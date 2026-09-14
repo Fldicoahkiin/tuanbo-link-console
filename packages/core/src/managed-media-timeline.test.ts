@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { parseLinkProject } from '@tb/schema';
 import { collectCrossedManagedMediaEvents, compileManagedMediaTimeline, managedMediaSourceName } from './managed-media-timeline';
-import { setReferenceAudioCommand } from './link-command';
+import { editReferenceAudioCommand, setReferenceAudioCommand } from './link-command';
+import { audioTracks, audioSegments } from './audio-edit';
 import { allocateMediaTimecodeRanges } from './mtc-output';
 import { resolveTimelineState } from './timeline-state';
 
 describe('managed media timeline', () => {
+  it('旧视频主音频转多轨再删除，不会重新打开视频原声', () => {
+    const project = projectWithClips([clip('one', 'video', 'layer-top', 0, 1000)]);
+    const source = { assetId: 'music', relativePath: 'assets/music.wav', sha256: 'a'.repeat(64), durationMs: 1000, sourceMediaAssetId: 'asset-one' };
+    project.rundown[0]!.referenceAudio = source;
+    const mixed = { ...source, sourceMediaAssetId: undefined, timeline: { source, segments: audioSegments(source), tracks: audioTracks(source) } };
+    const converted = editReferenceAudioCommand('item', mixed, '转换多轨').execute(project);
+    expect(converted.rundown[0]!.referenceMediaClips[0]!.embeddedAudioEnabled).toBe(false);
+    const removed = setReferenceAudioCommand('item', null).execute(converted);
+    expect(resolveTimelineState(removed, removed.rundown[0]!, 0).activeAudioClipIds).toEqual([]);
+  });
   it('视频完整原声替换一秒歌曲后统一主控时长，并阻止多个图层重复发声', () => {
     const project = projectWithClips([clip('one', 'video', 'layer-top', 0, 1000)]);
     project.rundown[0]!.visualLayers.push({ id: 'layer-bottom', name: '图层 2', visible: true, locked: false });

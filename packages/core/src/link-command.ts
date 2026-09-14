@@ -397,6 +397,7 @@ export function setReferenceAudioCommand(
   return createCommand('设置参考音频', (project) => {
     const item = requireItem(project, itemId);
     if (referenceAudio === null) {
+      for (const clip of item.referenceMediaClips) if (clip.assetId === item.referenceAudio?.sourceMediaAssetId) clip.embeddedAudioEnabled = false;
       delete item.referenceAudio;
       return;
     }
@@ -407,6 +408,9 @@ export function setReferenceAudioCommand(
 export function editReferenceAudioCommand(itemId: string, audio: ReferenceAudio, label: string): LinkCommand {
   return createCommand(label, (project) => {
     const item = requireItem(project, itemId);
+    // Once a legacy video's sound becomes independently editable, deleting its
+    // audio track must not reactivate the video's former embedded sound.
+    if (audio.timeline?.tracks) for (const clip of item.referenceMediaClips) if (clip.assetId === item.referenceAudio?.sourceMediaAssetId) clip.embeddedAudioEnabled = false;
     item.referenceAudio = referenceAudioSchema.parse(audio);
     if (item.playback && (item.playback.startMs >= audio.durationMs || item.playback.endMs > audio.durationMs)) {
       item.playback = { ...item.playback, startMs: Math.min(item.playback.startMs, audio.durationMs - 1), endMs: Math.min(item.playback.endMs, audio.durationMs) };
