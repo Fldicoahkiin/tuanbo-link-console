@@ -6,6 +6,7 @@ import type {
   RundownItem
 } from '@tb/schema';
 import { frameNumberToTimecode } from './mtc-timecode';
+import { audioContainsMediaSource } from './audio-edit';
 import { resolveTimelineClipSpan, wasTimelineFrameCrossed } from './timeline-state';
 
 export const MANAGED_OBS_SCENE_NAME = '团播联动台输出';
@@ -44,7 +45,7 @@ export function compileManagedMediaTimeline(project: LinkProject, itemId: string
   const events = item.referenceMediaClips.flatMap((clip): ManagedMediaEvent[] => {
     const asset = requireAsset(assets, clip.assetId);
     if (asset.kind === 'audio' && project.obsOutputMode !== 'scenes') return [];
-    if (asset.kind === 'audio' && item.referenceAudio?.sourceMediaAssetId === asset.id) return [];
+    if (asset.kind === 'audio' && audioContainsMediaSource(item.referenceAudio, asset.id)) return [];
     const scene = project.obsOutputMode === 'scenes' ? materialSceneNames(project.projectId, asset) : null;
     if (!clip.layerId) throw new Error(`素材片段“${clip.label}”尚未分配视觉图层`);
     const layerIndex = item.visualLayers.findIndex((layer) => layer.id === clip.layerId);
@@ -65,7 +66,7 @@ export function compileManagedMediaTimeline(project: LinkProject, itemId: string
       relativePath: asset.relativePath,
       sourceOffsetMs: clip.sourceOffsetMs ?? 0,
       embeddedAudioEnabled: asset.kind === 'audio' || asset.kind === 'video' && clip.embeddedAudioEnabled !== false
-        && !(project.playbackSource === 'internal' && item.referenceAudio?.sourceMediaAssetId === asset.id)
+        && !(project.playbackSource === 'internal' && audioContainsMediaSource(item.referenceAudio, asset.id))
         && (project.playbackSource !== 'internal' || project.internalVideoAudio === true),
       transform: clip.canvasTransform
     } as const;

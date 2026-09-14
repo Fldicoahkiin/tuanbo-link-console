@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { integrationProfileSchema } from './integration-profile';
-import { linkMediaKindSchema, linkProjectSchema, referenceCanvasTransformSchema, referenceAudioSourceSchema } from './link-project';
+import { linkMediaKindSchema, linkProjectSchema, referenceCanvasTransformSchema, referenceAudioSourceSchema, audioTracksSchema } from './link-project';
 import { audioSegmentSchema } from './audio-edit';
 
 export const audioAnalysisRequestSchema = z.object({ projectPath: z.string().min(1), source: referenceAudioSourceSchema }).strict();
-export const audioRenderRequestSchema = audioAnalysisRequestSchema.extend({ segments: z.array(audioSegmentSchema).min(1).max(10_000) });
+export const audioRenderRequestSchema = audioAnalysisRequestSchema.extend({ segments: z.array(audioSegmentSchema).min(1).max(10_000), tracks: audioTracksSchema.optional() });
 
 export const linkExternalApplicationIdSchema = z.enum(['obs', 'p1']);
 

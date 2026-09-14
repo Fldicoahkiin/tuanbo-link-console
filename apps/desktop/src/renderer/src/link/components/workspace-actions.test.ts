@@ -1,25 +1,69 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, parseLinkProject, type AudioTrack } from '@tb/schema';
 import { materialSceneNames } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { createWorkspaceActions } from './workspace-actions';
+import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+import { setReferenceAudioCommand } from '@tb/core/link';
 
-vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: {}, linkFileViewModel: {} }));
+const source = { assetId: 'audio', relativePath: 'assets/source.wav', sha256: 'b'.repeat(64), durationMs: 12000 };
+vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: {
+  ensureMediaAudioUrl: vi.fn(() => Promise.resolve('audio-url')),
+  importReferenceAudio: vi.fn(() => Promise.resolve(source)),
+  renderAudioSegments: vi.fn(({ tracks }: { tracks: AudioTrack[] }) => {
+    const rendered = { ...source, durationMs: Math.max(...tracks.flatMap(track => track.segments.map(segment => segment.startMs + segment.durationMs))) };
+    return Promise.resolve({ ...rendered, timeline: { source: rendered, segments: [{ id: 'mix', startMs: 0, sourceOffsetMs: 0, durationMs: rendered.durationMs }], tracks } });
+  })
+}, linkFileViewModel: {} }));
 
 function fixture(locked = false, withCue = false, withClip = false) {
   const project = parseLinkProject({ ...createEmptyLinkProject('素材场景'), obsOutputMode: 'scenes',
     mediaAssets: [{ id: 'video', name: '片段.mp4', kind: 'video', relativePath: 'assets/video.mp4', sha256: 'a'.repeat(64), byteLength: 10, durationMs: 12000, width: 1080, height: 1920 }],
     rundown: [{ id: 'song', title: '节目', referenceMediaClips: withClip ? [{ id: 'clip', assetId: 'video', label: '视频', startTimecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, durationMs: 2000, layerId: 'layer' }] : [], cues: withCue ? [{ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, durationMs: 2000, layerId: 'layer', actions: [{id: 'action', label: '场景', kind: 'obs.setProgramScene', sceneName: 'Camera'}] }] : [], visualLayers: [{ id: 'layer', name: '画面', visible: true, locked }] }]
   });
-  useDocumentStore.getState().setProject(project, null);
+  useDocumentStore.getState().setProject(project, 'C:/test/show.tblink');
   const notify = vi.fn();
-  const actions = createWorkspaceActions({ project, projectPath: null, documentId: 0, item: project.rundown[0]!, cue: null,
+  const actions = createWorkspaceActions({ project, projectPath: 'C:/test/show.tblink', documentId: useDocumentStore.getState().documentId, item: project.rundown[0]!, cue: null,
     playheadMs: 3000, coordinator: null, execute: useDocumentStore.getState().execute, notify,
     setSelectedCueId: vi.fn(), setSelectedClipId: vi.fn(), setSelectedAssetId: vi.fn(), setSelectedObsResource: vi.fn() });
   return { actions, notify, sceneName: materialSceneNames(project.projectId, project.mediaAssets[0]!).sceneName };
 }
 
 describe('拖入 OBS 场景', () => {
+  it('已有音乐时追加独立视频音轨，并关闭视频重复出声', async () => {
+    fixture();
+    useDocumentStore.getState().execute(setReferenceAudioCommand('song', source));
+    const state = useDocumentStore.getState();
+    const notify = vi.fn();
+    const actions = createWorkspaceActions({ project: state.project!, projectPath: state.path, documentId: state.documentId, item: state.project!.rundown[0]!, cue: null, playheadMs: 0, coordinator: null, execute: state.execute, notify, setSelectedCueId: vi.fn(), setSelectedClipId: vi.fn(), setSelectedAssetId: vi.fn(), setSelectedObsResource: vi.fn() });
+    actions.addAssetClip('video', 4000);
+    await vi.waitFor(() => expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio?.timeline?.tracks).toHaveLength(2));
+    const item = useDocumentStore.getState().project!.rundown[0]!;
+    expect(item.referenceAudio?.timeline?.tracks?.[1]?.segments[0]).toMatchObject({ startMs: 4000, sourceOffsetMs: 0, durationMs: 12000 });
+    expect(item.referenceMediaClips[0]?.embeddedAudioEnabled).toBe(false);
+    useDocumentStore.getState().undo();
+    expect(useDocumentStore.getState().project).toEqual(state.project);
+  });
+  it('提取途中切换工程不会把视频或音轨写入新工程', async () => {
+    const { actions, notify } = fixture();
+    let finish: ((value: typeof source) => void) | undefined;
+    vi.spyOn(linkDesktopViewModel, 'importReferenceAudio').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    actions.addAssetClip('video', 0);
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    useDocumentStore.getState().setProject(createEmptyLinkProject('另一个工程'), 'C:/test/other.tblink');
+    const before = useDocumentStore.getState().project;
+    finish!(source);
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining('工程已修改'), 'error'));
+    expect(useDocumentStore.getState().project).toEqual(before);
+  });
+  it('无音轨视频保留画面并明确提示，解码异常不能伪装成无音轨', async () => {
+    const { actions, notify } = fixture();
+    vi.spyOn(linkDesktopViewModel, 'ensureMediaAudioUrl').mockRejectedValueOnce(new Error('素材不包含音频轨道'));
+    actions.addAssetClip('video', 0);
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining('此素材没有音轨')));
+    expect(useDocumentStore.getState().project!.rundown[0]!.referenceMediaClips).toHaveLength(1);
+    expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio).toBeUndefined();
+  });
   it('视频下拖新建轨道保留片段属性并一次撤销', () => {
     const { actions } = fixture(false, false, true);
     const before = useDocumentStore.getState().project;
@@ -30,10 +74,11 @@ describe('拖入 OBS 场景', () => {
     useDocumentStore.getState().undo();
     expect(useDocumentStore.getState().project).toEqual(before);
   });
-  it('底部新建素材轨道与内容一次撤销、重做', () => {
+  it('底部新建素材轨道与内容一次撤销、重做', async () => {
     const { actions } = fixture();
     const before = useDocumentStore.getState().project;
     expect(actions.addAssetClip('video', 4000, null)).toBe(true);
+    await vi.waitFor(() => expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio).toBeDefined());
     const item = useDocumentStore.getState().project!.rundown[0]!;
     expect(item.visualLayers).toHaveLength(2);
     expect(item.referenceMediaClips[0]).toMatchObject({ layerId: item.visualLayers[1]!.id, startTimecode: { seconds: 4 } });
@@ -59,9 +104,10 @@ describe('拖入 OBS 场景', () => {
     expect(useDocumentStore.getState().project).toEqual(before);
     expect(notify).toHaveBeenCalledWith('图层“画面”已锁定。', 'error');
   });
-  it('当前工程素材场景创建媒体片段，保留时长和入点并支持撤销', () => {
+  it('当前工程素材场景创建媒体片段，保留时长和入点并支持撤销', async () => {
     const { actions, sceneName } = fixture();
     expect(actions.addObsResource({ id: sceneName, kind: 'scene', group: '场景', name: sceneName, sceneName }, 3000, 'layer')).toBe(true);
+    await vi.waitFor(() => expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio).toBeDefined());
     const item = useDocumentStore.getState().project!.rundown[0]!;
     expect(item.cues).toHaveLength(0);
     expect(item.referenceMediaClips).toEqual([expect.objectContaining({ assetId: 'video', sourceOffsetMs: 0, durationMs: 12000,

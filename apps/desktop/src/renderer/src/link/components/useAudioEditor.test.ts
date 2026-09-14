@@ -9,6 +9,22 @@ import { useAudioEditor, type AudioEditor } from './useAudioEditor';
 vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: {} }));
 afterEach(() => { useRuntimeStore.getState().reset(); useDocumentStore.getState().setProject(null, null); });
 
+it('最后一条音轨可以删除，清空后可撤销恢复完整源信息', async () => {
+  const project = createEmptyLinkProject('删除音轨');
+  project.rundown.push({ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], referenceAudio: { assetId: 'audio', relativePath: 'audio.wav', durationMs: 5000, sha256: 'a'.repeat(64) } });
+  useDocumentStore.getState().setProject(project, 'test.tblink');
+  const before = useDocumentStore.getState().project;
+  const notify = vi.fn();
+  const result: AudioEditor[] = [];
+  function Harness() { result.push(useAudioEditor(useDocumentStore.getState().project!.rundown[0]!, 'test.tblink', false, notify)); return null; }
+  renderToString(createElement(Harness));
+  await result[0]!.removeTrack(result[0]!.tracks[0]!.id);
+  expect(notify).not.toHaveBeenCalled();
+  expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio).toBeUndefined();
+  useDocumentStore.getState().undo();
+  expect(useDocumentStore.getState().project).toEqual(before);
+});
+
 it('暂停状态允许应用和清除节拍标记，同时保留音频编辑保护', async () => {
   const project = createEmptyLinkProject('暂停节拍测试');
   project.rundown.push({ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [],
@@ -34,6 +50,6 @@ it('暂停状态允许应用和清除节拍标记，同时保留音频编辑保�
   expect(useRuntimeStore.getState().state).toBe('paused');
   const revision = useDocumentStore.getState().revision;
   await editor().split(2000);
-  expect(notify).toHaveBeenCalledWith('请停止播放后应用音频修改', 'error');
+  expect(notify).toHaveBeenCalledWith('请停止播放后编辑音频片段', 'error');
   expect(useDocumentStore.getState().revision).toBe(revision);
 });

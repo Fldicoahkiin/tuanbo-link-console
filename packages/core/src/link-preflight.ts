@@ -81,6 +81,10 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
     ? passed('project.currentItem', '当前节目', currentItem.title)
     : blocking('project.currentItem', '当前节目', currentItem ? '当前节目已停用' : '尚未选择有效的当前节目'));
 
+  // Internal playback prepares one song at a time; unfinished neighbours must
+  // not block it. P1/session preflight continues to inspect the whole rundown.
+  if (context.mtcRequirement === 'internal') project = { ...project, rundown: currentItem ? [currentItem] : [] };
+
   for (const item of project.rundown.filter((candidate) => candidate.enabled)) {
     if (project.obsOutputMode === 'scenes') {
       const incompatible = item.cues.filter((cue) => cue.enabled).flatMap((cue) => cue.actions).find((action) =>

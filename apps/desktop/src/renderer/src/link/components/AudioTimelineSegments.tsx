@@ -4,7 +4,7 @@ import type { AudioEditor } from './useAudioEditor';
 import { AudioSegmentWaveform } from './AudioSegmentWaveform';
 
 type Drag = { id: string; edge: 'move' | 'start' | 'end'; clientX: number; segment: AudioSegment; deltaMs: number };
-export function AudioTimelineSegments({ editor, pixelsPerSecond, onSelect, onSeek, peaks, scrollLeft, viewportWidth }: { editor: AudioEditor; pixelsPerSecond: number; onSelect: (id: string) => void; onSeek: (ms: number) => void; peaks: readonly number[]; scrollLeft: number; viewportWidth: number }): JSX.Element {
+export function AudioTimelineSegments({ editor, pixelsPerSecond, onSelect, onSeek, peaks, scrollLeft, viewportWidth, sourceWaveform = false, snapTime }: { editor: Pick<AudioEditor, 'audio' | 'title' | 'segments' | 'selectedId' | 'disabled' | 'points' | 'select' | 'update' | 'remove'>; sourceWaveform?: boolean; snapTime?: (ms: number) => number; pixelsPerSecond: number; onSelect: (id: string) => void; onSeek: (ms: number) => void; peaks: readonly number[]; scrollLeft: number; viewportWidth: number }): JSX.Element {
   const [drag, setDrag] = useState<Drag | null>(null);
   const begin = (event: PointerEvent<HTMLElement>, segment: AudioSegment, edge: Drag['edge']): void => {
     if (event.button !== 0) return;
@@ -22,7 +22,9 @@ export function AudioTimelineSegments({ editor, pixelsPerSecond, onSelect, onSee
   const end = (event: PointerEvent<HTMLElement>): void => {
     if (!drag) return;
     event.stopPropagation();
-    const delta = drag.deltaMs; const segment = drag.segment;
+    const segment = drag.segment;
+    const anchor = drag.edge === 'end' ? segment.startMs + segment.durationMs : segment.startMs;
+    const delta = drag.deltaMs && snapTime ? snapTime(anchor + drag.deltaMs) - anchor : drag.deltaMs;
     if (delta) {
       const patch = drag.edge === 'move' ? { startMs: Math.max(0, segment.startMs + delta) }
         : drag.edge === 'start' ? { startMs: segment.startMs + delta, sourceOffsetMs: segment.sourceOffsetMs + delta, durationMs: segment.durationMs - delta }
@@ -41,7 +43,7 @@ export function AudioTimelineSegments({ editor, pixelsPerSecond, onSelect, onSee
         onPointerDown={(event) => begin(event, segment, 'move')} onPointerMove={move} onPointerUp={end} onPointerCancel={() => setDrag(null)}
         onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); editor.select(segment.id); onSelect(segment.id); }}
         onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); editor.select(segment.id); onSelect(segment.id); } if (event.key === 'Delete' && editor.selectedId === segment.id) { event.preventDefault(); event.stopPropagation(); void editor.remove(); } }}>
-        <AudioSegmentWaveform peaks={peaks} sourceStartMs={segment.startMs + (active?.edge === 'start' ? active.deltaMs : 0)} sourceDurationMs={editor.audio?.durationMs ?? 1} durationMs={duration} startMs={start} pixelsPerSecond={pixelsPerSecond} scrollLeft={scrollLeft} viewportWidth={viewportWidth} />
+        <AudioSegmentWaveform peaks={peaks} sourceStartMs={(sourceWaveform ? segment.sourceOffsetMs : segment.startMs) + (active?.edge === 'start' ? active.deltaMs : 0)} sourceDurationMs={editor.audio?.durationMs ?? 1} durationMs={duration} startMs={start} pixelsPerSecond={pixelsPerSecond} scrollLeft={scrollLeft} viewportWidth={viewportWidth} />
         {duration / 1000 * pixelsPerSecond > 65 ? <span className="audio-segment-name" style={{ left: Math.max(8, scrollLeft - start / 1000 * pixelsPerSecond + 8) }}>{editor.title}<small>{(duration / 1000).toFixed(2)}s</small></span> : null}
         <span className="audio-trim-handle start" title="调整音频起点" onPointerDown={(event) => begin(event, segment, 'start')} />
         <span className="audio-trim-handle end" title="调整音频终点" onPointerDown={(event) => begin(event, segment, 'end')} />

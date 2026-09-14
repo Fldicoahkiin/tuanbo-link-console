@@ -14,9 +14,7 @@ import {
 } from '@tb/core/link';
 import {
   DEFAULT_REFERENCE_CANVAS_TRANSFORM,
-  type LinkAction,
-  type LinkCue,
-  type LinkProject,
+  type LinkAction, type LinkCue, type LinkProject,
   type ReferenceCanvasTransform,
   type ReferenceMediaClip,
   type SceneItemTransform
@@ -28,6 +26,7 @@ import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { formatMilliseconds } from './media-utils';
 import type { ObsResource } from './ResourceLibrary';
 import { actionsFromObsResource, importWorkspaceMedia, resolveVisualLayer } from './workspace-action-helpers';
+import { addVideoWithAudio } from './video-audio-import';
 
 export type WorkspaceActionsInput = {
   project: LinkProject;
@@ -101,6 +100,7 @@ function createMediaActions(input: WorkspaceActionsInput) {
         layerId: targetLayer.id,
         canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM
       };
+      if (asset.kind === 'video') { addVideoWithAudio(input, asset, next, range.startMs, targetLayer, layerId === null); return; }
       executeContent(input, addReferenceMediaClipCommand(item.id, next), targetLayer, layerId === null);
       input.setSelectedClipId(next.id);
       input.setSelectedAssetId(asset.id);

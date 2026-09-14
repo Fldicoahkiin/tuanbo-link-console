@@ -19,12 +19,16 @@ export async function runDesktopPreflight(
   }
 
   coordinator.beginPreflight(mode);
-  if (integration.obs.status === 'connected' && document.project.obsOutputMode === 'scenes' && document.project.mediaAssets.length) {
-    await linkDesktopViewModel.prepareObsMediaScenes(document.path, document.project, useDisplayPreferences.getState().preciseSeeking);
+  const selectedId = useRuntimeStore.getState().currentItemId;
+  const rundown = mtcRequirement === 'internal' ? document.project.rundown.filter((item) => item.id === selectedId) : document.project.rundown;
+  const mediaIds = new Set(rundown.flatMap((item) => item.referenceMediaClips.map((clip) => clip.assetId)));
+  const inspectedProject = mtcRequirement === 'internal' ? { ...document.project, rundown, mediaAssets: document.project.mediaAssets.filter((asset) => mediaIds.has(asset.id)) } : document.project;
+  if (integration.obs.status === 'connected' && inspectedProject.obsOutputMode === 'scenes' && inspectedProject.mediaAssets.length) {
+    await linkDesktopViewModel.prepareObsMediaScenes(document.path, inspectedProject, useDisplayPreferences.getState().preciseSeeking);
   }
   await coordinator.initializeMidi(mtcRequirement !== 'internal');
   const [assets, security, inventory, snapshots, appInfo] = await Promise.all([
-    linkDesktopViewModel.inspectProjectAssets(document.path, document.project),
+    linkDesktopViewModel.inspectProjectAssets(document.path, inspectedProject),
     linkDesktopViewModel.getSecurityPreflight(),
     integration.obs.status === 'connected'
       ? linkDesktopViewModel.readObsInventory()

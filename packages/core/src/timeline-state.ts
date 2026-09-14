@@ -1,3 +1,4 @@
+import { audioContainsMediaSource } from './audio-edit';
 import type {
   LinkAction,
   LinkCue,
@@ -101,7 +102,7 @@ export function resolveTimelineState(
       active,
       visible,
       visual: active && layerVisible && isVisualAsset,
-      audible: active && layerVisible && (asset.kind === 'audio' || (asset.kind === 'video' && clip.embeddedAudioEnabled !== false && item.referenceAudio?.sourceMediaAssetId !== asset.id))
+      audible: active && layerVisible && (asset.kind === 'audio' || (asset.kind === 'video' && clip.embeddedAudioEnabled !== false && !audioContainsMediaSource(item.referenceAudio, asset.id)))
     };
   });
   const visualObsCues = item.cues.flatMap((cue): ResolvedTimelineObsCue[] => {

@@ -509,7 +509,7 @@ function registerIpc(
   handle('link:render-audio-segments', (_event, value: unknown) => {
     const payload = audioRenderRequestSchema.parse(value);
     if (runtimeActive) throw new Error('请停止播放后编辑音频');
-    return audioEditService.render(payload.projectPath, payload.source, payload.segments);
+    return payload.tracks ? audioEditService.mix(payload.projectPath, payload.tracks) : audioEditService.render(payload.projectPath, payload.source, payload.segments);
   });
   handle('link:generate-waveform', (_event, payloadValue: unknown) => {
     const payload = linkWaveformGeneratePayloadSchema.parse(payloadValue);

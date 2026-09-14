@@ -3,6 +3,17 @@ import type { IntegrationProfile, LinkProject } from '@tb/schema';
 import { runLinkPreflight, type PreflightContext } from './link-preflight';
 
 describe('团播联动台预检', () => {
+  it('内部单曲播放不被另一首未完成节目的音频阻断，切到该节目仍阻断', () => {
+    const value = context(); value.mtcRequirement = 'internal'; value.project.playbackSource = 'internal';
+    const original = value.project.rundown[0]!;
+    const unfinished = { ...original, id: 'unfinished', title: '节目 4', cues: [], referenceMediaClips: [] };
+    delete unfinished.referenceAudio;
+    value.project.rundown.push(unfinished);
+    expect(runLinkPreflight(value).passed).toBe(true);
+    expect(runLinkPreflight(value).checks.some((check) => check.id === 'asset.audio.unfinished')).toBe(false);
+    value.currentItemId = unfinished.id;
+    expect(runLinkPreflight(value).checks.find((check) => check.id === 'asset.audio.unfinished')?.status).toBe('blocking');
+  });
   it('内部主控无需 P1 进程、输入时间码或波形缓存，仍检查灯光输出', () => {
     const value = context(); value.mtcRequirement = 'internal'; value.project.playbackSource = 'internal';
     value.processes.p1 = { running: false, version: null }; value.midi.mtcUpdating = false;

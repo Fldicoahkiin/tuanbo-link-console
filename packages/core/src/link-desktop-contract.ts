@@ -1,4 +1,4 @@
-import type { ObsLiveScene, ObsLiveEdit, AudioBeatAnalysis, AudioSegment } from '@tb/schema';
+import type { ObsLiveScene, ObsLiveEdit, AudioBeatAnalysis, AudioSegment, AudioTrack } from '@tb/schema';
 import type { ObsSourceDraft, ObsSourceKind, ObsSourceOption, ObsSourceSettings } from '@tb/schema';
 import type {
   IntegrationProfile,
@@ -209,7 +209,7 @@ export type LinkDesktopApi = {
   loadWaveformCache(payload: { projectPath: string; sha256: string }): Promise<number[] | null>;
   generateWaveform(payload: { projectPath: string; sha256: string; url: string; durationMs: number }): Promise<number[]>;
   analyzeAudioBeats(payload: { projectPath: string; source: ReferenceAudio }): Promise<AudioBeatAnalysis>;
-  renderAudioSegments(payload: { projectPath: string; source: ReferenceAudio; segments: AudioSegment[] }): Promise<ReferenceAudio>;
+  renderAudioSegments(payload: { projectPath: string; source: ReferenceAudio; segments: AudioSegment[]; tracks?: AudioTrack[] }): Promise<ReferenceAudio>;
   saveWaveformCache(payload: { projectPath: string; sha256: string; peaks: number[] }): Promise<void>;
   inspectProjectAssets(path: string, project: LinkProject): Promise<LinkProjectAssetInspection>;
   detectCurrentP1Project(): Promise<string>;

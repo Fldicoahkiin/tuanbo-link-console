@@ -17,7 +17,10 @@ export async function prepareInternalRuntime(project: LinkProject, itemId: strin
   context.capture();
   const scenes = project.obsOutputMode === 'scenes' ? project.rundown.find((item) => item.id === itemId)?.cues.filter((cue) => cue.enabled)
     .flatMap((cue) => cue.actions.flatMap((action) => action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])) ?? [] : undefined;
-  if (scenes) scenes.push(...project.mediaAssets.map((asset) => materialSceneNames(project.projectId, asset).sceneName));
+  if (scenes) {
+    const mediaIds = new Set(project.rundown.find((item) => item.id === itemId)?.referenceMediaClips.map((clip) => clip.assetId));
+    scenes.push(...project.mediaAssets.filter((asset) => mediaIds.has(asset.id)).map((asset) => materialSceneNames(project.projectId, asset).sceneName));
+  }
   await desktop.setInternalAudioCapture(true, scenes);
   if (positionMs === 0) { await context.armFromStart(); return; }
   if (project.obsOutputMode !== 'scenes') await desktop.activateManagedObsOutput();

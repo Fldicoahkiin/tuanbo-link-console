@@ -189,11 +189,30 @@ export const referenceAudioSourceSchema = z.object({
   durationMs: z.number().int().positive()
 });
 
+export const audioTrackSchema = z.object({
+  id: z.string().min(1), title: z.string().min(1), source: referenceAudioSourceSchema,
+  segments: z.array(audioSegmentSchema).min(1).max(10_000)
+}).strict().superRefine((track, ctx) => {
+  const sorted = [...track.segments].sort((a, b) => a.startMs - b.startMs);
+  if (new Set(sorted.map(segment => segment.id)).size !== sorted.length) ctx.addIssue({ code: 'custom', message: '音频片段 ID 不能重复' });
+  for (const [index, segment] of sorted.entries()) {
+    if (segment.sourceOffsetMs + segment.durationMs > track.source.durationMs) ctx.addIssue({ code: 'custom', message: '音频片段超出源文件范围' });
+    if (index && segment.startMs < sorted[index - 1]!.startMs + sorted[index - 1]!.durationMs) ctx.addIssue({ code: 'custom', message: '同一音轨的片段不能重叠，请使用不同音轨' });
+  }
+});
+export type AudioTrack = z.infer<typeof audioTrackSchema>;
+export const audioTracksSchema = z.array(audioTrackSchema).min(1).max(64).superRefine((tracks, ctx) => {
+  if (new Set(tracks.map(track => track.id)).size !== tracks.length) ctx.addIssue({ code: 'custom', message: '音轨 ID 不能重复' });
+});
+
 export const referenceAudioSchema = referenceAudioSourceSchema.extend({
-  timeline: z.object({ source: referenceAudioSourceSchema, segments: z.array(audioSegmentSchema).min(1).max(10_000) }).strict().optional(),
+  // Keep multitrack metadata inside the strict timeline object: old versions
+  // reject the project instead of silently discarding independently edited tracks.
+  timeline: z.object({ source: referenceAudioSourceSchema, segments: z.array(audioSegmentSchema).min(1).max(10_000), tracks: audioTracksSchema.optional() }).strict().optional(),
   beats: audioBeatMapSchema.optional()
 }).superRefine((audio, ctx) => {
   const segments = audio.timeline?.segments;
+  if (audio.timeline?.tracks?.some(track => track.segments.some(segment => segment.startMs + segment.durationMs > audio.durationMs))) ctx.addIssue({ code: 'custom', message: '音轨超出混合音频时长' });
   if (segments && audio.timeline) {
     const sorted = [...segments].sort((a, b) => a.startMs - b.startMs);
     for (const [index, segment] of sorted.entries()) {

@@ -5,11 +5,41 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
 import { AudioBeatDetector } from '@tb/core/link';
-import { referenceAudioSchema, type AudioBeatAnalysis, type AudioSegment, type ReferenceAudio } from '@tb/schema';
+import { audioTracksSchema, referenceAudioSchema, type AudioBeatAnalysis, type AudioSegment, type AudioTrack, type ReferenceAudio } from '@tb/schema';
 import type { LinkProjectService } from './link-project-service';
 
 export class AudioEditService {
   constructor(private readonly projects: LinkProjectService) {}
+
+  async mix(projectPath: string, input: AudioTrack[]): Promise<ReferenceAudio> {
+    const tracks = audioTracksSchema.parse(input);
+    const directory = join(dirname(projectPath), 'cache', 'audio-edit');
+    await mkdir(directory, { recursive: true });
+    const token = crypto.randomUUID();
+    const cleanup: string[] = [];
+    const inputs: string[] = [];
+    const durationMs = Math.max(...tracks.flatMap(track => track.segments.map(segment => segment.startMs + segment.durationMs)));
+    try {
+      for (const [index, track] of tracks.entries()) {
+        const path = await this.sourcePath(projectPath, track.source);
+        const raw = join(directory, `${token}-${index}-source.pcm`);
+        const edit = join(directory, `${token}-${index}-edit.pcm`);
+        cleanup.push(raw, edit);
+        await ffmpeg(['-i', path, '-map', '0:a:0', '-vn', '-ac', '2', '-ar', '48000', '-f', 's16le', raw]);
+        await composeAudioPcm(raw, edit, track.segments);
+        inputs.push('-f', 's16le', '-ar', '48000', '-ac', '2', '-i', edit);
+      }
+      const output = join(directory, `${token}-mix.wav`);
+      cleanup.push(output);
+      // Preserve single-track gain; only limit overlapping peaks, with latency
+      // compensation so the mixed output remains aligned with lighting cues.
+      await ffmpeg([...inputs, '-filter_complex', `amix=inputs=${tracks.length}:duration=longest:normalize=0,alimiter=limit=0.98:level=0:latency=1`, '-c:a', 'pcm_s16le', '-rf64', 'auto', output]);
+      const rendered = await this.projects.importReferenceAudio(projectPath, output, durationMs);
+      return referenceAudioSchema.parse({ ...rendered, timeline: { source: rendered, segments: [{ id: `mix-${rendered.assetId}`, startMs: 0, sourceOffsetMs: 0, durationMs }], tracks } });
+    } finally {
+      await Promise.all(cleanup.map(async file => { try { await unlink(file); } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; } }));
+    }
+  }
 
   async analyze(projectPath: string, source: ReferenceAudio): Promise<AudioBeatAnalysis> {
     const path = await this.sourcePath(projectPath, source);

@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyLinkProject, referenceAudioSchema } from '@tb/schema';
-import { audioSegments, editedAudio, splitAudioSegments, updateAudioSegment } from './audio-edit';
+import { createEmptyLinkProject, referenceAudioSchema, audioTracksSchema } from '@tb/schema';
+import { audioSegments, audioTracks, audioContainsMediaSource, editedAudio, splitAudioSegments, updateAudioSegment } from './audio-edit';
 import { AudioBeatDetector } from './audio-beat-detection';
 import { editReferenceAudioCommand } from './link-command';
 
 const audio = { assetId: 'song', relativePath: 'assets/music.wav', sha256: 'a'.repeat(64), durationMs: 5000 };
 describe('可编辑歌曲音频', () => {
+  it('多轨允许跨轨重叠，拒绝源范围错误，保留旧视频主音频的重复出声保护', () => {
+    const tracks = audioTracks({ ...audio, sourceMediaAssetId: 'video' });
+    const two = [...tracks, { ...tracks[0]!, id: 'second' }];
+    expect(audioTracksSchema.parse(two)).toEqual(two);
+    expect(() => audioTracksSchema.parse([{ ...tracks[0], segments: [{ id: 'bad', startMs: 0, sourceOffsetMs: 4900, durationMs: 200 }] }])).toThrow();
+    const mixed = referenceAudioSchema.parse({ ...audio, timeline: { source: audio, segments: audioSegments(audio), tracks: two } });
+    expect(audioTracks(mixed)).toEqual(two);
+    expect(audioContainsMediaSource(mixed, 'video')).toBe(true);
+  });
   it('分割保留连续的素材位置与总时长', () => {
     let id = 0;
     const result = splitAudioSegments(audioSegments(audio), [0, 1500, 1500, 3200, 5000], () => `part-${id++}`);

@@ -1,4 +1,12 @@
-import { referenceAudioSchema, type AudioSegment, type ReferenceAudio } from '@tb/schema';
+import { referenceAudioSchema, referenceAudioSourceSchema, type AudioSegment, type AudioTrack, type ReferenceAudio } from '@tb/schema';
+
+export function audioTracks(audio: ReferenceAudio, title = '歌曲音频'): AudioTrack[] {
+  return audio.timeline?.tracks ?? [{ id: `track-${audio.assetId}`, title, source: referenceAudioSourceSchema.parse(audio.timeline?.source ?? audio), segments: audioSegments(audio) }];
+}
+
+export function audioContainsMediaSource(audio: ReferenceAudio | undefined, assetId: string): boolean {
+  return audio?.sourceMediaAssetId === assetId || Boolean(audio?.timeline?.tracks?.some(track => track.source.sourceMediaAssetId === assetId));
+}
 
 export function audioSegments(audio: ReferenceAudio): AudioSegment[] {
   return audio.timeline?.segments ?? [{ id: `audio-${audio.assetId}`, startMs: 0, sourceOffsetMs: 0, durationMs: audio.durationMs }];

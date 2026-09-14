@@ -29,7 +29,7 @@
 .audio-beat-marker::before { content: ''; position: absolute; top: 5px; left: 3px; width: 8px; height: 9px; clip-path: polygon(0 0,100% 0,100% 65%,50% 100%,0 65%); background: var(--audio-marker); }
 .waveform-lane .audio-beat-marker:hover::before, .waveform-lane .audio-beat-marker:focus-visible::before { background: #fff; }
 .timeline-beat-guide { display: none; }
-.track-heading button.audio-track-edit { width: auto; background: transparent; color: inherit; font: inherit; padding: 0; border: 0; }
+.track-heading button.audio-track-edit { width: auto; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; background: transparent; color: inherit; font: inherit; padding: 0; border: 0; }
 .editor-preview-row .cue-inspector, .p1-item-inspector, .obs-source-dialog {
   --property-control: color-mix(in srgb, var(--page-background) 90%, var(--text-primary));
   --property-control-hover: color-mix(in srgb, var(--page-background) 85%, var(--text-primary));
