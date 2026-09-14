@@ -1,0 +1,8 @@
+external/
+build-mac-arm64/
+build-mac-x64/
+build-win-x64/
+dist/
+*.dSYM/
+compile_commands.json
+.cache/

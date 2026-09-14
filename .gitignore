@@ -1,0 +1,65 @@
+node_modules
+.DS_Store
+dist
+apps/desktop/dist-*/
+output/
+out
+coverage
+tmp/
+.vscode
+*.log
+*.tsbuildinfo
+
+# Claude Code 本地配置（settings.local.json 含本地权限和任务锁，不进版本库）
+.claude/
+
+# native addon 编译产物（node-gyp build 出来的 .node / Makefile）
+**/native/**/build/
+*.node
+
+# obs-helper CMake 编译产物（CMake build dir / .o / 可执行）
+apps/obs-helper/build/
+apps/obs-helper/build-*/
+*.o
+*.obj
+
+# Playwright e2e 输出（trace / video / screenshots）
+apps/desktop/test-results/
+apps/desktop/playwright-report/
+apps/desktop/playwright/.cache/
+
+# Obsidian 个人笔记（误放在仓库目录，不进版本库）
+.obsidian/
+*.base
+术语速查.md
+知识地图.md
+知识库首页.md
+Obsidian 使用说明.md
+2026-*.md
+tools/obs/native-preview/compiler/
+tools/obs/native-preview/portable/
+tools/obs/native-preview/zig.zip
+tools/obs/native-preview/*.dll
+tools/obs/native-preview/*.lib
+tools/obs/native-preview/*.pdb
+
+# 本机开发输出、验收数据及历史交付包（保留在本地）
+apps/desktop/out-*/
+/acceptance-*/
+/交付*/
+/artifacts/
+/*.png
+/.playwright-cli/
+/.codex/
+/%SystemDrive%/
+**/user-data/
+**/__pycache__/
+*.pyc
+
+# 本机凭据和环境变量；可提交无敏感值的示例
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.key

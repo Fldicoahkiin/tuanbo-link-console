@@ -1,0 +1,458 @@
+import { describe, expect, it } from 'vitest';
+import { DEFAULT_REFERENCE_CANVAS_TRANSFORM, createEmptyLinkProject, type LinkAction, type LinkCue, type RundownItem } from '@tb/schema';
+import {
+  addActionCommand,
+  addCueCommand,
+  addMediaFolderCommand,
+  addMediaAssetCommand,
+  addReferenceMediaClipCommand,
+  addRundownItemCommand,
+  addVisualLayerCommand,
+  applyP1ProjectExportCommand,
+  duplicateRundownItemCommand,
+  moveActionCommand,
+  moveCueCommand,
+  moveMediaAssetCommand,
+  moveMediaFolderCommand,
+  moveRundownItemCommand,
+  moveVisualLayerCommand,
+  removeActionCommand,
+  removeCueCommand,
+  removeMediaFolderCommand,
+  removeMediaAssetCommand,
+  removeReferenceMediaClipCommand,
+  removeVisualLayerCommand,
+  removeRundownItemCommand,
+  renameProjectCommand,
+  renameMediaFolderCommand,
+  routeVisualObsCuesToManagedSceneCommand,
+  replaceActionCommand,
+  replaceCueCommand,
+  setReferenceAudioCommand,
+  setProjectFrameRateCommand,
+  setProjectOutputCanvasCommand,
+  setRundownItemP1StartTriggerCommand,
+  splitReferenceMediaClipCommand,
+  synchronizeP1ProjectCommand,
+  initializeVisualLayersCommand,
+  updateVisualLayerCommand,
+  updateRundownItemCommand,
+  type LinkCommand
+} from './link-command';
+
+const timestamp = () => '2026-08-26T00:00:00.000Z';
+
+describe('LinkProject Command', () => {
+  it('节目、Cue、动作的全部修改都返回经过校验的新工程', () => {
+    const initial = createEmptyLinkProject('初始', new Date('2026-08-25T00:00:00.000Z'));
+    const item = rundownItem('item-a', '节目 A');
+    const cue = linkCue('cue-a', 'Cue A');
+    const action = programAction('action-a', 1);
+
+    const named = renameProjectCommand('联动工程', timestamp).execute(initial);
+    const timebaseChanged = setProjectFrameRateCommand('25', timestamp).execute(named);
+    const canvasChanged = setProjectOutputCanvasCommand({ width: 1920, height: 1080 }, timestamp).execute(timebaseChanged);
+    const withItem = addRundownItemCommand(item, undefined, timestamp).execute(canvasChanged);
+    const updatedItem = updateRundownItemCommand('item-a', { title: '节目 A1', enabled: false, notes: '说明' }, timestamp).execute(withItem);
+    const withCue = addCueCommand('item-a', cue, undefined, timestamp).execute(updatedItem);
+    const withAction = addActionCommand('item-a', 'cue-a', action, undefined, timestamp).execute(withCue);
+
+    expect(initial.name).toBe('初始');
+    expect(withAction.name).toBe('联动工程');
+    expect(withAction.timebase.frameRate).toBe('25');
+    expect(withAction.outputCanvas).toEqual({ width: 1920, height: 1080 });
+    expect(withAction.rundown[0]?.title).toBe('节目 A1');
+    expect(withAction.rundown[0]?.enabled).toBe(false);
+    expect(withAction.rundown[0]?.cues[0]?.actions[0]).toEqual(action);
+    expect(withAction.updatedAt).toBe(timestamp());
+  });
+
+  it('覆盖、移动、复制、删除和参考音频命令可组合', () => {
+    let project = createEmptyLinkProject('工程');
+    project = addRundownItemCommand(rundownItem('a', 'A'), undefined, timestamp).execute(project);
+    project = addRundownItemCommand(rundownItem('b', 'B'), undefined, timestamp).execute(project);
+    project = addCueCommand('a', linkCue('cue-1', '一'), undefined, timestamp).execute(project);
+    project = addCueCommand('a', linkCue('cue-2', '二'), undefined, timestamp).execute(project);
+    project = addActionCommand('a', 'cue-1', programAction('x', 1), undefined, timestamp).execute(project);
+    project = addActionCommand('a', 'cue-1', programAction('y', 2), undefined, timestamp).execute(project);
+    project = replaceActionCommand('a', 'cue-1', programAction('x', 7), timestamp).execute(project);
+    project = moveActionCommand('a', 'cue-1', 'y', 0, timestamp).execute(project);
+    project = replaceCueCommand('a', { ...linkCue('cue-2', '二改'), notes: '已改' }, timestamp).execute(project);
+    project = moveCueCommand('a', 'cue-2', 0, timestamp).execute(project);
+    project = moveRundownItemCommand('b', 0, timestamp).execute(project);
+    project = duplicateRundownItemCommand('a', sequenceIds('copy', 'copy-cue-2', 'copy-cue-1', 'copy-action-1', 'copy-action-2'), timestamp).execute(project);
+    project = setReferenceAudioCommand('a', {
+      assetId: 'audio',
+      relativePath: 'assets/reference-audio/a.wav',
+      sha256: 'a'.repeat(64),
+      durationMs: 1_000
+    }, timestamp).execute(project);
+    project = removeActionCommand('a', 'cue-1', 'x', timestamp).execute(project);
+    project = removeCueCommand('a', 'cue-2', timestamp).execute(project);
+    project = removeRundownItemCommand('b', timestamp).execute(project);
+
+    expect(project.rundown.map((item) => item.id)).toEqual(['a', 'copy']);
+    expect(project.rundown[0]?.referenceAudio?.sha256).toBe('a'.repeat(64));
+    expect(project.rundown[0]?.cues.map((candidate) => candidate.id)).toEqual(['cue-1']);
+    expect(project.rundown[0]?.cues[0]?.actions.map((candidate) => candidate.id)).toEqual(['y']);
+    expect(project.rundown[1]?.cues.flatMap((candidate) => candidate.actions).map((candidate) => candidate.id))
+      .toEqual(['copy-action-1', 'copy-action-2']);
+  });
+
+  it('视觉图层初始化、增补、排序和状态修改全部通过 Command', () => {
+    let project = createEmptyLinkProject('图层工程');
+    project = addRundownItemCommand(rundownItem('item', '节目'), undefined, timestamp).execute(project);
+    project = initializeVisualLayersCommand(
+      'item',
+      { id: 'layer-obs', name: '图层 2', visible: true, locked: false },
+      { id: 'layer-media', name: '图层 1', visible: true, locked: false },
+      timestamp
+    ).execute(project);
+    project = addVisualLayerCommand('item', { id: 'layer-top', name: '图层 3', visible: true, locked: false }, 0, timestamp).execute(project);
+    project = moveVisualLayerCommand('item', 'layer-media', 0, timestamp).execute(project);
+    project = updateVisualLayerCommand('item', { id: 'layer-obs', name: '图层 2', visible: false, locked: true }, timestamp).execute(project);
+    project = removeVisualLayerCommand('item', 'layer-top', timestamp).execute(project);
+
+    expect(project.rundown[0]?.visualLayers.map((layer) => layer.id)).toEqual(['layer-media', 'layer-obs']);
+    expect(project.rundown[0]?.visualLayers[1]).toMatchObject({ visible: false, locked: true });
+  });
+
+  it('初始化图层时给所有时间线素材分配图层', () => {
+    let project = createEmptyLinkProject('混合素材工程');
+    project = addRundownItemCommand(rundownItem('item', '节目'), undefined, timestamp).execute(project);
+    project = addMediaAssetCommand({
+      id: 'image', name: '画面', kind: 'image', folderId: null,
+      relativePath: 'assets/reference-media/image.png', sha256: 'a'.repeat(64), byteLength: 10,
+      width: 1920, height: 1080
+    }, timestamp).execute(project);
+    project = addMediaAssetCommand({
+      id: 'audio', name: '音频', kind: 'audio', folderId: null,
+      relativePath: 'assets/reference-media/audio.wav', sha256: 'b'.repeat(64), byteLength: 10, durationMs: 5_000
+    }, timestamp).execute(project);
+    const baseClip = {
+      startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
+      sourceOffsetMs: 0,
+      durationMs: 5_000,
+      canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM
+    };
+    project = addReferenceMediaClipCommand('item', { ...baseClip, id: 'image-clip', assetId: 'image', label: '画面' }, undefined, timestamp).execute(project);
+    project = addReferenceMediaClipCommand('item', { ...baseClip, id: 'audio-clip', assetId: 'audio', label: '音频' }, undefined, timestamp).execute(project);
+    project = initializeVisualLayersCommand(
+      'item',
+      { id: 'layer-obs', name: '图层 2', visible: true, locked: false },
+      { id: 'layer-media', name: '图层 1', visible: true, locked: false },
+      timestamp
+    ).execute(project);
+
+    expect(project.rundown[0]?.referenceMediaClips[0]).toMatchObject({ id: 'image-clip', layerId: 'layer-media' });
+    expect(project.rundown[0]?.referenceMediaClips[1]).toMatchObject({ id: 'audio-clip', layerId: 'layer-media' });
+  });
+
+  it('视觉 OBS Cue 通过 Command 接入受管输出场景', () => {
+    let project = createEmptyLinkProject('受管输出');
+    project = addRundownItemCommand({ ...rundownItem('item', '节目'), visualLayers: [{ id: 'layer', name: '图层 1', visible: true, locked: false }] }, undefined, timestamp).execute(project);
+    project = addCueCommand('item', {
+      ...linkCue('cue', '机位'),
+      layerId: 'layer',
+      durationMs: 5_000,
+      actions: [{ id: 'show', label: '显示机位', kind: 'obs.setSceneItemEnabled', sceneName: '原场景', sourceName: 'Camera', enabled: true }]
+    }, undefined, timestamp).execute(project);
+    project = routeVisualObsCuesToManagedSceneCommand('item', timestamp).execute(project);
+    expect(project.rundown[0]?.cues[0]?.actions[0]).toMatchObject({ sceneName: '团播联动台输出', sourceName: 'Camera' });
+  });
+
+  it('undo 恢复 execute 前快照', () => {
+    const project = createEmptyLinkProject('工程');
+    const command = addRundownItemCommand(rundownItem('a', 'A'), undefined, timestamp);
+    const next = command.execute(project);
+    expect(next.rundown).toHaveLength(1);
+    expect(command.undo(project)).toEqual(project);
+  });
+
+  it('P1 播放触发只能通过 Command 设置、替换和移除', () => {
+    const initial = addRundownItemCommand(rundownItem('a', 'A'), undefined, timestamp).execute(createEmptyLinkProject('工程'));
+    let project = initial;
+    const command = setRundownItemP1StartTriggerCommand('a', {
+      id: 'p1-start', label: 'P1 播放', kind: 'p1.midiNotePulse', portProfileId: 'p1-output',
+      channel: 1, note: 60, velocity: 127, durationMs: 80
+    }, timestamp);
+    project = command.execute(project);
+    expect(project.rundown[0]?.p1StartTrigger).toMatchObject({ kind: 'p1.midiNotePulse', note: 60 });
+    const removed = setRundownItemP1StartTriggerCommand('a', null, timestamp).execute(project);
+    expect(removed.rundown[0]?.p1StartTrigger).toBeUndefined();
+    expect(command.undo(initial)).toEqual(initial);
+  });
+
+  it('唯一相同音频自动绑定手工节目并保留时间线，不生成空白重复节目', () => {
+    const imported = p1ImportedItem('a'.repeat(64), 'P1 歌曲', 'list', 'a');
+    const existing = { ...rundownItem('manual', '已有编排'), referenceAudio: imported.referenceAudio, cues: [linkCue('existing-cue', '机位')] };
+    const project = addRundownItemCommand(existing).execute(createEmptyLinkProject('测试'));
+    const next = synchronizeP1ProjectCommand({ sourceSha256: 'b'.repeat(64), playlists: [{ id: 'list', name: '列表', sourceIndex: 0 }], items: [imported] }).execute(project);
+    expect(next.rundown).toHaveLength(1);
+    expect(next.rundown[0]).toMatchObject({ id: 'manual', cues: [{ id: 'existing-cue' }], p1Media: imported.p1Media });
+  });
+
+  it('P1 全量读取按稳定映射更新顺序并保留已有 Cue', () => {
+    const playlist = { id: 'p1-playlist-1', name: '演出歌单', sourceIndex: 0 };
+    const firstSnapshot = {
+      sourceSha256: '1'.repeat(64),
+      playlists: [playlist],
+      items: [
+        p1ImportedItem('a'.repeat(64), '第一首', playlist.id, 'a'),
+        p1ImportedItem('b'.repeat(64), '第二首', playlist.id, 'b')
+      ]
+    };
+    let project = synchronizeP1ProjectCommand(firstSnapshot, sequenceIds('item-a', 'item-b'), timestamp)
+      .execute(createEmptyLinkProject('P1 工程'));
+    project = addCueCommand('item-a', linkCue('camera-cue', '切机位'), undefined, timestamp).execute(project);
+
+    project = synchronizeP1ProjectCommand({
+      sourceSha256: '2'.repeat(64),
+      playlists: [playlist],
+      items: [
+        p1ImportedItem('b'.repeat(64), '第二首（P1 改名）', playlist.id, 'b'),
+        p1ImportedItem('a'.repeat(64), '第一首', playlist.id, 'a')
+      ]
+    }, sequenceIds(), timestamp).execute(project);
+
+    expect(project.rundown.map((item) => item.id)).toEqual(['item-b', 'item-a']);
+    expect(project.rundown[0]?.title).toBe('第二首（P1 改名）');
+    expect(project.rundown[1]?.cues[0]?.id).toBe('camera-cue');
+    expect(project.p1Sync?.sourceSha256).toBe('2'.repeat(64));
+  });
+
+  it('P1 写回结果通过 Command 更新绑定，未写入 P1 的节目解除旧绑定', () => {
+    const playlist = { id: 'p1-playlist-1', name: '演出歌单', sourceIndex: 0 };
+    let project = synchronizeP1ProjectCommand({
+      sourceSha256: '1'.repeat(64),
+      playlists: [playlist],
+      items: [p1ImportedItem('a'.repeat(64), '第一首', playlist.id, 'a')]
+    }, sequenceIds('item-a'), timestamp).execute(createEmptyLinkProject('P1 工程'));
+    project = addRundownItemCommand(rundownItem('manual', '手工节目'), undefined, timestamp).execute(project);
+
+    project = applyP1ProjectExportCommand({
+      sourceSha256: '3'.repeat(64),
+      playlists: [playlist],
+      itemBindings: [{ itemId: 'manual', p1Media: p1Binding('c'.repeat(64), playlist.id, 'manual.wav') }]
+    }, timestamp).execute(project);
+
+    expect(project.rundown.find((item) => item.id === 'item-a')?.p1Media).toBeUndefined();
+    expect(project.rundown.find((item) => item.id === 'manual')?.p1Media?.sourceKey).toBe('c'.repeat(64));
+    expect(project.p1Sync?.sourceSha256).toBe('3'.repeat(64));
+  });
+
+  it('切换工程帧率时拒绝现有 Cue 的非法帧号且不修改原工程', () => {
+    let project = createEmptyLinkProject('工程');
+    project = addRundownItemCommand(rundownItem('a', 'A'), undefined, timestamp).execute(project);
+    project = addCueCommand('a', {
+      ...linkCue('cue-1', '一'),
+      timecode: { hours: 0, minutes: 0, seconds: 1, frames: 29 }
+    }, undefined, timestamp).execute(project);
+
+    expect(() => setProjectFrameRateCommand('25', timestamp).execute(project)).toThrow('帧号超出 25 fps 范围');
+    expect(project.timebase.frameRate).toBe('30');
+  });
+
+  it('每一种工程修改命令都能恢复各自 execute 前快照', () => {
+    let base = createEmptyLinkProject('工程');
+    base = addRundownItemCommand(rundownItem('a', 'A'), undefined, timestamp).execute(base);
+    base = addRundownItemCommand(rundownItem('b', 'B'), undefined, timestamp).execute(base);
+    base = addCueCommand('a', linkCue('cue-1', '一'), undefined, timestamp).execute(base);
+    base = addCueCommand('a', linkCue('cue-2', '二'), undefined, timestamp).execute(base);
+    base = addActionCommand('a', 'cue-1', programAction('x', 1), undefined, timestamp).execute(base);
+    base = addActionCommand('a', 'cue-1', programAction('y', 2), undefined, timestamp).execute(base);
+    const reference = { assetId: 'audio', relativePath: 'assets/reference-audio/a.wav', sha256: 'a'.repeat(64), durationMs: 1_000 };
+    const commands: LinkCommand[] = [
+      renameProjectCommand('新名称', timestamp),
+      setProjectFrameRateCommand('25', timestamp),
+      addRundownItemCommand(rundownItem('c', 'C'), undefined, timestamp),
+      updateRundownItemCommand('a', { title: 'A+', enabled: false, notes: '改' }, timestamp),
+      removeRundownItemCommand('b', timestamp),
+      moveRundownItemCommand('b', 0, timestamp),
+      duplicateRundownItemCommand('a', sequenceIds('copy-item', 'copy-cue-1', 'copy-action-1', 'copy-action-2', 'copy-cue-2'), timestamp),
+      setReferenceAudioCommand('a', reference, timestamp),
+      setRundownItemP1StartTriggerCommand('a', { id: 'p1', label: 'P1', kind: 'midi.programChange', portProfileId: 'p1-output', channel: 1, program: 1 }, timestamp),
+      addCueCommand('a', linkCue('cue-3', '三'), undefined, timestamp),
+      replaceCueCommand('a', { ...linkCue('cue-1', '一改'), notes: '改' }, timestamp),
+      removeCueCommand('a', 'cue-2', timestamp),
+      moveCueCommand('a', 'cue-2', 0, timestamp),
+      addActionCommand('a', 'cue-1', programAction('z', 3), undefined, timestamp),
+      replaceActionCommand('a', 'cue-1', programAction('x', 9), timestamp),
+      removeActionCommand('a', 'cue-1', 'x', timestamp),
+      moveActionCommand('a', 'cue-1', 'y', 0, timestamp)
+    ];
+    for (const command of commands) {
+      expect(command.execute(base)).not.toEqual(base);
+      expect(command.undo(base)).toEqual(base);
+    }
+  });
+
+  it('媒体素材与参考片段只能经 Command 添加并保持引用安全', () => {
+    let project = createEmptyLinkProject('媒体工程');
+    project = addRundownItemCommand(rundownItem('a', 'A'), undefined, timestamp).execute(project);
+    const asset = {
+      id: 'asset',
+      name: '参考视频',
+      kind: 'video' as const,
+      folderId: null,
+      relativePath: 'assets/reference-media/a.mp4',
+      sha256: 'b'.repeat(64),
+      byteLength: 2_048,
+      durationMs: 5_000,
+      width: 1920,
+      height: 1080
+    };
+    project = addMediaAssetCommand(asset, timestamp).execute(project);
+    project = addReferenceMediaClipCommand('a', {
+      id: 'clip',
+      assetId: asset.id,
+      label: asset.name,
+      startTimecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+      sourceOffsetMs: 500,
+      durationMs: 4_500,
+      canvasTransform: { x: 0.5, y: 0.5, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 }
+    }, undefined, timestamp).execute(project);
+
+    expect(project.mediaAssets).toEqual([{ ...asset, folderId: null }]);
+    expect(project.rundown[0]?.referenceMediaClips).toHaveLength(1);
+    expect(() => removeMediaAssetCommand(asset.id, timestamp).execute(project)).toThrow(/仍被节目/);
+    project = splitReferenceMediaClipCommand('a', 'clip', { hours: 0, minutes: 0, seconds: 3, frames: 0 }, 'clip-right', timestamp).execute(project);
+    expect(project.rundown[0]?.referenceMediaClips).toMatchObject([
+      { id: 'clip', sourceOffsetMs: 500, durationMs: 2_000 },
+      { id: 'clip-right', startTimecode: { hours: 0, minutes: 0, seconds: 3, frames: 0 }, sourceOffsetMs: 2_500, durationMs: 2_500 }
+    ]);
+    const frameSplit = splitReferenceMediaClipCommand(
+      'a',
+      'clip-right',
+      { hours: 0, minutes: 0, seconds: 3, frames: 1 },
+      'clip-frame-right',
+      timestamp
+    ).execute(project);
+    expect(frameSplit.rundown[0]?.referenceMediaClips).toMatchObject([
+      { id: 'clip', durationMs: 2_000 },
+      { id: 'clip-right', durationMs: 33 },
+      { id: 'clip-frame-right', sourceOffsetMs: 2_533, durationMs: 2_467 }
+    ]);
+    expect(() => splitReferenceMediaClipCommand('a', 'clip', { hours: 0, minutes: 0, seconds: 1, frames: 0 }, 'invalid', timestamp).execute(project)).toThrow(/片段内部/);
+    project = removeReferenceMediaClipCommand('a', 'clip', timestamp).execute(project);
+    project = removeReferenceMediaClipCommand('a', 'clip-right', timestamp).execute(project);
+    project = removeMediaAssetCommand(asset.id, timestamp).execute(project);
+    expect(project.mediaAssets).toHaveLength(0);
+  });
+
+  it('资源文件夹的新建、重命名、移动和删除都经过 Command 与引用校验', () => {
+    let project = createEmptyLinkProject('资源库工程');
+    project = addMediaFolderCommand({ id: 'folder-a', name: '演出素材', parentId: null }, timestamp).execute(project);
+    project = addMediaFolderCommand({ id: 'folder-b', name: '开场', parentId: 'folder-a' }, timestamp).execute(project);
+    project = renameMediaFolderCommand('folder-b', '开场片', timestamp).execute(project);
+    project = addMediaAssetCommand({
+      id: 'image',
+      name: '开场图',
+      kind: 'image',
+      folderId: null,
+      relativePath: 'assets/reference-media/opening.png',
+      sha256: 'c'.repeat(64),
+      byteLength: 1_024,
+      width: 1080,
+      height: 1920
+    }, timestamp).execute(project);
+    project = moveMediaAssetCommand('image', 'folder-b', timestamp).execute(project);
+
+    expect(project.mediaFolders[1]).toMatchObject({ name: '开场片', parentId: 'folder-a' });
+    expect(project.mediaAssets[0]?.folderId).toBe('folder-b');
+    expect(() => removeMediaFolderCommand('folder-b', timestamp).execute(project)).toThrow(/媒体素材/);
+    expect(() => moveMediaFolderCommand('folder-a', 'folder-b', timestamp).execute(project)).toThrow(/循环/);
+
+    project = moveMediaAssetCommand('image', null, timestamp).execute(project);
+    project = removeMediaFolderCommand('folder-b', timestamp).execute(project);
+    project = removeMediaFolderCommand('folder-a', timestamp).execute(project);
+    expect(project.mediaFolders).toHaveLength(0);
+  });
+
+  it('29.97df 在半秒帧切割后保持素材总时长且不越过源文件', () => {
+    let project = setProjectFrameRateCommand('29.97df', timestamp).execute(createEmptyLinkProject('切割工程'));
+    project = addRundownItemCommand(rundownItem('item', '节目'), undefined, timestamp).execute(project);
+    project = addMediaAssetCommand({
+      id: 'video', name: '一秒视频', kind: 'video', folderId: null,
+      relativePath: 'assets/reference-media/video.mp4', sha256: 'd'.repeat(64), byteLength: 1_024,
+      durationMs: 1_001, width: 1920, height: 1080
+    }, timestamp).execute(project);
+    project = addReferenceMediaClipCommand('item', {
+      id: 'clip', assetId: 'video', label: '一秒视频',
+      startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
+      sourceOffsetMs: 0, durationMs: 1_001,
+      canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM
+    }, undefined, timestamp).execute(project);
+
+    const split = splitReferenceMediaClipCommand(
+      'item', 'clip', { hours: 0, minutes: 0, seconds: 0, frames: 15 }, 'right', timestamp
+    ).execute(project);
+
+    expect(split.rundown[0]?.referenceMediaClips).toMatchObject([
+      { id: 'clip', sourceOffsetMs: 0, durationMs: 501 },
+      { id: 'right', sourceOffsetMs: 501, durationMs: 500 }
+    ]);
+  });
+});
+
+function rundownItem(id: string, title: string): RundownItem {
+  return { id, title, enabled: true, notes: '', visualLayers: [], referenceMediaClips: [], cues: [] };
+}
+
+function linkCue(id: string, name: string): LinkCue {
+  return {
+    id,
+    name,
+    timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+    enabled: true,
+    notes: '',
+    actions: []
+  };
+}
+
+function programAction(id: string, program: number): LinkAction {
+  return {
+    id,
+    label: id,
+    kind: 'midi.programChange',
+    portProfileId: 'p1-output',
+    channel: 1,
+    program
+  };
+}
+
+function p1ImportedItem(sourceKey: string, title: string, playlistId: string, marker: string) {
+  return {
+    title,
+    referenceAudio: {
+      assetId: `audio-${marker}`,
+      relativePath: `assets/reference-audio/${marker}.wav`,
+      sha256: marker.repeat(64),
+      durationMs: 1_000
+    },
+    p1Media: p1Binding(sourceKey, playlistId, `${marker}.wav`)
+  };
+}
+
+function p1Binding(sourceKey: string, playlistId: string, sourceFileName: string) {
+  return {
+    sourceKey,
+    playlistId,
+    sourceFileName,
+    playEndAction: 'stop' as const,
+    volume: 100,
+    muted: false,
+    shortcut: '',
+    midiStartTime: '0'
+  };
+}
+
+function sequenceIds(...ids: string[]): () => string {
+  let index = 0;
+  return () => {
+    const id = ids[index];
+    if (!id) throw new Error('测试 ID 已耗尽');
+    index += 1;
+    return id;
+  };
+}

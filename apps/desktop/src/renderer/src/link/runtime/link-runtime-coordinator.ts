@@ -1,0 +1,441 @@
+import { sceneBoundaryWork, sceneOutputAt } from './scene-output-timeline';
+import {
+  CueActionRunner,
+  CueRuntime, MtcQuarterFrameDecoder, timecodeToFrameNumber,
+  type ManagedMediaEvent, type MtcSample, type PreflightReport, type RuntimeUpdate
+} from '@tb/core/link';
+import type { LinkAction, LinkCue, LinkProject } from '@tb/schema';
+import { LinkMidiAdapter } from '../../registry/link-midi-adapter';
+import { useIntegrationStore } from '../stores/integration-store';
+import { useRuntimeStore } from '../stores/runtime-store';
+import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+import { collectManagedOutputCleanupAfter, ManagedMediaExecutionError, ManagedOutputRuntime } from './managed-output-runtime';
+import { executeManagedOutputCleanup } from './managed-output-cleanup';
+import { MtcStabilityTracker } from './mtc-stability-tracker';
+import { ObsIpcExecutor } from './obs-ipc-executor';
+import { recordRuntimeAction, recordRuntimeOperator, reportCoordinatorError } from './runtime-action-log';
+import { recordMidiPortUpdate } from './runtime-midi-log';
+import { findNextCueId } from './runtime-next-cue';
+import { appendMediaReport, appendRetryActionReport } from './runtime-report-store';
+import { applyRuntimeState, resetRuntimeExecutionView } from './runtime-state-application';
+import { P1AutoFollowController } from './p1-auto-follow-controller';
+import { internalSample } from './internal-timeline';
+import { seekInternalRuntime } from './internal-runtime-seek';
+import { prepareInternalRuntime } from './internal-runtime-preparation';
+import { executeTimelineWork, executeDueCues } from './timeline-work';
+
+export class LinkRuntimeCoordinator {
+  private readonly runtime: CueRuntime;
+  private readonly decoder = new MtcQuarterFrameDecoder();
+  private readonly midi: LinkMidiAdapter;
+  private readonly runner: CueActionRunner;
+  private unsubscribeMtc: (() => void) | null = null;
+  private mtcSubscriptionKey: string | null = null;
+  private unsubscribePorts: (() => void) | null = null;
+  private tickTimer: number | null = null;
+  private lastSample: MtcSample | null = null;
+  private readonly mtcStability = new MtcStabilityTracker();
+  private cueExecutionTail: Promise<void> = Promise.resolve();
+  private executionGeneration = 0;
+  private readonly managedOutput: ManagedOutputRuntime;
+  private autoFollow: P1AutoFollowController | null = null;
+  private disposed = false;
+  private internalStopHandler: (() => void) | null = null;
+  private internalCaptureActive = false;
+
+  onInternalStop(handler: (() => void) | null): void { this.internalStopHandler = handler; }
+  async stopAndWait(suspendAuto = true): Promise<void> {
+    this.stop(suspendAuto); await this.cueExecutionTail;
+    if (this.runtime.getState() === 'error') throw new Error(useRuntimeStore.getState().reason ?? '停止清理失败');
+  }
+  async prepareInternal(itemId: string, preflight: () => Promise<PreflightReport>, positionMs = 0): Promise<void> {
+    this.autoFollow?.suspend();
+    await prepareInternalRuntime(this.project, itemId, positionMs, preflight, {
+      stop: () => this.stopAndWait(false), select: () => this.selectItem(itemId, false), capture: () => { this.internalCaptureActive = true; },
+      armFromStart: () => this.armFromStart(), runtime: this.runtime, sample: (sample) => { this.lastSample = sample; },
+      apply: (update) => this.applyRequiredUpdate(update), collectThrough: (frame) => { this.managedOutput.collectThrough(frame); },
+      execute: (cues, media) => this.enqueueTimelineWork(cues, media)
+    });
+  }
+  ingestInternal(positionMs: number): Promise<void> { return this.ingestSample(internalSample(this.project, positionMs)); }
+  async seekInternal(positionMs: number): Promise<void> {
+    const item = this.currentItem();
+    if (!item || !useRuntimeStore.getState().preflight?.passed || !['running', 'paused'].includes(this.runtime.getState())) throw new Error('当前播放会话不可定位，请重新播放');
+    if (this.runtime.getState() === 'running') this.applyRequiredUpdate(this.runtime.pauseAutomatic());
+    ++this.executionGeneration; await this.cueExecutionTail;
+    const sample = internalSample(this.project, positionMs); this.lastSample = sample;
+    const operation = seekInternalRuntime(this.project, this.projectPath, item.id, sample, this.runtime, this.managedOutput, this.runner, (update) => this.applyRequiredUpdate(update));
+    this.cueExecutionTail = operation.catch((error: unknown) => this.reportRuntimeError(error)); await operation;
+  }
+  async pauseInternal(): Promise<void> { this.pause(); await this.syncMediaTransport('pause'); }
+
+  async enableP1AutoFollow(preflight: () => Promise<PreflightReport>): Promise<void> {
+    if (this.project.playbackSource === 'internal' || !this.project.p1AutoFollow?.enabled || this.disposed) return;
+    if (this.autoFollow) { await this.initializeMidi(); this.autoFollow.enable(); return; }
+    this.autoFollow = new P1AutoFollowController(this.project, {
+      prepare: async (itemId, isCurrent) => {
+        this.stop(false); await this.cueExecutionTail;
+        if (!isCurrent()) return;
+        this.selectItem(itemId, false);
+        const report = await preflight();
+        if (!isCurrent()) return;
+        if (!report.passed) throw new Error(report.checks.filter((check) => check.status === 'blocking').map((check) => check.detail).join('；'));
+        await this.armFromStart();
+      },
+      ingest: (sample) => this.ingestSample(sample, true),
+      interrupt: () => { this.executionGeneration += 1; },
+      fail: (error) => this.reportRuntimeError(error)
+    });
+    await this.initializeMidi();
+    useRuntimeStore.getState().setState({ reason: '自动监听 P1：直接点击歌曲即可联动 OBS' });
+  }
+
+  constructor(private readonly project: LinkProject, private readonly projectPath: string | null) {
+    this.runtime = new CueRuntime(project);
+    this.managedOutput = new ManagedOutputRuntime(project, projectPath, linkDesktopViewModel);
+    this.midi = new LinkMidiAdapter(
+      (profileId) => {
+        const port = useIntegrationStore.getState().profile?.midiPortProfiles.find((candidate) => candidate.id === profileId);
+        return port ?? null;
+      },
+      (error) => this.reportRuntimeError(error)
+    );
+    this.runner = new CueActionRunner([new ObsIpcExecutor(), this.midi], {
+      onStatus: (event) => recordRuntimeAction(this.project.projectId, this.currentItem(), event)
+    });
+  }
+
+  async initializeMidi(input = true): Promise<void> {
+    const receiveTimecode = input && this.project.playbackSource !== 'internal';
+    if (!receiveTimecode) { this.unsubscribeMtc?.(); this.unsubscribeMtc = null; this.mtcSubscriptionKey = null; }
+    const ports = await this.midi.initialize();
+    useIntegrationStore.getState().setMidiPorts(ports);
+    this.unsubscribePorts?.();
+    this.unsubscribePorts = this.midi.subscribePorts((next) => {
+      useIntegrationStore.getState().setMidiPorts(next);
+      void recordMidiPortUpdate(this.project.projectId, next).catch((error: unknown) => this.reportRuntimeError(error));
+    });
+    const profile = useIntegrationStore.getState().profile;
+    if (!profile) throw new Error('尚未配置集成档案');
+    const nextSubscriptionKey = `${profile.p1.mtcInputPortProfileId}:${profile.p1.expectedFrameRate}`;
+    if (receiveTimecode && (
+      this.unsubscribeMtc === null
+      || this.mtcSubscriptionKey !== nextSubscriptionKey
+      || !this.midi.hasActiveMtcSubscription(profile.p1.mtcInputPortProfileId)
+    )) {
+      this.unsubscribeMtc?.();
+      this.unsubscribeMtc = null;
+      this.mtcSubscriptionKey = null;
+      this.unsubscribeMtc = await this.midi.subscribeMtc(
+        profile.p1.mtcInputPortProfileId,
+        profile.p1.expectedFrameRate,
+        (message) => {
+          void this.ingestQuarterFrame((message.messageType << 4) | message.value, message.receivedAt)
+            .catch((error: unknown) => this.reportRuntimeError(error));
+        }
+      );
+      this.mtcSubscriptionKey = nextSubscriptionKey;
+    }
+    if (this.tickTimer !== null) window.clearInterval(this.tickTimer);
+    this.tickTimer = window.setInterval(() => {
+      if (this.project.playbackSource === 'internal' && this.runtime.getState() === 'paused') return;
+      this.applyUpdate(this.runtime.tick(performance.now()));
+    }, 100);
+  }
+
+  async waitForMtcInputPort(timeoutMs: number): Promise<void> {
+    const profile = useIntegrationStore.getState().profile;
+    if (!profile) throw new Error('尚未配置集成档案');
+    await this.midi.waitForConnectedInput(profile.p1.mtcInputPortProfileId, timeoutMs, (ports) => useIntegrationStore.getState().setMidiPorts(ports));
+  }
+
+  selectItem(itemId: string, recordOperator = true): void {
+    const update = this.runtime.selectItem(itemId, -1);
+    if (update.state === 'error' || update.reason) {
+      this.applyUpdate(update);
+      return;
+    }
+    this.decoder.reset(); this.mtcStability.reset();
+    this.lastSample = null;
+    try { this.managedOutput.selectItem(itemId); } catch (error) { this.reportRuntimeError(error); return; }
+    useRuntimeStore.getState().setState({ currentItemId: itemId, reports: [], mediaReports: [], currentCueId: null, timecode: null, detectedFrameRate: null, mtcStable: false, lastMtcAt: null });
+    this.applyUpdate(update);
+    if (recordOperator) this.recordOperatorAction('选择当前节目', { itemId });
+  }
+
+  beginPreflight(mode: PreflightReport['mode']): void { useRuntimeStore.getState().setState({ preflight: null, mode }); this.applyRequiredUpdate(this.runtime.beginPreflight(mode)); }
+
+  async applyPreflight(report: PreflightReport): Promise<void> {
+    if (this.runtime.getState() !== 'preflight') throw new Error(`预检结果不能应用到当前运行状态：${this.runtime.getState()}`);
+    await this.recordOperatorActionAsync('执行预检', { mode: report.mode, passed: report.passed });
+    useRuntimeStore.getState().setState({ preflight: report, mode: report.mode });
+  }
+
+  async arm(): Promise<void> {
+    const report = useRuntimeStore.getState().preflight;
+    if (!report?.passed) throw new Error('预检存在阻断项，不能布防');
+    const currentSample = this.lastSample && performance.now() - this.lastSample.receivedAtMs <= 500
+      ? this.lastSample
+      : null;
+    if (!currentSample) throw new Error('当前没有持续更新的 MTC；请到集成中心重新启动并待命');
+    if (!useRuntimeStore.getState().mtcStable) throw new Error('MTC 尚未连续稳定 500ms；请等待稳定后重新预检');
+    this.managedOutput.resetExecution();
+    useRuntimeStore.getState().setState({ reports: [], mediaReports: [], currentCueId: null });
+    if (this.project.obsOutputMode !== 'scenes') await linkDesktopViewModel.activateManagedObsOutput();
+    this.applyRequiredUpdate(this.runtime.arm(performance.now(), currentSample));
+    const skippedMedia = this.managedOutput.collectThrough(currentSample.totalFrames);
+    await this.enqueueSkippedMedia(skippedMedia, '从当前 MTC 布防时该素材边界已经越过；系统未自动补执行');
+    await this.recordOperatorActionAsync('从当前 MTC 布防当前节目', { skippedMediaActions: skippedMedia.length });
+  }
+
+  async armFromStart(): Promise<void> {
+    const report = useRuntimeStore.getState().preflight;
+    if (!report?.passed) throw new Error('预检存在阻断项，不能布防');
+    await this.prepareArmFromStart();
+    await this.recordOperatorActionAsync('从头布防当前节目');
+  }
+
+  pause(): void {
+    this.applyRequiredUpdate(this.runtime.pauseAutomatic());
+    this.recordOperatorAction('暂停自动联动');
+  }
+
+  resume(): void {
+    this.applyRequiredUpdate(this.runtime.resumeAutomatic());
+    this.recordOperatorAction('恢复自动联动');
+  }
+
+  async resyncCurrentTime(): Promise<void> {
+    if (!this.lastSample) throw new Error('尚未收到完整 MTC 时间码');
+    if (performance.now() - this.lastSample.receivedAtMs > 500) throw new Error('MTC 尚未恢复稳定更新，不能按当前时间重同步');
+    const sample = this.lastSample;
+    this.applyRequiredUpdate(this.runtime.resync(sample));
+    const skippedMedia = this.managedOutput.collectThrough(sample.totalFrames);
+    await this.enqueueSkippedMedia(skippedMedia, 'MTC 丢失期间已越过该素材边界；系统未自动补执行');
+    await this.recordOperatorActionAsync('按当前时间重同步', { skippedMediaActions: skippedMedia.length });
+  }
+
+  rearmFromStart(): void {
+    this.decoder.reset(); this.mtcStability.reset();
+    this.lastSample = null;
+    this.managedOutput.resetExecution();
+    resetRuntimeExecutionView();
+    this.applyRequiredUpdate(this.runtime.rearmFromStart(performance.now()));
+    this.recordOperatorAction('从头重新布防');
+  }
+
+  async enableManualTakeover(): Promise<void> {
+    this.applyRequiredUpdate(this.runtime.enableManualTakeover(this.lastSample));
+    const skippedMedia = this.lastSample ? this.managedOutput.collectThrough(this.lastSample.totalFrames) : [];
+    await this.enqueueSkippedMedia(skippedMedia, 'MTC 丢失后已切换手动接管；系统未自动补执行');
+    await this.recordOperatorActionAsync('确认手动接管', { skippedMediaActions: skippedMedia.length });
+  }
+
+  async manualGo(cueId: string): Promise<void> {
+    await this.recordOperatorActionAsync('手动 GO', { cueId });
+    const update = this.runtime.manualGo(cueId);
+    this.applyUpdate(update);
+    if (update.state === 'error') throw new Error(update.reason ?? '手动 GO 失败');
+    await this.enqueueDueCues(update.dueCues.map((due) => due.cue));
+  }
+
+  async retryAction(cueId: string, actionId: string): Promise<void> {
+    await this.recordOperatorActionAsync('重试失败或遗漏动作', { cueId, actionId });
+    const action = useRuntimeStore.getState().reports
+      .flatMap((report) => report.results)
+      .reverse()
+      .find((result) => result.cueId === cueId && result.actionId === actionId)?.action;
+    if (!action) throw new Error('重试目标动作不存在');
+    this.managedOutput.trackVisualActionAttempt(cueId, action); const result = await this.runner.retry(cueId, action);
+    this.managedOutput.applyRetriedVisualAction(cueId, action, result.status);
+    appendRetryActionReport(result, this.runtime.getMode());
+    if (result.status === 'failed') throw new Error(result.error ?? '动作重试失败');
+  }
+
+  async retryManagedMedia(event: ManagedMediaEvent): Promise<void> {
+    await this.recordOperatorActionAsync('重试失败或遗漏素材动作', { eventId: event.id, clipId: event.clipId, phase: event.phase });
+    const report = await this.managedOutput.executeMedia(event, 'live');
+    appendMediaReport(report);
+    if (report.status === 'failed') throw new Error(report.error ?? '素材动作重试失败');
+  }
+
+  async testAction(action: LinkAction): Promise<void> {
+    await this.recordOperatorActionAsync('单步测试动作', { actionId: action.id, kind: action.kind });
+    const result = await this.runner.retry('single-action-test', action);
+    if (result.status === 'failed') throw new Error(result.error ?? '单步测试失败');
+  }
+
+  stop(suspendAuto = true): void {
+    if (suspendAuto) this.internalStopHandler?.();
+    if (suspendAuto) this.autoFollow?.suspend();
+    if (this.runtime.getState() === 'stopping') return;
+    this.applyUpdate(this.runtime.stop()); if (this.runtime.getState() === 'idle') return;
+    this.recordOperatorAction('停止运行会话');
+    const cleanupExecution = collectManagedOutputCleanupAfter(this.cueExecutionTail, this.managedOutput).then(async (cleanup) => {
+      await executeManagedOutputCleanup(cleanup, this.managedOutput, this.runner);
+      if (this.internalCaptureActive) { await linkDesktopViewModel.setInternalAudioCapture(false); this.internalCaptureActive = false; }
+    });
+    this.cueExecutionTail = cleanupExecution.then(
+      () => { this.managedOutput.resetExecution(); this.applyUpdate(this.runtime.completeStop()); },
+      (error: unknown) => this.reportRuntimeError(error)
+    );
+  }
+
+  dispose(): void {
+    this.disposed = true; this.autoFollow?.dispose();
+    this.executionGeneration += 1;
+    this.unsubscribeMtc?.();
+    this.unsubscribePorts?.();
+    if (this.tickTimer !== null) window.clearInterval(this.tickTimer);
+    this.unsubscribeMtc = null;
+    this.mtcSubscriptionKey = null;
+    this.unsubscribePorts = null;
+    this.tickTimer = null;
+    this.midi.dispose();
+  }
+
+  private async ingestQuarterFrame(dataByte: number, receivedAt: number): Promise<void> {
+    if (this.project.playbackSource === 'internal') return;
+    const sample = this.decoder.push(dataByte, receivedAt);
+    if (!sample) return;
+    if (this.autoFollow) { this.autoFollow.push(sample); return; }
+    await this.ingestSample(sample);
+  }
+
+  private async ingestSample(sample: MtcSample, followP1 = false): Promise<void> {
+    const previousSample = this.lastSample, previousFrame = previousSample?.totalFrames ?? -1;
+    const previousState = this.runtime.getState(); this.lastSample = sample;
+    useRuntimeStore.getState().setState({
+      timecode: sample.timecode,
+      detectedFrameRate: sample.frameRate,
+      mtcStable: this.mtcStability.update(previousSample, sample),
+      lastMtcAt: sample.receivedAtMs
+    });
+    const resumingP1 = followP1 && previousState === 'timecodeLost';
+    const resumingMedia = this.project.playbackSource === 'internal' && previousState === 'paused';
+    const update = resumingMedia ? this.runtime.resumeMedia(sample) : resumingP1 ? this.runtime.resumeP1(sample) : this.runtime.ingest(sample);
+    this.applyUpdate(update);
+    if ((resumingP1 || resumingMedia) && update.state === 'running') await this.syncMediaTransport('start');
+    const managedMedia = (previousState === 'armed' || previousState === 'running' || resumingP1 || resumingMedia) && update.state === 'running'
+      ? this.managedOutput.collectCrossed(previousFrame, sample.totalFrames)
+      : [];
+    const skippedMedia = previousState === 'paused' && update.state === 'paused' && !update.manualTakeover
+      ? this.managedOutput.collectCrossed(previousFrame, sample.totalFrames)
+      : [];
+    const work = update.state === 'running' && this.currentItem() ? sceneBoundaryWork(this.project, this.currentItem()!.id, previousFrame, sample.totalFrames, update.dueCues, managedMedia) : { cues: update.dueCues, media: managedMedia };
+    await this.enqueueTimelineWork(work.cues, work.media);
+    await this.enqueueSkippedMedia(skippedMedia, '自动联动暂停期间已越过该素材边界；系统未自动补执行');
+  }
+
+  private enqueueDueCues(cues: LinkCue[]): Promise<void> {
+    return this.enqueueTimelineWork(cues.map((cue) => ({
+      cue,
+      scheduledFrame: timecodeToFrameNumber(cue.timecode, this.project.timebase.frameRate),
+      executionId: crypto.randomUUID()
+    })), []);
+  }
+
+  private enqueueTimelineWork(dueCues: RuntimeUpdate['dueCues'], mediaEvents: ManagedMediaEvent[]): Promise<void> {
+    if (dueCues.length === 0 && mediaEvents.length === 0) return Promise.resolve();
+    const generation = this.executionGeneration;
+    const execution = this.cueExecutionTail.then(() => this.executeTimelineWork(dueCues, mediaEvents, generation));
+    this.cueExecutionTail = execution.catch((error: unknown) => this.reportRuntimeError(error));
+    return execution;
+  }
+
+  private enqueueSkippedMedia(events: readonly ManagedMediaEvent[], reason: string): Promise<void> {
+    if (events.length === 0) return Promise.resolve();
+    const execution = this.cueExecutionTail.then(async () => {
+      const reports = await this.managedOutput.reportSkippedMedia(events, reason);
+      for (const report of reports) appendMediaReport(report);
+    });
+    this.cueExecutionTail = execution.catch((error: unknown) => this.reportRuntimeError(error));
+    return execution;
+  }
+
+  private async executeTimelineWork(dueCues: RuntimeUpdate['dueCues'], mediaEvents: ManagedMediaEvent[], generation: number): Promise<void> {
+    const canExecute = (): boolean => generation === this.executionGeneration;
+    await executeTimelineWork(dueCues, mediaEvents, {
+      canExecute, media: (event) => this.executeManagedMedia(event),
+      cue: (cue) => this.executeDueCues([cue], canExecute), skipCue: (cue, reason) => this.executeSkippedCue(cue, reason),
+      skipMedia: async (event, reason) => {
+        const [report] = await this.managedOutput.reportSkippedMedia([event], reason);
+        if (report) appendMediaReport(report);
+      }
+    });
+  }
+
+  private async executeManagedMedia(event: ManagedMediaEvent): Promise<void> {
+    try {
+      const aligned = this.autoFollow || this.project.playbackSource === 'internal' ? this.managedOutput.alignEvent(event, this.lastSample?.totalFrames ?? event.frameNumber) : event;
+      appendMediaReport(await this.managedOutput.executeMedia(aligned, this.runtime.getMode()));
+    } catch (error) {
+      if (error instanceof ManagedMediaExecutionError) appendMediaReport(error.report);
+      throw error;
+    }
+  }
+
+  private async executeDueCues(cues: LinkCue[], canExecute: () => boolean): Promise<void> {
+    await executeDueCues(cues, this.runner, this.managedOutput, this.runtime.getMode(), canExecute,
+      () => this.nextCueId(useRuntimeStore.getState().missedCueIds));
+  }
+
+  private async executeSkippedCue(cue: LinkCue, reason: string): Promise<void> {
+    const executionCue = this.managedOutput.compileVisualCue(cue);
+    const report = await this.runner.skip(executionCue, this.runtime.getMode(), reason);
+    useRuntimeStore.getState().setState({
+      reports: [...useRuntimeStore.getState().reports, report],
+      nextCueId: this.nextCueId(useRuntimeStore.getState().missedCueIds)
+    });
+  }
+
+  private async prepareArmFromStart(): Promise<void> {
+    this.decoder.reset(); this.mtcStability.reset();
+    this.lastSample = null;
+    this.managedOutput.resetExecution();
+    resetRuntimeExecutionView();
+    if (this.project.obsOutputMode !== 'scenes') await linkDesktopViewModel.activateManagedObsOutput();
+    this.applyRequiredUpdate(this.runtime.arm(performance.now(), null, 'awaiting-external-start'));
+  }
+
+  private applyUpdate(update: RuntimeUpdate): void {
+    if (useRuntimeStore.getState().state !== update.state && ['paused', 'timecodeLost', 'error', 'stopping'].includes(update.state)) {
+      this.executionGeneration += 1;
+      if (this.autoFollow && (update.state === 'timecodeLost' || update.state === 'error')) void this.syncMediaTransport('pause').catch((error: unknown) => this.reportRuntimeError(error));
+    }
+    applyRuntimeState({ project: this.project, item: this.currentItem(), update, nextCueId: this.nextCueId(update.missedCueIds) });
+  }
+
+  private async syncMediaTransport(action: 'pause' | 'start'): Promise<void> {
+    const execution = this.cueExecutionTail.then(() => this.managedOutput.executeTransport(this.runner, action, this.lastSample?.totalFrames ?? 0));
+    this.cueExecutionTail = execution.catch((error: unknown) => this.reportRuntimeError(error));
+    await execution;
+    if (action === 'start' && this.project.obsOutputMode === 'scenes' && this.currentItem()) { const work = sceneOutputAt(this.project, this.currentItem()!.id, this.lastSample?.totalFrames ?? 0); await this.enqueueTimelineWork(work.cues, work.media); }
+  }
+
+  private applyRequiredUpdate(update: RuntimeUpdate): void { this.applyUpdate(update); if (update.state === 'error') throw new Error(update.reason ?? '运行状态变更失败'); }
+
+  private nextCueId(missedCueIds: readonly string[]): string | null { return findNextCueId({
+      item: this.currentItem(),
+      frameRate: this.project.timebase.frameRate,
+      currentFrame: this.lastSample?.totalFrames ?? -1, missedCueIds,
+      reports: useRuntimeStore.getState().reports
+    }); }
+
+  private currentItem() { const id = useRuntimeStore.getState().currentItemId; return this.project.rundown.find((item) => item.id === id); }
+
+  private reportRuntimeError(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.applyUpdate(this.runtime.failExecution(message));
+    reportCoordinatorError(message, (reason) => useRuntimeStore.getState().setState({ state: 'error', reason }));
+  }
+
+  private recordOperatorAction(message: string, details?: Readonly<Record<string, unknown>>): void {
+    void this.recordOperatorActionAsync(message, details).catch((error: unknown) => this.reportRuntimeError(error));
+  }
+
+  private recordOperatorActionAsync(message: string, details?: Readonly<Record<string, unknown>>): Promise<void> {
+    return recordRuntimeOperator(this.project.projectId, this.currentItem(), message, details);
+  }
+
+}

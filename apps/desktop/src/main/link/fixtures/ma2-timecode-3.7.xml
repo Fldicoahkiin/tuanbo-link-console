@@ -1,0 +1,37 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml-stylesheet type="text/xsl" href="styles/timecode@sheet.xsl"?>
+<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.7.0/MA.xsd" major_vers="3" minor_vers="7" stream_vers="0">
+  <Timecode index="903" name="AI 舞蹈参考片 STAGING" slot="TC Slot 1" frame_format="30 FPS">
+    <Track index="0" active="true" expanded="true">
+      <Object name="AI 舞蹈参考片 SEQ 99.204">
+        <No>30</No>
+        <No>1</No>
+        <No>99</No>
+        <No>204</No>
+      </Object>
+      <SubTrack index="0">
+        <Event index="0" time="0" command="Goto" pressed="true" step="1">
+          <Cue name="开场乐句 · 开场乐句 · 乐句 1 · 建立">
+            <No>1</No>
+            <No>9004</No>
+            <No>1</No>
+          </Cue>
+        </Event>
+        <Event index="1" time="12" command="Goto" pressed="true" step="2">
+          <Cue name="开场乐句 · IMPACT · Pre-black">
+            <No>1</No>
+            <No>9004</No>
+            <No>2</No>
+          </Cue>
+        </Event>
+        <Event index="2" time="15" command="Goto" pressed="true" step="3">
+          <Cue name="开场乐句 · IMPACT · Impact 对撞">
+            <No>1</No>
+            <No>9004</No>
+            <No>3</No>
+          </Cue>
+        </Event>
+      </SubTrack>
+    </Track>
+  </Timecode>
+</MA>

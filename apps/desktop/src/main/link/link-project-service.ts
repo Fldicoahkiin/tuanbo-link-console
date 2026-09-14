@@ -1,0 +1,335 @@
+import { createHash } from 'node:crypto';
+import { constants, createReadStream } from 'node:fs';
+import { access, copyFile, mkdir, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  linkMediaAssetSchema,
+  parseLinkProject,
+  serializeLinkProject,
+  type LinkMediaAsset,
+  type LinkMediaKind,
+  type LinkProject
+} from '@tb/schema';
+import type { LinkProjectAssetInspection } from '@tb/core/link';
+import { writeFileAtomically } from './atomic-file';
+import { VerifiedMediaFiles } from './verified-media-files';
+import {
+  extractReferenceAudioTrack,
+  type ReferenceAudioExtractor
+} from './reference-audio-extractor';
+
+const REFERENCE_AUDIO_EXTENSIONS = new Set(['.aac', '.flac', '.m4a', '.mp3', '.ogg', '.wav']);
+const REFERENCE_AUDIO_CONTAINER_EXTENSIONS = new Set(['.avi', '.m4v', '.mkv', '.mov', '.mp4', '.webm']);
+const MEDIA_EXTENSIONS: Record<LinkMediaKind, ReadonlySet<string>> = {
+  audio: REFERENCE_AUDIO_EXTENSIONS,
+  video: new Set(['.avi', '.m4v', '.mkv', '.mov', '.mp4', '.webm']),
+  image: new Set(['.bmp', '.gif', '.jpeg', '.jpg', '.png', '.webp'])
+};
+
+export type ImportedReferenceAudio = {
+  assetId: string;
+  relativePath: string;
+  sha256: string;
+  durationMs: number;
+};
+
+export class LinkProjectService {
+  private readonly pendingSaves = new Map<string, Promise<void>>();
+  private readonly verifiedMedia = new VerifiedMediaFiles(hashFile);
+
+  constructor(
+    private readonly extractAudioTrack: ReferenceAudioExtractor = extractReferenceAudioTrack,
+    private readonly writeProject: typeof writeFileAtomically = writeFileAtomically
+  ) {}
+
+  async open(projectPath: string): Promise<LinkProject> {
+    assertProjectExtension(projectPath);
+    const content = await readFile(projectPath, 'utf8');
+    let value: unknown;
+    try {
+      value = JSON.parse(content);
+    } catch (error) {
+      throw new Error(`工程文件不是有效 JSON：${projectPath}`, { cause: error });
+    }
+    return parseLinkProject(value);
+  }
+
+  async save(projectPath: string, project: LinkProject): Promise<void> {
+    assertProjectExtension(projectPath);
+    const content = serializeLinkProject(project);
+    const absolutePath = resolve(projectPath);
+    const key = process.platform === 'win32' ? absolutePath.toLowerCase() : absolutePath;
+    const previous = this.pendingSaves.get(key) ?? Promise.resolve();
+    const operation = previous.then(() => this.writeProject(absolutePath, content));
+    // Each caller receives its own failure; a failed save must not block a later explicit save.
+    const settled = operation.then(() => undefined, () => undefined);
+    this.pendingSaves.set(key, settled);
+    try {
+      await operation;
+    } finally {
+      if (this.pendingSaves.get(key) === settled) this.pendingSaves.delete(key);
+    }
+  }
+
+  async loadWaveformCache(projectPath: string, sha256: string): Promise<number[] | null> {
+    assertSha256(sha256);
+    const path = waveformCachePath(projectPath, sha256);
+    let content: string;
+    try {
+      content = await readFile(path, 'utf8');
+    } catch (error) {
+      if (isErrorWithCode(error, 'ENOENT')) return null;
+      throw error;
+    }
+    let value: unknown;
+    try {
+      value = JSON.parse(content);
+    } catch (error) {
+      throw new Error(`波形缓存损坏：${path}`, { cause: error });
+    }
+    if (!Array.isArray(value) || !value.every((peak) => typeof peak === 'number' && Number.isFinite(peak) && peak >= -1 && peak <= 1)) {
+      throw new Error(`波形缓存结构无效：${path}`);
+    }
+    return value.map((peak) => {
+      if (typeof peak !== 'number') throw new Error(`波形缓存结构无效：${path}`);
+      return peak;
+    });
+  }
+
+  async saveWaveformCache(projectPath: string, sha256: string, peaks: number[]): Promise<void> {
+    assertSha256(sha256);
+    if (peaks.length === 0 || !peaks.every((peak) => Number.isFinite(peak) && peak >= -1 && peak <= 1)) {
+      throw new Error('波形峰值必须是 -1 到 1 之间的有限数值');
+    }
+    await writeFileAtomically(waveformCachePath(projectPath, sha256), `${JSON.stringify(peaks)}\n`);
+  }
+
+  async inspectAssets(projectPath: string, project: LinkProject): Promise<LinkProjectAssetInspection> {
+    const result: LinkProjectAssetInspection = { referenceAudio: {}, media: {} };
+    for (const item of project.rundown) {
+      if (!item.referenceAudio) continue;
+      const audioPath = this.resolveReferenceAudio(projectPath, item.referenceAudio.relativePath);
+      result.referenceAudio[item.id] = {
+        audioAvailable: await pathExists(audioPath),
+        waveformAvailable: await pathExists(waveformCachePath(projectPath, item.referenceAudio.sha256))
+      };
+    }
+    for (const asset of project.mediaAssets) {
+      const assetPath = this.resolveMediaAsset(projectPath, asset.relativePath);
+      const exists = await pathExists(assetPath);
+      if (exists && !await this.verifiedMedia.verify(assetPath, asset.sha256)) throw new Error(`素材完整性校验失败：${asset.name}，请重新导入原文件`);
+      result.media[asset.id] = {
+        fileAvailable: exists
+      };
+    }
+    return result;
+  }
+
+  async importReferenceAudio(
+    projectPath: string,
+    sourcePath: string,
+    durationMs: number
+  ): Promise<ImportedReferenceAudio> {
+    assertProjectExtension(projectPath);
+    if (!Number.isInteger(durationMs) || durationMs <= 0) {
+      throw new Error('参考音频时长必须是正整数毫秒');
+    }
+    const extension = extname(sourcePath).toLowerCase();
+    if (!REFERENCE_AUDIO_EXTENSIONS.has(extension) && !REFERENCE_AUDIO_CONTAINER_EXTENSIONS.has(extension)) {
+      throw new Error(`不支持的参考音频格式：${extension || '无扩展名'}`);
+    }
+    await access(sourcePath, constants.R_OK);
+    const sourceStat = await stat(sourcePath);
+    if (!sourceStat.isFile() || sourceStat.size <= 0) throw new Error('参考音频必须是非空文件');
+
+    const projectDirectory = dirname(resolve(projectPath));
+    const assetsDirectory = join(projectDirectory, 'assets', 'reference-audio');
+    await mkdir(assetsDirectory, { recursive: true });
+    if (REFERENCE_AUDIO_CONTAINER_EXTENSIONS.has(extension)) {
+      return this.importContainerAudio(assetsDirectory, projectDirectory, sourcePath, durationMs);
+    }
+
+    const digest = await hashFile(sourcePath);
+    const destination = join(assetsDirectory, `${digest}${extension}`);
+
+    if (!(await pathExists(destination))) {
+      const temporaryPath = join(assetsDirectory, `.${crypto.randomUUID()}.tmp`);
+      await copyFile(sourcePath, temporaryPath, constants.COPYFILE_EXCL);
+      try {
+        await rename(temporaryPath, destination);
+      } catch (error) {
+        throw new Error(`导入参考音频失败；临时文件：${temporaryPath}`, { cause: error });
+      }
+    }
+
+    const relativePath = relative(projectDirectory, destination).replaceAll('\\', '/');
+    return {
+      assetId: crypto.randomUUID(),
+      relativePath,
+      sha256: digest,
+      durationMs
+    };
+  }
+
+  private async importContainerAudio(
+    assetsDirectory: string,
+    projectDirectory: string,
+    sourcePath: string,
+    durationMs: number
+  ): Promise<ImportedReferenceAudio> {
+    const temporaryPath = join(assetsDirectory, `.${crypto.randomUUID()}.tmp.wav`);
+    try {
+      await this.extractAudioTrack(sourcePath, temporaryPath);
+      const extractedStat = await stat(temporaryPath);
+      if (!extractedStat.isFile() || extractedStat.size <= 0) throw new Error('提取结果为空');
+      const digest = await hashFile(temporaryPath);
+      const destination = join(assetsDirectory, `${digest}.wav`);
+      if (await pathExists(destination)) await unlink(temporaryPath);
+      else await rename(temporaryPath, destination);
+      return {
+        assetId: crypto.randomUUID(),
+        relativePath: relative(projectDirectory, destination).replaceAll('\\', '/'),
+        sha256: digest,
+        durationMs
+      };
+    } catch (error) {
+      try {
+        await unlink(temporaryPath);
+      } catch (cleanupError) {
+        if (!isErrorWithCode(cleanupError, 'ENOENT')) {
+          throw new Error(`MP4 音轨导入失败且临时文件清理失败：${toMessage(error)}；清理失败：${toMessage(cleanupError)}`, {
+            cause: new AggregateError([error, cleanupError])
+          });
+        }
+      }
+      throw new Error(`素材没有可解码的音轨：${sourcePath}：${toMessage(error)}`, { cause: error });
+    }
+  }
+
+  async importMediaAsset(
+    projectPath: string,
+    sourcePath: string,
+    metadata: Pick<LinkMediaAsset, 'name' | 'kind' | 'durationMs' | 'width' | 'height'>
+  ): Promise<LinkMediaAsset> {
+    assertProjectExtension(projectPath);
+    const extension = extname(sourcePath).toLowerCase();
+    if (!MEDIA_EXTENSIONS[metadata.kind].has(extension)) {
+      throw new Error(`不支持的${mediaKindLabel(metadata.kind)}格式：${extension || '无扩展名'}`);
+    }
+    await access(sourcePath, constants.R_OK);
+    const sourceStat = await stat(sourcePath);
+    if (!sourceStat.isFile() || sourceStat.size <= 0) throw new Error('媒体素材必须是非空文件');
+
+    const digest = await hashFile(sourcePath);
+    const projectDirectory = dirname(resolve(projectPath));
+    const assetsDirectory = join(projectDirectory, 'assets', 'reference-media');
+    const destination = join(assetsDirectory, `${digest}${extension}`);
+    await mkdir(assetsDirectory, { recursive: true });
+    await copyIntoProject(sourcePath, destination, assetsDirectory, '导入媒体素材', digest);
+
+    return linkMediaAssetSchema.parse({
+      id: crypto.randomUUID(),
+      name: metadata.name.trim(),
+      kind: metadata.kind,
+      relativePath: relative(projectDirectory, destination).replaceAll('\\', '/'),
+      sha256: digest,
+      byteLength: sourceStat.size,
+      ...(metadata.durationMs !== undefined ? { durationMs: metadata.durationMs } : {}),
+      ...(metadata.width !== undefined ? { width: metadata.width } : {}),
+      ...(metadata.height !== undefined ? { height: metadata.height } : {})
+    });
+  }
+
+  resolveReferenceAudio(projectPath: string, relativePath: string): string {
+    return resolveProjectAsset(projectPath, relativePath, '参考音频');
+  }
+
+  resolveMediaAsset(projectPath: string, relativePath: string): string {
+    return resolveProjectAsset(projectPath, relativePath, '媒体素材');
+  }
+}
+
+async function copyIntoProject(
+  sourcePath: string,
+  destination: string,
+  assetsDirectory: string,
+  operation: string,
+  expectedSha256: string
+): Promise<void> {
+  if (await pathExists(destination)) {
+    if (await hashFile(destination) !== expectedSha256) throw new Error(`${operation}失败：工程内已有素材与原文件校验不一致，请恢复原文件`);
+    return;
+  }
+  const temporaryPath = join(assetsDirectory, `.${crypto.randomUUID()}.tmp`);
+  await copyFile(sourcePath, temporaryPath, constants.COPYFILE_EXCL);
+  try {
+    if (await hashFile(temporaryPath) !== expectedSha256) throw new Error('复制结果与原文件不一致，源文件可能正在变化');
+    await rename(temporaryPath, destination);
+  } catch (error) {
+    throw new Error(`${operation}失败；临时文件：${temporaryPath}`, { cause: error });
+  }
+}
+
+function resolveProjectAsset(projectPath: string, relativePath: string, label: string): string {
+  const projectDirectory = dirname(resolve(projectPath));
+  const resolved = resolve(projectDirectory, relativePath);
+  const relativeResolved = relative(projectDirectory, resolved);
+  if (
+    relativeResolved === ''
+    || relativeResolved === '..'
+    || relativeResolved.startsWith(`..${sep}`)
+    || isAbsolute(relativeResolved)
+    || basename(resolved) === ''
+  ) {
+    throw new Error(`${label}路径必须位于工程目录内`);
+  }
+  return resolved;
+}
+
+export async function hashFile(filePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filePath)) {
+    const bytes: unknown = chunk;
+    if (!Buffer.isBuffer(bytes)) throw new Error('素材读取未返回二进制数据');
+    hash.update(bytes);
+  }
+  return hash.digest('hex');
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath, constants.F_OK);
+    return true;
+  } catch (error) {
+    if (isErrorWithCode(error, 'ENOENT')) return false;
+    throw error;
+  }
+}
+
+function assertProjectExtension(projectPath: string): void {
+  if (extname(projectPath).toLowerCase() !== '.tblink') {
+    throw new Error('工程文件必须使用 .tblink 扩展名');
+  }
+}
+
+function waveformCachePath(projectPath: string, sha256: string): string {
+  return join(dirname(resolve(projectPath)), 'cache', 'waveforms', `${sha256}.json`);
+}
+
+function assertSha256(value: string): void {
+  if (!/^[a-f0-9]{64}$/.test(value)) throw new Error('SHA-256 格式无效');
+}
+
+function mediaKindLabel(kind: LinkMediaKind): string {
+  if (kind === 'audio') return '音频';
+  if (kind === 'video') return '视频';
+  return '图片';
+}
+
+function isErrorWithCode(error: unknown, code: string): error is Error & { code: string } {
+  return error instanceof Error && 'code' in error && error.code === code;
+}
+
+function toMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

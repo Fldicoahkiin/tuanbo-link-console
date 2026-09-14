@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": []
+  },
+  "include": [
+    "src/renderer/src/main.tsx",
+    "src/renderer/src/link/**/*.ts",
+    "src/renderer/src/link/**/*.tsx",
+    "src/renderer/src/link/**/*.d.ts",
+    "src/renderer/src/registry/link-midi-adapter.ts",
+    "src/renderer/src/registry/link-midi-adapter.test.ts",
+    "../../packages/core/src/types/**/*.d.ts"
+  ]
+}

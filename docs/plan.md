@@ -1,0 +1,53 @@
+# 团播联动台实施状态
+
+2026-09-13：已统一 [OBS 场景工作流](OBS_SCENE_WORKFLOW.md)，包含单一画面设置、场景事件同步和素材独立场景、有限时长机位恢复和可开关低功率预览。以下受管场景链路为历史记录；真实机位与插件验收仍待现场完成。
+
+2026-09-08 当前实现见 [P1 点击播放自动联动](P1_AUTO_FOLLOW.md)。旧记录的“必须外接硬件”已经被实机验证推翻：本机可回滚兼容修复后，P1→loopMIDI→联动台→OBS 已接通。下文是既往实施记录。
+
+## 当前目标路线（2026-08-27）
+
+唯一交付链路为：P1 播放正式音乐与既有声光并输出逐节目归零 MTC；联动台按 MTC 执行摄像头、本地视频、OBS、MIDI 和灯光时间线；OBS 的“团播联动台输出”受管场景负责正式视频解码、视频内嵌音频、摄像头合成和完整画音输出；直播伴侣只采集 OBS 并推流。详细约束见 `SINGLE_MACHINE_WORKFLOW.md`。
+
+实施总计划：
+
+1. 复核 Windows、Git、固定依赖和现有工作区，保留全部已有改动。
+2. 冻结 `.tblink` 视觉片段、受管 OBS 输出、P1/MTC、正式音频和直播伴侣边界。
+3. 实现视频/图片片段的开始与结束帧编译、同层防重叠、OBS 媒体源、内嵌音频、画布变换和图层层序。
+4. 把已有 OBS 摄像头作为引用加入受管场景，按时间线切换且不重新打开设备。
+5. 完成 P1 `.hia`、MIDI 启播、MTC 跟随、丢码恢复和一键连接向导的真实端口签收。
+6. 收敛剪辑式编辑、工程恢复、预检、运行日志和脱敏诊断包。
+7. 通过全量自动验证、Windows NSIS、release manifest、独立账户安装及真实现场场景。
+
+当前已完成第 1–6 步和第 7 步中的既有自动验证、NSIS、release manifest、当前账户安装/覆盖/启动/退出/卸载；2026-08-31 的 0.2.14 本地开发树另通过 37 个测试文件、237 项单元测试和 14/14 Electron E2E。按操作员要求本轮不生成安装包、不提交、不打标签、不推送、不发布。P1 1.14.2 已打开工程并实际播放，但对 loopMIDI 和 Windows MIDI Services 软件环回均不发送 quarter-frame，官方说明所示的物理 USB-MIDI OUT→IN 设备当前不存在。真实 MTC/MIDI 与 OBS/P1 联动证据、干净 Windows 账户安装尚未签收，因此目标保持 active；直播伴侣不属于该联动链。
+
+## 已完成
+
+- Windows Node 25.8.2 / pnpm 10.33.0 / Electron 39.8.10 基线。
+- S3/IBC 公开资料与本地软件差距矩阵。
+- `.tblink` schema v1、Command、undo/redo、原子保存、参考音频去重与波形缓存。
+- 四种 MTC 帧率、quarter-frame 解码、Cue crossing、丢失/跳变/恢复状态机。
+- 排练/直播执行策略与单动作重试。
+- OBS WebSocket 5.x、Web MIDI、MSC、安全存储，以及 OBS/P1 进程所有权。
+- 集中预检、结构化脱敏日志和诊断包。
+- 五工作区 Windows UI 与最小 `tbLink` preload。
+- 删除 Program、内置合成、libobs helper、NDI、虚拟摄像头、RTMP、摄像头/麦克风和旧 ShowPackage 产品路径。
+- 已验证 P1 1.14.2 实际音频工程为 UTF-8 XML `.hia`；联动台可读取全部播放列表与音频、以 Command 合并并保留已有 Cue、检测源工程并发变化，并原子生成独立的 `*.联动台.hia`。
+
+## 自动验收
+
+- `pnpm install --frozen-lockfile`
+- `pnpm typecheck`
+- `pnpm test`
+- `pnpm lint`
+- `pnpm build`
+- `pnpm verify`
+- Electron Playwright smoke
+- Windows NSIS / unpacked / release manifest
+- 当前 Windows 账户的首次安装、同版本覆盖安装、启动、正常退出和卸载（干净账户仍待现场验收）
+- 最终安装包 SHA-256：`6DE45E630CC0176A2FB5032F4E570A8BE6E7872370F1264759B3CDEF2C947DC7`；Windows 主程序资源元数据采用显式写入、已确认暂时占用的有限公开重试和最终硬校验，连续两轮打包通过。
+
+## 真实现场前置条件
+
+已在当前 Windows 机器确认 P1 `1.14.2`，主程序为 `D:\HirenderP1\HirenderP1.exe`，并通过受控 `.hia` 工程验证音频路径、播放列表、顺序、标题、音量、静音、快捷键、结束动作和 MIDI 起始字段的往返。P1 已进入 Audio 模式、打开工程并实际播放；在勾选发送 MTC 30Hz 后，loopMIDI 与 Windows MIDI Services 两个原生软件环回均收到 0 条 quarter-frame，P1 显示 MTC“未发送”。当前需补入物理 USB-MIDI OUT→IN，再确认归零、帧率、丢失和恢复。OBS 密码必须由操作员在联动台本机输入，不进入文档或聊天记录。完成后按 `WINDOWS_ACCEPTANCE.md` 逐项记录版本、设备、步骤、结果和证据。
+
+完整实现与验收状态见 `COMPLETION_AUDIT.md`。代码、自动测试或当前账户安装通过，不等于 P1、OBS 现场链路已经签收；直播伴侣仅由直播端独立确认其 OBS 采集配置。

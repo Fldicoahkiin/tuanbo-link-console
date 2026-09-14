@@ -1,0 +1,63 @@
+/* Point cues and duration clips keep distinct geometry. Selection never changes their size. */
+.reference-timeline { --timeline-selection: #91d9ee; --timeline-grip: #d5f4ff; }
+:root[data-theme='light'] .reference-timeline { --timeline-selection: #087b89; --timeline-grip: #064f63; }
+.reference-timeline :is(.timeline-clip, .timeline-cue) { border-radius: 3px; transition: box-shadow 100ms; }
+.reference-timeline .timeline-cue.visual-obs-clip { transform: none; }
+.reference-timeline .timeline-playhead { width: 1px; box-shadow: none; }
+.reference-timeline .timeline-playhead::before { left: -5.5px; }
+.reference-timeline .timeline-snap-guide { box-shadow: none; }
+.reference-timeline .timeline-current-time { position: absolute; bottom: 3px; z-index: 10; transform: translateX(-50%); padding: 3px 5px; border-radius: 3px; background: #ffb340; color: #18130a; font: 600 10px/15px Consolas, monospace; white-space: nowrap; pointer-events: none; }
+.reference-timeline :is(.timeline-clip, .timeline-cue).is-selected { z-index: 5; box-shadow: inset 0 0 0 1px var(--timeline-selection); outline: 1px solid var(--timeline-selection); outline-offset: -1px; }
+/* All visual tracks share one card layout and type scale. */
+.reference-timeline :is(.timeline-clip, .timeline-cue) { top: 2px; height: calc(100% - 4px); min-height: 0; box-sizing: border-box; display: flex; flex-direction: column; align-items: stretch; justify-content: center; padding: 6px 10px; border-width: 1px; text-align: left; font-family: 'Segoe UI', 'Microsoft YaHei UI', sans-serif; }
+.reference-timeline :is(.timeline-clip, .timeline-cue) > span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; font-weight: 650; line-height: 14px; }
+.reference-timeline :is(.timeline-clip, .timeline-cue) > small { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; color: var(--text-primary); font: 9px/12px Consolas, monospace; }
+/* Color identifies content; selection only adds an outline. */
+.reference-timeline { --type-video: #205778; --type-image: #594579; --type-audio: #1c625d; --type-obs: #855326; --type-midi: #794568; --type-lighting: #32623a; --type-mixed: #6b6230; --type-empty: #414954; --type-missing: #823d48; --type-ink: #f4f7fb; --type-edge: rgb(255 255 255 / .3); }
+:root[data-theme='light'] .reference-timeline { --type-video: #c7e4f5; --type-image: #e3d6f3; --type-audio: #c6e9e2; --type-obs: #f4dfbd; --type-midi: #f0d1e4; --type-lighting: #d4e8c9; --type-mixed: #e9e3bb; --type-empty: #e0e4ea; --type-missing: #f4cdd3; --type-ink: #18212d; --type-edge: rgb(24 33 45 / .28); }
+.reference-timeline .timeline-clip.video { --type-fill: var(--type-video); }
+.reference-timeline .timeline-clip.image { --type-fill: var(--type-image); }
+.reference-timeline .timeline-clip.audio { --type-fill: var(--type-audio); }
+.reference-timeline .timeline-clip.missing { --type-fill: var(--type-missing); }
+.reference-timeline .timeline-cue.cue-kind-obs { --type-fill: var(--type-obs); }
+.reference-timeline .timeline-cue.cue-kind-midi { --type-fill: var(--type-midi); }
+.reference-timeline .timeline-cue.cue-kind-lighting { --type-fill: var(--type-lighting); }
+.reference-timeline .timeline-cue.cue-kind-mixed { --type-fill: var(--type-mixed); }
+.reference-timeline .timeline-cue.cue-kind-empty { --type-fill: var(--type-empty); }
+.reference-timeline :is(.timeline-clip, .timeline-cue)[class] { background: var(--type-fill, var(--type-empty)); border-color: var(--type-edge); color: var(--type-ink); }
+.reference-timeline :is(.timeline-clip, .timeline-cue)[class] > :is(span, small) { color: var(--type-ink); }
+.reference-timeline .timeline-trim-handle { top: 0; bottom: 0; width: 8px; border: 0; border-radius: 0; background: transparent; opacity: 0; transition: opacity 100ms; }
+.reference-timeline :is(.timeline-clip, .timeline-cue):hover .timeline-trim-handle,
+.reference-timeline :is(.timeline-clip, .timeline-cue):focus-visible .timeline-trim-handle { background: transparent; opacity: 1; }
+.reference-timeline .timeline-trim-handle::after { content: ''; position: absolute; width: 2px; height: 14px; left: 3px; top: calc(50% - 7px); border-radius: 1px; background: var(--timeline-grip); }
+.reference-timeline .timeline-trim-handle.start { left: 0; }
+.reference-timeline .timeline-trim-handle.end { right: 0; }
+.reference-timeline .is-locked .timeline-trim-handle { display: none; }
+.reference-timeline :is(.timeline-clip, .timeline-cue):focus-visible { outline: 1px solid var(--timeline-selection); outline-offset: 1px; }
+.timeline-edit-menu { position: fixed; z-index: 10000; width: 290px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; padding: 6px; border: 1px solid var(--separator); border-radius: 8px; background: var(--surface-raised); color: var(--text-primary); box-shadow: 0 12px 32px rgb(0 0 0 / .35); }
+.timeline-edit-menu .timeline-menu-title { padding: 8px 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-secondary); font-size: 12px; }
+.timeline-edit-menu > button { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; color: inherit; text-align: left; box-shadow: none; font: 13px/1.5 'Segoe UI', 'Microsoft YaHei UI', sans-serif; }
+.timeline-edit-menu > button svg { width: 16px; height: 16px; }
+.timeline-edit-menu > button:is(:hover, :focus-visible):not(:disabled) { background: color-mix(in srgb, var(--accent) 20%, transparent); outline: none; }
+.timeline-edit-menu > button:disabled { opacity: .4; cursor: not-allowed; }
+.timeline-edit-menu > button.danger { color: #ff9da4; }
+:root[data-theme='light'] .timeline-edit-menu > button.danger { color: #b32b39; }
+.timeline-edit-menu kbd { font: 11px/1.5 Consolas, monospace; color: var(--text-secondary); }
+.timeline-edit-menu hr { height: 1px; border: 0; background: var(--separator); margin: 5px 6px; }
+@media (prefers-reduced-motion: reduce) { .reference-timeline :is(.timeline-clip, .timeline-cue, .timeline-trim-handle) { transition: none; } }
+
+.obs-live-canvas, .obs-live-selection { position: absolute; inset: 0; }
+.obs-live-canvas > canvas { display: block; width: 100%; height: 100%; }
+.obs-live-selection { pointer-events: none; }
+.obs-live-source { position: absolute; pointer-events: auto; touch-action: none; cursor: move; }
+.obs-live-source.is-selected { outline: 1px solid #ff453a; outline-offset: -1px; }
+.obs-live-caption { position: absolute; left: 0; bottom: -20px; color: var(--text-secondary); font-size: 11px; white-space: nowrap; pointer-events: none; }
+
+.obs-live-container { position: relative; width: 100%; height: 100%; min-height: 0; container-type: size; }
+.obs-live-container > .obs-live-canvas { position: absolute; inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.timeline-new-layer-heading, .timeline-new-layer-drop { order: 1000000; min-height: 90px; }
+.reference-timeline .timeline-viewport, .reference-timeline .timeline-track-headings { align-self: stretch; }
+.reference-timeline .timeline-content { min-height: 100%; }
+.timeline-new-layer-drop { position: relative; padding: 18px 16px; color: var(--text-secondary); font-size: 12px; }
+.timeline-new-layer-drop > span { pointer-events: none; }
+.timeline-new-layer-drop.is-drop-target { background: rgb(var(--theme-ink-rgb) / .06); box-shadow: inset 0 0 0 1px var(--apple-blue); color: var(--text-primary); }

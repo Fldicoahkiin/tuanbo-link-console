@@ -1,0 +1,477 @@
+import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
+import { access, readFile, stat } from 'node:fs/promises';
+import { basename, dirname, extname, isAbsolute, join, parse, resolve } from 'node:path';
+import {
+  DOMParser,
+  XMLSerializer,
+  type Document as XmlDocument,
+  type Element as XmlElement,
+  type Node as XmlNode
+} from '@xmldom/xmldom';
+import {
+  p1MediaBindingSchema,
+  type LinkProject,
+  type P1MediaBinding,
+  type P1PlaylistBinding,
+  type RundownItem
+} from '@tb/schema';
+import type {
+  LinkP1ProjectExportPreview,
+  LinkP1ProjectExportResult,
+  LinkP1ProjectImportResult
+} from '@tb/core/link';
+import { writeFileAtomically } from './atomic-file';
+import { validateP1TimecodeRanges } from '@tb/core/link';
+import { LinkProjectService } from './link-project-service';
+
+type ParsedP1Media = {
+  element: XmlElement;
+  resourcePath: string;
+  durationMs: number;
+  title: string;
+  binding: P1MediaBinding;
+};
+
+type ParsedP1Playlist = {
+  binding: P1PlaylistBinding;
+  element: XmlElement;
+  media: ParsedP1Media[];
+};
+
+type ParsedP1Project = {
+  document: XmlDocument;
+  sourcePath: string;
+  sourceSha256: string;
+  videoPlayList: XmlElement;
+  audioPlayList: XmlElement | null;
+  playlists: ParsedP1Playlist[];
+};
+
+type ExportPlan = {
+  parsed: ParsedP1Project;
+  targetPath: string;
+  exportItems: RundownItem[];
+  preview: LinkP1ProjectExportPreview;
+};
+
+export class P1ProjectService {
+  constructor(private readonly projects: LinkProjectService) {}
+
+  async importProject(p1ProjectPath: string, linkProjectPath: string): Promise<LinkP1ProjectImportResult> {
+    const parsed = await this.parseProject(p1ProjectPath);
+    await this.preflightMedia(parsed);
+    const items: LinkP1ProjectImportResult['items'] = [];
+    for (const playlist of parsed.playlists) {
+      for (const media of playlist.media) {
+        const referenceAudio = await this.projects.importReferenceAudio(
+          linkProjectPath,
+          media.resourcePath,
+          media.durationMs
+        );
+        items.push({
+          title: media.title,
+          referenceAudio,
+          p1Media: media.binding
+        });
+      }
+    }
+    return {
+      sourcePath: parsed.sourcePath,
+      sourceSha256: parsed.sourceSha256,
+      playlists: parsed.playlists.map((playlist) => playlist.binding),
+      items
+    };
+  }
+
+  async previewExport(
+    p1ProjectPath: string,
+    linkProjectPath: string,
+    project: LinkProject
+  ): Promise<LinkP1ProjectExportPreview> {
+    return (await this.createExportPlan(p1ProjectPath, linkProjectPath, project)).preview;
+  }
+
+  async exportProject(
+    p1ProjectPath: string,
+    linkProjectPath: string,
+    project: LinkProject,
+    expectedSourceSha256: string
+  ): Promise<LinkP1ProjectExportResult> {
+    const plan = await this.createExportPlan(p1ProjectPath, linkProjectPath, project);
+    if (plan.parsed.sourceSha256 !== expectedSourceSha256) {
+      throw new Error('P1 工程在写回确认后发生变化，已停止写入；请重新预览');
+    }
+    const existingMedia = new Map(
+      plan.parsed.playlists.flatMap((playlist) => playlist.media.map((media) => [media.binding.sourceKey, media] as const))
+    );
+    const projectSync = project.p1Sync;
+    if (!projectSync) throw new Error('当前联动工程尚未从 P1 导入，不能写回');
+    const playlists = [...projectSync.playlists].sort((left, right) => left.sourceIndex - right.sourceIndex);
+    const itemsByPlaylist = new Map(playlists.map((playlist) => [playlist.id, [] as RundownItem[]]));
+    const defaultPlaylist = playlists[0];
+    if (!defaultPlaylist) throw new Error('P1 同步来源没有播放列表');
+    for (const item of plan.exportItems) {
+      const playlistId = item.p1Media?.playlistId ?? defaultPlaylist.id;
+      const list = itemsByPlaylist.get(playlistId);
+      if (!list) throw new Error(`节目“${item.title}”引用不存在的 P1 播放列表：${playlistId}`);
+      list.push(item);
+    }
+
+    const outputBindings: LinkP1ProjectExportResult['itemBindings'] = [];
+    const pathOccurrences = new Map<string, number>();
+    const playlistElements: XmlElement[] = [];
+    for (const playlist of playlists) {
+      const sourcePlaylist = plan.parsed.playlists.find((candidate) => candidate.binding.id === playlist.id);
+      const playlistElement = sourcePlaylist
+        ? requireElement(sourcePlaylist.element.cloneNode(false), 'P1 播放列表')
+        : plan.parsed.document.createElement('videoPlayElement');
+      playlistElement.setAttribute('caption', playlist.name);
+      if (!playlistElement.hasAttribute('type')) playlistElement.setAttribute('type', '0');
+      for (const item of itemsByPlaylist.get(playlist.id) ?? []) {
+        const existing = item.p1Media ? existingMedia.get(item.p1Media.sourceKey) : undefined;
+        if (item.p1Media && !existing) {
+          throw new Error(`P1 工程缺少已绑定音频“${item.title}”，请重新导入后再写回`);
+        }
+        if (!item.referenceAudio) throw new Error(`节目“${item.title}”没有参考音频，不能写入 P1`);
+        const resourcePath = existing?.resourcePath
+          ?? this.projects.resolveReferenceAudio(linkProjectPath, item.referenceAudio.relativePath);
+        const element = existing
+          ? requireElement(existing.element.cloneNode(true), 'P1 音频')
+          : createMediaElement(plan.parsed.document, resourcePath, item.referenceAudio.durationMs);
+        const occurrence = pathOccurrences.get(normalizePathKey(resourcePath)) ?? 0;
+        pathOccurrences.set(normalizePathKey(resourcePath), occurrence + 1);
+        const sourceKey = createSourceKey(resourcePath, occurrence);
+        const binding = p1MediaBindingSchema.parse({
+          sourceKey,
+          playlistId: playlist.id,
+          sourceFileName: basename(resourcePath),
+          playEndAction: item.p1Media?.playEndAction ?? 'stop',
+          volume: item.p1Media?.volume ?? 100,
+          muted: item.p1Media?.muted ?? false,
+          shortcut: item.p1Media?.shortcut ?? '',
+          midiStartTime: project.p1AutoFollow?.enabled
+            ? String(project.p1AutoFollow.ranges.find((range) => range.itemId === item.id)?.startSeconds ?? (() => { throw new Error(`缺少 P1 时间码区间：${item.title}`); })())
+            : item.p1Media?.midiStartTime ?? '0'
+        });
+        applyMediaBinding(element, resourcePath, item.title, item.referenceAudio.durationMs, binding);
+        playlistElement.appendChild(element);
+        outputBindings.push({ itemId: item.id, p1Media: binding });
+      }
+      playlistElements.push(playlistElement);
+    }
+
+    replaceElementChildren(plan.parsed.videoPlayList, 'videoPlayElement', playlistElements);
+    synchronizeAudioPlaylistNames(plan.parsed.document, plan.parsed.audioPlayList, playlists);
+    const rootXml = new XMLSerializer().serializeToString(
+      requireElement(plan.parsed.document.documentElement, 'P1 工程根节点'),
+      {
+        requireWellFormed: true
+      }
+    );
+    const serialized = `<?xml version="1.0" encoding="UTF-8"?>\n${rootXml}\n`;
+    await writeFileAtomically(plan.targetPath, serialized);
+    const written = await readFile(plan.targetPath);
+    return {
+      outputPath: plan.targetPath,
+      sourceSha256: sha256(written),
+      playlists,
+      itemBindings: outputBindings
+    };
+  }
+
+  private async createExportPlan(
+    p1ProjectPath: string,
+    linkProjectPath: string,
+    project: LinkProject
+  ): Promise<ExportPlan> {
+    validateP1TimecodeRanges(project);
+    const parsed = await this.parseProject(p1ProjectPath);
+    if (!project.p1Sync) throw new Error('当前联动工程尚未从 P1 导入，不能写回');
+    if (project.p1Sync.sourceSha256 !== parsed.sourceSha256) {
+      throw new Error('P1 工程在上次导入后已变化，已停止写回；请先重新读取 P1');
+    }
+    const existingKeys = new Set(parsed.playlists.flatMap((playlist) => playlist.media.map((media) => media.binding.sourceKey)));
+    const exportItems = project.rundown.filter((item) => item.p1Media !== undefined || item.referenceAudio !== undefined);
+    const matchedKeys = new Set<string>();
+    let addedCount = 0;
+    let updatedCount = 0;
+    for (const item of exportItems) {
+      if (!item.referenceAudio) throw new Error(`P1 绑定节目“${item.title}”缺少参考音频`);
+      await access(this.projects.resolveReferenceAudio(linkProjectPath, item.referenceAudio.relativePath), constants.R_OK);
+      if (!item.p1Media) {
+        addedCount += 1;
+        continue;
+      }
+      if (!existingKeys.has(item.p1Media.sourceKey)) {
+        throw new Error(`P1 工程找不到已绑定节目“${item.title}”，请重新导入`);
+      }
+      matchedKeys.add(item.p1Media.sourceKey);
+      updatedCount += 1;
+    }
+    const removedCount = existingKeys.size - matchedKeys.size;
+    const targetPath = linkedOutputPath(parsed.sourcePath);
+    return {
+      parsed,
+      targetPath,
+      exportItems,
+      preview: {
+        sourcePath: parsed.sourcePath,
+        targetPath,
+        sourceSha256: parsed.sourceSha256,
+        playlistCount: project.p1Sync.playlists.length,
+        addedCount,
+        updatedCount,
+        removedCount,
+        ignoredCount: project.rundown.length - exportItems.length
+      }
+    };
+  }
+
+  private async parseProject(projectPathValue: string): Promise<ParsedP1Project> {
+    const sourcePath = resolve(projectPathValue);
+    if (extname(sourcePath).toLowerCase() !== '.hia') throw new Error('P1 音频工程必须使用 .hia 扩展名');
+    const sourceBuffer = await readFile(sourcePath);
+    const content = sourceBuffer.toString('utf8');
+    if (/<!DOCTYPE|<!ENTITY/i.test(content)) throw new Error('P1 工程包含不允许的 XML DTD 或实体声明');
+    const document = new DOMParser().parseFromString(content, 'application/xml');
+    const parserErrors = document.getElementsByTagName('parsererror');
+    if (parserErrors.length > 0) throw new Error(`P1 工程 XML 无效：${parserErrors.item(0)?.textContent ?? sourcePath}`);
+    const root = document.documentElement;
+    if (!root || root.tagName !== 'playerRoot') throw new Error('P1 工程缺少 playerRoot 根节点');
+    const videoPlayList = requireDirectChild(root, 'videoPlayList');
+    const audioPlayList = optionalDirectChild(root, 'audioPlayList');
+    const playlistElements = directChildren(videoPlayList, 'videoPlayElement');
+    if (playlistElements.length === 0) throw new Error('P1 音频工程没有播放列表');
+    const pathOccurrences = new Map<string, number>();
+    const playlists = playlistElements.map((element, sourceIndex): ParsedP1Playlist => {
+      const name = requiredAttribute(element, 'caption', `P1 播放列表 ${sourceIndex + 1}`);
+      const playlistBinding: P1PlaylistBinding = { id: `p1-playlist-${sourceIndex + 1}`, name, sourceIndex };
+      const media = directChildren(element, 'media').map((mediaElement, mediaIndex) => {
+        requiredAttribute(mediaElement, 'mediaType', `${name} 第 ${mediaIndex + 1} 个素材`);
+        const rawPath = requiredAttribute(mediaElement, 'resourceFilePath', `${name} 第 ${mediaIndex + 1} 个素材`);
+        const resourcePath = isAbsolute(rawPath) ? resolve(rawPath) : resolve(dirname(sourcePath), rawPath);
+        const pathKey = normalizePathKey(resourcePath);
+        const occurrence = pathOccurrences.get(pathKey) ?? 0;
+        pathOccurrences.set(pathKey, occurrence + 1);
+        const durationMs = readDurationMs(mediaElement, name, mediaIndex);
+        const title = mediaElement.getAttribute('audio_caption_')?.trim() || basename(resourcePath);
+        const binding = readMediaBinding(mediaElement, resourcePath, occurrence, playlistBinding.id, name, mediaIndex);
+        return { element: mediaElement, resourcePath, durationMs, title, binding };
+      });
+      return { binding: playlistBinding, element, media };
+    });
+    return {
+      document,
+      sourcePath,
+      sourceSha256: sha256(sourceBuffer),
+      videoPlayList,
+      audioPlayList,
+      playlists
+    };
+  }
+
+  private async preflightMedia(project: ParsedP1Project): Promise<void> {
+    for (const playlist of project.playlists) {
+      for (const media of playlist.media) {
+        await access(media.resourcePath, constants.R_OK);
+        const fileStat = await stat(media.resourcePath);
+        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`P1 音频文件无效：${media.resourcePath}`);
+      }
+    }
+  }
+}
+
+function readMediaBinding(
+  element: XmlElement,
+  resourcePath: string,
+  occurrence: number,
+  playlistId: string,
+  playlistName: string,
+  mediaIndex: number
+): P1MediaBinding {
+  const context = `${playlistName} 第 ${mediaIndex + 1} 个音频`;
+  const playEndValue = requiredAttribute(element, 'playEndAction', context);
+  const playEndAction = playEndValue === '0' ? 'playNext' : playEndValue === '1' ? 'loop' : playEndValue === '2' ? 'stop' : null;
+  if (!playEndAction) throw new Error(`${context} 的 playEndAction 无效：${playEndValue}`);
+  return p1MediaBindingSchema.parse({
+    sourceKey: createSourceKey(resourcePath, occurrence),
+    playlistId,
+    sourceFileName: basename(resourcePath),
+    playEndAction,
+    volume: readIntegerAttribute(element, 'volume', 0, 100, context),
+    muted: readBooleanAttribute(element, 'mute', context),
+    shortcut: element.getAttribute('shortcut') ?? '',
+    midiStartTime: element.getAttribute('MidiStartTime') ?? '0'
+  });
+}
+
+function readDurationMs(element: XmlElement, playlistName: string, mediaIndex: number): number {
+  const context = `${playlistName} 第 ${mediaIndex + 1} 个音频`;
+  const start = readFiniteAttribute(element, 'cut_start', context);
+  const end = readFiniteAttribute(element, 'cut_end', context);
+  const durationMs = Math.round((end - start) * 1_000);
+  if (durationMs <= 0) throw new Error(`${context} 的音频时长无效`);
+  return durationMs;
+}
+
+function createMediaElement(document: XmlDocument, resourcePath: string, durationMs: number): XmlElement {
+  const element = document.createElement('media');
+  const durationSeconds = durationMs / 1_000;
+  const durationLabel = durationText(durationMs);
+  const attributes: Readonly<Record<string, string>> = {
+    mediaType: '4',
+    resourceFilePath: toP1Path(resourcePath),
+    playEndAction: '2',
+    transitionType: '0',
+    transitionDirection: '0',
+    transitionDuration: '0.5',
+    transitionMotionEnable: '0',
+    transitionSpeed: '1',
+    scaleType: '1',
+    cut_start: '0',
+    cut_end: String(durationSeconds),
+    iskv: '0',
+    volume: '100',
+    RotationAngle: '0',
+    StretchMode: '0',
+    crop_rect: '0 0 1 1',
+    use_transcode: '0',
+    Caption: durationLabel,
+    Resolution: '0x0',
+    mute: '0',
+    shortcut: '',
+    midiport: '',
+    midicut: '',
+    midiname: '',
+    caption_: durationLabel,
+    audio_caption_: basename(resourcePath),
+    MidiStartTime: '0',
+    PPTName: ''
+  };
+  for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+  return element;
+}
+
+function applyMediaBinding(
+  element: XmlElement,
+  resourcePath: string,
+  title: string,
+  durationMs: number,
+  binding: P1MediaBinding
+): void {
+  element.setAttribute('resourceFilePath', toP1Path(resourcePath));
+  element.setAttribute('audio_caption_', title);
+  element.setAttribute('playEndAction', binding.playEndAction === 'playNext' ? '0' : binding.playEndAction === 'loop' ? '1' : '2');
+  element.setAttribute('volume', String(binding.volume));
+  element.setAttribute('mute', binding.muted ? '1' : '0');
+  element.setAttribute('shortcut', binding.shortcut);
+  element.setAttribute('MidiStartTime', binding.midiStartTime);
+  element.setAttribute('cut_start', '0');
+  element.setAttribute('cut_end', String(durationMs / 1_000));
+  element.setAttribute('Caption', durationText(durationMs));
+  element.setAttribute('caption_', durationText(durationMs));
+}
+
+function synchronizeAudioPlaylistNames(
+  document: XmlDocument,
+  audioPlayList: XmlElement | null,
+  playlists: P1PlaylistBinding[]
+): void {
+  if (!audioPlayList) return;
+  const existing = directChildren(audioPlayList, 'audioPlayElement');
+  const elements = playlists.map((playlist, index) => {
+    const element = existing[index]
+      ? requireElement(existing[index].cloneNode(true), 'P1 音频播放列表')
+      : document.createElement('audioPlayElement');
+    element.setAttribute('caption', playlist.name);
+    if (!element.hasAttribute('type')) element.setAttribute('type', '0');
+    return element;
+  });
+  replaceElementChildren(audioPlayList, 'audioPlayElement', elements);
+}
+
+function replaceElementChildren(parent: XmlElement, tagName: string, replacements: XmlElement[]): void {
+  for (const child of directChildren(parent, tagName)) parent.removeChild(child);
+  for (const replacement of replacements) parent.appendChild(replacement);
+}
+
+function directChildren(parent: XmlElement, tagName: string): XmlElement[] {
+  const result: XmlElement[] = [];
+  for (let node = parent.firstChild; node; node = node.nextSibling) {
+    if (node.nodeType === 1 && (node as XmlElement).tagName === tagName) result.push(node as XmlElement);
+  }
+  return result;
+}
+
+function requireDirectChild(parent: XmlElement, tagName: string): XmlElement {
+  const child = optionalDirectChild(parent, tagName);
+  if (!child) throw new Error(`P1 工程缺少 ${tagName} 节点`);
+  return child;
+}
+
+function optionalDirectChild(parent: XmlElement, tagName: string): XmlElement | null {
+  return directChildren(parent, tagName)[0] ?? null;
+}
+
+function requireElement(node: XmlNode | null, context: string): XmlElement {
+  if (!node || node.nodeType !== 1) throw new Error(`${context} XML 节点类型无效`);
+  return node as XmlElement;
+}
+
+function requiredAttribute(element: XmlElement, name: string, context: string): string {
+  const value = element.getAttribute(name)?.trim();
+  if (!value) throw new Error(`${context} 缺少 ${name} 属性`);
+  return value;
+}
+
+function readFiniteAttribute(element: XmlElement, name: string, context: string): number {
+  const value = Number(requiredAttribute(element, name, context));
+  if (!Number.isFinite(value)) throw new Error(`${context} 的 ${name} 不是有限数值`);
+  return value;
+}
+
+function readIntegerAttribute(element: XmlElement, name: string, minimum: number, maximum: number, context: string): number {
+  const value = Number(requiredAttribute(element, name, context));
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${context} 的 ${name} 必须在 ${minimum}-${maximum} 范围内`);
+  }
+  return value;
+}
+
+function readBooleanAttribute(element: XmlElement, name: string, context: string): boolean {
+  const value = requiredAttribute(element, name, context);
+  if (value === '0') return false;
+  if (value === '1') return true;
+  throw new Error(`${context} 的 ${name} 必须是 0 或 1`);
+}
+
+function createSourceKey(resourcePath: string, occurrence: number): string {
+  return sha256(Buffer.from(`${normalizePathKey(resourcePath)}\u0000${occurrence}`, 'utf8'));
+}
+
+function normalizePathKey(resourcePath: string): string {
+  return resolve(resourcePath).replaceAll('\\', '/').toLocaleLowerCase('en-US');
+}
+
+function linkedOutputPath(sourcePath: string): string {
+  const parsed = parse(sourcePath);
+  if (parsed.name.endsWith('.联动台')) return sourcePath;
+  return join(parsed.dir, `${parsed.name}.联动台.hia`);
+}
+
+function toP1Path(resourcePath: string): string {
+  return resolve(resourcePath).replaceAll('\\', '/');
+}
+
+function durationText(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
+}
+
+function sha256(value: Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex');
+}

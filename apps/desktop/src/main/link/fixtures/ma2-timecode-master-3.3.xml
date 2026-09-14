@@ -1,0 +1,34 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml-stylesheet type="text/xsl" href="styles/timecode@sheet.xsl"?>
+<MA xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.malighting.de/grandma2/xml/MA" xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.3.4/MA.xsd" major_vers="3" minor_vers="3" stream_vers="4">
+	<Timecode index="9901" name="TBLINK_FRACTIONAL_TIMECODE" lenght="17" slot="TC Slot 1" frame_format="30 FPS">
+		<Track index="0" active="true" expanded="true" muted="true">
+			<Object name="TBLINK_CUE_REFERENCE_ACCEPTANCE 99.219">
+				<No>30</No>
+				<No>1</No>
+				<No>99</No>
+				<No>219</No>
+			</Object>
+			<SubTrack index="0">
+				<Event index="0" command="Goto" pressed="true" step="1">
+					<Cue name="Cue 1.25">
+						<No>1</No>
+						<No>9901</No>
+						<No>1</No>
+					</Cue>
+				</Event>
+				<Event index="1" time="45" command="Goto" pressed="true" step="2">
+					<Cue name="Cue 7.5">
+						<No>1</No>
+						<No>9901</No>
+						<No>2</No>
+					</Cue>
+				</Event>
+			</SubTrack>
+			<SubTrack index="1" fader_command="Master">
+				<Event index="0" fader_level="0.25" />
+				<Event index="1" time="16" fader_level="0.755" />
+			</SubTrack>
+		</Track>
+	</Timecode>
+</MA>

@@ -1,0 +1,112 @@
+import { createLightingDocument, lightingDocumentSchema, ma2ExecutorPreviewSchema, ma2TimecodePreviewSchema, parseLinkProject, type LightingDocument, type LightingTrack, type Ma2ExecutorPreview, type Ma2TimecodePreview } from '@tb/schema';
+import type { LinkCommand } from './link-command';
+import { LightingTempoMap } from './lighting-edit';
+
+export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePreview, initialDocument?: LightingDocument): LinkCommand {
+  const preview = ma2TimecodePreviewSchema.parse(value);
+  const initial = initialDocument ? lightingDocumentSchema.parse(initialDocument) : undefined;
+  if (preview.unconverted.length) throw new Error('存在未转换事件，暂不能完整加入节目');
+  const bindingId = crypto.randomUUID();
+  return { id: crypto.randomUUID(), label: '从 MA2 加入灯光编排', execute(project) {
+    const next = structuredClone(project);
+    const item = next.rundown.find((entry) => entry.id === itemId);
+    if (!item) throw new Error('接收 MA2 数据的节目不存在');
+    const current = item.lighting ?? structuredClone(initial ?? createLightingDocument());
+    if (current.ma2Bindings?.some((binding) => binding.timecode === preview.target)) throw new Error('该节目已关联此 Timecode，请勿重复导入');
+    const tracks = structuredClone(preview.document.tracks);
+    item.lighting = { ...current, tracks: [...current.tracks, ...tracks], ma2Bindings: [...current.ma2Bindings ?? [], {
+      id: bindingId, timecode: preview.target, name: preview.name, readAt: preview.readAt,
+      sourceXml: preview.sourceXml, baselineTracks: structuredClone(tracks), mappings: structuredClone(preview.mappings), trackMappings: structuredClone(preview.trackMappings), cueCatalog: structuredClone(preview.cueCatalog)
+    }] };
+    next.schemaVersion = 2;
+    next.updatedAt = new Date().toISOString();
+    return parseLinkProject(next);
+  }, undo: (before) => parseLinkProject(before) };
+}
+
+export function bindMa2TrackCommand(itemId: string, bindingId: string, trackId: string, executor: string, executorName: string, executorInput?: Ma2ExecutorPreview): LinkCommand {
+  const preview = executorInput ? ma2ExecutorPreviewSchema.parse(executorInput) : undefined;
+  return { id: crypto.randomUUID(), label: '关联灯光轨道到 MA2', execute(project) {
+    const next = structuredClone(project);
+    const document = next.rundown.find((item) => item.id === itemId)?.lighting;
+    const binding = document?.ma2Bindings?.find((entry) => entry.id === bindingId);
+    const track = document?.tracks.find((entry) => entry.id === trackId);
+    if (!document || !binding || !track || track.kind !== 'ma2') throw new Error('请选择节目中的 MA2 灯光轨道和 Timecode 绑定');
+    if (preview && (preview.target !== binding.timecode || preview.executor !== executor || preview.executorName !== executorName)) throw new Error('执行器读取结果与所选轨道绑定不一致');
+    if (track.locked) throw new Error('请先解锁灯光轨道');
+    if (track.cueStamp?.mode === 'fixed' && track.cueStamp.executor !== executor) throw new Error('固定 Cue 的执行器与选定执行器不一致，请先修改灯光打点设置');
+    if (document.ma2Bindings?.some((entry) => entry.baselineTracks.some((value) => value.id === trackId) || entry.pendingTracks?.some((value) => value.trackId === trackId))) throw new Error('该灯光轨道已经关联 MA2');
+    if (track.clips.some((clip) => clip.events.some((event) => (event.kind !== 'ma2' && event.kind !== 'ma2-fader') || event.executor !== executor))) throw new Error('轨道内的动作必须使用选定执行器');
+    binding.pendingTracks = [...binding.pendingTracks ?? [], { trackId, executor, executorName, ...(preview ? { sequence: preview.cueCatalog[0]!.sequence } : {}) }];
+    if (preview) binding.cueCatalog = [...new Map([...(binding.cueCatalog ?? []), ...structuredClone(preview.cueCatalog)].map((sequence) => [sequence.sequence, sequence])).values()];
+    lightingDocumentSchema.parse(document);
+    next.schemaVersion = 2; next.updatedAt = new Date().toISOString();
+    return parseLinkProject(next);
+  }, undo: (before) => parseLinkProject(before) };
+}
+
+/** Apply only an adapter-confirmed readback. The captured document prevents overwriting newer edits. */
+export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expectedInput: LightingDocument, confirmedInput: Ma2TimecodePreview): LinkCommand {
+  const expected = lightingDocumentSchema.parse(expectedInput);
+  const confirmed = ma2TimecodePreviewSchema.parse(confirmedInput);
+  const binding = expected.ma2Bindings?.find((entry) => entry.id === bindingId);
+  if (!binding || binding.timecode !== confirmed.target) throw new Error('MA2 回读与节目绑定不一致');
+  if (confirmed.unconverted.length) throw new Error('回读存在未转换事件，不能更新同步基线');
+  const map = new LightingTempoMap(expected.tempos);
+  const boundIds = new Set([...binding.baselineTracks.map((track) => track.id), ...(binding.pendingTracks ?? []).map((track) => track.trackId)]);
+  const nativeNames = new Map(binding.baselineTracks.flatMap((track) => track.clips.flatMap((clip) => clip.events.flatMap((event) => event.kind === 'ma2' || event.kind === 'ma2-fader' ? [[event.id, event.label] as const] : []))));
+  const updated = new Map<string, LightingTrack>();
+  for (const remote of confirmed.document.tracks) {
+    if (expected.tracks.some((track) => track.id === remote.id && !boundIds.has(track.id))) throw new Error('回读轨道与未绑定的节目轨道冲突');
+    const current = expected.tracks.find((track) => track.id === remote.id);
+    if (!current) { updated.set(remote.id, structuredClone(remote)); continue; }
+    const events = new Map(remote.clips.flatMap((clip) => {
+      if (clip.timeLock !== 'time') throw new Error('MA2 回读必须使用绝对时间');
+      return clip.events.map((event) => [event.id, { event, ms: clip.start + event.at }] as const);
+    }));
+    if (events.size !== remote.clips.reduce((count, clip) => count + clip.events.length, 0)) throw new Error('MA2 回读事件 ID 重复');
+    const used = new Set<string>();
+    const clips = current.clips.map((clip) => {
+      const retained = clip.events.flatMap((event) => {
+        const next = events.get(event.id);
+        if (!next) return [];
+        if (used.has(event.id)) throw new Error('节目内绑定事件 ID 重复');
+        used.add(event.id);
+        const annotated = (event.kind === 'ma2' || event.kind === 'ma2-fader') && event.label !== nativeNames.get(event.id);
+        const keepLabel = event.kind === next.event.kind && (next.event.kind === 'ma2-fader' ? annotated : next.event.kind === 'ma2' && (next.event.action !== 'goto' || annotated));
+        return [{ ...next, event: keepLabel && 'label' in event && 'label' in next.event ? { ...next.event, label: event.label } : next.event }];
+      });
+      const positions = retained.map((entry) => clip.timeLock === 'time' ? entry.ms : map.msToBeat(entry.ms));
+      // Moving before the old clip start extends the clip without moving its other points.
+      const start = positions.reduce((minimum, value) => Math.min(minimum, value), clip.start);
+      const nextEvents = retained.map((entry, index) => ({ ...entry.event, at: positions[index]! - start }));
+      const duration = nextEvents.reduce((end, event) => Math.max(end, event.at + 0.001), clip.start + clip.duration - start);
+      return { ...clip, start, duration, events: nextEvents };
+    });
+    for (const clip of remote.clips) {
+      const additions = clip.events.filter((event) => !used.has(event.id));
+      if (additions.length) clips.push({ ...structuredClone(clip), id: crypto.randomUUID(), events: structuredClone(additions) });
+    }
+    const baselineName = binding.baselineTracks.find((track) => track.id === remote.id)?.name;
+    updated.set(remote.id, { ...current, name: current.name !== baselineName ? current.name : remote.name, muted: remote.muted, clips });
+  }
+  const ordered = confirmed.document.tracks.map((track) => updated.get(track.id)!);
+  let index = 0;
+  const tracks = expected.tracks.flatMap((track) => {
+    if (!boundIds.has(track.id)) return [track];
+    const next = ordered[index++]; return next ? [next] : [];
+  });
+  tracks.push(...ordered.slice(index));
+  const lighting = lightingDocumentSchema.parse({ ...expected, tracks, ma2Bindings: expected.ma2Bindings?.map((entry) => entry.id === bindingId ? {
+    ...entry, name: confirmed.name, readAt: confirmed.readAt, sourceXml: confirmed.sourceXml, pendingTracks: undefined,
+    baselineTracks: structuredClone(confirmed.document.tracks), mappings: structuredClone(confirmed.mappings), trackMappings: structuredClone(confirmed.trackMappings), cueCatalog: [...new Map([...(entry.cueCatalog ?? []), ...(confirmed.cueCatalog ?? [])].map((sequence) => [sequence.sequence, structuredClone(sequence)])).values()]
+  } : entry) });
+  return { id: crypto.randomUUID(), label: '应用 MA2 同步回读', execute(project) {
+    const next = structuredClone(project);
+    const item = next.rundown.find((entry) => entry.id === itemId);
+    if (!item?.lighting || JSON.stringify(lightingDocumentSchema.parse(item.lighting)) !== JSON.stringify(expected)) throw new Error('同步期间节目灯光已修改，未覆盖本地内容，请重新读取比较');
+    item.lighting = structuredClone(lighting);
+    next.schemaVersion = 2; next.updatedAt = new Date().toISOString();
+    return parseLinkProject(next);
+  }, undo: (before) => parseLinkProject(before) };
+}

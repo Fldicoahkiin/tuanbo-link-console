@@ -1,0 +1,227 @@
+# Windows 现场验收记录
+
+## 环境
+
+| 项目 | 实际值 | 证据 |
+|---|---|---|
+| Windows / 架构 | Windows 11 Pro 10.0.26200 / x64 | 本机 PowerShell 系统信息 |
+| 团播联动台版本与 Git SHA | 0.2.11 / `97a732a00326e28afc24010e61f2ae2e1ff08b68` | GitHub `v0.2.11` 标签与 Release Windows #12 |
+| Node / pnpm / Electron | 25.8.2 / 10.33.0 / 39.8.10 | `apps/desktop/dist/release-manifest.json` |
+| OBS Studio | 32.2.2 | 关于窗口截图 |
+| P1 | 已安装 Hirender P1 1.14.2；现场启动验收待完成 | Windows 卸载项；关于窗口截图待补 |
+| 抖音直播伴侣（联动链外） | 由直播端独立维护 | 仅确认其采集 OBS 输出，不进入联动台验收 |
+| MTC 输入端口 | 团播联动台 P1 MTC | Electron Web MIDI 实机枚举 |
+| MIDI 输出端口 | 团播联动台 P1 MTC | Electron Web MIDI 实机枚举 |
+| MTC 帧率 | 待用户提供 | 现场运行台截图 |
+
+需要写入用户集成档案的路径：
+
+- OBS：`C:\Program Files\obs-studio\bin\64bit\obs64.exe`
+- P1：`D:\HirenderP1\HirenderP1.exe`
+
+## 场景
+
+| # | 步骤 | 预期 | 结果 | 证据 |
+|---|---|---|---|---|
+| 1 | 联动台依次启动或连接 OBS、P1 | 顺序正确，进程所有权可见；直播伴侣不被触碰 | 待验收 | |
+| 2 | 建立参考音频和至少五个 Cue | 波形真实，保存重开一致 | 待验收 | |
+| 3 | 选择节目并让 P1 MTC 归零推进 | 仅当前节目 Cue 自动触发 | 待验收 | |
+| 4 | 执行场景、来源、滤镜、静音、媒体和转场 | OBS 目标按顺序变化 | 待验收 | |
+| 5 | 发送现场约定 MIDI | Windows 端口发送成功，P1 现场响应 | 待验收 | |
+| 6 | 直播端独立确认直播伴侣持续采集 OBS | 不影响联动台启动、预检或停止 | 待验收 | |
+| 7 | 断开 MTC 输入再恢复 | 500ms 后冻结，恢复必须人工确认 | 待验收 | |
+| 8 | 制造一个 OBS 动作失败 | 排练阻断、直播继续且失败标红 | 待验收 | |
+| 9 | 退出联动台 | 只询问本次启动的程序，不强杀 | 待验收 | |
+| 10 | 干净账户安装、覆盖升级、卸载 | 正常完成且无联动台残留进程 | 待验收 | |
+| 11 | 导出诊断包 | 不含 OBS 密码、认证头或完整凭证 URL | 待验收 | |
+
+## 本机 0.2.1 候选包验证（2026-08-27）
+
+以下结果只证明当前 Windows 账户的安装生命周期，不替代上表第 10 项要求的干净账户验收：
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| x64 NSIS 生成与产物校验 | 通过 | `pnpm verify:release`；精确核对 `Tuanbo-Link-Console-0.2.1-x64.exe`、主程序、`latest.yml` 和无凭证的私有 GitHub `app-update.yml`；文件 SHA-256 以同次构建生成的 `release-manifest.json` 为准 |
+| Windows 主程序资源写入 | 通过 | 关闭 electron-builder 的并发资源编辑，`afterPack` 使用固定 `rcedit` 5.0.2 显式写入；仅对已确认的 `Unable to commit changes` 暂时占用做最多五次、逐次公开日志的有限等待重试，其他错误立即失败；主程序产品名、说明和版本为“团播联动台”/“团播联动台”/`0.2.1` |
+| Authenticode 状态 | 未签名候选包，符合当前无证书前置条件 | release manifest 记录安装器与主程序均为 `NotSigned` |
+| 当前账户独立目录安装 | 通过 | `pnpm verify:installer`；安装器固定为 `oneClick=true`、`perMachine=false`，使用 `/S /D=<目录>` 时安装器退出码 0，且唯一卸载项位于 HKCU 并带 `/currentuser` |
+| 当前账户同版本覆盖 | 通过 | `pnpm verify:installer` 连续安装两次，首次与覆盖安装退出码均为 0 |
+| 安装后启动与正常退出 | 通过 | 自动验收确认窗口标题为“团播联动台 / Tuanbo Link Console”；发送正常关闭后主进程与子进程残留 0，不使用强制结束 |
+| 产品卸载器卸载 | 通过 | 产品卸载器退出码 0；测试安装目录、卸载项和联动台残留进程均为 0 |
+| `pnpm dev` | 通过 | 窗口标题“团播联动台 / Tuanbo Link Console”，响应正常；停止后 Electron 与 5173 监听均为 0 |
+| 软件更新 UI 与 preload | 通过 | Playwright 4/4；开发态明确禁止安装更新，正式安装版配置 GitHub 私有 Release；Token 只进入 `safeStorage` 密文存储 |
+
+首次执行 0.2.0 静默安装时，NSIS 临时目录的 `System.dll` 曾单次以 `0xC0000005` 崩溃且未写入任何文件；保留空目录证据后，同一安装包随后两次完整生命周期验收均通过。该偶发记录不得删除，也不得改写成“从未失败”。
+
+## 本机 0.2.2 更新修复验证（2026-08-27）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 私有 Release 检查 | 通过 | 仅限 `JinHe9527/tuanbo-yijianchufa`、Contents 只读、Metadata 只读的一年期 fine-grained Token；安装版 0.2.0 正确发现 0.2.1 |
+| 旧差分下载链路 | 确认阻塞 | 0.2.0 下载停在 0%；Release API、`latest.yml` 与安装包 Range 请求均为 200/206，但私有资产数字 API 地址被通用 blockmap 逻辑追加 `.blockmap` 后请求持续不返回 |
+| 修复策略 | 通过代码与构建校验 | `NsisUpdater.disableDifferentialDownload = true`；固定下载完整 NSIS 包并沿用 `latest.yml` 的 SHA-512 校验，不增加备用源或静默重试 |
+| 自动测试与构建 | 通过 | typecheck、146 项单元测试、lint、build、`verify:release`、Playwright Electron E2E 4/4 |
+| 安装生命周期 | 通过 | 0.2.2 `verify:installer`：首次安装、同版本覆盖、主窗口、正常关闭、卸载均通过，进程与注册表残留均为 0 |
+
+0.2.0 与 0.2.1 无法自行获得该主进程修复，测试电脑需手工安装一次 0.2.2 或更高版本。
+
+## 本机 0.2.6 安装范围与升级路径修复（2026-08-28）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 0.2.3 → 0.2.5 私有 Release 检查与完整下载 | 通过 | 安装版通过 GitHub 私有 Release 找到 0.2.5，并按 `latest.yml` 完成 112,176,156 字节完整安装包下载 |
+| 0.2.3 → 0.2.5 重启安装 | 发现缺陷 | 在管理员会话中，旧双模式 NSIS 将当前用户自定义目录迁移为 `C:\Program Files\@tbdesktop` 的 `/allusers` 安装；已正常卸载该验收实例，目录、进程和注册表残留均为 0 |
+| 0.2.6 修复 | 通过代码与产物校验 | 安装器固定当前用户一键模式并移除 elevate helper；更新器向 NSIS 传入当前 `process.execPath` 目录，防止默认目录迁移 |
+| 当前账户 0.2.5 → 0.2.6 升级 | 通过 | 按旧更新器真实参数 `--updated --force-run` 执行；自定义目录保持不变，HKCU `/currentuser` 保持不变，版本为 0.2.6，主窗口启动和正常关闭通过 |
+| 正式私有 Release 0.2.5 → 0.2.6 软件内更新 | 通过 | [Release Windows #7](https://github.com/JinHe9527/tuanbo-yijianchufa/actions/runs/33091663471) 成功；安装版发现 0.2.6，完整下载 112,138,872 / 112,138,872 字节并重启安装；更新后仍位于原自定义目录、HKCU `/currentuser`，唯一主窗口和正常卸载通过，目录/进程/注册表残留均为 0 |
+| 独立标准账户 0.2.5 → 0.2.6 升级与卸载 | 通过 | 新建临时标准账户，完成安装与覆盖升级；离线挂载该账户 HKCU 确认 0.2.6 与 `/currentuser`；卸载后删除临时账户和用户配置，安装目录及进程残留为 0 |
+| 独立标准账户交互式 GUI 启动 | 待验收 | `Start-Process -Credential` 未建立该账户的交互式桌面会话，不能据此签收 GUI；需在真实登录的干净账户桌面执行 |
+| 生产依赖安全审计 | 通过 | `ws` 固定 8.21.0、`js-yaml` 固定 4.3.1；`pnpm audit --prod --audit-level=high` 返回无已知漏洞 |
+| GitHub Actions 运行时提示 | 已修复 | 0.2.7 将 `checkout`、`setup-node`、`pnpm/action-setup`、`action-gh-release` 升级至各自当前官方主版本；[Release Windows #8](https://github.com/JinHe9527/tuanbo-yijianchufa/actions/runs/33093699393) 成功且不再出现旧 Node action 运行时弃用告警 |
+
+## 本机 0.2.7 软件更新弹窗修复（2026-08-28）
+
+| 检查项 | 结果 | 证据 |
+| --- | --- | --- |
+| 根因 | 已确认 | 普通 Portal 加固定 `z-index` 仍处于页面合成层；已加载的工程节目单在实际安装产物中可能覆盖弹窗下半部分 |
+| 顶层模型 | 通过 | 更新窗口改为原生模态 `dialog.showModal()`，进入 Chromium 顶层；不再依赖页面 `z-index` 竞争 |
+| Electron E2E | 通过 | 在已加载工程、已有节目卡、1180×640 窗口下检查弹窗；顶部/中部/底部三个采样点均位于最上层，弹窗完整处于视口内 |
+| 0.2.7 打包产物视觉验收 | 通过 | 直接启动 `win-unpacked`，在 1540×960 窗口下创建工程与节目后打开更新中心；状态区、凭证区、按钮和遮罩完整显示，三个纵向采样点均未被工作区覆盖 |
+| GitHub Release | 通过 | [v0.2.7](https://github.com/JinHe9527/tuanbo-yijianchufa/releases/tag/v0.2.7) 为 Latest，标签提交 `5f0db64`；安装包、blockmap、`latest.yml`、release manifest 与源码共 6 个资产齐全 |
+| 安装包摘要 | 通过 | `Tuanbo-Link-Console-0.2.7-x64.exe`，107 MB，SHA-256 `0356523bc345d5e7b40e7b890dac7697c06c3d413854ca03346437cf475d7dfd` |
+
+## 当前现场前置探测（2026-08-28）
+
+| 项目 | 结果 | 影响 |
+|---|---|---|
+| OBS 32.2.2 进程与 `ws://127.0.0.1:4455` | 正式打包产物使用现有 safeStorage 凭证认证成功；实际版本 32.2.2、obs-websocket 5.7.4，读取 3 个场景、3 个输入、2 个转场；密码未读取或输出 | 连接与库存已实机确认；仍需操作员签收全部动作、断线和失败策略 |
+| Hirender P1 1.14.2 | `D:\HirenderP1\HirenderP1.exe` 可启动并显示“注册账号”窗口；正常关闭请求后 15 秒未退出，按规则保留进程 | 需要操作员完成登录或正常退出；未强制结束进程 |
+| Windows Web MIDI / P1 MTC | Electron 实启确认 SysEx 可用，“团播联动台 P1 MTC”输入 1、输出 1；loopMIDI 系统回环发送/接收 240/240 条；修复端口显式打开后，隔离 Electron 实例接收 960 条并将时间码推进到 `00:00:01:28` | 联动台接收链路已实机确认；P1 1.14.2 的 MIDI 输出列表仍为空，尚未实际发送 MTC，需操作员登录 P1、打开工程并让 P1 识别该输出端口后继续归零/丢失/恢复验收 |
+| 直播伴侣 12.8.1 | 探测时已运行；同一路径 11 个 Chromium 进程中存在唯一标题“直播伴侣”的主窗口，均响应正常 | 精确路径与唯一主窗口识别规则已实机确认；登录状态及持续采集 OBS 输出仍待现场验收 |
+| Windows 独立账户 | 非交互安装、升级、卸载已通过；Windows Sandbox 未启用 | 仍需在真实登录的干净账户桌面签收 GUI 启动，不得把非交互凭证进程标成界面通过 |
+
+## 本机 0.2.8 Windows MTC 接收修复（2026-08-28）
+
+| 检查项 | 结果 | 证据 |
+| --- | --- | --- |
+| 根因 | 已确认 | Web MIDI 适配器订阅 `onmidimessage` 前未显式打开 `MIDIInput`；Windows 实机上端口可枚举但联动台收不到 quarter-frame |
+| 端口生命周期 | 通过 | `subscribeMtc()` 现在先 `await input.open()`，取消订阅和适配器释放时移除监听并关闭同一端口；不切换端口、不重试到其他设备 |
+| 单元与静态验证 | 通过 | 聚焦测试验证 open/close 各执行一次；桌面端 typecheck 与全仓 lint 通过 |
+| Windows 系统回环 | 通过 | loopMIDI 同名端口发送 240 条、接收 240 条，8 个 quarter-frame piece 全部存在，约 995ms，无丢失 |
+| 联动台真实运行回环 | 通过 | 隔离 Electron userData 只复制不含密码的 `profile.json`，恢复已保存 `.tblink`；联动台接收 960 条 30fps MTC，界面显示 `00:00:01:28`、`MTC 30 running` |
+| 中文进程与窗口标题 | 通过 | 外部进程探测改用 UTF-16LE `EncodedCommand` 传入脚本并显式输出无 BOM UTF-8；隔离 Electron 实测设备行显示“直播伴侣”，不再出现替换字符乱码 |
+| P1 官方设置 | 部分确认 | P1 官方帮助要求在常规设置勾选“发送 MTC 时间码”并选择帧率；本机已勾选 30Hz，但 P1 的 MIDI 输出列表为空，而 WinMM/loopMIDI 均能枚举同名输出 |
+| GitHub Release | 通过 | [Release Windows #9](https://github.com/JinHe9527/tuanbo-yijianchufa/actions/runs/33098554787) 全步骤成功；[v0.2.8](https://github.com/JinHe9527/tuanbo-yijianchufa/releases/tag/v0.2.8) 为 Latest，标签提交 `06b09fc5f62f8d7d3ab07db48d90130a7009987c`，安装包、blockmap、`latest.yml`、release manifest 与两种源码共 6 个资产 |
+| 正式安装包摘要 | 通过 | `Tuanbo-Link-Console-0.2.8-x64.exe`，112,140,496 字节；GitHub Release SHA-256 `1e55e2e0fe8349d3b5398c8bbf3635c2c5f26acdd4917962223b19864fbc159c` |
+| 现场剩余阻断 | 待现场签收 | P1 当前停在登录窗口，尚未由 P1 自身发出 MTC；直播伴侣持续采集 OBS、真实 Cue 执行、丢失/恢复和完整五 Cue 场景仍不得标为完成 |
+
+## 本机 0.2.7 → 0.2.8 正式软件内更新（2026-08-28）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 官方旧版安装 | 通过 | 从私有 GitHub Release 下载 `Tuanbo-Link-Console-0.2.7-x64.exe`，SHA-256 `0356523bc345d5e7b40e7b890dac7697c06c3d413854ca03346437cf475d7dfd`；只解除该安装器的 Internet 下载标记后，以 `/currentuser` 安装到独立短目录 |
+| 检查与完整下载 | 通过 | 0.2.7 更新中心使用本机 `safeStorage` 凭证发现 0.2.8；界面显示 60.1 MB / 106.9 MB 中间进度并最终进入“版本 0.2.8 已下载” |
+| 退出并安装 | 通过 | 点击“重启并安装”并在 Electron 系统确认框选择“退出并安装”；约 3 秒后同一目录文件版本与 HKCU 卸载项均为 0.2.8，唯一主窗口正常启动 |
+| 外部程序保护 | 通过 | 更新前后的 OBS 32.2.2、P1 1.14.2、直播伴侣 12.8.1 PID 与启动时间均未改变 |
+| 最新版检查与卸载 | 通过 | 0.2.8 重启后显示“当前已经是最新版本”；正常退出并使用产品卸载器后，验收目录、联动台进程和卸载项残留均为 0 |
+
+## 本机 0.2.9 集成状态与更新窗口修复（2026-08-28）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 首次进入后一键连接 | 通过 | 真实 Electron 首次打开集成中心后立即点击“一键识别并连接”，本次实时枚举并保存“团播联动台 P1 MTC”输入/输出；OBS、P1、直播伴侣连接成功，临时无端口时不再清空既有设置 |
+| 预检 MTC 文案 | 通过 | 未收到持续 MTC 时，“MTC 更新”与“MTC 稳定性”均为阻断，稳定性明确显示“尚无持续时间码，无法判断稳定性” |
+| 演出控制 MTC 状态 | 通过 | 实际发送 240 条 quarter-frame 消息时显示 `MTC 30 running`；停止 900ms 后显示 `MTC 无信号 notRunning`，不再保留假绿色状态 |
+| 软件更新窗口层级 | 通过 | 已加载节目工程、1180×640 Electron 窗口中打开更新中心；遮罩挂载于 `document.body`、覆盖完整视口，弹窗顶部/中部/底部采样均为最上层，最大宽度 520px，Esc 可关闭 |
+| GitHub Release | 通过 | [Release Windows #10](https://github.com/JinHe9527/tuanbo-yijianchufa/actions/runs/33102009894) 全步骤成功；[v0.2.9](https://github.com/JinHe9527/tuanbo-yijianchufa/releases/tag/v0.2.9) 为 Latest，标签提交 `318c84258bb95c4952459ba9d4bbface41804eeb`，安装包、blockmap、`latest.yml`、release manifest 与两种源码齐全 |
+| 正式安装包摘要 | 通过 | `Tuanbo-Link-Console-0.2.9-x64.exe`，112,142,314 字节；GitHub Release SHA-256 `6da012fc587cae7e7b016f3ce204912086b4c05e9410bd51d9eb95b933fcd3b5` |
+| 现场剩余阻断 | 待现场签收 | OBS 当前基准画布 1920×1080 与测试工程 1080×1920 不一致；尚未由操作员指定 P1 正式音频对应的 OBS 输入；P1 当前未登录且尚未自行输出 MTC，故不得标记完整现场链路通过 |
+
+## 本机 0.2.8 → 0.2.9 正式软件内更新（2026-08-28）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 官方旧版安装 | 通过 | 从私有 GitHub Release 下载并校验 `Tuanbo-Link-Console-0.2.8-x64.exe`；112,140,496 字节，SHA-256 `1e55e2e0fe8349d3b5398c8bbf3635c2c5f26acdd4917962223b19864fbc159c`；以当前用户模式安装到独立短目录 |
+| 检查与完整下载 | 通过 | 正式 0.2.8 更新中心发现 0.2.9，完整下载 112,142,314 / 112,142,314 字节，并显示“版本 0.2.9 已下载” |
+| 退出并安装 | 通过 | 点击“重启并安装”并在系统确认框选择“退出并安装”；同一安装目录更新为 0.2.9，应用以 `--updated` 重新启动 |
+| 更新后 UI | 通过 | 0.2.9 遮罩覆盖 1540×960 完整视口，弹窗为 520×325，顶部/中部/底部均位于最上层；最新版检查与 Esc 关闭通过 |
+| 外部程序保护 | 通过 | 更新前后的 OBS 32.2.2、P1 1.14.2、直播伴侣 12.8.1 与 DouyinLiveWall PID 及启动时间均未改变 |
+| 正常退出与卸载 | 通过 | 更新后正常退出并使用产品卸载器卸载；独立安装目录、联动台进程和 HKCU 卸载项残留均为 0；下载的旧安装器已移入 Windows 回收站，可恢复 |
+
+## 0.2.10 更新安全与模态交互回归（2026-08-28）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 更新窗口模态隔离 | 通过代码与定向 E2E | 弹窗打开时底层 `.app-shell` 进入 `inert`，不能被鼠标或键盘误操作；关闭按钮自动获得焦点，Esc 关闭后恢复底层交互 |
+| 更新错误脱敏 | 通过单元测试 | 检查与下载阶段的未知错误即使包含 GitHub Token，也只向界面显示 `[REDACTED]`，不回显凭证 |
+| 素材预览失败 | 通过定向 E2E | 缩略图解码失败不再静默显示通用占位，资源行明确标红“失败”，并提供真实错误原因 |
+| GitHub Release | 通过 | [Release Windows #11](https://github.com/JinHe9527/tuanbo-yijianchufa/actions/runs/33104369530) 全步骤成功；[v0.2.10](https://github.com/JinHe9527/tuanbo-yijianchufa/releases/tag/v0.2.10) 为正式 Release，标签提交 `dcde2408833ce65e7be40b433ac3f6f8124db7fb`，安装包、blockmap、`latest.yml`、release manifest 与两种源码齐全 |
+| 正式安装包摘要 | 通过 | `Tuanbo-Link-Console-0.2.10-x64.exe`，112,118,320 字节；GitHub Release SHA-256 `92e4f8ad5bb176eccbaa94032004b3fe2f48a63c41b0af655d8bb05861680e7f` |
+
+## 0.2.11 数据保护与异常路径回归（2026-08-28）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 未保存工程保护 | 通过定向 E2E | 当前工程存在未保存修改时点击“新建”必须确认；取消后原工程和修改保持不变，确认后才显示新建工程窗口 |
+| 工程与布局恢复 | 通过定向 E2E | 工作区布局 JSON 损坏或上次工程路径存储不可读时显示明确错误；界面保持可用，不再静默清零或崩溃 |
+| MIDI 资源释放 | 通过单元测试 | 协调器销毁时释放 MIDI 适配器、端口状态监听与输入回调；输入端口关闭失败进入运行错误上报，不产生未处理 Promise |
+| 媒体代理失败清理 | 通过单元测试 | FFmpeg 或重命名失败后删除已产生的临时代理；清理失败时同时保留原始错误与清理错误 |
+| 更新取消 | 通过定向 E2E | 在系统确认框取消“重启并安装”后，更新按钮恢复可操作，不再永久保持忙碌状态 |
+| 最小窗口逐页检查 | 通过定向 E2E | 1180×720 下依次打开工程、Cue、演出、集成和日志，应用根节点、工具栏与主内容均保持在视口边界内 |
+| GitHub Release | 通过 | [Release Windows #12](https://github.com/JinHe9527/tuanbo-yijianchufa/actions/runs/33106205421) 全步骤成功；[v0.2.11](https://github.com/JinHe9527/tuanbo-yijianchufa/releases/tag/v0.2.11) 为 Latest，标签提交 `97a732a00326e28afc24010e61f2ae2e1ff08b68`，安装包、blockmap、`latest.yml`、release manifest 与两种源码共 6 个资产齐全 |
+| 正式安装包摘要 | 通过 | `Tuanbo-Link-Console-0.2.11-x64.exe`，GitHub 显示 107 MB；GitHub Release SHA-256 `6d41a254d3df1598e6ad86f0eb538382eda30cde84f084d12b98b63aa6e1e093` |
+| 安装版 0.2.10 → 正式 0.2.11 软件内更新 | 通过 | 使用本地同版本 0.2.10 安装构建在独立目录验收；更新中心发现 0.2.11，按 `latest.yml` 完整下载 112,120,449 / 112,120,449 字节并执行退出安装；原目录原地升级为 0.2.11 且自动重启 |
+| 更新窗口与最新版复查 | 通过 | 升级前后弹窗均挂载到 `document.body`、覆盖 960px 完整视口、宽 520px、底层工作区 `inert`；升级后再次检查返回“当前已经是最新版本” |
+| 更新验收清理与外部程序保护 | 通过 | 隔离实例正常退出、静默卸载；安装目录、联动台进程和卸载注册表残留均为 0；OBS、P1、直播伴侣、DouyinLiveWall、S3 与 loopMIDI 的 PID 和启动时间未改变 |
+
+## 0.2.12 演出控制初始化与 MTC 连续性回归（2026-08-28）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 工程恢复后的演出控制 | 通过定向 E2E | 运行协调器和桌面集成状态均完成初始化后才显示演出控制；首次点击排练预检必须产生检查结果或明确错误，不再静默返回 |
+| OBS 实机只读与无状态变化写入 | 通过 | OBS 32.2.2 / WebSocket 5.7.4 认证成功，读取 3 场景、3 输入、9 滤镜；将“桌面音频”当前未静音状态原样写回后再次读取仍未静音 |
+| 真实 Windows MIDI 回环 | 通过 | 独立 Electron 发送进程经 loopMIDI 连续发送 12 秒、30fps、2880 条 quarter-frame；联动台显示 `MTC / 30 / running` |
+| 重复预检 MTC 连续性 | 通过 | 相同端口与帧率复用既有 MTC 订阅；第二次排练预检中“时间码正在更新”“时间码稳定”“MTC 帧率 30”三项全部通过 |
+| 软件更新窗口完整显示 | 通过定向 E2E 与视觉检查 | 更新中心使用 Chromium 原生 `dialog` 顶层模态，显式覆盖 1180×640 完整视口；弹窗居中、背景完整遮罩、底层工作区 `inert`，顶部/中部/底部采样均位于最上层，Esc 后恢复交互 |
+| GitHub Release | 通过 | [Release Windows #13](https://github.com/JinHe9527/tuanbo-yijianchufa/actions/runs/33109764252) 全步骤成功，用时 5 分 32 秒；[v0.2.12](https://github.com/JinHe9527/tuanbo-yijianchufa/releases/tag/v0.2.12) 为 Latest，标签提交 `42c823bdb36199852ac2f1b0bf1c7fa6489b9b11`，6 个发布资产齐全 |
+| 正式安装包摘要 | 通过 | `Tuanbo-Link-Console-0.2.12-x64.exe`，GitHub 显示 107 MB；正式 Release SHA-256 `d2a10055f1e5d877ef8a31998244d8b491ceae97f785015fdf1110ba58fbc3e8` |
+| 安装版 0.2.11 → 正式 0.2.12 软件内更新 | 通过 | 隔离目录中的本地同版本 0.2.11 安装构建发现正式 0.2.12，完整下载后执行退出安装；原目录文件版本变为 0.2.12 并自动重启，随后检查显示“当前已经是最新版本” |
+| 更新后模态与清理 | 通过 | 正式 0.2.12 中更新遮罩为已打开的原生 `DIALOG`，覆盖 1540×960 视口，卡片宽 520px，底层工作区 `inert`；验收实例正常退出并卸载后，安装目录、产品进程和卸载注册表残留均为 0 |
+| 当前真实现场阻断 | 待现场处理 | P1 仍停在登录窗口且未打开工程；OBS 基础画布为 1920×1080、尚未选择 P1 正式音频输入；这些项目由预检明确阻断，未伪报通过 |
+
+## 0.2.13 P1 端口等待、更新窗口与 Electron 安全回归（2026-08-28）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| P1 MTC 端口判定 | 通过单元测试与实机枚举 | 只有档案精确匹配、唯一且 connected 的输入才就绪；本机 loopMIDI 实际枚举“团播联动台 P1 MTC”输入 1、输出 1 |
+| P1 慢启动等待 | 通过单元测试 | 顺序启动与人工重启均先循环刷新端口，再订阅 MTC；测试覆盖最初无输入、250ms 后目标端口出现才继续 |
+| MTC 订阅与重新布防 | 通过单元测试 | 端口断开、重建或档案改名后旧订阅不可复用；从头重新布防同时清除旧帧率和最后到达时间 |
+| 软件更新窗口 | 通过 Electron E2E | 已加载工程后原生 `dialog` 完整覆盖视口；跨工程、Cue、演出、集成、日志五工作区连续打开/关闭 5 次，无 page error、console error、遮罩或 inert 残留 |
+| Electron 39.8.10 | 通过自动回归 | Electron 37 已结束上游支持；精确升级至 39.8.10 后 install frozen、typecheck、31 文件 163 项单测、lint、build、verify 全部通过 |
+| Electron 39.8.10 / OBS 实机 | 通过 | 正式 `win-unpacked` 使用本机 `windows-stage` 加密档案连接 OBS；凭证可解密、日志脱敏就绪，读取 3 场景、3 输入、2 转场后正常断开退出 |
+| UI 与数据链路 | 12/12 通过 | Electron 39.8.10 下验证新建/导入 P1、缩略图错误可见、未保存保护、布局/工程恢复、最小窗口五工作区、软件更新和自动保存重开 |
+| 生产依赖安全 | 通过 | `pnpm audit --prod --audit-level high` 返回 `No known vulnerabilities found`；开发工具链的无上游修复项不进入正式 ASAR 运行依赖 |
+| GitHub Release | 通过 | [Release Windows #14](https://github.com/JinHe9527/tuanbo-yijianchufa/actions/runs/33112754200) 全步骤成功，用时 5 分 51 秒；[v0.2.13](https://github.com/JinHe9527/tuanbo-yijianchufa/releases/tag/v0.2.13) 为 Latest，标签提交 `eed6e09b812b7841232d4822e37114f9b83a587c`，6 个资产齐全 |
+| 正式安装包摘要 | 通过 | `Tuanbo-Link-Console-0.2.13-x64.exe`，118,283,132 字节；GitHub Release SHA-256 `ac71d9be2bd5e2f1158e91754ed3b109de776c99f933ddcda94bed2db0cede3b` |
+| 安装版 0.2.12 → 正式 0.2.13 软件内更新 | 通过 | 隔离目录中的 0.2.12 读取本机 safeStorage 凭证但不回显内容；发现 0.2.13、完整下载 118,283,132 / 118,283,132 字节并执行退出安装；同一目录升级为 0.2.13 后自动重启，HKCU `/currentuser` 安装范围保持正确 |
+| 更新后 1920×1030 UI | 通过 | 正式 0.2.13 返回“当前已经是最新版本”；原生 `DIALOG` 遮罩 1920×1030，卡片 520×325 且位于 `(700, 352.5)`，顶部/中部/底部采样均在最上层，底层工作区 `inert` |
+| 更新验收清理 | 通过 | 正式更新实例正常关闭并静默卸载；隔离安装目录、产品进程与卸载注册表残留均为 0 |
+| P1 真实 MTC 现场门槛 | 阻断且根因已确认 | `HirenderP1.exe` 正在运行受控 `roundtrip.hia`，但唯一主窗口标题仍为“登陆”；对真实 loopMIDI 输入连续监听 5 秒收到 0 条 quarter-frame。必须由操作员完成 P1 登录、打开正式工程并开始播放，不能用模拟 MTC 代替签收 |
+
+只有当前现场前置探测表与本节剩余阻断全部通过并附证据后，真实现场目标才能标记完成。
+
+## 0.2.14 本地开发回归（2026-08-31，未发布）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 全量工程校验 | 通过 | `pnpm verify`：37 个测试文件、237 项单元测试全部通过；类型检查、ESLint、Electron 生产构建和桌面产物边界检查通过 |
+| 生产运行依赖审计 | 通过 | `pnpm audit --prod --audit-level high` 返回 `No known vulnerabilities found` |
+| Electron 端到端 | 14/14 通过 | 覆盖新建/保存/恢复、P1 自动建档、缩略图失败、未保存保护、布局与恢复异常、最小窗口五工作区、更新模态、自动保存重开、Cue 时间线，以及运行会话未停止时主进程拒绝关闭 |
+| 工程与素材安全 | 通过自动回归 | 旧工程的异步保存或 Command 不能落入后来打开的工程；跨盘绝对路径不能绕过工程内素材边界；浏览器不支持的媒体由内置 FFmpeg 探测，编辑代理失败不再使正式素材导入失去工程记录 |
+| 受管 OBS 输出 | 通过自动回归 | 同层图片与视频使用不同类型的稳定来源名；同一 OBS 来源跨图层并发在工程校验阶段阻断；停止失败后继续启动的新来源与所有可能已执行的来源均保留到最终清理；清理逐项尝试并聚合错误 |
+| MTC 与手动接管 | 通过自动回归 | MTC 必须连续稳定满 500ms 才可通过预检或从当前时间布防；跳变、中断和重置重新计时；手动接管按最后样本把丢码期间越过的 Cue 与媒体边界明确标记为错过/跳过 |
+| 外部程序生命周期 | 通过自动回归 | 路径核验暂时失败时保留本次启动 PID 与所有权并拒绝重复启动；确认进程退出后清空旧 PID/所有权；退出流程自身失败会显示系统错误而非静默卡住 |
+| 发布与安装 | 未执行 | 按操作员要求本轮只开发：未生成新安装包、未执行安装/覆盖/卸载、未提交、未打标签、未推送、未发布 |
+| P1 真实 MTC | 仍阻断 | P1 1.14.2 已实际播放并勾选发送 MTC 30Hz，但软件环回为 0 条 quarter-frame 且 P1 显示“未发送”；需物理 USB-MIDI OUT→IN 后完成真实归零、帧率、丢失与恢复签收 |
+
+本节自动回归通过不等于真实现场完成；物理 P1 MTC、OBS 画面与素材执行、操作员五 Cue 现场签收仍不得用模拟结果替代。直播伴侣只需由直播端独立确认其持续采集 OBS。

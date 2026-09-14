@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": [
+    "test-e2e/**/*.ts",
+    "src/renderer/src/link/global.d.ts",
+    "../../packages/core/src/types/**/*.d.ts"
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "name": "@tb/desktop",
+  "private": true,
+  "version": "0.4.1",
+  "productName": "团播联动台",
+  "type": "module",
+  "main": "out/main/index.cjs",
+  "scripts": {
+    "dev": "node ../../tools/obs/native-preview/build.mjs && node ./scripts/run-dev.mjs",
+    "build": "node ../../tools/obs/native-preview/build.mjs && electron-vite build",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.e2e.json --noEmit",
+    "test:e2e": "playwright test",
+    "probe:midi": "node ./scripts/probe-windows-midi.mjs",
+    "probe:mtc": "node ./scripts/probe-windows-mtc.mjs",
+    "probe:mtc:send": "node ./scripts/send-windows-mtc.mjs",
+    "probe:mtc:runtime": "node ./scripts/probe-link-mtc-runtime.mjs",
+    "dist:dir": "node ../../tools/obs/native-preview/build.mjs && electron-vite build && electron-builder --dir",
+    "dist": "node ../../tools/obs/native-preview/build.mjs && electron-vite build && electron-builder --publish never"
+  },
+  "build": {
+    "productName": "团播联动台",
+    "afterPack": "./scripts/edit-windows-executable.mjs",
+    "appId": "com.tuanbo.control",
+    "files": [
+      "out/**",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
+    "directories": {
+      "buildResources": "build"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "JinHe9527",
+      "repo": "tuanbo-yijianchufa",
+      "private": true,
+      "releaseType": "release"
+    },
+    "mac": {
+      "icon": "build/icon.icns"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Tuanbo-Link-Console-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "packElevateHelper": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "团播联动台",
+      "uninstallDisplayName": "团播联动台"
+    },
+    "linux": {
+      "icon": "build/icon.png"
+    },
+    "electronVersion": "39.8.10",
+    "extraResources": [
+      {
+        "from": "../../tools/obs/native-preview/tblink-realtime-preview.dll",
+        "to": "obs/tblink-realtime-preview.dll"
+      }
+    ]
+  },
+  "dependencies": {
+    "@tb/core": "workspace:*",
+    "@tb/schema": "workspace:*",
+    "@xmldom/xmldom": "0.9.12",
+    "electron-updater": "6.8.9",
+    "ffmpeg-static": "5.3.0",
+    "lucide-react": "^0.460.0",
+    "obs-websocket-js": "5.0.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.13"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron-builder": "26.15.3",
+    "electron-vite": "^4.0.0",
+    "rcedit": "5.0.2"
+  },
+  "description": "内部音乐主控与 P1 跟随双模式的 OBS、MIDI 时间线联动桌面端",
+  "author": "团播联动台"
+}

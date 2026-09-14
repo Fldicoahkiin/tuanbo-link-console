@@ -1,0 +1,47 @@
+{
+  "name": "tuanbo-yijianchufa",
+  "private": true,
+  "version": "0.4.1",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "pnpm --filter @tb/desktop dev",
+    "build": "pnpm --filter @tb/desktop build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint . --ignore-pattern eslint.config.mjs",
+    "test": "vitest run",
+    "dist:dir": "pnpm --filter @tb/desktop dist:dir",
+    "dist": "pnpm --filter @tb/desktop dist",
+    "verify": "pnpm typecheck && pnpm test && pnpm lint && pnpm build && node scripts/verify-desktop-artifacts.mjs",
+    "verify:release": "pnpm verify && pnpm dist && node scripts/verify-desktop-artifacts.mjs --dist && pnpm release:manifest",
+    "verify:installer": "pwsh -NoLogo -NoProfile -File scripts/verify-windows-installer.ps1",
+    "release:manifest": "node scripts/write-release-manifest.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.8.1",
+    "electron": "39.8.10",
+    "eslint": "^9.39.1",
+    "eslint-plugin-boundaries": "^6.0.2",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^16.4.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.1",
+    "vitest": "3.2.7",
+    "zod": "^4.1.12"
+  },
+  "pnpm": {
+    "overrides": {
+      "js-yaml": "4.3.1",
+      "ws": "8.21.0"
+    },
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "ffmpeg-static"
+    ]
+  }
+}
+
+
+
+

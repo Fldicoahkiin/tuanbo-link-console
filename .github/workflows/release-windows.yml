@@ -1,0 +1,54 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use pnpm 10.33.0
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+
+      - name: Use Node.js 25.8.2
+        uses: actions/setup-node@v7
+        with:
+          node-version: 25.8.2
+          cache: pnpm
+
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          $packageVersion = node -p "require('./apps/desktop/package.json').version"
+          $expectedTag = "v$packageVersion"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "标签 $env:GITHUB_REF_NAME 与应用版本 $packageVersion 不一致，应为 $expectedTag"
+          }
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify and build Windows release
+        run: pnpm verify:release
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            apps/desktop/dist/Tuanbo-Link-Console-*.exe
+            apps/desktop/dist/Tuanbo-Link-Console-*.exe.blockmap
+            apps/desktop/dist/latest.yml
+            apps/desktop/dist/release-manifest.json

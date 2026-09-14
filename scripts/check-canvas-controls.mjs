@@ -1,0 +1,43 @@
+import { chromium, expect } from '../apps/desktop/node_modules/@playwright/test/index.mjs';
+const browser=await chromium.launch({headless:true,channel:'msedge'});
+const page=await browser.newPage({viewport:{width:1000,height:800}});
+try {
+ await page.route('**/__preview-check',r=>r.fulfill({contentType:'text/html',body:'<div id="test"></div>'}));
+ await page.goto('http://localhost:5173/__preview-check');
+ await page.evaluate(async()=>{
+  const refresh=await import('/@react-refresh');refresh.injectIntoGlobalHook(globalThis);globalThis.$RefreshReg$=()=>{};globalThis.$RefreshSig$=()=>type=>type;
+  const src=await(await fetch('/src/main.tsx')).text();
+  const {default:React}=await import(src.match(/from "([^"]*deps\/react\.js[^"]*)"/)[1]);
+  const {default:{createRoot}}=await import(src.match(/from "([^"]*deps\/react-dom_client.js[^"]*)"/)[1]);
+  const canvas=globalThis.document.createElement('canvas');canvas.width=64;canvas.height=64;canvas.getContext('2d').fillRect(0,0,64,64);
+  const stream=canvas.captureStream(30),recorder=new globalThis.MediaRecorder(stream,{mimeType:'video/webm'}),parts=[];
+  recorder.ondataavailable=e=>parts.push(e.data);const stopped=new Promise(resolve=>{recorder.onstop=resolve;});recorder.start();const draw=setInterval(()=>{canvas.getContext('2d').fillStyle=`rgb(${Math.floor(Math.random()*255)},0,0)`;canvas.getContext('2d').fillRect(0,0,64,64);},30);await new Promise(resolve=>setTimeout(resolve,1200));clearInterval(draw);recorder.stop();await stopped;stream.getTracks().forEach(t=>t.stop());
+  const url=URL.createObjectURL(new Blob(parts,{type:'video/webm'}));globalThis.requests=0;
+  globalThis.tbLink={ensureMediaPreviewUrl:async()=>{globalThis.requests++;return url;},getObsSourceScreenshot:async()=>canvas.toDataURL()};
+  const {ReferenceStage}=await import('/src/link/components/ReferenceStage.tsx');
+  await import('/src/link/link.css');
+  const css=globalThis.document.createElement('style');css.textContent='.reference-stage{height:650px;width:900px}.stage-canvas{height:600px}.stage-frame{width:240px!important;height:480px!important}';globalThis.document.head.append(css);
+  const root=createRoot(globalThis.document.getElementById('test'));
+  const layer={id:'layer',visible:true,locked:false};
+  const asset={id:'asset',name:'sample',width:20,height:40,kind:'video',relativePath:'sample.webm',sha256:'a'.repeat(64)};
+  const clip={id:'clip',assetId:'asset',sourceOffsetMs:0,canvasTransform:{x:.5,y:.5,scale:1,scaleX:2.56,scaleY:2.56,rotation:0}};
+  const noop=()=>{};
+  globalThis.renderPreview=(at,covered)=>root.render(React.createElement(ReferenceStage,{sceneMode:true,activeMediaClipId:covered?null:'clip',scenePreview:covered?{cueId:'cue',sceneName:'Camera'}:null,projectPath:'test.tblink',itemTitle:'test',playheadMs:at,playing:false,obsStatus:'connected',obsInventory:null,outputCanvas:{width:64,height:128},obsSceneCount:1,obsInputCount:1,selectedClipId:'clip',selectedCueId:null,selectedAsset:null,onSelectClip:noop,onSelectCue:noop,onSelectObsResource:noop,onTransformClip:(_id,t)=>{globalThis.savedTransform=t;},onMoveClipToTop:noop,onRemoveClip:noop,onTransformObs:noop,onMoveObsToTop:noop,onRemoveObs:noop,onDropObsResource:noop,timelineState:{clips:[{clip,asset,layer,startMs:100,endMs:1500,visual:at>=100,active:at>=100}],layers:[{layer,activeObsCues:[]}],activeClipIds:at>=100?['clip']:[],activeAudioClipIds:[],activeObsCueIds:[]}}));
+  globalThis.renderPreview(300,false);
+ });
+ const layer=page.locator('.stage-media-layer');
+ await expect(layer).toBeVisible();
+ const handle=page.locator('.stage-media-handle.se');
+ await expect(handle).toHaveCount(1);
+ const box=await handle.boundingBox();expect(box.width).toBe(8);expect(box.height).toBe(8);
+ const before=await layer.boundingBox();
+ await page.mouse.move(box.x+4,box.y+4);await page.mouse.down();await page.mouse.move(box.x+24,box.y+44,{steps:10});await page.mouse.up();
+ const after=await layer.boundingBox();
+ expect(Math.abs(after.x-before.x)).toBeLessThan(1);
+ expect(Math.abs(after.y-before.y)).toBeLessThan(1);
+ expect(after.width-before.width).toBeCloseTo(20,0);
+ expect(after.height-before.height).toBeCloseTo(40,0);
+ expect(await page.evaluate(()=>globalThis.savedTransform.scaleX)).toBeGreaterThan(2.56);
+ await page.screenshot({path:'canvas-controls-verified.png'});
+ console.log('通过：大倍率素材控制点固定 8px，真实鼠标缩放跟手、对角固定、提交最终位置。');
+} finally {await browser.close();}

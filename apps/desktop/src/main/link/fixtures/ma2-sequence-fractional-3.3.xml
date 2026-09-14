@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Native onPC 3.3.4.3 export of dedicated non-playing test Sequence 9901.
+     Only Info (timestamp and user's show name) has been removed. -->
+<MA xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.malighting.de/grandma2/xml/MA" xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.3.4/MA.xsd" major_vers="3" minor_vers="3" stream_vers="4">
+  <Sequ index="9900" name="TBLINK_CUE_REFERENCE_ACCEPTANCE">
+    <Cue xsi:nil="true" />
+    <Cue index="1"><Number number="1" sub_number="250" /><CuePart index="0" /></Cue>
+    <Cue index="2"><Number number="7" sub_number="500" /><CuePart index="0" /></Cue>
+  </Sequ>
+</MA>

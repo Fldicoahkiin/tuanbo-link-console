@@ -1,0 +1,7 @@
+{
+  "frames": 150,
+  "fps": 30.007137469523876,
+  "frameAgeMedianMs": 42.02207,
+  "frameAgeP95Ms": 43.85869,
+  "scope": "isolated OBS raw-frame transport, excludes Electron paint"
+}

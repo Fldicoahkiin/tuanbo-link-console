@@ -1,0 +1,15 @@
+{
+  "name": "@tb/core",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@tb/schema": "workspace:*",
+    "midi-file": "1.2.4"
+  }
+}

@@ -1,0 +1,51 @@
+import { readFile } from 'node:fs/promises';
+import { expect, it } from 'vitest';
+import { appendMa2MasterSubtracks, appendMa2Tracks, removeMa2Tracks } from './ma2-track-write';
+import { inspectMa2TimecodeXml } from './ma2-timecode-xml';
+
+const xml = await readFile(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url), 'utf8');
+it('Master 子轨道创建保留 Cue，并拒绝重复、错误目标和未验证版本', () => {
+  const path = 'Timecode:9901/Track:0';
+  const added = appendMa2MasterSubtracks(xml, 9902, [path]);
+  expect([...added.paths]).toEqual([[path, `${path}/SubTrack:1`]]);
+  const before = inspectMa2TimecodeXml(xml).timecodes[0]!.tracks[0]!;
+  const after = inspectMa2TimecodeXml(added.xml).timecodes[0]!.tracks[0]!;
+  expect(after.subtracks[0]).toEqual(before.subtracks[0]);
+  expect(after.subtracks[1]).toEqual({ index: 1, attributes: { index: '1', fader_command: 'Master' }, events: [] });
+  expect(appendMa2MasterSubtracks(xml, 9902, []).xml).toBe(xml);
+  expect(() => appendMa2MasterSubtracks(added.xml, 9902, [path])).toThrow('已有 Master');
+  expect(() => appendMa2MasterSubtracks(xml, 9902, [path, path])).toThrow('重复');
+  expect(() => appendMa2MasterSubtracks(xml, 9902, ['missing'])).toThrow('不存在');
+  expect(() => appendMa2MasterSubtracks(xml, 9901, [path])).toThrow('目标');
+  expect(() => appendMa2MasterSubtracks(xml.replace('minor_vers="3"', 'minor_vers="7"').replace('stream_vers="4"', 'stream_vers="0"'), 9902, [path])).toThrow('尚未验证');
+});
+it('新增执行器轨道保留原始轨道和扩展节点，空 Timecode 也可创建', () => {
+  const addition = { executor: '99.219', executorName: '灯光 & <主舞台>', muted: false };
+  const source = xml.replace('</Timecode>', '<FutureData value="keep" /></Timecode>');
+  const appended = appendMa2Tracks(source, 9902, [addition, { ...addition, executor: '99.218', muted: true }]);
+  expect(appended.paths).toEqual(['Timecode:9901/Track:1', 'Timecode:9901/Track:2']);
+  const tracks = inspectMa2TimecodeXml(appended.xml).timecodes[0]!.tracks;
+  expect(tracks[0]).toEqual(inspectMa2TimecodeXml(xml).timecodes[0]!.tracks[0]);
+  expect(tracks[1]).toMatchObject({ index: 1, attributes: { active: 'true' }, executorName: addition.executorName, executorAddress: ['30', '1', '99', '219'], subtracks: [{ index: 0, events: [] }] });
+  expect(tracks[2]!.attributes.active).toBeUndefined();
+  expect(appended.xml).toContain('<FutureData value="keep"/>');
+  expect(appendMa2Tracks(source, 9902, []).xml).toBe(source);
+  const empty = removeMa2Tracks(xml, 9902, ['Timecode:9901/Track:0']).xml;
+  expect(appendMa2Tracks(empty, 9902, [addition]).paths).toEqual(['Timecode:9901/Track:0']);
+  expect(() => appendMa2Tracks(xml, 9901, [addition])).toThrow('目标');
+  for (const executor of ['0.1', '1.0', '99.219 command', '1', '1.100000']) expect(() => appendMa2Tracks(xml, 9902, [{ ...addition, executor }])).toThrow('执行器');
+  expect(() => appendMa2Tracks(xml, 9902, [{ ...addition, executorName: '' }])).toThrow('名称');
+});
+it('删除轨道保留其余引用、扩展信息，并提供重编号映射', () => {
+  const originalTrack = xml.match(/<Track\s[\s\S]*?<\/Track>/)?.[0];
+  if (!originalTrack) throw new Error('测试轨道缺失');
+  const source = xml.replace('</Timecode>', `${originalTrack.replace('index="0"', 'index="4"')}<FutureData value="keep" /></Timecode>`);
+  const result = removeMa2Tracks(source, 9902, ['Timecode:9901/Track:0']);
+  expect([...result.trackPaths]).toEqual([['Timecode:9901/Track:4', 'Timecode:9901/Track:0']]);
+  expect(inspectMa2TimecodeXml(result.xml).timecodes[0]!.tracks).toEqual(inspectMa2TimecodeXml(xml).timecodes[0]!.tracks);
+  expect(result.xml).toContain('<FutureData value="keep"/>');
+  expect(removeMa2Tracks(source, 9902, []).xml).toBe(source);
+  expect(() => removeMa2Tracks(source, 9901, [])).toThrow('目标');
+  expect(() => removeMa2Tracks(source, 9902, ['missing'])).toThrow('路径');
+  expect(inspectMa2TimecodeXml(removeMa2Tracks(xml, 9902, ['Timecode:9901/Track:0']).xml).timecodes[0]!.tracks).toEqual([]);
+});
