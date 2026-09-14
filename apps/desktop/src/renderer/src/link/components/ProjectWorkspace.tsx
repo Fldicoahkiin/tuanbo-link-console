@@ -1,4 +1,5 @@
 import { useSelectedProgram } from '../useSelectedProgram';
+import { usePlayProgram } from './usePlayProgram';
 import { P1TimeMonitor } from './P1TimeMonitor';
 import { AudioSpectrum } from './AudioSpectrum';
 import { ProgramGrid } from './ProgramGrid';
@@ -72,6 +73,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
   const [audioTargetId, setAudioTargetId] = useState<string | null>(null);
   const [selectedItemId, setSelectedItemId] = useSelectedProgram(notify);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState('all');
+  const playProgram = usePlayProgram(player, busy, setBusy, selectedPlaylistId, setSelectedItemId, notify);
   const [search, setSearch] = useState('');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   useEffect(() => { if (project && !['all', 'unassigned'].includes(selectedPlaylistId) && !programPlaylists(project).some((list) => list.id === selectedPlaylistId)) setSelectedPlaylistId('all'); }, [project, selectedPlaylistId]);
@@ -193,7 +195,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
         playlistHost={playlistHost}
         notify={notify}
         locked={locked}
-        playItem={internal ? (item) => { if (!player.controller || busy) { notify('设备正在初始化，请稍后点击播放。'); return; } if (!item.referenceAudio) { notify('请先为该节目添加音频。', 'error'); return; } if (!busy && item.enabled) { player.controller.setPlaylist(selectedPlaylistId); setSelectedItemId(item.id); void player.controller.play(item.id); } } : undefined}
+        playItem={internal ? playProgram : undefined}
         project={project}
         revision={revision}
         filteredItems={filteredItems}
