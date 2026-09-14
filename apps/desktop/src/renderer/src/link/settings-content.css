@@ -127,6 +127,9 @@
 .settings-inline.integration-workspace .settings-detail .integration-settings-body .settings-disclosure { padding: 6px 0; }
 .settings-inline.integration-workspace .settings-detail .settings-support-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
 .settings-inline.integration-workspace .settings-detail .settings-support-grid .update-trigger { display: inline-flex; width: auto; gap: 6px; }
+.update-installed-version { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; }
+.update-installed-version > span { color: var(--text-secondary); font-size: 13px; }
+.update-installed-version > strong { color: var(--text-primary); font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .settings-inline.integration-workspace .settings-detail .settings-support-grid > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 16px; min-height: 0; padding: 6px 0; border: 0; border-bottom: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .settings-inline.integration-workspace .settings-detail .settings-support-grid > div > strong { grid-column: 1; font-size: 14px; }
 .settings-inline.integration-workspace .settings-detail .settings-support-grid > div > span { grid-column: 1; color: var(--text-secondary); font-size: 13px; }

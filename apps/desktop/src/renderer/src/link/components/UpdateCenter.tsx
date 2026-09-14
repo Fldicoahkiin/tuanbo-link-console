@@ -99,6 +99,10 @@ export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
   const icon = phase === 'downloaded' || phase === 'upToDate' ? <CheckCircle2 /> : working ? <LoaderCircle className="spin" /> : <CloudDownload />;
 
   return <>
+    <div className="update-installed-version" aria-live="polite">
+      <span>当前安装版本</span>
+      <strong>{status?.currentVersion ? `v${status.currentVersion}` : '正在读取…'}</strong>
+    </div>
     <button className="secondary-button update-trigger" title="软件更新" aria-label="软件更新" onClick={() => setOpen(true)}>
       {icon}
       打开软件更新
