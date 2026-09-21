@@ -12,7 +12,15 @@ export function LicenseSettings({ runtimeActive }: { runtimeActive: boolean }): 
   const [message, setMessage] = useState('');
   useEffect(() => {
     let alive = true;
-    void window.tbLink.getLicenseStatus().then(value => { const parsed = licenseStatusSchema.parse(value); if (alive) setStatus(parsed); }).catch((failure: unknown) => { if (alive) setError(String(failure)); });
+    const read = async (): Promise<void> => {
+      try {
+        const parsed = licenseStatusSchema.parse(await window.tbLink.getLicenseStatus());
+        if (alive) setStatus(parsed);
+      } catch (failure) {
+        if (alive) setError(`读取授权失败，请完整退出并重新打开软件后重试。${failure instanceof Error ? failure.message : String(failure)}`);
+      }
+    };
+    void read();
     return () => { alive = false; };
   }, []);
   const run = async (action: 'refresh' | 'export' | 'import'): Promise<void> => {
@@ -28,7 +36,7 @@ export function LicenseSettings({ runtimeActive }: { runtimeActive: boolean }): 
   };
   const claims = status?.claims;
   return <section aria-label="本机授权" className="settings-section">
-    <div className="device-section-heading"><h3>一台主机，一份授权</h3><span role="status">{status ? stateLabels[status.state] : '正在读取…'}</span></div>
+    <div className="device-section-heading"><h3>一台主机，一份授权</h3><span role="status">{status ? stateLabels[status.state] : error ? '读取失败' : '正在读取…'}</span></div>
     <p className="settings-note">买断与订阅均绑定本机。其他电脑需要单独授权，换机需办理授权迁移。</p>
     {status ? <>
       <label className="settings-path-row"><span>本机机器码</span><input aria-label="本机机器码" readOnly value={status.machineCode} onFocus={event => event.currentTarget.select()} /></label>

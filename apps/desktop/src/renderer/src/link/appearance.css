@@ -27,6 +27,8 @@
   --surface-glass-strong: rgba(14, 14, 17, 0.88);
   --text-1: #c9cdd4;
   --text-emphasis: #f5f5f7;
+  --clock-elapsed: #6be3a1;
+  --clock-remaining: #ffbf69;
   --selection-background: #153653;
   --selection-border: #409cff;
   --text-2: #a1a6af;
@@ -90,6 +92,8 @@
 }
 :root[data-theme='light'] {
   --text-emphasis: #1d1d1f;
+  --clock-elapsed: #087744;
+  --clock-remaining: #955100;
   --selection-background: #dcecff;
   --selection-border: #007aff;
   --text-tertiary: var(--text-2);

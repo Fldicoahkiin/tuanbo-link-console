@@ -51,7 +51,6 @@ export function P1TimeMonitor({ player, title, positionMs, durationMs, frameRate
   const sampleRate = useIntegrationStore((s) => s.profile?.internalPlayer?.audioSampleRate ?? 44100);
   const sending = internal && player.state.mtcEnabled && player.state.status === 'playing' && player.state.mtcSentPositionMs != null && !player.state.error;
   return <section className="p1-time-monitor" aria-label="P1 播放监测" title={title}>
-    <header><span>播放监测</span><strong title={title}>{title}</strong></header>
     <div className="monitor-readings">
       <dl>
         <div><dt>正计时</dt><dd aria-label={`正计时 ${clockText(positionMs)}`}>{clockText(positionMs)}</dd></div>
@@ -64,8 +63,13 @@ export function P1TimeMonitor({ player, title, positionMs, durationMs, frameRate
         </div>)}
       </div>
     </div>
-    <footer><span>总时长 {clockText(durationMs).slice(0, 8)}</span><span>{internal ? `${sampleRate / 1000} kHz` : '外部主控'}</span></footer>
-    <div className="monitor-mtc" data-sending={sending} title={`偏移后 MTC：${outputTimecode}；采样率为音频输出设置`}><span>MTC · {frameRate} fps</span><strong>{sending ? '发送中' : internal && player.state.status === 'paused' ? '已暂停' : '未发送'}</strong></div>
+    <div className="monitor-mtc" data-sending={sending} title={internal ? '含时间码偏移；未发送时显示预备位置，不代表控台已收到' : '最近接收到的外部 MTC 时间码'}>
+      <span>MTC · {frameRate} fps</span>
+      <strong className="monitor-mtc-clock" aria-label={`MTC 时间码 ${outputTimecode}`}>{outputTimecode}</strong>
+      <span>{sending ? '发送中' : !internal ? outputTimecode === '—' ? '无信号' : '接收值' : player.state.status === 'paused' ? '已暂停' : '未发送'}</span>
+      <span className="monitor-duration">总时长 {clockText(durationMs).slice(0, 8)}</span>
+      <span>{internal ? `${sampleRate / 1000} kHz` : '外部主控'}</span>
+    </div>
     {error ? <small role="alert">{error}</small> : null}
   </section>;
 }

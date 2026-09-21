@@ -30,7 +30,7 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await expect(page.locator('.p1-media-card')).toHaveCount(24);
-    await expect(page.locator('.p1-time-monitor footer')).toContainText('总时长 00:00:12');
+    await expect(page.locator('.monitor-duration')).toContainText('总时长 00:00:12');
     const nav = page.getByRole('navigation', { name: '主要工作区' });
     await page.locator('.player-buttons .primary-button').click();
     await expect(page.locator('.unified-player .mtc-output-status')).toHaveCount(0);

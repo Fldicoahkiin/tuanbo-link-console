@@ -75,26 +75,24 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .p1-pane-title input { font-size: var(--text-control); color: var(--text-primary); }
 .player-error { color: var(--danger); background: var(--danger-soft); }
 
-.p1-time-monitor { display: flex; flex-direction: column; align-items: stretch; justify-content: space-between; gap: 8px; padding: 16px; border: 1px solid var(--separator); border-radius: var(--radius-panel); background: var(--surface); }
-.p1-time-monitor header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
-.p1-time-monitor header > span { color: var(--text-secondary); font-size: var(--text-caption); white-space: nowrap; }
-.p1-time-monitor header > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-control); font-weight: 500; }
-.monitor-readings { display: flex; align-items: stretch; justify-content: space-between; gap: 12px; }
-.monitor-readings dl { margin: 0; display: grid; gap: 8px; min-width: 0; }
-.monitor-readings dl > div { display: flex; align-items: baseline; gap: 12px; }
-.monitor-readings dt { color: var(--text-secondary); font-size: var(--text-caption); white-space: nowrap; }
-.monitor-readings dd { margin: 0; font: 700 clamp(18px, 1.8vw, 28px)/1.3 var(--font-numeric); font-variant-numeric: tabular-nums; letter-spacing: -.04em; color: var(--text-emphasis); }
-.monitor-readings dd.monitor-remaining { color: var(--text-emphasis); }
-.monitor-levels { display: flex; gap: 5px; }
-.monitor-channel { display: grid; gap: 3px; justify-items: center; }
-.monitor-channel small { font: 10px var(--font-numeric); color: var(--text-secondary); }
-.monitor-level-track { display: flex; flex-direction: column; gap: 2px; width: 6px; }
+.p1-time-monitor { container-type: inline-size; display: flex; flex-direction: column; align-items: stretch; justify-content: space-between; gap: 8px; padding: 16px; border: 1px solid var(--separator); border-radius: var(--radius-panel); background: var(--surface); }
+.monitor-readings { display: flex; flex: 1; align-items: stretch; justify-content: space-between; gap: 12px; }
+.monitor-readings dl { margin: 0; display: grid; flex: 1; gap: 12px; min-width: 0; }
+.monitor-readings dl > div { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 8px; }
+.monitor-readings dt { color: var(--text-secondary); font-size: var(--text-caption); line-height: 16px; white-space: nowrap; }
+.monitor-readings dd { margin: 0; font: 600 clamp(26px, 15cqi, 80px)/1.08 'Segoe UI', 'SF Pro Display', sans-serif; font-variant-numeric: lining-nums tabular-nums; letter-spacing: -.025em; white-space: nowrap; color: var(--clock-elapsed); }
+.monitor-readings dd.monitor-remaining { color: var(--clock-remaining); }
+.monitor-levels { display: flex; align-self: stretch; flex-shrink: 0; gap: 5px; }
+.monitor-channel { display: grid; grid-template-rows: minmax(0, 1fr) 12px; gap: 3px; justify-items: center; min-height: 0; }
+.monitor-channel small { font: 10px/12px var(--font-numeric); color: var(--text-secondary); }
+.monitor-level-track { display: flex; align-self: stretch; min-height: 0; flex-direction: column; gap: 2px; width: 6px; }
 .monitor-level-track i { display: block; flex: 1; min-height: 4px; border-radius: 1px; background: var(--surface-hover); }
 .monitor-level-track i[data-lit='true'] { background: var(--success-text); }
 .monitor-level-track .warning[data-lit='true'] { background: var(--warning-text); }
 .monitor-level-track .peak[data-lit='true'] { background: var(--danger); }
-.p1-time-monitor footer, .monitor-mtc { display: flex; justify-content: space-between; gap: 8px; color: var(--text-secondary); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
-.monitor-mtc { padding-top: 8px; border-top: 1px solid var(--separator); }
+.monitor-mtc { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 8px; padding-top: 8px; border-top: 1px solid var(--separator); color: var(--text-secondary); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
+.monitor-mtc > span { white-space: nowrap; }
+.monitor-mtc .monitor-mtc-clock { font: 600 clamp(16px, 4cqi, 22px)/1.15 'Segoe UI', sans-serif; font-variant-numeric: tabular-nums; color: var(--text-emphasis); white-space: nowrap; }
 .monitor-mtc strong { font-weight: 500; }
 .monitor-mtc[data-sending='true'] strong { color: var(--success-text); }
 
@@ -218,7 +216,7 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
   .device-console { padding: 24px 20px 40px; }
   .device-console .device-panel { padding: 16px 0; }
   .p1-time-monitor { padding: 12px; }
-  .monitor-readings dl > div { gap: 8px; }
+  .monitor-readings dl { gap: 8px; }
 }
 /* At large UI zoom settings reflow; the time axis keeps its necessary own scrolling. */
 @media (max-width: 980px) {

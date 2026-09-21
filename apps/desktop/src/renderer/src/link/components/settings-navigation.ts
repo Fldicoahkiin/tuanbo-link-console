@@ -7,7 +7,6 @@ export const SETTINGS_GROUPS = [
   { id: 'appearance', name: '外观与更新', icon: Palette }
 ] as const;
 export const SETTINGS_SECTIONS = [
-  { id: 'license', group: 'appearance', name: '本机授权', detail: '买断、订阅与离线激活', icon: KeyRound },
   { id: 'obs', group: 'devices', name: 'OBS Studio', detail: '画面与声音输出', icon: Monitor },
   { id: 'ma2', group: 'devices', name: 'MA2 控台', detail: '灯光与控台通信', icon: SlidersHorizontal },
   { id: 'audio', group: 'devices', name: '音频与 MIDI', detail: '声音线路与时间码', icon: AudioLines },
@@ -21,7 +20,8 @@ export const SETTINGS_SECTIONS = [
   { id: 'timecode', group: 'picture', name: '时间码同步', detail: '工程时间码帧率', icon: Timer },
   { id: 'workflow', group: 'picture', name: '场景工作方式', detail: '机位与素材的 OBS 场景关系', icon: Layers },
   { id: 'theme', group: 'appearance', name: '界面外观', detail: '深色、浅色或跟随系统', icon: Palette },
-  { id: 'updates', group: 'appearance', name: '软件更新', detail: '版本检查与更新', icon: Download }
+  { id: 'updates', group: 'appearance', name: '软件更新', detail: '版本检查与更新', icon: Download },
+  { id: 'license', group: 'appearance', name: '本机授权', detail: '买断、订阅与离线激活', icon: KeyRound }
 ] as const;
 export type SettingsCategory = (typeof SETTINGS_SECTIONS)[number]['id'];
 export type DeviceSettingsCategory = 'obs' | 'ma2' | 'audio' | 'virtual' | 'maintenance';

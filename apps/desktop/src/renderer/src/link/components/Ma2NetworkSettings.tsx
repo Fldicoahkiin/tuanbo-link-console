@@ -114,7 +114,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     <div className="ma2-network-fields">
       <label><span>控台 IP</span><input aria-label="MA2 控台 IP" placeholder="192.168.0.10" value={host} disabled={locked} onChange={(event) => { setError(''); setHost(event.target.value); }} /></label>
       <label><span>登录用户</span><input aria-label="MA2 登录用户" autoComplete="off" value={username} disabled={locked} onChange={(event) => { setError(''); setUsername(event.target.value); setPassword(''); setPasswordEdited(false); }} /></label>
-      <label><span>登录密码</span><input aria-label="MA2 登录密码" type="password" autoComplete="new-password" placeholder={matching && status?.passwordSaved ? '已安全保存，留空不修改' : '没有密码可留空'} value={password} disabled={locked} onChange={(event) => { setPassword(event.target.value); setPasswordEdited(true); }} /></label>
+      <label><span>登录密码</span><input aria-label="MA2 登录密码" type="text" autoComplete="off" spellCheck={false} placeholder={matching && status?.passwordSaved ? '已安全保存，留空不修改' : '没有密码可留空'} value={password} disabled={locked} onChange={(event) => { setPassword(event.target.value); setPasswordEdited(true); }} /></label>
       <label><span>启动时连接</span><input aria-label="启动时自动连接 MA2" type="checkbox" checked={autoConnect} disabled={locked} onChange={(event) => setAutoConnect(event.target.checked)} /></label>
     </div>
 

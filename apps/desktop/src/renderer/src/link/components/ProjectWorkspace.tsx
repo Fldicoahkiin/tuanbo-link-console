@@ -115,7 +115,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
   const mtcPositionMs = player.state.status === 'stopped'
     ? selectedItem ? (selectedItem.playback?.mtcOffsetMs ?? 0) + (selectedItem.playback?.startMs ?? 0) : null
     : player.state.status === 'preparing' ? null : player.state.mtcPositionMs;
-  const outputTimecode = mtcPositionMs !== null && mtcPositionMs < 86_400_000
+  const outputTimecode = !internal ? timecode ? formatTimecode(timecode) : '—' : mtcPositionMs !== null && mtcPositionMs < 86_400_000
     ? formatTimecode(mediaTimecodeAt(mtcPositionMs, project.timebase.frameRate)) : '—';
 
   const addItem = (): void => {
