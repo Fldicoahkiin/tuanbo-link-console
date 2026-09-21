@@ -12,7 +12,7 @@
     "src/renderer/src/link/**/*.tsx",
     "src/renderer/src/link/**/*.d.ts",
     "src/renderer/src/registry/link-midi-adapter.ts",
-    "src/renderer/src/registry/link-midi-adapter.test.ts",
     "../../packages/core/src/types/**/*.d.ts"
-  ]
+  ],
+  "exclude": ["**/*.test.ts"]
 }

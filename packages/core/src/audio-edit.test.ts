@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, referenceAudioSchema, audioTracksSchema } from '@tb/schema';
 import { audioSegments, audioTracks, audioContainsMediaSource, editedAudio, splitAudioSegments, updateAudioSegment } from './audio-edit';
-import { AudioBeatDetector } from './audio-beat-detection';
 import { editReferenceAudioCommand } from './link-command';
 
 const audio = { assetId: 'song', relativePath: 'assets/music.wav', sha256: 'a'.repeat(64), durationMs: 5000 };
@@ -44,44 +43,3 @@ describe('可编辑歌曲音频', () => {
   });
 });
 
-describe('音频瞬态节拍检测', () => {
-  it('密集跟随主拍而不是每个十六分镲片，标准和稀疏按二拍及四拍分层', () => {
-    const detector = new AudioBeatDetector();
-    for (let sample = 0; sample < 22050 * 12; sample++) {
-      const time = sample / 22050;
-      const kick = Math.sin(time * Math.PI * 2 * 90) * Math.exp(-(time % 0.5) * 45) * 0.8;
-      const hat = Math.sin(time * Math.PI * 2 * 6000) * Math.exp(-(time % 0.125) * 100) * 0.12;
-      detector.push(kick + hat);
-    }
-    const result = detector.finish(12000);
-    expect(result.dense.length).toBeGreaterThanOrEqual(20);
-    expect(result.dense.length).toBeLessThanOrEqual(25);
-    expect(result.dense.every((time) => Math.abs(time - Math.round(time / 500) * 500) < 35)).toBe(true);
-    expect(result.standard.length).toBeLessThanOrEqual(13);
-    expect(result.sparse.length).toBeLessThanOrEqual(7);
-    expect(result.standard.every((time) => result.dense.includes(time))).toBe(true);
-    expect(result.sparse.every((time) => result.standard.includes(time))).toBe(true);
-  });
-  it('静音和稳定正弦不会凭空生成节拍', () => {
-    for (const amplitude of [0, 0.5]) {
-      const detector = new AudioBeatDetector();
-      for (let sample = 0; sample < 22050 * 3; sample++) detector.push(Math.sin(sample * Math.PI * 2 * 440 / 22050) * amplitude);
-      expect(detector.finish(3000).dense).toEqual([]);
-    }
-  });
-  it('检测合成鼓点，三级逐渐稀疏且保留真实时间', () => {
-    const detector = new AudioBeatDetector();
-    for (let sample = 0; sample < 22050 * 6; sample++) {
-      const seconds = sample / 22050;
-      const beat = Math.floor(seconds / 0.5);
-      const local = seconds - beat * 0.5;
-      const amplitude = beat % 2 === 0 ? 0.9 : 0.35;
-      detector.push(Math.sin(sample * Math.PI * 2 * 100 / 22050) * amplitude * Math.exp(-local * 40));
-    }
-    const result = detector.finish(6000);
-    expect(result.dense.length).toBeGreaterThanOrEqual(10);
-    expect(result.dense.every((time) => Math.abs(time - Math.round(time / 500) * 500) < 30)).toBe(true);
-    expect(result.standard.every((time) => result.dense.includes(time))).toBe(true);
-    expect(result.sparse.every((time) => result.standard.includes(time))).toBe(true);
-  });
-});

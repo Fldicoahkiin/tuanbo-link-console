@@ -25,6 +25,7 @@ apps/obs-helper/build-*/
 
 # Playwright e2e 输出（trace / video / screenshots）
 apps/desktop/test-results/
+apps/desktop/test-results-*/
 apps/desktop/playwright-report/
 apps/desktop/playwright/.cache/
 
@@ -46,6 +47,11 @@ tools/obs/native-preview/*.pdb
 # 本机开发输出、验收数据及历史交付包（保留在本地）
 apps/desktop/out-*/
 /acceptance-*/
+/acceptance-*.json
+/audit-*.json
+/repair-*-dependencies*.json
+/repair-dependencies*.json
+/repair-production-dependencies*.json
 /交付*/
 /artifacts/
 /*.png
@@ -63,3 +69,7 @@ apps/desktop/out-*/
 *.pem
 *.pfx
 *.key
+*.tbllicense
+
+# IBT built runtime (reproduced from pinned public source)
+tools/ibt/bin/

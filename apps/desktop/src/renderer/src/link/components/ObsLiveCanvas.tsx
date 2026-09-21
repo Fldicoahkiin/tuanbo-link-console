@@ -14,7 +14,21 @@ export function ObsLiveCanvas(): JSX.Element {
   const sending = useRef(false);
   const editing = useRef(false);
   const [restart, setRestart] = useState(0);
+  const [repairing, setRepairing] = useState(false);
+  const [suspended, setSuspended] = useState(false);
+  const [visible, setVisible] = useState(false);
+  const previewFailed = useRef(false);
   useEffect(() => {
+    let active = true, received = false;
+    const unsubscribe = desktop.onWindowVisibilityChanged((value) => { received = true; setVisible(value); });
+    void desktop.getWindowVisible().then((value) => {
+      if (typeof value !== 'boolean') throw new Error('窗口可见状态无效');
+      if (active && !received) setVisible(value);
+    }).catch((reason: unknown) => { if (active) setError(String(reason)); });
+    return () => { active = false; unsubscribe(); };
+  }, []);
+  useEffect(() => {
+    if (suspended || !visible) return;
     let active = true;
     let busy = false, dirty = false;
     const refresh = async (): Promise<void> => {
@@ -27,10 +41,12 @@ export function ObsLiveCanvas(): JSX.Element {
     const unsubscribe = desktop.onObsLiveChanged(() => { void refresh(); });
     void refresh();
     return () => { active = false; unsubscribe(); };
-  }, [restart]);
+  }, [restart, suspended, visible]);
   useEffect(() => {
+    if (suspended || !visible) return;
     let active = true;
     let started = false;
+    if (previewFailed.current) return;
     setError(null);
     const run = async (): Promise<void> => {
       try {
@@ -41,13 +57,29 @@ export function ObsLiveCanvas(): JSX.Element {
           const context = target?.getContext('2d', { alpha: false });
           if (!target || !context) throw new Error('无法创建 OBS 实时画布');
           if (target.width !== frame.width || target.height !== frame.height) { target.width = frame.width; target.height = frame.height; }
-          context.putImageData(new ImageData(new Uint8ClampedArray(frame.rgba), frame.width, frame.height), 0, 0);
+          if (!(frame.rgba.buffer instanceof ArrayBuffer)) throw new Error('OBS 视频帧缓冲区类型无效');
+          const pixels = new Uint8ClampedArray(frame.rgba.buffer, frame.rgba.byteOffset, frame.rgba.byteLength);
+          context.putImageData(new ImageData(pixels, frame.width, frame.height), 0, 0);
         }
-      } catch (reason) { if (active) setError(String(reason)); }
+      } catch (reason) { if (active) { previewFailed.current = true; setError(String(reason)); } }
     };
     liveSession = liveSession.then(async () => { if (active) { started = true; await run(); } });
     return () => { active = false; if (started) void desktop.closeObsLivePreview().catch((reason: unknown) => { console.error('关闭 OBS 预览失败', reason); }); };
-  }, [restart]);
+  }, [restart, suspended, visible]);
+  const repair = async (): Promise<void> => {
+    if (repairing) return;
+    setRepairing(true);
+    setSuspended(true);
+    try {
+      await desktop.closeObsLivePreview();
+      await desktop.repairObsBridge();
+      previewFailed.current = false;
+      setError(null);
+      setSuspended(false);
+      setRestart((value) => value + 1);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setRepairing(false); }
+  };
   const send = async (): Promise<void> => {
     if (sending.current) return;
     sending.current = true;
@@ -68,7 +100,7 @@ export function ObsLiveCanvas(): JSX.Element {
     <canvas ref={canvas} aria-label="OBS 实时画面" />
     {scene && !error ? <ObsLiveSelection scene={scene} selected={selected} onSelect={setSelected} onEdit={edit} /> : null}
 
-    {error ? <div className="stage-error" role="alert">{error}<button onClick={() => setRestart((value) => value + 1)}>重新连接预览</button></div> : null}
+    {error || repairing ? <div className="stage-error" role="alert">{repairing ? '正在检查 OBS 组件，请完成可能出现的 Windows 授权或 OBS 重启确认。' : error}<button disabled={repairing} onClick={() => { void repair(); }}>检查并修复组件</button><button disabled={repairing} onClick={() => { previewFailed.current = false; setSuspended(false); setRestart((value) => value + 1); }}>重新连接预览</button></div> : null}
     </div>
   </div>;
 }

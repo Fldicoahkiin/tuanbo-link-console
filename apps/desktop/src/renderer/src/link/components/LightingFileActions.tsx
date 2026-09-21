@@ -1,3 +1,4 @@
+import { FolderOpen, FileMusic, FileJson, ChevronRight } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { exportLightingMidi, importLightingMidi, importLightingReaper, appendLightingDocument, type LightingImport } from '@tb/core/link';
 import { lightingDocumentSchema, type LightingDocument } from '@tb/schema';
@@ -34,9 +35,9 @@ export function LightingFileActions(props: { document: LightingDocument; onChang
   };
   return <>
     <input hidden ref={input} type="file" multiple accept=".mid,.midi,.rpp,.json" onChange={(event) => void read(event.target.files)} />
-    <button disabled={busy} onClick={() => input.current?.click()}>{busy ? '读取中…' : '导入灯光'}</button>
-    <button onClick={() => { try { download(new Blob([new Uint8Array(exportLightingMidi(props.document))], { type: 'audio/midi' }), '灯光编排.mid'); } catch (error) { fail(error); } }}>导出 MIDI</button>
-    <button onClick={() => download(new Blob([JSON.stringify(props.document, null, 2)], { type: 'application/json' }), '灯光编排.tblight.json')}>导出灯光工程</button>
+    <button className="lighting-file-operation" aria-label="导入灯光" disabled={busy} onClick={() => input.current?.click()}><FolderOpen /><span><strong>{busy ? '读取中…' : '导入灯光'}</strong><small>从 MIDI、REAPER 或灯光工程添加编排</small></span><ChevronRight /></button>
+    <button className="lighting-file-operation" aria-label="导出 MIDI" onClick={() => { try { download(new Blob([new Uint8Array(exportLightingMidi(props.document))], { type: 'audio/midi' }), '灯光编排.mid'); } catch (error) { fail(error); } }}><FileMusic /><span><strong>导出 MIDI</strong><small>用于其他支持 MIDI 的软件</small></span><ChevronRight /></button>
+    <button className="lighting-file-operation" aria-label="导出灯光工程" onClick={() => download(new Blob([JSON.stringify(props.document, null, 2)], { type: 'application/json' }), '灯光编排.tblight.json')}><FileJson /><span><strong>导出灯光工程</strong><small>保存完整灯光编排，便于备份或再次导入</small></span><ChevronRight /></button>
     {preview ? <div className="lighting-import-preview" role="region" aria-label="灯光导入预览"><strong>导入 {preview.document.tracks.length} 条轨道 · {preview.document.tracks.reduce((sum, track) => sum + track.clips.reduce((total, clip) => total + clip.events.length, 0), 0)} 个事件 · {preview.document.templates.length} 个模板{preview.document.ma2Bindings?.length ? ` · ${preview.document.ma2Bindings.length} 个 MA2 绑定` : ''}</strong>
       {preview.warnings.map((warning) => <p key={warning}>{warning}</p>)}
       <button disabled={busy} onClick={() => { try { apply(); } catch (error) { fail(error); } }}>确认导入</button><button onClick={() => setPreview(null)}>取消</button>

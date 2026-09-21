@@ -56,21 +56,25 @@ export function useAudioEditor(item: RundownItem | null, projectPath: string | n
     trackEditor: (track: AudioTrack) => ({ audio: track.source, title: track.title, segments: track.segments, selectedId: activeTrack?.id === track.id ? selectedId : null, disabled: disabled || busy, points: track.id === tracks[0]?.id ? points : [], select: (id: string | null) => selectTrack(track.id, id), update: (id: string, patch: Partial<Pick<AudioSegment, 'startMs' | 'durationMs' | 'sourceOffsetMs'>>) => update(track, id, patch), remove: () => remove(track, selectedId) }),
     removeTrack: (id: string) => run(() => render(tracks.filter(track => track.id !== id), '删除音轨')),
     select: (id: string | null) => setSelectedId(id),
-    analyze: () => run(async () => {
+    analyze: (onReady?: (points: number[]) => void) => run(async () => {
       if (!audio || !projectPath) throw new Error('请先保存工程并添加歌曲音频');
       const result = audioBeatAnalysisSchema.parse(await linkDesktopViewModel.analyzeAudioBeats({ projectPath, source: audio }));
       if (!current()) throw new Error('分析期间音频已改变，请重新分析');
-      setAnalysis(result);
+      if (onReady) onReady(result[level]); else setAnalysis(result);
       if (!result.dense.length) notify('没有检测到明显节奏点，请按听感手动放置灯光 Cue', 'info');
     }),
     mark: () => run(() => { if (audio) commit({ ...audio, beats: { sourceSha256: audio.sha256, level, pointsMs: points, levels: analysis ?? audio.beats?.levels } }, '应用音频节拍标记', 'markers'); }),
     clearMarks: () => run(() => { if (audio) { const next = { ...audio }; delete next.beats; commit(next, '清除音频节拍标记', 'markers'); setAnalysis(null); } }),
+    splitAtBeats: () => run(async () => {
+      if (!audio || !activeTrack || !points.length) throw new Error('请先检测或加载节拍标记');
+      const next = splitAudioSegments(segments, points);
+      if (next.length === segments.length) throw new Error('当前音轨内没有可切分的节拍点');
+      await changeTrack(activeTrack.id, next, '按节拍切分音频');
+    }),
     split: (timeMs: number) => run(async () => {
       if (!audio || !activeTrack) return;
-      const target = selected ? [selected] : segments;
-      const split = splitAudioSegments(target, [timeMs]);
-      if (split.length === target.length) throw new Error('播放头需要位于音频片段内部');
-      const next = selected ? segments.flatMap((segment) => segment.id === selected.id ? split : [segment]) : split;
+      const next = splitAudioSegments(segments, [timeMs]);
+      if (next.length === segments.length) throw new Error('播放头需要位于音频片段内部');
       await changeTrack(activeTrack.id, next, '分割音频片段');
     }),
     update: (id: string, patch: Partial<Pick<AudioSegment, 'startMs' | 'durationMs' | 'sourceOffsetMs'>>) => activeTrack ? update(activeTrack, id, patch) : Promise.resolve(),

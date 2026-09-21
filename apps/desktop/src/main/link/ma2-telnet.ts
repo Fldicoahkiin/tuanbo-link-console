@@ -38,7 +38,7 @@ export class Ma2Telnet {
         socket.setNoDelay(true); socket.setKeepAlive(true, 5000);
         socket.on('connect', () => { if (index === 1) { monitorReady = true; this.check(); } });
         socket.on('data', (data: Buffer) => { if (this.streams.includes(stream)) this.receive(stream, data); });
-        socket.on('error', () => { if (this.streams.includes(stream)) this.fail(new Error('MA2 网络连接失败，请检查 IP、命令端口、监视端口和控台远程设置')); });
+        socket.on('error', (error: NodeJS.ErrnoException) => { if (this.streams.includes(stream)) this.fail(new Error(`MA2 ${index === 0 ? '命令' : '监视'}端口连接失败：${this.address.host}:${port}（${error.code ?? '网络错误'}）。请检查 IP、端口和控台 Telnet 设置`)); });
         socket.on('close', () => { if (this.streams.includes(stream)) this.fail(new Error('MA2 网络连接已断开；未确认的操作不会自动重试')); });
       }
       await this.waitFor((text) => monitorReady && /\[[^\r\n]*\]>/.test(text) ? 'ready' : null);

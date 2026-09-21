@@ -25,10 +25,10 @@ export async function recoverProgramAudio(itemId: string): Promise<void> {
     try { await desktop.ensureMediaAudioUrl({ projectPath: path, relativePath: asset.relativePath, sha256: asset.sha256, kind: asset.kind }); }
     catch (error) { if (error instanceof Error && error.message.includes('素材不包含音频轨道')) continue; throw error; }
     const source = referenceAudioSourceSchema.parse(await desktop.importReferenceAudio({ projectPath: path, sourcePath: directory + asset.relativePath, durationMs: asset.durationMs }));
-    const sourceOffsetMs = clip.sourceOffsetMs ?? 0;
-    const durationMs = Math.min(clip.durationMs, source.durationMs - sourceOffsetMs);
+    const sourceOffsetMs = Math.round(clip.sourceOffsetMs ?? 0);
+    const durationMs = Math.floor(Math.min(clip.durationMs, source.durationMs - sourceOffsetMs));
     if (durationMs <= 0) throw new Error(`视频片段已超出原声音频范围：${asset.name}`);
-    tracks.push({ id: crypto.randomUUID(), title: `${asset.name} · 原声`, source, segments: [{ id: crypto.randomUUID(), startMs: timecodeToMilliseconds(clip.startTimecode, project.timebase.frameRate), sourceOffsetMs, durationMs }] });
+    tracks.push({ id: crypto.randomUUID(), title: `${asset.name} · 原声`, source, segments: [{ id: crypto.randomUUID(), startMs: Math.round(timecodeToMilliseconds(clip.startTimecode, project.timebase.frameRate)), sourceOffsetMs, durationMs }] });
     mutedClips.push(replaceReferenceMediaClipCommand(itemId, { ...clip, embeddedAudioEnabled: false }));
   }
   if (!tracks.length) throw new Error('该节目的视频不包含可用原声，请添加歌曲音频');

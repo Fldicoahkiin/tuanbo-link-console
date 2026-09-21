@@ -9,6 +9,16 @@ import {
 } from './external-process-manager';
 
 describe('ExternalProcessManager', () => {
+  it('相同 PID 被复用但启动时间改变时撤销所有权', async () => {
+    const tools = fakeTools([]);
+    tools.detectedAfterLaunch = [processInfo(321)];
+    const manager = new ExternalProcessManager(tools, idleObs());
+    await manager.start('obs', configuration());
+    tools.detectedAfterLaunch = [{ ...processInfo(321), startTime: '2026-09-15T00:00:00.000Z' }];
+    expect(await manager.refresh('obs', configuration())).toMatchObject({ owned: false });
+    await expect(manager.stop('obs', 100)).rejects.toThrow('不是本次由联动台启动');
+    expect(tools.closedPids).toEqual([]);
+  });
   it('刷新时按集成档案精确识别既有程序且不取得所有权', async () => {
     const tools = fakeTools([processInfo(100)]);
     const manager = new ExternalProcessManager(tools, idleObs());

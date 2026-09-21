@@ -27,9 +27,9 @@ type TimelineViewport = {
   revealTime: (milliseconds: number) => void;
 };
 
-export function useTimelineViewport(durationMs: number): TimelineViewport {
+export function useTimelineViewport(durationMs: number, initialPixelsPerSecond = DEFAULT_TIMELINE_PIXELS_PER_SECOND, onWheelSeek?: (deltaMs: number) => number): TimelineViewport {
   const viewportRef = useRef<HTMLDivElement>(null);
-  const [pixelsPerSecond, setPixelsPerSecond] = useState(DEFAULT_TIMELINE_PIXELS_PER_SECOND);
+  const [pixelsPerSecond, setPixelsPerSecond] = useState(initialPixelsPerSecond);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(1);
   const contentWidth = timelineContentWidth(durationMs, pixelsPerSecond, viewportWidth);
@@ -110,13 +110,15 @@ export function useTimelineViewport(durationMs: number): TimelineViewport {
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientWidth : 1;
       if (event.ctrlKey) {
         if (event.deltaY !== 0) zoomAt(pixelsPerSecond * (event.deltaY < 0 ? 1.18 : 1 / 1.18), event.clientX);
+      } else if (onWheelSeek && !event.shiftKey && event.deltaY !== 0) {
+        revealTime(onWheelSeek(event.deltaY * unit / pixelsPerSecond * 1_000));
       } else {
         setViewportScrollLeft(viewport.scrollLeft + (event.deltaX || event.deltaY) * unit);
       }
     };
     viewport.addEventListener('wheel', wheel, { passive: false });
     return () => viewport.removeEventListener('wheel', wheel);
-  }, [pixelsPerSecond, setViewportScrollLeft, zoomAt]);
+  }, [pixelsPerSecond, setViewportScrollLeft, zoomAt, onWheelSeek, revealTime]);
 
   return {
     viewportRef,

@@ -1,6 +1,41 @@
 import type { IntegrationProfile, MtcFrameRate } from '@tb/schema';
 import type { MidiPortSnapshot } from '../../registry/link-midi-adapter';
 
+export function applyDetectedLightingMidiPorts(profile: IntegrationProfile, ports: readonly MidiPortSnapshot[], internal: boolean): { profile: IntegrationProfile; issues: string[] } {
+  let next = profile;
+  const issues: string[] = [];
+  const outputs = ports.filter(port => port.direction === 'output' && port.state === 'connected' && !/Microsoft GS Wavetable Synth/i.test(port.name));
+  const mtcId = profile.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output';
+  const preferred = portName(profile, mtcId) || portName(profile, 'lighting-events-output');
+  const roles = internal ? [[mtcId, '灯光时间码'], ['lighting-events-output', '灯光 Cue']] as const : [['lighting-events-output', '灯光 Cue']] as const;
+  for (const [id, label] of roles) {
+    const configured = portName(profile, id);
+    const candidates = configured ? outputs.filter(port => port.name === configured) : preferred ? outputs.filter(port => port.name === preferred) : outputs;
+    if (candidates.length !== 1) {
+      issues.push(`${label}：${configured ? `已配置端口 ${configured} 不可用或名称重复` : outputs.length ? `检测到多个输出（${outputs.map(port => port.name).join('、')}），请在音频与 MIDI 选择控台端口` : '未检测到可用 MIDI 输出，请检查 USB-MIDI 接口和驱动'}`);
+      continue;
+    }
+    next = updatePortProfile(next, id, 'output', candidates[0]!.name);
+    if (internal && id === mtcId) next = { ...next, internalPlayer: { audioOutputDeviceId: 'default', ...next.internalPlayer, mtcOutputPortProfileId: mtcId } };
+  }
+  return { profile: next, issues };
+}
+
+export function internalMidiConnectionIssues(profile: IntegrationProfile, ports: readonly MidiPortSnapshot[]): string[] {
+  const issues: string[] = [];
+  for (const [id, direction, label] of [
+    [profile.internalPlayer?.mtcOutputPortProfileId, 'output', '灯光 MIDI 时间码输出'],
+    [profile.internalPlayer?.controlInputPortProfileId, 'input', '播放控制 MIDI 输入']
+  ] as const) {
+    if (!id) continue;
+    const configured = profile.midiPortProfiles.find(port => port.id === id && port.direction === direction);
+    if (!configured?.portName) { issues.push(`${label}：端口配置缺失，请在音频与 MIDI 中重新选择`); continue; }
+    const matches = ports.filter(port => port.direction === direction && port.name === configured.portName && port.state === 'connected');
+    if (matches.length !== 1) issues.push(`${label}：${configured.portName} ${matches.length === 0 ? '未检测到' : '名称重复'}，请在音频与 MIDI 中刷新并核对端口`);
+  }
+  return issues;
+}
+
 export function isMtcSignalReady(input: {
   portConnected: boolean;
   stable: boolean;
@@ -58,8 +93,10 @@ function resolveConfiguredOrNamedP1Port(
   direction: MidiPortSnapshot['direction']
 ): MidiPortSnapshot | null {
   const configuredName = portName(profile, profileId);
-  const configured = ports.find((port) => port.direction === direction && port.state === 'connected' && port.name === configuredName);
-  if (configured) return configured;
+  if (configuredName) {
+    const configured = ports.filter((port) => port.direction === direction && port.state === 'connected' && port.name === configuredName);
+    return configured.length === 1 ? configured[0] ?? null : null;
+  }
   const namedMatches = ports.filter((port) => port.direction === direction && port.state === 'connected' && /hirender|\bp1\b/i.test(port.name));
   if (namedMatches.length === 1) return namedMatches[0] ?? null;
   const connected = ports.filter((port) => port.direction === direction && port.state === 'connected');

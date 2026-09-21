@@ -22,15 +22,16 @@ import type {
   LinkP1ProjectImportResult
 } from '@tb/core/link';
 import { writeFileAtomically } from './atomic-file';
-import { validateP1TimecodeRanges } from '@tb/core/link';
+import { validateP1TimecodeRanges, parseP1TimeOrigin } from '@tb/core/link';
 import { LinkProjectService } from './link-project-service';
 
 type ParsedP1Media = {
   element: XmlElement;
   resourcePath: string;
-  durationMs: number;
+  sourceKey: string;
+  occurrence: number;
+  index: number;
   title: string;
-  binding: P1MediaBinding;
 };
 
 type ParsedP1Playlist = {
@@ -60,23 +61,31 @@ export class P1ProjectService {
 
   async importProject(p1ProjectPath: string, linkProjectPath: string): Promise<LinkP1ProjectImportResult> {
     const parsed = await this.parseProject(p1ProjectPath);
-    await this.preflightMedia(parsed);
     const items: LinkP1ProjectImportResult['items'] = [];
+    const skippedItems: NonNullable<LinkP1ProjectImportResult['skippedItems']> = [];
     for (const playlist of parsed.playlists) {
       for (const media of playlist.media) {
-        const referenceAudio = await this.projects.importReferenceAudio(
-          linkProjectPath,
-          media.resourcePath,
-          media.durationMs
-        );
+        try {
+        requiredAttribute(media.element, 'mediaType', media.title);
+        requiredAttribute(media.element, 'resourceFilePath', media.title);
+        const binding = readMediaBinding(media.element, media.resourcePath, media.occurrence, playlist.binding.id, playlist.binding.name, media.index);
+        parseP1TimeOrigin(binding.midiStartTime);
+        await access(media.resourcePath, constants.R_OK);
+        const fileStat = await stat(media.resourcePath);
+        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${media.resourcePath}`);
+        const audio = await importP1Audio(this.projects, linkProjectPath, media);
         items.push({
           title: media.title,
-          referenceAudio,
-          p1Media: media.binding
+          ...audio,
+          p1Media: { ...binding, ...(audio.importNotes ? { importedFullSource: true } : {}) }
         });
+        } catch (error) { skippedItems.push({ sourceKey: media.sourceKey, title: media.title, playlistName: playlist.binding.name, playlistId: playlist.binding.id, reason: error instanceof Error ? error.message : String(error) }); }
       }
     }
+    if (!items.length && !skippedItems.length) throw new Error('P1 工程中没有歌曲条目');
     return {
+      skippedItems,
+      sourceOrder: parsed.playlists.flatMap(playlist => playlist.media.map(media => media.sourceKey)),
       sourcePath: parsed.sourcePath,
       sourceSha256: parsed.sourceSha256,
       playlists: parsed.playlists.map((playlist) => playlist.binding),
@@ -103,7 +112,7 @@ export class P1ProjectService {
       throw new Error('P1 工程在写回确认后发生变化，已停止写入；请重新预览');
     }
     const existingMedia = new Map(
-      plan.parsed.playlists.flatMap((playlist) => playlist.media.map((media) => [media.binding.sourceKey, media] as const))
+      plan.parsed.playlists.flatMap((playlist) => playlist.media.map((media) => [media.sourceKey, media] as const))
     );
     const projectSync = project.p1Sync;
     if (!projectSync) throw new Error('当前联动工程尚未从 P1 导入，不能写回');
@@ -119,6 +128,9 @@ export class P1ProjectService {
     }
 
     const outputBindings: LinkP1ProjectExportResult['itemBindings'] = [];
+    const emitted = new Map<XmlElement, LinkP1ProjectExportResult['itemBindings'][number]>();
+    const protectedItems = new Map(projectSync.skippedItems?.map(item => [item.sourceKey, item]));
+    const preserved = new Map<XmlElement, import('@tb/schema').P1ImportIssue>();
     const pathOccurrences = new Map<string, number>();
     const playlistElements: XmlElement[] = [];
     for (const playlist of playlists) {
@@ -154,12 +166,22 @@ export class P1ProjectService {
             ? String(project.p1AutoFollow.ranges.find((range) => range.itemId === item.id)?.startSeconds ?? (() => { throw new Error(`缺少 P1 时间码区间：${item.title}`); })())
             : item.p1Media?.midiStartTime ?? '0'
         });
+        if (item.p1Media?.importedFullSource) element.setAttribute('cut_start', '0');
         applyMediaBinding(element, resourcePath, item.title, item.referenceAudio.durationMs, binding);
         playlistElement.appendChild(element);
-        outputBindings.push({ itemId: item.id, p1Media: binding });
+        const outputBinding = { itemId: item.id, p1Media: binding };
+        outputBindings.push(outputBinding); emitted.set(element, outputBinding);
+      }
+      for (const media of sourcePlaylist?.media ?? []) {
+        const issue = protectedItems.get(media.sourceKey);
+        if (!issue) continue;
+        const clone = requireElement(media.element.cloneNode(true), '未导入的 P1 条目');
+        playlistElement.insertBefore(clone, directChildren(playlistElement, 'media')[media.index] ?? null);
+        preserved.set(clone, issue);
       }
       playlistElements.push(playlistElement);
     }
+    const skippedItems = reindexExportMedia(playlistElements, plan.parsed.sourcePath, emitted, preserved);
 
     replaceElementChildren(plan.parsed.videoPlayList, 'videoPlayElement', playlistElements);
     synchronizeAudioPlaylistNames(plan.parsed.document, plan.parsed.audioPlayList, playlists);
@@ -174,6 +196,7 @@ export class P1ProjectService {
     const written = await readFile(plan.targetPath);
     return {
       outputPath: plan.targetPath,
+      skippedItems,
       sourceSha256: sha256(written),
       playlists,
       itemBindings: outputBindings
@@ -191,8 +214,9 @@ export class P1ProjectService {
     if (project.p1Sync.sourceSha256 !== parsed.sourceSha256) {
       throw new Error('P1 工程在上次导入后已变化，已停止写回；请先重新读取 P1');
     }
-    const existingKeys = new Set(parsed.playlists.flatMap((playlist) => playlist.media.map((media) => media.binding.sourceKey)));
-    const exportItems = project.rundown.filter((item) => item.p1Media !== undefined || item.referenceAudio !== undefined);
+    const protectedKeys = new Set(project.p1Sync.skippedItems?.map(item => item.sourceKey));
+    const existingKeys = new Set(parsed.playlists.flatMap((playlist) => playlist.media.map((media) => media.sourceKey)));
+    const exportItems = project.rundown.filter((item) => (item.p1Media !== undefined || item.referenceAudio !== undefined) && !protectedKeys.has(item.p1UnavailableSourceKey ?? item.p1Media?.sourceKey ?? ''));
     const matchedKeys = new Set<string>();
     let addedCount = 0;
     let updatedCount = 0;
@@ -209,7 +233,7 @@ export class P1ProjectService {
       matchedKeys.add(item.p1Media.sourceKey);
       updatedCount += 1;
     }
-    const removedCount = existingKeys.size - matchedKeys.size;
+    const removedCount = [...existingKeys].filter(key => !matchedKeys.has(key) && !protectedKeys.has(key)).length;
     const targetPath = linkedOutputPath(parsed.sourcePath);
     return {
       parsed,
@@ -248,16 +272,13 @@ export class P1ProjectService {
       const name = requiredAttribute(element, 'caption', `P1 播放列表 ${sourceIndex + 1}`);
       const playlistBinding: P1PlaylistBinding = { id: `p1-playlist-${sourceIndex + 1}`, name, sourceIndex };
       const media = directChildren(element, 'media').map((mediaElement, mediaIndex) => {
-        requiredAttribute(mediaElement, 'mediaType', `${name} 第 ${mediaIndex + 1} 个素材`);
-        const rawPath = requiredAttribute(mediaElement, 'resourceFilePath', `${name} 第 ${mediaIndex + 1} 个素材`);
+        const rawPath = mediaElement.getAttribute('resourceFilePath') || `missing-${sourceIndex}-${mediaIndex}`;
         const resourcePath = isAbsolute(rawPath) ? resolve(rawPath) : resolve(dirname(sourcePath), rawPath);
         const pathKey = normalizePathKey(resourcePath);
         const occurrence = pathOccurrences.get(pathKey) ?? 0;
         pathOccurrences.set(pathKey, occurrence + 1);
-        const durationMs = readDurationMs(mediaElement, name, mediaIndex);
         const title = mediaElement.getAttribute('audio_caption_')?.trim() || basename(resourcePath);
-        const binding = readMediaBinding(mediaElement, resourcePath, occurrence, playlistBinding.id, name, mediaIndex);
-        return { element: mediaElement, resourcePath, durationMs, title, binding };
+        return { element: mediaElement, resourcePath, title, sourceKey: createSourceKey(resourcePath, occurrence), occurrence, index: mediaIndex };
       });
       return { binding: playlistBinding, element, media };
     });
@@ -271,15 +292,21 @@ export class P1ProjectService {
     };
   }
 
-  private async preflightMedia(project: ParsedP1Project): Promise<void> {
-    for (const playlist of project.playlists) {
-      for (const media of playlist.media) {
-        await access(media.resourcePath, constants.R_OK);
-        const fileStat = await stat(media.resourcePath);
-        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`P1 音频文件无效：${media.resourcePath}`);
-      }
-    }
+}
+
+function reindexExportMedia(playlists: XmlElement[], sourcePath: string, emitted: Map<XmlElement, LinkP1ProjectExportResult['itemBindings'][number]>, preserved: Map<XmlElement, import('@tb/schema').P1ImportIssue>): import('@tb/schema').P1ImportIssue[] {
+  const occurrences = new Map<string, number>();
+  const skipped: import('@tb/schema').P1ImportIssue[] = [];
+  for (const [listIndex, playlist] of playlists.entries()) for (const [index, element] of directChildren(playlist, 'media').entries()) {
+    const raw = element.getAttribute('resourceFilePath') || `missing-${listIndex}-${index}`;
+    const path = isAbsolute(raw) ? resolve(raw) : resolve(dirname(sourcePath), raw);
+    const key = normalizePathKey(path);
+    const occurrence = occurrences.get(key) ?? 0; occurrences.set(key, occurrence + 1);
+    const sourceKey = createSourceKey(path, occurrence);
+    const binding = emitted.get(element); if (binding) binding.p1Media.sourceKey = sourceKey;
+    const issue = preserved.get(element); if (issue) skipped.push({ ...issue, previousSourceKey: issue.sourceKey, sourceKey });
   }
+  return skipped;
 }
 
 function readMediaBinding(
@@ -306,13 +333,22 @@ function readMediaBinding(
   });
 }
 
-function readDurationMs(element: XmlElement, playlistName: string, mediaIndex: number): number {
-  const context = `${playlistName} 第 ${mediaIndex + 1} 个音频`;
-  const start = readFiniteAttribute(element, 'cut_start', context);
-  const end = readFiniteAttribute(element, 'cut_end', context);
-  const durationMs = Math.round((end - start) * 1_000);
-  if (durationMs <= 0) throw new Error(`${context} 的音频时长无效`);
-  return durationMs;
+async function importP1Audio(projects: LinkProjectService, projectPath: string, media: ParsedP1Media): Promise<Pick<LinkP1ProjectImportResult['items'][number], 'referenceAudio' | 'importNotes'>> {
+  const startText = media.element.getAttribute('cut_start');
+  const endText = media.element.getAttribute('cut_end');
+  const start = Number(startText), end = Number(endText);
+  const valid = startText?.trim() && endText?.trim() && Number.isFinite(start) && start >= 0 && Number.isFinite(end) && end > start && Math.round((end - start) * 1000) > 0;
+  if (!valid) return { referenceAudio: await projects.importReferenceAudio(projectPath, media.resourcePath, null), importNotes: `P1 裁剪时长无效（${startText ?? '缺失'}～${endText ?? '缺失'} 秒），已按完整原音频导入；原起始时间码保留，请核对灯光结束位置。` };
+  const durationMs = Math.round((end - start) * 1000);
+  try {
+    const referenceAudio = await projects.importReferenceAudio(projectPath, media.resourcePath, durationMs, start * 1000, true);
+    if (referenceAudio.durationMs < durationMs - 2) throw new Error('声明时长超出可解码音频');
+    return { referenceAudio };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    if (!/裁剪区间超出可解码音频|声明时长超出可解码音频/.test(reason)) throw error;
+    return { referenceAudio: await projects.importReferenceAudio(projectPath, media.resourcePath, null), importNotes: `P1 裁剪范围 ${start}～${end} 秒超出实际音频，已按完整原音频导入；原起始时间码保留，请核对灯光结束位置。` };
+  }
 }
 
 function createMediaElement(document: XmlDocument, resourcePath: string, durationMs: number): XmlElement {
@@ -367,8 +403,8 @@ function applyMediaBinding(
   element.setAttribute('mute', binding.muted ? '1' : '0');
   element.setAttribute('shortcut', binding.shortcut);
   element.setAttribute('MidiStartTime', binding.midiStartTime);
-  element.setAttribute('cut_start', '0');
-  element.setAttribute('cut_end', String(durationMs / 1_000));
+  const start = Number(element.getAttribute('cut_start') ?? '0');
+  element.setAttribute('cut_end', String(start + durationMs / 1_000));
   element.setAttribute('Caption', durationText(durationMs));
   element.setAttribute('caption_', durationText(durationMs));
 }
@@ -422,12 +458,6 @@ function requireElement(node: XmlNode | null, context: string): XmlElement {
 function requiredAttribute(element: XmlElement, name: string, context: string): string {
   const value = element.getAttribute(name)?.trim();
   if (!value) throw new Error(`${context} 缺少 ${name} 属性`);
-  return value;
-}
-
-function readFiniteAttribute(element: XmlElement, name: string, context: string): number {
-  const value = Number(requiredAttribute(element, name, context));
-  if (!Number.isFinite(value)) throw new Error(`${context} 的 ${name} 不是有限数值`);
   return value;
 }
 

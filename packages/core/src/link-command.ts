@@ -32,10 +32,13 @@ import type { SmpteTimecode } from '@tb/schema';
 import { timecodeToFrameNumber, timecodeToMilliseconds } from './mtc-timecode';
 import { MANAGED_OBS_SCENE_NAME } from './managed-media-timeline';
 import { resolveTimelineClipSpan } from './timeline-state';
+import { parseP1TimeOrigin } from './ma2-time-origin';
 
 export type LinkCommand = {
   readonly id: string;
   readonly label: string;
+  /** Local lighting edits are safe against the immutable playback snapshot. */
+  readonly scope?: 'lighting';
   execute(project: LinkProject): LinkProject;
   undo(before: LinkProject): LinkProject;
 };
@@ -86,17 +89,21 @@ type TimestampProvider = () => string;
 
 export type P1ImportedRundownItem = {
   title: string;
+  importNotes?: string;
   referenceAudio: ReferenceAudio;
   p1Media: P1MediaBinding;
 };
 
 export type P1ProjectImportSnapshot = {
+  sourceOrder?: string[];
+  skippedItems?: import('@tb/schema').P1ImportIssue[];
   sourceSha256: string;
   playlists: P1PlaylistBinding[];
   items: P1ImportedRundownItem[];
 };
 
 export type P1ProjectExportSnapshot = {
+  skippedItems?: import('@tb/schema').P1ImportIssue[];
   sourceSha256: string;
   playlists: P1PlaylistBinding[];
   itemBindings: Array<{ itemId: string; p1Media: P1MediaBinding }>;
@@ -183,14 +190,15 @@ export function synchronizeP1ProjectCommand(
   const playlists = snapshot.playlists.map((playlist) => p1PlaylistBindingSchema.parse(playlist));
   const importedItems = snapshot.items.map((item) => ({
     title: rundownItemSchema.shape.title.parse(item.title),
+    importNotes: item.importNotes,
     referenceAudio: referenceAudioSchema.parse(item.referenceAudio),
     p1Media: p1MediaBindingSchema.parse(item.p1Media)
   }));
-  return createCommand('从 P1 同步全部音频', (project) => {
+  return createCommand('从 P1 同步可用音频', (project) => {
     const existingBySourceKey = new Map(
       project.rundown
-        .filter((item): item is RundownItem & { p1Media: P1MediaBinding } => item.p1Media !== undefined)
-        .map((item) => [item.p1Media.sourceKey, item])
+        .filter(item => item.p1Media || item.p1UnavailableSourceKey)
+        .map((item) => [item.p1Media?.sourceKey ?? item.p1UnavailableSourceKey, item])
     );
     const importedKeys = new Set(importedItems.map((item) => item.p1Media.sourceKey));
     const matchedIds = new Set<string>();
@@ -200,13 +208,22 @@ export function synchronizeP1ProjectCommand(
       const uniqueImportedAudio = importedItems.filter((item) => item.referenceAudio.sha256 === imported.referenceAudio.sha256).length === 1;
       const existing = existingBySourceKey.get(imported.p1Media.sourceKey)
         ?? (uniqueImportedAudio && exactAudioMatches.length === 1 ? exactAudioMatches[0] : undefined);
+      const playback = {
+        volume: imported.p1Media.muted ? 0 : imported.p1Media.volume,
+        startMs: 0, endMs: 0,
+        endAction: imported.p1Media.playEndAction === 'playNext' ? 'next' : imported.p1Media.playEndAction,
+        shortcut: imported.p1Media.shortcut,
+        ...existing?.playback,
+        mtcOffsetMs: parseP1TimeOrigin(imported.p1Media.midiStartTime)
+      };
       if (!existing) {
         return rundownItemSchema.parse({
           id: createId(),
           title: imported.title,
           enabled: true,
-          notes: '',
+          notes: imported.importNotes ?? '',
           p1Media: imported.p1Media,
+          playback,
           referenceAudio: imported.referenceAudio,
           referenceMediaClips: [],
           cues: []
@@ -215,25 +232,41 @@ export function synchronizeP1ProjectCommand(
       matchedIds.add(existing.id);
       return rundownItemSchema.parse({
         ...structuredClone(existing),
+        p1UnavailableSourceKey: undefined,
+        enabled: existing.p1UnavailableSourceKey ? true : existing.enabled,
+        notes: imported.importNotes ?? (existing.p1UnavailableSourceKey ? '' : existing.notes),
         title: imported.title,
         p1Media: imported.p1Media,
+        playback,
         referenceAudio: imported.referenceAudio
       });
     });
     const retained = project.rundown
-      .filter((item) => !matchedIds.has(item.id) && (!item.p1Media || !importedKeys.has(item.p1Media.sourceKey)))
+      .filter((item) => !matchedIds.has(item.id) && !importedKeys.has(item.p1Media?.sourceKey ?? item.p1UnavailableSourceKey ?? ''))
       .map((item) => {
         const copy = structuredClone(item);
-        delete copy.p1Media;
+        const issue = snapshot.skippedItems?.find(issue => issue.sourceKey === (copy.p1Media?.sourceKey ?? copy.p1UnavailableSourceKey));
+        if (issue) { copy.enabled = false; copy.p1UnavailableSourceKey = issue.sourceKey; copy.notes = `P1 音频待修复：${issue.reason}`; }
+        else delete copy.p1Media;
         return copy;
       });
     project.p1Sync = {
+      ...(snapshot.skippedItems?.length ? { skippedItems: structuredClone(snapshot.skippedItems) } : {}),
       format: 'hirender-p1-audio-project',
       sourceSha256,
       importedAt: timestamp(now),
       playlists: structuredClone(playlists)
     };
-    project.rundown = [...synchronized, ...retained];
+    const unavailable = (snapshot.skippedItems ?? []).filter(issue => !existingBySourceKey.has(issue.sourceKey)).map(issue => rundownItemSchema.parse({
+      id: createId(), title: issue.title, enabled: false, notes: `P1 音频待修复：${issue.reason}`, p1UnavailableSourceKey: issue.sourceKey,
+      playlistId: issue.playlistId && (project.playlists === undefined || project.playlists.some(list => list.id === `p1:${issue.playlistId}`)) ? `p1:${issue.playlistId}` : undefined
+    }));
+    project.rundown = [...synchronized, ...retained, ...unavailable];
+    if (snapshot.sourceOrder) {
+      const order = new Map(snapshot.sourceOrder.map((key, index) => [key, index]));
+      const position = (item: RundownItem): number => order.get(item.p1Media?.sourceKey ?? item.p1UnavailableSourceKey ?? '') ?? Number.MAX_SAFE_INTEGER;
+      project.rundown.sort((left, right) => position(left) - position(right));
+    }
   }, now);
 }
 
@@ -246,11 +279,17 @@ export function applyP1ProjectExportCommand(
   const bindings = new Map(snapshot.itemBindings.map(({ itemId, p1Media }) => [itemId, p1MediaBindingSchema.parse(p1Media)]));
   return createCommand('记录 P1 工程写回结果', (project) => {
     for (const item of project.rundown) {
+      const unavailable = snapshot.skippedItems?.find(issue => (issue.previousSourceKey ?? issue.sourceKey) === (item.p1UnavailableSourceKey ?? item.p1Media?.sourceKey));
+      if (unavailable) { item.p1UnavailableSourceKey = unavailable.sourceKey; item.enabled = false; }
       const binding = bindings.get(item.id);
-      if (binding) item.p1Media = structuredClone(binding);
+      if (binding) {
+        item.p1Media = structuredClone(binding);
+        if (item.playback) item.playback.mtcOffsetMs = parseP1TimeOrigin(binding.midiStartTime);
+      }
       else delete item.p1Media;
     }
     project.p1Sync = {
+      ...(snapshot.skippedItems?.length ? { skippedItems: structuredClone(snapshot.skippedItems) } : {}),
       format: 'hirender-p1-audio-project',
       sourceSha256,
       importedAt: timestamp(now),
@@ -712,7 +751,7 @@ export function configureP1AutoFollowCommand(config: NonNullable<LinkProject['p1
 }
 
 export function setPlaybackSourceCommand(source: 'p1' | 'internal'): LinkCommand {
-  return createCommand('切换播放主控', (project) => { project.playbackSource = source; });
+  return createCommand('切换播放主控', (project) => { project.playbackSource = source; if (source === 'internal' && project.p1AutoFollow) project.p1AutoFollow.enabled = false; });
 }
 
 export function setInternalVideoAudioCommand(enabled: boolean): LinkCommand {

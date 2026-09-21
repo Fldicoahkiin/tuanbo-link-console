@@ -38,7 +38,7 @@ export const ma2BridgeRequestSchema = z.object({
   desired: z.string().max(32 * 1024 * 1024).default('')
 }).strict();
 export type Ma2BridgeRequest = z.infer<typeof ma2BridgeRequestSchema>;
-export const ma2ReadRequestSchema = ma2BridgeRequestSchema.pick({ dataDirectory: true, network: true, target: true });
+export const ma2ReadRequestSchema = ma2BridgeRequestSchema.pick({ dataDirectory: true, network: true, target: true }).extend({ timeOriginMs: z.number().int().min(0).max(86399999).optional() });
 export type Ma2ReadRequest = z.infer<typeof ma2ReadRequestSchema>;
 export const ma2CreateRequestSchema = ma2ReadRequestSchema.extend({ name: z.string().trim().min(1).max(512).regex(/^[^\u0000-\u001f]+$/) });
 export type Ma2CreateRequest = z.infer<typeof ma2CreateRequestSchema>;
@@ -50,6 +50,7 @@ export const ma2ExecutorPreviewSchema = z.object({
 }).strict().refine((value) => value.cueCatalog.length === 1, '执行器必须对应一个明确序列');
 export type Ma2ExecutorPreview = z.infer<typeof ma2ExecutorPreviewSchema>;
 export const ma2TimecodePreviewSchema = z.object({
+  timeOriginMs: z.number().int().min(0).max(86399999).optional(),
   target: z.number().int().min(1).max(99999), name: z.string(), readAt: z.string().datetime(),
   document: lightingDocumentSchema, sourceXml: z.string().min(1).max(32 * 1024 * 1024),
   mappings: z.array(lightingMa2EventMappingSchema),

@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { AudioBeatDetector } from '../packages/core/src/audio-beat-detection';
+import { analyzeIbtAudio } from '../apps/desktop/src/main/link/ibt-beat-service';
 
 const requireDesktop = createRequire(resolve('apps/desktop/package.json'));
 const ffmpeg: unknown = requireDesktop('ffmpeg-static');
@@ -15,20 +15,15 @@ const project = parseLinkProject(data);
 const results = [];
 for (const item of project.rundown) {
   const audio = item.referenceAudio; if (!audio) continue;
-  const detector = new AudioBeatDetector(); let remainder = Buffer.alloc(0);
-  await new Promise<void>((done, fail) => {
-    const child = spawn(ffmpeg, ['-v', 'error', '-i', resolve(dirname(projectPath), audio.relativePath), '-ac', '1', '-ar', '22050', '-f', 'f32le', 'pipe:1'], { windowsHide: true });
+  const beats = await analyzeIbtAudio(resolve(dirname(projectPath), audio.relativePath), audio.durationMs, (input, output) => new Promise<void>((done, fail) => {
+    const child = spawn(ffmpeg, ['-v', 'error', '-threads', '1', '-i', input, '-vn', '-ac', '1', '-ar', '44100', '-c:a', 'pcm_s16le', '-y', output], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
     let error = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      const bytes = Buffer.concat([remainder, chunk]); const size = bytes.length - bytes.length % 4;
-      for (let offset = 0; offset < size; offset += 4) detector.push(bytes.readFloatLE(offset));
-      remainder = Buffer.from(bytes.subarray(size));
-    });
-    child.stderr.on('data', (chunk: Buffer) => { error += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { error = (error + chunk.toString()).slice(-8000); });
+    child.stderr.on('error', fail);
     child.on('error', fail); child.on('close', (code) => code === 0 ? done() : fail(new Error(error)));
-  });
-  const beats = detector.finish(audio.durationMs);
+  }), resolve('tools/ibt/bin/ibt.exe'));
   results.push({ title: item.title, durationMs: audio.durationMs, counts: { sparse: beats.sparse.length, standard: beats.standard.length, dense: beats.dense.length }, beats });
 }
+await mkdir('artifacts/beat-research', { recursive: true });
 await writeFile('artifacts/beat-research/analysis.json', JSON.stringify(results, null, 2));
 console.log(results.map(({ title, counts }) => ({ title, counts })));

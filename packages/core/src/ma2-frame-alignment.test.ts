@@ -9,6 +9,13 @@ function snapshot(times: number[]): Ma2SyncSnapshot {
   ] };
 }
 describe('MA2 帧对齐预览', () => {
+  it('非整帧歌曲起点仍对齐原生时间网格，零点不向负时间取整', () => {
+    const result = alignMa2SnapshotToFrames(snapshot([0, 1000]), 30, 125);
+    const positions = result.snapshot.objects.filter(entry => entry.kind === 'event').map(entry => Number(entry.properties.time));
+    for (const position of positions) expect((position + 125) * 30 / 1000).toBeCloseTo(Math.round((position + 125) * 30 / 1000));
+    expect(positions.every(position => position >= 0)).toBe(true);
+    expect(alignMa2SnapshotToFrames(result.snapshot, 30, 125).adjustments).toEqual([]);
+  });
   it('按最近帧生成明确偏移，重复应用不累计误差且不改原数据', () => {
     const original = snapshot([0, 1, 517, 1500, 1501, 86399999]);
     const result = alignMa2SnapshotToFrames(original, 30);

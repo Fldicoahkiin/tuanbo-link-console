@@ -1,4 +1,6 @@
+import { Button } from './Button';
 import { useState } from 'react';
+import { ModalSurface } from './ModalSurface';
 import { createPortal } from 'react-dom';
 import { obsSourceKinds, obsSourceSettingsSchema, type ObsSourceDraft, type ObsSourceKind, type ObsSourceOption, type ObsSourceSettings } from '@tb/schema';
 import { linkDesktopViewModel, linkFileViewModel } from '../view-models/link-desktop-view-model';
@@ -40,7 +42,7 @@ export function ObsSourceDialog(props: Props): JSX.Element {
     if (draft && !applied) await linkDesktopViewModel.cancelObsSource(draft.inputName);
     props.onClose();
   });
-  return createPortal(<div className="obs-source-backdrop"><form className="obs-source-dialog" role="dialog" aria-modal="true" aria-label={`添加${obsSourceKinds[props.kind].label}`} onSubmit={(event) => { event.preventDefault(); void (draft ? finish() : create()); }}>
+  return createPortal(<ModalSurface className="obs-source-dialog" label={`添加${obsSourceKinds[props.kind].label}`} onClose={() => { if (!busy) void close(); }}><form onSubmit={(event) => { event.preventDefault(); void (draft ? finish() : create()); }}>
     <h3>添加{obsSourceKinds[props.kind].label}</h3>
     <fieldset disabled={busy || applied}>
       <label>名称<input autoFocus required maxLength={100} value={name} disabled={draft !== null} onChange={(event) => setName(event.target.value)} /></label>
@@ -49,8 +51,8 @@ export function ObsSourceDialog(props: Props): JSX.Element {
       {draft && !props.asset ? <SourceFields kind={props.kind} settings={settings} options={options} onUpdate={update} onRefresh={() => void run(() => refresh(draft))} /> : null}
     </fieldset>
     {error ? <p role="alert" className="obs-source-error">{error}</p> : null}
-    <footer><button type="button" className="secondary-button" disabled={busy} onClick={() => void close()}>{applied ? '关闭' : '取消'}</button><button className="primary-button" disabled={busy || !sceneName}>{busy ? '正在同步…' : applied ? '刷新场景列表' : draft ? '添加到 OBS 场景' : '下一步'}</button></footer>
-  </form></div>, document.body);
+    <footer><Button type="button" className="secondary-button" disabled={busy} onClick={() => void close()}>{applied ? '关闭' : '取消'}</Button><Button className="primary-button" disabled={busy || !sceneName}>{busy ? '正在同步…' : applied ? '刷新场景列表' : draft ? '添加到 OBS 场景' : '下一步'}</Button></footer>
+  </form></ModalSurface>, document.body);
 }
 
 function SourceFields(props: { kind: ObsSourceKind; settings: ObsSourceSettings; options: ObsSourceOption[]; onUpdate: (value: Partial<ObsSourceSettings>) => void; onRefresh: () => void }): JSX.Element {

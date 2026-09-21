@@ -1,21 +1,26 @@
 import { createLightingDocument, lightingDocumentSchema, ma2ExecutorPreviewSchema, ma2TimecodePreviewSchema, parseLinkProject, type LightingDocument, type LightingTrack, type Ma2ExecutorPreview, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { LightingTempoMap } from './lighting-edit';
+import { parseP1TimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
 
 export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePreview, initialDocument?: LightingDocument): LinkCommand {
-  const preview = ma2TimecodePreviewSchema.parse(value);
+  const input = ma2TimecodePreviewSchema.parse(value);
   const initial = initialDocument ? lightingDocumentSchema.parse(initialDocument) : undefined;
-  if (preview.unconverted.length) throw new Error('存在未转换事件，暂不能完整加入节目');
+  if (input.unconverted.length) throw new Error('存在未转换事件，暂不能完整加入节目');
   const bindingId = crypto.randomUUID();
   return { id: crypto.randomUUID(), label: '从 MA2 加入灯光编排', execute(project) {
     const next = structuredClone(project);
     const item = next.rundown.find((entry) => entry.id === itemId);
     if (!item) throw new Error('接收 MA2 数据的节目不存在');
+    const originMs = item.p1Media ? parseP1TimeOrigin(item.p1Media.midiStartTime) : item.playback?.mtcOffsetMs ?? input.timeOriginMs ?? 0;
+    const preview = withMa2TimeOrigin(input, originMs);
+    if (item.playback && item.playback.mtcOffsetMs !== originMs) throw new Error('歌曲播放时间码与 P1 原始起点不一致，请先核对播放设置');
+    if (originMs > 0) item.playback ??= { volume: item.p1Media?.volume ?? 100, endAction: 'stop', startMs: 0, endMs: 0, mtcOffsetMs: originMs, shortcut: item.p1Media?.shortcut ?? '' };
     const current = item.lighting ?? structuredClone(initial ?? createLightingDocument());
     if (current.ma2Bindings?.some((binding) => binding.timecode === preview.target)) throw new Error('该节目已关联此 Timecode，请勿重复导入');
     const tracks = structuredClone(preview.document.tracks);
     item.lighting = { ...current, tracks: [...current.tracks, ...tracks], ma2Bindings: [...current.ma2Bindings ?? [], {
-      id: bindingId, timecode: preview.target, name: preview.name, readAt: preview.readAt,
+      id: bindingId, timecode: preview.target, name: preview.name, readAt: preview.readAt, timeOriginMs: preview.timeOriginMs,
       sourceXml: preview.sourceXml, baselineTracks: structuredClone(tracks), mappings: structuredClone(preview.mappings), trackMappings: structuredClone(preview.trackMappings), cueCatalog: structuredClone(preview.cueCatalog)
     }] };
     next.schemaVersion = 2;
@@ -51,6 +56,7 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
   const confirmed = ma2TimecodePreviewSchema.parse(confirmedInput);
   const binding = expected.ma2Bindings?.find((entry) => entry.id === bindingId);
   if (!binding || binding.timecode !== confirmed.target) throw new Error('MA2 回读与节目绑定不一致');
+  if ((binding.timeOriginMs ?? 0) !== (confirmed.timeOriginMs ?? 0)) throw new Error('MA2 回读与歌曲时间码起点不一致');
   if (confirmed.unconverted.length) throw new Error('回读存在未转换事件，不能更新同步基线');
   const map = new LightingTempoMap(expected.tempos);
   const boundIds = new Set([...binding.baselineTracks.map((track) => track.id), ...(binding.pendingTracks ?? []).map((track) => track.trackId)]);

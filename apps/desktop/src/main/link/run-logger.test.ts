@@ -1,4 +1,4 @@
-import { mkdir, readFile, rmdir, unlink } from 'node:fs/promises';
+import { mkdir, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzip } from 'node:zlib';
@@ -16,6 +16,27 @@ afterEach(async () => {
 });
 
 describe('LinkRunLogger', () => {
+  it('十五万条日志可完整查询并筛选，返回对象不会污染后续读取', async () => {
+    const directory = await createTestDirectory();
+    const logger = new LinkRunLogger(directory);
+    const file = join(directory, 'large.jsonl'); cleanupFiles.push(file);
+    const entry = { id: 'entry', sessionId: 'session', timestamp: '2026-09-17T00:00:00.000Z', monotonicMs: 0, level: 'info', category: 'state', message: '大场次日志', itemId: 'other' };
+    await writeFile(file, `${JSON.stringify(entry)}\n`.repeat(150000) + JSON.stringify({ ...entry, itemId: 'selected', message: '最后一条' }));
+    expect(await logger.query()).toHaveLength(150001);
+    const selected = await logger.query({ itemId: 'selected' });
+    expect(selected.map(value => value.message)).toEqual(['最后一条']);
+    selected[0]!.message = '调用方修改';
+    expect((await logger.query({ itemId: 'selected' }))[0]!.message).toBe('最后一条');
+  });
+
+  it('损坏日志报告物理行号，包括空行和分块 UTF-8 内容', async () => {
+    const directory = await createTestDirectory();
+    const logger = new LinkRunLogger(directory);
+    const file = join(directory, 'broken.jsonl'); cleanupFiles.push(file);
+    const entry = { id: 'entry', sessionId: 'session', timestamp: '2026-09-17T00:00:00.000Z', monotonicMs: 0, level: 'info', category: 'state', message: '中文'.repeat(40000) };
+    await writeFile(file, `${JSON.stringify(entry)}\r\n\r\ninvalid`);
+    await expect(logger.query()).rejects.toThrow('第 3 行损坏');
+  });
   it('日志与诊断包均脱敏且支持筛选', async () => {
     const directory = await createTestDirectory();
     const logsDirectory = join(directory, 'logs');

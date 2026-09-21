@@ -1,8 +1,10 @@
 # 编排台 MA2 桥接插件
 
+2026-09-15 新增 LIST 只读目录协议。设置 → 设备连接 → MA2 控台 → 现场节目导入可扫描当前 Show 的已录制时间线、核对 Cue 编号、配对导入并导出现场核对包。需要重新导入并运行本版插件；只更新联动台不够。本机 onPC 3.3.4.3 已通过真实全池扫描，实体控台仍需现场核对。详见 `docs/P1_MA2_PROGRAM_TRANSFER.md`。
+
 ## 安装与更新
 
-在编排台“设置 → 设备连接 → MA2 控台”选择“实体控台 / 网络 onPC”，展开“连接说明与高级设置”，点击“导出控台插件”。导出的 XML、Lua 文件必须放在同一目录。
+插件随安装包内置，无需另行下载。进入“设置 → 设备连接 → MA2 控台”，点击页面顶部的“导出控台插件”，选择电脑目录或 U 盘；无需先连接控台。导出的 XML、Lua 文件必须放在同一目录。
 
 在 MA2 插件池选择空闲位置，打开编辑器，通过 Import 选择 `tblink_bridge.xml`。本机 onPC 的文件放在对应版本数据目录的 `plugins` 下，例如 `C:/ProgramData/MA Lighting Technologies/grandma/gma2_V_3.3.4/plugins`。实体控台通过 MA2 识别的 USB 插件目录导入。
 
@@ -10,7 +12,8 @@
 
 ## 连接实体控台
 
-1. 电脑与控台接入同一局域网，在 MA2 的 Telnet 设置启用远程登录，并准备允许登录的 Show 用户。
+1. 电脑与控台用网线直连或接同一交换机，配置同一局域网。控台打开 Setup → Console → Global Settings → Telnet → Login Enabled。
+   登录用户在 Setup → Console → User & Profiles Setup 中查看或由管理员新建，使用这个 Show 用户的密码；未设密码才留空。IP 页面不显示登录账号，账号密码区分大小写。
 2. 点击“搜索局域网控台”并选择地址，或手动填写控台 IP。填写登录用户及密码，点击“连接控台”。密码由 Windows 安全存储保管，不写入节目工程。
 3. 默认命令端口 **30000**、监视端口 **30001**。两个端口都需可达；Lua 的真实回复来自监视端口，命令回显不能当成成功。Telnet 使用明文传输，请用于受控的演出局域网。
 4. 在控台运行插件后，点击“检查 MA2 连接”；出现“插件通信正常”后再读取 Timecode。网络登录成功、插件通信正常、同步核对成功是三个独立状态。
@@ -24,7 +27,7 @@
 
 播放中禁止写入控台工程。断线、超时、部分失败都显示未完成；先重新读取核对，不能假定失败请求未执行。网络传输未正常释放时，插件保留请求最多 120 秒，避免其他请求抢占。
 
-“灯光事件与录制 → 控台 MIDI 地址”可设置 MSC 设备号（0–127，127 为全部设备），用于直接触发 MA2 Cue。它与网络 IP、灯具 DMX 地址是不同设置；MA2 MSC 执行器格式需要使用 Exec.Page。
+“设置 → 设备连接 → MA2 控台 → 控台 MIDI 地址”可设置 MSC 设备号（0–127，127 为全部设备），用于直接触发 MA2 Cue。它与网络 IP、灯具 DMX 地址是不同设置；MA2 MSC 执行器格式需要使用 Exec.Page。
 
 音乐驱动时间码仍走 MIDI：在编排台选择 MTC 输出，在 MA2 选择匹配的 MIDI 时间码输入。不要把网络工程同步当成 MTC。Cue、灯具地址、颜色、位置与效果继续在 MA2 内保存和执行。
 
@@ -49,3 +52,14 @@
 **目前不能承诺所有历史 MA2 版本完整兼容。** 3.3.4.3 已有本机真实测试；其他版本需要对应运行环境和实际 XML 样例。MA 官方说明 3.1 起使用 Lua 5.3，跨版本插件可能需要修改。模拟不同版本字符串仅验证分支行为，不能替代这些版本的实测。网络连接还需要真实 Show 用户登录，自动发现不能获得密码或开启控台权限。
 
 参考：[MA2 Telnet](https://help.malighting.com/grandMA2/en/help/key_remote_control_telnet.html)、[3.3 发布说明（Lua 版本说明）](https://help2.malighting.com/grandMA2/en/help/release_notes/key_rn_v3_3.html)、[插件跨版本说明](https://help.malighting.com/grandMA2/en/help/key_keyword_reloadplugins.html)。
+# 效果库扫描
+
+2026-09-15：灯光工作台「读取控台」新增 LISTSEQ / SEQUENCE 只读操作，读取所有序列的实际 Cue 编号与已记录 Fixture ID。请从新版联动台重新导出插件并在控台重新加载运行。扫描不执行 Cue、不写灯具参数、不删除控台对象。此新增全 Cue 池协议尚需现场版本验证；时间线 LIST 验收不能代替本功能验收。
+
+## 只接 MIDI 时使用 Cue
+
+仅 MIDI 连接不需要本插件、网线或登录账号。在“音频与 MIDI”配置“灯光动作输出”，在灯光工作台选择“MIDI · 直接触发 Cue”。手工添加控台已有序列、Cue 和执行器引用后即可编排触发；它不会读取或生成 Cue 内的灯具参数。
+
+控台 Setup → Console → Midi Show Control：MSC In Mode 选 MIDI，Command 选 General Light 或 All，Exec 选 Exec.Page；设备号与联动台一致（联动台 127 表示全部设备）。联动台填写页.执行器，发送时转换为 MA2 的 Exec.Page 顺序。
+
+若控台已有录好的 Timecode，选择“MTC · 控台时间线播放”，由控台执行时间线，不重复发送 Cue 指令。若要自动读取控台 Cue 列表或双向修改控台工程，再启用网络连接和插件。

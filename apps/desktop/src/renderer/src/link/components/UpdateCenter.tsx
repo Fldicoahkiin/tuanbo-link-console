@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { LinkUpdateStatus } from '@tb/core/link';
@@ -103,11 +104,11 @@ export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
       <span>当前安装版本</span>
       <strong>{status?.currentVersion ? `v${status.currentVersion}` : '正在读取…'}</strong>
     </div>
-    <button className="secondary-button update-trigger" title="软件更新" aria-label="软件更新" onClick={() => setOpen(true)}>
+    <Button className="secondary-button update-trigger" title="软件更新" aria-label="软件更新" onClick={() => setOpen(true)}>
       {icon}
       打开软件更新
       {phase === 'available' || phase === 'downloaded' ? <span className="update-badge" /> : null}
-    </button>
+    </Button>
     {open ? createPortal(<dialog
       ref={dialogRef}
       className="update-overlay"
@@ -125,7 +126,7 @@ export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
       <section className="modal-card update-center">
         <header className="update-center-header">
           <div><span className="eyebrow">SOFTWARE UPDATE</span><h2 id="update-center-title">软件更新</h2></div>
-          <button ref={closeButtonRef} className="icon-button" aria-label="关闭软件更新" onClick={() => setOpen(false)}><X /></button>
+          <Button ref={closeButtonRef} className="icon-button" aria-label="关闭软件更新" onClick={() => setOpen(false)}><X /></Button>
         </header>
 
         <div className={`update-summary phase-${phase}`}>
@@ -145,15 +146,15 @@ export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
           <div className="update-credential-title"><ShieldCheck /><div><strong>私有仓库读取凭证</strong><span>{status?.tokenConfigured ? '已加密保存在本机，不会写入工程或日志' : '仅需配置一次，只授予仓库 Contents 读取权限'}</span></div></div>
           {!status?.tokenConfigured ? <label className="field"><span>GitHub 只读 Token</span><input type="password" autoComplete="off" spellCheck={false} value={token} onChange={(event) => setToken(event.currentTarget.value)} placeholder="github_pat_…" /></label> : null}
           <div className="inline-actions">
-            {!status?.tokenConfigured ? <button className="secondary-button" disabled={working || token.trim().length < 20} onClick={() => void saveToken()}><KeyRound />保存凭证</button> : <button className="secondary-button" disabled={working} onClick={() => void clearToken()}><Trash2 />清除凭证</button>}
+            {!status?.tokenConfigured ? <Button className="secondary-button" disabled={working || token.trim().length < 20} onClick={() => void saveToken()}><KeyRound />保存凭证</Button> : <Button className="secondary-button" disabled={working} onClick={() => void clearToken()}><Trash2 />清除凭证</Button>}
           </div>
         </div> : <p className="update-dev-note">开发模式不会执行下载或安装。正式安装包中会启用 GitHub Release 更新。</p>}
 
         <div className="modal-actions update-actions">
-          <button className="secondary-button" onClick={() => setOpen(false)}>关闭</button>
-          {status?.tokenConfigured && phase !== 'downloaded' && phase !== 'available' && phase !== 'disabled' ? <button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</button> : null}
-          {phase === 'available' ? <button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</button> : null}
-          {phase === 'downloaded' ? <button className="primary-button" disabled={busy} onClick={() => void install()}><CloudDownload />重启并安装</button> : null}
+          <Button className="secondary-button" onClick={() => setOpen(false)}>关闭</Button>
+          {status?.tokenConfigured && phase !== 'downloaded' && phase !== 'available' && phase !== 'disabled' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</Button> : null}
+          {phase === 'available' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</Button> : null}
+          {phase === 'downloaded' ? <Button className="primary-button" disabled={busy} onClick={() => void install()}><CloudDownload />重启并安装</Button> : null}
         </div>
       </section>
     </dialog>, document.body) : null}

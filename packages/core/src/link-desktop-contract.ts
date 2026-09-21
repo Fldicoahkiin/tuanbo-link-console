@@ -56,11 +56,14 @@ export type LinkProjectAssetInspection = {
 };
 
 export type LinkP1ProjectImportResult = {
+  sourceOrder?: string[];
+  skippedItems?: import('@tb/schema').P1ImportIssue[];
   sourcePath: string;
   sourceSha256: string;
   playlists: P1PlaylistBinding[];
   items: Array<{
     title: string;
+    importNotes?: string;
     referenceAudio: ReferenceAudio;
     p1Media: P1MediaBinding;
   }>;
@@ -78,6 +81,7 @@ export type LinkP1ProjectExportPreview = {
 };
 
 export type LinkP1ProjectExportResult = {
+  skippedItems?: import('@tb/schema').P1ImportIssue[];
   outputPath: string;
   sourceSha256: string;
   playlists: P1PlaylistBinding[];
@@ -159,6 +163,9 @@ export type LinkLogEntryDto = {
 };
 
 export type LinkDesktopApi = {
+  getLicenseStatus(): Promise<import('@tb/schema').LicenseStatus>;
+  exportLicenseRequest(): Promise<boolean>;
+  importLicense(): Promise<import('@tb/schema').LicenseStatus | null>;
   exportMa2Plugin: () => Promise<string | null>;
   exportObsPreviewScript: () => Promise<string>;
   getObsPreviewStatus: () => Promise<{ ready: boolean; message: string }>;
@@ -171,6 +178,8 @@ export type LinkDesktopApi = {
   disconnectMa2Network(): Promise<import('@tb/schema').Ma2NetworkStatus>;
   exchangeMa2(payload: import('@tb/schema').Ma2BridgeRequest): Promise<string>;
   previewMa2(payload: import('@tb/schema').Ma2ReadRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;
+  readMa2Catalog(payload: import('@tb/schema').Ma2CatalogRequest): Promise<import('@tb/schema').Ma2Catalog>;
+  readMa2EffectLibrary(payload: import('@tb/schema').Ma2CatalogRequest): Promise<import('@tb/schema').Ma2EffectLibrary>;
   createMa2(payload: import('@tb/schema').Ma2CreateRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;
   readMa2Executor(payload: import('@tb/schema').Ma2ExecutorReadRequest): Promise<import('@tb/schema').Ma2ExecutorPreview>;
   compareMa2(payload: import('@tb/schema').Ma2CompareRequest): Promise<import('./ma2-sync').Ma2SyncPreview>;
@@ -243,8 +252,11 @@ export type LinkDesktopApi = {
   readObsLiveScene(): Promise<ObsLiveScene>;
   editObsLiveScene(edit: ObsLiveEdit): Promise<void>;
   onObsLiveChanged(listener: () => void): () => void;
+  getWindowVisible(): Promise<boolean>;
+  onWindowVisibilityChanged(listener: (visible: boolean) => void): () => void;
   getObsLiveFrame(): Promise<{ width: number; height: number; sequence: number; timestampNs: string; rgba: Uint8Array }>;
   closeObsLivePreview(): Promise<void>;
+  repairObsBridge(): Promise<void>;
   getObsSourceScreenshot(payload: { sourceName: string; width?: number; height?: number }): Promise<string>;
   executeObsAction(action: LinkAction): Promise<void>;
   activateManagedObsOutput(): Promise<void>;

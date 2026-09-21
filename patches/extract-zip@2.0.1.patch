@@ -1,0 +1,37 @@
+diff --git a/index.js b/index.js
+--- a/index.js
++++ b/index.js
+@@ -11,3 +11,20 @@
+-const pipeline = promisify(stream.pipeline)
+-
+-class Extractor {
++const pipeline = promisify(stream.pipeline)
++
++// Windows release archives contain regular files only. Never traverse links.
++async function rejectLinkComponents (root, target) {
++  const relative = path.relative(root, target)
++  if (path.isAbsolute(relative) || relative.split(path.sep).includes('..')) {
++    throw new Error('ZIP entry is outside the extraction directory')
++  }
++  let current = root
++  for (const component of relative.split(path.sep).filter(Boolean)) {
++    current = path.join(current, component)
++    const stat = await fs.lstat(current).catch(err => {
++      if (err.code === 'ENOENT') return null
++      throw err
++    })
++    if (stat && stat.isSymbolicLink()) throw new Error('ZIP extraction refuses symbolic links')
++  }
++}
++
++class Extractor {
+@@ -55,2 +72,3 @@
+-        try {
+-          await fs.mkdir(destDir, { recursive: true })
++        try {
++          await rejectLinkComponents(this.opts.dir, path.join(this.opts.dir, entry.fileName))
++          await fs.mkdir(destDir, { recursive: true })
+@@ -111,1 +129,2 @@
+-    const procMode = this.getExtractedMode(mode, isDir) & 0o777
++    if (symlink) throw new Error('ZIP extraction refuses symbolic links')
++    const procMode = this.getExtractedMode(mode, isDir) & 0o777

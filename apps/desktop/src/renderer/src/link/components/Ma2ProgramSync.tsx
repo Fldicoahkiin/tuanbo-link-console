@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { alignMa2SnapshotToFrames, applyMa2ReadbackCommand, bindMa2TrackCommand, importMa2TimecodeCommand, matchMa2Readback, resolveMa2Readback, resolveMa2Sync, setLightingCommand, type Ma2SyncPreview } from '@tb/core/link';
 import { type Ma2NetworkTarget, ma2ExecutorPreviewSchema, type Ma2ExecutorPreview, ma2ApplyResultSchema, ma2TimecodePreviewSchema, ma2SyncPreviewSchema, type LightingDocument, type LightingEvent, type Ma2TimecodePreview } from '@tb/schema';
@@ -6,7 +7,7 @@ import { useSelectedProgram } from '../useSelectedProgram';
 import { useLightingDocument } from './useCueWorkspaceSetup';
 
 type Preview = { result: Ma2TimecodePreview; documentId: number; itemId: string | null };
-export function Ma2ProgramSync({ disabled, notify, method, network, directory, onBusy }: { onBusy: (busy: boolean) => void; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; method: 'local' | 'network'; network: Ma2NetworkTarget | null; directory: string }): JSX.Element {
+export function Ma2ProgramSync({ disabled, notify, method, network, directory, onBusy, initialTarget = 1 }: { initialTarget?: number; onBusy: (busy: boolean) => void; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; method: 'local' | 'network'; network: Ma2NetworkTarget | null; directory: string }): JSX.Element {
   const [difference, setDifference] = useState<{ result: Ma2SyncPreview; source: LightingDocument; readback: Ma2TimecodePreview; identities: ReadonlyMap<string, string | null> } | null>(null);
   const [conflictChoices, setConflictChoices] = useState<ReadonlyMap<string, 'local' | 'remote'>>(new Map());
   const endpoint = () => {
@@ -14,7 +15,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
     if (method === 'local' && !directory.trim()) throw new Error('请在维护页填写本机 onPC 数据目录');
     return method === 'network' && network ? { dataDirectory: '', network } : { dataDirectory: directory.trim() };
   };
-  const [target, setTarget] = useState(1);
+  const [target, setTarget] = useState(initialTarget);
   const [busy, setWorking] = useState(false);
   const setBusy = (value: boolean): void => { setWorking(value); onBusy(value); };
   const [status, setStatus] = useState('尚未检查');
@@ -35,7 +36,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
       const connection = endpoint();
       if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号应为 1–99999');
 
-      const result = ma2TimecodePreviewSchema.parse(await window.tbLink.previewMa2({ ...connection, target }));
+      const result = ma2TimecodePreviewSchema.parse(await window.tbLink.previewMa2({ ...connection, target, timeOriginMs: item?.lighting?.ma2Bindings?.find(entry => entry.timecode === target)?.timeOriginMs }));
       setPreview({ result, documentId, itemId });
       setStatus(result.unconverted.length ? `已读取，${result.unconverted.length} 个事件暂不能转换` : `Timecode ${target} 已读取`);
     } catch (error) { const message = error instanceof Error ? error.message : String(error); setStatus('通信未完成'); notify(message, 'error'); }
@@ -82,9 +83,9 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
   const activeDifference = difference && difference.source === item?.lighting && difference.readback === preview?.result && difference.identities === identityChoices && !stale ? difference.result : null;
   const resolution = useMemo(() => {
     if (!activeDifference || activeDifference.conflicts.some((entry) => !conflictChoices.has(entry.id))) return null;
-    try { return { ...alignMa2SnapshotToFrames(resolveMa2Sync(activeDifference, conflictChoices), 30), message: '合并检查通过 · 尚未应用' }; }
+    try { return { ...alignMa2SnapshotToFrames(resolveMa2Sync(activeDifference, conflictChoices), 30, preview?.result.timeOriginMs ?? 0), message: '合并检查通过 · 尚未应用' }; }
     catch (error) { return { snapshot: null, adjustments: [], message: `合并未完成：${error instanceof Error ? error.message : String(error)}` }; }
-  }, [activeDifference, conflictChoices]);
+  }, [activeDifference, conflictChoices, preview?.result.timeOriginMs]);
   const mergedEvents = useMemo(() => resolution?.snapshot?.objects.filter((entry) => entry.kind === 'event').sort((a, b) => Number(a.properties.time) - Number(b.properties.time)) ?? [], [resolution]);
   const mergePageCount = Math.max(1, Math.ceil(mergedEvents.length / 100));
   const visibleMergePage = Math.min(mergePage, mergePageCount - 1);
@@ -129,8 +130,8 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
   const events = preview?.result.document.tracks.flatMap((track) => track.clips.flatMap((clip) => clip.events)).filter((event) => event.kind === 'ma2' || event.kind === 'ma2-fader') ?? [];
   return <section className="settings-section ma2-sync-section" aria-label="MA2 节目同步">
     <p className="sync-destination"><span>目标控台</span><strong>{method === 'network' ? network ? `${network.host} · ${network.username}` : '请先在设备连接中保存并连接控台' : `本机 onPC · ${directory || '未配置目录'}`}</strong></p>
-    <div className="settings-header-actions ma2-connection-actions"><label>时间码编号<input aria-label="读取 MA2 Timecode 编号" type="number" min={1} max={99999} value={Number.isNaN(target) ? '' : target} disabled={busy || disabled} onChange={(event) => { setTarget(event.target.valueAsNumber); setPreview(null); setDifference(null); }} /></label><button className="primary-button" disabled={busy || disabled || !item} onClick={() => void readPreview()}>读取灯光编排</button>{status !== '尚未检查' ? <span className="ma2-connection-status" role="status">{status}</span> : null}</div>
-    {item ? <div className="ma2-create-action"><button className="secondary-button" title={`使用上方编号创建“${item.title}”，已有编号不会覆盖`} disabled={busy || disabled || item.lighting?.ma2Bindings?.some((entry) => entry.timecode === target)} onClick={() => void create()}>创建并关联当前节目</button></div> : null}
+    <div className="settings-header-actions ma2-connection-actions"><label>时间码编号<input aria-label="读取 MA2 Timecode 编号" type="number" min={1} max={99999} value={Number.isNaN(target) ? '' : target} disabled={busy || disabled} onChange={(event) => { setTarget(event.target.valueAsNumber); setPreview(null); setDifference(null); }} /></label><Button className="primary-button" disabled={busy || disabled || !item} onClick={() => void readPreview()}>读取灯光编排</Button>{status !== '尚未检查' ? <span className="ma2-connection-status" role="status">{status}</span> : null}</div>
+    {item ? <div className="ma2-create-action"><Button className="secondary-button" title={`使用上方编号创建“${item.title}”，已有编号不会覆盖`} disabled={busy || disabled || item.lighting?.ma2Bindings?.some((entry) => entry.timecode === target)} onClick={() => void create()}>创建并关联当前节目</Button></div> : null}
     {preview ? <div className="ma2-read-preview" role="region" aria-label="MA2 灯光读取预览">
       <strong>{preview.result.name} · {events.length} 个灯光点</strong>
       {binding && item?.lighting && !stale ? <Ma2TrackBinding key={`${item.id}:${binding.id}:${directory}:${preview.result.readAt}`} directory={method === 'network' ? '' : directory} network={method === 'network' ? network ?? undefined : undefined} itemId={item.id} bindingId={binding.id} document={item.lighting} preview={preview.result} disabled={disabled || busy} notify={notify} /> : null}
@@ -143,7 +144,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
       }}><option value="">请选择对应点</option><option value="new">控台新增点</option>{comparison.candidates.get(event.id)?.map((id) => <option key={id} value={`old:${id}`} disabled={[...identityChoices].some(([remote, selected]) => remote !== event.id && selected === id)}>{comparison.baseline.get(id)}</option>)}</select> : comparison?.labels.get(event.id) ?? '未比较'}</td> : null}</tr>)}</tbody></table> : null}
       {comparison?.removed.length ? <details open><summary>控台已删除的点（{comparison.removed.length}）</summary>{comparison.removed.map(({ event, time }) => <p key={event.id}>{(time / 1000).toFixed(3)} 秒 · {ma2EventLabel(event, true)}{event.kind === 'ma2' ? ` · ${event.label}` : ''}</p>)}</details> : null}
       {comparison?.result ? <p className="settings-note">仅回读 · 未应用到节目或控台</p> : null}
-      {comparison?.result ? <button className="secondary-button" disabled={busy || disabled || stale || comparison.result.ambiguous.length > 0} onClick={() => void compare()}>比较节目与控台修改</button> : null}
+      {comparison?.result ? <Button className="secondary-button" disabled={busy || disabled || stale || comparison.result.ambiguous.length > 0} onClick={() => void compare()}>比较节目与控台修改</Button> : null}
       {activeDifference ? <div className="ma2-difference" role="region" aria-label="节目与控台差异">
         <strong>{activeDifference.conflicts.length ? `${activeDifference.conflicts.length} 处冲突，请选择保留内容` : '没有冲突'}</strong>
         {activeDifference.conflicts.length ? <table className="ma2-conflict-table"><thead><tr><th>原来</th><th>当前节目</th><th>控台回读</th><th>保留</th></tr></thead><tbody>{activeDifference.conflicts.map((entry, index) => <tr key={entry.id}>
@@ -154,12 +155,12 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
         {resolution?.snapshot ? <p className="settings-note">合并后 {resolution.snapshot.objects.filter((entry) => entry.kind === 'track').length} 条轨道 · {mergedEvents.length} 个灯光点</p> : null}
         {resolution?.adjustments.length ? <p className="settings-note">MA2 按 30 帧/秒保存，{resolution.adjustments.length} 个点将对齐到最近帧，最大偏移 {resolution.adjustments.reduce((maximum, entry) => Math.max(maximum, Math.abs(entry.toMs - entry.fromMs)), 0).toFixed(3)} 毫秒。合并结果显示对齐后的时间，确认同步后应用到节目。</p> : null}
         {resolution?.snapshot ? <details open><summary>核对合并结果（{mergedEvents.length} 个点）</summary><table><thead><tr><th>时间（秒）</th><th>Cue / 动作</th><th>执行器</th><th>名称</th></tr></thead><tbody>{mergedEvents.slice(visibleMergePage * 100, (visibleMergePage + 1) * 100).map((entry) => <tr key={entry.id}><td>{(Number(entry.properties.time) / 1000).toFixed(3)}</td><td>{entry.properties.action === 'master' ? `主推杆 ${Number((Number(entry.properties.level) * 100).toFixed(6))}%` : entry.properties.action === 'goto' ? entry.properties.cue : entry.properties.action === 'go' ? '下一步' : '关闭执行器'}</td><td>{entry.properties.executor}</td><td>{entry.properties.name}</td></tr>)}</tbody></table>{mergePageCount > 1 ? <div className="settings-header-actions"><button disabled={visibleMergePage === 0} onClick={() => setMergePage(visibleMergePage - 1)}>上一页</button><span>{visibleMergePage + 1} / {mergePageCount}</span><button disabled={visibleMergePage + 1 === mergePageCount} onClick={() => setMergePage(visibleMergePage + 1)}>下一页</button></div> : null}</details> : null}
-        <button className="secondary-button" disabled={busy || disabled || !resolution?.snapshot} onClick={() => void synchronize()}>同步节目与 MA2</button>
+        <Button className="secondary-button" disabled={busy || disabled || !resolution?.snapshot} onClick={() => void synchronize()}>同步节目与 MA2</Button>
       </div> : null}
       {events.length > 100 ? <div className="settings-header-actions"><button disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button><span>{page + 1} / {Math.ceil(events.length / 100)}</span><button disabled={(page + 1) * 100 >= events.length} onClick={() => setPage(page + 1)}>下一页</button></div> : null}
       {preview.result.warnings.map((warning) => <p className="settings-note" key={warning}>{warning}</p>)}
       {preview.result.unconverted.length ? <details open><summary>未转换事件（{preview.result.unconverted.length}）</summary>{preview.result.unconverted.map((entry) => <p className="settings-note" key={entry.path}>{entry.path}：{entry.reason}</p>)}</details> : null}
-      <div className="settings-header-actions"><button className="secondary-button" disabled={disabled || busy || stale || !item || Boolean(alreadyBound) || preview.result.unconverted.length > 0} onClick={apply}>加入当前节目</button><span>{stale ? '节目已切换，请重新读取' : alreadyBound ? '此节目已关联该 Timecode' : item ? item.title : '请先选择节目'}</span><button className="secondary-button" onClick={() => setPreview(null)}>关闭预览</button></div>
+      <div className="settings-header-actions"><Button className="secondary-button" disabled={disabled || busy || stale || !item || Boolean(alreadyBound) || preview.result.unconverted.length > 0} onClick={apply}>加入当前节目</Button><span>{stale ? '节目已切换，请重新读取' : alreadyBound ? '此节目已关联该 Timecode' : item ? item.title : '请先选择节目'}</span><Button className="secondary-button" onClick={() => setPreview(null)}>关闭预览</Button></div>
     </div> : null}
   </section>;
 }
@@ -201,7 +202,7 @@ function Ma2TrackBinding(props: { directory: string; network?: Ma2NetworkTarget 
     } catch (error) { props.notify(error instanceof Error ? error.message : String(error), 'error'); }
   };
   return <details open className="ma2-track-binding"><summary>关联节目中的灯光轨道{binding.pendingTracks?.length ? ` · ${binding.pendingTracks.length} 条待同步` : ''}</summary>
-    {tracks.length ? <div className="settings-header-actions ma2-executor-read"><label>其他执行器<input aria-label="读取执行器地址" placeholder="页.编号，例如 1.5" value={address} disabled={props.disabled || reading} onChange={(event) => { setAddress(event.currentTarget.value); setDiscovered(null); }} /></label><button className="secondary-button" disabled={props.disabled || reading || !/^[1-9]\d{0,4}\.[1-9]\d{0,4}$/.test(address.trim())} onClick={() => void readExecutor()}>{reading ? '读取中…' : '读取执行器'}</button></div> : null}
+    {tracks.length ? <div className="settings-header-actions ma2-executor-read"><label>其他执行器<input aria-label="读取执行器地址" placeholder="页.编号，例如 1.5" value={address} disabled={props.disabled || reading} onChange={(event) => { setAddress(event.currentTarget.value); setDiscovered(null); }} /></label><Button className="secondary-button" disabled={props.disabled || reading || !/^[1-9]\d{0,4}\.[1-9]\d{0,4}$/.test(address.trim())} onClick={() => void readExecutor()}>{reading ? '读取中…' : '读取执行器'}</Button></div> : null}
     {discovered ? <p role="status">{discovered.executorName} · 序列 {discovered.cueCatalog[0]?.sequence} · {discovered.cueCatalog[0]?.cues.length} 个 Cue</p> : null}
     {tracks.length ? <div className="ma2-track-binding-fields">
       <label>节目轨道<select aria-label="关联 MA2 的节目轨道" value={trackId} disabled={props.disabled || reading} onChange={(event) => setTrackId(event.currentTarget.value)}><option value="">选择轨道</option>{tracks.map((track) => <option key={track.id} value={track.id} disabled={track.locked}>{track.name}{track.locked ? '（已锁定）' : ''}</option>)}</select></label>

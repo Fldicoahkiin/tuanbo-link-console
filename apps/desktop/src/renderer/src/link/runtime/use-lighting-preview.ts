@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { lightingTimeOrigin } from '@tb/core/link';
 import type { LightingDocument, MtcFrameRate } from '@tb/schema';
 import { LightingMidiOutput } from '../../registry/lighting-midi-output';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
@@ -30,6 +31,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       mtc.stop(); try { output.stop(); } catch (error) { fail(error); }
     };
     const start = async (): Promise<void> => {
+      const originMs = lightingTimeOrigin(document);
       const profile = useIntegrationStore.getState().profile;
       const audio = input.audioRef.current;
       if (!audio || !audio.getAttribute('src')) { if (input.enabled) throw new Error('请先给节目添加音乐，再开启灯光试听'); return; }
@@ -49,7 +51,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
           if (audio.paused || audio.ended || audio.seeking) return;
           canFinish = true;
           if (document.loop.enabled && audio.currentTime * 1000 >= document.loop.endMs) { output.loop(document.loop.startMs, document.loop.endMs); audio.currentTime = document.loop.startMs / 1000; mtc.stop(); return; }
-          if (input.enabled) output.tick(audio.currentTime * 1000); if (input.enabled && document.outputMode === 'timecode') mtc.tick(audio.currentTime * 1000, latest.current.frameRate);
+          if (input.enabled) output.tick(audio.currentTime * 1000); if (input.enabled && document.outputMode === 'timecode') mtc.tick(audio.currentTime * 1000 + originMs, latest.current.frameRate);
         } catch (error) { cleanup(); fail(error); }
       }, 5);
     };

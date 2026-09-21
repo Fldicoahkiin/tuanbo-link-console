@@ -78,6 +78,37 @@ export class LinkMidiAdapter implements LinkActionExecutor {
     return this.listPorts();
   }
 
+  async refreshPorts(): Promise<MidiPortSnapshot[]> {
+    if (this.mtcInput) throw new Error('MTC 输入正在使用，请停止联动后重新检测端口');
+    if (this.initialization) throw new Error('MIDI 端口正在检测，请等待本次检测完成');
+    this.generation++;
+    this.access?.removeEventListener('statechange', this.onPortsChanged);
+    this.access = null;
+    const ports = await this.initialize();
+    this.emitPorts();
+    return ports;
+  }
+
+  async openOutputs(profileIds: readonly string[]): Promise<string[]> {
+    await this.initialize();
+    const issues: string[] = [];
+    const opened = new Set<string>();
+    for (const id of profileIds) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const output = this.resolveOutput(id);
+        if (output.state !== 'connected') throw new Error(`MIDI 输出已断开：${output.name}`);
+        if (opened.has(output.id)) continue;
+        await Promise.race([output.open(), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`MIDI 输出打开超时：${output.name}`)), 5000); })]);
+        if (output.state !== 'connected') throw new Error(`MIDI 输出已断开：${output.name}`);
+        opened.add(output.id);
+      } catch (error) { issues.push(toMessage(error)); }
+      finally { clearTimeout(timer); }
+    }
+    this.emitPorts();
+    return issues;
+  }
+
   async waitForConnectedInput(
     profileId: string,
     timeoutMs: number,

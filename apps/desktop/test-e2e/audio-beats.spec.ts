@@ -19,16 +19,16 @@ test('真实音频检测三级节拍、保存标记、灯光放置与拖动吸�
     await application.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, path);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('button', { name: '编辑器', exact: true }).click();
-    await page.getByRole('button', { name: '歌曲音频', exact: true }).click();
+    await page.locator('.audio-track-edit').first().click();
     await page.getByRole('button', { name: '检测节拍', exact: true }).click();
     await expect(page.getByRole('button', { name: '应用标记', exact: true })).toBeEnabled();
     const counts: number[] = [];
-    for (const name of ['稀疏', '标准', '密集']) {
+    for (const name of ['每四拍', '每两拍', '每拍']) {
       await page.getByRole('button', { name, exact: true }).click();
       counts.push(await page.locator('.audio-beat-marker').count());
     }
     expect(counts[0]).toBeGreaterThan(0); expect(counts[1]).toBeGreaterThanOrEqual(counts[0]!); expect(counts[2]).toBeGreaterThanOrEqual(counts[1]!);
-    await page.getByRole('button', { name: '标准', exact: true }).click();
+    await page.getByRole('button', { name: '每两拍', exact: true }).click();
     await page.getByRole('button', { name: '应用标记', exact: true }).click();
     const load = async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
     await expect.poll(async () => (await load()).rundown[0]!.referenceAudio?.beats?.pointsMs.length ?? 0).toBe(counts[1]);
@@ -44,7 +44,7 @@ test('真实音频检测三级节拍、保存标记、灯光放置与拖动吸�
     await page.mouse.move(cue.x + 3, cue.y + 8); await page.mouse.down();
     await page.mouse.move(cue.x + 3 + markers[1]! - markers[0]! + 2, cue.y + 8, { steps: 6 }); await page.mouse.up();
     await expect.poll(async () => (await load()).rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]?.at ?? -1).toBe(saved.beats!.pointsMs[1]);
-    await page.getByRole('button', { name: '吸附开', exact: true }).click();
+    await page.getByRole('button', { name: '关闭吸附', exact: true }).click();
     const currentBounds = await clip.boundingBox(); if (!currentBounds) throw new Error('灯光轨道未显示');
     await page.mouse.dblclick(markers[0]! + 8, currentBounds.y + currentBounds.height - 6);
     await expect.poll(async () => (await load()).rundown[0]!.lighting!.tracks[0]!.clips[0]!.events.length).toBe(2);

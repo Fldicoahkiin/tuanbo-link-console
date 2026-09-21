@@ -78,6 +78,42 @@ local function process(data)
     assert(tc and tc >= 1 and tc <= 99999 and tc == math.floor(tc), 'Invalid Timecode')
     assert(#body == tonumber(size), 'Request length mismatch')
     if op == 'PING' then return gma.show.getvar('VERSION') or 'unknown' end
+    if op == 'LIST' or op == 'LISTSEQ' then
+      assert(body == '', 'Directory request must be empty')
+      local obj = gma.show.getobj
+      local pool = assert(obj.handle(op == 'LISTSEQ' and 'Sequence' or 'Timecode'), 'Object pool unavailable')
+      local count = assert(obj.amount(pool), 'Timecode enumeration unavailable')
+      assert(count >= 0 and count <= 100000, 'Timecode directory exceeds limit')
+      local function quote(value)
+        return '"' .. tostring(value):gsub('[%z\1-\31\\"]', function(char)
+          return string.format('\\u%04x', string.byte(char))
+        end) .. '"'
+      end
+      local entries, seen = {}, {}
+      for index = 0, count - 1 do
+        -- Native pools are sparse: amount is the indexed span, not occupied slots.
+        local child = obj.child(pool, index)
+        if child then
+          local number = tonumber(obj.number(child))
+          assert(number and number >= 1 and number <= 99999 and number == math.floor(number) and not seen[number], 'Invalid Timecode directory number')
+          seen[number] = true
+          entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(assert(obj.name(child), 'Timecode name unavailable')) .. '}'
+          assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
+        end
+      end
+      assert(obj.amount(pool) == count, 'Timecode directory changed during read')
+      return '{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(assert(gma.show.getvar('VERSION'))) .. ',"entries":[' .. table.concat(entries, ',') .. ']}'
+    end
+    if op == 'SEQUENCE' then
+      assert(body == '', 'Sequence request must be empty')
+      assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
+      local name = 'tblink_library_' .. id
+      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
+      local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
+      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+      assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
+      return xml
+    end
     if op == 'EXECUTOR' then
       assert(body:match('^[1-9]%d*$') and tonumber(body) <= 99999, 'Invalid Executor number')
       local address = 'Executor ' .. tc .. '.' .. body
@@ -166,7 +202,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
     assert(type(id) == 'string' and #id == 32 and id:match('^[a-f0-9]+$'), 'Invalid request identity')
     if action == 'begin' then
       assert(id ~= last, 'Request already processed')
-      assert(a == 'PING' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR', 'Invalid operation')
+      assert(a == 'PING' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(not network or gma.gettime() > network.expires, 'Another network request is pending')

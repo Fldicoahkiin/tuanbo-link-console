@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { IntegrationProfile } from '@tb/schema';
 import type { MidiPortSnapshot } from '../../registry/link-midi-adapter';
-import { applyDetectedP1MidiPorts, isMtcSignalReady } from './local-integration-midi';
+import { applyDetectedP1MidiPorts, applyDetectedLightingMidiPorts, internalMidiConnectionIssues, isMtcSignalReady } from './local-integration-midi';
+
+it('本机一键连接检查配置的输出，不将缺失、错误方向或同名重复报告为正常', () => {
+  const configured = { ...profile('', 'MA2'), internalPlayer: { mtcOutputPortProfileId: 'p1-output', audioOutputDeviceId: 'default' } };
+  expect(internalMidiConnectionIssues(configured, [port('output', 'MA2')])).toEqual([]);
+  expect(internalMidiConnectionIssues(configured, [port('input', 'MA2')])).toEqual([expect.stringContaining('未检测到')]);
+  expect(internalMidiConnectionIssues(configured, [port('output', 'MA2'), port('output', 'MA2')])).toEqual([expect.stringContaining('名称重复')]);
+  expect(internalMidiConnectionIssues({ ...configured, midiPortProfiles: [] }, [])).toEqual([expect.stringContaining('配置缺失')]);
+  expect(configured.midiPortProfiles[1]?.portName).toBe('MA2');
+});
 
 describe('isMtcSignalReady', () => {
   const signal = { portConnected: true, stable: true, lastMtcAt: 1000, now: 1100, detectedFrameRate: '30' as const, expectedFrameRate: '30' as const };
@@ -42,6 +51,18 @@ describe('applyDetectedP1MidiPorts', () => {
       'P1：已配置的 MTC 输入端口当前不可用：P1 MTC',
       'P1：已配置的控制输出端口当前不可用：P1 Control'
     ]);
+  });
+
+  it('已配置端口缺失或重复时不会改选其他可用端口', () => {
+    const configured = profile('P1 MTC', 'P1 Control');
+    for (const ports of [
+      [port('input', '另一个 P1'), port('output', '其他设备')],
+      [port('input', 'P1 MTC'), port('input', 'P1 MTC'), port('output', 'P1 Control'), port('output', 'P1 Control')]
+    ]) {
+      const result = applyDetectedP1MidiPorts(configured, ports);
+      expect(result.profile).toEqual(configured);
+      expect(result.issues).toHaveLength(2);
+    }
   });
 
   it('直接由 P1 播放时不把未配置的可选控制输出误报为阻断', () => {
@@ -112,3 +133,25 @@ function port(direction: MidiPortSnapshot['direction'], name: string): MidiPortS
     connection: 'closed'
   };
 }
+
+
+describe('灯光一键检测与配置', () => {
+  it('唯一 MIDI 输出同时用于本机 MTC 与 Cue，忽略 Windows 合成器', () => {
+    const result = applyDetectedLightingMidiPorts(profile('', ''), [port('output', 'USB MIDI'), port('output', 'Microsoft GS Wavetable Synth')], true);
+    expect(result.issues).toEqual([]);
+    expect(result.profile.internalPlayer?.mtcOutputPortProfileId).toBe('internal-mtc-output');
+    expect(result.profile.midiPortProfiles.filter(value => value.id === 'internal-mtc-output' || value.id === 'lighting-events-output').map(value => value.portName)).toEqual(['USB MIDI', 'USB MIDI']);
+  });
+  it('多个输出要求明确选择，不随便选第一个；已配置端口缺失不换线', () => {
+    const ports = [port('output', 'USB A'), port('output', 'USB B')];
+    expect(applyDetectedLightingMidiPorts(profile('', ''), ports, true).issues).toHaveLength(2);
+    const configured = { ...profile('', ''), internalPlayer: { mtcOutputPortProfileId: 'p1-output', audioOutputDeviceId: 'default' }, midiPortProfiles: [{ id: 'p1-mtc', direction: 'input' as const, portName: '' }, { id: 'p1-output', direction: 'output' as const, portName: '旧控台' }] };
+    const result = applyDetectedLightingMidiPorts(configured, ports, true);
+    expect(result.profile).toEqual(configured); expect(result.issues).toHaveLength(2);
+  });
+  it('多个输出时复用明确配置的控台端口，P1 模式不创建本机 MTC 输出', () => {
+    const configured = profile('', ''); configured.midiPortProfiles.push({ id: 'lighting-events-output', direction: 'output', portName: 'USB B' });
+    const result = applyDetectedLightingMidiPorts(configured, [port('output', 'USB A'), port('output', 'USB B')], false);
+    expect(result.issues).toEqual([]); expect(result.profile.internalPlayer).toBeUndefined();
+  });
+});

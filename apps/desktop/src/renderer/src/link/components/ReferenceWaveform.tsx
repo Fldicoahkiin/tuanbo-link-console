@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import type { TimelineSpan } from '@tb/core/link';
 import type { LinkMediaAsset, ReferenceMediaClip } from '@tb/schema';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -25,6 +25,8 @@ export function useReferenceWaveformPeaks(source: ReferenceWaveformSource | null
 
   useEffect(() => {
     let cancelled = false;
+    setPeaks([]);
+    setError(null);
     if (!projectPath || !url || !sha256 || durationMs === undefined) {
       setPeaks([]);
       setError(null);
@@ -55,15 +57,16 @@ export function TimelineWaveformCanvas(props: {
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { contentWidth, peaks, scrollLeft, viewportWidth } = props;
+  const normalizationLevel = useMemo(() => waveformNormalization(peaks), [peaks]);
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || peaks.length === 0) return;
-    const draw = (): void => drawVisibleWaveform(canvas, { contentWidth, peaks, scrollLeft, viewportWidth });
+    const draw = (): void => drawVisibleWaveform(canvas, { contentWidth, peaks, scrollLeft, viewportWidth, normalizationLevel });
     draw();
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [contentWidth, peaks, scrollLeft, viewportWidth]);
+  }, [contentWidth, peaks, scrollLeft, viewportWidth, normalizationLevel]);
 
   return <canvas
     className="timeline-waveform-canvas"
@@ -184,15 +187,22 @@ function ClippedWaveformCanvas(props: {
   clipDurationMs: number;
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const { peaks, sourceDurationMs, sourceOffsetMs, clipDurationMs } = props;
+  const visiblePeaks = useMemo(() => {
+    const start = Math.max(0, Math.floor(sourceOffsetMs / sourceDurationMs * peaks.length));
+    const end = Math.min(peaks.length, Math.ceil((sourceOffsetMs + clipDurationMs) / sourceDurationMs * peaks.length));
+    return peaks.slice(start, Math.max(start + 1, end));
+  }, [peaks, sourceDurationMs, sourceOffsetMs, clipDurationMs]);
+  const normalizationLevel = useMemo(() => waveformNormalization(visiblePeaks), [visiblePeaks]);
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const draw = (): void => drawClippedWaveform(canvas, props);
+    const draw = (): void => drawClippedWaveform(canvas, visiblePeaks, normalizationLevel);
     draw();
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [props]);
+  }, [visiblePeaks, normalizationLevel]);
   return <canvas ref={canvasRef} />;
 }
 
@@ -200,9 +210,14 @@ function loadPeaks(source: ReferenceWaveformSource): Promise<number[]> {
   return linkDesktopViewModel.generateWaveform(source);
 }
 
+function waveformNormalization(peaks: readonly number[]): number {
+  const sorted = [...peaks].sort((left, right) => left - right);
+  return Math.max(0.001, sorted[Math.floor(sorted.length * 0.96)] ?? 1);
+}
+
 function drawVisibleWaveform(
   canvas: HTMLCanvasElement,
-  props: { peaks: readonly number[]; scrollLeft: number; viewportWidth: number; contentWidth: number }
+  props: { peaks: readonly number[]; scrollLeft: number; viewportWidth: number; contentWidth: number; normalizationLevel: number }
 ): void {
   const bounds = canvas.getBoundingClientRect();
   const scale = window.devicePixelRatio || 1;
@@ -218,13 +233,11 @@ function drawVisibleWaveform(
   const visibleEnd = (props.scrollLeft + props.viewportWidth) / Math.max(1, props.contentWidth);
   const startIndex = Math.min(props.peaks.length, Math.max(0, Math.floor(visibleStart * props.peaks.length)));
   const endIndex = Math.min(props.peaks.length, Math.ceil(visibleEnd * props.peaks.length));
-  const sortedLevels = [...props.peaks].sort((left, right) => left - right);
-  const normalizationLevel = Math.max(0.001, sortedLevels[Math.floor(sortedLevels.length * 0.96)] ?? 1);
   context.beginPath();
   for (let index = startIndex; index < endIndex; index += 1) {
     const contentX = index / props.peaks.length * props.contentWidth;
     const x = (contentX - props.scrollLeft) / Math.max(1, props.viewportWidth) * canvas.width;
-    const normalizedPeak = Math.min(1, (props.peaks[index] ?? 0) / normalizationLevel);
+    const normalizedPeak = Math.min(1, (props.peaks[index] ?? 0) / props.normalizationLevel);
     const height = normalizedPeak * center * 0.88;
     context.moveTo(x, center - height);
     context.lineTo(x, center + height);
@@ -232,26 +245,16 @@ function drawVisibleWaveform(
   context.stroke();
 }
 
-function drawClippedWaveform(canvas: HTMLCanvasElement, props: {
-  peaks: readonly number[];
-  sourceDurationMs: number;
-  sourceOffsetMs: number;
-  clipDurationMs: number;
-}): void {
+function drawClippedWaveform(canvas: HTMLCanvasElement, visiblePeaks: readonly number[], normalizationLevel: number): void {
   const bounds = canvas.getBoundingClientRect();
   const scale = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.floor(bounds.width * scale));
+  canvas.width = Math.max(1, Math.min(4096, Math.floor(bounds.width * scale)));
   canvas.height = Math.max(1, Math.floor(bounds.height * scale));
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Canvas 2D 不可用');
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.strokeStyle = '#8be7d4';
   context.lineWidth = Math.max(1, scale);
-  const startIndex = Math.max(0, Math.floor(props.sourceOffsetMs / props.sourceDurationMs * props.peaks.length));
-  const endIndex = Math.min(props.peaks.length, Math.ceil((props.sourceOffsetMs + props.clipDurationMs) / props.sourceDurationMs * props.peaks.length));
-  const visiblePeaks = props.peaks.slice(startIndex, Math.max(startIndex + 1, endIndex));
-  const sortedLevels = [...visiblePeaks].sort((left, right) => left - right);
-  const normalizationLevel = Math.max(0.001, sortedLevels[Math.floor(sortedLevels.length * 0.96)] ?? 1);
   const center = canvas.height / 2;
   context.beginPath();
   for (let index = 0; index < visiblePeaks.length; index += 1) {

@@ -44,8 +44,8 @@ test('concurrent requests share work, independent jobs serialize and failures ne
   fail(new Error('invalid audio')); await failed;
   await expect(second).resolves.toEqual([0.5]);
   expect(cache.saveWaveformCache).toHaveBeenCalledExactlyOnceWith('show.tblink', 'two', [0.5]);
-  cache.loadWaveformCache.mockResolvedValue([0.25]);
-  await expect(service.ensure('show.tblink', 'cached.wav', 'cached', 1000)).resolves.toEqual([0.25]);
+  cache.loadWaveformCache.mockResolvedValue(Array.from({ length: 4800 }, () => 0.25));
+  await expect(service.ensure('show.tblink', 'cached.wav', 'cached', 1000)).resolves.toHaveLength(4800);
   expect(decode).toHaveBeenCalledTimes(2);
 });
 
@@ -60,7 +60,17 @@ test('real FFmpeg streams the first channel and reports invalid media', async ()
   for (let sample = 0; sample < 48000; sample += 1) { wav.writeInt16LE(8192, 44 + sample * 4); wav.writeInt16LE(-32768, 46 + sample * 4); }
   await writeFile(path, wav);
   const peaks = await decodeWaveform(path, 1000);
-  expect(peaks).toHaveLength(2400); expect(peaks.every((value) => Math.abs(value - 0.25) < 0.0001)).toBe(true);
+  expect(peaks).toHaveLength(4800); expect(peaks.every((value) => Math.abs(value - 0.25) < 0.0001)).toBe(true);
   const invalid = join(directory, 'invalid.wav'); await writeFile(invalid, 'invalid');
   await expect(decodeWaveform(invalid, 1000)).rejects.toThrow('波形解码失败');
+});
+
+test('coarse waveform cache is regenerated for precise editing', async () => {
+  const cache = { loadWaveformCache: vi.fn().mockResolvedValue(Array(2400).fill(0)), saveWaveformCache: vi.fn().mockResolvedValue(undefined) };
+  const detailed = Array.from({ length: 30000 }, (_, index) => index === 12001 ? 1 : 0);
+  const decode = vi.fn().mockResolvedValue(detailed);
+  const result = await new WaveformService(cache, decode).ensure('show.tblink', 'song.wav', 'song', 60000);
+  expect(result[12001]).toBe(1);
+  expect(decode).toHaveBeenCalledExactlyOnceWith('song.wav', 60000);
+  expect(cache.saveWaveformCache).toHaveBeenCalledExactlyOnceWith('show.tblink', 'song', detailed);
 });

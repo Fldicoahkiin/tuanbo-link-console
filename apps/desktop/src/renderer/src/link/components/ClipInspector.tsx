@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import type { LinkMediaAsset, ReferenceCanvasTransform, ReferenceMediaClip } from '@tb/schema';
 import { Crosshair, Maximize, RotateCcw, Trash2 } from 'lucide-react';
@@ -25,7 +26,7 @@ export function ClipInspector(props: {
   const sourceHeight = props.asset.height ?? REFERENCE_CANVAS_HEIGHT;
   const patch = (values: Partial<ReferenceCanvasTransform>): void => props.onTransform({ ...transform, ...values });
   return <div className="inspector-body clip-inspector">
-    <div className="inspector-hero" title={`${props.clip.label} · ${formatBytes(props.asset.byteLength)}`}><span><strong>{props.clip.label}</strong><small>{props.asset.kind === 'video' ? '视频' : props.asset.kind === 'image' ? '图片' : '音频'}</small></span><button className="icon-button danger-text" aria-label="从时间线移除" title="从时间线移除" onClick={props.onRemove}><Trash2 /></button></div>
+    <div className="inspector-hero" title={`${props.clip.label} · ${formatBytes(props.asset.byteLength)}`}><span><strong>{props.clip.label}</strong><small>{props.asset.kind === 'video' ? '视频' : props.asset.kind === 'image' ? '图片' : '音频'}</small></span><Button className="icon-button danger-text" aria-label="从时间线移除" title="从时间线移除" onClick={props.onRemove}><Trash2 /></Button></div>
     <div className="property-metadata">
       {isVisual ? <span className="visual-source-summary">原始尺寸 {sourceWidth} × {sourceHeight}</span> : null}
       <span>开始 {formatTimecode(props.clip.startTimecode)}</span>

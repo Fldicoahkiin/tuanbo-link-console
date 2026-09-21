@@ -7,8 +7,24 @@ import { useLightingClipboardStore } from '../stores/lighting-clipboard-store';
 import { LightingMasterCurve } from './LightingMasterCurve';
 import { masterCurveY } from './lighting-master-curve';
 
+function groupStackedEvents(tracks: LightingTrack[], map: LightingTempoMap, pixelsPerSecond: number): Map<string, LightingEvent[]> {
+  const result = new Map<string, LightingEvent[]>();
+  for (const track of tracks) for (const clip of track.clips) {
+    const groups = new Map<number, LightingEvent[]>();
+    let anchor = -Infinity;
+    for (const event of [...clip.events].sort((a, b) => a.at - b.at)) {
+      const pixel = lightingEventTime(clip, event, map) / 1000 * pixelsPerSecond;
+      if (pixel - anchor >= 16) anchor = pixel;
+      const group = groups.get(anchor) ?? []; group.push(event); groups.set(anchor, group);
+    }
+    for (const group of groups.values()) for (const event of group) result.set(event.id, group);
+  }
+  return result;
+}
+
 export type LightingTimelineProps = {
-  snapTime?: (milliseconds: number) => number;
+  onAuditionEvent?: (eventId: string) => void;
+  snapTime?: (milliseconds: number, excludedEventId?: string) => number;
   document: LightingDocument;
   selectedClipId: string | null;
   selectedEventId?: string | null;
@@ -65,16 +81,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
   const menuTrack = props.document.tracks.find((entry) => entry.id === context?.trackId);
   const menuClip = menuTrack?.clips.find((entry) => entry.id === context?.clipId);
   const menuEvent = menuClip?.events.find((entry) => entry.id === context?.eventId);
-  const stackedEvents = useMemo(() => {
-    const result = new Map<string, LightingEvent[]>();
-    for (const track of props.document.tracks) for (const clip of track.clips) {
-      const groups = new Map<number, LightingEvent[]>();
-      let anchor = -Infinity;
-      for (const event of [...clip.events].sort((a, b) => a.at - b.at)) { const pixel = lightingEventTime(clip, event, map) / 1000 * props.pixelsPerSecond; if (pixel - anchor >= 16) anchor = pixel; const group = groups.get(anchor) ?? []; group.push(event); groups.set(anchor, group); }
-      for (const group of groups.values()) for (const event of group) result.set(event.id, group);
-    }
-    return result;
-  }, [props.document.tracks, props.pixelsPerSecond, map]);
+  const stackedEvents = useMemo(() => groupStackedEvents(props.document.tracks, map, props.pixelsPerSecond), [props.document.tracks, props.pixelsPerSecond, map]);
   const selectedStack = props.selectedEventId ? stackedEvents.get(props.selectedEventId) : undefined;
   const selectedIds = new Set(props.selectedEventIds ?? (props.selectedEventId ? [props.selectedEventId] : []));
   const menuIds = menuEvent && menuClip?.id === props.selectedClipId && selectedIds.has(menuEvent.id) ? selectedIds : new Set(menuEvent ? [menuEvent.id] : []);
@@ -88,6 +95,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
     if (additive && ids.has(event.id)) ids.delete(event.id); else ids.add(event.id);
     const primary = ids.has(event.id) ? event.id : [...ids].at(-1);
     if (primary) props.onSelectEvent?.(track.id, clip.id, primary, [...ids]); else props.onSelect(track.id, clip.id);
+    if (!additive) props.onAuditionEvent?.(event.id);
     return [...ids];
   };
   const movedAt = (clip: LightingClip, event: LightingEvent, deltaMs: number): number => movedLightingTime(clip, event, deltaMs, map);
@@ -145,7 +153,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
         return;
       }
       if (track.locked) return;
-      if (event.code === 'KeyM') { event.preventDefault(); add(track, clip, props.getPlaybackPosition?.() ?? props.playheadMs); }
+      if (!document.querySelector('.lighting-workbench') && event.code === 'KeyM') { event.preventDefault(); add(track, clip, props.getPlaybackPosition?.() ?? props.playheadMs); }
       if ((event.code === 'Delete' || event.code === 'Backspace') && props.selectedEventId) { event.preventDefault(); changeClip(track, { ...clip, events: clip.events.filter((entry) => !selectedIds.has(entry.id)) }, '删除灯光点'); props.onSelect(track.id, clip.id); }
     };
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
@@ -192,7 +200,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
                 setDrag({ ...drag, deltaMs, at: movedAt(clip, drag.event, deltaMs) });
               }}
               onPointerUp={(input) => { if (!drag || drag.event.id !== event.id) return; input.currentTarget.releasePointerCapture(input.pointerId); if (drag.deltaMs !== 0 || drag.deltaLevel !== 0) { changeClip(track, { ...clip, events: clip.events.map((entry) => movedEvent(clip, entry)) }, drag.valueDrag ? '调整主推杆值' : '移动灯光点'); if (!drag.valueDrag) props.onSeek(lightingEventTime(clip, { ...stored, at: drag.at }, map)); } else if (!input.ctrlKey && !input.metaKey && !input.shiftKey) select(track, clip, stored, false); setDrag(null); }} onPointerCancel={() => setDrag(null)}>
-              <i />{event.kind === 'ma2-fader' ? <b className="lighting-master-handle" style={{ top: masterCurveY(event.level) - 8 }} /> : null}<span className="lighting-point-label">{event.kind === 'ma2' ? `${event.action === 'goto' ? `${event.cue} ` : ''}${event.label}` : event.kind === 'ma2-fader' ? `Master ${Number((event.level * 100).toFixed(6))}%` : event.kind === 'note' ? String(event.note) : event.kind === 'point' || event.kind === 'cc' ? String(event.value) : '事件'}</span>{stack.length > 1 ? <small title="此处有多个灯光点，放大或右键选择">+{stack.length - 1}</small> : null}
+              <i />{event.kind === 'ma2-fader' ? <b className="lighting-master-handle" style={{ top: masterCurveY(event.level) - 8 }} /> : null}<span className="lighting-point-label">{event.kind === 'ma2' ? event.cue ?? String(clip.events.findIndex(entry => entry.id === event.id) + 1) : event.kind === 'ma2-fader' ? `Master ${Number((event.level * 100).toFixed(6))}%` : event.kind === 'note' ? String(event.note) : event.kind === 'point' || event.kind === 'cc' ? String(event.value) : '事件'}</span>{stack.length > 1 ? <small title="此处有多个灯光点，放大或右键选择">+{stack.length - 1}</small> : null}
             </button>;
           })}
         </div>;

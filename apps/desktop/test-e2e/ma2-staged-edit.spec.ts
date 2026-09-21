@@ -1,0 +1,55 @@
+import { test, expect, _electron as electron } from '@playwright/test';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { importMa2TimecodeCommand } from '@tb/core/link';
+import { convertMa2Timecode } from '../src/main/link/ma2-timecode-conversion';
+
+test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提交列表', async ({}, info) => {
+  const xml = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-timecode-fractional-3.3.xml'), 'utf8');
+  const sequence = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-sequence-fractional-3.3.xml'), 'utf8');
+  const wav = Buffer.alloc(44 + 8000 * 60, 128);
+  wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
+  wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+  await writeFile(info.outputPath('song.wav'), wav);
+  const project = parseLinkProject({ ...createEmptyLinkProject('安全暂存桌面验收'), playbackSource: 'p1', rundown: [{ id: 'song', title: '暂存歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'song.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 60000 } }] });
+  const file = info.outputPath('staged.tblink');
+  await writeFile(file, JSON.stringify(importMa2TimecodeCommand('song', convertMa2Timecode(xml, [sequence], 9902)).execute(project)));
+  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
+  try {
+    const page = await app.firstWindow(); const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
+    await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
+    await expect(page.locator('[data-waveform-engine="wavesurfer"][data-ready="true"]').first()).toBeVisible();
+    await page.getByRole('button', { name: '播放时间线', exact: true }).click();
+    await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
+    await page.locator('.waveform-cue-point').first().dblclick();
+    await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
+    await page.getByLabel('时间（秒）', { exact: true }).fill('2');
+    await page.getByRole('button', { name: '保存卡点', exact: true }).click();
+    await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
+    const pending = page.getByRole('region', { name: 'MA2 待提交变更' });
+    await expect(pending).toContainText('1 处变更');
+    await pending.getByText('查看待提交变更', { exact: true }).click();
+    await expect(pending).toContainText('2.000 秒');
+    await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect(pending).toHaveCount(0);
+    await page.getByRole('button', { name: '重做', exact: true }).click(); await expect(pending).toContainText('1 处变更');
+    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks[0]?.clips[0]?.events[0]?.at).toBe(2000);
+    await expect(pending.getByRole('button', { name: '停止并核对提交' })).toBeDisabled();
+    await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
+    await expect(pending).toContainText('1 处变更');
+    await expect(pending.getByRole('button', { name: '核对并提交' })).toBeDisabled();
+    await pending.getByText('查看待提交变更', { exact: true }).click();
+    await page.screenshot({ path: info.outputPath('pending.png') });
+    await page.reload();
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
+    await expect(pending).toContainText('1 处变更');
+    expect(errors).toEqual([]);
+  } finally { await app.close(); }
+});

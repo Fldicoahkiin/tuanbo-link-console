@@ -1,0 +1,122 @@
+/* Original workbench: vertical tools, material library and Cue composer. */
+.lighting-workbench .lighting-effect-dock {
+  --wb-text: var(--text-primary); --wb-secondary: var(--text-secondary); --wb-line: var(--separator); --wb-control: var(--surface-raised); --wb-accent: var(--accent-fill);
+  grid-row: 1; grid-column: 1; display: grid; grid-template-columns: 175px minmax(0, 1fr) 280px; grid-template-rows: minmax(0, 1fr); position: relative; min-width: 0; min-height: 0; overflow: hidden; border: 0; border-radius: 0; background: var(--page-background); color: var(--text-primary);
+}
+.lighting-effect-dock button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 6px 10px; border: 1px solid var(--separator); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-primary); font: inherit; font-size: var(--text-control); cursor: pointer; }
+.lighting-effect-dock button:disabled { opacity: .45; cursor: not-allowed; }
+.lighting-effect-dock svg { width: 16px; height: 16px; flex-shrink: 0; }
+.lighting-effect-dock > .effect-library-actions { grid-row: 1; grid-column: 1; display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 12px 10px; min-height: 0; overflow-y: auto; background: var(--surface); }
+.lighting-effect-dock .effect-library-actions button { background: transparent; border-color: transparent; white-space: nowrap; justify-content: flex-start; flex-shrink: 0; }
+.lighting-effect-dock .effect-library-actions button[aria-current=page] { color: var(--on-accent); background: var(--accent-fill); }
+.effect-library-actions .lighting-header-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--separator); }
+.effect-library-actions .lighting-header-actions > span { display: none; }
+.effect-library-actions .lighting-output-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0; font-size: var(--text-caption); color: var(--text-secondary); }
+.effect-library-actions > .lighting-output-choice { order: 0; display: grid; width: 100%; padding: 8px; }
+.effect-library-actions .lighting-output-choice select { width: 100%; max-width: 100%; min-height: 28px; padding: 4px 8px; border: 1px solid var(--control-border); border-radius: 5px; background: var(--surface); color: var(--text-primary); }
+.effect-library-actions .lighting-output-choice small { display: none; }
+.lighting-header-actions > .lighting-output-choice { border: 0; padding: 8px; }
+.cue-material-browser { grid-row: 1; grid-column: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 16px; gap: 14px; }
+.effect-library-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; flex-shrink: 0; }
+.effect-library-filter .effect-search { flex: 0 1 190px; min-width: 0; }
+.effect-search { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--separator); border-radius: var(--radius-control); background: var(--surface-raised); }
+.effect-search input { min-width: 0; width: 100%; border: 0; padding: 0; color: var(--text-primary); background: transparent; font: inherit; }
+.effect-library-filter nav { display: flex; flex-wrap: wrap; gap: 4px; }
+.effect-library-filter nav button { min-height: 28px; padding: 4px 8px; border: 0; background: transparent; color: var(--text-secondary); font-size: var(--text-caption); }
+.effect-library-filter nav button[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); }
+.cue-material-browser .lighting-effect-cards { display: flex; align-items: flex-start; align-content: flex-start; flex-wrap: wrap; flex: 1; min-height: 0; height: auto; overflow: auto; gap: 8px; }
+.cue-material-browser .lighting-effect-card { flex: 1 0 180px; max-width: 280px; width: auto; min-width: 0; min-height: 60px; background: var(--surface-raised); border: 1px solid var(--separator); border-radius: 8px; padding: 4px; }
+.lighting-effect-card > button { min-width: 0; }
+.lighting-effect-card > button:has(strong) { display: flex; flex-direction: column; align-items: flex-start; flex: 1; border: 0; background: transparent; padding: 6px; overflow: hidden; }
+.lighting-effect-card strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.lighting-effect-dock .effect-settings { padding: 4px; min-width: 24px; min-height: 28px; border: 0; background: transparent; color: var(--text-secondary); }
+.lighting-effect-dock .effect-settings[aria-pressed=true] { color: var(--accent); }
+.lighting-effect-dock .effect-empty { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; width: 100%; gap: 8px; padding: 8px 0; color: var(--text-secondary); font-size: var(--text-caption); white-space: normal; }
+.effect-empty strong { font-size: var(--text-body); color: var(--text-primary); }
+.cue-composer { display: flex; flex-direction: column; grid-column: 3; grid-row: 1; position: relative; min-width: 0; min-height: 0; overflow: auto; gap: 12px; padding: 16px; border-left: 1px solid var(--separator); background: transparent; }
+.cue-composer header { padding-right: 38px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cue-composer header strong { font-size: var(--text-body); font-weight: 600; }
+.cue-composer input { width: 100%; min-width: 0; padding: 9px 0; border: 0; border-bottom: 1px solid var(--control-border); border-radius: 0; color: var(--text-primary); background: transparent; font-size: var(--text-control); }
+.cue-composer > small { font-size: var(--text-caption); color: var(--text-secondary); }
+.cue-composer .cue-save { position: absolute; top: 16px; right: 16px; width: 32px; min-height: 32px; padding: 6px; background: transparent; color: var(--accent); border: 0; }
+.cue-composer .cue-save > span { display: none; }
+.lighting-effect-dock[data-details=true] > .cue-material-browser { display: none; }
+.lighting-effect-dock[data-details=true] > .cue-composer { grid-column: 2 / -1; border: 0; }
+.lighting-effect-dock[data-details=true] .cue-ingredients { display: flex; flex-wrap: wrap; gap: 12px; align-content: start; }
+.lighting-effect-dock[data-details=true] .cue-ingredients > div { width: 220px; padding: 12px; border: 1px solid var(--separator); border-radius: 8px; }
+.lighting-effect-dock[data-panel=true] > .cue-material-browser, .lighting-effect-dock[data-panel=true] > .cue-composer { display: none; }
+.lighting-effect-dock > .effect-binding-backdrop, .lighting-effect-dock > .effect-inline-panel { position: static; grid-column: 2 / -1; grid-row: 1; padding: 20px; min-height: 0; overflow: auto; display: block; background: var(--surface); }
+.lighting-effect-dock .effect-binding-form, .lighting-effect-dock .effect-import-dialog, .lighting-effect-dock .lighting-tools-dialog { width: 100%; max-width: 840px; max-height: none; margin: 0; padding: 0; border: 0; box-shadow: none; border-radius: 0; background: transparent; }
+.lighting-effect-dock .effect-binding-form { display: flex; flex-direction: column; gap: 12px; }
+.lighting-effect-dock .effect-binding-form > label { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 16px; margin: 0; font-size: var(--text-control); }
+.lighting-effect-dock :is(.effect-binding-form, .effect-import-dialog, .effect-inline-panel) :is(input:not([type=checkbox]), select, textarea) { min-width: 0; min-height: 34px; padding: 6px 10px; border: 1px solid var(--control-border); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-primary); font: inherit; }
+.lighting-effect-dock .effect-binding-form footer { display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--separator); padding-top: 12px; margin: 0; }
+.lighting-effect-dock .effect-binding-form footer button:last-child { background: var(--accent-fill); color: var(--on-accent); }
+.lighting-effect-dock .preference-row input { flex: 1; min-width: 0; }
+.lighting-effect-dock .row-actions button, .lighting-effect-dock button.row-icon { min-width: 28px; min-height: 28px; padding: 4px; background: transparent; border: 0; }
+.lighting-effect-dock .lighting-file-operation { display: flex; align-items: center; justify-content: flex-start; gap: 16px; width: 100%; padding: 16px; border: 0; border-bottom: 1px solid var(--separator); border-radius: 0; text-align: left; background: transparent; }
+.lighting-effect-dock [role=alert] { color: var(--danger); font-size: var(--text-control); }
+@media (hover: hover) and (pointer: fine) { .lighting-effect-dock button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); } }
+@media (max-width: 1250px) {
+  .lighting-workbench .lighting-effect-dock { grid-template-columns: 160px minmax(0, 1fr) 230px; }
+  .lighting-effect-dock > .effect-library-actions { padding: 8px 10px; gap: 4px; }
+  .lighting-effect-dock .effect-library-actions button { padding-inline: 7px; font-size: var(--text-caption); }
+  .cue-material-browser, .cue-composer { padding: 12px; gap: 8px; }
+  .effect-library-filter { gap: 6px; }
+}
+@media (max-width: 980px) {
+  .lighting-workbench .lighting-effect-dock { grid-template-columns: 145px minmax(0, 1fr); grid-template-rows: auto auto; overflow: auto; }
+  .lighting-effect-dock > .effect-library-actions { grid-row: 1 / 3; }
+  .cue-material-browser { min-height: 220px; }
+  .cue-composer { grid-column: 2; grid-row: 2; min-height: 240px; border-left: 0; border-top: 1px solid var(--separator); }
+  .lighting-effect-dock[data-details=true] > .cue-composer { grid-row: 1 / 3; }
+}
+
+.lighting-workbench .workbench-page-title { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-shrink: 0; }
+.lighting-workbench .workbench-page-title h3,
+.lighting-workbench .effect-binding-form > h3,
+.lighting-workbench .effect-import-dialog h3,
+.lighting-workbench .effect-inline-panel h2 { font-size: 20px; font-weight: 600; line-height: 1.3; margin: 0 0 6px; letter-spacing: -.35px; }
+.lighting-workbench .workbench-page-title p,
+.lighting-workbench .effect-binding-form > p,
+.lighting-workbench .effect-inline-panel header p { color: var(--wb-secondary); font-size: var(--text-caption); line-height: 1.6; margin: 0; }
+.lighting-workbench .library-count { color: var(--wb-secondary); font-size: var(--text-caption); white-space: nowrap; }
+.lighting-workbench .lighting-effect-card strong { font-weight: 500; font-size: var(--text-control); }
+.lighting-workbench .lighting-effect-card small { color: var(--wb-secondary); font-size: var(--text-caption); }
+.lighting-workbench .lighting-effect-card.is-selected { border-color: var(--accent); background: var(--accent-soft); }
+.lighting-workbench .cue-ingredients > div { padding: 12px 0; border-bottom: 1px solid var(--wb-line); }
+.lighting-workbench .cue-ingredients strong { font-weight: 500; font-size: var(--text-control); }
+.lighting-workbench .cue-ingredients small { font-size: var(--text-caption); color: var(--wb-secondary); }
+.lighting-workbench .effect-category-options { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 12px; }
+.lighting-workbench .effect-category-options legend { font-size: var(--text-caption); color: var(--wb-secondary); margin-bottom: 10px; }
+.lighting-workbench .effect-category-options label { display: flex; gap: 7px; align-items: center; font-size: var(--text-caption); }
+.lighting-workbench input[type=checkbox] { accent-color: var(--wb-accent); }
+.lighting-workbench .preference-section { display: flex; flex-direction: column; gap: 8px; }
+.lighting-workbench .preference-section h4 { font-size: var(--text-caption); font-weight: 500; color: var(--wb-secondary); margin: 0 0 2px; }
+.lighting-workbench .preference-section h4 small { padding-left: 6px; }
+.lighting-workbench .preference-rows { border: 1px solid var(--wb-line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.lighting-workbench .preference-row { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-bottom: 1px solid var(--wb-line); }
+.lighting-workbench .preference-row:last-child { border: 0; }
+.lighting-workbench .row-actions { display: flex; gap: 3px; }
+.lighting-workbench .row-actions svg,.lighting-workbench .row-icon svg { width: 14px; height: 14px; }
+.lighting-workbench .preference-hint,.lighting-workbench .preference-empty { font-size: var(--text-caption); color: var(--wb-secondary); margin: 2px 0; line-height: 1.6; }
+.lighting-workbench .preference-empty { padding: 16px; }
+.lighting-workbench .effect-inline-panel .settings-detail > header { margin: 0 0 24px; padding: 0 0 16px; border-bottom: 1px solid var(--wb-line); }
+.lighting-workbench .effect-inline-panel :is(fieldset,.settings-lighting,.lighting-settings) { border: 0; padding: 0; margin: 0; min-width: 0; }
+.lighting-workbench .effect-import-dialog { gap: 16px; }
+.lighting-workbench .effect-import-dialog > header { padding-bottom: 16px; border-bottom: 1px solid var(--wb-line); }
+.lighting-workbench .effect-import-row { border-color: var(--wb-line); padding: 10px 0; }
+.lighting-workbench .effect-inline-panel details { margin: 12px 0; padding: 12px 0; border: 0; border-top: 1px solid var(--wb-line); background: transparent; }
+.lighting-workbench .effect-inline-panel summary { font-size: var(--text-control); font-weight: 500; cursor: pointer; }
+.lighting-workbench .effect-inline-panel .lighting-tools { display: flex; flex-direction: column; gap: 0; }
+.lighting-workbench .lighting-file-operation > svg:first-child { width: 24px; height: 24px; color: var(--accent); stroke-width: 1.5; }
+.lighting-workbench .lighting-file-operation > svg:last-child { width: 16px; height: 16px; color: var(--wb-secondary); }
+.lighting-workbench .lighting-file-operation > span { display: flex; flex: 1; flex-direction: column; gap: 5px; }
+.lighting-workbench .lighting-file-operation strong { font-size: var(--text-body); font-weight: 500; }
+.lighting-workbench .lighting-file-operation small { font-size: var(--text-caption); color: var(--wb-secondary); font-weight: 400; }
+.lighting-workbench .lighting-point-page { width: 100%; max-width: 840px; }
+
+.lighting-workbench .lighting-point-page .lighting-inspector { height: auto; overflow: visible; margin-top: 0; padding: 0; background: transparent; border: 0; }
+
+.lighting-output-choice { display: grid; gap: 6px; padding: 8px; font-size: var(--text-caption); color: var(--text-muted); }
+.lighting-output-choice select { width: 100%; min-width: 0; font: inherit; }

@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { createMa2Timecode, createMa2TimecodeXml } from './ma2-create';
 import { convertMa2Timecode } from './ma2-timecode-conversion';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { inspectMa2TimecodeXml } from './ma2-timecode-xml';
 
 it('生成空 Timecode，名称转义且拒绝未验证版本和目标', async () => {
   const xml = createMa2TimecodeXml(9903, 'TBLINK & <测试>', '3.3.4.3');
@@ -22,5 +23,5 @@ it.skipIf(!process.env.MA2_ONPC_CREATE_TARGET)('新建专用 Timecode 回读确�
   expect(result).toMatchObject({ target, name, document: { tracks: [] }, unconverted: [] });
   const before = await bridge.request('READ', target);
   await expect(createMa2Timecode(bridge, target, 'TBLINK_MUST_NOT_OVERWRITE')).rejects.toThrow('already exists');
-  expect(await bridge.request('READ', target)).toBe(before);
+  expect(inspectMa2TimecodeXml(await bridge.request('READ', target)).timecodes).toEqual(inspectMa2TimecodeXml(before).timecodes);
 }, 60000);

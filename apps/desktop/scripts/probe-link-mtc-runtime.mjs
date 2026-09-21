@@ -44,15 +44,15 @@ try {
     await output.open()
 
     const frameRate = 30
-    const messageCount = frameRate * 8 * 20
+    const messageCount = frameRate * 4 * 20
     const startedAt = performance.now() + 100
     for (let index = 0; index < messageCount; index += 1) {
-      const absoluteFrame = Math.floor(index / 8)
+      const absoluteFrame = Math.floor(index / 8) * 2
       const piece = index % 8
       const frames = absoluteFrame % frameRate
       const seconds = Math.floor(absoluteFrame / frameRate) % 60
       const values = [frames & 0x0f, (frames >> 4) & 0x01, seconds & 0x0f, (seconds >> 4) & 0x03, 0, 0, 0, 0x06]
-      output.send([0xf1, (piece << 4) | values[piece]], startedAt + index * (1000 / (frameRate * 8)))
+      output.send([0xf1, (piece << 4) | values[piece]], startedAt + index * (1000 / (frameRate * 4)))
     }
 
     await new Promise((resolve) => setTimeout(resolve, 4_000))

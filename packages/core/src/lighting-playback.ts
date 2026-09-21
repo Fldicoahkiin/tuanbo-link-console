@@ -8,11 +8,12 @@ export function compileLightingPackets(document: LightingDocument, ma2DeviceId =
   const map = new LightingTempoMap(document.tempos);
   const solo = document.tracks.some((track) => track.solo && !track.muted);
   const packets: LightingPacket[] = [];
-  for (const track of document.tracks) {
+  for (const sourceTrack of document.tracks) {
+    // An empty per-track selection explicitly means the configured default lighting output.
+    const track = sourceTrack.portProfileId ? sourceTrack : { ...sourceTrack, portProfileId: 'lighting-events-output' };
     if (track.muted || (solo && !track.solo)) continue;
     for (const clip of track.clips) {
       if (clip.muted || !clip.events.length) continue;
-      if (!track.portProfileId) throw new Error(`请设置灯光轨道 MIDI 输出：${track.name}`);
       for (const event of clip.events) appendEvent(packets, track, clip, event, map, ma2DeviceId);
       const points = clip.events.filter((event) => event.kind === 'point').sort((a, b) => a.at - b.at);
       for (let index = 0; index + 1 < points.length; index += 1) {

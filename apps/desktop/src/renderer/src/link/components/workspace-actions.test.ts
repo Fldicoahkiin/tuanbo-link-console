@@ -30,6 +30,16 @@ function fixture(locked = false, withCue = false, withClip = false) {
 }
 
 describe('拖入 OBS 场景', () => {
+  it('30 fps 非整毫秒落点生成合法整数音频位置，短音轨不使用视频全长', async () => {
+    const { actions } = fixture();
+    vi.spyOn(linkDesktopViewModel, 'importReferenceAudio').mockResolvedValueOnce({ ...source, durationMs: 1250 });
+    actions.addAssetClip('video', 1033.3333333333);
+    await vi.waitFor(() => expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio).toBeDefined());
+    const item = useDocumentStore.getState().project!.rundown[0]!;
+    expect(item.referenceAudio?.timeline?.tracks?.[0]?.segments[0]).toMatchObject({ startMs: 1033, durationMs: 1250 });
+    expect(item.referenceMediaClips[0]?.durationMs).toBe(12000);
+    expect(item.referenceMediaClips[0]?.startTimecode.frames).toBe(1);
+  });
   it('已有音乐时追加独立视频音轨，并关闭视频重复出声', async () => {
     fixture();
     useDocumentStore.getState().execute(setReferenceAudioCommand('song', source));

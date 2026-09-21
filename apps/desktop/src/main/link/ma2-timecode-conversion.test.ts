@@ -98,7 +98,7 @@ describe('MA2 本机实测小数 Cue 引用转换', () => {
     expect(() => inspectMa2SequenceXml(sequence.replace('sub_number="250"', 'sub_number="1250"'))).toThrow('编号无效');
     expect(() => inspectMa2SequenceXml(sequence.replace('index="2"', 'index="1"'))).toThrow('重复');
     expect(() => convertMa2Timecode(timecode.replace('30 FPS', '25 FPS'), [sequence], 9902)).toThrow('30 FPS');
-    expect(() => convertMa2Timecode(timecode.replace('slot="TC Slot 1"', 'slot="TC Slot 1" offset="30"'), [sequence], 9902)).toThrow('偏移');
+    expect(() => convertMa2Timecode(timecode.replace('slot="TC Slot 1"', 'slot="TC Slot 1" offset="-30"'), [sequence], 9902)).toThrow('偏移');
     expect(() => convertMa2Timecode(timecode, [sequence], 9901)).toThrow('没有绑定');
   });
 });

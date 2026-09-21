@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 type ResizeTarget = 'resource' | 'inspector' | 'timeline';
 
@@ -21,10 +21,12 @@ const DEFAULT_LAYOUT: WorkspaceLayout = { resourceWidth: 390, inspectorWidth: 33
 export function useWorkspaceLayout(notify: (message: string, tone?: 'info' | 'error') => void): {
   style: WorkspaceLayoutStyle;
   beginResize: (target: ResizeTarget, event: ReactPointerEvent<HTMLButtonElement>) => void;
+  resizeWithKeyboard: (target: ResizeTarget, event: ReactKeyboardEvent<HTMLButtonElement>) => void;
 } {
   const [initial] = useState(readLayout);
   const [layout, setLayout] = useState<WorkspaceLayout>(initial.layout);
-  const [previewInspectorWidth, setPreviewInspectorWidth] = useState<number | null>(null);
+  const dragCleanup = useRef<(() => void) | null>(null);
+  useEffect(() => () => dragCleanup.current?.(), []);
   const writeFailureReported = useRef(false);
   useEffect(() => {
     if (initial.error) notify(`工作区布局恢复失败：${initial.error}；已使用默认布局`, 'error');
@@ -43,29 +45,38 @@ export function useWorkspaceLayout(notify: (message: string, tone?: 'info' | 'er
 
   const beginResize = (target: ResizeTarget, event: ReactPointerEvent<HTMLButtonElement>): void => {
     event.preventDefault();
+    if (event.button !== 0) return;
+    dragCleanup.current?.();
     const startX = event.clientX;
     const startY = event.clientY;
     const start = layout;
     const inspectorStartWidth = event.currentTarget.nextElementSibling?.getBoundingClientRect().width ?? start.inspectorWidth;
+    const timelineStartHeight = event.currentTarget.nextElementSibling?.getBoundingClientRect().height ?? start.timelineHeight;
+    const limits = resizeLimits(target, event.currentTarget);
     const onMove = (moveEvent: PointerEvent): void => {
       if (target === 'resource') {
-        setLayout((current) => ({ ...current, resourceWidth: clamp(start.resourceWidth + moveEvent.clientX - startX, 280, 560) }));
+        setLayout((current) => ({ ...current, resourceWidth: clamp(start.resourceWidth + moveEvent.clientX - startX, ...limits) }));
       } else if (target === 'inspector') {
-        const width = clamp(inspectorStartWidth - moveEvent.clientX + startX, 260, 700);
-        setPreviewInspectorWidth(width);
-        setLayout((current) => ({ ...current, inspectorWidth: Math.min(480, width) }));
+        const width = clamp(inspectorStartWidth - moveEvent.clientX + startX, ...limits);
+        setLayout((current) => ({ ...current, inspectorWidth: width }));
       } else {
-        setLayout((current) => ({ ...current, timelineHeight: clamp(start.timelineHeight - moveEvent.clientY + startY, 280, 620) }));
+        setLayout((current) => ({ ...current, timelineHeight: clamp(timelineStartHeight - moveEvent.clientY + startY, ...limits) }));
       }
     };
     const onUp = (): void => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('blur', onUp);
       document.body.classList.remove('is-resizing-workspace');
+      dragCleanup.current = null;
     };
     document.body.classList.add('is-resizing-workspace');
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    window.addEventListener('blur', onUp);
+    dragCleanup.current = onUp;
   };
 
   return {
@@ -73,9 +84,20 @@ export function useWorkspaceLayout(notify: (message: string, tone?: 'info' | 'er
       '--resource-width': `${layout.resourceWidth}px`,
       '--inspector-width': `${layout.inspectorWidth}px`,
       '--timeline-height': `${layout.timelineHeight}px`,
-      '--preview-inspector-width': previewInspectorWidth === null ? '50%' : `${previewInspectorWidth}px`
+      '--preview-inspector-width': `${layout.inspectorWidth}px`
     },
-    beginResize
+    beginResize,
+    resizeWithKeyboard: (target, event) => {
+      const keys = target === 'timeline' ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight'];
+      if (!keys.includes(event.key)) return;
+      event.preventDefault();
+      const delta = event.key === keys[0] ? 20 : -20;
+      const limits = resizeLimits(target, event.currentTarget);
+      setLayout(current => target === 'timeline'
+        ? { ...current, timelineHeight: clamp(current.timelineHeight + delta, ...limits) }
+        : target === 'inspector' ? { ...current, inspectorWidth: clamp(current.inspectorWidth + delta, ...limits) }
+          : { ...current, resourceWidth: clamp(current.resourceWidth - delta, ...limits) });
+    }
   };
 }
 
@@ -89,9 +111,9 @@ function readLayout(): { layout: WorkspaceLayout; error: string | null } {
     }
     return {
       layout: {
-        resourceWidth: clamp(parsed.resourceWidth, 280, 560),
-        inspectorWidth: clamp(parsed.inspectorWidth, 260, 480),
-        timelineHeight: clamp(parsed.timelineHeight, 280, 620)
+        resourceWidth: Math.max(160, parsed.resourceWidth),
+        inspectorWidth: Math.max(180, parsed.inspectorWidth),
+        timelineHeight: Math.max(140, parsed.timelineHeight)
       },
       error: null
     };
@@ -102,6 +124,13 @@ function readLayout(): { layout: WorkspaceLayout; error: string | null } {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function resizeLimits(target: ResizeTarget, element: HTMLButtonElement): [number, number] {
+  const bounds = element.parentElement!.getBoundingClientRect();
+  const minimum = target === 'timeline' ? 140 : target === 'inspector' ? 180 : 160;
+  const maximum = target === 'timeline' ? bounds.height - 108 : bounds.width - 168;
+  return [minimum, Math.max(minimum, maximum)];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

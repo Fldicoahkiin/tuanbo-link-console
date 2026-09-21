@@ -10,6 +10,7 @@ import './link/lighting.css';
 import './link/properties.css';
 import './link/device-connections.css';
 import './link/timeline-editing.css';
+import './link/interface.css';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Renderer root element is missing');

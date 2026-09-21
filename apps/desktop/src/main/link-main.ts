@@ -1,9 +1,22 @@
+import { ibtExecutable } from './link/ibt-beat-service';
+import { LicenseService } from './link/license-service';
+import { writeFileAtomically } from './link/atomic-file';
+import { readLicenseMachineCode } from './link/license-machine';
+import licensePublicKeys from './link/license-public-keys.json';
+import { licenseRequestSchema } from '@tb/schema';
 import { installObsLiveBridge } from './link/obs-live-install';
+import { existsSync } from 'node:fs';
+import { elevateObsPluginInstall } from './link/obs-plugin-elevation';
+import { ObsBridgeSetup } from './link/obs-bridge-setup';
+import { waitForObsEndpoint } from './link/obs-startup';
 import { obsLiveEditSchema } from '@tb/schema';
 import { ObsLivePreview } from './link/obs-live-preview';
 import { ObsNativeSeek } from './link/obs-native-seek';
 import { obsSourceCreateSchema, obsSourceNameSchema, obsSourceApplySchema, ma2BridgeRequestSchema, ma2ReadRequestSchema, ma2CompareRequestSchema, ma2ApplyRequestSchema, ma2CreateRequestSchema } from '@tb/schema';
 import { createMa2Timecode } from './link/ma2-create';
+import { ma2CatalogRequestSchema } from '@tb/schema';
+import { readMa2Catalog } from './link/ma2-catalog';
+import { readMa2EffectLibrary } from './link/ma2-effect-library';
 import { ma2ExecutorReadRequestSchema } from '@tb/schema';
 import { readMa2Executor } from './link/ma2-executor-read';
 import { Ma2Connections } from './link/ma2-connections';
@@ -159,7 +172,7 @@ function createMainWindow(obs: ObsWebSocketAdapter): void {
     height: 960,
     minWidth: 1180,
     minHeight: 720,
-    title: '团播联动台',
+    title: `团播联动台 / Tuanbo Link Console · ${process.pid}`,
     backgroundColor: '#14171e',
     ...(process.platform === 'win32' ? { backgroundMaterial: 'none' as const } : {}),
     frame: false,
@@ -175,6 +188,13 @@ function createMainWindow(obs: ObsWebSocketAdapter): void {
     }
   });
   mainWindow.setMenu(null);
+  const notifyVisibility = (): void => sendToRenderer('link:window-visible', Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized()));
+  mainWindow.on('minimize', notifyVisibility);
+  mainWindow.on('restore', notifyVisibility);
+  mainWindow.on('hide', notifyVisibility);
+  mainWindow.on('show', notifyVisibility);
+  // OBS matches native window titles. Keep this instance distinct across reloads.
+  mainWindow.on('page-title-updated', (event) => event.preventDefault());
 
   if (!app.isPackaged) {
     mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -244,6 +264,31 @@ function registerIpc(
   integrationDetector: WindowsIntegrationDetector,
   updateManager: LinkUpdateManager
 ): void {
+  let licenseService: LicenseService | undefined;
+  const getLicenseService = async (): Promise<LicenseService> => {
+    if (!licenseService) licenseService = new LicenseService(app.getPath('userData'), await readLicenseMachineCode(), licensePublicKeys);
+    return licenseService;
+  };
+  handle('link:license-status', async () => (await getLicenseService()).status());
+  handle('link:license-export-request', async () => {
+    const status = await (await getLicenseService()).status();
+    const result = await dialog.showSaveDialog(mainWindow!, { title: '导出本机授权申请', defaultPath: '团播联动台-授权申请.json', filters: [{ name: '授权申请', extensions: ['json'] }] });
+    if (result.canceled || !result.filePath) return false;
+    await writeFileAtomically(result.filePath, JSON.stringify(licenseRequestSchema.parse({ version: 1, product: 'tuanbo-link-console', machineCode: status.machineCode }), null, 2));
+    return true;
+  });
+  handle('link:license-import', async () => {
+    if (runtimeActive) throw new Error('请停止播放后再更换授权');
+    const result = await dialog.showOpenDialog(mainWindow!, { title: '导入本机授权', properties: ['openFile'], filters: [{ name: '团播联动台授权', extensions: ['tbllicense'] }] });
+    const file = result.filePaths[0];
+    if (result.canceled || !file) return null;
+    if ((await stat(file)).size > 16384) throw new Error('授权文件超过大小限制');
+    const token = await readFile(file, 'utf8');
+    if (runtimeActive) throw new Error('播放已开始，请停止后再导入授权');
+    const status = await (await getLicenseService()).activate(token);
+    await logger.record({ level: 'info', category: 'system', message: '已导入本机授权', result: 'succeeded' });
+    return status;
+  });
   const ma2Connections = new Ma2Connections(() => runtimeActive);
   const loopMidiService = new LoopMidiService();
   const ma2Network = new Ma2NetworkManager(app.getPath('userData'), profileStore, () => runtimeActive);
@@ -290,7 +335,31 @@ function registerIpc(
   handle('link:ma2-preview', async (_event, value: unknown) => {
     const request = ma2ReadRequestSchema.parse(value);
     const snapshot = await (await getMa2Connection(request)).bridge.request('SNAPSHOT', request.target);
-    return convertMa2Snapshot(snapshot, request.target);
+    return convertMa2Snapshot(snapshot, request.target, [], request.timeOriginMs);
+  });
+  handle('link:ma2-catalog', async (_event, value: unknown) => {
+    const request = ma2CatalogRequestSchema.parse(value);
+    if (runtimeActive) throw new Error('请停止播放后扫描控台');
+    try {
+      const catalog = await readMa2Catalog((await getMa2Connection(request)).bridge, () => runtimeActive);
+      for (const entry of catalog.entries) if (entry.error) await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `Timecode ${entry.target} 扫描失败：${entry.error}`, result: 'failed' });
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `已扫描 ${catalog.entries.length} 条 Timecode，${catalog.entries.filter(entry => entry.error).length} 条读取异常`, result: catalog.entries.some(entry => entry.error) ? 'failed' : 'succeeded' });
+      return catalog;
+    } catch (error) {
+      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `控台目录扫描未完成：${error instanceof Error ? error.message : String(error)}`, result: 'failed' });
+      throw error;
+    }
+  });
+  handle('link:ma2-effect-library', async (_event, value: unknown) => {
+    const request = ma2CatalogRequestSchema.parse(value);
+    try {
+      const result = await readMa2EffectLibrary((await getMa2Connection(request)).bridge, () => runtimeActive);
+      await logger.record({ level: result.errors.length ? 'error' : 'info', category: 'device', device: 'MA2', message: `效果库读取 ${result.sequences.length} 条序列；异常：${JSON.stringify(result.errors)}`, result: result.errors.length ? 'failed' : 'succeeded' });
+      return result;
+    } catch (error) {
+      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `效果库读取失败：${String(error)}`, result: 'failed' });
+      throw error;
+    }
   });
   handle('link:ma2-create', async (_event, value: unknown) => {
     const request = ma2CreateRequestSchema.parse(value);
@@ -501,7 +570,7 @@ function registerIpc(
     return createAssetUrl(await mediaPreviewService.ensureAudioPreview(payload.projectPath, payload.relativePath, payload.sha256));
   });
   const waveformService = new WaveformService(projectService);
-  const audioEditService = new AudioEditService(projectService);
+  const audioEditService = new AudioEditService(projectService, ibtExecutable(app.isPackaged ? process.resourcesPath : undefined));
   handle('link:analyze-audio-beats', (_event, value: unknown) => {
     const payload = audioAnalysisRequestSchema.parse(value);
     return audioEditService.analyze(payload.projectPath, payload.source);
@@ -595,14 +664,14 @@ function registerIpc(
       };
     }
   });
-  handle('link:obs-connect', async (): Promise<LinkObsSnapshot> => {
+  const connectObs = async (): Promise<LinkObsSnapshot> => {
     const profile = await requireProfile(profileStore);
     const password = await profileStore.loadCredential(profile.obs.credentialId);
     knownSecrets.add(password);
     const snapshot = await obs.connect(profile.obs.webSocketUrl, password, profile.obs.startupTimeoutMs);
     if (snapshot.status === 'connected' && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(profile.obs.webSocketUrl).hostname)) await nativeSeek.prepare(profile.obs.webSocketUrl);
     return snapshot;
-  });
+  };
   handle('link:obs-disconnect', () => obs.disconnect());
   handle('link:obs-snapshot', () => obs.getSnapshot());
   handle('link:obs-inventory', (): Promise<LinkObsInventory> => obs.readInventory());
@@ -646,22 +715,102 @@ function registerIpc(
     try { await obs.mediaScenes.seek(payload.event, absolutePath, (name, position) => nativeSeek.seek(address, name, position)); }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }
   });
+  handle('link:obs-connect', connectObs);
   let liveBridgeInstalled = false;
+  let liveBridgeInstallation: Promise<'installed' | 'unchanged'> | null = null;
+  const ensureLiveBridge = async (): Promise<void> => {
+    if (liveBridgeInstalled) return;
+    liveBridgeInstallation ??= installObsLiveBridge(app.isPackaged
+      ? join(process.resourcesPath, 'obs/tblink-realtime-preview.dll')
+      : join(app.getAppPath(), '../../tools/obs/native-preview/tblink-realtime-preview.dll'));
+    try {
+      await liveBridgeInstallation;
+      liveBridgeInstalled = true;
+    } finally {
+      liveBridgeInstallation = null;
+    }
+  };
   let liveAddress: string | null = null;
+  let bridgeMaintenance = false;
+  let bridgeMaintenanceTask: Promise<void> | null = null;
+  const bridgeSetup = new ObsBridgeSetup({
+    install: async (allowElevation) => {
+      const result = await installObsLiveBridge(app.isPackaged
+        ? join(process.resourcesPath, 'obs/tblink-realtime-preview.dll')
+        : join(app.getAppPath(), '../../tools/obs/native-preview/tblink-realtime-preview.dll'),
+      allowElevation ? elevateObsPluginInstall : undefined);
+      liveBridgeInstalled = true;
+      return result === 'installed';
+    },
+    process: async () => {
+      const profile = await requireProfile(profileStore);
+      return processManager.refresh('obs', processConfiguration(profile, 'obs'));
+    },
+    confirm: async (kind, reason) => {
+      const decision = await dialog.showMessageBox(mainWindow!, {
+        type: 'question', title: '维护 OBS 内置组件',
+        message: kind === 'restart' ? '需要正常重启 OBS 以加载组件' : '请先在 OBS 内正常退出，再继续',
+        detail: `${reason}\n\n${kind === 'restart' ? '请先保存 OBS 场景。确认后联动台会检查推流与录像状态，正常关闭本次启动的 OBS，部署组件并重新连接。' : '当前 OBS 不是本次由联动台启动，软件不会关闭它。请保存场景并正常退出 OBS；点击继续后，软件将完成部署、启动和连接。'}`,
+        buttons: [kind === 'restart' ? '保存好了，重启并修复' : '已退出，继续', '取消'], defaultId: 1, cancelId: 1
+      });
+      return decision.response === 0;
+    },
+    stop: async () => {
+      if (runtimeActive) throw new Error('请先停止节目播放，再维护 OBS 组件');
+      const profile = await requireProfile(profileStore);
+      if (obs.getSnapshot().status !== 'connected') await connectObs();
+      await processManager.stop('obs', profile.obs.shutdownTimeoutMs);
+      await obs.disconnect();
+      nativeSeek.reset();
+    },
+    start: async () => {
+      const profile = await requireProfile(profileStore);
+      const started = await processManager.start('obs', processConfiguration(profile, 'obs'));
+      if (started.pid === null) throw new Error('OBS 启动后未返回进程');
+      await waitForObsEndpoint(profile.obs.webSocketUrl, started.pid, profile.obs.startupTimeoutMs);
+    },
+    connect: async () => {
+      if (obs.getSnapshot().status !== 'connected') {
+        const snapshot = await connectObs();
+        if (snapshot.status !== 'connected') throw new Error('OBS 组件已部署，但 WebSocket 未连接；请在设备连接中检查配置');
+      }
+    },
+    verify: async () => {
+      const profile = await requireProfile(profileStore);
+      const probe = new ObsLivePreview();
+      try { await probe.next(profile.obs.webSocketUrl); }
+      finally { probe.close(); }
+    }
+  });
+  handle('link:obs-bridge-repair', async (): Promise<void> => {
+    if (runtimeActive) throw new Error('请先停止节目播放，再维护 OBS 组件');
+    if (bridgeMaintenance) throw new Error('OBS 组件维护正在进行');
+    bridgeMaintenance = true;
+    livePreview.close(); liveAddress = null; liveBridgeInstalled = false;
+    try {
+      bridgeMaintenanceTask = bridgeSetup.repair();
+      await bridgeMaintenanceTask;
+      await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'succeeded', message: 'OBS 内置组件部署及真实视频帧检查通过' });
+    } catch (error) {
+      await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) });
+      throw error;
+    } finally { bridgeMaintenance = false; bridgeMaintenanceTask = null; }
+  });
   app.on('before-quit', () => livePreview.close());
   handle('link:obs-live-frame', async () => {
+    if (bridgeMaintenanceTask) await bridgeMaintenanceTask;
     if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 未连接');
-    if (!liveBridgeInstalled) {
-      await installObsLiveBridge(app.isPackaged ? join(process.resourcesPath, 'obs/tblink-realtime-preview.dll') : join(app.getAppPath(), '../../tools/obs/native-preview/tblink-realtime-preview.dll'));
-      liveBridgeInstalled = true;
+    try {
+      await ensureLiveBridge();
+      liveAddress ??= (await requireProfile(profileStore)).obs.webSocketUrl;
+      return await livePreview.next(liveAddress);
     }
-    liveAddress ??= (await requireProfile(profileStore)).obs.webSocketUrl;
-    try { return await livePreview.next(liveAddress); }
     catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) });
       throw error;
     }
   });
+  handle('link:window-visible', () => Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized()));
   handle('link:obs-live-close', () => { livePreview.close(); liveAddress = null; });
   obs.subscribe((state) => { if (state.status !== 'connected') { livePreview.close(); liveAddress = null; } });
   handle('link:obs-source-screenshot', (_event, payloadValue: unknown): Promise<string> => {
@@ -696,7 +845,17 @@ function registerIpc(
   handle('link:process-start', async (_event, idValue: unknown): Promise<LinkProcessSnapshot> => {
     const id = linkExternalApplicationIdSchema.parse(idValue);
     const profile = await requireProfile(profileStore);
-    return processManager.start(id, processConfiguration(profile, id));
+    // OBS loads native modules at startup; deploy the bundled bridge before launch.
+    if (id === 'obs') {
+      try { await bridgeSetup.prepare(); }
+      catch (error) {
+        await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) });
+        throw error;
+      }
+    }
+    const started = await processManager.start(id, processConfiguration(profile, id));
+    if (id === 'obs' && started.owned && started.pid !== null) await waitForObsEndpoint(profile.obs.webSocketUrl, started.pid, profile.obs.startupTimeoutMs);
+    return started;
   });
   handle('link:process-refresh', async (_event, idValue: unknown) => {
     const id = linkExternalApplicationIdSchema.parse(idValue);
@@ -836,7 +995,18 @@ function showRuntimeActiveExitWarning(): void {
 }
 
 function processConfiguration(profile: IntegrationProfile, id: ExternalApplicationId) {
-  if (id === 'obs') return profile.obs;
+  if (id === 'obs') {
+    const root = join(dirname(profile.obs.executablePath), '../..');
+    const portable = profile.obs.arguments.some((argument) => argument === '--portable' || argument === '-p')
+      || existsSync(join(root, 'portable_mode')) || existsSync(join(root, 'obs_portable_mode'));
+    if (!portable) return profile.obs;
+    if (!process.env.ProgramData) throw new Error('无法定位 OBS 内置组件目录');
+    const plugins = join(process.env.ProgramData, 'obs-studio/plugins');
+    return { ...profile.obs, environment: {
+      OBS_PLUGINS_PATH: join(plugins, 'tblink-realtime-preview/bin/64bit').replaceAll('\\', '/'),
+      OBS_PLUGINS_DATA_PATH: plugins.replaceAll('\\', '/')
+    } };
+  }
   return profile.p1;
 }
 

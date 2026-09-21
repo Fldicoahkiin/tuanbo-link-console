@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import { useEffect, useState } from 'react';
 import { Download, Play, RefreshCw } from 'lucide-react';
 import { loopMidiStatusSchema, type LoopMidiStatus } from '@tb/schema';
@@ -50,9 +51,9 @@ export function LoopMidiSettings({ disabled, notify, onBusy, onRefreshMidi }: { 
   return <div className="virtual-midi-panel">
     <div className="virtual-midi-summary"><div><h3>loopMIDI</h3><p className="settings-note">连接本机 P1、联动台和 MA2 onPC 的虚拟通道。</p></div><span className={`device-badge ${status?.state === 'running' ? 'ready' : 'pending'}`} role="status">{status ? ({ missing: '未找到安装', installed: '已安装 · 未运行', running: '正在运行' })[status.state] : '正在检测…'}</span></div>
     <div className="settings-header-actions">
-      <button className="primary-button" disabled={disabled || busy} onClick={() => act('start')}><Play />{busy ? '正在处理…' : '启动／连接'}</button>
-      <button className="secondary-button" disabled={disabled || busy} onClick={() => act('detect')}><RefreshCw />重新检测</button>
-      <button className="secondary-button" disabled={disabled || busy} onClick={() => act('download')}><Download />打开官网安装</button>
+      <Button className="primary-button" disabled={disabled || busy} onClick={() => act('start')}><Play />{busy ? '正在处理…' : '启动／连接'}</Button>
+      <Button className="secondary-button" disabled={disabled || busy} onClick={() => act('detect')}><RefreshCw />重新检测</Button>
+      <Button className="secondary-button" disabled={disabled || busy} onClick={() => act('download')}><Download />打开官网安装</Button>
     </div>
     <label className="settings-row"><span>随联动台启动</span><input aria-label="随联动台启动 loopMIDI" type="checkbox" checked={profile?.loopMidi?.autoStart ?? false} disabled={disabled || busy} onChange={(event) => saveAutoStart(event.currentTarget.checked)} /></label>
     <section className="device-port-section"><h3>已配置的通道</h3><p className="settings-note">系统识别到 {ports.filter((port) => port.state === 'connected').length} 个输入／输出端口。端口可用不代表已收到时间码。</p>

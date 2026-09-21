@@ -233,6 +233,7 @@ export const p1PlaylistBindingSchema = z.object({
 });
 
 export const p1MediaBindingSchema = z.object({
+  importedFullSource: z.boolean().optional(),
   sourceKey: z.string().regex(/^[a-f0-9]{64}$/),
   playlistId: z.string().min(1),
   sourceFileName: z.string().min(1),
@@ -243,7 +244,10 @@ export const p1MediaBindingSchema = z.object({
   midiStartTime: z.string().regex(/^\d+(?::\d{1,2}){0,3}(?:\.\d+)?$/, 'P1 MTC 起始时间格式无效')
 });
 
+export const p1ImportIssueSchema = z.object({ sourceKey: z.string().min(1), previousSourceKey: z.string().optional(), title: z.string(), playlistName: z.string(), playlistId: z.string().optional(), reason: z.string() });
+export type P1ImportIssue = z.infer<typeof p1ImportIssueSchema>;
 export const p1ProjectSyncSchema = z.object({
+  skippedItems: z.array(p1ImportIssueSchema).optional(),
   format: z.literal('hirender-p1-audio-project'),
   sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
   importedAt: z.string().datetime({ offset: true }),
@@ -316,6 +320,7 @@ export const referenceMediaClipSchema = z.object({
 });
 
 export const rundownItemSchema = z.object({
+  p1UnavailableSourceKey: z.string().optional(),
   lighting: lightingDocumentSchema.optional(),
   playback: z.object({
     volume: z.number().min(0).max(100),

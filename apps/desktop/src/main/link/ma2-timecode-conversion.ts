@@ -1,26 +1,28 @@
 import { randomUUID } from 'node:crypto';
+import { withMa2TimeOrigin } from '@tb/core/link';
 import { createLightingDocument, ma2TimecodePreviewSchema, type Ma2TimecodePreview, type LightingEvent } from '@tb/schema';
 import { extractMa2TimecodeXml, inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference, validateMa2TimecodeSnapshot } from './ma2-timecode-xml';
 
 export type Ma2TimecodeConversion = Ma2TimecodePreview;
 
-export function convertMa2Snapshot(xml: string, target: number, additionalSequences: readonly number[] = []): Ma2TimecodePreview {
+export function convertMa2Snapshot(xml: string, target: number, additionalSequences: readonly number[] = [], timeOriginMs = 0): Ma2TimecodePreview {
   validateMa2TimecodeSnapshot(xml, additionalSequences);
   const hasReferences = inspectMa2TimecodeXml(xml).timecodes.some((tc) => tc.tracks.some((track) => track.subtracks.some((subtrack) => subtrack.events.some((event) => event.cueAddress.length))));
-  return convertMa2Timecode(extractMa2TimecodeXml(xml, target), hasReferences || additionalSequences.length ? [xml] : [], target);
+  return convertMa2Timecode(extractMa2TimecodeXml(xml, target), hasReferences || additionalSequences.length ? [xml] : [], target, timeOriginMs);
 }
 
 /** Preview conversion only. Keep the entire XML for unsupported data and
  * later read/modify/write; never infer a Cue number from an internal index. */
-export function convertMa2Timecode(xml: string, sequenceXml: readonly string[], target: number): Ma2TimecodeConversion {
+export function convertMa2Timecode(xml: string, sequenceXml: readonly string[], target: number, timeOriginMs = 0): Ma2TimecodeConversion {
   const report = inspectMa2TimecodeXml(xml);
   if (!['3.3.4', '3.7.0'].includes(report.version)) throw new Error('该 MA2 Timecode XML 版本尚未验证');
   if (!Number.isSafeInteger(target) || target < 1) throw new Error('Timecode 编号无效');
   const timecode = report.timecodes.find((entry) => entry.index === target - 1);
   if (!timecode) throw new Error('XML 中没有绑定的 Timecode');
-  // Other display formats and nonzero object offsets need native samples.
   if (timecode.attributes.frame_format !== '30 FPS') throw new Error('当前仅验证了 30 FPS Timecode 数据转换');
-  if (Number(timecode.attributes.offset ?? 0) !== 0) throw new Error('带偏移的 MA2 Timecode 需要先确认时间基准');
+  const rawOffset = timecode.attributes.offset ?? '0';
+  if (!/^\d+(?:\.0+)?$/.test(rawOffset) || !Number.isSafeInteger(Number(rawOffset)) || Number(rawOffset) >= 2592000) throw new Error('MA2 偏移必须是完整原生时间单位且小于 24 小时');
+  const offsetMs = Number(rawOffset) * 1000 / 30;
   const sequences = sequenceXml.map((source) => inspectMa2SequenceXml(source, true));
   const result: Ma2TimecodeConversion = { target, name: timecode.attributes.name ?? `Timecode ${target}`, readAt: new Date().toISOString(), document: createLightingDocument(), sourceXml: xml, mappings: [], trackMappings: [], cueCatalog: sequences.flatMap((report) => report.sequences.map((entry) => ({ sequence: entry.number, name: entry.name, cues: [...entry.cues].sort((a, b) => a.index - b.index) }))), unconverted: [], warnings: report.warnings };
   for (const track of timecode.tracks) {
@@ -66,5 +68,9 @@ export function convertMa2Timecode(xml: string, sequenceXml: readonly string[], 
     }
     result.document.tracks.push({ id: trackId, name: track.executorName ?? `MA2 轨道 ${track.index + 1}`, kind: 'ma2', color: '#ba8fff', group: '', muted: track.attributes.active !== 'true', solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: clipId, name: timecode.attributes.name ?? `Timecode ${target}`, start: 0, duration: events.reduce((end, event) => Math.max(end, event.at + 1), 1), timeLock: 'time', muted: false, events }] });
   }
-  return ma2TimecodePreviewSchema.parse(result);
+  for (const track of result.document.tracks) for (const clip of track.clips) {
+    for (const event of clip.events) event.at += offsetMs;
+    clip.duration += offsetMs;
+  }
+  return withMa2TimeOrigin(ma2TimecodePreviewSchema.parse(result), timeOriginMs);
 }

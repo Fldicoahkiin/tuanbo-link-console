@@ -1,4 +1,6 @@
+import { Button } from './Button';
 import { ObsDeviceSettings } from './ObsDeviceSettings';
+import { ConnectionResult } from './ConnectionResult';
 import { createDefaultIntegrationProfile, mergeIntegrationDraft } from '../view-models/local-integration-profile';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -44,9 +46,10 @@ type Props = {
   notify: (message: string, tone?: 'info' | 'error') => void;
   settingsOpen: boolean;
   onSettingsClose: () => void;
+  onSettingsOpen: () => void;
 };
 
-export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, coordinator, notify, settingsOpen, onSettingsClose }: Props): JSX.Element {
+export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, coordinator, notify, settingsOpen, onSettingsClose, onSettingsOpen, onCategoryChange }: Props): JSX.Element {
   const storedProfile = useIntegrationStore((state) => state.profile);
   const securityAvailable = useIntegrationStore((state) => state.securityAvailable);
   const obs = useIntegrationStore((state) => state.obs);
@@ -61,7 +64,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   const draftBaseline = useRef(draft);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const localIntegration = useLocalIntegrationConnection({ draft, password, storedProfile, readMidiPorts: () => readAndStoreMidiPorts(midiMonitor), notify, onDraft: setDraft, onPasswordCleared: () => setPassword(''), onBusyChange: setBusy });
+  const localIntegration = useLocalIntegrationConnection({ draft, password, storedProfile, readMidiPorts: () => readAndStoreMidiPorts(midiMonitor), openMidiOutputs: ids => midiMonitor.openOutputs(ids), notify, onDraft: setDraft, onPasswordCleared: () => setPassword(''), onBusyChange: setBusy });
   const lastMtcAt = useRuntimeStore((state) => state.lastMtcAt);
   const mtcStable = useRuntimeStore((state) => state.mtcStable);
   const detectedFrameRate = useRuntimeStore((state) => state.detectedFrameRate);
@@ -112,7 +115,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
     try {
       const snapshots = await Promise.all((['obs', 'p1'] as const).map((id) => linkDesktopViewModel.refreshExternalApplication(id)));
       for (const snapshot of snapshots) useIntegrationStore.getState().setProcess(snapshot);
-      useIntegrationStore.getState().setMidiPorts(midiMonitor.listPorts());
+      await readAndStoreMidiPorts(midiMonitor);
       if (obs.status === 'connected') useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory());
       notify('外部程序、OBS 库存和 MIDI 端口状态已刷新。');
     } catch (error) {
@@ -164,13 +167,13 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
       setBusy(false);
     }
   };
-  return (
-    <div className="page-stack integration-workspace">
+  return (<div className="page-stack integration-workspace">
+      {localIntegration.resultOpen ? createPortal(<ConnectionResult issues={localIntegration.issues} onClose={localIntegration.closeResult} onResolve={target => { localIntegration.closeResult(); onCategoryChange(target); onSettingsOpen(); }} onRetry={() => { localIntegration.closeResult(); localIntegration.connect(); }} />, document.body) : null}
       {quickConnectHost ? createPortal(<button aria-label="顶部一键连接" title="识别并连接本机设备" disabled={busy || runtimeActive || !securityAvailable} onClick={localIntegration.connect}><ScanSearch />{busy ? '连接中…' : '一键连接'}</button>, quickConnectHost) : null}
       {settingsOpen ? <IntegrationSettingsDialog
         category={category} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} nestedDialogOpen={false}
         midiPorts={midiPorts} inventory={inventory} notify={notify}
-        onConnect={localIntegration.connect} onRefresh={() => void refresh()} onSave={() => void save()} onRefreshMidi={async () => { await readAndStoreMidiPorts(midiMonitor); }}
+        onRefresh={() => void refresh()} onSave={() => void save()} onRefreshMidi={async () => { await readAndStoreMidiPorts(midiMonitor); }}
         onClose={onSettingsClose}
         maintenance={<>
       {isDeviceSettingsCategory(category) && !internal ? <details open className="settings-disclosure p1-follow-settings"><summary>P1 工程与跟随</summary><div className="connection-overview">
@@ -225,9 +228,23 @@ function ProgramSettingsCards({ draft, setDraft, busy, runtimeActive, securityAv
   startProgram: (id: 'obs' | 'p1') => Promise<void>;
   notify: Props['notify'];
 }): JSX.Element {
+  const [repairingBridge, setRepairingBridge] = useState(false);
+  const repairBridge = async (): Promise<void> => {
+    if (repairingBridge) return;
+    setRepairingBridge(true);
+    try {
+      await persistDraft();
+      await linkDesktopViewModel.repairObsBridge();
+      useIntegrationStore.getState().setProcess(await linkDesktopViewModel.refreshExternalApplication('obs'));
+      notify('OBS 内置组件已就绪，真实视频帧检查通过。');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), 'error');
+    } finally { setRepairingBridge(false); }
+  };
   const internal = useDocumentStore((state) => state.project?.playbackSource === 'internal');
   return <fieldset className="device-program-list" disabled={runtimeActive}>
-    <ProgramProfileCard kind="obs" icon={MonitorUp} title="OBS Studio" process={processes.obs} busy={busy || runtimeActive} settings={draft.obs} acceptedVersion={draft.acceptedVersions.obs} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, obs: value } })} onSettingsChange={(settings) => setDraft({ ...draft, obs: { ...draft.obs, ...settings } })} onPick={() => void pickExecutable('obs')} onStart={() => void startProgram('obs')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('obs'), notify)} maintenanceActions={<button className="secondary-button" disabled={busy || !securityAvailable} onClick={() => void runAction(async () => { await persistDraft(); useIntegrationStore.getState().setObs(await linkDesktopViewModel.connectObs()); useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory()); }, notify)}><Link2 />重新连接 WebSocket</button>}>
+    <ProgramProfileCard kind="obs" icon={MonitorUp} title="OBS Studio" process={processes.obs} busy={busy || runtimeActive} settings={draft.obs} acceptedVersion={draft.acceptedVersions.obs} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, obs: value } })} onSettingsChange={(settings) => setDraft({ ...draft, obs: { ...draft.obs, ...settings } })} onPick={() => void pickExecutable('obs')} onStart={() => void startProgram('obs')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('obs'), notify)} maintenanceActions={<Button className="secondary-button" disabled={busy || !securityAvailable} onClick={() => void runAction(async () => { await persistDraft(); useIntegrationStore.getState().setObs(await linkDesktopViewModel.connectObs()); useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory()); }, notify)}><Link2 />重新连接 WebSocket</Button>}>
+      <div className="device-panel-actions"><Button className="secondary-button" disabled={busy || runtimeActive || repairingBridge || !securityAvailable} onClick={() => { void repairBridge(); }}><Wrench />{repairingBridge ? '正在检查组件…' : '检查并修复组件'}</Button><small>随软件内置 · 自动安装与升级 · 检查真实画面</small></div>
     </ProgramProfileCard>
     {!internal ? <ProgramProfileCard kind="p1" icon={AudioWaveform} title="P1" process={processes.p1} busy={busy || runtimeActive} settings={draft.p1} acceptedVersion={draft.acceptedVersions.p1} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, p1: value } })} onSettingsChange={(settings) => setDraft({ ...draft, p1: { ...draft.p1, ...settings } })} onPick={() => void pickExecutable('p1')} onStart={() => void startProgram('p1')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('p1'), notify)}>
       <MidiPortField label="旧节目 MIDI 输出" direction="output" value={portName(draft, 'lighting-output')} ports={midiPorts} onChange={(value) => setDraft(updatePortProfile(draft, 'lighting-output', 'output', value))} />
@@ -248,7 +265,7 @@ function P1MtcSetupNotice({ ready, portAvailable }: { ready: boolean; portAvaila
 }
 
 async function readAndStoreMidiPorts(monitor: LinkMidiAdapter): Promise<ReturnType<LinkMidiAdapter['listPorts']>> {
-  const ports = await monitor.initialize();
+  const ports = await monitor.refreshPorts();
   useIntegrationStore.getState().setMidiPorts(ports);
   return ports;
 }
@@ -307,7 +324,7 @@ function DeviceProcessSettings({ title, process, busy, settings, acceptedVersion
     <Field label="启动参数"><textarea aria-label={`${title} 启动参数`} placeholder="每行一个参数，无需参数时留空" disabled={busy} value={settings.arguments.join('\n')} onChange={(event) => onSettingsChange({ ...settings, arguments: event.currentTarget.value.split(/\r?\n/).filter((argument) => argument !== '') })} /></Field>
     <Field label="启动超时（ms）"><input disabled={busy} type="number" min="1000" max="120000" value={settings.startupTimeoutMs} onChange={(event) => onSettingsChange({ ...settings, startupTimeoutMs: Number(event.currentTarget.value) })} /></Field>
     <Field label="停止超时（ms）"><input disabled={busy} type="number" min="1000" max="120000" value={settings.shutdownTimeoutMs} onChange={(event) => onSettingsChange({ ...settings, shutdownTimeoutMs: Number(event.currentTarget.value) })} /></Field>
-    <div className="device-panel-actions">{maintenanceActions}<button className="secondary-button" disabled={busy} onClick={onStart}><Power />启动或连接 {title}</button><button className="secondary-button" disabled={busy || !process.owned} onClick={onStop}><Square />关闭 {title}</button></div>
+    <div className="device-panel-actions">{maintenanceActions}<Button className="secondary-button" disabled={busy} onClick={onStart}><Power />启动或连接 {title}</Button><Button className="secondary-button" disabled={busy || !process.owned} onClick={onStop}><Square />关闭 {title}</Button></div>
   </div>;
 }
 

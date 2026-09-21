@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { addActionCommand, nominalFramesPerSecond, removeCueCommand, replaceActionCommand, replaceCueCommand, type LinkObsInventory } from '@tb/core/link';
 import type { LinkAction, LinkCue, LinkProject } from '@tb/schema';
@@ -23,10 +24,10 @@ export function CueInspector(props: {
     <div className="cue-detail-header">
       <input className="title-input" aria-label="Cue 名称" defaultValue={cue.name} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.name, (name) => execute(replaceCueCommand(itemId, { ...cue, name })), true)} />
       <label className="check-field"><input type="checkbox" checked={cue.enabled} onChange={(event) => execute(replaceCueCommand(itemId, { ...cue, enabled: event.currentTarget.checked }))} /><span>启用</span></label>
-      <button className="icon-button danger" title="删除 Cue" onClick={() => execute(removeCueCommand(itemId, cue.id))}><Trash2 /></button>
+      <Button className="icon-button danger" title="删除 Cue" onClick={() => execute(removeCueCommand(itemId, cue.id))}><Trash2 /></Button>
     </div>
     <TimecodeEditor cue={cue} frameRate={frameRate} onChange={(next) => execute(replaceCueCommand(itemId, next))} />
-    <textarea aria-label="备注" rows={1} className="cue-notes" placeholder="备注（选填）" defaultValue={cue.notes} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.notes, (notes) => execute(replaceCueCommand(itemId, { ...cue, notes })))} />
+    <textarea key={`${cue.id}:${cue.notes}`} aria-label="备注" rows={1} className="cue-notes" placeholder="备注（选填）" defaultValue={cue.notes} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitCueText(event.currentTarget, cue.notes, (notes) => execute(replaceCueCommand(itemId, { ...cue, notes })))} />
     {visual ? <VisualCueLayoutEditor itemId={itemId} cueId={cue.id} visual={visual} testAction={testAction} /> : null}
     <div className="action-list">{visibleActions.map(({ action, index }) => <ActionEditor key={action.id} itemId={itemId} cueId={cue.id} action={action} index={index} actionCount={cue.actions.length} onTest={testAction} />)}</div>
   </div>;

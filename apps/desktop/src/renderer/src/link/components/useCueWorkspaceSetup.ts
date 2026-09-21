@@ -9,17 +9,19 @@ export function useReferenceAudioUrl(input: {
   notify: (message: string, tone?: 'info' | 'error') => void;
 }): void {
   const { item, notify, projectPath, setAudioUrl } = input;
+  const relativePath = item?.referenceAudio?.relativePath;
+  const sha256 = item?.referenceAudio?.sha256;
   useEffect(() => {
     let cancelled = false;
-    if (!projectPath || !item?.referenceAudio) {
+    if (!projectPath || !relativePath) {
       setAudioUrl(null);
       return;
     }
-    void linkDesktopViewModel.resolveReferenceAudioUrl({ projectPath, relativePath: item.referenceAudio.relativePath })
+    void linkDesktopViewModel.resolveReferenceAudioUrl({ projectPath, relativePath })
       .then((url) => { if (!cancelled) setAudioUrl(url); })
       .catch((error: unknown) => { if (!cancelled) notify(toMessage(error), 'error'); });
     return () => { cancelled = true; };
-  }, [item?.referenceAudio, notify, projectPath, setAudioUrl]);
+  }, [relativePath, sha256, notify, projectPath, setAudioUrl]);
 }
 
 function toMessage(error: unknown): string {

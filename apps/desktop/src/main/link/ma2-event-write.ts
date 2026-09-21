@@ -17,6 +17,7 @@ const eventProperties = z.union([
 ]);
 
 export type Ma2PreparedEventWrite = {
+  timeOriginMs?: number | undefined;
   expectedXml: string;
   desiredXml: string;
   desired: Ma2SyncSnapshot;
@@ -35,7 +36,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
   readback.trackMappings ??= recoverMa2TrackMappings(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings);
   const comparison = compareMa2LightingReadback(document, bindingId, readback, identityChoices);
   const merged = resolveMa2Sync(comparison, conflictChoices);
-  const desired = timeAlignment === 'nearest-frame' ? alignMa2SnapshotToFrames(merged, 30).snapshot : merged;
+  const desired = timeAlignment === 'nearest-frame' ? alignMa2SnapshotToFrames(merged, 30, readback.timeOriginMs ?? 0).snapshot : merged;
   const remoteObjects = new Map(comparison.remote.objects.map((object) => [object.id, object]));
   const desiredObjects = new Map(desired.objects.map((object) => [object.id, object]));
   const pendingTracks = new Map((binding.pendingTracks ?? []).map((track) => [track.trackId, track]));
@@ -135,7 +136,8 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     const executor = original?.executor ?? subtrackExecutors.get(subtrackPath);
     if (executor !== value.executor) throw new Error('灯光点的执行器与控台轨道不一致，请先配置轨道对应');
     if (masterSubtracks.has(subtrackPath) !== (value.action === 'master')) throw new Error('不能把 Cue 点改成推杆点，或把推杆点改成 Cue 点');
-    const ticks = value.time * 30 / 1000;
+    const ticks = (value.time + (readback.timeOriginMs ?? 0)) * 30 / 1000 - Number(report.timecodes[0]?.attributes.offset ?? 0);
+    if (ticks < 0) throw new Error('事件早于控台 Timecode 起点，请调整时间或在控台修改偏移');
     // Current native acceptance proves integer ticks. Do not silently round sub-frame points.
     if (Math.abs(ticks - Math.round(ticks)) > 1e-7) throw new Error('灯光点时间未落在已验证的 MA2 帧位置，需要先处理帧精度');
     const rawTime = String(Math.round(ticks));
@@ -194,7 +196,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     eventPaths.set(id, next + previous.slice(split));
   }
   const desiredXml = edits.length ? extendMa2TimecodeLength(removed.xml, readback.target) : removed.xml;
-  return { expectedXml: readback.sourceXml, desiredXml, desired, eventPaths, trackPaths };
+  return { expectedXml: readback.sourceXml, desiredXml, desired, eventPaths, trackPaths, timeOriginMs: readback.timeOriginMs };
 }
 
 /** Confirm native output and restore stable IDs before a project baseline may advance. */
@@ -202,7 +204,7 @@ export function confirmMa2MergedEvents(prepared: Ma2PreparedEventWrite, readback
   if (!sameMa2XmlObjects(prepared.desiredXml, readbackXml)) throw new Error('MA2 回读与本次写入不一致，不能更新同步基线');
   const root = prepared.desired.objects.find((object) => object.kind === 'timecode');
   if (!root) throw new Error('同步结果缺少 Timecode');
-  const preview = convertMa2Timecode(readbackXml, sequenceXml, Number(root.properties.number));
+  const preview = convertMa2Timecode(readbackXml, sequenceXml, Number(root.properties.number), prepared.timeOriginMs);
   if (preview.unconverted.length) throw new Error('MA2 回读存在未转换内容，不能更新同步基线');
   const byPath = new Map([...prepared.eventPaths].map(([id, path]) => [path, id]));
   if (byPath.size !== prepared.eventPaths.size || byPath.size !== preview.mappings.length) throw new Error('MA2 写回映射数量不一致');

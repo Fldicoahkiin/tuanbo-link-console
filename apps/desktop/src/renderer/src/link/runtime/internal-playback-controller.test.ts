@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../view-models/local-integration-profile';
 import { InternalPlaybackController, emptyInternalPlayerState } from './internal-playback-controller';
-import type { MediaMtcOutput } from '../../registry/media-mtc-output';
+import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { PreflightBlockedError } from './preflight-blocked-error';
+import { synchronizeP1ProjectCommand } from '@tb/core/link';
 
 class FakeAudio extends EventTarget {
   paused = true; preload = ''; src = ''; currentTime = 0; volume = 1; error = null;
@@ -12,13 +13,13 @@ class FakeAudio extends EventTarget {
   load(): void { queueMicrotask(() => this.dispatchEvent(new Event('loadedmetadata'))); }
   removeAttribute(): void { this.src = ''; }
 }
-function fixture(grouped = false, nativeSeek = false) {
+function fixture(grouped = false, nativeSeek = false, mtcInstance?: MediaMtcOutput) {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
   const audio = new FakeAudio();
   const mtc = { connect: vi.fn(() => Promise.resolve()), tick: vi.fn(), stop: vi.fn() };
   const deps = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), stop: vi.fn(() => Promise.resolve()),
     scrub: nativeSeek ? vi.fn(() => Promise.resolve()) : undefined,
-    resolveAudio: vi.fn(() => Promise.resolve('file:///original.wav')), configuration: () => ({ outputDeviceId: 'default', mtcPortName: 'MA2' }),
+    resolveAudio: vi.fn(() => Promise.resolve('file:///original.wav')), configuration: (): { outputDeviceId: string; mtcPortName: string | null } => ({ outputDeviceId: 'default', mtcPortName: 'MA2' }),
     changed: vi.fn((next: typeof emptyInternalPlayerState) => { state = next; }) };
   let state = { ...emptyInternalPlayerState };
   const project = parseLinkProject({ ...createEmptyLinkProject('内部十首'), playbackSource: 'internal', rundown: Array.from({ length: 10 }, (_, index) => ({
@@ -26,10 +27,99 @@ function fixture(grouped = false, nativeSeek = false) {
   })) });
   if (grouped) { project.playlists = [{ id: 'selected', name: '当前列表' }]; project.rundown[0]!.playlistId = 'selected'; project.rundown[2]!.playlistId = 'selected'; }
   const output = { prepare: vi.fn(() => Promise.resolve()), captureMonitoringStream: vi.fn((): MediaStream | null => null), dispose: () => Promise.resolve() };
-  const controller = new InternalPlaybackController(project, deps, audio as unknown as HTMLAudioElement, mtc as unknown as MediaMtcOutput, output);
+  const controller = new InternalPlaybackController(project, deps, audio as unknown as HTMLAudioElement, mtcInstance ?? mtc as unknown as MediaMtcOutput, output);
   return { controller, deps, audio, mtc, project, output, state: () => state };
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+it('只导入 P1、不绑定 MA2 时间线，也从原歌曲起始时间码输出 MIDI', async () => {
+  const f = fixture();
+  const project = synchronizeP1ProjectCommand({
+    sourceSha256: 'b'.repeat(64), playlists: [{ id: 'p1', name: '现场', sourceIndex: 0 }],
+    items: [{ title: '原始时间码', referenceAudio: { assetId: 'trimmed', relativePath: 'trimmed.wav', sha256: 'c'.repeat(64), durationMs: 1250 },
+      p1Media: { sourceKey: 'd'.repeat(64), playlistId: 'p1', sourceFileName: 'original.wav', playEndAction: 'stop', volume: 100, muted: false, shortcut: '', midiStartTime: '120' } }]
+  }, () => 'imported').execute(f.project);
+  f.project.rundown = project.rundown;
+  await f.controller.play('imported');
+  expect(f.audio.currentTime).toBe(0);
+  expect(f.state().mtcPositionMs).toBe(120000);
+  f.audio.currentTime = 0.5; await vi.advanceTimersByTimeAsync(8);
+  expect(f.mtc.tick).toHaveBeenLastCalledWith(120500, '30', expect.any(Number));
+  f.controller.dispose();
+});
+it('音频输出准备期间停止，迟到结果不得再申请 MIDI 或启动 OBS', async () => {
+  const f = fixture();
+  let finish = (): void => { throw new Error('音频输出尚未开始准备'); };
+  f.output.prepare.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  const preparing = f.controller.play('song-0');
+  await vi.waitFor(() => expect(f.output.prepare).toHaveBeenCalledOnce());
+  const stopping = f.controller.stop();
+  finish(); await preparing; await stopping;
+  expect(f.mtc.connect).not.toHaveBeenCalled();
+  expect(f.deps.prepare).not.toHaveBeenCalled();
+  expect(f.audio.play).not.toHaveBeenCalled();
+  await f.controller.play('song-1');
+  expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing' });
+  f.controller.dispose();
+});
+it('权限挂起时停止能够释放串行队列，随后可显式播放下一首', async () => {
+  const request = vi.fn().mockReturnValueOnce(new Promise<never>(() => undefined)).mockResolvedValue({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send: () => undefined }]]) });
+  vi.stubGlobal('navigator', { requestMIDIAccess: request });
+  const f = fixture(false, false, new MediaMtcOutput());
+  const preparing = f.controller.play('song-0');
+  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+  await f.controller.stop(); await preparing;
+  expect(f.state().status).toBe('stopped');
+  await f.controller.play('song-1');
+  expect(f.state().status).toBe('playing'); expect(f.state().itemId).toBe('song-1');
+  f.controller.dispose();
+});
+it('播放头反复吸附同一位置时复用在途定位，完成后不重复调用 OBS', async () => {
+  const f = fixture(false, true);
+  await f.controller.play('song-0', 0, true);
+  let finish = (): void => { throw new Error('定位尚未开始'); };
+  f.deps.scrub!.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  const first = f.controller.scrub('song-0', 1000);
+  await Promise.resolve();
+  const duplicate = f.controller.scrub('song-0', 1000);
+  expect(f.deps.scrub).toHaveBeenCalledOnce();
+  finish(); await first; await duplicate;
+  await f.controller.scrub('song-0', 1000);
+  expect(f.deps.scrub).toHaveBeenCalledOnce();
+  expect(f.audio.currentTime).toBe(1);
+  await f.controller.scrub('song-0', 2000);
+  expect(f.deps.scrub).toHaveBeenCalledTimes(2);
+  expect(f.audio.currentTime).toBe(2);
+  f.controller.dispose();
+});
+it('OBS 准备失败后连续拖动不重试，明确播放才重新准备', async () => {
+  const f = fixture(false, true);
+  f.deps.prepare.mockRejectedValueOnce(new Error('OBS 无法唯一识别联动台音频窗口'));
+  await f.controller.scrub('song-0', 1000);
+  expect(f.state().status).toBe('error');
+  const notifications = f.deps.changed.mock.calls.length;
+  for (const position of [1100, 1200, 1300, 1400]) await f.controller.scrub('song-0', position);
+  expect(f.deps.prepare).toHaveBeenCalledOnce();
+  expect(f.deps.changed).toHaveBeenCalledTimes(notifications);
+  expect(f.audio.play).not.toHaveBeenCalled();
+  expect(f.mtc.tick).not.toHaveBeenCalled();
+  await f.controller.play('song-0', 1400);
+  expect(f.deps.prepare).toHaveBeenCalledTimes(2);
+  expect(f.state()).toMatchObject({ status: 'playing', error: null });
+  f.controller.dispose();
+});
+it('MA2 绑定起点驱动内部音乐时间码，直接输出模式不再发送重复 MTC', async () => {
+  const f = fixture();
+  const item = f.project.rundown[0]!;
+  item.lighting = createLightingDocument();
+  item.lighting.ma2Bindings = [{ id: 'binding', timecode: 1, name: 'TC', readAt: new Date().toISOString(), sourceXml: '<MA/>', baselineTracks: [], mappings: [], timeOriginMs: 3600000 }];
+  await f.controller.play(item.id);
+  f.audio.currentTime = 1; await vi.advanceTimersByTimeAsync(8);
+  expect(f.mtc.tick).toHaveBeenCalledWith(3601000, '30', expect.any(Number));
+  await f.controller.stop(); item.lighting.outputMode = 'direct'; f.mtc.tick.mockClear();
+  await f.controller.play(item.id); f.audio.currentTime = 2; await vi.advanceTimersByTimeAsync(8);
+  expect(f.mtc.connect).toHaveBeenLastCalledWith(null, false); expect(f.mtc.tick).not.toHaveBeenCalled();
+  f.controller.dispose();
+});
 it('发布播放状态后、audio.play 启动前即可连接监测音轨', async () => {
   const f = fixture();
   let checked = false;
@@ -229,7 +319,13 @@ describe('内部正式音乐主控', () => {
   });
   it('MIDI 断开不继续空跑', async () => {
     const f = fixture(); await f.controller.play('song-0'); f.mtc.tick.mockImplementation(() => { throw new Error('MIDI 已断开'); });
-    await vi.advanceTimersByTimeAsync(8); expect(f.state()).toMatchObject({ status: 'error', error: 'MIDI 已断开' }); f.controller.dispose();
+    await vi.advanceTimersByTimeAsync(8); expect(f.state()).toMatchObject({ status: 'error', error: 'MIDI 已断开' });
+    const ticks = f.mtc.tick.mock.calls.length; const connections = f.mtc.connect.mock.calls.length;
+    const ingested = f.deps.ingest.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(f.mtc.tick).toHaveBeenCalledTimes(ticks); expect(f.mtc.connect).toHaveBeenCalledTimes(connections);
+    expect(f.deps.ingest).toHaveBeenCalledTimes(ingested); expect(f.audio.pause).toHaveBeenCalled();
+    expect(f.state().status).toBe('error'); f.controller.dispose();
   });
   it('暂停时定位保持暂停，循环只重播当前歌', async () => {
     const f = fixture(); await f.controller.play('song-1'); await f.controller.pause(); await f.controller.seek(3000);
@@ -237,4 +333,30 @@ describe('内部正式音乐主控', () => {
     await f.controller.resume(); f.controller.setEndAction('loop'); f.audio.onended?.(); await vi.advanceTimersByTimeAsync(0);
     expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1', positionMs: 0 }); f.controller.dispose();
   });
+});
+
+it('歌曲播放自动识别未配置的唯一 MIDI 输出，并公布实际发送时间码', async () => {
+  const send = vi.fn();
+  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['usb', { name: 'USB MIDI', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
+  const f = fixture(false, false, new MediaMtcOutput());
+  f.deps.configuration = () => ({ outputDeviceId: 'default', mtcPortName: null });
+  f.project.rundown[0]!.lighting = { ...createLightingDocument(), ma2Bindings: [{ id: 'binding', timecode: 1, name: 'TC', readAt: new Date().toISOString(), sourceXml: '<MA/>', baselineTracks: [], mappings: [], timeOriginMs: 120000 }] };
+  await f.controller.play('song-0');
+  expect(f.state()).toMatchObject({ status: 'playing', mtcPortName: 'USB MIDI', mtcSentPositionMs: null });
+  for (let i = 1; i <= 8; i++) { f.audio.currentTime = i * 0.008; await vi.advanceTimersByTimeAsync(8); }
+  expect(f.state().mtcSentPositionMs).toBeGreaterThan(0);
+  expect(send.mock.calls.some(call => call[0][0] === 0xf1)).toBe(true);
+  await f.controller.pause(); const count = send.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(100); expect(send).toHaveBeenCalledTimes(count);
+  f.controller.dispose();
+});
+it('需要灯光时间码但无 MIDI 输出时阻断音乐，不出现假同步', async () => {
+  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map() }) });
+  const f = fixture(false, false, new MediaMtcOutput());
+  f.deps.configuration = () => ({ outputDeviceId: 'default', mtcPortName: null });
+  f.project.rundown[0]!.lighting = { ...createLightingDocument(), ma2Bindings: [{ id: 'binding', timecode: 1, name: 'TC', readAt: new Date().toISOString(), sourceXml: '<MA/>', baselineTracks: [], mappings: [], timeOriginMs: 120000 }] };
+  await f.controller.play('song-0');
+  expect(f.state().error).toContain('未检测到灯光 MIDI 输出');
+  expect(f.audio.play).not.toHaveBeenCalled(); expect(f.deps.prepare).not.toHaveBeenCalled();
+  f.controller.dispose();
 });

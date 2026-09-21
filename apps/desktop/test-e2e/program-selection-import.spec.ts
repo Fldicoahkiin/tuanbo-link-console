@@ -1,0 +1,67 @@
+import { test, expect, _electron as electron } from '@playwright/test';
+import { readFile, writeFile, stat } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { join } from 'node:path';
+import ffmpegPath from 'ffmpeg-static';
+import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+
+test('节目框选批量删除、撤销以及外部音视频拖入', async ({}, info) => {
+  if (!ffmpegPath) throw new Error('缺少 FFmpeg');
+  const audio = info.outputPath('music.wav'), video = info.outputPath('video.mp4');
+  await promisify(execFile)(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=duration=1', audio], { windowsHide: true });
+  await promisify(execFile)(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'color=s=64x64:r=30:d=1', '-i', audio, '-c:v', 'mpeg4', '-c:a', 'aac', video], { windowsHide: true });
+  const path = info.outputPath('programs.tblink');
+  await writeFile(path, JSON.stringify(parseLinkProject({ ...createEmptyLinkProject('节目选择验收'), playbackSource: 'internal', rundown: Array.from({ length: 4 }, (_, index) => ({ id: `p${index}`, title: `节目 ${index + 1}`, cues: [] })) })));
+  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
+  try {
+    const page = await app.firstWindow();
+    await app.evaluate(({ dialog, BrowserWindow }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); BrowserWindow.getAllWindows()[0]?.setSize(1540, 960); }, path);
+    await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    const grid = page.getByLabel('节目列表', { exact: true });
+    const cards = page.locator('.p1-media-card');
+    await expect(cards).toHaveCount(4);
+    expect(await cards.first().getAttribute('draggable')).toBe('false');
+    expect(await page.locator('.monitor-readings').evaluate(el => getComputedStyle(el).userSelect)).toBe('none');
+    expect(await page.getByLabel('搜索节目', { exact: true }).evaluate(el => getComputedStyle(el).userSelect)).toBe('text');
+    const first = (await cards.first().boundingBox())!, second = (await cards.nth(1).boundingBox())!;
+    await page.mouse.move(first.x - 5, first.y - 5); await page.mouse.down();
+    await page.mouse.move(second.x + second.width - 2, second.y + second.height - 2, { steps: 8 }); await page.mouse.up();
+    await expect(page.locator('[data-batch-selected=true]')).toHaveCount(2);
+    await expect(page.locator('.program-selection-actions')).toHaveCount(0);
+    await cards.first().click({ button: 'right' });
+    await page.screenshot({ path: info.outputPath('multi-selection.png') });
+    page.once('dialog', dialog => void dialog.dismiss());
+    await page.getByRole('menuitem', { name: '删除所选 2 个节目', exact: true }).click();
+    await expect(cards).toHaveCount(4);
+    await cards.nth(1).click({ button: 'right' });
+    page.once('dialog', dialog => void dialog.accept());
+    await page.getByRole('menuitem', { name: '删除所选 2 个节目', exact: true }).click();
+    await expect(cards).toHaveCount(2);
+    await page.keyboard.press('Control+z');
+    await expect(cards).toHaveCount(4);
+    await cards.first().click({ modifiers: ['Control'] });
+    await cards.nth(2).click({ modifiers: ['Control'] });
+    await expect(page.locator('[data-batch-selected=true]')).toHaveCount(2);
+    await grid.focus(); await page.keyboard.press('Control+a');
+    await expect(page.locator('[data-batch-selected=true]')).toHaveCount(4);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-batch-selected=true]')).toHaveCount(0);
+    await page.evaluate(() => { const input = document.createElement('input'); input.id = 'test-drop-files'; input.type = 'file'; input.multiple = true; input.hidden = true; document.body.append(input); });
+    await page.locator('#test-drop-files').setInputFiles([audio, video]);
+    await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>('#test-drop-files')!;
+      const transfer = new DataTransfer(); for (const file of input.files!) transfer.items.add(file);
+      document.querySelector('.p1-media-grid')!.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    });
+    await expect(cards).toHaveCount(6);
+    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.length).toBe(6);
+    const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
+    expect(saved.rundown.find(item => item.title === 'music.wav')?.referenceAudio).toBeTruthy();
+    const importedVideo = saved.rundown.find(item => item.title === 'video.mp4')!;
+    expect(importedVideo.referenceMediaClips).toHaveLength(1); expect(importedVideo.referenceAudio).toBeTruthy();
+    expect(saved.mediaAssets).toHaveLength(1);
+    expect((await stat(audio)).size).toBeGreaterThan(0); expect((await stat(video)).size).toBeGreaterThan(0);
+    await page.screenshot({ path: info.outputPath('imported-programs.png') });
+  } finally { await app.close(); }
+});

@@ -11,6 +11,22 @@ afterEach(() => {
 });
 
 describe('LinkMidiAdapter', () => {
+  it('手动刷新重新申请端口会话并更新订阅，不沿用已失效的缓存', async () => {
+    const oldAccess = midiAccess([]), freshAccess = midiAccess([]);
+    Object.defineProperty(oldAccess.outputs.get('output')!, 'state', { value: 'disconnected' });
+    const request = vi.fn<() => Promise<MIDIAccess>>().mockResolvedValueOnce(oldAccess).mockResolvedValue(freshAccess);
+    installNavigator(oldAccess, request);
+    const adapter = new LinkMidiAdapter(resolveProfile, vi.fn());
+    const listener = vi.fn(); adapter.subscribePorts(listener);
+    expect((await adapter.initialize()).find(port => port.direction === 'output')?.state).toBe('disconnected');
+    expect((await adapter.refreshPorts()).find(port => port.direction === 'output')?.state).toBe('connected');
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ direction: 'output', state: 'connected' })]));
+    listener.mockClear(); oldAccess.dispatchEvent(new Event('statechange'));
+    expect(listener).not.toHaveBeenCalled();
+    freshAccess.dispatchEvent(new Event('statechange')); expect(listener).toHaveBeenCalledOnce();
+    adapter.dispose();
+  });
   it('系统端口申请挂起时明确超时，允许操作员重新检测', async () => {
     vi.useFakeTimers();
     const access = midiAccess([]);

@@ -1,3 +1,14 @@
+
+import { useLightingCueAudition } from './useLightingCueAudition';
+import { Ma2PendingChanges } from './Ma2PendingChanges';
+import { lightingEditHandler } from './lighting-edit-handler';
+import { useStoppedRuntimeRecovery } from './useStoppedRuntimeRecovery';
+import { LightingEffectDock } from './LightingEffectDock';
+import { useLightingLibrarySplit } from './LightingLibrarySplitter';
+import { useLightingEffectStamp } from './useLightingEffectStamp';
+import { LightingProgramList } from './LightingWorkbenchPanel';
+import '../lighting-workbench.css';
+import '../lighting-workbench-appearance.css';
 import { useAudioEditor } from './useAudioEditor';
 import { AudioInspector } from './AudioInspector';
 import { createPortal } from 'react-dom';
@@ -16,14 +27,13 @@ import {
   renameMediaFolderCommand,
   resolveTimelineState,
   millisecondsToFrameNumber,
-  setLightingCommand,
   LightingTempoMap,
   lightingEventTime,
   timecodeToMilliseconds,
   updateVisualLayerCommand,
   type LinkCommand
 } from '@tb/core/link';
-import { Clock3, FileVideo2, MonitorPlay } from 'lucide-react';
+import { Clock3, FileVideo2, MonitorPlay, SlidersHorizontal, X, FolderInput, RefreshCw } from 'lucide-react';
 import { type LightingDocument, type LinkProject } from '@tb/schema';
 import { LightingTimelineTools, type LightingTool } from './LightingTimelineTools';
 import { useRuntimeStore } from '../stores/runtime-store';
@@ -38,6 +48,7 @@ import { CommonProperties } from './CommonProperties';
 import { CueInspector } from './CueInspector';
 import { CueRundownHeader } from './CueRundownHeader';
 import { ReferenceTimeline } from './ReferenceTimeline';
+
 import { ResourceLibrary, type ObsResource } from './ResourceLibrary';
 import { useAssetAvailability } from './useAssetAvailability';
 import { useWorkspaceLayout } from './useWorkspaceLayout';
@@ -50,6 +61,7 @@ import { createWorkspaceActions } from './workspace-actions';
 import type { DocumentActionProps } from './DocumentActions';
 
 type Props = {
+  workspace?: 'visual' | 'lighting';
   player: ProjectPlayer;
   sidebarHost: HTMLDivElement | null;
   toolbarHost: HTMLDivElement | null;
@@ -58,7 +70,15 @@ type Props = {
   documentActions: DocumentActionProps;
 };
 
-export function CueWorkspace({ player, sidebarHost, toolbarHost, coordinator, notify, documentActions }: Props): JSX.Element {
+function useTimelineReferenceAudio(audio: LinkProject['rundown'][number]['referenceAudio'], projectPath: string | null, url: string | null) {
+  return useMemo(() => audio && projectPath && url
+    ? { projectPath, url, sha256: audio.sha256, durationMs: audio.durationMs }
+    : null, [audio, projectPath, url]);
+}
+
+export function CueWorkspace({ workspace = 'visual', player, sidebarHost, toolbarHost, coordinator, notify, documentActions }: Props): JSX.Element {
+  const lightingWorkspace = workspace === 'lighting';
+  const librarySplit = useLightingLibrarySplit();
   const lowPower = useDisplayPreferences((state) => state.lowPower);
   const project = useDocumentStore((state) => state.project);
   const projectPath = useDocumentStore((state) => state.path);
@@ -76,50 +96,45 @@ export function CueWorkspace({ player, sidebarHost, toolbarHost, coordinator, no
   const { playheadMs, playing, setPlayheadMs, setPlaying, reset, audioRef, stop } = useEditorTransport(player, currentItemId, externalTransport, notify);
   const [lightingSelection, setLightingSelection] = useState<{ trackId: string; clipId: string | null; eventId?: string; eventIds?: string[] } | null>(null);
   const runtimeState = useRuntimeStore((state) => state.state);
+  useStoppedRuntimeRecovery(externalTransport, player, runtimeState, coordinator, notify);
   const [lightingTool, setLightingTool] = useState<LightingTool | null>(null);
   const [lightingPreview, setLightingPreview] = useState(false);
-  const showCommonProperties = (): void => { audioEditor.select(null); setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); setLightingTool(null); };
-  const openLightingTool = (tool: LightingTool): void => { if (tool === 'tempo') showCommonProperties(); else setLightingTool(tool); };
+  const [pointDetails, setPointDetails] = useState(false);
+  const [cueSelectionVersion, setCueSelectionVersion] = useState(0);
+  const showCommonProperties = (): void => { audioEditor.select(null); setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); setLightingTool(null); setPointDetails(false); };
+  const openLightingTool = (tool: LightingTool): void => { if (tool === 'tempo') showCommonProperties(); else { setPointDetails(false); setLightingTool(tool); } };
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const assetAvailability = useAssetAvailability(projectPath, project, notify);
   const workspaceLayout = useWorkspaceLayout(notify);
   const runCommand = createCommandRunner(execute, notify);
   const item = project?.rundown.find((candidate) => candidate.id === currentItemId) ?? null;
   const lightingDocument = useLightingDocument(item);   const audioEditor = useAudioEditor(item, projectPath, playing || runtimeState !== 'idle', notify);   const selectAudio = (id?: string): void => { setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); audioEditor.select(id ?? audioEditor.selectedId ?? audioEditor.segments[0]?.id ?? null); };
-  const changeLighting = (document: LightingDocument, label: string): void => { if (item) { try { execute(setLightingCommand(item.id, document, label)); } catch (error) { notify(toMessage(error), 'error'); } } };
-  useEffect(() => { setLightingSelection(null); setLightingPreview(false); setLightingTool(null); }, [currentItemId]);
+  const audition = useLightingCueAudition(lightingDocument, project?.projectId, item, notify);
+  const effectStamp = useLightingEffectStamp(item?.id ?? null, lightingDocument, item?.referenceAudio?.durationMs ?? 0, notify);
+  const changeLighting = lightingEditHandler({ itemId: item?.id ?? null, project, notify });
+  useEffect(() => { reset(); setSelectedCueId(null); setSelectedClipId(null); setLightingSelection(null); setLightingPreview(false); setLightingTool(null); }, [currentItemId, reset]);
   const cue = item?.cues.find((candidate) => candidate.id === selectedCueId) ?? null;
   const clip = item?.referenceMediaClips.find((candidate) => candidate.id === selectedClipId) ?? null;
   const selectedAsset = project?.mediaAssets.find((asset) => asset.id === (clip?.assetId ?? selectedAssetId)) ?? null;
   useEffect(() => { if (selectedCueId && !item?.cues.some((candidate) => candidate.id === selectedCueId)) setSelectedCueId(null); if (selectedClipId && !item?.referenceMediaClips.some((candidate) => candidate.id === selectedClipId)) setSelectedClipId(null); }, [item, selectedClipId, selectedCueId]);
-  useEffect(() => { reset(); setSelectedCueId(null); setSelectedClipId(null); }, [currentItemId, reset]);
   useReferenceAudioUrl({ item, projectPath, setAudioUrl, notify });
 
-  const durationMs = useMemo(() => {
-    if (!project || !item) return 60_000;
-    const map = new LightingTempoMap(lightingDocument.tempos);
-    return editableTimelineDuration({
-      referenceAudioDurationMs: item.referenceAudio?.durationMs ?? 0,
-      media: item.referenceMediaClips.map((candidate) => ({ startMs: timecodeToMilliseconds(candidate.startTimecode, project.timebase.frameRate), durationMs: candidate.durationMs, sourceOffsetMs: candidate.sourceOffsetMs ?? 0 })),
-      cues: [...lightingDocument.markers.map((marker) => ({ startMs: marker.endMs ?? marker.startMs, durationMs: 0 })), ...item.cues.map((candidate) => ({ startMs: timecodeToMilliseconds(candidate.timecode, project.timebase.frameRate), durationMs: candidate.durationMs ?? 0 })), ...lightingDocument.tracks.flatMap((track) => track.clips.flatMap((clip) => clip.events.map((event) => { const end = lightingEventTime(clip, event.kind === 'note' ? { ...event, at: event.at + event.duration } : event, map); return { startMs: end, durationMs: 0 }; })))]
-    });
-  }, [item, project, lightingDocument]);
-  // Visual-only editor preview keeps its existing clock. Lighting output still
-  // requires an actual reference-audio clock in useLightingPreview.
+  const durationMs = useWorkspaceDuration(project, item, lightingDocument);
+  // Visual preview keeps its clock; lighting output requires real audio in useLightingPreview.
   useTimelinePlaybackClock({ playing: playing && !audioUrl && !externalTransport, playheadMs, durationMs, frameRate: project?.timebase.frameRate ?? '30', itemId: item?.id ?? null, onPlayheadChange: setPlayheadMs, onPlayingChange: setPlaying });
-  const timelineReferenceAudio = useMemo(() => item?.referenceAudio && projectPath && audioUrl
-    ? { projectPath, url: audioUrl, sha256: item.referenceAudio.sha256, durationMs: item.referenceAudio.durationMs }
-    : null, [audioUrl, item?.referenceAudio, projectPath]);
+  const timelineReferenceAudio = useTimelineReferenceAudio(item?.referenceAudio, projectPath, audioUrl);
   const timelineState = useMemo(() => project && item ? resolveTimelineState(project, item, playheadMs) : null, [item, playheadMs, project]);
   const scenePreviewOutput = useMemo(() => resolveScenePreviewOutput(project, item?.id ?? null, playheadMs), [project, item?.id, playheadMs]);
   if (!project) return <div className="empty-panel full"><Clock3 /><h3>尚未打开工程</h3><p>新建或打开工程后即可添加素材与 OBS 目标。</p></div>;
   const { importMedia, addAssetClip, addObsResource, moveClip, trimClip, trimCue, splitClip, duplicateClip, duplicateCue, transformClip, transformObs, moveCue, removeClip, removeCue, setClipEmbeddedAudioEnabled, refreshObs, testAction } = createWorkspaceActions({ project, projectPath, documentId, item, cue, playheadMs, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource });
 
-  return <div className={`cue-studio${lowPower ? ' low-power-workspace' : ''}`}>
-    {item && lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools key={item.id} tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null}
+  return <div className={`cue-studio${lightingWorkspace ? ' lighting-workbench' : ''}${lowPower ? ' low-power-workspace' : ''}`} data-inspector={true}>
+    {!lightingWorkspace && item && lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools key={item.id} tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null}
     {toolbarHost ? createPortal(<CueRundownHeader item={item} notify={notify} documentActions={documentActions} />, toolbarHost) : null}
+    <Ma2PendingChanges playing={playing || runtimeState !== 'idle'} onStop={stop} />
     <div className={`cue-studio-grid${lightingSelection ? ' has-lighting-editor' : ''}`} style={workspaceLayout.style}>
-      {sidebarHost ? createPortal(<ResourceLibrary
+      {sidebarHost && lightingWorkspace ? createPortal(<LightingProgramList currentItemId={currentItemId} disabled={playing || runtimeState !== 'idle'} notify={notify} />, sidebarHost) : null}
+      {sidebarHost && !lightingWorkspace ? createPortal(<ResourceLibrary
         folders={project.mediaFolders} assets={project.mediaAssets}
         assetAvailability={assetAvailability}
         projectPath={projectPath}
@@ -147,9 +162,10 @@ export function CueWorkspace({ player, sidebarHost, toolbarHost, coordinator, no
         onAddObsResource={addObsResource}
         onSelectObsResource={setSelectedObsResource}
       />, sidebarHost) : null}
-      <main className="timeline-workbench">
+      <main className="timeline-workbench" style={lightingWorkspace ? librarySplit.style : undefined}>
+        {lightingWorkspace ? librarySplit.separator : null}
         <div className="editor-preview-row">
-          {!lowPower ? <><ReferenceStage
+          {!lowPower && !lightingWorkspace ? <><ReferenceStage
             scenePreview={scenePreviewOutput?.scene ?? null}
             sceneMode={project.obsOutputMode === 'scenes'} activeMediaClipId={scenePreviewOutput?.mediaClipId ?? null}
             itemTitle={item?.title ?? null} timelineState={timelineState} outputCanvas={project.obsOutputMode === 'scenes' && inventory?.videoSettings
@@ -164,9 +180,9 @@ export function CueWorkspace({ player, sidebarHost, toolbarHost, coordinator, no
             onMoveClipToTop={(id) => { const entry = item?.referenceMediaClips.find((value) => value.id === id); if (entry && item?.visualLayers[0]) moveClip(id, timecodeToMilliseconds(entry.startTimecode, project.timebase.frameRate), item.visualLayers[0].id); }}
             onRemoveClip={removeClip} onTransformObs={transformObs}
             onMoveObsToTop={(id) => { const entry = item?.cues.find((value) => value.id === id); if (entry && item?.visualLayers[0]) moveCue(id, timecodeToMilliseconds(entry.timecode, project.timebase.frameRate), item.visualLayers[0].id); }}
-            onRemoveObs={removeCue} onDropObsResource={addObsResource}
-          /><button className="workspace-splitter vertical" aria-label="调整属性面板宽度" onPointerDown={(event) => workspaceLayout.beginResize('inspector', event)} /></> : null}
-      {lightingSelection ? <aside className="cue-inspector panel"><div className="panel-title"><span>灯光属性</span><button onClick={showCommonProperties}>常用设置</button></div><div className="lighting-inspector-host"><LightingTimelineInspector onOpenTools={openLightingTool} onError={(message) => notify(message, 'error')} preview={lightingPreview} onPreviewChange={setLightingPreview} document={lightingDocument} trackId={lightingSelection.trackId} selectedClipId={lightingSelection.clipId} selectedEventId={lightingSelection.eventId ?? null} selectedEventIds={lightingSelection.eventIds ?? []} onSelect={(trackId, clipId) => setLightingSelection({ trackId, clipId })} onChange={changeLighting} /></div></aside> : <aside className="cue-inspector panel" key={`${cue?.id ?? clip?.id ?? 'empty'}:${cue || clip ? revision : currentItemId}`}>
+            onRemoveObs={removeCue} onDropObsResource={addObsResource} />{<button className="workspace-splitter vertical" aria-label="调整属性面板宽度" onPointerDown={(event) => workspaceLayout.beginResize('inspector', event)} onKeyDown={event => workspaceLayout.resizeWithKeyboard('inspector', event)} />}</> : null}
+
+      {lightingSelection && !lightingWorkspace ? <aside className="cue-inspector panel"><div className="panel-title"><span>灯光属性</span><button onClick={showCommonProperties}>常用设置</button></div><div className="lighting-inspector-host"><label><input type="checkbox" aria-label="选中 Cue 实时播放" checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />选中 Cue 实时播放</label><p role="status">{audition.enabled ? audition.status : '已关闭选中即播放'}</p>{lightingSelection ? <LightingTimelineInspector onOpenTools={openLightingTool} onError={(message) => notify(message, 'error')} preview={lightingPreview} onPreviewChange={setLightingPreview} document={lightingDocument} trackId={lightingSelection.trackId} selectedClipId={lightingSelection.clipId} selectedEventId={lightingSelection.eventId ?? null} selectedEventIds={lightingSelection.eventIds ?? []} onSelect={(trackId, clipId) => setLightingSelection({ trackId, clipId })} onChange={changeLighting} /> : null}</div></aside> : lightingWorkspace ? null : <aside className="cue-inspector panel" key={`${cue?.id ?? clip?.id ?? 'empty'}:${cue || clip ? revision : currentItemId}`}>
         <div className="panel-title"><span>{cue ? '画面与动作' : clip ? '媒体属性' : audioEditor.selected ? '音频属性' : '属性'}</span>{cue || clip || audioEditor.selected ? <button onClick={showCommonProperties}>常用设置</button> : null}</div>
         {cue && item ? <CueInspector itemId={item.id} cue={cue} frameRate={project.timebase.frameRate} inventory={inventory} execute={execute} testAction={testAction} /> : clip && item && selectedAsset ? <ClipInspector
           clip={clip} asset={selectedAsset}
@@ -174,13 +190,13 @@ export function CueWorkspace({ player, sidebarHost, toolbarHost, coordinator, no
           onTransform={(transform) => transformClip(clip.id, transform)}
           onEmbeddedAudioEnabled={(embeddedAudioEnabled) => setClipEmbeddedAudioEnabled(clip.id, embeddedAudioEnabled)}
           onRemove={() => removeClip(clip.id)}
-        /> : audioEditor.selected ? <AudioInspector editor={audioEditor} playheadMs={playheadMs} /> : item ? <CommonProperties key={item.id} item={item} document={lightingDocument} disabled={playing || runtimeState !== 'idle'} onChange={changeLighting} notify={notify} /> : <div className="inspector-empty"><FileVideo2 /><h3>先选择节目</h3></div>}
+        /> : lightingWorkspace || audioEditor.selected ? <AudioInspector editor={audioEditor} playheadMs={playheadMs} /> : item ? <CommonProperties key={item.id} item={item} document={lightingDocument} disabled={playing || runtimeState !== 'idle'} onChange={changeLighting} notify={notify} /> : <div className="inspector-empty"><FileVideo2 /><h3>先选择节目</h3></div>}
       </aside>}
         </div>
-        {!lowPower ? <button className="workspace-splitter horizontal" aria-label="调整时间线高度" onPointerDown={(event) => workspaceLayout.beginResize('timeline', event)} /> : null}
-        {item && timelineState ? <ReferenceTimeline
+        {!lowPower && !lightingWorkspace ? <button className="workspace-splitter horizontal" aria-label="调整时间线高度" onPointerDown={(event) => workspaceLayout.beginResize('timeline', event)} onKeyDown={event => workspaceLayout.resizeWithKeyboard('timeline', event)} /> : null}
+        {item && timelineState ? <ReferenceTimeline onEffectDrop={lightingWorkspace ? effectStamp.stamp : undefined} lightingWorkspace={lightingWorkspace}
           audioEditor={audioEditor} onSelectAudio={selectAudio} externalTransport={externalTransport} transportAudioRef={audioRef} onStop={stop}
-          lighting={{ onOpenTools: openLightingTool, detailOpen: lightingTool !== null, onError: (message) => notify(message, 'error'), preview: lightingPreview, onPreviewChange: setLightingPreview, document: lightingDocument, selectedClipId: lightingSelection?.clipId ?? null, selectedEventId: lightingSelection?.eventId ?? null, selectedEventIds: lightingSelection?.eventIds ?? [], onSelectEvent: (trackId, clipId, eventId, eventIds) => { setSelectedClipId(null); setSelectedCueId(null); setLightingSelection({ trackId, clipId, eventId, eventIds: eventIds ?? [eventId] }); }, onSelect: (trackId, clipId) => { setSelectedClipId(null); setSelectedCueId(null); setLightingSelection({ trackId, clipId }); }, onChange: changeLighting }}
+          lighting={{ onAuditionEvent: audition.select, onOpenTools: openLightingTool, detailOpen: lightingTool !== null, onError: (message) => notify(message, 'error'), preview: lightingPreview, onPreviewChange: setLightingPreview, document: lightingDocument, selectedClipId: lightingSelection?.clipId ?? null, selectedEventId: lightingSelection?.eventId ?? null, selectedEventIds: lightingSelection?.eventIds ?? [], onSelectEvent: (trackId, clipId, eventId, eventIds) => { setSelectedClipId(null); setSelectedCueId(null); setLightingSelection({ trackId, clipId, eventId, eventIds: eventIds ?? [eventId] }); if (lightingWorkspace && (!eventIds || eventIds.length <= 1)) { setPointDetails(true); setLightingTool(null); setCueSelectionVersion(value => value + 1); } }, onSelect: (trackId, clipId) => { setSelectedClipId(null); setSelectedCueId(null); setLightingSelection({ trackId, clipId }); }, onChange: changeLighting }}
           projectPath={projectPath}
           assets={project.mediaAssets}
           clips={item.referenceMediaClips}
@@ -217,6 +233,7 @@ export function CueWorkspace({ player, sidebarHost, toolbarHost, coordinator, no
           onDeleteClip={removeClip}
           onDeleteCue={removeCue}
         /> : <div className="empty-panel studio-empty"><MonitorPlay /><h3>先选择当前节目</h3><p>随后可把本地素材或 OBS 目标拖入时间线。</p></div>}
+        {lightingWorkspace && item ? <LightingEffectDock pointDetails={pointDetails} cueSelectionVersion={cueSelectionVersion} onLibrary={() => { setLightingTool(null); setPointDetails(false); }} externalPanel={lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools inline tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null} headerActions={<div className="lighting-header-actions"><label className="lighting-output-choice"><span><input type="checkbox" aria-label="选中 Cue 实时播放" checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />选中 Cue 实时播放</span><small role="status">{audition.enabled ? audition.status : '已关闭选中即播放'}</small></label>{lightingSelection?.eventId ? <><span>已选灯光点 · 点击效果可替换</span><button title="点位详情" aria-label="点位详情" aria-current={pointDetails ? 'page' : undefined} onClick={() => { setLightingTool(null); setPointDetails(!pointDetails); }}><SlidersHorizontal /><span>点位详情</span></button><button title="取消选择" aria-label="取消选择" onClick={showCommonProperties}><X /><span>取消选择</span></button></> : null}<button aria-current={lightingTool === 'files' ? 'page' : undefined} title="导入 / 导出" aria-label="导入 / 导出" onClick={() => openLightingTool('files')} disabled={playing || runtimeState !== 'idle'}><FolderInput /><span>导入与导出</span></button><button aria-current={lightingTool === 'sync' ? 'page' : undefined} title="MA2 同步" aria-label="MA2 同步" onClick={() => openLightingTool('sync')} disabled={playing || runtimeState !== 'idle'}><RefreshCw /><span>MA2 同步</span></button></div>} eventId={lightingSelection?.eventId} ms={playheadMs} durationMs={timelineReferenceAudio?.durationMs ?? 0} onNew={showCommonProperties} document={lightingDocument} disabled={false} onStamp={id => effectStamp.stamp(id, externalTransport && playing && audioRef.current ? audioRef.current.currentTime * 1000 : playheadMs, lightingSelection?.eventId)} onChange={changeLighting} /> : null}
       </main>
 
     </div>
@@ -227,6 +244,7 @@ export function CueWorkspace({ player, sidebarHost, toolbarHost, coordinator, no
 function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
 
 function resolveScenePreviewOutput(project: LinkProject | null, itemId: string | null, playheadMs: number) {
   if (!project || !itemId || project.obsOutputMode !== 'scenes') return null;
@@ -253,4 +271,17 @@ function createCommandRunner(
 }
 
 
+
+
+function useWorkspaceDuration(project: LinkProject | null, item: import('@tb/schema').RundownItem | null, lightingDocument: LightingDocument): number {
+  return useMemo(() => {
+    if (!project || !item) return 60_000;
+    const map = new LightingTempoMap(lightingDocument.tempos);
+    return editableTimelineDuration({
+      referenceAudioDurationMs: item.referenceAudio?.durationMs ?? 0,
+      media: item.referenceMediaClips.map((candidate) => ({ startMs: timecodeToMilliseconds(candidate.startTimecode, project.timebase.frameRate), durationMs: candidate.durationMs, sourceOffsetMs: candidate.sourceOffsetMs ?? 0 })),
+      cues: [...lightingDocument.markers.map((marker) => ({ startMs: marker.endMs ?? marker.startMs, durationMs: 0 })), ...item.cues.map((candidate) => ({ startMs: timecodeToMilliseconds(candidate.timecode, project.timebase.frameRate), durationMs: candidate.durationMs ?? 0 })), ...lightingDocument.tracks.flatMap((track) => track.clips.flatMap((clip) => clip.events.map((event) => { const end = lightingEventTime(clip, event.kind === 'note' ? { ...event, at: event.at + event.duration } : event, map); return { startMs: end, durationMs: 0 }; })))]
+    });
+  }, [item, project, lightingDocument]);
+}
 

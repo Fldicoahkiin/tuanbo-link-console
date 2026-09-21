@@ -1,3 +1,5 @@
+import { Ma2DiscoveryResults } from './Ma2DiscoveryResults';
+import { Button } from './Button';
 import { checkNetworkMa2 } from '../stores/ma2-connection-store';
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState, type JSX } from 'react';
@@ -12,12 +14,13 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
   const [host, setHost] = useState('');
   const [port, setPort] = useState(30000);
   const [monitorPort, setMonitorPort] = useState(30001);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [passwordEdited, setPasswordEdited] = useState(false);
+  const [username, setUsername] = useState('administrator');
+  const [password, setPassword] = useState('admin');
+  const [passwordEdited, setPasswordEdited] = useState(true);
   const [autoConnect, setAutoConnect] = useState(false);
   const [status, setStatus] = useState<Ma2NetworkStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState('');
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     let alive = true;
@@ -29,7 +32,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
         setStatus(next);
         if (initial) {
           const settings = next.settings;
-          if (settings) { setHost(settings.host); setPort(settings.port); setMonitorPort(settings.monitorPort); setUsername(settings.username); setAutoConnect(settings.autoConnect); }
+          if (settings) { setHost(settings.host); setPort(settings.port); setMonitorPort(settings.monitorPort); setUsername(settings.username); setAutoConnect(settings.autoConnect); setPassword(''); setPasswordEdited(false); }
           setLoaded(true);
         }
         if (next.state !== 'connected') { checkedConnection.current = false; setPluginReady(false); }
@@ -44,7 +47,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
           } catch (failure) { if (alive) { setPluginReady(false); setError(`已连接，但插件未就绪：${failure instanceof Error ? failure.message : String(failure)}`); } }
         }
         timer = setTimeout(() => void read(false), 1000);
-      } catch (error) { if (alive) notify(`读取 MA2 连接状态失败：${error instanceof Error ? error.message : String(error)}`, 'error'); }
+      } catch (error) { if (alive) { const message = `读取 MA2 连接状态失败：${error instanceof Error ? error.message : String(error)}`; setError(message); notify(message, 'error'); } }
     };
     void read(true);
     return () => { alive = false; clearTimeout(timer); };
@@ -52,7 +55,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
   const choose = (profile?: NetworkSettings, address?: { host: string; port: number }): void => {
     setError('');
     setHost(profile?.host ?? address?.host ?? ''); setPort(profile?.port ?? address?.port ?? 30000); setMonitorPort(profile?.monitorPort ?? 30001);
-    setUsername(profile?.username ?? ''); setAutoConnect(profile?.autoConnect ?? false); setPassword(''); setPasswordEdited(false);
+    setUsername(profile?.username ?? 'administrator'); setAutoConnect(profile?.autoConnect ?? false); setPassword(profile ? '' : 'admin'); setPasswordEdited(!profile);
   };
   const search = async (): Promise<void> => {
     setSearching(true); setFound(null);
@@ -71,20 +74,23 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     finally { setBusy(false); }
   };
   const save = async (connect: boolean): Promise<void> => {
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setProgress('正在保存连接设置…');
     try {
       const parsed = ma2NetworkSaveSchema.safeParse({ settings: { host: host.trim(), port, monitorPort, username: username.trim(), autoConnect }, ...(passwordEdited ? { password } : {}) });
       if (!parsed.success) throw new Error('请填写有效的控台 IPv4 地址、端口与用户名；用户名和密码不能包含引号、反斜杠或换行');
       const saved = ma2NetworkStatusSchema.parse(await window.tbLink.saveMa2Network(parsed.data));
       setPassword(''); setPasswordEdited(false); setStatus(saved);
       if (connect) {
+        setProgress(`正在连接 ${host.trim()}:${port}，并验证登录…`);
         checkedConnection.current = false; setPluginReady(false);
         const connected = ma2NetworkStatusSchema.parse(await window.tbLink.connectMa2Network());
         setStatus(connected);
-        if (connected.error) notify(connected.error, 'error');
+        if (connected.error) { setError(connected.error); notify(connected.error, 'error'); }
+        else if (connected.state === 'connected') notify('MA2 已登录，正在检查插件通信');
+        else { const message = 'MA2 未建立连接，请检查控台远程设置和网络后重新连接'; setError(message); notify(message, 'error'); }
       } else notify('MA2 连接设置已保存');
     } catch (error) { const message = error instanceof Error ? error.message : String(error); setError(message); notify(message, 'error'); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setProgress(''); }
   };
   const disconnect = async (): Promise<void> => {
     try { setStatus(ma2NetworkStatusSchema.parse(await window.tbLink.disconnectMa2Network())); }
@@ -101,21 +107,25 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
   return <div className="ma2-network-settings">
     <span className="ma2-device-status" role="status">{connectionLabel}</span>
 
-    <div className="ma2-saved-row"><label><span>已保存控台</span><select aria-label="已保存 MA2 控台" value={selected} disabled={locked || searching} onChange={(event) => choose(profiles[Number(event.target.value)])}><option value={-1}>添加控台</option>{profiles.map((profile, index) => <option key={`${profile.host}:${profile.port}:${profile.monitorPort}:${profile.username}`} value={index}>{profile.host}:{profile.port} · {profile.username}</option>)}</select></label><div className="settings-header-actions"><button className="secondary-button" disabled={locked || searching} onClick={() => void search()}>{searching ? '搜索中…' : '搜索局域网控台'}</button>{searching ? <button onClick={() => { void window.tbLink.cancelMa2Discovery().catch((error: unknown) => notify(String(error), 'error')); }}>取消搜索</button> : null}</div></div>
-    {found ? <div aria-label="MA2 搜索结果"><p className="settings-note">{found.hosts.length ? `发现 ${found.hosts.length} 个地址，请选择控台。` : '未发现开放远程端口的控台，请检查网线、IP 网段和控台 Telnet 设置，或手动填写地址。'}</p>{found.hosts.map((address) => <button className="secondary-button" key={`${address.host}:${address.port}`} disabled={locked} onClick={() => choose(profiles.find((profile) => profile.host === address.host && profile.port === address.port), address)}>{address.host}:{address.port} · {address.identity === 'ma2' ? 'MA2 远程入口' : '待确认设备'}</button>)}{found.warnings.length ? <p className="device-error" role="alert">{found.warnings.join('；')}</p> : null}</div> : null}
+    <div className="ma2-saved-row"><label><span>已保存控台</span><select aria-label="已保存 MA2 控台" value={selected} disabled={locked || searching} onChange={(event) => choose(profiles[Number(event.target.value)])}><option value={-1}>添加控台</option>{profiles.map((profile, index) => <option key={`${profile.host}:${profile.port}:${profile.monitorPort}:${profile.username}`} value={index}>{profile.host}:{profile.port} · {profile.username}</option>)}</select></label><div className="settings-header-actions"><Button className="secondary-button" disabled={locked || searching} onClick={() => void search()}>{searching ? '搜索中…' : '搜索局域网控台'}</Button>{searching ? <button onClick={() => { void window.tbLink.cancelMa2Discovery().catch((error: unknown) => notify(String(error), 'error')); }}>取消搜索</button> : null}</div></div>
+    {found ? <Ma2DiscoveryResults result={found} disabled={locked} selectedHost={host} onChoose={address => choose(profiles.find(profile => profile.host === address.host && profile.port === address.port), address)} /> : null}
 
+    <details className="ma2-operation-help"><summary>网络连接说明</summary><p className="settings-note">读取控台 Cue 和双向同步需要电脑与控台接入同一局域网，可用网线直连或接同一交换机。控台开启 Setup → Console → Global Settings → Telnet → Login Enabled。登录用户在 Setup → Console → User &amp; Profiles Setup 中查看或新建，填写该用户的密码；未设密码才留空。</p></details>
     <div className="ma2-network-fields">
-      <label><span>控台 IP</span><input aria-label="MA2 控台 IP" placeholder="192.168.0.10" value={host} disabled={locked} onChange={(event) => { setError(''); setHost(event.target.value); setPassword(''); setPasswordEdited(false); }} /></label>
+      <label><span>控台 IP</span><input aria-label="MA2 控台 IP" placeholder="192.168.0.10" value={host} disabled={locked} onChange={(event) => { setError(''); setHost(event.target.value); }} /></label>
       <label><span>登录用户</span><input aria-label="MA2 登录用户" autoComplete="off" value={username} disabled={locked} onChange={(event) => { setError(''); setUsername(event.target.value); setPassword(''); setPasswordEdited(false); }} /></label>
       <label><span>登录密码</span><input aria-label="MA2 登录密码" type="password" autoComplete="new-password" placeholder={matching && status?.passwordSaved ? '已安全保存，留空不修改' : '没有密码可留空'} value={password} disabled={locked} onChange={(event) => { setPassword(event.target.value); setPasswordEdited(true); }} /></label>
       <label><span>启动时连接</span><input aria-label="启动时自动连接 MA2" type="checkbox" checked={autoConnect} disabled={locked} onChange={(event) => setAutoConnect(event.target.checked)} /></label>
     </div>
 
-    <div className="settings-header-actions device-actions">{connected && !dirty ? <button className="secondary-button" disabled={locked} onClick={() => void disconnect()}>断开</button> : <button className="primary-button" disabled={locked || searching} onClick={() => void save(true)}>{busy ? '连接中…' : '保存并连接'}</button>}{dirty ? <button className="secondary-button" disabled={locked || searching} onClick={() => void save(false)}>仅保存</button> : null}</div>
+    <div className="device-actions"><Button className="secondary-button" disabled={locked} onClick={() => { setUsername('administrator'); setPassword('admin'); setPasswordEdited(true); setError(''); }}>使用默认账号</Button><span className="settings-note">MA2 默认：administrator / admin。自定义用户请填写自己的密码。</span></div>
+
+    <div className="settings-header-actions device-actions">{connected && !dirty ? <Button className="secondary-button" disabled={locked} onClick={() => void disconnect()}>断开</Button> : <Button className="primary-button" disabled={locked || searching} onClick={() => void save(true)}>{busy ? '连接中…' : '保存并连接'}</Button>}{dirty ? <Button className="secondary-button" disabled={locked || searching} onClick={() => void save(false)}>仅保存</Button> : null}</div>
+    {progress ? <p className="settings-note" role="status">{progress}</p> : null}
     {error || matching && status?.error ? <p className="device-error" role="alert">{error || status?.error}</p> : null}
-    {connected && !pluginReady ? <div className="device-actions"><button className="secondary-button" onClick={onMaintenance}>连接维护</button></div> : null}
+    {connected ? <div className="device-actions"><Button className="secondary-button" disabled={locked} onClick={() => void check()}>检查插件通信</Button><span role="status">{pluginReady ? '插件通信正常，可以读取灯光 Cue' : '请在控台导入并运行插件后检查通信'}</span>{!pluginReady ? <Button className="secondary-button" onClick={onMaintenance}>连接维护</Button> : null}</div> : null}
     {maintenanceHost ? createPortal(
-    <section className="ma2-protocol"><div className="device-section-heading"><h3>MA2 控台</h3><span>{host || '未选择控台'}</span></div><div className="settings-header-actions ma2-plugin-actions"><button className="secondary-button" disabled={locked} onClick={() => { void window.tbLink.exportMa2Plugin().then((path) => { if (path) notify(`插件已导出：${path}`); }).catch((error: unknown) => notify(error instanceof Error ? error.message : String(error), 'error')); }}>导出控台插件</button></div>    <div className="settings-header-actions"><button className="secondary-button" disabled={locked || !matching || status?.state !== 'connected'} onClick={() => void check()}>检测版本兼容性</button></div>
+    <section className="ma2-protocol"><div className="device-section-heading"><h3>MA2 控台</h3><span>{host || '未选择控台'}</span></div>    <div className="settings-header-actions"><Button className="secondary-button" disabled={locked || !matching || status?.state !== 'connected'} onClick={() => void check()}>检测版本兼容性</Button></div>
     {matching && status?.capabilities ? <p role="status">MA2 {status.capabilities.version} · {status.capabilities.lua} · {status.capabilities.message}</p> : null}
 <label className="settings-path-row"><span>远程端口</span><input aria-label="MA2 远程端口" type="number" min={1} max={65535} value={Number.isNaN(port) ? '' : port} disabled={locked} onChange={(event) => { setPort(event.target.valueAsNumber); }} /></label><label className="settings-path-row"><span>监视端口</span><input aria-label="MA2 监视端口" type="number" min={1} max={65535} value={Number.isNaN(monitorPort) ? '' : monitorPort} disabled={locked} onChange={(event) => { setMonitorPort(event.target.valueAsNumber); }} /></label><div className="device-actions">{dirty ? <button disabled={locked} onClick={() => void save(false)}>保存连接配置</button> : null}</div></section>, maintenanceHost) : null}
   </div>;

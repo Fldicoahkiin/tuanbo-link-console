@@ -8,7 +8,13 @@ const desktopPackage = JSON.parse(readFileSync(join(root, 'apps/desktop/package.
 const requiredBuildFiles = [
   'apps/desktop/out/main/index.cjs',
   'apps/desktop/out/preload/index.cjs',
-  'apps/desktop/out/renderer/index.html'
+  'apps/desktop/out/renderer/index.html',
+  'tools/ibt/bin/ibt.exe',
+  'tools/ibt/bin/COPYING',
+  'tools/ibt/bin/marsyas-source.zip',
+  'tools/ibt/bin/build.mjs',
+  'tools/ibt/bin/README.md',
+  'tools/ibt/bin/build.json'
 ];
 
 const missing = requiredBuildFiles.filter((file) => !existsSync(join(root, file)));
@@ -34,9 +40,18 @@ if (requireDist) {
   const updateMetadata = files.find((file) => relative(distDirectory, file).replaceAll('\\', '/') === 'latest.yml');
   const packagedUpdateConfig = files.find((file) => relative(distDirectory, file).replaceAll('\\', '/') === 'win-unpacked/resources/app-update.yml');
   const updateConfigText = packagedUpdateConfig ? readFileSync(packagedUpdateConfig, 'utf8') : '';
+  const packagedBridge = join(distDirectory, 'win-unpacked/resources/obs/tblink-realtime-preview.dll');
+  const builtBridge = join(root, 'tools/obs/native-preview/tblink-realtime-preview.dll');
+  const bridgeMatches = existsSync(packagedBridge) && existsSync(builtBridge)
+    && readFileSync(packagedBridge).equals(readFileSync(builtBridge));
   const installerVersionInfo = installer ? readWindowsVersionInfo(installer) : undefined;
   const appVersionInfo = unpackedExecutable ? readWindowsVersionInfo(unpackedExecutable) : undefined;
   checks.push(
+    { name: 'bundled-ibt-engine-and-source', ok: ['ibt.exe', 'COPYING', 'marsyas-source.zip', 'build.mjs', 'README.md', 'build.json'].every(file => {
+      const packaged = join(distDirectory, 'win-unpacked/resources/ibt', file);
+      return existsSync(packaged) && readFileSync(packaged).equals(readFileSync(join(root, 'tools/ibt/bin', file)));
+    }), detail: 'IBT engine, corresponding source, license and build instructions match this build' },
+    { name: 'bundled-obs-native-bridge', ok: bridgeMatches, detail: bridgeMatches ? 'packaged DLL matches this build; no runtime compiler required' : 'missing or mismatched OBS bridge DLL' },
     { name: 'windows-nsis-installer', ok: Boolean(installer), detail: installer ? relative(root, installer) : 'missing' },
     { name: 'windows-unpacked-executable', ok: Boolean(unpackedExecutable), detail: unpackedExecutable ? relative(root, unpackedExecutable) : 'missing' },
     { name: 'windows-update-metadata', ok: Boolean(updateMetadata), detail: updateMetadata ? relative(root, updateMetadata) : 'missing latest.yml' },

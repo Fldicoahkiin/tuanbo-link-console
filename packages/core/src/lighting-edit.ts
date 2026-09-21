@@ -3,7 +3,7 @@ import type { LinkCommand } from './link-command';
 
 export function setLightingCommand(itemId: string, lighting: LightingDocument, label = '编辑灯光'): LinkCommand {
   const validated = lightingDocumentSchema.parse(lighting);
-  return { id: crypto.randomUUID(), label, execute(project) {
+  return { id: crypto.randomUUID(), label, scope: 'lighting', execute(project) {
     const next = structuredClone(project);
     const item = next.rundown.find((entry) => entry.id === itemId);
     if (!item) throw new Error('灯光节目不存在');

@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
+/** Two-millisecond envelopes for short programmes; bound cache size for long media. */
+export const waveformBucketCount = (durationMs: number): number => Math.min(500_000, Math.max(4800, Math.ceil(durationMs / 2)));
 import type { LinkProjectService } from './link-project-service';
 
 /** Streaming PCM reduction: retain only one incomplete float and the output peaks. */
@@ -53,7 +55,7 @@ export class WaveformService {
 
   private async generate(projectPath: string, sourcePath: string, sha256: string, durationMs: number): Promise<number[]> {
     const cached = await this.projects.loadWaveformCache(projectPath, sha256);
-    if (cached) return cached;
+    if (cached?.length === waveformBucketCount(durationMs)) return cached;
     const peaks = await this.decode(sourcePath, durationMs);
     await this.projects.saveWaveformCache(projectPath, sha256, peaks);
     return peaks;
@@ -63,7 +65,7 @@ export class WaveformService {
 export function decodeWaveform(sourcePath: string, durationMs: number): Promise<number[]> {
   if (!ffmpegPath) throw new Error('FFmpeg 运行时未安装');
   const executable = ffmpegPath.includes('app.asar') ? ffmpegPath.replace('app.asar', 'app.asar.unpacked') : ffmpegPath;
-  const accumulator = new WaveformAccumulator(Math.round(durationMs * 48));
+  const accumulator = new WaveformAccumulator(Math.round(durationMs * 48), waveformBucketCount(durationMs));
   return new Promise((resolve, reject) => {
     const child = spawn(executable, ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-i', sourcePath,
       '-map', '0:a:0', '-vn', '-af', 'pan=mono|c0=c0', '-ar', '48000', '-f', 'f32le', 'pipe:1'],

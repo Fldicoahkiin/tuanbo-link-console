@@ -1,37 +1,31 @@
-import { useEffect, useRef } from 'react';
+import { useMemo } from 'react';
+import { WaveSurferSurface } from './WaveSurferSurface';
 
-/** A viewport-sized canvas keeps long songs cheap while the waveform follows its clip. */
-export function AudioSegmentWaveform({ peaks, sourceStartMs, sourceDurationMs, durationMs, pixelsPerSecond, scrollLeft, viewportWidth, startMs }: {
+/** Only send the visible source interval to the library; clip edits retain source offsets. */
+export function AudioSegmentWaveform({ samples, peaks, sourceStartMs, sourceDurationMs, durationMs, pixelsPerSecond, scrollLeft, viewportWidth, startMs }: {
+  samples?: AudioBuffer | null;
   peaks: readonly number[]; sourceStartMs: number; sourceDurationMs: number; durationMs: number;
   pixelsPerSecond: number; scrollLeft: number; viewportWidth: number; startMs: number;
 }): JSX.Element {
-  const ref = useRef<HTMLCanvasElement>(null);
-  const left = Math.max(0, scrollLeft - startMs / 1000 * pixelsPerSecond);
-  const width = Math.max(0, Math.min(durationMs / 1000 * pixelsPerSecond - left, viewportWidth));
-  useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas) return;
-    const draw = (): void => {
-      const scale = window.devicePixelRatio || 1;
-      canvas.width = Math.max(1, Math.round(width * scale));
-      canvas.height = Math.max(1, Math.round(canvas.clientHeight * scale));
-      const ctx = canvas.getContext('2d'); if (!ctx) throw new Error('音频波形 Canvas 不可用');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = getComputedStyle(canvas).color;
-      const samplesPerPixel = 1000 / pixelsPerSecond / sourceDurationMs * peaks.length;
-      ctx.beginPath(); ctx.moveTo(0, canvas.height);
-      for (let x = 0; x < canvas.width; x++) {
-        const position = (sourceStartMs / sourceDurationMs * peaks.length) + (left + x / scale) * samplesPerPixel;
-        const first = Math.max(0, Math.floor(position));
-        const last = Math.min(peaks.length, Math.max(first + 1, Math.ceil(position + samplesPerPixel / scale)));
-        let peak = 0;
-        for (let index = first; index < last; index++) peak = Math.max(peak, peaks[index]!);
-        ctx.lineTo(x, canvas.height - Math.min(1, peak) * (canvas.height - 2 * scale));
-      }
-      ctx.lineTo(canvas.width, canvas.height); ctx.closePath(); ctx.fill();
-    };
-    draw(); const observer = new ResizeObserver(draw); observer.observe(canvas);
-    return () => observer.disconnect();
-  }, [peaks, sourceStartMs, sourceDurationMs, pixelsPerSecond, left, width]);
-  return <canvas ref={ref} className="audio-segment-waveform" style={{ left, width }} />;
+  // Stable tiles avoid restarting waveform/FFT work on every playback scroll frame.
+  const left = Math.floor(Math.max(0, scrollLeft - startMs / 1000 * pixelsPerSecond) / 256) * 256;
+  const inViewport = startMs / 1000 * pixelsPerSecond < scrollLeft + viewportWidth
+    && (startMs + durationMs) / 1000 * pixelsPerSecond > scrollLeft;
+  const width = inViewport ? Math.max(0, Math.min(durationMs / 1000 * pixelsPerSecond - left, viewportWidth + 256)) : 0;
+  const visibleStart = sourceStartMs / 1000 + left / pixelsPerSecond;
+  const seconds = width / pixelsPerSecond;
+  const channels = useMemo(() => {
+    if (seconds <= 0) return [];
+    if (samples) {
+      const first = Math.max(0, Math.floor(visibleStart * samples.sampleRate));
+      const last = Math.min(samples.length, Math.ceil((visibleStart + seconds) * samples.sampleRate));
+      // The library can normalize supplied arrays in place; never share our decoded source.
+      return Array.from({ length: samples.numberOfChannels }, (_, index) => Float32Array.from(samples.getChannelData(index).subarray(first, last), value => Math.max(-1, Math.min(1, value))));
+    }
+    const rate = peaks.length / (sourceDurationMs / 1000);
+    return [Float32Array.from(peaks.slice(Math.max(0, Math.floor(visibleStart * rate)), Math.ceil((visibleStart + seconds) * rate)))];
+  }, [samples, peaks, visibleStart, seconds, sourceDurationMs]);
+  return <div className="audio-segment-waveform" style={{ left, width }}>
+    {seconds > 0 && channels[0]?.length ? <WaveSurferSurface channels={channels} duration={seconds} allowSpectrum={Boolean(samples)} /> : null}
+  </div>;
 }

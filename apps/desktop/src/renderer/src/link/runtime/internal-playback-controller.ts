@@ -1,4 +1,4 @@
-import { allocateMediaTimecodeRanges, millisecondsToFrameNumber, playlistItems, programPlaylists } from '@tb/core/link';
+import { allocateMediaTimecodeRanges, lightingTimeOrigin, millisecondsToFrameNumber, playlistItems, programPlaylists } from '@tb/core/link';
 import type { IntegrationProfile, LinkProject } from '@tb/schema';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { LightingMidiOutput } from '../../registry/lighting-midi-output';
@@ -13,6 +13,8 @@ export type InternalPlayerState = {
   playedItemIds: string[];
   mtcEnabled: boolean;
   mtcPositionMs: number | null;
+  mtcPortName?: string | null;
+  mtcSentPositionMs?: number | null;
   errorTitle: string | null;
 };
 export const emptyInternalPlayerState: InternalPlayerState = {
@@ -40,6 +42,8 @@ export class InternalPlaybackController {
   private lastAdvanced = 0;
   private previousPosition = -1;
   private offsetMs = 0;
+  private directLighting = false;
+  private mtcSentPositionMs: number | null = null;
   private disposed = false;
   private loadedAudioUrl: string | null = null;
   private readonly lighting = new LightingMidiOutput();
@@ -82,14 +86,19 @@ export class InternalPlaybackController {
       if (!this.current(generation)) return;
       const config = this.dependencies.configuration();
       await this.output.prepare(this.audio, config.outputDeviceId, config.audioSampleRate ?? 48000);
-      await this.mtc.connect(config.mtcPortName);
+      if (!this.current(generation)) return;
+      this.directLighting = item.lighting?.outputMode === 'direct';
+      const mtcPortName = await this.mtc.connect(this.directLighting ? null : config.mtcPortName, !this.directLighting && this.state.mtcEnabled && Boolean(item.p1Media || item.lighting?.ma2Bindings?.length || item.lighting?.tracks.some(track => track.clips.some(clip => clip.events.length))));
+      if (!this.current(generation)) return;
+      this.update({ mtcPortName: this.directLighting ? null : mtcPortName ?? config.mtcPortName, mtcSentPositionMs: null });
       if (item.lighting) await this.lighting.prepare(item.lighting, config.lightingProfile ?? null, positionMs);
       if (!this.current(generation)) return;
       await this.dependencies.prepare(itemId, positionMs, reuseSession);
       if (!this.current(generation)) return;
       this.update({ volume: item.playback?.volume ?? 100, ...(item.playback ? { endAction: item.playback.endAction } : {}) });
       this.audio.currentTime = positionMs / 1000; this.audio.volume = this.state.volume / 100;
-      this.offsetMs = item.playback?.mtcOffsetMs ?? (this.project.obsOutputMode === 'scenes' ? 0 : (allocateMediaTimecodeRanges(this.project).find((range) => range.itemId === itemId)?.startSeconds ?? 0) * 1000);
+      this.offsetMs = lightingTimeOrigin(item.lighting, item.playback?.mtcOffsetMs ?? (this.project.obsOutputMode === 'scenes' ? 0 : (allocateMediaTimecodeRanges(this.project).find((range) => range.itemId === itemId)?.startSeconds ?? 0) * 1000));
+      if (item.playback && item.playback.mtcOffsetMs !== this.offsetMs) throw new Error('歌曲播放起点与 MA2 绑定时间码不一致，请重新核对');
       this.lastFrame = -1; this.previousPosition = -1; this.lastAdvanced = performance.now();
       this.update({ itemId, positionMs, mtcPositionMs: positionMs + this.offsetMs, durationMs: endMs, status: 'playing' });
       await this.dependencies.ingest(positionMs);
@@ -142,9 +151,13 @@ export class InternalPlaybackController {
     return this.play(this.state.itemId, positionMs, this.state.status === 'paused');
   }
   scrub(itemId: string, positionMs: number): Promise<void> {
+    // Pointer movement must not retry a failed OBS/audio preparation.
+    // A deliberate Play starts a new preparation and clears the error.
+    if (this.state.status === 'error') return Promise.resolve();
     if (!this.dependencies.scrub || this.state.itemId !== itemId || !['playing', 'paused'].includes(this.state.status)) return this.play(itemId, positionMs, true);
     const item = this.project.rundown.find((entry) => entry.id === itemId);
     if (!Number.isFinite(positionMs) || positionMs < (item?.playback?.startMs ?? 0) || positionMs >= this.state.durationMs) return Promise.reject(new Error('定位位置超出节目范围'));
+    if (this.state.status === 'paused' && this.state.positionMs === positionMs) return this.tail;
     const generation = ++this.generation;
     this.silence(); this.update({ status: 'paused', positionMs });
     const operation = this.tail.then(async () => {
@@ -171,7 +184,11 @@ export class InternalPlaybackController {
   }
   setEndAction(endAction: InternalPlayerState['endAction']): void { this.update({ endAction }); }
   setPlaylist(playlistId: string): void { this.update({ playlistId }); }
-  toggleMtc(): void { this.mtc.stop(); this.update({ mtcEnabled: !this.state.mtcEnabled }); }
+  toggleMtc(): void {
+    this.mtc.stop(); this.mtcSentPositionMs = null;
+    this.update({ mtcEnabled: !this.state.mtcEnabled, mtcSentPositionMs: null });
+    if (this.state.mtcEnabled && !this.directLighting && !this.state.mtcPortName && ['playing', 'paused'].includes(this.state.status)) this.freeze('灯光时间码输出尚未连接，请重新点击播放以自动检测 MIDI 接口');
+  }
   toggle(): Promise<void> {
     if (this.state.status === 'playing') return this.pause();
     if (this.state.status === 'paused') return this.resume();
@@ -232,14 +249,14 @@ export class InternalPlaybackController {
         return;
       }
       if (positionMs >= this.state.durationMs) { this.finish(); return; }
-      if (this.state.mtcEnabled) this.mtc.tick(positionMs + this.offsetMs, this.project.timebase.frameRate, now);
+      if (this.state.mtcEnabled && !this.directLighting && this.mtc.tick(positionMs + this.offsetMs, this.project.timebase.frameRate, now)) this.mtcSentPositionMs = positionMs + this.offsetMs;
       this.lighting.tick(positionMs);
       const frame = millisecondsToFrameNumber(positionMs, this.project.timebase.frameRate);
       if (frame !== this.lastFrame) {
         this.lastFrame = frame; const generation = this.generation;
         void this.dependencies.ingest(positionMs).catch((error: unknown) => { if (this.current(generation)) this.fail(error); });
       }
-      if (now - this.lastRendered > 50) { this.lastRendered = now; this.update({ positionMs, mtcPositionMs: positionMs + this.offsetMs }); }
+      if (now - this.lastRendered > 50) { this.lastRendered = now; this.update({ positionMs, mtcPositionMs: positionMs + this.offsetMs, mtcSentPositionMs: this.mtcSentPositionMs }); }
     } catch (error) { this.fail(error); }
   }
   private finish(): void {
@@ -270,6 +287,7 @@ export class InternalPlaybackController {
   }
   private silence(): void {
     this.audio.pause(); this.mtc.stop();
+    this.mtcSentPositionMs = null;
     if (this.timer) clearInterval(this.timer); this.timer = null;
     if (this.fadeTimer) clearInterval(this.fadeTimer); this.fadeTimer = null;
     this.lighting.stop();

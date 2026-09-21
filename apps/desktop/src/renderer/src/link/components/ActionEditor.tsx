@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { ArrowDown, ArrowUp, Play, Trash2 } from 'lucide-react';
 import { moveActionCommand, removeActionCommand, replaceActionCommand } from '@tb/core/link';
@@ -56,10 +57,10 @@ export function ActionEditor({ itemId, cueId, action, index, actionCount, onTest
         </select>
         <input className="action-name" aria-label="动作名称" title="动作名称" key={action.label} defaultValue={action.label} onBlur={(event) => { if (event.currentTarget.value !== action.label) replace({ ...action, label: event.currentTarget.value }); }} />
         <div className="action-tools">
-          {actionCount > 1 ? <><button className="icon-button" disabled={index === 0} onClick={() => execute(moveActionCommand(itemId, cueId, action.id, index - 1))} title="上移"><ArrowUp /></button>
-          <button className="icon-button" disabled={index === actionCount - 1} onClick={() => execute(moveActionCommand(itemId, cueId, action.id, index + 1))} title="下移"><ArrowDown /></button></> : null}
-          <button className="icon-button" disabled={!supported} onClick={() => void onTest(action)} title="单步测试"><Play /></button>
-          <button className="icon-button danger" onClick={() => execute(removeActionCommand(itemId, cueId, action.id))} title="删除"><Trash2 /></button>
+          {actionCount > 1 ? <><Button className="icon-button" disabled={index === 0} onClick={() => execute(moveActionCommand(itemId, cueId, action.id, index - 1))} title="上移"><ArrowUp /></Button>
+          <Button className="icon-button" disabled={index === actionCount - 1} onClick={() => execute(moveActionCommand(itemId, cueId, action.id, index + 1))} title="下移"><ArrowDown /></Button></> : null}
+          <Button className="icon-button" disabled={!supported} onClick={() => void onTest(action)} title="单步测试"><Play /></Button>
+          <Button className="icon-button danger" onClick={() => execute(removeActionCommand(itemId, cueId, action.id))} title="删除"><Trash2 /></Button>
         </div>
       </div>
       <div className="form-grid compact">

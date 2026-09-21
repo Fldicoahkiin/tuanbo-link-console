@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import { createDefaultIntegrationProfile } from '../view-models/local-integration-profile';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -8,6 +9,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+
 import { ImportPlayerMusic } from './ImportPlayerMusic';
 
 export type ProjectPlayer = { controller: InternalPlaybackController | null; state: InternalPlayerState };
@@ -33,19 +35,20 @@ export function ProjectPlayerTransport({ controller, state }: ProjectPlayer): JS
         {state.error ? <p className="player-error" role="alert">{state.errorTitle ? <strong>{state.errorTitle}：</strong> : null}{state.error}</p> : null}
         <div className="player-buttons">
           <button aria-label="上一首" title="上一首" disabled={!controller || !items.length} onClick={() => void controller?.skip(-1)}><SkipBack /></button>
-          <button className="primary-button" disabled={!controller || state.status === 'preparing' || !items.some((item) => item.referenceAudio)} onClick={() => {
+          <Button className="primary-button" loading={state.status === 'preparing'} disabled={!controller || state.status === 'preparing' || !items.some((item) => item.referenceAudio)} onClick={() => {
             if (state.status === 'playing') void controller?.pause();
             else if (state.status === 'paused') void controller?.resume();
             else { const item = selected ?? items.find((entry) => entry.referenceAudio); if (item) void controller?.play(item.id); }
-          }}>{state.status === 'playing' ? <Pause /> : <Play />}{state.status === 'playing' ? '暂停' : state.status === 'paused' ? '继续' : '播放'}</button>
+          }}>{state.status === 'playing' ? <Pause /> : <Play />}{state.status === 'playing' ? '暂停' : state.status === 'paused' ? '继续' : '播放'}</Button>
           <button aria-label="停止播放" title="停止播放" className="player-stop" disabled={!controller} onClick={() => void controller?.stop()}><Square /><span>停止</span></button>
           <button aria-label="重播当前歌曲" title="重播当前歌曲" disabled={!controller || !state.itemId} onClick={() => { if (state.itemId) void controller?.play(state.itemId); }}><RotateCcw /></button>
           <button aria-label="下一首" title="下一首" disabled={!controller || !items.length} onClick={() => void controller?.skip(1)}><SkipForward /></button>
         </div>
         <div className="player-options"><label className="player-end-action"><span>播放方式</span><select aria-label="歌曲结束动作" value={state.endAction} onChange={(event) => controller?.setEndAction(event.currentTarget.value === 'pause' ? 'pause' : event.currentTarget.value === 'loop' ? 'loop' : event.currentTarget.value === 'stop' ? 'stop' : 'next')}><option value="next">顺序连播</option><option value="stop">播完停止</option><option value="pause">播完暂停</option><option value="loop">单曲循环</option></select></label>
           <label className="player-volume" title="仅调整本次播放；每首歌曲的固定音量请点击音频卡片上的音量设置">临时音量 {Math.round(state.volume)}% <input aria-label="正式音频音量" type="range" min={0} max={100} disabled={!controller || !state.itemId} value={state.volume} onChange={(event) => controller?.setVolume(Number(event.currentTarget.value))} /></label>
-          <div className="player-fades"><button disabled={!controller} onClick={() => controller?.fade(false)}>淡入</button><button disabled={!controller} onClick={() => controller?.fade(true)}>淡出</button><button disabled={!controller} aria-label="重置播放状态" title="停止并重置播放记录" onClick={() => void controller?.reset()}><RotateCcw /></button><button disabled={!controller} aria-pressed={state.mtcEnabled} title="启停已配置端口的 MTC 输出（Ctrl+M）" onClick={() => controller?.toggleMtc()}>MTC {state.mtcEnabled ? '开' : '关'}</button></div>
+          <div className="player-fades"><button disabled={!controller} onClick={() => controller?.fade(false)}>淡入</button><button disabled={!controller} onClick={() => controller?.fade(true)}>淡出</button><button disabled={!controller} aria-label="重置播放状态" title="停止并重置播放记录" onClick={() => void controller?.reset()}><RotateCcw /></button></div>
         </div>
+
       </section>
   );
 }

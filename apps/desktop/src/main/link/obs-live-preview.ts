@@ -40,7 +40,7 @@ export class ObsLivePreview {
       let offset = 0;
       let expected = 32;
       const cleanup = (): void => { clearTimeout(timer); socket.off('data', data); socket.off('error', failed); socket.off('close', closed); };
-      const failed = (error: Error): void => { cleanup(); reject(new Error('code' in error && error.code === 'ENOENT' ? 'OBS 实时预览插件尚未加载。请保存 OBS 场景并重启 OBS，然后重新连接预览。' : `OBS 原生预览不可用：${error.message}`)); };
+      const failed = (error: Error): void => { cleanup(); reject(new Error('code' in error && error.code === 'ENOENT' ? 'OBS 内置预览组件尚未加载。请点击“检查并修复组件”；如果 OBS 使用安全模式或禁用了此插件，请先恢复正常加载。' : `OBS 原生预览不可用：${error.message}`)); };
       const closed = (): void => failed(new Error('预览连接已关闭，请确认 OBS 原生预览插件已加载'));
       const timer = setTimeout(() => failed(new Error('等待 OBS 视频帧超时')), 2000);
       const data = (chunk: Buffer): void => {

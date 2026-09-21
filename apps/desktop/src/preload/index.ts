@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { LinkDesktopApi, LinkFileBridge, LinkObsSnapshot, LinkProcessSnapshot, LinkUpdateStatus } from '@tb/core/link';
 
 const tbLink: LinkDesktopApi = {
+  getLicenseStatus: () => ipcRenderer.invoke('link:license-status'),
+  exportLicenseRequest: () => ipcRenderer.invoke('link:license-export-request'),
+  importLicense: () => ipcRenderer.invoke('link:license-import'),
   exportMa2Plugin: () => ipcRenderer.invoke('link:ma2-export-plugin'),
   exportObsPreviewScript: () => ipcRenderer.invoke('link:obs-preview-script'),
   getObsPreviewStatus: () => ipcRenderer.invoke('link:obs-preview-status'),
@@ -14,6 +17,8 @@ const tbLink: LinkDesktopApi = {
   disconnectMa2Network: () => ipcRenderer.invoke('link:ma2-network-disconnect'),
   exchangeMa2: (payload) => ipcRenderer.invoke('link:ma2-exchange', payload),
   previewMa2: (payload) => ipcRenderer.invoke('link:ma2-preview', payload),
+  readMa2Catalog: (payload) => ipcRenderer.invoke('link:ma2-catalog', payload),
+  readMa2EffectLibrary: (payload) => ipcRenderer.invoke('link:ma2-effect-library', payload),
   createMa2: (payload) => ipcRenderer.invoke('link:ma2-create', payload),
   readMa2Executor: (payload) => ipcRenderer.invoke('link:ma2-executor', payload),
   compareMa2: (payload) => ipcRenderer.invoke('link:ma2-compare', payload),
@@ -70,7 +75,17 @@ const tbLink: LinkDesktopApi = {
   editObsLiveScene: (edit) => ipcRenderer.invoke('link:obs-live-edit', edit),
   onObsLiveChanged: (listener) => { const notify = (): void => listener(); ipcRenderer.on('link:obs-live-changed', notify); return () => { ipcRenderer.removeListener('link:obs-live-changed', notify); }; },
   getObsLiveFrame: () => ipcRenderer.invoke('link:obs-live-frame'),
+  getWindowVisible: () => ipcRenderer.invoke('link:window-visible'),
+  onWindowVisibilityChanged: (listener) => {
+    const notify = (_event: Electron.IpcRendererEvent, visible: unknown): void => {
+      if (typeof visible !== 'boolean') throw new Error('窗口可见状态无效');
+      listener(visible);
+    };
+    ipcRenderer.on('link:window-visible', notify);
+    return () => { ipcRenderer.removeListener('link:window-visible', notify); };
+  },
   closeObsLivePreview: () => ipcRenderer.invoke('link:obs-live-close'),
+  repairObsBridge: () => ipcRenderer.invoke('link:obs-bridge-repair'),
   getObsSourceScreenshot: (payload) => ipcRenderer.invoke('link:obs-source-screenshot', payload),
   executeObsAction: (action) => ipcRenderer.invoke('link:obs-execute', action),
   activateManagedObsOutput: () => ipcRenderer.invoke('link:obs-activate-managed-output'),

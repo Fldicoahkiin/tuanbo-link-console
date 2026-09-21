@@ -1,0 +1,108 @@
+import { test, expect, _electron as electron } from '@playwright/test';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
+import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { Ma2OnpcBridge } from '../src/main/link/ma2-onpc-bridge';
+import { sameMa2XmlObjects } from '../src/main/link/ma2-timecode-xml';
+
+test('真实 P1 文件与音频一键匹配真实 onPC 时间线，保留无法配对的提示', async ({}, info) => {
+  const directory = process.env.MA2_ONPC_DATA_DIRECTORY;
+  test.skip(!process.env.MA2_ONPC_CATALOG_ACCEPTANCE || !directory, '需要真实 onPC');
+  if (!directory) throw new Error('缺少 onPC 数据目录');
+  test.setTimeout(180000);
+  const wav = Buffer.alloc(44 + 40000, 128);
+  wav.write('RIFF', 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
+  wav.write('data', 36); wav.writeUInt32LE(40000, 40);
+  const audio = info.outputPath('song.wav'); await writeFile(audio, wav);
+  const p1 = info.outputPath('show.hia');
+  await writeFile(p1, `<playerRoot><PlayerOptions Voice="100" AudioVoice="100" AudioMode="0"/><audioPlayList CurrentList="0"><audioPlayElement caption="现场" type="0"/></audioPlayList><videoPlayList CurrentList="0"><videoPlayElement caption="现场" type="0"><media mediaType="4" resourceFilePath="${audio.replaceAll('\\', '/')}" playEndAction="0" cut_start="0" cut_end="5" volume="100" mute="0" shortcut="" MidiStartTime="0" audio_caption_="TBLINK_FRACTIONAL_TIMECODE"/></videoPlayElement></videoPlayList></playerRoot>`);
+  const destination = info.outputPath('migration.tblink'); await writeFile(destination, JSON.stringify(createEmptyLinkProject('一键迁移验收')));
+  const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
+  const application = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), 'out/main/index.cjs')]] });
+  const page = await application.firstWindow();
+  try {
+    await application.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, destination);
+    await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
+    await page.getByLabel('MA2 连接方式').selectOption('local'); await page.getByLabel('MA2 onPC 数据目录').fill(directory);
+    await application.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, p1);
+    const section = page.getByLabel('MA2 现场节目导入');
+    await section.locator('.p1-import-menu > summary').click();
+    await section.getByRole('button', { name: '选择 .hia 并读取音频与灯光', exact: true }).click();
+    await expect(section.getByText(/音频读取完成，1 条灯光已导入/)).toBeVisible({ timeout: 120000 });
+    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.timecode).toBe(9902);
+    const saved = parseLinkProject(JSON.parse(await readFile(destination, 'utf8')));
+    expect(saved.rundown).toHaveLength(1);
+    expect(await readFile(join(info.outputDir, saved.rundown[0]!.referenceAudio!.relativePath))).toEqual(wav);
+    expect(saved.rundown[0]!.p1Media?.midiStartTime).toBe('0');
+    await page.screenshot({ path: info.outputPath('one-click.png') });
+  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await application.close(); }
+});
+
+test('真实 onPC 设置扫描、小数 Cue、歌曲配对、批量导入与保存', async ({}, info) => {
+  const directory = process.env.MA2_ONPC_DATA_DIRECTORY;
+  test.skip(!process.env.MA2_ONPC_CATALOG_ACCEPTANCE || !directory, '需要真实 onPC 桥接插件');
+  if (!directory) throw new Error('缺少 onPC 数据目录');
+  test.setTimeout(180000);
+  const project = createEmptyLinkProject('现场扫描验收');
+  project.rundown.push({ id: 'song', title: '验收歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [] });
+  const path = info.outputPath('catalog.tblink'); await writeFile(path, JSON.stringify(project));
+  const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
+  const application = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), process.env.TBLINK_E2E_BUILD_DIR ?? 'out', 'main/index.cjs')]] });
+  const page = await application.firstWindow();
+  const bridge = new Ma2OnpcBridge(directory, () => false);
+  const original = await bridge.request('READ', 9902);
+  try {
+    await application.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, path);
+    await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
+    await page.getByLabel('MA2 连接方式').selectOption('local');
+    await page.getByLabel('MA2 onPC 数据目录').fill(directory);
+    const section = page.getByLabel('MA2 现场节目导入');
+    await expect(section.getByRole('button', { name: '生成点击播放联动工程', exact: true })).toHaveCount(0);
+    await section.getByRole('button', { name: '扫描控台全部时间线', exact: true }).click();
+    await expect(section.getByText(/条已录制/)).toBeVisible({ timeout: 120000 });
+    const row = section.locator('details').filter({ has: page.locator('summary').filter({ hasText: 'Timecode 9902 · TBLINK_FRACTIONAL_TIMECODE' }) });
+    await row.locator('summary').click();
+    await expect(row.getByRole('cell', { name: '9901 / 1.250', exact: true })).toBeVisible();
+    await expect(row.getByRole('cell', { name: '9901 / 7.500', exact: true })).toBeVisible();
+    await row.getByLabel('Timecode 9902 对应歌曲').selectOption('song');
+    await page.screenshot({ path: info.outputPath('pairing.png') });
+    await section.getByRole('button', { name: '导入已配对灯光', exact: true }).click();
+    await expect(section.getByText(/已导入 1 条灯光时间线/)).toBeVisible({ timeout: 120000 });
+    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.timecode).toBe(9902);
+    const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
+    expect(saved.rundown[0]?.lighting?.tracks[0]?.clips[0]?.events.map(event => event.kind === 'ma2' ? event.cue : '')).toEqual(['1.250', '7.500']);
+    await page.screenshot({ path: info.outputPath('imported.png') });
+    const reportPath = info.outputPath('site.tbdiag.gz');
+    await application.evaluate(({ dialog }, file) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: file }); }, reportPath);
+    await section.getByRole('button', { name: '导出现场核对包', exact: true }).click();
+    await expect(section.getByText(/现场核对包已导出/)).toBeVisible({ timeout: 120000 });
+    const reportText = gunzipSync(await readFile(reportPath)).toString('utf8');
+    expect(reportText).toContain('TBLINK_FRACTIONAL_TIMECODE');
+    expect(reportText).toContain('1.250');
+    expect(reportText).toContain('<Timecode');
+    await section.getByRole('button', { name: '启用编辑后自动双向同步', exact: true }).click();
+    await expect(section.getByText('已检查全部绑定时间线，节目与控台一致', { exact: true })).toBeVisible({ timeout: 120000 });
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
+    await page.locator('.lighting-timeline-point').last().click();
+    await page.getByLabel('灯光点歌曲时间').fill('1.2');
+    await page.getByLabel('灯光点歌曲时间').press('Tab');
+    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.baselineTracks[0]?.clips[0]?.events[1]?.at, { timeout: 120000 }).toBe(1200);
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
+    await section.getByRole('button', { name: '关闭自动双向同步', exact: true }).click();
+    await page.screenshot({ path: info.outputPath('automatic-after-editor.png') });
+  } finally {
+    await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await application.close();
+    const current = await bridge.request('READ', 9902);
+    if (!sameMa2XmlObjects(current, original)) await bridge.exchange('APPLY', 9902, current, original);
+    expect(sameMa2XmlObjects(await bridge.request('READ', 9902), original)).toBe(true);
+  }
+});

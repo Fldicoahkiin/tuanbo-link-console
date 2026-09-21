@@ -10,6 +10,7 @@ export type ExternalProcessConfiguration = {
   workingDirectory: string;
   startupTimeoutMs: number;
   shutdownTimeoutMs: number;
+  environment?: Record<string, string>;
 };
 
 export type DetectedProcess = {
@@ -37,7 +38,7 @@ export type ManagedProcessSnapshot = {
 export type ExternalProcessTools = {
   findByExecutable(executablePath: string): Promise<DetectedProcess[]>;
   launch(configuration: ExternalProcessConfiguration): ChildProcess;
-  requestClose(pid: number): Promise<boolean>;
+  requestClose(pid: number, identity?: Pick<ManagedProcessSnapshot, 'executablePath' | 'startTime'>): Promise<boolean>;
 };
 
 export type ObsActivityReader = {
@@ -82,7 +83,7 @@ export class ExternalProcessManager {
     const existingProcess = selectDetectedProcess(id, matches, current.snapshot.pid, '连接目标');
     if (existingProcess) {
       const process = existingProcess;
-      const stillOwned = current.snapshot.owned && current.snapshot.pid === process.pid;
+      const stillOwned = current.snapshot.owned && current.snapshot.pid === process.pid && current.snapshot.startTime === process.startTime;
       this.setEntry(id, processSnapshot(id, process, stillOwned, 'running'), stillOwned ? current.child : null);
       return this.getSnapshot(id);
     }
@@ -155,7 +156,7 @@ export class ExternalProcessManager {
       }
       return this.getSnapshot(id);
     }
-    const stillOwned = current.snapshot.owned && current.snapshot.pid === match.pid;
+    const stillOwned = current.snapshot.owned && current.snapshot.pid === match.pid && current.snapshot.startTime === match.startTime;
     this.setEntry(id, processSnapshot(id, match, stillOwned, 'running'), stillOwned ? current.child : null);
     return this.getSnapshot(id);
   }
@@ -175,7 +176,7 @@ export class ExternalProcessManager {
 
     const pid = entry.snapshot.pid;
     this.setEntry(id, { ...entry.snapshot, status: 'stopping', error: null }, entry.child);
-    const accepted = await this.tools.requestClose(pid);
+    const accepted = await this.tools.requestClose(pid, entry.snapshot);
     if (!accepted) {
       this.setEntry(id, { ...this.getSnapshot(id), status: 'running', error: '程序拒绝正常关闭请求' }, entry.child);
       throw new Error(`${id} 没有接受正常关闭请求，进程保持运行`);
@@ -206,7 +207,7 @@ export class ExternalProcessManager {
       if (activity.streaming || activity.recording) throw new Error('OBS 正在推流或录像，拒绝关闭');
     }
     this.setEntry(id, { ...entry.snapshot, status: 'stopping', error: null }, entry.child);
-    const accepted = await this.tools.requestClose(entry.snapshot.pid);
+    const accepted = await this.tools.requestClose(entry.snapshot.pid, entry.snapshot);
     if (!accepted) throw new Error(`${id} 没有接受正常关闭请求，进程保持运行`);
     const exited = await waitForExit(entry.child, entry.snapshot.pid, entry.snapshot, timeoutMs);
     if (!exited) throw new Error(`${id} 正常关闭超时，未强制结束进程`);
@@ -285,14 +286,18 @@ export class WindowsProcessTools implements ExternalProcessTools {
   launch(configuration: ExternalProcessConfiguration): ChildProcess {
     return spawn(configuration.executablePath, configuration.arguments, {
       cwd: configuration.workingDirectory,
+      env: { ...process.env, ...configuration.environment },
       windowsHide: false,
       stdio: 'ignore'
     });
   }
 
-  async requestClose(pid: number): Promise<boolean> {
+  async requestClose(pid: number, identity?: Pick<ManagedProcessSnapshot, 'executablePath' | 'startTime'>): Promise<boolean> {
     if (!Number.isInteger(pid) || pid <= 0) throw new Error(`非法 PID：${pid}`);
-    const script = `$p=Get-Process -Id ${pid} -ErrorAction Stop; $p.CloseMainWindow()`;
+    if (!identity?.executablePath || !identity.startTime) throw new Error('无法核验进程路径与启动时间，拒绝关闭');
+    const path = Buffer.from(resolve(identity.executablePath), 'utf16le').toString('base64');
+    const started = Buffer.from(identity.startTime, 'utf16le').toString('base64');
+    const script = `$p=Get-Process -Id ${pid} -ErrorAction Stop; $expected=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${path}')); $started=[DateTime]::Parse([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${started}'))).ToUniversalTime(); if(-not $p.MainModule.FileName.Equals($expected,[StringComparison]::OrdinalIgnoreCase) -or $p.StartTime.ToUniversalTime() -ne $started){throw '进程身份已变化，拒绝关闭'}; $p.CloseMainWindow()`;
     return (await runPowerShell(script, 10_000)).trim().toLowerCase() === 'true';
   }
 }

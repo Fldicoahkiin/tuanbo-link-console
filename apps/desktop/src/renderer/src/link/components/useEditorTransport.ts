@@ -3,6 +3,7 @@ import type { ProjectPlayer } from './ProjectPlayerControls';
 import { useSelectedProgram } from '../useSelectedProgram';
 import { useDocumentStore } from '../stores/document-store';
 import { LatestPosition } from '../runtime/latest-position';
+import { useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
 
 export function useEditorProgram(player: ProjectPlayer, external: boolean, notify: (message: string, tone?: 'info' | 'error') => void): string | null {
   const [selected, select] = useSelectedProgram(notify);
@@ -16,6 +17,7 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   const [cursor, setCursor] = useState(0);
   const cursorRef = useRef(0);
   const [localPlaying, setLocalPlaying] = useState(false);
+  useEffect(() => { useMa2AutoSyncStore.setState({ previewPlaying: localPlaying }); return () => { useMa2AutoSyncStore.setState({ previewPlaying: false }); }; }, [localPlaying]);
   const [seeking, setSeeking] = useState(false);
   const seekQueue = useRef<LatestPosition | null>(null);
   const resumeAfterSeek = useRef(false);
@@ -29,7 +31,9 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   const reset = useCallback(() => { seekQueue.current?.cancel(); seekQueue.current = null; setSeeking(false); cursorRef.current = 0; setCursor(0); setLocalPlaying(false); }, []);
   const setPlayheadMs = (position: number): void => {
     cursorRef.current = position; setCursor(position);
-    if (!external || !itemId || !player.controller) return;
+    // A stopped editor seek is only a cursor move. Scrub prepares a formal
+    // paused session, which acquires the runtime edit lock even without Play.
+    if (!external || !active || !itemId || !player.controller) return;
     const controller = player.controller;
     const item = useDocumentStore.getState().project?.rundown.find((entry) => entry.id === itemId);
     const endMs = item?.playback?.endMs || item?.referenceAudio?.durationMs;
@@ -46,8 +50,9 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
     seekQueue.current.push(target);
   };
   const setPlaying = (next: boolean): void => {
+    if (next && useMa2AutoSyncStore.getState().status === 'writing') { notify('MA2 正在同步并回读，请完成后播放', 'error'); return; }
     if (seekQueue.current) { resumeAfterSeek.current = next; return; }
-    if (!external) { setLocalPlaying(next); return; }
+    if (!external) { useMa2AutoSyncStore.setState({ previewPlaying: next }); setLocalPlaying(next); return; }
     const controller = player.controller;
     if (!controller || !itemId) { if (next) notify('播放器尚未就绪，请稍后再试', 'error'); return; }
     if (!next) { if (active && player.state.status === 'playing') void controller.pause().catch(report); return; }

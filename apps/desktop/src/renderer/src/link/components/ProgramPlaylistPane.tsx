@@ -1,4 +1,6 @@
+import { Button } from './Button';
 import { useEffect, useState } from 'react';
+import { ModalSurface } from './ModalSurface';
 import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, ListMusic, Plus, Pencil, Trash2 } from 'lucide-react';
 import { editProgramPlaylistCommand, playlistItems, programPlaylists } from '@tb/core/link';
@@ -29,8 +31,15 @@ export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: s
   const current = lists.find((list) => list.id === menu?.id);
   const index = lists.findIndex((list) => list.id === menu?.id);
   return <aside className="p1-playlist-pane">
-    <div className="p1-pane-title"><strong>播放列表</strong><button className="icon-button" aria-label="新建播放列表" title="新建播放列表" disabled={props.locked} onClick={() => setEditing({ id: null, name: '' })}><Plus /></button></div>
-    {[{ id: 'all', name: '全部节目' }, ...lists, { id: 'unassigned', name: '未分组' }].map((list) => <button key={list.id} className={props.selectedId === list.id ? 'active' : ''} onClick={() => props.onSelect(list.id)}
+    <div className="p1-pane-title"><strong>播放列表</strong><Button className="icon-button" aria-label="新建播放列表" title="新建播放列表" disabled={props.locked} onClick={() => setEditing({ id: null, name: '' })}><Plus /></Button></div>
+    {[{ id: 'all', name: '全部节目' }, ...lists, { id: 'unassigned', name: '未分组' }].map((list) => <button key={list.id} title={list.name} aria-pressed={props.selectedId === list.id} className={props.selectedId === list.id ? 'active' : ''} onClick={() => props.onSelect(list.id)}
+      onKeyDown={(event) => {
+        if (!props.locked && !['all', 'unassigned'].includes(list.id) && (event.key === 'F2' || event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) {
+          event.preventDefault();
+          if (event.key === 'F2') setEditing({ id: list.id, name: list.name });
+          else { const bounds = event.currentTarget.getBoundingClientRect(); setMenu({ id: list.id, x: bounds.left, y: bounds.bottom }); }
+        }
+      }}
       onDoubleClick={() => { if (!props.locked && !['all', 'unassigned'].includes(list.id)) setEditing({ id: list.id, name: list.name }); }}
       onContextMenu={(event) => { event.preventDefault(); if (!props.locked && !['all', 'unassigned'].includes(list.id)) setMenu({ id: list.id, x: event.clientX, y: event.clientY }); }}
       onDragOver={(event) => { if (!props.locked && list.id !== 'all' && event.dataTransfer.types.includes(PROGRAM_DRAG_TYPE)) event.preventDefault(); }}
@@ -43,11 +52,11 @@ export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: s
       <button disabled={index >= lists.length - 1} onClick={() => { execute({ type: 'move', id: current.id, index: index + 1 }); setMenu(null); }}><ArrowDown />下移列表</button>
       <button onClick={() => { setRemoving(current.id); setMenu(null); }}><Trash2 />删除列表</button>
     </div> : null}
-    {editing ? <div className="playlist-dialog-backdrop"><form className="playlist-dialog" role="dialog" aria-label={editing.id ? '重命名列表' : '新建播放列表'} onSubmit={(event) => { event.preventDefault(); save(); }}>
+    {editing ? <ModalSurface className="playlist-dialog" label={editing.id ? '重命名列表' : '新建播放列表'} onClose={() => setEditing(null)}><form onSubmit={(event) => { event.preventDefault(); save(); }}>
       <strong>{editing.id ? '重命名列表' : '新建播放列表'}</strong><input autoFocus aria-label="列表名称" value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.currentTarget.value })} />
       <div><button type="button" onClick={() => setEditing(null)}>取消</button><button type="submit" disabled={props.locked || !editing.name.trim()}>保存列表</button></div>
-    </form></div> : null}
-    {removing ? <div className="playlist-dialog-backdrop"><div className="playlist-dialog" role="dialog" aria-label="删除播放列表"><strong>删除“{lists.find((list) => list.id === removing)?.name}”？</strong><p>歌曲和素材会保留，列表内的歌曲移到“未分组”。</p><div><button onClick={() => setRemoving(null)}>取消</button><button disabled={props.locked} onClick={() => { if (execute({ type: 'remove', id: removing })) { if (props.selectedId === removing) props.onSelect('all'); setRemoving(null); } }}>删除列表，保留歌曲</button></div></div></div> : null}
+    </form></ModalSurface> : null}
+    {removing ? <ModalSurface className="playlist-dialog" label="删除播放列表" onClose={() => setRemoving(null)}><strong>删除“{lists.find((list) => list.id === removing)?.name}”？</strong><p>歌曲和素材会保留，列表内的歌曲移到“未分组”。</p><div><button onClick={() => setRemoving(null)}>取消</button><button disabled={props.locked} onClick={() => { if (execute({ type: 'remove', id: removing })) { if (props.selectedId === removing) props.onSelect('all'); setRemoving(null); } }}>删除列表，保留歌曲</button></div></ModalSurface> : null}
     </>, document.body)}
   </aside>;
 }

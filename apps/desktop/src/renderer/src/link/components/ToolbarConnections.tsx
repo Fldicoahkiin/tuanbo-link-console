@@ -1,3 +1,6 @@
+import { ToolbarMtcStatus } from './ToolbarMtcStatus';
+import type { ProjectPlayer } from './ProjectPlayerControls';
+import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useLocalMa2Store } from '../stores/ma2-connection-store';
 import { useEffect, useState } from 'react';
 import { ma2NetworkStatusSchema, type Ma2NetworkStatus } from '@tb/schema';
@@ -6,7 +9,8 @@ import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { hasConnectedProfilePort } from '../../registry/link-midi-adapter';
 
-export function ToolbarConnections(): JSX.Element {
+export function ToolbarConnections({ player, onMtcSettings }: { player: ProjectPlayer; onMtcSettings: () => void }): JSX.Element {
+  const method = useMa2ModeStore((state) => state.method);
   const projectName = useDocumentStore((state) => state.project?.name);
   const projectPath = useDocumentStore((state) => state.path);
   const dirty = useDocumentStore((state) => state.dirty);
@@ -23,7 +27,7 @@ export function ToolbarConnections(): JSX.Element {
     const timer = window.setInterval(() => setNow(performance.now()), 500);
     return () => window.clearInterval(timer);
   }, [internal]);
-  const ids = internal ? [profile?.internalPlayer?.mtcOutputPortProfileId, profile?.internalPlayer?.controlInputPortProfileId] : [profile?.p1.mtcInputPortProfileId, profile?.p1.controlOutputPortProfileId];
+  const ids = internal ? [profile?.internalPlayer?.mtcOutputPortProfileId] : [profile?.p1.mtcInputPortProfileId, profile?.p1.controlOutputPortProfileId];
   const configured = profile?.midiPortProfiles.filter((port) => ids.includes(port.id) && port.portName) ?? [];
   const connected = configured.filter((port) => profile && hasConnectedProfilePort(profile, port.id, ports)).length;
   const receiving = lastMtcAt !== null && now >= lastMtcAt && now - lastMtcAt <= 500;
@@ -32,9 +36,9 @@ export function ToolbarConnections(): JSX.Element {
     <div className="toolbar-connections" aria-label="连接状态">
     <Connection name="OBS" value={obs.status === 'connected' ? '已连接' : obs.status === 'connecting' || obs.status === 'reconnecting' ? '连接中' : obs.status === 'error' ? '异常' : '未连接'} ok={obs.status === 'connected'} detail={obs.error ?? undefined} />
     {internal ? <Connection name="主控" value={initialized ? '本机播放' : '初始化中'} ok={initialized} /> : <Connection name="P1" value={p1.status === 'running' ? '运行中' : p1.status === 'error' ? '异常' : '未运行'} ok={p1.status === 'running'} detail={p1.error ?? undefined} />}
-    <Connection name="MIDI" value={!initialized ? '检测中' : !configured.length ? '未配置' : connected === configured.length ? '已连接' : '未连接'} ok={configured.length > 0 && connected === configured.length} detail={configured.map((port) => `${port.direction === 'input' ? '输入' : '输出'}：${port.portName} · ${profile && hasConnectedProfilePort(profile, port.id, ports) ? '已连接' : '未连接'}`).join('\n')} />
-    <Ma2NetworkIndicator />
-    {!internal ? <Connection name="MTC" value={receiving ? '接收中' : '无信号'} ok={receiving} /> : null}
+    <ToolbarMtcStatus player={player} receiving={receiving} onSettings={onMtcSettings} portStatus={!initialized ? '检测中' : !configured.length ? internal ? '播放时检测' : '未配置' : connected === configured.length ? '已连接' : '未连接'} portDetail={configured.map((port) => `${port.direction === 'input' ? '输入' : '输出'}：${port.portName} · ${profile && hasConnectedProfilePort(profile, port.id, ports) ? '已连接' : '未连接'}`).join('\n')} />
+    {method !== 'midi' ? <Ma2NetworkIndicator key={method} /> : null}
+
   </div></div>;
 }
 

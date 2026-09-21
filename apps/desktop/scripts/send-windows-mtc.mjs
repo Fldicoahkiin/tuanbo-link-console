@@ -23,13 +23,14 @@ try {
       await output.open()
 
       const frameRate = 30
-      const quarterFramesPerSecond = frameRate * 8
+      const quarterFramesPerSecond = frameRate * 4
       const intervalMs = 1000 / quarterFramesPerSecond
       const messageCount = seconds * quarterFramesPerSecond
       const startedAt = performance.now() + 100
 
       for (let index = 0; index < messageCount; index += 1) {
-        const absoluteFrame = Math.floor(index / 8)
+        // Eight pieces describe one snapshot over two media frames.
+        const absoluteFrame = Math.floor(index / 8) * 2
         const piece = index % 8
         const frames = absoluteFrame % frameRate
         const totalSeconds = Math.floor(absoluteFrame / frameRate)

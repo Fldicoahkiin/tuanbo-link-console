@@ -52,7 +52,7 @@ export function LightingEditor(props: Props): JSX.Element {
   useEffect(() => {
     const key = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey || event.altKey || tab !== 'edit' || event.target instanceof Element && event.target.closest('input,textarea,select,[contenteditable="true"]')) return;
-      if (event.code === 'KeyM' && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey) { event.preventDefault(); addEvent(); }
+      if (!document.querySelector('.lighting-workbench') && event.code === 'KeyM' && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey) { event.preventDefault(); addEvent(); }
     };
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
   });
@@ -181,7 +181,7 @@ function LightingSettings(props: { section: SettingsSection; document: LightingD
     </div></> : section === 'arrangement' ? <div className="lighting-settings"><LightingArrangementSettings document={document} onChange={props.onChange} /></div> : section === 'files' ? <><p className="lighting-muted">支持 MIDI、REAPER（.rpp）和灯光工程文件，导入前可预览。</p><div className="lighting-tools"><LightingFileActions document={document} onChange={props.onChange} notify={props.notify} /></div></> : <>
       <div className="lighting-settings">
         <label>控制方式<select aria-label="控制方式" value={document.outputMode} onChange={(event) => props.onChange({ ...document, outputMode: event.target.value as LightingDocument['outputMode'] }, '修改灯光输出方式')}><option value="timecode">发送时间码，由 MA2 播放</option><option value="direct">由编排台逐条触发</option></select></label>
-        {document.outputMode === 'direct' ? <label>事件输出端口<select aria-label="事件输出端口" value={track.portProfileId} disabled={track.locked} onChange={(event) => props.changeTrack({ ...track, portProfileId: event.target.value }, '配置灯光输出')}><option value="">未指定</option>{ports?.filter((port) => port.direction === 'output').map((port) => <option key={port.id} value={port.id}>{port.portName || '未连接端口'}</option>)}</select></label> : null}
+        {document.outputMode === 'direct' ? <label>事件输出端口<select aria-label="事件输出端口" value={track.portProfileId} disabled={track.locked} onChange={(event) => props.changeTrack({ ...track, portProfileId: event.target.value }, '配置灯光输出')}><option value="">使用默认灯光输出</option>{ports?.filter((port) => port.direction === 'output').map((port) => <option key={port.id} value={port.id}>{port.portName || '未连接端口'}</option>)}</select></label> : null}
       </div><div className="lighting-settings">
 
         <label>事件类型<select aria-label="灯光编辑内容" value={track.kind} disabled={track.locked || track.clips.some((clip) => clip.events.length > 0)} onChange={(event) => props.changeTrack({ ...track, kind: event.target.value as LightingTrack['kind'] }, '修改灯光编辑类型')}><option value="ma2">灯光切换（MA2 Cue）</option><option value="midi">音符与 MIDI 消息</option><option value="automation">推杆变化（MIDI CC）</option></select></label>

@@ -1,4 +1,5 @@
 import { ObsLiveEditor } from './obs-live-editor';
+import { selectObsAudioWindow } from './obs-audio-window';
 import { ObsSourceManager } from './obs-source-manager';
 import { ObsMediaScenes } from './obs-media-scenes';
 import type { ObsEditorPreview } from './obs-editor-preview';
@@ -371,11 +372,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       const properties = await this.request(this.client.call('GetInputPropertiesListPropertyItems', {
         inputName: name, propertyName: 'window'
       }), 'GetInputPropertiesListPropertyItems');
-      const windows = properties.propertyItems.filter((item) => typeof item.itemValue === 'string'
-        && item.itemValue.startsWith(`${title}:`) && item.itemValue.toLowerCase().endsWith(`:${executable.toLowerCase()}`));
-      if (windows.length !== 1) throw new Error('OBS 无法唯一识别联动台音频窗口，请保持主窗口打开');
-      const windowValue = windows[0]?.itemValue;
-      if (typeof windowValue !== 'string') throw new Error('OBS 音频窗口标识无效');
+      const windowValue = selectObsAudioWindow(properties.propertyItems, executable, title);
       await this.request(this.client.call('SetInputSettings', { inputName: name,
         inputSettings: { window: windowValue, priority: 0 }, overlay: false }), 'SetInputSettings');
       await this.request(this.client.call('SetInputAudioMonitorType', {

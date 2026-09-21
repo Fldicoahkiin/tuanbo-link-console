@@ -7,5 +7,8 @@ export * from './obs-source';
 export * from './ma2-sync';
 export * from './lighting';
 export * from './ma2-bridge';
+export * from './ma2-catalog';
+export * from './ma2-effect-library';
 
 export * from './obs-live-canvas';
+export * from './license';

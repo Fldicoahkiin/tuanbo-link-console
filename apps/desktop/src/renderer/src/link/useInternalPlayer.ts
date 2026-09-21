@@ -9,6 +9,7 @@ import { useIntegrationStore } from './stores/integration-store';
 import { linkDesktopViewModel as desktop } from './view-models/link-desktop-view-model';
 import { runDesktopPreflight } from './view-models/link-preflight-view-model';
 import { useRuntimeStore } from './stores/runtime-store';
+import { useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
 
 export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, ready: boolean, project: LinkProject | null) {
   const path = useDocumentStore((state) => state.path);
@@ -43,6 +44,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     let prepared: { report: PreflightReport; profile: ReturnType<typeof useIntegrationStore.getState>['profile'] } | null = null;
     const player = new InternalPlaybackController(project, {
       prepare: async (itemId, positionMs, reuseSession) => {
+        if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
         if (!path) throw new Error('请先保存工程，再播放正式音频');
         if (useIntegrationStore.getState().obs.status !== 'connected') {
           prepared = null;

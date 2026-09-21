@@ -1,6 +1,9 @@
+import { Button } from './Button';
 import { useEffect, type RefObject, type ReactNode } from 'react';
+import { TimelineIconMenu } from './TimelineIconMenu';
 import {
   Magnet,
+  SlidersHorizontal,
   Maximize2,
   Pause,
   Play,
@@ -21,6 +24,10 @@ type Props = {
   externalTransport?: boolean | undefined;
   onStop?: (() => void) | undefined;
   recordingControl?: ReactNode;
+  tools?: ReactNode;
+  stampControls?: ReactNode;
+  compact?: boolean;
+  wheelSeek?: { speed: number; setSpeed: (speed: number) => void } | undefined;
   frameRate: MtcFrameRate;
   durationMs: number;
   playheadMs: number;
@@ -59,6 +66,13 @@ export function TimelineToolbar(props: Props): JSX.Element {
     if (props.externalTransport || !audio || !audioUrl) return;
     if (props.playbackReady === false) { audio.pause(); return; }
     const desiredSeconds = playheadMs / 1_000;
+    // A render can run between the native pause-at-end and ended events.
+    // Calling play() there restarts the media before lighting can flush its tail.
+    if (audio.ended && playing && desiredSeconds > 0) {
+      onPlayheadChange(audio.currentTime * 1000);
+      onPlayingChange(false);
+      return;
+    }
     if (Math.abs(audio.currentTime - desiredSeconds) > (playing ? 0.75 : 0.04)) audio.currentTime = desiredSeconds;
     if (Number.isFinite(audio.duration) && desiredSeconds >= audio.duration) {
       audio.pause();
@@ -74,7 +88,7 @@ export function TimelineToolbar(props: Props): JSX.Element {
       onPlayingChange(false);
       onPlaybackError(error instanceof Error ? error.message : String(error));
     });
-  }, [audioRef, audioUrl, onPlaybackError, onPlayingChange, playheadMs, playing, props.playbackReady, props.externalTransport]);
+  }, [audioRef, audioUrl, onPlaybackError, onPlayheadChange, onPlayingChange, playheadMs, playing, props.playbackReady, props.externalTransport]);
 
   const seekTo = (milliseconds: number): void => {
     props.onPlayingChange(false);
@@ -90,12 +104,13 @@ export function TimelineToolbar(props: Props): JSX.Element {
 
   return <div className="timeline-toolbar">
     <div className="timeline-edit-controls" aria-label="时间线剪辑工具">
-      {props.recordingControl}
+      {props.stampControls}
+      {props.tools ?? <>{props.recordingControl}
       <details className="timeline-navigation-menu"><summary>定位</summary><div>
         <button onClick={(event) => { const point = [...props.editPoints].filter((point) => point < props.playheadMs - frameDurationMs / 2).sort((a, b) => b - a)[0]; seekTo(point ?? 0); event.currentTarget.closest('details')?.removeAttribute('open'); }}>上一剪辑点</button>
         <button onClick={(event) => { const point = [...props.editPoints].filter((point) => point > props.playheadMs + frameDurationMs / 2).sort((a, b) => a - b)[0]; seekTo(point ?? props.durationMs); event.currentTarget.closest('details')?.removeAttribute('open'); }}>下一剪辑点</button>
         <p>Space 播放 / 暂停<br />← → 逐帧移动<br />S 在播放头切割<br />Ctrl+C / V 复制粘贴</p>
-      </div></details>
+      </div></details></>}
     </div>
 
     <div className="timeline-transport" aria-label="时间线播放控制">
@@ -109,16 +124,18 @@ export function TimelineToolbar(props: Props): JSX.Element {
     </div>
 
     <div className="timeline-view-controls">
+      {props.wheelSeek ? <TimelineIconMenu label="时间线设置" icon={SlidersHorizontal}><label>滚轮速度<select aria-label="滚轮移动速度" value={props.wheelSeek.speed} onChange={event => props.wheelSeek?.setSpeed(Number(event.currentTarget.value))}>{[0.1, 0.25, 0.5, 1, 2].map(speed => <option key={speed} value={speed}>{speed}×</option>)}</select></label><p>选中 Cue：滚轮移动 Cue<br />未选中：滚轮移动播放头<br />Shift + 滚轮：平移<br />Ctrl + 滚轮：缩放</p></TimelineIconMenu> : null}
       <button
         className={`timeline-snap-state ${props.snapEnabled ? 'active' : ''}`}
         aria-pressed={props.snapEnabled}
+        aria-label={props.snapEnabled ? '关闭吸附' : '开启吸附'}
         title={props.snapEnabled ? '关闭吸附' : '开启吸附'}
         onClick={() => props.onSnapEnabledChange(!props.snapEnabled)}
-      ><Magnet />{props.snapEnabled ? '吸附开' : '吸附关'}</button>
-      <select className="timeline-snap-distance" aria-label="吸附强度" title="片段两端、机位边缘和播放头之间的吸附距离" value={props.snapDistance} disabled={!props.snapEnabled} onChange={(event) => props.onSnapDistanceChange(Number(event.currentTarget.value))}><option value={8}>轻 · 8 px</option><option value={14}>标准 · 14 px</option><option value={22}>强 · 22 px</option></select>
-      <button className="icon-button" aria-label="缩小时间线" title="缩小时间线" onClick={props.onZoomOut}><ZoomOut /></button>
-      <button className="timeline-fit-button" aria-label="适合节目时长" title="缩放至全部节目内容" onClick={props.onFit}><Maximize2 /><span>全部</span></button>
-      <button className="icon-button" aria-label="放大时间线" title="放大时间线" onClick={props.onZoomIn}><ZoomIn /></button>
+      ><Magnet />{props.compact ? null : props.snapEnabled ? '吸附开' : '吸附关'}</button>
+      {!props.compact ? <select className="timeline-snap-distance" aria-label="吸附强度" title="片段两端、机位边缘和播放头之间的吸附距离" value={props.snapDistance} disabled={!props.snapEnabled} onChange={(event) => props.onSnapDistanceChange(Number(event.currentTarget.value))}><option value={8}>轻 · 8 px</option><option value={14}>标准 · 14 px</option><option value={22}>强 · 22 px</option></select> : null}
+      <Button className="icon-button" aria-label="缩小时间线" title="缩小时间线" onClick={props.onZoomOut}><ZoomOut /></Button>
+      <button className="timeline-fit-button" aria-label="适合节目时长" title="缩放至全部节目内容" onClick={props.onFit}><Maximize2 />{props.compact ? null : <span>全部</span>}</button>
+      <Button className="icon-button" aria-label="放大时间线" title="放大时间线" onClick={props.onZoomIn}><ZoomIn /></Button>
     </div>
 
     {!props.externalTransport && props.referenceAudio ? <audio

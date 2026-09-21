@@ -28,6 +28,22 @@ export type Ma2SequenceReport = {
   sequences: Array<{ number: number; name: string | null; cues: Array<{ index: number; number: string; name: string | null }> }>;
 };
 
+/** Explicit fixture references only. Tracking and programmer state are not inferred. */
+export function inspectMa2CueFixtures(xml: string): { sequence: number; cueIndex: number; fixtureIds: number[] }[] {
+  const { root } = parse(xml);
+  return indexedChildren(root, 'Sequ').flatMap(sequence => children(sequence, 'Cue').filter(cue => cue.hasAttribute('index')).map(cue => {
+    const fixtureIds = new Set<number>();
+    const channels = cue.getElementsByTagNameNS(MA_NAMESPACE, 'Channel');
+    for (let index = 0; index < channels.length; index++) {
+      const value = channels.item(index)?.getAttribute('fixture_id');
+      if (!value) continue;
+      if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error('Cue 灯具编号无效');
+      fixtureIds.add(Number(value));
+    }
+    return { sequence: indexOf(sequence) + 1, cueIndex: indexOf(cue), fixtureIds: [...fixtureIds].sort((a, b) => a - b) };
+  }));
+}
+
 export function inspectMa2SequenceXml(xml: string, allowEmpty = false): Ma2SequenceReport {
   const { root } = parse(xml);
   const version = ['major_vers', 'minor_vers', 'stream_vers'].map((name) => required(root, name)).join('.');
@@ -283,7 +299,7 @@ export function prepareMa2TimecodeEvents(xml: string, expectedSha256: string, ta
   const report = inspectMa2TimecodeXml(xml);
   const tc = report.timecodes[0];
   if (report.timecodes.length !== 1 || tc?.index !== target - 1) throw new Error('写入目标 Timecode 与 XML 不一致');
-  if (!['3.3.4', '3.7.0'].includes(report.version) || tc.attributes.frame_format !== '30 FPS' || Number(tc.attributes.offset ?? 0) !== 0) throw new Error('该 Timecode 格式或时间基准尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(report.version) || tc.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(tc.attributes.offset ?? '0')) throw new Error('该 Timecode 格式或时间基准尚未验证');
   const edits = z.array(ma2EventEditSchema).parse(input);
   for (const edit of edits) {
     if (edit.kind === 'delete') continue;
@@ -412,7 +428,7 @@ export function extendMa2TimecodeLength(xml: string, target: number): string {
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
   if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('播放长度目标与 Timecode 不一致');
-  if (report.version !== '3.3.4' || timecode.attributes.frame_format !== '30 FPS' || Number(timecode.attributes.offset ?? 0) !== 0) throw new Error('该 MA2 版本或时间基准的播放长度尚未验证');
+  if (report.version !== '3.3.4' || timecode.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('该 MA2 版本或时间基准的播放长度尚未验证');
   const length = timecode.attributes.lenght ?? '0';
   if (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))) throw new Error('MA2 播放长度无效，未写入控台');
   let required = 0;

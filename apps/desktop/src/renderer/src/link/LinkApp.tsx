@@ -1,10 +1,13 @@
+import { useDocumentShortcuts } from './useDocumentShortcuts';
 import { useMidiPortMonitor } from './useMidiPortMonitor';
 import { prepareLoopMidi } from './view-models/loop-midi';
 import { subscribeObsSceneSync } from './obs-scene-sync';
 import { ToolbarConnections } from './components/ToolbarConnections';
+import { ProjectDialog } from './components/ProjectDialog';
 import { Component, useCallback, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import {
   Activity,
+  Lightbulb,
   ListMusic,
   Maximize2,
   Minus,
@@ -27,14 +30,16 @@ import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 import { useProjectPersistence } from './useProjectPersistence';
 import { useP1AutoFollow } from './useP1AutoFollow';
 import { useInternalPlayer } from './useInternalPlayer';
+import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
 
-type Page = 'project' | 'cues';
+type Page = 'project' | 'cues' | 'lighting';
 type Notice = { id: string; message: string; tone: 'info' | 'error' };
 type NavigationItem = { id: Page; label: string; caption: string; icon: typeof ListMusic };
 
 const NAVIGATION: NavigationItem[] = [
   { id: 'project', label: '节目单', caption: '安排节目与素材', icon: ListMusic },
-  { id: 'cues', label: '编辑器', caption: '编排画面与动作', icon: SlidersHorizontal }
+  { id: 'cues', label: '编辑器', caption: '编排画面与动作', icon: SlidersHorizontal },
+  { id: 'lighting', label: '灯光工作台', caption: '音频分段与灯光编排', icon: Lightbulb }
 ];
 
 export function LinkApp(): JSX.Element {
@@ -46,6 +51,7 @@ export function LinkApp(): JSX.Element {
   const [coordinator, setCoordinator] = useState<LinkRuntimeCoordinator | null>(null);
   const [notices, setNotices] = useState<Notice[]>([]);
   const { newProjectOpen, setNewProjectOpen, newProjectName, setNewProjectName } = useNewProjectDialog();
+  const [newProjectError, setNewProjectError] = useState<string | null>(null);
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('obs');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
@@ -57,6 +63,8 @@ export function LinkApp(): JSX.Element {
   const documentError = useDocumentStore((state) => state.error);
   const canUndo = useDocumentStore(selectCanUndo);
   const canRedo = useDocumentStore(selectCanRedo);
+  const lightingUndo = useDocumentStore(state => state.past.at(-1)?.command.scope === 'lighting');
+  const lightingRedo = useDocumentStore(state => state.future.at(-1)?.command.scope === 'lighting');
   const obs = useIntegrationStore((state) => state.obs);
   const processes = useIntegrationStore((state) => state.processes);
   const integrationInitialized = useIntegrationStore((state) => state.initialized);
@@ -64,21 +72,22 @@ export function LinkApp(): JSX.Element {
   const [playbackProject, setPlaybackProject] = useState(project);
   const internalPlayer = useInternalPlayer(coordinator, integrationInitialized, playbackProject);
   const editingLocked = internalPlayer.state.status === 'preparing' || ['preflight', 'armed', 'running', 'timecodeLost', 'paused', 'error', 'stopping'].includes(runtimeState);
-  useEffect(() => { if (!editingLocked) setPlaybackProject(project); }, [editingLocked, project]);
+  const previewPlaying = useMa2AutoSyncStore(state => state.previewPlaying);
+  const playbackLocked = editingLocked || previewPlaying || internalPlayer.state.status === 'playing';
+  useEffect(() => { if (!playbackLocked) setPlaybackProject(project); }, [playbackLocked, project]);
   useConnectionsEscape(connectionsOpen && !settingsOpen, () => setConnectionsOpen(false));
 
   const notify = useCallback((message: string, tone: 'info' | 'error' = 'info') => {
     const id = crypto.randomUUID();
     setNotices((current) => [...current, { id, message, tone }]);
-    window.setTimeout(() => setNotices((current) => current.filter((notice) => notice.id !== id)), 5_000);
+    if (tone === 'info') window.setTimeout(() => setNotices((current) => current.filter((notice) => notice.id !== id)), 5_000);
   }, []);
 
   const midiMonitor = useDesktopIntegrationEvents(notify); useEffect(() => { try { useDisplayPreferences.getState().load(); } catch (error) { notify(`显示设置读取失败：${String(error)}`, 'error'); } }, [notify]);
+  useMa2AutoSync(editingLocked || internalPlayer.state.status === 'playing', notify);
   useProjectPersistence(notify);
 
-  useEffect(() => {
-    void linkDesktopViewModel.setDocumentDirty(dirty).catch((error: unknown) => notify(error instanceof Error ? error.message : String(error), 'error'));
-  }, [dirty, notify]);
+  useDocumentDirty(dirty, notify);
 
   useRuntimeCloseProtection(internalPlayer.state.status === 'preparing' ? 'preflight' : runtimeState, notify);
 
@@ -108,41 +117,22 @@ export function LinkApp(): JSX.Element {
 
   useP1AutoFollow(coordinator, integrationInitialized, project?.playbackSource !== 'internal' && project?.p1AutoFollow?.enabled === true, notify);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.ctrlKey) return;
-      if (editingLocked) {
-        if (['s', 'y', 'z'].includes(event.key.toLowerCase())) event.preventDefault();
-        return;
-      }
-      if (event.key.toLowerCase() === 's') {
-        event.preventDefault();
-        void saveProject();
-      } else if (event.key.toLowerCase() === 'z' && !event.shiftKey) {
-        event.preventDefault();
-        useDocumentStore.getState().undo();
-      } else if (event.key.toLowerCase() === 'y' || (event.key.toLowerCase() === 'z' && event.shiftKey)) {
-        event.preventDefault();
-        useDocumentStore.getState().redo();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  });
-
   const createProject = async (): Promise<void> => {
+    setNewProjectError(null);
     try {
       if (!await saveBeforeNewProject()) return;
       const next = await linkDesktopViewModel.createProject(newProjectName);
       useDocumentStore.getState().setProject(next, null);
       setNewProjectOpen(false); setPage('project');
     } catch (error) {
+      setNewProjectError(`无法创建工程：${error instanceof Error ? error.message : String(error)}。请检查保存位置后重试。`);
       notify(error instanceof Error ? error.message : String(error), 'error');
     }
   };
 
   const beginCreateProject = (): void => {
     if (dirty && !window.confirm('新建独立工程会切换到空节目单，当前工程将先保存。是否继续？')) return;
+    setNewProjectError(null);
     setNewProjectOpen(true);
   };
 
@@ -173,6 +163,7 @@ export function LinkApp(): JSX.Element {
     }
   };
 
+
   const controlWindow = (action: 'minimize' | 'toggleMaximize' | 'close'): void => {
     void linkDesktopViewModel.controlWindow(action).catch((error: unknown) => {
       notify(error instanceof Error ? error.message : String(error), 'error');
@@ -190,30 +181,33 @@ export function LinkApp(): JSX.Element {
     setConnectionsOpen(false);
   }, []);
 
+  useDocumentShortcuts(playbackLocked, saveProject);
   const documentActions = {
-    canUndo, canRedo,
+    canUndo: canUndo && (!playbackLocked || lightingUndo), canRedo: canRedo && (!playbackLocked || lightingRedo),
+    historyDisabled: false,
     disabled: editingLocked || !project,
     onUndo: () => useDocumentStore.getState().undo(),
     onRedo: () => useDocumentStore.getState().redo(), onSave: () => void saveProject()
   };
-  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} /></div>{page === 'cues' && !connectionsOpen ? <CueWorkspace player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
+  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} /></div>{page !== 'project' && !connectionsOpen ? <CueWorkspace key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
 
   return <RendererErrorBoundary>
-    <div className="app-shell">
-      <AppTopbar connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
+    <div className="app-shell" data-workspace={connectionsOpen ? 'settings' : page}>
+      <a className="skip-link" href="#workspace-content">跳到工作区</a>
+      <AppTopbar status={<ToolbarConnections player={internalPlayer} onMtcSettings={() => { setSettingsCategory('audio'); openSettings(); }} />} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
       <AppSidebar editorHostRef={setEditorSidebarHost} playlistHostRef={setPlaylistHost} settingsCategory={settingsCategory} onSettingsCategoryChange={setSettingsCategory}
         page={page} internal={project?.playbackSource === 'internal'} editingLocked={editingLocked}
         obsState={obs.status} p1State={processes.p1.status} runtimeState={runtimeState} settingsOpen={connectionsOpen} onPageChange={(next) => { closeSettings(); setPage(next); }} onSettings={openSettings}
       />
       <section className={`app-workspace${connectionsOpen ? ' settings-workspace' : ''}`}>
         {connectionsOpen ? <SettingsSectionNavigation selected={settingsCategory} onSelect={setSettingsCategory} /> : null}
-        <main className="app-main">
-          <div className="content-scroll">{pageContent}<section hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content"><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={setSettingsCategory} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsClose={closeSettings} /></div></section>
-      <div className="toast-stack">{notices.map((notice) => <div className={`toast ${notice.tone}`} key={notice.id}><span>{notice.message}</span><button onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X /></button></div>)}</div></div>
+        <main className="app-main" id="workspace-content" tabIndex={-1} aria-label={connectionsOpen ? '设置' : NAVIGATION.find(item => item.id === page)?.label}>
+          <div className="content-scroll">{pageContent}<section hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content"><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={setSettingsCategory} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsClose={closeSettings} onSettingsOpen={openSettings} /></div></section>
+      <div className="toast-stack" role="region" aria-label="通知"><div role="status" aria-live="polite">{notices.filter(notice => notice.tone === 'info').map((notice) => <div className="toast info" key={notice.id}><span>{notice.message}</span><button aria-label="关闭通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div><div role="alert">{notices.filter(notice => notice.tone === 'error').map((notice) => <div className="toast error" key={notice.id}><span>{notice.message}</span><button aria-label="关闭错误通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div></div></div>
         </main>
       </section>
 
-      {newProjectOpen ? <div className="modal-backdrop"><div className="modal-card"><span className="eyebrow">NEW PROJECT</span><h2>新建联动工程</h2><p>这会切换到一份独立的空节目单。当前工程会保存在原文件中；要继续添加内容，请取消并使用“添加节目”。</p><label className="field"><span>工程名称</span><input autoFocus value={newProjectName} onChange={(event) => setNewProjectName(event.currentTarget.value)} /></label><div className="modal-actions"><button className="secondary-button" onClick={() => setNewProjectOpen(false)}>取消</button><button className="primary-button" disabled={!newProjectName.trim()} onClick={() => void createProject()}>创建工程</button></div></div></div> : null}
+      {newProjectOpen ? <ProjectDialog name={newProjectName} error={newProjectError} onNameChange={setNewProjectName} onClose={() => setNewProjectOpen(false)} onCreate={() => void createProject()} /> : null}
     </div>
   </RendererErrorBoundary>;
 }
@@ -225,6 +219,12 @@ function useConnectionsEscape(open: boolean, onClose: () => void): void {
     window.addEventListener('keydown', close);
     return () => window.removeEventListener('keydown', close);
   }, [open, onClose]);
+}
+
+function useDocumentDirty(dirty: boolean, notify: (message: string, tone?: 'info' | 'error') => void): void {
+  useEffect(() => {
+    void linkDesktopViewModel.setDocumentDirty(dirty).catch((error: unknown) => notify(error instanceof Error ? error.message : String(error), 'error'));
+  }, [dirty, notify]);
 }
 
 function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange, playlistHostRef, page, internal, editingLocked, settingsOpen, onPageChange, onSettings }: {
@@ -243,27 +243,28 @@ function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange,
   onSettings: () => void;
 }): JSX.Element {
   return <aside className="app-sidebar">
-    <nav className="main-nav" aria-label="主要工作区">{NAVIGATION.map((item) => {
+    <nav className="main-nav workspace-navigation" aria-label="主要工作区">{NAVIGATION.map((item) => {
       const Icon = item.icon;
-      const disabled = editingLocked && !internal;
-      return <button key={item.id} title={`${item.label} · ${disabled ? '已锁定' : item.caption}`} disabled={disabled} className={!settingsOpen && page === item.id ? 'active' : ''} onClick={() => onPageChange(item.id)}><Icon /><span><strong>{item.label}</strong></span></button>;
-    })}<button className={settingsOpen ? 'active' : ''} onClick={onSettings}><Settings /><span><strong>设置</strong></span></button></nav>
+      const disabled = editingLocked && !internal && item.id === 'cues';
+      return <button key={item.id} title={`${item.label} · ${disabled ? '已锁定' : item.caption}`} disabled={disabled} aria-current={!settingsOpen && page === item.id ? 'page' : undefined} className={!settingsOpen && page === item.id ? 'active' : ''} onClick={() => onPageChange(item.id)}><Icon aria-hidden="true" /><span><strong>{item.label}</strong></span></button>;
+    })}<button className={settingsOpen ? 'active' : ''} aria-current={settingsOpen ? 'page' : undefined} onClick={onSettings}><Settings aria-hidden="true" /><span><strong>设置</strong></span></button></nav>
     <div className="sidebar-context">
       <div className="sidebar-playlists" hidden={settingsOpen || page !== 'project'} ref={playlistHostRef} />
-      <div className="sidebar-editor" hidden={settingsOpen || page !== 'cues'} ref={editorHostRef} />
+      <div className="sidebar-editor" hidden={settingsOpen || page === 'project'} ref={editorHostRef} />
       {settingsOpen ? <SettingsNavigation selected={settingsCategory} onSelect={onSettingsCategoryChange} /> : null}
     </div>
   </aside>;
 }
 
-function AppTopbar({ connectHostRef, toolbarHostRef, onWindowAction }: {
+function AppTopbar({ status, connectHostRef, toolbarHostRef, onWindowAction }: {
+  status: ReactNode;
   connectHostRef: (element: HTMLDivElement | null) => void;
   toolbarHostRef: (element: HTMLDivElement | null) => void;
   onWindowAction: (action: 'minimize' | 'toggleMaximize' | 'close') => void;
 }): JSX.Element {
   return <div className="app-topbar">
     <div className="persistent-project-toolbar" ref={toolbarHostRef} />
-    <div className="topbar-status"><ToolbarConnections /></div>
+    <div className="topbar-status">{status}</div>
     <div className="topbar-connect" ref={connectHostRef} />
     <WorkspaceToolbar onWindowAction={onWindowAction} />
   </div>;
@@ -346,7 +347,7 @@ async function loadDesktopIntegrationState(
   isCancelled: () => boolean,
   notify: (message: string, tone?: 'info' | 'error') => void
 ): Promise<void> {
-  useIntegrationStore.getState().setInitialized(false);
+  useIntegrationStore.getState().setInitialized(false); useIntegrationStore.getState().setError(null);
   try {
     const [appInfo, profile, securityAvailable, obsSnapshot, snapshots] = await Promise.all([
       linkDesktopViewModel.getAppInfo(),
@@ -376,7 +377,11 @@ async function loadDesktopIntegrationState(
       }
     }
   } catch (error) {
-    if (!isCancelled()) notify(`桌面集成初始化失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    if (!isCancelled()) {
+      const message = `桌面集成初始化失败：${error instanceof Error ? error.message : String(error)}`;
+      useIntegrationStore.getState().setError(message); notify(message, 'error');
+      void linkDesktopViewModel.recordLog({ level: 'error', category: 'device', message }).catch((reason: unknown) => notify(`初始化错误日志写入失败：${String(reason)}`, 'error'));
+    }
   } finally {
     if (!isCancelled()) useIntegrationStore.getState().setInitialized(true);
   }

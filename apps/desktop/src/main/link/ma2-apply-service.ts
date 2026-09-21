@@ -23,7 +23,7 @@ export class Ma2ApplyService {
       if (!binding || binding.timecode !== request.readback.target) throw new Error('节目与 MA2 绑定不一致');
       stage = 'read';
       let snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
-      const current = convertMa2Snapshot(snapshot, binding.timecode);
+      const current = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
       if (!sameMa2XmlObjects(request.readback.sourceXml, current.sourceXml) || previewContent(request.readback) !== previewContent(current)) throw new Error('控台 Timecode 或序列在预览后已改变，请重新读取比较');
       stage = 'preflight';
       const merged = resolveMa2Sync(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map(request.choices)), new Map(request.conflicts));
@@ -38,7 +38,7 @@ export class Ma2ApplyService {
       if (additional.length) {
         stage = 'read';
         snapshot = await this.bridge.request('SCOPE', binding.timecode, additional.join(','));
-        const scoped = convertMa2Snapshot(snapshot, binding.timecode, additional);
+        const scoped = convertMa2Snapshot(snapshot, binding.timecode, additional, binding.timeOriginMs);
         if (!sameMa2XmlObjects(current.sourceXml, scoped.sourceXml) || previewContent(current) !== previewContent(scoped)) throw new Error('控台在读取新增 Cue 序列期间已改变，请重新读取比较');
         stage = 'preflight';
       }
@@ -50,7 +50,7 @@ export class Ma2ApplyService {
       backupFile = `tblink_backup_${receipt.requestId}.xml`;
       stage = 'verify';
       const after = await this.bridge.request('SNAPSHOT', binding.timecode);
-      const verified = convertMa2Snapshot(after, binding.timecode);
+      const verified = convertMa2Snapshot(after, binding.timecode, [], binding.timeOriginMs);
       const confirmed = confirmMa2MergedEvents(prepared, verified.sourceXml, [after]);
       return ma2ApplyResultSchema.parse({ status: 'verified', confirmed, backupFile });
     } catch (error) {

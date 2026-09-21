@@ -36,7 +36,7 @@ export async function importVideoAudio(input: WorkspaceActionsInput, asset: Link
     const directory = input.projectPath.slice(0, Math.max(input.projectPath.lastIndexOf('/'), input.projectPath.lastIndexOf('\\')) + 1);
     const source = await linkDesktopViewModel.importReferenceAudio({ projectPath: input.projectPath, sourcePath: directory + asset.relativePath, durationMs: asset.durationMs });
     const tracks = input.item.referenceAudio ? audioTracks(input.item.referenceAudio, input.item.title) : [];
-    tracks.push({ id: crypto.randomUUID(), title: `${asset.name} · 原声`, source: referenceAudioSourceSchema.parse(source), segments: [{ id: crypto.randomUUID(), startMs, sourceOffsetMs: 0, durationMs: Math.min(clip.durationMs ?? source.durationMs, source.durationMs) }] });
+    tracks.push({ id: crypto.randomUUID(), title: `${asset.name} · 原声`, source: referenceAudioSourceSchema.parse(source), segments: [{ id: crypto.randomUUID(), startMs: Math.round(startMs), sourceOffsetMs: 0, durationMs: Math.floor(Math.min(clip.durationMs ?? source.durationMs, source.durationMs)) }] });
     const mixed = await linkDesktopViewModel.renderAudioSegments({ projectPath: input.projectPath, source, segments: tracks.at(-1)!.segments, tracks });
     const current = useDocumentStore.getState();
     if (current.documentId !== before.documentId || current.revision !== before.revision) throw new Error('提取期间工程已修改，视频尚未加入，请重新拖入');

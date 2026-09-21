@@ -15,6 +15,7 @@ import { writeFileAtomically } from './atomic-file';
 import { VerifiedMediaFiles } from './verified-media-files';
 import {
   extractReferenceAudioTrack,
+  readExtractedAudioDuration,
   type ReferenceAudioExtractor
 } from './reference-audio-extractor';
 
@@ -128,10 +129,13 @@ export class LinkProjectService {
   async importReferenceAudio(
     projectPath: string,
     sourcePath: string,
-    durationMs: number
+    durationMs: number | null,
+    startMs = 0,
+    preserveP1Duration = false
   ): Promise<ImportedReferenceAudio> {
     assertProjectExtension(projectPath);
-    if (!Number.isInteger(durationMs) || durationMs <= 0) {
+    if (!Number.isFinite(startMs) || startMs < 0) throw new Error('音频裁剪起点必须是非负毫秒数');
+    if (durationMs !== null && (!Number.isInteger(durationMs) || durationMs <= 0)) {
       throw new Error('参考音频时长必须是正整数毫秒');
     }
     const extension = extname(sourcePath).toLowerCase();
@@ -145,8 +149,8 @@ export class LinkProjectService {
     const projectDirectory = dirname(resolve(projectPath));
     const assetsDirectory = join(projectDirectory, 'assets', 'reference-audio');
     await mkdir(assetsDirectory, { recursive: true });
-    if (REFERENCE_AUDIO_CONTAINER_EXTENSIONS.has(extension)) {
-      return this.importContainerAudio(assetsDirectory, projectDirectory, sourcePath, durationMs);
+    if (durationMs === null || startMs > 0 || REFERENCE_AUDIO_CONTAINER_EXTENSIONS.has(extension)) {
+      return this.importContainerAudio(assetsDirectory, projectDirectory, sourcePath, durationMs, startMs, preserveP1Duration);
     }
 
     const digest = await hashFile(sourcePath);
@@ -175,13 +179,16 @@ export class LinkProjectService {
     assetsDirectory: string,
     projectDirectory: string,
     sourcePath: string,
-    durationMs: number
+    durationMs: number | null,
+    startMs: number,
+    preserveP1Duration: boolean
   ): Promise<ImportedReferenceAudio> {
     const temporaryPath = join(assetsDirectory, `.${crypto.randomUUID()}.tmp.wav`);
     try {
-      await this.extractAudioTrack(sourcePath, temporaryPath);
+      await this.extractAudioTrack(sourcePath, temporaryPath, durationMs !== null && (startMs > 0 || preserveP1Duration) ? { startMs, durationMs, ...(preserveP1Duration ? { tailToleranceMs: 250 } : {}) } : undefined);
       const extractedStat = await stat(temporaryPath);
       if (!extractedStat.isFile() || extractedStat.size <= 0) throw new Error('提取结果为空');
+      const decodedDurationMs = await readExtractedAudioDuration(temporaryPath);
       const digest = await hashFile(temporaryPath);
       const destination = join(assetsDirectory, `${digest}.wav`);
       if (await pathExists(destination)) await unlink(temporaryPath);
@@ -190,7 +197,7 @@ export class LinkProjectService {
         assetId: crypto.randomUUID(),
         relativePath: relative(projectDirectory, destination).replaceAll('\\', '/'),
         sha256: digest,
-        durationMs
+        durationMs: durationMs === null ? decodedDurationMs : Math.min(durationMs, decodedDurationMs)
       };
     } catch (error) {
       try {

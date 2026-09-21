@@ -4,12 +4,12 @@ import { mkdir, open, stat, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
-import { AudioBeatDetector } from '@tb/core/link';
+import { analyzeIbtAudio } from './ibt-beat-service';
 import { audioTracksSchema, referenceAudioSchema, type AudioBeatAnalysis, type AudioSegment, type AudioTrack, type ReferenceAudio } from '@tb/schema';
 import type { LinkProjectService } from './link-project-service';
 
 export class AudioEditService {
-  constructor(private readonly projects: LinkProjectService) {}
+  constructor(private readonly projects: LinkProjectService, private readonly beatExecutable?: string) {}
 
   async mix(projectPath: string, input: AudioTrack[]): Promise<ReferenceAudio> {
     const tracks = audioTracksSchema.parse(input);
@@ -43,16 +43,7 @@ export class AudioEditService {
 
   async analyze(projectPath: string, source: ReferenceAudio): Promise<AudioBeatAnalysis> {
     const path = await this.sourcePath(projectPath, source);
-    const detector = new AudioBeatDetector();
-    let remainder = Buffer.alloc(0);
-    await ffmpeg(['-i', path, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '22050', '-f', 'f32le', 'pipe:1'], (chunk) => {
-      const data = remainder.length ? Buffer.concat([remainder, chunk]) : chunk;
-      const complete = data.length - data.length % 4;
-      for (let offset = 0; offset < complete; offset += 4) detector.push(data.readFloatLE(offset));
-      remainder = Buffer.from(data.subarray(complete));
-    });
-    if (remainder.length) throw new Error('音频节拍解码数据不完整');
-    return detector.finish(source.durationMs);
+    return analyzeIbtAudio(path, source.durationMs, (input, output) => ffmpeg(['-i', input, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '44100', '-c:a', 'pcm_s16le', output]), this.beatExecutable);
   }
 
   async render(projectPath: string, source: ReferenceAudio, segments: AudioSegment[]): Promise<ReferenceAudio> {

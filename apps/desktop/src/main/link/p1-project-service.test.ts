@@ -24,6 +24,72 @@ afterEach(async () => {
 });
 
 describe('P1ProjectService', () => {
+  it('坏裁剪跳过，好歌曲仍导入并保留时间码；保存重开再导出保留坏条目', async () => {
+    const fixture = await createFixture();
+    const source = await readFile(fixture.p1Path, 'utf8');
+    await writeFile(fixture.p1Path, source.replace('cut_start="0"', 'cut_start="2"').replaceAll('MidiStartTime="0"', 'MidiStartTime="120"').replace(fixture.audioPaths[1].replaceAll('\\', '/'), fixture.audioPaths[0].replaceAll('\\', '/')));
+    const service = new P1ProjectService(new LinkProjectService());
+    const imported = await service.importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.items.map(item => item.title)).toEqual(['第二首.wav']);
+    expect(imported.skippedItems).toHaveLength(1);
+    expect(imported.skippedItems?.[0]?.reason).toContain('可解码的音轨');
+    const project = synchronizeP1ProjectCommand(imported, sequenceIds('good', 'unavailable'), timestamp).execute(createEmptyLinkProject('部分导入'));
+    expect(project.rundown.find(item => item.referenceAudio)?.playback?.mtcOffsetMs).toBe(120000);
+    expect(project.rundown).toHaveLength(2);
+    expect(project.rundown[0]).toMatchObject({ title: '第一首.wav', enabled: false });
+    expect((await service.previewExport(fixture.p1Path, fixture.linkPath, project)).removedCount).toBe(0);
+    const projects = new LinkProjectService();
+    await projects.save(fixture.linkPath, project); cleanupFiles.push(fixture.linkPath);
+    const reopened = await projects.open(fixture.linkPath);
+    expect(reopened.p1Sync?.skippedItems).toEqual(imported.skippedItems);
+    const exported = await service.exportProject(fixture.p1Path, fixture.linkPath, reopened, imported.sourceSha256);
+    cleanupFiles.push(exported.outputPath);
+    const xml = await readFile(exported.outputPath, 'utf8');
+    expect(xml).toContain('cut_start="2"'); expect(xml).toContain('第一首.wav'); expect(xml).toContain('第二首.wav');
+    const reread = await service.importProject(exported.outputPath, fixture.linkPath);
+    expect(reread.items[0]?.p1Media.sourceKey).toBe(exported.itemBindings[0]?.p1Media.sourceKey);
+    expect(reread.skippedItems?.[0]?.sourceKey).toBe(exported.skippedItems?.[0]?.sourceKey);
+  });
+  it('实际裁剪音频并在导出和再次导入时保留起点、时长及时间码', async () => {
+    const fixture = await createFixture();
+    const rate = 48000;
+    const wave = Buffer.alloc(44 + rate * 2 * 3);
+    wave.write('RIFF', 0); wave.writeUInt32LE(wave.length - 8, 4); wave.write('WAVEfmt ', 8);
+    wave.writeUInt32LE(16, 16); wave.writeUInt16LE(1, 20); wave.writeUInt16LE(1, 22);
+    wave.writeUInt32LE(rate, 24); wave.writeUInt32LE(rate * 2, 28); wave.writeUInt16LE(2, 32); wave.writeUInt16LE(16, 34);
+    wave.write('data', 36); wave.writeUInt32LE(wave.length - 44, 40);
+    for (let frame = 0; frame < rate * 3; frame++) wave.writeInt16LE(frame < rate ? 0 : 10000, 44 + frame * 2);
+    await writeFile(fixture.audioPaths[0], wave);
+    const source = (await readFile(fixture.p1Path, 'utf8')).replace('cut_start="0" cut_end="1"', 'cut_start="1.25" cut_end="2.5"').replace('MidiStartTime="0"', 'MidiStartTime="120"');
+    await writeFile(fixture.p1Path, source);
+    const service = new P1ProjectService(new LinkProjectService());
+    const imported = await service.importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    const audio = imported.items[0]!.referenceAudio;
+    expect(audio.durationMs).toBe(1250);
+    const rendered = await readFile(join(fixture.directory, audio.relativePath));
+    const data = rendered.indexOf(Buffer.from('data')) + 8;
+    expect(rendered.length - data).toBe(rate * 4 * 1.25);
+    expect(rendered.readInt16LE(data + 4800)).toBeGreaterThan(6000);
+    const project = synchronizeP1ProjectCommand(imported, sequenceIds('a', 'b'), timestamp).execute(createEmptyLinkProject('裁剪验证'));
+    expect(project.rundown[0]!.playback?.mtcOffsetMs).toBe(120000);
+    const exported = await service.exportProject(fixture.p1Path, fixture.linkPath, project, imported.sourceSha256);
+    cleanupFiles.push(exported.outputPath);
+    const output = await readFile(exported.outputPath, 'utf8');
+    expect(output).toContain('cut_start="1.25"'); expect(output).toContain('cut_end="2.5"');
+    expect(output).toContain('MidiStartTime="120"');
+    expect(await readFile(fixture.p1Path, 'utf8')).toBe(source);
+    const reopened = await service.importProject(exported.outputPath, fixture.linkPath);
+    expect(reopened.items[0]!.referenceAudio.sha256).toBe(audio.sha256);
+    expect(reopened.items[0]!.referenceAudio.durationMs).toBe(1250);
+    await writeFile(fixture.p1Path, source.replace('cut_end="2.5"', 'cut_end="4"'));
+    const partial = await service.importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, partial.items.map(item => item.referenceAudio.relativePath));
+    expect(partial.items).toHaveLength(2);
+    expect(partial.items[0]?.referenceAudio.durationMs).toBe(3000);
+    expect(partial.items[0]?.importNotes).toContain('完整原音频');
+  });
   it('自动联动工程写入独立起点且不覆盖原 P1 文件', async () => {
     const fixture = await createFixture();
     const service = new P1ProjectService(new LinkProjectService());
@@ -85,20 +151,59 @@ describe('P1ProjectService', () => {
     await expect(service.previewExport(fixture.p1Path, fixture.linkPath, project)).rejects.toThrow('上次导入后已变化');
   });
 
-  it('缺失源音频时整次读取失败，不生成伪素材', async () => {
+  it('缺失源音频只跳过该条目，不生成伪素材', async () => {
     const fixture = await createFixture();
     await unlink(fixture.audioPaths[1]);
     const cleanupIndex = cleanupFiles.indexOf(fixture.audioPaths[1]);
     if (cleanupIndex < 0) throw new Error('测试清理列表缺少第二首音频');
     cleanupFiles.splice(cleanupIndex, 1);
-    await expect(new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath))
-      .rejects.toThrow();
+    const imported = await new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.items).toHaveLength(1); expect(imported.skippedItems).toHaveLength(1);
+  });
+
+  it('零时长从原音频恢复，缺失歌曲保留原顺序，补文件后原位恢复不重复', async () => {
+    const fixture = await createFixture();
+    const wav = Buffer.alloc(44 + 2 * 192000);
+    wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22);
+    wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(192000, 28); wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+    await writeFile(fixture.audioPaths[0], wav); await unlink(fixture.audioPaths[1]);
+    await writeFile(fixture.p1Path, (await readFile(fixture.p1Path, 'utf8')).replace('cut_end="1"', 'cut_end="0"').replaceAll('MidiStartTime="0"', 'MidiStartTime="120"'));
+    const service = new P1ProjectService(new LinkProjectService());
+    const imported = await service.importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    let project = synchronizeP1ProjectCommand(imported, sequenceIds('first', 'second')).execute(createEmptyLinkProject('全部保留'));
+    expect(project.rundown.map(item => item.id)).toEqual(['first', 'second']);
+    expect(project.rundown[0]?.referenceAudio?.durationMs).toBe(2000);
+    expect(project.rundown[0]?.notes).toContain('完整原音频');
+    expect(project.rundown[0]?.playback?.mtcOffsetMs).toBe(120000);
+    expect(project.rundown[1]?.enabled).toBe(false);
+    project = synchronizeP1ProjectCommand(imported).execute(project);
+    expect(project.rundown.map(item => item.id)).toEqual(['first', 'second']);
+    const exported = await service.exportProject(fixture.p1Path, fixture.linkPath, project, imported.sourceSha256);
+    cleanupFiles.push(exported.outputPath);
+    expect(await readFile(exported.outputPath, 'utf8')).toContain('cut_end="2"');
+    expect(await readFile(exported.outputPath, 'utf8')).toContain('第二首.wav');
+    await writeFile(fixture.audioPaths[1], wav);
+    const recovered = await service.importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, recovered.items.map(item => item.referenceAudio.relativePath));
+    project = synchronizeP1ProjectCommand(recovered).execute(project);
+    expect(project.rundown.map(item => item.id)).toEqual(['first', 'second']);
+    expect(project.rundown.every(item => item.enabled && item.referenceAudio)).toBe(true);
+    expect(project.rundown[1]?.p1UnavailableSourceKey).toBeUndefined();
   });
 
   it('P1 将带音轨 MP4 标记为视频节目时仍提取音轨并保留原始 P1 路径', async () => {
     const fixture = await createContainerFixture();
     const projectService = new LinkProjectService(async (_sourcePath, destinationPath) => {
-      await writeFile(destinationPath, Buffer.from('decoded-pcm-audio'));
+      const wav = Buffer.alloc(44 + 3 * 192000);
+      wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
+      wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22);
+      wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(192000, 28); wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34);
+      wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+      await writeFile(destinationPath, wav);
     });
     const service = new P1ProjectService(projectService);
     const imported = await service.importProject(fixture.p1Path, fixture.linkPath);
@@ -115,15 +220,25 @@ describe('P1ProjectService', () => {
     cleanupFiles.push(exported.outputPath);
     const output = await readFile(exported.outputPath, 'utf8');
     expect(output).toContain(fixture.mediaPath.replaceAll('\\', '/'));
+    await writeFile(fixture.p1Path, (await readFile(fixture.p1Path, 'utf8')).replace('cut_end="3"', 'cut_end="45"'));
+    const recovered = await service.importProject(fixture.p1Path, fixture.linkPath);
+    expect(recovered.items[0]?.referenceAudio.durationMs).toBe(3000);
+    expect(recovered.items[0]?.importNotes).toContain('完整原音频');
   });
 
-  it('MP4 没有可解码音轨时明确阻断整次 P1 导入', async () => {
+  it('MP4 没有可解码音轨时仍保留待修复节目', async () => {
     const fixture = await createContainerFixture();
     const projectService = new LinkProjectService(() => Promise.reject(
       new Error('Output file does not contain any stream')
     ));
-    await expect(new P1ProjectService(projectService).importProject(fixture.p1Path, fixture.linkPath))
-      .rejects.toThrow('素材没有可解码的音轨');
+    const imported = await new P1ProjectService(projectService).importProject(fixture.p1Path, fixture.linkPath);
+    expect(imported.items).toHaveLength(0); expect(imported.skippedItems).toHaveLength(1);
+    const project = synchronizeP1ProjectCommand(imported, sequenceIds('pending')).execute(createEmptyLinkProject('保留歌曲'));
+    expect(project.rundown).toHaveLength(1);
+    expect(project.rundown[0]).toMatchObject({ id: 'pending', title: 'MP4 音频', enabled: false });
+    expect(project.rundown[0]?.referenceAudio).toBeUndefined();
+    expect(project.rundown[0]?.notes).toContain('没有可解码的音轨');
+    expect(synchronizeP1ProjectCommand(imported).execute(project).rundown).toHaveLength(1);
   });
 });
 

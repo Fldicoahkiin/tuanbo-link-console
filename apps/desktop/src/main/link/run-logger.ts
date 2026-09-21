@@ -1,4 +1,6 @@
-import { appendFile, mkdir, readFile, readdir } from 'node:fs/promises';
+import { appendFile, mkdir, readdir } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { dirname, join } from 'node:path';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
@@ -62,15 +64,7 @@ export class LinkRunLogger {
   }
 
   async query(filter: LinkLogFilter = {}): Promise<LinkLogEntry[]> {
-    const entries = await this.readAllDiskEntries();
-    return entries.filter((entry) => {
-      if (filter.sessionId && entry.sessionId !== filter.sessionId) return false;
-      if (filter.itemId && entry.itemId !== filter.itemId) return false;
-      if (filter.cueId && entry.cueId !== filter.cueId) return false;
-      if (filter.device && entry.device !== filter.device) return false;
-      if (filter.result && entry.result !== filter.result) return false;
-      return true;
-    }).map((entry) => structuredClone(entry));
+    return this.readAllDiskEntries(filter);
   }
 
   async exportDiagnosticPackage(
@@ -89,7 +83,7 @@ export class LinkRunLogger {
     await writeFileAtomically(destinationPath, await gzipAsync(Buffer.from(JSON.stringify(payload, null, 2), 'utf8')));
   }
 
-  private async readAllDiskEntries(): Promise<LinkLogEntry[]> {
+  private async readAllDiskEntries(filter: LinkLogFilter = {}): Promise<LinkLogEntry[]> {
     let fileNames: string[];
     try {
       fileNames = (await readdir(this.logsDirectory, { withFileTypes: true }))
@@ -102,28 +96,41 @@ export class LinkRunLogger {
     }
     const entries: LinkLogEntry[] = [];
     for (const fileName of fileNames) {
-      entries.push(...await this.readDiskEntries(join(this.logsDirectory, fileName)));
+      for await (const entry of this.readDiskEntries(join(this.logsDirectory, fileName))) {
+        if (filter.sessionId && entry.sessionId !== filter.sessionId) continue;
+        if (filter.itemId && entry.itemId !== filter.itemId) continue;
+        if (filter.cueId && entry.cueId !== filter.cueId) continue;
+        if (filter.device && entry.device !== filter.device) continue;
+        if (filter.result && entry.result !== filter.result) continue;
+        entries.push(entry);
+      }
     }
     return entries.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
   }
 
-  private async readDiskEntries(filePath: string): Promise<LinkLogEntry[]> {
-    let content: string;
+  private async *readDiskEntries(filePath: string): AsyncGenerator<LinkLogEntry> {
+    const stream = createReadStream(filePath, { encoding: 'utf8' });
+    const lines = createInterface({ input: stream, crlfDelay: Infinity });
+    let index = 0;
     try {
-      content = await readFile(filePath, 'utf8');
-    } catch (error) {
-      if (isErrorWithCode(error, 'ENOENT')) return [];
-      throw error;
-    }
-    return content.split(/\r?\n/).filter(Boolean).map((line, index): LinkLogEntry => {
-      try {
-        const value: unknown = JSON.parse(line);
-        if (!isLinkLogEntry(value)) throw new Error('日志条目结构无效');
-        return value;
-      } catch (error) {
-        throw new Error(`${filePath} 第 ${index + 1} 行损坏`, { cause: error });
+      for await (const line of lines) {
+        index++;
+        if (!line) continue;
+        try {
+          const value: unknown = JSON.parse(line);
+          if (!isLinkLogEntry(value)) throw new Error('日志条目结构无效');
+          yield value;
+        } catch (error) {
+          throw new Error(`${filePath} 第 ${index} 行损坏`, { cause: error });
+        }
       }
-    });
+    } catch (error) {
+      if (isErrorWithCode(error, 'ENOENT')) return;
+      throw error;
+    } finally {
+      lines.close();
+      stream.destroy();
+    }
   }
 }
 

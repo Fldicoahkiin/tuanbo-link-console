@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import { ObsPreviewSetup } from './ObsPreviewSetup';
 import { useState } from 'react';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -14,8 +15,8 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const dirty = url !== profile?.obs.webSocketUrl || password !== '';
-  const save = async (connect: boolean): Promise<void> => {
-    if (disabled || busy) return;
+  const save = async (connect: boolean): Promise<boolean> => {
+    if (disabled || busy) return false;
     setBusy(true); onBusy(true); setError(''); setSaved(false);
     try {
       const current = useIntegrationStore.getState().profile ?? createDefaultIntegrationProfile();
@@ -28,7 +29,8 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
         if (result.status === 'connected') useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory());
         else setError('OBS 连接未完成，请检查地址、密码和 OBS 的 WebSocket 服务。');
       }
-    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+      return true;
+    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); return false; }
     finally { setBusy(false); onBusy(false); }
   };
   const disconnect = async (): Promise<void> => {
@@ -41,8 +43,10 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
     <div className="device-section-heading"><h3>OBS Studio</h3><span role="status">{busy ? '连接处理中' : obs.status === 'connected' ? '已连接' : '未连接'}</span></div>
     <label className="settings-row"><span>WebSocket 地址</span><input aria-label="WebSocket 地址" value={url} disabled={disabled || busy} onChange={(event) => { onUrl(event.currentTarget.value); setSaved(false); }} /></label>
     <label className="settings-row"><span>密码</span><input aria-label="OBS 密码" type="password" autoComplete="new-password" placeholder="留空则不更换" value={password} disabled={disabled || busy} onChange={(event) => { onPassword(event.currentTarget.value); setSaved(false); }} /></label>
-    <div className="device-actions settings-header-actions">{obs.status === 'connected' && !dirty ? <button className="secondary-button" disabled={disabled || busy} onClick={() => void disconnect()}>断开 OBS</button> : <button className="primary-button" disabled={disabled || busy} onClick={() => void save(true)}>保存并连接 OBS</button>}{dirty ? <button className="secondary-button" disabled={disabled || busy} onClick={() => void save(false)}>仅保存 OBS</button> : null}{saved ? <span role="status">已保存</span> : null}</div>
+    <div className="device-actions settings-header-actions">{obs.status === 'connected' && !dirty ? <Button className="secondary-button" disabled={disabled || busy} onClick={() => void disconnect()}>断开 OBS</Button> : <Button className="primary-button" loading={busy} disabled={disabled || busy} onClick={() => void save(true)}>保存并连接 OBS</Button>}{dirty ? <Button className="secondary-button" disabled={disabled || busy} onClick={() => void save(false)}>仅保存 OBS</Button> : null}{saved ? <span role="status">已保存</span> : null}</div>
     {error ? <p className="device-error" role="alert">{error}</p> : null}
-    <details className="device-advanced"><summary>编辑器预览与脚本配置</summary><ObsPreviewSetup disabled={disabled || busy} notify={notify} /></details>
+    <ObsPreviewSetup disabled={disabled || busy} notify={notify} beforeRepair={async () => {
+      if (dirty && !await save(false)) throw new Error('OBS 配置保存失败，请检查地址后再次修复组件');
+    }} />
   </section>;
 }

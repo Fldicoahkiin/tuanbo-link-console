@@ -1,36 +1,34 @@
-import { useEffect, useState } from 'react';
+import { Button } from './Button';
+import { useState } from 'react';
+import { Wrench } from 'lucide-react';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
-export function ObsPreviewSetup({ disabled, notify }: {
+export function ObsPreviewSetup({ disabled, notify, beforeRepair }: {
   disabled: boolean;
   notify: (message: string, tone?: 'info' | 'error') => void;
+  beforeRepair: () => Promise<void>;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
-  const [path, setPath] = useState<string | null>(null);
   const [status, setStatus] = useState<{ ready: boolean; message: string } | null>(null);
-  useEffect(() => {
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = async (): Promise<void> => {
-      try {
-        const value = await linkDesktopViewModel.getObsPreviewStatus();
-        if (!disposed) setStatus(value);
-      } catch (error) {
-        if (!disposed) setStatus({ ready: false, message: error instanceof Error ? error.message : String(error) });
-      } finally { if (!disposed) timer = setTimeout(() => void refresh(), 1_000); }
-    };
-    void refresh();
-    return () => { disposed = true; clearTimeout(timer); };
-  }, []);
   const prepare = async (): Promise<void> => {
-    setBusy(true);
-    try { setPath(await linkDesktopViewModel.exportObsPreviewScript()); }
-    catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
+    if (busy || disabled) return;
+    setBusy(true); setStatus(null);
+    try {
+      await beforeRepair();
+      await linkDesktopViewModel.repairObsBridge();
+      setStatus({ ready: true, message: '组件已就绪，真实画面检查通过。' });
+      notify('OBS 内置组件检查完成。');
+    }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus({ ready: false, message }); notify(message, 'error');
+    }
     finally { setBusy(false); }
   };
   return <div className="settings-field">
-    <button className="secondary-button" disabled={disabled || busy} onClick={() => void prepare()}>{busy ? '正在准备…' : '导出 OBS 预览脚本'}</button>
-    {status ? <p className="settings-note" role="status">{status.message}</p> : null}
-    {path ? <p className="settings-note">在本机 OBS 的“工具 → 脚本”中添加已打开文件夹里的 tblink_preview.lua（仅首次需要）。之后编辑器自动预览，播放时才切换正式画面。<br />{path}</p> : null}
+    <h3>内置预览组件</h3>
+    <p className="settings-note">随联动台提供，自动安装与升级。需要 Windows 授权或重启 OBS 时，软件会引导完成。</p>
+    <Button className="secondary-button" disabled={disabled || busy} onClick={() => void prepare()}><Wrench />{busy ? '正在检查组件…' : '检查并修复组件'}</Button>
+    {status ? <p className={status.ready ? 'settings-note' : 'device-error'} role={status.ready ? 'status' : 'alert'}>{status.message}</p> : null}
   </div>;
 }

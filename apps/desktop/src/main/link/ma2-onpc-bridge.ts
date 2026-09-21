@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { ma2ObjectDirectorySchema } from '@tb/schema';
 import { readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
-import { inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
-export type Ma2Operation = 'PING' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR';
+import { inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
+export type Ma2Operation = 'PING' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR';
 export type Ma2Wire = {
   exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void): Promise<string>;
 };
@@ -44,7 +45,12 @@ export class Ma2OnpcBridge {
       const body = writing ? `${Buffer.byteLength(expected)}\n${expected}${desired}` : operation === 'EXECUTOR' ? expected : operation === 'SCOPE' ? requestedSequences.sort((a, b) => a - b).join(',') : '';
       if (Buffer.byteLength(body) > 32 * 1024 * 1024) throw new Error('MA2 交换数据超过 32 MB');
       const validate = (result: string): { response: string; requestId: string } => {
-        if (operation === 'EXECUTOR') inspectMa2ExecutorXml(result);
+        if (operation === 'LIST' || operation === 'LISTSEQ') ma2ObjectDirectorySchema.parse(JSON.parse(result));
+        else if (operation === 'SEQUENCE') {
+          const report = inspectMa2SequenceXml(result);
+          if (report.sequences.length !== 1 || report.sequences[0]?.number !== target) throw new Error('Sequence 回读对象不一致');
+        }
+        else if (operation === 'EXECUTOR') inspectMa2ExecutorXml(result);
         else if (operation !== 'PING') {
           if (operation === 'SNAPSHOT' || operation === 'SCOPE') validateMa2TimecodeSnapshot(result, requestedSequences);
           else validateMa2TimecodeWrite(result);
