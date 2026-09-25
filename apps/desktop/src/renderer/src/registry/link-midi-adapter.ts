@@ -1,3 +1,4 @@
+import { requestMidiAccess } from './midi-access';
 import type { IntegrationProfile, LinkAction, MtcFrameRate } from '@tb/schema';
 import type { LinkActionExecutor } from '@tb/core/link';
 
@@ -60,7 +61,7 @@ export class LinkMidiAdapter implements LinkActionExecutor {
     if (!navigator.requestMIDIAccess) throw new Error('当前 Electron 环境不支持 Web MIDI');
     if (!this.access) {
       const generation = this.generation;
-      const initialization = this.initialization ?? navigator.requestMIDIAccess({ sysex: true });
+      const initialization = this.initialization ?? requestMidiAccess({ sysex: true });
       this.initialization = initialization;
       let access: MIDIAccess;
       try {
@@ -90,17 +91,25 @@ export class LinkMidiAdapter implements LinkActionExecutor {
   }
 
   async openOutputs(profileIds: readonly string[]): Promise<string[]> {
+    return this.openPorts(profileIds, 'output');
+  }
+
+  async openInputs(profileIds: readonly string[]): Promise<string[]> {
+    return this.openPorts(profileIds, 'input');
+  }
+
+  private async openPorts(profileIds: readonly string[], direction: 'input' | 'output'): Promise<string[]> {
     await this.initialize();
     const issues: string[] = [];
     const opened = new Set<string>();
     for (const id of profileIds) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const output = this.resolveOutput(id);
-        if (output.state !== 'connected') throw new Error(`MIDI 输出已断开：${output.name}`);
+        const output = direction === 'output' ? this.resolveOutput(id) : this.resolveInput(id);
+        if (output.state !== 'connected') throw new Error(`MIDI 接口已断开：${output.name}`);
         if (opened.has(output.id)) continue;
-        await Promise.race([output.open(), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`MIDI 输出打开超时：${output.name}`)), 5000); })]);
-        if (output.state !== 'connected') throw new Error(`MIDI 输出已断开：${output.name}`);
+        await Promise.race([output.open(), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`MIDI 接口打开超时：${output.name}`)), 5000); })]);
+        if (output.state !== 'connected') throw new Error(`MIDI 接口已断开：${output.name}`);
         opened.add(output.id);
       } catch (error) { issues.push(toMessage(error)); }
       finally { clearTimeout(timer); }

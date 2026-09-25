@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type WheelEvent as ReactWheelEvent } from 'react';
 import {
   buildVisibleTimelineTicks,
   chooseTimelineTickInterval,
@@ -12,6 +12,8 @@ import {
 
 type TimelineViewport = {
   viewportRef: RefObject<HTMLDivElement>;
+  headingViewportRef: RefObject<HTMLDivElement>;
+  onHeadingsWheel: (event: ReactWheelEvent) => void;
   pixelsPerSecond: number;
   scrollLeft: number;
   viewportWidth: number;
@@ -29,6 +31,7 @@ type TimelineViewport = {
 
 export function useTimelineViewport(durationMs: number, initialPixelsPerSecond = DEFAULT_TIMELINE_PIXELS_PER_SECOND, onWheelSeek?: (deltaMs: number) => number): TimelineViewport {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const headingViewportRef = useTimelineHeadings(viewportRef);
   const [pixelsPerSecond, setPixelsPerSecond] = useState(initialPixelsPerSecond);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(1);
@@ -112,6 +115,9 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
         if (event.deltaY !== 0) zoomAt(pixelsPerSecond * (event.deltaY < 0 ? 1.18 : 1 / 1.18), event.clientX);
       } else if (onWheelSeek && !event.shiftKey && event.deltaY !== 0) {
         revealTime(onWheelSeek(event.deltaY * unit / pixelsPerSecond * 1_000));
+      } else if (!event.shiftKey && event.deltaY !== 0 && viewport.scrollHeight > viewport.clientHeight) {
+        viewport.scrollTop += event.deltaY * unit;
+        if (event.deltaX !== 0) setViewportScrollLeft(viewport.scrollLeft + event.deltaX * unit);
       } else {
         setViewportScrollLeft(viewport.scrollLeft + (event.deltaX || event.deltaY) * unit);
       }
@@ -122,13 +128,23 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
 
   return {
     viewportRef,
+    headingViewportRef,
+    onHeadingsWheel: event => {
+      const area = viewportRef.current;
+      if (!area || event.ctrlKey || event.shiftKey) return;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? area.clientHeight : 1;
+      area.scrollTop += event.deltaY * unit;
+    },
     pixelsPerSecond,
     scrollLeft,
     viewportWidth,
     contentWidth,
     gridSize,
     ticks,
-    onScroll: () => setScrollLeft(viewportRef.current?.scrollLeft ?? 0),
+    onScroll: () => {
+      setScrollLeft(viewportRef.current?.scrollLeft ?? 0);
+      if (headingViewportRef.current && viewportRef.current) headingViewportRef.current.scrollTop = viewportRef.current.scrollTop;
+    },
     timeAtClientX: (clientX) => {
       const viewport = viewportRef.current;
       if (!viewport) return 0;
@@ -149,4 +165,19 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
     fit,
     revealTime
   };
+}
+
+function useTimelineHeadings(viewportRef: RefObject<HTMLDivElement>): RefObject<HTMLDivElement> {
+  const headingsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const area = viewportRef.current, headings = headingsRef.current;
+    if (!area || !headings) return;
+    const sync = (): void => { headings.style.height = `${area.clientHeight}px`; headings.scrollTop = area.scrollTop; };
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(area);
+    if (area.firstElementChild) observer.observe(area.firstElementChild);
+    return () => observer.disconnect();
+  }, [viewportRef]);
+  return headingsRef;
 }

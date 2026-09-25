@@ -4,6 +4,23 @@ import { CueRuntime, isMtcSampleContinuous } from './cue-runtime';
 import { frameNumberToTimecode, type MtcSample } from './mtc-timecode';
 
 describe('CueRuntime', () => {
+  it('本机音频准备后重建时钟基准，保留已执行 Cue 且继续检测真实断流', () => {
+    const runtime = new CueRuntime({ ...project(), playbackSource: 'internal' });
+    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);
+    expect(runtime.ingest(sample(30, 1000)).dueCues.map(due => due.cue.id)).toEqual(['cue-1']);
+    expect(runtime.anchorMediaClock(sample(30, 5000)).state).toBe('running');
+    expect(runtime.ingest(sample(31, 5034)).dueCues).toEqual([]);
+    expect(runtime.tick(5600).state).toBe('timecodeLost');
+    expect(runtime.anchorMediaClock(sample(31, 5700)).state).toBe('error');
+  });
+  it('本机时钟准备接口不能掩盖位置跳变或用于 P1 模式', () => {
+    for (const source of ['internal', 'p1'] as const) {
+      const runtime = new CueRuntime({ ...project(), playbackSource: source });
+      runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);
+      runtime.ingest(sample(0, 0));
+      expect(runtime.anchorMediaClock(sample(source === 'internal' ? 30 : 0, 2000)).state).toBe('error');
+    }
+  });
   it('空闲监听 MTC 时不要求先选节目，也不改变运行状态', () => {
     const runtime = new CueRuntime(project());
     expect(runtime.ingest(sample(30, 1_000))).toMatchObject({ state: 'idle', dueCues: [], missedCueIds: [] });

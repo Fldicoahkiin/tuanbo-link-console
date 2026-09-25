@@ -33,3 +33,4 @@ export * from './lighting-reaper';
 
 export * from './lighting-effect-group';
 export * from './lighting-beat-cues';
+export * from './link-user-error';

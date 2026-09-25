@@ -7,7 +7,7 @@
 .ma2-pending-changes summary { cursor: pointer; }
 .lighting-workbench .reference-timeline { user-select: none; -webkit-user-drag: none; }
 .lighting-workbench .timeline-shell { grid-template-columns: minmax(0, 1fr); }
-.lighting-workbench .timeline-track-headings { display: none; }
+.lighting-workbench .timeline-heading-viewport { display: none; }
 .timeline-stamp-controls { display: flex; align-items: center; gap: 6px; }
 .timeline-stamp-controls > button { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .timeline-stamp-controls > select { max-width: 140px; min-width: 80px; height: 30px; }
@@ -336,3 +336,44 @@
 .lighting-workbench .reference-timeline { grid-row: 3; }
 .effect-inline-panel .lighting-tools-dialog .settings-detail { padding: 0; }
 .effect-inline-panel .lighting-tools-dialog h2 { font-size: 17px; }
+
+/* Native dialog keeps material selection out of the constrained timeline dock. */
+.ma2-material-dialog { width: min(1120px, calc(100vw - 64px)); max-width: none; max-height: calc(100vh - 64px); padding: 0; color: var(--text-primary); background: var(--surface); border: 1px solid var(--separator); border-radius: 14px; box-shadow: 0 24px 80px #0006, 0 4px 16px #0004; }
+.ma2-material-dialog::backdrop { background: #0009; }
+.ma2-material-dialog .effect-import-dialog { width: 100%; height: min(760px, calc(100vh - 66px)); max-height: none; padding: 0; gap: 0; border: 0; border-radius: 14px; box-sizing: border-box; }
+.ma2-material-heading { align-items: center; padding: 24px 28px 20px; }
+.ma2-material-heading h2 { font-size: 21px; font-weight: 600; margin: 0 0 6px; letter-spacing: -.3px; }
+.ma2-material-dialog button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 7px 12px; border: 1px solid var(--separator); border-radius: 7px; background: var(--surface-raised); color: var(--text-primary); font: inherit; font-size: 13px; cursor: pointer; }
+.ma2-material-dialog button:hover:not(:disabled) { background: var(--surface-hover); }
+.ma2-material-dialog button:disabled { opacity: .45; cursor: default; }
+.ma2-material-dialog button.primary-button { color: var(--on-accent); background: var(--accent-fill); border-color: transparent; }
+.ma2-material-dialog svg { width: 17px; height: 17px; flex-shrink: 0; }
+.ma2-material-dialog .ma2-material-close { border: 0; background: transparent; width: 36px; padding: 8px; }
+.ma2-material-toolbar { display: flex; align-items: center; gap: 10px; padding: 0 28px 20px; }
+.ma2-material-toolbar .effect-search { flex: 1; min-width: 0; height: 38px; box-sizing: border-box; font-size: 13px; }
+.ma2-material-toolbar > select { max-width: 240px; min-height: 38px; padding: 7px 10px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--separator); border-radius: 7px; }
+.ma2-material-dialog .effect-import-rows { flex: 1; min-height: 0; margin: 0 28px; border: 1px solid var(--separator); border-radius: 8px; }
+.ma2-material-dialog .effect-import-rows table { font-size: 13px; }
+.ma2-material-dialog th { position: sticky; top: 0; z-index: 1; background: var(--surface-raised); color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+.ma2-material-dialog .effect-import-rows :is(th, td) { padding: 10px 14px; }
+.ma2-material-dialog td:first-child, .ma2-material-dialog th:first-child { width: 24px; padding-right: 0; }
+.ma2-material-dialog td:nth-child(2) { width: 42%; font-weight: 500; }
+.ma2-material-dialog td:nth-child(3) { white-space: nowrap; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.ma2-material-dialog tr[data-selected=true] { background: color-mix(in srgb, var(--accent-fill) 12%, transparent); }
+.ma2-material-dialog tbody tr:hover { background: var(--surface-hover); }
+.ma2-material-dialog input[type=checkbox] { accent-color: var(--accent-fill); width: 15px; height: 15px; }
+.ma2-material-dialog .effect-import-rows :is(input:not([type=checkbox]), select) { width: 110px; border-color: transparent; border-radius: 6px; background: transparent; font-size: 12px; }
+.ma2-material-dialog .effect-import-rows :is(input:not([type=checkbox]), select):hover { border-color: var(--separator); background: var(--surface-raised); }
+.ma2-material-footer { padding: 18px 28px; align-items: center; font-size: 13px; }
+.ma2-material-footer > span { color: var(--text-secondary); }
+.ma2-material-pagination { display: flex; align-items: center; gap: 12px; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.ma2-material-pagination button { width: 32px; min-height: 32px; padding: 6px; }
+.ma2-material-empty { min-height: 240px; height: 70%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; color: var(--text-secondary); font-size: 13px; }
+.ma2-material-empty > svg { width: 28px; height: 28px; margin-bottom: 4px; }
+.ma2-material-empty strong { font-size: 15px; color: var(--text-primary); font-weight: 500; }
+.ma2-material-dialog .effect-import-dialog > [role=alert] { margin: 12px 28px 0; }
+.ma2-material-dialog .fixture-mapping { margin: 0 28px 14px; }
+.ma2-advanced-settings { margin-top: 24px; border-top: 1px solid var(--separator); padding-top: 18px; }
+.ma2-advanced-settings > summary { color: var(--text-secondary); font-size: 13px; cursor: pointer; }
+.ma2-advanced-settings[open] > summary { margin-bottom: 20px; }
+@media (max-width: 800px) { .ma2-material-dialog { width: calc(100vw - 24px); } .ma2-material-toolbar { flex-wrap: wrap; } .ma2-material-toolbar .effect-search { flex-basis: 100%; } .ma2-material-dialog .effect-import-rows { margin-inline: 16px; } }

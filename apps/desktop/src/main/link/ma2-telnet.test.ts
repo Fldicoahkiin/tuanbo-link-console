@@ -4,7 +4,7 @@ import { Ma2Telnet, ma2ResponseLine, type Ma2TelnetState } from './ma2-telnet';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
-async function peer(onLine: (line: string, socket: Socket, monitor: Socket) => void): Promise<{ port: number; monitorPort: number }> {
+async function peer(onLine: (line: string, socket: Socket, monitor: Socket) => void, banner?: string): Promise<{ port: number; monitorPort: number }> {
   const sockets = new Set<Socket>();
   let monitor: Socket | null = null;
   const monitorServer = createServer((socket) => { monitor = socket; sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
@@ -13,7 +13,7 @@ async function peer(onLine: (line: string, socket: Socket, monitor: Socket) => v
   const server = createServer((socket) => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket));
     // Native onPC 3.3.4.3 says guest before login; this must not mean connected.
-    socket.write("\u001b[37mLogged in as User 'guest'\n\r\n [Channel]>\u001b[KPlease login !\r\n\r [Channel]>\u001b[K\n");
+    socket.write(banner ?? "\u001b[37mLogged in as User 'guest'\n\r\n [Channel]>\u001b[KPlease login !\r\n\r [Channel]>\u001b[K\n");
     let buffer = '';
     socket.on('data', (data: Buffer) => {
       buffer += data.toString();
@@ -37,6 +37,15 @@ function authenticate(line: string, socket: Socket, monitor: Socket): void {
   const marker = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0];
   if (marker) { socket.write(`${line}\r\n [Channel]>`); monitor.write(`\r15h11m38.613s : \u001b[33m${marker}:3.3.`); monitor.write('4.3\u001b[37m\r\n'); }
 }
+it('实体控台关闭远程入口时明确提示首次开启，不发送登录或误报密码错误', async () => {
+  const sent: string[] = [];
+  const states: Ma2TelnetState[] = [];
+  const ports = await peer((line) => sent.push(line), '\nRemote commandline disabled\n\r');
+  const connection = client(ports, states);
+  await expect(connection.connect('operator', 'test-value')).rejects.toThrow('控台尚未开启远程连接');
+  expect(sent).toEqual([]);
+  expect(states).toEqual(['connecting', 'disconnected']);
+});
 it('只有登录后的关联响应可确认连接，支持分段帧和命令往返', async () => {
   const states: Ma2TelnetState[] = [];
   const port = await peer((line, socket, monitor) => { authenticate(line, socket, monitor); if (line === 'Test') socket.write('RESULT:ok\r\n'); });
@@ -53,14 +62,13 @@ it('guest 横幅和回显的验证命令都不代表认证成功', async () => {
   await expect(connection.connect('operator', 'test-value')).rejects.toThrow('登录未确认');
   expect(states).not.toContain('connected'); expect(connection.state).toBe('disconnected');
 });
-it('断线和超时不会重发未确认命令，并拒绝并行请求', async () => {
+it('超时取消排队请求，不重发未确认命令', async () => {
   const sent: string[] = [];
   const port = await peer((line, socket, monitor) => { sent.push(line); authenticate(line, socket, monitor); });
   const connection = client(port, [], 80);
   await connection.connect('operator', 'test-value');
   const pending = connection.command('WriteOnce', () => null);
-  await expect(connection.command('Second', () => null)).rejects.toThrow('尚未完成');
-  await expect(pending).rejects.toThrow('不会自动重试');
+  await Promise.all([expect(connection.command('Second', () => null)).rejects.toThrow('已取消'), expect(pending).rejects.toThrow('不会自动重试')]);
   expect(sent.filter((line) => line === 'WriteOnce')).toHaveLength(1);
   expect(sent).not.toContain('Second'); expect(connection.state).toBe('disconnected');
 });
@@ -81,5 +89,30 @@ it('远端关闭连接立即清除状态和正在等待的请求', async () => {
 it('原生监视端口的时间戳结果可匹配，命令回显不会冒充结果', () => {
   const prefix = 'TBLINK_RPC_1234567890abcdef1234567890abcdef:';
   expect(ma2ResponseLine(`\r15h11m38.613s : ${prefix}ACK\r\n`, prefix)).toBe('ACK');
+  expect(ma2ResponseLine(`\r11h34m19.001s    LUA : ${prefix}3.3.4.3\n\r`, prefix)).toBe('3.3.4.3');
+  expect(ma2ResponseLine(`\r11h34m18.991s   ROOT : administrator 1 CMD INPUT : Lua "gma.echo('${prefix}ACK')"\r\n`, prefix)).toBeNull();
   expect(ma2ResponseLine(`\r15h11m38.613s : administrator 1 CMD INPUT : Lua "gma.echo('${prefix}ACK')"\r\n`, prefix)).toBeNull();
+});
+
+it('并发检查和数据读取按顺序发送，各自得到响应且不重发', async () => {
+  const sent: string[] = [];
+  const ports = await peer((line, socket, monitor) => {
+    authenticate(line, socket, monitor);
+    if (line.startsWith('Read')) { sent.push(line); setTimeout(() => socket.write(`RESULT:${line}\r\n`), 10); }
+  });
+  const connection = client(ports);
+  await connection.connect('operator', 'test-value');
+  const commands = ['Read1', 'Read2', 'Read3'];
+  const results = await Promise.all(commands.map(line => connection.command(line, text => text.includes(`RESULT:${line}\r\n`) ? line : null)));
+  expect(results).toEqual(commands); expect(sent).toEqual(commands);
+});
+it('主动断开取消全部未发送请求', async () => {
+  const sent: string[] = [];
+  const ports = await peer((line, socket, monitor) => { authenticate(line, socket, monitor); sent.push(line); });
+  const connection = client(ports); await connection.connect('operator', 'test-value');
+  const requests = ['First', 'Second'].map(line => connection.command(line, () => null));
+  const finished = Promise.allSettled(requests);
+  connection.disconnect();
+  expect((await finished).every(result => result.status === 'rejected')).toBe(true);
+  expect(sent).not.toContain('First'); expect(sent).not.toContain('Second');
 });

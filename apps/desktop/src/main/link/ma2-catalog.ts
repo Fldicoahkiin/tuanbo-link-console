@@ -1,17 +1,22 @@
-import { ma2CatalogSchema, ma2ObjectDirectorySchema, type Ma2Catalog } from '@tb/schema';
+import { ma2CatalogSchema, ma2ObjectDirectorySchema, type Ma2Catalog, type Ma2ReadProgressUpdate } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
-import { inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference } from './ma2-timecode-xml';
+import { inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference, type Ma2SequenceReport } from './ma2-timecode-xml';
 
 /** Read-only inventory. Failed objects remain visible; no writes or retry. */
-export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isPlaying: () => boolean): Promise<Ma2Catalog> {
+export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isPlaying: () => boolean, cueDirectory?: Ma2SequenceReport, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal): Promise<Ma2Catalog> {
+  if (signal?.aborted) throw new Error('扫描已取消');
   const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
+  if (signal?.aborted) throw new Error('扫描已取消');
+  onProgress?.({ phase: 'timecodes', completed: 0, total: directory.entries.length + 1, detail: '读取控台时间线' });
   const entries: Ma2Catalog['entries'] = [];
   let totalEvents = 0;
   for (const object of directory.entries) {
+    if (signal?.aborted) throw new Error('扫描已取消');
     if (isPlaying()) throw new Error('播放已开始，控台扫描已停止');
     const entry: Ma2Catalog['entries'][number] = { ...object, eventCount: null, frameFormat: null, offset: null, slot: null, events: [], error: null, warnings: [] };
     try {
       const xml = await bridge.request('READ', object.target);
+      if (signal?.aborted) throw new Error('扫描已取消');
       const report = inspectMa2TimecodeXml(xml);
       const tc = report.timecodes[0];
       if (!tc || tc.index !== object.target - 1 || report.timecodes.length !== 1) throw new Error('读取对象与目录不一致');
@@ -27,10 +32,11 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isP
         entry.events.push({ path: event.path, time: event.attributes.time ?? '0', action: event.attributes.command ?? subtrack.attributes.fader_command ?? '未知动作', executor: address.length === 4 ? `${address[2]}.${address[3]}` : address.join('/'), cue: null, name: event.cueName });
       }
       if (tc.tracks.some(track => track.subtracks.some(subtrack => subtrack.events.some(event => event.cueAddress.length)))) {
-        const snapshot = await bridge.request('SNAPSHOT', object.target);
+        const snapshot = await bridge.request(cueDirectory ? 'READ' : 'SNAPSHOT', object.target);
+        if (signal?.aborted) throw new Error('扫描已取消');
         const current = inspectMa2TimecodeXml(snapshot);
         if (JSON.stringify(current.timecodes) !== JSON.stringify(report.timecodes)) throw new Error('扫描期间时间线发生变化，请重新扫描');
-        const sequences = inspectMa2SequenceXml(snapshot);
+        const sequences = cueDirectory ?? inspectMa2SequenceXml(snapshot);
         const byPath = new Map(entry.events.map(event => [event.path, event]));
         for (const track of tc.tracks) for (const subtrack of track.subtracks) for (const event of subtrack.events) {
           if (!event.cueAddress.length) continue;
@@ -42,10 +48,15 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isP
       }
     } catch (error) { entry.error = error instanceof Error ? error.message : String(error); }
     entries.push(entry);
+    onProgress?.({ phase: 'timecodes', completed: entries.length, total: directory.entries.length + 1, detail: `已读取 Timecode ${object.target}` });
     if (totalEvents > 100000) throw new Error('扫描事件超过十万，结果未提交');
   }
   if (isPlaying()) throw new Error('播放已开始，控台扫描已停止');
+  onProgress?.({ phase: 'timecodes', completed: entries.length, total: directory.entries.length + 1, detail: '核对控台时间线目录' });
   const verified = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
+  if (signal?.aborted) throw new Error('扫描已取消');
   if (JSON.stringify(directory) !== JSON.stringify(verified)) throw new Error('控台 Show、插件或时间线目录已变化，请重新扫描');
-  return ma2CatalogSchema.parse({ directory, readAt: new Date().toISOString(), entries });
+  const result = ma2CatalogSchema.parse({ directory, readAt: new Date().toISOString(), entries });
+  onProgress?.({ phase: 'timecodes', completed: directory.entries.length + 1, total: directory.entries.length + 1, detail: '时间线目录已核对' });
+  return result;
 }

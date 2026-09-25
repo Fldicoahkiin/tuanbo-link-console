@@ -25,6 +25,21 @@ it('最后一条音轨可以删除，清空后可撤销恢复完整源信息', a
   expect(useDocumentStore.getState().project).toEqual(before);
 });
 
+it('内部暂停会话先正常停止，再删除独立音轨，视频片段保持不变', async () => {
+  const project = createEmptyLinkProject('暂停编辑');
+  project.rundown.push({ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], referenceAudio: { assetId: 'audio', relativePath: 'audio.wav', durationMs: 5000, sha256: 'a'.repeat(64) } });
+  useDocumentStore.getState().setProject(project, 'test.tblink');
+  useRuntimeStore.getState().setState({ state: 'paused' });
+  const stop = vi.fn(() => { useRuntimeStore.getState().setState({ state: 'idle' }); return Promise.resolve(); });
+  const notify = vi.fn(); const result: AudioEditor[] = [];
+  function Harness() { result.push(useAudioEditor(useDocumentStore.getState().project!.rundown[0]!, 'test.tblink', false, notify, stop)); return null; }
+  renderToString(createElement(Harness));
+  await result[0]!.removeTrack(result[0]!.tracks[0]!.id);
+  expect(stop).toHaveBeenCalledOnce(); expect(notify).not.toHaveBeenCalled();
+  expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio).toBeUndefined();
+  expect(useRuntimeStore.getState().state).toBe('idle');
+});
+
 it('暂停状态允许应用和清除节拍标记，同时保留音频编辑保护', async () => {
   const project = createEmptyLinkProject('暂停节拍测试');
   project.rundown.push({ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [],

@@ -46,9 +46,9 @@ export class ManagedOutputRuntime {
     this.activeMediaByLayer.clear();
     this.activeObsSourcesByLayer.clear();
   }
-  adoptSeek(event: ManagedMediaEvent | undefined, frame: number): void {
+  adoptSeek(event: ManagedMediaEvent | ManagedMediaEvent[] | undefined, frame: number): void {
     this.resetExecution(); this.collectThrough(frame);
-    if (event) this.addActiveMedia(event);
+    for (const entry of Array.isArray(event) ? event : event ? [event] : []) this.addActiveMedia(entry);
   }
 
   transportActions(action: 'pause' | 'start'): LinkAction[] {
@@ -61,7 +61,7 @@ export class ManagedOutputRuntime {
   alignEvent(event: ManagedMediaEvent, currentFrame: number): ManagedMediaEvent {
     if (event.phase !== 'start' || event.assetKind === 'image') return event;
     const original = this.mediaEvents.find((candidate) => candidate.id === event.id) ?? event;
-    return { ...original, sourceOffsetMs: original.sourceOffsetMs
+    return { ...original, deferSceneSwitch: event.deferSceneSwitch, sourceOffsetMs: original.sourceOffsetMs
       + Math.round(Math.max(0, currentFrame - original.frameNumber) * 1000 / nominalFramesPerSecond(this.project.timebase.frameRate)) };
   }
 

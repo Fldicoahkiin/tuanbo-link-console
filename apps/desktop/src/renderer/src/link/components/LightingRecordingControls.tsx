@@ -1,3 +1,4 @@
+import { requestMidiAccess } from '../../registry/midi-access';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { LightingRecorder, LightingTempoMap } from '@tb/core/link';
 import type { LightingClip, LightingDocument, LightingTempo, LightingTrack } from '@tb/schema';
@@ -39,7 +40,7 @@ export function LightingRecordingControls(props: { audioAvailable?: boolean; cli
     if (!props.audioRef.current || !props.audioAvailable && !props.audioRef.current.getAttribute('src')) { props.notify('请先添加歌曲音频，再录制灯光', 'error'); return; }
     const token = ++generation.current; setConnecting(true);
     try {
-      const access = await navigator.requestMIDIAccess({ sysex: true });
+      const access = await requestMidiAccess({ sysex: true });
       const matching = [...access.inputs.values()].filter((port) => port.name === mapping.portName && port.state === 'connected');
       const input = matching[0]; if (matching.length !== 1 || !input) throw new Error('录制输入未连接或名称不唯一');
       await input.open(); if (token !== generation.current) return;

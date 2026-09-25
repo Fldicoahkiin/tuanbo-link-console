@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
+import { windowsPowerShellExecutable } from './windows-powershell';
 
 export type ExternalApplicationId = 'obs' | 'p1';
 export type ExternalProcessStatus = 'notRunning' | 'starting' | 'running' | 'reconnecting' | 'stopping' | 'error';
@@ -275,7 +276,7 @@ export class WindowsProcessTools implements ExternalProcessTools {
     const script = [
       `$target=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodedPath}'))`,
       '$target=[IO.Path]::GetFullPath($target)',
-      "$items=@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).Equals($target,[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $p=Get-Process -Id $_.ProcessId -ErrorAction Stop; $info=(Get-Item -LiteralPath $_.ExecutablePath -ErrorAction Stop).VersionInfo; $version=if($info.FileVersion){$info.FileVersion}elseif($info.ProductVersion){$info.ProductVersion}else{''}; if(-not $version){$directory=[IO.Path]::GetDirectoryName($_.ExecutablePath).TrimEnd('\\'); $uninstallEntries=@(Get-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue); $match=$uninstallEntries | Where-Object { $_.InstallLocation -and [IO.Path]::GetFullPath($_.InstallLocation).TrimEnd('\\').Equals($directory,[StringComparison]::OrdinalIgnoreCase) -and $_.DisplayVersion } | Select-Object -First 1; if($match){$version=[string]$match.DisplayVersion}}; [PSCustomObject]@{ pid=[int]$_.ProcessId; processName=$_.Name; executablePath=$_.ExecutablePath; startTime=$p.StartTime.ToUniversalTime().ToString('o'); windowTitle=$p.MainWindowTitle; fileVersion=$version } })",
+      "$items=@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).Equals($target,[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { try { $p=Get-Process -Id $_.ProcessId -ErrorAction Stop } catch { if($_.FullyQualifiedErrorId -like 'NoProcessFoundForGivenId,*'){ return }; throw }; $info=(Get-Item -LiteralPath $_.ExecutablePath -ErrorAction Stop).VersionInfo; $version=if($info.FileVersion){$info.FileVersion}elseif($info.ProductVersion){$info.ProductVersion}else{''}; if(-not $version){$directory=[IO.Path]::GetDirectoryName($_.ExecutablePath).TrimEnd('\\'); $uninstallEntries=@(Get-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue); $match=$uninstallEntries | Where-Object { $_.InstallLocation -and [IO.Path]::GetFullPath($_.InstallLocation).TrimEnd('\\').Equals($directory,[StringComparison]::OrdinalIgnoreCase) -and $_.DisplayVersion } | Select-Object -First 1; if($match){$version=[string]$match.DisplayVersion}}; [PSCustomObject]@{ pid=[int]$_.ProcessId; processName=$_.Name; executablePath=$_.ExecutablePath; startTime=$p.StartTime.ToUniversalTime().ToString('o'); windowTitle=[string]$p.MainWindowTitle; fileVersion=[string]$version } })",
       '$items | ConvertTo-Json -Compress'
     ].join(';');
     const output = await runPowerShell(script, 10_000);
@@ -284,12 +285,16 @@ export class WindowsProcessTools implements ExternalProcessTools {
   }
 
   launch(configuration: ExternalProcessConfiguration): ChildProcess {
-    return spawn(configuration.executablePath, configuration.arguments, {
+    const child = spawn(configuration.executablePath, configuration.arguments, {
       cwd: configuration.workingDirectory,
       env: { ...process.env, ...configuration.environment },
       windowsHide: false,
       stdio: 'ignore'
     });
+    // Retain the child handle for ownership checks while the desktop runs,
+    // but do not let a preserved OBS/P1 process keep Electron alive after exit.
+    child.unref();
+    return child;
   }
 
   async requestClose(pid: number, identity?: Pick<ManagedProcessSnapshot, 'executablePath' | 'startTime'>): Promise<boolean> {
@@ -385,14 +390,15 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function runPowerShell(script: string, timeoutMs: number): Promise<string> {
+async function runPowerShell(script: string, timeoutMs: number): Promise<string> {
+  const executable = await windowsPowerShellExecutable();
   const encoded = Buffer.from([
     '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)',
     '$OutputEncoding=[Text.UTF8Encoding]::new($false)',
     script
   ].join(';'), 'utf16le').toString('base64');
   return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
+    const child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     });

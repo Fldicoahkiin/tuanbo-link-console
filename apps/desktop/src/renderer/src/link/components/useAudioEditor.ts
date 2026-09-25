@@ -5,7 +5,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
-export function useAudioEditor(item: RundownItem | null, projectPath: string | null, disabled: boolean, notify: (message: string, tone?: 'info' | 'error') => void) {
+export function useAudioEditor(item: RundownItem | null, projectPath: string | null, disabled: boolean, notify: (message: string, tone?: 'info' | 'error') => void, beforeEdit?: () => Promise<void>) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<AudioBeatAnalysis | null>(null);
@@ -34,6 +34,7 @@ export function useAudioEditor(item: RundownItem | null, projectPath: string | n
     finally { processing.current = false; setBusy(false); }
   };
   const render = async (next: AudioTrack[], label: string): Promise<void> => {
+    if (!disabled && beforeEdit) await beforeEdit();
     if (disabled || useRuntimeStore.getState().state !== 'idle') throw new Error('请停止播放后编辑音频片段');
     if (!audio || !projectPath) throw new Error('请先保存工程并添加歌曲音频');
     if (!next.length) {
@@ -55,7 +56,7 @@ export function useAudioEditor(item: RundownItem | null, projectPath: string | n
     audio, title: activeTrack?.title ?? '歌曲音频', tracks, activeTrackId: activeTrack?.id, segments, selected, selectedId, setSelectedId, level, setLevel, points, busy, disabled: disabled || busy,
     trackEditor: (track: AudioTrack) => ({ audio: track.source, title: track.title, segments: track.segments, selectedId: activeTrack?.id === track.id ? selectedId : null, disabled: disabled || busy, points: track.id === tracks[0]?.id ? points : [], select: (id: string | null) => selectTrack(track.id, id), update: (id: string, patch: Partial<Pick<AudioSegment, 'startMs' | 'durationMs' | 'sourceOffsetMs'>>) => update(track, id, patch), remove: () => remove(track, selectedId) }),
     removeTrack: (id: string) => run(() => render(tracks.filter(track => track.id !== id), '删除音轨')),
-    select: (id: string | null) => setSelectedId(id),
+    select: (id: string | null) => { setSelectedId(id); if (id) setSelectedTrackId(tracks.find(track => track.segments.some(segment => segment.id === id))?.id ?? null); },
     analyze: (onReady?: (points: number[]) => void) => run(async () => {
       if (!audio || !projectPath) throw new Error('请先保存工程并添加歌曲音频');
       const result = audioBeatAnalysisSchema.parse(await linkDesktopViewModel.analyzeAudioBeats({ projectPath, source: audio }));

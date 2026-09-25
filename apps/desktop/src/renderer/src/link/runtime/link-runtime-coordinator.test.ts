@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   setInternalAudioCapture: vi.fn(() => Promise.resolve()),
   executeObsAction: vi.fn<() => Promise<void>>(),
   executeManagedMediaEvent: vi.fn<LinkDesktopApi['executeManagedMediaEvent']>(),
+  seekManagedMedia: vi.fn<LinkDesktopApi['seekManagedMedia']>(),
   listener: null as ((message: MtcQuarterFrameMessage) => void) | null
 }));
 vi.mock('../view-models/link-desktop-view-model', () => ({
@@ -18,7 +19,8 @@ vi.mock('../view-models/link-desktop-view-model', () => ({
     activateManagedObsOutput: mocks.activateManagedObsOutput,
     setInternalAudioCapture: mocks.setInternalAudioCapture,
     executeObsAction: mocks.executeObsAction,
-    executeManagedMediaEvent: mocks.executeManagedMediaEvent
+    executeManagedMediaEvent: mocks.executeManagedMediaEvent,
+    seekManagedMedia: mocks.seekManagedMedia
   }
 }));
 vi.mock('../stores/integration-store', () => ({
@@ -40,9 +42,42 @@ vi.mock('../../registry/link-midi-adapter', () => ({
   }
 }));
 
-afterEach(() => { vi.unstubAllGlobals(); mocks.executeObsAction.mockReset(); mocks.executeManagedMediaEvent.mockReset(); useRuntimeStore.getState().reset(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); mocks.executeObsAction.mockReset(); mocks.executeManagedMediaEvent.mockReset(); mocks.seekManagedMedia.mockReset(); useRuntimeStore.getState().reset(); });
 
 describe('LinkRuntimeCoordinator', () => {
+  it('慢速准备与暂停继续不误报断流、不重复启动素材；真正开始后仍检测断流', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
+    vi.stubGlobal('window', { setInterval, clearInterval });
+    mocks.executeObsAction.mockResolvedValue(); mocks.executeManagedMediaEvent.mockResolvedValue(); mocks.seekManagedMedia.mockResolvedValue();
+    const project = parseLinkProject({ ...createEmptyLinkProject('慢启动回归'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      mediaAssets: [{ id: 'alpha', name: '特效', kind: 'video', relativePath: 'alpha.mov', sha256: 'a'.repeat(64), byteLength: 100, durationMs: 5000, width: 1080, height: 1920 }],
+      rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'top', name: '叠加' }, { id: 'bottom', name: '机位' }],
+        referenceMediaClips: [{ id: 'clip', label: '透明特效', assetId: 'alpha', layerId: 'top', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 5000 }],
+        cues: [{ id: 'camera', name: '机位', layerId: 'bottom', durationMs: 5000, timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, actions: [{ id: 'switch', label: '机位', kind: 'obs.setProgramScene', sceneName: 'Camera' }] }] }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:\\show\\alpha.tblink');
+    const preflight = async () => { coordinator.beginPreflight('live'); const report = { checkedAt: new Date().toISOString(), mode: 'live' as const, passed: true, checks: [] }; await coordinator.applyPreflight(report); return report; };
+    try {
+      await coordinator.initializeMidi();
+      await coordinator.prepareInternal('song', preflight);
+      mocks.executeManagedMediaEvent.mockImplementationOnce(async () => { await vi.advanceTimersByTimeAsync(1200); });
+      await coordinator.ingestInternal(0);
+      await vi.advanceTimersByTimeAsync(800); // audio.play() has not resolved yet
+      expect(useRuntimeStore.getState().state).toBe('running');
+      coordinator.startInternalClock(0);
+      await vi.advanceTimersByTimeAsync(33); await coordinator.ingestInternal(33);
+      await coordinator.pauseInternal(); await vi.advanceTimersByTimeAsync(3000);
+      mocks.executeObsAction.mockImplementationOnce(async () => { await vi.advanceTimersByTimeAsync(1200); });
+      await coordinator.ingestInternal(33); coordinator.startInternalClock(33);
+      expect(useRuntimeStore.getState().state).toBe('running');
+      expect(mocks.executeManagedMediaEvent).toHaveBeenCalledTimes(1);
+      await coordinator.prepareInternal('song', preflight, 1200);
+      expect(mocks.seekManagedMedia.mock.calls.at(-1)?.[0].event.sourceOffsetMs).toBe(1200);
+      await vi.advanceTimersByTimeAsync(1000);
+      await coordinator.ingestInternal(1200); coordinator.startInternalClock(1200);
+      await vi.advanceTimersByTimeAsync(600);
+      expect(useRuntimeStore.getState().state).toBe('timecodeLost');
+    } finally { coordinator.dispose(); }
+  });
   it('显式停止将界面状态同步到已待机的控制器，不遗留暂停锁', async () => {
     const coordinator = new LinkRuntimeCoordinator(createEmptyLinkProject('停止状态同步'), null);
     useRuntimeStore.getState().setState({ state: 'paused', reason: '操作员暂停自动联动' });

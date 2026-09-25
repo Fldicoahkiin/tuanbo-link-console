@@ -253,3 +253,41 @@ input:disabled, textarea:disabled, select:disabled { opacity: .5; cursor: not-al
 :root [aria-invalid=true] { border-color: var(--danger); }
 @media (prefers-contrast: more) {
 }
+
+/* One titlebar row: project, every connection, connect action, window controls. */
+.app-shell { grid-template-rows: auto minmax(0, 1fr); }
+.app-topbar { display: grid; grid-template-columns: auto minmax(0, 1fr) 80px auto 132px; grid-template-rows: 54px; height: 54px; -webkit-app-region: drag; user-select: none; }
+.app-topbar > .persistent-project-toolbar { grid-column: 1; grid-row: 1; max-width: 290px; }
+.app-topbar > .topbar-drag-region { grid-column: 3; grid-row: 1; min-width: 80px; -webkit-app-region: drag; }
+.app-topbar > .topbar-connect { grid-column: 4; grid-row: 1; align-items: center; }
+.app-topbar > .unified-toolbar { grid-column: 5; grid-row: 1; }
+.app-topbar > .topbar-status { display: block; position: relative; inset: auto; grid-column: 2; grid-row: 1; height: 54px; min-width: 0; -webkit-app-region: drag; }
+.topbar-status .toolbar-project-summary { height: 54px; align-items: stretch; justify-content: center; padding: 0 8px; gap: 0; -webkit-app-region: drag; }
+.topbar-project-title { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-primary); }
+.persistent-project-toolbar .p1-project-ribbon > .topbar-project-title { -webkit-app-region: drag; }
+.persistent-project-toolbar .p1-project-ribbon { gap: 8px; }
+.persistent-project-toolbar .toolbar-drag-space { min-width: 8px; }
+.persistent-project-toolbar .project-file-menu > summary { width: 32px; height: 36px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 6px; }
+.persistent-project-toolbar .project-file-menu > summary:hover { background: var(--surface-hover); }
+.persistent-project-toolbar .project-file-menu > summary svg { width: 18px; height: 18px; }
+.topbar-connect { padding: 0 10px; }
+.topbar-connect button { height: 34px; padding: 0 15px; gap: 7px; border-radius: 6px; background: var(--accent-fill); color: var(--on-accent); font-size: 13px; font-weight: 650; cursor: pointer; }
+.topbar-connect button:hover:not(:disabled) { filter: brightness(1.12); }
+.topbar-connect button:focus-visible, .project-file-menu > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.topbar-connect svg { width: 16px; height: 16px; }
+.topbar-status .toolbar-connections { width: max-content; height: 42px; justify-content: flex-start; flex-wrap: nowrap; gap: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; -webkit-app-region: no-drag; }
+.topbar-status .toolbar-connection { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-height: 30px; padding: 4px 8px; margin: 0; border: 0; border-radius: 4px; background: transparent; color: #e8bd79; font-size: 12px; font-weight: 550; line-height: 1.4; white-space: nowrap; cursor: pointer; -webkit-app-region: no-drag; }
+.topbar-status .toolbar-connection.state-ready { color: #6bdaa3; }
+.topbar-status .toolbar-connection.state-error { color: #ff7777; }
+.topbar-status .toolbar-connection.state-skipped { color: var(--text-tertiary); }
+.topbar-status .toolbar-connection:hover, .topbar-status .toolbar-connection[aria-pressed=true] { background: var(--surface-hover); }
+.topbar-status .toolbar-connection:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+:root[data-theme='light'] .topbar-status .toolbar-connection { color: #8a4d08; }
+:root[data-theme='light'] .topbar-status .toolbar-connection.state-ready { color: #146c47; }
+:root[data-theme='light'] .topbar-status .toolbar-connection.state-error { color: #be2828; }
+:root[data-theme='light'] .topbar-status .toolbar-connection.state-skipped { color: var(--text-tertiary); }
+.connection-inline-detail { position: absolute; z-index: 50; top: 50px; left: 8px; right: 8px; display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border-default); background: var(--surface); box-shadow: 0 8px 24px #0004; border-radius: 7px; font-size: 12px; -webkit-app-region: no-drag; }
+.connection-inline-detail > strong { flex-shrink: 0; }
+.connection-inline-detail > span { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: text; }
+.connection-inline-detail > button { flex-shrink: 0; padding: 5px 8px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--surface-hover); color: var(--text-primary); cursor: pointer; }
+@media (max-width: 1400px) { .topbar-project-title { max-width: 100px; } .topbar-status .toolbar-connection { padding-inline: 6px; } }

@@ -1,3 +1,4 @@
+import { requestMidiAccess } from './midi-access';
 import { encodeMediaTimecode, playbackFramesPerSecond } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
 
@@ -18,7 +19,7 @@ export class MediaMtcOutput {
     const attempt = new AbortController();
     this.connectionAttempt = attempt;
     try {
-      const access = await waitForMidi(navigator.requestMIDIAccess({ sysex: true }), attempt.signal, '申请 MIDI 权限');
+      const access = await waitForMidi(requestMidiAccess({ sysex: true }), attempt.signal, '申请 MIDI 权限');
       const available = [...access.outputs.values()].filter(port => port.state === 'connected' && port.name && !/Microsoft GS Wavetable Synth/i.test(port.name));
       if (!portName) {
         if (available.length !== 1) throw new Error(available.length === 0

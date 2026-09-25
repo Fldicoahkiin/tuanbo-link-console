@@ -13,43 +13,123 @@ function fixture(resetOnSceneSwitch = false, seekNeedsPlayback = false) {
   const responses = new Map<string, unknown>([
     ['GetSceneList', { scenes: [] }], ['CreateInput', { sceneItemId: 1 }],
     ['GetVideoSettings', { baseWidth: 1080, baseHeight: 1920 }],
+    ['GetSceneItemTransform', { sceneItemTransform: { sourceWidth: 1080, sourceHeight: 1920 } }],
 
   ]);
   let mediaState = 'OBS_MEDIA_STATE_STOPPED';
   let sceneSwitches = 0;
   let mediaCursor = seekNeedsPlayback ? 33 : 2300;
   let pendingCursor: number | undefined;
+  const setMediaState = (state: string, cursor: number): void => { mediaState = state; mediaCursor = cursor; };
   const apply = (data: unknown): void => {
     if (typeof data !== 'object' || data === null) return;
     if ('mediaCursor' in data && typeof data.mediaCursor === 'number') pendingCursor = data.mediaCursor;
     if (!('mediaAction' in data)) return;
+    if (data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART') mediaCursor = 0;
     mediaState = data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE' ? 'OBS_MEDIA_STATE_PAUSED' : 'OBS_MEDIA_STATE_PLAYING';
     if (mediaState === 'OBS_MEDIA_STATE_PLAYING' && pendingCursor !== undefined) {
       mediaCursor = pendingCursor; pendingCursor = undefined;
     }
   };
   const client = {
-    call: (requestType: string, requestData?: unknown) => { calls.push({ requestType, requestData }); apply(requestData); return Promise.resolve(responses.get(requestType) ?? (requestType === 'GetMediaInputStatus' ? { mediaState, mediaCursor } : {})); },
+    call: (requestType: string, requestData?: unknown) => { calls.push({ requestType, requestData }); apply(requestData); return Promise.resolve(responses.get(requestType) ?? (requestType === 'GetMediaInputStatus' ? { mediaState, mediaCursor, mediaDuration: 5000 } : {})); },
     callBatch: (batch: Array<{ requestType: string; requestData?: unknown }>) => {
       if (batch.some((entry) => entry.requestType === 'SetCurrentProgramScene')) sceneSwitches += 1;
       if (resetOnSceneSwitch && sceneSwitches === 2) responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PLAYING', mediaCursor: 0 });
       calls.push(...batch); batch.forEach((entry) => apply(entry.requestData)); return Promise.resolve(batch.map(({ requestType }) => ({ requestType, requestStatus: { result: true, code: 100 } })));
     }
   };
-  return { calls, responses, scenes: new ObsMediaScenes(client as unknown as OBSWebSocket, (promise) => promise) };
+  return { calls, responses, setMediaState, scenes: new ObsMediaScenes(client as unknown as OBSWebSocket, (promise) => promise) };
 }
 
 describe('素材独立场景播放', () => {
+  it('叠加只在独立输出内排列嵌套场景，上轨道在上，重复布局不重新创建', async () => {
+    const { scenes, calls, responses } = fixture();
+    responses.set('GetSceneList', { scenes: [{ sceneName: '机位' }, { sceneName: names.sceneName }] });
+    responses.set('GetSceneItemList', { sceneItems: [] });
+    responses.set('CreateSceneItem', { sceneItemId: 3 });
+    const output = '团播联动台·叠加·测试';
+    await scenes.compose(output, [names.sceneName, '机位']);
+    expect(calls.filter(call => call.requestType === 'SetSceneItemIndex').map(call => call.requestData)).toEqual([
+      { sceneName: output, sceneItemId: 3, sceneItemIndex: 1 }, { sceneName: output, sceneItemId: 3, sceneItemIndex: 0 }
+    ]);
+    expect(calls.some(call => ['SetInputSettings', 'SetSceneItemTransform', 'RemoveScene', 'RemoveInput'].includes(call.requestType))).toBe(false);
+    calls.length = 0;
+    await scenes.compose(output, [names.sceneName, '机位']);
+    expect(calls.map(call => call.requestType)).toEqual(['SetCurrentProgramScene']);
+    await expect(scenes.compose('用户机位', [names.sceneName])).rejects.toThrow('独立');
+  });
+  it('叠加中的媒体启动与定位不抢走正式机位，也不静音同场其他层', async () => {
+    const { scenes, calls, responses } = fixture();
+    await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
+    await scenes.execute({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4');
+    responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PAUSED', mediaCursor: 2300 });
+    await scenes.seek({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4', () => Promise.resolve());
+    expect(calls.some(call => call.requestType === 'SetCurrentProgramScene')).toBe(false);
+  });
   it('拖动只定位已准备的自有素材，不重载来源或重新启动媒体', async () => {
-    const { scenes, calls } = fixture();
+    const { scenes, calls, responses } = fixture();
     const native = vi.fn(() => Promise.resolve());
     await expect(scenes.seek(event, 'C:/dance.mp4', native)).rejects.toThrow('未准备');
     await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
+    responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PAUSED', mediaCursor: 2300 });
     await scenes.seek(event, 'C:/dance.mp4', native);
     expect(native).toHaveBeenCalledWith(event.sourceName, 2300);
     expect(calls.some((call) => ['SetInputSettings', 'TriggerMediaInputAction', 'SetMediaInputCursor'].includes(call.requestType))).toBe(false);
     await expect(scenes.seek(event, 'C:/other.mp4', native)).rejects.toThrow('与工程不符');
     expect(native).toHaveBeenCalledTimes(1);
+  });
+  it('结束片段使用停止，避免暂停在 EOF 后无法重新定位', async () => {
+    const { scenes, calls } = fixture();
+    await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
+    await scenes.execute({ ...event, phase: 'stop' }, 'C:/dance.mp4');
+    expect(calls.find(call => call.requestType === 'TriggerMediaInputAction')?.requestData).toEqual({
+      inputName: names.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP'
+    });
+  });
+  it('已有会话暂停在片尾，定位前结束旧解码会话；正常暂停不受影响', async () => {
+    const { scenes, calls, setMediaState } = fixture();
+    await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
+    setMediaState('OBS_MEDIA_STATE_PAUSED', 5000);
+    const native = vi.fn(() => {
+      expect(calls.find(call => call.requestType === 'TriggerMediaInputAction')?.requestData).toEqual({ inputName: names.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART' });
+      setMediaState('OBS_MEDIA_STATE_PAUSED', 2300);
+      return Promise.resolve();
+    });
+    await scenes.seek(event, 'C:/dance.mp4', native);
+    expect(native).toHaveBeenCalledTimes(1);
+  });
+  it('原生指令已返回但尚无解码画面，不能宣称定位成功或自动重试', async () => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, responses } = fixture();
+      await scenes.prepare('project', asset, 'C:/dance.mp4');
+      responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PAUSED', mediaCursor: 2300 });
+      const native = vi.fn(() => {
+        responses.set('GetSceneItemTransform', { sceneItemTransform: { sourceWidth: 0, sourceHeight: 0 } });
+        return Promise.resolve();
+      });
+      const failure = expect(scenes.seek(event, 'C:/dance.mp4', native)).rejects.toThrow('未完成画面定位');
+      await vi.advanceTimersByTimeAsync(2020); await failure;
+      expect(native).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+  it('暂停状态没有首帧时，等解码器真正输出后才进行一次定位', async () => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, responses, setMediaState, calls } = fixture();
+      await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
+      setMediaState('OBS_MEDIA_STATE_PAUSED', 23);
+      responses.set('GetSceneItemTransform', { sceneItemTransform: { sourceWidth: 0, sourceHeight: 0 } });
+      const native = vi.fn(() => { setMediaState('OBS_MEDIA_STATE_PAUSED', 2300); return Promise.resolve(); });
+      const seek = scenes.seek(event, 'C:/dance.mp4', native);
+      await vi.advanceTimersByTimeAsync(120);
+      expect(native).not.toHaveBeenCalled();
+      responses.set('GetSceneItemTransform', { sceneItemTransform: { sourceWidth: 1080, sourceHeight: 1920 } });
+      await vi.advanceTimersByTimeAsync(20); await seek;
+      expect(native).toHaveBeenCalledTimes(1);
+      expect(calls.filter(call => call.requestType === 'TriggerMediaInputAction')).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
   });
   it('暂停定位的时钟需继续播放才能更新，首次入场及机位返回均应完成定位', async () => {
     const { scenes, calls } = fixture(false, true);
@@ -87,7 +167,7 @@ describe('素材独立场景播放', () => {
     const { scenes, calls } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
     await scenes.execute(event, 'C:/dance.mp4');
     expect(calls.slice(0, 4).map((call) => call.requestType)).toEqual(['SetInputMute', 'SetSceneItemEnabled', 'SetCurrentProgramScene', 'TriggerMediaInputAction']);
-    expect(calls.some((call) => call.requestType === 'SetMediaInputCursor')).toBe(false);
+    expect(calls.find((call) => call.requestType === 'SetMediaInputCursor')?.requestData).toEqual({ inputName: names.sourceName, mediaCursor: 2300 });
     expect(calls[2]?.requestData).toEqual({ sceneName: names.sceneName });
   });
   it('机位插入只静音底层视频，切回对应位置不发重播或重新定位', async () => {

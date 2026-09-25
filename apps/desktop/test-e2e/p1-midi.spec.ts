@@ -23,6 +23,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] });
       ipcMain.removeHandler('link:detect-local-integrations');
       ipcMain.handle('link:detect-local-integrations', () => ({ detectedAt: new Date().toISOString(), applications: Object.fromEntries(['obs', 'p1'].map(id => [id, { id, executablePath: null, workingDirectory: null, processName: null, windowTitle: null, version: null, running: false }])) }));
+      ipcMain.removeHandler('link:midi-recheck'); ipcMain.handle('link:midi-recheck', () => undefined);
       ipcMain.removeHandler('link:process-start'); ipcMain.handle('link:process-start', () => { throw new Error('隔离测试不启动外部程序'); });
     }, path);
     await page.evaluate(() => {
@@ -37,14 +38,12 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
       const saved = await page.evaluate(() => window.tbLink.loadIntegrationProfile());
       return saved?.midiPortProfiles.find(port => port.id === 'lighting-events-output')?.portName;
     }).toBe('USB MIDI');
-    const connectionResult = page.getByRole('dialog', { name: '设备连接检查结果', exact: true });
-    await expect(connectionResult).toBeVisible();
-    await expect(connectionResult).toContainText('OBS');
-    await expect(connectionResult).not.toContainText('阻断项');
-    await expect(connectionResult).not.toContainText('端口档案不存在');
-    await page.screenshot({ path: info.outputPath('connection-result.png') });
-    await connectionResult.getByRole('button', { name: '打开 OBS 设置', exact: true }).first().click();
-    await expect(connectionResult).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '顶部一键连接', exact: true })).toBeEnabled();
+    await expect(page.getByRole('dialog', { name: '设备连接检查结果', exact: true })).toHaveCount(0);
+    const connectionResult = page.getByLabel('全部连接状态', { exact: true });
+    await expect(connectionResult.getByRole('button', { name: '灯光 Cue 输出：已打开', exact: true })).toBeVisible();
+    await connectionResult.getByRole('button', { name: 'OBS 控制：待处理', exact: true }).click();
+    await page.getByRole('region', { name: '连接详情' }).getByRole('button', { name: '前往设置', exact: true }).click();
     await expect(page.getByRole('navigation', { name: '设置子子菜单' })).toBeVisible();
     const packets = () => page.evaluate(() => Reflect.get(window, '__cuePackets') as number[][]);
     expect(await packets()).toEqual([]);
@@ -88,7 +87,8 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     await expect(page.getByLabel('MA2 连接方式')).toHaveValue('midi');
     await expect(page.getByLabel('MA2 控台 IP')).toHaveCount(0);
     await expect(page.getByRole('button', { name: '扫描控台全部时间线', exact: true })).toHaveCount(0);
-    await expect(page.getByLabel('连接状态')).not.toContainText('MA2');
+    await expect(page.getByLabel('全部连接状态').getByRole('button', { name: 'MA2 网络：未启用', exact: true })).toBeVisible();
+    await expect(page.getByLabel('全部连接状态').getByRole('button', { name: 'MA2 工程通信：未启用', exact: true })).toBeVisible();
     await pick(info.outputDir);
     await page.getByRole('button', { name: '导出控台插件', exact: true }).click();
     await expect.poll(async () => (await readdir(info.outputDir)).filter(name => name.startsWith('TBLINK-MA2-Bridge-')).length).toBe(1);

@@ -1,3 +1,4 @@
+import { requestMidiAccess } from '../../registry/midi-access';
 import { Button } from './Button';
 import { createDefaultIntegrationProfile } from '../view-models/local-integration-profile';
 import { useEffect, useState } from 'react';
@@ -33,6 +34,12 @@ export function ProjectPlayerTransport({ controller, state }: ProjectPlayer): JS
         <div className="home-section-heading"><h2>播放主控</h2><span>音乐 · 画面 · 灯光</span></div>
         <div className="player-now"><div className="player-track-icon"><Music2 /></div><div><small title={state.error ?? reason ?? undefined}>{statusLabel(state.status)}</small><h2>{selected?.title ?? '未播放'}</h2></div><span className="player-next"><small>{state.itemId ? '接下来' : '就绪'}</small><strong title={next?.title}>{state.itemId ? next?.title ?? '播完停止' : `${items.length} 首歌曲`}</strong></span></div>
         {state.error ? <p className="player-error" role="alert">{state.errorTitle ? <strong>{state.errorTitle}：</strong> : null}{state.error}</p> : null}
+        {state.mtcConnectionFailed && state.mtcEnabled && state.itemId ? <button className="secondary-button" disabled={!controller || state.status === 'preparing'} onClick={() => {
+          if (!controller || !state.itemId) return;
+          controller.toggleMtc();
+          void controller.play(state.itemId);
+        }}>关闭时间码后重试</button> : null}
+        {state.notice ? <p className="player-notice" role="status">{state.notice}</p> : null}
         <div className="player-buttons">
           <button aria-label="上一首" title="上一首" disabled={!controller || !items.length} onClick={() => void controller?.skip(-1)}><SkipBack /></button>
           <Button className="primary-button" loading={state.status === 'preparing'} disabled={!controller || state.status === 'preparing' || !items.some((item) => item.referenceAudio)} onClick={() => {
@@ -65,7 +72,7 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
   useEffect(() => {
     let cancelled = false; let access: MIDIAccess | null = null;
     const refresh = (): void => { if (!cancelled && access) { setInputs([...access.inputs.values()].filter((port) => port.state === 'connected').map((port) => port.name ?? '').filter(Boolean)); setOutputs([...access.outputs.values()].filter((port) => port.state === 'connected').map((port) => port.name ?? '').filter(Boolean)); } };
-    void navigator.requestMIDIAccess({ sysex: true }).then((result) => { access = result; refresh(); result.addEventListener('statechange', refresh); }).catch((error: unknown) => notify(String(error), 'error'));
+    void requestMidiAccess({ sysex: true }).then((result) => { access = result; refresh(); result.addEventListener('statechange', refresh); }).catch((error: unknown) => notify(String(error), 'error'));
     const refreshDevices = (): void => { void navigator.mediaDevices.enumerateDevices().then((result) => { if (!cancelled) setDevices(result.filter((device) => device.kind === 'audiooutput' && device.deviceId !== 'default')); }).catch((error: unknown) => notify(String(error), 'error')); };
     refreshDevices(); navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
     return () => { cancelled = true; access?.removeEventListener('statechange', refresh); navigator.mediaDevices.removeEventListener('devicechange', refreshDevices); };
@@ -83,11 +90,12 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
       await linkDesktopViewModel.saveIntegrationProfile({ profile: next }); useIntegrationStore.getState().setProfile(next); setSavedField(audioSampleRate !== (current.internalPlayer?.audioSampleRate ?? 48000) ? 'rate' : deviceId !== current.internalPlayer?.audioOutputDeviceId ? 'audio' : controlName !== inputName ? 'remote' : 'mtc');
     } catch (error) { setError(String(error)); notify(String(error), 'error'); } finally { setSaving(false); onBusy(false); }
   };
+  const chosenOutput = profile?.internalPlayer?.audioOutputDeviceId ?? 'default';
   return <div className="player-connections panel"><h3 className="device-form-title">音频输出</h3>
-    <label><span>音频输出线路</span><select aria-label="音乐监听设备" disabled={disabled || saving} value={profile?.internalPlayer?.audioOutputDeviceId ?? 'default'} onChange={(event) => void save(port, event.currentTarget.value)}><option value="default">Windows 默认播放设备</option>{devices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || device.deviceId}</option>)}</select>{savedField === 'audio' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
+    <label><span>音频输出线路</span><select aria-label="音乐监听设备" disabled={disabled || saving} value={chosenOutput} onChange={(event) => void save(port, event.currentTarget.value)}><option value="default">Windows 默认播放设备</option>{chosenOutput !== 'default' && !devices.some(device => device.deviceId === chosenOutput) ? <option value={chosenOutput}>上次选择的输出设备（当前列表不可见）</option> : null}{devices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || device.deviceId}</option>)}</select>{savedField === 'audio' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
     <label><span>采样率</span><select aria-label="音频采样率" disabled={disabled || saving} value={profile?.internalPlayer?.audioSampleRate ?? 48000} onChange={(event) => void save(port, profile?.internalPlayer?.audioOutputDeviceId ?? 'default', inputName, profile?.internalPlayer?.doubleClickPlayback ?? false, event.currentTarget.value === '44100' ? 44100 : 48000)}><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select>{savedField === 'rate' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
 <h3 className="device-form-title">MIDI 时间码</h3>
-<label><span>时间码输出</span><select aria-label="灯光 MIDI 输出" disabled={disabled || saving} value={port} onChange={(event) => void save(event.currentTarget.value, profile?.internalPlayer?.audioOutputDeviceId ?? 'default')}><option value="">不输出时间码</option>{[...new Set([...outputs, ...(port ? [port] : [])])].map((name) => <option key={name} value={name} disabled={!outputs.includes(name)}>{name}{outputs.includes(name) ? '' : '（未连接）'}</option>)}</select>{savedField === 'mtc' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
+<label><span>时间码输出</span><select aria-label="灯光 MIDI 输出" disabled={disabled || saving} value={port} onChange={(event) => void save(event.currentTarget.value, profile?.internalPlayer?.audioOutputDeviceId ?? 'default')}><option value="">自动检测控台接口</option>{[...new Set([...outputs, ...(port ? [port] : [])])].map((name) => <option key={name} value={name} disabled={!outputs.includes(name)}>{name}{outputs.includes(name) ? '' : '（未连接）'}</option>)}</select>{savedField === 'mtc' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
     <p className="settings-note">自动识别 loopMIDI 端口与实体 MIDI 设备，用于输出 MTC 时间码。{outputs.length === 0 ? '当前未检测到可用输出设备。' : `已识别 ${new Set(outputs).size} 个输出端口。`}</p>
     <details className="settings-disclosure"><summary>远程控制与灯光动作端口</summary><div className="player-connections">
     <label><span>远程播放输入</span><select aria-label="播放控制 MIDI 输入" disabled={disabled || saving} value={inputName} onChange={(event) => void save(port, profile?.internalPlayer?.audioOutputDeviceId ?? 'default', event.currentTarget.value)}><option value="">关闭远程播放控制</option>{[...new Set([...inputs, ...(inputName ? [inputName] : [])])].map((name) => <option key={name}>{name}</option>)}</select>{savedField === 'remote' ? <small className="field-save-status" role="status">已保存</small> : null}</label>

@@ -30,7 +30,8 @@ describe('MediaPreviewService', () => {
     const [first, second] = await Promise.all([request(), request()]);
     cleanupFiles.push(first, `${first}.sha256`);
     expect(second).toBe(first); expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual(expect.arrayContaining(['-c:v', 'jpeg2000', '-pred', '1', '-threads', '2', '-avoid_negative_ts', 'disabled']));
+    expect(first).toMatch(/\.rgba\.mkv$/);
+    expect(calls[0]).toEqual(expect.arrayContaining(['-c:v', 'ffv1', '-pix_fmt', 'bgra', '-threads', '2', '-avoid_negative_ts', 'disabled']));
     await expect(request()).resolves.toBe(first); expect(calls).toHaveLength(1);
     await writeFile(first, 'corrupt-cache-longer');
     await expect(request()).rejects.toThrow('定位缓存已损坏');

@@ -62,11 +62,10 @@ it('写入后的扩展数据丢失必须报告未完成同步', async () => {
   wire.response = desired;
   await expect(bridge.request('APPLY', 904, source, desired)).resolves.toBe(desired);
 });
-it('正在交换时拒绝第二个请求，避免覆盖插件请求文件', async () => {
+it('同时读取依次交换，避免覆盖插件请求文件', async () => {
   const bridge = new Ma2OnpcBridge(process.cwd(), () => false);
   const first = bridge.request('READ', 904);
-  await expect(bridge.request('READ', 904)).rejects.toThrow('正在交换');
-  await expect(first).resolves.toBe(source);
+  await expect(Promise.all([first, bridge.request('READ', 904)])).resolves.toEqual([source, source]);
 });
 it('快照只接受 Timecode 引用的序列，且不能作为写入 XML 使用', async () => {
   const tc = readFileSync(fileURLToPath(new URL('./fixtures/ma2-timecode-fractional-3.3.xml', import.meta.url)), 'utf8');

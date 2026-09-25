@@ -93,7 +93,7 @@ export function CueWorkspace({ workspace = 'visual', player, sidebarHost, toolba
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [selectedObsResource, setSelectedObsResource] = useState<ObsResource | null>(null);
   const externalTransport = project?.playbackSource === 'internal';
-  const { playheadMs, playing, setPlayheadMs, setPlaying, reset, audioRef, stop } = useEditorTransport(player, currentItemId, externalTransport, notify);
+  const { playheadMs, playing, setPlayheadMs, setPlaying, reset, audioRef, stop, stopForEdit } = useEditorTransport(player, currentItemId, externalTransport, notify);
   const [lightingSelection, setLightingSelection] = useState<{ trackId: string; clipId: string | null; eventId?: string; eventIds?: string[] } | null>(null);
   const runtimeState = useRuntimeStore((state) => state.state);
   useStoppedRuntimeRecovery(externalTransport, player, runtimeState, coordinator, notify);
@@ -108,7 +108,9 @@ export function CueWorkspace({ workspace = 'visual', player, sidebarHost, toolba
   const workspaceLayout = useWorkspaceLayout(notify);
   const runCommand = createCommandRunner(execute, notify);
   const item = project?.rundown.find((candidate) => candidate.id === currentItemId) ?? null;
-  const lightingDocument = useLightingDocument(item);   const audioEditor = useAudioEditor(item, projectPath, playing || runtimeState !== 'idle', notify);   const selectAudio = (id?: string): void => { setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); audioEditor.select(id ?? audioEditor.selectedId ?? audioEditor.segments[0]?.id ?? null); };
+  const lightingDocument = useLightingDocument(item);
+  const audioEditor = useAudioEditor(item, projectPath, playing || runtimeState !== 'idle' && !(externalTransport && player.state.status === 'paused' && runtimeState === 'paused'), notify, stopForEdit);
+  const selectAudio = (id?: string): void => { setLightingSelection(null); setSelectedCueId(null); setSelectedClipId(null); audioEditor.select(id ?? audioEditor.selectedId ?? audioEditor.segments[0]?.id ?? null); };
   const audition = useLightingCueAudition(lightingDocument, project?.projectId, item, notify);
   const effectStamp = useLightingEffectStamp(item?.id ?? null, lightingDocument, item?.referenceAudio?.durationMs ?? 0, notify);
   const changeLighting = lightingEditHandler({ itemId: item?.id ?? null, project, notify });
@@ -120,11 +122,10 @@ export function CueWorkspace({ workspace = 'visual', player, sidebarHost, toolba
   useReferenceAudioUrl({ item, projectPath, setAudioUrl, notify });
 
   const durationMs = useWorkspaceDuration(project, item, lightingDocument);
-  // Visual preview keeps its clock; lighting output requires real audio in useLightingPreview.
   useTimelinePlaybackClock({ playing: playing && !audioUrl && !externalTransport, playheadMs, durationMs, frameRate: project?.timebase.frameRate ?? '30', itemId: item?.id ?? null, onPlayheadChange: setPlayheadMs, onPlayingChange: setPlaying });
   const timelineReferenceAudio = useTimelineReferenceAudio(item?.referenceAudio, projectPath, audioUrl);
   const timelineState = useMemo(() => project && item ? resolveTimelineState(project, item, playheadMs) : null, [item, playheadMs, project]);
-  const scenePreviewOutput = useMemo(() => resolveScenePreviewOutput(project, item?.id ?? null, playheadMs), [project, item?.id, playheadMs]);
+  const scenePreviewOutput = useMemo(() => obs.status === 'connected' ? null : resolveScenePreviewOutput(project, item?.id ?? null, playheadMs), [obs.status, project, item?.id, playheadMs]);
   if (!project) return <div className="empty-panel full"><Clock3 /><h3>尚未打开工程</h3><p>新建或打开工程后即可添加素材与 OBS 目标。</p></div>;
   const { importMedia, addAssetClip, addObsResource, moveClip, trimClip, trimCue, splitClip, duplicateClip, duplicateCue, transformClip, transformObs, moveCue, removeClip, removeCue, setClipEmbeddedAudioEnabled, refreshObs, testAction } = createWorkspaceActions({ project, projectPath, documentId, item, cue, playheadMs, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource });
 

@@ -1,6 +1,6 @@
 import { Button } from './Button';
 import { ObsDeviceSettings } from './ObsDeviceSettings';
-import { ConnectionResult } from './ConnectionResult';
+import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { createDefaultIntegrationProfile, mergeIntegrationDraft } from '../view-models/local-integration-profile';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -21,7 +21,7 @@ import {
   type LucideIcon
 } from 'lucide-react';
 import type { IntegrationProfile } from '@tb/schema';
-import type { LinkProcessSnapshot } from '@tb/core/link';
+import { toUserErrorMessage, type LinkProcessSnapshot } from '@tb/core/link';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { LinkMidiAdapter, hasConnectedProfilePort } from '../../registry/link-midi-adapter';
 import { useDocumentStore } from '../stores/document-store';
@@ -49,7 +49,7 @@ type Props = {
   onSettingsOpen: () => void;
 };
 
-export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, coordinator, notify, settingsOpen, onSettingsClose, onSettingsOpen, onCategoryChange }: Props): JSX.Element {
+export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, coordinator, notify, settingsOpen, onSettingsClose }: Props): JSX.Element {
   const storedProfile = useIntegrationStore((state) => state.profile);
   const securityAvailable = useIntegrationStore((state) => state.securityAvailable);
   const obs = useIntegrationStore((state) => state.obs);
@@ -64,15 +64,12 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   const draftBaseline = useRef(draft);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const localIntegration = useLocalIntegrationConnection({ draft, password, storedProfile, readMidiPorts: () => readAndStoreMidiPorts(midiMonitor), openMidiOutputs: ids => midiMonitor.openOutputs(ids), notify, onDraft: setDraft, onPasswordCleared: () => setPassword(''), onBusyChange: setBusy });
+  const connectionProgress = useConnectionCheckStore();
+  const localIntegration = useLocalIntegrationConnection({ draft, password, readMidiPorts: () => readAndStoreMidiPorts(midiMonitor), openMidiPorts: (ids, direction) => direction === 'input' ? midiMonitor.openInputs(ids) : midiMonitor.openOutputs(ids), listenToP1: async () => { if (!coordinator) throw new Error('请先打开 P1 跟随工程'); await coordinator.initializeMidi(); }, notify, onDraft: setDraft, onPasswordCleared: () => setPassword(''), onBusyChange: setBusy });
   const lastMtcAt = useRuntimeStore((state) => state.lastMtcAt);
   const mtcStable = useRuntimeStore((state) => state.mtcStable);
   const detectedFrameRate = useRuntimeStore((state) => state.detectedFrameRate);
-  const [now, setNow] = useState(() => performance.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(performance.now()), 100);
-    return () => window.clearInterval(timer);
-  }, []);
+  const now = useSettingsMtcClock(!internal && settingsOpen);
   const mtcPortAvailable = hasConnectedProfilePort(draft, draft.p1.mtcInputPortProfileId, midiPorts);
   const mtcReady = isMtcSignalReady({ portConnected: mtcPortAvailable, stable: mtcStable, lastMtcAt, now, detectedFrameRate, expectedFrameRate: draft.p1.expectedFrameRate });
   const runtimeActive = runtimeState !== 'idle';
@@ -168,8 +165,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
     }
   };
   return (<div className="page-stack integration-workspace">
-      {localIntegration.resultOpen ? createPortal(<ConnectionResult issues={localIntegration.issues} onClose={localIntegration.closeResult} onResolve={target => { localIntegration.closeResult(); onCategoryChange(target); onSettingsOpen(); }} onRetry={() => { localIntegration.closeResult(); localIntegration.connect(); }} />, document.body) : null}
-      {quickConnectHost ? createPortal(<button aria-label="顶部一键连接" title="识别并连接本机设备" disabled={busy || runtimeActive || !securityAvailable} onClick={localIntegration.connect}><ScanSearch />{busy ? '连接中…' : '一键连接'}</button>, quickConnectHost) : null}
+      {quickConnectHost ? createPortal(<button aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '逐项连接全部已启用设备，一项失败不会中断其他连接'} disabled={busy || runtimeActive} onClick={localIntegration.connect}><ScanSearch />{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</button>, quickConnectHost) : null}
       {settingsOpen ? <IntegrationSettingsDialog
         category={category} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} nestedDialogOpen={false}
         midiPorts={midiPorts} inventory={inventory} notify={notify}
@@ -265,9 +261,26 @@ function P1MtcSetupNotice({ ready, portAvailable }: { ready: boolean; portAvaila
 }
 
 async function readAndStoreMidiPorts(monitor: LinkMidiAdapter): Promise<ReturnType<LinkMidiAdapter['listPorts']>> {
-  const ports = await monitor.refreshPorts();
-  useIntegrationStore.getState().setMidiPorts(ports);
-  return ports;
+  try {
+    await window.tbLink.recheckMidi();
+    const ports = await monitor.refreshPorts();
+    useIntegrationStore.getState().setMidiPorts(ports);
+    if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('midi', 'ready', '系统 MIDI 检测通过');
+    return ports;
+  } catch (error) {
+    if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('midi', 'error', toUserErrorMessage(error));
+    throw error;
+  }
+}
+
+function useSettingsMtcClock(active: boolean): number {
+  const [now, setNow] = useState(() => performance.now());
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setNow(performance.now()), 500);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  return now;
 }
 
 type ProgramSettingsValue = Pick<

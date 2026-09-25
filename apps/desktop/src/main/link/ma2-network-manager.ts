@@ -1,13 +1,16 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { ma2NetworkSettingsSchema, ma2NetworkSaveSchema, ma2NetworkCatalogSchema, type Ma2Capabilities, type Ma2NetworkSettings, type Ma2NetworkSave, type Ma2NetworkStatus, type Ma2NetworkTarget } from '@tb/schema';
+import { ma2NetworkSettingsSchema, ma2NetworkSaveSchema, ma2NetworkCatalogSchema, type Ma2Capabilities, type Ma2NetworkSettings, type Ma2NetworkSave, type Ma2NetworkStatus, type Ma2NetworkTarget, type Ma2ReadProgressUpdate } from '@tb/schema';
 import { SecureProfileStore } from './secure-profile-store';
 import { writeFileAtomically } from './atomic-file';
 import { Ma2Telnet, ma2ResponseLine } from './ma2-telnet';
 import { Ma2NetworkWire } from './ma2-network-wire';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ApplyService } from './ma2-apply-service';
+import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
+import { readMa2NativeLibrary } from './ma2-native-library';
+import { readMa2Catalog } from './ma2-catalog';
 
 /** One chosen console, machine settings only. Auto-connect never replays writes. */
 export class Ma2NetworkManager {
@@ -22,7 +25,7 @@ export class Ma2NetworkManager {
   private generation = 0;
   private services: { bridge: Ma2OnpcBridge; service: Ma2ApplyService } | null = null;
   private readonly path: string;
-  constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
+  constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
   get(target: Ma2NetworkTarget): { bridge: Ma2OnpcBridge; service: Ma2ApplyService } {
     const settings = this.settings;
     if (!settings || target.host !== settings.host || target.port !== settings.port || target.monitorPort !== settings.monitorPort || target.username !== settings.username) throw new Error('MA2 连接目标已改变，请重新读取控台');
@@ -31,6 +34,19 @@ export class Ma2NetworkManager {
     return this.services;
   }
   private credentialId(settings: Ma2NetworkSettings): string { return `ma2-${createHash('sha256').update(`${settings.host}:${settings.port}:${settings.username}`).digest('hex')}`; }
+  async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal): Promise<import('@tb/schema').Ma2Catalog> {
+    const { bridge } = this.get(target);
+    const before = await this.readLibrary(target, onProgress, 'library', signal);
+    const result = await readMa2Catalog(bridge, this.isPlaying, { version: before.directory.version, sequences: before.sequences.map(sequence => ({ number: sequence.sequence, name: sequence.name, cues: sequence.cues })) }, onProgress, signal);
+    const after = await this.readLibrary(target, onProgress, 'verification', signal);
+    if (JSON.stringify(before.directory) !== JSON.stringify(after.directory) || JSON.stringify(before.sequences) !== JSON.stringify(after.sequences)) throw new Error('扫描期间控台序列发生变化，请重新扫描');
+    return result;
+  }
+  async readLibrary(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, phase: 'library' | 'verification' = 'library', signal?: AbortSignal): Promise<import('@tb/schema').Ma2EffectLibrary> {
+    const { bridge } = this.get(target);
+    if (!this.connection) throw new Error('请先连接控台');
+    return readMa2NativeLibrary(this.connection, bridge, this.isPlaying, onProgress, phase, signal);
+  }
   async initialize(): Promise<void> {
     try {
       const raw: unknown = JSON.parse(await readFile(this.path, 'utf8'));
@@ -46,7 +62,7 @@ export class Ma2NetworkManager {
     catch { this.error = 'MA2 安全凭证读取失败，请重新保存密码'; return; }
     if (this.settings.autoConnect) await this.connect();
   }
-  status(): Ma2NetworkStatus { return { profiles: this.profiles, capabilities: this.capabilities, settings: this.settings, passwordSaved: this.passwordSaved, state: this.connection?.state ?? 'disconnected', version: this.version, error: this.error }; }
+  status(): Ma2NetworkStatus { return { profiles: this.profiles, capabilities: this.capabilities, settings: this.settings, passwordSaved: this.passwordSaved, state: this.connection?.state === 'connected' && !this.services ? 'connecting' : this.connection?.state ?? 'disconnected', version: this.version, error: this.error }; }
   async save(payload: Ma2NetworkSave): Promise<Ma2NetworkStatus> {
     if (this.isPlaying()) throw new Error('播放期间不能更换控台连接');
     if (this.busy) throw new Error('MA2 正在连接，请稍后保存');
@@ -82,9 +98,11 @@ export class Ma2NetworkManager {
       const version = await connection.connect(settings.username, password);
       if (generation !== this.generation) return this.status();
       this.version = version;
+      if (this.bundledBridge) await ensureMa2NetworkBridge(connection, this.bundledBridge);
+      if (generation !== this.generation) return this.status();
       const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(connection), this.isPlaying);
       this.services = { bridge, service: new Ma2ApplyService(bridge, this.isPlaying) };
-    } catch (error) { if (generation === this.generation) { this.error = error instanceof Error ? error.message : String(error); this.version = null; } }
+    } catch (error) { if (generation === this.generation) { this.connection?.disconnect(); this.services = null; this.error = error instanceof Error ? error.message : String(error); this.version = null; } }
     finally { this.busy = false; }
     return this.status();
   }
@@ -96,9 +114,9 @@ export class Ma2NetworkManager {
     const generation = this.generation; this.busy = true; this.capabilities = null;
     try {
       const marker = `TBLINK_CAP_${randomBytes(16).toString('hex')}`;
-      const script = "tostring(_VERSION)..'|'..tostring(type(TBLINK_NET)=='function')..'|'..tostring(type(gma.show.getobj)=='table' and type(gma.show.getobj.handle)=='function')..'|'..tostring(type(io)=='table' and type(io.open)=='function')";
+      const script = "tostring(_VERSION)..':'..tostring(type(TBLINK_NET)=='function')..':'..tostring(type(gma.show.getobj)=='table' and type(gma.show.getobj.handle)=='function')..':'..tostring(type(io)=='table' and type(io.open)=='function')";
       const result = await connection.command(`Lua "gma.echo('${marker}:'..${script})"`, (text) => ma2ResponseLine(text, `${marker}:`));
-      const parts = result.split('|');
+      const parts = result.split(':');
       if (parts.length !== 4 || !parts.slice(1).every((part) => part === 'true' || part === 'false')) throw new Error('控台能力响应格式不支持');
       if (generation !== this.generation) return this.status();
       const plugin = parts[1] === 'true', objects = parts[2] === 'true', files = parts[3] === 'true';

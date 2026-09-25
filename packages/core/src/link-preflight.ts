@@ -22,6 +22,7 @@ export type PreflightReport = {
 export type PreflightContext = {
   mode: PreflightMode;
   mtcRequirement: 'running' | 'start-on-go' | 'awaiting-external-start' | 'internal';
+  internalMtcOutputEnabled?: boolean;
   project: LinkProject;
   profile: IntegrationProfile;
   currentItemId: string | null;
@@ -172,8 +173,8 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
   }
 
   const inputProfile = profile.midiPortProfiles.find((port) => port.id === profile.p1.mtcInputPortProfileId);
-  const outputProfiles = new Set(collectOutputProfileIds(project));
-  if (context.mtcRequirement === 'internal' && profile.internalPlayer?.mtcOutputPortProfileId) outputProfiles.add(profile.internalPlayer.mtcOutputPortProfileId);
+  const outputProfiles = new Set(collectCueMidiOutputProfileIds(project));
+  if (context.mtcRequirement === 'internal' && context.internalMtcOutputEnabled !== false && profile.internalPlayer?.mtcOutputPortProfileId) outputProfiles.add(profile.internalPlayer.mtcOutputPortProfileId);
   if (context.mtcRequirement === 'start-on-go') outputProfiles.add(profile.p1.controlOutputPortProfileId);
   if (context.mtcRequirement !== 'internal') checks.push(portCheck('midi.mtcInput', 'P1 MTC 输入', inputProfile, context.midi.ports));
   for (const profileId of outputProfiles) {
@@ -303,7 +304,7 @@ function missingObsTarget(action: LinkAction, obs: PreflightContext['obs']): str
   }
 }
 
-function collectOutputProfileIds(project: LinkProject): string[] {
+export function collectCueMidiOutputProfileIds(project: LinkProject): string[] {
   const ids = new Set<string>();
   for (const item of project.rundown) {
     if (!item.enabled) continue;

@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+import { windowsPowerShellExecutable } from './windows-powershell';
 import previewScript from '../../../../../tools/obs/tblink_preview.lua?raw';
 
 const run = promisify(execFile);
@@ -87,8 +88,9 @@ export async function findLocalObsPid(address: string): Promise<number | null> {
   if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return null;
   const port = Number(url.port || (url.protocol === 'wss:' ? 443 : 80));
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('OBS 端口无效');
-  const command = `$ErrorActionPreference='Stop'; $owners = @(Get-NetTCPConnection -State Listen | Where-Object {$_.LocalPort -eq ${port}} | Select-Object -ExpandProperty OwningProcess -Unique); if ($owners.Count -eq 0) { [Console]::Write('0'); exit 0 }; if ($owners.Count -ne 1) { throw 'OBS listening process is ambiguous' }; $target = Get-Process -Id $owners[0]; if ($target.ProcessName -notin @('obs64','obs32')) { throw 'Port does not belong to OBS' }; [Console]::Write($target.Id)`;
-  const { stdout } = await run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], { windowsHide: true, timeout: 2_000, maxBuffer: 16_384 });
+  const command = `$ErrorActionPreference='Stop'; $owners = @(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique); if ($owners.Count -eq 0) { [Console]::Write('0'); exit 0 }; if ($owners.Count -ne 1) { throw 'OBS listening process is ambiguous' }; $target = Get-Process -Id $owners[0]; if ($target.ProcessName -notin @('obs64','obs32')) { throw 'Port does not belong to OBS' }; [Console]::Write($target.Id)`;
+  const executable = await windowsPowerShellExecutable();
+  const { stdout } = await run(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], { windowsHide: true, timeout: 5_000, maxBuffer: 16_384 });
   const pid = Number(stdout.trim());
   if (stdout.trim() === '0') return null;
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('无法确认本机 OBS 进程');

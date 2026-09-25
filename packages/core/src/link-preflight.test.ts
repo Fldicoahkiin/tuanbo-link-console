@@ -31,6 +31,17 @@ describe('团播联动台预检', () => {
     expect(report.checks.some((check) => check.status === 'blocking')).toBe(false);
   });
 
+  it('显式关闭内部时间码只跳过其端口，仍阻断 Cue 实际需要的 MIDI 输出', () => {
+    const value = context(); value.mtcRequirement = 'internal'; value.project.playbackSource = 'internal';
+    value.internalMtcOutputEnabled = false;
+    value.profile.internalPlayer = { mtcOutputPortProfileId: 'lights', audioOutputDeviceId: 'default' };
+    value.profile.midiPortProfiles.push({ id: 'lights', direction: 'output', portName: 'Missing MA2' });
+    value.midi.ports = [];
+    expect(runLinkPreflight(value).passed).toBe(true);
+    value.project.rundown[0]!.cues[0]!.actions.push({ id: 'light-action', label: '灯光', kind: 'midi.noteOn', portProfileId: 'lights', channel: 1, note: 60, velocity: 100 });
+    expect(runLinkPreflight(value).checks.find(check => check.id === 'midi.output.lights')?.status).toBe('blocking');
+  });
+
   it('OBS 目标、MTC 和 P1 缺失时均形成阻断项', () => {
     const value = context();
     value.obs.scenes = [];

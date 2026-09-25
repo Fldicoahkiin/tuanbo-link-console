@@ -1,11 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { createLightingDocument, createEmptyLinkProject, lightingDocumentSchema, parseLinkProject, serializeLinkProject, type LightingClip } from '@tb/schema';
+import { createLightingDocument, createEmptyLinkProject, lightingDocumentSchema, lightingTemplateTrackSchema, parseLinkProject, serializeLinkProject, type LightingClip } from '@tb/schema';
 import { LightingTempoMap, lightingClipInTime, copyLightingEventsAt, lightingClipSpan, lightingCurveValue, lightingEventTime, offsetLightingEvents, quantizeLightingClip, setLightingCommand, splitLightingClip, trimLightingClip, mergeLightingClips } from './lighting-edit';
 import { exportLightingMidi } from './lighting-midi-file';
 import { copyLightingEvents, pasteLightingEvents } from './lighting-clipboard';
 import { compileLightingPackets, LightingScheduler, type LightingPacket } from './lighting-playback';
 
 const clip: LightingClip = { id: 'clip', name: '灯光', start: 0, duration: 10000, timeLock: 'time', muted: false, events: [{ id: 'note', kind: 'note', at: 100, note: 60, velocity: 100, duration: 4000 }] };
+it('584 个未绑定执行器的实机 Cue 可一次加入工程并保存回读', () => {
+  const project = createEmptyLinkProject('素材导入验收');
+  const lighting = createLightingDocument();
+  lighting.templates = Array.from({ length: 584 }, (_, index) => {
+    const name = `Cue ${index + 1}`;
+    const track = lightingTemplateTrackSchema.parse({ id: `material-track-${index}`, name, kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [], cueStamp: { mode: 'fixed', sequence: index + 1, cue: '1.000', executor: '' } });
+    return { id: `material-${index}`, name, sourceShow: '2hao', track };
+  });
+  project.rundown.push({ id: 'song', title: '测试节目', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting });
+  const result = setLightingCommand('song', lighting, '导入控台素材').execute(project);
+  const saved = parseLinkProject(JSON.parse(serializeLinkProject(result)));
+  expect(saved.rundown[0]?.lighting?.templates).toHaveLength(584);
+  expect(saved.rundown[0]?.lighting?.templates[0]?.track.cueStamp).toMatchObject({ executor: '', sequence: 1 });
+});
 function document() { const value = createLightingDocument(); value.outputMode = 'direct'; value.tracks.push({ id: 'track', name: '测试', kind: 'midi', color: '#abcdef', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: 'light', noteNames: {}, clips: [structuredClone(clip)] }); return value; }
 
 describe('灯光编排编辑与时间基准', () => {

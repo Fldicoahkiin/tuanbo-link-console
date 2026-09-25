@@ -40,6 +40,7 @@ export const linkActionSchema = z.discriminatedUnion('kind', [
   actionBase.extend({
     kind: z.literal('obs.setProgramScene'),
     sceneName: z.string().min(1),
+    sceneLayers: z.array(z.string().min(1)).min(1).max(128).optional(),
     transition: z.object({
       name: z.string().min(1),
       durationMs: z.number().int().min(50).max(20_000)

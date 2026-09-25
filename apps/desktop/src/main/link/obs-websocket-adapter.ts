@@ -152,6 +152,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
 
     switch (action.kind) {
       case 'obs.setProgramScene':
+        if (action.sceneLayers) { await this.mediaScenes.compose(action.sceneName, action.sceneLayers); return; }
         if (action.transition) {
           await this.request(this.client.call('SetCurrentSceneTransition', { transitionName: action.transition.name }), 'SetCurrentSceneTransition');
           const transition = await this.request(this.client.call('GetCurrentSceneTransition'), 'GetCurrentSceneTransition');

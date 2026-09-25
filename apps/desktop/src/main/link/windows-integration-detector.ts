@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { windowsPowerShellExecutable } from './windows-powershell';
 import type { LinkDetectedApplication, LinkLocalIntegrationDetection, LinkProcessSnapshot } from '@tb/core/link';
 
 type PowerShellRunner = (script: string, timeoutMs: number) => Promise<string>;
@@ -57,10 +58,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function executePowerShell(script: string, timeoutMs: number): Promise<string> {
+export async function executePowerShell(script: string, timeoutMs: number): Promise<string> {
+  const executable = await windowsPowerShellExecutable();
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
+    const child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     });

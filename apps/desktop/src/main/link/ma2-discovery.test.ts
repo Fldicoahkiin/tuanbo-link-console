@@ -1,7 +1,12 @@
 import { createServer } from 'node:net';
 import type { NetworkInterfaceInfo } from 'node:os';
 import { expect, it } from 'vitest';
-import { discoveryTargets, probeMa2 } from './ma2-discovery';
+import { discoveryTargets, probeMa2, Ma2DiscoveryService } from './ma2-discovery';
+
+it.runIf(Boolean(process.env.TBLINK_MA2_HARDWARE_HOST))('实际局域网广播发现实体控台', async () => {
+  const found = await new Ma2DiscoveryService().search([]);
+  expect(found.hosts).toContainEqual({ host: process.env.TBLINK_MA2_HARDWARE_HOST, port: 30000, identity: 'ma2' });
+}, 60000);
 
 function adapter(address: string, netmask = '255.255.255.0'): NetworkInterfaceInfo {
   return { address, netmask, family: 'IPv4', mac: '00:00:00:00:00:00', internal: false, cidr: null };

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, readFile, stat } from 'node:fs/promises';
+import { access, opendir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, parse, resolve } from 'node:path';
 import {
   DOMParser,
@@ -14,6 +14,7 @@ import {
   type LinkProject,
   type P1MediaBinding,
   type P1PlaylistBinding,
+  type LinkP1ProjectImportProgress,
   type RundownItem
 } from '@tb/schema';
 import type {
@@ -59,27 +60,47 @@ type ExportPlan = {
 export class P1ProjectService {
   constructor(private readonly projects: LinkProjectService) {}
 
-  async importProject(p1ProjectPath: string, linkProjectPath: string): Promise<LinkP1ProjectImportResult> {
+  async importProject(p1ProjectPath: string, linkProjectPath: string, options: { signal?: AbortSignal; onProgress?: (progress: Omit<LinkP1ProjectImportProgress, 'id'>) => void } = {}): Promise<LinkP1ProjectImportResult> {
     const parsed = await this.parseProject(p1ProjectPath);
     const items: LinkP1ProjectImportResult['items'] = [];
     const skippedItems: NonNullable<LinkP1ProjectImportResult['skippedItems']> = [];
+    let relocatedFiles: Promise<Map<string, string[]>> | null = null;
+    const total = parsed.playlists.reduce((count, playlist) => count + playlist.media.length, 0);
+    let completed = 0;
+    options.signal?.throwIfAborted();
+    options.onProgress?.({ completed, total, song: '', state: 'starting' });
     for (const playlist of parsed.playlists) {
       for (const media of playlist.media) {
+        options.signal?.throwIfAborted();
+        let state: 'imported' | 'skipped' = 'imported';
         try {
         requiredAttribute(media.element, 'mediaType', media.title);
         requiredAttribute(media.element, 'resourceFilePath', media.title);
         const binding = readMediaBinding(media.element, media.resourcePath, media.occurrence, playlist.binding.id, playlist.binding.name, media.index);
         parseP1TimeOrigin(binding.midiStartTime);
-        await access(media.resourcePath, constants.R_OK);
-        const fileStat = await stat(media.resourcePath);
-        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${media.resourcePath}`);
-        const audio = await importP1Audio(this.projects, linkProjectPath, media);
+        let readablePath = media.resourcePath;
+        try { await access(readablePath, constants.R_OK); }
+        catch {
+          relocatedFiles ??= indexCopiedP1Media(dirname(parsed.sourcePath), options.signal);
+          const matches = (await relocatedFiles).get(basename(media.resourcePath).toLocaleLowerCase()) ?? [];
+          if (matches.length !== 1) throw new Error(matches.length ? `复制的歌曲目录中存在多个同名文件，无法确认“${media.title}”` : `未找到“${media.title}”的歌曲文件；请把 P1 工程和歌曲文件夹一起复制到本机`);
+          readablePath = matches[0]!;
+        }
+        const fileStat = await stat(readablePath);
+        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${readablePath}`);
+        const audio = await importP1Audio(this.projects, linkProjectPath, media, readablePath);
         items.push({
           title: media.title,
           ...audio,
           p1Media: { ...binding, ...(audio.importNotes ? { importedFullSource: true } : {}) }
         });
-        } catch (error) { skippedItems.push({ sourceKey: media.sourceKey, title: media.title, playlistName: playlist.binding.name, playlistId: playlist.binding.id, reason: error instanceof Error ? error.message : String(error) }); }
+        } catch (error) {
+          options.signal?.throwIfAborted();
+          state = 'skipped';
+          skippedItems.push({ sourceKey: media.sourceKey, title: media.title, playlistName: playlist.binding.name, playlistId: playlist.binding.id, reason: error instanceof Error ? error.message : String(error) });
+        }
+        completed += 1;
+        options.onProgress?.({ completed, total, song: media.title, state });
       }
     }
     if (!items.length && !skippedItems.length) throw new Error('P1 工程中没有歌曲条目');
@@ -333,22 +354,47 @@ function readMediaBinding(
   });
 }
 
-async function importP1Audio(projects: LinkProjectService, projectPath: string, media: ParsedP1Media): Promise<Pick<LinkP1ProjectImportResult['items'][number], 'referenceAudio' | 'importNotes'>> {
+async function importP1Audio(projects: LinkProjectService, projectPath: string, media: ParsedP1Media, readablePath: string): Promise<Pick<LinkP1ProjectImportResult['items'][number], 'referenceAudio' | 'importNotes'>> {
   const startText = media.element.getAttribute('cut_start');
   const endText = media.element.getAttribute('cut_end');
   const start = Number(startText), end = Number(endText);
   const valid = startText?.trim() && endText?.trim() && Number.isFinite(start) && start >= 0 && Number.isFinite(end) && end > start && Math.round((end - start) * 1000) > 0;
-  if (!valid) return { referenceAudio: await projects.importReferenceAudio(projectPath, media.resourcePath, null), importNotes: `P1 裁剪时长无效（${startText ?? '缺失'}～${endText ?? '缺失'} 秒），已按完整原音频导入；原起始时间码保留，请核对灯光结束位置。` };
+  if (!valid) return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), importNotes: `P1 裁剪时长无效（${startText ?? '缺失'}～${endText ?? '缺失'} 秒），已按完整原音频导入；原起始时间码保留，请核对灯光结束位置。` };
   const durationMs = Math.round((end - start) * 1000);
   try {
-    const referenceAudio = await projects.importReferenceAudio(projectPath, media.resourcePath, durationMs, start * 1000, true);
+    const referenceAudio = await projects.importReferenceAudio(projectPath, readablePath, durationMs, start * 1000, true);
     if (referenceAudio.durationMs < durationMs - 2) throw new Error('声明时长超出可解码音频');
     return { referenceAudio };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     if (!/裁剪区间超出可解码音频|声明时长超出可解码音频/.test(reason)) throw error;
-    return { referenceAudio: await projects.importReferenceAudio(projectPath, media.resourcePath, null), importNotes: `P1 裁剪范围 ${start}～${end} 秒超出实际音频，已按完整原音频导入；原起始时间码保留，请核对灯光结束位置。` };
+    return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), importNotes: `P1 裁剪范围 ${start}～${end} 秒超出实际音频，已按完整原音频导入；原起始时间码保留，请核对灯光结束位置。` };
   }
+}
+
+async function indexCopiedP1Media(root: string, signal?: AbortSignal): Promise<Map<string, string[]>> {
+  const files = new Map<string, string[]>();
+  const pending = [{ directory: root, depth: 0 }];
+  let visited = 0;
+  while (pending.length) {
+    signal?.throwIfAborted();
+    const current = pending.shift()!;
+    const directory = await opendir(current.directory);
+    for await (const entry of directory) {
+      signal?.throwIfAborted();
+      visited += 1;
+      if (visited > 12_000) throw new Error('P1 歌曲目录超过 12000 项；请将 .hia 与歌曲文件放入单独文件夹后重试');
+      const path = join(current.directory, entry.name);
+      if (entry.isDirectory() && current.depth < 8 && !entry.name.startsWith('.')) pending.push({ directory: path, depth: current.depth + 1 });
+      else if (entry.isFile()) {
+        const name = entry.name.toLocaleLowerCase();
+        const candidates = files.get(name) ?? [];
+        candidates.push(path);
+        files.set(name, candidates);
+      }
+    }
+  }
+  return files;
 }
 
 function createMediaElement(document: XmlDocument, resourcePath: string, durationMs: number): XmlElement {

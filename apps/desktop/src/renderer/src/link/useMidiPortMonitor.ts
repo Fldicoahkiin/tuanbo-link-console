@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { LinkMidiAdapter } from '../registry/link-midi-adapter';
 import { useIntegrationStore } from './stores/integration-store';
+import { useConnectionCheckStore } from './stores/connection-check-store';
+import { toUserErrorMessage } from '@tb/core/link';
+import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 
 /** Observe ports for the entire application lifetime, independently of the settings page. */
 export function useMidiPortMonitor(notify: (message: string, tone?: 'info' | 'error') => void): LinkMidiAdapter {
@@ -9,9 +12,16 @@ export function useMidiPortMonitor(notify: (message: string, tone?: 'info' | 'er
     let cancelled = false;
     const unsubscribe = monitor.subscribePorts((ports) => useIntegrationStore.getState().setMidiPorts(ports));
     void monitor.initialize().then((ports) => {
-      if (!cancelled) useIntegrationStore.getState().setMidiPorts(ports);
+      if (!cancelled) {
+        useIntegrationStore.getState().setMidiPorts(ports);
+        if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('midi', 'ready', '系统 MIDI 检测通过');
+      }
     }).catch((error: unknown) => {
-      if (!cancelled) notify(error instanceof Error ? error.message : String(error), 'error');
+      if (!cancelled) {
+        const message = toUserErrorMessage(error);
+        if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('midi', 'error', message);
+        void linkDesktopViewModel.recordLog({ level: 'warning', category: 'device', device: 'midi', message, result: 'failed' }).catch(console.error);
+      }
     });
     return () => { cancelled = true; unsubscribe(); monitor.dispose(); };
   }, [monitor, notify]);

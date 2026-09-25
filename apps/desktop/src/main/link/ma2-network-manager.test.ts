@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { Ma2NetworkManager } from './ma2-network-manager';
 
-const memory = vi.hoisted(() => ({ file: null as string | null, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3|true|true|true', pause: null as Promise<void> | null }));
+const memory = vi.hoisted(() => ({ file: null as string | null, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', pause: null as Promise<void> | null }));
 vi.mock('node:fs/promises', () => ({ readFile: () => memory.file === null ? Promise.reject(Object.assign(new Error('Missing'), { code: 'ENOENT' })) : Promise.resolve(memory.file) }));
 vi.mock('./atomic-file', () => ({ writeFileAtomically: (_path: string, value: string) => { memory.file = value; return Promise.resolve(); } }));
 vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typeof import('./ma2-telnet')>(), Ma2Telnet: class {
@@ -10,7 +10,7 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
   command(line: string, match: (text: string) => string | null): Promise<string> { const token = /TBLINK_CAP_[a-f0-9]{32}/.exec(line)?.[0]; const result = match(`${token}:${memory.capabilities}\r\n`); return result ? Promise.resolve(result) : Promise.reject(new Error('No response')); }
   disconnect(): void { memory.closes += 1; this.state = 'disconnected'; }
 } }));
-beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3|true|true|true'; });
+beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true'; });
 const settings = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'lighting', autoConnect: true };
 function secretStore() {
   const values = new Map<string, string>();
@@ -81,7 +81,7 @@ it.each(['2.9.1', '3.0.0.5', '3.1.2.5', '3.3.4.3', '3.9.60.74'])('版本 %s 不�
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
   await manager.save({ settings }); await manager.connect();
   expect((await manager.checkCapabilities()).capabilities).toMatchObject({ version, objects: true, files: true, plugin: true });
-  memory.capabilities = 'Lua 5.1|false|false|true';
+  memory.capabilities = 'Lua 5.1:false:false:true';
   expect((await manager.checkCapabilities()).capabilities?.objects).toBe(false);
   expect(() => manager.get(settings)).toThrow();
   manager.disconnect(); expect(manager.status().capabilities).toBeNull();

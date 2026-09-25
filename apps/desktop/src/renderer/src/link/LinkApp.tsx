@@ -1,6 +1,7 @@
+import { toUserErrorMessage } from '@tb/core/link';
 import { useDocumentShortcuts } from './useDocumentShortcuts';
 import { useMidiPortMonitor } from './useMidiPortMonitor';
-import { prepareLoopMidi } from './view-models/loop-midi';
+import { initializeStartupDevices } from './startup-obs-connection';
 import { subscribeObsSceneSync } from './obs-scene-sync';
 import { ToolbarConnections } from './components/ToolbarConnections';
 import { ProjectDialog } from './components/ProjectDialog';
@@ -79,7 +80,8 @@ export function LinkApp(): JSX.Element {
 
   const notify = useCallback((message: string, tone: 'info' | 'error' = 'info') => {
     const id = crypto.randomUUID();
-    setNotices((current) => [...current, { id, message, tone }]);
+    const displayMessage = tone === 'error' ? toUserErrorMessage(message) : message;
+    setNotices((current) => [...current.filter(notice => notice.message !== displayMessage), { id, message: displayMessage, tone }]);
     if (tone === 'info') window.setTimeout(() => setNotices((current) => current.filter((notice) => notice.id !== id)), 5_000);
   }, []);
 
@@ -194,7 +196,7 @@ export function LinkApp(): JSX.Element {
   return <RendererErrorBoundary>
     <div className="app-shell" data-workspace={connectionsOpen ? 'settings' : page}>
       <a className="skip-link" href="#workspace-content">跳到工作区</a>
-      <AppTopbar status={<ToolbarConnections player={internalPlayer} onMtcSettings={() => { setSettingsCategory('audio'); openSettings(); }} />} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
+      <AppTopbar status={<ToolbarConnections player={internalPlayer} onSettings={category => { setSettingsCategory(category); openSettings(); }} />} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
       <AppSidebar editorHostRef={setEditorSidebarHost} playlistHostRef={setPlaylistHost} settingsCategory={settingsCategory} onSettingsCategoryChange={setSettingsCategory}
         page={page} internal={project?.playbackSource === 'internal'} editingLocked={editingLocked}
         obsState={obs.status} p1State={processes.p1.status} runtimeState={runtimeState} settingsOpen={connectionsOpen} onPageChange={(next) => { closeSettings(); setPage(next); }} onSettings={openSettings}
@@ -265,6 +267,7 @@ function AppTopbar({ status, connectHostRef, toolbarHostRef, onWindowAction }: {
   return <div className="app-topbar">
     <div className="persistent-project-toolbar" ref={toolbarHostRef} />
     <div className="topbar-status">{status}</div>
+    <div className="topbar-drag-region" title="拖动窗口，双击最大化或还原" aria-hidden="true" />
     <div className="topbar-connect" ref={connectHostRef} />
     <WorkspaceToolbar onWindowAction={onWindowAction} />
   </div>;
@@ -349,38 +352,24 @@ async function loadDesktopIntegrationState(
 ): Promise<void> {
   useIntegrationStore.getState().setInitialized(false); useIntegrationStore.getState().setError(null);
   try {
-    const [appInfo, profile, securityAvailable, obsSnapshot, snapshots] = await Promise.all([
+    const [appInfo, profile, securityAvailable, obsSnapshot] = await Promise.all([
       linkDesktopViewModel.getAppInfo(),
       linkDesktopViewModel.loadIntegrationProfile(),
       linkDesktopViewModel.getSecurityAvailability(),
-      linkDesktopViewModel.getObsSnapshot(),
-      linkDesktopViewModel.getExternalSnapshots()
+      linkDesktopViewModel.getObsSnapshot()
     ]);
     if (isCancelled()) return;
     useIntegrationStore.getState().setAppInfo(appInfo);
     useIntegrationStore.getState().setProfile(profile);
     useIntegrationStore.getState().setSecurityAvailable(securityAvailable);
     useIntegrationStore.getState().setObs(obsSnapshot);
-    for (const snapshot of snapshots) useIntegrationStore.getState().setProcess(snapshot);
-    if (profile) {
-      try { await prepareLoopMidi(profile); }
-      catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
-    }
-    if (profile && securityAvailable && obsSnapshot.status !== 'connected') {
-      const security = await linkDesktopViewModel.getSecurityPreflight();
-      if (security.credentialDecryptable) {
-        const connected = await linkDesktopViewModel.connectObs();
-        if (isCancelled()) return;
-        useIntegrationStore.getState().setObs(connected);
-        useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory());
-        notify('已自动连接 OBS 并刷新摄像头。');
-      }
-    }
+    useIntegrationStore.getState().setInitialized(true);
+    initializeStartupDevices(profile, securityAvailable, obsSnapshot, isCancelled);
   } catch (error) {
     if (!isCancelled()) {
-      const message = `桌面集成初始化失败：${error instanceof Error ? error.message : String(error)}`;
+      const message = `桌面集成初始化失败：${toUserErrorMessage(error)}`;
       useIntegrationStore.getState().setError(message); notify(message, 'error');
-      void linkDesktopViewModel.recordLog({ level: 'error', category: 'device', message }).catch((reason: unknown) => notify(`初始化错误日志写入失败：${String(reason)}`, 'error'));
+      void linkDesktopViewModel.recordLog({ level: 'error', category: 'device', message }).catch(console.error);
     }
   } finally {
     if (!isCancelled()) useIntegrationStore.getState().setInitialized(true);
@@ -403,7 +392,7 @@ class RendererErrorBoundary extends Component<{ children: ReactNode }, { error: 
   static getDerivedStateFromError(error: Error) { return { error }; }
   override componentDidCatch(error: Error, info: ErrorInfo): void { console.error('Renderer crashed', error, info); }
   override render(): ReactNode {
-    if (this.state.error) return <div className="fatal-screen"><Activity /><h1>团播联动台界面发生错误</h1><pre>{this.state.error.stack ?? this.state.error.message}</pre></div>;
+    if (this.state.error) return <div className="fatal-screen"><Activity /><h1>界面暂时无法显示</h1><p>请重新打开联动台恢复界面，已保存的工程不会受影响。</p></div>;
     return this.props.children;
   }
 }

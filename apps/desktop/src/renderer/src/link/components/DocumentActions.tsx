@@ -18,7 +18,7 @@ export function DocumentActions({ canUndo, canRedo, disabled, historyDisabled = 
   return <div className="document-actions" aria-label="工程编辑操作">
     <Button className="icon-button" disabled={!canUndo || historyDisabled} onClick={onUndo} title="撤销" aria-label="撤销"><Undo2 /></Button>
     <Button className="icon-button" disabled={!canRedo || historyDisabled} onClick={onRedo} title="重做" aria-label="重做"><Redo2 /></Button>
-    {path ? <span className="project-save-status" role="status">{dirty ? '待自动保存' : '已自动保存'}</span> : <Button className="secondary-button document-save-button" disabled={disabled} onClick={onSave} title="保存工程" aria-label="保存工程"><Save />选择保存位置</Button>}
+    {path ? dirty ? <span className="project-save-status" role="status">待自动保存</span> : null : <Button className="secondary-button document-save-button" disabled={disabled} onClick={onSave} title="保存工程" aria-label="保存工程"><Save />选择保存位置</Button>}
     {dirty ? <Button className="icon-button" title="备份未保存工程" aria-label="备份未保存工程" onClick={() => {
       const project = useDocumentStore.getState().project;
       if (!project) return;

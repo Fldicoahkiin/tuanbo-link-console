@@ -1,21 +1,21 @@
 {
   "name": "@tb/desktop",
   "private": true,
-  "version": "0.4.13",
+  "version": "0.4.27",
   "productName": "团播联动台",
   "type": "module",
   "main": "out/main/index.cjs",
   "scripts": {
-    "dev": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ./scripts/run-dev.mjs",
-    "build": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && electron-vite build",
+    "dev": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && node ./scripts/run-dev.mjs",
+    "build": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && electron-vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.e2e.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test:e2e": "playwright test",
     "probe:midi": "node ./scripts/probe-windows-midi.mjs",
     "probe:mtc": "node ./scripts/probe-windows-mtc.mjs",
     "probe:mtc:send": "node ./scripts/send-windows-mtc.mjs",
     "probe:mtc:runtime": "node ./scripts/probe-link-mtc-runtime.mjs",
-    "dist:dir": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && electron-vite build && electron-builder --dir",
-    "dist": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && electron-vite build && electron-builder --publish never"
+    "dist:dir": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && electron-vite build && electron-builder --dir",
+    "dist": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && electron-vite build && electron-builder --publish never"
   },
   "build": {
     "productName": "团播联动台",
@@ -80,6 +80,10 @@
       {
         "from": "../../tools/ibt/bin",
         "to": "ibt"
+      },
+      {
+        "from": "../../tools/midi-probe/bin/tblink-midi-probe.exe",
+        "to": "midi/tblink-midi-probe.exe"
       }
     ]
   },

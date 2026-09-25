@@ -1,4 +1,5 @@
 import { ibtExecutable } from './link/ibt-beat-service';
+import { WindowsMidiHealth, midiProbeExecutable, probeWindowsMidi, midiHealthMessage } from './link/windows-midi-health';
 import { LicenseService } from './link/license-service';
 import { writeFileAtomically } from './link/atomic-file';
 import { readLicenseMachineCode } from './link/license-machine';
@@ -14,7 +15,7 @@ import { ObsLivePreview } from './link/obs-live-preview';
 import { ObsNativeSeek } from './link/obs-native-seek';
 import { obsSourceCreateSchema, obsSourceNameSchema, obsSourceApplySchema, ma2BridgeRequestSchema, ma2ReadRequestSchema, ma2CompareRequestSchema, ma2ApplyRequestSchema, ma2CreateRequestSchema } from '@tb/schema';
 import { createMa2Timecode } from './link/ma2-create';
-import { ma2CatalogRequestSchema } from '@tb/schema';
+import { ma2CatalogRequestSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema, type Ma2ReadProgressUpdate, type LinkP1ProjectImportProgress } from '@tb/schema';
 import { readMa2Catalog } from './link/ma2-catalog';
 import { readMa2EffectLibrary } from './link/ma2-effect-library';
 import { ma2ExecutorReadRequestSchema } from '@tb/schema';
@@ -108,6 +109,8 @@ let documentDirty = false;
 let runtimeActive = false;
 let allowWindowClose = false;
 let quitFlowRunning = false;
+let restoreMainWindow: (() => void) | null = null;
+const midiHealth = new WindowsMidiHealth(() => probeWindowsMidi(midiProbeExecutable(app.isPackaged ? process.resourcesPath : undefined)));
 
 const projectService = new LinkProjectService();
 const p1ProjectService = new P1ProjectService(projectService);
@@ -120,6 +123,7 @@ const UPDATE_CREDENTIAL_ID = 'github.update.token';
 async function bootstrap(): Promise<void> {
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
   app.on('second-instance', () => {
+    if (!mainWindow) restoreMainWindow?.();
     if (mainWindow?.isMinimized()) mainWindow.restore();
     mainWindow?.show(); mainWindow?.focus();
   });
@@ -139,17 +143,31 @@ async function bootstrap(): Promise<void> {
   updateManager.setTokenConfigured(await profileStore.hasCredential(UPDATE_CREDENTIAL_ID));
   registerAssetProtocol();
   registerIpc(profileStore, obs, processManager, logger, integrationDetector, updateManager);
+  void midiHealth.check().then((result) => logger.record({
+    level: result === 'ready' ? 'info' : 'error', category: 'device', device: 'MIDI',
+    message: midiHealthMessage(result), details: { result }
+  })).catch((error: unknown) => console.error('MIDI 检测日志写入失败', error));
+  handle('link:midi-recheck', async () => {
+    const result = await midiHealth.check(true);
+    await logger.record({ level: result === 'ready' ? 'info' : 'error', category: 'device', device: 'MIDI', message: midiHealthMessage(result), details: { result } });
+    if (result !== 'ready') throw new Error(midiHealthMessage(result));
+  });
   createMainWindow(obs);
+  restoreMainWindow = () => {
+    if (mainWindow || quitFlowRunning) return;
+    allowWindowClose = false;
+    createMainWindow(obs);
+  };
 
   obs.subscribe((snapshot) => sendToRenderer('link:obs-status', snapshot));
   obs.subscribeInventoryChanges(() => sendToRenderer('link:obs-inventory-changed', null));
   processManager.subscribe((snapshot) => sendToRenderer('link:process-status', snapshot));
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow(obs);
+    if (BrowserWindow.getAllWindows().length === 0) restoreMainWindow?.();
   });
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin' && !quitFlowRunning) app.quit();
+    if (process.platform !== 'darwin' && (allowWindowClose || !quitFlowRunning)) app.quit();
   });
   app.on('before-quit', (event) => {
     if (allowWindowClose || quitFlowRunning) return;
@@ -161,7 +179,10 @@ async function bootstrap(): Promise<void> {
     quitFlowRunning = true;
     void obs.sources.discardPending().then(() => runQuitFlow(profileStore, processManager))
       .catch((error: unknown) => dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error)))
-      .finally(() => { quitFlowRunning = false; });
+      .finally(() => {
+        quitFlowRunning = false;
+        if (allowWindowClose && BrowserWindow.getAllWindows().length === 0) app.quit();
+      });
   });
 }
 
@@ -215,10 +236,19 @@ function createMainWindow(obs: ObsWebSocketAdapter): void {
   mainWindow.webContents.session.setPermissionCheckHandler((_webContents, permission, _origin, details) => {
     // Chromium requires the audio-device visibility check to enumerate output
     // endpoints. Actual capture requests remain denied below.
-    return permission === 'midi' || permission === 'midiSysex' || (permission === 'media' && details.mediaType === 'audio');
+    // MIDI must pass the asynchronous, isolated driver probe below. Granting it
+    // here would let Chromium enter a stalled Windows MIDI service directly.
+    return permission === 'media' && details.mediaType === 'audio';
   });
   mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(permission === 'midi' || permission === 'midiSysex' || permission === 'speaker-selection');
+    if (permission === 'midi' || permission === 'midiSysex') {
+      void midiHealth.check().then((result) => callback(result === 'ready'), (error: unknown) => {
+        console.error('MIDI 检测组件失败', error);
+        callback(false);
+      });
+      return;
+    }
+    callback(permission === 'speaker-selection');
   });
   mainWindow.on('close', (event) => {
     if (allowWindowClose) return;
@@ -291,7 +321,22 @@ function registerIpc(
   });
   const ma2Connections = new Ma2Connections(() => runtimeActive);
   const loopMidiService = new LoopMidiService();
-  const ma2Network = new Ma2NetworkManager(app.getPath('userData'), profileStore, () => runtimeActive);
+  const ma2Network = new Ma2NetworkManager(app.getPath('userData'), profileStore, () => runtimeActive, ma2PluginLua);
+  const ma2Reads = new Map<string, { senderId: number; controller: AbortController }>();
+  const beginMa2Read = (event: IpcMainInvokeEvent, id?: string): { signal: AbortSignal; report: ((progress: Ma2ReadProgressUpdate) => void) | undefined; finish: () => void } => {
+    if (id && ma2Reads.has(id)) throw new Error('读取任务编号重复');
+    const controller = new AbortController();
+    if (id) ma2Reads.set(id, { senderId: event.sender.id, controller });
+    return { signal: controller.signal,
+      report: id ? progress => { if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send('link:ma2-read-progress', ma2ReadProgressSchema.parse({ id, ...progress })); } : undefined,
+      finish: () => { if (id) ma2Reads.delete(id); }
+    };
+  };
+  handle('link:ma2-read-cancel', (event, value: unknown) => {
+    const id = z.string().uuid().parse(value);
+    const read = ma2Reads.get(id);
+    if (read?.senderId === event.sender.id) read.controller.abort();
+  });
   const ma2Discovery = new Ma2DiscoveryService();
   app.once('will-quit', () => ma2Discovery.cancel());
   handle('link:ma2-discover', async () => { await ma2NetworkReady; if (runtimeActive) throw new Error('请停止播放后搜索控台'); return ma2Discovery.search(ma2Network.status().profiles ?? []); });
@@ -337,29 +382,35 @@ function registerIpc(
     const snapshot = await (await getMa2Connection(request)).bridge.request('SNAPSHOT', request.target);
     return convertMa2Snapshot(snapshot, request.target, [], request.timeOriginMs);
   });
-  handle('link:ma2-catalog', async (_event, value: unknown) => {
+  handle('link:ma2-catalog', async (event, value: unknown) => {
     const request = ma2CatalogRequestSchema.parse(value);
     if (runtimeActive) throw new Error('请停止播放后扫描控台');
+    const task = beginMa2Read(event, request.progressId);
     try {
-      const catalog = await readMa2Catalog((await getMa2Connection(request)).bridge, () => runtimeActive);
+      await ma2NetworkReady;
+      if (task.signal.aborted) throw new Error('扫描已取消');
+      const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal) : await readMa2Catalog((await getMa2Connection(request)).bridge, () => runtimeActive, undefined, task.report, task.signal);
       for (const entry of catalog.entries) if (entry.error) await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `Timecode ${entry.target} 扫描失败：${entry.error}`, result: 'failed' });
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `已扫描 ${catalog.entries.length} 条 Timecode，${catalog.entries.filter(entry => entry.error).length} 条读取异常`, result: catalog.entries.some(entry => entry.error) ? 'failed' : 'succeeded' });
       return catalog;
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `控台目录扫描未完成：${error instanceof Error ? error.message : String(error)}`, result: 'failed' });
       throw error;
-    }
+    } finally { task.finish(); }
   });
-  handle('link:ma2-effect-library', async (_event, value: unknown) => {
+  handle('link:ma2-effect-library', async (event, value: unknown) => {
     const request = ma2CatalogRequestSchema.parse(value);
+    const task = beginMa2Read(event, request.progressId);
     try {
-      const result = await readMa2EffectLibrary((await getMa2Connection(request)).bridge, () => runtimeActive);
+      await ma2NetworkReady;
+      if (task.signal.aborted) throw new Error('素材读取已取消');
+      const result = request.network ? await ma2Network.readLibrary(request.network, task.report, 'library', task.signal) : await readMa2EffectLibrary((await getMa2Connection(request)).bridge, () => runtimeActive, task.report, task.signal);
       await logger.record({ level: result.errors.length ? 'error' : 'info', category: 'device', device: 'MA2', message: `效果库读取 ${result.sequences.length} 条序列；异常：${JSON.stringify(result.errors)}`, result: result.errors.length ? 'failed' : 'succeeded' });
       return result;
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `效果库读取失败：${String(error)}`, result: 'failed' });
       throw error;
-    }
+    } finally { task.finish(); }
   });
   handle('link:ma2-create', async (_event, value: unknown) => {
     const request = ma2CreateRequestSchema.parse(value);
@@ -617,9 +668,26 @@ function registerIpc(
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
-  handle('link:p1-import-project', (_event, payloadValue: unknown) => {
+  const p1Imports = new Map<string, { senderId: number; controller: AbortController }>();
+  handle('link:p1-import-cancel', (event, value: unknown) => {
+    const id = z.string().uuid().parse(value);
+    const task = p1Imports.get(id);
+    if (task?.senderId === event.sender.id) task.controller.abort();
+  });
+  handle('link:p1-import-project', async (event, payloadValue: unknown) => {
     const payload = linkP1ProjectImportPayloadSchema.parse(payloadValue);
-    return p1ProjectService.importProject(payload.p1ProjectPath, payload.linkProjectPath);
+    const id = payload.progressId;
+    if (id && p1Imports.has(id)) throw new Error('P1 导入任务编号重复');
+    const controller = new AbortController();
+    if (id) p1Imports.set(id, { senderId: event.sender.id, controller });
+    try {
+      return await p1ProjectService.importProject(payload.p1ProjectPath, payload.linkProjectPath, {
+        signal: controller.signal,
+        ...(id ? { onProgress: (progress: Omit<LinkP1ProjectImportProgress, 'id'>) => {
+          if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send('link:p1-import-progress', linkP1ProjectImportProgressSchema.parse({ id, ...progress } satisfies LinkP1ProjectImportProgress));
+        } } : {})
+      });
+    } finally { if (id) p1Imports.delete(id); }
   });
   handle('link:p1-preview-export', (_event, payloadValue: unknown) => {
     const payload = linkP1ProjectExportPreviewPayloadSchema.parse(payloadValue);
@@ -668,9 +736,8 @@ function registerIpc(
     const profile = await requireProfile(profileStore);
     const password = await profileStore.loadCredential(profile.obs.credentialId);
     knownSecrets.add(password);
-    const snapshot = await obs.connect(profile.obs.webSocketUrl, password, profile.obs.startupTimeoutMs);
-    if (snapshot.status === 'connected' && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(profile.obs.webSocketUrl).hostname)) await nativeSeek.prepare(profile.obs.webSocketUrl);
-    return snapshot;
+    // Native seeking resolves its process when used; it must not invalidate WebSocket authentication.
+    return obs.connect(profile.obs.webSocketUrl, password, profile.obs.startupTimeoutMs);
   };
   handle('link:obs-disconnect', () => obs.disconnect());
   handle('link:obs-snapshot', () => obs.getSnapshot());
@@ -686,7 +753,7 @@ function registerIpc(
       const cachePath = join(dirname(path), 'cache', 'obs-seek-jpeg2000', `${asset.sha256}.mkv`);
       const playbackPath = preciseSeeking && asset.kind === 'video'
         ? await mediaPreviewService.ensureObsSeekVideo(path, asset.relativePath, asset.sha256) : absolutePath;
-      await obs.mediaScenes.prepare(project.projectId, asset, absolutePath, playbackPath, cachePath);
+      await obs.mediaScenes.prepare(project.projectId, asset, absolutePath, playbackPath, cachePath, join(dirname(path), 'cache', 'obs-seek-jpeg2000', `${asset.sha256}.rgba.mkv`));
     }
   });
   handle('link:obs-source-create', (_event, value: unknown) => obs.sources.create(obsSourceCreateSchema.parse(value)));
@@ -712,7 +779,11 @@ function registerIpc(
     const payload = linkManagedMediaExecutionPayloadSchema.parse(value);
     const absolutePath = projectService.resolveMediaAsset(payload.projectPath, payload.event.relativePath);
     const address = (await requireProfile(profileStore)).obs.webSocketUrl;
-    try { await obs.mediaScenes.seek(payload.event, absolutePath, (name, position) => nativeSeek.seek(address, name, position)); }
+    try {
+      // Resolve the transport before starting a short video: process discovery can outlast the clip.
+      await nativeSeek.prepare(address);
+      await obs.mediaScenes.seek(payload.event, absolutePath, (name, position) => nativeSeek.seek(address, name, position));
+    }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }
   });
   handle('link:obs-connect', connectObs);
@@ -722,7 +793,7 @@ function registerIpc(
     if (liveBridgeInstalled) return;
     liveBridgeInstallation ??= installObsLiveBridge(app.isPackaged
       ? join(process.resourcesPath, 'obs/tblink-realtime-preview.dll')
-      : join(app.getAppPath(), '../../tools/obs/native-preview/tblink-realtime-preview.dll'));
+      : join(__dirname, '../../../../tools/obs/native-preview/tblink-realtime-preview.dll'));
     try {
       await liveBridgeInstallation;
       liveBridgeInstalled = true;
@@ -737,7 +808,7 @@ function registerIpc(
     install: async (allowElevation) => {
       const result = await installObsLiveBridge(app.isPackaged
         ? join(process.resourcesPath, 'obs/tblink-realtime-preview.dll')
-        : join(app.getAppPath(), '../../tools/obs/native-preview/tblink-realtime-preview.dll'),
+        : join(__dirname, '../../../../tools/obs/native-preview/tblink-realtime-preview.dll'),
       allowElevation ? elevateObsPluginInstall : undefined);
       liveBridgeInstalled = true;
       return result === 'installed';

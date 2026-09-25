@@ -100,6 +100,7 @@
 .unified-player .player-options .player-fades { width: auto; gap: 4px; }
 .unified-player .player-fades button { padding: 4px 7px; white-space: nowrap; }
 .unified-player .player-error { grid-row: 5; margin: 0; padding: 4px 8px; font-size: var(--text-caption); background: var(--surface); border: 1px solid var(--separator); border-radius: 5px; z-index: 2; }
+.unified-player .player-notice { grid-row: 5; margin: 0; padding: 4px 8px; font-size: var(--text-caption); background: var(--surface); border: 1px solid var(--separator); border-radius: 5px; z-index: 2; }
 .unified-player .p1-audio-monitor { grid-row: 3 / 5; padding: 0; }
 .p1-project-ribbon { justify-content: flex-start; align-items: center; gap: 8px; min-height: 54px; padding: 0 125px 8px 0; border-bottom: 1px solid var(--separator); }
 .p1-project-ribbon .project-player-setup { flex: 1; min-width: 0; display: flex; flex-wrap: nowrap; gap: 8px; padding: 0; border: 0; }
@@ -246,7 +247,7 @@
   -webkit-app-region: no-drag;
 }
 .persistent-project-toolbar { width: calc(100% - 132px); -webkit-app-region: drag; }
-.persistent-project-toolbar .p1-project-ribbon { padding: 0 12px; -webkit-app-region: drag; }
+.persistent-project-toolbar .p1-project-ribbon { padding: 0 12px; -webkit-app-region: no-drag; }
 .persistent-project-toolbar .project-player-setup { flex: 0 0 auto; }
 .toolbar-drag-space { flex: 1 1 40px; align-self: stretch; min-width: 24px; -webkit-app-region: drag; }
 .sidebar-title-space { height: 48px; flex: 0 0 48px; -webkit-app-region: drag; }

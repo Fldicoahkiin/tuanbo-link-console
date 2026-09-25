@@ -1,8 +1,20 @@
 import { z } from 'zod';
 import { ma2NetworkTargetSchema } from './ma2-bridge';
+import { lightingMa2CueCatalogSchema } from './lighting';
 
-export const ma2CatalogRequestSchema = z.object({ dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional() }).strict();
+export const ma2CatalogRequestSchema = z.object({ dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(), progressId: z.string().uuid().optional() }).strict();
 export type Ma2CatalogRequest = z.infer<typeof ma2CatalogRequestSchema>;
+export const ma2ReadProgressSchema = z.object({
+  id: z.string().uuid(),
+  phase: z.enum(['connecting', 'library', 'timecodes', 'verification', 'previews', 'raw']),
+  completed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  detail: z.string().max(128),
+  show: z.string().max(4096).optional(),
+  sequences: lightingMa2CueCatalogSchema.max(1).optional()
+}).strict().refine(value => value.completed <= value.total, '读取进度超过总数');
+export type Ma2ReadProgress = z.infer<typeof ma2ReadProgressSchema>;
+export type Ma2ReadProgressUpdate = Omit<Ma2ReadProgress, 'id'>;
 export const ma2ObjectDirectorySchema = z.object({
   show: z.string().min(1).max(4096), generation: z.string().min(1).max(128), version: z.string().min(1).max(128),
   entries: z.array(z.object({ target: z.number().int().min(1).max(99999), name: z.string().max(4096) }).strict()).max(10000)

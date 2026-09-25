@@ -241,6 +241,19 @@ export class CueRuntime {
     return this.ingest(sample);
   }
 
+  /** Audio has not advanced while its output/OBS transport was being prepared. */
+  anchorMediaClock(sample: MtcSample): RuntimeUpdate {
+    if (this.project.playbackSource !== 'internal' || !['armed', 'running'].includes(this.state)
+      || !this.lastSample || sample.frameRate !== this.lastSample.frameRate
+      || sample.totalFrames < this.previousFrame
+      || sample.totalFrames - this.previousFrame > nominalFramesPerSecond(sample.frameRate) / 4) {
+      return this.fail('本机播放起点与准备位置不一致，请重新定位后播放');
+    }
+    const elapsed = (sample.totalFrames - this.previousFrame) * 1000 / nominalFramesPerSecond(sample.frameRate);
+    this.lastSample = { ...this.lastSample, receivedAtMs: sample.receivedAtMs - elapsed };
+    return this.update();
+  }
+
   manualGo(cueId: string): RuntimeUpdate {
     if (!this.manualTakeover || !this.selectedItem) return this.fail('手动接管尚未确认');
     const cue = this.selectedItem.cues.find((candidate) => candidate.id === cueId);

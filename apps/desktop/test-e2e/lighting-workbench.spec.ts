@@ -165,16 +165,16 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
     });
     await page.getByRole('button', { name: '读取控台', exact: true }).click();
     const importDialog = page.getByLabel('读取控台效果库', { exact: true });
-    await expect(importDialog.getByText('蓝色扫光', { exact: true })).toBeVisible();
+    await expect(importDialog.getByText('光束 · 蓝色扫光', { exact: true })).toBeVisible();
     await importDialog.getByText('灯具对应关系 · 设置一次，批量分类', { exact: true }).click();
     await importDialog.getByLabel('光束 灯具编号', { exact: true }).fill('101-110');
     await importDialog.getByRole('button', { name: '按灯具编号分类', exact: true }).click();
     await expect(importDialog.getByLabel('分类 10/1.250', { exact: true })).toHaveValue('光束');
     await importDialog.getByLabel('执行器 10/1.250', { exact: true }).fill('1.110');
     await importDialog.getByLabel('选择 10/1.250', { exact: true }).check();
-    await importDialog.getByRole('button', { name: '加入效果库 · 1', exact: true }).click();
+    await importDialog.getByRole('button', { name: '加入素材库 · 1', exact: true }).click();
     await expect(importDialog).toHaveCount(0);
-    await expect(page.getByLabel('选择效果 蓝色扫光', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('选择效果 光束 · 蓝色扫光', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '音频 Cue 8', exact: true }).click();
     await page.getByRole('button', { name: '向点位添加素材', exact: true }).click();
     const beforeComposition = await page.locator('.waveform-cue-point').count();
@@ -187,7 +187,7 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
     await page.keyboard.press('Control+s');
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(entry => entry.events)).some(event => event.kind === 'ma2' && event.label === '蓝光加频闪')).toBe(true);
     await page.getByRole('button', { name: '素材管理', exact: true }).click();
-    await page.getByLabel('素材名称 蓝色扫光', { exact: true }).fill('我的蓝光');
+    await page.getByLabel('素材名称 光束 · 蓝色扫光', { exact: true }).fill('我的蓝光');
     while (await page.getByRole('button', { name: '删除分类 1', exact: true }).count()) await page.getByRole('button', { name: '删除分类 1', exact: true }).click();
     for (const name of ['我的常用', '柔和', '强烈']) { await page.getByRole('textbox', { name: '新分类', exact: true }).fill(name); await page.getByRole('button', { name: '添加分类', exact: true }).click(); }
     await page.getByRole('button', { name: '保存菜单', exact: true }).click();

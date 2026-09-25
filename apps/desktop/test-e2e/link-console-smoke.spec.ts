@@ -1394,7 +1394,7 @@ test('编辑器共用正式播放器，打点和菜单切换不中断，暂停�
   const navigation = page.getByRole('navigation', { name: '主要工作区' });
   await navigation.getByRole('button', { name: '编辑器', exact: true }).click();
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.send('link:obs-status', { status: 'connected', obsVersion: '32.2.2', webSocketVersion: '5.6.3', error: null }));
-  await expect(page.getByLabel('连接状态', { exact: true })).toContainText('主控本机播放');
+  await expect(page.getByLabel('全部连接状态', { exact: true })).toContainText('P1 播放器未启用');
   await expect(page.locator('.timeline-toolbar > audio')).toHaveCount(0);
   await page.getByRole('button', { name: '录制灯光', exact: true }).click();
   await expect(page.getByRole('button', { name: '结束录制', exact: true })).toBeVisible();
@@ -2192,6 +2192,35 @@ test('已保存工程会自动保存修改并在重新打开时恢复', async ({
   await expect(page.locator('.p1-media-card')).toHaveCount(1);
 });
 
+test('多轨时间线滚动时刻度固定、轨道对齐且底部可达', async ({}, testInfo) => {
+  const project = parseLinkProject({ ...createEmptyLinkProject('时间线滚动验收'), rundown: [{
+    id: 'song', title: '多轨测试', visualLayers: Array.from({ length: 14 }, (_, index) => ({ id: `layer-${index}`, name: `图层 ${index + 1}`, visible: true, locked: false })),
+    cues: Array.from({ length: 14 }, (_, index) => ({ id: `cue-${index}`, name: `机位 ${index + 1}`, layerId: `layer-${index}`, timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 60000, actions: [{ id: `scene-${index}`, kind: 'obs.setProgramScene', label: '切换', sceneName: `测试机位 ${index + 1}` }] }))
+  }] });
+  const path = testInfo.outputPath('scroll.tblink'); await writeFile(path, JSON.stringify(project));
+  await application.evaluate(({ dialog }, filePath) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [filePath] }); }, path);
+  await page.getByRole('button', { name: '打开工程', exact: true }).click();
+  await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
+  for (const size of [[1200, 800], [1920, 1080]]) {
+    await application.evaluate(({ BrowserWindow }, dimensions) => { const window = BrowserWindow.getAllWindows()[0]!; window.unmaximize(); window.setSize(dimensions[0]!, dimensions[1]!); }, size);
+    const viewport = page.locator('.timeline-viewport');
+    await viewport.evaluate(element => { element.scrollTop = element.scrollHeight; element.scrollLeft = 150; });
+    await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    await expect.poll(async () => {
+      const ruler = await page.locator('.timeline-ruler').boundingBox(); const bounds = await viewport.boundingBox();
+      return Math.abs((ruler?.y ?? -1000) - (bounds?.y ?? 0));
+    }).toBeLessThan(2);
+    const bottomHeading = page.locator('.visual-layer-heading').last(); const bottomClip = page.locator('.timeline-cue').last();
+    await expect(bottomClip).toBeInViewport();
+    await expect.poll(async () => Math.abs((await bottomHeading.boundingBox())!.y + 2 - (await bottomClip.boundingBox())!.y)).toBeLessThan(2);
+    const bounds = (await viewport.boundingBox())!;
+    expect((await bottomClip.boundingBox())!.y + (await bottomClip.boundingBox())!.height).toBeLessThan(bounds.y + bounds.height);
+    await page.mouse.move(bounds.x + 100, bounds.y + 100); await page.mouse.wheel(0, -180);
+    await expect.poll(() => viewport.evaluate(element => element.scrollTop < element.scrollHeight - element.clientHeight)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`timeline-${size[0]}.png`) });
+  }
+});
+
 test('Cue 时间线的统一图层、取消拖动、适配、滚动和播放键盘行为稳定', async ({}, testInfo) => {
   await beginNewProject();
   await page.getByLabel('工程名称').fill('时间线回归工程');
@@ -2266,7 +2295,7 @@ test('Cue 时间线的统一图层、取消拖动、适配、滚动和播放键�
   await page.locator('.timeline-clip.audio').first().click();
   await page.locator('.reference-timeline').press('Delete');
   await expect(layerHeadings).toHaveCount(9);
-  const timelineShell = page.locator('.timeline-shell');
+  const timelineShell = page.locator('.timeline-viewport');
   await expect.poll(() => timelineShell.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
   await timelineShell.evaluate((element) => { element.scrollTop = element.scrollHeight; });
   await expect.poll(() => timelineShell.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
@@ -2370,7 +2399,7 @@ test('新建独立工程先保存原节目，取消保存不会清空当前内�
 test('右上角操作栏不属于窗口拖动区，更多和窗口按钮可点击', async () => {
   await beginNewProject();
   await page.getByRole('button', { name: '创建工程', exact: true }).click();
-  for (const selector of ['.project-file-menu', '.project-player-setup', '.p1-project-actions', '.project-file-menu > summary', '.unified-toolbar', '.window-controls button']) {
+  for (const selector of ['.p1-project-ribbon', '.project-file-menu', '.project-player-setup', '.p1-project-actions', '.project-file-menu > summary', '.unified-toolbar', '.window-controls button']) {
     const regions = await page.locator(selector).evaluateAll((elements) => elements.map((element) => getComputedStyle(element).getPropertyValue('-webkit-app-region')));
     expect(regions.length).toBeGreaterThan(0);
     expect(regions.every((region) => region === 'no-drag')).toBe(true);
@@ -2448,15 +2477,16 @@ test('MIDI 顶部状态在启动和插拔时更新，不依赖打开设置', asy
 });
 
 test('顶部连接状态跨页面显示，并跟随 OBS 连接变化', async () => {
-  const status = page.getByLabel('连接状态', { exact: true });
-  await expect(status).toContainText('OBS未连接');
-  await expect(status).toContainText('MIDI未配置');
+  const status = page.getByLabel('全部连接状态', { exact: true });
+  await expect(status.getByRole('button', { name: 'OBS 控制：未连接', exact: true })).toBeVisible();
+  await expect(status).toContainText('系统 MIDI');
+  for (const name of ['OBS 预览', '音频输出', '虚拟 MIDI', 'P1 播放器', 'MA2 网络', 'MA2 工程通信', 'P1 时间码输入', 'P1 控制输出', '灯光时间码输出', '播放控制输入', '灯光 Cue 输出']) await expect(status).toContainText(name);
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.send('link:obs-status', { status: 'connected', obsVersion: '32.2.2', webSocketVersion: '5.6.3', error: null }));
-  await expect(status).toContainText('OBS已连接');
+  await expect(status.getByRole('button', { name: 'OBS 控制：已连接', exact: true })).toHaveCSS('color', 'rgb(107, 218, 163)');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(status).toBeVisible();
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.send('link:obs-status', { status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null }));
-  await expect(status).toContainText('OBS未连接');
+  await expect(status.getByRole('button', { name: 'OBS 控制：未连接', exact: true })).toBeVisible();
   await expect(page.locator('.project-more-actions')).toHaveCount(0);
 });
 
@@ -2469,7 +2499,8 @@ test('顶部贯穿整个窗口，三个窗口按钮和工具栏同层', async ()
   expect(bar!.x).toBe(shell!.x);
   expect(bar!.width).toBe(shell!.width);
   expect(controls!.y).toBe(bar!.y);
-  expect(controls!.height).toBe(bar!.height);
+  expect(controls!.height).toBe(54);
+  expect(bar!.height).toBe(controls!.height);
   expect(controls!.x + controls!.width).toBe(bar!.x + bar!.width);
   expect(sidebar!.y).toBeGreaterThanOrEqual(bar!.y + bar!.height);
   expect(await page.locator('.unified-toolbar').evaluate((element) => getComputedStyle(element).position)).toBe('static');
@@ -3284,7 +3315,8 @@ test('一键连接仅保留顶部入口，连接中禁止重复点击', async ({
   await expect.poll(() => application.evaluate(() => Number(Reflect.get(globalThis, '__quickConnectCalls')))).toBe(1);
   await application.evaluate(() => { const release: unknown = Reflect.get(globalThis, '__releaseQuickConnect'); if (typeof release === 'function') (release as () => void)(); });
   await expect(device).toHaveCount(0); await expect(top).toBeEnabled();
-  await page.getByRole('dialog', { name: '设备连接检查结果' }).getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '设备连接检查结果' })).toHaveCount(0);
+  await expect(page.getByLabel('全部连接状态').getByRole('button', { name: '程序识别：待处理', exact: true })).toBeVisible();
 
   await expect(page.locator('.device-maintenance-section').getByRole('button', { name: '一键识别并连接', exact: true })).toHaveCount(0);
   await top.click(); await expect(top).toBeDisabled();
@@ -3300,7 +3332,7 @@ test('一键连接仅保留顶部入口，连接中禁止重复点击', async ({
 });
 
 
-test('顶部连接状态切换主菜单位置固定且不遮挡操作', async ({}, testInfo) => {
+test('顶部单行连接状态跨主菜单显示且不遮挡操作', async ({}, testInfo) => {
   await beginNewProject(); await page.getByLabel('工程名称').fill('顶部固定位置');
   await page.getByRole('button', { name: '创建工程' }).click(); await addEmptyProgram();
   const main = page.getByRole('navigation', { name: '主要工作区' });
@@ -3312,9 +3344,22 @@ test('顶部连接状态切换主菜单位置固定且不遮挡操作', async ({
       await expect(page.locator('.toolbar-connections')).toHaveCount(1);
       const box = await page.locator('.toolbar-connections').boundingBox(); if (!box) throw new Error('顶部连接状态不可见'); bounds.push(box);
       const connect = await page.getByRole('button', { name: '顶部一键连接' }).boundingBox();
-      expect(box.x + box.width).toBeLessThan(connect!.x);
+      expect(box.y).toBeLessThan(connect!.y + connect!.height);
+      expect(box.x + box.width).toBeLessThanOrEqual(connect!.x);
+      expect((await page.locator('.app-topbar').boundingBox())!.height).toBe(54);
+      const drag = await page.locator('.topbar-drag-region').boundingBox();
+      expect(drag!.width).toBeGreaterThanOrEqual(80);
+      expect(drag!.height).toBe(54);
+      expect(drag!.x).toBeGreaterThanOrEqual(box.x + box.width);
+      expect(drag!.x + drag!.width).toBeLessThanOrEqual(connect!.x);
+      await page.getByRole('button', { name: /^OBS 控制：/ }).click();
+      await expect(page.locator('.connection-inline-detail')).toBeVisible();
+      await page.getByRole('button', { name: /^OBS 控制：/ }).click();
+      await expect(page.locator('.connection-inline-detail')).toHaveCount(0);
+      await expect(page.locator('.persistent-project-toolbar .import-player-music')).toHaveCount(0);
+      await expect(page.getByText('已自动保存', { exact: true })).toHaveCount(0);
       await page.screenshot({ path: testInfo.outputPath(`fixed-status-${width}-${name}.png`) });
     }
-    expect(bounds[1]).toEqual(bounds[0]); expect(bounds[2]).toEqual(bounds[0]);
+    expect(bounds[1]!.y).toBe(bounds[0]!.y); expect(bounds[2]!.y).toBe(bounds[0]!.y);
   }
 });

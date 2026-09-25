@@ -1,4 +1,4 @@
-import { allocateMediaTimecodeRanges, lightingTimeOrigin, millisecondsToFrameNumber, playlistItems, programPlaylists } from '@tb/core/link';
+import { allocateMediaTimecodeRanges, lightingTimeOrigin, millisecondsToFrameNumber, playlistItems, programPlaylists, toUserErrorMessage } from '@tb/core/link';
 import type { IntegrationProfile, LinkProject } from '@tb/schema';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { LightingMidiOutput } from '../../registry/lighting-midi-output';
@@ -16,13 +16,16 @@ export type InternalPlayerState = {
   mtcPortName?: string | null;
   mtcSentPositionMs?: number | null;
   errorTitle: string | null;
+  notice: string | null;
+  mtcConnectionFailed: boolean;
 };
 export const emptyInternalPlayerState: InternalPlayerState = {
-  status: 'stopped', itemId: null, positionMs: 0, durationMs: 0, volume: 100, endAction: 'pause', error: null, errorTitle: null, playedItemIds: [], mtcEnabled: true, mtcPositionMs: null
+  status: 'stopped', itemId: null, positionMs: 0, durationMs: 0, volume: 100, endAction: 'pause', error: null, errorTitle: null, notice: null, playedItemIds: [], mtcEnabled: true, mtcPositionMs: null, mtcConnectionFailed: false
 };
 type Dependencies = {
-  prepare: (itemId: string, positionMs: number, reuseSession?: boolean) => Promise<void>;
+  prepare: (itemId: string, positionMs: number, options: { reuseSession: boolean; mtcOutputEnabled: boolean }) => Promise<void>;
   ingest: (positionMs: number) => Promise<void>;
+  started?: (positionMs: number) => void;
   scrub?: ((positionMs: number) => Promise<void>) | undefined;
   pause: () => Promise<void>;
   stop: () => Promise<void>;
@@ -63,7 +66,7 @@ export class InternalPlaybackController {
     const reuseSession = this.state.itemId === itemId && ['playing', 'paused'].includes(this.state.status);
     if (this.state.itemId && this.state.itemId !== itemId && ['playing', 'paused'].includes(this.state.status)) this.markPlayed();
     const generation = ++this.generation;
-    this.silence(); this.update({ status: 'preparing', itemId, error: null, errorTitle: null });
+    this.silence(); this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, mtcConnectionFailed: false });
     const operation = this.tail.then(async () => {
       if (!this.current(generation)) return;
       await this.dependencies.stop();
@@ -85,15 +88,23 @@ export class InternalPlaybackController {
       }
       if (!this.current(generation)) return;
       const config = this.dependencies.configuration();
-      await this.output.prepare(this.audio, config.outputDeviceId, config.audioSampleRate ?? 48000);
+      const outputRoute = await this.output.prepare(this.audio, config.outputDeviceId, config.audioSampleRate ?? 48000);
       if (!this.current(generation)) return;
+      if (outputRoute === 'default-fallback') this.update({ notice: '原音频输出设备已断开，本次播放改用 Windows 默认设备。请在音频输出设置中确认线路。' });
       this.directLighting = item.lighting?.outputMode === 'direct';
-      const mtcPortName = await this.mtc.connect(this.directLighting ? null : config.mtcPortName, !this.directLighting && this.state.mtcEnabled && Boolean(item.p1Media || item.lighting?.ma2Bindings?.length || item.lighting?.tracks.some(track => track.clips.some(clip => clip.events.length))));
+      const sendMtc = !this.directLighting && this.state.mtcEnabled;
+      let mtcPortName: string | null | undefined;
+      try {
+        mtcPortName = await this.mtc.connect(sendMtc ? config.mtcPortName : null, sendMtc && Boolean(item.p1Media || item.lighting?.ma2Bindings?.length || item.lighting?.tracks.some(track => track.clips.some(clip => clip.events.length))));
+      } catch (error) {
+        if (this.current(generation)) this.update({ mtcConnectionFailed: true });
+        throw error;
+      }
       if (!this.current(generation)) return;
-      this.update({ mtcPortName: this.directLighting ? null : mtcPortName ?? config.mtcPortName, mtcSentPositionMs: null });
+      this.update({ mtcPortName: sendMtc ? mtcPortName ?? config.mtcPortName : null, mtcSentPositionMs: null });
       if (item.lighting) await this.lighting.prepare(item.lighting, config.lightingProfile ?? null, positionMs);
       if (!this.current(generation)) return;
-      await this.dependencies.prepare(itemId, positionMs, reuseSession);
+      await this.dependencies.prepare(itemId, positionMs, { reuseSession, mtcOutputEnabled: sendMtc });
       if (!this.current(generation)) return;
       this.update({ volume: item.playback?.volume ?? 100, ...(item.playback ? { endAction: item.playback.endAction } : {}) });
       this.audio.currentTime = positionMs / 1000; this.audio.volume = this.state.volume / 100;
@@ -107,6 +118,8 @@ export class InternalPlaybackController {
       if (config.fadeInMs) this.audio.volume = 0;
       await this.audio.play();
       if (!this.current(generation)) { this.silence(); return; }
+      this.dependencies.started?.(this.audio.currentTime * 1000);
+      this.lastAdvanced = performance.now();
       if (config.fadeInMs) this.ramp(0, this.state.volume / 100, config.fadeInMs, false);
       this.timer = setInterval(() => this.tick(), 8);
     });
@@ -131,12 +144,13 @@ export class InternalPlaybackController {
       if (!this.current(generation)) return;
       this.audio.volume = this.state.volume / 100; await this.audio.play(); this.lastAdvanced = performance.now();
       if (!this.current(generation)) { this.silence(); return; }
+      this.dependencies.started?.(this.audio.currentTime * 1000);
       this.update({ status: 'playing' }); this.timer = setInterval(() => this.tick(), 8);
     } catch (error) { this.fail(error); }
   }
 
   async stop(): Promise<void> {
-    ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0 });
+    ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null });
     // Publish cleanup to the same queue before another Play can start preparing OBS.
     const operation = this.tail.then(() => this.dependencies.stop());
     this.tail = operation.catch((error: unknown) => this.fail(error));
@@ -144,7 +158,7 @@ export class InternalPlaybackController {
   }
   async reset(): Promise<void> { await this.stop(); if (this.state.status !== 'error') this.update({ itemId: null, playedItemIds: [], durationMs: 0 }); }
 
-  externalStop(): void { ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0 }); }
+  externalStop(): void { ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null }); }
   freeze(message: string): void { ++this.generation; this.silence(); this.update({ status: 'error', error: message, errorTitle: '播放已中断' }); }
   seek(positionMs: number): Promise<void> {
     if (!this.state.itemId) return Promise.resolve();
@@ -186,7 +200,7 @@ export class InternalPlaybackController {
   setPlaylist(playlistId: string): void { this.update({ playlistId }); }
   toggleMtc(): void {
     this.mtc.stop(); this.mtcSentPositionMs = null;
-    this.update({ mtcEnabled: !this.state.mtcEnabled, mtcSentPositionMs: null });
+    this.update({ mtcEnabled: !this.state.mtcEnabled, mtcSentPositionMs: null, mtcPortName: null });
     if (this.state.mtcEnabled && !this.directLighting && !this.state.mtcPortName && ['playing', 'paused'].includes(this.state.status)) this.freeze('灯光时间码输出尚未连接，请重新点击播放以自动检测 MIDI 接口');
   }
   toggle(): Promise<void> {
@@ -279,11 +293,12 @@ export class InternalPlaybackController {
   }
   private fail(error: unknown): void {
     const errorTitle = error instanceof PreflightBlockedError ? '播放未开始：预检未通过'
+      : this.state.mtcConnectionFailed ? '播放未开始：时间码输出不可用'
       : this.state.status === 'preparing' ? '播放未开始：准备失败' : '播放操作失败';
-    ++this.generation; let message = error instanceof Error ? error.message : String(error);
-    try { this.silence(); } catch (cleanup) { message += `；灯光释放失败：${String(cleanup)}`; }
-    this.update({ status: 'error', error: message, errorTitle });
-    void this.dependencies.stop().catch((cleanup: unknown) => this.update({ error: `${message}；清理失败：${String(cleanup)}` }));
+    ++this.generation; let message = toUserErrorMessage(error);
+    try { this.silence(); } catch (cleanup) { message += `；灯光释放失败：${toUserErrorMessage(cleanup)}`; }
+    this.update({ status: 'error', error: message, errorTitle, notice: null });
+    void this.dependencies.stop().catch((cleanup: unknown) => this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` }));
   }
   private silence(): void {
     this.audio.pause(); this.mtc.stop();

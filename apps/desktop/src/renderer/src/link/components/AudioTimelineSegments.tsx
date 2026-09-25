@@ -12,7 +12,7 @@ export function AudioTimelineSegments({ samples, editor, pixelsPerSecond, onSele
   };
   const begin = (event: PointerEvent<HTMLElement>, segment: AudioSegment, edge: Drag['edge']): void => {
     if (event.button !== 0) return;
-    event.stopPropagation(); editor.select(segment.id); onSelect(segment.id);
+    event.stopPropagation(); event.currentTarget.closest<HTMLElement>('.audio-timeline-segment')?.focus({ preventScroll: true }); editor.select(segment.id); onSelect(segment.id);
     if (edge === 'move' && (!(event.target instanceof Element) || !event.target.closest('.audio-segment-name'))) {
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);

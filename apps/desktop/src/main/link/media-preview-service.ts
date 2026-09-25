@@ -40,7 +40,7 @@ export class MediaPreviewService {
     const source = this.projects.resolveMediaAsset(projectPath, relativePath);
     if (!await this.verified.verify(source, sha256)) throw new Error('原素材完整性校验失败，请重新导入');
     const directory = join(dirname(resolve(projectPath)), 'cache', 'obs-seek-jpeg2000');
-    const destination = join(directory, `${sha256}.mkv`);
+    const destination = join(directory, `${sha256}.rgba.mkv`);
     const checksumPath = `${destination}.sha256`;
     if (await pathExists(destination) && await pathExists(checksumPath)) {
       const digest = (await readFile(checksumPath, 'utf8')).trim();
@@ -53,7 +53,7 @@ export class MediaPreviewService {
     await generateTemporaryOutput(temporaryPath, destination, async () => {
       await this.executeFfmpeg(this.resolveExecutable(), [
         '-hide_banner', '-loglevel', 'error', '-y', '-i', source,
-        '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'jpeg2000', '-pred', '1', '-format', 'j2k', '-threads', '2',
+          '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'ffv1', '-level', '3', '-g', '1', '-pix_fmt', 'bgra', '-threads', '2',
         '-c:a', 'copy', '-avoid_negative_ts', 'disabled', temporaryPath
       ]);
       if (!await this.verified.verify(source, sha256)) throw new Error('原素材在生成定位缓存时发生变化');

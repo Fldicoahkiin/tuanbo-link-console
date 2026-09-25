@@ -2,16 +2,25 @@ import type { LightingClip, LightingDocument, LightingEvent, LightingTrack } fro
 import { LightingTempoMap, lightingEventTime, lightingCurveValue } from './lighting-edit';
 
 export type LightingPacket = { atMs: number; portProfileId: string; bytes: number[]; noteKey: string | null; phase: 'on' | 'off' | 'control' };
+/** Inspect connection dependencies without encoding events or expanding automation curves. */
+export function collectLightingOutputProfileIds(document: LightingDocument): string[] {
+  return [...new Set(activeLightingTracks(document)
+    .filter(track => track.clips.some(clip => !clip.muted && clip.events.length > 0))
+    .map(track => track.portProfileId || 'lighting-events-output'))];
+}
+function activeLightingTracks(document: LightingDocument): LightingTrack[] {
+  if (document.outputMode === 'timecode') return [];
+  const solo = document.tracks.some(track => track.solo && !track.muted);
+  return document.tracks.filter(track => !track.muted && (!solo || track.solo));
+}
 export function compileLightingPackets(document: LightingDocument, ma2DeviceId = 127): LightingPacket[] {
   if (!Number.isInteger(ma2DeviceId) || ma2DeviceId < 0 || ma2DeviceId > 127) throw new Error('MA2 MSC 设备号应为 0–127');
   if (document.outputMode === 'timecode') return [];
   const map = new LightingTempoMap(document.tempos);
-  const solo = document.tracks.some((track) => track.solo && !track.muted);
   const packets: LightingPacket[] = [];
-  for (const sourceTrack of document.tracks) {
+  for (const sourceTrack of activeLightingTracks(document)) {
     // An empty per-track selection explicitly means the configured default lighting output.
     const track = sourceTrack.portProfileId ? sourceTrack : { ...sourceTrack, portProfileId: 'lighting-events-output' };
-    if (track.muted || (solo && !track.solo)) continue;
     for (const clip of track.clips) {
       if (clip.muted || !clip.events.length) continue;
       for (const event of clip.events) appendEvent(packets, track, clip, event, map, ma2DeviceId);

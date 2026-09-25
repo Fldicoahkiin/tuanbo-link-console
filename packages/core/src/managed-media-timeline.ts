@@ -23,6 +23,7 @@ export type ManagedMediaEvent = {
   layerCount: number;
   sourceName: string;
   sceneName?: string | undefined;
+  deferSceneSwitch?: boolean | undefined;
   assetId: string;
   assetName: string;
   assetKind: 'video' | 'image' | 'audio';

@@ -33,5 +33,18 @@ test('44 秒 MP4 加入节目，短原声音轨及非整毫秒落点保存重开
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);
+    await page.locator('.audio-timeline-segment').click({ position: { x: 30, y: 35 } });
+    await expect(page.getByLabel('音频片段位置', { exact: true })).toBeVisible();
+    await page.getByLabel('音频片段位置', { exact: true }).fill('5');
+    await page.getByLabel('音频片段位置', { exact: true }).press('Enter');
+    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio?.timeline?.tracks?.[0]?.segments[0]?.startMs).toBe(5000);
+    await page.locator('.audio-timeline-segment').click({ position: { x: 30, y: 35 } });
+    await page.keyboard.press('Delete');
+    await expect(page.locator('.audio-timeline-segment')).toHaveCount(0);
+    await expect(page.locator('.timeline-clip')).toHaveCount(1);
+    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio).toBeUndefined();
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);
+    await expect(page.locator('.timeline-clip')).toHaveCount(1);
   } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
 });

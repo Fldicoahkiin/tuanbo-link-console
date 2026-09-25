@@ -1,3 +1,4 @@
+import { requestMidiAccess } from './midi-access';
 import { compileLightingPackets, LightingScheduler, type LightingPacket } from '@tb/core/link';
 import type { IntegrationProfile, LightingDocument } from '@tb/schema';
 
@@ -9,7 +10,7 @@ export class LightingMidiOutput {
     const packets = compileLightingPackets(document, profile?.lighting?.mscDeviceId ?? 127);
     const ids = new Set(packets.map((packet) => packet.portProfileId));
     if (ids.size) {
-      const access = await navigator.requestMIDIAccess({ sysex: true });
+      const access = await requestMidiAccess({ sysex: true });
       for (const id of ids) {
         const mapping = profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output');
         const ports = [...access.outputs.values()].filter((port) => port.name === mapping?.portName && port.state === 'connected');

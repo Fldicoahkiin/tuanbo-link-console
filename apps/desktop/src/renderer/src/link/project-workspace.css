@@ -72,6 +72,7 @@
 .player-fades button:first-child { border-radius: 5px 0 0 5px; }
 .player-fades button:last-child { border-left: 0; border-radius: 0 5px 5px 0; }
 .player-error { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--surface-raised); color: #ffc0c5; font-size: var(--text-caption); line-height: 1.5; overflow-wrap: anywhere; }
+.player-notice { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--surface-raised); color: var(--text-primary); font-size: var(--text-caption); line-height: 1.5; overflow-wrap: anywhere; }
 .p1-digital-panel { display: grid; align-content: center; gap: 10px; padding: 8px 20px 12px 24px; }
 .p1-digital-panel > strong { color: var(--text-primary); font-size: var(--text-caption); font-weight: 500; }
 .p1-digital-panel dl { display: grid; gap: 12px; margin: 0; }

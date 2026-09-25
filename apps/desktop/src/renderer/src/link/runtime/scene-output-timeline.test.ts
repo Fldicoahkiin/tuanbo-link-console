@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { sceneBoundaryWork, sceneOutputAt } from './scene-output-timeline';
 import { ManagedOutputRuntime } from './managed-output-runtime';
+import { compileManagedMediaTimeline } from '@tb/core/link';
 
 function projectFixture() {
   return parseLinkProject({ ...createEmptyLinkProject('插入机位'), obsOutputMode: 'scenes', mediaAssets: [{ id: 'video', name: '舞蹈.mp4', kind: 'video', relativePath: 'assets/dance.mp4', sha256: 'a'.repeat(64), byteLength: 10, durationMs: 40000, width: 1080, height: 1920 }], rundown: [{
@@ -12,6 +13,34 @@ function projectFixture() {
 }
 
 describe('机位片段结束恢复素材', () => {
+  it('第二段透明素材进入和退出只改变叠加层，不重新启动持续播放的底层视频', () => {
+    const project = projectFixture(), item = project.rundown[0]!;
+    item.cues = [];
+    project.mediaAssets.push({ ...project.mediaAssets[0]!, id: 'cards', name: '扑克牌.mov', relativePath: 'assets/cards.mov', sha256: 'b'.repeat(64), durationMs: 2200 });
+    item.referenceMediaClips.push(...[0, 8].map((seconds) => ({ ...item.referenceMediaClips[0]!, id: `cards-${seconds}`, assetId: 'cards', layerId: 'camera-layer', startTimecode: { hours: 0, minutes: 0, seconds, frames: 0 }, durationMs: 2200, sourceOffsetMs: 0 })));
+    const events = compileManagedMediaTimeline(project, 'song').events;
+    const entering = sceneBoundaryWork(project, 'song', 239, 240, [], events.filter(event => event.frameNumber === 240));
+    expect(entering.media.map(event => event.clipId)).toEqual(['cards-8']);
+    expect(entering.cues[0]?.cue.actions[0]).toMatchObject({ kind: 'obs.setProgramScene', sceneLayers: [events.find(event => event.clipId === 'cards-8')!.sceneName, events.find(event => event.clipId === 'clip')!.sceneName] });
+    const leaving = sceneBoundaryWork(project, 'song', 305, 306, [], events.filter(event => event.frameNumber === 306));
+    expect(leaving.media.map(event => [event.clipId, event.phase])).toEqual([['cards-8', 'stop']]);
+    expect(leaving.cues[0]?.cue.actions[0]).toMatchObject({ kind: 'obs.setProgramScene', sceneName: events.find(event => event.clipId === 'clip')!.sceneName });
+  });
+  it('透明视频在机位上方时保留下方机位，并在特效结束时恢复机位', () => {
+    const project = projectFixture();
+    project.rundown[0]!.visualLayers.reverse();
+    const work = sceneOutputAt(project, 'song', 330);
+    expect(work.media).toHaveLength(1);
+    expect(work.media[0]?.deferSceneSwitch).toBe(true);
+    expect(work.cues[0]?.cue.actions[0]).toMatchObject({ kind: 'obs.setProgramScene', sceneLayers: [work.media[0]?.sceneName, '拉腿机位'] });
+    const runtime = new ManagedOutputRuntime(project, 'show.tblink', { executeManagedMediaEvent: () => Promise.resolve(), recordLog: () => Promise.reject(new Error('不应写日志')) });
+    runtime.selectItem('song');
+    expect(runtime.alignEvent(work.media[0]!, 330)).toMatchObject({ deferSceneSwitch: true, sourceOffsetMs: 7000 });
+    project.rundown[0]!.referenceMediaClips[0]!.durationMs = 6000;
+    const ended = sceneBoundaryWork(project, 'song', 359, 360, [], [{ ...work.media[0]!, phase: 'stop', frameNumber: 360 }]);
+    expect(ended.cues[0]?.cue.actions[0]).toMatchObject({ kind: 'obs.setProgramScene', sceneName: '拉腿机位' });
+    expect(ended.media.every(event => event.phase === 'stop')).toBe(true);
+  });
   it('10–15 秒覆盖视频，15 秒恢复视频第 11 秒，不能从头或暂停处继续', () => {
     const project = projectFixture();
     expect(sceneOutputAt(project, 'song', 299).media[0]?.clipId).toBe('clip');

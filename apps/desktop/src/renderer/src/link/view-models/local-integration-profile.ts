@@ -35,7 +35,7 @@ export function createDefaultIntegrationProfile(): IntegrationProfile {
     profileId: 'windows-stage',
     name: 'Windows 现场机器',
     updatedAt: new Date().toISOString(),
-    obs: { ...executable('C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe'), webSocketUrl: 'ws://127.0.0.1:4455', credentialId: 'obs-main' },
+    obs: { ...executable('C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe'), autoConnectOnLaunch: true, webSocketUrl: 'ws://127.0.0.1:4455', credentialId: 'obs-main' },
     p1: { ...executable('C:\\P1\\P1.exe'), mtcInputPortProfileId: 'p1-mtc', controlOutputPortProfileId: 'p1-output', expectedFrameRate: '30', obsAudioInputName: '' },
     midiPortProfiles: [
       { id: 'p1-mtc', direction: 'input', portName: '' },

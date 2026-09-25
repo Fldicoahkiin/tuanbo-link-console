@@ -73,3 +73,4 @@ apps/desktop/out-*/
 
 # IBT built runtime (reproduced from pinned public source)
 tools/ibt/bin/
+tools/midi-probe/bin/

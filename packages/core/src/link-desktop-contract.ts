@@ -163,6 +163,7 @@ export type LinkLogEntryDto = {
 };
 
 export type LinkDesktopApi = {
+  recheckMidi(): Promise<void>;
   getLicenseStatus(): Promise<import('@tb/schema').LicenseStatus>;
   exportLicenseRequest(): Promise<boolean>;
   importLicense(): Promise<import('@tb/schema').LicenseStatus | null>;
@@ -178,8 +179,9 @@ export type LinkDesktopApi = {
   disconnectMa2Network(): Promise<import('@tb/schema').Ma2NetworkStatus>;
   exchangeMa2(payload: import('@tb/schema').Ma2BridgeRequest): Promise<string>;
   previewMa2(payload: import('@tb/schema').Ma2ReadRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;
-  readMa2Catalog(payload: import('@tb/schema').Ma2CatalogRequest): Promise<import('@tb/schema').Ma2Catalog>;
-  readMa2EffectLibrary(payload: import('@tb/schema').Ma2CatalogRequest): Promise<import('@tb/schema').Ma2EffectLibrary>;
+  readMa2Catalog(payload: import('@tb/schema').Ma2CatalogRequest, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2Catalog>;
+  readMa2EffectLibrary(payload: import('@tb/schema').Ma2CatalogRequest, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2EffectLibrary>;
+  cancelMa2Read(id: string): Promise<void>;
   createMa2(payload: import('@tb/schema').Ma2CreateRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;
   readMa2Executor(payload: import('@tb/schema').Ma2ExecutorReadRequest): Promise<import('@tb/schema').Ma2ExecutorPreview>;
   compareMa2(payload: import('@tb/schema').Ma2CompareRequest): Promise<import('./ma2-sync').Ma2SyncPreview>;
@@ -223,7 +225,8 @@ export type LinkDesktopApi = {
   inspectProjectAssets(path: string, project: LinkProject): Promise<LinkProjectAssetInspection>;
   detectCurrentP1Project(): Promise<string>;
   pickP1Project(): Promise<string | null>;
-  importP1Project(payload: { p1ProjectPath: string; linkProjectPath: string }): Promise<LinkP1ProjectImportResult>;
+  importP1Project(payload: { p1ProjectPath: string; linkProjectPath: string; progressId?: string }, onProgress?: (progress: import('@tb/schema').LinkP1ProjectImportProgress) => void): Promise<LinkP1ProjectImportResult>;
+  cancelP1Import(id: string): Promise<void>;
   previewP1ProjectExport(payload: {
     p1ProjectPath: string;
     linkProjectPath: string;

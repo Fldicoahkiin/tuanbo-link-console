@@ -24,6 +24,61 @@ afterEach(async () => {
 });
 
 describe('P1ProjectService', () => {
+  it('跨电脑复制 .hia 与歌曲文件夹后自动找回全部音频且保留原始时间码', async () => {
+    const fixture = await createFixture();
+    const oldPath = 'Z:/旧电脑/演出歌曲';
+    const source = await readFile(fixture.p1Path, 'utf8');
+    await writeFile(fixture.p1Path, source
+      .replaceAll(fixture.audioPaths[0].replaceAll('\\', '/'), `${oldPath}/first.wav`)
+      .replaceAll(fixture.audioPaths[1].replaceAll('\\', '/'), `${oldPath}/second.wav`)
+      .replace('MidiStartTime="0"', 'MidiStartTime="60"')
+      .replace('MidiStartTime="0"', 'MidiStartTime="120"'));
+    const progress: Array<{ completed: number; total: number; song: string }> = [];
+    const imported = await new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath, {
+      onProgress: update => progress.push({ completed: update.completed, total: update.total, song: update.song })
+    });
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.items).toHaveLength(2);
+    expect(imported.skippedItems).toEqual([]);
+    expect(imported.items.map(item => item.p1Media.midiStartTime)).toEqual(['60', '120']);
+    expect(imported.items.map(item => item.p1Media.sourceFileName)).toEqual(['first.wav', 'second.wav']);
+    expect(progress).toEqual([
+      { completed: 0, total: 2, song: '' },
+      { completed: 1, total: 2, song: '第一首.wav' },
+      { completed: 2, total: 2, song: '第二首.wav' }
+    ]);
+  });
+
+  it('跨电脑歌曲文件同名且无法唯一定位时保留待修复项，不猜测音频', async () => {
+    const fixture = await createFixture();
+    const duplicateDirectory = join(fixture.directory, '另一份歌曲');
+    await mkdir(duplicateDirectory);
+    cleanupDirectories.push(duplicateDirectory);
+    const duplicate = join(duplicateDirectory, 'first.wav');
+    await writeFile(duplicate, Buffer.from('different-audio'));
+    cleanupFiles.push(duplicate);
+    const source = await readFile(fixture.p1Path, 'utf8');
+    await writeFile(fixture.p1Path, source.replaceAll(fixture.audioPaths[0].replaceAll('\\', '/'), 'Z:/旧电脑/first.wav'));
+    const imported = await new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.items.map(item => item.title)).toEqual(['第二首.wav']);
+    expect(imported.skippedItems).toHaveLength(1);
+    expect(imported.skippedItems?.[0]?.reason).toContain('多个同名文件');
+  });
+
+  it('歌曲导入取消后停止处理，工程文件保持原状', async () => {
+    const fixture = await createFixture();
+    const original = JSON.stringify(createEmptyLinkProject('未开始导入'));
+    await writeFile(fixture.linkPath, original);
+    cleanupFiles.push(fixture.linkPath);
+    const controller = new AbortController();
+    await expect(new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath, {
+      signal: controller.signal,
+      onProgress: progress => { if (progress.completed === 0) controller.abort(); }
+    })).rejects.toThrow();
+    expect(await readFile(fixture.linkPath, 'utf8')).toBe(original);
+  });
+
   it('坏裁剪跳过，好歌曲仍导入并保留时间码；保存重开再导出保留坏条目', async () => {
     const fixture = await createFixture();
     const source = await readFile(fixture.p1Path, 'utf8');

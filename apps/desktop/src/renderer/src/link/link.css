@@ -1007,11 +1007,11 @@ select option:disabled { color: var(--text-secondary); }
 .timeline-shell {
   display: grid;
   grid-template-columns: 164px minmax(0, 1fr);
-  align-items: start;
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
   min-width: 0;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
   overscroll-behavior: contain;
   scrollbar-color: #5f6067 #19191b;
   scrollbar-width: thin;
@@ -1022,21 +1022,24 @@ select option:disabled { color: var(--text-secondary); }
   display: grid;
   min-height: 0;
 }
-.timeline-track-headings { z-index: 2; align-self: start; background: var(--surface-raised); box-shadow: 1px 0 rgba(255,255,255,.08); }
+.timeline-heading-viewport { min-height: 0; overflow: hidden; }
+.timeline-track-headings { position: relative; z-index: 2; min-height: 100%; background: var(--surface-raised); box-shadow: 1px 0 rgba(255,255,255,.08); }
 .timeline-track-headings .track-heading { min-width: 0; padding-inline: 9px; }
 .timeline-track-headings .track-heading svg { flex: none; width: 14px; color: var(--text-secondary); }
 .timeline-track-headings .track-heading span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.timeline-track-headings .time-heading { justify-content: space-between; }
+.timeline-track-headings .time-heading { position: sticky; top: 0; z-index: 12; background: var(--surface-raised); justify-content: space-between; }
 .timeline-track-headings .time-heading small { color: var(--text-secondary); font: 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .timeline-track-headings .time-heading button { display: grid; width: 19px; height: 19px; padding: 0; place-items: center; color: var(--text-primary); border: 0; border-radius: 4px; background: rgb(var(--theme-ink-rgb) / .08); }
 @media (hover: hover) and (pointer: fine) {
 .timeline-track-headings .time-heading button:hover { color: var(--text-primary); background: var(--apple-blue); }
 }
 .timeline-track-headings .time-heading button svg { width: 11px; }
-.timeline-viewport { align-self: start; min-width: 0; min-height: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain; scrollbar-color: #5f6067 #19191b; scrollbar-width: thin; }
+.timeline-viewport { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-color: #5f6067 #19191b; scrollbar-width: thin; }
 .timeline-content { position: relative; min-width: 100%; }
 .timeline-ruler {
-  position: relative;
+  position: sticky;
+  top: 0;
+  z-index: 12;
   overflow: hidden;
   border-bottom: 1px solid var(--separator);
   background: var(--surface-raised);
@@ -3198,7 +3201,7 @@ html, body, #root { background: transparent; }
 .studio-heading,
 .integration-workspace > .integration-hero {
   padding-right: 142px;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 .p1-project-ribbon button,
 .p1-project-ribbon input,

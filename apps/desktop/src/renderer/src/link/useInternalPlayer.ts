@@ -41,9 +41,9 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     if (!coordinator || !project || project.playbackSource !== 'internal' || !ready) {
       setController(null); setState(emptyInternalPlayerState); return;
     }
-    let prepared: { report: PreflightReport; profile: ReturnType<typeof useIntegrationStore.getState>['profile'] } | null = null;
+    let prepared: { report: PreflightReport; profile: ReturnType<typeof useIntegrationStore.getState>['profile']; mtcOutputEnabled: boolean } | null = null;
     const player = new InternalPlaybackController(project, {
-      prepare: async (itemId, positionMs, reuseSession) => {
+      prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled }) => {
         if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
         if (!path) throw new Error('请先保存工程，再播放正式音频');
         if (useIntegrationStore.getState().obs.status !== 'connected') {
@@ -52,16 +52,17 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
           useIntegrationStore.getState().setObs(await desktop.connectObs());
         }
         await coordinator.prepareInternal(itemId, async () => {
-          if (reuseSession && prepared?.profile === useIntegrationStore.getState().profile) {
+          if (reuseSession && prepared?.profile === useIntegrationStore.getState().profile && prepared.mtcOutputEnabled === mtcOutputEnabled) {
             coordinator.beginPreflight(prepared.report.mode);
             await coordinator.applyPreflight(prepared.report); return prepared.report;
           }
-          const report = await runDesktopPreflight(coordinator, 'live', 'internal');
-          prepared = report.passed ? { report, profile: useIntegrationStore.getState().profile } : null;
+          const report = await runDesktopPreflight(coordinator, 'live', 'internal', false, { internalMtcOutputEnabled: mtcOutputEnabled });
+          prepared = report.passed ? { report, profile: useIntegrationStore.getState().profile, mtcOutputEnabled } : null;
           return report;
         }, positionMs);
       },
       ingest: (positionMs) => coordinator.ingestInternal(positionMs),
+      started: (positionMs) => coordinator.startInternalClock(positionMs),
       scrub: project.obsOutputMode === 'scenes' ? (positionMs) => coordinator.seekInternal(positionMs) : undefined,
       pause: () => coordinator.pauseInternal(), stop: () => coordinator.stopAndWait(false),
       resolveAudio: (relativePath) => {

@@ -12,7 +12,7 @@ function monitoringStream() {
 }
 function fixture() {
   const source = { connect: vi.fn(), disconnect: vi.fn() };
-  const sink = vi.fn(() => Promise.resolve());
+  const sink = vi.fn((id: string) => { void id; return Promise.resolve(); });
   const close = vi.fn(() => Promise.resolve());
   const createSource = vi.fn(() => source);
   const contexts: { sampleRate: number }[] = [];
@@ -63,10 +63,22 @@ describe('内部音频输出线路', () => {
     expect(f.sink).toHaveBeenLastCalledWith('device-line-out'); expect(f.createSource).toHaveBeenCalledTimes(1);
     await f.output.dispose(); expect(f.close).toHaveBeenCalledOnce(); expect(f.source.disconnect).toHaveBeenCalledOnce();
   });
-  it('线路不可用时直接报错，不改用默认设备', async () => {
-    const f = fixture(); f.sink.mockRejectedValueOnce(new Error('设备已断开'));
-    await expect(f.output.prepare(f.audio, 'missing-device', 48000)).rejects.toThrow('设备已断开');
-    expect(f.sink).toHaveBeenCalledOnce(); expect(f.sink).toHaveBeenCalledWith('missing-device');
+  it('保存的设备已拔出时明确返回系统默认线路，本次播放继续', async () => {
+    const f = fixture(); f.sink.mockRejectedValueOnce(Object.assign(new Error('AudioContext.setSinkId: device is not found'), { name: 'NotFoundError' }));
+    await expect(f.output.prepare(f.audio, 'missing-device', 48000)).resolves.toBe('default-fallback');
+    expect(f.sink.mock.calls.map(([id]) => id)).toEqual(['missing-device', '']);
+    await f.output.dispose();
+  });
+  it('旧设备与系统默认设备均不可用时用中文说明，不继续播放', async () => {
+    const f = fixture(); f.sink.mockRejectedValueOnce(Object.assign(new Error('device is not found'), { name: 'NotFoundError' })).mockRejectedValueOnce(new Error('default unavailable'));
+    await expect(f.output.prepare(f.audio, 'missing-device', 48000)).rejects.toThrow('Windows 默认输出设备也不可用');
+    expect(f.sink).toHaveBeenCalledTimes(2);
+    await f.output.dispose();
+  });
+  it('输出设备被占用时不切换线路', async () => {
+    const f = fixture(); f.sink.mockRejectedValueOnce(Object.assign(new Error('device busy'), { name: 'NotReadableError' }));
+    await expect(f.output.prepare(f.audio, 'missing-device', 48000)).rejects.toThrow('device busy');
+    expect(f.sink).toHaveBeenCalledOnce();
     await f.output.dispose();
   });
 });

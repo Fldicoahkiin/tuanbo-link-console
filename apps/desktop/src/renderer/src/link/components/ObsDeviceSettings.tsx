@@ -15,12 +15,12 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const dirty = url !== profile?.obs.webSocketUrl || password !== '';
-  const save = async (connect: boolean): Promise<boolean> => {
+  const save = async (connect: boolean, autoConnect = profile?.obs.autoConnectOnLaunch !== false): Promise<boolean> => {
     if (disabled || busy) return false;
     setBusy(true); onBusy(true); setError(''); setSaved(false);
     try {
       const current = useIntegrationStore.getState().profile ?? createDefaultIntegrationProfile();
-      const next = { ...current, updatedAt: new Date().toISOString(), obs: { ...current.obs, webSocketUrl: url.trim() } };
+      const next = { ...current, updatedAt: new Date().toISOString(), obs: { ...current.obs, webSocketUrl: url.trim(), autoConnectOnLaunch: autoConnect } };
       await linkDesktopViewModel.saveIntegrationProfile({ profile: next, ...(password !== '' || !profile ? { obsPassword: password } : {}) });
       useIntegrationStore.getState().setProfile(next); onPassword(''); setSaved(true);
       if (connect) {
@@ -43,6 +43,8 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
     <div className="device-section-heading"><h3>OBS Studio</h3><span role="status">{busy ? '连接处理中' : obs.status === 'connected' ? '已连接' : '未连接'}</span></div>
     <label className="settings-row"><span>WebSocket 地址</span><input aria-label="WebSocket 地址" value={url} disabled={disabled || busy} onChange={(event) => { onUrl(event.currentTarget.value); setSaved(false); }} /></label>
     <label className="settings-row"><span>密码</span><input aria-label="OBS 密码" type="password" autoComplete="new-password" placeholder="留空则不更换" value={password} disabled={disabled || busy} onChange={(event) => { onPassword(event.currentTarget.value); setSaved(false); }} /></label>
+    <label className="settings-row"><span>启动时自动连接</span><input aria-label="启动时自动连接 OBS" type="checkbox" checked={profile?.obs.autoConnectOnLaunch !== false} disabled={disabled || busy} onChange={(event) => void save(false, event.currentTarget.checked)} /></label>
+    <p className="settings-note">启动时尝试一次：OBS 尚未运行时使用已配置的程序路径启动。暂时不可用时保持工作区可用，恢复后可手动重新连接。</p>
     <div className="device-actions settings-header-actions">{obs.status === 'connected' && !dirty ? <Button className="secondary-button" disabled={disabled || busy} onClick={() => void disconnect()}>断开 OBS</Button> : <Button className="primary-button" loading={busy} disabled={disabled || busy} onClick={() => void save(true)}>保存并连接 OBS</Button>}{dirty ? <Button className="secondary-button" disabled={disabled || busy} onClick={() => void save(false)}>仅保存 OBS</Button> : null}{saved ? <span role="status">已保存</span> : null}</div>
     {error ? <p className="device-error" role="alert">{error}</p> : null}
     <ObsPreviewSetup disabled={disabled || busy} notify={notify} beforeRepair={async () => {

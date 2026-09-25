@@ -7,6 +7,7 @@ export function placeEffect(document: LightingDocument, stamp: Stamp, durationMs
   const effect = document.templates.find(entry => entry.id === stamp.effectId);
   const binding = effect?.track.cueStamp;
   if (!effect || binding?.mode !== 'fixed') throw new Error('请先绑定灯光效果');
+  if (!/^[1-9]\d*\.[1-9]\d*$/.test(binding.executor)) throw new Error('该素材尚未绑定执行器，请在素材配置中填写控台页号.执行器编号');
   if (effect.members) {
     if (effect.members.some(member => stamp.ms + member.delayMs >= durationMs)) throw new Error('组合效果超出音频结尾，请提前放置');
     return [...effect.members].sort((a, b) => a.delayMs - b.delayMs).reduce((result, member, index) => {

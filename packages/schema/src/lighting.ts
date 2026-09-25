@@ -46,6 +46,14 @@ export const lightingTrackSchema = z.object({
   ]).optional(),
   clips: z.array(lightingClipSchema)
 }).strict();
+/** Library references may be imported before the console executor is known. Timeline tracks stay bound. */
+export const lightingTemplateTrackSchema = lightingTrackSchema.extend({
+  cueStamp: z.discriminatedUnion('mode', [
+    z.object({ mode: z.literal('sequence') }).strict(),
+    z.object({ mode: z.literal('marker') }).strict(),
+    z.object({ mode: z.literal('fixed'), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]) }).strict()
+  ]).optional()
+});
 export const lightingTempoSchema = z.object({ beat: time, bpm: z.number().finite().min(10).max(999), numerator: z.number().int().min(1).max(32), denominator: z.union([z.literal(1), z.literal(2), z.literal(4), z.literal(8), z.literal(16)]), transition: z.enum(['hold', 'linear']).optional() }).strict();
 export const lightingMa2EventMappingSchema = z.object({ eventId: id, trackId: id, clipId: id, path: z.string().min(1), sequence: z.number().int().positive().nullable(), cueIndex: z.number().int().nonnegative().nullable(), action: z.enum(['goto', 'go', 'off', 'master']).optional(), executor: z.string().regex(/^\d+\.\d+$/) }).strict().superRefine((mapping, ctx) => {
   const cueAction = (mapping.action ?? 'goto') === 'goto';
@@ -80,7 +88,7 @@ export const lightingDocumentSchema = z.object({
   markers: z.array(z.object({ id, name: z.string(), startMs: time, endMs: time.nullable() }).strict()),
   loop: z.object({ enabled: z.boolean(), startMs: time, endMs: time.positive() }).strict(),
   outputMode: z.enum(['timecode', 'direct']),
-  templates: z.array(z.object({ id, name: z.string().min(1), track: lightingTrackSchema,
+  templates: z.array(z.object({ id, name: z.string().min(1), track: lightingTemplateTrackSchema,
     categories: z.array(z.string().min(1).max(64)).max(16).optional(),
     sourceShow: z.string().min(1).max(4096).optional(),
     favorite: z.boolean().optional(),

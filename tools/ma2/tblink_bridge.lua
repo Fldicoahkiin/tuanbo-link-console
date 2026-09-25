@@ -237,11 +237,17 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
   end)
   gma.echo('TBLINK_RPC_' .. token .. ':' .. (ok and result or 'ERR:' .. hex(tostring(result))))
 end
-local function main()
-  if active then active = false; gma.feedback('TBLINK bridge stopped'); return end
+local function main(mode)
+  if active then active = false; _G.TBLINK_BRIDGE_READY = false; gma.feedback('TBLINK bridge stopped'); return end
+  if mode == 'network' then
+    active = true
+    _G.TBLINK_BRIDGE_READY = true
+    return
+  end
   -- A restart must not replay a previously sent write with an uncertain outcome.
   os.rename(request_file, root .. '/temp/tblink_bridge_abandoned_' .. generation .. '.txt')
   active = true
+  _G.TBLINK_BRIDGE_READY = true
   gma.timer(poll, 0.1, 0)
   gma.feedback('TBLINK local onPC bridge ready')
 end

@@ -1,7 +1,29 @@
 import type { CueActionRunner, ManagedMediaEvent, PreflightMode, RuntimeUpdate } from '@tb/core/link';
-import type { LinkCue } from '@tb/schema';
+import type { LinkCue, LinkProject } from '@tb/schema';
 import type { ManagedOutputRuntime } from './managed-output-runtime';
 import { useRuntimeStore } from '../stores/runtime-store';
+import { sceneOutputAt } from './scene-output-timeline';
+import { appendMediaReport } from './runtime-report-store';
+
+export async function reportSkippedTimelineMedia(managed: ManagedOutputRuntime, events: readonly ManagedMediaEvent[], reason: string): Promise<void> {
+  for (const report of await managed.reportSkippedMedia(events, reason)) appendMediaReport(report);
+}
+
+export async function executeSkippedTimelineCue(cue: LinkCue, reason: string, runner: CueActionRunner,
+  managed: ManagedOutputRuntime, mode: PreflightMode, nextCueId: () => string | null): Promise<void> {
+  const report = await runner.skip(managed.compileVisualCue(cue), mode, reason);
+  useRuntimeStore.getState().setState({ reports: [...useRuntimeStore.getState().reports, report], nextCueId: nextCueId() });
+}
+
+export async function synchronizeTimelineTransport(project: LinkProject, itemId: string | undefined, action: 'pause' | 'start', frame: number,
+  managed: ManagedOutputRuntime, runner: CueActionRunner,
+  execute: (cues: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[]) => Promise<void>): Promise<void> {
+  await managed.executeTransport(runner, action, frame);
+  if (action !== 'start' || project.obsOutputMode !== 'scenes' || !itemId) return;
+  const work = sceneOutputAt(project, itemId, frame);
+  // Internal audio resumes the paused decoder; don't seek/restart it a second time.
+  await execute(work.cues, project.playbackSource === 'internal' ? [] : work.media);
+}
 
 export async function executeDueCues(cues: LinkCue[], runner: CueActionRunner, managed: ManagedOutputRuntime,
   mode: PreflightMode, canExecute: () => boolean, nextCueId: () => string | null): Promise<void> {
@@ -26,6 +48,7 @@ export async function executeTimelineWork(dueCues: RuntimeUpdate['dueCues'], med
   skipCue: (cue: LinkCue, reason: string) => Promise<void>;
 }): Promise<void> {
   const work = [
+    // OBS only restarts a showing source: activate the composition before its media.
     ...dueCues.map((due) => ({ frame: due.scheduledFrame, priority: 1, cue: due.cue } as const)),
     ...mediaEvents.map((event) => ({ frame: event.frameNumber, priority: event.phase === 'stop' ? 0 : 2, event } as const))
   ].sort((left, right) => left.frame - right.frame || left.priority - right.priority);

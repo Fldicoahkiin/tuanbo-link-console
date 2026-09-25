@@ -28,6 +28,7 @@ export const linkManagedMediaEventSchema = z.object({
   layerCount: z.number().int().positive(),
   sourceName: z.string().min(1),
   sceneName: z.string().min(1).optional(),
+  deferSceneSwitch: z.boolean().optional(),
   assetId: z.string().min(1),
   assetName: z.string().min(1),
   assetKind: z.enum(['video', 'image', 'audio']),
@@ -75,8 +76,18 @@ export const linkMediaPreviewPayloadSchema = linkMediaAssetResolvePayloadSchema.
 
 export const linkP1ProjectImportPayloadSchema = z.object({
   p1ProjectPath: linkFilePathSchema,
-  linkProjectPath: linkFilePathSchema
+  linkProjectPath: linkFilePathSchema,
+  progressId: z.string().uuid().optional()
 });
+
+export const linkP1ProjectImportProgressSchema = z.object({
+  id: z.string().uuid(),
+  completed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  song: z.string(),
+  state: z.enum(['starting', 'imported', 'skipped'])
+}).strict().refine(value => value.completed <= value.total);
+export type LinkP1ProjectImportProgress = z.infer<typeof linkP1ProjectImportProgressSchema>;
 
 export const linkP1ProjectExportPreviewPayloadSchema = z.object({
   p1ProjectPath: linkFilePathSchema,

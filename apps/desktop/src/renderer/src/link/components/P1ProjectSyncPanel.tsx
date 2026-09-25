@@ -1,9 +1,10 @@
 import { Button } from './Button';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AudioLines, ChevronDown, Download, FileAudio2, FolderOpen, Upload } from 'lucide-react';
 import { allocateP1TimecodeRanges, configureP1AutoFollowCommand, applyP1ProjectExportCommand, synchronizeP1ProjectCommand, setPlaybackSourceCommand } from '@tb/core/link';
 import { assertDocumentSession, useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+import type { LinkP1ProjectImportProgress } from '@tb/schema';
 
 type Props = {
   afterImport?: (() => Promise<void>) | undefined;
@@ -24,7 +25,11 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
   const documentId = useDocumentStore((state) => state.documentId);
   const [p1ProjectPath, setP1ProjectPath] = useState('');
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<LinkP1ProjectImportProgress | null>(null);
+  const activeImport = useRef<string | null>(null);
+  const cancelledImport = useRef(false);
   const [summary, setSummary] = useState<SyncSummary | null>(null);
+  useEffect(() => () => { if (activeImport.current) void linkDesktopViewModel.cancelP1Import(activeImport.current).catch(error => console.error(error)); }, []);
   useEffect(() => {
     setP1ProjectPath('');
     setSummary(null);
@@ -46,7 +51,13 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
       const targetDocumentId = document.documentId;
       const projectPath = document.path ?? await saveUnsavedDocument(targetDocumentId);
       if (!projectPath) return;
-      const imported = await linkDesktopViewModel.importP1Project({ p1ProjectPath: sourcePath, linkProjectPath: projectPath });
+      const progressId = crypto.randomUUID();
+      activeImport.current = progressId;
+      cancelledImport.current = false;
+      setProgress({ id: progressId, completed: 0, total: 0, song: '', state: 'starting' });
+      const imported = await linkDesktopViewModel.importP1Project({ p1ProjectPath: sourcePath, linkProjectPath: projectPath, progressId }, update => setProgress(update));
+      activeImport.current = null;
+      setProgress(null);
       const command = synchronizeP1ProjectCommand(imported);
       useDocumentStore.getState().executeForDocument(targetDocumentId, purpose !== 'follow' ? { ...command, label: '导入 P1 音频并使用内部主控播放', execute: value => setPlaybackSourceCommand('internal').execute(command.execute(value)) } : command);
       await persistCurrentDocument(projectPath, targetDocumentId);
@@ -60,8 +71,10 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
       notify(`已导入 ${imported.items.length} 首音频，另保留 ${imported.skippedItems?.length ?? 0} 首待修复节目；原始时间码已保留。${purpose === 'audio' ? '使用本软件内部主控播放，无需启动 P1。' : ''}`);
       if (lighting && afterImport) { await afterImport(); await persistCurrentDocument(projectPath, targetDocumentId); }
     } catch (error) {
-      notify(error instanceof Error ? error.message : String(error), 'error');
+      notify(cancelledImport.current ? '已取消 P1 导入，当前工程未应用本次读取结果' : error instanceof Error ? error.message : String(error), 'error');
     } finally {
+      activeImport.current = null;
+      setProgress(null);
       setBusy(false);
     }
   };
@@ -126,6 +139,7 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
       <div><AudioLines /><span><strong>P1 音频工程同步</strong></span></div>
       <span className={`status-pill ${project?.p1Sync ? 'ok' : 'pending'}`}>{project?.p1Sync ? '已建立映射' : '未读取'}</span>
     </div>
+    {progress ? <div className="ma2-read-progress" role="status" aria-live="polite"><div><strong>导入 P1 歌曲</strong><span>{progress.total ? `${progress.completed} / ${progress.total}` : '正在统计歌曲'}</span></div><progress aria-label="P1 导入进度" {...progress.total ? { value: progress.completed, max: progress.total } : {}} /><small>{progress.song ? `${progress.state === 'skipped' ? '待修复' : '已导入'}：${progress.song}` : '正在读取 P1 工程'}</small><button onClick={() => { const id = activeImport.current; if (id) { cancelledImport.current = true; void linkDesktopViewModel.cancelP1Import(id).catch(error => notify(String(error), 'error')); } }}>取消导入</button></div> : null}
     <div className="p1-sync-path" title={p1ProjectPath || '尚未选择 P1 工程'}>
       <FileAudio2 /><span>{p1ProjectPath || '未选择 .hia 工程'}</span>
     </div>
@@ -138,11 +152,11 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
           {afterImport ? <Button className="secondary-button" disabled={disabled || busy} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); void importProject('picker', true); }}><FolderOpen />选择 .hia 并读取音频与灯光</Button> : null}
         </div>
       </details>
-      {afterImport ? <Button className="primary-button" disabled={disabled || busy} onClick={() => void importProject('current', true)}><Download />一键读取当前音频与灯光</Button> : null}
+      {afterImport ? <Button className="primary-button" disabled={disabled || busy} onClick={() => void importProject(purpose === 'migration' ? 'picker' : 'current', true)}><Download />{purpose === 'migration' ? '导入外部 P1 音乐与控台 Cue' : '一键读取当前音频与灯光'}</Button> : null}
       {purpose !== 'migration' ? <><Button className="primary-button" aria-label="同步回 P1 工程" disabled={disabled || busy || !project?.p1Sync} onClick={() => void exportProject()}><Upload />写回 P1</Button>
       {purpose === 'follow' ? <Button className="primary-button" disabled={disabled || busy || !project?.p1Sync} onClick={() => void exportProject(true)}><AudioLines />生成点击播放联动工程</Button> : null}</> : null}
     </div>
-    <p>{purpose === 'audio' ? '读取 P1 音频，保留裁剪和原始歌曲时间码。MP4 音轨尾部短缺不超过 250 毫秒时补静音，保持节目长度和灯光时间码不变。P1 不含控台 Cue 列表；要显示 Cue，请在设备连接中扫描控台后导入。写回生成独立 .hia；重新打开联动工程后，选择上次读取或导出的对应 P1 文件即可导出，无需启动 P1 或连接控台网络。' : purpose === 'migration' ? '读取原始音频及原有歌曲起始时间码，用于核对控台灯光配对。' : project?.p1AutoFollow?.enabled ? '已启用自动监听：在 P1 打开生成的 .hia，直接点歌曲即可选节目并跟随时间线。停止联动后可在集成中心恢复监听。' : '生成一次联动工程后，点击 P1 歌曲即可自动控制 OBS，无需逐首布防。'}</p>
+    <p>{purpose === 'audio' ? '读取 P1 音频，保留裁剪和原始歌曲时间码。MP4 音轨尾部短缺不超过 250 毫秒时补静音，保持节目长度和灯光时间码不变。P1 不含控台 Cue 列表；要显示 Cue，请在设备连接中扫描控台后导入。写回生成独立 .hia；重新打开联动工程后，选择上次读取或导出的对应 P1 文件即可导出，无需启动 P1 或连接控台网络。' : purpose === 'migration' ? '从另一台电脑复制 .hia 和歌曲文件夹到同一文件夹，选择 .hia 后自动导入全部可读取歌曲，并按原始时间码匹配已连接控台的 Cue。同名音频或时间线无法唯一确认时会明确列出。' : project?.p1AutoFollow?.enabled ? '已启用自动监听：在 P1 打开生成的 .hia，直接点歌曲即可选节目并跟随时间线。停止联动后可在集成中心恢复监听。' : '生成一次联动工程后，点击 P1 歌曲即可自动控制 OBS，无需逐首布防。'}</p>
     {project?.rundown.some(item => item.notes.startsWith('P1 裁剪')) ? <details className="p1-sync-issues"><summary>已恢复的歌曲：请核对裁剪范围</summary>{project.rundown.filter(item => item.notes.startsWith('P1 裁剪')).map(item => <p key={item.id}><strong>{item.title}</strong><br />{item.notes}</p>)}</details> : null}
     {summary ? <div className="p1-sync-summary"><strong>{summary.itemCount}</strong> 首音频 · <strong>{summary.playlistCount}</strong> 个列表 · {summary.updatedAt}<span>{summary.path}</span></div> : null}
     {project?.p1Sync?.skippedItems?.length ? <details open className="p1-sync-issues"><summary>已保留 {project.p1Sync.skippedItems.length} 首待修复节目，其余歌曲可以播放</summary><p>以下歌曲已保留在节目单并停用；补齐原文件后重新导入即可恢复，写回 P1 时仍保留原条目。</p>{project.p1Sync.skippedItems.map(entry => <p key={entry.sourceKey}><strong>{entry.playlistName} / {entry.title}</strong><br />{entry.reason}</p>)}</details> : null}

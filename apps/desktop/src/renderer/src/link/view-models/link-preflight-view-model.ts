@@ -1,4 +1,4 @@
-import { runLinkPreflight, type PreflightMode, type PreflightReport } from '@tb/core/link';
+import { collectCueMidiOutputProfileIds, runLinkPreflight, type PreflightMode, type PreflightReport } from '@tb/core/link';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { useDocumentStore } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -10,7 +10,8 @@ export async function runDesktopPreflight(
   coordinator: LinkRuntimeCoordinator,
   mode: PreflightMode,
   mtcRequirement: 'running' | 'start-on-go' | 'awaiting-external-start' | 'internal',
-  p1ClockObserved = false
+  p1ClockObserved = false,
+  options: { internalMtcOutputEnabled?: boolean } = {}
 ): Promise<PreflightReport> {
   const document = useDocumentStore.getState();
   const integration = useIntegrationStore.getState();
@@ -26,7 +27,10 @@ export async function runDesktopPreflight(
   if (integration.obs.status === 'connected' && inspectedProject.obsOutputMode === 'scenes' && inspectedProject.mediaAssets.length) {
     await linkDesktopViewModel.prepareObsMediaScenes(document.path, inspectedProject, useDisplayPreferences.getState().preciseSeeking);
   }
-  await coordinator.initializeMidi(mtcRequirement !== 'internal');
+  const needsMidi = mtcRequirement !== 'internal'
+    || (options.internalMtcOutputEnabled !== false && Boolean(integration.profile.internalPlayer?.mtcOutputPortProfileId))
+    || collectCueMidiOutputProfileIds(inspectedProject).length > 0;
+  if (needsMidi) await coordinator.initializeMidi(mtcRequirement !== 'internal');
   const [assets, security, inventory, snapshots, appInfo] = await Promise.all([
     linkDesktopViewModel.inspectProjectAssets(document.path, inspectedProject),
     linkDesktopViewModel.getSecurityPreflight(),
@@ -47,6 +51,7 @@ export async function runDesktopPreflight(
   const report = runLinkPreflight({
     mode,
     mtcRequirement,
+    ...options,
     project: document.project,
     profile: integration.profile,
     currentItemId: currentRuntime.currentItemId,

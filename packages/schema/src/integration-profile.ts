@@ -16,6 +16,7 @@ export const integrationProfileSchema = z.object({
   loopMidi: z.object({ autoStart: z.boolean() }).optional(),
   updatedAt: z.string().datetime({ offset: true }),
   obs: executableProfileSchema.extend({
+    autoConnectOnLaunch: z.boolean().optional(),
     webSocketUrl: z.string().url().refine((value) => value.startsWith('ws://') || value.startsWith('wss://'), {
       message: 'OBS 地址必须使用 ws:// 或 wss://'
     }),

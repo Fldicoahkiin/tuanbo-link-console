@@ -1,3 +1,4 @@
+import { inspectMa2SequenceXml } from './ma2-timecode-xml';
 import { readFileSync } from 'node:fs';
 import { expect, it, vi } from 'vitest';
 import { readMa2Catalog } from './ma2-catalog';
@@ -40,3 +41,19 @@ it.skipIf(!process.env.MA2_ONPC_CATALOG_ACCEPTANCE)('真实 onPC 扫描目录及
   expect(owned?.events.map(event => event.cue)).toEqual(['9901 / 1.250', '9901 / 7.500']);
   expect(result.entries.find(entry => entry.target === 9903)?.eventCount).toBe(0);
 }, 180000);
+
+it('网络扫描复用已核对的 Cue 目录，不下载完整灯具快照', async () => {
+  const request = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(tc).mockResolvedValueOnce(tc).mockResolvedValueOnce(JSON.stringify(directory));
+  const metadata = inspectMa2SequenceXml(snapshot);
+  const result = await readMa2Catalog({ request }, () => false, metadata);
+  expect(result.entries[0]?.events.map(event => event.cue)).toEqual(['9901 / 1.250', '9901 / 7.500']);
+  expect(result.entries[0]?.error).toBeNull();
+  expect(request.mock.calls.map(call => call[0])).toEqual(['LIST', 'READ', 'READ', 'LIST']);
+});
+it('时间线扫描只按真实对象完成数推进，目录复核后才到终点', async () => {
+  const progress: { completed: number; total: number; detail: string }[] = [];
+  const request = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(tc).mockResolvedValueOnce(tc).mockResolvedValueOnce(JSON.stringify(directory));
+  await readMa2Catalog({ request }, () => false, inspectMa2SequenceXml(snapshot), update => progress.push(update));
+  expect(progress.map(value => [value.completed, value.total])).toEqual([[0, 2], [1, 2], [1, 2], [2, 2]]);
+  expect(progress.at(-1)?.detail).toBe('时间线目录已核对');
+});

@@ -1,3 +1,4 @@
+import { requestMidiAccess } from './midi-access';
 import { compileLightingPackets } from '@tb/core/link';
 import type { IntegrationProfile, LightingDocument } from '@tb/schema';
 
@@ -17,7 +18,7 @@ export class LightingCueAudition {
     })) };
     const packets = compileLightingPackets(preview, profile?.lighting?.mscDeviceId ?? 127);
     try {
-      const access = await deadline(navigator.requestMIDIAccess({ sysex: true }), 'MIDI 访问超时');
+      const access = await deadline(requestMidiAccess({ sysex: true }), 'MIDI 访问超时');
       if (generation !== this.generation) return 0;
       const outputs = new Map<string, MIDIOutput>();
       for (const id of new Set(packets.map(packet => packet.portProfileId))) {

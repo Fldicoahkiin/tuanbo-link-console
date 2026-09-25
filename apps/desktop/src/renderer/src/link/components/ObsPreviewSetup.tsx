@@ -2,6 +2,7 @@ import { Button } from './Button';
 import { useState } from 'react';
 import { Wrench } from 'lucide-react';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+import { useConnectionCheckStore } from '../stores/connection-check-store';
 
 export function ObsPreviewSetup({ disabled, notify, beforeRepair }: {
   disabled: boolean;
@@ -17,11 +18,13 @@ export function ObsPreviewSetup({ disabled, notify, beforeRepair }: {
       await beforeRepair();
       await linkDesktopViewModel.repairObsBridge();
       setStatus({ ready: true, message: '组件已就绪，真实画面检查通过。' });
+      useConnectionCheckStore.getState().finish('preview', 'ready', '组件已就绪，真实画面检查通过');
       notify('OBS 内置组件检查完成。');
     }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStatus({ ready: false, message }); notify(message, 'error');
+      useConnectionCheckStore.getState().finish('preview', 'error', message);
     }
     finally { setBusy(false); }
   };

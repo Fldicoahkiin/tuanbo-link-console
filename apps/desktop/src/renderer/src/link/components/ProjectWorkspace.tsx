@@ -45,7 +45,7 @@ import { DocumentActions, type DocumentActionProps } from './DocumentActions';
 import { ProjectWelcome } from './ProjectWelcome';
 import { ProgramPlaylistPane } from './ProgramPlaylistPane';
 import { PlayerWaveformTimeline } from './PlayerWaveformTimeline';
-import { ProjectPlayerSetup, ProjectPlayerTransport, type ProjectPlayer } from './ProjectPlayerControls';
+import { ProjectPlayerTransport, type ProjectPlayer } from './ProjectPlayerControls';
 import { formatTimecode } from './media-utils';
 
 type Props = {
@@ -170,8 +170,8 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
   return (
     <div className="p1-project-workspace">
       {toolbarHost ? createPortal(<header className="p1-project-ribbon" title={projectPath ?? undefined}>
-        <details className="project-file-menu"><summary><FolderOpen /><span>工程</span></summary><div className="project-file-menu-items"><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onOpen(); }}><FolderOpen />打开工程</button><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onCreate(); }}><FilePlus2 />新建独立工程</button></div></details>
-        <ProjectPlayerSetup locked={locked} notify={notify} onBusy={setBusy} playlistId={selectedPlaylistId} />
+        <details className="project-file-menu"><summary aria-label="工程菜单" title="工程 · 打开或新建"><FolderOpen /></summary><div className="project-file-menu-items"><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onOpen(); }}><FolderOpen />打开工程</button><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onCreate(); }}><FilePlus2 />新建独立工程</button></div></details>
+        <strong className="topbar-project-title" aria-label="当前工程">{project.name}</strong>
         <div className="toolbar-drag-space" />
         <fieldset className="p1-project-actions" disabled={locked}>
           <DocumentActions {...documentActions} />

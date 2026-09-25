@@ -65,5 +65,11 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
     }
   };
   const stop = (): void => { reset(); if (external) void player.controller?.stop().catch(report); };
-  return { playheadMs, playing, setPlayheadMs, setPlaying, reset, audioRef, stop };
+  const stopForEdit = async (): Promise<void> => {
+    if (!external || player.state.status !== 'paused') return;
+    if (seekQueue.current) throw new Error('正在定位，请完成后编辑音频');
+    cursorRef.current = playheadMs; setCursor(playheadMs);
+    await player.controller?.stop();
+  };
+  return { playheadMs, playing, setPlayheadMs, setPlaying, reset, audioRef, stop, stopForEdit };
 }

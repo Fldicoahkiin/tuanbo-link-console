@@ -1,74 +1,110 @@
+import { useEffect, useMemo, useState } from 'react';
+import { toUserErrorMessage } from '@tb/core/link';
+import { ma2NetworkStatusSchema, loopMidiStatusSchema, type Ma2NetworkStatus } from '@tb/schema';
 import { ToolbarMtcStatus } from './ToolbarMtcStatus';
 import type { ProjectPlayer } from './ProjectPlayerControls';
+import type { SettingsCategory } from './settings-navigation';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useLocalMa2Store } from '../stores/ma2-connection-store';
-import { useEffect, useState } from 'react';
-import { ma2NetworkStatusSchema, type Ma2NetworkStatus } from '@tb/schema';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
-import { hasConnectedProfilePort } from '../../registry/link-midi-adapter';
+import { useConnectionCheckStore, type ConnectionCheck } from '../stores/connection-check-store';
+import { midiConnectionTargets } from '../view-models/connection-targets';
+import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 
-export function ToolbarConnections({ player, onMtcSettings }: { player: ProjectPlayer; onMtcSettings: () => void }): JSX.Element {
-  const method = useMa2ModeStore((state) => state.method);
-  const projectName = useDocumentStore((state) => state.project?.name);
-  const projectPath = useDocumentStore((state) => state.path);
-  const dirty = useDocumentStore((state) => state.dirty);
-  const obs = useIntegrationStore((state) => state.obs);
-  const p1 = useIntegrationStore((state) => state.processes.p1);
-  const profile = useIntegrationStore((state) => state.profile);
-  const ports = useIntegrationStore((state) => state.midiPorts);
-  const initialized = useIntegrationStore((state) => state.initialized);
-  const internal = useDocumentStore((state) => state.project?.playbackSource === 'internal');
-  const lastMtcAt = useRuntimeStore((state) => state.lastMtcAt);
+type Row = { id: string; name: string; value: string; state: 'ready' | 'error' | 'checking' | 'idle' | 'skipped'; detail: string; category: SettingsCategory };
+const statusLabel = { checking: '连接中', ready: '已就绪', error: '待处理', skipped: '未启用' };
+function checked(row: Row, check: ConnectionCheck | undefined): Row {
+  return check ? { ...row, state: check.state, value: statusLabel[check.state], detail: check.detail } : row;
+}
+
+export function ToolbarConnections({ player, onSettings }: { player: ProjectPlayer; onSettings: (category: SettingsCategory) => void }): JSX.Element {
+  const method = useMa2ModeStore(state => state.method);
+  const local = useLocalMa2Store();
+  const project = useDocumentStore(state => state.project);
+  const obs = useIntegrationStore(state => state.obs);
+  const p1 = useIntegrationStore(state => state.processes.p1);
+  const profile = useIntegrationStore(state => state.profile);
+  const ports = useIntegrationStore(state => state.midiPorts);
+  const checks = useConnectionCheckStore(state => state.checks);
+  const running = useConnectionCheckStore(state => state.running);
+  const lastMtcAt = useRuntimeStore(state => state.lastMtcAt);
   const [now, setNow] = useState(() => performance.now());
+  const [selected, setSelected] = useState<string | null>(null);
+  const [network, setNetwork] = useState<Ma2NetworkStatus | null>(null);
+  const [networkError, setNetworkError] = useState<string | null>(null);
+  const internal = project?.playbackSource === 'internal';
+  const targets = useMemo(() => midiConnectionTargets(profile, project), [profile, project]);
   useEffect(() => {
     if (internal) return;
-    const timer = window.setInterval(() => setNow(performance.now()), 500);
-    return () => window.clearInterval(timer);
+    const timer = setInterval(() => setNow(performance.now()), 500); return () => clearInterval(timer);
   }, [internal]);
-  const ids = internal ? [profile?.internalPlayer?.mtcOutputPortProfileId] : [profile?.p1.mtcInputPortProfileId, profile?.p1.controlOutputPortProfileId];
-  const configured = profile?.midiPortProfiles.filter((port) => ids.includes(port.id) && port.portName) ?? [];
-  const connected = configured.filter((port) => profile && hasConnectedProfilePort(profile, port.id, ports)).length;
-  const receiving = lastMtcAt !== null && now >= lastMtcAt && now - lastMtcAt <= 500;
-  return <div className="toolbar-project-summary">
-    {projectName ? <div className="toolbar-project-name" aria-label="当前工程" title={`${projectName}${projectPath ? `\n${projectPath}` : ''}`}><strong>{projectName}</strong>{dirty ? <span aria-label="未保存修改" title="未保存修改">·</span> : null}</div> : null}
-    <div className="toolbar-connections" aria-label="连接状态">
-    <Connection name="OBS" value={obs.status === 'connected' ? '已连接' : obs.status === 'connecting' || obs.status === 'reconnecting' ? '连接中' : obs.status === 'error' ? '异常' : '未连接'} ok={obs.status === 'connected'} detail={obs.error ?? undefined} />
-    {internal ? <Connection name="主控" value={initialized ? '本机播放' : '初始化中'} ok={initialized} /> : <Connection name="P1" value={p1.status === 'running' ? '运行中' : p1.status === 'error' ? '异常' : '未运行'} ok={p1.status === 'running'} detail={p1.error ?? undefined} />}
-    <ToolbarMtcStatus player={player} receiving={receiving} onSettings={onMtcSettings} portStatus={!initialized ? '检测中' : !configured.length ? internal ? '播放时检测' : '未配置' : connected === configured.length ? '已连接' : '未连接'} portDetail={configured.map((port) => `${port.direction === 'input' ? '输入' : '输出'}：${port.portName} · ${profile && hasConnectedProfilePort(profile, port.id, ports) ? '已连接' : '未连接'}`).join('\n')} />
-    {method !== 'midi' ? <Ma2NetworkIndicator key={method} /> : null}
-
-  </div></div>;
-}
-
-function Ma2NetworkIndicator(): JSX.Element {
-  const local = useLocalMa2Store();
-  const [localMode, setLocalMode] = useState(false);
-  const [status, setStatus] = useState<Ma2NetworkStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (method !== 'network') return;
+    let alive = true; let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = async (): Promise<void> => {
+      try { const status = ma2NetworkStatusSchema.parse(await desktop.getMa2NetworkStatus()); if (alive) { setNetwork(status); setNetworkError(null); timer = setTimeout(() => void read(), 3000); } }
+      catch (error) { if (alive) setNetworkError(toUserErrorMessage(error)); }
+    };
+    void read(); return () => { alive = false; clearTimeout(timer); };
+  }, [method, running]);
   useEffect(() => {
     let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const update = async (): Promise<void> => {
+    const inspectAudio = async (): Promise<void> => {
       try {
-        const next = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
-        if (!alive) return;
-        const directory = localStorage.getItem('tblink.ma2-onpc-data-directory.v1');
-        const method = localStorage.getItem('tblink.ma2-connection-method.v1');
-        setLocalMode(method === 'local' || !method && Boolean(directory));
-        setStatus(next); setError(null);
-        timer = setTimeout(() => void update(), 1000);
-      } catch (failure) { if (alive) { setStatus(null); setError(failure instanceof Error ? failure.message : String(failure)); } }
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (!alive || useConnectionCheckStore.getState().running) return;
+        const device = devices.find(entry => entry.kind === 'audiooutput' && entry.deviceId === (profile?.internalPlayer?.audioOutputDeviceId ?? 'default'));
+        useConnectionCheckStore.getState().finish('audio', device ? 'ready' : 'error', device ? '音频设备可用，播放时启用正式输出' : '所选音频设备不可用，请重新选择输出线路');
+      } catch (error) { if (alive && !useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('audio', 'error', toUserErrorMessage(error)); }
     };
-    void update();
-    return () => { alive = false; clearTimeout(timer); };
-  }, []);
-  if (localMode) return <Connection name="MA2" value={local.status === 'ready' ? '插件已响应' : local.status === 'connecting' ? '连接中' : local.status === 'error' ? '异常' : '未连接'} ok={local.status === 'ready'} detail={local.error ?? `本机 onPC：${local.directory}；MIDI 演出通道需单独验证`} />;
-  const connected = status?.state === 'connected';
-  return <Connection name="MA2" value={error || status?.error ? '异常' : connected ? '网络已连接' : status?.state === 'connecting' || status?.state === 'authenticating' ? '连接中' : status?.settings ? '未连接' : '网络未配置'} ok={connected} detail={error ?? status?.error ?? (connected ? `${status.settings?.host} · MA2 ${status.version}；网络登录已确认，插件与 MIDI 分别检查` : '在设置 → 设备连接中配置 MA2 网络连接')} />;
-}
-
-function Connection({ name, value, ok, detail }: { name: string; value: string; ok: boolean; detail?: string | undefined }): JSX.Element {
-  return <span className={`toolbar-connection ${ok ? 'connected' : 'disconnected'}`} title={detail || `${name}：${value}`}><i aria-hidden="true" /><strong>{name}</strong><span>{value}</span></span>;
+    const onAudioChange = (): void => { void inspectAudio(); };
+    onAudioChange(); navigator.mediaDevices.addEventListener('devicechange', onAudioChange);
+    return () => { alive = false; navigator.mediaDevices.removeEventListener('devicechange', onAudioChange); };
+  }, [profile?.internalPlayer?.audioOutputDeviceId]);
+  useEffect(() => {
+    let alive = true;
+    void desktop.loopMidi('detect').then(value => {
+      const status = loopMidiStatusSchema.parse(value);
+      if (alive && !useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('loop', status.state === 'running' ? 'ready' : profile?.loopMidi?.autoStart ? 'error' : 'skipped', status.state === 'running' ? 'loopMIDI 已运行，端口单独检查' : profile?.loopMidi?.autoStart ? '虚拟 MIDI 未启动，点击一键连接' : '未启用虚拟 MIDI 自动启动，实体 MIDI 不依赖此项');
+    }).catch(error => { if (alive && !useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('loop', 'error', toUserErrorMessage(error)); });
+    return () => { alive = false; };
+  }, [profile?.loopMidi?.autoStart]);
+  const rows: Row[] = [
+    checked({ id: 'obs', name: 'OBS 控制', value: obs.status === 'connected' ? '已连接' : obs.status === 'connecting' || obs.status === 'reconnecting' ? '连接中' : '未连接', state: obs.status === 'connected' ? 'ready' : obs.error ? 'error' : 'idle', detail: obs.error ?? '连接 OBS 场景与动作控制', category: 'obs' }, checks.obs),
+    checked({ id: 'preview', name: 'OBS 预览', value: obs.status === 'connected' ? '未检查' : '待 OBS 连接', state: 'idle', detail: '一键连接会检查内置组件并接收真实预览画面', category: 'obs' }, obs.status === 'connected' ? checks.preview : undefined),
+    checked({ id: 'audio', name: '音频输出', value: '检测中', state: 'idle', detail: '检查选择的声音输出设备', category: 'audio' }, checks.audio),
+    checked({ id: 'midi', name: '系统 MIDI', value: '检测中', state: 'idle', detail: '检查系统 MIDI 服务与驱动', category: 'audio' }, checks.midi),
+    checked({ id: 'loop', name: '虚拟 MIDI', value: '未检查', state: 'idle', detail: '软件间 MIDI 通道；实体接口不依赖此项', category: 'virtual' }, checks.loop),
+    checked({ id: 'p1', name: 'P1 播放器', value: internal || !project ? '未启用' : p1.status === 'running' ? '运行中' : '未运行', state: internal || !project ? 'skipped' : p1.status === 'running' ? 'ready' : 'idle', detail: internal ? '当前使用本机播放，无需启动 P1' : p1.error ?? '跟随模式会启动 P1 并监听输入时间码', category: 'source' }, internal || !project ? undefined : checks.p1),
+    { id: 'ma2', name: 'MA2 网络', value: method !== 'network' ? '未启用' : network?.state === 'connected' ? '已连接' : checks.ma2?.state === 'checking' ? '连接中' : '未连接', state: method !== 'network' ? 'skipped' : network?.state === 'connected' ? 'ready' : checks.ma2?.state === 'checking' ? 'checking' : networkError || network?.error || checks.ma2?.state === 'error' ? 'error' : 'idle', detail: method !== 'network' ? '当前使用 ' + (method === 'local' ? '本机 onPC' : 'MIDI') : networkError ?? network?.error ?? checks.ma2?.detail ?? '一键连接会连接已保存控台，未保存时识别局域网中的唯一控台', category: 'ma2' },
+    checked({ id: 'bridge', name: 'MA2 工程通信', value: method === 'midi' ? '未启用' : method === 'local' && local.status === 'ready' ? '已响应' : method === 'network' && network?.state !== 'connected' ? '待网络连接' : '未检查', state: method === 'midi' ? 'skipped' : method === 'local' && local.status === 'ready' ? 'ready' : 'idle', detail: method === 'midi' ? 'MIDI 模式不提供工程读写连接' : local.error ?? '单独验证控台读写通信，网络登录成功不代表此项已就绪', category: 'ma2' }, method === 'midi' || method === 'network' && network?.state !== 'connected' ? undefined : checks.bridge)
+  ];
+  for (const [id, name] of [['discovery', '程序识别'], ['profile', '连接配置']] as const) {
+    if (checks[id]?.state === 'error') rows.unshift(checked({ id, name, value: '待处理', state: 'error', detail: '', category: 'maintenance' }, checks[id]));
+  }
+  // A stale successful check never overrides an actual disconnect.
+  const obsRow = rows.find(row => row.id === 'obs');
+  if (obs.status !== 'connected' && obsRow?.state === 'ready') { obsRow.state = 'idle'; obsRow.value = '未连接'; obsRow.detail = obs.error ?? 'OBS 已断开'; }
+  for (const target of targets) {
+    const mapped = profile?.midiPortProfiles.find(port => port.id === target.id && port.direction === target.direction);
+    const matching = ports.filter(port => port.name === mapped?.portName && port.direction === target.direction && port.state === 'connected');
+    const available = matching.length === 1;
+    const open = available && matching[0]?.connection === 'open';
+    const key = 'port:' + target.id;
+    const check = checks[key];
+    rows.push({ id: key, name: target.name, state: check?.state === 'checking' ? 'checking' : !target.required ? 'skipped' : open ? 'ready' : check?.state === 'error' || checks.midi?.state === 'error' ? 'error' : 'idle',
+      value: check?.state === 'checking' ? '连接中' : !target.required ? '未启用' : open ? '已打开' : !mapped?.portName ? '未配置' : available ? '可用' : '未连接',
+      detail: check?.state === 'error' ? check.detail : target.required ? (mapped?.portName ?? '尚未选择接口') + '；接口就绪不代表正在收发时间码或 Cue' : '未启用此接口；在音频与 MIDI 中配置后纳入一键连接', category: 'audio' });
+  }
+  const detail = rows.find(row => row.id === selected);
+  const receiving = lastMtcAt !== null && now >= lastMtcAt && now - lastMtcAt <= 500;
+  return <div className="toolbar-project-summary">
+    <div className="toolbar-connections" aria-label="全部连接状态">
+      {rows.map(row => <button key={row.id} className={'toolbar-connection connection-chip state-' + row.state} aria-label={row.name + '：' + row.value} aria-pressed={selected === row.id} title={`${row.name}：${row.value}\n${row.detail}`} onClick={() => setSelected(selected === row.id ? null : row.id)}>{row.name}</button>)}
+      <ToolbarMtcStatus player={player} receiving={receiving} onSettings={() => onSettings('audio')} portStatus={checks.midi?.state === 'error' ? '不可用' : '详见上方各输入输出接口'} portDetail={targets.filter(target => target.required).map(target => target.name + '：' + (profile?.midiPortProfiles.find(port => port.id === target.id)?.portName ?? '未配置')).join('；')} />
+    </div>
+    {detail ? <div className="connection-inline-detail" role="region" aria-label="连接详情"><strong>{detail.name} · {detail.value}</strong><span>{detail.detail}</span><button onClick={() => { onSettings(detail.category); setSelected(null); }}>前往设置</button><button aria-label="收起连接详情" onClick={() => setSelected(null)}>收起</button></div> : null}
+  </div>;
 }

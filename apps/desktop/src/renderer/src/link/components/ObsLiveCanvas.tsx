@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
+import { toUserErrorMessage } from '@tb/core/link';
 import { obsLiveSceneSchema, type ObsLiveEdit, type ObsLiveScene } from '@tb/schema';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 import { ObsLiveSelection } from './ObsLiveSelection';
+import { obsPreviewSession } from '../view-models/obs-preview-session';
 
 let liveSession: Promise<void> = Promise.resolve();
 
-export function ObsLiveCanvas(): JSX.Element {
+export const ObsLiveCanvas = memo(function ObsLiveCanvas(): JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [scene, setScene] = useState<ObsLiveScene | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,13 +47,13 @@ export function ObsLiveCanvas(): JSX.Element {
   useEffect(() => {
     if (suspended || !visible) return;
     let active = true;
-    let started = false;
     if (previewFailed.current) return;
+    const preview = obsPreviewSession.open();
     setError(null);
     const run = async (): Promise<void> => {
       try {
         while (active) {
-          const frame = await desktop.getObsLiveFrame();
+          const frame = await preview.next();
           if (!active) break;
           const target = canvas.current;
           const context = target?.getContext('2d', { alpha: false });
@@ -61,10 +63,11 @@ export function ObsLiveCanvas(): JSX.Element {
           const pixels = new Uint8ClampedArray(frame.rgba.buffer, frame.rgba.byteOffset, frame.rgba.byteLength);
           context.putImageData(new ImageData(pixels, frame.width, frame.height), 0, 0);
         }
-      } catch (reason) { if (active) { previewFailed.current = true; setError(String(reason)); } }
+      } catch (reason) { if (active) { previewFailed.current = true; setError(toUserErrorMessage(reason)); } }
+      finally { await preview.close(); }
     };
-    liveSession = liveSession.then(async () => { if (active) { started = true; await run(); } });
-    return () => { active = false; if (started) void desktop.closeObsLivePreview().catch((reason: unknown) => { console.error('关闭 OBS 预览失败', reason); }); };
+    liveSession = liveSession.then(async () => { if (active) await run(); }).catch((reason: unknown) => { if (active) setError(toUserErrorMessage(reason)); console.error('OBS 预览会话失败', reason); });
+    return () => { active = false; void preview.close().catch((reason: unknown) => { console.error('关闭 OBS 预览失败', reason); }); };
   }, [restart, suspended, visible]);
   const repair = async (): Promise<void> => {
     if (repairing) return;
@@ -103,4 +106,4 @@ export function ObsLiveCanvas(): JSX.Element {
     {error || repairing ? <div className="stage-error" role="alert">{repairing ? '正在检查 OBS 组件，请完成可能出现的 Windows 授权或 OBS 重启确认。' : error}<button disabled={repairing} onClick={() => { void repair(); }}>检查并修复组件</button><button disabled={repairing} onClick={() => { previewFailed.current = false; setSuspended(false); setRestart((value) => value + 1); }}>重新连接预览</button></div> : null}
     </div>
   </div>;
-}
+});

@@ -15,6 +15,9 @@ export class Ma2Telnet {
   private streams: Stream[] = [];
   private current: Ma2TelnetState = 'disconnected';
   private connecting = false;
+  private commandTail: Promise<void> = Promise.resolve();
+  private queuedCommands = 0;
+  private connectionEpoch = 0;
   constructor(private readonly address: Ma2NetworkAddress, private readonly onState: (state: Ma2TelnetState) => void = () => undefined, private readonly timeoutMs = 5000) {
     if (!isIP(address.host) || [address.port, address.monitorPort].some((port) => !Number.isInteger(port) || port < 1 || port > 65535) || address.port === address.monitorPort) throw new Error('请填写有效的控台 IP 地址和端口');
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new Error('MA2 连接超时设置无效');
@@ -61,14 +64,23 @@ export class Ma2Telnet {
   async command(line: string, match: (response: string) => string | null): Promise<string> {
     if (!this.socket || (this.current !== 'connected' && this.current !== 'authenticating')) throw new Error('MA2 尚未连接');
     if (/[\r\n\u0000]/.test(line) || Buffer.byteLength(line) > 4096) throw new Error('MA2 网络命令格式或长度无效');
-    if (this.waiter) throw new Error('MA2 网络请求尚未完成');
-    for (const stream of this.streams) stream.buffer = '';
-    const response = this.waitFor(match);
-    this.socket.write(`${line}\r\n`);
+    if (this.queuedCommands >= 32) throw new Error('控台请求过多，请等待当前操作完成');
+    const epoch = this.connectionEpoch;
+    this.queuedCommands += 1;
+    const response = this.commandTail.then(() => {
+      if (epoch !== this.connectionEpoch || !this.socket) throw new Error('控台连接已改变，待发送请求已取消');
+      for (const stream of this.streams) stream.buffer = '';
+      const pending = this.waitFor(match);
+      this.socket.write(`${line}\r\n`);
+      return pending;
+    }).finally(() => { this.queuedCommands -= 1; });
+    // Advance scheduling on either outcome; the caller still receives every failure.
+    this.commandTail = response.then(() => undefined, () => undefined);
     return response;
   }
   disconnect(): void { this.fail(new Error('MA2 连接已关闭；未确认的操作不会自动重试')); }
   private fail(error: Error): void {
+    this.connectionEpoch += 1;
     this.socket = null;
     const streams = this.streams; this.streams = [];
     for (const stream of streams) stream.socket.destroy();
@@ -113,6 +125,10 @@ export class Ma2Telnet {
     if (!this.waiter && stream.buffer.length > 65536) stream.buffer = stream.buffer.slice(-32768);
     if (stream.buffer.length > 1024 * 1024) { this.fail(new Error('MA2 网络响应超过限制')); return; }
     stream.buffer = stream.buffer.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+    if (stream.socket === this.socket && this.current === 'connecting' && /(?:^|[\r\n])\s*Remote commandline disabled\s*(?:[\r\n]|$)/i.test(stream.buffer)) {
+      this.fail(new Error('已找到控台，但控台尚未开启远程连接。请在控台设置中开启远程登录，然后连接。'));
+      return;
+    }
     this.check();
   }
 }
@@ -120,5 +136,5 @@ export class Ma2Telnet {
 /** Native monitor lines have a timestamp; command echo must never match a result. */
 export function ma2ResponseLine(text: string, prefix: string): string | null {
   if (!/^[A-Z0-9_a-f:]+$/.test(prefix)) throw new Error('Invalid response prefix');
-  return new RegExp(`(?:^|[\\r\\n])(?:[0-9]+h[0-9]+m[0-9]+\\.[0-9]+s : )?${prefix}([^\\r\\n]+)\\r?\\n`).exec(text)?.[1] ?? null;
+  return new RegExp(`(?:^|[\\r\\n])(?:[0-9]+h[0-9]+m[0-9]+\\.[0-9]+s\\s+(?:[A-Z][A-Z0-9_]{0,15}\\s*)?:\\s*)?${prefix}([^\\r\\n]+)\\r?\\n`).exec(text)?.[1] ?? null;
 }

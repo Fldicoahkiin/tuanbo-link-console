@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
+import { windowsPowerShellExecutable } from './windows-powershell';
 
 const run = promisify(execFile);
 const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
@@ -45,10 +46,11 @@ exit 0
 }
 
 export async function elevateObsPluginInstall(source: string, sha256: string): Promise<void> {
+  const executable = await windowsPowerShellExecutable();
   const script = obsPluginInstallScript(source, sha256);
   const launcher = `$ErrorActionPreference='Stop'; try { $p=Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -Verb RunAs -WindowStyle Hidden -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand','${encoded(script)}') -Wait -PassThru; if($p.ExitCode -ne 0){throw '插件部署失败：文件可能仍被 OBS 占用，或目标目录不可写。原插件不会被截断。'} } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }`;
   try {
-    await run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded(launcher)], { windowsHide: true });
+    await run(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded(launcher)], { windowsHide: true });
   } catch (error) {
     throw new Error('OBS 组件部署未完成。Windows 授权被取消，或组件仍被占用；请处理后在软件中再次点击“检查并修复组件”。', { cause: error });
   }

@@ -16,6 +16,7 @@ export function cueIngredients(document: LightingDocument, eventId?: string): Cu
 }
 export function saveCueIngredients(document: LightingDocument, ingredients: CueIngredient[], name: string, ms: number, durationMs: number, eventId?: string): LightingDocument {
   if (!ingredients.length) throw new Error('请先选择素材');
+  if (ingredients.some(entry => !/^[1-9]\d*\.[1-9]\d*$/.test(entry.executor))) throw new Error('请先为素材绑定真实执行器');
   if (new Set(ingredients.map(entry => entry.executor)).size !== ingredients.length) throw new Error('同一执行器只能使用一个素材，请先替换冲突素材');
   const first = document.templates.find(effect => effect.track.cueStamp?.mode === 'fixed');
   if (!first) throw new Error('请先添加素材');

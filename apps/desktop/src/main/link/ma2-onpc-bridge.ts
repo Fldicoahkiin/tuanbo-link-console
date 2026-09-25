@@ -13,7 +13,9 @@ export class Ma2BridgeFailure extends Error {
 
 /** One request at a time; timeout is an uncertain outcome and is never retried. */
 export class Ma2OnpcBridge {
-  private busy = false;
+  private exchangeTail: Promise<void> = Promise.resolve();
+  private queuedExchanges = 0;
+  private exchangeEpoch = 0;
   constructor(private readonly dataDirectory: string | Ma2Wire, private readonly isPlaying: () => boolean) {
     if (typeof dataDirectory === 'string' && !isAbsolute(dataDirectory)) throw new Error('MA2 数据目录必须是绝对路径');
   }
@@ -21,7 +23,20 @@ export class Ma2OnpcBridge {
     return (await this.exchange(operation, target, expected, desired)).response;
   }
   async exchange(operation: Ma2Operation, target: number, expected = '', desired = ''): Promise<{ response: string; requestId: string }> {
-    if (this.busy) throw new Error('MA2 正在交换数据');
+    if (this.queuedExchanges >= 32) throw new Error('控台操作过多，请等待当前操作完成');
+    const epoch = this.exchangeEpoch;
+    this.queuedExchanges += 1;
+    const result = this.exchangeTail.then(async () => {
+      if (epoch !== this.exchangeEpoch) throw new Error('前一项控台操作未完成，待处理操作已取消');
+      try { return await this.performExchange(operation, target, expected, desired); }
+      catch (error) { this.exchangeEpoch += 1; throw error; }
+    }).finally(() => { this.queuedExchanges -= 1; });
+    // Serialize the entire transaction, including all chunks and response release.
+    // Scheduling consumes rejection only internally; callers retain the original error.
+    this.exchangeTail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+  private async performExchange(operation: Ma2Operation, target: number, expected: string, desired: string): Promise<{ response: string; requestId: string }> {
     if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号无效');
     const writing = operation === 'APPLY' || operation === 'SYNC' || operation === 'CREATE';
     if (operation === 'EXECUTOR' && (!/^[1-9]\d*$/.test(expected) || Number(expected) > 99999 || desired !== '')) throw new Error('执行器编号无效');
@@ -38,7 +53,6 @@ export class Ma2OnpcBridge {
         if (operation === 'CREATE' && (report.timecodes[0].tracks.length || report.timecodes[0].attributes.frame_format !== '30 FPS' || Number(report.timecodes[0].attributes.offset ?? 0) !== 0)) throw new Error('新建 Timecode 必须为空且使用已验证的 30 FPS');
       }
     }
-    this.busy = true;
     const id = randomUUID().replaceAll('-', '');
     let sent = false;
     try {
@@ -108,6 +122,6 @@ export class Ma2OnpcBridge {
         }
       }
       throw new Ma2BridgeFailure(message, id, sent, { cause: error }, backupFile);
-    } finally { this.busy = false; }
+    }
   }
 }

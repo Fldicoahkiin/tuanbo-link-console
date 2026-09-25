@@ -1,3 +1,4 @@
+import { requestMidiAccess } from './midi-access';
 export class PlaybackMidiInput {
   private input: MIDIInput | null = null;
   private generation = 0;
@@ -6,7 +7,7 @@ export class PlaybackMidiInput {
   private readonly onState = (): void => { if (this.input?.state === 'disconnected') this.fail('播放控制 MIDI 输入已断开'); };
   async connect(portName: string): Promise<void> {
     this.dispose(); const generation = this.generation;
-    const access = await navigator.requestMIDIAccess({ sysex: false });
+    const access = await requestMidiAccess({ sysex: false });
     if (generation !== this.generation) return;
     const matches = [...access.inputs.values()].filter((port) => port.name === portName && port.state === 'connected');
     const input = matches[0];
