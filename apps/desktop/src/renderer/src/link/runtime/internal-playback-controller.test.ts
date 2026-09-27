@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../../registry/license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../view-models/local-integration-profile';
 import { InternalPlaybackController, emptyInternalPlayerState } from './internal-playback-controller';

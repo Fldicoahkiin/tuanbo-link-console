@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
+vi.mock('./license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { createLightingDocument, lightingTrackSchema } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../link/view-models/local-integration-profile';
 import { LightingMidiOutput } from './lighting-midi-output';

@@ -4,6 +4,8 @@ import { LicenseService } from './link/license-service';
 import { writeFileAtomically } from './link/atomic-file';
 import { readLicenseMachineCode } from './link/license-machine';
 import licensePublicKeys from './link/license-public-keys.json';
+import licenseConfig from './link/license-config.json';
+import { LicenseAccess, needsProductLicense } from './link/license-access';
 import { licenseRequestSchema } from '@tb/schema';
 import { installObsLiveBridge } from './link/obs-live-install';
 import { existsSync } from 'node:fs';
@@ -107,6 +109,8 @@ protocol.registerSchemesAsPrivileged([{
 let mainWindow: BrowserWindow | null = null;
 let documentDirty = false;
 let runtimeActive = false;
+let authorizeOutput: () => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
+let authorizeProduct: (channel: string, value: unknown) => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
 let allowWindowClose = false;
 let quitFlowRunning = false;
 let restoreMainWindow: (() => void) | null = null;
@@ -204,11 +208,14 @@ function createMainWindow(obs: ObsWebSocketAdapter): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      devTools: !app.isPackaged,
       backgroundThrottling: false,
       autoplayPolicy: 'no-user-gesture-required'
     }
   });
   mainWindow.setMenu(null);
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', event => event.preventDefault());
   const notifyVisibility = (): void => sendToRenderer('link:window-visible', Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized()));
   mainWindow.on('minimize', notifyVisibility);
   mainWindow.on('restore', notifyVisibility);
@@ -242,7 +249,7 @@ function createMainWindow(obs: ObsWebSocketAdapter): void {
   });
   mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
     if (permission === 'midi' || permission === 'midiSysex') {
-      void midiHealth.check().then((result) => callback(result === 'ready'), (error: unknown) => {
+      void authorizeOutput().then(() => midiHealth.check()).then((result) => callback(result === 'ready'), (error: unknown) => {
         console.error('MIDI 检测组件失败', error);
         callback(false);
       });
@@ -294,12 +301,44 @@ function registerIpc(
   integrationDetector: WindowsIntegrationDetector,
   updateManager: LinkUpdateManager
 ): void {
+  const enforcement = z.literal('required').parse(licenseConfig.enforcement);
   let licenseService: LicenseService | undefined;
   const getLicenseService = async (): Promise<LicenseService> => {
-    if (!licenseService) licenseService = new LicenseService(app.getPath('userData'), await readLicenseMachineCode(), licensePublicKeys);
+    if (!licenseService) licenseService = new LicenseService(app.getPath('userData'), await readLicenseMachineCode(), licensePublicKeys, Date.now, {
+      serverUrl: licenseConfig.serverUrl, enforcement, credentials: profileStore
+    });
     return licenseService;
   };
   handle('link:license-status', async () => (await getLicenseService()).status());
+  let licenseChanging = false;
+  const licenseAccess = new LicenseAccess(async () => (await getLicenseService()).status());
+  authorizeOutput = async () => {
+    if (licenseChanging) throw new Error('请等待授权操作完成后再执行设备输出');
+    await licenseAccess.requireOutput();
+    if (licenseChanging) throw new Error('授权正在更换，请完成后重新执行');
+  };
+  authorizeProduct = async (channel, value) => {
+    const protectedCall = needsProductLicense(channel, value);
+    if (protectedCall && licenseChanging) throw new Error('请等待授权操作完成后再使用产品功能');
+    await licenseAccess.authorize(channel, value);
+    if (protectedCall && licenseChanging) throw new Error('授权正在更换，请完成后重试');
+  };
+  handle('link:license-require-output', () => authorizeOutput());
+  const changeOnlineLicense = async (code?: string) => {
+    if (runtimeActive || licenseChanging) throw new Error('请停止播放，并等待上一项授权操作完成');
+    licenseChanging = true;
+    try {
+      const service = await getLicenseService();
+      const result = code === undefined ? await service.refreshOnline() : await service.activateCode(code);
+      await logger.record({ level: 'info', category: 'system', message: '在线授权已验证并保存', result: 'succeeded' });
+      return result;
+    } catch (error) {
+      await logger.record({ level: 'error', category: 'system', message: '在线授权验证失败，请查看授权设置中的错误提示', result: 'failed' });
+      throw error;
+    } finally { licenseChanging = false; }
+  };
+  handle('link:license-activate-code', (_event, value: unknown) => changeOnlineLicense(z.string().max(64).parse(value)));
+  handle('link:license-refresh-online', () => changeOnlineLicense());
   handle('link:license-export-request', async () => {
     const status = await (await getLicenseService()).status();
     const result = await dialog.showSaveDialog(mainWindow!, { title: '导出本机授权申请', defaultPath: '团播联动台-授权申请.json', filters: [{ name: '授权申请', extensions: ['json'] }] });
@@ -308,16 +347,19 @@ function registerIpc(
     return true;
   });
   handle('link:license-import', async () => {
-    if (runtimeActive) throw new Error('请停止播放后再更换授权');
-    const result = await dialog.showOpenDialog(mainWindow!, { title: '导入本机授权', properties: ['openFile'], filters: [{ name: '团播联动台授权', extensions: ['tbllicense'] }] });
-    const file = result.filePaths[0];
-    if (result.canceled || !file) return null;
-    if ((await stat(file)).size > 16384) throw new Error('授权文件超过大小限制');
-    const token = await readFile(file, 'utf8');
-    if (runtimeActive) throw new Error('播放已开始，请停止后再导入授权');
-    const status = await (await getLicenseService()).activate(token);
-    await logger.record({ level: 'info', category: 'system', message: '已导入本机授权', result: 'succeeded' });
-    return status;
+    if (runtimeActive || licenseChanging) throw new Error('请停止播放并等待授权操作完成后再更换授权');
+    licenseChanging = true;
+    try {
+      const result = await dialog.showOpenDialog(mainWindow!, { title: '导入本机授权', properties: ['openFile'], filters: [{ name: '团播联动台授权', extensions: ['tbllicense'] }] });
+      const file = result.filePaths[0];
+      if (result.canceled || !file) return null;
+      if ((await stat(file)).size > 16384) throw new Error('授权文件超过大小限制');
+      const token = await readFile(file, 'utf8');
+      if (runtimeActive) throw new Error('播放已开始，请停止后再导入授权');
+      const status = await (await getLicenseService()).activate(token);
+      await logger.record({ level: 'info', category: 'system', message: '已导入本机授权', result: 'succeeded' });
+      return status;
+    } finally { licenseChanging = false; }
   });
   const ma2Connections = new Ma2Connections(() => runtimeActive);
   const loopMidiService = new LoopMidiService();
@@ -502,8 +544,12 @@ function registerIpc(
   handle('link:set-document-dirty', (_event, dirtyValue: unknown) => {
     documentDirty = linkDocumentDirtySchema.parse(dirtyValue);
   });
-  handle('link:set-runtime-active', (_event, activeValue: unknown) => {
-    runtimeActive = linkRuntimeActiveSchema.parse(activeValue);
+  handle('link:set-runtime-active', async (_event, activeValue: unknown) => {
+    if (licenseChanging && activeValue === true) throw new Error('请等待授权操作完成后再播放');
+    const active = linkRuntimeActiveSchema.parse(activeValue);
+    await licenseAccess.setActive(active);
+    if (active && licenseChanging) { await licenseAccess.setActive(false); throw new Error('授权正在更换，请完成后重新播放'); }
+    runtimeActive = active;
   });
   handle('link:window-control', (event, actionValue: unknown) => {
     const action = linkWindowControlActionSchema.parse(actionValue);
@@ -962,6 +1008,8 @@ function registerIpc(
 
 function registerAssetProtocol(): void {
   protocol.handle('tblink-asset', async (request) => {
+    try { await authorizeOutput(); }
+    catch (error) { return new Response(error instanceof Error ? error.message : '授权校验失败', { status: 403 }); }
     const url = new URL(request.url);
     const token = url.pathname.slice(1);
     const path = assetTokens.get(token);
@@ -1092,7 +1140,11 @@ function handle<Arguments extends unknown[], Result>(
   listener: (event: IpcMainInvokeEvent, ...args: Arguments) => Result | Promise<Result>
 ): void {
   ipcMain.removeHandler(channel);
-  ipcMain.handle(channel, listener);
+  ipcMain.handle(channel, async (event, ...args: Arguments) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('拒绝非主窗口的 IPC 请求');
+    await authorizeProduct(channel, args[0]);
+    return listener(event, ...args);
+  });
 }
 
 function sendToRenderer(channel: string, payload: unknown): void {

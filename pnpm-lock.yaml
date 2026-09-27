@@ -40,6 +40,9 @@ importers:
       electron:
         specifier: 39.8.10
         version: 39.8.10
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       eslint:
         specifier: ^9.39.1
         version: 9.39.4(jiti@2.6.1)
@@ -122,6 +125,16 @@ importers:
       rcedit:
         specifier: 5.0.2
         version: 5.0.2
+
+  apps/licensing-server:
+    dependencies:
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
 
   packages/core:
     dependencies:

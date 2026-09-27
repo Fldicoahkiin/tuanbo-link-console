@@ -1,4 +1,5 @@
 import { requestMidiAccess } from './midi-access';
+import { requireOutputLicense } from './license-output';
 import type { IntegrationProfile, LinkAction, MtcFrameRate } from '@tb/schema';
 import type { LinkActionExecutor } from '@tb/core/link';
 
@@ -200,6 +201,7 @@ export class LinkMidiAdapter implements LinkActionExecutor {
 
   async execute(action: LinkAction): Promise<void> {
     try {
+      if (action.kind !== 'midi.noteOff' && !(action.kind === 'midi.showControl' && action.command === 'stop')) await requireOutputLicense();
       this.executeSynchronous(action);
       if (action.kind === 'midi.noteOn' && action.durationMs !== undefined) {
         await new Promise<void>((resolve) => globalThis.setTimeout(resolve, action.durationMs));

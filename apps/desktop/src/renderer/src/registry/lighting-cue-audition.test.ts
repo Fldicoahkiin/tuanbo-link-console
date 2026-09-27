@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
+vi.mock('./license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { createLightingDocument, lightingTrackSchema } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../link/view-models/local-integration-profile';
 import { LightingCueAudition } from './lighting-cue-audition';
@@ -30,7 +31,9 @@ it('快速改选时迟到的前一条 Cue 不得发送', async () => {
 it('关闭选中即播放后，正在申请权限的 Cue 不得补发', async () => {
   const f = fixture(); let finish = (): void => { throw new Error('未开始'); };
   f.request.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(f.access); }));
-  const pending = f.audition.play(f.document, 'a', f.profile); f.audition.cancel(); finish();
+  const pending = f.audition.play(f.document, 'a', f.profile);
+  await vi.waitFor(() => expect(f.request).toHaveBeenCalledOnce());
+  f.audition.cancel(); finish();
   expect(await pending).toBe(0); expect(f.send).not.toHaveBeenCalled();
 });
 it('权限挂起明确超时，不会在超时后补发', async () => {

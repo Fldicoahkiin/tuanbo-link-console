@@ -1,0 +1,26 @@
+[Unit]
+Description=Tuanbo licensing API
+After=network.target
+
+[Service]
+Type=simple
+User=tblink-license
+Group=tblink-license
+WorkingDirectory=/opt/tblink-licensing
+EnvironmentFile=/etc/tblink-licensing/service.env
+ExecStart=/usr/bin/node /opt/tblink-licensing/dist/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+StateDirectory=tblink-licensing
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tblink-licensing
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('./license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { LinkMidiAdapter, buildMidiShowControlMessage, hasConnectedProfilePort, type MidiPortProfile, type MidiPortSnapshot } from './link-midi-adapter';
 import type { IntegrationProfile } from '@tb/schema';
 

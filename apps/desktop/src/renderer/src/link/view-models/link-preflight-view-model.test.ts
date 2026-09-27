@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+vi.mock('../../registry/license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { createEmptyLinkProject, parseLinkProject, type LinkAction } from '@tb/schema';
 import { runDesktopPreflight } from './link-preflight-view-model';
 import { createDefaultIntegrationProfile } from './local-integration-profile';

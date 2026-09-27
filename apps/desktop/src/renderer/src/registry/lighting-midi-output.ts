@@ -1,4 +1,5 @@
 import { requestMidiAccess } from './midi-access';
+import { requireOutputLicense } from './license-output';
 import { compileLightingPackets, LightingScheduler, type LightingPacket } from '@tb/core/link';
 import type { IntegrationProfile, LightingDocument } from '@tb/schema';
 
@@ -10,6 +11,7 @@ export class LightingMidiOutput {
     const packets = compileLightingPackets(document, profile?.lighting?.mscDeviceId ?? 127);
     const ids = new Set(packets.map((packet) => packet.portProfileId));
     if (ids.size) {
+      await requireOutputLicense();
       const access = await requestMidiAccess({ sysex: true });
       for (const id of ids) {
         const mapping = profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output');

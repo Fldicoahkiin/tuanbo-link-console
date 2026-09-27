@@ -24,7 +24,7 @@ try {
     const request = JSON.parse(await readFile(resolve(required('request')), 'utf8'));
     if (request.version !== 1 || request.product !== 'tuanbo-link-console' || !/^TB1-[A-F0-9]{64}$/.test(request.machineCode)) throw new Error('授权申请格式无效');
     const kind = required('kind');
-    if (!['perpetual', 'subscription', 'trial'].includes(kind)) throw new Error('kind 必须为 perpetual、subscription 或 trial');
+    if (!['perpetual', 'subscription'].includes(kind)) throw new Error('kind 必须为 perpetual 或 subscription；不提供试用');
     const customer = required('customer').trim();
     if (!customer || customer.length > 160) throw new Error('客户名称长度必须在 1 至 160 字之间');
     const now = new Date();
@@ -43,6 +43,6 @@ try {
     await writeNew(required('out'), `${input}.${sign(null, Buffer.from(input), privateKey).toString('base64url')}`);
     console.log(`已签发 ${kind} 单主机授权，编号 ${claims.licenseId}。请在订单台账登记该编号。`);
   } else {
-    throw new Error('用法：keygen --kid ID --private 私钥路径 --public 公钥JSON路径；issue --private 私钥路径 --public 公钥JSON路径 --kid ID --request 申请JSON --customer 客户 --kind perpetual|subscription|trial --updates-until ISO日期 [--use-until ISO日期] --out 授权.tbllicense');
+    throw new Error('用法：keygen --kid ID --private 私钥路径 --public 公钥JSON路径；issue --private 私钥路径 --public 公钥JSON路径 --kid ID --request 申请JSON --customer 客户 --kind perpetual|subscription --updates-until ISO日期 [--use-until ISO日期] --out 授权.tbllicense');
   }
 } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }

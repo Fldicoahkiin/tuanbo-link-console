@@ -5,6 +5,7 @@ import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { linkDesktopViewModel } from './link-desktop-view-model';
 import { useDisplayPreferences } from '../stores/display-preferences-store';
+import { requireOutputLicense } from '../../registry/license-output';
 
 export async function runDesktopPreflight(
   coordinator: LinkRuntimeCoordinator,
@@ -18,6 +19,7 @@ export async function runDesktopPreflight(
   if (!document.project) throw new Error('尚未加载工程，请打开已有工程');
   if (!document.path) throw new Error('当前工程尚未保存，请先保存工程再播放');
   if (!integration.profile) throw new Error(integration.error ?? '连接配置尚未加载，请在设置中检查 OBS 与 MIDI 连接配置');
+  await requireOutputLicense();
 
   coordinator.beginPreflight(mode);
   const selectedId = useRuntimeStore.getState().currentItemId;

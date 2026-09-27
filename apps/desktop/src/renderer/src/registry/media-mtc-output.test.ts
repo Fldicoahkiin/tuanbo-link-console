@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('./license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { MediaMtcOutput } from './media-mtc-output';
 import { MtcQuarterFrameDecoder, playbackFramesPerSecond } from '@tb/core/link';
 

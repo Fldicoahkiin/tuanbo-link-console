@@ -2,8 +2,18 @@ import { createPublicKey, verify } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { licenseClaimsSchema, licenseMachineCodeSchema, type LicenseClaims, type LicenseStatus } from '@tb/schema';
+import { activationCodeSchema, licenseActivationResponseSchema, licenseClaimsSchema, licenseMachineCodeSchema, type LicenseClaims, type LicenseStatus } from '@tb/schema';
 import { writeFileAtomically } from './atomic-file';
+import type { SecureProfileStore } from './secure-profile-store';
+
+type OnlineOptions = {
+  serverUrl: string;
+  enforcement: LicenseStatus['enforcement'];
+  credentials: Pick<SecureProfileStore, 'hasCredential' | 'loadCredential' | 'saveCredential'>;
+  fetch?: typeof fetch;
+};
+const CODE_CREDENTIAL = 'license.activation.code';
+const CLOCK_CREDENTIAL = 'license.clock';
 
 const headerSchema = z.object({ alg: z.literal('EdDSA'), typ: z.literal('JWT'), kid: z.string().min(1).max(80) }).strict();
 const tokenSchema = z.string().max(16384).regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
@@ -26,23 +36,27 @@ export function verifyLicense(token: string, machineCode: string, keys: Readonly
 
 export class LicenseService {
   private readonly path: string;
-  constructor(directory: string, private readonly machineCode: string, private readonly keys: Readonly<Record<string, string>>, private readonly now: () => number = Date.now) {
+  constructor(directory: string, private readonly machineCode: string, private readonly keys: Readonly<Record<string, string>>, private readonly now: () => number = Date.now, private readonly online?: OnlineOptions) {
     licenseMachineCodeSchema.parse(machineCode);
     this.path = join(directory, 'licensing', 'license.jwt');
   }
   private result(claims: LicenseClaims | null, state: LicenseStatus['state'], message: string): LicenseStatus {
-    return { machineCode: this.machineCode, state, claims, message, enforcement: 'preview' };
+    return { machineCode: this.machineCode, state, claims, message, enforcement: this.online?.enforcement ?? 'required', onlineAvailable: Boolean(this.online?.serverUrl && Object.keys(this.keys).length) };
   }
   private describe(token: string): LicenseStatus {
     const claims = verifyLicense(token, this.machineCode, this.keys, this.now());
+    if (claims.kind === 'trial') return this.result(claims, 'invalid', '本产品仅支持付费授权，不接受试用许可');
     if (claims.useUntil && this.now() >= Date.parse(claims.useUntil)) return this.result(claims, 'expired', '使用期限已结束；工程文件保持不变');
+    if (claims.online && this.now() >= Date.parse(claims.online.leaseUntil)) return this.result(claims, 'renewal-required', '离线凭证已到期，请联网验证授权；这不表示买断使用权到期');
     return this.result(claims, 'active', claims.kind === 'perpetual' ? '本机永久授权有效；升级服务期限单独计算' : '本机授权有效');
   }
   async status(): Promise<LicenseStatus> {
     if (!Object.keys(this.keys).length) return this.result(null, 'unconfigured', '授权签发尚未启用，可先导出本机授权申请');
     try {
       if ((await stat(this.path)).size > 16384) throw new Error('授权文件超过大小限制');
-      return this.describe((await readFile(this.path, 'utf8')).trim());
+      const status = this.describe((await readFile(this.path, 'utf8')).trim());
+      if (status.claims?.online) await this.checkClock();
+      return status;
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return this.result(null, 'inactive', '此主机尚未激活');
       return this.result(null, 'invalid', `授权读取或校验失败：${error instanceof Error ? error.message : String(error)}`);
@@ -51,8 +65,56 @@ export class LicenseService {
   async activate(token: string): Promise<LicenseStatus> {
     const normalized = token.trim();
     const result = this.describe(normalized);
-    if (result.state !== 'active') throw new Error('这份授权已到期，未替换本机现有授权');
+    if (result.state !== 'active') throw new Error(`${result.message}；未替换本机现有授权`);
     await writeFileAtomically(this.path, normalized);
     return result;
+  }
+  private async checkClock(): Promise<void> {
+    if (!this.online) throw new Error('在线授权缺少安全存储配置');
+    const storage = this.online.credentials;
+    const last = await storage.hasCredential(CLOCK_CREDENTIAL) ? z.number().finite().parse(JSON.parse(await storage.loadCredential(CLOCK_CREDENTIAL))) : 0;
+    if (this.now() + 300_000 < last) throw new Error('检测到系统时间回拨，请校正系统日期并联网验证');
+    await storage.saveCredential(CLOCK_CREDENTIAL, JSON.stringify(Math.max(last, this.now())));
+  }
+  async activateCode(input: string): Promise<LicenseStatus> {
+    const code = activationCodeSchema.parse(input);
+    const online = this.online;
+    if (!online?.serverUrl || !Object.keys(this.keys).length) throw new Error('发行方尚未配置在线授权服务');
+    const url = new URL(online.serverUrl);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('授权服务器必须是固定的 HTTPS 域名');
+    // Refuse activation before allocating a seat if encrypted storage is unavailable.
+    await this.checkClock();
+    let response: Response;
+    try {
+      response = await (online.fetch ?? fetch)(new URL('/v1/activate', url), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, redirect: 'error',
+        body: JSON.stringify({ product: 'tuanbo-link-console', code, machineCode: this.machineCode }), signal: AbortSignal.timeout(10000)
+      });
+    } catch { throw new Error('无法连接授权服务器，请检查网络后手动重试；现有授权保持不变'); }
+    if (!response.ok) {
+      await response.body?.cancel();
+      const messages: Record<number, string> = { 403: '激活码无效、已到期或已撤销，请联系发行方', 409: '激活码已绑定其他机器，请联系发行方办理换机', 429: '激活请求过于频繁，请稍后手动重试' };
+      throw new Error(messages[response.status] ?? `授权服务器请求失败（${response.status}），现有授权保持不变`);
+    }
+    if (!response.body) throw new Error('授权服务器返回为空');
+    const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+    try {
+      for (;;) {
+        const part = await reader.read(); if (part.done) break;
+        size += part.value.length;
+        if (size > 20000) throw new Error('授权服务器返回超过大小限制');
+        chunks.push(part.value);
+      }
+    } finally { await reader.cancel(); reader.releaseLock(); }
+    const result = licenseActivationResponseSchema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+    const status = this.describe(result.license);
+    if (!status.claims?.online || status.state !== 'active') throw new Error('服务器未返回有效的在线授权');
+    await online.credentials.saveCredential(CODE_CREDENTIAL, code);
+    await writeFileAtomically(this.path, result.license);
+    return status;
+  }
+  async refreshOnline(): Promise<LicenseStatus> {
+    if (!this.online || !await this.online.credentials.hasCredential(CODE_CREDENTIAL)) throw new Error('本机尚未保存激活码，请先输入激活码');
+    return this.activateCode(await this.online.credentials.loadCredential(CODE_CREDENTIAL));
   }
 }

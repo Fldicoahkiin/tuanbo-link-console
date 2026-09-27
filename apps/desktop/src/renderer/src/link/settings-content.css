@@ -310,3 +310,8 @@
 .settings-inline.integration-workspace .settings-detail .p1-follow-settings .p1-sync-panel > p { width: auto; margin: 0; font-size: var(--text-control); color: var(--text-secondary); }
 .settings-inline.integration-workspace .settings-detail .p1-follow-settings .security-banner { min-height: 0; padding: 8px 0; }
 .settings-inline.integration-workspace .settings-detail .p1-follow-settings { margin: 20px 0; }
+.device-console.license-gate { min-height: 100vh; height: 100vh; overflow: auto; padding: 48px 24px; box-sizing: border-box; }
+.device-console.license-gate > .device-detail { width: 100%; max-width: 800px; margin: 0 auto; flex: none; }
+.license-gate h1 { font-size: 24px; line-height: 1.4; margin: 0 0 16px; }
+.license-gate-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; -webkit-app-region: drag; }
+.license-gate-heading button { -webkit-app-region: no-drag; }

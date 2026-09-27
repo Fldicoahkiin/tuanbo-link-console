@@ -1,4 +1,5 @@
 import { requestMidiAccess } from './midi-access';
+import { requireOutputLicense } from './license-output';
 import { compileLightingPackets } from '@tb/core/link';
 import type { IntegrationProfile, LightingDocument } from '@tb/schema';
 
@@ -11,6 +12,7 @@ export class LightingCueAudition {
     const generation = ++this.generation;
     const selected = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === eventId);
     if (!selected || selected.kind !== 'ma2') return 0;
+    await requireOutputLicense();
     const group = selected.effectGroupId ?? selected.id;
     const preview: LightingDocument = { ...document, outputMode: 'direct', tracks: document.tracks.map(track => ({
       ...track, muted: false, solo: false,

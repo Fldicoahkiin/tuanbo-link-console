@@ -167,6 +167,9 @@ export type LinkDesktopApi = {
   getLicenseStatus(): Promise<import('@tb/schema').LicenseStatus>;
   exportLicenseRequest(): Promise<boolean>;
   importLicense(): Promise<import('@tb/schema').LicenseStatus | null>;
+  activateLicenseCode(code: string): Promise<import('@tb/schema').LicenseStatus>;
+  refreshOnlineLicense(): Promise<import('@tb/schema').LicenseStatus>;
+  requireOutputLicense(): Promise<void>;
   exportMa2Plugin: () => Promise<string | null>;
   exportObsPreviewScript: () => Promise<string>;
   getObsPreviewStatus: () => Promise<{ ready: boolean; message: string }>;

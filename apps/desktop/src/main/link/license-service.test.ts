@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { type LicenseClaims } from '@tb/schema';
 import { LicenseService, verifyLicense } from './license-service';
@@ -42,7 +42,7 @@ it('签名许可只接受指定主机，拒绝修改载荷、未知公钥和未�
   expect(() => verifyLicense(parts.join('.'), machine, publicKeys, now)).toThrow('签名无效');
   expect(() => verifyLicense(issue({ issuedAt: '2026-09-22T00:00:00Z' }), machine, publicKeys, now)).toThrow('本机时间');
 });
-it('买断升级期结束不影响使用；订阅和试用按截止时间到期', async () => {
+it('买断升级期结束不影响使用；订阅按截止时间到期', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-license-'));
   let time = now;
   const service = new LicenseService(directory, machine, publicKeys, () => time);
@@ -51,7 +51,7 @@ it('买断升级期结束不影响使用；订阅和试用按截止时间到期'
   time = Date.parse('2028-01-01T00:00:00Z');
   expect((await service.status()).state).toBe('active');
   time = now;
-  for (const kind of ['subscription', 'trial'] as const) {
+  for (const kind of ['subscription'] as const) {
     const end = now + 86400000;
     await service.activate(issue({ kind, useUntil: new Date(end).toISOString() }));
     time = end;
@@ -65,7 +65,60 @@ it('错误或到期导入不覆盖现有许可，未配置签发时明确显示�
   const valid = issue();
   await service.activate(valid);
   await expect(service.activate(issue({ machineCode: `TB1-${'B'.repeat(64)}` }))).rejects.toThrow('另一台主机');
-  await expect(service.activate(issue({ kind: 'trial', issuedAt: '2026-09-01T00:00:00Z', useUntil: '2026-09-20T00:00:00Z' }))).rejects.toThrow('已到期');
+  await expect(service.activate(issue({ kind: 'subscription', issuedAt: '2026-09-01T00:00:00Z', useUntil: '2026-09-20T00:00:00Z' }))).rejects.toThrow('使用期限已结束');
   expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(valid);
   expect((await new LicenseService(directory, machine, {}).status()).state).toBe('unconfigured');
+});
+
+it('在线激活验签后保存激活码，离线租约到期要求联网，网络失败保留许可', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-online-'));
+  let time = now;
+  const credentials = new Map<string, string>();
+  const token = issue({ online: { leaseUntil: new Date(now + 86400000).toISOString(), customerType: 'personal' } });
+  const request = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({ license: token })));
+  const service = new LicenseService(directory, machine, publicKeys, () => time, {
+    serverUrl: 'https://license.example.com', enforcement: 'required', fetch: request,
+    credentials: {
+      hasCredential: key => Promise.resolve(credentials.has(key)),
+      loadCredential: key => Promise.resolve(credentials.get(key) ?? ''),
+      saveCredential: (key, value) => { credentials.set(key, value); return Promise.resolve(); }
+    }
+  });
+  expect((await service.activateCode(`TBA-${'A'.repeat(32)}`)).state).toBe('active');
+  expect(request).toHaveBeenCalledOnce();
+  expect(credentials.get('license.activation.code')).toBe(`TBA-${'A'.repeat(32)}`);
+  request.mockRejectedValueOnce(new Error('offline'));
+  await expect(service.refreshOnline()).rejects.toThrow('无法连接');
+  expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(token);
+  time += 86400000;
+  expect((await service.status()).state).toBe('renewal-required');
+  time = now;
+  expect((await service.status()).message).toContain('回拨');
+});
+
+it('拒绝明文传输、不可用安全存储、超大响应以及未签名响应，现有许可不被替换', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-online-invalid-'));
+  const token = issue(); await new LicenseService(directory, machine, publicKeys, () => now).activate(token);
+  const request = vi.fn<typeof fetch>();
+  const credentials = { hasCredential: () => Promise.resolve(false), loadCredential: () => Promise.resolve(''), saveCredential: () => Promise.resolve() };
+  const options = { serverUrl: 'https://license.example.com', enforcement: 'required' as const, fetch: request, credentials };
+  const code = `TBA-${'A'.repeat(32)}`;
+  await expect(new LicenseService(directory, machine, publicKeys, () => now, { ...options, serverUrl: 'http://license.example.com' }).activateCode(code)).rejects.toThrow('HTTPS');
+  const inaccessible = { ...options, credentials: { ...credentials, saveCredential: () => Promise.reject(new Error('安全存储不可用')) } };
+  await expect(new LicenseService(directory, machine, publicKeys, () => now, inaccessible).activateCode(code)).rejects.toThrow('安全存储');
+  expect(request).not.toHaveBeenCalled();
+  const service = new LicenseService(directory, machine, publicKeys, () => now, options);
+  request.mockResolvedValueOnce(new Response('x'.repeat(21000)));
+  await expect(service.activateCode(code)).rejects.toThrow('大小限制');
+  request.mockResolvedValueOnce(new Response(JSON.stringify({ license: 'unsigned' })));
+  await expect(service.activateCode(code)).rejects.toThrow('格式无效');
+  expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(token);
+});
+
+it('不接受有效签名的试用许可，不替换已有付费许可', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-no-trial-'));
+  const service = new LicenseService(directory, machine, publicKeys, () => now);
+  const paid = issue(); await service.activate(paid);
+  await expect(service.activate(issue({ kind: 'trial', useUntil: '2026-09-30T00:00:00Z' }))).rejects.toThrow('不接受试用');
+  expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(paid);
 });

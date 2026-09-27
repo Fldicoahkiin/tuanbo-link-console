@@ -54,7 +54,7 @@ export default tseslint.config(
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
       parserOptions: {
-        project: ['./tsconfig.json', './packages/*/tsconfig.json', './apps/desktop/tsconfig.node.json', './apps/desktop/tsconfig.web.json', './apps/desktop/tsconfig.e2e.json'],
+        project: ['./tsconfig.json', './packages/*/tsconfig.json', './apps/licensing-server/tsconfig.json', './apps/desktop/tsconfig.node.json', './apps/desktop/tsconfig.web.json', './apps/desktop/tsconfig.e2e.json'],
         tsconfigRootDir: import.meta.dirname
       },
       globals: {

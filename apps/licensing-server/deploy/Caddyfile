@@ -1,0 +1,10 @@
+# Replace with the authorized production domain before deploying.
+license.example.com {
+    @public path /health /v1/activate
+    handle @public {
+        reverse_proxy 127.0.0.1:8787
+    }
+    handle {
+        respond "Not found" 404
+    }
+}
