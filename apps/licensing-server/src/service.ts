@@ -74,7 +74,7 @@ export class LicensingService {
       return { id, state: 'pending' as const };
     });
   }
-  fulfill(id: string, input: unknown) {
+  fulfill(id: string, input: unknown, source: 'manual' | 'alipay' = 'manual') {
     const payment = paymentSchema.parse(input);
     return this.transaction(() => {
       const order = this.order(id);
@@ -90,7 +90,7 @@ export class LicensingService {
         const code = `TBA-${randomBytes(16).toString('hex').toUpperCase()}`;
         this.db.prepare('INSERT INTO licenses (id, order_id, code_hash, code_cipher) VALUES (?, ?, ?, ?)').run(randomUUID(), id, this.hash(code), this.encrypt(code));
       }
-      this.audit('order.manual-payment-confirmed', id, payment.paymentReference);
+      this.audit(source === 'alipay' ? 'order.alipay-payment-confirmed' : 'order.manual-payment-confirmed', id, payment.paymentReference);
       return this.describeOrder(id);
     });
   }

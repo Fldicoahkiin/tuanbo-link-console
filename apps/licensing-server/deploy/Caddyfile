@@ -1,6 +1,6 @@
 # DNS must resolve to this server before Caddy can obtain public certificates.
 api.tuanbo-link.jinhefilm.com {
-    @public path /health /v1/activate
+    @public path /health /v1/activate /v1/payments/alipay/notify
     handle @public {
         reverse_proxy 127.0.0.1:8787
     }

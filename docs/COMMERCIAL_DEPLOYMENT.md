@@ -47,7 +47,7 @@ Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级
 /srv/tblink-updates/windows/x64/    仅已验收的正式公开文件
 ```
 
-本服务器使用 [Nginx 配置](../apps/licensing-server/deploy/nginx.conf)、[systemd unit](../apps/licensing-server/deploy/tblink-licensing.service)、[环境示例](../apps/licensing-server/deploy/service.env.example)。将本项目配置作为独立站点启用，不覆盖其他站点。[Caddyfile](../apps/licensing-server/deploy/Caddyfile) 仅供以后全新环境使用，不在本机与 Nginx 同时绑定 80/443。反向代理只开放两个现有路径，支付接口尚未实现，不能通过放开全部 `/v1/*` 或 `/admin/*` 提前代替开发。
+本服务器使用 [Nginx 配置](../apps/licensing-server/deploy/nginx.conf)、[systemd unit](../apps/licensing-server/deploy/tblink-licensing.service)、[环境示例](../apps/licensing-server/deploy/service.env.example)。将本项目配置作为独立站点启用，不覆盖其他站点。[Caddyfile](../apps/licensing-server/deploy/Caddyfile) 仅供以后全新环境使用，不在本机与 Nginx 同时绑定 80/443。线上反向代理目前只开放健康与激活路径。本地模板新增支付宝通知的精确路径代理，未同步生产；服务未完整配置支付宝时仍返回 404。不得放开全部 `/v1/*` 或 `/admin/*`。
 
 腾讯云防火墙与系统防火墙允许公网 TCP 80/443，用于 HTTPS 和证书校验；8787、数据库和管理员 API 不开放公网。SSH 用户名已确认为 `ubuntu`，本轮公网 SSH 可用，Tailscale SSH 连接超时，尚未验收该运维通道。域名仅 DNS 的 HTTPS 请求来自用户公网网络，普通客户不需要加入 Tailscale。
 
@@ -78,7 +78,7 @@ curl --fail --max-time 15 -I https://updates.tuanbo-link.jinhefilm.com/windows/x
 
 对实际版本安装包检查 HEAD 的长度、Range 请求的 206 响应、本地 SHA-512 与 `latest.yml` 相符、Windows Authenticode 发布者和签名状态正确；测试未列入白名单路径返回 404、跨机激活拒绝、并发激活不多占席位、支付未实现路径不存在。必须完成检查→完整下载→停止联动→保存→确认安装→原目录自动重启，全程不停止 OBS/P1。
 
-当前授权进程限流为每 socket IP 120 次/分钟；Nginx 回环代理会共享该限额，这是当前上线容量限制。已准备 Nginx 真实连接 IP 的激活限流（每分钟 30 次、burst 5），仍需压测并处理进程共享总限额，不能盲信外部 `X-Forwarded-For`，也不能直接放大到无限制。购买回调将来应有独立限流预算，避免激活流量挤占核款。
+当前授权进程限流为每 socket IP 120 次/分钟；Nginx 回环代理会共享该限额，这是当前上线容量限制。已准备 Nginx 真实连接 IP 的激活限流（每分钟 30 次、burst 5），仍需压测并处理进程共享总限额，不能盲信外部 `X-Forwarded-For`，也不能直接放大到无限制。本地新增支付宝通知与其余请求的独立限流预算（各 120 次/分钟/连接来源）；未同步生产。仍须结合真实负载验收，避免反代共享限额影响渠道重发。
 
 ## 恢复和回退
 
@@ -97,3 +97,7 @@ curl --fail --max-time 15 -I https://updates.tuanbo-link.jinhefilm.com/windows/x
 - 三个新域名 DNS 已配置，Let’s Encrypt 证书覆盖三个 SAN，有效期至 2026-12-26（UTC）；使用服务器现有 ACME 账户，无新增付费证书。`certbot.timer` 已启用，项目专用 reload hook 已安装并执行成功。限定本证书的 `certbot renew --dry-run --run-deploy-hooks --no-random-sleep-on-renew` 演练通过，部署钩子执行完成。
 - 公网普通 HTTPS 请求：健康检查 200；空激活请求 400 `INVALID_REQUEST`；后台路径 404；未实现的支付宝通知路径 404；更新清单 404 且带 `Cache-Control: no-store`；更新目录与预留网站 404。尚未上传正式 Windows 安装包，尚未完成真实机器的生产激活和自动更新验收。
 - 后台令牌、私钥及登录密码未下载到本地或写入仓库。回环健康通过不等于公众可激活、收款或自动开票。
+
+## 支付宝回调部署前置（本轮未部署）
+
+本地代码和 Nginx/Caddy 模板已增加精确路径 `/v1/payments/alipay/notify`。先完成商户和应用产品审核、获取并核对官方验签公钥，然后按环境示例设置三项配置；先在测试环境验证，再随已批准的真实小额验收上线。必须备份 SQLite 后上传新 bundle、校验摘要、检查 Nginx 配置并重载；不能只打开代理而继续运行旧 bundle。当前服务器仍运行此前构建，未变更配置、未填写商户身份、未接收真实付款。

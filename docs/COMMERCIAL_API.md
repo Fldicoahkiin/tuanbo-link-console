@@ -1,14 +1,15 @@
 # 商业接口与凭证契约
 
-2026-09-28。本文区分已实现接口和后续设计。生产 origin 规划为 `https://api.tuanbo-link.jinhefilm.com`，服务已回环部署，公网 DNS/HTTPS 待完成；客户端配置该地址不代表公众已可用。实现依据：`apps/licensing-server/src/http.ts`、`service.ts`、`packages/schema/src/license.ts`。
+2026-09-28。本文区分已实现接口和后续设计。生产 origin 为 `https://api.tuanbo-link.jinhefilm.com`，既有授权服务、公网 DNS/HTTPS 已有验收记录；本轮支付宝回调仅在本地实现，尚未部署或启用。实现依据：`apps/licensing-server/src/http.ts`、`service.ts`、`packages/schema/src/license.ts`。
 
 ## 已实现接口
 
-服务本体成功时返回 200 JSON；请求对象经 Zod 校验。写接口必须 `Content-Type: application/json`。请求体最多 16KiB、请求头最多 8KiB、HTTP 请求超时 10 秒；当前限流每连接来源 IP 120 次/分钟，反向代理共享限额的限制见部署文档。响应 `Cache-Control: no-store`，带 `X-Request-Id`。不提供 CORS 购买页、会话 Cookie 或客户登录。
+除下述支付宝回调外，服务本体成功时返回 200 JSON，写接口要求 `Content-Type: application/json`；请求对象经 Zod 校验。请求体最多 16KiB、请求头最多 8KiB、HTTP 请求超时 10 秒；当前限流每连接来源 IP 每业务组 120 次/分钟，支付宝通知和其余接口分组独立，反向代理共享限额的限制见部署文档。响应 `Cache-Control: no-store`，带 `X-Request-Id`。不提供 CORS 购买页、会话 Cookie 或客户登录。
 
 | 方法与路径 | 访问范围 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
 | GET `/health` | 公网 | 无 | `{"status":"ok"}`，仅存活，不证明数据库、签名或支付可用 |
+| POST `/v1/payments/alipay/notify` | 配置后可通过代理公开，本轮未上线 | RSA2 签名表单，见下文 | 纯文本 `success`，不返回客户信息或激活码 |
 | POST `/v1/activate` | 公网 | `product, code, machineCode` | `{"license":"<Ed25519 JWS>"}` |
 | POST `/admin/orders` | 回环/运维隧道 + Bearer | 订单对象，见下文 | `{"id":"<UUID>","state":"pending或fulfilled"}` |
 | GET `/admin/orders/:id` | 同上 | UUID 路径 | 订单详情和 `licenses`，含完整激活码，仅运营可读 |
@@ -78,7 +79,22 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 | 413 / 415 / 429 | `BODY_TOO_LARGE` / `CONTENT_TYPE` / `RATE_LIMITED` | 调整请求或稍后由操作员重试 |
 | 500 | `INTERNAL_ERROR` | 提供请求 ID 排查；不删除现有许可 |
 
-## 支付自动化接口草案——尚未实现，不能调用
+## 支付宝通知自动发码（已实现，未上线）
+
+`POST /v1/payments/alipay/notify` 接受 `application/x-www-form-urlencoded`（可带 UTF-8 charset），同样限制 16KiB。运营先创建本地订单；后续渠道下单必须以返回的订单 UUID 作为 `out_trade_no`，不能使用人类可读 `reference` 替代。
+
+- 启用条件：服务端完整配置 `ALIPAY_APP_ID`、`ALIPAY_SELLER_ID`、`ALIPAY_PUBLIC_KEY_FILE`。缺项使服务启动失败；全部省略时路由 404。公钥文件是从官方平台核对取得的支付宝验签公钥，不能误用本应用公钥；本轮采用固定 RSA 公钥，不包含证书自动轮换。
+- 只接受 RSA2、UTF-8、`trade_status_sync`；表单只解码一次，拒绝重复字段。验签包含未知扩展字段，排除 `sign` 与 `sign_type`，不能只签自己挑选的业务字段。
+- 验签后比对 app_id/seller_id，核对订单 UUID、已付款状态 `TRADE_SUCCESS` 或 `TRADE_FINISHED`、整数分金额；明确为非 CNY、含非零退款、未支付或交易关闭的通知均拒绝发码。退款及关闭处理尚未实现，相关通知非成功响应，不冒充已处理退款。
+- 验签、核款、数据库事务和发码全部完成后才返回 200 纯文本 `success`。订单变更、激活码与审计同事务提交；通道流水保存为 `alipay:<trade_no>` 并受唯一约束。重复或迟到的同笔成功通知只读取原码，不再生成。
+- 错误签名 401；错商户/应用、金额、交易状态或流水冲突 409；未知订单 404；其他结构错误 400。失败响应为错误 JSON，绝不返回 `success`。支付宝的渠道重发不等于客户端自动重试；重复通知由幂等处理保护。
+- 审计使用 `order.alipay-payment-confirmed` 区分人工核款。通知原始表单、买方信息、签名及激活码不进入日志。两组限流相互隔离，但各组在回环反代下仍共享进程限额，正式上线前需按容量验收。
+
+这一步仅打通“有效支付通知 → 事务发码”。商品计价、渠道下单、通知丢失后主动查单、客户查询凭据与领码页、退款对账和发票 API 仍待实现，不能称为完整自动交付。正式商户尚未完成签约验证，不能仅填环境变量就开放收款。没有真实扣款或发票操作。
+
+实现参考：[支付宝网站支付通知说明](https://opendocs.alipay.com/open/270/105902)、[官方 Node SDK 通知验签说明](https://github.com/alipay/alipay-sdk-nodejs-all#通知验签)。本实现只覆盖网站支付标准表单通知，不作为所有支付宝业务通知的通用解析器。
+
+## 其余支付自动化接口草案——尚未实现，不能调用
 
 不增加用户账号。购买凭据、支付订单、发票信息与机器授权分开：付款人可以替操作电脑购买，企业一笔订单可以发多码。
 
@@ -87,7 +103,6 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 | POST `/v1/orders` | `sku, quantity, channel`；服务端计算金额并创建渠道订单；返回二维码/支付链接、订单 ID、随机查询凭据 |
 | GET `/v1/orders/:id` | 使用高熵查询凭据取订单状态；不能只凭可猜订单号查看客户或码 |
 | POST `/v1/payments/wechat/notify` | 微信官方通知验签、解密、商户/币种/金额/订单/状态核对后交付 |
-| POST `/v1/payments/alipay/notify` | 支付宝官方通知验签及 app/seller/金额/订单/状态核对后交付 |
 | POST `/v1/orders/:id/invoice-requests` | 查询凭据授权后提交个人/企业开票资料；仅创建申请，不假装开票成功 |
 | POST `/admin/orders/:id/refunds` | 运营确认规则后申请原路退款，跟踪渠道结果、吊销与红冲状态 |
 
