@@ -57,7 +57,7 @@
 
 JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT",kid:"发行密钥标识"}`。payload 包含 `version:1`、`product`、`licenseId`、`customer`、`machineCode`、`kind`、`issuedAt`、`useUntil`、`updatesUntil`，在线许可另有 `online:{customerType,leaseUntil}`。
 
-客户端只信任编译时公钥表和固定产品/机器，校验结构、算法、keyId、签名和时间。签名正文可读取，不是加密容器。不得把付款密钥或额外个人资料写入许可。最长离线租约为 7 天且不超过订阅到期；固定购买的 updatesUntil 不会被刷新延长。
+客户端只信任编译时公钥表和固定产品/机器，校验结构、算法、keyId、签名和时间。签名正文可读取，不是加密容器。不得把付款密钥或额外个人资料写入许可。签名租约为最多 7 天且不超过订阅到期；当前客户端每次启动仍须通过 `/v1/activate` 联网验证，不以未到期缓存免检。启动失败不自动重试，手动验证成功后放行。固定购买的 updatesUntil 不会被刷新延长。
 
 `updatesUntil` 当前仅保存和展示，**尚未限制新版安装/启动资格**。在版本发布日期与已购升级权校验实现前，不得承诺已实现“升级期过后不能使用新版本”。下载公开安装包也不代表可免费使用：产品入口仍需有效授权。
 

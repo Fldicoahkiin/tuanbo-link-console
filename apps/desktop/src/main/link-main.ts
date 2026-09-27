@@ -299,10 +299,15 @@ function registerIpc(
   updateManager: LinkUpdateManager
 ): void {
   const enforcement = z.literal('required').parse(licenseConfig.enforcement);
-  let licenseService: LicenseService | undefined;
-  const getLicenseService = async (): Promise<LicenseService> => {
-    if (!licenseService) licenseService = new LicenseService(app.getPath('userData'), await readLicenseMachineCode(), licensePublicKeys, Date.now, {
-      serverUrl: licenseConfig.serverUrl, enforcement, credentials: profileStore
+  let licenseService: Promise<LicenseService> | undefined;
+  const getLicenseService = (): Promise<LicenseService> => {
+    licenseService ??= readLicenseMachineCode().then(async machineCode => {
+      const service = new LicenseService(app.getPath('userData'), machineCode, licensePublicKeys, Date.now, {
+        serverUrl: licenseConfig.serverUrl, enforcement, credentials: profileStore
+      });
+      const status = await service.status();
+      await logger.record({ level: status.state === 'active' ? 'info' : 'error', category: 'system', message: `启动授权校验：${status.state}`, result: status.state === 'active' ? 'succeeded' : 'failed' });
+      return service;
     });
     return licenseService;
   };

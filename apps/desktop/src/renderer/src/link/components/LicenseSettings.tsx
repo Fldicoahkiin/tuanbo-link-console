@@ -27,7 +27,7 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
   const run = async (action: 'refresh' | 'export' | 'import' | 'activate' | 'online'): Promise<void> => {
     setBusy(true); setError(''); setMessage('');
     try {
-      if (action === 'export') { if (await window.tbLink.exportLicenseRequest()) setMessage('授权申请已导出，请交给发行方签发本机授权。'); }
+      if (action === 'export') { if (await window.tbLink.exportLicenseRequest()) setMessage('机器信息已导出，可用于向发行方核对授权。'); }
       else {
         const value = await (action === 'import' ? window.tbLink.importLicense() : action === 'activate' ? window.tbLink.activateLicenseCode(activationCodeSchema.parse(code)) : action === 'online' ? window.tbLink.refreshOnlineLicense() : window.tbLink.getLicenseStatus());
         if (value) {
@@ -38,7 +38,14 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
           if (action === 'activate') setCode('');
         }
       }
-    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+    } catch (failure) {
+      const reason = failure instanceof Error ? failure.message : String(failure);
+      setError(reason);
+      if (action === 'activate' || action === 'online') {
+        try { setStatus(licenseStatusSchema.parse(await window.tbLink.getLicenseStatus())); }
+        catch (readFailure) { setError(`${reason}；读取当前授权状态失败：${readFailure instanceof Error ? readFailure.message : String(readFailure)}`); }
+      }
+    }
     finally { setBusy(false); }
   };
   const claims = status?.claims;
@@ -52,10 +59,10 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
         <label className="settings-path-row"><span>激活码</span><input aria-label="激活码" type="password" autoComplete="off" spellCheck={false} maxLength={36} value={code} placeholder="TBA-…" disabled={busy || runtimeActive || !status.onlineAvailable} onChange={event => setCode(event.target.value)} /></label>
         <div className="settings-header-actions"><Button type="submit" className="primary-button" disabled={busy || runtimeActive || !status.onlineAvailable || !code.trim()}><KeyRound />激活本机</Button><Button type="button" className="secondary-button" disabled={busy || runtimeActive || !status.onlineAvailable} onClick={() => void run('online')}><RefreshCw />联网验证授权</Button></div>
       </form>
-      {!status.onlineAvailable ? <p className="settings-note">发行方尚未配置在线授权服务，仍可导入离线授权文件。</p> : <p className="settings-note">首次激活会上传产品机器码。激活码在本机加密保存，请勿转发；联网验证失败不会删除已有许可。</p>}
+      {!status.onlineAvailable ? <p className="settings-note">发行方尚未配置在线授权服务，请联系发行方。</p> : <p className="settings-note">每次启动会联网核对激活码和机器码，通过后才能进入工作区。激活码在本机加密保存；验证失败请检查网络后手动重试，工程和已有凭证不会被删除。</p>}
       {claims ? <dl><dt>授权客户</dt><dd>{claims.customer}</dd><dt>授权类型</dt><dd>{kindLabels[claims.kind]}</dd><dt>使用期限</dt><dd>{claims.useUntil ? new Date(claims.useUntil).toLocaleString('zh-CN') : '永久使用'}</dd><dt>升级服务截止</dt><dd>{new Date(claims.updatesUntil).toLocaleString('zh-CN')}</dd></dl> : null}
-      {claims?.online ? <p className="settings-note">本次离线凭证有效至 {new Date(claims.online.leaseUntil).toLocaleString('zh-CN')}。到期前请在停止播放后联网验证。</p> : null}
-      <div className="settings-header-actions"><Button className="secondary-button" disabled={busy} onClick={() => void run('export')}><Download />导出授权申请</Button><Button className="primary-button" disabled={busy || runtimeActive} onClick={() => void run('import')}><Upload />导入授权文件</Button><Button className="secondary-button" disabled={busy} onClick={() => void run('refresh')}><RefreshCw />刷新状态</Button></div>
+      {claims?.online ? <p className="settings-note">本次签名凭证有效至 {new Date(claims.online.leaseUntil).toLocaleString('zh-CN')}。该期限不免除下次启动的联网验证；运行中的演出不会因网络中断而停止。</p> : null}
+      <div className="settings-header-actions"><Button className="secondary-button" disabled={busy} onClick={() => void run('export')}><Download />导出授权申请</Button><Button className="primary-button" disabled={busy || runtimeActive || status.onlineAvailable} onClick={() => void run('import')}><Upload />导入授权文件</Button><Button className="secondary-button" disabled={busy} onClick={() => void run('refresh')}><RefreshCw />刷新状态</Button></div>
       <p className="settings-note">本软件所有产品功能均需付费激活，不提供免费版或试用。购买、续费和企业开票请联系发行方，当前不提供软件内自动支付。</p>
       {runtimeActive ? <p className="settings-note">请停止播放后再更换授权。</p> : null}
     </> : error ? <Button className="secondary-button" disabled={busy} onClick={() => void run('refresh')}>重新读取</Button> : null}

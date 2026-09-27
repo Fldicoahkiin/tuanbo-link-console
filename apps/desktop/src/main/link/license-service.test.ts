@@ -122,3 +122,56 @@ it('不接受有效签名的试用许可，不替换已有付费许可', async (
   await expect(service.activate(issue({ kind: 'trial', useUntil: '2026-09-30T00:00:00Z' }))).rejects.toThrow('不接受试用');
   expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(paid);
 });
+
+it('每次进程启动联网验证一次，并发状态读取共用请求；拒绝旧缓存放行', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-startup-'));
+  const stored = new Map<string, string>();
+  const credentials = {
+    hasCredential: (key: string) => Promise.resolve(stored.has(key)),
+    loadCredential: (key: string) => Promise.resolve(stored.get(key) ?? ''),
+    saveCredential: (key: string, value: string) => { stored.set(key, value); return Promise.resolve(); }
+  };
+  const token = issue({ online: { leaseUntil: new Date(now + 7 * 86400000).toISOString(), customerType: 'personal' } });
+  const request = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ license: token }))));
+  const make = () => new LicenseService(directory, machine, publicKeys, () => now, { serverUrl: 'https://license.example.com', enforcement: 'required', credentials, fetch: request });
+  await make().activateCode(`TBA-${'A'.repeat(32)}`);
+  request.mockClear();
+  const reopened = make();
+  const states = await Promise.all([reopened.status(), reopened.status(), reopened.status()]);
+  expect(states.every(status => status.state === 'active')).toBe(true);
+  expect(request).toHaveBeenCalledOnce();
+  await reopened.status();
+  expect(request).toHaveBeenCalledOnce();
+  request.mockRejectedValueOnce(new Error('offline'));
+  const offline = make();
+  expect((await offline.status()).state).toBe('renewal-required');
+  expect((await offline.status()).message).toContain('无法连接');
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(token);
+  expect((await offline.refreshOnline()).state).toBe('active');
+  expect((await offline.status()).state).toBe('active');
+  expect(request).toHaveBeenCalledTimes(3);
+  request.mockResolvedValueOnce(new Response(null, { status: 403 }));
+  expect((await make().status()).message).toContain('撤销');
+  request.mockResolvedValueOnce(new Response(null, { status: 409 }));
+  expect((await make().status()).state).toBe('renewal-required');
+  request.mockResolvedValueOnce(new Response(JSON.stringify({ license: 'unsigned' })));
+  expect((await make().status()).state).toBe('renewal-required');
+  expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(token);
+});
+
+it('在线发行不允许通过导入永久文件绕过启动验证；新机器不发送空激活请求', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-startup-import-'));
+  const request = vi.fn<typeof fetch>();
+  const legacy = issue();
+  const service = new LicenseService(directory, machine, publicKeys, () => now, {
+    serverUrl: 'https://license.example.com', enforcement: 'required', fetch: request,
+    credentials: { hasCredential: () => Promise.resolve(false), loadCredential: () => Promise.resolve(''), saveCredential: () => Promise.resolve() }
+  });
+  expect((await service.status()).state).toBe('inactive');
+  expect(request).not.toHaveBeenCalled();
+  await new LicenseService(directory, machine, publicKeys, () => now).activate(legacy);
+  expect((await service.status()).state).toBe('renewal-required');
+  await expect(service.activate(legacy)).rejects.toThrow('激活码');
+  expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(legacy);
+});

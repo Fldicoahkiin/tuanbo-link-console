@@ -36,6 +36,9 @@ export function verifyLicense(token: string, machineCode: string, keys: Readonly
 
 export class LicenseService {
   private readonly path: string;
+  private startupVerification: Promise<void> | undefined;
+  private sessionLicenseId: string | undefined;
+  private verificationFailure = '本次启动尚未通过联网验证，请输入激活码或手动联网验证';
   constructor(directory: string, private readonly machineCode: string, private readonly keys: Readonly<Record<string, string>>, private readonly now: () => number = Date.now, private readonly online?: OnlineOptions) {
     licenseMachineCodeSchema.parse(machineCode);
     this.path = join(directory, 'licensing', 'license.jwt');
@@ -52,10 +55,20 @@ export class LicenseService {
   }
   async status(): Promise<LicenseStatus> {
     if (!Object.keys(this.keys).length) return this.result(null, 'unconfigured', '授权签发尚未启用，可先导出本机授权申请');
+    // Share the one startup request across concurrent IPC calls; failures require an explicit retry.
+    if (this.online && !this.startupVerification) {
+      this.startupVerification = this.refreshOnline().then(() => undefined, (error: unknown) => {
+        this.verificationFailure = error instanceof Error ? error.message : String(error);
+      });
+    }
+    await this.startupVerification;
     try {
       if ((await stat(this.path)).size > 16384) throw new Error('授权文件超过大小限制');
       const status = this.describe((await readFile(this.path, 'utf8')).trim());
       if (status.claims?.online) await this.checkClock();
+      if (this.online && status.state === 'active' && status.claims?.licenseId !== this.sessionLicenseId) {
+        return this.result(status.claims, 'renewal-required', this.verificationFailure);
+      }
       return status;
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return this.result(null, 'inactive', '此主机尚未激活');
@@ -63,6 +76,7 @@ export class LicenseService {
     }
   }
   async activate(token: string): Promise<LicenseStatus> {
+    if (this.online) throw new Error('当前版本每次启动需联网验证，请使用激活码；不支持导入离线授权绕过验证');
     const normalized = token.trim();
     const result = this.describe(normalized);
     if (result.state !== 'active') throw new Error(`${result.message}；未替换本机现有授权`);
@@ -77,6 +91,18 @@ export class LicenseService {
     await storage.saveCredential(CLOCK_CREDENTIAL, JSON.stringify(Math.max(last, this.now())));
   }
   async activateCode(input: string): Promise<LicenseStatus> {
+    this.startupVerification ??= Promise.resolve();
+    this.sessionLicenseId = undefined;
+    try {
+      const status = await this.requestActivation(input);
+      this.sessionLicenseId = status.claims?.licenseId;
+      return status;
+    } catch (error) {
+      this.verificationFailure = error instanceof Error ? error.message : String(error);
+      throw error;
+    }
+  }
+  private async requestActivation(input: string): Promise<LicenseStatus> {
     const code = activationCodeSchema.parse(input);
     const online = this.online;
     if (!online?.serverUrl || !Object.keys(this.keys).length) throw new Error('发行方尚未配置在线授权服务');

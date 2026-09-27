@@ -32,23 +32,23 @@ test.beforeEach(async ({ page }) => {
         current = { ...base, state: 'active', message: '本机授权有效', claims: { version: 1, product: 'tuanbo-link-console', licenseId: '9d53530a-6712-423e-985e-e69beb9ec1c6', customer: '验收公司', machineCode: base.machineCode, kind: 'perpetual', issuedAt: '2026-09-27T00:00:00Z', useUntil: null, updatesUntil: '2027-09-27T00:00:00Z', online: { customerType: 'company', leaseUntil: '2026-10-04T00:00:00Z' } } };
         return Promise.resolve(current);
       },
-      refreshOnlineLicense: () => Promise.reject(new Error('无法连接授权服务器，现有授权保持不变')),
+      refreshOnlineLicense: () => { current = { ...current, state: 'renewal-required', message: '无法连接授权服务器，请检查网络后手动重试' }; return Promise.reject(new Error('无法连接授权服务器，现有授权保持不变')); },
       exportLicenseRequest: () => Promise.resolve(true), importLicense: () => Promise.resolve(null)
     } });
   });
   await page.addScriptTag({ content: script });
 });
 
-test('激活成功展示企业与离线期限、清空密钥，网络失败保留已激活状态', async ({ page }, info) => {
+test('激活成功展示企业与凭证期限、清空密钥，网络失败显示需要验证', async ({ page }, info) => {
   const panel = page.getByRole('region', { name: '本机授权', exact: true });
   await panel.getByLabel('激活码', { exact: true }).fill(`TBA-${'A'.repeat(32)}`);
   await panel.getByRole('button', { name: '激活本机' }).click();
   await expect(panel.getByText('验收公司', { exact: true })).toBeVisible();
   await expect(panel.getByLabel('激活码', { exact: true })).toHaveValue('');
-  await expect(panel.getByText(/本次离线凭证有效至/)).toBeVisible();
+  await expect(panel.getByText(/本次签名凭证有效至/)).toBeVisible();
   await panel.getByRole('button', { name: '联网验证授权' }).click();
   await expect(panel.getByRole('alert')).toContainText('现有授权保持不变');
-  await expect(panel.getByText('已激活', { exact: true })).toBeVisible();
+  await expect(panel.getByText('需要联网验证', { exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('license-settings.png') });
 });
 test('错误激活码明确反馈，运行中禁用激活、联网验证与导入', async ({ page }) => {
@@ -72,4 +72,39 @@ test('未激活不挂载工作区，激活后经主进程校验才进入', async
   await page.getByRole('button', { name: '激活本机' }).click();
   await expect(page.getByTestId('workspace')).toBeVisible();
   await expect(page.getByRole('heading', { name: '激活团播联动台' })).toHaveCount(0);
+});
+
+
+test('启动校验完成前不挂载工作区，网络失败后可手动验证进入', async ({ page }) => {
+  await page.evaluate(() => {
+    const bridge = window.tbLink;
+    let verified = false;
+    Object.defineProperty(window, 'tbLink', { configurable: true, value: {
+      ...bridge,
+      requireOutputLicense: () => verified ? Promise.resolve() : Promise.reject(new Error('无法连接授权服务器，请检查网络后手动重试')),
+      refreshOnlineLicense: async () => {
+        const status = await bridge.activateLicenseCode(`TBA-${'A'.repeat(32)}`);
+        verified = true;
+        return status;
+      }
+    } });
+  });
+  await page.evaluate('window.renderGate()');
+  await expect(page.getByTestId('workspace')).toHaveCount(0);
+  await expect(page.getByText('无法连接授权服务器，请检查网络后手动重试', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '联网验证授权' }).click();
+  await expect(page.getByTestId('workspace')).toBeVisible();
+});
+
+test('联网检查进行中只展示等待页', async ({ page }) => {
+  await page.evaluate(() => {
+    Object.defineProperty(window.tbLink, 'requireOutputLicense', { value: () => new Promise<void>(resolve => {
+      Object.defineProperty(window, 'finishStartup', { configurable: true, value: resolve });
+    }) });
+  });
+  await page.evaluate('window.renderGate()');
+  await expect(page.getByText('正在联网验证本机授权…', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('workspace')).toHaveCount(0);
+  await page.evaluate('window.finishStartup()');
+  await expect(page.getByTestId('workspace')).toBeVisible();
 });

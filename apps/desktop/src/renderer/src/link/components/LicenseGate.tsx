@@ -27,7 +27,7 @@ export function LicenseGate({ children }: { children: ReactNode }): JSX.Element 
         }}><X /></Button>
       </header>
       <p className="settings-note">无需注册账户。购买授权后输入激活码，绑定这台电脑，即可使用全部产品功能。</p>
-      {state === 'checking' ? <p role="status">正在验证本机授权…</p> : <>
+      {state === 'checking' ? <p role="status">正在联网验证本机授权…</p> : <>
         <p className="settings-note" role="alert">{error}</p>
         <LicenseSettings runtimeActive={false} onAuthorized={async () => {
           await window.tbLink.requireOutputLicense();
