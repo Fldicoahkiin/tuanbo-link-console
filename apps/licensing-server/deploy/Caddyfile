@@ -1,5 +1,5 @@
 # DNS must resolve to this server before Caddy can obtain public certificates.
-api.link.jinhefilm.com {
+api.tuanbo-link.jinhefilm.com {
     @public path /health /v1/activate
     handle @public {
         reverse_proxy 127.0.0.1:8787
@@ -9,7 +9,7 @@ api.link.jinhefilm.com {
     }
 }
 
-updates.link.jinhefilm.com {
+updates.tuanbo-link.jinhefilm.com {
     root * /srv/tblink-updates
     header X-Content-Type-Options nosniff
     @manifest path /windows/x64/latest.yml
@@ -28,6 +28,6 @@ updates.link.jinhefilm.com {
 }
 
 # Future product website: reserved hostname, no application or directory listing.
-link.jinhefilm.com {
+tuanbo-link.jinhefilm.com {
     respond "Not found" 404
 }

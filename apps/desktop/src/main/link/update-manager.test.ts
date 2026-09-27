@@ -44,7 +44,7 @@ describe('LinkUpdateManager', () => {
     }));
     const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), factory);
     await expect(manager.check()).resolves.toMatchObject({ phase: 'error', message: '更新服务尚未发布可用的正式版本' });
-    expect(factory).toHaveBeenCalledWith('https://updates.link.jinhefilm.com/windows/x64/', expect.any(Object));
+    expect(factory).toHaveBeenCalledWith('https://updates.tuanbo-link.jinhefilm.com/windows/x64/', expect.any(Object));
     expect(() => manager.install()).toThrow('更新尚未下载完成');
     await expect(manager.download()).rejects.toThrow('当前没有可下载的更新');
   });

@@ -42,7 +42,7 @@
     },
     "publish": {
       "provider": "generic",
-      "url": "https://updates.link.jinhefilm.com/windows/x64/"
+      "url": "https://updates.tuanbo-link.jinhefilm.com/windows/x64/"
     },
     "mac": {
       "icon": "build/icon.icns"
