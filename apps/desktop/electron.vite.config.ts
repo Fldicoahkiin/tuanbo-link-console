@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   main: {
     build: {
-      sourcemap: true,
+      sourcemap: false,
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/main/link-main.ts')
@@ -34,7 +34,7 @@ export default defineConfig({
   },
   preload: {
     build: {
-      sourcemap: true,
+      sourcemap: false,
       rollupOptions: {
         output: {
           format: 'cjs'

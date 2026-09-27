@@ -21,8 +21,16 @@
     "productName": "团播联动台",
     "afterPack": "./scripts/edit-windows-executable.mjs",
     "appId": "com.tuanbo.control",
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
     "files": [
       "out/**",
+      "!out/**/*.map",
       "build/icon.ico",
       "package.json"
     ],
