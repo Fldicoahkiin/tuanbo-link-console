@@ -1,29 +1,66 @@
 # 团播联动台软件更新
 
-## 更新链路
+2026-09-28：当前源码改为公司 HTTPS 更新源，尚未发布新安装包、配置 DNS 或部署更新服务器。旧版本历史验收记录留在文末，不代表本次域名和保护配置已验收。
 
-正式 Windows 安装版从 GitHub 私有仓库 `JinHe9527/tuanbo-yijianchufa` 的正式 Release 检查更新：
+## 当前链路
 
-1. 开发电脑完成修复并通过全部校验。
-2. 同步修改根目录和 `apps/desktop/package.json` 的版本号。
-3. 提交并推送代码，再推送与版本严格一致的标签，例如 `v0.2.2`。
-4. GitHub Actions 在 Windows 上执行冻结安装、测试、构建和发布校验。
-5. Actions 创建 GitHub Release，并上传 NSIS 安装包、blockmap、`latest.yml` 与 `release-manifest.json`。
-6. 测试电脑打开联动台右上角“软件更新”，检查、下载并重启安装。
+- 更新源：`https://updates.link.jinhefilm.com/windows/x64/`，`electron-updater 6.8.9` 的 generic provider。
+- 唯一配置来源：`apps/desktop/package.json` 的 `build.publish.url`；主进程直接引用相同配置，打包生成的 `app-update.yml` 应与其一致。
+- 客户不填写 GitHub Token，不需要公司网站账号；旧更新 Token 的 IPC、schema 和输入 UI 已移除，客户端不再读取它。已有本地加密凭证不会被静默删除，也不会迁移到公司服务。
+- 用户打开更新中心后检查→下载→确认重启安装；没有启动自动检查、自动下载、退出即安装、失败自动重试或自动降级。
+- 固定完整 NSIS 包下载，保留 SHA-512 校验；差分下载关闭，blockmap 仍可随构建归档。新源协议仅允许 HTTPS、无用户名/密码、无 query/fragment，且必须为目录地址。
+- 检查与下载互斥，已经下载的版本保留等待安装。运行中或工程未保存时拒绝安装；系统确认框返回后再次检查，防止确认期间状态变化。安装失败恢复关闭保护。
+- 安装沿用原目录和当前用户范围，只退出团播联动台，不关闭 OBS/P1。开发模式不执行更新。
+- 网络层采用锁定版本 `builder-util-runtime` 的 60 秒 socket 空闲超时。完整包传输可超过 60 秒，不是整次下载的总时限；慢链路需实测。授权请求另有独立的 10 秒时限。
 
-标签与 `apps/desktop/package.json` 版本不一致时，发布任务会立即失败，不会生成错误版本。
+当前 feed 是公开静态资源，下载本身不发授权，使用软件仍要求付费许可。`updatesUntil` 对新版使用资格尚未接入；服务器短效下载链接、版本资格目录和安装后资格验证都属于后续工作，不能说已实现按升级期收费。
 
-## 测试电脑首次配置
+## 同服务器静态出口
 
-因为仓库是私有仓库，每台测试电脑首次使用更新功能时需要录入一个 GitHub fine-grained personal access token：
+不需要 HTML 网页，Caddy 提供以下文件即可：
 
-- Repository access 只选择 `JinHe9527/tuanbo-yijianchufa`。
-- Repository permissions 只授予 `Contents: Read-only`；Metadata 保持 GitHub 默认只读。
-- 不授予写入、Actions 管理、仓库管理等权限。
+```text
+/srv/tblink-updates/windows/x64/
+  latest.yml
+  Tuanbo-Link-Console-X.Y.Z-x64.exe
+  Tuanbo-Link-Console-X.Y.Z-x64.exe.blockmap
+```
 
-在软件右上角打开“软件更新”，输入 Token 并保存。Token 使用 Electron `safeStorage` 交给 Windows 加密存储，不写入 `.tblink` 工程、仓库、发布清单或运行日志；界面不会回显已保存的 Token。Windows 安全存储不可用时保存失败，不回退到明文。
+`latest.yml` 由 electron-builder 生成，包含版本、安装包相对文件名、大小和 SHA-512。不要手填摘要，不要把内部绝对路径写进去。正式稳定版本用数字 `X.Y.Z`；当前 Caddy 白名单不服务 prerelease、其他架构或任意文件。
 
-私有 GitHub Release 更新固定下载并校验完整 NSIS 安装包，不启用差分下载。GitHub 私有资产使用数字 API 地址，`electron-updater 6.8.9` 的通用 blockmap 地址推导无法定位单独上传的 blockmap 资产；显式关闭差分更新可以避免下载永久停在 0%。blockmap 仍随 Release 保留，供产物完整性检查使用。
+清单 `Cache-Control: no-store`；带版本的安装包不可变、长期缓存。不开目录浏览，未匹配路径 404。服务器、CF 记录和探测命令见 [COMMERCIAL_DEPLOYMENT.md](COMMERCIAL_DEPLOYMENT.md)。
+
+## 发布流程与上线门槛
+
+1. 在 Windows 原生环境完成仓库 `pnpm verify:release` 及设备回归。同步根包和桌面包版本，使用递增且未发布过的版本号。当前工作没有改版本号、打标签或发布。
+2. **当前脚本仍检查 `unsigned-candidate-confirmed`，`win.signAndEditExecutable` 为 false，不能把该检查通过视为正式商用签名通过。** 取得代码签名证书后，需接入构建签名、真实证书的发布者校验，并调整 manifest 的正式发行检查。必须同时验收应用 EXE 和 NSIS 安装器。未完成前不把候选文件放到公开正式 feed。
+3. 检查成品的 `app-update.yml` 与公司地址一致；确认目标安装器版本、大小、SHA-512 和 Authenticode 发布者。当前依赖在没有配置 `publisherName` 时会跳过 Windows 更新签名验证，因此仅改 HTTPS 地址尚未完成可信更新链路。不能猜公司中文名就是证书发布者。
+4. 在隔离测试源用两套版本验收更新、损坏下载拒绝、错误发布者拒绝、网络中断、运行/未保存拒绝、取消安装、原目录与卸载信息保持。测试主进程与 preload 必须完整重启，不能仅刷新 renderer。
+5. 经发布授权后，把签名且验收通过的版本化安装包和 blockmap 上传到服务器临时目录，校验完成后移入同一文件系统下的公开目录。保留旧版本文件。
+6. 将对应清单上传为临时文件，再以同目录原子 rename 最后替换 `latest.yml`。不要先上传清单，否则客户会读到尚不存在或尚未传完的包。清单路径和版本文件内容发布后不可分别随意修改。
+7. 由公网客户路径检查清单缓存头、文件大小、Range 和摘要，再用 Windows 客户端完成全链路；保存脱敏验收记录。失败时停止发布下一版，不能自动切到未知镜像。
+
+现有 `.github/workflows/release-windows.yml` 只在标签推送后构建并上传 GitHub Release 资产，**不会同步腾讯云出口**。`build.publish` 改为 generic 不会让 `softprops/action-gh-release` 自动上传服务器。待签名、SSH 发布身份与服务器目录验收完成后，再增加受控 CI 发布阶段，按“产物先、清单后”自动同步；生产密钥通过 CI 秘密存储提供，不在 YAML 写口令。本轮未 push，因此没有触发该流水线。
+
+官方参考：[electron-builder 自动更新](https://www.electron.build/v26/docs/features/auto-update/)、[发布配置](https://www.electron.build/v26/docs/publish/)、[Windows 代码签名](https://www.electron.build/docs/features/code-signing/code-signing-win/)。实现行为以本仓库锁定的 electron-updater 6.8.9 / electron-builder 26.15.3 为准，不把更新版文档中新增的清单签名能力当作当前依赖已有能力。
+
+## 旧安装迁移与故障
+
+已安装的旧客户端仍指向历史 GitHub 源，修改本仓库不会远程改变它们。首次迁移默认手动安装一个已签名、经过验证且包含新地址的版本；若以后选择通过旧 feed 发桥接版本，须另行确认旧仓库发布权限与验收，不在本轮执行。旧 0.2.0/0.2.1 的历史下载缺陷仍需要手动跨过。
+
+- “尚未发布可用的正式版本”：检查 `latest.yml` 是否已按白名单路径上线，不能用 HTML 占位页返回 200。
+- TLS 失败：核查多级子域名证书、DNS、CAA、云防火墙以及灰云/橙云方式。
+- 摘要不匹配：停止交付，检查文件被覆盖、上传不完整、代理缓存或被篡改；不关闭校验来恢复下载。
+- 下载慢：检查服务器 4Mbps 共享带宽、剩余流量和并发，不能承诺国内一定秒下。
+- 客户端仍访问 GitHub：核对实际安装版本和包内配置，按迁移流程处理。
+
+## 本轮验证
+
+本轮 macOS 本地 `pnpm typecheck`、`pnpm lint`、Electron main/preload/renderer 构建通过；更新与授权专项 4 个文件共 28 项通过；Chromium 真实组件配测试桥 4 项通过，截图已检查。新增浏览器测试另通过 e2e TypeScript 检查。Windows NSIS 安装、签名、原目录更新、Caddy 和公网 HTTPS 尚未验收，不能用组件 mock 替代真实签名下载。
+
+## 旧版本历史记录（保留原记录，非当前状态）
+
+以下内容来自以前的 Windows 与 GitHub 发布记录，本轮未重新验证其远端链接、签名或实机结果；其中“本机”“本轮”“Latest”“未提交”等均指当时，不是当前交付。
 
 `0.2.0` 与 `0.2.1` 已包含上述差分下载缺陷，无法通过软件内更新跨过该版本。测试电脑必须手工安装一次 `0.2.2` 或更高版本；从该版本开始才能使用软件内更新。不得移动或覆盖既有标签来隐藏这一事实。
 
@@ -46,37 +83,3 @@
 `0.2.13` 收紧 P1 MTC 端口与启动链路：只有集成档案中精确配置、唯一且已连接的输入端口才显示就绪；端口断开、重新创建或同一档案改名后不会复用旧订阅。从集成中心顺序启动或在演出控制中人工重启 P1 时，联动台会先轮询等待目标端口出现，再建立 MTC 订阅，避免 P1 启动较慢时提前失败。“从头重新布防”会同时清除上一轮帧率和到达时间，防止短时间显示旧的绿色 MTC 状态。软件更新顶层模态增加跨全部工作区反复打开的渲染错误回归测试。Electron 从已结束支持的 37.3.1 精确升级至 39.8.10，正式运行依赖审计无已知漏洞。[Release Windows #14](https://github.com/JinHe9527/tuanbo-yijianchufa/actions/runs/33112754200) 已全步骤成功，[v0.2.13](https://github.com/JinHe9527/tuanbo-yijianchufa/releases/tag/v0.2.13) 已发布为 Latest；本机已完成 0.2.12 → 正式 0.2.13 的软件内更新、1920×1030 更新弹窗和零残留卸载验收。
 
 `0.2.14` 本地候选版补齐参考音频提取、时间线素材时长与分层拖放/修剪、工作区交互及受管 OBS 输出清理，并把 P1 MTC 的“Windows 输入端口已就绪”和“P1 实际正在发送”明确分开。后续本地开发又补齐跨工程异步保存/导入隔离、跨盘素材路径防护、预检结果提交门槛、混合图片/视频的独立 OBS 输入、失败或超时后的保守活动来源跟踪、500ms 连续稳定判定、手动接管错过结算、外部程序所有权与重复启动保护。2026-08-31 已通过 37 个测试文件、237 项单元测试和 14/14 Electron E2E。实机确认 P1 1.14.2 播放时对 loopMIDI 与 Windows MIDI Services 软件环回均显示“未发送”且无 quarter-frame；界面和预检不再暗示仅选择虚拟端口即可完成现场签收。该版本仍是未提交、未发布的本地候选版；本轮按操作员要求不生成新安装包、不执行安装生命周期、不提交、不打标签、不推送、不发布，不能描述为正式 Release。
-
-## 发布修复版本
-
-以下命令只应在所有校验通过后执行，且不得强推：
-
-```powershell
-git add --all
-git commit -m "fix: 修复现场问题"
-git push origin codex/tuanbo-link-console
-git tag v0.2.2
-git push origin v0.2.2
-```
-
-每次发布必须使用新的、递增的语义化版本。已经推送的标签不移动、不复用。
-
-## 测试电脑操作
-
-1. 保存当前工程。
-2. 打开“软件更新”，点击“检查更新”。
-3. 发现新版本后点击“下载更新”。
-4. 下载完成后点击“重启并安装”。
-5. 在系统确认框再次确认。
-
-安装更新只退出团播联动台，OBS 与 P1 保持运行；直播伴侣不在联动台的进程管理范围内。当前工程未保存时，主进程会阻止安装。
-更新完成后程序必须仍位于更新前的安装目录，卸载项必须保持当前用户范围；若路径或范围发生变化，应停止现场使用并保留诊断证据。
-
-当前候选包未签名，Windows SmartScreen 可能提示未知发布者；在取得代码签名证书前不得把它描述为已签名版本。
-
-## 失败定位
-
-- `Token 无效或没有权限`：重新创建仅限目标仓库、Contents 只读的 Token。
-- `尚未找到正式 Release`：检查标签对应的 GitHub Actions 是否完成，以及 Release 是否包含 `latest.yml`、安装包和 blockmap。
-- 下载失败：保留界面错误和 GitHub Actions 日志，不删除 lockfile、不升级依赖绕过。
-- 安装被阻止：先保存当前 `.tblink` 工程，再重新安装。
