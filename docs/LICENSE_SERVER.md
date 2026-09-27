@@ -59,7 +59,7 @@ pnpm --filter @tb/licensing-server build
 4. 客户端 `license-config.json.serverUrl` 已配置为 `https://api.tuanbo-link.jinhefilm.com`；使用独立测试密钥与已签名的测试付费许可做端到端验收。固定 `enforcement: "required"`，不提供免费绕过开关。正式发行前确认生产公钥、Windows safeStorage、单机绑定、网络故障和安装器签名。配置编译进主进程，没有用户可用的环境变量绕过开关。
 5. 备份数据库及密钥。备份数据库使用 SQLite 在线备份或停服后一并处理 WAL 状态，不能只在写入期间复制 `license.db`。使用测试环境恢复备份验证旧码可查询、可刷新，订单和审计无缺失。
 
-已通过公网 SSH 登录并部署 systemd 服务；此次 Tailscale SSH 连接超时。Nginx 已用于其他业务，因此不安装 Caddy；新项目反代配置待 DNS 和证书后启用。实时部署证据见部署文档。
+已通过公网 SSH 登录并部署 systemd 服务；此次 Tailscale SSH 连接超时。Nginx 已用于其他业务，因此不安装 Caddy；新项目 DNS、证书及独立反代已启用，公网健康探测通过。实时部署证据见部署文档。
 
 ## 运营 API
 

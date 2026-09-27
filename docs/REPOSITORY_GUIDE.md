@@ -40,7 +40,7 @@ pnpm --filter @tb/desktop test:e2e
 
 ## Git 与发布
 
-本仓库新建为私有源码仓库；历史更新仓库保持原配置。默认不自动发布版本。`.github/workflows` 中现有发布流程仅在推送 `v*` 标签时触发；版本标签必须与应用包版本匹配。
+本仓库新建为私有源码仓库；旧安装版保留其历史更新地址，新源码已切换公司 HTTPS 更新源。默认不自动发布版本。`.github/workflows` 中现有发布流程仅在推送 `v*` 标签时触发；根包、桌面包和发布标签必须一致；当前流水线只生成候选草稿 Release，不自动同步腾讯云。完整关系见 [版本与部署链路](RELEASE_CHAIN.md)。
 
 提交采用 Conventional Commits。依赖通过锁文件安装，不提交 node_modules、构建产物、历史安装包、验收 user-data、音视频测试缓存、密钥或环境变量。本地文件仍保留，排除规则见根目录 `.gitignore`。
 

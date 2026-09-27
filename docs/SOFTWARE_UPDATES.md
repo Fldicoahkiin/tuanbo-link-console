@@ -1,6 +1,6 @@
 # 团播联动台软件更新
 
-2026-09-28：当前源码改为公司 HTTPS 更新源，尚未发布新安装包、配置 DNS 或部署更新服务器。旧版本历史验收记录留在文末，不代表本次域名和保护配置已验收。
+2026-09-28：当前源码改为公司 HTTPS 更新源，DNS、源站 TLS 和静态更新路由已完成并验证；尚未发布新安装包。旧版本历史验收记录留在文末，不代表本次域名和保护配置已验收。
 
 ## 当前链路
 
@@ -30,6 +30,8 @@
 
 清单 `Cache-Control: no-store`；带版本的安装包不可变、长期缓存。不开目录浏览，未匹配路径 404。服务器、CF 记录和探测命令见 [COMMERCIAL_DEPLOYMENT.md](COMMERCIAL_DEPLOYMENT.md)。
 
+Git、版本标识、构建位置与服务部署关系见 [完整链路核查](RELEASE_CHAIN.md)。
+
 ## 发布流程与上线门槛
 
 1. 在 Windows 原生环境完成仓库 `pnpm verify:release` 及设备回归。同步根包和桌面包版本，使用递增且未发布过的版本号。当前工作没有改版本号、打标签或发布。
@@ -40,7 +42,7 @@
 6. 将对应清单上传为临时文件，再以同目录原子 rename 最后替换 `latest.yml`。不要先上传清单，否则客户会读到尚不存在或尚未传完的包。清单路径和版本文件内容发布后不可分别随意修改。
 7. 由公网客户路径检查清单缓存头、文件大小、Range 和摘要，再用 Windows 客户端完成全链路；保存脱敏验收记录。失败时停止发布下一版，不能自动切到未知镜像。
 
-现有 `.github/workflows/release-windows.yml` 只在标签推送后构建并上传 GitHub Release 资产，**不会同步腾讯云出口**。`build.publish` 改为 generic 不会让 `softprops/action-gh-release` 自动上传服务器。待签名、SSH 发布身份与服务器目录验收完成后，再增加受控 CI 发布阶段，按“产物先、清单后”自动同步；生产密钥通过 CI 秘密存储提供，不在 YAML 写口令。本轮未 push，因此没有触发该流水线。
+现有 `.github/workflows/release-windows.yml` 只在 `v*` 标签推送后构建并上传 GitHub 草稿 Release 资产，**不会同步腾讯云出口**。`build.publish` 改为 generic 不会让 `softprops/action-gh-release` 自动上传服务器。待签名、SSH 发布身份与服务器目录验收完成后，再增加受控 CI 发布阶段，按“产物先、清单后”自动同步；生产密钥通过 CI 秘密存储提供，不在 YAML 写口令。本轮未 push，因此没有触发该流水线。
 
 官方参考：[electron-builder 自动更新](https://www.electron.build/v26/docs/features/auto-update/)、[发布配置](https://www.electron.build/v26/docs/publish/)、[Windows 代码签名](https://www.electron.build/docs/features/code-signing/code-signing-win/)。实现行为以本仓库锁定的 electron-updater 6.8.9 / electron-builder 26.15.3 为准，不把更新版文档中新增的清单签名能力当作当前依赖已有能力。
 
@@ -56,7 +58,7 @@
 
 ## 本轮验证
 
-本轮 macOS 本地 `pnpm typecheck`、`pnpm lint`、Electron main/preload/renderer 构建通过；更新与授权专项 4 个文件共 28 项通过；Chromium 真实组件配测试桥 4 项通过，截图已检查。新增浏览器测试另通过 e2e TypeScript 检查。Windows NSIS 安装、签名、原目录更新、反向代理新配置和公网 HTTPS 尚未验收，不能用组件 mock 替代真实签名下载。
+本轮 macOS 本地 `pnpm typecheck`、`pnpm lint`、Electron main/preload/renderer 构建通过；更新与授权专项 4 个文件共 28 项通过；Chromium 真实组件配测试桥 4 项通过，截图已检查。新增浏览器测试另通过 e2e TypeScript 检查。后续已完成反向代理和公网 HTTPS 探测及证书续期演练，见部署文档。Windows NSIS 安装、签名和原目录更新尚未验收，不能用组件 mock 替代真实签名下载。
 
 ## 旧版本历史记录（保留原记录，非当前状态）
 

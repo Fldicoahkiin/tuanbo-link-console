@@ -163,7 +163,7 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 - P1 工程生成后需要手动打开，没有已确认的工程热重载接口。
 - 当前主机标识不能防止克隆 Windows，重装系统可能需要重新签发；离线授权不具备即时撤销能力。
 - 当前构建配置未启用 Windows 代码签名。
-- 自动更新配置已改为 `https://updates.tuanbo-link.jinhefilm.com/windows/x64/`，无需 GitHub Token；公网出口、生产签名及 Windows 更新实机验收尚未完成。旧安装版需迁移。
+- 自动更新配置已改为 `https://updates.tuanbo-link.jinhefilm.com/windows/x64/`，无需 GitHub Token；公网 DNS 与 HTTPS 出口已通过探测；正式安装包、生产签名及 Windows 更新实机验收尚未完成。旧安装版需迁移。
 
 本仓库提交不会自动更新已安装的客户端。正式交付应完成现场验收、版本发布和安装流程验证。
 
@@ -178,6 +178,7 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 | 界面设计 | [设计映射与验证记录](docs/JINHE_UI_ALIGNMENT.md) |
 | 实机验收 | [Windows 验收清单](docs/WINDOWS_ACCEPTANCE.md) |
 | 更新维护 | [软件更新说明](docs/SOFTWARE_UPDATES.md) |
+| Git 与版本链路 | [源码、构建、部署与离线运行](docs/RELEASE_CHAIN.md) |
 | 商业接口 | [授权与支付接口契约](docs/COMMERCIAL_API.md) |
 | 域名部署 | [Cloudflare 与同服务器部署](docs/COMMERCIAL_DEPLOYMENT.md) |
 | 软件保护 | [凭证、加密与后续防破解](docs/SECURITY.md) |
