@@ -1,0 +1,47 @@
+import { test, expect } from '@playwright/test';
+import { build } from 'esbuild';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import type { LinkUpdateStatus } from '@tb/core/link';
+
+let script = '';
+let styles = '';
+test.beforeAll(async () => {
+  const result = await build({
+    stdin: { contents: `import React from 'react'; import { createRoot } from 'react-dom/client'; import { UpdateCenter } from './src/renderer/src/link/components/UpdateCenter'; createRoot(document.getElementById('root')).render(React.createElement(UpdateCenter, { notify: message => { document.getElementById('notice').textContent = message; } }));`, resolveDir: process.cwd(), loader: 'jsx' },
+    bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic'
+  });
+  script = result.outputFiles[0]!.text;
+  styles = (await Promise.all(['link.css', 'appearance.css', 'interface.css'].map(file => readFile(resolve('src/renderer/src/link', file), 'utf8')))).join('\n');
+});
+
+test('公司更新无需客户凭证，下载后由用户确认安装，关闭恢复工作区', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.setContent('<main class="app-shell"><div id="root"></div><div id="notice" role="status"></div></main>');
+  await page.addStyleTag({ content: styles });
+  await page.evaluate(() => {
+    const status: LinkUpdateStatus = { phase: 'idle', currentVersion: '0.4.27', availableVersion: null, releaseDate: null, progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, message: '可以检查软件更新' };
+    Object.defineProperty(window, 'tbLink', { configurable: true, value: {
+      getUpdateStatus: () => Promise.resolve(status), onUpdateStatus: () => () => undefined,
+      checkForUpdates: () => Promise.resolve({ ...status, phase: 'available', availableVersion: '0.4.28', message: '发现新版本 0.4.28' }),
+      downloadUpdate: () => Promise.resolve({ ...status, phase: 'downloaded', availableVersion: '0.4.28', message: '版本 0.4.28 已下载，确认后重启安装' }),
+      installUpdate: () => Promise.reject(new Error('联动尚未停止，请停止联动后再安装更新'))
+    } });
+  });
+  await page.addScriptTag({ content: script });
+  await page.getByRole('button', { name: '软件更新', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.locator('input')).toHaveCount(0);
+  await page.getByRole('button', { name: '检查更新', exact: true }).click();
+  await expect(page.getByText('发现新版本 0.4.28', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '下载更新', exact: true }).click();
+  await expect(page.getByRole('button', { name: '重启并安装', exact: true })).toBeEnabled();
+  await page.screenshot({ path: info.outputPath('company-update.png') });
+  await page.getByRole('button', { name: '重启并安装', exact: true }).click();
+  await expect(page.locator('#notice')).toContainText('联动尚未停止');
+  await expect(page.getByRole('button', { name: '重启并安装', exact: true })).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '软件更新', exact: true })).toBeEnabled();
+  expect(await page.locator('.app-shell').evaluate(element => element.hasAttribute('inert'))).toBe(false);
+});

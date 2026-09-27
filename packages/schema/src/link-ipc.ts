@@ -15,7 +15,6 @@ export const linkDocumentDirtySchema = z.boolean();
 export const linkRuntimeActiveSchema = z.boolean();
 export const linkInternalAudioCaptureSchema = z.object({ enabled: z.boolean(), sceneNames: z.array(z.string().min(1)).max(1000).optional() });
 export const linkWindowControlActionSchema = z.enum(['minimize', 'toggleMaximize', 'close']);
-export const linkUpdateTokenSchema = z.string().trim().min(20, 'GitHub Token 长度无效').max(512, 'GitHub Token 长度无效');
 
 export const linkManagedMediaEventSchema = z.object({
   id: z.string().min(1),

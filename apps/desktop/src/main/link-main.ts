@@ -72,7 +72,6 @@ import {
   linkWaveformGeneratePayloadSchema,
   linkWaveformCacheSavePayloadSchema,
   linkWindowControlActionSchema,
-  linkUpdateTokenSchema,
   linkActionSchema,
   parseLinkProject,
   type IntegrationProfile
@@ -122,7 +121,6 @@ const mediaMetadataProbe = new MediaMetadataProbe();
 const mediaPreviewService = new MediaPreviewService(projectService);
 const assetTokens = new Map<string, string>();
 const knownSecrets = new Set<string>();
-const UPDATE_CREDENTIAL_ID = 'github.update.token';
 
 async function bootstrap(): Promise<void> {
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
@@ -144,7 +142,6 @@ async function bootstrap(): Promise<void> {
     app.isPackaged,
     (status) => sendToRenderer('link:update-status', status)
   );
-  updateManager.setTokenConfigured(await profileStore.hasCredential(UPDATE_CREDENTIAL_ID));
   registerAssetProtocol();
   registerIpc(profileStore, obs, processManager, logger, integrationDetector, updateManager);
   void midiHealth.check().then((result) => logger.record({
@@ -501,28 +498,8 @@ function registerIpc(
       availableDiskBytes: disk.bavail * disk.bsize
     };
   });
-  handle('link:update-status', async (): Promise<LinkUpdateStatus> => {
-    const configured = await profileStore.hasCredential(UPDATE_CREDENTIAL_ID);
-    const status = updateManager.getStatus();
-    return status.tokenConfigured === configured ? status : updateManager.setTokenConfigured(configured);
-  });
-  handle('link:update-save-token', async (_event, tokenValue: unknown): Promise<LinkUpdateStatus> => {
-    const token = linkUpdateTokenSchema.parse(tokenValue);
-    await profileStore.saveCredential(UPDATE_CREDENTIAL_ID, token);
-    knownSecrets.add(token);
-    return updateManager.setTokenConfigured(true);
-  });
-  handle('link:update-clear-token', async (): Promise<LinkUpdateStatus> => {
-    await profileStore.deleteCredential(UPDATE_CREDENTIAL_ID);
-    return updateManager.setTokenConfigured(false);
-  });
-  handle('link:update-check', async (): Promise<LinkUpdateStatus> => {
-    const configured = await profileStore.hasCredential(UPDATE_CREDENTIAL_ID);
-    if (!configured) return updateManager.check(null);
-    const token = await profileStore.loadCredential(UPDATE_CREDENTIAL_ID);
-    knownSecrets.add(token);
-    return updateManager.check(token);
-  });
+  handle('link:update-status', (): LinkUpdateStatus => updateManager.getStatus());
+  handle('link:update-check', (): Promise<LinkUpdateStatus> => updateManager.check());
   handle('link:update-download', (): Promise<LinkUpdateStatus> => updateManager.download());
   handle('link:update-install', async () => {
     if (runtimeActive) throw new Error('联动尚未停止；请先到集成中心停止联动并完成 OBS 清理，再安装更新');
@@ -538,8 +515,14 @@ function registerIpc(
       noLink: true
     });
     if (decision.response !== 1) return;
+    if (runtimeActive || documentDirty) throw new Error('播放或工程状态已变化，请停止联动并保存工程后重新安装');
     allowWindowClose = true;
-    updateManager.install();
+    try {
+      updateManager.install();
+    } catch (error) {
+      allowWindowClose = false;
+      throw error;
+    }
   });
   handle('link:set-document-dirty', (_event, dirtyValue: unknown) => {
     documentDirty = linkDocumentDirtySchema.parse(dirtyValue);

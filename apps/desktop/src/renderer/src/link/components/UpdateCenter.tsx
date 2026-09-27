@@ -2,7 +2,7 @@ import { Button } from './Button';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { LinkUpdateStatus } from '@tb/core/link';
-import { CheckCircle2, CloudDownload, Download, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react';
+import { CheckCircle2, CloudDownload, Download, LoaderCircle, RefreshCw, X } from 'lucide-react';
 
 type UpdateCenterProps = {
   notify: (message: string, tone?: 'info' | 'error') => void;
@@ -11,7 +11,6 @@ type UpdateCenterProps = {
 export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<LinkUpdateStatus | null>(null);
-  const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -67,21 +66,6 @@ export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
     } finally {
       setBusy(false);
     }
-  };
-
-  const saveToken = async (): Promise<void> => {
-    const trimmed = token.trim();
-    if (!trimmed) {
-      notify('请输入 GitHub 只读 Token', 'error');
-      return;
-    }
-    await run(() => window.tbLink.saveUpdateToken(trimmed), '更新凭证已使用 Windows 加密存储');
-    setToken('');
-  };
-
-  const clearToken = async (): Promise<void> => {
-    await run(() => window.tbLink.clearUpdateToken(), '更新凭证已清除');
-    setToken('');
   };
 
   const install = async (): Promise<void> => {
@@ -142,17 +126,11 @@ export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
           <small>{formatProgress(status)}</small>
         </div> : null}
 
-        {phase !== 'disabled' ? <div className="update-credential">
-          <div className="update-credential-title"><ShieldCheck /><div><strong>私有仓库读取凭证</strong><span>{status?.tokenConfigured ? '已加密保存在本机，不会写入工程或日志' : '仅需配置一次，只授予仓库 Contents 读取权限'}</span></div></div>
-          {!status?.tokenConfigured ? <label className="field"><span>GitHub 只读 Token</span><input type="password" autoComplete="off" spellCheck={false} value={token} onChange={(event) => setToken(event.currentTarget.value)} placeholder="github_pat_…" /></label> : null}
-          <div className="inline-actions">
-            {!status?.tokenConfigured ? <Button className="secondary-button" disabled={working || token.trim().length < 20} onClick={() => void saveToken()}><KeyRound />保存凭证</Button> : <Button className="secondary-button" disabled={working} onClick={() => void clearToken()}><Trash2 />清除凭证</Button>}
-          </div>
-        </div> : <p className="update-dev-note">开发模式不会执行下载或安装。正式安装包中会启用 GitHub Release 更新。</p>}
+        <p className="update-dev-note">{phase === 'disabled' ? '开发模式不会执行下载或安装，请使用 Windows 安装版验证更新。' : '更新由发行方提供。下载后需确认重启安装，请先停止联动并保存工程。'}</p>
 
         <div className="modal-actions update-actions">
           <Button className="secondary-button" onClick={() => setOpen(false)}>关闭</Button>
-          {status?.tokenConfigured && phase !== 'downloaded' && phase !== 'available' && phase !== 'disabled' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</Button> : null}
+          {status?.feedConfigured && phase !== 'downloaded' && phase !== 'available' && phase !== 'disabled' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</Button> : null}
           {phase === 'available' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</Button> : null}
           {phase === 'downloaded' ? <Button className="primary-button" disabled={busy} onClick={() => void install()}><CloudDownload />重启并安装</Button> : null}
         </div>

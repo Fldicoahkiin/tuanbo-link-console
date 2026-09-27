@@ -1,4 +1,4 @@
 {
-  "serverUrl": "",
+  "serverUrl": "https://api.link.jinhefilm.com",
   "enforcement": "required"
 }

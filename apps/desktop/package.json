@@ -41,11 +41,8 @@
       "buildResources": "build"
     },
     "publish": {
-      "provider": "github",
-      "owner": "JinHe9527",
-      "repo": "tuanbo-yijianchufa",
-      "private": true,
-      "releaseType": "release"
+      "provider": "generic",
+      "url": "https://updates.link.jinhefilm.com/windows/x64/"
     },
     "mac": {
       "icon": "build/icon.icns"

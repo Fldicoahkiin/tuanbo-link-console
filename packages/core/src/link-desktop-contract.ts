@@ -41,7 +41,7 @@ export type LinkUpdateStatus = {
   progressPercent: number | null;
   transferredBytes: number | null;
   totalBytes: number | null;
-  tokenConfigured: boolean;
+  feedConfigured: boolean;
   message: string;
 };
 
@@ -191,8 +191,6 @@ export type LinkDesktopApi = {
   applyMa2(payload: import('@tb/schema').Ma2ApplyRequest): Promise<import('@tb/schema').Ma2ApplyResult>;
   getAppInfo(): Promise<LinkAppInfo>;
   getUpdateStatus(): Promise<LinkUpdateStatus>;
-  saveUpdateToken(token: string): Promise<LinkUpdateStatus>;
-  clearUpdateToken(): Promise<LinkUpdateStatus>;
   checkForUpdates(): Promise<LinkUpdateStatus>;
   downloadUpdate(): Promise<LinkUpdateStatus>;
   installUpdate(): Promise<void>;

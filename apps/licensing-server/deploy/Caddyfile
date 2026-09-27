@@ -1,5 +1,5 @@
-# Replace with the authorized production domain before deploying.
-license.example.com {
+# DNS must resolve to this server before Caddy can obtain public certificates.
+api.link.jinhefilm.com {
     @public path /health /v1/activate
     handle @public {
         reverse_proxy 127.0.0.1:8787
@@ -7,4 +7,27 @@ license.example.com {
     handle {
         respond "Not found" 404
     }
+}
+
+updates.link.jinhefilm.com {
+    root * /srv/tblink-updates
+    header X-Content-Type-Options nosniff
+    @manifest path /windows/x64/latest.yml
+    handle @manifest {
+        header Cache-Control "no-store"
+        file_server
+    }
+    @artifact path_regexp artifact ^/windows/x64/Tuanbo-Link-Console-[0-9]+\.[0-9]+\.[0-9]+-x64\.exe(\.blockmap)?$
+    handle @artifact {
+        header Cache-Control "public, max-age=31536000, immutable"
+        file_server
+    }
+    handle {
+        respond "Not found" 404
+    }
+}
+
+# Future product website: reserved hostname, no application or directory listing.
+link.jinhefilm.com {
+    respond "Not found" 404
 }

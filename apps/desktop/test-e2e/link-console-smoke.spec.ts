@@ -1510,8 +1510,6 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
     'activateManagedObsOutput',
     'executeManagedMediaEvent',
     'getUpdateStatus',
-    'saveUpdateToken',
-    'clearUpdateToken',
     'checkForUpdates',
     'downloadUpdate',
     'installUpdate',
@@ -2009,7 +2007,7 @@ test('取消重启安装后更新按钮会恢复可操作', async () => {
       progressPercent: 100,
       transferredBytes: 1,
       totalBytes: 1,
-      tokenConfigured: true,
+      feedConfigured: true,
       message: '版本 0.2.11 已下载，确认后重启安装'
     }));
     ipcMain.removeHandler('link:update-install');
