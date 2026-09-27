@@ -8,7 +8,9 @@
 - 全部产品功能付费后开放，无免费编排或试用。未激活只开放授权入口及必要窗口操作。
 - 已实现：本地付费入口、服务端订单及人工核款发码、机器绑定、签名验签、激活码加密保存、撤销及等待旧凭证失效后迁移。
 - 待实现：公开商品和结算页、微信/支付宝收款、自动发货任务、无账户订单找回、退款、自动开票和财务对账导出。
-- 未部署，未配置生产密钥或商户参数，未发生真实收款。本地测试不代表正式支付或 Windows 验收成功。
+- 授权服务已部署至服务器回环并配置签发密钥；公网 HTTPS、商户参数与自动开票未完成，未发生真实收款。本地测试不代表正式支付或 Windows 验收成功。
+
+逐项网址、材料、操作及完成判定见 [COMMERCIAL_ONBOARDING.md](COMMERCIAL_ONBOARDING.md)。已备案域名不按“每个子域名重新备案”处理，先核对腾讯云接入及主体。
 
 ## 2. 办理顺序
 
@@ -148,4 +150,4 @@ ICP备案与增值电信业务许可证不同。仅自营销售、没有其他�
 
 ## 本项目确定的域名
 
-2026-09-28 已选 `api.link.jinhefilm.com` 用于授权与未来支付通知，`updates.link.jinhefilm.com` 用于更新，`link.jinhefilm.com` 预留产品网站。当前没有真实收银台、商户通知路由或网站，不能把 DNS 配置当作商户已开通。部署与多级域名证书方式见 [COMMERCIAL_DEPLOYMENT.md](COMMERCIAL_DEPLOYMENT.md)，预留 API 见 [COMMERCIAL_API.md](COMMERCIAL_API.md)。
+2026-09-28 已选 `api.tuanbo-link.jinhefilm.com` 用于授权与未来支付通知，`updates.tuanbo-link.jinhefilm.com` 用于更新，`tuanbo-link.jinhefilm.com` 预留产品网站。当前没有真实收银台、商户通知路由或网站，不能把 DNS 配置当作商户已开通。部署与多级域名证书方式见 [COMMERCIAL_DEPLOYMENT.md](COMMERCIAL_DEPLOYMENT.md)，预留 API 见 [COMMERCIAL_API.md](COMMERCIAL_API.md)。

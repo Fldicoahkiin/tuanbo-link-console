@@ -1,20 +1,20 @@
 # 公司域名与服务器部署交接
 
-2026-09-28。目标为现有腾讯云上海 `jinhe-cloud`，2 核 / 2GB / 4Mbps；配置尚未部署。主域名 `jinhefilm.com`，项目层采用 `link`。本文件不保存服务器口令、SSH 私钥或商户秘密。
+2026-09-28。目标为现有腾讯云上海 `jinhe-cloud`，2 核 / 2GB / 4Mbps；授权服务已部署至回环地址，公网 HTTPS 待 DNS。主域名 `jinhefilm.com`，项目层采用 `tuanbo-link`。本文件不保存服务器口令、SSH 私钥或商户秘密。
 
 ## Cloudflare 要添加的记录
 
-在 `jinhefilm.com` 的 DNS 页面添加以下记录，内容均填写腾讯云控制台这台实例的**公网 IPv4**，不能填写 Tailscale 的 `100.x` 地址。无需给 `link` 建 NS 委派，也不需要通配记录。
+在 `jinhefilm.com` 的 DNS 页面添加以下记录，内容均填写腾讯云控制台这台实例的**公网 IPv4**，不能填写 Tailscale 的 `100.x` 地址。无需给 `tuanbo-link` 建 NS 委派，也不需要通配记录。
 
 | 类型 | 名称 | 内容 | 代理 | TTL | 用途 |
 | --- | --- | --- | --- | --- | --- |
-| A | `api.link` | 服务器公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 激活、未来支付 |
-| A | `updates.link` | 同一公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 安装包与更新清单 |
-| A | `link` | 同一公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 网站预留，当前返回 404 |
+| A | `api.tuanbo-link` | 服务器公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 激活、未来支付 |
+| A | `updates.tuanbo-link` | 同一公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 安装包与更新清单 |
+| A | `tuanbo-link` | 同一公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 网站预留，当前返回 404 |
 
-先检查是否已有同名 A/AAAA/CNAME，确认后改记录，不能覆盖其他业务。暂不添加 AAAA：有 IPv6 地址不代表公网路由、云防火墙和 Caddy 的 IPv6 链路已验收。如果暂不添加网站记录，也暂不启用 Caddy 模板的 `link.jinhefilm.com` 站点块。
+先检查是否已有同名 A/AAAA/CNAME，确认后改记录，不能覆盖其他业务。暂不添加 AAAA：有 IPv6 地址不代表公网路由、云防火墙和 Nginx 的 IPv6 链路已验收。如果暂不添加网站记录，也暂不启用反向代理模板的 `tuanbo-link.jinhefilm.com` 站点块。
 
-Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级子域，`api.link.jinhefilm.com`、`updates.link.jinhefilm.com` 不在该范围内。初期使用仅 DNS，让 Caddy 申请和续期覆盖实际主机名的公网证书。以后启用代理，需要先配置确实覆盖这些主机名的边缘证书（例如适用的 Advanced Certificate / Total TLS 或自定义证书），并使用 Full (strict) 校验源站证书。不能把 Flexible 当作替代。
+Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级子域，`api.tuanbo-link.jinhefilm.com`、`updates.tuanbo-link.jinhefilm.com` 不在该范围内。初期使用仅 DNS，使用现有 Nginx + Certbot 申请和续期覆盖实际主机名的公网证书。以后启用代理，需要先配置确实覆盖这些主机名的边缘证书（例如适用的 Advanced Certificate / Total TLS 或自定义证书），并使用 Full (strict) 校验源站证书。不能把 Flexible 当作替代。
 
 仅 DNS 不经过 Cloudflare HTTP 代理，因此没有 Cloudflare WAF/CDN 的访问保护与带宽卸载，下载流量全部由腾讯云承担。4Mbps 理论上限约 0.5MB/s，200MB 完整包单用户约需 7 分钟，多人会共享带宽，实际更慢。先保持同服务器出口；流量增长时可在保留域名的前提下迁移对象存储/CDN，仍需校验更新包。
 
@@ -23,13 +23,13 @@ Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级
 ## 服务器布局与端口
 
 ```text
-公网 80/443 → Caddy
-  api.link.jinhefilm.com/health       → 127.0.0.1:8787
-  api.link.jinhefilm.com/v1/activate  → 127.0.0.1:8787
-  api.link.jinhefilm.com/admin/*     → 404（不转发）
-  updates.link.jinhefilm.com/windows/x64/latest.yml → 静态更新清单
-  updates.link.jinhefilm.com/windows/x64/Tuanbo-Link-Console-X.Y.Z-x64.exe
-  link.jinhefilm.com/*               → 404（网站尚未建设）
+公网 80/443 → 现有 Nginx（本项目 HTTPS 配置待启用）
+  api.tuanbo-link.jinhefilm.com/health       → 127.0.0.1:8787
+  api.tuanbo-link.jinhefilm.com/v1/activate  → 127.0.0.1:8787
+  api.tuanbo-link.jinhefilm.com/admin/*     → 404（不转发）
+  updates.tuanbo-link.jinhefilm.com/windows/x64/latest.yml → 静态更新清单
+  updates.tuanbo-link.jinhefilm.com/windows/x64/Tuanbo-Link-Console-X.Y.Z-x64.exe
+  tuanbo-link.jinhefilm.com/*               → 404（网站尚未建设）
 
 /opt/tblink-licensing/               服务代码和运行依赖
 /etc/tblink-licensing/               仅服务账号可读的密钥、环境文件
@@ -37,38 +37,38 @@ Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级
 /srv/tblink-updates/windows/x64/    仅已验收的正式公开文件
 ```
 
-使用 [Caddyfile](../apps/licensing-server/deploy/Caddyfile)、[systemd unit](../apps/licensing-server/deploy/tblink-licensing.service)、[环境示例](../apps/licensing-server/deploy/service.env.example)。把站点块合并入已有 Caddy 配置，不覆盖其他站点。反向代理只开放两个现有路径，支付接口尚未实现，不能通过放开全部 `/v1/*` 或 `/admin/*` 提前代替开发。
+本服务器使用 [Nginx 配置](../apps/licensing-server/deploy/nginx.conf)、[systemd unit](../apps/licensing-server/deploy/tblink-licensing.service)、[环境示例](../apps/licensing-server/deploy/service.env.example)。将本项目配置作为独立站点启用，不覆盖其他站点。[Caddyfile](../apps/licensing-server/deploy/Caddyfile) 仅供以后全新环境使用，不在本机与 Nginx 同时绑定 80/443。反向代理只开放两个现有路径，支付接口尚未实现，不能通过放开全部 `/v1/*` 或 `/admin/*` 提前代替开发。
 
 腾讯云防火墙与系统防火墙允许公网 TCP 80/443，用于 HTTPS 和证书校验；8787、数据库和管理员 API 不开放公网。运维通过现有 Tailscale 和 SSH，服务器用户名待确认。域名仅 DNS 的 HTTPS 请求来自用户公网网络，普通客户不需要加入 Tailscale。
 
-部署前还需核实该主域名在腾讯云大陆实例上的备案/接入状态和实际业务材料要求。“暂时没有网页”不能直接推断 API、下载服务免备案。支付商户审核可能要求可访问的产品介绍、服务条款与售后联系方式；当前 404 占位不等同满足进件材料。
+本次已登录腾讯云核实主域名为公司主体、状态正常、已接入腾讯云并关联目标实例。顶级域名有效备案后，下级子域名通常无需逐个重新备案；若原接入商不是腾讯云，应办理腾讯云接入备案，新的业务内容还应核对是否需变更网站信息。详见 [办理执行单](COMMERCIAL_ONBOARDING.md)。支付商户审核可能要求可访问的产品介绍、服务条款与售后联系方式；当前 404 占位不等同满足进件材料。
 
 ## 部署顺序
 
-1. 核实 SSH 用户名、备份、磁盘余量和已有服务。读取服务状态前也不应把用户口令放到脚本或仓库。实例内存有限，在本地或 CI 构建，生产只运行服务和 Caddy。
-2. 安装支持 `node:sqlite` 的 Node 22.16+ LTS，建立 `tblink-license` 用户及上述目录。服务构建命令 `pnpm --filter @tb/licensing-server build`。构建产物仍依赖锁定版本的 `zod`，按锁文件部署完整运行依赖；不要仅上传一个 JS。
+1. 核实 SSH 用户名、备份、磁盘余量和已有服务。读取服务状态前也不应把用户口令放到脚本或仓库。实例内存有限，在本地或 CI 构建，生产只运行服务及既有 Nginx。
+2. 安装支持 `node:sqlite` 的 Node 22.16+ LTS，建立 `tblink-license` 用户及上述目录。服务构建命令 `pnpm --filter @tb/licensing-server build`。当前构建已将锁定的 zod 打包进 `dist/index.js`；运行时只需 Node 内建模块。部署时保留 `package.json` 的 `type: module`，无需在生产安装 npm 依赖。
 3. 离线生成生产 Ed25519 签名密钥、独立随机 32 字节数据密钥、至少 32 字符随机后台令牌。按环境示例使用受限文件注入。私钥和数据密钥必须加密离线备份。客户端只编入公钥，绝不分发私钥或后台令牌。
 4. 核对 systemd 中 Node 路径，启动服务，确认回环 `/health`。数据库目录权限 0700、密钥文件权限 0600。运营通过 SSH 本地转发访问回环地址，仍须 Bearer 认证；后台响应含激活码，不保存原始终端输出。
-5. 在 Cloudflare 添加上述 DNS；核实 DNS 和 CAA 不阻止证书签发。执行 `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`，成功后 reload；确认三张主机名证书与自动续期。官方说明：[Caddy 静态服务](https://caddyserver.com/docs/caddyfile/directives/file_server)。本仓库未在目标机验证此模板。
-6. 创建更新静态目录，Caddy 用户只读，发布用户可写。按[更新发布步骤](SOFTWARE_UPDATES.md)上传，目录中不放数据库、备份、密钥、内部构建清单或诊断日志。
+5. 在 Cloudflare 添加上述 DNS；核实 DNS 和 CAA 不阻止证书签发。先启用模板中的 HTTP ACME challenge 站点，通过既有 Certbot 的 webroot 方式申请覆盖三个主机名的证书（cert-name 为 `tuanbo-link.jinhefilm.com`）；证书存在后再启用 HTTPS 块。执行 `nginx -t`，成功后 reload；核对续期任务及 Nginx reload hook。不得为了签发证书停止已有站点。
+6. 创建更新静态目录，Nginx 用户只读，发布用户可写。按[更新发布步骤](SOFTWARE_UPDATES.md)上传，目录中不放数据库、备份、密钥、内部构建清单或诊断日志。
 7. 完成以下探测和 Windows 实机流程，再开放商业销售。生产域名已编入客户端；这表示配置完成，不表示域名解析、服务器或商户已上线。
 
 ## 验收探测
 
 ```sh
-curl --fail --max-time 15 https://api.link.jinhefilm.com/health
+curl --fail --max-time 15 https://api.tuanbo-link.jinhefilm.com/health
 # 预期 200 JSON {"status":"ok"}
-curl --max-time 15 -o /dev/null -w '%{http_code}\n' https://api.link.jinhefilm.com/admin/orders
+curl --max-time 15 -o /dev/null -w '%{http_code}\n' https://api.tuanbo-link.jinhefilm.com/admin/orders
 # 预期 404；不得出现订单或认证业务响应
-curl --max-time 15 -o /dev/null -w '%{http_code}\n' https://link.jinhefilm.com/
+curl --max-time 15 -o /dev/null -w '%{http_code}\n' https://tuanbo-link.jinhefilm.com/
 # 预期 404，当前没有网页
-curl --fail --max-time 15 -I https://updates.link.jinhefilm.com/windows/x64/latest.yml
+curl --fail --max-time 15 -I https://updates.tuanbo-link.jinhefilm.com/windows/x64/latest.yml
 # 发布后 200，Cache-Control: no-store；尚未发布为 404
 ```
 
 对实际版本安装包检查 HEAD 的长度、Range 请求的 206 响应、本地 SHA-512 与 `latest.yml` 相符、Windows Authenticode 发布者和签名状态正确；测试未列入白名单路径返回 404、跨机激活拒绝、并发激活不多占席位、支付未实现路径不存在。必须完成检查→完整下载→停止联动→保存→确认安装→原目录自动重启，全程不停止 OBS/P1。
 
-当前授权进程限流为每 socket IP 120 次/分钟；Caddy 回环代理会共享该限额，这是当前上线容量限制。需在上线前实现可信代理来源和独立业务限流、压测后调整，不能盲信外部 `X-Forwarded-For`，也不能直接放大到无限制。购买回调将来应有独立限流预算，避免激活流量挤占核款。
+当前授权进程限流为每 socket IP 120 次/分钟；Nginx 回环代理会共享该限额，这是当前上线容量限制。已准备 Nginx 真实连接 IP 的激活限流（每分钟 30 次、burst 5），仍需压测并处理进程共享总限额，不能盲信外部 `X-Forwarded-For`，也不能直接放大到无限制。购买回调将来应有独立限流预算，避免激活流量挤占核款。
 
 ## 恢复和回退
 
@@ -76,4 +76,13 @@ curl --fail --max-time 15 -I https://updates.link.jinhefilm.com/windows/x64/late
 
 更新文件先备份清单再发布；有问题时可以撤回最新清单到上一个可信版本，阻止新用户继续下载，但已经安装新版的机器不会自动降级。应发布更高版本修复或走经确认的人工恢复。不同版本文件不可覆盖；保留旧资产供已经读到旧清单的客户端完成下载。
 
-本轮没有 SSH、DNS、证书、线上部署、生产发码或支付渠道操作。服务器访问凭证不在交付物中；若已通过聊天发送密码，部署前应轮换并改用受控的 SSH 密钥访问。
+## 当前部署记录
+
+- 已通过用户授权的 ubuntu 密码登录，原有 Nginx、金河分镜和无忧排班保持 active，未修改其配置。
+- 已从 Ubuntu 官方签名仓库安装 Node 22.22.1。服务器 `/tmp` 内存盘满，安装使用 `TMPDIR=/var/tmp`，未删除现有文件，未关闭软件包签名校验。此存量问题仍需后续单独排查。
+- `tblink-licensing.service` 已启用并运行；`127.0.0.1:8787/health` 为 200，未认证后台请求为 401，只绑定回环地址。服务账号 `tblink-license`。
+- 生产 Ed25519 私钥、数据密钥和后台令牌仅在服务器生成，密钥目录 0700、文件 0600。公钥已编入客户端。尚无生产订单、发码、支付或开票；异地加密备份/恢复演练待完成。
+- 本地与远端服务 JS 的 SHA-256 一致：`f0b70d0590326bfff04ed6dc553eb60fe99878e54a3f865dfa02695400bac63a`。
+- Nginx 本项目完整配置保存在 `/opt/tblink-licensing/nginx-pending.conf`，尚未加载；现有 nginx 配置检查通过，有原有 http2 指令弃用提示，本次未改动。
+- 三个新域名仍未解析；未签发新 TLS 证书，未启用本项目公网路由，未上传正式更新安装包。用户完成 DNS 后继续证书及公网验收。
+- 后台令牌、私钥及登录密码未下载到本地或写入仓库。回环健康通过不等于公众可激活、收款或自动开票。

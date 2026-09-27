@@ -90,7 +90,7 @@ OBS 原生预览组件随安装资源提供。通过 **设置 → 设备连接 �
 - 客户端验证 Ed25519 签名、产品、绑定主机和有效期。
 - 买断使用期限与升级服务期限分别显示，无效文件不覆盖现有许可。
 
-**当前为本地实现，尚未商业上线。** 不设客户账户、注册或登录，一码一机，全部产品功能付费后开放。客户端固定授权闸门，公司 API 地址已配置，生产公钥尚未配置，因此停在授权页。服务端已支持人工核款、个人／企业批量发码、在线机器绑定、加密保存激活码和等待旧凭证失效后迁移。自动支付、自动开票、退款及升级资格限制仍未完成；更新已改公司 HTTPS 源，尚未部署；Windows 实机与打包保护尚需验收。参见 [授权服务](docs/LICENSE_SERVER.md)、[支付与税务接入](docs/PAYMENTS_AND_TAX.md)。文档中的价格为建议，不是正式报价。
+**授权服务已回环部署，尚未商业上线。** 不设客户账户、注册或登录，一码一机，全部产品功能付费后开放。客户端固定授权闸门，公司 API 地址与验签公钥已配置，未激活停在授权页。服务端已支持人工核款、个人／企业批量发码、在线机器绑定、加密保存激活码和等待旧凭证失效后迁移。自动支付、自动开票、退款及升级资格限制仍未完成；更新已改公司 HTTPS 源，尚未部署；Windows 实机与打包保护尚需验收。参见 [授权服务](docs/LICENSE_SERVER.md)、[支付与税务接入](docs/PAYMENTS_AND_TAX.md)。文档中的价格为建议，不是正式报价。
 
 [商业化方案](docs/COMMERCIALIZATION.md) · [授权实现与签发说明](docs/LICENSE_IMPLEMENTATION.md) · [激活码服务器与部署](docs/LICENSE_SERVER.md)
 
@@ -163,7 +163,7 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 - P1 工程生成后需要手动打开，没有已确认的工程热重载接口。
 - 当前主机标识不能防止克隆 Windows，重装系统可能需要重新签发；离线授权不具备即时撤销能力。
 - 当前构建配置未启用 Windows 代码签名。
-- 自动更新配置已改为 `https://updates.link.jinhefilm.com/windows/x64/`，无需 GitHub Token；公网出口、生产签名及 Windows 更新实机验收尚未完成。旧安装版需迁移。
+- 自动更新配置已改为 `https://updates.tuanbo-link.jinhefilm.com/windows/x64/`，无需 GitHub Token；公网出口、生产签名及 Windows 更新实机验收尚未完成。旧安装版需迁移。
 
 本仓库提交不会自动更新已安装的客户端。正式交付应完成现场验收、版本发布和安装流程验证。
 
@@ -181,6 +181,7 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 | 商业接口 | [授权与支付接口契约](docs/COMMERCIAL_API.md) |
 | 域名部署 | [Cloudflare 与同服务器部署](docs/COMMERCIAL_DEPLOYMENT.md) |
 | 软件保护 | [凭证、加密与后续防破解](docs/SECURITY.md) |
+| 办理执行 | [商户、备案、自动交付与开票步骤](docs/COMMERCIAL_ONBOARDING.md) |
 | 公司经营 | [支付申请、税务与开票](docs/PAYMENTS_AND_TAX.md) |
 | 开发约束 | [仓库维护](docs/REPOSITORY_GUIDE.md) · [Agent 工作规范](AGENTS.md) |
 

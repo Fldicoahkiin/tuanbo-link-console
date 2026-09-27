@@ -1,6 +1,6 @@
 # 商业接口与凭证契约
 
-2026-09-28。本文区分已实现接口和后续设计。生产 origin 规划为 `https://api.link.jinhefilm.com`，服务尚未部署；客户端配置该地址不代表生产已可用。实现依据：`apps/licensing-server/src/http.ts`、`service.ts`、`packages/schema/src/license.ts`。
+2026-09-28。本文区分已实现接口和后续设计。生产 origin 规划为 `https://api.tuanbo-link.jinhefilm.com`，服务已回环部署，公网 DNS/HTTPS 待完成；客户端配置该地址不代表公众已可用。实现依据：`apps/licensing-server/src/http.ts`、`service.ts`、`packages/schema/src/license.ts`。
 
 ## 已实现接口
 
@@ -16,7 +16,7 @@
 | POST `/admin/licenses/:id/revoke` | 同上 | `{"reason":"原因"}` | `{"revoked":true}` |
 | POST `/admin/licenses/:id/migrate` | 同上 | `{"reason":"原因"}` | `{"code":"TBA-…"}`，同一 license ID 换新码 |
 
-管理员请求头 `Authorization: Bearer <至少32字符随机后台令牌>`。不得把后台令牌放在 renderer、preload、安装包或公开网站。Caddy 对 `/admin/*` 返回 404；不能通过修改代理使其成为支付通知入口。
+管理员请求头 `Authorization: Bearer <至少32字符随机后台令牌>`。不得把后台令牌放在 renderer、preload、安装包或公开网站。Nginx/Caddy 模板对公网 `/admin/*` 返回 404；不能通过修改代理使其成为支付通知入口。
 
 激活请求示意（以下码是格式示例，不是真实授权）：
 

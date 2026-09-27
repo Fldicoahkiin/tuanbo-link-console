@@ -1,6 +1,6 @@
 # 激活码与服务器授权
 
-2026-09-28。本轮为可本地验证的实现，尚未部署、收款或签发生产密钥。客户端固定 `required`，未配置生产公钥时停在授权页；不能把该版本描述为已上线的收费版。
+2026-09-28。授权服务已在目标服务器回环部署，生产密钥已现场生成、验签公钥已编入客户端；公网域名/HTTPS 尚未完成，没有真实收款或生产发码。客户端固定 `required`，未激活仍停在授权页；不能把该版本描述为已上线的收费版。
 
 域名及部署步骤见 [COMMERCIAL_DEPLOYMENT.md](COMMERCIAL_DEPLOYMENT.md)，字段、响应与支付预留接口见 [COMMERCIAL_API.md](COMMERCIAL_API.md)，安全后续工作见 [SECURITY.md](SECURITY.md)。
 
@@ -49,17 +49,17 @@ pnpm --filter @tb/licensing-server build
 
 配置项见 `apps/licensing-server/deploy/service.env.example`。服务默认仅监听 `127.0.0.1:8787`；签名私钥、32 字节随机数据密钥（base64 文本）和至少 32 字符随机后台令牌分别从文件读取。文件仅服务账号可读，放在仓库及网页目录之外；不要把秘密放在命令行、Git 或桌面包里。
 
-签名密钥用既有 `scripts/license-issuer.mjs keygen` 生成。只把其公钥 JSON 写入 `apps/desktop/src/main/link/license-public-keys.json`；生产私钥不在本轮生成。数据密钥一旦更换会影响旧码查找与解密，必须备份，不能直接替换文件当作已完成密钥轮换。保留旧签名公钥，按 keyId 轮换发行密钥。
+签名密钥用既有 `scripts/license-issuer.mjs keygen` 生成。只把其公钥 JSON 写入 `apps/desktop/src/main/link/license-public-keys.json`；本轮生产私钥已仅在服务器生成。数据密钥一旦更换会影响旧码查找与解密，必须备份，不能直接替换文件当作已完成密钥轮换。保留旧签名公钥，按 keyId 轮换发行密钥。
 
 ## Linux 部署交接
 
-1. 确认服务器、域名、服务账号、存储位置及运营访问方式。构建服务，部署 `dist/index.js` 及锁定版本的 zod 运行依赖；`dist` 单文件仍引用外部 zod，不能只复制 JS 就声称可运行。也可在服务器按完整仓库锁文件安装后构建服务。
+1. 确认服务器、域名、服务账号、存储位置及运营访问方式。构建服务，当前 `dist/index.js` 已包含 zod，搭配 `type: module` 的 package.json 和 Node 22.16+ 即可运行，无需在生产下载 npm 依赖。
 2. 建立 `/etc/tblink-licensing` 的受限密钥文件和环境文件；创建 `tblink-license` 系统用户。`systemd` 示例会建立私有数据库目录。核对 Node 的实际绝对路径与部署目录，再启用示例 unit。
-3. Caddy 示例仅将 `/v1/activate` 和 `/health` 暴露为 HTTPS。`/admin/` 不公开，运营在服务器本机或受控隧道调用；不要把监听地址改成公网来绕过反向代理。当前进程按 socket 地址限流，代理后的连接共享限额，需按实际流量在代理补充真实来源限流并调整总容量；不得盲目信任任意 X-Forwarded-For。
-4. 客户端 `license-config.json.serverUrl` 已配置为 `https://api.link.jinhefilm.com`；使用独立测试密钥与已签名的测试付费许可做端到端验收。固定 `enforcement: "required"`，不提供免费绕过开关。正式发行前确认生产公钥、Windows safeStorage、单机绑定、网络故障和安装器签名。配置编译进主进程，没有用户可用的环境变量绕过开关。
+3. Nginx（当前服务器）及 Caddy（全新环境备选）模板仅将 `/v1/activate` 和 `/health` 暴露为 HTTPS。`/admin/` 不公开，运营在服务器本机或受控隧道调用；不要把监听地址改成公网来绕过反向代理。当前进程按 socket 地址限流，代理后的连接共享限额，需按实际流量在代理补充真实来源限流并调整总容量；不得盲目信任任意 X-Forwarded-For。
+4. 客户端 `license-config.json.serverUrl` 已配置为 `https://api.tuanbo-link.jinhefilm.com`；使用独立测试密钥与已签名的测试付费许可做端到端验收。固定 `enforcement: "required"`，不提供免费绕过开关。正式发行前确认生产公钥、Windows safeStorage、单机绑定、网络故障和安装器签名。配置编译进主进程，没有用户可用的环境变量绕过开关。
 5. 备份数据库及密钥。备份数据库使用 SQLite 在线备份或停服后一并处理 WAL 状态，不能只在写入期间复制 `license.db`。使用测试环境恢复备份验证旧码可查询、可刷新，订单和审计无缺失。
 
-已确认目标为腾讯云国内 Linux 实例，Tailscale 中继可达；本轮没有 SSH、DNS 或线上配置变更。`systemd` 与 Caddy 文件是部署模板，未在实际服务器执行。
+已通过公网 SSH 登录并部署 systemd 服务；此次 Tailscale SSH 连接超时。Nginx 已用于其他业务，因此不安装 Caddy；新项目反代配置待 DNS 和证书后启用。实时部署证据见部署文档。
 
 ## 运营 API
 
@@ -112,4 +112,4 @@ pnpm --filter @tb/licensing-server build
 - `pnpm --filter @tb/desktop exec electron-vite build` 通过，重新生成 main、preload、renderer；未复用旧 preload。macOS 无法运行本仓库完整 `pnpm dev` 的 Windows 原生前置构建，因此没有宣称 Windows 进程重启验收通过。
 - 全库 Vitest 回归快照：913 项通过、18 项失败、44 项跳过。18 项位于原有 Windows PowerShell／OBS 插件／IBT 和真实媒体处理用例，错误包括平台限制、缺少 DLL／EXE／FFmpeg；没有将失败跳过或修改断言以伪造通过。该快照之后补充的两个时序测试已包含在之前 16 项专项检查；此次全功能付费策略新增测试后的 18 项也已通过中。
 - 仓库标准 `pnpm test` 在 IBT Windows 构建前置步骤停止，`pnpm build` 在 OBS Windows 插件构建前置步骤停止。正式 `pnpm verify:release`、安装器签名、ASAR 篡改拦截、真实 OBS／MIDI／MA2 与服务器 HTTPS 联调仍须 Windows 与部署环境验收。
-- 没有操作生产服务器、DNS、支付商户、公司账户或 Git 远端，本地已按逻辑提交，未 push。
+- 以上为最初本地检查记录；后续已部署回环服务，见部署文档。未进行 DNS 修改、商户提交、收付款或 Git push。

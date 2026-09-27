@@ -4,7 +4,7 @@
 
 ## 当前链路
 
-- 更新源：`https://updates.link.jinhefilm.com/windows/x64/`，`electron-updater 6.8.9` 的 generic provider。
+- 更新源：`https://updates.tuanbo-link.jinhefilm.com/windows/x64/`，`electron-updater 6.8.9` 的 generic provider。
 - 唯一配置来源：`apps/desktop/package.json` 的 `build.publish.url`；主进程直接引用相同配置，打包生成的 `app-update.yml` 应与其一致。
 - 客户不填写 GitHub Token，不需要公司网站账号；旧更新 Token 的 IPC、schema 和输入 UI 已移除，客户端不再读取它。已有本地加密凭证不会被静默删除，也不会迁移到公司服务。
 - 用户打开更新中心后检查→下载→确认重启安装；没有启动自动检查、自动下载、退出即安装、失败自动重试或自动降级。
@@ -17,7 +17,7 @@
 
 ## 同服务器静态出口
 
-不需要 HTML 网页，Caddy 提供以下文件即可：
+不需要 HTML 网页，Nginx 静态站点提供以下文件即可：
 
 ```text
 /srv/tblink-updates/windows/x64/
@@ -26,7 +26,7 @@
   Tuanbo-Link-Console-X.Y.Z-x64.exe.blockmap
 ```
 
-`latest.yml` 由 electron-builder 生成，包含版本、安装包相对文件名、大小和 SHA-512。不要手填摘要，不要把内部绝对路径写进去。正式稳定版本用数字 `X.Y.Z`；当前 Caddy 白名单不服务 prerelease、其他架构或任意文件。
+`latest.yml` 由 electron-builder 生成，包含版本、安装包相对文件名、大小和 SHA-512。不要手填摘要，不要把内部绝对路径写进去。正式稳定版本用数字 `X.Y.Z`；当前反向代理白名单不服务 prerelease、其他架构或任意文件。
 
 清单 `Cache-Control: no-store`；带版本的安装包不可变、长期缓存。不开目录浏览，未匹配路径 404。服务器、CF 记录和探测命令见 [COMMERCIAL_DEPLOYMENT.md](COMMERCIAL_DEPLOYMENT.md)。
 
@@ -56,7 +56,7 @@
 
 ## 本轮验证
 
-本轮 macOS 本地 `pnpm typecheck`、`pnpm lint`、Electron main/preload/renderer 构建通过；更新与授权专项 4 个文件共 28 项通过；Chromium 真实组件配测试桥 4 项通过，截图已检查。新增浏览器测试另通过 e2e TypeScript 检查。Windows NSIS 安装、签名、原目录更新、Caddy 和公网 HTTPS 尚未验收，不能用组件 mock 替代真实签名下载。
+本轮 macOS 本地 `pnpm typecheck`、`pnpm lint`、Electron main/preload/renderer 构建通过；更新与授权专项 4 个文件共 28 项通过；Chromium 真实组件配测试桥 4 项通过，截图已检查。新增浏览器测试另通过 e2e TypeScript 检查。Windows NSIS 安装、签名、原目录更新、反向代理新配置和公网 HTTPS 尚未验收，不能用组件 mock 替代真实签名下载。
 
 ## 旧版本历史记录（保留原记录，非当前状态）
 
