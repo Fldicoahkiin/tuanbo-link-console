@@ -1,10 +1,10 @@
 # 公司域名与服务器部署交接
 
-2026-09-28。目标为现有腾讯云上海 `jinhe-cloud`，2 核 / 2GB / 4Mbps；授权服务已部署至回环地址，公网 HTTPS 待 DNS。主域名 `jinhefilm.com`，项目层采用 `tuanbo-link`。本文件不保存服务器口令、SSH 私钥或商户秘密。
+2026-09-28。目标为现有腾讯云上海 `jinhe-cloud`，2 核 / 2GB / 4Mbps；授权服务已部署至回环地址，Cloudflare DNS 与公网 HTTPS 已启用。主域名 `jinhefilm.com`，项目层采用 `tuanbo-link`。本文件不保存服务器口令、SSH 私钥或商户秘密。
 
-## Cloudflare 要添加的记录
+## Cloudflare 已配置的记录
 
-在 `jinhefilm.com` 的 DNS 页面添加以下记录，内容均填写腾讯云控制台这台实例的**公网 IPv4**，不能填写 Tailscale 的 `100.x` 地址。无需给 `tuanbo-link` 建 NS 委派，也不需要通配记录。
+已在 `jinhefilm.com` 的 DNS 页面添加以下记录，内容均填写腾讯云控制台这台实例的**公网 IPv4**，不能填写 Tailscale 的 `100.x` 地址。无需给 `tuanbo-link` 建 NS 委派，也不需要通配记录。
 
 | 类型 | 名称 | 内容 | 代理 | TTL | 用途 |
 | --- | --- | --- | --- | --- | --- |
@@ -13,6 +13,16 @@
 | A | `tuanbo-link` | 同一公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 网站预留，当前返回 404 |
 
 先检查是否已有同名 A/AAAA/CNAME，确认后改记录，不能覆盖其他业务。暂不添加 AAAA：有 IPv6 地址不代表公网路由、云防火墙和 Nginx 的 IPv6 链路已验收。如果暂不添加网站记录，也暂不启用反向代理模板的 `tuanbo-link.jinhefilm.com` 站点块。
+
+三条记录已在 Cloudflare 的 Comment 字段填写以下用途，后续修改应保留既有备注；填写备注不代表对应接口已经上线：
+
+| 名称 | Comment |
+| --- | --- |
+| `api.tuanbo-link` | 团播联动台：授权激活 API，后续支付回调预留；源站 jinhe-cloud（腾讯云上海）；仅 DNS，源站 Nginx 提供 HTTPS；管理员接口不对外。 |
+| `updates.tuanbo-link` | 团播联动台：Windows x64 更新清单与正式安装包出口；源站 jinhe-cloud（腾讯云上海）；仅 DNS，源站 Nginx 提供 HTTPS。 |
+| `tuanbo-link` | 团播联动台：未来产品网站预留；当前无网页，计划返回 404；源站 jinhe-cloud（腾讯云上海）；仅 DNS。 |
+
+2026-09-28 已在 Cloudflare 管理页新增以上三条 A 记录，逐条核实公网 IPv4、仅 DNS、TTL Auto 和 Comment；原有记录未修改。服务器正常解析三个域名并通过 ACME 校验，本地一度存在 API 域名的负缓存，随后普通 HTTPS 请求也通过。
 
 Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级子域，`api.tuanbo-link.jinhefilm.com`、`updates.tuanbo-link.jinhefilm.com` 不在该范围内。初期使用仅 DNS，使用现有 Nginx + Certbot 申请和续期覆盖实际主机名的公网证书。以后启用代理，需要先配置确实覆盖这些主机名的边缘证书（例如适用的 Advanced Certificate / Total TLS 或自定义证书），并使用 Full (strict) 校验源站证书。不能把 Flexible 当作替代。
 
@@ -23,7 +33,7 @@ Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级
 ## 服务器布局与端口
 
 ```text
-公网 80/443 → 现有 Nginx（本项目 HTTPS 配置待启用）
+公网 80/443 → 现有 Nginx（本项目独立站点已启用）
   api.tuanbo-link.jinhefilm.com/health       → 127.0.0.1:8787
   api.tuanbo-link.jinhefilm.com/v1/activate  → 127.0.0.1:8787
   api.tuanbo-link.jinhefilm.com/admin/*     → 404（不转发）
@@ -39,7 +49,7 @@ Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级
 
 本服务器使用 [Nginx 配置](../apps/licensing-server/deploy/nginx.conf)、[systemd unit](../apps/licensing-server/deploy/tblink-licensing.service)、[环境示例](../apps/licensing-server/deploy/service.env.example)。将本项目配置作为独立站点启用，不覆盖其他站点。[Caddyfile](../apps/licensing-server/deploy/Caddyfile) 仅供以后全新环境使用，不在本机与 Nginx 同时绑定 80/443。反向代理只开放两个现有路径，支付接口尚未实现，不能通过放开全部 `/v1/*` 或 `/admin/*` 提前代替开发。
 
-腾讯云防火墙与系统防火墙允许公网 TCP 80/443，用于 HTTPS 和证书校验；8787、数据库和管理员 API 不开放公网。运维通过现有 Tailscale 和 SSH，服务器用户名待确认。域名仅 DNS 的 HTTPS 请求来自用户公网网络，普通客户不需要加入 Tailscale。
+腾讯云防火墙与系统防火墙允许公网 TCP 80/443，用于 HTTPS 和证书校验；8787、数据库和管理员 API 不开放公网。SSH 用户名已确认为 `ubuntu`，本轮公网 SSH 可用，Tailscale SSH 连接超时，尚未验收该运维通道。域名仅 DNS 的 HTTPS 请求来自用户公网网络，普通客户不需要加入 Tailscale。
 
 本次已登录腾讯云核实主域名为公司主体、状态正常、已接入腾讯云并关联目标实例。顶级域名有效备案后，下级子域名通常无需逐个重新备案；若原接入商不是腾讯云，应办理腾讯云接入备案，新的业务内容还应核对是否需变更网站信息。详见 [办理执行单](COMMERCIAL_ONBOARDING.md)。支付商户审核可能要求可访问的产品介绍、服务条款与售后联系方式；当前 404 占位不等同满足进件材料。
 
@@ -49,9 +59,9 @@ Cloudflare 全区接入下，普通 Universal SSL 通常仅覆盖根域和一级
 2. 安装支持 `node:sqlite` 的 Node 22.16+ LTS，建立 `tblink-license` 用户及上述目录。服务构建命令 `pnpm --filter @tb/licensing-server build`。当前构建已将锁定的 zod 打包进 `dist/index.js`；运行时只需 Node 内建模块。部署时保留 `package.json` 的 `type: module`，无需在生产安装 npm 依赖。
 3. 离线生成生产 Ed25519 签名密钥、独立随机 32 字节数据密钥、至少 32 字符随机后台令牌。按环境示例使用受限文件注入。私钥和数据密钥必须加密离线备份。客户端只编入公钥，绝不分发私钥或后台令牌。
 4. 核对 systemd 中 Node 路径，启动服务，确认回环 `/health`。数据库目录权限 0700、密钥文件权限 0600。运营通过 SSH 本地转发访问回环地址，仍须 Bearer 认证；后台响应含激活码，不保存原始终端输出。
-5. 在 Cloudflare 添加上述 DNS；核实 DNS 和 CAA 不阻止证书签发。先启用模板中的 HTTP ACME challenge 站点，通过既有 Certbot 的 webroot 方式申请覆盖三个主机名的证书（cert-name 为 `tuanbo-link.jinhefilm.com`）；证书存在后再启用 HTTPS 块。执行 `nginx -t`，成功后 reload；核对续期任务及 Nginx reload hook。不得为了签发证书停止已有站点。
+5. 在 Cloudflare 添加上述 DNS；核实 DNS 和 CAA 不阻止证书签发。先启用模板中的 HTTP ACME challenge 站点，通过既有 Certbot 的 webroot 方式申请覆盖三个主机名的证书（cert-name 为 `tuanbo-link.jinhefilm.com`）；证书存在后再启用 HTTPS 块。执行 `nginx -t`，成功后 reload；核对续期任务及 Nginx reload hook。将 [证书部署钩子](../apps/licensing-server/deploy/certbot-deploy-hook.sh) 安装至 `/etc/letsencrypt/renewal-hooks/deploy/tblink-nginx-reload`，权限 0755；仅本项目证书续期后检查并重载 Nginx。不得为了签发证书停止已有站点。
 6. 创建更新静态目录，Nginx 用户只读，发布用户可写。按[更新发布步骤](SOFTWARE_UPDATES.md)上传，目录中不放数据库、备份、密钥、内部构建清单或诊断日志。
-7. 完成以下探测和 Windows 实机流程，再开放商业销售。生产域名已编入客户端；这表示配置完成，不表示域名解析、服务器或商户已上线。
+7. 完成以下探测和 Windows 实机流程，再开放商业销售。生产域名已编入客户端，DNS 和 HTTPS 已通过本次探测；客户端配置及服务探测不能替代商户开通和端到端验收。
 
 ## 验收探测
 
@@ -83,6 +93,7 @@ curl --fail --max-time 15 -I https://updates.tuanbo-link.jinhefilm.com/windows/x
 - `tblink-licensing.service` 已启用并运行；`127.0.0.1:8787/health` 为 200，未认证后台请求为 401，只绑定回环地址。服务账号 `tblink-license`。
 - 生产 Ed25519 私钥、数据密钥和后台令牌仅在服务器生成，密钥目录 0700、文件 0600。公钥已编入客户端。尚无生产订单、发码、支付或开票；异地加密备份/恢复演练待完成。
 - 本地与远端服务 JS 的 SHA-256 一致：`f0b70d0590326bfff04ed6dc553eb60fe99878e54a3f865dfa02695400bac63a`。
-- Nginx 本项目完整配置保存在 `/opt/tblink-licensing/nginx-pending.conf`，尚未加载；现有 nginx 配置检查通过，有原有 http2 指令弃用提示，本次未改动。
-- 三个新域名仍未解析；未签发新 TLS 证书，未启用本项目公网路由，未上传正式更新安装包。用户完成 DNS 后继续证书及公网验收。
+- 独立站点 `/etc/nginx/sites-available/tblink-licensing.conf` 已链接至 sites-enabled，先通过 HTTP webroot 申请证书，再加载完整 HTTPS 配置。`nginx -t` 通过，既有两个业务服务保持 active，金河分镜公网返回 200。旧站点的 http2 弃用提示及共享 443 的 protocol options 提示仍存在；未修改旧站点。
+- 三个新域名 DNS 已配置，Let’s Encrypt 证书覆盖三个 SAN，有效期至 2026-12-26（UTC）；使用服务器现有 ACME 账户，无新增付费证书。`certbot.timer` 已启用，项目专用 reload hook 已安装并执行成功。限定本证书的 `certbot renew --dry-run --run-deploy-hooks --no-random-sleep-on-renew` 演练通过，部署钩子执行完成。
+- 公网普通 HTTPS 请求：健康检查 200；空激活请求 400 `INVALID_REQUEST`；后台路径 404；未实现的支付宝通知路径 404；更新清单 404 且带 `Cache-Control: no-store`；更新目录与预留网站 404。尚未上传正式 Windows 安装包，尚未完成真实机器的生产激活和自动更新验收。
 - 后台令牌、私钥及登录密码未下载到本地或写入仓库。回环健康通过不等于公众可激活、收款或自动开票。
