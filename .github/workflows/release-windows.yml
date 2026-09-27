@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release-windows:
     runs-on: windows-latest
@@ -27,24 +31,21 @@ jobs:
           node-version: 25.8.2
           cache: pnpm
 
-      - name: Validate release tag
-        shell: pwsh
-        run: |
-          $packageVersion = node -p "require('./apps/desktop/package.json').version"
-          $expectedTag = "v$packageVersion"
-          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
-            throw "标签 $env:GITHUB_REF_NAME 与应用版本 $packageVersion 不一致，应为 $expectedTag"
-          }
-
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Validate release version and tag
+        shell: pwsh
+        run: node scripts/verify-release-version.mjs "$env:GITHUB_REF_NAME"
 
       - name: Verify and build Windows release
         run: pnpm verify:release
 
-      - name: Upload release assets
+      - name: Upload draft candidate assets
         uses: softprops/action-gh-release@v3
         with:
+          draft: true
+          make_latest: 'false'
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |

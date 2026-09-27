@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { validatePackagedUpdateConfig, validateReleaseVersion } from './release-config.mjs';
 
 const requireDist = process.argv.includes('--dist');
 const root = process.cwd();
 const desktopPackage = JSON.parse(readFileSync(join(root, 'apps/desktop/package.json'), 'utf8'));
+validateReleaseVersion(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')), desktopPackage);
 const requiredBuildFiles = [
   'apps/desktop/out/main/index.cjs',
   'apps/desktop/out/preload/index.cjs',
@@ -41,6 +43,7 @@ if (requireDist) {
   const updateMetadata = files.find((file) => relative(distDirectory, file).replaceAll('\\', '/') === 'latest.yml');
   const packagedUpdateConfig = files.find((file) => relative(distDirectory, file).replaceAll('\\', '/') === 'win-unpacked/resources/app-update.yml');
   const updateConfigText = packagedUpdateConfig ? readFileSync(packagedUpdateConfig, 'utf8') : '';
+  validatePackagedUpdateConfig(updateConfigText, desktopPackage.build.publish);
   const packagedBridge = join(distDirectory, 'win-unpacked/resources/obs/tblink-realtime-preview.dll');
   const builtBridge = join(root, 'tools/obs/native-preview/tblink-realtime-preview.dll');
   const bridgeMatches = existsSync(packagedBridge) && existsSync(builtBridge)
@@ -58,12 +61,8 @@ if (requireDist) {
     { name: 'windows-unpacked-executable', ok: Boolean(unpackedExecutable), detail: unpackedExecutable ? relative(root, unpackedExecutable) : 'missing' },
     { name: 'windows-update-metadata', ok: Boolean(updateMetadata), detail: updateMetadata ? relative(root, updateMetadata) : 'missing latest.yml' },
     {
-      name: 'packaged-private-github-update-config',
-      ok: Boolean(packagedUpdateConfig)
-        && updateConfigText.includes('provider: github')
-        && updateConfigText.includes('owner: JinHe9527')
-        && updateConfigText.includes('repo: tuanbo-yijianchufa')
-        && !/token:|github_pat_|ghp_|authorization:/i.test(updateConfigText),
+      name: 'packaged-company-update-config',
+      ok: Boolean(packagedUpdateConfig),
       detail: packagedUpdateConfig ? relative(root, packagedUpdateConfig) : 'missing app-update.yml'
     },
     {

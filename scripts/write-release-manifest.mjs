@@ -2,10 +2,12 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, relative } from 'node:path';
+import { validateReleaseVersion } from './release-config.mjs';
 
 const root = process.cwd();
 const desktopPackage = readJson(join(root, 'apps/desktop/package.json'));
 const rootPackage = readJson(join(root, 'package.json'));
+validateReleaseVersion(rootPackage, desktopPackage);
 const distDirectory = join(root, process.env.TBLINK_DIST_DIRECTORY ?? 'apps/desktop/dist');
 const expectedInstallerName = `Tuanbo-Link-Console-${desktopPackage.version}-x64.exe`;
 if (process.platform !== 'win32') fail('Windows release manifest 必须在 Windows 原生环境生成');
