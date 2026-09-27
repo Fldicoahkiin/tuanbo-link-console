@@ -31,16 +31,20 @@ export function createLicensingServer(service: LicensingService, adminToken: str
     response.setHeader('Content-Type', 'application/json; charset=utf-8');
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('X-Request-Id', requestId);
     const dispatch = async (): Promise<unknown> => {
       const now = Date.now();
       for (const [key, value] of rates) if (value.reset <= now) rates.delete(key);
-      const address = `${request.socket.remoteAddress ?? 'unknown'}:${request.url === '/v1/payments/alipay/notify' ? 'alipay' : 'product'}`;
+      const group = request.url === '/v1/payments/alipay/notify' ? 'alipay' : request.url?.startsWith('/v1/orders/') ? 'delivery' : 'product';
+      const address = `${request.socket.remoteAddress ?? 'unknown'}:${group}`;
       const rate = rates.get(address) ?? { count: 0, reset: now + 60000 };
       if (rates.size >= 10000 && !rates.has(address) || ++rate.count > 120) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
       rates.set(address, rate);
       if (request.method === 'GET' && request.url === '/health') return { status: 'ok' };
       if (request.method === 'POST' && request.url === '/v1/activate') return service.activate(await readBody(request));
+      const delivery = /^\/v1\/orders\/([a-f0-9-]{36})$/.exec(request.url ?? '');
+      if (request.method === 'GET' && delivery) return service.readDelivery(delivery[1]!, /^Bearer (TBD-[A-F0-9]{64})$/.exec(request.headers.authorization ?? '')?.[1] ?? '');
       if (request.method === 'POST' && request.url === '/v1/payments/alipay/notify' && alipay) {
         if (!/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '')) throw new ServiceError(415, 'CONTENT_TYPE', '需要 UTF-8 表单通知');
         const payment = alipay.verify(await readBytes(request));
@@ -50,6 +54,8 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       if (!request.url?.startsWith('/admin/')) throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
       if (!timingSafeEqual(digest(request.headers.authorization ?? ''), expected)) throw new ServiceError(401, 'UNAUTHORIZED', '后台认证失败');
       if (request.method === 'POST' && request.url === '/admin/orders') return service.createOrder(await readBody(request));
+      const deliveryAccess = /^\/admin\/orders\/([a-f0-9-]{36})\/delivery-access(\/revoke)?$/.exec(request.url);
+      if (request.method === 'POST' && deliveryAccess) return deliveryAccess[2] ? service.revokeDeliveryAccess(deliveryAccess[1]!, await readBody(request)) : service.issueDeliveryAccess(deliveryAccess[1]!, await readBody(request));
       const order = /^\/admin\/orders\/([a-f0-9-]{36})(\/fulfill)?$/.exec(request.url);
       if (order) {
         if (request.method === 'GET' && !order[2]) return service.describeOrder(order[1]!);

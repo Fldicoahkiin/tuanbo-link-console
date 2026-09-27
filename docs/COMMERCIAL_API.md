@@ -4,13 +4,16 @@
 
 ## 已实现接口
 
-除下述支付宝回调外，服务本体成功时返回 200 JSON，写接口要求 `Content-Type: application/json`；请求对象经 Zod 校验。请求体最多 16KiB、请求头最多 8KiB、HTTP 请求超时 10 秒；当前限流每连接来源 IP 每业务组 120 次/分钟，支付宝通知和其余接口分组独立，反向代理共享限额的限制见部署文档。响应 `Cache-Control: no-store`，带 `X-Request-Id`。不提供 CORS 购买页、会话 Cookie 或客户登录。
+除下述支付宝回调外，服务本体成功时返回 200 JSON，写接口要求 `Content-Type: application/json`；请求对象经 Zod 校验。请求体最多 16KiB、请求头最多 8KiB、HTTP 请求超时 10 秒；当前限流每连接来源 IP 每业务组 120 次/分钟，支付宝通知、客户领取和其余接口分组独立，反向代理共享限额的限制见部署文档。响应 `Cache-Control: no-store`，带 `X-Request-Id`。不提供 CORS 购买页、会话 Cookie 或客户登录。
 
 | 方法与路径 | 访问范围 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
 | GET `/health` | 公网 | 无 | `{"status":"ok"}`，仅存活，不证明数据库、签名或支付可用 |
 | POST `/v1/payments/alipay/notify` | 配置后可通过代理公开，本轮未上线 | RSA2 签名表单，见下文 | 纯文本 `success`，不返回客户信息或激活码 |
 | POST `/v1/activate` | 公网 | `product, code, machineCode` | `{"license":"<Ed25519 JWS>"}` |
+| GET `/v1/orders/:id` | 订单专属 Bearer 领取凭据 | 无正文，不接受 URL 凭据 | 脱敏订单状态和已支付授权，见下文 |
+| POST `/admin/orders/:id/delivery-access` | 回环/运维隧道 + 管理员 Bearer | `{"reason":"签发或更换原因"}` | `{"token":"TBD-…","expiresAt":"UTC时间"}`，重新签发即作废旧凭据 |
+| POST `/admin/orders/:id/delivery-access/revoke` | 同上 | `{"reason":"原因"}` | `{"revoked":true}`，不撤销产品授权本身 |
 | POST `/admin/orders` | 回环/运维隧道 + Bearer | 订单对象，见下文 | `{"id":"<UUID>","state":"pending或fulfilled"}` |
 | GET `/admin/orders/:id` | 同上 | UUID 路径 | 订单详情和 `licenses`，含完整激活码，仅运营可读 |
 | POST `/admin/orders/:id/fulfill` | 同上 | `paymentReference, amountFen` | 与订单详情相同，人工核款后发码 |
@@ -54,6 +57,21 @@
 - 详情返回 `{id,state,...订单字段,licenses:[{id,code,machineCode,revoked,leaseUntil}]}`；未绑定的 machineCode 与未签发的 leaseUntil 为 null。核款流水不在详情响应中，数据库及审计保留，不能把查询响应当财务对账单。
 - 吊销可重复但每次记录审计；**迁移不是幂等发货接口**，新码生成后立即恢复未绑定状态，再次 migrate 会被拒绝。响应丢失时通过订单详情恢复新码，不再次生成。旧授权须先撤销并等待已签发租约到期加 5 分钟；旧码永久失效。
 
+## 无账号客户领取（已实现，未上线）
+
+领取凭据与激活码、管理员令牌是三种不同的凭证。当前由受保护运营接口为已经创建的订单签发领取凭据；未来公开收银台创建订单时调用同一服务逻辑，不要求建立用户账号。尚未实现的公开下单接口不能让客户端提交任意金额或标记已付款。
+
+- 领取凭据为 `TBD-` 加 64 位大写十六进制，使用 32 字节随机数；数据库仅存带用途及订单 ID 隔离的 HMAC-SHA256 摘要，不存可还原的凭据。仅签发响应返回一次明文，不记录到日志或审计。
+- 当前领取凭据有效期固定为签发后七天，是领取入口的有效期，与软件授权期限分开。响应丢失或遗忘时，运营核对真实购买人后明确重新签发；旧凭据立即失效，不能承诺能找回原文。重复签发不是幂等操作。
+- 请求为 `GET /v1/orders/<订单UUID>`，头部 `Authorization: Bearer TBD-…`。不接受查询字符串中的 token，不建立 Cookie，不开放 CORS。将来的网站必须使用同源受控代理或另行实现明确的来源策略，不可为了调通任意开放跨域。
+- 未付款返回 `state: pending` 和空 `licenses`；只有付款事务成功后返回原批次激活码。多次领取、服务重启或支付回调重复不会增发授权；领取本身不会核款或改变授权状态。
+- 返回字段仅 `id,state,amountFen,quantity,kind,useUntil,updatesUntil,licenses:[{id,code,revoked}]`。不返回客户名称、人工订单编号、交易流水、机器码和管理员信息。已撤销的单码只返回 `code: null`，其他未撤销席位仍可领取。
+- 无凭据、错误、跨订单、过期、撤销和未知订单均返回 401 `INVALID_DELIVERY_ACCESS`，不泄露该订单是否存在。管理员令牌不能当作客户凭据；客户凭据也不能调用任何运营接口。
+- 响应 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`；代理日志不得包含 Authorization 或响应正文。凭据不得放进图片、公开聊天、分析埋点或含 token 的 URL。未来收银台需让购买人保存领取凭据，并提供经核实的恢复流程。
+- `/delivery-access/revoke` 仅撤销领取权限，不取消已付款授权。换机成功会同时撤销该订单原领取凭据，避免旧领取人取走新码；企业订单换机后由运营向经核实的接收人重新签发订单级凭据。
+
+数据库只新增 `order_delivery_access` 表，旧订单没有默认领取权限。已验证旧数据库结构升级、凭据不以明文落库及服务重启后仍可领取。生产升级仍需备份和恢复演练。本地 HTTP 测试已贯通“受保护签发凭据 → RSA2 测试通知 → 事务发码 → 客户凭据领取”，这不等同于支付宝真实付款或已具备收银台。
+
 ## 签名许可
 
 JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT",kid:"发行密钥标识"}`。payload 包含 `version:1`、`product`、`licenseId`、`customer`、`machineCode`、`kind`、`issuedAt`、`useUntil`、`updatesUntil`，在线许可另有 `online:{customerType,leaseUntil}`。
@@ -88,9 +106,9 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 - 验签后比对 app_id/seller_id，核对订单 UUID、已付款状态 `TRADE_SUCCESS` 或 `TRADE_FINISHED`、整数分金额；明确为非 CNY、含非零退款、未支付或交易关闭的通知均拒绝发码。退款及关闭处理尚未实现，相关通知非成功响应，不冒充已处理退款。
 - 验签、核款、数据库事务和发码全部完成后才返回 200 纯文本 `success`。订单变更、激活码与审计同事务提交；通道流水保存为 `alipay:<trade_no>` 并受唯一约束。重复或迟到的同笔成功通知只读取原码，不再生成。
 - 错误签名 401；错商户/应用、金额、交易状态或流水冲突 409；未知订单 404；其他结构错误 400。失败响应为错误 JSON，绝不返回 `success`。支付宝的渠道重发不等于客户端自动重试；重复通知由幂等处理保护。
-- 审计使用 `order.alipay-payment-confirmed` 区分人工核款。通知原始表单、买方信息、签名及激活码不进入日志。两组限流相互隔离，但各组在回环反代下仍共享进程限额，正式上线前需按容量验收。
+- 审计使用 `order.alipay-payment-confirmed` 区分人工核款。通知原始表单、买方信息、签名及激活码不进入日志。通知、领取与其余请求的限流相互隔离，但各组在回环反代下仍共享进程限额，正式上线前需按容量验收。
 
-这一步仅打通“有效支付通知 → 事务发码”。商品计价、渠道下单、通知丢失后主动查单、客户查询凭据与领码页、退款对账和发票 API 仍待实现，不能称为完整自动交付。正式商户尚未完成签约验证，不能仅填环境变量就开放收款。没有真实扣款或发票操作。
+这一步仅打通“有效支付通知 → 事务发码”。商品计价、渠道下单、通知丢失后主动查单、客户领码页、退款对账和发票 API 仍待实现，不能称为完整自动交付。正式商户尚未完成签约验证，不能仅填环境变量就开放收款。没有真实扣款或发票操作。
 
 实现参考：[支付宝网站支付通知说明](https://opendocs.alipay.com/open/270/105902)、[官方 Node SDK 通知验签说明](https://github.com/alipay/alipay-sdk-nodejs-all#通知验签)。本实现只覆盖网站支付标准表单通知，不作为所有支付宝业务通知的通用解析器。
 
@@ -101,7 +119,6 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 | 预留方法与路径 | 计划行为 |
 | --- | --- |
 | POST `/v1/orders` | `sku, quantity, channel`；服务端计算金额并创建渠道订单；返回二维码/支付链接、订单 ID、随机查询凭据 |
-| GET `/v1/orders/:id` | 使用高熵查询凭据取订单状态；不能只凭可猜订单号查看客户或码 |
 | POST `/v1/payments/wechat/notify` | 微信官方通知验签、解密、商户/币种/金额/订单/状态核对后交付 |
 | POST `/v1/orders/:id/invoice-requests` | 查询凭据授权后提交个人/企业开票资料；仅创建申请，不假装开票成功 |
 | POST `/admin/orders/:id/refunds` | 运营确认规则后申请原路退款，跟踪渠道结果、吊销与红冲状态 |

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, createPrivateKey, randomBytes, randomUUID, sign, type KeyObject } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, createPrivateKey, randomBytes, randomUUID, sign, timingSafeEqual, type KeyObject } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import { licenseActivationSchema, licenseClaimsSchema } from '../../../packages/schema/src/license';
@@ -30,6 +30,7 @@ export class LicensingService {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, reference TEXT NOT NULL UNIQUE, body TEXT NOT NULL, state TEXT NOT NULL, payment_reference TEXT UNIQUE);
       CREATE TABLE IF NOT EXISTS licenses (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id), code_hash TEXT NOT NULL UNIQUE, code_cipher TEXT NOT NULL, machine TEXT, revoked INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS order_delivery_access (order_id TEXT PRIMARY KEY REFERENCES orders(id), token_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, at TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL);`);
   }
   close(): void { this.db.close(); }
@@ -102,6 +103,46 @@ export class LicensingService {
     });
     return { id, state: order.state, ...order.details, licenses };
   }
+  private deliveryHash(id: string, token: string): Buffer {
+    return createHmac('sha256', this.dataKey).update(`delivery:v1:${id}:${token}`).digest();
+  }
+  issueDeliveryAccess(id: string, input: unknown): { token: string; expiresAt: string } {
+    const { reason } = z.object({ reason: z.string().trim().min(1).max(500) }).strict().parse(input);
+    return this.transaction(() => {
+      this.order(id);
+      const token = `TBD-${randomBytes(32).toString('hex').toUpperCase()}`;
+      const expiresAt = this.now() + 7 * 86400000;
+      this.db.prepare(`INSERT INTO order_delivery_access (order_id, token_hash, expires_at, revoked) VALUES (?, ?, ?, 0)
+        ON CONFLICT(order_id) DO UPDATE SET token_hash = excluded.token_hash, expires_at = excluded.expires_at, revoked = 0`).run(id, this.deliveryHash(id, token).toString('hex'), expiresAt);
+      this.audit('order.delivery-access-issued', id, reason);
+      return { token, expiresAt: new Date(expiresAt).toISOString() };
+    });
+  }
+  revokeDeliveryAccess(id: string, input: unknown): { revoked: true } {
+    const { reason } = z.object({ reason: z.string().trim().min(1).max(500) }).strict().parse(input);
+    return this.transaction(() => {
+      this.order(id);
+      this.db.prepare('UPDATE order_delivery_access SET revoked = 1 WHERE order_id = ?').run(id);
+      this.audit('order.delivery-access-revoked', id, reason);
+      return { revoked: true as const };
+    });
+  }
+  readDelivery(id: string, token: string) {
+    return this.transaction(() => {
+      const row = this.db.prepare('SELECT token_hash, expires_at, revoked FROM order_delivery_access WHERE order_id = ?').get(id);
+      const access = row ? z.object({ token_hash: z.string().regex(/^[a-f0-9]{64}$/), expires_at: z.number(), revoked: z.number() }).parse(row) : null;
+      // Unknown orders and invalid credentials have the same public response; never accept an order ID alone.
+      const matches = timingSafeEqual(this.deliveryHash(id, token), access ? Buffer.from(access.token_hash, 'hex') : Buffer.alloc(32));
+      if (!/^TBD-[A-F0-9]{64}$/.test(token) || !access || !matches || access.revoked || this.now() >= access.expires_at) throw new ServiceError(401, 'INVALID_DELIVERY_ACCESS', '领取凭据无效或过期，请联系发行方核对购买记录');
+      const order = this.order(id);
+      const licenses = order.state === 'fulfilled' ? this.db.prepare('SELECT * FROM licenses WHERE order_id = ? ORDER BY rowid').all(id).map(row => {
+        const license = licenseRowSchema.parse(row);
+        return { id: license.id, code: license.revoked ? null : this.decrypt(license.code_cipher), revoked: Boolean(license.revoked) };
+      }) : [];
+      return { id, state: order.state, amountFen: order.details.amountFen, quantity: order.details.quantity,
+        kind: order.details.kind, useUntil: order.details.useUntil, updatesUntil: order.details.updatesUntil, licenses };
+    });
+  }
   activate(input: unknown): { license: string } {
     const request = licenseActivationSchema.parse(input);
     return this.transaction(() => {
@@ -144,6 +185,8 @@ export class LicensingService {
       if (!license.revoked || license.lease_until + 300_000 > this.now()) throw new ServiceError(409, 'LEASE_OUTSTANDING', '请先撤销旧授权，等待已签发离线凭证到期及五分钟时钟容差后换机');
       const code = `TBA-${randomBytes(16).toString('hex').toUpperCase()}`;
       this.db.prepare('UPDATE licenses SET code_hash = ?, code_cipher = ?, machine = NULL, revoked = 0, lease_until = 0 WHERE id = ?').run(this.hash(code), this.encrypt(code), id);
+      // A previous recipient must not retrieve the replacement code after a machine transfer.
+      this.db.prepare('UPDATE order_delivery_access SET revoked = 1 WHERE order_id = ?').run(license.order_id);
       this.audit('license.migrated', id, reason);
       return { code };
     });

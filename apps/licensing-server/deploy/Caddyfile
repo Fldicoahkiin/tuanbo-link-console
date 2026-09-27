@@ -4,6 +4,13 @@ api.tuanbo-link.jinhefilm.com {
     handle @public {
         reverse_proxy 127.0.0.1:8787
     }
+    @delivery {
+        method GET
+        path_regexp delivery "^/v1/orders/[a-f0-9-]{36}$"
+    }
+    handle @delivery {
+        reverse_proxy 127.0.0.1:8787
+    }
     handle {
         respond "Not found" 404
     }
