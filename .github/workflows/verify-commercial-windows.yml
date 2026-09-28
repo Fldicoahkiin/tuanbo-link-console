@@ -31,8 +31,10 @@ jobs:
         run: |
           pnpm --filter @tb/desktop exec tsc -p tsconfig.e2e.json --noEmit
           pnpm exec eslint apps/desktop/test-e2e/license-settings.spec.ts apps/desktop/scripts/verify-update-feed.mjs
-      - name: Build source for real IPC acceptance
-        run: pnpm build
+      - name: Bundle main, preload and renderer for unlicensed IPC acceptance
+        # Unlicensed startup must not invoke native media tools. The separate
+        # installer step verifies the fully built, published distribution.
+        run: pnpm --filter @tb/desktop exec electron-vite build
       - name: Missing and tampered credentials block real Windows IPC
         run: pnpm --filter @tb/desktop exec playwright test test-e2e/license-settings.spec.ts --workers=1 --reporter=line
       - name: Download immutable published release and verify manifest
