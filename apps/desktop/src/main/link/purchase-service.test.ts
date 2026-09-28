@@ -22,6 +22,8 @@ let service: LicensingService;
 let server: ReturnType<typeof createLicensingServer>;
 let base: string;
 let data: Map<string, string>;
+let queryStatus: 'WAIT_BUYER_PAY' | 'TRADE_SUCCESS';
+let providerRequests = 0;
 const storage = {
   hasCredential: (id: string) => Promise.resolve(data.has(id)),
   loadCredential: (id: string) => { const value = data.get(id); if (!value) throw new Error('不存在'); return Promise.resolve(value); },
@@ -37,15 +39,31 @@ const fetchLocal: typeof fetch = (input, options) => {
 };
 function desktop(fetcher: typeof fetch = fetchLocal) { return new PurchaseService(origin, storage, external, fetcher, () => now); }
 beforeEach(async () => {
-  data = new Map(); external.mockReset(); external.mockResolvedValue();
+  data = new Map(); external.mockReset(); external.mockResolvedValue(); queryStatus = 'WAIT_BUYER_PAY'; providerRequests = 0;
   service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => now);
-  server = createLicensingServer(service, 'x'.repeat(48), new AlipayNotifications(appId, sellerId, provider.publicKey.export({ type: 'spki', format: 'pem' }).toString()),
-    new AlipayCheckout(appId, sellerId, provider.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), () => now), catalog);
+  const checkout = new AlipayCheckout(appId, sellerId, provider.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), () => now);
+  const original = checkout.query.bind(checkout);
+  vi.spyOn(checkout, 'query').mockImplementation((id, verifier) => original(id, verifier, () => {
+    providerRequests++;
+    const body = JSON.stringify({ code: '10000', out_trade_no: `TB_${id.replaceAll('-', '')}`, trade_no: '202609282200000000001234',
+      trade_status: queryStatus, total_amount: (service.describeOrder(id).amountFen / 100).toFixed(2) });
+    return Promise.resolve(new Response(`{"alipay_trade_query_response":${body},"sign":"${sign('RSA-SHA256', Buffer.from(body), provider.privateKey).toString('base64')}"}`));
+  }));
+  server = createLicensingServer(service, 'x'.repeat(48), new AlipayNotifications(appId, sellerId, provider.publicKey.export({ type: 'spki', format: 'pem' }).toString()), checkout, catalog);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
   base = `http://127.0.0.1:${address.port}`;
 });
-afterEach(async () => { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); service.close(); });
+afterEach(async () => { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); service.close(); vi.restoreAllMocks(); });
+
+it('桌面显式查询在缺失通知时补交付，重复查询不重复请求渠道或发码', async () => {
+  const client = desktop(); const receipt = await client.create(request);
+  queryStatus = 'TRADE_SUCCESS';
+  const delivered = await client.refresh(receipt.localId);
+  expect(delivered.delivery?.state).toBe('fulfilled'); expect(delivered.delivery?.licenses).toHaveLength(2);
+  expect((await client.refresh(receipt.localId)).delivery?.licenses).toEqual(delivered.delivery?.licenses);
+  expect(providerRequests).toBe(1); expect(external).not.toHaveBeenCalled();
+});
 
 async function pay(id: string, amount = '2.00') {
   const fields: Record<string, string> = { app_id: appId, seller_id: sellerId, out_trade_no: `TB_${id.replaceAll('-', '')}`,

@@ -219,4 +219,14 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 
 ## 网页购买调用方
 
-`apps/licensing-server/web` 复用现有 `/v1/catalog`、`/v1/orders` 和 `/v1/orders/:id`，不新增服务端接口。网页与 API 使用同源 Nginx 代理，续费仍由桌面发起；订单令牌保存在标签会话及用户导出的凭据文件中。官网现已发布公网，生产销售继续关闭；公开下单实测返回 503 PAYMENTS_UNAVAILABLE。详见 [购买网页](PURCHASE_WEBSITE.md)。
+### 客户主动查单补交付
+
+`POST /v1/orders/:id/reconcile` 使用原领取凭据 `Authorization: Bearer TBD-...`，正文仅 `{}`。网页“查询付款并领取激活码”和桌面购买记录的显式刷新使用此接口；原 `GET /v1/orders/:id` 继续只读取本地交付状态。
+
+- 先检查领取凭据，再读取请求；请求读取后与渠道等待结束后重新检查有效性，过期、撤销或错单凭据不能领取。公开订单号、管理员令牌不能替代领取凭据。
+- 已交付订单直接返回现有交付，不再次查询渠道。待付订单核对持久化商户/应用绑定，然后仅调用一次 `alipay.trade.query`；既有 RSA2 验签、订单/金额/状态核对与事务交付保持不变。接口只返回 `purchaseDeliverySchema` 字段，不返回渠道买家、流水、内部客户或机器标识。
+- 单个客户地址每分钟最多十次查单请求；单个订单只允许一个在途渠道查询，查询结束后十秒内拒绝再次查询。该限流状态限当前单进程，重启会清空；未来多实例须共享限流，数据库交付幂等不依赖此限流。
+- 渠道超时、无确认交易、异常签名、退款信息或异常收款状态明确报错，保留原单，不自动重试或重新下单。已关闭收款配置时未交付订单查单返回 503；已经交付的订单仍可凭原凭据领取。该接口不执行退款，也不把已交付查询当作退款对账。
+- 支付宝官方说明在未收到异步通知时可主动查单：[交易查询接口](https://developer.alibaba.com/docs/doc.htm?articleId=757&docType=4&treeId=180)。本地使用测试 RSA 密钥与隔离 HTTP 验证补交付，不代表真实商户付款验收完成。
+
+`apps/licensing-server/web` 使用 `/v1/catalog`、`/v1/orders`、`/v1/orders/:id` 和客户主动查单接口。网页与 API 使用同源 Nginx 代理，续费仍由桌面发起；订单令牌保存在标签会话及用户导出的凭据文件中。官网现已发布公网，生产销售继续关闭；公开下单实测返回 503 PAYMENTS_UNAVAILABLE。详见 [购买网页](PURCHASE_WEBSITE.md)。

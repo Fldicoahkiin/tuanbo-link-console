@@ -23,6 +23,10 @@ const messages: Record<string, string> = {
   INVALID_RENEWAL_AUTHORIZATION: '续费授权无效，请在原绑定机器核对激活码',
   RENEWAL_NOT_SUBSCRIPTION: '只能用订阅商品续费原订阅授权',
   RENEWAL_DETAILS_MISMATCH: '续费需保留原客户信息，且每次只续一台机器',
+  PAYMENT_QUERY_FAILED: '支付宝查单超时或网络异常，原订单已保留，请稍后手动查询',
+  PAYMENT_QUERY_UNCONFIRMED: '支付宝尚未返回可确认的交易，请保留原订单，不要重复付款',
+  PAYMENT_REFUNDED: '订单涉及退款，请联系支持核对',
+  PAYMENT_REQUIRES_REVIEW: '订单收款状态需要人工核对，请联系支持',
   RATE_LIMITED: '查询过于频繁，请稍后手动重试'
 };
 class PurchaseResponseError extends Error {
@@ -91,7 +95,7 @@ export class PurchaseService {
       if (!receipt.order) await this.recover(receipt, receipts);
       const order = receipt.order;
       if (!order) throw new Error('尚未取得订单，请保留记录并手动恢复');
-      const delivery = purchaseDeliverySchema.parse(await this.json(`/v1/orders/${order.id}`, receipt.token));
+      const delivery = purchaseDeliverySchema.parse(await this.json(`/v1/orders/${order.id}/reconcile`, receipt.token, {}));
       if (delivery.id !== order.id || delivery.amountFen !== order.amountFen || delivery.quantity !== order.quantity || delivery.kind !== order.offer.kind || delivery.renewalLicenseId !== receipt.request.renewalLicenseId
         || receipt.delivery?.state === 'fulfilled' && delivery.state !== 'fulfilled') throw new Error('交付信息与原订单不一致，请联系发行方');
       receipt.delivery = delivery;

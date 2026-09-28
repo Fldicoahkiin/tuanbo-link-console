@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AlipayCheckout, AlipayNotifications } from './alipay';
 import { createLicensingServer } from './http';
 import { LicensingService } from './service';
+import { purchaseDeliverySchema } from '../../../packages/schema/src/purchase';
 
 const merchant = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const provider = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -133,7 +134,7 @@ it('主动查单只供运营，对未绑定或错误配置在请求渠道前拒�
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000)
     });
     expect((await request('')).status).toBe(401);
-    expect((await request(admin, {}, 'v1')).status).toBe(404);
+    expect((await request(admin, {}, 'v1')).status).toBe(401);
     expect((await request(admin, { amountFen: 1 })).status).toBe(400);
     expect((await request(admin)).status).toBe(409);
     expect(providerRequest).not.toHaveBeenCalled();
@@ -146,4 +147,71 @@ it('主动查单只供运营，对未绑定或错误配置在请求渠道前拒�
     }
     expect(service.describeOrder(order.id).licenses).toHaveLength(2);
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+it('客户持原领取凭据可在通知丢失后查单补交付，不泄漏买家或运营信息', async () => {
+  const { checkout, service, order } = setup();
+  service.prepareAlipayPayment(order.id, appId, sellerId);
+  const access = service.issueDeliveryAccess(order.id, { reason: '测试领取' });
+  const original = checkout.query.bind(checkout);
+  const providerRequest = vi.fn<typeof fetch>(() => Promise.resolve(new Response(signed(JSON.stringify(fields(order.id))))));
+  vi.spyOn(checkout, 'query').mockImplementation((id, verifier) => original(id, verifier, providerRequest));
+  const server = createLicensingServer(service, 'a'.repeat(48), notifications, checkout);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
+    const request = (token: string, body: unknown = {}) => fetch(`http://127.0.0.1:${address.port}/v1/orders/${order.id}/reconcile`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000)
+    });
+    expect((await request('')).status).toBe(401);
+    expect((await request('TBD-' + '0'.repeat(64))).status).toBe(401);
+    expect((await request(access.token, { amountFen: 1 })).status).toBe(400);
+    expect(providerRequest).not.toHaveBeenCalled();
+    const response = await request(access.token);
+    expect(response.status).toBe(200);
+    const delivery = purchaseDeliverySchema.parse(await response.json());
+    expect(delivery).toEqual(service.readDelivery(order.id, access.token));
+    expect(delivery.state).toBe('fulfilled'); expect(delivery.licenses).toHaveLength(2);
+    expect(JSON.stringify(delivery)).not.toMatch(/private@|paymentReference|customer|machineCode/);
+    expect((await request(access.token)).status).toBe(200);
+    expect(providerRequest).toHaveBeenCalledTimes(1);
+    service.revokeDeliveryAccess(order.id, { reason: '撤销测试' });
+    expect((await request(access.token)).status).toBe(401);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+it.each(['pending', 'network', 'revoked', 'tampered'] as const)('客户查单并发限流及 %s 结果不误发码、不重试', async mode => {
+  const { checkout, service, order } = setup();
+  service.prepareAlipayPayment(order.id, appId, sellerId);
+  const access = service.issueDeliveryAccess(order.id, { reason: '测试领取' });
+  let started!: () => void; let release!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const original = checkout.query.bind(checkout);
+  const providerRequest = vi.fn<typeof fetch>(async () => {
+    started(); await waiting;
+    if (mode === 'network') throw new Error('channel unavailable');
+    const response = signed(JSON.stringify(fields(order.id, { trade_status: mode === 'pending' ? 'WAIT_BUYER_PAY' : 'TRADE_SUCCESS' })));
+    return new Response(mode === 'tampered' ? response.replace('123.45', '999.00') : response);
+  });
+  vi.spyOn(checkout, 'query').mockImplementation((id, verifier) => original(id, verifier, providerRequest));
+  const server = createLicensingServer(service, 'a'.repeat(48), notifications, checkout);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
+    const request = () => fetch(`http://127.0.0.1:${address.port}/v1/orders/${order.id}/reconcile`, {
+      method: 'POST', headers: { Authorization: `Bearer ${access.token}`, 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(5000)
+    });
+    const first = request(); await entered;
+    expect((await request()).status).toBe(429);
+    if (mode === 'revoked') service.revokeDeliveryAccess(order.id, { reason: '查单途中撤销' });
+    release();
+    const response = await first;
+    expect(response.status).toBe(mode === 'pending' ? 200 : mode === 'revoked' ? 401 : 502);
+    if (mode === 'pending') expect(await response.json()).toMatchObject({ state: 'pending', licenses: [] });
+    expect((await request()).status).toBe(mode === 'revoked' ? 401 : 429);
+    expect(providerRequest).toHaveBeenCalledTimes(1);
+    expect(service.describeOrder(order.id).state).toBe('pending');
+    expect(service.describeOrder(order.id).licenses).toEqual([]);
+  } finally { release(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

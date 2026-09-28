@@ -47,15 +47,15 @@ def validate_config(previous, candidate):
     next_before, site, next_after = site_sections(candidate)
     if (before, after) != (next_before, next_after):
         raise RuntimeError('Only the website block may change')
-    if f'    root {ROOT};' not in site or site.count('proxy_pass http://127.0.0.1:8787;') != 3:
+    if f'    root {ROOT};' not in site or site.count('proxy_pass http://127.0.0.1:8787;') != 4:
         raise RuntimeError('Unexpected website root or proxy routes')
     expected = {'= /', '= /purchase.js', '= /purchase.css', '~ "^/media/[a-z0-9][a-z0-9-]*\\.mp4$"',
-                '= /v1/catalog', '= /v1/orders', '~ "^/v1/orders/[a-f0-9-]{36}$"'}
+                '= /v1/catalog', '= /v1/orders', '~ "^/v1/orders/[a-f0-9-]{36}$"', '~ "^/v1/orders/[a-f0-9-]{36}/reconcile$"'}
     routes = dict(re.findall(r'    location (.*?) \{\n(.*?)\n    }', site, re.S))
     if set(routes) != expected or '    location / { return 404; }' not in site:
         raise RuntimeError('Unexpected exposed route')
     for name, body in routes.items():
-        method = 'POST' if name == '= /v1/orders' else 'GET'
+        method = 'POST' if name == '= /v1/orders' or '/reconcile' in name else 'GET'
         if f'limit_except {method} {{ deny all; }}' not in body:
             raise RuntimeError('Missing method restriction')
         if '/v1/' in name and 'proxy_set_header X-Tblink-Client-IP $remote_addr;' not in body:

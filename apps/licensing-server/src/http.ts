@@ -30,6 +30,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
   const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
   const expected = digest(`Bearer ${adminToken}`);
   const rates = new Map<string, { count: number; reset: number }>();
+  const paymentQueries = new Map<string, { until: number; running: boolean }>();
   return createServer({ requestTimeout: 10000, headersTimeout: 10000, maxHeaderSize: 8192 }, (request, response) => {
     const requestId = randomUUID();
     response.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -40,10 +41,11 @@ export function createLicensingServer(service: LicensingService, adminToken: str
     const dispatch = async (): Promise<unknown> => {
       const now = Date.now();
       for (const [key, value] of rates) if (value.reset <= now) rates.delete(key);
-      const group = request.url === '/v1/payments/alipay/notify' ? 'alipay' : request.url === '/v1/orders' ? 'purchase' : request.url?.startsWith('/v1/orders/') ? 'delivery' : 'product';
+      const customerQuery = /^\/v1\/orders\/([a-f0-9-]{36})\/reconcile$/.exec(request.url ?? '');
+      const group = request.url === '/v1/payments/alipay/notify' ? 'alipay' : customerQuery ? 'payment-query' : request.url === '/v1/orders' ? 'purchase' : request.url?.startsWith('/v1/orders/') ? 'delivery' : 'product';
       const address = `${clientAddress(request.socket.remoteAddress, request.headers['x-tblink-client-ip'], trustLoopbackProxy)}:${group}`;
       const rate = rates.get(address) ?? { count: 0, reset: now + 60000 };
-      if (rates.size >= 10000 && !rates.has(address) || ++rate.count > (group === 'purchase' ? 10 : 120)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
+      if (rates.size >= 10000 && !rates.has(address) || ++rate.count > (group === 'purchase' || group === 'payment-query' ? 10 : 120)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
       rates.set(address, rate);
       if (request.method === 'GET' && request.url === '/health') return { status: 'ok' };
       if (request.method === 'POST' && request.url === '/v1/activate') return service.activate(await readBody(request));
@@ -61,6 +63,27 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       }
       const delivery = /^\/v1\/orders\/([a-f0-9-]{36})$/.exec(request.url ?? '');
       if (request.method === 'GET' && delivery) return service.readDelivery(delivery[1]!, /^Bearer (TBD-[A-F0-9]{64})$/.exec(request.headers.authorization ?? '')?.[1] ?? '');
+      if (request.method === 'POST' && customerQuery) {
+        const id = customerQuery[1]!;
+        const token = /^Bearer (TBD-[A-F0-9]{64})$/.exec(request.headers.authorization ?? '')?.[1] ?? '';
+        service.readDelivery(id, token);
+        z.object({}).strict().parse(await readBody(request));
+        const existing = service.readDelivery(id, token);
+        if (existing.state === 'fulfilled') return existing;
+        if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用，请保留原订单并联系支持');
+        service.alipayQueryOrder(id, checkout.appId, checkout.sellerId);
+        for (const [key, gate] of paymentQueries) if (!gate.running && gate.until <= now) paymentQueries.delete(key);
+        if (paymentQueries.has(id) || paymentQueries.size >= 10000) throw new ServiceError(429, 'RATE_LIMITED', '原订单正在查询或刚完成查询，请十秒后手动重试');
+        const gate = { until: now + 10000, running: true };
+        paymentQueries.set(id, gate);
+        try {
+          const payment = await checkout.query(id, alipay);
+          // The credential may expire or be revoked while the channel request is in flight.
+          service.readDelivery(id, token);
+          service.reconcileAlipay(id, payment);
+          return service.readDelivery(id, token);
+        } finally { gate.running = false; gate.until = Date.now() + 10000; }
+      }
       if (request.method === 'POST' && request.url === '/v1/payments/alipay/notify' && alipay) {
         if (!/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '')) throw new ServiceError(415, 'CONTENT_TYPE', '需要 UTF-8 表单通知');
         const payment = alipay.verify(await readBytes(request));

@@ -95,9 +95,9 @@ function exportReceipt(): void {
   orderState.textContent = '请确认文件已保存到你的电脑，然后创建或恢复原订单。';
 }
 
-async function readDelivery(): Promise<void> {
+async function readDelivery(reconcile = false): Promise<void> {
   codes.replaceChildren(); finish.hidden = true;
-  const delivery = await client.delivery();
+  const delivery = await client.delivery(reconcile);
   if (delivery.state === 'pending') {
     deliveryState.textContent = '服务端尚未确认到账。如已付款，请稍后点击查询；不要重复付款。'; return;
   }
@@ -136,7 +136,7 @@ quantity.addEventListener('input', updateQuote);
 element('reload', HTMLButtonElement).addEventListener('click', () => { void run(loadCatalog); });
 download.addEventListener('click', () => { void run(() => { exportReceipt(); return Promise.resolve(); }); });
 submit.addEventListener('click', () => { if (saved) void run(submitOrder); });
-query.addEventListener('click', () => { void run(readDelivery); });
+query.addEventListener('click', () => { void run(() => readDelivery(true)); });
 discard.addEventListener('click', () => { void run(async () => {
   client.discard(); saved = false; pay.hidden = true; await loadCatalog();
 }); });

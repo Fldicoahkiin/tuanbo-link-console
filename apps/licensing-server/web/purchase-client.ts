@@ -92,10 +92,13 @@ export class WebPurchaseClient {
     return result;
   }
 
-  async delivery() {
+  async delivery(reconcile = false) {
     const receipt = this.receipt;
     if (!receipt?.orderId) throw new Error('请先恢复原订单');
-    const result = purchaseDeliverySchema.parse(await this.api(`/v1/orders/${receipt.orderId}`, { headers: { Authorization: `Bearer ${receipt.token}` } }));
+    const result = purchaseDeliverySchema.parse(await this.api(`/v1/orders/${receipt.orderId}${reconcile ? '/reconcile' : ''}`, {
+      headers: { Authorization: `Bearer ${receipt.token}`, ...(reconcile ? { 'Content-Type': 'application/json' } : {}) },
+      ...(reconcile ? { method: 'POST', body: '{}' } : {})
+    }));
     if (result.id !== receipt.orderId || result.amountFen !== receipt.request.quantity * receipt.request.quotedUnitAmountFen
       || result.quantity !== receipt.request.quantity || result.renewalLicenseId !== undefined) throw new Error('交付与原订单不一致，请联系支持');
     return result;

@@ -1,6 +1,6 @@
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import type { Server } from 'node:http';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { AlipayCheckout, AlipayNotifications } from '../src/alipay';
 import { LicensingService } from '../src/service';
 import { createLicensingServer } from '../src/http';
@@ -19,6 +19,7 @@ const servers: Server[] = []; const services: LicensingService[] = [];
 afterEach(async () => {
   for (const server of servers.splice(0)) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   for (const service of services.splice(0)) service.close();
+  vi.restoreAllMocks();
 });
 function storage() {
   const data = new Map<string, string>();
@@ -33,8 +34,29 @@ async function setup() {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
   const send: typeof fetch = (path, init) => fetch(`http://127.0.0.1:${address.port}${(typeof path === 'string' ? path : path instanceof URL ? path.href : path.url)}`, init);
-  return { service, send };
+  return { service, send, checkout };
 }
+
+it('网页显式查询请求渠道补交付，网络失败保留同一凭据且不自动重试', async () => {
+  const { service, send, checkout } = await setup();
+  const client = new WebPurchaseClient(storage(), send); client.prepare(request);
+  const order = await client.submit(); const receipt = client.receipt;
+  const original = checkout.query.bind(checkout);
+  const body = JSON.stringify({ code: '10000', out_trade_no: `TB_${order.id.replaceAll('-', '')}`, trade_no: '202609282200000000000704',
+    trade_status: 'TRADE_SUCCESS', total_amount: '199.00' });
+  const providerRequest = vi.fn<typeof fetch>(() => Promise.resolve(new Response(`{"alipay_trade_query_response":${body},"sign":"${sign('RSA-SHA256', Buffer.from(body), provider.privateKey).toString('base64')}"}`)));
+  vi.spyOn(checkout, 'query').mockImplementation((id, verifier) => original(id, verifier, providerRequest));
+  let calls = 0;
+  const offline = new WebPurchaseClient(storage(), () => { calls++; return Promise.reject(new Error('网络断开')); });
+  offline.importReceipt(JSON.stringify(receipt));
+  await expect(offline.delivery(true)).rejects.toThrow('网络断开');
+  expect(calls).toBe(1); expect(offline.receipt).toEqual(receipt);
+  expect((await client.delivery()).state).toBe('pending'); expect(providerRequest).not.toHaveBeenCalled();
+  const delivered = await client.delivery(true);
+  expect(delivered.state).toBe('fulfilled'); expect(delivered.licenses).toHaveLength(1);
+  expect((await client.delivery(true)).licenses).toEqual(service.readDelivery(order.id, receipt!.token).licenses);
+  expect(providerRequest).toHaveBeenCalledTimes(1);
+});
 
 async function paid(send: typeof fetch, orderId: string, tradeNo: string): Promise<void> {
   const fields: Record<string, string> = { app_id: identity.appId, seller_id: identity.sellerId,

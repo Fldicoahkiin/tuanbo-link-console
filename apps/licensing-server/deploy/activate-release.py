@@ -89,7 +89,7 @@ def next_proxy_config(current, previous, candidate):
         raise RuntimeError("Release may only change the API server block")
     routes = dict(re.findall(r"    location (.*?) \{\n(.*?)\n    }", api, re.S))
     expected = {"= /health": "GET", "= /v1/activate": "POST", "= /v1/catalog": "GET", "= /v1/orders": "POST",
-                '~ "^/v1/orders/[a-f0-9-]{36}$"': "GET", '= /v1/payments/alipay/notify': "POST"}
+                '~ "^/v1/orders/[a-f0-9-]{36}$"': "GET", '~ "^/v1/orders/[a-f0-9-]{36}/reconcile$"': "POST", '= /v1/payments/alipay/notify': "POST"}
     if set(routes) != set(expected) or api.count("proxy_pass ") != len(expected):
         raise RuntimeError("Unexpected public routes")
     for route, method in expected.items():
