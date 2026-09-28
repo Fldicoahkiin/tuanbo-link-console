@@ -10,7 +10,7 @@
 
 ## 已实现接口
 
-除下述支付宝回调外，服务本体成功时返回 200 JSON，写接口要求 `Content-Type: application/json`；请求对象经 Zod 校验。请求体最多 16KiB、请求头最多 8KiB、HTTP 请求超时 10 秒；限流每连接来源 IP 每业务组 120 次/分钟，本地新增下单组单独限制 10 次/分钟。支付宝通知、客户领取和其余接口分组独立，反向代理共享限额的限制见部署文档。响应 `Cache-Control: no-store`，带 `X-Request-Id`。不提供 CORS 购买页、会话 Cookie 或客户登录。
+除下述支付宝回调外，服务本体成功时返回 200 JSON，写接口要求 `Content-Type: application/json`；请求对象经 Zod 校验。请求体最多 16KiB、请求头最多 8KiB、HTTP 请求超时 10 秒；限流每连接来源 IP 每业务组 120 次/分钟，新增下单组与客户主动查单组各自限制 10 次/分钟。支付宝通知、客户领取和其余接口分组独立，反向代理共享限额的限制见部署文档。响应 `Cache-Control: no-store`，带 `X-Request-Id`。不提供 CORS 购买页、会话 Cookie 或客户登录。
 
 | 方法与路径 | 访问范围 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
@@ -20,6 +20,7 @@
 | POST `/v1/payments/alipay/notify` | 代理与验签已启用；缺失配置时 404 | RSA2 签名表单，见下文 | 纯文本 `success`，不返回客户信息或激活码 |
 | POST `/v1/activate` | 公网 | `product, code, machineCode` | `{"license":"<Ed25519 JWS>"}` |
 | GET `/v1/orders/:id` | 订单专属 Bearer 领取凭据 | 无正文，不接受 URL 凭据 | 脱敏订单状态和已支付授权，见下文 |
+| POST `/v1/orders/:id/reconcile` | 订单专属 Bearer 领取凭据 | 空对象 `{}` | 已交付返回原授权；待付向支付宝查单后返回同一交付 DTO，详见客户主动查单 |
 | POST `/admin/orders/:id/delivery-access` | 回环/运维隧道 + 管理员 Bearer | `{"reason":"签发或更换原因"}` | `{"token":"TBD-…","expiresAt":"UTC时间"}`，重新签发即作废旧凭据 |
 | POST `/admin/orders/:id/delivery-access/revoke` | 同上 | `{"reason":"原因"}` | `{"revoked":true}`，不撤销产品授权本身 |
 | POST `/admin/orders` | 回环/运维隧道 + Bearer | 订单对象，见下文 | `{"id":"<UUID>","state":"pending或fulfilled"}` |
@@ -93,7 +94,7 @@
 3. `POST /v1/orders` 使用 `Authorization: Bearer TBD-…`，正文只接受 `offerId,revision,quotedUnitAmountFen,quantity,customer,customerType`。报价字段用于核对用户刚看到的价格，实际总价始终来自服务端目录乘数量；不能提交期限、渠道身份、订单编号或付款状态。
 4. 创建事务同时保存订单、商品快照、领取凭据摘要和支付宝身份/截止时间。返回 `id,state,amountFen,quantity,offer,expiresAt,payable,paymentUrl`。付款期限最多 15 分钟且不超过停售时间。随机凭据不进入付款链接，数据库只保存用途隔离的 HMAC 摘要。
 5. 响应丢失或软件重启后，用户明确恢复原购买时，使用原凭据及相同请求重新提交，返回同一订单；不能自动换新凭据重建订单。商品下架、改价或关闭收款配置后仍可恢复原单。原请求已变更返回 409 `PURCHASE_CONFLICT`；未知商品/报价版本返回 409 `OFFER_CHANGED`；超限数量返回 400 `QUANTITY_LIMIT`。
-6. 付款链接过期、订单已交付或当前商户身份不同，返回 `payable:false,paymentUrl:null`，不延长原窗口、不切换商户。pending 不是渠道确认未付款；通知延迟时沿用原订单，由运营主动查单补交付。
+6. 付款链接过期、订单已交付或当前商户身份不同，返回 `payable:false,paymentUrl:null`，不延长原窗口、不切换商户。pending 不是渠道确认未付款；通知延迟时沿用原订单，客户可持领取凭据主动查单补交付，运营仍保留查单入口。
 7. 已验签付款事实首次交付时，按商品快照起算完整使用/升级天数；重复通知和查单不延长期限。人工订单仍保持原有固定截止时间契约。待付领取响应的日期只是预估，客户 UI 应展示商品天数和“首次核款交付起算”，已交付后才显示实际到期日。
 8. 通过既有 `GET /v1/orders/:id` 领取原批次激活码。凭据从建单起有效七天，超过七天才确认的支付仍能发码，但需运营核实后重签领取凭据。撤销/更换凭据会使原创建凭据无法恢复；新凭据用于领取原订单，不能冒充原建单凭据。
 

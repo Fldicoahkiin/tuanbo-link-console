@@ -190,3 +190,14 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 官网 `https://tuanbo-link.jinhefilm.com/` 已从 404 预留站点切换为静态产品网站，来源 `886fef87cde2844b885d999ed022b347e82b70e0`。公开页面/JS/CSS 摘要与构建一致，购买目录关闭，下单返回 503，管理员及内部文件路径保持 404。授权 bundle、支付环境配置及其他站点未修改。发布备份 `/var/lib/tblink-licensing/backups/20260928T130630Z-website`。详细验证、首次回滚和修复记录见 [官网发布结果](PURCHASE_WEBSITE.md)。
 
 已在 Cloudflare 将 `tuanbo-link.jinhefilm.com` 的备注更新为“团播联动台：产品官网、操作演示与授权购买入口；官网已上线，当前销售关闭；源站 jinhe-cloud（腾讯云上海）；仅 DNS”，保存后重新展开记录核对。A 记录仍为 `123.206.229.200`、仅 DNS、自动 TTL；没有修改解析值或其他记录。
+
+## 2026-09-28 客户查单补交付上线
+
+- 授权服务与官网均升级至来源 `a3809183dd65165273730fa5d9ef680d14588d15`，新增客户持原领取凭据主动查单的 POST 路由。授权 bundle SHA-256：`f26c32332c6065fee19653066909d71ba0ce53964e1a138be3dacc28f053ade5`；官网 purchase.js：`b0a54c5adaafac3f30b1d72ee0cc5d997e39af4f2448ce103580b5b22ec96e64`。
+- API 发布备份：`/var/lib/tblink-licensing/backups/20260928T132409Z`；官网备份：`/var/lib/tblink-licensing/backups/20260928T132412Z-website`。数据库完整性、副本恢复及原表内容一致性验证通过。环境文件摘要未变，销售开关仍关闭。
+- 官网目录：`/srv/tblink-purchase-releases/a3809183dd65165273730fa5d9ef680d14588d15-2b1108d1`；最终 Nginx 摘要：`3837b02c31464a4fe46e253d771e18e2bbecf16d28538ce6e0e3a06295b03d99`。先只升级 API block，再只升级官网 block，其他站点配置保留。
+- 公网官网与 JS 为 200，JS 摘要与构建一致；官网和 API 域名的客户查单路由对无凭据请求均返回 401 INVALID_DELIVERY_ACCESS，管理员路径均为 404。目录 available=false、offers=[]；授权 API 与金河分镜健康接口为 200。四项既有服务均 active。
+- 九个服务/网页/桌面购买测试文件共 92 项通过，部署工具回归 18 项通过；随后为请求体读取期间凭据变化增加再次校验，相关查单 19 项重新通过。服务与桌面类型检查、变更文件 ESLint、服务与网页构建通过。
+- 浏览器在隔离本地服务验证“通知缺失 → 持原凭据点击查询 → 测试 RSA2 签名查单 → 原单发码”，重复点击原码与期限不变，测试渠道调用一次。未连接实际支付，不替代实商户付款/退款/开票验收；桌面代码尚未发布 Windows 安装包。
+
+官网随后独立发布付款完成提示修正 `aa34ff0e4ca4177fb0ea15365f971679acce96e6`，备份 `/var/lib/tblink-licensing/backups/20260928T132717Z-website`。最终 purchase.js SHA-256：`1ac218f9957a468f6c0c44b5815d5a21546f6393209b96967969337f15daf7e9`，公网摘要已核对。授权 bundle、Nginx 和环境摘要不变，销售保持关闭。
