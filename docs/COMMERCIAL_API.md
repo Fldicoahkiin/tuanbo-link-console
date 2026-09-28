@@ -1,6 +1,6 @@
 # 商业接口与凭证契约
 
-2026-09-28。本文区分已实现接口和后续设计。生产 origin 为 `https://api.tuanbo-link.jinhefilm.com`，既有授权服务、公网 DNS/HTTPS 已有验收记录；本轮支付宝回调仅在本地实现，尚未部署或启用。实现依据：`apps/licensing-server/src/http.ts`、`service.ts`、`packages/schema/src/license.ts`。
+2026-09-28。本文区分已实现接口和后续设计。生产 origin 为 `https://api.tuanbo-link.jinhefilm.com`，既有授权服务、公网 DNS/HTTPS 已有验收记录；支付宝回调与客户领取代码已于 2026-09-28 部署；支付宝尚未配置启用，客户领取接口已公开且要求订单专属凭据。实现依据：`apps/licensing-server/src/http.ts`、`service.ts`、`packages/schema/src/license.ts`。
 
 ## 产品与商户范围
 
@@ -15,7 +15,7 @@
 | 方法与路径 | 访问范围 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
 | GET `/health` | 公网 | 无 | `{"status":"ok"}`，仅存活，不证明数据库、签名或支付可用 |
-| POST `/v1/payments/alipay/notify` | 配置后可通过代理公开，本轮未上线 | RSA2 签名表单，见下文 | 纯文本 `success`，不返回客户信息或激活码 |
+| POST `/v1/payments/alipay/notify` | 代理已上线；未配置时 404 | RSA2 签名表单，见下文 | 纯文本 `success`，不返回客户信息或激活码 |
 | POST `/v1/activate` | 公网 | `product, code, machineCode` | `{"license":"<Ed25519 JWS>"}` |
 | GET `/v1/orders/:id` | 订单专属 Bearer 领取凭据 | 无正文，不接受 URL 凭据 | 脱敏订单状态和已支付授权，见下文 |
 | POST `/admin/orders/:id/delivery-access` | 回环/运维隧道 + 管理员 Bearer | `{"reason":"签发或更换原因"}` | `{"token":"TBD-…","expiresAt":"UTC时间"}`，重新签发即作废旧凭据 |
@@ -63,7 +63,7 @@
 - 详情返回 `{id,state,...订单字段,licenses:[{id,code,machineCode,revoked,leaseUntil}]}`；未绑定的 machineCode 与未签发的 leaseUntil 为 null。核款流水不在详情响应中，数据库及审计保留，不能把查询响应当财务对账单。
 - 吊销可重复但每次记录审计；**迁移不是幂等发货接口**，新码生成后立即恢复未绑定状态，再次 migrate 会被拒绝。响应丢失时通过订单详情恢复新码，不再次生成。旧授权须先撤销并等待已签发租约到期加 5 分钟；旧码永久失效。
 
-## 无账号客户领取（已实现，未上线）
+## 无账号客户领取（API 已部署，购买页面待接入）
 
 领取凭据与激活码、管理员令牌是三种不同的凭证。当前由受保护运营接口为已经创建的订单签发领取凭据；未来公开收银台创建订单时调用同一服务逻辑，不要求建立用户账号。尚未实现的公开下单接口不能让客户端提交任意金额或标记已付款。
 
@@ -76,7 +76,7 @@
 - 响应 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`；代理日志不得包含 Authorization 或响应正文。凭据不得放进图片、公开聊天、分析埋点或含 token 的 URL。未来收银台需让购买人保存领取凭据，并提供经核实的恢复流程。
 - `/delivery-access/revoke` 仅撤销领取权限，不取消已付款授权。换机成功会同时撤销该订单原领取凭据，避免旧领取人取走新码；企业订单换机后由运营向经核实的接收人重新签发订单级凭据。
 
-数据库只新增 `order_delivery_access` 表，旧订单没有默认领取权限。已验证旧数据库结构升级、凭据不以明文落库及服务重启后仍可领取。生产升级仍需备份和恢复演练。本地 HTTP 测试已贯通“受保护签发凭据 → RSA2 测试通知 → 事务发码 → 客户凭据领取”，这不等同于支付宝真实付款或已具备收银台。
+数据库只新增 `order_delivery_access` 表，旧订单没有默认领取权限。已验证旧数据库结构升级、凭据不以明文落库及服务重启后仍可领取。生产升级已完成数据库备份、副本恢复和既有数据一致性核对；异地密钥备份及整机恢复仍待完成。本地 HTTP 测试已贯通“受保护签发凭据 → RSA2 测试通知 → 事务发码 → 客户凭据领取”，这不等同于支付宝真实付款或已具备收银台。
 
 ## 签名许可
 
@@ -103,18 +103,18 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 | 413 / 415 / 429 | `BODY_TOO_LARGE` / `CONTENT_TYPE` / `RATE_LIMITED` | 调整请求或稍后由操作员重试 |
 | 500 | `INTERNAL_ERROR` | 提供请求 ID 排查；不删除现有许可 |
 
-## 支付宝通知自动发码（已实现，未上线）
+## 支付宝通知自动发码（代码已部署，商户未启用）
 
 `POST /v1/payments/alipay/notify` 接受 `application/x-www-form-urlencoded`（可带 UTF-8 charset），同样限制 16KiB。运营先创建本地订单；后续渠道下单必须以返回的订单 UUID 作为 `out_trade_no`，不能使用人类可读 `reference` 替代。
 
-- 启用条件：服务端完整配置 `ALIPAY_APP_ID`、`ALIPAY_SELLER_ID`、`ALIPAY_PUBLIC_KEY_FILE`。缺项使服务启动失败；全部省略时路由 404。公钥文件是从官方平台核对取得的支付宝验签公钥，不能误用本应用公钥；本轮采用固定 RSA 公钥，不包含证书自动轮换。
+- 启用条件：服务端完整配置 `ALIPAY_APP_ID`、`ALIPAY_SELLER_ID`、`ALIPAY_PUBLIC_KEY_FILE`。缺项使服务启动失败；全部省略时路由 404。公钥文件是从官方平台核对取得的支付宝验签公钥，不能误用本应用公钥；当前实现采用固定 RSA 公钥，不包含证书自动轮换。
 - 只接受 RSA2、UTF-8、`trade_status_sync`；表单只解码一次，拒绝重复字段。验签包含未知扩展字段，排除 `sign` 与 `sign_type`，不能只签自己挑选的业务字段。
 - 验签后比对 app_id/seller_id，核对订单 UUID、已付款状态 `TRADE_SUCCESS` 或 `TRADE_FINISHED`、整数分金额；明确为非 CNY、含非零退款、未支付或交易关闭的通知均拒绝发码。退款及关闭处理尚未实现，相关通知非成功响应，不冒充已处理退款。
 - 验签、核款、数据库事务和发码全部完成后才返回 200 纯文本 `success`。订单变更、激活码与审计同事务提交；通道流水保存为 `alipay:<trade_no>` 并受唯一约束。重复或迟到的同笔成功通知只读取原码，不再生成。
 - 错误签名 401；错商户/应用、金额、交易状态或流水冲突 409；未知订单 404；其他结构错误 400。失败响应为错误 JSON，绝不返回 `success`。支付宝的渠道重发不等于客户端自动重试；重复通知由幂等处理保护。
 - 审计使用 `order.alipay-payment-confirmed` 区分人工核款。通知原始表单、买方信息、签名及激活码不进入日志。通知、领取与其余请求的限流相互隔离，但各组在回环反代下仍共享进程限额，正式上线前需按容量验收。
 
-这一步仅打通“有效支付通知 → 事务发码”。商品计价、渠道下单、通知丢失后主动查单、客户领码页、退款对账和发票 API 仍待实现，不能称为完整自动交付。正式商户尚未完成签约验证，不能仅填环境变量就开放收款。没有真实扣款或发票操作。
+这一步仅打通“有效支付通知 → 事务发码”。商品计价、渠道下单、通知丢失后主动查单、客户领码页、退款对账和发票 API 仍待实现，不能称为完整自动交付。正式商户尚未完成签约验证，不能仅填环境变量就开放收款。没有真实扣款或发票操作。2026-09-28 已部署服务提交 `374ea715b3ff4c1a73ca77413f71ca494a1de981`，未填写支付宝商户凭据，公网通知仍返回 404；无凭据领取返回 401。
 
 实现参考：[支付宝网站支付通知说明](https://opendocs.alipay.com/open/270/105902)、[官方 Node SDK 通知验签说明](https://github.com/alipay/alipay-sdk-nodejs-all#通知验签)。本实现只覆盖网站支付标准表单通知，不作为所有支付宝业务通知的通用解析器。
 
