@@ -3,6 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { LicensingService, ServiceError } from './service';
 import type { AlipayCheckout, AlipayNotifications } from './alipay';
+import { purchaseCatalogSchema, type PurchaseCatalog } from './catalog';
 
 async function readBytes(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
@@ -21,9 +22,10 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   catch { throw new ServiceError(400, 'INVALID_JSON', 'JSON 格式无效'); }
 }
 
-export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout) {
+export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout, purchaseCatalog?: PurchaseCatalog) {
   if (adminToken.length < 32) throw new Error('后台访问令牌至少 32 位');
   if (checkout && !alipay) throw new Error('启用支付宝付款入口必须同时配置通知验签');
+  const catalog = purchaseCatalog === undefined ? undefined : purchaseCatalogSchema.parse(purchaseCatalog);
   const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
   const expected = digest(`Bearer ${adminToken}`);
   const rates = new Map<string, { count: number; reset: number }>();
@@ -37,13 +39,23 @@ export function createLicensingServer(service: LicensingService, adminToken: str
     const dispatch = async (): Promise<unknown> => {
       const now = Date.now();
       for (const [key, value] of rates) if (value.reset <= now) rates.delete(key);
-      const group = request.url === '/v1/payments/alipay/notify' ? 'alipay' : request.url?.startsWith('/v1/orders/') ? 'delivery' : 'product';
+      const group = request.url === '/v1/payments/alipay/notify' ? 'alipay' : request.url === '/v1/orders' ? 'purchase' : request.url?.startsWith('/v1/orders/') ? 'delivery' : 'product';
       const address = `${request.socket.remoteAddress ?? 'unknown'}:${group}`;
       const rate = rates.get(address) ?? { count: 0, reset: now + 60000 };
-      if (rates.size >= 10000 && !rates.has(address) || ++rate.count > 120) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
+      if (rates.size >= 10000 && !rates.has(address) || ++rate.count > (group === 'purchase' ? 10 : 120)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
       rates.set(address, rate);
       if (request.method === 'GET' && request.url === '/health') return { status: 'ok' };
       if (request.method === 'POST' && request.url === '/v1/activate') return service.activate(await readBody(request));
+      if (request.method === 'GET' && request.url === '/v1/catalog') {
+        const offers = checkout && catalog ? service.listOffers(catalog) : [];
+        return { available: offers.length > 0, currency: 'CNY', termStart: 'fulfillment', offers };
+      }
+      if (request.method === 'POST' && request.url === '/v1/orders') {
+        const token = /^Bearer (TBD-[A-F0-9]{64})$/.exec(request.headers.authorization ?? '')?.[1] ?? '';
+        const purchase = service.createPurchase(await readBody(request), token, catalog, checkout);
+        const paymentUrl = purchase.payable && checkout ? checkout.createUrl({ id: purchase.id, amountFen: purchase.amountFen, quantity: purchase.quantity, expiresAt: purchase.expiresAt }) : null;
+        return { ...purchase, paymentUrl };
+      }
       const delivery = /^\/v1\/orders\/([a-f0-9-]{36})$/.exec(request.url ?? '');
       if (request.method === 'GET' && delivery) return service.readDelivery(delivery[1]!, /^Bearer (TBD-[A-F0-9]{64})$/.exec(request.headers.authorization ?? '')?.[1] ?? '');
       if (request.method === 'POST' && request.url === '/v1/payments/alipay/notify' && alipay) {
