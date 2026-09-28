@@ -100,9 +100,7 @@ jobs:
         run: |
           $manifest = Get-Content apps/desktop/dist/release-manifest.json -Raw | ConvertFrom-Json
           $tag = "v$($manifest.version)"
-          git fetch --no-tags origin "refs/tags/${tag}:refs/tags/${tag}"
-          if ($LASTEXITCODE -ne 0) { throw 'Release tag is missing' }
-          $tagSha = (git rev-parse "${tag}^{commit}").Trim()
+          $tagSha = (gh api "repos/$env:GH_REPO/commits/$tag" --jq .sha).Trim()
           if ($LASTEXITCODE -ne 0 -or $tagSha -cne $manifest.gitSha) { throw 'Release tag differs from manifest' }
           $installer = "apps/desktop/dist/Tuanbo-Link-Console-$($manifest.version)-x64.exe"
           $notes = "Verified Windows candidate. Source: $($manifest.gitSha). Build: https://github.com/$env:GH_REPO/actions/runs/$env:GITHUB_RUN_ID. Not a published release."
