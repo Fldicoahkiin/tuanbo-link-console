@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""Publish the prepared static website on the existing company host, without enabling sales."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import time
+import urllib.request
+import uuid
+
+HOST = 'tuanbo-link.jinhefilm.com'
+NGINX = Path('/etc/nginx/sites-available/tblink-licensing.conf')
+ROOT = Path('/srv/tblink-purchase')
+RELEASES = Path('/srv/tblink-purchase-releases')
+BACKUPS = Path('/var/lib/tblink-licensing/backups')
+PROTECTED = [Path('/opt/tblink-licensing/dist/index.js'), Path('/etc/tblink-licensing/service.env')]
+FILES = {'index.html', 'purchase.js', 'purchase.css', 'revision.txt', 'nginx.previous.conf', 'nginx.next.conf'}
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def run(*args):
+    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=30)
+
+
+def site_sections(config):
+    marker = f'    server_name {HOST};\n'
+    if config.count(marker) != 1:
+        raise RuntimeError('Expected one website HTTPS block')
+    pos = config.index(marker)
+    start = config.rfind('server {\n', 0, pos)
+    end = config.find('\n}\n', pos)
+    if start < 0 or end < 0:
+        raise RuntimeError('Unsupported site configuration layout')
+    return config[:start], config[start:end + 3], config[end + 3:]
+
+
+def validate_config(previous, candidate):
+    before, _, after = site_sections(previous)
+    next_before, site, next_after = site_sections(candidate)
+    if (before, after) != (next_before, next_after):
+        raise RuntimeError('Only the website block may change')
+    if f'    root {ROOT};' not in site or site.count('proxy_pass http://127.0.0.1:8787;') != 3:
+        raise RuntimeError('Unexpected website root or proxy routes')
+    expected = {'= /', '= /purchase.js', '= /purchase.css', '~ "^/media/[a-z0-9][a-z0-9-]*\\.mp4$"',
+                '= /v1/catalog', '= /v1/orders', '~ "^/v1/orders/[a-f0-9-]{36}$"'}
+    routes = dict(re.findall(r'    location (.*?) \{\n(.*?)\n    }', site, re.S))
+    if set(routes) != expected or '    location / { return 404; }' not in site:
+        raise RuntimeError('Unexpected exposed route')
+    for name, body in routes.items():
+        method = 'POST' if name == '= /v1/orders' else 'GET'
+        if f'limit_except {method} {{ deny all; }}' not in body:
+            raise RuntimeError('Missing method restriction')
+        if '/v1/' in name and 'proxy_set_header X-Tblink-Client-IP $remote_addr;' not in body:
+            raise RuntimeError('Missing trusted client address overwrite')
+    for header in ['Cache-Control no-store always', 'X-Content-Type-Options nosniff always',
+                   'Referrer-Policy no-referrer always', "frame-ancestors 'none'"]:
+        if header not in site:
+            raise RuntimeError('Missing security header')
+    return candidate
+
+
+def atomic_text(path, value):
+    staged = path.with_name(path.name + '.staged-' + uuid.uuid4().hex)
+    staged.write_text(value)
+    os.chmod(staged, 0o644)
+    os.replace(staged, path)
+
+
+def read_catalog():
+    with urllib.request.urlopen('http://127.0.0.1:8787/v1/catalog', timeout=5) as response:
+        value = json.load(response)
+    if value.get('available') is not False or value.get('offers') != []:
+        raise RuntimeError('Website release must not enable sales')
+
+
+def probe(path):
+    return run('curl', '--silent', '--show-error', '--max-time', '10', '--noproxy', '*',
+               '--resolve', f'{HOST}:443:127.0.0.1', f'https://{HOST}{path}').stdout
+
+
+def main():
+    if len(sys.argv) != 6 or os.geteuid() != 0:
+        raise RuntimeError('Run as root: publish-website.py ARCHIVE ARCHIVE_SHA NGINX_SHA BUNDLE_SHA ENV_SHA')
+    artifact = Path(sys.argv[1])
+    if digest(artifact) != sys.argv[2] or digest(NGINX) != sys.argv[3]:
+        raise RuntimeError('Archive or current proxy changed')
+    protected = [digest(path) for path in PROTECTED]
+    if protected != sys.argv[4:6]:
+        raise RuntimeError('Protected service files changed')
+    if ROOT.exists() and not ROOT.is_symlink():
+        raise RuntimeError('Refusing to replace an unmanaged directory')
+    old_target = os.readlink(ROOT) if ROOT.is_symlink() else None
+    if old_target and not Path(old_target).resolve().is_relative_to(RELEASES.resolve()):
+        raise RuntimeError('Unmanaged static release link')
+    read_catalog()
+    services = ['nginx', 'tblink-licensing', 'jinhe-storyboard', 'wuyou-dispatch']
+    for unit in services:
+        if run('systemctl', 'is-active', unit).stdout.strip() != 'active':
+            raise RuntimeError('Expected healthy existing services')
+    backup = BACKUPS / (time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-website')
+    backup.mkdir(mode=0o700)
+    with tarfile.open(artifact) as archive:
+        members = archive.getmembers()
+        if {item.name for item in members} != FILES or len(members) != len(FILES):
+            raise RuntimeError('Unexpected release archive members')
+        for item in members:
+            if not item.isfile() or item.size > 2_000_000:
+                raise RuntimeError('Invalid archive entry')
+            stream = archive.extractfile(item)
+            if stream is None:
+                raise RuntimeError('Missing archive entry')
+            (backup / item.name).write_bytes(stream.read())
+    previous = NGINX.read_text()
+    if previous != (backup / 'nginx.previous.conf').read_text():
+        raise RuntimeError('Prior proxy does not match inspected state')
+    candidate = validate_config(previous, (backup / 'nginx.next.conf').read_text())
+    revision = (backup / 'revision.txt').read_text().strip()
+    if not re.fullmatch(r'[a-f0-9]{40}', revision):
+        raise RuntimeError('Invalid revision')
+    (backup / 'rollback.json').write_text(json.dumps({'previousRoot': old_target, 'previousNginxSha256': digest(NGINX)}))
+    preflight = backup / 'nginx-preflight.conf'
+    preflight.write_text('error_log stderr;\nevents {}\nhttp {\ninclude /etc/nginx/mime.types;\naccess_log off;\n' + candidate + '\n}\n')
+    run('nginx', '-t', '-c', str(preflight))
+    RELEASES.mkdir(mode=0o755, exist_ok=True)
+    release = RELEASES / (revision + '-' + uuid.uuid4().hex[:8])
+    release.mkdir(mode=0o755)
+    for name in ['index.html', 'purchase.js', 'purchase.css']:
+        shutil.copyfile(backup / name, release / name)
+        os.chmod(release / name, 0o644)
+    changed = False
+    try:
+        staged_link = ROOT.with_name(ROOT.name + '.staged-' + uuid.uuid4().hex)
+        staged_link.symlink_to(release)
+        os.replace(staged_link, ROOT)
+        changed = True
+        atomic_text(NGINX, candidate)
+        run('nginx', '-t')
+        run('systemctl', 'reload', 'nginx')
+        if probe('/') != (release / 'index.html').read_text():
+            raise RuntimeError('Live HTML differs from built artifact')
+        if json.loads(probe('/v1/catalog')).get('available') is not False:
+            raise RuntimeError('Public catalog is not closed')
+        if [digest(path) for path in PROTECTED] != protected:
+            raise RuntimeError('Protected files changed during release')
+        for unit in services:
+            if run('systemctl', 'is-active', unit).stdout.strip() != 'active':
+                raise RuntimeError('Existing service health changed')
+        manifest = {'revision': revision, 'backup': str(backup), 'release': str(release),
+                    'files': {name: digest(release / name) for name in ['index.html', 'purchase.js', 'purchase.css']},
+                    'nginxSha256': digest(NGINX), 'protectedFilesUnchanged': True, 'catalogClosed': True}
+        (backup / 'result.json').write_text(json.dumps(manifest, indent=2))
+        print(json.dumps(manifest, indent=2))
+    except BaseException:
+        if changed:
+            atomic_text(NGINX, previous)
+            if old_target:
+                recovery = ROOT.with_name(ROOT.name + '.rollback-' + uuid.uuid4().hex)
+                recovery.symlink_to(old_target)
+                os.replace(recovery, ROOT)
+            else:
+                ROOT.rename(ROOT.with_name(ROOT.name + '.failed-' + uuid.uuid4().hex))
+            run('nginx', '-t')
+            run('systemctl', 'reload', 'nginx')
+        raise
+
+
+if __name__ == '__main__':
+    main()
