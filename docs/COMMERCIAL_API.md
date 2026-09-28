@@ -23,6 +23,7 @@
 | POST `/admin/orders` | 回环/运维隧道 + Bearer | 订单对象，见下文 | `{"id":"<UUID>","state":"pending或fulfilled"}` |
 | GET `/admin/orders/:id` | 同上 | UUID 路径 | 订单详情和 `licenses`，含完整激活码，仅运营可读 |
 | POST `/admin/orders/:id/fulfill` | 同上 | `paymentReference, amountFen` | 与订单详情相同，人工核款后发码 |
+| POST `/admin/orders/:id/payment-link` | 同上，本地已实现尚未部署 | 空对象 `{}` | `id,amountFen,quantity,expiresAt,paymentUrl`；默认 503 未启用 |
 | POST `/admin/licenses/:id/revoke` | 同上 | `{"reason":"原因"}` | `{"revoked":true}` |
 | POST `/admin/licenses/:id/migrate` | 同上 | `{"reason":"原因"}` | `{"code":"TBA-…"}`，同一 license ID 换新码 |
 
@@ -99,13 +100,15 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 | 403 | `INVALID_CODE`, `REVOKED`, `EXPIRED` | 不授权，联系运营核查 |
 | 404 | `NOT_FOUND`, `ORDER_NOT_FOUND`, `LICENSE_NOT_FOUND` | 检查路由/编号；无此记录 |
 | 409 | `ORDER_CONFLICT`, `PAYMENT_CONFLICT`, `PAYMENT_REUSED`, `AMOUNT_MISMATCH`, `ORDER_EXPIRED` | 订单或支付冲突，人工核实 |
+| 409 | `ORDER_ALREADY_FULFILLED`, `PAYMENT_LINK_EXPIRED`, `PAYMENT_IDENTITY_MISMATCH`, `PAYMENT_CHANNEL_MISMATCH` | 不再生成付款链接；先核对原订单和渠道交易，不改价或切换商户重试 |
 | 409 | `MACHINE_BOUND`, `LEASE_OUTSTANDING` | 已绑定别机或旧租约尚未结束 |
 | 413 / 415 / 429 | `BODY_TOO_LARGE` / `CONTENT_TYPE` / `RATE_LIMITED` | 调整请求或稍后由操作员重试 |
 | 500 | `INTERNAL_ERROR` | 提供请求 ID 排查；不删除现有许可 |
+| 503 | `PAYMENTS_UNAVAILABLE` | 收款入口未启用，不生成付款链接 |
 
 ## 支付宝通知自动发码（代码已部署，商户未启用）
 
-`POST /v1/payments/alipay/notify` 接受 `application/x-www-form-urlencoded`（可带 UTF-8 charset），同样限制 16KiB。运营先创建本地订单；后续渠道下单必须以返回的订单 UUID 作为 `out_trade_no`，不能使用人类可读 `reference` 替代。
+`POST /v1/payments/alipay/notify` 接受 `application/x-www-form-urlencoded`（可带 UTF-8 charset），同样限制 16KiB。运营先创建服务端订单；现有已部署回调接受订单 UUID。本地下单实现按渠道字符限制使用 `TB_` 加去掉连字符的 UUID 作为 `out_trade_no`，新版回调在验签后映射回原订单 UUID，也保留既有 UUID 通知契约。不能使用人类可读 `reference` 替代，生成新格式付款入口前须同时部署新版回调。
 
 - 启用条件：服务端完整配置 `ALIPAY_APP_ID`、`ALIPAY_SELLER_ID`、`ALIPAY_PUBLIC_KEY_FILE`。缺项使服务启动失败；全部省略时路由 404。公钥文件是从官方平台核对取得的支付宝验签公钥，不能误用本应用公钥；当前实现采用固定 RSA 公钥，不包含证书自动轮换。
 - 只接受 RSA2、UTF-8、`trade_status_sync`；表单只解码一次，拒绝重复字段。验签包含未知扩展字段，排除 `sign` 与 `sign_type`，不能只签自己挑选的业务字段。
@@ -117,6 +120,21 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 这一步仅打通“有效支付通知 → 事务发码”。商品计价、渠道下单、通知丢失后主动查单、客户领码页、退款对账和发票 API 仍待实现，不能称为完整自动交付。正式商户尚未完成签约验证，不能仅填环境变量就开放收款。没有真实扣款或发票操作。2026-09-28 已部署服务提交 `374ea715b3ff4c1a73ca77413f71ca494a1de981`，未填写支付宝商户凭据，公网通知仍返回 404；无凭据领取返回 401。
 
 实现参考：[支付宝网站支付通知说明](https://opendocs.alipay.com/open/270/105902)、[官方 Node SDK 通知验签说明](https://github.com/alipay/alipay-sdk-nodejs-all#通知验签)。本实现只覆盖网站支付标准表单通知，不作为所有支付宝业务通知的通用解析器。
+
+## 既有订单的支付宝付款入口（本地已实现，尚未部署或启用）
+
+运营先通过受保护接口创建已确认金额与授权期限的团播订单，再请求 `POST /admin/orders/<UUID>/payment-link`，正文仅 `{}`。身份仍使用管理员 Bearer；客户领取凭据、公开订单编号和请求中的金额不能代替运营权限。此步骤生成电脑网站支付链接，不扣款、不交付，也不自动发送给任何客户。
+
+- 配置独立开关 `ALIPAY_CHECKOUT_ENABLED=true` 和 `ALIPAY_PRIVATE_KEY_FILE`，同时必须完整配置通知验签的三项身份/公钥；默认关闭。私钥只在服务器受限文件中，至少 2048 位 RSA。应用私钥和支付宝验签公钥不同，不能互换。
+- 金额、台数和期限只从已有订单读取；请求包含金额、回跳地址或其他字段时拒绝。签名请求固定发送到 `https://openapi.alipay.com/gateway.do`，通知固定为本服务已部署路径；尚无客户完成页，不配置虚假的 `return_url`。
+- `alipay_payment_links` 保存订单、APPID、seller_id 和首次付款截止时间；截止时间最多为首次生成后 15 分钟，且不能超过原订单使用/升级期限。重复获取及服务重启不延长截止时间；剩余不足一分钟时返回 409 `PAYMENT_LINK_EXPIRED`，需先查清原订单付款情况，不能直接再发另一单诱导重复支付。
+- OpenAPI 请求签名包含 `sign_type`，异步通知验签不包含它。时间采用 UTC+8，金额为整数分转换的两位小数，软件按虚拟商品发送；不传个人信息、激活码或领取凭据。
+- 已交付订单拒绝再次生成链接。已生成链接的订单不能改为人工核款；通知必须与该订单记录的应用和商户一致。付款窗口结束不直接把订单当作未支付关闭，后续已验签的成功通知仍按原金额和授权规则处理。
+- 测试覆盖独立 RSA 验签、参数篡改、固定网关、重复/过期/重启、商户切换、管理员权限，以及生成链接 → 新格式订单号通知 → 原订单发码。全部使用隔离数据库和临时密钥，无真实渠道请求。
+
+本步骤供运营已确认订单使用，不是公开商品计价或完整客户收银台。正式团播价格尚未确认；公开下单、客户领码页、主动查单、退款对账和发票仍待完成。生产目前仍为 `374ea71`，不可提前按本节启用付款。
+
+实现依据：[支付宝官方请求签名实现](https://github.com/alipay/alipay-sdk-nodejs-all/blob/master/src/util.ts)、[官方电脑网站支付参数模型](https://github.com/alipay/alipay-sdk-java-all/blob/master/v2/src/main/java/com/alipay/api/domain/AlipayTradePagePayModel.java)。
 
 ## 其余支付自动化接口草案——尚未实现，不能调用
 

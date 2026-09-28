@@ -1,6 +1,9 @@
-import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, sign, verify as verifySignature } from 'node:crypto';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { AlipayNotifications } from './alipay';
+import { AlipayCheckout, AlipayNotifications } from './alipay';
 import { createLicensingServer } from './http';
 import { LicensingService } from './service';
 
@@ -26,8 +29,85 @@ const verify = (form: URLSearchParams) => notifications.verify(Buffer.from(form.
 
 it('RSA2 通知验签保留中文、百分号、加号和新增字段，不二次解码', () => {
   const { order } = setup();
-  expect(verify(notification(order.id))).toEqual({ orderId: order.id, amountFen: 12345, paymentReference: 'alipay:202609282200000000000001' });
+  expect(verify(notification(order.id))).toEqual({ orderId: order.id, amountFen: 12345, paymentReference: 'alipay:202609282200000000000001', appId, sellerId });
   for (const amount of ['123', '123.4', '123.45']) expect(verify(notification(order.id, { total_amount: amount })).amountFen).toBe(Math.round(Number(amount) * 100));
+});
+
+it('付款入口签名包含 sign_type，金额和有效期来自订单，链接不包含客户或领取凭据', () => {
+  const { service, order } = setup();
+  const now = Date.parse('2026-09-28T00:00:00Z');
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), () => now);
+  const payment = service.prepareAlipayPayment(order.id, appId, sellerId);
+  const url = new URL(checkout.createUrl(payment));
+  expect(url.origin + url.pathname).toBe('https://openapi.alipay.com/gateway.do');
+  const params = Object.fromEntries(url.searchParams); const signature = params.sign!; delete params.sign;
+  const content = Object.keys(params).sort().map(key => `${key}=${params[key]}`).join('&');
+  expect(verifySignature('RSA-SHA256', Buffer.from(content), rsa.publicKey, Buffer.from(signature, 'base64'))).toBe(true);
+  delete params.sign_type;
+  const withoutType = Object.keys(params).sort().map(key => `${key}=${params[key]}`).join('&');
+  expect(verifySignature('RSA-SHA256', Buffer.from(withoutType), rsa.publicKey, Buffer.from(signature, 'base64'))).toBe(false);
+  expect(params.notify_url).toBe('https://api.tuanbo-link.jinhefilm.com/v1/payments/alipay/notify');
+  expect(params).not.toHaveProperty('return_url');
+  expect(JSON.parse(params.biz_content!)).toEqual({ out_trade_no: `TB_${order.id.replaceAll('-', '')}`, product_code: 'FAST_INSTANT_TRADE_PAY', total_amount: '123.45', subject: '团播联动台授权 2 台', goods_type: '0', qr_pay_mode: '2', time_expire: '2026-09-28 08:15:00' });
+  expect(url.href).not.toContain('TBD-');
+  expect(checkout.createUrl(payment)).not.toContain(encodeURIComponent('测试客户'));
+  expect(service.describeOrder(order.id).licenses).toHaveLength(0);
+  expect(service.prepareAlipayPayment(order.id, appId, sellerId)).toEqual(payment);
+  expect(() => service.prepareAlipayPayment(order.id, '2026000000000002', sellerId)).toThrow('其他支付配置');
+  expect(() => service.fulfill(order.id, { paymentReference: 'manual', amountFen: 12345 })).toThrow('不能改成人工核款');
+});
+
+it('仅服务器订单字段可构建付款链接，拒绝过期、弱密钥和额外网址参数', () => {
+  const { service, order } = setup();
+  let now = Date.parse('2026-09-28T00:00:00Z');
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), () => now);
+  const payment = service.prepareAlipayPayment(order.id, appId, sellerId);
+  expect(() => checkout.createUrl({ ...payment, returnUrl: 'https://example.invalid' })).toThrow();
+  const weak = generateKeyPairSync('rsa', { modulusLength: 1024 });
+  expect(() => new AlipayCheckout(appId, sellerId, weak.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString())).toThrow('2048');
+  now += 15 * 60000;
+  expect(() => checkout.createUrl(payment)).toThrow('过期');
+});
+
+it('付款入口过期不丢弃支付事实，绑定身份必须匹配；支付后不能再取得付款链接', () => {
+  let now = Date.parse('2026-09-28T00:00:00Z');
+  const service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => now);
+  services.push(service);
+  const { details } = setup(); const order = service.createOrder(details);
+  service.prepareAlipayPayment(order.id, appId, sellerId);
+  now += 20 * 60000;
+  expect(() => service.prepareAlipayPayment(order.id, appId, sellerId)).toThrow('过期');
+  const payment = verify(notification(`TB_${order.id.replaceAll('-', '')}`));
+  expect(payment.orderId).toBe(order.id);
+  const fields = { amountFen: payment.amountFen, paymentReference: payment.paymentReference };
+  expect(() => service.fulfill(order.id, fields, 'alipay', { appId, sellerId: '2088000000000002' })).toThrow('不匹配');
+  const result = service.fulfill(order.id, fields, 'alipay', payment);
+  expect(result.licenses).toHaveLength(2);
+  expect(service.fulfill(order.id, fields, 'alipay', payment).licenses).toEqual(result.licenses);
+  expect(() => service.prepareAlipayPayment(order.id, appId, sellerId)).toThrow('已交付');
+});
+
+it('付款入口只供认证运营获取，不能从请求覆盖金额；签名通知按渠道订单号交付原订单', async () => {
+  const { service, order } = setup();
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), () => Date.parse('2026-09-28T00:00:00Z'));
+  const admin = 'a'.repeat(48); const server = createLicensingServer(service, admin, notifications, checkout);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('缺少监听地址');
+    const base = `http://127.0.0.1:${address.port}`;
+    const request = (token: string, body: unknown = {}) => fetch(`${base}/admin/orders/${order.id}/payment-link`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+    expect((await request('')).status).toBe(401);
+    expect((await request(admin, { amountFen: 1 })).status).toBe(400);
+    const response = await request(admin);
+    expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('no-store');
+    const body = await response.json() as { paymentUrl: string; id: string };
+    expect(body.id).toBe(order.id);
+    const tradeNo = JSON.parse(new URL(body.paymentUrl).searchParams.get('biz_content')!).out_trade_no as string;
+    const paid = await fetch(`${base}/v1/payments/alipay/notify`, { method: 'POST', body: notification(tradeNo), signal: AbortSignal.timeout(5000) });
+    expect(await paid.text()).toBe('success');
+    expect(service.describeOrder(order.id).licenses).toHaveLength(2);
+    expect((await request(admin)).status).toBe(409);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
 
 it('拒绝篡改、重复字段、算法降级以及用商户自己的公钥验支付宝通知', () => {
@@ -94,5 +174,25 @@ it('没有配置支付宝时保持回调关闭，不能由请求指定验签公�
     const response = await fetch(`http://127.0.0.1:${address.port}/v1/payments/alipay/notify`, { method: 'POST', body: notification(order.id), signal: AbortSignal.timeout(5000) });
     expect(response.status).toBe(404);
     expect(service.describeOrder(order.id).licenses).toHaveLength(0);
+    const link = await fetch(`http://127.0.0.1:${address.port}/admin/orders/${order.id}/payment-link`, {
+      method: 'POST', headers: { Authorization: `Bearer ${'a'.repeat(48)}`, 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(5000)
+    });
+    expect(link.status).toBe(503);
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+it('重启后保留原付款期限与商户绑定，不因重复取链接延长付款窗口', async () => {
+  const path = join(await mkdtemp(join(tmpdir(), 'tblink-payment-')), 'license.db');
+  const key = randomBytes(32); let now = Date.parse('2026-09-28T00:00:00Z');
+  const privateKey = issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const first = new LicensingService(path, privateKey, 'test', key, () => now);
+  const { details } = setup();
+  const order = first.createOrder(details);
+  const before = first.prepareAlipayPayment(order.id, appId, sellerId);
+  first.close();
+  now += 5 * 60000;
+  const reopened = new LicensingService(path, privateKey, 'test', key, () => now);
+  services.push(reopened);
+  expect(reopened.prepareAlipayPayment(order.id, appId, sellerId)).toEqual(before);
+  expect(() => reopened.prepareAlipayPayment(order.id, appId, '2088000000000002')).toThrow('其他支付配置');
 });

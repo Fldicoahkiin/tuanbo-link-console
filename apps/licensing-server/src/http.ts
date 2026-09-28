@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { LicensingService, ServiceError } from './service';
-import type { AlipayNotifications } from './alipay';
+import type { AlipayCheckout, AlipayNotifications } from './alipay';
 
 async function readBytes(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
@@ -21,8 +21,9 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   catch { throw new ServiceError(400, 'INVALID_JSON', 'JSON 格式无效'); }
 }
 
-export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications) {
+export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout) {
   if (adminToken.length < 32) throw new Error('后台访问令牌至少 32 位');
+  if (checkout && !alipay) throw new Error('启用支付宝付款入口必须同时配置通知验签');
   const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
   const expected = digest(`Bearer ${adminToken}`);
   const rates = new Map<string, { count: number; reset: number }>();
@@ -48,12 +49,19 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       if (request.method === 'POST' && request.url === '/v1/payments/alipay/notify' && alipay) {
         if (!/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '')) throw new ServiceError(415, 'CONTENT_TYPE', '需要 UTF-8 表单通知');
         const payment = alipay.verify(await readBytes(request));
-        service.fulfill(payment.orderId, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'alipay');
+        service.fulfill(payment.orderId, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'alipay', payment);
         return 'success';
       }
       if (!request.url?.startsWith('/admin/')) throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
       if (!timingSafeEqual(digest(request.headers.authorization ?? ''), expected)) throw new ServiceError(401, 'UNAUTHORIZED', '后台认证失败');
       if (request.method === 'POST' && request.url === '/admin/orders') return service.createOrder(await readBody(request));
+      const pay = /^\/admin\/orders\/([a-f0-9-]{36})\/payment-link$/.exec(request.url);
+      if (request.method === 'POST' && pay) {
+        z.object({}).strict().parse(await readBody(request));
+        if (!checkout) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝付款入口尚未启用');
+        const payment = service.prepareAlipayPayment(pay[1]!, checkout.appId, checkout.sellerId);
+        return { ...payment, paymentUrl: checkout.createUrl(payment) };
+      }
       const deliveryAccess = /^\/admin\/orders\/([a-f0-9-]{36})\/delivery-access(\/revoke)?$/.exec(request.url);
       if (request.method === 'POST' && deliveryAccess) return deliveryAccess[2] ? service.revokeDeliveryAccess(deliveryAccess[1]!, await readBody(request)) : service.issueDeliveryAccess(deliveryAccess[1]!, await readBody(request));
       const order = /^\/admin\/orders\/([a-f0-9-]{36})(\/fulfill)?$/.exec(request.url);

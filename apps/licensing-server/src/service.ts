@@ -31,6 +31,7 @@ export class LicensingService {
       CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, reference TEXT NOT NULL UNIQUE, body TEXT NOT NULL, state TEXT NOT NULL, payment_reference TEXT UNIQUE);
       CREATE TABLE IF NOT EXISTS licenses (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id), code_hash TEXT NOT NULL UNIQUE, code_cipher TEXT NOT NULL, machine TEXT, revoked INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS order_delivery_access (order_id TEXT PRIMARY KEY REFERENCES orders(id), token_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS alipay_payment_links (order_id TEXT PRIMARY KEY REFERENCES orders(id), app_id TEXT NOT NULL, seller_id TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, at TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL);`);
   }
   close(): void { this.db.close(); }
@@ -75,10 +76,32 @@ export class LicensingService {
       return { id, state: 'pending' as const };
     });
   }
-  fulfill(id: string, input: unknown, source: 'manual' | 'alipay' = 'manual') {
+  prepareAlipayPayment(id: string, appId: string, sellerId: string) {
+    z.string().regex(/^\d{16}$/).parse(appId); z.string().regex(/^\d{16}$/).parse(sellerId);
+    return this.transaction(() => {
+      const order = this.order(id);
+      if (order.state !== 'pending') throw new ServiceError(409, 'ORDER_ALREADY_FULFILLED', '订单已交付，无需再次付款');
+      const now = this.now();
+      const expiresAt = Math.min(now + 15 * 60000, Date.parse(order.details.updatesUntil), order.details.useUntil ? Date.parse(order.details.useUntil) : Infinity);
+      const old = this.db.prepare('SELECT app_id, seller_id, expires_at FROM alipay_payment_links WHERE order_id = ?').get(id);
+      const payment = old ? z.object({ app_id: z.string(), seller_id: z.string(), expires_at: z.number() }).parse(old)
+        : { app_id: appId, seller_id: sellerId, expires_at: expiresAt };
+      if (payment.app_id !== appId || payment.seller_id !== sellerId) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '订单已绑定其他支付配置，请核对原交易');
+      if (payment.expires_at - now < 60000) throw new ServiceError(409, 'PAYMENT_LINK_EXPIRED', '付款入口已过期，请先核对原订单是否已付款');
+      if (!old) {
+        this.db.prepare('INSERT INTO alipay_payment_links VALUES (?, ?, ?, ?)').run(id, appId, sellerId, expiresAt);
+        this.audit('order.alipay-link-created', id);
+      }
+      return { id, amountFen: order.details.amountFen, quantity: order.details.quantity, expiresAt: new Date(payment.expires_at).toISOString() };
+    });
+  }
+  fulfill(id: string, input: unknown, source: 'manual' | 'alipay' = 'manual', paymentIdentity?: { appId: string; sellerId: string }) {
     const payment = paymentSchema.parse(input);
     return this.transaction(() => {
       const order = this.order(id);
+      const link = this.db.prepare('SELECT app_id, seller_id FROM alipay_payment_links WHERE order_id = ?').get(id);
+      if (link && source === 'alipay' && (link.app_id !== paymentIdentity?.appId || link.seller_id !== paymentIdentity?.sellerId)) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '支付通知与订单绑定的商户或应用不匹配');
+      if (link && source === 'manual') throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '已生成支付宝付款入口的订单必须先核对渠道交易，不能改成人工核款');
       if (order.details.amountFen !== payment.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '核款金额与订单不一致');
       if (order.state === 'fulfilled') {
         if (order.payment_reference !== payment.paymentReference) throw new ServiceError(409, 'PAYMENT_CONFLICT', '订单已使用其他流水完成核款');
