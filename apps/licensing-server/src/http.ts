@@ -62,6 +62,14 @@ export function createLicensingServer(service: LicensingService, adminToken: str
         const payment = service.prepareAlipayPayment(pay[1]!, checkout.appId, checkout.sellerId);
         return { ...payment, paymentUrl: checkout.createUrl(payment) };
       }
+      const reconcile = /^\/admin\/orders\/([a-f0-9-]{36})\/reconcile$/.exec(request.url);
+      if (request.method === 'POST' && reconcile) {
+        z.object({}).strict().parse(await readBody(request));
+        if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用');
+        service.alipayQueryOrder(reconcile[1]!, checkout.appId, checkout.sellerId);
+        const payment = await checkout.query(reconcile[1]!, alipay);
+        return service.reconcileAlipay(reconcile[1]!, payment);
+      }
       const deliveryAccess = /^\/admin\/orders\/([a-f0-9-]{36})\/delivery-access(\/revoke)?$/.exec(request.url);
       if (request.method === 'POST' && deliveryAccess) return deliveryAccess[2] ? service.revokeDeliveryAccess(deliveryAccess[1]!, await readBody(request)) : service.issueDeliveryAccess(deliveryAccess[1]!, await readBody(request));
       const order = /^\/admin\/orders\/([a-f0-9-]{36})(\/fulfill)?$/.exec(request.url);

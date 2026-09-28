@@ -1,6 +1,6 @@
 # 源码、版本、部署与本地运行链路
 
-核查日期：2026-09-28。本轮基于工作区代码、Git 配置及上一轮服务器验收记录，不代表已发布新的 Windows 安装包。GitHub CLI 当前返回 HTTP 401，未取得远端最新分支、Actions 或 Release 状态；`origin/master` 是本地已有的远端跟踪记录，不能当作实时远端状态。
+核查日期：2026-09-28。本轮基于工作区代码、Git 配置及服务器部署验收记录，不代表已发布新的 Windows 安装包。最初链路核查时 GitHub CLI 返回 HTTP 401；这只是当时的认证结果。本节未重新取得团播远端最新分支、Actions 或 Release 状态，`origin/master` 不能当作实时远端状态。
 
 ## 1. 运行位置与职责
 
@@ -72,7 +72,7 @@ Windows 上执行 `pnpm verify:release`，再执行 `pnpm verify:installer` 和�
 
 服务器部署构建产物，不需要在公网站点目录放完整 Git checkout。不要在 `/srv/tblink-updates` 中保存 `.git`、源码包或仓库令牌。现有源站按白名单提供正式更新文件。
 
-当前部署仍是上一轮本地构建后上传的授权 bundle，systemd 运行 `/opt/tblink-licensing/dist/index.js`；已经记录 JS SHA-256，但没有自动部署 workflow、逐版本 release 目录或完整部署回执。不能将当前手动部署描述为 GitOps 或自动跟随主分支。
+最近已验收的生产部署为 `374ea715b3ff4c1a73ca77413f71ca494a1de981`，systemd 运行 `/opt/tblink-licensing/dist/index.js`。部署已记录 `/opt/tblink-licensing/RELEASE`、bundle SHA-256、受限备份与部署回执，并执行 SQLite 副本恢复及数据一致性核对，详情见部署文档。仍没有自动部署 workflow 或自动跟随主分支；后续本地付款链接及主动查单代码尚未部署。
 
 后续接入自动部署应明确以下流程：
 
@@ -114,12 +114,12 @@ flowchart TB
 
 | 链路 | 已有 | 剩余 |
 | --- | --- | --- |
-| 源码管理 | GitHub origin、本地提交、锁文件 | CLI 401，远端最新状态和保护规则未核实 |
+| 源码管理 | GitHub origin、本地提交、锁文件 | 团播远端最新状态和保护规则未重新核实，未 push |
 | 候选构建 | Windows 标签工作流、版本一致性检查、草稿 Release | 本轮未运行远端 CI；无完整 Windows 构建验收 |
 | 正式发行 | NSIS、摘要与 manifest 脚本 | Authenticode 签名、发布者校验、当前 unsigned-only 门槛改造 |
 | 公司更新出口 | CF DNS、TLS、静态目录、续期验收 | 首个可信安装包、产物自动同步、两版本实机更新 |
-| 付费与激活 | 人工核款发码、绑定机器、签名凭证、每次启动联网校验 | 备份恢复、正式 Windows 激活验收 |
-| 自动销售 | 接口/税务文档及商户办理中 | 支付宝回调本地已实现，待签约与部署；渠道下单、领码页面（凭据接口已本地实现）、查单补偿、发票 API、退款对账 |
+| 付费与激活 | 人工核款发码、绑定机器、签名凭证、每次启动联网校验；数据库备份副本恢复已验收 | 异地密钥备份与整机恢复、正式 Windows 激活验收 |
+| 自动销售 | 支付通知/领取 API 已部署未启用商户；运营付款链接、主动查单补交付本地已实现 | 商户签约、正式定价、付款及查单部署；公开计价下单、领码页面、发票 API、退款对账及真实支付验收 |
 | 现场运行 | 本机编排、OBS/MIDI/MA2 适配 | 现场设备与长时间运行验收不能被构建成功替代 |
 
 本轮验证：先复现旧更新源检查拒绝当前 generic 配置，再通过五项脚本回归、版本检查、定向 ESLint 与 JavaScript 语法检查。当前主机为 macOS，没有执行 Windows `verify:release`、安装、签名或实机更新。更没有将草稿、单测或 TLS 通过写成全链路商业可交付。

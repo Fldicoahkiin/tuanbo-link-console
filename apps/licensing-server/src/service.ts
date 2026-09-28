@@ -95,28 +95,51 @@ export class LicensingService {
       return { id, amountFen: order.details.amountFen, quantity: order.details.quantity, expiresAt: new Date(payment.expires_at).toISOString() };
     });
   }
+  alipayQueryOrder(id: string, appId: string, sellerId: string) {
+    const order = this.order(id);
+    const link = this.db.prepare('SELECT app_id, seller_id FROM alipay_payment_links WHERE order_id = ?').get(id);
+    if (!link) throw new ServiceError(409, 'PAYMENT_NOT_PREPARED', '订单尚未生成支付宝付款入口');
+    if (link.app_id !== appId || link.seller_id !== sellerId) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '订单绑定的商户或应用与查单配置不匹配');
+    return { id, state: order.state, amountFen: order.details.amountFen };
+  }
+  reconcileAlipay(id: string, input: unknown) {
+    const payment = z.object({ orderId: z.string().uuid(), amountFen: z.number().int().positive(), paymentReference: z.string(),
+      appId: z.string().regex(/^\d{16}$/), sellerId: z.string().regex(/^\d{16}$/),
+      status: z.enum(['TRADE_SUCCESS', 'TRADE_FINISHED', 'WAIT_BUYER_PAY', 'TRADE_CLOSED']) }).strict().parse(input);
+    return this.transaction(() => {
+      const order = this.alipayQueryOrder(id, payment.appId, payment.sellerId);
+      if (payment.orderId !== id) throw new ServiceError(409, 'PAYMENT_ORDER_MISMATCH', '查单返回了其他订单');
+      if (payment.amountFen !== order.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '查单金额与订单不一致');
+      const settled = payment.status === 'TRADE_SUCCESS' || payment.status === 'TRADE_FINISHED';
+      const result = settled ? this.fulfillOrder(id, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'alipay', payment) : order;
+      this.audit('order.alipay-queried', id, payment.status);
+      // 已交付订单的 CLOSED 可能代表退款，记录事实但不推断退款金额或撤销席位。
+      return { id, state: result.state, paymentStatus: payment.status, needsReview: !settled && result.state === 'fulfilled' };
+    });
+  }
   fulfill(id: string, input: unknown, source: 'manual' | 'alipay' = 'manual', paymentIdentity?: { appId: string; sellerId: string }) {
     const payment = paymentSchema.parse(input);
-    return this.transaction(() => {
-      const order = this.order(id);
-      const link = this.db.prepare('SELECT app_id, seller_id FROM alipay_payment_links WHERE order_id = ?').get(id);
-      if (link && source === 'alipay' && (link.app_id !== paymentIdentity?.appId || link.seller_id !== paymentIdentity?.sellerId)) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '支付通知与订单绑定的商户或应用不匹配');
-      if (link && source === 'manual') throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '已生成支付宝付款入口的订单必须先核对渠道交易，不能改成人工核款');
-      if (order.details.amountFen !== payment.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '核款金额与订单不一致');
-      if (order.state === 'fulfilled') {
-        if (order.payment_reference !== payment.paymentReference) throw new ServiceError(409, 'PAYMENT_CONFLICT', '订单已使用其他流水完成核款');
-        return this.describeOrder(id);
-      }
-      if (this.db.prepare('SELECT id FROM orders WHERE payment_reference = ?').get(payment.paymentReference)) throw new ServiceError(409, 'PAYMENT_REUSED', '收款流水已用于另一订单');
-      if (order.details.useUntil && Date.parse(order.details.useUntil) <= this.now() || Date.parse(order.details.updatesUntil) <= this.now()) throw new ServiceError(409, 'ORDER_EXPIRED', '订单期限已过，请重新确认订单');
-      this.db.prepare("UPDATE orders SET state = 'fulfilled', payment_reference = ? WHERE id = ?").run(payment.paymentReference, id);
-      for (let index = 0; index < order.details.quantity; index += 1) {
-        const code = `TBA-${randomBytes(16).toString('hex').toUpperCase()}`;
-        this.db.prepare('INSERT INTO licenses (id, order_id, code_hash, code_cipher) VALUES (?, ?, ?, ?)').run(randomUUID(), id, this.hash(code), this.encrypt(code));
-      }
-      this.audit(source === 'alipay' ? 'order.alipay-payment-confirmed' : 'order.manual-payment-confirmed', id, payment.paymentReference);
+    return this.transaction(() => this.fulfillOrder(id, payment, source, paymentIdentity));
+  }
+  private fulfillOrder(id: string, payment: z.infer<typeof paymentSchema>, source: 'manual' | 'alipay', paymentIdentity?: { appId: string; sellerId: string }) {
+    const order = this.order(id);
+    const link = this.db.prepare('SELECT app_id, seller_id FROM alipay_payment_links WHERE order_id = ?').get(id);
+    if (link && source === 'alipay' && (link.app_id !== paymentIdentity?.appId || link.seller_id !== paymentIdentity?.sellerId)) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '支付通知与订单绑定的商户或应用不匹配');
+    if (link && source === 'manual') throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '已生成支付宝付款入口的订单必须先核对渠道交易，不能改成人工核款');
+    if (order.details.amountFen !== payment.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '核款金额与订单不一致');
+    if (order.state === 'fulfilled') {
+      if (order.payment_reference !== payment.paymentReference) throw new ServiceError(409, 'PAYMENT_CONFLICT', '订单已使用其他流水完成核款');
       return this.describeOrder(id);
-    });
+    }
+    if (this.db.prepare('SELECT id FROM orders WHERE payment_reference = ?').get(payment.paymentReference)) throw new ServiceError(409, 'PAYMENT_REUSED', '收款流水已用于另一订单');
+    if (order.details.useUntil && Date.parse(order.details.useUntil) <= this.now() || Date.parse(order.details.updatesUntil) <= this.now()) throw new ServiceError(409, 'ORDER_EXPIRED', '订单期限已过，请重新确认订单');
+    this.db.prepare("UPDATE orders SET state = 'fulfilled', payment_reference = ? WHERE id = ?").run(payment.paymentReference, id);
+    for (let index = 0; index < order.details.quantity; index += 1) {
+      const code = `TBA-${randomBytes(16).toString('hex').toUpperCase()}`;
+      this.db.prepare('INSERT INTO licenses (id, order_id, code_hash, code_cipher) VALUES (?, ?, ?, ?)').run(randomUUID(), id, this.hash(code), this.encrypt(code));
+    }
+    this.audit(source === 'alipay' ? 'order.alipay-payment-confirmed' : 'order.manual-payment-confirmed', id, payment.paymentReference);
+    return this.describeOrder(id);
   }
   describeOrder(id: string) {
     const order = this.order(id);

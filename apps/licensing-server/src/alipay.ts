@@ -3,6 +3,14 @@ import { z } from 'zod';
 import { ServiceError } from './service';
 
 const identity = z.string().regex(/^\d{16}$/);
+const amount = z.string().regex(/^(0|[1-9]\d{0,6})(\.\d{1,2})?$/);
+const tradeStatus = z.enum(['TRADE_SUCCESS', 'TRADE_FINISHED', 'WAIT_BUYER_PAY', 'TRADE_CLOSED']);
+const channelOrderId = (id: string): string => `TB_${z.string().uuid().parse(id).replaceAll('-', '')}`;
+const time = (value: number): string => new Date(value + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ');
+function amountFen(value: string): number {
+  const [yuan, fraction = ''] = amount.parse(value).split('.');
+  return Number(yuan) * 100 + Number(fraction.padEnd(2, '0'));
+}
 // 新请求用渠道允许的字母、数字、下划线；既有通知契约的 UUID 仍须能验签处理。
 const orderId = z.union([z.string().uuid(), z.string().regex(/^TB_[a-f0-9]{32}$/).transform(value => {
   const id = value.slice(3);
@@ -13,8 +21,8 @@ const notificationSchema = z.object({
   trade_no: z.string().regex(/^\d{16,64}$/), sign_type: z.literal('RSA2'),
   charset: z.string().refine(value => value.toLowerCase() === 'utf-8'),
   notify_type: z.literal('trade_status_sync'),
-  trade_status: z.enum(['TRADE_SUCCESS', 'TRADE_FINISHED', 'WAIT_BUYER_PAY', 'TRADE_CLOSED']),
-  total_amount: z.string().regex(/^(0|[1-9]\d{0,6})(\.\d{1,2})?$/),
+  trade_status: tradeStatus,
+  total_amount: amount,
   sign: z.string().min(100).max(1400).regex(/^[A-Za-z0-9+/]+={0,2}$/)
 });
 
@@ -43,10 +51,34 @@ export class AlipayNotifications {
     if (notification.trade_status !== 'TRADE_SUCCESS' && notification.trade_status !== 'TRADE_FINISHED') throw new ServiceError(409, 'PAYMENT_NOT_SETTLED', '通知不是支付成功状态，不能发码');
     if (fields.refund_fee && !/^0(\.0{1,2})?$/.test(fields.refund_fee)) throw new ServiceError(409, 'PAYMENT_REFUNDED', '含退款的通知需要先核对退款状态');
     if (fields.trans_currency && fields.trans_currency !== 'CNY') throw new ServiceError(409, 'PAYMENT_CURRENCY_MISMATCH', '仅接受人民币订单');
-    const [yuan, fraction = ''] = notification.total_amount.split('.');
-    const amountFen = Number(yuan) * 100 + Number(fraction.padEnd(2, '0'));
-    if (amountFen < 1 || amountFen > 100_000_000) throw new ServiceError(400, 'INVALID_PAYMENT_AMOUNT', '支付金额超出订单范围');
-    return { orderId: notification.out_trade_no, paymentReference: `alipay:${notification.trade_no}`, amountFen, appId: this.appId, sellerId: this.sellerId };
+    const total = amountFen(notification.total_amount);
+    if (total < 1 || total > 100_000_000) throw new ServiceError(400, 'INVALID_PAYMENT_AMOUNT', '支付金额超出订单范围');
+    return { orderId: notification.out_trade_no, paymentReference: `alipay:${notification.trade_no}`, amountFen: total, appId: this.appId, sellerId: this.sellerId };
+  }
+  verifyQuery(body: string, expectedId: string) {
+    // 公钥模式只接收 response + sign 信封。仅解析验签覆盖的原始对象，禁止重序列化后验签。
+    const envelope = /^\s*\{\s*"alipay_trade_query_response"\s*:\s*(\{[\s\S]*\})\s*,\s*"sign"\s*:\s*"([A-Za-z0-9+/]+={0,2})"\s*\}\s*$/.exec(body);
+    if (!envelope || !verify('RSA-SHA256', Buffer.from(envelope[1]!, 'utf8'), this.key, Buffer.from(envelope[2]!, 'base64'))) throw new ServiceError(502, 'INVALID_PAYMENT_SIGNATURE', '支付宝查单响应验签失败');
+    let data: unknown;
+    try { data = JSON.parse(envelope[1]!) as unknown; }
+    catch { throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', '支付宝查单响应格式无效'); }
+    const result = z.object({ code: z.string(), sub_code: z.string().optional() }).safeParse(data);
+    if (!result.success || result.data.code !== '10000') throw new ServiceError(502, 'PAYMENT_QUERY_UNCONFIRMED', '支付宝尚未返回可确认的交易结果，请核对渠道后重试');
+    const parsed = z.object({
+      out_trade_no: z.string(), trade_no: z.string().regex(/^\d{16,64}$/), trade_status: tradeStatus,
+      total_amount: amount, trans_currency: z.literal('CNY').optional(),
+      app_id: identity.optional(), seller_id: identity.optional(), refund_fee: amount.optional(),
+      additional_status: z.string().optional()
+    }).safeParse(data);
+    if (!parsed.success) throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', '支付宝查单响应字段无效');
+    const payment = parsed.data;
+    if (payment.out_trade_no !== channelOrderId(expectedId)) throw new ServiceError(409, 'PAYMENT_ORDER_MISMATCH', '查单返回了其他订单');
+    if (payment.app_id && payment.app_id !== this.appId || payment.seller_id && payment.seller_id !== this.sellerId) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '查单返回的商户或应用不匹配');
+    if (payment.refund_fee && amountFen(payment.refund_fee) !== 0) throw new ServiceError(409, 'PAYMENT_REFUNDED', '交易涉及退款，须先核对退款状态');
+    if (payment.additional_status) throw new ServiceError(409, 'PAYMENT_REQUIRES_REVIEW', '交易存在附加状态，须先核对收款状态');
+    const total = amountFen(payment.total_amount);
+    if (total < 1 || total > 100_000_000) throw new ServiceError(502, 'INVALID_PAYMENT_AMOUNT', '查单金额超出订单范围');
+    return { orderId: expectedId, status: payment.trade_status, paymentReference: `alipay:${payment.trade_no}`, amountFen: total, appId: this.appId, sellerId: this.sellerId };
   }
 }
 
@@ -55,7 +87,7 @@ const checkoutSchema = z.object({
   quantity: z.number().int().min(1).max(100), expiresAt: z.string().datetime()
 }).strict();
 
-/** 生成网站支付请求，本方法不请求支付宝、不扣款、不交付授权。 */
+/** 网站支付与主动查单；只向固定支付宝网关发送签名请求，不在适配器中交付授权。 */
 export class AlipayCheckout {
   private readonly key: KeyObject;
   constructor(readonly appId: string, readonly sellerId: string, privateKey: string, private readonly now: () => number = Date.now) {
@@ -67,18 +99,44 @@ export class AlipayCheckout {
     const order = checkoutSchema.parse(input);
     const now = this.now();
     if (Date.parse(order.expiresAt) - now < 60000) throw new ServiceError(409, 'PAYMENT_LINK_EXPIRED', '付款入口已过期，请先核对原订单是否已付款');
-    const time = (value: number): string => new Date(value + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ');
-    const params: Record<string, string> = {
-      app_id: this.appId, method: 'alipay.trade.page.pay', format: 'JSON', charset: 'utf-8',
-      sign_type: 'RSA2', timestamp: time(now), version: '1.0',
-      notify_url: 'https://api.tuanbo-link.jinhefilm.com/v1/payments/alipay/notify',
-      biz_content: JSON.stringify({ out_trade_no: `TB_${order.id.replaceAll('-', '')}`, product_code: 'FAST_INSTANT_TRADE_PAY',
+    const params = this.signedParams('alipay.trade.page.pay',
+      { out_trade_no: channelOrderId(order.id), product_code: 'FAST_INSTANT_TRADE_PAY',
         total_amount: (order.amountFen / 100).toFixed(2), subject: `团播联动台授权 ${order.quantity} 台`,
-        goods_type: '0', qr_pay_mode: '2', time_expire: time(Date.parse(order.expiresAt)) })
-    };
+        goods_type: '0', qr_pay_mode: '2', time_expire: time(Date.parse(order.expiresAt)) },
+      { notify_url: 'https://api.tuanbo-link.jinhefilm.com/v1/payments/alipay/notify' });
+    return `https://openapi.alipay.com/gateway.do?${new URLSearchParams(params)}`;
+  }
+  private signedParams(method: string, business: Record<string, string>, extra: Record<string, string> = {}): Record<string, string> {
+    const params: Record<string, string> = { app_id: this.appId, method, format: 'JSON', charset: 'utf-8',
+      sign_type: 'RSA2', timestamp: time(this.now()), version: '1.0', ...extra, biz_content: JSON.stringify(business) };
     // 请求签名包含 sign_type；通知验签排除它，两者不能共用同一拼串规则。
     const content = Object.keys(params).sort().map(name => `${name}=${params[name]}`).join('&');
     params.sign = sign('RSA-SHA256', Buffer.from(content, 'utf8'), this.key).toString('base64');
-    return `https://openapi.alipay.com/gateway.do?${new URLSearchParams(params)}`;
+    return params;
+  }
+  async query(id: string, notifications: AlipayNotifications, request: typeof fetch = fetch) {
+    const { biz_content: business, ...params } = this.signedParams('alipay.trade.query', { out_trade_no: channelOrderId(id) });
+    let body: string;
+    try {
+      const response = await request(`https://openapi.alipay.com/gateway.do?${new URLSearchParams(params)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8', Accept: 'application/json' },
+        body: new URLSearchParams({ biz_content: business! }), redirect: 'error', signal: AbortSignal.timeout(8000)
+      });
+      if (!response.ok || !response.body) {
+        await response.body?.cancel();
+        throw new ServiceError(502, 'PAYMENT_QUERY_FAILED', '支付宝查单失败，订单保持原状态');
+      }
+      const chunks: Uint8Array[] = []; let size = 0;
+      for await (const chunk of response.body) {
+        size += chunk.length;
+        if (size > 65536) throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', '支付宝查单响应超过大小限制');
+        chunks.push(chunk);
+      }
+      body = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+    } catch (error) {
+      if (error instanceof ServiceError) throw error;
+      throw new ServiceError(502, 'PAYMENT_QUERY_FAILED', '支付宝查单超时或网络异常，订单保持原状态');
+    }
+    return notifications.verifyQuery(body, id);
   }
 }

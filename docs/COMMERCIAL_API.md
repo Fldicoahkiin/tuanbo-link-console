@@ -24,6 +24,7 @@
 | GET `/admin/orders/:id` | 同上 | UUID 路径 | 订单详情和 `licenses`，含完整激活码，仅运营可读 |
 | POST `/admin/orders/:id/fulfill` | 同上 | `paymentReference, amountFen` | 与订单详情相同，人工核款后发码 |
 | POST `/admin/orders/:id/payment-link` | 同上，本地已实现尚未部署 | 空对象 `{}` | `id,amountFen,quantity,expiresAt,paymentUrl`；默认 503 未启用 |
+| POST `/admin/orders/:id/reconcile` | 同上，本地已实现尚未部署 | 空对象 `{}` | `id,state,paymentStatus,needsReview`；调用支付宝查单，可信已付结果幂等发码 |
 | POST `/admin/licenses/:id/revoke` | 同上 | `{"reason":"原因"}` | `{"revoked":true}` |
 | POST `/admin/licenses/:id/migrate` | 同上 | `{"reason":"原因"}` | `{"code":"TBA-…"}`，同一 license ID 换新码 |
 
@@ -132,9 +133,24 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 - 已交付订单拒绝再次生成链接。已生成链接的订单不能改为人工核款；通知必须与该订单记录的应用和商户一致。付款窗口结束不直接把订单当作未支付关闭，后续已验签的成功通知仍按原金额和授权规则处理。
 - 测试覆盖独立 RSA 验签、参数篡改、固定网关、重复/过期/重启、商户切换、管理员权限，以及生成链接 → 新格式订单号通知 → 原订单发码。全部使用隔离数据库和临时密钥，无真实渠道请求。
 
-本步骤供运营已确认订单使用，不是公开商品计价或完整客户收银台。正式团播价格尚未确认；公开下单、客户领码页、主动查单、退款对账和发票仍待完成。生产目前仍为 `374ea71`，不可提前按本节启用付款。
+本步骤供运营已确认订单使用，不是公开商品计价或完整客户收银台。正式团播价格尚未确认；公开下单、客户领码页、退款对账和发票仍待完成。生产目前仍为 `374ea71`，不可提前按本节启用付款。
 
 实现依据：[支付宝官方请求签名实现](https://github.com/alipay/alipay-sdk-nodejs-all/blob/master/src/util.ts)、[官方电脑网站支付参数模型](https://github.com/alipay/alipay-sdk-java-all/blob/master/v2/src/main/java/com/alipay/api/domain/AlipayTradePagePayModel.java)。
+
+## 主动查单补交付（本地已实现，尚未部署或实商户验收）
+
+当原订单的通知丢失或延迟时，运营通过 `POST /admin/orders/<UUID>/reconcile`，正文 `{}`，查询 `alipay.trade.query`。接口与付款入口共用开关和密钥；只有本服务已生成付款入口、且绑定当前应用/商户的订单才会请求渠道。付款链接过期仍可查询，不能通过重建订单掩盖未知付款状态。公网与客户领取凭据不能访问此接口。
+
+- 固定生产网关、RSA2 请求签名、8 秒总网络时限、最多 64KiB 响应，不跟随重定向、不自动重试。网络、HTTP、签名、格式或渠道错误均返回失败；`ACQ.TRADE_NOT_EXIST` 也不会把本地订单判定为已关闭。错误不包含支付宝响应正文或买家信息。
+- 公钥模式接收官方的 `alipay_trade_query_response` 加 `sign` 信封，对原始 JSON 对象字符串验签后解析，保留空格、转义及字段顺序。未签名错误、未知信封或证书模式扩展默认拒绝，需根据实际签约配置另行接入，不能降级跳过验签。
+- 核对查询订单号、人民币金额，以及返回中存在的身份字段；查询响应并不保证返回 APPID/seller_id，所以身份同时依赖本地持久化绑定、签名请求和固定网关。发现非零退款字段或附加收款状态时返回需核对错误。
+- `TRADE_SUCCESS`/`TRADE_FINISHED` 通过已有发码事务处理。金额、流水唯一性、绑定身份、授权期限均重复校验；查询和通知并发、重复查单不会产生第二批激活码，也不会恢复已撤销的授权。查询状态与发码审计在同一事务内提交。
+- `WAIT_BUYER_PAY`/`TRADE_CLOSED` 只记录查询事实，不交付、不改变本地订单状态。已交付订单出现非成功状态时响应 `needsReview: true`；不能从 CLOSED 推断具体退款金额或应撤销的企业席位。
+- **该查询不是退款对账**：标准交易查询不提供完整部分退款历史。上线前还须接入退款台账、退款查询及异常处理；在商户后台单独退款必须关联订单、核对并撤销对应授权，不能依赖本接口自动发现全部退款。
+
+本地隔离测试覆盖签名与报文篡改、订单串换、身份/金额/币种、网络超时、待付/关闭、并发补发、通知重复及撤销后再次查单。未发送真实支付渠道请求。
+
+实现依据：[支付宝官方查询参数](https://github.com/alipay/alipay-sdk-java-all/blob/master/v2/src/main/java/com/alipay/api/domain/AlipayTradeQueryModel.java)、[查询响应字段](https://github.com/alipay/alipay-sdk-java-all/blob/master/v2/src/main/java/com/alipay/api/response/AlipayTradeQueryResponse.java)、[官方 Node SDK 原文验签实现](https://github.com/alipay/alipay-sdk-nodejs-all/blob/master/src/alipay.ts)。
 
 ## 其余支付自动化接口草案——尚未实现，不能调用
 
