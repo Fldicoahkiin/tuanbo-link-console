@@ -1,6 +1,6 @@
 # 商业接口与凭证契约
 
-2026-09-28。本文区分已实现接口和后续设计。生产 origin 为 `https://api.tuanbo-link.jinhefilm.com`，既有授权服务、公网 DNS/HTTPS 已有验收记录；支付宝回调与客户领取代码已于 2026-09-28 部署；支付宝尚未配置启用，客户领取接口已公开且要求订单专属凭据。实现依据：`apps/licensing-server/src/http.ts`、`service.ts`、`packages/schema/src/license.ts`。
+2026-09-28。本文区分已实现接口和后续设计。生产 origin 为 `https://api.tuanbo-link.jinhefilm.com`，既有授权服务、公网 DNS/HTTPS 已有验收记录；支付宝回调、客户领取、自助商品目录与下单接口已部署。支付宝身份和回调验签已配置，服务器生产只读查单响应验签通过；销售开关关闭且未配置商品目录。客户领取接口要求订单专属凭据。实现依据：`apps/licensing-server/src/http.ts`、`service.ts`、`packages/schema/src/license.ts`。
 
 ## 产品与商户范围
 
@@ -15,9 +15,9 @@
 | 方法与路径 | 访问范围 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
 | GET `/health` | 公网 | 无 | `{"status":"ok"}`，仅存活，不证明数据库、签名或支付可用 |
-| GET `/v1/catalog` | 本地已实现，未部署或开放代理 | 无 | `available,currency,termStart,offers`；配置缺失时无可售商品 |
-| POST `/v1/orders` | 本地已实现，未部署或开放代理 | 客户预存随机 Bearer 凭据及商品请求，见下文 | 原订单、商品快照、付款期限及 `paymentUrl`；价格只由服务端计算 |
-| POST `/v1/payments/alipay/notify` | 代理已上线；未配置时 404 | RSA2 签名表单，见下文 | 纯文本 `success`，不返回客户信息或激活码 |
+| GET `/v1/catalog` | 已部署并开放精确代理；当前无可售商品 | 无 | `available,currency,termStart,offers`；配置缺失时无可售商品 |
+| POST `/v1/orders` | 已部署并开放精确代理；销售关闭时 503 | 客户预存随机 Bearer 凭据及商品请求，见下文 | 原订单、商品快照、付款期限及 `paymentUrl`；价格只由服务端计算 |
+| POST `/v1/payments/alipay/notify` | 代理与验签已启用；缺失配置时 404 | RSA2 签名表单，见下文 | 纯文本 `success`，不返回客户信息或激活码 |
 | POST `/v1/activate` | 公网 | `product, code, machineCode` | `{"license":"<Ed25519 JWS>"}` |
 | GET `/v1/orders/:id` | 订单专属 Bearer 领取凭据 | 无正文，不接受 URL 凭据 | 脱敏订单状态和已支付授权，见下文 |
 | POST `/admin/orders/:id/delivery-access` | 回环/运维隧道 + 管理员 Bearer | `{"reason":"签发或更换原因"}` | `{"token":"TBD-…","expiresAt":"UTC时间"}`，重新签发即作废旧凭据 |

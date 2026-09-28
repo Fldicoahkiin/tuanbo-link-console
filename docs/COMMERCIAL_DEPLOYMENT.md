@@ -116,7 +116,7 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 
 ## 支付宝回调启用前置
 
-服务代码和 Nginx 已增加精确路径 `/v1/payments/alipay/notify`，但尚未配置商户。先完成商户和应用产品审核、获取并核对官方验签公钥，再按环境示例设置三项配置；先在测试环境验证，再进行获准的真实小额验收。当前未填写商户身份或接收真实付款，公网通知返回 404。
+服务代码和 Nginx 已增加精确路径 `/v1/payments/alipay/notify`。应用身份与官方验签公钥已于 2026-09-28 配置，生产只读查单响应验签通过，详见文末记录；这不替代真实小额付款与交付验收。回调验签启用不等于商品可售，销售仍由独立的 `ALIPAY_CHECKOUT_ENABLED` 与商品目录控制。
 
 ## 客户领取接口部署记录（2026-09-28）
 
@@ -164,3 +164,13 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 - 公网伪造 `X-Tblink-Client-IP` 和 `X-Forwarded-For` 不改变来源：同源连续第 11 次下单请求返回 429，不能通过每次更换头绕过；无效伪造来源头的健康请求仍返回 200，证明 Nginx 覆盖该头。不同真实客户独立计数已用本地 HTTP 边界测试验证，尚非多地区公网容量测试。
 - 团播、分镜、无忧排班和 Nginx 均 active；分镜公网 `/api/health` 返回 200。更新清单仍为 404 且 `no-store`，预留网站仍为 404。尚未上传 Windows 安装包。
 - 本轮授权服务六个测试文件与桌面购买适配器合计 71 项通过；Python 部署回归 10 项通过，ResourceWarning 作为错误时无失败。授权服务类型检查、变更 TS 的 ESLint 与服务 bundle 已通过。上述均不替代 Windows 安装/更新、正式商品、实商户交易、退款或开票验收。
+
+## 2026-09-28 支付宝身份与回调验签接入
+
+- 用户在官方开放平台完成 AppID `2021007101657826` 的 RSA2 公钥登记；应用公钥与服务器私钥导出的 SPKI 指纹一致。官方页面返回的支付宝公钥已归档，见 [公钥及指纹](../apps/licensing-server/deploy/public-keys/README.md)。服务器私钥始终未导出。
+- 使用服务器私钥向固定生产网关 `https://openapi.alipay.com/gateway.do` 发起一次随机不存在订单的 `alipay.trade.query`。HTTP 200，业务码 `40004 / ACQ.TRADE_NOT_EXIST`，原始响应正文 RSA2 验签通过。此操作只核实接口认证，不创建交易或授权。
+- 配置变更前备份至 `/var/lib/tblink-licensing/backups/20260928T093701Z-alipay-config`；包含原 `service.env` 与 SQLite 在线备份，备份完整性、外键检查和逻辑数据摘要核对通过。
+- 在既有 `service.env` 追加应用、收款方、官方验签公钥和私钥路径，保留其他字段及注释。支付宝公钥文件 `/etc/tblink-licensing/alipay-public.pem` 归服务用户所有、权限 0600。配置文件 SHA-256 为 `7fe2f3df138e69beb0cdbf9b39b99155c705807ceffedf95e9181e8b61321ee6`；本次未改服务 bundle、Nginx 或 Cloudflare。
+- 重启团播服务后健康正常，数据库逻辑摘要未变化；团播、金河分镜、无忧排班与 Nginx 均 active。销售仍为 `ALIPAY_CHECKOUT_ENABLED=false`，未配置 `LICENSE_CATALOG_FILE`，目录不展示商品。
+- 公网实测：团播健康 200；目录 200 且 `available:false,offers:[]`；后台路径 404；空通知 400 `INVALID_REQUEST`，完整形状的伪造签名通知 401 `INVALID_PAYMENT_SIGNATURE`；分镜健康 200。未创建真实订单或请求付款。
+- 月付／年付价格仍为讨论稿，详见 [销售草案](COMMERCIAL_ONBOARDING.md#首发销售草案未开售)。网站经营内容补件、真实支付、发码及机器激活、退款、发票和 Windows 更新验收均未完成。
