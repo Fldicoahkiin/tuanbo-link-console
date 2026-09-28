@@ -201,3 +201,16 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 - 浏览器在隔离本地服务验证“通知缺失 → 持原凭据点击查询 → 测试 RSA2 签名查单 → 原单发码”，重复点击原码与期限不变，测试渠道调用一次。未连接实际支付，不替代实商户付款/退款/开票验收；桌面代码尚未发布 Windows 安装包。
 
 官网随后独立发布付款完成提示修正 `aa34ff0e4ca4177fb0ea15365f971679acce96e6`，备份 `/var/lib/tblink-licensing/backups/20260928T132717Z-website`。最终 purchase.js SHA-256：`1ac218f9957a468f6c0c44b5815d5a21546f6393209b96967969337f15daf7e9`，公网摘要已核对。授权 bundle、Nginx 和环境摘要不变，销售保持关闭。
+
+
+## 2026-09-28 收款持久化与交付异常上线
+
+- 授权服务与官网来源均为 `c17fd6124f6219b8d0cef7e9eba4ec33ca6b4bf4`。bundle SHA-256：`1145f4f1a5cc5f76ac1e0593aae540e4faee318693797a4385504d771a04ecea`；网页 purchase.js：`31e624bfd34b92cdef445a2364315edf0625faa9178c368c5834b1cf0be48f65`。公网 HTML、JS、CSS 均为 200，逐文件摘要与构建包一致；正式浏览器仍显示“暂未开放购买”。
+- API 备份 `/var/lib/tblink-licensing/backups/20260928T135007Z`，官网备份 `/var/lib/tblink-licensing/backups/20260928T135011Z-website`；静态目录 `/srv/tblink-purchase-releases/c17fd6124f6219b8d0cef7e9eba4ec33ca6b4bf4-1ab35fb5`。SQLite 备份、副本恢复和既有表逻辑摘要核对通过，只新增 `payment_receipts`。发布工具现在检查收款表存在，否则恢复旧代码、环境及代理；相关缺表回归通过。
+- 部署后独立 SSH 检查：RELEASE 一致、既有表未改变，订单 0 条、收款记录 0 条。没有为验收创建生产交易或授权。
+- 运维命令已安装到 `/opt/tblink-licensing/payment-exceptions.py`，root 所有、0644，SHA-256 `f1f35e7a6a274d59749ee1566599c52bab7653d4c2fe35fcd82862263343f707`。服务器内部实际执行只读清单，返回 0 条且 nextCursor=null；未执行生产补发。源码、访问范围与操作说明见 [接口文档](COMMERCIAL_API.md#收款记录与交付异常)。
+- Nginx 摘要仍为 `3837b02c31464a4fe46e253d771e18e2bbecf16d28538ce6e0e3a06295b03d99`；支付环境摘要仍为 `7fe2f3df138e69beb0cdbf9b39b99155c705807ceffedf95e9181e8b61321ee6`。没有修改 Cloudflare 或新增公网管理路由，销售开关保持关闭，正式商品目录仍未配置。
+- 官网和 API 的 `/admin/payment-exceptions` 均为 404；无领取凭据的客户 POST 查单均为 401；两域名目录均 available=false、offers=[]。团播 API、分镜健康均为 200，团播、Nginx、分镜、无忧排班四项服务均 active，nginx -t 通过。
+- 本地服务、网页客户端与桌面购买适配器共 97 项测试分批通过；Python 部署／回退／运维命令 22 项通过。服务和桌面类型检查、变更文件 ESLint、服务与网页构建通过。桌面新增测试初次因测试客户名称与原授权不一致被正确拒绝，修正测试资料后又校正关闭付款入口的预期提示，最终 17 项桌面购买测试通过。
+- 浏览器官网故障测试使用本地 SQLite 发码失败注入与测试 RSA2 查单响应，页面显示已收款待处理并移除付款链接；桌面组件使用模拟 IPC 记录验证同状态文案和禁用付款按钮，主进程另以真实本地 HTTP 边界验证。均不连接真实支付渠道。
+- 本轮只完成收款事实保留和显式补交付，不包含渠道退款、自动开票或后台定时重试。没有 Windows 原生安装包、真实支付／退款／开票验收；正式价格、真实演示视频和商户网站补件仍待完成。源提交已在本地保存，未 push 或触发 GitHub CI。
