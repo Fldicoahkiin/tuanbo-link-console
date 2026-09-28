@@ -72,7 +72,7 @@ Windows 上执行 `pnpm verify:release`，再执行 `pnpm verify:installer` 和�
 
 服务器部署构建产物，不需要在公网站点目录放完整 Git checkout。不要在 `/srv/tblink-updates` 中保存 `.git`、源码包或仓库令牌。现有源站按白名单提供正式更新文件。
 
-最近已验收的生产部署为 `8b428e24caee7d3495405f7824f2d208af441d11`，systemd 运行 `/opt/tblink-licensing/dist/index.js`。部署已记录 `/opt/tblink-licensing/RELEASE`、bundle SHA-256、受限备份与部署回执，并执行 SQLite 副本恢复及数据一致性核对，详情见部署文档。付款链接及主动查单代码已经部署，但商户身份和密钥未配置，收款开关关闭。仍没有自动部署 workflow 或自动跟随主分支。
+最近已验收的生产部署为 `e032891a10d1f41124e850a83a238e5ea40def45`，systemd 运行 `/opt/tblink-licensing/dist/index.js`。部署已记录 `/opt/tblink-licensing/RELEASE`、bundle SHA-256、受限备份与部署回执，并执行 SQLite 副本恢复及数据一致性核对，详情见部署文档。付款链接、主动查单、商品目录及自助下单已经部署，代理来源按客户分别限流；商户身份和密钥未配置，目录与收款开关关闭。仍没有自动部署 workflow 或自动跟随主分支。
 
 后续接入自动部署应明确以下流程：
 
@@ -119,7 +119,7 @@ flowchart TB
 | 正式发行 | NSIS、摘要与 manifest 脚本 | Authenticode 签名、发布者校验、当前 unsigned-only 门槛改造 |
 | 公司更新出口 | CF DNS、TLS、静态目录、续期验收 | 首个可信安装包、产物自动同步、两版本实机更新 |
 | 付费与激活 | 人工核款发码、绑定机器、签名凭证、每次启动联网校验；数据库备份副本恢复已验收 | 异地密钥备份与整机恢复、正式 Windows 激活验收 |
-| 自动销售 | 支付通知/领取、运营付款链接、主动查单补交付 API 已部署；公司支付宝及电脑网站支付已开通；商品计价、自助下单、桌面购买/恢复/领码仅本地实现 | 开放平台应用和密钥、正式定价；自助下单部署、Windows 桌面验收、发票 API、退款对账及真实支付验收 |
+| 自动销售 | 支付通知/领取、运营付款链接、主动查单补交付 API 已部署；公司支付宝及电脑网站支付已开通；商品计价与自助下单已部署但销售关闭；桌面购买/恢复/领码尚未发布 | 开放平台应用和密钥、正式定价；Windows 桌面验收、发票 API、退款对账及真实支付验收 |
 | 现场运行 | 本机编排、OBS/MIDI/MA2 适配 | 现场设备与长时间运行验收不能被构建成功替代 |
 
 本轮验证：先复现旧更新源检查拒绝当前 generic 配置，再通过五项脚本回归、版本检查、定向 ESLint 与 JavaScript 语法检查。当前主机为 macOS，没有执行 Windows `verify:release`、安装、签名或实机更新。更没有将草稿、单测或 TLS 通过写成全链路商业可交付。
