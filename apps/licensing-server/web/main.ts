@@ -102,6 +102,7 @@ async function readDelivery(reconcile = false): Promise<void> {
     deliveryState.textContent = '服务端尚未确认到账。如已付款，请稍后点击查询；不要重复付款。'; return;
   }
   pay.hidden = true; submit.hidden = true;
+  orderState.textContent = '订单已交付，无需再次付款。';
   deliveryState.textContent = `付款已核实。使用期限至 ${delivery.useUntil ? new Date(delivery.useUntil).toLocaleString('zh-CN') : '永久'}；更新权益至 ${new Date(delivery.updatesUntil).toLocaleString('zh-CN')}。请保存以下激活码并在软件中激活。`;
   codes.replaceChildren(...delivery.licenses.map((license, index) => {
     const li = document.createElement('li'); const label = document.createElement('div'); label.textContent = `第 ${index + 1} 台电脑`;
