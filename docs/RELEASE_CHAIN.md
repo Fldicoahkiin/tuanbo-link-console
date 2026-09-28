@@ -114,12 +114,12 @@ flowchart TB
 
 | 链路 | 已有 | 剩余 |
 | --- | --- | --- |
-| 源码管理 | GitHub origin、本地提交、锁文件 | 团播远端最新状态和保护规则未重新核实，未 push |
+| 源码管理 | GitHub origin、本地提交、锁文件；2026-09-29 已核对身份、远端 master 和仓库权限 | 本轮未 push；分支保护规则尚未核对 |
 | 候选构建 | Windows 标签工作流、手动指定提交的候选构建、版本一致性检查、草稿 Release | 本轮未运行远端 CI；无完整 Windows 构建验收 |
 | 正式发行 | NSIS、摘要与 manifest 脚本 | Authenticode 签名、发布者校验、当前 unsigned-only 门槛改造 |
 | 公司更新出口 | CF DNS、TLS、静态目录、续期验收 | 首个可信安装包、产物自动同步、两版本实机更新 |
 | 付费与激活 | 人工核款发码、绑定机器、签名凭证、每次启动联网校验；数据库备份副本恢复已验收 | 异地密钥备份与整机恢复、正式 Windows 激活验收 |
-| 自动销售 | 支付通知/领取、运营付款链接、主动查单补交付 API 已部署；公司支付宝及电脑网站支付已开通；商品计价与自助下单已部署但销售关闭；桌面购买/恢复/领码尚未发布 | 正式定价、经营材料补件；Windows 桌面验收、发票 API、退款对账及真实支付验收 |
+| 自动销售 | 支付通知/领取、运营付款链接、主动查单补交付 API 已部署；公司支付宝及电脑网站支付已开通；商品计价与自助下单已部署但销售关闭；桌面购买/恢复/领码尚未发布 | 正式商品目录、经营材料补件；Windows 桌面验收、发票 API、退款对账及真实支付验收 |
 | 现场运行 | 本机编排、OBS/MIDI/MA2 适配 | 现场设备与长时间运行验收不能被构建成功替代 |
 
 本轮验证：先复现旧更新源检查拒绝当前 generic 配置，再通过五项脚本回归、版本检查、定向 ESLint 与 JavaScript 语法检查。当前主机为 macOS，没有执行 Windows `verify:release`、安装、签名或实机更新。更没有将草稿、单测或 TLS 通过写成全链路商业可交付。
@@ -135,7 +135,9 @@ flowchart TB
 
 手动候选构建不会创建 Release、改变产品版本、部署腾讯云或写正式更新 feed。现有 manifest 仍要求未签名候选，下载到候选包不等于商业可发布；正式签名设施、Windows 安装及两版本更新验收仍需完成。
 
-启用前先恢复 GitHub CLI 身份，核对 `gh api user --jq .login` 为 `Fldicoahkiin`，读取远端实际默认分支、权限与新提交，获准后推送已审查变更。GitHub 要求支持 workflow_dispatch 的工作流存在于默认分支；未推送的本地 YAML 不能远程运行。实际调用模板：
+2026-09-29 已在本机执行环境核对 `gh api user --jq .login` 为 `Fldicoahkiin`；仓库为私有，默认分支为 `master`，当前账号有 pull/push 权限、无 admin 权限。实际 fetch 后远端 `master` 为 `fb9b59e`，相对当时本地 `14eaac7` 无远端独有提交、本地领先 46 个提交。本次没有 push 或触发工作流。受限执行环境曾返回 401，而同机环境读取成功，不能据前者要求用户反复重新登录。后续 GitHub 写入前仍重新核对身份及分支状态。
+
+获得推送授权后再同步已审查变更。GitHub 要求支持 workflow_dispatch 的工作流存在于默认分支；未推送的本地 YAML 不能远程运行。实际调用模板：
 
 ```sh
 gh workflow run release-windows.yml --repo JinHe9527/tuanbo-link-console --ref <已核对分支> -f expected_sha=<完整提交SHA>

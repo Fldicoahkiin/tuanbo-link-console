@@ -87,7 +87,7 @@
 
 ## 无账号商品计价与订单恢复（服务已部署，销售关闭）
 
-只有同时启用支付宝收款配置并提供 `LICENSE_CATALOG_FILE` 才提供新订单。没有目录时 `GET /v1/catalog` 返回 `{available:false,currency:"CNY",termStart:"fulfillment",offers:[]}`，新下单返回 503；不会回退到测试价格。公司正式团播价格、授权天数及升级天数尚未确认，仓库仅测试夹具有虚拟商品，未生成生产目录。桌面购买入口、订单凭据保存及恢复 UI 已实现并本地验证；自助接口已部署并验证关闭状态，Windows 安装与实商户验收未完成，当前不能对客户开放销售。
+只有同时启用支付宝收款配置并提供 `LICENSE_CATALOG_FILE` 才提供新订单。没有目录时 `GET /v1/catalog` 返回 `{available:false,currency:"CNY",termStart:"fulfillment",offers:[]}`，新下单返回 503；不会回退到测试价格。2026-09-29 月付更新为 800 元／30 天／台，年付为 8,000 元／365 天／台；更新权益、销售有效期及商户额度尚待核实，未生成可售生产目录。仓库测试夹具中的其他金额只用于测试，不是当前报价。桌面购买入口、订单凭据保存及恢复 UI 已实现并本地验证；自助接口已部署并验证关闭状态，Windows 安装与实商户验收未完成，当前不能对客户开放销售。
 
 目录是严格 JSON：`version:1,maxOrderAmountFen,offers`。每个商品包含 `id,revision,name,unitAmountFen,kind,useDays,updatesDays,maxQuantity,saleUntil`。金额为人民币整数分；天数为 24 小时，不是自然月。买断 `useDays:null`，订阅为明确正整数天数；升级期限也必须明确。商品 ID 唯一，最多 20 项；单笔金额上限与商品数量共同限制台数。价格或条款变化必须更新 `revision`，不能在原版本号下更改授权条款。
 
@@ -185,7 +185,7 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 - 已交付订单拒绝再次生成链接。已生成链接的订单不能改为人工核款；通知必须与该订单记录的应用和商户一致。付款窗口结束不直接把订单当作未支付关闭，后续已验签的成功通知仍按原金额和授权规则处理。
 - 测试覆盖独立 RSA 验签、参数篡改、固定网关、重复/过期/重启、商户切换、管理员权限，以及生成链接 → 新格式订单号通知 → 原订单发码。全部使用隔离数据库和临时密钥，无真实渠道请求。
 
-本步骤供运营已确认订单使用，客户自助商品计价与桌面领取见上节本地实现。正式团播价格尚未确认；公开下单部署、桌面正式发布、退款对账和发票仍待完成。生产已升级至 `8b428e2`，内部接口验证返回 503 `PAYMENTS_UNAVAILABLE`；商户产品已开通不等于服务端应用和密钥已配置，真实交易验收前不能开放销售。
+本步骤供运营已确认订单使用，客户自助商品计价与桌面领取见上节。历史 `8b428e2` 部署时，正式价格与公开下单尚未落实，内部接口返回 503 `PAYMENTS_UNAVAILABLE`；这不是当前完整部署状态。最新源版本见 [部署记录](COMMERCIAL_DEPLOYMENT.md)，2026-09-29 定价见 [首发销售方案](COMMERCIAL_ONBOARDING.md#首发销售方案价格已更新未开售)。当前生产新售继续关闭，真实交易及 Windows 发布验收仍未完成。
 
 实现依据：[支付宝官方请求签名实现](https://github.com/alipay/alipay-sdk-nodejs-all/blob/master/src/util.ts)、[官方电脑网站支付参数模型](https://github.com/alipay/alipay-sdk-java-all/blob/master/v2/src/main/java/com/alipay/api/domain/AlipayTradePagePayModel.java)。
 

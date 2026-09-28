@@ -173,7 +173,7 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 - 在既有 `service.env` 追加应用、收款方、官方验签公钥和私钥路径，保留其他字段及注释。支付宝公钥文件 `/etc/tblink-licensing/alipay-public.pem` 归服务用户所有、权限 0600。配置文件 SHA-256 为 `7fe2f3df138e69beb0cdbf9b39b99155c705807ceffedf95e9181e8b61321ee6`；本次未改服务 bundle、Nginx 或 Cloudflare。
 - 重启团播服务后健康正常，数据库逻辑摘要未变化；团播、金河分镜、无忧排班与 Nginx 均 active。销售仍为 `ALIPAY_CHECKOUT_ENABLED=false`，未配置 `LICENSE_CATALOG_FILE`，目录不展示商品。
 - 公网实测：团播健康 200；目录 200 且 `available:false,offers:[]`；后台路径 404；空通知 400 `INVALID_REQUEST`，完整形状的伪造签名通知 401 `INVALID_PAYMENT_SIGNATURE`；分镜健康 200。未创建真实订单或请求付款。
-- 月付／年付价格仍为讨论稿，详见 [销售草案](COMMERCIAL_ONBOARDING.md#首发销售草案未开售)。网站经营内容补件、真实支付、发码及机器激活、退款、发票和 Windows 更新验收均未完成。
+- 本次部署时月付／年付价格仍为讨论稿；2026-09-29 后续定价见 [首发销售方案](COMMERCIAL_ONBOARDING.md#首发销售方案价格已更新未开售)。网站经营内容补件、真实支付、发码及机器激活、退款、发票和 Windows 更新验收均未完成。
 
 ## 2026-09-28 原机器订阅续费部署
 
