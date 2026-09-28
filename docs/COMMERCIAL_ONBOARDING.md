@@ -66,6 +66,14 @@
 
 商品改价使用新的 `revision`：服务端校验客户端报价，新订单采用新价；已建订单保存商品快照，重试同单不能改变原金额、机器数量或期限。现有 `quantity` 表示独立机器授权数量，并非企业套餐数量。准备目录时月付 `unitAmountFen=80000,useDays=30`，年付 `unitAmountFen=800000,useDays=365`；更新天数、销售截止时间及商户单笔额度仍需核实，不用任意远期日期或虚构额度生成可售目录。暂不配置 `LICENSE_CATALOG_FILE`，保留 `ALIPAY_CHECKOUT_ENABLED=false`。
 
+### 2026-09-29 开售授权与发行准备
+
+用户随后明确要求“创建正式发行、开放收款，后续会真实找人测试”。按此授权先准备 `0.4.28` 与正式目录，实际启用以部署记录为准，不再以缺少真实付款／实机验收为由拒绝执行已经授权的上线。真实交易、退款、开票及 Windows 实机测试仍如实标记未完成。
+
+正式目录为 [catalog.json](../apps/licensing-server/deploy/catalog.json)：月付 800 元／30 天，年付 8,000 元／365 天；使用与更新天数一致，每单最多一份单机授权，单笔本地上限 8,000 元。这个上限是本系统的下单限制，不是已验证的支付宝商户额度。多台可分单采购，暂不引入折扣。目录版本 `2026-09-29-1`，本轮价格销售窗口至北京时间 2027-09-29 00:00；到时须更新目录才能继续新售，已购授权仍按各自交付日期和购买天数执行，不能用销售窗口截短。窗口内也可按新 revision 调价。
+
+开启销售只改变该公司的支付宝下单与商品目录配置；不自动签约、不代付款、不自动退款，不开通尚未实现的微信或自动开票。售后继续使用 info@jinhefilm.com；页面保留人工退款／开票联系说明。正式收款后首笔测试应核对平台流水、订单、发码与机器激活，不把配置可读或付款链接生成当作到账。
+
 ## 3. 微信 Native 支付
 
 入口：[微信支付商户平台](https://pay.weixin.qq.com/)；依据：[PC 网站接入指引](https://pay.wechatpay.cn/static/applyment_guide/applyment_detail_website.shtml)、[扫码支付接入流程](https://pay.wechatpay.cn/guide/qrcode_payment.shtml)、[Native 开发准备](https://pay.wechatpay.cn/doc/v3/merchant/4015614538)。

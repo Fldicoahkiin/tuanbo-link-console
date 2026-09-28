@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "maxOrderAmountFen": 800000,
+  "offers": [
+    {
+      "id": "single-device-monthly",
+      "revision": "2026-09-29-1",
+      "name": "月付 · 30 天 · 1 台电脑",
+      "unitAmountFen": 80000,
+      "kind": "subscription",
+      "useDays": 30,
+      "updatesDays": 30,
+      "maxQuantity": 1,
+      "saleUntil": "2027-09-28T16:00:00.000Z"
+    },
+    {
+      "id": "single-device-annual",
+      "revision": "2026-09-29-1",
+      "name": "年付 · 365 天 · 1 台电脑",
+      "unitAmountFen": 800000,
+      "kind": "subscription",
+      "useDays": 365,
+      "updatesDays": 365,
+      "maxQuantity": 1,
+      "saleUntil": "2027-09-28T16:00:00.000Z"
+    }
+  ]
+}
