@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer"><meta name="color-scheme" content="dark">
+  <meta name="description" content="团播联动台：Windows 节目单、时间线与 OBS 联动软件。查看授权规则、购买套餐及领取机器激活码。">
+  <title>团播联动台 · 购买与授权</title><link rel="stylesheet" href="/purchase.css">
+  <script type="module" src="/purchase.js"></script>
+</head>
+<body>
+<header><a class="brand" href="/">团播联动台</a><nav aria-label="页面导航"><a href="#purchase">购买授权</a><a href="#receipt">恢复订单</a><a href="#rules">购买须知</a></nav></header>
+<main>
+  <section class="intro" aria-labelledby="intro-title">
+    <p class="platform">Windows 桌面软件</p><h1 id="intro-title">把节目、时间线<br>和 OBS 接在一起。</h1>
+    <p class="lead">为团播工作室和现场操作人员编排节目、标记 Cue、联动 OBS 场景。节目与媒体在你的电脑上运行。</p>
+    <dl class="features"><div><dt>节目编排</dt><dd>管理节目单、参考波形和时间线，按节目安排动作。</dd></div><div><dt>设备联动</dt><dd>通过 OBS WebSocket、MIDI 和时间码连接现有工作流。</dd></div><div><dt>机器授权</dt><dd>无需注册账户。付款后领取激活码，在软件内绑定电脑。</dd></div></dl>
+    <p class="boundary">本软件不代替 OBS 或直播平台，不控制开播、关播及录像。</p>
+  </section>
+  <section class="purchase" id="purchase" aria-labelledby="purchase-title">
+    <h2 id="purchase-title">购买授权</h2><p>全部功能需要付费授权。续费请在已激活电脑的软件内办理。</p>
+    <p id="catalog-status" role="status">正在读取可售套餐…</p><button id="reload" type="button" class="secondary">重新读取套餐</button>
+    <form id="purchase-form" hidden>
+      <label for="offer">授权套餐</label><select id="offer" required></select><p id="offer-detail" class="hint"></p>
+      <div class="fields"><div><label for="customer-type">购买主体</label><select id="customer-type"><option value="personal">个人</option><option value="company">公司</option></select></div><div><label for="quantity">电脑数量</label><input id="quantity" type="number" min="1" value="1" required inputmode="numeric"></div></div>
+      <label for="customer">购买人或公司名称</label><input id="customer" maxlength="160" required autocomplete="organization"><p class="hint">用于记录授权归属，不会创建登录账户。</p>
+      <div class="total"><span>本次合计</span><strong id="total">—</strong></div>
+      <label class="check"><input id="consent" type="checkbox" required><span>我已阅读<a href="#rules">购买须知</a>，了解单机绑定、期限起算和联网验证要求。</span></label>
+      <button type="submit">确认套餐，准备订单</button>
+    </form>
+    <section id="order" hidden aria-labelledby="order-title"><h3 id="order-title">当前订单</h3><p id="order-summary"></p><p id="order-state" role="status"></p>
+      <p class="hint">订单凭据相当于领取密码。付款前下载保存，不要转发；关闭标签页或清除浏览器数据后，可导入文件恢复。领取权限自订单创建起七天有效，请及时领取激活码。</p>
+      <div class="actions"><button id="export" type="button" class="secondary">下载订单凭据</button><button id="submit-order" type="button" disabled>凭据已保存，创建或恢复原单</button></div>
+      <button id="discard" type="button" class="secondary" hidden>返回修改，重新选择套餐</button>
+      <a id="pay" class="button" hidden target="_blank" rel="noopener noreferrer">打开支付宝付款</a>
+      <button id="query" type="button" class="secondary" hidden>查询付款并领取激活码</button>
+      <p id="delivery-state" role="status"></p><ul id="codes"></ul>
+      <button id="finish" type="button" class="secondary" hidden>已保存激活码，结束本次订单</button>
+    </section>
+    <p id="error" role="alert" hidden></p>
+    <section id="receipt" class="recovery"><h3>已有订单凭据？</h3><p>导入下载的 JSON 文件，恢复同一笔订单。支付状态不确定时请先查询，不要重复购买。</p><label for="import">选择订单凭据文件</label><input id="import" type="file" accept=".json,application/json"></section>
+    <noscript>购买和订单查询需要启用 JavaScript。你也可以在团播联动台软件内购买。</noscript>
+  </section>
+  <section id="rules" class="rules" aria-labelledby="rules-title"><h2 id="rules-title">购买须知</h2><div class="rule-grid">
+    <div><h3>授权与设备</h3><p>一份激活码绑定一台电脑，购买数量对应电脑数量。每次启动需要联网验证；验证失败时不能进入工作区。需要更换电脑时请联系支持处理，不能直接在另一台电脑重复激活。</p></div>
+    <div><h3>期限与交付</h3><p>套餐明确列出使用和更新天数。首次付款经服务端核实并发码时起算，不从首次安装起算。领取激活码后在软件内激活；续费由你主动购买，没有自动扣款。</p></div>
+    <div><h3>订单、售后与发票</h3><p>支付成功以服务端确认结果为准。长时间未交付、需要退款或开票时，请提供订单号联系支持；不要发送订单凭据或完整激活码。自动开票尚未开放。</p><a href="mailto:info@jinhefilm.com">info@jinhefilm.com</a></div>
+    <div><h3>数据与隐私</h3><p>下单记录购买人或公司名称、套餐、金额和订单状态。浏览器仅在当前标签会话内保存订单领取凭据，导出的凭据文件由你保管。机器标识在软件激活时提交，用于绑定授权。</p></div>
+  </div></section>
+</main>
+<footer><span>成都相变风景科技有限公司</span><span>团播联动台</span></footer>
+</body></html>
