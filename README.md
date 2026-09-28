@@ -4,7 +4,7 @@
 
 **当前发行：0.4.29 · Windows x64**
 
-本仓库包含桌面端源码、设备桥接工具、自动化测试和实施文档。0.4.29 已开放下载与支付宝购买；Windows 实际安装、真实付款激活、更新与现场设备验收仍待完成。
+本仓库包含桌面端源码、设备桥接工具、自动化测试和实施文档。0.4.29 已开放下载与支付宝购买；Windows CI 已验证正式安装版的未激活拦截、覆盖安装、正常关闭和卸载，以及真实更新器的公网完整下载和损坏包拒绝。真实付款激活、两版本重启更新与现场设备验收仍待完成，见[授权与更新验收](docs/LICENSE_UPDATE_ACCEPTANCE.md)。
 
 [产品官网与购买](https://tuanbo-link.jinhefilm.com/) · [下载 Windows 0.4.29](https://updates.tuanbo-link.jinhefilm.com/windows/x64/Tuanbo-Link-Console-0.4.29-x64.exe) · [发行记录](docs/RELEASE_0.4.29.md)
 
@@ -166,7 +166,7 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 - P1 工程生成后需要手动打开，没有已确认的工程热重载接口。
 - 每次启动需要联网验证激活码和机器绑定，通过后进入工作区；失败可手动重试，运行中的演出不因断网强停。当前主机标识不能防止克隆 Windows，旧客户端和已运行会话不具备即时撤销能力。
 - 当前构建配置未启用 Windows 代码签名。
-- 自动更新配置已改为 `https://updates.tuanbo-link.jinhefilm.com/windows/x64/`，无需 GitHub Token；公网 DNS 与 HTTPS 出口已通过探测；正式安装包、生产签名及 Windows 更新实机验收尚未完成。旧安装版需迁移。
+- 自动更新配置已改为 `https://updates.tuanbo-link.jinhefilm.com/windows/x64/`，无需 GitHub Token；0.4.29 正式安装包已发布，Windows 安装生命周期通过 CI。生产签名与两版本重启更新仍未验收；当前专项结果见[授权与更新验收](docs/LICENSE_UPDATE_ACCEPTANCE.md)。旧安装版需迁移。
 
 本仓库提交不会自动更新已安装的客户端。正式交付应完成现场验收、版本发布和安装流程验证。
 
