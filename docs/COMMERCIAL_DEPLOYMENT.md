@@ -174,3 +174,13 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 - 重启团播服务后健康正常，数据库逻辑摘要未变化；团播、金河分镜、无忧排班与 Nginx 均 active。销售仍为 `ALIPAY_CHECKOUT_ENABLED=false`，未配置 `LICENSE_CATALOG_FILE`，目录不展示商品。
 - 公网实测：团播健康 200；目录 200 且 `available:false,offers:[]`；后台路径 404；空通知 400 `INVALID_REQUEST`，完整形状的伪造签名通知 401 `INVALID_PAYMENT_SIGNATURE`；分镜健康 200。未创建真实订单或请求付款。
 - 月付／年付价格仍为讨论稿，详见 [销售草案](COMMERCIAL_ONBOARDING.md#首发销售草案未开售)。网站经营内容补件、真实支付、发码及机器激活、退款、发票和 Windows 更新验收均未完成。
+
+## 2026-09-28 原机器订阅续费部署
+
+- 源码提交 `4c064d58663fc89cf5c50bab4d42f0fbf78c77ac`，服务 bundle SHA-256 `bb13e5886255ce42a7213fb0897068c0a4fe9c41a2c84feeaa3c9f202d6b7413`；独立 SSH 检查确认线上 `RELEASE` 与 bundle 均匹配。
+- 新增 `license_renewals` 表及授权索引，原订单和激活码不迁移、不重写。备份路径 `/var/lib/tblink-licensing/backups/20260928T095908Z`，独立恢复校验和既有表逻辑摘要核对通过。部署脚本要求续费表存在，否则恢复旧代码、环境及代理。
+- Nginx 与支付宝环境配置哈希保持上节值，未修改 Cloudflare。部署时临时维护 API，完成后恢复既有代理；团播、分镜、无忧排班及 Nginx 均 active，`nginx -t` 通过。授权服务仍只监听 `127.0.0.1:8787`。
+- 公网健康 200；目录返回 `available:false,offers:[]`；合法形状的虚构续费购买返回 503 `PAYMENTS_UNAVAILABLE`；后台路径 404；空支付宝通知 400；分镜健康 200。检查后服务器购买与续费行数均为 0，既有表数据未变化，未创建真实交易或授权。
+- 本地授权服务与桌面购买／授权／安全存储回归共 97 项通过；部署及回滚 Python 回归 11 项通过。严格 TypeScript、变更文件 ESLint、服务端 bundle 与 Electron Vite main/preload/renderer 构建通过。回归曾发现未续费授权的日期格式被重写，已修复并重新验证。
+- 本地 Chrome 使用模拟 IPC 数据走通到期订阅、单机续费、查询交付和联网验证更新期限，检查客户名称及机器数量不可改、仅显示订阅商品、已交付续费不显示新码。界面测试不连接支付宝；实际服务端适配器另以本地 HTTP 与测试签名通知验证，不替代真实支付。
+- 桌面续费入口尚未发布 Windows 安装包，也未完成 Windows safeStorage、真实商户续费、退款或开票验收。完整 Windows 原生构建／安装验收仍须在 Windows PowerShell 执行；本轮 macOS Electron Vite 构建不能代替它。正式价格、每份套餐机器数与网站提额材料仍待确定。
