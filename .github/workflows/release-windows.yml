@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       expected_sha:
-        description: '完整 Git SHA；仅构建 Windows 候选包，不创建 Release 或更新线上 feed'
+        description: '要检出的完整 Git SHA；必须与产物清单一致'
         required: true
         type: string
+      archive_to_draft:
+        description: '直接归档到版本标签的草稿 Release，不占用 Actions artifact 配额；不发布正式版'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -22,6 +27,8 @@ jobs:
   release-windows:
     runs-on: windows-latest
     timeout-minutes: 45
+    permissions:
+      contents: write
     outputs:
       candidate-name: windows-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -29,6 +36,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          ref: ${{ inputs.expected_sha || github.sha }}
+          fetch-tags: true
 
       - name: Verify requested candidate commit
         if: github.event_name == 'workflow_dispatch'
@@ -38,7 +47,7 @@ jobs:
         run: |
           if ($env:EXPECTED_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Expected a full lowercase Git SHA' }
           $actual = (git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_SHA -or $actual -cne $env:GITHUB_SHA) {
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_SHA) {
             throw 'Checkout differs from the requested candidate commit'
           }
 
@@ -69,9 +78,10 @@ jobs:
         run: pnpm verify:release
 
       - name: Archive verified Windows candidate
+        if: ${{ !inputs.archive_to_draft }}
         uses: actions/upload-artifact@v7
         with:
-          name: windows-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-candidate-${{ inputs.expected_sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -80,6 +90,24 @@ jobs:
             apps/desktop/dist/Tuanbo-Link-Console-*.exe.blockmap
             apps/desktop/dist/latest.yml
             apps/desktop/dist/release-manifest.json
+
+      - name: Archive candidate directly to draft release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.archive_to_draft }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $manifest = Get-Content apps/desktop/dist/release-manifest.json -Raw | ConvertFrom-Json
+          $tag = "v$($manifest.version)"
+          git fetch --no-tags origin "refs/tags/${tag}:refs/tags/${tag}"
+          if ($LASTEXITCODE -ne 0) { throw 'Release tag is missing' }
+          $tagSha = (git rev-parse "${tag}^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0 -or $tagSha -cne $manifest.gitSha) { throw 'Release tag differs from manifest' }
+          $installer = "apps/desktop/dist/Tuanbo-Link-Console-$($manifest.version)-x64.exe"
+          $notes = "Verified Windows candidate. Source: $($manifest.gitSha). Build: https://github.com/$env:GH_REPO/actions/runs/$env:GITHUB_RUN_ID. Not a published release."
+          gh release create $tag --verify-tag --draft --title "团播联动台 $($manifest.version)" --notes $notes $installer "${installer}.blockmap" apps/desktop/dist/latest.yml apps/desktop/dist/release-manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release archive failed; inspect existing assets before retrying' }
 
   draft-release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
