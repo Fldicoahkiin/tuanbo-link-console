@@ -1,6 +1,6 @@
 # 源码、版本、部署与本地运行链路
 
-核查日期：2026-09-28。本轮基于工作区代码、Git 配置及服务器部署验收记录，不代表已发布新的 Windows 安装包。最初链路核查时 GitHub CLI 返回 HTTP 401；这只是当时的认证结果。本节未重新取得团播远端最新分支、Actions 或 Release 状态，`origin/master` 不能当作实时远端状态。
+核查日期：2026-09-28。本轮基于工作区代码、Git 配置及服务器部署验收记录，不代表已发布新的 Windows 安装包。最近一次 GitHub CLI 身份核查仍返回 HTTP 401，未取得远端最新分支、Actions 或 Release 状态；`origin/master` 只是本地跟踪引用，不能当作实时远端状态。
 
 ## 1. 运行位置与职责
 
@@ -72,7 +72,7 @@ Windows 上执行 `pnpm verify:release`，再执行 `pnpm verify:installer` 和�
 
 服务器部署构建产物，不需要在公网站点目录放完整 Git checkout。不要在 `/srv/tblink-updates` 中保存 `.git`、源码包或仓库令牌。现有源站按白名单提供正式更新文件。
 
-最近已验收的生产部署为 `e032891a10d1f41124e850a83a238e5ea40def45`，systemd 运行 `/opt/tblink-licensing/dist/index.js`。部署已记录 `/opt/tblink-licensing/RELEASE`、bundle SHA-256、受限备份与部署回执，并执行 SQLite 副本恢复及数据一致性核对，详情见部署文档。付款链接、主动查单、商品目录及自助下单已经部署，代理来源按客户分别限流；商户身份和密钥未配置，目录与收款开关关闭。仍没有自动部署 workflow 或自动跟随主分支。
+最近已验收的授权服务与官网生产部署为 `c17fd6124f6219b8d0cef7e9eba4ec33ca6b4bf4`，systemd 运行 `/opt/tblink-licensing/dist/index.js`。部署已记录 `/opt/tblink-licensing/RELEASE`、bundle SHA-256、受限备份与部署回执，并执行 SQLite 副本恢复及数据一致性核对，详情见部署文档。付款链接、主动查单、商品目录、自助下单、原机器续费和独立收款记录／补交付已经部署，代理来源按客户分别限流；商户身份和验签配置已完成，目录与收款开关仍关闭。仍没有自动部署 workflow 或自动跟随主分支。
 
 后续接入自动部署应明确以下流程：
 
@@ -115,13 +115,32 @@ flowchart TB
 | 链路 | 已有 | 剩余 |
 | --- | --- | --- |
 | 源码管理 | GitHub origin、本地提交、锁文件 | 团播远端最新状态和保护规则未重新核实，未 push |
-| 候选构建 | Windows 标签工作流、版本一致性检查、草稿 Release | 本轮未运行远端 CI；无完整 Windows 构建验收 |
+| 候选构建 | Windows 标签工作流、手动指定提交的候选构建、版本一致性检查、草稿 Release | 本轮未运行远端 CI；无完整 Windows 构建验收 |
 | 正式发行 | NSIS、摘要与 manifest 脚本 | Authenticode 签名、发布者校验、当前 unsigned-only 门槛改造 |
 | 公司更新出口 | CF DNS、TLS、静态目录、续期验收 | 首个可信安装包、产物自动同步、两版本实机更新 |
 | 付费与激活 | 人工核款发码、绑定机器、签名凭证、每次启动联网校验；数据库备份副本恢复已验收 | 异地密钥备份与整机恢复、正式 Windows 激活验收 |
-| 自动销售 | 支付通知/领取、运营付款链接、主动查单补交付 API 已部署；公司支付宝及电脑网站支付已开通；商品计价与自助下单已部署但销售关闭；桌面购买/恢复/领码尚未发布 | 开放平台应用和密钥、正式定价；Windows 桌面验收、发票 API、退款对账及真实支付验收 |
+| 自动销售 | 支付通知/领取、运营付款链接、主动查单补交付 API 已部署；公司支付宝及电脑网站支付已开通；商品计价与自助下单已部署但销售关闭；桌面购买/恢复/领码尚未发布 | 正式定价、经营材料补件；Windows 桌面验收、发票 API、退款对账及真实支付验收 |
 | 现场运行 | 本机编排、OBS/MIDI/MA2 适配 | 现场设备与长时间运行验收不能被构建成功替代 |
 
 本轮验证：先复现旧更新源检查拒绝当前 generic 配置，再通过五项脚本回归、版本检查、定向 ESLint 与 JavaScript 语法检查。当前主机为 macOS，没有执行 Windows `verify:release`、安装、签名或实机更新。更没有将草稿、单测或 TLS 通过写成全链路商业可交付。
 
 本次启动校验变更验证：授权与服务端专项 20 项、浏览器真实组件配测试桥 5 项通过；类型检查、Lint 和 Electron main/preload/renderer 构建通过。浏览器断网/撤销为模拟边界数据，不替代正式 Windows 安装和生产授权服务联调。
+
+
+## 7. 手动 Windows 候选构建（本地配置完成，远端尚未运行）
+
+同一 `release-windows.yml` 现支持 `workflow_dispatch`。运行者必须填写完整小写 40 位 `expected_sha`，checkout 后同时与实际 HEAD 和 GitHub 事件 SHA 核对；分支在操作期间前进会使任务停止，不会悄悄构建另一提交。输入经环境变量传入 PowerShell，不插入命令源码。
+
+手动路径运行现有 `pnpm verify:release`，不要求新建产品版本标签。成功后把安装器、blockmap、latest.yml 和 release-manifest.json 保存为当前 run 的候选 artifact，名称包含提交、run ID 和 attempt，保留 14 天。普通构建作业仅有 contents:read，checkout 不持久化 GitHub 凭据。仅 v 标签 push 成功时才由独立 contents:write 作业下载同一次构建产物并创建草稿 Release，继续保持 draft=true、make_latest=false。
+
+手动候选构建不会创建 Release、改变产品版本、部署腾讯云或写正式更新 feed。现有 manifest 仍要求未签名候选，下载到候选包不等于商业可发布；正式签名设施、Windows 安装及两版本更新验收仍需完成。
+
+启用前先恢复 GitHub CLI 身份，核对 `gh api user --jq .login` 为 `Fldicoahkiin`，读取远端实际默认分支、权限与新提交，获准后推送已审查变更。GitHub 要求支持 workflow_dispatch 的工作流存在于默认分支；未推送的本地 YAML 不能远程运行。实际调用模板：
+
+```sh
+gh workflow run release-windows.yml --repo JinHe9527/tuanbo-link-console --ref <已核对分支> -f expected_sha=<完整提交SHA>
+```
+
+触发后记录真实 run ID，检查其 headSha、结论及对应 manifest，不能仅凭触发命令成功声称 Windows 通过。核对来源与产物后，才安排受控 Windows 安装／激活／更新验收。官方依据：[手动运行工作流](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)、[工作流产物及跨作业传递](https://docs.github.com/en/actions/tutorials/store-and-share-data)。
+
+本次本地验证：actionlint 1.7.12 工作流检查通过，YAML 解析及手动／标签发布边界核对通过，`pnpm test:release` 五项通过、`pnpm release:check` 确認根包与桌面包均为 0.4.27。没有运行远端工作流，没有生成新的 Windows 成品。

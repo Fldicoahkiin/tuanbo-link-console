@@ -42,7 +42,7 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 6. 将对应清单上传为临时文件，再以同目录原子 rename 最后替换 `latest.yml`。不要先上传清单，否则客户会读到尚不存在或尚未传完的包。清单路径和版本文件内容发布后不可分别随意修改。
 7. 由公网客户路径检查清单缓存头、文件大小、Range 和摘要，再用 Windows 客户端完成全链路；保存脱敏验收记录。失败时停止发布下一版，不能自动切到未知镜像。
 
-现有 `.github/workflows/release-windows.yml` 只在 `v*` 标签推送后构建并上传 GitHub 草稿 Release 资产，**不会同步腾讯云出口**。`build.publish` 改为 generic 不会让 `softprops/action-gh-release` 自动上传服务器。待签名、SSH 发布身份与服务器目录验收完成后，再增加受控 CI 发布阶段，按“产物先、清单后”自动同步；生产密钥通过 CI 秘密存储提供，不在 YAML 写口令。本轮未 push，因此没有触发该流水线。
+现有 `.github/workflows/release-windows.yml` 在 `v*` 标签推送后构建并上传 GitHub 草稿 Release 资产；新增手动入口要求指定完整提交，只保留候选 artifact，尚未推送运行。两条路径都**不会同步腾讯云出口**。`build.publish` 改为 generic 不会让 `softprops/action-gh-release` 自动上传服务器。待签名、SSH 发布身份与服务器目录验收完成后，再增加受控 CI 发布阶段，按“产物先、清单后”自动同步；生产密钥通过 CI 秘密存储提供，不在 YAML 写口令。本轮未 push，因此没有触发该流水线。
 
 官方参考：[electron-builder 自动更新](https://www.electron.build/v26/docs/features/auto-update/)、[发布配置](https://www.electron.build/v26/docs/publish/)、[Windows 代码签名](https://www.electron.build/docs/features/code-signing/code-signing-win/)。实现行为以本仓库锁定的 electron-updater 6.8.9 / electron-builder 26.15.3 为准，不把更新版文档中新增的清单签名能力当作当前依赖已有能力。
 
