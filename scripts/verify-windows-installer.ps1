@@ -19,7 +19,8 @@ function Invoke-Installer {
     [string]$Target
   )
 
-  $process = Start-Process -FilePath $Installer -ArgumentList '/S', "/D=$Target" -WindowStyle Hidden -Wait -PassThru
+  $process = Start-Process -FilePath $Installer -ArgumentList '/S', "/D=$Target" -WindowStyle Hidden -PassThru
+  if (-not $process.WaitForExit(120000)) { throw '安装超时，保留进程以便诊断。' }
   if ($process.ExitCode -ne 0) {
     throw "安装程序退出码：$($process.ExitCode)"
   }
@@ -146,8 +147,7 @@ if (-not (Test-Path -LiteralPath $uninstallerPath)) {
   throw "安装后缺少卸载程序：$uninstallerPath"
 }
 
-$mainWindowTitle = (& node apps/desktop/scripts/verify-installed-app.mjs $applicationPath | Out-String).Trim()
-if ($LASTEXITCODE -ne 0) { throw '安装版隔离启动与正常退出验证失败。' }
+$mainWindowTitle = (& ./scripts/verify-installed-app.ps1 -ExecutablePath $applicationPath | Out-String).Trim()
 
 $deadline = (Get-Date).AddSeconds(15)
 do {
@@ -159,7 +159,8 @@ if ($remainingProcesses.Count -gt 0) {
   throw '安装版正常关闭超时；按产品规则保留进程，不强制结束。'
 }
 
-$uninstall = Start-Process -FilePath $uninstallerPath -ArgumentList '/S', '/currentuser' -WindowStyle Hidden -Wait -PassThru
+$uninstall = Start-Process -FilePath $uninstallerPath -ArgumentList '/S', '/currentuser' -WindowStyle Hidden -PassThru
+if (-not $uninstall.WaitForExit(120000)) { throw '卸载超时，保留进程以便诊断。' }
 if ($uninstall.ExitCode -ne 0) {
   throw "卸载程序退出码：$($uninstall.ExitCode)"
 }

@@ -1,0 +1,78 @@
+name: Verify Commercial Windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-commercial-windows
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 25.8.2
+          cache: pnpm
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck and lint acceptance tests
+        run: |
+          pnpm --filter @tb/desktop exec tsc -p tsconfig.e2e.json --noEmit
+          pnpm exec eslint apps/desktop/test-e2e/license-settings.spec.ts apps/desktop/scripts/verify-update-feed.mjs
+      - name: Build source for real IPC acceptance
+        run: pnpm build
+      - name: Missing and tampered credentials block real Windows IPC
+        run: pnpm --filter @tb/desktop exec playwright test test-e2e/license-settings.spec.ts --workers=1 --reporter=line
+      - name: Download immutable published release and verify manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $version = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
+          $release = gh release view "v$version" --json isDraft,isPrerelease,targetCommitish | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.isDraft -or $release.isPrerelease) { throw 'Expected a published stable release' }
+          $destination = Join-Path $env:RUNNER_TEMP 'published-release'
+          New-Item -ItemType Directory -Path $destination | Out-Null
+          gh release download "v$version" --dir $destination --pattern "Tuanbo-Link-Console-$version-x64.exe" --pattern release-manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Release download failed' }
+          $manifestPath = Join-Path $destination 'release-manifest.json'
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $tagSha = (gh api "repos/$env:GH_REPO/commits/v$version" --jq .sha).Trim()
+          if ($LASTEXITCODE -ne 0 -or $tagSha -cne $manifest.gitSha -or $manifest.version -ne $version -or $manifest.gitWorkingTreeDirty) { throw 'Manifest source mismatch' }
+          $installer = Join-Path $destination "Tuanbo-Link-Console-$version-x64.exe"
+          $artifact = @($manifest.artifacts | Where-Object { $_.path -eq "apps/desktop/dist/Tuanbo-Link-Console-$version-x64.exe" })
+          if ($artifact.Count -ne 1 -or (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant() -cne $artifact[0].sha256 -or (Get-Item $installer).Length -ne $artifact[0].bytes) { throw 'Installer differs from release manifest' }
+          "INSTALLER_PATH=$installer" >> $env:GITHUB_ENV
+          "MANIFEST_PATH=$manifestPath" >> $env:GITHUB_ENV
+          "Published version: $version; product source: $tagSha" >> $env:GITHUB_STEP_SUMMARY
+      - name: Verify shipped installer gate, overwrite and graceful uninstall
+        shell: pwsh
+        run: ./scripts/verify-windows-installer.ps1 -InstallerPath $env:INSTALLER_PATH
+      - name: Verify real updater HTTPS download and checksum rejection
+        shell: pwsh
+        run: |
+          pnpm --filter @tb/desktop exec electron scripts/verify-update-feed.mjs "$env:MANIFEST_PATH"
+          if ($LASTEXITCODE -ne 0) { throw 'Actual NSIS updater acceptance failed' }
+      - name: Record acceptance scope
+        shell: pwsh
+        run: |
+          @'
+          PASS: native source app rejects missing/tampered credentials through real IPC.
+          PASS: published installer stays at activation gate, installs twice and uninstalls normally.
+          PASS: real NSIS updater downloads HTTPS feed, verifies manifest SHA256/SHA512 and rejects corrupted fixture.
+          Not covered: real paid activation, old installed version to new version restart, OBS/MA2 hardware.
+          No production license issued, no payment created, no product release modified.
+          '@ >> $env:GITHUB_STEP_SUMMARY
