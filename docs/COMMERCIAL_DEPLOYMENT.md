@@ -134,3 +134,12 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 继续要求人工核实并传入包、旧 bundle、旧 Nginx 的 SHA-256，绑定完整 Git SHA。服务升级仍执行受限备份、SQLite 副本恢复核对、代码原子替换、健康和既有数据核对；回执增加 `proxyChanged`，`RELEASE` 标记采用原子替换。仅支持新增表等兼容迁移，失败回退代码而保留数据库写入；删除字段或改数据格式必须另做迁移与恢复方案。
 
 脚本回归：`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s apps/licensing-server/deploy -p 'test_*.py'`。测试隔离首次安装、原样升级、配置漂移、重复/错放路由和错误入口，不代表已进行新一轮生产部署。
+
+## 付款链接与主动查单部署记录（2026-09-28）
+
+- 源提交 `8b428e24caee7d3495405f7824f2d208af441d11`；含 `daba30d` 付款链接、`e298563` 主动查单及重复升级脚本，均为本地提交，未 push 或触发 GitHub CI。
+- bundle SHA-256：`def20e1d9b153c6142ced1f97daa3a71520b2714e38e021bc7b59564cf237c4e`，`RELEASE` 与上述源提交一致。备份位于 `/var/lib/tblink-licensing/backups/20260928T014836Z`；数据库副本恢复与既有表数据摘要核对通过，新增付款绑定表。
+- 回执 `proxyChanged: false`；Nginx 摘要保持 `d41f83d3a97ea066919b4f596ba9888021c5f445940227adc58f057a2ad8eedd`，未改代理或重载 Nginx。团播、分镜、无忧排班、Nginx 均 active。
+- 服务端检查确认 `ALIPAY_CHECKOUT_ENABLED` 为 false、未配置支付宝应用身份；使用服务器内部管理员凭据请求虚构订单的 `/payment-link` 和 `/reconcile` 均返回 503 `PAYMENTS_UNAVAILABLE`。后台令牌仅在服务器进程内使用，未输出或下载到本地；未创建订单或请求支付渠道。
+- 公网验证：健康 200、无凭据领取 401，管理员和查单路径 404，未配置支付通知 404；更新清单仍 404，分镜健康 200。账户产品已开通，但服务应用/密钥、正式价格和受控真实交易尚未验收。
+- 本地查单专项 14 项、既有授权/支付/交付 30 项分批通过，授权服务类型检查、相关 ESLint、bundle 构建通过；部署路由回归 4 项通过。未进行 Windows 安装、签名或真实更新验收。

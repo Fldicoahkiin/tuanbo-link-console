@@ -23,8 +23,8 @@
 | POST `/admin/orders` | 回环/运维隧道 + Bearer | 订单对象，见下文 | `{"id":"<UUID>","state":"pending或fulfilled"}` |
 | GET `/admin/orders/:id` | 同上 | UUID 路径 | 订单详情和 `licenses`，含完整激活码，仅运营可读 |
 | POST `/admin/orders/:id/fulfill` | 同上 | `paymentReference, amountFen` | 与订单详情相同，人工核款后发码 |
-| POST `/admin/orders/:id/payment-link` | 同上，本地已实现尚未部署 | 空对象 `{}` | `id,amountFen,quantity,expiresAt,paymentUrl`；默认 503 未启用 |
-| POST `/admin/orders/:id/reconcile` | 同上，本地已实现尚未部署 | 空对象 `{}` | `id,state,paymentStatus,needsReview`；调用支付宝查单，可信已付结果幂等发码 |
+| POST `/admin/orders/:id/payment-link` | 同上，代码已部署，收款配置关闭 | 空对象 `{}` | `id,amountFen,quantity,expiresAt,paymentUrl`；默认 503 未启用 |
+| POST `/admin/orders/:id/reconcile` | 同上，代码已部署，收款配置关闭 | 空对象 `{}` | `id,state,paymentStatus,needsReview`；调用支付宝查单，可信已付结果幂等发码 |
 | POST `/admin/licenses/:id/revoke` | 同上 | `{"reason":"原因"}` | `{"revoked":true}` |
 | POST `/admin/licenses/:id/migrate` | 同上 | `{"reason":"原因"}` | `{"code":"TBA-…"}`，同一 license ID 换新码 |
 
@@ -122,7 +122,7 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 
 实现参考：[支付宝网站支付通知说明](https://opendocs.alipay.com/open/270/105902)、[官方 Node SDK 通知验签说明](https://github.com/alipay/alipay-sdk-nodejs-all#通知验签)。本实现只覆盖网站支付标准表单通知，不作为所有支付宝业务通知的通用解析器。
 
-## 既有订单的支付宝付款入口（本地已实现，尚未部署或启用）
+## 既有订单的支付宝付款入口（代码已部署，收款配置关闭）
 
 运营先通过受保护接口创建已确认金额与授权期限的团播订单，再请求 `POST /admin/orders/<UUID>/payment-link`，正文仅 `{}`。身份仍使用管理员 Bearer；客户领取凭据、公开订单编号和请求中的金额不能代替运营权限。此步骤生成电脑网站支付链接，不扣款、不交付，也不自动发送给任何客户。
 
@@ -133,11 +133,11 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 - 已交付订单拒绝再次生成链接。已生成链接的订单不能改为人工核款；通知必须与该订单记录的应用和商户一致。付款窗口结束不直接把订单当作未支付关闭，后续已验签的成功通知仍按原金额和授权规则处理。
 - 测试覆盖独立 RSA 验签、参数篡改、固定网关、重复/过期/重启、商户切换、管理员权限，以及生成链接 → 新格式订单号通知 → 原订单发码。全部使用隔离数据库和临时密钥，无真实渠道请求。
 
-本步骤供运营已确认订单使用，不是公开商品计价或完整客户收银台。正式团播价格尚未确认；公开下单、客户领码页、退款对账和发票仍待完成。生产目前仍为 `374ea71`，不可提前按本节启用付款。
+本步骤供运营已确认订单使用，不是公开商品计价或完整客户收银台。正式团播价格尚未确认；公开下单、客户领码页、退款对账和发票仍待完成。生产已升级至 `8b428e2`，内部接口验证返回 503 `PAYMENTS_UNAVAILABLE`；商户产品已开通不等于服务端应用和密钥已配置，真实交易验收前不能开放销售。
 
 实现依据：[支付宝官方请求签名实现](https://github.com/alipay/alipay-sdk-nodejs-all/blob/master/src/util.ts)、[官方电脑网站支付参数模型](https://github.com/alipay/alipay-sdk-java-all/blob/master/v2/src/main/java/com/alipay/api/domain/AlipayTradePagePayModel.java)。
 
-## 主动查单补交付（本地已实现，尚未部署或实商户验收）
+## 主动查单补交付（代码已部署，未配置或实商户验收）
 
 当原订单的通知丢失或延迟时，运营通过 `POST /admin/orders/<UUID>/reconcile`，正文 `{}`，查询 `alipay.trade.query`。接口与付款入口共用开关和密钥；只有本服务已生成付款入口、且绑定当前应用/商户的订单才会请求渠道。付款链接过期仍可查询，不能通过重建订单掩盖未知付款状态。公网与客户领取凭据不能访问此接口。
 
