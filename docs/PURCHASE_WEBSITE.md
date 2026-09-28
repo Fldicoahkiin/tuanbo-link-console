@@ -53,3 +53,25 @@ CF 沿用已准备的 `tuanbo-link.jinhefilm.com` 解析，本轮未修改 Cloud
 - 授权服务与网页客户端共 8 个测试文件、70 项测试通过；授权服务包 typecheck、网页源码 ESLint 和 `build:web` 均通过。Nginx 候选配置未在目标服务器执行 `nginx -t`，不记为已部署或已验收。
 
 本地截图含“本地测试、非正式报价”提示，不得用作商户真实经营审核材料。正式上线后必须重新从公网域名截取真实产品、套餐和付款页面，且不得对外泄露客户订单领取凭据。
+
+## 官网、演示视频与联系邮箱
+
+用户于 2026-09-28 明确要求不提供试用，并增加官网、演示视频和公司域名邮箱。页面现在包括产品介绍、演示视频区域、购买与订单恢复、购买须知、联系区域，不提供试用入口。
+
+联系邮箱建议统一使用 `support@jinhefilm.com`，用于购买咨询、激活、换机、企业多机、退款和开票。该地址尚未确认创建，当前页面沿用用户 OquMail 截图中已有的 `info@jinhefilm.com`；截图只能证明当时存在邮箱，不代替实际收发验收。不使用 `admin@jinhefilm.com` 对外承接客户支持。初期无需分别建立 sales、billing 等邮箱。
+
+建立 support 邮箱（或服务商支持的可收发别名）后，由用户验证收件、回复的 From 地址均为 support，再构建切换：
+
+```sh
+TBLINK_CONTACT_EMAIL=support@jinhefilm.com pnpm --filter @tb/licensing-server build:web
+```
+
+构建只接受 jinhefilm.com 的非 admin 地址。注册邮箱、启用收发能力和官网显示地址是三个步骤，本次只准备了官网配置，没有创建邮箱或发送测试邮件。
+
+没有真实演示视频时显示“演示视频准备中”，不显示假的播放器或试用按钮。提供可公开的 MP4 后，将文件放到正式静态目录 `/srv/tblink-purchase/media/demo.mp4`，再构建：
+
+```sh
+TBLINK_DEMO_VIDEO_PATH=/media/demo.mp4 pnpm --filter @tb/licensing-server build:web
+```
+
+播放器使用原生 controls、playsinline 和 preload=none，点击后才加载，不自动播放。构建仅接受同源 `/media/` 下的 MP4 路径；视频文件不随源码自动入库，运营需另行发布到该位置。候选 Nginx 配置已添加精确的视频目录白名单与 media-src self；正式发布时还需要核验视频编码、MIME、Range 请求与真实播放。当前没有收到演示视频，不能记为播放验收通过。若将来改用外部视频平台或对象存储，应按实际地址调整 CSP 和部署，不能直接填任意外链。
