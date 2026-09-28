@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { LicensingService } from './service';
 import { createLicensingServer } from './http';
 import { AlipayCheckout, AlipayNotifications } from './alipay';
-import { purchaseCatalogSchema } from './catalog';
+import { purchaseCatalogSchema } from '../../../packages/schema/src/purchase';
 
 const config = z.object({
   LICENSE_DATABASE: z.string().min(1), LICENSE_PRIVATE_KEY_FILE: z.string().min(1), LICENSE_KEY_ID: z.string().min(1),

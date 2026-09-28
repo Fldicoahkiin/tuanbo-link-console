@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Download, Upload, RefreshCw, KeyRound } from 'lucide-react';
 import { activationCodeSchema, licenseStatusSchema, type LicenseStatus } from '@tb/schema';
 import { Button } from './Button';
+import { PurchaseSettings } from './PurchaseSettings';
 
 const stateLabels: Record<LicenseStatus['state'], string> = { unconfigured: '尚未启用', inactive: '未激活', active: '已激活', expired: '已到期', invalid: '校验失败', 'renewal-required': '需要联网验证' };
 const kindLabels = { perpetual: '买断授权', subscription: '订阅授权', trial: '试用授权' };
@@ -11,6 +12,7 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [code, setCode] = useState('');
+  const codeInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     let alive = true;
     const read = async (): Promise<void> => {
@@ -56,14 +58,15 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
       <label className="settings-path-row"><span>本机机器码</span><input aria-label="本机机器码" readOnly value={status.machineCode} onFocus={event => event.currentTarget.select()} /></label>
       <p className="settings-note">{status.message}</p>
       <form onSubmit={event => { event.preventDefault(); if (!busy && !runtimeActive && status.onlineAvailable) void run('activate'); }}>
-        <label className="settings-path-row"><span>激活码</span><input aria-label="激活码" type="password" autoComplete="off" spellCheck={false} maxLength={36} value={code} placeholder="TBA-…" disabled={busy || runtimeActive || !status.onlineAvailable} onChange={event => setCode(event.target.value)} /></label>
+        <label className="settings-path-row"><span>激活码</span><input ref={codeInput} aria-label="激活码" type="password" autoComplete="off" spellCheck={false} maxLength={36} value={code} placeholder="TBA-…" disabled={busy || runtimeActive || !status.onlineAvailable} onChange={event => setCode(event.target.value)} /></label>
         <div className="settings-header-actions"><Button type="submit" className="primary-button" disabled={busy || runtimeActive || !status.onlineAvailable || !code.trim()}><KeyRound />激活本机</Button><Button type="button" className="secondary-button" disabled={busy || runtimeActive || !status.onlineAvailable} onClick={() => void run('online')}><RefreshCw />联网验证授权</Button></div>
       </form>
       {!status.onlineAvailable ? <p className="settings-note">发行方尚未配置在线授权服务，请联系发行方。</p> : <p className="settings-note">每次启动会联网核对激活码和机器码，通过后才能进入工作区。激活码在本机加密保存；验证失败请检查网络后手动重试，工程和已有凭证不会被删除。</p>}
       {claims ? <dl><dt>授权客户</dt><dd>{claims.customer}</dd><dt>授权类型</dt><dd>{kindLabels[claims.kind]}</dd><dt>使用期限</dt><dd>{claims.useUntil ? new Date(claims.useUntil).toLocaleString('zh-CN') : '永久使用'}</dd><dt>升级服务截止</dt><dd>{new Date(claims.updatesUntil).toLocaleString('zh-CN')}</dd></dl> : null}
       {claims?.online ? <p className="settings-note">本次签名凭证有效至 {new Date(claims.online.leaseUntil).toLocaleString('zh-CN')}。该期限不免除下次启动的联网验证；运行中的演出不会因网络中断而停止。</p> : null}
       <div className="settings-header-actions"><Button className="secondary-button" disabled={busy} onClick={() => void run('export')}><Download />导出授权申请</Button><Button className="primary-button" disabled={busy || runtimeActive || status.onlineAvailable} onClick={() => void run('import')}><Upload />导入授权文件</Button><Button className="secondary-button" disabled={busy} onClick={() => void run('refresh')}><RefreshCw />刷新状态</Button></div>
-      <p className="settings-note">本软件所有产品功能均需付费激活，不提供免费版或试用。购买、续费和企业开票请联系发行方，当前不提供软件内自动支付。</p>
+      <p className="settings-note">本软件所有产品功能均需付费激活，不提供免费版或试用。开票、换机及售后请联系发行方。</p>
+      <PurchaseSettings runtimeActive={runtimeActive || busy || !status.onlineAvailable} onSelectCode={value => { setCode(value); codeInput.current?.focus(); }} />
       {runtimeActive ? <p className="settings-note">请停止播放后再更换授权。</p> : null}
     </> : error ? <Button className="secondary-button" disabled={busy} onClick={() => void run('refresh')}>重新读取</Button> : null}
     {message ? <p role="status">{message}</p> : null}

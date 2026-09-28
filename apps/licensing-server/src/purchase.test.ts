@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, it } from 'vitest';
 import { z } from 'zod';
 import { AlipayCheckout, AlipayNotifications } from './alipay';
-import { purchaseCatalogSchema, purchaseRequestSchema } from './catalog';
+import { purchaseCatalogSchema, purchaseRequestSchema } from '../../../packages/schema/src/purchase';
 import { createLicensingServer } from './http';
 import { LicensingService } from './service';
 

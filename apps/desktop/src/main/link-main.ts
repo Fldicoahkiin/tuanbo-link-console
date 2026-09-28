@@ -1,6 +1,7 @@
 import { ibtExecutable } from './link/ibt-beat-service';
 import { WindowsMidiHealth, midiProbeExecutable, probeWindowsMidi, midiHealthMessage } from './link/windows-midi-health';
 import { LicenseService } from './link/license-service';
+import { PurchaseService } from './link/purchase-service';
 import { writeFileAtomically } from './link/atomic-file';
 import { readLicenseMachineCode } from './link/license-machine';
 import licensePublicKeys from './link/license-public-keys.json';
@@ -37,6 +38,7 @@ import { z } from 'zod';
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -341,6 +343,15 @@ function registerIpc(
   };
   handle('link:license-activate-code', (_event, value: unknown) => changeOnlineLicense(z.string().max(64).parse(value)));
   handle('link:license-refresh-online', () => changeOnlineLicense());
+  const purchases = new PurchaseService(licenseConfig.serverUrl, profileStore, url => shell.openExternal(url));
+  handle('link:purchase-catalog', () => purchases.catalog());
+  handle('link:purchase-list', () => purchases.list());
+  handle('link:purchase-create', (_event, value: unknown) => purchases.create(value));
+  handle('link:purchase-refresh', (_event, value: unknown) => purchases.refresh(z.string().uuid().parse(value)));
+  handle('link:purchase-open-payment', (_event, value: unknown) => purchases.openPayment(z.string().uuid().parse(value)));
+  handle('link:purchase-copy-code', async (_event, localId: unknown, licenseId: unknown) => {
+    clipboard.writeText(await purchases.code(z.string().uuid().parse(localId), z.string().uuid().parse(licenseId)));
+  });
   handle('link:license-export-request', async () => {
     const status = await (await getLicenseService()).status();
     const result = await dialog.showSaveDialog(mainWindow!, { title: '导出本机授权申请', defaultPath: '团播联动台-授权申请.json', filters: [{ name: '授权申请', extensions: ['json'] }] });

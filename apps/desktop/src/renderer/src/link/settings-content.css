@@ -47,6 +47,8 @@
 }
 .settings-inline.integration-workspace .settings-detail > header h2 { margin: 0; font-size: 22px; line-height: 1.4; font-weight: 650; }
 .settings-header-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.purchase-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.purchase-confirmation { display: flex; align-items: center; gap: 10px; margin: 16px 0; }
 .settings-detail .settings-header-actions button { min-height: 40px; padding: 8px 14px; font-size: var(--text-body); border-radius: 6px; }
 .settings-inline.integration-workspace .settings-detail .settings-section,
 .settings-inline.integration-workspace .settings-detail .music-connection-settings,

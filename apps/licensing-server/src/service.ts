@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHmac, createPrivateKey, randomB
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import { licenseActivationSchema, licenseClaimsSchema } from '../../../packages/schema/src/license';
-import { purchaseOfferSchema, purchaseRequestSchema, type PurchaseCatalog } from './catalog';
+import { purchaseOfferSchema, purchaseRequestSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
 
 const orderSchema = z.object({
   reference: z.string().trim().min(1).max(100), customer: z.string().trim().min(1).max(160),

@@ -21,7 +21,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'workflow', group: 'picture', name: '场景工作方式', detail: '机位与素材的 OBS 场景关系', icon: Layers },
   { id: 'theme', group: 'appearance', name: '界面外观', detail: '深色、浅色或跟随系统', icon: Palette },
   { id: 'updates', group: 'appearance', name: '软件更新', detail: '版本检查与更新', icon: Download },
-  { id: 'license', group: 'appearance', name: '本机授权', detail: '买断、订阅与离线激活', icon: KeyRound }
+  { id: 'license', group: 'appearance', name: '本机授权', detail: '购买、订单与联网激活', icon: KeyRound }
 ] as const;
 export type SettingsCategory = (typeof SETTINGS_SECTIONS)[number]['id'];
 export type DeviceSettingsCategory = 'obs' | 'ma2' | 'audio' | 'virtual' | 'maintenance';

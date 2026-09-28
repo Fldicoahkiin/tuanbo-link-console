@@ -169,6 +169,12 @@ export type LinkDesktopApi = {
   importLicense(): Promise<import('@tb/schema').LicenseStatus | null>;
   activateLicenseCode(code: string): Promise<import('@tb/schema').LicenseStatus>;
   refreshOnlineLicense(): Promise<import('@tb/schema').LicenseStatus>;
+  getPurchaseCatalog(): Promise<import('@tb/schema').PurchaseCatalogResponse>;
+  listPurchases(): Promise<import('@tb/schema').PurchaseReceipt[]>;
+  createPurchase(request: import('@tb/schema').PurchaseRequest): Promise<import('@tb/schema').PurchaseReceipt>;
+  refreshPurchase(localId: string): Promise<import('@tb/schema').PurchaseReceipt>;
+  openPurchasePayment(localId: string): Promise<void>;
+  copyPurchaseCode(localId: string, licenseId: string): Promise<void>;
   requireOutputLicense(): Promise<void>;
   exportMa2Plugin: () => Promise<string | null>;
   exportObsPreviewScript: () => Promise<string>;

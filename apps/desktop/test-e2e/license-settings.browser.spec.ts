@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -26,6 +26,8 @@ test.beforeEach(async ({ page }) => {
     let current: { state: string; claims: unknown; machineCode: string; message: string; enforcement: string; onlineAvailable: boolean } = base;
     Object.defineProperty(window, 'tbLink', { configurable: true, value: {
       getLicenseStatus: () => Promise.resolve(current),
+      listPurchases: () => Promise.resolve([]),
+      getPurchaseCatalog: () => Promise.resolve({ available: false, currency: 'CNY', termStart: 'fulfillment', offers: [] }),
       requireOutputLicense: () => current.state === 'active' ? Promise.resolve() : Promise.reject(new Error('使用团播联动台需要有效授权')),
       activateLicenseCode: (code: string) => {
         if (code !== `TBA-${'A'.repeat(32)}`) return Promise.reject(new Error('激活码已绑定其他机器，请联系发行方办理换机'));
@@ -107,4 +109,102 @@ test('联网检查进行中只展示等待页', async ({ page }) => {
   await expect(page.getByTestId('workspace')).toHaveCount(0);
   await page.evaluate('window.finishStartup()');
   await expect(page.getByTestId('workspace')).toBeVisible();
+});
+
+async function configurePurchase(page: Page, mode: 'success' | 'lost' | 'failed-storage'): Promise<void> {
+  await page.evaluate(mode => {
+    const offer = { id: 'test-only', revision: 'test-1', name: '浏览器测试授权', unitAmountFen: 100,
+      kind: 'perpetual' as const, useDays: null, updatesDays: 365, maxQuantity: 5, saleUntil: '2099-12-31T00:00:00Z' };
+    let records: import('@tb/schema').PurchaseReceipt[] = [];
+    let opens = 0; let creates = 0;
+    Object.defineProperty(window, 'purchaseCounts', { configurable: true, value: () => ({ opens, creates }) });
+    Object.defineProperty(window, 'tbLink', { configurable: true, value: {
+      ...window.tbLink,
+      listPurchases: () => Promise.resolve(records),
+      getPurchaseCatalog: () => Promise.resolve({ available: true, currency: 'CNY', termStart: 'fulfillment', offers: [offer] }),
+      createPurchase: (request: import('@tb/schema').PurchaseRequest) => {
+        creates += 1;
+        if (mode === 'failed-storage') return Promise.reject(new Error('Windows 安全存储不可用，不能保存凭证'));
+        const record: import('@tb/schema').PurchaseReceipt = { localId: 'bbc5c1a4-64aa-4322-9cf3-38a19035d1e0',
+          createdAt: '2026-09-28T00:00:00Z', request, rejected: false, delivery: null,
+          order: mode === 'lost' ? null : { id: '4c809a80-1776-4999-9145-31d4b95cdc35', offer, state: 'pending', amountFen: request.quantity * 100, quantity: request.quantity, expiresAt: '2099-12-31T00:00:00Z', payable: true } };
+        records = [record];
+        return mode === 'lost' ? Promise.reject(new Error('购买服务连接失败，原购买记录已保留')) : Promise.resolve(record);
+      },
+      openPurchasePayment: () => { opens += 1; return Promise.resolve(); },
+      copyPurchaseCode: (_localId: string, licenseId: string) => {
+        Object.defineProperty(window, 'copiedPurchaseLicense', { configurable: true, value: licenseId });
+        return Promise.resolve();
+      },
+      refreshPurchase: () => {
+        const record = records[0]; if (!record) return Promise.reject(new Error('无订单'));
+        const order: NonNullable<import('@tb/schema').PurchaseReceipt['order']> = { id: '4c809a80-1776-4999-9145-31d4b95cdc35', offer, state: 'fulfilled', amountFen: record.request.quantity * 100, quantity: record.request.quantity, expiresAt: '2099-12-31T00:00:00Z', payable: false };
+        const result: import('@tb/schema').PurchaseReceipt = { ...record, order, delivery: {
+          id: order.id, state: 'fulfilled', amountFen: order.amountFen, quantity: order.quantity, kind: 'perpetual', useUntil: null, updatesUntil: '2027-09-28T00:00:00Z',
+          licenses: Array.from({ length: order.quantity }, (_, index) => ({ id: index === 0 ? '4398b2a0-9f7a-41fb-a57c-df3d5d222747' : '4747d19b-01ea-4e02-a90d-e9f0b4e11870', code: `TBA-${'A'.repeat(32)}`, revoked: false }))
+        } };
+        records = [result]; return Promise.resolve(result);
+      }
+    } });
+  }, mode);
+}
+
+test('未配置购买时明确提示，保留手工激活入口且不展示测试商品', async ({ page }) => {
+  await page.getByRole('button', { name: '查看可售授权' }).click();
+  await expect(page.getByText('购买尚未开放，请联系发行方。已有订单仍可查询。')).toBeVisible();
+  await expect(page.getByRole('button', { name: '创建购买订单' })).toHaveCount(0);
+  await expect(page.getByLabel('激活码', { exact: true })).toBeEnabled();
+});
+
+test('确认服务器价格后建单，显式打开付款页和领取，不自动绑定企业席位', async ({ page }, info) => {
+  await configurePurchase(page, 'success');
+  await page.getByRole('button', { name: '查看可售授权' }).click();
+  await page.getByLabel('购买主体').selectOption('company');
+  await page.getByLabel('授权客户名称').fill('浏览器测试企业');
+  await page.getByLabel('机器数量', { exact: true }).fill('2');
+  await expect(page.getByText(/含税总价 ¥2.00/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '创建购买订单' })).toBeDisabled();
+  await page.getByRole('checkbox', { name: '我已核对价格、机器数量与授权期限' }).check();
+  await page.getByRole('button', { name: '创建购买订单' }).click();
+  await expect(page.getByText('待付款或核对', { exact: true })).toBeVisible();
+  expect(await page.evaluate('window.purchaseCounts()')).toEqual({ opens: 0, creates: 1 });
+  await page.getByRole('button', { name: '打开支付宝付款页' }).click();
+  expect(await page.evaluate('window.purchaseCounts()')).toEqual({ opens: 1, creates: 1 });
+  await page.getByRole('button', { name: '查询付款并领取' }).click();
+  await expect(page.getByText('已付款，可领取激活码', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('激活码', { exact: true })).toHaveValue('');
+  await expect(page.getByRole('button', { name: '填入本机激活栏' })).toHaveCount(2);
+  await page.getByRole('button', { name: '复制激活码', exact: true }).first().click();
+  expect(await page.evaluate('window.copiedPurchaseLicense')).toBe('4398b2a0-9f7a-41fb-a57c-df3d5d222747');
+  await page.getByRole('button', { name: '填入本机激活栏' }).first().click();
+  await expect(page.getByLabel('激活码', { exact: true })).toHaveValue(`TBA-${'A'.repeat(32)}`);
+  await expect(page.getByLabel('激活码', { exact: true })).toBeFocused();
+  await expect(page.getByText('未激活', { exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('purchase-delivery.png'), fullPage: true });
+  await page.evaluate('window.renderLicense(true)');
+  for (const button of await page.getByRole('button', { name: '填入本机激活栏' }).all()) await expect(button).toBeDisabled();
+});
+
+test('响应丢失后展示恢复入口并阻止重复建单，恢复后领取原订单', async ({ page }) => {
+  await configurePurchase(page, 'lost');
+  await page.getByRole('button', { name: '查看可售授权' }).click();
+  await page.getByLabel('授权客户名称').fill('测试购买人');
+  await page.getByRole('checkbox', { name: '我已核对价格、机器数量与授权期限' }).check();
+  await page.getByRole('button', { name: '创建购买订单' }).click();
+  await expect(page.getByText('结果待确认，请恢复原订单', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '创建购买订单' })).toBeDisabled();
+  await page.getByRole('button', { name: '恢复原订单' }).click();
+  await expect(page.getByText('已付款，可领取激活码', { exact: true })).toBeVisible();
+  expect(await page.evaluate('window.purchaseCounts()')).toEqual({ opens: 0, creates: 1 });
+});
+
+test('安全存储失败不出现虚构订单或付款入口', async ({ page }) => {
+  await configurePurchase(page, 'failed-storage');
+  await page.getByRole('button', { name: '查看可售授权' }).click();
+  await page.getByLabel('授权客户名称').fill('测试购买人');
+  await page.getByRole('checkbox', { name: '我已核对价格、机器数量与授权期限' }).check();
+  await page.getByRole('button', { name: '创建购买订单' }).click();
+  await expect(page.getByRole('alert')).toContainText('安全存储不可用');
+  await expect(page.getByRole('button', { name: '打开支付宝付款页' })).toHaveCount(0);
+  await expect(page.getByText('本机暂无购买记录。')).toBeVisible();
 });

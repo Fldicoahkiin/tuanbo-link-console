@@ -3,6 +3,8 @@ import { linkActionSchema, linkInternalAudioCaptureSchema, linkManagedMediaExecu
 const publicCalls = new Set([
   'link:license-status', 'link:license-activate-code', 'link:license-refresh-online',
   'link:license-export-request', 'link:license-import', 'link:window-control', 'link:window-visible',
+  'link:purchase-catalog', 'link:purchase-list', 'link:purchase-create', 'link:purchase-refresh', 'link:purchase-open-payment',
+  'link:purchase-copy-code',
   'link:app-info', 'link:process-stop', 'link:obs-disconnect', 'link:ma2-network-disconnect',
   'link:obs-source-cancel', 'link:obs-live-close', 'link:ma2-read-cancel',
   'link:ma2-discovery-cancel', 'link:p1-import-cancel', 'link:set-document-dirty'

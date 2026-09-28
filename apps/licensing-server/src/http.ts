@@ -3,7 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { LicensingService, ServiceError } from './service';
 import type { AlipayCheckout, AlipayNotifications } from './alipay';
-import { purchaseCatalogSchema, type PurchaseCatalog } from './catalog';
+import { purchaseCatalogSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
 
 async function readBytes(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
