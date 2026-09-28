@@ -18,9 +18,11 @@
 
 | 名称 | Comment |
 | --- | --- |
-| `api.tuanbo-link` | 团播联动台：授权激活 API，后续支付回调预留；源站 jinhe-cloud（腾讯云上海）；仅 DNS，源站 Nginx 提供 HTTPS；管理员接口不对外。 |
+| `api.tuanbo-link` | 团播联动台：机器授权激活、商品订单与支付宝通知 API；源站 jinhe-cloud（腾讯云上海）；仅 DNS，源站 Nginx 提供 HTTPS；管理员接口仅回环或运维隧道访问。 |
 | `updates.tuanbo-link` | 团播联动台：Windows x64 更新清单与正式安装包出口；源站 jinhe-cloud（腾讯云上海）；仅 DNS，源站 Nginx 提供 HTTPS。 |
-| `tuanbo-link` | 团播联动台：未来产品网站预留；当前无网页，计划返回 404；源站 jinhe-cloud（腾讯云上海）；仅 DNS。 |
+| `tuanbo-link` | 团播联动台：产品官网、演示视频与付费购买入口；源站 jinhe-cloud（腾讯云上海）；仅 DNS，源站 Nginx 提供 HTTPS；可售套餐由授权服务控制。 |
+
+2026-09-29 已在已登录 Cloudflare 页面更新官网与 API 注释，并从保存后的记录重新读取确认；三条 A 记录仍为 `123.206.229.200`、仅 DNS、自动 TTL。更新出口的原注释保留。备注描述用途，是否实际可购买或下载仍以对应服务的部署记录为准。
 
 2026-09-28 已在 Cloudflare 管理页新增以上三条 A 记录，逐条核实公网 IPv4、仅 DNS、TTL Auto 和 Comment；原有记录未修改。服务器正常解析三个域名并通过 ACME 校验，本地一度存在 API 域名的负缓存，随后普通 HTTPS 请求也通过。
 
