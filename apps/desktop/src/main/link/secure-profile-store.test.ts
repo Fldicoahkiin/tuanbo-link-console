@@ -14,6 +14,21 @@ afterEach(async () => {
 });
 
 describe('SecureProfileStore', () => {
+  it('并发保存激活码与订单凭据时两项均保留，删除不覆盖同时保存的凭据', async () => {
+    const directory = await createTestDirectory();
+    const store = new SecureProfileStore(directory, reversibleStorage(true));
+    const integrationDirectory = join(directory, 'link-integrations');
+    cleanupFiles.push(join(integrationDirectory, 'secrets.json'));
+    cleanupDirectories.push(integrationDirectory);
+    await Promise.all([store.saveCredential('license.activation.code', 'activation'), store.saveCredential('license.purchases', 'receipt')]);
+    await expect(store.loadCredential('license.activation.code')).resolves.toBe('activation');
+    await expect(store.loadCredential('license.purchases')).resolves.toBe('receipt');
+    await Promise.all([store.deleteCredential('license.activation.code'), store.saveCredential('license.clock', 'clock')]);
+    await expect(store.hasCredential('license.activation.code')).resolves.toBe(false);
+    await expect(store.loadCredential('license.clock')).resolves.toBe('clock');
+    await expect(store.loadCredential('license.purchases')).resolves.toBe('receipt');
+  });
+
   it('档案与密文分开保存，磁盘不出现 OBS 明文密码', async () => {
     const directory = await createTestDirectory();
     const store = new SecureProfileStore(directory, reversibleStorage(true));
@@ -38,6 +53,23 @@ describe('SecureProfileStore', () => {
     const store = new SecureProfileStore(directory, reversibleStorage(false));
     await expect(store.saveCredential('obs-main', 'password')).rejects.toThrow('安全存储不可用');
     await expect(store.loadCredential('obs-main')).rejects.toThrow('安全存储不可用');
+  });
+
+  it('加密失败向原调用者报告，后续保存仍可执行并保留已有凭据', async () => {
+    const directory = await createTestDirectory();
+    const storage = reversibleStorage(true);
+    const store = new SecureProfileStore(directory, { ...storage, encryptString: value => {
+      if (value === 'fail') throw new Error('模拟加密失败');
+      return storage.encryptString(value);
+    } });
+    const integrationDirectory = join(directory, 'link-integrations');
+    cleanupFiles.push(join(integrationDirectory, 'secrets.json'));
+    cleanupDirectories.push(integrationDirectory);
+    await store.saveCredential('obs-main', 'existing');
+    await expect(store.saveCredential('license.activation.code', 'fail')).rejects.toThrow('模拟加密失败');
+    await store.saveCredential('license.purchases', 'receipt');
+    await expect(store.loadCredential('obs-main')).resolves.toBe('existing');
+    await expect(store.loadCredential('license.purchases')).resolves.toBe('receipt');
   });
 
   it('可以检查并删除独立凭证且不影响其他凭证', async () => {

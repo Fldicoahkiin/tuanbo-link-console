@@ -17,6 +17,7 @@ type StoredSecrets = {
 export class SecureProfileStore {
   private readonly profilePath: string;
   private readonly secretsPath: string;
+  private credentialWrites: Promise<void> = Promise.resolve();
 
   constructor(
     userDataDirectory: string,
@@ -43,13 +44,16 @@ export class SecureProfileStore {
     if (!this.safeStorage.isEncryptionAvailable()) {
       throw new Error('Windows 安全存储不可用，不能保存凭证');
     }
-    const secrets = await this.loadSecrets();
-    secrets.credentials[credentialId] = this.safeStorage.encryptString(password).toString('base64');
-    await writeFileAtomically(this.secretsPath, `${JSON.stringify(secrets, null, 2)}\n`);
+    await this.writeCredentials(async () => {
+      const secrets = await this.loadSecrets();
+      secrets.credentials[credentialId] = this.safeStorage.encryptString(password).toString('base64');
+      await writeFileAtomically(this.secretsPath, `${JSON.stringify(secrets, null, 2)}\n`);
+    });
   }
 
   async loadCredential(credentialId: string): Promise<string> {
     assertCredentialId(credentialId);
+    await this.credentialWrites;
     if (!this.safeStorage.isEncryptionAvailable()) {
       throw new Error('Windows 安全存储不可用，不能读取凭证');
     }
@@ -65,16 +69,26 @@ export class SecureProfileStore {
 
   async hasCredential(credentialId: string): Promise<boolean> {
     assertCredentialId(credentialId);
+    await this.credentialWrites;
     const secrets = await this.loadSecrets();
     return typeof secrets.credentials[credentialId] === 'string';
   }
 
   async deleteCredential(credentialId: string): Promise<void> {
     assertCredentialId(credentialId);
-    const secrets = await this.loadSecrets();
-    if (!(credentialId in secrets.credentials)) return;
-    delete secrets.credentials[credentialId];
-    await writeFileAtomically(this.secretsPath, `${JSON.stringify(secrets, null, 2)}\n`);
+    await this.writeCredentials(async () => {
+      const secrets = await this.loadSecrets();
+      if (!(credentialId in secrets.credentials)) return;
+      delete secrets.credentials[credentialId];
+      await writeFileAtomically(this.secretsPath, `${JSON.stringify(secrets, null, 2)}\n`);
+    });
+  }
+
+  private writeCredentials(write: () => Promise<void>): Promise<void> {
+    const result = this.credentialWrites.then(write);
+    // Each caller receives its failure; a failed write must not poison later writes.
+    this.credentialWrites = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   private async loadSecrets(): Promise<StoredSecrets> {
