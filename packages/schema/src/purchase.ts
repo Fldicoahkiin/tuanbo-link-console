@@ -38,8 +38,10 @@ export const purchaseDeliverySchema = z.object({
   quantity: z.number().int().min(1).max(100), kind: z.enum(['perpetual', 'subscription']),
   useUntil: z.string().datetime().nullable(), updatesUntil: z.string().datetime(),
   renewalLicenseId: z.string().uuid().optional(),
+  paymentConfirmed: z.literal(true).optional(),
   licenses: z.array(z.object({ id: z.string().uuid(), code: activationCodeSchema.nullable(), revoked: z.boolean() }).strict()).max(100)
-}).strict().refine(value => value.state === 'pending' ? value.licenses.length === 0 : value.licenses.length === value.quantity, '交付数量不一致')
+}).strict().refine(value => !value.paymentConfirmed || value.state === 'pending', '已确认付款的待处理标记仅用于未交付订单')
+  .refine(value => value.state === 'pending' ? value.licenses.length === 0 : value.licenses.length === value.quantity, '交付数量不一致')
   .refine(value => (value.kind === 'perpetual') === (value.useUntil === null)
     && value.licenses.every(license => (license.revoked || Boolean(value.renewalLicenseId)) === (license.code === null)), '交付授权状态不一致')
   .refine(value => !value.renewalLicenseId || value.quantity === 1 && value.kind === 'subscription'

@@ -28,6 +28,8 @@
 | POST `/admin/orders/:id/fulfill` | 同上 | `paymentReference, amountFen` | 与订单详情相同，人工核款后发码 |
 | POST `/admin/orders/:id/payment-link` | 同上，代码已部署，收款配置关闭 | 空对象 `{}` | `id,amountFen,quantity,expiresAt,paymentUrl`；默认 503 未启用 |
 | POST `/admin/orders/:id/reconcile` | 同上，代码已部署，收款配置关闭 | 空对象 `{}` | `id,state,paymentStatus,needsReview`；调用支付宝查单，可信已付结果幂等发码 |
+| GET `/admin/payment-exceptions?after=0` | 回环/运维隧道 + 管理员 Bearer | 非负整数游标，可省略 | 最多 100 条已收款未交付记录与 `nextCursor`，见下文 |
+| POST `/admin/orders/:id/retry-delivery` | 同上 | `{"reason":"补发原因"}` | `{id,state}`；按已保存收款事实补交付，不发起扣款 |
 | POST `/admin/licenses/:id/revoke` | 同上 | `{"reason":"原因"}` | `{"revoked":true}` |
 | POST `/admin/licenses/:id/migrate` | 同上 | `{"reason":"原因"}` | `{"code":"TBA-…"}`，同一 license ID 换新码 |
 
@@ -75,8 +77,8 @@
 - 领取凭据为 `TBD-` 加 64 位大写十六进制，使用 32 字节随机数；数据库仅存带用途及订单 ID 隔离的 HMAC-SHA256 摘要，不存可还原的凭据。仅签发响应返回一次明文，不记录到日志或审计。
 - 当前领取凭据有效期固定为签发后七天，是领取入口的有效期，与软件授权期限分开。响应丢失或遗忘时，运营核对真实购买人后明确重新签发；旧凭据立即失效，不能承诺能找回原文。重复签发不是幂等操作。
 - 请求为 `GET /v1/orders/<订单UUID>`，头部 `Authorization: Bearer TBD-…`。不接受查询字符串中的 token，不建立 Cookie，不开放 CORS。将来的网站必须使用同源受控代理或另行实现明确的来源策略，不可为了调通任意开放跨域。
-- 未付款返回 `state: pending` 和空 `licenses`；只有付款事务成功后返回原批次激活码。多次领取、服务重启或支付回调重复不会增发授权；领取本身不会核款或改变授权状态。
-- 返回字段仅 `id,state,amountFen,quantity,kind,useUntil,updatesUntil,licenses:[{id,code,revoked}]`。不返回客户名称、人工订单编号、交易流水、机器码和管理员信息。已撤销的单码只返回 `code: null`，其他未撤销席位仍可领取。
+- 未交付返回 `state: pending` 和空 `licenses`；已确认收款但尚未交付时另带 `paymentConfirmed:true`，不能把 pending 等同于未付款。只有交付事务成功后返回原批次激活码。多次领取、服务重启或支付回调重复不会增发授权；领取本身不会核款或改变授权状态。
+- 基础返回字段为 `id,state,amountFen,quantity,kind,useUntil,updatesUntil,licenses:[{id,code,revoked}]`，续费含可选 `renewalLicenseId`，已收款待交付含可选 `paymentConfirmed:true`。不返回客户名称、人工订单编号、交易流水、机器码和管理员信息。已撤销的单码只返回 `code: null`，其他未撤销席位仍可领取。
 - 无凭据、错误、跨订单、过期、撤销和未知订单均返回 401 `INVALID_DELIVERY_ACCESS`，不泄露该订单是否存在。管理员令牌不能当作客户凭据；客户凭据也不能调用任何运营接口。
 - 响应 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`；代理日志不得包含 Authorization 或响应正文。凭据不得放进图片、公开聊天、分析埋点或含 token 的 URL。未来收银台需让购买人保存领取凭据，并提供经核实的恢复流程。
 - `/delivery-access/revoke` 仅撤销领取权限，不取消已付款授权。换机成功会同时撤销该订单原领取凭据，避免旧领取人取走新码；企业订单换机后由运营向经核实的接收人重新签发订单级凭据。
@@ -94,7 +96,7 @@
 3. `POST /v1/orders` 使用 `Authorization: Bearer TBD-…`，正文只接受 `offerId,revision,quotedUnitAmountFen,quantity,customer,customerType`。报价字段用于核对用户刚看到的价格，实际总价始终来自服务端目录乘数量；不能提交期限、渠道身份、订单编号或付款状态。
 4. 创建事务同时保存订单、商品快照、领取凭据摘要和支付宝身份/截止时间。返回 `id,state,amountFen,quantity,offer,expiresAt,payable,paymentUrl`。付款期限最多 15 分钟且不超过停售时间。随机凭据不进入付款链接，数据库只保存用途隔离的 HMAC 摘要。
 5. 响应丢失或软件重启后，用户明确恢复原购买时，使用原凭据及相同请求重新提交，返回同一订单；不能自动换新凭据重建订单。商品下架、改价或关闭收款配置后仍可恢复原单。原请求已变更返回 409 `PURCHASE_CONFLICT`；未知商品/报价版本返回 409 `OFFER_CHANGED`；超限数量返回 400 `QUANTITY_LIMIT`。
-6. 付款链接过期、订单已交付或当前商户身份不同，返回 `payable:false,paymentUrl:null`，不延长原窗口、不切换商户。pending 不是渠道确认未付款；通知延迟时沿用原订单，客户可持领取凭据主动查单补交付，运营仍保留查单入口。
+6. 付款链接过期、订单已交付、已保存确认收款或当前商户身份不同，返回 `payable:false,paymentUrl:null`，不延长原窗口、不切换商户。pending 不是渠道确认未付款；通知延迟时沿用原订单，客户可持领取凭据主动查单补交付，运营仍保留查单入口。
 7. 已验签付款事实首次交付时，按商品快照起算完整使用/升级天数；重复通知和查单不延长期限。人工订单仍保持原有固定截止时间契约。待付领取响应的日期只是预估，客户 UI 应展示商品天数和“首次核款交付起算”，已交付后才显示实际到期日。
 8. 通过既有 `GET /v1/orders/:id` 领取原批次激活码。凭据从建单起有效七天，超过七天才确认的支付仍能发码，但需运营核实后重签领取凭据。撤销/更换凭据会使原创建凭据无法恢复；新凭据用于领取原订单，不能冒充原建单凭据。
 
@@ -106,7 +108,7 @@
 
 续费复用 `POST /v1/orders`，在购买请求中增加可选 `renewalLicenseId`；首次建单同时提供 `X-Tblink-Renewal-Code` 激活码与 `X-Tblink-Machine-Code` 机器码请求头。不得放入 URL、日志或 renderer。服务端核对授权 ID、激活码、已绑定机器及撤销状态；只允许订阅商品续订原订阅，数量固定 1，客户名称与个人／企业类型必须与原授权一致。管理员、原订单号或公开机器码本身都不能代替该认证。
 
-新增 `license_renewals` 表记录续费订单与原授权，以及核款后生效的使用／升级截止时间。未付订单不改变授权。核款使用既有商户、金额、签名与唯一流水校验；从当前时间和已有权益截止时间中较晚者追加商品天数，各项权益分别计算，重复回调／主动查单不重复延长。原购买订单快照不改写，不生成新激活码、不解除机器绑定。原授权被撤销时付款不自动恢复授权，交付失败保留原单供运营核款处理。
+新增 `license_renewals` 表记录续费订单与原授权，以及核款后生效的使用／升级截止时间。未付订单不改变授权。核款使用既有商户、金额、签名与唯一流水校验；从当前时间和已有权益截止时间中较晚者追加商品天数，各项权益分别计算，重复回调／主动查单不重复延长。原购买订单快照不改写，不生成新激活码、不解除机器绑定。原授权被撤销时付款不自动恢复授权，交付失败独立保留收款流水与原订单，标记已收款待处理；补发不会绕过原授权撤销规则。
 
 订单和交付响应返回可选 `renewalLicenseId`。续费交付只返回目标授权 ID、撤销状态和本次期限，`code` 始终为 null，避免旧续费领取凭据泄漏后来换机生成的激活码。客户订单凭据仍有七天有效期；原订单响应丢失后使用原凭据恢复，不重新下单。续费认证信息仅用于首次建单，持有原订单凭据的恢复请求不再次授予其他授权的访问权。
 
@@ -164,7 +166,7 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 - 启用条件：服务端完整配置 `ALIPAY_APP_ID`、`ALIPAY_SELLER_ID`、`ALIPAY_PUBLIC_KEY_FILE`。缺项使服务启动失败；全部省略时路由 404。公钥文件是从官方平台核对取得的支付宝验签公钥，不能误用本应用公钥；当前实现采用固定 RSA 公钥，不包含证书自动轮换。
 - 只接受 RSA2、UTF-8、`trade_status_sync`；表单只解码一次，拒绝重复字段。验签包含未知扩展字段，排除 `sign` 与 `sign_type`，不能只签自己挑选的业务字段。
 - 验签后比对 app_id/seller_id，核对订单 UUID、已付款状态 `TRADE_SUCCESS` 或 `TRADE_FINISHED`、整数分金额；明确为非 CNY、含非零退款、未支付或交易关闭的通知均拒绝发码。退款及关闭处理尚未实现，相关通知非成功响应，不冒充已处理退款。
-- 验签、核款、数据库事务和发码全部完成后才返回 200 纯文本 `success`。订单变更、激活码与审计同事务提交；通道流水保存为 `alipay:<trade_no>` 并受唯一约束。重复或迟到的同笔成功通知只读取原码，不再生成。
+- 验签、核款、数据库事务和发码全部完成后才返回 200 纯文本 `success`。先独立提交核对后的收款事实，再在另一个事务提交订单变更、激活码与交付审计；通道流水保存为 `alipay:<trade_no>` 并受唯一约束。重复或迟到的同笔成功通知只读取原码，不再生成。
 - 错误签名 401；错商户/应用、金额、交易状态或流水冲突 409；未知订单 404；其他结构错误 400。失败响应为错误 JSON，绝不返回 `success`。支付宝的渠道重发不等于客户端自动重试；重复通知由幂等处理保护。
 - 审计使用 `order.alipay-payment-confirmed` 区分人工核款。通知原始表单、买方信息、签名及激活码不进入日志。通知、领取、购买与其余请求的限流相互隔离；生产使用可信本机代理覆盖的客户地址计数，正式上线前仍需按容量验收。
 
@@ -231,3 +233,26 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 - 支付宝官方说明在未收到异步通知时可主动查单：[交易查询接口](https://developer.alibaba.com/docs/doc.htm?articleId=757&docType=4&treeId=180)。本地使用测试 RSA 密钥与隔离 HTTP 验证补交付，不代表真实商户付款验收完成。
 
 `apps/licensing-server/web` 使用 `/v1/catalog`、`/v1/orders`、`/v1/orders/:id` 和客户主动查单接口。网页与 API 使用同源 Nginx 代理，续费仍由桌面发起；订单令牌保存在标签会话及用户导出的凭据文件中。官网现已发布公网，生产销售继续关闭；公开下单实测返回 503 PAYMENTS_UNAVAILABLE。详见 [购买网页](PURCHASE_WEBSITE.md)。
+
+
+## 收款记录与交付异常
+
+`payment_receipts` 是新增表，不重写既有订单或授权。每个订单只有一条收款事实，流水全表唯一，并与旧订单流水共同查重。仅通过签名、订单、商户和金额核对的支付宝通知／查单，或受保护人工核款入口可以写入；客户端不能标记已收款。保留原流水、金额、来源、应用／商户、首次收款确认时间和最近交付错误码，不保存原始通知或买方资料。
+
+收款与交付使用两个事务。发码失败或进程在两者之间退出时，原收款事实仍存在；异常列表包括错误码为空但尚未交付的中间状态。失败写入 `order.delivery-failed` 审计和脱敏错误码；成功补发清除最近错误，移出异常列表。重复同流水不重复发码或延长期限。
+
+客户 GET 领取或 POST 主动查询可得到 `paymentConfirmed:true` 的待处理 DTO。官网隐藏付款链接与再次创建入口，桌面记录不再允许付款。POST 主动查询发现已保存收款时，按原收款记录尝试补交付，无需再次请求支付宝；这一分支在停止新售后仍可使用。交付失败时返回明确待处理状态并记录脱敏日志，不伪报交付成功；凭据、签名或金额错误且没有有效收款事实时仍返回错误。通知和运营补发失败则继续返回非成功状态。
+
+运营异常列表每页最多 100 条，返回 `cursor,orderId,paymentReference,amountFen,source,receivedAt,lastError`，不返回客户名称、激活码、机器码或领取凭据。若 `nextCursor` 非空，下一页通过 `after` 继续；一次清单结束后下次从 0 开始，避免遗漏仍待处理的旧单。列表是交付异常台账，不代替支付宝账单或税务收入核算。
+
+补发请求必须带 1–500 字符原因，只读服务器中原流水和金额，不允许客户端指定新流水。不存在收款记录时返回 `PAYMENT_NOT_RECEIVED`；已交付重复调用返回原状态；被撤销的续费授权或已结束的人工固定期限仍拒绝交付。退款需另行核对和办理，补发不发起退款或扣款。
+
+服务器运维命令为 `apps/licensing-server/deploy/payment-exceptions.py`。默认从 `/etc/tblink-licensing/admin-token.txt` 在进程内部加载管理员令牌，仅请求固定回环地址，禁止系统代理和 HTTP 跳转，12 秒超时。以下在服务器安装该脚本后执行，不向公网开放 admin 路由：
+
+```sh
+sudo python3 /opt/tblink-licensing/payment-exceptions.py
+sudo python3 /opt/tblink-licensing/payment-exceptions.py --after 100
+sudo python3 /opt/tblink-licensing/payment-exceptions.py --retry-order <订单UUID> --reason '已确认交付故障修复，按原收款补发'
+```
+
+异常时先核对记录和原因，处理后显式补发；脚本不自动重试、不自动撤销授权，也不对客户发送消息。本地测试覆盖故障事务回滚、重启恢复、重复流水拒绝、补发幂等、撤销边界及 HTTP 权限，不能代替真实商户交易验收。生产状态见部署记录。

@@ -68,7 +68,7 @@ class EnvironmentTest(unittest.TestCase):
 
 
 class ActivationTest(unittest.TestCase):
-    def exercise(self, catalog_ok, final_nginx_ok=True, renewal_table=True):
+    def exercise(self, catalog_ok, final_nginx_ok=True, renewal_table=True, payment_table=True):
         directory = Path(tempfile.mkdtemp(prefix="tblink-deploy-test-"))
         targets = {"/opt/tblink-licensing/dist/index.js": directory / "index.js",
                    "/opt/tblink-licensing/RELEASE": directory / "RELEASE",
@@ -114,6 +114,8 @@ class ActivationTest(unittest.TestCase):
                     db.execute("CREATE TABLE IF NOT EXISTS purchase_requests (id TEXT)")
                     if renewal_table:
                         db.execute("CREATE TABLE IF NOT EXISTS license_renewals (id TEXT)")
+                    if payment_table:
+                        db.execute("CREATE TABLE IF NOT EXISTS payment_receipts (id TEXT)")
 
         def check_catalog():
             self.assertIn("return 503;", nginx.read_text())
@@ -125,7 +127,7 @@ class ActivationTest(unittest.TestCase):
                  patch.object(release.os, "geteuid", return_value=0), patch.object(release, "run", side_effect=command), \
                  patch.object(release, "health", return_value=True), patch.object(release, "catalog_closed", side_effect=check_catalog), \
                  patch.object(release.sys, "argv", arguments), patch("builtins.print"):
-                if catalog_ok and final_nginx_ok and renewal_table:
+                if catalog_ok and final_nginx_ok and renewal_table and payment_table:
                     release.main()
                 else:
                     with self.assertRaises(RuntimeError):
@@ -136,8 +138,9 @@ class ActivationTest(unittest.TestCase):
         self.assertTrue(all(after[name] == value for name, value in before.items()))
         self.assertIn("purchase_requests", after)
         self.assertEqual("license_renewals" in after, renewal_table)
+        self.assertEqual("payment_receipts" in after, payment_table)
         self.assertEqual(environment.stat().st_mode & 0o777, 0o640)
-        if catalog_ok and final_nginx_ok and renewal_table:
+        if catalog_ok and final_nginx_ok and renewal_table and payment_table:
             self.assertEqual(bundle.read_text(), "new code")
             self.assertEqual(nginx.read_text(), template)
             self.assertEqual(environment.read_text(), original_env + "LICENSE_PROXY_MODE=loopback\n")
@@ -164,6 +167,9 @@ class ActivationTest(unittest.TestCase):
 
     def test_restore_when_renewal_migration_is_missing(self):
         self.exercise(True, renewal_table=False)
+
+    def test_restore_when_payment_receipt_migration_is_missing(self):
+        self.exercise(True, payment_table=False)
 
 
 if __name__ == "__main__":

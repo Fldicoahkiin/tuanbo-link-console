@@ -100,6 +100,7 @@ export class PurchaseService {
         || receipt.delivery?.state === 'fulfilled' && delivery.state !== 'fulfilled') throw new Error('交付信息与原订单不一致，请联系发行方');
       receipt.delivery = delivery;
       if (delivery.state === 'fulfilled') receipt.order = { ...order, state: 'fulfilled', payable: false };
+      else if (delivery.paymentConfirmed) receipt.order = { ...order, payable: false };
       await this.save(receipts);
       return this.summary(receipt);
     });

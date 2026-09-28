@@ -250,3 +250,22 @@ it('缺失本机续费凭据时不保存购买、不发请求；服务端拒绝�
   expect((await client.list())[0]?.rejected).toBe(true);
   expect(external).not.toHaveBeenCalled();
 });
+
+it('已确认收款但续费被撤销时保存待处理提示，重启后仍禁止再次打开付款', async () => {
+  const original = service.createOrder({ reference: 'pending-delivery-fixture', customer: request.customer, customerType: 'company', quantity: 1,
+    kind: 'subscription', amountFen: 100, useUntil: new Date(now + 30 * 86400000).toISOString(), updatesUntil: new Date(now + 30 * 86400000).toISOString() });
+  const license = service.fulfill(original.id, { amountFen: 100, paymentReference: 'manual:pending-fixture' }).licenses[0]!;
+  const authorization = { product: 'tuanbo-link-console' as const, code: license.code, machineCode: `TB1-${'A'.repeat(64)}` };
+  service.activate(authorization);
+  const client = new PurchaseService(origin, storage, external, fetchLocal, () => now, () => Promise.resolve(authorization));
+  const receipt = await client.create({ ...request, offerId: 'test-month', quantity: 1, renewalLicenseId: license.id });
+  service.revoke(license.id, { reason: '建单后撤销，验证收款不丢失' });
+  queryStatus = 'TRADE_SUCCESS';
+  const pending = await client.refresh(receipt.localId);
+  expect(pending.delivery).toMatchObject({ state: 'pending', paymentConfirmed: true, licenses: [] });
+  expect(pending.order?.payable).toBe(false);
+  expect((await desktop().list())[0]?.delivery?.paymentConfirmed).toBe(true);
+  await expect(desktop().openPayment(receipt.localId)).rejects.toThrow('不要重复下单');
+  expect(external).not.toHaveBeenCalled();
+  expect(providerRequests).toBe(1);
+});

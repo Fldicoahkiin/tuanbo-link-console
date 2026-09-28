@@ -84,7 +84,7 @@ export function PurchaseSettings({ runtimeActive, onSelectCode, license }: { run
     {ready && records.length === 0 ? <p className="settings-note">本机暂无购买记录。</p> : null}
     {[...records].reverse().map(record => <article key={record.localId} className="settings-section" aria-label={`购买记录 ${record.order?.id ?? record.localId}`}>
       <h4>{record.order?.offer.name ?? record.request.offerId}</h4>
-      <p>{record.rejected ? '未建单，请重新查看商品' : record.delivery?.state === 'fulfilled' ? record.request.renewalLicenseId ? '续费已完成，请联网验证原授权' : '已付款，可领取激活码' : record.order?.state === 'fulfilled' ? '已付款，待查询交付' : record.order ? '待付款或核对' : '结果待确认，请恢复原订单'}</p>
+      <p>{record.rejected ? '未建单，请重新查看商品' : record.delivery?.state === 'fulfilled' ? record.request.renewalLicenseId ? '续费已完成，请联网验证原授权' : '已付款，可领取激活码' : record.delivery?.paymentConfirmed ? '付款已确认，授权待处理，请联系支持；无需再次付款' : record.order?.state === 'fulfilled' ? '已付款，待查询交付' : record.order ? '待付款或核对' : '结果待确认，请恢复原订单'}</p>
       <p className="settings-note">{new Date(record.createdAt).toLocaleString('zh-CN')} · {record.request.quantity} 台 · {money(record.order?.amountFen ?? record.request.quotedUnitAmountFen * record.request.quantity)}</p>
       <label className="settings-path-row"><span>{record.order ? '订单编号' : '本机购买编号'}</span><input aria-label="购买编号" value={record.order?.id ?? record.localId} readOnly onFocus={event => event.currentTarget.select()} /></label>
       {!record.rejected ? <div className="settings-header-actions">

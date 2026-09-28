@@ -99,6 +99,11 @@ async function readDelivery(reconcile = false): Promise<void> {
   codes.replaceChildren(); finish.hidden = true;
   const delivery = await client.delivery(reconcile);
   if (delivery.state === 'pending') {
+    if (delivery.paymentConfirmed) {
+      pay.hidden = true; pay.removeAttribute('href'); submit.hidden = true;
+      orderState.textContent = '付款已确认，无需再次付款。';
+      deliveryState.textContent = '授权尚未交付，请保留订单号并联系支持处理。'; return;
+    }
     deliveryState.textContent = '服务端尚未确认到账。如已付款，请稍后点击查询；不要重复付款。'; return;
   }
   pay.hidden = true; submit.hidden = true;

@@ -38,6 +38,16 @@ export function createLicensingServer(service: LicensingService, adminToken: str
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('X-Request-Id', requestId);
+    const deliver = (id: string, token: string, action: () => unknown) => {
+      try { action(); }
+      catch (error) {
+        const delivery = service.readDelivery(id, token);
+        if (!delivery.paymentConfirmed) throw error;
+        console.error(JSON.stringify({ requestId, error: 'LICENSING_DELIVERY_PENDING', code: error instanceof ServiceError ? error.code : 'INTERNAL_ERROR' }));
+        return delivery;
+      }
+      return service.readDelivery(id, token);
+    };
     const dispatch = async (): Promise<unknown> => {
       const now = Date.now();
       for (const [key, value] of rates) if (value.reset <= now) rates.delete(key);
@@ -70,6 +80,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
         z.object({}).strict().parse(await readBody(request));
         const existing = service.readDelivery(id, token);
         if (existing.state === 'fulfilled') return existing;
+        if (existing.paymentConfirmed) return deliver(id, token, () => service.retryDelivery(id, { reason: '客户持原凭据请求补交付' }));
         if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用，请保留原订单并联系支持');
         service.alipayQueryOrder(id, checkout.appId, checkout.sellerId);
         for (const [key, gate] of paymentQueries) if (!gate.running && gate.until <= now) paymentQueries.delete(key);
@@ -80,8 +91,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
           const payment = await checkout.query(id, alipay);
           // The credential may expire or be revoked while the channel request is in flight.
           service.readDelivery(id, token);
-          service.reconcileAlipay(id, payment);
-          return service.readDelivery(id, token);
+          return deliver(id, token, () => service.reconcileAlipay(id, payment));
         } finally { gate.running = false; gate.until = Date.now() + 10000; }
       }
       if (request.method === 'POST' && request.url === '/v1/payments/alipay/notify' && alipay) {
@@ -92,6 +102,13 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       }
       if (!request.url?.startsWith('/admin/')) throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
       if (!timingSafeEqual(digest(request.headers.authorization ?? ''), expected)) throw new ServiceError(401, 'UNAUTHORIZED', '后台认证失败');
+      const exceptions = /^\/admin\/payment-exceptions(?:\?after=(0|[1-9]\d{0,15}))?$/.exec(request.url);
+      if (request.method === 'GET' && exceptions) return service.paymentExceptions(Number(exceptions[1] ?? 0));
+      const retry = /^\/admin\/orders\/([a-f0-9-]{36})\/retry-delivery$/.exec(request.url);
+      if (request.method === 'POST' && retry) {
+        const result = service.retryDelivery(retry[1]!, await readBody(request));
+        return { id: result.id, state: result.state };
+      }
       if (request.method === 'POST' && request.url === '/admin/orders') return service.createOrder(await readBody(request));
       const pay = /^\/admin\/orders\/([a-f0-9-]{36})\/payment-link$/.exec(request.url);
       if (request.method === 'POST' && pay) {

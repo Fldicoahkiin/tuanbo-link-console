@@ -36,6 +36,7 @@ export class LicensingService {
       CREATE TABLE IF NOT EXISTS purchase_requests (token_hash TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE REFERENCES orders(id), request_body TEXT NOT NULL, offer_body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS license_renewals (order_id TEXT PRIMARY KEY REFERENCES orders(id), license_id TEXT NOT NULL REFERENCES licenses(id), use_until TEXT, updates_until TEXT);
       CREATE INDEX IF NOT EXISTS license_renewals_license ON license_renewals(license_id);
+      CREATE TABLE IF NOT EXISTS payment_receipts (order_id TEXT PRIMARY KEY REFERENCES orders(id), payment_reference TEXT NOT NULL UNIQUE, amount_fen INTEGER NOT NULL, source TEXT NOT NULL, app_id TEXT, seller_id TEXT, received_at TEXT NOT NULL, last_error TEXT);
       CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, at TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL);`);
   }
   close(): void { this.db.close(); }
@@ -126,7 +127,7 @@ export class LicensingService {
       const snapshot = z.object({ offer_body: z.string() }).parse(this.db.prepare('SELECT offer_body FROM purchase_requests WHERE order_id = ?').get(id));
       return { id, state: order.state, amountFen: order.details.amountFen, quantity: order.details.quantity, ...this.renewalTarget(id),
         offer: purchaseOfferSchema.parse(JSON.parse(snapshot.offer_body)),
-        expiresAt: new Date(link.expires_at).toISOString(), payable: order.state === 'pending' && link.expires_at - this.now() >= 60000 && link.app_id === payment?.appId && link.seller_id === payment.sellerId };
+        expiresAt: new Date(link.expires_at).toISOString(), payable: order.state === 'pending' && !this.hasPayment(id) && link.expires_at - this.now() >= 60000 && link.app_id === payment?.appId && link.seller_id === payment.sellerId };
     });
   }
   private renewalTarget(orderId: string): { renewalLicenseId?: string } {
@@ -153,6 +154,7 @@ export class LicensingService {
     return this.transaction(() => {
       const order = this.order(id);
       if (order.state !== 'pending') throw new ServiceError(409, 'ORDER_ALREADY_FULFILLED', '订单已交付，无需再次付款');
+      if (this.hasPayment(id)) throw new ServiceError(409, 'PAYMENT_ALREADY_RECEIVED', '付款已确认，授权待处理，请勿重复付款');
       const now = this.now();
       const expiresAt = Math.min(now + 15 * 60000, Date.parse(order.details.updatesUntil), order.details.useUntil ? Date.parse(order.details.useUntil) : Infinity);
       const old = this.db.prepare('SELECT app_id, seller_id, expires_at FROM alipay_payment_links WHERE order_id = ?').get(id);
@@ -178,32 +180,79 @@ export class LicensingService {
     const payment = z.object({ orderId: z.string().uuid(), amountFen: z.number().int().positive(), paymentReference: z.string(),
       appId: z.string().regex(/^\d{16}$/), sellerId: z.string().regex(/^\d{16}$/),
       status: z.enum(['TRADE_SUCCESS', 'TRADE_FINISHED', 'WAIT_BUYER_PAY', 'TRADE_CLOSED']) }).strict().parse(input);
-    return this.transaction(() => {
-      const order = this.alipayQueryOrder(id, payment.appId, payment.sellerId);
-      if (payment.orderId !== id) throw new ServiceError(409, 'PAYMENT_ORDER_MISMATCH', '查单返回了其他订单');
-      if (payment.amountFen !== order.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '查单金额与订单不一致');
-      const settled = payment.status === 'TRADE_SUCCESS' || payment.status === 'TRADE_FINISHED';
-      const result = settled ? this.fulfillOrder(id, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'alipay', payment) : order;
-      this.audit('order.alipay-queried', id, payment.status);
-      // 已交付订单的 CLOSED 可能代表退款，记录事实但不推断退款金额或撤销席位。
-      return { id, state: result.state, paymentStatus: payment.status, needsReview: !settled && result.state === 'fulfilled' };
-    });
+    const order = this.alipayQueryOrder(id, payment.appId, payment.sellerId);
+    if (payment.orderId !== id) throw new ServiceError(409, 'PAYMENT_ORDER_MISMATCH', '查单返回了其他订单');
+    if (payment.amountFen !== order.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '查单金额与订单不一致');
+    const settled = payment.status === 'TRADE_SUCCESS' || payment.status === 'TRADE_FINISHED';
+    const result = settled ? this.fulfill(id, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'alipay', payment) : order;
+    this.transaction(() => this.audit('order.alipay-queried', id, payment.status));
+    // 已交付订单的 CLOSED 可能代表退款，记录事实但不推断退款金额或撤销席位。
+    return { id, state: result.state, paymentStatus: payment.status, needsReview: !settled && result.state === 'fulfilled' };
+  }
+  private hasPayment(id: string): boolean {
+    return Boolean(this.db.prepare('SELECT order_id FROM payment_receipts WHERE order_id = ?').get(id));
+  }
+  paymentExceptions(after: number) {
+    const cursor = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).parse(after);
+    const rows = this.db.prepare(`SELECT p.rowid AS cursor, p.order_id AS orderId, p.payment_reference AS paymentReference,
+      p.amount_fen AS amountFen, p.source, p.received_at AS receivedAt, p.last_error AS lastError
+      FROM payment_receipts p JOIN orders o ON o.id = p.order_id WHERE o.state = 'pending' AND p.rowid > ? ORDER BY p.rowid LIMIT 100`).all(cursor);
+    const items = z.array(z.object({ cursor: z.number().int(), orderId: z.string().uuid(), paymentReference: z.string(),
+      amountFen: z.number().int(), source: z.enum(['manual', 'alipay']), receivedAt: z.string().datetime(), lastError: z.string().nullable() })).parse(rows);
+    return { items, nextCursor: items.length === 100 ? items[99]!.cursor : null };
+  }
+  retryDelivery(id: string, input: unknown) {
+    const { reason } = z.object({ reason: z.string().trim().min(1).max(500) }).strict().parse(input);
+    this.order(id);
+    const raw = this.db.prepare('SELECT * FROM payment_receipts WHERE order_id = ?').get(id);
+    if (!raw) throw new ServiceError(409, 'PAYMENT_NOT_RECEIVED', '订单尚无已确认收款记录，不能补发');
+    const receipt = z.object({ payment_reference: z.string(), amount_fen: z.number(), source: z.enum(['manual', 'alipay']),
+      app_id: z.string().nullable(), seller_id: z.string().nullable() }).parse(raw);
+    this.transaction(() => this.audit('order.delivery-retry-requested', id, reason));
+    return this.fulfill(id, { paymentReference: receipt.payment_reference, amountFen: receipt.amount_fen }, receipt.source,
+      receipt.app_id && receipt.seller_id ? { appId: receipt.app_id, sellerId: receipt.seller_id } : undefined);
   }
   fulfill(id: string, input: unknown, source: 'manual' | 'alipay' = 'manual', paymentIdentity?: { appId: string; sellerId: string }) {
     const payment = paymentSchema.parse(input);
-    return this.transaction(() => this.fulfillOrder(id, payment, source, paymentIdentity));
+    // Verified receipt survives a later delivery rollback or a process exit between these transactions.
+    this.transaction(() => {
+      this.validatePayment(id, payment, source, paymentIdentity);
+      const prior = this.db.prepare('SELECT * FROM payment_receipts WHERE order_id = ?').get(id);
+      if (prior) {
+        if (prior.payment_reference !== payment.paymentReference || prior.amount_fen !== payment.amountFen || prior.source !== source
+          || prior.app_id !== (paymentIdentity?.appId ?? null) || prior.seller_id !== (paymentIdentity?.sellerId ?? null)) throw new ServiceError(409, 'PAYMENT_CONFLICT', '订单已确认其他收款流水或身份');
+      } else {
+        this.db.prepare('INSERT INTO payment_receipts VALUES (?, ?, ?, ?, ?, ?, ?, NULL)').run(id, payment.paymentReference, payment.amountFen, source,
+          paymentIdentity?.appId ?? null, paymentIdentity?.sellerId ?? null, new Date(this.now()).toISOString());
+        this.audit('order.payment-received', id, source);
+      }
+    });
+    try { return this.transaction(() => {
+      const result = this.fulfillOrder(id, payment, source, paymentIdentity);
+      this.db.prepare('UPDATE payment_receipts SET last_error = NULL WHERE order_id = ?').run(id);
+      return result;
+    }); } catch (error) {
+      this.transaction(() => {
+        this.db.prepare('UPDATE payment_receipts SET last_error = ? WHERE order_id = ?').run(error instanceof ServiceError ? error.code : 'INTERNAL_ERROR', id);
+        this.audit('order.delivery-failed', id, error instanceof ServiceError ? error.code : 'INTERNAL_ERROR');
+      });
+      throw error;
+    }
   }
-  private fulfillOrder(id: string, payment: z.infer<typeof paymentSchema>, source: 'manual' | 'alipay', paymentIdentity?: { appId: string; sellerId: string }) {
+  private validatePayment(id: string, payment: z.infer<typeof paymentSchema>, source: 'manual' | 'alipay', paymentIdentity?: { appId: string; sellerId: string }) {
     const order = this.order(id);
     const link = this.db.prepare('SELECT app_id, seller_id FROM alipay_payment_links WHERE order_id = ?').get(id);
     if (link && source === 'alipay' && (link.app_id !== paymentIdentity?.appId || link.seller_id !== paymentIdentity?.sellerId)) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '支付通知与订单绑定的商户或应用不匹配');
     if (link && source === 'manual') throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '已生成支付宝付款入口的订单必须先核对渠道交易，不能改成人工核款');
     if (order.details.amountFen !== payment.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '核款金额与订单不一致');
-    if (order.state === 'fulfilled') {
-      if (order.payment_reference !== payment.paymentReference) throw new ServiceError(409, 'PAYMENT_CONFLICT', '订单已使用其他流水完成核款');
-      return this.describeOrder(id);
-    }
-    if (this.db.prepare('SELECT id FROM orders WHERE payment_reference = ?').get(payment.paymentReference)) throw new ServiceError(409, 'PAYMENT_REUSED', '收款流水已用于另一订单');
+    if (order.state === 'fulfilled' && order.payment_reference !== payment.paymentReference) throw new ServiceError(409, 'PAYMENT_CONFLICT', '订单已使用其他流水完成核款');
+    if (this.db.prepare('SELECT id FROM orders WHERE payment_reference = ? AND id != ?').get(payment.paymentReference, id)
+      || this.db.prepare('SELECT order_id FROM payment_receipts WHERE payment_reference = ? AND order_id != ?').get(payment.paymentReference, id)) throw new ServiceError(409, 'PAYMENT_REUSED', '收款流水已用于另一订单');
+    return order;
+  }
+  private fulfillOrder(id: string, payment: z.infer<typeof paymentSchema>, source: 'manual' | 'alipay', paymentIdentity?: { appId: string; sellerId: string }) {
+    const order = this.validatePayment(id, payment, source, paymentIdentity);
+    if (order.state === 'fulfilled') return this.describeOrder(id);
     const purchase = this.db.prepare('SELECT offer_body FROM purchase_requests WHERE order_id = ?').get(id);
     const { renewalLicenseId } = this.renewalTarget(id);
     if (purchase) {
@@ -280,7 +329,8 @@ export class LicensingService {
         return { id: license.id, code: license.revoked || target.renewalLicenseId ? null : this.decrypt(license.code_cipher), revoked: Boolean(license.revoked) };
       }) : [];
       return { id, state: order.state, amountFen: order.details.amountFen, quantity: order.details.quantity,
-        kind: order.details.kind, useUntil: order.details.useUntil, updatesUntil: order.details.updatesUntil, ...target, licenses };
+        kind: order.details.kind, useUntil: order.details.useUntil, updatesUntil: order.details.updatesUntil, ...target, licenses,
+        ...(order.state === 'pending' && this.hasPayment(id) ? { paymentConfirmed: true as const } : {}) };
     });
   }
   private requireDeliveryAccess(id: string, token: string): void {
