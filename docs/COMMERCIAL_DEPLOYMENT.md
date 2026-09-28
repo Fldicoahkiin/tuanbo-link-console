@@ -224,3 +224,17 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 - API 源版本仍为 `c17fd6124f6219b8d0cef7e9eba4ec33ca6b4bf4`。安装前后 API bundle、RELEASE、服务环境文件、Nginx 配置及 SQLite 主数据库文件共五项摘要未变；没有重启服务、修改销售配置或开通新路由。团播、Nginx、金河分镜与无忧排班服务检查均 active。
 - Python 部署／运维套件共 30 项通过，其中新增 8 项覆盖真实服务表结构、上海日期边界、整数金额、并发收款快照、敏感字段排除、CSV 公式及长数字保护、权限与拒绝覆盖、无效数据和限时失败。非空数据在隔离数据库验证，未向生产写入测试订单。
 - 未 push GitHub。渠道账单下载、银行结算匹配、退款、自动开票和真实交易验收仍待完成；此命令不替代这些流程。
+
+## 2026-09-29 实际发布与开售结果
+
+- 产品来源：`3dcf91cafc56dcebf368160da2961648c330fdbe`，标签 `v0.4.29`；[正式 Release](https://github.com/JinHe9527/tuanbo-link-console/releases/tag/v0.4.29)。私有仓库无需公开，客户从公司更新域名下载安装包。
+- [Windows 构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36461288338) 完成校验与直接草稿归档；下载后逐项验证 manifest、三个分发文件 SHA-256、清单版本／大小／SHA-512，再发布正式 Release。
+- Manifest SHA-256：`ad37f80fde39ee760a2671214d799d58ec227ce768989983e6c57b2adb5811a9`。安装器保持未签名，未伪造 Authenticode 状态。
+- 更新发布备份：`/var/lib/tblink-licensing/backups/20260928T181937Z-e217bc22-update-0.4.29`；公网清单与 blockmap 摘要一致，安装包 HEAD 大小一致、Range 返回 206 且片段一致。
+- 官网来源 `3dcf91cafc56dcebf368160da2961648c330fdbe`，增加 Windows 0.4.29 下载入口；商品与金额从生产目录读取。
+- 开售备份：`/var/lib/tblink-licensing/backups/20260928T182029Z-open-sales-bc3ae9fd`；目录 SHA-256：`07fd7553d5a5f11184eafb9f92282f10f06f026a01e1c879980d6adb02d14c6d`；启用后环境文件 SHA-256：`11a2c78ad6cd9ea54cfe1ed4c3bc47d047dcbc30f9cc146449435bf08f3437a5`。仅改变团播收款和目录设置。
+- 公网未付款验证订单：`0f0a3434-f6ae-4925-99c8-99c7ad32468a`，800 元；同凭据重复创建返回同一订单，领取状态 pending、激活码数量 0；公司 app、支付方法及回调地址匹配，没有实际扣款。该凭据仅保留在本机受限文件，未入库文档。
+- 自动开票、微信、真实支付／回调／激活／续费和 Windows 安装更新仍未验收。后续应按真实平台流水核对，不用伪造回调或手动改已付状态替代。
+- 最终服务器复核：授权 bundle 与 Nginx 摘要保持不变，授权服务、Nginx、金河分镜、无忧排班均 active。官网 HTML／JS／CSS 的公网摘要与发布包一致，授权 health 为 200；官网与 API 的管理员路径及配置文件探测均为 404。
+- 官网浏览器已验证 0.4.29 下载链接、月付 800 元／30 天与年付 8,000 元／365 天选项及对应合计；未勾选购买协议或执行浏览器付款。官网备份为 `/var/lib/tblink-licensing/backups/20260928T182005Z-website`。
+- 本地上线脚本回归 38 项通过；最终 Windows 构建为 149 个测试文件、1,039 项通过，40 项跳过。Actionlint 与工作流 YAML 检查通过。

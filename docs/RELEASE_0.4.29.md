@@ -4,7 +4,7 @@
 
 ## 构建来源
 
-- 目标标签：`v0.4.29`。实际构建提交、结论、产物和部署结果在核验后补记。
+- 发行标签：`v0.4.29`；产品提交 `3dcf91cafc56dcebf368160da2961648c330fdbe`。已完成正式发行与开售，实际证据见文末。
 - 前一标签 `v0.4.28` 对应 `dc12f1b61d398b0408c7a6dbba1cc6bfa800130e`，保留失败记录，没有移动或重新使用该标签。
 - [0.4.28 构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36453607620) 完成原生编译后，在 Node.js 25.8.2 的测试模块导入时因 `localStorage.getItem is not a function` 失败；148 个测试文件、1,036 项测试通过，1 个测试文件未能导入，40 项测试跳过。没有生成或发布安装包。
 - 在相同 Node.js 25.8.2 本地复现该错误。修复是让 MA2 模式测试在模块导入前建立模拟存储，避免依赖 Node 的 Web Storage；客户端行为不变。随后三项测试、定向 ESLint 和测试 TypeScript 配置检查通过。
@@ -16,7 +16,7 @@
 
 ## 发布与收款操作
 
-1. 从上述 run 下载安装器、blockmap、`latest.yml` 和 `release-manifest.json`。核对 manifest 的 Git SHA、平台、版本、工作区状态、检查结果及三个分发文件的长度和 SHA-256；本机使用 YAML 解析器核对 `latest.yml` 的版本、文件名、长度及安装器 SHA-512。
+1. 从上述成功 run 创建的草稿 Release 下载安装器、blockmap、`latest.yml` 和 `release-manifest.json`。核对 manifest 的 Git SHA、平台、版本、工作区状态、检查结果及三个分发文件的长度和 SHA-256；本机使用 YAML 解析器核对 `latest.yml` 的版本、文件名、长度及安装器 SHA-512。
 2. 上传上述文件到服务器非公开暂存目录。执行 `publish-update.py <目录> <已核验的manifest摘要> <Git SHA> 0.4.29`。脚本拒绝覆盖同名安装包；文件完整写入并校验后先发布安装器和 blockmap，最后原子替换清单。操作记录和旧清单保存在私有备份目录，不修改 Nginx 或授权服务。
 3. 核对公网清单、安装包 HEAD、Range 响应与缓存头。首次更新出口此前没有清单，回退时将新清单移入私有备份可停止后续更新；已安装客户端不能由此降级。
 4. 商品目录使用 `apps/licensing-server/deploy/catalog.json`：800 元 / 30 天 / 台，8,000 元 / 365 天 / 台；仅订阅、单份一台，主动续费。价格和期限均由服务端决定。
@@ -31,3 +31,17 @@
 - 支付宝公司产品额度、800 元 / 8,000 元实际付款及自动发码、原单恢复与续费。
 - 自动开票、退款对账、微信支付和现场 OBS / MIDI / MA2 联调。
 - GitHub 到腾讯云的自动同步仍未配置，本次使用受控上传。
+
+## 2026-09-29 实际发布与开售结果
+
+- 产品来源：`3dcf91cafc56dcebf368160da2961648c330fdbe`，标签 `v0.4.29`；[正式 Release](https://github.com/JinHe9527/tuanbo-link-console/releases/tag/v0.4.29)。私有仓库无需公开，客户从公司更新域名下载安装包。
+- [Windows 构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36461288338) 完成校验与直接草稿归档；下载后逐项验证 manifest、三个分发文件 SHA-256、清单版本／大小／SHA-512，再发布正式 Release。
+- Manifest SHA-256：`ad37f80fde39ee760a2671214d799d58ec227ce768989983e6c57b2adb5811a9`。安装器保持未签名，未伪造 Authenticode 状态。
+- 更新发布备份：`/var/lib/tblink-licensing/backups/20260928T181937Z-e217bc22-update-0.4.29`；公网清单与 blockmap 摘要一致，安装包 HEAD 大小一致、Range 返回 206 且片段一致。
+- 官网来源 `3dcf91cafc56dcebf368160da2961648c330fdbe`，增加 Windows 0.4.29 下载入口；商品与金额从生产目录读取。
+- 开售备份：`/var/lib/tblink-licensing/backups/20260928T182029Z-open-sales-bc3ae9fd`；目录 SHA-256：`07fd7553d5a5f11184eafb9f92282f10f06f026a01e1c879980d6adb02d14c6d`；启用后环境文件 SHA-256：`11a2c78ad6cd9ea54cfe1ed4c3bc47d047dcbc30f9cc146449435bf08f3437a5`。仅改变团播收款和目录设置。
+- 公网未付款验证订单：`0f0a3434-f6ae-4925-99c8-99c7ad32468a`，800 元；同凭据重复创建返回同一订单，领取状态 pending、激活码数量 0；公司 app、支付方法及回调地址匹配，没有实际扣款。该凭据仅保留在本机受限文件，未入库文档。
+- 自动开票、微信、真实支付／回调／激活／续费和 Windows 安装更新仍未验收。后续应按真实平台流水核对，不用伪造回调或手动改已付状态替代。
+- 最终服务器复核：授权 bundle 与 Nginx 摘要保持不变，授权服务、Nginx、金河分镜、无忧排班均 active。官网 HTML／JS／CSS 的公网摘要与发布包一致，授权 health 为 200；官网与 API 的管理员路径及配置文件探测均为 404。
+- 官网浏览器已验证 0.4.29 下载链接、月付 800 元／30 天与年付 8,000 元／365 天选项及对应合计；未勾选购买协议或执行浏览器付款。官网备份为 `/var/lib/tblink-licensing/backups/20260928T182005Z-website`。
+- 本地上线脚本回归 38 项通过；最终 Windows 构建为 149 个测试文件、1,039 项通过，40 项跳过。Actionlint 与工作流 YAML 检查通过。

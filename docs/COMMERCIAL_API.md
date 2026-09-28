@@ -1,6 +1,8 @@
 # 商业接口与凭证契约
 
-2026-09-28。本文区分已实现接口和后续设计。生产 origin 为 `https://api.tuanbo-link.jinhefilm.com`，既有授权服务、公网 DNS/HTTPS 已有验收记录；支付宝回调、客户领取、自助商品目录与下单接口已部署。支付宝身份和回调验签已配置，服务器生产只读查单响应验签通过；销售开关关闭且未配置商品目录。客户领取接口要求订单专属凭据。实现依据：`apps/licensing-server/src/http.ts`、`service.ts`、`packages/schema/src/license.ts`。
+2026-09-29 当前生产状态：Windows **0.4.29** 已正式发行，公司更新源已发布安装包、blockmap 与 `latest.yml`；官网已开放支付宝月付 **800 元／30 天／台**、年付 **8,000 元／365 天／台**。已核验未付款订单创建、同单恢复和未付款不发码，未进行实际扣款。Windows 安装、真实支付交付与续费、退款及两版本更新仍待真人测试；微信和自动开票尚未接入。实际构建、摘要与部署备份见 [发行记录](RELEASE_0.4.29.md)。下文带日期的旧关闭／未发行记录只表示当时状态。
+
+2026-09-29。本文区分已实现接口和后续设计。生产 origin 为 `https://api.tuanbo-link.jinhefilm.com`，既有授权服务、公网 DNS/HTTPS 已有验收记录；支付宝回调、客户领取、自助商品目录与下单接口已部署。支付宝身份和回调验签已配置，服务器生产只读查单响应验签通过；销售开关和正式商品目录已于 2026-09-29 启用。客户领取接口要求订单专属凭据。实现依据：`apps/licensing-server/src/http.ts`、`service.ts`、`packages/schema/src/license.ts`。
 
 ## 产品与商户范围
 
@@ -15,7 +17,7 @@
 | 方法与路径 | 访问范围 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
 | GET `/health` | 公网 | 无 | `{"status":"ok"}`，仅存活，不证明数据库、签名或支付可用 |
-| GET `/v1/catalog` | 已部署并开放精确代理；当前无可售商品 | 无 | `available,currency,termStart,offers`；配置缺失时无可售商品 |
+| GET `/v1/catalog` | 已部署并开放精确代理；月付和年付单机订阅可售 | 无 | `available,currency,termStart,offers`；配置缺失时无可售商品 |
 | POST `/v1/orders` | 已部署并开放精确代理；销售关闭时 503 | 客户预存随机 Bearer 凭据及商品请求，见下文 | 原订单、商品快照、付款期限及 `paymentUrl`；价格只由服务端计算 |
 | POST `/v1/payments/alipay/notify` | 代理与验签已启用；缺失配置时 404 | RSA2 签名表单，见下文 | 纯文本 `success`，不返回客户信息或激活码 |
 | POST `/v1/activate` | 公网 | `product, code, machineCode` | `{"license":"<Ed25519 JWS>"}` |
@@ -26,8 +28,8 @@
 | POST `/admin/orders` | 回环/运维隧道 + Bearer | 订单对象，见下文 | `{"id":"<UUID>","state":"pending或fulfilled"}` |
 | GET `/admin/orders/:id` | 同上 | UUID 路径 | 订单详情和 `licenses`，含完整激活码，仅运营可读 |
 | POST `/admin/orders/:id/fulfill` | 同上 | `paymentReference, amountFen` | 与订单详情相同，人工核款后发码 |
-| POST `/admin/orders/:id/payment-link` | 同上，代码已部署，收款配置关闭 | 空对象 `{}` | `id,amountFen,quantity,expiresAt,paymentUrl`；默认 503 未启用 |
-| POST `/admin/orders/:id/reconcile` | 同上，代码已部署，收款配置关闭 | 空对象 `{}` | `id,state,paymentStatus,needsReview`；调用支付宝查单，可信已付结果幂等发码 |
+| POST `/admin/orders/:id/payment-link` | 同上，代码和收款配置已启用 | 空对象 `{}` | `id,amountFen,quantity,expiresAt,paymentUrl`；默认 503 未启用 |
+| POST `/admin/orders/:id/reconcile` | 同上，代码和收款配置已启用 | 空对象 `{}` | `id,state,paymentStatus,needsReview`；调用支付宝查单，可信已付结果幂等发码 |
 | GET `/admin/payment-exceptions?after=0` | 回环/运维隧道 + 管理员 Bearer | 非负整数游标，可省略 | 最多 100 条已收款未交付记录与 `nextCursor`，见下文 |
 | POST `/admin/orders/:id/retry-delivery` | 同上 | `{"reason":"补发原因"}` | `{id,state}`；按已保存收款事实补交付，不发起扣款 |
 | POST `/admin/licenses/:id/revoke` | 同上 | `{"reason":"原因"}` | `{"revoked":true}` |
@@ -70,9 +72,9 @@
 - 详情返回 `{id,state,...订单字段,licenses:[{id,code,machineCode,revoked,leaseUntil}]}`；未绑定的 machineCode 与未签发的 leaseUntil 为 null。核款流水不在详情响应中，数据库及审计保留，不能把查询响应当财务对账单。
 - 吊销可重复但每次记录审计；**迁移不是幂等发货接口**，新码生成后立即恢复未绑定状态，再次 migrate 会被拒绝。响应丢失时通过订单详情恢复新码，不再次生成。旧授权须先撤销并等待已签发租约到期加 5 分钟；旧码永久失效。
 
-## 无账号客户领取（API 已部署，桌面购买仅本地验证）
+## 无账号客户领取（API 已部署，桌面随 0.4.29 发布）
 
-领取凭据与激活码、管理员令牌是三种不同的凭证。生产当前由受保护运营接口为已经创建的订单签发领取凭据；本地新增自助下单接口由客户预存随机凭据，创建时直接绑定订单，不要求建立用户账号。客户端不能提交任意金额或标记已付款。
+领取凭据与激活码、管理员令牌是三种不同的凭证。生产自助下单由客户预存随机凭据，创建时直接绑定订单，不要求建立用户账号；受保护运营接口也可为已经创建的订单签发或恢复领取凭据。客户端不能提交任意金额或标记已付款。
 
 - 领取凭据为 `TBD-` 加 64 位大写十六进制，使用 32 字节随机数；数据库仅存带用途及订单 ID 隔离的 HMAC-SHA256 摘要，不存可还原的凭据。仅签发响应返回一次明文，不记录到日志或审计。
 - 当前领取凭据有效期固定为签发后七天，是领取入口的有效期，与软件授权期限分开。响应丢失或遗忘时，运营核对真实购买人后明确重新签发；旧凭据立即失效，不能承诺能找回原文。重复签发不是幂等操作。
@@ -85,9 +87,9 @@
 
 数据库只新增 `order_delivery_access` 表，旧订单没有默认领取权限。已验证旧数据库结构升级、凭据不以明文落库及服务重启后仍可领取。生产升级已完成数据库备份、副本恢复和既有数据一致性核对；异地密钥备份及整机恢复仍待完成。本地 HTTP 测试已贯通“受保护签发凭据 → RSA2 测试通知 → 事务发码 → 客户凭据领取”，这不等同于支付宝真实付款或已具备收银台。
 
-## 无账号商品计价与订单恢复（服务已部署，销售关闭）
+## 无账号商品计价与订单恢复（服务与商品已启用）
 
-只有同时启用支付宝收款配置并提供 `LICENSE_CATALOG_FILE` 才提供新订单。没有目录时 `GET /v1/catalog` 返回 `{available:false,currency:"CNY",termStart:"fulfillment",offers:[]}`，新下单返回 503；不会回退到测试价格。2026-09-29 月付更新为 800 元／30 天／台，年付为 8,000 元／365 天／台；更新权益、销售有效期及商户额度尚待核实，未生成可售生产目录。仓库测试夹具中的其他金额只用于测试，不是当前报价。桌面购买入口、订单凭据保存及恢复 UI 已实现并本地验证；自助接口已部署并验证关闭状态，Windows 安装与实商户验收未完成，当前不能对客户开放销售。
+只有同时启用支付宝收款配置并提供 `LICENSE_CATALOG_FILE` 才提供新订单。没有目录时 `GET /v1/catalog` 返回 `{available:false,currency:"CNY",termStart:"fulfillment",offers:[]}`，新下单返回 503；不会回退到测试价格。2026-09-29 已配置正式目录并开放月付 800 元／30 天／台、年付 8,000 元／365 天／台，使用与更新天数一致，每单一份单机授权。客户端报价须匹配商品 revision；商户实际额度及 Windows／真实支付验收仍未完成。
 
 目录是严格 JSON：`version:1,maxOrderAmountFen,offers`。每个商品包含 `id,revision,name,unitAmountFen,kind,useDays,updatesDays,maxQuantity,saleUntil`。金额为人民币整数分；天数为 24 小时，不是自然月。买断 `useDays:null`，订阅为明确正整数天数；升级期限也必须明确。商品 ID 唯一，最多 20 项；单笔金额上限与商品数量共同限制台数。价格或条款变化必须更新 `revision`，不能在原版本号下更改授权条款。
 
@@ -159,7 +161,7 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 | 500 | `INTERNAL_ERROR` | 提供请求 ID 排查；不删除现有许可 |
 | 503 | `PAYMENTS_UNAVAILABLE` | 收款入口未启用，不生成付款链接 |
 
-## 支付宝通知自动发码（代码已部署，商户未启用）
+## 支付宝通知自动发码（代码与商户配置已启用，实付待验收）
 
 `POST /v1/payments/alipay/notify` 接受 `application/x-www-form-urlencoded`（可带 UTF-8 charset），同样限制 16KiB。运营先创建服务端订单；现有已部署回调接受订单 UUID。本地下单实现按渠道字符限制使用 `TB_` 加去掉连字符的 UUID 作为 `out_trade_no`，新版回调在验签后映射回原订单 UUID，也保留既有 UUID 通知契约。不能使用人类可读 `reference` 替代，生成新格式付款入口前须同时部署新版回调。
 
@@ -174,7 +176,7 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 
 实现参考：[支付宝网站支付通知说明](https://opendocs.alipay.com/open/270/105902)、[官方 Node SDK 通知验签说明](https://github.com/alipay/alipay-sdk-nodejs-all#通知验签)。本实现只覆盖网站支付标准表单通知，不作为所有支付宝业务通知的通用解析器。
 
-## 既有订单的支付宝付款入口（代码已部署，收款配置关闭）
+## 既有订单的支付宝付款入口（代码与收款配置已启用）
 
 运营先通过受保护接口创建已确认金额与授权期限的团播订单，再请求 `POST /admin/orders/<UUID>/payment-link`，正文仅 `{}`。身份仍使用管理员 Bearer；客户领取凭据、公开订单编号和请求中的金额不能代替运营权限。此步骤生成电脑网站支付链接，不扣款、不交付，也不自动发送给任何客户。
 
@@ -185,11 +187,11 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 - 已交付订单拒绝再次生成链接。已生成链接的订单不能改为人工核款；通知必须与该订单记录的应用和商户一致。付款窗口结束不直接把订单当作未支付关闭，后续已验签的成功通知仍按原金额和授权规则处理。
 - 测试覆盖独立 RSA 验签、参数篡改、固定网关、重复/过期/重启、商户切换、管理员权限，以及生成链接 → 新格式订单号通知 → 原订单发码。全部使用隔离数据库和临时密钥，无真实渠道请求。
 
-本步骤供运营已确认订单使用，客户自助商品计价与桌面领取见上节。历史 `8b428e2` 部署时，正式价格与公开下单尚未落实，内部接口返回 503 `PAYMENTS_UNAVAILABLE`；这不是当前完整部署状态。最新源版本见 [部署记录](COMMERCIAL_DEPLOYMENT.md)，2026-09-29 定价见 [首发销售方案](COMMERCIAL_ONBOARDING.md#首发销售方案价格已更新未开售)。当前生产新售继续关闭，真实交易及 Windows 发布验收仍未完成。
+本步骤供运营已确认订单使用，客户自助商品计价与桌面领取见上节。历史 `8b428e2` 部署时，正式价格与公开下单尚未落实，内部接口返回 503 `PAYMENTS_UNAVAILABLE`；这不是当前完整部署状态。最新源版本见 [部署记录](COMMERCIAL_DEPLOYMENT.md)，2026-09-29 定价见 [首发销售方案](COMMERCIAL_ONBOARDING.md#首发销售方案已按授权开售)。当前生产新售已开启，真实交易及 Windows 实机验收仍未完成。
 
 实现依据：[支付宝官方请求签名实现](https://github.com/alipay/alipay-sdk-nodejs-all/blob/master/src/util.ts)、[官方电脑网站支付参数模型](https://github.com/alipay/alipay-sdk-java-all/blob/master/v2/src/main/java/com/alipay/api/domain/AlipayTradePagePayModel.java)。
 
-## 主动查单补交付（代码已部署，未配置或实商户验收）
+## 主动查单补交付（代码与配置已部署，真实收款补交付待验收）
 
 当原订单的通知丢失或延迟时，运营通过 `POST /admin/orders/<UUID>/reconcile`，正文 `{}`，查询 `alipay.trade.query`。接口与付款入口共用开关和密钥；只有本服务已生成付款入口、且绑定当前应用/商户的订单才会请求渠道。付款链接过期仍可查询，不能通过重建订单掩盖未知付款状态。公网与客户领取凭据不能访问此接口。
 
@@ -232,7 +234,7 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 - 渠道超时、无确认交易、异常签名、退款信息或异常收款状态明确报错，保留原单，不自动重试或重新下单。已关闭收款配置时未交付订单查单返回 503；已经交付的订单仍可凭原凭据领取。该接口不执行退款，也不把已交付查询当作退款对账。
 - 支付宝官方说明在未收到异步通知时可主动查单：[交易查询接口](https://developer.alibaba.com/docs/doc.htm?articleId=757&docType=4&treeId=180)。本地使用测试 RSA 密钥与隔离 HTTP 验证补交付，不代表真实商户付款验收完成。
 
-`apps/licensing-server/web` 使用 `/v1/catalog`、`/v1/orders`、`/v1/orders/:id` 和客户主动查单接口。网页与 API 使用同源 Nginx 代理，续费仍由桌面发起；订单令牌保存在标签会话及用户导出的凭据文件中。官网现已发布公网，生产销售继续关闭；公开下单实测返回 503 PAYMENTS_UNAVAILABLE。详见 [购买网页](PURCHASE_WEBSITE.md)。
+`apps/licensing-server/web` 使用 `/v1/catalog`、`/v1/orders`、`/v1/orders/:id` 和客户主动查单接口。网页与 API 使用同源 Nginx 代理，续费仍由桌面发起；订单令牌保存在标签会话及用户导出的凭据文件中。官网已开放月付与年付购买；公开下单实测返回待付款订单及公司支付宝付款链接，未实际付款、未发码。详见 [购买网页](PURCHASE_WEBSITE.md)。
 
 
 ## 收款记录与交付异常
