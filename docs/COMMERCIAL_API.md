@@ -219,4 +219,4 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 
 ## 网页购买调用方
 
-`apps/licensing-server/web` 复用现有 `/v1/catalog`、`/v1/orders` 和 `/v1/orders/:id`，不新增服务端接口。网页与 API 使用同源 Nginx 代理，续费仍由桌面发起；订单令牌保存在标签会话及用户导出的凭据文件中。当前只完成本地实现，公网购买站点尚未部署，生产销售继续关闭。详见 [购买网页](PURCHASE_WEBSITE.md)。
+`apps/licensing-server/web` 复用现有 `/v1/catalog`、`/v1/orders` 和 `/v1/orders/:id`，不新增服务端接口。网页与 API 使用同源 Nginx 代理，续费仍由桌面发起；订单令牌保存在标签会话及用户导出的凭据文件中。官网现已发布公网，生产销售继续关闭；公开下单实测返回 503 PAYMENTS_UNAVAILABLE。详见 [购买网页](PURCHASE_WEBSITE.md)。

@@ -4,7 +4,7 @@
 
 2026-09-28 新增 `apps/licensing-server/web`，为团播域名准备无账户购买和领取入口，复用已经存在的商品目录、订单和交付 API。不引入新的服务端业务接口，也不修改激活、续费或支付回调。网页仅提供新订阅购买；原机器续费继续在桌面端完成。
 
-**目前为本地实现，未部署公网，不能作为支付宝已上线经营与付款页面的证明。** 正式价格、退款细则、换机规则、完整隐私/授权条款、实际适用的备案展示和 Windows 发布验收尚待完成。页面的购买须知只是现有行为说明，不能替代待确定的合同与隐私文本。首发月付/年付讨论报价不写在页面源码，价格和天数来自生产商品目录；目录关闭时显示暂未开放购买。
+**官网已于 2026-09-28 发布至 https://tuanbo-link.jinhefilm.com/，生产商品目录仍关闭。产品展示已上线，不代表真实付款、交付与商户审核已经完成。** 正式价格、退款细则、换机规则、完整隐私/授权条款和 Windows 发布验收尚待完成。域名备案号已展示，服务信息变更与公安联网备案状态仍需核对。页面的购买须知只是现有行为说明，不能替代待确定的合同与隐私文本。首发月付/年付讨论报价不写在页面源码，价格和天数来自生产商品目录；目录关闭时显示暂未开放购买。
 
 ## 用户流程
 
@@ -29,7 +29,7 @@ pnpm --filter @tb/licensing-server build:web
 
 输出为 `apps/licensing-server/dist/web/index.html`、`purchase.js`、`purchase.css`。浏览器构建独立于授权服务 Node bundle，默认服务端 build 不会自动发布网页。
 
-准备好的 Nginx 文件是 `apps/licensing-server/deploy/purchase-site.conf`，**尚未启用**：
+准备好的 Nginx 文件是 `apps/licensing-server/deploy/purchase-site.conf`，**已用于本次官网发布**：
 
 - 仅替换原 `tuanbo-link.jinhefilm.com` HTTPS 占位 server block，不能重复 include 同名站点，也不能覆盖 api、updates、金河分镜等站点。
 - 将三份构建产物发布到 `/srv/tblink-purchase`；保留旧版本以便回滚。正式发布记录需要文件哈希、来源提交、备份、`nginx -t` 和公网页面/API 检查。
@@ -39,7 +39,7 @@ pnpm --filter @tb/licensing-server build:web
 - 现有 `activate-release.py` 只允许调整 API server block，不能拿它直接发布新网页 vhost。需要独立的静态站发布与回滚步骤，核对当前服务器配置后再做变更。
 - 关闭商品目录并不会禁止历史订单凭据恢复/领码。不可只隐藏按钮却开放未经确认的生产目录。
 
-CF 沿用已准备的 `tuanbo-link.jinhefilm.com` 解析，本轮未修改 Cloudflare、生产 Nginx、商品目录或付款开关。
+CF 沿用已准备的 `tuanbo-link.jinhefilm.com` 解析；本次只调整团播官网 Nginx block，不修改商品目录、付款开关和其他项目站点。
 
 ## 本地验证
 
@@ -80,10 +80,22 @@ TBLINK_DEMO_VIDEO_PATH=/media/demo.mp4 pnpm --filter @tb/licensing-server build:
 
 2026-09-28 用户要求官网具有更高的视觉品质。本次只调整官网 HTML/CSS：深石墨背景、冷白标题、冰蓝时间线示意；首屏呈现产品用途，后续依次为独立演示区、功能说明、购买、须知和联系区域。购买表单的字段 ID、事件入口与服务端契约保留。首页图为带有文字标记的编排流程示意，不冒充真实软件截图。没有增加试用、虚构客户评价或免费入口。
 
-动效仅用于首屏轻量进入和按钮反馈，尊重 prefers-reduced-motion；不引入外部字体、图片、脚本或统计服务。本地浏览器检查覆盖桌面、390 与 320 像素视口；320 像素下发现标题被拆成三行，已调整小屏字级。官网仍未发布公网，视频仍待真实素材。
+动效仅用于首屏轻量进入和按钮反馈，尊重 prefers-reduced-motion；不引入外部字体、图片、脚本或统计服务。本地浏览器检查覆盖桌面、390 与 320 像素视口；320 像素下发现标题被拆成三行，已调整小屏字级。该视觉版本随后发布公网，视频仍待真实素材。
 
 ## 静态官网发布工具
 
 `apps/licensing-server/deploy/publish-website.py` 将网站作为独立静态版本发布，要求生产商品目录继续关闭。发布包含三份网页文件、完整来源提交和前后 Nginx 配置；工具固定校验旧 Nginx、授权 bundle、环境文件摘要，只允许团播官网 HTTPS block 改动。其他站点配置、授权服务配置和数据库不属于本次写入范围。使用版本目录及原子软链接切换，先执行候选 Nginx 校验，再重载；源站 HTML 比对或健康检查失败时恢复原配置与原链接。首次发布失败将候选链接改名保留，不删除已有文件。
 
 2026-09-28 发布准备时从 `https://jinhefilm.com/` 与 `https://story.jinhefilm.com/` 公开页核对到相同备案展示“蜀ICP备2026056101号-2”，页脚引用该域名备案号并链接工信部查询。此前腾讯云控制台已核对公司主体、域名已接入且关联此服务器；此展示不代表新增独立服务资料变更或公安联网备案已经完成。域名层级要求依据 [腾讯云域名备案说明](https://cloud.tencent.com/document/product/243/18905)。
+
+## 2026-09-28 公网发布结果
+
+- 正式地址：`https://tuanbo-link.jinhefilm.com/`，公开 HTML、JS、CSS 均为 200，文件 SHA-256 与发布包一致；浏览器已读取正式页面，无本地测试提示。
+- 来源提交：`886fef87cde2844b885d999ed022b347e82b70e0`；静态版本目录：`/srv/tblink-purchase-releases/886fef87cde2844b885d999ed022b347e82b70e0-598346b5`。
+- 成功发布备份：`/var/lib/tblink-licensing/backups/20260928T130630Z-website`；Nginx 摘要：`db9eb4d61c39db53688eb973899de050fbcd45b8f65b8f3a3ae23469b6da0a46`。
+- HTML 摘要：`d8b564965473c5ebd8924315fcdc2e898f21f39505f0050be85e5793aafc729d`。
+- 商品目录明确 available=false 且 offers=[]；实际 POST /v1/orders 返回 503 PAYMENTS_UNAVAILABLE。未生成正式销售订单、未开启收款。
+- 公网 /admin/orders、/v1/activate（官网域名）、/.env、/revision.txt、/nginx.previous.conf 均返回 404；公开文件 no-store，CSP 与 no-referrer 生效。
+- 授权服务 bundle 和环境文件摘要不变；授权服务、Nginx、金河分镜、无忧排班均 active；授权 API 与分镜 API 健康均为 200。
+- 首次切换后即时 HTML 比对失败，工具自动回滚；只读核查证明旧 Nginx 摘要及四个服务恢复，候选配置独立回环验证返回 200 且 HTML 完全一致。随后修复重载完成与新工作进程接管的时序，增加有上限的新页面等待和持续不匹配回滚测试，再发布成功。首次失败备份保留在 `/var/lib/tblink-licensing/backups/20260928T130324Z-website`。
+- 发布相关 Python 测试合计 18 项通过。真实视频、正式支付、自动开票、Windows 安装包验收仍未完成。

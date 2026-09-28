@@ -10,7 +10,7 @@
 | --- | --- | --- | --- | --- | --- |
 | A | `api.tuanbo-link` | 服务器公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 激活、未来支付 |
 | A | `updates.tuanbo-link` | 同一公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 安装包与更新清单 |
-| A | `tuanbo-link` | 同一公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 网站预留，当前返回 404 |
+| A | `tuanbo-link` | 同一公网 IPv4 | DNS only / 仅 DNS / 灰云 | Auto | 团播产品官网，已上线；商品销售关闭 |
 
 先检查是否已有同名 A/AAAA/CNAME，确认后改记录，不能覆盖其他业务。暂不添加 AAAA：有 IPv6 地址不代表公网路由、云防火墙和 Nginx 的 IPv6 链路已验收。如果暂不添加网站记录，也暂不启用反向代理模板的 `tuanbo-link.jinhefilm.com` 站点块。
 
@@ -71,7 +71,7 @@ curl --fail --max-time 15 https://api.tuanbo-link.jinhefilm.com/health
 curl --max-time 15 -o /dev/null -w '%{http_code}\n' https://api.tuanbo-link.jinhefilm.com/admin/orders
 # 预期 404；不得出现订单或认证业务响应
 curl --max-time 15 -o /dev/null -w '%{http_code}\n' https://tuanbo-link.jinhefilm.com/
-# 预期 404，当前没有网页
+# 预期 200，产品官网已上线；商品销售关闭
 curl --fail --max-time 15 -I https://updates.tuanbo-link.jinhefilm.com/windows/x64/latest.yml
 # 发布后 200，Cache-Control: no-store；尚未发布为 404
 ```
@@ -184,3 +184,9 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 - 本地授权服务与桌面购买／授权／安全存储回归共 97 项通过；部署及回滚 Python 回归 11 项通过。严格 TypeScript、变更文件 ESLint、服务端 bundle 与 Electron Vite main/preload/renderer 构建通过。回归曾发现未续费授权的日期格式被重写，已修复并重新验证。
 - 本地 Chrome 使用模拟 IPC 数据走通到期订阅、单机续费、查询交付和联网验证更新期限，检查客户名称及机器数量不可改、仅显示订阅商品、已交付续费不显示新码。界面测试不连接支付宝；实际服务端适配器另以本地 HTTP 与测试签名通知验证，不替代真实支付。
 - 桌面续费入口尚未发布 Windows 安装包，也未完成 Windows safeStorage、真实商户续费、退款或开票验收。完整 Windows 原生构建／安装验收仍须在 Windows PowerShell 执行；本轮 macOS Electron Vite 构建不能代替它。正式价格、每份套餐机器数与网站提额材料仍待确定。
+
+## 2026-09-28 团播官网上线
+
+官网 `https://tuanbo-link.jinhefilm.com/` 已从 404 预留站点切换为静态产品网站，来源 `886fef87cde2844b885d999ed022b347e82b70e0`。公开页面/JS/CSS 摘要与构建一致，购买目录关闭，下单返回 503，管理员及内部文件路径保持 404。授权 bundle、支付环境配置及其他站点未修改。发布备份 `/var/lib/tblink-licensing/backups/20260928T130630Z-website`。详细验证、首次回滚和修复记录见 [官网发布结果](PURCHASE_WEBSITE.md)。
+
+已在 Cloudflare 将 `tuanbo-link.jinhefilm.com` 的备注更新为“团播联动台：产品官网、操作演示与授权购买入口；官网已上线，当前销售关闭；源站 jinhe-cloud（腾讯云上海）；仅 DNS”，保存后重新展开记录核对。A 记录仍为 `123.206.229.200`、仅 DNS、自动 TTL；没有修改解析值或其他记录。
