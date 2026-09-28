@@ -127,22 +127,24 @@ flowchart TB
 本次启动校验变更验证：授权与服务端专项 20 项、浏览器真实组件配测试桥 5 项通过；类型检查、Lint 和 Electron main/preload/renderer 构建通过。浏览器断网/撤销为模拟边界数据，不替代正式 Windows 安装和生产授权服务联调。
 
 
-## 7. 手动 Windows 候选构建（本地配置完成，远端尚未运行）
+## 7. 手动 Windows 构建与草稿归档
 
-同一 `release-windows.yml` 现支持 `workflow_dispatch`。运行者必须填写完整小写 40 位 `expected_sha`，checkout 后同时与实际 HEAD 和 GitHub 事件 SHA 核对；分支在操作期间前进会使任务停止，不会悄悄构建另一提交。输入经环境变量传入 PowerShell，不插入命令源码。
+同一 `release-windows.yml` 支持 `workflow_dispatch`。运行者必须填写完整小写 40 位 `expected_sha`，checkout 直接检出该提交，并比较实际 HEAD。工作流可从 master 运行而产品源码保持固定标签；GitHub run 的 headSha 标识工作流来源，不能代替 manifest 的产品 gitSha。输入经环境变量传入 PowerShell，不插入命令源码。
 
-手动路径运行现有 `pnpm verify:release`，不要求新建产品版本标签。成功后把安装器、blockmap、latest.yml 和 release-manifest.json 保存为当前 run 的候选 artifact，名称包含提交、run ID 和 attempt，保留 14 天。普通构建作业仅有 contents:read，checkout 不持久化 GitHub 凭据。仅 v 标签 push 成功时才由独立 contents:write 作业下载同一次构建产物并创建草稿 Release，继续保持 draft=true、make_latest=false。
+手动路径运行现有 `pnpm verify:release`，不要求新建产品版本标签。成功后把安装器、blockmap、latest.yml 和 release-manifest.json 保存为当前 run 的候选 artifact，名称包含提交、run ID 和 attempt，保留 14 天。构建作业具有 contents:write 以支持直接草稿归档，checkout 不持久化 GitHub 凭据。默认候选仍使用 artifact；v 标签 push 成功时由独立作业下载同一次构建产物并创建草稿 Release，保持 draft=true、make_latest=false。
 
-手动候选构建不会创建 Release、改变产品版本、部署腾讯云或写正式更新 feed。现有 manifest 仍要求未签名候选，下载到候选包不等于商业可发布；正式签名设施、Windows 安装及两版本更新验收仍需完成。
+手动运行默认不创建 Release。只有显式 `archive_to_draft=true` 时，构建完成后才用 GitHub API 核对既有版本标签与 manifest SHA 一致，直接将四个分发文件上传为草稿 Release；这一路不使用 Actions artifact 配额，不覆盖已有 Release，不部署腾讯云或写正式 feed。正式公开仍是后续单独操作。现有 manifest 如实要求未签名候选；本次先发行后实测的授权与证据见 [0.4.29 记录](RELEASE_0.4.29.md)。
 
-2026-09-29 已在本机执行环境核对 `gh api user --jq .login` 为 `Fldicoahkiin`；仓库为私有，默认分支为 `master`，当前账号有 pull/push 权限、无 admin 权限。实际 fetch 后远端 `master` 为 `fb9b59e`，相对当时本地 `14eaac7` 无远端独有提交、本地领先 46 个提交。本次没有 push 或触发工作流。受限执行环境曾返回 401，而同机环境读取成功，不能据前者要求用户反复重新登录。后续 GitHub 写入前仍重新核对身份及分支状态。
+2026-09-29 首次同步前的历史记录：已在本机执行环境核对 `gh api user --jq .login` 为 `Fldicoahkiin`；仓库为私有，默认分支为 `master`，当前账号有 pull/push 权限、无 admin 权限。实际 fetch 后远端 `master` 为 `fb9b59e`，相对当时本地 `14eaac7` 无远端独有提交、本地领先 46 个提交。本次没有 push 或触发工作流。受限执行环境曾返回 401，而同机环境读取成功，不能据前者要求用户反复重新登录。后续 GitHub 写入前仍重新核对身份及分支状态。
 
-获得推送授权后再同步已审查变更。GitHub 要求支持 workflow_dispatch 的工作流存在于默认分支；未推送的本地 YAML 不能远程运行。实际调用模板：
+现已获得推送与发行授权，源码及工作流已推送。GitHub 要求支持 workflow_dispatch 的工作流存在于默认分支；未推送的本地 YAML 不能远程运行。实际调用模板：
 
 ```sh
 gh workflow run release-windows.yml --repo JinHe9527/tuanbo-link-console --ref <已核对分支> -f expected_sha=<完整提交SHA>
 ```
 
-触发后记录真实 run ID，检查其 headSha、结论及对应 manifest，不能仅凭触发命令成功声称 Windows 通过。核对来源与产物后，才安排受控 Windows 安装／激活／更新验收。官方依据：[手动运行工作流](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)、[工作流产物及跨作业传递](https://docs.github.com/en/actions/tutorials/store-and-share-data)。
+触发后记录真实 run ID，分别核对工作流 headSha、实际产品 checkout SHA、结论及对应 manifest，不能仅凭触发命令成功声称 Windows 通过。核对来源与产物后，才安排受控 Windows 安装／激活／更新验收。官方依据：[手动运行工作流](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)、[工作流产物及跨作业传递](https://docs.github.com/en/actions/tutorials/store-and-share-data)。
 
-本次本地验证：actionlint 1.7.12 工作流检查通过，YAML 解析及手动／标签发布边界核对通过，`pnpm test:release` 五项通过、`pnpm release:check` 确認根包与桌面包均为 0.4.27。没有运行远端工作流，没有生成新的 Windows 成品。
+早期候选准备验证（非最新远端结果）：actionlint 1.7.12 工作流检查通过，YAML 解析及手动／标签发布边界核对通过，`pnpm test:release` 五项通过、`pnpm release:check` 确認根包与桌面包均为 0.4.27。没有运行远端工作流，没有生成新的 Windows 成品。
+
+2026-09-29 直接草稿归档修复：actionlint 1.7.12 与 YAML 解析通过。第一次 0.4.29 Windows `verify:release` 已通过，因 artifact 配额耗尽未能归档；已使用原产品 SHA 重新运行直接草稿归档。最新结论以 [发行记录](RELEASE_0.4.29.md) 为准。

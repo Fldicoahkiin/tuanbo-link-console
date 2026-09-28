@@ -9,7 +9,9 @@
 - [0.4.28 构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36453607620) 完成原生编译后，在 Node.js 25.8.2 的测试模块导入时因 `localStorage.getItem is not a function` 失败；148 个测试文件、1,036 项测试通过，1 个测试文件未能导入，40 项测试跳过。没有生成或发布安装包。
 - 在相同 Node.js 25.8.2 本地复现该错误。修复是让 MA2 模式测试在模块导入前建立模拟存储，避免依赖 Node 的 Web Storage；客户端行为不变。随后三项测试、定向 ESLint 和测试 TypeScript 配置检查通过。
 - 前一标签推送未观察到自动 run，因此使用显式标签和完整提交手动触发。新构建同样核对实际 SHA，不把标签存在视为构建完成。
-- 手动构建不会自动创建 Release；通过后将同一批产物附加到该标签的正式发行。
+- [0.4.29 第一轮构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36457266164) 已通过完整 `pnpm verify:release`，包括 149 个测试文件、1,039 项测试通过（2 个文件、40 项测试跳过），Windows 打包及 manifest 校验；归档阶段因 GitHub Actions artifact 存储配额已满失败，未取得可下载产物，未发布正式版。
+- 工作流增加显式 `archive_to_draft` 选项：仍检出指定完整源码 SHA、验证版本标签与 manifest 一致，但直接从 Windows runner 上传四个分发文件到草稿 Release，不经过 Actions artifact 存储。该选项默认关闭，不自动公开或覆盖旧发行资产；GitHub 临时令牌仅由工作流使用。
+- [归档修复后的构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36461288338) 使用工作流提交 `6c5a5dfff8525cf9f8ee50d977cd9f8b8e1a506a`，实际产品源码仍固定为 `3dcf91cafc56dcebf368160da2961648c330fdbe` / `v0.4.29`。GitHub run 的 headSha 此时标识工作流来源，产品来源必须从实际 checkout 和 manifest 核对。通过后下载草稿资产再核验，最后才转为正式发行。
 - 之前的 `3965dd0` 候选构建因其版本仍为已发行的 0.4.27 而主动取消，不是校验通过或失败。
 
 ## 发布与收款操作
