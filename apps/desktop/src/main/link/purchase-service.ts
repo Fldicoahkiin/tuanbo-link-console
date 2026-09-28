@@ -2,12 +2,14 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   purchaseCatalogResponseSchema, purchaseDeliverySchema, purchaseOrderSchema, purchaseReceiptSchema,
-  purchaseRequestSchema, purchaseResponseSchema, type PurchaseReceipt
+  licenseActivationSchema, purchaseRequestSchema, purchaseResponseSchema, type PurchaseReceipt
 } from '@tb/schema';
 import type { SecureProfileStore } from './secure-profile-store';
 
 const credentialId = 'license.purchases';
-const storedReceiptSchema = purchaseReceiptSchema.extend({ token: z.string().regex(/^TBD-[A-F0-9]{64}$/) });
+const storedReceiptSchema = purchaseReceiptSchema.extend({ token: z.string().regex(/^TBD-[A-F0-9]{64}$/),
+  renewalAuthorization: licenseActivationSchema.optional()
+}).refine(value => Boolean(value.request.renewalLicenseId) === Boolean(value.renewalAuthorization), '续费凭据与购买类型不一致');
 const receiptsSchema = z.array(storedReceiptSchema).max(100);
 type StoredReceipt = z.infer<typeof storedReceiptSchema>;
 type Credentials = Pick<SecureProfileStore, 'hasCredential' | 'loadCredential' | 'saveCredential'>;
@@ -18,6 +20,9 @@ const messages: Record<string, string> = {
   PAYMENTS_UNAVAILABLE: '购买尚未开放，请联系发行方',
   INVALID_DELIVERY_ACCESS: '领取凭据已过期或撤销，请联系发行方核对原订单',
   PURCHASE_CONFLICT: '原购买请求不一致，请联系发行方核对订单',
+  INVALID_RENEWAL_AUTHORIZATION: '续费授权无效，请在原绑定机器核对激活码',
+  RENEWAL_NOT_SUBSCRIPTION: '只能用订阅商品续费原订阅授权',
+  RENEWAL_DETAILS_MISMATCH: '续费需保留原客户信息，且每次只续一台机器',
   RATE_LIMITED: '查询过于频繁，请稍后手动重试'
 };
 class PurchaseResponseError extends Error {
@@ -29,7 +34,8 @@ export class PurchaseService {
   private busy = false;
   constructor(serverUrl: string, private readonly credentials: Credentials,
     private readonly openExternal: (url: string) => Promise<void>, private readonly request: typeof fetch = fetch,
-    private readonly now: () => number = Date.now) {
+    private readonly now: () => number = Date.now,
+    private readonly renewalAuthorization?: (licenseId: string) => Promise<z.infer<typeof licenseActivationSchema>>) {
     this.origin = new URL(serverUrl);
     if (this.origin.protocol !== 'https:' || this.origin.username || this.origin.password || this.origin.search || this.origin.hash || this.origin.pathname !== '/') throw new Error('购买服务器必须是固定的 HTTPS 域名');
   }
@@ -65,8 +71,12 @@ export class PurchaseService {
       const receipts = await this.load();
       if (receipts.some(receipt => !receipt.rejected && receipt.delivery?.state !== 'fulfilled')) throw new Error('还有待核对的购买，请先恢复原订单；不要重复付款');
       if (receipts.length >= 100) throw new Error('本机购买记录已达上限，请联系发行方核对');
+      if (request.renewalLicenseId && !this.renewalAuthorization) throw new Error('本机续费凭据不可用，未创建订单');
+      const renewalAuthorization = request.renewalLicenseId
+        ? licenseActivationSchema.parse(await this.renewalAuthorization!(request.renewalLicenseId)) : undefined;
       const receipt: StoredReceipt = { localId: randomUUID(), createdAt: new Date(this.now()).toISOString(), request,
-        order: null, delivery: null, rejected: false, token: `TBD-${randomBytes(32).toString('hex').toUpperCase()}` };
+        order: null, delivery: null, rejected: false, token: `TBD-${randomBytes(32).toString('hex').toUpperCase()}`,
+        ...(renewalAuthorization ? { renewalAuthorization } : {}) };
       receipts.push(receipt);
       // Save before the first request so a lost response cannot lose the recovery credential.
       await this.save(receipts);
@@ -82,7 +92,7 @@ export class PurchaseService {
       const order = receipt.order;
       if (!order) throw new Error('尚未取得订单，请保留记录并手动恢复');
       const delivery = purchaseDeliverySchema.parse(await this.json(`/v1/orders/${order.id}`, receipt.token));
-      if (delivery.id !== order.id || delivery.amountFen !== order.amountFen || delivery.quantity !== order.quantity || delivery.kind !== order.offer.kind
+      if (delivery.id !== order.id || delivery.amountFen !== order.amountFen || delivery.quantity !== order.quantity || delivery.kind !== order.offer.kind || delivery.renewalLicenseId !== receipt.request.renewalLicenseId
         || receipt.delivery?.state === 'fulfilled' && delivery.state !== 'fulfilled') throw new Error('交付信息与原订单不一致，请联系发行方');
       receipt.delivery = delivery;
       if (delivery.state === 'fulfilled') receipt.order = { ...order, state: 'fulfilled', payable: false };
@@ -121,9 +131,9 @@ export class PurchaseService {
   }
   private async recover(receipt: StoredReceipt, receipts: StoredReceipt[]) {
     try {
-      const result = purchaseResponseSchema.parse(await this.json('/v1/orders', receipt.token, receipt.request));
+      const result = purchaseResponseSchema.parse(await this.json('/v1/orders', receipt.token, receipt.request, receipt.order ? undefined : receipt.renewalAuthorization));
       const { request, order } = receipt;
-      if (result.offer.id !== request.offerId || result.offer.revision !== request.revision || result.offer.unitAmountFen !== request.quotedUnitAmountFen
+      if (result.offer.id !== request.offerId || result.offer.revision !== request.revision || result.offer.unitAmountFen !== request.quotedUnitAmountFen || result.renewalLicenseId !== request.renewalLicenseId
         || result.quantity !== request.quantity || order && (result.id !== order.id || result.amountFen !== order.amountFen || result.expiresAt !== order.expiresAt || JSON.stringify(result.offer) !== JSON.stringify(order.offer))
         || receipt.delivery?.state === 'fulfilled' && result.state !== 'fulfilled') throw new Error('购买响应与已保存请求不一致，请联系发行方');
       receipt.order = purchaseOrderSchema.strip().parse(result);
@@ -133,18 +143,22 @@ export class PurchaseService {
       // Only explicit, pre-creation rejections permit a new purchase. Timeouts and 5xx remain uncertain.
       if (!receipt.order && error instanceof PurchaseResponseError && (
         error.code === 'OFFER_CHANGED' && error.status === 409 || error.code === 'QUANTITY_LIMIT' && error.status === 400
-        || error.code === 'PAYMENTS_UNAVAILABLE' && error.status === 503)) {
+        || error.code === 'PAYMENTS_UNAVAILABLE' && error.status === 503
+        || error.code === 'INVALID_RENEWAL_AUTHORIZATION' && error.status === 403
+        || error.code === 'RENEWAL_NOT_SUBSCRIPTION' && error.status === 409
+        || error.code === 'RENEWAL_DETAILS_MISMATCH' && error.status === 400)) {
         receipt.rejected = true;
         await this.save(receipts);
       }
       throw error;
     }
   }
-  private async json(path: string, token?: string, body?: unknown): Promise<unknown> {
+  private async json(path: string, token?: string, body?: unknown, renewal?: z.infer<typeof licenseActivationSchema>): Promise<unknown> {
     let response: Response; let text: string;
     try {
       response = await this.request(new URL(path, this.origin), { method: body === undefined ? 'GET' : 'POST', redirect: 'error',
-        headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          ...(renewal ? { 'X-Tblink-Renewal-Code': renewal.code, 'X-Tblink-Machine-Code': renewal.machineCode } : {}) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(10000) });
       if (!response.body) throw new Error('empty');
       const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;

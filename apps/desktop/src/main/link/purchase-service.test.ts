@@ -14,6 +14,8 @@ const appId = '2026000000000001'; const sellerId = '2088000000000001';
 const catalog = purchaseCatalogSchema.parse({ version: 1, maxOrderAmountFen: 10000, offers: [{
   id: 'test-only', revision: 'test-1', name: '测试商品', unitAmountFen: 100,
   kind: 'perpetual', useDays: null, updatesDays: 365, maxQuantity: 10, saleUntil: '2026-12-31T00:00:00Z'
+}, { id: 'test-month', revision: 'test-1', name: '测试续费', unitAmountFen: 100,
+  kind: 'subscription', useDays: 30, updatesDays: 30, maxQuantity: 1, saleUntil: '2026-12-31T00:00:00Z'
 }] });
 const request = { offerId: 'test-only', revision: 'test-1', quotedUnitAmountFen: 100, quantity: 2, customer: '测试企业', customerType: 'company' };
 let service: LicensingService;
@@ -45,9 +47,9 @@ beforeEach(async () => {
 });
 afterEach(async () => { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); service.close(); });
 
-async function pay(id: string) {
+async function pay(id: string, amount = '2.00') {
   const fields: Record<string, string> = { app_id: appId, seller_id: sellerId, out_trade_no: `TB_${id.replaceAll('-', '')}`,
-    trade_no: '202609282200000000001234', charset: 'utf-8', notify_type: 'trade_status_sync', trade_status: 'TRADE_SUCCESS', total_amount: '2.00' };
+    trade_no: '202609282200000000001234', charset: 'utf-8', notify_type: 'trade_status_sync', trade_status: 'TRADE_SUCCESS', total_amount: amount };
   const content = Object.keys(fields).sort().map(key => `${key}=${fields[key]}`).join('&');
   const body = new URLSearchParams({ ...fields, sign_type: 'RSA2', sign: sign('RSA-SHA256', Buffer.from(content), provider.privateKey).toString('base64') });
   const result = await fetch(`${base}/v1/payments/alipay/notify`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body, signal: AbortSignal.timeout(5000) });
@@ -186,4 +188,47 @@ it('拒绝重定向配置、超大或非 JSON 响应，不把 5xx 拒绝误判�
   const client = desktop(unavailable);
   await expect(client.create(request)).rejects.toThrow();
   expect((await client.list())[0]?.rejected).toBe(false);
+});
+
+it('本机续费贯通私密认证头、丢失响应恢复、验签交付；不向界面暴露续费凭据或新码', async () => {
+  const original = service.createOrder({ reference: 'renewal-fixture', customer: '测试企业', customerType: 'company', quantity: 1,
+    kind: 'subscription', amountFen: 100, useUntil: new Date(now + 30 * 86400000).toISOString(), updatesUntil: new Date(now + 30 * 86400000).toISOString() });
+  const license = service.fulfill(original.id, { amountFen: 100, paymentReference: 'manual:fixture' }).licenses[0]!;
+  const authorization = { product: 'tuanbo-link-console' as const, code: license.code, machineCode: `TB1-${'A'.repeat(64)}` };
+  service.activate(authorization);
+  const renewal = { ...request, offerId: 'test-month', quantity: 1, renewalLicenseId: license.id };
+  let id = '';
+  const lost: typeof fetch = async (input, options) => {
+    expect(new Headers(options?.headers).get('X-Tblink-Renewal-Code')).toBe(license.code);
+    expect(data.has('license.purchases')).toBe(true);
+    const response = await fetchLocal(input, options);
+    id = purchaseResponseSchema.parse(await response.json()).id;
+    throw new Error('lost response');
+  };
+  const getAuthorization = vi.fn((licenseId: string) => { expect(licenseId).toBe(license.id); return Promise.resolve(authorization); });
+  const client = new PurchaseService(origin, storage, external, lost, () => now, getAuthorization);
+  await expect(client.create(renewal)).rejects.toThrow('原购买记录已保留');
+  expect(getAuthorization).toHaveBeenCalledOnce();
+  const restored = desktop();
+  const receipt = (await restored.list())[0]!;
+  expect(JSON.stringify(receipt)).not.toMatch(/TBA-|TBD-|renewalAuthorization/);
+  expect((await restored.refresh(receipt.localId)).order).toMatchObject({ id, renewalLicenseId: license.id });
+  await restored.openPayment(receipt.localId);
+  await pay(id, '1.00');
+  const delivered = await restored.refresh(receipt.localId);
+  expect(delivered.delivery).toMatchObject({ renewalLicenseId: license.id, state: 'fulfilled',
+    useUntil: new Date(now + 60 * 86400000).toISOString(), licenses: [{ id: license.id, code: null, revoked: false }] });
+  await expect(restored.code(receipt.localId, license.id)).rejects.toThrow('未找到可复制');
+  expect(service.describeOrder(original.id).licenses[0]?.code).toBe(license.code);
+});
+
+it('缺失本机续费凭据时不保存购买、不发请求；服务端拒绝认证后可重新选择', async () => {
+  const renewal = { ...request, offerId: 'test-month', quantity: 1, renewalLicenseId: '9c8bab6c-2e5f-40d4-8327-9b8658ee0a53' };
+  const network = vi.fn(fetchLocal);
+  await expect(new PurchaseService(origin, storage, external, network).create(renewal)).rejects.toThrow('续费凭据不可用');
+  expect(network).not.toHaveBeenCalled(); expect(data.size).toBe(0);
+  const client = new PurchaseService(origin, storage, external, network, () => now, () => Promise.resolve({ product: 'tuanbo-link-console', code: `TBA-${'B'.repeat(32)}`, machineCode: `TB1-${'A'.repeat(64)}` }));
+  await expect(client.create(renewal)).rejects.toThrow('续费授权无效');
+  expect((await client.list())[0]?.rejected).toBe(true);
+  expect(external).not.toHaveBeenCalled();
 });

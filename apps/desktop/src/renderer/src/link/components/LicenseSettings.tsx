@@ -66,7 +66,7 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
       {claims?.online ? <p className="settings-note">本次签名凭证有效至 {new Date(claims.online.leaseUntil).toLocaleString('zh-CN')}。该期限不免除下次启动的联网验证；运行中的演出不会因网络中断而停止。</p> : null}
       <div className="settings-header-actions"><Button className="secondary-button" disabled={busy} onClick={() => void run('export')}><Download />导出授权申请</Button><Button className="primary-button" disabled={busy || runtimeActive || status.onlineAvailable} onClick={() => void run('import')}><Upload />导入授权文件</Button><Button className="secondary-button" disabled={busy} onClick={() => void run('refresh')}><RefreshCw />刷新状态</Button></div>
       <p className="settings-note">本软件所有产品功能均需付费激活，不提供免费版或试用。开票、换机及售后请联系发行方。</p>
-      <PurchaseSettings runtimeActive={runtimeActive || busy || !status.onlineAvailable} onSelectCode={value => { setCode(value); codeInput.current?.focus(); }} />
+      <PurchaseSettings runtimeActive={runtimeActive || busy || !status.onlineAvailable} license={claims ?? null} onSelectCode={value => { setCode(value); codeInput.current?.focus(); }} />
       {runtimeActive ? <p className="settings-note">请停止播放后再更换授权。</p> : null}
     </> : error ? <Button className="secondary-button" disabled={busy} onClick={() => void run('refresh')}>重新读取</Button> : null}
     {message ? <p role="status">{message}</p> : null}

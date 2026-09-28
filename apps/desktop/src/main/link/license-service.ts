@@ -143,4 +143,10 @@ export class LicenseService {
     if (!this.online || !await this.online.credentials.hasCredential(CODE_CREDENTIAL)) throw new Error('本机尚未保存激活码，请先输入激活码');
     return this.activateCode(await this.online.credentials.loadCredential(CODE_CREDENTIAL));
   }
+  async renewalAuthorization(licenseId: string) {
+    const status = await this.status();
+    if (!this.online || !status.claims?.online || status.claims.kind !== 'subscription' || status.claims.licenseId !== z.string().uuid().parse(licenseId)) throw new Error('只能续费本机已保存的订阅授权，请核对授权设置');
+    const code = activationCodeSchema.parse(await this.online.credentials.loadCredential(CODE_CREDENTIAL));
+    return { product: 'tuanbo-link-console' as const, code, machineCode: this.machineCode };
+  }
 }

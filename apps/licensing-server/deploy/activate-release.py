@@ -214,8 +214,8 @@ def main():
         after = database_snapshot(database)
         if any(after.get(name) != value for name, value in before.items()):
             raise RuntimeError("Existing data changed during migration")
-        if "order_delivery_access" not in after or "purchase_requests" not in after:
-            raise RuntimeError("Delivery/purchase table was not created")
+        if not {"order_delivery_access", "purchase_requests", "license_renewals"}.issubset(after):
+            raise RuntimeError("Delivery/purchase/renewal table was not created")
         if not catalog_closed():
             raise RuntimeError("Catalog must remain closed during this rollout")
         atomic_copy(backup / "nginx.next.conf", nginx, 0o644)

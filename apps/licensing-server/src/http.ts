@@ -53,7 +53,9 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       }
       if (request.method === 'POST' && request.url === '/v1/orders') {
         const token = /^Bearer (TBD-[A-F0-9]{64})$/.exec(request.headers.authorization ?? '')?.[1] ?? '';
-        const purchase = service.createPurchase(await readBody(request), token, catalog, checkout);
+        const purchase = service.createPurchase(await readBody(request), token, catalog, checkout, {
+          product: 'tuanbo-link-console', code: request.headers['x-tblink-renewal-code'], machineCode: request.headers['x-tblink-machine-code']
+        });
         const paymentUrl = purchase.payable && checkout ? checkout.createUrl({ id: purchase.id, amountFen: purchase.amountFen, quantity: purchase.quantity, expiresAt: purchase.expiresAt }) : null;
         return { ...purchase, paymentUrl };
       }

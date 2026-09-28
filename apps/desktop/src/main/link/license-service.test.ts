@@ -175,3 +175,28 @@ it('在线发行不允许通过导入永久文件绕过启动验证；新机器�
   await expect(service.activate(legacy)).rejects.toThrow('激活码');
   expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(legacy);
 });
+
+it('已到期的本机订阅可在主进程取得续费证明，拒绝其他授权 ID 和买断授权', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-renewal-proof-'));
+  let time = now;
+  const values = new Map<string, string>();
+  const id = randomUUID();
+  const code = `TBA-${'D'.repeat(32)}`;
+  const request = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({ license: issue({ licenseId: id,
+    kind: 'subscription', useUntil: new Date(now + 86400000).toISOString(),
+    online: { leaseUntil: new Date(now + 86400000).toISOString(), customerType: 'company' } }) })));
+  const service = new LicenseService(directory, machine, publicKeys, () => time, {
+    serverUrl: 'https://license.example.com', enforcement: 'required', fetch: request,
+    credentials: { hasCredential: key => Promise.resolve(values.has(key)), loadCredential: key => Promise.resolve(values.get(key) ?? ''),
+      saveCredential: (key, value) => { values.set(key, value); return Promise.resolve(); } }
+  });
+  await service.activateCode(code);
+  time += 2 * 86400000;
+  expect((await service.status()).state).toBe('expired');
+  expect(await service.renewalAuthorization(id)).toEqual({ product: 'tuanbo-link-console', code, machineCode: machine });
+  await expect(service.renewalAuthorization(randomUUID())).rejects.toThrow('只能续费');
+  request.mockResolvedValueOnce(new Response(JSON.stringify({ license: issue({ licenseId: id, online: {
+    leaseUntil: new Date(time + 86400000).toISOString(), customerType: 'company' } }) })));
+  await service.activateCode(code);
+  await expect(service.renewalAuthorization(id)).rejects.toThrow('只能续费');
+});

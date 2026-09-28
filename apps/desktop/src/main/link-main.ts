@@ -343,7 +343,8 @@ function registerIpc(
   };
   handle('link:license-activate-code', (_event, value: unknown) => changeOnlineLicense(z.string().max(64).parse(value)));
   handle('link:license-refresh-online', () => changeOnlineLicense());
-  const purchases = new PurchaseService(licenseConfig.serverUrl, profileStore, url => shell.openExternal(url));
+  const purchases = new PurchaseService(licenseConfig.serverUrl, profileStore, url => shell.openExternal(url), fetch, Date.now,
+    async id => (await getLicenseService()).renewalAuthorization(id));
   handle('link:purchase-catalog', () => purchases.catalog());
   handle('link:purchase-list', () => purchases.list());
   handle('link:purchase-create', (_event, value: unknown) => purchases.create(value));

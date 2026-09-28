@@ -34,6 +34,8 @@ export class LicensingService {
       CREATE TABLE IF NOT EXISTS order_delivery_access (order_id TEXT PRIMARY KEY REFERENCES orders(id), token_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS alipay_payment_links (order_id TEXT PRIMARY KEY REFERENCES orders(id), app_id TEXT NOT NULL, seller_id TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS purchase_requests (token_hash TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE REFERENCES orders(id), request_body TEXT NOT NULL, offer_body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS license_renewals (order_id TEXT PRIMARY KEY REFERENCES orders(id), license_id TEXT NOT NULL REFERENCES licenses(id), use_until TEXT, updates_until TEXT);
+      CREATE INDEX IF NOT EXISTS license_renewals_license ON license_renewals(license_id);
       CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, at TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL);`);
   }
   close(): void { this.db.close(); }
@@ -83,7 +85,7 @@ export class LicensingService {
       .map(offer => ({ ...offer, maxQuantity: Math.min(offer.maxQuantity, Math.floor(catalog.maxOrderAmountFen / offer.unitAmountFen)) }))
       .filter(offer => offer.maxQuantity > 0);
   }
-  createPurchase(input: unknown, token: string, catalog: PurchaseCatalog | undefined, payment?: { appId: string; sellerId: string }) {
+  createPurchase(input: unknown, token: string, catalog: PurchaseCatalog | undefined, payment?: { appId: string; sellerId: string }, renewalAuthorization?: unknown) {
     const request = purchaseRequestSchema.parse(input);
     if (!/^TBD-[A-F0-9]{64}$/.test(token)) throw new ServiceError(401, 'INVALID_DELIVERY_ACCESS', '请先安全保存本次购买的随机领取凭据');
     const tokenHash = createHmac('sha256', this.dataKey).update(`purchase:v1:${token}`).digest('hex');
@@ -100,6 +102,12 @@ export class LicensingService {
         const offer = this.listOffers(catalog).find(item => item.id === request.offerId);
         if (!offer || offer.revision !== request.revision || offer.unitAmountFen !== request.quotedUnitAmountFen) throw new ServiceError(409, 'OFFER_CHANGED', '商品已更新或停止销售，请重新查看价格与授权条款');
         if (request.quantity > offer.maxQuantity) throw new ServiceError(400, 'QUANTITY_LIMIT', '数量超过当前商品或单笔金额限制');
+        if (request.renewalLicenseId) {
+          const license = this.authorizeRenewal(request.renewalLicenseId, renewalAuthorization);
+          const original = this.order(license.order_id).details;
+          if (offer.kind !== 'subscription' || original.kind !== 'subscription') throw new ServiceError(409, 'RENEWAL_NOT_SUBSCRIPTION', '只能为原订阅购买订阅续期');
+          if (request.quantity !== 1 || request.customer !== original.customer || request.customerType !== original.customerType) throw new ServiceError(400, 'RENEWAL_DETAILS_MISMATCH', '续费必须保留原授权客户且每次只续一台机器');
+        }
         const now = this.now(); const expiresAt = Math.min(now + 15 * 60000, Date.parse(offer.saleUntil));
         id = randomUUID();
         const details = orderSchema.parse({ reference: `purchase:${tokenHash}`, customer: request.customer, customerType: request.customerType,
@@ -110,15 +118,35 @@ export class LicensingService {
         this.db.prepare('INSERT INTO purchase_requests VALUES (?, ?, ?, ?)').run(tokenHash, id, JSON.stringify(request), JSON.stringify(offer));
         this.db.prepare('INSERT INTO order_delivery_access VALUES (?, ?, ?, 0)').run(id, this.deliveryHash(id, token).toString('hex'), now + 7 * 86400000);
         this.db.prepare('INSERT INTO alipay_payment_links VALUES (?, ?, ?, ?)').run(id, appId, sellerId, expiresAt);
+        if (request.renewalLicenseId) this.db.prepare('INSERT INTO license_renewals (order_id, license_id) VALUES (?, ?)').run(id, request.renewalLicenseId);
         this.audit('order.purchase-created', id, `${offer.id}:${offer.revision}`);
       }
       const order = this.order(id);
       const link = z.object({ expires_at: z.number(), app_id: z.string(), seller_id: z.string() }).parse(this.db.prepare('SELECT * FROM alipay_payment_links WHERE order_id = ?').get(id));
       const snapshot = z.object({ offer_body: z.string() }).parse(this.db.prepare('SELECT offer_body FROM purchase_requests WHERE order_id = ?').get(id));
-      return { id, state: order.state, amountFen: order.details.amountFen, quantity: order.details.quantity,
+      return { id, state: order.state, amountFen: order.details.amountFen, quantity: order.details.quantity, ...this.renewalTarget(id),
         offer: purchaseOfferSchema.parse(JSON.parse(snapshot.offer_body)),
         expiresAt: new Date(link.expires_at).toISOString(), payable: order.state === 'pending' && link.expires_at - this.now() >= 60000 && link.app_id === payment?.appId && link.seller_id === payment.sellerId };
     });
+  }
+  private renewalTarget(orderId: string): { renewalLicenseId?: string } {
+    const row = this.db.prepare('SELECT license_id FROM license_renewals WHERE order_id = ?').get(orderId);
+    return row ? { renewalLicenseId: z.string().uuid().parse(row.license_id) } : {};
+  }
+  private authorizeRenewal(id: string, input: unknown) {
+    const parsed = licenseActivationSchema.safeParse(input);
+    const row = parsed.success ? this.db.prepare('SELECT * FROM licenses WHERE id = ? AND code_hash = ?').get(id, this.hash(parsed.data.code)) : undefined;
+    const license = row ? licenseRowSchema.parse(row) : null;
+    if (!parsed.success || !license || license.revoked || !license.machine || license.machine !== parsed.data.machineCode) throw new ServiceError(403, 'INVALID_RENEWAL_AUTHORIZATION', '续费授权无效，请在原绑定机器核对激活码');
+    return license;
+  }
+  private licenseTerms(license: z.infer<typeof licenseRowSchema>) {
+    const original = this.order(license.order_id).details;
+    const renewed = z.object({ use_until: z.string().nullable(), updates_until: z.string().nullable() }).parse(
+      this.db.prepare('SELECT MAX(use_until) AS use_until, MAX(updates_until) AS updates_until FROM license_renewals WHERE license_id = ?').get(license.id));
+    const later = (current: string, renewal: string | null): string => renewal && Date.parse(renewal) > Date.parse(current) ? renewal : current;
+    return { ...original, useUntil: original.useUntil ? later(original.useUntil, renewed.use_until) : null,
+      updatesUntil: later(original.updatesUntil, renewed.updates_until) };
   }
   prepareAlipayPayment(id: string, appId: string, sellerId: string) {
     z.string().regex(/^\d{16}$/).parse(appId); z.string().regex(/^\d{16}$/).parse(sellerId);
@@ -177,16 +205,30 @@ export class LicensingService {
     }
     if (this.db.prepare('SELECT id FROM orders WHERE payment_reference = ?').get(payment.paymentReference)) throw new ServiceError(409, 'PAYMENT_REUSED', '收款流水已用于另一订单');
     const purchase = this.db.prepare('SELECT offer_body FROM purchase_requests WHERE order_id = ?').get(id);
+    const { renewalLicenseId } = this.renewalTarget(id);
     if (purchase) {
       // 自助订单按首次核款发码时间起算，重试和回调不会再次延长期限。
       const offer = purchaseOfferSchema.parse(JSON.parse(z.string().parse(purchase.offer_body)));
       const now = this.now();
-      order.details.useUntil = offer.useDays === null ? null : new Date(now + offer.useDays * 86400000).toISOString();
-      order.details.updatesUntil = new Date(now + offer.updatesDays * 86400000).toISOString();
+      let useStart = now; let updatesStart = now;
+      if (renewalLicenseId) {
+        const license = licenseRowSchema.parse(this.db.prepare('SELECT * FROM licenses WHERE id = ?').get(renewalLicenseId));
+        if (license.revoked) throw new ServiceError(409, 'RENEWAL_REVOKED', '原授权已撤销，续费付款需由发行方核对处理');
+        const terms = this.licenseTerms(license);
+        if (terms.kind !== 'subscription' || !terms.useUntil || offer.useDays === null) throw new ServiceError(409, 'RENEWAL_NOT_SUBSCRIPTION', '原订阅与续期商品不匹配');
+        useStart = Math.max(now, Date.parse(terms.useUntil));
+        updatesStart = Math.max(now, Date.parse(terms.updatesUntil));
+      }
+      order.details.useUntil = offer.useDays === null ? null : new Date(useStart + offer.useDays * 86400000).toISOString();
+      order.details.updatesUntil = new Date(updatesStart + offer.updatesDays * 86400000).toISOString();
+      orderSchema.parse(order.details);
       this.db.prepare('UPDATE orders SET body = ? WHERE id = ?').run(JSON.stringify(order.details), id);
     } else if (order.details.useUntil && Date.parse(order.details.useUntil) <= this.now() || Date.parse(order.details.updatesUntil) <= this.now()) throw new ServiceError(409, 'ORDER_EXPIRED', '订单期限已过，请重新确认订单');
     this.db.prepare("UPDATE orders SET state = 'fulfilled', payment_reference = ? WHERE id = ?").run(payment.paymentReference, id);
-    for (let index = 0; index < order.details.quantity; index += 1) {
+    if (renewalLicenseId) {
+      this.db.prepare('UPDATE license_renewals SET use_until = ?, updates_until = ? WHERE order_id = ?').run(order.details.useUntil, order.details.updatesUntil, id);
+      this.audit('license.renewed', renewalLicenseId, id);
+    } else for (let index = 0; index < order.details.quantity; index += 1) {
       const code = `TBA-${randomBytes(16).toString('hex').toUpperCase()}`;
       this.db.prepare('INSERT INTO licenses (id, order_id, code_hash, code_cipher) VALUES (?, ?, ?, ?)').run(randomUUID(), id, this.hash(code), this.encrypt(code));
     }
@@ -195,11 +237,14 @@ export class LicensingService {
   }
   describeOrder(id: string) {
     const order = this.order(id);
-    const licenses = this.db.prepare('SELECT * FROM licenses WHERE order_id = ? ORDER BY rowid').all(id).map(row => {
+    const licenses = this.orderLicenses(id).map(row => {
       const value = licenseRowSchema.parse(row);
       return { id: value.id, code: this.decrypt(value.code_cipher), machineCode: value.machine, revoked: Boolean(value.revoked), leaseUntil: value.lease_until ? new Date(value.lease_until).toISOString() : null };
     });
-    return { id, state: order.state, ...order.details, licenses };
+    return { id, state: order.state, ...order.details, ...this.renewalTarget(id), licenses };
+  }
+  private orderLicenses(id: string) {
+    return this.db.prepare('SELECT * FROM licenses WHERE order_id = ? OR id IN (SELECT license_id FROM license_renewals WHERE order_id = ?) ORDER BY rowid').all(id, id);
   }
   private deliveryHash(id: string, token: string): Buffer {
     return createHmac('sha256', this.dataKey).update(`delivery:v1:${id}:${token}`).digest();
@@ -229,12 +274,13 @@ export class LicensingService {
     return this.transaction(() => {
       this.requireDeliveryAccess(id, token);
       const order = this.order(id);
-      const licenses = order.state === 'fulfilled' ? this.db.prepare('SELECT * FROM licenses WHERE order_id = ? ORDER BY rowid').all(id).map(row => {
+      const target = this.renewalTarget(id);
+      const licenses = order.state === 'fulfilled' ? this.orderLicenses(id).map(row => {
         const license = licenseRowSchema.parse(row);
-        return { id: license.id, code: license.revoked ? null : this.decrypt(license.code_cipher), revoked: Boolean(license.revoked) };
+        return { id: license.id, code: license.revoked || target.renewalLicenseId ? null : this.decrypt(license.code_cipher), revoked: Boolean(license.revoked) };
       }) : [];
       return { id, state: order.state, amountFen: order.details.amountFen, quantity: order.details.quantity,
-        kind: order.details.kind, useUntil: order.details.useUntil, updatesUntil: order.details.updatesUntil, licenses };
+        kind: order.details.kind, useUntil: order.details.useUntil, updatesUntil: order.details.updatesUntil, ...target, licenses };
     });
   }
   private requireDeliveryAccess(id: string, token: string): void {
@@ -252,7 +298,7 @@ export class LicensingService {
       const license = licenseRowSchema.parse(row);
       if (license.revoked) throw new ServiceError(403, 'REVOKED', '授权已撤销，请联系发行方');
       if (license.machine && license.machine !== request.machineCode) throw new ServiceError(409, 'MACHINE_BOUND', '激活码已绑定另一台机器，请办理换机');
-      const order = this.order(license.order_id).details;
+      const order = this.licenseTerms(license);
       const now = this.now();
       if (order.useUntil && Date.parse(order.useUntil) <= now) throw new ServiceError(403, 'EXPIRED', '授权使用期限已结束');
       const leaseUntil = Math.min(now + 7 * 86400000, order.useUntil ? Date.parse(order.useUntil) : Infinity);
