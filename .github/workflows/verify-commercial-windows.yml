@@ -38,6 +38,7 @@ jobs:
       - name: Missing and tampered credentials block real Windows IPC
         run: pnpm --filter @tb/desktop exec playwright test test-e2e/license-settings.spec.ts --workers=1 --reporter=line
       - name: Download immutable published release and verify manifest
+        id: published_release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -64,6 +65,7 @@ jobs:
         shell: pwsh
         run: ./scripts/verify-windows-installer.ps1 -InstallerPath $env:INSTALLER_PATH
       - name: Verify real updater HTTPS download and checksum rejection
+        if: ${{ !cancelled() && steps.published_release.outcome == 'success' }}
         shell: pwsh
         run: |
           pnpm --filter @tb/desktop exec electron scripts/verify-update-feed.mjs "$env:MANIFEST_PATH"

@@ -26,7 +26,8 @@ try {
   } while (-not $locked -and (Get-Date) -lt $deadline)
   if (-not $locked) { throw '安装版未显示完整的未激活入口。' }
   if ($names -contains '新建工程' -or $names -contains '主要工作区') { throw '未激活安装版暴露了工程工作区。' }
-  if ($process.MainWindowTitle -ne '团播联动台 / Tuanbo Link Console') { throw '安装版窗口标题不正确。' }
+  $expectedTitle = "团播联动台 / Tuanbo Link Console · $($process.Id)"
+  if ($process.MainWindowTitle -ne $expectedTitle) { throw "安装版窗口标题不正确：$($process.MainWindowTitle)" }
   if (Test-Path (Join-Path $testProfile 'licensing/license.jwt')) { throw '空白配置意外产生授权凭证。' }
   Write-Output $process.MainWindowTitle
 } finally {
