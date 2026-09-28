@@ -1,0 +1,10 @@
+[Unit]
+Description=Check confirmed Tuanbo payments awaiting delivery
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=60s
+Unit=tblink-delivery-recovery.service
+
+[Install]
+WantedBy=timers.target
