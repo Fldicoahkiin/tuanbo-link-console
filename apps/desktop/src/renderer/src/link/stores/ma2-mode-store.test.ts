@@ -1,6 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { readMa2Method, setMa2Method, useMa2ModeStore } from './ma2-mode-store';
 
+// The store reads browser storage during import, before per-test stubs exist.
+vi.hoisted(() => {
+  vi.stubGlobal('localStorage', { getItem: () => null });
+});
+
 afterEach(() => { vi.unstubAllGlobals(); useMa2ModeStore.setState({ method: 'midi' }); });
 
 it('新机器默认仅 MIDI，保留明确配置的高级连接', () => {
