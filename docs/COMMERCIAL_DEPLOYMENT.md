@@ -238,3 +238,15 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 - 最终服务器复核：授权 bundle 与 Nginx 摘要保持不变，授权服务、Nginx、金河分镜、无忧排班均 active。官网 HTML／JS／CSS 的公网摘要与发布包一致，授权 health 为 200；官网与 API 的管理员路径及配置文件探测均为 404。
 - 官网浏览器已验证 0.4.29 下载链接、月付 800 元／30 天与年付 8,000 元／365 天选项及对应合计；未勾选购买协议或执行浏览器付款。官网备份为 `/var/lib/tblink-licensing/backups/20260928T182005Z-website`。
 - 本地上线脚本回归 38 项通过；最终 Windows 构建为 149 个测试文件、1,039 项通过，40 项跳过。Actionlint 与工作流 YAML 检查通过。
+
+## 2026-09-29 已确认付款的交付恢复任务
+
+- 运维来源 `2c83fe91fa7eb0fbcae02092ea81731b337e4974`，已推送 GitHub。只更新 `/opt/tblink-licensing/payment-exceptions.py` 并安装 systemd service/timer；授权服务 bundle 来源仍为 `c17fd6124f6219b8d0cef7e9eba4ec33ca6b4bf4`，桌面正式版本仍为 0.4.29，不改写它们的 RELEASE 记录。
+- 备份及安装回执：`/var/lib/tblink-licensing/backups/20260928T193152Z-delivery-recovery-2c83fe9`。脚本 SHA256 `9bec4ec5782bc641f00b5e95e8353b90f052a880ccbfa46501a489dde78a8ebc`；service 为 `2ade8c3955ee4a2d21b142534f5c6e29a71889ec81a7535a2894618dc147c562`；timer 为 `0214639c75561480b94d8e4a3a481634d2bf6a5d8ef0a951004898f53195a674`。三项文件均 root 所有、0644。
+- 安装前 `systemd-analyze verify` 通过。先手动执行一次成功，再启用 timer；独立 SSH 复核自动调度从北京时间 03:31:54 到 03:32:54 再次执行，InvocationID 改变，`Result=success`、`ExecMainStatus=0`，timer `enabled/active` 且已安排后续执行。
+- 任务使用 `tblink-license` 身份，读取服务器内部管理员令牌，只访问回环接口；独立恢复状态库权限 0600。每批最多 5 单、每单最多 5 次，持久化退避，业务异常转人工。授权服务停机时不会由任务自动拉起。完整行为见 [接口文档](COMMERCIAL_API.md#收款记录与交付异常)。
+- 本地 Python 部署／运维套件 49 项通过，其中恢复任务单测 13 项。真实本地 Node 服务与 SQLite 故障注入覆盖：测试签名回调核款成功但发码事务失败 → 收款事实保留 → 故障解除后定时逻辑补发一次 → 重复执行不再发码；同库未付款订单保持 pending。测试使用隔离密钥和本机服务，未连接真实支付宝。
+- 生产每次任务均扫描 0、尝试 0、交付 0；数据库仍为 1 笔未付款测试订单、0 个授权、0 笔已付款待交付，完整性检查为 ok。没有用生产伪造付款检验任务。
+- API bundle、支付环境文件和 Nginx 配置的 SHA256 与开售时一致；团播、Nginx、金河分镜、无忧排班四项服务均 active，无需重启它们。
+- 该任务只恢复已保存可信收款事实的本地交付；未收到渠道通知的订单仍需渠道通知或主动查单。真实付款／激活／续费、微信、退款和自动开票仍未验收。Windows 授权拦截、正式安装器生命周期与真实更新下载器已通过专项 CI，但实际两版本安装更新重启仍待验收，见 [授权与更新验收](LICENSE_UPDATE_ACCEPTANCE.md)。
+- 回退时仅停止并禁用 `tblink-delivery-recovery.timer`，等待当前 oneshot 结束，再从上述备份恢复旧脚本；保留恢复状态和审计记录。不得清空业务库、撤销已有授权或为重新尝试而直接清零次数。
