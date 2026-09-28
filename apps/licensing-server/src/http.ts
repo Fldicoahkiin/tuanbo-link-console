@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { LicensingService, ServiceError } from './service';
 import type { AlipayCheckout, AlipayNotifications } from './alipay';
 import { purchaseCatalogSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
+import { clientAddress } from './client-address';
 
 async function readBytes(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
@@ -22,7 +23,7 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   catch { throw new ServiceError(400, 'INVALID_JSON', 'JSON 格式无效'); }
 }
 
-export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout, purchaseCatalog?: PurchaseCatalog) {
+export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout, purchaseCatalog?: PurchaseCatalog, trustLoopbackProxy = false) {
   if (adminToken.length < 32) throw new Error('后台访问令牌至少 32 位');
   if (checkout && !alipay) throw new Error('启用支付宝付款入口必须同时配置通知验签');
   const catalog = purchaseCatalog === undefined ? undefined : purchaseCatalogSchema.parse(purchaseCatalog);
@@ -40,7 +41,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       const now = Date.now();
       for (const [key, value] of rates) if (value.reset <= now) rates.delete(key);
       const group = request.url === '/v1/payments/alipay/notify' ? 'alipay' : request.url === '/v1/orders' ? 'purchase' : request.url?.startsWith('/v1/orders/') ? 'delivery' : 'product';
-      const address = `${request.socket.remoteAddress ?? 'unknown'}:${group}`;
+      const address = `${clientAddress(request.socket.remoteAddress, request.headers['x-tblink-client-ip'], trustLoopbackProxy)}:${group}`;
       const rate = rates.get(address) ?? { count: 0, reset: now + 60000 };
       if (rates.size >= 10000 && !rates.has(address) || ++rate.count > (group === 'purchase' ? 10 : 120)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
       rates.set(address, rate);

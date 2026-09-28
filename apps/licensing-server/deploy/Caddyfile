@@ -1,15 +1,19 @@
 # DNS must resolve to this server before Caddy can obtain public certificates.
 api.tuanbo-link.jinhefilm.com {
-    @public path /health /v1/activate /v1/payments/alipay/notify
+    @public path /health /v1/activate /v1/catalog /v1/orders /v1/payments/alipay/notify
     handle @public {
-        reverse_proxy 127.0.0.1:8787
+        reverse_proxy 127.0.0.1:8787 {
+            header_up X-Tblink-Client-IP {http.request.remote.host}
+        }
     }
     @delivery {
         method GET
         path_regexp delivery "^/v1/orders/[a-f0-9-]{36}$"
     }
     handle @delivery {
-        reverse_proxy 127.0.0.1:8787
+        reverse_proxy 127.0.0.1:8787 {
+            header_up X-Tblink-Client-IP {http.request.remote.host}
+        }
     }
     handle {
         respond "Not found" 404

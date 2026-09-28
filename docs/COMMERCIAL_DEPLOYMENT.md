@@ -78,7 +78,9 @@ curl --fail --max-time 15 -I https://updates.tuanbo-link.jinhefilm.com/windows/x
 
 对实际版本安装包检查 HEAD 的长度、Range 请求的 206 响应、本地 SHA-512 与 `latest.yml` 相符、Windows Authenticode 发布者和签名状态正确；测试未列入白名单路径返回 404、跨机激活拒绝、并发激活不多占席位、支付未实现路径不存在。必须完成检查→完整下载→停止联动→保存→确认安装→原目录自动重启，全程不停止 OBS/P1。
 
-当前授权进程限流为每 socket IP 120 次/分钟；Nginx 回环代理会共享该限额，这是当前上线容量限制。已准备 Nginx 真实连接 IP 的激活限流（每分钟 30 次、burst 5），仍需压测并处理进程共享总限额，不能盲信外部 `X-Forwarded-For`，也不能直接放大到无限制。支付宝通知、客户领取与其余请求的独立限流预算（各 120 次/分钟/连接来源）已随本次服务升级上线。仍须结合真实负载验收，避免反代共享限额影响渠道重发。
+待部署源码已支持 `LICENSE_PROXY_MODE=loopback`：仅在监听回环地址时启用，只信任来自回环连接的单一有效 `X-Tblink-Client-IP`。Nginx 在六条公开 API 路径覆盖该头为 `$remote_addr`；默认模式忽略所有转发来源头。等价 IPv6/IPv4 映射地址归一计数，拒绝列表、重复值、端口与作用域。下单每客户 10 次/分钟，支付宝通知、客户领取和其余请求各 120 次/分钟；激活仍叠加 Nginx 30 次/分钟、burst 5。
+
+当前 Cloudflare 为仅 DNS，此方案直接使用源站看到的客户连接地址；若以后开启 Cloudflare 代理，必须另行核实可信代理网段和来源配置，不能直接信任外部 `X-Forwarded-For` 或 `CF-Connecting-IP`。隔离测试已证明不同客户独立计数及伪造头不可绕过默认模式，真实并发容量仍需验收。
 
 ## 恢复和回退
 
@@ -87,12 +89,14 @@ curl --fail --max-time 15 -I https://updates.tuanbo-link.jinhefilm.com/windows/x
 本次授权服务升级使用版本化脚本 `apps/licensing-server/deploy/activate-release.py`，在公司服务器由 root 执行：
 
 ```sh
-python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CURRENT_NGINX_SHA256
+python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CURRENT_NGINX_SHA256 CURRENT_ENV_SHA256
 ```
 
-发布包仅包含 `dist/index.js`、`revision.txt`（源提交完整 SHA）和 `nginx-routes.conf`（待新增的精确路径）。先在本地完成类型检查、授权/交付/支付通知回归及服务构建，生成包摘要；脚本同时核对包、线上旧 bundle 和旧 Nginx 文件摘要，任何漂移均停止，不能绕过核对重新运行。
+发布包仅包含 `dist/index.js`、`revision.txt`（源提交完整 SHA）、`nginx.previous.conf`（已核实的旧配置）和 `nginx.next.conf`（本次配置）。先完成类型检查、授权/交付/支付回归及服务构建，生成包摘要；脚本同时核对包、线上旧 bundle、旧 Nginx 和旧环境文件摘要，任何漂移均停止。环境内容不进入发布包或日志。
 
-脚本只停止团播授权服务，在原服务器受限目录保留旧代码、旧代理和一致数据库备份，用 SQLite backup API 恢复到独立副本并核对表数据摘要、完整性和外键，再切换代码。新增代理块插入 API 站点原有默认 404 前，原文件其他内容保持不变。失败恢复旧代码与代理；新增领取表兼容旧代码，不用旧数据库覆盖可能已提交的数据。成功记录发布 SHA、bundle/代理摘要及备份路径。该脚本针对本次追加领取表及指定代理路径升级，已存在路径时拒绝重复插入，不是任意版本的通用迁移工具。
+脚本限定只改团播 API server 段，更新源站、ACME 与预留网站段必须逐字保持；六条代理路径均须固定上游、限制请求方法、覆盖来源头。停服前独立检查候选 Nginx 配置。只停止团播授权服务，短暂将 API 返回 503，保留旧代码、旧代理、旧环境与一致 SQLite 备份；用 backup API 恢复到独立副本并核对表数据摘要、完整性和外键。环境只修改代理模式，保留未知字段、顺序、注释和文件属主/权限。
+
+新代码启动后核对既有表数据不变、领取/购买表存在、商品目录关闭，再开放新代理路径。失败恢复旧代码、环境和代理，并检查旧服务健康；只允许新增表等兼容迁移，不用旧数据库覆盖可能已提交的数据。成功回执包含源 SHA、bundle/代理/环境摘要、代理模式、关闭目录与备份恢复验证结果。此脚本要求收款关闭，不适用于正在销售的版本切换。
 
 数据库副本恢复验证不等于整机灾备；私钥和数据密钥未复制到本地或发布包，异地加密备份与丢失主机后的完整恢复仍需另行完成。
 
@@ -129,11 +133,9 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 
 ## 后续授权服务升级
 
-`apps/licensing-server/deploy/activate-release.py` 支持同路由的后续代码升级：包内路由与现有 API 段完整一致且没有重复时，保留 Nginx 文件，不重载 Nginx。缺少两条路由时仍支持首次插入；部分存在、内容不同、位置不符或重复时停止，不能直接覆盖源站配置。
+按上节的四成员发布包、包路径及四项摘要参数执行。已上线配置必须等于经核实的旧配置或候选配置；部分修改、路径变化或其他站点段变化均停止。每次绑定完整 Git SHA，只支持兼容迁移，涉及删除字段或改数据格式需另做迁移与恢复方案。
 
-继续要求人工核实并传入包、旧 bundle、旧 Nginx 的 SHA-256，绑定完整 Git SHA。服务升级仍执行受限备份、SQLite 副本恢复核对、代码原子替换、健康和既有数据核对；回执增加 `proxyChanged`，`RELEASE` 标记采用原子替换。仅支持新增表等兼容迁移，失败回退代码而保留数据库写入；删除字段或改数据格式必须另做迁移与恢复方案。
-
-脚本回归：`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s apps/licensing-server/deploy -p 'test_*.py'`。测试隔离首次安装、原样升级、配置漂移、重复/错放路由和错误入口，不代表已进行新一轮生产部署。
+脚本回归：`PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest discover -s apps/licensing-server/deploy -p 'test_*.py'`。10 项隔离测试覆盖配置漂移、代理限制、环境保留、成功部署、目录意外开放和最终 Nginx 校验失败的回退。SQLite 使用实际临时数据库；systemd/Nginx 为模拟边界，不能代替源站验证。
 
 ## 付款链接与主动查单部署记录（2026-09-28）
 
@@ -148,6 +150,6 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 
 新增可选 `LICENSE_CATALOG_FILE` 和 `purchase_requests` 表，契约见 [COMMERCIAL_API.md](COMMERCIAL_API.md)。没有商品文件或未启用支付宝收款时不创建新单；不要将测试商品、金额或期限复制到生产。正式目录需先确认含税价格、使用/升级天数、单笔金额与机器数限制、截止时间，并给价格/条款变更分配新版本号。
 
-当前生产仍是上述 `8b428e2`，未部署商品代码，未添加 `GET /v1/catalog` 或 `POST /v1/orders` 的公网代理，也未修改 Cloudflare。客户端购买与本机安全保存/恢复凭据已接入本地源码，尚未发布安装包。本地下单限流为连接来源每分钟 10 次，反向代理下会共享回环来源；须完成可信来源限流与容量验收后再开放。现有升级脚本只接受原有路由片段，不可直接借新增路由覆盖 Nginx。
+当前生产仍是上述 `8b428e2`，未部署商品代码，未添加 `GET /v1/catalog` 或 `POST /v1/orders` 的公网代理，也未修改 Cloudflare。客户端购买与本机安全保存/恢复凭据已接入本地源码，尚未发布安装包。可信代理来源限流和受控 API 配置切换已在本地实现，待实际部署验证；真实容量与商业开放仍需验收。
 
 桌面读取未开放的商品路径会明确显示服务未开放，不生成本地商品替代。部署顺序为：备份恢复核对 → 授权服务与受控代理路由 → 不配置商品时的关闭验证 → 确认商品和商户配置 → Windows 桌面预发布验收 → 受控真实交易 → 正式开放。新增共享购买契约须随服务端 bundle 和桌面 preload 一起更新；开发时必须完全退出旧 Electron 实例并重新启动，不能只热更新 renderer。
