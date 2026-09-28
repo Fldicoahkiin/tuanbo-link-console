@@ -50,6 +50,19 @@ def health():
         return response.status == 200 and json.load(response) == {"status": "ok"}
 
 
+def next_proxy_config(current, routes):
+    api_start = current.index("server_name api.tuanbo-link.jinhefilm.com;")
+    insertion = current.index("    location / { return 404; }", api_start)
+    if (routes and current.count(routes) == 1 and routes in current[api_start:insertion]
+            and current.count('/v1/orders/') == 1 and current.count('/v1/payments/alipay/notify') == 1):
+        return current
+    if "/v1/orders/" in current or "/v1/payments/alipay/notify" in current:
+        raise RuntimeError("Existing routes differ from release; inspect before changing proxy")
+    if not routes.strip():
+        raise RuntimeError("Release routes are empty")
+    return current[:insertion] + routes + current[insertion:]
+
+
 def main():
     if os.geteuid() != 0 or len(sys.argv) != 5:
         raise RuntimeError("Usage as root: activate-release.py ARCHIVE ARCHIVE_SHA OLD_BUNDLE_SHA OLD_NGINX_SHA")
@@ -79,11 +92,9 @@ def main():
     if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
         raise RuntimeError("Invalid source revision")
     old_nginx = nginx.read_text()
-    if "/v1/orders/" in old_nginx or "/v1/payments/alipay/notify" in old_nginx:
-        raise RuntimeError("Routes already present; inspect instead of duplicating")
-    api_start = old_nginx.index("server_name api.tuanbo-link.jinhefilm.com;")
-    insertion = old_nginx.index("    location / { return 404; }", api_start)
-    (backup / "nginx.next.conf").write_text(old_nginx[:insertion] + (backup / "nginx-routes.conf").read_text() + old_nginx[insertion:])
+    next_nginx = next_proxy_config(old_nginx, (backup / "nginx-routes.conf").read_text())
+    proxy_changed = next_nginx != old_nginx
+    (backup / "nginx.next.conf").write_text(next_nginx)
     shutil.copyfile(bundle, backup / "previous.js")
     shutil.copyfile(nginx, backup / "previous-nginx.conf")
     services = ["jinhe-storyboard.service", "wuyou-dispatch.service", "nginx.service"]
@@ -102,8 +113,9 @@ def main():
         if database_snapshot(backup / "restore-check.db") != before:
             raise RuntimeError("Backup restore differs from production data")
         atomic_copy(backup / "index.js", bundle, 0o644)
-        atomic_copy(backup / "nginx.next.conf", nginx, 0o644)
-        run("nginx", "-t")
+        if proxy_changed:
+            atomic_copy(backup / "nginx.next.conf", nginx, 0o644)
+            run("nginx", "-t")
         run("systemctl", "start", "tblink-licensing.service")
         for attempt in range(10):
             try:
@@ -120,24 +132,28 @@ def main():
             raise RuntimeError("Existing data changed during migration")
         if "order_delivery_access" not in after:
             raise RuntimeError("Delivery table was not created")
-        run("systemctl", "reload", "nginx.service")
+        if proxy_changed:
+            run("systemctl", "reload", "nginx.service")
         for name in ["tblink-licensing.service", *services]:
             run("systemctl", "is-active", name)
         manifest = {"revision": revision, "bundleSha256": digest(bundle), "previousBundleSha256": expected_old,
-                    "nginxSha256": digest(nginx), "backupRestoreVerified": True, "existingTablesPreserved": True}
+                    "nginxSha256": digest(nginx), "proxyChanged": proxy_changed,
+                    "backupRestoreVerified": True, "existingTablesPreserved": True}
         (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        Path("/opt/tblink-licensing/RELEASE").write_text(revision + "\n")
+        atomic_copy(backup / "revision.txt", Path("/opt/tblink-licensing/RELEASE"), 0o644)
         activated = True
         print(json.dumps({**manifest, "backup": str(backup)}))
     finally:
         if not activated:
-            # Migration only adds a table. Preserve the database instead of discarding any committed writes.
+            # Only additive migrations are supported; never discard committed database writes.
             run("systemctl", "stop", "tblink-licensing.service")
             atomic_copy(backup / "previous.js", bundle, 0o644)
-            atomic_copy(backup / "previous-nginx.conf", nginx, 0o644)
-            run("nginx", "-t")
+            if proxy_changed:
+                atomic_copy(backup / "previous-nginx.conf", nginx, 0o644)
+                run("nginx", "-t")
             run("systemctl", "start", "tblink-licensing.service")
-            run("systemctl", "reload", "nginx.service")
+            if proxy_changed:
+                run("systemctl", "reload", "nginx.service")
             print("Activation failed; previous code and proxy restored", file=sys.stderr)
 
 

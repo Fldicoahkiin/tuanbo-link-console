@@ -126,3 +126,11 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 - 本地授权、支付通知、交付、客户端授权及更新管理六个文件共 48 项专项测试通过；授权服务类型检查、构建通过。部署脚本的副本恢复与原子替换辅助逻辑也用隔离文件验证。
 
 本次升级不改变收费开关、不创建生产订单，不上传 Windows 安装包。异地加密备份、完整灾备和客户购买链路仍需继续完成。
+
+## 后续授权服务升级
+
+`apps/licensing-server/deploy/activate-release.py` 支持同路由的后续代码升级：包内路由与现有 API 段完整一致且没有重复时，保留 Nginx 文件，不重载 Nginx。缺少两条路由时仍支持首次插入；部分存在、内容不同、位置不符或重复时停止，不能直接覆盖源站配置。
+
+继续要求人工核实并传入包、旧 bundle、旧 Nginx 的 SHA-256，绑定完整 Git SHA。服务升级仍执行受限备份、SQLite 副本恢复核对、代码原子替换、健康和既有数据核对；回执增加 `proxyChanged`，`RELEASE` 标记采用原子替换。仅支持新增表等兼容迁移，失败回退代码而保留数据库写入；删除字段或改数据格式必须另做迁移与恢复方案。
+
+脚本回归：`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s apps/licensing-server/deploy -p 'test_*.py'`。测试隔离首次安装、原样升级、配置漂移、重复/错放路由和错误入口，不代表已进行新一轮生产部署。
