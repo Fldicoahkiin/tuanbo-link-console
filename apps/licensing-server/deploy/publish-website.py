@@ -82,8 +82,24 @@ def read_catalog():
 
 
 def probe(path):
-    return run('curl', '--silent', '--show-error', '--max-time', '10', '--noproxy', '*',
+    return run('curl', '--silent', '--show-error', '--max-time', '3', '--noproxy', '*',
                '--resolve', f'{HOST}:443:127.0.0.1', f'https://{HOST}{path}').stdout
+
+
+def wait_for_page(expected):
+    # A successful reload command only signals the master; old workers can still answer briefly.
+    observed = None
+    for attempt in range(10):
+        try:
+            page = probe('/')
+            observed = hashlib.sha256(page.encode()).hexdigest()
+            if page == expected:
+                return
+        except subprocess.CalledProcessError:
+            observed = 'request failed'
+        if attempt < 9:
+            time.sleep(0.25)
+    raise RuntimeError('Live HTML differs from built artifact after reload; observed SHA256: ' + str(observed))
 
 
 def main():
@@ -144,8 +160,7 @@ def main():
         atomic_text(NGINX, candidate)
         run('nginx', '-t')
         run('systemctl', 'reload', 'nginx')
-        if probe('/') != (release / 'index.html').read_text():
-            raise RuntimeError('Live HTML differs from built artifact')
+        wait_for_page((release / 'index.html').read_text())
         if json.loads(probe('/v1/catalog')).get('available') is not False:
             raise RuntimeError('Public catalog is not closed')
         if [digest(path) for path in PROTECTED] != protected:

@@ -40,6 +40,17 @@ class WebsiteConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'security header'):
             module.validate_config(self.previous, self.candidate.replace('Referrer-Policy no-referrer always', 'Referrer-Policy unsafe-url always'))
 
+    def test_reload_waits_for_worker_to_serve_new_version(self):
+        with patch.object(module, 'probe', side_effect=['old response', 'new response']) as probe, patch.object(module.time, 'sleep'):
+            module.wait_for_page('new response')
+            self.assertEqual(probe.call_count, 2)
+
+    def test_wrong_page_never_passes_bounded_wait(self):
+        with patch.object(module, 'probe', return_value='wrong response') as probe, patch.object(module.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'after reload'):
+                module.wait_for_page('expected response')
+            self.assertEqual(probe.call_count, 10)
+
     def test_failed_live_probe_restores_existing_root_and_proxy(self):
         for had_site in [False, True]:
             with self.subTest(had_site=had_site):
