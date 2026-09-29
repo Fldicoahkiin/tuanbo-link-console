@@ -8,6 +8,7 @@ import re
 import sqlite3
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -45,11 +46,19 @@ class ProxyUpgradeTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 release.next_proxy_config(previous, previous, candidate)
 
-    def test_maintenance_only_changes_api(self):
-        before, api, after = release.api_sections(release.maintenance_config(template))
-        original_before, _, original_after = release.api_sections(template)
-        self.assertEqual((before, after), (original_before, original_after))
-        self.assertEqual(api.count("    return 503;\n"), 1)
+    def test_maintenance_blocks_both_order_hosts_and_preserves_updates(self):
+        result = release.maintenance_config(template)
+        self.assertEqual(result.count("    return 503;\n"), 2)
+        self.assertEqual(result.replace("    return 503;\n", ""), template)
+        for host in ("api.tuanbo-link.jinhefilm.com", "tuanbo-link.jinhefilm.com"):
+            self.assertIn(f"server_name {host};\n    return 503;", result)
+        self.assertNotIn("server_name updates.tuanbo-link.jinhefilm.com;\n    return 503;", result)
+
+    def test_maintenance_rejects_missing_or_duplicate_website(self):
+        marker = "    server_name tuanbo-link.jinhefilm.com;\n"
+        for candidate in (template.replace(marker, ""), template + marker):
+            with self.assertRaisesRegex(RuntimeError, "public service host"):
+                release.maintenance_config(candidate)
 
 
 class EnvironmentTest(unittest.TestCase):
@@ -61,14 +70,18 @@ class EnvironmentTest(unittest.TestCase):
         self.assertEqual(release.proxy_environment("CUSTOM_SETTING=value"), "CUSTOM_SETTING=value\nLICENSE_PROXY_MODE=loopback\n")
 
     def test_reject_ambiguous_or_unsafe_environment(self):
-        for original in ["LICENSE_HOST=0.0.0.0\n", "ALIPAY_CHECKOUT_ENABLED=true\n", "LICENSE_PROXY_MODE=external\n",
+        for original in ["LICENSE_HOST=0.0.0.0\n", "ALIPAY_CHECKOUT_ENABLED=yes\n", "LICENSE_PROXY_MODE=external\n",
                          "LICENSE_PROXY_MODE=none\nLICENSE_PROXY_MODE=loopback\n"]:
             with self.assertRaises(RuntimeError):
                 release.proxy_environment(original)
 
+    def test_preserve_enabled_checkout(self):
+        original = "# keep sales open\nALIPAY_CHECKOUT_ENABLED=true\nLICENSE_PROXY_MODE=loopback\n"
+        self.assertEqual(release.proxy_environment(original), original)
+
 
 class ActivationTest(unittest.TestCase):
-    def exercise(self, catalog_ok, final_nginx_ok=True, renewal_table=True, payment_table=True):
+    def exercise(self, catalog_ok, final_nginx_ok=True, renewal_table=True, payment_table=True, sales_open=False, timer_active=True):
         directory = Path(tempfile.mkdtemp(prefix="tblink-deploy-test-"))
         targets = {"/opt/tblink-licensing/dist/index.js": directory / "index.js",
                    "/opt/tblink-licensing/RELEASE": directory / "RELEASE",
@@ -82,7 +95,7 @@ class ActivationTest(unittest.TestCase):
         database = targets["/var/lib/tblink-licensing/license.db"]
         bundle.write_text("old code")
         nginx.write_text(previous)
-        original_env = "# unchanged\nLICENSE_HOST=127.0.0.1\nALIPAY_CHECKOUT_ENABLED=false\nCUSTOM_SETTING=preserve\n"
+        original_env = f"# unchanged\nLICENSE_HOST=127.0.0.1\nALIPAY_CHECKOUT_ENABLED={'true' if sales_open else 'false'}\nCUSTOM_SETTING=preserve\n"
         environment.write_text(original_env)
         os.chmod(environment, 0o640)
         targets["/opt/tblink-licensing/RELEASE"].write_text("a" * 40 + "\n")
@@ -103,6 +116,8 @@ class ActivationTest(unittest.TestCase):
         def command(*args):
             nonlocal checks
             calls.append(args)
+            if args[:2] == ("systemctl", "show"):
+                return SimpleNamespace(stdout="active\n" if timer_active else "inactive\n")
             if args == ("nginx", "-t"):
                 checks += 1
                 if checks == 2 and not final_nginx_ok:
@@ -118,14 +133,20 @@ class ActivationTest(unittest.TestCase):
                         db.execute("CREATE TABLE IF NOT EXISTS payment_receipts (id TEXT)")
 
         def check_catalog():
-            self.assertIn("return 503;", nginx.read_text())
-            return catalog_ok
+            self.assertEqual(nginx.read_text().count("return 503;"), 2)
+            self.assertIn(("systemctl", "stop", "tblink-delivery-recovery.service"), calls)
+            catalog = {"available": sales_open, "currency": "CNY", "termStart": "fulfillment", "offers": []}
+            if sales_open:
+                catalog["offers"] = [{"unitAmountFen": 80000, "useDays": 30}]
+            if bundle.read_text() == "new code" and not catalog_ok:
+                catalog["offers"] = [{"unitAmountFen": 1, "useDays": 365}]
+            return catalog
 
         original_mask = os.umask(0o077)
         try:
             with patch.object(release, "Path", side_effect=lambda value: targets.get(str(value), Path(value))), \
                  patch.object(release.os, "geteuid", return_value=0), patch.object(release, "run", side_effect=command), \
-                 patch.object(release, "health", return_value=True), patch.object(release, "catalog_closed", side_effect=check_catalog), \
+                 patch.object(release, "health", return_value=True), patch.object(release, "read_catalog", side_effect=check_catalog), \
                  patch.object(release.sys, "argv", arguments), patch("builtins.print"):
                 if catalog_ok and final_nginx_ok and renewal_table and payment_table:
                     release.main()
@@ -146,7 +167,8 @@ class ActivationTest(unittest.TestCase):
             self.assertEqual(environment.read_text(), original_env + "LICENSE_PROXY_MODE=loopback\n")
             manifest = json.loads(next((directory / "backups").glob("*/manifest.json")).read_text())
             self.assertTrue(manifest["backupRestoreVerified"])
-            self.assertTrue(manifest["catalogClosed"])
+            self.assertEqual(manifest["catalogClosed"], not sales_open)
+            self.assertTrue(manifest["catalogPreserved"])
             self.assertEqual(targets["/opt/tblink-licensing/RELEASE"].read_text(), "b" * 40 + "\n")
         else:
             self.assertEqual(bundle.read_text(), "old code")
@@ -154,13 +176,26 @@ class ActivationTest(unittest.TestCase):
             self.assertEqual(environment.read_text(), original_env)
             self.assertEqual(targets["/opt/tblink-licensing/RELEASE"].read_text(), "a" * 40 + "\n")
         self.assertFalse(any(call[:2] == ("systemctl", "restart") for call in calls))
-        self.assertFalse(any(call[:2] == ("systemctl", "stop") and call[2] != "tblink-licensing.service" for call in calls))
+        self.assertFalse(any(call[:2] == ("systemctl", "stop") and call[2] not in {
+            "tblink-licensing.service", "tblink-delivery-recovery.timer", "tblink-delivery-recovery.service"} for call in calls))
+        self.assertEqual(("systemctl", "start", "tblink-delivery-recovery.timer") in calls, timer_active)
+        if timer_active:
+            self.assertEqual(calls[-1], ("systemctl", "is-active", "tblink-delivery-recovery.timer"))
 
     def test_activate_with_maintenance_and_restore_verification(self):
         self.exercise(True)
 
-    def test_restore_code_environment_proxy_when_catalog_is_open(self):
+    def test_restore_code_environment_proxy_when_catalog_changes(self):
         self.exercise(False)
+
+    def test_activate_preserves_live_prices_and_open_checkout(self):
+        self.exercise(True, sales_open=True)
+
+    def test_restore_live_release_when_prices_change(self):
+        self.exercise(False, sales_open=True)
+
+    def test_does_not_enable_an_operator_disabled_timer(self):
+        self.exercise(True, sales_open=True, timer_active=False)
 
     def test_restore_after_final_nginx_validation_failure(self):
         self.exercise(True, False)

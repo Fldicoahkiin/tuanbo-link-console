@@ -105,8 +105,12 @@ def next_proxy_config(current, previous, candidate):
 
 def maintenance_config(config):
     api_sections(config)
-    marker = "    server_name api.tuanbo-link.jinhefilm.com;\n"
-    return config.replace(marker, marker + "    return 503;\n", 1)
+    for host in ("api.tuanbo-link.jinhefilm.com", "tuanbo-link.jinhefilm.com"):
+        marker = f"    server_name {host};\n"
+        if config.count(marker) != 1:
+            raise RuntimeError("Expected one public service host for maintenance")
+        config = config.replace(marker, marker + "    return 503;\n", 1)
+    return config
 
 
 def proxy_environment(current):
@@ -125,8 +129,8 @@ def proxy_environment(current):
         values[key] = value.strip().strip('"').strip("'")
     if values.get("LICENSE_HOST", "127.0.0.1") not in ("127.0.0.1", "::1"):
         raise RuntimeError("Trusted proxy requires a loopback listener")
-    if values.get("ALIPAY_CHECKOUT_ENABLED", "false") != "false":
-        raise RuntimeError("This rollout requires sales to remain disabled")
+    if values.get("ALIPAY_CHECKOUT_ENABLED", "false") not in ("false", "true"):
+        raise RuntimeError("Unknown checkout setting")
     if values.get("LICENSE_PROXY_MODE", "none") not in ("none", "loopback"):
         raise RuntimeError("Unknown proxy mode")
     if values.get("LICENSE_PROXY_MODE") == "loopback":
@@ -140,9 +144,22 @@ def proxy_environment(current):
     return current + ("" if current.endswith("\n") or not current else newline) + "LICENSE_PROXY_MODE=loopback" + newline
 
 
-def catalog_closed():
+def read_catalog():
     with urllib.request.urlopen("http://127.0.0.1:8787/v1/catalog", timeout=5) as response:
-        return response.status == 200 and json.load(response) == {"available": False, "currency": "CNY", "termStart": "fulfillment", "offers": []}
+        catalog = json.load(response)
+        if (response.status != 200 or not isinstance(catalog, dict)
+                or not isinstance(catalog.get("available"), bool)
+                or catalog.get("currency") != "CNY" or catalog.get("termStart") != "fulfillment"
+                or not isinstance(catalog.get("offers"), list)):
+            raise RuntimeError("Unexpected catalog response")
+        return catalog
+
+
+def recovery_timer_active():
+    state = run("systemctl", "show", "tblink-delivery-recovery.timer", "--property=ActiveState", "--value").stdout.strip()
+    if state not in ("active", "inactive"):
+        raise RuntimeError("Unexpected delivery recovery timer state")
+    return state == "active"
 
 
 def main():
@@ -192,13 +209,17 @@ def main():
     for name in services:
         run("systemctl", "is-active", name)
     run("/usr/bin/node", "--check", str(backup / "index.js"))
+    resume_recovery = recovery_timer_active()
     activated = False
     try:
-        run("systemctl", "stop", "tblink-licensing.service")
-        # Keep public API traffic out while checking the migrated database and closed catalog.
+        run("systemctl", "stop", "tblink-delivery-recovery.timer")
+        run("systemctl", "stop", "tblink-delivery-recovery.service")
+        # Both hosts proxy orders; stop the recovery worker before comparing database snapshots.
         atomic_copy(backup / "nginx.maintenance.conf", nginx, 0o644)
         run("nginx", "-t")
         run("systemctl", "reload", "nginx.service")
+        catalog_before = read_catalog()
+        run("systemctl", "stop", "tblink-licensing.service")
         # Stop the sole writer, then SQLite's backup API captures all committed WAL content.
         before = database_snapshot(database)
         with closing(sqlite3.connect(str(database))) as source, closing(sqlite3.connect(str(backup / "license.db"))) as target:
@@ -216,8 +237,8 @@ def main():
             raise RuntimeError("Existing data changed during migration")
         if not {"order_delivery_access", "purchase_requests", "license_renewals", "payment_receipts"}.issubset(after):
             raise RuntimeError("Delivery/purchase/renewal/payment receipt table was not created")
-        if not catalog_closed():
-            raise RuntimeError("Catalog must remain closed during this rollout")
+        if read_catalog() != catalog_before:
+            raise RuntimeError("Catalog changed during release activation")
         atomic_copy(backup / "nginx.next.conf", nginx, 0o644)
         run("nginx", "-t")
         run("systemctl", "reload", "nginx.service")
@@ -225,12 +246,12 @@ def main():
             run("systemctl", "is-active", name)
         manifest = {"revision": revision, "bundleSha256": digest(bundle), "previousBundleSha256": expected_old,
                     "nginxSha256": digest(nginx), "proxyChanged": proxy_changed,
-                    "environmentSha256": digest(environment), "proxyMode": "loopback", "catalogClosed": True,
+                    "environmentSha256": digest(environment), "proxyMode": "loopback",
+                    "catalogClosed": not catalog_before["available"], "catalogPreserved": True,
                     "backupRestoreVerified": True, "existingTablesPreserved": True}
         (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         atomic_copy(backup / "revision.txt", Path("/opt/tblink-licensing/RELEASE"), 0o644)
         activated = True
-        print(json.dumps({**manifest, "backup": str(backup)}))
     finally:
         if not activated:
             # Only additive migrations are supported; never discard committed database writes.
@@ -243,6 +264,10 @@ def main():
             run("systemctl", "start", "tblink-licensing.service")
             wait_health()
             print("Activation failed; previous code, environment and proxy restored", file=sys.stderr)
+        if resume_recovery:
+            run("systemctl", "start", "tblink-delivery-recovery.timer")
+            run("systemctl", "is-active", "tblink-delivery-recovery.timer")
+    print(json.dumps({**manifest, "backup": str(backup)}))
 
 
 if __name__ == "__main__":
