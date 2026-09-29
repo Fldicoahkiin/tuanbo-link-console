@@ -16,3 +16,6 @@ const demo = videoPath
 const html = (await readFile(new URL('web/index.html', root), 'utf8')).replace('<!-- DEMO_VIDEO -->', demo).replaceAll('info@jinhefilm.com', email);
 await writeFile(new URL('index.html', target), html);
 await copyFile(new URL('web/purchase.css', root), new URL('purchase.css', target));
+await mkdir(new URL('assets/', target), { recursive: true });
+await copyFile(new URL('web/assets/studio.webp', root), new URL('assets/studio.webp', target));
+for (const name of ['display.woff2', 'FONT-LICENSE.txt']) await copyFile(new URL(`web/assets/${name}`, root), new URL(`assets/${name}`, target));

@@ -67,6 +67,7 @@ apps/desktop/out-*/
 .env
 .env.*
 !.env.example
+**/.impeccable/review/
 *.pem
 *.pfx
 *.key

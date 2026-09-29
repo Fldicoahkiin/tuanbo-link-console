@@ -9,6 +9,7 @@ function element<T extends HTMLElement>(id: string, type: { new(): T }): T {
 }
 const form = element('purchase-form', HTMLFormElement);
 const offerInput = element('offer', HTMLSelectElement);
+const planOptions = element('plan-options', HTMLDivElement);
 const quantity = element('quantity', HTMLInputElement);
 const customer = element('customer', HTMLInputElement);
 const customerType = element('customer-type', HTMLSelectElement);
@@ -41,6 +42,12 @@ function updateQuote(): void {
   element('offer-detail', HTMLParagraphElement).textContent = `使用 ${offer.useDays} 天，更新权益 ${offer.updatesDays} 天。${money(offer.unitAmountFen)} / 台。按天计算，自核款发码起算。`;
   const count = quantity.valueAsNumber;
   element('total', HTMLElement).textContent = Number.isInteger(count) && count >= 1 && count <= offer.maxQuantity ? money(count * offer.unitAmountFen) : '请检查数量';
+  planOptions.querySelectorAll<HTMLButtonElement>('button[data-offer]').forEach(button => {
+    const selected = button.dataset.offer === offer.id;
+    button.setAttribute('aria-pressed', String(selected));
+    const state = button.querySelector('.plan-state');
+    if (state) state.textContent = selected ? '已选择' : '选择套餐';
+  });
 }
 
 function renderReceipt(receipt: WebReceipt | null): void {
@@ -50,6 +57,16 @@ function renderReceipt(receipt: WebReceipt | null): void {
     orderSummary.textContent = `${receipt.request.customer} · ${receipt.request.quantity} 台 · ${money(receipt.request.quantity * receipt.request.quotedUnitAmountFen)}${receipt.orderId ? ` · 订单号 ${receipt.orderId}` : ''}`;
   }
   submit.disabled = !saved || busy;
+  planOptions.querySelectorAll<HTMLButtonElement>('button').forEach(button => {
+    button.disabled = busy || receipt !== null || !catalog?.available;
+    if (receipt) {
+      const offer = catalog?.offers.find(candidate => candidate.id === button.dataset.offer);
+      const selected = offer?.id === receipt.request.offerId && offer.revision === receipt.request.revision && offer.unitAmountFen === receipt.request.quotedUnitAmountFen;
+      button.setAttribute('aria-pressed', String(selected));
+      const state = button.querySelector('.plan-state');
+      if (state) state.textContent = selected ? '本单套餐' : '当前在售套餐';
+    }
+  });
   discard.hidden = !receipt?.discardable || receipt.orderId !== null;
 }
 
@@ -61,7 +78,10 @@ async function run(action: () => Promise<void>): Promise<void> {
   controls.forEach(control => { control.disabled = true; });
   try { await action(); }
   catch (failure) {
-    if (!catalog) catalogStatus.textContent = '套餐读取未完成，请检查连接后重新读取。';
+    if (!catalog) {
+      catalogStatus.textContent = '套餐读取未完成，请检查连接后重新读取。';
+      planOptions.textContent = '套餐暂时无法加载，请在下方重新读取。';
+    }
     error.textContent = failure instanceof TypeError ? '连接失败，请保留订单凭据，恢复或查询原单后再操作。' : failure instanceof z.ZodError ? '资料格式或服务返回内容不正确。请保留订单凭据并联系支持。' : failure instanceof Error ? failure.message : '操作未完成，请保留凭据并查询原订单';
     error.hidden = false;
   } finally {
@@ -74,13 +94,40 @@ async function run(action: () => Promise<void>): Promise<void> {
 async function loadCatalog(): Promise<void> {
   catalog = null;
   form.hidden = true;
+  planOptions.replaceChildren();
+  const loading = document.createElement('p');
+  loading.className = 'plan-loading'; loading.textContent = '正在加载月付与年付套餐';
+  planOptions.append(loading);
   catalogStatus.textContent = '正在读取可售套餐…';
   const response = await client.catalog();
   const offers = response.offers.filter(offer => offer.kind === 'subscription');
-  catalog = { ...response, offers, available: offers.length > 0 };
+  catalog = { ...response, offers, available: response.available && offers.length > 0 };
   offerInput.replaceChildren(...offers.map(offer => {
     const option = document.createElement('option'); option.value = offer.id; option.textContent = `${offer.name} · ${money(offer.unitAmountFen)} / 台`; return option;
   }));
+  planOptions.replaceChildren(...offers.map(offer => {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'plan'; button.dataset.offer = offer.id;
+    button.setAttribute('aria-pressed', 'false');
+    const name = document.createElement('span'); name.className = 'plan-name';
+    name.textContent = offer.useDays === 30 ? '月付授权' : offer.useDays === 365 ? '年付授权' : offer.name;
+    const price = document.createElement('span'); price.className = 'plan-price';
+    price.textContent = `¥${(offer.unitAmountFen / 100).toLocaleString('zh-CN')}`;
+    const unit = document.createElement('span'); unit.className = 'plan-unit'; unit.textContent = `/ ${offer.useDays} 天 / 台`;
+    const detail = document.createElement('span'); detail.className = 'plan-detail';
+    detail.textContent = `全部功能，含 ${offer.updatesDays} 天更新权益`;
+    const state = document.createElement('span'); state.className = 'plan-state';
+    state.textContent = '选择套餐';
+    button.append(name, price, unit, detail, state);
+    button.addEventListener('click', () => { if (!busy && !client.receipt) { offerInput.value = offer.id; updateQuote(); } });
+    return button;
+  }));
+  if (!catalog.available) {
+    const unavailable = document.createElement('p'); unavailable.className = 'plan-loading';
+    unavailable.textContent = '暂未开放购买，已有订单可以继续恢复和查询。'; planOptions.replaceChildren(unavailable);
+  }
+  const restoredOffer = client.receipt?.request.offerId;
+  if (restoredOffer && offers.some(offer => offer.id === restoredOffer)) offerInput.value = restoredOffer;
   catalogStatus.textContent = catalog.available ? '选择套餐和电脑数量，随后保存订单凭据。' : '暂未开放购买。已付款客户仍可导入订单凭据，查询并领取激活码。';
   updateQuote();
 }
@@ -154,6 +201,7 @@ importInput.addEventListener('change', () => { void run(async () => {
   const file = importInput.files?.[0]; if (!file) return;
   if (file.size > 32768) throw new Error('订单凭据文件超过大小限制');
   client.importReceipt(await file.text()); storageReady = true; saved = true;
+  pay.hidden = true; pay.removeAttribute('href');
   codes.replaceChildren(); deliveryState.textContent = ''; submit.hidden = false; query.hidden = true; finish.hidden = true;
   orderState.textContent = '已载入凭据。点击恢复原单后查询付款和交付状态。';
 }); });
