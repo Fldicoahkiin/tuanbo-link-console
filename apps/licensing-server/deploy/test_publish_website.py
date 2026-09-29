@@ -73,11 +73,12 @@ class WebsiteConfigTest(unittest.TestCase):
                 package = folder / 'package'
                 package.mkdir()
                 candidate = self.candidate.replace('root /srv/tblink-purchase;', f'root {root};')
-                content = {'index.html': 'candidate site', 'purchase.js': 'script', 'purchase.css': 'style',
+                content = {'index.html': 'candidate site', 'purchase.js': 'script', 'purchase.css': 'style', 'assets/studio.webp': 'test image', 'assets/display.woff2': 'font', 'assets/FONT-LICENSE.txt': 'license',
                            'revision.txt': 'a' * 40, 'nginx.previous.conf': self.previous, 'nginx.next.conf': candidate}
                 archive = folder / 'release.tar'
                 with tarfile.open(archive, 'w') as tar:
                     for name, value in content.items():
+                        (package / name).parent.mkdir(exist_ok=True)
                         (package / name).write_text(value)
                         tar.add(package / name, arcname=name)
                 args = ['publish-website.py', str(archive), module.digest(archive), module.digest(proxy)] + [module.digest(p) for p in protected]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish the prepared static website on the existing company host, without enabling sales."""
+"""Publish the static website while preserving services and the current sales catalog."""
 import hashlib
 import json
 import os
@@ -19,7 +19,8 @@ ROOT = Path('/srv/tblink-purchase')
 RELEASES = Path('/srv/tblink-purchase-releases')
 BACKUPS = Path('/var/lib/tblink-licensing/backups')
 PROTECTED = [Path('/opt/tblink-licensing/dist/index.js'), Path('/etc/tblink-licensing/service.env')]
-FILES = {'index.html', 'purchase.js', 'purchase.css', 'revision.txt', 'nginx.previous.conf', 'nginx.next.conf'}
+STATIC_FILES = {'index.html', 'purchase.js', 'purchase.css', 'assets/studio.webp', 'assets/display.woff2', 'assets/FONT-LICENSE.txt'}
+FILES = STATIC_FILES | {'revision.txt', 'nginx.previous.conf', 'nginx.next.conf'}
 
 
 def digest(path):
@@ -49,7 +50,7 @@ def validate_config(previous, candidate):
         raise RuntimeError('Only the website block may change')
     if f'    root {ROOT};' not in site or site.count('proxy_pass http://127.0.0.1:8787;') != 4:
         raise RuntimeError('Unexpected website root or proxy routes')
-    expected = {'= /', '= /purchase.js', '= /purchase.css', '~ "^/media/[a-z0-9][a-z0-9-]*\\.mp4$"',
+    expected = {'= /', '= /purchase.js', '= /purchase.css', '= /assets/studio.webp', '= /assets/display.woff2', '= /assets/FONT-LICENSE.txt', '~ "^/media/[a-z0-9][a-z0-9-]*\\.mp4$"',
                 '= /v1/catalog', '= /v1/orders', '~ "^/v1/orders/[a-f0-9-]{36}$"', '~ "^/v1/orders/[a-f0-9-]{36}/reconcile$"'}
     routes = dict(re.findall(r'    location (.*?) \{\n(.*?)\n    }', site, re.S))
     if set(routes) != expected or '    location / { return 404; }' not in site:
@@ -77,8 +78,9 @@ def atomic_text(path, value):
 def read_catalog():
     with urllib.request.urlopen('http://127.0.0.1:8787/v1/catalog', timeout=5) as response:
         value = json.load(response)
-    if value.get('available') is not False or value.get('offers') != []:
-        raise RuntimeError('Website release must not enable sales')
+    if not isinstance(value.get('available'), bool) or not isinstance(value.get('offers'), list):
+        raise RuntimeError('Unexpected catalog response')
+    return value
 
 
 def probe(path):
@@ -116,7 +118,7 @@ def main():
     old_target = os.readlink(ROOT) if ROOT.is_symlink() else None
     if old_target and not Path(old_target).resolve().is_relative_to(RELEASES.resolve()):
         raise RuntimeError('Unmanaged static release link')
-    read_catalog()
+    catalog = read_catalog()
     services = ['nginx', 'tblink-licensing', 'jinhe-storyboard', 'wuyou-dispatch']
     for unit in services:
         if run('systemctl', 'is-active', unit).stdout.strip() != 'active':
@@ -133,6 +135,7 @@ def main():
             stream = archive.extractfile(item)
             if stream is None:
                 raise RuntimeError('Missing archive entry')
+            (backup / item.name).parent.mkdir(exist_ok=True)
             (backup / item.name).write_bytes(stream.read())
     previous = NGINX.read_text()
     if previous != (backup / 'nginx.previous.conf').read_text():
@@ -148,7 +151,8 @@ def main():
     RELEASES.mkdir(mode=0o755, exist_ok=True)
     release = RELEASES / (revision + '-' + uuid.uuid4().hex[:8])
     release.mkdir(mode=0o755)
-    for name in ['index.html', 'purchase.js', 'purchase.css']:
+    for name in STATIC_FILES:
+        (release / name).parent.mkdir(exist_ok=True)
         shutil.copyfile(backup / name, release / name)
         os.chmod(release / name, 0o644)
     changed = False
@@ -161,16 +165,16 @@ def main():
         run('nginx', '-t')
         run('systemctl', 'reload', 'nginx')
         wait_for_page((release / 'index.html').read_text())
-        if json.loads(probe('/v1/catalog')).get('available') is not False:
-            raise RuntimeError('Public catalog is not closed')
+        if json.loads(probe('/v1/catalog')) != catalog:
+            raise RuntimeError('Sales catalog changed during website release')
         if [digest(path) for path in PROTECTED] != protected:
             raise RuntimeError('Protected files changed during release')
         for unit in services:
             if run('systemctl', 'is-active', unit).stdout.strip() != 'active':
                 raise RuntimeError('Existing service health changed')
         manifest = {'revision': revision, 'backup': str(backup), 'release': str(release),
-                    'files': {name: digest(release / name) for name in ['index.html', 'purchase.js', 'purchase.css']},
-                    'nginxSha256': digest(NGINX), 'protectedFilesUnchanged': True, 'catalogClosed': True}
+                    'files': {name: digest(release / name) for name in STATIC_FILES},
+                    'nginxSha256': digest(NGINX), 'protectedFilesUnchanged': True, 'catalogUnchanged': True}
         (backup / 'result.json').write_text(json.dumps(manifest, indent=2))
         print(json.dumps(manifest, indent=2))
     except BaseException:
