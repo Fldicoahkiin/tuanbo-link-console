@@ -104,6 +104,12 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 
 更新文件先备份清单再发布；有问题时可以撤回最新清单到上一个可信版本，阻止新用户继续下载，但已经安装新版的机器不会自动降级。应发布更高版本修复或走经确认的人工恢复。不同版本文件不可覆盖；保留旧资产供已经读到旧清单的客户端完成下载。
 
+### 开售后的部署工具与 Git 校验（2026-09-29）
+
+部署工具来源 `b766f7da98fb86a26fa53afd8bff7318239e3245`，已安装到服务器 `/opt/tblink-licensing/activate-release.py`，SHA-256 为 `3315ae49a5667a78011b18a2404f332dbea078ba6c77dd9ade344a38eec98b69`。服务器临时目录内 17 项隔离回归通过后才安装，备份记录位于 `/var/lib/tblink-licensing/backups/deploy-tool-20260929T043110Z-3861bf84`。本地部署／运维套件 54 项通过；旧实现对开售环境保留和双域名维护用例失败。仅更新运维工具，授权 bundle、Nginx、环境文件与产品 RELEASE 的摘要前后不变；团播、分镜、无忧排班、Nginx 及补交付 timer 均保持 active。尚未用这版工具进行真实生产版本切换，因此隔离回退测试不代表生产回退演练完成。
+
+[Verify Licensing Server](../.github/workflows/verify-licensing-server.yml) 在服务、共享契约及构建配置变更的 master 推送和 PR 上执行类型检查、授权／支付测试、服务与网站构建，以及 Python 部署／回退／补交付集成测试。CI 使用与生产记录一致的 Node 22.22.1，权限只读，不接触商户密钥、不连接生产服务器。GitHub 自动验证与服务器自动部署分别管理；当前仍按上述摘要校验流程显式发布，尚未建立 GitHub 到腾讯云的自动部署凭据和触发器。
+
 ## 初次部署记录（以下旧摘要由后续升级取代）
 
 - 已通过用户授权的 ubuntu 密码登录，原有 Nginx、金河分镜和无忧排班保持 active，未修改其配置。

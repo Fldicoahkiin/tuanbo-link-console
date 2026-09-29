@@ -1,0 +1,70 @@
+name: Verify Licensing Server
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'apps/licensing-server/**'
+      - 'packages/core/**'
+      - 'packages/schema/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'patches/**'
+      - 'tsconfig*.json'
+      - 'vitest.config.ts'
+      - '.github/workflows/verify-licensing-server.yml'
+  pull_request:
+    paths:
+      - 'apps/licensing-server/**'
+      - 'packages/core/**'
+      - 'packages/schema/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'patches/**'
+      - 'tsconfig*.json'
+      - 'vitest.config.ts'
+      - '.github/workflows/verify-licensing-server.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-licensing-server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.22.1
+          cache: pnpm
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck licensing service
+        run: pnpm --filter @tb/licensing-server typecheck
+      - name: Verify authorization, payments and purchase client
+        run: pnpm exec vitest run apps/licensing-server --maxWorkers=2
+      - name: Build server and website from this commit
+        run: |
+          pnpm --filter @tb/licensing-server build
+          pnpm --filter @tb/licensing-server build:web
+      - name: Verify deployment, rollback and delivery recovery
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -W error::ResourceWarning -m unittest discover -s apps/licensing-server/deploy -p 'test_*.py'
+      - name: Record verification scope
+        run: |
+          printf 'Verified source: `%s`\n\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' 'Built licensing service and website; verified isolated authorization, payment, deployment and recovery behavior.' 'This workflow does not deploy to production, issue licenses or execute real payments.' >> "$GITHUB_STEP_SUMMARY"
