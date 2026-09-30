@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -124,7 +126,7 @@ try {
     assert.equal(await native.locator('#wechat-qr').evaluate(canvas => canvas.width === 240 && canvas.getContext('2d').getImageData(0, 0, 240, 240).data.some((v, i) => i % 4 !== 3 && v === 0)), true);
     assert.equal(await native.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), true);
     await native.locator('#order').scrollIntoViewIfNeeded();
-    await native.screenshot({ path: `/private/tmp/tblink-wechat-${name}.png`, fullPage: true });
+    await native.screenshot({ path: join(tmpdir(), `tblink-wechat-${name}.png`), fullPage: true });
     nativePaid = true; await native.locator('#query').click(); await native.locator('#codes code').waitFor();
     assert.equal(await native.locator('#wechat-payment').isHidden(), true); assert.deepEqual(errors, []);
     nativePaid = false; await native.close();
