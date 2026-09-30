@@ -95,6 +95,7 @@ function Get-TuanboUninstallEntries {
           $uninstallProperty = $property.PSObject.Properties['UninstallString']
           $entries += [pscustomobject]@{
             Hive = $root
+            Key = $key.PSChildName
             UninstallString = if ($null -eq $uninstallProperty) { '' } else { [string]$uninstallProperty.Value }
           }
         }
@@ -151,6 +152,7 @@ if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) {
     throw '旧版静默安装后仍有进程运行，停止覆盖以避免强制关闭。'
   }
   $migration = "$PreviousVersion -> $($desktopPackage.version)"
+  Write-Host "Verified installed legacy executable: $($previousMetadata.ProductVersion)"
 }
 
 Invoke-Installer -Installer $resolvedInstaller -Target $resolvedInstallDirectory
@@ -158,6 +160,7 @@ $currentMetadata = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($applica
 if ([version]$currentMetadata.ProductVersion -ne [version]"$($desktopPackage.version).0") {
   throw "覆盖安装后未切换到目标版本：$($currentMetadata.ProductVersion)"
 }
+Write-Host "Verified installed current executable: $($currentMetadata.ProductVersion); migration: $migration"
 Invoke-Installer -Installer $resolvedInstaller -Target $resolvedInstallDirectory
 
 $installedEntries = @(Get-TuanboUninstallEntries)
@@ -181,6 +184,7 @@ if (-not (Test-Path -LiteralPath $uninstallerPath)) {
 
 $mainWindowTitle = (& ./scripts/verify-installed-app.ps1 -ExecutablePath $applicationPath | Out-String).Trim()
 $tamperedWindowTitle = (& ./scripts/verify-installed-app.ps1 -ExecutablePath $applicationPath -Credential tampered | Out-String).Trim()
+Write-Host 'Installed product rejected both missing and tampered credentials.'
 
 $deadline = (Get-Date).AddSeconds(15)
 do {
@@ -192,7 +196,16 @@ if ($remainingProcesses.Count -gt 0) {
   throw '安装版正常关闭超时；按产品规则保留进程，不强制结束。'
 }
 
-$uninstall = Start-Process -FilePath $uninstallerPath -ArgumentList '/S', '/currentuser' -WindowStyle Hidden -PassThru
+# NSIS's original stub exits after launching its temporary copy. Execute our own
+# verified copy with _?= so WaitForExit observes the actual uninstall and status.
+$uninstallCopyDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "tblink-uninstall-check-$([guid]::NewGuid())"
+[void](New-Item -ItemType Directory -Path $uninstallCopyDirectory)
+$uninstallCopy = Join-Path $uninstallCopyDirectory 'uninstall.exe'
+Copy-Item -LiteralPath $uninstallerPath -Destination $uninstallCopy
+if ((Get-FileHash $uninstallerPath -Algorithm SHA256).Hash -cne (Get-FileHash $uninstallCopy -Algorithm SHA256).Hash) {
+  throw '卸载程序临时副本校验失败。'
+}
+$uninstall = Start-Process -FilePath $uninstallCopy -ArgumentList '/S', '/currentuser', "_?=$resolvedInstallDirectory" -WindowStyle Hidden -PassThru
 if (-not $uninstall.WaitForExit(120000)) { throw '卸载超时，保留进程以便诊断。' }
 if ($uninstall.ExitCode -ne 0) {
   throw "卸载程序退出码：$($uninstall.ExitCode)"
@@ -208,7 +221,7 @@ if ($processResidue.Count -gt 0) {
   throw "卸载后仍有 $($processResidue.Count) 个联动台进程。"
 }
 if ($registryResidue.Count -gt 0) {
-  throw "卸载后仍有 $($registryResidue.Count) 个卸载注册项。"
+  throw "卸载后仍有 $($registryResidue.Count) 个卸载注册项：$($registryResidue | ConvertTo-Json -Compress)"
 }
 
 [pscustomobject]@{
