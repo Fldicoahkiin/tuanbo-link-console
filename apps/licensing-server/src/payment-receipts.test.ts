@@ -48,17 +48,18 @@ it('已核款但续费交付失败保留收款事实，重启后不再提供付�
   expect(() => restarted.retryDelivery(order.id, { reason: '不能越过撤销规则' })).toThrow('已撤销');
 });
 
-it('发码事务异常和进程重启不丢收款，运营按原流水补发一次并清除异常', async () => {
+it.each(['alipay', 'wechat'] as const)('%s 发码事务异常和进程重启不丢收款，运营按原流水补发一次并清除异常', async source => {
+  const paymentIdentity = source === 'wechat' ? { appId: 'wx1234567890abcdef', sellerId: '1900000001' } : identity;
   const path = join(await mkdtemp(join(tmpdir(), 'tblink-receipts-')), 'license.db'); const key = randomBytes(32);
-  const service = setup(path, key); const credential = token(); const order = service.createPurchase(input, credential, catalog, identity);
+  const service = setup(path, key); const credential = token(); const order = service.createPurchase(input, credential, catalog, paymentIdentity, undefined, source);
   const database = new DatabaseSync(path);
   try {
     database.exec("CREATE TRIGGER fail_delivery BEFORE INSERT ON licenses BEGIN SELECT RAISE(ABORT, 'test delivery unavailable'); END;");
-    expect(() => service.fulfill(order.id, { amountFen: 100, paymentReference: 'alipay:recoverable' }, 'alipay', identity)).toThrow('test delivery unavailable');
+    expect(() => service.fulfill(order.id, { amountFen: 100, paymentReference: `${source}:recoverable` }, source, paymentIdentity)).toThrow('test delivery unavailable');
     expect(service.paymentExceptions(0).items).toMatchObject([{ orderId: order.id, lastError: 'INTERNAL_ERROR' }]);
     expect(service.readDelivery(order.id, credential)).toMatchObject({ state: 'pending', paymentConfirmed: true, licenses: [] });
-    const other = service.createPurchase(input, token(), catalog, identity);
-    expect(() => service.fulfill(other.id, { amountFen: 100, paymentReference: 'alipay:recoverable' }, 'alipay', identity)).toThrow('流水');
+    const other = service.createPurchase(input, token(), catalog, paymentIdentity, undefined, source);
+    expect(() => service.fulfill(other.id, { amountFen: 100, paymentReference: `${source}:recoverable` }, source, paymentIdentity)).toThrow('流水');
     expect(service.paymentExceptions(0).items).toHaveLength(1);
     const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const server = createLicensingServer(service, 'a'.repeat(48));

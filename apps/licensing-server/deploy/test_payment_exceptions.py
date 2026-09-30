@@ -86,13 +86,14 @@ class RecoveryTest(unittest.TestCase):
         self.items = [item for item in self.items if item['orderId'] != order_id]
         return {'id': order_id, 'state': 'fulfilled'}
 
-    def test_only_verified_alipay_receipts_are_recovered(self):
+    def test_only_verified_channel_receipts_are_recovered(self):
         eligible = self.receipt(1)
         self.receipt(2, source='manual')
         self.receipt(3, lastError='RENEWAL_REVOKED')
+        wechat = self.receipt(4, source='wechat')
         result = module.recover_batch(self.request, self.state, self.now)
-        self.assertEqual(result, {'scanned': 3, 'attempted': 1, 'delivered': 1, 'deferred': 0, 'needsReview': 1, 'manualSkipped': 1})
-        self.assertEqual([order for order, _ in self.posts], [eligible['orderId']])
+        self.assertEqual(result, {'scanned': 4, 'attempted': 2, 'delivered': 2, 'deferred': 0, 'needsReview': 1, 'manualSkipped': 1})
+        self.assertEqual([order for order, _ in self.posts], [eligible['orderId'], wechat['orderId']])
         self.assertIn('1/5', self.posts[0][1]['reason'])
         self.assertEqual(module.recover_batch(self.request, self.state, self.now + 3600)['attempted'], 0)
 

@@ -10,12 +10,39 @@ await mkdir(shots, { recursive: true });
 const fixture = JSON.parse(await readFile(new URL('../apps/licensing-server/deploy/catalog.json', import.meta.url), 'utf8'));
 let catalogMode = 'open';
 let writes = 0;
+let nativeTesting = false;
+let nativeEnabled = true;
+let nativePaid = false;
+let nativeFailure = false;
+let nativeExpired = false;
+let nativeOrder;
+const nativeId = '12345678-1234-4234-8234-123456789012';
 const server = createServer(async (req, res) => {
+  if (nativeTesting && req.url === '/v1/orders' && req.method === 'POST') {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const input = JSON.parse(Buffer.concat(chunks).toString());
+    assert.equal(req.headers['x-tblink-payment-channel'], 'wechat');
+    const offer = fixture.offers.find(item => item.id === input.offerId);
+    nativeOrder = { id: nativeId, state: 'pending', amountFen: offer.unitAmountFen, quantity: 1, offer,
+      expiresAt: new Date(Date.now() + (nativeExpired ? 1500 : 900000)).toISOString(), payable: true, paymentUrl: 'weixin://wxpay/bizpayurl?pr=LOCAL_TEST_ONLY' };
+    res.setHeader('content-type', 'application/json');
+    if (nativeFailure) { res.writeHead(502).end(JSON.stringify({ code: 'WECHAT_REQUEST_UNCONFIRMED', message: '测试渠道响应丢失，请查询原订单', orderId: nativeId })); return; }
+    res.end(JSON.stringify(nativeOrder)); return;
+  }
+  if (nativeTesting && req.url === `/v1/orders/${nativeId}/reconcile` && req.method === 'POST') {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ id: nativeId, state: nativePaid ? 'fulfilled' : 'pending', amountFen: nativeOrder.amountFen, quantity: 1,
+      kind: 'subscription', useUntil: new Date(Date.now() + 30 * 86400000).toISOString(), updatesUntil: new Date(Date.now() + 30 * 86400000).toISOString(),
+      licenses: nativePaid ? [{ id: '12345678-1234-4234-8234-123456789013', code: 'TBA-' + 'A'.repeat(32), revoked: false }] : [] })); return;
+  }
   if (req.method !== 'GET') { writes++; res.writeHead(500).end(); return; }
   if (req.url === '/v1/catalog') {
     if (catalogMode === 'error') { res.writeHead(503).end('{}'); return; }
+    const channel = req.headers['x-tblink-payment-channel'] ?? 'alipay';
+    res.setHeader('X-Tblink-Payment-Channel', channel);
+    const available = catalogMode === 'open' && (channel !== 'wechat' || nativeEnabled);
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ available: catalogMode === 'open', currency: 'CNY', termStart: 'fulfillment', offers: catalogMode === 'open' ? fixture.offers : [] })); return;
+    res.end(JSON.stringify({ available, currency: 'CNY', termStart: 'fulfillment', offers: available ? fixture.offers : [] })); return;
   }
   const files = { '/': ['index.html', 'text/html'], '/purchase.js': ['purchase.js', 'text/javascript'], '/purchase.css': ['purchase.css', 'text/css'], '/assets/studio.webp': ['assets/studio.webp', 'image/webp'] };
   files['/assets/display.woff2']=['assets/display.woff2','font/woff2'];
@@ -79,4 +106,50 @@ try {
   assert.equal(await page.locator('#pay').isHidden(),true);
   assert.equal(await page.locator('#pay').getAttribute('href'),null);
   assert.equal(writes,0); console.log('recovery passed; no order/payment requests sent');
+  await page.close(); nativeTesting = true;
+  for (const [name, width, height, colorScheme] of [['desktop', 1440, 960, 'light'], ['mobile-dark', 390, 844, 'dark']]) {
+    const native = await browser.newPage({ viewport: { width, height }, colorScheme });
+    const errors = []; native.on('pageerror', error => errors.push(error.message));
+    await native.goto(`http://127.0.0.1:${address.port}`, { waitUntil: 'networkidle' });
+    await native.locator('#payment-channel').selectOption('wechat');
+    await native.waitForFunction(() => !globalThis.document.querySelector('#payment-channel').disabled);
+    await native.locator('#customer').fill('本地微信验收'); await native.locator('#consent').check();
+    await native.locator('#purchase-form button[type=submit]').click();
+    const saved = await native.evaluate(() => JSON.parse(globalThis.sessionStorage.getItem('tblink.purchase.receipt')));
+    assert.equal(saved.version, 2); assert.equal(saved.paymentChannel, 'wechat');
+    assert.equal(await native.locator('#payment-channel').isDisabled(), true);
+    const download = native.waitForEvent('download'); await native.locator('#export').click(); await download;
+    await native.locator('#submit-order').click(); await native.locator('#wechat-payment').waitFor({ state: 'visible' });
+    assert.equal(await native.locator('#pay').isHidden(), true);
+    assert.equal(await native.locator('#wechat-qr').evaluate(canvas => canvas.width === 240 && canvas.getContext('2d').getImageData(0, 0, 240, 240).data.some((v, i) => i % 4 !== 3 && v === 0)), true);
+    assert.equal(await native.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), true);
+    await native.locator('#order').scrollIntoViewIfNeeded();
+    await native.screenshot({ path: `/private/tmp/tblink-wechat-${name}.png`, fullPage: true });
+    nativePaid = true; await native.locator('#query').click(); await native.locator('#codes code').waitFor();
+    assert.equal(await native.locator('#wechat-payment').isHidden(), true); assert.deepEqual(errors, []);
+    nativePaid = false; await native.close();
+  }
+  const states = await browser.newPage();
+  nativeEnabled = false;
+  await states.goto(`http://127.0.0.1:${address.port}`, { waitUntil: 'networkidle' });
+  await states.locator('#payment-channel').selectOption('wechat');
+  await states.waitForFunction(() => globalThis.document.querySelector('#catalog-status').textContent.includes('微信暂未开放'));
+  assert.equal(await states.locator('#purchase-form').isHidden(), true);
+  await states.locator('#payment-channel').selectOption('alipay'); await states.locator('#purchase-form').waitFor({ state: 'visible' });
+  nativeEnabled = true; nativeFailure = true;
+  await states.locator('#payment-channel').selectOption('wechat');
+  await states.waitForFunction(() => !globalThis.document.querySelector('#payment-channel').disabled);
+  await states.locator('#customer').fill('本地响应丢失验收'); await states.locator('#consent').check();
+  await states.locator('#purchase-form button[type=submit]').click();
+  const download = states.waitForEvent('download'); await states.locator('#export').click(); await download;
+  await states.locator('#submit-order').click(); await states.locator('#error').waitFor({ state: 'visible' });
+  assert.equal(await states.locator('#query').isVisible(), true); assert.equal(await states.locator('#wechat-payment').isHidden(), true);
+  assert.equal(await states.locator('#discard').isHidden(), true);
+  nativeFailure = false; nativeExpired = true;
+  await states.locator('#submit-order').click(); await states.locator('#wechat-payment').waitFor({ state: 'visible' });
+  await states.waitForFunction(() => globalThis.document.querySelector('#order-state').textContent.includes('已过期'));
+  assert.equal(await states.locator('#wechat-payment').isHidden(), true);
+  console.log('wechat: local QR, fixed-channel receipt, paid/closed/failed/expired states passed; no real channel requests');
+  await states.close();
+
 } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }

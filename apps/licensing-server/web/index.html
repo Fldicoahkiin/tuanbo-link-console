@@ -24,9 +24,10 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <section class="workflow" aria-labelledby="workflow-title"><h2 id="workflow-title">先编排，再上场。</h2><div class="workflow-body"><article><h3>把节奏写进节目</h3><p>整理节目单，对照参考波形安排 Cue。切场景、触发 MIDI、调度媒体，把重复操作放到时间线上。</p></article><article><h3>接着用你的设备</h3><p>通过 OBS WebSocket 和时间码接入现场。节目与媒体留在本机，OBS 继续负责正式画面与输出。</p></article></div></section>
   <section id="purchase" class="pricing" aria-labelledby="pricing-title"><div class="pricing-heading"><h2 id="pricing-title">一个工具，两种周期。</h2><p>全部功能包含在内。每份授权绑定一台电脑，主动续费，不自动扣款。</p></div>
     <div id="plan-options" class="plan-options" role="group" aria-label="授权套餐"><div class="plan-loading">正在加载月付与年付套餐</div></div>
-    <div class="checkout-layout"><div class="checkout-note"><h3>买好，激活，上场。</h3><ol><li><strong>保存订单凭据</strong><span>用于恢复订单和领取激活码。</span></li><li><strong>完成支付宝付款</strong><span>服务端核实到账后自动交付。</span></li><li><strong>在电脑上激活</strong><span>输入激活码，每次启动联网验证。</span></li></ol><a class="text-link" href="#rules">购买须知</a></div>
+    <div class="checkout-layout"><div class="checkout-note"><h3>买好，激活，上场。</h3><ol><li><strong>保存订单凭据</strong><span>用于恢复订单和领取激活码。</span></li><li><strong>完成付款</strong><span>服务端核实到账后自动交付。</span></li><li><strong>在电脑上激活</strong><span>输入激活码，每次启动联网验证。</span></li></ol><a class="text-link" href="#rules">购买须知</a></div>
   <section class="purchase" aria-labelledby="purchase-title">
     <h3 id="purchase-title">填写购买信息</h3><p class="hint">激活码绑定电脑，无需注册账户。</p>
+    <label for="payment-channel">支付方式</label><select id="payment-channel"><option value="alipay">支付宝</option><option value="wechat">微信支付</option></select>
     <p id="catalog-status" role="status">正在读取可售套餐…</p><button id="reload" type="button" class="secondary">重新读取套餐</button>
     <form id="purchase-form" hidden>
       <label class="sr-only" for="offer">授权套餐</label><select id="offer" class="sr-only" required tabindex="-1" aria-hidden="true"></select><p id="offer-detail" class="hint"></p>
@@ -41,6 +42,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <div class="actions"><button id="export" type="button" class="secondary">下载订单凭据</button><button id="submit-order" type="button" disabled>凭据已保存，创建或恢复原单</button></div>
       <button id="discard" type="button" class="secondary" hidden>返回修改，重新选择套餐</button>
       <a id="pay" class="button" hidden target="_blank" rel="noopener noreferrer">打开支付宝付款</a>
+      <div id="wechat-payment" class="wechat-payment" hidden><canvas id="wechat-qr" role="img" aria-label="微信付款二维码"></canvas><p>请用另一台设备上的微信扫一扫。付款后点击下方按钮查询交付。</p></div>
       <button id="query" type="button" class="secondary" hidden>查询付款并领取激活码</button>
       <p id="delivery-state" role="status"></p><ul id="codes"></ul>
       <button id="finish" type="button" class="secondary" hidden>已保存激活码，结束本次订单</button>

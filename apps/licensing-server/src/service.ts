@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHmac, createPrivateKey, randomB
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import { licenseActivationSchema, licenseClaimsSchema } from '../../../packages/schema/src/license';
-import { purchaseOfferSchema, purchaseRequestSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
+import { purchaseOfferSchema, purchaseRequestSchema, wechatCodeUrlSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
 
 const orderSchema = z.object({
   reference: z.string().trim().min(1).max(100), customer: z.string().trim().min(1).max(160),
@@ -14,8 +14,11 @@ const paymentSchema = z.object({ paymentReference: z.string().trim().min(1).max(
 const licenseRowSchema = z.object({ id: z.string(), order_id: z.string(), code_hash: z.string(), code_cipher: z.string(), machine: z.string().nullable(), revoked: z.number(), lease_until: z.number() });
 const orderRowSchema = z.object({ id: z.string(), body: z.string(), state: z.enum(['pending', 'fulfilled']), payment_reference: z.string().nullable() });
 
+type PaymentSource = 'manual' | 'alipay' | 'wechat';
+type PaymentChannel = Exclude<PaymentSource, 'manual'>;
+
 export class ServiceError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) { super(message); }
+  constructor(readonly status: number, readonly code: string, message: string, readonly orderId?: string) { super(message); }
 }
 
 /** Single SQLite writer; transactions also serialize activation across server processes. */
@@ -33,6 +36,7 @@ export class LicensingService {
       CREATE TABLE IF NOT EXISTS licenses (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id), code_hash TEXT NOT NULL UNIQUE, code_cipher TEXT NOT NULL, machine TEXT, revoked INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS order_delivery_access (order_id TEXT PRIMARY KEY REFERENCES orders(id), token_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS alipay_payment_links (order_id TEXT PRIMARY KEY REFERENCES orders(id), app_id TEXT NOT NULL, seller_id TEXT NOT NULL, expires_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS wechat_payment_links (order_id TEXT PRIMARY KEY REFERENCES orders(id), app_id TEXT NOT NULL, seller_id TEXT NOT NULL, expires_at INTEGER NOT NULL, code_url TEXT);
       CREATE TABLE IF NOT EXISTS purchase_requests (token_hash TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE REFERENCES orders(id), request_body TEXT NOT NULL, offer_body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS license_renewals (order_id TEXT PRIMARY KEY REFERENCES orders(id), license_id TEXT NOT NULL REFERENCES licenses(id), use_until TEXT, updates_until TEXT);
       CREATE INDEX IF NOT EXISTS license_renewals_license ON license_renewals(license_id);
@@ -86,8 +90,9 @@ export class LicensingService {
       .map(offer => ({ ...offer, maxQuantity: Math.min(offer.maxQuantity, Math.floor(catalog.maxOrderAmountFen / offer.unitAmountFen)) }))
       .filter(offer => offer.maxQuantity > 0);
   }
-  createPurchase(input: unknown, token: string, catalog: PurchaseCatalog | undefined, payment?: { appId: string; sellerId: string }, renewalAuthorization?: unknown) {
+  createPurchase(input: unknown, token: string, catalog: PurchaseCatalog | undefined, payment?: { appId: string; sellerId: string }, renewalAuthorization?: unknown, channel: PaymentChannel = 'alipay') {
     const request = purchaseRequestSchema.parse(input);
+    const table = channel === 'wechat' ? 'wechat_payment_links' : 'alipay_payment_links';
     if (!/^TBD-[A-F0-9]{64}$/.test(token)) throw new ServiceError(401, 'INVALID_DELIVERY_ACCESS', '请先安全保存本次购买的随机领取凭据');
     const tokenHash = createHmac('sha256', this.dataKey).update(`purchase:v1:${token}`).digest('hex');
     return this.transaction(() => {
@@ -96,10 +101,11 @@ export class LicensingService {
       if (prior) {
         id = z.string().parse(prior.order_id);
         this.requireDeliveryAccess(id, token);
+        if (this.paymentChannel(id) !== channel) throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '原订单不能更换支付渠道，请恢复原凭据');
         if (prior.request_body !== JSON.stringify(request)) throw new ServiceError(409, 'PURCHASE_CONFLICT', '同一购买凭据已用于其他商品或数量，请先核对原订单');
       } else {
         if (!catalog || !payment) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '购买尚未开放，原订单可凭领取凭据查询');
-        const { appId, sellerId } = z.object({ appId: z.string().regex(/^\d{16}$/), sellerId: z.string().regex(/^\d{16}$/) }).parse(payment);
+        const { appId, sellerId } = z.object({ appId: z.string().regex(channel === 'wechat' ? /^wx[a-zA-Z0-9]{16}$/ : /^\d{16}$/), sellerId: z.string().regex(channel === 'wechat' ? /^\d{8,32}$/ : /^\d{16}$/) }).parse(payment);
         const offer = this.listOffers(catalog).find(item => item.id === request.offerId);
         if (!offer || offer.revision !== request.revision || offer.unitAmountFen !== request.quotedUnitAmountFen) throw new ServiceError(409, 'OFFER_CHANGED', '商品已更新或停止销售，请重新查看价格与授权条款');
         if (request.quantity > offer.maxQuantity) throw new ServiceError(400, 'QUANTITY_LIMIT', '数量超过当前商品或单笔金额限制');
@@ -118,17 +124,50 @@ export class LicensingService {
         this.db.prepare("INSERT INTO orders VALUES (?, ?, ?, 'pending', NULL)").run(id, details.reference, JSON.stringify(details));
         this.db.prepare('INSERT INTO purchase_requests VALUES (?, ?, ?, ?)').run(tokenHash, id, JSON.stringify(request), JSON.stringify(offer));
         this.db.prepare('INSERT INTO order_delivery_access VALUES (?, ?, ?, 0)').run(id, this.deliveryHash(id, token).toString('hex'), now + 7 * 86400000);
-        this.db.prepare('INSERT INTO alipay_payment_links VALUES (?, ?, ?, ?)').run(id, appId, sellerId, expiresAt);
+        this.db.prepare(`INSERT INTO ${table} (order_id, app_id, seller_id, expires_at) VALUES (?, ?, ?, ?)`).run(id, appId, sellerId, expiresAt);
         if (request.renewalLicenseId) this.db.prepare('INSERT INTO license_renewals (order_id, license_id) VALUES (?, ?)').run(id, request.renewalLicenseId);
         this.audit('order.purchase-created', id, `${offer.id}:${offer.revision}`);
       }
       const order = this.order(id);
-      const link = z.object({ expires_at: z.number(), app_id: z.string(), seller_id: z.string() }).parse(this.db.prepare('SELECT * FROM alipay_payment_links WHERE order_id = ?').get(id));
+      const link = z.object({ expires_at: z.number(), app_id: z.string(), seller_id: z.string() }).parse(this.db.prepare(`SELECT * FROM ${table} WHERE order_id = ?`).get(id));
       const snapshot = z.object({ offer_body: z.string() }).parse(this.db.prepare('SELECT offer_body FROM purchase_requests WHERE order_id = ?').get(id));
       return { id, state: order.state, amountFen: order.details.amountFen, quantity: order.details.quantity, ...this.renewalTarget(id),
         offer: purchaseOfferSchema.parse(JSON.parse(snapshot.offer_body)),
         expiresAt: new Date(link.expires_at).toISOString(), payable: order.state === 'pending' && !this.hasPayment(id) && link.expires_at - this.now() >= 60000 && link.app_id === payment?.appId && link.seller_id === payment.sellerId };
     });
+  }
+  paymentChannel(id: string): PaymentChannel | null {
+    const alipay = this.db.prepare('SELECT order_id FROM alipay_payment_links WHERE order_id = ?').get(id);
+    const wechat = this.db.prepare('SELECT order_id FROM wechat_payment_links WHERE order_id = ?').get(id);
+    if (alipay && wechat) throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '订单支付渠道记录冲突，请联系支持');
+    return wechat ? 'wechat' : alipay ? 'alipay' : null;
+  }
+  wechatQueryOrder(id: string, appId: string, sellerId: string) {
+    const order = this.order(id);
+    const raw = this.db.prepare('SELECT * FROM wechat_payment_links WHERE order_id = ?').get(id);
+    if (!raw) throw new ServiceError(409, 'PAYMENT_NOT_PREPARED', '订单尚未准备微信付款');
+    const link = z.object({ app_id: z.string(), seller_id: z.string(), code_url: z.string().nullable() }).parse(raw);
+    if (link.app_id !== appId || link.seller_id !== sellerId) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '微信订单的商户或应用与当前配置不匹配');
+    return { id, state: order.state, amountFen: order.details.amountFen, codeUrl: link.code_url };
+  }
+  saveWechatCodeUrl(id: string, appId: string, sellerId: string, url: string): void {
+    wechatCodeUrlSchema.parse(url);
+    this.transaction(() => {
+      this.wechatQueryOrder(id, appId, sellerId);
+      this.db.prepare('UPDATE wechat_payment_links SET code_url = ? WHERE order_id = ? AND code_url IS NULL').run(url, id);
+    });
+  }
+  reconcileWechat(id: string, input: unknown) {
+    const payment = z.object({ orderId: z.string().uuid(), amountFen: z.number().int().positive(), paymentReference: z.string(),
+      appId: z.string().regex(/^wx[a-zA-Z0-9]{16}$/), sellerId: z.string().regex(/^\d{8,32}$/),
+      status: z.enum(['SUCCESS', 'REFUND', 'NOTPAY', 'CLOSED', 'REVOKED', 'USERPAYING', 'PAYERROR']) }).strict().parse(input);
+    const order = this.wechatQueryOrder(id, payment.appId, payment.sellerId);
+    if (payment.orderId !== id) throw new ServiceError(409, 'PAYMENT_ORDER_MISMATCH', '微信查单返回了其他订单');
+    if (payment.amountFen !== order.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '微信查单金额与订单不一致');
+    const settled = payment.status === 'SUCCESS';
+    const result = settled ? this.fulfill(id, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'wechat', payment) : order;
+    this.transaction(() => this.audit('order.wechat-queried', id, payment.status));
+    return { id, state: result.state, paymentStatus: payment.status, needsReview: !settled && result.state === 'fulfilled' };
   }
   private renewalTarget(orderId: string): { renewalLicenseId?: string } {
     const row = this.db.prepare('SELECT license_id FROM license_renewals WHERE order_id = ?').get(orderId);
@@ -152,6 +191,7 @@ export class LicensingService {
   prepareAlipayPayment(id: string, appId: string, sellerId: string) {
     z.string().regex(/^\d{16}$/).parse(appId); z.string().regex(/^\d{16}$/).parse(sellerId);
     return this.transaction(() => {
+      if (this.paymentChannel(id) === 'wechat') throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '微信订单不能另建支付宝付款入口');
       const order = this.order(id);
       if (order.state !== 'pending') throw new ServiceError(409, 'ORDER_ALREADY_FULFILLED', '订单已交付，无需再次付款');
       if (this.hasPayment(id)) throw new ServiceError(409, 'PAYMENT_ALREADY_RECEIVED', '付款已确认，授权待处理，请勿重复付款');
@@ -198,7 +238,7 @@ export class LicensingService {
       p.amount_fen AS amountFen, p.source, p.received_at AS receivedAt, p.last_error AS lastError
       FROM payment_receipts p JOIN orders o ON o.id = p.order_id WHERE o.state = 'pending' AND p.rowid > ? ORDER BY p.rowid LIMIT 100`).all(cursor);
     const items = z.array(z.object({ cursor: z.number().int(), orderId: z.string().uuid(), paymentReference: z.string(),
-      amountFen: z.number().int(), source: z.enum(['manual', 'alipay']), receivedAt: z.string().datetime(), lastError: z.string().nullable() })).parse(rows);
+      amountFen: z.number().int(), source: z.enum(['manual', 'alipay', 'wechat']), receivedAt: z.string().datetime(), lastError: z.string().nullable() })).parse(rows);
     return { items, nextCursor: items.length === 100 ? items[99]!.cursor : null };
   }
   retryDelivery(id: string, input: unknown) {
@@ -206,13 +246,13 @@ export class LicensingService {
     this.order(id);
     const raw = this.db.prepare('SELECT * FROM payment_receipts WHERE order_id = ?').get(id);
     if (!raw) throw new ServiceError(409, 'PAYMENT_NOT_RECEIVED', '订单尚无已确认收款记录，不能补发');
-    const receipt = z.object({ payment_reference: z.string(), amount_fen: z.number(), source: z.enum(['manual', 'alipay']),
+    const receipt = z.object({ payment_reference: z.string(), amount_fen: z.number(), source: z.enum(['manual', 'alipay', 'wechat']),
       app_id: z.string().nullable(), seller_id: z.string().nullable() }).parse(raw);
     this.transaction(() => this.audit('order.delivery-retry-requested', id, reason));
     return this.fulfill(id, { paymentReference: receipt.payment_reference, amountFen: receipt.amount_fen }, receipt.source,
       receipt.app_id && receipt.seller_id ? { appId: receipt.app_id, sellerId: receipt.seller_id } : undefined);
   }
-  fulfill(id: string, input: unknown, source: 'manual' | 'alipay' = 'manual', paymentIdentity?: { appId: string; sellerId: string }) {
+  fulfill(id: string, input: unknown, source: PaymentSource = 'manual', paymentIdentity?: { appId: string; sellerId: string }) {
     const payment = paymentSchema.parse(input);
     // Verified receipt survives a later delivery rollback or a process exit between these transactions.
     this.transaction(() => {
@@ -239,18 +279,20 @@ export class LicensingService {
       throw error;
     }
   }
-  private validatePayment(id: string, payment: z.infer<typeof paymentSchema>, source: 'manual' | 'alipay', paymentIdentity?: { appId: string; sellerId: string }) {
+  private validatePayment(id: string, payment: z.infer<typeof paymentSchema>, source: PaymentSource, paymentIdentity?: { appId: string; sellerId: string }) {
     const order = this.order(id);
+    const channel = this.paymentChannel(id);
+    if (channel && channel !== source) throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '已生成付款入口的订单不能更换支付渠道，也不能改成人工核款');
+    if (source === 'wechat') this.wechatQueryOrder(id, paymentIdentity?.appId ?? '', paymentIdentity?.sellerId ?? '');
     const link = this.db.prepare('SELECT app_id, seller_id FROM alipay_payment_links WHERE order_id = ?').get(id);
     if (link && source === 'alipay' && (link.app_id !== paymentIdentity?.appId || link.seller_id !== paymentIdentity?.sellerId)) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '支付通知与订单绑定的商户或应用不匹配');
-    if (link && source === 'manual') throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '已生成支付宝付款入口的订单必须先核对渠道交易，不能改成人工核款');
     if (order.details.amountFen !== payment.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '核款金额与订单不一致');
     if (order.state === 'fulfilled' && order.payment_reference !== payment.paymentReference) throw new ServiceError(409, 'PAYMENT_CONFLICT', '订单已使用其他流水完成核款');
     if (this.db.prepare('SELECT id FROM orders WHERE payment_reference = ? AND id != ?').get(payment.paymentReference, id)
       || this.db.prepare('SELECT order_id FROM payment_receipts WHERE payment_reference = ? AND order_id != ?').get(payment.paymentReference, id)) throw new ServiceError(409, 'PAYMENT_REUSED', '收款流水已用于另一订单');
     return order;
   }
-  private fulfillOrder(id: string, payment: z.infer<typeof paymentSchema>, source: 'manual' | 'alipay', paymentIdentity?: { appId: string; sellerId: string }) {
+  private fulfillOrder(id: string, payment: z.infer<typeof paymentSchema>, source: PaymentSource, paymentIdentity?: { appId: string; sellerId: string }) {
     const order = this.validatePayment(id, payment, source, paymentIdentity);
     if (order.state === 'fulfilled') return this.describeOrder(id);
     const purchase = this.db.prepare('SELECT offer_body FROM purchase_requests WHERE order_id = ?').get(id);
@@ -281,7 +323,7 @@ export class LicensingService {
       const code = `TBA-${randomBytes(16).toString('hex').toUpperCase()}`;
       this.db.prepare('INSERT INTO licenses (id, order_id, code_hash, code_cipher) VALUES (?, ?, ?, ?)').run(randomUUID(), id, this.hash(code), this.encrypt(code));
     }
-    this.audit(source === 'alipay' ? 'order.alipay-payment-confirmed' : 'order.manual-payment-confirmed', id, payment.paymentReference);
+    this.audit(`order.${source}-payment-confirmed`, id, payment.paymentReference);
     return this.describeOrder(id);
   }
   describeOrder(id: string) {

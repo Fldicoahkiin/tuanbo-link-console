@@ -743,3 +743,7 @@ footer a {
     transition:none;
   }
 }
+
+.wechat-payment { margin-block: 20px; }
+.wechat-payment canvas { display: block; width: 240px; max-width: 100%; height: auto; }
+.wechat-payment p { max-width: 32ch; font-size: 14px; color: var(--muted); }

@@ -1,11 +1,20 @@
+import QRCode from 'qrcode';
 import { z } from 'zod';
-import { purchaseRequestSchema, type PurchaseCatalogResponse } from '../../../packages/schema/src/purchase';
+import { purchaseRequestSchema, paymentChannelSchema, type PurchaseCatalogResponse } from '../../../packages/schema/src/purchase';
 import { WebPurchaseClient, type WebReceipt } from './purchase-client';
 
 function element<T extends HTMLElement>(id: string, type: { new(): T }): T {
   const value = document.getElementById(id);
   if (!(value instanceof type)) throw new Error(`页面缺少 ${id}`);
   return value;
+}
+const channelInput = element('payment-channel', HTMLSelectElement);
+const wechatPanel = element('wechat-payment', HTMLDivElement);
+const wechatQr = element('wechat-qr', HTMLCanvasElement);
+let paymentExpiry: ReturnType<typeof setTimeout> | undefined;
+function clearPayment(): void {
+  clearTimeout(paymentExpiry); wechatPanel.hidden = true; wechatQr.width = 0;
+  pay.hidden = true; pay.removeAttribute('href');
 }
 const form = element('purchase-form', HTMLFormElement);
 const offerInput = element('offer', HTMLSelectElement);
@@ -52,6 +61,9 @@ function updateQuote(): void {
 
 function renderReceipt(receipt: WebReceipt | null): void {
   orderPanel.hidden = receipt === null;
+  query.hidden = !receipt?.orderId;
+  channelInput.disabled = busy || receipt !== null;
+  if (receipt) channelInput.value = receipt.version === 2 ? 'wechat' : 'alipay';
   form.hidden = !storageReady || receipt !== null || !catalog?.available;
   if (receipt) {
     orderSummary.textContent = `${receipt.request.customer} · ${receipt.request.quantity} 台 · ${money(receipt.request.quantity * receipt.request.quotedUnitAmountFen)}${receipt.orderId ? ` · 订单号 ${receipt.orderId}` : ''}`;
@@ -99,7 +111,9 @@ async function loadCatalog(): Promise<void> {
   loading.className = 'plan-loading'; loading.textContent = '正在加载月付与年付套餐';
   planOptions.append(loading);
   catalogStatus.textContent = '正在读取可售套餐…';
-  const response = await client.catalog();
+  const channel = client.receipt?.version === 2 ? 'wechat' : client.receipt ? 'alipay' : paymentChannelSchema.parse(channelInput.value);
+  channelInput.value = channel;
+  const response = await client.catalog(channel);
   const offers = response.offers.filter(offer => offer.kind === 'subscription');
   catalog = { ...response, offers, available: response.available && offers.length > 0 };
   offerInput.replaceChildren(...offers.map(offer => {
@@ -128,7 +142,7 @@ async function loadCatalog(): Promise<void> {
   }
   const restoredOffer = client.receipt?.request.offerId;
   if (restoredOffer && offers.some(offer => offer.id === restoredOffer)) offerInput.value = restoredOffer;
-  catalogStatus.textContent = catalog.available ? '选择套餐和电脑数量，随后保存订单凭据。' : '暂未开放购买。已付款客户仍可导入订单凭据，查询并领取激活码。';
+  catalogStatus.textContent = catalog.available ? '选择套餐和电脑数量，随后保存订单凭据。' : `${channel === 'wechat' ? '微信' : '支付宝'}暂未开放购买。已有订单仍可恢复和查询，也可切换支付方式查看。`;
   updateQuote();
 }
 
@@ -147,13 +161,13 @@ async function readDelivery(reconcile = false): Promise<void> {
   const delivery = await client.delivery(reconcile);
   if (delivery.state === 'pending') {
     if (delivery.paymentConfirmed) {
-      pay.hidden = true; pay.removeAttribute('href'); submit.hidden = true;
+      clearPayment(); submit.hidden = true;
       orderState.textContent = '付款已确认，无需再次付款。';
       deliveryState.textContent = '授权尚未交付，请保留订单号并联系支持处理。'; return;
     }
     deliveryState.textContent = '服务端尚未确认到账。如已付款，请稍后点击查询；不要重复付款。'; return;
   }
-  pay.hidden = true; submit.hidden = true;
+  clearPayment(); submit.hidden = true;
   orderState.textContent = '订单已交付，无需再次付款。';
   deliveryState.textContent = `付款已核实。使用期限至 ${delivery.useUntil ? new Date(delivery.useUntil).toLocaleString('zh-CN') : '永久'}；更新权益至 ${new Date(delivery.updatesUntil).toLocaleString('zh-CN')}。请保存以下激活码并在软件中激活。`;
   codes.replaceChildren(...delivery.licenses.map((license, index) => {
@@ -165,11 +179,19 @@ async function readDelivery(reconcile = false): Promise<void> {
 }
 
 async function submitOrder(): Promise<void> {
-  pay.removeAttribute('href'); pay.hidden = true;
+  clearPayment();
   const result = await client.submit();
   renderReceipt(client.receipt); query.hidden = false;
   orderState.textContent = result.state === 'fulfilled' ? '此订单已交付，请领取并保存激活码。' : result.payable ? `订单已创建。请于 ${new Date(result.expiresAt).toLocaleString('zh-CN')} 前付款。` : '付款入口已失效或暂停。请查询原订单；如已付款，请勿重复购买。';
-  if (result.paymentUrl) { pay.href = result.paymentUrl; pay.hidden = false; }
+  if (result.paymentUrl && result.payable) {
+    if (client.receipt?.version === 2) {
+      await QRCode.toCanvas(wechatQr, result.paymentUrl, { width: 240, margin: 4, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } });
+      wechatPanel.hidden = false;
+    } else { pay.href = result.paymentUrl; pay.hidden = false; }
+    const expire = () => { clearPayment(); orderState.textContent = '付款入口已过期，请查询原订单；如已付款，请勿重复购买。'; };
+    const remaining = Date.parse(result.expiresAt) - Date.now();
+    if (remaining <= 0) expire(); else paymentExpiry = setTimeout(expire, remaining);
+  }
   if (result.state === 'fulfilled') await readDelivery();
 }
 
@@ -178,12 +200,13 @@ form.addEventListener('submit', event => {
   void run(() => {
     const offer = selectedOffer(); if (!offer) throw new Error('请重新读取可售套餐');
     client.prepare(purchaseRequestSchema.parse({ offerId: offer.id, revision: offer.revision, quotedUnitAmountFen: offer.unitAmountFen,
-      quantity: quantity.valueAsNumber, customer: customer.value, customerType: customerType.value }));
+      quantity: quantity.valueAsNumber, customer: customer.value, customerType: customerType.value }), paymentChannelSchema.parse(channelInput.value));
     saved = false; submit.hidden = false; query.hidden = true; finish.hidden = true;
     orderState.textContent = '尚未提交订单，也未发起付款。请先下载专属订单凭据。';
     return Promise.resolve();
   });
 });
+channelInput.addEventListener('change', () => { if (!client.receipt) void run(loadCatalog); });
 offerInput.addEventListener('change', updateQuote);
 quantity.addEventListener('input', updateQuote);
 element('reload', HTMLButtonElement).addEventListener('click', () => { void run(loadCatalog); });
@@ -191,7 +214,7 @@ download.addEventListener('click', () => { void run(() => { exportReceipt(); ret
 submit.addEventListener('click', () => { if (saved) void run(submitOrder); });
 query.addEventListener('click', () => { void run(() => readDelivery(true)); });
 discard.addEventListener('click', () => { void run(async () => {
-  client.discard(); saved = false; pay.hidden = true; await loadCatalog();
+  client.discard(); saved = false; clearPayment(); await loadCatalog();
 }); });
 finish.addEventListener('click', () => { void run(async () => {
   await client.finish(); codes.replaceChildren(); deliveryState.textContent = ''; saved = false;
@@ -201,7 +224,7 @@ importInput.addEventListener('change', () => { void run(async () => {
   const file = importInput.files?.[0]; if (!file) return;
   if (file.size > 32768) throw new Error('订单凭据文件超过大小限制');
   client.importReceipt(await file.text()); storageReady = true; saved = true;
-  pay.hidden = true; pay.removeAttribute('href');
+  clearPayment();
   codes.replaceChildren(); deliveryState.textContent = ''; submit.hidden = false; query.hidden = true; finish.hidden = true;
   orderState.textContent = '已载入凭据。点击恢复原单后查询付款和交付状态。';
 }); });

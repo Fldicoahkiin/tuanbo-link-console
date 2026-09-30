@@ -47,7 +47,7 @@ class PaymentLedgerTest(unittest.TestCase):
         self.assertEqual(summary['receipt_count'], 2)
         self.assertEqual(summary['total_amount_fen'], 219801)
         self.assertEqual(summary['delivery_states'], {'pending': 1, 'fulfilled': 1})
-        self.assertEqual(summary['amount_fen_by_source'], {'alipay': 19901, 'manual': 199900})
+        self.assertEqual(summary['amount_fen_by_source'], {'alipay': 19901, 'wechat': 0, 'manual': 199900})
         records = [json.loads(line) for line in (self.output / 'receipts.jsonl').read_text().splitlines()]
         self.assertEqual([r['order_id'] for r in records], ['first', 'last'])
         self.assertEqual(records[1]['payment_reference'], '=HYPERLINK("bad")')
@@ -60,6 +60,12 @@ class PaymentLedgerTest(unittest.TestCase):
             self.assertEqual(file.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.output.stat().st_mode & 0o777, 0o700)
         self.assertEqual(list(self.db.iterdump()), before)
+
+    def test_wechat_receipts_are_exported_separately(self):
+        self.add_receipt('wechat', 'wechat:4200000000000001', '2026-09-28T00:00:00.000Z', source='wechat', amount=80000)
+        summary = self.export()
+        self.assertEqual(summary['count_by_source'], {'alipay': 0, 'wechat': 1, 'manual': 0})
+        self.assertEqual(summary['amount_fen_by_source'], {'alipay': 0, 'wechat': 80000, 'manual': 0})
 
     def test_empty_export_and_explicit_legacy_coverage_gap(self):
         self.add_receipt('old', 'r-old', '2026-09-27T16:00:00.000Z', receipt=False)

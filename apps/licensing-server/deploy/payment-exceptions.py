@@ -66,7 +66,7 @@ def validated_page(value, after):
         try:
             if (not isinstance(item, dict) or type(item['cursor']) is not int or item['cursor'] <= previous
                     or str(uuid.UUID(item['orderId'])) != item['orderId']
-                    or item['source'] not in ('alipay', 'manual')
+                    or item['source'] not in ('alipay', 'wechat', 'manual')
                     or item['lastError'] is not None and not isinstance(item['lastError'], str)):
                 raise ValueError()
             received = datetime.fromisoformat(item['receivedAt'].replace('Z', '+00:00'))
@@ -108,7 +108,7 @@ def recover_batch(request, state_path, now):
             for index, item in enumerate(items):
                 result['scanned'] += 1
                 order_id = item['orderId']
-                if item['source'] != 'alipay':
+                if item['source'] not in ('alipay', 'wechat'):
                     result['manualSkipped'] += 1
                     continue
                 old = db.execute('SELECT attempts, next_at, blocked FROM delivery_attempts WHERE order_id=?', (order_id,)).fetchone()
@@ -131,7 +131,7 @@ def recover_batch(request, state_path, now):
                 result['attempted'] += 1
                 error_code = None
                 try:
-                    response = request(f'/admin/orders/{order_id}/retry-delivery', {'reason': f'自动恢复已核实支付宝收款的交付，尝试 {attempts}/5'})
+                    response = request(f'/admin/orders/{order_id}/retry-delivery', {'reason': f'自动恢复已核实渠道收款的交付，尝试 {attempts}/5'})
                     if not isinstance(response, dict) or response.get('id') != order_id or response.get('state') != 'fulfilled':
                         raise AdminApiError(502, 'INVALID_RETRY_RESPONSE')
                     result['delivered'] += 1

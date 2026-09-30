@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { activationCodeSchema } from './license';
 
+export const paymentChannelSchema = z.enum(['alipay', 'wechat']);
+export type PaymentChannel = z.infer<typeof paymentChannelSchema>;
+export const wechatCodeUrlSchema = z.string().max(512).regex(/^weixin:\/\/wxpay\/bizpayurl\?pr=[A-Za-z0-9_-]+$/);
+
 const identifier = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/);
 export const purchaseOfferSchema = z.object({
   id: identifier, revision: identifier, name: z.string().trim().min(1).max(100),

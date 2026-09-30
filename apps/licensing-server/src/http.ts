@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { LicensingService, ServiceError } from './service';
 import type { AlipayCheckout, AlipayNotifications } from './alipay';
 import { purchaseCatalogSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
+import type { WechatPay } from './wechat';
 import { clientAddress } from './client-address';
 
 async function readBytes(request: IncomingMessage): Promise<Buffer> {
@@ -23,9 +24,11 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   catch { throw new ServiceError(400, 'INVALID_JSON', 'JSON 格式无效'); }
 }
 
-export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout, purchaseCatalog?: PurchaseCatalog, trustLoopbackProxy = false) {
+export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout, purchaseCatalog?: PurchaseCatalog, trustLoopbackProxy = false, wechat?: WechatPay, wechatCheckoutEnabled = false) {
   if (adminToken.length < 32) throw new Error('后台访问令牌至少 32 位');
   if (checkout && !alipay) throw new Error('启用支付宝付款入口必须同时配置通知验签');
+  if (wechatCheckoutEnabled && !wechat) throw new Error('启用微信付款必须同时配置签名、验签和解密凭据');
+  const nativeRequests = new Set<string>();
   const catalog = purchaseCatalog === undefined ? undefined : purchaseCatalogSchema.parse(purchaseCatalog);
   const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
   const expected = digest(`Bearer ${adminToken}`);
@@ -52,7 +55,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       const now = Date.now();
       for (const [key, value] of rates) if (value.reset <= now) rates.delete(key);
       const customerQuery = /^\/v1\/orders\/([a-f0-9-]{36})\/reconcile$/.exec(request.url ?? '');
-      const group = request.url === '/v1/payments/alipay/notify' ? 'alipay' : customerQuery ? 'payment-query' : request.url === '/v1/orders' ? 'purchase' : request.url?.startsWith('/v1/orders/') ? 'delivery' : 'product';
+      const group = request.url?.startsWith('/v1/payments/') ? 'payment-notify' : customerQuery ? 'payment-query' : request.url === '/v1/orders' ? 'purchase' : request.url?.startsWith('/v1/orders/') ? 'delivery' : 'product';
       const address = `${clientAddress(request.socket.remoteAddress, request.headers['x-tblink-client-ip'], trustLoopbackProxy)}:${group}`;
       const rate = rates.get(address) ?? { count: 0, reset: now + 60000 };
       if (rates.size >= 10000 && !rates.has(address) || ++rate.count > (group === 'purchase' || group === 'payment-query' ? 10 : 120)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
@@ -60,14 +63,41 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       if (request.method === 'GET' && request.url === '/health') return { status: 'ok' };
       if (request.method === 'POST' && request.url === '/v1/activate') return service.activate(await readBody(request));
       if (request.method === 'GET' && request.url === '/v1/catalog') {
-        const offers = checkout && catalog ? service.listOffers(catalog) : [];
+        const channel = z.enum(['alipay', 'wechat']).parse(request.headers['x-tblink-payment-channel'] ?? 'alipay');
+        response.setHeader('X-Tblink-Payment-Channel', channel);
+        const enabled = channel === 'wechat' ? wechatCheckoutEnabled : Boolean(checkout);
+        const offers = enabled && catalog ? service.listOffers(catalog) : [];
         return { available: offers.length > 0, currency: 'CNY', termStart: 'fulfillment', offers };
       }
       if (request.method === 'POST' && request.url === '/v1/orders') {
         const token = /^Bearer (TBD-[A-F0-9]{64})$/.exec(request.headers.authorization ?? '')?.[1] ?? '';
-        const purchase = service.createPurchase(await readBody(request), token, catalog, checkout, {
+        const channel = z.enum(['alipay', 'wechat']).parse(request.headers['x-tblink-payment-channel'] ?? 'alipay');
+        const payment = channel === 'wechat' ? (wechatCheckoutEnabled ? wechat : undefined) : checkout;
+        const input = await readBody(request);
+        let purchase = service.createPurchase(input, token, catalog, payment, {
           product: 'tuanbo-link-console', code: request.headers['x-tblink-renewal-code'], machineCode: request.headers['x-tblink-machine-code']
-        });
+        }, channel);
+        if (channel === 'wechat') {
+          let paymentUrl: string | null = null;
+          if (purchase.payable && wechat) {
+            if (nativeRequests.has(purchase.id) || nativeRequests.size >= 1000) throw new ServiceError(429, 'RATE_LIMITED', '原订单正在创建微信付款入口，请稍后恢复原单');
+            nativeRequests.add(purchase.id);
+            try {
+              paymentUrl = service.wechatQueryOrder(purchase.id, wechat.appId, wechat.sellerId).codeUrl;
+              if (!paymentUrl) {
+                paymentUrl = await wechat.create({ id: purchase.id, amountFen: purchase.amountFen, quantity: purchase.quantity, expiresAt: purchase.expiresAt });
+                service.saveWechatCodeUrl(purchase.id, wechat.appId, wechat.sellerId, paymentUrl);
+              }
+              service.readDelivery(purchase.id, token);
+              // 通知可在渠道请求返回前到账；返回最新状态，不展示已收款订单的二维码。
+              purchase = service.createPurchase(input, token, catalog, payment, undefined, channel);
+            } catch (error) {
+              if (error instanceof ServiceError) throw new ServiceError(error.status, error.code, error.message, purchase.id);
+              throw error;
+            } finally { nativeRequests.delete(purchase.id); }
+          }
+          return { ...purchase, paymentUrl: purchase.payable ? paymentUrl : null };
+        }
         const paymentUrl = purchase.payable && checkout ? checkout.createUrl({ id: purchase.id, amountFen: purchase.amountFen, quantity: purchase.quantity, expiresAt: purchase.expiresAt }) : null;
         return { ...purchase, paymentUrl };
       }
@@ -81,18 +111,41 @@ export function createLicensingServer(service: LicensingService, adminToken: str
         const existing = service.readDelivery(id, token);
         if (existing.state === 'fulfilled') return existing;
         if (existing.paymentConfirmed) return deliver(id, token, () => service.retryDelivery(id, { reason: '客户持原凭据请求补交付' }));
-        if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用，请保留原订单并联系支持');
-        service.alipayQueryOrder(id, checkout.appId, checkout.sellerId);
+        const channel = service.paymentChannel(id);
+        if (channel === 'wechat') {
+          if (!wechat) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '微信查单尚未启用，请保留原订单并联系支持');
+          service.wechatQueryOrder(id, wechat.appId, wechat.sellerId);
+        } else {
+          if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用，请保留原订单并联系支持');
+          service.alipayQueryOrder(id, checkout.appId, checkout.sellerId);
+        }
         for (const [key, gate] of paymentQueries) if (!gate.running && gate.until <= now) paymentQueries.delete(key);
         if (paymentQueries.has(id) || paymentQueries.size >= 10000) throw new ServiceError(429, 'RATE_LIMITED', '原订单正在查询或刚完成查询，请十秒后手动重试');
         const gate = { until: now + 10000, running: true };
         paymentQueries.set(id, gate);
         try {
+          if (channel === 'wechat' && wechat) {
+            const payment = await wechat.query(id);
+            service.readDelivery(id, token);
+            return deliver(id, token, () => service.reconcileWechat(id, payment));
+          }
+          if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用');
           const payment = await checkout.query(id, alipay);
           // The credential may expire or be revoked while the channel request is in flight.
           service.readDelivery(id, token);
           return deliver(id, token, () => service.reconcileAlipay(id, payment));
         } finally { gate.running = false; gate.until = Date.now() + 10000; }
+      }
+      if (request.method === 'POST' && request.url === '/v1/payments/wechat/notify' && wechat) {
+        if (!/^application\/json(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '')) throw new ServiceError(415, 'CONTENT_TYPE', '需要 UTF-8 JSON 通知');
+        const headers = new Headers();
+        for (const name of ['wechatpay-timestamp', 'wechatpay-nonce', 'wechatpay-serial', 'wechatpay-signature', 'wechatpay-signature-type']) {
+          const value = request.headers[name];
+          if (typeof value === 'string') headers.set(name, value);
+        }
+        const payment = wechat.notification(await readBytes(request), headers);
+        service.fulfill(payment.orderId, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'wechat', payment);
+        return { code: 'SUCCESS', message: '成功' };
       }
       if (request.method === 'POST' && request.url === '/v1/payments/alipay/notify' && alipay) {
         if (!/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '')) throw new ServiceError(415, 'CONTENT_TYPE', '需要 UTF-8 表单通知');
@@ -120,6 +173,11 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       const reconcile = /^\/admin\/orders\/([a-f0-9-]{36})\/reconcile$/.exec(request.url);
       if (request.method === 'POST' && reconcile) {
         z.object({}).strict().parse(await readBody(request));
+        if (service.paymentChannel(reconcile[1]!) === 'wechat') {
+          if (!wechat) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '微信查单尚未启用');
+          service.wechatQueryOrder(reconcile[1]!, wechat.appId, wechat.sellerId);
+          return service.reconcileWechat(reconcile[1]!, await wechat.query(reconcile[1]!));
+        }
         if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用');
         service.alipayQueryOrder(reconcile[1]!, checkout.appId, checkout.sellerId);
         const payment = await checkout.query(reconcile[1]!, alipay);
@@ -143,7 +201,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       const known = error instanceof ServiceError;
       response.statusCode = known ? error.status : error instanceof z.ZodError ? 400 : 500;
       if (response.statusCode === 500) console.error(JSON.stringify({ requestId, error: 'LICENSING_INTERNAL_ERROR' }));
-      response.end(JSON.stringify({ code: known ? error.code : response.statusCode === 400 ? 'INVALID_REQUEST' : 'INTERNAL_ERROR', message: known ? error.message : response.statusCode === 400 ? '请求字段或期限无效' : '授权服务暂时不可用，请联系发行方', requestId }));
+      response.end(JSON.stringify({ code: known ? error.code : response.statusCode === 400 ? 'INVALID_REQUEST' : 'INTERNAL_ERROR', ...(known && error.orderId ? { orderId: error.orderId } : {}), message: known ? error.message : response.statusCode === 400 ? '请求字段或期限无效' : '授权服务暂时不可用，请联系发行方', requestId }));
     });
   });
 }

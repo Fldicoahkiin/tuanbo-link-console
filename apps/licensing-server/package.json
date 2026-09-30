@@ -2,13 +2,21 @@
   "name": "@tb/licensing-server",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.16.0" },
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/index.js",
     "build:web": "node build-web.mjs",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": { "zod": "^4.1.12" },
-  "devDependencies": { "esbuild": "0.28.1" }
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/qrcode": "1.5.5",
+    "esbuild": "0.28.1"
+  }
 }

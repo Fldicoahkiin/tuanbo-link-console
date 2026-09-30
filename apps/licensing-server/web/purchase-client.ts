@@ -1,12 +1,15 @@
 import { z } from 'zod';
-import { purchaseCatalogResponseSchema, purchaseDeliverySchema, purchaseRequestSchema, purchaseResponseSchema, type PurchaseRequest } from '../../../packages/schema/src/purchase';
+import { purchaseCatalogResponseSchema, purchaseDeliverySchema, purchaseRequestSchema, purchaseResponseSchema, wechatCodeUrlSchema, paymentChannelSchema, type PaymentChannel, type PurchaseRequest } from '../../../packages/schema/src/purchase';
 
-export const webReceiptSchema = z.object({
-  version: z.literal(1), product: z.literal('tuanbo-link-console'),
+const receiptFields = z.object({ product: z.literal('tuanbo-link-console'),
   createdAt: z.string().datetime(), token: z.string().regex(/^TBD-[A-F0-9]{64}$/),
   request: purchaseRequestSchema.refine(value => value.renewalLicenseId === undefined, '请在原电脑的软件内续费'),
   orderId: z.string().uuid().nullable(), discardable: z.boolean().default(false)
 }).strict();
+export const webReceiptSchema = z.discriminatedUnion('version', [
+  receiptFields.extend({ version: z.literal(1) }),
+  receiptFields.extend({ version: z.literal(2), paymentChannel: z.literal('wechat') })
+]);
 export type WebReceipt = z.infer<typeof webReceiptSchema>;
 const storageKey = 'tblink.purchase.receipt';
 const paymentSchema = purchaseResponseSchema.refine(value => {
@@ -14,9 +17,9 @@ const paymentSchema = purchaseResponseSchema.refine(value => {
   const url = new URL(value.paymentUrl);
   return url.origin === 'https://openapi.alipay.com' && url.pathname === '/gateway.do' && !url.username && !url.password && !url.hash;
 }, '付款地址不是支付宝正式网关');
-const errorSchema = z.object({ code: z.string(), message: z.string().max(300) });
+const errorSchema = z.object({ code: z.string(), message: z.string().max(300), orderId: z.string().uuid().optional() });
 class OrderResponseError extends Error {
-  constructor(readonly code: string, message: string) { super(message); }
+  constructor(readonly code: string, message: string, readonly orderId?: string) { super(message); }
 }
 
 export class WebPurchaseClient {
@@ -40,10 +43,11 @@ export class WebPurchaseClient {
     return structuredClone(receipt);
   }
 
-  prepare(input: PurchaseRequest): WebReceipt {
+  prepare(input: PurchaseRequest, channel: PaymentChannel = 'alipay'): WebReceipt {
+    paymentChannelSchema.parse(channel);
     if (this.current) throw new Error('当前订单尚未结束，请先查询或恢复原订单');
     const bytes = crypto.getRandomValues(new Uint8Array(32));
-    const receipt = webReceiptSchema.parse({ version: 1, product: 'tuanbo-link-console', createdAt: new Date().toISOString(),
+    const receipt = webReceiptSchema.parse({ ...(channel === 'wechat' ? { version: 2, paymentChannel: channel } : { version: 1 }), product: 'tuanbo-link-console', createdAt: new Date().toISOString(),
       token: `TBD-${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase()}`, request: input, orderId: null, discardable: true });
     this.persist(receipt);
     return structuredClone(receipt);
@@ -58,16 +62,20 @@ export class WebPurchaseClient {
   private async api(path: string, init: RequestInit = {}): Promise<unknown> {
     const send = this.send;
     const response = await send(path, { ...init, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(12000) });
+    if (path === '/v1/catalog' && new Headers(init.headers).get('X-Tblink-Payment-Channel') === 'wechat'
+      && response.headers.get('X-Tblink-Payment-Channel') !== 'wechat') throw new Error('微信付款尚未开放，请选择支付宝或稍后重试');
     const body: unknown = await response.json();
     if (!response.ok) {
       const error = errorSchema.safeParse(body);
-      if (error.success) throw new OrderResponseError(error.data.code, error.data.message);
+      if (error.success) throw new OrderResponseError(error.data.code, error.data.message, error.data.orderId);
       throw new Error(`订单服务返回 ${response.status}，请保留凭据后查询原单`);
     }
     return body;
   }
 
-  async catalog() { return purchaseCatalogResponseSchema.parse(await this.api('/v1/catalog')); }
+  async catalog(channel: PaymentChannel = 'alipay') {
+    return purchaseCatalogResponseSchema.parse(await this.api('/v1/catalog', { headers: { 'X-Tblink-Payment-Channel': paymentChannelSchema.parse(channel) } }));
+  }
 
   async submit() {
     const receipt = this.receipt;
@@ -75,14 +83,19 @@ export class WebPurchaseClient {
     this.persist({ ...receipt, discardable: false });
     let body: unknown;
     try { body = await this.api('/v1/orders', { method: 'POST', headers: {
-      'Content-Type': 'application/json', Authorization: `Bearer ${receipt.token}`
+      'Content-Type': 'application/json', Authorization: `Bearer ${receipt.token}`,
+      'X-Tblink-Payment-Channel': receipt.version === 2 ? 'wechat' : 'alipay'
     }, body: JSON.stringify(receipt.request) }); }
     catch (error) {
+      if (receipt.version === 2 && error instanceof OrderResponseError && error.orderId) {
+        if (receipt.orderId !== null && receipt.orderId !== error.orderId) throw new Error('渠道返回的原订单编号不一致，请保留凭据并联系支持');
+        this.persist({ ...receipt, orderId: error.orderId, discardable: false });
+      }
       // These codes occur only when no order exists for this token. Unknown failures retain the original receipt.
-      if (receipt.orderId === null && error instanceof OrderResponseError && ['OFFER_CHANGED', 'QUANTITY_LIMIT', 'PAYMENTS_UNAVAILABLE'].includes(error.code)) this.persist({ ...receipt, discardable: true });
+      if (receipt.orderId === null && error instanceof OrderResponseError && !error.orderId && ['OFFER_CHANGED', 'QUANTITY_LIMIT', 'PAYMENTS_UNAVAILABLE'].includes(error.code)) this.persist({ ...receipt, discardable: true });
       throw error;
     }
-    const result = paymentSchema.parse(body);
+    const result = receipt.version === 2 ? purchaseResponseSchema.refine(value => value.paymentUrl === null || wechatCodeUrlSchema.safeParse(value.paymentUrl).success, '微信二维码地址无效').parse(body) : paymentSchema.parse(body);
     if (result.offer.id !== receipt.request.offerId || result.offer.revision !== receipt.request.revision
       || result.offer.unitAmountFen !== receipt.request.quotedUnitAmountFen || result.quantity !== receipt.request.quantity
       || result.renewalLicenseId !== undefined || receipt.orderId !== null && result.id !== receipt.orderId) {
