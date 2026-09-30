@@ -8,6 +8,10 @@ GitHub 仓库为 `JinHe9527/tuanbo-link-console`，生产分支为 `master`。�
 
 这条链路发布授权服务和官网，不自动发布 Windows Release、不改变商品价格、不启用微信、不创建支付订单或授权。Windows 安装包及 `latest.yml` 的发布仍走已有独立流程。
 
+实现提交 `3d27779a0998fd3788add2d33d4eed2a0f51210e` 的 [CI 36661008165](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36661008165) 已全部通过：类型检查、支付／授权测试、服务与官网构建、浏览器检查、Python 回归。新增接收器 7 项回归与既有套件合计 62 项在本地通过；CI 同一套件通过。`Confirm production branch is still current` 与 `Deploy verified licensing service and website` 均为 `skipped`，这次不是自动部署成功证明。
+
+配置后的独立服务器复核：生产来源仍为 `fb6e286c4a9c700b9693d566389598ace3ad446d`；API bundle、Nginx 和支付环境摘要保持此前部署值；数据库检查 `ok`，订单 1、收款 0、授权 0。SSH、团播、恢复定时器、Nginx、金河分镜和无忧排班均 active。自动发布任务目录为空，尚无 `last-success.json`。服务器接收器 SHA256 `d3b2c44162bc378994ac3e80e16439d778ca68d1795db727dec81d0fae8a6759`、官网发布脚本 SHA256 `f532a3f37cde08a20c02d7a1c2a5c7fa08458f5ea7db5c4f41135e03d74078ed`，均与本仓库文件一致。
+
 ## 验证与发布顺序
 
 1. `.github/workflows/verify-licensing-server.yml` 在匹配路径的 master push、PR 或手动触发时，使用锁文件安装依赖，执行类型检查、支付／授权测试、服务和官网构建、浏览器检查、Python 发布恢复回归。

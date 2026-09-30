@@ -74,7 +74,7 @@ Windows 上执行 `pnpm verify:release`，再执行 `pnpm verify:installer` 和�
 
 服务器部署构建产物，不需要在公网站点目录放完整 Git checkout。不要在 `/srv/tblink-updates` 中保存 `.git`、源码包或仓库令牌。现有源站按白名单提供正式更新文件。
 
-2026-09-30 授权服务和官网来源均为 `fb6e286c4a9c700b9693d566389598ace3ad446d`；systemd 运行 `/opt/tblink-licensing/dist/index.js`。部署已记录 `/opt/tblink-licensing/RELEASE`、bundle SHA-256、受限备份与部署回执，并执行 SQLite 副本恢复及数据一致性核对，详情见部署文档。付款链接、主动查单、商品目录、自助下单、原机器续费和独立收款记录／补交付已经部署，代理来源按客户分别限流；支付宝商户身份和验签配置已完成，支付宝目录与收款开关已于 2026-09-29 启用；微信 Native 代码已部署但尚未配置商户凭据，微信收款保持关闭。仍没有自动部署 workflow 或自动跟随主分支。
+2026-09-30 授权服务和官网来源均为 `fb6e286c4a9c700b9693d566389598ace3ad446d`；systemd 运行 `/opt/tblink-licensing/dist/index.js`。部署已记录 `/opt/tblink-licensing/RELEASE`、bundle SHA-256、受限备份与部署回执，并执行 SQLite 副本恢复及数据一致性核对，详情见部署文档。付款链接、主动查单、商品目录、自助下单、原机器续费和独立收款记录／补交付已经部署，代理来源按客户分别限流；支付宝商户身份和验签配置已完成，支付宝目录与收款开关已于 2026-09-29 启用；微信 Native 代码已部署但尚未配置商户凭据，微信收款保持关闭。受限发布工作流已准备，但仓库开关与密钥尚未启用，生产仍由手动发布管理。
 
 以下自动部署要求已落实为条件工作流及受限接收器，但尚未启用或完成 GitHub 到生产的端到端验证；具体状态见 [自动发布说明](AUTOMATED_DEPLOYMENT.md)：
 
