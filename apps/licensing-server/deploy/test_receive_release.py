@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import signal
 import tarfile
 from tempfile import TemporaryDirectory
 import unittest
@@ -40,6 +41,35 @@ def payload(change=None, extra=None, link=None):
 
 
 class ReceiverTest(unittest.TestCase):
+    def test_receive_stream_and_timeout_preserve_boundary(self):
+        data, manifest, _ = payload()
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        with TemporaryDirectory() as folder, patch.object(module, 'ROOT', Path(folder)):
+            def start_worker(command, **kwargs):
+                job = Path(folder) / 'jobs' / command[-1]
+                self.assertEqual((job / 'incoming.tar').read_bytes(), data)
+                (job / 'result.json').write_text(json.dumps({'revision': manifest['revision']}))
+
+            with patch.object(module.subprocess, 'run', side_effect=start_worker):
+                result = module.receive(io.BytesIO(data))
+            self.assertEqual(result['revision'], manifest['revision'])
+            self.assertEqual(signal.getsignal(signal.SIGALRM), previous_handler)
+
+        class InterruptedUpload:
+            calls = 0
+
+            def read1(self, size):
+                self.calls += 1
+                if self.calls == 1:
+                    return b'partial'
+                signal.getsignal(signal.SIGALRM)(signal.SIGALRM, None)
+
+        with TemporaryDirectory() as folder, patch.object(module, 'ROOT', Path(folder)):
+            with self.assertRaisesRegex(TimeoutError, 'receiving 7 bytes'):
+                module.receive(InterruptedUpload())
+            self.assertFalse((Path(folder) / 'jobs').exists())
+            self.assertEqual(signal.getsignal(signal.SIGALRM), previous_handler)
+
     def test_verified_archive_and_known_files_only(self):
         data, expected, files = payload()
         manifest, actual = module.decode_archive(data)

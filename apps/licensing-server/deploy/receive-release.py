@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import time
 import uuid
 
 ROOT = Path('/var/lib/tblink-deploy')
@@ -129,14 +130,33 @@ def activate_job(job):
 def receive(stream):
     if shutil.disk_usage(ROOT).free < 512 * 1024 * 1024:
         raise RuntimeError('Insufficient deployment disk space')
-    data = stream.read(MAX_ARCHIVE + 1)
+    started = time.monotonic()
+    chunks = []
+    received = 0
+
+    def upload_timeout(signum, frame):
+        raise TimeoutError(f'Deployment upload timed out after receiving {received} bytes')
+
+    previous_handler = signal.signal(signal.SIGALRM, upload_timeout)
+    signal.alarm(300)
+    try:
+        while received <= MAX_ARCHIVE:
+            chunk = stream.read1(min(65536, MAX_ARCHIVE + 1 - received))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            received += len(chunk)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
+    data = b''.join(chunks)
+    print(f'Received {received} deployment bytes in {time.monotonic() - started:.1f}s', file=sys.stderr)
     manifest, _ = decode_archive(data)
     job_id = uuid.uuid4().hex
     job = ROOT / 'jobs' / job_id
     job.mkdir(mode=0o700, parents=True)
     (job / 'incoming.tar').write_bytes(data)
     write_json(job / 'request.json', {key: manifest[key] for key in ['revision', 'runId', 'attempt', 'repository']})
-    signal.alarm(0)
     subprocess.run(['systemd-run', '--quiet', '--collect', '--wait', '--service-type=exec',
                     '--unit=tblink-deploy-' + job_id, '/usr/bin/python3', str(TOOLS['receive-release.py']),
                     '--job', job_id], check=True, timeout=1500)
@@ -158,7 +178,6 @@ def main():
                 print(error.stderr, file=sys.stderr)
             raise
     elif len(sys.argv) == 1:
-        signal.alarm(60)
         print(json.dumps(receive(sys.stdin.buffer)))
     else:
         raise RuntimeError('Unsupported deployment invocation')
