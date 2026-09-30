@@ -84,7 +84,7 @@ def read_catalog():
 
 
 def probe(path):
-    return run('curl', '--silent', '--show-error', '--max-time', '3', '--noproxy', '*',
+    return run('curl', '--fail', '--silent', '--show-error', '--max-time', '3', '--noproxy', '*',
                '--resolve', f'{HOST}:443:127.0.0.1', f'https://{HOST}{path}').stdout
 
 
@@ -149,10 +149,14 @@ def main():
     preflight.write_text('error_log stderr;\nevents {}\nhttp {\ninclude /etc/nginx/mime.types;\naccess_log off;\n' + candidate + '\n}\n')
     run('nginx', '-t', '-c', str(preflight))
     RELEASES.mkdir(mode=0o755, exist_ok=True)
+    RELEASES.chmod(0o755)
     release = RELEASES / (revision + '-' + uuid.uuid4().hex[:8])
     release.mkdir(mode=0o755)
+    # The receiver runs with umask 077; only public static directories need traversal.
+    release.chmod(0o755)
     for name in STATIC_FILES:
         (release / name).parent.mkdir(exist_ok=True)
+        (release / name).parent.chmod(0o755)
         shutil.copyfile(backup / name, release / name)
         os.chmod(release / name, 0o644)
     changed = False

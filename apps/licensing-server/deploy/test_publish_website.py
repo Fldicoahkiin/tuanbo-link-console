@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import stat
 import unittest
 from unittest.mock import patch
 from tempfile import mkdtemp
@@ -83,8 +84,16 @@ class WebsiteConfigTest(unittest.TestCase):
                         tar.add(package / name, arcname=name)
                 args = ['publish-website.py', str(archive), module.digest(archive), module.digest(proxy)] + [module.digest(p) for p in protected]
                 with patch.object(module, 'NGINX', proxy), patch.object(module, 'ROOT', root), patch.object(module, 'RELEASES', releases), patch.object(module, 'BACKUPS', backups), patch.object(module, 'PROTECTED', protected), patch.object(module.sys, 'argv', args), patch.object(module.os, 'geteuid', return_value=0), patch.object(module, 'read_catalog'), patch.object(module, 'run', return_value=SimpleNamespace(stdout='active')), patch.object(module, 'probe', side_effect=RuntimeError('simulated live probe failure')):
-                    with self.assertRaisesRegex(RuntimeError, 'simulated live probe failure'):
-                        module.main()
+                    previous_mask = module.os.umask(0o077)
+                    try:
+                        with self.assertRaisesRegex(RuntimeError, 'simulated live probe failure'):
+                            module.main()
+                    finally:
+                        module.os.umask(previous_mask)
+                candidate_release = next(releases.glob('a' * 40 + '-*'))
+                for directory in [candidate_release, candidate_release / 'assets']:
+                    self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o755)
+                self.assertEqual(stat.S_IMODE(next(backups.iterdir()).stat().st_mode), 0o700)
                 self.assertEqual(proxy.read_text(), self.previous)
                 if had_site:
                     self.assertEqual(root.resolve(), old.resolve())
