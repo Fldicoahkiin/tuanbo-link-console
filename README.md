@@ -8,6 +8,8 @@
 
 [产品官网与购买](https://tuanbo-link.jinhefilm.com/) · [下载 Windows 0.4.29](https://updates.tuanbo-link.jinhefilm.com/windows/x64/Tuanbo-Link-Console-0.4.29-x64.exe) · [发行记录](docs/RELEASE_0.4.29.md)
 
+0.4.27 仍使用旧 GitHub 更新源。首次迁移请保存工程、退出软件，再用上述 0.4.29 安装器覆盖原目录；新版使用公司更新源，无需填写 GitHub Token。具体步骤见[旧安装迁移](docs/SOFTWARE_UPDATES.md#旧安装迁移与故障)。
+
 安装包目前未做 Authenticode 签名，Windows 可能显示未知发布者或 SmartScreen 提示。
 
 ## 核心能力
