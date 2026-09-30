@@ -4,6 +4,12 @@ param(
   [string]$InstallerPath = '',
 
   [Parameter()]
+  [string]$PreviousInstallerPath = '',
+
+  [Parameter()]
+  [string]$PreviousVersion = '',
+
+  [Parameter()]
   [string]$InstallDirectory = 'C:\dev\tuanbo-link-installer-acceptance'
 )
 
@@ -124,7 +130,34 @@ if ($existingEntries.Count -gt 0) {
   throw '当前账户已经安装“团播联动台”；验收脚本拒绝覆盖用户现有安装。'
 }
 
+$desktopPackage = Get-Content -LiteralPath 'apps\desktop\package.json' -Raw | ConvertFrom-Json
+$applicationPath = Join-Path $resolvedInstallDirectory '团播联动台.exe'
+$migration = 'not-requested'
+if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) {
+  if ($PreviousVersion -notmatch '^\d+\.\d+\.\d+$' -or [version]$PreviousVersion -ge [version]$desktopPackage.version) {
+    throw '旧版迁移必须提供低于当前版本的确切版本号。'
+  }
+  $resolvedPreviousInstaller = (Resolve-Path -LiteralPath $PreviousInstallerPath).Path
+  Invoke-Installer -Installer $resolvedPreviousInstaller -Target $resolvedInstallDirectory
+  $previousMetadata = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($applicationPath)
+  if ([version]$previousMetadata.ProductVersion -ne [version]"$PreviousVersion.0") {
+    throw "旧版安装后的可执行文件版本不匹配：$($previousMetadata.ProductVersion)"
+  }
+  $oldEntries = @(Get-TuanboUninstallEntries)
+  if ($oldEntries.Count -ne 1 -or $oldEntries[0].Hive -ne 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall') {
+    throw '旧版安装没有产生唯一的当前用户卸载项。'
+  }
+  if (@(Get-TuanboProcesses -InstallDirectory $resolvedInstallDirectory).Count -gt 0) {
+    throw '旧版静默安装后仍有进程运行，停止覆盖以避免强制关闭。'
+  }
+  $migration = "$PreviousVersion -> $($desktopPackage.version)"
+}
+
 Invoke-Installer -Installer $resolvedInstaller -Target $resolvedInstallDirectory
+$currentMetadata = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($applicationPath)
+if ([version]$currentMetadata.ProductVersion -ne [version]"$($desktopPackage.version).0") {
+  throw "覆盖安装后未切换到目标版本：$($currentMetadata.ProductVersion)"
+}
 Invoke-Installer -Installer $resolvedInstaller -Target $resolvedInstallDirectory
 
 $installedEntries = @(Get-TuanboUninstallEntries)
@@ -138,7 +171,6 @@ if ($installedEntries[0].UninstallString -notmatch '/currentuser') {
   throw "卸载注册项未声明当前用户安装：$($installedEntries[0].UninstallString)"
 }
 
-$applicationPath = Join-Path $resolvedInstallDirectory '团播联动台.exe'
 $uninstallerPath = Join-Path $resolvedInstallDirectory 'Uninstall 团播联动台.exe'
 if (-not (Test-Path -LiteralPath $applicationPath)) {
   throw "安装后缺少主程序：$applicationPath"
@@ -148,6 +180,7 @@ if (-not (Test-Path -LiteralPath $uninstallerPath)) {
 }
 
 $mainWindowTitle = (& ./scripts/verify-installed-app.ps1 -ExecutablePath $applicationPath | Out-String).Trim()
+$tamperedWindowTitle = (& ./scripts/verify-installed-app.ps1 -ExecutablePath $applicationPath -Credential tampered | Out-String).Trim()
 
 $deadline = (Get-Date).AddSeconds(15)
 do {
@@ -183,8 +216,10 @@ if ($registryResidue.Count -gt 0) {
   InstallDirectory = $resolvedInstallDirectory
   FirstInstall = 'passed'
   SameVersionOverwrite = 'passed'
+  PreviousVersionMigration = $migration
   InstallScope = 'current-user'
   MainWindow = $mainWindowTitle
+  TamperedCredentialWindow = $tamperedWindowTitle
   GracefulClose = 'passed'
   Uninstall = 'passed'
   ProcessResidue = 0

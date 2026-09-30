@@ -61,9 +61,31 @@ jobs:
           "INSTALLER_PATH=$installer" >> $env:GITHUB_ENV
           "MANIFEST_PATH=$manifestPath" >> $env:GITHUB_ENV
           "Published version: $version; product source: $tagSha" >> $env:GITHUB_STEP_SUMMARY
-      - name: Verify shipped installer gate, overwrite and graceful uninstall
+      - name: Download verified legacy installer for first commercial migration
         shell: pwsh
-        run: ./scripts/verify-windows-installer.ps1 -InstallerPath $env:INSTALLER_PATH
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = 'desktop-0.4.27-20260925'
+          $version = '0.4.27'
+          $release = gh release view $tag --json isDraft,isPrerelease | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.isDraft -or $release.isPrerelease) { throw 'Expected the published legacy release' }
+          $destination = Join-Path $env:RUNNER_TEMP 'legacy-release'
+          New-Item -ItemType Directory -Path $destination | Out-Null
+          gh release download $tag --dir $destination --pattern "Tuanbo-Link-Console-$version-x64.exe" --pattern release-manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Legacy release download failed' }
+          $manifest = Get-Content (Join-Path $destination 'release-manifest.json') -Raw | ConvertFrom-Json
+          $tagSha = (gh api "repos/$env:GH_REPO/commits/$tag" --jq .sha).Trim()
+          if ($LASTEXITCODE -ne 0 -or $tagSha -cne $manifest.gitSha -or $manifest.version -ne $version -or $manifest.gitWorkingTreeDirty) { throw 'Legacy manifest source mismatch' }
+          $installer = Join-Path $destination "Tuanbo-Link-Console-$version-x64.exe"
+          $artifact = @($manifest.artifacts | Where-Object { $_.path -eq "apps/desktop/dist/Tuanbo-Link-Console-$version-x64.exe" })
+          if ($artifact.Count -ne 1 -or (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant() -cne $artifact[0].sha256 -or (Get-Item $installer).Length -ne $artifact[0].bytes) { throw 'Legacy installer differs from release manifest' }
+          "PREVIOUS_INSTALLER_PATH=$installer" >> $env:GITHUB_ENV
+          "Legacy version: $version; source: $tagSha; verified SHA256: $($artifact[0].sha256)" >> $env:GITHUB_STEP_SUMMARY
+      - name: Verify legacy migration, shipped credential gate and graceful uninstall
+        shell: pwsh
+        run: ./scripts/verify-windows-installer.ps1 -InstallerPath $env:INSTALLER_PATH -PreviousInstallerPath $env:PREVIOUS_INSTALLER_PATH -PreviousVersion '0.4.27'
       - name: Verify real updater HTTPS download and checksum rejection
         if: ${{ !cancelled() && steps.published_release.outcome == 'success' }}
         shell: pwsh
@@ -75,8 +97,9 @@ jobs:
         run: |
           @'
           PASS: native source app rejects missing/tampered credentials through real IPC.
-          PASS: published installer stays at activation gate, installs twice and uninstalls normally.
+          PASS: published 0.4.27 installs, current installer upgrades it in place and same-version overwrite succeeds.
+          PASS: installed current product rejects both missing and tampered credentials, closes and uninstalls normally.
           PASS: real NSIS updater downloads HTTPS feed, verifies manifest SHA256/SHA512 and rejects corrupted fixture.
-          Not covered: real paid activation, old installed version to new version restart, OBS/MA2 hardware.
+          Not covered: real paid activation, in-app quitAndInstall restart, paid user profile/project migration, OBS/MA2 hardware.
           No production license issued, no payment created, no product release modified.
           '@ >> $env:GITHUB_STEP_SUMMARY
