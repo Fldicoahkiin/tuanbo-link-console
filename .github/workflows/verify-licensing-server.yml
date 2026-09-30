@@ -35,12 +35,12 @@ permissions:
 
 concurrency:
   group: verify-licensing-server-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
         with:
@@ -72,5 +72,23 @@ jobs:
         run: python3 -W error::ResourceWarning -m unittest discover -s apps/licensing-server/deploy -p 'test_*.py'
       - name: Record verification scope
         run: |
-          printf 'Verified source: `%s`\n\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
-          printf '%s\n' 'Built licensing service and website; verified isolated authorization, payment, deployment and recovery behavior.' 'This workflow does not deploy to production, issue licenses or execute real payments.' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Verified source: %s\n\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' 'Built licensing service and website; verified isolated authorization, payment, deployment and recovery behavior.' 'Production deployment, when enabled, is reported below. These checks do not issue production licenses or execute real payments.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Confirm production branch is still current
+        if: github.repository == 'JinHe9527/tuanbo-link-console' && github.ref == 'refs/heads/master' && github.event_name != 'pull_request' && vars.TBLINK_AUTO_DEPLOY == 'true'
+        id: deploy_source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq .object.sha)
+          if [ "$current" = "$GITHUB_SHA" ]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'Skipped deployment because this source has been superseded.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Deploy verified licensing service and website
+        if: steps.deploy_source.outputs.current == 'true'
+        env:
+          TBLINK_DEPLOY_SSH_KEY: ${{ secrets.TBLINK_DEPLOY_SSH_KEY }}
+          TBLINK_DEPLOY_KNOWN_HOSTS: ${{ secrets.TBLINK_DEPLOY_KNOWN_HOSTS }}
+        run: python3 apps/licensing-server/deploy/deploy-from-ci.py
