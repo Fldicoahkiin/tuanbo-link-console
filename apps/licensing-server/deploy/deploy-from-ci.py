@@ -15,6 +15,12 @@ STATIC = ['index.html', 'purchase.js', 'purchase.css', 'assets/studio.webp',
           'assets/display.woff2', 'assets/FONT-LICENSE.txt']
 
 
+def write_ssh_file(path, value):
+    # Secret input can lose the final newline required by OpenSSH private keys.
+    path.write_text(value.rstrip('\r\n') + '\n')
+    path.chmod(0o600)
+
+
 def main():
     revision = os.environ['GITHUB_SHA']
     if (os.environ['GITHUB_REPOSITORY'] != 'JinHe9527/tuanbo-link-console'
@@ -44,11 +50,9 @@ def main():
     os.chmod(directory, 0o700)
     key = directory / 'identity'
     known_hosts = directory / 'known_hosts'
-    key.write_text(os.environ.pop('TBLINK_DEPLOY_SSH_KEY'))
-    key.chmod(0o600)
-    known_hosts.write_text(os.environ.pop('TBLINK_DEPLOY_KNOWN_HOSTS'))
-    known_hosts.chmod(0o600)
     try:
+        write_ssh_file(key, os.environ.pop('TBLINK_DEPLOY_SSH_KEY'))
+        write_ssh_file(known_hosts, os.environ.pop('TBLINK_DEPLOY_KNOWN_HOSTS'))
         deployed = subprocess.run(['ssh', '-F', '/dev/null', '-T', '-i', str(key),
                                   '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
                                   '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + str(known_hosts),
