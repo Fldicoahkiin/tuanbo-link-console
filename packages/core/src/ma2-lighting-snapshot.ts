@@ -34,6 +34,7 @@ export function ma2EventSnapshotProperties(event: LightingEvent, time: number, m
   const common = { time: String(time), muted: String(muted) };
   if (event.kind === 'ma2-fader') return { ...common, executor: event.executor, action: 'master', fader: event.fader, level: String(event.level), name: '主推杆' };
   if (event.kind !== 'ma2') throw new Error(`MA2 绑定轨道包含尚未映射的 ${event.kind} 事件`);
+  if (event.preparation) throw new Error('包含埋步的 Cue 请使用软件网络或 MIDI 直控播放；暂不支持写入控台 Timecode');
   return { ...common, executor: event.executor, action: event.action,
     cue: event.action === 'goto' ? event.cue ?? '' : '', sequence: event.action === 'goto' ? String(event.sequence) : '',
     name: event.action === 'goto' ? nativeName : event.action === 'go' ? '下一步' : '关闭执行器' };

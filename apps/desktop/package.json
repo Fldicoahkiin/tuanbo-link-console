@@ -1,7 +1,7 @@
 {
   "name": "@tb/desktop",
   "private": true,
-  "version": "0.4.29",
+  "version": "0.4.40",
   "productName": "团播联动台",
   "type": "module",
   "main": "out/main/index.cjs",
@@ -112,6 +112,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "electron-builder": "26.15.3",
     "electron-vite": "^4.0.0",
+    "esbuild": "0.28.1",
     "rcedit": "5.0.2"
   },
   "description": "内部音乐主控与 P1 跟随双模式的 OBS、MIDI 时间线联动桌面端",

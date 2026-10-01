@@ -1,0 +1,20 @@
+.ma2-cached-browser { grid-column: 1 / -1; grid-row: 1 / -1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 12px; gap: 10px; height: 100%; background: var(--surface-base); }
+.ma2-cached-browser header, .ma2-browser-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ma2-cached-browser header { justify-content: space-between; }
+.ma2-cached-browser :is(button, input, select) { min-height: 32px; padding: 6px 10px; border: 1px solid var(--separator); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-primary); font: inherit; font-size: 12px; }
+.ma2-cached-browser button:disabled { opacity: .45; }
+.ma2-cached-browser h3, .ma2-cached-browser h4, .ma2-cached-browser p { margin: 0 0 8px; }
+.ma2-cached-browser small, .ma2-cached-browser p { color: var(--text-secondary); line-height: 1.5; }
+.ma2-browser-tools input { flex: 1; min-width: 160px; }
+.ma2-browser-body { display: grid; grid-template-columns: minmax(180px, 25%) minmax(0, 1fr); flex: 1; min-height: 0; gap: 14px; }
+.ma2-browser-body nav, .ma2-browser-body article { overflow: auto; min-width: 0; }
+.ma2-browser-body nav { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--separator); padding-right: 10px; }
+.ma2-browser-body nav button { display: flex; flex-direction: column; align-items: flex-start; padding: 10px; gap: 4px; text-align: left; flex-shrink: 0; }
+.ma2-browser-body nav button[aria-pressed=true] { background: var(--surface-raised); border-color: var(--accent); }
+.ma2-browser-body nav span { font-size: 11px; color: var(--text-secondary); }
+.ma2-browser-body article > label { display: flex; gap: 8px; align-items: center; margin-block: 10px; }
+.ma2-browser-body article select { min-width: 0; flex: 1; }
+.ma2-browser-events { overflow: auto; margin-top: 12px; }
+.ma2-browser-events table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+.ma2-browser-events th, .ma2-browser-events td { padding: 7px 9px; text-align: left; border-bottom: 1px solid var(--separator); }
+.ma2-native-note { padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--surface-raised); }

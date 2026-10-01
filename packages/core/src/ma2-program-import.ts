@@ -1,6 +1,11 @@
-import { ma2TimecodePreviewSchema, parseLinkProject, type Ma2TimecodePreview } from '@tb/schema';
+import { ma2TimecodePreviewSchema, ma2ReadStateSchema, parseLinkProject, type Ma2TimecodePreview, type Ma2ReadState } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { importMa2TimecodeCommand } from './ma2-import';
+
+export function saveMa2ReadStateCommand(input: Ma2ReadState): LinkCommand {
+  const state = ma2ReadStateSchema.parse(input);
+  return { id: crypto.randomUUID(), label: '保存控台读取与配对状态', execute: project => parseLinkProject({ ...project, schemaVersion: 2, ma2ReadState: state, updatedAt: new Date().toISOString() }), undo: before => parseLinkProject(before) };
+}
 
 /** One history entry; a failed pairing never leaves a partially imported project. */
 export function importMa2ProgramsCommand(selections: readonly { itemId: string; preview: Ma2TimecodePreview }[]): LinkCommand {

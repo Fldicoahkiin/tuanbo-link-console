@@ -29,6 +29,13 @@ it('播放状态阻止发送任何素材读取命令', async () => {
   await expect(readMa2NativeLibrary(peer, { request: vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(directory)) }, () => true)).rejects.toThrow('播放');
   expect(peer.command).not.toHaveBeenCalled();
 });
+it('读取指定引用时不查询其他序列，不传输灯具数据', async () => {
+  const request = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify({ ...directory, entries: [...directory.entries, { target: 8, name: '无关序列' }] }));
+  const peer = connection(['2;1,1,61', '2;1,1,61']);
+  const result = await readMa2NativeLibrary(peer, { request }, () => false, undefined, 'library', undefined, [7]);
+  expect(result.sequences.map(entry => entry.sequence)).toEqual([7]); expect(peer.command).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls.every(call => call[0] === 'LISTSEQ')).toBe(true);
+});
 it('每条序列经双读核对后立即报告，取消后不再读取下一条', async () => {
   const two = { ...directory, entries: [{ target: 7, name: '第一条' }, { target: 8, name: '第二条' }] };
   const request = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(two));

@@ -6,22 +6,31 @@ import { parseP1TimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
 export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePreview, initialDocument?: LightingDocument): LinkCommand {
   const input = ma2TimecodePreviewSchema.parse(value);
   const initial = initialDocument ? lightingDocumentSchema.parse(initialDocument) : undefined;
-  if (input.unconverted.length) throw new Error('存在未转换事件，暂不能完整加入节目');
   const bindingId = crypto.randomUUID();
   return { id: crypto.randomUUID(), label: '从 MA2 加入灯光编排', execute(project) {
     const next = structuredClone(project);
     const item = next.rundown.find((entry) => entry.id === itemId);
     if (!item) throw new Error('接收 MA2 数据的节目不存在');
     const originMs = item.p1Media ? parseP1TimeOrigin(item.p1Media.midiStartTime) : item.playback?.mtcOffsetMs ?? input.timeOriginMs ?? 0;
+    if (input.timing?.absoluteEventTimesMs.some(time => time < originMs - 1e-6 || item.referenceAudio && time >= originMs + item.referenceAudio.durationMs)) throw new Error('原生事件超出歌曲原始时间范围，请核对配对；未丢弃事件或改写起点');
     const preview = withMa2TimeOrigin(input, originMs);
     if (item.playback && item.playback.mtcOffsetMs !== originMs) throw new Error('歌曲播放时间码与 P1 原始起点不一致，请先核对播放设置');
     if (originMs > 0) item.playback ??= { volume: item.p1Media?.volume ?? 100, endAction: 'stop', startMs: 0, endMs: 0, mtcOffsetMs: originMs, shortcut: item.p1Media?.shortcut ?? '' };
     const current = item.lighting ?? structuredClone(initial ?? createLightingDocument());
+    if (input.unconverted.length && current.outputMode !== 'timecode' && current.tracks.length) throw new Error('含原生保留事件的时间线需要时间码输出；请先核对当前歌曲的直接输出编排');
     if (current.ma2Bindings?.some((binding) => binding.timecode === preview.target)) throw new Error('该节目已关联此 Timecode，请勿重复导入');
     const tracks = structuredClone(preview.document.tracks);
-    item.lighting = { ...current, tracks: [...current.tracks, ...tracks], ma2Bindings: [...current.ma2Bindings ?? [], {
+    const templates = [...current.templates];
+    for (const track of tracks) for (const clip of track.clips) for (const event of clip.events) {
+      if (event.kind !== 'ma2' || event.action !== 'goto' || !event.sequence || !event.cue) continue;
+      if (templates.some(template => template.track.cueStamp?.mode === 'fixed' && template.track.cueStamp.sequence === event.sequence && Number(template.track.cueStamp.cue) === Number(event.cue) && template.track.cueStamp.executor === event.executor)) continue;
+      const name = event.label || `Cue ${event.cue}`;
+      templates.push({ id: crypto.randomUUID(), name, categories: [], track: { ...track, id: crypto.randomUUID(), name, muted: false, solo: false, locked: false, clips: [], cueStamp: { mode: 'fixed', sequence: event.sequence, cue: event.cue, executor: event.executor } } });
+    }
+    item.lighting = { ...current, ...(input.unconverted.length ? { outputMode: 'timecode' as const } : {}), templates, tracks: [...current.tracks, ...tracks], ma2Bindings: [...current.ma2Bindings ?? [], {
+      nativeEvents: structuredClone(preview.unconverted), playback: preview.unconverted.length ? 'native-timecode' : 'editable',
       id: bindingId, timecode: preview.target, name: preview.name, readAt: preview.readAt, timeOriginMs: preview.timeOriginMs,
-      sourceXml: preview.sourceXml, baselineTracks: structuredClone(tracks), mappings: structuredClone(preview.mappings), trackMappings: structuredClone(preview.trackMappings), cueCatalog: structuredClone(preview.cueCatalog)
+      sourceXml: preview.sourceXml, baselineTracks: structuredClone(tracks), mappings: structuredClone(preview.mappings), trackMappings: preview.trackMappings?.length === tracks.length ? structuredClone(preview.trackMappings) : undefined, cueCatalog: structuredClone(preview.cueCatalog)
     }] };
     next.schemaVersion = 2;
     next.updatedAt = new Date().toISOString();

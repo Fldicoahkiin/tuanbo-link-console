@@ -6,6 +6,7 @@ import {
 } from '@tb/core/link';
 import type { LinkAction, LinkCue, LinkProject } from '@tb/schema';
 import { LinkMidiAdapter } from '../../registry/link-midi-adapter';
+import { P1LightingOutput } from './p1-lighting-output';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -43,6 +44,7 @@ export class LinkRuntimeCoordinator {
   private internalStopHandler: (() => void) | null = null;
   private internalCaptureActive = false;
   private internalClockActive = false;
+  private readonly p1Lighting = new P1LightingOutput();
 
   onInternalStop(handler: (() => void) | null): void { this.internalStopHandler = handler; }
   async stopAndWait(suspendAuto = true): Promise<void> {
@@ -96,7 +98,7 @@ export class LinkRuntimeCoordinator {
         await this.armFromStart();
       },
       ingest: (sample) => this.ingestSample(sample, true),
-      interrupt: () => { this.executionGeneration += 1; },
+      interrupt: () => { this.executionGeneration += 1; this.p1Lighting.stop(); },
       fail: (error) => this.reportRuntimeError(error)
     });
     await this.initializeMidi();
@@ -195,6 +197,7 @@ export class LinkRuntimeCoordinator {
     this.managedOutput.resetExecution();
     useRuntimeStore.getState().setState({ reports: [], mediaReports: [], currentCueId: null });
     if (this.project.obsOutputMode !== 'scenes') await linkDesktopViewModel.activateManagedObsOutput();
+    await this.p1Lighting.prepare(this.project.playbackSource === 'internal' ? undefined : this.currentItem(), useIntegrationStore.getState().profile, Boolean(this.autoFollow), currentSample);
     this.applyRequiredUpdate(this.runtime.arm(performance.now(), currentSample));
     const skippedMedia = this.managedOutput.collectThrough(currentSample.totalFrames);
     await this.enqueueSkippedMedia(skippedMedia, '从当前 MTC 布防时该素材边界已经越过；系统未自动补执行');
@@ -232,6 +235,7 @@ export class LinkRuntimeCoordinator {
     this.decoder.reset(); this.mtcStability.reset();
     this.lastSample = null;
     this.managedOutput.resetExecution();
+    this.p1Lighting.restart();
     resetRuntimeExecutionView();
     this.applyRequiredUpdate(this.runtime.rearmFromStart(performance.now()));
     this.recordOperatorAction('从头重新布防');
@@ -279,9 +283,9 @@ export class LinkRuntimeCoordinator {
   }
 
   stop(suspendAuto = true): void {
+    this.p1Lighting.stop();
     this.internalClockActive = false;
-    if (suspendAuto) this.internalStopHandler?.();
-    if (suspendAuto) this.autoFollow?.suspend();
+    if (suspendAuto) { this.internalStopHandler?.(); this.autoFollow?.suspend(); }
     if (this.runtime.getState() === 'stopping') return;
     this.applyUpdate(this.runtime.stop()); if (this.runtime.getState() === 'idle') return;
     this.recordOperatorAction('停止运行会话');
@@ -296,15 +300,13 @@ export class LinkRuntimeCoordinator {
   }
 
   dispose(): void {
+    this.p1Lighting.stop();
     this.disposed = true; this.autoFollow?.dispose();
     this.executionGeneration += 1;
     this.unsubscribeMtc?.();
     this.unsubscribePorts?.();
     if (this.tickTimer !== null) window.clearInterval(this.tickTimer);
-    this.unsubscribeMtc = null;
-    this.mtcSubscriptionKey = null;
-    this.unsubscribePorts = null;
-    this.tickTimer = null;
+    this.unsubscribeMtc = null; this.mtcSubscriptionKey = null; this.unsubscribePorts = null; this.tickTimer = null;
     this.midi.dispose();
   }
 
@@ -329,6 +331,7 @@ export class LinkRuntimeCoordinator {
     const resumingMedia = this.project.playbackSource === 'internal' && previousState === 'paused';
     const update = resumingMedia ? this.runtime.resumeMedia(sample) : resumingP1 ? this.runtime.resumeP1(sample) : this.runtime.ingest(sample);
     this.applyUpdate(update);
+    if (update.state === 'running') this.p1Lighting.tick(sample);
     if ((resumingP1 || resumingMedia) && update.state === 'running') await this.syncMediaTransport('start');
     const managedMedia = (previousState === 'armed' || previousState === 'running' || resumingP1 || resumingMedia) && update.state === 'running'
       ? this.managedOutput.collectCrossed(previousFrame, sample.totalFrames)
@@ -395,12 +398,14 @@ export class LinkRuntimeCoordinator {
     this.managedOutput.resetExecution();
     resetRuntimeExecutionView();
     if (this.project.obsOutputMode !== 'scenes') await linkDesktopViewModel.activateManagedObsOutput();
+    await this.p1Lighting.prepare(this.project.playbackSource === 'internal' ? undefined : this.currentItem(), useIntegrationStore.getState().profile, Boolean(this.autoFollow));
     this.applyRequiredUpdate(this.runtime.arm(performance.now(), null, 'awaiting-external-start'));
   }
 
   private applyUpdate(update: RuntimeUpdate): void {
     if (useRuntimeStore.getState().state !== update.state && ['paused', 'timecodeLost', 'error', 'stopping'].includes(update.state)) {
       this.executionGeneration += 1;
+      try { this.p1Lighting.suspend(this.lastSample); } catch (error) { this.reportRuntimeError(error); return; }
       if (this.autoFollow && (update.state === 'timecodeLost' || update.state === 'error')) void this.syncMediaTransport('pause').catch((error: unknown) => this.reportRuntimeError(error));
     }
     applyRuntimeState({ project: this.project, item: this.currentItem(), update, nextCueId: this.nextCueId(update.missedCueIds) });
@@ -416,10 +421,9 @@ export class LinkRuntimeCoordinator {
 
   private applyRequiredUpdate(update: RuntimeUpdate): void { this.applyUpdate(update); if (update.state === 'error') throw new Error(update.reason ?? '运行状态变更失败'); }
 
-  private nextCueId(missedCueIds: readonly string[]): string | null { return findNextCueId({
-      item: this.currentItem(), frameRate: this.project.timebase.frameRate,
-      currentFrame: this.lastSample?.totalFrames ?? -1, missedCueIds, reports: useRuntimeStore.getState().reports
-    }); }
+  private nextCueId(missedCueIds: readonly string[]): string | null {
+    return findNextCueId({ item: this.currentItem(), frameRate: this.project.timebase.frameRate, currentFrame: this.lastSample?.totalFrames ?? -1, missedCueIds, reports: useRuntimeStore.getState().reports });
+  }
 
   private currentItem() { const id = useRuntimeStore.getState().currentItemId; return this.project.rundown.find((item) => item.id === id); }
 
@@ -429,12 +433,8 @@ export class LinkRuntimeCoordinator {
     reportCoordinatorError(message, (reason) => useRuntimeStore.getState().setState({ state: 'error', reason }));
   }
 
-  private recordOperatorAction(message: string, details?: Readonly<Record<string, unknown>>): void {
-    void this.recordOperatorActionAsync(message, details).catch((error: unknown) => this.reportRuntimeError(error));
-  }
+  private recordOperatorAction(message: string, details?: Readonly<Record<string, unknown>>): void { void this.recordOperatorActionAsync(message, details).catch((error: unknown) => this.reportRuntimeError(error)); }
 
-  private recordOperatorActionAsync(message: string, details?: Readonly<Record<string, unknown>>): Promise<void> {
-    return recordRuntimeOperator(this.project.projectId, this.currentItem(), message, details);
-  }
+  private recordOperatorActionAsync(message: string, details?: Readonly<Record<string, unknown>>): Promise<void> { return recordRuntimeOperator(this.project.projectId, this.currentItem(), message, details); }
 
 }

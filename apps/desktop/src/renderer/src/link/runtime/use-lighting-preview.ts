@@ -6,14 +6,17 @@ import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { useIntegrationStore } from '../stores/integration-store';
 
 export function useLightingPreview(input: { enabled: boolean; document: LightingDocument | undefined; audioRef: RefObject<HTMLAudioElement>; playing: boolean; frameRate: MtcFrameRate; onError: (message: string) => void }): boolean {
+  const endingOutput = useRef<LightingMidiOutput | null>(null);
   const [ready, setReady] = useState(false);
   const latest = useRef(input); latest.current = input;
   useEffect(() => {
+    endingOutput.current?.stop(); endingOutput.current = null;
     const document = latest.current.document;
     if (!input.playing || !document?.tracks.length) { setReady(false); return; }
     const output = new LightingMidiOutput(); const mtc = new MediaMtcOutput();
     let seekAudio: HTMLAudioElement | null = null;
     let canFinish = false;
+    let looping = false;
     let cancelled = false; let timer: ReturnType<typeof setInterval> | null = null;
     const fail = (error: unknown): void => latest.current.onError(error instanceof Error ? error.message : String(error));
     const began = (): void => { canFinish = Boolean(seekAudio && !seekAudio.ended && !seekAudio.seeking); };
@@ -23,12 +26,20 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       // The toolbar can pause at duration before Chromium dispatches `ended`.
       // Seeking clears canFinish, so a manual jump must never flush past cues.
       const reachedEnd = seekAudio && (seekAudio.ended || (Number.isFinite(seekAudio.duration) && seekAudio.duration > 0 && seekAudio.currentTime >= seekAudio.duration));
+      let finishing: Promise<void> | void = undefined;
       if (canFinish && reachedEnd && seekAudio && !seekAudio.seeking) {
         canFinish = false;
-        try { output.finish(seekAudio.currentTime * 1000); } catch (error) { fail(error); }
+        try { finishing = output.finish(seekAudio.currentTime * 1000); } catch (error) { fail(error); }
       }
       seekAudio?.removeEventListener('playing', began); seekAudio?.removeEventListener('seeking', located); seekAudio?.removeEventListener('seeked', located); seekAudio = null;
-      mtc.stop(); try { output.stop(); } catch (error) { fail(error); }
+      mtc.stop();
+      if (finishing) {
+        endingOutput.current = output;
+        void finishing.catch(fail).finally(() => {
+          try { output.stop(); } catch (error) { fail(error); }
+          if (endingOutput.current === output) endingOutput.current = null;
+        });
+      } else { try { output.stop(); } catch (error) { fail(error); } }
     };
     const start = async (): Promise<void> => {
       const originMs = lightingTimeOrigin(document);
@@ -48,9 +59,15 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       setReady(true);
       timer = setInterval(() => {
         try {
-          if (audio.paused || audio.ended || audio.seeking) return;
+          if (audio.paused || audio.ended || audio.seeking || looping) return;
           canFinish = true;
-          if (document.loop.enabled && audio.currentTime * 1000 >= document.loop.endMs) { output.loop(document.loop.startMs, document.loop.endMs); audio.currentTime = document.loop.startMs / 1000; mtc.stop(); return; }
+          if (document.loop.enabled && audio.currentTime * 1000 >= document.loop.endMs) {
+            const resume = (): void => { if (cancelled) return; output.locate(document.loop.startMs); audio.currentTime = document.loop.startMs / 1000; mtc.stop(); looping = false; };
+            const pending = output.finish(document.loop.endMs);
+            if (pending) { looping = true; void pending.then(resume).catch((error: unknown) => { cleanup(); if (!cancelled) fail(error); }); }
+            else resume();
+            return;
+          }
           if (input.enabled) output.tick(audio.currentTime * 1000); if (input.enabled && document.outputMode === 'timecode') mtc.tick(audio.currentTime * 1000 + originMs, latest.current.frameRate);
         } catch (error) { cleanup(); fail(error); }
       }, 5);

@@ -254,7 +254,7 @@ input:disabled, textarea:disabled, select:disabled { opacity: .5; cursor: not-al
 @media (prefers-contrast: more) {
 }
 
-/* One titlebar row: project, every connection, connect action, window controls. */
+/* One titlebar row: project, mode navigation, connection details, connect action, window controls. */
 .app-shell { grid-template-rows: auto minmax(0, 1fr); }
 .app-topbar { display: grid; grid-template-columns: auto minmax(0, 1fr) 80px auto 132px; grid-template-rows: 54px; height: 54px; -webkit-app-region: drag; user-select: none; }
 .app-topbar > .persistent-project-toolbar { grid-column: 1; grid-row: 1; max-width: 290px; }
@@ -291,3 +291,30 @@ input:disabled, textarea:disabled, select:disabled { opacity: .5; cursor: not-al
 .connection-inline-detail > span { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: text; }
 .connection-inline-detail > button { flex-shrink: 0; padding: 5px 8px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--surface-hover); color: var(--text-primary); cursor: pointer; }
 @media (max-width: 1400px) { .topbar-project-title { max-width: 100px; } .topbar-status .toolbar-connection { padding-inline: 6px; } }
+.app-topbar { grid-template-columns: auto minmax(0, 1fr) 60px auto auto 132px; overflow: visible; }
+.app-topbar > .topbar-connection-status { grid-column: 2; grid-row: 1; display: flex; align-items: center; position: relative; min-width: 0; padding: 0 12px; -webkit-app-region: no-drag; }
+.topbar-connection-overview { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.connection-overview-item { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 0 8px; border-radius: 6px; background: var(--surface-hover); color: var(--text-secondary); white-space: nowrap; font-size: 12px; }
+.connection-overview-item strong { font-weight: 650; color: var(--text-primary); }
+.connection-overview-item small { font-size: 11px; color: inherit; }
+.connection-overview-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
+.connection-overview-item.state-ready { color: #6bdaa3; }
+.connection-overview-item.state-error { color: #ff7777; }
+.connection-overview-item.state-checking { color: #e8bd79; }
+.connection-overview-item.state-skipped { color: var(--text-tertiary); }
+.topbar-details-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.app-topbar > .topbar-drag-region { grid-column: 3; min-width: 30px; }
+.app-topbar > .topbar-details { grid-column: 4; grid-row: 1; display: flex; align-items: center; position: relative; -webkit-app-region: no-drag; }
+.app-topbar > .topbar-connect { grid-column: 5; }
+.app-topbar > .unified-toolbar { grid-column: 6; }
+.topbar-details .toolbar-project-summary { height: auto; padding: 0; -webkit-app-region: no-drag; }
+.topbar-details-trigger { height: 34px; padding: 0 13px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--surface-hover); color: var(--text-primary); font: inherit; font-size: 13px; cursor: pointer; }
+.topbar-details-trigger[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+.topbar-connection-status > .toolbar-connections { display: flex; align-items: center; justify-content: flex-start; width: 100%; height: 42px; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.topbar-connection-status .toolbar-connection { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-height: 30px; padding: 4px 8px; border: 0; border-radius: 4px; background: transparent; color: #e8bd79; font-size: 12px; font-weight: 550; white-space: nowrap; cursor: pointer; }
+.topbar-connection-status .toolbar-connection.state-ready { color: #6bdaa3; }
+.topbar-connection-status .toolbar-connection.state-error { color: #ff7777; }
+.topbar-connection-status .toolbar-connection.state-skipped { color: var(--text-tertiary); }
+.topbar-connection-status .toolbar-connection:hover { background: var(--surface-hover); }
+.topbar-connection-status .connection-inline-detail { top: 50px; }
+@media (max-width: 900px) { .app-topbar > .persistent-project-toolbar { max-width: 150px; } .app-topbar > .topbar-connection-status { padding-inline: 4px; } .topbar-connection-overview { gap: 3px; } .connection-overview-item { padding-inline: 5px; } .connection-overview-item small { display: none; } }

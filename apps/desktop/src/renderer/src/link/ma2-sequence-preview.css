@@ -1,0 +1,52 @@
+.ma2-sequence-preview { grid-column: 1 / -1; grid-row: 1; display: flex; flex-direction: column; min-height: 0; height: 100%; padding: 16px; gap: 14px; background: var(--surface-base); }
+.ma2-sequence-preview header, .ma2-sequence-heading, .ma2-sequence-controls, .ma2-sheet-title, .ma2-pool-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ma2-sequence-preview h3, .ma2-sequence-preview p { margin: 0; }
+.ma2-sequence-preview p, .ma2-sequence-preview footer, .ma2-sequence-preview small, .ma2-playback-state { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.ma2-sequence-preview button, .ma2-sequence-preview select, .ma2-sequence-preview input { background: var(--surface-raised); color: var(--text-primary); border: 1px solid var(--separator); border-radius: var(--radius-control); padding: 7px 10px; font: inherit; font-size: 12px; min-height: 34px; }
+.ma2-sequence-preview button { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.ma2-sequence-preview button:disabled { opacity: .45; cursor: default; }
+.ma2-sequence-preview button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ma2-sequence-preview button svg { width: 16px; height: 16px; flex-shrink: 0; }
+.ma2-sequence-body { display: grid; grid-template-columns: minmax(240px, 42%) minmax(0, 1fr); gap: 16px; min-height: 0; flex: 1; }
+.ma2-sequence-body aside, .ma2-sequence-body article { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+.ma2-sequence-body aside { padding: 14px; border: 1px solid var(--separator); border-radius: var(--radius-control); }
+.ma2-sequence-body aside > label { display: flex; gap: 6px; align-items: center; }
+.ma2-sequence-body input { width: 100%; min-width: 0; }
+.ma2-sequence-body nav { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); align-content: start; gap: 8px; overflow: auto; flex: 1; padding: 2px; }
+.ma2-sequence-body nav button { position: relative; flex-direction: column; align-items: stretch; text-align: start; min-height: 94px; padding: 10px; overflow-wrap: anywhere; justify-content: space-between; }
+.ma2-pool-number { font-size: 19px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+.ma2-sequence-body nav button[aria-pressed=true] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.ma2-mini-executor { border: 1px solid var(--accent); border-radius: var(--radius-control); overflow: hidden; flex-shrink: 0; }
+.ma2-sequence-heading { padding: 12px; background: var(--surface-raised); border-bottom: 1px solid var(--separator); }
+.ma2-sequence-heading label { display: flex; gap: 8px; align-items: center; font-size: 12px; max-width: 100%; }
+.ma2-sequence-heading select { min-width: 0; max-width: 100%; }
+.ma2-mini-steps { display: flex; flex-direction: column; padding: 8px; gap: 4px; }
+.ma2-mini-steps button { display: grid; grid-template-columns: 130px 62px minmax(0, 1fr) 16px; text-align: start; border-color: transparent; background: transparent; min-height: 36px; }
+.ma2-mini-steps button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ma2-mini-steps .selected-step { background: var(--surface-raised); border-color: var(--accent); }
+.ma2-mini-steps b { font-variant-numeric: tabular-nums; }
+.ma2-sequence-controls { justify-content: flex-start; gap: 8px; padding: 0 12px 12px; }
+.ma2-playback-state { display: flex; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border-top: 1px solid var(--separator); }
+.ma2-playback-state small { margin-left: auto; }
+.ma2-sheet-title button { margin-left: auto; }
+.ma2-sequence-sheet { overflow: auto; min-height: 100px; flex: 1; border: 1px solid var(--separator); border-radius: var(--radius-control); }
+.ma2-sequence-sheet table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.ma2-sequence-sheet :is(td, th) { padding: 5px 12px; border-bottom: 1px solid var(--separator); text-align: start; }
+.ma2-sequence-sheet th { position: sticky; top: 0; background: var(--surface-raised); }
+.ma2-sequence-sheet tr[data-selected=true] { background: var(--surface-raised); outline: 1px solid var(--accent); outline-offset: -1px; }
+.ma2-sequence-preview [role=alert] { color: var(--danger, #ff7777); }
+@media (max-width: 1100px) { .ma2-sequence-body { grid-template-columns: minmax(200px, 35%) minmax(0, 1fr); gap: 12px; } .ma2-sequence-body article { overflow: auto; } .ma2-sequence-sheet { flex-shrink: 0; min-height: 140px; } .ma2-mini-steps button { grid-template-columns: 100px 55px minmax(0, 1fr) 16px; } }
+@media (max-width: 800px) { .ma2-sequence-preview { overflow: auto; } .ma2-sequence-body { display: flex; flex-direction: column; flex: none; } .ma2-sequence-body aside { min-height: 220px; max-height: 320px; flex-shrink: 0; } .ma2-sequence-body article { overflow: visible; min-height: 400px; flex-shrink: 0; } .ma2-sequence-heading label { flex-wrap: wrap; width: 100%; } .ma2-sequence-sheet { min-height: 180px; max-height: 320px; } }
+.ma2-sequence-body.pool-overview { grid-template-columns: minmax(0, 1fr); }
+.ma2-pool-categories, .ma2-submenu-heading { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ma2-pool-categories button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+.ma2-cue-submenu { display: grid; grid-template-columns: repeat(auto-fill, minmax(125px, 1fr)); align-content: start; gap: 8px; overflow: auto; flex: 1; min-height: 120px; padding: 2px; }
+.ma2-cue-submenu button { flex-direction: column; align-items: flex-start; justify-content: space-between; min-height: 100px; text-align: start; overflow-wrap: anywhere; }
+.ma2-cue-submenu button[aria-pressed=true] { border-color: var(--accent); }
+.ma2-cue-submenu small { display: flex; align-items: center; gap: 6px; }
+@media (max-width: 1100px) { .ma2-cue-submenu { flex-shrink: 0; min-height: 150px; } }
+@media (max-width: 800px) { .ma2-cue-submenu { min-height: 200px; max-height: 350px; } }
+.ma2-sequence-body article { overflow: auto; }
+.ma2-cue-submenu { flex: none; min-height: 160px; max-height: 320px; }
+.ma2-sequence-body article > :is(.ma2-submenu-heading, .ma2-sheet-title, p, footer) { flex-shrink: 0; }
+

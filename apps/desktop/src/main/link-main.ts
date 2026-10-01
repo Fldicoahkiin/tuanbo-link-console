@@ -25,8 +25,10 @@ import { ma2ExecutorReadRequestSchema } from '@tb/schema';
 import { readMa2Executor } from './link/ma2-executor-read';
 import { Ma2Connections } from './link/ma2-connections';
 import { Ma2DiscoveryService } from './link/ma2-discovery';
+import { Ma2NetworkSetup } from './link/ma2-network-setup';
+import { ma2NetworkSetupRequestSchema } from '@tb/schema';
 import { Ma2NetworkManager } from './link/ma2-network-manager';
-import { ma2NetworkSaveSchema } from '@tb/schema';
+import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema } from '@tb/schema';
 import ma2PluginLua from '../../../../tools/ma2/tblink_bridge.lua?raw';
 import ma2PluginXml from '../../../../tools/ma2/tblink_bridge.xml?raw';
 import ma2PluginInstructions from '../../../../tools/ma2/README.md?raw';
@@ -39,6 +41,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  crashReporter,
   dialog,
   ipcMain,
   Menu,
@@ -107,6 +110,12 @@ protocol.registerSchemesAsPrivileged([{
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
 }]);
 
+// OBS owns the live video renderer. Keeping Chromium's UI canvases on the
+// software path avoids competing for the same Windows GPU command queue while
+// OBS starts a high-resolution media source during playback.
+if (process.platform === 'win32') app.disableHardwareAcceleration();
+crashReporter.start({ uploadToServer: false });
+
 let mainWindow: BrowserWindow | null = null;
 let documentDirty = false;
 let runtimeActive = false;
@@ -139,6 +148,11 @@ async function bootstrap(): Promise<void> {
   const processManager = new ExternalProcessManager(new WindowsProcessTools(), obs);
   const integrationDetector = new WindowsIntegrationDetector();
   const logger = new LinkRunLogger(join(app.getPath('userData'), 'link-logs'), () => [...knownSecrets]);
+  app.on('child-process-gone', (_event, details) => {
+    void logger.record({ level: 'error', category: 'device', device: 'Electron',
+      message: `Electron ${details.type} 进程退出：${details.reason}，退出码 ${details.exitCode}`,
+      result: 'failed' }).catch((error: unknown) => console.error('记录 Electron 子进程崩溃失败', error));
+  });
   const updateManager = new LinkUpdateManager(
     app.getVersion(),
     app.isPackaged,
@@ -155,11 +169,11 @@ async function bootstrap(): Promise<void> {
     await logger.record({ level: result === 'ready' ? 'info' : 'error', category: 'device', device: 'MIDI', message: midiHealthMessage(result), details: { result } });
     if (result !== 'ready') throw new Error(midiHealthMessage(result));
   });
-  createMainWindow(obs);
+  createMainWindow(obs, logger);
   restoreMainWindow = () => {
     if (mainWindow || quitFlowRunning) return;
     allowWindowClose = false;
-    createMainWindow(obs);
+    createMainWindow(obs, logger);
   };
 
   obs.subscribe((snapshot) => sendToRenderer('link:obs-status', snapshot));
@@ -189,7 +203,7 @@ async function bootstrap(): Promise<void> {
   });
 }
 
-function createMainWindow(obs: ObsWebSocketAdapter): void {
+function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void {
   const icon = process.platform === 'win32' ? join(__dirname, '../../build/icon.ico') : undefined;
   mainWindow = new BrowserWindow({
     width: 1540,
@@ -215,6 +229,11 @@ function createMainWindow(obs: ObsWebSocketAdapter): void {
   mainWindow.setMenu(null);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', event => event.preventDefault());
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    void logger.record({ level: 'error', category: 'device', device: 'Electron',
+      message: `Electron 界面进程退出：${details.reason}，退出码 ${details.exitCode}；故障转储目录：${app.getPath('crashDumps')}`,
+      result: 'failed' }).catch((error: unknown) => console.error('记录 Electron 界面崩溃失败', error));
+  });
   const notifyVisibility = (): void => sendToRenderer('link:window-visible', Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized()));
   mainWindow.on('minimize', notifyVisibility);
   mainWindow.on('restore', notifyVisibility);
@@ -377,7 +396,8 @@ function registerIpc(
   });
   const ma2Connections = new Ma2Connections(() => runtimeActive);
   const loopMidiService = new LoopMidiService();
-  const ma2Network = new Ma2NetworkManager(app.getPath('userData'), profileStore, () => runtimeActive, ma2PluginLua);
+  const ma2NetworkSetup = new Ma2NetworkSetup(join(app.getPath('userData'), 'ma2-network-addresses.json'));
+  const ma2Network = new Ma2NetworkManager(app.getPath('userData'), profileStore, () => runtimeActive, ma2PluginLua, host => ma2NetworkSetup.connectionAddress(host));
   const ma2Reads = new Map<string, { senderId: number; controller: AbortController }>();
   const beginMa2Read = (event: IpcMainInvokeEvent, id?: string): { signal: AbortSignal; report: ((progress: Ma2ReadProgressUpdate) => void) | undefined; finish: () => void } => {
     if (id && ma2Reads.has(id)) throw new Error('读取任务编号重复');
@@ -394,6 +414,10 @@ function registerIpc(
     if (read?.senderId === event.sender.id) read.controller.abort();
   });
   const ma2Discovery = new Ma2DiscoveryService();
+  handle('link:ma2-network-setup-state', () => ma2NetworkSetup.state());
+  handle('link:ma2-network-setup-plan', (_event, value: unknown) => ma2NetworkSetup.plan(ma2NetworkSetupRequestSchema.parse(value)));
+  handle('link:ma2-network-setup-apply', async (_event, value: unknown) => { if (runtimeActive) throw new Error('请停止播放后配置网卡'); await ma2NetworkReady; ma2Network.disconnect(); return ma2NetworkSetup.apply(z.string().uuid().parse(value)); });
+  handle('link:ma2-network-setup-restore', async (_event, value: unknown) => { if (runtimeActive) throw new Error('请停止播放后恢复网卡'); await ma2NetworkReady; ma2Network.disconnect(); return ma2NetworkSetup.restore(z.string().uuid().parse(value)); });
   app.once('will-quit', () => ma2Discovery.cancel());
   handle('link:ma2-discover', async () => { await ma2NetworkReady; if (runtimeActive) throw new Error('请停止播放后搜索控台'); return ma2Discovery.search(ma2Network.status().profiles ?? []); });
   handle('link:ma2-discovery-cancel', () => ma2Discovery.cancel());
@@ -404,6 +428,18 @@ function registerIpc(
     await ma2NetworkReady;
     return request.network ? ma2Network.get(request.network) : ma2Connections.get(request.dataDirectory);
   };
+  handle('link:ma2-play-cue', async (_event, payload: unknown) => {
+    await ma2NetworkReady;
+    const request = ma2PlaybackRequestSchema.parse(payload);
+    try {
+      await ma2Network.playCue(request);
+      await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: 'MA2 Cue 网络指令已发送', result: 'succeeded', details: { action: request.action } });
+    } catch (error) {
+      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: String(error), result: 'failed' });
+      throw error;
+    }
+  });
+  handle('link:ma2-play-cancel', (_event, sessionId: unknown) => { if (typeof sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(sessionId)) throw new Error('无效的灯光会话'); ma2Network.cancelPlayback(sessionId); });
   handle('link:ma2-network-status', async () => { await ma2NetworkReady; return ma2Network.status(); });
   handle('link:ma2-export-plugin', async () => {
     const selected = await dialog.showOpenDialog({ title: '选择 MA2 插件导出位置', properties: ['openDirectory', 'createDirectory'] });
@@ -435,6 +471,7 @@ function registerIpc(
   });
   handle('link:ma2-preview', async (_event, value: unknown) => {
     const request = ma2ReadRequestSchema.parse(value);
+    if (request.network) { await ma2NetworkReady; return ma2Network.preview(request.network, request.target, request.timeOriginMs); }
     const snapshot = await (await getMa2Connection(request)).bridge.request('SNAPSHOT', request.target);
     return convertMa2Snapshot(snapshot, request.target, [], request.timeOriginMs);
   });
@@ -445,7 +482,7 @@ function registerIpc(
     try {
       await ma2NetworkReady;
       if (task.signal.aborted) throw new Error('扫描已取消');
-      const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal) : await readMa2Catalog((await getMa2Connection(request)).bridge, () => runtimeActive, undefined, task.report, task.signal);
+      const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal, request.targets) : await readMa2Catalog((await getMa2Connection(request)).bridge, () => runtimeActive, undefined, task.report, task.signal, { targets: request.targets });
       for (const entry of catalog.entries) if (entry.error) await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `Timecode ${entry.target} 扫描失败：${entry.error}`, result: 'failed' });
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `已扫描 ${catalog.entries.length} 条 Timecode，${catalog.entries.filter(entry => entry.error).length} 条读取异常`, result: catalog.entries.some(entry => entry.error) ? 'failed' : 'succeeded' });
       return catalog;

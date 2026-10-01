@@ -1,4 +1,5 @@
 import { Button } from './Button';
+import '../p1-sync.css';
 import { useEffect, useRef, useState } from 'react';
 import { AudioLines, ChevronDown, Download, FileAudio2, FolderOpen, Upload } from 'lucide-react';
 import { allocateP1TimecodeRanges, configureP1AutoFollowCommand, applyP1ProjectExportCommand, synchronizeP1ProjectCommand, setPlaybackSourceCommand } from '@tb/core/link';
@@ -35,7 +36,7 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
     setSummary(null);
   }, [documentId]);
 
-  const importProject = async (source: 'current' | 'picker', lighting = Boolean(afterImport)): Promise<void> => {
+  const importProject = async (source: 'current' | 'picker', lighting = purpose !== 'migration' && Boolean(afterImport)): Promise<void> => {
     setBusy(true);
     try {
       const sourcePath = source === 'current'
@@ -134,7 +135,7 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
     }
   };
 
-  return <section className="p1-sync-panel">
+  return <section className="p1-sync-panel p1-sync-layout">
     <div className="p1-sync-heading">
       <div><AudioLines /><span><strong>P1 音频工程同步</strong></span></div>
       <span className={`status-pill ${project?.p1Sync ? 'ok' : 'pending'}`}>{project?.p1Sync ? '已建立映射' : '未读取'}</span>
@@ -145,20 +146,21 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
     </div>
     <div className="p1-sync-actions">
       <details className={`p1-import-menu ${disabled || busy ? 'disabled' : ''}`}>
-        <summary aria-label="导入 P1 工程" aria-disabled={disabled || busy} onClick={(event) => { if (disabled || busy) event.preventDefault(); }}><Download />导入 P1 工程<ChevronDown /></summary>
+        <summary aria-label={purpose === 'migration' ? '仅导入 P1 音乐' : '导入 P1 工程'} aria-disabled={disabled || busy} onClick={(event) => { if (disabled || busy) event.preventDefault(); }}><Download />{purpose === 'migration' ? '仅导入 P1 音乐' : '导入 P1 工程'}<ChevronDown /></summary>
         <div className="p1-import-popover">
           <Button className="secondary-button" disabled={disabled || busy} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); void importProject('current'); }}><Download />读取 P1 当前工程</Button>
           <Button className="secondary-button" disabled={disabled || busy} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); void importProject('picker'); }}><FolderOpen />选择 .hia 文件</Button>
-          {afterImport ? <Button className="secondary-button" disabled={disabled || busy} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); void importProject('picker', true); }}><FolderOpen />选择 .hia 并读取音频与灯光</Button> : null}
+          {afterImport && purpose !== 'migration' ? <Button className="secondary-button" disabled={disabled || busy} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); void importProject('picker', true); }}><FolderOpen />选择 .hia 并读取音频与灯光</Button> : null}
         </div>
       </details>
-      {afterImport ? <Button className="primary-button" disabled={disabled || busy} onClick={() => void importProject(purpose === 'migration' ? 'picker' : 'current', true)}><Download />{purpose === 'migration' ? '导入外部 P1 音乐与控台 Cue' : '一键读取当前音频与灯光'}</Button> : null}
+      {afterImport ? <Button className="primary-button" disabled={disabled || busy} onClick={() => void importProject(purpose === 'migration' ? 'picker' : 'current', true)}><Download />{purpose === 'migration' ? '导入 P1 音乐并匹配控台 Cue' : '一键读取当前音频与灯光'}</Button> : null}
       {purpose !== 'migration' ? <><Button className="primary-button" aria-label="同步回 P1 工程" disabled={disabled || busy || !project?.p1Sync} onClick={() => void exportProject()}><Upload />写回 P1</Button>
       {purpose === 'follow' ? <Button className="primary-button" disabled={disabled || busy || !project?.p1Sync} onClick={() => void exportProject(true)}><AudioLines />生成点击播放联动工程</Button> : null}</> : null}
     </div>
-    <p>{purpose === 'audio' ? '读取 P1 音频，保留裁剪和原始歌曲时间码。MP4 音轨尾部短缺不超过 250 毫秒时补静音，保持节目长度和灯光时间码不变。P1 不含控台 Cue 列表；要显示 Cue，请在设备连接中扫描控台后导入。写回生成独立 .hia；重新打开联动工程后，选择上次读取或导出的对应 P1 文件即可导出，无需启动 P1 或连接控台网络。' : purpose === 'migration' ? '从另一台电脑复制 .hia 和歌曲文件夹到同一文件夹，选择 .hia 后自动导入全部可读取歌曲，并按原始时间码匹配已连接控台的 Cue。同名音频或时间线无法唯一确认时会明确列出。' : project?.p1AutoFollow?.enabled ? '已启用自动监听：在 P1 打开生成的 .hia，直接点歌曲即可选节目并跟随时间线。停止联动后可在集成中心恢复监听。' : '生成一次联动工程后，点击 P1 歌曲即可自动控制 OBS，无需逐首布防。'}</p>
+    <p>{purpose === 'audio' ? '读取 P1 音频，保留裁剪和原始歌曲时间码。MP4 音轨尾部短缺不超过 250 毫秒时补静音，保持节目长度和灯光时间码不变。P1 不含控台 Cue 列表；要显示 Cue，请在设备连接中扫描控台后导入。写回生成独立 .hia；重新打开联动工程后，选择上次读取或导出的对应 P1 文件即可导出，无需启动 P1 或连接控台网络。' : purpose === 'migration' ? '从另一台电脑复制 .hia 和歌曲文件夹到同一文件夹。选择仅导入音乐，或同时按原始时间码匹配控台 Cue。同名音频或时间线无法唯一确认时会明确列出。' : project?.p1AutoFollow?.enabled ? '已启用自动监听：在 P1 打开生成的 .hia，直接点歌曲即可选节目并跟随时间线。停止联动后可在集成中心恢复监听。' : '生成一次联动工程后，点击 P1 歌曲即可自动控制 OBS，无需逐首布防。'}</p>
+    {purpose === 'migration' ? <p>仅导入音乐无需连接控台；匹配 Cue 需先连接 MA2。同一联动工程重复选择同一份 .hia，会更新已有歌曲、复用相同音频并跳过已绑定 Cue。修改 .hia 内的歌曲路径后，可能识别为新歌曲。</p> : null}
     {project?.rundown.some(item => item.notes.startsWith('P1 裁剪')) ? <details className="p1-sync-issues"><summary>已恢复的歌曲：请核对裁剪范围</summary>{project.rundown.filter(item => item.notes.startsWith('P1 裁剪')).map(item => <p key={item.id}><strong>{item.title}</strong><br />{item.notes}</p>)}</details> : null}
-    {summary ? <div className="p1-sync-summary"><strong>{summary.itemCount}</strong> 首音频 · <strong>{summary.playlistCount}</strong> 个列表 · {summary.updatedAt}<span>{summary.path}</span></div> : null}
+    {summary ? <div className="p1-sync-summary"><div><strong>{summary.itemCount}</strong> 首音频 · <strong>{summary.playlistCount}</strong> 个列表 · {summary.updatedAt}</div><span title={summary.path}>{summary.path}</span></div> : null}
     {project?.p1Sync?.skippedItems?.length ? <details open className="p1-sync-issues"><summary>已保留 {project.p1Sync.skippedItems.length} 首待修复节目，其余歌曲可以播放</summary><p>以下歌曲已保留在节目单并停用；补齐原文件后重新导入即可恢复，写回 P1 时仍保留原条目。</p>{project.p1Sync.skippedItems.map(entry => <p key={entry.sourceKey}><strong>{entry.playlistName} / {entry.title}</strong><br />{entry.reason}</p>)}</details> : null}
   </section>;
 }

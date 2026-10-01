@@ -10,7 +10,7 @@ export type Ma2PendingChange = {
 /** Derived from the persisted baseline, so undo, redo and reopening need no second queue. */
 export function ma2PendingChanges(project: LinkProject | null): Ma2PendingChange[] {
   return project?.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).flatMap((binding): Ma2PendingChange[] => {
-    if (!item.lighting) return [];
+    if (!item.lighting || binding.nativeEvents?.length || binding.playback === 'native-timecode') return [];
     const entry = { itemId: item.id, title: item.title, bindingId: binding.id, target: binding.timecode };
     try {
       const { base, local } = snapshotMa2LightingBinding(item.lighting, binding.id, { consoleVersion: 'pending', baselineRevision: 'baseline', localRevision: 'local' });

@@ -19,8 +19,8 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   const controlInputName = profile?.midiPortProfiles.find((entry) => entry.id === profile.internalPlayer?.controlInputPortProfileId)?.portName;
   useEffect(() => {
     if (!controller || !controlInputName) return;
-    const input = new PlaybackMidiInput((bytes) => controller.receiveMidi(bytes), (message) => controller.freeze(message));
-    void input.connect(controlInputName).catch((error: unknown) => controller.freeze(String(error)));
+    const input = new PlaybackMidiInput((bytes) => controller.receiveMidi(bytes), (message) => controller.reportUnavailable(`播放控制 MIDI 不可用：${message}`));
+    void input.connect(controlInputName).catch((error: unknown) => controller.reportUnavailable(`播放控制 MIDI 不可用：${String(error)}`));
     return () => input.dispose();
   }, [controller, controlInputName]);
   useEffect(() => {
@@ -48,8 +48,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
         if (!path) throw new Error('请先保存工程，再播放正式音频');
         if (useIntegrationStore.getState().obs.status !== 'connected') {
           prepared = null;
-          useIntegrationStore.getState().setProcess(await desktop.startExternalApplication('obs'));
-          useIntegrationStore.getState().setObs(await desktop.connectObs());
+          throw new Error('OBS 未连接；可用顶部“一键连接”恢复画面联动');
         }
         await coordinator.prepareInternal(itemId, async () => {
           if (reuseSession && prepared?.profile === useIntegrationStore.getState().profile && prepared.mtcOutputEnabled === mtcOutputEnabled) {
@@ -71,23 +70,21 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       },
       configuration: () => {
         const profile = useIntegrationStore.getState().profile;
-        if (!profile) throw new Error('连接配置尚未加载');
-        const id = profile.internalPlayer?.mtcOutputPortProfileId;
-        const port = id ? profile.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output') : null;
-        if (id && !port?.portName) throw new Error('灯光 MIDI 输出未配置');
-        return { lightingProfile: profile, outputDeviceId: profile.internalPlayer?.audioOutputDeviceId ?? 'default', audioSampleRate: profile.internalPlayer?.audioSampleRate ?? 48000, mtcPortName: port?.portName ?? null,
-          preload: profile.internalPlayer?.preload ?? true, fadeInMs: profile.internalPlayer?.fadeInMs ?? 0, fadeOutMs: profile.internalPlayer?.fadeOutMs ?? 500 };
+        const id = profile?.internalPlayer?.mtcOutputPortProfileId;
+        const port = id ? profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output') : null;
+        return { lightingProfile: profile, outputDeviceId: profile?.internalPlayer?.audioOutputDeviceId ?? 'default', audioSampleRate: profile?.internalPlayer?.audioSampleRate ?? 48000, mtcPortName: port?.portName ?? null,
+          preload: profile?.internalPlayer?.preload ?? true, fadeInMs: profile?.internalPlayer?.fadeInMs ?? 0, fadeOutMs: profile?.internalPlayer?.fadeOutMs ?? 500 };
       }, changed: setState
     });
     coordinator.onInternalStop(() => player.externalStop());
     const unsubscribe = useRuntimeStore.subscribe((next, previous) => {
-      if (next.state !== previous.state && ['error', 'timecodeLost'].includes(next.state)) player.freeze(next.reason ?? '联动已中断');
+      if (next.state !== previous.state && ['error', 'timecodeLost'].includes(next.state)) player.runtimeUnavailable(next.reason ?? '联动已中断');
     });
     const unsubscribeObs = useIntegrationStore.subscribe((next, previous) => {
       if (previous.obs.status === 'connected' && next.obs.status !== 'connected' && useRuntimeStore.getState().state !== 'idle') {
         prepared = null;
-        player.freeze('OBS 连接中断，正式音乐和灯光时间码已停止；重新连接后请明确选择歌曲重播');
-        void coordinator.stopAndWait(false).catch((error: unknown) => player.freeze(`OBS 连接中断，音乐与灯光时间码已停止。请在设置中重新连接 OBS，再点停止播放后重播。清理详情：${String(error)}`));
+        player.runtimeUnavailable('OBS 连接中断；音频继续播放，画面与 OBS 动作已停止。');
+        void coordinator.stopAndWait(false).catch((error: unknown) => player.reportUnavailable(`OBS 清理失败：${String(error)}`));
       }
     });
     setController(player); setState(emptyInternalPlayerState);

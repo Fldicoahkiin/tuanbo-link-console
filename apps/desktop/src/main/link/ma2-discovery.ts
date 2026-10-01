@@ -7,23 +7,33 @@ import { executePowerShell } from './windows-integration-detector';
 type Address = { host: string; port: number };
 
 /** One bounded ArtPoll per local IPv4 interface; replies still require MA2 TCP identification. */
-async function broadcastTargets(signal: AbortSignal): Promise<Address[]> {
+export function directedBroadcast(address: string, netmask: string): string {
+  const mask = netmask.split('.').map(Number);
+  return address.split('.').map((part, index) => Number(part) | (255 ^ mask[index]!)).join('.');
+}
+
+async function broadcastTargets(signal: AbortSignal, interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>, warnings: string[]): Promise<Address[]> {
   const found = new Set<string>();
-  const addresses = [...new Set(Object.values(networkInterfaces()).flatMap(entries => (entries ?? []).filter(entry => entry.family === 'IPv4' && !entry.internal).map(entry => entry.address)))].slice(0, 8);
-  await Promise.all(addresses.map(address => new Promise<void>(resolve => {
+  const entries = Object.values(interfaces).flatMap(entries => (entries ?? []).filter(entry => entry.family === 'IPv4' && !entry.internal)).slice(0, 8);
+  await Promise.all(entries.map(({ address, netmask }) => new Promise<void>(resolve => {
+    if (signal.aborted) { resolve(); return; }
+    if (netmask === '255.255.255.255') { warnings.push(`${address}/32 没有可广播子网；需通过已保存 IP 或静态路由直连控台。`); resolve(); return; }
     const socket = createSocket({ type: 'udp4', reuseAddr: true });
     let done = false;
     const finish = (): void => { if (done) return; done = true; clearTimeout(timer); signal.removeEventListener('abort', finish); socket.close(); resolve(); };
     const timer = setTimeout(finish, 1500);
     signal.addEventListener('abort', finish, { once: true });
-    socket.on('error', finish);
+    const failed = (error: Error): void => { warnings.push(`${address} 广播发现失败：${error.message}；仍可填写控台 IP 直接连接。`); finish(); };
+    socket.on('error', failed);
     socket.on('message', (message, remote) => {
       if (message.length >= 26 && message.subarray(0, 8).equals(Buffer.from('Art-Net\0')) && message.readUInt16LE(8) === 0x2100) found.add(remote.address);
     });
     socket.bind(6454, address, () => {
       if (done) return;
-      socket.setBroadcast(true);
-      socket.send(Buffer.from([65,114,116,45,78,101,116,0,0,32,0,14,0,0]), 6454, '255.255.255.255', error => { if (error) finish(); });
+      try {
+        socket.setBroadcast(true);
+        socket.send(Buffer.from([65,114,116,45,78,101,116,0,0,32,0,14,0,0]), 6454, directedBroadcast(address, netmask), error => { if (error) failed(error); });
+      } catch (error) { failed(error instanceof Error ? error : new Error(String(error))); }
     });
   })));
   return [...found].map(host => ({ host, port: 30000 }));
@@ -32,11 +42,14 @@ async function broadcastTargets(signal: AbortSignal): Promise<Address[]> {
 export function discoveryTargets(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>, saved: Ma2NetworkSettings[]): { addresses: Address[]; ranges: string[]; warnings: string[] } {
   const addresses = new Map<string, Address>();
   const ranges = new Set<string>(); const warnings: string[] = [];
+  const adapters: string[] = [];
   const add = (host: string, port = 30000): void => { addresses.set(`${host}:${port}`, { host, port }); };
   add('127.0.0.1');
   for (const profile of saved) add(profile.host, profile.port);
-  for (const entries of Object.values(interfaces)) for (const entry of entries ?? []) {
+  for (const [name, entries] of Object.entries(interfaces)) for (const entry of entries ?? []) {
     if (entry.family !== 'IPv4' || entry.internal) continue;
+    adapters.push(`${name}：${entry.address} / ${entry.netmask}`);
+    if (entry.address.startsWith('169.254.')) warnings.push(`${name} 使用自动分配地址 ${entry.address}，请核对是否与控台 IP 同网段。`);
     const octets = entry.address.split('.').map(Number);
     const mask = entry.netmask.split('.').map(Number);
     // Large show networks are common. Never enumerate millions of addresses.
@@ -50,7 +63,8 @@ export function discoveryTargets(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>
       if ((last & (mask[3] ?? 255)) === ((octets[3] ?? 0) & (mask[3] ?? 255))) add(`${prefix}.${last}`);
     }
   }
-  return { addresses: [...addresses.values()], ranges: ['本机 127.0.0.1', ...ranges], warnings };
+  if (!adapters.length) warnings.push('未检测到可用的外部 IPv4 网卡，目前只能检查本机及已保存地址。');
+  return { addresses: [...addresses.values()], ranges: ['本机 127.0.0.1', ...adapters, ...ranges], warnings };
 }
 
 export function probeMa2(address: Address, signal: AbortSignal, timeoutMs = 650): Promise<Ma2Discovery['hosts'][number] | null> {
@@ -64,12 +78,12 @@ export function probeMa2(address: Address, signal: AbortSignal, timeoutMs = 650)
       resolve(!signal.aborted && connected ? { ...address, identity: identified ? 'ma2' : 'candidate' } : null);
     };
     const cancel = (): void => { connected = false; finish(); };
-    const timer = setTimeout(finish, timeoutMs);
+    let timer = setTimeout(finish, timeoutMs);
     signal.addEventListener('abort', cancel, { once: true });
-    socket.on('connect', () => { connected = true; });
+    socket.on('connect', () => { connected = true; clearTimeout(timer); timer = setTimeout(finish, Math.max(timeoutMs, 1500)); });
     socket.on('data', (data: Buffer) => {
       text = (text + data.toString('utf8')).slice(0, 8192);
-      if (/grandMA2/i.test(text) || /\[[^\r\n]+\]>/.test(text) || text.length >= 8192) finish();
+      if (/grandMA2/i.test(text) || (/Logged in as User/i.test(text) && /\[[^\r\n]+\]>/.test(text)) || text.length >= 8192) finish();
     });
     socket.on('error', () => { connected = false; finish(); }); socket.on('close', finish);
   });
@@ -82,8 +96,9 @@ export class Ma2DiscoveryService {
     if (this.controller) throw new Error('正在搜索控台，请等待或取消');
     const controller = new AbortController(); this.controller = controller;
     try {
-      const plan = discoveryTargets(networkInterfaces(), saved); const hosts: Ma2Discovery['hosts'] = []; let cursor = 0;
-      const broadcast = await broadcastTargets(controller.signal);
+      const interfaces = networkInterfaces();
+      const plan = discoveryTargets(interfaces, saved); const hosts: Ma2Discovery['hosts'] = []; let cursor = 0;
+      const broadcast = await broadcastTargets(controller.signal, interfaces, plan.warnings);
       const neighbors: Address[] = [];
       if (process.platform === 'win32') {
         try {
@@ -92,11 +107,9 @@ export class Ma2DiscoveryService {
         } catch { plan.warnings.push('无法读取网卡邻居目录，本次仅使用网络广播及网段搜索。'); }
       }
       plan.addresses.unshift(...[...broadcast, ...neighbors].filter((address, index, all) => all.findIndex(value => value.host === address.host) === index && !plan.addresses.some(existing => existing.host === address.host && existing.port === address.port)));
-      const localAddresses = new Set(Object.values(networkInterfaces()).flatMap(entries => (entries ?? []).map(entry => entry.address)));
       await Promise.all(Array.from({ length: 24 }, async () => {
         while (!controller.signal.aborted && cursor < plan.addresses.length) {
           const address = plan.addresses[cursor++]; if (!address) break;
-          if (localAddresses.has(address.host)) continue;
           const result = await probeMa2(address, controller.signal); if (result) hosts.push(result);
         }
       }));

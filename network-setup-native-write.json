@@ -1,0 +1,164 @@
+{
+  "before": {
+    "adapters": [
+      {
+        "id": "FC106540-7EBB-4763-A156-18881BA698E5",
+        "index": 20,
+        "name": "WLAN",
+        "description": "Intel(R) Wi-Fi 6E AX211 160MHz",
+        "connected": false,
+        "physical": true,
+        "wired": false,
+        "addresses": [
+          {
+            "address": "169.254.102.234",
+            "prefix": 16
+          }
+        ]
+      },
+      {
+        "id": "E83F27A3-A5F0-4B63-8CC8-451AB19FDA97",
+        "index": 19,
+        "name": "以太网",
+        "description": "Intel(R) Ethernet Controller I226-V",
+        "connected": true,
+        "physical": true,
+        "wired": true,
+        "addresses": [
+          {
+            "address": "10.39.12.89",
+            "prefix": 22
+          },
+          {
+            "address": "2.97.214.222",
+            "prefix": 32
+          }
+        ]
+      },
+      {
+        "id": "4B677837-D11B-4C57-A726-4B0A576240BD",
+        "index": 7,
+        "name": "蓝牙网络连接",
+        "description": "Bluetooth Device (Personal Area Network)",
+        "connected": false,
+        "physical": false,
+        "wired": false,
+        "addresses": [
+          {
+            "address": "169.254.149.212",
+            "prefix": 16
+          }
+        ]
+      },
+      {
+        "id": "2E51B719-D99F-49DC-AFDE-67873C16FF21",
+        "index": 4,
+        "name": "以太网 2",
+        "description": "Microsoft KM-TEST 环回适配器",
+        "connected": true,
+        "physical": false,
+        "wired": true,
+        "addresses": [
+          {
+            "address": "2.0.0.3",
+            "prefix": 8
+          }
+        ]
+      }
+    ],
+    "additions": []
+  },
+  "after": {
+    "adapters": [
+      {
+        "id": "FC106540-7EBB-4763-A156-18881BA698E5",
+        "index": 20,
+        "name": "WLAN",
+        "description": "Intel(R) Wi-Fi 6E AX211 160MHz",
+        "connected": false,
+        "physical": true,
+        "wired": false,
+        "addresses": [
+          {
+            "address": "169.254.102.234",
+            "prefix": 16
+          }
+        ]
+      },
+      {
+        "id": "E83F27A3-A5F0-4B63-8CC8-451AB19FDA97",
+        "index": 19,
+        "name": "以太网",
+        "description": "Intel(R) Ethernet Controller I226-V",
+        "connected": true,
+        "physical": true,
+        "wired": true,
+        "addresses": [
+          {
+            "address": "10.39.12.89",
+            "prefix": 22
+          },
+          {
+            "address": "2.97.214.222",
+            "prefix": 32
+          }
+        ]
+      },
+      {
+        "id": "4B677837-D11B-4C57-A726-4B0A576240BD",
+        "index": 7,
+        "name": "蓝牙网络连接",
+        "description": "Bluetooth Device (Personal Area Network)",
+        "connected": false,
+        "physical": false,
+        "wired": false,
+        "addresses": [
+          {
+            "address": "169.254.149.212",
+            "prefix": 16
+          }
+        ]
+      },
+      {
+        "id": "2E51B719-D99F-49DC-AFDE-67873C16FF21",
+        "index": 4,
+        "name": "以太网 2",
+        "description": "Microsoft KM-TEST 环回适配器",
+        "connected": true,
+        "physical": false,
+        "wired": true,
+        "addresses": [
+          {
+            "address": "2.0.0.3",
+            "prefix": 8
+          }
+        ]
+      }
+    ],
+    "additions": []
+  },
+  "plan": {
+    "id": "8fed93a8-4b1a-4740-9ea7-79f7a1c57814",
+    "adapter": {
+      "id": "2E51B719-D99F-49DC-AFDE-67873C16FF21",
+      "index": 4,
+      "name": "以太网 2",
+      "description": "Microsoft KM-TEST 环回适配器",
+      "connected": true,
+      "physical": false,
+      "wired": true,
+      "addresses": [
+        {
+          "address": "2.0.0.3",
+          "prefix": 8
+        }
+      ]
+    },
+    "host": "192.0.2.201",
+    "address": "192.0.2.200",
+    "prefix": 24,
+    "needsChange": true,
+    "message": "为“以太网 2”增加控台专用地址 192.0.2.200/24，连接 192.0.2.201。保留现有 IP、自动获取地址、网关和 DNS；电脑重启或网卡重置后需重新配置。"
+  },
+  "passed": true
+}

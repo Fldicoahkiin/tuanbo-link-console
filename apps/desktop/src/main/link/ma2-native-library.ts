@@ -4,7 +4,7 @@ import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 
 /** Read object metadata only. Never export fixture values merely to display a Cue list. */
-export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, isPlaying: () => boolean, onProgress?: (progress: Ma2ReadProgressUpdate) => void, phase: 'library' | 'verification' = 'library', signal?: AbortSignal): Promise<Ma2EffectLibrary> {
+export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, isPlaying: () => boolean, onProgress?: (progress: Ma2ReadProgressUpdate) => void, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], measure?: (bytes: number) => void): Promise<Ma2EffectLibrary> {
   if (signal?.aborted) throw new Error('素材读取已取消');
   const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
   if (signal?.aborted) throw new Error('素材读取已取消');
@@ -14,9 +14,12 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
     if (isPlaying()) throw new Error('播放已开始，素材读取已停止');
     const prefix = `TBLINK_CUES_${randomBytes(16).toString('hex')}:`;
     const script = `local o=gma.show.getobj;local h=o.handle('Sequence ${target}');local r='missing';if h then local n=o.amount(h);local t={tostring(n)};for i=${offset},math.min(n-1,${offset + 31}) do local c=o.child(h,i);if c then local v=tostring(o.number(c));local s=tostring(o.name(c) or '');local x=s:gsub('.',function(b)return string.format('%02x',string.byte(b))end);t[#t+1]=i..','..v..','..x end end;r=table.concat(t,';') end;gma.echo('${prefix}'..r)`;
-    return connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, prefix));
+    const response = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, prefix));
+    measure?.(Buffer.byteLength(response, 'utf8'));
+    return response;
   };
-  for (const entry of directory.entries) {
+  if (targets?.some(target => !directory.entries.some(entry => entry.target === target))) throw new Error('时间线引用的序列已不存在');
+  for (const entry of directory.entries.filter(entry => !targets || targets.includes(entry.target))) {
     if (signal?.aborted) throw new Error('素材读取已取消');
     const cues: Ma2EffectLibrary['sequences'][number]['cues'] = [];
     let count = 1;

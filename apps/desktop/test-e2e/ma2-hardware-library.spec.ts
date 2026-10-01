@@ -25,9 +25,8 @@ test('实体控台经读取控台入口自动连接并显示真实素材', async
     const panel = page.getByRole('region', { name: '读取控台效果库' });
     await expect(panel.getByRole('progressbar', { name: '控台读取进度' })).toBeVisible();
     await expect(panel.locator('tbody tr').first()).toBeVisible({ timeout: 120000 });
-    await expect(panel.locator('.ma2-material-heading p')).toContainText('已显示');
-    await expect(panel.locator('.ma2-material-heading p')).toContainText('584 个 Cue', { timeout: 120000 });
-    await expect(panel.locator('.ma2-material-heading p')).toContainText('2hao');
+    await expect(panel.locator('.ma2-material-footer')).toContainText('584 项', { timeout: 120000 });
+    await expect(panel.locator('.ma2-material-footer')).toContainText('2hao');
     await expect(panel.getByRole('alert')).toHaveCount(0);
     await expect(panel).toContainText('mg1 spao 1');
     const tableHeight = await panel.locator('.effect-import-rows').evaluate(element => element.clientHeight);

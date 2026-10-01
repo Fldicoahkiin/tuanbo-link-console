@@ -25,9 +25,10 @@ it('对象读取失败仍列出，不把部分结果冒充完整成功，不自�
 });
 it('换 Show 或开始播放使扫描失败，重复目录编号被拒绝', async () => {
   const request = vi.fn().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(tc).mockResolvedValueOnce(snapshot).mockResolvedValueOnce(JSON.stringify({ ...directory, show: '其他 Show' }));
-  await expect(readMa2Catalog({ request }, () => false)).rejects.toThrow('Show');
+  const partial = await readMa2Catalog({ request }, () => false);
+  expect(partial.incomplete).toContain('Show'); expect(partial.entries[0]?.sourceXml).toBe(tc);
   request.mockReset().mockResolvedValue(JSON.stringify(directory));
-  await expect(readMa2Catalog({ request }, () => true)).rejects.toThrow('播放');
+  expect((await readMa2Catalog({ request }, () => true)).incomplete).toContain('停止');
   expect(request).toHaveBeenCalledTimes(1);
   request.mockResolvedValue(JSON.stringify({ ...directory, entries: [...directory.entries, ...directory.entries] }));
   await expect(readMa2Catalog({ request }, () => false)).rejects.toThrow('重复');

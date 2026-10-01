@@ -37,6 +37,23 @@ function authenticate(line: string, socket: Socket, monitor: Socket): void {
   const marker = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0];
   if (marker) { socket.write(`${line}\r\n [Channel]>`); monitor.write(`\r15h11m38.613s : \u001b[33m${marker}:3.3.`); monitor.write('4.3\u001b[37m\r\n'); }
 }
+it('命令与监视连接都绑定指定电脑地址', async () => {
+  const sources: string[] = [];
+  const ports = await peer((line, socket, monitor) => {
+    sources.push(socket.remoteAddress ?? '', monitor.remoteAddress ?? '');
+    authenticate(line, socket, monitor);
+  });
+  const connection = new Ma2Telnet({ host: '127.0.0.1', ...ports, localAddress: '127.0.0.1' });
+  try { await expect(connection.connect('operator', 'test-value')).resolves.toBe('3.3.4.3'); expect(sources.length).toBeGreaterThan(0); expect(sources.every(source => source === '127.0.0.1')).toBe(true); }
+  finally { connection.disconnect(); }
+});
+it('端口可达但没有 MA2 提示时说明阶段、端口及本机地址，不误报密码', async () => {
+  const sent: string[] = [];
+  const ports = await peer(line => sent.push(line), 'Other service\r\n');
+  const connection = client(ports, [], 80);
+  await expect(connection.connect('operator', 'test-value')).rejects.toThrow(`127.0.0.1:${ports.port} TCP 已连通（本机 127.0.0.1）`);
+  expect(sent).toEqual([]);
+});
 it('实体控台关闭远程入口时明确提示首次开启，不发送登录或误报密码错误', async () => {
   const sent: string[] = [];
   const states: Ma2TelnetState[] = [];

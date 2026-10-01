@@ -12,6 +12,7 @@ export function nextLightingMaster(document: LightingDocument, track: LightingTr
   const map = new LightingTempoMap(document.tempos);
   const preceding = track.clips.flatMap((clip) => clip.events.flatMap((event) => (event.kind === 'ma2' || event.kind === 'ma2-fader') && lightingEventTime(clip, event, map) <= ms ? [{ event, ms: lightingEventTime(clip, event, map) }] : [])).sort((a, b) => a.ms - b.ms);
   const executor = boundExecutor ?? (track.cueStamp?.mode === 'fixed' ? track.cueStamp.executor : preceding.at(-1)?.event.executor) ?? '1.1';
+  if (!executor) throw new Error('序列池 Cue 没有主推杆，请先指定执行器再添加推杆动作');
   const previous = preceding.filter(({ event }) => event.kind === 'ma2-fader' && event.executor === executor).at(-1)?.event;
   return { executor, fader: 'Master', level: previous?.kind === 'ma2-fader' ? previous.level : 1, label: '主推杆' };
 }
@@ -46,7 +47,7 @@ export function nextLightingCue(document: LightingDocument, track: LightingTrack
     .sort((a, b) => a.ms - b.ms).at(-1)?.event;
   if (!binding) {
     const cue = String(Math.floor(Number(preceding?.cue ?? 0)) + 1);
-    return { cue, sequence: preceding?.sequence ?? 1, executor: preceding?.executor ?? '1.1', label: `灯光 ${cue}` };
+    return { cue, sequence: preceding?.sequence ?? 1, executor: preceding?.executor ?? '', label: `灯光 ${cue}` };
   }
   const references = [...new Set(binding.mappings.filter((entry) => (entry.trackId === track.id || pending?.executor === entry.executor) && entry.sequence !== null).map((entry) => entry.sequence!))];
   const sequence = preceding?.sequence ?? pending?.sequence ?? (references.length === 1 ? references[0] : binding.cueCatalog?.length === 1 ? binding.cueCatalog[0]?.sequence : undefined);

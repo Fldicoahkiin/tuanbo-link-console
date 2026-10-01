@@ -1,4 +1,5 @@
 import { toUserErrorMessage } from '@tb/core/link';
+import { useMa2ReadStore } from './stores/ma2-read-store';
 import { useDocumentShortcuts } from './useDocumentShortcuts';
 import { useMidiPortMonitor } from './useMidiPortMonitor';
 import { initializeStartupDevices } from './startup-obs-connection';
@@ -46,6 +47,7 @@ const NAVIGATION: NavigationItem[] = [
 export function LinkApp(): JSX.Element {
   useAppearanceTheme();
   const [connectHost, setConnectHost] = useState<HTMLDivElement | null>(null); const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null);
+  const [connectionStatusHost, setConnectionStatusHost] = useState<HTMLDivElement | null>(null);
   const [editorSidebarHost, setEditorSidebarHost] = useState<HTMLDivElement | null>(null);
   const [playlistHost, setPlaylistHost] = useState<HTMLDivElement | null>(null);
   const [page, setPage] = useState<Page>('project');
@@ -56,6 +58,12 @@ export function LinkApp(): JSX.Element {
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('obs');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const openLighting = useMa2ReadStore(state => state.openWorkspace);
+  useEffect(() => {
+    if (!openLighting) return;
+    setConnectionsOpen(false); setSettingsOpen(false); setPage('lighting');
+    useMa2ReadStore.setState({ openWorkspace: false });
+  }, [openLighting]);
   const coordinatorDocumentIdRef = useRef<number | null>(null);
   const project = useDocumentStore((state) => state.project);
   const projectPath = useDocumentStore((state) => state.path);
@@ -196,7 +204,7 @@ export function LinkApp(): JSX.Element {
   return <RendererErrorBoundary>
     <div className="app-shell" data-workspace={connectionsOpen ? 'settings' : page}>
       <a className="skip-link" href="#workspace-content">跳到工作区</a>
-      <AppTopbar status={<ToolbarConnections player={internalPlayer} onSettings={category => { setSettingsCategory(category); openSettings(); }} />} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
+      <AppTopbar details={<ToolbarConnections player={internalPlayer} statusHost={connectionStatusHost} onSettings={category => { setSettingsCategory(category); openSettings(); }} />} statusHostRef={setConnectionStatusHost} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
       <AppSidebar editorHostRef={setEditorSidebarHost} playlistHostRef={setPlaylistHost} settingsCategory={settingsCategory} onSettingsCategoryChange={setSettingsCategory}
         page={page} internal={project?.playbackSource === 'internal'} editingLocked={editingLocked}
         obsState={obs.status} p1State={processes.p1.status} runtimeState={runtimeState} settingsOpen={connectionsOpen} onPageChange={(next) => { closeSettings(); setPage(next); }} onSettings={openSettings}
@@ -248,7 +256,8 @@ function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange,
     <nav className="main-nav workspace-navigation" aria-label="主要工作区">{NAVIGATION.map((item) => {
       const Icon = item.icon;
       const disabled = editingLocked && !internal && item.id === 'cues';
-      return <button key={item.id} title={`${item.label} · ${disabled ? '已锁定' : item.caption}`} disabled={disabled} aria-current={!settingsOpen && page === item.id ? 'page' : undefined} className={!settingsOpen && page === item.id ? 'active' : ''} onClick={() => onPageChange(item.id)}><Icon aria-hidden="true" /><span><strong>{item.label}</strong></span></button>;
+      const active = !settingsOpen && page === item.id;
+      return <button key={item.id} title={`${item.label} · ${disabled ? '已锁定' : item.caption}`} disabled={disabled} aria-current={active ? 'page' : undefined} className={active ? 'active' : ''} onClick={() => onPageChange(item.id)}><Icon aria-hidden="true" /><span><strong>{item.label}</strong></span></button>;
     })}<button className={settingsOpen ? 'active' : ''} aria-current={settingsOpen ? 'page' : undefined} onClick={onSettings}><Settings aria-hidden="true" /><span><strong>设置</strong></span></button></nav>
     <div className="sidebar-context">
       <div className="sidebar-playlists" hidden={settingsOpen || page !== 'project'} ref={playlistHostRef} />
@@ -258,16 +267,18 @@ function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange,
   </aside>;
 }
 
-function AppTopbar({ status, connectHostRef, toolbarHostRef, onWindowAction }: {
-  status: ReactNode;
+function AppTopbar({ details, statusHostRef, connectHostRef, toolbarHostRef, onWindowAction }: {
+  details: ReactNode;
+  statusHostRef: (element: HTMLDivElement | null) => void;
   connectHostRef: (element: HTMLDivElement | null) => void;
   toolbarHostRef: (element: HTMLDivElement | null) => void;
   onWindowAction: (action: 'minimize' | 'toggleMaximize' | 'close') => void;
 }): JSX.Element {
   return <div className="app-topbar">
     <div className="persistent-project-toolbar" ref={toolbarHostRef} />
-    <div className="topbar-status">{status}</div>
+    <div className="topbar-connection-status" ref={statusHostRef} />
     <div className="topbar-drag-region" title="拖动窗口，双击最大化或还原" aria-hidden="true" />
+    <div className="topbar-details">{details}</div>
     <div className="topbar-connect" ref={connectHostRef} />
     <WorkspaceToolbar onWindowAction={onWindowAction} />
   </div>;

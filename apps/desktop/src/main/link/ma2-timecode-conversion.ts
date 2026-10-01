@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { withMa2TimeOrigin } from '@tb/core/link';
 import { createLightingDocument, ma2TimecodePreviewSchema, type Ma2TimecodePreview, type LightingEvent } from '@tb/schema';
-import { extractMa2TimecodeXml, inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference, validateMa2TimecodeSnapshot } from './ma2-timecode-xml';
+import { extractMa2TimecodeXml, inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference, validateMa2TimecodeSnapshot, type Ma2SequenceReport } from './ma2-timecode-xml';
 
 export type Ma2TimecodeConversion = Ma2TimecodePreview;
 
@@ -14,6 +14,11 @@ export function convertMa2Snapshot(xml: string, target: number, additionalSequen
 /** Preview conversion only. Keep the entire XML for unsupported data and
  * later read/modify/write; never infer a Cue number from an internal index. */
 export function convertMa2Timecode(xml: string, sequenceXml: readonly string[], target: number, timeOriginMs = 0): Ma2TimecodeConversion {
+  return convertMa2TimecodeReferences(xml, sequenceXml.map(source => inspectMa2SequenceXml(source, true)), target, timeOriginMs);
+}
+
+/** Native object metadata carries the exact Cue index/number mapping without fixture values. */
+export function convertMa2TimecodeReferences(xml: string, sequences: readonly Ma2SequenceReport[], target: number, timeOriginMs = 0): Ma2TimecodeConversion {
   const report = inspectMa2TimecodeXml(xml);
   if (!['3.3.4', '3.7.0'].includes(report.version)) throw new Error('该 MA2 Timecode XML 版本尚未验证');
   if (!Number.isSafeInteger(target) || target < 1) throw new Error('Timecode 编号无效');
@@ -23,7 +28,6 @@ export function convertMa2Timecode(xml: string, sequenceXml: readonly string[], 
   const rawOffset = timecode.attributes.offset ?? '0';
   if (!/^\d+(?:\.0+)?$/.test(rawOffset) || !Number.isSafeInteger(Number(rawOffset)) || Number(rawOffset) >= 2592000) throw new Error('MA2 偏移必须是完整原生时间单位且小于 24 小时');
   const offsetMs = Number(rawOffset) * 1000 / 30;
-  const sequences = sequenceXml.map((source) => inspectMa2SequenceXml(source, true));
   const result: Ma2TimecodeConversion = { target, name: timecode.attributes.name ?? `Timecode ${target}`, readAt: new Date().toISOString(), document: createLightingDocument(), sourceXml: xml, mappings: [], trackMappings: [], cueCatalog: sequences.flatMap((report) => report.sequences.map((entry) => ({ sequence: entry.number, name: entry.name, cues: [...entry.cues].sort((a, b) => a.index - b.index) }))), unconverted: [], warnings: report.warnings };
   for (const track of timecode.tracks) {
     if (track.attributes.active !== undefined && !['true', 'false'].includes(track.attributes.active)) throw new Error('MA2 轨道启用状态格式未验证');
@@ -64,7 +68,20 @@ export function convertMa2Timecode(xml: string, sequenceXml: readonly string[], 
         const id = randomUUID();
         events.push({ id, kind: 'ma2', at: Number(rawTime) * 1000 / 30, sequence: reference.sequence, cue: reference.cueNumber, label: reference.cueName ?? event.cueName ?? `Cue ${reference.cueNumber}`, executor, action: 'goto' });
         result.mappings.push({ eventId: id, trackId, clipId, path: event.path, sequence: reference.sequence, cueIndex: reference.cueIndex, executor });
-      } catch (error) { result.unconverted.push({ path: event.path, reason: error instanceof Error ? error.message : String(error) }); }
+      } catch (error) {
+        result.unconverted.push({ path: event.path, reason: error instanceof Error ? error.message : String(error) });
+        // A read-only projection is not permission to execute or rewrite this event.
+        // Retain the unknown parameters in sourceXml and block the entire binding's write path.
+        const rawTime = event.attributes.time;
+        if (executor && rawTime !== undefined && /^\d+(?:\.\d+)?$/.test(rawTime) && Number.isFinite(Number(rawTime)) && event.attributes.command === 'Goto' && event.attributes.pressed === 'true') {
+          try {
+            const reference = resolveMa2CueReference(event.cueAddress, sequences);
+            const id = randomUUID();
+            events.push({ id, kind: 'ma2', at: Number(rawTime) * 1000 / 30, sequence: reference.sequence, cue: reference.cueNumber, label: reference.cueName ?? event.cueName ?? `Cue ${reference.cueNumber}`, executor, action: 'goto' });
+            result.mappings.push({ eventId: id, trackId, clipId, path: event.path, sequence: reference.sequence, cueIndex: reference.cueIndex, executor });
+          } catch (referenceError) { result.warnings.push(`${event.path}：${referenceError instanceof Error ? referenceError.message : String(referenceError)}`); }
+        }
+      }
     }
     result.document.tracks.push({ id: trackId, name: track.executorName ?? `MA2 轨道 ${track.index + 1}`, kind: 'ma2', color: '#ba8fff', group: '', muted: track.attributes.active !== 'true', solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: clipId, name: timecode.attributes.name ?? `Timecode ${target}`, start: 0, duration: events.reduce((end, event) => Math.max(end, event.at + 1), 1), timeLock: 'time', muted: false, events }] });
   }
@@ -72,5 +89,8 @@ export function convertMa2Timecode(xml: string, sequenceXml: readonly string[], 
     for (const event of clip.events) event.at += offsetMs;
     clip.duration += offsetMs;
   }
+  const nativeTimes = timecode.tracks.flatMap(track => track.subtracks.flatMap(subtrack => subtrack.events.map(event => event.attributes.time ?? '0')));
+  if (nativeTimes.some(time => !/^\d+(?:\.\d+)?$/.test(time) || !Number.isFinite(Number(time)))) throw new Error('原生事件时间无效，保留原文但不能确认歌曲位置');
+  result.timing = { frameFormat: '30 FPS', unit: 'frames-30', offsetNative: rawOffset, absoluteEventTimesMs: nativeTimes.map(time => (Number(time) + Number(rawOffset)) * 1000 / 30) };
   return withMa2TimeOrigin(ma2TimecodePreviewSchema.parse(result), timeOriginMs);
 }

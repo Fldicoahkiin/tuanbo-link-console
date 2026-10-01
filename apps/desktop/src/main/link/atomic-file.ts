@@ -10,6 +10,7 @@ export async function writeFileAtomically(filePath: string, content: string | Ui
   try {
     await rename(temporaryPath, filePath);
   } catch (error) {
-    throw new Error(`原子替换失败，原文件保持不变；临时文件：${temporaryPath}`, { cause: error });
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`原子替换失败，原文件保持不变；${detail}；临时文件：${temporaryPath}`, { cause: error });
   }
 }

@@ -8,6 +8,7 @@ export function previewMa2BoundSync(documentInput: LightingDocument, bindingId: 
   const readback = ma2TimecodePreviewSchema.parse(readbackInput);
   const binding = document.ma2Bindings?.find((entry) => entry.id === bindingId);
   if (!binding) throw new Error('节目没有这个 MA2 对象绑定');
+  if (binding.nativeEvents?.length || binding.playback === 'native-timecode' || readback.unconverted.length) throw new Error('原生保留时间线禁止写回，控台仍可按原有时间码播放');
   const matched = resolveMa2Readback(binding, readback, choices);
   const identities = new Map(matched.matches.map((entry) => [entry.remoteEventId, entry.baselineEventId]));
   const trackIdentities = resolveMa2ReadbackTracks(binding, readback, matched);

@@ -21,6 +21,7 @@ export class Ma2ApplyService {
       this.requireStopped();
       const binding = request.document.ma2Bindings?.find((entry) => entry.id === request.bindingId);
       if (!binding || binding.timecode !== request.readback.target) throw new Error('节目与 MA2 绑定不一致');
+      if (binding.nativeEvents?.length || binding.playback === 'native-timecode' || request.readback.unconverted.length) throw new Error('此时间线含原生保留事件，禁止写回；请在控台编辑并使用原有 Timecode 播放');
       stage = 'read';
       let snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
       const current = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);

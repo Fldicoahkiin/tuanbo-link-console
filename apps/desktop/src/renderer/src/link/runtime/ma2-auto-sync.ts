@@ -51,10 +51,10 @@ export class Ma2AutoSync {
     const current = (): boolean => this.generation === generation && this.session === session && this.dependencies.state().documentId === session.documentId && !this.dependencies.state().playing && !this.dependencies.state().editing;
     try {
       this.dependencies.changed('reading', '正在检查控台与节目修改');
-      const catalog = ma2CatalogSchema.parse(await this.dependencies.catalog(session.connection));
+      const catalog = ma2CatalogSchema.parse(await this.dependencies.catalog({ ...session.connection, targets: [] }));
       if (!current()) return;
       if (JSON.stringify(catalog.directory) !== JSON.stringify(session.directory)) throw new Error('Show、插件会话或时间线目录已变化，请重新扫描后启用自动同步');
-      const targets = state.project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).map(binding => ({ itemId: item.id, bindingId: binding.id, target: binding.timecode })));
+      const targets = state.project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).filter(binding => !binding.nativeEvents?.length && binding.playback !== 'native-timecode').map(binding => ({ itemId: item.id, bindingId: binding.id, target: binding.timecode })));
       if (new Set(targets.map(target => target.target)).size !== targets.length) throw new Error('同一控台时间线绑定了多个节目，不能自动同步');
       for (const target of targets) {
         if (!current()) return;
@@ -82,7 +82,7 @@ export class Ma2AutoSync {
         this.dependencies.execute(session.documentId, applyMa2ReadbackCommand(target.itemId, binding.id, source, result.confirmed));
       }
       if (!current()) return;
-      this.dependencies.changed('verified', '已检查全部绑定时间线，节目与控台一致');
+      this.dependencies.changed('verified', '可写回的绑定时间线已核对；原生保留时间线不参与写回');
     } catch (error) {
       this.session = null;
       this.dependencies.changed('blocked', error instanceof Error ? error.message : String(error));

@@ -1,5 +1,6 @@
 import { Button } from './Button';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ma2NetworkStatusSchema } from '@tb/schema';
 import { alignMa2SnapshotToFrames, applyMa2ReadbackCommand, bindMa2TrackCommand, importMa2TimecodeCommand, matchMa2Readback, resolveMa2Readback, resolveMa2Sync, setLightingCommand, type Ma2SyncPreview } from '@tb/core/link';
 import { type Ma2NetworkTarget, ma2ExecutorPreviewSchema, type Ma2ExecutorPreview, ma2ApplyResultSchema, ma2TimecodePreviewSchema, ma2SyncPreviewSchema, type LightingDocument, type LightingEvent, type Ma2TimecodePreview } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
@@ -10,8 +11,12 @@ type Preview = { result: Ma2TimecodePreview; documentId: number; itemId: string 
 export function Ma2ProgramSync({ disabled, notify, method, network, directory, onBusy, initialTarget = 1 }: { initialTarget?: number; onBusy: (busy: boolean) => void; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; method: 'local' | 'network'; network: Ma2NetworkTarget | null; directory: string }): JSX.Element {
   const [difference, setDifference] = useState<{ result: Ma2SyncPreview; source: LightingDocument; readback: Ma2TimecodePreview; identities: ReadonlyMap<string, string | null> } | null>(null);
   const [conflictChoices, setConflictChoices] = useState<ReadonlyMap<string, 'local' | 'remote'>>(new Map());
-  const endpoint = () => {
-    if (method === 'network' && !network) throw new Error('请先保存并连接 MA2 控台');
+  const endpoint = async () => {
+    if (method === 'network' && !network) {
+      const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
+      if (status.state !== 'connected' || !status.settings) throw new Error('请先保存并连接 MA2 控台');
+      const { host, port, monitorPort, username } = status.settings; return { dataDirectory: '', network: { host, port, monitorPort, username } };
+    }
     if (method === 'local' && !directory.trim()) throw new Error('请在维护页填写本机 onPC 数据目录');
     return method === 'network' && network ? { dataDirectory: '', network } : { dataDirectory: directory.trim() };
   };
@@ -33,7 +38,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
     if (busy || disabled) return;
     setBusy(true); setStatus('正在通信…'); setPreview(null); setPage(0); setIdentityChoices(new Map());
     try {
-      const connection = endpoint();
+      const connection = await endpoint();
       if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号应为 1–99999');
 
       const result = ma2TimecodePreviewSchema.parse(await window.tbLink.previewMa2({ ...connection, target, timeOriginMs: item?.lighting?.ma2Bindings?.find(entry => entry.timecode === target)?.timeOriginMs }));
@@ -49,7 +54,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
     let created = false;
     setBusy(true); setPreview(null); setDifference(null); setStatus('正在创建 Timecode…');
     try {
-      const connection = endpoint();
+      const connection = await endpoint();
       if (!Number.isInteger(number) || number < 1 || number > 99999) throw new Error('Timecode 编号应为 1–99999');
       if (item.lighting?.ma2Bindings?.some((entry) => entry.timecode === number)) throw new Error('当前节目已关联该 Timecode，请直接读取');
       const result = ma2TimecodePreviewSchema.parse(await window.tbLink.createMa2({ ...connection, target: number, name: item.title }));
@@ -95,7 +100,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
     let consoleConfirmed = false;
     setBusy(true); setStatus('正在复核、同步并回读…');
     try {
-      const result = ma2ApplyResultSchema.parse(await window.tbLink.applyMa2({ ...endpoint(), document: source, bindingId: binding.id, readback: preview.result, choices: [...identityChoices], conflicts: [...conflictChoices], timeAlignment: 'nearest-frame' }));
+      const result = ma2ApplyResultSchema.parse(await window.tbLink.applyMa2({ ...await endpoint(), document: source, bindingId: binding.id, readback: preview.result, choices: [...identityChoices], conflicts: [...conflictChoices], timeAlignment: 'nearest-frame' }));
       if (result.status === 'incomplete') {
         setStatus(result.mayHaveWritten ? '同步未完成 · 控台可能已写入，请重新读取' : '同步未完成 · 未写入控台');
         notify(`${result.message}${result.backupFile ? `；备份：${result.backupFile}` : ''}`, 'error');
@@ -160,7 +165,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
       {events.length > 100 ? <div className="settings-header-actions"><button disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button><span>{page + 1} / {Math.ceil(events.length / 100)}</span><button disabled={(page + 1) * 100 >= events.length} onClick={() => setPage(page + 1)}>下一页</button></div> : null}
       {preview.result.warnings.map((warning) => <p className="settings-note" key={warning}>{warning}</p>)}
       {preview.result.unconverted.length ? <details open><summary>未转换事件（{preview.result.unconverted.length}）</summary>{preview.result.unconverted.map((entry) => <p className="settings-note" key={entry.path}>{entry.path}：{entry.reason}</p>)}</details> : null}
-      <div className="settings-header-actions"><Button className="secondary-button" disabled={disabled || busy || stale || !item || Boolean(alreadyBound) || preview.result.unconverted.length > 0} onClick={apply}>加入当前节目</Button><span>{stale ? '节目已切换，请重新读取' : alreadyBound ? '此节目已关联该 Timecode' : item ? item.title : '请先选择节目'}</span><Button className="secondary-button" onClick={() => setPreview(null)}>关闭预览</Button></div>
+      <div className="settings-header-actions"><Button className="secondary-button" disabled={disabled || busy || stale || !item || Boolean(alreadyBound)} onClick={apply}>加入当前节目</Button><span>{stale ? '节目已切换，请重新读取' : alreadyBound ? '此节目已关联该 Timecode' : item ? item.title : '请先选择节目'}</span><Button className="secondary-button" onClick={() => setPreview(null)}>关闭预览</Button></div>
     </div> : null}
   </section>;
 }

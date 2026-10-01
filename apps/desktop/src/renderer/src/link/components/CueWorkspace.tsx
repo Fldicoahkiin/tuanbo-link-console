@@ -6,7 +6,6 @@ import { useStoppedRuntimeRecovery } from './useStoppedRuntimeRecovery';
 import { LightingEffectDock } from './LightingEffectDock';
 import { useLightingLibrarySplit } from './LightingLibrarySplitter';
 import { useLightingEffectStamp } from './useLightingEffectStamp';
-import { LightingProgramList } from './LightingWorkbenchPanel';
 import '../lighting-workbench.css';
 import '../lighting-workbench-appearance.css';
 import { useAudioEditor } from './useAudioEditor';
@@ -33,7 +32,7 @@ import {
   updateVisualLayerCommand,
   type LinkCommand
 } from '@tb/core/link';
-import { Clock3, FileVideo2, MonitorPlay, SlidersHorizontal, X, FolderInput, RefreshCw } from 'lucide-react';
+import { Clock3, FileVideo2, MonitorPlay, FolderInput, RefreshCw } from 'lucide-react';
 import { type LightingDocument, type LinkProject } from '@tb/schema';
 import { LightingTimelineTools, type LightingTool } from './LightingTimelineTools';
 import { useRuntimeStore } from '../stores/runtime-store';
@@ -134,7 +133,6 @@ export function CueWorkspace({ workspace = 'visual', player, sidebarHost, toolba
     {toolbarHost ? createPortal(<CueRundownHeader item={item} notify={notify} documentActions={documentActions} />, toolbarHost) : null}
     <Ma2PendingChanges playing={playing || runtimeState !== 'idle'} onStop={stop} />
     <div className={`cue-studio-grid${lightingSelection ? ' has-lighting-editor' : ''}`} style={workspaceLayout.style}>
-      {sidebarHost && lightingWorkspace ? createPortal(<LightingProgramList currentItemId={currentItemId} disabled={playing || runtimeState !== 'idle'} notify={notify} />, sidebarHost) : null}
       {sidebarHost && !lightingWorkspace ? createPortal(<ResourceLibrary
         folders={project.mediaFolders} assets={project.mediaAssets}
         assetAvailability={assetAvailability}
@@ -234,7 +232,7 @@ export function CueWorkspace({ workspace = 'visual', player, sidebarHost, toolba
           onDeleteClip={removeClip}
           onDeleteCue={removeCue}
         /> : <div className="empty-panel studio-empty"><MonitorPlay /><h3>先选择当前节目</h3><p>随后可把本地素材或 OBS 目标拖入时间线。</p></div>}
-        {lightingWorkspace && item ? <LightingEffectDock pointDetails={pointDetails} cueSelectionVersion={cueSelectionVersion} onLibrary={() => { setLightingTool(null); setPointDetails(false); }} externalPanel={lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools inline tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null} headerActions={<div className="lighting-header-actions"><label className="lighting-output-choice"><span><input type="checkbox" aria-label="选中 Cue 实时播放" checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />选中 Cue 实时播放</span><small role="status">{audition.enabled ? audition.status : '已关闭选中即播放'}</small></label>{lightingSelection?.eventId ? <><span>已选灯光点 · 点击效果可替换</span><button title="点位详情" aria-label="点位详情" aria-current={pointDetails ? 'page' : undefined} onClick={() => { setLightingTool(null); setPointDetails(!pointDetails); }}><SlidersHorizontal /><span>点位详情</span></button><button title="取消选择" aria-label="取消选择" onClick={showCommonProperties}><X /><span>取消选择</span></button></> : null}<button aria-current={lightingTool === 'files' ? 'page' : undefined} title="导入 / 导出" aria-label="导入 / 导出" onClick={() => openLightingTool('files')} disabled={playing || runtimeState !== 'idle'}><FolderInput /><span>导入与导出</span></button><button aria-current={lightingTool === 'sync' ? 'page' : undefined} title="MA2 同步" aria-label="MA2 同步" onClick={() => openLightingTool('sync')} disabled={playing || runtimeState !== 'idle'}><RefreshCw /><span>MA2 同步</span></button></div>} eventId={lightingSelection?.eventId} ms={playheadMs} durationMs={timelineReferenceAudio?.durationMs ?? 0} onNew={showCommonProperties} document={lightingDocument} disabled={false} onStamp={id => effectStamp.stamp(id, externalTransport && playing && audioRef.current ? audioRef.current.currentTime * 1000 : playheadMs, lightingSelection?.eventId)} onChange={changeLighting} /> : null}
+        {lightingWorkspace && item ? <LightingEffectDock onAuditionTemplate={audition.selectTemplate} auditionStatus={audition.enabled ? audition.status : '已关闭选中即播放'} sidebarHost={sidebarHost} key={item.id} pointDetails={pointDetails} cueSelectionVersion={cueSelectionVersion} onLibrary={() => { setLightingTool(null); setPointDetails(false); }} externalPanel={lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools inline tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null} playbackSettings={<>{!externalTransport ? <label className="lighting-output-choice"><span><input type="checkbox" aria-label="时间线播放控制灯光" checked={lightingPreview} onChange={event => setLightingPreview(event.currentTarget.checked)} />时间线播放控制灯光</span></label> : null}<label className="lighting-output-choice"><span><input type="checkbox" aria-label="选中 Cue 实时播放" checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />选中 Cue 实时播放</span><small role="status">{audition.enabled ? audition.status : '已关闭选中即播放'}</small></label></>} headerActions={<div className="lighting-header-actions"><button aria-current={lightingTool === 'files' ? 'page' : undefined} title="导入 / 导出" aria-label="导入 / 导出" onClick={() => openLightingTool('files')} disabled={playing || runtimeState !== 'idle'}><FolderInput /><span>导入与导出</span></button><button aria-current={lightingTool === 'sync' ? 'page' : undefined} title="MA2 同步" aria-label="MA2 同步" onClick={() => openLightingTool('sync')} disabled={playing || runtimeState !== 'idle'}><RefreshCw /><span>MA2 同步</span></button></div>} eventId={lightingSelection?.eventId} ms={playheadMs} durationMs={timelineReferenceAudio?.durationMs ?? 0} onNew={showCommonProperties} document={lightingDocument} disabled={false} onStamp={id => effectStamp.stamp(id, externalTransport && playing && audioRef.current ? audioRef.current.currentTime * 1000 : playheadMs, lightingSelection?.eventId)} onChange={changeLighting} /> : null}
       </main>
 
     </div>

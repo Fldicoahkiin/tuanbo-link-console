@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { audioSegmentSchema, audioBeatMapSchema } from './audio-edit';
 import { lightingDocumentSchema } from './lighting';
+import { ma2ReadStateSchema } from './ma2-catalog';
 
 export const LINK_PROJECT_SCHEMA_VERSION = 1 as const;
 
@@ -235,6 +236,7 @@ export const p1PlaylistBindingSchema = z.object({
 
 export const p1MediaBindingSchema = z.object({
   importedFullSource: z.boolean().optional(),
+  sourceTrim: z.object({ startMs: z.number().nonnegative(), endMs: z.number().positive(), applied: z.boolean() }).optional(),
   sourceKey: z.string().regex(/^[a-f0-9]{64}$/),
   playlistId: z.string().min(1),
   sourceFileName: z.string().min(1),
@@ -360,6 +362,7 @@ export const linkProjectSchema = z.object({
   internalVideoAudio: z.boolean().optional(),
   playlists: z.array(z.object({ id: z.string().min(1), name: z.string().trim().min(1) })).optional(),
   p1Sync: p1ProjectSyncSchema.optional(),
+  ma2ReadState: ma2ReadStateSchema.optional(),
   p1AutoFollow: z.object({
     enabled: z.boolean(),
     ranges: z.array(z.object({
@@ -424,7 +427,7 @@ function isSafeProjectPath(value: string): boolean {
 }
 
 function validateProjectInvariants(project: z.infer<typeof linkProjectSchema>, ctx: z.RefinementCtx): void {
-  if (project.schemaVersion === 1 && project.rundown.some((item) => item.lighting !== undefined)) {
+  if (project.schemaVersion === 1 && (project.ma2ReadState || project.rundown.some((item) => item.lighting !== undefined))) {
     ctx.addIssue({ code: 'custom', message: '含灯光编排的工程必须使用 schema 2，防止旧版本丢失数据', path: ['schemaVersion'] });
   }
   const playlistIds = new Set<string>();

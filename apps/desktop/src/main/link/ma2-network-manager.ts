@@ -1,3 +1,5 @@
+import { ma2PlaybackRequestSchema, type Ma2PlaybackRequest } from '@tb/schema';
+import { playMa2Cue } from './ma2-pool-playback';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
@@ -11,9 +13,11 @@ import { Ma2ApplyService } from './ma2-apply-service';
 import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
 import { readMa2NativeLibrary } from './ma2-native-library';
 import { readMa2Catalog } from './ma2-catalog';
+import { readMa2NetworkPreview } from './ma2-network-preview';
 
 /** One chosen console, machine settings only. Auto-connect never replays writes. */
 export class Ma2NetworkManager {
+  private readonly cancelledPlayback = new Map<string, number>();
   private profiles: Ma2NetworkSettings[] = [];
   private capabilities: Ma2Capabilities | null = null;
   private settings: Ma2NetworkSettings | null = null;
@@ -25,7 +29,7 @@ export class Ma2NetworkManager {
   private generation = 0;
   private services: { bridge: Ma2OnpcBridge; service: Ma2ApplyService } | null = null;
   private readonly path: string;
-  constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
+  constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string, private readonly resolveLocalAddress: (host: string) => Promise<string | undefined> = () => Promise.resolve(undefined)) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
   get(target: Ma2NetworkTarget): { bridge: Ma2OnpcBridge; service: Ma2ApplyService } {
     const settings = this.settings;
     if (!settings || target.host !== settings.host || target.port !== settings.port || target.monitorPort !== settings.monitorPort || target.username !== settings.username) throw new Error('MA2 连接目标已改变，请重新读取控台');
@@ -33,14 +37,59 @@ export class Ma2NetworkManager {
     if (this.connection?.state !== 'connected' || !this.services) throw new Error('请先连接 MA2 控台');
     return this.services;
   }
+  cancelPlayback(sessionId: string): void {
+    const now = Date.now();
+    for (const [id, expiresAt] of this.cancelledPlayback) if (expiresAt < now) this.cancelledPlayback.delete(id);
+    this.cancelledPlayback.set(sessionId, now + 180000);
+  }
+  async playCue(input: Ma2PlaybackRequest): Promise<void> {
+    const request = ma2PlaybackRequestSchema.parse(input);
+    const settings = this.settings; const connection = this.connection; const generation = this.generation;
+    if (!settings || !connection || connection.state !== 'connected') throw new Error('序列池播放需要先在设备设置连接 MA2 网络');
+    if (Object.entries(request.network).some(([key, value]) => Reflect.get(settings, key) !== value)) throw new Error('控台连接目标已改变，请重新选择 Cue');
+    const current = (): void => {
+      if (generation !== this.generation || connection.state !== 'connected' || this.cancelledPlayback.has(request.sessionId)) throw new Error('灯光播放会话已结束，已取消待发送 Cue');
+      if (Date.now() > request.deadlineAt) throw new Error('灯光调用已过期，未补发；请重新定位后播放');
+    };
+    current();
+    await playMa2Cue(connection, request.action, current);
+  }
   private credentialId(settings: Ma2NetworkSettings): string { return `ma2-${createHash('sha256').update(`${settings.host}:${settings.port}:${settings.username}`).digest('hex')}`; }
-  async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal): Promise<import('@tb/schema').Ma2Catalog> {
+  async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, targets?: readonly number[]): Promise<import('@tb/schema').Ma2Catalog> {
     const { bridge } = this.get(target);
-    const before = await this.readLibrary(target, onProgress, 'library', signal);
-    const result = await readMa2Catalog(bridge, this.isPlaying, { version: before.directory.version, sequences: before.sequences.map(sequence => ({ number: sequence.sequence, name: sequence.name, cues: sequence.cues })) }, onProgress, signal);
-    const after = await this.readLibrary(target, onProgress, 'verification', signal);
-    if (JSON.stringify(before.directory) !== JSON.stringify(after.directory) || JSON.stringify(before.sequences) !== JSON.stringify(after.sequences)) throw new Error('扫描期间控台序列发生变化，请重新扫描');
-    return result;
+    const connection = this.connection;
+    if (!connection) throw new Error('请先连接控台');
+    const cache = new Map<number, import('./ma2-timecode-xml').Ma2SequenceReport['sequences'][number]>();
+    const metrics = { elapsedMs: 0, requests: 0, bytes: 0, phases: {} as Record<string, number> };
+    const measuredBridge: Pick<Ma2OnpcBridge, 'request'> = { request: async (...args) => { metrics.requests += 1; const value = await bridge.request(...args); metrics.bytes += Buffer.byteLength(value, 'utf8'); return value; } };
+    let identity: string | undefined;
+    const trafficBefore = connection.readTraffic();
+    const catalog = await readMa2Catalog(bridge, this.isPlaying, undefined, onProgress, signal, { targets, metrics, metadata: async numbers => {
+      const missing = numbers.filter(number => !cache.has(number));
+      if (missing.length) {
+        const start = performance.now();
+        const library = await readMa2NativeLibrary(connection, measuredBridge, this.isPlaying, undefined, 'library', signal, missing, bytes => { metrics.requests += 1; metrics.bytes += bytes; });
+        metrics.phases.sequences = (metrics.phases.sequences ?? 0) + performance.now() - start;
+        const current = JSON.stringify(library.directory);
+        if (identity && identity !== current) throw new Error('读取期间 Show 或序列目录已变化');
+        identity = current;
+        for (const sequence of library.sequences) cache.set(sequence.sequence, { number: sequence.sequence, name: sequence.name, cues: sequence.cues });
+      }
+      return { version: this.version ?? '', sequences: numbers.flatMap(number => { const entry = cache.get(number); return entry ? [entry] : []; }) };
+    } });
+    const trafficAfter = connection.readTraffic();
+    catalog.metrics = { ...metrics, wireCommands: trafficAfter.wireCommands - trafficBefore.wireCommands, sentBytes: trafficAfter.sentBytes - trafficBefore.sentBytes, receivedBytes: trafficAfter.receivedBytes - trafficBefore.receivedBytes };
+    return catalog;
+  }
+  async preview(target: Ma2NetworkTarget, timecode: number, timeOriginMs = 0): Promise<import('@tb/schema').Ma2TimecodePreview> {
+    const { bridge } = this.get(target);
+    const connection = this.connection;
+    if (!connection) throw new Error('请先连接控台');
+    return readMa2NetworkPreview(timecode, timeOriginMs, () => {
+      this.get(target);
+      if (this.isPlaying()) throw new Error('请停止播放后读取灯光');
+      return bridge.request('READ', timecode);
+    }, targets => readMa2NativeLibrary(connection, bridge, this.isPlaying, undefined, 'library', undefined, targets));
   }
   async readLibrary(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, phase: 'library' | 'verification' = 'library', signal?: AbortSignal): Promise<import('@tb/schema').Ma2EffectLibrary> {
     const { bridge } = this.get(target);
@@ -90,8 +139,9 @@ export class Ma2NetworkManager {
     try {
       const settings = this.settings;
       const password = this.passwordSaved ? await this.secrets.loadCredential(this.credentialId(settings)) : '';
+      const localAddress = await this.resolveLocalAddress(settings.host);
       if (generation !== this.generation) return this.status();
-      const connection = new Ma2Telnet(settings, (state) => {
+      const connection = new Ma2Telnet({ ...settings, ...(localAddress ? { localAddress } : {}) }, (state) => {
         if (state === 'disconnected' && this.connection === connection) { this.version = null; this.capabilities = null; this.error = 'MA2 已断开，请重新连接'; }
       });
       this.connection = connection;

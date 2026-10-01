@@ -9,19 +9,21 @@ export function useLightingCueAudition(document: LightingDocument, projectId: st
   const [enabled, setEnabled] = useState(true);
   const [status, setStatus] = useState('选中灯光 Cue 即发送到控台');
   useEffect(() => () => output.cancel(), [output, projectId, item?.id, enabled]);
-  const select = (eventId: string): void => {
+  const select = (eventId: string, template = false): void => {
     if (!enabled || !projectId) return;
     const event = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(entry => entry.id === eventId);
-    if (event?.kind !== 'ma2') { output.cancel(); setStatus('所选事件不是控台 Cue'); return; }
+    if (!template && event?.kind !== 'ma2') { output.cancel(); setStatus('所选事件不是控台 Cue'); return; }
     setStatus('正在发送 Cue…');
-    void output.play(document, eventId, useIntegrationStore.getState().profile).then(async count => {
+    const operation = template ? output.playTemplate(document, eventId, useIntegrationStore.getState().profile) : output.play(document, eventId, useIntegrationStore.getState().profile);
+    void operation.then(async count => {
       if (!count) return;
-      setStatus(`已发送 ${count} 条 Cue 指令（MIDI 无回执）`);
-      await recordRuntimeOperator(projectId, item ?? undefined, '选中灯光 Cue，已发送 MIDI', { eventId, count });
+      const network = template || document.ma2Bindings?.some(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode') || document.outputMode === 'network' || document.tracks.some(track => track.clips.some(clip => clip.events.some(entry => entry.kind === 'ma2' && !entry.executor && (entry.id === eventId || entry.effectGroupId === eventId))));
+      setStatus(network ? `已发送 ${count} 条网络 Cue 指令` : `已发送 ${count} 条 Cue 指令（MIDI 无回执）`);
+      await recordRuntimeOperator(projectId, item ?? undefined, '选中灯光 Cue，已发送调用指令', { eventId, count });
     }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       setStatus(message); notify(message, 'error'); reportCoordinatorError(message, failure => notify(failure, 'error'));
     });
   };
-  return { enabled, setEnabled, status, select };
+  return { enabled, setEnabled, status, select: (id: string) => select(id), selectTemplate: (id: string) => select(id, true) };
 }

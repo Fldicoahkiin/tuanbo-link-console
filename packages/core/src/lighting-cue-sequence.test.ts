@@ -41,7 +41,7 @@ describe('按真实 Cue 顺序打点', () => {
     expect(() => createFixedLightingCueStamp(document, track)).toThrow('指定序列');
     expect(track.cueStamp).toEqual({ mode: 'marker' });
     document.ma2Bindings = [];
-    expect(createFixedLightingCueStamp(document, track)).toEqual({ mode: 'fixed', cue: '1', sequence: 1, executor: '1.1' });
+    expect(createFixedLightingCueStamp(document, track)).toEqual({ mode: 'fixed', cue: '1', sequence: 1, executor: '' });
   });
   it('已有 Cue 按音乐位置选择，不受片段或数组顺序影响', () => {
     const { document, track, clip } = fixture();

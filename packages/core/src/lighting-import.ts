@@ -11,12 +11,17 @@ export function appendLightingDocument(current: LightingDocument, incoming: Ligh
   const map = new LightingTempoMap(source.tempos);
   const remap = identityMap();
   const convertTrack = (track: LightingTrack, id: (sourceId: string) => string): LightingTrack => ({
-    ...structuredClone(track), id: id(track.id), clips: track.clips.map((clip) => lightingClipInTime(clip, map, id))
+    ...structuredClone(track), id: id(track.id), clips: track.clips.map((clip) => {
+      const converted = lightingClipInTime(clip, map, id);
+      return { ...converted, events: converted.events.map(event => event.effectGroupId ? { ...event, effectGroupId: id(event.effectGroupId) } : event) };
+    })
   });
   const tracks = source.tracks.map((track) => convertTrack(track, remap));
   const bindings = source.ma2Bindings?.map((binding) => ({
     ...structuredClone(binding), id: remap(binding.id),
     baselineTracks: binding.baselineTracks.map((track) => convertTrack(track, remap)),
+    ...(binding.trackMappings ? { trackMappings: binding.trackMappings.map(mapping => ({ ...mapping, trackId: remap(mapping.trackId) })) } : {}),
+    ...(binding.pendingTracks ? { pendingTracks: binding.pendingTracks.map(track => ({ ...track, trackId: remap(track.trackId) })) } : {}),
     mappings: binding.mappings.map((mapping) => ({ ...mapping, trackId: remap(mapping.trackId), clipId: remap(mapping.clipId), eventId: remap(mapping.eventId) }))
   }));
   return lightingDocumentSchema.parse({

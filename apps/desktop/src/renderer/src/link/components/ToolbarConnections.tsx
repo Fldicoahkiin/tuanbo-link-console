@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2NetworkStatusSchema, loopMidiStatusSchema, type Ma2NetworkStatus } from '@tb/schema';
 import { ToolbarMtcStatus } from './ToolbarMtcStatus';
@@ -19,7 +20,7 @@ function checked(row: Row, check: ConnectionCheck | undefined): Row {
   return check ? { ...row, state: check.state, value: statusLabel[check.state], detail: check.detail } : row;
 }
 
-export function ToolbarConnections({ player, onSettings }: { player: ProjectPlayer; onSettings: (category: SettingsCategory) => void }): JSX.Element {
+export function ToolbarConnections({ player, statusHost, onSettings }: { player: ProjectPlayer; statusHost: HTMLDivElement | null; onSettings: (category: SettingsCategory) => void }): JSX.Element {
   const method = useMa2ModeStore(state => state.method);
   const local = useLocalMa2Store();
   const project = useDocumentStore(state => state.project);
@@ -32,6 +33,7 @@ export function ToolbarConnections({ player, onSettings }: { player: ProjectPlay
   const lastMtcAt = useRuntimeStore(state => state.lastMtcAt);
   const [now, setNow] = useState(() => performance.now());
   const [selected, setSelected] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
   const [network, setNetwork] = useState<Ma2NetworkStatus | null>(null);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const internal = project?.playbackSource === 'internal';
@@ -100,11 +102,29 @@ export function ToolbarConnections({ player, onSettings }: { player: ProjectPlay
   }
   const detail = rows.find(row => row.id === selected);
   const receiving = lastMtcAt !== null && now >= lastMtcAt && now - lastMtcAt <= 500;
-  return <div className="toolbar-project-summary">
-    <div className="toolbar-connections" aria-label="全部连接状态">
+  const row = (id: string): Row | undefined => rows.find(entry => entry.id === id);
+  const currentItem = project?.rundown.find(item => item.id === player.state.itemId);
+  const lightingPort = targets.find(target => target.required && target.direction === 'output' && /灯光|Cue/.test(target.name));
+  const lightingRow = currentItem?.lighting?.outputMode === 'timecode' && lightingPort ? row(`port:${lightingPort.id}`)
+    : method === 'network' ? row('ma2') : lightingPort ? row(`port:${lightingPort.id}`) : row('ma2');
+  const lightingStatus: Pick<Row, 'state' | 'value' | 'detail'> = player.state.status === 'playing' && player.state.mtcSentPositionMs !== null
+    ? { state: 'ready', value: '发送中', detail: '正在按音频位置输出灯光时间码' }
+    : player.state.mtcConnectionFailed && player.state.status === 'playing'
+      ? { state: 'error', value: '未连接', detail: '本次音频继续播放，灯光时间码未输出' }
+      : lightingRow ?? { state: 'skipped', value: '未启用', detail: '当前工程未配置灯光输出' };
+  const audioStatus: Pick<Row, 'state' | 'value' | 'detail'> | undefined = internal && player.state.status === 'playing'
+    ? { state: 'ready', value: '播放中', detail: '本机音频正在播放' }
+    : internal || !project ? row('audio') : row('p1');
+  const overview = [
+    { name: '音频', status: audioStatus },
+    { name: '视频', status: row('obs') },
+    { name: '灯光', status: lightingStatus },
+    { name: '编辑灯光', status: row('bridge') }
+  ];
+  return <div className="toolbar-project-summary"><button type="button" className="topbar-details-trigger" aria-pressed={open} onClick={() => { setOpen(value => !value); setSelected(null); }}>详细</button>
+    {statusHost ? createPortal(open ? <><div className="toolbar-connections" aria-label="全部连接状态">
       {rows.map(row => <button key={row.id} className={'toolbar-connection connection-chip state-' + row.state} aria-label={row.name + '：' + row.value} aria-pressed={selected === row.id} title={`${row.name}：${row.value}\n${row.detail}`} onClick={() => setSelected(selected === row.id ? null : row.id)}>{row.name}</button>)}
       <ToolbarMtcStatus player={player} receiving={receiving} onSettings={() => onSettings('audio')} portStatus={checks.midi?.state === 'error' ? '不可用' : '详见上方各输入输出接口'} portDetail={targets.filter(target => target.required).map(target => target.name + '：' + (profile?.midiPortProfiles.find(port => port.id === target.id)?.portName ?? '未配置')).join('；')} />
-    </div>
-    {detail ? <div className="connection-inline-detail" role="region" aria-label="连接详情"><strong>{detail.name} · {detail.value}</strong><span>{detail.detail}</span><button onClick={() => { onSettings(detail.category); setSelected(null); }}>前往设置</button><button aria-label="收起连接详情" onClick={() => setSelected(null)}>收起</button></div> : null}
+    </div>{detail ? <div className="connection-inline-detail" role="region" aria-label="连接详情"><strong>{detail.name} · {detail.value}</strong><span>{detail.detail}</span><button onClick={() => { onSettings(detail.category); setSelected(null); setOpen(false); }}>前往设置</button><button aria-label="收起连接详情" onClick={() => setSelected(null)}>收起</button></div> : null}</> : <div className="topbar-connection-overview" role="group" aria-label="连接状态概览">{overview.map(entry => <span key={entry.name} className={`connection-overview-item state-${entry.status?.state ?? 'idle'}`} title={`${entry.name}：${entry.status?.value ?? '未检查'}\n${entry.status?.detail ?? ''}`}><span className="connection-overview-dot" aria-hidden="true" /><strong>{entry.name}</strong><small>{entry.status?.value ?? '未检查'}</small></span>)}</div>, statusHost) : null}
   </div>;
 }

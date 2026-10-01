@@ -13,7 +13,7 @@ export function ToolbarMtcStatus({ player, receiving, portStatus, portDetail, on
   const currentId = useRuntimeStore(state => state.currentItemId);
   const internal = project?.playbackSource === 'internal';
   const item = project?.rundown.find(entry => entry.id === (player.state.itemId ?? currentId));
-  const direct = item?.lighting?.outputMode === 'direct';
+  const direct = item?.lighting?.outputMode === 'direct' || item?.lighting?.outputMode === 'network';
   const sending = internal && !direct && player.state.mtcEnabled && player.state.status === 'playing' && player.state.mtcSentPositionMs !== null;
   const status = internal ? direct ? '直接 Cue' : !player.state.mtcEnabled ? '已关闭' : sending ? '发送中' : '待发送' : receiving ? '接收中' : '无信号';
   const active = sending || !internal && receiving;

@@ -7,7 +7,7 @@ export function placeEffect(document: LightingDocument, stamp: Stamp, durationMs
   const effect = document.templates.find(entry => entry.id === stamp.effectId);
   const binding = effect?.track.cueStamp;
   if (!effect || binding?.mode !== 'fixed') throw new Error('请先绑定灯光效果');
-  if (!/^[1-9]\d*\.[1-9]\d*$/.test(binding.executor)) throw new Error('该素材尚未绑定执行器，请在素材配置中填写控台页号.执行器编号');
+  if (binding.executor && !/^[1-9]\d*\.[1-9]\d*$/.test(binding.executor)) throw new Error('该素材尚未绑定执行器，请在素材配置中填写控台页号.执行器编号');
   if (effect.members) {
     if (effect.members.some(member => stamp.ms + member.delayMs >= durationMs)) throw new Error('组合效果超出音频结尾，请提前放置');
     return [...effect.members].sort((a, b) => a.delayMs - b.delayMs).reduce((result, member, index) => {
@@ -16,7 +16,7 @@ export function placeEffect(document: LightingDocument, stamp: Stamp, durationMs
       return { ...value, templates: document.templates };
     }, document);
   }
-  const existing = document.tracks.find(track => track.group === 'effect-canvas' && track.cueStamp?.mode === 'fixed' && track.cueStamp.executor === binding.executor && !track.locked);
+  const existing = document.tracks.find(track => track.group === 'effect-canvas' && track.cueStamp?.mode === 'fixed' && track.cueStamp.executor === binding.executor && (binding.executor || track.cueStamp.sequence === binding.sequence) && !track.locked);
   const track = existing ?? { ...effect.track, id: crypto.randomUUID(), name: '灯光', group: 'effect-canvas', clips: [] };
   const event = { id: stamp.id, ...(stamp.groupId ? { effectGroupId: stamp.groupId } : {}), kind: 'ma2' as const, action: 'goto' as const, label: effect.name, at: stamp.ms, executor: binding.executor, sequence: binding.sequence, cue: binding.cue };
   const clip = track.clips.find(entry => entry.timeLock === 'time' && entry.start === 0 && !entry.muted);

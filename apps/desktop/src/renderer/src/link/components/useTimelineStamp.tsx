@@ -28,7 +28,7 @@ export function useTimelineStamp(props: Props) {
   useEffect(() => {
     if (!lighting) return;
     const key = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || event.repeat || event.target instanceof Element && event.target.closest('input,textarea,select,[contenteditable="true"]') || [...document.querySelectorAll('[role="dialog"],dialog[open],.settings-content-page,.effect-binding-backdrop')].some(element => element.getClientRects().length > 0)) return;
+      if (event.defaultPrevented || event.repeat || event.target instanceof Element && event.target.closest('input,textarea,select,[contenteditable="true"],[role="separator"]') || [...document.querySelectorAll('[role="dialog"],dialog[open],.settings-content-page,.effect-binding-backdrop')].some(element => element.getClientRects().length > 0)) return;
       const action = bindings.find(binding => binding.key === shortcutKey(event))?.action;
       if (!action) return;
       event.preventDefault(); event.stopImmediatePropagation();

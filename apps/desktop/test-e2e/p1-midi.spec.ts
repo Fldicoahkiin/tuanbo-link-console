@@ -50,6 +50,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await page.getByRole('button', { name: '音频 Cue 1', exact: true }).click();
     await expect.poll(packets).toEqual([[0xf0, 0x7f, 127, 2, 1, 1, ...Array.from('1.000\0' + '101.2', char => char.charCodeAt(0)), 0xf7]]);
+    await page.getByText('播放设置', { exact: true }).click();
     await page.getByLabel('选中 Cue 实时播放', { exact: true }).uncheck();
     await page.getByRole('button', { name: '音频 Cue 2', exact: true }).click();
     expect(await packets()).toHaveLength(1);
@@ -89,12 +90,14 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     await expect(page.getByRole('button', { name: '扫描控台全部时间线', exact: true })).toHaveCount(0);
     await expect(page.getByLabel('全部连接状态').getByRole('button', { name: 'MA2 网络：未启用', exact: true })).toBeVisible();
     await expect(page.getByLabel('全部连接状态').getByRole('button', { name: 'MA2 工程通信：未启用', exact: true })).toBeVisible();
+    await page.getByLabel('MA2 连接方式').selectOption('local');
     await pick(info.outputDir);
     await page.getByRole('button', { name: '导出控台插件', exact: true }).click();
     await expect.poll(async () => (await readdir(info.outputDir)).filter(name => name.startsWith('TBLINK-MA2-Bridge-')).length).toBe(1);
     const pluginDirectory = (await readdir(info.outputDir)).find(name => name.startsWith('TBLINK-MA2-Bridge-'))!;
     await expect.poll(async () => (await readdir(join(info.outputDir, pluginDirectory))).length).toBe(3);
     expect(await readFile(join(info.outputDir, pluginDirectory, 'tblink_bridge.lua'), 'utf8')).toBe(await readFile(join(process.cwd(), '../../tools/ma2/tblink_bridge.lua'), 'utf8'));
+    await page.getByLabel('MA2 连接方式').selectOption('midi');
     await page.getByLabel('MA2 MSC 设备号').fill('5'); await page.getByLabel('MA2 MSC 设备号').press('Tab');
     await expect(page.getByLabel('MA2 MSC 设备号')).toHaveValue('5');
     await pick(source);
@@ -109,7 +112,16 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     for (let i = 0; i < summaries.length; i++) for (let j = i + 1; j < summaries.length; j++) expect(Math.min(summaries[i]!.bottom, summaries[j]!.bottom) - Math.max(summaries[i]!.top, summaries[j]!.top)).toBeLessThanOrEqual(0);
     await panel.locator('.p1-sync-issues').last().scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath('midi-p1.png') });
+    for (const width of [1200, 1440, 1920]) {
+      await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0]!.setBounds({ width, height: 900 }), width);
+      const sync = panel.locator('.p1-sync-layout');
+      await expect.poll(() => sync.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      const boxes = await sync.locator(':scope > *').evaluateAll(elements => elements.filter(element => element.getBoundingClientRect().height > 0).map(element => { const box = element.getBoundingClientRect(); return { top: box.top, bottom: box.bottom }; }));
+      for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) expect(Math.min(boxes[i]!.bottom, boxes[j]!.bottom) - Math.max(boxes[i]!.top, boxes[j]!.top)).toBeLessThanOrEqual(0);
+      await sync.screenshot({ path: info.outputPath(`p1-sync-${width}.png`) });
+    }
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
+    await page.getByText('播放设置', { exact: true }).click();
     await page.getByLabel('灯光输出方式').selectOption('direct');
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.outputMode).toBe('direct');
 

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-25T16:31:07.690Z",
+  "productName": "团播联动台",
+  "version": "0.4.35",
+  "gitSha": "fb9b59e16bfe7a4c4892063eb55447c78e45c54d",
+  "gitWorkingTreeDirty": true,
+  "platform": "win32",
+  "architecture": "x64",
+  "toolchain": {
+    "node": "v24.19.0",
+    "pnpm": "10.33.0",
+    "electron": "39.8.10"
+  },
+  "signing": {
+    "expected": "unsigned-candidate",
+    "smartScreenNoticeRequired": true
+  },
+  "summary": {
+    "artifactCount": 5,
+    "totalBytes": 389010918,
+    "checksPassed": 6,
+    "checksFailed": 0
+  },
+  "artifacts": [
+    {
+      "path": "apps/desktop/dist/Tuanbo-Link-Console-0.4.35-x64.exe",
+      "bytes": 132049680,
+      "sha256": "c833b7a316ff5c3b5a10a4c07bd3cad30c8867754c0ec38166df0b514dae5560",
+      "authenticode": "NotSigned"
+    },
+    {
+      "path": "apps/desktop/dist/Tuanbo-Link-Console-0.4.35-x64.exe.blockmap",
+      "bytes": 138279,
+      "sha256": "1075e158bb093e14ed762057302599d34e0dd155ba41c6de457fcdf72b0a424f"
+    },
+    {
+      "path": "apps/desktop/dist/latest.yml",
+      "bytes": 366,
+      "sha256": "eb2b249c9ce76eb2207cebcb131b8caafaa603076cbf24653f8c30bcdde8cc50"
+    },
+    {
+      "path": "apps/desktop/dist/win-unpacked/resources/app.asar",
+      "bytes": 45943105,
+      "sha256": "8acf6613bfa801ddf0818dbcbf6726d867dc0731984b8196e60dc5d7c4fd12db"
+    },
+    {
+      "path": "apps/desktop/dist/win-unpacked/团播联动台.exe",
+      "bytes": 210879488,
+      "sha256": "979f64dbd4aa19e9f3429b4d67cbc27f40ebe899cec21e6b07cd177d01be9948",
+      "authenticode": "NotSigned"
+    }
+  ],
+  "checks": [
+    {
+      "name": "windows-nsis-installer",
+      "ok": true,
+      "detail": "apps/desktop/dist/Tuanbo-Link-Console-0.4.35-x64.exe"
+    },
+    {
+      "name": "windows-unpacked-executable",
+      "ok": true,
+      "detail": "apps/desktop/dist/win-unpacked/团播联动台.exe"
+    },
+    {
+      "name": "authenticode-status-recorded",
+      "ok": true,
+      "detail": "Tuanbo-Link-Console-0.4.35-x64.exe=NotSigned, 团播联动台.exe=NotSigned"
+    },
+    {
+      "name": "unsigned-candidate-confirmed",
+      "ok": true,
+      "detail": "installer=NotSigned, app=NotSigned"
+    },
+    {
+      "name": "windows-installer-version-info",
+      "ok": true,
+      "detail": "product=团播联动台, description=内部音乐主控与 P1 跟随双模式的 OBS、MIDI 时间线联动桌面端, fileVersion=0.4.35, productVersion=0.4.35"
+    },
+    {
+      "name": "windows-app-version-info",
+      "ok": true,
+      "detail": "product=团播联动台, description=团播联动台, fileVersion=0.4.35, productVersion=0.4.35.0"
+    }
+  ]
+}

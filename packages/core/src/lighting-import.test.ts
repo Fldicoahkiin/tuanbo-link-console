@@ -13,6 +13,23 @@ function sourceDocument() {
 }
 
 describe('灯光工程追加导入', () => {
+  it('追加导入保持组合与埋步关联，不指向原工程的同名事件', () => {
+    const source = sourceDocument(); const current = sourceDocument(); delete current.ma2Bindings;
+    const clip = source.tracks[0]!.clips[0]!;
+    const event = clip.events[0]!;
+    if (event.kind !== 'ma2') throw new Error('测试 Cue 类型错误');
+    clip.events = [{ ...event, effectGroupId: event.id, preparation: { cue: '1', leadMs: 100 } }, { ...event, id: 'member', effectGroupId: event.id, sequence: 3, executor: '1.6' }];
+    const binding = source.ma2Bindings![0]!;
+    binding.baselineTracks = structuredClone(source.tracks);
+    binding.trackMappings = [{ trackId: 'track', path: 'Track:0', executor: '1.5', subtracks: [] }];
+    const result = appendLightingDocument(current, source);
+    const imported = result.tracks[1]!; const events = imported.clips[0]!.events;
+    expect(events[0]!.effectGroupId).toBe(events[0]!.id);
+    expect(events[1]!.effectGroupId).toBe(events[0]!.id);
+    expect(events[0]).toMatchObject({ preparation: { cue: '1', leadMs: 100 } });
+    expect(result.ma2Bindings![0]!.trackMappings![0]!.trackId).toBe(imported.id);
+    expect(events[0]!.effectGroupId).not.toBe(current.tracks[0]!.clips[0]!.events[0]!.id);
+  });
   it('保留模板、标记、绑定和基线，重映射后仍关联到导入事件', () => {
     const source = sourceDocument(); const current = sourceDocument(); delete current.ma2Bindings;
     current.tempos[0]!.bpm = 90;

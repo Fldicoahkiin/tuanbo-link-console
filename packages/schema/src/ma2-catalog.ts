@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { ma2NetworkTargetSchema } from './ma2-bridge';
+import { ma2NetworkTargetSchema, ma2TimecodePreviewSchema } from './ma2-bridge';
 import { lightingMa2CueCatalogSchema } from './lighting';
 
-export const ma2CatalogRequestSchema = z.object({ dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(), progressId: z.string().uuid().optional() }).strict();
+export const ma2CatalogRequestSchema = z.object({ dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(), progressId: z.string().uuid().optional(), targets: z.array(z.number().int().min(1).max(99999)).max(10000).optional() }).strict();
 export type Ma2CatalogRequest = z.infer<typeof ma2CatalogRequestSchema>;
 export const ma2ReadProgressSchema = z.object({
   id: z.string().uuid(),
@@ -21,10 +21,23 @@ export const ma2ObjectDirectorySchema = z.object({
 }).strict().refine(value => new Set(value.entries.map(entry => entry.target)).size === value.entries.length, '控台目录包含重复 Timecode');
 export type Ma2ObjectDirectory = z.infer<typeof ma2ObjectDirectorySchema>;
 export const ma2CatalogEntrySchema = z.object({
+  sourceXml: z.string().max(32 * 1024 * 1024).optional(),
+  preview: ma2TimecodePreviewSchema.optional(),
+  conversionError: z.string().optional(),
+  readAt: z.string().datetime().optional(),
   target: z.number().int().min(1).max(99999), name: z.string(), eventCount: z.number().int().nonnegative().nullable(),
   frameFormat: z.string().nullable(), offset: z.string().nullable(), slot: z.string().nullable(),
   events: z.array(z.object({ path: z.string(), time: z.string(), action: z.string(), executor: z.string(), cue: z.string().nullable(), name: z.string().nullable() }).strict()),
   error: z.string().nullable(), warnings: z.array(z.string())
 }).strict();
-export const ma2CatalogSchema = z.object({ directory: ma2ObjectDirectorySchema, readAt: z.string().datetime(), entries: z.array(ma2CatalogEntrySchema) }).strict();
+export const ma2CatalogSchema = z.object({ directory: ma2ObjectDirectorySchema, readAt: z.string().datetime(), entries: z.array(ma2CatalogEntrySchema),
+  incomplete: z.string().optional(),
+  metrics: z.object({ elapsedMs: z.number().nonnegative(), requests: z.number().int().nonnegative(), bytes: z.number().int().nonnegative(), wireCommands: z.number().int().nonnegative().optional(), receivedBytes: z.number().int().nonnegative().optional(), sentBytes: z.number().int().nonnegative().optional(), phases: z.record(z.string(), z.number().nonnegative()) }).strict().optional()
+}).strict();
 export type Ma2Catalog = z.infer<typeof ma2CatalogSchema>;
+export const ma2ReadStateSchema = z.object({
+  source: z.string().min(1).max(4096), catalog: ma2CatalogSchema,
+  pairs: z.record(z.string(), z.string()), failures: z.array(z.object({ target: z.number().int().positive(), message: z.string() }).strict()),
+  selectedTarget: z.number().int().positive().nullable(), query: z.string(), filter: z.enum(['all', 'pending', 'native', 'error']), message: z.string()
+}).strict();
+export type Ma2ReadState = z.infer<typeof ma2ReadStateSchema>;

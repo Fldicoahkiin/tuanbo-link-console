@@ -32,9 +32,9 @@ test('真实 P1 文件与音频一键匹配真实 onPC 时间线，保留无法�
     await page.getByLabel('MA2 连接方式').selectOption('local'); await page.getByLabel('MA2 onPC 数据目录').fill(directory);
     await application.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, p1);
     const section = page.getByLabel('MA2 现场节目导入');
-    await section.locator('.p1-import-menu > summary').click();
-    await section.getByRole('button', { name: '选择 .hia 并读取音频与灯光', exact: true }).click();
-    await expect(section.getByText(/音频读取完成，1 条灯光已导入/)).toBeVisible({ timeout: 120000 });
+    await section.getByText('导入或更新 P1 音乐（可选）', { exact: true }).click();
+    await section.getByRole('button', { name: '导入 P1 音乐并匹配控台 Cue', exact: true }).click();
+    await expect(section.getByText(/灯光读取完成，1 条灯光已导入/)).toBeVisible({ timeout: 120000 });
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.timecode).toBe(9902);
     const saved = parseLinkProject(JSON.parse(await readFile(destination, 'utf8')));
     expect(saved.rundown).toHaveLength(1);

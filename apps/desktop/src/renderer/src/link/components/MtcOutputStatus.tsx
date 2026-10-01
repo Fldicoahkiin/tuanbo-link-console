@@ -4,7 +4,7 @@ import { formatTimelineTimecode } from './timeline-geometry';
 
 export function MtcOutputStatus({ player, item, frameRate }: { player: ProjectPlayer; item: RundownItem; frameRate: MtcFrameRate }): JSX.Element {
   const { state, controller } = player;
-  const direct = item.lighting?.outputMode === 'direct';
+  const direct = item.lighting?.outputMode === 'direct' || item.lighting?.outputMode === 'network';
   const active = state.itemId === item.id;
   const sending = active && state.status === 'playing' && state.mtcEnabled && !direct && state.mtcSentPositionMs != null;
   return <div className="mtc-output-status" aria-label="灯光时间码输出">

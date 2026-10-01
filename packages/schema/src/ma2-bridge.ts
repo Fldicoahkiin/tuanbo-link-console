@@ -50,6 +50,7 @@ export const ma2ExecutorPreviewSchema = z.object({
 }).strict().refine((value) => value.cueCatalog.length === 1, '执行器必须对应一个明确序列');
 export type Ma2ExecutorPreview = z.infer<typeof ma2ExecutorPreviewSchema>;
 export const ma2TimecodePreviewSchema = z.object({
+  timing: z.object({ frameFormat: z.literal('30 FPS'), unit: z.literal('frames-30'), offsetNative: z.string(), absoluteEventTimesMs: z.array(z.number().finite().nonnegative()) }).strict().optional(),
   timeOriginMs: z.number().int().min(0).max(86399999).optional(),
   target: z.number().int().min(1).max(99999), name: z.string(), readAt: z.string().datetime(),
   document: lightingDocumentSchema, sourceXml: z.string().min(1).max(32 * 1024 * 1024),
@@ -76,3 +77,12 @@ export const ma2ApplyResultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('incomplete'), stage: z.enum(['preflight', 'read', 'write', 'verify']), message: z.string(), mayHaveWritten: z.boolean(), backupFile: z.string().nullable() }).strict()
 ]);
 export type Ma2ApplyResult = z.infer<typeof ma2ApplyResultSchema>;
+
+/** Sequence Pool references use their sequence number, never a fabricated executor. */
+export const ma2PlaybackActionSchema = z.discriminatedUnion('target', [
+  z.object({ target: z.literal('sequence'), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0).optional(), action: z.enum(['goto', 'go', 'off']) }).strict(),
+  z.object({ target: z.literal('executor'), executor: z.string().regex(/^[1-9]\d*\.[1-9]\d*$/), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).optional(), action: z.enum(['goto', 'go', 'off']) }).strict()
+]).superRefine((value, ctx) => { if (value.action === 'goto' && !value.cue) ctx.addIssue({ code: 'custom', message: '播放指定 Cue 需要 Cue 编号' }); });
+export type Ma2PlaybackAction = z.infer<typeof ma2PlaybackActionSchema>;
+export const ma2PlaybackRequestSchema = z.object({ network: ma2NetworkTargetSchema, action: ma2PlaybackActionSchema, sessionId: z.uuid(), deadlineAt: z.number().finite().positive() }).strict();
+export type Ma2PlaybackRequest = z.infer<typeof ma2PlaybackRequestSchema>;

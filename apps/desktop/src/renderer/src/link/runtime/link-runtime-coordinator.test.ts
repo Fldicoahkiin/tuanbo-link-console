@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject, type Ma2PlaybackRequest } from '@tb/schema';
 import { allocateP1TimecodeRanges, frameNumberToTimecode, type LinkDesktopApi } from '@tb/core/link';
 import type { MtcQuarterFrameMessage } from '../../registry/link-midi-adapter';
 import { LinkRuntimeCoordinator } from './link-runtime-coordinator';
@@ -45,6 +45,38 @@ vi.mock('../../registry/link-midi-adapter', () => ({
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); mocks.executeObsAction.mockReset(); mocks.executeManagedMediaEvent.mockReset(); mocks.seekManagedMedia.mockReset(); useRuntimeStore.getState().reset(); });
 
 describe('LinkRuntimeCoordinator', () => {
+  it('P1 跟随驱动准备和正式 Cue，暂停跳过旧点、断流冻结并取消发送', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
+    const playMa2Cue = vi.fn<(_request: Ma2PlaybackRequest) => Promise<void>>().mockResolvedValue();
+    const cancelMa2Playback = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('window', { setInterval, clearInterval, tbLink: { playMa2Cue, cancelMa2Playback,
+      getMa2NetworkStatus: () => Promise.resolve({ state: 'connected', settings: { host: '192.168.0.10', port: 30000, monitorPort: 30001, username: 'operator' }, passwordSaved: false, version: '3.9.60.74', error: null }) } });
+    const lighting = { ...createLightingDocument(), outputMode: 'network' as const, tracks: [lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 5000, timeLock: 'time', muted: false, events: [
+      { id: 'cue', kind: 'ma2', action: 'goto', sequence: 168, cue: '2', executor: '', label: '正式', at: 400, preparation: { cue: '1', leadMs: 300 } },
+      { id: 'skipped', kind: 'ma2', action: 'goto', sequence: 168, cue: '3', executor: '', label: '暂停期间', at: 600 },
+      { id: 'lost', kind: 'ma2', action: 'goto', sequence: 168, cue: '4', executor: '', label: '断流后', at: 1200 }
+    ] }] })] };
+    const project = parseLinkProject({ ...createEmptyLinkProject('P1 灯光链路'), schemaVersion: 2, playbackSource: 'p1', obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '测试', lighting }] });
+    const coordinator = new LinkRuntimeCoordinator(project, null);
+    try {
+      coordinator.selectItem('song', false); await coordinator.initializeMidi(); coordinator.beginPreflight('live');
+      await coordinator.applyPreflight({ checkedAt: new Date().toISOString(), mode: 'live', passed: true, checks: [] }); await coordinator.armFromStart();
+      sendTimecode(0); await vi.advanceTimersByTimeAsync(133); sendTimecode(4); await vi.advanceTimersByTimeAsync(1);
+      expect(playMa2Cue.mock.calls.map(([request]) => request.action.cue)).toEqual(['1']);
+      await vi.advanceTimersByTimeAsync(133); sendTimecode(8); await vi.advanceTimersByTimeAsync(133); sendTimecode(12); await vi.advanceTimersByTimeAsync(1);
+      expect(playMa2Cue.mock.calls.map(([request]) => request.action.cue)).toEqual(['1', '2']);
+      coordinator.pause();
+      for (const frame of [16, 20, 24]) { await vi.advanceTimersByTimeAsync(133); sendTimecode(frame); }
+      coordinator.resume(); await vi.advanceTimersByTimeAsync(133); sendTimecode(28); await vi.advanceTimersByTimeAsync(1);
+      expect(playMa2Cue.mock.calls.map(([request]) => request.action.cue)).toEqual(['1', '2']);
+      await vi.advanceTimersByTimeAsync(700);
+      expect(useRuntimeStore.getState().state).toBe('timecodeLost');
+      sendTimecode(40); await vi.advanceTimersByTimeAsync(1);
+      expect(playMa2Cue).toHaveBeenCalledTimes(2); expect(cancelMa2Playback).toHaveBeenCalled();
+      await coordinator.stopAndWait();
+      expect(useRuntimeStore.getState().state).toBe('idle');
+    } finally { coordinator.dispose(); }
+  });
   it('慢速准备与暂停继续不误报断流、不重复启动素材；真正开始后仍检测断流', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     vi.stubGlobal('window', { setInterval, clearInterval });
@@ -138,7 +170,8 @@ describe('LinkRuntimeCoordinator', () => {
     } finally { coordinator.dispose(); }
   });
   it('十首带视频节目循环三轮，上一首停止后才启动下一首，最终无活动素材', async () => {
-    vi.stubGlobal('window', { setInterval: () => 1, clearInterval: () => undefined });
+    const playMa2Cue = vi.fn<(_request: Ma2PlaybackRequest) => Promise<void>>().mockResolvedValue();
+    vi.stubGlobal('window', { setInterval: () => 1, clearInterval: () => undefined, tbLink: { playMa2Cue, cancelMa2Playback: () => Promise.resolve(), getMa2NetworkStatus: () => Promise.resolve({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, passwordSaved: false, version: '3.9.60.74', error: null }) } });
     mocks.executeObsAction.mockResolvedValue();
     const active = new Set<string>();
     const order: string[] = [];
@@ -152,10 +185,11 @@ describe('LinkRuntimeCoordinator', () => {
       order.push(`${event.phase}:${event.clipId}`);
       return Promise.resolve();
     });
-    const project = parseLinkProject({ ...createEmptyLinkProject('十首素材连续联动'),
+    const project = parseLinkProject({ ...createEmptyLinkProject('十首素材连续联动'), schemaVersion: 2,
       mediaAssets: [{ id: 'video', name: 'original.mp4', kind: 'video', relativePath: 'assets/reference-media/original.mp4',
         sha256: 'a'.repeat(64), byteLength: 100, durationMs: 30_000, width: 1080, height: 1920 }],
       rundown: Array.from({ length: 10 }, (_, index) => ({ id: `song-${index}`, title: `歌曲 ${index}`,
+        lighting: { ...createLightingDocument(), outputMode: 'network', tracks: [lightingTrackSchema.parse({ id: `lighting-${index}`, name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: `lighting-clip-${index}`, name: '开场', start: 0, duration: 30000, timeLock: 'time', muted: false, events: [{ id: `lighting-cue-${index}`, at: 0, kind: 'ma2', sequence: index + 1, cue: '1', executor: '', action: 'goto', label: '开场' }] }] })] },
         referenceAudio: { assetId: `audio-${index}`, relativePath: `assets/${index}.wav`, sha256: 'b'.repeat(64), durationMs: 30_000 },
         visualLayers: [{ id: `layer-${index}`, name: '视频' }],
         referenceMediaClips: [{ id: `clip-${index}`, assetId: 'video', layerId: `layer-${index}`,
@@ -176,6 +210,8 @@ describe('LinkRuntimeCoordinator', () => {
         await vi.waitFor(() => expect(order).toHaveLength(turn * 2 + 1), { interval: 1 });
         expect(useRuntimeStore.getState().currentItemId).toBe(`song-${index}`);
         expect(active).toEqual(new Set([`clip-${index}`]));
+        await vi.waitFor(() => expect(playMa2Cue).toHaveBeenCalledTimes(turn + 1), { interval: 1 });
+        expect(playMa2Cue.mock.calls.at(-1)?.[0].action).toEqual({ target: 'sequence', sequence: index + 1, cue: '1', action: 'goto' });
       }
       coordinator.stop();
       await vi.waitFor(() => expect(useRuntimeStore.getState().state).toBe('idle'), { interval: 1 });

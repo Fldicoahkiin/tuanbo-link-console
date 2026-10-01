@@ -1,7 +1,22 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { checkNetworkMa2, connectLocalMa2, useLocalMa2Store } from './ma2-connection-store';
+import { checkNetworkMa2, connectDiscoveredMa2, connectLocalMa2, useLocalMa2Store } from './ma2-connection-store';
 
 afterEach(() => { vi.unstubAllGlobals(); useLocalMa2Store.setState({ status: 'disconnected', directory: '', error: null }); });
+it('已保存 IP 直接连接，不要求广播发现；失败明确返回而不重试', async () => {
+  const status = { state: 'disconnected', settings: { host: '2.97.214.223', port: 30000, monitorPort: 30001, username: 'operator', autoConnect: false }, passwordSaved: true, version: null, error: null };
+  const discover = vi.fn(); const connect = vi.fn().mockResolvedValue({ ...status, state: 'connected' });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: () => Promise.resolve(status), discoverMa2: discover, connectMa2Network: connect } });
+  expect((await connectDiscoveredMa2()).state).toBe('connected'); expect(discover).not.toHaveBeenCalled();
+  connect.mockResolvedValue({ ...status, error: '命令端口超时' });
+  await expect(connectDiscoveredMa2()).rejects.toThrow('命令端口超时'); expect(connect).toHaveBeenCalledTimes(2);
+});
+it('首次发现未识别设备时保留结果与网卡诊断，不擅自登录候选端口', async () => {
+  const result = { hosts: [{ host: '2.97.214.223', port: 30000, identity: 'candidate' }], ranges: ['本机'], warnings: ['广播端口被占用'] };
+  const onDiscovery = vi.fn(); const connect = vi.fn();
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: () => Promise.resolve({ state: 'disconnected', settings: null, passwordSaved: false, version: null, error: null }), discoverMa2: () => Promise.resolve(result), connectMa2Network: connect } });
+  await expect(connectDiscoveredMa2(onDiscovery)).rejects.toThrow('广播端口被占用');
+  expect(onDiscovery).toHaveBeenCalledWith(result); expect(connect).not.toHaveBeenCalled();
+});
 
 it('本机连接必须收到插件响应，失败不能保留已连接状态', async () => {
   const exchangeMa2 = vi.fn().mockResolvedValue('PONG');

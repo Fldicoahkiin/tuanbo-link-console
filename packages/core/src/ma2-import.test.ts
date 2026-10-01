@@ -214,7 +214,7 @@ describe('MA2 预览应用命令', () => {
   });
   it('未转换事件、错误映射和已删除节目不能部分应用', () => {
     const read = preview(); read.unconverted.push({ path: 'event:3', reason: '未支持动作' });
-    expect(() => importMa2TimecodeCommand('item', read)).toThrow('未转换事件');
+    expect(importMa2TimecodeCommand('item', read).execute(project()).rundown[0]?.lighting?.ma2Bindings?.[0]?.nativeEvents).toEqual(read.unconverted);
     expect(() => importMa2TimecodeCommand('missing', preview()).execute(project())).toThrow('节目不存在');
     const invalid = preview(); invalid.mappings[0]!.eventId = 'missing';
     const original = project();

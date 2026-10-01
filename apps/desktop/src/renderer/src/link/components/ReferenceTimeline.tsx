@@ -164,7 +164,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const audioRef = props.externalTransport && props.transportAudioRef ? props.transportAudioRef : localAudioRef;
   const wheelSeek = useTimelineWheelSeek(props, audioRef);
   const showPlayheadTime = usePlayheadTimeLabel(timelineRef);
-  const viewport = useTimelineViewport(props.durationMs, props.lightingWorkspace ? 220 : undefined, props.lightingWorkspace ? wheelSeek.seek : undefined);
+  const viewport = useTimelineViewport(props.durationMs, props.lightingWorkspace ? 220 : undefined, props.lightingWorkspace ? wheelSeek.seek : undefined, props.lightingWorkspace ? props.referenceAudio?.sha256 ?? 'no-audio' : undefined);
   const revealTimelineTime = viewport.revealTime;
   const lightingPreview = props.lighting?.preview ?? false;
   const lightingReady = useLightingPreview({ enabled: lightingPreview && !props.externalTransport, document: props.lighting?.document, audioRef, playing: props.playing && !props.externalTransport, frameRate: props.frameRate, onError: (message) => { props.onPlayingChange(false); props.onPlaybackError(message); } });

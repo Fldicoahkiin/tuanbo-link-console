@@ -180,8 +180,14 @@ export type LinkDesktopApi = {
   exportObsPreviewScript: () => Promise<string>;
   getObsPreviewStatus: () => Promise<{ ready: boolean; message: string }>;
   discoverMa2(): Promise<import('@tb/schema').Ma2Discovery>;
+  getMa2NetworkSetup(): Promise<import('@tb/schema').Ma2NetworkSetupState>;
+  planMa2NetworkSetup(request: import('@tb/schema').Ma2NetworkSetupRequest): Promise<import('@tb/schema').Ma2NetworkSetupPlan>;
+  applyMa2NetworkSetup(id: string): Promise<import('@tb/schema').Ma2NetworkSetupState>;
+  restoreMa2NetworkSetup(id: string): Promise<import('@tb/schema').Ma2NetworkSetupState>;
   cancelMa2Discovery(): Promise<void>;
   checkMa2Capabilities(): Promise<import('@tb/schema').Ma2NetworkStatus>;
+  playMa2Cue(payload: import('@tb/schema').Ma2PlaybackRequest): Promise<void>;
+  cancelMa2Playback(sessionId: string): Promise<void>;
   getMa2NetworkStatus(): Promise<import('@tb/schema').Ma2NetworkStatus>;
   saveMa2Network(payload: import('@tb/schema').Ma2NetworkSave): Promise<import('@tb/schema').Ma2NetworkStatus>;
   connectMa2Network(): Promise<import('@tb/schema').Ma2NetworkStatus>;

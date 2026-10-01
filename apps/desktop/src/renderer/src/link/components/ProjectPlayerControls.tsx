@@ -34,11 +34,6 @@ export function ProjectPlayerTransport({ controller, state }: ProjectPlayer): JS
         <div className="home-section-heading"><h2>播放主控</h2><span>音乐 · 画面 · 灯光</span></div>
         <div className="player-now"><div className="player-track-icon"><Music2 /></div><div><small title={state.error ?? reason ?? undefined}>{statusLabel(state.status)}</small><h2>{selected?.title ?? '未播放'}</h2></div><span className="player-next"><small>{state.itemId ? '接下来' : '就绪'}</small><strong title={next?.title}>{state.itemId ? next?.title ?? '播完停止' : `${items.length} 首歌曲`}</strong></span></div>
         {state.error ? <p className="player-error" role="alert">{state.errorTitle ? <strong>{state.errorTitle}：</strong> : null}{state.error}</p> : null}
-        {state.mtcConnectionFailed && state.mtcEnabled && state.itemId ? <button className="secondary-button" disabled={!controller || state.status === 'preparing'} onClick={() => {
-          if (!controller || !state.itemId) return;
-          controller.toggleMtc();
-          void controller.play(state.itemId);
-        }}>关闭时间码后重试</button> : null}
         {state.notice ? <p className="player-notice" role="status">{state.notice}</p> : null}
         <div className="player-buttons">
           <button aria-label="上一首" title="上一首" disabled={!controller || !items.length} onClick={() => void controller?.skip(-1)}><SkipBack /></button>

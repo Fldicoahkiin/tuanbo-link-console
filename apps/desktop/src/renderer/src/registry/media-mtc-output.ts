@@ -13,6 +13,11 @@ export class MediaMtcOutput {
   private messages: number[][] = [];
   private locate = true;
   private connectionAttempt: AbortController | null = null;
+  private schedulingNotice: string | null = null;
+
+  takeSchedulingNotice(): string | null {
+    const notice = this.schedulingNotice; this.schedulingNotice = null; return notice;
+  }
 
   async connect(portName: string | null, autoDetect = false): Promise<string | null> {
     this.stop(); this.output = null;
@@ -48,13 +53,23 @@ export class MediaMtcOutput {
     let sent = false;
     if (!Number.isFinite(positionMs) || positionMs < 0 || positionMs >= 86400000) throw new Error('MIDI 时间码音频位置无效');
     if (!Number.isFinite(now) || now < 0) throw new Error('MIDI 时间码调度时钟无效');
-    if (this.output.state !== 'connected') throw new Error('灯光 MIDI 输出已断开，内部主控已停止');
+    if (this.output.state !== 'connected') throw new Error('灯光 MIDI 输出已断开，时间码输出已停止');
     // send() implicitly reopens a closed Web MIDI port. A lost connection must
     // instead fail this session and require an explicit operator action.
-    if (this.output.connection !== 'open') throw new Error('灯光 MIDI 输出连接已失效，已停止播放；请检查端口后手动重新播放');
+    if (this.output.connection !== 'open') throw new Error('灯光 MIDI 输出连接已失效，时间码输出已停止；请检查端口后手动重新播放');
     if (this.rate !== rate) { this.stop(); this.rate = rate; }
     if (this.lastPositionMs !== null && positionMs < this.lastPositionMs) throw new Error('音频位置回跳且未重新定位，已停止 MIDI 时间码输出');
-    if (this.lastTickAt !== null && now - this.lastTickAt > 100) throw new Error('MIDI 时间码发送延迟超过 100ms，已停止播放');
+    const elapsed = this.lastTickAt === null ? 0 : now - this.lastTickAt;
+    const advanced = this.lastPositionMs === null ? 0 : positionMs - this.lastPositionMs;
+    if (elapsed < 0) throw new Error('MIDI 时间码调度时钟回跳，时间码输出已停止');
+    if (elapsed > 500) throw new Error(`MIDI 时间码调度中断 ${Math.round(elapsed)}ms，时间码输出已停止；音频继续播放`);
+    if (Math.abs(advanced - elapsed) > 100) throw new Error('音频位置与播放时钟不一致，已停止 MIDI 时间码输出；请手动重新定位');
+    if (elapsed > 100) {
+      // Discard the incomplete cycle instead of bursting stale timecode. Locate
+      // from the actual media clock, then restart a complete quarter-frame cycle.
+      this.locate = true; this.piece = 0; this.messages = [];
+      this.schedulingNotice = `界面调度延迟 ${Math.round(elapsed)}ms，时间码已按当前音频位置恢复；请留意控台同步状态。`;
+    }
     this.lastTickAt = now;
     this.lastPositionMs = positionMs;
     const fps = playbackFramesPerSecond(rate);
@@ -66,7 +81,7 @@ export class MediaMtcOutput {
       // Locate immediately, but begin quarter frames on an actual media frame boundary.
       this.nextQuarterFrame = Math.ceil(positionMs / 1000 * fps) * 4;
     }
-    if (positionMs - this.nextQuarterFrame * 1000 / (fps * 4) > 100) throw new Error('MIDI 时间码发送延迟超过 100ms，已停止播放');
+    if (positionMs - this.nextQuarterFrame * 1000 / (fps * 4) > 100) throw new Error('MIDI 时间码发送延迟超过 100ms，时间码输出已停止');
     while (this.nextQuarterFrame <= positionMs / 1000 * fps * 4) {
       if (this.piece === 0) {
         const frame = this.nextQuarterFrame / 4;
@@ -86,7 +101,7 @@ export class MediaMtcOutput {
 
   stop(): void {
     this.connectionAttempt?.abort(); this.connectionAttempt = null;
-    this.nextQuarterFrame = 0; this.lastTickAt = null; this.lastPositionMs = null; this.rate = null; this.piece = 0; this.messages = []; this.locate = true;
+    this.nextQuarterFrame = 0; this.lastTickAt = null; this.lastPositionMs = null; this.rate = null; this.piece = 0; this.messages = []; this.locate = true; this.schedulingNotice = null;
   }
 }
 

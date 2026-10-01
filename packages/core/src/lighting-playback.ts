@@ -1,3 +1,4 @@
+import { ma2PlaybackActionSchema, type Ma2PlaybackAction } from '@tb/schema';
 import type { LightingClip, LightingDocument, LightingEvent, LightingTrack } from '@tb/schema';
 import { LightingTempoMap, lightingEventTime, lightingCurveValue } from './lighting-edit';
 
@@ -5,17 +6,21 @@ export type LightingPacket = { atMs: number; portProfileId: string; bytes: numbe
 /** Inspect connection dependencies without encoding events or expanding automation curves. */
 export function collectLightingOutputProfileIds(document: LightingDocument): string[] {
   return [...new Set(activeLightingTracks(document)
-    .filter(track => track.clips.some(clip => !clip.muted && clip.events.length > 0))
+    .filter(track => track.clips.some(clip => !clip.muted && clip.events.some(event => document.outputMode !== 'network' || event.kind !== 'ma2')))
     .map(track => track.portProfileId || 'lighting-events-output'))];
 }
 function activeLightingTracks(document: LightingDocument): LightingTrack[] {
+  if (document.outputMode !== 'timecode' && document.ma2Bindings?.some(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode')) throw new Error('原生保留时间线只能由控台按时间码播放，不能用本地部分事件替代');
   if (document.outputMode === 'timecode') return [];
   const solo = document.tracks.some(track => track.solo && !track.muted);
   return document.tracks.filter(track => !track.muted && (!solo || track.solo));
 }
 export function compileLightingPackets(document: LightingDocument, ma2DeviceId = 127): LightingPacket[] {
   if (!Number.isInteger(ma2DeviceId) || ma2DeviceId < 0 || ma2DeviceId > 127) throw new Error('MA2 MSC 设备号应为 0–127');
-  if (document.outputMode === 'timecode') return [];
+  if (document.outputMode === 'timecode') {
+    if (document.tracks.some(track => !track.muted && track.clips.some(clip => !clip.muted && clip.events.some(event => event.kind === 'ma2' && event.preparation)))) throw new Error('埋步需要由软件发送准备 Cue，请选择网络直控或 MIDI 执行器触发');
+    return [];
+  }
   const map = new LightingTempoMap(document.tempos);
   const packets: LightingPacket[] = [];
   for (const sourceTrack of activeLightingTracks(document)) {
@@ -23,7 +28,13 @@ export function compileLightingPackets(document: LightingDocument, ma2DeviceId =
     const track = sourceTrack.portProfileId ? sourceTrack : { ...sourceTrack, portProfileId: 'lighting-events-output' };
     for (const clip of track.clips) {
       if (clip.muted || !clip.events.length) continue;
-      for (const event of clip.events) appendEvent(packets, track, clip, event, map, ma2DeviceId);
+      for (const event of clip.events.filter(event => document.outputMode !== 'network' || event.kind !== 'ma2')) {
+        if (event.kind === 'ma2' && event.preparation) {
+          const atMs = lightingPreparationTime(clip, event, map);
+          appendEvent(packets, track, { ...clip, start: 0, timeLock: 'time' }, { ...event, at: atMs, cue: event.preparation.cue, preparation: undefined }, map, ma2DeviceId);
+        }
+        appendEvent(packets, track, clip, event, map, ma2DeviceId);
+      }
       const points = clip.events.filter((event) => event.kind === 'point').sort((a, b) => a.at - b.at);
       for (let index = 0; index + 1 < points.length; index += 1) {
         const from = points[index]; const to = points[index + 1];
@@ -61,6 +72,7 @@ function appendEvent(packets: LightingPacket[], track: LightingTrack, clip: Ligh
     case 'ma2': {
       // MA2 interprets MSC GO as Goto, not the console's next-cue action.
       if (event.action === 'go') throw new Error('MA2 MIDI 直控不支持“播放控台下一步”；请使用指定 Cue，或通过控台 Timecode 执行下一步');
+      if (!event.executor) throw new Error('序列池 Cue 不能通过执行器 MIDI 触发，请在播放设置选择网络直控');
       const [page, executor] = event.executor.split('.');
       if (!page || !executor || !/^[1-9]\d*$/.test(page) || !/^[1-9]\d*$/.test(executor)) throw new Error('MA2 执行器必须为有效的页.编号');
       const [whole, fraction = ''] = (event.cue ?? '').split('.');
@@ -125,4 +137,29 @@ export class LightingScheduler {
     }
     if (failures.length) throw new AggregateError(failures, '灯光音符释放失败');
   }
+}
+
+export type LightingNetworkAction = { atMs: number; action: Ma2PlaybackAction };
+function lightingPreparationTime(clip: LightingClip, event: Extract<LightingEvent, { kind: 'ma2' }>, map: LightingTempoMap): number {
+  const atMs = lightingEventTime(clip, event, map) - (event.preparation?.leadMs ?? 0);
+  if (atMs < 0) throw new Error(`“${event.label}”的埋步早于节目开始，请后移正式 Cue 或缩短提前时间`);
+  return atMs;
+}
+/** Timecode carries the song clock; local pool events are not an additional MA2 command channel. */
+export function lightingTimecodePlaybackNotice(document: LightingDocument): string | null {
+  if (document.outputMode !== 'timecode') return null;
+  const solo = document.tracks.some(track => track.solo && !track.muted);
+  const hasPoolCue = document.tracks.some(track => !track.muted && (!solo || track.solo)
+    && track.clips.some(clip => !clip.muted && clip.events.some(event => event.kind === 'ma2' && !event.executor)));
+  return hasPoolCue ? '音乐照常播放，时间码按开关设置输出；本地序列池 Cue 不会单独发送。请确认该 Cue 已编排在控台原生时间线。' : null;
+}
+export function compileLightingNetworkActions(document: LightingDocument): LightingNetworkAction[] {
+  if (document.outputMode !== 'network') return [];
+  const map = new LightingTempoMap(document.tempos);
+  return activeLightingTracks(document).flatMap(track => track.clips.filter(clip => !clip.muted).flatMap(clip => clip.events.flatMap(event => {
+    if (event.kind !== 'ma2') return [];
+    const action = ma2PlaybackActionSchema.parse(event.executor ? { target: 'executor', executor: event.executor, action: event.action, ...(event.cue ? { cue: event.cue } : {}) } : { target: 'sequence', sequence: event.sequence, cue: event.cue, action: event.action });
+    const formal = { atMs: lightingEventTime(clip, event, map), action };
+    return event.preparation ? [{ atMs: lightingPreparationTime(clip, event, map), action: ma2PlaybackActionSchema.parse({ ...action, cue: event.preparation.cue }) }, formal] : [formal];
+  }))).sort((a, b) => a.atMs - b.atMs);
 }

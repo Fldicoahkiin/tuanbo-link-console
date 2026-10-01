@@ -20,6 +20,7 @@ export function moveLightingEffect(document: LightingDocument, id: string, ms: n
   const offset = ms - anchor.ms;
   for (const value of all.filter(value => members.has(value.event.id))) {
     if (value.track.locked) throw new Error('组合中包含锁定轨道，不能移动');
+    if (value.event.kind === 'ma2' && value.event.preparation && value.ms + offset < value.event.preparation.leadMs) throw new Error('埋步不能早于节目开始，请缩短提前时间');
     const start = value.clip.timeLock === 'time' ? value.clip.start : map.beatToMs(value.clip.start);
     if (value.ms + offset < start || value.ms + offset >= durationMs) throw new Error('组合中的 Cue 超出音频或片段范围');
   }

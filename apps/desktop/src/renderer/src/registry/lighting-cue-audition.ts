@@ -1,23 +1,71 @@
 import { requestMidiAccess } from './midi-access';
 import { requireOutputLicense } from './license-output';
-import { compileLightingPackets } from '@tb/core/link';
-import type { IntegrationProfile, LightingDocument } from '@tb/schema';
+import { compileLightingPackets, compileLightingNetworkActions } from '@tb/core/link';
+import { ma2NetworkStatusSchema, ma2PlaybackActionSchema, type Ma2PlaybackAction, type IntegrationProfile, type LightingDocument } from '@tb/schema';
 
 /** Explicit operator selection only; never called when restoring editor selection. */
 export class LightingCueAudition {
   private generation = 0;
-  cancel(): void { this.generation += 1; }
+  private networkSession: string | null = null;
+  cancel(): void { this.generation += 1; const id = this.networkSession; this.networkSession = null; if (id) void window.tbLink.cancelMa2Playback(id).catch((error: unknown) => console.error('取消 Cue 试听失败', error)); }
+
+  /** Go continues on the console, including native triggers; no local next-Cue guessing. */
+  async playAction(input: Ma2PlaybackAction): Promise<boolean> {
+    this.cancel(); const generation = this.generation;
+    const action = ma2PlaybackActionSchema.parse(input);
+    const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
+    if (generation !== this.generation) return false;
+    if (status.state !== 'connected' || !status.settings) throw new Error('请先连接 MA2 网络');
+    const { host, port, monitorPort, username } = status.settings;
+    const sessionId = crypto.randomUUID(); this.networkSession = sessionId;
+    try { await window.tbLink.playMa2Cue({ sessionId, action, network: { host, port, monitorPort, username }, deadlineAt: Date.now() + 1000 }); }
+    catch (error) { if (generation !== this.generation) return false; throw error; }
+    return generation === this.generation;
+  }
+
+  /** A material click invokes its explicit Cue references, without inserting a timeline event. */
+  async playTemplate(document: LightingDocument, templateId: string, profile: IntegrationProfile | null): Promise<number> {
+    const template = document.templates.find(entry => entry.id === templateId);
+    const stamp = template?.track.cueStamp;
+    if (!template || stamp?.mode !== 'fixed') { this.cancel(); throw new Error('素材没有明确的序列和 Cue 引用，不能试听'); }
+    const members = template.members ?? [{ sequence: stamp.sequence, cue: stamp.cue, name: template.name }];
+    const events = members.map((member, index) => ({ id: `audition-${index}`, effectGroupId: 'audition-0', kind: 'ma2' as const, action: 'goto' as const, executor: '', sequence: member.sequence, cue: member.cue, label: member.name, at: 0 }));
+    if (!events.length) { this.cancel(); throw new Error('素材中没有 Cue'); }
+    return this.play({ ...document, ma2Bindings: [], outputMode: 'network', tracks: [{ ...template.track, clips: [{ id: 'audition', name: template.name, start: 0, duration: 1, timeLock: 'time', muted: false, events }] }] }, 'audition-0', profile);
+  }
 
   async play(document: LightingDocument, eventId: string, profile: IntegrationProfile | null): Promise<number> {
-    const generation = ++this.generation;
+    this.cancel(); const generation = this.generation;
     const selected = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === eventId);
     if (!selected || selected.kind !== 'ma2') return 0;
     await requireOutputLicense();
     const group = selected.effectGroupId ?? selected.id;
-    const preview: LightingDocument = { ...document, outputMode: 'direct', tracks: document.tracks.map(track => ({
+    const native = document.ma2Bindings?.some(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode');
+    const selectedEvents = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.id === group || event.effectGroupId === group)));
+    if (native && selectedEvents.some(event => event.kind !== 'ma2' || event.action !== 'goto' || !event.sequence || !event.cue)) throw new Error('原生时间线只能单独试听有明确序列和编号的 Cue');
+    // This isolated operator audition contains only the explicitly selected Cue(s).
+    // The original document and its native playback/writeback guards remain unchanged.
+    const preview: LightingDocument = { ...document, ma2Bindings: [], outputMode: 'direct', tracks: document.tracks.map(track => ({
       ...track, muted: false, solo: false,
-      clips: track.clips.map(clip => ({ ...clip, muted: false, start: 0, timeLock: 'time', events: clip.events.filter(event => event.kind === 'ma2' && (event.id === group || event.effectGroupId === group)).map(event => ({ ...event, at: 0 })) }))
+      clips: track.clips.map(clip => ({ ...clip, muted: false, start: 0, timeLock: 'time', events: clip.events.filter(event => event.kind === 'ma2' && (event.id === group || event.effectGroupId === group)).map(event => ({ ...event, ...(native ? { executor: '' } : {}), at: 0, preparation: undefined })) }))
     })) };
+    const networkPlayback = native || document.outputMode === 'network' || preview.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind === 'ma2' && !event.executor)));
+    if (networkPlayback) {
+      const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
+      if (generation !== this.generation) return 0;
+      if (status.state !== 'connected' || !status.settings) throw new Error('序列池 Cue 通过网络播放，请先连接 MA2 网络；无需绑定推杆或按键');
+      const { host, port, monitorPort, username } = status.settings;
+      const actions = compileLightingNetworkActions({ ...preview, outputMode: 'network' });
+      const sessionId = crypto.randomUUID(); this.networkSession = sessionId;
+      let count = 0;
+      for (const entry of actions) {
+        if (generation !== this.generation) return 0;
+        try { await window.tbLink.playMa2Cue({ sessionId, network: { host, port, monitorPort, username }, action: entry.action, deadlineAt: Date.now() + 1000 }); }
+        catch (error) { if (generation !== this.generation) return 0; throw error; }
+        count += 1;
+      }
+      return generation === this.generation ? count : 0;
+    }
     const packets = compileLightingPackets(preview, profile?.lighting?.mscDeviceId ?? 127);
     try {
       const access = await deadline(requestMidiAccess({ sysex: true }), 'MIDI 访问超时');

@@ -29,7 +29,9 @@ type TimelineViewport = {
   revealTime: (milliseconds: number) => void;
 };
 
-export function useTimelineViewport(durationMs: number, initialPixelsPerSecond = DEFAULT_TIMELINE_PIXELS_PER_SECOND, onWheelSeek?: (deltaMs: number) => number): TimelineViewport {
+export function useTimelineViewport(durationMs: number, initialPixelsPerSecond = DEFAULT_TIMELINE_PIXELS_PER_SECOND, onWheelSeek?: (deltaMs: number) => number, fitKey?: string): TimelineViewport {
+  const manualZoom = useRef(false);
+  const fittedKey = useRef<string | undefined>(undefined);
   const viewportRef = useRef<HTMLDivElement>(null);
   const headingViewportRef = useTimelineHeadings(viewportRef);
   const [pixelsPerSecond, setPixelsPerSecond] = useState(initialPixelsPerSecond);
@@ -69,6 +71,7 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
   }, [contentWidth, setViewportScrollLeft]);
 
   const zoomAt = useCallback((nextPixelsPerSecond: number, clientX?: number): void => {
+    manualZoom.current = true;
     const viewport = viewportRef.current;
     if (!viewport) return;
     const next = Math.min(MAX_TIMELINE_PIXELS_PER_SECOND, Math.max(MIN_TIMELINE_PIXELS_PER_SECOND, nextPixelsPerSecond));
@@ -88,11 +91,18 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
   }, [durationMs, pixelsPerSecond, setViewportScrollLeft]);
 
   const fit = useCallback((): void => {
+    manualZoom.current = false;
     const viewport = viewportRef.current;
     if (!viewport) return;
     setPixelsPerSecond(fitTimelinePixelsPerSecond(durationMs, viewport.clientWidth));
     requestAnimationFrame(() => setViewportScrollLeft(0));
   }, [durationMs, setViewportScrollLeft]);
+
+  useEffect(() => {
+    if (fitKey === undefined || viewportWidth <= 1) return;
+    if (fittedKey.current !== fitKey) { manualZoom.current = false; fittedKey.current = fitKey; }
+    if (!manualZoom.current) fit();
+  }, [fitKey, viewportWidth, fit]);
 
   const revealTime = useCallback((milliseconds: number): void => {
     const viewport = viewportRef.current;

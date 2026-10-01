@@ -1,4 +1,4 @@
-import { allocateMediaTimecodeRanges, lightingTimeOrigin, millisecondsToFrameNumber, playlistItems, programPlaylists, toUserErrorMessage } from '@tb/core/link';
+import { allocateMediaTimecodeRanges, lightingTimeOrigin, lightingTimecodePlaybackNotice, millisecondsToFrameNumber, playlistItems, programPlaylists, toUserErrorMessage } from '@tb/core/link';
 import type { IntegrationProfile, LinkProject } from '@tb/schema';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { LightingMidiOutput } from '../../registry/lighting-midi-output';
@@ -46,6 +46,9 @@ export class InternalPlaybackController {
   private previousPosition = -1;
   private offsetMs = 0;
   private directLighting = false;
+  private runtimePrepared = false;
+  private lightingPrepared = false;
+  private finishingLighting = false;
   private mtcSentPositionMs: number | null = null;
   private disposed = false;
   private loadedAudioUrl: string | null = null;
@@ -66,10 +69,11 @@ export class InternalPlaybackController {
     const reuseSession = this.state.itemId === itemId && ['playing', 'paused'].includes(this.state.status);
     if (this.state.itemId && this.state.itemId !== itemId && ['playing', 'paused'].includes(this.state.status)) this.markPlayed();
     const generation = ++this.generation;
-    this.silence(); this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, mtcConnectionFailed: false });
+    this.silence(); this.runtimePrepared = false; this.lightingPrepared = false; this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, mtcConnectionFailed: false });
     const operation = this.tail.then(async () => {
       if (!this.current(generation)) return;
-      await this.dependencies.stop();
+      try { await this.dependencies.stop(); }
+      catch (error) { this.appendNotice(`上次联动清理失败：${toUserErrorMessage(error)}。本次仍尝试播放音频。`); }
       if (!this.current(generation)) return;
       const item = this.project.rundown.find((candidate) => candidate.id === itemId && candidate.enabled);
       if (!item?.referenceAudio) throw new Error('节目没有可播放的音频');
@@ -91,34 +95,46 @@ export class InternalPlaybackController {
       const outputRoute = await this.output.prepare(this.audio, config.outputDeviceId, config.audioSampleRate ?? 48000);
       if (!this.current(generation)) return;
       if (outputRoute === 'default-fallback') this.update({ notice: '原音频输出设备已断开，本次播放改用 Windows 默认设备。请在音频输出设置中确认线路。' });
-      this.directLighting = item.lighting?.outputMode === 'direct';
+      this.directLighting = item.lighting?.outputMode === 'direct' || item.lighting?.outputMode === 'network';
       const sendMtc = !this.directLighting && this.state.mtcEnabled;
       let mtcPortName: string | null | undefined;
       try {
         mtcPortName = await this.mtc.connect(sendMtc ? config.mtcPortName : null, sendMtc && Boolean(item.p1Media || item.lighting?.ma2Bindings?.length || item.lighting?.tracks.some(track => track.clips.some(clip => clip.events.length))));
       } catch (error) {
-        if (this.current(generation)) this.update({ mtcConnectionFailed: true });
-        throw error;
+        if (this.current(generation)) { this.mtc.stop(); this.update({ mtcConnectionFailed: true }); this.appendNotice(`MIDI 时间码未输出：${toUserErrorMessage(error)}。本次继续播放音频。`); }
       }
       if (!this.current(generation)) return;
-      this.update({ mtcPortName: sendMtc ? mtcPortName ?? config.mtcPortName : null, mtcSentPositionMs: null });
-      if (item.lighting) await this.lighting.prepare(item.lighting, config.lightingProfile ?? null, positionMs);
+      this.update({ mtcPortName: sendMtc ? mtcPortName ?? null : null, mtcSentPositionMs: null });
+      if (item.lighting) {
+        try { await this.lighting.prepare(item.lighting, config.lightingProfile ?? null, positionMs); this.lightingPrepared = true; }
+        catch (error) { this.lighting.stop(); this.appendNotice(`灯光动作未启动：${toUserErrorMessage(error)}。本次继续播放音频。`); }
+      }
+      const lightingNotice = item.lighting ? lightingTimecodePlaybackNotice(item.lighting) : null;
+      if (lightingNotice) this.update({ notice: [this.state.notice, lightingNotice].filter(Boolean).join('；') });
       if (!this.current(generation)) return;
-      await this.dependencies.prepare(itemId, positionMs, { reuseSession, mtcOutputEnabled: sendMtc });
+      try { await this.dependencies.prepare(itemId, positionMs, { reuseSession, mtcOutputEnabled: sendMtc && Boolean(mtcPortName) }); this.runtimePrepared = true; }
+      catch (error) { this.appendNotice(`画面与联动未启动：${toUserErrorMessage(error)}。本次继续播放音频。`); }
       if (!this.current(generation)) return;
       this.update({ volume: item.playback?.volume ?? 100, ...(item.playback ? { endAction: item.playback.endAction } : {}) });
       this.audio.currentTime = positionMs / 1000; this.audio.volume = this.state.volume / 100;
       this.offsetMs = lightingTimeOrigin(item.lighting, item.playback?.mtcOffsetMs ?? (this.project.obsOutputMode === 'scenes' ? 0 : (allocateMediaTimecodeRanges(this.project).find((range) => range.itemId === itemId)?.startSeconds ?? 0) * 1000));
-      if (item.playback && item.playback.mtcOffsetMs !== this.offsetMs) throw new Error('歌曲播放起点与 MA2 绑定时间码不一致，请重新核对');
+      if (item.playback && item.playback.mtcOffsetMs !== this.offsetMs) {
+        this.mtc.stop(); this.update({ mtcPortName: null });
+        this.appendNotice('歌曲播放起点与 MA2 绑定时间码不一致，本次不输出时间码；音频继续播放。');
+      }
       this.lastFrame = -1; this.previousPosition = -1; this.lastAdvanced = performance.now();
-      this.update({ itemId, positionMs, mtcPositionMs: positionMs + this.offsetMs, durationMs: endMs, status: 'playing' });
-      await this.dependencies.ingest(positionMs);
+      this.update({ itemId, positionMs, mtcPositionMs: positionMs + this.offsetMs, durationMs: endMs });
+      if (this.runtimePrepared) {
+        try { await this.dependencies.ingest(positionMs); }
+        catch (error) { this.disableRuntime(error); }
+      }
       if (!this.current(generation)) return;
-      if (paused) { await this.dependencies.pause(); this.update({ status: 'paused' }); return; }
+      if (paused) { if (this.runtimePrepared) await this.dependencies.pause(); this.update({ status: 'paused' }); return; }
       if (config.fadeInMs) this.audio.volume = 0;
       await this.audio.play();
       if (!this.current(generation)) { this.silence(); return; }
-      this.dependencies.started?.(this.audio.currentTime * 1000);
+      if (this.runtimePrepared) this.dependencies.started?.(this.audio.currentTime * 1000);
+      this.update({ status: 'playing', positionMs: this.audio.currentTime * 1000, mtcPositionMs: this.audio.currentTime * 1000 + this.offsetMs });
       this.lastAdvanced = performance.now();
       if (config.fadeInMs) this.ramp(0, this.state.volume / 100, config.fadeInMs, false);
       this.timer = setInterval(() => this.tick(), 8);
@@ -128,9 +144,9 @@ export class InternalPlaybackController {
   }
 
   async pause(): Promise<void> {
-    if (this.state.status !== 'playing') return;
+    if (this.state.status !== 'playing' || this.finishingLighting) return;
     this.silence(); this.update({ status: 'paused', positionMs: this.audio.currentTime * 1000, mtcPositionMs: this.audio.currentTime * 1000 + this.offsetMs });
-    try { await this.dependencies.pause(); } catch (error) { this.fail(error); }
+    if (this.runtimePrepared) try { await this.dependencies.pause(); } catch (error) { this.disableRuntime(error); }
   }
 
   async resume(): Promise<void> {
@@ -138,13 +154,14 @@ export class InternalPlaybackController {
     if (this.audio.currentTime * 1000 >= this.state.durationMs && this.state.itemId) { await this.play(this.state.itemId); return; }
     const generation = this.generation;
     try {
-      await this.dependencies.ingest(this.audio.currentTime * 1000);
+      if (this.runtimePrepared) try { await this.dependencies.ingest(this.audio.currentTime * 1000); } catch (error) { this.disableRuntime(error); }
       const lighting = this.project.rundown.find((item) => item.id === this.state.itemId)?.lighting;
-      if (lighting) await this.lighting.prepare(lighting, this.dependencies.configuration().lightingProfile ?? null, this.audio.currentTime * 1000);
+      if (lighting && this.lightingPrepared) try { await this.lighting.prepare(lighting, this.dependencies.configuration().lightingProfile ?? null, this.audio.currentTime * 1000); }
+      catch (error) { this.lightingPrepared = false; this.lighting.stop(); this.appendNotice(`灯光动作已停止：${toUserErrorMessage(error)}`); }
       if (!this.current(generation)) return;
       this.audio.volume = this.state.volume / 100; await this.audio.play(); this.lastAdvanced = performance.now();
       if (!this.current(generation)) { this.silence(); return; }
-      this.dependencies.started?.(this.audio.currentTime * 1000);
+      if (this.runtimePrepared) this.dependencies.started?.(this.audio.currentTime * 1000);
       this.update({ status: 'playing' }); this.timer = setInterval(() => this.tick(), 8);
     } catch (error) { this.fail(error); }
   }
@@ -160,6 +177,8 @@ export class InternalPlaybackController {
 
   externalStop(): void { ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null }); }
   freeze(message: string): void { ++this.generation; this.silence(); this.update({ status: 'error', error: message, errorTitle: '播放已中断' }); }
+  reportUnavailable(message: string): void { this.appendNotice(message); }
+  runtimeUnavailable(message: string): void { this.disableRuntime(new Error(message)); }
   seek(positionMs: number): Promise<void> {
     if (!this.state.itemId) return Promise.resolve();
     return this.play(this.state.itemId, positionMs, this.state.status === 'paused');
@@ -168,9 +187,14 @@ export class InternalPlaybackController {
     // Pointer movement must not retry a failed OBS/audio preparation.
     // A deliberate Play starts a new preparation and clears the error.
     if (this.state.status === 'error') return Promise.resolve();
-    if (!this.dependencies.scrub || this.state.itemId !== itemId || !['playing', 'paused'].includes(this.state.status)) return this.play(itemId, positionMs, true);
     const item = this.project.rundown.find((entry) => entry.id === itemId);
-    if (!Number.isFinite(positionMs) || positionMs < (item?.playback?.startMs ?? 0) || positionMs >= this.state.durationMs) return Promise.reject(new Error('定位位置超出节目范围'));
+    if (!Number.isFinite(positionMs) || positionMs < (item?.playback?.startMs ?? 0) || positionMs >= (item?.playback?.endMs || item?.referenceAudio?.durationMs || 0)) return Promise.reject(new Error('定位位置超出节目范围'));
+    if (!this.runtimePrepared && this.state.itemId === itemId && ['playing', 'paused'].includes(this.state.status)) {
+      this.audio.currentTime = positionMs / 1000;
+      this.update({ positionMs, mtcPositionMs: positionMs + this.offsetMs });
+      return Promise.resolve();
+    }
+    if (!this.dependencies.scrub || this.state.itemId !== itemId || !['playing', 'paused'].includes(this.state.status)) return this.play(itemId, positionMs, true);
     if (this.state.status === 'paused' && this.state.positionMs === positionMs) return this.tail;
     const generation = ++this.generation;
     this.silence(); this.update({ status: 'paused', positionMs });
@@ -201,7 +225,7 @@ export class InternalPlaybackController {
   toggleMtc(): void {
     this.mtc.stop(); this.mtcSentPositionMs = null;
     this.update({ mtcEnabled: !this.state.mtcEnabled, mtcSentPositionMs: null, mtcPortName: null });
-    if (this.state.mtcEnabled && !this.directLighting && !this.state.mtcPortName && ['playing', 'paused'].includes(this.state.status)) this.freeze('灯光时间码输出尚未连接，请重新点击播放以自动检测 MIDI 接口');
+    if (this.state.mtcEnabled && !this.directLighting && !this.state.mtcPortName && ['playing', 'paused'].includes(this.state.status)) this.appendNotice('时间码输出尚未连接，本次继续播放音频；重新播放时会再次检测。');
   }
   toggle(): Promise<void> {
     if (this.state.status === 'playing') return this.pause();
@@ -251,38 +275,57 @@ export class InternalPlaybackController {
   dispose(): void { this.disposed = true; ++this.generation; this.silence(); this.audio.onended = null; this.audio.onerror = null; this.audio.removeAttribute('src'); this.audio.load(); void this.output.dispose().catch((error: unknown) => this.update({ status: 'error', error: `关闭音频输出失败：${String(error)}` })); }
 
   private tick(): void {
-    if (this.state.status !== 'playing') return;
+    if (this.state.status !== 'playing' || this.finishingLighting) return;
     try {
       const now = performance.now(); const positionMs = this.audio.currentTime * 1000;
       if (positionMs !== this.previousPosition) { this.previousPosition = positionMs; this.lastAdvanced = now; }
       if (now - this.lastAdvanced > 500) throw new Error('正式音频播放位置停止更新，已冻结音频、时间线及 MIDI 输出');
       const loop = this.project.rundown.find((item) => item.id === this.state.itemId)?.lighting?.loop;
       if (loop?.enabled && positionMs >= loop.endMs && loop.endMs <= this.state.durationMs && loop.startMs < loop.endMs && this.state.itemId) {
-        this.lighting.finish(loop.endMs);
-        void this.play(this.state.itemId, loop.startMs);
+        const itemId = this.state.itemId;
+        this.finishLighting(loop.endMs, () => { void this.play(itemId, loop.startMs); });
         return;
       }
       if (positionMs >= this.state.durationMs) { this.finish(); return; }
-      if (this.state.mtcEnabled && !this.directLighting && this.mtc.tick(positionMs + this.offsetMs, this.project.timebase.frameRate, now)) this.mtcSentPositionMs = positionMs + this.offsetMs;
-      this.lighting.tick(positionMs);
+      if (this.state.mtcEnabled && !this.directLighting && this.state.mtcPortName) {
+        try { if (this.mtc.tick(positionMs + this.offsetMs, this.project.timebase.frameRate, now)) this.mtcSentPositionMs = positionMs + this.offsetMs; }
+        catch (error) { this.mtc.stop(); this.update({ mtcPortName: null, mtcConnectionFailed: true }); this.appendNotice(`MIDI 时间码已停止：${toUserErrorMessage(error)}。音频继续播放。`); }
+      }
+      const schedulingNotice = this.mtc.takeSchedulingNotice();
+      if (schedulingNotice) this.appendNotice(schedulingNotice);
+      if (this.lightingPrepared) try { this.lighting.tick(positionMs); }
+      catch (error) { this.lightingPrepared = false; this.lighting.stop(); this.appendNotice(`灯光动作已停止：${toUserErrorMessage(error)}。音频继续播放。`); }
       const frame = millisecondsToFrameNumber(positionMs, this.project.timebase.frameRate);
       if (frame !== this.lastFrame) {
         this.lastFrame = frame; const generation = this.generation;
-        void this.dependencies.ingest(positionMs).catch((error: unknown) => { if (this.current(generation)) this.fail(error); });
+        if (this.runtimePrepared) void this.dependencies.ingest(positionMs).catch((error: unknown) => { if (this.current(generation)) this.disableRuntime(error); });
       }
       if (now - this.lastRendered > 50) { this.lastRendered = now; this.update({ positionMs, mtcPositionMs: positionMs + this.offsetMs, mtcSentPositionMs: this.mtcSentPositionMs }); }
     } catch (error) { this.fail(error); }
   }
   private finish(): void {
-    if (this.state.status !== 'playing') return;
-    try { this.lighting.finish(Math.min(this.audio.currentTime * 1000, this.state.durationMs)); }
-    catch (error) { this.fail(error); return; }
+    if (this.state.status !== 'playing' || this.finishingLighting) return;
+    this.finishLighting(Math.min(this.audio.currentTime * 1000, this.state.durationMs), () => this.completePlayback());
+  }
+  private finishLighting(positionMs: number, complete: () => void): void {
+    if (!this.lightingPrepared) { complete(); return; }
+    try {
+      const pending = this.lighting.finish(positionMs);
+      if (!pending) { complete(); return; }
+      const generation = this.generation; this.finishingLighting = true;
+      void pending.then(() => {
+        if (!this.current(generation)) return;
+        this.finishingLighting = false; complete();
+      }, (error: unknown) => { if (this.current(generation)) { this.lightingPrepared = false; this.appendNotice(`灯光收尾失败：${toUserErrorMessage(error)}`); complete(); } });
+    } catch (error) { this.lightingPrepared = false; this.appendNotice(`灯光收尾失败：${toUserErrorMessage(error)}`); complete(); }
+  }
+  private completePlayback(): void {
     this.markPlayed();
     this.silence();
     if (this.state.endAction === 'pause') {
       this.audio.currentTime = this.state.durationMs / 1000;
       this.update({ status: 'paused', positionMs: this.state.durationMs, mtcPositionMs: this.state.durationMs + this.offsetMs });
-      void this.dependencies.pause().catch((error: unknown) => this.fail(error));
+      if (this.runtimePrepared) void this.dependencies.pause().catch((error: unknown) => this.disableRuntime(error));
       return;
     }
     if (this.state.endAction === 'loop' && this.state.itemId) { void this.play(this.state.itemId); return; }
@@ -300,7 +343,16 @@ export class InternalPlaybackController {
     this.update({ status: 'error', error: message, errorTitle, notice: null });
     void this.dependencies.stop().catch((cleanup: unknown) => this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` }));
   }
+  private appendNotice(message: string): void {
+    this.update({ notice: [this.state.notice, message].filter(Boolean).join('；') });
+  }
+  private disableRuntime(error: unknown): void {
+    if (!this.runtimePrepared) return;
+    this.runtimePrepared = false;
+    this.appendNotice(`画面与联动已停止：${toUserErrorMessage(error)}。音频继续播放。`);
+  }
   private silence(): void {
+    this.finishingLighting = false;
     this.audio.pause(); this.mtc.stop();
     this.mtcSentPositionMs = null;
     if (this.timer) clearInterval(this.timer); this.timer = null;

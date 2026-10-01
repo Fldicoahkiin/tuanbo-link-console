@@ -92,7 +92,7 @@ export class P1ProjectService {
         items.push({
           title: media.title,
           ...audio,
-          p1Media: { ...binding, ...(audio.importNotes ? { importedFullSource: true } : {}) }
+          p1Media: { ...binding, ...(!audio.importNotes ? { sourceTrim: { startMs: Number(media.element.getAttribute('cut_start')) * 1000, endMs: Number(media.element.getAttribute('cut_end')) * 1000, applied: true } } : { importedFullSource: true }) }
         });
         } catch (error) {
           options.signal?.throwIfAborted();

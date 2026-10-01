@@ -4,6 +4,10 @@ const id = z.string().min(1);
 const time = z.number().finite().nonnegative();
 const dataByte = z.number().int().min(0).max(127);
 const eventBase = { id, at: time, effectGroupId: id.optional() };
+export const lightingPreparationSchema = z.object({
+  cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0, '准备 Cue 编号必须大于 0'),
+  leadMs: z.number().finite().min(100).max(10000)
+}).strict();
 export const lightingEventSchema = z.discriminatedUnion('kind', [
   z.object({ ...eventBase, kind: z.literal('raw'), bytes: z.array(z.number().int().min(0).max(255)).min(1).max(65536).refine((bytes) => {
     const status = bytes[0] ?? 0;
@@ -15,10 +19,12 @@ export const lightingEventSchema = z.discriminatedUnion('kind', [
   z.object({ ...eventBase, kind: z.literal('note'), note: dataByte, velocity: dataByte.min(1), releaseVelocity: dataByte.optional(), duration: time.positive() }).strict(),
   z.object({ ...eventBase, kind: z.literal('cc'), controller: dataByte, value: dataByte }).strict(),
   z.object({ ...eventBase, kind: z.literal('program'), program: dataByte }).strict(),
-  z.object({ ...eventBase, kind: z.literal('ma2'), cue: z.string().regex(/^\d+(?:\.\d+)?$/).optional(), label: z.string(), action: z.enum(['go', 'goto', 'off']), executor: z.string().regex(/^\d+\.\d+$/), sequence: z.number().int().positive().optional() }).strict(),
+  z.object({ ...eventBase, kind: z.literal('ma2'), cue: z.string().regex(/^\d+(?:\.\d+)?$/).optional(), label: z.string(), action: z.enum(['go', 'goto', 'off']), executor: z.union([z.literal(''), z.string().regex(/^\d+\.\d+$/)]), sequence: z.number().int().positive().optional(), preparation: lightingPreparationSchema.optional() }).strict(),
   z.object({ ...eventBase, kind: z.literal('ma2-fader'), executor: z.string().regex(/^[1-9]\d*\.[1-9]\d*$/), fader: z.literal('Master'), level: z.number().finite().min(0).max(1), label: z.string() }).strict(),
   z.object({ ...eventBase, kind: z.literal('point'), value: z.number().finite().min(0).max(127), shape: z.enum(['hold', 'linear', 'smooth']), controlValues: z.tuple([z.number().finite().min(0).max(127), z.number().finite().min(0).max(127)]).optional() }).strict()
 ]).superRefine((event, ctx) => {
+  if (event.kind === 'ma2' && event.preparation && (event.action !== 'goto' || Number(event.preparation.cue) === Number(event.cue))) ctx.addIssue({ code: 'custom', message: '埋步需要指定与正式 Cue 不同的准备 Cue' });
+  if (event.kind === 'ma2' && !event.executor && event.action !== 'goto') ctx.addIssue({ code: 'custom', message: '序列池调用需要指定序列和 Cue；下一步或关闭需要执行器' });
   if (event.kind === 'ma2' && event.action === 'goto' && (event.cue === undefined || event.sequence === undefined)) ctx.addIssue({ code: 'custom', message: '调用指定 Cue 必须填写 Cue 编号和序列' });
 });
 export const lightingClipSchema = z.object({
@@ -42,18 +48,12 @@ export const lightingTrackSchema = z.object({
   cueStamp: z.discriminatedUnion('mode', [
     z.object({ mode: z.literal('sequence') }).strict(),
     z.object({ mode: z.literal('marker') }).strict(),
-    z.object({ mode: z.literal('fixed'), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine((value) => Number(value) > 0), executor: z.string().regex(/^[1-9]\d*\.[1-9]\d*$/) }).strict()
+    z.object({ mode: z.literal('fixed'), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine((value) => Number(value) > 0), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]) }).strict()
   ]).optional(),
   clips: z.array(lightingClipSchema)
 }).strict();
-/** Library references may be imported before the console executor is known. Timeline tracks stay bound. */
-export const lightingTemplateTrackSchema = lightingTrackSchema.extend({
-  cueStamp: z.discriminatedUnion('mode', [
-    z.object({ mode: z.literal('sequence') }).strict(),
-    z.object({ mode: z.literal('marker') }).strict(),
-    z.object({ mode: z.literal('fixed'), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]) }).strict()
-  ]).optional()
-});
+/** Library and timeline references both support unassigned Sequence Pool cues. */
+export const lightingTemplateTrackSchema = lightingTrackSchema;
 export const lightingTempoSchema = z.object({ beat: time, bpm: z.number().finite().min(10).max(999), numerator: z.number().int().min(1).max(32), denominator: z.union([z.literal(1), z.literal(2), z.literal(4), z.literal(8), z.literal(16)]), transition: z.enum(['hold', 'linear']).optional() }).strict();
 export const lightingMa2EventMappingSchema = z.object({ eventId: id, trackId: id, clipId: id, path: z.string().min(1), sequence: z.number().int().positive().nullable(), cueIndex: z.number().int().nonnegative().nullable(), action: z.enum(['goto', 'go', 'off', 'master']).optional(), executor: z.string().regex(/^\d+\.\d+$/) }).strict().superRefine((mapping, ctx) => {
   const cueAction = (mapping.action ?? 'goto') === 'goto';
@@ -71,6 +71,8 @@ export const lightingMa2CueCatalogSchema = z.array(z.object({
   for (const entry of catalog) if (new Set(entry.cues.map((cue) => cue.index)).size !== entry.cues.length || new Set(entry.cues.map((cue) => Number(cue.number))).size !== entry.cues.length) ctx.addIssue({ code: 'custom', message: 'MA2 Cue 列表的编号或索引重复' });
 });
 export const lightingMa2BindingSchema = z.object({
+  nativeEvents: z.array(z.object({ path: z.string(), reason: z.string() }).strict()).optional(),
+  playback: z.enum(['native-timecode', 'editable']).optional(),
   timeOriginMs: z.number().int().min(0).max(86399999).optional(),
   id, timecode: z.number().int().min(1).max(99999), name: z.string(), readAt: z.string().datetime(),
   sourceXml: z.string().min(1).max(32 * 1024 * 1024),
@@ -80,6 +82,7 @@ export const lightingMa2BindingSchema = z.object({
   cueCatalog: lightingMa2CueCatalogSchema.optional()
 }).strict();
 export const lightingDocumentSchema = z.object({
+  ma2Library: z.object({ show: z.string(), readAt: z.string().datetime(), sequences: lightingMa2CueCatalogSchema }).strict().optional(),
   autoCueSource: z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), durationMs: z.number().finite().positive() }).strict().optional(),
   fixtureCategories: z.array(z.object({ show: z.string().min(1), category: z.string().min(1).max(64), fixtureIds: z.array(z.number().int().positive()).max(10000) }).strict()).max(128).optional(),
   ma2Bindings: z.array(lightingMa2BindingSchema).optional(),
@@ -87,12 +90,12 @@ export const lightingDocumentSchema = z.object({
   version: z.literal(1), tracks: z.array(lightingTrackSchema), tempos: z.array(lightingTempoSchema).min(1),
   markers: z.array(z.object({ id, name: z.string(), startMs: time, endMs: time.nullable() }).strict()),
   loop: z.object({ enabled: z.boolean(), startMs: time, endMs: time.positive() }).strict(),
-  outputMode: z.enum(['timecode', 'direct']),
+  outputMode: z.enum(['timecode', 'direct', 'network']),
   templates: z.array(z.object({ id, name: z.string().min(1), track: lightingTemplateTrackSchema,
     categories: z.array(z.string().min(1).max(64)).max(16).optional(),
     sourceShow: z.string().min(1).max(4096).optional(),
     favorite: z.boolean().optional(),
-    members: z.array(z.object({ name: z.string().min(1), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/), executor: z.string().regex(/^[1-9]\d*\.[1-9]\d*$/), delayMs: time }).strict()).min(2).max(32).optional()
+    members: z.array(z.object({ name: z.string().min(1), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]), delayMs: time }).strict()).min(2).max(32).optional()
   }).strict())
 }).strict().superRefine((document, ctx) => {
   if (document.tempos[0]?.beat !== 0) ctx.addIssue({ code: 'custom', message: '节拍图必须从第 0 拍开始', path: ['tempos'] });

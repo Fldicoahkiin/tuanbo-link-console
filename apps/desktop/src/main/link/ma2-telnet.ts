@@ -2,7 +2,7 @@ import { createConnection, isIP, type Socket } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 
-export type Ma2NetworkAddress = { host: string; port: number; monitorPort: number };
+export type Ma2NetworkAddress = { host: string; port: number; monitorPort: number; localAddress?: string };
 export type Ma2TelnetState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
 type Stream = { socket: Socket; decoder: StringDecoder; buffer: string; negotiation: 'data' | 'iac' | 'option' | 'sub' | 'sub-iac'; optionCommand: number };
 
@@ -16,11 +16,14 @@ export class Ma2Telnet {
   private current: Ma2TelnetState = 'disconnected';
   private connecting = false;
   private commandTail: Promise<void> = Promise.resolve();
+  private traffic = { wireCommands: 0, receivedBytes: 0, sentBytes: 0 };
+  readTraffic(): Readonly<typeof this.traffic> { return { ...this.traffic }; }
   private queuedCommands = 0;
   private connectionEpoch = 0;
   constructor(private readonly address: Ma2NetworkAddress, private readonly onState: (state: Ma2TelnetState) => void = () => undefined, private readonly timeoutMs = 5000) {
     if (!isIP(address.host) || [address.port, address.monitorPort].some((port) => !Number.isInteger(port) || port < 1 || port > 65535) || address.port === address.monitorPort) throw new Error('请填写有效的控台 IP 地址和端口');
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new Error('MA2 连接超时设置无效');
+    if (address.localAddress !== undefined && (isIP(address.localAddress) !== 4 || address.localAddress === '0.0.0.0')) throw new Error('电脑连接地址无效，请重新检查网卡');
   }
   get state(): Ma2TelnetState { return this.current; }
   private setState(state: Ma2TelnetState): void { this.current = state; this.onState(state); }
@@ -34,17 +37,23 @@ export class Ma2Telnet {
     try {
       let monitorReady = false;
       for (const [index, port] of [this.address.port, this.address.monitorPort].entries()) {
-        const socket = createConnection({ host: this.address.host, port });
+        const socket = createConnection({ host: this.address.host, port, ...(this.address.localAddress ? { localAddress: this.address.localAddress } : {}) });
         if (index === 0) this.socket = socket;
         const stream: Stream = { socket, decoder: new StringDecoder('utf8'), buffer: '', negotiation: 'data', optionCommand: 0 };
         this.streams.push(stream);
         socket.setNoDelay(true); socket.setKeepAlive(true, 5000);
         socket.on('connect', () => { if (index === 1) { monitorReady = true; this.check(); } });
         socket.on('data', (data: Buffer) => { if (this.streams.includes(stream)) this.receive(stream, data); });
-        socket.on('error', (error: NodeJS.ErrnoException) => { if (this.streams.includes(stream)) this.fail(new Error(`MA2 ${index === 0 ? '命令' : '监视'}端口连接失败：${this.address.host}:${port}（${error.code ?? '网络错误'}）。请检查 IP、端口和控台 Telnet 设置`)); });
+        socket.on('error', (error: NodeJS.ErrnoException) => { if (this.streams.includes(stream)) this.fail(new Error(`MA2 ${index === 0 ? '命令' : '监视'}端口连接失败：${this.address.host}:${port}${this.address.localAddress ? `（电脑 ${this.address.localAddress}）` : ''}（${error.code ?? '网络错误'}）。${error.code === 'EADDRNOTAVAIL' ? '电脑专用地址已失效，请重新点击自动连接。' : '请检查 IP、端口和控台 Telnet 设置'}`)); });
         socket.on('close', () => { if (this.streams.includes(stream)) this.fail(new Error('MA2 网络连接已断开；未确认的操作不会自动重试')); });
       }
-      await this.waitFor((text) => monitorReady && /\[[^\r\n]*\]>/.test(text) ? 'ready' : null);
+      await this.waitFor((text) => monitorReady && /\[[^\r\n]*\]>/.test(text) ? 'ready' : null, () => {
+        const ports = this.streams.map((stream, index) => {
+          const source = this.address.localAddress ?? stream.socket.localAddress;
+          return `${this.address.host}:${index === 0 ? this.address.port : this.address.monitorPort} ${stream.socket.connecting ? 'TCP 未连通' : 'TCP 已连通'}${source && source !== '0.0.0.0' ? `（本机 ${source}）` : '（尚未取得本机连接地址）'}`;
+        }).join('；');
+        return `MA2 连接超时：${ports}。${this.streams.some(stream => stream.socket.connecting) ? '请核对电脑与控台 IP、子网掩码、网卡路由及这两个端口的防火墙放行。' : '端口已通，但未收到 MA2 远程提示，请核对远程登录服务和端口。'} MIDI 线不提供这条网络连接。`;
+      });
       this.setState('authenticating');
       await this.command(`Login "${username}" "${password}"`, (text) => /\[[^\r\n]*\]>/.test(text) ? 'prompt' : null);
       // The native banner says "guest" even before login: only an executed
@@ -61,7 +70,7 @@ export class Ma2Telnet {
       throw error;
     } finally { this.connecting = false; }
   }
-  async command(line: string, match: (response: string) => string | null): Promise<string> {
+  async command(line: string, match: (response: string) => string | null, beforeSend?: () => void): Promise<string> {
     if (!this.socket || (this.current !== 'connected' && this.current !== 'authenticating')) throw new Error('MA2 尚未连接');
     if (/[\r\n\u0000]/.test(line) || Buffer.byteLength(line) > 4096) throw new Error('MA2 网络命令格式或长度无效');
     if (this.queuedCommands >= 32) throw new Error('控台请求过多，请等待当前操作完成');
@@ -69,9 +78,11 @@ export class Ma2Telnet {
     this.queuedCommands += 1;
     const response = this.commandTail.then(() => {
       if (epoch !== this.connectionEpoch || !this.socket) throw new Error('控台连接已改变，待发送请求已取消');
+      beforeSend?.();
       for (const stream of this.streams) stream.buffer = '';
       const pending = this.waitFor(match);
       this.socket.write(`${line}\r\n`);
+      this.traffic.wireCommands += 1; this.traffic.sentBytes += Buffer.byteLength(`${line}\r\n`, 'utf8');
       return pending;
     }).finally(() => { this.queuedCommands -= 1; });
     // Advance scheduling on either outcome; the caller still receives every failure.
@@ -87,10 +98,10 @@ export class Ma2Telnet {
     if (this.waiter) { clearTimeout(this.waiter.timer); this.waiter.reject(error); this.waiter = null; }
     if (this.current !== 'disconnected') this.setState('disconnected');
   }
-  private waitFor(match: Waiter['match']): Promise<string> {
+  private waitFor(match: Waiter['match'], timeoutMessage?: () => string): Promise<string> {
     if (this.waiter) return Promise.reject(new Error('MA2 网络请求尚未完成'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error(this.current === 'authenticating' ? 'MA2 登录未确认，请检查用户、密码及远程登录权限' : 'MA2 响应超时；操作未确认，不会自动重试')), this.timeoutMs);
+      const timer = setTimeout(() => this.fail(new Error(timeoutMessage?.() ?? (this.current === 'authenticating' ? 'MA2 登录未确认，请检查用户、密码及远程登录权限' : 'MA2 响应超时；操作未确认，不会自动重试'))), this.timeoutMs);
       this.waiter = { match, resolve, reject, timer };
       this.check();
     });
@@ -105,6 +116,7 @@ export class Ma2Telnet {
     } catch { this.fail(new Error('MA2 网络响应格式无效')); }
   }
   private receive(stream: Stream, data: Buffer): void {
+    this.traffic.receivedBytes += data.length;
     const output: number[] = [];
     for (const byte of data) {
       switch (stream.negotiation) {
