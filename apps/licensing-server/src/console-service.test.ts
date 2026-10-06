@@ -117,3 +117,43 @@ it('迁移前旧订单和领取凭据保持兼容，重复初始化不改写历�
   expect(service.readDelivery(order.id, delivery.token).licenses[0]?.code).toBe(paid.licenses[0]?.code);
   expect(service.activate({ product: 'tuanbo-link-console', code: paid.licenses[0]!.code, machineCode: `TB1-${'C'.repeat(64)}` }).license).toBeTruthy();
 });
+
+it('单码期限调整隔离同订单授权、幂等、权限和到期验证', async () => {
+  const s = await setup(); const result = await s.execute(grant);
+  const licenses = s.consoleService.detail('orders', result.id!, s.login.session).related;
+  const id = String(licenses[0]!.id); const other = String(licenses[1]!.id);
+  const input = { action: 'set-expiry' as const, id, useUntil: '2026-10-08T00:00:00Z', reason: '调整测试期限' };
+  for (const role of ['operations', 'finance', 'viewer'] as const) {
+    await expect(s.execute(input, { ...s.login.session, user: { ...s.login.session.user, role } })).rejects.toThrow('角色');
+  }
+  const operation = randomUUID(); await s.execute(input, s.login.session, operation); await s.execute(input, s.login.session, operation);
+  expect(s.service.consoleLicense(id).useUntil).toBe(input.useUntil);
+  expect(s.service.consoleLicense(other).useUntil).toBe(grant.useUntil);
+  expect(s.consoleService.overview().item.expiring).toBe(1);
+  expect(s.db.prepare("SELECT COUNT(*) AS n FROM console_audit WHERE action='license.expiry-adjusted'").get()?.n).toBe(1);
+  const code = s.service.consoleReveal(id);
+  expect(s.service.activate({ product: 'tuanbo-link-console', code, machineCode: `TB1-${'D'.repeat(64)}` }).license).toBeTruthy();
+  await expect(s.execute({ ...input, useUntil: '2026-01-01T00:00:00Z' })).rejects.toThrow('晚于');
+  s.advance(3 * 86400000);
+  expect(() => s.service.activate({ product: 'tuanbo-link-console', code, machineCode: `TB1-${'D'.repeat(64)}` })).toThrow('期限');
+  await expect(s.execute(input)).rejects.toThrow('二次验证');
+  await s.execute({ ...input, useUntil: '2026-12-01T00:00:00Z' }, { ...s.login.session, verifiedAt: s.now() });
+  expect(s.service.activate({ product: 'tuanbo-link-console', code, machineCode: `TB1-${'D'.repeat(64)}` }).license).toBeTruthy();
+  await s.execute({ action: 'revoke', id, reason: '结束' }, { ...s.login.session, verifiedAt: s.now() });
+  await expect(s.execute(input, { ...s.login.session, verifiedAt: s.now() })).rejects.toThrow('撤销');
+});
+
+it('工作台按已交付客户去重并按北京时间汇总实际收款', async () => {
+  const s = await setup(); await s.execute(grant); await s.execute(grant);
+  const order = await s.execute({ action: 'create-order', reference: 'trend-test', customer: '付费客户', customerType: 'company', quantity: 2, amountFen: 50000, useUntil: grant.useUntil, reason: '测试' });
+  expect(s.consoleService.overview().item.customerCount).toBe(1);
+  await s.execute({ action: 'fulfill', id: order.id!, amountFen: 50000, paymentReference: 'trend-payment', paymentMethod: '转账', reason: '到账' });
+  s.db.prepare('UPDATE payment_receipts SET received_at=? WHERE order_id=?').run('2026-10-05T16:00:00.000Z', order.id!);
+  await s.execute({ action: 'refund', id: order.id!, amountFen: 10000, reference: 'trend-refund', handledAt: '2026-10-05T15:59:00.000Z', reason: '人工登记' });
+  const dashboard = s.consoleService.overview(); const trend = dashboard.related.filter(row => row.category === 'cashflow');
+  expect(dashboard.item.customerCount).toBe(2); expect(dashboard.item.boundLicenseCount).toBe(0);
+  expect(trend).toHaveLength(30);
+  expect(trend.find(row => row.day === '2026-10-06')?.incomeFen).toBe(50000);
+  expect(trend.find(row => row.day === '2026-10-05')?.refundFen).toBe(10000);
+  expect(trend.reduce((sum, row) => sum + Number(row.incomeFen), 0)).toBe(50000);
+});

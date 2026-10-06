@@ -13,6 +13,7 @@ export const forms: Record<ConsoleAction['action'], { title: string; note: strin
   'delivery-access': { title: '重发领取凭据', note: '原领取凭据立即失效。新凭据仅交给已核实的购买人。', fields: [reason] },
   'revoke-delivery-access': { title: '撤销领取凭据', note: '只撤销订单领取权限，不撤销软件授权。', fields: [reason] },
   reveal: { title: '查看完整激活码', note: '此次查看将记录操作人和原因。', fields: [reason] },
+  'set-expiry': { title: '调整到期时间', note: '仅修改当前激活码，可延长或缩短期限，不改变订单金额和更新权益。下次联网验证生效；已运行会话和已签发凭证不会立即停止。永久码设定日期后变为期限授权。', fields: [{ key: 'useUntil', label: '新的到期时间（北京时间）', type: 'datetime-local' }, reason] },
   revoke: { title: '撤销授权', note: '将阻止新的激活和启动验证。已运行会话不会立即停止，此操作不会退款。', fields: [reason] },
   migrate: { title: '办理换机', note: '必须先撤销，等待最后凭证到期及五分钟容差。成功后旧码失效，新码尚未绑定。', fields: [reason] },
   grant: { title: '签发特殊授权', note: '仅负责人可签发；一码一机，有明确截止时间，不计入收款台账。', fields: [...customer, { key: 'purpose', label: '授权用途', type: 'select', options: [['test', '内测'], ['gift', '赠送']] }, reason] },

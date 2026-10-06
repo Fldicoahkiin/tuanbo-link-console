@@ -19,6 +19,7 @@ export const actionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('delivery-access'), id, reason: reasonSchema }),
   z.object({ action: z.literal('revoke-delivery-access'), id, reason: reasonSchema }),
   z.object({ action: z.literal('reveal'), id, reason: reasonSchema }),
+  z.object({ action: z.literal('set-expiry'), id, useUntil: date, reason: reasonSchema }),
   z.object({ action: z.literal('revoke'), id, reason: reasonSchema }),
   z.object({ action: z.literal('migrate'), id, reason: reasonSchema }),
   z.object({ action: z.literal('grant'), customer: text, customerType: z.enum(['personal', 'company']), quantity: z.number().int().min(1).max(100), useUntil: date, purpose: z.enum(['test', 'gift']), reason: reasonSchema }),
@@ -46,8 +47,8 @@ export type ConsoleResult = z.infer<typeof resultSchema>;
 export const permissions: Record<ConsoleAction['action'], readonly ConsoleRole[]> = {
   'create-order': ['owner', 'operations'], fulfill: ['owner', 'finance'], reconcile: ['owner', 'operations'],
   'retry-delivery': ['owner', 'operations'], 'delivery-access': ['owner', 'operations'], 'revoke-delivery-access': ['owner', 'operations'],
-  reveal: ['owner', 'operations'], revoke: ['owner', 'operations'], migrate: ['owner', 'operations'], grant: ['owner'],
+  'set-expiry': ['owner'], reveal: ['owner', 'operations'], revoke: ['owner', 'operations'], migrate: ['owner', 'operations'], grant: ['owner'],
   'create-user': ['owner'], 'update-user': ['owner'], 'reset-user': ['owner'],
   'create-ticket': ['owner', 'operations', 'finance'], 'update-ticket': ['owner', 'operations', 'finance'], refund: ['owner', 'finance'], invoice: ['owner', 'finance']
 };
-export const sensitiveActions = new Set<ConsoleAction['action']>(['fulfill', 'reveal', 'revoke', 'migrate', 'grant', 'create-user', 'update-user', 'reset-user', 'delivery-access']);
+export const sensitiveActions = new Set<ConsoleAction['action']>(['set-expiry', 'fulfill', 'reveal', 'revoke', 'migrate', 'grant', 'create-user', 'update-user', 'reset-user', 'delivery-access']);

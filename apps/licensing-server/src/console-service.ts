@@ -83,9 +83,18 @@ export class ConsoleService {
     const receipts = this.db.prepare("SELECT COALESCE(SUM(CASE WHEN source='manual' THEN amount_fen ELSE 0 END),0) AS manualFen,COALESCE(SUM(CASE WHEN source!='manual' THEN amount_fen ELSE 0 END),0) AS onlineFen FROM payment_receipts").get();
     const refunds = this.db.prepare('SELECT COALESCE(SUM(amount_fen),0) AS refundFen FROM console_refunds').get();
     const tickets = this.db.prepare("SELECT COUNT(*) AS openTickets FROM console_tickets WHERE state!='closed'").get();
-    const expiring = this.db.prepare(`SELECT COUNT(*) AS expiring FROM licenses l JOIN orders o ON o.id=l.order_id WHERE l.revoked=0 AND COALESCE((SELECT MAX(use_until) FROM license_renewals WHERE license_id=l.id),json_extract(o.body,'$.useUntil'))>? AND COALESCE((SELECT MAX(use_until) FROM license_renewals WHERE license_id=l.id),json_extract(o.body,'$.useUntil'))<=?`).get(new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString());
+    const expiring = this.db.prepare(`SELECT COUNT(*) AS expiring FROM licenses l JOIN orders o ON o.id=l.order_id WHERE l.revoked=0 AND COALESCE((SELECT use_until FROM license_term_overrides WHERE license_id=l.id),(SELECT MAX(use_until) FROM license_renewals WHERE license_id=l.id),json_extract(o.body,'$.useUntil'))>? AND COALESCE((SELECT use_until FROM license_term_overrides WHERE license_id=l.id),(SELECT MAX(use_until) FROM license_renewals WHERE license_id=l.id),json_extract(o.body,'$.useUntil'))<=?`).get(new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString());
     const health = this.db.prepare('SELECT name,state,checked_at AS checkedAt,detail FROM console_health ORDER BY name').all().map(row => rowSchema.parse(row));
-    return detailSchema.parse({ item: { ...counts, ...receipts, ...refunds, ...tickets, ...expiring, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '未知：尚无成功备份回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '未知：尚无恢复任务回执' }, related: health, history: [] });
+    const customers = this.db.prepare("SELECT COUNT(*) AS customerCount FROM (SELECT DISTINCT json_extract(body,'$.customer') COLLATE NOCASE,json_extract(body,'$.customerType') FROM orders WHERE state='fulfilled')").get();
+    const bindings = this.db.prepare('SELECT COUNT(*) AS boundLicenseCount FROM licenses WHERE machine IS NOT NULL AND revoked=0').get();
+    const today = new Date(this.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const days = Array.from({ length: 30 }, (_, index) => new Date(Date.parse(`${today}T00:00:00Z`) - (29 - index) * 86400000).toISOString().slice(0, 10));
+    const start = new Date(Date.parse(`${days[0]}T00:00:00+08:00`)).toISOString();
+    const end = new Date(Date.parse(`${today}T00:00:00+08:00`) + 86400000).toISOString();
+    const income = this.db.prepare("SELECT date(received_at,'+8 hours') AS day,SUM(amount_fen) AS amount FROM payment_receipts WHERE received_at>=? AND received_at<? GROUP BY day").all(start, end);
+    const refunded = this.db.prepare("SELECT date(handled_at,'+8 hours') AS day,SUM(amount_fen) AS amount FROM console_refunds WHERE handled_at>=? AND handled_at<? GROUP BY day").all(start, end);
+    const trend = days.map(day => ({ category: 'cashflow', day, incomeFen: Number(income.find(row => row.day === day)?.amount ?? 0), refundFen: Number(refunded.find(row => row.day === day)?.amount ?? 0) }));
+    return detailSchema.parse({ item: { ...counts, ...receipts, ...refunds, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '未知：尚无成功备份回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '未知：尚无恢复任务回执' }, related: [...health, ...trend], history: [] });
   }
   private authorize(input: ConsoleAction, session: ConsoleSession): void {
     if (!permissions[input.action].includes(session.user.role)) throw new ServiceError(403, 'FORBIDDEN', '当前角色不能执行此操作');
@@ -148,6 +157,7 @@ export class ConsoleService {
       case 'delivery-access': { const result = this.service.issueDeliveryAccess(input.id, { reason: input.reason }); return { id: input.id, message: '新的领取凭据已签发，旧凭据失效', secret: result.token, expiresAt: result.expiresAt }; }
       case 'revoke-delivery-access': this.service.revokeDeliveryAccess(input.id, { reason: input.reason }); return success(input.id, '领取凭据已撤销');
       case 'reveal': return { id: input.id, message: '请仅向已核实的授权持有人交付', secret: this.service.consoleReveal(input.id) };
+      case 'set-expiry': { const before = this.service.consoleLicense(input.id).useUntil; this.service.setLicenseExpiry(input.id, input.useUntil, input.reason); this.auth.audit(actor, 'license.expiry-adjusted', input.id, `原截止：${before ?? '永久'}；新截止：${input.useUntil}；${input.reason}`, 'success', operationId); return success(input.id, '到期时间已更新；下次联网验证生效，已签发凭证不会立即失效'); }
       case 'revoke': this.service.revoke(input.id, { reason: input.reason }); return success(input.id, '授权已撤销；已经开始的会话不会立即停止');
       case 'migrate': { const result = this.service.migrate(input.id, { reason: input.reason }); return { id: input.id, message: '换机完成，旧码失效，新码尚未绑定', secret: result.code }; }
       case 'grant': {
