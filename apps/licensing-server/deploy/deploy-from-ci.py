@@ -31,12 +31,15 @@ def main():
         raise RuntimeError('CI checkout does not match requested revision')
     subprocess.run(['git', 'diff', '--exit-code', 'HEAD'], check=True, capture_output=True, timeout=10)
     files = {'dist/index.js': (HERE.parent / 'dist/index.js').read_bytes()}
+    files['dist/console-bootstrap.js'] = (HERE.parent / 'dist/console-bootstrap.js').read_bytes()
+    files.update({'console/' + name: (HERE.parent / 'dist/console' / name).read_bytes()
+                  for name in ['index.html', 'console.js', 'console.css', 'manifest.json']})
     files.update({'web/' + name: (HERE.parent / 'dist/web' / name).read_bytes() for name in STATIC})
     manifest = {'revision': revision, 'repository': os.environ['GITHUB_REPOSITORY'],
                 'runId': int(os.environ['GITHUB_RUN_ID']), 'attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
                 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
                 'tools': {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
-                          for name in ['activate-release.py', 'publish-website.py', 'receive-release.py']}}
+                          for name in ['activate-release.py', 'publish-website.py', 'publish-console.py', 'receive-release.py']}}
     files['manifest.json'] = json.dumps(manifest).encode()
     data = io.BytesIO()
     with tarfile.open(fileobj=data, mode='w') as archive:

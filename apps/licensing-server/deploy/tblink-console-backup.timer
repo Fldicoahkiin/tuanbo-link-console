@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily licensing backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 Asia/Shanghai
+Persistent=true
+Unit=tblink-console-backup.service
+
+[Install]
+WantedBy=timers.target

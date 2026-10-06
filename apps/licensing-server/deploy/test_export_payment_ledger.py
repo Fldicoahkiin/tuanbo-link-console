@@ -75,6 +75,13 @@ class PaymentLedgerTest(unittest.TestCase):
         self.assertEqual((self.output / 'receipts.jsonl').read_text(), '')
         self.assertTrue(json.loads((self.output / 'summary.json').read_text())['complete'])
 
+    def test_zero_amount_special_grant_is_not_a_legacy_payment_gap(self):
+        self.db.execute('INSERT INTO orders VALUES (?,?,?,?,?)', ('special', 'special-ref', '{"amountFen":0,"customer":"gift"}', 'fulfilled', None))
+        self.db.commit()
+        summary = self.export()
+        self.assertEqual(summary['receipt_count'], 0)
+        self.assertEqual(summary['fulfilled_orders_without_receipt_all_time'], 0)
+
     def test_existing_bundle_and_symlink_are_not_overwritten(self):
         self.export()
         original = (self.output / 'summary.json').read_bytes()

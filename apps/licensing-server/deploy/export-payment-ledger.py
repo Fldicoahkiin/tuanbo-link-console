@@ -40,7 +40,7 @@ def export_ledger(database, output, start, before, timeout=30):
         db.set_progress_handler(lambda: int(clock.monotonic() >= deadline), 1000)
         db.execute('BEGIN')
         # This first read pins one snapshot, including legacy-coverage diagnostics.
-        legacy_count = db.execute("SELECT count(*) FROM orders o WHERE o.state = 'fulfilled' AND NOT EXISTS (SELECT 1 FROM payment_receipts p WHERE p.order_id = o.id)").fetchone()[0]
+        legacy_count = db.execute("SELECT count(*) FROM orders o WHERE o.state = 'fulfilled' AND json_extract(o.body, '$.amountFen') IS NOT 0 AND NOT EXISTS (SELECT 1 FROM payment_receipts p WHERE p.order_id = o.id)").fetchone()[0]
         rows = db.execute('''SELECT p.order_id, p.payment_reference, p.amount_fen, p.source,
                              p.received_at, o.state
                              FROM payment_receipts p LEFT JOIN orders o ON o.id = p.order_id

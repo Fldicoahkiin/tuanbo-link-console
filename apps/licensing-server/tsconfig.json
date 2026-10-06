@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "types": ["node"] },
-  "include": ["src/**/*.ts", "web/**/*.ts"]
+  "compilerOptions": { "types": ["node"], "jsx": "react-jsx", "esModuleInterop": true, "lib": ["ES2022", "DOM", "DOM.Iterable", "DOM.AsyncIterable"] },
+  "include": ["src/**/*.ts", "web/**/*.ts", "console/**/*.ts", "console/**/*.tsx"]
 }

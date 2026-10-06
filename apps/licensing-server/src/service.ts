@@ -3,11 +3,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import { licenseActivationSchema, licenseClaimsSchema } from '../../../packages/schema/src/license';
 import { purchaseOfferSchema, purchaseRequestSchema, wechatCodeUrlSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
+import { ConsoleService } from './console-service';
 
 const orderSchema = z.object({
   reference: z.string().trim().min(1).max(100), customer: z.string().trim().min(1).max(160),
   customerType: z.enum(['personal', 'company']), quantity: z.number().int().min(1).max(100),
-  kind: z.enum(['perpetual', 'subscription']), amountFen: z.number().int().min(1).max(100_000_000),
+  kind: z.enum(['perpetual', 'subscription']), amountFen: z.number().int().min(0).max(100_000_000),
   useUntil: z.string().datetime().nullable(), updatesUntil: z.string().datetime()
 }).strict().refine(value => (value.kind === 'perpetual') === (value.useUntil === null), '买断不设使用期限，订阅必须填写期限');
 const paymentSchema = z.object({ paymentReference: z.string().trim().min(1).max(100), amountFen: z.number().int().positive() }).strict();
@@ -25,6 +26,7 @@ export class ServiceError extends Error {
 export class LicensingService {
   private readonly db: DatabaseSync;
   private readonly signingKey: KeyObject;
+  private transactionDepth = 0;
   constructor(databasePath: string, privateKey: string, private readonly kid: string, private readonly dataKey: Buffer, private readonly now: () => number = Date.now) {
     if (dataKey.length !== 32) throw new Error('数据加密密钥必须为 32 字节');
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(kid)) throw new Error('签名 keyId 无效');
@@ -39,15 +41,22 @@ export class LicensingService {
       CREATE TABLE IF NOT EXISTS wechat_payment_links (order_id TEXT PRIMARY KEY REFERENCES orders(id), app_id TEXT NOT NULL, seller_id TEXT NOT NULL, expires_at INTEGER NOT NULL, code_url TEXT);
       CREATE TABLE IF NOT EXISTS purchase_requests (token_hash TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE REFERENCES orders(id), request_body TEXT NOT NULL, offer_body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS license_renewals (order_id TEXT PRIMARY KEY REFERENCES orders(id), license_id TEXT NOT NULL REFERENCES licenses(id), use_until TEXT, updates_until TEXT);
+      CREATE TABLE IF NOT EXISTS license_term_overrides (license_id TEXT PRIMARY KEY REFERENCES licenses(id), use_until TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS license_renewals_license ON license_renewals(license_id);
       CREATE TABLE IF NOT EXISTS payment_receipts (order_id TEXT PRIMARY KEY REFERENCES orders(id), payment_reference TEXT NOT NULL UNIQUE, amount_fen INTEGER NOT NULL, source TEXT NOT NULL, app_id TEXT, seller_id TEXT, received_at TEXT NOT NULL, last_error TEXT);
       CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, at TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL);`);
   }
   close(): void { this.db.close(); }
+  console(key: Buffer): ConsoleService { return new ConsoleService(this.db, this, key, this.now); }
+  consoleTransaction<T>(work: () => T): T { return this.transaction(work); }
   private transaction<T>(work: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
-    try { const value = work(); this.db.exec('COMMIT'); return value; }
-    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    const nested = this.transactionDepth > 0;
+    const savepoint = `operation_${randomBytes(8).toString('hex')}`;
+    this.db.exec(nested ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+    this.transactionDepth++;
+    try { const value = work(); this.db.exec(nested ? `RELEASE ${savepoint}` : 'COMMIT'); return value; }
+    catch (error) { this.db.exec(nested ? `ROLLBACK TO ${savepoint}` : 'ROLLBACK'); if (nested) this.db.exec(`RELEASE ${savepoint}`); throw error; }
+    finally { this.transactionDepth--; }
   }
   private audit(action: string, target: string, detail = ''): void {
     this.db.prepare('INSERT INTO audit VALUES (?, ?, ?, ?, ?)').run(randomUUID(), new Date(this.now()).toISOString(), action, target, detail);
@@ -72,6 +81,7 @@ export class LicensingService {
   }
   createOrder(input: unknown): { id: string; state: 'pending' | 'fulfilled' } {
     const order = orderSchema.parse(input);
+    if (order.amountFen < 1) throw new ServiceError(400, 'INVALID_AMOUNT', '销售订单金额必须大于零');
     if (Date.parse(order.updatesUntil) <= this.now() || order.useUntil && Date.parse(order.useUntil) <= this.now()) throw new ServiceError(400, 'INVALID_TERM', '订单期限必须晚于当前时间');
     return this.transaction(() => {
       const prior = this.db.prepare('SELECT id, body, state FROM orders WHERE reference = ?').get(order.reference);
@@ -185,7 +195,8 @@ export class LicensingService {
     const renewed = z.object({ use_until: z.string().nullable(), updates_until: z.string().nullable() }).parse(
       this.db.prepare('SELECT MAX(use_until) AS use_until, MAX(updates_until) AS updates_until FROM license_renewals WHERE license_id = ?').get(license.id));
     const later = (current: string, renewal: string | null): string => renewal && Date.parse(renewal) > Date.parse(current) ? renewal : current;
-    return { ...original, useUntil: original.useUntil ? later(original.useUntil, renewed.use_until) : null,
+    const override = this.db.prepare('SELECT use_until FROM license_term_overrides WHERE license_id=?').get(license.id);
+    return { ...original, kind: override ? 'subscription' as const : original.kind, useUntil: override ? z.string().parse(override.use_until) : original.useUntil ? later(original.useUntil, renewed.use_until) : null,
       updatesUntil: later(original.updatesUntil, renewed.updates_until) };
   }
   prepareAlipayPayment(id: string, appId: string, sellerId: string) {
@@ -281,6 +292,7 @@ export class LicensingService {
   }
   private validatePayment(id: string, payment: z.infer<typeof paymentSchema>, source: PaymentSource, paymentIdentity?: { appId: string; sellerId: string }) {
     const order = this.order(id);
+    if (order.details.amountFen === 0) throw new ServiceError(409, 'SPECIAL_GRANT', '特殊授权不能登记收款');
     const channel = this.paymentChannel(id);
     if (channel && channel !== source) throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '已生成付款入口的订单不能更换支付渠道，也不能改成人工核款');
     if (source === 'wechat') this.wechatQueryOrder(id, paymentIdentity?.appId ?? '', paymentIdentity?.sellerId ?? '');
@@ -318,6 +330,7 @@ export class LicensingService {
     this.db.prepare("UPDATE orders SET state = 'fulfilled', payment_reference = ? WHERE id = ?").run(payment.paymentReference, id);
     if (renewalLicenseId) {
       this.db.prepare('UPDATE license_renewals SET use_until = ?, updates_until = ? WHERE order_id = ?').run(order.details.useUntil, order.details.updatesUntil, id);
+      this.db.prepare('UPDATE license_term_overrides SET use_until=? WHERE license_id=?').run(order.details.useUntil, renewalLicenseId);
       this.audit('license.renewed', renewalLicenseId, id);
     } else for (let index = 0; index < order.details.quantity; index += 1) {
       const code = `TBA-${randomBytes(16).toString('hex').toUpperCase()}`;
@@ -413,6 +426,43 @@ export class LicensingService {
       this.db.prepare('UPDATE licenses SET revoked = 1 WHERE id = ?').run(id);
       this.audit('license.revoked', id, reason);
       return { revoked: true as const };
+    });
+  }
+  consoleLicense(id: string) {
+    const row = this.db.prepare('SELECT * FROM licenses WHERE id=?').get(id);
+    if (!row) throw new ServiceError(404, 'LICENSE_NOT_FOUND', '授权不存在');
+    const license = licenseRowSchema.parse(row); const terms = this.licenseTerms(license);
+    const last = this.db.prepare("SELECT MAX(at) AS at FROM audit WHERE target=? AND action IN ('license.activated','license.refreshed')").get(id);
+    return { id, orderId: license.order_id, customer: terms.customer, kind: terms.kind, useUntil: terms.useUntil, updatesUntil: terms.updatesUntil,
+      machineCode: license.machine, bound: Boolean(license.machine), revoked: Boolean(license.revoked), leaseUntil: license.lease_until ? new Date(license.lease_until).toISOString() : null,
+      migrationAfter: license.lease_until ? new Date(license.lease_until + 300000).toISOString() : null, lastIssuedAt: last?.at ? z.string().parse(last.at) : null };
+  }
+  setLicenseExpiry(id: string, useUntil: string, reason: string): void {
+    const until = z.string().datetime().parse(useUntil);
+    if (Date.parse(until) <= this.now()) throw new ServiceError(400, 'INVALID_TERM', '截止时间必须晚于当前时间；立即停用请使用撤销授权');
+    this.transaction(() => {
+      const prior = this.consoleLicense(id);
+      if (prior.revoked) throw new ServiceError(409, 'LICENSE_REVOKED', '已撤销授权不能修改期限');
+      this.db.prepare('INSERT INTO license_term_overrides VALUES(?,?) ON CONFLICT(license_id) DO UPDATE SET use_until=excluded.use_until').run(id, until);
+      this.audit('license.expiry-adjusted', id, JSON.stringify({ before: prior.useUntil, after: until, reason }));
+    });
+  }
+  consoleReveal(id: string): string {
+    const row = this.db.prepare('SELECT code_cipher FROM licenses WHERE id=?').get(id);
+    if (!row) throw new ServiceError(404, 'LICENSE_NOT_FOUND', '授权不存在');
+    return this.decrypt(z.string().parse(row.code_cipher));
+  }
+  createGrant(input: { customer: string; customerType: 'personal' | 'company'; quantity: number; useUntil: string }, reference: string): { id: string } {
+    const details = orderSchema.parse({ ...input, reference, kind: 'subscription', amountFen: 0, updatesUntil: input.useUntil });
+    if (Date.parse(details.useUntil!) <= this.now()) throw new ServiceError(400, 'INVALID_TERM', '截止时间必须晚于当前时间');
+    return this.transaction(() => {
+      const id = randomUUID();
+      this.db.prepare("INSERT INTO orders VALUES(?,?,?,'fulfilled',NULL)").run(id, reference, JSON.stringify(details));
+      for (let index = 0; index < details.quantity; index++) {
+        const code = `TBA-${randomBytes(16).toString('hex').toUpperCase()}`;
+        this.db.prepare('INSERT INTO licenses(id,order_id,code_hash,code_cipher) VALUES(?,?,?,?)').run(randomUUID(), id, this.hash(code), this.encrypt(code));
+      }
+      this.audit('license.special-grant', id); return { id };
     });
   }
   migrate(id: string, input: unknown): { code: string } {

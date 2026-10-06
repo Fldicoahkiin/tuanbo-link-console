@@ -1,10 +1,11 @@
 import { build } from 'esbuild';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 const root = new URL('./', import.meta.url);
 const target = new URL('dist/web/', root);
 await mkdir(target, { recursive: true });
-await build({ entryPoints: [new URL('web/main.ts', root).pathname], outfile: new URL('purchase.js', target).pathname,
+await build({ entryPoints: [fileURLToPath(new URL('web/main.ts', root))], outfile: fileURLToPath(new URL('purchase.js', target)),
   bundle: true, platform: 'browser', target: 'es2022', format: 'esm', minify: true });
 const email = process.env.TBLINK_CONTACT_EMAIL ?? 'info@jinhefilm.com';
 if (!/^[a-z0-9][a-z0-9._+-]*@jinhefilm\.com$/.test(email) || email.startsWith('admin@')) throw new Error('联系邮箱须为非 admin 的 jinhefilm.com 邮箱');

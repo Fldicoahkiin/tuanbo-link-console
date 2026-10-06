@@ -18,17 +18,22 @@ import uuid
 ROOT = Path('/var/lib/tblink-deploy')
 POLICY = Path('/etc/tblink-deploy/policy.json')
 NGINX = Path('/etc/nginx/sites-available/tblink-licensing.conf')
+CONSOLE_NGINX = Path('/etc/nginx/sites-available/tblink-console.conf')
 BUNDLE = Path('/opt/tblink-licensing/dist/index.js')
 ENVIRONMENT = Path('/etc/tblink-licensing/service.env')
 WEBSITE = Path('/srv/tblink-purchase')
+CONSOLE = Path('/srv/tblink-console')
+CONSOLE_MAINTENANCE = Path('/srv/tblink-console-maintenance')
 TOOLS = {
     'activate-release.py': Path('/opt/tblink-licensing/activate-release.py'),
     'publish-website.py': Path('/opt/tblink-licensing/publish-website.py'),
+    'publish-console.py': Path('/opt/tblink-licensing/publish-console.py'),
     'receive-release.py': Path('/usr/local/libexec/tblink-receive-release.py'),
 }
 STATIC = {'index.html', 'purchase.js', 'purchase.css', 'assets/studio.webp',
           'assets/display.woff2', 'assets/FONT-LICENSE.txt'}
-ARTIFACTS = {'dist/index.js'} | {'web/' + name for name in STATIC}
+CONSOLE_FILES = {'index.html', 'console.js', 'console.css', 'manifest.json'}
+ARTIFACTS = {'dist/index.js', 'dist/console-bootstrap.js'} | {'web/' + name for name in STATIC} | {'console/' + name for name in CONSOLE_FILES}
 MAX_ARCHIVE = 16 * 1024 * 1024
 
 
@@ -66,8 +71,8 @@ def decode_archive(data):
     return manifest, files
 
 
-def verify_policy(manifest, policy, tool_digests, nginx_digest, previous):
-    if tool_digests != manifest['tools'] or policy['nginxSha256'] != nginx_digest:
+def verify_policy(manifest, policy, tool_digests, nginx_digest, console_nginx_digest, previous):
+    if tool_digests != manifest['tools'] or policy['nginxSha256'] != nginx_digest or policy['consoleNginxSha256'] != console_nginx_digest:
         raise RuntimeError('Deployment tools or proxy require an operator-reviewed update')
     if previous and (manifest['runId'], manifest['attempt']) <= (previous['runId'], previous['attempt']):
         raise RuntimeError('Deployment run already completed or superseded')
@@ -101,27 +106,49 @@ def activate_job(job):
         previous_path = ROOT / 'last-success.json'
         previous = json.loads(previous_path.read_text()) if previous_path.exists() else None
         policy = json.loads(POLICY.read_text())
-        verify_policy(manifest, policy, {name: digest(path) for name, path in TOOLS.items()}, digest(NGINX), previous)
+        verify_policy(manifest, policy, {name: digest(path) for name, path in TOOLS.items()}, digest(NGINX), digest(CONSOLE_NGINX), previous)
         current_proxy = NGINX.read_bytes()
         protected_env = digest(ENVIRONMENT)
         common = {'revision.txt': manifest['revision'].encode(),
                   'nginx.previous.conf': current_proxy, 'nginx.next.conf': current_proxy}
         runtime = job / 'runtime.tar'
         website = job / 'website.tar'
+        console_archive = job / 'console.tar'
         make_archive(runtime, {**common, 'dist/index.js': files['dist/index.js']})
         make_archive(website, {**common, **{name: files['web/' + name] for name in STATIC}})
+        make_archive(console_archive, {**{name: files['console/' + name] for name in CONSOLE_FILES}, 'console-bootstrap.js': files['dist/console-bootstrap.js']})
         # The worker is owned by systemd, so losing SSH cannot interrupt activation.
+        # Prevent browser writes during the runtime's snapshot/migration verification.
+        if CONSOLE_MAINTENANCE.exists():
+            raise RuntimeError('Console maintenance is already active; investigate the previous release')
+        CONSOLE_MAINTENANCE.write_text(manifest['revision'])
+        CONSOLE_MAINTENANCE.chmod(0o644)
+        paused_timers = []
+        for unit in ['tblink-console-backup', 'tblink-console-health']:
+            loaded = subprocess.run(['systemctl', 'show', unit + '.service', '--property=LoadState', '--value'], capture_output=True, text=True, timeout=10)
+            if loaded.returncode == 0 and loaded.stdout.strip() == 'loaded':
+                active = subprocess.run(['systemctl', 'is-active', '--quiet', unit + '.timer'], timeout=10)
+                if active.returncode == 0:
+                    paused_timers.append(unit + '.timer')
+                subprocess.run(['systemctl', 'stop', unit + '.timer', unit + '.service'], check=True, capture_output=True, timeout=60)
+        write_json(job / 'paused-console-timers.json', paused_timers)
         runtime_result = execute('activate-release.py', runtime, digest(runtime), digest(BUNDLE), digest(NGINX), protected_env)
         write_json(job / 'runtime-result.json', runtime_result)
         website_result = execute('publish-website.py', website, digest(website), digest(NGINX), digest(BUNDLE), protected_env)
-        if digest(ENVIRONMENT) != protected_env or digest(NGINX) != policy['nginxSha256']:
+        console_result = execute('publish-console.py', console_archive, digest(console_archive))
+        if digest(ENVIRONMENT) != protected_env or digest(NGINX) != policy['nginxSha256'] or digest(CONSOLE_NGINX) != policy['consoleNginxSha256']:
             raise RuntimeError('Protected production configuration changed')
         if digest(BUNDLE) != manifest['files']['dist/index.js'] or any(
-                digest(WEBSITE / name) != manifest['files']['web/' + name] for name in STATIC):
+                digest(WEBSITE / name) != manifest['files']['web/' + name] for name in STATIC) or any(
+                digest(CONSOLE / name) != manifest['files']['console/' + name] for name in CONSOLE_FILES):
             raise RuntimeError('Installed files differ from CI artifacts')
         result = {'revision': manifest['revision'], 'runId': manifest['runId'], 'attempt': manifest['attempt'],
                   'runtimeBackup': runtime_result['backup'], 'websiteBackup': website_result['backup'],
+                  'consoleBackup': console_result['backup'],
                   'files': manifest['files'], 'status': 'success'}
+        for timer in paused_timers:
+            subprocess.run(['systemctl', 'start', timer], check=True, capture_output=True, timeout=30)
+        CONSOLE_MAINTENANCE.unlink()
         write_json(job / 'result.json', result)
         write_json(previous_path, result)
         return result

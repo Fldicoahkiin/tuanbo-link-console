@@ -6,6 +6,7 @@ import type { AlipayCheckout, AlipayNotifications } from './alipay';
 import { purchaseCatalogSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
 import type { WechatPay } from './wechat';
 import { clientAddress } from './client-address';
+import { dispatchConsole, type ConsoleHttp } from './console-http';
 
 async function readBytes(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
@@ -24,7 +25,7 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   catch { throw new ServiceError(400, 'INVALID_JSON', 'JSON 格式无效'); }
 }
 
-export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout, purchaseCatalog?: PurchaseCatalog, trustLoopbackProxy = false, wechat?: WechatPay, wechatCheckoutEnabled = false) {
+export function createLicensingServer(service: LicensingService, adminToken: string, alipay?: AlipayNotifications, checkout?: AlipayCheckout, purchaseCatalog?: PurchaseCatalog, trustLoopbackProxy = false, wechat?: WechatPay, wechatCheckoutEnabled = false, consoleOptions?: ConsoleHttp) {
   if (adminToken.length < 32) throw new Error('后台访问令牌至少 32 位');
   if (checkout && !alipay) throw new Error('启用支付宝付款入口必须同时配置通知验签');
   if (wechatCheckoutEnabled && !wechat) throw new Error('启用微信付款必须同时配置签名、验签和解密凭据');
@@ -60,6 +61,19 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       const rate = rates.get(address) ?? { count: 0, reset: now + 60000 };
       if (rates.size >= 10000 && !rates.has(address) || ++rate.count > (group === 'purchase' || group === 'payment-query' ? 10 : 120)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
       rates.set(address, rate);
+      if (request.url?.startsWith('/console-api/')) {
+        if (!consoleOptions) throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
+        return dispatchConsole(consoleOptions, request, response, requestId, address, () => readBody(request), async id => {
+          if (service.paymentChannel(id) === 'wechat') {
+            if (!wechat) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '微信查单尚未启用');
+            service.wechatQueryOrder(id, wechat.appId, wechat.sellerId);
+            return service.reconcileWechat(id, await wechat.query(id));
+          }
+          if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用');
+          service.alipayQueryOrder(id, checkout.appId, checkout.sellerId);
+          return service.reconcileAlipay(id, await checkout.query(id, alipay));
+        });
+      }
       if (request.method === 'GET' && request.url === '/health') return { status: 'ok' };
       if (request.method === 'POST' && request.url === '/v1/activate') return service.activate(await readBody(request));
       if (request.method === 'GET' && request.url === '/v1/catalog') {
@@ -195,6 +209,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
     };
     void dispatch().then(result => {
+      if (response.writableEnded) return;
       if (result === 'success') { response.setHeader('Content-Type', 'text/plain; charset=utf-8'); response.end('success'); }
       else response.end(JSON.stringify(result));
     }).catch((error: unknown) => {
