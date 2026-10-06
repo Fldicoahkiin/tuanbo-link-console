@@ -43,6 +43,18 @@ import {
 const timestamp = () => '2026-08-26T00:00:00.000Z';
 
 describe('LinkProject Command', () => {
+  it('局部 Cue 修改仍拒绝其他节目的动作 ID、未知图层和超出帧率的时间', () => {
+    let project = createEmptyLinkProject('局部校验');
+    project = addRundownItemCommand({ ...rundownItem('a', 'A'), cues: [{ ...linkCue('a-cue', 'A Cue'), actions: [programAction('shared-action', 1)] }] }).execute(project);
+    project = addRundownItemCommand({ ...rundownItem('b', 'B'), cues: [linkCue('b-cue', 'B Cue')] }).execute(project);
+    const before = structuredClone(project);
+    const cue = project.rundown[1]!.cues[0]!;
+    expect(() => replaceCueCommand('b', { ...cue, actions: [programAction('shared-action', 2)] }).execute(project)).toThrow('ID 重复');
+    expect(() => replaceCueCommand('b', { ...cue, layerId: 'missing-layer' }).execute(project)).toThrow();
+    const fps24 = setProjectFrameRateCommand('24').execute(project);
+    expect(() => replaceCueCommand('b', { ...cue, timecode: { ...cue.timecode, frames: 29 } }).execute(fps24)).toThrow('帧号超出');
+    expect(project).toEqual(before);
+  });
   it('节目、Cue、动作的全部修改都返回经过校验的新工程', () => {
     const initial = createEmptyLinkProject('初始', new Date('2026-08-25T00:00:00.000Z'));
     const item = rundownItem('item-a', '节目 A');

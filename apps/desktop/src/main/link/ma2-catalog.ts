@@ -1,11 +1,11 @@
-import { ma2CatalogSchema, ma2ObjectDirectorySchema, type Ma2Catalog, type Ma2ReadProgressUpdate } from '@tb/schema';
+import { ma2CatalogSchema, ma2ObjectDirectorySchema, type Ma2Catalog, type Ma2CatalogRequest, type Ma2ReadProgressUpdate } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { inspectMa2SequenceXml, inspectMa2TimecodeXml, resolveMa2CueReference, type Ma2SequenceReport } from './ma2-timecode-xml';
 import { referencedMa2Sequences } from './ma2-timecode-xml';
 import { convertMa2TimecodeReferences } from './ma2-timecode-conversion';
 
 /** Read-only inventory. Failed objects remain visible; no writes or retry. */
-export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isPlaying: () => boolean, cueDirectory?: Ma2SequenceReport, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, options?: { targets?: readonly number[] | undefined; metadata?: (targets: readonly number[]) => Promise<Ma2SequenceReport>; metrics?: NonNullable<Ma2Catalog['metrics']> }): Promise<Ma2Catalog> {
+export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isPlaying: () => boolean, cueDirectory?: Ma2SequenceReport, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, options?: { targets?: readonly number[] | undefined; expectedSource?: Ma2CatalogRequest['expectedSource']; metadata?: (targets: readonly number[]) => Promise<Ma2SequenceReport>; metrics?: NonNullable<Ma2Catalog['metrics']>; checkpoint?: ((catalog: Ma2Catalog, entry?: Ma2Catalog['entries'][number]) => Promise<void>) | undefined }): Promise<Ma2Catalog> {
   const started = performance.now();
   const metrics = options?.metrics ?? { elapsedMs: 0, requests: 0, bytes: 0, phases: {} };
   const request: Ma2OnpcBridge['request'] = async (...args) => {
@@ -15,12 +15,17 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isP
   };
   if (signal?.aborted) throw new Error('扫描已取消');
   const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await request('LIST', 1)));
+  if (options?.expectedSource && Object.entries(options.expectedSource).some(([key, value]) => Reflect.get(directory, key) !== value)) throw new Error('Show 或控台会话已改变，保留旧缓存，请读取新目录');
+  const readAt = new Date().toISOString();
+  const checkpointCatalog = (): Ma2Catalog => ({ directory, readAt, entries: [], sourceUnverified: false, incomplete: '读取尚未完成' });
+  await options?.checkpoint?.(checkpointCatalog());
   if (signal?.aborted) throw new Error('扫描已取消');
   const objects = directory.entries.filter(entry => !options?.targets || options.targets.includes(entry.target));
   onProgress?.({ phase: 'timecodes', completed: 0, total: objects.length + 1, detail: '读取控台时间线' });
   const entries: Ma2Catalog['entries'] = [];
   let totalEvents = 0;
   let incomplete: string | undefined;
+  let sourceUnverified = false;
   for (const object of objects) {
     if (signal?.aborted || isPlaying()) { incomplete = '读取已停止，保留已读取对象，可继续处理未完成项'; break; }
     const entry: Ma2Catalog['entries'][number] = { ...object, eventCount: null, frameFormat: null, offset: null, slot: null, events: [], error: null, warnings: [] };
@@ -62,18 +67,20 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isP
       catch (error) { entry.conversionError = error instanceof Error ? error.message : String(error); }
     } catch (error) { entry.error = error instanceof Error ? error.message : String(error); }
     entries.push(entry);
-    onProgress?.({ phase: 'timecodes', completed: entries.length, total: objects.length + 1, detail: `已读取 Timecode ${object.target}` });
-    if (totalEvents > 100000) throw new Error('扫描事件超过十万，结果未提交');
+    await options?.checkpoint?.(checkpointCatalog(), entry);
+    onProgress?.({ phase: 'timecodes', completed: entries.length, total: objects.length + 1, detail: `已读取 Timecode ${object.target}`, ...(options?.checkpoint ? { checkpoint: { directory, readAt, entry } } : {}) });
+    if (totalEvents > 100000) { incomplete = '扫描事件超过十万，已保留完成条目与原始 XML，请缩小读取范围'; break; }
   }
   if (!incomplete && !signal?.aborted && !isPlaying()) {
     onProgress?.({ phase: 'timecodes', completed: entries.length, total: objects.length + 1, detail: '核对控台时间线目录' });
     try {
       const verified = ma2ObjectDirectorySchema.parse(JSON.parse(await request('LIST', 1)));
-      if (JSON.stringify(directory) !== JSON.stringify(verified)) incomplete = '控台 Show、插件或目录已变化；以下为读取时缓存，需重新核对来源';
-    } catch (error) { incomplete = `目录复核未完成：${error instanceof Error ? error.message : String(error)}`; }
+      if (JSON.stringify(directory) !== JSON.stringify(verified)) { sourceUnverified = true; incomplete = '控台 Show、插件或目录已变化；以下为读取时缓存，需重新核对来源'; }
+    } catch (error) { sourceUnverified = true; incomplete = `目录复核未完成：${error instanceof Error ? error.message : String(error)}`; }
   } else incomplete ??= '读取已取消，保留已读取对象';
   metrics.elapsedMs = performance.now() - started;
-  const result = ma2CatalogSchema.parse({ directory, readAt: new Date().toISOString(), entries, metrics, incomplete });
+  const result = ma2CatalogSchema.parse({ directory, readAt, entries, metrics, incomplete, sourceUnverified });
+  await options?.checkpoint?.(result);
   onProgress?.({ phase: 'timecodes', completed: incomplete ? entries.length : objects.length + 1, total: objects.length + 1, detail: incomplete ? '已保留部分读取结果' : '时间线目录已核对' });
   return result;
 }

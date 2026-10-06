@@ -7,7 +7,7 @@ import { obsPreviewSession } from '../view-models/obs-preview-session';
 
 let liveSession: Promise<void> = Promise.resolve();
 
-export const ObsLiveCanvas = memo(function ObsLiveCanvas(): JSX.Element {
+export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAspectChange }: { editable?: boolean; onAspectChange?: (ratio: number) => void }): JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [scene, setScene] = useState<ObsLiveScene | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,6 +20,7 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas(): JSX.Element {
   const [suspended, setSuspended] = useState(false);
   const [visible, setVisible] = useState(false);
   const previewFailed = useRef(false);
+  useEffect(() => { if (scene) onAspectChange?.(scene.width / scene.height); }, [scene, onAspectChange]);
   useEffect(() => {
     let active = true, received = false;
     const unsubscribe = desktop.onWindowVisibilityChanged((value) => { received = true; setVisible(value); });
@@ -101,7 +102,7 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas(): JSX.Element {
   return <div className="obs-live-container">
     <div className="obs-live-canvas" style={{ aspectRatio: scene ? `${scene.width} / ${scene.height}` : '16 / 9', width: `min(calc(100cqw - 40px), calc((100cqh - 40px) * ${scene ? scene.width / scene.height : 16 / 9}))` }}>
     <canvas ref={canvas} aria-label="OBS 实时画面" />
-    {scene && !error ? <ObsLiveSelection scene={scene} selected={selected} onSelect={setSelected} onEdit={edit} /> : null}
+    {editable && scene && !error ? <ObsLiveSelection scene={scene} selected={selected} onSelect={setSelected} onEdit={edit} /> : null}
 
     {error || repairing ? <div className="stage-error" role="alert">{repairing ? '正在检查 OBS 组件，请完成可能出现的 Windows 授权或 OBS 重启确认。' : error}<button disabled={repairing} onClick={() => { void repair(); }}>检查并修复组件</button><button disabled={repairing} onClick={() => { previewFailed.current = false; setSuspended(false); setRestart((value) => value + 1); }}>重新连接预览</button></div> : null}
     </div>

@@ -4,6 +4,7 @@ export function toUserErrorMessage(error: unknown): string {
   const raw = typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string'
     ? error.message : String(error);
   const text = raw.replace(/Error invoking remote method '[^']+':\s*/g, '').replace(/\b(?:Error|TypeError|RangeError|SyntaxError):\s*/g, '').trim();
+  if (/^音频解码或读取失败[:：]/.test(text)) return '无法读取或解码音频。请检查音频文件是否损坏、格式是否支持；修复或更换音频后重新播放。';
   if (/No source was found|No scene was found|specified scene does not exist/i.test(text)) return 'OBS 中找不到需要的场景或来源。请重新同步素材后再播放。';
   if (/Authentication failed|鉴权失败/i.test(text)) return 'OBS 拒绝了连接认证。请核对连接地址、端口和密码；若确认无误，请导出诊断信息以便定位。';
   if (/SystemRoot|spawn powershell|系统目录|系统命令组件/i.test(text)) return '系统命令组件暂不可用，无法检测外部程序。请重新打开联动台；若仍然失败，请导出诊断信息。';

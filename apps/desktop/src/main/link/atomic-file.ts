@@ -1,11 +1,13 @@
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, rename, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 export async function writeFileAtomically(filePath: string, content: string | Uint8Array): Promise<void> {
   const parentDirectory = dirname(filePath);
   await mkdir(parentDirectory, { recursive: true });
   const temporaryPath = join(parentDirectory, `.${crypto.randomUUID()}.tmp`);
-  await writeFile(temporaryPath, content, { flag: 'wx' });
+  const file = await open(temporaryPath, 'wx');
+  try { await file.writeFile(content); await file.sync(); }
+  finally { await file.close(); }
 
   try {
     await rename(temporaryPath, filePath);

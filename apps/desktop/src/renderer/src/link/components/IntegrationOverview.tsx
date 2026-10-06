@@ -35,17 +35,18 @@ export function IntegrationFooter({ midiPorts, inventory }: {
   inventory: LinkObsInventory | null;
 }): JSX.Element {
   return <details className="integration-diagnostics device-advanced">
-    <summary><span><SlidersHorizontal />MIDI 端口与 OBS 资源详情</span><small>{midiPorts.length} 个 MIDI 端口 · OBS {inventory ? '已读取' : '未连接'}</small><ChevronDown /></summary>
+    <summary><span><SlidersHorizontal />电脑检测到了哪些设备？</span><small>{midiPorts.length} 个 MIDI 端口 · OBS {inventory ? '已读取' : '尚未读取'}</small><ChevronDown /></summary>
     <div className="integration-resources">
       <section className="midi-inventory">
         <div className="panel-title"><span><Cable />Windows MIDI 端口</span><small>{midiPorts.length}</small></div>
-        <div className="chip-list">{midiPorts.length > 0 ? midiPorts.map((port) => <span className={port.state === 'connected' ? 'chip ok' : 'chip error'} key={`${port.direction}-${port.id}`}>{port.direction === 'input' ? 'IN' : 'OUT'} · {port.name}</span>) : <p className="inventory-empty">未检测到 MIDI 端口</p>}</div>
+        <p className="settings-note">这里只显示检测结果。选择播放设备或时间码端口，请到“音频与 MIDI”。</p>
+        <div className="chip-list">{midiPorts.length > 0 ? midiPorts.map((port) => <span className={port.state === 'connected' ? 'chip ok' : 'chip error'} key={`${port.direction}-${port.id}`}>{port.direction === 'input' ? '接收' : '发送'} · {port.name}</span>) : <p className="inventory-empty">未检测到 MIDI 端口，请检查设备是否接入。</p>}</div>
       </section>
       <section className="inventory-summary">
-        <div className="panel-title"><span><MonitorUp />OBS 库存</span><small>{inventory ? '5.x' : '未连接'}</small></div>
+        <div className="panel-title"><span><MonitorUp />从 OBS 读取的内容</span></div>
         {inventory
-          ? <div className="stat-strip"><span><strong>{inventory.scenes.length}</strong>场景</span><span><strong>{inventory.inputs.length}</strong>输入</span><span><strong>{Object.values(inventory.filters).flat().length}</strong>滤镜</span><span><strong>{inventory.transitions.length}</strong>转场</span></div>
-          : <p className="inventory-empty">无库存数据</p>}
+          ? <div className="stat-strip"><span><strong>{inventory.scenes.length}</strong>场景</span><span><strong>{inventory.inputs.length}</strong>来源</span><span><strong>{Object.values(inventory.filters).flat().length}</strong>滤镜</span><span><strong>{inventory.transitions.length}</strong>转场</span></div>
+          : <p className="inventory-empty">尚未读取，请先到“OBS Studio”连接，再重新检测。</p>}
       </section>
     </div>
   </details>;

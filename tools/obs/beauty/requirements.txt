@@ -1,0 +1,11 @@
+# Analysis engine dependencies, bundled by build-runtime.mjs.
+mediapipe==0.10.21
+opencv-contrib-python==4.11.0.86
+numpy==1.26.4
+jax==0.4.38
+jaxlib==0.4.38
+onnxruntime-directml==1.24.4
+sympy==1.14.0
+mpmath==1.3.0
+openvino==2024.6.0
+openvino-telemetry==2025.2.0

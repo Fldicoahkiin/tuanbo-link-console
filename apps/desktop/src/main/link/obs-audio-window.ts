@@ -3,6 +3,12 @@ function decodeWindowField(value: string): string {
   return value.replaceAll('#3A', ':').replaceAll('#22', '#');
 }
 
+/** Only for the owned process whose actual window class was verified at its
+ * startup handshake. OBS's enumerated property is still checked after creation. */
+export function encodeObsAudioWindow(executable: string, title: string, windowClass: string): string {
+  return [title, windowClass, executable].map(value => value.replaceAll('#', '#22').replaceAll(':', '#3A')).join(':');
+}
+
 export function selectObsAudioWindow(items: readonly { itemValue?: unknown; itemEnabled?: boolean }[], executable: string, title: string): string {
   const windows = items.filter(item => {
     if (item.itemEnabled === false || typeof item.itemValue !== 'string') return false;

@@ -22,6 +22,14 @@ export type LinkAppInfo = {
   availableDiskBytes: number;
 };
 
+/** Keep large project graphs out of Electron's synchronous contextBridge copy.
+ * The renderer facade decodes/validates these documents in its worker. */
+export type LinkDesktopBridgeApi = Omit<LinkDesktopApi, 'pickOpenProject' | 'openProject' | 'saveProject'> & {
+  pickProjectDocument(): Promise<{ version: 1; path: string; content: string } | null>;
+  openProjectDocument(path: string): Promise<{ version: 1; path: string; content: string }>;
+  saveProjectDocument(path: string | null, content: string): Promise<string | null>;
+};
+
 export type LinkUpdatePhase =
   | 'disabled'
   | 'notConfigured'
@@ -163,6 +171,17 @@ export type LinkLogEntryDto = {
 };
 
 export type LinkDesktopApi = {
+  prepareNativeObs(request: import('@tb/schema').NativeObsPrepare): Promise<import('@tb/schema').NativeObsStatus>;
+  preloadNativeObs(request: import('@tb/schema').NativeObsPreload): Promise<void>;
+  cancelNativeObsPreload(request: import('@tb/schema').NativeObsStop): Promise<void>;
+  stopNativeObs(request: import('@tb/schema').NativeObsStop): Promise<void>;
+  getNativeObsStatus(): Promise<import('@tb/schema').NativeObsStatus | null>;
+  onNativeObsStatus(listener: (status: import('@tb/schema').NativeObsStatus) => void): () => void;
+  getNativePlaybackDevices(): Promise<import('@tb/schema').NativePlaybackDevices>;
+  prepareNativePlayback(request: import('@tb/schema').NativePlayerPrepare): Promise<import('@tb/schema').NativePlayerStatus>;
+  controlNativePlayback(request: import('@tb/schema').NativePlayerControl): Promise<import('@tb/schema').NativePlayerStatus>;
+  getNativePlaybackStatus(): Promise<import('@tb/schema').NativePlayerStatus | null>;
+  onNativePlaybackStatus(listener: (status: import('@tb/schema').NativePlayerStatus) => void): () => void;
   recheckMidi(): Promise<void>;
   getLicenseStatus(): Promise<import('@tb/schema').LicenseStatus>;
   exportLicenseRequest(): Promise<boolean>;
@@ -236,6 +255,8 @@ export type LinkDesktopApi = {
   renderAudioSegments(payload: { projectPath: string; source: ReferenceAudio; segments: AudioSegment[]; tracks?: AudioTrack[] }): Promise<ReferenceAudio>;
   saveWaveformCache(payload: { projectPath: string; sha256: string; peaks: number[] }): Promise<void>;
   inspectProjectAssets(path: string, project: LinkProject): Promise<LinkProjectAssetInspection>;
+  inspectMediaAssets(payload: import('@tb/schema').LinkMediaInspectionPayload): Promise<LinkProjectAssetInspection['media']>;
+  ensureMediaThumbnailUrl(payload: { projectPath: string; relativePath: string; sha256: string; kind: LinkMediaKind }): Promise<string>;
   detectCurrentP1Project(): Promise<string>;
   pickP1Project(): Promise<string | null>;
   importP1Project(payload: { p1ProjectPath: string; linkProjectPath: string; progressId?: string }, onProgress?: (progress: import('@tb/schema').LinkP1ProjectImportProgress) => void): Promise<LinkP1ProjectImportResult>;
@@ -266,6 +287,15 @@ export type LinkDesktopApi = {
   prepareObsMediaScenes(projectPath: string, project: LinkProject, preciseSeeking: boolean): Promise<void>;
   readObsOutputStatus(): Promise<{ streaming: boolean; recording: boolean }>;
   readObsLiveScene(): Promise<ObsLiveScene>;
+  readObsBeauty(target: import('@tb/schema').BeautyTarget): Promise<import('@tb/schema').BeautyFilterState>;
+  applyObsBeauty(payload: import('@tb/schema').BeautyApply): Promise<import('@tb/schema').BeautyFilterState>;
+  installBeautyRuntime(): Promise<string>;
+  startBeautyRuntime(payload: import('@tb/schema').BeautyStart): Promise<import('@tb/schema').BeautyRuntimeState>;
+  stopBeautyRuntime(): Promise<void>;
+  readBeautyRuntime(): Promise<import('@tb/schema').BeautyRuntimeState>;
+  syncBeautyOutput(values: import('@tb/schema').BeautyApply['values']): Promise<import('@tb/schema').BeautyFilterState | null>;
+  readBeautyComparison(target: import('@tb/schema').BeautyTarget): Promise<import('@tb/schema').BeautyComparisonFrame>;
+  closeBeautyComparison(): Promise<void>;
   editObsLiveScene(edit: ObsLiveEdit): Promise<void>;
   onObsLiveChanged(listener: () => void): () => void;
   getWindowVisible(): Promise<boolean>;
@@ -290,8 +320,11 @@ export type LinkDesktopApi = {
     cueId?: string;
     device?: string;
     result?: LinkLogEntryDto['result'];
+    limit?: number;
   }): Promise<LinkLogEntryDto[]>;
   exportDiagnosticPackage(context: Readonly<Record<string, unknown>>): Promise<string | null>;
+  exportLogs(): Promise<string | null>;
+  openLogsFolder(): Promise<void>;
   onObsStatus(listener: (snapshot: LinkObsSnapshot) => void): () => void;
   onObsInventoryChanged(listener: () => void): () => void;
   onProcessStatus(listener: (snapshot: LinkProcessSnapshot) => void): () => void;

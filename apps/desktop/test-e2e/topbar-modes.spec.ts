@@ -1,7 +1,9 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { join } from 'node:path';
+import { writeFile } from 'node:fs/promises';
+import { createEmptyLinkProject, createLightingDocument } from '@tb/schema';
 
-test('顶部四项只显示连接状态，详细切回完整连接列表且不切工作区', async ({}, info) => {
+test('顶部保留四项连接状态，详细切回完整连接列表且不切工作区', async ({}, info) => {
   const executablePath = process.env.TBLINK_PACKAGED_APP_EXE;
   const app = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...(executablePath ? [] : [join(process.cwd(), 'out/main/index.cjs')])] });
   try {
@@ -24,5 +26,45 @@ test('顶部四项只显示连接状态，详细切回完整连接列表且不�
     await details.click();
     await expect(details).toHaveAttribute('aria-pressed', 'false');
     await expect(overview).toBeVisible();
+  } finally { await app.close(); }
+});
+
+test('点击四项状态定位并短暂强调，重复点击重新滚动', async ({}, info) => {
+  const project = createEmptyLinkProject('连接定位验收'); project.schemaVersion = 2; project.playbackSource = 'internal';
+  const lighting = createLightingDocument(); lighting.outputMode = 'timecode';
+  project.rundown.push({ id: 'song', title: '定位歌曲', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting });
+  const file = info.outputPath('settings.tblink'); await writeFile(file, JSON.stringify(project));
+  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
+  try {
+    const page = await app.firstWindow();
+    await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, file);
+    await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await expect(page.getByText('连接定位验收', { exact: true })).toBeVisible();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1180, 720));
+    const overview = page.getByRole('group', { name: '连接状态概览' });
+    for (const [name, field] of [['音频', '音乐监听设备'], ['视频', 'OBS 连接设置'], ['灯光', '灯光 MIDI 输出'], ['编辑灯光', 'MA2 连接设置']] as const) {
+      await overview.getByRole('button', { name: new RegExp(`^${name}：`) }).click();
+      const highlight = page.locator('.settings-location-highlight');
+      await expect(highlight).toHaveCount(1);
+      await expect(highlight).toBeInViewport();
+      await expect(highlight).toBeFocused();
+      await expect(page.getByLabel(field, { exact: true })).toBeVisible();
+      expect(await highlight.evaluate((element, name) => element.getAttribute('aria-label') === name || Boolean(element.querySelector(`[aria-label="${name}"]`)), field)).toBe(true);
+      await page.screenshot({ path: info.outputPath(`定位-${name}.png`) });
+      await expect(highlight).toHaveCount(0);
+    }
+    await page.getByLabel('MA2 连接方式').selectOption('network');
+    await overview.getByRole('button', { name: /^灯光：/ }).click();
+    await expect(page.locator('.settings-location-highlight')).toHaveAttribute('aria-label', 'MA2 连接设置');
+    await page.getByLabel('MA2 连接方式').selectOption('midi');
+    // Manual navigation clears emphasis; repeated status clicks locate the field again.
+    await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '音频与 MIDI', exact: true }).click();
+    await expect(page.locator('.settings-location-highlight')).toHaveCount(0);
+    await overview.getByRole('button', { name: /^音频：/ }).click();
+    await page.locator('.content-scroll').evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await overview.getByRole('button', { name: /^音频：/ }).click();
+    await expect(page.locator('.settings-location-highlight')).toBeInViewport();
+    await expect(page.locator('.settings-location-highlight')).toBeFocused();
+    await expect(page.locator('.settings-location-highlight')).toHaveCount(0);
   } finally { await app.close(); }
 });

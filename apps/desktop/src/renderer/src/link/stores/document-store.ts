@@ -1,7 +1,9 @@
 import { create } from 'zustand';
+import { shareProjectStructure } from './share-project-structure';
+import { isWorkerValidatedProject } from './project-codec';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { parseLinkProject, type LinkProject } from '@tb/schema';
-import { initializeProjectVisualLayersCommand, needsProjectVisualLayers, setObsOutputModeCommand, withInitialVisualLayers, type LinkCommand } from '@tb/core/link';
+import { initializeProjectVisualLayersCommand, needsProjectVisualLayers, setObsOutputModeCommand, withInitialVisualLayers, withMa2PairingValidation, type LinkCommand } from '@tb/core/link';
 
 type HistoryFrame = {
   command: LinkCommand;
@@ -40,7 +42,7 @@ export const useDocumentStore = create<DocumentStoreState>()(
     error: null,
     setProject: (project, path) => {
       set((state) => {
-      const parsed = project ? parseLinkProject(project) : null;
+      const parsed = project ? isWorkerValidatedProject(project) ? project : parseLinkProject(project) : null;
       const needsLayers = parsed ? needsProjectVisualLayers(parsed) : false;
       return {
         project: parsed && needsLayers ? initializeProjectVisualLayersCommand().execute(parsed) : parsed,
@@ -71,9 +73,11 @@ export const useDocumentStore = create<DocumentStoreState>()(
       const state = get();
       if (!state.project) throw new Error('尚未打开工程');
       try {
-        const prepared = withInitialVisualLayers(command);
-        const next = prepared.execute(state.project);
-        const past = [...state.past, { command: prepared, before: state.project }].slice(-MAX_HISTORY);
+        const prepared = withMa2PairingValidation(withInitialVisualLayers(command));
+        const next = shareProjectStructure(state.project, prepared.execute(state.project));
+        const last = state.past.at(-1);
+        const grouped = prepared.historyGroup && prepared.historyGroup === last?.command.historyGroup;
+        const past = [...(grouped ? state.past.slice(0, -1) : state.past), { command: prepared, before: grouped ? last.before : state.project }].slice(-MAX_HISTORY);
         set({ project: next, dirty: true, revision: state.revision + 1, past, future: [], error: null });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -90,7 +94,7 @@ export const useDocumentStore = create<DocumentStoreState>()(
       const state = get();
       const frame = state.past.at(-1);
       if (!frame || !state.project) return;
-      const restored = frame.command.undo(frame.before);
+      const restored = shareProjectStructure(frame.before, frame.command.undo(frame.before));
       set({
         project: restored,
         dirty: true,
@@ -104,7 +108,7 @@ export const useDocumentStore = create<DocumentStoreState>()(
       const state = get();
       const frame = state.future.at(-1);
       if (!frame || !state.project) return;
-      const applied = frame.command.execute(state.project);
+      const applied = shareProjectStructure(state.project, frame.command.execute(state.project));
       set({
         project: applied,
         dirty: true,

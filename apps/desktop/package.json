@@ -1,21 +1,21 @@
 {
   "name": "@tb/desktop",
   "private": true,
-  "version": "0.4.40",
+  "version": "0.4.41",
   "productName": "团播联动台",
   "type": "module",
   "main": "out/main/index.cjs",
   "scripts": {
-    "dev": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && node ./scripts/run-dev.mjs",
-    "build": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && electron-vite build",
+    "dev": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && node ../../tools/playback-engine/build.mjs && node ./scripts/run-dev.mjs",
+    "build": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && node ../../tools/playback-engine/build.mjs && electron-vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.e2e.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test:e2e": "playwright test",
     "probe:midi": "node ./scripts/probe-windows-midi.mjs",
     "probe:mtc": "node ./scripts/probe-windows-mtc.mjs",
     "probe:mtc:send": "node ./scripts/send-windows-mtc.mjs",
     "probe:mtc:runtime": "node ./scripts/probe-link-mtc-runtime.mjs",
-    "dist:dir": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && electron-vite build && electron-builder --dir",
-    "dist": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && electron-vite build && electron-builder --publish never"
+    "dist:dir": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && node ../../tools/playback-engine/build.mjs && electron-vite build && electron-builder --dir",
+    "dist": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && node ../../tools/playback-engine/build.mjs && electron-vite build && electron-builder --publish never"
   },
   "build": {
     "productName": "团播联动台",
@@ -74,6 +74,64 @@
     },
     "electronVersion": "39.8.10",
     "extraResources": [
+      {
+        "from": "../../tools/playback-engine/bin",
+        "to": "playback-engine",
+        "filter": ["tblink-playback.exe", "build.json"]
+      },
+      {
+        "from": "../../artifacts/beauty-prototype/plugin",
+        "to": "beauty/plugin",
+        "filter": ["tblink-beauty.dll", "beauty.effect"]
+      },
+      {
+        "from": "../../artifacts/beauty-prototype/runtime",
+        "to": "beauty/runtime"
+      },
+      {
+        "from": "../../artifacts/beauty-prototype/face_landmarker.task",
+        "to": "beauty/face_landmarker.task"
+      },
+      {
+        "from": "../../artifacts/beauty-prototype/face_detection_yunet_2023mar.onnx",
+        "to": "beauty/face_detection_yunet_2023mar.onnx"
+      },
+      {
+        "from": "../../tools/obs/beauty/YUNET_LICENSE.txt",
+        "to": "beauty/YUNET_LICENSE.txt"
+      },
+      {
+        "from": "../../artifacts/beauty-prototype/selfie_multiclass_256x256.onnx",
+        "to": "beauty/selfie_multiclass_256x256.onnx"
+      },
+      {
+        "from": "../../artifacts/beauty-prototype/selfie_skin_probability.onnx",
+        "to": "beauty/selfie_skin_probability.onnx"
+      },
+      {
+        "from": "../../artifacts/beauty-prototype/rtmdet-ins-tiny/raw-heads.onnx",
+        "to": "beauty/rtmdet-ins-tiny/raw-heads.onnx"
+      },
+      {
+        "from": "../../tools/obs/beauty/RTMDET_LICENSE.txt",
+        "to": "beauty/RTMDET_LICENSE.txt"
+      },
+      {
+        "from": "../../tools/obs/beauty/RTMDET_NOTICE.txt",
+        "to": "beauty/RTMDET_NOTICE.txt"
+      },
+      {
+        "from": "../../tools/obs/beauty/SEMANTIC_LICENSE.txt",
+        "to": "beauty/SEMANTIC_LICENSE.txt"
+      },
+      {
+        "from": "../../tools/obs/beauty/SEMANTIC_NOTICE.txt",
+        "to": "beauty/SEMANTIC_NOTICE.txt"
+      },
+        {
+          "from": "../../artifacts/beauty-prototype/pose_landmarker_lite.task",
+          "to": "beauty/pose_landmarker_lite.task"
+        },
       {
         "from": "../../THIRD_PARTY_NOTICES.md",
         "to": "THIRD_PARTY_NOTICES.md"

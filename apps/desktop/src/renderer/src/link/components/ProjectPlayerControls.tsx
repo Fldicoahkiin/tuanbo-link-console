@@ -5,15 +5,18 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Play, Pause, Square, SkipBack, SkipForward, RotateCcw, Music2 } from 'lucide-react';
 import { playlistItems } from '@tb/core/link';
-import type { InternalPlaybackController, InternalPlayerState } from '../runtime/internal-playback-controller';
+import type { InternalPlayerState } from '../runtime/internal-playback-controller';
+import type { ProgramPlayerControls } from '../runtime/program-player-controls';
+import type { PlayerControlState, PlayerViewStore } from '../stores/player-view-store';
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
 import { ImportPlayerMusic } from './ImportPlayerMusic';
+import { PlayerStatusDetails } from './PlayerStatusDetails';
 
-export type ProjectPlayer = { controller: InternalPlaybackController | null; state: InternalPlayerState };
+export type ProjectPlayer = { controller: ProgramPlayerControls | null; state: PlayerControlState; view: PlayerViewStore };
 type SetupProps = { locked: boolean; notify: (message: string, tone?: 'info' | 'error') => void; onBusy: (busy: boolean) => void; playlistId: string };
 export function ProjectPlayerSetup({ locked, notify, onBusy, playlistId }: SetupProps): JSX.Element {
   const project = useDocumentStore((value) => value.project);
@@ -32,9 +35,7 @@ export function ProjectPlayerTransport({ controller, state }: ProjectPlayer): JS
   return (
       <section className={`player-transport panel status-${state.status}`} aria-label="节目播放控制">
         <div className="home-section-heading"><h2>播放主控</h2><span>音乐 · 画面 · 灯光</span></div>
-        <div className="player-now"><div className="player-track-icon"><Music2 /></div><div><small title={state.error ?? reason ?? undefined}>{statusLabel(state.status)}</small><h2>{selected?.title ?? '未播放'}</h2></div><span className="player-next"><small>{state.itemId ? '接下来' : '就绪'}</small><strong title={next?.title}>{state.itemId ? next?.title ?? '播完停止' : `${items.length} 首歌曲`}</strong></span></div>
-        {state.error ? <p className="player-error" role="alert">{state.errorTitle ? <strong>{state.errorTitle}：</strong> : null}{state.error}</p> : null}
-        {state.notice ? <p className="player-notice" role="status">{state.notice}</p> : null}
+        <div className="player-now"><div className="player-track-icon"><Music2 /></div><div><small title={state.error ?? reason ?? undefined}>{statusLabel(state.status)}</small><h2>{selected?.title ?? '未播放'}</h2></div><span className="player-next"><small>{state.itemId ? '接下来' : '就绪'}</small><strong title={next?.title}>{state.itemId ? next?.title ?? '播完停止' : `${items.length} 首歌曲`}</strong></span><PlayerStatusDetails error={state.error} errorTitle={state.errorTitle} notice={state.notice} /></div>
         <div className="player-buttons">
           <button aria-label="上一首" title="上一首" disabled={!controller || !items.length} onClick={() => void controller?.skip(-1)}><SkipBack /></button>
           <Button className="primary-button" loading={state.status === 'preparing'} disabled={!controller || state.status === 'preparing' || !items.some((item) => item.referenceAudio)} onClick={() => {
@@ -59,19 +60,23 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
   const profile = useIntegrationStore((state) => state.profile);
   const [outputs, setOutputs] = useState<string[]>([]);
   const [inputs, setInputs] = useState<string[]>([]);
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [devices, setDevices] = useState<{ deviceId: string; label: string }[]>([]);
+  const engine = profile?.internalPlayer?.audioEngine ?? 'browser';
   const [savedField, setSavedField] = useState('');
   const [error, setError] = useState('');
   useEffect(() => { if (!savedField) return; const timer = setTimeout(() => setSavedField(''), 2000); return () => clearTimeout(timer); }, [savedField]);
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     let cancelled = false; let access: MIDIAccess | null = null;
-    const refresh = (): void => { if (!cancelled && access) { setInputs([...access.inputs.values()].filter((port) => port.state === 'connected').map((port) => port.name ?? '').filter(Boolean)); setOutputs([...access.outputs.values()].filter((port) => port.state === 'connected').map((port) => port.name ?? '').filter(Boolean)); } };
+    const refresh = (): void => { if (!cancelled && access) { setInputs([...access.inputs.values()].filter((port) => port.state === 'connected').map((port) => port.name ?? '').filter(Boolean)); if (engine === 'browser') setOutputs([...access.outputs.values()].filter((port) => port.state === 'connected').map((port) => port.name ?? '').filter(Boolean)); } };
     void requestMidiAccess({ sysex: true }).then((result) => { access = result; refresh(); result.addEventListener('statechange', refresh); }).catch((error: unknown) => notify(String(error), 'error'));
-    const refreshDevices = (): void => { void navigator.mediaDevices.enumerateDevices().then((result) => { if (!cancelled) setDevices(result.filter((device) => device.kind === 'audiooutput' && device.deviceId !== 'default')); }).catch((error: unknown) => notify(String(error), 'error')); };
+    const refreshDevices = (): void => {
+      if (engine === 'native') void linkDesktopViewModel.getNativePlaybackDevices().then(result => { if (!cancelled) { setDevices(result.audio.map(device => ({ deviceId: device.id, label: device.name }))); setOutputs(result.midiOutputs.map(port => port.name)); } }).catch((error: unknown) => notify(String(error), 'error'));
+      else void navigator.mediaDevices.enumerateDevices().then(result => { if (!cancelled) setDevices(result.filter(device => device.kind === 'audiooutput' && device.deviceId !== 'default')); }).catch((error: unknown) => notify(String(error), 'error'));
+    };
     refreshDevices(); navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
     return () => { cancelled = true; access?.removeEventListener('statechange', refresh); navigator.mediaDevices.removeEventListener('devicechange', refreshDevices); };
-  }, [notify]);
+  }, [notify, engine]);
   const port = profile?.midiPortProfiles.find((entry) => entry.id === profile.internalPlayer?.mtcOutputPortProfileId)?.portName ?? '';
   const inputName = profile?.midiPortProfiles.find((entry) => entry.id === profile.internalPlayer?.controlInputPortProfileId)?.portName ?? '';
   const save = async (portName: string, deviceId: string, controlName = inputName, doubleClickPlayback = profile?.internalPlayer?.doubleClickPlayback ?? false, audioSampleRate = profile?.internalPlayer?.audioSampleRate ?? 48000): Promise<void> => {
@@ -80,20 +85,30 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
     setSaving(true); onBusy(true); setError('');
     try {
       const id = 'internal-mtc-output';
-      const next = { ...current, updatedAt: new Date().toISOString(), internalPlayer: { ...current.internalPlayer, audioSampleRate, doubleClickPlayback, controlInputPortProfileId: controlName ? 'internal-control-input' : null, audioOutputDeviceId: deviceId, mtcOutputPortProfileId: portName ? id : null },
+      const next = { ...current, updatedAt: new Date().toISOString(), internalPlayer: { audioOutputDeviceId: 'default', ...current.internalPlayer, audioSampleRate, doubleClickPlayback, controlInputPortProfileId: controlName ? 'internal-control-input' : null, ...(engine === 'native' ? { nativeAudioOutputDeviceId: deviceId } : { audioOutputDeviceId: deviceId }), mtcOutputPortProfileId: portName ? id : null },
         midiPortProfiles: [...current.midiPortProfiles.filter((entry) => entry.id !== id && entry.id !== 'internal-control-input'), ...(controlName ? [{ id: 'internal-control-input', direction: 'input' as const, portName: controlName }] : []), ...(portName ? [{ id, direction: 'output' as const, portName }] : [])] };
       await linkDesktopViewModel.saveIntegrationProfile({ profile: next }); useIntegrationStore.getState().setProfile(next); setSavedField(audioSampleRate !== (current.internalPlayer?.audioSampleRate ?? 48000) ? 'rate' : deviceId !== current.internalPlayer?.audioOutputDeviceId ? 'audio' : controlName !== inputName ? 'remote' : 'mtc');
     } catch (error) { setError(String(error)); notify(String(error), 'error'); } finally { setSaving(false); onBusy(false); }
   };
-  const chosenOutput = profile?.internalPlayer?.audioOutputDeviceId ?? 'default';
+  const chosenOutput = (engine === 'native' ? profile?.internalPlayer?.nativeAudioOutputDeviceId : profile?.internalPlayer?.audioOutputDeviceId) ?? 'default';
+  const chooseEngine = async (audioEngine: 'browser' | 'native'): Promise<void> => {
+    if (disabled || saving) return;
+    setSaving(true); onBusy(true); setError('');
+    try {
+      const current = useIntegrationStore.getState().profile ?? createDefaultIntegrationProfile();
+      const next = { ...current, updatedAt: new Date().toISOString(), internalPlayer: { audioOutputDeviceId: 'default', mtcOutputPortProfileId: null, ...current.internalPlayer, audioEngine } };
+      await linkDesktopViewModel.saveIntegrationProfile({ profile: next }); useIntegrationStore.getState().setProfile(next);
+    } catch (error) { setError(String(error)); notify(String(error), 'error'); } finally { setSaving(false); onBusy(false); }
+  };
   return <div className="player-connections panel"><h3 className="device-form-title">音频输出</h3>
+    <label><span>播放引擎</span><select aria-label="正式播放引擎" disabled={disabled || saving} value={engine} onChange={event => void chooseEngine(event.currentTarget.value === 'native' ? 'native' : 'browser')}><option value="browser">浏览器音频（对照）</option><option value="native">Windows 原生音频（验收中）</option></select></label>
     <label><span>音频输出线路</span><select aria-label="音乐监听设备" disabled={disabled || saving} value={chosenOutput} onChange={(event) => void save(port, event.currentTarget.value)}><option value="default">Windows 默认播放设备</option>{chosenOutput !== 'default' && !devices.some(device => device.deviceId === chosenOutput) ? <option value={chosenOutput}>上次选择的输出设备（当前列表不可见）</option> : null}{devices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || device.deviceId}</option>)}</select>{savedField === 'audio' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
-    <label><span>采样率</span><select aria-label="音频采样率" disabled={disabled || saving} value={profile?.internalPlayer?.audioSampleRate ?? 48000} onChange={(event) => void save(port, profile?.internalPlayer?.audioOutputDeviceId ?? 'default', inputName, profile?.internalPlayer?.doubleClickPlayback ?? false, event.currentTarget.value === '44100' ? 44100 : 48000)}><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select>{savedField === 'rate' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
+    <label><span>采样率</span><select aria-label="音频采样率" disabled={disabled || saving} value={profile?.internalPlayer?.audioSampleRate ?? 48000} onChange={(event) => void save(port, chosenOutput, inputName, profile?.internalPlayer?.doubleClickPlayback ?? false, event.currentTarget.value === '44100' ? 44100 : 48000)}><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select>{savedField === 'rate' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
 <h3 className="device-form-title">MIDI 时间码</h3>
-<label><span>时间码输出</span><select aria-label="灯光 MIDI 输出" disabled={disabled || saving} value={port} onChange={(event) => void save(event.currentTarget.value, profile?.internalPlayer?.audioOutputDeviceId ?? 'default')}><option value="">自动检测控台接口</option>{[...new Set([...outputs, ...(port ? [port] : [])])].map((name) => <option key={name} value={name} disabled={!outputs.includes(name)}>{name}{outputs.includes(name) ? '' : '（未连接）'}</option>)}</select>{savedField === 'mtc' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
+<label><span>时间码输出</span><select aria-label="灯光 MIDI 输出" disabled={disabled || saving} value={port} onChange={(event) => void save(event.currentTarget.value, chosenOutput)}><option value="">自动检测控台接口</option>{[...new Set([...outputs, ...(port ? [port] : [])])].map((name) => <option key={name} value={name} disabled={!outputs.includes(name)}>{name}{outputs.includes(name) ? '' : '（未连接）'}</option>)}</select>{savedField === 'mtc' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
     <p className="settings-note">自动识别 loopMIDI 端口与实体 MIDI 设备，用于输出 MTC 时间码。{outputs.length === 0 ? '当前未检测到可用输出设备。' : `已识别 ${new Set(outputs).size} 个输出端口。`}</p>
     <details className="settings-disclosure"><summary>远程控制与灯光动作端口</summary><div className="player-connections">
-    <label><span>远程播放输入</span><select aria-label="播放控制 MIDI 输入" disabled={disabled || saving} value={inputName} onChange={(event) => void save(port, profile?.internalPlayer?.audioOutputDeviceId ?? 'default', event.currentTarget.value)}><option value="">关闭远程播放控制</option>{[...new Set([...inputs, ...(inputName ? [inputName] : [])])].map((name) => <option key={name}>{name}</option>)}</select>{savedField === 'remote' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
+    <label><span>远程播放输入</span><select aria-label="播放控制 MIDI 输入" disabled={disabled || saving} value={inputName} onChange={(event) => void save(port, chosenOutput, event.currentTarget.value)}><option value="">关闭远程播放控制</option>{[...new Set([...inputs, ...(inputName ? [inputName] : [])])].map((name) => <option key={name}>{name}</option>)}</select>{savedField === 'remote' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
     {children}</div></details>
     {error ? <p className="device-error" role="alert">{error}</p> : null}</div>;
 }

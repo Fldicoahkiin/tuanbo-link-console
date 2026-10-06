@@ -1,8 +1,12 @@
 import type { LinkProject } from '@tb/schema';
 import type { PreflightReport } from '@tb/core/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { PlayerViewStore } from './stores/player-view-store';
 import { PlaybackMidiInput } from '../registry/playback-midi-input';
-import { InternalPlaybackController, emptyInternalPlayerState } from './runtime/internal-playback-controller';
+import { InternalPlaybackController, emptyInternalPlayerState, type InternalPlayerDependencies } from './runtime/internal-playback-controller';
+import { NativeProgramPlayer, toUserErrorMessage } from '@tb/core/link';
+import { LightingMidiOutput } from '../registry/lighting-midi-output';
+import type { ProgramPlayerControls } from './runtime/program-player-controls';
 import type { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
 import { useDocumentStore } from './stores/document-store';
 import { useIntegrationStore } from './stores/integration-store';
@@ -10,12 +14,30 @@ import { linkDesktopViewModel as desktop } from './view-models/link-desktop-view
 import { runDesktopPreflight } from './view-models/link-preflight-view-model';
 import { useRuntimeStore } from './stores/runtime-store';
 import { useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
+import { useDisplayPreferences } from './stores/display-preferences-store';
+import { useSelectedProgram } from './useSelectedProgram';
 
 export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, ready: boolean, project: LinkProject | null) {
   const path = useDocumentStore((state) => state.path);
-  const [controller, setController] = useState<InternalPlaybackController | null>(null);
-  const [state, setState] = useState(emptyInternalPlayerState);
+  const [controller, setController] = useState<ProgramPlayerControls | null>(null);
+  const [view] = useState(() => new PlayerViewStore());
+  const state = useSyncExternalStore(view.subscribeControl, view.readControl);
   const profile = useIntegrationStore((value) => value.profile);
+  const obsStatus = useIntegrationStore(value => value.obs.status);
+  const notifySelection = useCallback((message: string) => controller?.reportUnavailable(message), [controller]);
+  const [selectedItemId] = useSelectedProgram(notifySelection);
+  useEffect(() => {
+    if (controller instanceof NativeProgramPlayer && obsStatus === 'connected' && selectedItemId) controller.preloadSelected(selectedItemId);
+  }, [controller, obsStatus, selectedItemId]);
+  const requestedEngine = profile?.internalPlayer?.audioEngine ?? 'browser';
+  const requestedDevice = (requestedEngine === 'native' ? profile?.internalPlayer?.nativeAudioOutputDeviceId : profile?.internalPlayer?.audioOutputDeviceId) ?? 'default';
+  const requestedRate = profile?.internalPlayer?.audioSampleRate ?? 48000;
+  const [audioConfiguration, setAudioConfiguration] = useState({ deviceId: requestedDevice, sampleRate: requestedRate, engine: requestedEngine });
+  useEffect(() => {
+    if (['preparing', 'playing', 'paused'].includes(state.status)) return;
+    setAudioConfiguration(current => current.deviceId === requestedDevice && current.sampleRate === requestedRate && current.engine === requestedEngine
+      ? current : { deviceId: requestedDevice, sampleRate: requestedRate, engine: requestedEngine });
+  }, [requestedDevice, requestedRate, requestedEngine, state.status]);
   const controlInputName = profile?.midiPortProfiles.find((entry) => entry.id === profile.internalPlayer?.controlInputPortProfileId)?.portName;
   useEffect(() => {
     if (!controller || !controlInputName) return;
@@ -39,26 +61,27 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   }, [controller, project]);
   useEffect(() => {
     if (!coordinator || !project || project.playbackSource !== 'internal' || !ready) {
-      setController(null); setState(emptyInternalPlayerState); return;
+      setController(null); view.publish(emptyInternalPlayerState); return;
     }
     let prepared: { report: PreflightReport; profile: ReturnType<typeof useIntegrationStore.getState>['profile']; mtcOutputEnabled: boolean } | null = null;
-    const player = new InternalPlaybackController(project, {
-      prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled }) => {
+    const dependencies: InternalPlayerDependencies = {
+      prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled, signal }) => {
+        if (audioConfiguration.engine === 'native') { await coordinator.prepareNativeCompanion(itemId, positionMs, signal); return; }
         if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
         if (!path) throw new Error('请先保存工程，再播放正式音频');
         if (useIntegrationStore.getState().obs.status !== 'connected') {
           prepared = null;
           throw new Error('OBS 未连接；可用顶部“一键连接”恢复画面联动');
         }
-        await coordinator.prepareInternal(itemId, async () => {
+        await coordinator.prepareInternal(itemId, async (assertCurrent) => {
           if (reuseSession && prepared?.profile === useIntegrationStore.getState().profile && prepared.mtcOutputEnabled === mtcOutputEnabled) {
             coordinator.beginPreflight(prepared.report.mode);
-            await coordinator.applyPreflight(prepared.report); return prepared.report;
+            await coordinator.applyPreflight(prepared.report); assertCurrent(); return prepared.report;
           }
-          const report = await runDesktopPreflight(coordinator, 'live', 'internal', false, { internalMtcOutputEnabled: mtcOutputEnabled });
+          const report = await runDesktopPreflight(coordinator, 'live', 'internal', false, { internalMtcOutputEnabled: mtcOutputEnabled }, assertCurrent);
           prepared = report.passed ? { report, profile: useIntegrationStore.getState().profile, mtcOutputEnabled } : null;
           return report;
-        }, positionMs);
+        }, positionMs, signal);
       },
       ingest: (positionMs) => coordinator.ingestInternal(positionMs),
       started: (positionMs) => coordinator.startInternalClock(positionMs),
@@ -72,23 +95,39 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
         const profile = useIntegrationStore.getState().profile;
         const id = profile?.internalPlayer?.mtcOutputPortProfileId;
         const port = id ? profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output') : null;
-        return { lightingProfile: profile, outputDeviceId: profile?.internalPlayer?.audioOutputDeviceId ?? 'default', audioSampleRate: profile?.internalPlayer?.audioSampleRate ?? 48000, mtcPortName: port?.portName ?? null,
+        return { lightingProfile: profile, outputDeviceId: audioConfiguration.deviceId, audioSampleRate: audioConfiguration.sampleRate, mtcPortName: port?.portName ?? null,
           preload: profile?.internalPlayer?.preload ?? true, fadeInMs: profile?.internalPlayer?.fadeInMs ?? 0, fadeOutMs: profile?.internalPlayer?.fadeOutMs ?? 500 };
-      }, changed: setState
-    });
+      }, changed: view.publish,
+      notice: (message, itemId) => {
+        void desktop.recordLog({ level: 'warning', category: 'state', message, projectId: project.projectId,
+          ...(itemId ? { itemId } : {}), device: '正式播放器' })
+          .catch((error: unknown) => console.error('正式播放通道提示未能保存到日志', error));
+      },
+      preciseSeeking: () => useDisplayPreferences.getState().preciseSeeking,
+      obsChanged: status => {
+        if (status.state === 'running' || status.state === 'ready') useRuntimeStore.getState().setState({ currentCueId: status.currentCueId });
+      }
+    };
+    const player: ProgramPlayerControls = audioConfiguration.engine === 'native'
+      ? new NativeProgramPlayer(project, path ?? '', useDocumentStore.getState().revision, dependencies, desktop, new LightingMidiOutput())
+      : new InternalPlaybackController(project, dependencies);
     coordinator.onInternalStop(() => player.externalStop());
     const unsubscribe = useRuntimeStore.subscribe((next, previous) => {
       if (next.state !== previous.state && ['error', 'timecodeLost'].includes(next.state)) player.runtimeUnavailable(next.reason ?? '联动已中断');
     });
     const unsubscribeObs = useIntegrationStore.subscribe((next, previous) => {
-      if (previous.obs.status === 'connected' && next.obs.status !== 'connected' && useRuntimeStore.getState().state !== 'idle') {
+      if (audioConfiguration.engine !== 'native' && previous.obs.status === 'connected' && next.obs.status !== 'connected' && useRuntimeStore.getState().state !== 'idle') {
         prepared = null;
         player.runtimeUnavailable('OBS 连接中断；音频继续播放，画面与 OBS 动作已停止。');
         void coordinator.stopAndWait(false).catch((error: unknown) => player.reportUnavailable(`OBS 清理失败：${String(error)}`));
       }
     });
-    setController(player); setState(emptyInternalPlayerState);
-    return () => { unsubscribe(); unsubscribeObs(); coordinator.onInternalStop(null); player.dispose(); };
-  }, [coordinator, project, path, ready, profile?.internalPlayer?.audioSampleRate, profile?.internalPlayer?.audioOutputDeviceId]);
-  return { controller, state };
+    setController(player); view.publish(emptyInternalPlayerState);
+    return () => {
+      unsubscribe(); unsubscribeObs(); coordinator.onInternalStop(null);
+      if (player instanceof NativeProgramPlayer) void player.dispose().catch(error => dependencies.notice?.(`关闭播放器失败：${toUserErrorMessage(error)}`, null));
+      else player.dispose();
+    };
+  }, [coordinator, project, path, ready, audioConfiguration, view]);
+  return useMemo(() => ({ controller, state, view }), [controller, state, view]);
 }

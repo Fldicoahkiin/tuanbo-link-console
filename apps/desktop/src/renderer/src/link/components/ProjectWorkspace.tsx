@@ -3,8 +3,7 @@ import { Button } from './Button';
 import { importProgramFiles } from './import-program-files';
 import { useSelectedProgram } from '../useSelectedProgram';
 import { usePlayProgram } from './usePlayProgram';
-import { P1TimeMonitor } from './P1TimeMonitor';
-import { AudioSpectrum } from './AudioSpectrum';
+import { ProjectPlaybackMonitor } from './ProjectPlaybackMonitor';
 import { ProgramGrid } from './ProgramGrid';
 import { SongPlaybackProperties } from './SongPlaybackProperties';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -25,13 +24,10 @@ import {
   programPlaylistId,
   editProgramPlaylistCommand,
   allocateMediaTimecodeRanges,
-  mediaTimecodeAt,
   duplicateRundownItemCommand,
   moveRundownItemCommand,
   removeRundownItemCommand,
   setReferenceAudioCommand,
-  setPlaybackSourceCommand,
-  timecodeToMilliseconds,
   updateRundownItemCommand
 } from '@tb/core/link';
 import type { LinkProject, RundownItem } from '@tb/schema';
@@ -44,15 +40,15 @@ import { DocumentActions, type DocumentActionProps } from './DocumentActions';
 
 import { ProjectWelcome } from './ProjectWelcome';
 import { ProgramPlaylistPane } from './ProgramPlaylistPane';
-import { PlayerWaveformTimeline } from './PlayerWaveformTimeline';
-import { ProjectPlayerTransport, type ProjectPlayer } from './ProjectPlayerControls';
-import { formatTimecode } from './media-utils';
+import { type ProjectPlayer } from './ProjectPlayerControls';
+import { formatDuration } from './media-utils';
 
 type Props = {
   toolbarHost: HTMLDivElement | null;
   playlistHost: HTMLDivElement | null;
   onCreate: () => void;
   onOpen: () => void;
+  onImportSongs: () => void;
   player: ProjectPlayer;
   editingLocked: boolean;
   coordinator: LinkRuntimeCoordinator | null;
@@ -61,14 +57,13 @@ type Props = {
   documentActions: DocumentActionProps;
 };
 
-export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, player, editingLocked, coordinator, notify, onOpenCueEditor, documentActions }: Props): JSX.Element {
+export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, onImportSongs, player, editingLocked, coordinator, notify, onOpenCueEditor, documentActions }: Props): JSX.Element {
   const project = useDocumentStore((state) => state.project);
   const projectPath = useDocumentStore((state) => state.path);
   const documentId = useDocumentStore((state) => state.documentId);
   const execute = useDocumentStore((state) => state.execute);
   const revision = useDocumentStore((state) => state.revision);
   const currentItemId = useRuntimeStore((state) => state.currentItemId);
-  const timecode = useRuntimeStore((state) => state.timecode);
   const [busy, setBusy] = useState(false);
   const importPending = useRef(false);
   const locked = editingLocked || busy;
@@ -111,13 +106,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
     return playlistItems(project, selectedPlaylistId).filter((item) => keyword === '' || item.title.toLocaleLowerCase('zh-CN').includes(keyword));
   }, [project, search, selectedPlaylistId]);
 
-  if (!project) return <ProjectWelcome onCreate={onCreate} onOpen={onOpen} />;
-  const mtcPositionMs = player.state.status === 'stopped'
-    ? selectedItem ? (selectedItem.playback?.mtcOffsetMs ?? 0) + (selectedItem.playback?.startMs ?? 0) : null
-    : player.state.status === 'preparing' ? null : player.state.mtcPositionMs;
-  const outputTimecode = !internal ? timecode ? formatTimecode(timecode) : '—' : mtcPositionMs !== null && mtcPositionMs < 86_400_000
-    ? formatTimecode(mediaTimecodeAt(mtcPositionMs, project.timebase.frameRate)) : '—';
-
+  if (!project) return <ProjectWelcome onCreate={onCreate} onOpen={onOpen} onImportSongs={onImportSongs} />;
   const addItem = (): void => {
     const item: RundownItem = {
       id: crypto.randomUUID(),
@@ -162,11 +151,6 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
   };
 
 
-  const monitorItem = internal && player.state.status !== 'stopped' ? project.rundown.find(item => item.id === player.state.itemId) : selectedItem;
-  const currentMilliseconds = internal ? player.state.positionMs : timecode ? timecodeToMilliseconds(timecode, project.timebase.frameRate) : 0;
-  const monitorDuration = internal && player.state.status !== 'stopped' ? player.state.durationMs : monitorItem?.referenceAudio?.durationMs ?? 0;
-  const remainingMilliseconds = Math.max(0, monitorDuration - currentMilliseconds);
-
   return (
     <div className="p1-project-workspace">
       {toolbarHost ? createPortal(<header className="p1-project-ribbon" title={projectPath ?? undefined}>
@@ -183,20 +167,10 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
         if (file) void importReference(file);
       }} />
 
-      <section className={`p1-monitor-deck ${internal ? 'has-player' : ''}`} aria-label="播放与监看">
-        <section className={`unified-player ${internal ? 'internal-mode' : 'following-mode'}`} aria-label="播放与音频时间线">
-        {internal ? <ProjectPlayerTransport {...player} controller={busy ? null : player.controller} /> : <div className="p1-audio-monitor">
-          <div className="p1-monitor-caption"><strong>{selectedItem?.title ?? '未选择'}</strong></div>
-          {previewUrl ? <audio controls src={previewUrl} /> : <div className="p1-monitor-empty"><FileAudio /><span>未添加音频</span></div>}
-          <div className="player-mode-note"><span>P1 跟随</span><button onClick={() => execute(setPlaybackSourceCommand('internal'))}>切换为本软件播放</button></div>
-        </div>}
-        <PlayerWaveformTimeline enabled={internal && !!player.controller && ['playing', 'paused'].includes(player.state.status)} onSeek={(positionMs) => void player.controller?.seek(positionMs)} source={projectPath && previewUrl && selectedItem?.referenceAudio ? { projectPath, url: previewUrl, sha256: selectedItem.referenceAudio.sha256, durationMs: selectedItem.referenceAudio.durationMs } : null} positionMs={selectedItem?.id === currentItemId ? currentMilliseconds : 0} />
-        </section>
-        <section className="home-spectrum-monitor" aria-label="实时音频频谱"><AudioSpectrum {...player} /><small>实时频谱</small></section>
-        <P1TimeMonitor player={player} title={monitorItem?.title ?? '未选择节目'} positionMs={currentMilliseconds} durationMs={currentMilliseconds + remainingMilliseconds} frameRate={project.timebase.frameRate} internal={internal} outputTimecode={outputTimecode} />
-      </section>
+      <ProjectPlaybackMonitor project={project} player={player} selectedItem={selectedItem} currentItemId={currentItemId} projectPath={projectPath} previewUrl={previewUrl} busy={busy} visible={toolbarHost !== null} />
 
       <ProjectLibrary
+        onImportSongs={onImportSongs}
         onImportFiles={async files => {
           if (locked || importPending.current) return;
           importPending.current = true; setBusy(true);
@@ -208,6 +182,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
         playlistHost={playlistHost}
         notify={notify}
         locked={locked}
+        metadataLocked={locked && (busy || !internal || player.state.status !== 'paused')}
         playItem={internal ? playProgram : undefined}
         project={project}
         revision={revision}
@@ -243,13 +218,14 @@ async function importReferenceForDocument(
   useDocumentStore.getState().executeForDocument(documentId, setReferenceAudioCommand(itemId, reference));
 }
 
-type ProjectLibraryProps = {
+type ProjectLibraryProps = Pick<Props, 'onImportSongs' | 'onOpenCueEditor'> & {
   onImportFiles: (files: File[]) => Promise<void>;
   onAddItem: () => void;
   playedItemIds: string[];
   playlistHost: HTMLDivElement | null;
   notify: Props['notify'];
   locked: boolean;
+  metadataLocked: boolean;
   playItem?: ((item: RundownItem) => void) | undefined;
   project: LinkProject;
   revision: number;
@@ -263,7 +239,6 @@ type ProjectLibraryProps = {
   onSearch: (search: string) => void;
   onChooseItem: (item: RundownItem) => void;
   onChooseReference: (itemId: string) => void;
-  onOpenCueEditor: () => void;
   onSelectCurrentItem: (item: RundownItem) => void;
 };
 
@@ -278,7 +253,7 @@ function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
   const { project, revision, filteredItems, selectedItem, selectedItemId, selectedPlaylistId, search, currentItemId } = props;
   const { selected: visibleBatchIds, setSelectedIds: setBatchIds, deleteSelection } = useProgramSelection({ visibleIds: filteredItems.map(item => item.id), scope: JSON.stringify([project.projectId, search, selectedPlaylistId]), locked: props.locked, notify: props.notify });
   const commitText = (input: HTMLInputElement | HTMLTextAreaElement, field: 'title' | 'notes'): void => {
-    if (!selectedItem) return;
+    if (!selectedItem || props.metadataLocked) return;
     const value = field === 'title' ? input.value.trim() : input.value;
     input.value = value;
     if (value === selectedItem[field]) return;
@@ -306,10 +281,12 @@ function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
     {props.playlistHost ? createPortal(<ProgramPlaylistPane project={project} selectedId={selectedPlaylistId} locked={props.locked} onSelect={props.onSelectPlaylist} notify={props.notify} />, props.playlistHost) : null}
 
     <section className="p1-media-pane">
-      <div className="p1-pane-title"><div className="program-library-heading"><strong>节目单 <small>{filteredItems.length} 个</small></strong><span>{selectedPlaylistId === 'all' ? '全部节目' : programPlaylists(project).find(list => list.id === selectedPlaylistId)?.name ?? '未分组'} · {props.playItem ? doubleClickPlayback ? '双击节目播放' : '单击节目播放' : '选择节目进行联动'}</span></div><label><Search /><input aria-label="搜索节目" placeholder="搜索节目…" value={search} onChange={(event) => props.onSearch(event.currentTarget.value)} /></label><div className="program-view-switch" role="group" aria-label="节目显示方式"><Button className="icon-button" aria-label="列表视图" aria-pressed={view === 'list'} onClick={() => setView('list')}><List /></Button><Button className="icon-button" aria-label="卡片视图" aria-pressed={view === 'cards'} onClick={() => setView('cards')}><LayoutGrid /></Button></div><Button className="secondary-button" disabled={props.locked} onClick={props.onAddItem}><Plus />新建节目</Button><Button className="icon-button" title="节目属性" aria-label="节目属性" aria-expanded={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><SlidersHorizontal /></Button></div>
+      <div className="p1-pane-title"><div className="program-library-heading"><strong>节目单 <small>{filteredItems.length} 个</small></strong><span>{selectedPlaylistId === 'all' ? '全部节目' : programPlaylists(project).find(list => list.id === selectedPlaylistId)?.name ?? '未分组'} · {props.playItem ? doubleClickPlayback ? '双击节目播放' : '单击节目播放' : '选择节目进行联动'}</span></div><label><Search /><input aria-label="搜索节目" placeholder="搜索节目…" value={search} onChange={(event) => props.onSearch(event.currentTarget.value)} /></label><div className="program-view-switch" role="group" aria-label="节目显示方式"><Button className="icon-button" aria-label="列表视图" aria-pressed={view === 'list'} onClick={() => setView('list')}><List /></Button><Button className="icon-button" aria-label="卡片视图" aria-pressed={view === 'cards'} onClick={() => setView('cards')}><LayoutGrid /></Button></div><Button className="secondary-button" disabled={props.locked} onClick={props.onImportSongs}><FileAudio />导入歌曲 / P1</Button><Button className="secondary-button" disabled={props.locked} onClick={props.onAddItem}><Plus />新建节目</Button><Button className="icon-button" title="节目属性" aria-label="节目属性" aria-expanded={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><SlidersHorizontal /></Button></div>
       {view === 'list' ? <div className="program-list-columns" aria-hidden="true"><span>顺序</span><span>节目名称</span><span>状态</span><span>时长 / 内容</span><span>属性</span></div> : null}
-      <ProgramGrid view={view} locked={props.locked} onAddItem={props.onAddItem} onImportFiles={props.onImportFiles} selectedIds={visibleBatchIds} onSelectionChange={setBatchIds} onDeleteSelection={deleteSelection} onBlankClick={() => setInspectorOpen(false)}>
-        {filteredItems.map((item) => {
+      <ProgramGrid view={view} compact={inspectorOpen} itemIds={filteredItems.map(item => item.id)} locked={props.locked} onAddItem={props.onAddItem} onImportFiles={props.onImportFiles} selectedIds={visibleBatchIds} onSelectionChange={setBatchIds} onDeleteSelection={deleteSelection} onBlankClick={() => setInspectorOpen(false)}
+        empty={<div className="p1-library-empty"><FileAudio /><strong>{search ? '没有找到匹配的节目' : '添加第一个节目'}</strong></div>}
+        renderItem={visibleIndex => {
+          const item = filteredItems[visibleIndex]!;
           const index = project.rundown.findIndex((candidate) => candidate.id === item.id);
           return <article className={`p1-media-card rundown-row ${item.id === selectedItemId ? 'is-selected' : ''} ${item.id === currentItemId ? 'is-current' : ''} ${item.enabled ? '' : 'is-disabled'}`} data-program-id={item.id} data-batch-selected={visibleBatchIds.includes(item.id)} data-runtime={item.id === currentItemId ? runtime : 'idle'} title={item.title} aria-label={`${item.title}，${props.playItem ? doubleClickPlayback ? '双击播放' : '单击播放' : '单击选中'}`} key={`${item.id}:${revision}`} tabIndex={0} draggable={false} onClick={() => props.playItem && !doubleClickPlayback ? props.playItem(item) : props.onChooseItem(item)} onDoubleClick={() => { if (doubleClickPlayback && props.playItem) props.playItem(item); else if (!props.playItem) props.onSelectCurrentItem(item); }} onContextMenu={(event) => { event.preventDefault(); if (props.locked) return; props.onChooseItem(item); setContext({ item, x: event.clientX, y: event.clientY }); }} onKeyDown={(event) => { if (event.key === 'Enter' && event.target === event.currentTarget) { event.preventDefault(); (props.playItem ?? props.onSelectCurrentItem)(item); } }}>
             <div className="p1-card-top"><span><Music2 />{item.referenceAudio ? '音频节目' : '待添加音频'}</span><button className="rundown-index" disabled={!item.enabled} onClick={(event) => { event.stopPropagation(); (props.playItem ?? props.onSelectCurrentItem)(item); }}>{index + 1}</button></div>
@@ -318,17 +295,16 @@ function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
             <footer><span>{formatDuration(item.referenceAudio?.durationMs ?? 0)}</span><small><Film />{item.referenceMediaClips.length} 素材 · {item.cues.length} Cue</small></footer>
             <Button className="icon-button program-row-properties" aria-label={`编辑节目属性：${item.title}`} title="编辑节目属性" onDoubleClick={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); props.onChooseItem(item); setInspectorOpen(true); }}><SlidersHorizontal /></Button>
           </article>;
-        })}
-        {filteredItems.length === 0 ? <div className="p1-library-empty"><FileAudio /><strong>{search ? '没有找到匹配的节目' : '添加第一个节目'}</strong></div> : null}
-      </ProgramGrid>
+        }} />
     </section>
 
-    {inspectorOpen ? <fieldset disabled={props.locked} className="p1-item-inspector">
+    {inspectorOpen ? <section className="p1-item-inspector">
       <div className="p1-pane-title" title={selectedItem && props.playItem ? `灯光时间码起点：${internalStart(project, selectedItem.id)}` : undefined}><strong title={selectedItem?.title}>编辑节目</strong><Button className="icon-button" aria-label="收起节目属性" onClick={() => setInspectorOpen(false)}><X /></Button></div>
       {selectedItem ? <div className="p1-inspector-content" key={selectedItem.id}>
-        <label><span>播放列表</span><select aria-label="所属播放列表" value={programPlaylistId(project, selectedItem) ?? ''} onChange={(event) => { try { execute(editProgramPlaylistCommand({ type: 'assign', itemIds: [selectedItem.id], playlistId: event.currentTarget.value || null })); } catch (reason) { props.notify(String(reason), 'error'); } }}><option value="">未分组</option>{programPlaylists(project).map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label>
-        <label><span>名称</span><input key={selectedItem.title} className="title-input" aria-label="节目名称" title="回车保存，Esc 取消" defaultValue={selectedItem.title} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (event.key === 'Escape') event.currentTarget.value = selectedItem.title; event.currentTarget.blur(); } }} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitText(event.currentTarget, 'title')} /></label>
-        <label><span>备注</span><textarea key={`${selectedItem.id}:${selectedItem.notes}`} aria-label="备注" rows={1} defaultValue={selectedItem.notes} placeholder="选填" onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitText(event.currentTarget, 'notes')} /></label>
+        <label><span>播放列表</span><select disabled={props.locked} aria-label="所属播放列表" value={programPlaylistId(project, selectedItem) ?? ''} onChange={(event) => { try { execute(editProgramPlaylistCommand({ type: 'assign', itemIds: [selectedItem.id], playlistId: event.currentTarget.value || null })); } catch (reason) { props.notify(String(reason), 'error'); } }}><option value="">未分组</option>{programPlaylists(project).map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label>
+        <label><span>名称</span><input key={selectedItem.title} className="title-input" disabled={props.metadataLocked} aria-label="节目名称" title="回车保存，Esc 取消" defaultValue={selectedItem.title} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (event.key === 'Escape') event.currentTarget.value = selectedItem.title; event.currentTarget.blur(); } }} onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitText(event.currentTarget, 'title')} /></label>
+        <label><span>备注</span><textarea key={`${selectedItem.id}:${selectedItem.notes}`} aria-label="备注" disabled={props.metadataLocked} rows={1} defaultValue={selectedItem.notes} placeholder="选填" onInput={(event) => event.currentTarget.setCustomValidity('')} onBlur={(event) => commitText(event.currentTarget, 'notes')} /></label>
+        <fieldset disabled={props.locked} className="p1-runtime-properties">
         {project.playbackSource === 'internal' ? <SongPlaybackProperties item={selectedItem} notify={props.notify} collapseAdvanced /> : null}
         <div className="p1-inspector-footer"><label className="check-field"><input type="checkbox" checked={selectedItem.enabled} onChange={(event) => execute(updateRundownItemCommand(selectedItem.id, { title: selectedItem.title, enabled: event.currentTarget.checked, notes: selectedItem.notes }))} /><span>启用</span></label>
         <button className="p1-select-current" disabled={!selectedItem.enabled || selectedItem.id === currentItemId} onClick={() => props.onSelectCurrentItem(selectedItem)}><Check />{selectedItem.id === currentItemId ? '当前节目' : '设为当前节目'}</button>
@@ -341,8 +317,9 @@ function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
           <Button className="icon-button danger" onClick={() => { if (window.confirm(`确认删除节目“${selectedItem.title}”？`)) execute(removeRundownItemCommand(selectedItem.id)); }} title="删除"><Trash2 /></Button>
         </div>
         </div>
+        </fieldset>
       </div> : <div className="p1-library-empty"><FileAudio /><span>选择一个音频</span></div>}
-    </fieldset> : null}
+    </section> : null}
     {context && !props.locked ? <ProgramContextMenu
       item={context.item}
       project={project}
@@ -383,13 +360,6 @@ function ProgramContextMenu(props: {
     <button className="context-menu-item" onClick={() => run(() => props.execute(duplicateRundownItemCommand(props.item.id)))}><span className="context-icon"><Copy /></span><span>复制节目</span></button>
     <button className="context-menu-item danger" onClick={() => run(() => { if (window.confirm(`确认删除节目“${props.item.title}”？`)) props.execute(removeRundownItemCommand(props.item.id)); })}><span className="context-icon"><Trash2 /></span><span>删除节目</span></button>
   </div>;
-}
-
-function formatDuration(durationMs: number): string {
-  const totalSeconds = Math.max(0, Math.round(durationMs / 1_000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
 function formatMilliseconds(milliseconds: number): string {

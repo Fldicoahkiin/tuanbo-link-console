@@ -1,0 +1,27 @@
+{
+  "scope": "Public video fixtures for local analysis only; excluded from application packages",
+  "videos": [
+    {
+      "file": "cha-cha.webm",
+      "title": "Cha cha cha(Dance).webm",
+      "author": "Wpzhiyilee",
+      "source": "https://commons.wikimedia.org/wiki/File:Cha_cha_cha(Dance).webm",
+      "download": "https://upload.wikimedia.org/wikipedia/commons/d/de/Cha_cha_cha%28Dance%29.webm",
+      "license": "CC BY-SA 3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "sha256": "d60a4057489616003b6f66c26ed80825d95c8ea9b839c8c30824c06be65772fa",
+      "changes": "Original video unchanged. Extracted/resized/annotated test frames are adaptations under CC BY-SA 3.0."
+    },
+    {
+      "file": "cultural-dancers.webm",
+      "title": "Cultural dancers performing at an event.webm",
+      "author": "Tusk media",
+      "source": "https://commons.wikimedia.org/wiki/File:Cultural_dancers_performing_at_an_event.webm",
+      "download": "https://upload.wikimedia.org/wikipedia/commons/9/93/Cultural_dancers_performing_at_an_event.webm",
+      "license": "CC BY 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "sha256": "016cc1eecd63c65e4649b26880f6c1fd8c3bc34b0f4420193cea94b4eee7d224",
+      "changes": "Original video unchanged. Extracted/resized test frames are adaptations. Overhead footage is unsuitable for close-up beauty quality acceptance."
+    }
+  ]
+}

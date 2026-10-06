@@ -10,6 +10,16 @@ if (!seq) throw new Error('测试 Sequence 缺失');
 const snapshot = tc.replace('</MA>', `${seq}</MA>`);
 const directory = { show: '现场', generation: 'session', version: '3.3.4.3', entries: [{ target: 9902, name: '小数 Cue' }] };
 
+it('补读前校验来源，换 Show 不覆盖已有检查点；落盘失败不报告已保存', async () => {
+  const checkpoint = vi.fn().mockRejectedValue(new Error('磁盘已满'));
+  const request = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(directory));
+  await expect(readMa2Catalog({ request }, () => false, undefined, undefined, undefined, { checkpoint, expectedSource: { ...directory, show: '其他 Show' } })).rejects.toThrow('Show');
+  expect(checkpoint).not.toHaveBeenCalled();
+  const progress = vi.fn();
+  await expect(readMa2Catalog({ request }, () => false, undefined, progress, undefined, { checkpoint })).rejects.toThrow('磁盘已满');
+  expect(progress).not.toHaveBeenCalled();
+});
+
 it('目录扫描解析实际小数 Cue 编号，保留原始时间和执行器，只读且前后核对目录', async () => {
   const request = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(tc).mockResolvedValueOnce(snapshot).mockResolvedValueOnce(JSON.stringify(directory));
   const result = await readMa2Catalog({ request }, () => false);

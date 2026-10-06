@@ -3,6 +3,8 @@ import { Ma2ComputerNetwork, useMa2ComputerNetwork } from './Ma2ComputerNetwork'
 import { Button } from './Button';
 import { ma2AddressInput } from '../view-models/ma2-address-input';
 import { checkNetworkMa2, connectDiscoveredMa2 } from '../stores/ma2-connection-store';
+import { useDocumentStore } from '../stores/document-store';
+import { prepareMa2Editing } from '../runtime/ma2-editing-session';
 import { createPortal } from 'react-dom';
 import { useEffect, useState, type JSX } from 'react';
 import { ma2NetworkStatusSchema, ma2NetworkSaveSchema, ma2DiscoverySchema, type Ma2Discovery, type Ma2NetworkSettings as NetworkSettings, type Ma2NetworkStatus } from '@tb/schema';
@@ -53,6 +55,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     setUsername(profile?.username ?? 'administrator'); setAutoConnect(profile?.autoConnect ?? false); setPassword(profile ? '' : 'admin'); setPasswordEdited(!profile);
   };
   const automatic = async (): Promise<void> => {
+    const documentId = useDocumentStore.getState().documentId;
     setBusy(true); setError(''); setProgress('正在发现控台并准备素材读取…');
     try {
       if (host.trim()) {
@@ -64,7 +67,10 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
       const next = await connectDiscoveredMa2(setFound, address => computerNetwork.prepare(address, setProgress));
       setStatus(next);
       if (next.settings) choose(next.settings);
-      notify('控台已连接，可以读取素材');
+      if (!next.settings) throw new Error('控台连接缺少来源信息');
+      const target = next.settings;
+      setProgress('控台已连接，正在载入对应节目 Cue…');
+      notify(await prepareMa2Editing({ dataDirectory: '', network: { host: target.host, port: target.port, monitorPort: target.monitorPort, username: target.username } }, documentId));
     } catch (failure) { setAdvancedOpen(true); setError(failure instanceof Error ? failure.message : '连接未完成，请检查网线和控台设置'); }
     finally { setBusy(false); setProgress(''); }
   };
@@ -85,6 +91,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     finally { setBusy(false); }
   };
   const save = async (connect: boolean): Promise<void> => {
+    const documentId = useDocumentStore.getState().documentId;
     setBusy(true); setError(''); setProgress('正在保存连接设置…');
     try {
       const address = ma2AddressInput(host);
@@ -99,7 +106,10 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
         const connected = ma2NetworkStatusSchema.parse(await window.tbLink.connectMa2Network());
         setStatus(connected);
         if (connected.error) { setError(connected.error); notify(connected.error, 'error'); }
-        else if (connected.state === 'connected') notify('MA2 已登录，正在检查连接');
+        else if (connected.state === 'connected') {
+          setProgress('控台已连接，正在载入对应节目 Cue…');
+          notify(await prepareMa2Editing({ dataDirectory: '', network: { host: address, port, monitorPort, username: username.trim() } }, documentId));
+        }
         else { const message = 'MA2 未建立连接，请检查控台远程设置和网络后重新连接'; setError(message); notify(message, 'error'); }
       } else notify('MA2 连接设置已保存');
     } catch (error) { const message = error instanceof Error ? error.message : String(error); setError(message); notify(message, 'error'); }
@@ -122,7 +132,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
   const profiles = status?.profiles ?? [];
   const selected = profiles.findIndex((profile) => profile.host === host && profile.port === port && profile.monitorPort === monitorPort && profile.username === username);
   return <div className="ma2-network-settings">
-    <Button className="primary-button" disabled={locked || searching} onClick={() => void automatic()}>{busy ? '正在连接…' : '自动连接控台'}</Button>
+    <Button className="primary-button" disabled={locked || searching} onClick={() => void automatic()}>{busy ? '正在连接并载入…' : '连接 MA2 并载入节目 Cue'}</Button>
     <span className="ma2-device-status" role="status">{connectionLabel}</span>
     <p className="settings-note">插好网线后点击自动连接，软件会检查并配置电脑网卡。{status?.settings ? `当前控台 ${status.settings.host}。` : '首次连接会搜索控台；搜不到时只需填写一次控台 IP。'} MIDI 接口用于时间码与触发。</p>
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type WheelEvent as ReactWheelEvent } from 'react';
+import { initialTimelineSize, useTimelineViewportSize } from './useTimelineViewportSize';
 import {
   buildVisibleTimelineTicks,
   chooseTimelineTickInterval,
@@ -17,6 +18,8 @@ type TimelineViewport = {
   pixelsPerSecond: number;
   scrollLeft: number;
   viewportWidth: number;
+  viewportHeight: number;
+  scrollTop: number;
   contentWidth: number;
   gridSize: number;
   ticks: ReturnType<typeof buildVisibleTimelineTicks>;
@@ -29,15 +32,33 @@ type TimelineViewport = {
   revealTime: (milliseconds: number) => void;
 };
 
-export function useTimelineViewport(durationMs: number, initialPixelsPerSecond = DEFAULT_TIMELINE_PIXELS_PER_SECOND, onWheelSeek?: (deltaMs: number) => number, fitKey?: string): TimelineViewport {
-  const manualZoom = useRef(false);
-  const fittedKey = useRef<string | undefined>(undefined);
+function initialScrollLeft(durationMs: number, pixelsPerSecond: number, positionMs: number, fitKey?: string): number {
+  if (fitKey !== undefined) return 0;
+  const width = initialTimelineSize('visual').width;
+  if (width <= 1) return 0;
+  const x = Math.min(Math.max(0, positionMs), durationMs) / 1000 * pixelsPerSecond;
+  return Math.min(Math.max(0, x - width + Math.min(96, width * 0.2)),
+    Math.max(0, timelineContentWidth(durationMs, pixelsPerSecond, width) - width));
+}
+
+export function useTimelineViewport(durationMs: number, initialPixelsPerSecond = DEFAULT_TIMELINE_PIXELS_PER_SECOND, onWheelSeek?: (deltaMs: number) => number, fitKey?: string, initialPositionMs = 0): TimelineViewport {
   const viewportRef = useRef<HTMLDivElement>(null);
   const headingViewportRef = useTimelineHeadings(viewportRef);
-  const [pixelsPerSecond, setPixelsPerSecond] = useState(initialPixelsPerSecond);
-  const [scrollLeft, setScrollLeft] = useState(0);
-  const [viewportWidth, setViewportWidth] = useState(1);
+  const [zoom, setZoom] = useState({ key: fitKey, manual: false, pixelsPerSecond: initialPixelsPerSecond });
+  const [scrollLeft, setScrollLeft] = useState(() => initialScrollLeft(durationMs, initialPixelsPerSecond, initialPositionMs, fitKey));
+  const measuredScrollLeft = useRef(scrollLeft);
+  const revealFrame = useRef<number | null>(null);
+  const layoutMode = fitKey === undefined ? 'visual' : 'lighting';
+  const { width: viewportWidth, height: viewportHeight, observed: observedViewport } = useTimelineViewportSize(viewportRef, layoutMode, scrollLeft);
+  const [scrollTop, setScrollTop] = useState(0);
+  const autoFit = fitKey !== undefined && (!zoom.manual || zoom.key !== fitKey);
+  // Width and fitted scale must enter the same render. Updating the scale from
+  // an effect after ResizeObserver caused another full editor layout at mount.
+  const pixelsPerSecond = autoFit && viewportWidth > 1
+    ? fitTimelinePixelsPerSecond(durationMs, viewportWidth) : zoom.pixelsPerSecond;
   const contentWidth = timelineContentWidth(durationMs, pixelsPerSecond, viewportWidth);
+  const viewportMetrics = useRef({ contentWidth, viewportWidth });
+  viewportMetrics.current = { contentWidth, viewportWidth };
   const ticks = useMemo(() => buildVisibleTimelineTicks({
     durationMs,
     pixelsPerSecond,
@@ -49,29 +70,22 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
   const setViewportScrollLeft = useCallback((nextScrollLeft: number): void => {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    viewport.scrollLeft = Math.max(0, nextScrollLeft);
-    setScrollLeft(viewport.scrollLeft);
+    const metrics = viewportMetrics.current;
+    const next = Math.min(Math.max(0, nextScrollLeft), Math.max(0, metrics.contentWidth - metrics.viewportWidth));
+    if (next === measuredScrollLeft.current) return;
+    viewport.scrollLeft = next;
+    measuredScrollLeft.current = next;
+    setScrollLeft(next);
   }, []);
 
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    const update = (): void => setViewportWidth(Math.max(1, viewport.clientWidth));
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const maximumScrollLeft = Math.max(0, contentWidth - viewport.clientWidth);
-    if (viewport.scrollLeft > maximumScrollLeft) setViewportScrollLeft(maximumScrollLeft);
-  }, [contentWidth, setViewportScrollLeft]);
+    const maximumScrollLeft = Math.max(0, contentWidth - viewportWidth);
+    if (measuredScrollLeft.current > maximumScrollLeft) setViewportScrollLeft(maximumScrollLeft);
+  }, [contentWidth, viewportWidth, setViewportScrollLeft]);
 
   const zoomAt = useCallback((nextPixelsPerSecond: number, clientX?: number): void => {
-    manualZoom.current = true;
     const viewport = viewportRef.current;
     if (!viewport) return;
     const next = Math.min(MAX_TIMELINE_PIXELS_PER_SECOND, Math.max(MIN_TIMELINE_PIXELS_PER_SECOND, nextPixelsPerSecond));
@@ -84,36 +98,43 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
       pixelsPerSecond,
       durationMs
     });
-    setPixelsPerSecond(next);
+    setZoom({ key: fitKey, manual: true, pixelsPerSecond: next });
     requestAnimationFrame(() => {
       setViewportScrollLeft(anchorTime / 1_000 * next - (anchorX - bounds.left));
     });
-  }, [durationMs, pixelsPerSecond, setViewportScrollLeft]);
+  }, [durationMs, pixelsPerSecond, setViewportScrollLeft, fitKey]);
 
   const fit = useCallback((): void => {
-    manualZoom.current = false;
     const viewport = viewportRef.current;
     if (!viewport) return;
-    setPixelsPerSecond(fitTimelinePixelsPerSecond(durationMs, viewport.clientWidth));
+    setZoom({ key: fitKey, manual: false, pixelsPerSecond: fitTimelinePixelsPerSecond(durationMs, viewportWidth) });
     requestAnimationFrame(() => setViewportScrollLeft(0));
-  }, [durationMs, setViewportScrollLeft]);
+  }, [durationMs, viewportWidth, setViewportScrollLeft, fitKey]);
 
   useEffect(() => {
-    if (fitKey === undefined || viewportWidth <= 1) return;
-    if (fittedKey.current !== fitKey) { manualZoom.current = false; fittedKey.current = fitKey; }
-    if (!manualZoom.current) fit();
-  }, [fitKey, viewportWidth, fit]);
+    if (!autoFit || viewportWidth <= 1) return;
+    const frame = requestAnimationFrame(() => setViewportScrollLeft(0));
+    return () => cancelAnimationFrame(frame);
+  }, [autoFit, fitKey, viewportWidth, setViewportScrollLeft]);
 
   const revealTime = useCallback((milliseconds: number): void => {
     const viewport = viewportRef.current;
-    if (!viewport) return;
+    if (!viewport || viewportWidth <= 1 || !observedViewport.current) return;
+    // Wait for an actual viewport width before scrolling a mounted editor.
     const timeX = Math.min(Math.max(0, milliseconds), durationMs) / 1_000 * pixelsPerSecond;
-    const margin = Math.min(96, viewport.clientWidth * 0.2);
-    const visibleLeft = viewport.scrollLeft + margin;
-    const visibleRight = viewport.scrollLeft + viewport.clientWidth - margin;
-    if (timeX < visibleLeft) setViewportScrollLeft(timeX - margin);
-    else if (timeX > visibleRight) setViewportScrollLeft(timeX - viewport.clientWidth + margin);
-  }, [durationMs, pixelsPerSecond, setViewportScrollLeft]);
+    const margin = Math.min(96, viewportWidth * 0.2);
+    const visibleLeft = measuredScrollLeft.current + margin;
+    const visibleRight = measuredScrollLeft.current + viewportWidth - margin;
+    const next = timeX < visibleLeft ? timeX - margin
+      : timeX > visibleRight ? timeX - viewportWidth + margin : null;
+    if (revealFrame.current !== null) cancelAnimationFrame(revealFrame.current);
+    revealFrame.current = next === null ? null : requestAnimationFrame(() => {
+      revealFrame.current = null;
+      setViewportScrollLeft(next);
+    });
+  }, [durationMs, pixelsPerSecond, viewportWidth, setViewportScrollLeft, observedViewport]);
+
+  useEffect(() => () => { if (revealFrame.current !== null) cancelAnimationFrame(revealFrame.current); }, []);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -148,11 +169,15 @@ export function useTimelineViewport(durationMs: number, initialPixelsPerSecond =
     pixelsPerSecond,
     scrollLeft,
     viewportWidth,
+    viewportHeight,
+    scrollTop,
     contentWidth,
     gridSize,
     ticks,
     onScroll: () => {
-      setScrollLeft(viewportRef.current?.scrollLeft ?? 0);
+      measuredScrollLeft.current = viewportRef.current?.scrollLeft ?? 0;
+      setScrollLeft(measuredScrollLeft.current);
+      setScrollTop(viewportRef.current?.scrollTop ?? 0);
       if (headingViewportRef.current && viewportRef.current) headingViewportRef.current.scrollTop = viewportRef.current.scrollTop;
     },
     timeAtClientX: (clientX) => {
@@ -182,11 +207,14 @@ function useTimelineHeadings(viewportRef: RefObject<HTMLDivElement>): RefObject<
   useEffect(() => {
     const area = viewportRef.current, headings = headingsRef.current;
     if (!area || !headings) return;
-    const sync = (): void => { headings.style.height = `${area.clientHeight}px`; headings.scrollTop = area.scrollTop; };
-    sync();
-    const observer = new ResizeObserver(sync);
+    // Measuring clientHeight here forced a full layout during the editor's
+    // React commit. ResizeObserver already provides the laid-out viewport size;
+    // vertical scrolling is mirrored by onScroll above.
+    const observer = new ResizeObserver(entries => {
+      const entry = entries.find(candidate => candidate.target === area);
+      if (entry) headings.style.height = `${entry.contentRect.height}px`;
+    });
     observer.observe(area);
-    if (area.firstElementChild) observer.observe(area.firstElementChild);
     return () => observer.disconnect();
   }, [viewportRef]);
   return headingsRef;

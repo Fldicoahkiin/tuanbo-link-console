@@ -1,4 +1,4 @@
-import { AudioLines, Cable, MonitorUp, Palette, Monitor, SlidersHorizontal, Wrench, Play, Keyboard, Gauge, Film, Timer, Layers, Download, KeyRound } from 'lucide-react';
+import { AudioLines, Cable, MonitorUp, Palette, Monitor, SlidersHorizontal, Wrench, Play, Keyboard, Gauge, Film, Timer, Layers, Download, KeyRound, FileText, ListMusic } from 'lucide-react';
 
 export const SETTINGS_GROUPS = [
   { id: 'devices', name: '设备连接', icon: Cable },
@@ -7,11 +7,13 @@ export const SETTINGS_GROUPS = [
   { id: 'appearance', name: '外观与更新', icon: Palette }
 ] as const;
 export const SETTINGS_SECTIONS = [
+  { id: 'songs', group: 'devices', name: '歌曲导入', detail: '导入 P1 工程或本地歌曲，建立节目单', icon: ListMusic },
   { id: 'obs', group: 'devices', name: 'OBS Studio', detail: '画面与声音输出', icon: Monitor },
   { id: 'ma2', group: 'devices', name: 'MA2 控台', detail: '灯光与控台通信', icon: SlidersHorizontal },
   { id: 'audio', group: 'devices', name: '音频与 MIDI', detail: '声音线路与时间码', icon: AudioLines },
   { id: 'virtual', group: 'devices', name: '虚拟 MIDI', detail: 'loopMIDI 通道管理', icon: Cable },
-  { id: 'maintenance', group: 'devices', name: '高级与诊断', detail: '程序路径与设备详情', icon: Wrench },
+  { id: 'maintenance', group: 'devices', name: '程序维护', detail: '修复 OBS 预览、设置程序启动位置', icon: Wrench },
+  { id: 'logs', group: 'devices', name: '运行日志', detail: '查看记录与导出现场诊断', icon: FileText },
   { id: 'source', group: 'playback', name: '播放主控', detail: '选择内部主控或跟随 P1', icon: Play },
   { id: 'preferences', group: 'playback', name: '播放习惯', detail: '快捷操作、预载和淡入淡出', icon: Keyboard },
   { id: 'shortcuts', group: 'playback', name: '快捷键', detail: '灯光时间线快捷键设置、添加和修改', icon: Keyboard },
@@ -24,7 +26,14 @@ export const SETTINGS_SECTIONS = [
   { id: 'license', group: 'appearance', name: '本机授权', detail: '购买、订单与联网激活', icon: KeyRound }
 ] as const;
 export type SettingsCategory = (typeof SETTINGS_SECTIONS)[number]['id'];
-export type DeviceSettingsCategory = 'obs' | 'ma2' | 'audio' | 'virtual' | 'maintenance';
+export type SettingsFocus = 'audio-output' | 'lighting-mtc' | 'lighting-actions' | 'obs-connection' | 'ma2-connection';
+export type SettingsLocation = { category: SettingsCategory; focus?: SettingsFocus };
+export type DeviceSettingsCategory = 'songs' | 'obs' | 'ma2' | 'audio' | 'virtual' | 'maintenance' | 'logs';
+export const DEVICE_WORKFLOW_GROUPS = [
+  { name: '01 · 准备歌曲', entries: ['songs'] },
+  { name: '02 · 声音、画面与灯光', entries: ['audio', 'obs', 'ma2'] },
+  { name: '辅助工具', entries: ['virtual', 'maintenance', 'logs'] }
+] as const;
 export function isDeviceSettingsCategory(category: SettingsCategory): category is DeviceSettingsCategory {
   return SETTINGS_SECTIONS.find((section) => section.id === category)?.group === 'devices';
 }

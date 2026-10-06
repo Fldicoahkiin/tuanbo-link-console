@@ -9,7 +9,7 @@ function setup() {
   const document = createLightingDocument(); document.outputMode = 'network';
   document.tracks = [lightingTrackSchema.parse({ id: 'pool', name: '序列池', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '开场', start: 0, duration: 5000, timeLock: 'time', muted: false, events: [100, 200].map((at, index) => ({ id: `cue-${index}`, at, kind: 'ma2', action: 'goto', sequence: 168, cue: `${index + 1}.250`, executor: '', label: '开场' })) }] })];
   const status: Ma2NetworkStatus = { state: 'connected', settings: { host: '192.168.0.10', port: 30000, monitorPort: 30001, username: 'operator', autoConnect: false }, passwordSaved: false, version: '3.9.60.74', error: null };
-  const api = { getMa2NetworkStatus: vi.fn(() => Promise.resolve(status)), playMa2Cue: vi.fn(async () => {}), cancelMa2Playback: vi.fn(async () => {}) };
+  const api = { requireOutputLicense: vi.fn(async () => {}), getMa2NetworkStatus: vi.fn(() => Promise.resolve(status)), playMa2Cue: vi.fn(async () => {}), cancelMa2Playback: vi.fn(async () => {}) };
   const midi = vi.fn(); vi.stubGlobal('navigator', { requestMIDIAccess: midi }); vi.stubGlobal('window', { tbLink: api });
   return { document, status, api, midi, output: new LightingNetworkOutput() };
 }
@@ -21,6 +21,20 @@ it('序列池不依赖 MIDI，静音排除，时间码模式不伪造执行器�
   expect(() => compileLightingPackets({ ...f.document, outputMode: 'direct' })).toThrow('序列池');
   expect(compileLightingPackets({ ...f.document, outputMode: 'timecode' })).toEqual([]);
   f.document.tracks[0]!.muted = true; expect(compileLightingNetworkActions(f.document)).toEqual([]);
+});
+
+it('后台关闭必须等网络取消回执；取消失败不报告已经释放', async () => {
+  const f = setup(); await f.output.prepare(f.document, 0);
+  const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  let reject: ((error: Error) => void) | undefined;
+  f.api.cancelMa2Playback.mockImplementationOnce(() => new Promise<void>((_resolve, failed) => { reject = failed; }));
+  let settled = false;
+  const closing = f.output.close().finally(() => { settled = true; });
+  const failed = expect(closing).rejects.toThrow('取消未完成');
+  try {
+    await Promise.resolve(); expect(settled).toBe(false); reject!(new Error('控台取消未确认')); await failed;
+    expect(diagnostic).toHaveBeenCalledWith('取消灯光网络输出失败', expect.any(Error));
+  } finally { diagnostic.mockRestore(); }
 });
 
 it('准备期间停止不会恢复输出，定位不会补发之前的 Cue，尾部等待回执', async () => {
@@ -40,6 +54,24 @@ it('停止取消未发送队列；首条失败阻止后续，不重试也不改�
   await expect(f.output.finish(201)).rejects.toThrow('网络已断开');
   expect(f.api.playMa2Cue).toHaveBeenCalledOnce(); expect(f.api.cancelMa2Playback).toHaveBeenCalled();
   expect(f.midi).not.toHaveBeenCalled();
+});
+
+it('上一首的取消回执迟到失败不能污染新歌曲，错误仍保留诊断', async () => {
+  const f = setup();
+  const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  let rejectCancel: ((error: Error) => void) | undefined;
+  try {
+    await f.output.prepare(f.document, 0);
+    f.api.cancelMa2Playback.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectCancel = reject; }));
+    f.output.stop();
+    await f.output.prepare(f.document, 150);
+    rejectCancel!(new Error('上一首取消回执超时'));
+    await Promise.resolve();
+    await expect(f.output.finish(201)).resolves.toBeUndefined();
+    expect(f.api.playMa2Cue).toHaveBeenCalledOnce();
+    expect(diagnostic).toHaveBeenCalledWith('取消灯光网络输出失败', expect.any(Error));
+    f.output.stop();
+  } finally { diagnostic.mockRestore(); }
 });
 
 it('选中池 Cue 直接试听，连接未建立时显示错误而不请求 MIDI', async () => {

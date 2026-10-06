@@ -28,11 +28,41 @@ function fixture(grouped = false, nativeSeek = false, mtcInstance?: MediaMtcOutp
     id: `song-${index}`, title: `歌曲 ${index}`, referenceAudio: { assetId: `audio-${index}`, relativePath: `${index}.wav`, sha256: 'a'.repeat(64), durationMs: 10_000 }
   })) });
   if (grouped) { project.playlists = [{ id: 'selected', name: '当前列表' }]; project.rundown[0]!.playlistId = 'selected'; project.rundown[2]!.playlistId = 'selected'; }
-  const output = { prepare: vi.fn((): Promise<void | 'default-fallback'> => Promise.resolve()), captureMonitoringStream: vi.fn((): MediaStream | null => null), dispose: () => Promise.resolve() };
+  const output = { prepare: vi.fn((): Promise<void | 'default-fallback'> => Promise.resolve()), captureMonitoringStream: vi.fn((): MediaStream | null => null), getAnalysis: () => null, dispose: () => Promise.resolve() };
   const controller = new InternalPlaybackController(project, deps, audio as unknown as HTMLAudioElement, mtcInstance ?? mtc as unknown as MediaMtcOutput, output);
   return { controller, deps, audio, mtc, project, output, state: () => state };
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+it('异步准备期间保持已选音频线路，下一次明确播放才读取新配置', async () => {
+  const f = fixture();
+  let device = 'first-output';
+  f.deps.configuration = () => ({ outputDeviceId: device, mtcPortName: 'MA2' });
+  f.deps.stop.mockImplementationOnce(() => { device = 'second-output'; return Promise.resolve(); });
+  await f.controller.play('song-0');
+  expect(f.output.prepare).toHaveBeenLastCalledWith(f.audio, 'first-output', 48000);
+  expect(f.state().status).toBe('playing');
+  await f.controller.play('song-1');
+  expect(f.output.prepare).toHaveBeenLastCalledWith(f.audio, 'second-output', 48000);
+  f.controller.dispose();
+});
+it('MIDI 准备超出窗口后音频开始，迟到的端口结果不在歌中途补发', async () => {
+  let resolveAccess: ((access: MIDIAccess) => void) | undefined;
+  const access = new Promise<MIDIAccess>(resolve => { resolveAccess = resolve; });
+  vi.stubGlobal('navigator', { requestMIDIAccess: () => access });
+  const f = fixture(false, false, new MediaMtcOutput());
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] });
+  const playing = f.controller.play('song-0');
+  await vi.advanceTimersByTimeAsync(1001);
+  await playing;
+  expect(f.state().status).toBe('playing');
+  expect(f.state().notice).toContain('准备窗口内未就绪');
+  const send = vi.fn(), open = vi.fn();
+  resolveAccess?.({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open, send }]]) } as unknown as MIDIAccess);
+  await vi.advanceTimersByTimeAsync(8);
+  expect(open).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+  expect(f.audio.play).toHaveBeenCalledOnce();
+  f.controller.dispose();
+});
 it('原生保留绑定按实际音频位置加480秒起点发MTC，本地裁剪不重复计入，暂停停止发码', async () => {
   const f = fixture();
   f.project.rundown[0]!.playback = { volume: 100, endAction: 'stop', startMs: 1500, endMs: 9000, mtcOffsetMs: 480000, shortcut: '' };
@@ -66,17 +96,23 @@ it('时间码模式遇到本地序列池 Cue 时照常播放音频并发原偏�
   await f.controller.resume(); expect(f.state().status).toBe('playing');
   f.controller.dispose();
 });
-it('界面阻塞 200ms 后音乐继续并显示时间码恢复提示，暂停仍立即停发', async () => {
+it('界面阻塞 200ms 后仅停止时间码，音乐继续且不自动重发', async () => {
   const send = vi.fn();
   vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
   const f = fixture(false, false, new MediaMtcOutput());
   await f.controller.play('song-0');
   f.audio.currentTime = 0.008; await vi.advanceTimersByTimeAsync(8);
+  const beforeStall = send.mock.calls.length;
   const clock = vi.spyOn(performance, 'now').mockReturnValue(208);
   f.audio.currentTime = 0.208; await vi.advanceTimersByTimeAsync(8);
   expect(f.state()).toMatchObject({ status: 'playing', error: null });
-  expect(f.state().notice).toContain('200ms');
-  expect(send.mock.calls.at(-1)?.[0]?.[0]).toBe(0xf0);
+  expect(f.state().notice).toContain('超过一帧');
+  expect(f.state().mtcConnectionFailed).toBe(true);
+  expect(send).toHaveBeenCalledTimes(beforeStall);
+  clock.mockReturnValue(224); f.audio.currentTime = 0.224;
+  await vi.advanceTimersByTimeAsync(16);
+  expect(f.state().status).toBe('playing');
+  expect(send).toHaveBeenCalledTimes(beforeStall);
   await f.controller.pause(); const count = send.mock.calls.length;
   await vi.advanceTimersByTimeAsync(100); expect(send).toHaveBeenCalledTimes(count);
   clock.mockRestore(); f.controller.dispose();
@@ -235,6 +271,99 @@ it('OBS 准备失败后音频仍可定位播放，后续定位不反复准备 OB
   expect(f.state()).toMatchObject({ status: 'playing', error: null });
   f.controller.dispose();
 });
+it('无 OBS 联动时拖动播放头同样暂停并重置 MTC，继续后从新位置发码', async () => {
+  const send = vi.fn();
+  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
+  const f = fixture(false, true, new MediaMtcOutput());
+  f.project.rundown[0]!.playback = { volume: 100, endAction: 'stop', startMs: 0, endMs: 0, mtcOffsetMs: 480000, shortcut: '' };
+  f.deps.prepare.mockRejectedValue(new Error('OBS 未连接'));
+  await f.controller.play('song-0');
+  f.audio.currentTime = 0.016; await vi.advanceTimersByTimeAsync(16);
+  await f.controller.scrub('song-0', 4000);
+  expect(f.state().status).toBe('paused');
+  const sent = send.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(100);
+  expect(send).toHaveBeenCalledTimes(sent);
+  await f.controller.resume();
+  f.audio.currentTime = 4.016; await vi.advanceTimersByTimeAsync(8);
+  expect(f.state()).toMatchObject({ status: 'playing', mtcConnectionFailed: false, mtcPortName: 'MA2' });
+  expect(send.mock.calls.filter(call => call[0][0] === 0xf0).at(-1)?.[0].slice(5, 9)).toEqual([0x60, 8, 4, 0]);
+  expect(f.deps.prepare).toHaveBeenCalledOnce(); f.controller.dispose();
+});
+it('连续点击继续只启动一个音频播放和一个输出计时器', async () => {
+  const f = fixture(); await f.controller.play('song-0'); await f.controller.pause();
+  await Promise.all([f.controller.resume(), f.controller.resume()]);
+  expect(f.audio.play).toHaveBeenCalledTimes(2);
+  expect(vi.getTimerCount()).toBe(1); f.controller.dispose();
+});
+it('旧歌曲继续播放的迟到结果不能暂停新歌曲', async () => {
+  const f = fixture(); await f.controller.play('song-0'); await f.controller.pause();
+  let finish: (() => void) | undefined;
+  f.audio.play.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  const resuming = f.controller.resume();
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  await f.controller.play('song-1');
+  const pauses = f.audio.pause.mock.calls.length;
+  finish?.(); await resuming;
+  expect(f.state()).toMatchObject({ status: 'playing', itemId: 'song-1' });
+  expect(f.audio.pause).toHaveBeenCalledTimes(pauses); f.controller.dispose();
+});
+it('旧歌曲继续准备的迟到失败不能关闭新歌曲联动', async () => {
+  const f = fixture(); await f.controller.play('song-0'); await f.controller.pause();
+  let rejectOld: ((error: Error) => void) | undefined;
+  f.deps.ingest.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectOld = reject; }));
+  const old = f.controller.resume();
+  await f.controller.play('song-1');
+  const before = f.deps.ingest.mock.calls.length;
+  rejectOld?.(new Error('旧歌曲超时')); await old;
+  expect(f.state().notice).toBeNull();
+  f.audio.currentTime = 0.1; await vi.advanceTimersByTimeAsync(8);
+  expect(f.deps.ingest.mock.calls.length).toBeGreaterThan(before); f.controller.dispose();
+});
+it.each(['manual', 'end'] as const)('旧歌曲暂停的迟到失败不能关闭新歌曲联动：%s', async kind => {
+  const f = fixture(); await f.controller.play('song-0');
+  let rejectOld: ((error: Error) => void) | undefined;
+  f.deps.pause.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectOld = reject; }));
+  let pausing: Promise<void> | undefined;
+  if (kind === 'manual') pausing = f.controller.pause();
+  else { f.controller.setEndAction('pause'); f.audio.currentTime = 10; f.audio.onended?.(); }
+  expect(rejectOld).toBeDefined();
+  await f.controller.play('song-1');
+  rejectOld?.(new Error('旧歌曲暂停超时')); await pausing;
+  await Promise.resolve();
+  expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing', notice: null });
+  const before = f.deps.ingest.mock.calls.length;
+  f.audio.currentTime = 0.1; await vi.advanceTimersByTimeAsync(8);
+  expect(f.deps.ingest.mock.calls.length).toBeGreaterThan(before);
+  f.controller.dispose();
+});
+it('停止操作迟到失败不能取消随后点击的新歌曲', async () => {
+  const f = fixture(); await f.controller.play('song-0');
+  let rejectOld: ((error: Error) => void) | undefined;
+  f.deps.stop.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectOld = reject; }));
+  const stopping = f.controller.stop();
+  await Promise.resolve();
+  expect(rejectOld).toBeDefined();
+  const playing = f.controller.play('song-1');
+  rejectOld?.(new Error('旧歌曲停止超时'));
+  await stopping; await playing;
+  expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing', error: null });
+  expect(f.audio.play).toHaveBeenCalledTimes(2);
+  f.controller.dispose();
+});
+it('播放错误的清理结果迟到时不覆盖已恢复歌曲的状态', async () => {
+  const f = fixture();
+  let rejectCleanup: ((error: Error) => void) | undefined;
+  f.deps.stop.mockResolvedValueOnce(undefined).mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectCleanup = reject; }));
+  f.deps.resolveAudio.mockRejectedValueOnce(new Error('音频路径失效'));
+  await f.controller.play('song-0');
+  expect(f.state().status).toBe('error');
+  expect(rejectCleanup).toBeDefined();
+  await f.controller.play('song-1');
+  rejectCleanup?.(new Error('旧清理超时')); await Promise.resolve();
+  expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing', error: null });
+  f.controller.dispose();
+});
 it('MA2 绑定起点驱动内部音乐时间码，直接输出模式不再发送重复 MTC', async () => {
   const f = fixture();
   const item = f.project.rundown[0]!;
@@ -355,7 +484,7 @@ describe('内部正式音乐主控', () => {
     const f = lightingFixture(5000);
     f.project.rundown[0]!.lighting!.loop = { enabled: true, startMs: 2000, endMs: 5000 };
     await f.controller.play('song-0');
-    expect(f.controller.mediaElement).toBe(f.audio);
+    expect(f.controller.clock.read().positionMs).toBe(f.audio.currentTime * 1000);
     f.audio.currentTime = 4.995; await vi.advanceTimersByTimeAsync(8);
     f.audio.currentTime = 5; await vi.advanceTimersByTimeAsync(8);
     expect(f.sent.map((bytes) => bytes[0])).toEqual([0x90, 0xf0, 0x80]);

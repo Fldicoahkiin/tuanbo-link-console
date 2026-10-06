@@ -4,6 +4,8 @@ import {
   mtcFrameRateSchema,
   outputCanvasSchema,
   parseLinkProject,
+  linkProjectSchema,
+  validateLinkProjectRelations,
   p1StartTriggerSchema,
   p1MediaBindingSchema,
   p1PlaylistBindingSchema,
@@ -39,6 +41,8 @@ export type LinkCommand = {
   readonly label: string;
   /** Local lighting edits are safe against the immutable playback snapshot. */
   readonly scope?: 'lighting';
+  /** Consecutive checkpoints of one read task share a single undo frame. */
+  readonly historyGroup?: string | undefined;
   execute(project: LinkProject): LinkProject;
   undo(before: LinkProject): LinkProject;
 };
@@ -63,7 +67,8 @@ export function withInitialVisualLayers(command: LinkCommand): LinkCommand {
   const layers = new Map<string, VisualLayer[]>();
   return { ...command, execute(project) {
     const existing = new Set(project.rundown.map((item) => item.id));
-    const next = command.execute(project);
+    const executed = command.execute(project);
+    const next = needsProjectVisualLayers(executed) ? structuredClone(executed) : executed;
     let initialized = false;
     for (const item of next.rundown) {
       if ((!existing.has(item.id) || needsTimelineLayerAssignment(item)) && !item.visualLayers.length) { initializeDefaultItemLayers(item, layers); initialized = true; }
@@ -592,8 +597,7 @@ export function replaceReferenceMediaClipCommand(
   now?: TimestampProvider
 ): LinkCommand {
   const parsed = referenceMediaClipSchema.parse(clip);
-  return createCommand('修改参考素材片段', (project) => {
-    const item = requireItem(project, itemId);
+  return createItemCommand('修改参考素材片段', itemId, (item, project) => {
     requireMediaAsset(project, parsed.assetId);
     const index = item.referenceMediaClips.findIndex((candidate) => candidate.id === parsed.id);
     if (index < 0) throw new Error(`参考素材片段不存在：${parsed.id}`);
@@ -659,12 +663,30 @@ export function addCueCommand(itemId: string, cue: LinkCue, index?: number, now?
 
 export function replaceCueCommand(itemId: string, cue: LinkCue, now?: TimestampProvider): LinkCommand {
   const parsed = linkCueSchema.parse(cue);
-  return createCommand('修改 Cue', (project) => {
-    const item = requireItem(project, itemId);
+  return createItemCommand('修改 Cue', itemId, (item) => {
     const index = item.cues.findIndex((candidate) => candidate.id === parsed.id);
     if (index < 0) throw new Error(`Cue 不存在：${parsed.id}`);
     item.cues[index] = structuredClone(parsed);
   }, now);
+}
+
+function createItemCommand(label: string, itemId: string, mutate: (item: RundownItem, project: LinkProject) => void,
+  now: TimestampProvider = () => new Date().toISOString()): LinkCommand {
+  return {
+    id: crypto.randomUUID(), label,
+    execute(project) {
+      const index = project.rundown.findIndex(item => item.id === itemId);
+      if (index < 0) throw new Error(`节目不存在：${itemId}`);
+      const draft = structuredClone(project.rundown[index]!);
+      mutate(draft, project);
+      const item = rundownItemSchema.parse(draft);
+      const rundown = [...project.rundown]; rundown[index] = item;
+      const next = { ...project, rundown, updatedAt: linkProjectSchema.shape.updatedAt.parse(now()) };
+      validateLinkProjectRelations(next);
+      return next;
+    },
+    undo: before => before
+  };
 }
 
 export function removeCueCommand(itemId: string, cueId: string, now?: TimestampProvider): LinkCommand {
@@ -773,7 +795,8 @@ function createCommand(
       return parseLinkProject(next);
     },
     undo(before) {
-      return parseLinkProject(before);
+      // History stores a previously validated immutable project snapshot.
+      return before;
     }
   };
 }

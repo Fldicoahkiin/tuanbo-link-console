@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { VirtualResourceList } from './VirtualResourceList';
 import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import type { LinkMediaAsset, LinkMediaFolder } from '@tb/schema';
@@ -57,8 +58,31 @@ type MediaRow =
   | { kind: 'folder'; folder: LinkMediaFolder; depth: number }
   | { kind: 'asset'; asset: LinkMediaAsset; depth: number };
 
+const nameCollator = new Intl.Collator('zh-CN');
+const searchNames = new WeakMap<LinkMediaAsset | LinkMediaFolder, string>();
+function searchableName(item: LinkMediaAsset | LinkMediaFolder): string {
+  const cached = searchNames.get(item);
+  if (cached !== undefined) return cached;
+  const normalized = item.name.toLocaleLowerCase('zh-CN');
+  searchNames.set(item, normalized);
+  return normalized;
+}
+
 export function MediaResourceTable(props: Props): JSX.Element {
-  const rows = buildRows(props);
+  const { assets, folders, filter, query, sort, availability, expandedFolderIds } = props;
+  const searchQuery = useDeferredValue(query);
+  const statusAvailability = sort === 'status' ? availability : null;
+  const rows = useMemo(() => buildRows({ assets, folders, filter, query: searchQuery, sort, availability: statusAvailability, expandedFolderIds }),
+    [assets, folders, filter, searchQuery, sort, statusAvailability, expandedFolderIds]);
+  if (props.view === 'list' && rows.length + props.obsVisuals.length > 0) return <VirtualResourceList
+    keys={[...rows.map(row => row.kind === 'folder' ? `folder:${row.folder.id}` : `asset:${row.asset.id}`), ...props.obsVisuals.map(resource => `obs:${resource.id}`)]}
+    onContextMenu={(x, y) => props.onContextMenu({ kind: 'blank' }, x, y)}
+    renderRow={index => {
+      const row = rows[index];
+      if (row) return row.kind === 'folder' ? <FolderRow row={row} props={props} /> : <AssetRow row={row} props={props} />;
+      const resource = props.obsVisuals[index - rows.length]!;
+      return <ObsVisualRow resource={resource} selected={resource.id === props.selectedObsResourceId} onSelect={props.onSelectObsResource} onAdd={props.onAddObsResource} />;
+    }} />;
   return <div
     className={`media-resource-table media-view-${props.view}`}
     onContextMenu={(event) => {
@@ -187,12 +211,11 @@ function AssetRow({ row, props }: { row: Extract<MediaRow, { kind: 'asset' }>; p
 
 function AssetThumbnail({ asset, projectPath }: { asset: LinkMediaAsset; projectPath: string }): JSX.Element {
   const [url, setUrl] = useState<string | null>(null);
-  const [frame, setFrame] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    setUrl(null); setFrame(null); setError(null);
-    void linkDesktopViewModel.ensureMediaPreviewUrl({ projectPath, relativePath: asset.relativePath, sha256: asset.sha256, kind: asset.kind })
+    setUrl(null); setError(null);
+    void linkDesktopViewModel.ensureMediaThumbnailUrl({ projectPath, relativePath: asset.relativePath, sha256: asset.sha256, kind: asset.kind })
       .then((value) => { if (!cancelled) setUrl(value); })
       .catch((reason: unknown) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); });
     return () => { cancelled = true; };
@@ -200,18 +223,7 @@ function AssetThumbnail({ asset, projectPath }: { asset: LinkMediaAsset; project
   if (error) return <span className="media-thumbnail failed" aria-label={`缩略图生成失败：${error}`} title={error}><FileImage /><small>失败</small></span>;
   if (!url) return <span className="media-thumbnail icon" title="正在生成缩略图"><Film /></span>;
   return <span className="media-thumbnail">
-    {asset.kind === 'image' || frame ? <img src={frame ?? url} alt={asset.name} onError={() => setError(`无法显示素材缩略图：${asset.name}`)} />
-      : <video crossOrigin="anonymous" src={url} muted preload="auto" onError={() => setError(`无法解码素材缩略图：${asset.name}`)} onLoadedData={(event) => {
-        try {
-          const canvas = document.createElement('canvas');
-          const video = event.currentTarget;
-          canvas.width = Math.max(1, Math.round(240 * video.videoWidth / Math.max(video.videoWidth, video.videoHeight)));
-          canvas.height = Math.max(1, Math.round(240 * video.videoHeight / Math.max(video.videoWidth, video.videoHeight)));
-          const context = canvas.getContext('2d'); if (!context) throw new Error('无法读取素材缩略图');
-          context.drawImage(event.currentTarget, 0, 0, canvas.width, canvas.height);
-          setFrame(canvas.toDataURL());
-        } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-      }} />}
+    <img src={url} alt={asset.name} onError={() => setError(`无法显示素材缩略图：${asset.name}`)} />
   </span>;
 }
 
@@ -237,7 +249,7 @@ function InlineNameEditor(props: { initialValue: string; onCommit: (name: string
   />;
 }
 
-function buildRows(props: Props): MediaRow[] {
+function buildRows(props: Pick<Props, 'assets' | 'folders' | 'filter' | 'query' | 'sort' | 'availability' | 'expandedFolderIds'>): MediaRow[] {
   const query = props.query.trim().toLocaleLowerCase('zh-CN');
   const folderByParent = new Map<string | null, LinkMediaFolder[]>();
   for (const folder of props.folders) {
@@ -248,14 +260,14 @@ function buildRows(props: Props): MediaRow[] {
   const assetByFolder = new Map<string | null, LinkMediaAsset[]>();
   for (const asset of props.assets) {
     if (props.filter !== 'all' && props.filter !== asset.kind) continue;
-    if (query !== '' && !asset.name.toLocaleLowerCase('zh-CN').includes(query)) continue;
+    if (query !== '' && !searchableName(asset).includes(query)) continue;
     const children = assetByFolder.get(asset.folderId) ?? [];
     children.push(asset);
     assetByFolder.set(asset.folderId, children);
   }
   const rows: MediaRow[] = [];
   const append = (parentId: string | null, depth: number): void => {
-    const folders = [...(folderByParent.get(parentId) ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    const folders = [...(folderByParent.get(parentId) ?? [])].sort((a, b) => nameCollator.compare(a.name, b.name));
     for (const folder of folders) {
       if (!folderMatches(folder.id, query, folderByParent, assetByFolder, folder)) continue;
       rows.push({ kind: 'folder', folder, depth });
@@ -276,7 +288,7 @@ function folderMatches(
   assets: Map<string | null, LinkMediaAsset[]>,
   folder: LinkMediaFolder
 ): boolean {
-  if (query === '' || folder.name.toLocaleLowerCase('zh-CN').includes(query)) return true;
+  if (query === '' || searchableName(folder).includes(query)) return true;
   if ((assets.get(folderId) ?? []).length > 0) return true;
   return (folders.get(folderId) ?? []).some((child) => folderMatches(child.id, query, folders, assets, child));
 }
@@ -287,13 +299,13 @@ function compareAssets(
   sort: MediaSort,
   availability: Props['availability']
 ): number {
-  if (sort === 'type') return `${left.kind}:${left.name}`.localeCompare(`${right.kind}:${right.name}`, 'zh-CN');
+  if (sort === 'type') return nameCollator.compare(`${left.kind}:${left.name}`, `${right.kind}:${right.name}`);
   if (sort === 'status') {
     const leftStatus = availability?.[left.id]?.fileAvailable === false ? 1 : 0;
     const rightStatus = availability?.[right.id]?.fileAvailable === false ? 1 : 0;
     if (leftStatus !== rightStatus) return leftStatus - rightStatus;
   }
-  return left.name.localeCompare(right.name, 'zh-CN');
+  return nameCollator.compare(left.name, right.name);
 }
 
 function mediaKindLabel(kind: LinkMediaAsset['kind']): string {

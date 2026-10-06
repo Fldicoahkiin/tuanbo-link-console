@@ -6,7 +6,7 @@ import {
   ManagedMediaExecutionError,
   ManagedOutputRuntime,
   type ManagedOutputRuntimeDependencies
-} from './managed-output-runtime';
+} from '@tb/core/link';
 
 describe('ManagedOutputRuntime', () => {
   it('场景模式暂停后继续底层媒体，只恢复时钟，不抢占机位或重播', async () => {

@@ -17,6 +17,7 @@ export class LightingMidiOutput {
     const ids = new Set(packets.map((packet) => packet.portProfileId));
     if (ids.size) {
       await requireOutputLicense();
+      if (generation !== this.generation) return;
       const access = await requestMidiAccess({ sysex: true });
       if (generation !== this.generation) return;
       for (const id of ids) {

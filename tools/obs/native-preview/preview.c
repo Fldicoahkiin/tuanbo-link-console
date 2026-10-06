@@ -116,12 +116,21 @@ __declspec(dllexport) bool obs_module_load(void) {
     if (!stopped) { CloseHandle(ready); DeleteCriticalSection(&lock); return false; }
     stopping = 0; worker = CreateThread(NULL, 0, serve, NULL, 0, NULL);
     if (!worker) { CloseHandle(stopped); CloseHandle(ready); DeleteCriticalSection(&lock); return false; }
-    seek_tick_event = CreateEventW(NULL, FALSE, FALSE, NULL);
-    if (seek_tick_event) { seek_add_tick(seek_tick, NULL); seek_worker = CreateThread(NULL, 0, serve_seek, NULL, 0, NULL); }
-    if (!seek_worker) { if (seek_tick_event) { seek_remove_tick(seek_tick, NULL); CloseHandle(seek_tick_event); } InterlockedExchange(&stopping, 1); SetEvent(stopped); WaitForSingleObject(worker, INFINITE); CloseHandle(worker); CloseHandle(stopped); CloseHandle(ready); DeleteCriticalSection(&lock); return false; }
+    seek_add_tick(seek_tick, NULL);
+    for (unsigned i = 0; i < SEEK_WORKERS; i++) {
+        seek_workers[i] = CreateThread(NULL, 0, serve_seek, NULL, 0, NULL);
+        if (!seek_workers[i]) {
+            InterlockedExchange(&stopping, 1); SetEvent(stopped);
+            for (unsigned j = 0; j < i; j++) { WaitForSingleObject(seek_workers[j], INFINITE); CloseHandle(seek_workers[j]); }
+            seek_remove_tick(seek_tick, NULL);
+            WaitForSingleObject(worker, INFINITE); CloseHandle(worker); CloseHandle(stopped); CloseHandle(ready); DeleteCriticalSection(&lock); return false;
+        }
+    }
     return true;
 }
 __declspec(dllexport) void obs_module_unload(void) {
     InterlockedExchange(&stopping, 1); SetEvent(ready); SetEvent(stopped);
-    WaitForSingleObject(worker, INFINITE); WaitForSingleObject(seek_worker, INFINITE); seek_remove_tick(seek_tick, NULL); CloseHandle(seek_tick_event); CloseHandle(seek_worker); CloseHandle(worker); CloseHandle(ready); CloseHandle(stopped); DeleteCriticalSection(&lock);
+    WaitForSingleObject(worker, INFINITE);
+    for (unsigned i = 0; i < SEEK_WORKERS; i++) { WaitForSingleObject(seek_workers[i], INFINITE); CloseHandle(seek_workers[i]); }
+    seek_remove_tick(seek_tick, NULL); CloseHandle(worker); CloseHandle(ready); CloseHandle(stopped); DeleteCriticalSection(&lock);
 }

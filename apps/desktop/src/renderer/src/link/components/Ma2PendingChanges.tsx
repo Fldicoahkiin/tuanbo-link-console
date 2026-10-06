@@ -11,7 +11,9 @@ export function Ma2PendingChanges({ playing, onStop }: { playing: boolean; onSto
   const automatic = useMa2AutoSyncStore();
   const runtime = useRuntimeStore(state => state.state);
   const externalRunning = project?.playbackSource === 'p1' && runtime !== 'idle';
-  if (!pending.length && automatic.status !== 'blocked' && automatic.status !== 'writing') return null;
+  if (!pending.length && automatic.status !== 'blocked' && automatic.status !== 'writing') {
+    return automatic.request ? <section className="ma2-pending-changes" aria-label="MA2 编辑同步"><p role="status">{automatic.message}</p></section> : null;
+  }
   const active = Boolean(automatic.request) && automatic.status !== 'blocked';
   return <section className="ma2-pending-changes" aria-label="MA2 待提交变更">
     <div className="settings-header-actions"><strong>MA2 待提交 · {pending.reduce((sum, item) => sum + item.changes.length, 0)} 处变更</strong>

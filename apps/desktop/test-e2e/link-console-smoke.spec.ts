@@ -798,9 +798,10 @@ test('设备地址草稿不会被独立 MIDI 设置覆盖，保存后两项均�
   const address = page.getByLabel('WebSocket 地址');
   await address.fill('ws://127.0.0.1:4456');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '高级与诊断', exact: true }).click();
+  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '程序维护', exact: true }).click();
   await page.locator('.device-program-card.obs .device-process-settings > summary').click();
-  await page.locator('.device-program-card.obs').getByLabel('工作目录', { exact: true }).fill('C:/unsaved-maintenance');
+  await page.locator('.device-program-card.obs .device-advanced > summary').click();
+  await page.locator('.device-program-card.obs').getByLabel('启动文件夹', { exact: true }).fill('C:/unsaved-maintenance');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '音频与 MIDI', exact: true }).click();
   await page.getByLabel('灯光事件输出端口').selectOption('');
@@ -1659,7 +1660,7 @@ test('保存旧快照不会清除后来修改的退出保护', async ({}, testIn
   await page.evaluate(async (destination) => {
     const project = await window.tbLink.createProject('旧快照');
     await window.tbLink.setDocumentDirty(true);
-    await window.tbLink.saveProject(destination, project);
+    await window.tbLink.saveProjectDocument(destination, JSON.stringify(project));
   }, testInfo.outputPath('snapshot.tblink'));
   const result = await application.evaluate(({ BrowserWindow, dialog }) => {
     const window = BrowserWindow.getAllWindows()[0];
@@ -1717,7 +1718,9 @@ test('没有联动工程时可直接选择 P1 音频并自动建档', async ({},
     dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: paths.linkPath });
   }, { p1Path, linkPath });
   await openSettingsDialog();
-  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '高级与诊断', exact: true }).click();
+  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '程序维护', exact: true }).click();
+  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '歌曲导入', exact: true }).click();
+  await page.getByText('继续使用 P1 播放：跟随与写回', { exact: true }).click();
   await expect(page.locator('.integration-setup-primary > .p1-sync-panel')).toBeVisible();
   await expect(page.locator('.program-card .p1-sync-panel')).toHaveCount(0);
   await page.locator('.integration-setup-primary .p1-import-menu > summary').click();
@@ -2448,8 +2451,8 @@ test('MIDI 顶部状态在启动和插拔时更新，不依赖打开设置', asy
   await openSettingsDialog();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '高级与诊断', exact: true }).click();
-  await page.getByRole('button', { name: '保存本机配置', exact: true }).click();
+  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '程序维护', exact: true }).click();
+  await page.getByRole('button', { name: '保存启动设置', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.tbLink.loadIntegrationProfile())).not.toBeNull();
   await page.evaluate(async () => {
     const profile = await window.tbLink.loadIntegrationProfile();
@@ -2466,12 +2469,13 @@ test('MIDI 顶部状态在启动和插拔时更新，不依赖打开设置', asy
   });
   await page.reload();
   await expect(page.getByRole('navigation', { name: '设置子菜单' })).toHaveCount(0);
-  const midi = page.locator('.toolbar-connection').filter({ has: page.locator('strong', { hasText: /^MIDI$/ }) });
-  await expect(midi).toContainText('已连接');
+  await page.getByRole('button', { name: '详细', exact: true }).click();
+  const midi = page.getByRole('button', { name: /^P1 控制输出：/ });
+  await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：可用');
   await page.evaluate(() => window.dispatchEvent(new Event('test-midi-disconnect')));
-  await expect(midi).toContainText('未连接');
+  await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：未连接');
   await page.evaluate(() => window.dispatchEvent(new Event('test-midi-reconnect')));
-  await expect(midi).toContainText('已连接');
+  await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：可用');
 });
 
 test('顶部连接状态跨页面显示，并跟随 OBS 连接变化', async () => {
@@ -2736,7 +2740,9 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
     dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: paths.linkPath });
   }, { p1Path, linkPath });
   await openSettingsDialog();
-  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '高级与诊断', exact: true }).click();
+  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '程序维护', exact: true }).click();
+  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '歌曲导入', exact: true }).click();
+  await page.getByText('继续使用 P1 播放：跟随与写回', { exact: true }).click();
   await expect(page.locator('.integration-setup-primary > .p1-sync-panel')).toBeVisible();
   await expect(page.locator('.program-card .p1-sync-panel')).toHaveCount(0);
   await page.locator('.integration-setup-primary .p1-import-menu > summary').click();
@@ -2755,7 +2761,7 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByRole('button', { name: '保存本机配置', exact: true }).click();
+  await page.getByRole('button', { name: '保存启动设置', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.tbLink.loadIntegrationProfile())).not.toBeNull();
   await page.evaluate(async () => {
     const profile = await window.tbLink.loadIntegrationProfile();
@@ -3284,8 +3290,10 @@ test('维护合并设备连接，外观和更新同页，移除诊断日志入�
   await menu.getByRole('button', { name: '设备连接', exact: true }).click();
   await section.getByRole('button', { name: 'MA2 控台', exact: true }).click();
   await expect(page.getByLabel('MA2 控台 IP')).toHaveValue('192.168.1.50');
-  await section.getByRole('button', { name: '高级与诊断', exact: true }).click();
+  await section.getByRole('button', { name: '程序维护', exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath('device-maintenance.png') });
+  await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '歌曲导入', exact: true }).click();
+  await page.getByText('继续使用 P1 播放：跟随与写回', { exact: true }).click();
   const p1 = page.locator('.integration-setup-primary .p1-sync-panel');
   await p1.scrollIntoViewIfNeeded();
   await expect(p1.getByLabel('导入 P1 工程')).toBeVisible();

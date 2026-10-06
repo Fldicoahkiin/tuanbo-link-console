@@ -6,6 +6,8 @@ import { connectLocalMa2, useLocalMa2Store } from '../stores/ma2-connection-stor
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Ma2NetworkSettings } from './Ma2NetworkSettings';
 import { Ma2CatalogSettings } from './Ma2CatalogSettings';
+import { prepareMa2Editing } from '../runtime/ma2-editing-session';
+import { useDocumentStore } from '../stores/document-store';
 
 const directoryKey = 'tblink.ma2-onpc-data-directory.v1';
 export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMaintenance }: {
@@ -35,11 +37,13 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
   };
   const connectLocal = async (): Promise<void> => {
     if (busy || disabled) return;
+    const documentId = useDocumentStore.getState().documentId;
     setBusy(true);
     try {
       if (!directory.trim()) throw new Error('请填写本机 onPC 数据目录');
       saveDirectory();
       await connectLocalMa2(directory.trim());
+      notify(await prepareMa2Editing({ dataDirectory: directory.trim() }, documentId));
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setBusy(false); }
   };

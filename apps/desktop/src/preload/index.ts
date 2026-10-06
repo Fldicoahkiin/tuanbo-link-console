@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
-import type { LinkDesktopApi, LinkFileBridge, LinkObsSnapshot, LinkProcessSnapshot, LinkUpdateStatus } from '@tb/core/link';
+import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema } from '@tb/schema';
+import { nativeObsPrepareSchema, nativeObsPreloadSchema, nativeObsStopSchema, nativeObsStatusSchema } from '@tb/schema';
+import type { LinkDesktopApi, LinkDesktopBridgeApi, LinkFileBridge, LinkObsSnapshot, LinkProcessSnapshot, LinkUpdateStatus } from '@tb/core/link';
 
 /** Translate IPC wrappers once, before errors reach any user-facing view. */
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -24,7 +26,26 @@ async function readMa2<T>(channel: string, payload: import('@tb/schema').Ma2Cata
   finally { ipcRenderer.removeListener('link:ma2-read-progress', listener); }
 }
 
-const tbLink: LinkDesktopApi = {
+const tbLink: LinkDesktopBridgeApi = {
+  preloadNativeObs: request => invoke('link:native-obs-preload', nativeObsPreloadSchema.parse(request)),
+  cancelNativeObsPreload: request => invoke('link:native-obs-preload-cancel', nativeObsStopSchema.parse(request)),
+  prepareNativeObs: async request => nativeObsStatusSchema.parse(await invoke('link:native-obs-prepare', nativeObsPrepareSchema.parse(request))),
+  stopNativeObs: request => invoke('link:native-obs-stop', nativeObsStopSchema.parse(request)),
+  getNativeObsStatus: async () => nativeObsStatusSchema.nullable().parse(await invoke('link:native-obs-status')),
+  onNativeObsStatus: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(nativeObsStatusSchema.parse(value));
+    ipcRenderer.on('link:native-obs-status', receive);
+    return () => ipcRenderer.removeListener('link:native-obs-status', receive);
+  },
+  getNativePlaybackDevices: async () => nativePlaybackDevicesSchema.parse(await invoke('link:native-player-devices')),
+  prepareNativePlayback: async request => nativePlayerStatusSchema.parse(await invoke('link:native-player-prepare', nativePlayerPrepareSchema.parse(request))),
+  controlNativePlayback: async request => nativePlayerStatusSchema.parse(await invoke('link:native-player-control', nativePlayerControlSchema.parse(request))),
+  getNativePlaybackStatus: async () => nativePlayerStatusSchema.nullable().parse(await invoke('link:native-player-status')),
+  onNativePlaybackStatus: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(nativePlayerStatusSchema.parse(value));
+    ipcRenderer.on('link:native-player-status', receive);
+    return () => ipcRenderer.removeListener('link:native-player-status', receive);
+  },
   recheckMidi: () => invoke('link:midi-recheck'),
   getLicenseStatus: () => invoke('link:license-status'),
   exportLicenseRequest: () => invoke('link:license-export-request'),
@@ -75,14 +96,15 @@ const tbLink: LinkDesktopApi = {
   loopMidi: (action) => invoke('link:loop-midi', action),
   pickExecutable: () => invoke('link:pick-executable'),
   createProject: (name) => invoke('link:create-project', name),
-  pickOpenProject: () => invoke('link:pick-open-project'),
-  openProject: (path) => invoke('link:open-project', path),
-  saveProject: (path, project) => invoke('link:save-project', path, project),
+  pickProjectDocument: () => invoke('link:pick-open-project'),
+  openProjectDocument: (path) => invoke('link:open-project', path),
+  saveProjectDocument: (path, content) => invoke('link:save-project', path, content),
   importReferenceAudio: (payload) => invoke('link:import-reference-audio', payload),
   resolveReferenceAudioUrl: (payload) => invoke('link:resolve-reference-audio-url', payload),
   importMediaAsset: (payload) => invoke('link:import-media-asset', payload),
   resolveMediaAssetUrl: (payload) => invoke('link:resolve-media-asset-url', payload),
   ensureMediaPreviewUrl: (payload) => invoke('link:ensure-media-preview-url', payload),
+  ensureMediaThumbnailUrl: (payload) => invoke('link:ensure-media-thumbnail-url', payload),
   ensureMediaAudioUrl: (payload) => invoke('link:ensure-media-audio-url', payload),
   loadWaveformCache: (payload) => invoke('link:load-waveform-cache', payload),
   generateWaveform: (payload) => invoke('link:generate-waveform', payload),
@@ -90,6 +112,7 @@ const tbLink: LinkDesktopApi = {
   renderAudioSegments: (payload) => invoke('link:render-audio-segments', payload),
   saveWaveformCache: (payload) => invoke('link:save-waveform-cache', payload),
   inspectProjectAssets: (path, project) => invoke('link:inspect-project-assets', path, project),
+  inspectMediaAssets: (payload) => invoke('link:inspect-media-assets', payload),
   detectCurrentP1Project: () => invoke('link:p1-detect-current-project'),
   pickP1Project: () => invoke('link:p1-pick-project'),
   importP1Project: async (payload, onProgress) => {
@@ -120,6 +143,15 @@ const tbLink: LinkDesktopApi = {
   prepareObsMediaScenes: (projectPath, project, preciseSeeking) => invoke('link:obs-media-scenes-prepare', projectPath, project, preciseSeeking),
   readObsOutputStatus: () => invoke('link:obs-output-status'),
   readObsLiveScene: () => invoke('link:obs-live-scene'),
+  readObsBeauty: target => invoke('link:obs-beauty-read', target),
+  applyObsBeauty: payload => invoke('link:obs-beauty-apply', payload),
+  installBeautyRuntime: () => invoke('link:beauty-install'),
+  startBeautyRuntime: payload => invoke('link:beauty-start', payload),
+  stopBeautyRuntime: () => invoke('link:beauty-stop'),
+  readBeautyRuntime: () => invoke('link:beauty-status'),
+  syncBeautyOutput: values => invoke('link:beauty-output', values),
+  readBeautyComparison: target => invoke('link:beauty-comparison-frame', target),
+  closeBeautyComparison: () => invoke('link:beauty-comparison-close'),
   editObsLiveScene: (edit) => invoke('link:obs-live-edit', edit),
   onObsLiveChanged: (listener) => { const notify = (): void => listener(); ipcRenderer.on('link:obs-live-changed', notify); return () => { ipcRenderer.removeListener('link:obs-live-changed', notify); }; },
   getObsLiveFrame: () => invoke('link:obs-live-frame'),
@@ -147,6 +179,8 @@ const tbLink: LinkDesktopApi = {
   recordLog: (entry) => invoke('link:log-record', entry),
   queryLogs: (filter) => invoke('link:log-query', filter),
   exportDiagnosticPackage: (context) => invoke('link:diagnostic-export', context),
+  exportLogs: () => invoke('link:log-export'),
+  openLogsFolder: () => invoke('link:log-open-folder'),
   onObsStatus: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, snapshot: LinkObsSnapshot) => listener(snapshot);
     ipcRenderer.on('link:obs-status', wrapped);

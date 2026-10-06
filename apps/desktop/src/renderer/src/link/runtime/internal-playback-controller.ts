@@ -1,43 +1,20 @@
+import { optionalOutputReady } from '@tb/core/link';
 import { allocateMediaTimecodeRanges, lightingTimeOrigin, lightingTimecodePlaybackNotice, millisecondsToFrameNumber, playlistItems, programPlaylists, toUserErrorMessage } from '@tb/core/link';
-import type { IntegrationProfile, LinkProject } from '@tb/schema';
+import type { LinkProject } from '@tb/schema';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { LightingMidiOutput } from '../../registry/lighting-midi-output';
 import { PreflightBlockedError } from './preflight-blocked-error';
 import { InternalAudioOutput } from '../../registry/internal-audio-output';
+import { mediaPlaybackClock } from '../../registry/playback-clock';
 
-export type InternalPlayerState = {
-  playlistId?: string;
-  status: 'stopped' | 'preparing' | 'playing' | 'paused' | 'error';
-  itemId: string | null; positionMs: number; durationMs: number; volume: number;
-  endAction: 'stop' | 'next' | 'loop' | 'pause'; error: string | null;
-  playedItemIds: string[];
-  mtcEnabled: boolean;
-  mtcPositionMs: number | null;
-  mtcPortName?: string | null;
-  mtcSentPositionMs?: number | null;
-  errorTitle: string | null;
-  notice: string | null;
-  mtcConnectionFailed: boolean;
-};
-export const emptyInternalPlayerState: InternalPlayerState = {
-  status: 'stopped', itemId: null, positionMs: 0, durationMs: 0, volume: 100, endAction: 'pause', error: null, errorTitle: null, notice: null, playedItemIds: [], mtcEnabled: true, mtcPositionMs: null, mtcConnectionFailed: false
-};
-type Dependencies = {
-  prepare: (itemId: string, positionMs: number, options: { reuseSession: boolean; mtcOutputEnabled: boolean }) => Promise<void>;
-  ingest: (positionMs: number) => Promise<void>;
-  started?: (positionMs: number) => void;
-  scrub?: ((positionMs: number) => Promise<void>) | undefined;
-  pause: () => Promise<void>;
-  stop: () => Promise<void>;
-  resolveAudio: (relativePath: string) => Promise<string>;
-  configuration: () => { outputDeviceId: string; audioSampleRate?: 44100 | 48000; mtcPortName: string | null; preload?: boolean; fadeInMs?: number; fadeOutMs?: number; lightingProfile?: IntegrationProfile | null };
-  changed: (state: InternalPlayerState) => void;
-};
+import { emptyInternalPlayerState, type InternalPlayerDependencies, type InternalPlayerState } from '@tb/core/link';
+export { emptyInternalPlayerState, type InternalPlayerDependencies, type InternalPlayerState } from '@tb/core/link';
 
 export class InternalPlaybackController {
   private state: InternalPlayerState = { ...emptyInternalPlayerState };
   private generation = 0;
   private tail: Promise<void> = Promise.resolve();
+  private resuming: { generation: number; task: Promise<void> } | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private fadeTimer: ReturnType<typeof setInterval> | null = null;
   private lastFrame = -1;
@@ -54,18 +31,21 @@ export class InternalPlaybackController {
   private loadedAudioUrl: string | null = null;
   private readonly lighting = new LightingMidiOutput();
 
-  constructor(private readonly project: LinkProject, private readonly dependencies: Dependencies,
+  constructor(private readonly project: LinkProject, private readonly dependencies: InternalPlayerDependencies,
     private readonly audio: HTMLAudioElement = new Audio(), private readonly mtc = new MediaMtcOutput(),
-    private readonly output: Pick<InternalAudioOutput, 'prepare' | 'captureMonitoringStream' | 'dispose'> = new InternalAudioOutput()) {
+    private readonly output: Pick<InternalAudioOutput, 'prepare' | 'captureMonitoringStream' | 'getAnalysis' | 'dispose'> = new InternalAudioOutput()) {
     audio.preload = 'auto';
     audio.crossOrigin = 'anonymous';
     audio.onended = () => this.finish();
     audio.onerror = () => this.fail(new Error(`音频解码或读取失败：${audio.error?.message ?? '未知错误'}`));
   }
 
-  get mediaElement(): HTMLAudioElement { return this.audio; }
+  readonly clock = mediaPlaybackClock(() => this.audio);
 
   play(itemId: string, requestedPositionMs?: number, paused = false): Promise<void> {
+    // Capture output settings once for this preparation. Device changes must not
+    // destroy or silently re-route a song that has already begun preparing.
+    const config = this.dependencies.configuration();
     const reuseSession = this.state.itemId === itemId && ['playing', 'paused'].includes(this.state.status);
     if (this.state.itemId && this.state.itemId !== itemId && ['playing', 'paused'].includes(this.state.status)) this.markPlayed();
     const generation = ++this.generation;
@@ -86,29 +66,39 @@ export class InternalPlaybackController {
       if (!this.current(generation)) return;
       if (this.loadedAudioUrl !== url || this.audio.src !== url || this.audio.error) {
         this.loadedAudioUrl = null;
-        this.audio.preload = this.dependencies.configuration().preload === false ? 'metadata' : 'auto'; this.audio.src = url;
+        this.audio.preload = config.preload === false ? 'metadata' : 'auto'; this.audio.src = url;
         await waitForAudio(this.audio);
         this.loadedAudioUrl = url;
       }
       if (!this.current(generation)) return;
-      const config = this.dependencies.configuration();
       const outputRoute = await this.output.prepare(this.audio, config.outputDeviceId, config.audioSampleRate ?? 48000);
       if (!this.current(generation)) return;
       if (outputRoute === 'default-fallback') this.update({ notice: '原音频输出设备已断开，本次播放改用 Windows 默认设备。请在音频输出设置中确认线路。' });
       this.directLighting = item.lighting?.outputMode === 'direct' || item.lighting?.outputMode === 'network';
       const sendMtc = !this.directLighting && this.state.mtcEnabled;
       let mtcPortName: string | null | undefined;
-      try {
-        mtcPortName = await this.mtc.connect(sendMtc ? config.mtcPortName : null, sendMtc && Boolean(item.p1Media || item.lighting?.ma2Bindings?.length || item.lighting?.tracks.some(track => track.clips.some(clip => clip.events.length))));
-      } catch (error) {
-        if (this.current(generation)) { this.mtc.stop(); this.update({ mtcConnectionFailed: true }); this.appendNotice(`MIDI 时间码未输出：${toUserErrorMessage(error)}。本次继续播放音频。`); }
-      }
+      const stalePairing = Object.values(this.project.ma2ReadState?.pairings ?? {}).some(pair => pair.itemId === item.id && pair.status === 'stale');
+      if (stalePairing) this.appendNotice('歌曲与控台的时间依据已变化，本次灯光和时间码未参与；请重新核对配对。音频继续播放。');
+      await Promise.all([
+        (async () => {
+          try {
+            mtcPortName = await optionalOutputReady(this.mtc.connect(sendMtc && !stalePairing ? config.mtcPortName : null, sendMtc && !stalePairing && Boolean(item.p1Media || item.lighting?.ma2Bindings?.length || item.lighting?.tracks.some(track => track.clips.some(clip => clip.events.length)))), () => this.mtc.stop(), 'MIDI 时间码');
+          } catch (error) {
+            if (this.current(generation)) { this.mtc.stop(); this.update({ mtcConnectionFailed: true }); this.appendNotice(`MIDI 时间码未输出：${toUserErrorMessage(error)}。本次继续播放音频。`); }
+          }
+        })(),
+        (async () => {
+          if (!item.lighting || stalePairing) return;
+          try {
+            await optionalOutputReady(this.lighting.prepare(item.lighting, config.lightingProfile ?? null, positionMs), () => this.lighting.stop(), '灯光动作');
+            if (this.current(generation)) this.lightingPrepared = true;
+          } catch (error) {
+            if (this.current(generation)) { this.lighting.stop(); this.appendNotice(`灯光动作未启动：${toUserErrorMessage(error)}。本次继续播放音频。`); }
+          }
+        })()
+      ]);
       if (!this.current(generation)) return;
       this.update({ mtcPortName: sendMtc ? mtcPortName ?? null : null, mtcSentPositionMs: null });
-      if (item.lighting) {
-        try { await this.lighting.prepare(item.lighting, config.lightingProfile ?? null, positionMs); this.lightingPrepared = true; }
-        catch (error) { this.lighting.stop(); this.appendNotice(`灯光动作未启动：${toUserErrorMessage(error)}。本次继续播放音频。`); }
-      }
       const lightingNotice = item.lighting ? lightingTimecodePlaybackNotice(item.lighting) : null;
       if (lightingNotice) this.update({ notice: [this.state.notice, lightingNotice].filter(Boolean).join('；') });
       if (!this.current(generation)) return;
@@ -145,32 +135,46 @@ export class InternalPlaybackController {
 
   async pause(): Promise<void> {
     if (this.state.status !== 'playing' || this.finishingLighting) return;
-    this.silence(); this.update({ status: 'paused', positionMs: this.audio.currentTime * 1000, mtcPositionMs: this.audio.currentTime * 1000 + this.offsetMs });
-    if (this.runtimePrepared) try { await this.dependencies.pause(); } catch (error) { this.disableRuntime(error); }
+    const generation = this.generation; this.silence();
+    this.update({ status: 'paused', positionMs: this.audio.currentTime * 1000, mtcPositionMs: this.audio.currentTime * 1000 + this.offsetMs });
+    if (this.runtimePrepared) try { await this.dependencies.pause(); } catch (error) { if (this.current(generation)) this.disableRuntime(error); }
   }
 
-  async resume(): Promise<void> {
+  resume(): Promise<void> {
+    if (this.resuming?.generation === this.generation) return this.resuming.task;
+    const generation = this.generation;
+    const task = this.resumePlayback().finally(() => {
+      if (this.resuming?.task === task) this.resuming = null;
+    });
+    this.resuming = { generation, task };
+    return task;
+  }
+
+  private async resumePlayback(): Promise<void> {
     if (this.state.status !== 'paused') return;
     if (this.audio.currentTime * 1000 >= this.state.durationMs && this.state.itemId) { await this.play(this.state.itemId); return; }
     const generation = this.generation;
     try {
-      if (this.runtimePrepared) try { await this.dependencies.ingest(this.audio.currentTime * 1000); } catch (error) { this.disableRuntime(error); }
+      if (this.runtimePrepared) try { await this.dependencies.ingest(this.audio.currentTime * 1000); }
+      catch (error) { if (!this.current(generation)) return; this.disableRuntime(error); }
+      if (!this.current(generation)) return;
       const lighting = this.project.rundown.find((item) => item.id === this.state.itemId)?.lighting;
       if (lighting && this.lightingPrepared) try { await this.lighting.prepare(lighting, this.dependencies.configuration().lightingProfile ?? null, this.audio.currentTime * 1000); }
-      catch (error) { this.lightingPrepared = false; this.lighting.stop(); this.appendNotice(`灯光动作已停止：${toUserErrorMessage(error)}`); }
+      catch (error) { if (!this.current(generation)) return; this.lightingPrepared = false; this.lighting.stop(); this.appendNotice(`灯光动作已停止：${toUserErrorMessage(error)}`); }
       if (!this.current(generation)) return;
-      this.audio.volume = this.state.volume / 100; await this.audio.play(); this.lastAdvanced = performance.now();
-      if (!this.current(generation)) { this.silence(); return; }
+      this.audio.volume = this.state.volume / 100; await this.audio.play();
+      if (!this.current(generation)) return;
+      this.lastAdvanced = performance.now();
       if (this.runtimePrepared) this.dependencies.started?.(this.audio.currentTime * 1000);
       this.update({ status: 'playing' }); this.timer = setInterval(() => this.tick(), 8);
-    } catch (error) { this.fail(error); }
+    } catch (error) { if (this.current(generation)) this.fail(error); }
   }
 
   async stop(): Promise<void> {
-    ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null });
+    const generation = ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null });
     // Publish cleanup to the same queue before another Play can start preparing OBS.
     const operation = this.tail.then(() => this.dependencies.stop());
-    this.tail = operation.catch((error: unknown) => this.fail(error));
+    this.tail = operation.catch((error: unknown) => { if (this.current(generation)) this.fail(error); });
     await this.tail;
   }
   async reset(): Promise<void> { await this.stop(); if (this.state.status !== 'error') this.update({ itemId: null, playedItemIds: [], durationMs: 0 }); }
@@ -190,8 +194,12 @@ export class InternalPlaybackController {
     const item = this.project.rundown.find((entry) => entry.id === itemId);
     if (!Number.isFinite(positionMs) || positionMs < (item?.playback?.startMs ?? 0) || positionMs >= (item?.playback?.endMs || item?.referenceAudio?.durationMs || 0)) return Promise.reject(new Error('定位位置超出节目范围'));
     if (!this.runtimePrepared && this.state.itemId === itemId && ['playing', 'paused'].includes(this.state.status)) {
+      // Scrubbing must stop the old output clock even when OBS was unavailable.
+      // Resuming starts MTC at the selected position instead of treating it as a jump.
+      ++this.generation; this.silence();
       this.audio.currentTime = positionMs / 1000;
-      this.update({ positionMs, mtcPositionMs: positionMs + this.offsetMs });
+      this.lastFrame = -1; this.previousPosition = -1;
+      this.update({ status: 'paused', positionMs, mtcPositionMs: positionMs + this.offsetMs });
       return Promise.resolve();
     }
     if (!this.dependencies.scrub || this.state.itemId !== itemId || !['playing', 'paused'].includes(this.state.status)) return this.play(itemId, positionMs, true);
@@ -250,11 +258,9 @@ export class InternalPlaybackController {
     }
   }
   captureMonitoringStream(): MediaStream | null {
-    // The playing state is published before audio.play() resolves; attach the
-    // prepared monitoring graph now so consumers receive the first samples.
-    if (this.state.status !== 'playing') return null;
-    return this.output.captureMonitoringStream();
+    return this.state.status === 'playing' ? this.output.captureMonitoringStream() : null;
   }
+  getAudioAnalysis(): ReturnType<InternalAudioOutput['getAnalysis']> { return this.state.status === 'playing' ? this.output.getAnalysis() : null; }
   fade(out: boolean): void {
     const duration = out ? this.dependencies.configuration().fadeOutMs ?? 500 : this.dependencies.configuration().fadeInMs ?? 500;
     const itemVolume = this.project.rundown.find((item) => item.id === this.state.itemId)?.playback?.volume ?? 100;
@@ -323,10 +329,9 @@ export class InternalPlaybackController {
     this.markPlayed();
     this.silence();
     if (this.state.endAction === 'pause') {
-      this.audio.currentTime = this.state.durationMs / 1000;
+      const generation = this.generation; this.audio.currentTime = this.state.durationMs / 1000;
       this.update({ status: 'paused', positionMs: this.state.durationMs, mtcPositionMs: this.state.durationMs + this.offsetMs });
-      if (this.runtimePrepared) void this.dependencies.pause().catch((error: unknown) => this.disableRuntime(error));
-      return;
+      if (this.runtimePrepared) void this.dependencies.pause().catch((error: unknown) => { if (this.current(generation)) this.disableRuntime(error); }); return;
     }
     if (this.state.endAction === 'loop' && this.state.itemId) { void this.play(this.state.itemId); return; }
     const items = playlistItems(this.project, this.state.playlistId ?? 'all').filter((item) => item.enabled && item.referenceAudio);
@@ -338,10 +343,10 @@ export class InternalPlaybackController {
     const errorTitle = error instanceof PreflightBlockedError ? '播放未开始：预检未通过'
       : this.state.mtcConnectionFailed ? '播放未开始：时间码输出不可用'
       : this.state.status === 'preparing' ? '播放未开始：准备失败' : '播放操作失败';
-    ++this.generation; let message = toUserErrorMessage(error);
+    const generation = ++this.generation; let message = toUserErrorMessage(error);
     try { this.silence(); } catch (cleanup) { message += `；灯光释放失败：${toUserErrorMessage(cleanup)}`; }
     this.update({ status: 'error', error: message, errorTitle, notice: null });
-    void this.dependencies.stop().catch((cleanup: unknown) => this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` }));
+    void this.dependencies.stop().catch((cleanup: unknown) => { if (this.current(generation)) this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` }); });
   }
   private appendNotice(message: string): void {
     this.update({ notice: [this.state.notice, message].filter(Boolean).join('；') });
@@ -376,4 +381,3 @@ function waitForAudio(audio: HTMLAudioElement): Promise<void> {
     audio.load();
   });
 }
-

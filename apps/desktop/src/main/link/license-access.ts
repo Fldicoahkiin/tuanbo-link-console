@@ -1,6 +1,11 @@
 import { linkActionSchema, linkInternalAudioCaptureSchema, linkManagedMediaExecutionPayloadSchema, type LicenseStatus } from '@tb/schema';
+import { nativePlayerControlSchema } from '@tb/schema';
 
 const publicCalls = new Set([
+  'link:native-obs-status', 'link:native-obs-stop', 'link:native-obs-preload-cancel',
+  'link:native-player-status',
+  'link:beauty-stop', 'link:beauty-status',
+  'link:log-record', 'link:log-query', 'link:log-export', 'link:log-open-folder', 'link:diagnostic-export',
   'link:license-status', 'link:license-activate-code', 'link:license-refresh-online',
   'link:license-export-request', 'link:license-import', 'link:window-control', 'link:window-visible',
   'link:purchase-catalog', 'link:purchase-list', 'link:purchase-create', 'link:purchase-refresh', 'link:purchase-open-payment',
@@ -12,6 +17,10 @@ const publicCalls = new Set([
 
 export function needsProductLicense(channel: string, value: unknown): boolean {
   if (publicCalls.has(channel)) return false;
+  if (channel === 'link:native-player-control') {
+    const control = nativePlayerControlSchema.parse(value);
+    return control.kind !== 'stop' && control.kind !== 'pause' && control.kind !== 'stop-mtc';
+  }
   if (channel === 'link:set-runtime-active') return value !== false;
   if (channel === 'link:obs-internal-audio') return linkInternalAudioCaptureSchema.parse(value).enabled;
   if (channel === 'link:obs-execute-managed-media') return linkManagedMediaExecutionPayloadSchema.parse(value).event.phase === 'start';

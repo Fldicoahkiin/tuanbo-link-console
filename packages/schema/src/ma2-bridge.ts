@@ -86,3 +86,14 @@ export const ma2PlaybackActionSchema = z.discriminatedUnion('target', [
 export type Ma2PlaybackAction = z.infer<typeof ma2PlaybackActionSchema>;
 export const ma2PlaybackRequestSchema = z.object({ network: ma2NetworkTargetSchema, action: ma2PlaybackActionSchema, sessionId: z.uuid(), deadlineAt: z.number().finite().positive() }).strict();
 export type Ma2PlaybackRequest = z.infer<typeof ma2PlaybackRequestSchema>;
+
+export const ma2PreviewStateSchema = z.object({
+  selectedCue: z.string().nullable(),
+  command: z.enum(['idle', 'sending', 'sent', 'failed']),
+  activity: z.discriminatedUnion('state', [
+    z.object({ state: z.literal('unsupported'), reason: z.string() }).strict(),
+    z.object({ state: z.literal('current'), cue: z.string().nullable(), observedAt: z.number() }).strict(),
+    z.object({ state: z.enum(['stale', 'disconnected']), lastCue: z.string().nullable() }).strict()
+  ])
+}).strict();
+export type Ma2PreviewState = z.infer<typeof ma2PreviewStateSchema>;

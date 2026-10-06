@@ -152,17 +152,63 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .cue-point-dialog .effect-binding-form { width: min(420px, calc(100vw - 40px)); border: 0; box-shadow: none; }
 .cue-point-dialog button { min-height: 34px; padding: 6px 12px; border: 1px solid var(--separator); border-radius: var(--radius-control); color: var(--text-primary); background: var(--surface-raised); }
 .cue-point-dialog footer button:last-child { background: var(--accent-fill); color: var(--on-accent); border-color: transparent; }
-.diagnostics-log-sheet.modal-surface { inset: 0; width: min(1120px, calc(100vw - 48px)); padding: 24px; }
-.diagnostics-log-sheet .log-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 16px; }
-.diagnostics-log-sheet .log-filters label { flex: 1 1 120px; min-width: 0; }
-.diagnostics-log-sheet .log-filters select { width: 100%; }
-.diagnostics-log-sheet .log-row { padding-block: 14px; font-size: var(--text-control); }
-.diagnostics-log-sheet .log-row details { margin-top: 8px; }
-.diagnostics-log-sheet .log-row summary { cursor: pointer; color: var(--text-secondary); }
-.diagnostics-log-sheet .log-row pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-caption); }
-.diagnostics-log-sheet .log-row.error strong { color: var(--danger); }
-.diagnostics-log-sheet .log-row.warning strong { color: var(--warning-text); }
-.diagnostics-log-sheet .log-row.info strong { color: var(--text-secondary); }
+
+:root { --workflow-songs: #f2bd71; --workflow-audio: #67c8bf; --workflow-video: #78b4f0; --workflow-lighting: #b99bef; --workflow-tools: #9ca9bb; }
+:root[data-theme='light'] { --workflow-songs: #916019; --workflow-audio: #177c73; --workflow-video: #286eaf; --workflow-lighting: #7953b3; --workflow-tools: #627087; }
+[data-device-category='songs'] { --workflow-color: var(--workflow-songs); }
+[data-device-category='audio'] { --workflow-color: var(--workflow-audio); }
+[data-device-category='obs'] { --workflow-color: var(--workflow-video); }
+[data-device-category='ma2'] { --workflow-color: var(--workflow-lighting); }
+[data-device-category='virtual'], [data-device-category='maintenance'], [data-device-category='logs'] { --workflow-color: var(--workflow-tools); }
+.settings-section-sidebar .device-workflow-group { display: grid; gap: 4px; margin-bottom: 18px; }
+.settings-section-sidebar .device-workflow-group h3 { margin: 6px 8px 10px; color: var(--text-primary); font-size: 13px; font-weight: 600; line-height: 1.5; }
+.settings-section-sidebar .device-workflow-group button { display: flex; align-items: center; gap: 10px; padding: 10px; min-height: 64px; width: 100%; border-left: 3px solid transparent; border-radius: 8px; }
+.settings-section-sidebar .device-workflow-group button > svg { color: var(--workflow-color); background: color-mix(in srgb, var(--workflow-color) 12%, transparent); padding: 5px; box-sizing: content-box; border-radius: 7px; flex-shrink: 0; }
+.settings-section-sidebar .device-workflow-group button > span { min-width: 0; text-align: left; }
+.settings-section-sidebar .device-workflow-group button strong { font-size: 15px; font-weight: 600; line-height: 1.5; }
+.settings-section-sidebar .device-workflow-group button small { display: block; margin-top: 3px; font-size: 13px; font-weight: 400; color: var(--text-primary); white-space: normal; line-height: 1.5; }
+.settings-section-sidebar .device-workflow-group button.active { border-left-color: var(--workflow-color); background: color-mix(in srgb, var(--workflow-color) 13%, var(--surface)); }
+.settings-section-sidebar .device-workflow-group button.active strong { color: var(--workflow-color); }
+.device-console[data-device-category] .device-detail-header { border-left: 3px solid var(--workflow-color); padding-left: 12px; }
+.song-import-settings { display: grid; gap: 20px; }
+.song-import-settings fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.song-source-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.song-source-picker button { display: flex; align-items: center; gap: 10px; padding: 12px; text-align: left; color: var(--text-primary); border: 1px solid var(--separator); border-radius: var(--radius-control); background: var(--surface); }
+.song-source-picker button[aria-pressed='true'] { border-color: var(--workflow-songs); background: color-mix(in srgb, var(--workflow-songs) 9%, var(--surface)); }
+.song-source-picker button svg { color: var(--workflow-songs); flex-shrink: 0; }
+.song-source-picker button strong, .song-source-picker button small { display: block; }
+.song-source-picker button small { font-size: var(--text-caption); color: var(--text-secondary); margin-top: 4px; }
+.song-source-limits { margin-top: 20px; border-top: 1px solid var(--separator); padding-top: 12px; color: var(--text-secondary); font-size: var(--text-control); }
+.song-source-limits h4 { color: var(--text-primary); }
+@media (max-width: 1000px) { .song-source-picker { grid-template-columns: 1fr; } }
+.diagnostic-exports { display: grid; gap: 12px; }
+.diagnostic-export-options { color: var(--text-secondary); font-size: var(--text-caption); }
+.diagnostic-export-options summary { cursor: pointer; }
+.diagnostic-export-fields { display: grid; gap: 12px; padding-top: 12px; }
+.program-maintenance-task { padding: 16px 0; }
+.program-maintenance-task h4 { margin: 0 0 12px; color: var(--text-primary); }
+.device-console .program-maintenance-task .device-panel-actions,
+.device-console .program-maintenance-task .settings-note { margin: 0; }
+.device-console .diagnostic-exports .settings-note,
+.device-console .diagnostic-exports .device-panel-actions { margin: 0; }
+.device-console .diagnostic-export-options { margin: 0; padding: 0; border: 0; background: transparent; }
+.device-console .diagnostic-export-options > summary { padding: 4px 0; }
+.device-console .diagnostic-export-options[open] > :not(summary) { margin: 0; }
+.diagnostic-exports textarea { width: 100%; resize: vertical; min-height: 60px; padding: 8px 10px; color: var(--text-primary); background: var(--surface); border: 1px solid var(--separator); border-radius: var(--radius-control); font: inherit; }
+.diagnostic-export-fields > label { color: var(--text-secondary); font-size: var(--text-caption); }
+.diagnostic-export-result { overflow-wrap: anywhere; user-select: text; }
+.diagnostics-log-page .log-table-header, .diagnostics-log-page .log-row { grid-template-columns: 145px 55px 60px minmax(200px, 1fr) 115px; }
+.diagnostics-log-page .page-heading { padding-right: 36px; }
+.diagnostics-log-page .log-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 16px; }
+.diagnostics-log-page .log-filters label { flex: 1 1 100px; min-width: 0; }
+.diagnostics-log-page .log-filters select { width: 100%; }
+.diagnostics-log-page .log-row { padding-block: 14px; font-size: var(--text-control); }
+.diagnostics-log-page .log-row details { margin-top: 8px; }
+.diagnostics-log-page .log-row summary { cursor: pointer; color: var(--text-secondary); }
+.diagnostics-log-page .log-row pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-caption); }
+.diagnostics-log-page .log-row.error strong { color: var(--danger); }
+.diagnostics-log-page .log-row.warning strong { color: var(--warning-text); }
+.diagnostics-log-page .log-row.info strong { color: var(--text-secondary); }
 .playlist-dialog form { display: grid; gap: 16px; }
 .playlist-dialog form > div { display: flex; justify-content: flex-end; gap: 8px; }
 .modal-surface.obs-source-dialog form { display: grid; gap: 16px; }
@@ -297,6 +343,17 @@ input:disabled, textarea:disabled, select:disabled { opacity: .5; cursor: not-al
 .connection-overview-item { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 0 8px; border-radius: 6px; background: var(--surface-hover); color: var(--text-secondary); white-space: nowrap; font-size: 12px; }
 .connection-overview-item strong { font-weight: 650; color: var(--text-primary); }
 .connection-overview-item small { font-size: 11px; color: inherit; }
+.connection-overview-item { border: 1px solid transparent; cursor: pointer; -webkit-app-region: no-drag; }
+.connection-overview-item:hover { border-color: currentColor; background: var(--surface-active, var(--surface-hover)); }
+.connection-overview-item:focus-visible { outline: 2px solid var(--accent, #459bff); outline-offset: 2px; }
+.settings-location-highlight { outline: 2px solid transparent; outline-offset: 5px; border-radius: 6px; scroll-margin-block: 24px; animation: settings-location-flash 700ms ease-in-out 2; }
+@keyframes settings-location-flash {
+  0%, 100% { outline-color: transparent; background-color: transparent; }
+  35%, 65% { outline-color: var(--accent, #459bff); background-color: color-mix(in srgb, var(--accent, #459bff) 12%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-location-highlight { animation: none; outline-color: var(--accent, #459bff); }
+}
 .connection-overview-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
 .connection-overview-item.state-ready { color: #6bdaa3; }
 .connection-overview-item.state-error { color: #ff7777; }

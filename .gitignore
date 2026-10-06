@@ -67,6 +67,7 @@ apps/desktop/out-*/
 .env
 .env.*
 !.env.example
+apps/desktop/.local-test-access
 **/.impeccable/review/
 *.pem
 *.pfx
@@ -76,3 +77,7 @@ apps/desktop/out-*/
 # IBT built runtime (reproduced from pinned public source)
 tools/ibt/bin/
 tools/midi-probe/bin/
+tools/playback-engine/bin/
+
+apps/desktop/dist-internal/
+apps/desktop/dist-internal-candidate/

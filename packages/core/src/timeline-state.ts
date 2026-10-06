@@ -77,72 +77,95 @@ export function resolveTimelineState(
   playheadMs: number
 ): ResolvedTimelineState {
   if (!Number.isFinite(playheadMs) || playheadMs < 0) throw new Error('播放头时间必须是非负有限毫秒数');
-  const frameRate = project.timebase.frameRate;
-  const assetById = new Map(project.mediaAssets.map((asset) => [asset.id, asset]));
-  const layerById = new Map(item.visualLayers.map((layer, layerIndex) => [layer.id, { layer, layerIndex }]));
-  const clips = item.referenceMediaClips.map((clip): ResolvedTimelineClip => {
-    const asset = assetById.get(clip.assetId);
-    if (!asset) throw new Error(`媒体素材不存在：${clip.assetId}`);
-    const isVisualAsset = asset.kind === 'video' || asset.kind === 'image';
-    if (isVisualAsset && item.visualLayers.length > 0 && !clip.layerId) {
-      throw new Error(`视觉素材片段“${clip.label}”尚未分配视觉图层`);
-    }
-    const layerEntry = clip.layerId ? layerById.get(clip.layerId) : undefined;
-    if (clip.layerId && !layerEntry) throw new Error(`素材片段“${clip.label}”引用不存在的图层：${clip.layerId}`);
-    const span = resolveTimelineClipSpan(clip, frameRate);
-    const active = isTimelineSpanActive(span, playheadMs);
-    const layerVisible = layerEntry?.layer.visible ?? true;
-    const visible = active && layerVisible;
+  return new TimelineStateIndex(project, item).at(playheadMs);
+}
+
+/** Compile immutable document spans once; playback queries only resolve activity. */
+export class TimelineStateIndex {
+  private readonly clips: ResolvedTimelineClip[];
+  private readonly visualObsCues: ResolvedTimelineObsCue[];
+  private readonly clipOrder: number[];
+  constructor(project: LinkProject, private readonly item: RundownItem) {
+    const frameRate = project.timebase.frameRate;
+    const assetById = new Map(project.mediaAssets.map((asset) => [asset.id, asset]));
+    const layerById = new Map(item.visualLayers.map((layer, layerIndex) => [layer.id, { layer, layerIndex }]));
+    const clips = item.referenceMediaClips.map((clip): ResolvedTimelineClip => {
+      const asset = assetById.get(clip.assetId);
+      if (!asset) throw new Error(`媒体素材不存在：${clip.assetId}`);
+      const isVisualAsset = asset.kind === 'video' || asset.kind === 'image';
+      if (isVisualAsset && item.visualLayers.length > 0 && !clip.layerId) {
+        throw new Error(`视觉素材片段“${clip.label}”尚未分配视觉图层`);
+      }
+      const layerEntry = clip.layerId ? layerById.get(clip.layerId) : undefined;
+      if (clip.layerId && !layerEntry) throw new Error(`素材片段“${clip.label}”引用不存在的图层：${clip.layerId}`);
+      const span = resolveTimelineClipSpan(clip, frameRate);
+      const active = true;
+      const layerVisible = layerEntry?.layer.visible ?? true;
+      const visible = active && layerVisible;
+      return {
+        ...span,
+        clip,
+        asset,
+        layer: layerEntry?.layer ?? null,
+        layerIndex: layerEntry?.layerIndex ?? null,
+        active,
+        visible,
+        visual: active && layerVisible && isVisualAsset,
+        audible: active && layerVisible && (asset.kind === 'audio' || (asset.kind === 'video' && clip.embeddedAudioEnabled !== false && !audioContainsMediaSource(item.referenceAudio, asset.id)))
+      };
+    });
+    const visualObsCues = item.cues.flatMap((cue): ResolvedTimelineObsCue[] => {
+      const showAction = findVisualObsShowAction(cue);
+      if (!showAction) return [];
+      if (!cue.layerId) throw new Error(`OBS 显示 Cue“${cue.name}”尚未分配视觉图层`);
+      const layerEntry = layerById.get(cue.layerId);
+      if (!layerEntry) throw new Error(`OBS 显示 Cue“${cue.name}”引用不存在的图层：${cue.layerId}`);
+      const span = resolveTimelineCueSpan(cue, frameRate);
+      const active = cue.enabled;
+      return [{
+        ...span,
+        cue,
+        showAction,
+        layer: layerEntry.layer,
+        layerIndex: layerEntry.layerIndex,
+        active,
+        visible: active && layerEntry.layer.visible
+      }];
+    });
+    this.clips = clips;
+    this.visualObsCues = visualObsCues;
+    this.clipOrder = clips.map((_, index) => index).sort((left, right) =>
+      (clips[left]!.layerIndex ?? Number.MAX_SAFE_INTEGER) - (clips[right]!.layerIndex ?? Number.MAX_SAFE_INTEGER));
+  }
+  at(playheadMs: number): ResolvedTimelineState {
+    if (!Number.isFinite(playheadMs) || playheadMs < 0) throw new Error('播放头时间必须是非负有限毫秒数');
+    const clips = this.clips.map(entry => {
+      const active = isTimelineSpanActive(entry, playheadMs);
+      return { ...entry, active, visible: active && entry.visible, visual: active && entry.visual, audible: active && entry.audible };
+    });
+    const visualObsCues = this.visualObsCues.map(entry => {
+      const active = entry.active && isTimelineSpanActive(entry, playheadMs);
+      return { ...entry, active, visible: active && entry.visible };
+    });
+    const layers = this.item.visualLayers.map((layer, layerIndex): ResolvedTimelineLayer => ({
+      layer,
+      layerIndex,
+      activeVisualClips: clips.filter((entry) => entry.layer?.id === layer.id && entry.visual),
+      activeObsCues: visualObsCues.filter((entry) => entry.layer.id === layer.id && entry.visible)
+    }));
+    const topFirstClips = this.clipOrder.map(index => clips[index]!);
     return {
-      ...span,
-      clip,
-      asset,
-      layer: layerEntry?.layer ?? null,
-      layerIndex: layerEntry?.layerIndex ?? null,
-      active,
-      visible,
-      visual: active && layerVisible && isVisualAsset,
-      audible: active && layerVisible && (asset.kind === 'audio' || (asset.kind === 'video' && clip.embeddedAudioEnabled !== false && !audioContainsMediaSource(item.referenceAudio, asset.id)))
+      itemId: this.item.id,
+      playheadMs,
+      clips,
+      visualObsCues,
+      layers,
+      activeClipIds: topFirstClips.filter((entry) => entry.visible).map((entry) => entry.clip.id),
+      activeVisualClipIds: topFirstClips.filter((entry) => entry.visual).map((entry) => entry.clip.id),
+      activeAudioClipIds: topFirstClips.filter((entry) => entry.audible).map((entry) => entry.clip.id),
+      activeObsCueIds: visualObsCues.filter((entry) => entry.visible).map((entry) => entry.cue.id)
     };
-  });
-  const visualObsCues = item.cues.flatMap((cue): ResolvedTimelineObsCue[] => {
-    const showAction = findVisualObsShowAction(cue);
-    if (!showAction) return [];
-    if (!cue.layerId) throw new Error(`OBS 显示 Cue“${cue.name}”尚未分配视觉图层`);
-    const layerEntry = layerById.get(cue.layerId);
-    if (!layerEntry) throw new Error(`OBS 显示 Cue“${cue.name}”引用不存在的图层：${cue.layerId}`);
-    const span = resolveTimelineCueSpan(cue, frameRate);
-    const active = cue.enabled && isTimelineSpanActive(span, playheadMs);
-    return [{
-      ...span,
-      cue,
-      showAction,
-      layer: layerEntry.layer,
-      layerIndex: layerEntry.layerIndex,
-      active,
-      visible: active && layerEntry.layer.visible
-    }];
-  });
-  const layers = item.visualLayers.map((layer, layerIndex): ResolvedTimelineLayer => ({
-    layer,
-    layerIndex,
-    activeVisualClips: clips.filter((entry) => entry.layer?.id === layer.id && entry.visual),
-    activeObsCues: visualObsCues.filter((entry) => entry.layer.id === layer.id && entry.visible)
-  }));
-  const topFirstClips = [...clips].sort((left, right) => (
-    (left.layerIndex ?? Number.MAX_SAFE_INTEGER) - (right.layerIndex ?? Number.MAX_SAFE_INTEGER)
-  ));
-  return {
-    itemId: item.id,
-    playheadMs,
-    clips,
-    visualObsCues,
-    layers,
-    activeClipIds: topFirstClips.filter((entry) => entry.visible).map((entry) => entry.clip.id),
-    activeVisualClipIds: topFirstClips.filter((entry) => entry.visual).map((entry) => entry.clip.id),
-    activeAudioClipIds: topFirstClips.filter((entry) => entry.audible).map((entry) => entry.clip.id),
-    activeObsCueIds: visualObsCues.filter((entry) => entry.visible).map((entry) => entry.cue.id)
-  };
+  }
 }
 
 export function resolveTimelineClipSpan(clip: ReferenceMediaClip, frameRate: MtcFrameRate): TimelineSpan {

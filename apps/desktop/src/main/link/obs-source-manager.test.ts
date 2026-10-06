@@ -21,7 +21,7 @@ function setup() {
       default: return Promise.resolve({});
     }
   } };
-  const manager = new ObsSourceManager(client as unknown as OBSWebSocket, (promise) => promise);
+  const manager = new ObsSourceManager(client as unknown as OBSWebSocket, (operation) => operation(), (operation) => operation());
   return { manager, calls, client };
 }
 

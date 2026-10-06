@@ -1,0 +1,464 @@
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 pixel_size;
+uniform int face_count;
+uniform float4 faces[6];
+uniform float4 eyes[6];
+uniform float4 controls[6];
+uniform float4 grading;
+uniform float sharpen;
+uniform float3 skin_detail;
+uniform float4 features[36];
+uniform float4 shaping;
+uniform float4 lip_contours[120];
+uniform float4 lip_bounds[6];
+uniform float lipstick;
+uniform float teeth;
+uniform float2 makeup_tone;
+uniform float4 makeup_points[240];
+uniform float4 makeup_bounds[24];
+uniform float4 cheeks[6];
+uniform float3 makeup;
+uniform float4 outline_points[12];
+uniform float4 outline_amount;
+uniform float3 retouch;
+uniform int body_count;
+uniform float4 body_points[198];
+uniform texture2d body_mask;
+uniform texture2d semantic_mask;
+uniform int semantic_enabled;
+uniform texture2d profile_guard;
+uniform int profile_enabled;
+uniform float2 profile_amount;
+uniform float3 body_amount;
+uniform float3 leg_amount;
+sampler_state source_sampler { Filter = Linear; AddressU = Clamp; AddressV = Clamp; };
+struct VertData { float4 pos : POSITION; float2 uv : TEXCOORD0; };
+VertData VSDefault(VertData v) { v.pos = mul(float4(v.pos.xyz, 1.0), ViewProj); return v; }
+
+float eye_mask(float2 uv, float2 center, float2 radius)
+{
+    float2 d = (uv - center) / radius;
+    return 1.0 - smoothstep(0.25, 1.0, dot(d, d));
+}
+float2 lip_point(int face, int contour, int vertex_index)
+{
+    float4 pair = lip_contours[face * 20 + contour * 10 + vertex_index / 2];
+    if (vertex_index % 2 == 0) return pair.xy;
+    return pair.zw;
+}
+float lip_mask(float2 uv, int face, int contour)
+{
+    if (any(uv < lip_bounds[face].xy - pixel_size * 2.0) || any(uv > lip_bounds[face].zw + pixel_size * 2.0)) return 0.0;
+    bool inside = false;
+    float closest = 10000.0;
+    float2 previous = lip_point(face, contour, 19);
+    for (int i = 0; i < 20; i = i + 1) {
+        float2 current = lip_point(face, contour, i);
+        if ((current.y > uv.y) != (previous.y > uv.y)) {
+            float cross_x = current.x + (uv.y - current.y) * (previous.x - current.x) / (previous.y - current.y);
+            if (uv.x < cross_x) inside = !inside;
+        }
+        float2 edge = (previous - current) / pixel_size;
+        float2 relative = (uv - current) / pixel_size;
+        float t = saturate(dot(relative, edge) / max(dot(edge, edge), 0.0001));
+        closest = min(closest, length(relative - edge * t));
+        previous = current;
+    }
+    return smoothstep(-1.0, 1.0, inside ? closest : -closest);
+}
+float4 grade(float4 base, float2 uv)
+{
+    if (all(grading == float4(0.0, 0.0, 0.0, 0.0)) && sharpen == 0.0) return base;
+    float3 color = base.rgb;
+    if (sharpen > 0.0) {
+        float3 blur = (image.Sample(source_sampler, uv + float2(pixel_size.x, 0.0)).rgb +
+            image.Sample(source_sampler, uv - float2(pixel_size.x, 0.0)).rgb +
+            image.Sample(source_sampler, uv + float2(0.0, pixel_size.y)).rgb +
+            image.Sample(source_sampler, uv - float2(0.0, pixel_size.y)).rgb) * 0.25;
+        color = color + clamp(color - blur, -0.12, 0.12) * sharpen;
+    }
+    color = color * pow(2.0, grading.x * 1.5);
+    color = (color - 0.5) * (1.0 + grading.y * 0.6) + 0.5;
+    float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
+    color = lerp(float3(luminance, luminance, luminance), color, 1.0 + grading.z);
+    color = color + float3(0.08, 0.0, -0.08) * grading.w;
+    return float4(saturate(color), base.a);
+}
+float2 makeup_point(int face, int part, int vertex_index)
+{
+    float4 pair = makeup_points[face * 40 + part * 10 + vertex_index / 2];
+    if (vertex_index % 2 == 0) return pair.xy;
+    return pair.zw;
+}
+float2 contour_distance(float2 uv, int face, int part)
+{
+    float4 box = makeup_bounds[face * 4 + part];
+    if (any(uv < box.xy - pixel_size * 4.0) || any(uv > box.zw + pixel_size * 4.0)) return float2(-10000.0, -1.0);
+    int count = part < 2 ? 16 : 10;
+    float2 previous = makeup_point(face, part, count - 1);
+    bool inside = false;
+    float closest = 10000.0;
+    float segment = -1.0;
+    for (int i = 0; i < 20; i = i + 1) {
+        if (i < count) {
+            float2 current = makeup_point(face, part, i);
+            if ((current.y > uv.y) != (previous.y > uv.y)) {
+                float cross_x = current.x + (uv.y - current.y) * (previous.x - current.x) / (previous.y - current.y);
+                if (uv.x < cross_x) inside = !inside;
+            }
+            float2 edge = (previous - current) / pixel_size;
+            float2 relative = (uv - current) / pixel_size;
+            float t = saturate(dot(relative, edge) / max(dot(edge, edge), 0.0001));
+            float distance = length(relative - edge * t);
+            if (distance < closest) { closest = distance; segment = i; }
+            previous = current;
+        }
+    }
+    return float2(inside ? closest : -closest, segment);
+}
+float2 shape_features(float2 uv, int selected, float4 face, float4 eye, float weight)
+{
+    float2 nose = features[selected * 6].xy;
+    float2 nose_left = features[selected * 6].zw;
+    float2 nose_right = features[selected * 6 + 1].xy;
+    float2 horizontal = (nose_right - nose_left) / pixel_size;
+    float span = length(horizontal);
+    float protect_nose = 0.0;
+    if (span >= 1.0) {
+        horizontal = horizontal / span;
+        float2 vertical = float2(-horizontal.y, horizontal.x);
+        float2 relative = (uv - nose) / pixel_size;
+        float2 local = float2(dot(relative, horizontal), dot(relative, vertical));
+        float2 radius = float2(span * 1.25, face.w / pixel_size.y * 0.3);
+        float2 normalized = local / max(radius, float2(1.0, 1.0));
+        protect_nose = 1.0 - smoothstep(0.45, 1.0, dot(normalized, normalized));
+        float mask = (1.0 - smoothstep(0.1, 1.0, dot(normalized, normalized))) * weight;
+        uv = uv + (horizontal * local.x * shaping.x - vertical * local.y * shaping.y) * mask * 0.2 * pixel_size;
+    }
+    float2 mouth_left = features[selected * 6 + 1].zw;
+    float2 mouth_right = features[selected * 6 + 2].xy;
+    float2 mouth = (mouth_left + mouth_right + features[selected * 6 + 2].zw + features[selected * 6 + 3].xy) * 0.25;
+    float mouth_span = length((mouth_right - mouth_left) / pixel_size);
+    if (mouth_span >= 1.0) {
+        float2 mouth_axis = (mouth_right - mouth_left) / (pixel_size * mouth_span);
+        float2 mouth_vertical = float2(-mouth_axis.y, mouth_axis.x);
+        float2 mouth_local = (uv - mouth) / pixel_size;
+        float mouth_height = abs(dot((features[selected * 6 + 3].xy - features[selected * 6 + 2].zw) / pixel_size, mouth_vertical));
+        float2 d = float2(dot(mouth_local, mouth_axis), dot(mouth_local, mouth_vertical)) /
+            float2(mouth_span * 0.85, max(mouth_height * 1.35, mouth_span * 0.24));
+        float mask = (1.0 - smoothstep(0.1, 1.0, dot(d, d))) * weight;
+        uv = uv - (uv - mouth) * shaping.z * mask * 0.18;
+    }
+    float2 eye_radius = face.zw * float2(0.38, 0.26);
+    float left = eye_mask(uv, eye.xy, eye_radius);
+    float right = eye_mask(uv, eye.zw, eye_radius);
+    uv = uv + (eye.zw - eye.xy) * shaping.w * (left - right) * weight * (1.0 - protect_nose) * 0.08;
+    return uv;
+}
+float2 move_region(float2 uv, float2 anchor, float2 displacement, float2 radius, float weight)
+{
+    float mask = eye_mask(uv, anchor + displacement, radius) * weight;
+    return uv - displacement * mask;
+}
+float2 shape_outline(float2 uv, int selected, float4 face, float weight)
+{
+    float4 jaw = outline_points[selected * 2];
+    float4 cheek = outline_points[selected * 2 + 1];
+    float2 jaw_center = (jaw.xy + jaw.zw) * 0.5;
+    float2 cheek_center = (cheek.xy + cheek.zw) * 0.5;
+    uv = move_region(uv, jaw.xy, (jaw_center - jaw.xy) * outline_amount.x * 0.12, face.zw * float2(0.16, 0.22), weight);
+    uv = move_region(uv, jaw.zw, (jaw_center - jaw.zw) * outline_amount.x * 0.12, face.zw * float2(0.16, 0.22), weight);
+    uv = move_region(uv, cheek.xy, (cheek_center - cheek.xy) * outline_amount.y * 0.1, face.zw * float2(0.16, 0.22), weight);
+    uv = move_region(uv, cheek.zw, (cheek_center - cheek.zw) * outline_amount.y * 0.1, face.zw * float2(0.16, 0.22), weight);
+    float2 chin = features[selected * 6 + 4].zw;
+    float2 forehead = features[selected * 6 + 5].xy;
+    float2 vertical = chin - forehead;
+    uv = move_region(uv, chin, vertical * outline_amount.z * 0.08, face.zw * float2(0.32, 0.20), weight);
+    uv = move_region(uv, forehead, -vertical * outline_amount.w * 0.08, face.zw * float2(0.4, 0.20), weight);
+    return uv;
+}
+float fold_mask(float2 uv, float2 start_uv, float2 end_uv, float2 face_radius)
+{
+    float2 p = (uv - start_uv) / face_radius;
+    float2 axis = (end_uv - start_uv) / face_radius;
+    float t = saturate(dot(p, axis) / max(dot(axis, axis), 0.0001));
+    float distance_to_fold = length(p - axis * t);
+    return (1.0 - smoothstep(0.025, 0.13, distance_to_fold)) * smoothstep(0.0, 0.15, t) * (1.0 - smoothstep(0.8, 1.0, t));
+}
+float3 repair_shade(float3 color, float2 uv, float2 offset, float strength)
+{
+    float3 reference = (image.Sample(source_sampler, uv + offset).rgb + image.Sample(source_sampler, uv - offset).rgb) * 0.5;
+    float difference = dot(reference - color, float3(0.2126, 0.7152, 0.0722));
+    // Lift only local dark structure; keep source chroma and most high-frequency detail.
+    float lift = clamp(difference - 0.008, 0.0, 0.12) * strength * 0.65;
+    return color + lift;
+}
+float3 repair_spot(float3 base, float2 uv, float radius, float amount)
+{
+    float3 average = float3(0.0, 0.0, 0.0);
+    float minimum = 1.0;
+    float maximum = 0.0;
+    for (int sample_index = 0; sample_index < 8; sample_index = sample_index + 1) {
+        float angle = sample_index * 0.7853981634;
+        float2 offset = float2(cos(angle), sin(angle)) * pixel_size * radius;
+        float3 neighbor = image.Sample(source_sampler, uv + offset).rgb;
+        float light = dot(neighbor, float3(0.2126, 0.7152, 0.0722));
+        minimum = min(minimum, light); maximum = max(maximum, light);
+        average = average + neighbor;
+    }
+    average = average * 0.125;
+    float center_light = dot(base, float3(0.2126, 0.7152, 0.0722));
+    // Require surrounding skin on every side. Lines, edges and broad shadows
+    // fail this island test, rather than being erased as "blemishes".
+    float isolated = smoothstep(0.025, 0.075, minimum - center_light) * (1.0 - smoothstep(0.06, 0.12, maximum - minimum));
+    float3 correction = clamp(average - base, -0.18, 0.18);
+    return base + correction * isolated * amount * 0.85;
+}
+float person_mask(float2 uv, int person)
+{
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 0.0;
+    float2 tile_uv = clamp(uv, 0.5 / 160.0, 159.5 / 160.0);
+    return body_mask.Sample(source_sampler, float2(tile_uv.x, (tile_uv.y + person) / 6.0)).r;
+}
+float2 nearest_bone(float2 p, float2 a, float2 b)
+{
+    float2 axis = b - a;
+    return a + axis * saturate(dot(p - a, axis) / max(dot(axis, axis), 1.0));
+}
+float2 shape_legs(float2 uv, int person)
+{
+    float2 p = uv / pixel_size;
+    float hip_width = length((body_points[person * 33 + 23].xy - body_points[person * 33 + 24].xy) / pixel_size);
+    float radius = max(hip_width * 0.28, 4.0);
+    float best = 0.0;
+    float2 displacement = float2(0.0, 0.0);
+    for (int side = 0; side < 2; side = side + 1) {
+        float4 hip_joint = body_points[person * 33 + 23 + side];
+        float4 knee_joint = body_points[person * 33 + 25 + side];
+        float4 ankle_joint = body_points[person * 33 + 27 + side];
+        if (min(hip_joint.z, min(knee_joint.z, ankle_joint.z)) < 0.6) continue;
+        float2 hip = hip_joint.xy / pixel_size;
+        float2 knee = knee_joint.xy / pixel_size;
+        float2 ankle = ankle_joint.xy / pixel_size;
+        float2 axis = ankle - hip;
+        float leg_length = length(axis);
+        if (leg_length < 8.0) continue;
+        axis = axis / leg_length;
+        float t = dot(p - hip, axis) / leg_length;
+        float2 upper = nearest_bone(p, hip, knee);
+        float2 lower = nearest_bone(p, knee, ankle);
+        float2 nearest = length(p - upper) < length(p - lower) ? upper : lower;
+        float distance_to_bone = length(p - nearest);
+        float weight = (1.0 - smoothstep(radius, radius * 2.0, distance_to_bone)) *
+            smoothstep(0.0, 0.12, t) * (1.0 - smoothstep(1.05, 1.3, t));
+        if (weight > best) {
+            best = weight;
+            displacement = ((p - nearest) * leg_amount.x * 0.22 - axis * max(t, 0.0) * leg_length * leg_amount.y * 0.1) * weight;
+        }
+    }
+    return displacement * pixel_size;
+}
+float2 shape_body(float2 uv)
+{
+    if (body_count == 0 || dot(abs(body_amount), float3(1.0,1.0,1.0)) + dot(leg_amount, float3(1.0,1.0,1.0)) == 0.0) return uv;
+    float best_weight = 0.0;
+    float2 best_uv = uv;
+    for (int person = 0; person < 6; person = person + 1) {
+        if (person >= body_count) break;
+        float2 left_shoulder = body_points[person * 33 + 11].xy / pixel_size;
+        float2 right_shoulder = body_points[person * 33 + 12].xy / pixel_size;
+        float2 top = (left_shoulder + right_shoulder) * 0.5;
+        float2 hip = (body_points[person * 33 + 23].xy + body_points[person * 33 + 24].xy) * 0.5 / pixel_size;
+        float2 axis = hip - top;
+        float torso_length = length(axis);
+        float half_width = length(left_shoulder - right_shoulder) * 0.5;
+        if (torso_length < 4.0 || half_width < 4.0) continue;
+        axis = axis / torso_length;
+        float2 across = float2(-axis.y, axis.x);
+        float2 relative = uv / pixel_size - top;
+        float t = dot(relative, axis) / torso_length;
+        float side = dot(relative, across);
+        float lateral = 1.0 - smoothstep(1.0, 1.8, abs(side) / half_width);
+        float torso = smoothstep(-0.05, 0.18, t) * (1.0 - smoothstep(0.9, 1.2, t));
+        float waist = 1.0 - smoothstep(0.1, 0.48, abs(t - 0.68));
+        float shoulders = 1.0 - smoothstep(0.05, 0.32, abs(t));
+        float strength = body_amount.x * torso * 0.18 + body_amount.y * waist * 0.22 - body_amount.z * shoulders * 0.18;
+        float2 delta = across * side * strength * lateral * pixel_size + shape_legs(uv, person);
+        float4 nose_joint = body_points[person * 33];
+        if (leg_amount.z > 0.0 && nose_joint.z >= 0.6) {
+            float2 head_axis = top - nose_joint.xy / pixel_size;
+            float head_span = length(head_axis);
+            if (head_span >= 4.0 && head_span < torso_length) {
+                head_axis = head_axis / head_span;
+                float head_t = dot(relative, head_axis) / head_span;
+                float head_side = dot(relative, float2(-head_axis.y, head_axis.x));
+                float head_region = smoothstep(-2.3, -1.6, head_t) * (1.0 - smoothstep(-0.45, 0.0, head_t)) *
+                    (1.0 - smoothstep(0.55, 1.0, abs(head_side) / half_width));
+                delta = delta + head_axis * head_span * leg_amount.z * 0.12 * head_region * pixel_size;
+            }
+        }
+        if (dot(delta, delta) < 0.0000000001) continue;
+        float2 candidate = uv + delta;
+        float coverage = max(person_mask(uv, person), person_mask(candidate, person));
+        for (int other = 0; other < 6; other = other + 1) {
+            if (other < body_count && other != person)
+                coverage = coverage * (1.0 - max(person_mask(uv, other), person_mask(candidate, other)));
+        }
+        if (coverage > best_weight) {
+            best_weight = coverage;
+            best_uv = lerp(uv, candidate, coverage);
+        }
+    }
+    return best_uv;
+}
+float3 bilateral_average(float3 center, float2 uv)
+{
+    float3 total = center;
+    float sum = 1.0;
+    for (int y = -1; y <= 1; y = y + 1) {
+        for (int x = -1; x <= 1; x = x + 1) {
+            float3 sample = image.Sample(source_sampler, uv + float2(x, y) * pixel_size * 2.0).rgb;
+            float3 delta = sample - center;
+            float w = exp(-dot(delta, delta) * 100.0);
+            total = total + sample * w;
+            sum = sum + w;
+        }
+    }
+    return total / sum;
+}
+float skin_probability(float3 base)
+{
+    float cb = 0.5 - 0.168736 * base.r - 0.331264 * base.g + 0.5 * base.b;
+    float cr = 0.5 + 0.5 * base.r - 0.418688 * base.g - 0.081312 * base.b;
+    return smoothstep(0.28, 0.34, cb) * (1.0 - smoothstep(0.48, 0.54, cb)) *
+        smoothstep(0.50, 0.55, cr) * (1.0 - smoothstep(0.70, 0.76, cr));
+}
+float4 profile_skin_color(float4 base, float2 uv)
+{
+    if (profile_enabled <= 0 || (profile_amount.x <= 0.0 && profile_amount.y <= 0.0)) return base;
+    float confidence = semantic_mask.Sample(source_sampler, uv).r;
+    float mask = profile_guard.Sample(source_sampler, uv).r * smoothstep(0.55, 0.8, confidence) * skin_probability(base.rgb);
+    if (mask <= 0.0) return base;
+    float3 color = lerp(base.rgb, bilateral_average(base.rgb, uv), profile_amount.x * mask * 0.7 * (1.0 - skin_detail.x * 0.85));
+    color = color + (1.0 - color) * color * profile_amount.y * mask * 0.35;
+    return float4(saturate(color), base.a);
+}
+float4 PSBeauty(VertData v) : TARGET
+{
+    float2 body_uv = shape_body(v.uv);
+    // Pick one strongest local region; overlapping people never accumulate warps.
+    float weight = 0.0;
+    int selected = 0;
+    for (int i = 0; i < 6; i = i + 1) {
+        if (i < face_count) {
+            float2 d = (body_uv - faces[i].xy) / faces[i].zw;
+            float w = 1.0 - smoothstep(0.45, 1.0, dot(d, d));
+            if (w > weight) { weight = w; selected = i; }
+        }
+    }
+    float4 original = image.Sample(source_sampler, body_uv);
+    if (weight <= 0.0) return grade(profile_skin_color(original, body_uv), body_uv);
+    float4 face = faces[selected];
+    float4 eye = eyes[selected];
+    float4 amount = controls[selected];
+    float2 uv = shape_outline(body_uv, selected, face, weight);
+    uv = shape_features(uv, selected, face, eye, weight);
+    // Bounded inverse mapping: horizontal face narrowing, then local eye enlargement.
+    uv.x = uv.x + (uv.x - face.x) * amount.z * 0.16 * weight;
+    float2 radius = face.zw * float2(0.32, 0.22);
+    float left = eye_mask(uv, eye.xy, radius);
+    float right = eye_mask(uv, eye.zw, radius);
+    uv = uv - (uv - eye.xy) * left * amount.w * 0.22;
+    uv = uv - (uv - eye.zw) * right * amount.w * 0.22;
+    float4 base = image.Sample(source_sampler, uv);
+    float3 average = bilateral_average(base.rgb, uv);
+    float skin = skin_probability(base.rgb);
+    float protect_eyes = 1.0 - max(left, right);
+    float2 lip_left = features[selected * 6 + 1].zw;
+    float2 lip_right = features[selected * 6 + 2].xy;
+    float2 lip_top = features[selected * 6 + 2].zw;
+    float2 lip_bottom = features[selected * 6 + 3].xy;
+    float2 lip_center = (lip_left + lip_right + lip_top + lip_bottom) * 0.25;
+    float2 lip_radius = max(abs(lip_right - lip_left) * 0.62 + abs(lip_bottom - lip_top) * 0.7, pixel_size * 2.0);
+    float outer_lip = lip_mask(uv, selected, 0);
+    float protect_lips = 1.0 - max(outer_lip, eye_mask(uv, lip_center, lip_radius));
+    float mask = weight * skin * protect_eyes * protect_lips;
+    float3 color = lerp(base.rgb, average, amount.x * mask * 0.7 * (1.0 - skin_detail.x * 0.85));
+    if (retouch.z > 0.0) {
+        float radius = clamp(face.w / pixel_size.y * 0.018, 1.5, 5.0);
+        color = color + repair_spot(base.rgb, uv, radius, retouch.z * mask) - base.rgb;
+    }
+    // Local chroma equalization preserves luminance and avoids global whitening.
+    float3 chroma_delta = average - base.rgb;
+    float luminance_delta = dot(chroma_delta, float3(0.2126, 0.7152, 0.0722));
+    color = color + (chroma_delta - luminance_delta) * skin_detail.y * mask * 0.75;
+    float brightness = dot(color, float3(0.2126, 0.7152, 0.0722));
+    float highlight = smoothstep(0.65, 0.95, brightness);
+    color = color * (1.0 - highlight * skin_detail.z * mask * 0.15);
+    color = color + (1.0 - color) * color * amount.y * mask * 0.35;
+    if (retouch.x > 0.0 || retouch.y > 0.0) {
+        float2 vertical = features[selected * 6 + 4].zw - features[selected * 6 + 5].xy;
+        float2 down = vertical * 0.065;
+        float2 under_radius = face.zw * float2(0.25, 0.11);
+        float under = max(eye_mask(uv, eye.xy + down, under_radius), eye_mask(uv, eye.zw + down, under_radius));
+        float eye_inside = max(smoothstep(-1.0, 1.0, contour_distance(uv, selected, 0).x), smoothstep(-1.0, 1.0, contour_distance(uv, selected, 1).x));
+        float2 nose_left = features[selected * 6].zw;
+        float2 nose_right = features[selected * 6 + 1].xy;
+        float2 across = eye.zw - eye.xy;
+        float folds = max(fold_mask(uv, nose_left, lip_left - across * 0.14 + down * 0.3, face.zw),
+            fold_mask(uv, nose_right, lip_right + across * 0.14 + down * 0.3, face.zw));
+        color = repair_shade(color, uv, down * 0.8, under * retouch.x * weight * skin * protect_lips * (1.0 - eye_inside));
+        color = repair_shade(color, uv, across * 0.12, folds * retouch.y * mask);
+    }
+    if (makeup.z > 0.0) {
+        float2 cheek_radius = face.zw * float2(0.28, 0.23);
+        float blush_mask = max(eye_mask(uv, cheeks[selected].xy, cheek_radius), eye_mask(uv, cheeks[selected].zw, cheek_radius));
+        float3 blush_base = lerp(float3(0.66, 0.2, 0.24), makeup_tone.y < 0.0 ? float3(0.58, 0.18, 0.38) : float3(0.78, 0.34, 0.14), abs(makeup_tone.y));
+        float3 blush_color = blush_base * (0.5 + brightness);
+        color = lerp(color, blush_color, blush_mask * mask * makeup.z * 0.3);
+    }
+    if (makeup.x > 0.0) {
+        float brows = max(smoothstep(-0.75, 0.75, contour_distance(uv, selected, 2).x), smoothstep(-0.75, 0.75, contour_distance(uv, selected, 3).x));
+        color = lerp(color, float3(0.12, 0.08, 0.06) * (0.5 + brightness), brows * makeup.x * weight * 0.65);
+    }
+    if (makeup.y > 0.0) {
+        float line_mask = 0.0;
+        float thickness = clamp(face.w / pixel_size.y * 0.015, 1.0, 3.0);
+        for (int side = 0; side < 2; side = side + 1) {
+            float2 edge = contour_distance(uv, selected, side);
+            if (edge.x < 0.0 && (edge.y == 0.0 || edge.y >= 9.0))
+                line_mask = max(line_mask, 1.0 - smoothstep(0.0, thickness, -edge.x));
+        }
+        color = lerp(color, float3(0.07, 0.045, 0.04), line_mask * makeup.y * weight * 0.8);
+    }
+    if (lipstick > 0.0 && outer_lip > 0.0) {
+        float lip_region = outer_lip * (1.0 - lip_mask(uv, selected, 1));
+        float lip_light = dot(base.rgb, float3(0.2126, 0.7152, 0.0722));
+        float3 lip_base = lerp(float3(0.62, 0.12, 0.2), makeup_tone.x < 0.0 ? float3(0.48, 0.12, 0.38) : float3(0.72, 0.28, 0.1), abs(makeup_tone.x));
+        float3 pigment = lip_base * (0.35 + lip_light * 1.5);
+        color = lerp(color, pigment, lipstick * lip_region * weight * 0.65);
+    }
+    if (teeth > 0.0) {
+        float opening = length((lip_point(selected, 1, 5) - lip_point(selected, 1, 15)) / pixel_size);
+        float mouth_width = length((lip_point(selected, 1, 0) - lip_point(selected, 1, 10)) / pixel_size);
+        float open_mask = smoothstep(0.03, 0.08, opening / max(mouth_width, 1.0)) * smoothstep(1.0, 2.0, opening);
+        float tooth_light = dot(base.rgb, float3(0.2126, 0.7152, 0.0722));
+        float chroma = max(base.r, max(base.g, base.b)) - min(base.r, min(base.g, base.b));
+        float tooth_mask = open_mask * lip_mask(uv, selected, 1) * weight * smoothstep(0.22, 0.42, tooth_light) * (1.0 - smoothstep(0.18, 0.3, chroma));
+        float3 cleaned = lerp(color, float3(tooth_light, tooth_light, tooth_light), 0.5);
+        cleaned = cleaned + (1.0 - cleaned) * 0.35;
+        color = lerp(color, cleaned, teeth * tooth_mask);
+    }
+    // The semantic mask belongs to this accepted face result's source frame.
+    // Gate local skin/makeup changes, leaving deliberate whole-image grading
+    // and geometric shaping separate from this photometric protection.
+    if (semantic_enabled > 0) {
+        float confidence = semantic_mask.Sample(source_sampler, uv).r;
+        color = lerp(base.rgb, color, smoothstep(0.55, 0.8, confidence));
+    }
+    return grade(float4(saturate(color), base.a), uv);
+}
+technique Draw { pass { vertex_shader = VSDefault(v); pixel_shader = PSBeauty(v); } }
+float4 PSRaw(VertData v) : TARGET { return image.Sample(source_sampler, v.uv); }
+technique Raw { pass { vertex_shader = VSDefault(v); pixel_shader = PSRaw(v); } }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
-import { sceneBoundaryWork, sceneOutputAt } from './scene-output-timeline';
-import { ManagedOutputRuntime } from './managed-output-runtime';
+import { SceneOutputTimeline, sceneBoundaryWork, sceneOutputAt } from '@tb/core/link';
+import { ManagedOutputRuntime } from '@tb/core/link';
 import { compileManagedMediaTimeline } from '@tb/core/link';
 
 function projectFixture() {
@@ -13,6 +13,63 @@ function projectFixture() {
 }
 
 describe('机位片段结束恢复素材', () => {
+  it('倒序定位保留长机位覆盖短机位后的恢复，同帧场景及结束边界不混淆', () => {
+    const project = projectFixture(), item = project.rundown[0]!;
+    const camera = item.cues[0]!;
+    item.referenceMediaClips = [];
+    item.visualLayers.unshift({ id: 'top', name: '插入机位', visible: true, locked: false });
+    item.cues = [
+      { ...camera, id: 'short', layerId: 'top', durationMs: 1000 },
+      { ...camera, id: 'long', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, durationMs: 30000 },
+      { ...camera, id: 'same-time-point', layerId: 'media', durationMs: undefined }
+    ];
+    const timeline = new SceneOutputTimeline(project, 'song');
+    expect(timeline.at(330).cues[0]?.cue.id).toBe('long');
+    expect(timeline.at(300).cues[0]?.cue.id).toBe('short');
+    expect(timeline.at(299).cues[0]?.cue.id).toBe('long');
+    expect(timeline.at(0)).toEqual({ cues: [], media: [] });
+    expect(timeline.at(930).cues[0]?.cue.id).toBe('same-time-point');
+  });
+  it('29.97df 的恢复及预备偏移按实际帧时长换算，不把30当实际帧率累计误差', () => {
+    const project = projectFixture(); project.timebase.frameRate = '29.97df';
+    const item = project.rundown[0]!;
+    item.referenceMediaClips[0]!.durationMs = 3600000;
+    const camera = item.cues[0]!;
+    camera.timecode = { hours: 0, minutes: 9, seconds: 0, frames: 2 }; camera.durationMs = 60000;
+    const timeline = new SceneOutputTimeline(project, 'song');
+    const restored = timeline.preloadEntries().at(-1)!;
+    const runtime = new ManagedOutputRuntime(project, 'show.tblink', { executeManagedMediaEvent: () => Promise.resolve(), recordLog: () => Promise.reject(new Error('不应写日志')) });
+    runtime.selectItem('song');
+    const original = compileManagedMediaTimeline(project, 'song').events.find(event => event.phase === 'start')!;
+    const expected = 2000 + Math.round((restored.frameNumber - original.frameNumber) * 1001 / 30);
+    expect(restored.sourceOffsetMs).toBe(expected);
+    expect(runtime.alignEvent(original, restored.frameNumber).sourceOffsetMs).toBe(expected);
+    expect(expected - (2000 + Math.round((restored.frameNumber - original.frameNumber) * 1000 / 30))).toBeGreaterThan(500);
+  });
+  it('同来源紧邻片段直接重新定位，真实间隙仍停止来源', () => {
+    const project = projectFixture(), item = project.rundown[0]!;
+    item.cues = [];
+    const first = item.referenceMediaClips[0]!;
+    item.referenceMediaClips.push({ ...first, id: 'next', startTimecode: { hours: 0, minutes: 0, seconds: 30, frames: 0 }, durationMs: 5000, sourceOffsetMs: 0 });
+    const events = compileManagedMediaTimeline(project, 'song').events;
+    const work = sceneBoundaryWork(project, 'song', 899, 900, [], events.filter(event => event.frameNumber === 900));
+    expect(work.media.map(event => [event.clipId, event.phase, event.sourceOffsetMs])).toEqual([['next', 'start', 0]]);
+    item.referenceMediaClips[1]!.startTimecode.seconds = 31;
+    const gapEvents = compileManagedMediaTimeline(project, 'song').events;
+    const gap = sceneBoundaryWork(project, 'song', 899, 900, [], gapEvents.filter(event => event.frameNumber === 900));
+    expect(gap.media.map(event => [event.clipId, event.phase])).toEqual([['clip', 'stop']]);
+  });
+
+  it('播放会话重复查询复用准备结果，切换到新修订才采用改动的机位时长', () => {
+    const project = projectFixture();
+    const timeline = new SceneOutputTimeline(project, 'song');
+    const expected = timeline.at(450);
+    expect(expected.media[0]?.clipId).toBe('clip');
+    for (let frame = 451; frame < 600; frame++) expect(timeline.cross(frame - 1, frame, [], [])).toEqual({ cues: [], media: [] });
+    project.rundown[0]!.cues[0] = { ...project.rundown[0]!.cues[0]!, durationMs: 10000 };
+    expect(timeline.at(450).media[0]?.clipId).toBe('clip');
+    expect(new SceneOutputTimeline(project, 'song').at(450).cues[0]?.cue.id).toBe('camera');
+  });
   it('第二段透明素材进入和退出只改变叠加层，不重新启动持续播放的底层视频', () => {
     const project = projectFixture(), item = project.rundown[0]!;
     item.cues = [];

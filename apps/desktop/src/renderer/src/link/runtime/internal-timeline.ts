@@ -1,4 +1,4 @@
-import { sceneOutputAt } from './scene-output-timeline';
+import { sceneOutputAt } from '@tb/core/link';
 import { compileManagedMediaTimeline, resolveTimelineState, millisecondsToFrameNumber, frameNumberToTimecode, type MtcSample } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 

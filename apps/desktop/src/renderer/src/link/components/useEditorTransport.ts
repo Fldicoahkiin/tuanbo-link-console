@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectPlayer } from './ProjectPlayerControls';
 import { useSelectedProgram } from '../useSelectedProgram';
 import { useDocumentStore } from '../stores/document-store';
 import { LatestPosition } from '../runtime/latest-position';
 import { useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
+import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
+import { useDisplayPreferences } from '../stores/display-preferences-store';
+import { usePlayerClock } from '../usePlayerClock';
 
 export function useEditorProgram(player: ProjectPlayer, external: boolean, notify: (message: string, tone?: 'info' | 'error') => void): string | null {
   const [selected, select] = useSelectedProgram(notify);
@@ -13,7 +16,7 @@ export function useEditorProgram(player: ProjectPlayer, external: boolean, notif
 
 /** The editor owns only its stopped cursor; the formal player owns audio and output. */
 export function useEditorTransport(player: ProjectPlayer, itemId: string | null, external: boolean,
-  notify: (message: string, tone?: 'info' | 'error') => void) {
+  notify: (message: string, tone?: 'info' | 'error') => void, previewCoordinator: LinkRuntimeCoordinator | null = null) {
   const [cursor, setCursor] = useState(0);
   const cursorRef = useRef(0);
   const [localPlaying, setLocalPlaying] = useState(false);
@@ -21,19 +24,32 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   const [seeking, setSeeking] = useState(false);
   const seekQueue = useRef<LatestPosition | null>(null);
   const resumeAfterSeek = useRef(false);
-  useEffect(() => () => { seekQueue.current?.cancel(); seekQueue.current = null; }, [itemId, player.controller]);
+  useEffect(() => { setSeeking(false); return () => { seekQueue.current?.cancel(); seekQueue.current = null; }; }, [itemId, player.controller, previewCoordinator]);
   const active = external && player.state.itemId === itemId && ['playing', 'paused', 'preparing'].includes(player.state.status);
-  const playheadMs = active && !seeking ? player.state.positionMs : cursor;
+  const playerClock = usePlayerClock(player.view, active);
+  const playheadMs = active && !seeking ? playerClock.positionMs : cursor;
   const playing = external ? active && player.state.status === 'playing' : localPlaying;
-  const audioRef = useMemo(() => ({ current: player.controller?.mediaElement ?? null }), [player.controller]);
+  const clock = player.controller?.clock;
   useEffect(() => { if (external && player.state.error) notify(player.state.error, 'error'); }, [external, player.state.error, notify]);
   const report = (error: unknown): void => notify(error instanceof Error ? error.message : String(error), 'error');
   const reset = useCallback(() => { seekQueue.current?.cancel(); seekQueue.current = null; setSeeking(false); cursorRef.current = 0; setCursor(0); setLocalPlaying(false); }, []);
   const setPlayheadMs = (position: number): void => {
     cursorRef.current = position; setCursor(position);
-    // A stopped editor seek is only a cursor move. Scrub prepares a formal
-    // paused session, which acquires the runtime edit lock even without Play.
-    if (!external || !active || !itemId || !player.controller) return;
+    if (!external || !itemId) return;
+    if (!active) {
+      if (!previewCoordinator) return;
+      setSeeking(true);
+      if (!seekQueue.current) {
+        resumeAfterSeek.current = false;
+        seekQueue.current = new LatestPosition(
+          target => previewCoordinator.previewEditor(itemId, target, useDisplayPreferences.getState().preciseSeeking),
+          () => { seekQueue.current = null; setSeeking(false); if (resumeAfterSeek.current) void player.controller?.play(itemId, cursorRef.current).catch(report); },
+          error => { resumeAfterSeek.current = false; report(error); });
+      }
+      seekQueue.current.push(position);
+      return;
+    }
+    if (!player.controller) return;
     const controller = player.controller;
     const item = useDocumentStore.getState().project?.rundown.find((entry) => entry.id === itemId);
     const endMs = item?.playback?.endMs || item?.referenceAudio?.durationMs;
@@ -71,5 +87,5 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
     cursorRef.current = playheadMs; setCursor(playheadMs);
     await player.controller?.stop();
   };
-  return { playheadMs, playing, setPlayheadMs, setPlaying, reset, audioRef, stop, stopForEdit };
+  return { playheadMs, playing, setPlayheadMs, setPlaying, reset, clock, stop, stopForEdit };
 }

@@ -14,3 +14,8 @@ export * from './ma2-effect-library';
 export * from './obs-live-canvas';
 export * from './license';
 export * from './purchase';
+export * from './playback-engine';
+export * from './live-cue-edit';
+export * from './beauty';
+export * from './project-document';
+export * from './obs-playback';

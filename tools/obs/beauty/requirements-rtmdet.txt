@@ -1,0 +1,11 @@
+# Isolated export/quality experiment only. Do not install into the shipping worker.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.0.0+cpu
+torchvision==0.15.1+cpu
+numpy==1.26.4
+https://download.openmmlab.com/mmcv/dist/cpu/torch2.0.0/mmcv-2.1.0-cp311-cp311-win_amd64.whl
+mmengine==0.10.7
+mmdet==3.3.0
+onnx==1.17.0
+onnxruntime-directml==1.24.4
+opencv-python==4.10.0.84

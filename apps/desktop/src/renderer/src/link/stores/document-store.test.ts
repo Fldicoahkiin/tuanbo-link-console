@@ -7,6 +7,7 @@ import {
   removeCueCommand,
   removeReferenceMediaClipCommand,
   renameProjectCommand,
+  replaceCueCommand,
   resolveTimelineState
 } from '@tb/core/link';
 import { createEmptyLinkProject } from '@tb/schema';
@@ -17,6 +18,23 @@ beforeEach(() => {
 });
 
 describe('document store command history', () => {
+  it('编辑单个 Cue 的历史共享未变化节目与素材，撤销重做不改写旧快照', () => {
+    const store = useDocumentStore.getState();
+    for (const id of ['first', 'second']) store.execute(addRundownItemCommand({ id, title: id, enabled: true, notes: '', visualLayers: [], referenceMediaClips: [], cues: [
+      { id: `${id}-cue`, name: '原 Cue', enabled: true, notes: '', timecode: { hours: 0, minutes: 0, seconds: 10, frames: 0 }, actions: [] }
+    ] }));
+    const before = useDocumentStore.getState().project!;
+    const oldCue = before.rundown[0]!.cues[0]!;
+    store.execute(replaceCueCommand('first', { ...oldCue, name: '修改后', timecode: { ...oldCue.timecode, seconds: 20 } }));
+    const after = useDocumentStore.getState().project!;
+    expect(after.rundown[1]).toBe(before.rundown[1]);
+    expect(after.mediaAssets).toBe(before.mediaAssets);
+    expect(after.rundown[0]!.visualLayers).toBe(before.rundown[0]!.visualLayers);
+    expect(oldCue.name).toBe('原 Cue'); expect(oldCue.timecode.seconds).toBe(10);
+    store.undo(); expect(useDocumentStore.getState().project).toBe(before);
+    store.redo(); expect(useDocumentStore.getState().project!.rundown[0]!.cues[0]!.name).toBe('修改后');
+    expect(useDocumentStore.getState().project!.rundown[1]).toBe(before.rundown[1]);
+  });
   it('旧工程以 OBS 场景作为打开基线，编辑撤销不会恢复软件编排模式', () => {
     const project = createEmptyLinkProject('旧画面工程'); project.obsOutputMode = 'managed';
     const store = useDocumentStore.getState(); store.setProject(project, 'C:\\shows\\legacy.tblink');

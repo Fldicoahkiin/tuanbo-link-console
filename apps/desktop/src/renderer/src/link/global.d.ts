@@ -1,8 +1,8 @@
-import type { LinkDesktopApi, LinkFileBridge } from '@tb/core/link';
+import type { LinkDesktopBridgeApi, LinkFileBridge } from '@tb/core/link';
 
 declare global {
   interface Window {
-    tbLink: LinkDesktopApi;
+    tbLink: LinkDesktopBridgeApi;
     tbFile: LinkFileBridge;
   }
 }

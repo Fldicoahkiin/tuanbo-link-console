@@ -4,7 +4,7 @@ import { toUserErrorMessage } from '@tb/core/link';
 import { ma2NetworkStatusSchema, loopMidiStatusSchema, type Ma2NetworkStatus } from '@tb/schema';
 import { ToolbarMtcStatus } from './ToolbarMtcStatus';
 import type { ProjectPlayer } from './ProjectPlayerControls';
-import type { SettingsCategory } from './settings-navigation';
+import type { SettingsCategory, SettingsFocus } from './settings-navigation';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useLocalMa2Store } from '../stores/ma2-connection-store';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -13,6 +13,7 @@ import { useRuntimeStore } from '../stores/runtime-store';
 import { useConnectionCheckStore, type ConnectionCheck } from '../stores/connection-check-store';
 import { midiConnectionTargets } from '../view-models/connection-targets';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
+import { assertAudioOutputAvailable } from '../view-models/audio-output-route';
 
 type Row = { id: string; name: string; value: string; state: 'ready' | 'error' | 'checking' | 'idle' | 'skipped'; detail: string; category: SettingsCategory };
 const statusLabel = { checking: '连接中', ready: '已就绪', error: '待处理', skipped: '未启用' };
@@ -20,13 +21,14 @@ function checked(row: Row, check: ConnectionCheck | undefined): Row {
   return check ? { ...row, state: check.state, value: statusLabel[check.state], detail: check.detail } : row;
 }
 
-export function ToolbarConnections({ player, statusHost, onSettings }: { player: ProjectPlayer; statusHost: HTMLDivElement | null; onSettings: (category: SettingsCategory) => void }): JSX.Element {
+export function ToolbarConnections({ player, statusHost, onSettings }: { player: ProjectPlayer; statusHost: HTMLDivElement | null; onSettings: (category: SettingsCategory, focus?: SettingsFocus) => void }): JSX.Element {
   const method = useMa2ModeStore(state => state.method);
   const local = useLocalMa2Store();
   const project = useDocumentStore(state => state.project);
   const obs = useIntegrationStore(state => state.obs);
   const p1 = useIntegrationStore(state => state.processes.p1);
   const profile = useIntegrationStore(state => state.profile);
+  const audioRoute = profile?.internalPlayer;
   const ports = useIntegrationStore(state => state.midiPorts);
   const checks = useConnectionCheckStore(state => state.checks);
   const running = useConnectionCheckStore(state => state.running);
@@ -55,16 +57,15 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
     let alive = true;
     const inspectAudio = async (): Promise<void> => {
       try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
+        await assertAudioOutputAvailable(audioRoute);
         if (!alive || useConnectionCheckStore.getState().running) return;
-        const device = devices.find(entry => entry.kind === 'audiooutput' && entry.deviceId === (profile?.internalPlayer?.audioOutputDeviceId ?? 'default'));
-        useConnectionCheckStore.getState().finish('audio', device ? 'ready' : 'error', device ? '音频设备可用，播放时启用正式输出' : '所选音频设备不可用，请重新选择输出线路');
+        useConnectionCheckStore.getState().finish('audio', 'ready', '音频设备可用，播放时启用正式输出');
       } catch (error) { if (alive && !useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('audio', 'error', toUserErrorMessage(error)); }
     };
     const onAudioChange = (): void => { void inspectAudio(); };
     onAudioChange(); navigator.mediaDevices.addEventListener('devicechange', onAudioChange);
     return () => { alive = false; navigator.mediaDevices.removeEventListener('devicechange', onAudioChange); };
-  }, [profile?.internalPlayer?.audioOutputDeviceId]);
+  }, [audioRoute]);
   useEffect(() => {
     let alive = true;
     void desktop.loopMidi('detect').then(value => {
@@ -107,7 +108,7 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   const lightingPort = targets.find(target => target.required && target.direction === 'output' && /灯光|Cue/.test(target.name));
   const lightingRow = currentItem?.lighting?.outputMode === 'timecode' && lightingPort ? row(`port:${lightingPort.id}`)
     : method === 'network' ? row('ma2') : lightingPort ? row(`port:${lightingPort.id}`) : row('ma2');
-  const lightingStatus: Pick<Row, 'state' | 'value' | 'detail'> = player.state.status === 'playing' && player.state.mtcSentPositionMs !== null
+  const lightingStatus: Pick<Row, 'state' | 'value' | 'detail'> = player.state.status === 'playing' && player.state.mtcSending
     ? { state: 'ready', value: '发送中', detail: '正在按音频位置输出灯光时间码' }
     : player.state.mtcConnectionFailed && player.state.status === 'playing'
       ? { state: 'error', value: '未连接', detail: '本次音频继续播放，灯光时间码未输出' }
@@ -115,16 +116,19 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   const audioStatus: Pick<Row, 'state' | 'value' | 'detail'> | undefined = internal && player.state.status === 'playing'
     ? { state: 'ready', value: '播放中', detail: '本机音频正在播放' }
     : internal || !project ? row('audio') : row('p1');
-  const overview = [
-    { name: '音频', status: audioStatus },
-    { name: '视频', status: row('obs') },
-    { name: '灯光', status: lightingStatus },
-    { name: '编辑灯光', status: row('bridge') }
+  const mtcActive = player.state.status === 'playing' && (player.state.mtcSending || player.state.mtcConnectionFailed);
+  const lightingViaMidi = mtcActive || lightingRow?.category === 'audio' || method === 'midi';
+  const lightingFocus: SettingsFocus = mtcActive || lightingPort?.id === (profile?.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output') || internal && !lightingPort ? 'lighting-mtc' : 'lighting-actions';
+  const overview: { name: string; status: Pick<Row, 'state' | 'value' | 'detail'> | undefined; category: SettingsCategory; focus?: SettingsFocus }[] = [
+    { name: '音频', status: audioStatus, category: internal || !project ? 'audio' : 'source', ...(internal || !project ? { focus: 'audio-output' as const } : {}) },
+    { name: '视频', status: row('obs'), category: 'obs', focus: 'obs-connection' },
+    { name: '灯光', status: lightingStatus, category: lightingViaMidi ? 'audio' : 'ma2', focus: lightingViaMidi ? lightingFocus : 'ma2-connection' },
+    { name: '编辑灯光', status: row('bridge'), category: 'ma2', focus: 'ma2-connection' }
   ];
   return <div className="toolbar-project-summary"><button type="button" className="topbar-details-trigger" aria-pressed={open} onClick={() => { setOpen(value => !value); setSelected(null); }}>详细</button>
     {statusHost ? createPortal(open ? <><div className="toolbar-connections" aria-label="全部连接状态">
       {rows.map(row => <button key={row.id} className={'toolbar-connection connection-chip state-' + row.state} aria-label={row.name + '：' + row.value} aria-pressed={selected === row.id} title={`${row.name}：${row.value}\n${row.detail}`} onClick={() => setSelected(selected === row.id ? null : row.id)}>{row.name}</button>)}
       <ToolbarMtcStatus player={player} receiving={receiving} onSettings={() => onSettings('audio')} portStatus={checks.midi?.state === 'error' ? '不可用' : '详见上方各输入输出接口'} portDetail={targets.filter(target => target.required).map(target => target.name + '：' + (profile?.midiPortProfiles.find(port => port.id === target.id)?.portName ?? '未配置')).join('；')} />
-    </div>{detail ? <div className="connection-inline-detail" role="region" aria-label="连接详情"><strong>{detail.name} · {detail.value}</strong><span>{detail.detail}</span><button onClick={() => { onSettings(detail.category); setSelected(null); setOpen(false); }}>前往设置</button><button aria-label="收起连接详情" onClick={() => setSelected(null)}>收起</button></div> : null}</> : <div className="topbar-connection-overview" role="group" aria-label="连接状态概览">{overview.map(entry => <span key={entry.name} className={`connection-overview-item state-${entry.status?.state ?? 'idle'}`} title={`${entry.name}：${entry.status?.value ?? '未检查'}\n${entry.status?.detail ?? ''}`}><span className="connection-overview-dot" aria-hidden="true" /><strong>{entry.name}</strong><small>{entry.status?.value ?? '未检查'}</small></span>)}</div>, statusHost) : null}
+    </div>{detail ? <div className="connection-inline-detail" role="region" aria-label="连接详情"><strong>{detail.name} · {detail.value}</strong><span>{detail.detail}</span><button onClick={() => { onSettings(detail.category); setSelected(null); setOpen(false); }}>前往设置</button><button aria-label="收起连接详情" onClick={() => setSelected(null)}>收起</button></div> : null}</> : <div className="topbar-connection-overview" role="group" aria-label="连接状态概览">{overview.map(entry => <button type="button" key={entry.name} aria-label={`${entry.name}：${entry.status?.value ?? '未检查'}，前往设置`} onClick={() => onSettings(entry.category, entry.focus)} className={`connection-overview-item state-${entry.status?.state ?? 'idle'}`} title={`${entry.name}：${entry.status?.value ?? '未检查'}\n${entry.status?.detail ?? ''}\n点击前往对应设置`}><span className="connection-overview-dot" aria-hidden="true" /><strong>{entry.name}</strong><small>{entry.status?.value ?? '未检查'}</small></button>)}</div>, statusHost) : null}
   </div>;
 }

@@ -1,10 +1,10 @@
-import { ma2TimecodePreviewSchema, ma2ReadStateSchema, parseLinkProject, type Ma2TimecodePreview, type Ma2ReadState } from '@tb/schema';
+import { ma2EffectLibrarySchema, type Ma2EffectLibrary, ma2TimecodePreviewSchema, ma2ReadStateSchema, parseLinkProject, type Ma2TimecodePreview, type Ma2ReadState } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { importMa2TimecodeCommand } from './ma2-import';
 
-export function saveMa2ReadStateCommand(input: Ma2ReadState): LinkCommand {
+export function saveMa2ReadStateCommand(input: Ma2ReadState, historyGroup?: string): LinkCommand {
   const state = ma2ReadStateSchema.parse(input);
-  return { id: crypto.randomUUID(), label: '保存控台读取与配对状态', execute: project => parseLinkProject({ ...project, schemaVersion: 2, ma2ReadState: state, updatedAt: new Date().toISOString() }), undo: before => parseLinkProject(before) };
+  return { id: crypto.randomUUID(), historyGroup, label: '保存控台读取与配对状态', execute: project => parseLinkProject({ ...project, schemaVersion: 2, ma2ReadState: state, updatedAt: new Date().toISOString() }), undo: before => parseLinkProject(before) };
 }
 
 /** One history entry; a failed pairing never leaves a partially imported project. */
@@ -26,4 +26,9 @@ export function importMa2ProgramsCommand(selections: readonly { itemId: string; 
     }
     return parseLinkProject(next);
   }, undo: before => parseLinkProject(before) };
+}
+
+export function saveMa2MaterialLibraryCommand(source: string, input: Ma2EffectLibrary, historyGroup?: string): LinkCommand {
+  const library = ma2EffectLibrarySchema.parse(input);
+  return { id: crypto.randomUUID(), ...(historyGroup ? { historyGroup } : {}), label: '保存工程控台素材目录', execute: project => parseLinkProject({ ...project, schemaVersion: 2, ma2MaterialLibrary: { version: 1, source, library }, updatedAt: new Date().toISOString() }), undo: before => parseLinkProject(before) };
 }

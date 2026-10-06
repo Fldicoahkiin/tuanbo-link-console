@@ -15,31 +15,17 @@ function useStereoLevels(player: ProjectPlayer): { levels: number[]; error: stri
     setError(null);
     setLevels([0, 0]);
     if (lowPower || player.state.status !== 'playing' || !player.controller) return;
-    let context: AudioContext | null = null;
-    let stream: MediaStream | null = null;
     let timer: ReturnType<typeof setInterval> | null = null;
     try {
-      stream = player.controller.captureMonitoringStream();
-      if (!stream) throw new Error('播放中的音频监测连接不可用');
-      context = new AudioContext();
-      void context.resume().catch((failure: unknown) => setError(`电平监测启动失败：${String(failure)}`));
-      const source = context.createMediaStreamSource(stream);
-      const splitter = context.createChannelSplitter(2);
-      source.connect(splitter);
-      const audioContext = context;
+      const analysis = player.controller.getAudioAnalysis();
+      if (!analysis) throw new Error('播放中的音频监测连接不可用');
       setError(null);
-      const analysers = [0, 1].map((channel) => { const analyser = audioContext.createAnalyser(); analyser.fftSize = 1024; splitter.connect(analyser, channel); return analyser; });
-      const samples = new Float32Array(1024);
-      timer = setInterval(() => setLevels(analysers.map((analyser) => {
-        analyser.getFloatTimeDomainData(samples);
-        const peak = samples.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
+      timer = setInterval(() => setLevels(analysis.readPeaks().map((peak) => {
         return Math.max(0, Math.min(1, (20 * Math.log10(Math.max(peak, 0.001)) + 60) / 60));
       })), 80);
     } catch (error) { console.error('双声道电平监测失败', error); setError(`电平监测失败：${String(error)}`); }
     return () => {
       if (timer) clearInterval(timer);
-      stream?.getTracks().forEach((track) => track.stop());
-      if (context) void context.close().catch((error: unknown) => console.error('电平监测关闭失败', error));
     };
   }, [player.controller, player.state.status, lowPower]);
   return { levels, error };
@@ -49,7 +35,7 @@ export function P1TimeMonitor({ player, title, positionMs, durationMs, frameRate
 }): JSX.Element {
   const { levels, error } = useStereoLevels(player);
   const sampleRate = useIntegrationStore((s) => s.profile?.internalPlayer?.audioSampleRate ?? 44100);
-  const sending = internal && player.state.mtcEnabled && player.state.status === 'playing' && player.state.mtcSentPositionMs != null && !player.state.error;
+  const sending = internal && player.state.mtcEnabled && player.state.status === 'playing' && player.state.mtcSending && !player.state.error;
   return <section className="p1-time-monitor" aria-label="P1 播放监测" title={title}>
     <div className="monitor-readings">
       <dl>

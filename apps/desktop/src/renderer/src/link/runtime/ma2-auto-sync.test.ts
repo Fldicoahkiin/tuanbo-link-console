@@ -36,7 +36,8 @@ function setup() {
 it('未修改的周期不写控台，也不制造撤销历史', async () => {
   const test = setup(); await test.runner.tick(); await test.runner.tick();
   expect(test.dependencies.apply).not.toHaveBeenCalled(); expect(test.dependencies.execute).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('verified', expect.any(String));
+  expect(test.dependencies.catalog).not.toHaveBeenCalled(); expect(test.dependencies.read).not.toHaveBeenCalled();
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('waiting', expect.any(String));
 });
 it('写入不确定时锁住后续周期，不自动重试', async () => {
   const test = setup(); test.edit(); await test.runner.tick(); await test.runner.tick();
@@ -46,6 +47,21 @@ it('写入不确定时锁住后续周期，不自动重试', async () => {
 it('播放期间不读取或写入', async () => {
   const test = setup(); test.edit(); test.play(); await test.runner.tick();
   expect(test.dependencies.read).not.toHaveBeenCalled(); expect(test.dependencies.apply).not.toHaveBeenCalled();
+});
+it('播放中连接可建立编辑会话，但等待停止后才写回', async () => {
+  const test = setup(); test.play(); test.edit();
+  expect(() => test.runner.start({ dataDirectory: 'test' }, test.catalog)).not.toThrow();
+  await test.runner.tick();
+  expect(test.dependencies.catalog).not.toHaveBeenCalled(); expect(test.dependencies.apply).not.toHaveBeenCalled();
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('staged', expect.any(String));
+});
+it('歌曲配对失效后禁止将本地拖动写回控台', async () => {
+  const test = setup(); test.edit();
+  const project = test.dependencies.state().project!;
+  project.ma2ReadState = { source: 'test', catalog: test.catalog, pairs: {}, pairings: { '9902': { itemId: 'song', status: 'stale', evidence: '', reason: '起点已变化' } }, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
+  await test.runner.tick(); await test.runner.tick();
+  expect(test.dependencies.catalog).not.toHaveBeenCalled(); expect(test.dependencies.apply).not.toHaveBeenCalled();
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('配对已失效'));
 });
 it('关闭自动同步不能提前释放已经发送的写入锁', async () => {
   const test = setup(); test.edit();
@@ -60,7 +76,7 @@ it('关闭自动同步不能提前释放已经发送的写入锁', async () => {
   await test.runner.tick(); expect(test.dependencies.apply).toHaveBeenCalledOnce();
 });
 it('换 Show 后停止，后续周期不继续读写', async () => {
-  const test = setup(); test.catalog.directory.show = 'Other'; await test.runner.tick(); await test.runner.tick();
+  const test = setup(); test.edit(); test.catalog.directory.show = 'Other'; await test.runner.tick(); await test.runner.tick();
   expect(test.dependencies.catalog).toHaveBeenCalledTimes(1); expect(test.dependencies.read).not.toHaveBeenCalled();
   expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('Show'));
 });
@@ -90,13 +106,13 @@ it.skipIf(!process.env.MA2_ONPC_AUTO_SYNC_ACCEPTANCE)('真实 onPC 自动写回�
   try {
     runner.start(connection, await readMa2Catalog(bridge, () => false));
     project.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[1]!.at = 1200;
-    await runner.tick(); expect(changed).toHaveBeenLastCalledWith('verified', expect.any(String));
+    await runner.tick(true); expect(changed).toHaveBeenLastCalledWith('verified', expect.any(String));
     const updated = await bridge.request('READ', 9902);
     const report = inspectMa2TimecodeXml(updated);
     expect(report.timecodes[0]!.tracks[0]!.subtracks[0]!.events[1]!.attributes.time).toBe('36');
     const remote = patchMa2EventTimes(updated, report.sha256, [{ path: report.timecodes[0]!.tracks[0]!.subtracks[0]!.events[1]!.path, rawTime: '39' }]);
     await bridge.exchange('APPLY', 9902, updated, remote);
-    await runner.tick(); expect(changed).toHaveBeenLastCalledWith('verified', expect.any(String));
+    await runner.tick(true); expect(changed).toHaveBeenLastCalledWith('verified', expect.any(String));
     expect(project.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[1]!.at).toBe(1300);
   } finally {
     runner.stop(); const current = await bridge.request('READ', 9902);

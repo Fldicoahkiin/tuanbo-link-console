@@ -7,7 +7,6 @@ import { createPortal } from 'react-dom';
 import {
   AudioWaveform,
   CheckCircle2,
-  ChevronDown,
   CircleAlert,
   FolderOpen,
   Link2,
@@ -15,7 +14,6 @@ import {
   MonitorUp,
   Power,
   ShieldCheck,
-  SlidersHorizontal,
   Square,
   Wrench,
   type LucideIcon
@@ -171,8 +169,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
         midiPorts={midiPorts} inventory={inventory} notify={notify}
         onRefresh={() => void refresh()} onSave={() => void save()} onRefreshMidi={async () => { await readAndStoreMidiPorts(midiMonitor); }}
         onClose={onSettingsClose}
-        maintenance={<>
-      {isDeviceSettingsCategory(category) && !internal ? <details open className="settings-disclosure p1-follow-settings"><summary>P1 工程与跟随</summary><div className="connection-overview">
+        songTools={<div className="connection-overview p1-follow-settings">
       {internal ? null : <IntegrationHero
         busy={busy} securityAvailable={securityAvailable} coordinatorAvailable={coordinator !== null}
         currentItemTitle={currentItemTitle} runtimeState={runtimeState}
@@ -181,7 +178,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
         onLaunch={() => void launchSequence()} onStop={() => stopRuntime(coordinator, runtimeState, notify)}
       />}
 
-      {!internal && <div className="integration-setup-grid">
+      <div className="integration-setup-grid">
         <div className="integration-setup-primary">
           <P1ProjectSyncPanel disabled={runtimeActive} notify={notify} />
           {localIntegration.detection ? <DetectionReport detection={localIntegration.detection} issues={localIntegration.issues} /> : null}
@@ -192,8 +189,9 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
             ? <section className="security-banner attention"><div><strong>等待 P1 播放或继续</strong><p>P1 暂停或停止时不发送时间码，时间线和视频保持当前位置。直接在 P1 继续、重播或切歌即可；无需重新选择节目。</p></div></section>
             : <P1MtcSetupNotice ready={mtcReady} portAvailable={mtcPortAvailable} />}
         </div>
+      </div>
       </div>}
-      </div></details> : null}
+        maintenance={<>
         {isDeviceSettingsCategory(category) ? <ProgramSettingsCards
           draft={draft} setDraft={setDraft} password={password} setPassword={setPassword} busy={busy} runtimeActive={runtimeActive}
           securityAvailable={securityAvailable} processes={processes} midiPorts={midiPorts} inventory={inventory}
@@ -225,22 +223,27 @@ function ProgramSettingsCards({ draft, setDraft, busy, runtimeActive, securityAv
   notify: Props['notify'];
 }): JSX.Element {
   const [repairingBridge, setRepairingBridge] = useState(false);
+  const [bridgeResult, setBridgeResult] = useState<{ ok: boolean; message: string } | null>(null);
   const repairBridge = async (): Promise<void> => {
     if (repairingBridge) return;
-    setRepairingBridge(true);
+    setRepairingBridge(true); setBridgeResult(null);
     try {
       await persistDraft();
       await linkDesktopViewModel.repairObsBridge();
       useIntegrationStore.getState().setProcess(await linkDesktopViewModel.refreshExternalApplication('obs'));
       notify('OBS 内置组件已就绪，真实视频帧检查通过。');
+      setBridgeResult({ ok: true, message: 'OBS 预览组件已就绪，真实视频帧验证通过。结果已记录到运行日志。' });
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
+      setBridgeResult({ ok: false, message: error instanceof Error ? error.message : String(error) });
     } finally { setRepairingBridge(false); }
   };
   const internal = useDocumentStore((state) => state.project?.playbackSource === 'internal');
   return <fieldset className="device-program-list" disabled={runtimeActive}>
-    <ProgramProfileCard kind="obs" icon={MonitorUp} title="OBS Studio" process={processes.obs} busy={busy || runtimeActive} settings={draft.obs} acceptedVersion={draft.acceptedVersions.obs} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, obs: value } })} onSettingsChange={(settings) => setDraft({ ...draft, obs: { ...draft.obs, ...settings } })} onPick={() => void pickExecutable('obs')} onStart={() => void startProgram('obs')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('obs'), notify)} maintenanceActions={<Button className="secondary-button" disabled={busy || !securityAvailable} onClick={() => void runAction(async () => { await persistDraft(); useIntegrationStore.getState().setObs(await linkDesktopViewModel.connectObs()); useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory()); }, notify)}><Link2 />重新连接 WebSocket</Button>}>
-      <div className="device-panel-actions"><Button className="secondary-button" disabled={busy || runtimeActive || repairingBridge || !securityAvailable} onClick={() => { void repairBridge(); }}><Wrench />{repairingBridge ? '正在检查组件…' : '检查并修复组件'}</Button><small>随软件内置 · 自动安装与升级 · 检查真实画面</small></div>
+    <ProgramProfileCard kind="obs" icon={MonitorUp} title="OBS Studio" process={processes.obs} busy={busy || runtimeActive} settings={draft.obs} acceptedVersion={draft.acceptedVersions.obs} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, obs: value } })} onSettingsChange={(settings) => setDraft({ ...draft, obs: { ...draft.obs, ...settings } })} onPick={() => void pickExecutable('obs')} onStart={() => void startProgram('obs')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('obs'), notify)} maintenanceActions={<Button className="secondary-button" disabled={busy || !securityAvailable} onClick={() => void runAction(async () => { await persistDraft(); useIntegrationStore.getState().setObs(await linkDesktopViewModel.connectObs()); useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory()); }, notify)}><Link2 />重新连接 OBS</Button>}>
+      <div className="device-panel-actions"><Button className="secondary-button" disabled={busy || runtimeActive || repairingBridge || !securityAvailable} onClick={() => { void repairBridge(); }}><Wrench />{repairingBridge ? '正在检查组件…' : '检查并修复 OBS 预览组件'}</Button></div>
+      <p className="settings-note">OBS 有画面，但联动台预览不显示时使用。检查并安装预览组件，再验证是否收到画面；需要管理员授权或重启 OBS 时会提示。</p>
+      {bridgeResult ? <p className={bridgeResult.ok ? 'settings-note' : 'device-error'} role={bridgeResult.ok ? 'status' : 'alert'}>{bridgeResult.message}</p> : null}
     </ProgramProfileCard>
     {!internal ? <ProgramProfileCard kind="p1" icon={AudioWaveform} title="P1" process={processes.p1} busy={busy || runtimeActive} settings={draft.p1} acceptedVersion={draft.acceptedVersions.p1} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, p1: value } })} onSettingsChange={(settings) => setDraft({ ...draft, p1: { ...draft.p1, ...settings } })} onPick={() => void pickExecutable('p1')} onStart={() => void startProgram('p1')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('p1'), notify)}>
       <MidiPortField label="旧节目 MIDI 输出" direction="output" value={portName(draft, 'lighting-output')} ports={midiPorts} onChange={(value) => setDraft(updatePortProfile(draft, 'lighting-output', 'output', value))} />
@@ -307,13 +310,10 @@ function ProgramProfileCard({ kind, icon: Icon, title, process, busy, settings, 
   return <section className={`device-program-card ${kind}`}>
     <div className="device-program-heading">
       <div className={`device-program-icon ${kind}`}><Icon /></div>
-      <div className="device-program-identity"><span><h3>{title}</h3><StatusPill state={process.status} /></span><p>{process.owned ? <>联动台管理 · PID {process.pid}</> : process.status === 'running' ? <><CheckCircle2 />外部进程</> : '未运行'}</p></div>
+      <div className="device-program-identity"><span><h3>{title}</h3><StatusPill state={process.status} /></span><p>{process.owned ? '由联动台启动，可在这里关闭' : process.status === 'running' ? <><CheckCircle2 />已在其他位置打开，请在原程序中关闭</> : `尚未检测到 ${title}，可先打开该程序`}</p></div>
     </div>
-    {children ? <details className="program-configuration" open>
-      <summary><span><SlidersHorizontal />配置</span><ChevronDown /></summary>
-      <div className="form-grid">{children}</div>
-    </details> : null}
-    <details className="device-process-settings"><summary><Wrench />程序路径与启动设置</summary><DeviceProcessSettings title={title} process={process} busy={busy} settings={settings} acceptedVersion={acceptedVersion} onAcceptedVersionChange={onAcceptedVersionChange} onSettingsChange={onSettingsChange} onPick={onPick} onStart={onStart} onStop={onStop} maintenanceActions={maintenanceActions} /></details>
+    {children ? <div className="program-maintenance-task"><h4>{kind === 'obs' ? '联动台预览没有画面' : 'P1 声音与时间码'}</h4><div className="form-grid">{children}</div></div> : null}
+    <details className="device-process-settings"><summary><Wrench />无法自动启动 {title}？设置程序位置</summary><DeviceProcessSettings title={title} process={process} busy={busy} settings={settings} acceptedVersion={acceptedVersion} onAcceptedVersionChange={onAcceptedVersionChange} onSettingsChange={onSettingsChange} onPick={onPick} onStart={onStart} onStop={onStop} maintenanceActions={maintenanceActions} /></details>
   </section>;
 }
 
@@ -332,12 +332,15 @@ function DeviceProcessSettings({ title, process, busy, settings, acceptedVersion
 }) {
   return <div className="device-process-fields">
     <label className="settings-row"><span>程序位置</span><div className="device-path-control"><input aria-label={`${title} 可执行文件`} value={settings.executablePath} readOnly /><button disabled={busy} onClick={onPick} aria-label={`选择 ${title} 可执行文件`}><FolderOpen />浏览</button></div></label>
-    <Field label="工作目录"><input disabled={busy} value={settings.workingDirectory} onChange={(event) => onSettingsChange({ ...settings, workingDirectory: event.currentTarget.value })} /></Field>
-    <Field label="验收版本"><input disabled={busy} value={acceptedVersion} onChange={(event) => onAcceptedVersionChange(event.currentTarget.value)} /></Field>
-    <Field label="启动参数"><textarea aria-label={`${title} 启动参数`} placeholder="每行一个参数，无需参数时留空" disabled={busy} value={settings.arguments.join('\n')} onChange={(event) => onSettingsChange({ ...settings, arguments: event.currentTarget.value.split(/\r?\n/).filter((argument) => argument !== '') })} /></Field>
-    <Field label="启动超时（ms）"><input disabled={busy} type="number" min="1000" max="120000" value={settings.startupTimeoutMs} onChange={(event) => onSettingsChange({ ...settings, startupTimeoutMs: Number(event.currentTarget.value) })} /></Field>
-    <Field label="停止超时（ms）"><input disabled={busy} type="number" min="1000" max="120000" value={settings.shutdownTimeoutMs} onChange={(event) => onSettingsChange({ ...settings, shutdownTimeoutMs: Number(event.currentTarget.value) })} /></Field>
+    <p className="settings-note">选择已安装的 {title} 程序（.exe），然后保存启动设置。正常启动时无需修改下方技术参数。</p>
     <div className="device-panel-actions">{maintenanceActions}<Button className="secondary-button" disabled={busy} onClick={onStart}><Power />启动或连接 {title}</Button><Button className="secondary-button" disabled={busy || !process.owned} onClick={onStop}><Square />关闭 {title}</Button></div>
+    <details className="device-advanced"><summary>技术参数（排查启动问题时使用）</summary><div className="device-process-fields">
+    <Field label="启动文件夹"><input disabled={busy} value={settings.workingDirectory} onChange={(event) => onSettingsChange({ ...settings, workingDirectory: event.currentTarget.value })} /></Field>
+    <Field label="已测试的程序版本（手动记录）"><input disabled={busy} value={acceptedVersion} onChange={(event) => onAcceptedVersionChange(event.currentTarget.value)} /></Field>
+    <Field label="启动参数"><textarea aria-label={`${title} 启动参数`} placeholder="每行一个参数，无需参数时留空" disabled={busy} value={settings.arguments.join('\n')} onChange={(event) => onSettingsChange({ ...settings, arguments: event.currentTarget.value.split(/\r?\n/).filter((argument) => argument !== '') })} /></Field>
+    <Field label="最多等待启动（秒）"><input disabled={busy} type="number" min="1" max="120" step="0.001" value={settings.startupTimeoutMs / 1000} onChange={(event) => onSettingsChange({ ...settings, startupTimeoutMs: Math.round(Number(event.currentTarget.value) * 1000) })} /></Field>
+    <Field label="最多等待关闭（秒）"><input disabled={busy} type="number" min="1" max="120" step="0.001" value={settings.shutdownTimeoutMs / 1000} onChange={(event) => onSettingsChange({ ...settings, shutdownTimeoutMs: Math.round(Number(event.currentTarget.value) * 1000) })} /></Field>
+    </div></details>
   </div>;
 }
 

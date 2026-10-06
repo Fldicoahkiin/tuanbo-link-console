@@ -1,0 +1,56 @@
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+
+export function useProgramViewport(ids: string[], view: 'list' | 'cards', compact: boolean) {
+  const viewport = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: 0, height: 0, top: 0 });
+  const [focused, setFocused] = useState<string | null>(null);
+  const [requested, setRequested] = useState<number | null>(null);
+  useEffect(() => {
+    const element = viewport.current; if (!element) return;
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0]; if (!entry) return;
+      const width = entry.contentRect.width, height = entry.contentRect.height;
+      setSize(previous => previous.width === width && previous.height === height ? previous : { ...previous, width, height });
+    });
+    observer.observe(element); return () => observer.disconnect();
+  }, []);
+  const columns = view === 'list' ? 1 : Math.max(1, Math.floor((size.width + 8) / 172));
+  const height = view === 'cards' ? 104 : compact || size.width < 600 ? 96 : 56;
+  const gap = view === 'cards' ? 8 : 3, step = height + gap;
+  const rows = Math.ceil(ids.length / columns), totalHeight = Math.max(0, rows * step - gap);
+  const start = Math.max(0, Math.floor(size.top / step) - 1) * columns;
+  const end = Math.min(ids.length, (Math.ceil((size.top + size.height) / step) + 1) * columns);
+  const indices = new Set(Array.from({ length: Math.max(0, end - start) }, (_, index) => start + index));
+  const focusedIndex = focused ? ids.indexOf(focused) : -1;
+  if (focusedIndex >= 0) indices.add(focusedIndex);
+  if (requested !== null && requested < ids.length) indices.add(requested);
+  useLayoutEffect(() => {
+    const element = viewport.current; if (!element) return;
+    const maximum = Math.max(0, totalHeight - size.height);
+    if (size.top > maximum) {
+      element.scrollTop = maximum;
+      setSize(previous => ({ ...previous, top: maximum }));
+    }
+    if (requested !== null) {
+      element.querySelector<HTMLElement>(`[data-program-index="${requested}"] > article`)?.focus({ preventScroll: true });
+      setRequested(null);
+    }
+  }, [requested, totalHeight, size.height, size.top]);
+  const keyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || !(event.target instanceof HTMLElement) || !event.target.matches('article[data-program-id]')) return;
+    const index = ids.indexOf(event.target.dataset.programId ?? '');
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? ids.length - 1
+      : event.key === 'ArrowDown' ? index + columns : event.key === 'ArrowUp' ? index - columns
+      : event.key === 'ArrowRight' ? index + 1 : event.key === 'ArrowLeft' ? index - 1 : null;
+    if (next === null || !ids.length) return;
+    event.preventDefault(); event.stopPropagation();
+    const target = Math.max(0, Math.min(ids.length - 1, next)), top = Math.floor(target / columns) * step, element = event.currentTarget;
+    if (top < element.scrollTop) element.scrollTop = top;
+    else if (top + height > element.scrollTop + size.height) element.scrollTop = top + height - size.height;
+    setSize(previous => ({ ...previous, top: element.scrollTop })); setRequested(target);
+  };
+  return { viewport, indices: [...indices].sort((a, b) => a - b), totalHeight, setFocused, keyDown,
+    scroll: (top: number) => setSize(previous => previous.top === top ? previous : { ...previous, top }),
+    style: (index: number) => ({ top: Math.floor(index / columns) * step, left: view === 'list' ? 0 : index % columns * 172,
+      height, width: view === 'list' ? '100%' : Math.min(164, size.width || 164) }) };
+}

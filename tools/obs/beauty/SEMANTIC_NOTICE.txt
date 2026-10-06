@@ -1,0 +1,27 @@
+MediaPipe Selfie Multiclass Segmentation (256 x 256)
+Model and weights: Google LLC. Model author: Adel Ahmadyan, Google.
+Model date: May 10, 2023. License: Apache License, Version 2.0.
+Full license: SEMANTIC_LICENSE.txt.
+
+Original model card:
+https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Multiclass%20Segmentation.pdf
+Original versioned TFLite model:
+https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite
+Original SHA256:
+c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0
+
+ONNX format conversion: senty-au, tf2onnx 1.17.0, opset 17.
+https://huggingface.co/senty-au/selfie_multiclass_256x256-ONNX
+Converted SHA256:
+35ec1ecd9ee7f85073c99c00020b7f6751b69506eeacf683bc8665f6117f85b0
+The converter reports unchanged weights; this application does not modify them.
+
+Application preprocessing follows the original TFLite metadata (mean and standard
+deviation 127.5), verified against MediaPipe, rather than the converter's 0..1
+example. Segmentation is used only for frame-local effect masking, not identity.
+
+Optional application-derived skin-probability model adds Softmax(axis=3) and
+Gather(class=3) after the same logits, with unchanged learned weights.
+Conversion: probe-semantic-activation.py, ONNX opset 17.
+Derived SHA256:
+80bd994edb6437c8eed7a5d16b2dbdaa9635a166de190a9fd437b35e48461e5f

@@ -7,10 +7,26 @@ import {
   resolveTimelineClipSpan,
   resolveTimelineCueSpan,
   resolveTimelineState,
+  TimelineStateIndex,
   wasTimelineFrameCrossed
 } from './timeline-state';
 
 describe('timeline state', () => {
+  it('复用索引前进、回退和重新定位仍遵守边界，修改修订后重建索引', () => {
+    const value = project();
+    const index = new TimelineStateIndex(value, value.rundown[0]!);
+    const first = index.at(2_000);
+    expect(first.activeVisualClipIds).toEqual(['video-clip']);
+    expect(first.activeObsCueIds).toEqual(['obs-clip']);
+    expect(index.at(500).activeClipIds).toEqual([]);
+    expect(index.at(3_500).activeObsCueIds).toEqual([]);
+    expect(index.at(2_000)).toEqual(first);
+    expect(first.activeObsCueIds).toEqual(['obs-clip']);
+    const next = { ...value.rundown[0]!, visualLayers: value.rundown[0]!.visualLayers.map(layer => ({ ...layer, visible: false })) };
+    expect(new TimelineStateIndex(value, next).at(2_000).activeClipIds).toEqual([]);
+    expect(index.at(2_000).activeVisualClipIds).toEqual(['video-clip']);
+  });
+
   it('对本地片段使用统一半开区间边界', () => {
     const value = project();
     expect(activeClipIds(value, 999)).toEqual([]);

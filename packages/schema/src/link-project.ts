@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { audioSegmentSchema, audioBeatMapSchema } from './audio-edit';
 import { lightingDocumentSchema } from './lighting';
 import { ma2ReadStateSchema } from './ma2-catalog';
+import { ma2EffectLibrarySchema } from './ma2-effect-library';
 
 export const LINK_PROJECT_SCHEMA_VERSION = 1 as const;
 
@@ -363,6 +364,7 @@ export const linkProjectSchema = z.object({
   playlists: z.array(z.object({ id: z.string().min(1), name: z.string().trim().min(1) })).optional(),
   p1Sync: p1ProjectSyncSchema.optional(),
   ma2ReadState: ma2ReadStateSchema.optional(),
+  ma2MaterialLibrary: z.object({ version: z.literal(1), source: z.string().min(1), library: ma2EffectLibrarySchema }).strict().optional(),
   p1AutoFollow: z.object({
     enabled: z.boolean(),
     ranges: z.array(z.object({
@@ -401,6 +403,14 @@ export function parseLinkProject(value: unknown): LinkProject {
   return linkProjectSchema.parse(value);
 }
 
+/** Domain-only validation for immutable updates to already parsed projects.
+ * Callers must parse each changed item/field with its schema first. External
+ * input and saved files must still go through parseLinkProject. */
+const projectRelationsSchema = z.custom<LinkProject>().superRefine(validateProjectInvariants);
+export function validateLinkProjectRelations(project: LinkProject): void {
+  projectRelationsSchema.parse(project);
+}
+
 export function serializeLinkProject(project: LinkProject): string {
   return `${JSON.stringify(parseLinkProject(project), null, 2)}\n`;
 }
@@ -427,7 +437,7 @@ function isSafeProjectPath(value: string): boolean {
 }
 
 function validateProjectInvariants(project: z.infer<typeof linkProjectSchema>, ctx: z.RefinementCtx): void {
-  if (project.schemaVersion === 1 && (project.ma2ReadState || project.rundown.some((item) => item.lighting !== undefined))) {
+  if (project.schemaVersion === 1 && (project.ma2ReadState || project.ma2MaterialLibrary || project.rundown.some((item) => item.lighting !== undefined))) {
     ctx.addIssue({ code: 'custom', message: '含灯光编排的工程必须使用 schema 2，防止旧版本丢失数据', path: ['schemaVersion'] });
   }
   const playlistIds = new Set<string>();

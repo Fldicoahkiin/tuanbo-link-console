@@ -9,12 +9,55 @@ import { VerifiedMediaFiles } from './verified-media-files';
 export class MediaPreviewService {
   private readonly pending = new Map<string, Promise<string>>();
   private readonly verified = new VerifiedMediaFiles(hashFile);
+  private thumbnailWorkers = 0;
+  private readonly thumbnailQueue: (() => void)[] = [];
+  private videoWorkers = 0;
+  private readonly videoQueue: (() => void)[] = [];
 
   constructor(
     private readonly projects: LinkProjectService,
     private readonly executeFfmpeg: (executable: string, arguments_: string[]) => Promise<void> = runFfmpeg,
     private readonly resolveExecutable: () => string = resolveFfmpegExecutable
   ) {}
+
+  ensureThumbnail(projectPath: string, relativePath: string, sha256: string): Promise<string> {
+    assertSha256(sha256);
+    const key = `thumbnail:${resolve(projectPath)}:${sha256}`;
+    const current = this.pending.get(key);
+    if (current) return current;
+    if (this.thumbnailQueue.length >= 32) return Promise.reject(new Error('缩略图准备队列已满，请停止滚动后重新打开素材列表'));
+    const operation = this.thumbnailSlot(async () => {
+      const source = this.projects.resolveMediaAsset(projectPath, relativePath);
+      if (!await this.verified.verify(source, sha256)) throw new Error('原素材完整性校验失败，请重新导入');
+      const directory = join(dirname(resolve(projectPath)), 'cache', 'media-thumbnails');
+      const destination = join(directory, `${sha256}.jpg`);
+      if (await pathExists(destination)) return destination;
+      await mkdir(directory, { recursive: true });
+      const temporary = join(directory, `.${sha256}.${crypto.randomUUID()}.tmp.jpg`);
+      await generateTemporaryOutput(temporary, destination, () => this.executeFfmpeg(this.resolveExecutable(), [
+        '-hide_banner', '-loglevel', 'error', '-y', '-threads', '1', '-filter_threads', '1', '-i', source,
+        '-map', '0:v:0', '-an', '-frames:v', '1', '-vf', 'scale=320:320:force_original_aspect_ratio=decrease', '-q:v', '3', '-threads', '1', temporary
+      ]));
+      return destination;
+    }).finally(() => this.pending.delete(key));
+    this.pending.set(key, operation);
+    return operation;
+  }
+
+  private async thumbnailSlot<T>(task: () => Promise<T>): Promise<T> {
+    if (this.thumbnailWorkers >= 2) await new Promise<void>(resolve => this.thumbnailQueue.push(resolve));
+    else this.thumbnailWorkers++;
+    try { return await task(); }
+    finally { const next = this.thumbnailQueue.shift(); if (next) next(); else this.thumbnailWorkers--; }
+  }
+
+  private async videoSlot<T>(task: () => Promise<T>): Promise<T> {
+    if (this.videoQueue.length >= 32) throw new Error('视频准备队列已满，本次未开始生成缓存；请等待当前任务完成后重新准备');
+    if (this.videoWorkers >= 2) await new Promise<void>(resolve => this.videoQueue.push(resolve));
+    else this.videoWorkers++;
+    try { return await task(); }
+    finally { const next = this.videoQueue.shift(); if (next) next(); else this.videoWorkers--; }
+  }
 
   ensureVideoPreview(projectPath: string, relativePath: string, sha256: string): Promise<string> {
     assertSha256(sha256);
@@ -26,8 +69,13 @@ export class MediaPreviewService {
     return operation;
   }
 
-  ensureObsSeekVideo(projectPath: string, relativePath: string, sha256: string): Promise<string> {
+  async ensureObsSeekVideo(projectPath: string, relativePath: string, sha256: string): Promise<string> {
     assertSha256(sha256);
+    // Several assets may share one content-addressed output, but each source
+    // path must be verified before joining that work. Otherwise preloading only
+    // warms the first path and can also accept a different, corrupted source.
+    const source = this.projects.resolveMediaAsset(projectPath, relativePath);
+    if (!await this.verified.verify(source, sha256)) throw new Error('原素材完整性校验失败，请重新导入');
     const key = `obs-seek:${resolve(projectPath)}:${sha256}`;
     const current = this.pending.get(key);
     if (current) return current;
@@ -38,9 +86,8 @@ export class MediaPreviewService {
 
   private async createObsSeekVideo(projectPath: string, relativePath: string, sha256: string): Promise<string> {
     const source = this.projects.resolveMediaAsset(projectPath, relativePath);
-    if (!await this.verified.verify(source, sha256)) throw new Error('原素材完整性校验失败，请重新导入');
     const directory = join(dirname(resolve(projectPath)), 'cache', 'obs-seek-jpeg2000');
-    const destination = join(directory, `${sha256}.rgba.mkv`);
+    const destination = join(directory, `${sha256}.source-pixels.mkv`);
     const checksumPath = `${destination}.sha256`;
     if (await pathExists(destination) && await pathExists(checksumPath)) {
       const digest = (await readFile(checksumPath, 'utf8')).trim();
@@ -50,15 +97,18 @@ export class MediaPreviewService {
     }
     await mkdir(directory, { recursive: true });
     const temporaryPath = join(directory, `.${sha256}.${crypto.randomUUID()}.tmp.mkv`);
-    await generateTemporaryOutput(temporaryPath, destination, async () => {
+    await this.videoSlot(() => generateTemporaryOutput(temporaryPath, destination, async () => {
       await this.executeFfmpeg(this.resolveExecutable(), [
-        '-hide_banner', '-loglevel', 'error', '-y', '-i', source,
-          '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'ffv1', '-level', '3', '-g', '1', '-pix_fmt', 'bgra', '-threads', '2',
+        '-hide_banner', '-loglevel', 'error', '-y', '-threads', '2', '-filter_threads', '1', '-i', source,
+          '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'ffv1', '-level', '3', '-g', '1', '-threads', '2',
         '-c:a', 'copy', '-avoid_negative_ts', 'disabled', temporaryPath
       ]);
       if (!await this.verified.verify(source, sha256)) throw new Error('原素材在生成定位缓存时发生变化');
-    });
-    await writeFile(checksumPath, await hashFile(destination), 'utf8');
+    }));
+    // Publish the checksum through the same identity-checked cache used during
+    // admission. Otherwise the first use rehashes the file just generated by
+    // next-program preloading, moving large disk reads back onto the boundary.
+    await writeFile(checksumPath, await this.verified.digest(destination), 'utf8');
     return destination;
   }
 
@@ -80,15 +130,15 @@ export class MediaPreviewService {
     if (await pathExists(destination)) return destination;
     await mkdir(proxyDirectory, { recursive: true });
     const temporaryPath = join(proxyDirectory, `.${sha256}.${crypto.randomUUID()}.tmp.mp4`);
-    await generateTemporaryOutput(temporaryPath, destination, async () => {
+    await this.videoSlot(() => generateTemporaryOutput(temporaryPath, destination, async () => {
       await this.executeFfmpeg(this.resolveExecutable(), [
-        '-hide_banner', '-loglevel', 'error', '-y', '-i', source,
+        '-hide_banner', '-loglevel', 'error', '-y', '-threads', '2', '-filter_threads', '1', '-i', source,
         '-map', '0:v:0', '-map', '0:a:0?',
         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart',
+        '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', '-threads', '2',
         temporaryPath
       ]);
-    });
+    }));
     return destination;
   }
 

@@ -1,0 +1,208 @@
+{
+  "version": 1,
+  "scope": "Sparse circles visually reviewed from exact source frames; no identities and no dense ground truth. Neck is a known semantic false positive; valid face geometry must separately exclude it.",
+  "videoSha256": "d60a4057489616003b6f66c26ed80825d95c8ea9b839c8c30824c06be65772fa",
+  "attribution": {
+    "file": "cha-cha.webm",
+    "title": "Cha cha cha(Dance).webm",
+    "author": "Wpzhiyilee",
+    "source": "https://commons.wikimedia.org/wiki/File:Cha_cha_cha(Dance).webm",
+    "download": "https://upload.wikimedia.org/wikipedia/commons/d/de/Cha_cha_cha%28Dance%29.webm",
+    "license": "CC BY-SA 3.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0/",
+    "sha256": "d60a4057489616003b6f66c26ed80825d95c8ea9b839c8c30824c06be65772fa",
+    "changes": "Original video unchanged. Extracted/resized/annotated test frames are adaptations under CC BY-SA 3.0."
+  },
+  "samples": [
+    {
+      "timestampMs": 4000,
+      "rawSha256": "9c0c98ccf2c6c0a991c28779f4ad6e084910e8875665809f8091820780456641",
+      "regions": [
+        {
+          "kind": "face",
+          "circle": [
+            204,
+            40,
+            3
+          ]
+        },
+        {
+          "kind": "face",
+          "circle": [
+            280,
+            76,
+            3
+          ]
+        },
+        {
+          "kind": "hair",
+          "circle": [
+            191,
+            23,
+            3
+          ]
+        },
+        {
+          "kind": "arm",
+          "circle": [
+            247,
+            145,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": 8000,
+      "rawSha256": "77f515818b5bf1890d405ce41825d0f7f9612ced14f39053e4106e3ffc450c76",
+      "regions": [
+        {
+          "kind": "face",
+          "circle": [
+            279,
+            69,
+            5
+          ]
+        },
+        {
+          "kind": "face",
+          "circle": [
+            478,
+            96,
+            4
+          ]
+        },
+        {
+          "kind": "hair",
+          "circle": [
+            161,
+            109,
+            6
+          ]
+        },
+        {
+          "kind": "arm",
+          "circle": [
+            505,
+            205,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": 10000,
+      "rawSha256": "06253795bc0d633f50e69b79dd8001b967a9efca01e9096124b46889975707f9",
+      "regions": [
+        {
+          "kind": "face",
+          "circle": [
+            564,
+            82,
+            4
+          ]
+        },
+        {
+          "kind": "hair",
+          "circle": [
+            520,
+            140,
+            5
+          ]
+        },
+        {
+          "kind": "arm",
+          "circle": [
+            586,
+            202,
+            5
+          ]
+        },
+        {
+          "kind": "neck",
+          "circle": [
+            252,
+            91,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": 12000,
+      "rawSha256": "821b141556975b08e8aeb684bd53ef80d084a8fd95493b40fc5521307d1fd67f",
+      "regions": [
+        {
+          "kind": "face",
+          "circle": [
+            160,
+            85,
+            5
+          ]
+        },
+        {
+          "kind": "hair",
+          "circle": [
+            260,
+            130,
+            6
+          ]
+        },
+        {
+          "kind": "arm",
+          "circle": [
+            408,
+            214,
+            4
+          ]
+        },
+        {
+          "kind": "face",
+          "circle": [
+            448,
+            91,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": 14000,
+      "rawSha256": "3a9c03f61c8ffa248c4dbd29cecb08d5222047659ce19bd4a6911e9b585e87b7",
+      "regions": [
+        {
+          "kind": "face",
+          "circle": [
+            125,
+            164,
+            4
+          ]
+        },
+        {
+          "kind": "face",
+          "circle": [
+            460,
+            137,
+            3
+          ]
+        },
+        {
+          "kind": "hair",
+          "circle": [
+            101,
+            115,
+            5
+          ]
+        },
+        {
+          "kind": "arm",
+          "circle": [
+            181,
+            242,
+            4
+          ]
+        }
+      ]
+    }
+  ]
+}

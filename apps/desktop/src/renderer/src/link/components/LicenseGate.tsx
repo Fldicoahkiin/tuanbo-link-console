@@ -2,11 +2,13 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { Button } from './Button';
 import { LicenseSettings } from './LicenseSettings';
+import { LogsWorkspace } from './LogsWorkspace';
 
 /** Do not mount device adapters or restore a project before main-process authorization. */
 export function LicenseGate({ children }: { children: ReactNode }): JSX.Element {
   const [state, setState] = useState<'checking' | 'locked' | 'authorized'>('checking');
   const [error, setError] = useState('');
+  const [showLogs, setShowLogs] = useState(false);
   useEffect(() => {
     let alive = true;
     void window.tbLink.requireOutputLicense().then(() => {
@@ -17,9 +19,11 @@ export function LicenseGate({ children }: { children: ReactNode }): JSX.Element 
     return () => { alive = false; };
   }, []);
   if (state === 'authorized') return <>{children}</>;
+  if (showLogs) return <main className="device-console settings-content-page license-gate"><Button className="secondary-button" onClick={() => setShowLogs(false)}>返回激活页面</Button><LogsWorkspace notify={(message, tone) => { if (tone === 'error') setError(message); }} /></main>;
   return <main className="device-console settings-content-page license-gate">
     <div className="device-detail"><div className="device-panel">
       <header className="license-gate-heading"><h1>激活团播联动台</h1>
+        <Button className="secondary-button" onClick={() => setShowLogs(true)}>运行日志</Button>
         <Button className="secondary-button" aria-label="关闭软件" onClick={() => {
           void window.tbLink.controlWindow('close').catch((failure: unknown) => {
             setError(failure instanceof Error ? failure.message : String(failure));
