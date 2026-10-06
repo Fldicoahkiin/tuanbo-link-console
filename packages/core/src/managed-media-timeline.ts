@@ -126,12 +126,17 @@ function assertLayerIntervalsDoNotOverlap(
     const start = span.startFrame;
     const end = span.endFrame;
     const intervals = intervalsByLayer.get(clip.layerId) ?? [];
-    const overlap = intervals.find((candidate) => start < candidate.end && candidate.start < end);
-    if (overlap) {
-      throw new Error(`视觉图层存在重叠片段：“${overlap.label}”与“${clip.label}”`);
-    }
     intervals.push({ clipId: clip.id, label: clip.label, start, end });
     intervalsByLayer.set(clip.layerId, intervals);
+  }
+  for (const intervals of intervalsByLayer.values()) {
+    intervals.sort((a, b) => a.start - b.start || a.end - b.end);
+    for (let index = 1; index < intervals.length; index++) {
+      const previous = intervals[index - 1]!, current = intervals[index]!;
+      if (current.start < previous.end && previous.start < current.end) {
+        throw new Error(`视觉图层存在重叠片段：“${previous.label}”与“${current.label}”`);
+      }
+    }
   }
 }
 

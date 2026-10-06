@@ -1,4 +1,4 @@
-import { ma2PlaybackRequestSchema, type Ma2PlaybackRequest } from '@tb/schema';
+import { ma2PlaybackRequestSchema, type Ma2PlaybackRequest, type Ma2Catalog, type Ma2CatalogRequest, ma2ObjectDirectorySchema, type Ma2ObjectDirectory } from '@tb/schema';
 import { playMa2Cue } from './ma2-pool-playback';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -55,30 +55,37 @@ export class Ma2NetworkManager {
     await playMa2Cue(connection, request.action, current);
   }
   private credentialId(settings: Ma2NetworkSettings): string { return `ma2-${createHash('sha256').update(`${settings.host}:${settings.port}:${settings.username}`).digest('hex')}`; }
-  async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, targets?: readonly number[]): Promise<import('@tb/schema').Ma2Catalog> {
+  async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, targets?: readonly number[], checkpoint?: (catalog: Ma2Catalog, entry?: Ma2Catalog['entries'][number]) => Promise<void>, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2Catalog> {
+    const started = performance.now();
     const { bridge } = this.get(target);
     const connection = this.connection;
     if (!connection) throw new Error('请先连接控台');
     const cache = new Map<number, import('./ma2-timecode-xml').Ma2SequenceReport['sequences'][number]>();
     const metrics = { elapsedMs: 0, requests: 0, bytes: 0, phases: {} as Record<string, number> };
     const measuredBridge: Pick<Ma2OnpcBridge, 'request'> = { request: async (...args) => { metrics.requests += 1; const value = await bridge.request(...args); metrics.bytes += Buffer.byteLength(value, 'utf8'); return value; } };
-    let identity: string | undefined;
+    let sequenceDirectory: Ma2ObjectDirectory | undefined;
     const trafficBefore = connection.readTraffic();
-    const catalog = await readMa2Catalog(bridge, this.isPlaying, undefined, onProgress, signal, { targets, metrics, metadata: async numbers => {
+    const catalog = await readMa2Catalog(bridge, this.isPlaying, undefined, onProgress, signal, { targets, metrics, checkpoint, expectedSource, metadata: async numbers => {
       const missing = numbers.filter(number => !cache.has(number));
       if (missing.length) {
         const start = performance.now();
-        const library = await readMa2NativeLibrary(connection, measuredBridge, this.isPlaying, undefined, 'library', signal, missing, bytes => { metrics.requests += 1; metrics.bytes += bytes; });
+        sequenceDirectory ??= ma2ObjectDirectorySchema.parse(JSON.parse(await measuredBridge.request('LISTSEQ', 1)));
+        const library = await readMa2NativeLibrary(connection, measuredBridge, this.isPlaying, undefined, 'library', signal, missing, bytes => { metrics.requests += 1; metrics.bytes += bytes; }, sequenceDirectory);
         metrics.phases.sequences = (metrics.phases.sequences ?? 0) + performance.now() - start;
-        const current = JSON.stringify(library.directory);
-        if (identity && identity !== current) throw new Error('读取期间 Show 或序列目录已变化');
-        identity = current;
+
         for (const sequence of library.sequences) cache.set(sequence.sequence, { number: sequence.sequence, name: sequence.name, cues: sequence.cues });
       }
       return { version: this.version ?? '', sequences: numbers.flatMap(number => { const entry = cache.get(number); return entry ? [entry] : []; }) };
     } });
+    if (sequenceDirectory && !signal?.aborted && !this.isPlaying()) {
+      try {
+        const verified = ma2ObjectDirectorySchema.parse(JSON.parse(await measuredBridge.request('LISTSEQ', 1)));
+        if (JSON.stringify(sequenceDirectory) !== JSON.stringify(verified)) throw new Error('序列目录已变化');
+      } catch (error) { catalog.sourceUnverified = true; catalog.incomplete = `序列来源复核未完成：${error instanceof Error ? error.message : String(error)}`; }
+    }
     const trafficAfter = connection.readTraffic();
-    catalog.metrics = { ...metrics, wireCommands: trafficAfter.wireCommands - trafficBefore.wireCommands, sentBytes: trafficAfter.sentBytes - trafficBefore.sentBytes, receivedBytes: trafficAfter.receivedBytes - trafficBefore.receivedBytes };
+    catalog.metrics = { ...metrics, elapsedMs: performance.now() - started, queueMs: trafficAfter.queueMs - trafficBefore.queueMs, wireCommands: trafficAfter.wireCommands - trafficBefore.wireCommands, sentBytes: trafficAfter.sentBytes - trafficBefore.sentBytes, receivedBytes: trafficAfter.receivedBytes - trafficBefore.receivedBytes };
+    await checkpoint?.(catalog);
     return catalog;
   }
   async preview(target: Ma2NetworkTarget, timecode: number, timeOriginMs = 0): Promise<import('@tb/schema').Ma2TimecodePreview> {
@@ -91,10 +98,10 @@ export class Ma2NetworkManager {
       return bridge.request('READ', timecode);
     }, targets => readMa2NativeLibrary(connection, bridge, this.isPlaying, undefined, 'library', undefined, targets));
   }
-  async readLibrary(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, phase: 'library' | 'verification' = 'library', signal?: AbortSignal): Promise<import('@tb/schema').Ma2EffectLibrary> {
+  async readLibrary(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void | Promise<void>, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<import('@tb/schema').Ma2EffectLibrary> {
     const { bridge } = this.get(target);
     if (!this.connection) throw new Error('请先连接控台');
-    return readMa2NativeLibrary(this.connection, bridge, this.isPlaying, onProgress, phase, signal);
+    return readMa2NativeLibrary(this.connection, bridge, this.isPlaying, onProgress, phase, signal, targets, undefined, undefined, expectedSource);
   }
   async initialize(): Promise<void> {
     try {

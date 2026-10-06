@@ -8,6 +8,49 @@ import { ObsWebSocketAdapter } from './obs-websocket-adapter';
 import type { ObsEditorPreview } from './obs-editor-preview';
 
 describe('ObsWebSocketAdapter', () => {
+  it('播放预检保留完整名称索引，只读取当前目标详情，不随历史节目累积全扫', async () => {
+    const client = fakeObsClient();
+    client.responses.set('GetInputList', { inputs: Array.from({ length: 2000 }, (_, index) => ({ inputName: `素材${index}`, inputKind: 'ffmpeg_source' })) });
+    client.responses.set('GetSceneList', { scenes: Array.from({ length: 2000 }, (_, index) => ({ sceneName: `场景${index}` })) });
+    const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password'); client.calls.length = 0;
+    const inventory = await adapter.readInventory({ scenes: new Set(['场景8']), inputs: new Set(['素材7']) });
+    expect(inventory.inputs).toHaveLength(2000); expect(inventory.scenes).toHaveLength(2000);
+    expect(Object.keys(inventory.filters)).toEqual(['素材7']);
+    expect(Object.keys(inventory.sceneItems)).toEqual(['场景8']);
+    expect(client.calls.filter(([request]) => request === 'GetSceneItemList')).toEqual([['GetSceneItemList', { sceneName: '场景8' }]]);
+    expect(client.calls.filter(([request]) => request === 'GetSourceFilterList')).toEqual([['GetSourceFilterList', { sourceName: '素材7' }]]);
+    expect(client.calls).toHaveLength(7);
+  });
+  it('2000 个素材目录按有界请求读取，不一次发出全部查询', async () => {
+    const client = fakeObsClient();
+    client.responses.set('GetInputList', { inputs: Array.from({ length: 2000 }, (_, index) => ({ inputName: `素材${index}`, inputKind: 'ffmpeg_source' })) });
+    const call = client.call.bind(client);
+    let active = 0, maximum = 0;
+    client.call = async (request, data) => {
+      active++; maximum = Math.max(maximum, active);
+      try { return await call(request, data); } finally { active--; }
+    };
+    const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    const inventory = await adapter.readInventory();
+    expect(inventory.inputs).toHaveLength(2000);
+    expect(Object.keys(inventory.filters)).toHaveLength(2000);
+    expect(maximum).toBeLessThanOrEqual(3);
+  });
+
+  it('已连接但不响应的 OBS 超时后变为错误，不能继续发送下一动作', async () => {
+    const client = fakeObsClient();
+    const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket, 20);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    client.pendingRequests.add('SetCurrentProgramScene');
+    await expect(adapter.execute({ id: 'first', label: '切换', kind: 'obs.setProgramScene', sceneName: '近景' })).rejects.toThrow('执行结果不明');
+    expect(adapter.getSnapshot().status).toBe('error');
+    const count = client.calls.length;
+    await expect(adapter.execute({ id: 'second', label: '不得自动重发', kind: 'obs.setProgramScene', sceneName: '全景' })).rejects.toThrow('尚未连接');
+    expect(client.calls).toHaveLength(count);
+  });
+
   it('场景预览保持可见采集来源，跳过隐藏项且不切换正式场景', async () => {
     const client = fakeObsClient();
     client.responses.set('GetSceneItemList', { sceneItems: [
@@ -88,6 +131,24 @@ describe('ObsWebSocketAdapter', () => {
     expect(client.calls.some(([method]) => method === 'SetInputMute')).toBe(false);
     client.responses.set('GetSpecialInputs', { desktop1: '桌面音频', desktop2: '桌面音频 2' });
     await expect(adapter.setInternalAudioCapture(true, 'app.exe', 'app')).rejects.toThrow('两路桌面音频');
+  });
+  it('原生音频首次创建就带精确窗口，重复准备不重置已就绪的采集目标', async () => {
+    const client = fakeObsClient(), name = '团播联动台·内部正式音频';
+    const window = 'TBLINK Audio 123:Static:tblink-playback.exe';
+    client.responses.set('GetInputKindList', { inputKinds: ['wasapi_process_output_capture'] });
+    client.responses.set('GetInputPropertiesListPropertyItems', { propertyItems: [{ itemValue: window, itemEnabled: true }] });
+    const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password'); client.calls.length = 0;
+    await adapter.setInternalAudioCapture(true, 'tblink-playback.exe', 'TBLINK Audio 123', 'default', undefined, 'Static');
+    expect(client.calls).toContainEqual(['CreateInput', { sceneName: '团播联动台输出', inputName: name,
+      inputKind: 'wasapi_process_output_capture', inputSettings: { window, priority: 0 }, sceneItemEnabled: false }]);
+    expect(client.calls.some(([method]) => method === 'SetInputSettings')).toBe(false);
+    client.responses.set('GetInputList', { inputs: [{ inputName: name, inputKind: 'wasapi_process_output_capture' }] });
+    client.responses.set('GetInputSettings', { inputSettings: { window, priority: 0 } }); client.calls.length = 0;
+    await adapter.setInternalAudioCapture(true, 'tblink-playback.exe', 'TBLINK Audio 123', 'default', undefined, 'Static');
+    expect(client.calls.some(([method]) => method === 'CreateInput' || method === 'SetInputSettings')).toBe(false);
+    client.responses.set('GetInputPropertiesListPropertyItems', { propertyItems: [{ itemValue: 'TBLINK Audio 123:Other:tblink-playback.exe' }] });
+    await expect(adapter.setInternalAudioCapture(true, 'tblink-playback.exe', 'TBLINK Audio 123', 'default', undefined, 'Static')).rejects.toThrow('身份不一致');
   });
   it('正式音乐仅绑定本软件窗口并关闭 OBS 监听，停止时静音隐藏', async () => {
     const client = fakeObsClient();
@@ -436,6 +497,7 @@ function responseFor(request: string): unknown {
     GetMediaInputStatus: { mediaState: 'OBS_MEDIA_STATE_PLAYING', mediaDuration: 10_000, mediaCursor: 0 },
     GetSourceFilterList: { filters: [{ filterName: 'Color' }] },
     GetInputMute: { inputMuted: false },
+    GetInputSettings: { inputSettings: {} },
     GetStreamStatus: { outputActive: false },
     GetRecordStatus: { outputActive: false },
     GetSourceScreenshot: { imageData: 'data:image/png;base64,preview' }

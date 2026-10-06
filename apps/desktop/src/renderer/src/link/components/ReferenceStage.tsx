@@ -1,8 +1,9 @@
 import { ObsLiveCanvas } from './ObsLiveCanvas';
+import { useBeautyStore } from '../stores/beauty-store';
 import { Fragment, useEffect, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type PointerEvent } from 'react';
 import type { LinkObsInventory, LinkObsSceneItemTransform, ResolvedTimelineClip, ResolvedTimelineObsCue, ResolvedTimelineState } from '@tb/core/link';
 import type { LinkMediaAsset, OutputCanvas, ReferenceCanvasTransform, ReferenceMediaClip, SceneItemTransform } from '@tb/schema';
-import { Boxes, MonitorPlay, RadioTower, Volume2 } from 'lucide-react';
+import { Boxes, MonitorPlay, RadioTower, Sparkles, Volume2 } from 'lucide-react';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { OBS_DRAG_TYPE, obsPreviewSourceName, parseObsResource, type ObsResource } from './resource-library-model';
 import { snapCanvasAxis } from './canvas-snap';
@@ -10,6 +11,7 @@ import { resizeMediaCanvas } from './media-canvas-geometry';
 import { ObsPreviewLayer } from './ObsPreviewLayer';
 import { resolveObsSceneItemGeometry, resolveObsSourceSize, type ObsSourceSize } from './obs-source-geometry';
 import { StageMediaContextMenu, StageObsContextMenu } from './StageMediaContextMenu';
+import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
 
 type Props = {
   sceneMode?: boolean;
@@ -42,6 +44,9 @@ type Props = {
 };
 
 export function ReferenceStage(props: Props): JSX.Element {
+  const beautyOpen = useBeautyStore(state => state.panelOpen);
+  const setBeautyOpen = useBeautyStore(state => state.setPanelOpen);
+  const beautyButton = <button className="beauty-open-button" onClick={() => setBeautyOpen(true)}><Sparkles size={13} />人像美颜</button>;
   const aspect = props.outputCanvas.width > props.outputCanvas.height ? 'landscape' : 'portrait';
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [snapGuides, setSnapGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
@@ -74,8 +79,8 @@ export function ReferenceStage(props: Props): JSX.Element {
   };
 
   if (props.obsStatus === 'connected') return <section className="reference-stage panel">
-    <div className="stage-canvas"><ObsLiveCanvas /></div>
-    <footer className="stage-statusbar"><span><RadioTower />OBS 实时画布</span><span>直接编辑 OBS 当前场景来源</span></footer>
+    <div className="stage-canvas">{beautyOpen ? null : <ObsLiveCanvas />}</div>
+    <footer className="stage-statusbar"><span><RadioTower />OBS 实时画布</span><span>直接编辑 OBS 当前场景来源</span>{beautyButton}</footer>
   </section>;
   return <section className="reference-stage panel">
     <div
@@ -139,6 +144,7 @@ export function ReferenceStage(props: Props): JSX.Element {
     </div>
     {props.projectPath ? standaloneAudio.map((entry) => <StandaloneAudioPreview key={entry.clip.id} entry={entry} playheadMs={props.playheadMs} playing={props.playing} projectPath={props.projectPath ?? ''} onPlaybackError={setPlaybackError} />) : null}
     <footer className="stage-statusbar">
+      {beautyButton}
       <span><Boxes />活动素材 {activeClipCount}</span>
       <span><RadioTower />OBS {props.obsSceneCount} 场景 / {props.obsInputCount} 输入</span>
       <span><Volume2 />视频音频 试听</span>
@@ -172,6 +178,7 @@ function StandaloneAudioPreview(props: {
 }): JSX.Element | null {
   const [url, setUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  usePreviewMediaLifecycle(audioRef, url);
   const { asset, clip, startMs } = props.entry;
   const { onPlaybackError, playheadMs, playing, projectPath } = props;
   useEffect(() => {
@@ -193,9 +200,8 @@ function StandaloneAudioPreview(props: {
     }
     if (audio.paused) void audio.play().catch((error: unknown) => onPlaybackError(toMessage(error)));
   }, [clip.sourceOffsetMs, onPlaybackError, playheadMs, playing, startMs, url]);
-  useEffect(() => () => audioRef.current?.pause(), []);
   if (!url) return null;
-  return <audio className="timeline-audio-engine" data-asset-id={asset.id} ref={audioRef} src={url} preload="auto" onLoadedMetadata={(event) => {
+  return <audio className="timeline-audio-engine" data-asset-id={asset.id} ref={audioRef} src={url} preload={playing ? 'auto' : 'metadata'} onLoadedMetadata={(event) => {
     event.currentTarget.currentTime = ((clip.sourceOffsetMs ?? 0) + playheadMs - startMs) / 1_000;
     if (playing) void event.currentTarget.play().catch((error: unknown) => onPlaybackError(toMessage(error)));
   }} onError={() => onPlaybackError(`音频无法解码：${asset.name}`)} />;
@@ -225,6 +231,7 @@ function MediaCanvasLayer(props: {
   const [preview, setPreview] = useState(props.clip.canvasTransform);
   const gesture = useRef<CanvasGesture | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  usePreviewMediaLifecycle(videoRef, url);
   const startMs = props.startMs;
   const assetRelativePath = props.asset.relativePath;
   const assetKind = props.asset.kind;
@@ -319,7 +326,7 @@ function MediaCanvasLayer(props: {
       ref={videoRef}
       muted={props.muted}
       playsInline
-      preload="auto"
+      preload={props.hidden ? 'none' : playing ? 'auto' : 'metadata'}
       src={url}
       onLoadedMetadata={(event) => {
         event.currentTarget.currentTime = (sourceOffsetMs + Math.max(0, playheadMs - startMs)) / 1_000;

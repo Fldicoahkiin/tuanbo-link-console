@@ -1,15 +1,23 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { Ma2NetworkManager } from './ma2-network-manager';
+import { meiNanXml, meiNanCues } from './fixtures/ma2-mei-nan-reconstruction';
 
 const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', pause: null as Promise<void> | null }));
 vi.mock('node:fs/promises', () => ({ readFile: () => memory.file === null ? Promise.reject(Object.assign(new Error('Missing'), { code: 'ENOENT' })) : Promise.resolve(memory.file) }));
 vi.mock('./atomic-file', () => ({ writeFileAtomically: (_path: string, value: string) => { memory.file = value; return Promise.resolve(); } }));
 vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typeof import('./ma2-telnet')>(), Ma2Telnet: class {
   state = 'disconnected';
+  readTraffic() { return { wireCommands: 0, sentBytes: 0, receivedBytes: 0, queueMs: 0 }; }
   constructor(address: { localAddress?: string }) { memory.localAddress = address.localAddress; }
   async connect(): Promise<string> { memory.connects += 1; await memory.pause; this.state = 'connected'; return memory.version; }
   async command(line: string, match: (text: string) => string | null, beforeSend?: () => void): Promise<string> {
     await memory.pause; beforeSend?.();
+    const cuePrefix = /TBLINK_CUES_[a-f0-9]{32}:/.exec(line)?.[0];
+    if (cuePrefix) {
+      const row = `12;${meiNanCues.map((cue, index) => `${index + 1},${cue},${Buffer.from(`Cue ${cue}`).toString('hex')}`).join(';')}`;
+      const response = match(`${cuePrefix}${row}\r\n`);
+      if (!response) throw new Error('No cue response'); return response;
+    }
     const token = /TBLINK_(?:CAP|PLAY)_[a-f0-9]{32}/.exec(line)?.[0];
     const result = match(`${token}:${token?.includes('_PLAY_') ? 'SENT' : memory.capabilities}\r\n`);
     if (!result) throw new Error('No response'); return result;
@@ -18,6 +26,28 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
 } }));
 beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true'; });
 const settings = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'lighting', autoConnect: true };
+it('100 条混合时间线共享序列只取一次元数据；最终只复核目录，不再读全部 XML', async () => {
+  memory.version = '3.7.0.5';
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore());
+  await manager.save({ settings }); await manager.connect();
+  const directory = { show: '构造规模测试，非现场性能', generation: 'scale', version: memory.version, entries: Array.from({ length: 100 }, (_, index) => ({ target: index + 1, name: `TC ${index + 1}` })) };
+  const sequenceDirectory = { ...directory, entries: [{ target: 36, name: '截图重建序列' }] };
+  const request = vi.spyOn(manager.get(settings).bridge, 'request').mockImplementation((operation, target) => Promise.resolve(operation === 'LIST' ? JSON.stringify(directory) : operation === 'LISTSEQ' ? JSON.stringify(sequenceDirectory) : meiNanXml.replace('<Timecode index="1"', `<Timecode index="${target - 1}"`)));
+  const catalog = await manager.readCatalog(settings);
+  expect(catalog.entries).toHaveLength(100);
+  expect(catalog.entries.every(entry => !entry.error && entry.preview?.unconverted.length === 13)).toBe(true);
+  // Each XML is compared immediately around metadata resolution; no third full pass.
+  expect(request.mock.calls.filter(call => call[0] === 'READ')).toHaveLength(200);
+  for (let target = 1; target <= 100; target++) expect(request.mock.calls.filter(call => call[0] === 'READ' && call[1] === target)).toHaveLength(2);
+  expect(request.mock.calls.filter(call => call[0] === 'LIST')).toHaveLength(2);
+  expect(request.mock.calls.filter(call => call[0] === 'LISTSEQ')).toHaveLength(2);
+  expect(catalog.metrics?.requests).toBe(206);
+  expect(catalog.metrics?.bytes).toBeGreaterThan(100000);
+  request.mockClear();
+  await manager.readCatalog(settings, undefined, undefined, [55]);
+  expect(request.mock.calls.filter(call => call[0] === 'READ').map(call => call[1])).toEqual([55, 55]);
+  manager.disconnect();
+});
 it('连接传入已校验的电脑地址，地址解析失败不建立 TCP 连接', async () => {
   const resolve = vi.fn().mockResolvedValue('2.0.0.97');
   const manager = new Ma2NetworkManager(process.cwd(), secretStore(), () => false, undefined, resolve);

@@ -1,0 +1,22 @@
+{
+  "personInstances": {
+    "file": "rtmdet-ins-tiny/raw-heads.onnx",
+    "sha256": "e6a5e0f5e8c6403ac3935228d66ea2b1b4d8cb67f2eb6f45eb8ef90a72653779",
+    "sourceSha256": "ec670f7ee9e20bd7931e15f15b7016f7fe531baaab81f2e6153382d046111885",
+    "source": "https://download.openmmlab.com/mmdetection/v3.0/rtmdet/rtmdet-ins_tiny_8xb32-300e_coco/rtmdet-ins_tiny_8xb32-300e_coco_20221130_151727-ec670f7e.pth",
+    "conversion": "export-rtmdet.py; unchanged weights, raw heads, ONNX opset 17",
+    "license": "Apache-2.0",
+    "licenseFile": "RTMDET_LICENSE.txt",
+    "noticeFile": "RTMDET_NOTICE.txt"
+  },
+  "skinProbability": {
+    "file": "selfie_skin_probability.onnx",
+    "sha256": "80bd994edb6437c8eed7a5d16b2dbdaa9635a166de190a9fd437b35e48461e5f",
+    "sourceSha256": "35ec1ecd9ee7f85073c99c00020b7f6751b69506eeacf683bc8665f6117f85b0",
+    "source": "https://huggingface.co/senty-au/selfie_multiclass_256x256-ONNX",
+    "conversion": "probe-semantic-activation.py; unchanged weights, added Softmax and skin-channel Gather",
+    "license": "Apache-2.0",
+    "licenseFile": "SEMANTIC_LICENSE.txt",
+    "noticeFile": "SEMANTIC_NOTICE.txt"
+  }
+}

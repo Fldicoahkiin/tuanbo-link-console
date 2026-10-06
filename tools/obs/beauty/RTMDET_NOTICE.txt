@@ -1,0 +1,21 @@
+RTMDet-Ins-tiny person instance segmentation
+Copyright 2018-2023 OpenMMLab. All rights reserved.
+License: Apache License, Version 2.0. Full text: RTMDET_LICENSE.txt.
+
+Official configuration and checkpoint:
+https://github.com/open-mmlab/mmdetection/blob/v3.3.0/configs/rtmdet/rtmdet-ins_tiny_8xb32-300e_coco.py
+https://download.openmmlab.com/mmdetection/v3.0/rtmdet/rtmdet-ins_tiny_8xb32-300e_coco/rtmdet-ins_tiny_8xb32-300e_coco_20221130_151727-ec670f7e.pth
+Checkpoint SHA256:
+ec670f7ee9e20bd7931e15f15b7016f7fe531baaab81f2e6153382d046111885
+
+Application changes: export-rtmdet.py exports the backbone and raw detection,
+kernel and mask-feature heads to ONNX opset 17. Learned weights are unchanged.
+The application decodes detections and masks with NumPy/OpenCV and applies
+frame-local duplicate suppression and pose agreement for deformation protection.
+No identity recognition or persistent person registration is performed.
+Export SHA256:
+e6a5e0f5e8c6403ac3935228d66ea2b1b4d8cb67f2eb6f45eb8ef90a72653779
+
+The training framework and checkpoint are not required by the deployed worker.
+Accuracy on arbitrary scenes or equivalence to commercial retouching products
+is not asserted by this notice.

@@ -7,7 +7,7 @@ test('播放头合并高频移动，松手保留最后位置且旧帧不能拉�
   const project = parseLinkProject({ ...createEmptyLinkProject('播放头响应验收'), rundown: [{ id: 'song', title: '测试节目', cues: [] }] });
   const file = info.outputPath('playhead.tblink');
   await writeFile(file, JSON.stringify(project));
-  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
+  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   try {
     const page = await app.firstWindow();
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);

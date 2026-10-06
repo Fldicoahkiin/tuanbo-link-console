@@ -1,0 +1,30 @@
+import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { expect, it } from 'vitest';
+import { createEmptyLinkProject, type Ma2Catalog } from '@tb/schema';
+import { Ma2ReadRecovery, recoverMa2Read } from './ma2-read-recovery';
+import { LinkProjectService } from './link-project-service';
+
+it('中断后从逐条检查点恢复；一条损坏不丢其余结果，另一工程不接收', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tblink-recovery-'));
+  const path = join(root, 'show.tblink');
+  const project = createEmptyLinkProject('恢复测试');
+  const service = new LinkProjectService();
+  await service.save(path, project);
+  const catalog: Ma2Catalog = { directory: { show: '现场', generation: 'session', version: '3.7.0.5', entries: [1, 2].map(target => ({ target, name: `时间线${target}` })) }, readAt: new Date().toISOString(), entries: [] };
+  const recovery = new Ma2ReadRecovery(path, project.projectId, 'console');
+  await recovery.checkpoint(catalog);
+  for (const object of catalog.directory.entries) await recovery.checkpoint(catalog, { ...object, sourceXml: `<MA target="${object.target}"/>`, eventCount: 0, frameFormat: '30 FPS', offset: '0', slot: null, events: [], error: null, warnings: [] });
+  expect((await service.open(path)).ma2ReadState?.catalog.entries).toHaveLength(2);
+  const checkpointDirectory = (await readdir(`${path}.ma2-recovery`)).find(value => value !== 'active.json');
+  if (!checkpointDirectory) throw new Error('检查点目录未生成');
+  await writeFile(join(`${path}.ma2-recovery`, checkpointDirectory, '2.json'), '{broken');
+  const restored = await service.open(path);
+  expect(restored.ma2ReadState?.catalog.entries[0]?.sourceXml).toBe('<MA target="1"/>');
+  expect(restored.ma2ReadState?.catalog.entries[1]?.error).toContain('恢复记录损坏');
+  expect(await recoverMa2Read(path, createEmptyLinkProject('另一工程'))).not.toHaveProperty('ma2ReadState');
+  await service.save(path, restored);
+  expect(JSON.parse(await readFile(`${path}.before-ma2-workflow.bak`, 'utf8'))).toEqual(project);
+  expect((await service.open(path)).ma2ReadState?.catalog.entries).toHaveLength(2);
+});

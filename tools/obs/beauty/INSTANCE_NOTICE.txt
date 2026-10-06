@@ -1,0 +1,8 @@
+Experimental model: instance-segmentation-person-0007 (FP16)
+Publisher: Intel / OpenVINO Open Model Zoo
+Source: https://github.com/openvinotoolkit/open_model_zoo/tree/master/models/intel/instance-segmentation-person-0007
+License: Apache License 2.0, supplied as INSTANCE_LICENSE.txt.
+Original weights and model graph are unchanged; local filenames are model.xml/model.bin.
+Official SHA-384 and local SHA-256 checksums are recorded in instance-assets.json.
+This model is currently enabled only by the explicit experimental worker option;
+it is not included in the previously delivered internal installer.

@@ -16,7 +16,7 @@ export class Ma2Telnet {
   private current: Ma2TelnetState = 'disconnected';
   private connecting = false;
   private commandTail: Promise<void> = Promise.resolve();
-  private traffic = { wireCommands: 0, receivedBytes: 0, sentBytes: 0 };
+  private traffic = { queueMs: 0, wireCommands: 0, receivedBytes: 0, sentBytes: 0 };
   readTraffic(): Readonly<typeof this.traffic> { return { ...this.traffic }; }
   private queuedCommands = 0;
   private connectionEpoch = 0;
@@ -75,8 +75,10 @@ export class Ma2Telnet {
     if (/[\r\n\u0000]/.test(line) || Buffer.byteLength(line) > 4096) throw new Error('MA2 网络命令格式或长度无效');
     if (this.queuedCommands >= 32) throw new Error('控台请求过多，请等待当前操作完成');
     const epoch = this.connectionEpoch;
+    const queuedAt = performance.now();
     this.queuedCommands += 1;
     const response = this.commandTail.then(() => {
+      this.traffic.queueMs += performance.now() - queuedAt;
       if (epoch !== this.connectionEpoch || !this.socket) throw new Error('控台连接已改变，待发送请求已取消');
       beforeSend?.();
       for (const stream of this.streams) stream.buffer = '';

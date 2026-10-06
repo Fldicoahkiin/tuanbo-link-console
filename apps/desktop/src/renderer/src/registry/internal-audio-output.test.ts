@@ -16,6 +16,7 @@ function fixture() {
   const close = vi.fn(() => Promise.resolve());
   const createSource = vi.fn(() => source);
   const contexts: { sampleRate: number }[] = [];
+  const analysers: { fftSize: number; smoothingTimeConstant: number; disconnect: ReturnType<typeof vi.fn> }[] = [];
   const monitors: { stream: ReturnType<typeof monitoringStream>; disconnect: ReturnType<typeof vi.fn> }[] = [];
   vi.stubGlobal('AudioContext', class {
     sampleRate: number;
@@ -24,12 +25,28 @@ function fixture() {
     close = close;
     resume = vi.fn(() => Promise.resolve());
     createMediaElementSource = createSource;
+    createAnalyser() { const analyser = { fftSize: 0, smoothingTimeConstant: 0, disconnect: vi.fn() }; analysers.push(analyser); return analyser; }
+    createChannelSplitter() { return { connect: vi.fn(), disconnect: vi.fn() }; }
     createMediaStreamDestination() { const monitor = { stream: monitoringStream(), disconnect: vi.fn() }; monitors.push(monitor); return monitor; }
     constructor(options: AudioContextOptions) { this.sampleRate = options.sampleRate!; contexts.push(this); }
   });
-  return { output: new InternalAudioOutput(), audio: {} as HTMLAudioElement, source, sink, close, createSource, contexts, monitors };
+  return { output: new InternalAudioOutput(), audio: {} as HTMLAudioElement, source, sink, close, createSource, contexts, monitors, analysers };
 }
 describe('内部音频输出线路', () => {
+  it('播放前准备频谱与双声道分析，重复读取不创建音频上下文，销毁释放所有节点', async () => {
+    const f = fixture();
+    expect(f.output.getAnalysis()).toBeNull();
+    await f.output.prepare(f.audio, 'default', 48000);
+    const analysis = f.output.getAnalysis();
+    expect(analysis?.sampleRate).toBe(48000);
+    expect(analysis?.fftSize).toBe(2048);
+    expect(f.analysers.map(channel => channel.fftSize)).toEqual([2048, 1024, 1024]);
+    expect(f.output.getAnalysis()).toBe(analysis);
+    expect(f.contexts).toHaveLength(1);
+    await f.output.dispose();
+    for (const analyser of f.analysers) expect(analyser.disconnect).toHaveBeenCalledOnce();
+    expect(f.output.getAnalysis()).toBeNull();
+  });
   it('关闭频谱不关闭共享音源或另一块电平表，重新打开仍取得有效音轨', async () => {
     const f = fixture();
     await f.output.prepare(f.audio, 'default', 44100);

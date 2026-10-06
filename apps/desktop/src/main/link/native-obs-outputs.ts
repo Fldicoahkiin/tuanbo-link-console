@@ -1,0 +1,221 @@
+import { dirname, join } from 'node:path';
+import { stat, statfs } from 'node:fs/promises';
+import { materialSceneNames, millisecondsToFrameNumber, preciseSeekAssetIds, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type ObsProgramSessionDependencies } from '@tb/core/link';
+import type { NativeObsPrepare } from '@tb/schema';
+import type { ObsWebSocketAdapter } from './obs-websocket-adapter';
+import type { LinkProjectService } from './link-project-service';
+import type { MediaPreviewService } from './media-preview-service';
+import type { SecureProfileStore } from './secure-profile-store';
+import type { ObsNativeSeek } from './obs-native-seek';
+import type { NativePlayerService } from './native-player-service';
+import type { LinkRunLogger } from './run-logger';
+import { redactValue } from './run-logger';
+import { ObsMediaPreload } from './obs-media-preload';
+
+export type NativeObsOutputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport'> & {
+  preloadResources: (assertCurrent: () => void) => Promise<void>;
+};
+
+type Services = {
+  obs: ObsWebSocketAdapter; projects: LinkProjectService; media: MediaPreviewService;
+  profiles: SecureProfileStore; seek: ObsNativeSeek; logger: LinkRunLogger;
+  audioIdentity: () => NativePlayerService['audioCaptureIdentity'];
+  logFailure: (error: Error) => void;
+};
+
+/** Per-program adapters. Original documents are neither rewritten nor reread;
+ * only this immutable snapshot's referenced resources are prepared. */
+export function createNativeObsOutputs(request: NativeObsPrepare, services: Services, positionMs: number): NativeObsOutputs {
+  const { obs, projects, profiles, seek, logger } = services;
+  const project = projectFromObsSnapshot(request.snapshot), path = request.projectPath;
+  const preciseAssets = preciseSeekAssetIds(request.snapshot, positionMs);
+  let address: string | null = null, capture: NativePlayerService['audioCaptureIdentity'] | null = null;
+  let prepared = false;
+  const identities = new Map<string, { size: number; mtimeMs: number; ctimeMs: number; ino: number }>();
+  const preload = new ObsMediaPreload(project, request.snapshot.item.id, obs.mediaScenes, {
+    prime: async (name, retained, kind) => { if (!address) throw new Error('后台画面连接尚未准备'); await seek.prime(address, name, retained, kind); },
+    seek: async (name, position) => { if (!address) throw new Error('后台画面连接尚未准备'); await seek.seek(address, name, position); }
+  });
+  const outputs: NativeObsOutputs = {
+    now: () => performance.now(), executor: { id: obs.id, supports: action => obs.supports(action),
+      execute: action => obs.execute('inputName' in action ? { ...action, inputName: preload.resolveSource(action.inputName) }
+        : 'sourceName' in action ? { ...action, sourceName: preload.resolveSource(action.sourceName) } : action) },
+    guardOutput: (canSend, operation) => obs.guardPlaybackOperation(canSend, operation),
+    recordLog: entry => logger.recordBuffered(entry.category === 'action' && entry.result === 'failed'
+      ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure),
+    preloadResources: async assertCurrent => {
+      const started = performance.now(); let previous = started;
+      const measure = async (stage: string): Promise<void> => {
+        const now = performance.now();
+        await logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: project.projectId,
+          itemId: request.snapshot.item.id, message: `画面准备 · ${stage}`, result: 'succeeded',
+          details: { stageMs: now - previous, elapsedMs: now - started } });
+        previous = now;
+      };
+      assertCurrent();
+      if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 未连接，画面通道本轮不参与');
+      const profile = await profiles.loadProfile(); assertCurrent();
+      if (!profile) throw new Error('本机连接配置尚未保存');
+      address = profile.obs.webSocketUrl;
+      const opening = new SceneOutputTimeline(project, request.snapshot.item.id).at(millisecondsToFrameNumber(positionMs, request.snapshot.frameRate));
+      const openingDecoders = new Map(opening.media.filter(event => event.assetKind !== 'image')
+        .map(event => [event.assetId, event]));
+      const primeSlots = Array.from({ length: 4 }, () => Promise.resolve()); let nextPrime = 0;
+
+      // Each input is verified before OBS opens it. Pipeline disk work and OBS
+      // decoding across eight independent layers instead of waiting for every
+      // video digest before preparing the opening images.
+      for (let offset = 0; offset < project.mediaAssets.length; offset += 8) {
+        const results = await Promise.allSettled(project.mediaAssets.slice(offset, offset + 8).map(async asset => {
+          const assetStarted = performance.now(); let phase = '文件校验';
+          const timings = [{ phase, atMs: 0 }];
+          try {
+            const inspected = await projects.inspectMediaAssets(path, [asset]); assertCurrent();
+            if (!inspected[asset.id]?.fileAvailable) throw new Error(`素材文件不可读：${asset.name}`);
+            phase = '文件身份'; timings.push({ phase, atMs: performance.now() - assetStarted });
+            const absolute = projects.resolveMediaAsset(path, asset.relativePath);
+            const identity = await stat(absolute);
+            if (!identity.isFile()) throw new Error(`素材文件不可读：${asset.name}`);
+            identities.set(absolute, identity);
+            assertCurrent();
+            const cache = join(dirname(path), 'cache', 'obs-seek-jpeg2000');
+            phase = '定位缓存核验'; timings.push({ phase, atMs: performance.now() - assetStarted });
+            const playbackPath = request.preciseSeeking && asset.kind === 'video' && preciseAssets.has(asset.id)
+              ? await services.media.ensureObsSeekVideo(path, asset.relativePath, asset.sha256) : absolute;
+            assertCurrent();
+            phase = '来源准备'; timings.push({ phase, atMs: performance.now() - assetStarted });
+            await obs.mediaScenes.prepare(project.projectId, asset, absolute, playbackPath,
+              ['.mkv', '.rgba.mkv', '.source-pixels.mkv'].map(extension => join(cache, `${asset.sha256}${extension}`)));
+            preload.register(project.projectId, asset, absolute);
+            assertCurrent();
+            const openingEvent = openingDecoders.get(asset.id);
+            if (openingEvent) {
+              phase = '解码预热'; timings.push({ phase, atMs: performance.now() - assetStarted });
+              const slot = nextPrime++ % primeSlots.length;
+              const priming = primeSlots[slot]!.then(async () => {
+                assertCurrent();
+                await seek.prepare(profile.obs.webSocketUrl); assertCurrent();
+                await preload.prime(openingEvent, assertCurrent);
+              });
+              // This slot is only a barrier; the owning asset retains the error.
+              primeSlots[slot] = priming.then(() => undefined, () => undefined);
+              await priming;
+              assertCurrent();
+            }
+            await logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: project.projectId,
+              itemId: request.snapshot.item.id, message: `素材准备完成：${asset.name}`, result: 'succeeded',
+              details: { assetId: asset.id, elapsedMs: performance.now() - assetStarted, timings } });
+          } catch (error) {
+            await logger.record({ level: 'error', category: 'preflight', device: '后台画面', projectId: project.projectId,
+              itemId: request.snapshot.item.id, message: `素材准备未完成：${asset.name}`, result: 'failed',
+              details: { assetId: asset.id, phase, elapsedMs: performance.now() - assetStarted, timings,
+                error: error instanceof Error ? error.message : String(error) } });
+            throw error;
+          }
+        }));
+        const failure = results.find(result => result.status === 'rejected');
+        if (failure?.status === 'rejected') throw failure.reason;
+        assertCurrent(); await measure(`校验、准备及预热素材 ${offset + 1}–${Math.min(offset + 8, project.mediaAssets.length)}`);
+      }
+      const assets = await projects.inspectAssets(path, project); assertCurrent();
+      await measure('预检文件状态');
+      const actions = project.rundown.flatMap(item => item.cues.filter(cue => cue.enabled).flatMap(cue => cue.actions));
+      // Name indexes remain complete, but prior songs' thousands of source
+      // details must not be reread on each playback boundary. A screenshot can
+      // reference an otherwise unlisted group, so that case needs scene lookup.
+      const inventory = await obs.readInventory({
+        scenes: actions.some(action => action.kind === 'obs.saveSourceScreenshot') ? null
+          : new Set(actions.flatMap(action => 'sceneName' in action ? [action.sceneName] : [])),
+        inputs: new Set(actions.flatMap(action => 'inputName' in action ? [action.inputName]
+          : 'sourceName' in action ? [action.sourceName] : []))
+      }); assertCurrent();
+      await measure('读取目录');
+      const password = await profiles.loadCredential(profile.obs.credentialId); assertCurrent();
+      const redacted = JSON.stringify(redactValue({ password }, password ? [password] : []));
+      const disk = await statfs(dirname(path)); assertCurrent();
+      const report = runLinkPreflight({ mode: 'live', mtcRequirement: 'internal', internalMtcOutputEnabled: false,
+        project, profile, currentItemId: request.snapshot.item.id,
+        referenceAssets: assets.referenceAudio, mediaAssets: assets.media,
+        obs: { authenticated: obs.getSnapshot().status === 'connected', version: obs.getSnapshot().obsVersion, ...inventory },
+        midi: { ports: [], mtcUpdating: false, mtcStable: false, detectedFrameRate: null },
+        processes: { p1: { running: false, version: null } },
+        availableDiskBytes: disk.bavail * disk.bsize, minimumDiskBytes: 1_073_741_824,
+        credentialsDecryptable: true, logRedactionReady: !password || !redacted.includes(password)
+      });
+      for (const check of report.checks) {
+        await logger.record({ level: check.status === 'blocking' ? 'error' : check.status === 'warning' ? 'warning' : 'info',
+          category: 'preflight', device: '后台画面', projectId: project.projectId, itemId: request.snapshot.item.id,
+          message: `${check.label}：${check.detail}`, result: check.status === 'blocking' ? 'failed' : 'succeeded' });
+        assertCurrent();
+      }
+      if (!report.passed) throw new Error(report.checks.filter(check => check.status === 'blocking').map(check => check.detail).join('；'));
+      await measure('预检');
+      const upcoming = [...new Set([
+        ...request.snapshot.item.cues.filter(cue => cue.enabled).flatMap(cue => cue.actions.flatMap(action =>
+          action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])),
+        ...project.mediaAssets.map(asset => materialSceneNames(project.projectId, asset).sceneName)
+      ])];
+      const prepareStructure = async (): Promise<void> => {
+        for (const entry of opening.cues) for (const action of entry.cue.actions) {
+          if (action.kind !== 'obs.setProgramScene' || !action.sceneLayers) continue;
+          await obs.mediaScenes.prepareComposition(action.sceneName, action.sceneLayers, upcoming.filter(name => name !== action.sceneName));
+          assertCurrent();
+        }
+      };
+      await prepareStructure(); assertCurrent(); await measure('机位结构');
+      prepared = true;
+    },
+    prepareOutputs: async assertCurrent => {
+      if (!prepared) await outputs.preloadResources(assertCurrent);
+      assertCurrent();
+      if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 已断开，不能使用预备画面');
+      // A prepared decoder must not conceal an edited/deleted source file.
+      for (const [file, identity] of identities) {
+        const actual = await stat(file); assertCurrent();
+        if (actual.size !== identity.size || actual.mtimeMs !== identity.mtimeMs || actual.ctimeMs !== identity.ctimeMs || actual.ino !== identity.ino) {
+          throw new Error('已预备的素材发生变化，请重新导入后准备节目');
+        }
+      }
+      const scenes = [...new Set([...request.snapshot.item.cues.filter(cue => cue.enabled)
+        .flatMap(cue => cue.actions.flatMap(action => action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])),
+      ...project.mediaAssets.map(asset => materialSceneNames(project.projectId, asset).sceneName)])];
+      capture = services.audioIdentity();
+      await obs.setInternalAudioCapture(true, capture.executable, capture.title, capture.audioDeviceId, scenes, capture.windowClass);
+      assertCurrent();
+    },
+    prepareUpcoming: (frame, assertCurrent) => obs.preparePlaybackMedia(() => preload.upcoming(frame, assertCurrent)),
+    releaseOutputs: async () => {
+      const cleanup = [() => preload.close(), () => obs.mediaScenes.releasePrimed(),
+        () => obs.mediaScenes.releaseImages(project.mediaAssets.filter(asset => asset.kind === 'image')
+          .map(asset => materialSceneNames(project.projectId, asset).sourceName)), () => logger.flush()];
+      const target = capture;
+      if (target) cleanup.push(async () => {
+        await obs.setInternalAudioCapture(false, target.executable, target.title, target.audioDeviceId, undefined, target.windowClass);
+        capture = null;
+      });
+      const errors: string[] = [];
+      for (const release of cleanup) {
+        try { await release(); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
+      }
+      if (errors.length) throw new Error(`画面通道清理未完成：${errors.join('；')}`);
+    },
+    executeManagedMediaEvent: async payload => {
+      if (payload.projectPath !== path) throw new Error('后台画面素材与当前工程不一致');
+      try { await preload.execute(payload.event, projects.resolveMediaAsset(path, payload.event.relativePath)); }
+      catch (error) {
+        await logger.record({ level: 'error', category: 'device', device: '后台画面', projectId: project.projectId,
+          itemId: request.snapshot.item.id, message: '素材动作失败的请求耗时', result: 'failed',
+          details: { clipId: payload.event.clipId, error: error instanceof Error ? error.message : String(error),
+            ...obs.getRequestDiagnostics() } });
+        throw error;
+      }
+    },
+    seekMedia: async event => {
+      if (!address) throw new Error('后台画面连接尚未准备');
+      const target = address;
+      await seek.prepare(target);
+      await preload.seek(event, projects.resolveMediaAsset(path, event.relativePath));
+    }
+  };
+  return outputs;
+}

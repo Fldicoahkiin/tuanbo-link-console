@@ -19,6 +19,7 @@ import type { MtcFrameRate } from '@tb/schema';
 import { playbackFramesPerSecond } from '@tb/core/link';
 import { clampTimelineTime, formatTimelineTimecode, snapTimelineTime } from './timeline-geometry';
 import type { ReferenceWaveformSource } from './ReferenceWaveform';
+import { usePreviewMediaLifecycle } from './usePreviewMediaLifecycle';
 
 type Props = {
   externalTransport?: boolean | undefined;
@@ -50,6 +51,7 @@ type Props = {
 
 export function TimelineToolbar(props: Props): JSX.Element {
   const audioUrl = props.referenceAudio?.url;
+  usePreviewMediaLifecycle(props.audioRef, props.externalTransport ? null : audioUrl);
   const { audioRef, onPlaybackError, onPlayingChange, onPlayheadChange, playheadMs, playing } = props;
   useEffect(() => {
     const audio = audioRef.current;
@@ -60,7 +62,6 @@ export function TimelineToolbar(props: Props): JSX.Element {
     }, 16);
     return () => window.clearInterval(timer);
   }, [audioRef, audioUrl, playing, onPlayheadChange, onPlayingChange, props.playbackReady, props.externalTransport]);
-  useEffect(() => { if (props.externalTransport) return; const audio = audioRef.current; return () => { audio?.pause(); }; }, [audioRef, audioUrl, props.externalTransport]);
   useEffect(() => {
     const audio = audioRef.current;
     if (props.externalTransport || !audio || !audioUrl) return;

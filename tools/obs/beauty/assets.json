@@ -1,0 +1,49 @@
+{
+  "sdk": {
+    "url": "https://codeload.github.com/obsproject/obs-studio/zip/refs/tags/32.0.4",
+    "file": "obs-source.zip",
+    "sha256": "5e17f2e99213af77ee15c047755ee3e3e88b78e5eee17351c113d79671ffb98b"
+  },
+  "model": {
+    "url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+    "file": "face_landmarker.task",
+    "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
+  },
+  "bodyModel": {
+    "url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task",
+    "file": "pose_landmarker_full.task",
+    "sha256": "4eaa5eb7a98365221087693fcc286334cf0858e2eb6e15b506aa4a7ecdcec4ad"
+  },
+  "proposalModel": {
+    "url": "https://media.githubusercontent.com/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "file": "face_detection_yunet_2023mar.onnx",
+    "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "license": "MIT",
+    "licenseFile": "YUNET_LICENSE.txt"
+  },
+  "semanticModel": {
+    "url": "https://huggingface.co/senty-au/selfie_multiclass_256x256-ONNX/resolve/main/onnx/model.onnx",
+    "file": "selfie_multiclass_256x256.onnx",
+    "sha256": "35ec1ecd9ee7f85073c99c00020b7f6751b69506eeacf683bc8665f6117f85b0",
+    "license": "Apache-2.0",
+    "licenseFile": "SEMANTIC_LICENSE.txt",
+    "noticeFile": "SEMANTIC_NOTICE.txt"
+  },
+  "bodyLiteModel": {
+    "url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+    "file": "pose_landmarker_lite.task",
+    "sha256": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a"
+  },
+  "bodyPortrait": {
+    "url": "https://storage.googleapis.com/mediapipe-assets/pose.jpg",
+    "file": "pose.jpg",
+    "sha256": "c8a830ed683c0276d713dd5aeda28f415f10cd6291972084a40d0d8b934ed62b",
+    "usage": "Development test only; not shipped in the application"
+  },
+  "portrait": {
+    "url": "https://storage.googleapis.com/mediapipe-assets/portrait.jpg",
+    "file": "portrait.jpg",
+    "sha256": "a6f11efaa834706db23f275b6115058fa87fc7f14362681e6abe14e82749de3e",
+    "usage": "Development test only; not shipped in the application"
+  }
+}

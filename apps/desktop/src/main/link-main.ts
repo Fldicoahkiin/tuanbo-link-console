@@ -4,6 +4,8 @@ import { LicenseService } from './link/license-service';
 import { PurchaseService } from './link/purchase-service';
 import { writeFileAtomically } from './link/atomic-file';
 import { readLicenseMachineCode } from './link/license-machine';
+import { localTestAccessEnabled, localTestLicenseStatus } from './link/local-test-license';
+import { internalDistribution, internalDistributionStatus } from './link/internal-distribution';
 import licensePublicKeys from './link/license-public-keys.json';
 import licenseConfig from './link/license-config.json';
 import { LicenseAccess, needsProductLicense } from './link/license-access';
@@ -14,12 +16,18 @@ import { elevateObsPluginInstall } from './link/obs-plugin-elevation';
 import { ObsBridgeSetup } from './link/obs-bridge-setup';
 import { waitForObsEndpoint } from './link/obs-startup';
 import { obsLiveEditSchema } from '@tb/schema';
+import { beautyApplySchema, beautyBasicValuesSchema, beautyTargetSchema, beautyStartSchema } from '@tb/schema';
+import { BeautyRuntime } from './link/beauty-runtime';
+import { BeautyOutputController } from './link/beauty-output-controller';
+import { BeautyComparison } from './link/beauty-comparison';
 import { ObsLivePreview } from './link/obs-live-preview';
 import { ObsNativeSeek } from './link/obs-native-seek';
 import { obsSourceCreateSchema, obsSourceNameSchema, obsSourceApplySchema, ma2BridgeRequestSchema, ma2ReadRequestSchema, ma2CompareRequestSchema, ma2ApplyRequestSchema, ma2CreateRequestSchema } from '@tb/schema';
 import { createMa2Timecode } from './link/ma2-create';
 import { ma2CatalogRequestSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema, type Ma2ReadProgressUpdate, type LinkP1ProjectImportProgress } from '@tb/schema';
 import { readMa2Catalog } from './link/ma2-catalog';
+import { Ma2ReadRecovery } from './link/ma2-read-recovery';
+import { Ma2MaterialRecovery } from './link/ma2-material-recovery';
 import { readMa2EffectLibrary } from './link/ma2-effect-library';
 import { ma2ExecutorReadRequestSchema } from '@tb/schema';
 import { readMa2Executor } from './link/ma2-executor-read';
@@ -34,9 +42,13 @@ import ma2PluginXml from '../../../../tools/ma2/tblink_bridge.xml?raw';
 import ma2PluginInstructions from '../../../../tools/ma2/README.md?raw';
 import { compareMa2LightingReadback } from './link/ma2-comparison';
 import { convertMa2Snapshot } from './link/ma2-timecode-conversion';
-import { open, readFile, stat, statfs, mkdtemp, writeFile } from 'node:fs/promises';
+import { readFile, stat, statfs, mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { assetResponse } from './link/asset-response';
+import { ProjectDocumentService } from './link/project-document-service';
+import { cpus, release, totalmem, freemem } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
+import { projectDocumentTextSchema } from '@tb/schema';
 import {
   app,
   BrowserWindow,
@@ -64,6 +76,7 @@ import {
   linkMediaAssetImportPayloadSchema,
   linkMediaAssetResolvePayloadSchema,
   linkMediaPreviewPayloadSchema,
+  linkMediaInspectionPayloadSchema,
   linkManagedMediaExecutionPayloadSchema,
   linkObsSourcePreviewPayloadSchema,
   linkOptionalFilePathSchema,
@@ -96,7 +109,7 @@ import { WaveformService } from './link/waveform-service';
 import { AudioEditService } from './link/audio-edit-service';
 import { audioAnalysisRequestSchema, audioRenderRequestSchema } from '@tb/schema';
 import { ObsWebSocketAdapter } from './link/obs-websocket-adapter';
-import { ObsEditorPreview } from './link/obs-editor-preview';
+import { ObsEditorPreview, findLocalObsPid } from './link/obs-editor-preview';
 import { P1ProjectService } from './link/p1-project-service';
 import { LinkRunLogger, redactValue, type LinkLogEntry, type LinkLogFilter } from './link/run-logger';
 import { SecureProfileStore } from './link/secure-profile-store';
@@ -104,6 +117,17 @@ import { WindowsIntegrationDetector } from './link/windows-integration-detector'
 import { LoopMidiService } from './link/loop-midi-service';
 import { loopMidiActionSchema, loopMidiStatusSchema } from '@tb/schema';
 import { LinkUpdateManager } from './link/update-manager';
+import desktopPackage from '../../package.json';
+import ffmpegPath from 'ffmpeg-static';
+import { NativeAudioCache } from './link/native-audio-cache';
+import { NativePlayerService } from './link/native-player-service';
+import { NativePlayerUiPublisher } from './link/native-player-ui-publisher';
+import { NativePlaybackRequests } from './link/native-playback-requests';
+import { NativeObsHost } from './link/native-obs-host';
+import { NativeObsRequests } from './link/native-obs-requests';
+import { NativeObsPreloadPool } from './link/native-obs-preload';
+import { createNativeObsOutputs } from './link/native-obs-outputs';
+import { prepareNextObsFiles } from './link/native-obs-files';
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'tblink-asset',
@@ -114,6 +138,7 @@ protocol.registerSchemesAsPrivileged([{
 // software path avoids competing for the same Windows GPU command queue while
 // OBS starts a high-resolution media source during playback.
 if (process.platform === 'win32') app.disableHardwareAcceleration();
+if (internalDistribution) app.setName('团播联动台内测');
 crashReporter.start({ uploadToServer: false });
 
 let mainWindow: BrowserWindow | null = null;
@@ -124,9 +149,32 @@ let authorizeProduct: (channel: string, value: unknown) => Promise<void> = () =>
 let allowWindowClose = false;
 let quitFlowRunning = false;
 let restoreMainWindow: (() => void) | null = null;
+let nativePlayer: NativePlayerService | null = null;
+const nativePlayerUi = new NativePlayerUiPublisher(status => sendToRenderer('link:native-player-status', status));
+let nativePlayerShutdown: Promise<void> | null = null;
+let nativeObs: NativeObsHost | null = null;
+let nativeObsPreload: NativeObsPreloadPool | null = null;
+
+async function closeNativePlayer(): Promise<void> {
+  const player = nativePlayer;
+  nativePlayerShutdown ??= (async () => {
+    const results = await Promise.allSettled([player?.close(), nativeObs?.stop(), nativeObsPreload?.close()]);
+    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
+    if (failures.length) throw new AggregateError(failures, '正式音频或画面关闭未完成，请查看日志');
+  })();
+  // A failed close keeps the owned instance and blocks another engine from
+  // opening the same device. Never claim stopped or spawn a replacement.
+  await nativePlayerShutdown;
+  if (nativePlayer === player) nativePlayer = null;
+  nativePlayerShutdown = null;
+}
+function nativePlaybackActive(): boolean {
+  return Boolean(nativePlayer?.status && ['preparing', 'playing', 'paused'].includes(nativePlayer.status.status));
+}
 const midiHealth = new WindowsMidiHealth(() => probeWindowsMidi(midiProbeExecutable(app.isPackaged ? process.resourcesPath : undefined)));
 
 const projectService = new LinkProjectService();
+const projectDocuments = new ProjectDocumentService();
 const p1ProjectService = new P1ProjectService(projectService);
 const mediaMetadataProbe = new MediaMetadataProbe();
 const mediaPreviewService = new MediaPreviewService(projectService);
@@ -148,15 +196,20 @@ async function bootstrap(): Promise<void> {
   const processManager = new ExternalProcessManager(new WindowsProcessTools(), obs);
   const integrationDetector = new WindowsIntegrationDetector();
   const logger = new LinkRunLogger(join(app.getPath('userData'), 'link-logs'), () => [...knownSecrets]);
+  await logger.record({ level: 'info', category: 'system', message: `团播联动台 ${desktopPackage.version} 已启动`,
+    details: { appVersion: desktopPackage.version, packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
+    .catch((error: unknown) => dialog.showErrorBox('运行日志无法写入', error instanceof Error ? error.message : String(error)));
   app.on('child-process-gone', (_event, details) => {
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
       message: `Electron ${details.type} 进程退出：${details.reason}，退出码 ${details.exitCode}`,
       result: 'failed' }).catch((error: unknown) => console.error('记录 Electron 子进程崩溃失败', error));
   });
   const updateManager = new LinkUpdateManager(
-    app.getVersion(),
+    desktopPackage.version,
     app.isPackaged,
-    (status) => sendToRenderer('link:update-status', status)
+    (status) => sendToRenderer('link:update-status', status),
+    undefined,
+    internalDistribution ? '' : undefined
   );
   registerAssetProtocol();
   registerIpc(profileStore, obs, processManager, logger, integrationDetector, updateManager);
@@ -189,7 +242,7 @@ async function bootstrap(): Promise<void> {
   app.on('before-quit', (event) => {
     if (allowWindowClose || quitFlowRunning) return;
     event.preventDefault();
-    if (runtimeActive) {
+    if (runtimeActive || nativePlaybackActive()) {
       showRuntimeActiveExitWarning();
       return;
     }
@@ -230,9 +283,21 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', event => event.preventDefault());
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    void closeNativePlayer().catch((error: unknown) => {
+      void logger.record({ level: 'error', category: 'device', device: '正式音频', message: `界面退出后停止音频失败：${String(error)}`, result: 'failed' })
+        .catch((loggingError: unknown) => console.error('记录音频停止失败', loggingError));
+    });
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
       message: `Electron 界面进程退出：${details.reason}，退出码 ${details.exitCode}；故障转储目录：${app.getPath('crashDumps')}`,
       result: 'failed' }).catch((error: unknown) => console.error('记录 Electron 界面崩溃失败', error));
+  });
+  mainWindow.on('unresponsive', () => {
+    void logger.record({ level: 'error', category: 'system', message: '界面无响应', result: 'failed' })
+      .catch((error: unknown) => console.error('记录界面无响应失败', error));
+  });
+  mainWindow.on('responsive', () => {
+    void logger.record({ level: 'info', category: 'system', message: '界面已恢复响应', result: 'succeeded' })
+      .catch((error: unknown) => console.error('记录界面恢复失败', error));
   });
   const notifyVisibility = (): void => sendToRenderer('link:window-visible', Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized()));
   mainWindow.on('minimize', notifyVisibility);
@@ -277,7 +342,7 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
   });
   mainWindow.on('close', (event) => {
     if (allowWindowClose) return;
-    if (runtimeActive) {
+    if (runtimeActive || nativePlaybackActive()) {
       event.preventDefault();
       showRuntimeActiveExitWarning();
       return;
@@ -319,7 +384,92 @@ function registerIpc(
   integrationDetector: WindowsIntegrationDetector,
   updateManager: LinkUpdateManager
 ): void {
+  const nativeSeek = new ObsNativeSeek();
+  const obsPreload = new NativeObsPreloadPool({
+    authorize: async request => {
+      await authorizeProduct('link:native-obs-prepare', request);
+      if (nativePlaybackActive() || nativeObs?.status && !['stopped', 'failed'].includes(nativeObs.status.state)) throw new Error('播放或画面会话活动时不能预备另一个节目');
+      await nativeObs?.stop();
+      if (nativePlaybackActive()) throw new Error('音频已开始准备，不能另行启动节目预备');
+    },
+    create: (request, positionMs) => createNativeObsOutputs(request, { obs, projects: projectService, media: mediaPreviewService,
+      profiles: profileStore, seek: nativeSeek, logger,
+      logFailure: error => {
+        if (nativeObs?.status?.sessionId === request.sessionId) nativeObs.disconnect(error.message);
+        else console.error('已结束画面会话的运行日志未能落盘', error);
+      },
+      audioIdentity: () => { if (!nativePlayer) throw new Error('正式音频尚未准备'); return nativePlayer.audioCaptureIdentity; } }, positionMs)
+  });
+  nativeObsPreload = obsPreload;
+  nativeObs = new NativeObsHost({
+    audio: () => nativePlayer?.status ?? null,
+    outputs: (request, positionMs, assertCurrent) => obsPreload.take(request, positionMs, assertCurrent),
+    prepareNextFiles: async (request, assertCurrent) => {
+      if (!request.nextFiles) return;
+      const started = performance.now();
+      await prepareNextObsFiles(request, { projects: projectService, media: mediaPreviewService }, assertCurrent);
+      assertCurrent();
+      await logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: request.snapshot.projectId,
+        itemId: request.nextFiles.snapshot.item.id, message: '下一节目文件预备完成', result: 'succeeded',
+        details: { elapsedMs: performance.now() - started, decoderPrepared: false } });
+    },
+    changed: status => sendToRenderer('link:native-obs-status', status),
+    error: message => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message, result: 'failed' })
+      .catch((error: unknown) => console.error('后台画面日志写入失败', error)); }
+  });
+  const obsRequests = new NativeObsRequests(nativeObs, value => authorizeProduct('link:native-obs-prepare', value));
+  handle('link:native-obs-preload', (_event, value: unknown) => obsPreload.preload(value), 'listener');
+  handle('link:native-obs-preload-cancel', (_event, value: import('@tb/schema').NativeObsStop) => obsPreload.cancel(value));
+  handle('link:native-obs-prepare', (_event, value: unknown) => obsRequests.prepare(value), 'listener');
+  handle('link:native-obs-stop', (_event, value: unknown) => obsRequests.stop(value));
+  handle('link:native-obs-status', () => nativeObs?.status ?? null);
+  obs.subscribe(state => { if (state.status !== 'connected') {
+    nativeObs?.disconnect(state.error ?? 'OBS 已断开，画面通道停止');
+    void obsPreload.close().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message: `关闭节目预备失败：${String(error)}`, result: 'failed' })
+      .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
+  } });
+  const player = (): NativePlayerService => {
+    if (nativePlayerShutdown) throw new Error('正式音频引擎正在关闭或关闭失败，请查看运行日志');
+    if (!nativePlayer) {
+      if (!ffmpegPath) throw new Error('FFmpeg 音频解码组件未安装');
+      let lastClockBoundary = '';
+      const measured = (phase: string, elapsedMs: number): void => { void logger.record({ level: 'info', category: 'system', device: '正式音频', message: `正式音频准备：${phase}`, details: { elapsedMs } })
+        .catch((error: unknown) => console.error('正式音频计时日志写入失败', error)); };
+      nativePlayer = new NativePlayerService({
+        executable: app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
+          : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe'),
+        cache: new NativeAudioCache(join(app.getPath('userData'), 'native-audio-streams'), ffmpegPath.replace('app.asar', 'app.asar.unpacked'), undefined, undefined, measured),
+        resolveAudio: (projectPath, relativePath) => projectService.resolveReferenceAudio(projectPath, relativePath),
+        changed: (status, qpc100ns) => {
+          nativeObs?.observe(status, qpc100ns); nativePlayerUi.publish(status);
+          if (qpc100ns && qpc100ns !== '0' && (status.status === 'playing' || status.status === 'ended')) {
+            const boundary = `${status.sessionId}:${status.generation}:${status.status}`;
+            if (boundary !== lastClockBoundary) {
+              lastClockBoundary = boundary;
+              void logger.record({ level: 'info', category: 'state', device: '正式音频', itemId: status.itemId,
+                message: status.status === 'playing' ? '设备时钟确认开始输出' : '设备时钟确认到达曲尾',
+                details: { playbackSessionId: status.sessionId, generation: status.generation, positionMs: status.positionMs, qpc100ns, enginePid: status.enginePid } })
+                .catch((error: unknown) => console.error('正式音频边界日志写入失败', error));
+            }
+          }
+        },
+        beforeControl: request => nativeObs?.interrupt(request),
+        measured,
+        error: message => { void logger.record({ level: 'error', category: 'device', device: '正式音频', message, result: 'failed' })
+          .catch((error: unknown) => console.error('正式音频日志写入失败', error)); }
+      });
+    }
+    return nativePlayer;
+  };
+  handle('link:native-player-devices', () => player().devices());
+  handle('link:native-player-status', () => nativePlayer?.status ?? null);
+  const playbackRequests = new NativePlaybackRequests(player, (channel, value) => authorizeProduct(channel, value));
+  handle('link:native-player-prepare', (_event, value: unknown) => playbackRequests.prepare(value), 'listener');
+  handle('link:native-player-control', (_event, value: unknown) => playbackRequests.control(value), 'listener');
   const enforcement = z.literal('required').parse(licenseConfig.enforcement);
+  const localTestAccess = localTestAccessEnabled(app.isPackaged,
+    process.env.TBLINK_LOCAL_TEST_ACCESS === '1' || existsSync(join(app.getAppPath(), '.local-test-access')) ? '1' : undefined);
+  const getLocalTestStatus = async () => localTestLicenseStatus(await readLicenseMachineCode());
   let licenseService: Promise<LicenseService> | undefined;
   const getLicenseService = (): Promise<LicenseService> => {
     licenseService ??= readLicenseMachineCode().then(async machineCode => {
@@ -332,9 +482,10 @@ function registerIpc(
     });
     return licenseService;
   };
-  handle('link:license-status', async () => (await getLicenseService()).status());
+  const getLicenseStatus = async () => internalDistribution ? internalDistributionStatus(internalDistribution, await readLicenseMachineCode()) : localTestAccess ? getLocalTestStatus() : (await getLicenseService()).status();
+  handle('link:license-status', getLicenseStatus);
   let licenseChanging = false;
-  const licenseAccess = new LicenseAccess(async () => (await getLicenseService()).status());
+  const licenseAccess = new LicenseAccess(getLicenseStatus);
   authorizeOutput = async () => {
     if (licenseChanging) throw new Error('请等待授权操作完成后再执行设备输出');
     await licenseAccess.requireOutput();
@@ -482,7 +633,10 @@ function registerIpc(
     try {
       await ma2NetworkReady;
       if (task.signal.aborted) throw new Error('扫描已取消');
-      const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal, request.targets) : await readMa2Catalog((await getMa2Connection(request)).bridge, () => runtimeActive, undefined, task.report, task.signal, { targets: request.targets });
+      if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('读取检查点的工程身份不一致');
+      const recovery = request.projectPath && request.projectId ? new Ma2ReadRecovery(request.projectPath, request.projectId, request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC') : undefined;
+      const checkpoint = recovery?.checkpoint.bind(recovery);
+      const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal, request.targets, checkpoint, request.expectedSource) : await readMa2Catalog((await getMa2Connection(request)).bridge, () => runtimeActive, undefined, task.report, task.signal, { targets: request.targets, checkpoint, expectedSource: request.expectedSource });
       for (const entry of catalog.entries) if (entry.error) await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `Timecode ${entry.target} 扫描失败：${entry.error}`, result: 'failed' });
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `已扫描 ${catalog.entries.length} 条 Timecode，${catalog.entries.filter(entry => entry.error).length} 条读取异常`, result: catalog.entries.some(entry => entry.error) ? 'failed' : 'succeeded' });
       return catalog;
@@ -497,7 +651,11 @@ function registerIpc(
     try {
       await ma2NetworkReady;
       if (task.signal.aborted) throw new Error('素材读取已取消');
-      const result = request.network ? await ma2Network.readLibrary(request.network, task.report, 'library', task.signal) : await readMa2EffectLibrary((await getMa2Connection(request)).bridge, () => runtimeActive, task.report, task.signal);
+      if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('素材检查点的工程身份不一致');
+      const recovery = request.projectPath && request.projectId ? new Ma2MaterialRecovery(request.projectPath, request.projectId, request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC') : undefined;
+      const report = async (update: import('@tb/schema').Ma2ReadProgressUpdate): Promise<void> => { await recovery?.record(update); task.report?.(update); };
+      const result = request.network ? await ma2Network.readLibrary(request.network, report, 'library', task.signal, request.targets, request.expectedSource) : await readMa2EffectLibrary((await getMa2Connection(request)).bridge, () => runtimeActive, report, task.signal, request.targets, request.expectedSource);
+      await recovery?.complete(result);
       await logger.record({ level: result.errors.length ? 'error' : 'info', category: 'device', device: 'MA2', message: `效果库读取 ${result.sequences.length} 条序列；异常：${JSON.stringify(result.errors)}`, result: result.errors.length ? 'failed' : 'succeeded' });
       return result;
     } catch (error) {
@@ -544,7 +702,7 @@ function registerIpc(
     const disk = await statfs(app.getPath('userData'));
     return {
       name: '团播联动台',
-      version: app.getVersion(),
+      version: desktopPackage.version,
       platform: process.platform,
       architecture: process.arch,
       electronVersion: process.versions.electron,
@@ -556,7 +714,7 @@ function registerIpc(
   handle('link:update-check', (): Promise<LinkUpdateStatus> => updateManager.check());
   handle('link:update-download', (): Promise<LinkUpdateStatus> => updateManager.download());
   handle('link:update-install', async () => {
-    if (runtimeActive) throw new Error('联动尚未停止；请先到集成中心停止联动并完成 OBS 清理，再安装更新');
+    if (runtimeActive || nativePlaybackActive()) throw new Error('联动尚未停止；请先到集成中心停止联动并完成 OBS 清理，再安装更新');
     if (documentDirty) throw new Error('当前工程尚未保存，保存后才能安装更新');
     const decision = await dialog.showMessageBox(mainWindow!, {
       type: 'question',
@@ -569,7 +727,8 @@ function registerIpc(
       noLink: true
     });
     if (decision.response !== 1) return;
-    if (runtimeActive || documentDirty) throw new Error('播放或工程状态已变化，请停止联动并保存工程后重新安装');
+    if (runtimeActive || nativePlaybackActive() || documentDirty) throw new Error('播放或工程状态已变化，请停止联动并保存工程后重新安装');
+    await closeNativePlayer();
     allowWindowClose = true;
     try {
       updateManager.install();
@@ -643,25 +802,25 @@ function registerIpc(
     });
     const path = result.filePaths[0];
     if (result.canceled || !path) return null;
-    return { path, project: await projectService.open(path) };
+    return { version: 1, path, content: await projectDocuments.read(path) };
   });
   handle('link:open-project', async (_event, pathValue: unknown) => {
     const path = linkFilePathSchema.parse(pathValue);
-    return { path, project: await projectService.open(path) };
+    return { version: 1, path, content: await projectDocuments.read(path) };
   });
   handle('link:save-project', async (_event, pathValue: unknown, projectValue: unknown) => {
-    const project = parseLinkProject(projectValue);
+    const content = projectDocumentTextSchema.parse(projectValue);
     let destination = linkOptionalFilePathSchema.parse(pathValue);
     if (!destination) {
       const result = await dialog.showSaveDialog(mainWindow!, {
         title: '保存团播联动工程',
-        defaultPath: `${safeFileName(project.name)}.tblink`,
+        defaultPath: `${safeFileName(await projectDocuments.inspect(content))}.tblink`,
         filters: [{ name: '团播联动工程', extensions: ['tblink'] }]
       });
       if (result.canceled || !result.filePath) return null;
       destination = result.filePath;
     }
-    await projectService.save(destination, project);
+    await projectDocuments.save(destination, content);
     return destination;
   });
   handle('link:import-reference-audio', async (_event, payloadValue: unknown) => {
@@ -698,6 +857,11 @@ function registerIpc(
       : projectService.resolveMediaAsset(payload.projectPath, payload.relativePath);
     return createAssetUrl(path);
   });
+  handle('link:ensure-media-thumbnail-url', async (_event, payloadValue: unknown) => {
+    const payload = linkMediaPreviewPayloadSchema.strict().parse(payloadValue);
+    if (payload.kind === 'audio') throw new Error('音频素材使用类型图标');
+    return createAssetUrl(await mediaPreviewService.ensureThumbnail(payload.projectPath, payload.relativePath, payload.sha256));
+  });
   handle('link:ensure-media-audio-url', async (_event, payloadValue: unknown) => {
     const payload = linkMediaPreviewPayloadSchema.parse(payloadValue);
     if (payload.kind === 'image') throw new Error('图片素材不包含音轨');
@@ -731,6 +895,10 @@ function registerIpc(
   handle('link:inspect-project-assets', (_event, pathValue: unknown, projectValue: unknown) => {
     const path = linkFilePathSchema.parse(pathValue);
     return projectService.inspectAssets(path, parseLinkProject(projectValue));
+  });
+  handle('link:inspect-media-assets', (_event, value: unknown) => {
+    const payload = linkMediaInspectionPayloadSchema.parse(value);
+    return projectService.inspectMediaAssets(payload.projectPath, payload.assets);
   });
   handle('link:p1-detect-current-project', async () => {
     const detection = await integrationDetector.detect();
@@ -819,8 +987,15 @@ function registerIpc(
     const profile = await requireProfile(profileStore);
     const password = await profileStore.loadCredential(profile.obs.credentialId);
     knownSecrets.add(password);
-    // Native seeking resolves its process when used; it must not invalidate WebSocket authentication.
-    return obs.connect(profile.obs.webSocketUrl, password, profile.obs.startupTimeoutMs);
+    const connected = await obs.connect(profile.obs.webSocketUrl, password, profile.obs.startupTimeoutMs);
+    // Resolve the local bridge during explicit connection, not inside the one
+    // second playback admission window. Discovery failure does not undo auth.
+    if (connected.status === 'connected' && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(profile.obs.webSocketUrl).hostname)) {
+      try { await nativeSeek.prepare(profile.obs.webSocketUrl); }
+      catch (error) { await logger.record({ level: 'warning', category: 'device', device: 'OBS 原生媒体',
+        message: `OBS 网络已连接，但本机媒体桥识别失败：${error instanceof Error ? error.message : String(error)}`, result: 'failed' }); }
+    }
+    return connected;
   };
   handle('link:obs-disconnect', () => obs.disconnect());
   handle('link:obs-snapshot', () => obs.getSnapshot());
@@ -836,7 +1011,8 @@ function registerIpc(
       const cachePath = join(dirname(path), 'cache', 'obs-seek-jpeg2000', `${asset.sha256}.mkv`);
       const playbackPath = preciseSeeking && asset.kind === 'video'
         ? await mediaPreviewService.ensureObsSeekVideo(path, asset.relativePath, asset.sha256) : absolutePath;
-      await obs.mediaScenes.prepare(project.projectId, asset, absolutePath, playbackPath, cachePath, join(dirname(path), 'cache', 'obs-seek-jpeg2000', `${asset.sha256}.rgba.mkv`));
+      await obs.mediaScenes.prepare(project.projectId, asset, absolutePath, playbackPath, [cachePath,
+        ...['.rgba.mkv', '.source-pixels.mkv'].map(extension => join(dirname(path), 'cache', 'obs-seek-jpeg2000', `${asset.sha256}${extension}`))]);
     }
   });
   handle('link:obs-source-create', (_event, value: unknown) => obs.sources.create(obsSourceCreateSchema.parse(value)));
@@ -850,12 +1026,53 @@ function registerIpc(
   obs.liveEditor.subscribe(() => sendToRenderer('link:obs-live-changed', null));
   handle('link:obs-output-status', () => obs.readOutputStatus());
   handle('link:obs-live-scene', () => obs.liveEditor.read());
+  const beautyRuntime = new BeautyRuntime(app.isPackaged ? join(process.resourcesPath, 'beauty') : join(__dirname, '../../../../artifacts/beauty-prototype'),
+    join(app.getPath('userData'), 'beauty-reports'), obs.beauty, message => {
+      void logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message }).catch((error: unknown) => console.error('美颜日志写入失败', error));
+    });
+  handle('link:beauty-install', async () => {
+    try { return await beautyRuntime.install(); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }
+  });
+  handle('link:beauty-start', (_event, value: unknown) => beautyRuntime.start(beautyStartSchema.parse(value).sourceName));
+  handle('link:beauty-stop', () => beautyRuntime.stop());
+  const beautyOutput = new BeautyOutputController(beautyRuntime, obs.beauty, message => {
+    void logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message }).catch((error: unknown) => console.error('美颜日志写入失败', error));
+  });
+  obs.subscribe(state => beautyOutput.connection(state.status === 'connected'));
+  obs.subscribeProgramScene(() => beautyOutput.sceneChanged());
+  handle('link:beauty-output', (_event, value: unknown) => beautyOutput.configure(beautyBasicValuesSchema.parse(value)));
+  handle('link:beauty-status', () => beautyOutput.status());
+  const beautyComparison = new BeautyComparison(async target => {
+    const profile = await requireProfile(profileStore);
+    const pid = await findLocalObsPid(profile.obs.webSocketUrl);
+    if (pid === null) throw new Error('美颜对比需要连接本机 OBS');
+    return obs.beauty.comparisonPipe(target, pid);
+  });
+  handle('link:beauty-comparison-frame', async (_event, value: unknown) => {
+    if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 未连接');
+    try { return await beautyComparison.next(beautyTargetSchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: `美颜对比失败：${String(error)}` }); throw error; }
+  });
+  handle('link:beauty-comparison-close', () => beautyComparison.close());
+  mainWindow?.on('hide', () => beautyComparison.close());
+  mainWindow?.on('minimize', () => beautyComparison.close());
+  app.on('will-quit', () => beautyComparison.close());
+  obs.subscribe(state => { if (state.status !== 'connected') beautyComparison.close(); });
+  app.on('will-quit', () => beautyRuntime.close());
+  handle('link:obs-beauty-read', async (_event, value: unknown) => {
+    try { return await obs.beauty.read(beautyTargetSchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }
+  });
+  handle('link:obs-beauty-apply', async (_event, value: unknown) => {
+    try { return await obs.beauty.apply(beautyApplySchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }
+  });
   handle('link:obs-live-edit', async (_event, value: unknown) => {
     try { await obs.liveEditor.edit(obsLiveEditSchema.parse(value)); }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) }); throw error; }
   });
   const livePreview = new ObsLivePreview();
-  const nativeSeek = new ObsNativeSeek();
   obs.subscribe((state) => { if (state.status !== 'connected') nativeSeek.reset(); });
   handle('link:obs-seek-managed-media', async (_event, value: unknown) => {
     if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 未连接');
@@ -942,6 +1159,7 @@ function registerIpc(
     bridgeMaintenance = true;
     livePreview.close(); liveAddress = null; liveBridgeInstalled = false;
     try {
+      await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'running', message: '开始检查 OBS 预览组件：部署、连接及真实视频帧验证' });
       bridgeMaintenanceTask = bridgeSetup.repair();
       await bridgeMaintenanceTask;
       await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'succeeded', message: 'OBS 内置组件部署及真实视频帧检查通过' });
@@ -987,6 +1205,10 @@ function registerIpc(
     if (!mainWindow) throw new Error('主控窗口不存在');
     const profile = await requireProfile(profileStore);
     const payload = linkInternalAudioCaptureSchema.parse(value);
+    if (payload.enabled && nativePlayer?.status && nativePlayer.status.status !== 'stopped') {
+      const identity = nativePlayer.audioCaptureIdentity;
+      return obs.setInternalAudioCapture(true, identity.executable, identity.title, identity.audioDeviceId, payload.sceneNames, identity.windowClass);
+    }
     return obs.setInternalAudioCapture(payload.enabled, basename(process.execPath), mainWindow.getTitle(), profile.internalPlayer?.audioOutputDeviceId ?? 'default', payload.sceneNames);
   });
   handle('link:obs-execute-managed-media', async (_event, payloadValue: unknown) => {
@@ -1030,6 +1252,20 @@ function registerIpc(
   });
   handle('link:log-record', (_event, entryValue: unknown) => logger.record(parseLogRecord(entryValue)));
   handle('link:log-query', (_event, filterValue: unknown) => logger.query(parseLogFilter(filterValue)));
+  handle('link:log-open-folder', async () => {
+    const directory = join(app.getPath('userData'), 'link-logs');
+    await mkdir(directory, { recursive: true });
+    const error = await shell.openPath(directory);
+    if (error) throw new Error(`无法打开日志文件夹：${error}`);
+  });
+  handle('link:log-export', async () => {
+    const result = await dialog.showSaveDialog(mainWindow!, { title: '导出运行日志',
+      defaultPath: `团播联动台-日志-${new Date().toISOString().replaceAll(':', '-')}.txt`,
+      filters: [{ name: '文本日志', extensions: ['txt'] }] });
+    if (result.canceled || !result.filePath) return null;
+    await logger.exportText(result.filePath);
+    return result.filePath;
+  });
   handle('link:diagnostic-export', async (_event, contextValue: unknown) => {
     const context = linkDiagnosticContextSchema.parse(contextValue);
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -1038,7 +1274,14 @@ function registerIpc(
       filters: [{ name: '团播联动台诊断包', extensions: ['tbdiag.gz'] }]
     });
     if (result.canceled || !result.filePath) return null;
-    await logger.exportDiagnosticPackage(result.filePath, context);
+    await logger.exportDiagnosticPackage(result.filePath, { ...context, environment: {
+      appVersion: desktopPackage.version, packaged: app.isPackaged, platform: process.platform, arch: process.arch,
+      osRelease: release(), cpu: cpus()[0]?.model ?? '未知', logicalProcessors: cpus().length,
+      totalMemoryBytes: totalmem(), freeMemoryBytes: freemem(), versions: process.versions,
+      gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),
+      obs: obs.getSnapshot(), ma2: ma2Network.status(), runtimeActive, collectedAt: new Date().toISOString(),
+      crashDumpContentsIncluded: false
+    } });
     return result.filePath;
   });
 }
@@ -1051,40 +1294,12 @@ function registerAssetProtocol(): void {
     const token = url.pathname.slice(1);
     const path = assetTokens.get(token);
     if (!path) return new Response('Asset token not found', { status: 404 });
-    const fileStat = await stat(path);
-    const range = request.headers.get('range');
-    const baseHeaders = {
-      'Content-Type': mimeType(path),
-      'Access-Control-Allow-Origin': '*',
-      'Accept-Ranges': 'bytes',
-      'Cache-Control': 'no-store'
-    };
-    if (!range) {
-      const content = await readFile(path);
-      return new Response(content, { headers: { ...baseHeaders, 'Content-Length': String(fileStat.size) } });
-    }
-    const bounds = parseByteRange(range, fileStat.size);
-    if (!bounds) return new Response('Invalid byte range', { status: 416, headers: { ...baseHeaders, 'Content-Range': `bytes */${fileStat.size}` } });
-    const length = bounds.end - bounds.start + 1;
-    const content = Buffer.allocUnsafe(length);
-    const file = await open(path, 'r');
-    try {
-      await file.read(content, 0, length, bounds.start);
-    } finally {
-      await file.close();
-    }
-    return new Response(content, {
-      status: 206,
-      headers: {
-        ...baseHeaders,
-        'Content-Length': String(length),
-        'Content-Range': `bytes ${bounds.start}-${bounds.end}/${fileStat.size}`
-      }
-    });
+    return assetResponse(path, request, mimeType(path));
   });
 }
 
 async function runQuitFlow(profileStore: SecureProfileStore, processManager: ExternalProcessManager): Promise<void> {
+  await closeNativePlayer();
   const owned = (['p1', 'obs'] as const)
     .map((id) => processManager.getSnapshot(id))
     .filter((snapshot) => snapshot.owned && snapshot.pid !== null);
@@ -1135,19 +1350,23 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   app.quit();
 }
 
+let runtimeExitWarningOpen = false;
 function showRuntimeActiveExitWarning(): void {
+  if (runtimeExitWarningOpen) return;
+  runtimeExitWarningOpen = true;
   const options = {
     type: 'warning' as const,
     title: '联动尚未停止',
-    message: '当前运行会话仍可能控制 OBS 输出。',
-    detail: '请到集成中心点击“停止联动”并等待状态回到“待机”；联动台会先隐藏和停止全部受管来源，再允许退出。',
-    buttons: ['返回集成中心'],
+    message: '当前音频或联动会话尚未停止。',
+    detail: '请返回播放器停止播放；仍有画面联动时，等待相关来源完成清理后再退出。',
+    buttons: ['返回软件'],
     defaultId: 0,
     cancelId: 0,
     noLink: true
   };
-  if (mainWindow && !mainWindow.isDestroyed()) dialog.showMessageBoxSync(mainWindow, options);
-  else dialog.showMessageBoxSync(options);
+  // Keep native status and stop IPC responsive while the warning is visible.
+  const warning = mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options);
+  void warning.catch((error: unknown) => console.error('显示运行退出提示失败', error)).finally(() => { runtimeExitWarningOpen = false; });
 }
 
 function processConfiguration(profile: IntegrationProfile, id: ExternalApplicationId) {
@@ -1174,12 +1393,15 @@ async function requireProfile(store: SecureProfileStore) {
 
 function handle<Arguments extends unknown[], Result>(
   channel: string,
-  listener: (event: IpcMainInvokeEvent, ...args: Arguments) => Result | Promise<Result>
+  listener: (event: IpcMainInvokeEvent, ...args: Arguments) => Result | Promise<Result>,
+  authorization: 'wrapper' | 'listener' = 'wrapper'
 ): void {
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, ...args: Arguments) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('拒绝非主窗口的 IPC 请求');
-    await authorizeProduct(channel, args[0]);
+    // Native playback captures cancellation before awaiting authorization. Its
+    // request adapter performs the same license check before calling the service.
+    if (authorization === 'wrapper') await authorizeProduct(channel, args[0]);
     return listener(event, ...args);
   });
 }
@@ -1218,23 +1440,6 @@ function mimeType(path: string): string {
   return 'application/octet-stream';
 }
 
-function parseByteRange(value: string, size: number): { start: number; end: number } | null {
-  const match = /^bytes=(\d*)-(\d*)$/.exec(value.trim());
-  if (!match) return null;
-  const startText = match[1] ?? '';
-  const endText = match[2] ?? '';
-  if (startText === '' && endText === '') return null;
-  if (startText === '') {
-    const suffixLength = Number(endText);
-    if (!Number.isInteger(suffixLength) || suffixLength <= 0) return null;
-    return { start: Math.max(0, size - suffixLength), end: size - 1 };
-  }
-  const start = Number(startText);
-  const end = endText === '' ? size - 1 : Number(endText);
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start >= size || end < start) return null;
-  return { start, end: Math.min(end, size - 1) };
-}
-
 function parseLogRecord(
   value: unknown
 ): Omit<LinkLogEntry, 'id' | 'sessionId' | 'timestamp' | 'monotonicMs'> {
@@ -1261,7 +1466,8 @@ function parseLogFilter(value: unknown): LinkLogFilter {
     ...(filter.itemId !== undefined ? { itemId: filter.itemId } : {}),
     ...(filter.cueId !== undefined ? { cueId: filter.cueId } : {}),
     ...(filter.device !== undefined ? { device: filter.device } : {}),
-    ...(filter.result !== undefined ? { result: filter.result } : {})
+    ...(filter.result !== undefined ? { result: filter.result } : {}),
+    ...(filter.limit !== undefined ? { limit: filter.limit } : {})
   };
 }
 

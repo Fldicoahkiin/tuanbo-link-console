@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ListPlus, Trash2 } from 'lucide-react';
+import { useProgramViewport } from './useProgramViewport';
 
-export function ProgramGrid({ children, locked, onAddItem, onBlankClick, onImportFiles, selectedIds, onSelectionChange, onDeleteSelection, view = 'cards' }: { children: ReactNode; locked: boolean; onAddItem: () => void; onBlankClick: () => void; onImportFiles: (files: File[]) => Promise<void>; selectedIds: string[]; onSelectionChange: (ids: string[]) => void; onDeleteSelection: () => void; view?: 'list' | 'cards' }): JSX.Element {
+export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAddItem, onBlankClick, onImportFiles, selectedIds, onSelectionChange, onDeleteSelection, view = 'cards' }: { itemIds: string[]; renderItem: (index: number) => ReactNode; empty: ReactNode; compact: boolean; locked: boolean; onAddItem: () => void; onBlankClick: () => void; onImportFiles: (files: File[]) => Promise<void>; selectedIds: string[]; onSelectionChange: (ids: string[]) => void; onDeleteSelection: () => void; view?: 'list' | 'cards' }): JSX.Element {
+  const virtual = useProgramViewport(itemIds, view, compact);
   const drag = useRef<{ x: number; y: number; base: string[]; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
   const [rectangle, setRectangle] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
@@ -16,7 +18,9 @@ export function ProgramGrid({ children, locked, onAddItem, onBlankClick, onImpor
     window.addEventListener('keydown', key);
     return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('blur', close); window.removeEventListener('keydown', key); };
   }, [position]);
-  return <div className="p1-media-grid" data-view={view} data-file-drop={fileDrop} tabIndex={0} aria-label="节目列表"
+  return <div ref={virtual.viewport} className="p1-media-grid program-virtual-grid" data-view={view} data-total-programs={itemIds.length} data-file-drop={fileDrop} tabIndex={0} aria-label="节目列表"
+    onScroll={event => virtual.scroll(event.currentTarget.scrollTop)}
+    onFocusCapture={event => virtual.setFocused(event.target.closest<HTMLElement>('[data-program-id]')?.dataset.programId ?? null)}
     onPointerDown={event => {
       if (locked || event.button !== 0 || (event.target instanceof Element && event.target.closest('button, input, article, [role="menu"]'))) return;
       event.preventDefault(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId);
@@ -51,7 +55,8 @@ export function ProgramGrid({ children, locked, onAddItem, onBlankClick, onImpor
     }}
     onKeyDown={event => {
       if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') { event.preventDefault(); if (!locked) onSelectionChange(Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[data-program-id]'), card => card.dataset.programId!)); }
+      virtual.keyDown(event);
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') { event.preventDefault(); if (!locked) onSelectionChange(itemIds); }
       if (event.key === 'Escape') { onSelectionChange([]); drag.current = null; setRectangle(null); }
       if (event.key === 'Delete' && selectedIds.length && !locked) { event.preventDefault(); onDeleteSelection(); }
     }}
@@ -67,7 +72,7 @@ export function ProgramGrid({ children, locked, onAddItem, onBlankClick, onImpor
       event.preventDefault(); event.stopPropagation(); setFileDrop(false);
       if (!locked) void onImportFiles(Array.from(event.dataTransfer.files));
     }} onClick={(event) => {
-    if (event.target === event.currentTarget || (event.target instanceof Element && event.target.closest('.p1-library-empty'))) onBlankClick();
+    if (event.target === event.currentTarget || (event.target instanceof Element && (event.target.matches('.program-virtual-body') || event.target.closest('.p1-library-empty')))) onBlankClick();
   }} onContextMenuCapture={event => {
     const card = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-program-id]') : null;
     if (locked || !card?.dataset.programId) return;
@@ -80,7 +85,9 @@ export function ProgramGrid({ children, locked, onAddItem, onBlankClick, onImpor
     event.preventDefault();
     setPosition({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 100)) });
   }}>
-    {children}
+    {itemIds.length ? <div className="program-virtual-body" style={{ height: virtual.totalHeight }}>
+      {virtual.indices.map(index => <div className="program-virtual-row" data-program-index={index} key={itemIds[index]} style={virtual.style(index)}>{renderItem(index)}</div>)}
+    </div> : empty}
     {rectangle ? <div className="program-selection-rectangle" style={rectangle} /> : null}
     {position && !locked ? <div className="resource-context-menu" role="menu" style={{ left: position.x, top: position.y }} onPointerDown={(event) => event.stopPropagation()}>
       {selectedIds.length ? <button className="context-menu-item danger" role="menuitem" onClick={() => { setPosition(null); onDeleteSelection(); }}><Trash2 /><span>删除所选 {selectedIds.length} 个节目</span></button> : null}

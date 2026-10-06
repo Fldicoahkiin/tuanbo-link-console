@@ -12,7 +12,10 @@ import {
 } from '@tb/schema';
 import type { LinkProjectAssetInspection } from '@tb/core/link';
 import { writeFileAtomically } from './atomic-file';
+import { recoverMa2Read } from './ma2-read-recovery';
+import { recoverMa2Material } from './ma2-material-recovery';
 import { VerifiedMediaFiles } from './verified-media-files';
+import { ProjectWriteQueue } from './project-write-queue';
 import {
   extractReferenceAudioTrack,
   readExtractedAudioDuration,
@@ -35,7 +38,7 @@ export type ImportedReferenceAudio = {
 };
 
 export class LinkProjectService {
-  private readonly pendingSaves = new Map<string, Promise<void>>();
+  private readonly pendingSaves = new ProjectWriteQueue((path, project) => this.writeSavedProject(path, project));
   private readonly verifiedMedia = new VerifiedMediaFiles(hashFile);
 
   constructor(
@@ -52,24 +55,26 @@ export class LinkProjectService {
     } catch (error) {
       throw new Error(`工程文件不是有效 JSON：${projectPath}`, { cause: error });
     }
-    return parseLinkProject(value);
+    return recoverMa2Material(projectPath, await recoverMa2Read(projectPath, parseLinkProject(value)));
   }
 
   async save(projectPath: string, project: LinkProject): Promise<void> {
     assertProjectExtension(projectPath);
+    return this.pendingSaves.enqueue(projectPath, project);
+  }
+
+  private async writeSavedProject(absolutePath: string, project: LinkProject): Promise<void> {
     const content = serializeLinkProject(project);
-    const absolutePath = resolve(projectPath);
-    const key = process.platform === 'win32' ? absolutePath.toLowerCase() : absolutePath;
-    const previous = this.pendingSaves.get(key) ?? Promise.resolve();
-    const operation = previous.then(() => this.writeProject(absolutePath, content));
-    // Each caller receives its own failure; a failed save must not block a later explicit save.
-    const settled = operation.then(() => undefined, () => undefined);
-    this.pendingSaves.set(key, settled);
-    try {
-      await operation;
-    } finally {
-      if (this.pendingSaves.get(key) === settled) this.pendingSaves.delete(key);
-    }
+      if (project.ma2ReadState?.formatVersion === 2 || project.ma2MaterialLibrary) {
+        try {
+          const old = parseLinkProject(JSON.parse(await readFile(absolutePath, 'utf8')));
+          if (old.ma2ReadState?.formatVersion !== 2 && !old.ma2MaterialLibrary) {
+            try { await copyFile(absolutePath, `${absolutePath}.before-ma2-workflow.bak`, constants.COPYFILE_EXCL); }
+            catch (error) { if (!isErrorWithCode(error, 'EEXIST')) throw error; }
+          }
+        } catch (error) { if (!isErrorWithCode(error, 'ENOENT')) throw error; }
+      }
+      await this.writeProject(absolutePath, content);
   }
 
   async loadWaveformCache(projectPath: string, sha256: string): Promise<number[] | null> {
@@ -115,13 +120,21 @@ export class LinkProjectService {
         waveformAvailable: await pathExists(waveformCachePath(projectPath, item.referenceAudio.sha256))
       };
     }
-    for (const asset of project.mediaAssets) {
-      const assetPath = this.resolveMediaAsset(projectPath, asset.relativePath);
-      const exists = await pathExists(assetPath);
-      if (exists && !await this.verifiedMedia.verify(assetPath, asset.sha256)) throw new Error(`素材完整性校验失败：${asset.name}，请重新导入原文件`);
-      result.media[asset.id] = {
-        fileAvailable: exists
-      };
+    result.media = await this.inspectMediaAssets(projectPath, project.mediaAssets);
+    return result;
+  }
+
+  async inspectMediaAssets(projectPath: string, assets: Pick<LinkMediaAsset, 'id' | 'relativePath' | 'sha256' | 'name'>[]): Promise<LinkProjectAssetInspection['media']> {
+    const result: LinkProjectAssetInspection['media'] = {};
+    // Bounded disk work. Never start thousands of reads or hash an entire Show
+    // simply because the renderer mounted a material list.
+    for (let offset = 0; offset < assets.length; offset += 4) {
+      await Promise.all(assets.slice(offset, offset + 4).map(async asset => {
+        const path = this.resolveMediaAsset(projectPath, asset.relativePath);
+        const exists = await pathExists(path);
+        if (exists && !await this.verifiedMedia.verify(path, asset.sha256)) throw new Error(`素材完整性校验失败：${asset.name}，请重新导入原文件`);
+        result[asset.id] = { fileAvailable: exists };
+      }));
     }
     return result;
   }

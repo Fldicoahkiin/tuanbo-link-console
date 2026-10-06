@@ -16,7 +16,7 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
   await writeFile(info.outputPath('dance.wav'), wav);
   const project = parseLinkProject({ ...createEmptyLinkProject('灯光工作台验收'), playbackSource, rundown: [{ id: 'dance', title: '力量舞蹈片段', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'dance.wav', sha256, durationMs: 12000 } }] });
   const file = info.outputPath('lighting.tblink'); await writeFile(file, JSON.stringify(project));
-  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
+  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   try {
     const page = await app.firstWindow();
     const openTool = async (name: string): Promise<void> => {
@@ -175,6 +175,7 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
     });
     await page.getByRole('button', { name: '读取控台', exact: true }).click();
     const importDialog = page.getByLabel('读取控台效果库', { exact: true });
+    await importDialog.getByRole('button', { name: '读取控台素材', exact: true }).click();
     await expect(importDialog.getByText('光束 · 蓝色扫光', { exact: true })).toBeVisible();
     await importDialog.getByText('灯具对应关系 · 设置一次，批量分类', { exact: true }).click();
     await importDialog.getByLabel('光束 灯具编号', { exact: true }).fill('101-110');
@@ -268,7 +269,7 @@ test('序列池素材无需执行器，编辑与重开保留编号，点击 Cue 
   await writeFile(info.outputPath('pool.wav'), wav);
   const file = info.outputPath('pool.tblink');
   await writeFile(file, JSON.stringify(parseLinkProject({ ...createEmptyLinkProject('序列池编辑'), playbackSource: 'internal', rundown: [{ id: 'pool-song', title: '序列池节目', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'pool.wav', durationMs: 4000, sha256: createHash('sha256').update(wav).digest('hex') } }] })));
-  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
+  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   try {
     const page = await app.firstWindow(); const calls: unknown[] = [];
     await app.evaluate(({ ipcMain, dialog }, file) => {

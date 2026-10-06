@@ -1,10 +1,12 @@
 import { join } from 'node:path'
 import { rcedit } from 'rcedit'
+import verifyBeautyResources from './verify-beauty-resources.mjs'
 
 export default async function editWindowsExecutable(context) {
   if (context.electronPlatformName !== 'win32') {
     return
   }
+  await verifyBeautyResources(context)
 
   const executablePath = join(
     context.appOutDir,

@@ -1,40 +1,10 @@
-import { spawn } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
+import { join } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
-/** Two-millisecond envelopes for short programmes; bound cache size for long media. */
-export const waveformBucketCount = (durationMs: number): number => Math.min(500_000, Math.max(4800, Math.ceil(durationMs / 2)));
+import { waveformWorkerRequestSchema, waveformWorkerResultSchema } from './waveform-worker-contract';
+import { waveformBucketCount } from './waveform-accumulator';
+export { WaveformAccumulator, waveformBucketCount } from './waveform-accumulator';
 import type { LinkProjectService } from './link-project-service';
-
-/** Streaming PCM reduction: retain only one incomplete float and the output peaks. */
-export class WaveformAccumulator {
-  readonly peaks: number[];
-  private remainder = Buffer.alloc(0);
-  private sample = 0;
-  private bucket = 0;
-  private invalid = false;
-
-  constructor(private readonly sampleCount: number, buckets = 2400) {
-    if (!Number.isSafeInteger(sampleCount) || sampleCount <= 0 || !Number.isSafeInteger(buckets) || buckets <= 0) throw new Error('波形采样范围无效');
-    this.peaks = Array.from({ length: buckets }, () => 0);
-  }
-
-  push(chunk: Buffer): void {
-    const data = this.remainder.length ? Buffer.concat([this.remainder, chunk]) : chunk;
-    const complete = data.length - data.length % 4;
-    for (let offset = 0; offset < complete; offset += 4) {
-      const value = data.readFloatLE(offset);
-      while (this.bucket < this.peaks.length - 1 && this.sample >= Math.floor((this.bucket + 1) * this.sampleCount / this.peaks.length)) this.bucket += 1;
-      if (!Number.isFinite(value)) this.invalid = true;
-      else this.peaks[this.bucket] = Math.max(this.peaks[this.bucket]!, Math.min(1, Math.abs(value)));
-      this.sample += 1;
-    }
-    this.remainder = Buffer.from(data.subarray(complete));
-  }
-
-  finish(): number[] {
-    if (this.remainder.length || this.invalid || !this.sample) throw new Error('波形解码未返回完整有效的音频采样');
-    return this.peaks;
-  }
-}
 
 export class WaveformService {
   private readonly pending = new Map<string, Promise<number[]>>();
@@ -62,24 +32,23 @@ export class WaveformService {
   }
 }
 
-export function decodeWaveform(sourcePath: string, durationMs: number): Promise<number[]> {
+export function decodeWaveform(sourcePath: string, durationMs: number, workerPath = join(__dirname, 'waveform-worker.cjs')): Promise<number[]> {
   if (!ffmpegPath) throw new Error('FFmpeg 运行时未安装');
-  const executable = ffmpegPath.includes('app.asar') ? ffmpegPath.replace('app.asar', 'app.asar.unpacked') : ffmpegPath;
-  const accumulator = new WaveformAccumulator(Math.round(durationMs * 48), waveformBucketCount(durationMs));
+  const request = waveformWorkerRequestSchema.parse({ version: 1, sourcePath, durationMs, executable: ffmpegPath.replace('app.asar', 'app.asar.unpacked') });
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-i', sourcePath,
-      '-map', '0:a:0', '-vn', '-af', 'pan=mono|c0=c0', '-ar', '48000', '-f', 'f32le', 'pipe:1'],
-    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let errorOutput = '';
-    child.stdout.on('data', (chunk: Buffer) => accumulator.push(chunk));
-    child.stdout.on('error', reject);
-    child.stderr.on('error', reject);
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => { errorOutput = (errorOutput + chunk).slice(-8000); });
-    child.on('error', (error) => reject(new Error(`波形解码启动失败：${error.message}`, { cause: error })));
-    child.on('close', (code) => {
-      if (code !== 0) { reject(new Error(`波形解码失败（${String(code)}）：${errorOutput.trim() || '没有错误输出'}`)); return; }
-      try { resolve(accumulator.finish()); } catch (error) { reject(error instanceof Error ? error : new Error(String(error))); }
+    const worker = new Worker(workerPath, { workerData: request });
+    let result: number[] | null = null, failure: Error | null = null;
+    worker.on('message', (value: unknown) => {
+      try {
+        const message = waveformWorkerResultSchema.parse(value);
+        if (message.ok) result = message.peaks; else failure = new Error(message.error);
+      } catch (error) { failure = error instanceof Error ? error : new Error(String(error)); }
+    });
+    worker.on('error', (error: unknown) => { failure = error instanceof Error ? error : new Error(String(error)); });
+    worker.on('exit', code => {
+      if (failure) reject(failure);
+      else if (code !== 0 || !result) reject(new Error(`波形后台任务退出且没有完整结果（${code}）`));
+      else resolve(result);
     });
   });
 }

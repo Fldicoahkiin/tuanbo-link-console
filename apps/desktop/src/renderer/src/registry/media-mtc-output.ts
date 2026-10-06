@@ -26,6 +26,7 @@ export class MediaMtcOutput {
     this.connectionAttempt = attempt;
     try {
       await requireOutputLicense();
+      if (attempt.signal.aborted) throw new Error('MIDI 连接已取消');
       const access = await waitForMidi(requestMidiAccess({ sysex: true }), attempt.signal, '申请 MIDI 权限');
       const available = [...access.outputs.values()].filter(port => port.state === 'connected' && port.name && !/Microsoft GS Wavetable Synth/i.test(port.name));
       if (!portName) {
@@ -64,16 +65,17 @@ export class MediaMtcOutput {
     if (elapsed < 0) throw new Error('MIDI 时间码调度时钟回跳，时间码输出已停止');
     if (elapsed > 500) throw new Error(`MIDI 时间码调度中断 ${Math.round(elapsed)}ms，时间码输出已停止；音频继续播放`);
     if (Math.abs(advanced - elapsed) > 100) throw new Error('音频位置与播放时钟不一致，已停止 MIDI 时间码输出；请手动重新定位');
-    if (elapsed > 100) {
-      // Discard the incomplete cycle instead of bursting stale timecode. Locate
-      // from the actual media clock, then restart a complete quarter-frame cycle.
-      this.locate = true; this.piece = 0; this.messages = [];
-      this.schedulingNotice = `界面调度延迟 ${Math.round(elapsed)}ms，时间码已按当前音频位置恢复；请留意控台同步状态。`;
-    }
     this.lastTickAt = now;
     this.lastPositionMs = positionMs;
     const fps = playbackFramesPerSecond(rate);
     const frameMs = 1000 / fps;
+    // A stalled renderer must never burst expired quarters into the console.
+    // Freeze only this output channel; the player keeps the audio running and
+    // requires an explicit restart. In particular, a Full Frame relocation is
+    // not evidence that a physical console has recovered playback correctly.
+    if (!this.locate && positionMs - this.nextQuarterFrame * frameMs / 4 > frameMs) {
+      throw new Error(`MIDI 时间码调度滞后超过一帧（${Math.round(frameMs)}ms），已停止此通道；请手动重新定位`);
+    }
     if (this.locate) {
       this.output.send(encodeMediaTimecode(positionMs, rate).fullFrame);
       sent = true;
@@ -81,7 +83,6 @@ export class MediaMtcOutput {
       // Locate immediately, but begin quarter frames on an actual media frame boundary.
       this.nextQuarterFrame = Math.ceil(positionMs / 1000 * fps) * 4;
     }
-    if (positionMs - this.nextQuarterFrame * 1000 / (fps * 4) > 100) throw new Error('MIDI 时间码发送延迟超过 100ms，时间码输出已停止');
     while (this.nextQuarterFrame <= positionMs / 1000 * fps * 4) {
       if (this.piece === 0) {
         const frame = this.nextQuarterFrame / 4;

@@ -14,7 +14,7 @@ test('灯光打点按钮、M 与快捷键修改', async ({}, info) => {
   await writeFile(info.outputPath('audio.wav'), wav);
   const project = parseLinkProject({ ...createEmptyLinkProject('快捷键测试'), playbackSource: 'p1', rundown: [{ id: 'song', title: '歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'audio.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 3000 } }] });
   const file = info.outputPath('show.tblink'); await writeFile(file, JSON.stringify(project));
-  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
+  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   try {
     const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
@@ -62,7 +62,7 @@ test('灯光打点按钮、M 与快捷键修改', async ({}, info) => {
     expect(await playhead.evaluate(element => element.style.left)).toBe(playheadLeft);
     await rightClickCue.hover(); await page.mouse.wheel(0, -100);
     await expect.poll(() => rightClickCue.evaluate(element => parseFloat(element.style.left))).toBeCloseTo(cueLeft, 1);
-    await page.getByRole('button', { name: '取消选择', exact: true }).click();
+    await page.getByRole('button', { name: '新建 Cue', exact: true }).click();
     await page.locator('.waveform-lane').first().hover(); await page.mouse.wheel(0, 100);
     await expect.poll(() => playhead.evaluate(element => parseFloat(element.style.left))).toBeGreaterThan(parseFloat(playheadLeft));
     expect(await toolbar.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -70,6 +70,8 @@ test('灯光打点按钮、M 与快捷键修改', async ({}, info) => {
     const transportBox = (await page.locator('.timeline-transport').boundingBox())!;
     expect(Math.abs(toolbarBox.x + toolbarBox.width / 2 - transportBox.x - transportBox.width / 2)).toBeLessThan(1);
     await rightClickCue.click();
+    await expect(page.locator('.wavesurfer-surface').first()).toHaveAttribute('data-ready', 'true');
+    expect(await page.locator('.wavesurfer-surface').first().evaluate(element => element.clientHeight)).toBeGreaterThan(1);
     await page.locator('.reference-timeline').screenshot({ path: info.outputPath('cue-editor.png') });
     await page.screenshot({ path: info.outputPath('shortcuts.png') });
   } finally { await app.close(); }

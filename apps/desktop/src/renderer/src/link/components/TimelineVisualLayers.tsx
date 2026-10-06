@@ -4,6 +4,8 @@ import type { LinkCue, LinkMediaAsset, MtcFrameRate, ReferenceMediaClip, VisualL
 import { CueLane, TimelineClip, type TimelineDrag } from './TimelineItems';
 
 type Props = {
+  viewport: { left: number; width: number };
+  verticalViewport: { top: number; height: number; start: number; lightingIndex: number; lightingHeight: number };
   layers: VisualLayer[];
   clips: ReferenceMediaClip[];
   cues: LinkCue[];
@@ -42,9 +44,16 @@ type Props = {
 export function TimelineVisualLayers(props: Props): JSX.Element[] {
   return props.layers.map((layer, index) => {
     const draggingItem = props.drag?.moved === true && props.drag.originLayerId === layer.id;
+    const vertical = props.verticalViewport;
+    const rowTop = vertical.start + index * 50 + (index >= vertical.lightingIndex ? vertical.lightingHeight : 0);
+    const inView = rowTop + 50 >= vertical.top - 50 && rowTop <= vertical.top + vertical.height + 50;
+    // Keep the row and drop target in the grid. Only its offscreen contents are
+    // virtualized; a captured drag/resize or keyboard selection stays mounted.
     return <CueLane
     key={layer.id} order={100 + index * 100}
-    cues={props.cues.filter((cue) => cue.layerId === layer.id)}
+    viewport={props.viewport}
+    cues={props.cues.filter((cue) => cue.layerId === layer.id && (inView || cue.id === props.selectedCueId
+      || props.drag?.kind === 'cue' && props.drag.id === cue.id || props.cueResizeDrag?.id === cue.id))}
     frameRate={props.frameRate}
     selectedCueId={props.selectedCueId}
     device="all"
@@ -73,10 +82,15 @@ export function TimelineVisualLayers(props: Props): JSX.Element[] {
     onTrimPointerCancel={props.onCueTrimCancel}
   >
     <span className={`visual-layer-drop-state ${layer.locked ? 'is-locked' : ''}`} />
-    {props.clips.filter((clip) => clip.layerId === layer.id).map((clip) => {
+    {props.clips.filter((clip) => clip.layerId === layer.id && (inView || clip.id === props.selectedClipId
+      || props.drag?.kind === 'clip' && props.drag.id === clip.id || props.resizeDrag?.id === clip.id)).map((clip) => {
       const span = props.clipSpans.get(clip.id);
       if (!span) throw new Error(`时间线解析结果缺少素材片段：${clip.id}`);
       const itemDrag = props.drag?.kind === 'clip' && props.drag.id === clip.id ? props.drag : null;
+      const resizing = props.resizeDrag?.id === clip.id ? props.resizeDrag : null;
+      const left = (resizing?.previewStartMs ?? itemDrag?.previewMs ?? span.startMs) / 1000 * props.pixelsPerSecond;
+      const width = Math.max(8, (resizing?.previewDurationMs ?? span.durationMs) / 1000 * props.pixelsPerSecond);
+      if (!itemDrag && !resizing && props.selectedClipId !== clip.id && (left + width < props.viewport.left - 112 || left > props.viewport.left + props.viewport.width + 112)) return null;
       return <TimelineClip key={clip.id} clip={clip} asset={props.assets.get(clip.assetId)} resolvedStartMs={span.startMs} resolvedDurationMs={span.durationMs}
       frameRate={props.frameRate}
       pixelsPerSecond={props.pixelsPerSecond}

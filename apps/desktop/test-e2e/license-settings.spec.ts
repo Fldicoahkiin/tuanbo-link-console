@@ -26,7 +26,7 @@ for (const credential of ['missing', 'tampered'] as const) {
         const operations: Record<string, () => Promise<unknown>> = {
           output: () => window.tbLink.requireOutputLicense(),
           create: () => window.tbLink.createProject('未授权测试'),
-          open: () => window.tbLink.openProject('C:\\must-not-open.tblink'),
+          open: () => window.tbLink.openProjectDocument('C:\\must-not-open.tblink'),
           runtime: () => window.tbLink.setRuntimeActive(true),
           integrations: () => window.tbLink.detectLocalIntegrations(),
           update: () => window.tbLink.checkForUpdates()

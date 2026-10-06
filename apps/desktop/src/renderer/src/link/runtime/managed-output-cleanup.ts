@@ -1,5 +1,5 @@
 import type { CueActionRunner } from '@tb/core/link';
-import type { ManagedOutputCleanup, ManagedOutputRuntime } from './managed-output-runtime';
+import type { ManagedOutputCleanup, ManagedOutputRuntime } from '@tb/core/link';
 import { appendCueReport, appendMediaReport } from './runtime-report-store';
 
 type CleanupRuntime = Pick<ManagedOutputRuntime, 'executeMedia' | 'compileVisualCue' | 'applyVisualCueResult'>;

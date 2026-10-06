@@ -1,5 +1,7 @@
 import { ObsLiveEditor } from './obs-live-editor';
-import { selectObsAudioWindow } from './obs-audio-window';
+import { ObsBeauty } from './obs-beauty';
+import { ObsRequestScheduler } from './obs-request-scheduler';
+import { encodeObsAudioWindow, selectObsAudioWindow } from './obs-audio-window';
 import { ObsSourceManager } from './obs-source-manager';
 import { ObsMediaScenes } from './obs-media-scenes';
 import type { ObsEditorPreview } from './obs-editor-preview';
@@ -56,11 +58,14 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 2_000;
 export class ObsWebSocketAdapter implements LinkActionExecutor {
   readonly id = 'obs-websocket-5';
   readonly liveEditor: ObsLiveEditor;
+  readonly beauty: ObsBeauty;
   readonly sources: ObsSourceManager;
   readonly mediaScenes: ObsMediaScenes;
   private readonly client: OBSWebSocket;
+  private readonly requests: ObsRequestScheduler;
   private readonly listeners = new Set<StatusListener>();
   private readonly inventoryListeners = new Set<() => void>();
+  private readonly programListeners = new Set<() => void>();
   private snapshot: ObsConnectionSnapshot = {
     status: 'disconnected',
     obsVersion: null,
@@ -75,19 +80,30 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     readonly editorPreview?: ObsEditorPreview
   ) {
     this.client = client;
-    this.liveEditor = new ObsLiveEditor(client, (promise, label) => this.request(promise, label));
-    this.sources = new ObsSourceManager(client, (promise, label) => this.request(promise, label));
-    this.mediaScenes = new ObsMediaScenes(client, (promise, label) => this.request(promise, label));
+    this.requests = new ObsRequestScheduler(requestTimeoutMs, error => {
+      this.mediaScenes.clear(); this.editorPreview?.clear();
+      this.updateSnapshot({ status: 'error', error: error.message });
+    });
+    this.liveEditor = new ObsLiveEditor(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
+    this.beauty = new ObsBeauty(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
+    this.sources = new ObsSourceManager(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
+    this.mediaScenes = new ObsMediaScenes(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
+    this.client.on('CurrentProgramSceneChanged', event => {
+      this.mediaScenes.observeProgramScene(event.sceneName);
+      for (const listener of this.programListeners) listener();
+    });
     const inventoryChanged = (): void => { for (const listener of this.inventoryListeners) listener(); };
     for (const event of ['SceneCreated', 'SceneRemoved', 'SceneNameChanged', 'SceneListChanged', 'CurrentSceneCollectionChanged', 'InputCreated', 'InputRemoved', 'InputNameChanged', 'SceneItemCreated', 'SceneItemRemoved'] as const) {
       this.client.on(event, inventoryChanged);
     }
     this.client.on('ConnectionClosed', (error) => {
+      this.requests.invalidate(new Error(`OBS 连接已关闭：${error.message}`));
       this.mediaScenes.clear();
       this.editorPreview?.clear();
       this.updateSnapshot({ status: 'disconnected', error: error.message });
     });
     this.client.on('ConnectionError', (error) => {
+      this.requests.invalidate(new Error(`OBS 连接错误：${error.message}`));
       this.editorPreview?.clear();
       this.updateSnapshot({ status: 'error', error: error.message });
     });
@@ -101,6 +117,10 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     return { ...this.snapshot };
   }
 
+  getRequestDiagnostics(): { stats: ReturnType<ObsRequestScheduler['getStats']>; timings: ReturnType<ObsRequestScheduler['getTimings']> } {
+    return { stats: this.requests.getStats(), timings: this.requests.getTimings() };
+  }
+
   subscribe(listener: StatusListener): () => void {
     this.listeners.add(listener);
     listener(this.getSnapshot());
@@ -112,7 +132,13 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     return () => this.inventoryListeners.delete(listener);
   }
 
+  subscribeProgramScene(listener: () => void): () => void {
+    this.programListeners.add(listener);
+    return () => this.programListeners.delete(listener);
+  }
+
   async connect(url: string, password: string, timeoutMs = 10_000): Promise<ObsConnectionSnapshot> {
+    this.requests.invalidate(new Error('OBS 正在更换连接，旧请求已取消'));
     this.updateSnapshot({
       status: this.snapshot.status === 'disconnected' ? 'connecting' : 'reconnecting',
       error: null
@@ -121,6 +147,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       await withTimeout(this.client.connect(url, password, { rpcVersion: 1, eventSubscriptions: EventSubscription.All | EventSubscription.SceneItemTransformChanged }), timeoutMs, 'OBS WebSocket 连接');
       const version = await withTimeout(this.client.call('GetVersion'), this.requestTimeoutMs, 'OBS GetVersion 请求');
       this.editorPreview?.configure(url);
+      this.requests.connect();
       this.updateSnapshot({
         status: 'connected',
         obsVersion: version.obsVersion,
@@ -136,6 +163,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   }
 
   async disconnect(): Promise<void> {
+    this.requests.invalidate(new Error('OBS 已断开，旧请求已取消'));
     this.editorPreview?.clear();
     await this.client.disconnect();
     this.updateSnapshot({
@@ -146,7 +174,19 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     });
   }
 
-  async execute(action: LinkAction): Promise<void> {
+  execute(action: LinkAction): Promise<void> {
+    const urgent = action.kind === 'obs.mediaAction' && (action.action === 'stop' || action.action === 'pause');
+    return this.requests.run(urgent ? 'urgent' : 'control', () => this.executeAction(action));
+  }
+
+  guardPlaybackOperation<T>(canSend: () => boolean, operation: () => Promise<T>): Promise<T> {
+    return this.requests.guarded(canSend, operation);
+  }
+  preparePlaybackMedia<T>(operation: () => Promise<T>): Promise<T> {
+    return this.requests.run('background', operation);
+  }
+
+  private async executeAction(action: LinkAction): Promise<void> {
     if (!this.supports(action)) throw new Error(`OBS 适配器不支持 ${action.kind}`);
     if (this.snapshot.status !== 'connected') throw new Error('OBS WebSocket 尚未连接');
 
@@ -154,14 +194,15 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       case 'obs.setProgramScene':
         if (action.sceneLayers) { await this.mediaScenes.compose(action.sceneName, action.sceneLayers); return; }
         if (action.transition) {
-          await this.request(this.client.call('SetCurrentSceneTransition', { transitionName: action.transition.name }), 'SetCurrentSceneTransition');
-          const transition = await this.request(this.client.call('GetCurrentSceneTransition'), 'GetCurrentSceneTransition');
-          if (!transition.transitionFixed) await this.request(this.client.call('SetCurrentSceneTransitionDuration', { transitionDuration: action.transition.durationMs }), 'SetCurrentSceneTransitionDuration');
-          const override = await this.request(this.client.call('GetSceneSceneTransitionOverride', { sceneName: action.sceneName }), 'GetSceneSceneTransitionOverride');
+          const desiredTransition = action.transition;
+          await this.request(() => this.client.call('SetCurrentSceneTransition', { transitionName: desiredTransition.name }), 'SetCurrentSceneTransition');
+          const transition = await this.request(() => this.client.call('GetCurrentSceneTransition'), 'GetCurrentSceneTransition');
+          if (!transition.transitionFixed) await this.request(() => this.client.call('SetCurrentSceneTransitionDuration', { transitionDuration: desiredTransition.durationMs }), 'SetCurrentSceneTransitionDuration');
+          const override = await this.request(() => this.client.call('GetSceneSceneTransitionOverride', { sceneName: action.sceneName }), 'GetSceneSceneTransitionOverride');
           if (override.transitionName) {
-            await this.request(this.client.call('SetSceneSceneTransitionOverride', { sceneName: action.sceneName, transitionName: '', transitionDuration: 0 }), 'SetSceneSceneTransitionOverride');
+            await this.request(() => this.client.call('SetSceneSceneTransitionOverride', { sceneName: action.sceneName, transitionName: '', transitionDuration: 0 }), 'SetSceneSceneTransitionOverride');
             try { await this.mediaScenes.switchScene(action.sceneName); }
-            finally { await this.request(this.client.call('SetSceneSceneTransitionOverride', { sceneName: action.sceneName, transitionName: override.transitionName, transitionDuration: override.transitionDuration }), '恢复场景转场覆盖'); }
+            finally { await this.request(() => this.client.call('SetSceneSceneTransitionOverride', { sceneName: action.sceneName, transitionName: override.transitionName, transitionDuration: override.transitionDuration }), '恢复场景转场覆盖'); }
             return;
           }
         }
@@ -171,7 +212,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
         const sceneItemId = action.sceneName === MANAGED_OBS_SCENE_NAME
           ? await this.ensureManagedSceneItem(action.sourceName)
           : await this.getSceneItemId(action.sceneName, action.sourceName);
-        await this.request(this.client.call('SetSceneItemEnabled', {
+        await this.request(() => this.client.call('SetSceneItemEnabled', {
           sceneName: action.sceneName,
           sceneItemId,
           sceneItemEnabled: action.enabled
@@ -182,7 +223,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
         const sceneItemId = action.sceneName === MANAGED_OBS_SCENE_NAME
           ? await this.ensureManagedSceneItem(action.sourceName)
           : await this.getSceneItemId(action.sceneName, action.sourceName);
-        await this.request(this.client.call('SetSceneItemTransform', {
+        await this.request(() => this.client.call('SetSceneItemTransform', {
           sceneName: action.sceneName,
           sceneItemId,
           sceneItemTransform: {
@@ -204,7 +245,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
         const sceneItemId = action.sceneName === MANAGED_OBS_SCENE_NAME
           ? await this.ensureManagedSceneItem(action.sourceName)
           : await this.getSceneItemId(action.sceneName, action.sourceName);
-        await this.request(this.client.call('SetSceneItemIndex', {
+        await this.request(() => this.client.call('SetSceneItemIndex', {
           sceneName: action.sceneName,
           sceneItemId,
           sceneItemIndex: action.sceneItemIndex
@@ -212,28 +253,28 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
         return;
       }
       case 'obs.setSourceFilterEnabled':
-        await this.request(this.client.call('SetSourceFilterEnabled', {
+        await this.request(() => this.client.call('SetSourceFilterEnabled', {
           sourceName: action.sourceName,
           filterName: action.filterName,
           filterEnabled: action.enabled
         }), 'SetSourceFilterEnabled');
         return;
       case 'obs.setInputMute':
-        await this.request(this.client.call('SetInputMute', { inputName: action.inputName, inputMuted: action.muted }), 'SetInputMute');
+        await this.request(() => this.client.call('SetInputMute', { inputName: action.inputName, inputMuted: action.muted }), 'SetInputMute');
         return;
       case 'obs.setInputVolume':
-        await this.request(this.client.call('SetInputVolume', { inputName: action.inputName, inputVolumeDb: action.volumeDb }), 'SetInputVolume');
+        await this.request(() => this.client.call('SetInputVolume', { inputName: action.inputName, inputVolumeDb: action.volumeDb }), 'SetInputVolume');
         return;
       case 'obs.mediaAction':
-        await this.request(this.client.call('TriggerMediaInputAction', {
+        await this.request(() => this.client.call('TriggerMediaInputAction', {
           inputName: action.inputName,
           mediaAction: MEDIA_ACTIONS[action.action]
         }), 'TriggerMediaInputAction');
         return;
       case 'obs.setTransition':
-        await this.request(this.client.call('SetCurrentSceneTransition', { transitionName: action.transitionName }), 'SetCurrentSceneTransition');
+        await this.request(() => this.client.call('SetCurrentSceneTransition', { transitionName: action.transitionName }), 'SetCurrentSceneTransition');
         if (action.durationMs > 0) {
-          await this.request(this.client.call('SetCurrentSceneTransitionDuration', { transitionDuration: action.durationMs }), 'SetCurrentSceneTransitionDuration');
+          await this.request(() => this.client.call('SetCurrentSceneTransitionDuration', { transitionDuration: action.durationMs }), 'SetCurrentSceneTransitionDuration');
         }
         return;
       case 'obs.saveSourceScreenshot':
@@ -248,14 +289,18 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     }
   }
 
-  async executeManagedMediaEvent(event: ManagedMediaEvent, absolutePath: string): Promise<void> {
+  executeManagedMediaEvent(event: ManagedMediaEvent, absolutePath: string): Promise<void> {
+    return this.requests.run(event.phase === 'stop' ? 'urgent' : 'control', () => this.executeMedia(event, absolutePath));
+  }
+
+  private async executeMedia(event: ManagedMediaEvent, absolutePath: string): Promise<void> {
     this.assertConnected();
     if (event.sceneName) return this.mediaScenes.execute(event, absolutePath);
     if (event.phase === 'stop') {
       const errors: unknown[] = [];
       if (event.assetKind === 'video') {
         try {
-          await this.request(this.client.call('TriggerMediaInputAction', {
+          await this.request(() => this.client.call('TriggerMediaInputAction', {
             inputName: event.sourceName,
             mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP'
           }), 'TriggerMediaInputAction');
@@ -265,7 +310,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       }
       try {
         const sceneItemId = await this.getSceneItemId(MANAGED_OBS_SCENE_NAME, event.sourceName);
-        await this.request(this.client.call('SetSceneItemEnabled', {
+        await this.request(() => this.client.call('SetSceneItemEnabled', {
           sceneName: MANAGED_OBS_SCENE_NAME,
           sceneItemId,
           sceneItemEnabled: false
@@ -284,8 +329,8 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     await this.ensureManagedScene();
     const sceneItemId = await this.ensureManagedInput(event, absolutePath);
     try {
-      const video = await this.request(this.client.call('GetVideoSettings'), 'GetVideoSettings');
-      await this.request(this.client.call('SetSceneItemTransform', {
+      const video = await this.request(() => this.client.call('GetVideoSettings'), 'GetVideoSettings');
+      await this.request(() => this.client.call('SetSceneItemTransform', {
         sceneName: MANAGED_OBS_SCENE_NAME,
         sceneItemId,
         sceneItemTransform: {
@@ -297,34 +342,34 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
           alignment: 0
         }
       }), 'SetSceneItemTransform');
-      await this.request(this.client.call('SetSceneItemIndex', {
+      await this.request(() => this.client.call('SetSceneItemIndex', {
         sceneName: MANAGED_OBS_SCENE_NAME,
         sceneItemId,
         sceneItemIndex: Math.max(0, event.layerCount - event.layerIndex - 1)
       }), 'SetSceneItemIndex');
       if (event.assetKind === 'video') {
-        await this.request(this.client.call('SetInputMute', {
+        await this.request(() => this.client.call('SetInputMute', {
           inputName: event.sourceName,
           inputMuted: !event.embeddedAudioEnabled
         }), 'SetInputMute');
       }
       if (event.assetKind === 'video') {
-        await this.request(this.client.call('SetSceneItemEnabled', {
+        await this.request(() => this.client.call('SetSceneItemEnabled', {
           sceneName: MANAGED_OBS_SCENE_NAME, sceneItemId, sceneItemEnabled: true
         }), 'SetSceneItemEnabled');
-        await this.request(this.client.call('TriggerMediaInputAction', {
+        await this.request(() => this.client.call('TriggerMediaInputAction', {
           inputName: event.sourceName,
           mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART'
         }), 'TriggerMediaInputAction');
         if (event.sourceOffsetMs > 0) {
           await this.waitForMediaPlayback(event.sourceName);
-          await this.request(this.client.call('SetMediaInputCursor', {
+          await this.request(() => this.client.call('SetMediaInputCursor', {
             inputName: event.sourceName,
             mediaCursor: event.sourceOffsetMs
           }), 'SetMediaInputCursor');
         }
       }
-      await this.request(this.client.call('SetSceneItemEnabled', {
+      await this.request(() => this.client.call('SetSceneItemEnabled', {
         sceneName: MANAGED_OBS_SCENE_NAME,
         sceneItemId,
         sceneItemEnabled: true
@@ -340,80 +385,94 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     }
   }
 
-  async activateManagedOutput(): Promise<void> {
+  activateManagedOutput(): Promise<void> {
+    return this.requests.run('control', () => this.activateOutput());
+  }
+
+  private async activateOutput(): Promise<void> {
     this.assertConnected();
     await this.ensureManagedScene();
-    await this.request(this.client.call('SetCurrentProgramScene', { sceneName: MANAGED_OBS_SCENE_NAME }), 'SetCurrentProgramScene');
-    const current = await this.request(this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
+    await this.request(() => this.client.call('SetCurrentProgramScene', { sceneName: MANAGED_OBS_SCENE_NAME }), 'SetCurrentProgramScene');
+    const current = await this.request(() => this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
     if (current.currentProgramSceneName !== MANAGED_OBS_SCENE_NAME) {
       throw new Error(`OBS 未切换到受管输出场景：当前为 ${current.currentProgramSceneName ?? '未知场景'}`);
     }
   }
 
-  async setInternalAudioCapture(enabled: boolean, executable: string, title: string, audioDeviceId = 'default', sceneNames?: string[]): Promise<void> {
+  setInternalAudioCapture(enabled: boolean, executable: string, title: string, audioDeviceId = 'default', sceneNames?: string[], windowClass?: string): Promise<void> {
+    return this.requests.run(enabled ? 'control' : 'urgent', () => this.configureAudioCapture(enabled, executable, title, audioDeviceId, sceneNames, windowClass));
+  }
+
+  private async configureAudioCapture(enabled: boolean, executable: string, title: string, audioDeviceId: string, sceneNames?: string[], windowClass?: string): Promise<void> {
     this.assertConnected();
     if (enabled && await this.hasDefaultDesktopAudio(audioDeviceId)) {
       await this.setInternalAudioCapture(false, executable, title, audioDeviceId);
       return;
     }
     const name = '团播联动台·内部正式音频';
-    const inputs = await this.request(this.client.call('GetInputList'), 'GetInputList');
+    const inputs = await this.request(() => this.client.call('GetInputList'), 'GetInputList');
     const kind = collectNameValueMap(inputs.inputs, 'inputName', 'inputKind')[name];
     if (!enabled && kind === undefined) return;
     if (kind !== undefined && kind !== 'wasapi_process_output_capture') throw new Error('内部音频来源名称被其他类型来源占用');
     await this.ensureManagedScene();
+    const initialWindow = windowClass ? encodeObsAudioWindow(executable, title, windowClass) : null;
     if (kind === undefined) {
-      const kinds = await this.request(this.client.call('GetInputKindList'), 'GetInputKindList');
+      const kinds = await this.request(() => this.client.call('GetInputKindList'), 'GetInputKindList');
       if (!kinds.inputKinds.includes('wasapi_process_output_capture')) throw new Error('当前 OBS/Windows 不支持应用音频采集，内部正式音频尚不能接入 OBS');
-      await this.request(this.client.call('CreateInput', { sceneName: MANAGED_OBS_SCENE_NAME, inputName: name,
-        inputKind: 'wasapi_process_output_capture', inputSettings: {}, sceneItemEnabled: false }), 'CreateInput');
+      await this.request(() => this.client.call('CreateInput', { sceneName: MANAGED_OBS_SCENE_NAME, inputName: name,
+        inputKind: 'wasapi_process_output_capture', inputSettings: initialWindow ? { window: initialWindow, priority: 0 } : {}, sceneItemEnabled: false }), 'CreateInput');
     }
     const sceneItemId = await this.ensureManagedSceneItem(name);
     if (enabled) {
-      const properties = await this.request(this.client.call('GetInputPropertiesListPropertyItems', {
+      const properties = await this.request(() => this.client.call('GetInputPropertiesListPropertyItems', {
         inputName: name, propertyName: 'window'
       }), 'GetInputPropertiesListPropertyItems');
       const windowValue = selectObsAudioWindow(properties.propertyItems, executable, title);
-      await this.request(this.client.call('SetInputSettings', { inputName: name,
-        inputSettings: { window: windowValue, priority: 0 }, overlay: false }), 'SetInputSettings');
-      await this.request(this.client.call('SetInputAudioMonitorType', {
+      if (initialWindow && windowValue !== initialWindow) throw new Error('OBS 采集窗口与正式音频进程握手身份不一致');
+      const settings = kind === undefined ? { window: initialWindow, priority: 0 }
+        : (await this.request(() => this.client.call('GetInputSettings', { inputName: name }), 'GetInputSettings')).inputSettings;
+      if (settings.window !== windowValue || settings.priority !== 0) {
+        await this.request(() => this.client.call('SetInputSettings', { inputName: name,
+          inputSettings: { window: windowValue, priority: 0 }, overlay: false }), 'SetInputSettings');
+      }
+      await this.request(() => this.client.call('SetInputAudioMonitorType', {
         inputName: name, monitorType: 'OBS_MONITORING_TYPE_NONE'
       }), 'SetInputAudioMonitorType');
-      await this.request(this.client.call('SetInputVolume', { inputName: name, inputVolumeMul: 1 }), 'SetInputVolume');
+      await this.request(() => this.client.call('SetInputVolume', { inputName: name, inputVolumeMul: 1 }), 'SetInputVolume');
     }
-    await this.request(this.client.call('SetInputMute', { inputName: name, inputMuted: !enabled }), 'SetInputMute');
-    await this.request(this.client.call('SetSceneItemEnabled', { sceneName: MANAGED_OBS_SCENE_NAME,
+    await this.request(() => this.client.call('SetInputMute', { inputName: name, inputMuted: !enabled }), 'SetInputMute');
+    await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName: MANAGED_OBS_SCENE_NAME,
       sceneItemId, sceneItemEnabled: enabled }), 'SetSceneItemEnabled');
     // Scene playback adds only our dedicated audio input; existing visual items and filters are untouched.
     if (enabled && sceneNames) {
-      const current = await this.request(this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
+      const current = await this.request(() => this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
       const targets = new Set([...sceneNames, current.currentProgramSceneName]);
       targets.delete(MANAGED_OBS_SCENE_NAME);
       for (const sceneName of targets) {
-        const items = await this.request(this.client.call('GetSceneItemList', { sceneName }), 'GetSceneItemList');
+        const items = await this.request(() => this.client.call('GetSceneItemList', { sceneName }), 'GetSceneItemList');
         if (!collectNames(items.sceneItems, 'sourceName').includes(name)) {
-          await this.request(this.client.call('CreateSceneItem', { sceneName, sourceName: name, sceneItemEnabled: true }), 'CreateSceneItem');
+          await this.request(() => this.client.call('CreateSceneItem', { sceneName, sourceName: name, sceneItemEnabled: true }), 'CreateSceneItem');
         } else {
           const id = await this.getSceneItemId(sceneName, name);
-          await this.request(this.client.call('SetSceneItemEnabled', { sceneName, sceneItemId: id, sceneItemEnabled: true }), 'SetSceneItemEnabled');
+          await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName, sceneItemId: id, sceneItemEnabled: true }), 'SetSceneItemEnabled');
         }
       }
     }
   }
 
   private async hasDefaultDesktopAudio(audioDeviceId: string): Promise<boolean> {
-    const special = await this.request(this.client.call('GetSpecialInputs'), 'GetSpecialInputs');
+    const special = await this.request(() => this.client.call('GetSpecialInputs'), 'GetSpecialInputs');
     const names = [special.desktop1, special.desktop2].filter((name): name is string => typeof name === 'string' && name.length > 0);
     let matched = 0;
     for (const inputName of names) {
-      const muted = await this.request(this.client.call('GetInputMute', { inputName }), 'GetInputMute');
-      const volume = await this.request(this.client.call('GetInputVolume', { inputName }), 'GetInputVolume');
+      const muted = await this.request(() => this.client.call('GetInputMute', { inputName }), 'GetInputMute');
+      const volume = await this.request(() => this.client.call('GetInputVolume', { inputName }), 'GetInputVolume');
       if (muted.inputMuted || volume.inputVolumeMul === 0) continue;
-      const settings = await this.request(this.client.call('GetInputSettings', { inputName }), 'GetInputSettings');
+      const settings = await this.request(() => this.client.call('GetInputSettings', { inputName }), 'GetInputSettings');
       if (audioDeviceId !== 'default' || settings.inputSettings.device_id !== 'default') {
         throw new Error('OBS 已启用桌面音频，但其设备与音乐输出无法确认一致。请先在 OBS 停用桌面音频，或将两端播放设备设为默认，避免重复收音');
       }
-      const tracks = await this.request(this.client.call('GetInputAudioTracks', { inputName }), 'GetInputAudioTracks');
+      const tracks = await this.request(() => this.client.call('GetInputAudioTracks', { inputName }), 'GetInputAudioTracks');
       if (tracks.inputAudioTracks['1'] !== true) throw new Error('OBS 桌面音频未送入音轨 1，无法保证正式音乐输出');
       matched += 1;
     }
@@ -424,7 +483,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   private async waitForMediaPlayback(inputName: string): Promise<void> {
     const deadline = Date.now() + this.requestTimeoutMs;
     do {
-      const status = await this.request(this.client.call('GetMediaInputStatus', { inputName }), 'GetMediaInputStatus');
+      const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName }), 'GetMediaInputStatus');
       if (status.mediaState === 'OBS_MEDIA_STATE_PLAYING' || status.mediaState === 'OBS_MEDIA_STATE_PAUSED') return;
       if (status.mediaState === 'OBS_MEDIA_STATE_ERROR') throw new Error(`OBS 无法解码媒体：${inputName}`);
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
@@ -432,13 +491,17 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     throw new Error(`OBS 媒体未在 ${this.requestTimeoutMs}ms 内进入可定位状态：${inputName}`);
   }
 
-  async readInventory(): Promise<ObsInventory> {
+  readInventory(details?: { scenes: ReadonlySet<string> | null; inputs: ReadonlySet<string> }): Promise<ObsInventory> {
+    return this.requests.run('background', () => this.readInventoryInSession(details));
+  }
+
+  private async readInventoryInSession(details?: { scenes: ReadonlySet<string> | null; inputs: ReadonlySet<string> }): Promise<ObsInventory> {
     this.assertConnected();
     const [sceneResponse, inputResponse, transitionResponse, videoResponse] = await Promise.all([
-      this.request(this.client.call('GetSceneList'), 'GetSceneList'),
-      this.request(this.client.call('GetInputList'), 'GetInputList'),
-      this.request(this.client.call('GetSceneTransitionList'), 'GetSceneTransitionList'),
-      this.request(this.client.call('GetVideoSettings'), 'GetVideoSettings')
+      this.request(() => this.client.call('GetSceneList'), 'GetSceneList'),
+      this.request(() => this.client.call('GetInputList'), 'GetInputList'),
+      this.request(() => this.client.call('GetSceneTransitionList'), 'GetSceneTransitionList'),
+      this.request(() => this.client.call('GetVideoSettings'), 'GetVideoSettings')
     ]);
     const scenes = collectNames(sceneResponse.scenes, 'sceneName');
     const inputs = collectNames(inputResponse.inputs, 'inputName');
@@ -451,48 +514,49 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     const filters: Record<string, string[]> = {};
 
     const pendingGroups = new Set<string>();
-    await Promise.all(scenes.map(async (sceneName) => {
-      const response = await this.request(this.client.call('GetSceneItemList', { sceneName }), 'GetSceneItemList');
+    await forEachBounded(details?.scenes ? scenes.filter(name => details.scenes!.has(name)) : scenes, async (sceneName) => {
+      const response = await this.request(() => this.client.call('GetSceneItemList', { sceneName }), 'GetSceneItemList');
       sceneItems[sceneName] = collectNames(response.sceneItems, 'sourceName');
       sceneItemTransforms[sceneName] = collectSceneItemTransforms(response.sceneItems);
       for (const groupName of collectNamesWhere(response.sceneItems, 'sourceName', 'isGroup')) pendingGroups.add(groupName);
-    }));
+    });
     const visitedGroups = new Set<string>();
     while (pendingGroups.size > 0) {
       const groupNames = [...pendingGroups].filter((groupName) => !visitedGroups.has(groupName));
       pendingGroups.clear();
       if (groupNames.length === 0) break;
-      await Promise.all(groupNames.map(async (groupName) => {
+      await forEachBounded(groupNames, async (groupName) => {
         visitedGroups.add(groupName);
-        const response = await this.request(this.client.call('GetGroupSceneItemList', { sceneName: groupName }), 'GetGroupSceneItemList');
+        const response = await this.request(() => this.client.call('GetGroupSceneItemList', { sceneName: groupName }), 'GetGroupSceneItemList');
         sceneItems[groupName] = collectNames(response.sceneItems, 'sourceName');
         sceneItemTransforms[groupName] = collectSceneItemTransforms(response.sceneItems);
         for (const nestedGroupName of collectNamesWhere(response.sceneItems, 'sourceName', 'isGroup')) {
           if (!visitedGroups.has(nestedGroupName)) pendingGroups.add(nestedGroupName);
         }
-      }));
+      });
     }
-    const monitorInputs = inputs.filter((inputName) => inputKinds[inputName] === 'monitor_capture');
+    const detailInputs = details ? inputs.filter(name => details.inputs.has(name)) : inputs;
+    const monitorInputs = detailInputs.filter((inputName) => inputKinds[inputName] === 'monitor_capture');
     const monitorResponse = monitorInputs.length > 0
-      ? await this.request(this.client.call('GetMonitorList'), 'GetMonitorList')
+      ? await this.request(() => this.client.call('GetMonitorList'), 'GetMonitorList')
       : null;
-    await Promise.all(inputs.map(async (inputName) => {
-      const response = await this.request(this.client.call('GetSourceFilterList', { sourceName: inputName }), 'GetSourceFilterList');
+    await forEachBounded(detailInputs, async (inputName) => {
+      const response = await this.request(() => this.client.call('GetSourceFilterList', { sourceName: inputName }), 'GetSourceFilterList');
       filters[inputName] = collectNames(response.filters, 'filterName');
       if (inputKinds[inputName] === 'monitor_capture' && monitorResponse) {
         const [settings, properties] = await Promise.all([
-          this.request(this.client.call('GetInputSettings', { inputName }), 'GetInputSettings'),
-          this.request(this.client.call('GetInputPropertiesListPropertyItems', { inputName, propertyName: 'monitor_id' }), 'GetInputPropertiesListPropertyItems')
+          this.request(() => this.client.call('GetInputSettings', { inputName }), 'GetInputSettings'),
+          this.request(() => this.client.call('GetInputPropertiesListPropertyItems', { inputName, propertyName: 'monitor_id' }), 'GetInputPropertiesListPropertyItems')
         ]);
         sourceSizes[inputName] = resolveMonitorCaptureSize(inputName, settings.inputSettings, properties.propertyItems, monitorResponse.monitors);
       }
       try {
-        const audio = await this.request(this.client.call('GetInputMute', { inputName }), 'GetInputMute');
+        const audio = await this.request(() => this.client.call('GetInputMute', { inputName }), 'GetInputMute');
         inputAudioStates[inputName] = { supported: true, muted: audio.inputMuted, error: null };
       } catch (error) {
         inputAudioStates[inputName] = { supported: false, muted: null, error: toErrorMessage(error) };
       }
-    }));
+    });
 
     return {
       scenes,
@@ -509,16 +573,20 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     };
   }
 
-  async getSourceScreenshot(sourceName: string, width?: number, height?: number): Promise<string> {
+  getSourceScreenshot(sourceName: string, width?: number, height?: number): Promise<string> {
+    return this.requests.run('preview', () => this.readSourceScreenshot(sourceName, width, height));
+  }
+
+  private async readSourceScreenshot(sourceName: string, width?: number, height?: number): Promise<string> {
     this.assertConnected();
     if (this.editorPreview) {
-      const scenes = await this.request(this.client.call('GetSceneList'), '读取预览场景');
+      const scenes = await this.request(() => this.client.call('GetSceneList'), '读取预览场景');
       if (scenes.scenes.some((scene) => scene.sceneName === sourceName)) {
         await this.touchScenePreview(sourceName, false, new Set());
       } else await this.editorPreview.touch(sourceName);
     }
     this.assertConnected();
-    const response = await this.request(this.client.call('GetSourceScreenshot', {
+    const response = await this.request(() => this.client.call('GetSourceScreenshot', {
       sourceName,
       imageFormat: 'png',
       ...(width === undefined || height === undefined ? {} : { imageWidth: width, imageHeight: height })
@@ -530,7 +598,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   private async touchScenePreview(sceneName: string, group: boolean, visited: Set<string>): Promise<void> {
     if (visited.has(sceneName)) return;
     visited.add(sceneName);
-    const result = await this.request(group
+    const result = await this.request(() => group
       ? this.client.call('GetGroupSceneItemList', { sceneName })
       : this.client.call('GetSceneItemList', { sceneName }), '读取场景预览来源');
     for (const item of result.sceneItems) {
@@ -541,25 +609,29 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     }
   }
 
-  async readOutputStatus(): Promise<ObsOutputStatus> {
+  readOutputStatus(): Promise<ObsOutputStatus> {
+    return this.requests.run('background', () => this.readOutputStatusInSession());
+  }
+
+  private async readOutputStatusInSession(): Promise<ObsOutputStatus> {
     this.assertConnected();
     const [stream, record] = await Promise.all([
-      this.request(this.client.call('GetStreamStatus'), 'GetStreamStatus'),
-      this.request(this.client.call('GetRecordStatus'), 'GetRecordStatus')
+      this.request(() => this.client.call('GetStreamStatus'), 'GetStreamStatus'),
+      this.request(() => this.client.call('GetRecordStatus'), 'GetRecordStatus')
     ]);
     return { streaming: stream.outputActive, recording: record.outputActive };
   }
 
   private async getSceneItemId(sceneName: string, sourceName: string): Promise<number> {
-    const response = await this.request(this.client.call('GetSceneItemId', { sceneName, sourceName }), 'GetSceneItemId');
+    const response = await this.request(() => this.client.call('GetSceneItemId', { sceneName, sourceName }), 'GetSceneItemId');
     return response.sceneItemId;
   }
 
   private async ensureManagedScene(): Promise<void> {
-    const response = await this.request(this.client.call('GetSceneList'), 'GetSceneList');
+    const response = await this.request(() => this.client.call('GetSceneList'), 'GetSceneList');
     const names = collectNames(response.scenes, 'sceneName');
     if (names.includes(MANAGED_OBS_SCENE_NAME)) return;
-    await this.request(this.client.call('CreateScene', { sceneName: MANAGED_OBS_SCENE_NAME }), 'CreateScene');
+    await this.request(() => this.client.call('CreateScene', { sceneName: MANAGED_OBS_SCENE_NAME }), 'CreateScene');
   }
 
   private async ensureManagedInput(event: ManagedMediaEvent, absolutePath: string): Promise<number> {
@@ -574,14 +646,14 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
           clear_on_media_end: true
         }
       : { file: absolutePath, unload: false };
-    const response = await this.request(this.client.call('GetInputList'), 'GetInputList');
+    const response = await this.request(() => this.client.call('GetInputList'), 'GetInputList');
     const kinds = collectNameValueMap(response.inputs, 'inputName', 'inputKind');
     const existingKind = kinds[event.sourceName];
     if (existingKind !== undefined && existingKind !== expectedKind) {
       throw new Error(`OBS 受管来源名称冲突：${event.sourceName} 已是 ${existingKind}，预期 ${expectedKind}`);
     }
     if (existingKind === undefined) {
-      const created = await this.request(this.client.call('CreateInput', {
+      const created = await this.request(() => this.client.call('CreateInput', {
         sceneName: MANAGED_OBS_SCENE_NAME,
         inputName: event.sourceName,
         inputKind: expectedKind,
@@ -590,7 +662,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       }), 'CreateInput');
       return created.sceneItemId;
     }
-    await this.request(this.client.call('SetInputSettings', {
+    await this.request(() => this.client.call('SetInputSettings', {
       inputName: event.sourceName,
       inputSettings: settings,
       overlay: false
@@ -598,7 +670,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     try {
       return await this.getSceneItemId(MANAGED_OBS_SCENE_NAME, event.sourceName);
     } catch (error) {
-      const created = await this.request(this.client.call('CreateSceneItem', {
+      const created = await this.request(() => this.client.call('CreateSceneItem', {
         sceneName: MANAGED_OBS_SCENE_NAME,
         sourceName: event.sourceName,
         sceneItemEnabled: false
@@ -610,11 +682,11 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
 
   private async ensureManagedSceneItem(sourceName: string): Promise<number> {
     await this.ensureManagedScene();
-    const response = await this.request(this.client.call('GetSceneItemList', { sceneName: MANAGED_OBS_SCENE_NAME }), 'GetSceneItemList');
+    const response = await this.request(() => this.client.call('GetSceneItemList', { sceneName: MANAGED_OBS_SCENE_NAME }), 'GetSceneItemList');
     if (collectNames(response.sceneItems, 'sourceName').includes(sourceName)) {
       return this.getSceneItemId(MANAGED_OBS_SCENE_NAME, sourceName);
     }
-    const created = await this.request(this.client.call('CreateSceneItem', {
+    const created = await this.request(() => this.client.call('CreateSceneItem', {
       sceneName: MANAGED_OBS_SCENE_NAME,
       sourceName,
       sceneItemEnabled: false
@@ -626,7 +698,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     const errors: unknown[] = [];
     if (event.assetKind === 'video') {
       try {
-        await this.request(this.client.call('TriggerMediaInputAction', {
+        await this.request(() => this.client.call('TriggerMediaInputAction', {
           inputName: event.sourceName,
           mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP'
         }), 'TriggerMediaInputAction');
@@ -635,7 +707,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       }
     }
     try {
-      await this.request(this.client.call('SetSceneItemEnabled', {
+      await this.request(() => this.client.call('SetSceneItemEnabled', {
         sceneName: MANAGED_OBS_SCENE_NAME,
         sceneItemId,
         sceneItemEnabled: false
@@ -654,15 +726,15 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       : extension === '.bmp' ? 'bmp' : extension === '.png' ? 'png' : null;
     if (imageFormat === null) throw new Error('截图只支持 .png、.jpg、.jpeg 或 .bmp');
     await mkdir(this.screenshotsDirectory, { recursive: true });
-    await this.request(this.client.call('SaveSourceScreenshot', {
+    await this.request(() => this.client.call('SaveSourceScreenshot', {
       sourceName,
       imageFormat,
       imageFilePath: join(this.screenshotsDirectory, fileName)
     }), 'SaveSourceScreenshot');
   }
 
-  private request<T>(promise: Promise<T>, requestName: string): Promise<T> {
-    return withTimeout(promise, this.requestTimeoutMs, `OBS ${requestName} 请求`);
+  private request<T>(operation: () => Promise<T>, requestName: string): Promise<T> {
+    return this.requests.request(operation, requestName);
   }
 
   private assertConnected(): void {
@@ -769,6 +841,17 @@ function resolveMonitorCaptureSize(
     throw new Error(`OBS 显示器采集“${inputName}”无法对应到有效显示器尺寸`);
   }
   return { width: monitor.monitorWidth, height: monitor.monitorHeight };
+}
+
+async function forEachBounded<T>(values: T[], action: (value: T) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  let failed = false;
+  await Promise.all(Array.from({ length: Math.min(4, values.length) }, async () => {
+    while (cursor < values.length && !failed) {
+      const value = values[cursor++]!;
+      try { await action(value); } catch (error) { failed = true; throw error; }
+    }
+  }));
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {

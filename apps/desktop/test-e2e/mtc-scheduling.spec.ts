@@ -56,21 +56,29 @@ test('无 MA2 网线时按原偏移发 MTC；长时阻塞只停止发码，音�
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.send('link:obs-status', { status: 'connected', obsVersion: '32.2.2', webSocketVersion: '5.6.3', error: null }));
     await page.getByRole('button', { name: '播放时间线', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
+    await page.locator('.player-diagnostics > summary').click();
     await expect(page.getByText(/本地序列池 Cue 不会单独发送/).first()).toBeVisible();
     const audioPosition = (): Promise<number> => page.evaluate(() => (Reflect.get(window, '__schedulingAudio') as HTMLMediaElement | undefined)?.currentTime ?? 0);
     try { await expect.poll(audioPosition).toBeGreaterThan(0.3); }
     catch (error) { await writeFile(info.outputPath('playback-state.txt'), await page.locator('body').innerText()); throw error; }
     const position = await audioPosition();
     await page.evaluate(() => { const until = performance.now() + 200; while (performance.now() < until) { /* Simulate a busy renderer, with audio continuing independently. */ } });
-    await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__schedulingMessages') as number[][]).filter(bytes => bytes[0] === 0xf0).length)).toBeGreaterThan(1);
+    await expect(page.getByText(/MIDI 时间码已停止.*音频继续播放/).first()).toBeVisible();
+    const sentAfterStall = await page.evaluate(() => (Reflect.get(window, '__schedulingMessages') as number[][]).length);
+    expect(await page.evaluate(() => (Reflect.get(window, '__schedulingMessages') as number[][]).filter(bytes => bytes[0] === 0xf0).length)).toBe(1);
     await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__schedulingMessages') as number[][]).find(bytes => bytes[0] === 0xf0)?.slice(5, 9))).toEqual([0x60, 8, 0, 0]);
     expect(await app.evaluate(() => process.env.TBLINK_OFFLINE_NETWORK_CALLS)).toBe('0');
     await expect.poll(audioPosition).toBeGreaterThan(position + 0.5);
+    expect(await page.evaluate(() => (Reflect.get(window, '__schedulingMessages') as number[][]).length)).toBe(sentAfterStall);
     await expect(page.getByText('MIDI 时间码发送延迟超过 100ms，已停止播放', { exact: true })).toHaveCount(0);
-    await page.evaluate(() => { const until = performance.now() + 650; while (performance.now() < until) { /* Verify the long interruption guard still stops playback. */ } });
+    await page.evaluate(() => { const until = performance.now() + 650; while (performance.now() < until) { /* A further stall must neither restart MIDI nor stop independent audio. */ } });
     await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__schedulingAudio') as HTMLMediaElement | undefined)?.paused)).toBe(false);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
+    await page.locator('.player-diagnostics > summary').click();
     await expect(page.getByText(/MIDI 时间码已停止.*音频继续播放/).first()).toBeVisible();
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
-  } finally { await app.close(); }
+  } finally {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setRuntimeActive(false).then(() => window.tbLink.setDocumentDirty(false))'));
+    await app.close();
+  }
 });

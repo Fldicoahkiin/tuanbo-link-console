@@ -115,18 +115,16 @@ describe('Electron 原生 MIDI 时间码输出', () => {
     output.tick(63_000, '30', 3000);
     expect(send.mock.calls.at(-2)?.[0]).toEqual([240, 127, 127, 1, 1, 96, 1, 3, 0, 247]);
   });
-  it.each(['24', '25', '29.97df', '30'] as const)('%s fps 短暂调度延迟按真实音频重定位，不补发过期半帧', async rate => {
+  it.each(['24', '25', '29.97df', '30'] as const)('%s fps 超过一帧停止输出，不补发、不自动重定位', async rate => {
     const send = vi.fn();
     vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
     const output = new MediaMtcOutput(); await output.connect('MA2'); output.tick(0, rate, 0); output.tick(16, rate, 16);
     send.mockClear();
-    expect(output.tick(216, rate, 216)).toBe(true);
-    expect(send.mock.calls).toHaveLength(1); expect(send.mock.calls[0]?.[0]?.[0]).toBe(0xf0);
-    expect(output.takeSchedulingNotice()).toContain('200ms'); expect(output.takeSchedulingNotice()).toBeNull();
-    for (let now = 224; now < 400; now += 8) output.tick(now, rate, now);
-    const pieces = send.mock.calls.filter(([message]) => message[0] === 0xf1).map(([message]) => message[1] >> 4);
-    expect(pieces.length).toBeGreaterThan(8);
-    expect(pieces.every((piece, index) => piece === index % 8)).toBe(true);
+    expect(() => output.tick(80, rate, 80)).toThrow('超过一帧');
+    expect(send).not.toHaveBeenCalled();
+    expect(output.takeSchedulingNotice()).toBeNull();
+    output.stop(); output.tick(80, rate, 80);
+    expect(send.mock.calls[0]?.[0]?.[0]).toBe(0xf0);
   });
   it.each([[600, 600], [2000, 200], [0, 200]])('长时间中断或音频跳变仍阻断：位置 %s / 时钟 %s', async (position, now) => {
     const send = vi.fn();

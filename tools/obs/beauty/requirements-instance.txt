@@ -1,0 +1,3 @@
+# Explicit experimental worker only; install after requirements.lock.txt.
+openvino==2024.6.0
+openvino-telemetry==2025.2.0

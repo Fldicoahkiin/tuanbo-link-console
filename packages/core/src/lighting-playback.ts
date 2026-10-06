@@ -132,7 +132,7 @@ export class LightingScheduler {
   private release(): void {
     const failures: unknown[] = [];
     for (const [key, active] of this.active) {
-      try { this.send({ ...active.packet, phase: 'off', bytes: [0x80 | ((active.packet.bytes[0] ?? 0) & 15), active.packet.bytes[1] ?? 0, 0] }); this.active.delete(key); }
+      try { this.send({ ...active.packet, atMs: this.previousMs ?? active.packet.atMs, phase: 'off', bytes: [0x80 | ((active.packet.bytes[0] ?? 0) & 15), active.packet.bytes[1] ?? 0, 0] }); this.active.delete(key); }
       catch (error) { failures.push(error); }
     }
     if (failures.length) throw new AggregateError(failures, '灯光音符释放失败');

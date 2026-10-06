@@ -1,7 +1,6 @@
-import { sceneBoundaryWork } from './scene-output-timeline';
 import {
   CueActionRunner,
-  CueRuntime, MtcQuarterFrameDecoder, timecodeToFrameNumber,
+  CueRuntime, MtcQuarterFrameDecoder,
   type ManagedMediaEvent, type MtcSample, type PreflightReport, type RuntimeUpdate
 } from '@tb/core/link';
 import type { LinkAction, LinkCue, LinkProject } from '@tb/schema';
@@ -10,29 +9,29 @@ import { P1LightingOutput } from './p1-lighting-output';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
-import { collectManagedOutputCleanupAfter, ManagedMediaExecutionError, ManagedOutputRuntime } from './managed-output-runtime';
+import { collectManagedOutputCleanupAfter, ManagedOutputRuntime } from '@tb/core/link';
 import { executeManagedOutputCleanup } from './managed-output-cleanup';
 import { MtcStabilityTracker } from './mtc-stability-tracker';
 import { ObsIpcExecutor } from './obs-ipc-executor';
 import { recordRuntimeAction, recordRuntimeOperator, reportCoordinatorError } from './runtime-action-log';
-import { recordMidiPortUpdate } from './runtime-midi-log';
-import { findNextCueId } from './runtime-next-cue';
+import { RuntimeMidiSession } from './runtime-midi-session';
 import { appendMediaReport, appendRetryActionReport } from './runtime-report-store';
 import { applyRuntimeState, resetRuntimeExecutionView } from './runtime-state-application';
 import { P1AutoFollowController } from './p1-auto-follow-controller';
 import { internalSample } from './internal-timeline';
 import { seekInternalRuntime } from './internal-runtime-seek';
-import { prepareInternalRuntime } from './internal-runtime-preparation';
-import { executeTimelineWork, executeDueCues, synchronizeTimelineTransport, reportSkippedTimelineMedia, executeSkippedTimelineCue } from './timeline-work';
+import { prepareInternalRuntime, prepareRuntimeArm } from './internal-runtime-preparation';
+import { prepareNativeCompanionRuntime } from './native-companion-preparation';
+import { InternalPreparationScope } from './internal-preparation-scope';
+import { enqueueEditorPreview } from './editor-scene-preview';
+import { executeTimelineMedia, executeTimelineWork, executeDueCues, synchronizeTimelineTransport, reportSkippedTimelineMedia, executeSkippedTimelineCue } from './timeline-work';
 
 export class LinkRuntimeCoordinator {
   private readonly runtime: CueRuntime;
   private readonly decoder = new MtcQuarterFrameDecoder();
   private readonly midi: LinkMidiAdapter;
   private readonly runner: CueActionRunner;
-  private unsubscribeMtc: (() => void) | null = null;
-  private mtcSubscriptionKey: string | null = null;
-  private unsubscribePorts: (() => void) | null = null;
+  private readonly midiSession: RuntimeMidiSession;
   private tickTimer: number | null = null;
   private lastSample: MtcSample | null = null;
   private readonly mtcStability = new MtcStabilityTracker();
@@ -44,6 +43,8 @@ export class LinkRuntimeCoordinator {
   private internalStopHandler: (() => void) | null = null;
   private internalCaptureActive = false;
   private internalClockActive = false;
+  private internalObsOwner: 'renderer' | 'main' = 'renderer';
+  private readonly internalPreparation = new InternalPreparationScope();
   private readonly p1Lighting = new P1LightingOutput();
 
   onInternalStop(handler: (() => void) | null): void { this.internalStopHandler = handler; }
@@ -51,15 +52,34 @@ export class LinkRuntimeCoordinator {
     this.stop(suspendAuto); await this.cueExecutionTail;
     if (this.runtime.getState() === 'error') throw new Error(useRuntimeStore.getState().reason ?? '停止清理失败');
   }
-  async prepareInternal(itemId: string, preflight: () => Promise<PreflightReport>, positionMs = 0): Promise<void> {
+  async prepareInternal(itemId: string, preflight: (assertCurrent: () => void) => Promise<PreflightReport>, positionMs = 0, signal?: AbortSignal): Promise<void> {
     this.internalClockActive = false;
     this.autoFollow?.suspend();
-    await prepareInternalRuntime(this.project, itemId, positionMs, preflight, {
-      stop: () => this.stopAndWait(false), select: () => this.selectItem(itemId, false), capture: () => { this.internalCaptureActive = true; },
-      armFromStart: () => this.armFromStart(), runtime: this.runtime, managed: this.managedOutput, runner: this.runner, projectPath: this.projectPath,
+    if (this.disposed) throw new Error('当前播放会话已关闭');
+    await this.internalPreparation.run(() => this.stopAndWait(false), assertCurrent => {
+      this.internalObsOwner = 'renderer';
+      return prepareInternalRuntime(this.project, itemId, positionMs, () => preflight(assertCurrent), {
+      assertCurrent, select: () => this.selectItem(itemId, false), capture: () => { this.internalCaptureActive = true; },
+      armFromStart: () => this.armFromStart(assertCurrent), runtime: this.runtime, managed: this.managedOutput, runner: this.runner, projectPath: this.projectPath,
       sample: (sample) => { this.lastSample = sample; }, apply: (update) => this.applyRequiredUpdate(update),
       execute: (cues, media) => this.enqueueTimelineWork(cues, media)
-    });
+      });
+    }, signal);
+  }
+
+  /** Native audio owns OBS in main. This companion retains only generic MIDI
+   * Cue actions and the operator's timeline state; it never prepares/captures OBS. */
+  async prepareNativeCompanion(itemId: string, positionMs: number, signal?: AbortSignal): Promise<void> {
+    this.internalClockActive = false; this.autoFollow?.suspend();
+    if (this.disposed) throw new Error('当前播放会话已关闭');
+    await prepareNativeCompanionRuntime(this.project, itemId, positionMs, {
+      scope: this.internalPreparation, stop: () => this.stopAndWait(false),
+      select: () => { this.internalObsOwner = 'main'; this.selectItem(itemId, false); },
+      runtime: this.runtime, beginPreflight: () => this.beginPreflight('live'),
+      initializeMidi: () => this.initializeMidi(false), midi: this.midi,
+      applyPreflight: report => this.applyPreflight(report), sample: sample => { this.lastSample = sample; },
+      apply: update => this.applyRequiredUpdate(update)
+    }, signal);
   }
   ingestInternal(positionMs: number): Promise<void> {
     const sample = internalSample(this.project, positionMs);
@@ -69,12 +89,15 @@ export class LinkRuntimeCoordinator {
     return this.ingestSample(sample);
   }
   startInternalClock(positionMs: number): void {
-    this.applyRequiredUpdate(this.runtime.anchorMediaClock(internalSample(this.project, positionMs)));
+    if (this.lastSample && this.runtime.getState() !== 'paused') this.applyRequiredUpdate(this.runtime.anchorMediaClock(internalSample(this.project, positionMs)));
     this.internalClockActive = true;
   }
   async seekInternal(positionMs: number): Promise<void> {
     this.internalClockActive = false;
     const item = this.currentItem();
+    if (this.internalObsOwner === 'main' && item) {
+      await this.prepareNativeCompanion(item.id, positionMs); await this.pauseInternal(); return;
+    }
     if (!item || !useRuntimeStore.getState().preflight?.passed || !['running', 'paused'].includes(this.runtime.getState())) throw new Error('当前播放会话不可定位，请重新播放');
     if (this.runtime.getState() === 'running') this.applyRequiredUpdate(this.runtime.pauseAutomatic());
     ++this.executionGeneration; await this.cueExecutionTail;
@@ -83,6 +106,14 @@ export class LinkRuntimeCoordinator {
     this.cueExecutionTail = operation.catch((error: unknown) => this.reportRuntimeError(error)); await operation;
   }
   async pauseInternal(): Promise<void> { this.internalClockActive = false; this.pause(); await this.syncMediaTransport('pause'); }
+
+  previewEditor(itemId: string, positionMs: number, preciseSeeking: boolean): Promise<void> {
+    const generation = this.executionGeneration;
+    const queued = enqueueEditorPreview(this.cueExecutionTail, this.project, this.projectPath, itemId, positionMs, preciseSeeking,
+      () => !this.disposed && generation === this.executionGeneration && this.runtime.getState() === 'idle');
+    this.cueExecutionTail = queued.tail;
+    return queued.operation;
+  }
 
   async enableP1AutoFollow(preflight: () => Promise<PreflightReport>): Promise<void> {
     if (this.project.playbackSource === 'internal' || !this.project.p1AutoFollow?.enabled || this.disposed) return;
@@ -115,42 +146,16 @@ export class LinkRuntimeCoordinator {
       },
       (error) => this.reportRuntimeError(error)
     );
+    this.midiSession = new RuntimeMidiSession(this.midi, project.projectId, message => {
+      void this.ingestQuarterFrame((message.messageType << 4) | message.value, message.receivedAt).catch(error => this.reportRuntimeError(error));
+    }, error => this.reportRuntimeError(error));
     this.runner = new CueActionRunner([new ObsIpcExecutor(), this.midi], {
       onStatus: (event) => recordRuntimeAction(this.project.projectId, this.currentItem(), event)
     });
   }
 
   async initializeMidi(input = true): Promise<void> {
-    const receiveTimecode = input && this.project.playbackSource !== 'internal';
-    if (!receiveTimecode) { this.unsubscribeMtc?.(); this.unsubscribeMtc = null; this.mtcSubscriptionKey = null; }
-    const ports = await this.midi.initialize();
-    useIntegrationStore.getState().setMidiPorts(ports);
-    this.unsubscribePorts?.();
-    this.unsubscribePorts = this.midi.subscribePorts((next) => {
-      useIntegrationStore.getState().setMidiPorts(next);
-      void recordMidiPortUpdate(this.project.projectId, next).catch((error: unknown) => this.reportRuntimeError(error));
-    });
-    const profile = useIntegrationStore.getState().profile;
-    if (!profile) throw new Error('尚未配置集成档案');
-    const nextSubscriptionKey = `${profile.p1.mtcInputPortProfileId}:${profile.p1.expectedFrameRate}`;
-    if (receiveTimecode && (
-      this.unsubscribeMtc === null
-      || this.mtcSubscriptionKey !== nextSubscriptionKey
-      || !this.midi.hasActiveMtcSubscription(profile.p1.mtcInputPortProfileId)
-    )) {
-      this.unsubscribeMtc?.();
-      this.unsubscribeMtc = null;
-      this.mtcSubscriptionKey = null;
-      this.unsubscribeMtc = await this.midi.subscribeMtc(
-        profile.p1.mtcInputPortProfileId,
-        profile.p1.expectedFrameRate,
-        (message) => {
-          void this.ingestQuarterFrame((message.messageType << 4) | message.value, message.receivedAt)
-            .catch((error: unknown) => this.reportRuntimeError(error));
-        }
-      );
-      this.mtcSubscriptionKey = nextSubscriptionKey;
-    }
+    await this.midiSession.initialize(input && this.project.playbackSource !== 'internal');
     if (this.tickTimer !== null) window.clearInterval(this.tickTimer);
     this.tickTimer = window.setInterval(() => {
       if (this.project.playbackSource === 'internal' && (!this.internalClockActive || this.runtime.getState() === 'paused')) return;
@@ -159,9 +164,7 @@ export class LinkRuntimeCoordinator {
   }
 
   async waitForMtcInputPort(timeoutMs: number): Promise<void> {
-    const profile = useIntegrationStore.getState().profile;
-    if (!profile) throw new Error('尚未配置集成档案');
-    await this.midi.waitForConnectedInput(profile.p1.mtcInputPortProfileId, timeoutMs, (ports) => useIntegrationStore.getState().setMidiPorts(ports));
+    await this.midiSession.waitForInput(timeoutMs);
   }
 
   selectItem(itemId: string, recordOperator = true): void {
@@ -204,10 +207,10 @@ export class LinkRuntimeCoordinator {
     await this.recordOperatorActionAsync('从当前 MTC 布防当前节目', { skippedMediaActions: skippedMedia.length });
   }
 
-  async armFromStart(): Promise<void> {
+  async armFromStart(assertCurrent: () => void = () => undefined): Promise<void> {
     const report = useRuntimeStore.getState().preflight;
     if (!report?.passed) throw new Error('预检存在阻断项，不能布防');
-    await this.prepareArmFromStart();
+    await this.prepareArmFromStart(assertCurrent); assertCurrent();
     await this.recordOperatorActionAsync('从头布防当前节目');
   }
 
@@ -249,11 +252,14 @@ export class LinkRuntimeCoordinator {
   }
 
   async manualGo(cueId: string): Promise<void> {
+    if (this.internalObsOwner === 'main' && this.currentItem()?.cues.find(cue => cue.id === cueId)?.actions.some(action => action.kind.startsWith('obs.'))) {
+      throw new Error('当前画面由后台播放会话执行，不能通过旧的手动接管重复触发；请暂停并定位到目标位置');
+    }
     await this.recordOperatorActionAsync('手动 GO', { cueId });
     const update = this.runtime.manualGo(cueId);
     this.applyUpdate(update);
     if (update.state === 'error') throw new Error(update.reason ?? '手动 GO 失败');
-    await this.enqueueDueCues(update.dueCues.map((due) => due.cue));
+    await this.enqueueTimelineWork(update.dueCues, []);
   }
 
   async retryAction(cueId: string, actionId: string): Promise<void> {
@@ -283,13 +289,16 @@ export class LinkRuntimeCoordinator {
   }
 
   stop(suspendAuto = true): void {
+    this.internalPreparation.cancel();
+    ++this.executionGeneration;
     this.p1Lighting.stop();
     this.internalClockActive = false;
     if (suspendAuto) { this.internalStopHandler?.(); this.autoFollow?.suspend(); }
     if (this.runtime.getState() === 'stopping') return;
     this.applyUpdate(this.runtime.stop()); if (this.runtime.getState() === 'idle') return;
     this.recordOperatorAction('停止运行会话');
-    const cleanupExecution = collectManagedOutputCleanupAfter(this.cueExecutionTail, this.managedOutput).then(async (cleanup) => {
+    const settled = this.internalPreparation.settledBefore(this.cueExecutionTail);
+    const cleanupExecution = collectManagedOutputCleanupAfter(settled, this.managedOutput).then(async (cleanup) => {
       await executeManagedOutputCleanup(cleanup, this.managedOutput, this.runner);
       if (this.internalCaptureActive) { await linkDesktopViewModel.setInternalAudioCapture(false); this.internalCaptureActive = false; }
     });
@@ -300,13 +309,13 @@ export class LinkRuntimeCoordinator {
   }
 
   dispose(): void {
+    this.internalPreparation.cancel();
     this.p1Lighting.stop();
     this.disposed = true; this.autoFollow?.dispose();
     this.executionGeneration += 1;
-    this.unsubscribeMtc?.();
-    this.unsubscribePorts?.();
+    this.midiSession.dispose();
     if (this.tickTimer !== null) window.clearInterval(this.tickTimer);
-    this.unsubscribeMtc = null; this.mtcSubscriptionKey = null; this.unsubscribePorts = null; this.tickTimer = null;
+    this.tickTimer = null;
     this.midi.dispose();
   }
 
@@ -331,6 +340,13 @@ export class LinkRuntimeCoordinator {
     const resumingMedia = this.project.playbackSource === 'internal' && previousState === 'paused';
     const update = resumingMedia ? this.runtime.resumeMedia(sample) : resumingP1 ? this.runtime.resumeP1(sample) : this.runtime.ingest(sample);
     this.applyUpdate(update);
+    if (this.internalObsOwner === 'main') {
+      const cues = update.dueCues.flatMap(entry => {
+        const actions = entry.cue.actions.filter(action => action.kind.startsWith('midi.'));
+        return actions.length ? [{ ...entry, cue: { ...entry.cue, actions } }] : [];
+      });
+      await this.enqueueTimelineWork(cues, []); return;
+    }
     if (update.state === 'running') this.p1Lighting.tick(sample);
     if ((resumingP1 || resumingMedia) && update.state === 'running') await this.syncMediaTransport('start');
     const managedMedia = (previousState === 'armed' || previousState === 'running' || resumingP1 || resumingMedia) && update.state === 'running'
@@ -339,17 +355,9 @@ export class LinkRuntimeCoordinator {
     const skippedMedia = previousState === 'paused' && update.state === 'paused' && !update.manualTakeover
       ? this.managedOutput.collectCrossed(previousFrame, sample.totalFrames)
       : [];
-    const work = update.state === 'running' && this.currentItem() ? sceneBoundaryWork(this.project, this.currentItem()!.id, previousFrame, sample.totalFrames, update.dueCues, managedMedia) : { cues: update.dueCues, media: managedMedia };
+    const work = update.state === 'running' && this.managedOutput.sceneTimeline ? this.managedOutput.sceneTimeline.cross(previousFrame, sample.totalFrames, update.dueCues, managedMedia) : { cues: update.dueCues, media: managedMedia };
     await this.enqueueTimelineWork(work.cues, work.media);
     await this.enqueueSkippedMedia(skippedMedia, '自动联动暂停期间已越过该素材边界；系统未自动补执行');
-  }
-
-  private enqueueDueCues(cues: LinkCue[]): Promise<void> {
-    return this.enqueueTimelineWork(cues.map((cue) => ({
-      cue,
-      scheduledFrame: timecodeToFrameNumber(cue.timecode, this.project.timebase.frameRate),
-      executionId: crypto.randomUUID()
-    })), []);
   }
 
   private enqueueTimelineWork(dueCues: RuntimeUpdate['dueCues'], mediaEvents: ManagedMediaEvent[]): Promise<void> {
@@ -370,36 +378,25 @@ export class LinkRuntimeCoordinator {
   private async executeTimelineWork(dueCues: RuntimeUpdate['dueCues'], mediaEvents: ManagedMediaEvent[], generation: number): Promise<void> {
     const canExecute = (): boolean => generation === this.executionGeneration;
     await executeTimelineWork(dueCues, mediaEvents, {
-      canExecute, media: (event) => this.executeManagedMedia(event),
+      canExecute, media: (event) => executeTimelineMedia(event, this.managedOutput, this.runtime.getMode(),
+        this.autoFollow || this.project.playbackSource === 'internal' ? this.lastSample?.totalFrames ?? event.frameNumber : null),
       cue: (cue) => this.executeDueCues([cue], canExecute),
-      skipCue: (cue, reason) => executeSkippedTimelineCue(cue, reason, this.runner, this.managedOutput, this.runtime.getMode(), () => this.nextCueId(useRuntimeStore.getState().missedCueIds)),
+      skipCue: (cue, reason) => executeSkippedTimelineCue(cue, reason, this.runner, this.managedOutput, this.runtime.getMode(), () => this.nextCueId()),
       skipMedia: (event, reason) => reportSkippedTimelineMedia(this.managedOutput, [event], reason)
     });
   }
 
-  private async executeManagedMedia(event: ManagedMediaEvent): Promise<void> {
-    try {
-      const aligned = this.autoFollow || this.project.playbackSource === 'internal' ? this.managedOutput.alignEvent(event, this.lastSample?.totalFrames ?? event.frameNumber) : event;
-      appendMediaReport(await this.managedOutput.executeMedia(aligned, this.runtime.getMode()));
-    } catch (error) {
-      if (error instanceof ManagedMediaExecutionError) appendMediaReport(error.report);
-      throw error;
-    }
-  }
-
   private async executeDueCues(cues: LinkCue[], canExecute: () => boolean): Promise<void> {
     await executeDueCues(cues, this.runner, this.managedOutput, this.runtime.getMode(), canExecute,
-      () => this.nextCueId(useRuntimeStore.getState().missedCueIds));
+      () => this.nextCueId());
   }
 
-  private async prepareArmFromStart(): Promise<void> {
-    this.decoder.reset(); this.mtcStability.reset();
-    this.lastSample = null;
-    this.managedOutput.resetExecution();
-    resetRuntimeExecutionView();
-    if (this.project.obsOutputMode !== 'scenes') await linkDesktopViewModel.activateManagedObsOutput();
-    await this.p1Lighting.prepare(this.project.playbackSource === 'internal' ? undefined : this.currentItem(), useIntegrationStore.getState().profile, Boolean(this.autoFollow));
-    this.applyRequiredUpdate(this.runtime.arm(performance.now(), null, 'awaiting-external-start'));
+  private async prepareArmFromStart(assertCurrent: () => void = () => undefined): Promise<void> {
+    this.decoder.reset(); this.mtcStability.reset(); this.lastSample = null;
+    this.managedOutput.resetExecution(); resetRuntimeExecutionView();
+    this.applyRequiredUpdate(await prepareRuntimeArm(this.project, this.currentItem(), {
+      profile: useIntegrationStore.getState().profile, autoFollow: Boolean(this.autoFollow), lighting: this.p1Lighting, runtime: this.runtime, assertCurrent
+    }));
   }
 
   private applyUpdate(update: RuntimeUpdate): void {
@@ -408,10 +405,11 @@ export class LinkRuntimeCoordinator {
       try { this.p1Lighting.suspend(this.lastSample); } catch (error) { this.reportRuntimeError(error); return; }
       if (this.autoFollow && (update.state === 'timecodeLost' || update.state === 'error')) void this.syncMediaTransport('pause').catch((error: unknown) => this.reportRuntimeError(error));
     }
-    applyRuntimeState({ project: this.project, item: this.currentItem(), update, nextCueId: this.nextCueId(update.missedCueIds) });
+    applyRuntimeState({ project: this.project, item: this.currentItem(), update, nextCueId: this.nextCueId() });
   }
 
   private async syncMediaTransport(action: 'pause' | 'start'): Promise<void> {
+    if (this.internalObsOwner === 'main') return;
     const generation = this.executionGeneration;
     const execution = this.cueExecutionTail.then(() => synchronizeTimelineTransport(this.project, this.currentItem()?.id, action, this.lastSample?.totalFrames ?? 0,
       this.managedOutput, this.runner, (cues, media) => this.executeTimelineWork(cues, media, generation)));
@@ -421,8 +419,8 @@ export class LinkRuntimeCoordinator {
 
   private applyRequiredUpdate(update: RuntimeUpdate): void { this.applyUpdate(update); if (update.state === 'error') throw new Error(update.reason ?? '运行状态变更失败'); }
 
-  private nextCueId(missedCueIds: readonly string[]): string | null {
-    return findNextCueId({ item: this.currentItem(), frameRate: this.project.timebase.frameRate, currentFrame: this.lastSample?.totalFrames ?? -1, missedCueIds, reports: useRuntimeStore.getState().reports });
+  private nextCueId(): string | null {
+    return this.runtime.getNextCueId(this.lastSample?.totalFrames ?? -1);
   }
 
   private currentItem() { const id = useRuntimeStore.getState().currentItemId; return this.project.rundown.find((item) => item.id === id); }

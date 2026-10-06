@@ -1006,6 +1006,9 @@ select option:disabled { color: var(--text-secondary); }
 .timeline-snap-state[aria-pressed="false"] svg { color: var(--text-secondary); }
 .timeline-shell {
   display: grid;
+  /* This viewport is sized by the parent grid. Clip/row measurements must not
+     invalidate the surrounding programme page or preview layout on navigation. */
+  contain: size layout style;
   grid-template-columns: 164px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
@@ -1069,6 +1072,10 @@ select option:disabled { color: var(--text-secondary); }
   user-select: none;
 }
 .timeline-lane:nth-child(even) { background-color: var(--surface-raised); }
+/* Row sizes come from the timeline grid, not their absolute-positioned clips.
+   Isolate offscreen rows so opening/scanning the editor does not lay out and
+   paint every track. A cross-track drag must remain free to leave its row. */
+.timeline-lane:not(.has-item-drag) { content-visibility: auto; }
 .waveform-lane { background-color: var(--surface); box-shadow: inset 0 0 0 1px rgba(99,216,193,.08); }
 .timeline-waveform-canvas { position: absolute; z-index: 1; inset: 0 auto 0 0; height: 100%; pointer-events: none; opacity: .52; }
 .timeline-media-waveform {
@@ -3271,3 +3278,6 @@ html, body, #root { background: transparent; }
 .editor-preview-row > .reference-stage, .editor-preview-row > .cue-inspector { min-width: 0; min-height: 0; height: 100%; }
 .editor-preview-row > .cue-inspector { overflow: auto; }
 .editor-preview-row .inspector-empty { min-height: 100px; }
+
+/* Metadata remains editable during an internal pause; output controls keep their session lock. */
+.p1-runtime-properties { display: contents; }

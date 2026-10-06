@@ -23,6 +23,7 @@ test('实体控台经读取控台入口自动连接并显示真实素材', async
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await page.getByRole('button', { name: '读取控台', exact: true }).click();
     const panel = page.getByRole('region', { name: '读取控台效果库' });
+    await panel.getByRole('button', { name: '读取控台素材', exact: true }).click();
     await expect(panel.getByRole('progressbar', { name: '控台读取进度' })).toBeVisible();
     await expect(panel.locator('tbody tr').first()).toBeVisible({ timeout: 120000 });
     await expect(panel.locator('.ma2-material-footer')).toContainText('584 项', { timeout: 120000 });
@@ -39,17 +40,17 @@ test('实体控台经读取控台入口自动连接并显示真实素材', async
     await panel.getByLabel('搜索控台 Cue').fill('');
     await panel.getByRole('button', { name: '关闭素材窗口' }).click();
     await page.getByRole('button', { name: '读取控台', exact: true }).click();
-    await expect(panel).toContainText('上次读取');
+    await expect(panel).toContainText('工程缓存');
     await panel.getByLabel('按序列分组').selectOption('');
     await panel.getByLabel('全选筛选结果').check();
-    await expect(panel).toContainText('已选择 584 项');
+    await expect(panel).toContainText('已选 584');
     await panel.getByRole('button', { name: '加入素材库', exact: false }).click();
     await expect(page.locator('.lighting-effect-card')).toHaveCount(584);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await expect(page.getByLabel('MA2 控台 IP')).not.toBeVisible();
-    await expect(page.getByRole('button', { name: '自动连接控台' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '连接 MA2 并载入节目 Cue' })).toBeVisible();
     if (!process.env.TBLINK_MA2_TEST_HIDDEN) await page.screenshot({ path: info.outputPath('console-settings.png') });
     const status = await page.evaluate(() => window.tbLink.getMa2NetworkStatus());
     expect(status.settings?.host).toBe(process.env.TBLINK_MA2_HARDWARE_HOST);

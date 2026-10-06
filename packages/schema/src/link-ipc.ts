@@ -73,6 +73,13 @@ export const linkMediaPreviewPayloadSchema = linkMediaAssetResolvePayloadSchema.
   kind: linkMediaKindSchema
 });
 
+export const linkMediaInspectionPayloadSchema = z.object({
+  projectPath: linkFilePathSchema,
+  assets: z.array(z.object({ id: z.string().min(1), relativePath: z.string().min(1),
+    name: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).max(512)
+}).strict();
+export type LinkMediaInspectionPayload = z.infer<typeof linkMediaInspectionPayloadSchema>;
+
 export const linkP1ProjectImportPayloadSchema = z.object({
   p1ProjectPath: linkFilePathSchema,
   linkProjectPath: linkFilePathSchema,
@@ -148,7 +155,8 @@ export const linkLogFilterSchema = z.object({
   itemId: z.string().min(1).optional(),
   cueId: z.string().min(1).optional(),
   device: z.string().min(1).optional(),
-  result: linkLogResultSchema.optional()
+  result: linkLogResultSchema.optional(),
+  limit: z.number().int().min(1).max(5000).optional()
 });
 
 export const linkDiagnosticContextSchema = z.record(z.string(), z.unknown());

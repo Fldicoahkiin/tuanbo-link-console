@@ -12,7 +12,8 @@ export async function runDesktopPreflight(
   mode: PreflightMode,
   mtcRequirement: 'running' | 'start-on-go' | 'awaiting-external-start' | 'internal',
   p1ClockObserved = false,
-  options: { internalMtcOutputEnabled?: boolean } = {}
+  options: { internalMtcOutputEnabled?: boolean } = {},
+  assertCurrent: () => void = () => undefined
 ): Promise<PreflightReport> {
   const document = useDocumentStore.getState();
   const integration = useIntegrationStore.getState();
@@ -20,6 +21,7 @@ export async function runDesktopPreflight(
   if (!document.path) throw new Error('当前工程尚未保存，请先保存工程再播放');
   if (!integration.profile) throw new Error(integration.error ?? '连接配置尚未加载，请在设置中检查 OBS 与 MIDI 连接配置');
   await requireOutputLicense();
+  assertCurrent();
 
   coordinator.beginPreflight(mode);
   const selectedId = useRuntimeStore.getState().currentItemId;
@@ -28,11 +30,13 @@ export async function runDesktopPreflight(
   const inspectedProject = mtcRequirement === 'internal' ? { ...document.project, rundown, mediaAssets: document.project.mediaAssets.filter((asset) => mediaIds.has(asset.id)) } : document.project;
   if (integration.obs.status === 'connected' && inspectedProject.obsOutputMode === 'scenes' && inspectedProject.mediaAssets.length) {
     await linkDesktopViewModel.prepareObsMediaScenes(document.path, inspectedProject, useDisplayPreferences.getState().preciseSeeking);
+    assertCurrent();
   }
   const needsMidi = mtcRequirement !== 'internal'
     || (options.internalMtcOutputEnabled !== false && Boolean(integration.profile.internalPlayer?.mtcOutputPortProfileId))
     || collectCueMidiOutputProfileIds(inspectedProject).length > 0;
   if (needsMidi) await coordinator.initializeMidi(mtcRequirement !== 'internal');
+  assertCurrent();
   const [assets, security, inventory, snapshots, appInfo] = await Promise.all([
     linkDesktopViewModel.inspectProjectAssets(document.path, inspectedProject),
     linkDesktopViewModel.getSecurityPreflight(),
@@ -44,6 +48,7 @@ export async function runDesktopPreflight(
     p1ClockObserved || mtcRequirement === 'internal' ? Promise.resolve(Object.values(integration.processes)) : linkDesktopViewModel.getExternalSnapshots(),
     linkDesktopViewModel.getAppInfo()
   ]);
+  assertCurrent();
   useIntegrationStore.getState().setAppInfo(appInfo);
   for (const snapshot of snapshots) useIntegrationStore.getState().setProcess(snapshot);
   useIntegrationStore.getState().setInventory(inventory);
@@ -83,6 +88,7 @@ export async function runDesktopPreflight(
     logRedactionReady: security.logRedactionReady
   });
   for (const check of report.checks) {
+    assertCurrent();
     await linkDesktopViewModel.recordLog({
       level: check.status === 'blocking' ? 'error' : check.status === 'warning' ? 'warning' : 'info',
       category: 'preflight',
@@ -93,6 +99,7 @@ export async function runDesktopPreflight(
     });
   }
   if (report.passed) {
+    assertCurrent();
     const profile = {
       ...integration.profile,
       updatedAt: new Date().toISOString(),
@@ -107,9 +114,10 @@ export async function runDesktopPreflight(
       }
     };
     await linkDesktopViewModel.saveIntegrationProfile({ profile });
+    assertCurrent();
     useIntegrationStore.getState().setProfile(profile);
   }
-  await coordinator.applyPreflight(report);
+  assertCurrent(); await coordinator.applyPreflight(report); assertCurrent();
   return report;
 }
 

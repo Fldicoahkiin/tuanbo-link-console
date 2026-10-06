@@ -1,14 +1,18 @@
 import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   main: {
+    define: { __TBLINK_INTERNAL_DISTRIBUTION__: process.env.TBLINK_INTERNAL_DISTRIBUTION_FILE ? readFileSync(resolve(process.env.TBLINK_INTERNAL_DISTRIBUTION_FILE), 'utf8') : 'null' },
     build: {
       sourcemap: false,
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/main/link-main.ts')
+          index: resolve(__dirname, 'src/main/link-main.ts'),
+          'waveform-worker': resolve(__dirname, 'src/main/link/waveform-worker.ts'),
+          'project-document-worker': resolve(__dirname, 'src/main/link/project-document-worker.ts')
         },
         external: ['ffmpeg-static'],
         // 必须打成 CJS：包根 package.json 是 "type": "module"，

@@ -25,10 +25,10 @@ export class Ma2AutoSync {
   start(connection: Ma2CatalogRequest, catalog: Ma2Catalog): void {
     if (this.busy) throw new Error('上一次同步尚未结束，请等待回读后启用');
     const state = this.dependencies.state();
-    if (!state.project || state.playing) throw new Error('请先打开工程并停止播放');
+    if (!state.project) throw new Error('请先打开工程');
     this.generation += 1;
     this.session = { connection: structuredClone(connection), directory: ma2CatalogSchema.parse(catalog).directory, documentId: state.documentId };
-    this.dependencies.changed('waiting', '自动双向同步已启用，停止播放后检查已绑定时间线');
+    this.dependencies.changed('waiting', '编辑后自动同步已启用；控台侧修改请手动刷新');
   }
 
   stop(): void {
@@ -36,7 +36,7 @@ export class Ma2AutoSync {
     this.dependencies.changed(this.writing ? 'writing' : 'off', this.writing ? '自动同步正在结束，请等待已发出写入的回读' : '自动同步已关闭');
   }
 
-  async tick(): Promise<void> {
+  async tick(refreshRemote = false): Promise<void> {
     const session = this.session;
     if (!session || this.busy) return;
     const state = this.dependencies.state();
@@ -46,6 +46,12 @@ export class Ma2AutoSync {
       this.dependencies.changed(pending.length ? 'staged' : 'waiting', pending.length ? `${pending.length} 条时间线待提交；仅保存在本地，停止后核对同步` : '播放期间等待，停止后同步'); return;
     }
     if (state.editing) { this.dependencies.changed('waiting', '等待连续编辑结束'); return; }
+    const pending = ma2PendingChanges(state.project);
+    if (!refreshRemote && !pending.length) { this.dependencies.changed('waiting', '本地无待提交修改；控台侧修改请手动刷新'); return; }
+    const stale = pending.find(change => state.project?.ma2ReadState?.pairings?.[change.target]?.status === 'stale');
+    if (stale) { this.session = null; this.dependencies.changed('blocked', `Timecode ${stale.target} 的歌曲配对已失效，请先重新核对；未写入控台`); return; }
+    const blocked = pending.find(change => change.error);
+    if (blocked) { this.session = null; this.dependencies.changed('blocked', `Timecode ${blocked.target}：${blocked.error}`); return; }
     const generation = this.generation;
     this.busy = true;
     const current = (): boolean => this.generation === generation && this.session === session && this.dependencies.state().documentId === session.documentId && !this.dependencies.state().playing && !this.dependencies.state().editing;
@@ -54,7 +60,7 @@ export class Ma2AutoSync {
       const catalog = ma2CatalogSchema.parse(await this.dependencies.catalog({ ...session.connection, targets: [] }));
       if (!current()) return;
       if (JSON.stringify(catalog.directory) !== JSON.stringify(session.directory)) throw new Error('Show、插件会话或时间线目录已变化，请重新扫描后启用自动同步');
-      const targets = state.project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).filter(binding => !binding.nativeEvents?.length && binding.playback !== 'native-timecode').map(binding => ({ itemId: item.id, bindingId: binding.id, target: binding.timecode })));
+      const targets = state.project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).filter(binding => !binding.nativeEvents?.length && binding.playback !== 'native-timecode' && (refreshRemote || pending.some(change => change.bindingId === binding.id && change.itemId === item.id))).map(binding => ({ itemId: item.id, bindingId: binding.id, target: binding.timecode })));
       if (new Set(targets.map(target => target.target)).size !== targets.length) throw new Error('同一控台时间线绑定了多个节目，不能自动同步');
       for (const target of targets) {
         if (!current()) return;

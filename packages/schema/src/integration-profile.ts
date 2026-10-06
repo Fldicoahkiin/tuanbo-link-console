@@ -34,6 +34,8 @@ export const integrationProfileSchema = z.object({
     portName: z.string().max(256)
   })).min(2),
   internalPlayer: z.object({
+    audioEngine: z.enum(['browser', 'native']).optional(),
+    nativeAudioOutputDeviceId: z.string().min(1).max(1023).optional(),
     controlInputPortProfileId: z.string().min(1).nullable().optional(),
     doubleClickPlayback: z.boolean().optional(),
     arrowKeyPlayback: z.boolean().optional(),

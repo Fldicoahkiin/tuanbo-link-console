@@ -20,7 +20,7 @@ test('已保存控台直接连接，失败自动展开 IP 设置并显示具体�
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式', { exact: true }).selectOption('network');
-    await page.getByRole('button', { name: '自动连接控台', exact: true }).click();
+    await page.getByRole('button', { name: '连接 MA2 并载入节目 Cue', exact: true }).click();
     await expect(page.getByLabel('MA2 控台 IP', { exact: true })).toBeVisible();
     await expect(page.getByLabel('MA2 控台 IP', { exact: true })).toHaveValue('2.97.214.223');
     await expect(page.locator('.ma2-network-settings [role="alert"]')).toContainText('30001 TCP 未连通');

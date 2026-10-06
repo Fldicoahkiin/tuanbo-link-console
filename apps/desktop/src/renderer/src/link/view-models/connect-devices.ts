@@ -9,6 +9,7 @@ import { linkDesktopViewModel as desktop } from './link-desktop-view-model';
 import { applyDetectedLightingMidiPorts, applyDetectedP1MidiPorts } from './local-integration-midi';
 import { midiConnectionTargets } from './connection-targets';
 import { obsPreviewSession } from './obs-preview-session';
+import { assertAudioOutputAvailable } from './audio-output-route';
 
 export type DeviceConnectionOptions = {
   draft: IntegrationProfile;
@@ -70,9 +71,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       };
     }
     const audioTask = run('audio', '音频输出', async () => {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const id = profile.internalPlayer?.audioOutputDeviceId ?? 'default';
-      if (!devices.some(device => device.kind === 'audiooutput' && device.deviceId === id)) throw new Error('所选播放设备不可用，请在音频设置中重新选择输出线路');
+      await assertAudioOutputAvailable(profile.internalPlayer);
     }, '播放设备可用，正式音频在播放时启用');
     const loop = await run('loop', '虚拟 MIDI', async () => {
       let status = loopMidiStatusSchema.parse(await desktop.loopMidi('detect'));

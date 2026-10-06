@@ -1,0 +1,20 @@
+{
+  "scope": "Experimental person-instance protection; not packaged or enabled in production",
+  "model": "instance-segmentation-person-0007",
+  "source": "https://github.com/openvinotoolkit/open_model_zoo/tree/master/models/intel/instance-segmentation-person-0007",
+  "license": "https://raw.githubusercontent.com/openvinotoolkit/open_model_zoo/master/LICENSE",
+  "files": [
+    {
+      "file": "model.xml",
+      "url": "https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/instance-segmentation-person-0007/FP16/instance-segmentation-person-0007.xml",
+      "sha256": "60bf2e1737d77d34da5a9944b365bf4bf18bafd92b627c6c6756cb9a7e45c697",
+      "sha384": "6e91ab4b808253a7a83fe9c94e4508743aabfeaa9bf850cf976d8c34ba0034dc78d81a4d7a475c53bc006fb90595d538"
+    },
+    {
+      "file": "model.bin",
+      "url": "https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/instance-segmentation-person-0007/FP16/instance-segmentation-person-0007.bin",
+      "sha256": "1746b165345e734b962b5fdac5ad71d88bef7397e43613a6accc201052d78e0f",
+      "sha384": "26039d9fe430569662a0ea6b0810c31aa7f268309657b98c45eff09632f4b952ec61d4c85f8b68f3dc30decfb46edc39"
+    }
+  ]
+}

@@ -35,7 +35,15 @@ describe('LinkRunLogger', () => {
     const file = join(directory, 'broken.jsonl'); cleanupFiles.push(file);
     const entry = { id: 'entry', sessionId: 'session', timestamp: '2026-09-17T00:00:00.000Z', monotonicMs: 0, level: 'info', category: 'state', message: '中文'.repeat(40000) };
     await writeFile(file, `${JSON.stringify(entry)}\r\n\r\ninvalid`);
-    await expect(logger.query()).rejects.toThrow('第 3 行损坏');
+    const entries = await logger.query();
+    expect(entries).toHaveLength(2);
+    expect(entries[1]?.message).toContain('第 3 行损坏');
+    const exported = join(directory, 'damaged.tbdiag.gz'); cleanupFiles.push(exported);
+    await logger.exportDiagnosticPackage(exported, {});
+    const text = (await gunzipAsync(await readFile(exported))).toString('utf8');
+    expect(text).toContain('已保留原文件');
+    expect(text).toContain('中文');
+    expect(await readFile(file, 'utf8')).toContain('invalid');
   });
   it('日志与诊断包均脱敏且支持筛选', async () => {
     const directory = await createTestDirectory();
@@ -83,6 +91,24 @@ describe('LinkRunLogger', () => {
       token: '[REDACTED]',
       nested: ['[REDACTED]']
     });
+  });
+
+  it('导出等待已提交日志落盘，文本跨会话脱敏，限量查看仍保留完整导出', async () => {
+    const directory = await createTestDirectory();
+    const logger = new LinkRunLogger(directory, () => ['private-secret']);
+    cleanupFiles.push(join(directory, `${logger.sessionId}.jsonl`));
+    const textPath = join(directory, 'all.txt'); cleanupFiles.push(textPath);
+    const writes = Array.from({ length: 20 }, (_, index) => logger.record({ level: 'info', category: 'system', message: `记录 ${index} private-secret` }));
+    await logger.exportText(textPath); await Promise.all(writes);
+    const last = await logger.query({ limit: 5 });
+    expect(last).toHaveLength(5);
+    expect(last.at(-1)?.message).toContain('记录 19');
+    const contents = await readFile(textPath, 'utf8');
+    expect(contents).toContain('记录 0'); expect(contents).toContain('记录 19');
+    expect(contents).not.toContain('private-secret');
+    await expect(logger.exportText(join(directory, 'missing', 'all.txt'))).resolves.toBeUndefined();
+    cleanupFiles.push(join(directory, 'missing', 'all.txt')); cleanupDirectories.push(join(directory, 'missing'));
+    await expect(logger.exportText(join(directory, 'wrong.json'))).rejects.toThrow('.txt');
   });
 });
 

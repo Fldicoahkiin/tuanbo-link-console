@@ -1,4 +1,5 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useState } from 'react';
+import type { PlaybackClock } from '../../registry/playback-clock';
 import { MapPinPlus, Layers3, TriangleAlert } from 'lucide-react';
 import { TimelineIconMenu } from './TimelineIconMenu';
 import { playbackFramesPerSecond } from '@tb/core/link';
@@ -7,7 +8,7 @@ import { shortcutKey, shortcutLabel, useShortcutStore } from '../stores/shortcut
 import type { LightingTimelineProps } from './LightingTimeline';
 import { stampTimeline } from './timeline-stamp';
 
-type Props = { lighting: LightingTimelineProps | undefined; playheadMs: number; durationMs: number; playing: boolean; frameRate: MtcFrameRate; audioRef: RefObject<HTMLAudioElement>; onPlayingChange: (playing: boolean) => void; onSeek: (ms: number) => void };
+type Props = { lighting: LightingTimelineProps | undefined; playheadMs: number; durationMs: number; playing: boolean; frameRate: MtcFrameRate; clock: PlaybackClock; onPlayingChange: (playing: boolean) => void; onSeek: (ms: number) => void };
 export function useTimelineStamp(props: Props) {
   const { lighting } = props;
   const { bindings, load, error } = useShortcutStore();
@@ -19,7 +20,8 @@ export function useTimelineStamp(props: Props) {
   const stamp = (positionMs?: number): void => {
     if (!lighting) return;
     try {
-      const result = stampTimeline(lighting.document, track?.id, positionMs ?? (props.playing && props.audioRef.current ? props.audioRef.current.currentTime * 1000 : props.playheadMs), props.durationMs, lighting.selectedClipId ?? undefined);
+      const output = props.clock.read();
+      const result = stampTimeline(lighting.document, track?.id, positionMs ?? (props.playing && output.ready ? output.positionMs : props.playheadMs), props.durationMs, lighting.selectedClipId ?? undefined);
       lighting.onChange(result.document, '灯光时间线打点');
       if (result.eventId) lighting.onSelectEvent?.(result.trackId, result.clipId, result.eventId);
       setMessage(null);

@@ -1,0 +1,42 @@
+import { createEmptyLinkProject, parseLinkProject, type LinkProject, type ObsProgramSnapshot } from '@tb/schema';
+import { resolveTimelineClipSpan } from './timeline-state';
+
+/** Runtime data only: original console XML and unrelated programs stay in the
+ * document. This snapshot is never used to replace or save the user's project. */
+export function createObsProgramSnapshot(project: LinkProject, itemId: string, revision: number): ObsProgramSnapshot {
+  if (project.playbackSource !== 'internal' || project.obsOutputMode !== 'scenes') throw new Error('后台画面仅接受内部主控场景工程');
+  const item = project.rundown.find(entry => entry.id === itemId);
+  if (!item) throw new Error('画面节目不存在');
+  const ids = new Set(item.referenceMediaClips.map(clip => clip.assetId));
+  return { version: 1, projectId: project.projectId, revision, frameRate: project.timebase.frameRate,
+    outputCanvas: project.outputCanvas, internalVideoAudio: project.internalVideoAudio ?? false,
+    item: { id: item.id, title: item.title, enabled: item.enabled, notes: item.notes,
+      ...(item.referenceAudio ? { referenceAudio: item.referenceAudio } : {}),
+      visualLayers: item.visualLayers, referenceMediaClips: item.referenceMediaClips,
+      cues: item.cues.flatMap(cue => {
+        const actions = cue.actions.filter(action => action.kind.startsWith('obs.'));
+        return actions.length ? [{ ...cue, actions }] : [];
+      }) },
+    assets: project.mediaAssets.filter(asset => ids.has(asset.id)).map(asset => ({ ...asset, folderId: null })) };
+}
+
+export function projectFromObsSnapshot(snapshot: ObsProgramSnapshot): LinkProject {
+  return parseLinkProject({ ...createEmptyLinkProject(snapshot.item.title), projectId: snapshot.projectId,
+    playbackSource: 'internal', obsOutputMode: 'scenes', internalVideoAudio: snapshot.internalVideoAudio,
+    outputCanvas: snapshot.outputCanvas, timebase: { frameRate: snapshot.frameRate, mode: 'per-item-reset' },
+    rundown: [snapshot.item], mediaAssets: snapshot.assets });
+}
+
+/** Every upcoming video can be entered between frames: device observations
+ * arrive after a clip boundary and camera overlays can reveal it midway.
+ * A zero source trim therefore does not prove that decoding from zero is enough. */
+export function preciseSeekAssetIds(snapshot: ObsProgramSnapshot, positionMs: number): ReadonlySet<string> {
+  if (!Number.isFinite(positionMs) || positionMs < 0) throw new Error('素材准备的音频位置无效');
+  const ids = new Set<string>();
+  for (const clip of snapshot.item.referenceMediaClips) {
+    const span = resolveTimelineClipSpan(clip, snapshot.frameRate);
+    if (span.endMs <= positionMs) continue;
+    ids.add(clip.assetId);
+  }
+  return ids;
+}

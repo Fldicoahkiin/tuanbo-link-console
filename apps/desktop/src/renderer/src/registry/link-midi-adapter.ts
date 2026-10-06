@@ -1,7 +1,8 @@
 import { requestMidiAccess } from './midi-access';
 import { requireOutputLicense } from './license-output';
 import type { IntegrationProfile, LinkAction, MtcFrameRate } from '@tb/schema';
-import type { LinkActionExecutor } from '@tb/core/link';
+import { buildMidiShowControlMessage, type LinkActionExecutor } from '@tb/core/link';
+export { buildMidiShowControlMessage } from '@tb/core/link';
 
 export type MidiPortProfile = {
   id: string;
@@ -315,30 +316,3 @@ function portSnapshot(port: MIDIPort, direction: MidiPortProfile['direction']): 
   };
 }
 
-export function buildMidiShowControlMessage(action: Extract<LinkAction, { kind: 'midi.showControl' }>): number[] {
-  const command = {
-    go: 0x01,
-    stop: 0x02,
-    resume: 0x03,
-    load: 0x05
-  }[action.command];
-  const fields = [action.cueNumber, action.cueList, action.cuePath];
-  let lastField = -1;
-  for (const [index, field] of fields.entries()) {
-    if (field !== undefined) lastField = index;
-  }
-  const payload: number[] = [];
-  for (let index = 0; index <= lastField; index += 1) {
-    if (index > 0) payload.push(0x00);
-    payload.push(...toSevenBitAscii(fields[index] ?? ''));
-  }
-  return [0xf0, 0x7f, action.deviceId, 0x02, action.commandFormat, command, ...payload, 0xf7];
-}
-
-function toSevenBitAscii(value: string): number[] {
-  return [...value].map((character) => {
-    const code = character.codePointAt(0);
-    if (code === undefined || code > 0x7f) throw new Error('MIDI Show Control 字段只能使用 ASCII 字符');
-    return code;
-  });
-}

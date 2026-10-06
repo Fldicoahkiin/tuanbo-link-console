@@ -22,12 +22,25 @@ it('轻量读取保留真实索引、小数 Cue 和中文名，明确灯具详�
   expect(request.mock.calls.map(call => call[0])).toEqual(['LISTSEQ', 'LISTSEQ']);
 });
 it('读取期间 Cue 改变时拒绝不一致列表', async () => {
-  await expect(readMa2NativeLibrary(connection(['2;1,1,61', '2;1,2,61']), { request: vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(directory)) }, () => false)).rejects.toThrow('发生变化');
+  const result = await readMa2NativeLibrary(connection(['2;1,1,61', '2;1,2,61']), { request: vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(directory)) }, () => false);
+  expect(result.sequences).toEqual([]);
+  expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]?.sequence).toBe(7);
+  expect(result.errors[0]?.message).toContain('发生变化');
 });
 it('播放状态阻止发送任何素材读取命令', async () => {
   const peer = connection([]);
   await expect(readMa2NativeLibrary(peer, { request: vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(directory)) }, () => true)).rejects.toThrow('播放');
   expect(peer.command).not.toHaveBeenCalled();
+});
+it('一条序列损坏保留错误并继续其他序列，不把整个素材库清空', async () => {
+  const two = { ...directory, entries: [...directory.entries, { target: 8, name: '可用序列' }] };
+  const updates: Ma2ReadProgressUpdate[] = [];
+  const result = await readMa2NativeLibrary(connection(['missing', 'missing', '2;1,1.1,61', '2;1,1.1,61']), { request: vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(two)) }, () => false, update => { updates.push(update); });
+  expect(result.sequences[0]?.sequence).toBe(8);
+  expect(result.sequences[0]?.cues[0]?.number).toBe('1.100');
+  expect(result.errors[0]?.sequence).toBe(7);
+  expect(updates.find(update => update.libraryError)?.libraryError?.sequence).toBe(7);
 });
 it('读取指定引用时不查询其他序列，不传输灯具数据', async () => {
   const request = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify({ ...directory, entries: [...directory.entries, { target: 8, name: '无关序列' }] }));

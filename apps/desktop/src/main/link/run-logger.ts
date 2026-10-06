@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { writeFileAtomically } from './atomic-file';
@@ -36,11 +36,17 @@ export type LinkLogFilter = {
   cueId?: string;
   device?: string;
   result?: LinkLogEntry['result'];
+  limit?: number;
 };
 
 export class LinkRunLogger {
   readonly sessionId = crypto.randomUUID();
   private readonly filePath: string;
+  private pending: Promise<void> = Promise.resolve();
+  private bufferedCount = 0;
+  private bufferedBytes = 0;
+  private bufferedFailure: Error | null = null;
+  private readonly failedBuffered: LinkLogEntry[] = [];
 
   constructor(
     private readonly logsDirectory: string,
@@ -50,6 +56,40 @@ export class LinkRunLogger {
   }
 
   async record(entry: Omit<LinkLogEntry, 'id' | 'sessionId' | 'timestamp' | 'monotonicMs'>): Promise<LinkLogEntry> {
+    const sanitized = this.createEntry(entry);
+    await this.persist(sanitized);
+    return sanitized;
+  }
+
+  /** Admission only, never a durable-write acknowledgement. Formal output must
+   * not await filesystem latency. Query/export and flush wait for persistence. */
+  recordBuffered(entry: Omit<LinkLogEntry, 'id' | 'sessionId' | 'timestamp' | 'monotonicMs'>,
+    onFailure: (error: Error) => void): Promise<LinkLogEntry> {
+    if (this.bufferedFailure) return Promise.reject(this.bufferedFailure);
+    const sanitized = this.createEntry(entry), bytes = Buffer.byteLength(JSON.stringify(sanitized), 'utf8');
+    if (this.bufferedCount >= 512 || this.bufferedBytes + bytes > 4 * 1024 * 1024) return Promise.reject(new Error('正式输出日志待写队列已满；本条未接收'));
+    this.bufferedCount++; this.bufferedBytes += bytes;
+    void this.persist(sanitized).then(() => {
+      this.bufferedCount--; this.bufferedBytes -= bytes;
+    }, (error: unknown) => {
+      // Retain failed evidence for export; stop accepting more rather than
+      // growing memory or retrying an uncertain disk write indefinitely.
+      this.failedBuffered.push({ ...sanitized, details: { ...sanitized.details, persistence: 'failed' } });
+      this.bufferedCount--; this.bufferedBytes -= bytes;
+      if (!this.bufferedFailure) {
+        this.bufferedFailure = new Error(`运行日志未能落盘：${error instanceof Error ? error.message : String(error)}`);
+        onFailure(this.bufferedFailure);
+      }
+    });
+    return Promise.resolve(sanitized);
+  }
+
+  async flush(): Promise<void> {
+    await this.pending;
+    if (this.bufferedFailure) throw this.bufferedFailure;
+  }
+
+  private createEntry(entry: Omit<LinkLogEntry, 'id' | 'sessionId' | 'timestamp' | 'monotonicMs'>): LinkLogEntry {
     const sanitized = redactValue({
       id: crypto.randomUUID(),
       sessionId: this.sessionId,
@@ -58,13 +98,37 @@ export class LinkRunLogger {
       ...entry
     }, this.secretValues());
     if (!isLinkLogEntry(sanitized)) throw new Error('日志条目在脱敏后结构无效');
-    await mkdir(dirname(this.filePath), { recursive: true });
-    await appendFile(this.filePath, `${JSON.stringify(sanitized)}\n`, { encoding: 'utf8', flag: 'a' });
     return sanitized;
   }
 
+  private persist(sanitized: LinkLogEntry): Promise<void> {
+    const write = this.pending.then(async () => {
+      await mkdir(dirname(this.filePath), { recursive: true });
+      await appendFile(this.filePath, `${JSON.stringify(sanitized)}\n`, { encoding: 'utf8', flag: 'a' });
+    });
+    // Each caller receives its write error; the queue permits a later explicit write.
+    this.pending = write.then(() => undefined, () => undefined);
+    return write;
+  }
+
   async query(filter: LinkLogFilter = {}): Promise<LinkLogEntry[]> {
-    return this.readAllDiskEntries(filter);
+    await this.pending;
+    const entries = await this.readAllDiskEntries(filter);
+    for (const entry of this.failedBuffered) {
+      if (filter.sessionId && entry.sessionId !== filter.sessionId || filter.itemId && entry.itemId !== filter.itemId
+        || filter.cueId && entry.cueId !== filter.cueId || filter.device && entry.device !== filter.device
+        || filter.result && entry.result !== filter.result) continue;
+      entries.push(structuredClone(entry));
+    }
+    entries.sort(chronological);
+    return filter.limit ? entries.slice(-filter.limit) : entries;
+  }
+
+  async exportText(destinationPath: string): Promise<void> {
+    if (!destinationPath.toLowerCase().endsWith('.txt')) throw new Error('运行日志必须使用 .txt 扩展名');
+    const entries = await this.query();
+    const text = entries.map(entry => `${entry.timestamp} [${entry.level}] [${entry.category}] [${entry.device ?? '—'}] ${entry.message}\n${JSON.stringify(entry)}`).join('\n\n');
+    await writeFileAtomically(destinationPath, `团播联动台运行日志（包含历史会话）\n${text}\n`);
   }
 
   async exportDiagnosticPackage(
@@ -72,7 +136,7 @@ export class LinkRunLogger {
     context: Readonly<Record<string, unknown>>
   ): Promise<void> {
     if (!destinationPath.toLowerCase().endsWith('.tbdiag.gz')) throw new Error('诊断包必须使用 .tbdiag.gz 扩展名');
-    const diskEntries = await this.readAllDiskEntries();
+    const diskEntries = await this.query();
     const payload = redactValue({
       schemaVersion: 1,
       exportedAt: new Date().toISOString(),
@@ -103,9 +167,14 @@ export class LinkRunLogger {
         if (filter.device && entry.device !== filter.device) continue;
         if (filter.result && entry.result !== filter.result) continue;
         entries.push(entry);
+        if (filter.limit && entries.length >= filter.limit * 2) {
+          entries.sort((a, b) => chronological(b, a));
+          entries.length = filter.limit;
+        }
       }
     }
-    return entries.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    entries.sort(chronological);
+    return filter.limit ? entries.slice(-filter.limit) : entries;
   }
 
   private async *readDiskEntries(filePath: string): AsyncGenerator<LinkLogEntry> {
@@ -117,11 +186,15 @@ export class LinkRunLogger {
         index++;
         if (!line) continue;
         try {
-          const value: unknown = JSON.parse(line);
+          const value: unknown = redactValue(JSON.parse(line), this.secretValues());
           if (!isLinkLogEntry(value)) throw new Error('日志条目结构无效');
           yield value;
         } catch (error) {
-          throw new Error(`${filePath} 第 ${index} 行损坏`, { cause: error });
+          // A crash can leave an incomplete final line. Keep other evidence exportable.
+          yield { id: `damaged-${basename(filePath)}-${index}`, sessionId: basename(filePath, '.jsonl'),
+            timestamp: new Date().toISOString(), monotonicMs: 0, level: 'error', category: 'system',
+            message: `${basename(filePath)} 第 ${index} 行损坏；已保留原文件并继续读取其他日志`,
+            details: { file: basename(filePath), line: index, reason: error instanceof SyntaxError ? 'JSON 不完整或格式错误' : '日志条目结构无效' } };
         }
       }
     } catch (error) {
@@ -132,6 +205,10 @@ export class LinkRunLogger {
       stream.destroy();
     }
   }
+}
+
+function chronological(left: LinkLogEntry, right: LinkLogEntry): number {
+  return left.timestamp.localeCompare(right.timestamp) || left.monotonicMs - right.monotonicMs;
 }
 
 export function redactValue(value: unknown, secrets: readonly string[]): unknown {

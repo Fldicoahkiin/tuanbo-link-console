@@ -2,6 +2,8 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { mkdtemp, readdir, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import { decodeWaveform, WaveformAccumulator, WaveformService } from './waveform-service';
 
 const directories: string[] = [];
@@ -51,6 +53,8 @@ test('concurrent requests share work, independent jobs serialize and failures ne
 
 test('real FFmpeg streams the first channel and reports invalid media', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-waveform-')); directories.push(directory);
+  const worker = join(directory, 'waveform-worker.cjs');
+  await build({ entryPoints: [fileURLToPath(new URL('./waveform-worker.ts', import.meta.url))], bundle: true, platform: 'node', format: 'cjs', outfile: worker });
   const path = join(directory, 'stereo.wav');
   const wav = Buffer.alloc(44 + 48000 * 4);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
@@ -59,10 +63,10 @@ test('real FFmpeg streams the first channel and reports invalid media', async ()
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   for (let sample = 0; sample < 48000; sample += 1) { wav.writeInt16LE(8192, 44 + sample * 4); wav.writeInt16LE(-32768, 46 + sample * 4); }
   await writeFile(path, wav);
-  const peaks = await decodeWaveform(path, 1000);
+  const peaks = await decodeWaveform(path, 1000, worker);
   expect(peaks).toHaveLength(4800); expect(peaks.every((value) => Math.abs(value - 0.25) < 0.0001)).toBe(true);
   const invalid = join(directory, 'invalid.wav'); await writeFile(invalid, 'invalid');
-  await expect(decodeWaveform(invalid, 1000)).rejects.toThrow('波形解码失败');
+  await expect(decodeWaveform(invalid, 1000, worker)).rejects.toThrow('波形解码失败');
 });
 
 test('coarse waveform cache is regenerated for precise editing', async () => {

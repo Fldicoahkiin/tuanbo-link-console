@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { CueExecutionReport, LinkRuntimeState, ManagedMediaEvent, PreflightReport } from '@tb/core/link';
+import type { CueExecutionReport, LinkRuntimeState, ManagedMediaExecutionReport, PreflightReport } from '@tb/core/link';
+export type { ManagedMediaExecutionReport } from '@tb/core/link';
 import type { SmpteTimecode } from '@tb/schema';
 import type { MtcFrameRate } from '@tb/schema';
 
@@ -21,16 +22,6 @@ export type RuntimeStoreState = {
   mediaReports: ManagedMediaExecutionReport[];
   setState: (update: Partial<Omit<RuntimeStoreState, 'setState' | 'reset'>>) => void;
   reset: () => void;
-};
-
-export type ManagedMediaExecutionReport = {
-  executionId: string;
-  event: ManagedMediaEvent;
-  status: 'succeeded' | 'failed' | 'skipped';
-  startedAt: number;
-  finishedAt: number;
-  durationMs: number;
-  error?: string;
 };
 
 const initial = {

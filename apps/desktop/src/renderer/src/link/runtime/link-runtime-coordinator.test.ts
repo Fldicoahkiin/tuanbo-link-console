@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject, type Ma2PlaybackRequest } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject, type Ma2PlaybackRequest, type LinkAction } from '@tb/schema';
 import { allocateP1TimecodeRanges, frameNumberToTimecode, type LinkDesktopApi } from '@tb/core/link';
 import type { MtcQuarterFrameMessage } from '../../registry/link-midi-adapter';
 import { LinkRuntimeCoordinator } from './link-runtime-coordinator';
@@ -9,8 +9,10 @@ const mocks = vi.hoisted(() => ({
   activateManagedObsOutput: vi.fn(() => Promise.resolve()),
   setInternalAudioCapture: vi.fn(() => Promise.resolve()),
   executeObsAction: vi.fn<() => Promise<void>>(),
+  executeMidiAction: vi.fn<(action: LinkAction) => Promise<void>>(() => Promise.resolve()),
   executeManagedMediaEvent: vi.fn<LinkDesktopApi['executeManagedMediaEvent']>(),
   seekManagedMedia: vi.fn<LinkDesktopApi['seekManagedMedia']>(),
+  prepareObsMediaScenes: vi.fn<LinkDesktopApi['prepareObsMediaScenes']>().mockResolvedValue(),
   listener: null as ((message: MtcQuarterFrameMessage) => void) | null
 }));
 vi.mock('../view-models/link-desktop-view-model', () => ({
@@ -20,17 +22,22 @@ vi.mock('../view-models/link-desktop-view-model', () => ({
     setInternalAudioCapture: mocks.setInternalAudioCapture,
     executeObsAction: mocks.executeObsAction,
     executeManagedMediaEvent: mocks.executeManagedMediaEvent,
-    seekManagedMedia: mocks.seekManagedMedia
+    seekManagedMedia: mocks.seekManagedMedia,
+    prepareObsMediaScenes: mocks.prepareObsMediaScenes
   }
 }));
 vi.mock('../stores/integration-store', () => ({
   useIntegrationStore: { getState: () => ({
+    obs: { status: 'connected' },
     setMidiPorts: () => undefined,
     profile: { p1: { mtcInputPortProfileId: 'mtc', expectedFrameRate: '30' }, midiPortProfiles: [] }
   }) }
 }));
 vi.mock('../../registry/link-midi-adapter', () => ({
   LinkMidiAdapter: class {
+    supports(action: LinkAction) { return action.kind.startsWith('midi.'); }
+    execute(action: LinkAction) { return mocks.executeMidiAction(action); }
+    openOutputs() { return Promise.resolve([]); }
     initialize() { return Promise.resolve([]); }
     hasActiveMtcSubscription() { return mocks.listener !== null; }
     subscribePorts() { return () => undefined; }
@@ -45,6 +52,79 @@ vi.mock('../../registry/link-midi-adapter', () => ({
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); mocks.executeObsAction.mockReset(); mocks.executeManagedMediaEvent.mockReset(); mocks.seekManagedMedia.mockReset(); useRuntimeStore.getState().reset(); });
 
 describe('LinkRuntimeCoordinator', () => {
+  it('后台播放的界面观察不把四秒交付间隔当成 MTC 断流，不伪造 Cue 执行', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] }); vi.stubGlobal('window', globalThis);
+    mocks.executeMidiAction.mockClear();
+    const project = parseLinkProject({ ...createEmptyLinkProject('后台观察'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      rundown: [{ id: 'song', title: '歌曲', cues: [0, 1, 5].map(seconds => ({ id: `cue-${seconds}`, name: '画面',
+        timecode: { hours: 0, minutes: 0, seconds, frames: 0 },
+        actions: [{ id: `scene-${seconds}`, label: '画面', kind: 'obs.setProgramScene', sceneName: 'Camera' }] })) }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:/shows/test.tblink');
+    try {
+      await coordinator.prepareNativeCompanion('song', 0); await coordinator.ingestInternal(0); coordinator.startInternalClock(0);
+      vi.advanceTimersByTime(4000); await coordinator.ingestInternal(4000);
+      expect(useRuntimeStore.getState()).toMatchObject({ state: 'running', reason: null, nextCueId: 'cue-5', currentCueId: null, reports: [], missedCueIds: [] });
+      await coordinator.pauseInternal(); vi.advanceTimersByTime(4000); await coordinator.ingestInternal(4200);
+      expect(useRuntimeStore.getState().state).toBe('running');
+      await coordinator.seekInternal(2000); expect(useRuntimeStore.getState().state).toBe('paused');
+      await coordinator.stopAndWait(false); expect(useRuntimeStore.getState().state).toBe('idle');
+      expect(mocks.executeMidiAction).not.toHaveBeenCalled(); expect(mocks.executeObsAction).not.toHaveBeenCalled();
+    } finally { coordinator.dispose(); }
+  });
+  it('仍在界面执行的通用 MIDI 遇到四秒阻塞必须冻结，不补发过去动作', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] }); vi.stubGlobal('window', { setInterval: () => 1, clearInterval: () => undefined });
+    mocks.executeMidiAction.mockClear();
+    const project = parseLinkProject({ ...createEmptyLinkProject('通用 MIDI 边界'), playbackSource: 'internal', rundown: [{ id: 'song', title: '歌曲',
+      cues: [0, 1, 5].map(seconds => ({ id: `cue-${seconds}`, name: '动作', timecode: { hours: 0, minutes: 0, seconds, frames: 0 },
+        actions: [{ id: `midi-${seconds}`, label: '外部控制', kind: 'midi.noteOn', portProfileId: 'test', channel: 1, note: 60, velocity: 100 }] })) }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:/shows/test.tblink');
+    try {
+      await coordinator.prepareNativeCompanion('song', 0); await coordinator.ingestInternal(0); coordinator.startInternalClock(0);
+      vi.advanceTimersByTime(4000); await coordinator.ingestInternal(4000); await coordinator.ingestInternal(5000);
+      expect(useRuntimeStore.getState().state).toBe('timecodeLost');
+      expect(mocks.executeMidiAction.mock.calls.map(([action]) => action.id)).toEqual(['midi-0']);
+      await coordinator.stopAndWait(false);
+    } finally { coordinator.dispose(); }
+  });
+  it('原生伴随通道只执行 MIDI Cue，暂停定位停止均不重复采集或控制后台 OBS', async () => {
+    vi.stubGlobal('window', globalThis);
+    mocks.setInternalAudioCapture.mockClear(); mocks.executeMidiAction.mockClear();
+    const project = parseLinkProject({ ...createEmptyLinkProject('后台独立画面'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      rundown: [{ id: 'song', title: '歌曲', cues: [0, 1].map(seconds => ({ id: `cue-${seconds}`, name: '混合 Cue',
+        timecode: { hours: 0, minutes: 0, seconds, frames: 0 }, actions: [
+          { id: `scene-${seconds}`, label: '画面', kind: 'obs.setProgramScene', sceneName: 'Camera' },
+          { id: `midi-${seconds}`, label: '外部控制', kind: 'midi.noteOn', portProfileId: 'test', channel: 1, note: 60, velocity: 100 }
+        ] })) }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:/shows/test.tblink');
+    try {
+      await coordinator.prepareNativeCompanion('song', 0);
+      await coordinator.ingestInternal(0);
+      await coordinator.pauseInternal();
+      await coordinator.seekInternal(1500);
+      await coordinator.stopAndWait(false);
+      expect(mocks.executeMidiAction.mock.calls.map(([action]) => action.id)).toEqual(['midi-0']);
+      expect(mocks.executeObsAction).not.toHaveBeenCalled();
+      expect(mocks.executeManagedMediaEvent).not.toHaveBeenCalled();
+      expect(mocks.setInternalAudioCapture).not.toHaveBeenCalled();
+    } finally { coordinator.dispose(); }
+  });
+  it('停止拖动直接更新 OBS，保持 idle，不准备正式音频或布防', async () => {
+    mocks.executeObsAction.mockResolvedValue(); mocks.setInternalAudioCapture.mockClear();
+    const project = parseLinkProject({ ...createEmptyLinkProject('编辑预览'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      rundown: [{ id: 'song', title: '节目', cues: [{ id: 'camera', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 2, frames: 0 },
+        actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: 'Camera' }] }] }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:\\show\\show.tblink');
+    try {
+      await coordinator.previewEditor('song', 3000, false);
+      expect(mocks.executeObsAction).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sceneName: 'Camera' }));
+      expect(useRuntimeStore.getState().state).toBe('idle');
+      expect(mocks.setInternalAudioCapture).not.toHaveBeenCalled();
+      mocks.executeObsAction.mockClear();
+      const pending = coordinator.previewEditor('song', 4000, false);
+      await coordinator.stopAndWait(); await pending;
+      expect(mocks.executeObsAction).not.toHaveBeenCalled();
+    } finally { coordinator.dispose(); }
+  });
   it('P1 跟随驱动准备和正式 Cue，暂停跳过旧点、断流冻结并取消发送', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     const playMa2Cue = vi.fn<(_request: Ma2PlaybackRequest) => Promise<void>>().mockResolvedValue();
@@ -138,6 +218,28 @@ describe('LinkRuntimeCoordinator', () => {
       expect(useRuntimeStore.getState().state).toBe('running');
       expect(useRuntimeStore.getState().reason).not.toBe('MTC 时间跳变');
     } finally { coordinator.dispose(); }
+  });
+  it('取消已发出的 OBS 采集准备，等待回包再关闭，不执行迟到的时间线', async () => {
+    useRuntimeStore.getState().reset(); mocks.executeObsAction.mockClear(); mocks.setInternalAudioCapture.mockClear();
+    let release: (() => void) | undefined; const gate = new Promise<void>(resolve => { release = resolve; });
+    mocks.setInternalAudioCapture.mockImplementationOnce(() => gate);
+    const project = parseLinkProject({ ...createEmptyLinkProject('取消画面准备'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      rundown: [{ id: 'song', title: '歌', cues: [{ id: 'cue', name: '开场', timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
+        actions: [{ id: 'a', kind: 'obs.setProgramScene', label: '不应迟到切场景', sceneName: 'Scene' }] }] }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:\\show\\cancel.tblink');
+    const prepare = coordinator.prepareInternal('song', async () => {
+      coordinator.beginPreflight('live'); const report = { checkedAt: new Date().toISOString(), mode: 'live' as const, passed: true, checks: [] };
+      await coordinator.applyPreflight(report); return report;
+    }, 500);
+    const cancelled = expect(prepare).rejects.toThrow('已取消');
+    try {
+      await vi.waitFor(() => expect(mocks.setInternalAudioCapture).toHaveBeenCalledWith(true, ['Scene']));
+      let stopped = false; const stop = coordinator.stopAndWait(false).then(() => { stopped = true; });
+      await Promise.resolve(); expect(stopped).toBe(false);
+      release!(); await cancelled; await stop;
+      expect(mocks.setInternalAudioCapture).toHaveBeenLastCalledWith(false);
+      expect(mocks.executeObsAction).not.toHaveBeenCalled(); expect(useRuntimeStore.getState().state).toBe('idle');
+    } finally { release?.(); coordinator.dispose(); }
   });
   it('完整场景从头播放和反复定位只切场景，不发布受管画面或修改来源', async () => {
     vi.stubGlobal('window', { setInterval: () => 1, clearInterval: () => undefined });

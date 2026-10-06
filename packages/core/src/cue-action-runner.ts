@@ -43,6 +43,7 @@ export type ActionExecutionEvent = {
 };
 
 type RunnerOptions = {
+  stopOnFailure?: boolean;
   now?: () => number;
   createExecutionId?: () => string;
   obsTimeoutMs?: number;
@@ -50,12 +51,14 @@ type RunnerOptions = {
 };
 
 export class CueActionRunner {
+  private readonly stopOnFailure: boolean;
   private readonly now: () => number;
   private readonly createExecutionId: () => string;
   private readonly obsTimeoutMs: number;
   private readonly onStatus: ((event: ActionExecutionEvent) => Promise<void>) | null;
 
   constructor(private readonly executors: readonly LinkActionExecutor[], options: RunnerOptions = {}) {
+    this.stopOnFailure = options.stopOnFailure ?? false;
     this.now = options.now ?? (() => performance.now());
     this.createExecutionId = options.createExecutionId ?? (() => crypto.randomUUID());
     this.obsTimeoutMs = options.obsTimeoutMs ?? 2_000;
@@ -71,14 +74,14 @@ export class CueActionRunner {
     for (const action of cue.actions) {
       if (blocked) {
         const at = this.now();
-        const skipped = createResult(executionId, cue.id, action, 'skipped', at, at, '排练模式已被前序失败动作阻断');
+        const skipped = createResult(executionId, cue.id, action, 'skipped', at, at, mode === 'rehearsal' ? '排练模式已被前序失败动作阻断' : '当前输出通道已被前序失败动作阻断');
         results.push(skipped);
         await this.emit(action, skipped.status, executionId, cue.id, at, skipped.error);
         continue;
       }
       const result = await this.executeAction(executionId, cue.id, action, canExecute);
       results.push(result);
-      if (mode === 'rehearsal' && result.status === 'failed') blocked = true;
+      if ((mode === 'rehearsal' || this.stopOnFailure) && result.status === 'failed') blocked = true;
     }
 
     return {

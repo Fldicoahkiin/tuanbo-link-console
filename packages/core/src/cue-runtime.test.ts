@@ -4,6 +4,46 @@ import { CueRuntime, isMtcSampleContinuous } from './cue-runtime';
 import { frameNumberToTimecode, type MtcSample } from './mtc-timecode';
 
 describe('CueRuntime', () => {
+  it('后台观察模式不派发或认领执行结果，不能被 P1 或通用 MIDI 绕过断流保护', () => {
+    const value = { ...project(), playbackSource: 'internal' as const };
+    const runtime = new CueRuntime(value); runtime.selectItem('item'); runtime.beginPreflight('live');
+    runtime.arm(0, sample(30, 0), 'awaiting-external-start', 'external');
+    expect(runtime.tick(4000)).toMatchObject({ state: 'armed', dueCues: [], missedCueIds: [] });
+    expect(runtime.ingest(sample(120, 4000))).toMatchObject({ state: 'running', dueCues: [], missedCueIds: [] });
+    expect(runtime.manualGo('cue-1').dueCues).toEqual([]);
+    runtime.pauseAutomatic(); expect(runtime.resumeMedia(sample(126, 9000)).state).toBe('running');
+    runtime.stop(); runtime.completeStop(); runtime.beginPreflight('live'); runtime.arm(10000);
+    runtime.ingest(sample(0, 10000)); expect(runtime.tick(10501).state).toBe('timecodeLost');
+    for (const source of ['p1', 'internal'] as const) {
+      const blocked = project(); blocked.playbackSource = source;
+      if (source === 'internal') blocked.rundown[0]!.cues[0]!.actions = [{ id: 'midi', label: '不可旁路', kind: 'midi.noteOn', portProfileId: 'out', channel: 1, note: 60, velocity: 100 }];
+      const execution = new CueRuntime(blocked); execution.selectItem('item'); execution.beginPreflight('live');
+      expect(execution.arm(0, null, 'awaiting-external-start', 'external').state).toBe('error');
+    }
+  });
+  it('下一 Cue 使用运行索引，手动执行不受最近报告淘汰影响，重新布防重置', () => {
+    const runtime = new CueRuntime(project());
+    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);
+    expect(runtime.getNextCueId()).toBe('cue-1');
+    runtime.ingest(sample(0, 0)); runtime.tick(501); runtime.enableManualTakeover();
+    expect(runtime.manualGo('cue-1').dueCues).toHaveLength(1);
+    expect(runtime.getNextCueId()).toBe('cue-2');
+    expect(runtime.manualGo('cue-2').dueCues).toHaveLength(1);
+    expect(runtime.getNextCueId()).toBeNull();
+    runtime.stop(); runtime.completeStop(); runtime.beginPreflight('live'); runtime.arm(1000);
+    expect(runtime.getNextCueId()).toBe('cue-1');
+  });
+  it('下一 Cue 不显示隐藏层或自动生成的结束动作，保持同帧原顺序', () => {
+    const value = project(), item = value.rundown[0]!;
+    item.visualLayers.push({ id: 'hidden', name: '隐藏层', visible: false, locked: false });
+    item.cues[0]!.durationMs = 100;
+    item.cues[0]!.actions = [{ id: 'show', label: '显示', kind: 'obs.setSceneItemEnabled', sceneName: '场景', sourceName: '机位', enabled: true }];
+    item.cues.push({ ...item.cues[1]!, id: 'same-frame' }, { ...item.cues[0]!, id: 'hidden-cue', layerId: 'hidden', timecode: frameNumberToTimecode(0, '30') });
+    const runtime = new CueRuntime(value); runtime.selectItem('item');
+    expect(runtime.getNextCueId()).toBe('cue-1');
+    expect(runtime.getNextCueId(30)).toBe('cue-2');
+    expect(runtime.getNextCueId(60)).toBeNull();
+  });
   it('本机音频准备后重建时钟基准，保留已执行 Cue 且继续检测真实断流', () => {
     const runtime = new CueRuntime({ ...project(), playbackSource: 'internal' });
     runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);

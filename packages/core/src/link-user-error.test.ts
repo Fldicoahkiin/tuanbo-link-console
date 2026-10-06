@@ -21,3 +21,7 @@ it('原始系统异常与未知英文错误转为可读中文', () => {
 it('音频线路丢失时不泄露设备 ID 或英文底层异常', () => {
   expect(toUserErrorMessage(new Error('AudioContext.setSinkId: failed: the device 12345 is not found'))).toBe('所选音频输出设备已断开。请在音频输出设置中选择当前设备或 Windows 默认设备。');
 });
+it('音频解码错误带底层错误码时仍说明音频问题，不退回笼统提示', () => {
+  expect(toUserErrorMessage(new Error('音频解码或读取失败：DEMUXER_ERROR_COULD_NOT_OPEN: FFmpegDemuxer')))
+    .toBe('无法读取或解码音频。请检查音频文件是否损坏、格式是否支持；修复或更换音频后重新播放。');
+});
