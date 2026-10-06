@@ -6,6 +6,7 @@ on:
     paths:
       - 'apps/licensing-server/**'
       - 'scripts/verify-purchase-website.mjs'
+      - 'scripts/verify-console.mjs'
       - 'packages/core/**'
       - 'packages/schema/**'
       - 'package.json'
@@ -19,6 +20,7 @@ on:
     paths:
       - 'apps/licensing-server/**'
       - 'scripts/verify-purchase-website.mjs'
+      - 'scripts/verify-console.mjs'
       - 'packages/core/**'
       - 'packages/schema/**'
       - 'package.json'
@@ -62,10 +64,12 @@ jobs:
         run: |
           pnpm --filter @tb/licensing-server build
           pnpm --filter @tb/licensing-server build:web
+          pnpm --filter @tb/licensing-server build:console
       - name: Verify website checkout in an isolated browser
         run: |
           pnpm --filter @tb/desktop exec playwright install --with-deps chromium
           node scripts/verify-purchase-website.mjs
+          node scripts/verify-console.mjs
       - name: Verify deployment, rollback and delivery recovery
         env:
           PYTHONDONTWRITEBYTECODE: '1'

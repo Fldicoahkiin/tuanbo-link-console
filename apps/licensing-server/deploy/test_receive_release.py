@@ -7,6 +7,7 @@ import signal
 import tarfile
 from tempfile import TemporaryDirectory
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 HERE = Path(__file__).parent
@@ -102,24 +103,26 @@ class ReceiverTest(unittest.TestCase):
 
     def test_policy_requires_installed_tools_and_reviewed_proxy(self):
         _, manifest, _ = payload()
-        policy = {'nginxSha256': 'c' * 64}
-        module.verify_policy(manifest, policy, manifest['tools'], 'c' * 64, None)
+        policy = {'nginxSha256': 'c' * 64, 'consoleNginxSha256': 'e' * 64}
+        module.verify_policy(manifest, policy, manifest['tools'], 'c' * 64, 'e' * 64, None)
         with self.assertRaisesRegex(RuntimeError, 'operator-reviewed'):
-            module.verify_policy(manifest, policy, {}, 'c' * 64, None)
+            module.verify_policy(manifest, policy, {}, 'c' * 64, 'e' * 64, None)
         with self.assertRaisesRegex(RuntimeError, 'operator-reviewed'):
-            module.verify_policy(manifest, policy, manifest['tools'], 'd' * 64, None)
+            module.verify_policy(manifest, policy, manifest['tools'], 'd' * 64, 'e' * 64, None)
+        with self.assertRaisesRegex(RuntimeError, 'operator-reviewed'):
+            module.verify_policy(manifest, policy, manifest['tools'], 'c' * 64, 'f' * 64, None)
 
     def test_no_replay_or_older_run_but_failed_attempt_can_retry(self):
         _, manifest, _ = payload()
         previous = {'runId': 500, 'attempt': 1}
         with self.assertRaisesRegex(RuntimeError, 'superseded'):
-            module.verify_policy(manifest, {'nginxSha256': 'c'}, manifest['tools'], 'c', previous)
+            module.verify_policy(manifest, {'nginxSha256': 'c', 'consoleNginxSha256': 'e'}, manifest['tools'], 'c', 'e', previous)
         manifest['runId'] = 499
         manifest['attempt'] = 10
         with self.assertRaisesRegex(RuntimeError, 'superseded'):
-            module.verify_policy(manifest, {'nginxSha256': 'c'}, manifest['tools'], 'c', previous)
+            module.verify_policy(manifest, {'nginxSha256': 'c', 'consoleNginxSha256': 'e'}, manifest['tools'], 'c', 'e', previous)
         manifest.update(runId=500, attempt=2)
-        module.verify_policy(manifest, {'nginxSha256': 'c'}, manifest['tools'], 'c', previous)
+        module.verify_policy(manifest, {'nginxSha256': 'c', 'consoleNginxSha256': 'e'}, manifest['tools'], 'c', 'e', previous)
 
     def test_job_records_only_complete_deployment_and_preserves_partial_evidence(self):
         for failure in [False, True]:
@@ -132,13 +135,17 @@ class ReceiverTest(unittest.TestCase):
                 policy = root / 'policy.json'
                 proxy = root / 'nginx.conf'
                 proxy.write_text('existing proxy')
-                policy.write_text(json.dumps({'nginxSha256': module.digest(proxy)}))
+                console_proxy = root / 'console-nginx.conf'
+                console_proxy.write_text('separate console proxy')
+                policy.write_text(json.dumps({'nginxSha256': module.digest(proxy), 'consoleNginxSha256': module.digest(console_proxy)}))
                 env = root / 'environment'
                 env.write_text('existing environment')
                 bundle = root / 'bundle.js'
                 bundle.write_text('old bundle')
                 website = root / 'website'
                 website.mkdir()
+                console_site = root / 'console-site'
+                console_site.mkdir()
                 tools = {name: root / name for name in manifest['tools']}
                 for tool in tools.values():
                     tool.write_text('trusted operator-installed tool')
@@ -146,13 +153,18 @@ class ReceiverTest(unittest.TestCase):
                 (job / 'incoming.tar').write_bytes(data)
 
                 def execute(name, *args):
-                    with tarfile.open(args[0]) as archive:
-                        self.assertEqual(archive.extractfile('nginx.next.conf').read(), b'existing proxy')
+                    if name != 'publish-console.py':
+                        with tarfile.open(args[0]) as archive:
+                            self.assertEqual(archive.extractfile('nginx.next.conf').read(), b'existing proxy')
                     if name == 'activate-release.py':
                         bundle.write_bytes(files['dist/index.js'])
                         return {'backup': '/verified/runtime-backup'}
                     if failure:
                         raise RuntimeError('website failed')
+                    if name == 'publish-console.py':
+                        for asset in module.CONSOLE_FILES:
+                            (console_site / asset).write_bytes(files['console/' + asset])
+                        return {'backup': '/verified/console-backup'}
                     for name in module.STATIC:
                         target = website / name
                         target.parent.mkdir(exist_ok=True)
@@ -160,16 +172,19 @@ class ReceiverTest(unittest.TestCase):
                     return {'backup': '/verified/website-backup'}
 
                 with patch.multiple(module, ROOT=root, POLICY=policy, NGINX=proxy, ENVIRONMENT=env,
-                                    BUNDLE=bundle, WEBSITE=website, TOOLS=tools), patch.object(module, 'execute', side_effect=execute):
+                                    BUNDLE=bundle, WEBSITE=website, TOOLS=tools, CONSOLE=console_site, CONSOLE_NGINX=console_proxy,
+                                    CONSOLE_MAINTENANCE=root / 'console-maintenance'), patch.object(module, 'execute', side_effect=execute), patch.object(module.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='not-found')):
                     if failure:
                         with self.assertRaisesRegex(RuntimeError, 'website failed'):
                             module.activate_job(job)
                         self.assertFalse((root / 'last-success.json').exists())
                         self.assertFalse((job / 'result.json').exists())
+                        self.assertTrue((root / 'console-maintenance').exists())
                     else:
                         result = module.activate_job(job)
                         self.assertEqual(result['files'], manifest['files'])
                         self.assertEqual(json.loads((root / 'last-success.json').read_text()), result)
+                        self.assertFalse((root / 'console-maintenance').exists())
                     self.assertTrue((job / 'runtime-result.json').exists())
                     self.assertEqual(env.read_text(), 'existing environment')
 

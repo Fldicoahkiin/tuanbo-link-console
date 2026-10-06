@@ -1,0 +1,103 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { mkdtemp, readFile, mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { request as httpRequest } from 'node:http';
+import { createHmac } from 'node:crypto';
+import { build } from 'esbuild';
+const require = createRequire(new URL('../apps/desktop/package.json', import.meta.url));
+const { chromium } = require('@playwright/test');
+const folder = await mkdtemp(join(tmpdir(), 'tblink-console-browser-'));
+const bundle = join(folder, 'fixture.mjs');
+await build({ entryPoints: [fileURLToPath(new URL('../apps/licensing-server/src/console-fixture.ts', import.meta.url))], outfile: bundle, bundle: true, platform: 'node', target: 'node22', format: 'esm' });
+const { startConsoleFixture } = await import(pathToFileURL(bundle).href);
+const fixture = await startConsoleFixture();
+const origin = 'https://admin.tuanbo-link.jinhefilm.com';
+const assets = new URL('../apps/licensing-server/dist/console/', import.meta.url);
+const shots = new URL('../apps/licensing-server/dist/console-review/', import.meta.url); await mkdir(shots, { recursive: true });
+function totp(secret) {
+  let bits = 0; let value = 0; const bytes = [];
+  for (const char of secret) { value = (value << 5) | 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'.indexOf(char); bits += 5; if (bits >= 8) { bytes.push((value >>> (bits - 8)) & 255); bits -= 8; } }
+  const counter = Buffer.alloc(8); counter.writeBigUInt64BE(BigInt(Math.floor(fixture.now / 30000)));
+  const mac = createHmac('sha1', Buffer.from(bytes)).update(counter).digest(); const offset = mac.at(-1) & 15;
+  return ((mac.readUInt32BE(offset) & 0x7fffffff) % 1000000).toString().padStart(6, '0');
+}
+function forward(request) {
+  return new Promise((resolve, reject) => {
+    const headers = { ...request.headers(), host: new URL(origin).host }; delete headers['content-length'];
+    const req = httpRequest({ host: '127.0.0.1', port: fixture.port, path: new URL(request.url()).pathname + new URL(request.url()).search, method: request.method(), headers }, res => {
+      const chunks = []; res.on('data', chunk => chunks.push(chunk)); res.on('end', () => { const responseHeaders = {}; for (const [name, value] of Object.entries(res.headers)) if (value !== undefined && !['transfer-encoding', 'connection', 'content-length'].includes(name)) responseHeaders[name] = Array.isArray(value) ? value.join('\n') : value; resolve({ status: res.statusCode, headers: responseHeaders, body: Buffer.concat(chunks) }); });
+    }); req.on('error', reject); req.end(request.postData() ?? undefined);
+  });
+}
+const browser = await chromium.launch({ headless: true, ...(process.env.TBLINK_TEST_BROWSER_CHANNEL ? { channel: process.env.TBLINK_TEST_BROWSER_CHANNEL } : {}) }); const errors = [];
+try {
+  async function pageFor(role, width = 1440) {
+    const context = await browser.newContext({ viewport: { width, height: 960 } });
+    await context.route(origin + '/**', async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.startsWith('/console-api/')) { await route.fulfill(await forward(route.request())); return; }
+      const files = { '/': ['index.html', 'text/html'], '/console.js': ['console.js', 'application/javascript'], '/console.css': ['console.css', 'text/css'] };
+      const file = files[path]; if (!file) { await route.fulfill({ status: 404 }); return; }
+      await route.fulfill({ contentType: file[1], body: await readFile(new URL(file[0], assets)) });
+    });
+    const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
+    await page.goto(origin); await page.getByRole('button', { name: '使用开通凭据设置账号' }).click();
+    const invitation = role === 'owner' ? { token: fixture.invitation } : fixture.invite(role);
+    const secret = role === 'owner' ? fixture.secret : fixture.enrollment(invitation.token).secret;
+    await page.getByLabel('一次性开通凭据').fill(invitation.token); await page.getByRole('button', { name: '准备绑定验证器' }).click();
+    await page.getByLabel('设置密码').fill('browser-isolated-password'); await page.getByLabel('验证器验证码', { exact: true }).fill(totp(secret)); await page.getByRole('button', { name: '完成开通', exact: true }).click();
+    await page.getByRole('heading', { name: '保存恢复码' }).waitFor();
+    const recovery = (await page.locator('pre.secret').innerText()).split('\n')[0];
+    await page.getByRole('button', { name: '已保存，返回登录' }).click();
+    await page.getByLabel('用户名', { exact: true }).fill(`fixture-${role}`); await page.getByLabel('密码', { exact: true }).fill('browser-isolated-password'); await page.getByLabel('验证器验证码或恢复码').fill(recovery);
+    await page.getByRole('button', { name: '登录', exact: true }).click(); await page.getByRole('heading', { name: '工作台', exact: true }).waitFor();
+    return { page, context };
+  }
+  const { page, context } = await pageFor('owner');
+  await page.getByRole('button', { name: '订单中心', exact: true }).click(); await page.getByRole('button', { name: '创建线下订单', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('业务订单编号').fill('BROWSER-ORDER-1'); await dialog.getByLabel('客户名称').fill('浏览器验收客户');
+  await dialog.getByLabel('授权截止时间').fill('2026-11-06T16:00'); await dialog.getByLabel('金额（元）').fill('800'); await dialog.getByLabel('操作原因').fill('隔离验收');
+  await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('线下订单已创建，等待财务核款').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('button', { name: '查看详情' }).first().click(); await page.getByRole('button', { name: '确认实际收款并发码' }).click();
+  await dialog.getByLabel('真实收款流水号').fill('BROWSER-BANK-1'); await dialog.getByLabel('付款方式').fill('测试核款'); await dialog.getByLabel('操作原因').fill('隔离夹具，不是真实收款');
+  await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('核款与发码已完成').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('heading', { name: '关联授权' }).waitFor(); await page.getByRole('button', { name: '查看详情' }).first().click(); await page.getByRole('heading', { name: '授权详情' }).waitFor();
+  assert.equal((await page.locator('body').innerText()).includes('TBA-'), false);
+  await page.getByRole('button', { name: '查看完整激活码' }).click(); await dialog.getByLabel('操作原因').fill('测试授权交付'); await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.locator('pre.secret').waitFor(); assert.match(await dialog.locator('pre.secret').innerText(), /^TBA-/); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  await page.screenshot({ path: fileURLToPath(new URL('owner-desktop.png', shots)), fullPage: true });
+  await context.close();
+  for (const role of ['operations', 'finance', 'viewer']) {
+    const { page, context } = await pageFor(role, role === 'viewer' ? 390 : 1440);
+    assert.equal(await page.getByRole('button', { name: '人员管理', exact: true }).count(), 0);
+    await page.getByRole('button', { name: '订单中心', exact: true }).click(); await page.getByRole('button', { name: '查看详情' }).first().click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '重发领取凭据', exact: true }).count(), role === 'operations' ? 1 : 0);
+    assert.equal(await page.getByRole('button', { name: '登记已办理的退款', exact: true }).count(), role === 'finance' ? 1 : 0);
+    assert.equal((await page.locator('body').innerText()).includes('TBA-'), false);
+    const dialog = page.getByRole('dialog');
+    if (role === 'operations') {
+      await page.getByRole('button', { name: '创建售后工单', exact: true }).click();
+      await dialog.getByLabel('问题描述').fill('浏览器测试工单'); await dialog.getByLabel('操作原因').fill('客户问题处理');
+      await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('售后工单已创建').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+      await page.getByRole('button', { name: '售后工单', exact: true }).click(); await page.getByRole('button', { name: '查看详情' }).first().click(); await page.getByRole('button', { name: '处理工单', exact: true }).click();
+      await dialog.getByLabel('处理状态').selectOption('closed'); await dialog.getByLabel('授权处理结论').fill('已核对，不变更授权'); await dialog.getByLabel('操作原因').fill('处理完成');
+      await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('工单已更新').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+    }
+    if (role === 'finance') {
+      await page.getByRole('button', { name: '登记已办理的退款', exact: true }).click();
+      await dialog.getByLabel('金额（元）').fill('80'); await dialog.getByLabel('退款渠道凭证编号').fill('BROWSER-REFUND-1'); await dialog.getByLabel('实际办理时间').fill('2026-10-05T00:00'); await dialog.getByLabel('操作原因').fill('隔离人工退款记录');
+      await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('已人工登记退款；系统未调用退款渠道，授权需单独处理').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+      await page.getByRole('button', { name: '记录开票进度', exact: true }).click();
+      await dialog.getByLabel('购买方抬头').fill('浏览器验收客户'); await dialog.getByLabel('操作原因').fill('人工开票申请'); await dialog.getByRole('button', { name: '确认执行' }).click();
+      await dialog.getByText('开票处理记录已保存；系统未调用开票服务').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+      await page.getByRole('button', { name: '财务记录', exact: true }).click(); await page.getByText('BROWSER-REFUND-1', { exact: true }).waitFor();
+    }
+    assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), true);
+    await page.screenshot({ path: fileURLToPath(new URL(`${role}.png`, shots)), fullPage: true }); await context.close();
+  }
+  assert.deepEqual(errors, []);
+  console.log('Console browser acceptance passed: real isolated enrollment/login, manual delivery, protected reveal, operations ticket closure, finance refund/invoice records, four roles, mobile layout. No production payments or credentials used.');
+} finally { await browser.close(); await fixture.close(); }

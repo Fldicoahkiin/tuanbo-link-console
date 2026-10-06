@@ -1,0 +1,13 @@
+[Unit]
+Description=Record licensing recovery status
+After=tblink-licensing.service
+
+[Service]
+Type=oneshot
+User=tblink-license
+ExecStart=/usr/bin/python3 /opt/tblink-licensing/console-health.py
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tblink-licensing

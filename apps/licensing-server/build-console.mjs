@@ -1,0 +1,13 @@
+import { build } from 'esbuild';
+import { mkdir, copyFile, writeFile, readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+const root = new URL('./', import.meta.url);
+const output = new URL('dist/console/', root);
+await mkdir(output, { recursive: true });
+await build({ entryPoints: [fileURLToPath(new URL('console/main.tsx', root))], outfile: fileURLToPath(new URL('console.js', output)), bundle: true, platform: 'browser', format: 'esm', target: 'es2022', minify: true, jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
+for (const name of ['index.html', 'console.css']) await copyFile(new URL(`console/${name}`, root), new URL(name, output));
+const files = {};
+for (const name of ['index.html', 'console.js', 'console.css']) files[name] = createHash('sha256').update(await readFile(new URL(name, output))).digest('hex');
+await writeFile(new URL('manifest.json', output), JSON.stringify({ version: 1, files }, null, 2));
+await build({ entryPoints: [fileURLToPath(new URL('src/console-bootstrap.ts', root))], outfile: fileURLToPath(new URL('dist/console-bootstrap.js', root)), bundle: true, platform: 'node', target: 'node22', format: 'esm' });
