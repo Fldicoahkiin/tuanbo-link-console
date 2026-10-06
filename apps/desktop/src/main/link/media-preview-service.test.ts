@@ -31,15 +31,17 @@ describe('MediaPreviewService', () => {
         if (args[args.indexOf('-i') + 1]!.endsWith('0.mp4')) throw new Error('source decoder failed');
       } finally { active--; }
     }, () => 'ffmpeg.exe');
-    const requests: Promise<string>[] = [];
+    const fixtures: { relative: string; digest: string }[] = [];
     for (let index = 0; index < 8; index++) {
       const source = join(media, `${index}.mp4`), content = `video-${index}`;
       await writeFile(source, content); cleanupFiles.push(source);
       const digest = createHash('sha256').update(content).digest('hex');
       const relative = `assets/reference-media/${index}.mp4`;
-      requests.push(index % 2 === 0 ? service.ensureObsSeekVideo(join(root, 'show.tblink'), relative, digest)
-        : service.ensureVideoPreview(join(root, 'show.tblink'), relative, digest));
+      fixtures.push({ relative, digest });
     }
+    const requests = fixtures.map(({ relative, digest }, index) => index % 2 === 0
+      ? service.ensureObsSeekVideo(join(root, 'show.tblink'), relative, digest)
+      : service.ensureVideoPreview(join(root, 'show.tblink'), relative, digest));
     const results = await Promise.allSettled(requests);
     for (const result of results) if (result.status === 'fulfilled') {
       cleanupFiles.push(result.value);

@@ -33,10 +33,10 @@ export class NativeProgramHost {
 
   constructor(project: LinkProject, path: string, revision: number, private readonly dependencies: Dependencies) {
     const error = (message: string) => dependencies.notice(message, this.selectedItemId);
-    this.midi = new NativeMidiHost({ audio: dependencies.audio, profile: () => dependencies.configuration().lightingProfile ?? null,
-      executable: dependencies.executable, authorize: dependencies.authorize, changed: dependencies.midiChanged, error });
+    this.midi = new NativeMidiHost({ audio: () => dependencies.audio(), profile: () => dependencies.configuration().lightingProfile ?? null,
+      executable: dependencies.executable, authorize: () => dependencies.authorize(), changed: state => dependencies.midiChanged(state), error });
     this.lighting = new NativeLightingOutput({ executable: dependencies.executable, network: dependencies.network,
-      authorize: dependencies.authorize, error });
+      authorize: () => dependencies.authorize(), error });
     this.controller = new NativeProgramPlayer(project, path, revision, {
       prepare: async (itemId, positionMs, { signal }) => {
         const audio = dependencies.audio();
@@ -53,8 +53,8 @@ export class NativeProgramHost {
       // controller's coalesced state ingestion. This is not another sender.
       ingest: () => Promise.resolve(), pause: () => this.midi.stop(), stop: () => this.midi.stop(),
       resolveAudio: () => Promise.reject(new Error('后台节目宿主不使用浏览器音源地址')),
-      configuration: dependencies.configuration, preciseSeeking: dependencies.preciseSeeking,
-      changed: state => { this.selectedItemId = state.itemId; dependencies.changed(state); }, notice: dependencies.notice
+      configuration: () => dependencies.configuration(), preciseSeeking: () => dependencies.preciseSeeking(),
+      changed: state => { this.selectedItemId = state.itemId; dependencies.changed(state); }, notice: (message, itemId) => dependencies.notice(message, itemId)
     }, {
       ...dependencies.api,
       controlNativePlayback: request => { this.interrupt(request); return dependencies.api.controlNativePlayback(request); },
