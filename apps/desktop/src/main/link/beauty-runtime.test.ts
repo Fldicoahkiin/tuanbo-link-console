@@ -87,7 +87,8 @@ it('人体实例模型缺失时明确报错且不启动不完整引擎', async (
   vi.mocked(access).mockRejectedValueOnce(new Error('人体实例模型缺失'));
   await expect(runtime.start('机位')).rejects.toThrow('人体实例模型缺失');
   expect(spawn).not.toHaveBeenCalled();
-  expect(runtime.status()).toMatchObject({ phase: 'error', message: expect.stringContaining('人体实例模型缺失') });
+  expect(runtime.status().phase).toBe('error');
+  expect(runtime.status().message).toContain('人体实例模型缺失');
 });
 
 it('异常进程退出保留诊断，断开连接则协作关闭并回到空闲', async () => {

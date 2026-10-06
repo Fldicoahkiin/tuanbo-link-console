@@ -6,6 +6,8 @@ export default defineConfig({
     include: ['apps/**/*.test.ts', 'packages/**/*.test.ts'],
     environment: 'node',
     globals: true,
+    // Windows 文件与原生进程测试共享磁盘；限制并发，避免高核机器耗尽 I/O。
+    maxWorkers: 4,
     // 排除 e2e（Playwright spec）；vitest 不会跑它，由 playwright test 单独跑
     exclude: ['**/node_modules/**', '**/dist/**', '**/test-e2e/**'],
     coverage: {

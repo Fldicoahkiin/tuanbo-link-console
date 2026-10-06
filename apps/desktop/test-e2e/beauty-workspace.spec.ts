@@ -99,9 +99,9 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
       ipcMain.handle('link:beauty-start', () => { running = true; return runtime(); });
       ipcMain.handle('link:beauty-stop', () => { running = false; });
       ipcMain.removeHandler('link:obs-beauty-read'); ipcMain.handle('link:obs-beauty-read', state);
-      ipcMain.removeHandler('link:obs-beauty-apply');
-      ipcMain.handle('link:obs-beauty-apply', (_event, payload: { values: typeof values }) => {
-        values = payload.values; BrowserWindow.getAllWindows()[0]?.setTitle(JSON.stringify(values)); return state();
+      ipcMain.removeHandler('link:beauty-output');
+      ipcMain.handle('link:beauty-output', (_event, payload: typeof values) => {
+        running = true; values = payload; BrowserWindow.getAllWindows()[0]?.setTitle(JSON.stringify(values)); return state();
       });
       ipcMain.handle('link:obs-live-scene', () => ({ sceneName: '竖屏布局测试', width: 1080, height: 1920, items: [] }));
       ipcMain.removeHandler('link:obs-live-frame');
@@ -168,20 +168,14 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await viewer.press('Escape');
     await expect.poll(async () => (await preview.boundingBox())!.width).toBeCloseTo(fitted.width, 0);
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toBe(beforeView);
-    await page.getByText('画面来源与输出设置', { exact: true }).click();
-    await page.getByLabel('美颜画面来源').selectOption('测试机位');
-    await page.getByLabel('美颜目标滤镜').selectOption('美颜');
-    await page.getByRole('button', { name: '检查滤镜', exact: true }).click();
-    await expect(page.getByText('滤镜版本检查通过。', { exact: false })).toBeVisible();
+    await expect(page.getByLabel('美颜画面来源')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '启动美颜', exact: true })).toHaveCount(0);
     await page.getByLabel('磨皮数值').fill('42'); await page.getByLabel('磨皮数值').press('Enter');
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toContain('"smooth":42');
-    await page.getByRole('button', { name: '启动美颜', exact: true }).click();
-    await expect(page.getByText('已识别 2 人，统一美颜', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '启动美颜', exact: true })).toBeDisabled();
+    await expect(page.getByLabel('美颜生效状态')).toContainText('已识别 2 人');
     await page.getByRole('slider', { name: '磨皮', exact: true }).fill('65');
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toContain('"smooth":65');
     await expect(page.getByLabel('美颜生效状态')).toContainText('参数已送达');
-    await page.getByText('画面来源与输出设置', { exact: true }).click();
     await expect(page.getByLabel('美颜生效状态')).toBeVisible();
     await expect(page.getByLabel('美颜生效状态')).toContainText('已识别 2 人');
     const comparisonTitle = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle());
@@ -210,7 +204,6 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await expect(page.getByLabel('美颜前画面')).toBeVisible();
     await page.getByRole('button', { name: '前后对比', exact: true }).click();
     await expect(page.getByLabel('OBS 实时画面')).toBeVisible();
-    await page.getByText('画面来源与输出设置', { exact: true }).click();
     await page.getByRole('slider', { name: '质感保留', exact: true }).fill('55');
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toContain('"texture":55');
       await page.getByRole('slider', { name: '淡化黑眼圈', exact: true }).fill('45');
@@ -245,11 +238,9 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toContain('"lipstickTone":-100');
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toContain('"blushTone":100');
     await expect(page.getByRole('slider', { name: '口红', exact: true })).toHaveValue('35');
-    await page.getByText('画面来源与输出设置', { exact: true }).click();
     await page.getByRole('button', { name: '口红色调：莓紫', exact: true }).scrollIntoViewIfNeeded();
     await expect(page.getByRole('button', { name: '口红色调：莓紫', exact: true }).locator('span')).toHaveCSS('width', '14px');
     await page.screenshot({ path: test.info().outputPath('beauty-makeup-tones.png') });
-    await page.getByText('画面来源与输出设置', { exact: true }).click();
       await page.getByRole('button', { name: '美体', exact: true }).click();
       await page.getByRole('slider', { name: '瘦身', exact: true }).fill('30');
       await page.getByRole('slider', { name: '瘦腰', exact: true }).fill('25');
@@ -261,15 +252,9 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
       await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toContain('"legSlim":25');
       await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toContain('"neck":20');
       await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toContain('"shoulder":-20');
-      await page.getByRole('button', { name: '停止', exact: true }).click();
-      await page.getByRole('button', { name: '美体', exact: true }).click();
-      await expect(page.getByRole('slider', { name: '瘦身', exact: true })).toBeEnabled();
-      await expect(page.getByRole('slider', { name: '瘦腰', exact: true })).toBeEnabled();
-      await expect(page.getByRole('slider', { name: '肩宽', exact: true })).toBeEnabled();
-    await expect(page.getByText('尚未启动美颜', { exact: true })).toBeVisible();
-    await expect(page.getByLabel('美颜生效状态')).toContainText('美颜未运行');
-    await expect(page.getByRole('button', { name: '启动美颜', exact: true })).toBeEnabled();
-    await page.getByText('画面来源与输出设置', { exact: true }).click();
+    await expect(page.getByRole('slider', { name: '瘦身', exact: true })).toBeEnabled();
+    await expect(page.getByRole('slider', { name: '瘦腰', exact: true })).toBeEnabled();
+    await expect(page.getByRole('slider', { name: '肩宽', exact: true })).toBeEnabled();
     await app.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('link:beauty-status');
       ipcMain.handle('link:beauty-status', () => { throw new Error('测试：分析状态通道中断'); });
@@ -277,44 +262,42 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await expect(page.getByLabel('美颜生效状态')).toContainText('分析状态通道中断');
     await expect(page.getByLabel('美颜生效状态')).toHaveAttribute('data-tone', 'error');
     await page.screenshot({ path: info.outputPath('beauty-status-error.png') });
-    await page.getByRole('button', { name: '查看设置', exact: true }).click();
-    await expect(page.getByLabel('美颜画面来源')).toBeVisible();
+    await page.getByRole('button', { name: '查看详情', exact: true }).click();
+    await expect(page.getByRole('region', { name: '全画面美颜状态', exact: true })).toBeVisible();
     await app.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('link:beauty-status');
-      ipcMain.handle('link:beauty-status', () => ({ phase: 'idle', sourceName: null, filterName: null, faces: 0, message: '尚未启动美颜' }));
+      ipcMain.handle('link:beauty-status', () => ({ phase: 'tracking', sourceName: '测试机位', filterName: '美颜', faces: 2, message: '已识别 2 人，统一美颜' }));
     });
-    await page.getByRole('button', { name: '重新读取美颜状态', exact: true }).click();
-    await expect(page.getByLabel('美颜生效状态')).toHaveAttribute('data-tone', 'idle');
-    await expect(page.getByLabel('美颜生效状态')).toContainText('美颜未运行');
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null }));
+    await expect(page.getByLabel('美颜生效状态')).toContainText('离线调节');
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'connected', obsVersion: '32.0.4', webSocketVersion: '5', error: null }));
+    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已送达');
     await app.evaluate(({ ipcMain, BrowserWindow }) => {
-      ipcMain.removeHandler('link:obs-beauty-apply');
-      ipcMain.handle('link:obs-beauty-apply', async (_event, payload: { sourceName: string; filterName: string; values: Record<string, number> }) => {
+      ipcMain.removeHandler('link:beauty-output');
+      ipcMain.handle('link:beauty-output', async (_event, values: Record<string, number>) => {
         BrowserWindow.getAllWindows()[0]?.setTitle('BEAUTY_APPLY_PENDING');
         await new Promise<void>(resolve => ipcMain.once('beauty-test-release', () => resolve()));
-        return { ...payload, enabled: true, liveMode: true, uniform: true };
+        return { sourceName: '测试机位', filterName: '美颜', values, enabled: true, liveMode: true, uniform: true };
       });
     });
-    await page.getByRole('button', { name: '同步当前参数', exact: true }).click();
+    await page.getByRole('slider', { name: '瘦腰', exact: true }).fill('50');
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toBe('BEAUTY_APPLY_PENDING');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null }));
     await expect(page.getByLabel('美颜生效状态')).toContainText('离线调节');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'connected', obsVersion: '32.0.4', webSocketVersion: '5', error: null }));
     await expect(page.getByLabel('美颜生效状态')).toContainText('正在同步');
     await app.evaluate(({ ipcMain }) => { ipcMain.emit('beauty-test-release'); });
-    await expect(page.getByLabel('美颜生效状态')).toContainText('尚未确认滤镜');
-    await expect(page.getByRole('button', { name: '同步当前参数', exact: true })).toBeDisabled();
-    await page.getByRole('button', { name: '检查滤镜', exact: true }).click();
-    await expect(page.getByLabel('美颜生效状态')).toContainText('美颜未运行');
+    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已送达');
     await app.evaluate(({ ipcMain, BrowserWindow }) => {
-      ipcMain.removeHandler('link:obs-beauty-apply');
+      ipcMain.removeHandler('link:beauty-output');
       let requests = 0, active = 0, maximum = 0;
-      ipcMain.handle('link:obs-beauty-apply', async (_event, payload: { sourceName: string; filterName: string; values: Record<string, number> }) => {
+      ipcMain.handle('link:beauty-output', async (_event, values: Record<string, number>) => {
         requests++; active++; maximum = Math.max(maximum, active);
-        BrowserWindow.getAllWindows()[0]?.setTitle(JSON.stringify({ requests, maximum, waist: payload.values.waist, pending: true }));
+        BrowserWindow.getAllWindows()[0]?.setTitle(JSON.stringify({ requests, maximum, waist: values.waist, pending: true }));
         if (requests === 1) await new Promise<void>(resolve => ipcMain.once('beauty-test-release', () => resolve()));
         active--;
-        BrowserWindow.getAllWindows()[0]?.setTitle(JSON.stringify({ requests, maximum, waist: payload.values.waist, pending: false }));
-        return { ...payload, enabled: true, liveMode: true, uniform: true };
+        BrowserWindow.getAllWindows()[0]?.setTitle(JSON.stringify({ requests, maximum, waist: values.waist, pending: false }));
+        return { sourceName: '测试机位', filterName: '美颜', values, enabled: true, liveMode: true, uniform: true };
       });
     });
     await page.getByRole('slider', { name: '瘦腰', exact: true }).fill('51');

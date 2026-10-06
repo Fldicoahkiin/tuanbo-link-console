@@ -305,7 +305,11 @@ describe('灯光输出调度', () => {
     scheduler.locate(1000); scheduler.tick(4995); scheduler.loop(1000, 5000);
     expect(sent.map((packet) => packet.phase)).toEqual(['control', 'on', 'control', 'off']);
     expect(sent[2]?.bytes[0]).toBe(0xf0);
-    expect(sent.some((packet) => packet.atMs === 5000)).toBe(false);
+    // 循环终点不触发编排事件，但必须在终点释放仍按下的音符。
+    const boundaryPackets = sent.filter((packet) => packet.atMs === 5000);
+    expect(boundaryPackets).toHaveLength(1);
+    expect(boundaryPackets[0]).toMatchObject({ phase: 'off', bytes: [0x80, 60, 0] });
+    expect(sent.some((packet) => packet.bytes[0] === 0xb0 && packet.bytes[2] === 99)).toBe(false);
     scheduler.tick(1000); scheduler.tick(1000);
     expect(sent.filter((packet) => packet.atMs === 1000)).toHaveLength(2);
     scheduler.loop(1000, 5000);

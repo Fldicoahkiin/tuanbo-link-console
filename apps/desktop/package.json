@@ -73,6 +73,7 @@
       "icon": "build/icon.png"
     },
     "electronVersion": "39.8.10",
+    "electronDist": "../../node_modules/electron/dist",
     "extraResources": [
       {
         "from": "../../tools/playback-engine/bin",
