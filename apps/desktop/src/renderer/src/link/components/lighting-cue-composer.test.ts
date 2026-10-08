@@ -1,7 +1,21 @@
 import { expect, it } from 'vitest';
 import { createLightingDocument, lightingDocumentSchema } from '@tb/schema';
+import { cueEventEntries } from './cue-event-view';
 import { cueIngredients, saveCueIngredients } from './LightingCueComposer';
 import { compileLightingNetworkActions, compileLightingPackets, moveLightingEffect, removeLightingEffects, LightingScheduler } from '@tb/core/link';
+
+it('移除所有素材保留空 Cue，重开后加新素材仅发送新目标并保留原时间和编号', () => {
+  const original = saveCueIngredients({ ...createLightingDocument(), outputMode: 'network' }, ingredients, '点位', 2000, 10000, 'cue');
+  const cleared = saveCueIngredients(original, [], '点位', 7000, 10000, 'cue');
+  const reopened = lightingDocumentSchema.parse(JSON.parse(JSON.stringify(cleared)));
+  expect(reopened.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))).toEqual([{ id: 'cue', kind: 'empty-cue', at: 2000, label: '点位' }]);
+  expect(cueIngredients(reopened, 'cue')).toEqual([]);
+  expect(compileLightingNetworkActions(reopened)).toEqual([]);
+  const filled = saveCueIngredients(reopened, [{ name: '新素材', sequence: 88, cue: '5.25', executor: '', delayMs: 0 }], '点位', 7000, 10000, 'cue');
+  expect(cueIngredients(filled, 'cue')).toEqual([expect.objectContaining({ sequence: 88, cue: '5.25' })]);
+  expect(compileLightingNetworkActions(filled)).toEqual([{ atMs: 2000, action: { target: 'sequence', action: 'goto', sequence: 88, cue: '5.25' } }]);
+  expect(filled.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))).toHaveLength(1);
+});
 
 it('埋步随工程保存重开及整体移动，网络调用先准备后正式，删除不残留', () => {
   const ingredients = [{ name: '蓝光', sequence: 168, cue: '2', executor: '', delayMs: 0, preparation: { cue: '1', leadMs: 1500 } }];
@@ -36,6 +50,13 @@ const ingredients = [
   { name: '光束', sequence: 1, cue: '2', executor: '1.101', delayMs: 0 },
   { name: '染色', sequence: 2, cue: '3', executor: '1.102', delayMs: 0 }
 ];
+it('顺序组合保留各步延迟，保存与再次编辑不会压到同一时间', () => {
+  const steps=[{...ingredients[0]!,executor:'',delayMs:0},{...ingredients[0]!,executor:'',cue:'3.25',delayMs:800}];
+  const saved=saveCueIngredients(createLightingDocument(),steps,'顺序组合',1000,10000,'sequential');
+  expect(cueIngredients(saved,'sequential').map(value=>value.delayMs)).toEqual([0,800]);
+  const changed=saveCueIngredients(saved,[steps[0]!,{...steps[1]!,delayMs:1200}],'更新',1000,10000,'sequential');
+  expect(cueIngredients(changed,'sequential').map(value=>value.delayMs)).toEqual([0,1200]);
+});
 
 it('序列池组合可保存、重新读取及编辑，不强制添加执行器', () => {
   const pool = ingredients.map(entry => ({ ...entry, executor: '' }));
@@ -81,4 +102,14 @@ it('编辑原有 Cue 和扩展组合保留轨道输出、静音、片段及原�
   expect(edited.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))).toHaveLength(2);
   const again = saveCueIngredients(edited, [{ ...ingredients[0]!, cue: '7' }, ingredients[1]!], '修改编号', 0, 10000, 'original');
   expect(again.tracks.map(track => track.id)).toEqual(edited.tracks.map(track => track.id));
+});
+
+it('时间线编号独立于素材编号和名称，换成控台 Cue 26 后仍显示第 1 点', () => {
+  const blank = saveCueIngredients({ ...createLightingDocument(), outputMode: 'network' }, [], '', 0, 10000, 'point');
+  const filled = saveCueIngredients(blank, [{ name: '001 暖场', sequence: 9001, cue: '26.000', executor: '', delayMs: 0 }], '', 0, 10000, 'point');
+  expect(cueEventEntries(filled).map(entry => entry.cue)).toEqual(['1']);
+  expect(filled.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))).toEqual([expect.objectContaining({ id: 'point', label: '', cue: '26.000' })]);
+  const moved = moveLightingEffect(filled, 'point', 2000, 10000);
+  expect(cueEventEntries(moved).map(entry => entry.cue)).toEqual(['1']);
+  expect(compileLightingNetworkActions(moved)).toEqual([{ atMs: 2000, action: { target: 'sequence', action: 'goto', sequence: 9001, cue: '26.000' } }]);
 });

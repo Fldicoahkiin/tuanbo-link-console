@@ -42,12 +42,14 @@ export type ManagedMediaTimeline = {
 export function compileManagedMediaTimeline(project: LinkProject, itemId: string): ManagedMediaTimeline {
   const item = requireItem(project, itemId);
   const assets = new Map(project.mediaAssets.map((asset) => [asset.id, asset]));
+  const scenes = materialSceneTargets(project, itemId);
+  const sceneByLayer = new Map(scenes.filter(target => target.layerId).map(target => [`${target.asset.id}:${target.layerId}`, target]));
   assertLayerIntervalsDoNotOverlap(item, assets, project.timebase.frameRate);
   const events = item.referenceMediaClips.flatMap((clip): ManagedMediaEvent[] => {
     const asset = requireAsset(assets, clip.assetId);
     if (asset.kind === 'audio' && project.obsOutputMode !== 'scenes') return [];
     if (asset.kind === 'audio' && audioContainsMediaSource(item.referenceAudio, asset.id)) return [];
-    const scene = project.obsOutputMode === 'scenes' ? materialSceneNames(project.projectId, asset) : null;
+    const scene = project.obsOutputMode === 'scenes' ? sceneByLayer.get(`${asset.id}:${clip.layerId}`) ?? materialSceneNames(project.projectId, asset) : null;
     if (!clip.layerId) throw new Error(`素材片段“${clip.label}”尚未分配视觉图层`);
     const layerIndex = item.visualLayers.findIndex((layer) => layer.id === clip.layerId);
     if (layerIndex < 0) throw new Error(`素材片段“${clip.label}”引用不存在的视觉图层`);
@@ -87,6 +89,32 @@ export function managedMediaSourceName(projectId: string, layerId: string, kind:
 export function materialSceneNames(projectId: string, asset: Pick<LinkMediaAsset, 'id' | 'name'>): { sceneName: string; sourceName: string } {
   const sceneName = `${MANAGED_OBS_SOURCE_PREFIX}素材·${asset.name.slice(0, 48)}·${stableHash(`${projectId}:${asset.id}`)}`;
   return { sceneName, sourceName: `${sceneName}·来源` };
+}
+
+/** Separate decoders for the same asset on different tracks; sequential clips
+ * on one track retain the existing two-slot preloader and source presentation. */
+export function materialSceneTargets(project: LinkProject, itemId?: string): Array<{ asset: LinkMediaAsset; sceneName: string; sourceName: string; layerId?: string }> {
+  const result: ReturnType<typeof materialSceneTargets> = project.mediaAssets.map(asset => ({ asset, ...materialSceneNames(project.projectId, asset) }));
+  const assets = new Map(project.mediaAssets.map(asset => [asset.id, asset]));
+  for (const item of project.rundown) {
+    if (itemId && item.id !== itemId) continue;
+    const firstLayer = new Map<string, string>();
+    const seen = new Set<string>();
+    for (const clip of item.referenceMediaClips) {
+      if (!clip.layerId) continue;
+      const asset = assets.get(clip.assetId);
+      if (!asset) continue;
+      if (!firstLayer.has(asset.id)) firstLayer.set(asset.id, clip.layerId);
+      if (firstLayer.get(asset.id) === clip.layerId) continue;
+      const key = `${asset.id}:${clip.layerId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const base = materialSceneNames(project.projectId, asset);
+      const sceneName = `${base.sceneName}·轨道·${stableHash(`${item.id}:${clip.layerId}`)}`;
+      result.push({ asset, layerId: clip.layerId, sceneName, sourceName: `${sceneName}·来源` });
+    }
+  }
+  return result;
 }
 
 export function managedMediaEventTimecode(event: ManagedMediaEvent, frameRate: MtcFrameRate) {

@@ -57,6 +57,20 @@ it('补检模型缺失时明确失败且不启动缺功能的工作器', async (
   expect(runtime.status()).toMatchObject({ phase: 'error' });
 });
 
+it('持续心跳不能把停更画面解释成无人脸，也不能维持绿色生效', async () => {
+  const { runtime, child, log } = setup();
+  await runtime.start('机位'); child.stdout.write('{"started":true}\n');
+  const packet = { faces: 2, profiles: 0, sequence: 20, accepted: 19, age_ms: 688000, face_status: 1, accepted_age_ms: 80,
+    bodies: 0, body_accepted: 0, body_age_ms: 0, body_status: 0, body_accepted_age_ms: null };
+  for (let i = 0; i < 3; i++) child.stdout.write(`${JSON.stringify(packet)}\n`);
+  expect(runtime.status()).toMatchObject({ phase: 'waiting', faces: 0 });
+  expect(runtime.status().message).toContain('画面已停更');
+  expect(log).toHaveBeenCalledTimes(1);
+  child.stdout.write(`${JSON.stringify({ ...packet, age_ms: 30 })}\n`);
+  expect(runtime.status()).toMatchObject({ phase: 'tracking', faces: 2 });
+  runtime.close(); child.emit('exit', 0);
+});
+
 it('启动超时后不自动重试，迟到的消息不能覆盖错误状态', async () => {
   vi.useFakeTimers();
   const { runtime, child, log } = setup();

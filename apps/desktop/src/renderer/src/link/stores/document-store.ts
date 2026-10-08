@@ -1,4 +1,5 @@
-import { create } from 'zustand';
+/// <reference types="vite/client" />
+import { create, type StateCreator } from 'zustand';
 import { shareProjectStructure } from './share-project-structure';
 import { isWorkerValidatedProject } from './project-codec';
 import { subscribeWithSelector } from 'zustand/middleware';
@@ -8,7 +9,14 @@ import { initializeProjectVisualLayersCommand, needsProjectVisualLayers, setObsO
 type HistoryFrame = {
   command: LinkCommand;
   before: LinkProject;
+  rebases?: ReadonlyMap<string, (project: LinkProject) => LinkProject>;
 };
+
+function rebaseFrame(frame: HistoryFrame, project: LinkProject): LinkProject {
+  let next = project;
+  for (const rebase of frame.rebases?.values() ?? []) next = rebase(next);
+  return next;
+}
 
 export type DocumentStoreState = {
   project: LinkProject | null;
@@ -30,8 +38,7 @@ export type DocumentStoreState = {
 
 const MAX_HISTORY = 100;
 
-export const useDocumentStore = create<DocumentStoreState>()(
-  subscribeWithSelector((set, get) => ({
+const documentState: StateCreator<DocumentStoreState> = (set, get) => ({
     project: null,
     path: null,
     dirty: false,
@@ -75,6 +82,17 @@ export const useDocumentStore = create<DocumentStoreState>()(
       try {
         const prepared = withMa2PairingValidation(withInitialVisualLayers(command));
         const next = shareProjectStructure(state.project, prepared.execute(state.project));
+        const rebase = prepared.rebaseHistory;
+        if (rebase) {
+          if (!prepared.historyRebaseKey) throw new Error('同步回读缺少历史基线标识');
+          const updateFrame = (frame: HistoryFrame): HistoryFrame => ({
+            ...frame, before: rebase(frame.before),
+            rebases: new Map([...frame.rebases ?? [], [prepared.historyRebaseKey!, rebase]])
+          });
+          set({ project: next, dirty: true, revision: state.revision + 1,
+            past: state.past.map(updateFrame), future: state.future.map(updateFrame), error: null });
+          return;
+        }
         const last = state.past.at(-1);
         const grouped = prepared.historyGroup && prepared.historyGroup === last?.command.historyGroup;
         const past = [...(grouped ? state.past.slice(0, -1) : state.past), { command: prepared, before: grouped ? last.before : state.project }].slice(-MAX_HISTORY);
@@ -94,7 +112,7 @@ export const useDocumentStore = create<DocumentStoreState>()(
       const state = get();
       const frame = state.past.at(-1);
       if (!frame || !state.project) return;
-      const restored = shareProjectStructure(frame.before, frame.command.undo(frame.before));
+      const restored = shareProjectStructure(frame.before, rebaseFrame(frame, frame.command.undo(frame.before)));
       set({
         project: restored,
         dirty: true,
@@ -108,19 +126,37 @@ export const useDocumentStore = create<DocumentStoreState>()(
       const state = get();
       const frame = state.future.at(-1);
       if (!frame || !state.project) return;
-      const applied = shareProjectStructure(state.project, frame.command.execute(state.project));
+      const applied = shareProjectStructure(state.project, rebaseFrame(frame, frame.command.execute(state.project)));
       set({
         project: applied,
         dirty: true,
         revision: state.revision + 1,
-        past: [...state.past, { command: frame.command, before: state.project }].slice(-MAX_HISTORY),
+        past: [...state.past, { ...frame, before: state.project }].slice(-MAX_HISTORY),
         future: state.future.slice(0, -1),
         error: null
       });
     },
     clearError: () => set({ error: null })
-  }))
-);
+  });
+
+function createDocumentStore() {
+  return create<DocumentStoreState>()(subscribeWithSelector(documentState));
+}
+
+// Every importer must keep the same store, including older React refresh
+// boundaries and running controllers. Update actions without replacing the
+// document, its subscriptions, session identity or unsaved command history.
+const hotData = import.meta.hot?.data as { documentStore?: ReturnType<typeof createDocumentStore> } | undefined;
+export const useDocumentStore = hotData?.documentStore ?? createDocumentStore();
+if (import.meta.hot && hotData) {
+  if (hotData.documentStore) {
+    const { project, path, dirty, documentId, revision, past, future, error } = useDocumentStore.getState();
+    const actions = documentState(useDocumentStore.setState, useDocumentStore.getState, useDocumentStore);
+    useDocumentStore.setState({ ...actions, project, path, dirty, documentId, revision, past, future, error }, true);
+  }
+  hotData.documentStore = useDocumentStore;
+  import.meta.hot.accept();
+}
 
 export const selectCanUndo = (state: DocumentStoreState): boolean => state.past.length > 0;
 export const selectCanRedo = (state: DocumentStoreState): boolean => state.future.length > 0;

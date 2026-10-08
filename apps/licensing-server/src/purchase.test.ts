@@ -1,3 +1,4 @@
+import { listenHttpTestServer } from './http-test-server';
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -137,7 +138,7 @@ it('HTTP 贯通无账号商品查询、重复下单、验签通知和凭据领�
   const notifications = new AlipayNotifications(appId, sellerId, provider.publicKey.export({ type: 'spki', format: 'pem' }).toString());
   const checkout = new AlipayCheckout(appId, sellerId, provider.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), () => initial);
   const server = createLicensingServer(service, 'a'.repeat(48), notifications, checkout, catalog);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('缺少监听地址');
     const base = `http://127.0.0.1:${address.port}`;
@@ -166,7 +167,7 @@ it('HTTP 贯通无账号商品查询、重复下单、验签通知和凭据领�
 
 it('默认目录关闭且不创建订单，不从环境或请求回退到测试价格', async () => {
   const service = setup(); const server = createLicensingServer(service, 'a'.repeat(48));
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('缺少监听地址');
     const base = `http://127.0.0.1:${address.port}`;

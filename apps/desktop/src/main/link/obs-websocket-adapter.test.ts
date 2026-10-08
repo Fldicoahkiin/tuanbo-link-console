@@ -8,6 +8,31 @@ import { ObsWebSocketAdapter } from './obs-websocket-adapter';
 import type { ObsEditorPreview } from './obs-editor-preview';
 
 describe('ObsWebSocketAdapter', () => {
+  it('监听拒绝被桌面音频或模糊进程采集，仅核对专用音频来源且不修改 OBS', async () => {
+    const client = fakeObsClient(); const adapter = new ObsWebSocketAdapter(tmpdir(),client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455','password');
+    client.responses.set('GetInputList',{inputs:[{inputName:'正式音频',inputKind:'wasapi_process_output_capture'},...Array.from({length:2000},(_,index)=>({inputName:`视频${index}`,inputKind:'ffmpeg_source'}))]});
+    client.responses.set('GetSpecialInputs',{});client.responses.set('GetInputMute',{inputMuted:false});
+    client.responses.set('GetInputSettings',{inputKind:'wasapi_output_capture',inputSettings:{device_id:'headphones'}});
+    const identity={executable:'tblink-playback.exe',title:'Monitor-1',windowClass:'TBLINK',ownerExecutable:'electron.exe'};
+    await expect(adapter.assertMusicMonitorIsolation('headphones',false,identity)).rejects.toThrow('被 OBS');
+    client.responses.set('GetInputSettings',{inputKind:'wasapi_process_output_capture',inputSettings:{window:'Music:TBLINK:tblink-playback.exe',priority:1}});
+    await expect(adapter.assertMusicMonitorIsolation('headphones',false,identity)).rejects.toThrow('可能采集');
+    client.responses.set('GetInputSettings',{inputKind:'wasapi_process_output_capture',inputSettings:{window:'Music:TBLINK:tblink-playback.exe',priority:0}}); client.calls.length=0;
+    await adapter.assertMusicMonitorIsolation('headphones',false,identity);
+    expect(client.calls.map(([request])=>request)).toEqual(['GetInputList','GetSpecialInputs','GetInputSettings','GetInputMute']);
+    client.responses.set('GetInputSettings',{inputKind:'wasapi_process_output_capture',inputSettings:{window:'联动台:Chrome:electron.exe',priority:0}});await expect(adapter.assertMusicMonitorIsolation('headphones',false,identity)).rejects.toThrow('子进程');
+    let stopped=0;const unsubscribe=adapter.subscribeMusicMonitorRouteChange(()=>{stopped++;});client.emit('InputSettingsChanged',{});expect(stopped).toBe(1);unsubscribe();client.emit('InputSettingsChanged',{});expect(stopped).toBe(1);
+  });
+  it('旧场景回报不能吞掉下一次开场 Cue，连续两次明确动作均发送', async () => {
+    const client = fakeObsClient(); const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password'); client.calls.length = 0;
+    const action = { id: 'opening', label: '开场', kind: 'obs.setProgramScene' as const, sceneName: 'Camera' };
+    client.emit('CurrentProgramSceneChanged', { sceneName: 'Camera' });
+    // Another operator has switched OBS, but its asynchronous event is delayed.
+    await adapter.execute(action); await adapter.execute(action);
+    expect(client.calls).toEqual([['SetCurrentProgramScene', { sceneName: 'Camera' }], ['SetCurrentProgramScene', { sceneName: 'Camera' }]]);
+  });
   it('播放预检保留完整名称索引，只读取当前目标详情，不随历史节目累积全扫', async () => {
     const client = fakeObsClient();
     client.responses.set('GetInputList', { inputs: Array.from({ length: 2000 }, (_, index) => ({ inputName: `素材${index}`, inputKind: 'ffmpeg_source' })) });
@@ -223,6 +248,7 @@ describe('ObsWebSocketAdapter', () => {
       transitions: ['Cut'],
       videoSettings: { baseWidth: 1080, baseHeight: 1920 },
       sourceSizes: {},
+      sourceSizeErrors: {},
       sceneItemTransforms: { Program: { Camera: { positionX: 540, positionY: 960, scaleX: 1, scaleY: 1, rotation: 0, cropTop: 0, cropRight: 0, cropBottom: 0, cropLeft: 0, sourceWidth: 1080, sourceHeight: 1920, outputWidth: 1080, outputHeight: 1920, alignment: 0 } } }
     });
   });
@@ -246,6 +272,23 @@ describe('ObsWebSocketAdapter', () => {
       ['GetInputSettings', { inputName: '显示器采集' }],
       ['GetInputPropertiesListPropertyItems', { inputName: '显示器采集', propertyName: 'monitor_id' }]
     ]));
+  });
+
+  it('失效显示器不清空场景目录，不伪造尺寸，网络读取失败仍明确报错', async () => {
+    const client = fakeObsClient();
+    client.responses.set('GetInputList', { inputs: [{ inputName: '已拔出的显示器', inputKind: 'monitor_capture' }] });
+    client.responses.set('GetInputSettings', { inputKind: 'monitor_capture', inputSettings: { monitor_id: 'missing' } });
+    client.responses.set('GetInputPropertiesListPropertyItems', { propertyItems: [] });
+    client.responses.set('GetMonitorList', { monitors: [] });
+    const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket, 10);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    const inventory = await adapter.readInventory();
+    expect(inventory.scenes).toEqual(['Program']);
+    expect(inventory.sourceSizes).toEqual({});
+    expect(inventory.sourceSizeErrors?.['已拔出的显示器']).toContain('显示器绑定');
+    expect(adapter.getSnapshot().status).toBe('connected');
+    client.pendingRequests.add('GetInputSettings');
+    await expect(adapter.readInventory()).rejects.toThrow('GetInputSettings');
   });
 
   it('鉴权失败明确进入 error，不吞错', async () => {

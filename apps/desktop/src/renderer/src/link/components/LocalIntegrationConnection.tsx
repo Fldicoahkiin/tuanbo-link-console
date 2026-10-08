@@ -16,6 +16,7 @@ type LocalConnectionOptions = {
   notify: (message: string, tone?: 'info' | 'error') => void;
   onDraft: (profile: IntegrationProfile) => void;
   onPasswordCleared: () => void;
+  onObsPassword?: (password: string) => void;
   onBusyChange: (busy: boolean) => void;
 };
 

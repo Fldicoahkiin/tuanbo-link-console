@@ -1,3 +1,4 @@
+import { listenHttpTestServer } from './http-test-server';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -91,7 +92,7 @@ it('服务端时间回退后的刷新不能缩短换机等待期', () => {
 });
 it('HTTP 后台拒绝匿名访问，公开接口不接受后台订单和伪造支付', async () => {
   const { service } = setup(); const token = 'a'.repeat(48); const server = createLicensingServer(service, token);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('无测试监听地址');
     const base = `http://127.0.0.1:${address.port}`;

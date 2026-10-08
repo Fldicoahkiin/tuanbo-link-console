@@ -1,7 +1,7 @@
 {
   "name": "@tb/desktop",
   "private": true,
-  "version": "0.4.41",
+  "version": "0.4.45",
   "productName": "团播联动台",
   "type": "module",
   "main": "out/main/index.cjs",
@@ -78,12 +78,18 @@
       {
         "from": "../../tools/playback-engine/bin",
         "to": "playback-engine",
-        "filter": ["tblink-playback.exe", "build.json"]
+        "filter": [
+          "tblink-playback.exe",
+          "build.json"
+        ]
       },
       {
         "from": "../../artifacts/beauty-prototype/plugin",
         "to": "beauty/plugin",
-        "filter": ["tblink-beauty.dll", "beauty.effect"]
+        "filter": [
+          "tblink-beauty.dll",
+          "beauty.effect"
+        ]
       },
       {
         "from": "../../artifacts/beauty-prototype/runtime",
@@ -129,10 +135,10 @@
         "from": "../../tools/obs/beauty/SEMANTIC_NOTICE.txt",
         "to": "beauty/SEMANTIC_NOTICE.txt"
       },
-        {
-          "from": "../../artifacts/beauty-prototype/pose_landmarker_lite.task",
-          "to": "beauty/pose_landmarker_lite.task"
-        },
+      {
+        "from": "../../artifacts/beauty-prototype/pose_landmarker_lite.task",
+        "to": "beauty/pose_landmarker_lite.task"
+      },
       {
         "from": "../../THIRD_PARTY_NOTICES.md",
         "to": "THIRD_PARTY_NOTICES.md"
@@ -172,7 +178,8 @@
     "electron-builder": "26.15.3",
     "electron-vite": "^4.0.0",
     "esbuild": "0.28.1",
-    "rcedit": "5.0.2"
+    "rcedit": "5.0.2",
+    "vite": "7.3.5"
   },
   "description": "内部音乐主控与 P1 跟随双模式的 OBS、MIDI 时间线联动桌面端",
   "author": "团播联动台"

@@ -28,6 +28,11 @@ export class Ma2NetworkManager {
   private busy = false;
   private generation = 0;
   private services: { bridge: Ma2OnpcBridge; service: Ma2ApplyService } | null = null;
+  private beforeConnectionChange: (() => Promise<()=>void>) | null = null;
+  setBeforeConnectionChange(handler:()=>Promise<()=>void>):void { this.beforeConnectionChange=handler; }
+  private sameTarget(settings:Ma2NetworkSettings):boolean {
+    return this.settings!==null&&(['host','port','monitorPort','username'] as const).every(key=>this.settings?.[key]===settings[key]);
+  }
   private readonly path: string;
   constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string, private readonly resolveLocalAddress: (host: string) => Promise<string | undefined> = () => Promise.resolve(undefined)) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
   get(target: Ma2NetworkTarget): { bridge: Ma2OnpcBridge; service: Ma2ApplyService } {
@@ -42,7 +47,8 @@ export class Ma2NetworkManager {
     for (const [id, expiresAt] of this.cancelledPlayback) if (expiresAt < now) this.cancelledPlayback.delete(id);
     this.cancelledPlayback.set(sessionId, now + 180000);
   }
-  async playCue(input: Ma2PlaybackRequest): Promise<void> {
+  get connectionGeneration():number { return this.generation; }
+  async playCue(input: Ma2PlaybackRequest, options?:{beforeSend?:()=>void;priority?:'normal'|'stop'}): Promise<void> {
     const request = ma2PlaybackRequestSchema.parse(input);
     const settings = this.settings; const connection = this.connection; const generation = this.generation;
     if (!settings || !connection || connection.state !== 'connected') throw new Error('序列池播放需要先在设备设置连接 MA2 网络');
@@ -52,7 +58,7 @@ export class Ma2NetworkManager {
       if (Date.now() > request.deadlineAt) throw new Error('灯光调用已过期，未补发；请重新定位后播放');
     };
     current();
-    await playMa2Cue(connection, request.action, current);
+    await playMa2Cue(connection, request.action, ()=>{current();options?.beforeSend?.();},options?.priority);
   }
   private credentialId(settings: Ma2NetworkSettings): string { return `ma2-${createHash('sha256').update(`${settings.host}:${settings.port}:${settings.username}`).digest('hex')}`; }
   async readCatalog(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal, targets?: readonly number[], checkpoint?: (catalog: Ma2Catalog, entry?: Ma2Catalog['entries'][number]) => Promise<void>, expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<Ma2Catalog> {
@@ -124,7 +130,10 @@ export class Ma2NetworkManager {
     if (this.busy) throw new Error('MA2 正在连接，请稍后保存');
     const { settings, password } = ma2NetworkSaveSchema.parse(payload);
     this.busy = true;
+    let release:(()=>void)|undefined;
     try {
+      const replaceConnection=!this.sameTarget(settings)||password!==undefined;
+      if(replaceConnection&&this.connection?.state==='connected')release=await this.beforeConnectionChange?.();
       const id = this.credentialId(settings);
       if (password !== undefined) await this.secrets.saveCredential(id, password);
       const profiles = this.profiles.filter((profile) => this.credentialId(profile) !== id || profile.monitorPort !== settings.monitorPort);
@@ -132,15 +141,17 @@ export class Ma2NetworkManager {
       if (profiles.length > 128) throw new Error('最多保存 128 个控台连接');
       await writeFileAtomically(this.path, JSON.stringify({ format: 1, active: settings, profiles }));
       this.profiles = profiles;
-      this.disconnect(); this.settings = settings; this.error = null;
+      if(replaceConnection)this.disconnect();
+      this.settings = settings; this.error = null;
       this.passwordSaved = await this.secrets.hasCredential(id);
       return this.status();
-    } finally { this.busy = false; }
+    } finally { release?.();this.busy = false; }
   }
   async connect(): Promise<Ma2NetworkStatus> {
     if (this.isPlaying()) throw new Error('播放期间不能更换控台连接');
     if (this.busy) throw new Error('MA2 正在连接');
     if (!this.settings) throw new Error('请先保存控台 IP 与登录用户');
+    if(this.connection?.state==='connected'&&this.services)return this.status();
     this.disconnect(); this.error = null; this.busy = true;
     const generation = this.generation;
     try {
@@ -187,5 +198,12 @@ export class Ma2NetworkManager {
     const connection = this.connection; this.connection = null;
     connection?.disconnect(); this.version = null; this.services = null; this.capabilities = null;
     return this.status();
+  }
+  async disconnectByOperator():Promise<Ma2NetworkStatus>{
+    if(this.busy)throw new Error('MA2 正在连接，请稍后断开');
+    this.busy=true;
+    let release:(()=>void)|undefined;
+    try{if(this.connection?.state==='connected')release=await this.beforeConnectionChange?.();return this.disconnect();}
+    finally{release?.();this.busy=false;}
   }
 }

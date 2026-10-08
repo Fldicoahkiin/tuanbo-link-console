@@ -34,6 +34,7 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
     const nav = page.getByRole('navigation', { name: '主要工作区' });
     await page.locator('.player-buttons .primary-button').click();
     await expect(page.locator('.unified-player .mtc-output-status')).toHaveCount(0);
+    await page.getByRole('button', { name: '详细', exact: true }).click();
     await page.getByRole('button', { name: /^MTC 状态：/ }).click();
     const mtcDialog = page.getByRole('dialog', { name: 'MTC 时间码状态' });
     await expect(mtcDialog).toBeVisible();
@@ -53,15 +54,18 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
       for (const size of [[1540, 960], [1180, 720]]) {
         await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0]?.setSize(value[0]!, value[1]!), size);
         await nav.getByRole('button', { name: '节目单', exact: true }).click();
-        await page.locator('.p1-media-card').last().scrollIntoViewIfNeeded();
-        await expect(page.locator('.p1-media-card').last()).toBeInViewport();
-        await page.locator('.p1-media-card').first().scrollIntoViewIfNeeded();
+        await expect(page.getByLabel('节目列表', { exact: true })).toBeVisible();
+        await page.locator('[data-program-id="song-0"]').focus();
+        await page.keyboard.press('End');
+        await expect(page.locator('[data-program-id="song-23"]')).toBeInViewport();
+        await page.keyboard.press('Home');
+        await expect(page.locator('[data-program-id="song-0"]')).toBeInViewport();
         for (const name of ['节目单', '编辑器', '灯光工作台']) {
           await nav.getByRole('button', { name, exact: true }).click();
           if (name === '灯光工作台') {
-            await page.getByLabel('选中 Cue 实时播放', { exact: true }).uncheck();
+            await expect(page.getByLabel('选中 Cue 实时播放', { exact: true })).toHaveCount(0);
             await expect(page.locator('[data-waveform-engine="wavesurfer"][data-ready="true"]').first()).toBeVisible();
-            await expect(page.locator('.lighting-effect-card')).toHaveCount(6);
+            for (const template of templates) await expect(page.locator('.cue-material-browser').getByText(template.name, { exact: true })).toBeVisible();
           }
           await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           await page.screenshot({ path: info.outputPath(`${theme}-${size[0]}-${name}.png`) });
@@ -79,5 +83,10 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
       }
     }
     expect(errors).toEqual([]);
-  } finally { await app.close(); }
+  } catch (error) {
+    const page = await app.firstWindow();
+    await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
+    await page.screenshot({ path: info.outputPath('failure-ui.png') });
+    throw error;
+  } finally { const page = await app.firstWindow(); if (!page.isClosed()) await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); }); await app.close(); }
 });

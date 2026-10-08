@@ -35,6 +35,7 @@ export type ObsInventory = {
   transitions: string[];
   videoSettings: { baseWidth: number; baseHeight: number; outputWidth?: number; outputHeight?: number };
   sourceSizes: Record<string, { width: number; height: number }>;
+  sourceSizeErrors?: Record<string, string>;
   sceneItemTransforms: Record<string, Record<string, LinkObsSceneItemTransform>>;
 };
 
@@ -88,8 +89,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     this.beauty = new ObsBeauty(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
     this.sources = new ObsSourceManager(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
     this.mediaScenes = new ObsMediaScenes(client, (operation, label) => this.request(operation, label), operation => this.requests.run('control', operation));
-    this.client.on('CurrentProgramSceneChanged', event => {
-      this.mediaScenes.observeProgramScene(event.sceneName);
+    this.client.on('CurrentProgramSceneChanged', () => {
       for (const listener of this.programListeners) listener();
     });
     const inventoryChanged = (): void => { for (const listener of this.inventoryListeners) listener(); };
@@ -115,6 +115,30 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
 
   getSnapshot(): ObsConnectionSnapshot {
     return { ...this.snapshot };
+  }
+
+  /** Read-only audit: monitor audio must never be captured by desktop or process inputs. */
+  async assertMusicMonitorIsolation(deviceId: string, isDefault: boolean, identity: { executable: string; title: string; windowClass: string; ownerExecutable: string }): Promise<void> {
+    if (this.snapshot.status !== 'connected') throw new Error('请先连接 OBS 核对监听隔离；尚未启用试听声音');
+    const response = await this.request(() => this.client.call('GetInputList'), 'GetInputList');
+    const special = await this.request(() => this.client.call('GetSpecialInputs'), 'GetSpecialInputs');
+    const inputs = new Set([...collectNames(response.inputs.filter(input => typeof input.inputKind === 'string' && ['wasapi_output_capture', 'wasapi_process_output_capture'].includes(input.inputKind)), 'inputName'), ...Object.values(special).filter((name): name is string => typeof name === 'string' && name.length > 0)]);
+    for (const inputName of inputs) {
+      const input = await this.request(() => this.client.call('GetInputSettings', { inputName }), 'GetInputSettings');
+      if (!['wasapi_output_capture', 'wasapi_process_output_capture'].includes(input.inputKind)) continue;
+      const muted = await this.request(() => this.client.call('GetInputMute', { inputName }), 'GetInputMute');
+      if (muted.inputMuted) continue;
+      const settings = input.inputSettings;
+      if (input.inputKind === 'wasapi_output_capture' && (settings.device_id === deviceId || (settings.device_id === 'default' || settings.device_id === undefined) && isDefault)) throw new Error(`监听设备被 OBS“${inputName}”采集，请选择未进入正式混音的设备`);
+      if (input.inputKind === 'wasapi_process_output_capture' && typeof settings.window === 'string' && settings.window.toLowerCase().endsWith(`:${identity.ownerExecutable.toLowerCase()}`)) throw new Error(`OBS“${inputName}”采集联动台及其子进程，请绑定正式音频引擎的精确窗口后再启用监听`);
+      if (input.inputKind === 'wasapi_process_output_capture' && typeof settings.window === 'string' && (settings.window === encodeObsAudioWindow(identity.executable, identity.title, identity.windowClass) || settings.priority !== 0 && settings.window.includes(identity.executable))) throw new Error(`OBS“${inputName}”可能采集监听进程，请改用正式音频进程的精确窗口`);
+    }
+  }
+
+  subscribeMusicMonitorRouteChange(listener: () => void): () => void {
+    const events = ['InputSettingsChanged', 'InputMuteStateChanged', 'InputCreated', 'CurrentSceneCollectionChanging', 'ConnectionClosed'] as const;
+    for (const event of events) this.client.on(event, listener);
+    return () => { for (const event of events) this.client.off(event, listener); };
   }
 
   getRequestDiagnostics(): { stats: ReturnType<ObsRequestScheduler['getStats']>; timings: ReturnType<ObsRequestScheduler['getTimings']> } {
@@ -508,6 +532,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     const inputKinds = collectNameValueMap(inputResponse.inputs, 'inputName', 'inputKind');
     const inputAudioStates: ObsInventory['inputAudioStates'] = {};
     const sourceSizes: ObsInventory['sourceSizes'] = {};
+    const sourceSizeErrors: Record<string, string> = {};
     const transitions = collectNames(transitionResponse.transitions, 'transitionName');
     const sceneItems: Record<string, string[]> = {};
     const sceneItemTransforms: Record<string, Record<string, LinkObsSceneItemTransform>> = {};
@@ -548,7 +573,13 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
           this.request(() => this.client.call('GetInputSettings', { inputName }), 'GetInputSettings'),
           this.request(() => this.client.call('GetInputPropertiesListPropertyItems', { inputName, propertyName: 'monitor_id' }), 'GetInputPropertiesListPropertyItems')
         ]);
-        sourceSizes[inputName] = resolveMonitorCaptureSize(inputName, settings.inputSettings, properties.propertyItems, monitorResponse.monitors);
+        // A disconnected monitor must not erase unrelated scenes or prevent playback.
+        // Only local geometry resolution is recoverable here; request failures still propagate.
+        try {
+          sourceSizes[inputName] = resolveMonitorCaptureSize(inputName, settings.inputSettings, properties.propertyItems, monitorResponse.monitors);
+        } catch (error) {
+          sourceSizeErrors[inputName] = toErrorMessage(error);
+        }
       }
       try {
         const audio = await this.request(() => this.client.call('GetInputMute', { inputName }), 'GetInputMute');
@@ -569,6 +600,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       videoSettings: { baseWidth: videoResponse.baseWidth, baseHeight: videoResponse.baseHeight,
         outputWidth: videoResponse.outputWidth, outputHeight: videoResponse.outputHeight },
       sourceSizes,
+      sourceSizeErrors,
       sceneItemTransforms
     };
   }
@@ -834,7 +866,7 @@ function resolveMonitorCaptureSize(
     const y = candidate.monitorPositionY;
     if (typeof width !== 'number' || typeof height !== 'number' || typeof x !== 'number' || typeof y !== 'number') return false;
     return Number.isFinite(width) && Number.isFinite(height) && Number.isFinite(x) && Number.isFinite(y)
-      && label.includes(`${width}x${height} @ ${x},${y}`);
+      && label.replace(/\s/g, '').includes(`${width}x${height}@${x},${y}`);
   });
   if (!monitor || typeof monitor.monitorWidth !== 'number' || typeof monitor.monitorHeight !== 'number'
     || monitor.monitorWidth <= 0 || monitor.monitorHeight <= 0) {

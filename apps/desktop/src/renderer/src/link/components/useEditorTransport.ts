@@ -16,7 +16,7 @@ export function useEditorProgram(player: ProjectPlayer, external: boolean, notif
 
 /** The editor owns only its stopped cursor; the formal player owns audio and output. */
 export function useEditorTransport(player: ProjectPlayer, itemId: string | null, external: boolean,
-  notify: (message: string, tone?: 'info' | 'error') => void, previewCoordinator: LinkRuntimeCoordinator | null = null) {
+  notify: (message: string, tone?: 'info' | 'error') => void, previewCoordinator: LinkRuntimeCoordinator | null = null, localAudioReady = true) {
   const [cursor, setCursor] = useState(0);
   const cursorRef = useRef(0);
   const [localPlaying, setLocalPlaying] = useState(false);
@@ -31,6 +31,7 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   const playing = external ? active && player.state.status === 'playing' : localPlaying;
   const clock = player.controller?.clock;
   useEffect(() => { if (external && player.state.error) notify(player.state.error, 'error'); }, [external, player.state.error, notify]);
+  useEffect(() => { if (external && player.state.notice) notify(player.state.notice, 'info'); }, [external, player.state.notice, notify]);
   const report = (error: unknown): void => notify(error instanceof Error ? error.message : String(error), 'error');
   const reset = useCallback(() => { seekQueue.current?.cancel(); seekQueue.current = null; setSeeking(false); cursorRef.current = 0; setCursor(0); setLocalPlaying(false); }, []);
   const setPlayheadMs = (position: number): void => {
@@ -66,6 +67,7 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
     seekQueue.current.push(target);
   };
   const setPlaying = (next: boolean): void => {
+    if (next && !external && !localAudioReady) { notify('当前音频尚未就绪，请检查文件是否存在并等待音频加载完成', 'error'); return; }
     if (next && useMa2AutoSyncStore.getState().status === 'writing') { notify('MA2 正在同步并回读，请完成后播放', 'error'); return; }
     if (seekQueue.current) { resumeAfterSeek.current = next; return; }
     if (!external) { useMa2AutoSyncStore.setState({ previewPlaying: next }); setLocalPlaying(next); return; }

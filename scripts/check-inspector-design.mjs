@@ -55,7 +55,7 @@ try {
   await page.locator('.tempo-points summary').click();
   await expect(page.getByRole('button', { name: '添加变速点', exact: true })).toBeVisible();
   await page.locator('.song-advanced summary').click();
-  await expect(page.getByRole('textbox', { name: 'MTC 偏移（时:分:秒:帧）', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'MTC 起始时间（时:分:秒:帧）', exact: true })).toBeVisible();
   await page.locator('.cue-inspector').screenshot({ path: `${output}/advanced-300.png` });
   await page.locator('.tempo-points summary').click();
   await page.locator('.song-advanced summary').click();

@@ -1,6 +1,21 @@
 import { generateKeyPairSync, sign, randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { internalDistribution, internalDistributionStatus } from './internal-distribution';
+import { LicenseAccess } from './license-access';
+
+it('构建期免激活测试渠道允许不同主机进入和输出，不受正式授权文件影响', async () => {
+  const input = { channel: 'portable-test', version: 1 };
+  for (const digit of ['A', 'B']) {
+    const machineCode = `TB1-${digit.repeat(64)}`;
+    const status = internalDistributionStatus(input, machineCode);
+    expect(status.state).toBe('active');
+    expect(status.claims?.machineCode).toBe(machineCode);
+    expect(status.claims?.useUntil).toBeNull();
+    await expect(new LicenseAccess(() => Promise.resolve(status)).requireOutput()).resolves.toBeUndefined();
+  }
+  expect(internalDistributionStatus({ ...input, version: 2 }, `TB1-${'A'.repeat(64)}`).state).toBe('invalid');
+  expect(internalDistribution).toBeNull();
+});
 
 it('正式构建默认无内测通道；内测许可拒绝换机、到期与篡改', () => {
   expect(internalDistribution).toBeNull();

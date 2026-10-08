@@ -36,11 +36,15 @@ export class MediaMtcOutput {
         portName = available[0]!.name;
       }
       const ports = [...access.outputs.values()].filter((port) => port.name === portName && port.state === 'connected');
-      if (ports.length === 0) throw new Error(`未检测到 MIDI 时间码输出：${portName}。请保持 loopMIDI 运行，在设置 → 设备连接 → 音频与 MIDI 中刷新端口并核对灯光 MIDI 输出；仍不可用时保存工程并重新启动联动台。`);
+      if (ports.length === 0) throw new Error(`当前播放引擎未检测到 MIDI 时间码输出：${portName}。请先退出 P1 等使用该接口的软件，再到设置 → 音频与 MIDI 刷新端口；实体 USB MIDI 请核对连接和驱动，虚拟端口请保持 loopMIDI 运行。仍不可见时保存工程并重开联动台。`);
       if (ports.length > 1) throw new Error(`MIDI 时间码输出名称重复：${portName}（${ports.length} 个）。请为端口设置不同名称，再手动选择正确的输出。`);
       const port = ports[0];
       if (!port) throw new Error('MIDI 输出不存在');
-      await waitForMidi(port.open(), attempt.signal, `打开 MIDI 输出 ${portName}`);
+      try { await waitForMidi(port.open(), attempt.signal, `打开 MIDI 输出 ${portName}`); }
+      catch (error) {
+        if (attempt.signal.aborted) throw error;
+        throw new Error(`无法打开 MIDI 时间码输出 ${portName}：${error instanceof Error ? error.message : String(error)}。接口可能被 P1 或其他软件占用；请完全退出后刷新端口并手动重新播放。`);
+      }
       if (attempt.signal.aborted) throw new Error('MIDI 连接已取消');
       this.output = port;
       return port.name;

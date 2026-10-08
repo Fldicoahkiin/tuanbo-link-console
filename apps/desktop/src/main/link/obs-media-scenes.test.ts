@@ -50,6 +50,22 @@ function fixture(resetOnSceneSwitch = false, startsNearOrigin = false) {
 }
 
 describe('素材独立场景播放', () => {
+  it('同素材第二轨创建独立来源，复制原有画面滤镜，单独定位不会改变第一轨播放位置', async () => {
+    const { scenes, calls, responses, setMediaState } = fixture();
+    responses.set('GetSourceFilterList', { filters: [] });
+    await scenes.prepare('project', asset, 'C:/dance.mp4');
+    const sceneName = `${names.sceneName}·轨道·abc`;
+    const second = { sceneName, sourceName: `${sceneName}·来源` };
+    await scenes.prepare('project', asset, 'C:/dance.mp4', 'C:/dance.mp4', [], second);
+    expect(calls.filter(call => call.requestType === 'CreateInput').map(call => call.requestData)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ inputName: names.sourceName }), expect.objectContaining({ inputName: second.sourceName })
+    ]));
+    calls.length = 0;
+    const native = vi.fn<(name: string, position: number) => Promise<void>>().mockImplementation((_name, position) => { setMediaState('OBS_MEDIA_STATE_PAUSED', position); return Promise.resolve(); });
+    await scenes.seek({ ...event, ...second }, 'C:/dance.mp4', native);
+    expect(native).toHaveBeenCalledWith(second.sourceName, 2300);
+    expect(calls.some(call => call.requestType === 'SetMediaInputCursor' && JSON.stringify(call.requestData).includes(names.sourceName))).toBe(false);
+  });
   it('近期复用的素材只暂停、静音和隐藏；正式清理仍发送停止', async () => {
     const { scenes, calls } = fixture();
     await scenes.prepare('project', asset, 'C:/dance.mp4');
@@ -156,20 +172,20 @@ describe('素材独立场景播放', () => {
     expect(calls.at(-1)?.requestType).toBe('SetCurrentProgramScene');
   });
 
-  it('控台回报当前叠加场景后只更新图层，外部切场景或断线后重新发送切换', async () => {
+  it('每次明确选择叠加场景都发送切换，重复布局仍不重建图层', async () => {
     const { scenes, calls, responses } = fixture();
     responses.set('GetSceneList', { scenes: [{ sceneName: '机位1' }, { sceneName: '机位2' }] });
     responses.set('GetSceneItemList', { sceneItems: [] }); responses.set('CreateSceneItem', { sceneItemId: 3 });
     const output = '团播联动台·叠加·回读';
     await scenes.prepareComposition(output, ['机位1'], ['机位2']);
-    scenes.observeProgramScene(output); calls.length = 0;
+    calls.length = 0;
     await scenes.compose(output, ['机位2']);
     expect(calls.some(call => call.requestType === 'SetSceneItemEnabled')).toBe(true);
-    expect(calls.some(call => call.requestType === 'SetCurrentProgramScene')).toBe(false);
-    scenes.observeProgramScene('用户手动机位'); calls.length = 0;
+    expect(calls.filter(call => call.requestType === 'SetCurrentProgramScene')).toHaveLength(1);
+    calls.length = 0;
     await scenes.compose(output, ['机位2']);
     expect(calls).toEqual([{ requestType: 'SetCurrentProgramScene', requestData: { sceneName: output } }]);
-    scenes.observeProgramScene(output); scenes.clear(); calls.length = 0;
+    scenes.clear(); calls.length = 0;
     await scenes.switchScene(output);
     expect(calls).toEqual([{ requestType: 'SetCurrentProgramScene', requestData: { sceneName: output } }]);
   });

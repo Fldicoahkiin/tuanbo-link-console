@@ -14,6 +14,18 @@ afterEach(async () => {
 });
 
 describe('SecureProfileStore', () => {
+  it('新电脑没有保存 OBS 密码也能发起无认证握手，保留已有密码且解密失败不降级', async () => {
+    const directory = await createTestDirectory();
+    const storage = reversibleStorage(true);
+    const store = new SecureProfileStore(directory, storage);
+    await expect(store.loadObsPassword('obs-main')).resolves.toBe('');
+    await store.saveCredential('obs-main', 'configured');
+    cleanupFiles.push(join(directory, 'link-integrations/secrets.json'));
+    cleanupDirectories.push(join(directory, 'link-integrations'));
+    await expect(store.loadObsPassword('obs-main')).resolves.toBe('configured');
+    const broken = new SecureProfileStore(directory, { ...storage, decryptString: () => { throw new Error('cannot decrypt'); } });
+    await expect(broken.loadObsPassword('obs-main')).rejects.toThrow('凭证无法解密');
+  });
   it('并发保存激活码与订单凭据时两项均保留，删除不覆盖同时保存的凭据', async () => {
     const directory = await createTestDirectory();
     const store = new SecureProfileStore(directory, reversibleStorage(true));

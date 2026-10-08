@@ -1,6 +1,7 @@
 import { createConnection, isIP, type Socket } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
+import { Ma2CommandQueue } from './ma2-command-queue';
 
 export type Ma2NetworkAddress = { host: string; port: number; monitorPort: number; localAddress?: string };
 export type Ma2TelnetState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
@@ -15,7 +16,7 @@ export class Ma2Telnet {
   private streams: Stream[] = [];
   private current: Ma2TelnetState = 'disconnected';
   private connecting = false;
-  private commandTail: Promise<void> = Promise.resolve();
+  private readonly commands = new Ma2CommandQueue();
   private traffic = { queueMs: 0, wireCommands: 0, receivedBytes: 0, sentBytes: 0 };
   readTraffic(): Readonly<typeof this.traffic> { return { ...this.traffic }; }
   private queuedCommands = 0;
@@ -70,14 +71,14 @@ export class Ma2Telnet {
       throw error;
     } finally { this.connecting = false; }
   }
-  async command(line: string, match: (response: string) => string | null, beforeSend?: () => void): Promise<string> {
+  async command(line: string, match: (response: string) => string | null, beforeSend?: () => void, priority:'normal'|'stop'='normal'): Promise<string> {
     if (!this.socket || (this.current !== 'connected' && this.current !== 'authenticating')) throw new Error('MA2 尚未连接');
     if (/[\r\n\u0000]/.test(line) || Buffer.byteLength(line) > 4096) throw new Error('MA2 网络命令格式或长度无效');
-    if (this.queuedCommands >= 32) throw new Error('控台请求过多，请等待当前操作完成');
+    if (this.queuedCommands >= (priority==='stop'?64:32)) throw new Error('控台请求过多，请等待当前操作完成');
     const epoch = this.connectionEpoch;
     const queuedAt = performance.now();
     this.queuedCommands += 1;
-    const response = this.commandTail.then(() => {
+    const response = this.commands.schedule(async () => {
       this.traffic.queueMs += performance.now() - queuedAt;
       if (epoch !== this.connectionEpoch || !this.socket) throw new Error('控台连接已改变，待发送请求已取消');
       beforeSend?.();
@@ -86,9 +87,7 @@ export class Ma2Telnet {
       this.socket.write(`${line}\r\n`);
       this.traffic.wireCommands += 1; this.traffic.sentBytes += Buffer.byteLength(`${line}\r\n`, 'utf8');
       return pending;
-    }).finally(() => { this.queuedCommands -= 1; });
-    // Advance scheduling on either outcome; the caller still receives every failure.
-    this.commandTail = response.then(() => undefined, () => undefined);
+    },priority).finally(() => { this.queuedCommands -= 1; });
     return response;
   }
   disconnect(): void { this.fail(new Error('MA2 连接已关闭；未确认的操作不会自动重试')); }

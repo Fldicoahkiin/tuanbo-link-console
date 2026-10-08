@@ -56,7 +56,9 @@ export class BeautyOutputController {
           continue;
         }
         if (!this.values || this.failure) return;
-        const scene = this.target ?? await this.beauty.programScene();
+        // Every explicit parameter change verifies the actual output. A missed scene
+        // event must not keep edits attached to a cached, no-longer-visible scene.
+        const scene = await this.beauty.programScene();
         if (handled !== this.revision) continue;
         this.target = scene;
         const state = this.runtime.status();

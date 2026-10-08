@@ -1,3 +1,4 @@
+import { listenHttpTestServer } from './http-test-server';
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -90,7 +91,7 @@ it('HTTP 从支付宝通知到客户领取，客户凭据不能变成管理员�
   const appId = '2026000000000001'; const sellerId = '2088000000000001';
   const alipay = new AlipayNotifications(appId, sellerId, rsa.publicKey.export({ type: 'spki', format: 'pem' }).toString());
   const server = createLicensingServer(service, admin, alipay);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('缺少测试地址');
     const base = `http://127.0.0.1:${address.port}`;

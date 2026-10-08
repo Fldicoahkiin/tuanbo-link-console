@@ -83,7 +83,9 @@ test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继�
       engineSha256: createHash('sha256').update(await readFile(process.env.TBLINK_PLAYBACK_ENGINE_EXE!)).digest('hex') });
   } finally {
     await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2));
-    await page.evaluate(async () => { const state = await window.tbLink.getNativePlaybackStatus(); if (state) await window.tbLink.controlNativePlayback({ version: 1, sessionId: state.sessionId, generation: state.generation + 100, kind: 'stop' }); await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
+    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
     await app.close();
   }
 });

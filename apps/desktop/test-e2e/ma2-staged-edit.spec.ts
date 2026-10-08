@@ -22,10 +22,17 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
   try {
     const page = await app.firstWindow(); const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
-    await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
+    await app.evaluate(({ dialog, ipcMain }, path) => {
+      dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] });
+      ipcMain.removeHandler('link:ma2-network-status');
+      ipcMain.handle('link:ma2-network-status', () => ({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, passwordSaved: false, version: '3.3.4', error: null }));
+      ipcMain.removeHandler('link:ma2-play-cue'); ipcMain.handle('link:ma2-play-cue', () => undefined);
+      ipcMain.removeHandler('link:ma2-play-cancel'); ipcMain.handle('link:ma2-play-cancel', () => undefined);
+    }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.locator('[data-waveform-engine="wavesurfer"][data-ready="true"]').first()).toBeVisible();
+    await page.getByRole('combobox', { name: '灯光输出方式' }).selectOption('network');
     await page.getByRole('button', { name: '播放时间线', exact: true }).click();
     await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
     await page.locator('.waveform-cue-point').first().dblclick();
@@ -33,23 +40,26 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     await page.getByLabel('时间（秒）', { exact: true }).fill('2');
     await page.getByRole('button', { name: '保存卡点', exact: true }).click();
     await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
-    const pending = page.getByRole('region', { name: 'MA2 待提交变更' });
-    await expect(pending).toContainText('1 处变更');
-    await pending.getByText('查看待提交变更', { exact: true }).click();
-    await expect(pending).toContainText('2.000 秒');
+    const badge = page.getByRole('button', { name: '同步状态详情', exact: true });
+    await expect(badge).toContainText('待同步 1');
+    await badge.click();
+    const pending = page.getByRole('region', { name: '同步状态详情' });
+    await expect(pending).toContainText('1 处修改');
+    await expect(pending).toContainText('播放中暂存本地');
     await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect(pending).toHaveCount(0);
-    await page.getByRole('button', { name: '重做', exact: true }).click(); await expect(pending).toContainText('1 处变更');
+    await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect(badge).toContainText('仅本地');
+    await page.getByRole('button', { name: '重做', exact: true }).click(); await expect(badge).toContainText('待同步 1');
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks[0]?.clips[0]?.events[0]?.at).toBe(2000);
-    await expect(pending.getByRole('button', { name: '停止并核对提交' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '开始同步', exact: true })).toHaveAttribute('aria-pressed', 'false');
     await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
-    await expect(pending).toContainText('1 处变更');
-    await expect(pending.getByRole('button', { name: '核对并提交' })).toBeDisabled();
-    await pending.getByText('查看待提交变更', { exact: true }).click();
+    await expect(badge).toContainText('待同步 1');
+    await expect(page.getByRole('button', { name: '开始同步', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(pending).toContainText('1 处修改');
     await page.screenshot({ path: info.outputPath('pending.png') });
+    await page.getByRole('button', { name: '停止时间线', exact: true }).click();
     await page.reload();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await expect(pending).toContainText('1 处变更');
+    await expect(badge).toContainText('待同步 1');
     expect(errors).toEqual([]);
-  } finally { await app.close(); }
+  } finally { const page = await app.firstWindow(); await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
 });

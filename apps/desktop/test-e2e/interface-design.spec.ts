@@ -31,6 +31,7 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await expect(page.locator('.p1-media-card')).toHaveCount(4);
     const nav = page.getByRole('navigation', { name: '主要工作区' });
+    await nav.getByRole('button', { name: '节目单', exact: true }).click();
     await page.getByRole('button', { name: '新建播放列表', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '新建播放列表', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
@@ -94,12 +95,13 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
     await expect(page.getByText('没有找到匹配的节目', { exact: true })).toBeVisible();
     await page.getByLabel('搜索节目', { exact: true }).fill('');
     await nav.getByRole('button', { name: '编辑器', exact: true }).click();
-    const canvasBefore = (await page.locator('.reference-stage').boundingBox())!.width;
-    await page.getByRole('button', { name: '收起属性', exact: true }).click();
-    await expect(page.locator('.cue-inspector')).toHaveCount(0);
-    expect((await page.locator('.reference-stage').boundingBox())!.width).toBeGreaterThan(canvasBefore + 200);
-    await page.getByRole('button', { name: '显示属性', exact: true }).click();
-    await expect(page.locator('.cue-inspector')).toBeVisible();
+    const inspector = page.locator('.cue-inspector');
+    const inspectorBefore = (await inspector.boundingBox())!.width;
+    const resizeInspector = page.getByRole('button', { name: '调整属性面板宽度', exact: true });
+    await resizeInspector.focus(); await page.keyboard.press('ArrowRight');
+    await expect.poll(async () => (await inspector.boundingBox())!.width).toBeLessThan(inspectorBefore);
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(async () => (await inspector.boundingBox())!.width).toBe(inspectorBefore);
     await nav.getByRole('button', { name: '设置', exact: true }).click();
     const groups = page.getByRole('navigation', { name: '设置子菜单' });
     for (const group of ['设备连接', '播放', '画面与同步', '外观与更新']) {
@@ -126,5 +128,10 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
     expect(await nav.getByRole('button', { name: '节目单', exact: true }).evaluate(element => getComputedStyle(element).outlineStyle)).toBe('solid');
     expect(await nav.getByRole('button', { name: '节目单', exact: true }).evaluate(element => getComputedStyle(element).transitionDuration)).toBe('0s');
     expect(errors).toEqual([]);
-  } finally { await app.close(); }
+  } catch (error) {
+    const page = await app.firstWindow();
+    await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
+    await page.screenshot({ path: info.outputPath('failure-ui.png') });
+    throw error;
+  } finally { const page = await app.firstWindow(); if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
 });

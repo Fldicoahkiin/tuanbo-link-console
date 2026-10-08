@@ -1,4 +1,4 @@
-import { materialSceneNames, type CueRuntime, type CueActionRunner, type MtcSample, type RuntimeUpdate, type ManagedMediaEvent, type PreflightReport } from '@tb/core/link';
+import { materialSceneTargets, type CueRuntime, type CueActionRunner, type MtcSample, type RuntimeUpdate, type ManagedMediaEvent, type PreflightReport } from '@tb/core/link';
 import type { LinkProject, RundownItem, IntegrationProfile } from '@tb/schema';
 import type { P1LightingOutput } from './p1-lighting-output';
 import { PreflightBlockedError } from './preflight-blocked-error';
@@ -22,7 +22,7 @@ export async function prepareInternalRuntime(project: LinkProject, itemId: strin
   preflight: () => Promise<PreflightReport>, context: {
     assertCurrent: () => void; select: () => void; capture: () => void; armFromStart: () => Promise<void>;
     runtime: CueRuntime; managed: ManagedOutputRuntime; runner: CueActionRunner; projectPath: string | null;
-    sample: (value: MtcSample) => void; apply: (update: RuntimeUpdate) => void;
+    sample: (value: MtcSample) => void; apply: (update: RuntimeUpdate) => void; notice: (message: string) => void;
     execute: (cues: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[]) => Promise<void>;
   }): Promise<void> {
   context.assertCurrent(); context.select();
@@ -34,9 +34,16 @@ export async function prepareInternalRuntime(project: LinkProject, itemId: strin
     .flatMap((cue) => cue.actions.flatMap((action) => action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])) ?? [] : undefined;
   if (scenes) {
     const mediaIds = new Set(project.rundown.find((item) => item.id === itemId)?.referenceMediaClips.map((clip) => clip.assetId));
-    scenes.push(...project.mediaAssets.filter((asset) => mediaIds.has(asset.id)).map((asset) => materialSceneNames(project.projectId, asset).sceneName));
+    scenes.push(...materialSceneTargets(project, itemId).filter(target => mediaIds.has(target.asset.id)).map(target => target.sceneName));
   }
-  await desktop.setInternalAudioCapture(true, scenes);
+  try { await desktop.setInternalAudioCapture(true, scenes); }
+  catch (error) {
+    context.assertCurrent();
+    const message = `OBS 音乐采集未就绪：${error instanceof Error ? error.message : String(error)}。本机音频与画面动作继续，OBS 是否收到音乐请检查混音器。`;
+    await desktop.recordLog({ level: 'warning', category: 'device', device: 'OBS 音乐采集',
+      projectId: project.projectId, itemId, message, result: 'failed' });
+    context.assertCurrent(); context.notice(message);
+  }
   context.assertCurrent();
   if (positionMs === 0) { await context.armFromStart(); return; }
   const sample = internalSample(project, positionMs); context.sample(sample);

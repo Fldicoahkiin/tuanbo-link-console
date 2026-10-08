@@ -38,7 +38,8 @@ export type ImportedReferenceAudio = {
 };
 
 export class LinkProjectService {
-  private readonly pendingSaves = new ProjectWriteQueue((path, project) => this.writeSavedProject(path, project));
+  private readonly fileAccess = new Map<string, Promise<void>>();
+  private readonly pendingSaves = new ProjectWriteQueue((path, project) => this.withProjectFile(path, () => this.writeSavedProject(path, project)));
   private readonly verifiedMedia = new VerifiedMediaFiles(hashFile);
 
   constructor(
@@ -48,6 +49,21 @@ export class LinkProjectService {
 
   async open(projectPath: string): Promise<LinkProject> {
     assertProjectExtension(projectPath);
+    return this.withProjectFile(projectPath, () => this.readProject(projectPath));
+  }
+
+  /** Windows may refuse rename while the target is open. Serialize our reads
+   * with writes; external locks still fail visibly, without retrying a save. */
+  private withProjectFile<T>(path: string, operation: () => Promise<T>): Promise<T> {
+    const absolute=resolve(path);const key=process.platform==='win32' ? absolute.toLowerCase() : absolute;
+    const result=(this.fileAccess.get(key) ?? Promise.resolve()).then(operation);
+    // The caller owns errors. This settled tail only releases the file queue.
+    const tail=result.then(()=>undefined,()=>undefined);this.fileAccess.set(key,tail);
+    void tail.then(()=>{if(this.fileAccess.get(key)===tail)this.fileAccess.delete(key);});
+    return result;
+  }
+
+  private async readProject(projectPath: string): Promise<LinkProject> {
     const content = await readFile(projectPath, 'utf8');
     let value: unknown;
     try {
@@ -65,6 +81,25 @@ export class LinkProjectService {
 
   private async writeSavedProject(absolutePath: string, project: LinkProject): Promise<void> {
     const content = serializeLinkProject(project);
+      if (project.rundown.some(item => item.lighting?.musicAnalysis)) {
+        try {
+          const original = await readFile(absolutePath, 'utf8');
+          const old = parseLinkProject(JSON.parse(original));
+          if (!old.rundown.some(item => item.lighting?.musicAnalysis)) {
+            try { await copyFile(absolutePath, `${absolutePath}.before-music-analysis.bak`, constants.COPYFILE_EXCL); }
+            catch (error) { if (!isErrorWithCode(error, 'EEXIST')) throw error; }
+          }
+        } catch (error) { if (!isErrorWithCode(error, 'ENOENT')) throw error; }
+      }
+      if (project.ma2MaterialLibrary?.version === 2 || project.rundown.some(item => item.lighting?.version === 2)) {
+        try {
+          const old = parseLinkProject(JSON.parse(await readFile(absolutePath, 'utf8')));
+          if (old.ma2MaterialLibrary?.version !== 2 && !old.rundown.some(item => item.lighting?.version === 2)) {
+            try { await copyFile(absolutePath, `${absolutePath}.before-lighting-library.bak`, constants.COPYFILE_EXCL); }
+            catch (error) { if (!isErrorWithCode(error, 'EEXIST')) throw error; }
+          }
+        } catch (error) { if (!isErrorWithCode(error, 'ENOENT')) throw error; }
+      }
       if (project.ma2ReadState?.formatVersion === 2 || project.ma2MaterialLibrary) {
         try {
           const old = parseLinkProject(JSON.parse(await readFile(absolutePath, 'utf8')));

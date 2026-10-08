@@ -422,13 +422,13 @@ export function prepareMa2TimecodeEvents(xml: string, expectedSha256: string, ta
   return { xml: result, originalPaths, addedPaths };
 }
 
-/** Native 3.3.4 stores its misspelled length in 30 Hz ticks, independently of event positions. */
+/** 3.3.4 and onPC 3.7.0.5 exports use 30 Hz ticks for `lenght` (200 s = 6000). */
 export function extendMa2TimecodeLength(xml: string, target: number): string {
   validateMa2TimecodeWrite(xml);
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
   if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('播放长度目标与 Timecode 不一致');
-  if (report.version !== '3.3.4' || timecode.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('该 MA2 版本或时间基准的播放长度尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(report.version) || timecode.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('该 MA2 版本或时间基准的播放长度尚未验证');
   const length = timecode.attributes.lenght ?? '0';
   if (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))) throw new Error('MA2 播放长度无效，未写入控台');
   let required = 0;

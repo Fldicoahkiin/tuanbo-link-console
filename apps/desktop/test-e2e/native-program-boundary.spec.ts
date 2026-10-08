@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
 
-test('正式节目在界面繁忙跨越曲尾时仍由后台继续下一首', async ({}, info) => {
+for (const crash of [false, true]) test(`正式节目后台接续：界面繁忙跨越曲尾${crash ? '后界面崩溃停止自有输出并可退出' : '仍继续下一首'}`, async ({}, info) => {
   test.skip(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1', '真实WASAPI边界测试；不启用MIDI或用户OBS');
   const wav = Buffer.alloc(44 + 48000 * 4 * 10);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
@@ -23,6 +23,7 @@ test('正式节目在界面繁忙跨越曲尾时仍由后台继续下一首', as
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   const page = await app.firstWindow();
   const evidence: Record<string, unknown> = { passed: false, scope: '真实正式按钮/WASAPI曲尾跨界面阻塞；无OBS/MIDI/灯具，不代替完整六小时' };
+  let crashed = false;
   try {
     await page.waitForFunction(() => Boolean(window.tbLink));
     await page.evaluate(profile => window.tbLink.saveIntegrationProfile({ profile }), profile); await page.reload();
@@ -44,10 +45,24 @@ test('正式节目在界面繁忙跨越曲尾时仍由后台继续下一首', as
     expect(blocked.status).toMatchObject({ itemId: 'song-1', status: 'playing', offsetMs: 600000, underruns: 0, audioError: null });
     // A start scheduled only after the renderer wakes is not a successful handoff.
     expect(blocked.status!.positionMs).toBeGreaterThan(2500);
+    if (crash) {
+      crashed = true;
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.forcefullyCrashRenderer());
+      await expect.poll(async () => app.evaluate((_electron, pid) => {
+        try { process.kill(pid, 0); return true; }
+        catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false; throw error; }
+      }, blocked.status!.enginePid!), { timeout: 10000 }).toBe(false);
+      evidence.engineExitedAfterRendererCrash = true;
+    }
     evidence.passed = true;
   } finally {
     await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2));
-    await page.evaluate(async () => { const state = await window.tbLink.getNativePlaybackStatus(); if (state) await window.tbLink.controlNativePlayback({ version: 1, sessionId: state.sessionId, generation: state.generation + 100, kind: 'stop' }); await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+    if (!crashed) {
+      await page.keyboard.press('Escape');
+      await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
+      await expect(page.locator('.player-transport.status-stopped')).toBeVisible();
+      await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+    }
     await app.close();
   }
 });

@@ -13,12 +13,14 @@ export class LightingCueAudition {
   async playAction(input: Ma2PlaybackAction): Promise<boolean> {
     this.cancel(); const generation = this.generation;
     const action = ma2PlaybackActionSchema.parse(input);
+    const audition = await window.tbLink.controlMa2Audition({version:1,action:'status'});
+    if(audition.phase==='stopping')throw new Error('正在停止试听，请完成后再点击 Cue');
     const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
     if (generation !== this.generation) return false;
     if (status.state !== 'connected' || !status.settings) throw new Error('请先连接 MA2 网络');
     const { host, port, monitorPort, username } = status.settings;
     const sessionId = crypto.randomUUID(); this.networkSession = sessionId;
-    try { await window.tbLink.playMa2Cue({ sessionId, action, network: { host, port, monitorPort, username }, deadlineAt: Date.now() + 1000 }); }
+    try { await window.tbLink.playMa2Audition({ version:1,generation:audition.generation,sessionId, action, network: { host, port, monitorPort, username }, deadlineAt: Date.now() + 1000 }); }
     catch (error) { if (generation !== this.generation) return false; throw error; }
     return generation === this.generation;
   }
@@ -38,7 +40,7 @@ export class LightingCueAudition {
     this.cancel(); const generation = this.generation;
     const selected = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === eventId);
     if (!selected || selected.kind !== 'ma2') return 0;
-    await requireOutputLicense();
+
     const group = selected.effectGroupId ?? selected.id;
     const native = document.ma2Bindings?.some(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode');
     const selectedEvents = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.id === group || event.effectGroupId === group)));
@@ -51,6 +53,9 @@ export class LightingCueAudition {
     })) };
     const networkPlayback = native || document.outputMode === 'network' || preview.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind === 'ma2' && !event.executor)));
     if (networkPlayback) {
+      const audition=await window.tbLink.controlMa2Audition({version:1,action:'status'});
+      if(audition.phase==='stopping')throw new Error('正在停止试听，请完成后再点击 Cue');
+      await requireOutputLicense();
       const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
       if (generation !== this.generation) return 0;
       if (status.state !== 'connected' || !status.settings) throw new Error('序列池 Cue 通过网络播放，请先连接 MA2 网络；无需绑定推杆或按键');
@@ -60,12 +65,13 @@ export class LightingCueAudition {
       let count = 0;
       for (const entry of actions) {
         if (generation !== this.generation) return 0;
-        try { await window.tbLink.playMa2Cue({ sessionId, network: { host, port, monitorPort, username }, action: entry.action, deadlineAt: Date.now() + 1000 }); }
+        try { await window.tbLink.playMa2Audition({ version:1,generation:audition.generation,sessionId, network: { host, port, monitorPort, username }, action: entry.action, deadlineAt: Date.now() + 1000 }); }
         catch (error) { if (generation !== this.generation) return 0; throw error; }
         count += 1;
       }
       return generation === this.generation ? count : 0;
     }
+    await requireOutputLicense();
     const packets = compileLightingPackets(preview, profile?.lighting?.mscDeviceId ?? 127);
     try {
       const access = await deadline(requestMidiAccess({ sysex: true }), 'MIDI 访问超时');

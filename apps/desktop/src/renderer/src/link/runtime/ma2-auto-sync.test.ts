@@ -21,6 +21,7 @@ function setup() {
   let playing = false;
   const catalog: Ma2Catalog = { directory: { show: 'Test', generation: 'session', version: '3.3.4', entries: [] }, readAt: new Date().toISOString(), entries: [] };
   const dependencies: Ma2AutoSyncDependencies = {
+    archive: vi.fn(() => Promise.resolve('saved.tblink')),
     state: () => ({ project, documentId: 1, playing }),
     catalog: vi.fn(() => Promise.resolve(catalog)), read: vi.fn(() => Promise.resolve(preview)),
     compare: vi.fn<Ma2AutoSyncDependencies['compare']>(request => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map(request.choices)))),
@@ -100,6 +101,7 @@ it.skipIf(!process.env.MA2_ONPC_AUTO_SYNC_ACCEPTANCE)('真实 onPC 自动写回�
   project = importMa2TimecodeCommand('song', preview).execute(project);
   const changed = vi.fn();
   const runner = new Ma2AutoSync({ state: () => ({ project, documentId: 1, playing: false }), catalog: () => readMa2Catalog(bridge, () => false),
+    archive: () => Promise.resolve('test-harness'),
     read: async request => convertMa2Snapshot(await bridge.request('SNAPSHOT', request.target), request.target, [], request.timeOriginMs),
     compare: request => Promise.resolve(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map())), apply: request => service.apply(request),
     execute: (_id, command) => { project = command.execute(project); }, changed });

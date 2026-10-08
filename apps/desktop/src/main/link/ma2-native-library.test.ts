@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { readMa2NativeLibrary } from './ma2-native-library';
+import { readMa2NativeLibrary, readNativeCueChunks } from './ma2-native-library';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
 import type { Ma2ReadProgressUpdate } from '@tb/schema';
@@ -8,7 +8,10 @@ const directory = { show: '实机工程', generation: '1', version: '3.3.4.3', e
 function connection(replies: string[]): Pick<Ma2Telnet, 'command'> {
   return { command: vi.fn<Ma2Telnet['command']>((line, match) => {
     const prefix = /TBLINK_CUES_[a-f0-9]{32}:/.exec(line)?.[0];
-    const response = match(`${prefix}${replies.shift()}\n`);
+    const reply = replies.shift();
+    if (!reply) throw new Error('缺少测试响应');
+    const lines = reply.match(/.{1,700}/g)?.map((chunk, index) => `${prefix}${index * 700 + 1}:${chunk}\n`).join('');
+    const response = match(`${lines}${prefix}END:${reply.length}\n`);
     if (response === null) throw new Error('测试响应无效');
     return Promise.resolve(response);
   }) };
@@ -20,6 +23,26 @@ it('轻量读取保留真实索引、小数 Cue 和中文名，明确灯具详�
   expect(library.sequences[0]?.cues).toEqual([{ index: 1, number: '1.250', name: '开场' }, { index: 2, number: '7.500', name: '收尾' }]);
   expect(library.fixtureDetails).toBe('unavailable');
   expect(request.mock.calls.map(call => call[0])).toEqual(['LISTSEQ', 'LISTSEQ']);
+});
+
+it('分段读取超过控台单行长度的中文名称，保留全部 100 个 Cue', async () => {
+  const replies: string[] = [];
+  for (let offset = 0; offset < 101; offset += 32) {
+    const rows = Array.from({ length: Math.min(32, 101 - offset) }, (_, index) => offset + index)
+      .filter(index => index > 0).map(index => `${index},${index},${Buffer.from(`${index} 暖场灯光测试`).toString('hex')}`);
+    const reply = `101;${rows.join(';')}`;
+    replies.push(reply, reply);
+  }
+  const result = await readMa2NativeLibrary(connection(replies), { request: vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify({ ...directory, version: '3.7.0.5' })) }, () => false);
+  expect(result.errors).toEqual([]);
+  expect(result.sequences[0]?.cues).toHaveLength(100);
+  expect(result.sequences[0]?.cues.at(-1)).toEqual({ index: 100, number: '100.000', name: '100 暖场灯光测试' });
+});
+
+it('收到结束标记前等待，截断或缺失分段不能冒充完整目录', () => {
+  expect(readNativeCueChunks('TBLINK_TEST:1:abc\n', 'TBLINK_TEST:')).toBeNull();
+  expect(() => readNativeCueChunks('TBLINK_TEST:1:abc\nTBLINK_TEST:END:4\n', 'TBLINK_TEST:')).toThrow('传输不完整');
+  expect(() => readNativeCueChunks('TBLINK_TEST:END:701\n', 'TBLINK_TEST:')).toThrow('传输不完整');
 });
 it('读取期间 Cue 改变时拒绝不一致列表', async () => {
   const result = await readMa2NativeLibrary(connection(['2;1,1,61', '2;1,2,61']), { request: vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(directory)) }, () => false);

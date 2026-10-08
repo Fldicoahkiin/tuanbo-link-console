@@ -1,19 +1,6 @@
 import type { IntegrationProfile, NativeObsStatus, LightingDocument } from '@tb/schema';
 
-export type InternalPlayerState = {
-  playlistId?: string;
-  status: 'stopped' | 'preparing' | 'playing' | 'paused' | 'error';
-  itemId: string | null; positionMs: number; durationMs: number; volume: number;
-  endAction: 'stop' | 'next' | 'loop' | 'pause'; error: string | null;
-  playedItemIds: string[];
-  mtcEnabled: boolean;
-  mtcPositionMs: number | null;
-  mtcPortName?: string | null;
-  mtcSentPositionMs?: number | null;
-  errorTitle: string | null;
-  notice: string | null;
-  mtcConnectionFailed: boolean;
-};
+export type InternalPlayerState = import('@tb/schema').ProgramPlayerState;
 export const emptyInternalPlayerState: InternalPlayerState = {
   status: 'stopped', itemId: null, positionMs: 0, durationMs: 0, volume: 100, endAction: 'pause', error: null, errorTitle: null, notice: null, playedItemIds: [], mtcEnabled: true, mtcPositionMs: null, mtcConnectionFailed: false
 };
@@ -25,7 +12,7 @@ export type InternalPlayerDependencies = {
   pause: () => Promise<void>;
   stop: () => Promise<void>;
   resolveAudio: (relativePath: string) => Promise<string>;
-  configuration: () => { outputDeviceId: string; audioSampleRate?: 44100 | 48000; mtcPortName: string | null; preload?: boolean; fadeInMs?: number; fadeOutMs?: number; lightingProfile?: IntegrationProfile | null };
+  configuration: () => Omit<import('@tb/schema').NativeProgramConfiguration, 'preciseSeeking'>;
   changed: (state: InternalPlayerState) => void;
   notice?: (message: string, itemId: string | null) => void;
   obsChanged?: (state: NativeObsStatus) => void;
@@ -55,5 +42,6 @@ export type ProgramLightingOutput = {
   tick(positionMs: number): void;
   finish(positionMs: number): Promise<void> | void;
   stop(): void;
+  release?(): Promise<void>;
   close?(): Promise<void>;
 };

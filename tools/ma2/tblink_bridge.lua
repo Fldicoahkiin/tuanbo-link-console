@@ -194,19 +194,26 @@ end
 -- Telnet carries bounded hexadecimal data, never source code supplied by a project.
 -- No LuaSocket dependency. Each command has its own response token.
 local network = nil
+local snapshot_cache = nil
 local function hex(data) return (data:gsub('.', function(c) return string.format('%02x', string.byte(c)) end)) end
 _G.TBLINK_NET = function(token, action, id, a, b, c)
   if not token:match('^[a-f0-9]+$') or #token ~= 32 then return end
   local ok, result = pcall(function()
     assert(active and _G.TBLINK_BRIDGE_GENERATION == generation, 'Bridge is stopped')
     assert(type(id) == 'string' and #id == 32 and id:match('^[a-f0-9]+$'), 'Invalid request identity')
-    if action == 'begin' then
+    if action == 'begin' or action == 'beginsync' then
       assert(id ~= last, 'Request already processed')
+      local base = nil
+      if action == 'beginsync' then
+        assert(snapshot_cache and snapshot_cache.id == a and snapshot_cache.target == b, 'Snapshot reference expired or mismatched')
+        base = snapshot_cache.xml
+        a = 'SYNC'
+      end
       assert(a == 'PING' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(not network or gma.gettime() > network.expires, 'Another network request is pending')
-      network = { id = id, op = a, target = b, size = c, bytes = 0, chunks = {}, expires = gma.gettime() + 120 }
+      network = { id = id, op = a, target = b, size = c, bytes = 0, chunks = {}, base = base, expires = gma.gettime() + 120 }
       return 'ACK'
     end
     assert(network and network.id == id and gma.gettime() <= network.expires, 'Network request expired or mismatched')
@@ -223,8 +230,13 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
       assert(not network.done and network.bytes == network.size, 'Incomplete or already executed request')
       network.done = true
       local body = table.concat(network.chunks); network.chunks = nil
+      if network.base then body = #network.base .. '\n' .. network.base .. body; network.base = nil end
       network.response = process(id .. '\n' .. network.op .. '\n' .. network.target .. '\n' .. #body .. '\n' .. body)
       assert(#network.response <= 33554500, 'Response exceeds limit')
+      if network.op == 'SNAPSHOT' or network.op == 'SCOPE' then
+        local content = network.response:match('^[a-f0-9]+\nOK\n%d+\n(.*)$')
+        snapshot_cache = content and { id = id, target = network.target, xml = content } or nil
+      end
       return 'DONE:' .. #network.response
     end
     if action == 'read' then

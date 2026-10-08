@@ -86,6 +86,8 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await app.evaluate(({ ipcMain, BrowserWindow }) => {
       ipcMain.removeHandler('link:obs-live-scene');
       ipcMain.removeHandler('link:obs-live-edit');
+      ipcMain.removeHandler('link:obs-snapshot');
+      ipcMain.handle('link:obs-snapshot', () => ({ status: 'connected', obsVersion: '32.0.4', webSocketVersion: '5', error: null }));
       ipcMain.handle('link:obs-live-edit', () => { BrowserWindow.getAllWindows()[0]?.setTitle('UNEXPECTED_SOURCE_EDIT'); });
       ipcMain.removeHandler('link:obs-inventory');
       ipcMain.handle('link:obs-inventory', () => ({ scenes: [], inputs: ['测试机位'], filters: { 测试机位: ['美颜'] }, inputKinds: {}, inputAudioStates: {}, sceneItems: {}, transitions: [], videoSettings: { baseWidth: 1080, baseHeight: 1920 }, sourceSizes: {}, sceneItemTransforms: {} }));
@@ -126,6 +128,8 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
       BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'connected', obsVersion: '32.0.4', webSocketVersion: '5', error: null });
       BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-inventory-changed', null);
     });
+    // Initialize against the same simulated connection used for subsequent frames.
+    await page.reload();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '人像美颜', exact: true }).click();
     await expect(page.locator('.beauty-header')).toHaveCount(0);
     for (const [width, height, minimum] of [[1920, 1080, 700], [1180, 720, 400]]) {

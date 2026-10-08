@@ -1,5 +1,5 @@
 import { toUserErrorMessage, type LinkLocalIntegrationDetection } from '@tb/core/link';
-import { loopMidiStatusSchema, ma2NetworkStatusSchema, type IntegrationProfile, type LinkProject } from '@tb/schema';
+import { loopMidiStatusSchema, ma2NetworkStatusSchema, obsWebSocketUrlSchema, localObsConnectionResultSchema, type IntegrationProfile, type LinkProject } from '@tb/schema';
 import type { MidiPortSnapshot } from '../../registry/link-midi-adapter';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
@@ -21,6 +21,7 @@ export type DeviceConnectionOptions = {
   onProfile: (profile: IntegrationProfile) => void;
   onDetection: (detection: LinkLocalIntegrationDetection) => void;
   onIssues: (issues: string[]) => void;
+  onObsPassword?: (password: string) => void;
 };
 const tasks = ['discovery', 'profile', 'loop', 'midi', 'obs', 'preview', 'audio', 'p1', 'ma2', 'bridge'];
 
@@ -35,9 +36,13 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     try {
       const value = await operation(); checks.finish(id, 'ready', detail); return { value };
     } catch (error) {
-      const message = `${label}：${toUserErrorMessage(error)}`;
+      const raw = typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : String(error);
+      const technicalError = options.password ? raw.replaceAll(options.password, '[REDACTED]') : raw;
+      const explanation = toUserErrorMessage(technicalError);
+      const reason = explanation.startsWith('操作未能完成。') ? `操作失败：${technicalError.split('\n')[0]?.slice(0, 300) || '未返回错误内容'}` : explanation;
+      const message = `${label}：${reason}`;
       checks.finish(id, 'error', message); issues.push(message); options.onIssues([...issues]);
-      await desktop.recordLog({ level: 'warning', category: 'device', message, result: 'failed' }).catch(console.error);
+      await desktop.recordLog({ level: 'warning', category: 'device', message, result: 'failed', details: { step: id, technicalError } }).catch(console.error);
       return null;
     }
   };
@@ -83,12 +88,21 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     }, 'loopMIDI 已运行，端口单独检查');
     if (loop?.value === false) skip('loop', '未安装虚拟 MIDI，实体 MIDI 不依赖此项');
     const midi = await run('midi', '系统 MIDI', options.readMidiPorts, '系统 MIDI 检测通过');
+    const nativeMtc = internal && profile.internalPlayer?.audioEngine === 'native';
+    const nativeDevices = useIntegrationStore.getState().nativeDevices;
+    if (nativeMtc && nativeDevices) {
+      profile = applyDetectedLightingMidiPorts(profile, nativeDevices.midiOutputs.map(port => ({ id: String(port.id), name: port.name,
+        manufacturer: '', direction: 'output', state: 'connected', connection: 'closed' })), true).profile;
+    }
     if (midi) {
-      profile = applyDetectedLightingMidiPorts(profile, midi.value, internal).profile;
+      if (!nativeMtc) profile = applyDetectedLightingMidiPorts(profile, midi.value, internal).profile;
       if (options.project && !internal) profile = applyDetectedP1MidiPorts(profile, midi.value).profile;
     }
     profile = { ...profile, updatedAt: new Date().toISOString() };
     const saved = await run('profile', '连接配置', async () => {
+      const address = obsWebSocketUrlSchema.safeParse(profile.obs.webSocketUrl);
+      if (!address.success && profile.obs.connectionMethod === 'manual') throw new Error(address.error.issues.map(issue => issue.message).join('；'));
+      profile = { ...profile, obs: { ...profile.obs, webSocketUrl: address.success ? address.data : 'ws://127.0.0.1:4455' } };
       await desktop.saveIntegrationProfile({ profile, ...(options.password ? { obsPassword: options.password } : {}) });
       useIntegrationStore.getState().setProfile(profile); options.onProfile(profile);
     });
@@ -96,13 +110,25 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       if (!saved) { skip('obs', '连接配置未保存'); skip('preview', '等待 OBS 连接'); return; }
       const connected = await run('obs', 'OBS 控制', async () => {
         if (useIntegrationStore.getState().obs.status !== 'connected') {
-          const hostname = new URL(profile.obs.webSocketUrl).hostname;
-          if (['localhost', '127.0.0.1', '[::1]'].includes(hostname)) useIntegrationStore.getState().setProcess(await desktop.startExternalApplication('obs'));
-          const snapshot = await desktop.connectObs(); useIntegrationStore.getState().setObs(snapshot);
+          let snapshot;
+          if (profile.obs.connectionMethod !== 'manual') {
+            const local = localObsConnectionResultSchema.parse(await desktop.connectLocalObs());
+            snapshot = local.snapshot;
+            const savedProfile = await desktop.loadIntegrationProfile();
+            if (savedProfile) { profile = savedProfile; useIntegrationStore.getState().setProfile(profile); options.onProfile(profile); }
+            options.onObsPassword?.(local.password);
+          } else {
+            const hostname = new URL(profile.obs.webSocketUrl).hostname;
+            if (['localhost', '127.0.0.1', '[::1]'].includes(hostname)) useIntegrationStore.getState().setProcess(await desktop.startExternalApplication('obs'));
+            snapshot = await desktop.connectObs();
+          }
+          useIntegrationStore.getState().setObs(snapshot);
           if (snapshot.status !== 'connected') throw new Error(snapshot.error ?? 'OBS 连接未完成');
         }
+      }, 'OBS 控制已连接');
+      if (connected) await run('obs-inventory', 'OBS 场景清单', async () => {
         useIntegrationStore.getState().setInventory(await desktop.readObsInventory());
-      }, 'OBS 控制已连接，场景清单已读取');
+      }, 'OBS 场景清单已读取');
       if (connected) await run('preview', 'OBS 预览', async () => {
         const preview = obsPreviewSession.open();
         try { await preview.next(); }
@@ -121,20 +147,32 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       }, 'P1 已运行，时间码监听已连接；等待真实播放信号');
     };
     const portsTask = async (): Promise<void> => {
+      const checkedNativeOutputs = new Map<string, Promise<void>>();
       for (const target of midiConnectionTargets(profile, options.project)) {
         const key = `port:${target.id}`;
         checks.checking(key);
         if (!target.required) { skip(key, '未启用此接口'); continue; }
+        const mapped = profile.midiPortProfiles.find(port => port.id === target.id && port.direction === target.direction);
+        const mtcName = profile.midiPortProfiles.find(port => port.id === profile.internalPlayer?.mtcOutputPortProfileId)?.portName;
+        const nativeOutput = nativeMtc && target.direction === 'output' && (target.id === (profile.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output') || Boolean(mtcName && mapped?.portName === mtcName));
         await run(key, target.name, async () => {
           if (!saved) throw new Error('连接配置未保存');
-          if (!midi) throw new Error('系统 MIDI 未就绪，请处理系统检测项');
-          const mapped = profile.midiPortProfiles.find(port => port.id === target.id && port.direction === target.direction);
           if (!mapped?.portName) throw new Error('尚未配置接口，请在音频与 MIDI 中选择');
+          if (nativeOutput) {
+            if (!nativeDevices) throw new Error(useIntegrationStore.getState().nativeDeviceError ?? 'Windows 原生设备尚未检测，请刷新端口');
+            if (nativeDevices.midiOutputs.filter(port => port.name === mapped.portName).length !== 1) throw new Error(`Windows MIDI 接口未检测到或名称重复：${mapped.portName}`);
+            if (!checkedNativeOutputs.has(mapped.portName)) {
+              checkedNativeOutputs.set(mapped.portName, desktop.checkNativeMidiOutput({ version: 1, portName: mapped.portName }));
+            }
+            await checkedNativeOutputs.get(mapped.portName);
+            return;
+          }
+          if (!midi) throw new Error('系统 MIDI 未就绪，请处理系统检测项');
           const matching = midi.value.filter(port => port.name === mapped.portName && port.direction === target.direction && port.state === 'connected');
           if (matching.length !== 1) throw new Error('接口不可用或名称重复，请检查设备连接');
           const errors = await options.openMidiPorts([target.id], target.direction);
           if (errors.length) throw new Error(errors.join('；'));
-        }, '接口已打开；未发送任何 Cue 或时间码');
+        }, nativeOutput ? 'Windows 接口打开检查通过；未发送时间码，播放时打开并输出' : '接口已打开；未发送任何 Cue 或时间码');
       }
     };
     await Promise.all([obsTask(), p1Task(), portsTask(), ma2Task, audioTask]);

@@ -1,3 +1,6 @@
+import { readMa2Method } from './ma2-mode-store';
+import { connectDiscoveredMa2, useLocalMa2Store } from './ma2-connection-store';
+import { ma2NetworkStatusSchema } from '@tb/schema';
 import { create } from 'zustand';
 import { saveMa2MaterialLibraryCommand, toUserErrorMessage } from '@tb/core/link';
 import { ma2EffectLibrarySchema, type Ma2CatalogRequest, type Ma2EffectLibrary, type Ma2ReadProgress } from '@tb/schema';
@@ -18,7 +21,8 @@ export async function scanMa2Materials(source: Ma2CatalogRequest, retry = false)
     if (useDocumentStore.getState().documentId !== before.documentId) throw new Error('工程已切换');
     before.markSaved(path, before.revision, before.documentId);
     const sourceName = source.network ? `${source.network.host}:${source.network.port}` : '本机 onPC';
-    const cached = before.project.ma2MaterialLibrary;
+    const saved = before.project.ma2MaterialLibrary;
+    const cached = saved?.library ? { source: saved.source, library: saved.library } : undefined;
     if (retry && cached?.source !== sourceName) throw new Error('来源控台改变，请读取新目录');
     const targets = retry && cached ? cached.library.directory.entries.filter(entry => !cached.library.sequences.some(sequence => sequence.sequence === entry.target) || cached.library.errors.some(error => error.sequence === entry.target)).map(entry => entry.target) : undefined;
     const progressId = crypto.randomUUID();
@@ -52,4 +56,18 @@ export async function scanMa2Materials(source: Ma2CatalogRequest, retry = false)
     useDocumentStore.getState().markSaved(savedPath, current.revision, before.documentId);
   } catch (error) { useMa2MaterialReadStore.setState({ error: toUserErrorMessage(error) }); throw error; }
   finally { unsubscribe?.(); useMa2MaterialReadStore.setState({ busy: false, activeId: null, progress: null }); }
+}
+
+export async function ma2MaterialConnection(): Promise<Ma2CatalogRequest> {
+  const method = readMa2Method();
+  if (method === 'midi') throw new Error('当前为仅 MIDI 时间码模式，不读取控台灯光库');
+  const local = useLocalMa2Store.getState();
+  if (method === 'local' || (!method && local.status === 'ready')) {
+    if (local.status !== 'ready') throw new Error('请先在设备设置连接本机 onPC');
+    return { dataDirectory: local.directory };
+  }
+  const network = ma2NetworkStatusSchema.parse(await connectDiscoveredMa2());
+  if (network.state !== 'connected' || !network.settings) throw new Error('请先在设备设置连接 MA2 控台');
+  const { host, port, monitorPort, username } = network.settings;
+  return { dataDirectory: '', network: { host, port, monitorPort, username } };
 }

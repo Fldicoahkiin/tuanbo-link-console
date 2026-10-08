@@ -3,8 +3,8 @@ import WaveSurfer from 'wavesurfer.js';
 import Spectrogram from 'wavesurfer.js/dist/plugins/spectrogram.esm.js';
 
 /** Rendering only: the app remains the sole transport and edit authority. */
-export function WaveSurferSurface({ channels, duration, allowSpectrum = false }: {
-  channels: Float32Array[]; duration: number; allowSpectrum?: boolean;
+export function WaveSurferSurface({ channels, duration, spectrumChannels, allowSpectrum = false }: {
+  spectrumChannels: () => Float32Array[]; channels: Float32Array[]; duration: number; allowSpectrum?: boolean;
 }): JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const wave = useRef<HTMLDivElement>(null);
@@ -20,6 +20,7 @@ export function WaveSurferSurface({ channels, duration, allowSpectrum = false }:
     let initialization: number | null = null;
     let height = 1;
     let configuration = '';
+    let loadedMode: boolean | null = null;
     delete element.dataset.ready;
     setError(null);
     const report = (reason: Error): void => { if (!disposed) { setError(`波形显示失败：${reason.message}`); console.error('WaveSurfer', reason); } };
@@ -33,6 +34,10 @@ export function WaveSurferSurface({ channels, duration, allowSpectrum = false }:
       instance.setOptions({ height, barHeight: gain });
       waveElement.style.visibility = spectral ? 'hidden' : 'visible';
       plugin?.destroy(); plugin = null;
+      if (loadedMode !== spectral) {
+        loadedMode = spectral;
+        void instance.load('', spectral ? spectrumChannels() : channels, duration).catch((reason:unknown)=>report(reason instanceof Error ? reason : new Error(String(reason))));
+      }
       if (spectral) {
         plugin = Spectrogram.create({ container: spectrumElement, height, labels: true,
           fftSamples: 1024, scale: 'logarithmic', frequencyMin: 40, frequencyMax: 16000,
@@ -58,7 +63,6 @@ export function WaveSurferSurface({ channels, duration, allowSpectrum = false }:
         instance.on('error', report);
         instance.on('redrawcomplete', () => { if (!disposed) element.dataset.ready = 'true'; });
         display();
-        void instance.load('', channels, duration).catch((reason: unknown) => report(reason instanceof Error ? reason : new Error(String(reason))));
       }, { timeout: 100 });
       else if (instance) display();
     });
@@ -66,7 +70,7 @@ export function WaveSurferSurface({ channels, duration, allowSpectrum = false }:
     const settings = new MutationObserver(display);
     if (timeline) settings.observe(timeline, { attributes: true, attributeFilter: ['style', 'data-waveform-mode'] });
     return () => { disposed = true; if (initialization !== null) cancelIdleCallback(initialization); resize.disconnect(); settings.disconnect(); instance?.destroy(); };
-  }, [channels, duration, allowSpectrum]);
+  }, [channels, duration, allowSpectrum, spectrumChannels]);
   return <div ref={host} className="wavesurfer-surface" data-waveform-engine="wavesurfer">
     <div ref={wave} className="wavesurfer-wave" /><div ref={spectrum} className="wavesurfer-spectrum" />
     {error ? <span className="timeline-lane-error">{error}</span> : null}

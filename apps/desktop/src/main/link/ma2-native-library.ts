@@ -17,8 +17,10 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
   const read = async (target: number, offset: number): Promise<string> => {
     if (isPlaying()) throw new Error('播放已开始，素材读取已停止');
     const prefix = `TBLINK_CUES_${randomBytes(16).toString('hex')}:`;
-    const script = `local o=gma.show.getobj;local h=o.handle('Sequence ${target}');local r='missing';if h then local n=o.amount(h);local t={tostring(n)};for i=${offset},math.min(n-1,${offset + 31}) do local c=o.child(h,i);if c then local v=tostring(o.number(c));local s=tostring(o.name(c) or '');local x=s:gsub('.',function(b)return string.format('%02x',string.byte(b))end);t[#t+1]=i..','..v..','..x end end;r=table.concat(t,';') end;gma.echo('${prefix}'..r)`;
-    const response = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, prefix));
+    // The native monitor truncates long echo lines (observed on 3.7.0.5 with
+    // 32 Chinese Cue names). Keep each line bounded without truncating names.
+    const script = `local o=gma.show.getobj;local h=o.handle('Sequence ${target}');local r='missing';if h then local n=o.amount(h);local t={tostring(n)};for i=${offset},math.min(n-1,${offset + 31}) do local c=o.child(h,i);if c then local v=tostring(o.number(c));local s=tostring(o.label(c) or '');local x=s:gsub('.',function(b)return string.format('%02x',string.byte(b))end);t[#t+1]=i..','..v..','..x end end;r=table.concat(t,';') end;for p=1,#r,700 do gma.echo('${prefix}'..p..':'..r:sub(p,p+699)) end;gma.echo('${prefix}END:'..#r)`;
+    const response = await connection.command(`Lua "${script}"`, text => readNativeCueChunks(text, prefix));
     measure?.(Buffer.byteLength(response, 'utf8'));
     return response;
   };
@@ -61,4 +63,18 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
   const result = ma2EffectLibrarySchema.parse({ directory, sequences, fixtureUsage: [], fixtureDetails: 'unavailable', errors, readAt });
   await onProgress?.({ phase, completed: directory.entries.length + 1, total: directory.entries.length + 1, detail: '序列目录已核对' });
   return result;
+}
+
+export function readNativeCueChunks(text: string, prefix: string): string | null {
+  const end = ma2ResponseLine(text, `${prefix}END:`);
+  if (end === null) return null;
+  if (!/^\d+$/.test(end) || Number(end) < 1 || Number(end) > 512 * 1024) throw new Error('控台 Cue 目录长度无效');
+  const length = Number(end);
+  const chunks: string[] = [];
+  for (let position = 1; position <= length; position += 700) {
+    const chunk = ma2ResponseLine(text, `${prefix}${position}:`);
+    if (chunk === null || chunk.length !== Math.min(700, length - position + 1)) throw new Error('控台 Cue 目录传输不完整，未使用截断数据');
+    chunks.push(chunk);
+  }
+  return chunks.join('');
 }

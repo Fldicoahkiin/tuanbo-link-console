@@ -1,3 +1,4 @@
+import { listenHttpTestServer } from './http-test-server';
 import { generateKeyPairSync, randomBytes, sign, verify } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { AlipayCheckout, AlipayNotifications } from './alipay';
@@ -127,7 +128,7 @@ it('主动查单只供运营，对未绑定或错误配置在请求渠道前拒�
   const providerRequest = vi.fn<typeof fetch>(() => Promise.resolve(new Response(signed(JSON.stringify(fields(order.id))))));
   vi.spyOn(checkout, 'query').mockImplementation((id, verifier) => original(id, verifier, providerRequest));
   const admin = 'a'.repeat(48); const server = createLicensingServer(service, admin, notifications, checkout);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('缺少监听地址');
     const request = (token: string, body: unknown = {}, prefix = 'admin') => fetch(`http://127.0.0.1:${address.port}/${prefix}/orders/${order.id}/reconcile`, {
@@ -157,7 +158,7 @@ it('客户持原领取凭据可在通知丢失后查单补交付，不泄漏买�
   const providerRequest = vi.fn<typeof fetch>(() => Promise.resolve(new Response(signed(JSON.stringify(fields(order.id))))));
   vi.spyOn(checkout, 'query').mockImplementation((id, verifier) => original(id, verifier, providerRequest));
   const server = createLicensingServer(service, 'a'.repeat(48), notifications, checkout);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
     const request = (token: string, body: unknown = {}) => fetch(`http://127.0.0.1:${address.port}/v1/orders/${order.id}/reconcile`, {
@@ -196,7 +197,7 @@ it.each(['pending', 'network', 'revoked', 'tampered'] as const)('客户查单并
   });
   vi.spyOn(checkout, 'query').mockImplementation((id, verifier) => original(id, verifier, providerRequest));
   const server = createLicensingServer(service, 'a'.repeat(48), notifications, checkout);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
     const request = () => fetch(`http://127.0.0.1:${address.port}/v1/orders/${order.id}/reconcile`, {

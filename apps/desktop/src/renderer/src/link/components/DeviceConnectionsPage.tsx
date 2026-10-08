@@ -27,9 +27,17 @@ export function DeviceConnectionsPage(props: Props): JSX.Element {
   const method = useMa2ModeStore((state) => state.method);
   const selected = props.selected;
   const [maintenanceHost, setMaintenanceHost] = useState<HTMLDivElement | null>(null);
+  const [refreshingMidi, setRefreshingMidi] = useState(false);
   const obs = useIntegrationStore((state) => state.obs);
   const disabled = props.busy || props.runtimeActive;
   const current = SETTINGS_SECTIONS.find((device) => device.id === selected)!;
+  const refreshMidi = async (): Promise<void> => {
+    if (refreshingMidi) return;
+    setRefreshingMidi(true); props.onBusy(true);
+    try { await props.onRefreshMidi(); }
+    catch (error) { props.notify(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setRefreshingMidi(false); props.onBusy(false); }
+  };
   const openMa2Maintenance = (): void => {
     const details = maintenanceHost?.closest('details');
     if (details) details.open = true;
@@ -51,7 +59,7 @@ export function DeviceConnectionsPage(props: Props): JSX.Element {
           {method !== 'midi' ? <details className="device-advanced"><summary>高级连接与插件维护</summary><div ref={setMaintenanceHost} /></details> : null}
         </div>
         <div data-settings-section="audio" hidden={selected !== 'audio'} className="device-panel" aria-label="音频与 MIDI 设备面板">
-          <div className="device-panel-intro"><p>{props.internal ? '选择正式音乐的播放设备，以及发送时间码的 MIDI 端口。' : '当前跟随 P1 播放，设置时间码输入和灯光动作端口。'}</p><Button className="secondary-button" disabled={disabled} onClick={() => { void props.onRefreshMidi().catch((error: unknown) => props.notify(String(error), 'error')); }}><RefreshCw />刷新端口</Button></div>
+          <div className="device-panel-intro"><p>{props.internal ? '选择正式音乐的播放设备，以及发送时间码的 MIDI 端口。' : '当前跟随 P1 播放，设置时间码输入和灯光动作端口。'}</p><Button className="secondary-button" loading={refreshingMidi} disabled={disabled || refreshingMidi} onClick={() => void refreshMidi()}><RefreshCw />刷新端口</Button></div>
           {props.internal ? <ProjectMusicConnections disabled={disabled} notify={props.notify} onBusy={props.onBusy}><LightingMidiSettings disabled={disabled} notify={props.notify} onBusy={props.onBusy} /></ProjectMusicConnections> : <LightingMidiSettings follow disabled={disabled} notify={props.notify} onBusy={props.onBusy} />}
         </div>
         <div data-settings-section="virtual" hidden={selected !== 'virtual'} className="device-panel" aria-label="虚拟 MIDI 设备面板"><LoopMidiSettings disabled={disabled} notify={props.notify} onBusy={props.onBusy} onRefreshMidi={props.onRefreshMidi} /></div>

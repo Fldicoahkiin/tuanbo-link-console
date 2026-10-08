@@ -3,6 +3,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { importCachedMa2, scanMa2, useMa2ReadStore } from '../stores/ma2-read-store';
 import { ma2PendingChanges } from './ma2-pending-changes';
 import { useMa2AutoSyncStore } from './use-ma2-auto-sync';
+import { scanMa2Materials } from '../stores/ma2-material-read-store';
 
 let preparing = false;
 /** Called only by an explicit connect/read action, never by status polling or page mounting. */
@@ -35,12 +36,22 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   if (!reuse) await scanMa2(connection, retry);
   current();
   await importCachedMa2();
+  let libraryNotice = '';
+  const read = current().project?.ma2ReadState;
+  const pool = current().project?.ma2MaterialLibrary;
+  const completePool = pool?.library && pool.source === source && pool.library.directory.show === read?.catalog.directory.show
+    && pool.library.directory.generation === read.catalog.directory.generation && !pool.library.incomplete && !pool.library.sourceUnverified && !pool.library.errors.length;
+  if (read && !read.catalog.incomplete && !read.catalog.sourceUnverified && (!reuse || !completePool)) {
+    try { await scanMa2Materials(connection, retry && pool?.source === source); }
+    catch (error) { libraryNotice = `；全控台素材未读完整：${error instanceof Error ? error.message : String(error)}。已读取的歌曲 Cue 保留`; }
+    current();
+  }
   const project = current().project;
   const state = project?.ma2ReadState;
   if (!project || !state) throw new Error('未取得可用的控台读取结果');
   const bindings = project.rundown.flatMap(item => item.lighting?.ma2Bindings ?? []);
   const retained = bindings.filter(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode').length;
-  const summary = `${reuse ? '已恢复工程缓存（控台内容更新请点“更新控台读取”）' : '控台读取完成'}；${bindings.length} 条已关联，${retained} 条含原生保留动作`;
+  const summary = `${reuse ? '已恢复工程缓存（控台内容更新请点“更新控台读取”）' : '控台读取完成'}；${bindings.length} 条已关联，${retained} 条含原生保留动作${libraryNotice}`;
   const reason = state.catalog.incomplete || state.catalog.sourceUnverified ? '读取尚未完整核对'
     : Object.values(state.pairings ?? {}).some(pair => pair.status === 'stale') ? '已有配对需要重新核对'
     : ma2PendingChanges(project).length ? '有连接前的本地修改，请先核对后提交'
@@ -49,6 +60,6 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
     useMa2AutoSyncStore.setState({ status: 'off', message: `${reason}；已读 Cue 可查看，本地修改不会自动写回` });
     return `${summary}。${reason}，自动写回未启用`;
   }
-  useMa2AutoSyncStore.setState({ request: { connection, catalog: state.catalog } });
-  return `${summary}。已启用编辑后同步：停止播放后，拖动结束会核对、写入并回读；原生保留时间线不写回`;
+  useMa2AutoSyncStore.setState({ status: 'off', message: '已准备好；点击开始同步后，停止播放时的编辑会自动写回' });
+  return `${summary}。可在灯光工作台点击“开始同步”；启用后停止播放时，拖动结束会核对、写入并回读`;
 }

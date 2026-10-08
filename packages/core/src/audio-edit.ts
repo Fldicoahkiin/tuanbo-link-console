@@ -35,7 +35,30 @@ export function updateAudioSegment(audio: ReferenceAudio, id: string, patch: Par
   const segments = audioSegments(audio);
   if (!segments.some((segment) => segment.id === id)) throw new Error('音频片段已不存在');
   const next = segments.map((segment) => segment.id === id ? { ...segment, ...patch } : segment).sort((a, b) => a.startMs - b.startMs);
+  const source = audio.timeline?.source ?? audio;
+  for (const [index, segment] of next.entries()) {
+    if (![segment.startMs, segment.sourceOffsetMs, segment.durationMs].every(Number.isSafeInteger) || segment.startMs < 0 || segment.sourceOffsetMs < 0 || segment.durationMs < 1) throw new Error('位置和素材入点不能小于 0，片段时长至少为 1 毫秒');
+    if (segment.sourceOffsetMs + segment.durationMs > source.durationMs) throw new Error('裁剪结尾超过原素材长度，请缩短时长或提前素材入点');
+    const previous = next[index - 1];
+    if (previous && previous.startMs + previous.durationMs > segment.startMs) throw new Error('与同轨音频片段重叠，请移到空白位置或另一条音轨');
+  }
   const durationMs = Math.max(...next.map((segment) => segment.startMs + segment.durationMs));
   referenceAudioSchema.parse({ ...audio, durationMs, beats: undefined, timeline: { source: audio.timeline?.source ?? audio, segments: next } });
   return next;
+}
+
+/** Clamp pointer edits to source media and neighbouring clips; preview and commit share this result. */
+export function dragAudioSegment(segments:readonly AudioSegment[], id:string, edge:'move'|'start'|'end', deltaMs:number, sourceDurationMs:number):AudioSegment {
+  const segment=segments.find(value=>value.id===id);
+  if(!segment||!Number.isFinite(deltaMs))throw new Error('音频拖动目标无效');
+  const previous=Math.max(0,...segments.filter(value=>value.id!==id&&value.startMs<segment.startMs).map(value=>value.startMs+value.durationMs));
+  const following=Math.min(86_400_000,...segments.filter(value=>value.id!==id&&value.startMs>=segment.startMs).map(value=>value.startMs));
+  const end=segment.startMs+segment.durationMs;
+  const clamp=(minimum:number,maximum:number):number=>Math.max(minimum,Math.min(maximum,Math.round(deltaMs)));
+  if(edge==='move')return {...segment,startMs:segment.startMs+clamp(previous-segment.startMs,following-end)};
+  if(edge==='start'){
+    const delta=clamp(Math.max(previous-segment.startMs,-segment.sourceOffsetMs),segment.durationMs-1);
+    return {...segment,startMs:segment.startMs+delta,sourceOffsetMs:segment.sourceOffsetMs+delta,durationMs:segment.durationMs-delta};
+  }
+  return {...segment,durationMs:segment.durationMs+clamp(1-segment.durationMs,Math.min(following-end,sourceDurationMs-segment.sourceOffsetMs-segment.durationMs))};
 }

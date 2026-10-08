@@ -22,8 +22,8 @@ export class ObsMediaPreload {
     this.lookaheadFrames = Math.ceil(10 * playbackFramesPerSecond(project.timebase.frameRate));
     this.preparationSpacingFrames = Math.ceil(0.1 * playbackFramesPerSecond(project.timebase.frameRate));
   }
-  register(projectId: string, asset: { id: string; name: string }, path: string): void {
-    this.media.set(materialSceneNames(projectId, asset).sourceName, { path, current: null, pending: null, touched: new Set(), retained: new Set() });
+  register(projectId: string, asset: { id: string; name: string }, path: string, sourceName = materialSceneNames(projectId, asset).sourceName): void {
+    this.media.set(sourceName, { path, current: null, pending: null, touched: new Set(), retained: new Set() });
   }
   resolveSource(logicalName: string): string { return this.media.get(logicalName)?.current?.sourceName ?? logicalName; }
 

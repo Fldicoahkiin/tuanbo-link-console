@@ -63,5 +63,12 @@ test('节目框选批量删除、撤销以及外部音视频拖入', async ({}, 
     expect(saved.mediaAssets).toHaveLength(1);
     expect((await stat(audio)).size).toBeGreaterThan(0); expect((await stat(video)).size).toBeGreaterThan(0);
     await page.screenshot({ path: info.outputPath('imported-programs.png') });
-  } finally { await app.close(); }
+  } finally {
+    const page = await app.firstWindow();
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
+    const stop = page.getByRole('button', { name: '停止播放', exact: true });
+    if (await stop.isEnabled()) await stop.click();
+    await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    await app.close();
+  }
 });

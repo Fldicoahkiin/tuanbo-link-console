@@ -23,6 +23,8 @@ function groupStackedEvents(tracks: LightingTrack[], map: LightingTempoMap, pixe
 }
 
 export type LightingTimelineProps = {
+  onCreateCue?: ((ms: number) => void) | undefined;
+  onClearSelection?: () => void;
   onAuditionEvent?: (eventId: string) => void;
   snapTime?: (milliseconds: number, excludedEventId?: string) => number;
   document: LightingDocument;
@@ -88,7 +90,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
   const marquee = useRef<{ clipId: string; start: number; x: number; ids: string[] } | null>(null);
   const suppressClick = useRef(false);
   const [range, setRange] = useState<{ clipId: string; start: number; end: number } | null>(null);
-  const [drag, setDrag] = useState<{ trackId: string; clipId: string; event: LightingEvent; at: number; x: number; y: number; valueDrag: boolean; deltaLevel: number; ids: string[]; deltaMs: number } | null>(null);
+  const { drag, dragRef, setDrag } = useLightingPointDrag();
   const visibleEvents = useVisibleLightingEvents(props, map, drag);
   const select = (track: LightingTrack, clip: LightingClip, event: LightingEvent, additive: boolean): string[] => {
     const ids = additive && props.selectedClipId === clip.id ? new Set(selectedIds) : new Set<string>();
@@ -99,10 +101,10 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
     return [...ids];
   };
   const movedAt = (clip: LightingClip, event: LightingEvent, deltaMs: number): number => movedLightingTime(clip, event, deltaMs, map);
-  const movedEvent = (clip: LightingClip, event: LightingEvent): LightingEvent => {
-    if (!drag || drag.clipId !== clip.id || !drag.ids.includes(event.id)) return event;
-    if (drag.valueDrag) return event.kind === 'ma2-fader' ? { ...event, level: Number((event.level + drag.deltaLevel).toFixed(3)) } : event;
-    return { ...event, at: movedAt(clip, event, drag.deltaMs) };
+  const movedEvent = (clip: LightingClip, event: LightingEvent, current = drag): LightingEvent => {
+    if (!current || current.clipId !== clip.id || !current.ids.includes(event.id)) return event;
+    if (current.valueDrag) return event.kind === 'ma2-fader' ? { ...event, level: Number((event.level + current.deltaLevel).toFixed(3)) } : event;
+    return { ...event, at: movedAt(clip, event, current.deltaMs) };
   };
   const changeClip = (track: LightingTrack, candidate: LightingClip, label: string): void => { const clip = { ...candidate, duration: candidate.events.reduce((end, event) => Math.max(end, event.at + (event.kind === 'note' ? event.duration : 0.001)), candidate.duration) }; props.onChange({ ...props.document, tracks: props.document.tracks.map((entry) => entry.id === track.id ? { ...track, clips: track.clips.map((entry) => entry.id === clip.id ? clip : entry) } : entry) }, label); };
   const copy = (track: LightingTrack, clip: LightingClip, ids: ReadonlySet<string>, cut = false): void => {
@@ -193,13 +195,14 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
               onClick={(input) => { input.stopPropagation(); if (input.detail === 0) select(track, clip, stored, input.ctrlKey || input.metaKey || input.shiftKey); props.onSeek(ms); }} onDoubleClick={(input) => input.stopPropagation()}
               onPointerDown={(input) => { input.stopPropagation(); if (input.button !== 0) return; const additive = input.ctrlKey || input.metaKey || input.shiftKey; if (track.locked) { select(track, clip, stored, additive); return; } const ids = !additive && selectedIds.has(event.id) ? [...selectedIds] : select(track, clip, stored, additive); if (!ids.includes(event.id)) return; input.currentTarget.setPointerCapture(input.pointerId); setDrag({ trackId: track.id, clipId: clip.id, event: stored, at: stored.at, x: input.clientX, y: input.clientY, valueDrag: input.altKey && stored.kind === 'ma2-fader', deltaLevel: 0, ids, deltaMs: 0 }); }}
               onPointerMove={(input) => {
+                const drag = dragRef.current;
                 if (!drag || drag.event.id !== event.id) return;
                 if (drag.valueDrag) { setDrag({ ...drag, deltaLevel: masterDragDelta(clip, drag.ids, drag.y - input.clientY) }); return; }
                 const earliest = Math.min(...clip.events.filter((entry) => drag.ids.includes(entry.id)).map((entry) => lightingEventTime(clip, entry, map)));
                 const originMs = lightingEventTime(clip, drag.event, map);                 const targetMs = originMs + (input.clientX - drag.x) / props.pixelsPerSecond * 1000;                 const deltaMs = Math.max(lightingClipSpan(clip, map).startMs - earliest, (props.snapTime?.(targetMs) ?? targetMs) - originMs);
                 setDrag({ ...drag, deltaMs, at: movedAt(clip, drag.event, deltaMs) });
               }}
-              onPointerUp={(input) => { if (!drag || drag.event.id !== event.id) return; input.currentTarget.releasePointerCapture(input.pointerId); if (drag.deltaMs !== 0 || drag.deltaLevel !== 0) { changeClip(track, { ...clip, events: clip.events.map((entry) => movedEvent(clip, entry)) }, drag.valueDrag ? '调整主推杆值' : '移动灯光点'); if (!drag.valueDrag) props.onSeek(lightingEventTime(clip, { ...stored, at: drag.at }, map)); } else if (!input.ctrlKey && !input.metaKey && !input.shiftKey) select(track, clip, stored, false); setDrag(null); }} onPointerCancel={() => setDrag(null)}>
+              onPointerUp={(input) => { const current = dragRef.current; setDrag(null); if (!current || current.event.id !== event.id) return; input.currentTarget.releasePointerCapture(input.pointerId); if (current.deltaMs !== 0 || current.deltaLevel !== 0) { changeClip(track, { ...clip, events: clip.events.map((entry) => movedEvent(clip, entry, current)) }, current.valueDrag ? '调整主推杆值' : '移动灯光点'); if (!current.valueDrag) props.onSeek(lightingEventTime(clip, { ...stored, at: current.at }, map)); } else if (!input.ctrlKey && !input.metaKey && !input.shiftKey) select(track, clip, stored, false); }} onPointerCancel={() => setDrag(null)} onLostPointerCapture={() => setDrag(null)}>
               <i />{event.kind === 'ma2-fader' ? <b className="lighting-master-handle" style={{ top: masterCurveY(event.level) - 8 }} /> : null}<span className="lighting-point-label">{event.kind === 'ma2' ? event.cue ?? String(clip.events.findIndex(entry => entry.id === event.id) + 1) : event.kind === 'ma2-fader' ? `Master ${Number((event.level * 100).toFixed(6))}%` : event.kind === 'note' ? String(event.note) : event.kind === 'point' || event.kind === 'cc' ? String(event.value) : '事件'}</span>{stack.length > 1 ? <small title="此处有多个灯光点，放大或右键选择">+{stack.length - 1}</small> : null}
             </button>;
           })}
@@ -259,6 +262,22 @@ function masterDragDelta(clip: LightingClip, ids: string[], pixels: number): num
 function movedLightingTime(clip: LightingClip, event: LightingEvent, deltaMs: number, map: LightingTempoMap): number {
   const ms = Math.max(0, lightingEventTime(clip, event, map) + deltaMs);
   return Math.max(0, (clip.timeLock === 'time' ? ms : map.msToBeat(ms)) - clip.start);
+}
+
+type PointDrag = { trackId: string; clipId: string; event: LightingEvent; at: number; x: number; y: number; valueDrag: boolean; deltaLevel: number; ids: string[]; deltaMs: number };
+
+function useLightingPointDrag() {
+  const [drag, setDragState] = useState<PointDrag | null>(null);
+  const dragRef = useRef<PointDrag | null>(null);
+  const setDrag = (value: PointDrag | null): void => { dragRef.current = value; setDragState(value); };
+  useEffect(() => {
+    const cancel = (): void => { dragRef.current = null; setDragState(null); };
+    const key = (event: KeyboardEvent): void => { if (event.key === 'Escape') cancel(); };
+    window.addEventListener('keydown', key, true);
+    window.addEventListener('blur', cancel);
+    return () => { window.removeEventListener('keydown', key, true); window.removeEventListener('blur', cancel); };
+  }, []);
+  return { drag, dragRef, setDrag };
 }
 
 function useDismissLightingContext(open: boolean, dismiss: (value: null) => void): void {

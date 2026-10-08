@@ -10,6 +10,14 @@ const native = readFileSync(fileURLToPath(new URL('./fixtures/ma2-timecode-fract
 const sequence = readFileSync(fileURLToPath(new URL('./fixtures/ma2-sequence-fractional-3.3.xml', import.meta.url)), 'utf8');
 
 describe('MA2 原生 Cue 写回编辑', () => {
+  it('真实 onPC 3.7.0.5 导出：200 秒长度为 6000 原生帧，移动末点后延长一帧', () => {
+    const actual = readFileSync(new URL('./fixtures/ma2-timecode-onpc-3.7-100.xml', import.meta.url), 'utf8');
+    expect(extendMa2TimecodeLength(actual, 9907)).toBe(actual);
+    const moved = patchMa2EventTimes(actual, inspectMa2TimecodeXml(actual).sha256, [{ path: 'Timecode:9906/Track:0/SubTrack:0/Event:99', rawTime: '6030' }]);
+    const report = inspectMa2TimecodeXml(extendMa2TimecodeLength(moved, 9907));
+    expect(report.timecodes[0]?.attributes.lenght).toBe('6031');
+    expect(report.timecodes[0]?.tracks[0]?.subtracks[0]?.events).toHaveLength(100);
+  });
   const path = 'Timecode:9901/Track:0/SubTrack:0';
   const cue = { sequence: 9901, cueIndex: 1, name: 'Cue 1.25' };
   it('播放长度覆盖最后一点后的一帧，保留更长结尾并在回读时检查长度', () => {

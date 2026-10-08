@@ -1,4 +1,10 @@
-import { ma2TimecodePreviewSchema, type Ma2TimecodePreview, type LightingDocument } from '@tb/schema';
+import { ma2TimecodePreviewSchema, type Ma2TimecodePreview, type LightingDocument, type RundownItem } from '@tb/schema';
+
+/** Playback is the editable origin; P1 retains the imported source value. Old
+ * projects may contain only that P1 value. Neither value includes audio trim. */
+export function programTimeOrigin(item: Pick<RundownItem, 'playback' | 'p1Media' | 'lighting'>, fallback = 0): number {
+  return item.playback?.mtcOffsetMs ?? (item.p1Media ? parseP1TimeOrigin(item.p1Media.midiStartTime) : lightingTimeOrigin(item.lighting, fallback));
+}
 
 export function lightingTimeOrigin(document: LightingDocument | undefined, fallback = 0): number {
   const origins = new Set(document?.ma2Bindings?.map(binding => binding.timeOriginMs ?? 0) ?? []);

@@ -12,6 +12,10 @@ test('顶部保留四项连接状态，详细切回完整连接列表且不切�
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1180, 720));
     const overview = page.getByRole('group', { name: '连接状态概览' });
     await expect(overview.locator('.connection-overview-item')).toHaveCount(4);
+    // The status host stretches across the titlebar. Its unused area must not
+    // cancel native dragging while each actual control stays clickable.
+    await expect(page.locator('.topbar-connection-status')).toHaveCSS('-webkit-app-region', 'drag');
+    await expect(overview.locator('.connection-overview-item').first()).toHaveCSS('-webkit-app-region', 'no-drag');
     for (const name of ['音频', '视频', '灯光', '编辑灯光']) await expect(overview.getByText(name, { exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('connection-overview.png') });
     await expect(page.locator('.app-shell')).toHaveAttribute('data-workspace', 'project');
@@ -20,6 +24,7 @@ test('顶部保留四项连接状态，详细切回完整连接列表且不切�
     await expect(details).toHaveAttribute('aria-pressed', 'true');
     await expect(overview).toHaveCount(0);
     await expect(page.locator('.topbar-connection-status .toolbar-connections')).toBeVisible();
+    await expect(page.locator('.topbar-connection-status')).toHaveCSS('-webkit-app-region', 'drag');
     await expect(page.getByRole('button', { name: /OBS 控制/ })).toBeVisible();
     await page.screenshot({ path: info.outputPath('connection-details.png') });
     await expect(page.locator('.app-shell')).toHaveAttribute('data-workspace', 'project');
@@ -55,6 +60,9 @@ test('点击四项状态定位并短暂强调，重复点击重新滚动', async
     }
     await page.getByLabel('MA2 连接方式').selectOption('network');
     await overview.getByRole('button', { name: /^灯光：/ }).click();
+    // This song explicitly uses timecode; choosing an editing connection must not reroute its output.
+    await expect(page.locator('.settings-location-highlight').getByLabel('灯光 MIDI 输出', { exact: true })).toBeVisible();
+    await overview.getByRole('button', { name: /^编辑灯光：/ }).click();
     await expect(page.locator('.settings-location-highlight')).toHaveAttribute('aria-label', 'MA2 连接设置');
     await page.getByLabel('MA2 连接方式').selectOption('midi');
     // Manual navigation clears emphasis; repeated status clicks locate the field again.

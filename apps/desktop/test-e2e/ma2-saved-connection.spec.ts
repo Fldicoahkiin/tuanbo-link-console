@@ -1,5 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { join } from 'node:path';
+import { writeFile } from 'node:fs/promises';
 
 test('已保存控台直接连接，失败自动展开 IP 设置并显示具体端口', async ({}, info) => {
   const executablePath = process.env.TBLINK_MA2_PACKAGED_EXE;
@@ -21,9 +22,21 @@ test('已保存控台直接连接，失败自动展开 IP 设置并显示具体�
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式', { exact: true }).selectOption('network');
     await page.getByRole('button', { name: '连接 MA2 并载入节目 Cue', exact: true }).click();
+    await expect(page.locator('.ma2-network-settings > .ma2-advanced-settings')).toHaveAttribute('open', '');
+    await page.getByLabel('MA2 控台 IP', { exact: true }).scrollIntoViewIfNeeded();
     await expect(page.getByLabel('MA2 控台 IP', { exact: true })).toBeVisible();
     await expect(page.getByLabel('MA2 控台 IP', { exact: true })).toHaveValue('2.97.214.223');
     await expect(page.locator('.ma2-network-settings [role="alert"]')).toContainText('30001 TCP 未连通');
     await expect(page.getByText('已保存地址不应依赖搜索', { exact: true })).toHaveCount(0);
+  } catch (error) {
+    const page = await app.firstWindow();
+    await writeFile(info.outputPath('failure-state.json'), JSON.stringify(await page.getByLabel('MA2 控台 IP', { exact: true }).evaluate(element => {
+      const ancestry = []; let node: Element | null = element;
+      while (node) { const style = getComputedStyle(node), rect = node.getBoundingClientRect(); ancestry.push({ tag: node.tagName, classes: node.className, open: node.getAttribute('open'), hidden: node.getAttribute('hidden'), display: style.display, visibility: style.visibility, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } }); node = node.parentElement; }
+      return { ancestry, alerts: [...document.querySelectorAll('[role=alert]')].map(node => node.textContent) };
+    }), null, 2));
+    await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
+    await page.screenshot({ path: info.outputPath('failure-ui.png') });
+    throw error;
   } finally { await app.close(); }
 });

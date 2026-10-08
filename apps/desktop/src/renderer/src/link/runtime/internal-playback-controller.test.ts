@@ -33,6 +33,18 @@ function fixture(grouped = false, nativeSeek = false, mtcInstance?: MediaMtcOutp
   return { controller, deps, audio, mtc, project, output, state: () => state };
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+it('浏览器播放器读取旧工程保留的 P1 起点，无需重新输入且不叠加源裁剪', async () => {
+  const f = fixture();
+  f.project.rundown[0]!.p1Media = { sourceKey: 'b'.repeat(64), playlistId: 'p1', sourceFileName: 'song.wav',
+    playEndAction: 'stop', volume: 100, muted: false, shortcut: '', midiStartTime: '480.5',
+    sourceTrim: { startMs: 3000, endMs: 13000, applied: true } };
+  try {
+    await f.controller.play('song-0');
+    expect(f.state().mtcPositionMs).toBe(480500);
+    f.audio.currentTime = 1; await vi.advanceTimersByTimeAsync(8);
+    expect(f.mtc.tick).toHaveBeenCalledWith(481500, '30', expect.any(Number));
+  } finally { f.controller.dispose(); }
+});
 it('异步准备期间保持已选音频线路，下一次明确播放才读取新配置', async () => {
   const f = fixture();
   let device = 'first-output';
@@ -117,7 +129,7 @@ it('界面阻塞 200ms 后仅停止时间码，音乐继续且不自动重发', 
   await vi.advanceTimersByTimeAsync(100); expect(send).toHaveBeenCalledTimes(count);
   clock.mockRestore(); f.controller.dispose();
 });
-it('序列池网络模式不发 MTC，曲尾等待最后一个 Cue 回执后停止', async () => {
+it('旧时间码配对失效不阻断网络 Cue；不发 MTC，曲尾等待最后一个 Cue 回执后停止', async () => {
   const f = fixture(); let acknowledge: (() => void) | undefined;
   const playMa2Cue = vi.fn(() => new Promise<void>(resolve => { acknowledge = resolve; }));
   const cancelMa2Playback = vi.fn(async () => {});
@@ -125,11 +137,15 @@ it('序列池网络模式不发 MTC，曲尾等待最后一个 Cue 回执后停�
   const lighting = createLightingDocument(); lighting.outputMode = 'network';
   lighting.tracks = [lightingTrackSchema.parse({ id: 'pool', name: '池', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '尾部', start: 0, duration: 10000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', action: 'goto', sequence: 168, cue: '1', executor: '', label: '尾部', at: 9999 }] }] })];
   f.project.rundown[0]!.lighting = lighting;
+  f.project.ma2ReadState = { source: 'console', catalog: { directory: { show: 'test', generation: 'session', version: '3.7.0.5', entries: [] }, readAt: '2026-10-08T00:00:00.000Z', entries: [] },
+    pairs: {}, pairings: { '2': { itemId: 'song-0', status: 'stale', evidence: '', reason: '时间依据已变化' } }, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };
   await f.controller.play('song-0'); expect(f.mtc.connect).toHaveBeenCalledWith(null, false);
   f.audio.currentTime = 10; f.audio.onended?.(); await vi.advanceTimersByTimeAsync(0);
   expect(playMa2Cue).toHaveBeenCalledOnce(); expect(cancelMa2Playback).not.toHaveBeenCalled();
   acknowledge?.(); await vi.advanceTimersByTimeAsync(0);
   expect(f.state().status).toBe('paused'); expect(cancelMa2Playback).toHaveBeenCalledOnce();
+  expect(f.state().notice).toContain('网络直控按软件当前时间线执行');
+  expect(f.project.ma2ReadState?.pairings?.['2']?.status).toBe('stale');
   f.controller.dispose();
 });
 it('OBS 准备和音频启动完成后才启用播放时钟，暂停继续重新确认起点', async () => {

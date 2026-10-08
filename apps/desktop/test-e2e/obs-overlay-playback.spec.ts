@@ -70,10 +70,10 @@ test('真实 OBS 透明叠加播放与编辑器预览连续响应', async ({}, i
     expect(metrics.maximumDelayMs).toBeLessThan(500);
     await expect(page.locator('.toast.error')).toHaveCount(0);
     await expect(page.locator('.stage-error')).toHaveCount(0);
-    await expect(page.locator('.timeline-transport code')).not.toHaveText('00:00:00:00');
+    await expect(page.locator('.timeline-transport code')).not.toHaveText('00:00');
     await page.getByRole('button', { name: '停止时间线', exact: true }).click();
     await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible();
-    await expect(page.locator('.timeline-transport code')).toHaveText('00:00:00:00');
+    await expect(page.locator('.timeline-transport code')).toHaveText('00:00');
     // Leave a real decoder at EOF before starting a second session from the middle.
     // Fresh playback alone misses terminal states left by earlier application sessions.
     const names = materialSceneNames(project.projectId, project.mediaAssets[0]!);
@@ -88,9 +88,9 @@ test('真实 OBS 透明叠加播放与编辑器预览连续响应', async ({}, i
     } finally { await pausedSource.disconnect(); }
     for (let frame = 0; frame < 24; frame++) {
       await page.getByRole('button', { name: '下一帧', exact: true }).click();
-      await expect(page.locator('.timeline-transport code')).toHaveText(`00:00:00:${String(frame + 1).padStart(2, '0')}`);
+      await expect(page.locator('.timeline-transport code')).toHaveText(`00:${String(frame + 1).padStart(2, '0')}`);
     }
-    await expect(page.locator('.timeline-transport code')).toHaveText('00:00:00:24');
+    await expect(page.locator('.timeline-transport code')).toHaveText('00:24');
     await page.getByRole('button', { name: '播放时间线', exact: true }).click();
     await expect.poll(async () => parseTimelineSeconds(await page.locator('.timeline-transport code').innerText()), { timeout: 15_000 }).toBeGreaterThan(1.2);
     await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
@@ -120,7 +120,7 @@ test('真实 OBS 透明叠加播放与编辑器预览连续响应', async ({}, i
 });
 
 function parseTimelineSeconds(value: string): number {
-  const [hours = 0, minutes = 0, seconds = 0, frames = 0] = value.split(':').map(Number);
+  const [frames = 0, seconds = 0, minutes = 0, hours = 0] = value.split(':').map(Number).reverse();
   return hours * 3600 + minutes * 60 + seconds + frames / 30;
 }
 

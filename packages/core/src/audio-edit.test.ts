@@ -1,10 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyLinkProject, referenceAudioSchema, audioTracksSchema } from '@tb/schema';
-import { audioSegments, audioTracks, audioContainsMediaSource, editedAudio, splitAudioSegments, updateAudioSegment } from './audio-edit';
+import { audioSegments, audioTracks, audioContainsMediaSource, dragAudioSegment, editedAudio, splitAudioSegments, updateAudioSegment } from './audio-edit';
 import { editReferenceAudioCommand } from './link-command';
 
 const audio = { assetId: 'song', relativePath: 'assets/music.wav', sha256: 'a'.repeat(64), durationMs: 5000 };
 describe('可编辑歌曲音频', () => {
+  it('拖动片段不改变素材入点，裁剪可恢复，并在相邻片段处停止', () => {
+    const segment = { id: 'middle', startMs: 2000, sourceOffsetMs: 1000, durationMs: 2000 };
+    const segments = [{ id: 'before', startMs: 0, sourceOffsetMs: 0, durationMs: 1000 }, segment,
+      { id: 'after', startMs: 6000, sourceOffsetMs: 0, durationMs: 1000 }];
+    expect(dragAudioSegment(segments, 'middle', 'move', -9000, 5000)).toEqual({ ...segment, startMs: 1000 });
+    expect(dragAudioSegment(segments, 'middle', 'move', 9000, 5000)).toEqual({ ...segment, startMs: 4000 });
+    const trimmed = dragAudioSegment(segments, 'middle', 'start', 500, 5000);
+    expect(trimmed).toEqual({ ...segment, startMs: 2500, sourceOffsetMs: 1500, durationMs: 1500 });
+    expect(dragAudioSegment([trimmed], 'middle', 'start', -500, 5000)).toEqual(segment);
+    expect(dragAudioSegment(segments, 'middle', 'start', -9000, 5000)).toEqual({ ...segment, startMs: 1000, sourceOffsetMs: 0, durationMs: 3000 });
+    expect(dragAudioSegment(segments, 'middle', 'end', 9000, 5000).durationMs).toBe(4000);
+    expect(dragAudioSegment(segments, 'middle', 'end', -9000, 5000).durationMs).toBe(1);
+    expect(dragAudioSegment(segments, 'middle', 'start', 9000, 5000).durationMs).toBe(1);
+    expect(segments[1]).toEqual(segment);
+  });
   it('多轨允许跨轨重叠，拒绝源范围错误，保留旧视频主音频的重复出声保护', () => {
     const tracks = audioTracks({ ...audio, sourceMediaAssetId: 'video' });
     const two = [...tracks, { ...tracks[0]!, id: 'second' }];

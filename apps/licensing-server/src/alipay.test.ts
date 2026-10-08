@@ -1,3 +1,4 @@
+import { listenHttpTestServer } from './http-test-server';
 import { generateKeyPairSync, randomBytes, sign, verify as verifySignature } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -91,7 +92,7 @@ it('付款入口只供认证运营获取，不能从请求覆盖金额；签名�
   const { service, order } = setup();
   const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), () => Date.parse('2026-09-28T00:00:00Z'));
   const admin = 'a'.repeat(48); const server = createLicensingServer(service, admin, notifications, checkout);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('缺少监听地址');
     const base = `http://127.0.0.1:${address.port}`;
@@ -135,7 +136,7 @@ it.each([
 it('HTTP 验签、核款和发码成功后才返回纯 success；重复与乱序成功通知不重复发码', async () => {
   const { service, order, details } = setup();
   const server = createLicensingServer(service, 'a'.repeat(48), notifications);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('缺少监听地址');
     const post = (body: URLSearchParams | string, contentType = 'application/x-www-form-urlencoded') => fetch(`http://127.0.0.1:${address.port}/v1/payments/alipay/notify`, { method: 'POST', headers: { 'Content-Type': contentType }, body, signal: AbortSignal.timeout(5000) });
@@ -168,7 +169,7 @@ it('HTTP 验签、核款和发码成功后才返回纯 success；重复与乱序
 it('没有配置支付宝时保持回调关闭，不能由请求指定验签公钥或商户', async () => {
   const { service, order } = setup();
   const server = createLicensingServer(service, 'a'.repeat(48));
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('缺少监听地址');
     const response = await fetch(`http://127.0.0.1:${address.port}/v1/payments/alipay/notify`, { method: 'POST', body: notification(order.id), signal: AbortSignal.timeout(5000) });

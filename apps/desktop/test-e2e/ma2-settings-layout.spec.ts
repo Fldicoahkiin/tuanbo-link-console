@@ -24,10 +24,10 @@ test('MA2 设置分组及大量搜索结果保持紧凑', async ({}, info) => {
     await method.selectOption('local');
     await page.screenshot({ path: info.outputPath('ma2-local-top.png') });
     await page.locator('.ma2-advanced-settings > summary').click();
-    await page.getByRole('heading', { name: '自动双向同步', exact: true }).scrollIntoViewIfNeeded();
+    await page.getByRole('button', { name: '启用编辑后自动同步', exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath('ma2-operation-groups.png') });
     await method.selectOption('network');
-    await page.locator('.ma2-network-settings > details > summary').click();
+    await page.locator('.ma2-network-settings > .ma2-advanced-settings > summary').click();
     await expect(page.getByLabel('MA2 登录用户', { exact: true })).toHaveValue('administrator');
     await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('admin');
     await page.getByRole('button', { name: '搜索局域网控台', exact: true }).click();

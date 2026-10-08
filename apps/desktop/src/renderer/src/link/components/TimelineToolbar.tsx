@@ -27,6 +27,8 @@ type Props = {
   recordingControl?: ReactNode;
   tools?: ReactNode;
   stampControls?: ReactNode;
+  outputControl?: ReactNode;
+  displayControl?: ReactNode;
   compact?: boolean;
   wheelSeek?: { speed: number; setSpeed: (speed: number) => void } | undefined;
   frameRate: MtcFrameRate;
@@ -120,11 +122,13 @@ export function TimelineToolbar(props: Props): JSX.Element {
       <button className="timeline-play-button" aria-label={props.playing ? '暂停时间线' : '播放时间线'} title={props.playing ? '暂停（Space）' : '播放（Space）'} onClick={togglePlayback}>{props.playing ? <Pause /> : <Play />}</button>
       <button aria-label="下一帧" title="下一帧（→）" onClick={() => seekTo(props.playheadMs + frameDurationMs)}><StepForward /></button>
       <button aria-label="跳到时间线结尾" title="跳到结尾" onClick={() => seekTo(props.durationMs)}><SkipForward /></button>
-      {props.externalTransport ? <button aria-label="停止时间线" title="停止播放（Esc）" onClick={props.onStop}><Square /></button> : null}
+      {props.onStop ? <button aria-label="停止时间线" title="停止播放（Esc）" onClick={props.onStop}><Square /></button> : null}
       <code title="当前播放头时间码">{formatTimelineTimecode(props.playheadMs, props.frameRate)}</code>
+      {props.outputControl}
     </div>
 
     <div className="timeline-view-controls">
+      {props.displayControl}
       {props.wheelSeek ? <TimelineIconMenu label="时间线设置" icon={SlidersHorizontal}><label>滚轮速度<select aria-label="滚轮移动速度" value={props.wheelSeek.speed} onChange={event => props.wheelSeek?.setSpeed(Number(event.currentTarget.value))}>{[0.1, 0.25, 0.5, 1, 2].map(speed => <option key={speed} value={speed}>{speed}×</option>)}</select></label><p>选中 Cue：滚轮移动 Cue<br />未选中：滚轮移动播放头<br />Shift + 滚轮：平移<br />Ctrl + 滚轮：缩放</p></TimelineIconMenu> : null}
       <button
         className={`timeline-snap-state ${props.snapEnabled ? 'active' : ''}`}
@@ -144,6 +148,7 @@ export function TimelineToolbar(props: Props): JSX.Element {
       ref={props.audioRef}
       preload="auto"
       src={props.referenceAudio.url}
+      onError={() => { props.onPlayingChange(false); props.onPlaybackError('当前音频无法读取或解码，请检查文件是否存在、损坏或格式不受支持'); }}
       onEnded={(event) => { props.onPlayheadChange(event.currentTarget.currentTime * 1000); props.onPlayingChange(false); }}
     /> : null}
   </div>;

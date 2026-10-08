@@ -33,6 +33,7 @@ function setup() {
   const service = new Ma2ApplyService(bridge, () => playing);
   const catalog: Ma2Catalog = { directory: { show: 'Test', generation: 'session', version: '3.3.4', entries: [] }, readAt: new Date().toISOString(), entries: [] };
   const dependencies: Ma2AutoSyncDependencies = {
+    archive: vi.fn(() => Promise.resolve('saved.tblink')),
     state: () => ({ ...useDocumentStore.getState(), playing }),
     catalog: vi.fn(() => Promise.resolve(catalog)),
     read: vi.fn(() => Promise.resolve(convertMa2Snapshot(snapshot(native), 9902))),
@@ -71,13 +72,13 @@ it('播放中每次 Cue 编辑走命令，撤销重做即时更新待提交列�
   expect(test.dependencies.changed).toHaveBeenLastCalledWith('staged', expect.any(String));
 });
 
-it('停止后经过比较、写前快照与回读才清空待提交，回读通过命令进入历史', async () => {
+it('停止后经过比较、写前快照与回读才清空待提交，回读更新基线但不增加撤销步骤', async () => {
   const test = setup(); test.edit(1000); await test.runner.tick(); test.stop();
   await test.runner.tick();
   expect(test.dependencies.compare).toHaveBeenCalledOnce();
   expect(test.bridge.request).toHaveBeenCalledTimes(2); expect(test.bridge.exchange).toHaveBeenCalledOnce();
   expect(test.dependencies.execute).toHaveBeenCalledOnce(); expect(pending()).toEqual([]);
-  expect(useDocumentStore.getState().past).toHaveLength(2);
+  expect(useDocumentStore.getState().past).toHaveLength(1);
   expect(test.dependencies.changed).toHaveBeenLastCalledWith('verified', expect.any(String));
 });
 
@@ -182,4 +183,25 @@ it('本地 Cue 备注与未绑定轨道不伪装成控台待写入内容', () =>
   document.tracks.push({ ...structuredClone(document.tracks[0]!), id: 'unbound', clips: [] });
   useDocumentStore.getState().execute(setLightingCommand('song', document));
   expect(pending()).toEqual([]);
+});
+
+it('控台确认后一次撤销就反向同步，重做仍使用最新基线', async () => {
+  const test = setup(); const original = position(); test.edit(1000); test.stop();
+  await test.runner.tick(); expect(pending()).toEqual([]);
+  useDocumentStore.getState().undo(); expect(position()).toBe(original); expect(pending()).toHaveLength(1);
+  await test.runner.tick(); expect(pending()).toEqual([]);
+  expect(useDocumentStore.getState().future).toHaveLength(1);
+  useDocumentStore.getState().redo(); expect(position()).toBe(1000);
+  await test.runner.tick(); expect(pending()).toEqual([]);
+  useDocumentStore.getState().undo(); expect(position()).toBe(original);
+  await test.runner.tick(); expect(pending()).toEqual([]);
+  expect(test.bridge.exchange).toHaveBeenCalledTimes(4);
+  expect(test.dependencies.archive).toHaveBeenCalledTimes(4);
+});
+it('存档失败阻止写入，并保留本地修改且不重试', async () => {
+  const test = setup(); test.edit(1000); test.stop();
+  test.dependencies.archive = vi.fn(() => Promise.reject(new Error('磁盘无法保存存档')));
+  await test.runner.tick(); await test.runner.tick();
+  expect(test.bridge.exchange).not.toHaveBeenCalled(); expect(pending()).toHaveLength(1);
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('存档'));
 });

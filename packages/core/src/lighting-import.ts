@@ -1,5 +1,6 @@
-import { lightingDocumentSchema, type LightingDocument, type LightingTrack } from '@tb/schema';
+import { createLightingMusic, lightingDocumentSchema, type LightingDocument, type LightingTrack } from '@tb/schema';
 import { LightingTempoMap, lightingClipInTime } from './lighting-edit';
+import { musicMsToBeat } from './lighting-music';
 
 /** Append reusable lighting data while retaining the destination programme's timing. */
 export function appendLightingDocument(current: LightingDocument, incoming: LightingDocument): LightingDocument {
@@ -10,10 +11,20 @@ export function appendLightingDocument(current: LightingDocument, incoming: Ligh
   if (source.ma2Bindings?.some((binding) => existingTargets.has(binding.timecode))) throw new Error('当前节目已绑定导入文件中的 MA2 Timecode，不能重复导入');
   const map = new LightingTempoMap(source.tempos);
   const remap = identityMap();
+  const templateIds = new Set(source.templates.map(template => template.id));
   const convertTrack = (track: LightingTrack, id: (sourceId: string) => string): LightingTrack => ({
     ...structuredClone(track), id: id(track.id), clips: track.clips.map((clip) => {
       const converted = lightingClipInTime(clip, map, id);
-      return { ...converted, events: converted.events.map(event => event.effectGroupId ? { ...event, effectGroupId: id(event.effectGroupId) } : event) };
+      return { ...converted, events: converted.events.map(event => {
+        const next = { ...event };
+        if (next.effectGroupId) next.effectGroupId = id(next.effectGroupId);
+        if (next.librarySource) {
+          if (templateIds.has(next.librarySource.id)) next.librarySource = { ...next.librarySource, id: remap(next.librarySource.id) };
+          else delete next.librarySource;
+        }
+        if (next.beatAnchor !== undefined || clip.timeLock === 'beat') next.beatAnchor = musicMsToBeat(destination, converted.start + next.at);
+        return next;
+      }) };
     })
   });
   const tracks = source.tracks.map((track) => convertTrack(track, remap));
@@ -26,6 +37,8 @@ export function appendLightingDocument(current: LightingDocument, incoming: Ligh
   }));
   return lightingDocumentSchema.parse({
     ...destination,
+    version: source.version === 2 || destination.version === 2 || source.tracks.some(track => track.clips.some(clip => clip.timeLock === 'beat')) ? 2 : destination.version,
+    ...(source.music?.sections.length ? { music: { ...destination.music ?? createLightingMusic(), sections: [...destination.music?.sections ?? [], ...source.music.sections.map(section => ({ ...section, id: remap(section.id) }))] } } : {}),
     tracks: [...destination.tracks, ...tracks],
     markers: [...destination.markers, ...source.markers.map((marker) => ({ ...marker, id: remap(marker.id) }))],
     templates: [...destination.templates, ...source.templates.map((template) => ({

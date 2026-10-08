@@ -10,6 +10,7 @@ export type Ma2AutoSyncDependencies = {
   read: (request: Ma2ReadRequest) => Promise<Ma2TimecodePreview>;
   compare: (request: Ma2CompareRequest) => Promise<Ma2SyncPreview>;
   apply: (request: Ma2ApplyRequest) => Promise<Ma2ApplyResult>;
+  archive: (documentId: number, project: LinkProject) => Promise<string>;
   execute: (documentId: number, command: LinkCommand) => void;
   changed: (status: Ma2AutoSyncStatus, message: string) => void;
 };
@@ -77,6 +78,9 @@ export class Ma2AutoSync {
         const same = (left: Ma2SyncPreview['base'], right: Ma2SyncPreview['base']): boolean => JSON.stringify(left.objects) === JSON.stringify(right.objects);
         if (same(comparison.base, comparison.local) && same(comparison.base, comparison.remote)) continue;
         if (this.dependencies.state().project?.rundown.find(item => item.id === target.itemId)?.lighting !== source) { this.dependencies.changed('waiting', '编辑尚未结束，等待下一次检查'); return; }
+        await this.dependencies.archive(session.documentId, this.dependencies.state().project!);
+        if (!current()) return;
+        if (this.dependencies.state().project?.rundown.find(item => item.id === target.itemId)?.lighting !== source) { this.dependencies.changed('waiting', '存档期间本地修改已变化，等待下一次检查'); return; }
         this.writing = true;
         this.dependencies.changed('writing', `正在同步 Timecode ${target.target} 并回读`);
         const result = ma2ApplyResultSchema.parse(await this.dependencies.apply({ ...session.connection, document: source, bindingId: binding.id, readback, choices: [], conflicts: [], timeAlignment: 'nearest-frame' }));

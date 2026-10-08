@@ -5,11 +5,22 @@ import { LightingNetworkOutput } from './lighting-network-output';
 import { LightingCueAudition } from './lighting-cue-audition';
 
 afterEach(() => vi.unstubAllGlobals());
+it('整首三分钟编排按原小数编号执行到尾部，不能只发送开头几步（构造调度样本）', async () => {
+  const f = setup();
+  f.document.tracks[0]!.clips[0]!.duration = 180000;
+  const events = Array.from({ length: 90 }, (_, index) => ({ id: `step-${index}`, at: index * 2000, kind: 'ma2' as const, action: 'goto' as const, sequence: 168, cue: `${index + 1}.100`, executor: '', label: `步骤 ${index + 1}` }));
+  f.document.tracks[0]!.clips[0]!.events = events;
+  await f.output.prepare(f.document, 0);
+  for (let position = 0; position < 180000; position += 2000) { f.output.tick(position); await f.output.finish(position + 1); }
+  expect(f.api.playMa2Cue).toHaveBeenCalledTimes(90);
+  expect(f.api.playMa2Cue.mock.calls.at(-1)).toEqual([expect.objectContaining({ action: { target: 'sequence', sequence: 168, action: 'goto', cue: '90.100' } })]);
+  f.output.stop();
+});
 function setup() {
   const document = createLightingDocument(); document.outputMode = 'network';
   document.tracks = [lightingTrackSchema.parse({ id: 'pool', name: '序列池', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '开场', start: 0, duration: 5000, timeLock: 'time', muted: false, events: [100, 200].map((at, index) => ({ id: `cue-${index}`, at, kind: 'ma2', action: 'goto', sequence: 168, cue: `${index + 1}.250`, executor: '', label: '开场' })) }] })];
   const status: Ma2NetworkStatus = { state: 'connected', settings: { host: '192.168.0.10', port: 30000, monitorPort: 30001, username: 'operator', autoConnect: false }, passwordSaved: false, version: '3.9.60.74', error: null };
-  const api = { requireOutputLicense: vi.fn(async () => {}), getMa2NetworkStatus: vi.fn(() => Promise.resolve(status)), playMa2Cue: vi.fn(async () => {}), cancelMa2Playback: vi.fn(async () => {}) };
+  const api = { requireOutputLicense: vi.fn(async () => {}), getMa2NetworkStatus: vi.fn(() => Promise.resolve(status)), playMa2Cue: vi.fn(async () => {}), playMa2Audition: vi.fn(async () => {}), controlMa2Audition: vi.fn(() => Promise.resolve({ version: 1, revision: 0, generation: 0, phase: 'idle', targets: [] })), cancelMa2Playback: vi.fn(async () => {}) };
   const midi = vi.fn(); vi.stubGlobal('navigator', { requestMIDIAccess: midi }); vi.stubGlobal('window', { tbLink: api });
   return { document, status, api, midi, output: new LightingNetworkOutput() };
 }
@@ -77,10 +88,10 @@ it('上一首的取消回执迟到失败不能污染新歌曲，错误仍保留�
 it('选中池 Cue 直接试听，连接未建立时显示错误而不请求 MIDI', async () => {
   const f = setup(); const audition = new LightingCueAudition();
   expect(await audition.play(f.document, 'cue-0', null)).toBe(1);
-  expect(f.api.playMa2Cue).toHaveBeenCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 168, cue: '1.250', action: 'goto' } }));
+  expect(f.api.playMa2Audition).toHaveBeenCalledWith(expect.objectContaining({ version: 1, generation: 0, action: { target: 'sequence', sequence: 168, cue: '1.250', action: 'goto' } }));
   f.status.state = 'disconnected';
   await expect(audition.play(f.document, 'cue-1', null)).rejects.toThrow('先连接 MA2 网络');
-  expect(f.api.playMa2Cue).toHaveBeenCalledOnce(); expect(f.midi).not.toHaveBeenCalled();
+  expect(f.api.playMa2Audition).toHaveBeenCalledOnce(); expect(f.api.playMa2Cue).not.toHaveBeenCalled(); expect(f.midi).not.toHaveBeenCalled();
 });
 
 it('网络埋步按播放位置触发，停播取消，直接预览只发送正式 Cue', async () => {
@@ -96,6 +107,7 @@ it('网络埋步按播放位置触发，停播取消，直接预览只发送正�
   expect(f.api.playMa2Cue).toHaveBeenLastCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 168, cue: '2', action: 'goto' } }));
   f.output.stop(); f.api.playMa2Cue.mockClear();
   expect(await new LightingCueAudition().play(f.document, 'prepared', null)).toBe(1);
-  expect(f.api.playMa2Cue).toHaveBeenCalledOnce();
-  expect(f.api.playMa2Cue).toHaveBeenLastCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 168, cue: '2', action: 'goto' } }));
+  expect(f.api.playMa2Cue).not.toHaveBeenCalled();
+  expect(f.api.playMa2Audition).toHaveBeenCalledOnce();
+  expect(f.api.playMa2Audition).toHaveBeenLastCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 168, cue: '2', action: 'goto' } }));
 });

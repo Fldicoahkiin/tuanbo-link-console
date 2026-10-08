@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema } from '@tb/schema';
+import { ma2AuditionRequestSchema,ma2AuditionControlSchema,ma2AuditionStateSchema } from '@tb/schema';
+import { musicAnalysisRequestSchema, musicAnalysisProgressSchema, musicAnalysisControlSchema, musicAnalysisResultSchema } from '@tb/schema';
+import { automaticMusicRequestSchema, automaticMusicControlSchema, automaticMusicJobSchema, automaticMusicStatusSchema } from '@tb/schema';
+import { musicMonitorRequestSchema, musicMonitorStatusSchema } from '@tb/schema';
+import { projectArchiveRequestSchema, projectArchiveResultSchema } from '@tb/schema';
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
-import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema } from '@tb/schema';
+import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema, nativeMidiCheckSchema } from '@tb/schema';
 import { nativeObsPrepareSchema, nativeObsPreloadSchema, nativeObsStopSchema, nativeObsStatusSchema } from '@tb/schema';
 import type { LinkDesktopApi, LinkDesktopBridgeApi, LinkFileBridge, LinkObsSnapshot, LinkProcessSnapshot, LinkUpdateStatus } from '@tb/core/link';
 
@@ -27,6 +33,14 @@ async function readMa2<T>(channel: string, payload: import('@tb/schema').Ma2Cata
 }
 
 const tbLink: LinkDesktopBridgeApi = {
+  openNativeProgram: request => invoke('link:native-program-open', nativeProgramOpenSchema.parse(request)),
+  controlNativeProgram: request => invoke('link:native-program-control', nativeProgramControlSchema.parse(request)),
+  onNativeProgramEvent: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(nativeProgramEventSchema.parse(value));
+    ipcRenderer.on('link:native-program-event', receive);
+    return () => ipcRenderer.removeListener('link:native-program-event', receive);
+  },
+  projectArchives: async request => projectArchiveResultSchema.parse(await invoke('link:project-archives', projectArchiveRequestSchema.parse(request))),
   preloadNativeObs: request => invoke('link:native-obs-preload', nativeObsPreloadSchema.parse(request)),
   cancelNativeObsPreload: request => invoke('link:native-obs-preload-cancel', nativeObsStopSchema.parse(request)),
   prepareNativeObs: async request => nativeObsStatusSchema.parse(await invoke('link:native-obs-prepare', nativeObsPrepareSchema.parse(request))),
@@ -38,6 +52,7 @@ const tbLink: LinkDesktopBridgeApi = {
     return () => ipcRenderer.removeListener('link:native-obs-status', receive);
   },
   getNativePlaybackDevices: async () => nativePlaybackDevicesSchema.parse(await invoke('link:native-player-devices')),
+  checkNativeMidiOutput: request => invoke('link:native-midi-check', nativeMidiCheckSchema.parse(request)),
   prepareNativePlayback: async request => nativePlayerStatusSchema.parse(await invoke('link:native-player-prepare', nativePlayerPrepareSchema.parse(request))),
   controlNativePlayback: async request => nativePlayerStatusSchema.parse(await invoke('link:native-player-control', nativePlayerControlSchema.parse(request))),
   getNativePlaybackStatus: async () => nativePlayerStatusSchema.nullable().parse(await invoke('link:native-player-status')),
@@ -71,6 +86,9 @@ const tbLink: LinkDesktopBridgeApi = {
   checkMa2Capabilities: () => invoke('link:ma2-capabilities'),
   playMa2Cue: (payload) => invoke('link:ma2-play-cue', payload),
   cancelMa2Playback: (sessionId) => invoke('link:ma2-play-cancel', sessionId),
+  playMa2Audition: request=>invoke('link:ma2-audition-play',ma2AuditionRequestSchema.parse(request)),
+  controlMa2Audition: async request=>ma2AuditionStateSchema.parse(await invoke('link:ma2-audition-control',ma2AuditionControlSchema.parse(request))),
+  onMa2AuditionState: listener=>{const receive=(_event:Electron.IpcRendererEvent,input:unknown):void=>listener(ma2AuditionStateSchema.parse(input));ipcRenderer.on('link:ma2-audition-state',receive);return()=>ipcRenderer.removeListener('link:ma2-audition-state',receive);},
   getMa2NetworkStatus: () => invoke('link:ma2-network-status'),
   saveMa2Network: (payload) => invoke('link:ma2-network-save', payload),
   connectMa2Network: () => invoke('link:ma2-network-connect'),
@@ -109,6 +127,21 @@ const tbLink: LinkDesktopBridgeApi = {
   loadWaveformCache: (payload) => invoke('link:load-waveform-cache', payload),
   generateWaveform: (payload) => invoke('link:generate-waveform', payload),
   analyzeAudioBeats: (payload) => invoke('link:analyze-audio-beats', payload),
+  analyzeMusic: async (input, onProgress) => {
+    const payload = musicAnalysisRequestSchema.parse(input);
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown): void => { const progress = musicAnalysisProgressSchema.parse(value); if (progress.taskId === payload.taskId) onProgress?.(progress); };
+    ipcRenderer.on('link:music-analysis-progress', listener);
+    try { return musicAnalysisResultSchema.parse(await invoke('link:analyze-music', payload)); }
+    finally { ipcRenderer.removeListener('link:music-analysis-progress', listener); }
+  },
+  cancelMusicAnalysis: payload => invoke('link:cancel-music-analysis', musicAnalysisControlSchema.parse(payload)),
+  getAutomaticMusicStatus: async () => automaticMusicStatusSchema.parse(await invoke('link:automatic-music-status')),
+  startAutomaticMusicAnalysis: async payload => automaticMusicJobSchema.parse(await invoke('link:automatic-music-start', automaticMusicRequestSchema.parse(payload))),
+  controlAutomaticMusicAnalysis: payload => invoke('link:automatic-music-control', automaticMusicControlSchema.parse(payload)),
+  onAutomaticMusicJob: listener => { const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(automaticMusicJobSchema.parse(value)); ipcRenderer.on('link:automatic-music-job', receive); return () => { ipcRenderer.removeListener('link:automatic-music-job', receive); }; },
+  startMusicMonitor: async payload => musicMonitorStatusSchema.parse(await invoke('link:start-music-monitor', musicMonitorRequestSchema.parse(payload))),
+  onMusicMonitorStatus: listener => { const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(musicMonitorStatusSchema.parse(value)); ipcRenderer.on('link:music-monitor-status', receive); return () => { ipcRenderer.removeListener('link:music-monitor-status', receive); }; },
+  stopMusicMonitor: () => invoke('link:stop-music-monitor'),
   renderAudioSegments: (payload) => invoke('link:render-audio-segments', payload),
   saveWaveformCache: (payload) => invoke('link:save-waveform-cache', payload),
   inspectProjectAssets: (path, project) => invoke('link:inspect-project-assets', path, project),
@@ -133,6 +166,7 @@ const tbLink: LinkDesktopBridgeApi = {
   getSecurityAvailability: () => invoke('link:security-availability'),
   getSecurityPreflight: () => invoke('link:security-preflight'),
   connectObs: () => invoke('link:obs-connect'),
+  connectLocalObs: () => invoke('link:obs-connect-local'),
   disconnectObs: () => invoke('link:obs-disconnect'),
   getObsSnapshot: () => invoke('link:obs-snapshot'),
   createObsSource: (payload) => invoke('link:obs-source-create', payload),

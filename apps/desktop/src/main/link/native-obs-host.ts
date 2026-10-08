@@ -94,7 +94,7 @@ export class NativeObsHost {
       if (epoch !== this.epoch || this.entry !== entry) throw new Error('后台画面准备已取消');
       this.assertAdmission(request);
       if (session.error) throw session.error;
-      this.patch({ state: 'ready', nextCueId: session.nextCueId }); return entry.state;
+      this.patch({ state: 'ready', nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null }); return entry.state;
     } catch (error) {
       if (this.entry === entry && epoch === this.epoch) this.fail(error instanceof Error ? error.message : String(error));
       try { await session.stop(); }

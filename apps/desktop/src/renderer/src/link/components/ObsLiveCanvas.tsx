@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { toUserErrorMessage } from '@tb/core/link';
 import { obsLiveSceneSchema, type ObsLiveEdit, type ObsLiveScene } from '@tb/schema';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
@@ -11,15 +11,27 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAs
   const canvas = useRef<HTMLCanvasElement>(null);
   const [scene, setScene] = useState<ObsLiveScene | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const sceneName = useRef<string | null>(null);
+  const active = useRef(true);
   const [selected, setSelected] = useState<number | null>(null);
   const pending = useRef<ObsLiveEdit | null>(null);
   const sending = useRef(false);
   const editing = useRef(false);
+  const editRevision = useRef(0);
   const [restart, setRestart] = useState(0);
   const [repairing, setRepairing] = useState(false);
   const [suspended, setSuspended] = useState(false);
   const [visible, setVisible] = useState(false);
   const previewFailed = useRef(false);
+  useEffect(() => { active.current = true; return () => { active.current = false; pending.current = null; }; }, []);
+  const acceptScene = useCallback((next: ObsLiveScene): void => {
+    if (!active.current) return;
+    const changed = sceneName.current !== next.sceneName;
+    if (changed) { pending.current = null; editing.current = false; setSelected(null); setEditError(null); }
+    sceneName.current = next.sceneName;
+    if (changed || !editing.current && !sending.current) setScene(next);
+  }, []);
   useEffect(() => { if (scene) onAspectChange?.(scene.width / scene.height); }, [scene, onAspectChange]);
   useEffect(() => {
     let active = true, received = false;
@@ -35,16 +47,20 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAs
     let active = true;
     let busy = false, dirty = false;
     const refresh = async (): Promise<void> => {
+      // Local transform events are reconciled once on release, not with a full
+      // three-request scene read for every pointer move.
+      if (editing.current || sending.current) return;
       if (busy) { dirty = true; return; }
       busy = true;
-      try { const next = obsLiveSceneSchema.parse(await desktop.readObsLiveScene()); if (active && !editing.current && !sending.current) setScene(next); }
-      catch (reason) { if (active) setError(String(reason)); }
+      const revision = editRevision.current;
+      try { const next = obsLiveSceneSchema.parse(await desktop.readObsLiveScene()); if (active && revision === editRevision.current && !editing.current && !sending.current) acceptScene(next); }
+      catch (reason) { if (active && revision === editRevision.current) setEditError(toUserErrorMessage(reason)); }
       finally { busy = false; if (dirty && active) { dirty = false; void refresh(); } }
     };
     const unsubscribe = desktop.onObsLiveChanged(() => { void refresh(); });
     void refresh();
     return () => { active = false; unsubscribe(); };
-  }, [restart, suspended, visible]);
+  }, [restart, suspended, visible, acceptScene]);
   useEffect(() => {
     if (suspended || !visible) return;
     let active = true;
@@ -87,14 +103,32 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAs
   const send = async (): Promise<void> => {
     if (sending.current) return;
     sending.current = true;
+    let targetScene: string | null = null;
     try {
-      while (pending.current) { const next = pending.current; pending.current = null; await desktop.editObsLiveScene(next); }
-      const next = obsLiveSceneSchema.parse(await desktop.readObsLiveScene());
-      if (!editing.current) setScene(next);
-    } catch (reason) { pending.current = null; editing.current = false; setError(String(reason)); }
+      while (active.current && pending.current) { const next = pending.current; pending.current = null; targetScene = next.sceneName; await desktop.editObsLiveScene(next); }
+      if (active.current && !editing.current) {
+        const revision = editRevision.current;
+        const next = obsLiveSceneSchema.parse(await desktop.readObsLiveScene());
+        if (active.current && revision === editRevision.current && !editing.current && !pending.current) { acceptScene(next); setScene(next); setEditError(null); }
+      }
+    } catch (reason) {
+      pending.current = null; editing.current = false;
+      if (!active.current) return;
+      setEditError(toUserErrorMessage(reason));
+      // Read the new target once; never retry the old write into another scene.
+      const revision = editRevision.current;
+      try {
+        const next = obsLiveSceneSchema.parse(await desktop.readObsLiveScene());
+        if (active.current && revision === editRevision.current) { acceptScene(next); setScene(next); if (next.sceneName !== targetScene) setEditError(null); }
+      } catch (readError) { if (active.current && revision === editRevision.current) setEditError(toUserErrorMessage(readError)); }
+      void desktop.recordLog({ level: 'warning', category: 'device', device: 'obs', message: 'OBS 画布编辑已停止，未重发修改', details: { sceneName: targetScene, reason: toUserErrorMessage(reason) } }).catch(console.error);
+    }
     finally { sending.current = false; if (pending.current) void send(); }
   };
   const edit = (next: ObsLiveEdit, dragging: boolean): void => {
+    if (!active.current || next.sceneName !== sceneName.current) return;
+    editRevision.current++;
+    setEditError(null);
     editing.current = dragging;
     pending.current = next;
     void send();
@@ -102,7 +136,8 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAs
   return <div className="obs-live-container">
     <div className="obs-live-canvas" style={{ aspectRatio: scene ? `${scene.width} / ${scene.height}` : '16 / 9', width: `min(calc(100cqw - 40px), calc((100cqh - 40px) * ${scene ? scene.width / scene.height : 16 / 9}))` }}>
     <canvas ref={canvas} aria-label="OBS 实时画面" />
-    {editable && scene && !error ? <ObsLiveSelection scene={scene} selected={selected} onSelect={setSelected} onEdit={edit} /> : null}
+    {editable && scene && !error ? <ObsLiveSelection key={scene.sceneName} scene={scene} selected={selected} onSelect={setSelected} onEdit={edit} /> : null}
+    {editError ? <div className="obs-edit-notice" role="status">{editError}<button onClick={() => { setEditError(null); setRestart(value => value + 1); }}>刷新编辑目标</button></div> : null}
 
     {error || repairing ? <div className="stage-error" role="alert">{repairing ? '正在检查 OBS 组件，请完成可能出现的 Windows 授权或 OBS 重启确认。' : error}<button disabled={repairing} onClick={() => { void repair(); }}>检查并修复组件</button><button disabled={repairing} onClick={() => { previewFailed.current = false; setSuspended(false); setRestart((value) => value + 1); }}>重新连接预览</button></div> : null}
     </div>

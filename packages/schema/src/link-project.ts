@@ -3,6 +3,7 @@ import { audioSegmentSchema, audioBeatMapSchema } from './audio-edit';
 import { lightingDocumentSchema } from './lighting';
 import { ma2ReadStateSchema } from './ma2-catalog';
 import { ma2EffectLibrarySchema } from './ma2-effect-library';
+import { lightingUserLibrarySchema } from './lighting-library';
 
 export const LINK_PROJECT_SCHEMA_VERSION = 1 as const;
 
@@ -364,7 +365,10 @@ export const linkProjectSchema = z.object({
   playlists: z.array(z.object({ id: z.string().min(1), name: z.string().trim().min(1) })).optional(),
   p1Sync: p1ProjectSyncSchema.optional(),
   ma2ReadState: ma2ReadStateSchema.optional(),
-  ma2MaterialLibrary: z.object({ version: z.literal(1), source: z.string().min(1), library: ma2EffectLibrarySchema }).strict().optional(),
+  ma2MaterialLibrary: z.object({ version: z.union([z.literal(1), z.literal(2)]), source: z.string().min(1), library: ma2EffectLibrarySchema.optional(), userLibrary: lightingUserLibrarySchema.optional() }).strict().superRefine((value, context) => {
+    if (value.version === 1 && (!value.library || value.userLibrary)) context.addIssue({ code: 'custom', message: '旧素材目录必须包含控台数据且不能包含新版分类' });
+    if (value.version === 2 && !value.userLibrary) context.addIssue({ code: 'custom', message: '新版素材目录缺少分类库' });
+  }).optional(),
   p1AutoFollow: z.object({
     enabled: z.boolean(),
     ranges: z.array(z.object({

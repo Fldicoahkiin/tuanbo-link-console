@@ -6,7 +6,7 @@ export type LightingPacket = { atMs: number; portProfileId: string; bytes: numbe
 /** Inspect connection dependencies without encoding events or expanding automation curves. */
 export function collectLightingOutputProfileIds(document: LightingDocument): string[] {
   return [...new Set(activeLightingTracks(document)
-    .filter(track => track.clips.some(clip => !clip.muted && clip.events.some(event => document.outputMode !== 'network' || event.kind !== 'ma2')))
+    .filter(track => track.clips.some(clip => !clip.muted && clip.events.some(event => event.kind !== 'empty-cue' && (document.outputMode !== 'network' || event.kind !== 'ma2'))))
     .map(track => track.portProfileId || 'lighting-events-output'))];
 }
 function activeLightingTracks(document: LightingDocument): LightingTrack[] {
@@ -28,7 +28,7 @@ export function compileLightingPackets(document: LightingDocument, ma2DeviceId =
     const track = sourceTrack.portProfileId ? sourceTrack : { ...sourceTrack, portProfileId: 'lighting-events-output' };
     for (const clip of track.clips) {
       if (clip.muted || !clip.events.length) continue;
-      for (const event of clip.events.filter(event => document.outputMode !== 'network' || event.kind !== 'ma2')) {
+      for (const event of clip.events.filter(event => event.kind !== 'empty-cue' && (document.outputMode !== 'network' || event.kind !== 'ma2'))) {
         if (event.kind === 'ma2' && event.preparation) {
           const atMs = lightingPreparationTime(clip, event, map);
           appendEvent(packets, track, { ...clip, start: 0, timeLock: 'time' }, { ...event, at: atMs, cue: event.preparation.cue, preparation: undefined }, map, ma2DeviceId);
@@ -54,10 +54,22 @@ export function compileLightingPackets(document: LightingDocument, ma2DeviceId =
   const rank = { off: 0, control: 1, on: 2 };
   return packets.sort((a, b) => a.atMs - b.atMs || rank[a.phase] - rank[b.phase]);
 }
+/** MSC Off uses the same explicitly mapped executor and port as this song. */
+export function compileLightingReleasePackets(document: LightingDocument, ma2DeviceId = 127): LightingPacket[] {
+  if (document.outputMode !== 'direct') return [];
+  const tracks = activeLightingTracks(document).map(track => ({ ...track, clips: track.clips.filter(clip => !clip.muted).map(clip => ({ ...clip, start: 0, timeLock: 'time' as const,
+    events: clip.events.filter(event => event.kind === 'ma2' && event.executor).map(event => {
+      if (event.kind !== 'ma2') throw new Error('灯光关闭目标无效');
+      return { ...event, at: 0, action: 'off' as const, cue: undefined, preparation: undefined };
+    }) })) }));
+  const packets = compileLightingPackets({ ...document, tracks }, ma2DeviceId);
+  return [...new Map(packets.map(packet => [`${packet.portProfileId}:${packet.bytes.join(',')}`, packet])).values()];
+}
 function packet(track: LightingTrack, atMs: number, bytes: number[]): LightingPacket { return { atMs, portProfileId: track.portProfileId, bytes, noteKey: null, phase: 'control' }; }
 function appendEvent(packets: LightingPacket[], track: LightingTrack, clip: LightingClip, event: LightingEvent, map: LightingTempoMap, ma2DeviceId: number): void {
   const atMs = lightingEventTime(clip, event, map); const channel = track.channel - 1;
   switch (event.kind) {
+    case 'empty-cue': return;
     case 'ma2-fader': throw new Error('MA2 原生推杆请同步到控台 Timecode 播放，不能通过 MIDI CC 代发');
     case 'raw': packets.push(packet(track, atMs, event.bytes)); return;
     case 'note': {

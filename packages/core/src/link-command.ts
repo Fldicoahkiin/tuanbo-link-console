@@ -43,6 +43,9 @@ export type LinkCommand = {
   readonly scope?: 'lighting';
   /** Consecutive checkpoints of one read task share a single undo frame. */
   readonly historyGroup?: string | undefined;
+  /** A confirmed external baseline survives local undo/redo without adding an edit. */
+  readonly rebaseHistory?: (project: LinkProject) => LinkProject;
+  readonly historyRebaseKey?: string;
   execute(project: LinkProject): LinkProject;
   undo(before: LinkProject): LinkProject;
 };
@@ -568,9 +571,9 @@ export function removeVisualLayerCommand(itemId: string, layerId: string, now?: 
     const item = requireItem(project, itemId);
     const index = item.visualLayers.findIndex((layer) => layer.id === layerId);
     if (index < 0) throw new Error(`视觉图层不存在：${layerId}`);
-    if (item.referenceMediaClips.some((clip) => clip.layerId === layerId) || item.cues.some((cue) => cue.layerId === layerId)) {
-      throw new Error('图层中仍有素材或 Cue，不能删除');
-    }
+    if (item.visualLayers[index]!.locked) throw new Error('请先解锁轨道，再删除');
+    item.referenceMediaClips = item.referenceMediaClips.filter(clip => clip.layerId !== layerId);
+    item.cues = item.cues.filter(cue => cue.layerId !== layerId);
     item.visualLayers.splice(index, 1);
   }, now);
 }

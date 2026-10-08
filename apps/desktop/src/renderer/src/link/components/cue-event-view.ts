@@ -11,7 +11,7 @@ export function cueEventEntries(document: LightingDocument) {
     }
   }
   return document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.flatMap(event =>
-    event.kind === 'ma2' && (!event.effectGroupId || event.effectGroupId === event.id)
-      ? [{ track, clip, id: event.id, cue: event.cue ?? '—', executor: event.executor, label: event.label, preparationLeadMs: leads.get(event.effectGroupId ?? event.id) ?? 0, ms: lightingEventTime(clip, event, map) }] : []
-  ))).sort((a, b) => a.ms - b.ms);
+    (event.kind === 'ma2' || event.kind === 'empty-cue') && (!event.effectGroupId || event.effectGroupId === event.id)
+      ? [{ track, clip, id: event.id, cue: event.kind === 'ma2' ? event.cue ?? '—' : '', executor: event.kind === 'ma2' ? event.executor : '', label: event.label, preparationLeadMs: leads.get(event.effectGroupId ?? event.id) ?? 0, ms: lightingEventTime(clip, event, map) }] : []
+  ))).sort((a, b) => a.ms - b.ms).map((entry, index) => ({ ...entry, cue: String(index + 1) }));
 }

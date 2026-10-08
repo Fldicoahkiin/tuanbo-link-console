@@ -45,7 +45,7 @@ export async function recoverMa2Material(projectPath: string, project: LinkProje
   catch (error) { if (missing(error)) return project; throw new Error('素材恢复记录损坏，原工程与记录均保留', { cause: error }); }
   if (header.projectId !== project.projectId) return project;
   const saved = project.ma2MaterialLibrary;
-  if (saved && saved.library.readAt >= header.library.readAt && !saved.library.sourceUnverified) return project;
+  if (saved?.library && saved.library.readAt >= header.library.readAt && !saved.library.sourceUnverified) return project;
   let files: string[];
   try { files = await readdir(join(root, header.id)); } catch (error) { if (missing(error)) return project; throw error; }
   const library: Ma2EffectLibrary = { ...header.library, sequences: [], errors: [...header.library.errors] };
@@ -66,7 +66,7 @@ export async function recoverMa2Material(projectPath: string, project: LinkProje
       library.sequences.push(sequence);
     } catch (error) { library.errors.push({ sequence: target, message: `此序列恢复失败，原记录保留：${error instanceof Error ? error.message : String(error)}` }); }
   }
-  if (saved?.source === header.source && saved.library.directory.show === library.directory.show && saved.library.directory.generation === library.directory.generation) {
+  if (saved?.library && saved.source === header.source && saved.library.directory.show === library.directory.show && saved.library.directory.generation === library.directory.generation) {
     library.sequences.push(...saved.library.sequences.filter(sequence => library.directory.entries.some(entry => entry.target === sequence.sequence) && !library.sequences.some(entry => entry.sequence === sequence.sequence) && !library.errors.some(entry => entry.sequence === sequence.sequence)));
   }
   return saveMa2MaterialLibraryCommand(header.source, library).execute(project);

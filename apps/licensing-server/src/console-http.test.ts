@@ -1,3 +1,4 @@
+import { listenHttpTestServer } from './http-test-server';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
@@ -26,7 +27,7 @@ async function setup() {
     const login = await consoleService.auth.login(role, 'long-test-password', code(user.id), randomUUID()); users[role] = { token: login.token, csrf: login.session.csrf, id: user.id };
   }
   const server = createLicensingServer(service, 'x'.repeat(32), undefined, undefined, undefined, false, undefined, false, { service: consoleService, origin });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); closing.push(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+  await listenHttpTestServer(server); closing.push(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('missing address');
   const send = (path: string, role?: string, body?: unknown, extra: Record<string, string> = {}) => new Promise<{ status: number; body: unknown; cookie: string[] | undefined }>((resolve, reject) => {
     const user = role ? users[role] : undefined;

@@ -12,7 +12,7 @@ function networkFixture() {
   f.document.ma2Bindings = [{ id: 'native', timecode: 2, name: 'mei-nan', readAt: '2026-09-26T00:00:00Z', sourceXml: '<Timecode><unknown/></Timecode>', baselineTracks: structuredClone(f.document.tracks), mappings: [], playback: 'native-timecode', nativeEvents: [{ path: 'unknown', reason: 'Learn' }] }];
   const play = vi.fn(() => Promise.resolve());
   const status = vi.fn(() => Promise.resolve({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, version: '3.7.0.5', passwordSaved: false, error: null }));
-  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, playMa2Cue: play, cancelMa2Playback: vi.fn(() => Promise.resolve()) } });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, playMa2Audition: play, controlMa2Audition: vi.fn(()=>Promise.resolve({version:1,revision:0,generation:0,phase:'idle',targets:[]})), cancelMa2Playback: vi.fn(() => Promise.resolve()) } });
   return { ...f, play, status };
 }
 

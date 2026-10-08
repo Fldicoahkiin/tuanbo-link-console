@@ -7,7 +7,7 @@ import {
   synchronizeP1ProjectCommand,
   updateRundownItemCommand
 } from '@tb/core/link';
-import { allocateP1TimecodeRanges, configureP1AutoFollowCommand } from '@tb/core/link';
+import { allocateP1TimecodeRanges, configureP1AutoFollowCommand, nativeProgramSnapshot } from '@tb/core/link';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LinkProjectService } from './link-project-service';
 import { P1ProjectService } from './p1-project-service';
@@ -41,6 +41,8 @@ describe('P1ProjectService', () => {
     expect(imported.items).toHaveLength(2);
     expect(imported.skippedItems).toEqual([]);
     expect(imported.items.map(item => item.p1Media.midiStartTime)).toEqual(['60', '120']);
+    const synchronized = synchronizeP1ProjectCommand(imported, sequenceIds('first', 'second'), timestamp).execute(createEmptyLinkProject('原始 MTC 验收'));
+    expect(synchronized.rundown.map(item => nativeProgramSnapshot(synchronized, item.id, 1, 250, 48000).snapshot.offsetMs)).toEqual([60000, 120000]);
     expect(imported.items.map(item => item.p1Media.sourceFileName)).toEqual(['first.wav', 'second.wav']);
     expect(progress).toEqual([
       { completed: 0, total: 2, song: '' },

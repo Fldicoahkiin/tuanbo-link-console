@@ -1,0 +1,717 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml-stylesheet type="text/xsl" href="styles/timecode@sheet.xsl"?>
+<MA xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.malighting.de/grandma2/xml/MA" xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.7.0/MA.xsd" major_vers="3" minor_vers="7" stream_vers="0">
+	<Info datetime="2026-10-07T16:42:12" showfile="tblink_ui100_20261007" />
+	<Timecode index="9906" name="100步灯光测试" lenght="6000" slot="TC Slot 1" frame_format="30 FPS">
+		<Track index="0" active="true" expanded="true">
+			<Object name="100步灯光测试 99.101">
+				<No>30</No>
+				<No>1</No>
+				<No>99</No>
+				<No>101</No>
+			</Object>
+			<SubTrack index="0">
+				<Event index="0" command="Goto" pressed="true" step="1">
+					<Cue name="001 暖场 1">
+						<No>1</No>
+						<No>9907</No>
+						<No>1</No>
+					</Cue>
+				</Event>
+				<Event index="1" time="60" command="Goto" pressed="true" step="2">
+					<Cue name="002 蓝光 2">
+						<No>1</No>
+						<No>9907</No>
+						<No>2</No>
+					</Cue>
+				</Event>
+				<Event index="2" time="120" command="Goto" pressed="true" step="3">
+					<Cue name="003 扫光 3">
+						<No>1</No>
+						<No>9907</No>
+						<No>3</No>
+					</Cue>
+				</Event>
+				<Event index="3" time="180" command="Goto" pressed="true" step="4">
+					<Cue name="004 扇形 4">
+						<No>1</No>
+						<No>9907</No>
+						<No>4</No>
+					</Cue>
+				</Event>
+				<Event index="4" time="240" command="Goto" pressed="true" step="5">
+					<Cue name="005 紫光 5">
+						<No>1</No>
+						<No>9907</No>
+						<No>5</No>
+					</Cue>
+				</Event>
+				<Event index="5" time="300" command="Goto" pressed="true" step="6">
+					<Cue name="006 交叉 6">
+						<No>1</No>
+						<No>9907</No>
+						<No>6</No>
+					</Cue>
+				</Event>
+				<Event index="6" time="360" command="Goto" pressed="true" step="7">
+					<Cue name="007 红光 7">
+						<No>1</No>
+						<No>9907</No>
+						<No>7</No>
+					</Cue>
+				</Event>
+				<Event index="7" time="420" command="Goto" pressed="true" step="8">
+					<Cue name="008 追光 8">
+						<No>1</No>
+						<No>9907</No>
+						<No>8</No>
+					</Cue>
+				</Event>
+				<Event index="8" time="480" command="Goto" pressed="true" step="9">
+					<Cue name="009 暖场 9">
+						<No>1</No>
+						<No>9907</No>
+						<No>9</No>
+					</Cue>
+				</Event>
+				<Event index="9" time="540" command="Goto" pressed="true" step="10">
+					<Cue name="010 蓝光 10">
+						<No>1</No>
+						<No>9907</No>
+						<No>10</No>
+					</Cue>
+				</Event>
+				<Event index="10" time="600" command="Goto" pressed="true" step="11">
+					<Cue name="011 扫光 11">
+						<No>1</No>
+						<No>9907</No>
+						<No>11</No>
+					</Cue>
+				</Event>
+				<Event index="11" time="660" command="Goto" pressed="true" step="12">
+					<Cue name="012 扇形 12">
+						<No>1</No>
+						<No>9907</No>
+						<No>12</No>
+					</Cue>
+				</Event>
+				<Event index="12" time="720" command="Goto" pressed="true" step="13">
+					<Cue name="013 紫光 13">
+						<No>1</No>
+						<No>9907</No>
+						<No>13</No>
+					</Cue>
+				</Event>
+				<Event index="13" time="780" command="Goto" pressed="true" step="14">
+					<Cue name="014 交叉 14">
+						<No>1</No>
+						<No>9907</No>
+						<No>14</No>
+					</Cue>
+				</Event>
+				<Event index="14" time="840" command="Goto" pressed="true" step="15">
+					<Cue name="015 红光 15">
+						<No>1</No>
+						<No>9907</No>
+						<No>15</No>
+					</Cue>
+				</Event>
+				<Event index="15" time="900" command="Goto" pressed="true" step="16">
+					<Cue name="016 追光 16">
+						<No>1</No>
+						<No>9907</No>
+						<No>16</No>
+					</Cue>
+				</Event>
+				<Event index="16" time="960" command="Goto" pressed="true" step="17">
+					<Cue name="017 暖场 17">
+						<No>1</No>
+						<No>9907</No>
+						<No>17</No>
+					</Cue>
+				</Event>
+				<Event index="17" time="1020" command="Goto" pressed="true" step="18">
+					<Cue name="018 蓝光 18">
+						<No>1</No>
+						<No>9907</No>
+						<No>18</No>
+					</Cue>
+				</Event>
+				<Event index="18" time="1080" command="Goto" pressed="true" step="19">
+					<Cue name="019 扫光 19">
+						<No>1</No>
+						<No>9907</No>
+						<No>19</No>
+					</Cue>
+				</Event>
+				<Event index="19" time="1140" command="Goto" pressed="true" step="20">
+					<Cue name="020 扇形 20">
+						<No>1</No>
+						<No>9907</No>
+						<No>20</No>
+					</Cue>
+				</Event>
+				<Event index="20" time="1200" command="Goto" pressed="true" step="21">
+					<Cue name="021 紫光 21">
+						<No>1</No>
+						<No>9907</No>
+						<No>21</No>
+					</Cue>
+				</Event>
+				<Event index="21" time="1260" command="Goto" pressed="true" step="22">
+					<Cue name="022 交叉 22">
+						<No>1</No>
+						<No>9907</No>
+						<No>22</No>
+					</Cue>
+				</Event>
+				<Event index="22" time="1320" command="Goto" pressed="true" step="23">
+					<Cue name="023 红光 23">
+						<No>1</No>
+						<No>9907</No>
+						<No>23</No>
+					</Cue>
+				</Event>
+				<Event index="23" time="1380" command="Goto" pressed="true" step="24">
+					<Cue name="024 追光 24">
+						<No>1</No>
+						<No>9907</No>
+						<No>24</No>
+					</Cue>
+				</Event>
+				<Event index="24" time="1440" command="Goto" pressed="true" step="25">
+					<Cue name="025 暖场 25">
+						<No>1</No>
+						<No>9907</No>
+						<No>25</No>
+					</Cue>
+				</Event>
+				<Event index="25" time="1500" command="Goto" pressed="true" step="26">
+					<Cue name="026 蓝光 26">
+						<No>1</No>
+						<No>9907</No>
+						<No>26</No>
+					</Cue>
+				</Event>
+				<Event index="26" time="1560" command="Goto" pressed="true" step="27">
+					<Cue name="027 扫光 27">
+						<No>1</No>
+						<No>9907</No>
+						<No>27</No>
+					</Cue>
+				</Event>
+				<Event index="27" time="1620" command="Goto" pressed="true" step="28">
+					<Cue name="028 扇形 28">
+						<No>1</No>
+						<No>9907</No>
+						<No>28</No>
+					</Cue>
+				</Event>
+				<Event index="28" time="1680" command="Goto" pressed="true" step="29">
+					<Cue name="029 紫光 29">
+						<No>1</No>
+						<No>9907</No>
+						<No>29</No>
+					</Cue>
+				</Event>
+				<Event index="29" time="1740" command="Goto" pressed="true" step="30">
+					<Cue name="030 交叉 30">
+						<No>1</No>
+						<No>9907</No>
+						<No>30</No>
+					</Cue>
+				</Event>
+				<Event index="30" time="1800" command="Goto" pressed="true" step="31">
+					<Cue name="031 红光 31">
+						<No>1</No>
+						<No>9907</No>
+						<No>31</No>
+					</Cue>
+				</Event>
+				<Event index="31" time="1860" command="Goto" pressed="true" step="32">
+					<Cue name="032 追光 32">
+						<No>1</No>
+						<No>9907</No>
+						<No>32</No>
+					</Cue>
+				</Event>
+				<Event index="32" time="1920" command="Goto" pressed="true" step="33">
+					<Cue name="033 暖场 33">
+						<No>1</No>
+						<No>9907</No>
+						<No>33</No>
+					</Cue>
+				</Event>
+				<Event index="33" time="1980" command="Goto" pressed="true" step="34">
+					<Cue name="034 蓝光 34">
+						<No>1</No>
+						<No>9907</No>
+						<No>34</No>
+					</Cue>
+				</Event>
+				<Event index="34" time="2040" command="Goto" pressed="true" step="35">
+					<Cue name="035 扫光 35">
+						<No>1</No>
+						<No>9907</No>
+						<No>35</No>
+					</Cue>
+				</Event>
+				<Event index="35" time="2100" command="Goto" pressed="true" step="36">
+					<Cue name="036 扇形 36">
+						<No>1</No>
+						<No>9907</No>
+						<No>36</No>
+					</Cue>
+				</Event>
+				<Event index="36" time="2160" command="Goto" pressed="true" step="37">
+					<Cue name="037 紫光 37">
+						<No>1</No>
+						<No>9907</No>
+						<No>37</No>
+					</Cue>
+				</Event>
+				<Event index="37" time="2220" command="Goto" pressed="true" step="38">
+					<Cue name="038 交叉 38">
+						<No>1</No>
+						<No>9907</No>
+						<No>38</No>
+					</Cue>
+				</Event>
+				<Event index="38" time="2280" command="Goto" pressed="true" step="39">
+					<Cue name="039 红光 39">
+						<No>1</No>
+						<No>9907</No>
+						<No>39</No>
+					</Cue>
+				</Event>
+				<Event index="39" time="2340" command="Goto" pressed="true" step="40">
+					<Cue name="040 追光 40">
+						<No>1</No>
+						<No>9907</No>
+						<No>40</No>
+					</Cue>
+				</Event>
+				<Event index="40" time="2400" command="Goto" pressed="true" step="41">
+					<Cue name="041 暖场 41">
+						<No>1</No>
+						<No>9907</No>
+						<No>41</No>
+					</Cue>
+				</Event>
+				<Event index="41" time="2460" command="Goto" pressed="true" step="42">
+					<Cue name="042 蓝光 42">
+						<No>1</No>
+						<No>9907</No>
+						<No>42</No>
+					</Cue>
+				</Event>
+				<Event index="42" time="2520" command="Goto" pressed="true" step="43">
+					<Cue name="043 扫光 43">
+						<No>1</No>
+						<No>9907</No>
+						<No>43</No>
+					</Cue>
+				</Event>
+				<Event index="43" time="2580" command="Goto" pressed="true" step="44">
+					<Cue name="044 扇形 44">
+						<No>1</No>
+						<No>9907</No>
+						<No>44</No>
+					</Cue>
+				</Event>
+				<Event index="44" time="2640" command="Goto" pressed="true" step="45">
+					<Cue name="045 紫光 45">
+						<No>1</No>
+						<No>9907</No>
+						<No>45</No>
+					</Cue>
+				</Event>
+				<Event index="45" time="2700" command="Goto" pressed="true" step="46">
+					<Cue name="046 交叉 46">
+						<No>1</No>
+						<No>9907</No>
+						<No>46</No>
+					</Cue>
+				</Event>
+				<Event index="46" time="2760" command="Goto" pressed="true" step="47">
+					<Cue name="047 红光 47">
+						<No>1</No>
+						<No>9907</No>
+						<No>47</No>
+					</Cue>
+				</Event>
+				<Event index="47" time="2820" command="Goto" pressed="true" step="48">
+					<Cue name="048 追光 48">
+						<No>1</No>
+						<No>9907</No>
+						<No>48</No>
+					</Cue>
+				</Event>
+				<Event index="48" time="2880" command="Goto" pressed="true" step="49">
+					<Cue name="049 暖场 49">
+						<No>1</No>
+						<No>9907</No>
+						<No>49</No>
+					</Cue>
+				</Event>
+				<Event index="49" time="2940" command="Goto" pressed="true" step="50">
+					<Cue name="050 蓝光 50">
+						<No>1</No>
+						<No>9907</No>
+						<No>50</No>
+					</Cue>
+				</Event>
+				<Event index="50" time="3000" command="Goto" pressed="true" step="51">
+					<Cue name="051 扫光 51">
+						<No>1</No>
+						<No>9907</No>
+						<No>51</No>
+					</Cue>
+				</Event>
+				<Event index="51" time="3060" command="Goto" pressed="true" step="52">
+					<Cue name="052 扇形 52">
+						<No>1</No>
+						<No>9907</No>
+						<No>52</No>
+					</Cue>
+				</Event>
+				<Event index="52" time="3120" command="Goto" pressed="true" step="53">
+					<Cue name="053 紫光 53">
+						<No>1</No>
+						<No>9907</No>
+						<No>53</No>
+					</Cue>
+				</Event>
+				<Event index="53" time="3180" command="Goto" pressed="true" step="54">
+					<Cue name="054 交叉 54">
+						<No>1</No>
+						<No>9907</No>
+						<No>54</No>
+					</Cue>
+				</Event>
+				<Event index="54" time="3240" command="Goto" pressed="true" step="55">
+					<Cue name="055 红光 55">
+						<No>1</No>
+						<No>9907</No>
+						<No>55</No>
+					</Cue>
+				</Event>
+				<Event index="55" time="3300" command="Goto" pressed="true" step="56">
+					<Cue name="056 追光 56">
+						<No>1</No>
+						<No>9907</No>
+						<No>56</No>
+					</Cue>
+				</Event>
+				<Event index="56" time="3360" command="Goto" pressed="true" step="57">
+					<Cue name="057 暖场 57">
+						<No>1</No>
+						<No>9907</No>
+						<No>57</No>
+					</Cue>
+				</Event>
+				<Event index="57" time="3420" command="Goto" pressed="true" step="58">
+					<Cue name="058 蓝光 58">
+						<No>1</No>
+						<No>9907</No>
+						<No>58</No>
+					</Cue>
+				</Event>
+				<Event index="58" time="3480" command="Goto" pressed="true" step="59">
+					<Cue name="059 扫光 59">
+						<No>1</No>
+						<No>9907</No>
+						<No>59</No>
+					</Cue>
+				</Event>
+				<Event index="59" time="3540" command="Goto" pressed="true" step="60">
+					<Cue name="060 扇形 60">
+						<No>1</No>
+						<No>9907</No>
+						<No>60</No>
+					</Cue>
+				</Event>
+				<Event index="60" time="3600" command="Goto" pressed="true" step="61">
+					<Cue name="061 紫光 61">
+						<No>1</No>
+						<No>9907</No>
+						<No>61</No>
+					</Cue>
+				</Event>
+				<Event index="61" time="3660" command="Goto" pressed="true" step="62">
+					<Cue name="062 交叉 62">
+						<No>1</No>
+						<No>9907</No>
+						<No>62</No>
+					</Cue>
+				</Event>
+				<Event index="62" time="3720" command="Goto" pressed="true" step="63">
+					<Cue name="063 红光 63">
+						<No>1</No>
+						<No>9907</No>
+						<No>63</No>
+					</Cue>
+				</Event>
+				<Event index="63" time="3780" command="Goto" pressed="true" step="64">
+					<Cue name="064 追光 64">
+						<No>1</No>
+						<No>9907</No>
+						<No>64</No>
+					</Cue>
+				</Event>
+				<Event index="64" time="3840" command="Goto" pressed="true" step="65">
+					<Cue name="065 暖场 65">
+						<No>1</No>
+						<No>9907</No>
+						<No>65</No>
+					</Cue>
+				</Event>
+				<Event index="65" time="3900" command="Goto" pressed="true" step="66">
+					<Cue name="066 蓝光 66">
+						<No>1</No>
+						<No>9907</No>
+						<No>66</No>
+					</Cue>
+				</Event>
+				<Event index="66" time="3960" command="Goto" pressed="true" step="67">
+					<Cue name="067 扫光 67">
+						<No>1</No>
+						<No>9907</No>
+						<No>67</No>
+					</Cue>
+				</Event>
+				<Event index="67" time="4020" command="Goto" pressed="true" step="68">
+					<Cue name="068 扇形 68">
+						<No>1</No>
+						<No>9907</No>
+						<No>68</No>
+					</Cue>
+				</Event>
+				<Event index="68" time="4080" command="Goto" pressed="true" step="69">
+					<Cue name="069 紫光 69">
+						<No>1</No>
+						<No>9907</No>
+						<No>69</No>
+					</Cue>
+				</Event>
+				<Event index="69" time="4140" command="Goto" pressed="true" step="70">
+					<Cue name="070 交叉 70">
+						<No>1</No>
+						<No>9907</No>
+						<No>70</No>
+					</Cue>
+				</Event>
+				<Event index="70" time="4200" command="Goto" pressed="true" step="71">
+					<Cue name="071 红光 71">
+						<No>1</No>
+						<No>9907</No>
+						<No>71</No>
+					</Cue>
+				</Event>
+				<Event index="71" time="4260" command="Goto" pressed="true" step="72">
+					<Cue name="072 追光 72">
+						<No>1</No>
+						<No>9907</No>
+						<No>72</No>
+					</Cue>
+				</Event>
+				<Event index="72" time="4320" command="Goto" pressed="true" step="73">
+					<Cue name="073 暖场 73">
+						<No>1</No>
+						<No>9907</No>
+						<No>73</No>
+					</Cue>
+				</Event>
+				<Event index="73" time="4380" command="Goto" pressed="true" step="74">
+					<Cue name="074 蓝光 74">
+						<No>1</No>
+						<No>9907</No>
+						<No>74</No>
+					</Cue>
+				</Event>
+				<Event index="74" time="4440" command="Goto" pressed="true" step="75">
+					<Cue name="075 扫光 75">
+						<No>1</No>
+						<No>9907</No>
+						<No>75</No>
+					</Cue>
+				</Event>
+				<Event index="75" time="4500" command="Goto" pressed="true" step="76">
+					<Cue name="076 扇形 76">
+						<No>1</No>
+						<No>9907</No>
+						<No>76</No>
+					</Cue>
+				</Event>
+				<Event index="76" time="4560" command="Goto" pressed="true" step="77">
+					<Cue name="077 紫光 77">
+						<No>1</No>
+						<No>9907</No>
+						<No>77</No>
+					</Cue>
+				</Event>
+				<Event index="77" time="4620" command="Goto" pressed="true" step="78">
+					<Cue name="078 交叉 78">
+						<No>1</No>
+						<No>9907</No>
+						<No>78</No>
+					</Cue>
+				</Event>
+				<Event index="78" time="4680" command="Goto" pressed="true" step="79">
+					<Cue name="079 红光 79">
+						<No>1</No>
+						<No>9907</No>
+						<No>79</No>
+					</Cue>
+				</Event>
+				<Event index="79" time="4740" command="Goto" pressed="true" step="80">
+					<Cue name="080 追光 80">
+						<No>1</No>
+						<No>9907</No>
+						<No>80</No>
+					</Cue>
+				</Event>
+				<Event index="80" time="4800" command="Goto" pressed="true" step="81">
+					<Cue name="081 暖场 81">
+						<No>1</No>
+						<No>9907</No>
+						<No>81</No>
+					</Cue>
+				</Event>
+				<Event index="81" time="4860" command="Goto" pressed="true" step="82">
+					<Cue name="082 蓝光 82">
+						<No>1</No>
+						<No>9907</No>
+						<No>82</No>
+					</Cue>
+				</Event>
+				<Event index="82" time="4920" command="Goto" pressed="true" step="83">
+					<Cue name="083 扫光 83">
+						<No>1</No>
+						<No>9907</No>
+						<No>83</No>
+					</Cue>
+				</Event>
+				<Event index="83" time="4980" command="Goto" pressed="true" step="84">
+					<Cue name="084 扇形 84">
+						<No>1</No>
+						<No>9907</No>
+						<No>84</No>
+					</Cue>
+				</Event>
+				<Event index="84" time="5040" command="Goto" pressed="true" step="85">
+					<Cue name="085 紫光 85">
+						<No>1</No>
+						<No>9907</No>
+						<No>85</No>
+					</Cue>
+				</Event>
+				<Event index="85" time="5100" command="Goto" pressed="true" step="86">
+					<Cue name="086 交叉 86">
+						<No>1</No>
+						<No>9907</No>
+						<No>86</No>
+					</Cue>
+				</Event>
+				<Event index="86" time="5160" command="Goto" pressed="true" step="87">
+					<Cue name="087 红光 87">
+						<No>1</No>
+						<No>9907</No>
+						<No>87</No>
+					</Cue>
+				</Event>
+				<Event index="87" time="5220" command="Goto" pressed="true" step="88">
+					<Cue name="088 追光 88">
+						<No>1</No>
+						<No>9907</No>
+						<No>88</No>
+					</Cue>
+				</Event>
+				<Event index="88" time="5280" command="Goto" pressed="true" step="89">
+					<Cue name="089 暖场 89">
+						<No>1</No>
+						<No>9907</No>
+						<No>89</No>
+					</Cue>
+				</Event>
+				<Event index="89" time="5340" command="Goto" pressed="true" step="90">
+					<Cue name="090 蓝光 90">
+						<No>1</No>
+						<No>9907</No>
+						<No>90</No>
+					</Cue>
+				</Event>
+				<Event index="90" time="5400" command="Goto" pressed="true" step="91">
+					<Cue name="091 扫光 91">
+						<No>1</No>
+						<No>9907</No>
+						<No>91</No>
+					</Cue>
+				</Event>
+				<Event index="91" time="5460" command="Goto" pressed="true" step="92">
+					<Cue name="092 扇形 92">
+						<No>1</No>
+						<No>9907</No>
+						<No>92</No>
+					</Cue>
+				</Event>
+				<Event index="92" time="5520" command="Goto" pressed="true" step="93">
+					<Cue name="093 紫光 93">
+						<No>1</No>
+						<No>9907</No>
+						<No>93</No>
+					</Cue>
+				</Event>
+				<Event index="93" time="5580" command="Goto" pressed="true" step="94">
+					<Cue name="094 交叉 94">
+						<No>1</No>
+						<No>9907</No>
+						<No>94</No>
+					</Cue>
+				</Event>
+				<Event index="94" time="5640" command="Goto" pressed="true" step="95">
+					<Cue name="095 红光 95">
+						<No>1</No>
+						<No>9907</No>
+						<No>95</No>
+					</Cue>
+				</Event>
+				<Event index="95" time="5700" command="Goto" pressed="true" step="96">
+					<Cue name="096 追光 96">
+						<No>1</No>
+						<No>9907</No>
+						<No>96</No>
+					</Cue>
+				</Event>
+				<Event index="96" time="5760" command="Goto" pressed="true" step="97">
+					<Cue name="097 暖场 97">
+						<No>1</No>
+						<No>9907</No>
+						<No>97</No>
+					</Cue>
+				</Event>
+				<Event index="97" time="5820" command="Goto" pressed="true" step="98">
+					<Cue name="098 蓝光 98">
+						<No>1</No>
+						<No>9907</No>
+						<No>98</No>
+					</Cue>
+				</Event>
+				<Event index="98" time="5880" command="Goto" pressed="true" step="99">
+					<Cue name="099 扫光 99">
+						<No>1</No>
+						<No>9907</No>
+						<No>99</No>
+					</Cue>
+				</Event>
+				<Event index="99" time="5940" command="Goto" pressed="true" step="100">
+					<Cue name="100 扇形 100">
+						<No>1</No>
+						<No>9907</No>
+						<No>100</No>
+					</Cue>
+				</Event>
+			</SubTrack>
+		</Track>
+	</Timecode>
+</MA>

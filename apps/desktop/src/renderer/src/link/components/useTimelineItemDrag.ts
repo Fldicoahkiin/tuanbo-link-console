@@ -28,9 +28,9 @@ export function useTimelineItemDrag(options: Options): {
   useEffect(() => {
     const clear = (): void => { dragRef.current = null; setDrag(null); };
     const escape = (event: KeyboardEvent): void => { if (event.key === 'Escape') clear(); };
-    window.addEventListener('keydown', escape);
+    window.addEventListener('keydown', escape, true);
     window.addEventListener('blur', clear);
-    return () => { window.removeEventListener('keydown', escape); window.removeEventListener('blur', clear); };
+    return () => { window.removeEventListener('keydown', escape, true); window.removeEventListener('blur', clear); };
   }, []);
   const resolve = (current: TimelineDrag, clientX: number, clientY: number, draggedElement: HTMLElement): TimelineDrag => {
     const moved = current.moved || Math.hypot(clientX - current.startClientX, clientY - current.startClientY) >= 4;

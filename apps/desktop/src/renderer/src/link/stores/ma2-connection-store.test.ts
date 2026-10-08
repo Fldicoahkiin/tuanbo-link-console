@@ -2,6 +2,20 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { checkNetworkMa2, connectDiscoveredMa2, connectLocalMa2, useLocalMa2Store } from './ma2-connection-store';
 
 afterEach(() => { vi.unstubAllGlobals(); useLocalMa2Store.setState({ status: 'disconnected', directory: '', error: null }); });
+it('首次唯一识别到 MA2 时自动准备网络、保存并连接，无需填写 IP', async () => {
+  const settings = { host: '10.39.15.200', port: 30000, monitorPort: 30001, username: 'administrator', autoConnect: true };
+  const current = { state: 'disconnected', settings: null, passwordSaved: false, version: null, error: null };
+  const prepare = vi.fn().mockResolvedValue(undefined); const save = vi.fn().mockResolvedValue(undefined);
+  const connect = vi.fn().mockResolvedValue({ ...current, state: 'connected', settings });
+  vi.stubGlobal('window', { tbLink: {
+    getMa2NetworkStatus: () => Promise.resolve(current), discoverMa2: () => Promise.resolve({ hosts: [{ host: settings.host, port: 30000, identity: 'ma2' }], ranges: [], warnings: [] }),
+    saveMa2Network: save, connectMa2Network: connect
+  } });
+  expect((await connectDiscoveredMa2(undefined, prepare)).state).toBe('connected');
+  expect(prepare).toHaveBeenCalledExactlyOnceWith(settings.host);
+  expect(save).toHaveBeenCalledWith({ settings, password: 'admin' });
+  expect(connect).toHaveBeenCalledTimes(1);
+});
 it('已保存 IP 直接连接，不要求广播发现；失败明确返回而不重试', async () => {
   const status = { state: 'disconnected', settings: { host: '2.97.214.223', port: 30000, monitorPort: 30001, username: 'operator', autoConnect: false }, passwordSaved: true, version: null, error: null };
   const discover = vi.fn(); const connect = vi.fn().mockResolvedValue({ ...status, state: 'connected' });

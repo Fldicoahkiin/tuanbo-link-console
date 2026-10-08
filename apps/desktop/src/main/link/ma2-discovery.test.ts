@@ -48,6 +48,13 @@ it('窄子网不扫描相邻网段，取消的探测不建立连接', async () =
   const controller = new AbortController(); controller.abort();
   expect(await probeMa2({ host: '127.0.0.1', port: 1 }, controller.signal)).toBeNull();
 });
+it('按 /22 掩码搜索完整子网，不漏掉不同第三段的控台地址', () => {
+  const plan = discoveryTargets({ Ethernet: [adapter('10.39.12.89', '255.255.252.0')] }, []);
+  expect(plan.addresses).toContainEqual({ host: '10.39.15.200', port: 30000 });
+  expect(plan.addresses).not.toContainEqual({ host: '10.39.16.1', port: 30000 });
+  expect(plan.addresses).toHaveLength(1023);
+  expect(plan.ranges).toContain('10.39.12.0/22');
+});
 it('真实 TCP 探测只读横幅，不发送登录和命令，普通开放端口仅标为候选', async () => {
   for (const banner of ["Logged in as User 'guest'\r\n[Channel]>Please login !\r\n", 'Unrelated service\r\n']) {
     let bytes = 0;
@@ -59,6 +66,27 @@ it('真实 TCP 探测只读横幅，不发送登录和命令，普通开放端�
       expect(found?.identity).toBe(banner.includes('Channel') ? 'ma2' : 'candidate'); expect(bytes).toBe(0);
     } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
   }
+});
+
+it('大网段不能抢光期限：先覆盖每张网卡原来可扫描的同段地址', () => {
+  const plan = discoveryTargets({ WiFi: [adapter('10.39.15.89', '255.255.240.0')], Ethernet: [adapter('2.0.0.3', '255.0.0.0')] }, []);
+  const index = (host: string): number => plan.addresses.findIndex(address => address.host === host);
+  expect(index('2.0.0.98')).toBeGreaterThan(0);
+  expect(index('2.0.0.98')).toBeLessThan(200);
+  expect(index('10.39.15.200')).toBeLessThan(405);
+  expect(index('2.0.0.254')).toBeLessThan(index('10.39.0.1'));
+  expect(plan.addresses).toContainEqual({ host: '10.39.0.1', port: 30000 });
+});
+
+it('8192 上限不排除后面的控台网卡；保存过的地址保持优先', () => {
+  const plan = discoveryTargets({ a: [adapter('10.1.0.5', '255.255.240.0')], b: [adapter('10.2.0.5', '255.255.240.0')],
+    c: [adapter('10.3.0.5', '255.255.240.0')], Ethernet: [adapter('2.0.0.3', '255.0.0.0')] }, [
+    { host: '2.10.0.98', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }
+  ]);
+  expect(plan.addresses).toHaveLength(8192);
+  expect(plan.addresses[1]?.host).toBe('2.10.0.98');
+  expect(plan.addresses.findIndex(address => address.host === '2.0.0.98')).toBeLessThan(405);
+  expect(plan.warnings.join()).toContain('未全部纳入');
 });
 
 it.runIf(process.env.TBLINK_MA2_DISCOVERY_NATIVE === '1')('本机真实 onPC 远程横幅识别（不登录、不发送命令）', async () => {
