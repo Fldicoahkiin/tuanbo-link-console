@@ -11,6 +11,17 @@ function peer(options: { value?: string; wrongId?: boolean; truncate?: boolean; 
   return {
     actions, received,
     command: (line: string, match: (text: string) => string | null): Promise<string> => {
+      if (line.startsWith('Lua "for i=')) {
+        const batch = /for i=0,(\d+) do TBLINK_NET\('([a-f0-9]{28})'.*,'read','[a-f0-9]{32}',(\d+)\+i\*256/.exec(line);
+        if (!batch) throw new Error('Malformed batch');
+        actions.push('read-batch');
+        const replies = Array.from({ length: Number(batch[1]) + 1 }, (_, i) => {
+          const offset = Number(batch[3]) + i * 256;
+          return `TBLINK_RPC_${batch[2]}${i.toString(16).padStart(4, '0')}:DATA:${response.subarray(offset, offset + (options.truncate ? 255 : 256)).toString('hex')}\r\n`;
+        }).join('');
+        const parsed = match(replies); if (parsed === null) throw new Error('Incomplete batch');
+        return Promise.resolve(parsed);
+      }
       const call = /TBLINK_NET\('([a-f0-9]{32})','([a-z]+)','([a-f0-9]{32})'(.*?)\)/.exec(line);
       if (!call) throw new Error('Malformed command');
       const action = call[2]!; const args = call[4]!; actions.push(action);
@@ -57,4 +68,26 @@ it('网络传输沿用本机桥的对象验证与播放保护', async () => {
   await expect(bridge.request('READ', 6)).rejects.toThrow();
   await expect(bridge.request('APPLY', 6, 'invalid', 'invalid')).rejects.toThrow();
   expect(calls).toBe(1);
+});
+
+it('完整快照仅回读一次，写入复用同一目标和完全相同的原始快照', async () => {
+  const server = peer({ value: '<MA>原始全量序列</MA>'.repeat(1000) });
+  const wire = new Ma2NetworkWire(server);
+  const expected = await wire.exchange(id, 'SNAPSHOT', 9901, '', () => undefined);
+  expect(server.actions.filter(action => action === 'read-batch').length).toBeLessThan(10);
+  const desired = '<MA>修改后的时间线</MA>';
+  await wire.exchange(id, 'SYNC', 9901, `${Buffer.byteLength(expected)}\n${expected}${desired}`, () => undefined);
+  expect(server.actions).toContain('beginsync');
+  expect(Buffer.concat(server.received).toString()).toBe(desired);
+});
+
+it.each(['target', 'content'] as const)('快照 %s 不一致时不使用控台缓存引用', async change => {
+  const server = peer({ value: '<MA>完整原文</MA>' });
+  const wire = new Ma2NetworkWire(server);
+  const original = await wire.exchange(id, 'SNAPSHOT', 9901, '', () => undefined);
+  const expected = change === 'content' ? original.replace('原文', '变动') : original;
+  const body = `${Buffer.byteLength(expected)}\n${expected}<MA/>`;
+  await wire.exchange(id, 'SYNC', change === 'target' ? 9902 : 9901, body, () => undefined);
+  expect(server.actions).not.toContain('beginsync');
+  expect(Buffer.concat(server.received).toString()).toBe(body);
 });

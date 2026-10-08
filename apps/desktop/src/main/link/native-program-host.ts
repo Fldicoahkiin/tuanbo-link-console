@@ -15,6 +15,7 @@ type Dependencies = {
   preciseSeeking(): boolean;
   changed(state: InternalPlayerState): void;
   midiChanged(state: NativeMidiChannelState): void;
+  obsChanged?(state: import('@tb/schema').NativeObsStatus): void;
   notice(message: string, itemId: string | null): void;
 };
 
@@ -28,11 +29,10 @@ export class NativeProgramHost {
   private readonly listeners = new Set<(status: NativePlayerStatus) => void>();
   private disposed = false;
   private closing: Promise<void> | null = null;
-  private selectedItemId: string | null = null;
   private lightingSession: { sessionId: string; generation: number; itemId: string; ready: boolean } | null = null;
 
   constructor(project: LinkProject, path: string, revision: number, private readonly dependencies: Dependencies) {
-    const error = (message: string) => dependencies.notice(message, this.selectedItemId);
+    const error = (message: string) => this.controller.reportUnavailable(message);
     this.midi = new NativeMidiHost({ audio: () => dependencies.audio(), profile: () => dependencies.configuration().lightingProfile ?? null,
       executable: dependencies.executable, authorize: () => dependencies.authorize(), changed: state => dependencies.midiChanged(state), error });
     this.lighting = new NativeLightingOutput({ executable: dependencies.executable, network: dependencies.network,
@@ -54,7 +54,8 @@ export class NativeProgramHost {
       ingest: () => Promise.resolve(), pause: () => this.midi.stop(), stop: () => this.midi.stop(),
       resolveAudio: () => Promise.reject(new Error('后台节目宿主不使用浏览器音源地址')),
       configuration: () => dependencies.configuration(), preciseSeeking: () => dependencies.preciseSeeking(),
-      changed: state => { this.selectedItemId = state.itemId; dependencies.changed(state); }, notice: (message, itemId) => dependencies.notice(message, itemId)
+      changed: state => dependencies.changed(state), notice: (message, itemId) => dependencies.notice(message, itemId),
+      obsChanged: state => dependencies.obsChanged?.(state)
     }, {
       ...dependencies.api,
       controlNativePlayback: request => { this.interrupt(request); return dependencies.api.controlNativePlayback(request); },
@@ -85,12 +86,12 @@ export class NativeProgramHost {
       lighting.generation = status.generation;
       if (status.audioError || ['stopped', 'error', 'preparing'].includes(status.status)) this.stopLighting();
       else if (!lighting.ready && status.status === 'playing') {
-        this.dependencies.notice('灯光准备未赶上音频开始；本轮不参与，不中途补发', status.itemId); this.stopLighting();
+        this.controller.reportUnavailable('灯光准备未赶上音频开始；本轮不参与，不中途补发'); this.stopLighting();
       } else if (qpc100ns && qpc100ns !== '0' && lighting.ready) {
         this.lighting.observe(status.positionMs, Number(qpc100ns) / 10000);
         if (status.status === 'playing') {
           try { this.lighting.tick(status.positionMs); }
-          catch (error) { this.dependencies.notice(`灯光动作已停止：${String(error)}`, status.itemId); this.stopLighting(); }
+          catch (error) { this.controller.reportUnavailable(`灯光动作已停止：${String(error)}`); this.stopLighting(); }
         }
       }
     }

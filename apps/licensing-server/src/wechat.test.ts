@@ -1,3 +1,4 @@
+import { listenHttpTestServer } from './http-test-server';
 import { createCipheriv, generateKeyPairSync, randomBytes, sign, verify } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { Server } from 'node:http';
@@ -128,7 +129,7 @@ async function setup(send: typeof fetch, enabled = true) {
   const checkout = new AlipayCheckout(alipayId.appId, alipayId.sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), () => fixed);
   const wechat = provider(send);
   const server = createLicensingServer(service, 'a'.repeat(48), alipay, checkout, catalog, false, wechat, enabled); servers.push(server);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
   const request: typeof fetch = (url, init) => fetch(`http://127.0.0.1:${address.port}${urlString(url)}`, init);
   return { service, request, wechat, alipayId, client: new WebPurchaseClient(storage(), request) };

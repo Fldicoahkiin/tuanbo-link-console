@@ -175,7 +175,7 @@ describe('灯光编排编辑与时间基准', () => {
   it('修剪跨界音符并移除片段外事件，合并保持绝对时间', () => {
     const trimmed = trimLightingClip(clip, 1000);
     expect(trimmed.events[0]).toMatchObject({ at: 100, duration: 900 });
-    const map = new LightingTempoMap(createLightingDocument().tempos);
+    const map = new LightingTempoMap([{ beat: 0, bpm: 120, numerator: 4, denominator: 4 }]);
     const merged = mergeLightingClips([trimmed, { ...trimmed, id: 'second', start: 4, duration: 2, timeLock: 'beat', events: [{ id: 'later', kind: 'cc', at: 1, controller: 7, value: 127 }] }], map);
     expect(merged).toMatchObject({ start: 0, duration: 3000, timeLock: 'time' });
     expect(merged.events[1]).toMatchObject({ kind: 'cc', at: 2500 });
@@ -241,7 +241,7 @@ describe('灯光编排编辑与时间基准', () => {
     expect(right.events[0]?.id).not.toBe('note');
   });
   it('量化不会把长音符推出片段边界', () => {
-    const map = new LightingTempoMap(createLightingDocument().tempos);
+    const map = new LightingTempoMap([{ beat: 0, bpm: 120, numerator: 4, denominator: 4 }]);
     const result = quantizeLightingClip({ ...clip, events: [{ ...clip.events[0]!, at: 5900 }] }, map, 1);
     expect(result.events[0]?.at).toBe(6000);
   });

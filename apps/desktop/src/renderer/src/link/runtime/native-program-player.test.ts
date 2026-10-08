@@ -65,6 +65,18 @@ it('选择节目提前预备画面且不出声；重复选择不重做，播放�
   await f.player.dispose();
 });
 
+it('后台画面可用而音乐采集失败时保留播放并展示、记录采集原因', async () => {
+  const f = fixture(); f.project.obsOutputMode = 'scenes';
+  f.api.prepareNativeObs.mockImplementationOnce(request => Promise.resolve({ version: 1, sessionId: request.sessionId,
+    generation: request.generation, itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'ready', reason: null,
+    notice: 'OBS 音乐采集未就绪：窗口不可见', currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: 500 }));
+  try {
+    await f.player.play('song-0');
+    expect(f.state()).toMatchObject({ status: 'playing', notice: 'OBS 音乐采集未就绪：窗口不可见' });
+    expect(f.deps.notice).toHaveBeenCalledWith('OBS 音乐采集未就绪：窗口不可见', 'song-0');
+  } finally { await f.player.dispose(); }
+});
+
 it('关闭宿主等待所有通道释放，音频停止失败也清理画面且不回写旧界面', async () => {
   const f = fixture(); f.project.obsOutputMode = 'scenes'; await f.player.play('song-0');
   expect(f.api.prepareNativeObs).toHaveBeenCalledOnce();
@@ -276,4 +288,19 @@ it('不支持的 MTC 帧率明确隔离该通道，保留已知直接灯光和�
   const result = nativeProgramSnapshot(f.project, 'song-0', 7, 1000, 48000);
   expect(result).toMatchObject({ allowMtc: false, allowLighting: true }); expect(result.notice).toContain('29.97df');
   expect(f.project.rundown[0]!.playback!.mtcOffsetMs).toBe(480000);
+});
+
+for (const mode of ['network', 'timecode'] as const) it(`原生播放：待核对的时间码配对与 ${mode} 输出隔离`, async () => {
+  const f = fixture();
+  f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: mode };
+  f.project.ma2ReadState = { source: 'console', catalog: { directory: { show: 'test', generation: 'session', version: '3.7.0.5', entries: [] }, readAt: '2026-10-08T00:00:00.000Z', entries: [] },
+    pairs: {}, pairings: { '2': { itemId: 'song-0', status: 'stale', evidence: '', reason: '时间依据已变化' } }, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };
+  const result = nativeProgramSnapshot(f.project, 'song-0', 7, 500, 48000);
+  expect(result).toMatchObject({ allowMtc: false, allowLighting: mode === 'network' });
+  await f.player.play('song-0');
+  expect(f.state().status).toBe('playing');
+  expect(f.lighting.prepare).toHaveBeenCalledTimes(mode === 'network' ? 1 : 0);
+  expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBeNull();
+  expect(f.project.ma2ReadState?.pairings?.['2']?.status).toBe('stale');
+  await f.player.stop();
 });

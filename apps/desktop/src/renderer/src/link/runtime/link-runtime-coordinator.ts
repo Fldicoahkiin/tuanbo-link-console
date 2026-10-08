@@ -52,14 +52,14 @@ export class LinkRuntimeCoordinator {
     this.stop(suspendAuto); await this.cueExecutionTail;
     if (this.runtime.getState() === 'error') throw new Error(useRuntimeStore.getState().reason ?? '停止清理失败');
   }
-  async prepareInternal(itemId: string, preflight: (assertCurrent: () => void) => Promise<PreflightReport>, positionMs = 0, signal?: AbortSignal): Promise<void> {
+  async prepareInternal(itemId: string, preflight: (assertCurrent: () => void) => Promise<PreflightReport>, positionMs = 0, signal?: AbortSignal, notice: (message: string) => void = () => undefined): Promise<void> {
     this.internalClockActive = false;
     this.autoFollow?.suspend();
     if (this.disposed) throw new Error('当前播放会话已关闭');
     await this.internalPreparation.run(() => this.stopAndWait(false), assertCurrent => {
       this.internalObsOwner = 'renderer';
       return prepareInternalRuntime(this.project, itemId, positionMs, () => preflight(assertCurrent), {
-      assertCurrent, select: () => this.selectItem(itemId, false), capture: () => { this.internalCaptureActive = true; },
+      assertCurrent, notice, select: () => this.selectItem(itemId, false), capture: () => { this.internalCaptureActive = true; },
       armFromStart: () => this.armFromStart(assertCurrent), runtime: this.runtime, managed: this.managedOutput, runner: this.runner, projectPath: this.projectPath,
       sample: (sample) => { this.lastSample = sample; }, apply: (update) => this.applyRequiredUpdate(update),
       execute: (cues, media) => this.enqueueTimelineWork(cues, media)

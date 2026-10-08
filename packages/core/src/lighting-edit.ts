@@ -1,17 +1,35 @@
-import { lightingDocumentSchema, parseLinkProject, type LightingClip, type LightingDocument, type LightingEvent, type LightingTempo } from '@tb/schema';
+import { lightingDocumentSchema, parseLinkProject, validateLinkProjectRelations, type LightingClip, type LightingDocument, type LightingEvent, type LightingTempo } from '@tb/schema';
 import type { LinkCommand } from './link-command';
+import { libraryTemplates, projectLightingLibrary, updateLibraryTemplates } from './lighting-library';
 
 export function setLightingCommand(itemId: string, lighting: LightingDocument, label = '编辑灯光'): LinkCommand {
   const validated = lightingDocumentSchema.parse(lighting);
   return { id: crypto.randomUUID(), label, scope: 'lighting', execute(project) {
-    const next = structuredClone(project);
-    const item = next.rundown.find((entry) => entry.id === itemId);
-    if (!item) throw new Error('灯光节目不存在');
+    const currentTemplates = libraryTemplates(projectLightingLibrary(project));
+    const libraryChanged = JSON.stringify(validated.templates) !== JSON.stringify(currentTemplates) && JSON.stringify(validated.templates) !== JSON.stringify(project.rundown.find(entry => entry.id === itemId)?.lighting?.templates ?? []);
+    const base = libraryChanged ? updateLibraryTemplates(project, validated.templates) : project;
+    const original = base.rundown.find((entry) => entry.id === itemId);
+    if (!original) throw new Error('灯光节目不存在');
+    const item = { ...original };
+    const next = { ...base, rundown:base.rundown.map(entry=>entry.id===itemId ? item : entry) };
+    const previous = item.lighting;
     item.lighting = structuredClone(validated);
+    // A drag changes the anchor too. Tempo edits already supply their new anchors.
+    if (previous && JSON.stringify(previous.tempos) === JSON.stringify(validated.tempos) && (previous.music?.firstBeatMs ?? 0) === (validated.music?.firstBeatMs ?? 0)) {
+      const map = new LightingTempoMap(validated.tempos); const origin = validated.music?.firstBeatMs ?? 0;
+      const oldPositions = new Map(previous.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.map(event => [event.id, lightingEventTime(clip, event, map)] as const))));
+      for (const track of item.lighting.tracks) for (const clip of track.clips) for (const event of clip.events) {
+        if (event.beatAnchor === undefined) continue;
+        const ms = lightingEventTime(clip, event, map);
+        if (oldPositions.get(event.id) === ms) continue;
+        if (ms < origin) throw new Error('节拍锁定 Cue 不能移到第一拍之前，请先改为固定时间');
+        event.beatAnchor = map.msToBeat(ms - origin);
+      }
+    }
     // Old releases reject schema 2 rather than silently dropping lighting data.
     next.schemaVersion = 2;
     next.updatedAt = new Date().toISOString();
-    return parseLinkProject(next);
+    validateLinkProjectRelations(next);return next;
   }, undo: (before) => parseLinkProject(before) };
 }
 

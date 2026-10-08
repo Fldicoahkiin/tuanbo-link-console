@@ -43,6 +43,26 @@ import {
 const timestamp = () => '2026-08-26T00:00:00.000Z';
 
 describe('LinkProject Command', () => {
+  it('删除非空轨道与其中片段及 Cue 是一次可撤销操作，保留源素材和其他轨道', () => {
+    let project = createEmptyLinkProject('删除轨道');
+    project = addRundownItemCommand(rundownItem('item', '节目')).execute(project);
+    project = addVisualLayerCommand('item', { id: 'remove', name: '轨道 1', locked: false, visible: true }).execute(project);
+    project = addVisualLayerCommand('item', { id: 'keep', name: '轨道 2', locked: false, visible: true }).execute(project);
+    project = addMediaAssetCommand({ id: 'asset', name: '图片', kind: 'image', folderId: null, relativePath: 'assets/image.png', sha256: 'a'.repeat(64), byteLength: 10, width: 100, height: 100 }).execute(project);
+    for (const id of ['remove', 'keep']) {
+      project = addCueCommand('item', { ...linkCue(`cue-${id}`, id), layerId: id }).execute(project);
+      project = addReferenceMediaClipCommand('item', { id: `clip-${id}`, assetId: 'asset', layerId: id, label: id, startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 1000, canvasTransform: DEFAULT_REFERENCE_CANVAS_TRANSFORM }).execute(project);
+    }
+    const command = removeVisualLayerCommand('item', 'remove');
+    const result = command.execute(project);
+    expect(result.rundown[0]!.visualLayers.map(layer => layer.id)).toEqual(['keep']);
+    expect(result.rundown[0]!.cues.map(cue => cue.id)).toEqual(['cue-keep']);
+    expect(result.rundown[0]!.referenceMediaClips.map(clip => clip.id)).toEqual(['clip-keep']);
+    expect(result.mediaAssets).toEqual(project.mediaAssets);
+    expect(command.undo(project)).toEqual(project);
+    const locked = updateVisualLayerCommand('item', { ...project.rundown[0]!.visualLayers.find(layer => layer.id === 'remove')!, locked: true }).execute(project);
+    expect(() => removeVisualLayerCommand('item', 'remove').execute(locked)).toThrow('解锁');
+  });
   it('局部 Cue 修改仍拒绝其他节目的动作 ID、未知图层和超出帧率的时间', () => {
     let project = createEmptyLinkProject('局部校验');
     project = addRundownItemCommand({ ...rundownItem('a', 'A'), cues: [{ ...linkCue('a-cue', 'A Cue'), actions: [programAction('shared-action', 1)] }] }).execute(project);

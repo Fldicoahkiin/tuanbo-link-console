@@ -1,21 +1,23 @@
+import { writeFile, mkdir } from 'node:fs/promises';
 import { expect, it } from 'vitest';
-import { createLightingDocument, type LightingTrack } from '@tb/schema';
-import { compileLightingPackets, LightingScheduler } from './lighting-playback';
+import { createEmptyLinkProject, createLightingDocument, createLightingUserLibrary, parseLinkProject } from '@tb/schema';
+import { setLightingCommand } from './lighting-edit';
+import { setLightingLibraryCommand } from './lighting-library';
 
-it('32 轨 10 万音符编译并完整调度，不重复或遗漏释放', () => {
-  const document = createLightingDocument(); document.outputMode = 'direct';
-  document.tracks = Array.from({ length: 32 }, (_, index): LightingTrack => ({
-    id: `track-${index}`, name: `Track ${index}`, kind: 'midi', color: '#abcdef', group: '', muted: false, solo: false, locked: false,
-    channel: index % 16 + 1, portProfileId: `port-${Math.floor(index / 16)}`, controller: 7, noteNames: {},
-    clips: [{ id: `clip-${index}`, name: '压力测试', start: 0, duration: 312500, timeLock: 'time', muted: false,
-      events: Array.from({ length: 3125 }, (_, event) => ({ id: `${index}-${event}`, kind: 'note' as const, at: event * 100, duration: 50, note: event % 128, velocity: 100 })) }]
-  }));
-  const started = performance.now(); const packets = compileLightingPackets(document);
-  expect(packets).toHaveLength(200000);
-  let ons = 0; let offs = 0;
-  const scheduler = new LightingScheduler(packets, (packet) => { if (packet.phase === 'on') ons += 1; if (packet.phase === 'off') offs += 1; });
-  scheduler.locate(0);
-  for (let ms = 0; ms <= 312500; ms += 25) scheduler.tick(ms);
-  scheduler.stop(); expect(ons).toBe(100000); expect(offs).toBe(100000);
-  expect(performance.now() - started).toBeLessThan(10000);
-}, 15000);
+it('200 节目 / 2000 素材 / 50000 Cue：分类与当前歌曲修改保留其他对象，不复制全工程', async () => {
+  const base=createEmptyLinkProject('规定规模构造基准');base.schemaVersion=2;
+  base.mediaAssets=Array.from({length:2000},(_,i)=>({id:`asset-${i}`,name:`素材${i}`,kind:'image',folderId:null,relativePath:`assets/${i}.png`,sha256:'a'.repeat(64),byteLength:100,width:1920,height:1080}));
+  base.rundown=Array.from({length:200},(_,song)=>{const lighting=createLightingDocument();lighting.tracks=[{id:`track-${song}`,name:'灯光',kind:'ma2',color:'#abcdef',group:'',muted:false,solo:false,locked:false,channel:1,controller:7,portProfileId:'',noteNames:{},clips:[{id:`clip-${song}`,name:'Cue',timeLock:'time',start:0,duration:30000,muted:false,events:Array.from({length:250},(_,index)=>({id:`cue-${song}-${index}`,kind:'ma2',at:index*100,sequence:1,executor:'',cue:String(index+1),label:`Cue ${index}`,action:'goto'}))}]}];return{id:`song-${song}`,title:`节目${song}`,enabled:true,notes:'',visualLayers:[],referenceMediaClips:[],cues:[],lighting};});
+  let project=parseLinkProject(base);const library=createLightingUserLibrary();const classification:number[]=[],editing:number[]=[];
+  for(let run=0;run<22;run++){
+    let start=performance.now();const categorized=setLightingLibraryCommand(library).execute(project);const categoryMs=performance.now()-start;
+    expect(categorized.rundown).toBe(project.rundown);expect(categorized.mediaAssets).toBe(project.mediaAssets);
+    const document=categorized.rundown[0]!.lighting!;start=performance.now();const edited=setLightingCommand('song-0',{...document,markers:[{id:'m',name:'重点',startMs:run,endMs:null}]}).execute(categorized);const editMs=performance.now()-start;
+    expect(edited.rundown[1]).toBe(project.rundown[1]);expect(edited.mediaAssets).toBe(project.mediaAssets);expect(edited.rundown[0]).not.toBe(project.rundown[0]);
+    if(run>=2){classification.push(categoryMs);editing.push(editMs);}project=edited;
+  }
+  const p95=(values:number[]):number=>[...values].sort((a,b)=>a-b)[Math.ceil(values.length*.95)-1]!;
+  const evidence={kind:'纯领域构造数据，非 Electron 或硬件验收',programs:200,assets:2000,cues:50000,classificationP95:p95(classification),editingP95:p95(editing),classification,editing};
+  if(process.env.TBLINK_LIGHTING_METRICS){await mkdir(process.env.TBLINK_LIGHTING_METRICS,{recursive:true});await writeFile(`${process.env.TBLINK_LIGHTING_METRICS}/core-scale.json`,JSON.stringify(evidence,null,2));}
+  expect(p95(classification)).toBeLessThanOrEqual(100);expect(p95(editing)).toBeLessThanOrEqual(100);
+});

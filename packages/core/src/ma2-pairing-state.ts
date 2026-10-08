@@ -1,7 +1,7 @@
 import { parseLinkProject, type LinkProject, type Ma2Catalog, type Ma2ReadState } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { matchMa2Programs } from './ma2-program-matching';
-import { parseP1TimeOrigin } from './ma2-time-origin';
+import { programTimeOrigin } from './ma2-time-origin';
 import { importMa2TimecodeCommand } from './ma2-import';
 
 export function ma2PairingEvidence(project: LinkProject, source: string, catalog: Ma2Catalog, target: number, itemId: string): string {
@@ -11,7 +11,7 @@ export function ma2PairingEvidence(project: LinkProject, source: string, catalog
   try {
     return JSON.stringify({ source, show: catalog.directory.show, version: catalog.directory.version, generation: catalog.directory.generation,
       frame: entry.frameFormat, offset: entry.offset, times: entry.events.map(event => event.time),
-      origin: item.p1Media ? parseP1TimeOrigin(item.p1Media.midiStartTime) : item.playback?.mtcOffsetMs,
+      origin: programTimeOrigin(item),
       audio: item.referenceAudio.sha256, duration: item.referenceAudio.durationMs, trim: item.p1Media?.sourceTrim,
       fullSource: item.p1Media?.importedFullSource });
   } catch { return ''; }
@@ -121,7 +121,7 @@ export function confirmMa2PairingCommand(target: number, itemId: string): LinkCo
     if (state.catalog.sourceUnverified) throw new Error('控台来源尚未核对，请先复核读取来源');
     const song = project.rundown.find(item => item.id === itemId);
     const entry = state.catalog.entries.find(item => item.target === target);
-    const origin = song?.p1Media ? parseP1TimeOrigin(song.p1Media.midiStartTime) : song?.playback?.mtcOffsetMs;
+    const origin = song && (song.p1Media || song.playback) ? programTimeOrigin(song) : undefined;
     if (!entry || origin === undefined || !song?.referenceAudio || entry.frameFormat !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(entry.offset ?? '0') || !entry.events.length || entry.events.some(event => !/^\d+(?:\.\d+)?$/.test(event.time) || (Number(event.time) + Number(entry.offset ?? 0)) * 1000 / 30 < origin || (Number(event.time) + Number(entry.offset ?? 0)) * 1000 / 30 >= origin + song.referenceAudio!.durationMs)) throw new Error('时间格式或歌曲范围尚未核对，不能确认配对');
     const binding = song.lighting?.ma2Bindings?.find(value => value.timecode === target);
     if (binding && (binding.timeOriginMs ?? 0) !== origin) throw new Error('绑定中的歌曲起点已经变化，请先刷新并核对本地 Cue 位置');

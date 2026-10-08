@@ -178,7 +178,7 @@ export class NativeProgramPlayer {
     // Stop reaches the main service immediately if preparation has already
     // published its session; otherwise the queued prepare cannot start audio.
     const stopping = (this.requestedPreparation ? this.command({ kind: 'stop' }) : Promise.resolve()).catch(error => { if (this.current(token)) this.fail(error); });
-    return this.enqueue(token, async () => { await stopping; await this.optionalRuntime(() => this.cancelPreload(), '节目预备清理失败'); await this.optionalRuntime(() => this.stopObs(), '画面清理失败'); await this.dependencies.stop(); this.runtimePrepared = false;
+    return this.enqueue(token, async () => { await stopping; if (this.lighting.release) await this.optionalRuntime(() => this.lighting.release!(), '灯光关闭未完成'); await this.optionalRuntime(() => this.cancelPreload(), '节目预备清理失败'); await this.optionalRuntime(() => this.stopObs(), '画面清理失败'); await this.dependencies.stop(); this.runtimePrepared = false;
       if (this.current(token)) { this.boundary('pause'); this.update({ positionMs: 0, mtcSentPositionMs: null }); } });
   }
   async reset(): Promise<void> { await this.stop(); if (this.state.status !== 'error') this.update({ itemId: null, playedItemIds: [], durationMs: 0 }); }
@@ -254,6 +254,7 @@ export class NativeProgramPlayer {
     if (this.disposed || !this.obsSession || status.sessionId !== this.obsSession.sessionId
       || status.generation < this.obsSession.generation || status.itemId !== this.state.itemId) return;
     this.dependencies.obsChanged?.(status);
+    if (status.notice) this.reportUnavailable(status.notice);
     if (status.state === 'failed' || status.state === 'stopped' && status.reason) this.reportUnavailable(`画面通道未参与或已停止：${status.reason ?? '未知错误'}；音频继续播放。`);
   }
   private async prepareObs(itemId: string, token: number): Promise<void> {

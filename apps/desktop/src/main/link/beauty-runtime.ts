@@ -110,17 +110,20 @@ export class BeautyRuntime {
             else if ('ready' in packet) { /* Detection alone is not proof that OBS accepted it. */ }
             else if ('frames' in packet) { throw new Error('分析引擎在未请求停止时结束会话'); }
             else {
-              const faceAccepted = packet.face_status === 1 && packet.accepted > 0 && packet.sequence >= packet.accepted && packet.sequence - packet.accepted < 32 && packet.accepted_age_ms !== null && packet.accepted_age_ms <= 250;
+              const frameFresh = packet.sequence > 0 && packet.age_ms <= 1500;
+              const faceAccepted = frameFresh && packet.face_status === 1 && packet.accepted > 0 && packet.sequence >= packet.accepted && packet.sequence - packet.accepted < 32 && packet.accepted_age_ms !== null && packet.accepted_age_ms <= 250;
               const faces = faceAccepted ? packet.faces : 0;
               const profiles = faceAccepted ? packet.profiles : 0;
-              const bodyReady = packet.bodies > 0 && packet.body_status === 1 && packet.body_accepted > 0 && packet.sequence >= packet.body_accepted && packet.sequence - packet.body_accepted < 32 && packet.body_accepted_age_ms !== null && packet.body_accepted_age_ms <= 250;
+              const bodyReady = frameFresh && packet.bodies > 0 && packet.body_status === 1 && packet.body_accepted > 0 && packet.sequence >= packet.body_accepted && packet.sequence - packet.body_accepted < 32 && packet.body_accepted_age_ms !== null && packet.body_accepted_age_ms <= 250;
               const active = faces > 0 || profiles > 0 || bodyReady;
               const observed = performance.now();
               this.accepted = { faceUntil: faceAccepted && packet.accepted_age_ms !== null ? observed + 250 - packet.accepted_age_ms : 0,
                 bodyUntil: bodyReady && packet.body_accepted_age_ms !== null ? observed + 250 - packet.body_accepted_age_ms : 0,
                 faces, profiles, bodies: bodyReady ? packet.bodies : 0 };
-              this.publish({ phase: active ? 'tracking' : 'waiting', sourceName, filterName: target.filterName, faces,
-                message: active ? trackingMessage(faces, profiles, bodyReady ? packet.bodies : 0) : '等待清晰可见的人脸或身体；无有效结果的部位保持原画面' });
+              const message = !frameFresh ? 'OBS 美颜分析画面已停更，请检查当前场景和美颜滤镜；过期结果不参与输出'
+                : active ? trackingMessage(faces, profiles, bodyReady ? packet.bodies : 0) : '等待清晰可见的人脸或身体；无有效结果的部位保持原画面';
+              if (!frameFresh && this.state.message !== message) this.log(`${sourceName}：${message}（画面年龄 ${Math.round(packet.age_ms)}ms）`);
+              this.publish({ phase: active ? 'tracking' : 'waiting', sourceName, filterName: target.filterName, faces, message });
             }
           } catch (error) { fail(`分析引擎响应无效：${String(error)}`); break; }
         }

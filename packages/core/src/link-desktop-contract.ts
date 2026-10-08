@@ -113,6 +113,8 @@ export type LinkObsInventory = {
   transitions: string[];
   videoSettings?: { baseWidth: number; baseHeight: number; outputWidth?: number; outputHeight?: number };
   sourceSizes: Record<string, { width: number; height: number }>;
+  /** Unresolved optional source geometry; other scenes remain usable. */
+  sourceSizeErrors?: Record<string, string>;
   sceneItemTransforms?: Record<string, Record<string, LinkObsSceneItemTransform>>;
 };
 
@@ -171,6 +173,10 @@ export type LinkLogEntryDto = {
 };
 
 export type LinkDesktopApi = {
+  openNativeProgram(request: import('@tb/schema').NativeProgramOpen): Promise<void>;
+  controlNativeProgram(request: import('@tb/schema').NativeProgramControl): Promise<void>;
+  onNativeProgramEvent(listener: (event: import('@tb/schema').NativeProgramEvent) => void): () => void;
+  projectArchives(request: import('@tb/schema').ProjectArchiveRequest): Promise<import('@tb/schema').ProjectArchiveResult>;
   prepareNativeObs(request: import('@tb/schema').NativeObsPrepare): Promise<import('@tb/schema').NativeObsStatus>;
   preloadNativeObs(request: import('@tb/schema').NativeObsPreload): Promise<void>;
   cancelNativeObsPreload(request: import('@tb/schema').NativeObsStop): Promise<void>;
@@ -178,6 +184,7 @@ export type LinkDesktopApi = {
   getNativeObsStatus(): Promise<import('@tb/schema').NativeObsStatus | null>;
   onNativeObsStatus(listener: (status: import('@tb/schema').NativeObsStatus) => void): () => void;
   getNativePlaybackDevices(): Promise<import('@tb/schema').NativePlaybackDevices>;
+  checkNativeMidiOutput(request: import('@tb/schema').NativeMidiCheck): Promise<void>;
   prepareNativePlayback(request: import('@tb/schema').NativePlayerPrepare): Promise<import('@tb/schema').NativePlayerStatus>;
   controlNativePlayback(request: import('@tb/schema').NativePlayerControl): Promise<import('@tb/schema').NativePlayerStatus>;
   getNativePlaybackStatus(): Promise<import('@tb/schema').NativePlayerStatus | null>;
@@ -207,6 +214,9 @@ export type LinkDesktopApi = {
   checkMa2Capabilities(): Promise<import('@tb/schema').Ma2NetworkStatus>;
   playMa2Cue(payload: import('@tb/schema').Ma2PlaybackRequest): Promise<void>;
   cancelMa2Playback(sessionId: string): Promise<void>;
+  playMa2Audition(payload: import('@tb/schema').Ma2AuditionRequest): Promise<void>;
+  controlMa2Audition(payload: import('@tb/schema').Ma2AuditionControl): Promise<import('@tb/schema').Ma2AuditionState>;
+  onMa2AuditionState(listener:(state:import('@tb/schema').Ma2AuditionState)=>void):()=>void;
   getMa2NetworkStatus(): Promise<import('@tb/schema').Ma2NetworkStatus>;
   saveMa2Network(payload: import('@tb/schema').Ma2NetworkSave): Promise<import('@tb/schema').Ma2NetworkStatus>;
   connectMa2Network(): Promise<import('@tb/schema').Ma2NetworkStatus>;
@@ -252,6 +262,15 @@ export type LinkDesktopApi = {
   loadWaveformCache(payload: { projectPath: string; sha256: string }): Promise<number[] | null>;
   generateWaveform(payload: { projectPath: string; sha256: string; url: string; durationMs: number }): Promise<number[]>;
   analyzeAudioBeats(payload: { projectPath: string; source: ReferenceAudio }): Promise<AudioBeatAnalysis>;
+  analyzeMusic(payload: import('@tb/schema').MusicAnalysisRequest, onProgress?: (progress: import('@tb/schema').MusicAnalysisProgress) => void): Promise<import('@tb/schema').MusicAnalysisResult>;
+  cancelMusicAnalysis(payload: { version: 1; taskId: string }): Promise<void>;
+  getAutomaticMusicStatus(): Promise<import('@tb/schema').AutomaticMusicStatus>;
+  startAutomaticMusicAnalysis(payload: import('@tb/schema').AutomaticMusicRequest): Promise<import('@tb/schema').AutomaticMusicJob>;
+  controlAutomaticMusicAnalysis(payload: { version: 1; taskId: string; action: 'cancel' | 'resume' }): Promise<void>;
+  onAutomaticMusicJob(listener: (job: import('@tb/schema').AutomaticMusicJob) => void): () => void;
+  startMusicMonitor(payload: import('@tb/schema').MusicMonitorRequest): Promise<import('@tb/schema').MusicMonitorStatus>;
+  onMusicMonitorStatus(listener: (status: import('@tb/schema').MusicMonitorStatus) => void): () => void;
+  stopMusicMonitor(): Promise<void>;
   renderAudioSegments(payload: { projectPath: string; source: ReferenceAudio; segments: AudioSegment[]; tracks?: AudioTrack[] }): Promise<ReferenceAudio>;
   saveWaveformCache(payload: { projectPath: string; sha256: string; peaks: number[] }): Promise<void>;
   inspectProjectAssets(path: string, project: LinkProject): Promise<LinkProjectAssetInspection>;
@@ -277,6 +296,7 @@ export type LinkDesktopApi = {
   getSecurityAvailability(): Promise<boolean>;
   getSecurityPreflight(): Promise<{ credentialDecryptable: boolean; logRedactionReady: boolean; error: string | null }>;
   connectObs(): Promise<LinkObsSnapshot>;
+  connectLocalObs(): Promise<import('@tb/schema').LocalObsConnectionResult>;
   disconnectObs(): Promise<void>;
   getObsSnapshot(): Promise<LinkObsSnapshot>;
   createObsSource(payload: { kind: ObsSourceKind; name: string; sceneName: string }): Promise<ObsSourceDraft>;

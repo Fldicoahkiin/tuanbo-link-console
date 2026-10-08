@@ -6,8 +6,15 @@ import { type Ma2NetworkTarget, ma2ExecutorPreviewSchema, type Ma2ExecutorPrevie
 import { useDocumentStore } from '../stores/document-store';
 import { useSelectedProgram } from '../useSelectedProgram';
 import { useLightingDocument } from './useCueWorkspaceSetup';
-
+import { archiveMa2Project } from '../runtime/ma2-project-archive';
 type Preview = { result: Ma2TimecodePreview; documentId: number; itemId: string | null };
+async function archiveBeforeSync(destination: number, programId: string, source: LightingDocument): Promise<void> {
+  const current = useDocumentStore.getState();
+  if (current.documentId !== destination || !current.project) throw new Error('工程已切换');
+  await archiveMa2Project(destination, current.project);
+  const latest = useDocumentStore.getState();
+  if (latest.documentId !== destination || latest.project?.rundown.find(entry => entry.id === programId)?.lighting !== source) throw new Error('存档期间工程发生修改，请重新核对');
+}
 export function Ma2ProgramSync({ disabled, notify, method, network, directory, onBusy, initialTarget = 1 }: { initialTarget?: number; onBusy: (busy: boolean) => void; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; method: 'local' | 'network'; network: Ma2NetworkTarget | null; directory: string }): JSX.Element {
   const [difference, setDifference] = useState<{ result: Ma2SyncPreview; source: LightingDocument; readback: Ma2TimecodePreview; identities: ReadonlyMap<string, string | null> } | null>(null);
   const [conflictChoices, setConflictChoices] = useState<ReadonlyMap<string, 'local' | 'remote'>>(new Map());
@@ -40,7 +47,6 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
     try {
       const connection = await endpoint();
       if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号应为 1–99999');
-
       const result = ma2TimecodePreviewSchema.parse(await window.tbLink.previewMa2({ ...connection, target, timeOriginMs: item?.lighting?.ma2Bindings?.find(entry => entry.timecode === target)?.timeOriginMs }));
       setPreview({ result, documentId, itemId });
       setStatus(result.unconverted.length ? `已读取，${result.unconverted.length} 个事件暂不能转换` : `Timecode ${target} 已读取`);
@@ -98,8 +104,8 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
     if (!preview || !binding || !item?.lighting || !activeDifference || !resolution?.snapshot || stale || busy || disabled) return;
     const source = item.lighting; const destination = preview.documentId; const programId = item.id;
     let consoleConfirmed = false;
-    setBusy(true); setStatus('正在复核、同步并回读…');
-    try {
+    setBusy(true); setStatus('正在复核、同步并回读…'); try {
+      await archiveBeforeSync(destination, programId, source);
       const result = ma2ApplyResultSchema.parse(await window.tbLink.applyMa2({ ...await endpoint(), document: source, bindingId: binding.id, readback: preview.result, choices: [...identityChoices], conflicts: [...conflictChoices], timeAlignment: 'nearest-frame' }));
       if (result.status === 'incomplete') {
         setStatus(result.mayHaveWritten ? '同步未完成 · 控台可能已写入，请重新读取' : '同步未完成 · 未写入控台');
@@ -169,7 +175,6 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
     </div> : null}
   </section>;
 }
-
 function Ma2TrackBinding(props: { directory: string; network?: Ma2NetworkTarget | undefined; itemId: string; bindingId: string; document: LightingDocument; preview: Ma2TimecodePreview; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
   const [trackId, setTrackId] = useState('');
   const [executor, setExecutor] = useState('');
@@ -217,10 +222,8 @@ function Ma2TrackBinding(props: { directory: string; network?: Ma2NetworkTarget 
     {binding.pendingTracks?.map((pending) => <div className="ma2-pending-track" key={pending.trackId}><span>{props.document.tracks.find((track) => track.id === pending.trackId)?.name ?? '已删除轨道'} → {pending.executor}</span><button disabled={props.disabled || reading} onClick={() => cancel(pending.trackId)}>取消关联</button></div>)}
   </details>;
 }
-
 function ma2EventLabel(event: LightingEvent, cuePrefix = false): string {
   if (event.kind === 'ma2-fader') return `主推杆 ${Number((event.level * 100).toFixed(6))}%`;
   if (event.kind !== 'ma2') return '灯光事件';
   return event.action === 'goto' ? `${cuePrefix ? 'Cue ' : ''}${event.cue ?? ''}` : event.action === 'go' ? '下一步' : '关闭执行器';
 }
-

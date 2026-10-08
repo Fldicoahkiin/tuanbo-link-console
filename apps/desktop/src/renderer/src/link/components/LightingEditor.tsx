@@ -11,7 +11,7 @@ import { useIntegrationStore } from '../stores/integration-store';
 import type { LightingTimelineProps } from './LightingTimeline';
 
 type Props = LightingTimelineProps & { inspectorHost: HTMLDivElement | null; initialTab?: 'settings'; settingsPageSection?: SettingsSection; trackId: string; playheadMs: number; onClose?: () => void; notify: (message: string, tone?: 'info' | 'error') => void };
-const eventNames: Record<LightingEvent['kind'], string> = { 'ma2-fader': 'MA2 主推杆', ma2: '灯光切换', note: '音符', cc: '控制值', point: '推杆变化', program: '程序切换', raw: 'MIDI 消息' };
+const eventNames: Record<LightingEvent['kind'], string> = { 'empty-cue': '空 Cue', 'ma2-fader': 'MA2 主推杆', ma2: '灯光切换', note: '音符', cc: '控制值', point: '推杆变化', program: '程序切换', raw: 'MIDI 消息' };
 const clock = (ms: number): string => `${Math.floor(ms / 60000).toString().padStart(2, '0')}:${(ms % 60000 / 1000).toFixed(3).padStart(6, '0')}`;
 type SettingsSection = 'track' | 'arrangement' | 'files' | 'output';
 const settingsSections = [['track', '轨道'], ['arrangement', '节拍与循环'], ['files', '导入与导出'], ['output', '输出配置']] as const;

@@ -11,7 +11,7 @@ for (const credential of ['missing', 'tampered'] as const) {
       await mkdir(join(profile, 'licensing'), { recursive: true });
       await writeFile(join(profile, 'licensing/license.jwt'), 'invalid-license');
     }
-    const application = await electron.launch({ args: [`--user-data-dir=${profile}`, join(process.cwd(), 'out/main/index.cjs')] });
+    const application = await electron.launch({ args: [`--user-data-dir=${profile}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '0' } });
     try {
       const page = await application.firstWindow();
       await expect(page.getByRole('heading', { name: '激活团播联动台', exact: true })).toBeVisible();

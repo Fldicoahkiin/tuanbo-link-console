@@ -1,5 +1,5 @@
 import { optionalOutputReady } from '@tb/core/link';
-import { allocateMediaTimecodeRanges, lightingTimeOrigin, lightingTimecodePlaybackNotice, millisecondsToFrameNumber, playlistItems, programPlaylists, toUserErrorMessage } from '@tb/core/link';
+import { allocateMediaTimecodeRanges, programTimeOrigin, lightingTimeOrigin, lightingTimecodePlaybackNotice, millisecondsToFrameNumber, playlistItems, programPlaylists, toUserErrorMessage } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { LightingMidiOutput } from '../../registry/lighting-midi-output';
@@ -78,7 +78,10 @@ export class InternalPlaybackController {
       const sendMtc = !this.directLighting && this.state.mtcEnabled;
       let mtcPortName: string | null | undefined;
       const stalePairing = Object.values(this.project.ma2ReadState?.pairings ?? {}).some(pair => pair.itemId === item.id && pair.status === 'stale');
-      if (stalePairing) this.appendNotice('歌曲与控台的时间依据已变化，本次灯光和时间码未参与；请重新核对配对。音频继续播放。');
+      const allowLighting = !stalePairing || item.lighting?.outputMode === 'network';
+      if (stalePairing) this.appendNotice(allowLighting
+        ? '控台时间码配对待核对；本次不发送时间码，网络直控按软件当前时间线执行。'
+        : '歌曲与控台的时间依据已变化，本次灯光和时间码未参与；请重新核对配对。音频继续播放。');
       await Promise.all([
         (async () => {
           try {
@@ -88,7 +91,7 @@ export class InternalPlaybackController {
           }
         })(),
         (async () => {
-          if (!item.lighting || stalePairing) return;
+          if (!item.lighting || !allowLighting) return;
           try {
             await optionalOutputReady(this.lighting.prepare(item.lighting, config.lightingProfile ?? null, positionMs), () => this.lighting.stop(), '灯光动作');
             if (this.current(generation)) this.lightingPrepared = true;
@@ -107,8 +110,8 @@ export class InternalPlaybackController {
       if (!this.current(generation)) return;
       this.update({ volume: item.playback?.volume ?? 100, ...(item.playback ? { endAction: item.playback.endAction } : {}) });
       this.audio.currentTime = positionMs / 1000; this.audio.volume = this.state.volume / 100;
-      this.offsetMs = lightingTimeOrigin(item.lighting, item.playback?.mtcOffsetMs ?? (this.project.obsOutputMode === 'scenes' ? 0 : (allocateMediaTimecodeRanges(this.project).find((range) => range.itemId === itemId)?.startSeconds ?? 0) * 1000));
-      if (item.playback && item.playback.mtcOffsetMs !== this.offsetMs) {
+      this.offsetMs = programTimeOrigin(item, this.project.obsOutputMode === 'scenes' ? 0 : (allocateMediaTimecodeRanges(this.project).find((range) => range.itemId === itemId)?.startSeconds ?? 0) * 1000);
+      if (lightingTimeOrigin(item.lighting, this.offsetMs) !== this.offsetMs) {
         this.mtc.stop(); this.update({ mtcPortName: null });
         this.appendNotice('歌曲播放起点与 MA2 绑定时间码不一致，本次不输出时间码；音频继续播放。');
       }
@@ -173,7 +176,11 @@ export class InternalPlaybackController {
   async stop(): Promise<void> {
     const generation = ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null });
     // Publish cleanup to the same queue before another Play can start preparing OBS.
-    const operation = this.tail.then(() => this.dependencies.stop());
+    const operation = this.tail.then(async () => {
+      const [runtime, lighting] = await Promise.allSettled([this.dependencies.stop(), this.lighting.release()]);
+      if (lighting.status === 'rejected' && this.current(generation)) this.appendNotice(`灯光关闭未完成：${toUserErrorMessage(lighting.reason)}`);
+      if (runtime.status === 'rejected') throw runtime.reason;
+    });
     this.tail = operation.catch((error: unknown) => { if (this.current(generation)) this.fail(error); });
     await this.tail;
   }
@@ -349,6 +356,8 @@ export class InternalPlaybackController {
     void this.dependencies.stop().catch((cleanup: unknown) => { if (this.current(generation)) this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` }); });
   }
   private appendNotice(message: string): void {
+    if (this.state.notice?.includes(message)) return;
+    this.dependencies.notice?.(message, this.state.itemId);
     this.update({ notice: [this.state.notice, message].filter(Boolean).join('；') });
   }
   private disableRuntime(error: unknown): void {

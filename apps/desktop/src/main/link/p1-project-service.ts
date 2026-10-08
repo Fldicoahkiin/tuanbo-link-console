@@ -23,7 +23,7 @@ import type {
   LinkP1ProjectImportResult
 } from '@tb/core/link';
 import { writeFileAtomically } from './atomic-file';
-import { validateP1TimecodeRanges, parseP1TimeOrigin } from '@tb/core/link';
+import { validateP1TimecodeRanges, parseP1TimeOrigin, programTimeOrigin } from '@tb/core/link';
 import { LinkProjectService } from './link-project-service';
 
 type ParsedP1Media = {
@@ -185,7 +185,7 @@ export class P1ProjectService {
           shortcut: item.p1Media?.shortcut ?? '',
           midiStartTime: project.p1AutoFollow?.enabled
             ? String(project.p1AutoFollow.ranges.find((range) => range.itemId === item.id)?.startSeconds ?? (() => { throw new Error(`缺少 P1 时间码区间：${item.title}`); })())
-            : item.p1Media?.midiStartTime ?? '0'
+            : String(programTimeOrigin(item) / 1000)
         });
         if (item.p1Media?.importedFullSource) element.setAttribute('cut_start', '0');
         applyMediaBinding(element, resourcePath, item.title, item.referenceAudio.durationMs, binding);

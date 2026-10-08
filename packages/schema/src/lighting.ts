@@ -1,14 +1,17 @@
 import { z } from 'zod';
+import { lightingMusicSchema, musicMarkerKinds } from './lighting-music';
+import { musicStructureSchema } from './music-structure';
 
 const id = z.string().min(1);
 const time = z.number().finite().nonnegative();
 const dataByte = z.number().int().min(0).max(127);
-const eventBase = { id, at: time, effectGroupId: id.optional() };
+const eventBase = { id, at: time, effectGroupId: id.optional(), librarySource: z.object({ id, revision: z.number().int().positive() }).strict().optional(), beatAnchor: time.optional() };
 export const lightingPreparationSchema = z.object({
   cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0, '准备 Cue 编号必须大于 0'),
   leadMs: z.number().finite().min(100).max(10000)
 }).strict();
 export const lightingEventSchema = z.discriminatedUnion('kind', [
+  z.object({ ...eventBase, kind: z.literal('empty-cue'), label: z.string() }).strict(),
   z.object({ ...eventBase, kind: z.literal('raw'), bytes: z.array(z.number().int().min(0).max(255)).min(1).max(65536).refine((bytes) => {
     const status = bytes[0] ?? 0;
     if (status === 0xf0) return bytes.length >= 3 && bytes.at(-1) === 0xf7 && bytes.slice(1, -1).every((byte) => byte < 128);
@@ -82,22 +85,25 @@ export const lightingMa2BindingSchema = z.object({
   cueCatalog: lightingMa2CueCatalogSchema.optional()
 }).strict();
 export const lightingDocumentSchema = z.object({
+  musicAnalysis: musicStructureSchema.optional(),
   ma2Library: z.object({ show: z.string(), readAt: z.string().datetime(), sequences: lightingMa2CueCatalogSchema }).strict().optional(),
   autoCueSource: z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), durationMs: z.number().finite().positive() }).strict().optional(),
   fixtureCategories: z.array(z.object({ show: z.string().min(1), category: z.string().min(1).max(64), fixtureIds: z.array(z.number().int().positive()).max(10000) }).strict()).max(128).optional(),
   ma2Bindings: z.array(lightingMa2BindingSchema).optional(),
   laneIndex: z.number().int().min(0).optional(),
-  version: z.literal(1), tracks: z.array(lightingTrackSchema), tempos: z.array(lightingTempoSchema).min(1),
-  markers: z.array(z.object({ id, name: z.string(), startMs: time, endMs: time.nullable() }).strict()),
+  version: z.union([z.literal(1), z.literal(2)]), music: lightingMusicSchema.optional(), tracks: z.array(lightingTrackSchema), tempos: z.array(lightingTempoSchema).min(1),
+  markers: z.array(z.object({ id, name: z.string(), startMs: time, endMs: time.nullable(), kind: z.enum(musicMarkerKinds).optional(), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), notes: z.string().optional() }).strict()),
   loop: z.object({ enabled: z.boolean(), startMs: time, endMs: time.positive() }).strict(),
   outputMode: z.enum(['timecode', 'direct', 'network']),
   templates: z.array(z.object({ id, name: z.string().min(1), track: lightingTemplateTrackSchema,
+    libraryRevision: z.number().int().positive().optional(), nativeSequence: z.boolean().optional(),
     categories: z.array(z.string().min(1).max(64)).max(16).optional(),
     sourceShow: z.string().min(1).max(4096).optional(),
     favorite: z.boolean().optional(),
     members: z.array(z.object({ name: z.string().min(1), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]), delayMs: time }).strict()).min(2).max(32).optional()
   }).strict())
 }).strict().superRefine((document, ctx) => {
+  if (document.version === 1 && (document.musicAnalysis || document.music || document.markers.some(marker => marker.kind || marker.color || marker.notes) || document.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.librarySource || event.beatAnchor !== undefined))))) ctx.addIssue({ code: 'custom', message: '新版音乐结构和素材引用必须使用灯光格式 2' });
   if (document.tempos[0]?.beat !== 0) ctx.addIssue({ code: 'custom', message: '节拍图必须从第 0 拍开始', path: ['tempos'] });
   document.tempos.forEach((tempo, index) => {
     if (index && tempo.beat <= (document.tempos[index - 1]?.beat ?? 0)) ctx.addIssue({ code: 'custom', message: '变速点必须按节拍递增', path: ['tempos', index] });
@@ -134,5 +140,5 @@ export type LightingTrack = z.infer<typeof lightingTrackSchema>;
 export type LightingTempo = z.infer<typeof lightingTempoSchema>;
 export type LightingDocument = z.infer<typeof lightingDocumentSchema>;
 export function createLightingDocument(): LightingDocument {
-  return { version: 1, tracks: [], tempos: [{ beat: 0, bpm: 120, numerator: 4, denominator: 4 }], markers: [], loop: { enabled: false, startMs: 0, endMs: 10000 }, outputMode: 'timecode', templates: [] };
+  return { version: 1, tracks: [], tempos: [{ beat: 0, bpm: 128, numerator: 4, denominator: 4 }], markers: [], loop: { enabled: false, startMs: 0, endMs: 10000 }, outputMode: 'timecode', templates: [] };
 }

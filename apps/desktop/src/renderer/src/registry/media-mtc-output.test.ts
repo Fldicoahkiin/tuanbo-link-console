@@ -154,6 +154,15 @@ describe('Electron 原生 MIDI 时间码输出', () => {
   });
 });
 
+it('USB 输出被占用时显示端口和原始错误，提示退出 P1，未发送任何消息', async () => {
+  const send = vi.fn();
+  const port = { name: 'USB MIDI Interface', state: 'connected', connection: 'closed', open: () => Promise.reject(new Error('Port is in use')), send };
+  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['usb', port]]) }) });
+  const output = new MediaMtcOutput();
+  await expect(output.connect(port.name)).rejects.toThrow('USB MIDI Interface：Port is in use');
+  expect(send).not.toHaveBeenCalled(); expect(output.tick(0, '30', 0)).toBe(false);
+});
+
 it('自动识别唯一有效接口，忽略系统合成器，并确实发送完整帧及四分之一帧', async () => {
   const send = vi.fn();
   const port = { name: 'USB MIDI', state: 'connected', connection: 'open', open: vi.fn(() => Promise.resolve()), send };

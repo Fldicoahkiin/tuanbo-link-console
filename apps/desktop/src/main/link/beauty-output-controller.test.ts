@@ -63,6 +63,15 @@ describe('composed output beauty', () => {
     expect(beauty.apply.mock.calls[0]?.[0].values.smooth).toBe(75);
   });
 
+  it('修改参数时核实当前输出，漏收场景事件也不继续写入旧画面', async () => {
+    const { controller, runtime, beauty } = setup();
+    controller.connection(true); await controller.configure(values);
+    beauty.programScene.mockResolvedValue('场景 B');
+    await controller.configure({ ...values, smooth: 45 });
+    expect(runtime.start).toHaveBeenLastCalledWith('场景 B');
+    expect(beauty.apply).toHaveBeenLastCalledWith({ sourceName: '场景 B', filterName: '团播·人像美颜', values: { ...values, smooth: 45 } });
+  });
+
   it('reports external errors without an automatic retry loop', async () => {
     const { controller, beauty, log } = setup();
     beauty.programScene.mockRejectedValue(new Error('OBS unavailable'));

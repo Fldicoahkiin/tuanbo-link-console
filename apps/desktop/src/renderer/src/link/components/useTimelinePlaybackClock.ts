@@ -13,6 +13,8 @@ export function useTimelinePlaybackClock(props: {
 }): void {
   const { durationMs, frameRate, itemId, onPlayheadChange, onPlayingChange, playheadMs, playing } = props;
   const playheadRef = useRef(playheadMs);
+  const callbacks = useRef({ onPlayheadChange, onPlayingChange });
+  useEffect(() => { callbacks.current = { onPlayheadChange, onPlayingChange }; }, [onPlayheadChange, onPlayingChange]);
   useEffect(() => { playheadRef.current = playheadMs; }, [playheadMs]);
   useEffect(() => {
     if (!playing) return;
@@ -28,15 +30,15 @@ export function useTimelinePlaybackClock(props: {
       if (elapsedFrame > previousElapsedFrame || nextMs >= durationMs) {
         previousElapsedFrame = elapsedFrame;
         playheadRef.current = nextMs;
-        onPlayheadChange(nextMs);
+        callbacks.current.onPlayheadChange(nextMs);
       }
       if (nextMs >= durationMs) {
-        onPlayingChange(false);
+        callbacks.current.onPlayingChange(false);
         return;
       }
       frame = requestAnimationFrame(update);
     };
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
-  }, [durationMs, frameRate, itemId, onPlayheadChange, onPlayingChange, playing]);
+  }, [durationMs, frameRate, itemId, playing]);
 }

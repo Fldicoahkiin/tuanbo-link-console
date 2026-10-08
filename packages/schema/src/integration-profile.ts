@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { mtcFrameRateSchema } from './link-project';
+import { obsWebSocketUrlSchema } from './obs-address';
 
 const executableProfileSchema = z.object({
   executablePath: z.string().min(1),
@@ -16,10 +17,9 @@ export const integrationProfileSchema = z.object({
   loopMidi: z.object({ autoStart: z.boolean() }).optional(),
   updatedAt: z.string().datetime({ offset: true }),
   obs: executableProfileSchema.extend({
+    connectionMethod: z.enum(['automatic', 'manual']).optional(),
     autoConnectOnLaunch: z.boolean().optional(),
-    webSocketUrl: z.string().url().refine((value) => value.startsWith('ws://') || value.startsWith('wss://'), {
-      message: 'OBS 地址必须使用 ws:// 或 wss://'
-    }),
+    webSocketUrl: obsWebSocketUrlSchema,
     credentialId: z.string().min(1)
   }),
   p1: executableProfileSchema.extend({

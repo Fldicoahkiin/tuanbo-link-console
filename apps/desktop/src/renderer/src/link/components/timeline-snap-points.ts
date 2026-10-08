@@ -1,5 +1,13 @@
 import { LightingTempoMap, lightingEventTime, timecodeToMilliseconds, type ResolvedTimelineState } from '@tb/core/link';
-import type { LightingDocument, LinkCue, MtcFrameRate } from '@tb/schema';
+import type { LightingDocument, LinkCue, MtcFrameRate, ReferenceMediaClip } from '@tb/schema';
+import type { TimelineDrag } from './TimelineItems';
+
+export function timelineSnapGuide(props: { clips: ReferenceMediaClip[]; cues: LinkCue[]; timelineState: ResolvedTimelineState; frameRate: MtcFrameRate; playheadMs: number; durationMs: number }, pixelsPerSecond: number, enabled: boolean, moving: TimelineDrag | null): number | undefined {
+  if (!enabled || !moving?.moved) return undefined;
+  const duration = moving.kind === 'clip' ? props.clips.find(clip => clip.id === moving.id)?.durationMs ?? 0 : displayedSceneDuration(props.cues.find(cue => cue.id === moving.id), pixelsPerSecond);
+  return [0, props.durationMs, ...timelineSnapPoints(props.timelineState, props.cues, props.frameRate, pixelsPerSecond, props.playheadMs, moving)]
+    .find(point => Math.abs(point - moving.previewMs) < 1 || Math.abs(point - moving.previewMs - duration) < 1);
+}
 
 export function displayedSceneDuration(cue: LinkCue | undefined, pixelsPerSecond: number): number {
   return cue?.durationMs ?? (cue?.actions.some((action) => action.kind === 'obs.setProgramScene') ? 112 / pixelsPerSecond * 1000 : 0);

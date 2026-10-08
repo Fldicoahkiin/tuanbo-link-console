@@ -587,3 +587,10 @@ node scripts/verify-obs-video-load.mjs 'C:\Program Files\obs-studio' '生成目�
 - `LightingNetworkOutput` 旧取消请求的迟到失败此前会写到新会话的 failure，复现已确认。加入取消代数核对：旧错误保留诊断，但不能污染新歌曲或新定位后的队列。
 - 原生服务定位时若已配置 MIDI 消失，原逻辑会抛异常令音频一起失败。现在缺失/歧义仅退出 MTC，保持原偏移及音频定位；明确重新准备前不自动恢复。设备枚举返回后先核对会话，旧查询不能清空新歌的 MIDI。两项设备变化回归采用故障注入，**不是实体 MIDI 拔插验收**；真实 WASAPI 客户端/服务八项回归另行通过。
 - `native-fault-boundary-ui-run-20261006` 的最新独立构建正式按钮流程通过。第一次 `native-fault-boundary-ui-20261006` 因未设置测试启用变量被跳过，不能计作通过。当前协议 4 的 60 分钟回环 `native-soak-2026-10-05T21-47-29-370Z` 继续运行；仍是独立组件回环，不是正式全链路。
+
+### 2026-10-08 灯光工作台任务：正式后台宿主接入
+
+- 本次接入主进程 `NativeProgramHost`，正式原生播放器不再由 renderer 创建。`NativeProgramService` 管理工程快照、会话所有权和清理；`RemoteNativeProgramPlayer` 只转发命令并显示状态。通用 MIDI、直接灯光、自动换歌与原有后台 OBS 共同读取真实设备时钟。
+- `output/lighting-native-host-verified.log` 三项真实 WASAPI Electron 回归通过，包括界面阻塞 4 秒跨越曲尾，第二首实际位置超过 2.5 秒；暂停／继续、切页、元数据修改、切歌、结尾暂停及正常退出均覆盖。保留最初失败记录，不放宽断言。
+- `output/lighting-native-network-complete.log` 两项通过：真实 WASAPI + 本机隔离 TCP 协议端，界面阻塞时 Cue 正常发送，暂停不发、恢复不补发、停止后不继续；模拟控台拒绝第 2 条时不发送第 3 条，音频继续，当前时间线显示通道错误。TCP 回执是模拟的，不是实体 MA2 或灯具验收。
+- 新增 9 项会话／远程控制单测，覆盖关闭待授权打开、迟到操作隔离、关闭失败阻止替换、停止打断在途播放，以及 UI 不创建第二音源。此轮不改上方工作台布局、不把短测替代六小时正式全链路；模型识别质量仍按独立计划验收。

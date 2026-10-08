@@ -12,10 +12,10 @@ export function ma2PlaybackCommand(input: Ma2PlaybackAction): { command: string;
 }
 
 /** Numeric DTOs only. The receipt confirms command dispatch, not physical fixture output. */
-export async function playMa2Cue(connection: Pick<Ma2Telnet, 'command'>, action: Ma2PlaybackAction, beforeSend: () => void): Promise<void> {
+export async function playMa2Cue(connection: Pick<Ma2Telnet, 'command'>, action: Ma2PlaybackAction, beforeSend: () => void, priority:'normal'|'stop'='normal'): Promise<void> {
   const { command, object } = ma2PlaybackCommand(action);
   const marker = `TBLINK_PLAY_${randomBytes(16).toString('hex')}`;
   const script = `if gma.show.getobj.handle('${object}') then gma.cmd('${command}');gma.echo('${marker}:SENT') else gma.echo('${marker}:MISSING') end`;
-  const result = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, `${marker}:`), beforeSend);
+  const result = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, `${marker}:`), beforeSend, priority);
   if (result !== 'SENT') throw new Error(`控台没有找到 ${object}，请重新读取素材并核对编号`);
 }

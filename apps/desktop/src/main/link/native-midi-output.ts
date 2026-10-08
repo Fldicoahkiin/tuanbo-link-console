@@ -146,7 +146,7 @@ export class NativeMidiOutput {
 function now100ns(): bigint { return process.hrtime.bigint() / 100n; }
 function toError(error: unknown): Error { return error instanceof Error ? error : new Error(String(error)); }
 function nativeError(code: number): string {
-  const reasons: Record<number, string> = { [-1]: '指令或状态无效', [-2]: '指定输出端口不存在', [-3]: '输出端口名称不唯一',
+  const reasons: Record<number, string> = { 4: '端口资源被占用（错误码 4），请退出使用该接口的软件', [-1]: '指令或状态无效', [-2]: '指定输出端口不存在', [-3]: '输出端口名称不唯一',
     [-4]: 'Windows 驱动等待失败', [-5]: '打开的端口身份发生变化', [-6]: '前一条 SysEx 未及时完成', [-7]: '动作已过期，未发送' };
   return `MIDI 输出失败：${reasons[code] ?? `Windows 错误 ${code}`}；已停止该通道，不自动重试`;
 }

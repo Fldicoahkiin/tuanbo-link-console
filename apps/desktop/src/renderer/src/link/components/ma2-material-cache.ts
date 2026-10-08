@@ -8,9 +8,10 @@ export function loadMa2MaterialCache(projectId: string): MaterialCache | null {
   const project = useDocumentStore.getState().project;
   if (project?.projectId !== projectId) return null;
   const cache = project.ma2MaterialLibrary;
+  if (!cache?.library) return null;
   const scan = project.ma2ReadState;
   if (cache && scan && (cache.source !== scan.source || cache.library.directory.show !== scan.catalog.directory.show || cache.library.directory.generation !== scan.catalog.directory.generation)) return null;
-  return cache ?? null;
+  return { source: cache.source, library: cache.library };
 }
 
 export function rememberMa2MaterialCache(projectId: string, source: Ma2CatalogRequest, library: Ma2EffectLibrary): void {

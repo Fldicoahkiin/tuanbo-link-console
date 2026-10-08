@@ -52,6 +52,28 @@ vi.mock('../../registry/link-midi-adapter', () => ({
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); mocks.executeObsAction.mockReset(); mocks.executeManagedMediaEvent.mockReset(); mocks.seekManagedMedia.mockReset(); useRuntimeStore.getState().reset(); });
 
 describe('LinkRuntimeCoordinator', () => {
+  it('OBS 音乐窗口采集失败仍执行开场与后续场景，不要求拖动播放头', async () => {
+    vi.stubGlobal('window', globalThis); mocks.executeObsAction.mockResolvedValue();
+    const project = parseLinkProject({ ...createEmptyLinkProject('采集通道隔离'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      rundown: [{ id: 'song', title: '歌曲', cues: [0, 1].map(seconds => ({ id: `cue-${seconds}`, name: '画面',
+        timecode: { hours: 0, minutes: 0, seconds, frames: 0 },
+        actions: [{ id: `scene-${seconds}`, label: '画面', kind: 'obs.setProgramScene', sceneName: `Camera ${seconds}` }] })) }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:/shows/test.tblink');
+    const notice = vi.fn();
+    mocks.setInternalAudioCapture.mockRejectedValueOnce(new Error('OBS 未找到当前联动台音频窗口'));
+    try {
+      await coordinator.prepareInternal('song', async () => {
+        coordinator.beginPreflight('live'); const report = { checkedAt: new Date().toISOString(), mode: 'live' as const, passed: true, checks: [] };
+        await coordinator.applyPreflight(report); return report;
+      }, 0, undefined, notice);
+      await coordinator.ingestInternal(0);
+      for (let time = 100; time <= 1000; time += 100) await coordinator.ingestInternal(time);
+      expect(mocks.executeObsAction).toHaveBeenCalledTimes(2);
+      expect(mocks.executeObsAction).toHaveBeenNthCalledWith(1, expect.objectContaining({ sceneName: 'Camera 0' }));
+      expect(mocks.executeObsAction).toHaveBeenNthCalledWith(2, expect.objectContaining({ sceneName: 'Camera 1' }));
+      expect(notice).toHaveBeenCalledWith(expect.stringContaining('OBS 音乐采集未就绪'));
+    } finally { coordinator.dispose(); }
+  });
   it('后台播放的界面观察不把四秒交付间隔当成 MTC 断流，不伪造 Cue 执行', async () => {
     vi.useFakeTimers({ toFake: ['performance'] }); vi.stubGlobal('window', globalThis);
     mocks.executeMidiAction.mockClear();

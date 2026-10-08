@@ -1,8 +1,11 @@
 import type { CSSProperties } from 'react';
+import type { LightingDocument } from '@tb/schema';
 
 type LayoutInput = {
   lightingWorkspace?: boolean;
-  lighting?: { document: { markers: readonly unknown[]; tracks: readonly unknown[]; laneIndex?: number | undefined } };
+  sectionRow?: boolean;
+  musicRow?: boolean;
+  lighting?: { document: { markers: readonly { id: string }[]; tracks: readonly unknown[]; laneIndex?: number | undefined } };
   audioEditor?: { tracks: readonly unknown[] };
   audioRowHeight?: number;
   layers: readonly unknown[];
@@ -11,8 +14,13 @@ type LayoutInput = {
 };
 type TimelineStyle = CSSProperties & { '--timeline-grid-size': string };
 
-export function timelineRulerHeight(props: Pick<LayoutInput, 'lightingWorkspace' | 'lighting'>): number {
-  return (props.lightingWorkspace ? 44 : 28) + (props.lighting?.document.markers.length ? 16 : 0);
+export function timelineMusicLayout(props: { lightingWorkspace?: boolean; musicRow?: boolean; lighting?: { document: LightingDocument } }, display: { sections: boolean }) {
+  const sectionRow = Boolean(props.lightingWorkspace && display.sections && props.lighting?.document.music?.sections.some(section => !section.id.startsWith('analysis:')));
+  return { sectionRow, rulerHeight: timelineRulerHeight({ ...props, sectionRow }) };
+}
+
+export function timelineRulerHeight(props: Pick<LayoutInput, 'lightingWorkspace' | 'lighting' | 'sectionRow' | 'musicRow'>): number {
+  return (props.lightingWorkspace ? 44 : 28) + (props.lighting?.document.markers.some(marker => !props.lightingWorkspace || !/^(analysis:|music-beat:)/.test(marker.id)) ? 16 : 0) + (props.sectionRow ? 24 : 0) + (props.musicRow ? 24 : 0);
 }
 
 export function timelineLayout(props: LayoutInput, contentWidth: number, pixelsPerSecond: number, gridSize: number) {

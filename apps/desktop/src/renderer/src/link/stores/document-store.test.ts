@@ -10,6 +10,7 @@ import {
   replaceCueCommand,
   resolveTimelineState
 } from '@tb/core/link';
+import { setLightingLibraryViewCommand } from '@tb/core/link';
 import { createEmptyLinkProject } from '@tb/schema';
 import { useDocumentStore } from './document-store';
 
@@ -18,6 +19,13 @@ beforeEach(() => {
 });
 
 describe('document store command history', () => {
+  it('分类浏览位置不占用撤销，并在撤销和重做业务修改后保留', () => {
+    const store=useDocumentStore.getState();store.execute(renameProjectCommand('已修改'));
+    const view={section:'front' as const,tone:'bright' as const,people:3,zone:'front' as const,view:'music' as const,effectCategory:'effect:music:0',scope:'all' as const,query:'前区'};
+    store.execute(setLightingLibraryViewCommand(view));expect(useDocumentStore.getState().past).toHaveLength(1);
+    store.undo();expect(useDocumentStore.getState().project?.name).toBe('初始工程');expect(useDocumentStore.getState().project?.ma2MaterialLibrary?.userLibrary?.view).toEqual(view);
+    store.redo();expect(useDocumentStore.getState().project?.name).toBe('已修改');expect(useDocumentStore.getState().project?.ma2MaterialLibrary?.userLibrary?.view).toEqual(view);
+  });
   it('编辑单个 Cue 的历史共享未变化节目与素材，撤销重做不改写旧快照', () => {
     const store = useDocumentStore.getState();
     for (const id of ['first', 'second']) store.execute(addRundownItemCommand({ id, title: id, enabled: true, notes: '', visualLayers: [], referenceMediaClips: [], cues: [

@@ -13,7 +13,7 @@ export function AudioInspector({ editor, playheadMs }: { editor: AudioEditor; pl
         <label><span>时间线位置 <small>秒</small></span><PropertyNumberInput label="音频片段位置" min={0} step={0.001} value={segment.startMs / 1000} onCommit={(value) => { void editor.update(segment.id, { startMs: Math.round(value * 1000) }); }} /></label>
         <label><span>素材入点 <small>秒</small></span><PropertyNumberInput label="音频素材入点" min={0} step={0.001} value={segment.sourceOffsetMs / 1000} onCommit={(value) => { void editor.update(segment.id, { sourceOffsetMs: Math.round(value * 1000) }); }} /></label>
         <label><span>片段时长 <small>秒</small></span><PropertyNumberInput label="音频片段时长" min={0.001} step={0.001} value={segment.durationMs / 1000} onCommit={(value) => { void editor.update(segment.id, { durationMs: Math.round(value * 1000) }); }} /></label>
-      </div> : <p>点击波形定位，拖动片段标题移动位置，拖动两端调整范围。</p>}
+      </div> : <p>点击波形定位，拖动片段移动位置，拖动两端调整范围。</p>}
       <div className="audio-edit-actions"><button onClick={() => void editor.split(playheadMs)}><Scissors />播放头处分割</button><button disabled={!segment} onClick={() => void editor.remove()}><Trash2 />删除片段</button></div>
       </fieldset>
       {editor.disabled && !editor.busy ? <p>停止播放后可移动、裁剪或删除音频片段；节拍标记仍可操作。</p> : null}

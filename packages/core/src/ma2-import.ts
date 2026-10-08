@@ -1,7 +1,7 @@
 import { createLightingDocument, lightingDocumentSchema, ma2ExecutorPreviewSchema, ma2TimecodePreviewSchema, parseLinkProject, type LightingDocument, type LightingTrack, type Ma2ExecutorPreview, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { LightingTempoMap } from './lighting-edit';
-import { parseP1TimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
+import { programTimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
 
 export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePreview, initialDocument?: LightingDocument): LinkCommand {
   const input = ma2TimecodePreviewSchema.parse(value);
@@ -11,10 +11,9 @@ export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePrevi
     const next = structuredClone(project);
     const item = next.rundown.find((entry) => entry.id === itemId);
     if (!item) throw new Error('接收 MA2 数据的节目不存在');
-    const originMs = item.p1Media ? parseP1TimeOrigin(item.p1Media.midiStartTime) : item.playback?.mtcOffsetMs ?? input.timeOriginMs ?? 0;
+    const originMs = programTimeOrigin(item, input.timeOriginMs ?? 0);
     if (input.timing?.absoluteEventTimesMs.some(time => time < originMs - 1e-6 || item.referenceAudio && time >= originMs + item.referenceAudio.durationMs)) throw new Error('原生事件超出歌曲原始时间范围，请核对配对；未丢弃事件或改写起点');
     const preview = withMa2TimeOrigin(input, originMs);
-    if (item.playback && item.playback.mtcOffsetMs !== originMs) throw new Error('歌曲播放时间码与 P1 原始起点不一致，请先核对播放设置');
     if (originMs > 0) item.playback ??= { volume: item.p1Media?.volume ?? 100, endAction: 'stop', startMs: 0, endMs: 0, mtcOffsetMs: originMs, shortcut: item.p1Media?.shortcut ?? '' };
     const current = item.lighting ?? structuredClone(initial ?? createLightingDocument());
     if (input.unconverted.length && current.outputMode !== 'timecode' && current.tracks.length) throw new Error('含原生保留事件的时间线需要时间码输出；请先核对当前歌曲的直接输出编排');
@@ -116,7 +115,12 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
     ...entry, name: confirmed.name, readAt: confirmed.readAt, sourceXml: confirmed.sourceXml, pendingTracks: undefined,
     baselineTracks: structuredClone(confirmed.document.tracks), mappings: structuredClone(confirmed.mappings), trackMappings: structuredClone(confirmed.trackMappings), cueCatalog: [...new Map([...(entry.cueCatalog ?? []), ...(confirmed.cueCatalog ?? [])].map((sequence) => [sequence.sequence, structuredClone(sequence)])).values()]
   } : entry) });
-  return { id: crypto.randomUUID(), label: '应用 MA2 同步回读', execute(project) {
+  const confirmedBinding = lighting.ma2Bindings!.find(entry => entry.id === bindingId)!;
+  return { id: crypto.randomUUID(), label: '应用 MA2 同步回读', historyRebaseKey: `ma2:${itemId}:${bindingId}`, rebaseHistory: project => ({
+    ...project, rundown: project.rundown.map(item => item.id !== itemId || !item.lighting ? item : {
+      ...item, lighting: { ...item.lighting, ma2Bindings: item.lighting.ma2Bindings?.map(entry => entry.id === bindingId ? confirmedBinding : entry) }
+    })
+  }), execute(project) {
     const next = structuredClone(project);
     const item = next.rundown.find((entry) => entry.id === itemId);
     if (!item?.lighting || JSON.stringify(lightingDocumentSchema.parse(item.lighting)) !== JSON.stringify(expected)) throw new Error('同步期间节目灯光已修改，未覆盖本地内容，请重新读取比较');

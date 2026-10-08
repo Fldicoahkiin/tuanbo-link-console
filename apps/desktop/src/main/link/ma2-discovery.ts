@@ -3,6 +3,8 @@ import { createSocket } from 'node:dgram';
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 import type { Ma2Discovery, Ma2NetworkSettings } from '@tb/schema';
 import { executePowerShell } from './windows-integration-detector';
+import { readMa2NetworkAnnouncements } from './ma2-network-announcements';
+import { setMaxListeners } from 'node:events';
 
 type Address = { host: string; port: number };
 
@@ -43,6 +45,7 @@ export function discoveryTargets(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>
   const addresses = new Map<string, Address>();
   const ranges = new Set<string>(); const warnings: string[] = [];
   const adapters: string[] = [];
+  const subnets: { near: string[]; rest: string[] }[] = [];
   const add = (host: string, port = 30000): void => { addresses.set(`${host}:${port}`, { host, port }); };
   add('127.0.0.1');
   for (const profile of saved) add(profile.host, profile.port);
@@ -50,19 +53,37 @@ export function discoveryTargets(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>
     if (entry.family !== 'IPv4' || entry.internal) continue;
     adapters.push(`${name}：${entry.address} / ${entry.netmask}`);
     if (entry.address.startsWith('169.254.')) warnings.push(`${name} 使用自动分配地址 ${entry.address}，请核对是否与控台 IP 同网段。`);
-    const octets = entry.address.split('.').map(Number);
-    const mask = entry.netmask.split('.').map(Number);
-    // Large show networks are common. Never enumerate millions of addresses.
-    const prefix = octets.slice(0, 3).join('.');
-    const range = `${prefix}.0/24`;
+    const ipv4 = (text: string): number => text.split('.').reduce((value, part) => value * 256 + Number(part), 0);
+    const ip = ipv4(entry.address); const mask = ipv4(entry.netmask);
+    const size = 0x100000000 - mask;
+    // Respect /23-/22/etc. masks instead of silently truncating every LAN to /24.
+    // Huge class-A show networks use announcements/neighbors, never millions of probes.
+    const scanSize = size <= 4096 ? size : 256;
+    const start = size <= 4096 ? (ip & mask) >>> 0 : (ip & 0xffffff00) >>> 0;
+    const textIp = (value: number): string => [24, 16, 8, 0].map(shift => (value >>> shift) & 255).join('.');
+    const range = `${textIp(start)}/${32 - Math.log2(scanSize)}`;
     if (ranges.has(range)) continue;
     if (ranges.size >= 8) { warnings.push('网卡超过 8 个，部分网段未搜索；可手动填写控台 IP。'); break; }
     ranges.add(range);
-    if (mask.slice(0, 3).some((part) => part !== 255)) warnings.push(`${entry.address} 所在网络较大，本次仅搜索 ${range} 和已保存地址；其他地址请手动添加。`);
-    for (let last = 1; last < 255; last += 1) {
-      if ((last & (mask[3] ?? 255)) === ((octets[3] ?? 0) & (mask[3] ?? 255))) add(`${prefix}.${last}`);
+    const subnet = { near: [] as string[], rest: [] as string[] };
+    subnets.push(subnet);
+    if (size > 4096) warnings.push(`${entry.address} 所在网络较大，逐地址检查限定为 ${range}；其他地址通过 MA 网络监听、广播、邻居目录与已保存控台发现。`);
+    for (let offset = scanSize <= 2 ? 0 : 1; offset < scanSize - (scanSize <= 2 ? 0 : 1); offset += 1) {
+      const candidate = start + offset;
+      ((candidate >>> 8) === (ip >>> 8) ? subnet.near : subnet.rest).push(textIp(candidate));
     }
   }
+  // Preserve the old local-/24 coverage before expanding larger subnets. Round
+  // robin across interfaces so a Wi-Fi/VPN /20 cannot exhaust the deadline before
+  // the wired console network gets its first probe.
+  for (const phase of ['near', 'rest'] as const) {
+    const length = Math.max(0, ...subnets.map(subnet => subnet[phase].length));
+    for (let index = 0; index < length; index++) for (const subnet of subnets) {
+      const host = subnet[phase][index];
+      if (host && addresses.size < 8192) add(host);
+    }
+  }
+  if (addresses.size >= 8192) warnings.push('本次逐地址检查达到 8192 个上限；各网卡同段地址优先，其余范围未全部纳入。');
   if (!adapters.length) warnings.push('未检测到可用的外部 IPv4 网卡，目前只能检查本机及已保存地址。');
   return { addresses: [...addresses.values()], ranges: ['本机 127.0.0.1', ...adapters, ...ranges], warnings };
 }
@@ -95,26 +116,55 @@ export class Ma2DiscoveryService {
   async search(saved: Ma2NetworkSettings[]): Promise<Ma2Discovery> {
     if (this.controller) throw new Error('正在搜索控台，请等待或取消');
     const controller = new AbortController(); this.controller = controller;
+    // One multicast cancellation listener, up to 8 ArtPoll sockets and 24 TCP probes.
+    setMaxListeners(40, controller.signal);
+    let timedOut = false;
+    const deadline = setTimeout(() => { timedOut = true; controller.abort(); }, 45000);
     try {
       const interfaces = networkInterfaces();
       const plan = discoveryTargets(interfaces, saved); const hosts: Ma2Discovery['hosts'] = []; let cursor = 0;
-      const broadcast = await broadcastTargets(controller.signal, interfaces, plan.warnings);
-      const neighbors: Address[] = [];
-      if (process.platform === 'win32') {
+      const started = performance.now();
+      const announcements = readMa2NetworkAnnouncements(Object.values(interfaces).flatMap(entries => (entries ?? []).filter(entry => entry.family === 'IPv4' && !entry.internal).map(entry => entry.address)), controller.signal);
+      const broadcasts = broadcastTargets(controller.signal, interfaces, plan.warnings);
+      const readNeighbors = async (): Promise<Address[]> => {
+        const neighbors: Address[] = [];
+        if (process.platform !== 'win32' || controller.signal.aborted) return neighbors;
         try {
           const response = await executePowerShell("Get-NetNeighbor -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.State -in @('Reachable','Stale','Delay','Probe','Permanent') } | Select-Object -ExpandProperty IPAddress", 5000);
           for (const host of response.trim().split(/\s+/).slice(0, 256)) if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) && !host.endsWith('.255') && !host.startsWith('224.') && !host.startsWith('239.')) neighbors.push({ host, port: 30000 });
         } catch { plan.warnings.push('无法读取网卡邻居目录，本次仅使用网络广播及网段搜索。'); }
+        return neighbors;
+      };
+      const [observed, broadcast, neighbors] = await Promise.all([announcements, broadcasts, readNeighbors()]);
+      const preparedAt = performance.now();
+      plan.warnings.push(...observed.warnings);
+      const prioritized = [...saved.map(({ host, port }) => ({ host, port })), ...observed.hosts.map(host => ({ host, port: 30000 })), ...broadcast, ...neighbors, ...plan.addresses];
+      plan.addresses = [...new Map(prioritized.map(address => [`${address.host}:${address.port}`, address])).values()];
+      const coverage = new Map<string, { planned: number; started: number; completed: number; identified: number }>();
+      const block = (host: string): string => `${host.split('.').slice(0, 3).join('.')}.0/24`;
+      for (const address of plan.addresses) {
+        const key = block(address.host);
+        const count = coverage.get(key) ?? { planned: 0, started: 0, completed: 0, identified: 0 };
+        count.planned += 1; coverage.set(key, count);
       }
-      plan.addresses.unshift(...[...broadcast, ...neighbors].filter((address, index, all) => all.findIndex(value => value.host === address.host) === index && !plan.addresses.some(existing => existing.host === address.host && existing.port === address.port)));
       await Promise.all(Array.from({ length: 24 }, async () => {
         while (!controller.signal.aborted && cursor < plan.addresses.length) {
           const address = plan.addresses[cursor++]; if (!address) break;
-          const result = await probeMa2(address, controller.signal); if (result) hosts.push(result);
+          const count = coverage.get(block(address.host))!;
+          count.started += 1;
+          const result = await probeMa2(address, controller.signal);
+          if (!controller.signal.aborted) count.completed += 1;
+          if (result) { hosts.push(result); if (result.identity === 'ma2') count.identified += 1; }
         }
       }));
-      if (controller.signal.aborted) plan.warnings.push('搜索已取消，显示已发现的地址。');
+      if (controller.signal.aborted) plan.warnings.push(timedOut ? '搜索达到 45 秒上限，显示已发现地址；未完成的范围已保留在诊断记录中。' : '搜索已取消，显示已发现的地址。');
+      if (cursor < plan.addresses.length) plan.warnings.push(`尚有 ${plan.addresses.length - cursor} 个地址未检查，本次结果不代表网络中没有控台。`);
+      plan.ranges.push(`本次检查 ${cursor} 个远程地址，MA 网络监听收到 ${observed.packets} 个数据包、${observed.hosts.length} 个来源；耗时 ${Math.round(performance.now() - started)} 毫秒`);
+      plan.ranges.push(`发现准备 ${Math.round(preparedAt - started)} 毫秒；远程端口检查 ${Math.round(performance.now() - preparedAt)} 毫秒；已保存目标 ${saved.length} 个`);
+      for (const [range, count] of coverage) plan.ranges.push(`检查覆盖 ${range}：计划 ${count.planned}，发起 ${count.started}，完成 ${count.completed}，识别 MA2 ${count.identified}`);
+      const inaccessible = observed.hosts.filter(host => !hosts.some(result => result.host === host));
+      if (inaccessible.length) plan.warnings.push(`MA 网络端口收到以下地址的数据，但远程登录端口未响应：${inaccessible.join('、')}。网络可见与可读取 Cue 是两个独立检查。`);
       return { hosts: hosts.sort((a, b) => a.host.localeCompare(b.host, undefined, { numeric: true })), ranges: plan.ranges, warnings: plan.warnings };
-    } finally { this.controller = null; }
+    } finally { clearTimeout(deadline); this.controller = null; }
   }
 }

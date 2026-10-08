@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const nativeMidiCheckSchema = z.object({ version: z.literal(1), portName: z.string().min(1).max(256).refine(value => !value.includes('\0')) }).strict();
+export type NativeMidiCheck = z.infer<typeof nativeMidiCheckSchema>;
+
 const generation = z.number().int().min(1).max(0xffffffff);
 const timeMs = z.number().finite().min(0).max(86_399_999);
 const audioDeviceIdSchema = z.string().min(1).max(1023).refine(value => !value.includes('\0'));

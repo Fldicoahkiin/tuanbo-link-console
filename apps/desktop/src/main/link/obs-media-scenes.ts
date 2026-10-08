@@ -18,10 +18,8 @@ export class ObsMediaScenes {
   private readonly compositions = new Map<string, string>();
   private readonly compositionItems = new Map<string, Map<string, { id: number; enabled: boolean }>>();
   private readonly primed = new Map<string, 'preparing' | 'ready'>();
-  private programScene: string | null = null;
   constructor(private readonly client: OBSWebSocket, private readonly request: Request, private readonly run: ObsOperationRunner) {}
-  clear(): void { this.prepared.clear(); this.active.clear(); this.compositions.clear(); this.compositionItems.clear(); this.primed.clear(); this.programScene = null; }
-  observeProgramScene(sceneName: string): void { this.programScene = sceneName; }
+  clear(): void { this.prepared.clear(); this.active.clear(); this.compositions.clear(); this.compositionItems.clear(); this.primed.clear(); }
 
   /** A second decoder inside the same owned scene. The logical scene remains
    * stable for composition, while only the visible input changes at a boundary. */
@@ -61,7 +59,7 @@ export class ObsMediaScenes {
   async copyPresentation(from: string, to: string): Promise<void> {
     return this.run(async () => {
       const source = this.prepared.get(from), target = this.prepared.get(to);
-      if (!source || !target || source.sceneName !== target.sceneName || source.path !== target.path || this.active.has(to)) throw new Error('预备画面必须来自同一素材的非活动解码器');
+      if (!source || !target || source.path !== target.path || this.active.has(to)) throw new Error('预备画面必须来自同一素材的非活动解码器');
       const transform = await this.request(() => this.client.call('GetSceneItemTransform', { sceneName: source.sceneName, sceneItemId: source.sceneItemId }), '读取预备画面变换');
       await this.request(() => this.client.call('SetSceneItemTransform', { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemTransform: transform.sceneItemTransform }), '复制预备画面变换');
       const filters = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: from }), '读取预备画面滤镜')).filters);
@@ -82,9 +80,13 @@ export class ObsMediaScenes {
     });
   }
 
-  async prepare(projectId: string, asset: LinkMediaAsset, path: string, playbackPath = path, cachePaths: readonly string[] = []): Promise<void> {
+  async prepare(projectId: string, asset: LinkMediaAsset, path: string, playbackPath = path, cachePaths: readonly string[] = [], names = materialSceneNames(projectId, asset)): Promise<void> {
+    const baseNames = materialSceneNames(projectId, asset);
+    if (names.sourceName !== baseNames.sourceName && !this.prepared.has(baseNames.sourceName)) await this.prepare(projectId, asset, path, playbackPath, cachePaths);
     return this.run(async () => {
-      const { sceneName, sourceName } = materialSceneNames(projectId, asset);
+      const { sceneName, sourceName } = names;
+      const base = materialSceneNames(projectId, asset);
+      if (sceneName !== base.sceneName && !sceneName.startsWith(`${base.sceneName}·轨道·`) || sourceName !== `${sceneName}·来源`) throw new Error('素材场景身份无效');
       const kind = asset.kind === 'image' ? 'image_source' : 'ffmpeg_source';
       const scenes = await this.request(() => this.client.call('GetSceneList'), 'GetSceneList');
       const exists = scenes.scenes.some((scene) => scene.sceneName === sceneName);
@@ -139,6 +141,7 @@ export class ObsMediaScenes {
       this.prepared.set(sourceName, { path, sceneName, sceneItemId, kind: asset.kind });
       this.active.delete(sourceName);
       this.primed.delete(sourceName);
+      if (!exists && sourceName !== baseNames.sourceName && asset.kind !== 'audio') await this.copyPresentation(baseNames.sourceName, sourceName);
     });
   }
 
@@ -284,10 +287,10 @@ export class ObsMediaScenes {
     return this.run(async () => {
       const requests = this.muteOtherSources(sceneName);
       if (!requests.length) {
-        if (this.programScene !== sceneName) await this.request(() => this.client.call('SetCurrentProgramScene', { sceneName }), 'SetCurrentProgramScene');
+        await this.request(() => this.client.call('SetCurrentProgramScene', { sceneName }), 'SetCurrentProgramScene');
         return;
       }
-      if (this.programScene !== sceneName) requests.unshift({ requestType: 'SetCurrentProgramScene', requestData: { sceneName } });
+      requests.unshift({ requestType: 'SetCurrentProgramScene', requestData: { sceneName } });
       if (requests.length) await this.batch(requests);
     });
   }
@@ -350,9 +353,9 @@ export class ObsMediaScenes {
         return source && source.kind !== 'image' && !visible.has(source.sceneName)
           ? [{ requestType: 'SetInputMute' as const, requestData: { inputName, inputMuted: true } }] : [];
       });
-      // Composition edits already affect the active owned scene. Only an OBS
-      // program-scene event proves it is selected; a sent command is not enough.
-      if (this.programScene !== sceneName) output.push({ requestType: 'SetCurrentProgramScene', requestData: { sceneName } });
+      // Events can arrive after a later external scene change. An old observed
+      // scene cannot suppress this explicit timeline action (including t=0).
+      output.push({ requestType: 'SetCurrentProgramScene', requestData: { sceneName } });
       if (output.length) await this.batch(output);
     });
   }

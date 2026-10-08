@@ -239,7 +239,7 @@ export class NativePlayerService {
   private receive(clock: Clock): void {
     if (!this.state || clock.generation !== this.nativeGeneration || this.state.status === 'preparing' || this.state.status === 'error') return;
     const audioError = clock.audioError ? `Windows 音频输出失败：${clock.audioError}` : this.state.audioError;
-    const mtcError = clock.midiError ? `Windows MIDI 输出失败：${clock.midiError}` : this.state.mtcError;
+    const mtcError = clock.midiError ? `Windows MIDI 输出失败${this.state.mtcPortName ? `（${this.state.mtcPortName}）` : ''}：${clock.midiError === 4 ? '端口资源已被占用（错误码 4）；请完全退出 P1 等使用该接口的软件后手动重新播放' : `错误码 ${clock.midiError}，请检查接口和驱动后手动重新播放`}` : this.state.mtcError;
     if (audioError && audioError !== this.state.audioError) this.options.error(audioError);
     if (mtcError && mtcError !== this.state.mtcError) this.options.error(mtcError);
     this.patch({ status: clock.state === 'empty' ? 'stopped' : clock.state, positionMs: clock.positionMs,

@@ -74,6 +74,14 @@ export class SecureProfileStore {
     return typeof secrets.credentials[credentialId] === 'string';
   }
 
+  /** No saved password means an explicit unauthenticated OBS handshake.
+   * A saved but unreadable password must still fail; never discard it or retry empty.
+   */
+  async loadObsPassword(credentialId: string): Promise<string> {
+    if (!await this.hasCredential(credentialId)) return '';
+    return this.loadCredential(credentialId);
+  }
+
   async deleteCredential(credentialId: string): Promise<void> {
     assertCredentialId(credentialId);
     await this.writeCredentials(async () => {

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
-import { createEmptyLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, createLightingUserLibrary } from '@tb/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LinkProjectService } from './link-project-service';
 
@@ -15,6 +15,24 @@ afterEach(async () => {
 });
 
 describe('LinkProjectService', () => {
+  it('同一工程读取等待在途原子保存，不与 Windows 替换同时打开目标文件', async () => {
+    const directory=await createTestDirectory();const path=join(directory,'queued-read.tblink');cleanupFiles.push(path);
+    const original=createEmptyLinkProject('旧');await writeFile(path,JSON.stringify(original));
+    let release:()=>void=()=>{throw new Error('测试写入尚未开始');};const gate=new Promise<void>(resolve=>{release=resolve;});
+    const service=new LinkProjectService(undefined,async (target,content)=>{await gate;await writeFile(target,content);});
+    const saving=service.save(path,{...original,name:'新'});let readFinished=false;
+    const reading=service.open(path).then(value=>{readFinished=true;return value;});
+    await new Promise(resolve=>setTimeout(resolve,20));expect(readFinished).toBe(false);
+    release();await saving;expect((await reading).name).toBe('新');
+  });
+  it('首次升级分类格式先保留原工程备份；后续保存不覆盖旧备份', async () => {
+    const directory=await createTestDirectory(); const path=join(directory,'music.tblink');const backup=`${path}.before-lighting-library.bak`;cleanupFiles.push(path,backup,`${path}.before-ma2-workflow.bak`);
+    const original=createEmptyLinkProject('旧工程');await writeFile(path,JSON.stringify(original));
+    const next={...original,schemaVersion:2 as const,ma2MaterialLibrary:{version:2 as const,source:'local',userLibrary:createLightingUserLibrary()}};
+    const service=new LinkProjectService();await service.save(path,next);
+    expect(JSON.parse(await readFile(backup,'utf8'))).toEqual(original);
+    await service.save(path,{...next,name:'新名字'});expect(JSON.parse(await readFile(backup,'utf8'))).toEqual(original);
+  });
   it('拒绝复用被篡改的同名素材，避免把损坏文件当作原画质素材', async () => {
     const directory = await createTestDirectory();
     cleanupDirectories.push(join(directory, 'assets'), join(directory, 'assets', 'reference-media'));

@@ -51,7 +51,7 @@ const NAVIGATION: NavigationItem[] = [
 
 export function LinkApp(): JSX.Element {
   useAppearanceTheme();
-  const [connectHost, setConnectHost] = useState<HTMLDivElement | null>(null); const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null);
+  const [lightingActionsHost, setLightingActionsHost] = useState<HTMLDivElement | null>(null); const [connectHost, setConnectHost] = useState<HTMLDivElement | null>(null); const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null);
   const [connectionStatusHost, setConnectionStatusHost] = useState<HTMLDivElement | null>(null);
   const [editorSidebarHost, setEditorSidebarHost] = useState<HTMLDivElement | null>(null);
   const [playlistHost, setPlaylistHost] = useState<HTMLDivElement | null>(null);
@@ -207,12 +207,12 @@ export function LinkApp(): JSX.Element {
     onUndo: () => useDocumentStore.getState().undo(),
     onRedo: () => useDocumentStore.getState().redo(), onSave: () => void saveProject()
   };
-  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} /></div>{page === 'beauty' && !connectionsOpen ? <BeautyWorkspace connected={obs.status === 'connected'} /> : null}{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
+  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} /></div>{page === 'beauty' && !connectionsOpen ? <BeautyWorkspace connected={obs.status === 'connected'} /> : null}{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace actionsHost={lightingActionsHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
 
   return <RendererErrorBoundary>
     <div className="app-shell" data-workspace={connectionsOpen ? 'settings' : page}>
       <a className="skip-link" href="#workspace-content">跳到工作区</a>
-      <AppTopbar details={<ToolbarConnections player={internalPlayer} statusHost={connectionStatusHost} onSettings={(category, focus) => { setSettingsCategory(category); setSettingsLocation({ category, ...(focus ? { focus } : {}) }); openSettings(); }} />} statusHostRef={setConnectionStatusHost} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
+      <AppTopbar actionsHostRef={setLightingActionsHost} details={<ToolbarConnections player={internalPlayer} statusHost={connectionStatusHost} onSettings={(category, focus) => { setSettingsCategory(category); setSettingsLocation({ category, ...(focus ? { focus } : {}) }); openSettings(); }} />} statusHostRef={setConnectionStatusHost} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
       <AppSidebar editorHostRef={setEditorSidebarHost} playlistHostRef={setPlaylistHost} settingsCategory={settingsCategory} onSettingsCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }}
         page={page} internal={project?.playbackSource === 'internal'} editingLocked={editingLocked}
         obsState={obs.status} p1State={processes.p1.status} runtimeState={runtimeState} settingsOpen={connectionsOpen} onPageChange={(next) => { startTransition(() => { closeSettings(); setPage(next); }); }} onSettings={openSettings}
@@ -275,7 +275,8 @@ function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange,
   </aside>;
 }
 
-function AppTopbar({ details, statusHostRef, connectHostRef, toolbarHostRef, onWindowAction }: {
+function AppTopbar({ actionsHostRef, details, statusHostRef, connectHostRef, toolbarHostRef, onWindowAction }: {
+  actionsHostRef: (element: HTMLDivElement | null) => void;
   details: ReactNode;
   statusHostRef: (element: HTMLDivElement | null) => void;
   connectHostRef: (element: HTMLDivElement | null) => void;
@@ -286,6 +287,7 @@ function AppTopbar({ details, statusHostRef, connectHostRef, toolbarHostRef, onW
     <div className="persistent-project-toolbar" ref={toolbarHostRef} />
     <div className="topbar-connection-status" ref={statusHostRef} />
     <div className="topbar-drag-region" title="拖动窗口，双击最大化或还原" aria-hidden="true" />
+    <div className="lighting-topbar-actions" ref={actionsHostRef} />
     <div className="topbar-details">{details}</div>
     <div className="topbar-connect" ref={connectHostRef} />
     <WorkspaceToolbar onWindowAction={onWindowAction} />

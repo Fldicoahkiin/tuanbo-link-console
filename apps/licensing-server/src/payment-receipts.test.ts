@@ -1,3 +1,4 @@
+import { listenHttpTestServer } from './http-test-server';
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -63,7 +64,7 @@ it.each(['alipay', 'wechat'] as const)('%s 发码事务异常和进程重启不�
     expect(service.paymentExceptions(0).items).toHaveLength(1);
     const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const server = createLicensingServer(service, 'a'.repeat(48));
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    await listenHttpTestServer(server);
     try {
       const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
       const response = await fetch(`http://127.0.0.1:${address.port}/v1/orders/${order.id}/reconcile`, {
@@ -102,7 +103,7 @@ it('HTTP 通知交付失败仍持久化收款，客户不再请求付款，异�
   const provider = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const notifications = new AlipayNotifications(identity.appId, identity.sellerId, provider.publicKey.export({ type: 'spki', format: 'pem' }).toString());
   const admin = 'a'.repeat(48); const server = createLicensingServer(service, admin, notifications);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
     const base = `http://127.0.0.1:${address.port}`;

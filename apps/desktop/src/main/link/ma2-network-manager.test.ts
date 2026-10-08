@@ -15,7 +15,9 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
     const cuePrefix = /TBLINK_CUES_[a-f0-9]{32}:/.exec(line)?.[0];
     if (cuePrefix) {
       const row = `12;${meiNanCues.map((cue, index) => `${index + 1},${cue},${Buffer.from(`Cue ${cue}`).toString('hex')}`).join(';')}`;
-      const response = match(`${cuePrefix}${row}\r\n`);
+      const chunks: string[] = [];
+      for (let index = 0; index < row.length; index += 700) chunks.push(`${cuePrefix}${index + 1}:${row.slice(index, index + 700)}`);
+      const response = match(`${chunks.join('\r\n')}\r\n${cuePrefix}END:${row.length}\r\n`);
       if (!response) throw new Error('No cue response'); return response;
     }
     const token = /TBLINK_(?:CAP|PLAY)_[a-f0-9]{32}/.exec(line)?.[0];
@@ -35,6 +37,8 @@ it('100 条混合时间线共享序列只取一次元数据；最终只复核目
   const request = vi.spyOn(manager.get(settings).bridge, 'request').mockImplementation((operation, target) => Promise.resolve(operation === 'LIST' ? JSON.stringify(directory) : operation === 'LISTSEQ' ? JSON.stringify(sequenceDirectory) : meiNanXml.replace('<Timecode index="1"', `<Timecode index="${target - 1}"`)));
   const catalog = await manager.readCatalog(settings);
   expect(catalog.entries).toHaveLength(100);
+  expect(catalog.entries[0]?.error).toBeNull();
+  expect(catalog.entries[0]?.preview?.unconverted).toHaveLength(13);
   expect(catalog.entries.every(entry => !entry.error && entry.preview?.unconverted.length === 13)).toBe(true);
   // Each XML is compared immediately around metadata resolution; no third full pass.
   expect(request.mock.calls.filter(call => call[0] === 'READ')).toHaveLength(200);
@@ -134,6 +138,30 @@ it('播放中拒绝更换或连接控台，保留原配置', async () => {
   await expect(manager.save({ settings: { ...settings, host: '127.0.0.2' } })).rejects.toThrow('播放期间');
   await expect(manager.connect()).rejects.toThrow('播放期间');
   expect(manager.status().settings?.host).toBe(settings.host);
+});
+it('重复连接和保存相同目标复用会话，不制造旧连接试听记录',async()=>{
+  const manager=new Ma2NetworkManager(process.cwd(),secretStore());
+  await manager.save({settings});await manager.connect();
+  const generation=manager.connectionGeneration;
+  const guard=vi.fn(()=>Promise.reject(new Error('不应停止试听')));
+  manager.setBeforeConnectionChange(guard);
+  await manager.save({settings:{...settings,autoConnect:false}});await manager.connect();
+  expect(memory.connects).toBe(1);expect(manager.connectionGeneration).toBe(generation);
+  expect(manager.status().state).toBe('connected');expect(guard).not.toHaveBeenCalled();
+});
+it('更换目标或主动断开须先成功停止；失败不保存新设置，不断开原连接',async()=>{
+  const manager=new Ma2NetworkManager(process.cwd(),secretStore());
+  await manager.save({settings});await manager.connect();
+  const originalFile=memory.file;const generation=manager.connectionGeneration;
+  const release=vi.fn();const guard=vi.fn<()=>Promise<()=>void>>(()=>Promise.reject(new Error('停止失败')));
+  manager.setBeforeConnectionChange(guard);
+  await expect(manager.save({settings:{...settings,host:'127.0.0.2'}})).rejects.toThrow('停止失败');
+  await expect(manager.disconnectByOperator()).rejects.toThrow('停止失败');
+  expect(memory.file).toBe(originalFile);expect(manager.connectionGeneration).toBe(generation);
+  expect(manager.status().state).toBe('connected');
+  guard.mockImplementation(()=>Promise.resolve(release));
+  await manager.disconnectByOperator();expect(manager.status().state).toBe('disconnected');
+  expect(release).toHaveBeenCalledOnce();
 });
 
 it.each(['2.9.1', '3.0.0.5', '3.1.2.5', '3.3.4.3', '3.9.60.74'])('版本 %s 不使用白名单冒充兼容，按返回接口检测（模拟）', async (version) => {

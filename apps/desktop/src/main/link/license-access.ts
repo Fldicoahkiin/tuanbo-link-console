@@ -2,6 +2,7 @@ import { linkActionSchema, linkInternalAudioCaptureSchema, linkManagedMediaExecu
 import { nativePlayerControlSchema } from '@tb/schema';
 
 const publicCalls = new Set([
+  'link:ma2-audition-control', 'link:ma2-play-cancel',
   'link:native-obs-status', 'link:native-obs-stop', 'link:native-obs-preload-cancel',
   'link:native-player-status',
   'link:beauty-stop', 'link:beauty-status',

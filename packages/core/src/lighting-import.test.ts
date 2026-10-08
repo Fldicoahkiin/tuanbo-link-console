@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createLightingDocument, lightingDocumentSchema, type LightingTrack } from '@tb/schema';
+import { createLightingDocument, createLightingMusic, lightingDocumentSchema, type LightingTrack } from '@tb/schema';
 import { appendLightingDocument } from './lighting-import';
 
 function sourceDocument() {
@@ -13,6 +13,20 @@ function sourceDocument() {
 }
 
 describe('灯光工程追加导入', () => {
+  it('导入新版音乐标记、段落及 Cue 锚点，保留秒数并使用目标节拍依据', () => {
+    const source = sourceDocument(); source.version = 2;
+    source.music = { ...createLightingMusic(), firstBeatMs: 1000, sections: [{ id:'section', name:'副歌', startMs:1000, endMs:2000, color:'#abcdef', notes:'保留' }] };
+    source.markers[0] = { ...source.markers[0]!, kind:'hit', notes:'强调', color:'#abcdef' };
+    source.tracks[0]!.clips[0]!.events[0]!.beatAnchor = 500 / 468.75;
+    source.tracks[0]!.clips[0]!.events[0]!.librarySource = { id:'template', revision:1 };
+    const current = sourceDocument(); delete current.ma2Bindings; current.tempos[0]!.bpm = 60;
+    const result = appendLightingDocument(current, source);
+    expect(result.version).toBe(2);
+    expect(result.music?.sections[0]).toMatchObject({ name:'副歌', startMs:1000, endMs:2000, notes:'保留' });
+    expect(result.markers[1]).toMatchObject({ kind:'hit', notes:'强调' });
+    expect(result.tracks[1]!.clips[0]!.events[0]).toMatchObject({ at:500, beatAnchor:1.5, librarySource:{ id:result.templates[1]!.id, revision:1 } });
+    expect(() => appendLightingDocument({ ...current, version:2, music:source.music }, source)).toThrow('重叠');
+  });
   it('追加导入保持组合与埋步关联，不指向原工程的同名事件', () => {
     const source = sourceDocument(); const current = sourceDocument(); delete current.ma2Bindings;
     const clip = source.tracks[0]!.clips[0]!;
@@ -59,6 +73,7 @@ describe('灯光工程追加导入', () => {
   });
   it('导入模板按源节拍图转换完整音符，不依赖目标 BPM', () => {
     const source = sourceDocument(); const template = source.templates[0]!.track.clips[0]!;
+    source.tempos[0]!.bpm = 120;
     template.timeLock = 'beat'; template.start = 2; template.duration = 8;
     template.events = [{ id: 'note', kind: 'note', at: 1, duration: 5, note: 60, velocity: 100 }];
     source.tempos.push({ beat: 4, bpm: 60, numerator: 4, denominator: 4 });

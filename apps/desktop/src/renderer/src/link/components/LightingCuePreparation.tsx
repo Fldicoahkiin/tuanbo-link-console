@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { LightingDocument } from '@tb/schema';
 import type { CueIngredient } from './LightingCueComposer';
 import { PropertyNumberInput } from './PropertyNumberInput';
@@ -26,15 +26,33 @@ export function LightingCuePreparation({ document, ingredients, onChange, cueTim
           if (stamp?.mode === 'fixed' && stamp.sequence === entry.sequence) choices.set(String(Number(stamp.cue)), template.name);
         }
         choices.delete(String(Number(entry.cue)));
-        return <div className="cue-preparation-row" key={index}>
-          <label className="cue-preparation-toggle"><input type="checkbox" aria-label={`素材 ${index + 1} 启用埋步`} checked={Boolean(entry.preparation)} disabled={disabled} onChange={event => update(index, event.target.checked ? { cue: '', leadMs: 1500 } : undefined)} /><span>{entry.name}<small>序列 {entry.sequence} · 正式 Cue {entry.cue}</small></span></label>
-          {entry.preparation ? <>
-            <label>准备 Cue<input aria-label={`素材 ${index + 1} 准备 Cue`} placeholder="选择或输入编号" list={`${id}-${index}`} value={entry.preparation.cue} disabled={disabled} onChange={event => update(index, { cue: event.target.value, leadMs: entry.preparation!.leadMs })} /><datalist id={`${id}-${index}`}>{[...choices].map(([cue, name]) => <option value={cue} key={cue}>{name || `Cue ${cue}`}</option>)}</datalist></label>
-            <label>提前（秒）<PropertyNumberInput label={`素材 ${index + 1} 埋步提前秒数`} value={entry.preparation.leadMs / 1000} min={0.1} max={10} step={0.1} disabled={disabled} onCommit={value => update(index, { cue: entry.preparation!.cue, leadMs: Math.round(value * 1000) })} /></label>
-          </> : null}
-        </div>;
+        return <PreparationRow key={index} entry={entry} index={index} id={id} choices={choices} cueTime={cueTime} disabled={disabled} onChange={preparation => update(index, preparation)} />;
       })}
       {enabled.length ? <output className={cueTime < leadMs ? 'cue-preparation-invalid' : ''}>{cueTime < leadMs ? '准备时间早于节目开始，请缩短提前时间。' : `${((cueTime - leadMs) / 1000).toFixed(3)} 秒开始准备 → ${(cueTime / 1000).toFixed(3)} 秒正式亮灯`}</output> : null}
     </div>
   </details>;
+}
+
+
+function PreparationRow({ entry, index, id, choices, cueTime, disabled, onChange }: {
+  entry: CueIngredient; index: number; id: string; choices: Map<string, string>; cueTime: number; disabled: boolean;
+  onChange: (preparation: CueIngredient['preparation']) => void;
+}): JSX.Element {
+  const [draft, setDraft] = useState(entry.preparation);
+  useEffect(() => { setDraft(entry.preparation); }, [entry.preparation]);
+  const issue = !draft ? '' : !/^\d{1,4}(?:\.\d{1,3})?$/.test(draft.cue) || Number(draft.cue) <= 0 || Number(draft.cue) === Number(entry.cue)
+    ? '填写与正式 Cue 不同的准备编号后生效。' : draft.leadMs > cueTime ? '准备时间早于节目开始，请缩短提前时间。' : '';
+  const commit = (value: CueIngredient['preparation']): void => {
+    setDraft(value);
+    if (value && (!/^\d{1,4}(?:\.\d{1,3})?$/.test(value.cue) || Number(value.cue) <= 0 || Number(value.cue) === Number(entry.cue) || value.leadMs > cueTime)) return;
+    onChange(value);
+  };
+  return <div className="cue-preparation-row">
+    <label className="cue-preparation-toggle"><input type="checkbox" aria-label={`素材 ${index + 1} 启用埋步`} checked={Boolean(draft)} disabled={disabled} onChange={event => commit(event.target.checked ? { cue: '', leadMs: 1500 } : undefined)} /><span>{entry.name}<small>序列 {entry.sequence} · 正式 Cue {entry.cue}</small></span></label>
+    {draft ? <>
+      <label>准备 Cue<input aria-label={`素材 ${index + 1} 准备 Cue`} placeholder="选择或输入编号" list={`${id}-${index}`} value={draft.cue} disabled={disabled} onChange={event => setDraft({ ...draft, cue: event.target.value })} onBlur={() => commit(draft)} /><datalist id={`${id}-${index}`}>{[...choices].map(([cue, name]) => <option value={cue} key={cue}>{name || `Cue ${cue}`}</option>)}</datalist></label>
+      <label>提前（秒）<PropertyNumberInput label={`素材 ${index + 1} 埋步提前秒数`} value={draft.leadMs / 1000} min={0.1} max={10} step={0.1} disabled={disabled} onCommit={value => commit({ ...draft, leadMs: Math.round(value * 1000) })} /></label>
+      {issue ? <small role="status">{issue}</small> : null}
+    </> : null}
+  </div>;
 }

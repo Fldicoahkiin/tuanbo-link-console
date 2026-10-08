@@ -48,7 +48,7 @@ export function ObsLiveSelection(props: { scene: ObsLiveScene; selected: number 
     const selected = props.selected === item.sceneItemId;
     return <div key={`${props.scene.sceneName}:${item.sceneItemId}`} className={`obs-live-source ${selected ? 'is-selected' : ''}`} title={`${item.sourceName}${item.sceneItemLocked ? ' · 已锁定' : ''}`}
       style={{ left: `${center.x / props.scene.width * 100}%`, top: `${center.y / props.scene.height * 100}%`, width: `${Math.abs(box.width) / props.scene.width * 100}%`, height: `${Math.abs(box.height) / props.scene.height * 100}%`, transform: `translate(-50%,-50%) rotate(${t.rotation}deg)`, zIndex: item.sceneItemIndex + 1 }}
-      onPointerDown={(event) => begin(event, item, null)} onPointerMove={move} onPointerUp={(event) => end(event, false)} onPointerCancel={(event) => end(event, true)}>
+      onPointerDown={(event) => begin(event, item, null)} onPointerMove={move} onPointerUp={(event) => end(event, false)} onPointerCancel={(event) => end(event, true)} onLostPointerCapture={(event) => end(event, true)}>
       {selected && !item.sceneItemLocked ? handles.map((handle) => <i key={handle} className={`stage-media-handle ${handle}`} onPointerDown={(event) => begin(event, item, { x: handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0, y: handle.includes('s') ? 1 : handle.includes('n') ? -1 : 0 })} />) : null}
     </div>;
   })}</div>;

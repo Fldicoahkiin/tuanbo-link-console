@@ -14,6 +14,7 @@ import { useConnectionCheckStore, type ConnectionCheck } from '../stores/connect
 import { midiConnectionTargets } from '../view-models/connection-targets';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 import { assertAudioOutputAvailable } from '../view-models/audio-output-route';
+import { obsConnectionStatus, midiConnectionStatus, lightingConnectionDestination } from '../view-models/connection-status';
 
 type Row = { id: string; name: string; value: string; state: 'ready' | 'error' | 'checking' | 'idle' | 'skipped'; detail: string; category: SettingsCategory };
 const statusLabel = { checking: '连接中', ready: '已就绪', error: '待处理', skipped: '未启用' };
@@ -30,6 +31,8 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   const profile = useIntegrationStore(state => state.profile);
   const audioRoute = profile?.internalPlayer;
   const ports = useIntegrationStore(state => state.midiPorts);
+  const nativeDevices = useIntegrationStore(state => state.nativeDevices);
+  const nativeDeviceError = useIntegrationStore(state => state.nativeDeviceError);
   const checks = useConnectionCheckStore(state => state.checks);
   const running = useConnectionCheckStore(state => state.running);
   const lastMtcAt = useRuntimeStore(state => state.lastMtcAt);
@@ -75,7 +78,7 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
     return () => { alive = false; };
   }, [profile?.loopMidi?.autoStart]);
   const rows: Row[] = [
-    checked({ id: 'obs', name: 'OBS 控制', value: obs.status === 'connected' ? '已连接' : obs.status === 'connecting' || obs.status === 'reconnecting' ? '连接中' : '未连接', state: obs.status === 'connected' ? 'ready' : obs.error ? 'error' : 'idle', detail: obs.error ?? '连接 OBS 场景与动作控制', category: 'obs' }, checks.obs),
+    { id: 'obs', name: 'OBS 控制', ...obsConnectionStatus(obs), category: 'obs' },
     checked({ id: 'preview', name: 'OBS 预览', value: obs.status === 'connected' ? '未检查' : '待 OBS 连接', state: 'idle', detail: '一键连接会检查内置组件并接收真实预览画面', category: 'obs' }, obs.status === 'connected' ? checks.preview : undefined),
     checked({ id: 'audio', name: '音频输出', value: '检测中', state: 'idle', detail: '检查选择的声音输出设备', category: 'audio' }, checks.audio),
     checked({ id: 'midi', name: '系统 MIDI', value: '检测中', state: 'idle', detail: '检查系统 MIDI 服务与驱动', category: 'audio' }, checks.midi),
@@ -84,30 +87,25 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
     { id: 'ma2', name: 'MA2 网络', value: method !== 'network' ? '未启用' : network?.state === 'connected' ? '已连接' : checks.ma2?.state === 'checking' ? '连接中' : '未连接', state: method !== 'network' ? 'skipped' : network?.state === 'connected' ? 'ready' : checks.ma2?.state === 'checking' ? 'checking' : networkError || network?.error || checks.ma2?.state === 'error' ? 'error' : 'idle', detail: method !== 'network' ? '当前使用 ' + (method === 'local' ? '本机 onPC' : 'MIDI') : networkError ?? network?.error ?? checks.ma2?.detail ?? '一键连接会连接已保存控台，未保存时识别局域网中的唯一控台', category: 'ma2' },
     checked({ id: 'bridge', name: 'MA2 工程通信', value: method === 'midi' ? '未启用' : method === 'local' && local.status === 'ready' ? '已响应' : method === 'network' && network?.state !== 'connected' ? '待网络连接' : '未检查', state: method === 'midi' ? 'skipped' : method === 'local' && local.status === 'ready' ? 'ready' : 'idle', detail: method === 'midi' ? 'MIDI 模式不提供工程读写连接' : local.error ?? '单独验证控台读写通信，网络登录成功不代表此项已就绪', category: 'ma2' }, method === 'midi' || method === 'network' && network?.state !== 'connected' ? undefined : checks.bridge)
   ];
-  for (const [id, name] of [['discovery', '程序识别'], ['profile', '连接配置']] as const) {
-    if (checks[id]?.state === 'error') rows.unshift(checked({ id, name, value: '待处理', state: 'error', detail: '', category: 'maintenance' }, checks[id]));
+  for (const [id, name] of [['discovery', '程序识别'], ['profile', '连接配置'], ['obs-inventory', 'OBS 场景清单']] as const) {
+    if (checks[id]?.state === 'error') rows.unshift(checked({ id, name, value: '待处理', state: 'error', detail: '', category: id === 'obs-inventory' ? 'obs' : 'maintenance' }, checks[id]));
   }
-  // A stale successful check never overrides an actual disconnect.
-  const obsRow = rows.find(row => row.id === 'obs');
-  if (obs.status !== 'connected' && obsRow?.state === 'ready') { obsRow.state = 'idle'; obsRow.value = '未连接'; obsRow.detail = obs.error ?? 'OBS 已断开'; }
   for (const target of targets) {
     const mapped = profile?.midiPortProfiles.find(port => port.id === target.id && port.direction === target.direction);
     const matching = ports.filter(port => port.name === mapped?.portName && port.direction === target.direction && port.state === 'connected');
-    const available = matching.length === 1;
-    const open = available && matching[0]?.connection === 'open';
+    const nativeMtcName = profile?.midiPortProfiles.find(port => port.id === profile.internalPlayer?.mtcOutputPortProfileId)?.portName;
+    const nativeOutput = (internal || !project) && profile?.internalPlayer?.audioEngine === 'native' && target.direction === 'output'
+      && (target.id === (profile.internalPlayer.mtcOutputPortProfileId ?? 'internal-mtc-output') || Boolean(nativeMtcName && mapped?.portName === nativeMtcName));
+    const available = nativeOutput ? nativeDevices?.midiOutputs.filter(port => port.name === mapped?.portName).length === 1 : matching.length === 1;
+    const open = !nativeOutput && available && matching[0]?.connection === 'open';
     const key = 'port:' + target.id;
     const check = checks[key];
-    rows.push({ id: key, name: target.name, state: check?.state === 'checking' ? 'checking' : !target.required ? 'skipped' : open ? 'ready' : check?.state === 'error' || checks.midi?.state === 'error' ? 'error' : 'idle',
-      value: check?.state === 'checking' ? '连接中' : !target.required ? '未启用' : open ? '已打开' : !mapped?.portName ? '未配置' : available ? '可用' : '未连接',
-      detail: check?.state === 'error' ? check.detail : target.required ? (mapped?.portName ?? '尚未选择接口') + '；接口就绪不代表正在收发时间码或 Cue' : '未启用此接口；在音频与 MIDI 中配置后纳入一键连接', category: 'audio' });
+    rows.push({ id: key, name: target.name, ...midiConnectionStatus({ required: target.required, portName: mapped?.portName, available, open, native: nativeOutput, check, inventoryPending: nativeOutput && nativeDevices === null && nativeDeviceError === null, systemError: checks.midi?.state === 'error' ? checks.midi.detail : undefined }), category: 'audio' });
   }
   const detail = rows.find(row => row.id === selected);
   const receiving = lastMtcAt !== null && now >= lastMtcAt && now - lastMtcAt <= 500;
   const row = (id: string): Row | undefined => rows.find(entry => entry.id === id);
-  const currentItem = project?.rundown.find(item => item.id === player.state.itemId);
-  const lightingPort = targets.find(target => target.required && target.direction === 'output' && /灯光|Cue/.test(target.name));
-  const lightingRow = currentItem?.lighting?.outputMode === 'timecode' && lightingPort ? row(`port:${lightingPort.id}`)
-    : method === 'network' ? row('ma2') : lightingPort ? row(`port:${lightingPort.id}`) : row('ma2');
+  const lightingRow = row(`port:${profile?.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output'}`);
   const lightingStatus: Pick<Row, 'state' | 'value' | 'detail'> = player.state.status === 'playing' && player.state.mtcSending
     ? { state: 'ready', value: '发送中', detail: '正在按音频位置输出灯光时间码' }
     : player.state.mtcConnectionFailed && player.state.status === 'playing'
@@ -116,13 +114,10 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   const audioStatus: Pick<Row, 'state' | 'value' | 'detail'> | undefined = internal && player.state.status === 'playing'
     ? { state: 'ready', value: '播放中', detail: '本机音频正在播放' }
     : internal || !project ? row('audio') : row('p1');
-  const mtcActive = player.state.status === 'playing' && (player.state.mtcSending || player.state.mtcConnectionFailed);
-  const lightingViaMidi = mtcActive || lightingRow?.category === 'audio' || method === 'midi';
-  const lightingFocus: SettingsFocus = mtcActive || lightingPort?.id === (profile?.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output') || internal && !lightingPort ? 'lighting-mtc' : 'lighting-actions';
   const overview: { name: string; status: Pick<Row, 'state' | 'value' | 'detail'> | undefined; category: SettingsCategory; focus?: SettingsFocus }[] = [
     { name: '音频', status: audioStatus, category: internal || !project ? 'audio' : 'source', ...(internal || !project ? { focus: 'audio-output' as const } : {}) },
     { name: '视频', status: row('obs'), category: 'obs', focus: 'obs-connection' },
-    { name: '灯光', status: lightingStatus, category: lightingViaMidi ? 'audio' : 'ma2', focus: lightingViaMidi ? lightingFocus : 'ma2-connection' },
+    { name: '灯光', status: lightingStatus, ...lightingConnectionDestination },
     { name: '编辑灯光', status: row('bridge'), category: 'ma2', focus: 'ma2-connection' }
   ];
   return <div className="toolbar-project-summary"><button type="button" className="topbar-details-trigger" aria-pressed={open} onClick={() => { setOpen(value => !value); setSelected(null); }}>详细</button>

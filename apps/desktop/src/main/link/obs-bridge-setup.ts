@@ -40,17 +40,19 @@ export class ObsBridgeSetup {
       if (process.pid === null) {
         await this.tools.install(true);
       } else {
-        let reason: string;
+        let reason = '组件文件已更新，需要重新启动 OBS 加载新组件。';
+        let changed = true;
         try {
-          const changed = await this.tools.install(false);
-          if (!changed) {
-            await this.tools.connect();
-            await this.tools.verify();
-            return;
-          }
-          reason = '组件文件已更新，需要重新启动 OBS 加载新组件。';
+          changed = await this.tools.install(false);
         } catch (error) {
+          if (!(error instanceof ObsPluginInstallError)) throw error;
           reason = error instanceof Error ? error.message : String(error);
+        }
+        if (!changed) {
+          // Authentication and network failures are not plugin failures.
+          await this.tools.connect();
+          try { await this.tools.verify(); return; }
+          catch (error) { reason = error instanceof Error ? error.message : String(error); }
         }
         await this.release(process, reason);
         await this.tools.install(true);

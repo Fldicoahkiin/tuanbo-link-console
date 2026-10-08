@@ -1,5 +1,5 @@
 import type { LinkProject, Ma2Catalog } from '@tb/schema';
-import { parseP1TimeOrigin } from './ma2-time-origin';
+import { programTimeOrigin } from './ma2-time-origin';
 
 export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog): { pairs: Record<number, string>; unresolved: { target: number; reason: string }[] } {
   const pairs: Record<number, string> = {};
@@ -7,7 +7,7 @@ export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog): { p
   const originErrors: string[] = [];
   const songs = project.rundown.filter(item => item.referenceAudio && !item.p1UnavailableSourceKey && (item.p1Media || item.playback)).flatMap(item => {
     if (item.p1Media?.importedFullSource) { originErrors.push(`${item.title}：P1 裁剪未按原范围导入，请核对音频坐标`); return []; }
-    try { return [{ item, start: item.p1Media ? parseP1TimeOrigin(item.p1Media.midiStartTime) : item.playback?.mtcOffsetMs ?? 0 }]; }
+    try { return [{ item, start: programTimeOrigin(item) }]; }
     catch (error) { originErrors.push(`${item.title}：${error instanceof Error ? error.message : String(error)}`); return []; }
   });
   for (const entry of catalog.entries) {

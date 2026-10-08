@@ -1,5 +1,9 @@
 import { expect, it } from 'vitest';
 import { toUserErrorMessage } from './link-user-error';
+it('OBS 密码与配置错误直接说明原因，而非要求先导出诊断', () => {
+  expect(toUserErrorMessage(new Error('OBS WebSocket 连接失败：Authentication failed'))).toContain('OBS 要求认证或拒绝了密码');
+  expect(toUserErrorMessage(new Error('连接配置校验失败：profile.obs.webSocketUrl：Invalid URL'))).toContain('profile.obs.webSocketUrl');
+});
 it('OBS 来源缺失时不把包含中文场景名的英文异常直接展示', () => {
   expect(toUserErrorMessage("SetCurrentProgramScene: No source was found by the name of '团播联动台·叠加·123' within the canvas 'Main'.")).toBe('OBS 中找不到需要的场景或来源。请重新同步素材后再播放。');
 });

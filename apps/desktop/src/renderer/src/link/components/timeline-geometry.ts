@@ -8,6 +8,7 @@ import type { MtcFrameRate } from '@tb/schema';
 export const MIN_TIMELINE_PIXELS_PER_SECOND = 0.001;
 export const MAX_TIMELINE_PIXELS_PER_SECOND = 480;
 export const DEFAULT_TIMELINE_PIXELS_PER_SECOND = 32;
+export const MAX_TIMELINE_TIME_MS = 86_399_000;
 
 const TICK_INTERVALS_MS = [
   100,
@@ -158,12 +159,13 @@ export function buildVisibleTimelineTicks(input: {
   return ticks;
 }
 
-export function formatTimelineTimecode(milliseconds: number, frameRate: MtcFrameRate): string {
+export function formatTimelineTimecode(milliseconds: number, frameRate: MtcFrameRate, full = false): string {
   const timecode = frameNumberToTimecode(millisecondsToFrameNumber(Math.max(0, milliseconds), frameRate), frameRate);
   const values = [timecode.hours, timecode.minutes, timecode.seconds, timecode.frames]
     .map((value) => String(value).padStart(2, '0'));
   const separator = frameRate === '29.97df' ? ';' : ':';
-  return `${values[0]}:${values[1]}:${values[2]}${separator}${values[3]}`;
+  const prefix = full || timecode.hours > 0 ? `${values[0]}:${values[1]}:` : timecode.minutes > 0 ? `${values[1]}:` : '';
+  return `${prefix}${values[2]}${separator}${values[3]}`;
 }
 
 function formatTimelineRulerTime(milliseconds: number, interval: number): string {
@@ -171,9 +173,9 @@ function formatTimelineRulerTime(milliseconds: number, interval: number): string
   const hours = Math.floor(totalSeconds / 3_600);
   const minutes = Math.floor(totalSeconds % 3_600 / 60);
   const seconds = totalSeconds % 60;
+  const prefix = hours > 0 ? `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:` : minutes > 0 ? `${String(minutes).padStart(2, '0')}:` : '';
   if (interval < 1_000) {
-    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(Math.floor(milliseconds % 1_000 / 100))}`;
+    return `${prefix}${String(seconds).padStart(2, '0')}.${String(Math.floor(milliseconds % 1_000 / 100))}`;
   }
-  if (hours > 0) return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  return `${prefix}${String(seconds).padStart(2, '0')}`;
 }

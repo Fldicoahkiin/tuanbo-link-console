@@ -28,6 +28,7 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
       ipcMain.removeHandler('link:ma2-network-save'); ipcMain.handle('link:ma2-network-save', () => status);
       ipcMain.removeHandler('link:ma2-catalog'); ipcMain.handle('link:ma2-catalog', () => data.catalog);
       ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => data.catalog.entries[0]!.preview);
+      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => ({ directory: { ...data.catalog.directory, entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] }));
       // Only the transport receipt is simulated; renderer, comparison and document saving are real.
       ipcMain.removeHandler('link:ma2-apply'); ipcMain.handle('link:ma2-apply', (_event, request: unknown) => {
         process.env.TBLINK_EDIT_REQUEST = JSON.stringify(request);
@@ -42,9 +43,12 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式').selectOption('network');
     await page.getByRole('button', { name: '连接 MA2 并载入节目 Cue', exact: true }).click();
-    await expect(page.getByText(/已启用编辑后同步：停止播放后/)).toBeVisible();
+    await expect(page.getByText(/可在灯光工作台点击“开始同步”/)).toBeVisible();
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
+    expect(await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST)).toBeUndefined();
+    await page.getByRole('button', { name: '开始同步', exact: true }).click();
+    await expect(page.getByRole('button', { name: '暂停同步', exact: true })).toHaveAttribute('aria-pressed', 'true');
     const first = await page.locator('.waveform-cue-point').first().boundingBox();
     const second = await page.locator('.waveform-cue-point').nth(1).boundingBox();
     if (!first || !second) throw new Error('Cue 标记不可见');
@@ -52,10 +56,11 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await page.mouse.down();
     await page.mouse.move(first.x + 20 + (second.x - first.x) * 700 / 1500, first.y + first.height / 2, { steps: 12 });
     await page.mouse.up();
-    await expect(page.getByRole('region', { name: 'MA2 编辑同步' })).toContainText('已核对');
+    await page.getByRole('button', { name: '同步状态详情', exact: true }).click();
+    await expect(page.getByRole('region', { name: '同步状态详情' })).toContainText('已核对');
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!.ma2Bindings![0]!.baselineTracks[0]!.clips[0]!.events[0]!.at).toBe(700);
     const sent = await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST);
     expect(ma2ApplyRequestSchema.parse(JSON.parse(sent ?? 'null')).document.tracks[0]!.clips[0]!.events[0]!.at).toBeCloseTo(700, -1);
     await page.screenshot({ path: info.outputPath('编辑后已回读.png') });
-  } finally { await app.close(); }
+  } finally { await (await app.firstWindow()).evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
 });

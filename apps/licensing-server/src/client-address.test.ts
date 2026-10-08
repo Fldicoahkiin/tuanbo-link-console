@@ -1,3 +1,4 @@
+import { listenHttpTestServer } from './http-test-server';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { afterEach, expect, it } from 'vitest';
 import { clientAddress } from './client-address';
@@ -25,7 +26,7 @@ async function start(trusted: boolean) {
   const key = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
   const service = new LicensingService(':memory:', key, 'test', randomBytes(32));
   const server = createLicensingServer(service, 'x'.repeat(48), undefined, undefined, undefined, trusted);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenHttpTestServer(server);
   cleanup.push(async () => { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); service.close(); });
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
   const base = `http://127.0.0.1:${address.port}`;

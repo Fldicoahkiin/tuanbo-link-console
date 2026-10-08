@@ -1,0 +1,43 @@
+[project]
+name = "tblink-music-analysis"
+version = "0.1.0"
+description = "Offline music-analysis feasibility and acceptance harness"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "torch==2.7.1",
+  "torchaudio==2.7.1",
+  "beat-this==1.1.0",
+  "numpy==1.26.4",
+  "scipy==1.15.3",
+  "librosa==0.11.0",
+  "soundfile==0.13.1",
+  "pydantic==2.11.7",
+  "all-in-one-infer @ https://github.com/openmirlab/all-in-one-infer/archive/8414233b743d6ccec46e36ab4cfeddb4605ff3bf.zip",
+]
+
+[dependency-groups]
+dev = ["pytest==8.4.2", "ruff==0.14.0"]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+override-dependencies = [
+  "madmom-infer @ https://github.com/openmirlab/madmom-infer/archive/a9ed04ec942dd6ec5309df7ce7f3783d1bb42575.zip",
+  "demucs-infer @ https://github.com/openmirlab/demucs-infer/archive/ffe0080ef96336a34e3f0ee8ba22ceaa0623a36c.zip",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 110

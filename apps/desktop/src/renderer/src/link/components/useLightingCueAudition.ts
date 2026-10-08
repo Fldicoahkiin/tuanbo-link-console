@@ -10,9 +10,10 @@ export function useLightingCueAudition(document: LightingDocument, projectId: st
   const [status, setStatus] = useState('选中灯光 Cue 即发送到控台');
   useEffect(() => () => output.cancel(), [output, projectId, item?.id, enabled]);
   const select = (eventId: string, template = false): void => {
-    if (!enabled || !projectId) return;
+    // Clicking a library Cue is an explicit audition, independent of timeline-selection preview.
+    if (!projectId || !template && !enabled) return;
     const event = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(entry => entry.id === eventId);
-    if (!template && event?.kind !== 'ma2') { output.cancel(); setStatus('所选事件不是控台 Cue'); return; }
+    if (!template && event?.kind !== 'ma2') { output.cancel(); setStatus(event?.kind === 'empty-cue' ? '空 Cue · 不发送灯光指令' : '所选事件不是控台 Cue'); return; }
     setStatus('正在发送 Cue…');
     const operation = template ? output.playTemplate(document, eventId, useIntegrationStore.getState().profile) : output.play(document, eventId, useIntegrationStore.getState().profile);
     void operation.then(async count => {

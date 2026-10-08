@@ -19,13 +19,14 @@ import {
   type LucideIcon
 } from 'lucide-react';
 import type { IntegrationProfile } from '@tb/schema';
-import { toUserErrorMessage, type LinkProcessSnapshot } from '@tb/core/link';
+import { type LinkProcessSnapshot } from '@tb/core/link';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { LinkMidiAdapter, hasConnectedProfilePort } from '../../registry/link-midi-adapter';
 import { useDocumentStore } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+import { readAndStoreMidiPorts } from '../view-models/midi-device-inventory';
 import { runDesktopPreflight } from '../view-models/link-preflight-view-model';
 import { DetectionReport, useLocalIntegrationConnection } from './LocalIntegrationConnection';
 import { isMtcSignalReady, portName, updatePortProfile } from '../view-models/local-integration-midi';
@@ -63,7 +64,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const connectionProgress = useConnectionCheckStore();
-  const localIntegration = useLocalIntegrationConnection({ draft, password, readMidiPorts: () => readAndStoreMidiPorts(midiMonitor), openMidiPorts: (ids, direction) => direction === 'input' ? midiMonitor.openInputs(ids) : midiMonitor.openOutputs(ids), listenToP1: async () => { if (!coordinator) throw new Error('请先打开 P1 跟随工程'); await coordinator.initializeMidi(); }, notify, onDraft: setDraft, onPasswordCleared: () => setPassword(''), onBusyChange: setBusy });
+  const localIntegration = useLocalIntegrationConnection({ draft, password, readMidiPorts: () => readAndStoreMidiPorts(midiMonitor), openMidiPorts: (ids, direction) => direction === 'input' ? midiMonitor.openInputs(ids) : midiMonitor.openOutputs(ids), listenToP1: async () => { if (!coordinator) throw new Error('请先打开 P1 跟随工程'); await coordinator.initializeMidi(); }, notify, onDraft: setDraft, onPasswordCleared: () => setPassword(''), onObsPassword: setPassword, onBusyChange: setBusy });
   const lastMtcAt = useRuntimeStore((state) => state.lastMtcAt);
   const mtcStable = useRuntimeStore((state) => state.mtcStable);
   const detectedFrameRate = useRuntimeStore((state) => state.detectedFrameRate);
@@ -261,19 +262,6 @@ function stopRuntime(coordinator: LinkRuntimeCoordinator | null, runtimeState: s
 
 function P1MtcSetupNotice({ ready, portAvailable }: { ready: boolean; portAvailable: boolean }): JSX.Element {
   return <section className={`security-banner ${ready ? 'ok' : 'attention'}`}><span className="banner-symbol">{ready ? <CheckCircle2 /> : <CircleAlert />}</span><div><strong>{ready ? 'MTC 已连接' : portAvailable ? 'MIDI 端口可用，但未收到持续 MTC' : 'P1 MTC 输入尚未接通'}</strong><p>{ready ? '已收到持续更新且帧率匹配的时间码。' : '没有真实时间码，OBS 不会跟随时间线。请确认 P1 显示“已发送”，且设置中的 MIDI 输出设备不为空；仅创建虚拟端口不能证明 P1 已发送。'}</p></div></section>;
-}
-
-async function readAndStoreMidiPorts(monitor: LinkMidiAdapter): Promise<ReturnType<LinkMidiAdapter['listPorts']>> {
-  try {
-    await window.tbLink.recheckMidi();
-    const ports = await monitor.refreshPorts();
-    useIntegrationStore.getState().setMidiPorts(ports);
-    if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('midi', 'ready', '系统 MIDI 检测通过');
-    return ports;
-  } catch (error) {
-    if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('midi', 'error', toUserErrorMessage(error));
-    throw error;
-  }
 }
 
 function useSettingsMtcClock(active: boolean): number {

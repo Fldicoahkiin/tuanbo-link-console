@@ -1,0 +1,75 @@
+import { MusicMonitorControls } from './MusicMonitorControls';
+import { MusicAnalysisPanel } from './MusicAnalysisPanel';
+import { useRef, useState } from 'react';
+import { Check, Magnet, Music2, Plus, Trash2, X } from 'lucide-react';
+import { changeMusicTempo, estimateMusicBpm, lightingPositions, moveMusicCues, setMusicCueLock, snapMusicTime, type CuePositionChange } from '@tb/core/link';
+import { createLightingMusic, lightingDocumentSchema, musicMarkerKinds, musicMarkerNames, type LightingDocument, type LightingMusic } from '@tb/schema';
+import type { LightingTimelineProps } from './LightingTimeline';
+import type { AudioEditor } from './useAudioEditor';
+import { LightingTempoSettings } from './LightingTempoSettings';
+import { LightingMusicBatch } from './LightingMusicBatch';
+import '../lighting-music.css';
+import { musicGridOptions } from '../view-models/music-grid-options';
+
+type Props = { lighting: LightingTimelineProps; playheadMs: number; durationMs: number; editor?: AudioEditor | undefined; onSeek: (ms: number) => void };
+type Proposal = { before: LightingDocument; next: LightingDocument; changes: CuePositionChange[]; label: string };
+export function LightingMusicToolbar({ lighting, playheadMs, durationMs, editor, onSeek }: Props): JSX.Element {
+  const document = lighting.document; const music = document.music ?? createLightingMusic(); const first = document.tempos[0]!;
+  const [panel, setPanel] = useState<'tempo' | 'markers' | 'batch' | 'advanced' | 'analysis' | null>(null);
+  const [error, setError] = useState(''); const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [markerId, setMarkerId] = useState<string | null>(null); const [sectionId, setSectionId] = useState<string | null>(null);
+  const [range, setRange] = useState<{ start: number; end: number } | null>(null);
+  const [pendingKind, setPendingKind] = useState<typeof musicMarkerKinds[number] | null>(null);
+  const [bpmSuggestion, setBpmSuggestion] = useState<number | null>(null);
+  const taps = useRef<number[]>([]);
+  const run = (operation: () => void): void => { try { operation(); setError(''); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } };
+  const change = (next: LightingDocument, label: string): void => { if (next.markers.some(value => value.startMs > durationMs || value.endMs !== null && value.endMs > durationMs) || next.music?.sections.some(value => value.endMs > durationMs)) throw new Error('标记或段落超出歌曲范围'); lighting.onChange(lightingDocumentSchema.parse(next), label); };
+  const updateMusic = (patch: Partial<LightingMusic>): void => run(() => change({ ...document, version: 2, music: { ...music, ...patch } }, '修改音乐网格'));
+  const propose = (next: LightingDocument, label: string): void => run(() => {
+    const value = changeMusicTempo(document, next.tempos, next.music ?? music, durationMs);
+    if (value.changes.length) setProposal({ before: document, next: value.document, changes: value.changes, label }); else change(value.document, label);
+  });
+  const tempo = (bpm: number): void => propose({ ...document, tempos: document.tempos.map((value, index) => index === 0 ? { ...value, bpm } : value) }, '修改音乐速度');
+  const marker = document.markers.find(value => value.id === markerId); const section = music.sections.find(value => value.id === sectionId);
+  const addMarker = (kind: typeof musicMarkerKinds[number], area = range): void => run(() => {
+    const needsRange = ['roll', 'build', 'ending'].includes(kind);
+    if (needsRange && (!area || area.end <= area.start)) { setPanel('markers'); setPendingKind(kind); setRange({ start: playheadMs, end: playheadMs }); return; }
+    const id = crypto.randomUUID(); const startMs = needsRange && area ? area.start : playheadMs; const endMs = needsRange && area ? area.end : null;
+    if (startMs > durationMs || endMs !== null && endMs > durationMs) throw new Error('标记超出歌曲范围');
+    change({ ...document, version: 2, music, markers: [...document.markers, { id, kind, name: musicMarkerNames[kind], startMs, endMs, color: '#eabb68', notes: '' }] }, '添加音乐标记'); setMarkerId(id); setSectionId(null); setPendingKind(null); setPanel('markers');
+  });
+  const selected = new Set(lighting.selectedEventIds ?? (lighting.selectedEventId ? [lighting.selectedEventId] : []));
+  const align = (): void => run(() => { const changes = lightingPositions(document).filter(value => selected.has(value.id)).map(value => ({ ...value, toMs: snapMusicTime(document, value.fromMs) })); if (!changes.length) throw new Error('请先选择 Cue'); setProposal({ before: document, next: moveMusicCues(document, changes, durationMs), changes, label: 'Cue 对齐音乐网格' }); });
+  const lock = (beat: boolean): void => run(() => {
+    change(setMusicCueLock(document, selected, beat), beat ? 'Cue 跟随节拍' : 'Cue 固定时间');
+  });
+  return <div className="lighting-music-tools">
+    <div className="lighting-music-toolbar" aria-label="节拍与音乐标记">
+      <button onClick={() => setPanel(panel === 'tempo' ? null : 'tempo')}><Music2 />{first.bpm} BPM</button>
+      <button aria-label="拍号" onClick={() => setPanel('tempo')}>{first.numerator}/{first.denominator}</button>
+      <label>网格：<select aria-label="音乐网格间隔" value={[0.25, 0.5, 1, 2, 4, 8, 16, 32].includes(music.gridBeats) ? music.gridBeats : 'custom'} onChange={event => event.target.value === 'custom' ? setPanel('advanced') : updateMusic({ gridBeats: Number(event.target.value) })}>{musicGridOptions(document, playheadMs).map(({value,label}) => <option key={value} value={value}>{label}</option>)}<option value="custom">自定义</option></select></label>
+      <button aria-pressed={music.snap} onClick={() => updateMusic({ snap: !music.snap })}><Magnet />吸附</button>
+      <details><summary>添加标记</summary><div>{musicMarkerKinds.map(kind => <button key={kind} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); addMarker(kind); }}>{musicMarkerNames[kind]}</button>)}<button onClick={() => setPanel('markers')}>标记与歌曲段落</button></div></details>
+      <details onClick={event => { if (event.target instanceof Element && event.target.closest('button')) event.currentTarget.open = false; }}><summary>Cue 编排</summary><div><button onClick={() => setPanel('batch')}>在播放头 / 标记处添加</button><button onClick={() => setPanel('batch')}>按拍数 / 范围批量放置</button><button onClick={align}>选中 Cue 对齐网格</button><button onClick={() => setPanel('batch')}>对齐标记 / 整组移动</button></div></details>
+      <details onClick={event => { if (event.target instanceof Element && event.target.closest('button')) event.currentTarget.open = false; }}><summary>更多</summary><div><button onClick={() => setPanel('analysis')}>辅助找点</button><button onClick={() => setPanel('markers')}>歌曲段落</button><button onClick={() => setPanel('advanced')}>高级设置</button></div></details>
+    </div>
+    {error ? <div role="alert" className="music-tool-error">{error}<button aria-label="关闭错误" onClick={() => setError('')}><X /></button></div> : null}
+    {panel ? <section className="music-tool-panel" aria-label="音乐编排属性"><header><strong>{({ tempo: '音乐速度', markers: '音乐标记与歌曲段落', batch: 'Cue 编排', advanced: '高级设置', analysis: '辅助找点' })[panel]}</strong><button aria-label="关闭音乐编排属性" onClick={() => setPanel(null)}><X /></button></header>
+      {panel === 'tempo' || panel === 'advanced' ? <><LightingTempoSettings document={document} onChange={propose} /><div className="music-inline-actions"><button onClick={() => tempo(first.bpm / 2)}>速度减半</button><button onClick={() => tempo(first.bpm * 2)}>速度加倍</button><button onClick={() => { const now = performance.now(); taps.current = [...taps.current.filter(value => now - value < 8000), now].slice(-12); setBpmSuggestion(estimateMusicBpm(taps.current)); }}>敲击测速</button><button onClick={() => propose({ ...document, music: { ...music, firstBeatMs: playheadMs } }, '设置第一拍位置')}>播放头设为第一拍</button><button onClick={() => setPanel('analysis')}>自动检测</button>{bpmSuggestion !== null ? <button onClick={() => { tempo(bpmSuggestion); setBpmSuggestion(null); }}>应用建议 {bpmSuggestion} BPM</button> : null}</div></> : null}
+      {panel === 'advanced' ? <div className="music-fields"><label>自定义拍数<input type="number" min="0.01" max="1024" step="any" key={music.gridBeats} defaultValue={music.gridBeats} onBlur={event => updateMusic({ gridBeats: event.target.valueAsNumber })} /></label>{([['showGrid', '显示节拍线'], ['accentBars', '突出每小节第一拍'], ['triplet', '三连音网格']] as const).map(([key, name]) => <label key={key}><input type="checkbox" checked={music[key]} onChange={event => updateMusic({ [key]: event.target.checked })} />{name}</label>)}<label>对齐方式<select value={music.align} onChange={event => { const align = event.target.value; if (align === 'nearest' || align === 'previous' || align === 'next') updateMusic({ align }); }}><option value="nearest">最近网格</option><option value="previous">前一个网格</option><option value="next">后一个网格</option></select></label><label>标尺<select value={music.ruler} onChange={event => { const ruler = event.target.value; if (ruler === 'time' || ruler === 'beats' || ruler === 'both') updateMusic({ ruler }); }}><option value="time">分钟秒数</option><option value="beats">小节与拍数</option><option value="both">同时显示</option></select></label><button onClick={() => lock(false)}>选中 Cue 固定时间</button><button onClick={() => lock(true)}>选中 Cue 跟随节拍</button></div> : null}
+      {panel === 'markers' ? <><div className="music-fields"><label>范围起点（秒）<input aria-label="音乐范围起点" type="number" min="0" step="0.001" value={(range?.start ?? playheadMs) / 1000} onChange={event => setRange({ start: event.target.valueAsNumber * 1000, end: range?.end ?? playheadMs })} /></label><label>范围终点（秒）<input aria-label="音乐范围终点" type="number" min="0" step="0.001" value={(range?.end ?? playheadMs) / 1000} onChange={event => setRange({ start: range?.start ?? playheadMs, end: event.target.valueAsNumber * 1000 })} /></label><button onClick={() => setRange({ start: range?.start ?? playheadMs, end: playheadMs })}>播放头设为范围终点</button>{pendingKind ? <button onClick={() => addMarker(pendingKind)}>添加{musicMarkerNames[pendingKind]}</button> : null}<select aria-label="添加歌曲段落" value="" onChange={event => run(() => { if (!range || range.end <= range.start || range.end > durationMs) throw new Error('请先选择有效的歌曲范围'); const id = crypto.randomUUID(); change({ ...document, version: 2, music: { ...music, sections: [...music.sections, { id, name: event.target.value, startMs: range.start, endMs: range.end, color: '#65bfc8', notes: '' }] } }, '添加歌曲段落'); setSectionId(id); setMarkerId(null); })}><option value="" disabled>添加歌曲段落</option>{['前奏', '主歌', '预副歌', '副歌', '间奏', '桥段', '尾奏', '自定义'].map(name => <option key={name}>{name}</option>)}</select></div>
+        <div className="music-fields"><select aria-label="选择音乐标记或段落" value={markerId ?? sectionId ?? ''} onChange={event => { const id = event.target.value; setMarkerId(document.markers.some(value => value.id === id) ? id : null); setSectionId(music.sections.some(value => value.id === id) ? id : null); }}><option value="">选择标记或段落</option><optgroup label="音乐标记">{document.markers.map(value => <option key={value.id} value={value.id}>{value.name} · {(value.startMs / 1000).toFixed(3)}s</option>)}</optgroup><optgroup label="歌曲段落">{music.sections.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}</optgroup></select>{marker || section ? <><button onClick={() => onSeek((marker ?? section)!.startMs)}>定位</button><button aria-label="删除选中标记" onClick={() => run(() => change(marker ? { ...document, markers: document.markers.filter(value => value.id !== marker.id) } : { ...document, version: 2, music: { ...music, sections: music.sections.filter(value => value.id !== section!.id) } }, '删除音乐标记'))}><Trash2 /></button></> : null}</div>
+        {marker || section ? <MusicMarkEditor key={(marker ?? section)!.id} value={(marker ?? section)!} onSave={value => run(() => change(marker ? { ...document, version: 2, markers: document.markers.map(entry => entry.id === marker.id ? { ...entry, ...value } : entry) } : { ...document, version: 2, music: { ...music, sections: music.sections.map(entry => entry.id === section!.id ? { ...entry, ...value, endMs: value.endMs ?? entry.endMs } : entry) } }, '编辑音乐标记'))} /> : null}</> : null}
+      {panel === 'batch' ? <LightingMusicBatch lighting={lighting} playheadMs={playheadMs} durationMs={durationMs} markerId={markerId} range={range} onPreview={(next, changes, label) => setProposal({ before: document, next, changes, label })} /> : null}
+      {panel === 'analysis' ? <MusicAnalysisPanel editor={editor} document={document} onChange={change} onBpm={tempo} onSeek={onSeek} /> : null}
+      {panel === 'tempo' || panel === 'analysis' ? <MusicMonitorControls editor={editor} document={document} positionMs={marker?.startMs ?? playheadMs} /> : null}
+    </section> : null}
+    {proposal ? <section className="music-change-preview" aria-label="Cue 修改预览"><header><strong>{proposal.label} · {proposal.changes.length} 项</strong><button aria-label="取消修改预览" onClick={() => setProposal(null)}><X /></button></header><div className="music-preview-rows">{proposal.changes.slice(0, 200).map((value, index) => <div key={`${value.id}:${index}`}><span>{value.name}</span><span>{(value.fromMs / 1000).toFixed(3)} → {(value.toMs / 1000).toFixed(3)}s</span></div>)}</div>{proposal.changes.length > 200 ? <span>显示前 200 项，共 {proposal.changes.length} 项</span> : null}<button onClick={() => run(() => { if (JSON.stringify(proposal.before) !== JSON.stringify(document)) throw new Error('编排已改变，请重新生成预览'); change(proposal.next, proposal.label); setProposal(null); })}><Check />确认应用</button></section> : null}
+  </div>;
+}
+
+function MusicMarkEditor({ value, onSave }: { value: { name: string; startMs: number; endMs: number | null; color?: string | undefined; notes?: string | undefined }; onSave: (next: { name: string; startMs: number; endMs: number | null; color: string; notes: string }) => void }): JSX.Element {
+  return <form className="music-fields" onSubmit={event => { event.preventDefault(); const fields = new FormData(event.currentTarget); onSave({ name: formText(fields, 'name'), startMs: Number(fields.get('start')) * 1000, endMs: fields.get('end') === '' ? null : Number(fields.get('end')) * 1000, color: formText(fields, 'color'), notes: formText(fields, 'notes') }); }}><label>名称<input name="name" required defaultValue={value.name} /></label><label>位置（秒）<input name="start" type="number" min="0" step="0.001" required defaultValue={value.startMs / 1000} /></label><label>结束（秒）<input name="end" type="number" min="0" step="0.001" defaultValue={value.endMs === null ? '' : value.endMs / 1000} placeholder="留空为点" /></label><label>颜色<input name="color" type="color" defaultValue={value.color ?? '#eabb68'} /></label><label>备注<input name="notes" defaultValue={value.notes ?? ''} /></label><button><Plus />保存标记</button></form>;
+}
+
+function formText(data: FormData, name: string): string { const value = data.get(name); if (typeof value !== "string") throw new Error("表单字段无效"); return value; }

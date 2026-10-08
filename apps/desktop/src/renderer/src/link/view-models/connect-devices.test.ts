@@ -12,12 +12,16 @@ const api = vi.hoisted(() => ({
   loopMidi: vi.fn<LinkDesktopApi['loopMidi']>(),
   startExternalApplication: vi.fn<LinkDesktopApi['startExternalApplication']>(),
   connectObs: vi.fn<LinkDesktopApi['connectObs']>(),
+  connectLocalObs: vi.fn<LinkDesktopApi['connectLocalObs']>(),
+  loadIntegrationProfile: vi.fn<LinkDesktopApi['loadIntegrationProfile']>(),
   readObsInventory: vi.fn<LinkDesktopApi['readObsInventory']>(),
   getObsLiveFrame: vi.fn<LinkDesktopApi['getObsLiveFrame']>(),
   closeObsLivePreview: vi.fn<LinkDesktopApi['closeObsLivePreview']>(),
   getMa2NetworkStatus: vi.fn<LinkDesktopApi['getMa2NetworkStatus']>(),
   connectMa2Network: vi.fn<LinkDesktopApi['connectMa2Network']>(),
   recordLog: vi.fn<LinkDesktopApi['recordLog']>(),
+  getNativePlaybackDevices: vi.fn<LinkDesktopApi['getNativePlaybackDevices']>(),
+  checkNativeMidiOutput: vi.fn<LinkDesktopApi['checkNativeMidiOutput']>(),
   checkNetwork: vi.fn(() => Promise.resolve())
 }));
 vi.mock('./link-desktop-view-model', () => ({ linkDesktopViewModel: api }));
@@ -29,6 +33,8 @@ function snapshot(id: LinkProcessSnapshot['id']): LinkProcessSnapshot {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  api.checkNativeMidiOutput.mockResolvedValue();
+  useIntegrationStore.getState().setNativeDevices(null, null);
   useConnectionCheckStore.setState({ running: false, checks: {}, pending: [], completed: 0, total: 0 });
   useIntegrationStore.getState().setObs({ status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null });
   vi.stubGlobal('navigator', { mediaDevices: { enumerateDevices: () => Promise.resolve([{ kind: 'audiooutput', deviceId: 'default' }]) } });
@@ -45,13 +51,69 @@ beforeEach(() => {
   api.connectMa2Network.mockResolvedValue(network); api.checkNetwork.mockResolvedValue();
 });
 afterEach(() => vi.unstubAllGlobals());
+
+it('OBS 清单失败单独报告，控制仍已连接且继续检查预览', async () => {
+  api.readObsInventory.mockRejectedValue(new Error('显示器采集尺寸不可用'));
+  await connectDevices(options());
+  expect(useIntegrationStore.getState().obs.status).toBe('connected');
+  expect(useConnectionCheckStore.getState().checks.obs?.state).toBe('ready');
+  expect(useConnectionCheckStore.getState().checks['obs-inventory']?.state).toBe('error');
+  expect(api.getObsLiveFrame).toHaveBeenCalled();
+});
+
+it('原生 MTC 端口不被浏览器一键连接提前占用，浏览器漏枚举不误报 USB 未连接', async () => {
+  const config = options();
+  config.draft.internalPlayer = { audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: 'internal-mtc-output' };
+  config.draft.midiPortProfiles.push({ id: 'internal-mtc-output', direction: 'output', portName: 'USB MIDI Interface' });
+  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 1, name: 'USB MIDI Interface' }] };
+  useIntegrationStore.getState().setNativeDevices(native, null);
+  api.getNativePlaybackDevices.mockResolvedValue(native);
+  await connectDevices(config);
+  expect(useConnectionCheckStore.getState().checks['port:internal-mtc-output']?.state).toBe('ready');
+  expect(useConnectionCheckStore.getState().checks['port:internal-mtc-output']?.detail).toContain('打开检查通过');
+  expect(api.checkNativeMidiOutput).toHaveBeenCalledExactlyOnceWith({ version: 1, portName: 'USB MIDI Interface' });
+  expect(config.openMidiPorts).not.toHaveBeenCalledWith(['internal-mtc-output'], 'output');
+  expect(config.openMidiPorts).not.toHaveBeenCalledWith(['lighting-events-output'], 'output');
+  expect(config.openMidiPorts).toHaveBeenCalledWith(['custom-input'], 'input');
+});
+
+it('USB 打开失败不重复检查、不换成 Babyface，保留用户选定接口并报告具体原因', async () => {
+  const config = options();
+  config.draft.internalPlayer = { audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: 'internal-mtc-output' };
+  config.draft.midiPortProfiles.push({ id: 'internal-mtc-output', direction: 'output', portName: 'USB MIDI Interface' });
+  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 0, name: 'Babyface Midi Port 1' }, { id: 1, name: 'USB MIDI Interface' }] };
+  useIntegrationStore.getState().setNativeDevices(native, null);
+  api.getNativePlaybackDevices.mockResolvedValue(native);
+  api.checkNativeMidiOutput.mockRejectedValue(new Error('MIDI 接口 USB MIDI Interface：Windows 错误 4'));
+  await connectDevices(config);
+  expect(api.checkNativeMidiOutput).toHaveBeenCalledExactlyOnceWith({ version: 1, portName: 'USB MIDI Interface' });
+  expect(useConnectionCheckStore.getState().checks['port:internal-mtc-output']?.state).toBe('error');
+  expect(useConnectionCheckStore.getState().checks['port:internal-mtc-output']?.detail).toContain('Windows 错误 4');
+  expect(useIntegrationStore.getState().profile?.midiPortProfiles.find(port => port.id === 'internal-mtc-output')?.portName).toBe('USB MIDI Interface');
+});
 function options(): DeviceConnectionOptions {
   const draft = createDefaultIntegrationProfile();
+  draft.obs.connectionMethod = 'manual';
   draft.midiPortProfiles.push({ id: 'custom-input', direction: 'input', portName: '遥控键盘' });
   return { draft, password: '', project: parseLinkProject({ ...createEmptyLinkProject('连接检查'), playbackSource: 'internal' }),
     readMidiPorts: vi.fn(() => Promise.resolve([{ id: 'input', name: '遥控键盘', manufacturer: '', direction: 'input' as const, state: 'connected' as const, connection: 'closed' as const }])),
     openMidiPorts: vi.fn(() => Promise.resolve([])), listenToP1: vi.fn(() => Promise.resolve()), onProfile: vi.fn(), onDetection: vi.fn(), onIssues: vi.fn() };
 }
+
+it('自动连接不使用误填的地址和旧密码，读取 OBS 当前配置后更新显示', async () => {
+  const config = options(); config.draft.obs.connectionMethod = 'automatic';
+  config.draft.obs.webSocketUrl = 'ws://wrong-target';
+  config.password = 'outdated';
+  config.onObsPassword = vi.fn();
+  const saved = createDefaultIntegrationProfile(); saved.obs.webSocketUrl = 'ws://127.0.0.1:4567';
+  api.connectLocalObs.mockResolvedValue({ version: 1, address: saved.obs.webSocketUrl, password: 'from-obs', snapshot: { status: 'connected', obsVersion: '32.1.1', webSocketVersion: '5', error: null } });
+  api.loadIntegrationProfile.mockResolvedValue(saved);
+  await connectDevices(config);
+  expect(api.connectLocalObs).toHaveBeenCalledOnce();
+  expect(api.connectObs).not.toHaveBeenCalled();
+  expect(config.onObsPassword).toHaveBeenCalledWith('from-obs');
+  expect(useIntegrationStore.getState().profile?.obs.webSocketUrl).toBe('ws://127.0.0.1:4567');
+});
 
 it('系统 MIDI 失败后继续连接 OBS、真实预览、控台与音频，并完成所有进度项', async () => {
   const config = options(); config.readMidiPorts = vi.fn(() => Promise.reject(new Error('系统 MIDI 未响应')));
@@ -92,4 +154,14 @@ it('配置保存失败时不连接旧目标，但独立的控台和音频检查�
   expect(api.connectObs).not.toHaveBeenCalled(); expect(api.checkNetwork).toHaveBeenCalledOnce();
   expect(useConnectionCheckStore.getState().checks.profile?.state).toBe('error');
   expect(useConnectionCheckStore.getState().checks.audio?.state).toBe('ready');
+});
+
+it('配置失败保留诊断原文并脱敏密码，不只记录通用提示', async () => {
+  const config = options(); config.password = 'private-obs-password';
+  api.saveIntegrationProfile.mockRejectedValueOnce(new Error('DataCloneError private-obs-password field invalid'));
+  await connectDevices(config);
+  const entry = api.recordLog.mock.calls.map(([value]) => value).find(value => value.details?.step === 'profile');
+  expect(entry?.details?.technicalError).toBe('DataCloneError [REDACTED] field invalid');
+  expect(JSON.stringify(entry)).not.toContain(config.password);
+  expect(useConnectionCheckStore.getState().checks.profile?.detail).toContain('DataCloneError');
 });

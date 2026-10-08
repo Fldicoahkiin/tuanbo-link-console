@@ -2,7 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { createEmptyLinkProject, parseLinkProject, ma2PlaybackRequestSchema } from '@tb/schema';
+import { createEmptyLinkProject, createLightingUserLibrary, parseLinkProject, ma2AuditionRequestSchema } from '@tb/schema';
 
 for (const playbackSource of ['p1', 'internal'] as const) {
 test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, async ({}, info) => {
@@ -14,16 +14,11 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
   for (let i = 0; i < 48000 * 12; i++) wav.writeInt16LE(Math.round(Math.sin(i / 48000 * 440 * Math.PI * 2) * 16000 * Math.exp(-(i % 24000) / 5000)), 44 + i * 2);
   const sha256 = createHash('sha256').update(wav).digest('hex');
   await writeFile(info.outputPath('dance.wav'), wav);
-  const project = parseLinkProject({ ...createEmptyLinkProject('灯光工作台验收'), playbackSource, rundown: [{ id: 'dance', title: '力量舞蹈片段', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'dance.wav', sha256, durationMs: 12000 } }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('灯光工作台验收'), schemaVersion: 2, playbackSource, ma2MaterialLibrary: { version: 2, source: 'test', userLibrary: createLightingUserLibrary(), library: { directory: { show: '测试控台', generation: 'test', version: '3.9.60.74', entries: [] }, readAt: new Date().toISOString(), sequences: [{ sequence: 168, name: '开场', cues: [{ index: 0, number: '1.250', name: '蓝色扫光' }] }], fixtureUsage: [], errors: [] } }, rundown: [{ id: 'dance', title: '力量舞蹈片段', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'dance.wav', sha256, durationMs: 12000 } }] });
   const file = info.outputPath('lighting.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   try {
     const page = await app.firstWindow();
-    const openTool = async (name: string): Promise<void> => {
-      if (name === '取消选择') { await page.getByRole('button', { name: '新建 Cue', exact: true }).click(); return; }
-      if (name === '点位详情') { await page.locator('.waveform-cue-point[aria-pressed=true]').first().click(); return; }
-      await page.getByRole('navigation', { name: '灯光子菜单' }).getByRole('button', { name: name === '素材库' ? 'Cue 编辑器' : name, exact: true }).click();
-    };
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
@@ -41,7 +36,7 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
     await expect(page.locator('.lighting-effect-placeholder')).toHaveCount(0);
     await page.locator('.lighting-effect-dock').screenshot({ path: info.outputPath('empty-workbench.png') });
     await expect(page.getByRole('region', { name: '灯光节目列表' })).toHaveCount(0);
-    await expect(page.getByRole('navigation', { name: '灯光子菜单' })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: '灯光素材主菜单' })).toBeVisible();
     const divider = page.getByRole('separator', { name: '调整效果库和时间线高度' });
     const oldHeight = (await page.locator('.reference-timeline').boundingBox())!.height;
     const oldWaveHeight = (await page.locator('.waveform-lane').first().boundingBox())!.height;
@@ -62,201 +57,56 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
     expect((await page.locator('.waveform-lane').first().boundingBox())!.height).toBe(waveHeight - 80);
     await audioEdge.dblclick({ position: { x: 100, y: 4 } }); await expect(audioEdge).toHaveAttribute('aria-valuenow', String(waveHeight));
     expect(await page.locator('.timeline-viewport').evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
-    await page.getByRole('button', { name: '添加效果', exact: true }).click();
-    await page.getByLabel('效果名称', { exact: true }).fill('开场');
-    await page.getByLabel('序列', { exact: true }).fill('1');
-    await page.getByLabel('Cue', { exact: true }).fill('1');
-    await page.getByText('指定执行器（可选）', { exact: true }).click();
-    await page.getByLabel('执行器', { exact: true }).fill('1.101');
-    await page.getByRole('button', { name: '保存效果', exact: true }).click();
-    const card = page.locator('.lighting-effect-card > button').first();
-    const clip = page.locator('.audio-timeline-segment').first();
-    const box = await clip.boundingBox(); if (!box) throw new Error('缺少波形');
-    await page.mouse.move(box.x + 80, box.y + 80); await page.mouse.down();
-    await page.mouse.move(box.x + 220, box.y + 80, { steps: 5 }); await page.mouse.up();
-    await card.click();
-    await page.getByLabel('Cue 名称', { exact: true }).fill('开场');
-    await page.getByRole('button', { name: '添加 Cue', exact: true }).click();
-    await expect(page.getByRole('button', { name: '音频 Cue 1', exact: true })).toHaveCount(1);
-    await page.keyboard.press('Control+s');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(entry => entry.events)).filter(event => event.kind === 'ma2' && event.label === '开场').length).toBe(1);
-    await page.keyboard.press('Control+z');
-    await expect(page.getByRole('button', { name: '音频 Cue 1', exact: true })).toHaveCount(0);
-    await page.keyboard.press('Control+y');
-    const cuePoint = page.getByRole('button', { name: '音频 Cue 1', exact: true });
-    const cueBox = await cuePoint.boundingBox(); if (!cueBox) throw new Error('缺少音频 Cue');
-    await page.mouse.move(cueBox.x + 15, cueBox.y + 12); await page.mouse.down();
-    await page.mouse.move(cueBox.x + 125, cueBox.y + 12, { steps: 5 }); await page.mouse.up();
-    await cuePoint.dblclick();
-    await page.getByLabel('Cue 编号', { exact: true }).fill('8');
+    // The operator arranges Cue references; analysis must never auto-create lighting.
+    await expect(page.getByRole('button', { name: '自动打 Cue', exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('音乐网格间隔')).toHaveCount(0);
+    await page.locator('.lighting-playback-settings > summary').click();
+    await page.getByRole('checkbox', { name: '选中 Cue 实时播放', exact: true }).uncheck();
+    await page.locator('.lighting-playback-settings > summary').click();
+    const source = page.getByRole('button', { name: '试听序列 168 灯光步 1.250', exact: true });
+    const events = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)) ?? [];
+    await source.dragTo(page.locator('.waveform-lane'), { targetPosition: { x: 230, y: 80 } });
+    await expect(page.getByRole('button', { name: '音频 Cue 1', exact: true })).toBeVisible();
+    await expect.poll(async () => (await events()).length).toBe(1);
+    expect((await events())[0]).toMatchObject({ kind: 'ma2', sequence: 168, cue: '1.250', executor: '' });
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect(page.locator('.waveform-cue-point')).toHaveCount(0);
+    await page.getByRole('button', { name: '重做', exact: true }).click();
+    await page.locator('.waveform-cue-point').dblclick();
     await page.getByLabel('时间（秒）', { exact: true }).fill('2.5');
     await page.getByRole('button', { name: '保存卡点', exact: true }).click();
-    await expect(page.getByRole('button', { name: '音频 Cue 8', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '音频 Cue 1', exact: true })).toBeVisible();
+    await expect.poll(async () => (await events())[0]).toMatchObject({ cue: '1.250', at: 2500 });
     await expect(page.locator('.lighting-lane:visible')).toHaveCount(0);
-    await page.keyboard.press('Control+s');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(entry => entry.events)).find(event => event.kind === 'ma2')?.at).toBe(2500);
-    await openTool('取消选择');
-    await page.getByRole('button', { name: '自动打 Cue', exact: true }).click();
-    await expect.poll(() => page.locator('.waveform-cue-point').count()).toBeGreaterThan(2);
-    await expect(page.getByRole('button', { name: '自动打 Cue', exact: true })).toBeDisabled();
-    const autoCount = await page.locator('.waveform-cue-point').count();
-    await page.locator('.waveform-cue-point').first().click(); await page.keyboard.press('Backspace');
-    await expect(page.locator('.waveform-cue-point')).toHaveCount(autoCount - 1);
-    await expect(page.getByRole('button', { name: '自动打 Cue', exact: true })).toBeDisabled();
-    await page.keyboard.press('Control+z'); await expect(page.locator('.waveform-cue-point')).toHaveCount(autoCount);
-    await expect(page.getByRole('button', { name: '自动找拍', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '一键打 Cue', exact: true })).toHaveCount(0);
-    await expect(page.locator('.audio-beat-marks, .timeline-beat-guide')).toHaveCount(0);
-    await page.keyboard.press('Control+z');
-    await expect(page.locator('.waveform-cue-point')).toHaveCount(1);
-    await expect(page.locator('.lighting-heading:visible')).toHaveCount(0);
-    await openTool('素材库');
-    await card.dragTo(page.locator('.waveform-lane'), { targetPosition: { x: 430, y: 80 } });
-    await page.keyboard.press('Control+s');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(entry => entry.events)).length).toBe(2);
-    await page.getByRole('button', { name: '框选 Cue', exact: true }).click();
-    const selectionCanvas = page.getByLabel('Cue 框选画布', { exact: true });
-    const selectionBox = await selectionCanvas.boundingBox(); if (!selectionBox) throw new Error('缺少框选画布');
-    await page.mouse.move(selectionBox.x + 10, selectionBox.y + 60); await page.mouse.down();
-    await page.mouse.move(selectionBox.x + 700, selectionBox.y + 160, { steps: 6 }); await page.mouse.up();
-    await expect(page.locator('.cue-selection-delete')).toHaveCount(0);
-    await page.locator('.waveform-cue-point').first().click({ button: 'right' });
-    await page.getByRole('menuitem', { name: '删除 2 个 Cue' }).click();
-    await expect(page.locator('.waveform-cue-point')).toHaveCount(0);
-    await page.keyboard.press('Control+z');
+    await source.dragTo(page.locator('.waveform-lane'), { targetPosition: { x: 430, y: 80 } });
     await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
-    await page.getByRole('button', { name: '定位', exact: true }).click();
-    await page.keyboard.press('Control+z');
-    await page.locator('.reference-timeline').focus(); await page.keyboard.press('s');
-    await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);
-    if (playbackSource === 'p1') {
-      await page.getByRole('button', { name: '音频 Cue 8', exact: true }).click();
-      await page.getByRole('button', { name: '播放时间线', exact: true }).click();
-      await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
-      await page.locator('.reference-timeline').focus(); await page.keyboard.press('m');
-      await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
-      await page.keyboard.press('Control+z'); await expect(page.locator('.waveform-cue-point')).toHaveCount(1);
-      await page.keyboard.press('Control+y'); await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
-      await page.locator('.reference-timeline').focus(); await page.keyboard.press('m');
-      await expect(page.locator('.waveform-cue-point')).toHaveCount(3);
-      await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
-      await page.keyboard.press('Control+s');
-      await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(entry => entry.events)).length).toBe(3);
-    }
-    expect(await page.locator('.timeline-viewport').evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
-    await page.getByRole('button', { name: '添加效果', exact: true }).click();
-    await page.getByLabel('效果名称', { exact: true }).fill('频闪');
-    await page.getByLabel('序列', { exact: true }).fill('2');
-    await page.getByLabel('Cue', { exact: true }).fill('2');
-    await page.getByText('指定执行器（可选）', { exact: true }).click();
-    await page.getByLabel('执行器', { exact: true }).fill('1.102');
-    await page.getByRole('checkbox', { name: '长条频闪', exact: true }).check();
-    await page.getByRole('button', { name: '保存效果', exact: true }).click();
-    await page.getByLabel('选择效果 开场', { exact: true }).check();
-    await page.getByLabel('选择效果 频闪', { exact: true }).check();
-    await openTool('组合 2');
-    await page.locator('.effect-binding-form').getByLabel('名称', { exact: true }).fill('副歌组合');
-    await page.getByLabel('频闪 延迟秒', { exact: true }).fill('0.5');
-    await page.getByRole('button', { name: '保存组合', exact: true }).click();
-    const beforeCount = await page.locator('.waveform-cue-point').count();
-    await page.locator('.lighting-effect-card').filter({ hasText: '副歌组合' }).getByRole('button').first().dragTo(page.locator('.waveform-lane'), { targetPosition: { x: 650, y: 80 } });
-    await expect(page.locator('.waveform-cue-point')).toHaveCount(beforeCount + 1);
-    await page.keyboard.press('Control+s');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(entry => entry.events)).filter(event => event.effectGroupId).length).toBe(2);
-    await page.getByLabel('选择效果 副歌组合', { exact: true }).check();
-    await openTool('移除');
-    await expect(page.getByLabel('选择效果 副歌组合', { exact: true })).toHaveCount(0);
-    await expect(page.locator('.waveform-cue-point')).toHaveCount(beforeCount + 1);
-    await app.evaluate(({ ipcMain }) => {
-      ipcMain.removeHandler('link:ma2-network-status');
-      ipcMain.handle('link:ma2-network-status', () => ({ state: 'connected', settings: { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, passwordSaved: false, version: '3.3.4', error: null }));
-      ipcMain.removeHandler('link:ma2-effect-library');
-      ipcMain.handle('link:ma2-effect-library', () => ({ directory: { show: '测试控台', generation: '1', version: '3.3.4', entries: [{ target: 10, name: '光束' }] }, readAt: new Date().toISOString(), sequences: [{ sequence: 10, name: '光束', cues: [{ index: 1, number: '1.250', name: '蓝色扫光' }] }], fixtureUsage: [{ sequence: 10, cueIndex: 1, fixtureIds: [101, 102] }], errors: [] }));
-    });
-    await page.getByRole('button', { name: '读取控台', exact: true }).click();
-    const importDialog = page.getByLabel('读取控台效果库', { exact: true });
-    await importDialog.getByRole('button', { name: '读取控台素材', exact: true }).click();
-    await expect(importDialog.getByText('光束 · 蓝色扫光', { exact: true })).toBeVisible();
-    await importDialog.getByText('灯具对应关系 · 设置一次，批量分类', { exact: true }).click();
-    await importDialog.getByLabel('光束 灯具编号', { exact: true }).fill('101-110');
-    await importDialog.getByRole('button', { name: '按灯具编号分类', exact: true }).click();
-    await expect(importDialog.getByLabel('分类 10/1.250', { exact: true })).toHaveValue('光束');
-    await importDialog.getByLabel('执行器 10/1.250', { exact: true }).fill('1.110');
-    await importDialog.getByLabel('选择 10/1.250', { exact: true }).check();
-    await importDialog.getByRole('button', { name: '加入素材库 · 1', exact: true }).click();
-    await expect(importDialog).toHaveCount(0);
-    await expect(page.getByLabel('选择效果 光束 · 蓝色扫光', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '音频 Cue 8', exact: true }).click();
-    const beforeComposition = await page.locator('.waveform-cue-point').count();
-    await page.locator('.lighting-effect-card').filter({ hasText: '开场' }).locator('button').first().click();
-    await page.locator('.lighting-effect-card').filter({ hasText: '频闪' }).locator('button').first().click();
-    await page.getByLabel('Cue 名称', { exact: true }).fill('蓝光加频闪');
-    await page.getByRole('button', { name: '保存 Cue', exact: true }).click();
-    await expect(page.locator('.waveform-cue-point')).toHaveCount(beforeComposition);
-    await expect(page.locator('.cue-ingredients tbody tr')).toHaveCount(2);
-    await page.keyboard.press('Control+s');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(entry => entry.events)).some(event => event.kind === 'ma2' && event.label === '蓝光加频闪')).toBe(true);
-    await openTool('素材管理');
-    await page.getByLabel('素材名称 光束 · 蓝色扫光', { exact: true }).fill('我的蓝光');
-    await page.getByRole('navigation', { name: '素材管理子菜单' }).getByRole('button', { name: '分类管理', exact: true }).click();
-    while (await page.getByRole('button', { name: '删除分类 1', exact: true }).count()) await page.getByRole('button', { name: '删除分类 1', exact: true }).click();
-    for (const name of ['我的常用', '柔和', '强烈']) { await page.getByRole('textbox', { name: '新分类', exact: true }).fill(name); await page.getByRole('button', { name: '添加分类', exact: true }).click(); }
-    await page.getByRole('button', { name: '保存分类', exact: true }).click();
-    await expect(page.getByLabel('灯具分类').locator('option', { hasText: '我的常用' })).toHaveCount(1);
-    await expect(page.getByLabel('选择效果 我的蓝光', { exact: true })).toBeVisible();
-    await openTool('导入 / 导出');
-    await expect(page.locator('.effect-inline-panel').getByRole('button', { name: '导入灯光', exact: true })).toBeVisible();
-    await expect(page.locator('dialog[open]')).toHaveCount(0);
-    await page.locator('.lighting-effect-dock').screenshot({ path: info.outputPath('files.png') });
-    await expect(page.locator('.reference-timeline')).toBeVisible();
-    await openTool('素材管理');
-    await expect(page.locator('.material-preferences')).toBeVisible();
-    await page.locator('.lighting-effect-dock').screenshot({ path: info.outputPath('materials.png') });
-    await expect(page.locator('.effect-inline-panel')).toHaveCount(0);
-    await openTool('素材库');
-    await expect(page.locator('.cue-material-browser')).toBeVisible();
-    await expect(page.getByRole('navigation', { name: '灯光子菜单' }).getByRole('button', { name: 'Cue 编辑器', exact: true, includeHidden: true })).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByRole('navigation', { name: '灯光子菜单' }).getByRole('button', { name: '素材管理', exact: true, includeHidden: true })).not.toHaveAttribute('aria-current', 'page');
-    await page.locator('.lighting-effect-dock').screenshot({ path: info.outputPath('library.png') });
-    await openTool('点位详情');
-    await expect(page.getByRole('complementary', { name: '点位素材组合' })).toBeVisible();
-    await expect(page.locator('.cue-inspector')).toHaveCount(0);
-    await page.locator('.waveform-cue-point[aria-pressed=true]').first().click();
-    await expect(page.getByRole('complementary', { name: '点位素材组合' })).toBeVisible();
-    await expect(page.getByLabel('灯光点歌曲时间')).toHaveCount(0);
-    await page.locator('.lighting-effect-dock').screenshot({ path: info.outputPath('cue-material-details.png') });
-    await expect(page.locator('.cue-ingredients tbody tr')).toHaveCount(2);
-    await expect(page.locator('.effect-inline-panel')).toHaveCount(0);
-    await page.getByRole('button', { name: '添加效果', exact: true }).click();
-    await expect(page.getByRole('textbox', { name: '效果名称', exact: true })).toBeVisible();
-    await page.locator('.lighting-effect-dock').screenshot({ path: info.outputPath('add-material.png') });
-    await openTool('素材库');
-    await page.screenshot({ path: info.outputPath('lighting-workbench.png'), fullPage: true });
-    const widthDivider = page.getByRole('separator', { name: '调整素材库和 Cue 编辑区宽度' });
-    const originalWidth = (await page.locator('.cue-composer').boundingBox())!.width;
-    await widthDivider.focus(); await page.keyboard.press('ArrowLeft');
-    await expect.poll(async () => (await page.locator('.cue-composer').boundingBox())!.width).toBeGreaterThan(originalWidth);
-    await page.keyboard.press('Home');
-    await expect(widthDivider).toHaveAttribute('aria-valuenow', '36');
+    await page.locator('.waveform-cue-point').last().click();
+    await page.locator('.reference-timeline').focus(); await page.keyboard.press('Backspace');
+    await expect(page.locator('.waveform-cue-point')).toHaveCount(1);
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
+    await expect.poll(async () => (await events()).length).toBe(2);
+    const savedEvents = await events();
+    const savedTempos = parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!.tempos;
+    await page.reload();
+    await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
+    await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
+    expect(await events()).toEqual(savedEvents);
+    expect(parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!.tempos).toEqual(savedTempos);
     for (const width of [1200, 1440, 1920]) {
-      await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0]!.setBounds({ width, height: 900 }), width);
-      expect((await page.locator('.cue-composer').boundingBox())!.width).toBeGreaterThan(width * 0.36);
-      const main = (await page.locator('.app-main').boundingBox())!;
-      const dock = (await page.locator('.lighting-effect-dock').boundingBox())!;
-      expect(dock.x).toBeCloseTo(main.x, 0);
-      expect(dock.y).toBeCloseTo(main.y, 0);
-      expect(dock.width).toBeCloseTo(main.width, 0);
+      await page.setViewportSize({ width, height: 900 });
       await expect.poll(() => page.locator('.lighting-effect-dock').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-      await page.locator('.lighting-effect-dock').screenshot({ path: info.outputPath(`workbench-${width}.png`) });
+      expect(await page.locator('.timeline-viewport').evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
+      const cue = (await page.getByRole('button', { name: '音频 Cue 1', exact: true }).boundingBox())!;
+      const wave = (await page.locator('.waveform-lane').first().boundingBox())!;
+      expect(cue.y - wave.y).toBeLessThan(60);
+      await page.screenshot({ path: info.outputPath(`workbench-${width}.png`), fullPage: true });
     }
-    const cueCount = await page.locator('.waveform-cue-point').count();
-    await page.getByLabel('素材 1 Cue 编号', { exact: true }).fill('9');
-    await page.getByRole('button', { name: '保存 Cue', exact: true }).click();
-    await expect(page.locator('.waveform-cue-point')).toHaveCount(cueCount);
-    await page.keyboard.press('Control+s');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(entry => entry.events)).some(event => event.kind === 'ma2' && event.cue === '9')).toBe(true);
     expect(errors).toEqual([]);
-  } finally { await app.close(); }
+  } catch (error) {
+    await writeFile(info.outputPath('failure-ui.txt'), await (await app.firstWindow()).locator('body').innerText());
+    throw error;
+  } finally { await closeWorkbench(app); }
 });
 }
 
@@ -268,7 +118,9 @@ test('序列池素材无需执行器，编辑与重开保留编号，点击 Cue 
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   await writeFile(info.outputPath('pool.wav'), wav);
   const file = info.outputPath('pool.tblink');
-  await writeFile(file, JSON.stringify(parseLinkProject({ ...createEmptyLinkProject('序列池编辑'), playbackSource: 'internal', rundown: [{ id: 'pool-song', title: '序列池节目', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'pool.wav', durationMs: 4000, sha256: createHash('sha256').update(wav).digest('hex') } }] })));
+  await writeFile(file, JSON.stringify(parseLinkProject({ ...createEmptyLinkProject('序列池编辑'), schemaVersion: 2, playbackSource: 'internal',
+    ma2MaterialLibrary: { version: 2, source: 'test', userLibrary: createLightingUserLibrary(), library: { directory: { show: '测试控台', generation: 'test', version: '3.9.60.74', entries: [] }, readAt: new Date().toISOString(), sequences: [{ sequence: 168, name: '序列池开场', cues: [{ index: 0, number: '1.250', name: '序列池灯光' }] }], fixtureUsage: [], errors: [] } },
+    rundown: [{ id: 'pool-song', title: '序列池节目', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'pool.wav', durationMs: 4000, sha256: createHash('sha256').update(wav).digest('hex') } }] })));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   try {
     const page = await app.firstWindow(); const calls: unknown[] = [];
@@ -280,34 +132,46 @@ test('序列池素材无需执行器，编辑与重开保留编号，点击 Cue 
     }, file);
     app.on('console', message => { if (message.text().startsWith('POOL_CUE:')) calls.push(JSON.parse(message.text().slice(9))); });
     await app.evaluate(({ ipcMain }) => {
-      ipcMain.removeHandler('link:ma2-play-cue'); ipcMain.handle('link:ma2-play-cue', (_event, payload: unknown) => console.log(`POOL_CUE:${JSON.stringify(payload)}`));
+      ipcMain.removeHandler('link:ma2-audition-play'); ipcMain.handle('link:ma2-audition-play', (_event, payload: unknown) => console.log(`POOL_CUE:${JSON.stringify(payload)}`));
     });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await page.getByRole('button', { name: '添加效果', exact: true }).click();
-    await page.getByLabel('效果名称', { exact: true }).fill('序列池开场');
-    await page.getByLabel('序列', { exact: true }).fill('168');
-    await page.getByLabel('Cue', { exact: true }).fill('1.250');
-    await page.getByRole('button', { name: '保存效果', exact: true }).click();
-    await page.locator('.lighting-effect-card > button').first().click();
+    await expect(page.locator('.wavesurfer-surface[data-ready=true]').first()).toBeVisible();
+    await page.getByRole('button', { name: '试听序列 168 灯光步 1.250', exact: true }).dragTo(page.locator('.waveform-lane'), { targetPosition: { x: 230, y: 80 } });
+    await page.locator('.waveform-cue-point').click();
     await expect(page.getByRole('columnheader', { name: '执行器（可选）' })).toHaveCount(0);
     await page.getByLabel('Cue 名称', { exact: true }).fill('序列池灯光');
-    await page.getByRole('button', { name: '添加 Cue', exact: true }).click();
     await expect(page.locator('.waveform-cue-point')).toHaveCount(1);
-    await page.getByText('播放设置', { exact: true }).click();
     await page.getByLabel('灯光输出方式').selectOption('network');
     await page.locator('.waveform-cue-point').click();
     await expect.poll(() => calls.length).toBeGreaterThan(0);
-    expect(ma2PlaybackRequestSchema.parse(calls.at(-1)).action).toEqual({ target: 'sequence', sequence: 168, cue: '1.250', action: 'goto' });
+    expect(ma2AuditionRequestSchema.parse(calls.at(-1)).action).toEqual({ target: 'sequence', sequence: 168, cue: '1.250', action: 'goto' });
+    await page.locator('.cue-ingredient > details > summary').click();
+    await expect(page.getByLabel('素材 1 执行器', { exact: true })).toHaveValue('');
     await page.getByLabel('素材 1 Cue 编号', { exact: true }).fill('8.5');
-    await page.getByRole('button', { name: '保存 Cue', exact: true }).click();
+    await page.getByLabel('素材 1 Cue 编号', { exact: true }).press('Tab');
+    await expect(page.locator('.cue-marker-number')).toHaveText('1');
     await page.keyboard.press('Control+s');
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events))[0]).toMatchObject({ sequence: 168, cue: '8.5', executor: '' });
     await page.reload();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await page.locator('.waveform-cue-point').click();
+    await page.locator('.cue-ingredient > details > summary').click();
     await expect(page.getByLabel('素材 1 Cue 编号')).toHaveValue('8.5');
     await expect(page.locator('.waveform-cue-point')).toHaveCount(1);
     await page.screenshot({ path: info.outputPath('sequence-pool-editor.png'), fullPage: true });
-  } finally { await app.close(); }
+  } catch (error) {
+    await writeFile(info.outputPath('failure-ui.txt'), await (await app.firstWindow()).locator('body').innerText());
+    throw error;
+  } finally { await closeWorkbench(app); }
 });
+
+async function closeWorkbench(app: Awaited<ReturnType<typeof electron.launch>>): Promise<void> {
+  const page = await app.firstWindow();
+  if (!page.isClosed()) {
+    const stop = page.getByRole('button', { name: '停止时间线', exact: true });
+    if (await stop.isVisible()) await stop.click();
+    await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+  }
+  await app.close();
+}

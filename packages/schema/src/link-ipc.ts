@@ -4,6 +4,10 @@ import { linkMediaKindSchema, linkProjectSchema, referenceCanvasTransformSchema,
 import { audioSegmentSchema } from './audio-edit';
 
 export const audioAnalysisRequestSchema = z.object({ projectPath: z.string().min(1), source: referenceAudioSourceSchema }).strict();
+export const musicAnalysisRequestSchema = audioAnalysisRequestSchema.extend({ version: z.literal(1), taskId: z.string().uuid() }).strict();
+export type MusicAnalysisRequest = z.infer<typeof musicAnalysisRequestSchema>;
+export const automaticMusicRequestSchema = musicAnalysisRequestSchema.extend({ device: z.enum(['cpu', 'cuda']) }).strict();
+export type AutomaticMusicRequest = z.infer<typeof automaticMusicRequestSchema>;
 export const audioRenderRequestSchema = audioAnalysisRequestSchema.extend({ segments: z.array(audioSegmentSchema).min(1).max(10_000), tracks: audioTracksSchema.optional() });
 
 export const linkExternalApplicationIdSchema = z.enum(['obs', 'p1']);

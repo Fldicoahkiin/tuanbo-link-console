@@ -1,8 +1,8 @@
 import { licenseStatusSchema, type LicenseStatus } from '@tb/schema';
 
 /** Explicit access for the unpackaged development app on the publisher's PC. */
-export function localTestAccessEnabled(packaged: boolean, value: string | undefined): boolean {
-  return !packaged && value === '1';
+export function localTestAccessEnabled(packaged: boolean, value: string | undefined, markerExists = false): boolean {
+  return !packaged && value !== '0' && (value === '1' || markerExists);
 }
 
 export function localTestLicenseStatus(machineCode: string): LicenseStatus {

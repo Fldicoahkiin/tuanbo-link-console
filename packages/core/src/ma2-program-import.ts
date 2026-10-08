@@ -30,5 +30,5 @@ export function importMa2ProgramsCommand(selections: readonly { itemId: string; 
 
 export function saveMa2MaterialLibraryCommand(source: string, input: Ma2EffectLibrary, historyGroup?: string): LinkCommand {
   const library = ma2EffectLibrarySchema.parse(input);
-  return { id: crypto.randomUUID(), ...(historyGroup ? { historyGroup } : {}), label: '保存工程控台素材目录', execute: project => parseLinkProject({ ...project, schemaVersion: 2, ma2MaterialLibrary: { version: 1, source, library }, updatedAt: new Date().toISOString() }), undo: before => parseLinkProject(before) };
+  return { id: crypto.randomUUID(), ...(historyGroup ? { historyGroup } : {}), label: '保存工程控台素材目录', execute: project => parseLinkProject({ ...project, schemaVersion: 2, ma2MaterialLibrary: { ...project.ma2MaterialLibrary, version: project.ma2MaterialLibrary?.userLibrary ? 2 : 1, source, library }, updatedAt: new Date().toISOString() }), undo: before => parseLinkProject(before) };
 }

@@ -8,6 +8,7 @@ import type { ManagedMediaEvent } from './managed-media-timeline';
 export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
   guardOutput: <T>(canSend: () => boolean, operation: () => Promise<T>) => Promise<T>;
   prepareOutputs: (assertCurrent: () => void) => Promise<void>;
+  outputNotice?: () => string | null;
   prepareUpcoming?: (frame: number, assertCurrent: () => void) => Promise<void>;
   releaseOutputs: () => Promise<void>;
   executor: LinkActionExecutor;

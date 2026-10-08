@@ -4,21 +4,45 @@ import type { LightingDocument, MtcFrameRate } from '@tb/schema';
 import { LightingMidiOutput } from '../../registry/lighting-midi-output';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { useIntegrationStore } from '../stores/integration-store';
+import { reportCoordinatorError } from './runtime-action-log';
 
-export function useLightingPreview(input: { enabled: boolean; document: LightingDocument | undefined; audioRef: RefObject<HTMLAudioElement>; playing: boolean; frameRate: MtcFrameRate; onError: (message: string) => void }): boolean {
+export function useLightingPreview(input: { enabled: boolean; document: LightingDocument | undefined; audioRef: RefObject<HTMLAudioElement>; playing: boolean; frameRate: MtcFrameRate; onError: (message: string) => void }): { ready: boolean; stop: () => Promise<void> } {
   const endingOutput = useRef<LightingMidiOutput | null>(null);
+  const ownedOutput = useRef<LightingMidiOutput | null>(null);
   const [ready, setReady] = useState(false);
   const latest = useRef(input); latest.current = input;
+  const stop = async (): Promise<void> => {
+    const output = ownedOutput.current; ownedOutput.current = null;
+    if (!output) return;
+    output.stop();
+    await output.release();
+  };
+  useEffect(() => () => {
+    const output = ownedOutput.current; ownedOutput.current = null;
+    if (!output) return;
+    output.stop();
+    void output.release().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      latest.current.onError(message);
+      reportCoordinatorError(message, failure => latest.current.onError(failure));
+    });
+  }, []);
   useEffect(() => {
     endingOutput.current?.stop(); endingOutput.current = null;
     const document = latest.current.document;
     if (!input.playing || !document?.tracks.length) { setReady(false); return; }
+    const hasLightingContent = Boolean(document.ma2Bindings?.length) || document.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind !== 'empty-cue')));
     const output = new LightingMidiOutput(); const mtc = new MediaMtcOutput();
+    if (input.enabled) ownedOutput.current = output;
     let seekAudio: HTMLAudioElement | null = null;
     let canFinish = false;
     let looping = false;
     let cancelled = false; let timer: ReturnType<typeof setInterval> | null = null;
-    const fail = (error: unknown): void => latest.current.onError(error instanceof Error ? error.message : String(error));
+    const fail = (error: unknown): void => {
+      const message = error instanceof Error ? error.message : String(error);
+      latest.current.onError(message);
+      reportCoordinatorError(message, failure => latest.current.onError(failure));
+    };
     const began = (): void => { canFinish = Boolean(seekAudio && !seekAudio.ended && !seekAudio.seeking); };
     const located = (): void => { canFinish = false; try { if (seekAudio) output.locate(seekAudio.currentTime * 1000); mtc.stop(); } catch (error) { cleanup(); fail(error); } };
     const cleanup = (): void => {
@@ -47,14 +71,14 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       const audio = input.audioRef.current;
       if (!audio || !audio.getAttribute('src')) { if (input.enabled) throw new Error('请先给节目添加音乐，再开启灯光试听'); return; }
       if (input.enabled) await output.prepare(document, profile, audio.currentTime * 1000);
-      if (cancelled) { cleanup(); return; }
-      if (input.enabled && document.outputMode === 'timecode') {
+      if (cancelled || (input.enabled && ownedOutput.current !== output)) { cleanup(); return; }
+      if (input.enabled && hasLightingContent && document.outputMode === 'timecode') {
         const id = profile?.internalPlayer?.mtcOutputPortProfileId;
         const name = profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output')?.portName;
         if (!name) throw new Error('请在设备设置选择 MIDI 时间码输出');
         await mtc.connect(name);
       }
-      if (cancelled) { cleanup(); return; }
+      if (cancelled || (input.enabled && ownedOutput.current !== output)) { cleanup(); return; }
       seekAudio = audio; audio.addEventListener('playing', began); audio.addEventListener('seeking', located); audio.addEventListener('seeked', located);
       setReady(true);
       timer = setInterval(() => {
@@ -68,12 +92,12 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
             else resume();
             return;
           }
-          if (input.enabled) output.tick(audio.currentTime * 1000); if (input.enabled && document.outputMode === 'timecode') mtc.tick(audio.currentTime * 1000 + originMs, latest.current.frameRate);
+          if (input.enabled) output.tick(audio.currentTime * 1000); if (input.enabled && hasLightingContent && document.outputMode === 'timecode') mtc.tick(audio.currentTime * 1000 + originMs, latest.current.frameRate);
         } catch (error) { cleanup(); fail(error); }
       }, 5);
     };
     void start().catch((error: unknown) => { cleanup(); if (!cancelled) fail(error); });
     return () => { cancelled = true; cleanup(); };
   }, [input.playing, input.audioRef, input.enabled]);
-  return !input.enabled || !input.document?.tracks.length || ready;
+  return { ready: !input.enabled || !input.document?.tracks.length || ready, stop };
 }

@@ -21,7 +21,14 @@ export function useTimelineStamp(props: Props) {
     if (!lighting) return;
     try {
       const output = props.clock.read();
-      const result = stampTimeline(lighting.document, track?.id, positionMs ?? (props.playing && output.ready ? output.positionMs : props.playheadMs), props.durationMs, lighting.selectedClipId ?? undefined);
+      const ms = positionMs ?? (props.playing && output.ready ? output.positionMs : props.playheadMs);
+      if (lighting.onCreateCue) {
+        if (!Number.isFinite(ms) || ms < 0 || ms >= props.durationMs) throw new Error('请在歌曲范围内添加 Cue');
+        lighting.onCreateCue(ms);
+        setMessage(null);
+        return;
+      }
+      const result = stampTimeline(lighting.document, track?.id, ms, props.durationMs, lighting.selectedClipId ?? undefined);
       lighting.onChange(result.document, '灯光时间线打点');
       if (result.eventId) lighting.onSelectEvent?.(result.trackId, result.clipId, result.eventId);
       setMessage(null);
@@ -30,7 +37,7 @@ export function useTimelineStamp(props: Props) {
   useEffect(() => {
     if (!lighting) return;
     const key = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || event.repeat || event.target instanceof Element && event.target.closest('input,textarea,select,[contenteditable="true"],[role="separator"]') || [...document.querySelectorAll('[role="dialog"],dialog[open],.settings-content-page,.effect-binding-backdrop')].some(element => element.getClientRects().length > 0)) return;
+      if (event.defaultPrevented || event.repeat || event.target instanceof Element && event.target.closest('input,textarea,select,button,[role="button"],[role="menu"],.cue-pool-grid,[contenteditable="true"],[role="separator"]') || [...document.querySelectorAll('[role="dialog"],dialog[open],.settings-content-page,.effect-binding-backdrop')].some(element => element.getClientRects().length > 0)) return;
       const action = bindings.find(binding => binding.key === shortcutKey(event))?.action;
       if (!action) return;
       event.preventDefault(); event.stopImmediatePropagation();
@@ -43,8 +50,8 @@ export function useTimelineStamp(props: Props) {
     window.addEventListener('keydown', key, true); return () => window.removeEventListener('keydown', key, true);
   });
   const shortcut = bindings.find(binding => binding.action === 'stamp');
-  const controls = lighting ? <div className="timeline-stamp-controls"><button aria-label="打点" title={`在播放头打点${shortcut ? `（${shortcutLabel(shortcut.key)}）` : ''}；波形右键可在鼠标位置打点`} onClick={() => stamp()}><MapPinPlus /></button>
-    {lighting.document.tracks.length ? <TimelineIconMenu icon={Layers3} label={`打点轨道：${track?.name ?? '未选择'}`}><label>打点轨道<select aria-label="打点轨道" value={track?.id ?? ''} onChange={event => setChosen(event.currentTarget.value)}>{lighting.document.tracks.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.locked ? '（已锁定）' : ''}</option>)}</select></label></TimelineIconMenu> : null}
+  const controls = lighting ? <div className="timeline-stamp-controls"><button aria-label="打点" title={`在播放头打点${shortcut ? `（${shortcutLabel(shortcut.key)}）` : ''}；波形右键可在鼠标位置打点`} onClick={event => { stamp(); event.currentTarget.closest<HTMLElement>(".reference-timeline")?.focus(); }}><MapPinPlus /></button>
+    {!lighting.onCreateCue && lighting.document.tracks.length ? <TimelineIconMenu icon={Layers3} label={`打点轨道：${track?.name ?? '未选择'}`}><label>打点轨道<select aria-label="打点轨道" value={track?.id ?? ''} onChange={event => setChosen(event.currentTarget.value)}>{lighting.document.tracks.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.locked ? '（已锁定）' : ''}</option>)}</select></label></TimelineIconMenu> : null}
     {message || error ? <span role="alert" className="timeline-tool-error" tabIndex={0} aria-label={message ?? error ?? ''} title={message ?? error ?? ''}><TriangleAlert /></span> : null}
   </div> : null;
   return { stamp, controls };

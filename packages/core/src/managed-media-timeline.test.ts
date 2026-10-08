@@ -1,12 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import { parseLinkProject } from '@tb/schema';
-import { collectCrossedManagedMediaEvents, compileManagedMediaTimeline, managedMediaSourceName } from './managed-media-timeline';
+import { collectCrossedManagedMediaEvents, compileManagedMediaTimeline, managedMediaSourceName, materialSceneTargets } from './managed-media-timeline';
+import { SceneOutputTimeline } from './scene-output-timeline';
 import { editReferenceAudioCommand, setReferenceAudioCommand } from './link-command';
 import { audioTracks, audioSegments } from './audio-edit';
 import { allocateMediaTimecodeRanges } from './mtc-output';
 import { resolveTimelineState } from './timeline-state';
 
 describe('managed media timeline', () => {
+  it('同一素材跨轨叠加使用独立来源和播放位置，同轨分割继续复用自己的解码器', () => {
+    const project = projectWithClips([clip('one', 'video', 'layer-top', 0, 1000)]);
+    project.obsOutputMode = 'scenes';
+    const item = project.rundown[0]!;
+    item.visualLayers.push({ id: 'layer-second', name: '轨道 2', visible: true, locked: false });
+    item.referenceMediaClips.push({ ...item.referenceMediaClips[0]!, id: 'two', layerId: 'layer-second', sourceOffsetMs: 300 });
+    item.referenceMediaClips.push({ ...item.referenceMediaClips[1]!, id: 'three', startTimecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 } });
+    const starts = compileManagedMediaTimeline(project, 'item').events.filter(event => event.phase === 'start');
+    expect(starts[0]!.sourceName).not.toBe(starts[1]!.sourceName);
+    expect(starts[1]!.sourceName).toBe(starts[2]!.sourceName);
+    expect(starts[1]!.sourceOffsetMs).toBe(300);
+    const targets = materialSceneTargets(project);
+    expect(targets).toHaveLength(2);
+    expect(starts.every(event => targets.some(target => target.sourceName === event.sourceName && target.sceneName === event.sceneName))).toBe(true);
+    const action = new SceneOutputTimeline(project, 'item').at(0).cues[0]!.cue.actions[0]!;
+    expect(action.kind === 'obs.setProgramScene' && new Set(action.sceneLayers).size).toBe(2);
+  });
   it('旧视频主音频转多轨再删除，不会重新打开视频原声', () => {
     const project = projectWithClips([clip('one', 'video', 'layer-top', 0, 1000)]);
     const source = { assetId: 'music', relativePath: 'assets/music.wav', sha256: 'a'.repeat(64), durationMs: 1000, sourceMediaAssetId: 'asset-one' };

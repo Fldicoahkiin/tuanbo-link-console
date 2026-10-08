@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import { PlayerViewStore } from './stores/player-view-store';
 import { PlaybackMidiInput } from '../registry/playback-midi-input';
 import { InternalPlaybackController, emptyInternalPlayerState, type InternalPlayerDependencies } from './runtime/internal-playback-controller';
-import { NativeProgramPlayer, toUserErrorMessage } from '@tb/core/link';
-import { LightingMidiOutput } from '../registry/lighting-midi-output';
+import { toUserErrorMessage } from '@tb/core/link';
+import { RemoteNativeProgramPlayer } from './runtime/remote-native-program-player';
 import type { ProgramPlayerControls } from './runtime/program-player-controls';
 import type { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
 import { useDocumentStore } from './stores/document-store';
@@ -27,7 +27,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   const notifySelection = useCallback((message: string) => controller?.reportUnavailable(message), [controller]);
   const [selectedItemId] = useSelectedProgram(notifySelection);
   useEffect(() => {
-    if (controller instanceof NativeProgramPlayer && obsStatus === 'connected' && selectedItemId) controller.preloadSelected(selectedItemId);
+    if (controller instanceof RemoteNativeProgramPlayer && obsStatus === 'connected' && selectedItemId) controller.preloadSelected(selectedItemId);
   }, [controller, obsStatus, selectedItemId]);
   const requestedEngine = profile?.internalPlayer?.audioEngine ?? 'browser';
   const requestedDevice = (requestedEngine === 'native' ? profile?.internalPlayer?.nativeAudioOutputDeviceId : profile?.internalPlayer?.audioOutputDeviceId) ?? 'default';
@@ -66,7 +66,6 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     let prepared: { report: PreflightReport; profile: ReturnType<typeof useIntegrationStore.getState>['profile']; mtcOutputEnabled: boolean } | null = null;
     const dependencies: InternalPlayerDependencies = {
       prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled, signal }) => {
-        if (audioConfiguration.engine === 'native') { await coordinator.prepareNativeCompanion(itemId, positionMs, signal); return; }
         if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
         if (!path) throw new Error('请先保存工程，再播放正式音频');
         if (useIntegrationStore.getState().obs.status !== 'connected') {
@@ -81,7 +80,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
           const report = await runDesktopPreflight(coordinator, 'live', 'internal', false, { internalMtcOutputEnabled: mtcOutputEnabled }, assertCurrent);
           prepared = report.passed ? { report, profile: useIntegrationStore.getState().profile, mtcOutputEnabled } : null;
           return report;
-        }, positionMs, signal);
+        }, positionMs, signal, message => player.reportUnavailable(message));
       },
       ingest: (positionMs) => coordinator.ingestInternal(positionMs),
       started: (positionMs) => coordinator.startInternalClock(positionMs),
@@ -109,7 +108,14 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       }
     };
     const player: ProgramPlayerControls = audioConfiguration.engine === 'native'
-      ? new NativeProgramPlayer(project, path ?? '', useDocumentStore.getState().revision, dependencies, desktop, new LightingMidiOutput())
+      ? new RemoteNativeProgramPlayer(project, path ?? '', useDocumentStore.getState().revision, dependencies, desktop, event => {
+        const runtime = useRuntimeStore.getState();
+        const status = event.state.status === 'playing' ? 'running' : event.state.status === 'stopped' ? 'idle'
+          : event.state.status === 'preparing' ? 'preflight' : event.state.status;
+        if (runtime.state !== status || runtime.currentItemId !== event.state.itemId || runtime.currentCueId !== event.currentCueId) {
+          runtime.setState({ state: status, currentItemId: event.state.itemId, currentCueId: event.currentCueId, mode: 'live', reason: event.state.error });
+        }
+      })
       : new InternalPlaybackController(project, dependencies);
     coordinator.onInternalStop(() => player.externalStop());
     const unsubscribe = useRuntimeStore.subscribe((next, previous) => {
@@ -125,7 +131,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     setController(player); view.publish(emptyInternalPlayerState);
     return () => {
       unsubscribe(); unsubscribeObs(); coordinator.onInternalStop(null);
-      if (player instanceof NativeProgramPlayer) void player.dispose().catch(error => dependencies.notice?.(`关闭播放器失败：${toUserErrorMessage(error)}`, null));
+      if (player instanceof RemoteNativeProgramPlayer) void player.dispose().catch(error => dependencies.notice?.(`关闭播放器失败：${toUserErrorMessage(error)}`, null));
       else player.dispose();
     };
   }, [coordinator, project, path, ready, audioConfiguration, view]);

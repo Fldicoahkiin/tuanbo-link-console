@@ -24,6 +24,8 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
       ipcMain.removeHandler('link:detect-local-integrations');
       ipcMain.handle('link:detect-local-integrations', () => ({ detectedAt: new Date().toISOString(), applications: Object.fromEntries(['obs', 'p1'].map(id => [id, { id, executablePath: null, workingDirectory: null, processName: null, windowTitle: null, version: null, running: false }])) }));
       ipcMain.removeHandler('link:midi-recheck'); ipcMain.handle('link:midi-recheck', () => undefined);
+      ipcMain.removeHandler('link:obs-connect'); ipcMain.handle('link:obs-connect', () => { throw new Error('隔离 MIDI 测试不连接 OBS'); });
+      ipcMain.removeHandler('link:obs-connect-local'); ipcMain.handle('link:obs-connect-local', () => { throw new Error('隔离 MIDI 测试不连接本地 OBS'); });
       ipcMain.removeHandler('link:process-start'); ipcMain.handle('link:process-start', () => { throw new Error('隔离测试不启动外部程序'); });
     }, path);
     await page.evaluate(() => {
@@ -41,8 +43,9 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     await expect(page.getByRole('button', { name: '顶部一键连接', exact: true })).toBeEnabled();
     await expect(page.getByRole('dialog', { name: '设备连接检查结果', exact: true })).toHaveCount(0);
     const connectionResult = page.getByLabel('全部连接状态', { exact: true });
-    await expect(connectionResult.getByRole('button', { name: '灯光 Cue 输出：已打开', exact: true })).toBeVisible();
-    await connectionResult.getByRole('button', { name: 'OBS 控制：待处理', exact: true }).click();
+    await page.getByRole('button', { name: '详细', exact: true }).click();
+    await expect(connectionResult.getByRole('button', { name: '灯光 Cue 输出：已连接', exact: true })).toBeVisible();
+    await connectionResult.getByRole('button', { name: 'OBS 控制：未连接', exact: true }).click();
     await page.getByRole('region', { name: '连接详情' }).getByRole('button', { name: '前往设置', exact: true }).click();
     await expect(page.getByRole('navigation', { name: '设置子子菜单' })).toBeVisible();
     const packets = () => page.evaluate(() => Reflect.get(window, '__cuePackets') as number[][]);
@@ -50,7 +53,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await page.getByRole('button', { name: '音频 Cue 1', exact: true }).click();
     await expect.poll(packets).toEqual([[0xf0, 0x7f, 127, 2, 1, 1, ...Array.from('1.000\0' + '101.2', char => char.charCodeAt(0)), 0xf7]]);
-    await page.getByText('播放设置', { exact: true }).click();
+    await page.locator('.lighting-playback-settings > summary').click();
     await page.getByLabel('选中 Cue 实时播放', { exact: true }).uncheck();
     await page.getByRole('button', { name: '音频 Cue 2', exact: true }).click();
     expect(await packets()).toHaveLength(1);
@@ -88,6 +91,7 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     await expect(page.getByLabel('MA2 连接方式')).toHaveValue('midi');
     await expect(page.getByLabel('MA2 控台 IP')).toHaveCount(0);
     await expect(page.getByRole('button', { name: '扫描控台全部时间线', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '详细', exact: true }).click();
     await expect(page.getByLabel('全部连接状态').getByRole('button', { name: 'MA2 网络：未启用', exact: true })).toBeVisible();
     await expect(page.getByLabel('全部连接状态').getByRole('button', { name: 'MA2 工程通信：未启用', exact: true })).toBeVisible();
     await page.getByLabel('MA2 连接方式').selectOption('local');
@@ -121,7 +125,6 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
       await sync.screenshot({ path: info.outputPath(`p1-sync-${width}.png`) });
     }
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await page.getByText('播放设置', { exact: true }).click();
     await page.getByLabel('灯光输出方式').selectOption('direct');
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.outputMode).toBe('direct');
 

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { refreshMa2BindingCommand, detachMa2BindingCommand, restoreMa2BindingCommand, confirmMa2PairingCommand, matchMa2Programs, parseP1TimeOrigin } from '@tb/core/link';
+import { refreshMa2BindingCommand, detachMa2BindingCommand, restoreMa2BindingCommand, confirmMa2PairingCommand, matchMa2Programs, programTimeOrigin } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { importCachedMa2, updateMa2ReadState } from '../stores/ma2-read-store';
 import { useSelectedProgram } from '../useSelectedProgram';
@@ -28,7 +28,7 @@ export function Ma2CachedBrowser({ disabled, onClose, notify }: { disabled: bool
   const song = bound?.item ?? paired;
   let origin: number | undefined;
   let originError = '';
-  try { if (song) origin = song.p1Media ? parseP1TimeOrigin(song.p1Media.midiStartTime) : song.playback?.mtcOffsetMs ?? 0; }
+  try { if (song) origin = programTimeOrigin(song); }
   catch (error) { originError = error instanceof Error ? error.message : String(error); }
   const apply = async (target?: number): Promise<void> => {
     setBusy(true);

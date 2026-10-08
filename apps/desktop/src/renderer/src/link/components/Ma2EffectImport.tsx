@@ -1,13 +1,11 @@
 import { useDocumentStore } from '../stores/document-store';
-import { readMa2Method } from '../stores/ma2-mode-store';
 import { toUserErrorMessage } from '@tb/core/link';
 import { useEffect, useState } from 'react';
 import { Download, Search, X, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
-import { ma2NetworkStatusSchema, lightingTemplateTrackSchema, type LightingDocument, type Ma2CatalogRequest, type Ma2EffectLibrary } from '@tb/schema';
-import { connectDiscoveredMa2, useLocalMa2Store } from '../stores/ma2-connection-store';
+import { lightingTemplateTrackSchema, type LightingDocument, type Ma2EffectLibrary } from '@tb/schema';
 import { FIXTURE_CATEGORIES, LightingFixtureMapping } from './LightingFixtureMapping';
 import { loadMa2MaterialCache } from './ma2-material-cache';
-import { scanMa2Materials, useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
+import { ma2MaterialConnection, scanMa2Materials, useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 
 type Row = { key: string; name: string; sequence: number; cue: string; executor: string; categories: string[]; fixtureIds: number[]; selected: boolean };
 function rowsForSequence(sequence: Ma2EffectLibrary['sequences'][number], document: LightingDocument, savedMappings: Record<string, number[]>, usage: Ma2EffectLibrary['fixtureUsage']): Row[] {
@@ -17,19 +15,6 @@ function rowsForSequence(sequence: Ma2EffectLibrary['sequences'][number], docume
     const categories = [...new Set([...Object.entries(savedMappings).filter(([, ids]) => ids.some(id => fixtureIds.includes(id))).map(([category]) => category), ...FIXTURE_CATEGORIES.filter(category => `${sequence.name ?? ''} ${cue.name ?? ''}`.includes(category))])];
     return { key: `${sequence.sequence}/${cue.number}`, name: sequence.name ? `${sequence.name} · ${cue.name ?? `Cue ${cue.number}`}` : cue.name ?? `Cue ${cue.number}`, sequence: sequence.sequence, cue: cue.number, executor: candidates.length === 1 ? candidates[0]! : '', categories, fixtureIds, selected: false };
   });
-}
-async function connection(): Promise<Ma2CatalogRequest> {
-  const method = readMa2Method();
-  if (method === 'midi') throw new Error('当前为仅 MIDI 时间码模式，不读取控台灯光库');
-  const local = useLocalMa2Store.getState();
-  if (method === 'local' || (!method && local.status === 'ready')) {
-    if (local.status !== 'ready') throw new Error('请先在设备设置连接本机 onPC');
-    return { dataDirectory: local.directory };
-  }
-  const network = ma2NetworkStatusSchema.parse(await connectDiscoveredMa2());
-  if (network.state !== 'connected' || !network.settings) throw new Error('请先在设备设置连接 MA2 控台');
-  const { host, port, monitorPort, username } = network.settings;
-  return { dataDirectory: '', network: { host, port, monitorPort, username } };
 }
 export function Ma2EffectImport({ document, disabled, onChange, onClose }: { document: LightingDocument; disabled: boolean; onChange: (document: LightingDocument, label: string) => boolean | void; onClose: () => void }): JSX.Element {
   const projectId = useDocumentStore(state => state.project?.projectId ?? '');
@@ -56,7 +41,7 @@ export function Ma2EffectImport({ document, disabled, onChange, onClose }: { doc
   }, [catalog, document]);
   const scan = async (retry = false): Promise<void> => {
     setError('');
-    try { await scanMa2Materials(await connection(), retry); }
+    try { await scanMa2Materials(await ma2MaterialConnection(), retry); }
     catch (cause) { setError(toUserErrorMessage(cause)); }
   };
   const patch = (key: string, value: Partial<Row>): void => setRows(current => current.map(row => row.key === key ? { ...row, ...value } : row));

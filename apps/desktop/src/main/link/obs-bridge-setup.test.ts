@@ -16,6 +16,16 @@ function fixture() {
   return { tools, calls, setup: new ObsBridgeSetup(tools) };
 }
 
+it('认证失败不是插件故障，不提示重启或关闭 OBS', async () => {
+  const { setup, tools } = fixture();
+  tools.process.mockResolvedValue({ pid: 1, owned: false });
+  tools.connect.mockRejectedValue(new Error('Authentication failed'));
+  await expect(setup.repair()).rejects.toThrow('Authentication failed');
+  expect(tools.verify).not.toHaveBeenCalled();
+  expect(tools.confirm).not.toHaveBeenCalled();
+  expect(tools.stop).not.toHaveBeenCalled();
+});
+
 it('新电脑：部署完成后启动、连接并读取真实帧', async () => {
   const { setup, calls } = fixture();
   await setup.repair();

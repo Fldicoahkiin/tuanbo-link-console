@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { stat, statfs } from 'node:fs/promises';
-import { materialSceneNames, millisecondsToFrameNumber, preciseSeekAssetIds, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type ObsProgramSessionDependencies } from '@tb/core/link';
+import { materialSceneTargets, millisecondsToFrameNumber, preciseSeekAssetIds, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type ObsProgramSessionDependencies } from '@tb/core/link';
 import type { NativeObsPrepare } from '@tb/schema';
 import type { ObsWebSocketAdapter } from './obs-websocket-adapter';
 import type { LinkProjectService } from './link-project-service';
@@ -28,15 +28,18 @@ type Services = {
 export function createNativeObsOutputs(request: NativeObsPrepare, services: Services, positionMs: number): NativeObsOutputs {
   const { obs, projects, profiles, seek, logger } = services;
   const project = projectFromObsSnapshot(request.snapshot), path = request.projectPath;
+  const materialTargets = materialSceneTargets(project);
   const preciseAssets = preciseSeekAssetIds(request.snapshot, positionMs);
   let address: string | null = null, capture: NativePlayerService['audioCaptureIdentity'] | null = null;
   let prepared = false;
+  let captureNotice: string | null = null;
   const identities = new Map<string, { size: number; mtimeMs: number; ctimeMs: number; ino: number }>();
   const preload = new ObsMediaPreload(project, request.snapshot.item.id, obs.mediaScenes, {
     prime: async (name, retained, kind) => { if (!address) throw new Error('后台画面连接尚未准备'); await seek.prime(address, name, retained, kind); },
     seek: async (name, position) => { if (!address) throw new Error('后台画面连接尚未准备'); await seek.seek(address, name, position); }
   });
   const outputs: NativeObsOutputs = {
+    outputNotice: () => captureNotice,
     now: () => performance.now(), executor: { id: obs.id, supports: action => obs.supports(action),
       execute: action => obs.execute('inputName' in action ? { ...action, inputName: preload.resolveSource(action.inputName) }
         : 'sourceName' in action ? { ...action, sourceName: preload.resolveSource(action.sourceName) } : action) },
@@ -59,14 +62,15 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       address = profile.obs.webSocketUrl;
       const opening = new SceneOutputTimeline(project, request.snapshot.item.id).at(millisecondsToFrameNumber(positionMs, request.snapshot.frameRate));
       const openingDecoders = new Map(opening.media.filter(event => event.assetKind !== 'image')
-        .map(event => [event.assetId, event]));
+        .map(event => [event.sourceName, event]));
       const primeSlots = Array.from({ length: 4 }, () => Promise.resolve()); let nextPrime = 0;
 
       // Each input is verified before OBS opens it. Pipeline disk work and OBS
       // decoding across eight independent layers instead of waiting for every
       // video digest before preparing the opening images.
-      for (let offset = 0; offset < project.mediaAssets.length; offset += 8) {
-        const results = await Promise.allSettled(project.mediaAssets.slice(offset, offset + 8).map(async asset => {
+      for (let offset = 0; offset < materialTargets.length; offset += 8) {
+        const results = await Promise.allSettled(materialTargets.slice(offset, offset + 8).map(async target => {
+          const { asset } = target;
           const assetStarted = performance.now(); let phase = '文件校验';
           const timings = [{ phase, atMs: 0 }];
           try {
@@ -85,10 +89,10 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
             assertCurrent();
             phase = '来源准备'; timings.push({ phase, atMs: performance.now() - assetStarted });
             await obs.mediaScenes.prepare(project.projectId, asset, absolute, playbackPath,
-              ['.mkv', '.rgba.mkv', '.source-pixels.mkv'].map(extension => join(cache, `${asset.sha256}${extension}`)));
-            preload.register(project.projectId, asset, absolute);
+              ['.mkv', '.rgba.mkv', '.source-pixels.mkv'].map(extension => join(cache, `${asset.sha256}${extension}`)), target);
+            preload.register(project.projectId, asset, absolute, target.sourceName);
             assertCurrent();
-            const openingEvent = openingDecoders.get(asset.id);
+            const openingEvent = openingDecoders.get(target.sourceName);
             if (openingEvent) {
               phase = '解码预热'; timings.push({ phase, atMs: performance.now() - assetStarted });
               const slot = nextPrime++ % primeSlots.length;
@@ -153,7 +157,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       const upcoming = [...new Set([
         ...request.snapshot.item.cues.filter(cue => cue.enabled).flatMap(cue => cue.actions.flatMap(action =>
           action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])),
-        ...project.mediaAssets.map(asset => materialSceneNames(project.projectId, asset).sceneName)
+        ...materialTargets.map(target => target.sceneName)
       ])];
       const prepareStructure = async (): Promise<void> => {
         for (const entry of opening.cues) for (const action of entry.cue.actions) {
@@ -178,16 +182,21 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       }
       const scenes = [...new Set([...request.snapshot.item.cues.filter(cue => cue.enabled)
         .flatMap(cue => cue.actions.flatMap(action => action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])),
-      ...project.mediaAssets.map(asset => materialSceneNames(project.projectId, asset).sceneName)])];
+      ...materialTargets.map(target => target.sceneName)])];
       capture = services.audioIdentity();
-      await obs.setInternalAudioCapture(true, capture.executable, capture.title, capture.audioDeviceId, scenes, capture.windowClass);
+      try { await obs.setInternalAudioCapture(true, capture.executable, capture.title, capture.audioDeviceId, scenes, capture.windowClass); }
+      catch (error) {
+        assertCurrent();
+        captureNotice = `OBS 音乐采集未就绪：${error instanceof Error ? error.message : String(error)}。本机音频与画面动作继续，OBS 是否收到音乐请检查混音器。`;
+        await logger.record({ level: 'warning', category: 'device', device: 'OBS 音乐采集',
+          projectId: project.projectId, itemId: request.snapshot.item.id, message: captureNotice, result: 'failed' });
+      }
       assertCurrent();
     },
     prepareUpcoming: (frame, assertCurrent) => obs.preparePlaybackMedia(() => preload.upcoming(frame, assertCurrent)),
     releaseOutputs: async () => {
       const cleanup = [() => preload.close(), () => obs.mediaScenes.releasePrimed(),
-        () => obs.mediaScenes.releaseImages(project.mediaAssets.filter(asset => asset.kind === 'image')
-          .map(asset => materialSceneNames(project.projectId, asset).sourceName)), () => logger.flush()];
+        () => obs.mediaScenes.releaseImages(materialTargets.filter(target => target.asset.kind === 'image').map(target => target.sourceName)), () => logger.flush()];
       const target = capture;
       if (target) cleanup.push(async () => {
         await obs.setInternalAudioCapture(false, target.executable, target.title, target.audioDeviceId, undefined, target.windowClass);

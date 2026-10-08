@@ -56,7 +56,17 @@ describe('timeline geometry', () => {
 
   it('按工程帧率吸附并格式化 drop-frame 时间码', () => {
     expect(snapTimelineTime(1_016, '30')).toBe(1_000);
-    expect(formatTimelineTimecode(60_060, '29.97df')).toBe('00:01:00;02');
+    expect(formatTimelineTimecode(60_060, '29.97df')).toBe('01:00;02');
+    expect(formatTimelineTimecode(60_060, '29.97df', true)).toBe('00:01:00;02');
+  });
+
+  it('时间线省略没有值的小时和分钟，跨边界时自动展开，保留帧精度', () => {
+    expect(formatTimelineTimecode(0, '30')).toBe('00:00');
+    expect(formatTimelineTimecode(7867, '30')).toBe('07:26');
+    expect(formatTimelineTimecode(59967, '30')).toBe('59:29');
+    expect(formatTimelineTimecode(60000, '30')).toBe('01:00:00');
+    expect(formatTimelineTimecode(3599967, '30')).toBe('59:59:29');
+    expect(formatTimelineTimecode(3600000, '30')).toBe('01:00:00:00');
   });
 
   it('允许操作员关闭磁性吸附，同时仍把时间限制在节目范围内', () => {
