@@ -23,7 +23,7 @@ export function midiConnectionStatus(input: {
   if (check?.state === 'checking') return { state: 'checking', value: '连接中', detail: check.detail };
   if (!available) return { state: 'error', value: '未连接', detail: `${portName}；当前未检测到唯一可用接口` };
   if (check?.state === 'error' || !native && systemError) return { state: 'error', value: '未连接', detail: check?.state === 'error' ? check.detail : systemError! };
-  return { state: native ? 'ready' : 'idle', value: '可用', detail: `${portName}；${native ? 'Windows 已识别，播放时打开并发送时间码' : '系统已识别，点击一键连接打开接口'}` };
+  return { state: native ? 'ready' : 'idle', value: '可用', detail: `${portName}；${native ? 'Windows 已识别，播放时打开并输出 MIDI' : '系统已识别，点击一键连接打开接口'}` };
 }
 
 export const lightingConnectionDestination = { category: 'audio', focus: 'lighting-mtc' } as const;

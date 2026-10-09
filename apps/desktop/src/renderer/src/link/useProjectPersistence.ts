@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useDocumentStore } from './stores/document-store';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
+import { isProjectReopenSuspended } from './stores/project-recovery';
 
 const LAST_PROJECT_PATH_KEY = 'tblink.last-project-path.v1';
 
@@ -16,6 +17,10 @@ export function useProjectPersistence(notify: (message: string, tone?: 'info' | 
     let lastPath: string | null;
     try {
       lastPath = localStorage.getItem(LAST_PROJECT_PATH_KEY);
+      if (lastPath && isProjectReopenSuspended(lastPath)) {
+        notify(`上次工程显示异常，已暂停自动打开。工程文件保留在原位置，可通过“打开工程”重新选择：${lastPath}`, 'error');
+        return;
+      }
     } catch (error) {
       notify(`读取上次工程路径失败：${toMessage(error)}`, 'error');
       return;

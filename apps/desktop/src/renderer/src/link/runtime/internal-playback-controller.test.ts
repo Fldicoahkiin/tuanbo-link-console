@@ -144,7 +144,7 @@ it('旧时间码配对失效不阻断网络 Cue；不发 MTC，曲尾等待最�
   expect(playMa2Cue).toHaveBeenCalledOnce(); expect(cancelMa2Playback).not.toHaveBeenCalled();
   acknowledge?.(); await vi.advanceTimersByTimeAsync(0);
   expect(f.state().status).toBe('paused'); expect(cancelMa2Playback).toHaveBeenCalledOnce();
-  expect(f.state().notice).toContain('网络直控按软件当前时间线执行');
+  expect(f.state().notice).toBeNull();
   expect(f.project.ma2ReadState?.pairings?.['2']?.status).toBe('stale');
   f.controller.dispose();
 });

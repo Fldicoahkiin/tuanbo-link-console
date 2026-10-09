@@ -290,16 +290,19 @@ it('不支持的 MTC 帧率明确隔离该通道，保留已知直接灯光和�
   expect(f.project.rundown[0]!.playback!.mtcOffsetMs).toBe(480000);
 });
 
-for (const mode of ['network', 'timecode'] as const) it(`原生播放：待核对的时间码配对与 ${mode} 输出隔离`, async () => {
+for (const mode of ['network', 'direct', 'timecode'] as const) it(`原生播放：待核对的时间码配对与 ${mode} 输出隔离`, async () => {
   const f = fixture();
   f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: mode };
   f.project.ma2ReadState = { source: 'console', catalog: { directory: { show: 'test', generation: 'session', version: '3.7.0.5', entries: [] }, readAt: '2026-10-08T00:00:00.000Z', entries: [] },
     pairs: {}, pairings: { '2': { itemId: 'song-0', status: 'stale', evidence: '', reason: '时间依据已变化' } }, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };
   const result = nativeProgramSnapshot(f.project, 'song-0', 7, 500, 48000);
-  expect(result).toMatchObject({ allowMtc: false, allowLighting: mode === 'network' });
+  expect(result).toMatchObject({ allowMtc: false, allowLighting: mode !== 'timecode' });
+  if (mode !== 'timecode') expect(result.notice).toBeNull();
+  else expect(result.notice).toContain('本次不发送时间码');
   await f.player.play('song-0');
   expect(f.state().status).toBe('playing');
-  expect(f.lighting.prepare).toHaveBeenCalledTimes(mode === 'network' ? 1 : 0);
+  expect(f.lighting.prepare).toHaveBeenCalledTimes(mode !== 'timecode' ? 1 : 0);
+  expect(f.state().notice).not.toContain('按开关设置输出');
   expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBeNull();
   expect(f.project.ma2ReadState?.pairings?.['2']?.status).toBe('stale');
   await f.player.stop();

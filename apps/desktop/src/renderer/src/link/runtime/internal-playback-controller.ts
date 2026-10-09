@@ -78,10 +78,8 @@ export class InternalPlaybackController {
       const sendMtc = !this.directLighting && this.state.mtcEnabled;
       let mtcPortName: string | null | undefined;
       const stalePairing = Object.values(this.project.ma2ReadState?.pairings ?? {}).some(pair => pair.itemId === item.id && pair.status === 'stale');
-      const allowLighting = !stalePairing || item.lighting?.outputMode === 'network';
-      if (stalePairing) this.appendNotice(allowLighting
-        ? '控台时间码配对待核对；本次不发送时间码，网络直控按软件当前时间线执行。'
-        : '歌曲与控台的时间依据已变化，本次灯光和时间码未参与；请重新核对配对。音频继续播放。');
+      const allowLighting = !stalePairing || this.directLighting;
+      if (stalePairing && !this.directLighting) this.appendNotice('当前歌曲与控台时间线尚未核对，本次不发送时间码。请打开控台时间线核对关联；音频继续播放。');
       await Promise.all([
         (async () => {
           try {
@@ -102,7 +100,7 @@ export class InternalPlaybackController {
       ]);
       if (!this.current(generation)) return;
       this.update({ mtcPortName: sendMtc ? mtcPortName ?? null : null, mtcSentPositionMs: null });
-      const lightingNotice = item.lighting ? lightingTimecodePlaybackNotice(item.lighting) : null;
+      const lightingNotice = item.lighting && allowLighting && sendMtc && mtcPortName ? lightingTimecodePlaybackNotice(item.lighting) : null;
       if (lightingNotice) this.update({ notice: [this.state.notice, lightingNotice].filter(Boolean).join('；') });
       if (!this.current(generation)) return;
       try { await this.dependencies.prepare(itemId, positionMs, { reuseSession, mtcOutputEnabled: sendMtc && Boolean(mtcPortName) }); this.runtimePrepared = true; }

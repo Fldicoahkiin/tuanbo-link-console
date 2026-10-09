@@ -100,6 +100,22 @@ function options(): DeviceConnectionOptions {
     openMidiPorts: vi.fn(() => Promise.resolve([])), listenToP1: vi.fn(() => Promise.resolve()), onProfile: vi.fn(), onDetection: vi.fn(), onIssues: vi.fn() };
 }
 
+it('原生引擎的灯光 Cue 使用独立 USB 端口时，也按 Windows 原生路径检测，不被 Web MIDI 漏枚举阻断', async () => {
+  const config = options();
+  config.draft.internalPlayer = { audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: 'internal-mtc-output' };
+  config.draft.midiPortProfiles.push({ id: 'internal-mtc-output', direction: 'output', portName: '时间码口' }, { id: 'lighting-events-output', direction: 'output', portName: '声光 MIDI' });
+  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 0, name: '时间码口' }, { id: 1, name: '声光 MIDI' }] };
+  useIntegrationStore.getState().setNativeDevices(native, null);
+  api.getNativePlaybackDevices.mockResolvedValue(native);
+  config.readMidiPorts = vi.fn(() => Promise.reject(new Error('Web MIDI 不可用')));
+  await connectDevices(config);
+  expect(api.checkNativeMidiOutput).toHaveBeenCalledWith({ version: 1, portName: '声光 MIDI' });
+  expect(useConnectionCheckStore.getState().checks['port:lighting-events-output']?.state).toBe('ready');
+  expect(useConnectionCheckStore.getState().checks['port:internal-mtc-output']?.state).toBe('ready');
+  expect(useConnectionCheckStore.getState().checks['port:custom-input']?.state).toBe('error');
+  expect(config.openMidiPorts).not.toHaveBeenCalled();
+});
+
 it('自动连接不使用误填的地址和旧密码，读取 OBS 当前配置后更新显示', async () => {
   const config = options(); config.draft.obs.connectionMethod = 'automatic';
   config.draft.obs.webSocketUrl = 'ws://wrong-target';

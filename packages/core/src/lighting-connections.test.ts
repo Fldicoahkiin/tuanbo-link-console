@@ -1,10 +1,23 @@
 import { expect, it } from 'vitest';
 import { createLightingDocument, type LightingTrack } from '@tb/schema';
-import { collectLightingOutputProfileIds, compileLightingPackets, lightingTimecodePlaybackNotice } from './lighting-playback';
+import { collectLightingOutputProfileIds, compileLightingPackets, compileLightingNetworkActions, compileLightingReleasePackets, lightingTimecodePlaybackNotice } from './lighting-playback';
 
 function track(id: string, portProfileId: string): LightingTrack {
   return { id, name: id, kind: 'midi', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId, controller: 7, noteNames: {}, clips: [{ id: 'clip-' + id, name: id, start: 0, duration: 1000, timeLock: 'time', muted: false, events: [{ id: 'note-' + id, kind: 'note', at: 0, note: 60, velocity: 100, duration: 500 }] }] };
 }
+it('原生时间线切换模式与重新打开时允许检查端口，播放仍严格拒绝部分重放', () => {
+  const document = createLightingDocument();
+  document.tracks = [track('native', 'console')];
+  document.ma2Bindings = [{ id: 'binding', name: '原生灯光', timecode: 2, readAt: new Date().toISOString(), sourceXml: '<MA/>', baselineTracks: [], mappings: [], nativeEvents: [{ path: 'unknown', reason: '保留原生参数' }], playback: 'native-timecode', timeOriginMs: 0 }];
+  for (const mode of ['network', 'direct', 'timecode'] as const) {
+    document.outputMode = mode;
+    expect(collectLightingOutputProfileIds(document)).toEqual(mode === 'timecode' ? [] : ['console']);
+    if (mode === 'timecode') expect(compileLightingPackets(document)).toEqual([]);
+    else expect(() => compileLightingPackets(document)).toThrow('原生保留时间线');
+    if (mode === 'network') expect(() => compileLightingNetworkActions(document)).toThrow('原生保留时间线');
+    if (mode === 'direct') expect(() => compileLightingReleasePackets(document)).toThrow('原生保留时间线');
+  }
+});
 it('端口检查与实际输出采用相同的独奏和静音规则，并识别默认灯光端口', () => {
   const document = createLightingDocument(); document.outputMode = 'direct';
   document.tracks = [track('one', ''), track('two', 'custom'), { ...track('muted', 'unused'), muted: true }];
