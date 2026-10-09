@@ -30,3 +30,14 @@
 最终安装包目录：`D:/Tuanbo-Test-Offline-0.4.46-Hotfix-20261009`。较早不含第二轮时间码提示修复的候选目录 `D:/Tuanbo-Test-Offline-0.4.46-20261009` 不作为交付件。
 
 安装后的免激活、三种模式重开和真实音源模型测试由 `verify-portable-test.mjs`、`verify-installed-lighting.mjs`、`verify-installed-music.mjs` 留存独立验收 JSON；只有实际成功记录才算安装验收完成。
+
+## 实际安装验收结果
+
+- NSIS 静默安装退出码 0，安装到交付目录的 `installed` 子目录。
+- 空白配置、测试损坏授权、完整重启三种场景均直接进入工作区，输出授权通过；正式更新源未启用。
+- 实际安装版分别切换时间码、MIDI、网络，保存后完全退出并重启，全部通过；Cue 与原生绑定数据一致，无界面错误。
+- 随包音乐资源 23,927 个文件逐项大小和 SHA-256 校验通过。真实音源 32,933ms，CPU 首次端到端 100.529 秒，缓存 3.256 秒。此项只证明随包模型可运行，不代表真实曲库精度或五分钟曲目的 P95 门槛已达标。
+- 验收 JSON 位于交付目录下 `installed-license-acceptance`、`installed-lighting-acceptance`、`installed-music-acceptance`。
+- 安装包：`Tuanbo-Link-Test-NoActivation-0.4.46-x64.exe`，987,952,340 字节。
+- 安装包 SHA-256：`2579BF0FBFEA886E4DB86848962FA5D6637497B91759D65FE656D28746CD585C`。
+- 安装后 `resources/app.asar` SHA-256：`51226DF733D758A4E88133FA34AB5F255D7B45EB7A372F9BC201635A50938F5F`。
