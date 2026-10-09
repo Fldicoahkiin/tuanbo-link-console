@@ -16,7 +16,7 @@ export function useEditorProgram(player: ProjectPlayer, external: boolean, notif
 
 /** The editor owns only its stopped cursor; the formal player owns audio and output. */
 export function useEditorTransport(player: ProjectPlayer, itemId: string | null, external: boolean,
-  notify: (message: string, tone?: 'info' | 'error') => void, previewCoordinator: LinkRuntimeCoordinator | null = null, localAudioReady = true) {
+  notify: (message: string, tone?: 'info' | 'error', key?: string) => void, previewCoordinator: LinkRuntimeCoordinator | null = null, localAudioReady = true) {
   const [cursor, setCursor] = useState(0);
   const cursorRef = useRef(0);
   const [localPlaying, setLocalPlaying] = useState(false);
@@ -31,7 +31,7 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   const playing = external ? active && player.state.status === 'playing' : localPlaying;
   const clock = player.controller?.clock;
   useEffect(() => { if (external && player.state.error) notify(player.state.error, 'error'); }, [external, player.state.error, notify]);
-  useEffect(() => { if (external && player.state.notice) notify(player.state.notice, 'info'); }, [external, player.state.notice, notify]);
+  useEffect(() => { if (external) notify(player.state.status === 'preparing' ? '' : player.state.notice ?? '', 'info', 'player-notice'); }, [external, player.state.notice, player.state.status, notify]);
   const report = (error: unknown): void => notify(error instanceof Error ? error.message : String(error), 'error');
   const reset = useCallback(() => { seekQueue.current?.cancel(); seekQueue.current = null; setSeeking(false); cursorRef.current = 0; setCursor(0); setLocalPlaying(false); }, []);
   const setPlayheadMs = (position: number): void => {

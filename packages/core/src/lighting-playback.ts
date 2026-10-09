@@ -5,12 +5,16 @@ import { LightingTempoMap, lightingEventTime, lightingCurveValue } from './light
 export type LightingPacket = { atMs: number; portProfileId: string; bytes: number[]; noteKey: string | null; phase: 'on' | 'off' | 'control' };
 /** Inspect connection dependencies without encoding events or expanding automation curves. */
 export function collectLightingOutputProfileIds(document: LightingDocument): string[] {
-  return [...new Set(activeLightingTracks(document)
+  return [...new Set(selectedLightingTracks(document)
     .filter(track => track.clips.some(clip => !clip.muted && clip.events.some(event => event.kind !== 'empty-cue' && (document.outputMode !== 'network' || event.kind !== 'ma2'))))
     .map(track => track.portProfileId || 'lighting-events-output'))];
 }
 function activeLightingTracks(document: LightingDocument): LightingTrack[] {
   if (document.outputMode !== 'timecode' && document.ma2Bindings?.some(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode')) throw new Error('原生保留时间线只能由控台按时间码播放，不能用本地部分事件替代');
+  return selectedLightingTracks(document);
+}
+/** Rendering connection requirements must not validate or execute a playback route. */
+function selectedLightingTracks(document: LightingDocument): LightingTrack[] {
   if (document.outputMode === 'timecode') return [];
   const solo = document.tracks.some(track => track.solo && !track.muted);
   return document.tracks.filter(track => !track.muted && (!solo || track.solo));

@@ -39,7 +39,7 @@ import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
 
 type Page = 'project' | 'cues' | 'lighting' | 'beauty';
-type Notice = { id: string; message: string; tone: 'info' | 'error' };
+type Notice = { id: string; message: string; tone: 'info' | 'error'; key?: string };
 type NavigationItem = { id: Page; label: string; caption: string; icon: typeof ListMusic };
 
 const NAVIGATION: NavigationItem[] = [
@@ -94,10 +94,10 @@ export function LinkApp(): JSX.Element {
   useEffect(() => { if (!playbackLocked) setPlaybackProject(project); }, [playbackLocked, project]);
   useConnectionsEscape(connectionsOpen && !settingsOpen, () => setConnectionsOpen(false));
 
-  const notify = useCallback((message: string, tone: 'info' | 'error' = 'info') => {
+  const notify = useCallback((message: string, tone: 'info' | 'error' = 'info', key?: string) => {
     const id = crypto.randomUUID();
     const displayMessage = tone === 'error' ? toUserErrorMessage(message) : message;
-    setNotices((current) => [...current.filter(notice => notice.message !== displayMessage), { id, message: displayMessage, tone }]);
+    setNotices((current) => [...current.filter(notice => notice.message !== displayMessage && (!key || notice.key !== key)), ...(message ? [{ id, message: displayMessage, tone, ...(key ? { key } : {}) }] : [])]);
     if (tone === 'info') window.setTimeout(() => setNotices((current) => current.filter((notice) => notice.id !== id)), 5_000);
   }, []);
 

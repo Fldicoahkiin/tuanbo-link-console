@@ -3,6 +3,11 @@ import { collectCueMidiOutputProfileIds, collectLightingOutputProfileIds } from 
 
 export type MidiConnectionTarget = { id: string; name: string; direction: 'input' | 'output'; required: boolean };
 
+/** Native playback owns every output port; inputs still use the Web MIDI monitor. */
+export function usesNativeMidiOutput(profile: IntegrationProfile | null, project: LinkProject | null, direction: 'input' | 'output'): boolean {
+  return direction === 'output' && profile?.internalPlayer?.audioEngine === 'native' && (!project || project.playbackSource === 'internal');
+}
+
 /** Every configured port and every port referenced by the show must remain visible. */
 export function midiConnectionTargets(profile: IntegrationProfile | null, project: LinkProject | null): MidiConnectionTarget[] {
   const internal = project?.playbackSource === 'internal';
