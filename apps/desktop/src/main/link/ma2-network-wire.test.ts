@@ -91,3 +91,15 @@ it.each(['target', 'content'] as const)('快照 %s 不一致时不使用控台�
   expect(server.actions).not.toContain('beginsync');
   expect(Buffer.concat(server.received).toString()).toBe(body);
 });
+
+it('精简 Cue 快照仍使用控台原始快照引用，不能上传精简数据替代写前核对', async () => {
+  const compact = '<MA><Timecode index="9906"/><Sequ index="8998"><Cue index="1"><Number number="1" sub_number="100"/><CuePart index="0" name="测试 Cue"/></Cue></Sequ></MA>';
+  const server = peer({ value: compact });
+  const wire = new Ma2NetworkWire(server);
+  const received = await wire.exchange(id, 'SCOPE', 9907, '8999', () => undefined);
+  server.received.length = 0;
+  const desired = '<MA><Timecode index="9906"/></MA>';
+  await wire.exchange(id, 'SYNC', 9907, `${Buffer.byteLength(received)}\n${received}${desired}`, () => undefined);
+  expect(server.actions).toContain('beginsync');
+  expect(Buffer.concat(server.received).toString()).toBe(desired);
+});

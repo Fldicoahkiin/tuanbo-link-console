@@ -67,7 +67,9 @@ test('正式原生按钮驱动隔离 OBS：精确音频采集、编排切场景�
   } finally {
     await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2));
     await page.screenshot({ path: info.outputPath('final.png') });
-    await page.evaluate(async () => { const state = await window.tbLink.getNativePlaybackStatus(); if (state) await window.tbLink.controlNativePlayback({ version: 1, sessionId: state.sessionId, generation: state.generation + 100, kind: 'stop' }); await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+    await page.getByRole('button', { name: '停止播放', exact: true }).click();
+    await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
+    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
     await app.close(); await obs.disconnect();
   }
 });

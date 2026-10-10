@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { ma2AutoBindRequestSchema, ma2AutoBindResultSchema } from '@tb/schema';
+import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
 import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema } from '@tb/schema';
 import { ma2AuditionRequestSchema,ma2AuditionControlSchema,ma2AuditionStateSchema } from '@tb/schema';
 import { musicAnalysisRequestSchema, musicAnalysisProgressSchema, musicAnalysisControlSchema, musicAnalysisResultSchema } from '@tb/schema';
@@ -102,6 +104,8 @@ const tbLink: LinkDesktopBridgeApi = {
   readMa2Executor: (payload) => invoke('link:ma2-executor', payload),
   compareMa2: (payload) => invoke('link:ma2-compare', payload),
   applyMa2: (payload) => invoke('link:ma2-apply', payload),
+  prepareMa2AutoBindings: async payload => ma2AutoBindResultSchema.parse(await invoke('link:ma2-auto-bind', ma2AutoBindRequestSchema.parse(payload))),
+  renameMa2Object: async payload => ma2RenameResultSchema.parse(await invoke('link:ma2-rename', ma2RenameRequestSchema.parse(payload))),
   getAppInfo: () => invoke('link:app-info'),
   getUpdateStatus: () => invoke('link:update-status'),
   checkForUpdates: () => invoke('link:update-check'),

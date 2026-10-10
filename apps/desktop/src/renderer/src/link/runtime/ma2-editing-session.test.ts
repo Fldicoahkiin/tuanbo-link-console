@@ -40,7 +40,7 @@ it('重新连接核对目录并复用缓存，等待明确开始同步', async (
   expect(importCachedMa2).toHaveBeenCalledOnce();
   expect(scanMa2Materials).toHaveBeenCalledWith(connection, false);
   expect(useMa2AutoSyncStore.getState().request).toBeNull();
-  expect(message).toContain('开始同步');
+  expect(message).toContain('实时同步');
   expect(message).toContain('缓存');
 });
 it('首次连接依次扫描、配对，不依赖设置页面挂载', async () => {

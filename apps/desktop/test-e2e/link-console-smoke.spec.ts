@@ -2292,6 +2292,7 @@ test('Cue 时间线的统一图层、取消拖动、适配、滚动和播放键�
   await addEmptyProgram();
   const firstAudioPath = testInfo.outputPath('timeline-a.wav');
   await createAudioFixture(firstAudioPath);
+  await expect(page.locator('.document-save-button')).toHaveCount(0);
   await openProgramProperties();
   const chooseAudio = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: '添加音频', exact: true }).click();

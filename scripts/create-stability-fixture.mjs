@@ -12,7 +12,7 @@ if (process.platform !== 'win32') throw new Error('稳定性基准必须在 Wind
 const require = createRequire(resolve('apps/desktop/package.json'));
 const ffmpeg = require('ffmpeg-static');
 if (typeof ffmpeg !== 'string') throw new Error('缺少 FFmpeg');
-const root = resolve('artifacts'); await mkdir(root, { recursive: true });
+const root = resolve(process.env.TBLINK_ACCEPTANCE_DIRECTORY ?? 'artifacts'); await mkdir(root, { recursive: true });
 const directory = await mkdtemp(join(root, 'stability-fixture-'));
 const masters = join(directory, 'masters'); await mkdir(masters);
 await build({ stdin: { contents: "export {parseLinkProject,createEmptyLinkProject,createLightingDocument} from './packages/schema/src/index'; export {frameNumberToTimecode} from './packages/core/src/mtc-timecode';", resolveDir: process.cwd() },

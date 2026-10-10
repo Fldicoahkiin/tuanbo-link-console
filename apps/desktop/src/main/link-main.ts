@@ -29,6 +29,10 @@ import { ObsLivePreview } from './link/obs-live-preview';
 import { ObsNativeSeek } from './link/obs-native-seek';
 import { obsSourceCreateSchema, obsSourceNameSchema, obsSourceApplySchema, ma2BridgeRequestSchema, ma2ReadRequestSchema, ma2CompareRequestSchema, ma2ApplyRequestSchema, ma2CreateRequestSchema } from '@tb/schema';
 import { createMa2Timecode } from './link/ma2-create';
+import { ma2AutoBindRequestSchema } from '@tb/schema';
+import { prepareMa2AutoBindings } from './link/ma2-auto-bind-service';
+import { renameMa2Object } from './link/ma2-rename-service';
+import { ma2RenameRequestSchema } from '@tb/schema';
 import { ma2CatalogRequestSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema, type Ma2ReadProgressUpdate, type LinkP1ProjectImportProgress } from '@tb/schema';
 import { readMa2Catalog } from './link/ma2-catalog';
 import { Ma2ReadRecovery } from './link/ma2-read-recovery';
@@ -768,6 +772,28 @@ function registerIpc(
       await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `效果库读取失败：${String(error)}`, result: 'failed' });
       throw error;
     } finally { task.finish(); }
+  });
+  handle('link:ma2-auto-bind', async (_event, value: unknown) => {
+    const request = ma2AutoBindRequestSchema.parse(value);
+    try {
+      const result = await prepareMa2AutoBindings((await getMa2Connection(request)).bridge, request, () => runtimeActive || nativePlaybackActive());
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `自动关联已核对：${result.plan.assignments.length} 个执行位置`, result: 'succeeded' });
+      return result;
+    } catch (error) {
+      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `自动关联未完成：${String(error)}`, result: 'failed' });
+      throw error;
+    }
+  });
+  handle('link:ma2-rename', async (_event, value: unknown) => {
+    const request = ma2RenameRequestSchema.parse(value);
+    try {
+      const result = await renameMa2Object((await getMa2Connection(request)).bridge, request);
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `控台改名已回读：Sequence ${result.sequence} ${result.kind === 'single' ? `Cue ${result.cue}` : ''} → ${result.name}；备份 ${result.backupFile}`, result: 'succeeded' });
+      return result;
+    } catch (error) {
+      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `控台改名未确认：${String(error)}`, result: 'failed' });
+      throw error;
+    }
   });
   handle('link:ma2-create', async (_event, value: unknown) => {
     const request = ma2CreateRequestSchema.parse(value);

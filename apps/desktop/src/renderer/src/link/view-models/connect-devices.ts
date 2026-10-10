@@ -7,7 +7,7 @@ import { checkNetworkMa2, connectDiscoveredMa2, connectLocalMa2 } from '../store
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { linkDesktopViewModel as desktop } from './link-desktop-view-model';
 import { applyDetectedLightingMidiPorts, applyDetectedP1MidiPorts } from './local-integration-midi';
-import { midiConnectionTargets } from './connection-targets';
+import { midiConnectionTargets, usesNativeMidiOutput } from './connection-targets';
 import { obsPreviewSession } from './obs-preview-session';
 import { assertAudioOutputAvailable } from './audio-output-route';
 
@@ -88,7 +88,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     }, 'loopMIDI 已运行，端口单独检查');
     if (loop?.value === false) skip('loop', '未安装虚拟 MIDI，实体 MIDI 不依赖此项');
     const midi = await run('midi', '系统 MIDI', options.readMidiPorts, '系统 MIDI 检测通过');
-    const nativeMtc = internal && profile.internalPlayer?.audioEngine === 'native';
+    const nativeMtc = usesNativeMidiOutput(profile, options.project, 'output');
     const nativeDevices = useIntegrationStore.getState().nativeDevices;
     if (nativeMtc && nativeDevices) {
       profile = applyDetectedLightingMidiPorts(profile, nativeDevices.midiOutputs.map(port => ({ id: String(port.id), name: port.name,
@@ -153,8 +153,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
         checks.checking(key);
         if (!target.required) { skip(key, '未启用此接口'); continue; }
         const mapped = profile.midiPortProfiles.find(port => port.id === target.id && port.direction === target.direction);
-        const mtcName = profile.midiPortProfiles.find(port => port.id === profile.internalPlayer?.mtcOutputPortProfileId)?.portName;
-        const nativeOutput = nativeMtc && target.direction === 'output' && (target.id === (profile.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output') || Boolean(mtcName && mapped?.portName === mtcName));
+        const nativeOutput = usesNativeMidiOutput(profile, options.project, target.direction);
         await run(key, target.name, async () => {
           if (!saved) throw new Error('连接配置未保存');
           if (!mapped?.portName) throw new Error('尚未配置接口，请在音频与 MIDI 中选择');

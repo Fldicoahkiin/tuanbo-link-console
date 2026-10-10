@@ -30,6 +30,9 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
     await page.getByRole('button',{name:'打开工程',exact:true}).click();
     await page.getByRole('navigation',{name:'主要工作区'}).getByRole('button',{name:'灯光工作台',exact:true}).click();
     await expect(page.locator('.timeline-shell')).toBeVisible();
+    // Analysis is a separate undoable operation; finish it before measuring
+    // classification edits so Undo targets the edit this scenario just made.
+    await expect.poll(async () => (await readSaved()).rundown[0]?.lighting?.musicAnalysis?.state, { timeout: 45000 }).toBe('ready');
     expect((await page.locator('.timeline-shell').boundingBox())!.height).toBeGreaterThan(100);
     const tabs=page.getByRole('navigation',{name:'灯光素材主菜单'});await tabs.getByRole('button',{name:'面光',exact:true}).click();
     await expect(tabs.getByRole('button')).toHaveText(['控台素材','面光','轮廓','效果']);
@@ -96,10 +99,10 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
     await expect(page.getByLabel('搜索分类 Cue')).toHaveValue('前区灯光 999');await expect(page.locator('.classification-cell>button').first()).toHaveText('前区灯光 999');
     await expect(page.getByRole('button',{name:'时间线标记 重鼓点 / 重击',exact:true})).toHaveCount(0);
     if(scaled){
+      await page.getByRole('button', { name: '回到时间线开头', exact: true }).click();
       for (let step = 0; step < 5; step++) await page.getByRole('button', { name: '放大时间线', exact: true }).click();
+      await page.getByRole('button', { name: '回到时间线开头', exact: true }).click();
       await page.getByRole('button', { name: '关闭吸附', exact: true }).click();
-      await page.locator('.cue-cluster-trigger').first().click();
-      await page.getByRole('button', { name: '选择 Cue 1', exact: true }).click();
       const point=page.getByRole('button',{name:'音频 Cue 1',exact:true});await expect(point).toBeVisible();
       await page.evaluate(()=>{
         const samples:number[]=[];Reflect.set(window,'lightingDragSamples',samples);const point=document.querySelector('button[aria-label="音频 Cue 1"]');if(!point)throw new Error('缺少待拖动 Cue');

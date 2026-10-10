@@ -1,4 +1,4 @@
-import { snapshotMa2LightingBinding } from '@tb/core/link';
+import { ma2AutoBindEvents, snapshotMa2LightingBinding } from '@tb/core/link';
 import type { LinkProject, Ma2SyncObject } from '@tb/schema';
 
 export type Ma2PendingChange = {
@@ -6,6 +6,18 @@ export type Ma2PendingChange = {
   changes: Array<{ id: string; before: Ma2SyncObject | null; after: Ma2SyncObject | null }>;
   error: string | null;
 };
+
+/** These events are provisioned automatically when real-time synchronization is enabled. */
+export function ma2UnboundTracks(project: LinkProject | null): Array<{ itemId: string; title: string; trackId: string; name: string; count: number; reason: string }> {
+  return project?.rundown.flatMap(item => {
+    const unresolved = new Set(item.lighting ? ma2AutoBindEvents(item.lighting) : []);
+    return item.lighting?.tracks.flatMap(track => {
+      const events = track.clips.flatMap(clip => clip.events).filter(event => (event.kind === 'ma2' || event.kind === 'ma2-fader') && unresolved.has(event));
+      return events.length ? [{ itemId: item.id, title: item.title, trackId: track.id, name: track.name, count: events.length,
+        reason: '开启同步后自动准备控台执行位置' }] : [];
+    }) ?? [];
+  }) ?? [];
+}
 
 /** Derived from the persisted baseline, so undo, redo and reopening need no second queue. */
 export function ma2PendingChanges(project: LinkProject | null): Ma2PendingChange[] {

@@ -276,6 +276,7 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await expect(page.getByLabel('美颜生效状态')).toContainText('离线调节');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'connected', obsVersion: '32.0.4', webSocketVersion: '5', error: null }));
     await expect(page.getByLabel('美颜生效状态')).toContainText('参数已送达');
+    const staleBeauty = await page.evaluate(() => window.tbLink.readObsBeauty({ sourceName: '测试机位', filterName: '美颜' }));
     await app.evaluate(({ ipcMain, BrowserWindow }) => {
       ipcMain.removeHandler('link:beauty-output');
       ipcMain.handle('link:beauty-output', async (_event, values: Record<string, number>) => {
@@ -288,10 +289,26 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toBe('BEAUTY_APPLY_PENDING');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null }));
     await expect(page.getByLabel('美颜生效状态')).toContainText('离线调节');
+    await app.evaluate(({ ipcMain }, stale) => {
+      process.env.TBLINK_BEAUTY_STALE_READ = 'waiting';
+      ipcMain.removeHandler('link:obs-beauty-read');
+      ipcMain.handle('link:obs-beauty-read', async () => {
+        process.env.TBLINK_BEAUTY_STALE_READ = 'pending';
+        await new Promise<void>(resolve => ipcMain.once('beauty-test-read-release', () => resolve()));
+        process.env.TBLINK_BEAUTY_STALE_READ = 'returned';
+        return stale;
+      });
+      ipcMain.removeHandler('link:beauty-status');
+      ipcMain.handle('link:beauty-status', () => ({ phase: 'tracking', sourceName: '测试机位', filterName: '美颜', faces: 2,
+        message: process.env.TBLINK_BEAUTY_STALE_READ === 'returned' ? '旧回读已返回' : '已识别 2 人，统一美颜' }));
+    }, staleBeauty);
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'connected', obsVersion: '32.0.4', webSocketVersion: '5', error: null }));
     await expect(page.getByLabel('美颜生效状态')).toContainText('正在同步');
+    await expect.poll(() => app.evaluate(() => process.env.TBLINK_BEAUTY_STALE_READ)).toBe('pending');
     await app.evaluate(({ ipcMain }) => { ipcMain.emit('beauty-test-release'); });
     await expect(page.getByLabel('美颜生效状态')).toContainText('参数已送达');
+    await app.evaluate(({ ipcMain }) => { ipcMain.emit('beauty-test-read-release'); });
+    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已送达 · 旧回读已返回');
     await app.evaluate(({ ipcMain, BrowserWindow }) => {
       ipcMain.removeHandler('link:beauty-output');
       let requests = 0, active = 0, maximum = 0;

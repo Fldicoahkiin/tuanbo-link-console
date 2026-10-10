@@ -14,6 +14,10 @@ it.skipIf(!process.env.MA2_ONPC_DATA_DIRECTORY)('本机插件按地址读取已�
   expect(inspectMa2ExecutorXml(await bridge.request('EXECUTOR', 99, '219'))).toEqual(first);
 }, 40000);
 describe('MA2 执行器序列关系', () => {
+  it('onPC 3.7.0.5 自动分配的实际导出读取同一序列和执行器名称', async () => {
+    const actual = await readFile(new URL('./fixtures/ma2-executor-3.7.xml', import.meta.url), 'utf8');
+    expect(inspectMa2ExecutorXml(actual)).toEqual({ version: '3.7.0', sequence: 9907, assignmentName: '100步灯光测试 9907', executorName: '100步灯光测试 999.101' });
+  });
   it('从真实执行器导出读取 Sequence，不将相对偏移猜成执行器地址', () => {
     expect(inspectMa2ExecutorXml(xml)).toEqual({ version: '3.3.4', sequence: 9901, assignmentName: 'TBLINK_CUE_REFERENCE_ACCEPTANCE 9901' });
   });

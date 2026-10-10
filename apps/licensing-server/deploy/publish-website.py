@@ -20,6 +20,7 @@ RELEASES = Path('/srv/tblink-purchase-releases')
 BACKUPS = Path('/var/lib/tblink-licensing/backups')
 PROTECTED = [Path('/opt/tblink-licensing/dist/index.js'), Path('/etc/tblink-licensing/service.env')]
 STATIC_FILES = {'index.html', 'purchase.js', 'purchase.css', 'assets/studio.webp', 'assets/display.woff2', 'assets/FONT-LICENSE.txt'}
+STATIC_FILES |= {'site.js', 'site.css', 'download/index.html', 'guide/index.html', 'purchase/index.html', 'media.json', 'release.json', 'robots.txt', 'sitemap.xml', 'website-manifest.json', 'assets/20261010-programs.webp', 'assets/20261010-timeline.webp', 'assets/20261010-cameras.webp', 'assets/20261010-lighting.webp', 'assets/20261010-connections.webp', 'assets/20261010-rehearsal.webp', 'media/20261010-programs.mp4', 'media/20261010-timeline.mp4', 'media/20261010-cameras.mp4', 'media/20261010-lighting.mp4', 'media/20261010-overview.mp4', 'media/20261010-overview.vtt'}
 FILES = STATIC_FILES | {'revision.txt', 'nginx.previous.conf', 'nginx.next.conf'}
 
 
@@ -48,10 +49,12 @@ def validate_config(previous, candidate):
     next_before, site, next_after = site_sections(candidate)
     if (before, after) != (next_before, next_after):
         raise RuntimeError('Only the website block may change')
-    if f'    root {ROOT};' not in site or site.count('proxy_pass http://127.0.0.1:8787;') != 4:
+    root_match = re.search(r'^    root (.+);$', site, re.M)
+    if not root_match or Path(root_match.group(1)) != ROOT or site.count('proxy_pass http://127.0.0.1:8787;') != 4:
         raise RuntimeError('Unexpected website root or proxy routes')
     expected = {'= /', '= /purchase.js', '= /purchase.css', '= /assets/studio.webp', '= /assets/display.woff2', '= /assets/FONT-LICENSE.txt', '~ "^/media/[a-z0-9][a-z0-9-]*\\.mp4$"',
                 '= /v1/catalog', '= /v1/orders', '~ "^/v1/orders/[a-f0-9-]{36}$"', '~ "^/v1/orders/[a-f0-9-]{36}/reconcile$"'}
+    expected |= {'= /download/', '= /guide/', '= /purchase/'} | {'= /' + name for name in STATIC_FILES - {'index.html', 'download/index.html', 'guide/index.html', 'purchase/index.html'}}
     routes = dict(re.findall(r'    location (.*?) \{\n(.*?)\n    }', site, re.S))
     if set(routes) != expected or '    location / { return 404; }' not in site:
         raise RuntimeError('Unexpected exposed route')
@@ -73,6 +76,20 @@ def atomic_text(path, value):
     staged.write_text(value)
     os.chmod(staged, 0o644)
     os.replace(staged, path)
+
+
+def validate_files(directory):
+    manifest = json.loads((directory / 'website-manifest.json').read_text(encoding='utf-8'))
+    if set(manifest) != {'version', 'files'} or manifest['version'] != 1:
+        raise RuntimeError('Invalid website manifest')
+    if set(manifest['files']) != STATIC_FILES - {'website-manifest.json'}:
+        raise RuntimeError('Website manifest file list differs from allowlist')
+    for name, entry in manifest['files'].items():
+        if set(entry) != {'size', 'sha256'} or type(entry['size']) is not int:
+            raise RuntimeError('Invalid website file metadata')
+        file = directory / name
+        if file.stat().st_size != entry['size'] or digest(file) != entry['sha256']:
+            raise RuntimeError('Website artifact checksum mismatch: ' + name)
 
 
 def read_catalog():
@@ -104,6 +121,22 @@ def wait_for_page(expected):
     raise RuntimeError('Live HTML differs from built artifact after reload; observed SHA256: ' + str(observed))
 
 
+def verify_live_files(release):
+    for name in sorted(STATIC_FILES):
+        path = '/' if name == 'index.html' else '/' + name.removesuffix('index.html') if name.endswith('/index.html') else '/' + name
+        response = subprocess.run(['curl', '--fail', '--silent', '--show-error', '--max-time', '30',
+                                   '--noproxy', '*', '--resolve', f'{HOST}:443:127.0.0.1',
+                                   f'https://{HOST}{path}'], check=True, capture_output=True, timeout=35)
+        if hashlib.sha256(response.stdout).hexdigest() != digest(release / name):
+            raise RuntimeError('Live artifact checksum mismatch: ' + name)
+        if name.endswith('.mp4'):
+            headers = run('curl', '--fail', '--silent', '--show-error', '--max-time', '10', '--noproxy', '*',
+                          '--resolve', f'{HOST}:443:127.0.0.1', '--range', '0-1023', '--dump-header', '-',
+                          '--output', '/dev/null', f'https://{HOST}{path}').stdout.lower()
+            if not re.search(r'^http/[^ ]+ 206\b', headers, re.M) or f'content-range: bytes 0-1023/{(release / name).stat().st_size}' not in headers:
+                raise RuntimeError('Video range request failed: ' + name)
+
+
 def main():
     if len(sys.argv) != 6 or os.geteuid() != 0:
         raise RuntimeError('Run as root: publish-website.py ARCHIVE ARCHIVE_SHA NGINX_SHA BUNDLE_SHA ENV_SHA')
@@ -130,13 +163,15 @@ def main():
         if {item.name for item in members} != FILES or len(members) != len(FILES):
             raise RuntimeError('Unexpected release archive members')
         for item in members:
-            if not item.isfile() or item.size > 2_000_000:
+            limit = 40_000_000 if item.name.endswith('.mp4') else 2_000_000
+            if not item.isfile() or item.size <= 0 or item.size > limit:
                 raise RuntimeError('Invalid archive entry')
             stream = archive.extractfile(item)
             if stream is None:
                 raise RuntimeError('Missing archive entry')
             (backup / item.name).parent.mkdir(exist_ok=True)
             (backup / item.name).write_bytes(stream.read())
+    validate_files(backup)
     previous = NGINX.read_text()
     if previous != (backup / 'nginx.previous.conf').read_text():
         raise RuntimeError('Prior proxy does not match inspected state')
@@ -169,6 +204,7 @@ def main():
         run('nginx', '-t')
         run('systemctl', 'reload', 'nginx')
         wait_for_page((release / 'index.html').read_text())
+        verify_live_files(release)
         if json.loads(probe('/v1/catalog')) != catalog:
             raise RuntimeError('Sales catalog changed during website release')
         if [digest(path) for path in PROTECTED] != protected:

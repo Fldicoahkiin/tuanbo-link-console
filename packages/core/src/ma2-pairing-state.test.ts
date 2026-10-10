@@ -65,6 +65,22 @@ it('修改歌曲起点立即使确认失效，撤销同时恢复确认', () => {
   expect(command.undo(confirmed).ma2ReadState?.pairings?.[2]?.status).toBe('confirmed');
 });
 
+it('仅切换灯光输出模式不会改变时间依据或使已确认配对失效', () => {
+  const { project, catalog } = fixture();
+  project.schemaVersion = 2;
+  project.rundown[0]!.lighting = createLightingDocument();
+  project.ma2ReadState = reconcileMa2ReadState(project, 'console', catalog);
+  let current = confirmMa2PairingCommand(2, '歌曲甲').execute(project);
+  const confirmed = current.ma2ReadState?.pairings?.[2];
+  for (const mode of ['network', 'timecode', 'direct', 'timecode'] as const) {
+    const command = withMa2PairingValidation({ id: mode, label: '切换模式', execute: value => {
+      const next = structuredClone(value); next.rundown[0]!.lighting!.outputMode = mode; return next;
+    }, undo: before => before });
+    current = command.execute(current);
+    expect(current.ma2ReadState?.pairings?.[2]).toEqual(confirmed);
+  }
+});
+
 it('解除与恢复完整保留未知原生数据，不把部分 Cue 变成独立重放', () => {
   const { project, catalog } = fixture();
   project.schemaVersion = 2;

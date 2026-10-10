@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 const require = createRequire(new URL('../apps/desktop/package.json', import.meta.url));
 const { chromium } = require('@playwright/test');
 const root = new URL('../apps/licensing-server/dist/web/', import.meta.url);
@@ -46,7 +47,7 @@ const server = createServer(async (req, res) => {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ available, currency: 'CNY', termStart: 'fulfillment', offers: available ? fixture.offers : [] })); return;
   }
-  const files = { '/': ['index.html', 'text/html'], '/purchase.js': ['purchase.js', 'text/javascript'], '/purchase.css': ['purchase.css', 'text/css'], '/assets/studio.webp': ['assets/studio.webp', 'image/webp'] };
+  const files = { '/purchase/': ['purchase/index.html', 'text/html'], '/purchase.js': ['purchase.js', 'text/javascript'], '/purchase.css': ['purchase.css', 'text/css'], '/site.css': ['site.css', 'text/css'] };
   files['/assets/display.woff2']=['assets/display.woff2','font/woff2'];
   const file = files[req.url];
   if (!file) { res.writeHead(404).end(); return; }
@@ -60,7 +61,7 @@ try {
   for (const [name, width, height, colorScheme] of [['desktop',1440,960,'light'],['mobile',390,844,'light'],['desktop-dark',1440,960,'dark'],['mobile-dark',390,844,'dark']]) {
     const page = await browser.newPage({ viewport: {width,height}, colorScheme, reducedMotion: 'reduce' });
     const errors=[]; page.on('pageerror', e => errors.push(e.message));
-    await page.goto(`http://127.0.0.1:${address.port}`, {waitUntil:'networkidle'});
+    await page.goto(`http://127.0.0.1:${address.port}/purchase/`, {waitUntil:'networkidle'});
     const plans=page.locator('button.plan'); await plans.first().waitFor();
     assert.equal(await plans.count(),2);
     assert.equal(await page.locator('#total').textContent(),'¥800.00');
@@ -68,10 +69,10 @@ try {
     assert.equal(await page.locator('#total').textContent(),'¥8000.00');
     assert.equal(await plans.nth(1).getAttribute('aria-pressed'),'true');
     assert.equal(await page.locator('body').innerText().then(t=>t.includes('成都相变风景科技有限公司')),false);
-    assert.equal(await page.locator('img').evaluate(img=>img.complete && img.naturalWidth>0),true);
+    assert.equal(await page.getByRole('heading', { name: '购买团播联动台授权' }).count(),1);
     assert.equal(await page.evaluate(()=>globalThis.document.documentElement.scrollWidth<=globalThis.innerWidth),true);
     await page.evaluate(()=>globalThis.scrollTo(0,0));
-    await page.screenshot({path:new URL(`${name}.png`,shots).pathname,fullPage:true});
+    await page.screenshot({path:fileURLToPath(new URL(`${name}.png`,shots)),fullPage:true});
     if (name==='desktop') {
       await page.locator('#customer').fill('自动化验收（本地模拟）');
       await page.locator('#consent').check();
@@ -91,7 +92,7 @@ try {
   const page=await browser.newPage();
   for (const mode of ['closed','error']) {
     catalogMode=mode;
-    await page.goto(`http://127.0.0.1:${address.port}`,{waitUntil:'networkidle'});
+    await page.goto(`http://127.0.0.1:${address.port}/purchase/`,{waitUntil:'networkidle'});
     assert.equal(await page.locator('#purchase-form').isHidden(),true);
     assert.equal(await page.locator('button.plan').count(),0);
     if(mode==='error') assert.equal(await page.locator('#error').isVisible(),true);
@@ -112,7 +113,7 @@ try {
   for (const [name, width, height, colorScheme] of [['desktop', 1440, 960, 'light'], ['mobile-dark', 390, 844, 'dark']]) {
     const native = await browser.newPage({ viewport: { width, height }, colorScheme });
     const errors = []; native.on('pageerror', error => errors.push(error.message));
-    await native.goto(`http://127.0.0.1:${address.port}`, { waitUntil: 'networkidle' });
+    await native.goto(`http://127.0.0.1:${address.port}/purchase/`, { waitUntil: 'networkidle' });
     await native.locator('#payment-channel').selectOption('wechat');
     await native.waitForFunction(() => !globalThis.document.querySelector('#payment-channel').disabled);
     await native.locator('#customer').fill('本地微信验收'); await native.locator('#consent').check();
@@ -133,7 +134,7 @@ try {
   }
   const states = await browser.newPage();
   nativeEnabled = false;
-  await states.goto(`http://127.0.0.1:${address.port}`, { waitUntil: 'networkidle' });
+  await states.goto(`http://127.0.0.1:${address.port}/purchase/`, { waitUntil: 'networkidle' });
   await states.locator('#payment-channel').selectOption('wechat');
   await states.waitForFunction(() => globalThis.document.querySelector('#catalog-status').textContent.includes('微信暂未开放'));
   assert.equal(await states.locator('#purchase-form').isHidden(), true);

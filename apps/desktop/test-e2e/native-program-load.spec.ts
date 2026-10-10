@@ -115,7 +115,9 @@ test('高负载正式按钮与真实 OBS 连续节目', async ({}, info) => {
       audioProbe: { file: join(dirname(file), probeName), sha256: probeSha256, description: '108秒48kHz双声道：连续低电平400Hz导频叠加每秒20ms的1000Hz脉冲；原始负载工程未改动' },
       engineSha256: createHash('sha256').update(await readFile(process.env.TBLINK_PLAYBACK_ENGINE_EXE!)).digest('hex') }, null, 2));
     await page.screenshot({ path: info.outputPath('final.png') });
-    await page.evaluate(async () => { const state = await window.tbLink.getNativePlaybackStatus(); if (state) await window.tbLink.controlNativePlayback({ version: 1, sessionId: state.sessionId, generation: state.generation + 100, kind: 'stop' }); await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
+    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
     await app.close(); await obs.disconnect();
   }
 });

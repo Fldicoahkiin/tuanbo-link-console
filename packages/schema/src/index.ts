@@ -22,10 +22,12 @@ export * from './project-document';
 export * from './obs-playback';
 export * from './obs-address';
 export * from './lighting-library';
+export * from './ma2-rename';
 export * from './lighting-music';
 export * from './music-analysis';
 export * from './automatic-music-analysis';
 export * from './music-monitor';
+export * from './ma2-auto-bind';
 export * from './native-program';
 
 export { musicStructureSchema, musicStructureSegmentSchema, type MusicStructure, type MusicStructureSegment } from './music-structure';

@@ -78,6 +78,84 @@ local function process(data)
     assert(tc and tc >= 1 and tc <= 99999 and tc == math.floor(tc), 'Invalid Timecode')
     assert(#body == tonumber(size), 'Request length mismatch')
     if op == 'PING' then return gma.show.getvar('VERSION') or 'unknown' end
+    if op == 'LABEL' then
+      local kind, cue, show_hex, session_hex, old_hex, name_hex = body:match('^(%a+)\n([%d%.]+)\n([a-f0-9]+)\n([a-f0-9]+)\n([a-f0-9]*)\n([a-f0-9]+)$')
+      assert(kind == 'single' or kind == 'sequence', 'Invalid label target')
+      assert(cue:match('^%d+$') or cue:match('^%d+%.%d%d?%d?$'), 'Invalid Cue number')
+      local function decode(value)
+        assert(#value % 2 == 0, 'Invalid label encoding')
+        return value:gsub('..', function(pair) return string.char(tonumber(pair, 16)) end)
+      end
+      local show, session, previous, name = decode(show_hex), decode(session_hex), decode(old_hex), decode(name_hex)
+      assert(show == gma.show.getvar('SHOWFILE') and session == generation, 'Show or session changed; name not written')
+      assert(#name > 0 and #name <= 2048 and not name:find('[%z\1-\31\127"\\]'), 'Unsupported characters in label')
+      local obj = gma.show.getobj
+      local address = 'Sequence ' .. tc .. (kind == 'single' and (' Cue ' .. cue) or '')
+      local handle = assert(obj.handle(address), 'Rename target missing')
+      local function label()
+        local current = obj.handle(address)
+        assert(current, 'Rename target disappeared')
+        return obj.label(current) or ''
+      end
+      assert(label() == previous or label() == name, 'Console name changed; read console before retrying')
+      local backup = 'tblink_label_' .. id
+      gma.cmd('Export Sequence ' .. tc .. ' "' .. backup .. '" /o')
+      assert(read(root .. '/importexport/' .. backup .. '.xml'), 'Name backup unavailable')
+      assert(obj.handle(address) == handle and (label() == previous or label() == name), 'Rename target changed during backup')
+      assert(show == gma.show.getvar('SHOWFILE') and session == generation, 'Show changed during backup')
+      if label() ~= name then gma.cmd('Label ' .. address .. ' "' .. name .. '"') end
+      assert(label() == name, 'Name readback differs; write unconfirmed')
+      local function quote(value)
+        return '"' .. value:gsub('[%z\1-\31\\"]', function(char) return string.format('\\u%04x', string.byte(char)) end) .. '"'
+      end
+      return '{"sequence":' .. tc .. ',"kind":' .. quote(kind) .. ',"cue":' .. quote(cue) .. ',"show":' .. quote(show) .. ',"generation":' .. quote(session) .. ',"name":' .. quote(label()) .. ',"backupFile":' .. quote(backup .. '.xml') .. '}'
+    end
+    if op == 'ASSIGNSEQ' then
+      local owner, show_hex, session_hex = body:match('^([a-f0-9]+)\n([a-f0-9]+)\n([a-f0-9]+)$')
+      assert(owner and #owner == 24 and #show_hex % 2 == 0 and #session_hex % 2 == 0, 'Invalid automatic assignment')
+      local function decode(value) return value:gsub('..', function(pair) return string.char(tonumber(pair, 16)) end) end
+      assert(decode(show_hex) == gma.show.getvar('SHOWFILE') and decode(session_hex) == generation, 'Show or session changed')
+      local obj = gma.show.getobj
+      assert(obj.handle('Sequence ' .. tc), 'Sequence missing')
+      local label = 'TBLINK_' .. owner
+      local free_page, free_exec, free_address
+      local function assigned(address)
+        local name = 'tblink_assignment_' .. id
+        gma.cmd('Export Executor ' .. address .. ' "' .. name .. '" /o')
+        local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Executor export unavailable')
+        local assignment = xml:match('<Assignment%s[^>]*>(.-)</Assignment>')
+        if not assignment then return nil end
+        local values = {}; for number in assignment:gmatch('<No>%s*(%d+)%s*</No>') do values[#values + 1] = tonumber(number) end
+        return #values == 3 and values[1] == 25 and values[2] == 1 and values[3] or nil
+      end
+      -- A dedicated page avoids touching operators' physical faders and occupied slots.
+      for page = 999, 900, -1 do
+        local handle = obj.handle('Page ' .. page)
+        if not handle then free_page = free_page or page
+        elseif obj.label(handle) == label then
+          for number = 101, 120 do
+            local address = page .. '.' .. number
+            if not obj.handle('Executor ' .. address) then
+              if not free_address then free_address = address; free_exec = page end
+            elseif assigned(address) == tc then
+              return '{"sequence":' .. tc .. ',"executor":"' .. address .. '"}'
+            end
+          end
+        end
+      end
+      if not free_address then
+        assert(free_page, 'No empty page available for automatic sync')
+        assert(not obj.handle('Page ' .. free_page), 'Page became occupied')
+        gma.cmd('Store Page ' .. free_page .. ' "' .. label .. '" /nc')
+        assert(obj.label(assert(obj.handle('Page ' .. free_page))) == label, 'Page creation unconfirmed')
+        free_exec = free_page; free_address = free_page .. '.101'
+      end
+      assert(obj.label(assert(obj.handle('Page ' .. free_exec))) == label, 'Page ownership changed')
+      assert(not obj.handle('Executor ' .. free_address), 'Executor became occupied')
+      gma.cmd('Assign Sequence ' .. tc .. ' At Executor ' .. free_address .. ' /nc')
+      assert(obj.handle('Executor ' .. free_address) and assigned(free_address) == tc, 'Sequence assignment unconfirmed')
+      return '{"sequence":' .. tc .. ',"executor":"' .. free_address .. '"}'
+    end
     if op == 'LIST' or op == 'LISTSEQ' then
       assert(body == '', 'Directory request must be empty')
       local obj = gma.show.getobj
@@ -209,7 +287,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
         base = snapshot_cache.xml
         a = 'SYNC'
       end
-      assert(a == 'PING' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR', 'Invalid operation')
+      assert(a == 'PING' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(not network or gma.gettime() > network.expires, 'Another network request is pending')
@@ -236,6 +314,13 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
       if network.op == 'SNAPSHOT' or network.op == 'SCOPE' then
         local content = network.response:match('^[a-f0-9]+\nOK\n%d+\n(.*)$')
         snapshot_cache = content and { id = id, target = network.target, xml = content } or nil
+        if content then
+          -- Fixture values are never edited by this application. Keep the complete
+          -- export here for SYNC's exact preflight, but send only Cue metadata.
+          -- Cue/CuePart attributes and Number remain unchanged for reference checks.
+          local compact = content:gsub('<CueDatas%s*>.-</CueDatas>', '')
+          network.response = id .. '\nOK\n' .. #compact .. '\n' .. compact
+        end
       end
       return 'DONE:' .. #network.response
     end

@@ -55,6 +55,7 @@ apps/desktop/out-*/
 /repair-production-dependencies*.json
 /交付*/
 /artifacts/
+/apps/licensing-server/web/media/concat.txt
 /*.png
 /.playwright-cli/
 /.codex/

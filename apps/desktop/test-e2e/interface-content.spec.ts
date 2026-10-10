@@ -63,13 +63,17 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
         for (const name of ['节目单', '编辑器', '灯光工作台']) {
           await nav.getByRole('button', { name, exact: true }).click();
           if (name === '灯光工作台') {
-            await expect(page.getByLabel('选中 Cue 实时播放', { exact: true })).toHaveCount(0);
+            await expect(page.getByLabel('选中 Cue 实时播放', { exact: true })).toBeHidden();
             await expect(page.locator('[data-waveform-engine="wavesurfer"][data-ready="true"]').first()).toBeVisible();
-            for (const template of templates) await expect(page.locator('.cue-material-browser').getByText(template.name, { exact: true })).toBeVisible();
+            await page.getByRole('navigation', { name: '灯光素材主菜单' }).getByRole('button', { name: '效果', exact: true }).click();
+            await page.getByLabel('分类搜索范围', { exact: true }).selectOption('all');
+            for (const template of templates) await expect(page.locator('.classification-cell>button').filter({ hasText: template.name })).toBeVisible();
           }
           await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           await page.screenshot({ path: info.outputPath(`${theme}-${size[0]}-${name}.png`) });
-          expect(await page.locator('.app-workspace').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+          const layout = await page.locator('.app-workspace').evaluate(element => ({ width: element.clientWidth, scrollWidth: element.scrollWidth,
+            overflow: [...element.querySelectorAll('*')].filter(child => child.getBoundingClientRect().right > element.getBoundingClientRect().right + 1).slice(0, 30).map(child => ({ tag: child.tagName, classes: child.className, right: child.getBoundingClientRect().right })) }));
+          expect(layout.scrollWidth, JSON.stringify({ theme, size, name, layout })).toBeLessThanOrEqual(layout.width);
         }
       }
     }
@@ -77,7 +81,9 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
       await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(value), zoom);
       for (const name of ['节目单', '编辑器', '灯光工作台', '设置']) {
         await nav.getByRole('button', { name, exact: true }).click();
-        expect(await page.locator('.app-shell').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+        const shell = await page.locator('.app-shell').evaluate(element => ({ width: element.clientWidth, scrollWidth: element.scrollWidth,
+          overflow: [...element.querySelectorAll('*')].filter(child => child.getBoundingClientRect().right > element.getBoundingClientRect().right + 1).slice(0, 24).map(child => ({ tag: child.tagName, classes: child.className, right: child.getBoundingClientRect().right })) }));
+        expect(shell.scrollWidth, JSON.stringify({ zoom, name, shell })).toBeLessThanOrEqual(shell.width);
         const capture = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0]!.webContents.capturePage()).toPNG().toString('base64'));
         await writeFile(info.outputPath(`zoom-${zoom}-${name}.png`), Buffer.from(capture, 'base64'));
       }

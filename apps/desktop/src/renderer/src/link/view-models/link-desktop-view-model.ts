@@ -1,6 +1,7 @@
 import type { LinkDesktopApi, LinkFileBridge } from '@tb/core/link';
 import { projectDocumentEnvelopeSchema } from '@tb/schema';
 import { projectCodec } from '../stores/project-codec';
+import { allowProjectReopen } from '../stores/project-recovery';
 
 /**
  * Renderer 视图模型的桌面能力边界。
@@ -13,7 +14,9 @@ export const linkDesktopViewModel: LinkDesktopApi = {
     const result = await window.tbLink.pickProjectDocument();
     if (result === null) return null;
     const document = projectDocumentEnvelopeSchema.parse(result);
-    return { path: document.path, project: await projectCodec.decode(document.content) };
+    const project = await projectCodec.decode(document.content);
+    allowProjectReopen(document.path);
+    return { path: document.path, project };
   },
   openProject: async path => {
     const document = projectDocumentEnvelopeSchema.parse(await window.tbLink.openProjectDocument(path));

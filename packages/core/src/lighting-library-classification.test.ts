@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, serializeLinkProject } from '@tb/schema';
-import { classifyConsoleCuesCommand, hideConsoleCuesCommand } from './lighting-library-classification';
+import { classifyConsoleCuesCommand, hideConsoleCuesCommand, renameConsoleCueCommand, renameLightingLibraryEntryCommand } from './lighting-library-classification';
 import { projectLightingLibrary } from './lighting-library';
 import { saveMa2MaterialLibraryCommand } from './ma2-program-import';
 
@@ -34,4 +34,20 @@ it('删除只隐藏软件素材，原始控台目录、已分类条目保留；�
   expect(()=>classifyConsoleCuesCommand(refs,'rim:7:back',{...source,show:'其他 Show'}).execute(base)).toThrow('目录已变化');
   expect(()=>classifyConsoleCuesCommand([{...refs[0]!,cue:'不存在'}],'rim:7:back',source).execute(base)).toThrow('当前读取目录');
   expect(()=>classifyConsoleCuesCommand(refs,'不存在',source).execute(base)).toThrow('分类已移除');
+});
+it('重命名未分类 Cue 后归类、重读及保存保留名称，原名和执行版本不变',()=>{
+  const base=fixture(), command=renameConsoleCueCommand(refs[0]!, '  暖白面光  ',source);
+  const renamed=command.execute(base);
+  const entry=projectLightingLibrary(renamed).entries[0]!;
+  expect(entry).toMatchObject({name:'暖白面光',originalName:'控台原名暖白',categoryIds:[],revision:1});
+  expect(renamed.ma2MaterialLibrary?.library).toEqual(base.ma2MaterialLibrary?.library);
+  expect(renamed.rundown).toEqual(base.rundown);
+  const classified=classifyConsoleCuesCommand([refs[0]!],'rim:7:back',source).execute(renamed);
+  expect(projectLightingLibrary(classified).entries).toHaveLength(1);
+  const changed=renameLightingLibraryEntryCommand(entry.id,'轮廓暖白').execute(classified);
+  const restored=parseLinkProject(JSON.parse(serializeLinkProject(changed)));
+  expect(projectLightingLibrary(restored).entries[0]).toMatchObject({name:'轮廓暖白',originalName:'控台原名暖白',categoryIds:['rim:7:back'],revision:1,track:{name:'轮廓暖白',cueStamp:{sequence:2,cue:'1.100',executor:''}}});
+  expect(command.undo(base)).toBe(base);
+  expect(()=>renameConsoleCueCommand(refs[0]!,' ',source).execute(base)).toThrow();
+  expect(()=>renameConsoleCueCommand(refs[0]!,'新名',{...source,show:'不同 Show'}).execute(base)).toThrow('目录已变化');
 });

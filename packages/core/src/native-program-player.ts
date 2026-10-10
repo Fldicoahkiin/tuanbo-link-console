@@ -129,7 +129,7 @@ export class NativeProgramPlayer {
         catch (error) { this.lighting.stop(); if (this.current(token)) this.reportUnavailable(`灯光动作未参与：${toUserErrorMessage(error)}`); }
       } };
       if (!this.current(token)) return;
-      const notice = item.lighting ? lightingTimecodePlaybackNotice(item.lighting) : null;
+      const notice = item.lighting && prepared.allowLighting && sendMtc && midiPortName && !this.state.mtcConnectionFailed ? lightingTimecodePlaybackNotice(item.lighting) : null;
       if (notice) this.reportUnavailable(notice);
       await Promise.all([prepareLighting(), this.prepareRuntime(itemId, snapshot.positionMs, reuseSession, token), this.prepareObs(itemId, token)]);
       if (!this.current(token)) return;

@@ -11,7 +11,7 @@ import { useIntegrationStore } from '../stores/integration-store';
 import { useDocumentStore } from '../stores/document-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { useConnectionCheckStore, type ConnectionCheck } from '../stores/connection-check-store';
-import { midiConnectionTargets } from '../view-models/connection-targets';
+import { midiConnectionTargets, usesNativeMidiOutput } from '../view-models/connection-targets';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 import { assertAudioOutputAvailable } from '../view-models/audio-output-route';
 import { obsConnectionStatus, midiConnectionStatus, lightingConnectionDestination } from '../view-models/connection-status';
@@ -93,9 +93,7 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   for (const target of targets) {
     const mapped = profile?.midiPortProfiles.find(port => port.id === target.id && port.direction === target.direction);
     const matching = ports.filter(port => port.name === mapped?.portName && port.direction === target.direction && port.state === 'connected');
-    const nativeMtcName = profile?.midiPortProfiles.find(port => port.id === profile.internalPlayer?.mtcOutputPortProfileId)?.portName;
-    const nativeOutput = (internal || !project) && profile?.internalPlayer?.audioEngine === 'native' && target.direction === 'output'
-      && (target.id === (profile.internalPlayer.mtcOutputPortProfileId ?? 'internal-mtc-output') || Boolean(nativeMtcName && mapped?.portName === nativeMtcName));
+    const nativeOutput = usesNativeMidiOutput(profile, project, target.direction);
     const available = nativeOutput ? nativeDevices?.midiOutputs.filter(port => port.name === mapped?.portName).length === 1 : matching.length === 1;
     const open = !nativeOutput && available && matching[0]?.connection === 'open';
     const key = 'port:' + target.id;

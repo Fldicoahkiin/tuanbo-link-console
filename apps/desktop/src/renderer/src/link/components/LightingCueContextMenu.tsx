@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Trash2, Sun, ScanLine, Sparkles, RotateCcw, Check, Minus } from 'lucide-react';
+import { Plus, Trash2, Sun, ScanLine, Sparkles, RotateCcw, Check, Minus, Pencil } from 'lucide-react';
 import type { LightingCategory } from '@tb/schema';
 import '../lighting-cue-context-menu.css';
 
 /** One small menu for both console cues and classified cues. Changes remain local until the operator confirms. */
-export function LightingCueContextMenu({x,y,title,categories,categoryIds=[],mixedCategoryIds=[],onConfirm,onRemove,onAdd,onRestore,onClose}:{
+export function LightingCueContextMenu({x,y,title,categories,categoryIds=[],mixedCategoryIds=[],onConfirm,onRemove,onAdd,onRestore,onRename,onClose}:{
   x:number;y:number;title:string;categories:LightingCategory[];categoryIds?:string[];mixedCategoryIds?:string[];
   onConfirm:(changes:{add:string[];remove:string[]})=>void;onRemove:()=>void;onAdd?:(()=>void)|undefined;onRestore?:()=>void;onClose:()=>void;
+  onRename?:((name:string)=>void)|undefined;
 }):JSX.Element {
   const root=useRef<HTMLDivElement>(null);
   const initial=categories.find(category=>categoryIds.includes(category.id));
@@ -16,8 +17,13 @@ export function LightingCueContextMenu({x,y,title,categories,categoryIds=[],mixe
   const [tone,setTone]=useState<'bright'|'middle'|'dark'|null>(initial?.tone??null);
   const [zone,setZone]=useState<'front'|'middle'|'back'|null>(initial?.zone??null);
   const [position,setPosition]=useState({left:x,top:y});
+  const [renaming,setRenaming]=useState(false);
+  const [name,setName]=useState(title);
+  const [renameError,setRenameError]=useState('');
+  const nameInput=useRef<HTMLInputElement>(null);
+  useEffect(()=>{if(renaming){nameInput.current?.focus();nameInput.current?.select();}},[renaming]);
   const close=useRef(onClose);close.current=onClose;
-  useLayoutEffect(()=>{const box=root.current?.getBoundingClientRect();if(box)setPosition({left:Math.max(8,Math.min(x,window.innerWidth-box.width-8)),top:Math.max(8,Math.min(y,window.innerHeight-box.height-8))});},[x,y,section,tone,zone]);
+  useLayoutEffect(()=>{const box=root.current?.getBoundingClientRect();if(box)setPosition({left:Math.max(8,Math.min(x,window.innerWidth-box.width-8)),top:Math.max(8,Math.min(y,window.innerHeight-box.height-8))});},[x,y,section,tone,zone,renaming,renameError]);
   useEffect(()=>{
     const previous=document.activeElement;
     root.current?.querySelector<HTMLButtonElement>('button')?.focus({preventScroll:true});
@@ -30,11 +36,16 @@ export function LightingCueContextMenu({x,y,title,categories,categoryIds=[],mixe
   const leaves=categories.filter(category=>category.section===section&&(section==='effect'?category.view==='music'||category.view==='beat':category.zone===zone&&(section==='rim'||category.tone===tone)));
   return createPortal(<div ref={root} className="lighting-cue-context-menu" style={position} role="dialog" aria-label="Cue 右键菜单" onContextMenu={event=>event.preventDefault()} onKeyDown={event=>{
     if(event.key!=='ArrowDown'&&event.key!=='ArrowUp'&&event.key!=='Tab')return;
-    const buttons=[...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];const index=buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if(renaming&&event.key!=='Tab')return;
+    const buttons=[...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled)')];const index=buttons.indexOf(document.activeElement as HTMLElement);
     event.preventDefault();buttons[(index+(event.key==='ArrowUp'||event.key==='Tab'&&event.shiftKey?-1:1)+buttons.length)%buttons.length]?.focus();
   }}>
-    <div className="cue-menu-title" title={title}>{title}</div>
-    {onRestore?<button onClick={()=>apply(onRestore)}><RotateCcw/>恢复素材</button>:<>
+    <div className="cue-menu-heading"><div className="cue-menu-title" title={title}>{title}</div>{onRename&&!renaming?<button type="button" aria-label="重命名" title="重命名" onClick={()=>setRenaming(true)}><Pencil/>重命名</button>:null}</div>
+    {renaming?<form className="cue-menu-rename" onSubmit={event=>{event.preventDefault();try{onRename?.(name.trim());onClose();}catch(cause){setRenameError(cause instanceof Error?cause.message:String(cause));}}}>
+      <input ref={nameInput} aria-label="Cue 名称" value={name} maxLength={512} required onChange={event=>{setName(event.target.value);setRenameError('');}}/>
+      {renameError?<p role="alert">{renameError}</p>:null}
+      <footer><button type="button" onClick={()=>{setRenaming(false);setName(title);setRenameError('');}}>取消</button><button className="cue-menu-confirm" type="submit" disabled={!name.trim()||name.trim()===title}>确定</button></footer>
+    </form>:onRestore?<button onClick={()=>apply(onRestore)}><RotateCcw/>恢复素材</button>:<>
       <div className="cue-menu-sections">{([['front','面光',Sun],['rim','轮廓',ScanLine],['effect','效果',Sparkles]] as const).map(([value,name,Icon])=><button key={value} data-section={value} aria-pressed={section===value} onClick={()=>{setSection(value);const previous=categories.find(category=>category.section===value&&(changes[category.id]??categoryIds.includes(category.id)));setTone(previous?.tone??null);setZone(previous?.zone??null);}}><Icon/>{name}</button>)}</div>
       {section && section!=='effect'?<>
         {section==='front'?<div className="cue-menu-options">{([['bright','亮调'],['middle','中调'],['dark','暗调']] as const).map(([value,name])=><button key={value} aria-pressed={tone===value} onClick={()=>setTone(value)}>{name}</button>)}</div>:null}

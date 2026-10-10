@@ -6,6 +6,8 @@ on:
     paths:
       - 'apps/licensing-server/**'
       - 'scripts/verify-purchase-website.mjs'
+      - 'scripts/verify-product-website.mjs'
+      - 'scripts/serve-product-website.mjs'
       - 'scripts/verify-console.mjs'
       - 'packages/core/**'
       - 'packages/schema/**'
@@ -20,6 +22,8 @@ on:
     paths:
       - 'apps/licensing-server/**'
       - 'scripts/verify-purchase-website.mjs'
+      - 'scripts/verify-product-website.mjs'
+      - 'scripts/serve-product-website.mjs'
       - 'scripts/verify-console.mjs'
       - 'packages/core/**'
       - 'packages/schema/**'
@@ -69,6 +73,7 @@ jobs:
         run: |
           pnpm --filter @tb/desktop exec playwright install --with-deps chromium
           node scripts/verify-purchase-website.mjs
+          node scripts/verify-product-website.mjs
           node scripts/verify-console.mjs
       - name: Verify deployment, rollback and delivery recovery
         env:

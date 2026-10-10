@@ -32,6 +32,9 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
       });
       const status = { settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, state: 'connected', version: '3.7.0.5', passwordSaved: false, error: null };
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status', () => status);
+      ipcMain.removeHandler('link:ma2-network-save'); ipcMain.handle('link:ma2-network-save', () => {
+        throw new Error('连接设置未修改，重新读取不应保存设置或中断现有连接');
+      });
       ipcMain.removeHandler('link:ma2-catalog'); ipcMain.handle('link:ma2-catalog', async () => {
         process.env.TBLINK_CACHE_TEST_READS = String(Number(process.env.TBLINK_CACHE_TEST_READS) + 1);
         await new Promise(resolve => setTimeout(resolve, 1500)); return data.catalog;
@@ -122,6 +125,12 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await expect(page.locator('.ma2-browser-events tbody tr')).toHaveCount(24);
     await page.getByLabel('时间线状态筛选').selectOption('error');
     await expect(page.locator('.ma2-browser-body article')).toContainText('读取超时样例');
+  } catch (error) {
+    if (!page.isClosed()) {
+      await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
+      await writeFile(info.outputPath('failure-logs.json'), JSON.stringify(await page.evaluate(() => window.tbLink.queryLogs({ limit: 100 })), null, 2));
+    }
+    throw error;
   } finally { if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false)); if (app.process().exitCode === null) await app.close(); }
 });
 
