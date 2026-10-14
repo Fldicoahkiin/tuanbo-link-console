@@ -83,12 +83,16 @@ export class LicenseService {
     await writeFileAtomically(this.path, normalized);
     return result;
   }
-  private async checkClock(): Promise<void> {
+  private async clockHighWater(): Promise<number> {
     if (!this.online) throw new Error('在线授权缺少安全存储配置');
     const storage = this.online.credentials;
-    const last = await storage.hasCredential(CLOCK_CREDENTIAL) ? z.number().finite().parse(JSON.parse(await storage.loadCredential(CLOCK_CREDENTIAL))) : 0;
+    return await storage.hasCredential(CLOCK_CREDENTIAL) ? z.number().finite().parse(JSON.parse(await storage.loadCredential(CLOCK_CREDENTIAL))) : 0;
+  }
+  private async checkClock(): Promise<void> {
+    if (!this.online) throw new Error('在线授权缺少安全存储配置');
+    const last = await this.clockHighWater();
     if (this.now() + 300_000 < last) throw new Error('检测到系统时间回拨，请校正系统日期并联网验证');
-    await storage.saveCredential(CLOCK_CREDENTIAL, JSON.stringify(Math.max(last, this.now())));
+    await this.online.credentials.saveCredential(CLOCK_CREDENTIAL, JSON.stringify(Math.max(last, this.now())));
   }
   async activateCode(input: string): Promise<LicenseStatus> {
     this.startupVerification ??= Promise.resolve();
@@ -108,8 +112,9 @@ export class LicenseService {
     if (!online?.serverUrl || !Object.keys(this.keys).length) throw new Error('发行方尚未配置在线授权服务');
     const url = new URL(online.serverUrl);
     if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('授权服务器必须是固定的 HTTPS 域名');
-    // Refuse activation before allocating a seat if encrypted storage is unavailable.
-    await this.checkClock();
+    // Refuse activation before allocating a seat if encrypted storage is unavailable. The rollback check waits for
+    // the server: a clock that was once fast must not block the online verification that corrects it.
+    await online.credentials.saveCredential(CLOCK_CREDENTIAL, JSON.stringify(await this.clockHighWater()));
     let response: Response;
     try {
       response = await (online.fetch ?? fetch)(new URL('/v1/activate', url), {
@@ -136,6 +141,7 @@ export class LicenseService {
     const status = this.describe(result.license);
     if (!status.claims?.online || status.state !== 'active') throw new Error('服务器未返回有效的在线授权');
     await online.credentials.saveCredential(CODE_CREDENTIAL, code);
+    await online.credentials.saveCredential(CLOCK_CREDENTIAL, JSON.stringify(Date.parse(status.claims.issuedAt)));
     await writeFileAtomically(this.path, result.license);
     return status;
   }

@@ -200,3 +200,18 @@ it('已到期的本机订阅可在主进程取得续费证明，拒绝其他授�
   await service.activateCode(code);
   await expect(service.renewalAuthorization(id)).rejects.toThrow('只能续费');
 });
+
+it('系统时间曾被调快后已校正，启动联网验证仍可通过，并以服务器签发时间重置时钟高水位', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-clock-corrected-'));
+  const stored = new Map([['license.clock', JSON.stringify(now + 30 * 86400000)], ['license.activation.code', `TBA-${'C'.repeat(32)}`]]);
+  const token = issue({ online: { leaseUntil: new Date(now + 2 * 86400000).toISOString(), customerType: 'personal' } });
+  const request = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ license: token }))));
+  const service = new LicenseService(directory, machine, publicKeys, () => now, {
+    serverUrl: 'https://license.example.com', enforcement: 'required', fetch: request,
+    credentials: { hasCredential: key => Promise.resolve(stored.has(key)), loadCredential: key => Promise.resolve(stored.get(key) ?? ''),
+      saveCredential: (key, value) => { stored.set(key, value); return Promise.resolve(); } }
+  });
+  expect((await service.status()).state).toBe('active');
+  expect(request).toHaveBeenCalledOnce();
+  expect(Number(stored.get('license.clock'))).toBe(now);
+});
