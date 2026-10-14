@@ -145,3 +145,19 @@ TBLINK_DEMO_VIDEO_PATH=/media/demo.mp4 pnpm --filter @tb/licensing-server build:
 图像为标注了 AI 来源的直播间场景示意，不是软件截图、真实客户案例或商户交易证明。标题字体自托管，来源及许可随源码保存。当前没有真实演示视频。8000 元订单仍需核实企业支付宝对应产品额度；本轮没有实际付款、实际发码、完成邮箱验证码确认或自动开票。
 
 本轮配套邮件检查：按用户授权在服务器通过金河分镜正式注册接口创建受控测试账户，并调用验证邮件接口；注册返回 200，邮件请求返回 202，随后 OquMail 投递日志显示 `delivered`、SMTP 250、目标 MX 为 local，收件人为 `info@jinhefilm.com`。这证明正式应用到 OquMail 同域邮箱的投递，不证明外部邮箱投递或验证码确认全流程。测试密码和会话只存放在服务器受限文件，不进入源码、截图或 Git。
+
+## 2026-10-14 服务条款、退款与隐私页面
+
+新增 `/terms/`、`/refund/`、`/privacy/` 三个静态页面，内容在 `apps/licensing-server/web/pages.mjs`。页脚和结账同意勾选项都链接到这三个页面，用于支付宝提额补件的经营信息展示。按用户 2026-10-14 的决定，页面不展示公司主体，只写联系邮箱。
+
+退款规则为默认草案，正式对外前需用户确认：未激活 7 天内全额退款；重复付款退还多付部分；续费在新增期限开始前可全额退款；已激活仅在软件缺陷 15 个工作日内未修复时按剩余天数比例退款；3 个工作日内答复审核结果。
+
+### 上线前的服务器一次性更新
+
+CI 部署不会修改 Nginx 配置，也不会替换已安装的部署工具（见 [自动部署](AUTOMATED_DEPLOYMENT.md)）。新增路由需由有 sudo 权限的运维先完成以下步骤；完成前推送的 master 能通过校验，但部署会以 `Deployment tools or proxy require an operator-reviewed update` 拒绝，线上保持不变。
+
+1. 备份 `/etc/nginx/sites-available/tblink-licensing.conf`、`/etc/tblink-deploy/policy.json`、`/opt/tblink-licensing/publish-website.py` 和 `/usr/local/libexec/tblink-receive-release.py`。
+2. 在 `tuanbo-link.jinhefilm.com` 的 server 块中，于 `location = /purchase/` 之后加入仓库 `deploy/purchase-site.conf` 里 `/terms/`、`/refund/`、`/privacy/` 三段；执行 `nginx -t` 通过后再 reload。
+3. 用本提交的 `deploy/publish-website.py` 和 `deploy/receive-release.py` 替换上述两个已安装副本，保持原所有者和权限。`activate-release.py`、`publish-console.py` 未改动。
+4. 把 `policy.json` 的 `nginxSha256` 改为新 Nginx 配置文件的 SHA-256。
+5. 在 GitHub Actions 手动运行 `verify-licensing-server`。部署成功后，确认三个页面返回 200，页脚与购买页链接可用。

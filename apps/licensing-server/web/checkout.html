@@ -10,7 +10,7 @@
       <div class="fields"><div><label for="customer-type">购买主体</label><select id="customer-type"><option value="personal">个人</option><option value="company">公司</option></select></div><div><label for="quantity">电脑数量</label><input id="quantity" type="number" min="1" value="1" required inputmode="numeric"></div></div>
       <label for="customer">购买人或公司名称</label><input id="customer" maxlength="160" required autocomplete="organization"><p class="hint">用于记录授权归属，不会创建登录账户。</p>
       <div class="total"><span>本次合计</span><strong id="total">待选择</strong></div>
-      <label class="check"><input id="consent" type="checkbox" required><span>我已阅读<a href="#rules">购买须知</a>，了解单机绑定、期限起算和联网验证要求。</span></label>
+      <label class="check"><input id="consent" type="checkbox" required><span>我已阅读<a href="#rules">购买须知</a>，同意<a href="/terms/" target="_blank" rel="noopener">服务条款</a>、<a href="/refund/" target="_blank" rel="noopener">退款政策</a>和<a href="/privacy/" target="_blank" rel="noopener">隐私政策</a>，了解单机绑定、期限起算和联网验证要求。</span></label>
       <button type="submit">准备订单</button>
     </form>
     <section id="order" hidden aria-labelledby="order-title"><h3 id="order-title">当前订单</h3><p id="order-summary"></p><p id="order-state" role="status"></p>
@@ -31,7 +31,7 @@
   <section id="rules" class="rules" aria-labelledby="rules-title"><h2 id="rules-title">购买前，了解这些。</h2><div class="rule-grid">
     <details><summary>授权、设备与联网</summary><p>一份激活码绑定一台电脑，无免费版或试用。每次启动需要联网验证；验证失败不能进入工作区。换机请联系支持，不能直接在另一台电脑重复激活。</p></details>
     <details><summary>期限从什么时候开始？</summary><p>月付按 30 天、年付按 365 天计算，包含对应期限的使用与更新权益。首次付款经服务端核实并发码时起算，不从首次安装起算。续费在已激活电脑的软件内办理。</p></details>
-    <details><summary>交付、退款与发票</summary><p>支付成功以服务端确认结果为准。未收到激活码、需要退款或开票时，请提供订单号联系 info@jinhefilm.com。不要发送订单凭据或完整激活码。自动开票尚未开放。</p></details>
+    <details><summary>交付、退款与发票</summary><p>支付成功以服务端确认结果为准。未收到激活码、需要退款或开票时，请提供订单号联系 info@jinhefilm.com。不要发送订单凭据或完整激活码。自动开票尚未开放。退款条件见<a href="/refund/" target="_blank" rel="noopener">退款政策</a>。</p></details>
     <details><summary>下载与现场使用</summary><p>适用于 Windows x64。当前安装包未做代码签名，Windows 可能提示未知发布者。OBS 负责正式画面与输出，联动台不控制开播、关播及录像。现场设备适配需按你的实际环境验证。</p></details>
-    <details><summary>订单数据与隐私</summary><p>下单记录购买人或公司名称、套餐、金额和状态。浏览器在当前标签会话内保存订单领取凭据，导出的凭据由你保管。软件激活时提交机器标识，用于授权绑定。</p></details>
+    <details><summary>订单数据与隐私</summary><p>下单记录购买人或公司名称、套餐、金额和状态。浏览器在当前标签会话内保存订单领取凭据，导出的凭据由你保管。软件激活时提交机器标识，用于授权绑定。详见<a href="/privacy/" target="_blank" rel="noopener">隐私政策</a>。</p></details>
   </div></section>

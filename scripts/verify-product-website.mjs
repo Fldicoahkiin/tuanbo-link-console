@@ -20,7 +20,7 @@ try {
     const page = await browser.newPage({ viewport: { width, height: 960 }, reducedMotion: 'reduce' });
     const errors = [], mediaRequests = []; page.on('pageerror', e => errors.push(e.message)); page.on('request', r => { if (r.url().endsWith('.mp4')) mediaRequests.push(r.url()); });
     await page.route('**/v1/catalog', route => route.fulfill({ json: { available: true, currency: 'CNY', termStart: 'fulfillment', offers: catalog.offers } }));
-    for (const path of ['/', '/download/', '/guide/', '/purchase/']) {
+    for (const path of ['/', '/download/', '/guide/', '/purchase/', '/terms/', '/refund/', '/privacy/']) {
       let initialBytes;
       await page.goto(origin + path, { waitUntil: 'networkidle' });
       assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), true, `${width}: ${path} overflow`);

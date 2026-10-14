@@ -20,7 +20,7 @@ RELEASES = Path('/srv/tblink-purchase-releases')
 BACKUPS = Path('/var/lib/tblink-licensing/backups')
 PROTECTED = [Path('/opt/tblink-licensing/dist/index.js'), Path('/etc/tblink-licensing/service.env')]
 STATIC_FILES = {'index.html', 'purchase.js', 'purchase.css', 'assets/studio.webp', 'assets/display.woff2', 'assets/FONT-LICENSE.txt'}
-STATIC_FILES |= {'site.js', 'site.css', 'download/index.html', 'guide/index.html', 'purchase/index.html', 'media.json', 'release.json', 'robots.txt', 'sitemap.xml', 'website-manifest.json', 'assets/20261010-programs.webp', 'assets/20261010-timeline.webp', 'assets/20261010-cameras.webp', 'assets/20261010-lighting.webp', 'assets/20261010-connections.webp', 'assets/20261010-rehearsal.webp', 'media/20261010-programs.mp4', 'media/20261010-timeline.mp4', 'media/20261010-cameras.mp4', 'media/20261010-lighting.mp4', 'media/20261010-overview.mp4', 'media/20261010-overview.vtt'}
+STATIC_FILES |= {'site.js', 'site.css', 'download/index.html', 'guide/index.html', 'purchase/index.html', 'terms/index.html', 'refund/index.html', 'privacy/index.html', 'media.json', 'release.json', 'robots.txt', 'sitemap.xml', 'website-manifest.json', 'assets/20261010-programs.webp', 'assets/20261010-timeline.webp', 'assets/20261010-cameras.webp', 'assets/20261010-lighting.webp', 'assets/20261010-connections.webp', 'assets/20261010-rehearsal.webp', 'media/20261010-programs.mp4', 'media/20261010-timeline.mp4', 'media/20261010-cameras.mp4', 'media/20261010-lighting.mp4', 'media/20261010-overview.mp4', 'media/20261010-overview.vtt'}
 FILES = STATIC_FILES | {'revision.txt', 'nginx.previous.conf', 'nginx.next.conf'}
 
 
@@ -54,7 +54,7 @@ def validate_config(previous, candidate):
         raise RuntimeError('Unexpected website root or proxy routes')
     expected = {'= /', '= /purchase.js', '= /purchase.css', '= /assets/studio.webp', '= /assets/display.woff2', '= /assets/FONT-LICENSE.txt', '~ "^/media/[a-z0-9][a-z0-9-]*\\.mp4$"',
                 '= /v1/catalog', '= /v1/orders', '~ "^/v1/orders/[a-f0-9-]{36}$"', '~ "^/v1/orders/[a-f0-9-]{36}/reconcile$"'}
-    expected |= {'= /download/', '= /guide/', '= /purchase/'} | {'= /' + name for name in STATIC_FILES - {'index.html', 'download/index.html', 'guide/index.html', 'purchase/index.html'}}
+    expected |= {'= /download/', '= /guide/', '= /purchase/', '= /terms/', '= /refund/', '= /privacy/'} | {'= /' + name for name in STATIC_FILES - {'index.html', 'download/index.html', 'guide/index.html', 'purchase/index.html', 'terms/index.html', 'refund/index.html', 'privacy/index.html'}}
     routes = dict(re.findall(r'    location (.*?) \{\n(.*?)\n    }', site, re.S))
     if set(routes) != expected or '    location / { return 404; }' not in site:
         raise RuntimeError('Unexpected exposed route')

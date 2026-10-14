@@ -13,7 +13,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 STATIC = ['index.html', 'purchase.js', 'purchase.css', 'assets/studio.webp',
           'assets/display.woff2', 'assets/FONT-LICENSE.txt']
-STATIC += ["site.js","site.css","download/index.html","guide/index.html","purchase/index.html","media.json","release.json","robots.txt","sitemap.xml","website-manifest.json","assets/20261010-programs.webp","assets/20261010-timeline.webp","assets/20261010-cameras.webp","assets/20261010-lighting.webp","assets/20261010-connections.webp","assets/20261010-rehearsal.webp","media/20261010-programs.mp4","media/20261010-timeline.mp4","media/20261010-cameras.mp4","media/20261010-lighting.mp4","media/20261010-overview.mp4","media/20261010-overview.vtt"]
+STATIC += ["site.js","site.css","download/index.html","guide/index.html","purchase/index.html","terms/index.html","refund/index.html","privacy/index.html","media.json","release.json","robots.txt","sitemap.xml","website-manifest.json","assets/20261010-programs.webp","assets/20261010-timeline.webp","assets/20261010-cameras.webp","assets/20261010-lighting.webp","assets/20261010-connections.webp","assets/20261010-rehearsal.webp","media/20261010-programs.mp4","media/20261010-timeline.mp4","media/20261010-cameras.mp4","media/20261010-lighting.mp4","media/20261010-overview.mp4","media/20261010-overview.vtt"]
 
 
 def write_ssh_file(path, value):
