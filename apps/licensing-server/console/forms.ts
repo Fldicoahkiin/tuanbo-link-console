@@ -27,6 +27,11 @@ export const forms: Record<ConsoleAction['action'], { title: string; note: strin
   'refund-review': { title: '处理渠道退款', note: '核对渠道退款后，撤销本订单签发的全部授权，或保留授权结案。续费订单不拥有授权，只能保留，请先用“调整到期时间”回退续期。', fields: [{ key: 'decision', label: '处理方式', type: 'select', options: [['revoke', '撤销本订单全部授权'], ['keep', '保留授权，仅结案']] }, reason] },
   invoice: { title: '记录开票进度', note: '系统未接入自动开票；此处记录人工办理进度，不生成税务发票。', fields: [{ key: 'state', label: '办理状态', type: 'select', options: [['requested', '已申请'], ['processing', '办理中'], ['issued', '已开票'], ['rejected', '无法办理']] }, { key: 'buyer', label: '购买方抬头' }, { key: 'taxId', label: '税号（可选）', optional: true }, { key: 'reference', label: '发票编号（已开票必填）', optional: true }, reason] }
 };
+/** Irreversible or credential-invalidating actions: red styling and a confirm label that names the consequence. */
+export const destructiveActions: Partial<Record<ConsoleAction['action'], string>> = {
+  revoke: '确认撤销授权', 'revoke-delivery-access': '确认撤销领取凭据', 'delivery-access': '确认重发（原凭据失效）',
+  'alipay-refund': '确认向支付宝发起退款', 'refund-review': '确认处理渠道退款', 'reset-user': '确认重置认证'
+};
 export const labels: Record<string, string> = {
   offerName: '商品名称', offerRevision: '商品版本', unitAmountFen: '单份金额',
   id: '编号', reference: '业务编号', customer: '客户', customerType: '客户类型', quantity: '份数', amountFen: '金额', useUntil: '使用截止', updatesUntil: '更新权益截止', state: '状态', channel: '来源 / 渠道', paymentStatus: '付款状态', paymentReference: '付款流水', receivedAt: '确认收款时间', deliveryError: '交付错误', created: '创建时间', openTickets: '待处理工单', refundedFen: '已登记退款', orderId: '原订单', order_id: '订单编号', source: '来源', kind: '授权类型', machineCode: '绑定机器码', bound: '已绑定', revoked: '已撤销', leaseUntil: '最后凭证到期', migrationAfter: '最早可换机时间', lastIssuedAt: '最后签发时间', username: '用户名', role: '角色', enabled: '已启用', enrolled: '已开通', at: '时间', actor: '操作人编号', operator: '操作人', action: '操作', target: '对象', reason: '原因', result: '结果', request_id: '请求编号', category: '类别', note: '问题描述', conclusion: '授权处理结论', license_id: '授权编号', updated: '更新时间', orderReference: '业务订单号', buyer: '发票抬头', taxId: '税号', pendingOrders: '待付款 / 核款', deliveryPending: '已收款待交付', refundReview: '渠道退款待处理', channelRefundFen: '渠道累计退款', reviewedRefundFen: '已处理退款', expiring: '七日内到期', manualFen: '人工确认收款', onlineFen: '线上确认收款', refundFen: '已登记退款', service: '服务', backup: '最近备份回执', recovery: '交付恢复任务回执', name: '检查项', checkedAt: '检查时间', detail: '说明'

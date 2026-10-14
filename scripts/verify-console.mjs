@@ -79,6 +79,12 @@ try {
     assert.equal((await page.locator('body').innerText()).includes('TBA-'), false);
     const dialog = page.getByRole('dialog');
     if (role === 'operations') {
+      // Credential-invalidating actions name their consequence in red; close without executing.
+      await page.getByRole('button', { name: '重发领取凭据', exact: true }).click();
+      const confirm = dialog.getByRole('button', { name: '确认重发（原凭据失效）' });
+      assert.match(await confirm.getAttribute('class') ?? '', /danger-confirm/);
+      await page.screenshot({ path: fileURLToPath(new URL('operations-destructive-dialog.png', shots)) });
+      await dialog.getByRole('button', { name: '关闭操作窗口' }).click(); await dialog.waitFor({ state: 'hidden' });
       await page.getByRole('button', { name: '创建售后工单', exact: true }).click();
       await dialog.getByLabel('问题描述').fill('浏览器测试工单'); await dialog.getByLabel('操作原因').fill('客户问题处理');
       await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('售后工单已创建').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();

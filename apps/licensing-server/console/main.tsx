@@ -7,7 +7,7 @@ import { api, ApiError, errorMessage, messageSchema } from './api';
 import { RevenueTrend } from './revenue-trend';
 import { AuthView } from './auth-view';
 import { ActionDialog } from './action-dialog';
-import { display, forms, labels, roleNames } from './forms';
+import { destructiveActions, display, forms, labels, roleNames } from './forms';
 
 type Session = z.infer<typeof sessionSchema>;
 type Page = z.infer<typeof pageSchema>;
@@ -47,7 +47,7 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
   function navigate(key: string) { setRoute(key); setSelected(null); setDetail(null); setData(null); setError(''); setPage(1); }
   const can = (action: ConsoleAction['action']) => permissions[action].includes(session.user.role);
   const open = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => setDialog({ action, row });
-  const actionButton = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => can(action) ? <button className={action === 'revoke' || action === 'revoke-delivery-access' || action === 'alipay-refund' ? 'danger-button' : ['set-expiry', 'create-order', 'grant', 'create-user'].includes(action) ? 'primary' : undefined} key={action} onClick={() => open(action, row)}>{forms[action].title}</button> : null;
+  const actionButton = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => can(action) ? <button className={destructiveActions[action] ? 'danger-button' : ['set-expiry', 'create-order', 'grant', 'create-user'].includes(action) ? 'primary' : undefined} key={action} onClick={() => open(action, row)}>{forms[action].title}</button> : null;
   async function logout() { setBusy(true); try { await api('logout', messageSchema, {}, session.csrf); signedOut(); } catch (error) { setError(errorMessage(error)); } finally { setBusy(false); } }
   async function verify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = event.currentTarget; setBusy(true); setError('');
