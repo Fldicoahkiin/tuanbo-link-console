@@ -1,12 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import { enrollmentSchema, loginSchema, pageQuerySchema, sessionSchema } from './console-contract';
-import type { ConsoleService } from './console-service';
+import type { ConsoleChannels, ConsoleService } from './console-service';
 import { ServiceError } from './service';
 
 export type ConsoleHttp = { service: ConsoleService; origin: string };
 const cookieName = '__Host-tblink-console';
-export async function dispatchConsole(options: ConsoleHttp, request: IncomingMessage, response: ServerResponse, requestId: string, address: string, readBody: () => Promise<unknown>, reconcile: (id: string) => Promise<unknown>): Promise<unknown> {
+export async function dispatchConsole(options: ConsoleHttp, request: IncomingMessage, response: ServerResponse, requestId: string, address: string, readBody: () => Promise<unknown>, channels: ConsoleChannels): Promise<unknown> {
   const origin = new URL(options.origin);
   if (origin.protocol !== 'https:' || origin.origin !== options.origin || request.headers.host !== origin.host) throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
   if (request.headers['sec-fetch-site'] === 'cross-site') throw new ServiceError(403, 'ORIGIN_REJECTED', '请求来源不受信任');
@@ -38,7 +38,7 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
   }
   if (request.method === 'POST' && path === '/console-api/commands') {
     const body = await readBody();
-    return options.service.execute(body, auth.session(token), requestId, reconcile);
+    return options.service.execute(body, auth.session(token), requestId, channels);
   }
   if (request.method === 'GET' && path === '/console-api/overview') return options.service.overview();
   if (request.method === 'GET' && path === '/console-api/export') {

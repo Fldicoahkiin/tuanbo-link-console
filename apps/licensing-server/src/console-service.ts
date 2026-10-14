@@ -15,9 +15,17 @@ const orderProjection = `SELECT o.id,o.reference,json_extract(o.body,'$.customer
   p.payment_reference AS paymentReference,p.received_at AS receivedAt,p.last_error AS deliveryError,
   COALESCE(m.created,(SELECT MIN(at) FROM audit WHERE target=o.id AND action IN ('order.created','order.purchase-created'))) AS created,
   (SELECT COUNT(*) FROM console_tickets WHERE order_id=o.id AND state!='closed') AS openTickets,
-  (SELECT COALESCE(SUM(amount_fen),0) FROM console_refunds WHERE order_id=o.id) AS refundedFen
+  (SELECT COALESCE(SUM(amount_fen),0) FROM console_refunds WHERE order_id=o.id) AS refundedFen,
+  MAX(COALESCE((SELECT MAX(refund_fen) FROM payment_events WHERE order_id=o.id),0),COALESCE((SELECT SUM(amount_fen) FROM alipay_refunds WHERE order_id=o.id AND state='succeeded'),0),
+    COALESCE((SELECT MAX(refunded_total_fen) FROM alipay_refunds WHERE order_id=o.id AND state='succeeded'),0)) AS channelRefundFen,
+  (SELECT COALESCE(MAX(refund_fen),0) FROM refund_reviews WHERE order_id=o.id) AS reviewedRefundFen
   FROM orders o LEFT JOIN console_order_meta m ON m.order_id=o.id LEFT JOIN payment_receipts p ON p.order_id=o.id
   LEFT JOIN alipay_payment_links a ON a.order_id=o.id LEFT JOIN wechat_payment_links w ON w.order_id=o.id`;
+/** 由 HTTP 层注入的渠道调用；控制台只编排，不直接持有支付宝凭据。 */
+export type ConsoleChannels = {
+  reconcile: (id: string) => Promise<unknown>;
+  refund: (request: ReturnType<LicensingService['prepareAlipayRefund']>) => Promise<{ confirmed: boolean; refundedTotalFen: number }>;
+};
 export class ConsoleService {
   readonly auth: ConsoleAuth;
   constructor(private readonly db: DatabaseSync, private readonly service: LicensingService, key: Buffer, private readonly now: () => number = Date.now) {
@@ -36,7 +44,8 @@ export class ConsoleService {
   list(resource: string, query: PageQuery, session: ConsoleSession) {
     const term = `%${query.q.replace(/[\\%_]/g, '\\$&')}%`;
     if (resource === 'orders' || resource === 'exceptions') {
-      const extra = resource === 'exceptions' ? " AND paymentStatus='confirmed' AND state!='fulfilled'" : '';
+      // 异常队列：已收款未交付，或渠道累计退款尚未由运营决定授权去留。
+      const extra = resource === 'exceptions' ? " AND (paymentStatus='confirmed' AND state IN ('pending','paid') OR channelRefundFen>reviewedRefundFen)" : '';
       return this.page(`SELECT * FROM (${orderProjection}) WHERE (id LIKE ? ESCAPE '\\' OR reference LIKE ? ESCAPE '\\' OR customer LIKE ? ESCAPE '\\') AND (?='' OR state=?) AND (?='' OR channel=?) AND (?='' OR created>=?) AND (?='' OR created<?)${extra} ORDER BY created DESC,id`,
         [term, term, term, query.state, query.state, query.channel, query.channel, query.from, query.from ? new Date(`${query.from}T00:00:00+08:00`).toISOString() : '', query.to, query.to ? new Date(Date.parse(`${query.to}T00:00:00+08:00`) + 86400000).toISOString() : ''], query);
     }
@@ -47,7 +56,7 @@ export class ConsoleService {
     if (resource === 'tickets') return this.page(`SELECT t.*,o.reference AS orderReference FROM console_tickets t JOIN orders o ON o.id=t.order_id WHERE (t.id LIKE ? ESCAPE '\\' OR o.reference LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\') AND (?='' OR t.state=?) ORDER BY t.created DESC,t.id`, [term, term, term, query.state, query.state], query);
     if (resource === 'finance') {
       this.financial(session);
-      return this.page(`SELECT * FROM (SELECT id,order_id AS orderId,'refund' AS category,amount_fen AS amountFen,reference,handled_at AS created,'人工登记退款' AS state,reason,actor,NULL AS buyer,NULL AS taxId FROM console_refunds UNION ALL SELECT id,order_id,'invoice',NULL,reference,created,state,reason,actor,buyer,tax_id FROM console_invoices) WHERE (orderId LIKE ? ESCAPE '\\' OR reference LIKE ? ESCAPE '\\') ORDER BY created DESC,id`, [term, term], query);
+      return this.page(`SELECT * FROM (SELECT id,order_id AS orderId,'refund' AS category,amount_fen AS amountFen,reference,handled_at AS created,CASE WHEN reference LIKE 'alipay-refund:%' THEN '支付宝原路退款' ELSE '人工登记退款' END AS state,reason,actor,NULL AS buyer,NULL AS taxId FROM console_refunds UNION ALL SELECT id,order_id,'invoice',NULL,reference,created,state,reason,actor,buyer,tax_id FROM console_invoices) WHERE (orderId LIKE ? ESCAPE '\\' OR reference LIKE ? ESCAPE '\\') ORDER BY created DESC,id`, [term, term], query);
     }
     if (resource === 'audit') {
       if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '只有负责人可以查看全局日志');
@@ -79,7 +88,7 @@ export class ConsoleService {
     return detailSchema.parse({ item, related, history });
   }
   overview() {
-    const counts = this.db.prepare(`SELECT SUM(CASE WHEN paymentStatus='pending' AND state='pending' THEN 1 ELSE 0 END) AS pendingOrders,SUM(CASE WHEN paymentStatus='confirmed' AND state!='fulfilled' THEN 1 ELSE 0 END) AS deliveryPending FROM (${orderProjection})`).get();
+    const counts = this.db.prepare(`SELECT SUM(CASE WHEN paymentStatus='pending' AND state='pending' THEN 1 ELSE 0 END) AS pendingOrders,SUM(CASE WHEN paymentStatus='confirmed' AND state IN ('pending','paid') THEN 1 ELSE 0 END) AS deliveryPending,SUM(CASE WHEN channelRefundFen>reviewedRefundFen THEN 1 ELSE 0 END) AS refundReview FROM (${orderProjection})`).get();
     const receipts = this.db.prepare("SELECT COALESCE(SUM(CASE WHEN source='manual' THEN amount_fen ELSE 0 END),0) AS manualFen,COALESCE(SUM(CASE WHEN source!='manual' THEN amount_fen ELSE 0 END),0) AS onlineFen FROM payment_receipts").get();
     const refunds = this.db.prepare('SELECT COALESCE(SUM(amount_fen),0) AS refundFen FROM console_refunds').get();
     const tickets = this.db.prepare("SELECT COUNT(*) AS openTickets FROM console_tickets WHERE state!='closed'").get();
@@ -109,7 +118,7 @@ export class ConsoleService {
     if (row.state === 'failed') return { ...(result.id ? { id: result.id } : {}), message: `原操作未完成：${result.message}。请核对订单状态后再发起新的操作。` };
     return resultSchema.parse({ ...(result.id ? { id: result.id } : {}), message: `${result.message}；如需完整凭据，请重新执行受保护的查看操作` });
   }
-  async execute(value: unknown, session: ConsoleSession, requestId: string, reconcile: (id: string) => Promise<unknown>): Promise<ConsoleResult> {
+  async execute(value: unknown, session: ConsoleSession, requestId: string, channels: ConsoleChannels): Promise<ConsoleResult> {
     const { operationId, input } = commandSchema.parse(value); const target = 'id' in input ? input.id : operationId;
     const safeInput: ConsoleAction = { ...input, reason: redactConsoleText(input.reason) };
     const fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex');
@@ -125,12 +134,19 @@ export class ConsoleService {
         this.db.prepare("UPDATE console_operations SET state='done',result=? WHERE id=?").run(this.auth.seal(JSON.stringify(resultSchema.parse(result))), operationId);
         this.auth.audit(session.user.id, input.action, result.id ?? target, input.reason, 'success', requestId); return result;
       };
-      if (input.action === 'reconcile' || input.action === 'fulfill' || input.action === 'retry-delivery') {
+      if (input.action === 'reconcile' || input.action === 'fulfill' || input.action === 'retry-delivery' || input.action === 'alipay-refund') {
         this.service.consoleTransaction(begin);
         try {
           // Keep payment receipt durable even if the subsequent delivery transaction fails.
           let result: ConsoleResult;
-          if (input.action === 'reconcile') { await reconcile(input.id); result = { id: input.id, message: '查单已完成，请刷新订单查看实际付款与交付状态' }; }
+          if (input.action === 'reconcile') { await channels.reconcile(input.id); result = { id: input.id, message: '查单已完成，请刷新订单查看实际付款与交付状态' }; }
+          else if (input.action === 'alipay-refund') {
+            // 退款请求先落库，渠道结果未确认时保持待确认，运营用新操作编号按原金额重提即复用同一 out_request_no。
+            const request = this.service.prepareAlipayRefund(input.id, input.amountFen, input.reason, session.user.id);
+            const outcome = await channels.refund(request);
+            if (!outcome.confirmed) throw new ServiceError(502, 'REFUND_UNCONFIRMED', '支付宝尚未确认本笔退款，订单与授权未变。请稍后返回表单按相同金额重新提交，支付宝按同一退款请求号去重，不会重复退款');
+            return this.service.consoleTransaction(() => finish(this.recordAlipayRefund(request, outcome.refundedTotalFen, session.user.id)));
+          }
           else result = this.perform(safeInput, session, operationId);
           return this.service.consoleTransaction(() => finish(result));
         } catch (error) {
@@ -197,8 +213,19 @@ export class ConsoleService {
         this.db.prepare('INSERT INTO console_invoices VALUES(?,?,?,?,?,?,?,?,?)').run(randomUUID(), input.id, input.state, input.buyer, input.taxId, input.reference, input.reason, actor, at);
         return success(input.id, '开票处理记录已保存；系统未调用开票服务');
       }
-      case 'reconcile': throw new ServiceError(500, 'INVALID_DISPATCH', '查单必须通过异步通道执行');
+      case 'refund-review': {
+        const { revoked } = this.service.reviewRefund(input.id, input.decision, input.reason, actor);
+        return success(input.id, input.decision === 'revoke' ? `已撤销本订单 ${revoked.length} 份授权，渠道退款处理完成` : '已保留授权，渠道退款处理完成');
+      }
+      case 'reconcile': case 'alipay-refund': throw new ServiceError(500, 'INVALID_DISPATCH', '渠道操作必须通过异步通道执行');
     }
+  }
+  private recordAlipayRefund(request: ReturnType<LicensingService['prepareAlipayRefund']>, refundedTotalFen: number, actor: string): ConsoleResult {
+    const confirmed = this.service.confirmAlipayRefund(request.refundId, refundedTotalFen, actor);
+    if (!confirmed) return { id: request.orderId, message: '该笔支付宝退款此前已确认，未重复处理' };
+    this.db.prepare('INSERT INTO console_refunds VALUES(?,?,?,?,?,?,?)').run(randomUUID(), request.orderId, request.amountFen, `alipay-refund:${request.refundId}`, new Date(this.now()).toISOString(), request.reason, actor);
+    if (confirmed.full && !confirmed.renewal) return { id: request.orderId, message: `支付宝已全额退款，订单已标记退款并撤销 ${confirmed.revoked.length} 份授权` };
+    return { id: request.orderId, message: confirmed.renewal ? '支付宝已退款。续费订单不自动撤销原授权，已进入异常队列，请调整原授权到期时间后处理' : '支付宝已部分退款，授权未变，已进入异常队列待处理' };
   }
   exportOrders(query: PageQuery, session: ConsoleSession, requestId: string): string {
     this.financial(session); const rows: ConsoleRow[] = [];

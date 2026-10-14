@@ -23,7 +23,7 @@ async function setup() {
   const recovery = await consoleService.auth.enroll(first.token, 'a-secure-test-password', code(first.id), 'enroll');
   time += 30000;
   const login = await consoleService.auth.login('owner', 'a-secure-test-password', code(first.id), 'login');
-  const execute = (input: ConsoleAction, session = login.session, operationId = randomUUID()) => consoleService.execute({ operationId, input }, session, randomUUID(), () => Promise.resolve({}));
+  const execute = (input: ConsoleAction, session = login.session, operationId = randomUUID()) => consoleService.execute({ operationId, input }, session, randomUUID(), { reconcile: () => Promise.resolve({}), refund: () => Promise.reject(new Error('测试未接入支付宝')) });
   return { service, consoleService, db, first, login, recovery, code, execute, advance: (n: number) => { time += n; }, now: () => time };
 }
 const grant = { action: 'grant' as const, customer: '内测客户', customerType: 'company' as const, quantity: 2, useUntil: '2026-11-06T00:00:00Z', purpose: 'test' as const, reason: '现场兼容验收' };
@@ -156,4 +156,25 @@ it('工作台按已交付客户去重并按北京时间汇总实际收款', asyn
   expect(trend.find(row => row.day === '2026-10-06')?.incomeFen).toBe(50000);
   expect(trend.find(row => row.day === '2026-10-05')?.refundFen).toBe(10000);
   expect(trend.reduce((sum, row) => sum + Number(row.incomeFen), 0)).toBe(50000);
+});
+it('渠道退款通知进入异常队列且不自动撤销授权，人工登记只记账，运营处理后出列', async () => {
+  const s = await setup(); const identity = { appId: '2026000000000001', sellerId: '2088000000000001' };
+  const order = s.service.createOrder({ reference: 'refund-queue', customer: '退款客户', customerType: 'company', quantity: 1, kind: 'perpetual', amountFen: 80000, useUntil: null, updatesUntil: '2027-10-06T00:00:00Z' });
+  s.service.prepareAlipayPayment(order.id, identity.appId, identity.sellerId);
+  const notice = { orderId: order.id, ...identity, status: 'TRADE_SUCCESS', amountFen: 80000, refundFen: 0, paymentReference: 'alipay:202610062200000000000001' };
+  s.service.alipayNotification(notice);
+  const exceptions = () => s.consoleService.list('exceptions', pageQuerySchema.parse({}), s.login.session).items.map(row => row.id);
+  expect(exceptions()).toEqual([]);
+  s.service.alipayNotification({ ...notice, status: 'TRADE_CLOSED', refundFen: 80000 });
+  expect(exceptions()).toEqual([order.id]);
+  expect(s.consoleService.overview().item.refundReview).toBe(1);
+  const detail = s.consoleService.detail('orders', order.id, s.login.session);
+  expect(detail.item).toMatchObject({ state: 'refunded', channelRefundFen: 80000, reviewedRefundFen: 0, refundedFen: 0 });
+  expect(detail.related.map(row => row.revoked)).toEqual([false]);
+  await s.execute({ action: 'refund', id: order.id, amountFen: 80000, reference: 'manual-refund-1', handledAt: new Date(s.now()).toISOString(), reason: '财务登记' });
+  expect(exceptions()).toEqual([order.id]);
+  await s.execute({ action: 'refund-review', id: order.id, decision: 'keep', reason: '客户申请退款，核对后保留授权至期满' });
+  expect(exceptions()).toEqual([]);
+  expect(s.consoleService.detail('orders', order.id, s.login.session).related.map(row => row.revoked)).toEqual([false]);
+  expect(s.consoleService.overview().item.refundReview).toBe(0);
 });

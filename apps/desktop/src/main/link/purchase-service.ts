@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
-  purchaseCatalogResponseSchema, purchaseDeliverySchema, purchaseOrderSchema, purchaseReceiptSchema,
+  alipayGateways, paymentEnvironmentHeader, paymentEnvironmentSchema, purchaseCatalogResponseSchema, purchaseDeliverySchema, purchaseOrderSchema, purchaseReceiptSchema,
   licenseActivationSchema, purchaseRequestSchema, purchaseResponseSchema, type PurchaseReceipt
 } from '@tb/schema';
 import type { SecureProfileStore } from './secure-profile-store';
@@ -27,11 +27,14 @@ const messages: Record<string, string> = {
   PAYMENT_QUERY_UNCONFIRMED: '支付宝尚未返回可确认的交易，请保留原订单，不要重复付款',
   PAYMENT_REFUNDED: '订单涉及退款，请联系支持核对',
   PAYMENT_REQUIRES_REVIEW: '订单收款状态需要人工核对，请联系支持',
+  PAYMENT_CLOSE_UNCONFIRMED: '支付宝尚未确认关闭原交易，原订单已保留，请稍后再查询；不要重复付款',
   RATE_LIMITED: '查询过于频繁，请稍后手动重试'
 };
 class PurchaseResponseError extends Error {
   constructor(readonly code: string, readonly status: number) { super(messages[code] ?? `购买服务请求失败（${status}），请保留原订单并手动核对`); }
 }
+// 服务端经渠道确认原交易关闭或不存在且未收款，本机可另建新单。
+const ended = (receipt: StoredReceipt): boolean => receipt.order?.state === 'closed' || receipt.order?.state === 'expired';
 
 export class PurchaseService {
   private readonly origin: URL;
@@ -62,7 +65,7 @@ export class PurchaseService {
     if (!license?.code || license.revoked) throw new Error('未找到可复制的已交付激活码，请先查询原订单');
     return license.code;
   }
-  async catalog() { return purchaseCatalogResponseSchema.parse(await this.json('/v1/catalog')); }
+  async catalog() { return purchaseCatalogResponseSchema.parse((await this.json('/v1/catalog')).body); }
   private async exclusive<T>(action: () => Promise<T>): Promise<T> {
     if (this.busy) throw new Error('请等待当前购买操作完成，不要重复下单');
     this.busy = true;
@@ -73,7 +76,7 @@ export class PurchaseService {
     const request = purchaseRequestSchema.parse(input);
     return this.exclusive(async () => {
       const receipts = await this.load();
-      if (receipts.some(receipt => !receipt.rejected && receipt.delivery?.state !== 'fulfilled')) throw new Error('还有待核对的购买，请先恢复原订单；不要重复付款');
+      if (receipts.some(receipt => !receipt.rejected && receipt.delivery?.state !== 'fulfilled' && !ended(receipt))) throw new Error('还有待核对的购买，请先恢复原订单；不要重复付款');
       if (receipts.length >= 100) throw new Error('本机购买记录已达上限，请联系发行方核对');
       if (request.renewalLicenseId && !this.renewalAuthorization) throw new Error('本机续费凭据不可用，未创建订单');
       const renewalAuthorization = request.renewalLicenseId
@@ -95,12 +98,13 @@ export class PurchaseService {
       if (!receipt.order) await this.recover(receipt, receipts);
       const order = receipt.order;
       if (!order) throw new Error('尚未取得订单，请保留记录并手动恢复');
-      const delivery = purchaseDeliverySchema.parse(await this.json(`/v1/orders/${order.id}/reconcile`, receipt.token, {}));
+      const delivery = purchaseDeliverySchema.parse((await this.json(`/v1/orders/${order.id}/reconcile`, receipt.token, {})).body);
       if (delivery.id !== order.id || delivery.amountFen !== order.amountFen || delivery.quantity !== order.quantity || delivery.kind !== order.offer.kind || delivery.renewalLicenseId !== receipt.request.renewalLicenseId
-        || receipt.delivery?.state === 'fulfilled' && delivery.state !== 'fulfilled') throw new Error('交付信息与原订单不一致，请联系发行方');
+        || receipt.delivery?.state === 'fulfilled' && delivery.state !== 'fulfilled'
+        || ended(receipt) && delivery.state === 'pending' && !delivery.paymentConfirmed) throw new Error('交付信息与原订单不一致，请联系发行方');
       receipt.delivery = delivery;
-      if (delivery.state === 'fulfilled') receipt.order = { ...order, state: 'fulfilled', payable: false };
-      else if (delivery.paymentConfirmed) receipt.order = { ...order, payable: false };
+      if (delivery.state !== 'pending') receipt.order = { ...order, state: delivery.state, payable: false };
+      else if (delivery.paymentConfirmed) receipt.order = { ...order, state: 'pending', payable: false };
       await this.save(receipts);
       return this.summary(receipt);
     });
@@ -109,11 +113,13 @@ export class PurchaseService {
     return this.exclusive(async () => {
       const receipts = await this.load(); const receipt = this.find(receipts, localId);
       if (receipt.rejected || receipt.delivery?.state === 'fulfilled') throw new Error('这笔记录不能再次付款');
-      const response = await this.recover(receipt, receipts);
+      const { response, environment } = await this.recover(receipt, receipts);
+      if (response.state === 'closed' || response.state === 'expired') throw new Error('原订单已关闭且未收款，可以重新创建订单');
       if (!response.payable || !response.paymentUrl || Date.parse(response.expiresAt) - this.now() < 60000) throw new Error('付款入口已关闭或过期，请核对原订单；不要重复下单');
       const url = new URL(response.paymentUrl);
       const params = url.searchParams;
-      if (url.origin !== 'https://openapi.alipay.com' || url.pathname !== '/gateway.do' || url.username || url.password || url.hash
+      const gateway = paymentEnvironmentSchema.safeParse(environment);
+      if (!gateway.success || `${url.origin}${url.pathname}` !== alipayGateways[gateway.data] || url.username || url.password || url.hash
         || [...new Set(params.keys())].some(key => params.getAll(key).length !== 1)
         || params.get('method') !== 'alipay.trade.page.pay' || params.get('sign_type') !== 'RSA2' || !params.get('sign')
         || params.has('return_url') || params.get('notify_url') !== new URL('/v1/payments/alipay/notify', this.origin).href) throw new Error('付款链接未通过安全检查，请联系发行方');
@@ -136,14 +142,15 @@ export class PurchaseService {
   }
   private async recover(receipt: StoredReceipt, receipts: StoredReceipt[]) {
     try {
-      const result = purchaseResponseSchema.parse(await this.json('/v1/orders', receipt.token, receipt.request, receipt.order ? undefined : receipt.renewalAuthorization));
+      const { body, headers } = await this.json('/v1/orders', receipt.token, receipt.request, receipt.order ? undefined : receipt.renewalAuthorization);
+      const result = purchaseResponseSchema.parse(body);
       const { request, order } = receipt;
       if (result.offer.id !== request.offerId || result.offer.revision !== request.revision || result.offer.unitAmountFen !== request.quotedUnitAmountFen || result.renewalLicenseId !== request.renewalLicenseId
         || result.quantity !== request.quantity || order && (result.id !== order.id || result.amountFen !== order.amountFen || result.expiresAt !== order.expiresAt || JSON.stringify(result.offer) !== JSON.stringify(order.offer))
         || receipt.delivery?.state === 'fulfilled' && result.state !== 'fulfilled') throw new Error('购买响应与已保存请求不一致，请联系发行方');
       receipt.order = purchaseOrderSchema.strip().parse(result);
       await this.save(receipts);
-      return result;
+      return { response: result, environment: headers.get(paymentEnvironmentHeader) };
     } catch (error) {
       // Only explicit, pre-creation rejections permit a new purchase. Timeouts and 5xx remain uncertain.
       if (!receipt.order && error instanceof PurchaseResponseError && (
@@ -158,7 +165,7 @@ export class PurchaseService {
       throw error;
     }
   }
-  private async json(path: string, token?: string, body?: unknown, renewal?: z.infer<typeof licenseActivationSchema>): Promise<unknown> {
+  private async json(path: string, token?: string, body?: unknown, renewal?: z.infer<typeof licenseActivationSchema>): Promise<{ body: unknown; headers: Headers }> {
     let response: Response; let text: string;
     try {
       response = await this.request(new URL(path, this.origin), { method: body === undefined ? 'GET' : 'POST', redirect: 'error',
@@ -179,6 +186,6 @@ export class PurchaseService {
       const error = responseErrorSchema.safeParse(value);
       throw new PurchaseResponseError(error.success ? error.data.code : 'UNKNOWN', response.status);
     }
-    return value;
+    return { body: value, headers: response.headers };
   }
 }

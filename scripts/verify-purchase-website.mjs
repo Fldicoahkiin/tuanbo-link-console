@@ -20,7 +20,28 @@ let nativeFailure = false;
 let nativeExpired = false;
 let nativeOrder;
 const nativeId = '12345678-1234-4234-8234-123456789012';
+let alipayTesting = false;
+let alipayClosed = false;
+const alipayOrders = [];
 const server = createServer(async (req, res) => {
+  if (alipayTesting && req.url === '/v1/orders' && req.method === 'POST') {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const input = JSON.parse(Buffer.concat(chunks).toString());
+    assert.equal(req.headers['x-tblink-payment-channel'], 'alipay');
+    const offer = fixture.offers.find(item => item.id === input.offerId);
+    const id = `12345678-1234-4234-8234-12345678902${alipayOrders.length}`;
+    alipayOrders.push({ id, token: req.headers.authorization, amountFen: offer.unitAmountFen });
+    res.setHeader('content-type', 'application/json'); res.setHeader('X-Tblink-Payment-Environment', 'production');
+    res.end(JSON.stringify({ id, state: 'pending', amountFen: offer.unitAmountFen, quantity: 1, offer,
+      expiresAt: new Date(Date.now() + 3000).toISOString(), payable: true,
+      paymentUrl: `https://openapi.alipay.com/gateway.do?method=alipay.trade.page.pay&biz_content=${encodeURIComponent(JSON.stringify({ out_trade_no: `TB_${id.replaceAll('-', '')}` }))}` })); return;
+  }
+  const alipayQuery = alipayTesting && req.method === 'POST' && alipayOrders.find(order => req.url === `/v1/orders/${order.id}/reconcile`);
+  if (alipayQuery) {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ id: alipayQuery.id, state: alipayClosed ? 'expired' : 'pending', amountFen: alipayQuery.amountFen, quantity: 1,
+      kind: 'subscription', useUntil: new Date(Date.now() + 30 * 86400000).toISOString(), updatesUntil: new Date(Date.now() + 30 * 86400000).toISOString(), licenses: [] })); return;
+  }
   if (nativeTesting && req.url === '/v1/orders' && req.method === 'POST') {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString());
@@ -154,5 +175,34 @@ try {
   assert.equal(await states.locator('#wechat-payment').isHidden(), true);
   console.log('wechat: local QR, fixed-channel receipt, paid/closed/failed/expired states passed; no real channel requests');
   await states.close();
+  nativeTesting = false; alipayTesting = true;
+  const regenerate = await browser.newPage({ viewport: { width: 390, height: 844 }, colorScheme: 'dark' });
+  const regenerateErrors = []; regenerate.on('pageerror', error => regenerateErrors.push(error.message));
+  await regenerate.goto(`http://127.0.0.1:${address.port}/purchase/`, { waitUntil: 'networkidle' });
+  await regenerate.locator('#customer').fill('本地关单验收'); await regenerate.locator('#consent').check();
+  await regenerate.locator('#purchase-form button[type=submit]').click();
+  const firstDownload = regenerate.waitForEvent('download'); await regenerate.locator('#export').click(); await firstDownload;
+  await regenerate.locator('#submit-order').click(); await regenerate.locator('#pay').waitFor({ state: 'visible' });
+  const first = await regenerate.evaluate(() => JSON.parse(globalThis.sessionStorage.getItem('tblink.purchase.receipt')));
+  await regenerate.locator('#restart').waitFor({ state: 'visible' });
+  assert.equal(await regenerate.locator('#pay').isHidden(), true);
+  assert.equal((await regenerate.locator('#order-state').textContent()).includes('已过期'), true);
+  await regenerate.locator('#restart').click(); await regenerate.locator('#error').waitFor({ state: 'visible' });
+  assert.equal((await regenerate.locator('#error').textContent()).includes('尚未关闭'), true);
+  assert.deepEqual(await regenerate.evaluate(() => JSON.parse(globalThis.sessionStorage.getItem('tblink.purchase.receipt'))), first);
+  alipayClosed = true;
+  await regenerate.locator('#restart').click();
+  await regenerate.waitForFunction(() => globalThis.document.querySelector('#order-state').textContent.includes('已为同一套餐准备新订单'));
+  const next = await regenerate.evaluate(() => JSON.parse(globalThis.sessionStorage.getItem('tblink.purchase.receipt')));
+  assert.equal(next.orderId, null); assert.notEqual(next.token, first.token); assert.deepEqual(next.request, first.request);
+  assert.equal(await regenerate.locator('#restart').isHidden(), true); assert.equal(await regenerate.locator('#submit-order').isDisabled(), true);
+  const secondDownload = regenerate.waitForEvent('download'); await regenerate.locator('#export').click(); await secondDownload;
+  await regenerate.locator('#submit-order').click(); await regenerate.locator('#pay').waitFor({ state: 'visible' });
+  assert.equal(alipayOrders.length, 2); assert.notEqual(alipayOrders[1].token, alipayOrders[0].token);
+  assert.equal(await regenerate.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), true);
+  await regenerate.screenshot({ path: join(tmpdir(), 'tblink-alipay-regenerate-mobile-dark.png'), fullPage: true });
+  assert.deepEqual(regenerateErrors, []);
+  console.log('alipay: expired link offers regenerate only after server confirms closure; new credential and order passed');
+  await regenerate.close();
 
 } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }

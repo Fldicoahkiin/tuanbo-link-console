@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { purchaseCatalogResponseSchema, purchaseDeliverySchema, purchaseRequestSchema, purchaseResponseSchema, wechatCodeUrlSchema, paymentChannelSchema, type PaymentChannel, type PurchaseRequest } from '../../../packages/schema/src/purchase';
+import { alipayGateways, paymentEnvironmentHeader, paymentEnvironmentSchema, purchaseCatalogResponseSchema, purchaseDeliverySchema, purchaseRequestSchema, purchaseResponseSchema, wechatCodeUrlSchema, paymentChannelSchema, type PaymentChannel, type PurchaseRequest } from '../../../packages/schema/src/purchase';
 
 const receiptFields = z.object({ product: z.literal('tuanbo-link-console'),
   createdAt: z.string().datetime(), token: z.string().regex(/^TBD-[A-F0-9]{64}$/),
@@ -12,11 +12,15 @@ export const webReceiptSchema = z.discriminatedUnion('version', [
 ]);
 export type WebReceipt = z.infer<typeof webReceiptSchema>;
 const storageKey = 'tblink.purchase.receipt';
-const paymentSchema = purchaseResponseSchema.refine(value => {
-  if (value.paymentUrl === null) return true;
-  const url = new URL(value.paymentUrl);
-  return url.origin === 'https://openapi.alipay.com' && url.pathname === '/gateway.do' && !url.username && !url.password && !url.hash;
-}, '付款地址不是支付宝正式网关');
+/** 只接受服务端下发环境对应的固定支付宝网关。 */
+function alipayPayment(body: unknown, environment: string | null) {
+  const result = purchaseResponseSchema.parse(body);
+  if (result.paymentUrl === null) return result;
+  const url = new URL(result.paymentUrl);
+  const gateway = paymentEnvironmentSchema.safeParse(environment);
+  if (!gateway.success || `${url.origin}${url.pathname}` !== alipayGateways[gateway.data] || url.username || url.password || url.hash) throw new Error('付款地址不是服务端所配环境的支付宝网关，请保留凭据并联系支持');
+  return result;
+}
 const errorSchema = z.object({ code: z.string(), message: z.string().max(300), orderId: z.string().uuid().optional() });
 class OrderResponseError extends Error {
   constructor(readonly code: string, message: string, readonly orderId?: string) { super(message); }
@@ -59,7 +63,7 @@ export class WebPurchaseClient {
     this.current = receipt;
   }
 
-  private async api(path: string, init: RequestInit = {}): Promise<unknown> {
+  private async api(path: string, init: RequestInit = {}): Promise<{ body: unknown; headers: Headers }> {
     const send = this.send;
     const response = await send(path, { ...init, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(12000) });
     if (path === '/v1/catalog' && new Headers(init.headers).get('X-Tblink-Payment-Channel') === 'wechat'
@@ -70,19 +74,19 @@ export class WebPurchaseClient {
       if (error.success) throw new OrderResponseError(error.data.code, error.data.message, error.data.orderId);
       throw new Error(`订单服务返回 ${response.status}，请保留凭据后查询原单`);
     }
-    return body;
+    return { body, headers: response.headers };
   }
 
   async catalog(channel: PaymentChannel = 'alipay') {
-    return purchaseCatalogResponseSchema.parse(await this.api('/v1/catalog', { headers: { 'X-Tblink-Payment-Channel': paymentChannelSchema.parse(channel) } }));
+    return purchaseCatalogResponseSchema.parse((await this.api('/v1/catalog', { headers: { 'X-Tblink-Payment-Channel': paymentChannelSchema.parse(channel) } })).body);
   }
 
   async submit() {
     const receipt = this.receipt;
     if (!receipt) throw new Error('请先准备并保存订单凭据');
     this.persist({ ...receipt, discardable: false });
-    let body: unknown;
-    try { body = await this.api('/v1/orders', { method: 'POST', headers: {
+    let response: { body: unknown; headers: Headers };
+    try { response = await this.api('/v1/orders', { method: 'POST', headers: {
       'Content-Type': 'application/json', Authorization: `Bearer ${receipt.token}`,
       'X-Tblink-Payment-Channel': receipt.version === 2 ? 'wechat' : 'alipay'
     }, body: JSON.stringify(receipt.request) }); }
@@ -95,7 +99,8 @@ export class WebPurchaseClient {
       if (receipt.orderId === null && error instanceof OrderResponseError && !error.orderId && ['OFFER_CHANGED', 'QUANTITY_LIMIT', 'PAYMENTS_UNAVAILABLE'].includes(error.code)) this.persist({ ...receipt, discardable: true });
       throw error;
     }
-    const result = receipt.version === 2 ? purchaseResponseSchema.refine(value => value.paymentUrl === null || wechatCodeUrlSchema.safeParse(value.paymentUrl).success, '微信二维码地址无效').parse(body) : paymentSchema.parse(body);
+    const result = receipt.version === 2 ? purchaseResponseSchema.refine(value => value.paymentUrl === null || wechatCodeUrlSchema.safeParse(value.paymentUrl).success, '微信二维码地址无效').parse(response.body)
+      : alipayPayment(response.body, response.headers.get(paymentEnvironmentHeader));
     if (result.offer.id !== receipt.request.offerId || result.offer.revision !== receipt.request.revision
       || result.offer.unitAmountFen !== receipt.request.quotedUnitAmountFen || result.quantity !== receipt.request.quantity
       || result.renewalLicenseId !== undefined || receipt.orderId !== null && result.id !== receipt.orderId) {
@@ -108,13 +113,24 @@ export class WebPurchaseClient {
   async delivery(reconcile = false) {
     const receipt = this.receipt;
     if (!receipt?.orderId) throw new Error('请先恢复原订单');
-    const result = purchaseDeliverySchema.parse(await this.api(`/v1/orders/${receipt.orderId}${reconcile ? '/reconcile' : ''}`, {
+    const result = purchaseDeliverySchema.parse((await this.api(`/v1/orders/${receipt.orderId}${reconcile ? '/reconcile' : ''}`, {
       headers: { Authorization: `Bearer ${receipt.token}`, ...(reconcile ? { 'Content-Type': 'application/json' } : {}) },
       ...(reconcile ? { method: 'POST', body: '{}' } : {})
-    }));
+    })).body);
     if (result.id !== receipt.orderId || result.amountFen !== receipt.request.quantity * receipt.request.quotedUnitAmountFen
       || result.quantity !== receipt.request.quantity || result.renewalLicenseId !== undefined) throw new Error('交付与原订单不一致，请联系支持');
     return result;
+  }
+
+  /** 付款入口过期后经服务端查单确认原单关闭且未收款，才换新凭据为同一购买请求准备新订单。 */
+  async restart(): Promise<WebReceipt> {
+    const receipt = this.receipt;
+    if (!receipt?.orderId) throw new Error('请先恢复原订单');
+    const delivery = await this.delivery(true);
+    if (delivery.state === 'fulfilled') throw new Error('原订单已付款，请点击查询并领取激活码，不要重复购买');
+    if (delivery.state === 'pending') throw new Error(delivery.paymentConfirmed ? '原订单付款已确认，授权待处理，请联系支持；无需再次付款' : '原订单尚未关闭，仍可能到账；请稍后再试，不要重复付款');
+    this.storage.removeItem(storageKey); this.current = null;
+    return this.prepare(receipt.request, receipt.version === 2 ? 'wechat' : 'alipay');
   }
 
   discard(): void {

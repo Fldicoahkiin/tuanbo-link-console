@@ -16,3 +16,13 @@ export function clientAddress(remote: string | undefined, forwarded: string | st
   const high = Number.parseInt(mapped[1]!, 16); const low = Number.parseInt(mapped[2]!, 16);
   return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
 }
+
+/** 限流计数单位：IPv4 按单个地址，IPv6 按 /64（一个用户通常持有整段，可随意换后缀）。 */
+export function rateBucket(address: string): string {
+  if (isIP(address) !== 6 || address.includes('%')) return address;
+  const [head = '', tail] = address.split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? left : [...left, ...Array<string>(8 - left.length - right.length).fill('0'), ...right];
+  return `${groups.slice(0, 4).map(group => Number.parseInt(group, 16).toString(16)).join(':')}::/64`;
+}

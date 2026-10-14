@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { purchaseCatalogSchema, purchaseResponseSchema } from '@tb/schema';
+import { alipayGateways, purchaseCatalogSchema, purchaseResponseSchema } from '@tb/schema';
 import { LicensingService } from '../../../../licensing-server/src/service';
 import { AlipayCheckout, AlipayNotifications } from '../../../../licensing-server/src/alipay';
 import { createLicensingServer } from '../../../../licensing-server/src/http';
@@ -22,8 +22,10 @@ let service: LicensingService;
 let server: ReturnType<typeof createLicensingServer>;
 let base: string;
 let data: Map<string, string>;
-let queryStatus: 'WAIT_BUYER_PAY' | 'TRADE_SUCCESS';
+let queryStatus: 'WAIT_BUYER_PAY' | 'TRADE_SUCCESS' | 'TRADE_NOT_EXIST';
 let providerRequests = 0;
+let closeRequests = 0;
+let clock = now;
 const storage = {
   hasCredential: (id: string) => Promise.resolve(data.has(id)),
   loadCredential: (id: string) => { const value = data.get(id); if (!value) throw new Error('不存在'); return Promise.resolve(value); },
@@ -37,17 +39,22 @@ const fetchLocal: typeof fetch = (input, options) => {
   expect(options?.signal).toBeInstanceOf(AbortSignal);
   return fetch(`${base}${url.pathname}`, options);
 };
-function desktop(fetcher: typeof fetch = fetchLocal) { return new PurchaseService(origin, storage, external, fetcher, () => now); }
+function desktop(fetcher: typeof fetch = fetchLocal) { return new PurchaseService(origin, storage, external, fetcher, () => clock); }
+const signedReply = (key: string, body: string) => `{"${key}":${body},"sign":"${sign('RSA-SHA256', Buffer.from(body), provider.privateKey).toString('base64')}"}`;
 beforeEach(async () => {
-  data = new Map(); external.mockReset(); external.mockResolvedValue(); queryStatus = 'WAIT_BUYER_PAY'; providerRequests = 0;
-  service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => now);
-  const checkout = new AlipayCheckout(appId, sellerId, provider.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), () => now);
-  const original = checkout.query.bind(checkout);
+  data = new Map(); external.mockReset(); external.mockResolvedValue(); queryStatus = 'WAIT_BUYER_PAY'; providerRequests = 0; closeRequests = 0; clock = now;
+  service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => clock);
+  const checkout = new AlipayCheckout(appId, sellerId, provider.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'production', origin, () => clock);
+  const original = checkout.query.bind(checkout); const close = checkout.close.bind(checkout);
   vi.spyOn(checkout, 'query').mockImplementation((id, verifier) => original(id, verifier, () => {
     providerRequests++;
-    const body = JSON.stringify({ code: '10000', out_trade_no: `TB_${id.replaceAll('-', '')}`, trade_no: '202609282200000000001234',
+    const body = JSON.stringify(queryStatus === 'TRADE_NOT_EXIST' ? { code: '40004', sub_code: 'ACQ.TRADE_NOT_EXIST' } : { code: '10000', out_trade_no: `TB_${id.replaceAll('-', '')}`, trade_no: '202609282200000000001234',
       trade_status: queryStatus, total_amount: (service.describeOrder(id).amountFen / 100).toFixed(2) });
-    return Promise.resolve(new Response(`{"alipay_trade_query_response":${body},"sign":"${sign('RSA-SHA256', Buffer.from(body), provider.privateKey).toString('base64')}"}`));
+    return Promise.resolve(new Response(signedReply('alipay_trade_query_response', body)));
+  }));
+  vi.spyOn(checkout, 'close').mockImplementation((id, verifier) => close(id, verifier, () => {
+    closeRequests++;
+    return Promise.resolve(new Response(signedReply('alipay_trade_close_response', JSON.stringify({ code: '10000', out_trade_no: `TB_${id.replaceAll('-', '')}` }))));
   }));
   server = createLicensingServer(service, 'x'.repeat(48), new AlipayNotifications(appId, sellerId, provider.publicKey.export({ type: 'spki', format: 'pem' }).toString()), checkout, catalog);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -178,12 +185,12 @@ it.each(['expiresAt', 'offer'] as const)('恢复原订单时拒绝改变已确�
 });
 
 it('系统浏览器启动无响应时限时返回，保留同一订单且不自动重试', async () => {
-  let response: unknown;
+  let response: unknown; let headers = new Headers();
   let saved = false;
   const fetcher: typeof fetch = async (input, options) => {
-    if (saved) return Response.json(response);
-    const result = await fetchLocal(input, options); response = await result.json(); saved = true;
-    return Response.json(response);
+    if (saved) return Response.json(response, { headers });
+    const result = await fetchLocal(input, options); response = await result.json(); headers = result.headers; saved = true;
+    return Response.json(response, { headers });
   };
   const client = desktop(fetcher); const receipt = await client.create(request);
   external.mockImplementation(() => new Promise<void>(() => undefined));
@@ -268,4 +275,40 @@ it('已确认收款但续费被撤销时保存待处理提示，重启后仍禁�
   await expect(desktop().openPayment(receipt.localId)).rejects.toThrow('不要重复下单');
   expect(external).not.toHaveBeenCalled();
   expect(providerRequests).toBe(1);
+});
+
+it('付款期限过后服务端确认原单关闭，本机记录结束并允许重新下单；未确认前仍阻止重复下单', async () => {
+  const client = desktop(); const first = await client.create(request);
+  await expect(client.create(request)).rejects.toThrow('先恢复原订单');
+  clock += 15 * 60000;
+  await expect(client.openPayment(first.localId)).rejects.toThrow('付款入口已关闭或过期');
+  await expect(client.create(request)).rejects.toThrow('先恢复原订单');
+  queryStatus = 'TRADE_NOT_EXIST';
+  const expired = await client.refresh(first.localId);
+  expect(expired.order).toMatchObject({ state: 'expired', payable: false }); expect(expired.delivery).toMatchObject({ state: 'expired', licenses: [] });
+  await expect(client.openPayment(first.localId)).rejects.toThrow('已关闭且未收款');
+  expect((await client.refresh(first.localId)).order?.state).toBe('expired');
+  expect(providerRequests).toBe(1);
+  const second = await client.create(request);
+  expect(second.order).toMatchObject({ state: 'pending', payable: true }); expect(second.order?.id).not.toBe(expired.order?.id);
+  clock += 15 * 60000; queryStatus = 'WAIT_BUYER_PAY';
+  expect((await client.refresh(second.localId)).order?.state).toBe('closed');
+  expect(closeRequests).toBe(1);
+  expect((await client.create(request)).order?.state).toBe('pending');
+  expect(external).not.toHaveBeenCalled();
+});
+
+it('付款网关跟随服务端下发的支付环境，只接受该环境的固定网关', async () => {
+  const environment = (value: string | null): typeof fetch => async (input, options) => {
+    const result = await fetchLocal(input, options);
+    if (new URL(input instanceof Request ? input.url : String(input)).pathname !== '/v1/orders') return result;
+    const purchase = purchaseResponseSchema.parse(await result.json());
+    return Response.json({ ...purchase, paymentUrl: purchase.paymentUrl?.replace(alipayGateways.production, alipayGateways.sandbox) ?? null },
+      value ? { headers: { 'X-Tblink-Payment-Environment': value } } : {});
+  };
+  const receipt = await desktop(environment('sandbox')).create(request);
+  for (const value of ['production', 'staging', null]) await expect(desktop(environment(value)).openPayment(receipt.localId)).rejects.toThrow('安全检查');
+  expect(external).not.toHaveBeenCalled();
+  await desktop(environment('sandbox')).openPayment(receipt.localId);
+  expect(external).toHaveBeenCalledOnce(); expect(external.mock.calls[0]?.[0]).toMatch(/^https:\/\/openapi-sandbox\.dl\.alipaydev\.com\/gateway\.do\?/);
 });

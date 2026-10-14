@@ -1,11 +1,14 @@
 import { createPrivateKey, createPublicKey, sign, verify, type KeyObject } from 'node:crypto';
 import { z } from 'zod';
+import { alipayGateways, type PaymentEnvironment } from '../../../packages/schema/src/purchase';
 import { ServiceError } from './service';
 
 const identity = z.string().regex(/^\d{16}$/);
 const amount = z.string().regex(/^(0|[1-9]\d{0,6})(\.\d{1,2})?$/);
 const tradeStatus = z.enum(['TRADE_SUCCESS', 'TRADE_FINISHED', 'WAIT_BUYER_PAY', 'TRADE_CLOSED']);
 const channelOrderId = (id: string): string => `TB_${z.string().uuid().parse(id).replaceAll('-', '')}`;
+type OpenApiMethod = 'alipay.trade.query' | 'alipay.trade.close' | 'alipay.trade.refund' | 'alipay.trade.fastpay.refund.query';
+const methodLabels: Record<OpenApiMethod, string> = { 'alipay.trade.query': '查单', 'alipay.trade.close': '关单', 'alipay.trade.refund': '退款', 'alipay.trade.fastpay.refund.query': '退款查询' };
 const time = (value: number): string => new Date(value + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ');
 function amountFen(value: string): number {
   const [yuan, fraction = ''] = amount.parse(value).split('.');
@@ -34,7 +37,8 @@ export class AlipayNotifications {
     this.key = createPublicKey(publicKey);
     if (this.key.asymmetricKeyType !== 'rsa' || (this.key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) throw new Error('支付宝验签公钥必须为至少 2048 位 RSA 公钥');
   }
-  verify(body: Buffer): { orderId: string; paymentReference: string; amountFen: number; appId: string; sellerId: string } {
+  /** 只验证报文真实性与基本字段；是否交付、关单或记退款由授权服务按订单状态决定。 */
+  verify(body: Buffer) {
     let form: URLSearchParams;
     try { form = new URLSearchParams(new TextDecoder('utf-8', { fatal: true }).decode(body)); }
     catch { throw new ServiceError(400, 'INVALID_FORM', '支付通知编码无效'); }
@@ -48,22 +52,31 @@ export class AlipayNotifications {
     const signed = Object.keys(fields).filter(name => name !== 'sign' && name !== 'sign_type').sort().map(name => `${name}=${fields[name]}`).join('&');
     if (!verify('RSA-SHA256', Buffer.from(signed, 'utf8'), this.key, Buffer.from(notification.sign, 'base64'))) throw new ServiceError(401, 'INVALID_PAYMENT_SIGNATURE', '支付通知验签失败');
     if (notification.app_id !== this.appId || notification.seller_id !== this.sellerId) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '支付通知商户或应用不匹配');
-    if (notification.trade_status !== 'TRADE_SUCCESS' && notification.trade_status !== 'TRADE_FINISHED') throw new ServiceError(409, 'PAYMENT_NOT_SETTLED', '通知不是支付成功状态，不能发码');
-    if (fields.refund_fee && !/^0(\.0{1,2})?$/.test(fields.refund_fee)) throw new ServiceError(409, 'PAYMENT_REFUNDED', '含退款的通知需要先核对退款状态');
     if (fields.trans_currency && fields.trans_currency !== 'CNY') throw new ServiceError(409, 'PAYMENT_CURRENCY_MISMATCH', '仅接受人民币订单');
     const total = amountFen(notification.total_amount);
     if (total < 1 || total > 100_000_000) throw new ServiceError(400, 'INVALID_PAYMENT_AMOUNT', '支付金额超出订单范围');
-    return { orderId: notification.out_trade_no, paymentReference: `alipay:${notification.trade_no}`, amountFen: total, appId: this.appId, sellerId: this.sellerId };
+    // 退款通知可能仍是 TRADE_SUCCESS；refund_fee 为累计退款额，必须与状态一并交给服务判断。
+    const refund = fields.refund_fee === undefined ? 0 : amountFen(fields.refund_fee);
+    if (refund > total) throw new ServiceError(400, 'INVALID_PAYMENT_AMOUNT', '退款金额超过交易金额');
+    return { orderId: notification.out_trade_no, status: notification.trade_status, paymentReference: `alipay:${notification.trade_no}`,
+      amountFen: total, refundFen: refund, appId: this.appId, sellerId: this.sellerId };
   }
-  verifyQuery(body: string, expectedId: string) {
-    // 公钥模式只接收 response + sign 信封。仅解析验签覆盖的原始对象，禁止重序列化后验签。
-    const envelope = /^\s*\{\s*"alipay_trade_query_response"\s*:\s*(\{[\s\S]*\})\s*,\s*"sign"\s*:\s*"([A-Za-z0-9+/]+={0,2})"\s*\}\s*$/.exec(body);
-    if (!envelope || !verify('RSA-SHA256', Buffer.from(envelope[1]!, 'utf8'), this.key, Buffer.from(envelope[2]!, 'base64'))) throw new ServiceError(502, 'INVALID_PAYMENT_SIGNATURE', '支付宝查单响应验签失败');
+  /** 公钥模式只接收 response + sign 信封。仅解析验签覆盖的原始对象，禁止重序列化后验签。 */
+  private signedResponse(body: string, method: OpenApiMethod) {
+    const label = methodLabels[method];
+    const envelope = new RegExp(`^\\s*\\{\\s*"${method.replaceAll('.', '_')}_response"\\s*:\\s*(\\{[\\s\\S]*\\})\\s*,\\s*"sign"\\s*:\\s*"([A-Za-z0-9+/]+={0,2})"\\s*\\}\\s*$`).exec(body);
+    if (!envelope || !verify('RSA-SHA256', Buffer.from(envelope[1]!, 'utf8'), this.key, Buffer.from(envelope[2]!, 'base64'))) throw new ServiceError(502, 'INVALID_PAYMENT_SIGNATURE', `支付宝${label}响应验签失败`);
     let data: unknown;
     try { data = JSON.parse(envelope[1]!) as unknown; }
-    catch { throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', '支付宝查单响应格式无效'); }
+    catch { throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', `支付宝${label}响应格式无效`); }
     const result = z.object({ code: z.string(), sub_code: z.string().optional() }).safeParse(data);
-    if (!result.success || result.data.code !== '10000') throw new ServiceError(502, 'PAYMENT_QUERY_UNCONFIRMED', '支付宝尚未返回可确认的交易结果，请核对渠道后重试');
+    return { data, code: result.success ? result.data.code : null, subCode: result.success ? result.data.sub_code : undefined };
+  }
+  verifyQuery(body: string, expectedId: string) {
+    const { data, code, subCode } = this.signedResponse(body, 'alipay.trade.query');
+    // 买家未打开收银台时渠道无交易；只有已验签的明确业务结果才能用于关单。
+    if (code === '40004' && subCode === 'ACQ.TRADE_NOT_EXIST') return { orderId: expectedId, status: 'TRADE_NOT_EXIST' as const, appId: this.appId, sellerId: this.sellerId };
+    if (code !== '10000') throw new ServiceError(502, 'PAYMENT_QUERY_UNCONFIRMED', '支付宝尚未返回可确认的交易结果，请核对渠道后重试');
     const parsed = z.object({
       out_trade_no: z.string(), trade_no: z.string().regex(/^\d{16,64}$/), trade_status: tradeStatus,
       total_amount: amount, trans_currency: z.literal('CNY').optional(),
@@ -80,6 +93,31 @@ export class AlipayNotifications {
     if (total < 1 || total > 100_000_000) throw new ServiceError(502, 'INVALID_PAYMENT_AMOUNT', '查单金额超出订单范围');
     return { orderId: expectedId, status: payment.trade_status, paymentReference: `alipay:${payment.trade_no}`, amountFen: total, appId: this.appId, sellerId: this.sellerId };
   }
+  verifyRefund(body: string, expectedId: string) {
+    const { data, code } = this.signedResponse(body, 'alipay.trade.refund');
+    if (code !== '10000') throw new ServiceError(502, 'PAYMENT_REFUND_UNCONFIRMED', '支付宝未确认本次退款，订单与授权未变；请稍后按相同金额重新提交');
+    const parsed = z.object({ out_trade_no: z.string(), fund_change: z.enum(['Y', 'N']), refund_fee: amount }).safeParse(data);
+    if (!parsed.success) throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', '支付宝退款响应字段无效');
+    if (parsed.data.out_trade_no !== channelOrderId(expectedId)) throw new ServiceError(409, 'PAYMENT_ORDER_MISMATCH', '退款返回了其他订单');
+    // refund_fee 是该交易累计退款成功金额，不是本次金额。
+    return { fundChange: parsed.data.fund_change === 'Y', refundedTotalFen: amountFen(parsed.data.refund_fee) };
+  }
+  verifyRefundQuery(body: string, expectedId: string, refundId: string) {
+    const { data, code } = this.signedResponse(body, 'alipay.trade.fastpay.refund.query');
+    if (code !== '10000') throw new ServiceError(502, 'PAYMENT_REFUND_UNCONFIRMED', '支付宝未返回退款查询结果，订单与授权未变；请稍后按相同金额重新提交');
+    const parsed = z.object({ out_trade_no: z.string().optional(), out_request_no: z.string().optional(), refund_status: z.string().optional(), refund_amount: amount.optional() }).safeParse(data);
+    if (!parsed.success) throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', '支付宝退款查询响应字段无效');
+    const result = parsed.data;
+    if (result.out_trade_no !== undefined && result.out_trade_no !== channelOrderId(expectedId) || result.out_request_no !== undefined && result.out_request_no !== refundId) throw new ServiceError(409, 'PAYMENT_ORDER_MISMATCH', '退款查询返回了其他退款请求');
+    // 未返回 refund_status 表示退款请求未收到或失败。
+    return { succeeded: result.refund_status === 'REFUND_SUCCESS', amountFen: result.refund_amount === undefined ? null : amountFen(result.refund_amount) };
+  }
+  verifyClose(body: string, expectedId: string): void {
+    const { data, code } = this.signedResponse(body, 'alipay.trade.close');
+    if (code !== '10000') throw new ServiceError(502, 'PAYMENT_CLOSE_UNCONFIRMED', '支付宝未确认关闭原交易，订单保持待付款，请稍后再查询');
+    const closed = z.object({ out_trade_no: z.string().optional() }).safeParse(data);
+    if (!closed.success || closed.data.out_trade_no !== undefined && closed.data.out_trade_no !== channelOrderId(expectedId)) throw new ServiceError(409, 'PAYMENT_ORDER_MISMATCH', '关单返回了其他订单');
+  }
 }
 
 const checkoutSchema = z.object({
@@ -87,13 +125,17 @@ const checkoutSchema = z.object({
   quantity: z.number().int().min(1).max(100), expiresAt: z.string().datetime()
 }).strict();
 
-/** 网站支付与主动查单；只向固定支付宝网关发送签名请求，不在适配器中交付授权。 */
+/** 网站支付、主动查单与关单；只向所配环境的固定支付宝网关发送签名请求，不在适配器中交付授权。 */
 export class AlipayCheckout {
   private readonly key: KeyObject;
-  constructor(readonly appId: string, readonly sellerId: string, privateKey: string, private readonly now: () => number = Date.now) {
+  private readonly gateway: string;
+  private readonly notifyUrl: string;
+  constructor(readonly appId: string, readonly sellerId: string, privateKey: string, readonly environment: PaymentEnvironment, notifyOrigin: string, private readonly now: () => number = Date.now) {
     identity.parse(appId); identity.parse(sellerId);
     this.key = createPrivateKey(privateKey);
     if (this.key.asymmetricKeyType !== 'rsa' || (this.key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) throw new Error('支付宝请求私钥必须为至少 2048 位 RSA 私钥');
+    this.gateway = alipayGateways[environment];
+    this.notifyUrl = new URL('/v1/payments/alipay/notify', notifyOrigin).href;
   }
   createUrl(input: unknown): string {
     const order = checkoutSchema.parse(input);
@@ -103,8 +145,8 @@ export class AlipayCheckout {
       { out_trade_no: channelOrderId(order.id), product_code: 'FAST_INSTANT_TRADE_PAY',
         total_amount: (order.amountFen / 100).toFixed(2), subject: `团播联动台授权 ${order.quantity} 台`,
         goods_type: '0', qr_pay_mode: '2', time_expire: time(Date.parse(order.expiresAt)) },
-      { notify_url: 'https://api.tuanbo-link.jinhefilm.com/v1/payments/alipay/notify' });
-    return `https://openapi.alipay.com/gateway.do?${new URLSearchParams(params)}`;
+      { notify_url: this.notifyUrl });
+    return `${this.gateway}?${new URLSearchParams(params)}`;
   }
   private signedParams(method: string, business: Record<string, string>, extra: Record<string, string> = {}): Record<string, string> {
     const params: Record<string, string> = { app_id: this.appId, method, format: 'JSON', charset: 'utf-8',
@@ -114,29 +156,45 @@ export class AlipayCheckout {
     params.sign = sign('RSA-SHA256', Buffer.from(content, 'utf8'), this.key).toString('base64');
     return params;
   }
-  async query(id: string, notifications: AlipayNotifications, request: typeof fetch = fetch) {
-    const { biz_content: business, ...params } = this.signedParams('alipay.trade.query', { out_trade_no: channelOrderId(id) });
-    let body: string;
+  private async call(method: OpenApiMethod, business: Record<string, string>, request: typeof fetch): Promise<string> {
+    const label = methodLabels[method];
+    const { biz_content: content, ...params } = this.signedParams(method, business);
     try {
-      const response = await request(`https://openapi.alipay.com/gateway.do?${new URLSearchParams(params)}`, {
+      const response = await request(`${this.gateway}?${new URLSearchParams(params)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8', Accept: 'application/json' },
-        body: new URLSearchParams({ biz_content: business! }), redirect: 'error', signal: AbortSignal.timeout(8000)
+        body: new URLSearchParams({ biz_content: content! }), redirect: 'error', signal: AbortSignal.timeout(8000)
       });
       if (!response.ok || !response.body) {
         await response.body?.cancel();
-        throw new ServiceError(502, 'PAYMENT_QUERY_FAILED', '支付宝查单失败，订单保持原状态');
+        throw new ServiceError(502, 'PAYMENT_QUERY_FAILED', `支付宝${label}失败，订单保持原状态`);
       }
       const chunks: Uint8Array[] = []; let size = 0;
       for await (const chunk of response.body) {
         size += chunk.length;
-        if (size > 65536) throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', '支付宝查单响应超过大小限制');
+        if (size > 65536) throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', `支付宝${label}响应超过大小限制`);
         chunks.push(chunk);
       }
-      body = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+      return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
     } catch (error) {
       if (error instanceof ServiceError) throw error;
-      throw new ServiceError(502, 'PAYMENT_QUERY_FAILED', '支付宝查单超时或网络异常，订单保持原状态');
+      throw new ServiceError(502, 'PAYMENT_QUERY_FAILED', `支付宝${label}超时或网络异常，订单保持原状态`);
     }
-    return notifications.verifyQuery(body, id);
+  }
+  async query(id: string, notifications: AlipayNotifications, request: typeof fetch = fetch) {
+    return notifications.verifyQuery(await this.call('alipay.trade.query', { out_trade_no: channelOrderId(id) }, request), id);
+  }
+  async close(id: string, notifications: AlipayNotifications, request: typeof fetch = fetch): Promise<void> {
+    notifications.verifyClose(await this.call('alipay.trade.close', { out_trade_no: channelOrderId(id) }, request), id);
+  }
+  /** 原路退款：fund_change=Y 即成功；否则以退款查询的 REFUND_SUCCESS 确认。调用失败直接报错，不自动查询或重试，退款请求保持待确认。 */
+  async refund(id: string, refund: { refundId: string; amountFen: number; reason: string }, notifications: AlipayNotifications, request: typeof fetch = fetch): Promise<{ confirmed: boolean; refundedTotalFen: number }> {
+    const business = { out_trade_no: channelOrderId(id), out_request_no: z.string().uuid().parse(refund.refundId) };
+    const result = notifications.verifyRefund(await this.call('alipay.trade.refund', { ...business,
+      refund_amount: (refund.amountFen / 100).toFixed(2), refund_reason: refund.reason }, request), id);
+    if (result.fundChange) return { confirmed: true, refundedTotalFen: result.refundedTotalFen };
+    // 同一退款请求号重复提交时支付宝不再动资金，须查询原请求是否已成功。
+    const query = notifications.verifyRefundQuery(await this.call('alipay.trade.fastpay.refund.query', business, request), id, refund.refundId);
+    if (query.succeeded && query.amountFen !== refund.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '退款查询金额与请求不一致，请人工核对');
+    return { confirmed: query.succeeded, refundedTotalFen: result.refundedTotalFen };
   }
 }

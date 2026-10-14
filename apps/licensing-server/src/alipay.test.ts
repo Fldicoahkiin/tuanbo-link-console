@@ -3,9 +3,12 @@ import { generateKeyPairSync, randomBytes, sign, verify as verifySignature } fro
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, it } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
+import { afterEach, expect, it, vi } from 'vitest';
 import { AlipayCheckout, AlipayNotifications } from './alipay';
 import { createLicensingServer } from './http';
+import { serviceConfigSchema } from './config';
+import { alipayGateways } from '../../../packages/schema/src/purchase';
 import { LicensingService } from './service';
 
 const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -14,7 +17,7 @@ const appId = '2026000000000001';
 const sellerId = '2088000000000001';
 const notifications = new AlipayNotifications(appId, sellerId, rsa.publicKey.export({ format: 'pem', type: 'spki' }).toString());
 const services: LicensingService[] = [];
-afterEach(() => { for (const service of services.splice(0)) service.close(); });
+afterEach(() => { vi.restoreAllMocks(); for (const service of services.splice(0)) service.close(); });
 function setup() {
   const service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => Date.parse('2026-09-28T00:00:00Z'));
   services.push(service);
@@ -30,14 +33,14 @@ const verify = (form: URLSearchParams) => notifications.verify(Buffer.from(form.
 
 it('RSA2 通知验签保留中文、百分号、加号和新增字段，不二次解码', () => {
   const { order } = setup();
-  expect(verify(notification(order.id))).toEqual({ orderId: order.id, amountFen: 12345, paymentReference: 'alipay:202609282200000000000001', appId, sellerId });
+  expect(verify(notification(order.id))).toEqual({ orderId: order.id, status: 'TRADE_SUCCESS', amountFen: 12345, refundFen: 0, paymentReference: 'alipay:202609282200000000000001', appId, sellerId });
   for (const amount of ['123', '123.4', '123.45']) expect(verify(notification(order.id, { total_amount: amount })).amountFen).toBe(Math.round(Number(amount) * 100));
 });
 
 it('付款入口签名包含 sign_type，金额和有效期来自订单，链接不包含客户或领取凭据', () => {
   const { service, order } = setup();
   const now = Date.parse('2026-09-28T00:00:00Z');
-  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), () => now);
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => now);
   const payment = service.prepareAlipayPayment(order.id, appId, sellerId);
   const url = new URL(checkout.createUrl(payment));
   expect(url.origin + url.pathname).toBe('https://openapi.alipay.com/gateway.do');
@@ -61,11 +64,11 @@ it('付款入口签名包含 sign_type，金额和有效期来自订单，链接
 it('仅服务器订单字段可构建付款链接，拒绝过期、弱密钥和额外网址参数', () => {
   const { service, order } = setup();
   let now = Date.parse('2026-09-28T00:00:00Z');
-  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), () => now);
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => now);
   const payment = service.prepareAlipayPayment(order.id, appId, sellerId);
   expect(() => checkout.createUrl({ ...payment, returnUrl: 'https://example.invalid' })).toThrow();
   const weak = generateKeyPairSync('rsa', { modulusLength: 1024 });
-  expect(() => new AlipayCheckout(appId, sellerId, weak.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString())).toThrow('2048');
+  expect(() => new AlipayCheckout(appId, sellerId, weak.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com')).toThrow('2048');
   now += 15 * 60000;
   expect(() => checkout.createUrl(payment)).toThrow('过期');
 });
@@ -90,7 +93,7 @@ it('付款入口过期不丢弃支付事实，绑定身份必须匹配；支付�
 
 it('付款入口只供认证运营获取，不能从请求覆盖金额；签名通知按渠道订单号交付原订单', async () => {
   const { service, order } = setup();
-  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), () => Date.parse('2026-09-28T00:00:00Z'));
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => Date.parse('2026-09-28T00:00:00Z'));
   const admin = 'a'.repeat(48); const server = createLicensingServer(service, admin, notifications, checkout);
   await listenHttpTestServer(server);
   try {
@@ -125,10 +128,9 @@ it('拒绝篡改、重复字段、算法降级以及用商户自己的公钥验�
 
 it.each([
   { app_id: '2026000000000002' }, { seller_id: '2088000000000002' },
-  { trade_status: 'WAIT_BUYER_PAY' }, { trade_status: 'TRADE_CLOSED' },
   { total_amount: '1e2' }, { total_amount: '123.456' }, { total_amount: '0.00' },
-  { refund_fee: '1.00' }, { trans_currency: 'USD' }
-])('即使签名正确也拒绝不匹配或不能交付的通知 %j', changes => {
+  { refund_fee: '123.46' }, { refund_fee: '1e2' }, { trans_currency: 'USD' }
+])('即使签名正确也拒绝不匹配或无效金额的通知 %j', changes => {
   const { order } = setup();
   expect(() => verify(notification(order.id, changes))).toThrow();
 });
@@ -196,4 +198,107 @@ it('重启后保留原付款期限与商户绑定，不因重复取链接延长�
   services.push(reopened);
   expect(reopened.prepareAlipayPayment(order.id, appId, sellerId)).toEqual(before);
   expect(() => reopened.prepareAlipayPayment(order.id, appId, '2088000000000002')).toThrow('其他支付配置');
+});
+
+it('验签通过的退款与关单通知落事件表并应答 success，全额退款标记订单但不撤销授权；验签失败与金额不符写结构化日志', async () => {
+  const path = join(await mkdtemp(join(tmpdir(), 'tblink-alipay-events-')), 'license.db');
+  const service = new LicensingService(path, issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => Date.parse('2026-09-28T00:00:00Z'));
+  services.push(service);
+  const { details } = setup(); const order = service.createOrder(details);
+  service.prepareAlipayPayment(order.id, appId, sellerId);
+  const events = () => { const db = new DatabaseSync(path, { readOnly: true }); try { return db.prepare('SELECT kind, trade_status, refund_fen FROM payment_events ORDER BY rowid').all(); } finally { db.close(); } };
+  const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const server = createLicensingServer(service, 'a'.repeat(48), notifications);
+  await listenHttpTestServer(server);
+  try {
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('缺少监听地址');
+    const post = (body: URLSearchParams) => fetch(`http://127.0.0.1:${address.port}/v1/payments/alipay/notify`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body, signal: AbortSignal.timeout(5000) });
+    expect(await (await post(notification(order.id))).text()).toBe('success');
+    const delivered = service.describeOrder(order.id).licenses;
+    const partial = notification(order.id, { refund_fee: '23.45', gmt_refund: '2026-09-28 09:00:00' });
+    for (let attempt = 0; attempt < 2; attempt++) expect(await (await post(partial)).text()).toBe('success');
+    expect(service.describeOrder(order.id).state).toBe('fulfilled');
+    expect(events()).toEqual([{ kind: 'refund', trade_status: 'TRADE_SUCCESS', refund_fen: 2345 }]);
+    expect(await (await post(notification(order.id, { trade_status: 'TRADE_CLOSED', refund_fee: '123.45' }))).text()).toBe('success');
+    const refunded = service.describeOrder(order.id);
+    expect(refunded.state).toBe('refunded');
+    expect(refunded.licenses).toEqual(delivered); expect(refunded.licenses.every(license => !license.revoked)).toBe(true);
+    const access = service.issueDeliveryAccess(order.id, { reason: '退款后领取' });
+    expect(service.readDelivery(order.id, access.token)).toMatchObject({ state: 'fulfilled', licenses: delivered.map(license => ({ id: license.id, code: license.code, revoked: false })) });
+    expect(logs).not.toHaveBeenCalled();
+    const tampered = notification(order.id, { trade_status: 'TRADE_CLOSED', refund_fee: '123.45' }); tampered.set('refund_fee', '1.00');
+    expect((await post(tampered)).status).toBe(401);
+    expect((await post(notification(order.id, { trade_status: 'TRADE_CLOSED', total_amount: '1.00', refund_fee: '1.00' }))).status).toBe(409);
+    expect(events()).toHaveLength(2);
+    const lines = logs.mock.calls.map(call => JSON.parse(String(call[0])) as unknown);
+    expect(lines).toEqual([
+      expect.objectContaining({ error: 'PAYMENT_NOTIFICATION_REJECTED', channel: 'alipay', code: 'INVALID_PAYMENT_SIGNATURE' }),
+      expect.objectContaining({ error: 'PAYMENT_NOTIFICATION_REJECTED', channel: 'alipay', code: 'AMOUNT_MISMATCH', orderId: order.id })
+    ]);
+    expect(lines[0]).not.toHaveProperty('orderId');
+    expect(JSON.stringify(logs.mock.calls)).not.toMatch(/团播|sign|202609282200000000000001/);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+it('付款期限过后验签的 TRADE_CLOSED 通知关闭未收款订单；期限内只记事件，已收款订单不被关闭', () => {
+  let now = Date.parse('2026-09-28T00:00:00Z');
+  const service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => now);
+  services.push(service);
+  const { details } = setup(); const order = service.createOrder(details);
+  service.prepareAlipayPayment(order.id, appId, sellerId);
+  const closed = verify(notification(order.id, { trade_status: 'TRADE_CLOSED' }));
+  service.alipayNotification(closed);
+  expect(service.describeOrder(order.id).state).toBe('pending');
+  now += 15 * 60000;
+  service.alipayNotification(verify(notification(order.id, { trade_status: 'TRADE_CLOSED', trade_no: '202609282200000000000009' })));
+  expect(service.describeOrder(order.id).state).toBe('closed');
+  // 关单后若仍收到验签成功的付款，保留收款事实并照常交付。
+  service.alipayNotification(verify(notification(order.id, { trade_no: '202609282200000000000009' })));
+  expect(service.describeOrder(order.id)).toMatchObject({ state: 'fulfilled', licenses: [expect.anything(), expect.anything()] });
+  const paid = service.createOrder({ ...details, reference: 'paid-before-close' });
+  service.prepareAlipayPayment(paid.id, appId, sellerId);
+  service.alipayNotification(verify(notification(paid.id, { trade_no: '202609282200000000000010' })));
+  now += 15 * 60000;
+  service.alipayNotification(verify(notification(paid.id, { trade_status: 'TRADE_CLOSED', trade_no: '202609282200000000000010' })));
+  expect(service.describeOrder(paid.id).state).toBe('fulfilled');
+});
+
+it('支付环境只接受 production / sandbox：沙箱付款、查单与关单都走沙箱网关和所配回调域名，缺省为生产', async () => {
+  const base = { LICENSE_DATABASE: 'x.db', LICENSE_PRIVATE_KEY_FILE: 'k', LICENSE_KEY_ID: 'k', LICENSE_DATA_KEY_FILE: 'd', LICENSE_ADMIN_TOKEN_FILE: 't' };
+  expect(serviceConfigSchema.parse(base)).toMatchObject({ PAYMENT_ENVIRONMENT: 'production', PAYMENT_NOTIFY_ORIGIN: 'https://api.tuanbo-link.jinhefilm.com' });
+  expect(serviceConfigSchema.parse({ ...base, PAYMENT_ENVIRONMENT: 'sandbox', PAYMENT_NOTIFY_ORIGIN: 'https://sandbox.example.test' }).PAYMENT_ENVIRONMENT).toBe('sandbox');
+  for (const changes of [{ PAYMENT_ENVIRONMENT: 'staging' }, { PAYMENT_ENVIRONMENT: 'Production' }, { PAYMENT_NOTIFY_ORIGIN: 'http://api.example.test' },
+    { PAYMENT_NOTIFY_ORIGIN: 'https://api.example.test/v1' }, { PAYMENT_ENVIRONMENT: 'sandbox', WECHAT_APP_ID: 'wx1234567890abcdef', WECHAT_MCH_ID: '1234567890',
+      WECHAT_PRIVATE_KEY_FILE: 'w', WECHAT_CERT_SERIAL: 'ABCDEF0123456789', WECHAT_PUBLIC_KEY_FILE: 'p', WECHAT_PUBLIC_KEY_ID: 'PUB_KEY_ID_0123456789', WECHAT_API_V3_KEY_FILE: 'v' }]) {
+    expect(() => serviceConfigSchema.parse({ ...base, ...changes })).toThrow();
+  }
+  const { service, order } = setup(); const now = Date.parse('2026-09-28T00:00:00Z');
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'sandbox', 'https://sandbox.example.test', () => now);
+  const url = new URL(checkout.createUrl(service.prepareAlipayPayment(order.id, appId, sellerId)));
+  expect(url.origin + url.pathname).toBe(alipayGateways.sandbox);
+  expect(url.searchParams.get('notify_url')).toBe('https://sandbox.example.test/v1/payments/alipay/notify');
+  const gateways: string[] = [];
+  const request = (body: string) => vi.fn<typeof fetch>(input => { const target = new URL(input instanceof Request ? input.url : String(input)); gateways.push(target.origin + target.pathname); return Promise.resolve(new Response(body)); });
+  const reply = (key: string, value: unknown) => { const text = JSON.stringify(value); return `{"${key}":${text},"sign":"${sign('RSA-SHA256', Buffer.from(text), rsa.privateKey).toString('base64')}"}`; };
+  await checkout.query(order.id, notifications, request(reply('alipay_trade_query_response', { code: '40004', sub_code: 'ACQ.TRADE_NOT_EXIST' })));
+  await checkout.close(order.id, notifications, request(reply('alipay_trade_close_response', { code: '10000', out_trade_no: `TB_${order.id.replaceAll('-', '')}` })));
+  expect(gateways).toEqual([alipayGateways.sandbox, alipayGateways.sandbox]);
+  const production = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => now);
+  expect(new URL(production.createUrl(service.prepareAlipayPayment(order.id, appId, sellerId))).origin).toBe('https://openapi.alipay.com');
+});
+
+it('旧版“有收款但仍为 pending”的订单不回填，收到渠道事件或补交付时收敛为 paid 并照常交付', async () => {
+  const path = join(await mkdtemp(join(tmpdir(), 'tblink-legacy-')), 'license.db');
+  const service = new LicensingService(path, issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => Date.parse('2026-09-28T00:00:00Z'));
+  services.push(service);
+  const { details } = setup(); const order = service.createOrder(details);
+  service.prepareAlipayPayment(order.id, appId, sellerId);
+  const db = new DatabaseSync(path);
+  try { db.prepare("INSERT INTO payment_receipts VALUES (?, 'alipay:202609282200000000000001', 12345, 'alipay', ?, ?, '2026-09-28T00:00:00.000Z', 'INTERNAL_ERROR')").run(order.id, appId, sellerId); }
+  finally { db.close(); }
+  expect(service.describeOrder(order.id).state).toBe('pending');
+  expect(service.paymentExceptions(0).items.map(item => item.orderId)).toEqual([order.id]);
+  service.alipayNotification(verify(notification(order.id, { refund_fee: '0.45' })));
+  expect(service.describeOrder(order.id).state).toBe('paid');
+  expect(service.retryDelivery(order.id, { reason: '旧数据补交付' })).toMatchObject({ state: 'fulfilled', licenses: [expect.anything(), expect.anything()] });
 });

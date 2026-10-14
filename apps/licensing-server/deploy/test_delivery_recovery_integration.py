@@ -96,7 +96,7 @@ class DeliveryRecoveryIntegrationTest(unittest.TestCase):
                         opener.open(notification, timeout=5)
                     with failure.exception:
                         self.assertEqual(failure.exception.code, 500)
-                    self.assertEqual(request('/admin/orders/' + paid)['state'], 'pending')
+                    self.assertEqual(request('/admin/orders/' + paid)['state'], 'paid')
                     self.assertEqual(len(request('/admin/payment-exceptions')['items']), 1)
                     with contextlib.closing(sqlite3.connect(root / 'license.db')) as database, database:
                         database.execute('DROP TRIGGER fail_delivery')

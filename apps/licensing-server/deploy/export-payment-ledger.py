@@ -49,7 +49,8 @@ def export_ledger(database, output, start, before, timeout=30):
         output.mkdir(mode=0o700)
         counts = {'alipay': 0, 'wechat': 0, 'manual': 0}
         amounts = {'alipay': 0, 'wechat': 0, 'manual': 0}
-        states = {'pending': 0, 'fulfilled': 0}
+        # pending only remains on rows written before the paid state existed.
+        states = {'pending': 0, 'paid': 0, 'fulfilled': 0, 'refunded': 0}
         with (output / 'receipts.jsonl').open('x', encoding='utf-8') as exact, (output / 'receipts.csv').open('x', encoding='utf-8-sig', newline='') as sheet:
             os.chmod(exact.name, 0o600)
             os.chmod(sheet.name, 0o600)

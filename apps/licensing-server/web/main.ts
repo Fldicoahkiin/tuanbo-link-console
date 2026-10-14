@@ -29,6 +29,7 @@ const orderSummary = element('order-summary', HTMLParagraphElement);
 const catalogStatus = element('catalog-status', HTMLParagraphElement);
 const pay = element('pay', HTMLAnchorElement);
 const query = element('query', HTMLButtonElement);
+const restart = element('restart', HTMLButtonElement);
 const submit = element('submit-order', HTMLButtonElement);
 const download = element('export', HTMLButtonElement);
 const finish = element('finish', HTMLButtonElement);
@@ -80,7 +81,10 @@ function renderReceipt(receipt: WebReceipt | null): void {
     }
   });
   discard.hidden = !receipt?.discardable || receipt.orderId !== null;
+  if (!receipt?.orderId || receipt.version === 2) restart.hidden = true;
 }
+// 微信关单尚未接入；支付宝原单由服务端查单确认关闭后，才提供换新凭据重新下单。
+function offerRestart(): void { restart.hidden = client.receipt?.version !== 1 || !client.receipt.orderId; }
 
 async function run(action: () => Promise<void>): Promise<void> {
   if (busy) return;
@@ -159,6 +163,11 @@ function exportReceipt(): void {
 async function readDelivery(reconcile = false): Promise<void> {
   codes.replaceChildren(); finish.hidden = true;
   const delivery = await client.delivery(reconcile);
+  if (delivery.state === 'closed' || delivery.state === 'expired') {
+    clearPayment(); submit.hidden = true; offerRestart();
+    orderState.textContent = '原订单已关闭，未收款。';
+    deliveryState.textContent = '可点击“重新生成付款”，为同一套餐换新凭据重新下单。'; return;
+  }
   if (delivery.state === 'pending') {
     if (delivery.paymentConfirmed) {
       clearPayment(); submit.hidden = true;
@@ -182,13 +191,15 @@ async function submitOrder(): Promise<void> {
   clearPayment();
   const result = await client.submit();
   renderReceipt(client.receipt); query.hidden = false;
-  orderState.textContent = result.state === 'fulfilled' ? '此订单已交付，请领取并保存激活码。' : result.payable ? `订单已创建。请于 ${new Date(result.expiresAt).toLocaleString('zh-CN')} 前付款。` : '付款入口已失效或暂停。请查询原订单；如已付款，请勿重复购买。';
+  orderState.textContent = result.state === 'fulfilled' ? '此订单已交付，请领取并保存激活码。' : result.payable ? `订单已创建。请于 ${new Date(result.expiresAt).toLocaleString('zh-CN')} 前付款。`
+    : result.state === 'pending' ? '付款入口已失效或暂停。请查询原订单；如已付款，请勿重复购买。' : '原订单已关闭，未收款。可点击“重新生成付款”换新凭据重新下单。';
+  if (result.state === 'closed' || result.state === 'expired' || result.state === 'pending' && !result.payable) offerRestart();
   if (result.paymentUrl && result.payable) {
     if (client.receipt?.version === 2) {
       await QRCode.toCanvas(wechatQr, result.paymentUrl, { width: 240, margin: 4, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } });
       wechatPanel.hidden = false;
     } else { pay.href = result.paymentUrl; pay.hidden = false; }
-    const expire = () => { clearPayment(); orderState.textContent = '付款入口已过期，请查询原订单；如已付款，请勿重复购买。'; };
+    const expire = () => { clearPayment(); offerRestart(); orderState.textContent = '付款入口已过期，请查询原订单；如已付款，请勿重复购买。未付款可点击“重新生成付款”。'; };
     const remaining = Date.parse(result.expiresAt) - Date.now();
     if (remaining <= 0) expire(); else paymentExpiry = setTimeout(expire, remaining);
   }
@@ -213,6 +224,11 @@ element('reload', HTMLButtonElement).addEventListener('click', () => { void run(
 download.addEventListener('click', () => { void run(() => { exportReceipt(); return Promise.resolve(); }); });
 submit.addEventListener('click', () => { if (saved) void run(submitOrder); });
 query.addEventListener('click', () => { void run(() => readDelivery(true)); });
+restart.addEventListener('click', () => { void run(async () => {
+  await client.restart(); saved = false; clearPayment(); restart.hidden = true;
+  codes.replaceChildren(); deliveryState.textContent = ''; submit.hidden = false; query.hidden = true; finish.hidden = true;
+  orderState.textContent = '原订单已关闭。已为同一套餐准备新订单，请先下载新的订单凭据，再创建订单付款。';
+}); });
 discard.addEventListener('click', () => { void run(async () => {
   client.discard(); saved = false; clearPayment(); await loadCatalog();
 }); });
