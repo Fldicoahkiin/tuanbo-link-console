@@ -20,16 +20,23 @@
 
 ### 客户 DTO 与旧客户端兼容
 
-`/v1/orders`、`/v1/orders/:id`、`/v1/orders/:id/reconcile` 的 `state` 只公开 `pending | fulfilled | closed | expired`：paid 映射为 `pending + paymentConfirmed`（与旧版一致），已交付后退款仍为 fulfilled（授权未撤销），未交付即全额退款为 closed。终态订单的客户查单直接返回本地结果，不再请求渠道。已发布的旧桌面版严格校验 `state`，遇到 closed/expired 会解析失败并保持锁定（与修复前同样无法下单），升级后即可解锁。
+`/v1/orders`、`/v1/orders/:id`、`/v1/orders/:id/reconcile` 的 `state` 只公开 `pending | fulfilled | closed | expired`：paid 映射为 `pending + paymentConfirmed`（与旧版一致），已交付后退款仍为 fulfilled（授权是否撤销按下文退款规则，已撤销的码不再返回），未交付即全额退款为 closed。终态订单的客户查单直接返回本地结果，不再请求渠道。已发布的旧桌面版严格校验 `state`，遇到 closed/expired 会解析失败并保持锁定（与修复前同样无法下单），升级后即可解锁。
 
 - **桌面**：查询返回 closed/expired 时把本机记录写为已结束，不再阻止新建订单或续费；付款按钮隐藏，查询按钮保留。
 - **网页**：付款入口到期或查询结果为已关闭时显示“重新生成付款”。点击后先查单，服务端确认 closed/expired 才清除旧凭据、用同一套餐生成新凭据，客户需重新下载凭据再建单；原单仍可能到账时明确拒绝。
 
 ### 非成功通知与退款
 
-`AlipayNotifications.verify()` 只做验签与字段校验，交由 `LicensingService.alipayNotification()` 判断：`TRADE_SUCCESS/TRADE_FINISHED` 且 `refund_fee` 为 0 才交付；其余验签通过的通知（含 `refund_fee>0` 的 TRADE_SUCCESS、TRADE_CLOSED、WAIT_BUYER_PAY）核对订单、绑定身份、金额与已有收款流水后写入新表 `payment_events`（`交易号:状态:累计退款额` 去重），应答纯文本 `success`。`refund_fee` 是累计退款额；等于订单金额时订单转 refunded，部分退款只记事件。**退款不自动撤销授权**，是否撤销待决定。
+`AlipayNotifications.verify()` 只做验签与字段校验，交由 `LicensingService.alipayNotification()` 判断：`TRADE_SUCCESS/TRADE_FINISHED` 且 `refund_fee` 为 0 才交付；其余验签通过的通知（含 `refund_fee>0` 的 TRADE_SUCCESS、TRADE_CLOSED、WAIT_BUYER_PAY）核对订单、绑定身份、金额与已有收款流水后写入新表 `payment_events`（`交易号:状态:累计退款额` 去重），应答纯文本 `success`。`refund_fee` 是累计退款额；等于订单金额时订单转 refunded，部分退款只记事件。**通知从不撤销授权**：支付宝商户后台直接办理的退款只记录、标记，由运营在控制台确认。
 
-运营后台“交付异常”队列新增“渠道累计退款 > 人工登记退款”的订单，工作台显示“渠道退款待核对”。运营核对授权后在订单中“登记已办理的退款”，登记金额达到渠道累计退款即出列。`/admin/payment-exceptions` 与自动补交付任务不包含退款事件。
+### 退款规则（2026-10-14 确定）
+
+客户没有自助退款，退款只由运营在控制台发起或确认，均需原因与近五分钟二次验证。
+
+- **支付宝原路退款**（`alipay-refund`，负责人/财务）：仅限已确认支付宝收款、未全额退款的订单，累计不超过订单金额。先在 `alipay_refunds` 登记退款请求（其 id 即 `out_request_no`），再调用 `alipay.trade.refund`（`refund_reason` 最多 256 字，超长拒绝）。响应已验签且 `fund_change=Y` 视为成功；否则用 `alipay.trade.fastpay.refund.query` 查询，`refund_status=REFUND_SUCCESS` 且金额一致才视为成功。网络错误、未签名、未确认时订单与授权都不变，退款请求保持待确认；同一订单只允许一笔待确认请求，运营稍后用新的操作按**相同金额**重提即复用同一 `out_request_no`，支付宝据此去重，不会重复退款；金额不同则拒绝。不提供取消待确认请求，避免掩盖支付宝已处理的退款。
+- **确认后**：全额退款且非续费订单，在同一事务内标记 refunded、撤销本订单签发的全部授权（`licenses.order_id`）、写审计和自动处理记录；部分退款与续费订单只记录并进入异常队列（续费单不拥有授权，撤销会吊销原订单已付期限）。成功的原路退款同时写入财务退款记录，`reference` 为 `alipay-refund:<out_request_no>`，财务页显示为“支付宝原路退款”。
+- **异常队列**：渠道累计退款（通知累计额与已确认原路退款取大）> 已处理金额（`refund_reviews`）的订单进入“交付异常”，工作台显示“渠道退款待处理”。运营在订单中“处理渠道退款”：一键撤销本订单全部授权，或保留授权结案（续费单只能保留，须先用“调整到期时间”回退续期）。之后再有新的退款会重新入列。“登记已办理的退款”只记财务账，不影响队列。`/admin/payment-exceptions` 与自动补交付任务不包含退款。
+- 新增表 `alipay_refunds`、`refund_reviews`，均为新增表。原路退款依赖开放平台应用已开通退款权限（见 [商业接入](COMMERCIAL_ONBOARDING.md)）；支付宝建议退款发起后间隔 10 秒以上再查询，结果未确认时请稍后重提。
 
 拒收的通知（验签失败、身份/金额/流水不符、未知订单等）返回非 200，并输出一行结构化日志 `{"requestId","error":"PAYMENT_NOTIFICATION_REJECTED","channel","code","orderId"}`；`orderId` 仅在验签通过后出现，不记录原始报文、买家信息或签名。微信通知同样记录拒收日志；微信退款通知仍不处理。
 
@@ -48,7 +55,7 @@
 
 1. 在支付宝开放平台“沙箱环境”取得沙箱 APPID、沙箱商户 PID（2088 开头），按沙箱应用配置 RSA2 密钥，下载**沙箱**支付宝公钥；均与生产密钥不同，不能混用。
 2. 在独立的测试服务器（不能与生产共用数据库或 env）配置 `PAYMENT_ENVIRONMENT=sandbox`、`PAYMENT_NOTIFY_ORIGIN=<该服务器公网 HTTPS origin>`、沙箱 `ALIPAY_APP_ID/ALIPAY_SELLER_ID/ALIPAY_PUBLIC_KEY_FILE/ALIPAY_PRIVATE_KEY_FILE`，`ALIPAY_CHECKOUT_ENABLED=true` 及测试目录；不要配置微信参数。确认启动日志显示“支付环境 sandbox”。
-3. 用该服务器的 `/purchase/` 网页下单，用沙箱版支付宝 App 和沙箱买家账号付款，核对异步通知交付；在沙箱商户后台退款，核对事件表、订单 refunded 与后台异常队列；让付款链接过期后查询，核对关单及“重新生成付款”。
+3. 用该服务器的 `/purchase/` 网页下单，用沙箱版支付宝 App 和沙箱买家账号付款，核对异步通知交付；在沙箱商户后台退款，核对事件表、订单 refunded 与后台异常队列；在控制台对另一笔订单发起全额与部分原路退款，分别核对 `fund_change=Y` 与重复提交（`fund_change=N` → 退款查询）两条路径、授权撤销及队列；让付款链接过期后查询，核对关单及“重新生成付款”。
 4. 桌面端的服务器地址来自编译配置 `apps/desktop/src/main/link/license-config.json`，沙箱联调需单独构建指向测试服务器的版本，不得发布。
 
 ### 限流
@@ -60,9 +67,9 @@
 - **无强制 env 变更**：两个新变量均有生产缺省值，现有 `service.env` 可直接部署。仅在想显式声明时追加 `PAYMENT_ENVIRONMENT=production`。
 - 部署只新增 `payment_events` 表及索引，不改既有表行，符合 `activate-release.py` 的快照比对。
 - 同步部署 `apps/licensing-server/deploy/export-payment-ledger.py`：台账导出的 `delivery_states` 新增 `paid`、`refunded`，旧脚本遇到新状态会拒绝导出。
-- 退款是否自动撤销授权、微信关单与退款通知仍待决定，未实现。
+- 微信关单、微信退款与退款通知尚未接入。
 
-本地验证：授权服务与桌面购买 vitest、Python 运维测试（含用新 bundle 运行的交付恢复集成测试）、网页 Playwright 验收脚本，均使用测试密钥与隔离数据库。未连接支付宝沙箱或生产网关，未做真实付款、退款或关单。
+本地验证：授权服务与桌面购买 vitest、Python 运维测试（含用新 bundle 运行的交付恢复集成测试）、网页 Playwright 验收脚本，均使用测试密钥与隔离数据库；退款字段名按支付宝官方 Java SDK 的 `AlipayTradeRefundResponse`、`AlipayTradeFastpayRefundQueryResponse` 核对。未连接支付宝沙箱或生产网关，未做真实付款、退款或关单；上线前须在沙箱走通原路退款的两条确认路径。
 
 ## 产品与商户范围
 
@@ -260,7 +267,7 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 - 核对查询订单号、人民币金额，以及返回中存在的身份字段；查询响应并不保证返回 APPID/seller_id，所以身份同时依赖本地持久化绑定、签名请求和固定网关。发现非零退款字段或附加收款状态时返回需核对错误。
 - `TRADE_SUCCESS`/`TRADE_FINISHED` 通过已有发码事务处理。金额、流水唯一性、绑定身份、授权期限均重复校验；查询和通知并发、重复查单不会产生第二批激活码，也不会恢复已撤销的授权。查询状态与发码审计在同一事务内提交。
 - `WAIT_BUYER_PAY`/`TRADE_CLOSED` 不交付；付款期限内只记录查询事实，期限过后按上文关单条件转 closed（WAIT_BUYER_PAY 先调用 `alipay.trade.close`）。已交付订单出现非成功状态时响应 `needsReview: true`；不能从 CLOSED 推断具体退款金额或应撤销的企业席位。
-- **该查询不是退款对账**：标准交易查询不提供完整部分退款历史。上线前还须接入退款台账、退款查询及异常处理；在商户后台单独退款必须关联订单、核对并撤销对应授权，不能依赖本接口自动发现全部退款。
+- **该查询不是退款对账**：标准交易查询不提供完整部分退款历史。退款由控制台原路退款、退款通知与运营处理负责，见上文 2026-10-14 退款规则。
 
 本地隔离测试覆盖签名与报文篡改、订单串换、身份/金额/币种、网络超时、待付/关闭、并发补发、通知重复及撤销后再次查单。未发送真实支付渠道请求。
 
@@ -274,7 +281,7 @@ JWS Compact Serialization，三段 Base64URL，header 为 `{alg:"EdDSA",typ:"JWT
 | --- | --- |
 | POST `/v1/payments/wechat/notify` | 微信官方通知验签、解密、商户/币种/金额/订单/状态核对后交付 |
 | POST `/v1/orders/:id/invoice-requests` | 查询凭据授权后提交个人/企业开票资料；仅创建申请，不假装开票成功 |
-| POST `/admin/orders/:id/refunds` | 运营确认规则后申请原路退款，跟踪渠道结果、吊销与红冲状态 |
+| POST `/admin/orders/:id/refunds` | 运营确认规则后申请原路退款，跟踪渠道结果、吊销与红冲状态（2026-10-14 已在控制台以 `alipay-refund` 实现，此运维接口仍未实现） |
 
 具体字段、错误码与商户签约产品确定后冻结版本。支付通知必须使用官方要求的原始报文、证书/公钥校验与成功响应格式，不能统一套本服务 JSON 包装；微信和支付宝的成功确认格式不同。幂等处理通知及主动查单结果：先持久化可信支付事实、原子变更状态并创建授权，再用 outbox 交付，失败可补发但不重复发码。客户端跳转、截图、前端 paid 标志均不是收款事实。
 
