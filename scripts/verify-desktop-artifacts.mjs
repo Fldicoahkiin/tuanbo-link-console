@@ -48,6 +48,11 @@ if (requireDist) {
   const builtBridge = join(root, 'tools/obs/native-preview/tblink-realtime-preview.dll');
   const bridgeMatches = existsSync(packagedBridge) && existsSync(builtBridge)
     && readFileSync(packagedBridge).equals(readFileSync(builtBridge));
+  // Release builds compile out the development activation bypass; asar stores bundles uncompressed.
+  const packagedApp = join(distDirectory, 'win-unpacked/resources/app.asar');
+  const packagedAppBytes = existsSync(packagedApp) ? readFileSync(packagedApp) : undefined;
+  const testAccessMarkers = ['TBLINK_LOCAL_TEST_ACCESS', '.local-test-access', '本机开发测试通道']
+    .filter((marker) => !packagedAppBytes || packagedAppBytes.includes(Buffer.from(marker)));
   const installerVersionInfo = installer ? readWindowsVersionInfo(installer) : undefined;
   const appVersionInfo = unpackedExecutable ? readWindowsVersionInfo(unpackedExecutable) : undefined;
   checks.push(
@@ -57,6 +62,7 @@ if (requireDist) {
       return existsSync(packaged) && readFileSync(packaged).equals(readFileSync(join(root, 'tools/ibt/bin', file)));
     }), detail: 'IBT engine, corresponding source, license and build instructions match this build' },
     { name: 'bundled-obs-native-bridge', ok: bridgeMatches, detail: bridgeMatches ? 'packaged DLL matches this build; no runtime compiler required' : 'missing or mismatched OBS bridge DLL' },
+    { name: 'release-excludes-local-test-access', ok: testAccessMarkers.length === 0, detail: packagedAppBytes ? (testAccessMarkers.length === 0 ? 'app.asar has no development activation bypass' : `app.asar contains ${testAccessMarkers.join(', ')}`) : 'missing app.asar' },
     { name: 'windows-nsis-installer', ok: Boolean(installer), detail: installer ? relative(root, installer) : 'missing' },
     { name: 'windows-unpacked-executable', ok: Boolean(unpackedExecutable), detail: unpackedExecutable ? relative(root, unpackedExecutable) : 'missing' },
     { name: 'windows-update-metadata', ok: Boolean(updateMetadata), detail: updateMetadata ? relative(root, updateMetadata) : 'missing latest.yml' },

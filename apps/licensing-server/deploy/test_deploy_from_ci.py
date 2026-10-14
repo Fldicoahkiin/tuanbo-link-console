@@ -1,7 +1,9 @@
 import importlib.util
+import io
 from pathlib import Path
 import stat
 import subprocess
+import tarfile
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -25,6 +27,36 @@ class SSHCredentialTest(unittest.TestCase):
                                             check=True, capture_output=True, text=True, timeout=10)
                     self.assertEqual(result.stdout.split()[:2], source.with_suffix('.pub').read_text().split()[:2])
                     self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+
+
+class DeltaUploadTest(unittest.TestCase):
+    files = {'dist/index.js': b'bundle', 'web/index.html': b'page', 'web/media/demo.mp4': b'large video'}
+    manifest = {'revision': 'a' * 40, 'files': {}}
+
+    def deliver(self, *replies):
+        sent = []
+
+        def send(payload, timeout):
+            with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+                sent.append((sorted(archive.getnames()), timeout))
+            return replies[len(sent) - 1]
+
+        return module.deliver(send, self.files, self.manifest), sent
+
+    def test_uploads_only_artifacts_production_lacks(self):
+        result, sent = self.deliver({'status': 'plan', 'upload': ['web/index.html']}, {'status': 'success'})
+        self.assertEqual(result, {'status': 'success'})
+        self.assertEqual(sent, [(['manifest.json'], 120), (['manifest.json', 'web/index.html'], 2460)])
+
+    def test_skips_upload_when_production_already_matches(self):
+        result, sent = self.deliver({'status': 'plan', 'upload': []})
+        self.assertIsNone(result)
+        self.assertEqual(len(sent), 1)
+
+    def test_rejects_unknown_or_malformed_plan(self):
+        for reply in [{'status': 'plan', 'upload': ['../escape']}, {'status': 'success'}, {'status': 'plan', 'upload': 'all'}]:
+            with self.subTest(reply=reply), self.assertRaisesRegex(RuntimeError, 'invalid upload plan'):
+                self.deliver(reply)
 
 
 if __name__ == '__main__':

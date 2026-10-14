@@ -14,8 +14,8 @@
     "probe:mtc": "node ./scripts/probe-windows-mtc.mjs",
     "probe:mtc:send": "node ./scripts/send-windows-mtc.mjs",
     "probe:mtc:runtime": "node ./scripts/probe-link-mtc-runtime.mjs",
-    "dist:dir": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && node ../../tools/playback-engine/build.mjs && electron-vite build && electron-builder --dir",
-    "dist": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && node ../../tools/playback-engine/build.mjs && electron-vite build && electron-builder --publish never"
+    "dist:dir": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && node ../../tools/playback-engine/build.mjs && electron-vite build --mode release && electron-builder --dir",
+    "dist": "node ../../tools/obs/native-preview/build.mjs && node ../../tools/ibt/build.mjs && node ../../tools/midi-probe/build.mjs && node ../../tools/playback-engine/build.mjs && electron-vite build --mode release && electron-builder --publish never"
   },
   "build": {
     "productName": "团播联动台",

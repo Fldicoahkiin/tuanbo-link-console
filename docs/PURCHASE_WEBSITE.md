@@ -158,6 +158,6 @@ CI 部署不会修改 Nginx 配置，也不会替换已安装的部署工具（�
 
 1. 备份 `/etc/nginx/sites-available/tblink-licensing.conf`、`/etc/tblink-deploy/policy.json`、`/opt/tblink-licensing/publish-website.py` 和 `/usr/local/libexec/tblink-receive-release.py`。
 2. 在 `tuanbo-link.jinhefilm.com` 的 server 块中，于 `location = /purchase/` 之后加入仓库 `deploy/purchase-site.conf` 里 `/terms/`、`/refund/`、`/privacy/` 三段；执行 `nginx -t` 通过后再 reload。
-3. 用本提交的 `deploy/publish-website.py` 和 `deploy/receive-release.py` 替换上述两个已安装副本，保持原所有者和权限。`activate-release.py`、`publish-console.py` 未改动。
+3. 用当前 master 的 `deploy/publish-website.py` 和 `deploy/receive-release.py` 替换上述两个已安装副本，保持原所有者和权限。接收器同时启用增量上传和 900 秒上传窗口（见 [自动部署](AUTOMATED_DEPLOYMENT.md)）。`activate-release.py`、`publish-console.py` 未改动。
 4. 把 `policy.json` 的 `nginxSha256` 改为新 Nginx 配置文件的 SHA-256。
 5. 在 GitHub Actions 手动运行 `verify-licensing-server`。部署成功后，确认三个页面返回 200，页脚与购买页链接可用。
