@@ -12,6 +12,8 @@ const typeCheckedConfigs = tseslint.configs.recommendedTypeChecked.map((config) 
 export default tseslint.config(
   {
     ignores: [
+      // Claude Code session worktrees are full checkouts of other branches.
+      '.claude/**',
       '交付*/**',
       'acceptance-*/**',
       'artifacts/**',
