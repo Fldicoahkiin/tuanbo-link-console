@@ -13,6 +13,8 @@ const orderSchema = z.object({
 }).strict().refine(value => (value.kind === 'perpetual') === (value.useUntil === null), '买断不设使用期限，订阅必须填写期限');
 const paymentSchema = z.object({ paymentReference: z.string().trim().min(1).max(100), amountFen: z.number().int().positive() }).strict();
 const licenseRowSchema = z.object({ id: z.string(), order_id: z.string(), code_hash: z.string(), code_cipher: z.string(), machine: z.string().nullable(), revoked: z.number(), lease_until: z.number() });
+/** Signed lease on activation: bounds client offline starts and how long operator migration waits for the old machine. */
+const LEASE_MS = 48 * 3600000;
 const orderStateSchema = z.enum(['pending', 'paid', 'fulfilled', 'refunded', 'closed', 'expired']);
 type OrderState = z.infer<typeof orderStateSchema>;
 // 生产库只允许新增表，旧版“有收款记录但仍为 pending”的行不回填；收到收款事实时经 settle() 收敛为 paid。
@@ -563,7 +565,7 @@ export class LicensingService {
       const order = this.licenseTerms(license);
       const now = this.now();
       if (order.useUntil && Date.parse(order.useUntil) <= now) throw new ServiceError(403, 'EXPIRED', '授权使用期限已结束');
-      const leaseUntil = Math.min(now + 7 * 86400000, order.useUntil ? Date.parse(order.useUntil) : Infinity);
+      const leaseUntil = Math.min(now + LEASE_MS, order.useUntil ? Date.parse(order.useUntil) : Infinity);
       const claims = licenseClaimsSchema.parse({ version: 1, product: request.product, licenseId: license.id,
         customer: order.customer, machineCode: request.machineCode, kind: order.kind, issuedAt: new Date(now).toISOString(),
         useUntil: order.useUntil, updatesUntil: order.updatesUntil,

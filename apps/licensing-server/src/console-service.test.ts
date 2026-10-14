@@ -78,7 +78,7 @@ it('换机沿用旧租约等待并吊销旧码', async () => {
   s.service.activate({ product: 'tuanbo-link-console', code, machineCode: `TB1-${'A'.repeat(64)}` });
   await s.execute({ action: 'revoke', id, reason: '换机' });
   await expect(s.execute({ action: 'migrate', id, reason: '提前换机' })).rejects.toThrow('等待');
-  s.advance(7 * 86400000 + 300001);
+  s.advance(48 * 3600000 + 300001);
   const fresh = { ...s.login.session, verifiedAt: s.now() };
   const next = await s.execute({ action: 'migrate', id, reason: '旧租约已结束' }, fresh);
   expect(next.secret).not.toBe(code);

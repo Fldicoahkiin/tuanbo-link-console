@@ -43,7 +43,7 @@ it('首次激活绑定单机，同机重试不新增席位，其他机器被拒�
   const request = { product: 'tuanbo-link-console', code, machineCode: machine };
   const token = service.activate(request).license;
   const claims = verifyLicense(token, machine, publicKeys, now());
-  expect(claims.online).toEqual({ customerType: 'company', leaseUntil: '2026-10-04T00:00:00.000Z' });
+  expect(claims.online).toEqual({ customerType: 'company', leaseUntil: '2026-09-29T00:00:00.000Z' });
   expect(service.activate(request).license).toBe(token);
   expect(service.describeOrder(paid.id).licenses.filter(value => value.machineCode)).toHaveLength(1);
   expect(() => service.activate({ ...request, machineCode: `TB1-${'B'.repeat(64)}` })).toThrow('另一台');
@@ -69,7 +69,9 @@ it('吊销拒绝刷新；等待旧离线凭证到期后换机，旧码永久失�
   service.revoke(license.id, { reason: '换机申请' });
   expect(() => service.activate(request)).toThrow('撤销');
   expect(() => service.migrate(license.id, { reason: '更换电脑' })).toThrow('先撤销');
-  advance(7 * 86400000 + 300000);
+  advance(48 * 3600000);
+  expect(() => service.migrate(license.id, { reason: '更换电脑' })).toThrow('先撤销');
+  advance(300000);
   const replacement = service.migrate(license.id, { reason: '更换电脑' });
   expect(replacement.code).not.toBe(license.code);
   expect(() => service.activate(request)).toThrow('无效');
