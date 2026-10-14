@@ -91,7 +91,7 @@ export class LicenseService {
         // Only an unreachable server falls back to the signed, machine-bound lease; explicit rejections still block.
         if (this.offlineGrace && status.claims?.online) {
           const until = new Date(status.claims.online.leaseUntil).toLocaleString('zh-CN', { hour12: false });
-          return this.result(status.claims, 'active', `授权服务器暂时无法连接，已用本机授权离线启动；请在 ${until} 前联网验证`);
+          return { ...this.result(status.claims, 'active', `授权服务器暂时无法连接，已用本机授权离线启动；请在 ${until} 前联网验证`), offlineUntil: status.claims.online.leaseUntil };
         }
         return this.result(status.claims, 'renewal-required', this.verificationFailure);
       }

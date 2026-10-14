@@ -146,6 +146,7 @@ it('每次进程启动联网验证一次，并发状态读取共用请求；断�
   const offline = make();
   expect((await offline.status()).state).toBe('active');
   expect((await offline.status()).message).toContain('离线启动');
+  expect((await offline.status()).offlineUntil).toBe(new Date(now + 7 * 86400000).toISOString());
   expect(request).toHaveBeenCalledTimes(2);
   expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(token);
   expect((await offline.refreshOnline()).state).toBe('active');

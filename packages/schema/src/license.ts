@@ -21,7 +21,9 @@ export const licenseStatusSchema = z.object({
   state: z.enum(['unconfigured', 'inactive', 'active', 'expired', 'invalid', 'renewal-required']),
   claims: licenseClaimsSchema.nullable(), message: z.string(),
   enforcement: z.literal('required'),
-  onlineAvailable: z.boolean().default(false)
+  onlineAvailable: z.boolean().default(false),
+  /** Set when this run started on the local lease because the licensing server was unreachable. */
+  offlineUntil: z.string().datetime().optional()
 }).strict();
 export const activationCodeSchema = z.string().trim().toUpperCase().regex(/^TBA-[A-F0-9]{32}$/, '请输入完整激活码，格式为 TBA- 加 32 位字符');
 export const licenseActivationSchema = z.object({ product: z.literal('tuanbo-link-console'), code: activationCodeSchema, machineCode: licenseMachineCodeSchema }).strict();
