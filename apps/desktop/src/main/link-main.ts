@@ -150,6 +150,9 @@ import { NativeObsPreloadPool } from './link/native-obs-preload';
 import { createNativeObsOutputs } from './link/native-obs-outputs';
 import { prepareNextObsFiles } from './link/native-obs-files';
 
+/** False in `electron-vite build --mode release`; app.isPackaged only checks the executable name. */
+declare const __TBLINK_LOCAL_TEST_ACCESS__: boolean;
+
 protocol.registerSchemesAsPrivileged([{
   scheme: 'tblink-asset',
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
@@ -527,7 +530,7 @@ function registerIpc(
   handle('link:native-player-prepare', (_event, value: unknown) => playbackRequests.prepare(value), 'listener');
   handle('link:native-player-control', (_event, value: unknown) => playbackRequests.control(value), 'listener');
   const enforcement = z.literal('required').parse(licenseConfig.enforcement);
-  const localTestAccess = localTestAccessEnabled(app.isPackaged,
+  const localTestAccess = __TBLINK_LOCAL_TEST_ACCESS__ && localTestAccessEnabled(app.isPackaged,
     process.env.TBLINK_LOCAL_TEST_ACCESS, existsSync(join(app.getAppPath(), '.local-test-access')));
   const readMachineCode = createLicenseMachineCodeReader();
   const getLocalTestStatus = async () => localTestLicenseStatus(await readMachineCode());
