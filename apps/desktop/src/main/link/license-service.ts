@@ -122,7 +122,7 @@ export class LicenseService {
   }
   async activateCode(input: string): Promise<LicenseStatus> {
     this.startupVerification ??= Promise.resolve();
-    this.sessionLicenseId = undefined;
+    // A failed attempt (typo, network, rejection of a different code) keeps the license this run already verified.
     try {
       const status = await this.requestActivation(input);
       this.sessionLicenseId = status.claims?.licenseId;

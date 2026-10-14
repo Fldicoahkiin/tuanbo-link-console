@@ -267,3 +267,23 @@ it('服务器拒绝时按错误码给出续费、换机或核对激活码的具�
     expect(result.message).toContain(guidance);
   }
 });
+
+it('已验证的会话中输错激活码或断网，不影响当前授权', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-session-kept-'));
+  const stored = new Map<string, string>();
+  const token = issue({ online: { leaseUntil: new Date(now + 2 * 86400000).toISOString(), customerType: 'personal' } });
+  const request = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({ license: token })));
+  const service = new LicenseService(directory, machine, publicKeys, () => now, {
+    serverUrl: 'https://license.example.com', enforcement: 'required', fetch: request,
+    credentials: { hasCredential: key => Promise.resolve(stored.has(key)), loadCredential: key => Promise.resolve(stored.get(key) ?? ''),
+      saveCredential: (key, value) => { stored.set(key, value); return Promise.resolve(); } }
+  });
+  await service.activateCode(`TBA-${'A'.repeat(32)}`);
+  request.mockResolvedValueOnce(new Response(JSON.stringify({ code: 'INVALID_CODE' }), { status: 403 }));
+  await expect(service.activateCode(`TBA-${'B'.repeat(32)}`)).rejects.toThrow('核对');
+  expect((await service.status()).state).toBe('active');
+  request.mockRejectedValueOnce(new Error('offline'));
+  await expect(service.refreshOnline()).rejects.toThrow('无法连接');
+  expect((await service.status()).state).toBe('active');
+  expect(stored.get('license.activation.code')).toBe(`TBA-${'A'.repeat(32)}`);
+});
