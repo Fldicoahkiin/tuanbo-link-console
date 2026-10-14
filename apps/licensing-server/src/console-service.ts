@@ -15,7 +15,8 @@ const orderProjection = `SELECT o.id,o.reference,json_extract(o.body,'$.customer
   p.payment_reference AS paymentReference,p.received_at AS receivedAt,p.last_error AS deliveryError,
   COALESCE(m.created,(SELECT MIN(at) FROM audit WHERE target=o.id AND action IN ('order.created','order.purchase-created'))) AS created,
   (SELECT COUNT(*) FROM console_tickets WHERE order_id=o.id AND state!='closed') AS openTickets,
-  (SELECT COALESCE(SUM(amount_fen),0) FROM console_refunds WHERE order_id=o.id) AS refundedFen
+  (SELECT COALESCE(SUM(amount_fen),0) FROM console_refunds WHERE order_id=o.id) AS refundedFen,
+  (SELECT COALESCE(MAX(refund_fen),0) FROM payment_events WHERE order_id=o.id) AS channelRefundFen
   FROM orders o LEFT JOIN console_order_meta m ON m.order_id=o.id LEFT JOIN payment_receipts p ON p.order_id=o.id
   LEFT JOIN alipay_payment_links a ON a.order_id=o.id LEFT JOIN wechat_payment_links w ON w.order_id=o.id`;
 export class ConsoleService {
@@ -36,7 +37,8 @@ export class ConsoleService {
   list(resource: string, query: PageQuery, session: ConsoleSession) {
     const term = `%${query.q.replace(/[\\%_]/g, '\\$&')}%`;
     if (resource === 'orders' || resource === 'exceptions') {
-      const extra = resource === 'exceptions' ? " AND paymentStatus='confirmed' AND state!='fulfilled'" : '';
+      // 异常队列：已收款未交付，或渠道累计退款超过人工登记的退款（登记后出列；退款不自动撤销授权）。
+      const extra = resource === 'exceptions' ? " AND (paymentStatus='confirmed' AND state IN ('pending','paid') OR channelRefundFen>refundedFen)" : '';
       return this.page(`SELECT * FROM (${orderProjection}) WHERE (id LIKE ? ESCAPE '\\' OR reference LIKE ? ESCAPE '\\' OR customer LIKE ? ESCAPE '\\') AND (?='' OR state=?) AND (?='' OR channel=?) AND (?='' OR created>=?) AND (?='' OR created<?)${extra} ORDER BY created DESC,id`,
         [term, term, term, query.state, query.state, query.channel, query.channel, query.from, query.from ? new Date(`${query.from}T00:00:00+08:00`).toISOString() : '', query.to, query.to ? new Date(Date.parse(`${query.to}T00:00:00+08:00`) + 86400000).toISOString() : ''], query);
     }
@@ -79,7 +81,7 @@ export class ConsoleService {
     return detailSchema.parse({ item, related, history });
   }
   overview() {
-    const counts = this.db.prepare(`SELECT SUM(CASE WHEN paymentStatus='pending' AND state='pending' THEN 1 ELSE 0 END) AS pendingOrders,SUM(CASE WHEN paymentStatus='confirmed' AND state!='fulfilled' THEN 1 ELSE 0 END) AS deliveryPending FROM (${orderProjection})`).get();
+    const counts = this.db.prepare(`SELECT SUM(CASE WHEN paymentStatus='pending' AND state='pending' THEN 1 ELSE 0 END) AS pendingOrders,SUM(CASE WHEN paymentStatus='confirmed' AND state IN ('pending','paid') THEN 1 ELSE 0 END) AS deliveryPending,SUM(CASE WHEN channelRefundFen>refundedFen THEN 1 ELSE 0 END) AS refundReview FROM (${orderProjection})`).get();
     const receipts = this.db.prepare("SELECT COALESCE(SUM(CASE WHEN source='manual' THEN amount_fen ELSE 0 END),0) AS manualFen,COALESCE(SUM(CASE WHEN source!='manual' THEN amount_fen ELSE 0 END),0) AS onlineFen FROM payment_receipts").get();
     const refunds = this.db.prepare('SELECT COALESCE(SUM(amount_fen),0) AS refundFen FROM console_refunds').get();
     const tickets = this.db.prepare("SELECT COUNT(*) AS openTickets FROM console_tickets WHERE state!='closed'").get();

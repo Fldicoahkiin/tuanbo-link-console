@@ -28,6 +28,8 @@ const alipayQuerySchema = z.union([
   z.object({ ...alipayIdentity, status: z.literal('TRADE_NOT_EXIST') }).strict(),
   z.object({ ...alipayIdentity, status: alipayTradeStatus, amountFen: z.number().int().positive(), paymentReference: z.string() }).strict()
 ]);
+const alipayNoticeSchema = z.object({ ...alipayIdentity, status: alipayTradeStatus, amountFen: z.number().int().positive(),
+  refundFen: z.number().int().nonnegative(), paymentReference: z.string() }).strict();
 
 type PaymentSource = 'manual' | 'alipay' | 'wechat';
 type PaymentChannel = Exclude<PaymentSource, 'manual'>;
@@ -58,6 +60,8 @@ export class LicensingService {
       CREATE TABLE IF NOT EXISTS license_term_overrides (license_id TEXT PRIMARY KEY REFERENCES licenses(id), use_until TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS license_renewals_license ON license_renewals(license_id);
       CREATE TABLE IF NOT EXISTS payment_receipts (order_id TEXT PRIMARY KEY REFERENCES orders(id), payment_reference TEXT NOT NULL UNIQUE, amount_fen INTEGER NOT NULL, source TEXT NOT NULL, app_id TEXT, seller_id TEXT, received_at TEXT NOT NULL, last_error TEXT);
+      CREATE TABLE IF NOT EXISTS payment_events (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id), channel TEXT NOT NULL, event_key TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, trade_status TEXT NOT NULL, payment_reference TEXT NOT NULL, amount_fen INTEGER NOT NULL, refund_fen INTEGER NOT NULL, received_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS payment_events_order ON payment_events(order_id);
       CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, at TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL);`);
   }
   close(): void { this.db.close(); }
@@ -290,6 +294,32 @@ export class LicensingService {
     this.transaction(() => {
       if (!this.closable(id)) throw new ServiceError(409, 'ORDER_STATE_CONFLICT', '订单已收款或付款期限未过，不能关闭', id);
       this.transition(id, to, reason);
+    });
+  }
+  /** 验签通过的支付宝异步通知：成功且无退款的交付；其余落事件表，退款进运营异常队列但不撤销授权。 */
+  alipayNotification(input: unknown): void {
+    const notice = alipayNoticeSchema.parse(input);
+    if ((notice.status === 'TRADE_SUCCESS' || notice.status === 'TRADE_FINISHED') && notice.refundFen === 0) {
+      this.fulfill(notice.orderId, { paymentReference: notice.paymentReference, amountFen: notice.amountFen }, 'alipay', notice);
+      return;
+    }
+    this.transaction(() => {
+      const order = this.alipayQueryOrder(notice.orderId, notice.appId, notice.sellerId);
+      if (notice.amountFen !== order.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '支付通知金额与订单不一致');
+      const receipt = this.db.prepare('SELECT payment_reference FROM payment_receipts WHERE order_id = ?').get(order.id);
+      if (receipt && receipt.payment_reference !== notice.paymentReference) throw new ServiceError(409, 'PAYMENT_CONFLICT', '通知流水与已确认收款不一致');
+      const kind = notice.refundFen > 0 ? 'refund' : notice.status === 'TRADE_CLOSED' ? 'closed' : 'waiting';
+      // refund_fee 是累计退款额，同一交易的重复通知按状态与累计额去重。
+      const inserted = this.db.prepare(`INSERT INTO payment_events VALUES (?, ?, 'alipay', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(event_key) DO NOTHING`).run(randomUUID(), order.id,
+        `${notice.paymentReference}:${notice.status}:${notice.refundFen}`, kind, notice.status, notice.paymentReference, notice.amountFen, notice.refundFen, new Date(this.now()).toISOString());
+      if (inserted.changes === 0) return;
+      this.audit('order.alipay-event', order.id, `${notice.status}:${notice.refundFen}`);
+      this.settle(order.id, 'alipay-event');
+      if (kind === 'refund' && notice.refundFen === notice.amountFen) {
+        const { state } = this.order(order.id);
+        if (state === 'paid' || state === 'fulfilled') this.transition(order.id, 'refunded', 'alipay:full-refund');
+      }
+      if (kind === 'closed' && this.closable(order.id)) this.transition(order.id, 'closed', 'alipay:TRADE_CLOSED-notice');
     });
   }
   private hasPayment(id: string): boolean {

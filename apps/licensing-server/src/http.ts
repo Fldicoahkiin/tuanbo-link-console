@@ -3,7 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { LicensingService, ServiceError } from './service';
 import type { AlipayCheckout, AlipayNotifications } from './alipay';
-import { purchaseCatalogSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
+import { purchaseCatalogSchema, type PaymentChannel, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
 import type { WechatPay } from './wechat';
 import { clientAddress, rateBucket } from './client-address';
 import { SourceRates } from './source-rates';
@@ -69,6 +69,16 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       await checkout.close(id, alipay); recheck();
       service.closeOrder(id, 'closed', 'alipay:trade.close');
       return { ...result, state: 'closed' as const };
+    };
+    // 拒收的渠道通知只记错误码和已验签的订单号，不记原始报文、买家信息或签名。
+    const notification = (channel: PaymentChannel, accept: (verified: (orderId: string) => void) => void): void => {
+      let orderId: string | undefined;
+      try { accept(id => { orderId = id; }); }
+      catch (error) {
+        console.error(JSON.stringify({ requestId, error: 'PAYMENT_NOTIFICATION_REJECTED', channel, orderId,
+          code: error instanceof ServiceError ? error.code : error instanceof z.ZodError ? 'INVALID_REQUEST' : 'INTERNAL_ERROR' }));
+        throw error;
+      }
     };
     const dispatch = async (): Promise<unknown> => {
       const now = Date.now();
@@ -155,14 +165,20 @@ export function createLicensingServer(service: LicensingService, adminToken: str
           const value = request.headers[name];
           if (typeof value === 'string') headers.set(name, value);
         }
-        const payment = wechat.notification(await readBytes(request), headers);
-        service.fulfill(payment.orderId, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'wechat', payment);
+        const body = await readBytes(request);
+        notification('wechat', verified => {
+          const payment = wechat.notification(body, headers); verified(payment.orderId);
+          service.fulfill(payment.orderId, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'wechat', payment);
+        });
         return { code: 'SUCCESS', message: '成功' };
       }
       if (request.method === 'POST' && request.url === '/v1/payments/alipay/notify' && alipay) {
         if (!/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '')) throw new ServiceError(415, 'CONTENT_TYPE', '需要 UTF-8 表单通知');
-        const payment = alipay.verify(await readBytes(request));
-        service.fulfill(payment.orderId, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'alipay', payment);
+        const body = await readBytes(request);
+        notification('alipay', verified => {
+          const notice = alipay.verify(body); verified(notice.orderId);
+          service.alipayNotification(notice);
+        });
         return 'success';
       }
       if (!request.url?.startsWith('/admin/')) throw new ServiceError(404, 'NOT_FOUND', '接口不存在');

@@ -34,7 +34,8 @@ export class AlipayNotifications {
     this.key = createPublicKey(publicKey);
     if (this.key.asymmetricKeyType !== 'rsa' || (this.key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) throw new Error('支付宝验签公钥必须为至少 2048 位 RSA 公钥');
   }
-  verify(body: Buffer): { orderId: string; paymentReference: string; amountFen: number; appId: string; sellerId: string } {
+  /** 只验证报文真实性与基本字段；是否交付、关单或记退款由授权服务按订单状态决定。 */
+  verify(body: Buffer) {
     let form: URLSearchParams;
     try { form = new URLSearchParams(new TextDecoder('utf-8', { fatal: true }).decode(body)); }
     catch { throw new ServiceError(400, 'INVALID_FORM', '支付通知编码无效'); }
@@ -48,12 +49,14 @@ export class AlipayNotifications {
     const signed = Object.keys(fields).filter(name => name !== 'sign' && name !== 'sign_type').sort().map(name => `${name}=${fields[name]}`).join('&');
     if (!verify('RSA-SHA256', Buffer.from(signed, 'utf8'), this.key, Buffer.from(notification.sign, 'base64'))) throw new ServiceError(401, 'INVALID_PAYMENT_SIGNATURE', '支付通知验签失败');
     if (notification.app_id !== this.appId || notification.seller_id !== this.sellerId) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '支付通知商户或应用不匹配');
-    if (notification.trade_status !== 'TRADE_SUCCESS' && notification.trade_status !== 'TRADE_FINISHED') throw new ServiceError(409, 'PAYMENT_NOT_SETTLED', '通知不是支付成功状态，不能发码');
-    if (fields.refund_fee && !/^0(\.0{1,2})?$/.test(fields.refund_fee)) throw new ServiceError(409, 'PAYMENT_REFUNDED', '含退款的通知需要先核对退款状态');
     if (fields.trans_currency && fields.trans_currency !== 'CNY') throw new ServiceError(409, 'PAYMENT_CURRENCY_MISMATCH', '仅接受人民币订单');
     const total = amountFen(notification.total_amount);
     if (total < 1 || total > 100_000_000) throw new ServiceError(400, 'INVALID_PAYMENT_AMOUNT', '支付金额超出订单范围');
-    return { orderId: notification.out_trade_no, paymentReference: `alipay:${notification.trade_no}`, amountFen: total, appId: this.appId, sellerId: this.sellerId };
+    // 退款通知可能仍是 TRADE_SUCCESS；refund_fee 为累计退款额，必须与状态一并交给服务判断。
+    const refund = fields.refund_fee === undefined ? 0 : amountFen(fields.refund_fee);
+    if (refund > total) throw new ServiceError(400, 'INVALID_PAYMENT_AMOUNT', '退款金额超过交易金额');
+    return { orderId: notification.out_trade_no, status: notification.trade_status, paymentReference: `alipay:${notification.trade_no}`,
+      amountFen: total, refundFen: refund, appId: this.appId, sellerId: this.sellerId };
   }
   /** 公钥模式只接收 response + sign 信封。仅解析验签覆盖的原始对象，禁止重序列化后验签。 */
   private signedResponse(body: string, method: 'alipay.trade.query' | 'alipay.trade.close') {

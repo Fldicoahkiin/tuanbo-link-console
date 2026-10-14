@@ -157,3 +157,21 @@ it('工作台按已交付客户去重并按北京时间汇总实际收款', asyn
   expect(trend.find(row => row.day === '2026-10-05')?.refundFen).toBe(10000);
   expect(trend.reduce((sum, row) => sum + Number(row.incomeFen), 0)).toBe(50000);
 });
+it('渠道退款事件进入异常队列并保留授权，人工登记同额退款后出列', async () => {
+  const s = await setup(); const identity = { appId: '2026000000000001', sellerId: '2088000000000001' };
+  const order = s.service.createOrder({ reference: 'refund-queue', customer: '退款客户', customerType: 'company', quantity: 1, kind: 'perpetual', amountFen: 80000, useUntil: null, updatesUntil: '2027-10-06T00:00:00Z' });
+  s.service.prepareAlipayPayment(order.id, identity.appId, identity.sellerId);
+  const notice = { orderId: order.id, ...identity, status: 'TRADE_SUCCESS', amountFen: 80000, refundFen: 0, paymentReference: 'alipay:202610062200000000000001' };
+  s.service.alipayNotification(notice);
+  const exceptions = () => s.consoleService.list('exceptions', pageQuerySchema.parse({}), s.login.session).items.map(row => row.id);
+  expect(exceptions()).toEqual([]);
+  s.service.alipayNotification({ ...notice, status: 'TRADE_CLOSED', refundFen: 80000 });
+  expect(exceptions()).toEqual([order.id]);
+  expect(s.consoleService.overview().item.refundReview).toBe(1);
+  const detail = s.consoleService.detail('orders', order.id, s.login.session);
+  expect(detail.item).toMatchObject({ state: 'refunded', channelRefundFen: 80000, refundedFen: 0 });
+  expect(detail.related.map(row => row.revoked)).toEqual([false]);
+  await s.execute({ action: 'refund', id: order.id, amountFen: 80000, reference: 'alipay-refund-1', handledAt: new Date(s.now()).toISOString(), reason: '客户申请退款，核对后保留授权至期满' });
+  expect(exceptions()).toEqual([]);
+  expect(s.consoleService.overview().item.refundReview).toBe(0);
+});

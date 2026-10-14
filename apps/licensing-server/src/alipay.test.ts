@@ -3,7 +3,8 @@ import { generateKeyPairSync, randomBytes, sign, verify as verifySignature } fro
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, it } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
+import { afterEach, expect, it, vi } from 'vitest';
 import { AlipayCheckout, AlipayNotifications } from './alipay';
 import { createLicensingServer } from './http';
 import { LicensingService } from './service';
@@ -14,7 +15,7 @@ const appId = '2026000000000001';
 const sellerId = '2088000000000001';
 const notifications = new AlipayNotifications(appId, sellerId, rsa.publicKey.export({ format: 'pem', type: 'spki' }).toString());
 const services: LicensingService[] = [];
-afterEach(() => { for (const service of services.splice(0)) service.close(); });
+afterEach(() => { vi.restoreAllMocks(); for (const service of services.splice(0)) service.close(); });
 function setup() {
   const service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => Date.parse('2026-09-28T00:00:00Z'));
   services.push(service);
@@ -30,7 +31,7 @@ const verify = (form: URLSearchParams) => notifications.verify(Buffer.from(form.
 
 it('RSA2 通知验签保留中文、百分号、加号和新增字段，不二次解码', () => {
   const { order } = setup();
-  expect(verify(notification(order.id))).toEqual({ orderId: order.id, amountFen: 12345, paymentReference: 'alipay:202609282200000000000001', appId, sellerId });
+  expect(verify(notification(order.id))).toEqual({ orderId: order.id, status: 'TRADE_SUCCESS', amountFen: 12345, refundFen: 0, paymentReference: 'alipay:202609282200000000000001', appId, sellerId });
   for (const amount of ['123', '123.4', '123.45']) expect(verify(notification(order.id, { total_amount: amount })).amountFen).toBe(Math.round(Number(amount) * 100));
 });
 
@@ -125,10 +126,9 @@ it('拒绝篡改、重复字段、算法降级以及用商户自己的公钥验�
 
 it.each([
   { app_id: '2026000000000002' }, { seller_id: '2088000000000002' },
-  { trade_status: 'WAIT_BUYER_PAY' }, { trade_status: 'TRADE_CLOSED' },
   { total_amount: '1e2' }, { total_amount: '123.456' }, { total_amount: '0.00' },
-  { refund_fee: '1.00' }, { trans_currency: 'USD' }
-])('即使签名正确也拒绝不匹配或不能交付的通知 %j', changes => {
+  { refund_fee: '123.46' }, { refund_fee: '1e2' }, { trans_currency: 'USD' }
+])('即使签名正确也拒绝不匹配或无效金额的通知 %j', changes => {
   const { order } = setup();
   expect(() => verify(notification(order.id, changes))).toThrow();
 });
@@ -196,4 +196,83 @@ it('重启后保留原付款期限与商户绑定，不因重复取链接延长�
   services.push(reopened);
   expect(reopened.prepareAlipayPayment(order.id, appId, sellerId)).toEqual(before);
   expect(() => reopened.prepareAlipayPayment(order.id, appId, '2088000000000002')).toThrow('其他支付配置');
+});
+
+it('验签通过的退款与关单通知落事件表并应答 success，全额退款标记订单但不撤销授权；验签失败与金额不符写结构化日志', async () => {
+  const path = join(await mkdtemp(join(tmpdir(), 'tblink-alipay-events-')), 'license.db');
+  const service = new LicensingService(path, issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => Date.parse('2026-09-28T00:00:00Z'));
+  services.push(service);
+  const { details } = setup(); const order = service.createOrder(details);
+  service.prepareAlipayPayment(order.id, appId, sellerId);
+  const events = () => { const db = new DatabaseSync(path, { readOnly: true }); try { return db.prepare('SELECT kind, trade_status, refund_fen FROM payment_events ORDER BY rowid').all(); } finally { db.close(); } };
+  const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const server = createLicensingServer(service, 'a'.repeat(48), notifications);
+  await listenHttpTestServer(server);
+  try {
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('缺少监听地址');
+    const post = (body: URLSearchParams) => fetch(`http://127.0.0.1:${address.port}/v1/payments/alipay/notify`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body, signal: AbortSignal.timeout(5000) });
+    expect(await (await post(notification(order.id))).text()).toBe('success');
+    const delivered = service.describeOrder(order.id).licenses;
+    const partial = notification(order.id, { refund_fee: '23.45', gmt_refund: '2026-09-28 09:00:00' });
+    for (let attempt = 0; attempt < 2; attempt++) expect(await (await post(partial)).text()).toBe('success');
+    expect(service.describeOrder(order.id).state).toBe('fulfilled');
+    expect(events()).toEqual([{ kind: 'refund', trade_status: 'TRADE_SUCCESS', refund_fen: 2345 }]);
+    expect(await (await post(notification(order.id, { trade_status: 'TRADE_CLOSED', refund_fee: '123.45' }))).text()).toBe('success');
+    const refunded = service.describeOrder(order.id);
+    expect(refunded.state).toBe('refunded');
+    expect(refunded.licenses).toEqual(delivered); expect(refunded.licenses.every(license => !license.revoked)).toBe(true);
+    const access = service.issueDeliveryAccess(order.id, { reason: '退款后领取' });
+    expect(service.readDelivery(order.id, access.token)).toMatchObject({ state: 'fulfilled', licenses: delivered.map(license => ({ id: license.id, code: license.code, revoked: false })) });
+    expect(logs).not.toHaveBeenCalled();
+    const tampered = notification(order.id, { trade_status: 'TRADE_CLOSED', refund_fee: '123.45' }); tampered.set('refund_fee', '1.00');
+    expect((await post(tampered)).status).toBe(401);
+    expect((await post(notification(order.id, { trade_status: 'TRADE_CLOSED', total_amount: '1.00', refund_fee: '1.00' }))).status).toBe(409);
+    expect(events()).toHaveLength(2);
+    const lines = logs.mock.calls.map(call => JSON.parse(String(call[0])) as unknown);
+    expect(lines).toEqual([
+      expect.objectContaining({ error: 'PAYMENT_NOTIFICATION_REJECTED', channel: 'alipay', code: 'INVALID_PAYMENT_SIGNATURE' }),
+      expect.objectContaining({ error: 'PAYMENT_NOTIFICATION_REJECTED', channel: 'alipay', code: 'AMOUNT_MISMATCH', orderId: order.id })
+    ]);
+    expect(lines[0]).not.toHaveProperty('orderId');
+    expect(JSON.stringify(logs.mock.calls)).not.toMatch(/团播|sign|202609282200000000000001/);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+it('付款期限过后验签的 TRADE_CLOSED 通知关闭未收款订单；期限内只记事件，已收款订单不被关闭', () => {
+  let now = Date.parse('2026-09-28T00:00:00Z');
+  const service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => now);
+  services.push(service);
+  const { details } = setup(); const order = service.createOrder(details);
+  service.prepareAlipayPayment(order.id, appId, sellerId);
+  const closed = verify(notification(order.id, { trade_status: 'TRADE_CLOSED' }));
+  service.alipayNotification(closed);
+  expect(service.describeOrder(order.id).state).toBe('pending');
+  now += 15 * 60000;
+  service.alipayNotification(verify(notification(order.id, { trade_status: 'TRADE_CLOSED', trade_no: '202609282200000000000009' })));
+  expect(service.describeOrder(order.id).state).toBe('closed');
+  // 关单后若仍收到验签成功的付款，保留收款事实并照常交付。
+  service.alipayNotification(verify(notification(order.id, { trade_no: '202609282200000000000009' })));
+  expect(service.describeOrder(order.id)).toMatchObject({ state: 'fulfilled', licenses: [expect.anything(), expect.anything()] });
+  const paid = service.createOrder({ ...details, reference: 'paid-before-close' });
+  service.prepareAlipayPayment(paid.id, appId, sellerId);
+  service.alipayNotification(verify(notification(paid.id, { trade_no: '202609282200000000000010' })));
+  now += 15 * 60000;
+  service.alipayNotification(verify(notification(paid.id, { trade_status: 'TRADE_CLOSED', trade_no: '202609282200000000000010' })));
+  expect(service.describeOrder(paid.id).state).toBe('fulfilled');
+});
+
+it('旧版“有收款但仍为 pending”的订单不回填，收到渠道事件或补交付时收敛为 paid 并照常交付', async () => {
+  const path = join(await mkdtemp(join(tmpdir(), 'tblink-legacy-')), 'license.db');
+  const service = new LicensingService(path, issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => Date.parse('2026-09-28T00:00:00Z'));
+  services.push(service);
+  const { details } = setup(); const order = service.createOrder(details);
+  service.prepareAlipayPayment(order.id, appId, sellerId);
+  const db = new DatabaseSync(path);
+  try { db.prepare("INSERT INTO payment_receipts VALUES (?, 'alipay:202609282200000000000001', 12345, 'alipay', ?, ?, '2026-09-28T00:00:00.000Z', 'INTERNAL_ERROR')").run(order.id, appId, sellerId); }
+  finally { db.close(); }
+  expect(service.describeOrder(order.id).state).toBe('pending');
+  expect(service.paymentExceptions(0).items.map(item => item.orderId)).toEqual([order.id]);
+  service.alipayNotification(verify(notification(order.id, { refund_fee: '0.45' })));
+  expect(service.describeOrder(order.id).state).toBe('paid');
+  expect(service.retryDelivery(order.id, { reason: '旧数据补交付' })).toMatchObject({ state: 'fulfilled', licenses: [expect.anything(), expect.anything()] });
 });
