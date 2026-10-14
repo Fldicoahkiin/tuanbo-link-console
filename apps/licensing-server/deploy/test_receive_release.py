@@ -41,6 +41,14 @@ def payload(change=None, extra=None, link=None):
     return data.getvalue(), manifest, files
 
 
+def keep(names):
+    """Upload only these artifacts while the manifest still lists every digest."""
+    def change(manifest, files):
+        for name in set(files) - names:
+            del files[name]
+    return change
+
+
 class ReceiverTest(unittest.TestCase):
     def test_receive_stream_and_timeout_preserve_boundary(self):
         data, manifest, _ = payload()
@@ -70,6 +78,97 @@ class ReceiverTest(unittest.TestCase):
                 module.receive(InterruptedUpload())
             self.assertFalse((Path(folder) / 'jobs').exists())
             self.assertEqual(signal.getsignal(signal.SIGALRM), previous_handler)
+
+    def production(self, folder, files):
+        root = Path(folder)
+        paths = {'WEBSITE': root / 'website', 'CONSOLE': root / 'console', 'BUNDLE': root / 'opt/index.js',
+                 'CONSOLE_BOOTSTRAP': root / 'opt/console-bootstrap.js', 'ROOT': root / 'deploy'}
+        paths['ROOT'].mkdir()
+        with patch.multiple(module, **paths):
+            for name, value in files.items():
+                if name == 'manifest.json':
+                    continue
+                module.installed(name).parent.mkdir(parents=True, exist_ok=True)
+                module.installed(name).write_bytes(value)
+        return paths
+
+    def test_plan_lists_only_artifacts_missing_from_production(self):
+        _, manifest, files = payload()
+        changed = {'web/index.html', 'dist/index.js'}
+        with TemporaryDirectory() as folder:
+            # Production lacks console/console.js entirely and holds older copies of the changed files.
+            paths = self.production(folder, {name: value for name, value in files.items() if name not in changed | {'console/console.js'}})
+            with patch.multiple(module, **paths):
+                (module.WEBSITE / 'index.html').write_bytes(b'old page')
+                module.BUNDLE.write_bytes(b'old bundle')
+                plan_request = payload(change=keep(set()))[0]
+                with patch.object(module, 'check_source') as check, patch.object(module.subprocess, 'run', side_effect=AssertionError('no job')):
+                    plan = module.receive(io.BytesIO(plan_request))
+                check.assert_called_once()
+                self.assertEqual(plan, {'status': 'plan', 'upload': sorted(changed | {'console/console.js'})})
+                self.assertFalse((module.ROOT / 'jobs').exists())
+
+    def test_plan_rejects_unreviewed_toolchain_before_upload(self):
+        plan_request = payload(change=keep(set()))[0]
+        with TemporaryDirectory() as folder, patch.object(module, 'ROOT', Path(folder)), \
+                patch.object(module, 'check_source', side_effect=RuntimeError('Deployment tools or proxy require an operator-reviewed update')):
+            with self.assertRaisesRegex(RuntimeError, 'operator-reviewed'):
+                module.receive(io.BytesIO(plan_request))
+            self.assertFalse((Path(folder) / 'jobs').exists())
+
+    def test_partial_upload_reuses_verified_production_copies(self):
+        _, manifest, files = payload()
+        uploaded = {'web/index.html', 'console/console.js'}
+        partial = payload(change=keep(uploaded))[0]
+        with TemporaryDirectory() as folder:
+            paths = self.production(folder, {name: value for name, value in files.items() if name not in uploaded})
+            with patch.multiple(module, **paths):
+                def start_worker(command, **kwargs):
+                    job = module.ROOT / 'jobs' / command[-1]
+                    complete_manifest, complete = module.decode_archive((job / 'incoming.tar').read_bytes())
+                    self.assertEqual(complete_manifest, manifest)
+                    self.assertEqual(complete, {name: files[name] for name in module.ARTIFACTS})
+                    (job / 'result.json').write_text(json.dumps({'revision': manifest['revision']}))
+
+                with patch.object(module.subprocess, 'run', side_effect=start_worker) as worker:
+                    module.receive(io.BytesIO(partial))
+                worker.assert_called_once()
+
+    def test_ci_client_and_receiver_agree_on_delta_protocol(self):
+        ci_spec = importlib.util.spec_from_file_location('deploy_from_ci', HERE / 'deploy-from-ci.py')
+        ci = importlib.util.module_from_spec(ci_spec)
+        ci_spec.loader.exec_module(ci)
+        _, manifest, files = payload()
+        artifacts = {name: files[name] for name in module.ARTIFACTS}
+        with TemporaryDirectory() as folder:
+            paths = self.production(folder, {**artifacts, 'web/site.css': b'previous styles'})
+            uploads = []
+
+            def send(data, timeout):
+                uploads.append(len(data))
+                return module.receive(io.BytesIO(data))
+
+            def start_worker(command, **kwargs):
+                job = module.ROOT / 'jobs' / command[-1]
+                self.assertEqual(module.decode_archive((job / 'incoming.tar').read_bytes())[1], artifacts)
+                (job / 'result.json').write_text(json.dumps({'status': 'success'}))
+
+            with patch.multiple(module, **paths), patch.object(module, 'check_source'), \
+                    patch.object(module.subprocess, 'run', side_effect=start_worker):
+                self.assertEqual(ci.deliver(send, artifacts, manifest), {'status': 'success'})
+            self.assertEqual(len(uploads), 2)
+
+    def test_partial_upload_rejects_changed_production_copy(self):
+        _, _, files = payload()
+        partial = payload(change=keep({'web/index.html'}))[0]
+        with TemporaryDirectory() as folder:
+            paths = self.production(folder, files)
+            with patch.multiple(module, **paths):
+                module.BUNDLE.write_bytes(b'changed since the plan')
+                with patch.object(module.subprocess, 'run', side_effect=AssertionError('no job')), \
+                        self.assertRaisesRegex(RuntimeError, 'dist/index.js was not uploaded and differs from production'):
+                    module.receive(io.BytesIO(partial))
+                self.assertFalse((module.ROOT / 'jobs').exists())
 
     def test_verified_archive_and_known_files_only(self):
         data, expected, files = payload()

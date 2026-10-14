@@ -16,6 +16,32 @@ STATIC = ['index.html', 'purchase.js', 'purchase.css', 'assets/studio.webp',
 STATIC += ["site.js","site.css","download/index.html","guide/index.html","purchase/index.html","terms/index.html","refund/index.html","privacy/index.html","media.json","release.json","robots.txt","sitemap.xml","website-manifest.json","assets/20261010-programs.webp","assets/20261010-timeline.webp","assets/20261010-cameras.webp","assets/20261010-lighting.webp","assets/20261010-connections.webp","assets/20261010-rehearsal.webp","media/20261010-programs.mp4","media/20261010-timeline.mp4","media/20261010-cameras.mp4","media/20261010-lighting.mp4","media/20261010-overview.mp4","media/20261010-overview.vtt"]
 
 
+def pack(files):
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode='w') as archive:
+        for name, value in sorted(files.items()):
+            member = tarfile.TarInfo(name)
+            member.size = len(value)
+            member.mode = 0o644
+            archive.addfile(member, io.BytesIO(value))
+    return data.getvalue()
+
+
+def deliver(send, files, manifest):
+    """Ask the receiver which artifacts production lacks, then upload only those."""
+    encoded = json.dumps(manifest).encode()
+    plan = send(pack({'manifest.json': encoded}), 120)
+    upload = plan.get('upload') if plan.get('status') == 'plan' else None
+    if not isinstance(upload, list) or not set(upload) <= set(files):
+        raise RuntimeError('Server returned an invalid upload plan')
+    if not upload:
+        return None
+    payload = pack({**{name: files[name] for name in upload}, 'manifest.json': encoded})
+    print(f'Uploading {len(upload)} of {len(files)} artifacts ({len(payload)} bytes)', flush=True)
+    # Upload window plus the server's activation wait.
+    return send(payload, 2460)
+
+
 def write_ssh_file(path, value):
     # Secret input can lose the final newline required by OpenSSH private keys.
     path.write_text(value.rstrip('\r\n') + '\n')
@@ -41,14 +67,6 @@ def main():
                 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
                 'tools': {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
                           for name in ['activate-release.py', 'publish-website.py', 'publish-console.py', 'receive-release.py']}}
-    files['manifest.json'] = json.dumps(manifest).encode()
-    data = io.BytesIO()
-    with tarfile.open(fileobj=data, mode='w') as archive:
-        for name, value in sorted(files.items()):
-            member = tarfile.TarInfo(name)
-            member.size = len(value)
-            member.mode = 0o644
-            archive.addfile(member, io.BytesIO(value))
     # Never put deployment credentials into the checkout or forward them to SSH's environment.
     directory = Path(tempfile.mkdtemp(prefix='tblink-ci-deploy-'))
     os.chmod(directory, 0o700)
@@ -57,17 +75,24 @@ def main():
     try:
         write_ssh_file(key, os.environ.pop('TBLINK_DEPLOY_SSH_KEY'))
         write_ssh_file(known_hosts, os.environ.pop('TBLINK_DEPLOY_KNOWN_HOSTS'))
-        deployed = subprocess.run(['ssh', '-F', '/dev/null', '-T', '-i', str(key),
-                                  '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
-                                  '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + str(known_hosts),
-                                  '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15',
-                                  '-o', 'ServerAliveCountMax=3', 'tblink-deploy@123.206.229.200'],
-                                 input=data.getvalue(), capture_output=True, timeout=1560)
+        def send(payload, timeout):
+            deployed = subprocess.run(['ssh', '-F', '/dev/null', '-T', '-i', str(key),
+                                      '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
+                                      '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + str(known_hosts),
+                                      '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15',
+                                      '-o', 'ServerAliveCountMax=3', 'tblink-deploy@123.206.229.200'],
+                                     input=payload, capture_output=True, timeout=timeout)
+            if deployed.returncode:
+                raise RuntimeError('Restricted deployment failed; inspect its root-only server job record. ' + deployed.stderr.decode(errors='replace')[-2000:])
+            return json.loads(deployed.stdout)
+
+        result = deliver(send, files, manifest)
     finally:
         key.write_bytes(b'')
-    if deployed.returncode:
-        raise RuntimeError('Restricted deployment failed; inspect its root-only server job record. ' + deployed.stderr.decode(errors='replace')[-2000:])
-    result = json.loads(deployed.stdout)
+    if result is None:
+        with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+            summary.write('\nProduction already matches every artifact of `' + revision + '`; nothing was uploaded.\n')
+        return
     if result.get('status') != 'success' or result.get('revision') != revision or result.get('files') != manifest['files']:
         raise RuntimeError('Server receipt does not match the uploaded build')
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:

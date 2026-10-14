@@ -20,6 +20,7 @@ POLICY = Path('/etc/tblink-deploy/policy.json')
 NGINX = Path('/etc/nginx/sites-available/tblink-licensing.conf')
 CONSOLE_NGINX = Path('/etc/nginx/sites-available/tblink-console.conf')
 BUNDLE = Path('/opt/tblink-licensing/dist/index.js')
+CONSOLE_BOOTSTRAP = Path('/opt/tblink-licensing/dist/console-bootstrap.js')
 ENVIRONMENT = Path('/etc/tblink-licensing/service.env')
 WEBSITE = Path('/srv/tblink-purchase')
 CONSOLE = Path('/srv/tblink-console')
@@ -36,19 +37,33 @@ STATIC |= {'site.js', 'site.css', 'download/index.html', 'guide/index.html', 'pu
 CONSOLE_FILES = {'index.html', 'console.js', 'console.css', 'manifest.json'}
 ARTIFACTS = {'dist/index.js', 'dist/console-bootstrap.js'} | {'web/' + name for name in STATIC} | {'console/' + name for name in CONSOLE_FILES}
 MAX_ARCHIVE = 128 * 1024 * 1024
+# Cross-border uploads from CI runners measure about 15 KB/s.
+UPLOAD_SECONDS = 900
 
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def decode_archive(data):
+def installed(name):
+    """Production copy of an artifact; unchanged artifacts are reused instead of uploaded again."""
+    if name == 'dist/index.js':
+        return BUNDLE
+    if name == 'dist/console-bootstrap.js':
+        return CONSOLE_BOOTSTRAP
+    folder, _, path = name.partition('/')
+    return (WEBSITE if folder == 'web' else CONSOLE) / path
+
+
+def read_archive(data):
+    """Validate a manifest plus any subset of artifacts."""
     if len(data) > MAX_ARCHIVE:
         raise RuntimeError('Deployment archive exceeds limit')
     files = {}
     with tarfile.open(fileobj=io.BytesIO(data), mode='r:') as archive:
         members = archive.getmembers()
-        if len(members) != len(ARTIFACTS) + 1 or {m.name for m in members} != ARTIFACTS | {'manifest.json'}:
+        names = {m.name for m in members}
+        if len(members) != len(names) or 'manifest.json' not in names or not names <= ARTIFACTS | {'manifest.json'}:
             raise RuntimeError('Unexpected deployment files')
         for member in members:
             limit = 40_000_000 if member.name.endswith('.mp4') else 2_000_000
@@ -73,11 +88,30 @@ def decode_archive(data):
     return manifest, files
 
 
+def decode_archive(data):
+    manifest, files = read_archive(data)
+    if set(files) != ARTIFACTS:
+        raise RuntimeError('Unexpected deployment files')
+    return manifest, files
+
+
 def verify_policy(manifest, policy, tool_digests, nginx_digest, console_nginx_digest, previous):
     if tool_digests != manifest['tools'] or policy['nginxSha256'] != nginx_digest or policy['consoleNginxSha256'] != console_nginx_digest:
         raise RuntimeError('Deployment tools or proxy require an operator-reviewed update')
     if previous and (manifest['runId'], manifest['attempt']) <= (previous['runId'], previous['attempt']):
         raise RuntimeError('Deployment run already completed or superseded')
+
+
+def check_source(manifest):
+    previous_path = ROOT / 'last-success.json'
+    previous = json.loads(previous_path.read_text()) if previous_path.exists() else None
+    verify_policy(manifest, json.loads(POLICY.read_text()), {name: digest(path) for name, path in TOOLS.items()},
+                  digest(NGINX), digest(CONSOLE_NGINX), previous)
+
+
+def matches_installed(name, manifest):
+    path = installed(name)
+    return path.is_file() and digest(path) == manifest['files'][name]
 
 
 def make_archive(path, files):
@@ -167,7 +201,7 @@ def receive(stream):
         raise TimeoutError(f'Deployment upload timed out after receiving {received} bytes')
 
     previous_handler = signal.signal(signal.SIGALRM, upload_timeout)
-    signal.alarm(300)
+    signal.alarm(UPLOAD_SECONDS)
     try:
         while received <= MAX_ARCHIVE:
             chunk = stream.read1(min(65536, MAX_ARCHIVE + 1 - received))
@@ -180,11 +214,25 @@ def receive(stream):
         signal.signal(signal.SIGALRM, previous_handler)
     data = b''.join(chunks)
     print(f'Received {received} deployment bytes in {time.monotonic() - started:.1f}s', file=sys.stderr)
-    manifest, _ = decode_archive(data)
+    manifest, files = read_archive(data)
+    if not files:
+        # A manifest alone asks which artifacts production lacks; reject an unreviewed toolchain before any upload.
+        check_source(manifest)
+        return {'status': 'plan', 'upload': sorted(name for name in ARTIFACTS if not matches_installed(name, manifest))}
+    missing = sorted(ARTIFACTS - set(files))
+    for name in missing:
+        path = installed(name)
+        value = path.read_bytes() if path.is_file() else b''
+        if hashlib.sha256(value).hexdigest() != manifest['files'][name]:
+            raise RuntimeError(f'{name} was not uploaded and differs from production')
+        files[name] = value
     job_id = uuid.uuid4().hex
     job = ROOT / 'jobs' / job_id
     job.mkdir(mode=0o700, parents=True)
-    (job / 'incoming.tar').write_bytes(data)
+    if missing:
+        make_archive(job / 'incoming.tar', {**files, 'manifest.json': json.dumps(manifest).encode()})
+    else:
+        (job / 'incoming.tar').write_bytes(data)
     write_json(job / 'request.json', {key: manifest[key] for key in ['revision', 'runId', 'attempt', 'repository']})
     subprocess.run(['systemd-run', '--quiet', '--collect', '--wait', '--service-type=exec',
                     '--unit=tblink-deploy-' + job_id, '/usr/bin/python3', str(TOOLS['receive-release.py']),
