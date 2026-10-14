@@ -10,7 +10,7 @@ export const automaticMusicRequestSchema = musicAnalysisRequestSchema.extend({ d
 export type AutomaticMusicRequest = z.infer<typeof automaticMusicRequestSchema>;
 export const audioRenderRequestSchema = audioAnalysisRequestSchema.extend({ segments: z.array(audioSegmentSchema).min(1).max(10_000), tracks: audioTracksSchema.optional() });
 
-export const linkExternalApplicationIdSchema = z.enum(['obs', 'p1']);
+export const linkExternalApplicationIdSchema = z.enum(['obs', 'p1', 'ma2', 'ma3d']);
 
 export const linkProjectNameSchema = z.string().trim().min(1, '工程名称不能为空');
 export const linkFilePathSchema = z.string().min(1, '文件路径不能为空');

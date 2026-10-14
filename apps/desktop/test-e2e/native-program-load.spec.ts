@@ -7,6 +7,8 @@ import { z } from 'zod';
 import { parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
 
+type MainLoopProbe = { timer: ReturnType<typeof setInterval>; last: number; maximumMs: number; stalls: { at: string; gapMs: number }[] };
+
 test('高负载正式按钮与真实 OBS 连续节目', async ({}, info) => {
   test.skip(process.env.TBLINK_VERIFY_LOAD_UI !== '1' || !process.env.TBLINK_TEST_OBS_URL || !process.env.TBLINK_STABILITY_FIXTURE,
     '需隔离 OBS 和高负载工程；不连接用户正式 OBS');
@@ -52,6 +54,17 @@ test('高负载正式按钮与真实 OBS 连续节目', async ({}, info) => {
     }
   });
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
+  await app.evaluate(() => {
+    const probe: MainLoopProbe = { timer: setInterval(() => {
+      const now = performance.now(), gapMs = now - probe.last;
+      probe.last = now; probe.maximumMs = Math.max(probe.maximumMs, gapMs);
+      if (gapMs >= 50) {
+        probe.stalls.push({ at: new Date().toISOString(), gapMs });
+        if (probe.stalls.length > 200) probe.stalls.shift();
+      }
+    }, 10), last: performance.now(), maximumMs: 0, stalls: [] };
+    (globalThis as typeof globalThis & { tblinkLoadProbe: MainLoopProbe }).tblinkLoadProbe = probe;
+  });
   const page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message));
   let passed = false, failure: string | null = null;
   let initialRender: { skipped: number; total: number } | null = null;
@@ -77,6 +90,10 @@ test('高负载正式按钮与真实 OBS 连续节目', async ({}, info) => {
     await writeFile(info.outputPath('initial-preload.json'), JSON.stringify({ elapsedMs: performance.now() - preloadingAt, itemId: project.rundown[0]!.id }));
     await page.locator('.player-transport .primary-button').click();
     await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    await app.evaluate(() => {
+      const probe = (globalThis as typeof globalThis & { tblinkLoadProbe: MainLoopProbe }).tblinkLoadProbe;
+      probe.last = performance.now(); probe.maximumMs = 0; probe.stalls.length = 0;
+    });
     const started = performance.now(), initial = await obs.call('GetStats');
     initialRender = { skipped: initial.renderSkippedFrames, total: initial.renderTotalFrames };
     for (let index = 0; performance.now() - started < seconds * 1000; index++) {
@@ -106,6 +123,12 @@ test('高负载正式按钮与真实 OBS 连续节目', async ({}, info) => {
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error); throw error;
   } finally {
+    const mainLoop = await app.evaluate(() => {
+      const probe = (globalThis as typeof globalThis & { tblinkLoadProbe: MainLoopProbe }).tblinkLoadProbe;
+      clearInterval(probe.timer);
+      return { maximumMs: probe.maximumMs, stalls: probe.stalls };
+    });
+    await writeFile(info.outputPath('main-loop.json'), JSON.stringify(mainLoop, null, 2));
     const logs = await page.evaluate(() => window.tbLink.queryLogs({ limit: 1000 }));
     await writeFile(info.outputPath('logs.json'), JSON.stringify(logs, null, 2));
     await writeFile(info.outputPath('evidence.json'), JSON.stringify({ passed, failure, seconds,

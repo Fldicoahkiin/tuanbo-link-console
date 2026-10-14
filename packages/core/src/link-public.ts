@@ -59,3 +59,4 @@ export { automaticMusicCandidates, applyAutomaticMusicCandidates, removeAutomati
 export { musicBeatSegments, saveMusicBeatSegments, musicBeatPrefix, detectedBeatsPerBar, type MusicBeatInterval } from './music-beat-segments';
 
 export { recognizeMusicStructure, matchingMusicStructure, musicStructureSegments, acceptMusicStructure, editMusicStructure } from './music-structure';
+export { setAutomaticMusicAnalysisCommand } from './music-analysis-command';

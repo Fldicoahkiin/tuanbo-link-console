@@ -8,8 +8,27 @@ import type { NativePlayerPrepare, NativePlayerStatus } from '@tb/schema';
 import { NativeAudioCache } from './native-audio-cache';
 import { NativePlayerService } from './native-player-service';
 import type { DecodeResult } from './native-audio-decode';
+import { probeWindowsMidi } from './windows-midi-health';
 
 const windowsTest = it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1');
+
+windowsTest('系统 MIDI 故障时明确只播音频，真实 WASAPI 可播放定位并正常退出', async () => {
+  const { options, request, failures } = await fixture();
+  const checkDeviceHealth = vi.fn<() => Promise<void>>().mockRejectedValue(new Error('MIDI 服务故障'));
+  const player = new NativePlayerService({ ...options, checkDeviceHealth });
+  try {
+    const devices = await player.devices('audio');
+    expect(devices.audio.some(device => device.isDefault)).toBe(true);
+    expect(devices.midiOutputs).toEqual([]);
+    await player.prepare(request);
+    await player.control({ version: 1, sessionId: request.sessionId, generation: 2, kind: 'play' });
+    await expect.poll(() => player.status?.positionMs).toBeGreaterThan(1050);
+    await player.control({ version: 1, sessionId: request.sessionId, generation: 3, kind: 'seek', positionMs: 1500 });
+    expect(player.status).toMatchObject({ status: 'paused', positionMs: 1500, mtcPortName: null, underruns: 0 });
+    await player.control({ version: 1, sessionId: request.sessionId, generation: 4, kind: 'stop' });
+    expect(checkDeviceHealth).not.toHaveBeenCalled(); expect(failures).toEqual([]);
+  } finally { await player.close(); }
+}, 10000);
 
 windowsTest('真实 WASAPI 播放期间预填充下一首，曲尾接管不再解码且保留下一首原始时间码', async () => {
   const { options, request, failures } = await fixture(), measured = vi.fn();
@@ -68,6 +87,7 @@ async function fixture() {
       startMs: 500, endMs: 2600, positionMs: 900, offsetMs: 480000, sampleRate: 48000, frameRate: 30, volume: 0 } };
   const failures: string[] = [], states: NativePlayerStatus[] = [];
   const options = { executable: resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tools/playback-engine/bin/tblink-playback.exe'),
+    checkDeviceHealth: async () => { expect(await probeWindowsMidi(resolve('tools/midi-probe/bin/tblink-midi-probe.exe'))).toBe('ready'); },
     cache, resolveAudio: () => path, error: (message: string) => { failures.push(message); },
     changed: (state: NativePlayerStatus) => { states.push(state); } };
   return { options, request, failures, states };

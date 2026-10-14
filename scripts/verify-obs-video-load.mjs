@@ -14,18 +14,20 @@ import { closeOwnedObsTest } from './close-owned-obs-test.mjs';
 const [installation, fixture, durationText = '1800'] = process.argv.slice(2);
 const seconds = Number(durationText);
 const hardwareStreams = Number(process.env.TBLINK_OBS_HARDWARE_STREAMS ?? 4);
+const cacheMode = process.env.TBLINK_OBS_DIAGNOSTIC_CACHE ?? 'original';
+assert(['original', 'hardware', 'software'].includes(cacheMode));
 if (!Number.isInteger(hardwareStreams) || hardwareStreams < 0 || hardwareStreams > 4) throw new Error('硬件解码路数必须为 0..4，其余视频仍以原分辨率软件解码');
 if (process.platform !== 'win32' || !installation || !fixture || !Number.isInteger(seconds) || seconds < 30 || seconds > 21600) throw new Error('用法：node scripts/verify-obs-video-load.mjs <OBS 目录> <合成 tblink> <30..21600 秒>');
 const projectFile = resolve(fixture), project = JSON.parse(await readFile(projectFile, 'utf8'));
 assert.equal(project.rundown.length, 200); assert.equal(project.mediaAssets.length, 2000);
 const assets = project.mediaAssets.slice(0, 8);
 assert.equal(assets.filter(asset => asset.kind === 'video').length, 4);
-const root = resolve('artifacts'); await mkdir(root, { recursive: true });
+const root = resolve(process.env.TBLINK_ACCEPTANCE_DIRECTORY ?? 'artifacts'); await mkdir(root, { recursive: true });
 const directory = await mkdtemp(join(root, 'obs-video-load-')), obsDirectory = join(directory, 'obs');
 for (const name of ['bin', 'data', 'obs-plugins']) await cp(join(resolve(installation), name), join(obsDirectory, name), { recursive: true });
 const config = join(obsDirectory, 'config/obs-studio');
 for (const name of ['basic/profiles/Load', 'basic/scenes', 'plugin_config/obs-websocket']) await mkdir(join(config, name), { recursive: true });
-const global = '[General]\nFirstRun=false\nPre19Defaults=false\nLastVersion=537001986\nEnableAutoUpdates=false\n[Basic]\nProfile=Load\nProfileDir=Load\nSceneCollection=Load\nSceneCollectionFile=Load\n';
+const global = '[General]\nFirstRun=false\nLastVersion=537001986\nEnableAutoUpdates=false\n[Basic]\nProfile=Load\nProfileDir=Load\nSceneCollection=Load\nSceneCollectionFile=Load\nConfigOnNewProfile=false\n';
 await writeFile(join(config, 'global.ini'), global);
 await writeFile(join(config, 'user.ini'), global + '[BasicWindow]\nPreviewEnabled=true\nSysTrayEnabled=false\n');
 await writeFile(join(config, 'basic/profiles/Load/basic.ini'), '[General]\nName=Load\n[Video]\nBaseCX=2160\nBaseCY=3840\nOutputCX=2160\nOutputCY=3840\nFPSType=0\nFPSCommon=60\n[Audio]\nSampleRate=48000\nChannelSetup=Stereo\n[Output]\nMode=Simple\n');
@@ -43,7 +45,7 @@ const identity = { ...JSON.parse(launched.stdout.replace(/^\uFEFF/, '')), execut
 await writeFile(join(directory, 'owned-process.json'), JSON.stringify(identity));
 console.log(JSON.stringify({ event: 'started', directory, identityFile: join(directory, 'owned-process.json') }));
 const socket = new OBSWebSocket(), failures = [], hashes = new Set();
-const report = { passed: false, seconds, hardwareDecodeStreams: hardwareStreams, softwareDecodeStreams: 4 - hardwareStreams, applicationAcceptance: false, hardwareAcceptance: false,
+const report = { passed: false, seconds, cacheMode, hardwareDecodeStreams: hardwareStreams, softwareDecodeStreams: 4 - hardwareStreams, applicationAcceptance: false, hardwareAcceptance: false,
   scope: 'Isolated OBS render/decoder baseline; 16 synthetic scenes reuse 4 video + 4 image inputs. No application event scheduler, cameras, physical output or six-hour approval.',
   maximumFrameStallMeasured: false, assets, failures, samples: 0, switches: 0 };
 const trace = createWriteStream(join(directory, 'samples.ndjson'));
@@ -74,8 +76,14 @@ try {
   assert.equal((await call('GetStreamStatus')).outputActive, false); assert.equal((await call('GetRecordStatus')).outputActive, false);
   for (const sceneName of scenes.slice(1)) await call('CreateScene', { sceneName });
   for (const [index, asset] of assets.entries()) {
-    const inputName = `TBLINK 压力素材 ${index + 1}`, path = resolve(dirname(projectFile), asset.relativePath);
+    const inputName = `TBLINK 压力素材 ${index + 1}`, path = asset.kind === 'video' && cacheMode !== 'original'
+      ? resolve(dirname(projectFile), 'cache/obs-seek-jpeg2000', `${asset.sha256}.${cacheMode === 'hardware' ? 'seek-intra' : 'seek-ready'}.mkv`)
+      : resolve(dirname(projectFile), asset.relativePath);
     assert(path.startsWith(dirname(projectFile) + '\\'), '素材路径必须处于独立验收工程中');
+    if (asset.kind === 'video' && cacheMode !== 'original') {
+      const expected = (await readFile(`${path}.sha256`, 'utf8')).trim();
+      assert.equal(createHash('sha256').update(await readFile(path)).digest('hex'), expected, '定位缓存完整性必须通过');
+    }
     await call('CreateInput', { sceneName: scenes[0], inputName, inputKind: asset.kind === 'video' ? 'ffmpeg_source' : 'image_source',
       inputSettings: asset.kind === 'video' ? { local_file: path, is_local_file: true, looping: true, hw_decode: index < hardwareStreams, close_when_inactive: false, restart_on_activate: false, clear_on_media_end: false } : { file: path, unload: false }, sceneItemEnabled: true });
     if (asset.kind === 'video') await call('SetInputMute', { inputName, inputMuted: true });

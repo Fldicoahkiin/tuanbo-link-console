@@ -24,23 +24,29 @@ function run(args) {
 }
 const service = new MediaPreviewService(new LinkProjectService(), undefined, () => ffmpeg);
 const rows = [];
-for (const format of ['yuv420p', 'yuv420p10le', 'bgra']) {
+for (const format of ['yuv420p', 'yuv422p', 'yuv444p', 'gbrp', 'gbrap', 'yuv420p10le', 'bgra']) {
   const source = join(directory, `${format}.mkv`);
-  const filters = format === 'bgra' ? 'testsrc=size=128x96:rate=10:duration=1,format=rgba,colorchannelmixer=aa=0.25,format=bgra'
+  const hasAlpha = format === 'bgra' || format === 'gbrap';
+  const filters = hasAlpha ? `testsrc=size=128x96:rate=10:duration=1,format=rgba,colorchannelmixer=aa=0.25,format=${format}`
     : `testsrc2=size=128x96:rate=10:duration=1,format=${format}`;
   await run(['-n', '-f', 'lavfi', '-i', filters, '-c:v', 'ffv1', '-level', '3', '-g', '1', '-threads', '2', source]);
   const sha256 = createHash('sha256').update(await readFile(source)).digest('hex');
   const cache = await service.ensureObsSeekVideo(join(directory, 'acceptance.tblink'), `${format}.mkv`, sha256);
   const decoded = file => run(['-i', file, '-map', '0:v:0', '-pix_fmt', format, '-f', 'framemd5', '-']);
   const original = await decoded(source), cached = await decoded(cache);
-  assert.deepEqual(cached.split('\n').filter(line => line && !line.startsWith('#')), original.split('\n').filter(line => line && !line.startsWith('#')));
-  if (format === 'bgra') {
+  const sourceFrames = original.split('\n').filter(line => line && !line.startsWith('#'));
+  const cacheFrames = cached.split('\n').filter(line => line && !line.startsWith('#'));
+  assert.equal(cacheFrames.length, sourceFrames.length + 32);
+  assert.deepEqual(cacheFrames.slice(0, sourceFrames.length), sourceFrames, '原素材范围内像素及时间戳必须逐帧相同');
+  const lastHash = sourceFrames.at(-1).split(',').at(-1).trim();
+  assert(cacheFrames.slice(sourceFrames.length).every(line => line.split(',').at(-1).trim() === lastHash), '范围外的解码保护帧只能保持最后画面');
+  if (hasAlpha) {
     const alpha = await run(['-i', cache, '-vf', 'alphaextract', '-f', 'framemd5', '-']);
     assert(alpha.includes(',  '), 'alpha plane must decode');
-    await writeFile(join(directory, 'alpha.framemd5'), alpha);
+    await writeFile(join(directory, `${format}-alpha.framemd5`), alpha);
   }
   await writeFile(join(directory, `${format}.framemd5`), cached);
-  rows.push({ format, frames: cached.split('\n').filter(line => line && !line.startsWith('#')).length, cache, decodedFramesIdentical: true });
+  rows.push({ format, originalFrames: sourceFrames.length, guardFrames: 32, cacheFrames: cacheFrames.length, cache, originalPixelsAndTimestampsIdentical: true });
 }
 await writeFile(join(directory, 'report.json'), JSON.stringify({ passed: true, scope: 'real FFmpeg cache pixel/depth/alpha roundtrip; not OBS timing acceptance', rows }, null, 2));
 console.log(JSON.stringify({ directory, rows }, null, 2));

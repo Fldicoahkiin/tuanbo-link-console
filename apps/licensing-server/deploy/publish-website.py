@@ -105,14 +105,14 @@ def probe(path):
                '--resolve', f'{HOST}:443:127.0.0.1', f'https://{HOST}{path}').stdout
 
 
-def wait_for_page(expected):
-    # A successful reload command only signals the master; old workers can still answer briefly.
+def wait_for_page(expected, expected_manifest):
+    # Old workers see the new symlink too, so HTML alone cannot prove new routes are loaded.
     observed = None
     for attempt in range(10):
         try:
             page = probe('/')
             observed = hashlib.sha256(page.encode()).hexdigest()
-            if page == expected:
+            if page == expected and probe('/website-manifest.json') == expected_manifest:
                 return
         except subprocess.CalledProcessError:
             observed = 'request failed'
@@ -203,7 +203,7 @@ def main():
         atomic_text(NGINX, candidate)
         run('nginx', '-t')
         run('systemctl', 'reload', 'nginx')
-        wait_for_page((release / 'index.html').read_text())
+        wait_for_page((release / 'index.html').read_text(), (release / 'website-manifest.json').read_text())
         verify_live_files(release)
         if json.loads(probe('/v1/catalog')) != catalog:
             raise RuntimeError('Sales catalog changed during website release')

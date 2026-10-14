@@ -4,6 +4,8 @@ import { StringDecoder } from 'node:string_decoder';
 import { Ma2CommandQueue } from './ma2-command-queue';
 
 export type Ma2NetworkAddress = { host: string; port: number; monitorPort: number; localAddress?: string };
+export type Ma2ConnectedPeer = { localAddress: string; localPort: number; remoteAddress: string; remotePort: number };
+export type Ma2PeerValidator = (peers: readonly Ma2ConnectedPeer[]) => Promise<void>;
 export type Ma2TelnetState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
 type Stream = { socket: Socket; decoder: StringDecoder; buffer: string; negotiation: 'data' | 'iac' | 'option' | 'sub' | 'sub-iac'; optionCommand: number };
 
@@ -21,7 +23,7 @@ export class Ma2Telnet {
   readTraffic(): Readonly<typeof this.traffic> { return { ...this.traffic }; }
   private queuedCommands = 0;
   private connectionEpoch = 0;
-  constructor(private readonly address: Ma2NetworkAddress, private readonly onState: (state: Ma2TelnetState) => void = () => undefined, private readonly timeoutMs = 5000) {
+  constructor(private readonly address: Ma2NetworkAddress, private readonly onState: (state: Ma2TelnetState) => void = () => undefined, private readonly timeoutMs = 5000, private readonly validatePeers?: Ma2PeerValidator) {
     if (!isIP(address.host) || [address.port, address.monitorPort].some((port) => !Number.isInteger(port) || port < 1 || port > 65535) || address.port === address.monitorPort) throw new Error('请填写有效的控台 IP 地址和端口');
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new Error('MA2 连接超时设置无效');
     if (address.localAddress !== undefined && (isIP(address.localAddress) !== 4 || address.localAddress === '0.0.0.0')) throw new Error('电脑连接地址无效，请重新检查网卡');
@@ -55,6 +57,14 @@ export class Ma2Telnet {
         }).join('；');
         return `MA2 连接超时：${ports}。${this.streams.some(stream => stream.socket.connecting) ? '请核对电脑与控台 IP、子网掩码、网卡路由及这两个端口的防火墙放行。' : '端口已通，但未收到 MA2 远程提示，请核对远程登录服务和端口。'} MIDI 线不提供这条网络连接。`;
       });
+      // Validate accepted connections, not listening sockets: Windows can report
+      // MA 3D as listener even when onPC accepted this particular connection.
+      const epoch = this.connectionEpoch;
+      if (this.validatePeers) await this.validatePeers(this.streams.map(({ socket }) => {
+        if (!socket.localAddress || !socket.localPort || !socket.remoteAddress || !socket.remotePort) throw new Error('MA2 通信通道已关闭，请重新连接');
+        return { localAddress: socket.localAddress, localPort: socket.localPort, remoteAddress: socket.remoteAddress, remotePort: socket.remotePort };
+      }));
+      if (epoch !== this.connectionEpoch || !this.socket) throw new Error('MA2 连接已改变，未发送登录或控台命令');
       this.setState('authenticating');
       await this.command(`Login "${username}" "${password}"`, (text) => /\[[^\r\n]*\]>/.test(text) ? 'prompt' : null);
       // The native banner says "guest" even before login: only an executed

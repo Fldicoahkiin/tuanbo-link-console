@@ -13,6 +13,7 @@ it('原生线路按端点 ID 区分同名设备，不拿浏览器设备 ID 猜�
   await assertAudioOutputAvailable({ audioEngine: 'native', audioOutputDeviceId: 'browser-a', nativeAudioOutputDeviceId: 'native-a', mtcOutputPortProfileId: null });
   await expect(assertAudioOutputAvailable({ audioEngine: 'native', audioOutputDeviceId: 'browser-a', nativeAudioOutputDeviceId: 'browser-a', mtcOutputPortProfileId: null })).rejects.toThrow('不可用');
   expect(mocks.browser).not.toHaveBeenCalled();
+  expect(mocks.native).toHaveBeenCalledWith('audio');
 });
 
 it('原生默认线路必须有明确默认端点，缺少时不切到其他设备', async () => {

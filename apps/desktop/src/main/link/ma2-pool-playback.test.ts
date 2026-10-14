@@ -1,6 +1,23 @@
 import { expect, it, vi } from 'vitest';
 import { ma2PlaybackCommand, playMa2Cue } from './ma2-pool-playback';
 
+it('停止缺失目标仍发送精确 Off 并等待关联回执，不被存在性检查阻止', async () => {
+  const guard = vi.fn();
+  const command = vi.fn((line: string, match: (response: string) => string | null, beforeSend?: () => void) => {
+    beforeSend?.();
+    expect(line).toContain("gma.cmd('Off Sequence 19')");
+    expect(line).not.toContain('getobj.handle');
+    const marker = /TBLINK_PLAY_[a-f0-9]{32}/.exec(line)?.[0];
+    return Promise.resolve(match(`${marker}:SENT\r\n`)!);
+  });
+  await playMa2Cue({ command }, { target: 'sequence', sequence: 19, action: 'off' }, guard, 'stop');
+  expect(guard).toHaveBeenCalledOnce();
+  await expect(playMa2Cue({ command: () => Promise.reject(new Error('连接中断')) },
+    { target: 'sequence', sequence: 19, action: 'off' }, guard, 'stop')).rejects.toThrow('连接中断');
+  await expect(playMa2Cue({ command: () => Promise.resolve('UNKNOWN') },
+    { target: 'sequence', sequence: 19, action: 'off' }, guard, 'stop')).rejects.toThrow('未确认');
+});
+
 it('序列池直接调用序列和小数 Cue，不制造执行器地址', () => {
   expect(ma2PlaybackCommand({ target: 'sequence', sequence: 36, action: 'go' })).toEqual({ command: 'Go Sequence 36', object: 'Sequence 36' });
   expect(ma2PlaybackCommand({ target: 'sequence', sequence: 36, action: 'off' })).toEqual({ command: 'Off Sequence 36', object: 'Sequence 36' });

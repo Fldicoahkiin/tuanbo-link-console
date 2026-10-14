@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { createEmptyLinkProject } from '@tb/schema';
 
+test.skip(true, '2026-10-13：正式版暂不提供美颜工作台，保留用例供功能恢复时验收');
+
 test('美颜工作台：离线参数、撤销、预设、持久化和窄窗口', async ({}, info) => {
   const file = info.outputPath('beauty.tblink');
   await writeFile(file, JSON.stringify(createEmptyLinkProject('美颜界面验收')));

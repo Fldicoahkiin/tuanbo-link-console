@@ -28,6 +28,8 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   const project = useDocumentStore(state => state.project);
   const obs = useIntegrationStore(state => state.obs);
   const p1 = useIntegrationStore(state => state.processes.p1);
+  const ma2Program = useIntegrationStore(state => state.processes.ma2);
+  const ma3dProgram = useIntegrationStore(state => state.processes.ma3d);
   const profile = useIntegrationStore(state => state.profile);
   const audioRoute = profile?.internalPlayer;
   const ports = useIntegrationStore(state => state.midiPorts);
@@ -78,13 +80,15 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
     return () => { alive = false; };
   }, [profile?.loopMidi?.autoStart]);
   const rows: Row[] = [
+    checked({ id: 'ma2-app', name: 'MA2 onPC 程序', value: ma2Program.status === 'running' ? '运行中' : '未运行', state: ma2Program.status === 'running' ? 'ready' : 'idle', detail: ma2Program.error ?? '一键连接会启动选定的本机 onPC；网络通信单独检查', category: 'ma2' }, checks['ma2-app']),
+    checked({ id: 'ma3d', name: 'MA 3D 预演', value: ma3dProgram.status === 'running' ? '运行中' : '未运行', state: ma3dProgram.status === 'running' ? 'ready' : 'idle', detail: ma3dProgram.error ?? '一键连接会启动选定的 MA 3D；请在 MA 3D 中加入对应控台会话', category: 'ma2' }, checks.ma3d),
     { id: 'obs', name: 'OBS 控制', ...obsConnectionStatus(obs), category: 'obs' },
     checked({ id: 'preview', name: 'OBS 预览', value: obs.status === 'connected' ? '未检查' : '待 OBS 连接', state: 'idle', detail: '一键连接会检查内置组件并接收真实预览画面', category: 'obs' }, obs.status === 'connected' ? checks.preview : undefined),
     checked({ id: 'audio', name: '音频输出', value: '检测中', state: 'idle', detail: '检查选择的声音输出设备', category: 'audio' }, checks.audio),
     checked({ id: 'midi', name: '系统 MIDI', value: '检测中', state: 'idle', detail: '检查系统 MIDI 服务与驱动', category: 'audio' }, checks.midi),
     checked({ id: 'loop', name: '虚拟 MIDI', value: '未检查', state: 'idle', detail: '软件间 MIDI 通道；实体接口不依赖此项', category: 'virtual' }, checks.loop),
     checked({ id: 'p1', name: 'P1 播放器', value: internal || !project ? '未启用' : p1.status === 'running' ? '运行中' : '未运行', state: internal || !project ? 'skipped' : p1.status === 'running' ? 'ready' : 'idle', detail: internal ? '当前使用本机播放，无需启动 P1' : p1.error ?? '跟随模式会启动 P1 并监听输入时间码', category: 'source' }, internal || !project ? undefined : checks.p1),
-    { id: 'ma2', name: 'MA2 网络', value: method !== 'network' ? '未启用' : network?.state === 'connected' ? '已连接' : checks.ma2?.state === 'checking' ? '连接中' : '未连接', state: method !== 'network' ? 'skipped' : network?.state === 'connected' ? 'ready' : checks.ma2?.state === 'checking' ? 'checking' : networkError || network?.error || checks.ma2?.state === 'error' ? 'error' : 'idle', detail: method !== 'network' ? '当前使用 ' + (method === 'local' ? '本机 onPC' : 'MIDI') : networkError ?? network?.error ?? checks.ma2?.detail ?? '一键连接会连接已保存控台，未保存时识别局域网中的唯一控台', category: 'ma2' },
+    checked({ id: 'ma2', name: 'MA2 网络', value: method !== 'network' ? '未启用' : network?.state === 'connected' ? '已连接' : checks.ma2?.state === 'checking' ? '连接中' : '未连接', state: method !== 'network' ? 'skipped' : network?.state === 'connected' ? 'ready' : checks.ma2?.state === 'checking' ? 'checking' : networkError || network?.error || checks.ma2?.state === 'error' ? 'error' : 'idle', detail: method !== 'network' ? '当前使用 ' + (method === 'local' ? '本机 onPC' : 'MIDI') : networkError ?? network?.error ?? checks.ma2?.detail ?? '一键连接会连接已保存控台，未保存时识别局域网中的唯一控台', category: 'ma2' }, method === 'network' && checks.ma2?.state !== 'ready' ? checks.ma2 : undefined),
     checked({ id: 'bridge', name: 'MA2 工程通信', value: method === 'midi' ? '未启用' : method === 'local' && local.status === 'ready' ? '已响应' : method === 'network' && network?.state !== 'connected' ? '待网络连接' : '未检查', state: method === 'midi' ? 'skipped' : method === 'local' && local.status === 'ready' ? 'ready' : 'idle', detail: method === 'midi' ? 'MIDI 模式不提供工程读写连接' : local.error ?? '单独验证控台读写通信，网络登录成功不代表此项已就绪', category: 'ma2' }, method === 'midi' || method === 'network' && network?.state !== 'connected' ? undefined : checks.bridge)
   ];
   for (const [id, name] of [['discovery', '程序识别'], ['profile', '连接配置'], ['obs-inventory', 'OBS 场景清单']] as const) {

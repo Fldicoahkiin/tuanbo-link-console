@@ -15,7 +15,12 @@ export function ma2PlaybackCommand(input: Ma2PlaybackAction): { command: string;
 export async function playMa2Cue(connection: Pick<Ma2Telnet, 'command'>, action: Ma2PlaybackAction, beforeSend: () => void, priority:'normal'|'stop'='normal'): Promise<void> {
   const { command, object } = ma2PlaybackCommand(action);
   const marker = `TBLINK_PLAY_${randomBytes(16).toString('hex')}`;
-  const script = `if gma.show.getobj.handle('${object}') then gma.cmd('${command}');gma.echo('${marker}:SENT') else gma.echo('${marker}:MISSING') end`;
+  // Off is idempotent: a deleted/missing target must not trap audition cleanup.
+  // Still dispatch the exact Off command and require its receipt; disconnects
+  // and unknown outcomes remain failures instead of silently clearing ownership.
+  const dispatch = `gma.cmd('${command}');gma.echo('${marker}:SENT')`;
+  const script = action.action === 'off' ? dispatch : `if gma.show.getobj.handle('${object}') then ${dispatch} else gma.echo('${marker}:MISSING') end`;
   const result = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, `${marker}:`), beforeSend, priority);
-  if (result !== 'SENT') throw new Error(`控台没有找到 ${object}，请重新读取素材并核对编号`);
+  if (result === 'MISSING') throw new Error(`控台没有找到 ${object}，请重新读取素材并核对编号`);
+  if (result !== 'SENT') throw new Error(`控台未确认 ${command} 的发送结果，请核对连接状态`);
 }

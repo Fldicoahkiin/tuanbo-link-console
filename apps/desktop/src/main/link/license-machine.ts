@@ -3,6 +3,13 @@ import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { windowsSystemExecutable } from './windows-system-executable';
 
+/** Machine identity is fixed for this process. Do not spawn a registry reader
+ * on every editor IPC; authorization and expiry are still checked separately. */
+export function createLicenseMachineCodeReader(read: () => Promise<string> = readLicenseMachineCode): () => Promise<string> {
+  let result: Promise<string> | undefined;
+  return () => result ??= read();
+}
+
 /** Windows installation identifier: never send the raw MachineGuid to the issuer. */
 export async function readLicenseMachineCode(): Promise<string> {
   if (process.platform !== 'win32') throw new Error('主机授权目前仅支持 Windows');

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
 import { windowsPowerShellExecutable } from './windows-powershell';
 
-export type ExternalApplicationId = 'obs' | 'p1';
+export type ExternalApplicationId = 'obs' | 'p1' | 'ma2' | 'ma3d';
 export type ExternalProcessStatus = 'notRunning' | 'starting' | 'running' | 'reconnecting' | 'stopping' | 'error';
 
 export type ExternalProcessConfiguration = {
@@ -59,7 +59,7 @@ export class ExternalProcessManager {
     private readonly tools: ExternalProcessTools,
     private readonly obsActivity: ObsActivityReader
   ) {
-    for (const id of ['obs', 'p1'] as const) {
+    for (const id of ['obs', 'p1', 'ma2', 'ma3d'] as const) {
       this.entries.set(id, {
         snapshot: emptySnapshot(id),
         child: null
@@ -86,6 +86,11 @@ export class ExternalProcessManager {
       const process = existingProcess;
       const stillOwned = current.snapshot.owned && current.snapshot.pid === process.pid && current.snapshot.startTime === process.startTime;
       this.setEntry(id, processSnapshot(id, process, stillOwned, 'running'), stillOwned ? current.child : null);
+      if ((id === 'ma2' || id === 'ma3d') && !process.windowTitle) {
+        const message = `${id === 'ma2' ? 'MA2 onPC' : 'MA 3D'} 进程已存在但主窗口未就绪，请处理该程序的残留进程或启动提示后再连接；未重复启动`;
+        this.setEntry(id, { ...this.getSnapshot(id), status: 'error', error: message }, stillOwned ? current.child : null);
+        throw new Error(message);
+      }
       return this.getSnapshot(id);
     }
     if (hasLiveOwnedChild(current)) {
@@ -114,7 +119,7 @@ export class ExternalProcessManager {
         owned: true
       }, child);
 
-      const process = await waitForExactProcess(this.tools, executablePath, pid, configuration.startupTimeoutMs);
+      const process = await waitForExactProcess(this.tools, executablePath, pid, configuration.startupTimeoutMs, id === 'ma2' || id === 'ma3d');
       this.setEntry(id, processSnapshot(id, process, true, 'running'), child);
       return this.getSnapshot(id);
     } catch (error) {
@@ -192,11 +197,13 @@ export class ExternalProcessManager {
     return this.getSnapshot(id);
   }
 
-  async stopOwnedInOrder(configurations: Record<ExternalApplicationId, ExternalProcessConfiguration>): Promise<void> {
-    for (const id of ['p1', 'obs'] as const) {
+  async stopOwnedInOrder(configurations: Record<'obs' | 'p1', ExternalProcessConfiguration> & Partial<Record<'ma2' | 'ma3d', ExternalProcessConfiguration>>): Promise<void> {
+    for (const id of ['p1', 'ma3d', 'ma2', 'obs'] as const) {
       const entry = this.getEntry(id);
       if (!entry.snapshot.owned || entry.snapshot.pid === null) continue;
-      await this.stopWithTimeout(id, configurations[id].shutdownTimeoutMs);
+      const configuration = configurations[id];
+      if (!configuration) throw new Error(`${id} 启动配置缺失，进程保持运行`);
+      await this.stopWithTimeout(id, configuration.shutdownTimeoutMs);
     }
   }
 
@@ -288,11 +295,12 @@ export class WindowsProcessTools implements ExternalProcessTools {
     const child = spawn(configuration.executablePath, configuration.arguments, {
       cwd: configuration.workingDirectory,
       env: { ...process.env, ...configuration.environment },
+      detached: true,
       windowsHide: false,
       stdio: 'ignore'
     });
-    // Retain the child handle for ownership checks while the desktop runs,
-    // but do not let a preserved OBS/P1 process keep Electron alive after exit.
+    // Give external apps an independent lifetime so choosing to preserve them
+    // survives Electron exit; retain their handle for exact ownership checks.
     child.unref();
     return child;
   }
@@ -346,16 +354,17 @@ async function waitForExactProcess(
   tools: ExternalProcessTools,
   executablePath: string,
   pid: number,
-  timeoutMs: number
+  timeoutMs: number,
+  requireWindow = false
 ): Promise<DetectedProcess> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     const matches = await tools.findByExecutable(executablePath);
     const match = matches.find((candidate) => candidate.pid === pid);
-    if (match) return match;
+    if (match && (!requireWindow || match.windowTitle)) return match;
     await delay(250);
   }
-  throw new Error(`进程 ${pid} 在 ${timeoutMs}ms 内未通过路径核验`);
+  throw new Error(`进程 ${pid} 在 ${timeoutMs}ms 内${requireWindow ? '未通过路径核验或主窗口尚未就绪' : '未通过路径核验'}`);
 }
 
 function waitForSpawn(child: ChildProcess, id: ExternalApplicationId): Promise<void> {

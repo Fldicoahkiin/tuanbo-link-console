@@ -40,10 +40,16 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
         await new Promise(resolve => setTimeout(resolve, 1500)); return data.catalog;
       });
       ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => { throw new Error('缓存配对不应再次读取'); });
-      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => ({ directory: { ...data.catalog.directory, entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] }));
+      // A successful full pool read is authoritative. Return the actual fixture
+      // pool instead of relying on old song references to refill an empty pool.
+      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => ({
+        directory: { ...data.catalog.directory, entries: data.sequences.map(sequence => ({ target: sequence.sequence, name: sequence.name })) },
+        readAt: new Date().toISOString(), sequences: data.sequences, fixtureUsage: [], errors: []
+      }));
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [data.file] });
-    }, { catalog, file });
+    }, { catalog, file, sequences: meiNanSequences[0]!.sequences.map(sequence => ({ sequence: sequence.number, name: sequence.name, cues: sequence.cues })) });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await expect(page.getByText('中文歌曲', { exact: true }).first()).toBeVisible();
     const nav = page.getByRole('navigation', { name: '主要工作区' });
     await nav.getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
@@ -51,6 +57,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await page.getByLabel('MA2 连接方式').selectOption('network');
     await page.getByRole('button', { name: '连接 MA2 并载入节目 Cue', exact: true }).click();
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
+    await expect.poll(() => app.evaluate(() => process.env.TBLINK_CACHE_TEST_READS)).toBe('1');
     await expect(page.locator('.waveform-cue-point')).toHaveCount(11);
     await expect(page.locator('.project-save-status')).toBeHidden();
     await nav.getByRole('button', { name: '设置', exact: true }).click();
@@ -127,6 +134,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await expect(page.locator('.ma2-browser-body article')).toContainText('读取超时样例');
   } catch (error) {
     if (!page.isClosed()) {
+      await writeFile(info.outputPath('failure-reads.json'), JSON.stringify(await app.evaluate(() => ({ reads: process.env.TBLINK_CACHE_TEST_READS })), null, 2));
       await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
       await writeFile(info.outputPath('failure-logs.json'), JSON.stringify(await page.evaluate(() => window.tbLink.queryLogs({ limit: 100 })), null, 2));
     }

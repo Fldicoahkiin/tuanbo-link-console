@@ -8,6 +8,7 @@ import { NativeProgramPlayer, emptyInternalPlayerState, type InternalPlayerState
 import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
 import { NativeAudioCache } from './native-audio-cache';
 import { NativePlayerService } from './native-player-service';
+import { probeWindowsMidi } from './windows-midi-health';
 
 const windowsTest = it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1');
 
@@ -35,6 +36,7 @@ async function fixture(gateNext = false) {
   const cache = new NativeAudioCache(join(directory, 'cache'), ffmpeg);
   let preparedCount = 0;
   const service = new NativePlayerService({ executable: resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tools/playback-engine/bin/tblink-playback.exe'),
+    checkDeviceHealth: async () => { expect(await probeWindowsMidi(resolve('tools/midi-probe/bin/tblink-midi-probe.exe'))).toBe('ready'); },
     cache: { prepare: async (input, signal) => {
       if (++preparedCount === 2 && gateNext) { nextPreparing = true; await nextGate; }
       return cache.prepare(input, signal);

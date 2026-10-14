@@ -5,11 +5,12 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "pnpm --filter @tb/desktop dev",
+    "start:built": "node apps/desktop/scripts/start-built.mjs",
     "build": "pnpm --filter @tb/desktop build",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint . --ignore-pattern eslint.config.mjs",
     "test": "pnpm test:release && node tools/ibt/build.mjs && vitest run",
-    "test:release": "node --test scripts/release-config.test.mjs",
+    "test:release": "node --test scripts/release-config.test.mjs apps/desktop/scripts/start-built.test.mjs",
     "release:check": "node scripts/verify-release-version.mjs",
     "dist:dir": "pnpm --filter @tb/desktop dist:dir",
     "dist": "pnpm --filter @tb/desktop dist",

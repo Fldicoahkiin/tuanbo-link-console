@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { nativeDeviceResponseSchema, type NativePlaybackDevices } from '@tb/schema';
+import { nativeDeviceResponseSchema, type NativePlaybackDevices, type NativeDeviceQueryRequest } from '@tb/schema';
 
 type Pending = { resolve: (devices: NativePlaybackDevices) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 
@@ -16,7 +16,7 @@ export class NativeDeviceQuery {
   private closeTask: Promise<void> | null = null;
   private exitError: Error | null = null;
 
-  constructor(private readonly executable: string) {}
+  constructor(private readonly executable: string, private readonly scope: NativeDeviceQueryRequest['scope'] = 'all') {}
 
   async reopenForPreparation(): Promise<void> {
     if (this.closing) throw new Error('设备查询服务正在关闭');
@@ -52,7 +52,7 @@ export class NativeDeviceQuery {
   }
 
   private start(): void {
-    const child = spawn(this.executable, ['--device-service'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(this.executable, [this.scope === 'audio' ? '--audio-device-service' : '--device-service'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child = child;
     this.exited = new Promise(resolve => child.once('close', () => resolve()));
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');

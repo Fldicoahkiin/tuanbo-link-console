@@ -15,6 +15,7 @@ import { writeFileAtomically } from './atomic-file';
 import { recoverMa2Read } from './ma2-read-recovery';
 import { recoverMa2Material } from './ma2-material-recovery';
 import { VerifiedMediaFiles } from './verified-media-files';
+import { ReferenceAudioCache } from './reference-audio-cache';
 import { ProjectWriteQueue } from './project-write-queue';
 import {
   extractReferenceAudioTrack,
@@ -41,6 +42,7 @@ export class LinkProjectService {
   private readonly fileAccess = new Map<string, Promise<void>>();
   private readonly pendingSaves = new ProjectWriteQueue((path, project) => this.withProjectFile(path, () => this.writeSavedProject(path, project)));
   private readonly verifiedMedia = new VerifiedMediaFiles(hashFile);
+  private readonly referenceAudioCache = new ReferenceAudioCache(hashFile);
 
   constructor(
     private readonly extractAudioTrack: ReferenceAudioExtractor = extractReferenceAudioTrack,
@@ -197,6 +199,11 @@ export class LinkProjectService {
     const projectDirectory = dirname(resolve(projectPath));
     const assetsDirectory = join(projectDirectory, 'assets', 'reference-audio');
     await mkdir(assetsDirectory, { recursive: true });
+    if (REFERENCE_AUDIO_CONTAINER_EXTENSIONS.has(extension) && startMs === 0 && !preserveP1Duration) {
+      const audio = await this.referenceAudioCache.ensure(projectPath, sourcePath,
+        () => this.importContainerAudio(assetsDirectory, projectDirectory, sourcePath, null, 0, false));
+      return { ...audio, durationMs: durationMs === null ? audio.durationMs : Math.min(durationMs, audio.durationMs) };
+    }
     if (durationMs === null || startMs > 0 || REFERENCE_AUDIO_CONTAINER_EXTENSIONS.has(extension)) {
       return this.importContainerAudio(assetsDirectory, projectDirectory, sourcePath, durationMs, startMs, preserveP1Duration);
     }
@@ -257,6 +264,7 @@ export class LinkProjectService {
           });
         }
       }
+      if (error instanceof Error && error.message.includes('matches no streams')) throw new Error('素材不包含音频轨道', { cause: error });
       throw new Error(`素材没有可解码的音轨：${sourcePath}：${toMessage(error)}`, { cause: error });
     }
   }
@@ -343,7 +351,9 @@ function resolveProjectAsset(projectPath: string, relativePath: string, label: s
 
 export async function hashFile(filePath: string): Promise<string> {
   const hash = createHash('sha256');
-  for await (const chunk of createReadStream(filePath)) {
+  // Keep integrity checks streaming, with fewer filesystem round trips for 4K
+  // media and rendered PCM. One-MiB blocks keep memory bounded.
+  for await (const chunk of createReadStream(filePath, { highWaterMark: 1024 * 1024 })) {
     const bytes: unknown = chunk;
     if (!Buffer.isBuffer(bytes)) throw new Error('素材读取未返回二进制数据');
     hash.update(bytes);

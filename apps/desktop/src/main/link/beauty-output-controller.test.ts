@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { beautyBasicValuesSchema, neutralBeautyValues, type BeautyRuntimeState, type BeautyApply } from '@tb/schema';
 import { BeautyOutputController } from './beauty-output-controller';
 
-const values = beautyBasicValuesSchema.parse(neutralBeautyValues);
+const values = beautyBasicValuesSchema.parse({ ...neutralBeautyValues, smooth: 10 });
 function setup() {
   let state: BeautyRuntimeState = { phase: 'idle', sourceName: null, filterName: null, faces: 0, message: '' };
   const runtime = {
@@ -20,6 +20,42 @@ function setup() {
 }
 
 describe('composed output beauty', () => {
+  it('零参数显示原画面，连接和切机位均不创建滤镜或启动分析', async () => {
+    const { controller, runtime, beauty } = setup();
+    controller.connection(true);
+    expect(await controller.configure(neutralBeautyValues)).toBeNull();
+    controller.sceneChanged();
+    await controller.configure(neutralBeautyValues);
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(beauty.programScene).not.toHaveBeenCalled();
+    expect(beauty.apply).not.toHaveBeenCalled();
+    expect(beauty.disable).not.toHaveBeenCalled();
+  });
+
+  it('参数归零仅停用当前受管滤镜，之后调整参数可正常恢复', async () => {
+    const { controller, runtime, beauty } = setup();
+    controller.connection(true); await controller.configure(values);
+    runtime.stop.mockClear();
+    expect(await controller.configure(neutralBeautyValues)).toBeNull();
+    expect(beauty.disable).toHaveBeenCalledExactlyOnceWith({ sourceName: '场景 A', filterName: '团播·人像美颜' });
+    expect(runtime.stop).toHaveBeenCalledOnce();
+    expect(controller.status().phase).toBe('idle');
+    await controller.configure({ ...values, eye: 30 });
+    expect(runtime.start).toHaveBeenCalledTimes(2);
+    expect(beauty.apply).toHaveBeenLastCalledWith({ sourceName: '场景 A', filterName: '团播·人像美颜', values: { ...values, eye: 30 } });
+  });
+
+  it('归零时停用失败明确报错，不自动重试或假装已停止', async () => {
+    const { controller, runtime, beauty, log } = setup();
+    controller.connection(true); await controller.configure(values);
+    beauty.disable.mockRejectedValue(new Error('关闭滤镜失败'));
+    runtime.stop.mockClear();
+    await expect(controller.configure(neutralBeautyValues)).rejects.toThrow('关闭滤镜失败');
+    expect(runtime.stop).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledOnce();
+    expect(controller.status().phase).toBe('error');
+  });
+
   it('waits offline, then starts on the program scene without an input selection', async () => {
     const { controller, runtime, beauty } = setup();
     expect(await controller.configure(values)).toBeNull();

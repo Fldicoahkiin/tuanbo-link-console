@@ -18,7 +18,7 @@ if (existsSync(exe) && existsSync(stamp)) {
 const compiler = join(here, '../obs/native-preview/compiler/zig-x86_64-windows-0.14.1/zig.exe');
 if (!existsSync(compiler)) throw new Error('请先构建 OBS 原生组件以准备项目固定版本的编译器');
 await mkdir(bin, { recursive: true });
-const result = spawnSync(compiler, ['cc', '-target', 'x86_64-windows-gnu', '-O2', '-Wall', '-Wextra', join(here, 'probe.c'), '-lwinmm', '-o', exe], { windowsHide: true, stdio: 'inherit' });
+const result = spawnSync(compiler, ['cc', '-target', 'x86_64-windows-gnu', '-O2', '-Wall', '-Wextra', join(here, 'probe.c'), '-lwinmm', '-ladvapi32', '-o', exe], { windowsHide: true, stdio: 'inherit' });
 if (result.error) throw result.error;
 if (result.status !== 0) throw new Error('MIDI 检测组件构建失败');
 await writeFile(stamp, JSON.stringify({ recipe, sha256: createHash('sha256').update(await readFile(exe)).digest('hex') }, null, 2));

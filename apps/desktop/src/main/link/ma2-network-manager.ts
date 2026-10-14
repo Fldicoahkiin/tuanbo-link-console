@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { ma2NetworkSettingsSchema, ma2NetworkSaveSchema, ma2NetworkCatalogSchema, type Ma2Capabilities, type Ma2NetworkSettings, type Ma2NetworkSave, type Ma2NetworkStatus, type Ma2NetworkTarget, type Ma2ReadProgressUpdate } from '@tb/schema';
 import { SecureProfileStore } from './secure-profile-store';
 import { writeFileAtomically } from './atomic-file';
-import { Ma2Telnet, ma2ResponseLine } from './ma2-telnet';
+import { Ma2Telnet, ma2ResponseLine, type Ma2ConnectedPeer } from './ma2-telnet';
 import { Ma2NetworkWire } from './ma2-network-wire';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ApplyService } from './ma2-apply-service';
@@ -34,7 +34,7 @@ export class Ma2NetworkManager {
     return this.settings!==null&&(['host','port','monitorPort','username'] as const).every(key=>this.settings?.[key]===settings[key]);
   }
   private readonly path: string;
-  constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string, private readonly resolveLocalAddress: (host: string) => Promise<string | undefined> = () => Promise.resolve(undefined)) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
+  constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string, private readonly resolveLocalAddress: (host: string) => Promise<string | undefined> = () => Promise.resolve(undefined), private readonly validatePeers?: (host: string, peers: readonly Ma2ConnectedPeer[]) => Promise<void>) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
   get(target: Ma2NetworkTarget): { bridge: Ma2OnpcBridge; service: Ma2ApplyService } {
     const settings = this.settings;
     if (!settings || target.host !== settings.host || target.port !== settings.port || target.monitorPort !== settings.monitorPort || target.username !== settings.username) throw new Error('MA2 连接目标已改变，请重新读取控台');
@@ -161,7 +161,7 @@ export class Ma2NetworkManager {
       if (generation !== this.generation) return this.status();
       const connection = new Ma2Telnet({ ...settings, ...(localAddress ? { localAddress } : {}) }, (state) => {
         if (state === 'disconnected' && this.connection === connection) { this.version = null; this.capabilities = null; this.error = 'MA2 已断开，请重新连接'; }
-      });
+      }, 5000, this.validatePeers ? peers => this.validatePeers!(settings.host, peers) : undefined);
       this.connection = connection;
       const version = await connection.connect(settings.username, password);
       if (generation !== this.generation) return this.status();

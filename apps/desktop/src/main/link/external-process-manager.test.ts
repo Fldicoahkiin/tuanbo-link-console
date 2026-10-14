@@ -9,6 +9,29 @@ import {
 } from './external-process-manager';
 
 describe('ExternalProcessManager', () => {
+  it('残留 onPC 没有主窗口时明确报错，不误报打开成功或重复启动', async () => {
+    const tools = fakeTools([{ ...processInfo(100), windowTitle: '' }]);
+    const manager = new ExternalProcessManager(tools, idleObs());
+    await expect(manager.start('ma2', configuration())).rejects.toThrow('主窗口未就绪');
+    expect(manager.getSnapshot('ma2')).toMatchObject({ status: 'error', pid: 100, owned: false });
+    expect(tools.launchCount).toBe(0);
+  });
+  it('新启动的 MA 3D 必须出现主窗口，超时保留程序与所有权', async () => {
+    const tools = fakeTools([]);
+    tools.detectedAfterLaunch = [{ ...processInfo(321), windowTitle: '' }];
+    const manager = new ExternalProcessManager(tools, idleObs());
+    await expect(manager.start('ma3d', { ...configuration(), startupTimeoutMs: 1 })).rejects.toThrow('主窗口尚未就绪');
+    expect(manager.getSnapshot('ma3d')).toMatchObject({ status: 'error', pid: 321, owned: true });
+    expect(tools.closedPids).toEqual([]);
+  });
+  it.each(['ma2', 'ma3d'] as const)('%s 复用精确路径的既有程序，重复连接不接管关闭权限', async id => {
+    const tools = fakeTools([processInfo(100)]);
+    const manager = new ExternalProcessManager(tools, idleObs());
+    expect(await manager.start(id, configuration())).toMatchObject({ id, pid: 100, owned: false, status: 'running' });
+    expect(await manager.start(id, configuration())).toMatchObject({ id, pid: 100, owned: false });
+    await expect(manager.stop(id, 100)).rejects.toThrow('不是本次由联动台启动');
+    expect(tools.closedPids).toEqual([]);
+  });
   it('相同 PID 被复用但启动时间改变时撤销所有权', async () => {
     const tools = fakeTools([]);
     tools.detectedAfterLaunch = [processInfo(321)];

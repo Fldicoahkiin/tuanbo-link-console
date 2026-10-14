@@ -88,6 +88,12 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
     await page.getByRole('button', { name: '卡片视图', exact: true }).click();
     await expect(page.locator('.p1-media-grid')).toHaveAttribute('data-view', 'cards');
     await page.getByRole('button', { name: '列表视图', exact: true }).click();
+    const cards = await page.locator('.p1-media-grid').boundingBox();
+    const properties = await page.locator('.p1-item-inspector').boundingBox();
+    if (!cards || !properties) throw new Error('节目列表和属性面板必须同时可见');
+    expect(cards.x + cards.width <= properties.x + 1 || properties.x + properties.width <= cards.x + 1
+      || cards.y + cards.height <= properties.y + 1 || properties.y + properties.height <= cards.y + 1,
+    '属性面板不能覆盖节目列表的点击区域').toBe(true);
     await page.getByRole('button', { name: '编辑节目属性：开场 · 灯光渐入', exact: true }).click();
     await expect(page.getByLabel('节目名称', { exact: true })).toHaveValue('开场 · 灯光渐入');
     await page.getByRole('button', { name: '收起节目属性', exact: true }).click();

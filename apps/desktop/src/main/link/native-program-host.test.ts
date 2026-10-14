@@ -8,6 +8,7 @@ import { emptyInternalPlayerState, type InternalPlayerState } from '@tb/core/lin
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
 import { NativeAudioCache } from './native-audio-cache';
 import { NativePlayerService } from './native-player-service';
+import { probeWindowsMidi } from './windows-midi-health';
 import { NativeProgramHost } from './native-program-host';
 
 const windowsTest = it.skipIf(process.platform !== 'win32' || process.env.TBLINK_NATIVE_ENGINE_TEST !== '1');
@@ -31,6 +32,7 @@ windowsTest('正式后台宿主使用真实 WASAPI 换歌、暂停恢复；空�
   const errors: string[] = [], notices: string[] = [];
   const executable = resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tools/playback-engine/bin/tblink-playback.exe');
   const service = new NativePlayerService({ executable, cache: new NativeAudioCache(join(directory, 'cache'), ffmpeg), resolveAudio: () => path,
+    checkDeviceHealth: async () => { expect(await probeWindowsMidi(resolve('tools/midi-probe/bin/tblink-midi-probe.exe'))).toBe('ready'); },
     changed: (status, qpc) => host?.observe(status, qpc), beforeControl: request => host?.interrupt(request), error: message => errors.push(message) });
   host = new NativeProgramHost(project, join(directory, 'project.tblink'), 1, {
     executable, audio: () => service.status, authorize: () => Promise.resolve(), preciseSeeking: () => false,

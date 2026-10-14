@@ -23,7 +23,28 @@ export type DeviceConnectionOptions = {
   onIssues: (issues: string[]) => void;
   onObsPassword?: (password: string) => void;
 };
-const tasks = ['discovery', 'profile', 'loop', 'midi', 'obs', 'preview', 'audio', 'p1', 'ma2', 'bridge'];
+const tasks = ['discovery', 'profile', 'loop', 'midi', 'obs', 'preview', 'audio', 'p1', 'ma2-app', 'ma3d', 'ma2', 'bridge'];
+type ConnectionStep = <T>(id: string, label: string, operation: () => Promise<T>, detail?: string) => Promise<{ value: T } | null>;
+
+async function startMaPrograms(profile: IntegrationProfile, saved: boolean, run: ConnectionStep, skip: (id: string, detail: string) => void, connect: () => Promise<void>): Promise<void> {
+  const start = async (id: 'ma2' | 'ma3d'): Promise<boolean> => {
+    const key = id === 'ma2' ? 'ma2-app' : 'ma3d';
+    const label = id === 'ma2' ? 'MA2 onPC' : 'MA 3D';
+    if (!profile[id]?.connectOnDemand) { skip(key, profile[id] ? '已关闭一键启动' : '未配置本机程序；可在 MA2 设置选择程序'); return true; }
+    const result = await run(key, label, async () => {
+      if (!saved) throw new Error('启动路径未保存，无法启动程序');
+      const snapshot = await desktop.startExternalApplication(id);
+      useIntegrationStore.getState().setProcess(snapshot);
+      if (snapshot.status !== 'running') throw new Error(snapshot.error ?? `${label} 未运行`);
+    }, `${label} 已运行；控台通信另行检查`);
+    return result !== null;
+  };
+  const onpcReady = await start('ma2');
+  if (onpcReady) await connect();
+  else { skip('ma2', '等待 MA2 onPC 启动成功'); skip('bridge', '等待 MA2 onPC 启动成功'); }
+  // MA 3D also opens native remote ports; establish onPC channels first.
+  await start('ma3d');
+}
 
 /** One explicit attempt per task. A failed dependency cannot stop unrelated connections. */
 export async function connectDevices(options: DeviceConnectionOptions): Promise<void> {
@@ -57,15 +78,13 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     }
     const connected = await run('ma2', 'MA2 网络', async () => {
       let status = ma2NetworkStatusSchema.parse(await desktop.getMa2NetworkStatus());
-      if (status.state !== 'connected') status = status.settings ? ma2NetworkStatusSchema.parse(await desktop.connectMa2Network()) : await connectDiscoveredMa2();
+      status = status.settings ? ma2NetworkStatusSchema.parse(await desktop.connectMa2Network()) : await connectDiscoveredMa2();
       if (status.state !== 'connected') throw new Error(status.error ?? '控台登录未完成');
     }, '控台网络登录成功');
     if (connected) await run('bridge', 'MA2 工程通信', checkNetworkMa2, '控台工程通信已响应');
     else skip('bridge', '等待控台网络连接成功');
   };
   try {
-    // MA2 uses its own saved settings and remains independent of machine/MIDI discovery.
-    const ma2Task = connectMa2();
     const detection = await run('discovery', '程序识别', () => desktop.detectLocalIntegrations());
     if (detection) {
       options.onDetection(detection.value);
@@ -74,6 +93,13 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
         obs: obs.executablePath && obs.workingDirectory ? { ...profile.obs, executablePath: obs.executablePath, workingDirectory: obs.workingDirectory } : profile.obs,
         p1: p1.executablePath && p1.workingDirectory ? { ...profile.p1, executablePath: p1.executablePath, workingDirectory: p1.workingDirectory } : profile.p1
       };
+      for (const id of ['ma2', 'ma3d'] as const) {
+        const application = detection.value.applications[id];
+        if (!profile[id] && application?.executablePath && application.workingDirectory) {
+          profile = { ...profile, [id]: { executablePath: application.executablePath, workingDirectory: application.workingDirectory,
+            arguments: [], startupTimeoutMs: 30_000, shutdownTimeoutMs: 10_000, connectOnDemand: true } };
+        }
+      }
     }
     const audioTask = run('audio', '音频输出', async () => {
       await assertAudioOutputAvailable(profile.internalPlayer);
@@ -106,6 +132,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       await desktop.saveIntegrationProfile({ profile, ...(options.password ? { obsPassword: options.password } : {}) });
       useIntegrationStore.getState().setProfile(profile); options.onProfile(profile);
     });
+    const ma2Task = startMaPrograms(profile, Boolean(saved), run, skip, connectMa2);
     const obsTask = async (): Promise<void> => {
       if (!saved) { skip('obs', '连接配置未保存'); skip('preview', '等待 OBS 连接'); return; }
       const connected = await run('obs', 'OBS 控制', async () => {

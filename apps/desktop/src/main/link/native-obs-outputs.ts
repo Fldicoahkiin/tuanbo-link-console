@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { stat, statfs } from 'node:fs/promises';
-import { materialSceneTargets, millisecondsToFrameNumber, preciseSeekAssetIds, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type ObsProgramSessionDependencies } from '@tb/core/link';
+import { millisecondsToFrameNumber, preciseSeekAssetIds, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type ObsProgramSessionDependencies } from '@tb/core/link';
 import type { NativeObsPrepare } from '@tb/schema';
 import type { ObsWebSocketAdapter } from './obs-websocket-adapter';
 import type { LinkProjectService } from './link-project-service';
@@ -11,9 +11,10 @@ import type { NativePlayerService } from './native-player-service';
 import type { LinkRunLogger } from './run-logger';
 import { redactValue } from './run-logger';
 import { ObsMediaPreload } from './obs-media-preload';
+import { obsMediaDecodeTargets } from './obs-media-decode';
 
 export type NativeObsOutputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport'> & {
-  preloadResources: (assertCurrent: () => void) => Promise<void>;
+  preloadResources: (assertCurrent: () => void, phase?: 'idle' | 'playback' | 'background') => Promise<void>;
 };
 
 type Services = {
@@ -28,7 +29,9 @@ type Services = {
 export function createNativeObsOutputs(request: NativeObsPrepare, services: Services, positionMs: number): NativeObsOutputs {
   const { obs, projects, profiles, seek, logger } = services;
   const project = projectFromObsSnapshot(request.snapshot), path = request.projectPath;
-  const materialTargets = materialSceneTargets(project);
+  // Leave decode-engine headroom for the standby slot. Remaining live layers
+  // use fast CPU lossless caches instead of adding more hardware sessions.
+  const materialTargets = obsMediaDecodeTargets(project);
   const preciseAssets = preciseSeekAssetIds(request.snapshot, positionMs);
   let address: string | null = null, capture: NativePlayerService['audioCaptureIdentity'] | null = null;
   let prepared = false;
@@ -46,7 +49,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
     guardOutput: (canSend, operation) => obs.guardPlaybackOperation(canSend, operation),
     recordLog: entry => logger.recordBuffered(entry.category === 'action' && entry.result === 'failed'
       ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure),
-    preloadResources: async assertCurrent => {
+    preloadResources: async (assertCurrent, preparationPhase = 'idle') => {
       const started = performance.now(); let previous = started;
       const measure = async (stage: string): Promise<void> => {
         const now = performance.now();
@@ -63,14 +66,21 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       const opening = new SceneOutputTimeline(project, request.snapshot.item.id).at(millisecondsToFrameNumber(positionMs, request.snapshot.frameRate));
       const openingDecoders = new Map(opening.media.filter(event => event.assetKind !== 'image')
         .map(event => [event.sourceName, event]));
-      const primeSlots = Array.from({ length: 4 }, () => Promise.resolve()); let nextPrime = 0;
+      // Selection can warm quietly in sequence. At an explicit cold playback
+      // admission, two independent decoders overlap so four layers do not
+      // consume the entire one-second window before the structure is ready.
+      // Live lookahead remains single-file and staggered by ObsMediaPreload.
+      const primeTails = Array.from({ length: preparationPhase === 'playback' ? 2 : 1 }, () => Promise.resolve());
+      let nextPrimeSlot = 0;
 
       // Each input is verified before OBS opens it. Pipeline disk work and OBS
       // decoding across eight independent layers instead of waiting for every
       // video digest before preparing the opening images.
-      for (let offset = 0; offset < materialTargets.length; offset += 8) {
-        const results = await Promise.allSettled(materialTargets.slice(offset, offset + 8).map(async target => {
+      const batchSize = preparationPhase === 'background' ? 1 : 8;
+      for (let offset = 0; offset < materialTargets.length; offset += batchSize) {
+        const results = await Promise.allSettled(materialTargets.slice(offset, offset + batchSize).map(async target => {
           const { asset } = target;
+          const { hardwareDecode } = target;
           const assetStarted = performance.now(); let phase = '文件校验';
           const timings = [{ phase, atMs: 0 }];
           try {
@@ -85,30 +95,34 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
             const cache = join(dirname(path), 'cache', 'obs-seek-jpeg2000');
             phase = '定位缓存核验'; timings.push({ phase, atMs: performance.now() - assetStarted });
             const playbackPath = request.preciseSeeking && asset.kind === 'video' && preciseAssets.has(asset.id)
-              ? await services.media.ensureObsSeekVideo(path, asset.relativePath, asset.sha256) : absolute;
+              ? await services.media.ensureObsSeekVideo(path, asset.relativePath, asset.sha256, hardwareDecode ? 'hardware' : 'software') : absolute;
             assertCurrent();
             phase = '来源准备'; timings.push({ phase, atMs: performance.now() - assetStarted });
             await obs.mediaScenes.prepare(project.projectId, asset, absolute, playbackPath,
-              ['.mkv', '.rgba.mkv', '.source-pixels.mkv'].map(extension => join(cache, `${asset.sha256}${extension}`)), target);
+              ['.mkv', '.rgba.mkv', '.source-pixels.mkv', '.seek-ready.mkv', '.seek-intra.mkv'].map(extension => join(cache, `${asset.sha256}${extension}`)), target, hardwareDecode);
             preload.register(project.projectId, asset, absolute, target.sourceName);
             assertCurrent();
             const openingEvent = openingDecoders.get(target.sourceName);
             if (openingEvent) {
               phase = '解码预热'; timings.push({ phase, atMs: performance.now() - assetStarted });
-              const slot = nextPrime++ % primeSlots.length;
-              const priming = primeSlots[slot]!.then(async () => {
+              const primeSlot = nextPrimeSlot++ % primeTails.length;
+              const priming = primeTails[primeSlot]!.then(async () => {
                 assertCurrent();
                 await seek.prepare(profile.obs.webSocketUrl); assertCurrent();
                 await preload.prime(openingEvent, assertCurrent);
+                // The idle selected-program preparation has no one-second
+                // participation deadline. A cold auto-next song prepares only
+                // its opening here; its successor uses the regular lookahead.
+                if (preparationPhase === 'idle') await preload.primeFollowing(openingEvent, assertCurrent);
               });
               // This slot is only a barrier; the owning asset retains the error.
-              primeSlots[slot] = priming.then(() => undefined, () => undefined);
+              primeTails[primeSlot] = priming.then(() => undefined, () => undefined);
               await priming;
               assertCurrent();
             }
             await logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: project.projectId,
               itemId: request.snapshot.item.id, message: `素材准备完成：${asset.name}`, result: 'succeeded',
-              details: { assetId: asset.id, elapsedMs: performance.now() - assetStarted, timings } });
+              details: { assetId: asset.id, hardwareDecode, elapsedMs: performance.now() - assetStarted, timings } });
           } catch (error) {
             await logger.record({ level: 'error', category: 'preflight', device: '后台画面', projectId: project.projectId,
               itemId: request.snapshot.item.id, message: `素材准备未完成：${asset.name}`, result: 'failed',
@@ -119,7 +133,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         }));
         const failure = results.find(result => result.status === 'rejected');
         if (failure?.status === 'rejected') throw failure.reason;
-        assertCurrent(); await measure(`校验、准备及预热素材 ${offset + 1}–${Math.min(offset + 8, project.mediaAssets.length)}`);
+        assertCurrent(); await measure(`校验、准备及预热素材 ${offset + 1}–${Math.min(offset + batchSize, materialTargets.length)}`);
       }
       const assets = await projects.inspectAssets(path, project); assertCurrent();
       await measure('预检文件状态');
@@ -170,7 +184,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       prepared = true;
     },
     prepareOutputs: async assertCurrent => {
-      if (!prepared) await outputs.preloadResources(assertCurrent);
+      if (!prepared) await outputs.preloadResources(assertCurrent, 'playback');
       assertCurrent();
       if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 已断开，不能使用预备画面');
       // A prepared decoder must not conceal an edited/deleted source file.
@@ -195,7 +209,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
     },
     prepareUpcoming: (frame, assertCurrent) => obs.preparePlaybackMedia(() => preload.upcoming(frame, assertCurrent)),
     releaseOutputs: async () => {
-      const cleanup = [() => preload.close(), () => obs.mediaScenes.releasePrimed(),
+      const cleanup = [() => preload.close(), () => obs.mediaScenes.releasePrimed(materialTargets.flatMap(target => [target.sourceName, `${target.sourceName}·预备`])),
         () => obs.mediaScenes.releaseImages(materialTargets.filter(target => target.asset.kind === 'image').map(target => target.sourceName)), () => logger.flush()];
       const target = capture;
       if (target) cleanup.push(async () => {

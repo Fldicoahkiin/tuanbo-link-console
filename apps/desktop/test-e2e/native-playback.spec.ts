@@ -56,10 +56,11 @@ test('真实 Electron IPC：独立音频时钟承受界面阻塞，界面崩溃�
     evidence.events = await page.evaluate(() => Reflect.get(window, '__nativeEvents') as unknown);
     crashed = true;
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.forcefullyCrashRenderer());
-    await expect.poll(async () => app.evaluate((_electron, pid) => {
-      try { process.kill(pid, 0); return true; }
+    // Inspect the OS process directly: the crashed renderer cannot service a browser round trip.
+    await expect.poll(() => {
+      try { process.kill(enginePid!, 0); return true; }
       catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false; throw error; }
-    }, enginePid!), { timeout: 10000 }).toBe(false);
+    }, { timeout: 10000 }).toBe(false);
     evidence.engineExitedAfterRendererCrash = true; evidence.passed = true;
   } finally {
     await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2));

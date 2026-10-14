@@ -30,7 +30,7 @@ describe('MediaPreviewService', () => {
         await writeFile(args.at(-1)!, 'generated');
         if (args[args.indexOf('-i') + 1]!.endsWith('0.mp4')) throw new Error('source decoder failed');
       } finally { active--; }
-    }, () => 'ffmpeg.exe');
+    }, () => 'ffmpeg.exe', () => Promise.resolve('yuv420p'));
     const fixtures: { relative: string; digest: string }[] = [];
     for (let index = 0; index < 8; index++) {
       const source = join(media, `${index}.mp4`), content = `video-${index}`;
@@ -90,20 +90,25 @@ describe('MediaPreviewService', () => {
     const calls: string[][] = [];
     const service = new MediaPreviewService(new LinkProjectService(), async (_executable, args) => {
       calls.push(args); await writeFile(args.at(-1)!, 'encoded-cache');
-    }, () => 'ffmpeg.exe');
+    }, () => 'ffmpeg.exe', () => Promise.resolve('yuv420p'));
     const request = () => service.ensureObsSeekVideo(join(root, 'show.tblink'), 'assets/reference-media/source.mp4', digest);
     const [first, second] = await Promise.all([request(), request()]);
     cleanupFiles.push(first, `${first}.sha256`);
     expect(second).toBe(first); expect(calls).toHaveLength(1);
-    expect(first).toMatch(/\.source-pixels\.mkv$/);
-    expect(calls[0]).toEqual(expect.arrayContaining(['-c:v', 'ffv1', '-threads', '2', '-avoid_negative_ts', 'disabled']));
-    expect(calls[0]).not.toContain('-pix_fmt');
+    expect(first).toMatch(/\.seek-intra\.mkv$/);
+    expect(calls[0]).toEqual(expect.arrayContaining(['-c:v', 'libx265', '-threads', '2', '-avoid_negative_ts', 'disabled']));
+    expect(calls[0]).toEqual(expect.arrayContaining(['-pix_fmt', '+', '-fps_mode', 'passthrough']));
     await expect(request()).resolves.toBe(first); expect(calls).toHaveLength(1);
+    const software = await service.ensureObsSeekVideo(join(root, 'show.tblink'), 'assets/reference-media/source.mp4', digest, 'software');
+    cleanupFiles.push(software, `${software}.sha256`);
+    expect(software).not.toBe(first); expect(software).toMatch(/\.seek-ready\.mkv$/);
+    expect(calls[1]).toEqual(expect.arrayContaining(['-c:v', 'utvideo']));
+    await expect(service.ensureObsSeekVideo(join(root, 'show.tblink'), 'assets/reference-media/source.mp4', digest, 'software')).resolves.toBe(software);
     await writeFile(first, 'corrupt-cache-longer');
     await expect(request()).rejects.toThrow('定位缓存已损坏');
     await writeFile(source, 'modified-original-longer');
     await expect(request()).rejects.toThrow('原素材完整性校验失败');
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
   });
   it('同一摘要的并行素材不能绕过各自原文件校验', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tblink-obs-source-identity-'));
@@ -115,7 +120,7 @@ describe('MediaPreviewService', () => {
     const digest = createHash('sha256').update('original').digest('hex');
     const service = new MediaPreviewService(new LinkProjectService(), async (_executable, args) => {
       await new Promise(resolve => setTimeout(resolve, 20)); await writeFile(args.at(-1)!, 'encoded-cache');
-    }, () => 'ffmpeg.exe');
+    }, () => 'ffmpeg.exe', () => Promise.resolve('yuv420p'));
     const first = service.ensureObsSeekVideo(join(root, 'show.tblink'), 'assets/reference-media/original.mp4', digest);
     const second = service.ensureObsSeekVideo(join(root, 'show.tblink'), 'assets/reference-media/changed.mp4', digest);
     const results = await Promise.allSettled([first, second]);

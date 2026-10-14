@@ -13,11 +13,12 @@ const executable = resolve(process.argv[2] || 'tools/playback-engine/bin/tblink-
 const engineSha256 = createHash('sha256').update(await readFile(executable)).digest('hex');
 const directory = await mkdtemp(resolve('artifacts/native-boundary-'));
 const bundle = join(directory, 'service.cjs');
-await build({ stdin: { contents: "export { NativePlayerService } from './apps/desktop/src/main/link/native-player-service'; export { NativeAudioCache } from './apps/desktop/src/main/link/native-audio-cache';", resolveDir: process.cwd() },
+await build({ stdin: { contents: "export { NativePlayerService } from './apps/desktop/src/main/link/native-player-service'; export { NativeAudioCache } from './apps/desktop/src/main/link/native-audio-cache'; export { WindowsMidiHealth, probeWindowsMidi, midiHealthMessage } from './apps/desktop/src/main/link/windows-midi-health';", resolveDir: process.cwd() },
   bundle: true, platform: 'node', format: 'cjs', outfile: bundle,
   alias: { '@tb/schema': resolve('packages/schema/src/index.ts'), '@tb/core/link': resolve('packages/core/src/link-public.ts') } });
 const require = createRequire(resolve('apps/desktop/package.json'));
-const { NativePlayerService, NativeAudioCache } = require(bundle);
+const { NativePlayerService, NativeAudioCache, WindowsMidiHealth, probeWindowsMidi, midiHealthMessage } = require(bundle);
+const midiHealth = new WindowsMidiHealth(() => probeWindowsMidi(resolve('tools/midi-probe/bin/tblink-midi-probe.exe')));
 const wav = Buffer.alloc(44 + 48000 * 4 * 3);
 wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
 wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(48000 * 4, 28);
@@ -29,6 +30,10 @@ const snapshots = Array.from({ length: 8 }, (_, index) => ({ version: 1, project
 const measurements = [], transitions = [], failures = [], states = [];
 let phaseItem = null;
 const player = new NativePlayerService({ executable, cache: new NativeAudioCache(join(directory, 'cache'), require('ffmpeg-static')),
+  checkDeviceHealth: async () => {
+    const result = await midiHealth.check();
+    if (result !== 'ready') throw new Error(midiHealthMessage(result));
+  },
   resolveAudio: () => audio, error: message => failures.push(message),
   measured: (phase, durationMs) => measurements.push({ itemId: phaseItem, phase, durationMs }),
   changed: state => {

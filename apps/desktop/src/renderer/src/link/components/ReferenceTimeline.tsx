@@ -48,6 +48,12 @@ import { LightingHeadings, LightingLanes, type LightingTimelineProps } from './L
 import { TimelineMarkers } from './TimelineMarkers';
 import { useLightingPreview } from '../runtime/use-lighting-preview';
 
+function seekTimelineAudio(audio: HTMLAudioElement, milliseconds: number): void {
+  const seconds = Number.isFinite(audio.duration) ? Math.min(milliseconds / 1_000, audio.duration) : milliseconds / 1_000;
+  // Reassigning the same end position queues another seek/ended cycle.
+  if (Math.abs(audio.currentTime - seconds) > 0.001) audio.currentTime = seconds;
+}
+
 type Props = {
   analysisPanel?: import('./LightingTimelineControls').MusicAnalysisHost | undefined;
   transportStatus?: import('react').ReactNode;
@@ -202,7 +208,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const seekTo = (milliseconds: number, updateAudio: boolean, snapToEdges = true): number => {
     const next = snap(props, milliseconds, snapEnabled, snapToEdges ? seekSnapPointsMs : [], snapToEdges ? snapThresholdMs : 0);
     props.onPlayheadChange(next);
-    if (!props.externalTransport && updateAudio && audioRef.current) audioRef.current.currentTime = next / 1_000;
+    if (!props.externalTransport && updateAudio && audioRef.current) seekTimelineAudio(audioRef.current, next);
     revealTimelineTime(next);
     return next;
   };

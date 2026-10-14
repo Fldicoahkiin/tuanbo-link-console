@@ -23,7 +23,7 @@ await mkdir(join(obsDirectory, 'data/obs-plugins/tblink-beauty'), { recursive: t
 await cp(join(root, 'artifacts/beauty-prototype/plugin/beauty.effect'), join(obsDirectory, 'data/obs-plugins/tblink-beauty/beauty.effect'));
 const config = join(obsDirectory, 'config/obs-studio');
 for (const folder of ['basic/profiles/Timeline', 'basic/scenes', 'plugin_config/obs-websocket']) await mkdir(join(config, folder), { recursive: true });
-const settings = '[General]\nFirstRun=false\nEnableAutoUpdates=false\n[Basic]\nProfile=Timeline\nProfileDir=Timeline\nSceneCollection=Timeline\nSceneCollectionFile=Timeline\n';
+const settings = '[General]\nFirstRun=false\nLastVersion=537001986\nEnableAutoUpdates=false\n[Basic]\nProfile=Timeline\nProfileDir=Timeline\nSceneCollection=Timeline\nSceneCollectionFile=Timeline\n';
 await writeFile(join(config, 'global.ini'), settings);
 await writeFile(join(config, 'user.ini'), settings + '[BasicWindow]\nPreviewEnabled=true\nSysTrayEnabled=false\n');
 await writeFile(join(config, 'basic/profiles/Timeline/basic.ini'), '[General]\nName=Timeline\n[Video]\nBaseCX=640\nBaseCY=360\nOutputCX=640\nOutputCY=360\nFPSType=0\nFPSCommon=30\n');

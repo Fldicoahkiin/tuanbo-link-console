@@ -56,14 +56,26 @@ class WebsiteConfigTest(unittest.TestCase):
             module.validate_config(self.previous, self.candidate.replace('Referrer-Policy no-referrer always', 'Referrer-Policy unsafe-url always'))
 
     def test_reload_waits_for_worker_to_serve_new_version(self):
-        with patch.object(module, 'probe', side_effect=['old response', 'new response']) as probe, patch.object(module.time, 'sleep'):
-            module.wait_for_page('new response')
-            self.assertEqual(probe.call_count, 2)
+        with patch.object(module, 'probe', side_effect=['old response', 'new response', 'manifest']) as probe, patch.object(module.time, 'sleep'):
+            module.wait_for_page('new response', 'manifest')
+            self.assertEqual(probe.call_count, 3)
+
+    def test_new_html_from_old_worker_does_not_prove_new_routes(self):
+        missing_route = module.subprocess.CalledProcessError(22, 'curl')
+        with patch.object(module, 'probe', side_effect=['new', missing_route, 'new', 'manifest']) as probe, patch.object(module.time, 'sleep') as sleep:
+            module.wait_for_page('new', 'manifest')
+            self.assertEqual(probe.call_count, 4)
+            sleep.assert_called_once_with(0.25)
+
+    def test_wrong_manifest_never_passes_bounded_wait(self):
+        with patch.object(module, 'probe', side_effect=['new', 'wrong'] * 10), patch.object(module.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'after reload'):
+                module.wait_for_page('new', 'manifest')
 
     def test_wrong_page_never_passes_bounded_wait(self):
         with patch.object(module, 'probe', return_value='wrong response') as probe, patch.object(module.time, 'sleep'):
             with self.assertRaisesRegex(RuntimeError, 'after reload'):
-                module.wait_for_page('expected response')
+                module.wait_for_page('expected response', 'manifest')
             self.assertEqual(probe.call_count, 10)
 
     def test_manifest_rejects_tampering_and_unlisted_paths(self):

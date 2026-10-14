@@ -2,11 +2,12 @@ import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 
-const resultSchema = z.enum(['ready', 'timeout', 'failed']);
+const resultSchema = z.enum(['ready', 'timeout', 'stopping', 'failed']);
 export type MidiHealth = z.infer<typeof resultSchema>;
 export function midiHealthMessage(result: MidiHealth): string {
   switch (result) {
     case 'ready': return 'MIDI 系统检测通过';
+    case 'stopping': return 'Windows MIDI 服务正在停止，尚未释放 MIDI 连接。正常退出 MIDI 应用并恢复服务后点击“重新检测”；持续无法停止时需保存工作后重启 Windows。工程仍可编辑。';
     case 'timeout': return 'Windows MIDI 端口枚举未响应。请恢复系统 MIDI 服务后点击“重新检测”。依赖 MIDI 的播放暂不可用，工程仍可编辑。';
     case 'failed': return 'MIDI 检测组件运行失败。请查看诊断日志并修复检测组件，随后点击“重新检测”。工程仍可编辑。';
   }
@@ -24,7 +25,11 @@ export class WindowsMidiHealth {
 
   check(recheck = false): Promise<MidiHealth> {
     if (this.pending) return this.pending;
-    if (this.result !== null && !recheck) return Promise.resolve(this.result);
+    // A successful startup probe is not a lifetime guarantee: Windows can
+    // begin stopping the service while this desktop session remains open.
+    // Recheck at each new MIDI access, but never retry a known failure without
+    // the operator's explicit action. Concurrent access still shares a probe.
+    if (this.result !== null && this.result !== 'ready' && !recheck) return Promise.resolve(this.result);
     const request = this.probe().then((result) => {
       this.result = result;
       return result;

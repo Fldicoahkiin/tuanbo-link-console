@@ -24,6 +24,32 @@ function setup(camera = false, kind: 'audio' | 'video' = 'video') {
 }
 const current = (): void => undefined;
 
+it('正式播放前预热首段和接续段，播放中不重复创建或预热；再下一段仍复用原解码器', async () => {
+  const t = setup(true);
+  const unique = t.events.filter((event, index, events) => events.findIndex(candidate => candidate.clipId === event.clipId) === index);
+  const first = unique[0]!, second = unique[1]!, third = unique[2]!;
+  await t.preload.prime(first, current); await t.preload.primeFollowing(first, current);
+  expect(t.native.prime).toHaveBeenCalledTimes(2);
+  expect(t.scenes.execute).not.toHaveBeenCalled();
+  await t.preload.execute(first, t.path); await t.preload.upcoming(60, current);
+  expect(t.native.prime).toHaveBeenCalledTimes(2);
+  await t.preload.execute(second, t.path);
+  expect(t.preload.resolveSource(first.sourceName)).toBe(`${first.sourceName}·预备`);
+  await t.preload.prime(third, current);
+  expect(t.native.prime).toHaveBeenLastCalledWith(first.sourceName, true, 'video');
+  await t.preload.close();
+});
+
+it('正式播放前取消时两份解码器都关闭，预备失败不进入时间线', async () => {
+  const t = setup(), first = t.events[0]!;
+  await t.preload.prime(first, current);
+  t.native.prime.mockRejectedValueOnce(new Error('预备解码失败'));
+  await expect(t.preload.primeFollowing(first, current)).rejects.toThrow('预备解码失败');
+  await t.preload.close();
+  expect(t.scenes.execute.mock.calls.map(([event]) => [event.sourceName, event.phase]))
+    .toEqual([[first.sourceName, 'stop'], [`${first.sourceName}·预备`, 'stop']]);
+});
+
 it.each(['audio', 'video'] as const)('按 %s 类型预热初次和复用解码器，保留裁剪定位', async kind => {
   const t = setup(false, kind);
   for (const event of t.events) {
@@ -59,9 +85,9 @@ it('播放中的四路纹理预热分散到音频时钟周期，全部仍在原�
     await preload.prime(event, current); await preload.execute(event, base.path);
   }
   expect(base.native.prime).toHaveBeenCalledTimes(4);
-  for (let frame = 60; frame <= 69; frame++) {
+  for (let frame = 60; frame <= 105; frame++) {
     await preload.upcoming(frame, current);
-    expect(base.native.prime).toHaveBeenCalledTimes(5 + Math.floor((frame - 60) / 3));
+    expect(base.native.prime).toHaveBeenCalledTimes(5 + Math.floor((frame - 60) / 15));
   }
   for (const event of events.filter(event => event.frameNumber === 360)) await preload.execute(event, base.path);
   expect(base.scenes.execute).toHaveBeenCalledTimes(8);
@@ -72,7 +98,7 @@ it('当前边界仍排队时不覆盖开场预备槽，也不因更后面的片�
   await t.preload.prime(first, current);
   await t.preload.upcoming(60, current);
   expect(t.native.prime).toHaveBeenCalledTimes(1);
-  await t.preload.execute(first, t.path); await t.preload.upcoming(63, current);
+  await t.preload.execute(first, t.path); await t.preload.upcoming(75, current);
   expect(t.native.prime).toHaveBeenCalledTimes(2);
 });
 
