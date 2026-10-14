@@ -27,11 +27,14 @@ const messages: Record<string, string> = {
   PAYMENT_QUERY_UNCONFIRMED: '支付宝尚未返回可确认的交易，请保留原订单，不要重复付款',
   PAYMENT_REFUNDED: '订单涉及退款，请联系支持核对',
   PAYMENT_REQUIRES_REVIEW: '订单收款状态需要人工核对，请联系支持',
+  PAYMENT_CLOSE_UNCONFIRMED: '支付宝尚未确认关闭原交易，原订单已保留，请稍后再查询；不要重复付款',
   RATE_LIMITED: '查询过于频繁，请稍后手动重试'
 };
 class PurchaseResponseError extends Error {
   constructor(readonly code: string, readonly status: number) { super(messages[code] ?? `购买服务请求失败（${status}），请保留原订单并手动核对`); }
 }
+// 服务端经渠道确认原交易关闭或不存在且未收款，本机可另建新单。
+const ended = (receipt: StoredReceipt): boolean => receipt.order?.state === 'closed' || receipt.order?.state === 'expired';
 
 export class PurchaseService {
   private readonly origin: URL;
@@ -73,7 +76,7 @@ export class PurchaseService {
     const request = purchaseRequestSchema.parse(input);
     return this.exclusive(async () => {
       const receipts = await this.load();
-      if (receipts.some(receipt => !receipt.rejected && receipt.delivery?.state !== 'fulfilled')) throw new Error('还有待核对的购买，请先恢复原订单；不要重复付款');
+      if (receipts.some(receipt => !receipt.rejected && receipt.delivery?.state !== 'fulfilled' && !ended(receipt))) throw new Error('还有待核对的购买，请先恢复原订单；不要重复付款');
       if (receipts.length >= 100) throw new Error('本机购买记录已达上限，请联系发行方核对');
       if (request.renewalLicenseId && !this.renewalAuthorization) throw new Error('本机续费凭据不可用，未创建订单');
       const renewalAuthorization = request.renewalLicenseId
@@ -97,10 +100,11 @@ export class PurchaseService {
       if (!order) throw new Error('尚未取得订单，请保留记录并手动恢复');
       const delivery = purchaseDeliverySchema.parse(await this.json(`/v1/orders/${order.id}/reconcile`, receipt.token, {}));
       if (delivery.id !== order.id || delivery.amountFen !== order.amountFen || delivery.quantity !== order.quantity || delivery.kind !== order.offer.kind || delivery.renewalLicenseId !== receipt.request.renewalLicenseId
-        || receipt.delivery?.state === 'fulfilled' && delivery.state !== 'fulfilled') throw new Error('交付信息与原订单不一致，请联系发行方');
+        || receipt.delivery?.state === 'fulfilled' && delivery.state !== 'fulfilled'
+        || ended(receipt) && delivery.state === 'pending' && !delivery.paymentConfirmed) throw new Error('交付信息与原订单不一致，请联系发行方');
       receipt.delivery = delivery;
-      if (delivery.state === 'fulfilled') receipt.order = { ...order, state: 'fulfilled', payable: false };
-      else if (delivery.paymentConfirmed) receipt.order = { ...order, payable: false };
+      if (delivery.state !== 'pending') receipt.order = { ...order, state: delivery.state, payable: false };
+      else if (delivery.paymentConfirmed) receipt.order = { ...order, state: 'pending', payable: false };
       await this.save(receipts);
       return this.summary(receipt);
     });
@@ -110,6 +114,7 @@ export class PurchaseService {
       const receipts = await this.load(); const receipt = this.find(receipts, localId);
       if (receipt.rejected || receipt.delivery?.state === 'fulfilled') throw new Error('这笔记录不能再次付款');
       const response = await this.recover(receipt, receipts);
+      if (response.state === 'closed' || response.state === 'expired') throw new Error('原订单已关闭且未收款，可以重新创建订单');
       if (!response.payable || !response.paymentUrl || Date.parse(response.expiresAt) - this.now() < 60000) throw new Error('付款入口已关闭或过期，请核对原订单；不要重复下单');
       const url = new URL(response.paymentUrl);
       const params = url.searchParams;

@@ -43,8 +43,8 @@ export function createLicensingServer(service: LicensingService, adminToken: str
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('X-Request-Id', requestId);
-    const deliver = (id: string, token: string, action: () => unknown) => {
-      try { action(); }
+    const deliver = async (id: string, token: string, action: () => Promise<unknown>) => {
+      try { await action(); }
       catch (error) {
         const delivery = service.readDelivery(id, token);
         if (!delivery.paymentConfirmed) throw error;
@@ -52,6 +52,23 @@ export function createLicensingServer(service: LicensingService, adminToken: str
         return delivery;
       }
       return service.readDelivery(id, token);
+    };
+    // 运营、后台与客户查单共用：按订单原渠道查询；支付宝付款期限已过仍待付款时，先由渠道关闭原交易再关单。
+    const reconcile = async (id: string, recheck: () => void = () => undefined) => {
+      if (service.paymentChannel(id) === 'wechat') {
+        if (!wechat) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '微信查单尚未启用');
+        service.wechatQueryOrder(id, wechat.appId, wechat.sellerId);
+        const payment = await wechat.query(id); recheck();
+        return service.reconcileWechat(id, payment);
+      }
+      if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用');
+      service.alipayQueryOrder(id, checkout.appId, checkout.sellerId);
+      const payment = await checkout.query(id, alipay); recheck();
+      const result = service.reconcileAlipay(id, payment);
+      if (result.paymentStatus !== 'WAIT_BUYER_PAY' || !service.closable(id)) return result;
+      await checkout.close(id, alipay); recheck();
+      service.closeOrder(id, 'closed', 'alipay:trade.close');
+      return { ...result, state: 'closed' as const };
     };
     const dispatch = async (): Promise<unknown> => {
       const now = Date.now();
@@ -62,16 +79,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       if (group !== 'payment-notify' && rates.exceeded(address, group === 'purchase' || group === 'payment-query' ? 10 : 120, now)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
       if (request.url?.startsWith('/console-api/')) {
         if (!consoleOptions) throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
-        return dispatchConsole(consoleOptions, request, response, requestId, address, () => readBody(request), async id => {
-          if (service.paymentChannel(id) === 'wechat') {
-            if (!wechat) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '微信查单尚未启用');
-            service.wechatQueryOrder(id, wechat.appId, wechat.sellerId);
-            return service.reconcileWechat(id, await wechat.query(id));
-          }
-          if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用');
-          service.alipayQueryOrder(id, checkout.appId, checkout.sellerId);
-          return service.reconcileAlipay(id, await checkout.query(id, alipay));
-        });
+        return dispatchConsole(consoleOptions, request, response, requestId, address, () => readBody(request), id => reconcile(id));
       }
       if (request.method === 'GET' && request.url === '/health') return { status: 'ok' };
       if (request.method === 'POST' && request.url === '/v1/activate') return service.activate(await readBody(request));
@@ -122,8 +130,8 @@ export function createLicensingServer(service: LicensingService, adminToken: str
         service.readDelivery(id, token);
         z.object({}).strict().parse(await readBody(request));
         const existing = service.readDelivery(id, token);
-        if (existing.state === 'fulfilled') return existing;
-        if (existing.paymentConfirmed) return deliver(id, token, () => service.retryDelivery(id, { reason: '客户持原凭据请求补交付' }));
+        if (existing.state !== 'pending') return existing;
+        if (existing.paymentConfirmed) return deliver(id, token, () => Promise.resolve(service.retryDelivery(id, { reason: '客户持原凭据请求补交付' })));
         const channel = service.paymentChannel(id);
         if (channel === 'wechat') {
           if (!wechat) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '微信查单尚未启用，请保留原订单并联系支持');
@@ -136,18 +144,9 @@ export function createLicensingServer(service: LicensingService, adminToken: str
         if (paymentQueries.has(id) || paymentQueries.size >= 10000) throw new ServiceError(429, 'RATE_LIMITED', '原订单正在查询或刚完成查询，请十秒后手动重试');
         const gate = { until: now + 10000, running: true };
         paymentQueries.set(id, gate);
-        try {
-          if (channel === 'wechat' && wechat) {
-            const payment = await wechat.query(id);
-            service.readDelivery(id, token);
-            return deliver(id, token, () => service.reconcileWechat(id, payment));
-          }
-          if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用');
-          const payment = await checkout.query(id, alipay);
-          // The credential may expire or be revoked while the channel request is in flight.
-          service.readDelivery(id, token);
-          return deliver(id, token, () => service.reconcileAlipay(id, payment));
-        } finally { gate.running = false; gate.until = Date.now() + 10000; }
+        // The credential may expire or be revoked while the channel request is in flight.
+        try { return await deliver(id, token, () => reconcile(id, () => service.readDelivery(id, token))); }
+        finally { gate.running = false; gate.until = Date.now() + 10000; }
       }
       if (request.method === 'POST' && request.url === '/v1/payments/wechat/notify' && wechat) {
         if (!/^application\/json(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '')) throw new ServiceError(415, 'CONTENT_TYPE', '需要 UTF-8 JSON 通知');
@@ -183,18 +182,10 @@ export function createLicensingServer(service: LicensingService, adminToken: str
         const payment = service.prepareAlipayPayment(pay[1]!, checkout.appId, checkout.sellerId);
         return { ...payment, paymentUrl: checkout.createUrl(payment) };
       }
-      const reconcile = /^\/admin\/orders\/([a-f0-9-]{36})\/reconcile$/.exec(request.url);
-      if (request.method === 'POST' && reconcile) {
+      const adminReconcile = /^\/admin\/orders\/([a-f0-9-]{36})\/reconcile$/.exec(request.url);
+      if (request.method === 'POST' && adminReconcile) {
         z.object({}).strict().parse(await readBody(request));
-        if (service.paymentChannel(reconcile[1]!) === 'wechat') {
-          if (!wechat) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '微信查单尚未启用');
-          service.wechatQueryOrder(reconcile[1]!, wechat.appId, wechat.sellerId);
-          return service.reconcileWechat(reconcile[1]!, await wechat.query(reconcile[1]!));
-        }
-        if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝查单尚未启用');
-        service.alipayQueryOrder(reconcile[1]!, checkout.appId, checkout.sellerId);
-        const payment = await checkout.query(reconcile[1]!, alipay);
-        return service.reconcileAlipay(reconcile[1]!, payment);
+        return reconcile(adminReconcile[1]!);
       }
       const deliveryAccess = /^\/admin\/orders\/([a-f0-9-]{36})\/delivery-access(\/revoke)?$/.exec(request.url);
       if (request.method === 'POST' && deliveryAccess) return deliveryAccess[2] ? service.revokeDeliveryAccess(deliveryAccess[1]!, await readBody(request)) : service.issueDeliveryAccess(deliveryAccess[1]!, await readBody(request));

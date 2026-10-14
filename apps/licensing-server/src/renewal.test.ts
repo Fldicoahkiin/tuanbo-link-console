@@ -81,7 +81,8 @@ it('续费金额错误或已撤销时不能交付，也不能把同笔流水用�
   expect(() => service.fulfill(second.id, { amountFen: 100, paymentReference: 'alipay:once' }, 'alipay', identity)).toThrow('流水');
   service.revoke(license.id, { reason: '测试撤销' });
   expect(() => service.fulfill(second.id, { amountFen: 100, paymentReference: 'alipay:after-revoke' }, 'alipay', identity)).toThrow('已撤销');
-  expect(service.describeOrder(second.id).state).toBe('pending');
+  // 收款事实已记录，交付被拒：订单停在 paid，等待运营核对。
+  expect(service.describeOrder(second.id).state).toBe('paid');
   expect(paid.useUntil).toBe(new Date(start + 60 * day).toISOString());
 });
 

@@ -6,6 +6,7 @@ import { Button } from './Button';
 
 const money = (fen: number): string => `¥${(fen / 100).toFixed(2)}`;
 const recordsSchema = z.array(purchaseReceiptSchema).max(100);
+const ended = (record: PurchaseReceipt): boolean => record.order?.state === 'closed' || record.order?.state === 'expired';
 
 export function PurchaseSettings({ runtimeActive, onSelectCode, license }: { runtimeActive: boolean; onSelectCode: (code: string) => void; license?: LicenseClaims | null }): JSX.Element {
   const [catalog, setCatalog] = useState<PurchaseCatalogResponse | null>(null);
@@ -24,7 +25,7 @@ export function PurchaseSettings({ runtimeActive, onSelectCode, license }: { run
   const canRenew = license?.kind === 'subscription' && Boolean(license.online);
   const offers = catalog?.offers.filter(item => !renewing || item.kind === 'subscription') ?? [];
   const offer = offers.find(item => item.id === offerId);
-  const unresolved = records.some(record => !record.rejected && record.delivery?.state !== 'fulfilled');
+  const unresolved = records.some(record => !record.rejected && record.delivery?.state !== 'fulfilled' && !ended(record));
   useEffect(() => {
     let alive = true;
     void window.tbLink.listPurchases().then(value => {
@@ -79,12 +80,12 @@ export function PurchaseSettings({ runtimeActive, onSelectCode, license }: { run
         <div className="settings-header-actions"><Button type="submit" className="primary-button" disabled={!offer || !confirmed || (renewing ? !canRenew : !customer.trim())}><ShoppingCart />{renewing ? '创建续费订单' : '创建购买订单'}</Button></div>
       </fieldset>
     </form> : null}
-    {unresolved ? <p className="settings-note">还有待核对的购买。若关闭过付款页或遇到网络错误，请恢复原订单，不要重复付款。</p> : null}
+    {unresolved ? <p className="settings-note">还有待核对的购买。若关闭过付款页或遇到网络错误，请恢复原订单，不要重复付款。付款入口过期且未付款时，点击“查询付款并领取”，确认原单关闭后即可重新购买。</p> : null}
     {!ready ? <Button className="secondary-button" disabled={busy} onClick={() => void run(() => Promise.resolve())}>重新读取购买记录</Button> : null}
     {ready && records.length === 0 ? <p className="settings-note">本机暂无购买记录。</p> : null}
     {[...records].reverse().map(record => <article key={record.localId} className="settings-section" aria-label={`购买记录 ${record.order?.id ?? record.localId}`}>
       <h4>{record.order?.offer.name ?? record.request.offerId}</h4>
-      <p>{record.rejected ? '未建单，请重新查看商品' : record.delivery?.state === 'fulfilled' ? record.request.renewalLicenseId ? '续费已完成，请联网验证原授权' : '已付款，可领取激活码' : record.delivery?.paymentConfirmed ? '付款已确认，授权待处理，请联系支持；无需再次付款' : record.order?.state === 'fulfilled' ? '已付款，待查询交付' : record.order ? '待付款或核对' : '结果待确认，请恢复原订单'}</p>
+      <p>{record.rejected ? '未建单，请重新查看商品' : ended(record) ? '原订单已关闭，未收款；可以重新购买' : record.delivery?.state === 'fulfilled' ? record.request.renewalLicenseId ? '续费已完成，请联网验证原授权' : '已付款，可领取激活码' : record.delivery?.paymentConfirmed ? '付款已确认，授权待处理，请联系支持；无需再次付款' : record.order?.state === 'fulfilled' ? '已付款，待查询交付' : record.order ? '待付款或核对' : '结果待确认，请恢复原订单'}</p>
       <p className="settings-note">{new Date(record.createdAt).toLocaleString('zh-CN')} · {record.request.quantity} 台 · {money(record.order?.amountFen ?? record.request.quotedUnitAmountFen * record.request.quantity)}</p>
       <label className="settings-path-row"><span>{record.order ? '订单编号' : '本机购买编号'}</span><input aria-label="购买编号" value={record.order?.id ?? record.localId} readOnly onFocus={event => event.currentTarget.select()} /></label>
       {!record.rejected ? <div className="settings-header-actions">

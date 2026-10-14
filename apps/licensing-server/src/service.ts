@@ -13,7 +13,21 @@ const orderSchema = z.object({
 }).strict().refine(value => (value.kind === 'perpetual') === (value.useUntil === null), '买断不设使用期限，订阅必须填写期限');
 const paymentSchema = z.object({ paymentReference: z.string().trim().min(1).max(100), amountFen: z.number().int().positive() }).strict();
 const licenseRowSchema = z.object({ id: z.string(), order_id: z.string(), code_hash: z.string(), code_cipher: z.string(), machine: z.string().nullable(), revoked: z.number(), lease_until: z.number() });
-const orderRowSchema = z.object({ id: z.string(), body: z.string(), state: z.enum(['pending', 'fulfilled']), payment_reference: z.string().nullable() });
+const orderStateSchema = z.enum(['pending', 'paid', 'fulfilled', 'refunded', 'closed', 'expired']);
+type OrderState = z.infer<typeof orderStateSchema>;
+// 生产库只允许新增表，旧版“有收款记录但仍为 pending”的行不回填；收到收款事实时经 settle() 收敛为 paid。
+const orderTransitions: Readonly<Record<OrderState, readonly OrderState[]>> = {
+  pending: ['paid', 'closed', 'expired'], paid: ['fulfilled', 'refunded'], fulfilled: ['refunded'], refunded: [],
+  // 关单后仍收到验签成功的付款：保留收款事实并照常交付，审计中可见 closed→paid。
+  closed: ['paid'], expired: ['paid']
+};
+const orderRowSchema = z.object({ id: z.string(), body: z.string(), state: orderStateSchema, payment_reference: z.string().nullable() });
+const alipayIdentity = { orderId: z.string().uuid(), appId: z.string().regex(/^\d{16}$/), sellerId: z.string().regex(/^\d{16}$/) };
+const alipayTradeStatus = z.enum(['TRADE_SUCCESS', 'TRADE_FINISHED', 'WAIT_BUYER_PAY', 'TRADE_CLOSED']);
+const alipayQuerySchema = z.union([
+  z.object({ ...alipayIdentity, status: z.literal('TRADE_NOT_EXIST') }).strict(),
+  z.object({ ...alipayIdentity, status: alipayTradeStatus, amountFen: z.number().int().positive(), paymentReference: z.string() }).strict()
+]);
 
 type PaymentSource = 'manual' | 'alipay' | 'wechat';
 type PaymentChannel = Exclude<PaymentSource, 'manual'>;
@@ -61,6 +75,29 @@ export class LicensingService {
   private audit(action: string, target: string, detail = ''): void {
     this.db.prepare('INSERT INTO audit VALUES (?, ?, ?, ?, ?)').run(randomUUID(), new Date(this.now()).toISOString(), action, target, detail);
   }
+  /** 订单状态的唯一写入口；须在事务内调用，每次转换写审计。 */
+  private transition(id: string, to: OrderState, reason: string): void {
+    if (this.transactionDepth === 0) throw new Error('订单状态转换必须在事务内执行');
+    const from = this.order(id).state;
+    if (!orderTransitions[from].includes(to)) throw new ServiceError(409, 'ORDER_STATE_CONFLICT', '订单当前状态不允许此操作，请刷新后核对', id);
+    if (this.db.prepare('UPDATE orders SET state = ? WHERE id = ? AND state = ?').run(to, id, from).changes !== 1) throw new Error('订单状态写入未生效');
+    this.audit('order.state-changed', id, `${from}->${to}:${reason}`);
+  }
+  /** 已有可信收款的订单至少处于 paid。 */
+  private settle(id: string, reason: string): void {
+    const { state } = this.order(id);
+    if ((state === 'pending' || state === 'closed' || state === 'expired') && this.hasPayment(id)) this.transition(id, 'paid', reason);
+  }
+  /** 对客户只公开 pending/fulfilled/closed/expired，旧版桌面端仍能解析已收款与已交付订单。 */
+  private publicState(order: { state: OrderState; payment_reference: string | null }): 'pending' | 'fulfilled' | 'closed' | 'expired' {
+    switch (order.state) {
+      case 'pending': case 'paid': return 'pending';
+      case 'fulfilled': return 'fulfilled';
+      // 退款不自动撤销授权：已交付的码照常可领，未交付即退款的按关闭处理。
+      case 'refunded': return order.payment_reference === null ? 'closed' : 'fulfilled';
+      case 'closed': case 'expired': return order.state;
+    }
+  }
   private hash(code: string): string { return createHmac('sha256', this.dataKey).update(`activation:${code}`).digest('hex'); }
   private encrypt(code: string): string {
     const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', this.dataKey, iv);
@@ -79,7 +116,7 @@ export class LicensingService {
     const parsed = orderRowSchema.parse(row);
     return { ...parsed, details: orderSchema.parse(JSON.parse(parsed.body)) };
   }
-  createOrder(input: unknown): { id: string; state: 'pending' | 'fulfilled' } {
+  createOrder(input: unknown): { id: string; state: OrderState } {
     const order = orderSchema.parse(input);
     if (order.amountFen < 1) throw new ServiceError(400, 'INVALID_AMOUNT', '销售订单金额必须大于零');
     if (Date.parse(order.updatesUntil) <= this.now() || order.useUntil && Date.parse(order.useUntil) <= this.now()) throw new ServiceError(400, 'INVALID_TERM', '订单期限必须晚于当前时间');
@@ -87,7 +124,7 @@ export class LicensingService {
       const prior = this.db.prepare('SELECT id, body, state FROM orders WHERE reference = ?').get(order.reference);
       if (prior) {
         if (prior.body !== JSON.stringify(order)) throw new ServiceError(409, 'ORDER_CONFLICT', '订单编号已存在且内容不同');
-        return { id: z.string().parse(prior.id), state: z.enum(['pending', 'fulfilled']).parse(prior.state) };
+        return { id: z.string().parse(prior.id), state: orderStateSchema.parse(prior.state) };
       }
       const id = randomUUID();
       this.db.prepare("INSERT INTO orders VALUES (?, ?, ?, 'pending', NULL)").run(id, order.reference, JSON.stringify(order));
@@ -141,7 +178,7 @@ export class LicensingService {
       const order = this.order(id);
       const link = z.object({ expires_at: z.number(), app_id: z.string(), seller_id: z.string() }).parse(this.db.prepare(`SELECT * FROM ${table} WHERE order_id = ?`).get(id));
       const snapshot = z.object({ offer_body: z.string() }).parse(this.db.prepare('SELECT offer_body FROM purchase_requests WHERE order_id = ?').get(id));
-      return { id, state: order.state, amountFen: order.details.amountFen, quantity: order.details.quantity, ...this.renewalTarget(id),
+      return { id, state: this.publicState(order), amountFen: order.details.amountFen, quantity: order.details.quantity, ...this.renewalTarget(id),
         offer: purchaseOfferSchema.parse(JSON.parse(snapshot.offer_body)),
         expiresAt: new Date(link.expires_at).toISOString(), payable: order.state === 'pending' && !this.hasPayment(id) && link.expires_at - this.now() >= 60000 && link.app_id === payment?.appId && link.seller_id === payment.sellerId };
     });
@@ -204,7 +241,8 @@ export class LicensingService {
     return this.transaction(() => {
       if (this.paymentChannel(id) === 'wechat') throw new ServiceError(409, 'PAYMENT_CHANNEL_MISMATCH', '微信订单不能另建支付宝付款入口');
       const order = this.order(id);
-      if (order.state !== 'pending') throw new ServiceError(409, 'ORDER_ALREADY_FULFILLED', '订单已交付，无需再次付款');
+      if (order.state === 'fulfilled' || order.state === 'refunded') throw new ServiceError(409, 'ORDER_ALREADY_FULFILLED', '订单已交付，无需再次付款');
+      if (order.state === 'closed' || order.state === 'expired') throw new ServiceError(409, 'ORDER_STATE_CONFLICT', '订单已关闭，不能再生成付款入口', id);
       if (this.hasPayment(id)) throw new ServiceError(409, 'PAYMENT_ALREADY_RECEIVED', '付款已确认，授权待处理，请勿重复付款');
       const now = this.now();
       const expiresAt = Math.min(now + 15 * 60000, Date.parse(order.details.updatesUntil), order.details.useUntil ? Date.parse(order.details.useUntil) : Infinity);
@@ -228,17 +266,31 @@ export class LicensingService {
     return { id, state: order.state, amountFen: order.details.amountFen };
   }
   reconcileAlipay(id: string, input: unknown) {
-    const payment = z.object({ orderId: z.string().uuid(), amountFen: z.number().int().positive(), paymentReference: z.string(),
-      appId: z.string().regex(/^\d{16}$/), sellerId: z.string().regex(/^\d{16}$/),
-      status: z.enum(['TRADE_SUCCESS', 'TRADE_FINISHED', 'WAIT_BUYER_PAY', 'TRADE_CLOSED']) }).strict().parse(input);
+    const payment = alipayQuerySchema.parse(input);
     const order = this.alipayQueryOrder(id, payment.appId, payment.sellerId);
     if (payment.orderId !== id) throw new ServiceError(409, 'PAYMENT_ORDER_MISMATCH', '查单返回了其他订单');
-    if (payment.amountFen !== order.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '查单金额与订单不一致');
+    if (payment.status !== 'TRADE_NOT_EXIST' && payment.amountFen !== order.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '查单金额与订单不一致');
     const settled = payment.status === 'TRADE_SUCCESS' || payment.status === 'TRADE_FINISHED';
-    const result = settled ? this.fulfill(id, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'alipay', payment) : order;
-    this.transaction(() => this.audit('order.alipay-queried', id, payment.status));
-    // 已交付订单的 CLOSED 可能代表退款，记录事实但不推断退款金额或撤销席位。
-    return { id, state: result.state, paymentStatus: payment.status, needsReview: !settled && result.state === 'fulfilled' };
+    if (settled) this.fulfill(id, { paymentReference: payment.paymentReference, amountFen: payment.amountFen }, 'alipay', payment);
+    return this.transaction(() => {
+      this.audit('order.alipay-queried', id, payment.status);
+      const closure = payment.status === 'TRADE_NOT_EXIST' ? 'expired' : payment.status === 'TRADE_CLOSED' ? 'closed' : null;
+      if (closure && this.closable(id)) this.transition(id, closure, `alipay:${payment.status}`);
+      const { state } = this.order(id);
+      // 已交付订单的 CLOSED 可能代表退款，记录事实但不推断退款金额或撤销席位。
+      return { id, state, paymentStatus: payment.status, needsReview: !settled && state === 'fulfilled' };
+    });
+  }
+  /** 待付款、无收款记录且支付宝付款期限已过；仍须渠道确认交易关闭或不存在后才能关单。 */
+  closable(id: string): boolean {
+    const link = this.db.prepare('SELECT expires_at FROM alipay_payment_links WHERE order_id = ?').get(id);
+    return this.order(id).state === 'pending' && !this.hasPayment(id) && link !== undefined && this.now() >= z.object({ expires_at: z.number() }).parse(link).expires_at;
+  }
+  closeOrder(id: string, to: 'closed' | 'expired', reason: string): void {
+    this.transaction(() => {
+      if (!this.closable(id)) throw new ServiceError(409, 'ORDER_STATE_CONFLICT', '订单已收款或付款期限未过，不能关闭', id);
+      this.transition(id, to, reason);
+    });
   }
   private hasPayment(id: string): boolean {
     return Boolean(this.db.prepare('SELECT order_id FROM payment_receipts WHERE order_id = ?').get(id));
@@ -247,7 +299,7 @@ export class LicensingService {
     const cursor = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).parse(after);
     const rows = this.db.prepare(`SELECT p.rowid AS cursor, p.order_id AS orderId, p.payment_reference AS paymentReference,
       p.amount_fen AS amountFen, p.source, p.received_at AS receivedAt, p.last_error AS lastError
-      FROM payment_receipts p JOIN orders o ON o.id = p.order_id WHERE o.state = 'pending' AND p.rowid > ? ORDER BY p.rowid LIMIT 100`).all(cursor);
+      FROM payment_receipts p JOIN orders o ON o.id = p.order_id WHERE o.state IN ('pending', 'paid') AND p.rowid > ? ORDER BY p.rowid LIMIT 100`).all(cursor);
     const items = z.array(z.object({ cursor: z.number().int(), orderId: z.string().uuid(), paymentReference: z.string(),
       amountFen: z.number().int(), source: z.enum(['manual', 'alipay', 'wechat']), receivedAt: z.string().datetime(), lastError: z.string().nullable() })).parse(rows);
     return { items, nextCursor: items.length === 100 ? items[99]!.cursor : null };
@@ -277,6 +329,7 @@ export class LicensingService {
           paymentIdentity?.appId ?? null, paymentIdentity?.sellerId ?? null, new Date(this.now()).toISOString());
         this.audit('order.payment-received', id, source);
       }
+      this.settle(id, `${source}-payment`);
     });
     try { return this.transaction(() => {
       const result = this.fulfillOrder(id, payment, source, paymentIdentity);
@@ -299,14 +352,14 @@ export class LicensingService {
     const link = this.db.prepare('SELECT app_id, seller_id FROM alipay_payment_links WHERE order_id = ?').get(id);
     if (link && source === 'alipay' && (link.app_id !== paymentIdentity?.appId || link.seller_id !== paymentIdentity?.sellerId)) throw new ServiceError(409, 'PAYMENT_IDENTITY_MISMATCH', '支付通知与订单绑定的商户或应用不匹配');
     if (order.details.amountFen !== payment.amountFen) throw new ServiceError(409, 'AMOUNT_MISMATCH', '核款金额与订单不一致');
-    if (order.state === 'fulfilled' && order.payment_reference !== payment.paymentReference) throw new ServiceError(409, 'PAYMENT_CONFLICT', '订单已使用其他流水完成核款');
+    if (order.payment_reference !== null && order.payment_reference !== payment.paymentReference) throw new ServiceError(409, 'PAYMENT_CONFLICT', '订单已使用其他流水完成核款');
     if (this.db.prepare('SELECT id FROM orders WHERE payment_reference = ? AND id != ?').get(payment.paymentReference, id)
       || this.db.prepare('SELECT order_id FROM payment_receipts WHERE payment_reference = ? AND order_id != ?').get(payment.paymentReference, id)) throw new ServiceError(409, 'PAYMENT_REUSED', '收款流水已用于另一订单');
     return order;
   }
   private fulfillOrder(id: string, payment: z.infer<typeof paymentSchema>, source: PaymentSource, paymentIdentity?: { appId: string; sellerId: string }) {
     const order = this.validatePayment(id, payment, source, paymentIdentity);
-    if (order.state === 'fulfilled') return this.describeOrder(id);
+    if (order.state === 'fulfilled' || order.state === 'refunded') return this.describeOrder(id);
     const purchase = this.db.prepare('SELECT offer_body FROM purchase_requests WHERE order_id = ?').get(id);
     const { renewalLicenseId } = this.renewalTarget(id);
     if (purchase) {
@@ -327,7 +380,8 @@ export class LicensingService {
       orderSchema.parse(order.details);
       this.db.prepare('UPDATE orders SET body = ? WHERE id = ?').run(JSON.stringify(order.details), id);
     } else if (order.details.useUntil && Date.parse(order.details.useUntil) <= this.now() || Date.parse(order.details.updatesUntil) <= this.now()) throw new ServiceError(409, 'ORDER_EXPIRED', '订单期限已过，请重新确认订单');
-    this.db.prepare("UPDATE orders SET state = 'fulfilled', payment_reference = ? WHERE id = ?").run(payment.paymentReference, id);
+    this.transition(id, 'fulfilled', source);
+    this.db.prepare('UPDATE orders SET payment_reference = ? WHERE id = ?').run(payment.paymentReference, id);
     if (renewalLicenseId) {
       this.db.prepare('UPDATE license_renewals SET use_until = ?, updates_until = ? WHERE order_id = ?').run(order.details.useUntil, order.details.updatesUntil, id);
       this.db.prepare('UPDATE license_term_overrides SET use_until=? WHERE license_id=?').run(order.details.useUntil, renewalLicenseId);
@@ -378,14 +432,15 @@ export class LicensingService {
     return this.transaction(() => {
       this.requireDeliveryAccess(id, token);
       const order = this.order(id);
+      const state = this.publicState(order);
       const target = this.renewalTarget(id);
-      const licenses = order.state === 'fulfilled' ? this.orderLicenses(id).map(row => {
+      const licenses = state === 'fulfilled' ? this.orderLicenses(id).map(row => {
         const license = licenseRowSchema.parse(row);
         return { id: license.id, code: license.revoked || target.renewalLicenseId ? null : this.decrypt(license.code_cipher), revoked: Boolean(license.revoked) };
       }) : [];
-      return { id, state: order.state, amountFen: order.details.amountFen, quantity: order.details.quantity,
+      return { id, state, amountFen: order.details.amountFen, quantity: order.details.quantity,
         kind: order.details.kind, useUntil: order.details.useUntil, updatesUntil: order.details.updatesUntil, ...target, licenses,
-        ...(order.state === 'pending' && this.hasPayment(id) ? { paymentConfirmed: true as const } : {}) };
+        ...(state === 'pending' && this.hasPayment(id) ? { paymentConfirmed: true as const } : {}) };
     });
   }
   private requireDeliveryAccess(id: string, token: string): void {

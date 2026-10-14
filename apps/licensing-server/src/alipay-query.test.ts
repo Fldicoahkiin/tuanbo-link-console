@@ -1,6 +1,11 @@
 import { listenHttpTestServer } from './http-test-server';
 import { generateKeyPairSync, randomBytes, sign, verify } from 'node:crypto';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import { AlipayCheckout, AlipayNotifications } from './alipay';
 import { createLicensingServer } from './http';
 import { LicensingService } from './service';
@@ -58,7 +63,10 @@ it('拒绝篡改、无签名、其他订单和歧义信封，不接受错误码�
   expect(() => notifications.verifyQuery(valid.replace('123.45', '999.00'), order.id)).toThrow('验签失败');
   expect(() => notifications.verifyQuery(JSON.stringify({ alipay_trade_query_response: fields(order.id) }), order.id)).toThrow('验签失败');
   expect(() => notifications.verifyQuery(valid, '11111111-1111-4111-8111-111111111111')).toThrow('其他订单');
-  expect(() => notifications.verifyQuery(signed(JSON.stringify({ code: '40004', sub_code: 'ACQ.TRADE_NOT_EXIST' })), order.id)).toThrow('尚未返回可确认');
+  expect(() => notifications.verifyQuery(signed(JSON.stringify({ code: '40004', sub_code: 'ACQ.SYSTEM_ERROR' })), order.id)).toThrow('尚未返回可确认');
+  expect(() => notifications.verifyQuery(JSON.stringify({ alipay_trade_query_response: { code: '40004', sub_code: 'ACQ.TRADE_NOT_EXIST' } }), order.id)).toThrow('验签失败');
+  expect(notifications.verifyQuery(signed(JSON.stringify({ code: '40004', msg: 'Business Failed', sub_code: 'ACQ.TRADE_NOT_EXIST' })), order.id))
+    .toEqual({ orderId: order.id, status: 'TRADE_NOT_EXIST', appId, sellerId });
   expect(() => notifications.verifyQuery(`{"alipay_trade_query_response":{},${valid.slice(1)}`, order.id)).toThrow();
   expect(() => notifications.verifyQuery(signed(`${JSON.stringify(fields(order.id))},"other":{}`), order.id)).toThrow('格式无效');
 });
@@ -215,4 +223,63 @@ it.each(['pending', 'network', 'revoked', 'tampered'] as const)('客户查单并
     expect(service.describeOrder(order.id).state).toBe('pending');
     expect(service.describeOrder(order.id).licenses).toEqual([]);
   } finally { release(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+it('付款期限过后查单确认交易不存在或已关闭才关单；仍待付款先调用 alipay.trade.close，未确认则保持待付款；每次转换写审计', async () => {
+  let clock = now;
+  const path = join(await mkdtemp(join(tmpdir(), 'tblink-close-')), 'license.db');
+  const service = new LicensingService(path, issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => clock);
+  services.push(service);
+  const checkout = new AlipayCheckout(appId, sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), () => clock);
+  const create = (reference: string) => {
+    const order = service.createOrder({ reference, customer: '测试客户', customerType: 'company', quantity: 1, kind: 'perpetual', amountFen: 12345, useUntil: null, updatesUntil: '2027-09-28T00:00:00Z' });
+    service.prepareAlipayPayment(order.id, appId, sellerId); return order.id;
+  };
+  const missing = create('close-missing'); const closed = create('close-closed'); const waiting = create('close-waiting');
+  const replies: Record<string, (id: string) => string> = {};
+  const closeRequests: string[] = [];
+  const providerRequest = vi.fn<typeof fetch>((input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input)); const method = url.searchParams.get('method')!;
+    if (!(init?.body instanceof URLSearchParams)) throw new Error('应发送表单正文');
+    const id = z.object({ out_trade_no: z.string() }).parse(JSON.parse(init.body.get('biz_content')!)).out_trade_no;
+    if (method === 'alipay.trade.close') closeRequests.push(id);
+    return Promise.resolve(new Response(replies[method]!(id)));
+  });
+  const query = checkout.query.bind(checkout); const close = checkout.close.bind(checkout);
+  vi.spyOn(checkout, 'query').mockImplementation((id, verifier) => query(id, verifier, providerRequest));
+  vi.spyOn(checkout, 'close').mockImplementation((id, verifier) => close(id, verifier, providerRequest));
+  const status: Record<string, string> = { [missing]: 'TRADE_NOT_EXIST', [closed]: 'TRADE_CLOSED', [waiting]: 'WAIT_BUYER_PAY' };
+  replies['alipay.trade.query'] = trade => {
+    const order = [missing, closed, waiting].find(id => `TB_${id.replaceAll('-', '')}` === trade)!;
+    return status[order] === 'TRADE_NOT_EXIST' ? signed(JSON.stringify({ code: '40004', msg: 'Business Failed', sub_code: 'ACQ.TRADE_NOT_EXIST' }))
+      : signed(JSON.stringify(fields(order, { trade_status: status[order]!, total_amount: '123.45' })));
+  };
+  const closeReply = (body: unknown) => () => { const text = JSON.stringify(body); return `{"alipay_trade_close_response":${text},"sign":"${sign('RSA-SHA256', Buffer.from(text), provider.privateKey).toString('base64')}"}`; };
+  replies['alipay.trade.close'] = closeReply({ code: '40004', msg: 'Business Failed', sub_code: 'ACQ.TRADE_STATUS_ERROR' });
+  const admin = 'a'.repeat(48); const server = createLicensingServer(service, admin, notifications, checkout);
+  await listenHttpTestServer(server);
+  try {
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
+    const reconcile = (id: string) => fetch(`http://127.0.0.1:${address.port}/admin/orders/${id}/reconcile`, {
+      method: 'POST', headers: { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(5000)
+    });
+    for (const id of [missing, closed, waiting]) expect(await (await reconcile(id)).json()).toMatchObject({ state: 'pending' });
+    expect(closeRequests).toEqual([]);
+    clock += 15 * 60000;
+    expect(await (await reconcile(missing)).json()).toMatchObject({ state: 'expired', paymentStatus: 'TRADE_NOT_EXIST' });
+    expect(await (await reconcile(closed)).json()).toMatchObject({ state: 'closed', paymentStatus: 'TRADE_CLOSED' });
+    const unconfirmed = await reconcile(waiting);
+    expect(unconfirmed.status).toBe(502); expect(await unconfirmed.json()).toMatchObject({ code: 'PAYMENT_CLOSE_UNCONFIRMED' });
+    expect(service.describeOrder(waiting).state).toBe('pending');
+    replies['alipay.trade.close'] = closeReply({ code: '10000', msg: 'Success', out_trade_no: `TB_${waiting.replaceAll('-', '')}`, trade_no: '202609282200000000000001' });
+    expect(await (await reconcile(waiting)).json()).toMatchObject({ state: 'closed', paymentStatus: 'WAIT_BUYER_PAY' });
+    expect(closeRequests).toEqual([`TB_${waiting.replaceAll('-', '')}`, `TB_${waiting.replaceAll('-', '')}`]);
+    expect(() => service.prepareAlipayPayment(waiting, appId, sellerId)).toThrow('已关闭');
+    const db = new DatabaseSync(path, { readOnly: true });
+    try {
+      expect(db.prepare("SELECT target, detail FROM audit WHERE action = 'order.state-changed' ORDER BY rowid").all()).toEqual([
+        { target: missing, detail: 'pending->expired:alipay:TRADE_NOT_EXIST' }, { target: closed, detail: 'pending->closed:alipay:TRADE_CLOSED' },
+        { target: waiting, detail: 'pending->closed:alipay:trade.close' }]);
+    } finally { db.close(); }
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

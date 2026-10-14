@@ -55,15 +55,22 @@ export class AlipayNotifications {
     if (total < 1 || total > 100_000_000) throw new ServiceError(400, 'INVALID_PAYMENT_AMOUNT', '支付金额超出订单范围');
     return { orderId: notification.out_trade_no, paymentReference: `alipay:${notification.trade_no}`, amountFen: total, appId: this.appId, sellerId: this.sellerId };
   }
-  verifyQuery(body: string, expectedId: string) {
-    // 公钥模式只接收 response + sign 信封。仅解析验签覆盖的原始对象，禁止重序列化后验签。
-    const envelope = /^\s*\{\s*"alipay_trade_query_response"\s*:\s*(\{[\s\S]*\})\s*,\s*"sign"\s*:\s*"([A-Za-z0-9+/]+={0,2})"\s*\}\s*$/.exec(body);
-    if (!envelope || !verify('RSA-SHA256', Buffer.from(envelope[1]!, 'utf8'), this.key, Buffer.from(envelope[2]!, 'base64'))) throw new ServiceError(502, 'INVALID_PAYMENT_SIGNATURE', '支付宝查单响应验签失败');
+  /** 公钥模式只接收 response + sign 信封。仅解析验签覆盖的原始对象，禁止重序列化后验签。 */
+  private signedResponse(body: string, method: 'alipay.trade.query' | 'alipay.trade.close') {
+    const label = method === 'alipay.trade.query' ? '查单' : '关单';
+    const envelope = new RegExp(`^\\s*\\{\\s*"${method.replaceAll('.', '_')}_response"\\s*:\\s*(\\{[\\s\\S]*\\})\\s*,\\s*"sign"\\s*:\\s*"([A-Za-z0-9+/]+={0,2})"\\s*\\}\\s*$`).exec(body);
+    if (!envelope || !verify('RSA-SHA256', Buffer.from(envelope[1]!, 'utf8'), this.key, Buffer.from(envelope[2]!, 'base64'))) throw new ServiceError(502, 'INVALID_PAYMENT_SIGNATURE', `支付宝${label}响应验签失败`);
     let data: unknown;
     try { data = JSON.parse(envelope[1]!) as unknown; }
-    catch { throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', '支付宝查单响应格式无效'); }
+    catch { throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', `支付宝${label}响应格式无效`); }
     const result = z.object({ code: z.string(), sub_code: z.string().optional() }).safeParse(data);
-    if (!result.success || result.data.code !== '10000') throw new ServiceError(502, 'PAYMENT_QUERY_UNCONFIRMED', '支付宝尚未返回可确认的交易结果，请核对渠道后重试');
+    return { data, code: result.success ? result.data.code : null, subCode: result.success ? result.data.sub_code : undefined };
+  }
+  verifyQuery(body: string, expectedId: string) {
+    const { data, code, subCode } = this.signedResponse(body, 'alipay.trade.query');
+    // 买家未打开收银台时渠道无交易；只有已验签的明确业务结果才能用于关单。
+    if (code === '40004' && subCode === 'ACQ.TRADE_NOT_EXIST') return { orderId: expectedId, status: 'TRADE_NOT_EXIST' as const, appId: this.appId, sellerId: this.sellerId };
+    if (code !== '10000') throw new ServiceError(502, 'PAYMENT_QUERY_UNCONFIRMED', '支付宝尚未返回可确认的交易结果，请核对渠道后重试');
     const parsed = z.object({
       out_trade_no: z.string(), trade_no: z.string().regex(/^\d{16,64}$/), trade_status: tradeStatus,
       total_amount: amount, trans_currency: z.literal('CNY').optional(),
@@ -80,6 +87,12 @@ export class AlipayNotifications {
     if (total < 1 || total > 100_000_000) throw new ServiceError(502, 'INVALID_PAYMENT_AMOUNT', '查单金额超出订单范围');
     return { orderId: expectedId, status: payment.trade_status, paymentReference: `alipay:${payment.trade_no}`, amountFen: total, appId: this.appId, sellerId: this.sellerId };
   }
+  verifyClose(body: string, expectedId: string): void {
+    const { data, code } = this.signedResponse(body, 'alipay.trade.close');
+    if (code !== '10000') throw new ServiceError(502, 'PAYMENT_CLOSE_UNCONFIRMED', '支付宝未确认关闭原交易，订单保持待付款，请稍后再查询');
+    const closed = z.object({ out_trade_no: z.string().optional() }).safeParse(data);
+    if (!closed.success || closed.data.out_trade_no !== undefined && closed.data.out_trade_no !== channelOrderId(expectedId)) throw new ServiceError(409, 'PAYMENT_ORDER_MISMATCH', '关单返回了其他订单');
+  }
 }
 
 const checkoutSchema = z.object({
@@ -87,7 +100,7 @@ const checkoutSchema = z.object({
   quantity: z.number().int().min(1).max(100), expiresAt: z.string().datetime()
 }).strict();
 
-/** 网站支付与主动查单；只向固定支付宝网关发送签名请求，不在适配器中交付授权。 */
+/** 网站支付、主动查单与关单；只向固定支付宝网关发送签名请求，不在适配器中交付授权。 */
 export class AlipayCheckout {
   private readonly key: KeyObject;
   constructor(readonly appId: string, readonly sellerId: string, privateKey: string, private readonly now: () => number = Date.now) {
@@ -114,9 +127,9 @@ export class AlipayCheckout {
     params.sign = sign('RSA-SHA256', Buffer.from(content, 'utf8'), this.key).toString('base64');
     return params;
   }
-  async query(id: string, notifications: AlipayNotifications, request: typeof fetch = fetch) {
-    const { biz_content: business, ...params } = this.signedParams('alipay.trade.query', { out_trade_no: channelOrderId(id) });
-    let body: string;
+  private async call(method: 'alipay.trade.query' | 'alipay.trade.close', id: string, request: typeof fetch): Promise<string> {
+    const label = method === 'alipay.trade.query' ? '查单' : '关单';
+    const { biz_content: business, ...params } = this.signedParams(method, { out_trade_no: channelOrderId(id) });
     try {
       const response = await request(`https://openapi.alipay.com/gateway.do?${new URLSearchParams(params)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8', Accept: 'application/json' },
@@ -124,19 +137,24 @@ export class AlipayCheckout {
       });
       if (!response.ok || !response.body) {
         await response.body?.cancel();
-        throw new ServiceError(502, 'PAYMENT_QUERY_FAILED', '支付宝查单失败，订单保持原状态');
+        throw new ServiceError(502, 'PAYMENT_QUERY_FAILED', `支付宝${label}失败，订单保持原状态`);
       }
       const chunks: Uint8Array[] = []; let size = 0;
       for await (const chunk of response.body) {
         size += chunk.length;
-        if (size > 65536) throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', '支付宝查单响应超过大小限制');
+        if (size > 65536) throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', `支付宝${label}响应超过大小限制`);
         chunks.push(chunk);
       }
-      body = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+      return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
     } catch (error) {
       if (error instanceof ServiceError) throw error;
-      throw new ServiceError(502, 'PAYMENT_QUERY_FAILED', '支付宝查单超时或网络异常，订单保持原状态');
+      throw new ServiceError(502, 'PAYMENT_QUERY_FAILED', `支付宝${label}超时或网络异常，订单保持原状态`);
     }
-    return notifications.verifyQuery(body, id);
+  }
+  async query(id: string, notifications: AlipayNotifications, request: typeof fetch = fetch) {
+    return notifications.verifyQuery(await this.call('alipay.trade.query', id, request), id);
+  }
+  async close(id: string, notifications: AlipayNotifications, request: typeof fetch = fetch): Promise<void> {
+    notifications.verifyClose(await this.call('alipay.trade.close', id, request), id);
   }
 }

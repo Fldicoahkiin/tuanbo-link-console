@@ -117,6 +117,17 @@ export class WebPurchaseClient {
     return result;
   }
 
+  /** 付款入口过期后经服务端查单确认原单关闭且未收款，才换新凭据为同一购买请求准备新订单。 */
+  async restart(): Promise<WebReceipt> {
+    const receipt = this.receipt;
+    if (!receipt?.orderId) throw new Error('请先恢复原订单');
+    const delivery = await this.delivery(true);
+    if (delivery.state === 'fulfilled') throw new Error('原订单已付款，请点击查询并领取激活码，不要重复购买');
+    if (delivery.state === 'pending') throw new Error(delivery.paymentConfirmed ? '原订单付款已确认，授权待处理，请联系支持；无需再次付款' : '原订单尚未关闭，仍可能到账；请稍后再试，不要重复付款');
+    this.storage.removeItem(storageKey); this.current = null;
+    return this.prepare(receipt.request, receipt.version === 2 ? 'wechat' : 'alipay');
+  }
+
   discard(): void {
     if (!this.current?.discardable || this.current.orderId !== null) throw new Error('原订单状态尚未确认，不能重新下单');
     this.storage.removeItem(storageKey); this.current = null;
