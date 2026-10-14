@@ -245,3 +245,25 @@ it('离线宽限只用于服务器不可达：租约到期、明确拒绝或手�
   request.mockRejectedValueOnce(new Error('offline'));
   expect((await make().status()).state).toBe('renewal-required');
 });
+
+it('服务器拒绝时按错误码给出续费、换机或核对激活码的具体指引', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-rejection-codes-'));
+  const stored = new Map([['license.activation.code', `TBA-${'A'.repeat(32)}`]]);
+  const request = vi.fn<typeof fetch>();
+  const make = () => new LicenseService(directory, machine, publicKeys, () => now, {
+    serverUrl: 'https://license.example.com', enforcement: 'required', fetch: request,
+    credentials: { hasCredential: key => Promise.resolve(stored.has(key)), loadCredential: key => Promise.resolve(stored.get(key) ?? ''),
+      saveCredential: (key, value) => { stored.set(key, value); return Promise.resolve(); } }
+  });
+  const token = issue({ online: { leaseUntil: new Date(now + 2 * 86400000).toISOString(), customerType: 'personal' } });
+  request.mockResolvedValueOnce(new Response(JSON.stringify({ license: token })));
+  await make().activateCode(`TBA-${'A'.repeat(32)}`);
+  const answers: [number, string, string][] = [[403, 'EXPIRED', '续费'], [403, 'REVOKED', '已被撤销'], [403, 'INVALID_CODE', '核对'],
+    [409, 'MACHINE_BOUND', '重装系统'], [403, 'constructor', '已到期或已撤销'], [409, 'UNKNOWN', '绑定其他机器']];
+  for (const [status, code, guidance] of answers) {
+    request.mockResolvedValueOnce(new Response(JSON.stringify({ code }), { status, headers: { 'Content-Type': 'application/json' } }));
+    const result = await make().status();
+    expect(result.state).not.toBe('active');
+    expect(result.message).toContain(guidance);
+  }
+});

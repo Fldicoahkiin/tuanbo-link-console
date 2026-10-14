@@ -37,6 +37,22 @@ export function verifyLicense(token: string, machineCode: string, keys: Readonly
 /** Network failure, timeout or a transient server answer: a valid local lease may still start the app. */
 class LicenseServerUnavailable extends Error {}
 
+/** Codes the licensing server returns with 403/409, mapped to the action the operator should take. */
+const rejectionMessages: Readonly<Record<string, string>> = {
+  INVALID_CODE: '激活码无效，请核对后重新输入；仍有问题请联系发行方',
+  REVOKED: '本机授权已被撤销，请联系发行方',
+  EXPIRED: '授权使用期限已结束，请在「本机授权」中续费；工程文件保持不变',
+  MACHINE_BOUND: '激活码已绑定其他电脑；更换电脑或重装系统需联系发行方办理换机'
+};
+
+async function rejectionCode(response: Response): Promise<string | undefined> {
+  const text = (await response.text()).slice(0, 2000);
+  let body: unknown;
+  try { body = JSON.parse(text); } catch (error) { if (error instanceof SyntaxError) return undefined; throw error; }
+  const parsed = z.object({ code: z.string().max(64) }).safeParse(body);
+  return parsed.success && Object.hasOwn(rejectionMessages, parsed.data.code) ? parsed.data.code : undefined;
+}
+
 export class LicenseService {
   private readonly path: string;
   private startupVerification: Promise<void> | undefined;
@@ -133,11 +149,13 @@ export class LicenseService {
       });
     } catch { throw new LicenseServerUnavailable('无法连接授权服务器，请检查网络后手动重试；现有授权保持不变'); }
     if (!response.ok) {
-      await response.body?.cancel();
-      if (response.status === 429) throw new LicenseServerUnavailable('激活请求过于频繁，请稍后手动重试');
-      if (response.status >= 500) throw new LicenseServerUnavailable(`授权服务器暂时不可用（${response.status}），现有授权保持不变`);
+      if (response.status === 429 || response.status >= 500) {
+        await response.body?.cancel();
+        throw new LicenseServerUnavailable(response.status === 429 ? '激活请求过于频繁，请稍后手动重试' : `授权服务器暂时不可用（${response.status}），现有授权保持不变`);
+      }
+      const code = await rejectionCode(response);
       const messages: Record<number, string> = { 403: '激活码无效、已到期或已撤销，请联系发行方', 409: '激活码已绑定其他机器，请联系发行方办理换机' };
-      throw new Error(messages[response.status] ?? `授权服务器请求失败（${response.status}），现有授权保持不变`);
+      throw new Error(code ? rejectionMessages[code] : messages[response.status] ?? `授权服务器请求失败（${response.status}），现有授权保持不变`);
     }
     if (!response.body) throw new Error('授权服务器返回为空');
     const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
