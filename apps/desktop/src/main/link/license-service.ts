@@ -34,10 +34,14 @@ export function verifyLicense(token: string, machineCode: string, keys: Readonly
   return claims;
 }
 
+/** Network failure, timeout or a transient server answer: a valid local lease may still start the app. */
+class LicenseServerUnavailable extends Error {}
+
 export class LicenseService {
   private readonly path: string;
   private startupVerification: Promise<void> | undefined;
   private sessionLicenseId: string | undefined;
+  private offlineGrace = false;
   private verificationFailure = '本次启动尚未通过联网验证，请输入激活码或手动联网验证';
   constructor(directory: string, private readonly machineCode: string, private readonly keys: Readonly<Record<string, string>>, private readonly now: () => number = Date.now, private readonly online?: OnlineOptions) {
     licenseMachineCodeSchema.parse(machineCode);
@@ -59,6 +63,7 @@ export class LicenseService {
     if (this.online && !this.startupVerification) {
       this.startupVerification = this.refreshOnline().then(() => undefined, (error: unknown) => {
         this.verificationFailure = error instanceof Error ? error.message : String(error);
+        this.offlineGrace = error instanceof LicenseServerUnavailable;
       });
     }
     await this.startupVerification;
@@ -67,6 +72,11 @@ export class LicenseService {
       const status = this.describe((await readFile(this.path, 'utf8')).trim());
       if (status.claims?.online) await this.checkClock();
       if (this.online && status.state === 'active' && status.claims?.licenseId !== this.sessionLicenseId) {
+        // Only an unreachable server falls back to the signed, machine-bound lease; explicit rejections still block.
+        if (this.offlineGrace && status.claims?.online) {
+          const until = new Date(status.claims.online.leaseUntil).toLocaleString('zh-CN', { hour12: false });
+          return this.result(status.claims, 'active', `授权服务器暂时无法连接，已用本机授权离线启动；请在 ${until} 前联网验证`);
+        }
         return this.result(status.claims, 'renewal-required', this.verificationFailure);
       }
       return status;
@@ -121,10 +131,12 @@ export class LicenseService {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, redirect: 'error',
         body: JSON.stringify({ product: 'tuanbo-link-console', code, machineCode: this.machineCode }), signal: AbortSignal.timeout(10000)
       });
-    } catch { throw new Error('无法连接授权服务器，请检查网络后手动重试；现有授权保持不变'); }
+    } catch { throw new LicenseServerUnavailable('无法连接授权服务器，请检查网络后手动重试；现有授权保持不变'); }
     if (!response.ok) {
       await response.body?.cancel();
-      const messages: Record<number, string> = { 403: '激活码无效、已到期或已撤销，请联系发行方', 409: '激活码已绑定其他机器，请联系发行方办理换机', 429: '激活请求过于频繁，请稍后手动重试' };
+      if (response.status === 429) throw new LicenseServerUnavailable('激活请求过于频繁，请稍后手动重试');
+      if (response.status >= 500) throw new LicenseServerUnavailable(`授权服务器暂时不可用（${response.status}），现有授权保持不变`);
+      const messages: Record<number, string> = { 403: '激活码无效、已到期或已撤销，请联系发行方', 409: '激活码已绑定其他机器，请联系发行方办理换机' };
       throw new Error(messages[response.status] ?? `授权服务器请求失败（${response.status}），现有授权保持不变`);
     }
     if (!response.body) throw new Error('授权服务器返回为空');
@@ -147,7 +159,13 @@ export class LicenseService {
   }
   async refreshOnline(): Promise<LicenseStatus> {
     if (!this.online || !await this.online.credentials.hasCredential(CODE_CREDENTIAL)) throw new Error('本机尚未保存激活码，请先输入激活码');
-    return this.activateCode(await this.online.credentials.loadCredential(CODE_CREDENTIAL));
+    try {
+      return await this.activateCode(await this.online.credentials.loadCredential(CODE_CREDENTIAL));
+    } catch (error) {
+      // The server rejected the stored code itself, so the local lease no longer covers a later start.
+      if (!(error instanceof LicenseServerUnavailable)) this.offlineGrace = false;
+      throw error;
+    }
   }
   async renewalAuthorization(licenseId: string) {
     const status = await this.status();

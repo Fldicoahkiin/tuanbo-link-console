@@ -123,7 +123,7 @@ it('不接受有效签名的试用许可，不替换已有付费许可', async (
   expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(paid);
 });
 
-it('每次进程启动联网验证一次，并发状态读取共用请求；拒绝旧缓存放行', async () => {
+it('每次进程启动联网验证一次，并发状态读取共用请求；断网时用有效租约离线启动，明确拒绝不放行', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-startup-'));
   const stored = new Map<string, string>();
   const credentials = {
@@ -144,8 +144,8 @@ it('每次进程启动联网验证一次，并发状态读取共用请求；拒�
   expect(request).toHaveBeenCalledOnce();
   request.mockRejectedValueOnce(new Error('offline'));
   const offline = make();
-  expect((await offline.status()).state).toBe('renewal-required');
-  expect((await offline.status()).message).toContain('无法连接');
+  expect((await offline.status()).state).toBe('active');
+  expect((await offline.status()).message).toContain('离线启动');
   expect(request).toHaveBeenCalledTimes(2);
   expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(token);
   expect((await offline.refreshOnline()).state).toBe('active');
@@ -214,4 +214,34 @@ it('系统时间曾被调快后已校正，启动联网验证仍可通过，并�
   expect((await service.status()).state).toBe('active');
   expect(request).toHaveBeenCalledOnce();
   expect(Number(stored.get('license.clock'))).toBe(now);
+});
+
+it('离线宽限只用于服务器不可达：租约到期、明确拒绝或手动复核被拒后都不放行', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-offline-grace-'));
+  let time = now;
+  const stored = new Map<string, string>();
+  const credentials = {
+    hasCredential: (key: string) => Promise.resolve(stored.has(key)),
+    loadCredential: (key: string) => Promise.resolve(stored.get(key) ?? ''),
+    saveCredential: (key: string, value: string) => { stored.set(key, value); return Promise.resolve(); }
+  };
+  const token = issue({ online: { leaseUntil: new Date(now + 2 * 86400000).toISOString(), customerType: 'personal' } });
+  const request = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ license: token }))));
+  const make = () => new LicenseService(directory, machine, publicKeys, () => time, { serverUrl: 'https://license.example.com', enforcement: 'required', credentials, fetch: request });
+  await make().activateCode(`TBA-${'A'.repeat(32)}`);
+  for (const answer of [() => Promise.reject(new Error('offline')), () => Promise.resolve(new Response(null, { status: 503 })), () => Promise.resolve(new Response(null, { status: 429 }))]) {
+    request.mockImplementationOnce(answer);
+    expect((await make().status()).state).toBe('active');
+  }
+  request.mockResolvedValueOnce(new Response(null, { status: 403 }));
+  expect((await make().status()).state).toBe('renewal-required');
+  request.mockRejectedValueOnce(new Error('offline'));
+  const graced = make();
+  expect((await graced.status()).state).toBe('active');
+  request.mockResolvedValueOnce(new Response(null, { status: 409 }));
+  await expect(graced.refreshOnline()).rejects.toThrow('绑定其他机器');
+  expect((await graced.status()).state).toBe('renewal-required');
+  time = now + 2 * 86400000;
+  request.mockRejectedValueOnce(new Error('offline'));
+  expect((await make().status()).state).toBe('renewal-required');
 });
