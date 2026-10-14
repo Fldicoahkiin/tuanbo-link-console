@@ -41,7 +41,9 @@ function fixture() {
     midiOutputs: [{ id: 1, name: 'test-mtc' }] };
   native.devices.mockImplementation(() => Promise.resolve(devices));
   const error = vi.fn();
+  const checkDeviceHealth = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
   const service = new NativePlayerService({ executable: 'test', changed: vi.fn(), error,
+    checkDeviceHealth,
     resolveAudio: () => 'test.wav', cache: { prepare: () => Promise.resolve({ path: 'test.pcm', sampleRate: 48000 as const,
       baseMs: 0, streaming: false, frames: 480000, durationMs: 10000,
       completion: Promise.resolve({ ok: true as const }), release: () => Promise.resolve() }) } });
@@ -50,8 +52,46 @@ function fixture() {
     snapshot: { version: 1, projectId: 'test', itemId: 'song', revision: 1,
       audio: { relativePath: 'test.wav', sha256: 'a'.repeat(64), durationMs: 10000 },
       startMs: 500, endMs: 9500, positionMs: 500, offsetMs: 480000, frameRate: 30, sampleRate: 48000, volume: 1 } };
-  return { service, request, error, devices };
+  return { service, request, error, devices, checkDeviceHealth };
 }
+
+it('系统设备检测失败不启动设备查询；明确恢复后才允许重新准备', async () => {
+  const f = fixture();
+  f.checkDeviceHealth.mockRejectedValue(new Error('Windows MIDI 端口枚举未响应'));
+  try {
+    await expect(f.service.devices()).rejects.toThrow('端口枚举未响应');
+    await expect(f.service.prepare(f.request)).rejects.toThrow('端口枚举未响应');
+    expect(native.devices).not.toHaveBeenCalled();
+    expect(native.commands).not.toHaveBeenCalled();
+    expect(f.service.status).toMatchObject({ status: 'error', enginePid: null });
+    f.checkDeviceHealth.mockResolvedValue(undefined);
+    await expect(f.service.prepare({ ...f.request, generation: 2 })).resolves.toMatchObject({ status: 'ready' });
+    expect(native.devices).toHaveBeenCalledOnce();
+  } finally { await f.service.close(); }
+});
+
+it('等待设备检测期间关闭服务，迟到结果不能启动设备查询', async () => {
+  const f = fixture();
+  let finish!: () => void;
+  f.checkDeviceHealth.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+  const pending = expect(f.service.devices()).rejects.toThrow('正在关闭');
+  await f.service.close();
+  finish(); await pending;
+  expect(native.devices).not.toHaveBeenCalled();
+});
+
+it('明确关闭 MIDI 的音频播放不进入系统 MIDI 枚举，仍可定位和停止', async () => {
+  const f = fixture();
+  f.checkDeviceHealth.mockRejectedValue(new Error('Windows MIDI 服务未响应'));
+  try {
+    await expect(f.service.prepare({ ...f.request, midiPortName: null, autoDetectMtc: false })).resolves.toMatchObject({ status: 'ready', mtcPortName: null });
+    await f.service.control({ version: 1, sessionId: f.request.sessionId, generation: 2, kind: 'play' });
+    await f.service.control({ version: 1, sessionId: f.request.sessionId, generation: 3, kind: 'seek', positionMs: 2000 });
+    expect(f.service.status).toMatchObject({ status: 'paused', positionMs: 2000 });
+    expect(f.checkDeviceHealth).not.toHaveBeenCalled();
+    expect(native.commands.mock.calls.filter(([command]) => command.kind === 'prepare').every(([command]) => command.kind === 'prepare' && command.midiDevice === null)).toBe(true);
+  } finally { await f.service.close(); }
+});
 
 it('定位时 MIDI 端口消失只退出时间码通道，音频仍可定位和继续；端口回来不自动恢复', async () => {
   const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId };

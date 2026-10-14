@@ -29,6 +29,11 @@ it('下一节目文件按两路准备，未接入任何设备控制，也不改�
   await prepareNextObsFiles(t.request, t.services, () => undefined);
   expect(t.maximum()).toBe(2); expect(t.inspectMediaAssets).toHaveBeenCalledTimes(6);
   expect(t.ensureObsSeekVideo).toHaveBeenCalledTimes(6); expect(JSON.stringify(t.request)).toBe(original);
+  expect(t.ensureObsSeekVideo.mock.calls.map(call => [call[1], call[3]])).toEqual([
+    ['assets/0.mp4', 'hardware'], ['assets/1.mp4', 'hardware'],
+    ['assets/2.mp4', 'software'], ['assets/3.mp4', 'software'],
+    ['assets/4.mp4', 'software'], ['assets/5.mp4', 'software']
+  ]);
 });
 
 it('校验等待期间取消不能继续转码或开始后续文件', async () => {
@@ -36,6 +41,21 @@ it('校验等待期间取消不能继续转码或开始后续文件', async () =
   t.inspectMediaAssets.mockImplementation(async () => { await Promise.resolve(); valid = false; return { a0: { fileAvailable: true } }; });
   await expect(prepareNextObsFiles(t.request, t.services, () => { if (!valid) throw new Error('已取消'); })).rejects.toThrow('已取消');
   expect(t.inspectMediaAssets).toHaveBeenCalledTimes(2); expect(t.ensureObsSeekVideo).not.toHaveBeenCalled();
+});
+
+it('同素材跨轨占用硬解和软解时提前准备两份对应缓存，重复软解轨不重复生成', async () => {
+  const t = fixture();
+  const snapshot = t.request.nextFiles!.snapshot;
+  snapshot.item.visualLayers = ['one', 'two', 'three'].map(id => ({ id, name: id, visible: true, locked: false }));
+  const first = snapshot.item.referenceMediaClips[0]!;
+  snapshot.item.referenceMediaClips = [
+    { ...first, layerId: 'one' },
+    { ...first, id: 'second', layerId: 'two' },
+    { ...first, id: 'third', layerId: 'three' }
+  ];
+  await prepareNextObsFiles(t.request, t.services, () => undefined);
+  expect(t.ensureObsSeekVideo.mock.calls.filter(call => call[1] === 'assets/0.mp4').map(call => call[3]))
+    .toEqual(['hardware', 'software']);
 });
 
 it('缺失文件明确失败，关闭精确定位时仍校验原文件但不生成定位缓存', async () => {

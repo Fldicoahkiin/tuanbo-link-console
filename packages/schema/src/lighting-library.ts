@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { lightingTemplateTrackSchema } from './lighting';
+import { ma2RenameRecordSchema } from './ma2-rename';
 
 export const lightingCategorySchema = z.object({
   id: z.string().min(1), name: z.string().min(1).max(64),
@@ -27,6 +28,7 @@ export const lightingLibrarySelectionsSchema = z.object({
 }).strict();
 export const lightingLibraryViewSchema = z.object({section:z.enum(['front','rim','effect']),tone:z.enum(['bright','middle','dark']),people:z.number().int().positive(),zone:z.enum(['front','middle','back']),view:z.enum(['music','shape']),effectCategory:z.string(),scope:z.enum(['category','all','favorites','unclassified']),query:z.string().max(512),selections:lightingLibrarySelectionsSchema.optional()}).strict();
 export const lightingUserLibrarySchema = z.object({
+  consoleRenames: z.array(ma2RenameRecordSchema).optional(),
   version: z.literal(1), categories: z.array(lightingCategorySchema), entries: z.array(lightingLibraryEntrySchema), view:lightingLibraryViewSchema.optional(),
   hiddenConsoleCues: z.array(z.object({ endpoint:z.string(), show:z.string(), sequence:z.number().int().positive(), cue:z.string(), kind:z.enum(['single','sequence']) }).strict()).optional()
 }).strict().superRefine((library, context) => {

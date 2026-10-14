@@ -69,22 +69,21 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
   } finally { await application.close(); }
 });
 
-test('未激活主机可记录界面错误并导出，关闭重开仍能查看历史记录', async ({}, info) => {
+test('激活页不显示日志入口，界面错误仍持久化并可由诊断接口导出', async ({}, info) => {
   const profile = info.outputPath('profile');
   for (const round of [0, 1]) {
     const application = await electron.launch({ env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '0' },
       args: [`--user-data-dir=${profile}`, join(process.cwd(), 'out/main/index.cjs')] });
     try {
       const page = await application.firstWindow();
-      await page.getByRole('heading', { name: '激活团播联动台', exact: true }).waitFor();
+      await page.getByRole('heading', { name: '激活你的工作区', exact: true }).waitFor();
       if (!round) await page.evaluate(() => window.dispatchEvent(new ErrorEvent('error', { message: '诊断验收：界面错误', error: new Error('诊断验收：界面错误') })));
-      await page.getByRole('button', { name: '运行日志', exact: true }).click();
-      await expect(page.getByText('界面异常：诊断验收：界面错误', { exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '运行日志', exact: true })).toHaveCount(0);
+      await expect.poll(() => page.evaluate(async () => (await window.tbLink.queryLogs({ limit: 100 })).some(log => log.message === '界面异常：诊断验收：界面错误'))).toBe(true);
       await expect(page.locator('dialog[open]')).toHaveCount(0);
       const destination = info.outputPath(`未激活-${round}.tbdiag.gz`);
       await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath }); }, destination);
-      await page.getByRole('button', { name: '导出诊断包', exact: true }).click();
-      await expect(page.getByRole('status')).toContainText(destination);
+      expect(await page.evaluate(() => window.tbLink.exportDiagnosticPackage({}))).toBe(destination);
       expect(gunzipSync(await readFile(destination)).toString('utf8')).toContain('诊断验收：界面错误');
       await expect(page.evaluate(() => window.tbLink.requireOutputLicense())).rejects.toThrow('有效授权');
     } finally { await application.close(); }

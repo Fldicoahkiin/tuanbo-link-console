@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "softwareVersion": "0.4.46",
+  "status": "development-preview",
+  "source": "isolated Electron application, original demo project",
+  "lighting": "offline editing; no hardware output claim",
+  "files": [
+    {
+      "path": "assets/20261010-programs.webp",
+      "kind": "real-application-screenshot",
+      "sha256": "974e473ea9dac8e3aae2063cc1c7bdf4e31dd09a6e46d5c13f04ec14973f2907",
+      "bytes": 51846
+    },
+    {
+      "path": "assets/20261010-timeline.webp",
+      "kind": "real-application-screenshot",
+      "sha256": "d5999987bfe8b1a3b8e3ddcf2adbaca759aa2fa65645a03937f16f0ca65dd288",
+      "bytes": 45964
+    },
+    {
+      "path": "assets/20261010-cameras.webp",
+      "kind": "real-application-screenshot",
+      "sha256": "c70e3caeca919222e7dd598b0f19b89eee9d97cf96c2f74ba2094fa559f0f8ea",
+      "bytes": 49668
+    },
+    {
+      "path": "assets/20261010-lighting.webp",
+      "kind": "real-application-screenshot",
+      "sha256": "ee1fc73c0eaa0d2ad2c4d59fdfa0c11274417fe960aa436f103c39a61d047061",
+      "bytes": 52116
+    },
+    {
+      "path": "assets/20261010-connections.webp",
+      "kind": "real-application-screenshot",
+      "sha256": "09765131229e9f691c7f3e77388af9cc7ad2ded5ba4ed9c70ee78664c3073fb4",
+      "bytes": 53988
+    },
+    {
+      "path": "assets/20261010-rehearsal.webp",
+      "kind": "real-application-screenshot",
+      "sha256": "966a935f09ed98c71d982ae0790af59ae4f231f90da920587617cad992810edd",
+      "bytes": 56388
+    },
+    {
+      "path": "media/20261010-programs.mp4",
+      "kind": "real-application-recording",
+      "sha256": "b40ff01194f204109707818e9c3f8c16c6c2c22eeb63b5778ff1205c383c8553",
+      "bytes": 276821,
+      "durationSeconds": 20,
+      "poster": "assets/20261010-programs.webp",
+      "subtitles": null
+    },
+    {
+      "path": "media/20261010-timeline.mp4",
+      "kind": "real-application-recording",
+      "sha256": "bb06d6e05177d483561392add1c8626260ab4d7680d10cef1f294c9eea4a9672",
+      "bytes": 305026,
+      "durationSeconds": 20,
+      "poster": "assets/20261010-timeline.webp",
+      "subtitles": null
+    },
+    {
+      "path": "media/20261010-cameras.mp4",
+      "kind": "real-application-recording",
+      "sha256": "5d1c28d5abb94e98f52e182432544e26da85eb78417eeb47cc281ab739bcff6a",
+      "bytes": 247834,
+      "durationSeconds": 20,
+      "poster": "assets/20261010-cameras.webp",
+      "subtitles": null
+    },
+    {
+      "path": "media/20261010-lighting.mp4",
+      "kind": "real-application-recording",
+      "sha256": "459d6ab743478c36a0d9086e371630608fa5d25e60bd527322a4f25a953de6b7",
+      "bytes": 405749,
+      "durationSeconds": 20,
+      "poster": "assets/20261010-lighting.webp",
+      "subtitles": null
+    },
+    {
+      "path": "media/20261010-overview.mp4",
+      "kind": "real-application-recording",
+      "sha256": "6b48c99261d570b0ddf596e38716c4b09f49b0f61bf1c108a5f51c85a51b6b16",
+      "bytes": 1320167,
+      "durationSeconds": 90,
+      "poster": "assets/20261010-timeline.webp",
+      "subtitles": "media/20261010-overview.vtt"
+    },
+    {
+      "path": "media/20261010-overview.vtt",
+      "kind": "subtitles",
+      "sha256": "26a72ce702f241bdd5b11a3d09847bd29fa732e8ce908f35b48af65fab2841ee",
+      "bytes": 614
+    }
+  ],
+  "scenes": "Original OBS title/color scenes; not live cameras",
+  "audio": "Silent real-application screen recording; original music source supplied separately"
+}

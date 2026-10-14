@@ -9,7 +9,7 @@ export type Ma2ExecutorReport = { version: string; sequence: number; assignmentN
 export function inspectMa2ExecutorXml(xml: string): Ma2ExecutorReport {
   const { root } = parse(xml);
   const version = ['major_vers', 'minor_vers', 'stream_vers'].map((name) => required(root, name)).join('.');
-  if (version !== '3.3.4') throw new Error('该 MA2 执行器 XML 版本尚未验证');
+  if (version !== '3.3.4' && version !== '3.7.0') throw new Error('该 MA2 执行器 XML 版本尚未验证');
   const executor = singleChild(root, 'Exec');
   if (!executor || required(executor, 'offset_from_first') !== '0') throw new Error('必须读取单个明确执行器');
   const assignment = singleChild(executor, 'Assignment');

@@ -10,13 +10,34 @@ type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string
 const jsonValue: z.ZodType<JsonValue> = z.lazy(() => z.union([z.string(), z.number().finite(), z.boolean(), z.null(), z.array(jsonValue), z.record(z.string(), jsonValue)]));
 const filtersSchema = z.array(z.object({ filterName: z.string().min(1), filterKind: z.string().min(1),
   filterIndex: z.number().int().nonnegative(), filterEnabled: z.boolean(), filterSettings: z.record(z.string(), jsonValue) }));
+const compositionItemsSchema = z.array(z.object({ sourceName: z.string().min(1), sceneItemId: z.number().int(),
+  sceneItemIndex: z.number().int().nonnegative(), sceneItemEnabled: z.boolean() }));
+type CompositionItem = { id: number; enabled: boolean; index: number };
+
+/** Invisible items have no compositing order requirement. Keep them in place
+ * when the visible subset already has the requested relative order. */
+function compositionOrderRequests(sceneName: string, layers: string[], items: Map<string, CompositionItem>): Parameters<OBSWebSocket['callBatch']>[0] {
+  const order = [...items].sort((a, b) => a[1].index - b[1].index).map(([name]) => name);
+  const bottomFirst = [...layers].reverse();
+  const visible = new Set(layers);
+  if (order.filter(name => visible.has(name)).every((name, index) => name === bottomFirst[index])) return [];
+  const requests: Parameters<OBSWebSocket['callBatch']>[0] = [];
+  for (const [index, name] of bottomFirst.entries()) {
+    const previous = order.indexOf(name);
+    if (previous === index) continue;
+    order.splice(previous, 1); order.splice(index, 0, name);
+    requests.push({ requestType: 'SetSceneItemIndex', requestData: { sceneName, sceneItemId: items.get(name)!.id, sceneItemIndex: index } });
+  }
+  order.forEach((name, index) => { items.get(name)!.index = index; });
+  return requests;
+}
 
 /** Only the dedicated input in an application-owned material scene is controlled. */
 export class ObsMediaScenes {
-  private readonly prepared = new Map<string, { path: string; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
+  private readonly prepared = new Map<string, { path: string; playbackPaths: readonly string[]; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
   private readonly active = new Set<string>();
   private readonly compositions = new Map<string, string>();
-  private readonly compositionItems = new Map<string, Map<string, { id: number; enabled: boolean }>>();
+  private readonly compositionItems = new Map<string, Map<string, CompositionItem>>();
   private readonly primed = new Map<string, 'preparing' | 'ready'>();
   constructor(private readonly client: OBSWebSocket, private readonly request: Request, private readonly run: ObsOperationRunner) {}
   clear(): void { this.prepared.clear(); this.active.clear(); this.compositions.clear(); this.compositionItems.clear(); this.primed.clear(); }
@@ -30,14 +51,23 @@ export class ObsMediaScenes {
       const sourceName = `${primaryName}·预备`;
       if (this.active.has(sourceName)) throw new Error('正在播放的解码器不能重新预备');
       const settings = await this.request(() => this.client.call('GetInputSettings', { inputName: primaryName }), '读取预备素材配置');
-      if (settings.inputKind !== 'ffmpeg_source' || typeof settings.inputSettings.local_file !== 'string') throw new Error('预备素材配置与原来源不符');
+      if (settings.inputKind !== 'ffmpeg_source' || typeof settings.inputSettings.local_file !== 'string'
+        || !primary.playbackPaths.includes(settings.inputSettings.local_file)) throw new Error('预备素材配置与原来源不符');
+      const playbackPath = settings.inputSettings.local_file, hardwareDecode = settings.inputSettings.hw_decode;
+      if (typeof hardwareDecode !== 'boolean') throw new Error('预备素材解码配置无效');
       const items = await this.request(() => this.client.call('GetSceneItemList', { sceneName: primary.sceneName }), '读取预备素材场景');
       const found = items.sceneItems.find(item => item.sourceName === sourceName);
       let sceneItemId: number;
       if (found) {
         if (typeof found.sceneItemId !== 'number') throw new Error('预备素材场景项身份无效');
         const existing = await this.request(() => this.client.call('GetInputSettings', { inputName: sourceName }), '核对预备素材配置');
-        if (existing.inputKind !== settings.inputKind || existing.inputSettings.local_file !== settings.inputSettings.local_file) throw new Error('预备素材名称已被其他来源占用');
+        const existingPath = existing.inputSettings.local_file;
+        if (existing.inputKind !== settings.inputKind || typeof existingPath !== 'string' || !primary.playbackPaths.includes(existingPath)) throw new Error('预备素材名称已被其他来源占用');
+        if (existingPath !== playbackPath || existing.inputSettings.hw_decode !== hardwareDecode) {
+          await this.request(() => this.client.call('SetInputSettings', { inputName: sourceName,
+            inputSettings: { local_file: playbackPath, hw_decode: hardwareDecode,
+              restart_on_activate: false, close_when_inactive: false, looping: false }, overlay: true }), '更新自有预备素材缓存');
+        }
         sceneItemId = found.sceneItemId;
       } else {
         const created = await this.request(() => this.client.call('CreateInput', {
@@ -80,11 +110,12 @@ export class ObsMediaScenes {
     });
   }
 
-  async prepare(projectId: string, asset: LinkMediaAsset, path: string, playbackPath = path, cachePaths: readonly string[] = [], names = materialSceneNames(projectId, asset)): Promise<void> {
+  async prepare(projectId: string, asset: LinkMediaAsset, path: string, playbackPath = path, cachePaths: readonly string[] = [], names = materialSceneNames(projectId, asset), hardwareDecode = asset.kind === 'video'): Promise<void> {
     const baseNames = materialSceneNames(projectId, asset);
-    if (names.sourceName !== baseNames.sourceName && !this.prepared.has(baseNames.sourceName)) await this.prepare(projectId, asset, path, playbackPath, cachePaths);
+    if (names.sourceName !== baseNames.sourceName && !this.prepared.has(baseNames.sourceName)) await this.prepare(projectId, asset, path, playbackPath, cachePaths, baseNames, hardwareDecode);
     return this.run(async () => {
       const { sceneName, sourceName } = names;
+      const playbackPaths = [path, playbackPath, ...cachePaths];
       const base = materialSceneNames(projectId, asset);
       if (sceneName !== base.sceneName && !sceneName.startsWith(`${base.sceneName}·轨道·`) || sourceName !== `${sceneName}·来源`) throw new Error('素材场景身份无效');
       const kind = asset.kind === 'image' ? 'image_source' : 'ffmpeg_source';
@@ -98,17 +129,18 @@ export class ObsMediaScenes {
         const settings = await this.request(() => this.client.call('GetInputSettings', { inputName: sourceName }), 'GetInputSettings');
         const existingPath = settings.inputSettings[asset.kind === 'image' ? 'file' : 'local_file'];
         if (settings.inputKind !== kind || typeof existingPath !== 'string' || ![path, playbackPath, ...cachePaths].includes(existingPath)) throw new Error(`素材来源与工程文件不一致，拒绝覆盖：${sourceName}`);
-        this.prepared.set(sourceName, { path, sceneName, sceneItemId: item.sceneItemId, kind: asset.kind });
+        this.prepared.set(sourceName, { path, playbackPaths, sceneName, sceneItemId: item.sceneItemId, kind: asset.kind });
         if (existingPath !== playbackPath) await this.request(() => this.client.call('SetInputSettings', {
           inputName: sourceName, inputSettings: { local_file: playbackPath }, overlay: true
         }), '切换素材定位文件');
         if (asset.kind === 'image' && settings.inputSettings.unload !== false) await this.request(() => this.client.call('SetInputSettings', {
           inputName: sourceName, inputSettings: { unload: false }, overlay: true
         }), '准备图片解码');
-        if (asset.kind !== 'image' && (settings.inputSettings.restart_on_activate !== false || settings.inputSettings.close_when_inactive !== false || settings.inputSettings.looping !== false)) {
+        if (asset.kind !== 'image' && (settings.inputSettings.restart_on_activate !== false || settings.inputSettings.close_when_inactive !== false
+          || settings.inputSettings.looping !== false || settings.inputSettings.hw_decode !== hardwareDecode)) {
           await this.request(() => this.client.call('SetInputSettings', {
             inputName: sourceName,
-            inputSettings: { restart_on_activate: false, close_when_inactive: false, looping: false },
+            inputSettings: { restart_on_activate: false, close_when_inactive: false, looping: false, hw_decode: hardwareDecode },
             overlay: true
           }), '关闭受管素材切场景时重播');
         }
@@ -118,10 +150,10 @@ export class ObsMediaScenes {
         const created = await this.request(() => this.client.call('CreateInput', {
           sceneName, inputName: sourceName, inputKind: kind, sceneItemEnabled: true,
           inputSettings: asset.kind === 'image' ? { file: playbackPath, unload: false }
-            : { is_local_file: true, local_file: playbackPath, looping: false, restart_on_activate: false, close_when_inactive: false }
+            : { is_local_file: true, local_file: playbackPath, looping: false, restart_on_activate: false, close_when_inactive: false, hw_decode: hardwareDecode }
         }), 'CreateInput');
         sceneItemId = created.sceneItemId;
-        this.prepared.set(sourceName, { path, sceneName, sceneItemId, kind: asset.kind });
+        this.prepared.set(sourceName, { path, playbackPaths, sceneName, sceneItemId, kind: asset.kind });
         if (asset.kind !== 'audio') {
           const canvas = await this.request(() => this.client.call('GetVideoSettings'), 'GetVideoSettings');
           await this.request(() => this.client.call('SetSceneItemTransform', { sceneName, sceneItemId, sceneItemTransform: {
@@ -138,7 +170,7 @@ export class ObsMediaScenes {
           await this.waitForState(sourceName, 'OBS_MEDIA_STATE_PAUSED');
         }
       }
-      this.prepared.set(sourceName, { path, sceneName, sceneItemId, kind: asset.kind });
+      this.prepared.set(sourceName, { path, playbackPaths, sceneName, sceneItemId, kind: asset.kind });
       this.active.delete(sourceName);
       this.primed.delete(sourceName);
       if (!exists && sourceName !== baseNames.sourceName && asset.kind !== 'audio') await this.copyPresentation(baseNames.sourceName, sourceName);
@@ -170,9 +202,10 @@ export class ObsMediaScenes {
     });
   }
 
-  async releasePrimed(): Promise<void> {
+  async releasePrimed(inputNames: readonly string[]): Promise<void> {
     return this.run(async () => {
-      for (const inputName of this.primed.keys()) {
+      for (const inputName of new Set(inputNames)) {
+        if (!this.primed.has(inputName)) continue;
         await this.batch([
           { requestType: 'TriggerMediaInputAction', requestData: { inputName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP' } },
           { requestType: 'SetInputMute', requestData: { inputName, inputMuted: true } }
@@ -303,7 +336,7 @@ export class ObsMediaScenes {
     });
   }
 
-  private async updateComposition(sceneName: string, layers: string[], upcoming: readonly string[] = []): Promise<void> {
+  private async updateComposition(sceneName: string, layers: string[], upcoming: readonly string[] = [], output: Parameters<OBSWebSocket['callBatch']>[0] = []): Promise<void> {
       if (!sceneName.startsWith('团播联动台·叠加·') || layers.includes(sceneName)) throw new Error('叠加输出必须使用独立的联动台场景');
       if (new Set(layers).size !== layers.length) throw new Error('同一素材或场景不能在同一时刻重复叠加，请使用独立素材');
       const signature = JSON.stringify(layers);
@@ -315,38 +348,37 @@ export class ObsMediaScenes {
           if (needed.some(name => name === sceneName || !inventory.scenes.some(scene => scene.sceneName === name))) throw new Error('叠加的机位或素材场景不存在，请重新同步素材');
           if (!inventory.scenes.some(scene => scene.sceneName === sceneName)) await this.request(() => this.client.call('CreateScene', { sceneName }), '创建叠加输出');
           const actual = await this.request(() => this.client.call('GetSceneItemList', { sceneName }), '读取叠加图层');
-          items = new Map(actual.sceneItems.flatMap(item => typeof item.sceneItemId === 'number' && typeof item.sourceName === 'string'
-            ? [[item.sourceName, { id: item.sceneItemId, enabled: item.sceneItemEnabled === true }] as const] : []));
+          const parsed = compositionItemsSchema.parse(actual.sceneItems);
+          if (new Set(parsed.map(item => item.sourceName)).size !== parsed.length) throw new Error('叠加场景包含重复来源，请重新同步素材');
+          items = new Map(parsed.map(item => [item.sourceName, { id: item.sceneItemId, enabled: item.sceneItemEnabled, index: item.sceneItemIndex }]));
           for (const sourceName of needed) if (!items.has(sourceName)) {
             const created = await this.request(() => this.client.call('CreateSceneItem', { sceneName, sourceName, sceneItemEnabled: false }), '添加叠加图层');
-            items.set(sourceName, { id: created.sceneItemId, enabled: false });
+            items.set(sourceName, { id: created.sceneItemId, enabled: false, index: items.size });
           }
         }
         const requests: Parameters<OBSWebSocket['callBatch']>[0] = [];
         for (const [sourceName, item] of items) {
           if (item.enabled && !layers.includes(sourceName)) requests.push({ requestType: 'SetSceneItemEnabled', requestData: { sceneName, sceneItemId: item.id, sceneItemEnabled: false } });
         }
-        // OBS index zero is the bottom; timeline index zero is the top.
-        for (const [index, sourceName] of layers.entries()) {
+        for (const sourceName of layers) {
           const existing = items.get(sourceName)!;
           const sceneItemId = existing.id;
           if (!existing.enabled) requests.push({ requestType: 'SetSceneItemEnabled', requestData: { sceneName, sceneItemId, sceneItemEnabled: true } });
-          requests.push(
-            { requestType: 'SetSceneItemIndex', requestData: { sceneName, sceneItemId, sceneItemIndex: layers.length - index - 1 } }
-          );
         }
+        requests.push(...compositionOrderRequests(sceneName, layers, items));
         // Invalidate before writes: a partial response must force a fresh read.
         this.compositionItems.delete(sceneName); this.compositions.delete(sceneName);
-        await this.batch(requests);
+        // Order layers, mute covered media and switch the output in one batch.
+        // A separate switch round trip spends another render boundary.
+        await this.batch([...requests, ...output]);
         for (const [sourceName, item] of items) item.enabled = layers.includes(sourceName);
         this.compositionItems.set(sceneName, items);
         this.compositions.set(sceneName, signature);
-      }
+      } else if (output.length) await this.batch(output);
   }
 
   async compose(sceneName: string, layers: string[]): Promise<void> {
     return this.run(async () => {
-      await this.updateComposition(sceneName, layers);
       const visible = new Set(layers);
       const output: Parameters<OBSWebSocket['callBatch']>[0] = [...this.active].flatMap(inputName => {
         const source = this.prepared.get(inputName);
@@ -356,7 +388,7 @@ export class ObsMediaScenes {
       // Events can arrive after a later external scene change. An old observed
       // scene cannot suppress this explicit timeline action (including t=0).
       output.push({ requestType: 'SetCurrentProgramScene', requestData: { sceneName } });
-      if (output.length) await this.batch(output);
+      await this.updateComposition(sceneName, layers, [], output);
     });
   }
 

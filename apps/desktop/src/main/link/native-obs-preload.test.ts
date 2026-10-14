@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type NativeObsPreload } from '@tb/schema';
-import { createObsProgramSnapshot } from '@tb/core/link';
+import { createObsProgramSnapshot, materialSceneNames } from '@tb/core/link';
 import { NativeObsPreloadPool } from './native-obs-preload';
 import type { NativeObsOutputs } from './native-obs-outputs';
 
@@ -60,4 +60,74 @@ it('接管中停止立即使原资源预备失效，失败释放且不自动重�
   const rejected = expect(taking).rejects.toThrow('正式会话已取消');
   valid = false; complete(); await failed; await rejected;
   expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1); expect(t.create).toHaveBeenCalledTimes(1);
+});
+
+it('下一首提前完成解码预热，交接不重复创建，当前歌曲结束不再使已接管资源过期', async () => {
+  const t = setup();
+  const next = { snapshot: { ...t.request.snapshot, item: { ...t.request.snapshot.item, id: 'next' } }, positionMs: 0 };
+  let playing = true;
+  await t.pool.prepareNext({ ...t.request, nextFiles: next }, () => { if (!playing) throw new Error('上一首已结束'); });
+  expect(t.outputs.preloadResources).toHaveBeenCalledWith(expect.any(Function), 'background');
+  playing = false;
+  expect(await t.pool.take({ ...t.request, generation: 3, snapshot: next.snapshot }, 0, () => undefined)).toBe(t.outputs);
+  await t.pool.close();
+  expect(t.create).toHaveBeenCalledTimes(1); expect(t.outputs.releaseOutputs).not.toHaveBeenCalled();
+});
+
+it('下一首修订不匹配时清理其解码器，不能把旧预备结果当成新工程', async () => {
+  const t = setup();
+  const next = { snapshot: { ...t.request.snapshot, item: { ...t.request.snapshot.item, id: 'next' } }, positionMs: 0 };
+  await t.pool.prepareNext({ ...t.request, nextFiles: next }, () => undefined);
+  await t.pool.take({ ...t.request, snapshot: { ...next.snapshot, revision: 2 } }, 0, () => undefined);
+  expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1); expect(t.create).toHaveBeenCalledTimes(2);
+});
+
+it('下一首共用当前视频来源时不修改活动解码器', async () => {
+  const t = setup();
+  const project = parseLinkProject({ ...createEmptyLinkProject('共用来源'), playbackSource: 'internal', obsOutputMode: 'scenes',
+    mediaAssets: [{ id: 'video', name: '视频', kind: 'video', relativePath: 'video.mp4', sha256: 'a'.repeat(64), byteLength: 1, durationMs: 1000, width: 1920, height: 1080 }],
+    rundown: ['song', 'next'].map(id => ({ id, title: id, referenceMediaClips: [{ id: `${id}-clip`, assetId: 'video', label: '视频',
+      startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 1000 }] })) });
+  const request = { ...t.request, snapshot: createObsProgramSnapshot(project, 'song', 1),
+    nextFiles: { snapshot: createObsProgramSnapshot(project, 'next', 1), positionMs: 0 } };
+  expect(await t.pool.prepareNext(request, () => undefined)).toBe(false);
+  expect(t.create).not.toHaveBeenCalled();
+  // A manually selected OBS scene can display that material without a clip
+  // reference in the current song. It still owns the visible source.
+  request.snapshot.assets = []; request.snapshot.item.referenceMediaClips = [];
+  request.snapshot.item.cues = [{ id: 'manual-scene', name: '素材场景', enabled: true, notes: '',
+    timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, actions: [{ id: 'scene', label: '显示素材',
+      kind: 'obs.setProgramScene', sceneName: materialSceneNames(project.projectId, project.mediaAssets[0]!).sceneName }] }];
+  expect(await t.pool.prepareNext(request, () => undefined)).toBe(false);
+  expect(t.create).not.toHaveBeenCalled();
+});
+
+it('同一歌曲的循环预备不能在活动期间重写其叠加场景', async () => {
+  const t = setup();
+  expect(await t.pool.prepareNext({ ...t.request, nextFiles: { snapshot: t.request.snapshot, positionMs: 0 } }, () => undefined)).toBe(false);
+  expect(t.create).not.toHaveBeenCalled();
+});
+
+it('停止本轮时取消在途下一首预备并清理，旧选择取消不碰下一首', async () => {
+  const t = setup(); let finish: () => void = () => { throw new Error('尚未开始'); };
+  vi.mocked(t.outputs.preloadResources).mockImplementation(async current => {
+    await new Promise<void>(resolve => { finish = resolve; }); current();
+  });
+  const next = { snapshot: { ...t.request.snapshot, item: { ...t.request.snapshot.item, id: 'next' } }, positionMs: 0 };
+  const job = t.pool.prepareNext({ ...t.request, nextFiles: next }, () => undefined);
+  const rejected = expect(job).rejects.toThrow('取消');
+  await vi.waitFor(() => expect(t.outputs.preloadResources).toHaveBeenCalled());
+  await t.pool.cancel(t.stop); await t.pool.cancelNext(crypto.randomUUID());
+  expect(t.outputs.releaseOutputs).not.toHaveBeenCalled();
+  const stopping = t.pool.cancelNext(t.request.sessionId); finish(); await stopping; await rejected;
+  expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1);
+});
+
+it('播放代数不污染选择预备代数，重新选歌先清理下一首', async () => {
+  const t = setup();
+  const next = { snapshot: { ...t.request.snapshot, item: { ...t.request.snapshot.item, id: 'next' } }, positionMs: 0 };
+  await t.pool.prepareNext({ ...t.request, generation: 100, nextFiles: next }, () => undefined);
+  await t.pool.preload({ ...t.request, generation: 2 });
+  expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1); expect(t.authorize).toHaveBeenCalledTimes(1);
+  expect(t.create).toHaveBeenCalledTimes(2);
 });

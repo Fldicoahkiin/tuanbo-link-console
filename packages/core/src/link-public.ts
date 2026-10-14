@@ -50,10 +50,13 @@ export * from './native-program-snapshot';
 export * from './optional-output-ready';
 export * from './lighting-library';
 export * from './lighting-empty-cue';
+export * from './ma2-auto-bind';
 export * from './lighting-library-classification';
+export * from './ma2-rename';
 export * from './lighting-music';
 export * from './music-analysis';
 export { automaticMusicCandidates, applyAutomaticMusicCandidates, removeAutomaticMusicAnnotations } from './automatic-music-candidates';
 export { musicBeatSegments, saveMusicBeatSegments, musicBeatPrefix, detectedBeatsPerBar, type MusicBeatInterval } from './music-beat-segments';
 
 export { recognizeMusicStructure, matchingMusicStructure, musicStructureSegments, acceptMusicStructure, editMusicStructure } from './music-structure';
+export { setAutomaticMusicAnalysisCommand } from './music-analysis-command';

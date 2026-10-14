@@ -1,9 +1,8 @@
 import { ObsLiveCanvas } from './ObsLiveCanvas';
-import { useBeautyStore } from '../stores/beauty-store';
 import { Fragment, useEffect, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type PointerEvent } from 'react';
 import type { LinkObsInventory, LinkObsSceneItemTransform, ResolvedTimelineClip, ResolvedTimelineObsCue, ResolvedTimelineState } from '@tb/core/link';
 import type { LinkMediaAsset, OutputCanvas, ReferenceCanvasTransform, ReferenceMediaClip, SceneItemTransform } from '@tb/schema';
-import { Boxes, MonitorPlay, RadioTower, Sparkles, Volume2 } from 'lucide-react';
+import { Boxes, MonitorPlay, RadioTower, Volume2 } from 'lucide-react';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { OBS_DRAG_TYPE, obsPreviewSourceName, parseObsResource, type ObsResource } from './resource-library-model';
 import { snapCanvasAxis } from './canvas-snap';
@@ -44,9 +43,6 @@ type Props = {
 };
 
 export function ReferenceStage(props: Props): JSX.Element {
-  const beautyOpen = useBeautyStore(state => state.panelOpen);
-  const setBeautyOpen = useBeautyStore(state => state.setPanelOpen);
-  const beautyButton = <button className="beauty-open-button" onClick={() => setBeautyOpen(true)}><Sparkles size={13} />人像美颜</button>;
   const aspect = props.outputCanvas.width > props.outputCanvas.height ? 'landscape' : 'portrait';
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [snapGuides, setSnapGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
@@ -79,8 +75,8 @@ export function ReferenceStage(props: Props): JSX.Element {
   };
 
   if (props.obsStatus === 'connected') return <section className="reference-stage panel">
-    <div className="stage-canvas">{beautyOpen ? null : <ObsLiveCanvas />}</div>
-    <footer className="stage-statusbar"><span><RadioTower />OBS 实时画布</span><span>直接编辑 OBS 当前场景来源</span>{beautyButton}</footer>
+    <div className="stage-canvas"><ObsLiveCanvas /></div>
+    <footer className="stage-statusbar"><span><RadioTower />OBS 实时画布</span><span>直接编辑 OBS 当前场景来源</span></footer>
   </section>;
   return <section className="reference-stage panel">
     <div
@@ -144,7 +140,6 @@ export function ReferenceStage(props: Props): JSX.Element {
     </div>
     {props.projectPath ? standaloneAudio.map((entry) => <StandaloneAudioPreview key={entry.clip.id} entry={entry} playheadMs={props.playheadMs} playing={props.playing} projectPath={props.projectPath ?? ''} onPlaybackError={setPlaybackError} />) : null}
     <footer className="stage-statusbar">
-      {beautyButton}
       <span><Boxes />活动素材 {activeClipCount}</span>
       <span><RadioTower />OBS {props.obsSceneCount} 场景 / {props.obsInputCount} 输入</span>
       <span><Volume2 />视频音频 试听</span>

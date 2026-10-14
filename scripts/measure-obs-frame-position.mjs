@@ -43,6 +43,8 @@ export async function measureFramePosition({ socket, address, directory, inputKi
   // threading for JPEG 2000. Preserve YUV pixels; this is not a production
   // cache replacement or evidence for alpha/10-bit/4K compatibility.
   const singleFrameCache = join(directory, 'frame-position-jpeg2000.mkv');
+  const cacheOnly = process.env.TBLINK_FRAME_POSITION_CACHE_ONLY === '1';
+  if (!cacheOnly) {
   await run(['-threads', '2', '-i', source, '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'jpeg2000', '-pred', '1', '-threads', '1', '-c:a', 'copy', '-avoid_negative_ts', 'disabled', singleFrameCache]);
   const cachePixels = await run(['-threads', '2', '-i', singleFrameCache, '-vf', 'scale=128:72:flags=neighbor', '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
   // Comparing large Buffers with deepEqual constructs a gigantic textual diff
@@ -50,11 +52,23 @@ export async function measureFramePosition({ socket, address, directory, inputKi
   // without materialising one number/string for every pixel in the error.
   assert.equal(cachePixels.length, reference.length, '定位诊断缓存的实际帧数与原文不同');
   assert.equal(createHash('sha256').update(cachePixels).digest('hex'), createHash('sha256').update(reference).digest('hex'), '定位诊断缓存像素与原文不同');
+  }
   const originalScene = (await socket.call('GetCurrentProgramScene')).sceneName;
   const rows = [], failures = [];
-  const variants = [{ name: 'original-software', file: source, hardwareRequested: false },
+  const hevcDiagnostic = process.env.TBLINK_FRAME_POSITION_HEVC_DIAGNOSTIC === '1';
+  const hevcCache = join(directory, 'frame-position-hevc-lossless.mkv');
+  if (hevcDiagnostic) {
+    await run(['-threads', '2', '-i', source, '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'hevc_nvenc',
+      '-preset', 'p1', '-tune', 'lossless', '-rc', 'constqp', '-qp', '0', '-g', '1', '-bf', '0', '-pix_fmt', '+',
+      '-vf', 'tpad=stop_mode=clone:stop=32', '-fps_mode', 'passthrough', '-c:a', 'copy', '-avoid_negative_ts', 'disabled', hevcCache]);
+    const originalPixels = await run(['-threads', '2', '-i', source, '-map', '0:v:0', '-f', 'hash', '-hash', 'sha256', '-']);
+    const hardwarePixels = await run(['-hwaccel', 'cuda', '-i', hevcCache, '-map', '0:v:0', '-frames:v', String(frameCount), '-f', 'hash', '-hash', 'sha256', '-']);
+    assert.equal(hardwarePixels.toString('utf8'), originalPixels.toString('utf8'), 'HEVC 硬件解码的原范围像素必须相同');
+  }
+  const variants = hevcDiagnostic ? [{ name: 'hevc-lossless-diagnostic', file: hevcCache, hardwareRequested: true }]
+    : cacheOnly ? [{ name: 'lossless-cache', file: cache, hardwareRequested: true }] : [{ name: 'original-software', file: source, hardwareRequested: false },
     { name: 'original-hardware-requested', file: source, hardwareRequested: true },
-    { name: 'lossless-cache', file: cache, hardwareRequested: false },
+    { name: 'lossless-cache', file: cache, hardwareRequested: true },
     { name: 'lossless-jpeg2000-diagnostic', file: singleFrameCache, hardwareRequested: false }];
   function identify(pixels) {
     const bitWidth = 8, bits = [];
@@ -109,7 +123,7 @@ export async function measureFramePosition({ socket, address, directory, inputKi
   } finally {
     await writeFile(join(directory, 'frame-position.json'), JSON.stringify({ passed: failures.length === 0 && rows.length === variants.length * 8,
       scope: '单来源视频的真实OBS截图条码定位；不代表四路负载或硬件解码已实际启用',
-      dimensions, withAudio, fps, gop: fps * 3, bFrames, inputKind, rows, failures }, null, 2));
+      dimensions, withAudio, fps, gop: fps * 3, bFrames, inputKind, cacheOnly, hevcDiagnostic, rows, failures }, null, 2));
   }
   assert.equal(failures.length, 0, '真实OBS截图帧号与目标不一致；不能依靠游标数值确认定位准确');
 }

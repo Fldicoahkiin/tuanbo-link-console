@@ -48,6 +48,7 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [data.path] });
     }, { path, catalog, pluginAvailable, scenario });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await expect(page.getByText('网络导入验收', { exact: true }).first()).toBeVisible();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();

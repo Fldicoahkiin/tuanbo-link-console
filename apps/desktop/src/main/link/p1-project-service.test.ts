@@ -9,7 +9,7 @@ import {
 } from '@tb/core/link';
 import { allocateP1TimecodeRanges, configureP1AutoFollowCommand, nativeProgramSnapshot } from '@tb/core/link';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LinkProjectService } from './link-project-service';
+import { hashFile, LinkProjectService } from './link-project-service';
 import { P1ProjectService } from './p1-project-service';
 
 const cleanupFiles: string[] = [];
@@ -281,6 +281,8 @@ describe('P1ProjectService', () => {
     const recovered = await service.importProject(fixture.p1Path, fixture.linkPath);
     expect(recovered.items[0]?.referenceAudio.durationMs).toBe(3000);
     expect(recovered.items[0]?.importNotes).toContain('完整原音频');
+    cleanupFiles.push(join(fixture.directory, 'cache', 'reference-audio', `${await hashFile(fixture.mediaPath)}.json`));
+    cleanupDirectories.push(join(fixture.directory, 'cache', 'reference-audio'), join(fixture.directory, 'cache'));
   });
 
   it('MP4 没有可解码音轨时仍保留待修复节目', async () => {

@@ -3,7 +3,7 @@ import type { LinkProject } from '@tb/schema';
 import type { ObsMediaScenes } from './obs-media-scenes';
 
 type Slot = { event: ManagedMediaEvent; sourceName: string; ready: boolean };
-type Media = { path: string; current: Slot | null; pending: Slot | null; touched: Set<string>; retained: Set<string> };
+type Media = { path: string; current: Slot | null; pending: Slot | null; following: Slot | null; touched: Set<string>; retained: Set<string> };
 type Scenes = Pick<ObsMediaScenes, 'prepareStandby' | 'copyPresentation' | 'prime' | 'execute' | 'seek'>;
 
 /** Two decoders per material, at most one future clip per material. Preparation
@@ -20,10 +20,13 @@ export class ObsMediaPreload {
     private readonly native: { prime: (name: string, restartRetained: boolean, kind: 'audio' | 'video') => Promise<void>; seek: (name: string, positionMs: number) => Promise<void> }) {
     this.starts = new SceneOutputTimeline(project, itemId).preloadEntries();
     this.lookaheadFrames = Math.ceil(10 * playbackFramesPerSecond(project.timebase.frameRate));
-    this.preparationSpacingFrames = Math.ceil(0.1 * playbackFramesPerSecond(project.timebase.frameRate));
+    // Eight live layers can still prepare inside the ten-second horizon.
+    // Leave rendering time between decoder flush/upload bursts, rather than
+    // starting another full-resolution preheat on the next clock sample.
+    this.preparationSpacingFrames = Math.ceil(0.5 * playbackFramesPerSecond(project.timebase.frameRate));
   }
   register(projectId: string, asset: { id: string; name: string }, path: string, sourceName = materialSceneNames(projectId, asset).sourceName): void {
-    this.media.set(sourceName, { path, current: null, pending: null, touched: new Set(), retained: new Set() });
+    this.media.set(sourceName, { path, current: null, pending: null, following: null, touched: new Set(), retained: new Set() });
   }
   resolveSource(logicalName: string): string { return this.media.get(logicalName)?.current?.sourceName ?? logicalName; }
 
@@ -89,6 +92,32 @@ export class ObsMediaPreload {
     await this.prime(target, assertCurrent);
   }
 
+  /** Allocate and warm the second decoder before the formal clock starts.
+   * Once the opening clip enters, this becomes the ordinary pending slot;
+   * live playback never owns more than the same pair of decoders. */
+  async primeFollowing(opening: ManagedMediaEvent, assertCurrent: () => void): Promise<void> {
+    assertCurrent();
+    const media = this.require(opening);
+    if (this.closed || media.current || !media.pending?.ready || media.pending.event.clipId !== opening.clipId || media.following) {
+      throw new Error('接续预备只能在首个素材已准备、正式播放尚未开始时执行');
+    }
+    const next = this.starts.find(event => event.sourceName === opening.sourceName && event.clipId !== opening.clipId && event.frameNumber > opening.frameNumber
+      && event.frameNumber <= opening.frameNumber + 2 * this.lookaheadFrames);
+    if (!next) return;
+    if (next.assetKind !== 'audio' && next.assetKind !== 'video') throw new Error('接续预备只支持音视频');
+    const sourceName = `${opening.sourceName}·预备`, kind = next.assetKind;
+    media.touched.add(sourceName);
+    await this.scenes.prepareStandby(opening.sourceName); assertCurrent();
+    await this.scenes.prime({ ...next, sourceName }, media.path, async () => {
+      assertCurrent(); await this.native.prime(sourceName, false, kind); assertCurrent();
+      if (next.sourceOffsetMs !== 0) await this.native.seek(sourceName, Math.round(next.sourceOffsetMs));
+      assertCurrent();
+    });
+    assertCurrent();
+    if (this.closed) throw new Error('接续预备会话已关闭');
+    media.following = { event: next, sourceName, ready: true };
+  }
+
   async execute(event: ManagedMediaEvent, path: string): Promise<void> {
     if (event.assetKind === 'image') return this.scenes.execute(event, path);
     const media = this.require(event);
@@ -111,7 +140,7 @@ export class ObsMediaPreload {
     const next = media.pending;
     if (!next?.ready || next.event.clipId !== event.clipId) throw new Error(`下一素材未在播放边界前准备完成：${event.assetName}`);
     const previous = media.current;
-    media.current = next; media.pending = null;
+    media.current = next; media.pending = media.following; media.following = null;
     await this.scenes.execute({ ...event, sourceName: next.sourceName }, path, previous?.sourceName, retirement);
     // A successfully stopped input needs no further cleanup; a paused one
     // remains owned until its next use or explicit session shutdown.
@@ -126,7 +155,7 @@ export class ObsMediaPreload {
     const media = this.require(event);
     if (media.path !== path || this.closed) throw new Error('素材定位路径或会话已改变');
     const sourceName = media.pending?.sourceName ?? media.current?.sourceName ?? event.sourceName;
-    media.touched.add(sourceName); media.pending = null;
+    media.touched.add(sourceName); media.pending = null; media.following = null;
     media.retained.delete(sourceName);
     media.current = { event, sourceName, ready: true };
     await this.scenes.seek({ ...event, sourceName }, path, this.native.seek);

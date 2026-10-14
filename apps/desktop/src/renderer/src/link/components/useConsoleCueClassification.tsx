@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react';
-import { updateConsoleCueCategoriesCommand, type CategoryChanges, consoleCueKey, hideConsoleCuesCommand, projectLightingLibrary, type ConsoleCueReference, type ConsoleLibrarySource } from '@tb/core/link';
+import { renameConsoleCueCommand, updateConsoleCueCategoriesCommand, type CategoryChanges, consoleCueKey, hideConsoleCuesCommand, projectLightingLibrary, type ConsoleCueReference, type ConsoleLibrarySource } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { LightingCueContextMenu } from './LightingCueContextMenu';
 
@@ -44,6 +44,9 @@ export function useConsoleCueClassification(onError:(message:string)=>void){
   const union=[...new Set(memberships.flat())];const common=union.filter(id=>memberships.every(ids=>ids.includes(id)));
   const sections=new Map<string,('front'|'rim'|'effect')[]>();
   for(const entry of library?.entries??[]){const ref=entry.track.cueStamp;if(ref?.mode!=='fixed'||entry.kind==='combination'||entry.source.endpoint!==source.endpoint||entry.source.show!==source.show)continue;const key=consoleCueKey({...ref,kind:entry.kind});sections.set(key,[...new Set([...(sections.get(key)??[]),...entry.categoryIds.flatMap(id=>library?.categories.find(category=>category.id===id)?.section??[])])]);}
-  const menu=context&&library?<LightingCueContextMenu {...context} categories={library.categories} categoryIds={common} mixedCategoryIds={union.filter(id=>!common.includes(id))} onClose={()=>setContext(null)} onConfirm={changes=>execute('classify',changes)} onRemove={()=>execute('remove')} {...showRemoved?{onRestore:()=>execute('restore')}:{} }/>:null;
+  const menu=context&&library?<LightingCueContextMenu {...context} categories={library.categories} categoryIds={common} mixedCategoryIds={union.filter(id=>!common.includes(id))} onClose={()=>setContext(null)} onRename={context.refs.length===1?(name)=>{
+    const state=useDocumentStore.getState();if(state.project?.projectId!==context.projectId)throw new Error('工程已切换，请重新选择 Cue');
+    state.execute(renameConsoleCueCommand(context.refs[0]!,name,context.source));onError('');
+  }:undefined} onConfirm={changes=>execute('classify',changes)} onRemove={()=>execute('remove')} {...showRemoved?{onRestore:()=>execute('restore')}:{} }/>:null;
   return {sections,isVisible,select,open,menu,picked,setPicked,classified,hidden,showRemoved,setShowRemoved,onlyUnclassified,setOnlyUnclassified,message};
 }

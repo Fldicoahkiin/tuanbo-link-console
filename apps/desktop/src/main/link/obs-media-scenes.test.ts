@@ -46,10 +46,37 @@ function fixture(resetOnSceneSwitch = false, startsNearOrigin = false) {
       calls.push(...batch); batch.forEach((entry) => apply(entry.requestData)); return Promise.resolve(batch.map(({ requestType }) => ({ requestType, requestStatus: { result: true, code: 100 } })));
     }
   };
-  return { calls, responses, setMediaState, deferSeek: () => { deferSeek = true; }, deferPause: () => { deferPause = true; }, scenes: new ObsMediaScenes(client as unknown as OBSWebSocket, (operation) => operation(), (operation) => operation()) };
+  return { client, calls, responses, setMediaState, deferSeek: () => { deferSeek = true; }, deferPause: () => { deferPause = true; }, scenes: new ObsMediaScenes(client as unknown as OBSWebSocket, (operation) => operation(), (operation) => operation()) };
 }
 
 describe('素材独立场景播放', () => {
+  it.each([true, false])('预备解码器只接受已核验的同素材旧缓存，拒绝其他文件（自有=%s）', async owned => {
+    const { scenes, client, calls, responses } = fixture();
+    const currentCache = 'C:/cache/new-hash.mkv', oldCache = 'C:/cache/old-hash.mkv';
+    const standby = `${names.sourceName}·预备`;
+    await scenes.prepare('project', asset, 'C:/dance.mp4', currentCache, [oldCache]);
+    responses.set('GetSceneItemList', { sceneItems: [{ sourceName: standby, sceneItemId: 2 }] });
+    responses.set('GetSourceFilterList', { filters: [] });
+    const original = client.call;
+    vi.spyOn(client, 'call').mockImplementation((type, data) => {
+      const result = original(type, data);
+      if (type !== 'GetInputSettings') return result;
+      const primary = typeof data === 'object' && data !== null && 'inputName' in data && data.inputName === names.sourceName;
+      return result.then(() => ({ inputKind: 'ffmpeg_source', inputSettings: {
+        local_file: primary ? currentCache : owned ? oldCache : 'C:/unrelated.mp4', hw_decode: primary
+      } }));
+    });
+    calls.length = 0;
+    if (owned) {
+      await expect(scenes.prepareStandby(names.sourceName)).resolves.toBe(standby);
+      expect(calls).toContainEqual({ requestType: 'SetInputSettings', requestData: { inputName: standby,
+        inputSettings: { local_file: currentCache, hw_decode: true, restart_on_activate: false, close_when_inactive: false, looping: false }, overlay: true } });
+      expect(calls.some(call => call.requestType === 'SetCurrentProgramScene' || call.requestType.startsWith('Remove'))).toBe(false);
+    } else {
+      await expect(scenes.prepareStandby(names.sourceName)).rejects.toThrow('其他来源占用');
+      expect(calls.some(call => call.requestType.startsWith('Set') || call.requestType === 'CreateInput')).toBe(false);
+    }
+  });
   it('同素材第二轨创建独立来源，复制原有画面滤镜，单独定位不会改变第一轨播放位置', async () => {
     const { scenes, calls, responses, setMediaState } = fixture();
     responses.set('GetSourceFilterList', { filters: [] });
@@ -84,7 +111,7 @@ describe('素材独立场景播放', () => {
     const { scenes, calls, responses } = fixture();
     await scenes.prepare('project', asset, 'C:/dance.mp4');
     const standby = `${names.sourceName}·预备`;
-    responses.set('GetInputSettings', { inputKind: 'ffmpeg_source', inputSettings: { local_file: 'C:/dance.mp4' } });
+    responses.set('GetInputSettings', { inputKind: 'ffmpeg_source', inputSettings: { local_file: 'C:/dance.mp4', hw_decode: false } });
     responses.set('GetSceneItemList', { sceneItems: [] });
     responses.set('GetSourceFilterList', { filters: [{ filterName: '颜色', filterKind: 'color_filter_v2', filterIndex: 0, filterEnabled: true, filterSettings: { brightness: 0.1 } }] });
     calls.length = 0;
@@ -159,17 +186,76 @@ describe('素材独立场景播放', () => {
     } finally { vi.useRealTimers(); }
   });
   it('准备阶段建好后续机位，正式切换不再查询目录或创建来源', async () => {
-    const { scenes, calls, responses } = fixture();
+    const { scenes, calls, responses, client } = fixture();
     responses.set('GetSceneList', { scenes: [{ sceneName: '机位1' }, { sceneName: '机位2' }, { sceneName: names.sceneName }] });
     responses.set('GetSceneItemList', { sceneItems: [] }); responses.set('CreateSceneItem', { sceneItemId: 3 });
     const output = '团播联动台·叠加·预备';
     await scenes.prepareComposition(output, [names.sceneName, '机位1'], ['机位1', '机位2']);
     expect(calls.filter(call => call.requestType === 'CreateSceneItem')).toHaveLength(3);
     calls.length = 0;
+    const batches = vi.spyOn(client, 'callBatch');
     await scenes.compose(output, [names.sceneName, '机位2']);
+    expect(batches).toHaveBeenCalledOnce();
     expect(calls.some(call => ['GetSceneList', 'GetSceneItemList', 'CreateSceneItem'].includes(call.requestType))).toBe(false);
     expect(calls.filter(call => call.requestType === 'SetSceneItemEnabled')).toHaveLength(2);
     expect(calls.at(-1)?.requestType).toBe('SetCurrentProgramScene');
+  });
+
+  it('叠加批次部分失败不记录成功布局，明确再次执行时重新读取而不自动重试', async () => {
+    const { scenes, calls, responses, client } = fixture();
+    const output = '团播联动台·叠加·失败';
+    responses.set('GetSceneList', { scenes: [{ sceneName: '机位1' }, { sceneName: '机位2' }, { sceneName: output }] });
+    responses.set('GetSceneItemList', { sceneItems: [] }); responses.set('CreateSceneItem', { sceneItemId: 3 });
+    await scenes.prepareComposition(output, ['机位1'], ['机位2']);
+    calls.length = 0;
+    const batches = vi.spyOn(client, 'callBatch').mockResolvedValueOnce([
+      { requestType: 'SetSceneItemEnabled', requestStatus: { result: false, code: 500 } }
+    ]);
+    await expect(scenes.compose(output, ['机位2'])).rejects.toThrow('SetSceneItemEnabled');
+    expect(batches).toHaveBeenCalledOnce();
+    expect(calls).toHaveLength(0);
+    await scenes.compose(output, ['机位2']);
+    expect(calls.some(call => call.requestType === 'GetSceneItemList')).toBe(true);
+    expect(calls.at(-1)?.requestType).toBe('SetCurrentProgramScene');
+  });
+
+  it('四视频四图片被机位覆盖和恢复时保持相对顺序，不重复提交图层排序；真正换序仍正确', async () => {
+    const { scenes, calls, responses, client } = fixture();
+    const output = '团播联动台·叠加·负载';
+    const media = ['视频1', '视频2', '视频3', '视频4'];
+    const images = ['图片1', '图片2', '图片3', '图片4'];
+    const layers = [...images, ...media];
+    const order = ['机位1', '机位2', ...[...layers].reverse()];
+    const ids = new Map(order.map((name, index) => [name, index + 1]));
+    responses.set('GetSceneList', { scenes: [output, ...order].map(sceneName => ({ sceneName })) });
+    responses.set('GetSceneItemList', { sceneItems: order.map((sourceName, sceneItemIndex) => ({
+      sourceName, sceneItemId: ids.get(sourceName), sceneItemIndex, sceneItemEnabled: layers.includes(sourceName)
+    })).reverse() }); // The response array itself is not the stacking order.
+    const batch = client.callBatch;
+    vi.spyOn(client, 'callBatch').mockImplementation(requests => {
+      for (const request of requests) {
+        if (request.requestType !== 'SetSceneItemIndex') continue;
+        const data = request.requestData as { sceneItemId: number; sceneItemIndex: number };
+        const from = order.findIndex(name => ids.get(name) === data.sceneItemId);
+        const [name] = order.splice(from, 1); order.splice(data.sceneItemIndex, 0, name!);
+      }
+      return batch(requests);
+    });
+    await scenes.prepareComposition(output, layers, ['机位1', '机位2']);
+    calls.length = 0;
+    for (let index = 0; index < 8; index++) {
+      const visible = [...images, `机位${index % 2 + 1}`];
+      await scenes.compose(output, visible);
+      expect(order.filter(name => visible.includes(name)).reverse()).toEqual(visible);
+      await scenes.compose(output, layers);
+      expect(order.filter(name => layers.includes(name)).reverse()).toEqual(layers);
+    }
+    expect(calls.filter(call => call.requestType === 'SetSceneItemIndex')).toHaveLength(0);
+    expect(calls.filter(call => call.requestType === 'SetCurrentProgramScene')).toHaveLength(16);
+    const changed = [...layers].reverse();
+    await scenes.compose(output, changed);
+    expect(calls.some(call => call.requestType === 'SetSceneItemIndex')).toBe(true);
+    expect(order.filter(name => changed.includes(name)).reverse()).toEqual(changed);
   });
 
   it('每次明确选择叠加场景都发送切换，重复布局仍不重建图层', async () => {
@@ -249,7 +335,7 @@ describe('素材独立场景播放', () => {
     });
     calls.length = 0;
     await scenes.execute({ ...event, phase: 'stop' }, 'C:/dance.mp4');
-    await scenes.releasePrimed();
+    await scenes.releasePrimed([event.sourceName, secondEvent.sourceName]);
     expect(calls.filter(call => call.requestType === 'TriggerMediaInputAction')).toEqual([
       { requestType: 'TriggerMediaInputAction', requestData: { inputName: event.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP' } },
       { requestType: 'TriggerMediaInputAction', requestData: { inputName: secondEvent.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP' } }
@@ -260,12 +346,32 @@ describe('素材独立场景播放', () => {
     await scenes.prepare('project', asset, 'C:/dance.mp4');
     responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_ERROR', mediaCursor: 0 });
     await expect(scenes.prime({ ...event, sourceOffsetMs: 0 }, 'C:/dance.mp4', () => Promise.resolve())).rejects.toThrow('未完成画面定位');
-    calls.length = 0; await scenes.releasePrimed();
+    calls.length = 0; await scenes.releasePrimed([names.sourceName]);
     expect(calls).toEqual([
       { requestType: 'TriggerMediaInputAction', requestData: { inputName: names.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP' } },
       { requestType: 'SetInputMute', requestData: { inputName: names.sourceName, inputMuted: true } }
     ]);
-    calls.length = 0; await scenes.releasePrimed(); expect(calls).toEqual([]);
+    calls.length = 0; await scenes.releasePrimed([names.sourceName]); expect(calls).toEqual([]);
+  });
+  it('结束当前节目只释放其预备目标，不停止下一首已预热的解码器', async () => {
+    const { scenes, calls, setMediaState } = fixture();
+    const second = { ...asset, id: 'next-song', name: '下一首' };
+    const secondEvent = { ...event, ...materialSceneNames('project', second), assetId: second.id };
+    await scenes.prepare('project', asset, 'C:/dance.mp4');
+    await scenes.prepare('project', second, 'C:/dance.mp4');
+    for (const target of [event, secondEvent]) await scenes.prime(target, 'C:/dance.mp4', () => {
+      setMediaState('OBS_MEDIA_STATE_PAUSED', target.sourceOffsetMs); return Promise.resolve();
+    });
+    calls.length = 0;
+    await scenes.releasePrimed([event.sourceName, event.sourceName]);
+    expect(calls.filter(call => call.requestType === 'TriggerMediaInputAction')).toHaveLength(1);
+    expect(calls).toEqual([
+      { requestType: 'TriggerMediaInputAction', requestData: { inputName: event.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP' } },
+      { requestType: 'SetInputMute', requestData: { inputName: event.sourceName, inputMuted: true } }
+    ]);
+    calls.length = 0;
+    await scenes.releasePrimed([secondEvent.sourceName]);
+    expect(calls.filter(call => call.requestType === 'TriggerMediaInputAction')).toHaveLength(1);
   });
   it('开场结构在准备阶段建好但不切正式画面，正式触发不再创建图层', async () => {
     const { scenes, calls, responses } = fixture();
@@ -287,7 +393,7 @@ describe('素材独立场景播放', () => {
     const output = '团播联动台·叠加·测试';
     await scenes.compose(output, [names.sceneName, '机位']);
     expect(calls.filter(call => call.requestType === 'SetSceneItemIndex').map(call => call.requestData)).toEqual([
-      { sceneName: output, sceneItemId: 3, sceneItemIndex: 1 }, { sceneName: output, sceneItemId: 3, sceneItemIndex: 0 }
+      { sceneName: output, sceneItemId: 3, sceneItemIndex: 0 }
     ]);
     expect(calls.some(call => ['SetInputSettings', 'SetSceneItemTransform', 'RemoveScene', 'RemoveInput'].includes(call.requestType))).toBe(false);
     calls.length = 0;
@@ -426,7 +532,7 @@ describe('素材独立场景播放', () => {
     await scenes.prepare('project', asset, 'C:/dance.mp4');
     expect(calls.filter((call) => call.requestType === 'SetInputSettings')).toEqual([{
       requestType: 'SetInputSettings', requestData: { inputName: names.sourceName,
-        inputSettings: { restart_on_activate: false, close_when_inactive: false, looping: false }, overlay: true }
+        inputSettings: { restart_on_activate: false, close_when_inactive: false, looping: false, hw_decode: true }, overlay: true }
     }]);
     expect(calls.some((call) => call.requestType === 'SetSceneItemTransform' || call.requestType.startsWith('Remove'))).toBe(false);
   });

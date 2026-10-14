@@ -188,7 +188,8 @@ static DWORD WINAPI commands(void *unused) {
 }
 int main(int argc, char **argv) {
   if (argc == 2 && strcmp(argv[1], "--devices") == 0) return print_devices();
-  if (argc == 2 && strcmp(argv[1], "--device-service") == 0) return serve_devices();
+  if (argc == 2 && strcmp(argv[1], "--device-service") == 0) return serve_devices(true);
+  if (argc == 2 && strcmp(argv[1], "--audio-device-service") == 0) return serve_devices(false);
   if (argc == 2 && strcmp(argv[1], "--midi-output") == 0) return serve_midi_output();
   if (argc != 1) return 2;
   _setmode(_fileno(stdin), _O_BINARY);

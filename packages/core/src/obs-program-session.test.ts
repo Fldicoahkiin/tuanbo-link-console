@@ -163,14 +163,16 @@ function videoFixture(): LinkProject {
     rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'video-layer', name: '视频' }], referenceMediaClips: [{ id: 'clip', assetId: 'video', layerId: 'video-layer', label: '视频', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 10000 }], cues: [] }] });
 }
 
-it('机位覆盖结束只恢复叠加显隐，持续播放的底层视频不再定位或重发', async () => {
+it.each([0, 150])('机位覆盖结束只恢复叠加显隐，持续播放的视频不重发；应答耗时 %i ms', async latency => {
   const project = videoFixture(), item = project.rundown[0]!;
   project.mediaAssets.push({ ...project.mediaAssets[0]!, id: 'overlay', kind: 'image', name: '叠加', relativePath: 'assets/overlay.png' });
   item.visualLayers.unshift({ id: 'overlay', name: '叠加', visible: true, locked: false }, { id: 'camera', name: '机位', visible: true, locked: false });
   item.referenceMediaClips.push({ ...item.referenceMediaClips[0]!, id: 'overlay', assetId: 'overlay', layerId: 'overlay' });
   item.cues.push({ id: 'camera', name: '覆盖', notes: '', enabled: true, layerId: 'camera', durationMs: 200,
     timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, actions: [{ id: 'camera', label: '机位', kind: 'obs.setProgramScene', sceneName: '机位' }] });
-  const test = setup(project); await test.session.prepare(0); await test.advance(0, 2000);
+  let compositions = 0;
+  const test = setup(project, () => { if (++compositions === 3) test.time(1200 + latency); return Promise.resolve(); });
+  await test.session.prepare(0); await test.advance(0, 1200); await test.advance(1400, 2000);
   expect(test.session.error).toBeNull();
   expect(test.dependencies.executeManagedMediaEvent.mock.calls.map(call => call[0].event.clipId)).toEqual(['overlay', 'clip']);
   await test.session.stop();

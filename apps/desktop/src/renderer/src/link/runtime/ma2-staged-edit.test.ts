@@ -6,7 +6,7 @@ import { convertMa2Snapshot, convertMa2Timecode } from '../../../../main/link/ma
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
 import { Ma2ApplyService } from '../../../../main/link/ma2-apply-service';
 import { Ma2AutoSync, type Ma2AutoSyncDependencies } from './ma2-auto-sync';
-import { ma2PendingChanges } from './ma2-pending-changes';
+import { ma2PendingChanges, ma2UnboundTracks } from './ma2-pending-changes';
 import { useDocumentStore } from '../stores/document-store';
 import { lightingEditHandler } from '../components/lighting-edit-handler';
 
@@ -33,6 +33,8 @@ function setup() {
   const service = new Ma2ApplyService(bridge, () => playing);
   const catalog: Ma2Catalog = { directory: { show: 'Test', generation: 'session', version: '3.3.4', entries: [] }, readAt: new Date().toISOString(), entries: [] };
   const dependencies: Ma2AutoSyncDependencies = {
+    rename: () => Promise.reject(new Error('此测试不应改名')),
+    prepare: vi.fn(() => Promise.reject(new Error('此测试不应创建关联'))),
     archive: vi.fn(() => Promise.resolve('saved.tblink')),
     state: () => ({ ...useDocumentStore.getState(), playing }),
     catalog: vi.fn(() => Promise.resolve(catalog)),
@@ -145,21 +147,44 @@ it('读取中恢复播放取消本轮写入，再次停止必须重新读取', a
   expect(read).toHaveBeenCalledTimes(2); expect(test.bridge.exchange).toHaveBeenCalledOnce();
 });
 
-it.each(['关闭同步', '继续编辑', '切换工程'] as const)('写入后%s仍完成回读，但不覆盖本地或声称全部成功', async action => {
+it('写入期间继续编辑保留最新位置，下一轮继续写入；撤销仍形成反向修改', async () => {
   const test = setup(); test.edit(1000); test.stop();
   const exchange = test.bridge.exchange.getMockImplementation()!;
-  test.bridge.exchange.mockImplementation(async (...args) => {
-    const result = await exchange(...args);
-    if (action === '关闭同步') test.runner.stop();
-    else if (action === '继续编辑') test.edit(1400);
-    else useDocumentStore.getState().setProject(createEmptyLinkProject('其他工程'), null);
-    return result;
+  test.bridge.exchange.mockImplementationOnce(async (...args) => {
+    const result = await exchange(...args); test.edit(1400); return result;
+  });
+  await test.runner.tick();
+  expect(position()).toBe(1400); expect(pending()).toHaveLength(1);
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('staged', expect.any(String));
+  await test.runner.tick();
+  expect(position()).toBe(1400); expect(pending()).toEqual([]);
+  expect(test.bridge.exchange).toHaveBeenCalledTimes(2);
+  useDocumentStore.getState().undo(); expect(position()).toBe(1000);
+  await test.runner.tick(); expect(pending()).toEqual([]);
+});
+
+it('写入中关闭开关仍核对已发出的修改，不再发送下一笔', async () => {
+  const test = setup(); test.edit(1000); test.stop();
+  const exchange = test.bridge.exchange.getMockImplementation()!;
+  test.bridge.exchange.mockImplementationOnce(async (...args) => {
+    const result = await exchange(...args); test.runner.stop(); test.edit(1400); return result;
   });
   await test.runner.tick(); await test.runner.tick();
-  expect(test.bridge.request).toHaveBeenCalledTimes(2); expect(test.bridge.exchange).toHaveBeenCalledOnce();
+  expect(position()).toBe(1400); expect(pending()).toHaveLength(1);
+  expect(test.bridge.exchange).toHaveBeenCalledOnce();
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('off', expect.any(String));
+});
+
+it('写入中切换工程不把旧回读应用到新工程', async () => {
+  const test = setup(); test.edit(1000); test.stop();
+  const exchange = test.bridge.exchange.getMockImplementation()!;
+  test.bridge.exchange.mockImplementationOnce(async (...args) => {
+    const result = await exchange(...args);
+    useDocumentStore.getState().setProject(createEmptyLinkProject('其他工程'), null); return result;
+  });
+  await test.runner.tick();
   expect(test.dependencies.execute).not.toHaveBeenCalled();
   expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('请手动回读确认'));
-  if (action !== '切换工程') { expect(pending()).toHaveLength(1); expect(position()).toBe(action === '继续编辑' ? 1400 : 1000); }
 });
 
 it('保存重开仍可从基线恢复暂存；新增、删除均显示', () => {
@@ -197,6 +222,31 @@ it('控台确认后一次撤销就反向同步，重做仍使用最新基线', a
   await test.runner.tick(); expect(pending()).toEqual([]);
   expect(test.bridge.exchange).toHaveBeenCalledTimes(4);
   expect(test.dependencies.archive).toHaveBeenCalledTimes(4);
+});
+it('未关联的序列池 Cue 单独列出，空点位不伪装成控台动作', () => {
+  const project = structuredClone(useDocumentStore.getState().project!);
+  const document = project.rundown[0]!.lighting!;
+  const track = structuredClone(document.tracks[0]!); track.id = 'unbound';
+  track.clips = track.clips.map(clip => ({ ...clip, id: `unbound-${clip.id}`, events: clip.events.map(event => event.kind === 'ma2' ? { ...event, executor: '' } : event) }));
+  document.tracks.push(track);
+  const unbound = ma2UnboundTracks(project);
+  expect(unbound).toHaveLength(1);
+  expect(unbound[0]).toMatchObject({ trackId: 'unbound', count: 2 });
+  expect(unbound[0]?.reason).toContain('自动准备控台执行位置');
+  track.clips[0]!.events = [{ id: 'empty', kind: 'empty-cue', label: '空点位', at: 0 }];
+  expect(ma2UnboundTracks(project)).toEqual([]);
+});
+
+it('写入中撤销不会被旧回读覆盖，下一笔写回撤销后的内容', async () => {
+  const test = setup(); const original = position(); test.edit(1000); test.stop();
+  const exchange = test.bridge.exchange.getMockImplementation()!;
+  test.bridge.exchange.mockImplementationOnce(async (...args) => {
+    const result = await exchange(...args); useDocumentStore.getState().undo(); return result;
+  });
+  await test.runner.tick(); expect(position()).toBe(original); expect(pending()).toHaveLength(1);
+  await test.runner.tick(); expect(position()).toBe(original); expect(pending()).toEqual([]);
+  expect(useDocumentStore.getState().future).toHaveLength(1);
+  await test.runner.tick(); expect(test.dependencies.changed).toHaveBeenLastCalledWith('verified', expect.stringContaining('回读确认'));
 });
 it('存档失败阻止写入，并保留本地修改且不重试', async () => {
   const test = setup(); test.edit(1000); test.stop();

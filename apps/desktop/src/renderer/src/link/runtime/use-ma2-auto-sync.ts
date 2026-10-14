@@ -28,6 +28,8 @@ export function useMa2AutoSync(playing: boolean, notify: (message: string, tone?
     const runner = new Ma2AutoSync({
       state: () => ({ ...useDocumentStore.getState(), playing: playingRef.current || useMa2AutoSyncStore.getState().previewPlaying, editing: performance.now() - lastEditAt < 1000 }),
       catalog: request => window.tbLink.readMa2Catalog(request),
+      prepare: request => window.tbLink.prepareMa2AutoBindings(request),
+      rename: request => window.tbLink.renameMa2Object(request),
       read: request => window.tbLink.previewMa2(request),
       compare: request => window.tbLink.compareMa2(request),
       apply: request => window.tbLink.applyMa2(request),
@@ -66,7 +68,7 @@ export function useMa2AutoSync(playing: boolean, notify: (message: string, tone?
       if (debounce) clearTimeout(debounce);
       debounce = setTimeout(() => { void runner.tick(); }, 1000);
     });
-    const poll = setInterval(() => { void runner.tick(); }, 5000);
+    const poll = setInterval(() => { void runner.tick(); }, 1000);
     return () => { runnerRef.current = null; unsubscribe(); documents(); clearInterval(poll); if (debounce) clearTimeout(debounce); runner.stop(); useMa2AutoSyncStore.setState({ request: null }); };
   }, [method]);
 }

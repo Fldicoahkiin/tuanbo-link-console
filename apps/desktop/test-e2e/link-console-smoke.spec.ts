@@ -1265,7 +1265,7 @@ test('设置分类清晰，首页无重复入口，场景在原编辑器编排',
   const submenu = await page.locator('.settings-submenus').boundingBox();
   expect(submenu!.x).toBeGreaterThanOrEqual(sidebar!.x);
   expect(submenu!.x + submenu!.width).toBeLessThanOrEqual(sidebar!.x + sidebar!.width);
-  await expect(page.getByRole('navigation', { name: '主要工作区' }).getByRole('button')).toHaveText(['节目单', '编辑器', '灯光工作台', '人像美颜', '设置']);
+  await expect(page.getByRole('navigation', { name: '主要工作区' }).getByRole('button')).toHaveText(['节目单', '编辑器', '灯光工作台', '设置']);
   await page.screenshot({ path: testInfo.outputPath('settings-devices.png') });
   await closeSettingsDialog();
   await addEmptyProgram();
@@ -1288,6 +1288,9 @@ test('设置分类清晰，首页无重复入口，场景在原编辑器编排',
   await expect(page.locator('.cue-inspector')).toContainText('场景');
   await expect(page.getByRole('button', { name: '保存工程', exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('simple-editor.png') });
+  await expect(page.getByRole('button', { name: '人像美颜', exact: true })).toHaveCount(0);
+  await expect(page.locator('.beauty-workspace')).toHaveCount(0);
+  await expect(page.locator('.stage-statusbar')).toContainText('OBS 实时画布');
 });
 
 test('播放列表可新建、改名、分配歌曲和删除，删除列表不删除歌曲', async ({}, testInfo) => {
@@ -1486,7 +1489,17 @@ test.beforeEach(async ({}, testInfo) => {
   await page.reload();
 });
 
-test.afterEach(async () => {
+test.afterEach(async ({}, info) => {
+  if (info.status !== info.expectedStatus && !page.isClosed()) {
+    await writeFile(info.outputPath('failure-playback.json'), JSON.stringify(await page.evaluate(() => {
+      const audio = document.querySelector<HTMLAudioElement>('.timeline-toolbar > audio');
+      const events: unknown = Reflect.get(window, '__previewAudioEvents');
+      return { audio: audio ? { currentTime: audio.currentTime, duration: audio.duration, paused: audio.paused, ended: audio.ended,
+        readyState: audio.readyState, error: audio.error?.message, source: audio.currentSrc } : null,
+      events: events ?? null };
+    }), null, 2));
+    await writeFile(info.outputPath('failure-logs.json'), JSON.stringify(await page.evaluate(() => window.tbLink.queryLogs({ limit: 100 })), null, 2));
+  }
   await page.evaluate(() => Promise.all([
     window.tbLink.setDocumentDirty(false),
     window.tbLink.setRuntimeActive(false)
@@ -1768,6 +1781,18 @@ test('没有联动工程时可直接选择 P1 音频并自动建档', async ({},
     dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [paths.p1Path] });
     dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: paths.linkPath });
   }, { p1Path, linkPath });
+  await page.evaluate(() => {
+    const events: { kind: string; at: number; position: number; paused: boolean; ended: boolean; readyState: number }[] = [];
+    Reflect.set(window, '__previewAudioEvents', events);
+    for (const kind of ['play', 'playing', 'pause', 'seeking', 'seeked', 'ended', 'error', 'emptied', 'loadstart']) {
+      document.addEventListener(kind, event => {
+        const audio = event.target;
+        if (audio instanceof HTMLAudioElement && audio.matches('.timeline-toolbar > audio')) {
+          events.push({ kind, at: performance.now(), position: audio.currentTime, paused: audio.paused, ended: audio.ended, readyState: audio.readyState });
+        }
+      }, true);
+    }
+  });
   await openSettingsDialog();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '程序维护', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '歌曲导入', exact: true }).click();
@@ -1809,7 +1834,20 @@ test('没有联动工程时可直接选择 P1 音频并自动建档', async ({},
   await page.getByRole('button', { name: '播放时间线' }).click();
   await expect(page.getByRole('button', { name: '暂停时间线' })).toBeVisible();
   await expect.poll(() => page.locator('.timeline-toolbar > audio').evaluate((audio) => (audio as HTMLAudioElement).currentTime)).toBeLessThan(2);
+  // A queued ended event can arrive after restarting from the end of the song.
+  // Only the current media state may stop this new playback session.
+  await page.locator('.timeline-toolbar > audio').evaluate((element) => {
+    const audio = element as HTMLAudioElement;
+    if (audio.ended || audio.paused) throw new Error('音频尚未重新播放，不能验证迟到的结束事件');
+    audio.dispatchEvent(new Event('ended'));
+  });
+  await expect(page.getByRole('button', { name: '暂停时间线' })).toBeVisible();
+  await expect.poll(() => page.locator('.timeline-toolbar > audio').evaluate((audio) => (audio as HTMLAudioElement).currentTime)).toBeGreaterThan(0.5);
   await page.getByRole('button', { name: '暂停时间线' }).click();
+  const lifecycle: unknown = await page.evaluate((): unknown => Reflect.get(window, '__previewAudioEvents'));
+  await writeFile(testInfo.outputPath('audio-lifecycle.json'), JSON.stringify(lifecycle, null, 2));
+  if (!Array.isArray(lifecycle)) throw new Error('音频事件记录未建立');
+  expect(lifecycle.filter((event: unknown) => typeof event === 'object' && event !== null && Reflect.get(event, 'kind') === 'ended').length).toBeLessThan(20);
   await page.screenshot({ path: testInfo.outputPath('reference-audio-waveform.png') });
 
 });
@@ -2195,12 +2233,17 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await mtcOffset.fill('00:00:00:30'); await mtcOffset.press('Enter');
   await expect(mtcOffset).toHaveValue('01:02:03:17');
   await expect(page.getByRole('alert')).toContainText('当前帧率的帧数为 00–29');
-  await page.getByRole('button', { name: '关闭错误通知', exact: true }).click();
+  await page.locator('.toast.error').filter({ hasText: '当前帧率的帧数为 00–29' }).getByRole('button', { name: '关闭错误通知', exact: true }).click();
   await songVolume.fill('45'); await songVolume.press('Enter');
   await openProgramProperties();
   await expect(page.getByRole('spinbutton', { name: '歌曲音量', exact: true })).toHaveValue('45');
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown[0]?.playback?.volume).toBe(45);
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown[0]?.playback?.mtcOffsetMs).toBe(3723567);
+  const midiNotice = page.locator('.toast.error').filter({ hasText: /Windows MIDI (?:端口枚举未响应|服务正在停止)/ });
+  if (await midiNotice.isVisible()) {
+    await writeFile(testInfo.outputPath('system-midi-notice.txt'), await midiNotice.innerText());
+    await midiNotice.getByRole('button', { name: '关闭错误通知', exact: true }).click();
+  }
   await page.getByRole('button', { name: '编辑内容', exact: true }).click();
   await expect(page.locator('.p1-project-workspace')).toBeHidden();
   await page.getByRole('button', { name: /节目单/ }).first().click();
@@ -2292,6 +2335,7 @@ test('Cue 时间线的统一图层、取消拖动、适配、滚动和播放键�
   await addEmptyProgram();
   const firstAudioPath = testInfo.outputPath('timeline-a.wav');
   await createAudioFixture(firstAudioPath);
+  await expect(page.locator('.document-save-button')).toHaveCount(0);
   await openProgramProperties();
   const chooseAudio = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: '添加音频', exact: true }).click();
@@ -3397,6 +3441,13 @@ test('维护合并设备连接，外观和更新同页，移除诊断日志入�
 
 test('一键连接仅保留顶部入口，连接中禁止重复点击', async ({}, testInfo) => {
   await application.evaluate(({ ipcMain }) => {
+    // This checks button lifecycle, not the operator's running OBS or MIDI setup.
+    for (const channel of ['link:obs-connect-local', 'link:obs-connect']) {
+      ipcMain.removeHandler(channel);
+      ipcMain.handle(channel, () => { throw new Error('界面回归：未连接测试 OBS'); });
+    }
+    ipcMain.removeHandler('link:loop-midi');
+    ipcMain.handle('link:loop-midi', () => ({ state: 'missing', executablePath: null, pid: null, startTime: null }));
     ipcMain.removeHandler('link:detect-local-integrations');
     Reflect.set(globalThis, '__quickConnectCalls', 0);
     ipcMain.handle('link:detect-local-integrations', () => {

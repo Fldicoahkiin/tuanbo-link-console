@@ -18,9 +18,12 @@ const installation = 'C:/Program Files/obs-studio';
 const obsDirectory = join(directory, 'obs');
 for (const folder of ['bin', 'data', 'obs-plugins']) await cp(join(installation, folder), join(obsDirectory, folder), { recursive: true });
 await cp(join(root, 'tools/obs/native-preview/tblink-realtime-preview.dll'), join(obsDirectory, 'obs-plugins/64bit/tblink-realtime-preview.dll'));
+await cp(join(root, 'artifacts/beauty-prototype/plugin/tblink-beauty.dll'), join(obsDirectory, 'obs-plugins/64bit/tblink-beauty.dll'));
+await mkdir(join(obsDirectory, 'data/obs-plugins/tblink-beauty'), { recursive: true });
+await cp(join(root, 'artifacts/beauty-prototype/plugin/beauty.effect'), join(obsDirectory, 'data/obs-plugins/tblink-beauty/beauty.effect'));
 const config = join(obsDirectory, 'config/obs-studio');
 for (const folder of ['basic/profiles/Timeline', 'basic/scenes', 'plugin_config/obs-websocket']) await mkdir(join(config, folder), { recursive: true });
-const settings = '[General]\nFirstRun=false\nEnableAutoUpdates=false\n[Basic]\nProfile=Timeline\nProfileDir=Timeline\nSceneCollection=Timeline\nSceneCollectionFile=Timeline\n';
+const settings = '[General]\nFirstRun=false\nLastVersion=537001986\nEnableAutoUpdates=false\n[Basic]\nProfile=Timeline\nProfileDir=Timeline\nSceneCollection=Timeline\nSceneCollectionFile=Timeline\n';
 await writeFile(join(config, 'global.ini'), settings);
 await writeFile(join(config, 'user.ini'), settings + '[BasicWindow]\nPreviewEnabled=true\nSysTrayEnabled=false\n');
 await writeFile(join(config, 'basic/profiles/Timeline/basic.ini'), '[General]\nName=Timeline\n[Video]\nBaseCX=640\nBaseCY=360\nOutputCX=640\nOutputCY=360\nFPSType=0\nFPSCommon=30\n');
@@ -35,6 +38,7 @@ const launch = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-E
 const identity = { ...JSON.parse(launch.stdout.replace(/^\uFEFF/, '')), executable };
 await writeFile(join(directory, 'owned-obs.json'), JSON.stringify(identity));
 let app; const obs = new OBSWebSocket();
+let result = { passed: false, scenariosPassed: false, cleanupPassed: false };
 try {
   const url = `ws://127.0.0.1:${port}`;
   await expect.poll(async () => { try { await obs.connect(url); return true; } catch { return false; } }, { timeout: 20000 }).toBe(true);
@@ -43,14 +47,15 @@ try {
   const domain = requireDesktop(bundle);
   const video = join(directory, 'test.mp4');
   await run(requireDesktop('ffmpeg-static'), ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '10', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', video], { windowsHide: true });
-  const project = domain.parseLinkProject({ ...domain.createEmptyLinkProject('同素材跨轨验收'), obsOutputMode: 'scenes', mediaAssets: [{ id: 'video', kind: 'video', name: '测试图', relativePath: 'test.mp4', sha256: createHash('sha256').update(await readFile(video)).digest('hex'), byteLength: (await stat(video)).size, durationMs: 10000 }], rundown: [{ id: 'song', title: '两条独立视频轨道', visualLayers: ['one', 'two'].map(id => ({ id, name: id, visible: true, locked: false })), referenceMediaClips: ['one', 'two'].map((id, index) => ({ id: "clip-" + id, assetId: 'video', label: id, layerId: id, startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, sourceOffsetMs: index * 3000, durationMs: 5000 })) }] });
+  const project = domain.parseLinkProject({ ...domain.createEmptyLinkProject('同素材跨轨验收'), obsOutputMode: 'scenes', mediaAssets: [{ id: 'video', kind: 'video', name: '测试图', relativePath: 'test.mp4', sha256: createHash('sha256').update(await readFile(video)).digest('hex'), byteLength: (await stat(video)).size, durationMs: 10000, width: 640, height: 360 }], rundown: [{ id: 'song', title: '两条独立视频轨道', visualLayers: ['one', 'two'].map(id => ({ id, name: id, visible: true, locked: false })), referenceMediaClips: ['one', 'two'].map((id, index) => ({ id: "clip-" + id, assetId: 'video', label: id, layerId: id, startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, sourceOffsetMs: index * 3000, durationMs: 5000 })) }] });
   const projectPath = join(directory, 'test.tblink'); await writeFile(projectPath, JSON.stringify(project));
   app = await electron.launch({ args: [`--user-data-dir=${join(directory, 'profile')}`, join(root, 'apps/desktop/out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const page = await app.firstWindow(); await page.waitForFunction(() => Boolean(globalThis.window.tbLink));
   const profile = domain.createDefaultIntegrationProfile(); profile.obs.autoConnectOnLaunch = false; profile.obs.executablePath = executable; profile.obs.webSocketUrl = url;
   await page.evaluate(profile => globalThis.window.tbLink.saveIntegrationProfile({ profile, obsPassword: '' }), profile);
   await page.evaluate(() => globalThis.window.tbLink.connectObs());
-  await page.evaluate(({ projectPath, project }) => globalThis.window.tbLink.prepareObsMediaScenes(projectPath, project, false), { projectPath, project });
+  // Match the editor's default precise-seeking preparation before asserting frame positions.
+  await page.evaluate(({ projectPath, project }) => globalThis.window.tbLink.prepareObsMediaScenes(projectPath, project, true), { projectPath, project });
   const work = new domain.SceneOutputTimeline(project, 'song').at(0);
   for (const entry of work.cues) for (const action of entry.cue.actions) await page.evaluate(action => globalThis.window.tbLink.executeObsAction(action), action);
   assert.equal(new Set(work.media.map(event => event.sourceName)).size, 2);
@@ -66,10 +71,17 @@ try {
   assert.equal(layers.sceneItems.filter(item => item.sceneItemEnabled).length, 2);
   const screenshot = await obs.call('GetSourceScreenshot', { sourceName: composition.currentProgramSceneName, imageFormat: 'png', imageWidth: 640 });
   await writeFile(join(directory, 'obs-overlap.png'), Buffer.from(screenshot.imageData.split(',')[1], 'base64'));
-  await writeFile(join(directory, 'acceptance.json'), JSON.stringify({ passed: true, sourceNames: work.media.map(event => event.sourceName), cursors, after, layers, scope: '真实隔离 OBS：同素材双轨叠加、不同入点、单独定位不改变另一轨；未验证长时播放' }, null, 2));
-  console.log('真实隔离 OBS 双轨定位验收通过');
+  result = { ...result, scenariosPassed: true, sourceNames: work.media.map(event => event.sourceName), cursors, after, layers, scope: '真实隔离 OBS，默认精确定位：同素材双轨叠加、不同入点、单独定位不改变另一轨；未验证长时播放' };
 } catch (error) {
-  await writeFile(join(directory, 'failure.txt'), String(error.stack ?? error)); throw error;
+  await writeFile(join(directory, 'failure.txt'), String(error.stack ?? error)); process.exitCode = 1;
 } finally {
-  if (app) await app.close(); await obs.disconnect(); await closeOwnedObsTest(identity);
+  const failures = [];
+  for (const cleanup of [async () => { if (app) await app.close(); }, () => obs.disconnect(), () => closeOwnedObsTest(identity)]) {
+    try { await cleanup(); } catch (error) { failures.push(String(error.message ?? error)); }
+  }
+  result.cleanupPassed = failures.length === 0;
+  result.passed = result.scenariosPassed && result.cleanupPassed;
+  if (failures.length) { await writeFile(join(directory, 'cleanup-failure.txt'), failures.join('\n')); process.exitCode = 1; }
+  await writeFile(join(directory, 'acceptance.json'), JSON.stringify(result, null, 2));
+  console.log(JSON.stringify({ directory, passed: result.passed, scenariosPassed: result.scenariosPassed, cleanupPassed: result.cleanupPassed }));
 }

@@ -9,17 +9,17 @@ test.beforeAll(async () => {
   const result = await build({
     stdin: { contents: `import React from 'react'; import { createRoot } from 'react-dom/client'; import { LicenseSettings } from './src/renderer/src/link/components/LicenseSettings'; import { LicenseGate } from './src/renderer/src/link/components/LicenseGate';
       const root = createRoot(document.getElementById('root'));
-      window.renderLicense = active => root.render(React.createElement(LicenseSettings, { runtimeActive: active })); window.renderLicense(false);
+      window.renderLicense = active => root.render(React.createElement('main', { className: 'device-console settings-content-page' }, React.createElement('div', { className: 'device-detail' }, React.createElement('div', { className: 'device-panel' }, React.createElement(LicenseSettings, { runtimeActive: active }))))); window.renderLicense(false);
       window.renderGate = () => root.render(React.createElement(LicenseGate, null, React.createElement('div', { 'data-testid': 'workspace' }, '付费工作区')));`, resolveDir: process.cwd(), loader: 'jsx' },
-    bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic',
+    bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic', loader: { '.webp': 'dataurl' },
     alias: { '@tb/schema': resolve('../../packages/schema/src/index.ts') }
   });
   script = result.outputFiles[0]!.text;
-  styles = (await Promise.all(['link.css', 'appearance.css', 'interface.css', 'device-connections.css', 'settings-content.css'].map(file => readFile(resolve('src/renderer/src/link', file), 'utf8')))).join('\n');
+  styles = (await Promise.all(['link.css', 'project-workspace.css', 'appearance.css', 'home-layout.css', 'settings-content.css', 'lighting.css', 'properties.css', 'device-connections.css', 'timeline-editing.css', 'interface.css'].map(file => readFile(resolve('src/renderer/src/link', file), 'utf8')))).join('\n');
 });
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.setContent('<main class="device-console settings-content-page"><div class="device-detail"><div class="device-panel" id="root"></div></div></main>');
+  await page.setContent('<div id="root"></div>');
   await page.addStyleTag({ content: styles });
   await page.evaluate(() => {
     const base = { machineCode: `TB1-${'A'.repeat(64)}`, state: 'inactive', claims: null, message: '本机尚未激活', enforcement: 'required', onlineAvailable: true };
@@ -66,14 +66,16 @@ test('错误激活码明确反馈，运行中禁用激活、联网验证与导�
 
 test('未激活不挂载工作区，激活后经主进程校验才进入', async ({ page }, info) => {
   await page.evaluate('window.renderGate()');
-  await expect(page.getByRole('heading', { name: '激活团播联动台' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '激活你的工作区' })).toBeVisible();
   await expect(page.getByTestId('workspace')).toHaveCount(0);
-  await expect(page.getByText('本软件所有产品功能均需付费激活', { exact: false })).toBeVisible();
+  await expect(page.getByRole('link', { name: '购买授权', exact: true })).toHaveAttribute('href', 'https://tuanbo-link.jinhefilm.com/#purchase');
+  await expect(page.getByRole('link', { name: '官网了解产品' })).toHaveAttribute('href', 'https://tuanbo-link.jinhefilm.com/');
+  await expect(page.getByRole('button', { name: '运行日志' })).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('license-gate.png') });
   await page.getByLabel('激活码', { exact: true }).fill(`TBA-${'A'.repeat(32)}`);
   await page.getByRole('button', { name: '激活本机' }).click();
   await expect(page.getByTestId('workspace')).toBeVisible();
-  await expect(page.getByRole('heading', { name: '激活团播联动台' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '激活你的工作区' })).toHaveCount(0);
 });
 
 
@@ -105,10 +107,70 @@ test('联网检查进行中只展示等待页', async ({ page }) => {
     }) });
   });
   await page.evaluate('window.renderGate()');
-  await expect(page.getByText('正在联网验证本机授权…', { exact: true })).toBeVisible();
+  await expect(page.getByText('正在核对本机授权', { exact: true })).toBeVisible();
   await expect(page.getByTestId('workspace')).toHaveCount(0);
   await page.evaluate('window.finishStartup()');
   await expect(page.getByTestId('workspace')).toBeVisible();
+});
+
+test('激活页保持标题栏可拖动、窗口按钮可用，小窗口可滚动输入', async ({ page }, info) => {
+  await page.evaluate(() => {
+    const actions: string[] = [];
+    Object.defineProperty(window, 'windowActions', { value: actions });
+    Object.defineProperty(window.tbLink, 'controlWindow', { value: (action: string) => { actions.push(action); return Promise.resolve(); } });
+  });
+  await page.evaluate('window.renderGate()');
+  const preview = page.getByRole('img', { name: /团播联动台真实界面/ });
+  await expect(preview).toBeVisible();
+  await expect.poll(() => preview.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1440);
+  const titlebar = page.getByRole('banner', { name: '窗口标题栏' });
+  await expect(titlebar).toBeVisible();
+  expect(await titlebar.evaluate(element => getComputedStyle(element).getPropertyValue('-webkit-app-region'))).toBe('drag');
+  for (const name of ['最小化窗口', '最大化或还原窗口', '关闭软件']) {
+    const button = page.getByRole('button', { name, exact: true });
+    expect(await button.evaluate(element => getComputedStyle(element).getPropertyValue('-webkit-app-region'))).toBe('no-drag');
+    await button.click();
+  }
+  expect(await page.evaluate('window.windowActions')).toEqual(['minimize', 'toggleMaximize', 'close']);
+  await expect(page.getByLabel('本机机器码')).not.toBeVisible();
+  await page.getByText('本机信息与授权文件', { exact: true }).click();
+  await expect(page.getByLabel('本机机器码')).toBeVisible();
+  await page.getByText('本机信息与授权文件', { exact: true }).click();
+  await page.screenshot({ path: info.outputPath('activation-desktop.png') });
+  await page.setViewportSize({ width: 720, height: 580 });
+  await page.getByLabel('激活码', { exact: true }).fill('TBA-INVALID');
+  await page.getByRole('button', { name: '显示激活码' }).click();
+  await expect(page.getByLabel('激活码', { exact: true })).toHaveAttribute('type', 'text');
+  await page.getByRole('button', { name: '隐藏激活码' }).click();
+  await page.getByRole('button', { name: '激活本机', exact: true }).click();
+  await expect(page.getByRole('region', { name: '本机授权', exact: true }).getByRole('alert')).toBeVisible();
+  await expect(page.getByRole('region', { name: '本机授权', exact: true }).getByRole('alert')).toHaveText('请输入完整激活码，格式为 TBA- 加 32 位字符');
+  await expect(titlebar).toBeInViewport();
+  expect(await page.locator('.license-page-scroll').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('activation-compact.png') });
+  await page.evaluate('window.renderLicense(false)');
+  await expect(page.getByRole('heading', { name: '一台主机，一份授权' })).toBeVisible();
+  await page.evaluate('window.renderGate()');
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(page.getByRole('heading', { name: '激活你的工作区' })).toBeVisible();
+  await page.locator('.license-page-scroll').evaluate(element => { element.scrollTop = 0; });
+  await page.screenshot({ path: info.outputPath('activation-light.png') });
+});
+
+test('非有效授权不显示成功、不清除输入，也不进入工作区', async ({ page }) => {
+  await page.evaluate(() => {
+    Object.defineProperty(window.tbLink, 'activateLicenseCode', { value: async () => ({
+      ...await window.tbLink.getLicenseStatus(), state: 'expired', message: '授权已到期，请续费后验证'
+    }) });
+  });
+  await page.evaluate('window.renderGate()');
+  await page.getByLabel('激活码', { exact: true }).fill(`TBA-${'A'.repeat(32)}`);
+  await page.getByRole('button', { name: '激活本机' }).click();
+  await expect(page.getByLabel('激活码', { exact: true })).toHaveValue(`TBA-${'A'.repeat(32)}`);
+  await expect(page.getByRole('region', { name: '本机授权', exact: true }).getByRole('alert')).toHaveText('授权已到期，请续费后验证');
+  await expect(page.getByText('授权已验证并保存到本机。')).toHaveCount(0);
+  await expect(page.getByTestId('workspace')).toHaveCount(0);
 });
 
 async function configurePurchase(page: Page, mode: 'success' | 'lost' | 'failed-storage'): Promise<void> {

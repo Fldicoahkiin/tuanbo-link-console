@@ -28,13 +28,16 @@ if (loadUi || process.env.TBLINK_VERIFY_PROGRAM_UI === '1' || process.env.TBLINK
     desktopBuildHashes[file] = createHash('sha256').update(content).digest('hex');
   }
 }
-const root = resolve('artifacts'); await mkdir(root, { recursive: true });
+const root = resolve(process.env.TBLINK_ACCEPTANCE_DIRECTORY ?? 'artifacts'); await mkdir(root, { recursive: true });
 const directory = await mkdtemp(join(root, 'native-audio-obs-'));
 const obsDirectory = join(directory, 'obs');
 for (const name of ['bin', 'data', 'obs-plugins']) await cp(join(resolve(source), name), join(obsDirectory, name), { recursive: true });
 const previewBridge = resolve(process.env.TBLINK_TEST_OBS_BRIDGE ?? 'tools/obs/native-preview/tblink-realtime-preview.dll');
 const previewBridgeSha256 = createHash('sha256').update(await readFile(previewBridge)).digest('hex');
 await cp(previewBridge, join(obsDirectory, 'obs-plugins/64bit/tblink-realtime-preview.dll'));
+await cp(resolve('artifacts/beauty-prototype/plugin/tblink-beauty.dll'), join(obsDirectory, 'obs-plugins/64bit/tblink-beauty.dll'));
+await mkdir(join(obsDirectory, 'data/obs-plugins/tblink-beauty'), { recursive: true });
+await cp(resolve('artifacts/beauty-prototype/plugin/beauty.effect'), join(obsDirectory, 'data/obs-plugins/tblink-beauty/beauty.effect'));
 let diagnosticMedia = null;
 if (process.env.TBLINK_TEST_OBS_MEDIA_MODULE) {
   assert(process.env.TBLINK_MEASURE_FRAME_POSITION === '1' || process.env.TBLINK_MEASURE_AUDIO_PRIME === '1',
@@ -50,7 +53,9 @@ if (process.env.TBLINK_TEST_OBS_MEDIA_MODULE) {
 }
 const config = join(obsDirectory, 'config/obs-studio');
 for (const name of ['basic/profiles/Audio', 'basic/scenes', 'plugin_config/obs-websocket']) await mkdir(join(config, name), { recursive: true });
-const global = '[General]\nFirstRun=false\nLastVersion=537001986\nEnableAutoUpdates=false\n[Basic]\nProfile=Audio\nProfileDir=Audio\nSceneCollection=Audio\nSceneCollectionFile=Audio\n';
+const obsPriority = process.env.TBLINK_TEST_OBS_PRIORITY ?? 'Normal';
+assert(['Normal', 'AboveNormal'].includes(obsPriority), '只允许隔离 OBS 的普通或高于普通优先级诊断');
+const global = `[General]\nProcessPriority=${obsPriority}\nFirstRun=false\nLastVersion=537001986\nEnableAutoUpdates=false\n[Basic]\nProfile=Audio\nProfileDir=Audio\nSceneCollection=Audio\nSceneCollectionFile=Audio\n`;
 await writeFile(join(config, 'global.ini'), global);
 await writeFile(join(config, 'user.ini'), global + '[BasicWindow]\nPreviewEnabled=true\nSysTrayEnabled=false\n');
 await writeFile(join(config, 'basic/profiles/Audio/basic.ini'), `[General]\nName=Audio\n[Video]\nBaseCX=${loadUi ? 2160 : 1080}\nBaseCY=${loadUi ? 3840 : 1920}\nOutputCX=${loadUi ? 2160 : 1080}\nOutputCY=${loadUi ? 3840 : 1920}\nFPSType=0\nFPSCommon=60\n[Audio]\nSampleRate=48000\nChannelSetup=Stereo\n[Output]\nMode=Simple\n`);
@@ -59,9 +64,10 @@ const port = 30000 + Math.floor(Math.random() * 15000), password = randomUUID();
 await writeFile(join(config, 'plugin_config/obs-websocket/config.json'), JSON.stringify({ alerts_enabled: false, auth_required: true, first_load: false, server_enabled: true, server_password: password, server_port: port }));
 const require = createRequire(resolve('apps/desktop/package.json'));
 const { OBSWebSocket, EventSubscription } = require('obs-websocket-js');
-await build({ stdin: { contents: "export { NativePlayerService } from './apps/desktop/src/main/link/native-player-service'; export { NativeAudioCache } from './apps/desktop/src/main/link/native-audio-cache'; export { selectObsAudioWindow } from './apps/desktop/src/main/link/obs-audio-window'; export { ObsWebSocketAdapter } from './apps/desktop/src/main/link/obs-websocket-adapter';", resolveDir: process.cwd() },
+await build({ stdin: { contents: "export { NativePlayerService } from './apps/desktop/src/main/link/native-player-service'; export { NativeAudioCache } from './apps/desktop/src/main/link/native-audio-cache'; export { selectObsAudioWindow } from './apps/desktop/src/main/link/obs-audio-window'; export { ObsWebSocketAdapter } from './apps/desktop/src/main/link/obs-websocket-adapter'; export { WindowsMidiHealth, probeWindowsMidi, midiHealthMessage } from './apps/desktop/src/main/link/windows-midi-health';", resolveDir: process.cwd() },
   bundle: true, platform: 'node', format: 'cjs', alias: { '@tb/schema': resolve('packages/schema/src/index.ts'), '@tb/core/link': resolve('packages/core/src/link-public.ts') }, outfile: join(directory, 'client.cjs') });
-const { NativePlayerService, NativeAudioCache, selectObsAudioWindow, ObsWebSocketAdapter } = require(join(directory, 'client.cjs'));
+const { NativePlayerService, NativeAudioCache, selectObsAudioWindow, ObsWebSocketAdapter, WindowsMidiHealth, probeWindowsMidi, midiHealthMessage } = require(join(directory, 'client.cjs'));
+const midiHealth = new WindowsMidiHealth(() => probeWindowsMidi(resolve('tools/midi-probe/bin/tblink-midi-probe.exe')));
 const pcm = Buffer.alloc(48000 * 4 * 20);
 for (let frame = 0; frame < pcm.length / 4; frame++) {
   const value = Math.round(512 * Math.sin(frame * 440 * 2 * Math.PI / 48000));
@@ -85,11 +91,15 @@ const enginePath = resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tools/play
 const sessionId = randomUUID();
 const envelope = { version: 1, sessionId };
 const engine = new NativePlayerService({ executable: enginePath,
+  checkDeviceHealth: async () => {
+    const result = await midiHealth.check();
+    if (result !== 'ready') throw new Error(midiHealthMessage(result));
+  },
   cache: new NativeAudioCache(join(directory, 'cache'), require('ffmpeg-static')),
   resolveAudio: () => wavPath,
   changed: state => { engineReadings.push({ at: Date.now(), status: state.status, positionMs: state.positionMs, gain: state.gain, peaks: state.analysis?.peaks }); if (state.audioError || state.mtcError || state.underruns) failures.push(state); },
   error: message => failures.push(message) });
-const report = { passed: false, directory, physicalOutputAcceptance: false, desktopBuild, desktopBuildHashes, previewBridge, previewBridgeSha256, diagnosticMedia, scope: 'Actual native PCM output captured by isolated OBS input meters; no recording/streaming or physical sound measurement', readings, engineReadings, failures };
+const report = { passed: false, directory, obsPriority, physicalOutputAcceptance: false, desktopBuild, desktopBuildHashes, previewBridge, previewBridgeSha256, diagnosticMedia, scope: 'Actual native PCM output captured by isolated OBS input meters; no recording/streaming or physical sound measurement', readings, engineReadings, failures };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 try {
   const deadline = Date.now() + 30000;
@@ -189,16 +199,32 @@ try {
   }
 } catch (error) { failures.push(String(error).replaceAll(password, '[redacted]')); process.exitCode = 1; }
 finally {
-  await engine.close();
-  await adapter.disconnect();
+  report.scenariosPassed = report.passed;
+  report.passed = false;
+  const cleanupFailures = [];
+  const cleanup = async (label, operation) => {
+    try { await operation(); }
+    catch (error) { cleanupFailures.push(`${label}: ${String(error).replaceAll(password, '[redacted]')}`); }
+  };
+  await cleanup('原生播放器退出', () => engine.close());
+  await cleanup('OBS 适配器断开', () => adapter.disconnect());
+  let mayClose = false;
+  if (connected) {
+    await cleanup('核对隔离 OBS 输出', async () => {
+      assert.equal((await socket.call('GetStreamStatus')).outputActive, false);
+      assert.equal((await socket.call('GetRecordStatus')).outputActive, false);
+      mayClose = true;
+    });
+    await cleanup('测试连接断开', () => socket.disconnect());
+  }
+  if (mayClose) await cleanup('隔离 OBS 正常退出', () => closeOwnedObsTest({ ...identity, executable }));
+  else cleanupFailures.push('未能确认隔离 OBS 无推流和录像，保留进程');
+  report.cleanupPassed = cleanupFailures.length === 0;
+  failures.push(...cleanupFailures);
+  report.passed = report.scenariosPassed && report.cleanupPassed && failures.length === 0;
+  if (cleanupFailures.length) process.exitCode = 1;
   report.engineSha256 = createHash('sha256').update(await readFile(enginePath)).digest('hex');
   report.previewBridgeSha256 = createHash('sha256').update(await readFile(join(obsDirectory, 'obs-plugins/64bit/tblink-realtime-preview.dll'))).digest('hex');
   await writeFile(join(directory, 'report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ directory, passed: report.passed, failures, peaks: report.peaks }, null, 2));
-  if (connected) {
-    assert.equal((await socket.call('GetStreamStatus')).outputActive, false);
-    assert.equal((await socket.call('GetRecordStatus')).outputActive, false);
-    await socket.disconnect();
-  }
-  await closeOwnedObsTest({ ...identity, executable });
 }

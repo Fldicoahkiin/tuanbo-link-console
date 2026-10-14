@@ -24,7 +24,7 @@ it.skipIf(!enabled)('原生 WASAPI / WinMM 独立回环：实际时钟误差、�
   const outputs = ports.outputs.filter(port => port.name === 'TBLINK SOAK MTC');
   const inputs = ports.inputs.filter(port => port.name === 'TBLINK SOAK MTC');
   expect(outputs).toHaveLength(1); expect(inputs).toHaveLength(1);
-  const directory = resolve('artifacts', `native-soak-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  const directory = resolve(process.env.TBLINK_ACCEPTANCE_DIRECTORY ?? 'artifacts', `native-soak-${new Date().toISOString().replace(/[:.]/g, '-')}`);
   await mkdir(directory, { recursive: true });
   const engineSha256 = createHash('sha256').update(await readFile(executable)).digest('hex');
   const sources = ['tools/playback-engine/engine.c', 'tools/playback-engine/engine.h', 'tools/playback-engine/audio.c', 'tools/playback-engine/midi.c', 'tools/playback-engine/devices.c', 'tools/playback-engine/probe.c',

@@ -48,7 +48,10 @@ export function useBeautyOutput(connected: boolean): void {
           (!confirmed || confirmed.sourceName !== runtime.sourceName || confirmed.filterName !== runtime.filterName) &&
           (runtime.phase === 'tracking' || runtime.phase === 'waiting')) {
           const next = beautyFilterStateSchema.parse(await desktop.readObsBeauty({ sourceName: runtime.sourceName, filterName: runtime.filterName }));
-          if (!cancelled) useBeautyOutputState.setState({ confirmed: next });
+          // A read begun before a parameter write may return after its acknowledgement.
+          // Keep the newer confirmation, including across changes of source.
+          if (!cancelled && !sending && useBeautyOutputState.getState().confirmed === confirmed)
+            useBeautyOutputState.setState({ confirmed: next });
         }
         if (!cancelled) timer = setTimeout(() => { void poll(); }, 500);
       } catch (error) {

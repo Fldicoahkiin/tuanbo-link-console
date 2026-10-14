@@ -4,11 +4,23 @@ from contextlib import closing
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import sqlite3
 import subprocess
 import tarfile
 import tempfile
+
+
+def restore_path(name):
+    path = PurePosixPath(name)
+    if (path.is_absolute() or '..' in path.parts or path.as_posix() != name
+            or any('\\' in part or ':' in part or part.rstrip(' .') != part
+                   or PureWindowsPath(part).is_reserved() or any(ord(char) < 32 for char in part)
+                   for part in path.parts)):
+        raise RuntimeError('Invalid restore member path')
+    if name not in {'manifest.json', 'license.db', 'delivery-recovery.db'} and (len(path.parts) != 2 or path.parts[0] != 'keys'):
+        raise RuntimeError('Unexpected restore member')
+    return path
 
 
 def verify(archive, identity):
@@ -18,27 +30,30 @@ def verify(archive, identity):
         with tarfile.open(root / 'backup.tar', 'r:') as tar:
             names = set()
             for member in tar.getmembers():
-                path = PurePosixPath(member.name)
-                if not member.isfile() or path.is_absolute() or '..' in path.parts or member.name in names or member.size > 2_000_000_000:
+                path = restore_path(member.name)
+                if not member.isfile() or member.name in names or member.size > 2_000_000_000:
                     raise RuntimeError('Invalid restore member')
-                if member.name not in {'manifest.json', 'license.db', 'delivery-recovery.db'} and (len(path.parts) != 2 or path.parts[0] != 'keys'):
-                    raise RuntimeError('Unexpected restore member')
                 names.add(member.name)
-                target = root / member.name
+                target = root.joinpath(*path.parts)
                 target.parent.mkdir(mode=0o700, exist_ok=True)
                 with tar.extractfile(member) as source, target.open('xb') as output:
                     import shutil
                     shutil.copyfileobj(source, output)
         manifest = json.loads((root / 'manifest.json').read_text())
-        if manifest['version'] != 1 or set(manifest['files']) != names - {'manifest.json'}:
+        if manifest['version'] != 1 or 'license.db' not in names or set(manifest['files']) != names - {'manifest.json'}:
             raise RuntimeError('Restore manifest mismatch')
         for name, digest in manifest['files'].items():
             if hashlib.sha256((root / name).read_bytes()).hexdigest() != digest:
                 raise RuntimeError('Restore digest mismatch')
-        with closing(sqlite3.connect(root / 'license.db')) as db:
-            if db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or db.execute('PRAGMA foreign_key_check').fetchall():
-                raise RuntimeError('Restored database integrity failure')
-            counts = {name: db.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0] for name in ['orders', 'licenses', 'payment_receipts', 'console_users', 'console_audit']}
+        counts = {}
+        for name in ['license.db', 'delivery-recovery.db']:
+            if name not in names:
+                continue
+            with closing(sqlite3.connect((root / name).resolve().as_uri() + '?mode=ro', uri=True)) as db:
+                if db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or db.execute('PRAGMA foreign_key_check').fetchall():
+                    raise RuntimeError('Restored database integrity failure: ' + name)
+                if name == 'license.db':
+                    counts = {table: db.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0] for table in ['orders', 'licenses', 'payment_receipts', 'console_users', 'console_audit']}
         return {'status': 'success', 'counts': counts, 'productionModified': False}
 
 

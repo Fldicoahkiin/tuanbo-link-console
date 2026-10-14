@@ -32,15 +32,24 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
       });
       const status = { settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, state: 'connected', version: '3.7.0.5', passwordSaved: false, error: null };
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status', () => status);
+      ipcMain.removeHandler('link:ma2-network-save'); ipcMain.handle('link:ma2-network-save', () => {
+        throw new Error('连接设置未修改，重新读取不应保存设置或中断现有连接');
+      });
       ipcMain.removeHandler('link:ma2-catalog'); ipcMain.handle('link:ma2-catalog', async () => {
         process.env.TBLINK_CACHE_TEST_READS = String(Number(process.env.TBLINK_CACHE_TEST_READS) + 1);
         await new Promise(resolve => setTimeout(resolve, 1500)); return data.catalog;
       });
       ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => { throw new Error('缓存配对不应再次读取'); });
-      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => ({ directory: { ...data.catalog.directory, entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] }));
+      // A successful full pool read is authoritative. Return the actual fixture
+      // pool instead of relying on old song references to refill an empty pool.
+      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => ({
+        directory: { ...data.catalog.directory, entries: data.sequences.map(sequence => ({ target: sequence.sequence, name: sequence.name })) },
+        readAt: new Date().toISOString(), sequences: data.sequences, fixtureUsage: [], errors: []
+      }));
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [data.file] });
-    }, { catalog, file });
+    }, { catalog, file, sequences: meiNanSequences[0]!.sequences.map(sequence => ({ sequence: sequence.number, name: sequence.name, cues: sequence.cues })) });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await expect(page.getByText('中文歌曲', { exact: true }).first()).toBeVisible();
     const nav = page.getByRole('navigation', { name: '主要工作区' });
     await nav.getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
@@ -48,6 +57,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await page.getByLabel('MA2 连接方式').selectOption('network');
     await page.getByRole('button', { name: '连接 MA2 并载入节目 Cue', exact: true }).click();
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
+    await expect.poll(() => app.evaluate(() => process.env.TBLINK_CACHE_TEST_READS)).toBe('1');
     await expect(page.locator('.waveform-cue-point')).toHaveCount(11);
     await expect(page.locator('.project-save-status')).toBeHidden();
     await nav.getByRole('button', { name: '设置', exact: true }).click();
@@ -122,6 +132,13 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await expect(page.locator('.ma2-browser-events tbody tr')).toHaveCount(24);
     await page.getByLabel('时间线状态筛选').selectOption('error');
     await expect(page.locator('.ma2-browser-body article')).toContainText('读取超时样例');
+  } catch (error) {
+    if (!page.isClosed()) {
+      await writeFile(info.outputPath('failure-reads.json'), JSON.stringify(await app.evaluate(() => ({ reads: process.env.TBLINK_CACHE_TEST_READS })), null, 2));
+      await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
+      await writeFile(info.outputPath('failure-logs.json'), JSON.stringify(await page.evaluate(() => window.tbLink.queryLogs({ limit: 100 })), null, 2));
+    }
+    throw error;
   } finally { if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false)); if (app.process().exitCode === null) await app.close(); }
 });
 

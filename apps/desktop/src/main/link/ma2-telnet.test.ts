@@ -1,6 +1,6 @@
 import { createServer, type Socket } from 'node:net';
-import { afterEach, expect, it } from 'vitest';
-import { Ma2Telnet, ma2ResponseLine, type Ma2TelnetState } from './ma2-telnet';
+import { afterEach, expect, it, vi } from 'vitest';
+import { Ma2Telnet, ma2ResponseLine, type Ma2TelnetState, type Ma2PeerValidator } from './ma2-telnet';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -37,6 +37,28 @@ function authenticate(line: string, socket: Socket, monitor: Socket): void {
   const marker = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0];
   if (marker) { socket.write(`${line}\r\n [Channel]>`); monitor.write(`\r15h11m38.613s : \u001b[33m${marker}:3.3.`); monitor.write('4.3\u001b[37m\r\n'); }
 }
+it('登录前校验两个实际 TCP 通道，错误进程收不到凭证或命令', async () => {
+  const sent: string[] = [];
+  const ports = await peer(line => sent.push(line));
+  const validate = vi.fn<Ma2PeerValidator>().mockRejectedValue(new Error('错误控台进程'));
+  const connection = new Ma2Telnet({ host: '127.0.0.1', ...ports }, undefined, 300, validate);
+  try {
+    await expect(connection.connect('operator', 'test-value')).rejects.toThrow('错误控台进程');
+    expect(sent).toEqual([]);
+    const channels = validate.mock.calls[0]?.[0];
+    expect(channels?.map(channel => channel.remotePort)).toEqual([ports.port, ports.monitorPort]);
+    expect(channels?.every(channel => channel.localAddress === '127.0.0.1' && channel.localPort > 0)).toBe(true);
+    expect(connection.state).toBe('disconnected');
+  } finally { connection.disconnect(); }
+});
+it('校验完成前主动断开，不恢复登录或发送命令', async () => {
+  const sent: string[] = [];
+  const ports = await peer(line => sent.push(line));
+  const validate = vi.fn(() => { connection.disconnect(); return Promise.resolve(); });
+  const connection = new Ma2Telnet({ host: '127.0.0.1', ...ports }, undefined, 300, validate);
+  await expect(connection.connect('operator', 'test-value')).rejects.toThrow('连接已改变');
+  expect(sent).toEqual([]);
+});
 it('命令与监视连接都绑定指定电脑地址', async () => {
   const sources: string[] = [];
   const ports = await peer((line, socket, monitor) => {

@@ -1,7 +1,7 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LightingTempoMap, nextLightingCue, nextLightingMaster, copyLightingEvents, copyLightingEventsAt, pasteLightingEvents, lightingClipSpan, lightingEventTime } from '@tb/core/link';
-import type { LightingClip, LightingDocument, LightingTrack, LightingEvent } from '@tb/schema';
+import type { LightingClip, LightingDocument, LightingTrack, LightingEvent, ReferenceAudio } from '@tb/schema';
 import { GripVertical, Lock, LockOpen, Plus, Trash2, Volume2, VolumeX } from 'lucide-react';
 import { useLightingClipboardStore } from '../stores/lighting-clipboard-store';
 import { LightingMasterCurve } from './LightingMasterCurve';
@@ -38,7 +38,7 @@ export type LightingTimelineProps = {
   preview?: boolean;
   onPreviewChange?: (enabled: boolean) => void;
   onSelect: (trackId: string, clipId: string | null) => void;
-  onChange: (document: LightingDocument, label: string) => void;
+  onChange: (document: LightingDocument, label: string, automaticSource?: ReferenceAudio) => void;
 };
 export function LightingHeadings(props: LightingTimelineProps & { durationMs: number }): JSX.Element {
   const reorder = useRef<{ y: number; target: number } | null>(null);

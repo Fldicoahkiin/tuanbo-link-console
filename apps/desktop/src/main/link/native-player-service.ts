@@ -1,5 +1,5 @@
 import { nativePlayerControlSchema, nativePlayerPrepareSchema, nativePlayerStatusSchema,
-  type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativePlaybackEvent } from '@tb/schema';
+  type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativePlaybackEvent, type NativeDeviceQueryRequest } from '@tb/schema';
 import { NativeAudioCache, type NativeAudioLease } from './native-audio-cache';
 import { NativePlaybackClient } from './native-playback-client';
 import { NativeDeviceQuery } from './native-device-query';
@@ -9,6 +9,7 @@ import { NativeAudioPreload } from './native-audio-preload';
 type Clock = Extract<NativePlaybackEvent, { kind: 'clock' }>;
 type Options = {
   executable: string; cache: Pick<NativeAudioCache, 'prepare'>;
+  checkDeviceHealth: () => Promise<void>;
   resolveAudio: (projectPath: string, relativePath: string) => string;
   changed: (status: NativePlayerStatus, qpc100ns: string | null) => void;
   error: (message: string) => void;
@@ -34,9 +35,11 @@ export class NativePlayerService {
   private volume = 1;
   private readonly preload: NativeAudioPreload;
   private readonly deviceQuery: NativeDeviceQuery;
+  private readonly audioDeviceQuery: NativeDeviceQuery;
   constructor(private readonly options: Options) {
     this.preload = new NativeAudioPreload(options);
     this.deviceQuery = new NativeDeviceQuery(options.executable);
+    this.audioDeviceQuery = new NativeDeviceQuery(options.executable, 'audio');
   }
 
   get status(): NativePlayerStatus | null { return this.state; }
@@ -48,7 +51,14 @@ export class NativePlayerService {
     }
     return { executable: basename(this.options.executable), title: identity.title, windowClass: identity.windowClass, audioDeviceId: this.source.audioDeviceId };
   }
-  devices() { return this.deviceQuery.read(); }
+  async devices(scope: NativeDeviceQueryRequest['scope'] = 'all') {
+    if (this.closing) throw new Error('正式音频服务正在关闭');
+    // The native inventory enumerates WinMM as well as WASAPI. Do not start a
+    // helper that cannot consume its shutdown request when WinMM is unhealthy.
+    if (scope === 'all') await this.options.checkDeviceHealth();
+    if (this.closing) throw new Error('正式音频服务正在关闭');
+    return (scope === 'audio' ? this.audioDeviceQuery : this.deviceQuery).read();
+  }
 
   prepare(input: NativePlayerPrepare): Promise<NativePlayerStatus> {
     const request = nativePlayerPrepareSchema.parse(input);
@@ -75,9 +85,10 @@ export class NativePlayerService {
       if (this.client) await this.send({ kind: 'stop' });
       this.requireEpoch(epoch);
       await this.releaseLease();
-      await this.deviceQuery.reopenForPreparation();
+      const scope = request.midiPortName || request.autoDetectMtc ? 'all' : 'audio';
+      await (scope === 'audio' ? this.audioDeviceQuery : this.deviceQuery).reopenForPreparation();
       this.requireEpoch(epoch);
-      const devices = await this.devices();
+      const devices = await this.devices(scope);
       measured('设备检查与旧播放清理');
       this.requireEpoch(epoch);
       if (request.audioDeviceId !== 'default' && !devices.audio.some(device => device.id === request.audioDeviceId)) throw new Error('选择的正式音频输出已断开；不会自动切换线路');
@@ -183,7 +194,7 @@ export class NativePlayerService {
     this.closing = true; ++this.epoch; this.abort?.abort();
     await this.pending;
     const client = this.client;
-    try { await Promise.all([client?.close(), this.deviceQuery.close()]); }
+    try { await Promise.all([client?.close(), this.deviceQuery.close(), this.audioDeviceQuery.close()]); }
     catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); throw error; }
     this.client = null; await this.preload.cancel(); await this.releaseLease();
     if (this.state) this.patch({ status: 'stopped', enginePid: null, engineTitle: null });

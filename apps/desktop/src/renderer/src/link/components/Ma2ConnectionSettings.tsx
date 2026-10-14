@@ -8,6 +8,7 @@ import { Ma2NetworkSettings } from './Ma2NetworkSettings';
 import { Ma2CatalogSettings } from './Ma2CatalogSettings';
 import { prepareMa2Editing } from '../runtime/ma2-editing-session';
 import { useDocumentStore } from '../stores/document-store';
+import { Ma2ProgramSettings } from './Ma2ProgramSettings';
 
 const directoryKey = 'tblink.ma2-onpc-data-directory.v1';
 export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMaintenance }: {
@@ -48,6 +49,7 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
     finally { setBusy(false); }
   };
   return <section className="settings-section ma2-device-section" aria-label="MA2 连接设置">
+    <Ma2ProgramSettings disabled={disabled || busy} notify={notify} />
     <div className="device-section-heading"><h3>连接配置</h3>{method === 'local' ? <span role="status">{status}</span> : null}</div>
     {method === 'local' ? <div className="settings-row ma2-plugin-row"><span>控台插件</span><div><Button className="secondary-button" disabled={disabled || busy} onClick={() => void exportPlugin()}><Download />导出控台插件</Button><span className="settings-note">插件已内置，可离线导出到 U 盘；在控台导入 XML 与 Lua 后运行。仅 MIDI 时间码或 Cue 触发无需插件。</span></div></div> : null}
     <label className="settings-path-row"><span>连接方式</span><select aria-label="MA2 连接方式" value={method} disabled={busy || disabled} onChange={(event) => void setMethod(event.target.value === 'midi' ? 'midi' : event.target.value === 'local' ? 'local' : 'network')}><option value="midi">仅 MIDI（时间码与 Cue）</option><option value="network">实体控台 / 网络 onPC</option><option value="local">本机 onPC</option></select></label>

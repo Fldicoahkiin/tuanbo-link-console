@@ -83,6 +83,11 @@
 .lighting-topbar-actions { -webkit-app-region:no-drag; flex-shrink:0; }
 .lighting-topbar-actions:empty { display:none; }
 .lighting-topbar-actions .ma2-sync-controls { position:relative; display:flex; align-items:center; gap:4px; border:0; margin:0; padding:0; }
+.ma2-switch-track { display:inline-flex; align-items:center; width:26px; height:16px; padding:2px; border-radius:9px; background:var(--text-secondary); transition:background .15s; }
+.ma2-switch-track>span { width:12px; height:12px; border-radius:50%; background:var(--text-primary); transition:transform .15s; }
+.ma2-realtime-switch[aria-checked="true"] .ma2-switch-track { background:var(--apple-blue); }
+.ma2-realtime-switch[aria-checked="true"] .ma2-switch-track>span { transform:translateX(10px); }
+@media (prefers-reduced-motion:reduce) { .ma2-switch-track,.ma2-switch-track>span { transition:none; } }
 .lighting-topbar-actions .ma2-sync-controls>button { display:inline-flex; align-items:center; gap:4px; height:30px; padding:4px 7px; font-size:12px; white-space:nowrap; background:var(--surface-raised); color:var(--text-primary); border:1px solid var(--separator); border-radius:5px; }
 .lighting-topbar-actions svg { width:14px; height:14px; }
 .lighting-topbar-actions .ma2-sync-controls>button:nth-child(3),.lighting-topbar-actions .ma2-sync-controls>button:nth-child(4) { display:none; }

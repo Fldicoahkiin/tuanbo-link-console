@@ -6,7 +6,7 @@ import { checkNetworkMa2, connectDiscoveredMa2 } from '../stores/ma2-connection-
 import { useDocumentStore } from '../stores/document-store';
 import { prepareMa2Editing } from '../runtime/ma2-editing-session';
 import { createPortal } from 'react-dom';
-import { useEffect, useRef, useState, type JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import { ma2NetworkStatusSchema, ma2NetworkSaveSchema, ma2DiscoverySchema, type Ma2Discovery, type Ma2NetworkSettings as NetworkSettings, type Ma2NetworkStatus } from '@tb/schema';
 
 export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMaintenance }: { maintenanceHost: HTMLDivElement | null; onMaintenance: () => void; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
@@ -25,7 +25,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [loaded, setLoaded] = useState(false);
-  const advanced = useRef<HTMLDetailsElement>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const computerNetwork = useMa2ComputerNetwork();
   useEffect(() => {
     let alive = true;
@@ -58,7 +58,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     const documentId = useDocumentStore.getState().documentId;
     setBusy(true); setError(''); setProgress('正在发现控台并准备素材读取…');
     try {
-      if (host.trim()) {
+      if (host.trim() && dirty) {
         const address = ma2AddressInput(host);
         const request = ma2NetworkSaveSchema.safeParse({ settings: { host: address, port, monitorPort, username: username.trim(), autoConnect }, ...(passwordEdited ? { password } : {}) });
         if (!request.success) throw new Error('请检查连接端口、用户名和密码；用户名和密码不能包含引号、反斜杠或换行');
@@ -71,7 +71,10 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
       const target = next.settings;
       setProgress('控台已连接，正在载入对应节目 Cue…');
       notify(await prepareMa2Editing({ dataDirectory: '', network: { host: target.host, port: target.port, monitorPort: target.monitorPort, username: target.username } }, documentId));
-    } catch (failure) { if (advanced.current) advanced.current.open = true; setError(failure instanceof Error ? failure.message : '连接未完成，请检查网线和控台设置'); }
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : '连接未完成，请检查网线和控台设置';
+      setAdvancedOpen(true); setError(message); notify(message, 'error');
+    }
     finally { setBusy(false); setProgress(''); }
   };
   const search = async (): Promise<void> => {
@@ -137,7 +140,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
     <span className="ma2-device-status" role="status">{connectionLabel}</span>
     <p className="settings-note">插好网线后点击自动连接，软件会检查并配置电脑网卡。{status?.settings ? `当前控台 ${status.settings.host}。` : '首次连接会搜索控台；搜不到时只需填写一次控台 IP。'} MIDI 接口用于时间码与触发。</p>
 
-    <details className="ma2-advanced-settings" ref={advanced}><summary>手动连接与网卡设置（备用）</summary>
+    <details className="ma2-advanced-settings" open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}><summary>手动连接与网卡设置（备用）</summary>
     <Ma2ComputerNetwork network={computerNetwork} disabled={locked || searching} run={runNetwork} />
     <div className="ma2-saved-row"><label><span>已保存控台</span><select aria-label="已保存 MA2 控台" value={selected} disabled={locked || searching} onChange={(event) => choose(profiles[Number(event.target.value)])}><option value={-1}>添加控台</option>{profiles.map((profile, index) => <option key={`${profile.host}:${profile.port}:${profile.monitorPort}:${profile.username}`} value={index}>{profile.host}:{profile.port} · {profile.username}</option>)}</select></label><div className="settings-header-actions"><Button className="secondary-button" disabled={locked || searching} onClick={() => void search()}>{searching ? '搜索中…' : '搜索局域网控台'}</Button>{searching ? <button onClick={() => { void window.tbLink.cancelMa2Discovery().catch((error: unknown) => notify(String(error), 'error')); }}>取消搜索</button> : null}</div></div>
     {found ? <Ma2DiscoveryResults result={found} disabled={locked} selectedHost={host} onChoose={address => choose(profiles.find(profile => profile.host === address.host && profile.port === address.port), address)} /> : null}

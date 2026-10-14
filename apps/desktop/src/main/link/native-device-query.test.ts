@@ -7,16 +7,24 @@ const processMock = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: processMock.spawn }));
 afterEach(() => { vi.useRealTimers(); processMock.spawn.mockReset(); });
 
-function fixture() {
+function fixture(scope: 'all' | 'audio' = 'all') {
   vi.useFakeTimers();
   const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
   processMock.spawn.mockReturnValue(child);
-  const query = new NativeDeviceQuery('test-engine.exe');
+  const query = new NativeDeviceQuery('test-engine.exe', scope);
   const reply = (id: number, name: string) => JSON.stringify({ version: 1, requestId: id, ok: true,
     devices: { protocol: 4, audio: [], midiOutputs: [{ id: 0, name }] } }) + '\n';
   const close = async () => { const closing = query.close(); child.emit('close', 0); await closing; };
   return { child, query, reply, close };
 }
+
+it.each(['all', 'audio'] as const)('明确的 %s 设备查询使用对应原生入口，不改变其他查询范围', async scope => {
+  const f = fixture(scope), pending = f.query.read();
+  expect(processMock.spawn).toHaveBeenCalledWith('test-engine.exe',
+    [scope === 'audio' ? '--audio-device-service' : '--device-service'], expect.objectContaining({ windowsHide: true }));
+  f.child.stdout.write(JSON.stringify({ version: 1, requestId: 1, ok: true, devices: { protocol: 4, audio: [], midiOutputs: [] } }) + '\n');
+  await pending; await f.close();
+});
 
 it('进程复用但清单不复用；分段响应及并发请求分别对应当前设备', async () => {
   const f = fixture();

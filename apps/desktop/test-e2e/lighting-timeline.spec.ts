@@ -58,13 +58,20 @@ for (const dense of [false, true]) test(`底部时间线：${dense ? '密集' : 
     await page.locator('.lighting-playback-settings > summary').click();
     const lane = page.getByLabel('Cue 框选画布');
     if (dense) {
-      await page.getByRole('button', { name: '10 个密集 Cue', exact: true }).click();
-      await expect(page.getByRole('dialog', { name: '密集 Cue', exact: true }).locator('[data-cue-choice]')).toHaveCount(10);
-      await page.screenshot({ path: info.outputPath('dense-expanded.png') });
-      await page.getByRole('button', { name: '选择 Cue 10', exact: true }).click();
-      await expect(page.getByRole('button', { name: '音频 Cue 10', exact: true })).toBeVisible();
-      await page.getByRole('button', { name: '10 个密集 Cue', exact: true }).click();
-      await page.getByRole('button', { name: '选择 Cue 1', exact: true }).click();
+      await expect(page.locator('.waveform-cue-point')).toHaveCount(10);
+      await expect(page.locator('.cue-cluster-trigger')).toHaveCount(0);
+      const boxes = await page.locator('.waveform-cue-point').evaluateAll(nodes => nodes.map(node => {
+        const box = node.getBoundingClientRect(); return { x: box.x, y: box.y, right: box.right, bottom: box.bottom };
+      }));
+      for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i]!; const b = boxes[j]!;
+        expect(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y).toBe(true);
+      }
+      const last = page.getByRole('button', { name: '音频 Cue 10', exact: true });
+      await last.scrollIntoViewIfNeeded();
+      await last.click();
+      await expect(last).toHaveAttribute('aria-pressed', 'true');
+      await page.screenshot({ path: info.outputPath('dense-direct.png') });
     }
     const first = page.getByRole('button', { name: '音频 Cue 1', exact: true });
     await first.scrollIntoViewIfNeeded();

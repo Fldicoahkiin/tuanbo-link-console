@@ -1,0 +1,2 @@
+# Media checksums must survive Windows and Linux checkouts unchanged.
+apps/licensing-server/web/media/*.vtt text eol=lf

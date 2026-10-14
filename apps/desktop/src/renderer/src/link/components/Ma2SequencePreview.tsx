@@ -33,10 +33,10 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
   const [busy, setBusy] = useState(false);
   useEffect(() => () => output.cancel(), [output]);
   const library = useMemo(() => ma2SequenceLibrary(project, document), [project, document]);
-  const index = useMemo(() => library.map(value => ({ value, text: `${value.sequence} ${value.name ?? ''} ${value.cues.map(cue => `${cue.number} ${cue.name ?? ''}`).join(' ')}`.toLowerCase() })), [library]);
+  const index = useMemo(() => library.map(value => ({ value, text: `${value.sequence} ${value.name ?? ''} ${value.originalName ?? ''} ${value.cues.map(cue => `${cue.number} ${cue.name ?? ''} ${cue.originalName ?? ''}`).join(' ')}`.toLowerCase() })), [library]);
   const matchingSequences = useMemo(() => index.filter(({value,text}) => text.includes(query.toLowerCase()) && (category !== 'multi' || value.cues.length > 1)).map(entry=>entry.value),[index,query,category]);
   const visibleSequences=matchingSequences.filter(value=>classification.isVisible({sequence:value.sequence,cue:value.cues[0]?.number??'',kind:value.cues.length===1?'single':'sequence'}));
-  const allSingles = useMemo(()=>library.flatMap(sequence=>sequence.cues.filter(cue=>`${sequence.sequence} ${sequence.name ?? ''} ${cue.number} ${cue.name ?? ''}`.toLowerCase().includes(query.toLowerCase())).map(cue=>({sequence,cue}))),[library,query]);
+  const allSingles = useMemo(()=>library.flatMap(sequence=>sequence.cues.filter(cue=>`${sequence.sequence} ${sequence.name ?? ''} ${sequence.originalName ?? ''} ${cue.number} ${cue.name ?? ''} ${cue.originalName ?? ''}`.toLowerCase().includes(query.toLowerCase())).map(cue=>({sequence,cue}))),[library,query]);
   const singles=allSingles.filter(({sequence,cue})=>classification.isVisible({sequence:sequence.sequence,cue:cue.number,kind:'single'}));
   const singleRefs:ConsoleCueReference[]=singles.map(({sequence,cue})=>({sequence:sequence.sequence,cue:cue.number,kind:'single'}));
   const sequence = library.find(value=>value.sequence===(selected ?? singleSequence));
@@ -59,7 +59,7 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
     } catch (cause) { setPreview(current => ({ ...current, command: 'failed' })); const message = cause instanceof Error ? cause.message : String(cause); setError(message); setStatus('发送未完成'); }
     finally { setBusy(false); }
   };
-  const visibleCues = sequence?.cues.filter(value => classification.isVisible({sequence:sequence.sequence,cue:value.number,kind:'single'}) && `${value.number} ${value.name ?? ''}`.toLowerCase().includes(query.toLowerCase())) ?? [];
+  const visibleCues = sequence?.cues.filter(value => classification.isVisible({sequence:sequence.sequence,cue:value.number,kind:'single'}) && `${value.number} ${value.name ?? ''} ${value.originalName ?? ''}`.toLowerCase().includes(query.toLowerCase())) ?? [];
   const materialCell = (button: ReactNode, owner: NonNullable<typeof sequence>, cue: string, name: string): JSX.Element => {
     const routes = [...new Set(document.ma2Bindings?.flatMap(binding => binding.mappings.filter(mapping => mapping.sequence === owner.sequence).map(mapping => mapping.executor)) ?? [])];
     const target = owner.sequence === sequence?.sequence ? executor : routes.length === 1 ? routes[0]! : routes.length > 1 ? '__choose' : '';

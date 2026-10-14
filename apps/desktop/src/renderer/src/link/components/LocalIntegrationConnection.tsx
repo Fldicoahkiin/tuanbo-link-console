@@ -44,8 +44,9 @@ export function DetectionReport({ detection, issues }: { detection: LinkLocalInt
   const ports = useIntegrationStore(state => state.midiPorts);
   return <details className={`integration-detection ${issues.length > 0 ? 'has-issues' : 'ready'}`} open={issues.length > 0}>
     <summary className="panel-title"><span><ScanSearch />本机识别结果</span><small>{issues.length > 0 ? `${String(issues.length)} 项需要处理` : '全部正常'}</small><ChevronDown /></summary>
-    <div className="detection-applications">{(['obs', 'p1'] as const).map((id) => {
+    <div className="detection-applications">{(['obs', 'p1', 'ma2', 'ma3d'] as const).map((id) => {
       const application = detection.applications[id];
+      if (!application) return null;
       return <div key={id}>{application.executablePath ? <CheckCircle2 /> : <AlertTriangle />}<span><strong>{applicationLabel(id)}</strong><small>{application.executablePath ?? '未找到'} · {application.version ?? '版本未知'} · {application.running ? '正在运行' : application.executablePath ? '已安装，未运行' : '未检测到安装位置'}</small></span></div>;
     })}</div>
     <div className="detection-applications" aria-label="检测到的 MIDI 设备">{ports.filter(port => port.state === 'connected').map(port => <div key={`${port.direction}:${port.id}`}><CheckCircle2 /><span><strong>{port.name}</strong><small>{port.direction === 'input' ? 'MIDI 输入' : 'MIDI 输出'} · {port.manufacturer || '厂商未提供'}</small></span></div>)}</div>
@@ -53,6 +54,6 @@ export function DetectionReport({ detection, issues }: { detection: LinkLocalInt
   </details>;
 }
 
-function applicationLabel(id: 'obs' | 'p1'): string {
-  return id === 'obs' ? 'OBS Studio' : 'HiRender P1';
+function applicationLabel(id: 'obs' | 'p1' | 'ma2' | 'ma3d'): string {
+  return { obs: 'OBS Studio', p1: 'HiRender P1', ma2: 'MA2 onPC', ma3d: 'MA 3D' }[id];
 }

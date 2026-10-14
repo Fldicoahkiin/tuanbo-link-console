@@ -88,3 +88,27 @@ function resolveFfmpegExecutable(): string {
   if (!ffmpegPath) throw new Error('FFmpeg 运行时未安装');
   return ffmpegPath.includes('app.asar') ? ffmpegPath.replace('app.asar', 'app.asar.unpacked') : ffmpegPath;
 }
+
+/** A single untouched PCM track can be reused without decode, copy and remix.
+ * Other formats and declared subranges still use the normal rendering path. */
+export async function referencePcmLayout(path: string): Promise<{ offset: number; bytes: number } | null> {
+  const file = await open(path, 'r');
+  try {
+    const header = Buffer.alloc(12);
+    if ((await file.read(header, 0, 12, 0)).bytesRead !== 12 || header.toString('ascii', 0, 4) !== 'RIFF' || header.toString('ascii', 8, 12) !== 'WAVE') return null;
+    const size = (await file.stat()).size;
+    const chunk = Buffer.alloc(24);
+    let pcm = false;
+    for (let offset = 12; offset + 8 <= size;) {
+      if ((await file.read(chunk, 0, Math.min(24, size - offset), offset)).bytesRead < 8) return null;
+      const length = chunk.readUInt32LE(4);
+      if (offset + 8 + length > size) return null;
+      const name = chunk.toString('ascii', 0, 4);
+      if (name === 'fmt ') pcm = length >= 16 && chunk.readUInt16LE(8) === 1 && chunk.readUInt16LE(10) === 2
+        && chunk.readUInt32LE(12) === 48000 && chunk.readUInt32LE(16) === 192000 && chunk.readUInt16LE(20) === 4 && chunk.readUInt16LE(22) === 16;
+      if (name === 'data') return pcm && length > 0 && length % 4 === 0 ? { offset: offset + 8, bytes: length } : null;
+      offset += 8 + length + length % 2;
+    }
+    return null;
+  } finally { await file.close(); }
+}

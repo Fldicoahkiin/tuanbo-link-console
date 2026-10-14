@@ -48,10 +48,10 @@ for (const crash of [false, true]) test(`正式节目后台接续：界面繁忙
     if (crash) {
       crashed = true;
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.forcefullyCrashRenderer());
-      await expect.poll(async () => app.evaluate((_electron, pid) => {
-        try { process.kill(pid, 0); return true; }
+      await expect.poll(() => {
+        try { process.kill(blocked.status!.enginePid!, 0); return true; }
         catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false; throw error; }
-      }, blocked.status!.enginePid!), { timeout: 10000 }).toBe(false);
+      }, { timeout: 10000 }).toBe(false);
       evidence.engineExitedAfterRendererCrash = true;
     }
     evidence.passed = true;

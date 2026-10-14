@@ -1,9 +1,13 @@
 import importlib.util
 from pathlib import Path
 import stat
+import os
+import json
+import hashlib
+import ast
 import unittest
 from unittest.mock import patch
-from tempfile import mkdtemp
+from tempfile import mkdtemp, TemporaryDirectory
 import tarfile
 from types import SimpleNamespace
 
@@ -24,6 +28,16 @@ class WebsiteConfigTest(unittest.TestCase):
     def test_only_website_changes(self):
         self.assertEqual(module.validate_config(self.previous, self.candidate), self.candidate)
 
+    def test_upload_and_receiver_allowlists_match_publisher(self):
+        for script in ['deploy-from-ci.py', 'receive-release.py']:
+            values = set()
+            for statement in ast.parse((HERE / script).read_text()).body:
+                if isinstance(statement, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'STATIC' for target in statement.targets):
+                    values.update(ast.literal_eval(statement.value))
+                if isinstance(statement, ast.AugAssign) and isinstance(statement.target, ast.Name) and statement.target.id == 'STATIC':
+                    values.update(ast.literal_eval(statement.value))
+            self.assertEqual(values, module.STATIC_FILES, script)
+
     def test_other_sites_cannot_change(self):
         with self.assertRaisesRegex(RuntimeError, 'Only the website'):
             module.validate_config(self.previous, self.candidate.replace('root /srv/tblink-updates;', 'root /tmp/other;'))
@@ -42,16 +56,59 @@ class WebsiteConfigTest(unittest.TestCase):
             module.validate_config(self.previous, self.candidate.replace('Referrer-Policy no-referrer always', 'Referrer-Policy unsafe-url always'))
 
     def test_reload_waits_for_worker_to_serve_new_version(self):
-        with patch.object(module, 'probe', side_effect=['old response', 'new response']) as probe, patch.object(module.time, 'sleep'):
-            module.wait_for_page('new response')
-            self.assertEqual(probe.call_count, 2)
+        with patch.object(module, 'probe', side_effect=['old response', 'new response', 'manifest']) as probe, patch.object(module.time, 'sleep'):
+            module.wait_for_page('new response', 'manifest')
+            self.assertEqual(probe.call_count, 3)
+
+    def test_new_html_from_old_worker_does_not_prove_new_routes(self):
+        missing_route = module.subprocess.CalledProcessError(22, 'curl')
+        with patch.object(module, 'probe', side_effect=['new', missing_route, 'new', 'manifest']) as probe, patch.object(module.time, 'sleep') as sleep:
+            module.wait_for_page('new', 'manifest')
+            self.assertEqual(probe.call_count, 4)
+            sleep.assert_called_once_with(0.25)
+
+    def test_wrong_manifest_never_passes_bounded_wait(self):
+        with patch.object(module, 'probe', side_effect=['new', 'wrong'] * 10), patch.object(module.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'after reload'):
+                module.wait_for_page('new', 'manifest')
 
     def test_wrong_page_never_passes_bounded_wait(self):
         with patch.object(module, 'probe', return_value='wrong response') as probe, patch.object(module.time, 'sleep'):
             with self.assertRaisesRegex(RuntimeError, 'after reload'):
-                module.wait_for_page('expected response')
+                module.wait_for_page('expected response', 'manifest')
             self.assertEqual(probe.call_count, 10)
 
+    def test_manifest_rejects_tampering_and_unlisted_paths(self):
+        with TemporaryDirectory(prefix='tblink-website-manifest-') as folder:
+            root = Path(folder)
+            files = {}
+            for name in module.STATIC_FILES - {'website-manifest.json'}:
+                file = root / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(b'original')
+                files[name] = {'size': 8, 'sha256': module.digest(file)}
+            manifest = root / 'website-manifest.json'
+            manifest.write_text(json.dumps({'version': 1, 'files': files}))
+            module.validate_files(root)
+            (root / 'index.html').write_bytes(b'tampered')
+            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+                module.validate_files(root)
+            files['../outside'] = files['index.html']
+            manifest.write_text(json.dumps({'version': 1, 'files': files}))
+            with self.assertRaisesRegex(RuntimeError, 'allowlist'):
+                module.validate_files(root)
+
+    def test_video_requires_partial_response(self):
+        with TemporaryDirectory(prefix='tblink-website-range-') as folder:
+            root = Path(folder)
+            (root / 'demo.mp4').write_bytes(b'x' * 2048)
+            with patch.object(module, 'STATIC_FILES', {'demo.mp4'}), patch.object(module.subprocess, 'run', return_value=SimpleNamespace(stdout=b'x' * 2048)), patch.object(module, 'run', return_value=SimpleNamespace(stdout='HTTP/1.1 200 OK\n')):
+                with self.assertRaisesRegex(RuntimeError, 'range request failed'):
+                    module.verify_live_files(root)
+            with patch.object(module, 'STATIC_FILES', {'demo.mp4'}), patch.object(module.subprocess, 'run', return_value=SimpleNamespace(stdout=b'x' * 2048)), patch.object(module, 'run', return_value=SimpleNamespace(stdout='HTTP/1.1 206 Partial Content\nContent-Range: bytes 0-1023/2048\n')):
+                module.verify_live_files(root)
+
+    @unittest.skipUnless(os.name == 'posix', 'Release symlink permissions and effective uid require POSIX')
     def test_failed_live_probe_restores_existing_root_and_proxy(self):
         for had_site in [False, True]:
             with self.subTest(had_site=had_site):
@@ -74,8 +131,9 @@ class WebsiteConfigTest(unittest.TestCase):
                 package = folder / 'package'
                 package.mkdir()
                 candidate = self.candidate.replace('root /srv/tblink-purchase;', f'root {root};')
-                content = {'index.html': 'candidate site', 'purchase.js': 'script', 'purchase.css': 'style', 'assets/studio.webp': 'test image', 'assets/display.woff2': 'font', 'assets/FONT-LICENSE.txt': 'license',
-                           'revision.txt': 'a' * 40, 'nginx.previous.conf': self.previous, 'nginx.next.conf': candidate}
+                content = {name: 'content:' + name for name in module.STATIC_FILES}
+                content.update({'index.html': 'candidate site', 'revision.txt': 'a' * 40, 'nginx.previous.conf': self.previous, 'nginx.next.conf': candidate})
+                content['website-manifest.json'] = json.dumps({'version': 1, 'files': {name: {'size': len(content[name].encode()), 'sha256': hashlib.sha256(content[name].encode()).hexdigest()} for name in module.STATIC_FILES - {'website-manifest.json'}}})
                 archive = folder / 'release.tar'
                 with tarfile.open(archive, 'w') as tar:
                     for name, value in content.items():

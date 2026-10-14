@@ -56,6 +56,15 @@ export class BeautyOutputController {
           continue;
         }
         if (!this.values || this.failure) return;
+        // Neutral controls produce the original frame. Do not create a filter
+        // and launch an inference process on every scene change for zero effect.
+        if (Object.values(this.values).every(value => value === 0)) {
+          const state = this.runtime.status();
+          if (state.sourceName && state.filterName) await this.beauty.disable({ sourceName: state.sourceName, filterName: state.filterName });
+          if (state.phase !== 'idle') await this.runtime.stop();
+          this.target = null; this.confirmed = null;
+          continue;
+        }
         // Every explicit parameter change verifies the actual output. A missed scene
         // event must not keep edits attached to a cached, no-longer-visible scene.
         const scene = await this.beauty.programScene();

@@ -1,30 +1,6 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="no-referrer"><meta name="color-scheme" content="light dark">
-  <meta name="description" content="团播联动台，Windows 节目编排与 OBS 联动软件。节目、媒体与 Cue 在同一条时间线上。月付 800 元，年付 8000 元，每份授权绑定一台电脑。">
-  <title>团播联动台 · Windows 节目编排与 OBS 联动</title>
-  <link rel="stylesheet" href="/purchase.css"><link rel="preload" href="/assets/studio.webp" as="image">
-  <script type="module" src="/purchase.js"></script>
-</head>
-<body>
-<!-- THESIS: A studio tool presented as a production equipment folio, with visible parallel plans and a single checkout.
-OWN-WORLD: Silver paper, charcoal ink, warm orange, squared photography and softly rounded controls.
-STORY: Understand the local show workflow, compare both durations, prepare and recover a machine-bound order.
-FIRST VIEWPORT: Left-aligned compact product statement beside a large studio image; download and plans remain above the fold.
-FORM: Production equipment folio, grounded candidate 7, seed 85a4f6d8. Code-led under user delegation.
-FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance -->
-<header class="site-header"><a class="brand" href="/">团播联动台<span>TUANBO LINK</span></a><nav aria-label="页面导航"><a href="#overview">产品介绍</a><a href="#demo">演示视频</a><a href="#purchase">购买授权</a><a href="#contact">联系我们</a></nav></header>
-<main>
-  <section class="intro" id="overview" aria-labelledby="intro-title">
-    <div class="hero-copy"><h1 id="intro-title">让每个动作，<br>跟上现场。</h1><p class="lead">节目、媒体与 Cue，同一条时间线。<br>连接 OBS、MIDI 与时间码的 Windows 编排软件。</p><div class="hero-actions"><a class="button" href="#purchase">购买授权</a><a class="text-link" href="https://updates.tuanbo-link.jinhefilm.com/windows/x64/Tuanbo-Link-Console-0.4.29-x64.exe">下载 Windows 版</a></div></div>
-    <figure class="hero-visual"><img src="/assets/studio.webp" width="1672" height="941" alt="空置直播间的灯光与摄影设备，AI 生成场景示意" fetchpriority="high"><figcaption>直播间场景示意 · AI 生成</figcaption></figure>
-  </section>
-  <section class="workflow" aria-labelledby="workflow-title"><h2 id="workflow-title">先编排，再上场。</h2><div class="workflow-body"><article><h3>把节奏写进节目</h3><p>整理节目单，对照参考波形安排 Cue。切场景、触发 MIDI、调度媒体，把重复操作放到时间线上。</p></article><article><h3>接着用你的设备</h3><p>通过 OBS WebSocket 和时间码接入现场。节目与媒体留在本机，OBS 继续负责正式画面与输出。</p></article></div></section>
-  <section id="purchase" class="pricing" aria-labelledby="pricing-title"><div class="pricing-heading"><h2 id="pricing-title">一个工具，两种周期。</h2><p>全部功能包含在内。每份授权绑定一台电脑，主动续费，不自动扣款。</p></div>
+<section id="purchase" class="pricing" aria-labelledby="pricing-title"><div class="pricing-heading"><h2 id="pricing-title">选择授权周期</h2><p>全部功能包含在内。每份授权绑定一台电脑，主动续费，不自动扣款。</p></div>
     <div id="plan-options" class="plan-options" role="group" aria-label="授权套餐"><div class="plan-loading">正在加载月付与年付套餐</div></div>
-    <div class="checkout-layout"><div class="checkout-note"><h3>买好，激活，上场。</h3><ol><li><strong>保存订单凭据</strong><span>用于恢复订单和领取激活码。</span></li><li><strong>完成付款</strong><span>服务端核实到账后自动交付。</span></li><li><strong>在电脑上激活</strong><span>输入激活码，每次启动联网验证。</span></li></ol><a class="text-link" href="#rules">购买须知</a></div>
+    <div class="checkout-layout"><div class="checkout-note"><h3>购买与激活</h3><ol><li><strong>保存订单凭据</strong><span>用于恢复订单和领取激活码。</span></li><li><strong>完成付款</strong><span>服务端核实到账后自动交付。</span></li><li><strong>在电脑上激活</strong><span>输入激活码，每次启动联网验证。</span></li></ol><a class="text-link" href="#rules">购买须知</a></div>
   <section class="purchase" aria-labelledby="purchase-title">
     <h3 id="purchase-title">填写购买信息</h3><p class="hint">激活码绑定电脑，无需注册账户。</p>
     <label for="payment-channel">支付方式</label><select id="payment-channel"><option value="alipay">支付宝</option><option value="wechat">微信支付</option></select>
@@ -52,7 +28,6 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     <noscript>购买和订单查询需要启用 JavaScript。你也可以在团播联动台软件内购买。</noscript>
   </section>
 </div></section>
-  <section class="demo" id="demo" aria-labelledby="demo-title"><div><h2 id="demo-title">看看它如何工作。</h2><p>从节目编排到 OBS 联动，了解完整操作流程。</p></div><div class="demo-frame"><!-- DEMO_VIDEO --></div></section>
   <section id="rules" class="rules" aria-labelledby="rules-title"><h2 id="rules-title">购买前，了解这些。</h2><div class="rule-grid">
     <details><summary>授权、设备与联网</summary><p>一份激活码绑定一台电脑，无免费版或试用。每次启动需要联网验证；验证失败不能进入工作区。换机请联系支持，不能直接在另一台电脑重复激活。</p></details>
     <details><summary>期限从什么时候开始？</summary><p>月付按 30 天、年付按 365 天计算，包含对应期限的使用与更新权益。首次付款经服务端核实并发码时起算，不从首次安装起算。续费在已激活电脑的软件内办理。</p></details>
@@ -60,7 +35,3 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     <details><summary>下载与现场使用</summary><p>适用于 Windows x64。当前安装包未做代码签名，Windows 可能提示未知发布者。OBS 负责正式画面与输出，联动台不控制开播、关播及录像。现场设备适配需按你的实际环境验证。</p></details>
     <details><summary>订单数据与隐私</summary><p>下单记录购买人或公司名称、套餐、金额和状态。浏览器在当前标签会话内保存订单领取凭据，导出的凭据由你保管。软件激活时提交机器标识，用于授权绑定。</p></details>
   </div></section>
-  <section id="contact" class="contact" aria-labelledby="contact-title"><h2 id="contact-title">聊聊你的现场。</h2><a class="contact-email" href="mailto:info@jinhefilm.com">info@jinhefilm.com</a><p>购买咨询、企业多机、激活换机与售后支持。<br>已有订单请附订单号。</p></section>
-</main>
-<footer><span>团播联动台</span><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">蜀ICP备2026056101号-2</a><span>Windows 节目编排与 OBS 联动</span></footer>
-</body></html>

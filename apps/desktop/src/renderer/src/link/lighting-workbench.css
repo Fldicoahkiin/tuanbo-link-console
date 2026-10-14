@@ -13,7 +13,7 @@
 .shortcut-binding input { width: 160px; padding: 8px; }
 .shortcut-settings button { display: inline-flex; align-items: center; gap: 6px; width: fit-content; }
 .shortcut-settings button svg { width: 15px; height: 15px; }
-.lighting-workbench .reference-timeline .timeline-viewport { overflow-y: hidden; }
+.lighting-workbench .reference-timeline .timeline-viewport { overflow-y: auto; }
 .lighting-workbench .timeline-new-layer-drop, .lighting-workbench .timeline-new-layer-heading { min-height: 0; padding: 0; }
 .lighting-workbench .reference-timeline :is(button, span, strong, small, svg) { -webkit-user-drag: none; }
 .lighting-workbench .reference-timeline :is(input, textarea, [contenteditable="true"]) { user-select: text; }

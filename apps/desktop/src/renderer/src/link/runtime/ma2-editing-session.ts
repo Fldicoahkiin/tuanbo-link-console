@@ -60,6 +60,6 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
     useMa2AutoSyncStore.setState({ status: 'off', message: `${reason}；已读 Cue 可查看，本地修改不会自动写回` });
     return `${summary}。${reason}，自动写回未启用`;
   }
-  useMa2AutoSyncStore.setState({ status: 'off', message: '已准备好；点击开始同步后，停止播放时的编辑会自动写回' });
-  return `${summary}。可在灯光工作台点击“开始同步”；启用后停止播放时，拖动结束会核对、写入并回读`;
+  useMa2AutoSyncStore.setState({ status: 'off', message: '已准备好；打开实时同步后，停止播放时的编辑会自动写回' });
+  return `${summary}。可在顶部打开“实时同步”；启用后停止播放时，拖动结束会核对、写入并回读`;
 }

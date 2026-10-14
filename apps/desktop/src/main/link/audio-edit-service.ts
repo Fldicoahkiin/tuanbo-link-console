@@ -1,18 +1,90 @@
 import { spawn } from 'node:child_process';
-import { createReadStream } from 'node:fs';
-import { mkdir, open, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { z } from 'zod';
+import { dirname, join, relative } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
 import { analyzeIbtAudio } from './ibt-beat-service';
-import { audioTracksSchema, referenceAudioSchema, type AudioBeatAnalysis, type AudioSegment, type AudioTrack, type ReferenceAudio } from '@tb/schema';
-import type { LinkProjectService } from './link-project-service';
+import { audioTracksSchema, referenceAudioSchema, referenceAudioSourceSchema, type AudioBeatAnalysis, type AudioSegment, type AudioTrack, type ReferenceAudio } from '@tb/schema';
+import { hashFile, type LinkProjectService } from './link-project-service';
+import { referencePcmLayout } from './reference-audio-extractor';
+import { VerifiedMediaFiles } from './verified-media-files';
+import { writeFileAtomically } from './atomic-file';
+import { mixPcmTracks, pcmWaveHeader } from './pcm-track-mixer';
+
+const mixCacheSchema = z.object({ version: z.literal(1), audio: referenceAudioSourceSchema }).strict();
 
 export class AudioEditService {
+  private readonly verified = new VerifiedMediaFiles(hashFile);
+  private readonly pendingMixes = new Map<string, Promise<ReferenceAudio>>();
   constructor(private readonly projects: LinkProjectService, private readonly beatExecutable?: string) {}
 
   async mix(projectPath: string, input: AudioTrack[]): Promise<ReferenceAudio> {
     const tracks = audioTracksSchema.parse(input);
+    // Every referenced path is verified even when another asset with the same
+    // content already prepared this mix. IDs and titles do not alter samples.
+    for (const track of tracks) await this.sourcePath(projectPath, track.source);
+    const key = createHash('sha256').update(JSON.stringify(tracks.map(track => ({ source: track.source.sha256,
+      durationMs: track.source.durationMs, segments: track.segments.map(({ startMs, sourceOffsetMs, durationMs }) => ({ startMs, sourceOffsetMs, durationMs })) })))).digest('hex');
+    const manifest = join(dirname(projectPath), 'cache', 'audio-mixes', `${key}.json`);
+    let operation = this.pendingMixes.get(manifest);
+    if (!operation) {
+      operation = this.cachedMix(projectPath, tracks, manifest).finally(() => this.pendingMixes.delete(manifest));
+      this.pendingMixes.set(manifest, operation);
+    }
+    const audio = referenceAudioSourceSchema.parse(await operation);
+    const expectedMs = Math.max(...tracks.flatMap(track => track.segments.map(segment => segment.startMs + segment.durationMs)));
+    if (audio.durationMs !== expectedMs) throw new Error('音轨缓存时长与当前编排不一致');
+    const rendered = { ...audio, assetId: crypto.randomUUID() };
+    return referenceAudioSchema.parse({ ...rendered, timeline: { source: rendered,
+      segments: [{ id: `mix-${rendered.assetId}`, startMs: 0, sourceOffsetMs: 0, durationMs: rendered.durationMs }], tracks } });
+  }
+
+  private async cachedMix(projectPath: string, tracks: AudioTrack[], manifest: string): Promise<ReferenceAudio> {
+    let content: string | null;
+    try { content = await readFile(manifest, 'utf8'); }
+    catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      content = null;
+    }
+    if (content !== null) {
+      const entry = mixCacheSchema.parse(JSON.parse(content));
+      await this.sourcePath(projectPath, entry.audio);
+      return entry.audio;
+    }
+    const audio = await this.renderMix(projectPath, tracks);
+    for (const track of tracks) await this.sourcePath(projectPath, track.source);
+    await this.sourcePath(projectPath, audio);
+    await writeFileAtomically(manifest, JSON.stringify(mixCacheSchema.parse({ version: 1, audio })));
+    return audio;
+  }
+
+  private async renderMix(projectPath: string, tracks: AudioTrack[]): Promise<ReferenceAudio> {
+    const track = tracks.length === 1 ? tracks[0] : undefined;
+    const segment = track?.segments.length === 1 ? track.segments[0] : undefined;
+    if (track) {
+      const path = await this.sourcePath(projectPath, track.source);
+      const layout = await referencePcmLayout(path);
+      if (layout && segment && segment.startMs === 0 && segment.sourceOffsetMs === 0 && segment.durationMs === track.source.durationMs
+        && Math.floor(layout.bytes / 192) === track.source.durationMs) {
+        return referenceAudioSchema.parse({ ...track.source, timeline: { source: track.source, segments: track.segments, tracks } });
+      }
+      const durationMs = Math.max(...track.segments.map(value => value.startMs + value.durationMs));
+      if (layout && durationMs * 192 + 36 <= 0xffffffff) {
+        const directory = join(dirname(projectPath), 'cache', 'audio-edit');
+        await mkdir(directory, { recursive: true });
+        const output = join(directory, `${crypto.randomUUID()}.wav`);
+        try {
+          await composeAudioPcm(path, output, track.segments, { ...layout, durationMs });
+          const rendered = await this.publishPcm(projectPath, output, durationMs);
+          return referenceAudioSchema.parse({ ...rendered, timeline: { source: rendered,
+            segments: [{ id: `mix-${rendered.assetId}`, startMs: 0, sourceOffsetMs: 0, durationMs }], tracks } });
+        } finally {
+          try { await unlink(output); }
+          catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
+        }
+      }
+    }
     const directory = join(dirname(projectPath), 'cache', 'audio-edit');
     await mkdir(directory, { recursive: true });
     const token = crypto.randomUUID();
@@ -20,13 +92,34 @@ export class AudioEditService {
     const inputs: string[] = [];
     const durationMs = Math.max(...tracks.flatMap(track => track.segments.map(segment => segment.startMs + segment.durationMs)));
     try {
+      if (tracks.length > 1 && durationMs * 192 + 36 <= 0xffffffff) {
+        const pcm = [];
+        for (const track of tracks) {
+          const path = await this.sourcePath(projectPath, track.source);
+          const layout = await referencePcmLayout(path);
+          if (!layout) break;
+          pcm.push({ path, ...layout, segments: track.segments });
+        }
+        if (pcm.length === tracks.length) {
+          const output = join(directory, `${token}-direct.wav`);
+          cleanup.push(output);
+          if (await mixPcmTracks(pcm, output, durationMs) === 'complete') {
+            return await this.publishPcm(projectPath, output, durationMs);
+          }
+        }
+      }
       for (const [index, track] of tracks.entries()) {
         const path = await this.sourcePath(projectPath, track.source);
         const raw = join(directory, `${token}-${index}-source.pcm`);
         const edit = join(directory, `${token}-${index}-edit.pcm`);
-        cleanup.push(raw, edit);
-        await ffmpeg(['-i', path, '-map', '0:a:0', '-vn', '-ac', '2', '-ar', '48000', '-f', 's16le', raw]);
-        await composeAudioPcm(raw, edit, track.segments);
+        cleanup.push(edit);
+        const layout = await referencePcmLayout(path);
+        if (layout) await composeAudioPcm(path, edit, track.segments, layout);
+        else {
+          cleanup.push(raw);
+          await ffmpeg(['-i', path, '-map', '0:a:0', '-vn', '-ac', '2', '-ar', '48000', '-f', 's16le', raw]);
+          await composeAudioPcm(raw, edit, track.segments);
+        }
         inputs.push('-f', 's16le', '-ar', '48000', '-ac', '2', '-i', edit);
       }
       const output = join(directory, `${token}-mix.wav`);
@@ -34,7 +127,7 @@ export class AudioEditService {
       // Preserve single-track gain; only limit overlapping peaks, with latency
       // compensation so the mixed output remains aligned with lighting cues.
       await ffmpeg([...inputs, '-filter_complex', `amix=inputs=${tracks.length}:duration=longest:normalize=0,alimiter=limit=0.98:level=0:latency=1`, '-c:a', 'pcm_s16le', '-rf64', 'auto', output]);
-      const rendered = await this.projects.importReferenceAudio(projectPath, output, durationMs);
+      const rendered = await this.publishPcm(projectPath, output, durationMs);
       return referenceAudioSchema.parse({ ...rendered, timeline: { source: rendered, segments: [{ id: `mix-${rendered.assetId}`, startMs: 0, sourceOffsetMs: 0, durationMs }], tracks } });
     } finally {
       await Promise.all(cleanup.map(async file => { try { await unlink(file); } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; } }));
@@ -44,6 +137,25 @@ export class AudioEditService {
   async analyze(projectPath: string, source: ReferenceAudio): Promise<AudioBeatAnalysis> {
     const path = await this.sourcePath(projectPath, source);
     return analyzeIbtAudio(path, source.durationMs, (input, output) => ffmpeg(['-i', input, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '44100', '-c:a', 'pcm_s16le', output]), this.beatExecutable);
+  }
+
+  /** This service produced the temporary WAV in this project. Publish it with
+   * a rename, rather than importing/copying the entire new mix a second time. */
+  private async publishPcm(projectPath: string, output: string, durationMs: number): Promise<ReferenceAudio> {
+    const digest = await this.verified.digest(output);
+    const directory = join(dirname(projectPath), 'assets', 'reference-audio');
+    await mkdir(directory, { recursive: true });
+    const destination = join(directory, `${digest}.wav`);
+    let exists: boolean;
+    try { await stat(destination); exists = true; }
+    catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      exists = false;
+    }
+    if (exists) {
+      if (!await this.verified.verify(destination, digest)) throw new Error('已有混音文件校验失败，未覆盖原文件');
+    } else await rename(output, destination);
+    return referenceAudioSchema.parse({ assetId: crypto.randomUUID(), relativePath: relative(dirname(projectPath), destination).replaceAll('\\', '/'), sha256: digest, durationMs });
   }
 
   async render(projectPath: string, source: ReferenceAudio, segments: AudioSegment[]): Promise<ReferenceAudio> {
@@ -66,23 +178,23 @@ export class AudioEditService {
 
   private async sourcePath(projectPath: string, source: ReferenceAudio): Promise<string> {
     const path = this.projects.resolveReferenceAudio(projectPath, source.relativePath);
-    const digest = createHash('sha256');
-    for await (const chunk of createReadStream(path)) { const data: unknown = chunk; if (!Buffer.isBuffer(data)) throw new Error('音频源读取格式无效'); digest.update(data); }
-    if (digest.digest('hex') !== source.sha256) throw new Error('音频源文件已改变，请重新导入后编辑');
+    if (!await this.verified.verify(path, source.sha256)) throw new Error('音频源文件已改变，请重新导入后编辑');
     return path;
   }
 }
 
 /** Copy sample-aligned ranges; intentional timeline gaps become actual PCM silence. */
-export async function composeAudioPcm(sourcePath: string, outputPath: string, segments: readonly AudioSegment[]): Promise<void> {
+export async function composeAudioPcm(sourcePath: string, outputPath: string, segments: readonly AudioSegment[],
+  wav?: { offset: number; bytes: number; durationMs?: number }): Promise<void> {
   const source = await open(sourcePath, 'r');
   const output = await open(outputPath, 'wx');
   const bytesPerMs = 192; // stereo signed 16-bit at 48 kHz
-  const sourceBytes = (await stat(sourcePath)).size;
+  const sourceBytes = wav?.bytes ?? (await stat(sourcePath)).size;
   const buffer = Buffer.alloc(64 * 1024);
   const silence = Buffer.alloc(buffer.length);
   let timelineBytes = 0;
   try {
+    if (wav?.durationMs) await output.writeFile(pcmWaveHeader(wav.durationMs));
     for (const segment of [...segments].sort((a, b) => a.startMs - b.startMs)) {
       const start = segment.startMs * bytesPerMs;
       const length = segment.durationMs * bytesPerMs;
@@ -96,7 +208,7 @@ export async function composeAudioPcm(sourcePath: string, outputPath: string, se
       while (remaining > 0) {
         const count = Math.min(buffer.length, remaining);
         buffer.fill(0, 0, count);
-        const { bytesRead } = await source.read(buffer, 0, Math.min(count, Math.max(0, sourceBytes - position)), position);
+        const { bytesRead } = await source.read(buffer, 0, Math.min(count, Math.max(0, sourceBytes - position)), position + (wav?.offset ?? 0));
         if (bytesRead < count && position + count - sourceBytes > bytesPerMs) throw new Error('音频源数据提前结束');
         await output.writeFile(buffer.subarray(0, count));
         position += count; remaining -= count; timelineBytes += count;

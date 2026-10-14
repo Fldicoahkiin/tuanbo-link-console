@@ -31,6 +31,59 @@ vi.mock('../stores/ma2-connection-store', () => ({ checkNetworkMa2: api.checkNet
 function snapshot(id: LinkProcessSnapshot['id']): LinkProcessSnapshot {
   return { id, status: 'running', pid: 1, processName: id, executablePath: null, startTime: null, windowTitle: null, fileVersion: null, owned: false, error: null };
 }
+function maProgram(path: string) {
+  return { executablePath: path, workingDirectory: 'D:\\MA', arguments: [], startupTimeoutMs: 30000, shutdownTimeoutMs: 10000, connectOnDemand: true };
+}
+
+it('一键连接先打开并连接 onPC 再启动 MA 3D，避免抢占通信端口；MIDI 失败不阻断程序启动', async () => {
+  const config = options();
+  config.draft.ma2 = maProgram('D:\\MA\\gma2onpc.exe');
+  config.draft.ma3d = maProgram('D:\\MA\\MA3D.exe');
+  config.readMidiPorts = vi.fn().mockRejectedValue(new Error('MIDI 服务停止中'));
+  const order: string[] = [];
+  api.startExternalApplication.mockImplementation(id => { order.push(id); return Promise.resolve(snapshot(id)); });
+  api.connectMa2Network.mockImplementation(async () => {
+    order.push('network');
+    return { ...(await api.getMa2NetworkStatus()), state: 'connected' };
+  });
+  await connectDevices(config);
+  expect(order.indexOf('ma2')).toBeLessThan(order.indexOf('network'));
+  expect(order.indexOf('network')).toBeLessThan(order.indexOf('ma3d'));
+  expect(useConnectionCheckStore.getState().checks['ma2-app']?.state).toBe('ready');
+  expect(useConnectionCheckStore.getState().checks.ma3d?.state).toBe('ready');
+  expect(useConnectionCheckStore.getState().checks.midi?.state).toBe('error');
+});
+
+it('保留用户选定路径和关闭选项，不被识别出的其他版本覆盖', async () => {
+  const config = options();
+  config.draft.ma2 = { ...maProgram('D:\\MA\\chosen.exe'), connectOnDemand: false };
+  api.detectLocalIntegrations.mockResolvedValue({ detectedAt: new Date().toISOString(), applications: {
+    obs: { id: 'obs', executablePath: null, workingDirectory: null, processName: null, windowTitle: null, version: null, running: false },
+    p1: { id: 'p1', executablePath: null, workingDirectory: null, processName: null, windowTitle: null, version: null, running: false },
+    ma2: { id: 'ma2', executablePath: 'D:\\Other\\onpc.exe', workingDirectory: 'D:\\Other', processName: 'onpc.exe', windowTitle: 'MA2', version: '3.9', running: true },
+    ma3d: { id: 'ma3d', executablePath: 'D:\\MA\\MA3D.exe', workingDirectory: 'D:\\MA', processName: 'MA3D.exe', windowTitle: 'MA 3D', version: '3.7', running: true }
+  } });
+  await connectDevices(config);
+  expect(api.startExternalApplication).not.toHaveBeenCalledWith('ma2');
+  expect(api.startExternalApplication).toHaveBeenCalledWith('ma3d');
+  expect(useIntegrationStore.getState().profile?.ma2?.executablePath).toBe('D:\\MA\\chosen.exe');
+  expect(useIntegrationStore.getState().profile?.ma3d?.executablePath).toBe('D:\\MA\\MA3D.exe');
+});
+
+it('onPC 启动失败会明确阻止后续控台连接，OBS 和 MA 3D 仍单独检查', async () => {
+  const config = options();
+  config.draft.ma2 = maProgram('D:\\MA\\missing.exe');
+  config.draft.ma3d = maProgram('D:\\MA\\MA3D.exe');
+  api.startExternalApplication.mockImplementation(id => {
+    if (id === 'ma2') return Promise.reject(new Error('所选控台程序不存在'));
+    return Promise.resolve(snapshot(id));
+  });
+  await connectDevices(config);
+  expect(api.connectMa2Network).not.toHaveBeenCalled();
+  expect(api.connectObs).toHaveBeenCalled();
+  expect(useConnectionCheckStore.getState().checks['ma2-app']?.detail).toContain('所选控台程序不存在');
+  expect(useConnectionCheckStore.getState().checks.ma3d?.state).toBe('ready');
+});
 beforeEach(() => {
   vi.resetAllMocks();
   api.checkNativeMidiOutput.mockResolvedValue();

@@ -15,6 +15,8 @@ export const integrationProfileSchema = z.object({
   profileId: z.string().min(1),
   name: z.string().min(1),
   loopMidi: z.object({ autoStart: z.boolean() }).optional(),
+  ma2: executableProfileSchema.extend({ connectOnDemand: z.boolean() }).optional(),
+  ma3d: executableProfileSchema.extend({ connectOnDemand: z.boolean() }).optional(),
   updatedAt: z.string().datetime({ offset: true }),
   obs: executableProfileSchema.extend({
     connectionMethod: z.enum(['automatic', 'manual']).optional(),

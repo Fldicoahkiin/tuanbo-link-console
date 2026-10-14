@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
 import { hashFile, LinkProjectService } from './link-project-service';
 import { VerifiedMediaFiles } from './verified-media-files';
+import { inspectObsSeekPixelFormat, obsSeekEncoding } from './obs-seek-encoding';
 
 export class MediaPreviewService {
   private readonly pending = new Map<string, Promise<string>>();
@@ -17,7 +18,8 @@ export class MediaPreviewService {
   constructor(
     private readonly projects: LinkProjectService,
     private readonly executeFfmpeg: (executable: string, arguments_: string[]) => Promise<void> = runFfmpeg,
-    private readonly resolveExecutable: () => string = resolveFfmpegExecutable
+    private readonly resolveExecutable: () => string = resolveFfmpegExecutable,
+    private readonly inspectPixelFormat: (executable: string, source: string) => Promise<string> = inspectObsSeekPixelFormat
   ) {}
 
   ensureThumbnail(projectPath: string, relativePath: string, sha256: string): Promise<string> {
@@ -69,25 +71,25 @@ export class MediaPreviewService {
     return operation;
   }
 
-  async ensureObsSeekVideo(projectPath: string, relativePath: string, sha256: string): Promise<string> {
+  async ensureObsSeekVideo(projectPath: string, relativePath: string, sha256: string, decode: 'hardware' | 'software' = 'hardware'): Promise<string> {
     assertSha256(sha256);
     // Several assets may share one content-addressed output, but each source
     // path must be verified before joining that work. Otherwise preloading only
     // warms the first path and can also accept a different, corrupted source.
     const source = this.projects.resolveMediaAsset(projectPath, relativePath);
     if (!await this.verified.verify(source, sha256)) throw new Error('原素材完整性校验失败，请重新导入');
-    const key = `obs-seek:${resolve(projectPath)}:${sha256}`;
+    const key = `obs-seek:${decode}:${resolve(projectPath)}:${sha256}`;
     const current = this.pending.get(key);
     if (current) return current;
-    const operation = this.createObsSeekVideo(projectPath, relativePath, sha256).finally(() => this.pending.delete(key));
+    const operation = this.createObsSeekVideo(projectPath, relativePath, sha256, decode).finally(() => this.pending.delete(key));
     this.pending.set(key, operation);
     return operation;
   }
 
-  private async createObsSeekVideo(projectPath: string, relativePath: string, sha256: string): Promise<string> {
+  private async createObsSeekVideo(projectPath: string, relativePath: string, sha256: string, decode: 'hardware' | 'software'): Promise<string> {
     const source = this.projects.resolveMediaAsset(projectPath, relativePath);
     const directory = join(dirname(resolve(projectPath)), 'cache', 'obs-seek-jpeg2000');
-    const destination = join(directory, `${sha256}.source-pixels.mkv`);
+    const destination = join(directory, `${sha256}.${decode === 'hardware' ? 'seek-intra' : 'seek-ready'}.mkv`);
     const checksumPath = `${destination}.sha256`;
     if (await pathExists(destination) && await pathExists(checksumPath)) {
       const digest = (await readFile(checksumPath, 'utf8')).trim();
@@ -98,9 +100,10 @@ export class MediaPreviewService {
     await mkdir(directory, { recursive: true });
     const temporaryPath = join(directory, `.${sha256}.${crypto.randomUUID()}.tmp.mkv`);
     await this.videoSlot(() => generateTemporaryOutput(temporaryPath, destination, async () => {
+      const encoding = obsSeekEncoding(await this.inspectPixelFormat(this.resolveExecutable(), source), decode);
       await this.executeFfmpeg(this.resolveExecutable(), [
         '-hide_banner', '-loglevel', 'error', '-y', '-threads', '2', '-filter_threads', '1', '-i', source,
-          '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'ffv1', '-level', '3', '-g', '1', '-threads', '2',
+        '-map', '0:v:0', '-map', '0:a:0?', ...encoding,
         '-c:a', 'copy', '-avoid_negative_ts', 'disabled', temporaryPath
       ]);
       if (!await this.verified.verify(source, sha256)) throw new Error('原素材在生成定位缓存时发生变化');

@@ -20,6 +20,7 @@ export async function importWorkspaceMedia(input: {
 }): Promise<void> {
   for (const file of input.files) {
     try {
+      assertDocumentSession(input.documentId);
       input.notify(`正在导入并读取素材信息：${file.name}`);
       const metadata = { kind: detectMediaKind(file) };
       const asset = await linkDesktopViewModel.importMediaAsset({
@@ -29,11 +30,25 @@ export async function importWorkspaceMedia(input: {
         kind: metadata.kind,
       });
       assertDocumentSession(input.documentId);
-      input.execute(input.addAsset({ ...asset, folderId: input.folderId }));
+      if (asset.kind === 'video') {
+        if (!asset.durationMs) throw new Error('视频缺少可用时长，无法准备原声');
+        const directory = input.projectPath.slice(0, Math.max(input.projectPath.lastIndexOf('/'), input.projectPath.lastIndexOf('\\')) + 1);
+        try {
+          await linkDesktopViewModel.importReferenceAudio({ projectPath: input.projectPath, sourcePath: directory + asset.relativePath, durationMs: asset.durationMs });
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.includes('素材不包含音频轨道')) throw error;
+        }
+      }
       const document = assertDocumentSession(input.documentId);
+      // A newly imported video becomes draggable only after its sound is ready.
+      // Preparation does not hold a document command or expose a half-ready clip.
+      input.execute(input.addAsset({ ...asset, folderId: input.folderId }));
       if (document.project && useIntegrationStore.getState().obs.status === 'connected' && useRuntimeStore.getState().state === 'idle') {
-        await linkDesktopViewModel.prepareObsMediaScenes(input.projectPath, document.project, useDisplayPreferences.getState().preciseSeeking);
-        useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory());
+        await linkDesktopViewModel.prepareObsMediaScenes(input.projectPath, { ...document.project, rundown: [], mediaAssets: [asset] }, useDisplayPreferences.getState().preciseSeeking);
+        assertDocumentSession(input.documentId);
+        const inventory = await linkDesktopViewModel.readObsInventory();
+        assertDocumentSession(input.documentId);
+        useIntegrationStore.getState().setInventory(inventory);
       } else input.notify(`${asset.name} 已导入，停止播放并连接 OBS 后点击“同步素材场景”完成场景准备。`);
       input.onImported(asset.id, asset.name);
     } catch (error) {

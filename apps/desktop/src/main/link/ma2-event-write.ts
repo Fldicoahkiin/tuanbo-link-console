@@ -126,9 +126,12 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     const properties = eventProperties.safeParse(object.properties);
     if (!properties.success || object.order !== 0 || !object.parentId) throw new Error('此次合并包含未完成转换的灯光动作或参数');
     const value = properties.data;
-    const path = paths.get(object.id);
+    let path = paths.get(object.id);
     const before = remoteObjects.get(object.id);
-    if (before && before.parentId !== object.parentId) throw new Error('跨控台轨道移动尚未完成写回验证');
+    if (path && before && before.parentId !== object.parentId) {
+      edits.push({ kind: 'delete', path });
+      path = undefined;
+    }
     const candidates = new Set([...(subtracks.get(object.parentId) ?? [])].filter((candidate) => masterSubtracks.has(candidate) === (value.action === 'master')));
     const subtrackPath = path?.slice(0, path.lastIndexOf('/')) ?? (candidates?.size === 1 ? [...candidates][0] : undefined);
     if (!subtrackPath) throw new Error('新增灯光点的控台子轨道不明确');
@@ -159,7 +162,9 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
       const name = reference.cueName ?? (sameReference ? original?.event.cueName : null) ?? `Cue ${Number(reference.cueNumber)}`;
       // A programme label is an annotation, never an instruction to rename a console Cue.
       object.properties.name = name;
-      cue = { sequence: reference.sequence, cueIndex: reference.cueIndex, name };
+      // Native references use getobj.name (label plus number), while editor labels
+      // use the Sequence export's Cue name without the numeric suffix.
+      cue = { sequence: reference.sequence, cueIndex: reference.cueIndex, name: reference.cueName === null ? name : `${reference.cueName} ${Number(reference.cueNumber)}` };
     } else if (value.cue || value.sequence) throw new Error('执行器动作不能带有 Cue 引用');
     if (path && original) {
       const timeChanged = Number(original.event.attributes.time ?? 0) !== Number(rawTime);

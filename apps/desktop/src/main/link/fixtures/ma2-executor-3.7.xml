@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MA xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.malighting.de/grandma2/xml/MA" xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.7.0/MA.xsd" major_vers="3" minor_vers="7" stream_vers="0">
+	<Info datetime="2026-10-09T18:45:06" showfile="tblink_ui100_20261007" />
+	<Exec tblink_executor_name="100步灯光测试 999.101" offset_from_first="0">
+		<Assignment name="100步灯光测试 9907">
+			<No>25</No>
+			<No>1</No>
+			<No>9907</No>
+		</Assignment>
+		<AssignmentExec fader="16384">
+			<Button>12299</Button>
+			<Button>0</Button>
+			<Button>0</Button>
+			<Button>0</Button>
+		</AssignmentExec>
+		<Playback auto_start="true" auto_stop="true" auto_stop_off_time="true" auto_fix="false" loop_breaking_go="false" priority="Normal" soft_ltp="true" playback_master="0" wrap_around="true" restart_mode="0" trigger_is_go="false" cmd_disable="false" tracking="true" release_on_first_step="true" auto_stomp="false" speed_scale="norm" speed_master="0" rate_master="0" stepped_rate="false" swop_protect="false" kill_protect="false" ignore_exec_time="false" off_on_overwritten="true" MIB_always="false" MIB_never="false" chaser="false" cross_fader_mode="false" auto_black_move="false" scale_effect_rate="true" auto_master_go="0" />
+	</Exec>
+</MA>

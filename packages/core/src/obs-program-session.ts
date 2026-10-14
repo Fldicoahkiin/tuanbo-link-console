@@ -103,7 +103,7 @@ export class ObsProgramSession {
     if (!this.prepared || this.closed || this.failure) return;
     try {
       const age = this.dependencies.now() - observedAt;
-      if (!Number.isFinite(age) || age < 0 || age > 100) throw new Error('设备位置已超过 100ms 执行边界或时间依据无效，画面通道停止；不会补发过时动作');
+      if (!Number.isFinite(age) || age < 0 || age > 100) throw new Error(`设备位置已超过 100ms 执行边界或时间依据无效（采样年龄 ${age.toFixed(3)}ms），画面通道停止；不会补发过时动作`);
       const sample = this.sample(positionMs, observedAt), previousFrame = this.frame;
       let update: RuntimeUpdate;
       if (this.runtime.getState() === 'paused') {
@@ -135,6 +135,11 @@ export class ObsProgramSession {
       this.enqueue(async () => {
         for (let index = 0; index < entries.length; index++) {
           const entry = entries[index]!;
+          // A covered decoder keeps running. The preceding composition already
+          // restored its visibility; there is no command left to send here.
+          // Do not turn a slow acknowledgement into a stale-command failure.
+          if ('event' in entry && entry.event.phase === 'start' && entry.event.deferSceneSwitch
+            && this.managed.isActiveMedia(entry.event)) continue;
           const allowed = (): boolean => canExecute(entry.frame);
           if (!allowed()) return;
           if ('cue' in entry) {

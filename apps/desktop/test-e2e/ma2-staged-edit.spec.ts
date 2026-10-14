@@ -50,10 +50,10 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect(badge).toContainText('仅本地');
     await page.getByRole('button', { name: '重做', exact: true }).click(); await expect(badge).toContainText('待同步 1');
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks[0]?.clips[0]?.events[0]?.at).toBe(2000);
-    await expect(page.getByRole('button', { name: '开始同步', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'false');
     await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
     await expect(badge).toContainText('待同步 1');
-    await expect(page.getByRole('button', { name: '开始同步', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'false');
     await expect(pending).toContainText('1 处修改');
     await page.screenshot({ path: info.outputPath('pending.png') });
     await page.getByRole('button', { name: '停止时间线', exact: true }).click();

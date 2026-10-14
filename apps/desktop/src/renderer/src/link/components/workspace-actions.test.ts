@@ -30,6 +30,15 @@ function fixture(locked = false, withCue = false, withClip = false) {
 }
 
 describe('拖入 OBS 场景', () => {
+  it('添加原声只调用正式提取，不再生成监听用低采样率预览；解码失败不丢弃音轨', async () => {
+    const { actions, notify } = fixture();
+    const preview = vi.spyOn(linkDesktopViewModel, 'ensureMediaAudioUrl').mockClear();
+    vi.spyOn(linkDesktopViewModel, 'importReferenceAudio').mockRejectedValueOnce(new Error('读取失败'));
+    actions.addAssetClip('video', 0);
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledWith('添加视频原声失败：读取失败', 'error'));
+    expect(preview).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState().project!.rundown[0]!.referenceMediaClips).toHaveLength(0);
+  });
   it('30 fps 非整毫秒落点生成合法整数音频位置，短音轨不使用视频全长', async () => {
     const { actions } = fixture();
     vi.spyOn(linkDesktopViewModel, 'importReferenceAudio').mockResolvedValueOnce({ ...source, durationMs: 1250 });
@@ -68,7 +77,7 @@ describe('拖入 OBS 场景', () => {
   });
   it('无音轨视频保留画面并明确提示，解码异常不能伪装成无音轨', async () => {
     const { actions, notify } = fixture();
-    vi.spyOn(linkDesktopViewModel, 'ensureMediaAudioUrl').mockRejectedValueOnce(new Error('素材不包含音频轨道'));
+    vi.spyOn(linkDesktopViewModel, 'importReferenceAudio').mockRejectedValueOnce(new Error('素材不包含音频轨道'));
     actions.addAssetClip('video', 0);
     await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining('此素材没有音轨')));
     expect(useDocumentStore.getState().project!.rundown[0]!.referenceMediaClips).toHaveLength(1);

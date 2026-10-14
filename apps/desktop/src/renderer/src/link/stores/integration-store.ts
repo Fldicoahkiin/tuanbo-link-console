@@ -49,7 +49,9 @@ export const useIntegrationStore = create<IntegrationStoreState>((set) => ({
   inventory: null,
   processes: {
     obs: emptyProcess('obs'),
-    p1: emptyProcess('p1')
+    p1: emptyProcess('p1'),
+    ma2: emptyProcess('ma2'),
+    ma3d: emptyProcess('ma3d')
   },
   midiPorts: [],
   nativeDevices: null,

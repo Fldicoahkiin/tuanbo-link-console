@@ -18,7 +18,7 @@ static void json_string(const wchar_t *value) {
   putchar('"');
 }
 
-static int write_devices(void) {
+static int write_devices(bool include_midi) {
   HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
   if (FAILED(hr)) return 2;
   IMMDeviceEnumerator *enumerator = NULL;
@@ -58,7 +58,7 @@ static int write_devices(void) {
     if (device) IMMDevice_Release(device);
   }
   fputs("],\"midiOutputs\":[", stdout);
-  UINT midi_count = midiOutGetNumDevs();
+  UINT midi_count = include_midi ? midiOutGetNumDevs() : 0;
   for (UINT i = 0; SUCCEEDED(hr) && i < midi_count; i++) {
     MIDIOUTCAPSW caps;
     MMRESULT result = midiOutGetDevCapsW(i, &caps, sizeof(caps));
@@ -77,14 +77,14 @@ static int write_devices(void) {
 }
 
 int print_devices(void) {
-  int result = write_devices();
+  int result = write_devices(true);
   putchar('\n'); fflush(stdout);
   return result;
 }
 
 // A dedicated non-realtime process keeps driver initialization warm. Every
 // request still enumerates current endpoints; no device inventory is cached.
-int serve_devices(void) {
+int serve_devices(bool include_midi) {
   _setmode(_fileno(stdin), _O_BINARY);
   unsigned char request[8];
   for (;;) {
@@ -94,7 +94,7 @@ int serve_devices(void) {
     UINT32 id = (UINT32)request[4] | ((UINT32)request[5] << 8) | ((UINT32)request[6] << 16) | ((UINT32)request[7] << 24);
     if (!id) return 2;
     printf("{\"version\":1,\"requestId\":%u,\"devices\":", id);
-    int result = write_devices();
+    int result = write_devices(include_midi);
     printf(",\"ok\":%s}\n", result ? "false" : "true"); fflush(stdout);
     if (result) return result;
   }

@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { ma2ObjectDirectorySchema } from '@tb/schema';
+import { ma2ObjectDirectorySchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema } from '@tb/schema';
 import { readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
-export type Ma2Operation = 'PING' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR';
+export type Ma2Operation = 'PING' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR' | 'ASSIGNSEQ' | 'LABEL';
 export type Ma2Wire = {
   exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void): Promise<string>;
 };
@@ -39,6 +39,14 @@ export class Ma2OnpcBridge {
   private async performExchange(operation: Ma2Operation, target: number, expected: string, desired: string): Promise<{ response: string; requestId: string }> {
     if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号无效');
     const writing = operation === 'APPLY' || operation === 'SYNC' || operation === 'CREATE';
+    const assigning = operation === 'ASSIGNSEQ' || operation === 'LABEL';
+    if (operation === 'LABEL') {
+      const parts = expected.split('\n');
+      if (desired || parts.length !== 6 || !['single', 'sequence'].includes(parts[0]!) || !/^\d+(?:\.\d{1,3})?$/.test(parts[1]!) || parts.slice(2).some(value => !/^(?:[a-f0-9]{2})*$/.test(value)) || expected.length > 16384) throw new Error('控台改名请求格式无效');
+      ma2LabelSchema.parse(Buffer.from(parts[5]!, 'hex').toString('utf8'));
+    }
+    if (operation === 'ASSIGNSEQ' && (!/^[a-f0-9]{24}\n(?:[a-f0-9]{2}){1,4096}\n(?:[a-f0-9]{2}){1,256}$/.test(expected) || desired)) throw new Error('自动关联请求格式无效');
+    if (assigning && this.isPlaying()) throw new Error('播放期间不能创建 MA2 关联');
     if (operation === 'EXECUTOR' && (!/^[1-9]\d*$/.test(expected) || Number(expected) > 99999 || desired !== '')) throw new Error('执行器编号无效');
     const requestedSequences = operation === 'SCOPE' ? expected.split(',').map(Number) : [];
     if (operation === 'SCOPE' && (!/^[1-9]\d*(?:,[1-9]\d*)*$/.test(expected) || requestedSequences.some((number) => !Number.isInteger(number) || number > 99999) || new Set(requestedSequences).size !== requestedSequences.length)) throw new Error('额外序列读取范围无效');
@@ -56,10 +64,12 @@ export class Ma2OnpcBridge {
     const id = randomUUID().replaceAll('-', '');
     let sent = false;
     try {
-      const body = writing ? `${Buffer.byteLength(expected)}\n${expected}${desired}` : operation === 'EXECUTOR' ? expected : operation === 'SCOPE' ? requestedSequences.sort((a, b) => a - b).join(',') : '';
+      const body = writing ? `${Buffer.byteLength(expected)}\n${expected}${desired}` : operation === 'EXECUTOR' || assigning ? expected : operation === 'SCOPE' ? requestedSequences.sort((a, b) => a - b).join(',') : '';
       if (Buffer.byteLength(body) > 32 * 1024 * 1024) throw new Error('MA2 交换数据超过 32 MB');
       const validate = (result: string): { response: string; requestId: string } => {
-        if (operation === 'LIST' || operation === 'LISTSEQ') ma2ObjectDirectorySchema.parse(JSON.parse(result));
+        if (operation === 'LABEL') { const label = ma2RenameResultSchema.parse(JSON.parse(result)); if (label.sequence !== target) throw new Error('控台名称回读序列不一致'); }
+        else if (assigning) { const assigned = ma2SequenceAssignmentSchema.parse(JSON.parse(result)); if (assigned.sequence !== target) throw new Error('控台自动关联序列不一致'); }
+        else if (operation === 'LIST' || operation === 'LISTSEQ') ma2ObjectDirectorySchema.parse(JSON.parse(result));
         else if (operation === 'SEQUENCE') {
           const report = inspectMa2SequenceXml(result);
           if (report.sequences.length !== 1 || report.sequences[0]?.number !== target) throw new Error('Sequence 回读对象不一致');
@@ -76,7 +86,7 @@ export class Ma2OnpcBridge {
       };
       if (typeof this.dataDirectory !== 'string') {
         return validate(await this.dataDirectory.exchange(id, operation, target, body, () => {
-          if (writing && this.isPlaying()) throw new Error('播放已开始，未发送 MA2 写入请求');
+          if ((writing || assigning) && this.isPlaying()) throw new Error('播放已开始，未发送 MA2 写入请求');
           sent = true;
         }));
       }
@@ -86,7 +96,7 @@ export class Ma2OnpcBridge {
       }
       const temporary = join(directory, `tblink_request_${id}.tmp`);
       await writeFile(temporary, `${id}\n${operation}\n${target}\n${Buffer.byteLength(body)}\n${body}`, 'utf8');
-      if (writing && this.isPlaying()) throw new Error('播放已开始，未发送 MA2 写入请求');
+      if ((writing || assigning) && this.isPlaying()) throw new Error('播放已开始，未发送 MA2 写入请求');
       await rename(temporary, join(directory, 'tblink_bridge_request.txt'));
       sent = true;
       const deadline = Date.now() + 15000;

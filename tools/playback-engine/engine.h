@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
 #include <windows.h>
+#include <stdbool.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <mmsystem.h>
@@ -43,7 +44,7 @@ typedef struct {
 extern Engine engine;
 HRESULT audio_prepare(const wchar_t *path, UINT32 rate, double start_ms, double end_ms, const wchar_t *device_id, double base_ms, BOOL streaming);
 int print_devices(void);
-int serve_devices(void);
+int serve_devices(bool include_midi);
 int serve_midi_output(void);
 HRESULT audio_play(void);
 HRESULT audio_pause(void);

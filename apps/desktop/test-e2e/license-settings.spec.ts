@@ -14,8 +14,9 @@ for (const credential of ['missing', 'tampered'] as const) {
     const application = await electron.launch({ args: [`--user-data-dir=${profile}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '0' } });
     try {
       const page = await application.firstWindow();
-      await expect(page.getByRole('heading', { name: '激活团播联动台', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '激活你的工作区', exact: true })).toBeVisible();
       const panel = page.getByRole('region', { name: '本机授权', exact: true });
+      await panel.getByText('本机信息与授权文件', { exact: true }).click();
       await expect(panel.getByLabel('本机机器码')).toHaveValue(/^TB1-[A-F0-9]{64}$/);
       expect((await page.evaluate(() => window.tbLink.getLicenseStatus())).state).toBe(credential === 'missing' ? 'inactive' : 'invalid');
       await expect(page.getByRole('button', { name: '新建工程', exact: true })).toHaveCount(0);

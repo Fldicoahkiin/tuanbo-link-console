@@ -48,6 +48,12 @@ import { LightingHeadings, LightingLanes, type LightingTimelineProps } from './L
 import { TimelineMarkers } from './TimelineMarkers';
 import { useLightingPreview } from '../runtime/use-lighting-preview';
 
+function seekTimelineAudio(audio: HTMLAudioElement, milliseconds: number): void {
+  const seconds = Number.isFinite(audio.duration) ? Math.min(milliseconds / 1_000, audio.duration) : milliseconds / 1_000;
+  // Reassigning the same end position queues another seek/ended cycle.
+  if (Math.abs(audio.currentTime - seconds) > 0.001) audio.currentTime = seconds;
+}
+
 type Props = {
   analysisPanel?: import('./LightingTimelineControls').MusicAnalysisHost | undefined;
   transportStatus?: import('react').ReactNode;
@@ -202,7 +208,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
   const seekTo = (milliseconds: number, updateAudio: boolean, snapToEdges = true): number => {
     const next = snap(props, milliseconds, snapEnabled, snapToEdges ? seekSnapPointsMs : [], snapToEdges ? snapThresholdMs : 0);
     props.onPlayheadChange(next);
-    if (!props.externalTransport && updateAudio && audioRef.current) audioRef.current.currentTime = next / 1_000;
+    if (!props.externalTransport && updateAudio && audioRef.current) seekTimelineAudio(audioRef.current, next);
     revealTimelineTime(next);
     return next;
   };
@@ -253,7 +259,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
     className="reference-timeline panel"
     data-lighting-timeline={props.lightingWorkspace === true} style={{ '--waveform-gain': waveformGain } as CSSProperties}
     onContextMenu={(event) => { if (event.defaultPrevented || !(event.target instanceof Element) || !event.target.closest('.timeline-lane')) return; event.preventDefault(); setClipContext({ target: null, x: event.clientX, y: event.clientY }); }}
-    onContextMenuCapture={event => { if (!props.lightingWorkspace || !(event.target instanceof Element) || !event.target.closest('.waveform-lane,.waveform-cue-points') || event.target.closest('.waveform-cue-point,.cue-cluster-trigger,.effect-binding-backdrop')) return; event.preventDefault(); event.stopPropagation(); stamping.stamp(viewport.editTimeAtClientX(event.clientX)); }}
+    onContextMenuCapture={event => { if (!props.lightingWorkspace || !(event.target instanceof Element) || !event.target.closest('.waveform-lane,.waveform-cue-points') || event.target.closest('.waveform-cue-point,.effect-binding-backdrop')) return; event.preventDefault(); event.stopPropagation(); stamping.stamp(viewport.editTimeAtClientX(event.clientX)); }}
     data-duration-ms={props.durationMs} data-waveform-mode={waveformMode}
     ref={timelineRef} data-playhead-time={showPlayheadTime}
     tabIndex={0}
@@ -278,7 +284,7 @@ export function ReferenceTimeline(input: Props): JSX.Element {
       </div></div>
       <div className="timeline-viewport" ref={viewport.viewportRef} onScroll={viewport.onScroll}>
         <div className="timeline-content" style={contentStyle} {...lightingMaterialDropHandlers({ onEffectDrop: props.onEffectDrop, onConsoleCueDrop: props.onConsoleCueDrop, onError: props.onPlaybackError, timeAtClientX: x => snap(props, viewport.editTimeAtClientX(x), snapEnabled, seekSnapPointsMs, snapThresholdMs) })}>
-          {props.lightingWorkspace && props.lighting ? <WaveformCuePoints onReveal={viewport.revealTime} frameRate={props.frameRate} mode={cueMouseMode} height={audioHeight} lighting={{ ...props.lighting, snapTime: (ms, excludedId) => snap(props, ms, snapEnabled, lightingSnapPoints(props.lighting?.document, beatSegments.snapPoints, props.referenceAudio?.durationMs ?? props.durationMs, excludedId), snapThresholdMs) }} pixelsPerSecond={viewport.pixelsPerSecond} top={rulerHeight} scrollLeft={viewport.scrollLeft} viewportWidth={viewport.viewportWidth} durationMs={props.referenceAudio?.durationMs ?? props.durationMs} disabled={false} /> : null}
+          {props.lightingWorkspace && props.lighting ? <WaveformCuePoints frameRate={props.frameRate} mode={cueMouseMode} height={audioHeight} lighting={{ ...props.lighting, snapTime: (ms, excludedId) => snap(props, ms, snapEnabled, lightingSnapPoints(props.lighting?.document, beatSegments.snapPoints, props.referenceAudio?.durationMs ?? props.durationMs, excludedId), snapThresholdMs) }} pixelsPerSecond={viewport.pixelsPerSecond} top={rulerHeight} scrollLeft={viewport.scrollLeft} viewportWidth={viewport.viewportWidth} durationMs={props.referenceAudio?.durationMs ?? props.durationMs} disabled={false} /> : null}
           {props.lightingWorkspace ? <AudioRowResizeHandle height={audioHeight} rulerHeight={rulerHeight} onChange={setAudioHeight} /> : null}
           {snapGuide !== undefined ? <div className="timeline-snap-guide" style={{ left: snapGuide / 1000 * viewport.pixelsPerSecond }}><span>已吸附</span></div> : null}
           <div className="timeline-ruler" data-sections={sectionRow} data-music={musicRow} {...lanePointer}>

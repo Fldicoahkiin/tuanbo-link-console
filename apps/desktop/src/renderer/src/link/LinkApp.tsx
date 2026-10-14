@@ -14,16 +14,13 @@ import {
   Maximize2,
   Minus,
   Settings,
-  SlidersHorizontal, Sparkles,
+  SlidersHorizontal,
   X
 } from 'lucide-react';
 import type { SettingsCategory, SettingsLocation } from './components/settings-navigation';
 import { useSettingsLocation } from './useSettingsLocation';
 import { SettingsNavigation, SettingsSectionNavigation } from './components/SettingsNavigation';
 import { CueWorkspace } from './components/CueWorkspace';
-import { BeautyWorkspace } from './components/BeautyWorkspace';
-import { useBeautyOutput } from './runtime/use-beauty-output';
-import { useBeautyNavigation } from './useBeautyNavigation';
 import { IntegrationWorkspace } from './components/IntegrationWorkspace';
 import { useAppearanceTheme } from './components/AppearanceControl';
 import { useDisplayPreferences } from './stores/display-preferences-store';
@@ -37,16 +34,16 @@ import { useProjectPersistence } from './useProjectPersistence';
 import { useP1AutoFollow } from './useP1AutoFollow';
 import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
+import { useMediaAudioPreparation } from './runtime/use-media-audio-preparation';
 
-type Page = 'project' | 'cues' | 'lighting' | 'beauty';
+type Page = 'project' | 'cues' | 'lighting';
 type Notice = { id: string; message: string; tone: 'info' | 'error'; key?: string };
 type NavigationItem = { id: Page; label: string; caption: string; icon: typeof ListMusic };
 
 const NAVIGATION: NavigationItem[] = [
   { id: 'project', label: '节目单', caption: '安排节目与素材', icon: ListMusic },
   { id: 'cues', label: '编辑器', caption: '编排画面与动作', icon: SlidersHorizontal },
-  { id: 'lighting', label: '灯光工作台', caption: '音频分段与灯光编排', icon: Lightbulb },
-  { id: 'beauty', label: '人像美颜', caption: '多人统一调节', icon: Sparkles }
+  { id: 'lighting', label: '灯光工作台', caption: '音频分段与灯光编排', icon: Lightbulb }
 ];
 
 export function LinkApp(): JSX.Element {
@@ -64,7 +61,6 @@ export function LinkApp(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false); const [settingsLocation, setSettingsLocation] = useState<SettingsLocation | null>(null);
   const settingsLocator = useSettingsLocation(settingsLocation, settingsOpen, settingsCategory);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
-  useBeautyNavigation(() => { setConnectionsOpen(false); setSettingsOpen(false); setPage('beauty'); });
   const openLighting = useMa2ReadStore(state => state.openWorkspace);
   useEffect(() => {
     if (!openLighting) return;
@@ -82,7 +78,6 @@ export function LinkApp(): JSX.Element {
   const lightingUndo = useDocumentStore(state => state.past.at(-1)?.command.scope === 'lighting');
   const lightingRedo = useDocumentStore(state => state.future.at(-1)?.command.scope === 'lighting');
   const obs = useIntegrationStore((state) => state.obs);
-  useBeautyOutput(obs.status === 'connected');
   const processes = useIntegrationStore((state) => state.processes);
   const integrationInitialized = useIntegrationStore((state) => state.initialized);
   const runtimeState = useRuntimeStore((state) => state.state);
@@ -103,7 +98,7 @@ export function LinkApp(): JSX.Element {
 
   const midiMonitor = useDesktopIntegrationEvents(notify); useEffect(() => { try { useDisplayPreferences.getState().load(); } catch (error) { notify(`显示设置读取失败：${String(error)}`, 'error'); } }, [notify]);
   useMa2AutoSync(editingLocked || internalPlayer.state.status === 'playing', notify);
-  useProjectPersistence(notify);
+  useProjectPersistence(notify); useMediaAudioPreparation(playbackLocked, notify);
 
   useDocumentDirty(dirty, notify);
 
@@ -207,7 +202,7 @@ export function LinkApp(): JSX.Element {
     onUndo: () => useDocumentStore.getState().undo(),
     onRedo: () => useDocumentStore.getState().redo(), onSave: () => void saveProject()
   };
-  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} /></div>{page === 'beauty' && !connectionsOpen ? <BeautyWorkspace connected={obs.status === 'connected'} /> : null}{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace actionsHost={lightingActionsHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
+  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace actionsHost={lightingActionsHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
 
   return <RendererErrorBoundary>
     <div className="app-shell" data-workspace={connectionsOpen ? 'settings' : page}>
@@ -269,7 +264,7 @@ function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange,
     })}<button className={settingsOpen ? 'active' : ''} aria-current={settingsOpen ? 'page' : undefined} onClick={onSettings}><Settings aria-hidden="true" /><span><strong>设置</strong></span></button></nav>
     <div className="sidebar-context">
       <div className="sidebar-playlists" hidden={settingsOpen || page !== 'project'} ref={playlistHostRef} />
-      <div className="sidebar-editor" hidden={settingsOpen || page === 'project' || page === 'beauty'} ref={editorHostRef} />
+      <div className="sidebar-editor" hidden={settingsOpen || page === 'project'} ref={editorHostRef} />
       {settingsOpen ? <SettingsNavigation selected={settingsCategory} onSelect={onSettingsCategoryChange} /> : null}
     </div>
   </aside>;

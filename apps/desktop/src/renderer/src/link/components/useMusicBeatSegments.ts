@@ -20,8 +20,8 @@ export function useMusicBeatSegments(lighting: LightingTimelineProps | undefined
   const points = useMemo(() => data ? musicStructureSegments(data) : [], [data]);
   const snapPoints = useMemo(() => data?.state === 'ready' ? [...data.beats.map(beat => beat.atMs), ...data.segments.flatMap(segment => [segment.startMs, segment.endMs])] : [], [data]);
   const busy = analysis.submitting || Boolean(analysis.job && ['queued', 'checking', 'running', 'pausing', 'cancelling'].includes(analysis.job.state));
-  const commit = useCallback((next: LightingDocument, label: string): void => {
-    const result: unknown = lighting?.onChange(next, label);
+  const commit = useCallback((next: LightingDocument, label: string, automaticSource?: ReferenceAudio): void => {
+    const result: unknown = lighting?.onChange(next, label, automaticSource);
     if (result === false) throw new Error('工程保存失败，请处理提示后重试');
   }, [lighting]);
   const run = useCallback((action: () => void): void => { if (blocked) return; try { action(); setError(''); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }, [blocked]);
@@ -34,8 +34,9 @@ export function useMusicBeatSegments(lighting: LightingTimelineProps | undefined
     if (!lighting || !source || blocked || job?.state !== 'completed' || !job.candidates) return;
     const key = `${scope}:${job.taskId}`;
     if (delivered.has(key) || data && rerun.current !== scope) return;
+    const automaticSource = rerun.current === scope ? undefined : source;
     remember(delivered, key); rerun.current = null;
-    run(() => commit(acceptMusicStructure(lighting.document, source, job.candidates!, job.taskId), '自动识别音乐节拍与段落'));
+    run(() => commit(acceptMusicStructure(lighting.document, source, job.candidates!, job.taskId), '自动识别音乐节拍与段落', automaticSource));
   }, [analysis.job, lighting, source, scope, blocked, data, run, commit]);
   const start = (): void => {
     if (blocked || busy) return;

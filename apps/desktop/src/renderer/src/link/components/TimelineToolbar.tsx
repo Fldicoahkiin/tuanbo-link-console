@@ -149,7 +149,12 @@ export function TimelineToolbar(props: Props): JSX.Element {
       preload="auto"
       src={props.referenceAudio.url}
       onError={() => { props.onPlayingChange(false); props.onPlaybackError('当前音频无法读取或解码，请检查文件是否存在、损坏或格式不受支持'); }}
-      onEnded={(event) => { props.onPlayheadChange(event.currentTarget.currentTime * 1000); props.onPlayingChange(false); }}
+      onEnded={(event) => {
+        // The event may have been queued before a seek or a new playback.
+        if (!event.currentTarget.ended) return;
+        props.onPlayheadChange(event.currentTarget.currentTime * 1000);
+        props.onPlayingChange(false);
+      }}
     /> : null}
   </div>;
 }

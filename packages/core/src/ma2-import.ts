@@ -59,7 +59,7 @@ export function bindMa2TrackCommand(itemId: string, bindingId: string, trackId: 
 }
 
 /** Apply only an adapter-confirmed readback. The captured document prevents overwriting newer edits. */
-export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expectedInput: LightingDocument, confirmedInput: Ma2TimecodePreview): LinkCommand {
+export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expectedInput: LightingDocument, confirmedInput: Ma2TimecodePreview, preserveLaterEdits = false): LinkCommand {
   const expected = lightingDocumentSchema.parse(expectedInput);
   const confirmed = ma2TimecodePreviewSchema.parse(confirmedInput);
   const binding = expected.ma2Bindings?.find((entry) => entry.id === bindingId);
@@ -123,8 +123,24 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
   }), execute(project) {
     const next = structuredClone(project);
     const item = next.rundown.find((entry) => entry.id === itemId);
-    if (!item?.lighting || JSON.stringify(lightingDocumentSchema.parse(item.lighting)) !== JSON.stringify(expected)) throw new Error('同步期间节目灯光已修改，未覆盖本地内容，请重新读取比较');
-    item.lighting = structuredClone(lighting);
+    if (!item?.lighting) throw new Error('同步期间节目已移除，未应用回读');
+    const latest = lightingDocumentSchema.parse(item.lighting);
+    if (JSON.stringify(latest) === JSON.stringify(expected)) item.lighting = structuredClone(lighting);
+    else {
+      if (!preserveLaterEdits || JSON.stringify(latest.ma2Bindings) !== JSON.stringify(expected.ma2Bindings)) throw new Error('同步期间节目灯光绑定已修改，未覆盖本地内容，请重新读取比较');
+      // A confirmed local-only write acknowledges the captured revision. Later edits
+      // remain pending against that baseline, including deletion and undo during I/O.
+      const submitted = new Map(expected.tracks.map(track => [track.id, track]));
+      const acknowledged = new Map(lighting.tracks.map(track => [track.id, track]));
+      item.lighting = lightingDocumentSchema.parse({ ...latest,
+        tracks: latest.tracks.flatMap(track => {
+          if (JSON.stringify(track) !== JSON.stringify(submitted.get(track.id))) return [track];
+          const confirmedTrack = acknowledged.get(track.id);
+          return confirmedTrack ? [confirmedTrack] : [];
+        }),
+        ma2Bindings: latest.ma2Bindings?.map(entry => entry.id === bindingId ? confirmedBinding : entry)
+      });
+    }
     next.schemaVersion = 2; next.updatedAt = new Date().toISOString();
     return parseLinkProject(next);
   }, undo: (before) => parseLinkProject(before) };

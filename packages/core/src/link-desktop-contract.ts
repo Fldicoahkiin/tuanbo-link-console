@@ -127,7 +127,7 @@ export type LinkObsSceneItemTransform = SceneItemTransform & {
 };
 
 export type LinkProcessSnapshot = {
-  id: 'obs' | 'p1';
+  id: 'obs' | 'p1' | 'ma2' | 'ma3d';
   status: 'notRunning' | 'starting' | 'running' | 'reconnecting' | 'stopping' | 'error';
   pid: number | null;
   processName: string | null;
@@ -151,7 +151,7 @@ export type LinkDetectedApplication = {
 
 export type LinkLocalIntegrationDetection = {
   detectedAt: string;
-  applications: Record<LinkProcessSnapshot['id'], LinkDetectedApplication>;
+  applications: Record<'obs' | 'p1', LinkDetectedApplication> & Partial<Record<'ma2' | 'ma3d', LinkDetectedApplication>>;
 };
 
 export type LinkLogEntryDto = {
@@ -183,7 +183,7 @@ export type LinkDesktopApi = {
   stopNativeObs(request: import('@tb/schema').NativeObsStop): Promise<void>;
   getNativeObsStatus(): Promise<import('@tb/schema').NativeObsStatus | null>;
   onNativeObsStatus(listener: (status: import('@tb/schema').NativeObsStatus) => void): () => void;
-  getNativePlaybackDevices(): Promise<import('@tb/schema').NativePlaybackDevices>;
+  getNativePlaybackDevices(scope?: import('@tb/schema').NativeDeviceQueryRequest['scope']): Promise<import('@tb/schema').NativePlaybackDevices>;
   checkNativeMidiOutput(request: import('@tb/schema').NativeMidiCheck): Promise<void>;
   prepareNativePlayback(request: import('@tb/schema').NativePlayerPrepare): Promise<import('@tb/schema').NativePlayerStatus>;
   controlNativePlayback(request: import('@tb/schema').NativePlayerControl): Promise<import('@tb/schema').NativePlayerStatus>;
@@ -230,6 +230,8 @@ export type LinkDesktopApi = {
   readMa2Executor(payload: import('@tb/schema').Ma2ExecutorReadRequest): Promise<import('@tb/schema').Ma2ExecutorPreview>;
   compareMa2(payload: import('@tb/schema').Ma2CompareRequest): Promise<import('./ma2-sync').Ma2SyncPreview>;
   applyMa2(payload: import('@tb/schema').Ma2ApplyRequest): Promise<import('@tb/schema').Ma2ApplyResult>;
+  prepareMa2AutoBindings(payload: import('@tb/schema').Ma2AutoBindRequest): Promise<import('@tb/schema').Ma2AutoBindResult>;
+  renameMa2Object(payload: import('@tb/schema').Ma2RenameRequest): Promise<import('@tb/schema').Ma2RenameResult>;
   getAppInfo(): Promise<LinkAppInfo>;
   getUpdateStatus(): Promise<LinkUpdateStatus>;
   checkForUpdates(): Promise<LinkUpdateStatus>;

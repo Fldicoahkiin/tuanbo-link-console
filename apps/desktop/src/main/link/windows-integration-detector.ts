@@ -36,6 +36,12 @@ function parseDetection(value: unknown): LinkLocalIntegrationDetection {
     if (!isDetectedApplication(candidate, id)) throw new Error(`Windows 本机集成检测缺少有效目标：${id}`);
     applications[id] = candidate;
   }
+  for (const id of ['ma2', 'ma3d'] as const) {
+    const candidate: unknown = detectedApplications.find((item) => isRecord(item) && item.id === id);
+    if (candidate === undefined) continue;
+    if (!isDetectedApplication(candidate, id)) throw new Error(`Windows 本机集成检测目标无效：${id}`);
+    applications[id] = candidate;
+  }
   return { detectedAt: value.detectedAt, applications };
 }
 
@@ -150,11 +156,34 @@ $p1Entry = Find-Entry '^Hirender P1'
 $p1Process = Find-Process 'HirenderP1.exe'
 $p1Path = if ($p1Process) { $p1Process.path } elseif ($p1Entry -and $p1Entry.InstallLocation) { Join-Path $p1Entry.InstallLocation 'HirenderP1.exe' } else { $null }
 
+# Multiple installed versions require an explicit path; never choose a different show version by sort order.
+function Find-MaApp([string]$id, [string]$displayPattern, [string]$exePattern) {
+  $running = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match $exePattern -and $_.ExecutablePath })
+  $paths = @($running | ForEach-Object { $_.ExecutablePath } | Sort-Object -Unique)
+  if ($paths.Count -eq 1) {
+    $item = $running[0]
+    $live = Get-Process -Id $item.ProcessId -ErrorAction Stop
+    return App $id $paths[0] ([PSCustomObject]@{name=$item.Name;title=$live.MainWindowTitle}) $null
+  }
+  if ($paths.Count -gt 1) { return App $id $null $null $null }
+  $candidates = @($entries | Where-Object { $_.DisplayName -match $displayPattern } | ForEach-Object {
+    $icon = Icon-Path $_
+    if ($icon -and (Test-Path -LiteralPath $icon -PathType Leaf) -and [IO.Path]::GetFileName($icon) -match $exePattern) { $icon }
+    if ($_.InstallLocation -and (Test-Path -LiteralPath $_.InstallLocation -PathType Container)) {
+      Get-ChildItem -LiteralPath $_.InstallLocation -File | Where-Object { $_.Name -match $exePattern } | ForEach-Object { $_.FullName }
+    }
+  } | Sort-Object -Unique)
+  if ($candidates.Count -eq 1) { return App $id $candidates[0] $null $null }
+  return App $id $null $null $null
+}
+
 [PSCustomObject]@{
   detectedAt = [DateTime]::UtcNow.ToString('o')
   applications = @(
     (App 'obs' $obsPath $obsProcess $obsEntry)
     (App 'p1' $p1Path $p1Process $p1Entry)
+    (Find-MaApp 'ma2' 'grandMA2.*onPC' '^gma2onpc\.exe(?:\.exe)?$')
+    (Find-MaApp 'ma3d' '(grandMA|MA)\s*3D' '^MA3D\.exe$')
   )
 } | ConvertTo-Json -Depth 5 -Compress
 `;
