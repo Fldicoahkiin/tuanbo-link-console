@@ -1,5 +1,6 @@
 import { createPrivateKey, createPublicKey, sign, verify, type KeyObject } from 'node:crypto';
 import { z } from 'zod';
+import { alipayGateways, type PaymentEnvironment } from '../../../packages/schema/src/purchase';
 import { ServiceError } from './service';
 
 const identity = z.string().regex(/^\d{16}$/);
@@ -103,13 +104,17 @@ const checkoutSchema = z.object({
   quantity: z.number().int().min(1).max(100), expiresAt: z.string().datetime()
 }).strict();
 
-/** 网站支付、主动查单与关单；只向固定支付宝网关发送签名请求，不在适配器中交付授权。 */
+/** 网站支付、主动查单与关单；只向所配环境的固定支付宝网关发送签名请求，不在适配器中交付授权。 */
 export class AlipayCheckout {
   private readonly key: KeyObject;
-  constructor(readonly appId: string, readonly sellerId: string, privateKey: string, private readonly now: () => number = Date.now) {
+  private readonly gateway: string;
+  private readonly notifyUrl: string;
+  constructor(readonly appId: string, readonly sellerId: string, privateKey: string, readonly environment: PaymentEnvironment, notifyOrigin: string, private readonly now: () => number = Date.now) {
     identity.parse(appId); identity.parse(sellerId);
     this.key = createPrivateKey(privateKey);
     if (this.key.asymmetricKeyType !== 'rsa' || (this.key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) throw new Error('支付宝请求私钥必须为至少 2048 位 RSA 私钥');
+    this.gateway = alipayGateways[environment];
+    this.notifyUrl = new URL('/v1/payments/alipay/notify', notifyOrigin).href;
   }
   createUrl(input: unknown): string {
     const order = checkoutSchema.parse(input);
@@ -119,8 +124,8 @@ export class AlipayCheckout {
       { out_trade_no: channelOrderId(order.id), product_code: 'FAST_INSTANT_TRADE_PAY',
         total_amount: (order.amountFen / 100).toFixed(2), subject: `团播联动台授权 ${order.quantity} 台`,
         goods_type: '0', qr_pay_mode: '2', time_expire: time(Date.parse(order.expiresAt)) },
-      { notify_url: 'https://api.tuanbo-link.jinhefilm.com/v1/payments/alipay/notify' });
-    return `https://openapi.alipay.com/gateway.do?${new URLSearchParams(params)}`;
+      { notify_url: this.notifyUrl });
+    return `${this.gateway}?${new URLSearchParams(params)}`;
   }
   private signedParams(method: string, business: Record<string, string>, extra: Record<string, string> = {}): Record<string, string> {
     const params: Record<string, string> = { app_id: this.appId, method, format: 'JSON', charset: 'utf-8',
@@ -134,7 +139,7 @@ export class AlipayCheckout {
     const label = method === 'alipay.trade.query' ? '查单' : '关单';
     const { biz_content: business, ...params } = this.signedParams(method, { out_trade_no: channelOrderId(id) });
     try {
-      const response = await request(`https://openapi.alipay.com/gateway.do?${new URLSearchParams(params)}`, {
+      const response = await request(`${this.gateway}?${new URLSearchParams(params)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8', Accept: 'application/json' },
         body: new URLSearchParams({ biz_content: business! }), redirect: 'error', signal: AbortSignal.timeout(8000)
       });

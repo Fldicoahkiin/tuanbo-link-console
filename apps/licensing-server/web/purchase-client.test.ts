@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AlipayCheckout, AlipayNotifications } from '../src/alipay';
 import { LicensingService } from '../src/service';
 import { createLicensingServer } from '../src/http';
-import { purchaseCatalogSchema, purchaseRequestSchema } from '../../../packages/schema/src/purchase';
+import { alipayGateways, purchaseCatalogSchema, purchaseRequestSchema } from '../../../packages/schema/src/purchase';
 import { WebPurchaseClient } from './purchase-client';
 
 const issuer = generateKeyPairSync('ed25519');
@@ -29,7 +29,7 @@ async function setup(now: () => number = Date.now) {
   const service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), now);
   services.push(service);
   const notifications = new AlipayNotifications(identity.appId, identity.sellerId, provider.publicKey.export({ type: 'spki', format: 'pem' }).toString());
-  const checkout = new AlipayCheckout(identity.appId, identity.sellerId, provider.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), now);
+  const checkout = new AlipayCheckout(identity.appId, identity.sellerId, provider.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', now);
   const server = createLicensingServer(service, 'a'.repeat(48), notifications, checkout, catalog); servers.push(server);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('未监听');
@@ -151,12 +151,18 @@ it('拒绝续费凭据、过大凭据及被更改的报价，并保留原领取�
 it('拒绝恶意付款跳转和错单响应，不向凭据文件保存付款链接', async () => {
   const { send } = await setup(); const client = new WebPurchaseClient(storage(), send);
   client.prepare(request); const original = await client.submit();
-  for (const paymentUrl of ['javascript:alert(1)', 'https://evil.example/gateway.do', 'https://user@openapi.alipay.com/gateway.do', 'https://openapi.alipay.com/not-payment']) {
-    const attacker = new WebPurchaseClient(storage(), () => Promise.resolve(Response.json({ ...original, paymentUrl })));
+  const reply = (value: unknown, environment: string | null = 'production') => () => Promise.resolve(Response.json(value, environment ? { headers: { 'X-Tblink-Payment-Environment': environment } } : {}));
+  const sandboxUrl = original.paymentUrl!.replace(alipayGateways.production, alipayGateways.sandbox);
+  for (const [paymentUrl, environment] of [['javascript:alert(1)', 'production'], ['https://evil.example/gateway.do', 'production'], ['https://user@openapi.alipay.com/gateway.do', 'production'],
+    ['https://openapi.alipay.com/not-payment', 'production'], [sandboxUrl, 'production'], [original.paymentUrl!, 'sandbox'], [original.paymentUrl!, null], [original.paymentUrl!, 'staging']] as const) {
+    const attacker = new WebPurchaseClient(storage(), reply({ ...original, paymentUrl }, environment));
     attacker.importReceipt(JSON.stringify(client.receipt));
     await expect(attacker.submit()).rejects.toThrow();
   }
-  const wrong = new WebPurchaseClient(storage(), () => Promise.resolve(Response.json({ ...original, id: crypto.randomUUID() })));
+  const sandbox = new WebPurchaseClient(storage(), reply({ ...original, paymentUrl: sandboxUrl }, 'sandbox'));
+  sandbox.importReceipt(JSON.stringify(client.receipt));
+  expect((await sandbox.submit()).paymentUrl).toBe(sandboxUrl);
+  const wrong = new WebPurchaseClient(storage(), reply({ ...original, id: crypto.randomUUID() }));
   wrong.importReceipt(JSON.stringify(client.receipt)); await expect(wrong.submit()).rejects.toThrow('不一致');
   expect(JSON.stringify(client.receipt)).not.toContain('paymentUrl');
 });

@@ -7,6 +7,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, it, vi } from 'vitest';
 import { AlipayCheckout, AlipayNotifications } from './alipay';
 import { createLicensingServer } from './http';
+import { serviceConfigSchema } from './config';
+import { alipayGateways } from '../../../packages/schema/src/purchase';
 import { LicensingService } from './service';
 
 const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -38,7 +40,7 @@ it('RSA2 通知验签保留中文、百分号、加号和新增字段，不二�
 it('付款入口签名包含 sign_type，金额和有效期来自订单，链接不包含客户或领取凭据', () => {
   const { service, order } = setup();
   const now = Date.parse('2026-09-28T00:00:00Z');
-  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), () => now);
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => now);
   const payment = service.prepareAlipayPayment(order.id, appId, sellerId);
   const url = new URL(checkout.createUrl(payment));
   expect(url.origin + url.pathname).toBe('https://openapi.alipay.com/gateway.do');
@@ -62,11 +64,11 @@ it('付款入口签名包含 sign_type，金额和有效期来自订单，链接
 it('仅服务器订单字段可构建付款链接，拒绝过期、弱密钥和额外网址参数', () => {
   const { service, order } = setup();
   let now = Date.parse('2026-09-28T00:00:00Z');
-  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), () => now);
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => now);
   const payment = service.prepareAlipayPayment(order.id, appId, sellerId);
   expect(() => checkout.createUrl({ ...payment, returnUrl: 'https://example.invalid' })).toThrow();
   const weak = generateKeyPairSync('rsa', { modulusLength: 1024 });
-  expect(() => new AlipayCheckout(appId, sellerId, weak.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString())).toThrow('2048');
+  expect(() => new AlipayCheckout(appId, sellerId, weak.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com')).toThrow('2048');
   now += 15 * 60000;
   expect(() => checkout.createUrl(payment)).toThrow('过期');
 });
@@ -91,7 +93,7 @@ it('付款入口过期不丢弃支付事实，绑定身份必须匹配；支付�
 
 it('付款入口只供认证运营获取，不能从请求覆盖金额；签名通知按渠道订单号交付原订单', async () => {
   const { service, order } = setup();
-  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), () => Date.parse('2026-09-28T00:00:00Z'));
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => Date.parse('2026-09-28T00:00:00Z'));
   const admin = 'a'.repeat(48); const server = createLicensingServer(service, admin, notifications, checkout);
   await listenHttpTestServer(server);
   try {
@@ -259,6 +261,30 @@ it('付款期限过后验签的 TRADE_CLOSED 通知关闭未收款订单；期�
   now += 15 * 60000;
   service.alipayNotification(verify(notification(paid.id, { trade_status: 'TRADE_CLOSED', trade_no: '202609282200000000000010' })));
   expect(service.describeOrder(paid.id).state).toBe('fulfilled');
+});
+
+it('支付环境只接受 production / sandbox：沙箱付款、查单与关单都走沙箱网关和所配回调域名，缺省为生产', async () => {
+  const base = { LICENSE_DATABASE: 'x.db', LICENSE_PRIVATE_KEY_FILE: 'k', LICENSE_KEY_ID: 'k', LICENSE_DATA_KEY_FILE: 'd', LICENSE_ADMIN_TOKEN_FILE: 't' };
+  expect(serviceConfigSchema.parse(base)).toMatchObject({ PAYMENT_ENVIRONMENT: 'production', PAYMENT_NOTIFY_ORIGIN: 'https://api.tuanbo-link.jinhefilm.com' });
+  expect(serviceConfigSchema.parse({ ...base, PAYMENT_ENVIRONMENT: 'sandbox', PAYMENT_NOTIFY_ORIGIN: 'https://sandbox.example.test' }).PAYMENT_ENVIRONMENT).toBe('sandbox');
+  for (const changes of [{ PAYMENT_ENVIRONMENT: 'staging' }, { PAYMENT_ENVIRONMENT: 'Production' }, { PAYMENT_NOTIFY_ORIGIN: 'http://api.example.test' },
+    { PAYMENT_NOTIFY_ORIGIN: 'https://api.example.test/v1' }, { PAYMENT_ENVIRONMENT: 'sandbox', WECHAT_APP_ID: 'wx1234567890abcdef', WECHAT_MCH_ID: '1234567890',
+      WECHAT_PRIVATE_KEY_FILE: 'w', WECHAT_CERT_SERIAL: 'ABCDEF0123456789', WECHAT_PUBLIC_KEY_FILE: 'p', WECHAT_PUBLIC_KEY_ID: 'PUB_KEY_ID_0123456789', WECHAT_API_V3_KEY_FILE: 'v' }]) {
+    expect(() => serviceConfigSchema.parse({ ...base, ...changes })).toThrow();
+  }
+  const { service, order } = setup(); const now = Date.parse('2026-09-28T00:00:00Z');
+  const checkout = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'sandbox', 'https://sandbox.example.test', () => now);
+  const url = new URL(checkout.createUrl(service.prepareAlipayPayment(order.id, appId, sellerId)));
+  expect(url.origin + url.pathname).toBe(alipayGateways.sandbox);
+  expect(url.searchParams.get('notify_url')).toBe('https://sandbox.example.test/v1/payments/alipay/notify');
+  const gateways: string[] = [];
+  const request = (body: string) => vi.fn<typeof fetch>(input => { const target = new URL(input instanceof Request ? input.url : String(input)); gateways.push(target.origin + target.pathname); return Promise.resolve(new Response(body)); });
+  const reply = (key: string, value: unknown) => { const text = JSON.stringify(value); return `{"${key}":${text},"sign":"${sign('RSA-SHA256', Buffer.from(text), rsa.privateKey).toString('base64')}"}`; };
+  await checkout.query(order.id, notifications, request(reply('alipay_trade_query_response', { code: '40004', sub_code: 'ACQ.TRADE_NOT_EXIST' })));
+  await checkout.close(order.id, notifications, request(reply('alipay_trade_close_response', { code: '10000', out_trade_no: `TB_${order.id.replaceAll('-', '')}` })));
+  expect(gateways).toEqual([alipayGateways.sandbox, alipayGateways.sandbox]);
+  const production = new AlipayCheckout(appId, sellerId, rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => now);
+  expect(new URL(production.createUrl(service.prepareAlipayPayment(order.id, appId, sellerId))).origin).toBe('https://openapi.alipay.com');
 });
 
 it('旧版“有收款但仍为 pending”的订单不回填，收到渠道事件或补交付时收敛为 paid 并照常交付', async () => {

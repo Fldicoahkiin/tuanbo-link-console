@@ -4,6 +4,14 @@ import { activationCodeSchema } from './license';
 export const paymentChannelSchema = z.enum(['alipay', 'wechat']);
 export type PaymentChannel = z.infer<typeof paymentChannelSchema>;
 export const wechatCodeUrlSchema = z.string().max(512).regex(/^weixin:\/\/wxpay\/bizpayurl\?pr=[A-Za-z0-9_-]+$/);
+/** 服务端经响应头下发支付环境；客户端只接受该环境对应的固定支付宝网关。 */
+export const paymentEnvironmentSchema = z.enum(['production', 'sandbox']);
+export type PaymentEnvironment = z.infer<typeof paymentEnvironmentSchema>;
+export const paymentEnvironmentHeader = 'X-Tblink-Payment-Environment';
+export const alipayGateways: Readonly<Record<PaymentEnvironment, string>> = {
+  production: 'https://openapi.alipay.com/gateway.do',
+  sandbox: 'https://openapi-sandbox.dl.alipaydev.com/gateway.do'
+};
 // closed/expired 表示渠道已确认原交易关闭或不存在且未收款，客户可另建新单。
 const publicOrderStateSchema = z.enum(['pending', 'fulfilled', 'closed', 'expired']);
 

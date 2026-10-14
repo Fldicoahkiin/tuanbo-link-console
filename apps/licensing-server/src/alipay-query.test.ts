@@ -20,7 +20,7 @@ const notifications = new AlipayNotifications(appId, sellerId, provider.publicKe
 const services: LicensingService[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); for (const service of services.splice(0)) service.close(); });
 function setup() {
-  const checkout = new AlipayCheckout(appId, sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), () => now);
+  const checkout = new AlipayCheckout(appId, sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => now);
   const service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => now);
   services.push(service);
   const order = service.createOrder({ reference: 'query-test', customer: '测试客户', customerType: 'company', quantity: 2,
@@ -230,7 +230,7 @@ it('付款期限过后查单确认交易不存在或已关闭才关单；仍待�
   const path = join(await mkdtemp(join(tmpdir(), 'tblink-close-')), 'license.db');
   const service = new LicensingService(path, issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => clock);
   services.push(service);
-  const checkout = new AlipayCheckout(appId, sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), () => clock);
+  const checkout = new AlipayCheckout(appId, sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => clock);
   const create = (reference: string) => {
     const order = service.createOrder({ reference, customer: '测试客户', customerType: 'company', quantity: 1, kind: 'perpetual', amountFen: 12345, useUntil: null, updatesUntil: '2027-09-28T00:00:00Z' });
     service.prepareAlipayPayment(order.id, appId, sellerId); return order.id;

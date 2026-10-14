@@ -45,7 +45,7 @@ function callback(value: unknown = transaction(), time = fixed) {
 }
 function provider(send: typeof fetch = () => Promise.reject(new Error('测试禁止外网')), now = () => fixed) {
   return new WechatPay(identity.appId, identity.sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), serial,
-    platform.publicKey.export({ type: 'spki', format: 'pem' }).toString(), publicKeyId, apiKey, now, send);
+    platform.publicKey.export({ type: 'spki', format: 'pem' }).toString(), publicKeyId, apiKey, 'https://api.tuanbo-link.jinhefilm.com', now, send);
 }
 const order = { id, amountFen: 80000, quantity: 1, expiresAt: new Date(fixed + 15 * 60000).toISOString() };
 
@@ -126,7 +126,7 @@ async function setup(send: typeof fetch, enabled = true) {
   const service = new LicensingService(':memory:', issuer.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => fixed); services.push(service);
   const alipayId = { appId: '2026000000000001', sellerId: '2088000000000001' };
   const alipay = new AlipayNotifications(alipayId.appId, alipayId.sellerId, platform.publicKey.export({ type: 'spki', format: 'pem' }).toString());
-  const checkout = new AlipayCheckout(alipayId.appId, alipayId.sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), () => fixed);
+  const checkout = new AlipayCheckout(alipayId.appId, alipayId.sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => fixed);
   const wechat = provider(send);
   const server = createLicensingServer(service, 'a'.repeat(48), alipay, checkout, catalog, false, wechat, enabled); servers.push(server);
   await listenHttpTestServer(server);

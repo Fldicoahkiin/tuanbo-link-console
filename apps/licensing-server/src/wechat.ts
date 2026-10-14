@@ -18,14 +18,16 @@ const uuid = (id: string): string => z.string().uuid().parse(`${id.slice(0, 8)}-
 export class WechatPay {
   private readonly privateKey: KeyObject;
   private readonly publicKey: KeyObject;
+  private readonly notifyUrl: string;
   constructor(readonly appId: string, readonly sellerId: string, privateKey: string, private readonly serial: string,
-    publicKey: string, private readonly publicKeyId: string, private readonly apiKey: Buffer,
+    publicKey: string, private readonly publicKeyId: string, private readonly apiKey: Buffer, notifyOrigin: string,
     private readonly now: () => number = Date.now, private readonly send: typeof fetch = fetch) {
     wechatIdentitySchema.parse({ appId, sellerId });
     z.string().regex(/^[A-Fa-f0-9]{16,64}$/).parse(serial);
     z.string().regex(/^PUB_KEY_ID_\d{10,64}$/).parse(publicKeyId);
     if (apiKey.length !== 32) throw new Error('微信 APIv3 密钥必须为 32 字节');
     this.privateKey = createPrivateKey(privateKey); this.publicKey = createPublicKey(publicKey);
+    this.notifyUrl = new URL('/v1/payments/wechat/notify', notifyOrigin).href;
     for (const key of [this.privateKey, this.publicKey]) {
       if (key.asymmetricKeyType !== 'rsa' || key.asymmetricKeyDetails?.modulusLength !== 2048) throw new Error('微信支付密钥必须为 2048 位 RSA');
     }
@@ -108,7 +110,7 @@ export class WechatPay {
     const response = await this.request('POST', '/v3/pay/transactions/native', {
       appid: this.appId, mchid: this.sellerId, out_trade_no: orderId(order.id),
       description: `团播联动台授权 ${order.quantity} 台`, time_expire: order.expiresAt.replace(/\.\d{3}Z$/, '+00:00'),
-      notify_url: 'https://api.tuanbo-link.jinhefilm.com/v1/payments/wechat/notify', amount: { total: order.amountFen, currency: 'CNY' }
+      notify_url: this.notifyUrl, amount: { total: order.amountFen, currency: 'CNY' }
     });
     const parsed = z.object({ code_url: wechatCodeUrlSchema }).safeParse(response);
     if (!parsed.success) throw new ServiceError(502, 'INVALID_PAYMENT_RESPONSE', '微信付款二维码地址无效');

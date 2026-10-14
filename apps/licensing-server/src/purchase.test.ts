@@ -136,7 +136,7 @@ it('目录拒绝重复 SKU 和不完整期限，接近停售时不再创建新�
 it('HTTP 贯通无账号商品查询、重复下单、验签通知和凭据领码，关闭销售仍可恢复', async () => {
   const service = setup(); const credential = token();
   const notifications = new AlipayNotifications(appId, sellerId, provider.publicKey.export({ type: 'spki', format: 'pem' }).toString());
-  const checkout = new AlipayCheckout(appId, sellerId, provider.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), () => initial);
+  const checkout = new AlipayCheckout(appId, sellerId, provider.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'production', 'https://api.tuanbo-link.jinhefilm.com', () => initial);
   const server = createLicensingServer(service, 'a'.repeat(48), notifications, checkout, catalog);
   await listenHttpTestServer(server);
   try {

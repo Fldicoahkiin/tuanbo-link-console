@@ -3,7 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { LicensingService, ServiceError } from './service';
 import type { AlipayCheckout, AlipayNotifications } from './alipay';
-import { purchaseCatalogSchema, type PaymentChannel, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
+import { paymentEnvironmentHeader, purchaseCatalogSchema, type PaymentChannel, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
 import type { WechatPay } from './wechat';
 import { clientAddress, rateBucket } from './client-address';
 import { SourceRates } from './source-rates';
@@ -130,6 +130,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
           return { ...purchase, paymentUrl: purchase.payable ? paymentUrl : null };
         }
         const paymentUrl = purchase.payable && checkout ? checkout.createUrl({ id: purchase.id, amountFen: purchase.amountFen, quantity: purchase.quantity, expiresAt: purchase.expiresAt }) : null;
+        if (checkout) response.setHeader(paymentEnvironmentHeader, checkout.environment);
         return { ...purchase, paymentUrl };
       }
       const delivery = /^\/v1\/orders\/([a-f0-9-]{36})$/.exec(request.url ?? '');
