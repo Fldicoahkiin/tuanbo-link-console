@@ -48,7 +48,7 @@ export class LicenseAccess {
   async requireOutput(): Promise<void> {
     if (this.sessionGranted) return;
     const status = await this.status();
-    if (status.state !== 'active' || !status.claims || status.claims.kind === 'trial') throw new Error(`使用团播联动台需要有效授权：${status.message}。请购买并激活本机。`);
+    if (status.state !== 'active' || !status.claims || status.claims.kind === 'trial') throw new Error(`使用团播联动台需要有效授权：${status.message}${status.state === 'inactive' ? '。请购买并激活本机' : ''}。`);
     this.workspaceGranted = true;
   }
   async setActive(active: boolean): Promise<void> {
