@@ -5,7 +5,8 @@ import { LicensingService, ServiceError } from './service';
 import type { AlipayCheckout, AlipayNotifications } from './alipay';
 import { purchaseCatalogSchema, type PurchaseCatalog } from '../../../packages/schema/src/purchase';
 import type { WechatPay } from './wechat';
-import { clientAddress } from './client-address';
+import { clientAddress, rateBucket } from './client-address';
+import { SourceRates } from './source-rates';
 import { dispatchConsole, type ConsoleHttp } from './console-http';
 
 async function readBytes(request: IncomingMessage): Promise<Buffer> {
@@ -33,7 +34,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
   const catalog = purchaseCatalog === undefined ? undefined : purchaseCatalogSchema.parse(purchaseCatalog);
   const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
   const expected = digest(`Bearer ${adminToken}`);
-  const rates = new Map<string, { count: number; reset: number }>();
+  const rates = new SourceRates(10000);
   const paymentQueries = new Map<string, { until: number; running: boolean }>();
   return createServer({ requestTimeout: 10000, headersTimeout: 10000, maxHeaderSize: 8192 }, (request, response) => {
     const requestId = randomUUID();
@@ -54,13 +55,11 @@ export function createLicensingServer(service: LicensingService, adminToken: str
     };
     const dispatch = async (): Promise<unknown> => {
       const now = Date.now();
-      for (const [key, value] of rates) if (value.reset <= now) rates.delete(key);
       const customerQuery = /^\/v1\/orders\/([a-f0-9-]{36})\/reconcile$/.exec(request.url ?? '');
       const group = request.url?.startsWith('/v1/payments/') ? 'payment-notify' : customerQuery ? 'payment-query' : request.url === '/v1/orders' ? 'purchase' : request.url?.startsWith('/v1/orders/') ? 'delivery' : 'product';
-      const address = `${clientAddress(request.socket.remoteAddress, request.headers['x-tblink-client-ip'], trustLoopbackProxy)}:${group}`;
-      const rate = rates.get(address) ?? { count: 0, reset: now + 60000 };
-      if (rates.size >= 10000 && !rates.has(address) || ++rate.count > (group === 'purchase' || group === 'payment-query' ? 10 : 120)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
-      rates.set(address, rate);
+      const address = `${rateBucket(clientAddress(request.socket.remoteAddress, request.headers['x-tblink-client-ip'], trustLoopbackProxy))}:${group}`;
+      // 渠道通知只靠验签把关：共享出口或计数表写满都不能拒收到账通知。
+      if (group !== 'payment-notify' && rates.exceeded(address, group === 'purchase' || group === 'payment-query' ? 10 : 120, now)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
       if (request.url?.startsWith('/console-api/')) {
         if (!consoleOptions) throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
         return dispatchConsole(consoleOptions, request, response, requestId, address, () => readBody(request), async id => {
