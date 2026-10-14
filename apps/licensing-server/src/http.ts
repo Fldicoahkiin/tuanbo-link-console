@@ -89,7 +89,14 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       if (group !== 'payment-notify' && rates.exceeded(address, group === 'purchase' || group === 'payment-query' ? 10 : 120, now)) throw new ServiceError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
       if (request.url?.startsWith('/console-api/')) {
         if (!consoleOptions) throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
-        return dispatchConsole(consoleOptions, request, response, requestId, address, () => readBody(request), id => reconcile(id));
+        return dispatchConsole(consoleOptions, request, response, requestId, address, () => readBody(request), {
+          reconcile: id => reconcile(id),
+          refund: async refund => {
+            if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝退款尚未启用');
+            service.alipayQueryOrder(refund.orderId, checkout.appId, checkout.sellerId);
+            return checkout.refund(refund.orderId, refund, alipay);
+          }
+        });
       }
       if (request.method === 'GET' && request.url === '/health') return { status: 'ok' };
       if (request.method === 'POST' && request.url === '/v1/activate') return service.activate(await readBody(request));

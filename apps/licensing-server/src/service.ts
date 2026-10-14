@@ -62,6 +62,10 @@ export class LicensingService {
       CREATE TABLE IF NOT EXISTS payment_receipts (order_id TEXT PRIMARY KEY REFERENCES orders(id), payment_reference TEXT NOT NULL UNIQUE, amount_fen INTEGER NOT NULL, source TEXT NOT NULL, app_id TEXT, seller_id TEXT, received_at TEXT NOT NULL, last_error TEXT);
       CREATE TABLE IF NOT EXISTS payment_events (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id), channel TEXT NOT NULL, event_key TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, trade_status TEXT NOT NULL, payment_reference TEXT NOT NULL, amount_fen INTEGER NOT NULL, refund_fen INTEGER NOT NULL, received_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS payment_events_order ON payment_events(order_id);
+      CREATE TABLE IF NOT EXISTS alipay_refunds (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id), amount_fen INTEGER NOT NULL, reason TEXT NOT NULL, actor TEXT NOT NULL, state TEXT NOT NULL, refunded_total_fen INTEGER, created_at TEXT NOT NULL, confirmed_at TEXT);
+      CREATE UNIQUE INDEX IF NOT EXISTS alipay_refunds_pending ON alipay_refunds(order_id) WHERE state = 'pending';
+      CREATE TABLE IF NOT EXISTS refund_reviews (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id), refund_fen INTEGER NOT NULL, decision TEXT NOT NULL, reason TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS refund_reviews_order ON refund_reviews(order_id);
       CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, at TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL);`);
   }
   close(): void { this.db.close(); }
@@ -320,6 +324,74 @@ export class LicensingService {
         if (state === 'paid' || state === 'fulfilled') this.transition(order.id, 'refunded', 'alipay:full-refund');
       }
       if (kind === 'closed' && this.closable(order.id)) this.transition(order.id, 'closed', 'alipay:TRADE_CLOSED-notice');
+    });
+  }
+  /** 渠道累计已退款：通知中的累计退款额与本服务确认成功的原路退款取大，口径与运营异常队列一致。 */
+  private channelRefundedFen(id: string): number {
+    return z.number().int().parse(this.db.prepare(`SELECT MAX(COALESCE((SELECT MAX(refund_fen) FROM payment_events WHERE order_id = ?1), 0),
+      COALESCE((SELECT SUM(amount_fen) FROM alipay_refunds WHERE order_id = ?1 AND state = 'succeeded'), 0),
+      COALESCE((SELECT MAX(refunded_total_fen) FROM alipay_refunds WHERE order_id = ?1 AND state = 'succeeded'), 0)) AS fen`).get(id)?.fen);
+  }
+  /** 撤销订单自身签发的授权；续费单不拥有授权，不在此撤销原订单已付期限。 */
+  private revokeOrderLicenses(id: string, reason: string): string[] {
+    const ids = this.db.prepare('SELECT id FROM licenses WHERE order_id = ? AND revoked = 0 ORDER BY rowid').all(id).map(row => z.string().parse(row.id));
+    for (const license of ids) this.revoke(license, { reason });
+    return ids;
+  }
+  /** 运营发起原路退款前登记退款请求；同一订单仅一笔待确认请求，重试沿用同一 out_request_no 由支付宝去重。 */
+  prepareAlipayRefund(id: string, amountFen: number, reason: string, actor: string): { orderId: string; refundId: string; amountFen: number; reason: string } {
+    return this.transaction(() => {
+      if (this.paymentChannel(id) !== 'alipay') throw new ServiceError(409, 'REFUND_CHANNEL_UNSUPPORTED', '只有支付宝订单可以原路退款；线下收款请人工办理后登记', id);
+      const receipt = this.db.prepare('SELECT source FROM payment_receipts WHERE order_id = ?').get(id);
+      if (!receipt || receipt.source !== 'alipay') throw new ServiceError(409, 'NOT_PAID', '订单尚无已确认的支付宝收款，不能退款', id);
+      this.settle(id, 'alipay-refund');
+      const order = this.order(id);
+      if (order.state === 'refunded') throw new ServiceError(409, 'ORDER_REFUNDED', '订单已全额退款', id);
+      const pending = this.db.prepare("SELECT id, amount_fen, reason FROM alipay_refunds WHERE order_id = ? AND state = 'pending'").get(id);
+      if (pending) {
+        const prior = z.object({ id: z.string(), amount_fen: z.number(), reason: z.string() }).parse(pending);
+        if (prior.amount_fen !== amountFen) throw new ServiceError(409, 'REFUND_PENDING', `上一笔 ¥${(prior.amount_fen / 100).toFixed(2)} 退款尚未确认，请先按原金额重新提交确认`, id);
+        return { orderId: id, refundId: prior.id, amountFen, reason: prior.reason };
+      }
+      if (this.channelRefundedFen(id) + amountFen > order.details.amountFen) throw new ServiceError(409, 'REFUND_EXCEEDED', '累计退款超过订单金额', id);
+      const refundId = randomUUID();
+      this.db.prepare("INSERT INTO alipay_refunds (id, order_id, amount_fen, reason, actor, state, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)").run(refundId, id, amountFen, reason, actor, new Date(this.now()).toISOString());
+      this.audit('order.alipay-refund-requested', id, `${refundId}:${amountFen}`);
+      return { orderId: id, refundId, amountFen, reason };
+    });
+  }
+  /** 渠道确认退款成功：全额退款在同一事务内标记 refunded 并撤销订单授权；部分退款与续费单只记录，进入运营复核。 */
+  confirmAlipayRefund(refundId: string, refundedTotalFen: number, actor: string) {
+    return this.transaction(() => {
+      const raw = this.db.prepare('SELECT order_id, amount_fen, reason, state FROM alipay_refunds WHERE id = ?').get(refundId);
+      if (!raw) throw new ServiceError(404, 'REFUND_NOT_FOUND', '退款请求不存在');
+      const refund = z.object({ order_id: z.string(), amount_fen: z.number(), reason: z.string(), state: z.enum(['pending', 'succeeded']) }).parse(raw);
+      if (refund.state === 'succeeded') return null;
+      this.db.prepare("UPDATE alipay_refunds SET state = 'succeeded', refunded_total_fen = ?, confirmed_at = ? WHERE id = ?").run(refundedTotalFen, new Date(this.now()).toISOString(), refundId);
+      this.audit('order.alipay-refund-confirmed', refund.order_id, `${refundId}:${refund.amount_fen}`);
+      this.settle(refund.order_id, 'alipay-refund');
+      const order = this.order(refund.order_id); const total = this.channelRefundedFen(refund.order_id);
+      const full = total >= order.details.amountFen; const renewal = Boolean(this.renewalTarget(refund.order_id).renewalLicenseId);
+      let revoked: string[] = [];
+      if (full && (order.state === 'paid' || order.state === 'fulfilled')) this.transition(refund.order_id, 'refunded', 'alipay:console-refund');
+      if (full && !renewal) {
+        revoked = this.revokeOrderLicenses(refund.order_id, `支付宝全额退款：${refund.reason}`);
+        this.db.prepare("INSERT INTO refund_reviews VALUES (?, ?, ?, 'revoke', ?, ?, ?)").run(randomUUID(), refund.order_id, total, `全额原路退款自动撤销：${refund.reason}`, actor, new Date(this.now()).toISOString());
+      }
+      return { orderId: refund.order_id, amountFen: refund.amount_fen, full, renewal, revoked };
+    });
+  }
+  /** 运营处理渠道退款（含支付宝后台直接退款的通知）：撤销本订单授权或保留结案；通知本身从不撤销授权。 */
+  reviewRefund(id: string, decision: 'revoke' | 'keep', reason: string, actor: string): { revoked: string[] } {
+    return this.transaction(() => {
+      const total = this.channelRefundedFen(id);
+      const reviewed = z.number().int().parse(this.db.prepare('SELECT COALESCE(MAX(refund_fen), 0) AS fen FROM refund_reviews WHERE order_id = ?').get(id)?.fen);
+      if (total <= reviewed) throw new ServiceError(409, 'REFUND_REVIEW_NOT_NEEDED', '该订单没有待处理的渠道退款', id);
+      if (decision === 'revoke' && this.renewalTarget(id).renewalLicenseId) throw new ServiceError(409, 'RENEWAL_REVOKE_UNSUPPORTED', '续费订单不拥有授权，撤销会吊销原订单已付期限；请用“调整到期时间”回退续期后选择保留授权结案', id);
+      const revoked = decision === 'revoke' ? this.revokeOrderLicenses(id, `渠道退款处理：${reason}`) : [];
+      this.db.prepare('INSERT INTO refund_reviews VALUES (?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), id, total, decision, reason, actor, new Date(this.now()).toISOString());
+      this.audit('order.refund-reviewed', id, `${decision}:${total}`);
+      return { revoked };
     });
   }
   private hasPayment(id: string): boolean {

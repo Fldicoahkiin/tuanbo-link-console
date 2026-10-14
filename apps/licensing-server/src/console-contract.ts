@@ -29,6 +29,9 @@ export const actionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('create-ticket'), id, licenseId: id.nullable(), category: z.enum(['migration', 'refund', 'invoice', 'recovery', 'other']), note: reasonSchema, reason: reasonSchema }),
   z.object({ action: z.literal('update-ticket'), id, state: z.enum(['open', 'processing', 'closed']), conclusion: z.string().trim().max(500), reason: reasonSchema }),
   z.object({ action: z.literal('refund'), id, amountFen: z.number().int().positive(), reference: text, handledAt: date, reason: reasonSchema }),
+  // 支付宝 refund_reason 会展示在买卖双方退款账单中，上限 256 字符，超长直接拒绝而不截断。
+  z.object({ action: z.literal('alipay-refund'), id, amountFen: z.number().int().positive(), reason: z.string().trim().min(1).max(256) }),
+  z.object({ action: z.literal('refund-review'), id, decision: z.enum(['revoke', 'keep']), reason: reasonSchema }),
   z.object({ action: z.literal('invoice'), id, state: z.enum(['requested', 'processing', 'issued', 'rejected']), buyer: text, taxId: z.string().trim().max(100), reference: z.string().trim().max(160), reason: reasonSchema })
 ]);
 export type ConsoleAction = z.infer<typeof actionSchema>;
@@ -49,6 +52,7 @@ export const permissions: Record<ConsoleAction['action'], readonly ConsoleRole[]
   'retry-delivery': ['owner', 'operations'], 'delivery-access': ['owner', 'operations'], 'revoke-delivery-access': ['owner', 'operations'],
   'set-expiry': ['owner'], reveal: ['owner', 'operations'], revoke: ['owner', 'operations'], migrate: ['owner', 'operations'], grant: ['owner'],
   'create-user': ['owner'], 'update-user': ['owner'], 'reset-user': ['owner'],
-  'create-ticket': ['owner', 'operations', 'finance'], 'update-ticket': ['owner', 'operations', 'finance'], refund: ['owner', 'finance'], invoice: ['owner', 'finance']
+  'create-ticket': ['owner', 'operations', 'finance'], 'update-ticket': ['owner', 'operations', 'finance'], refund: ['owner', 'finance'], invoice: ['owner', 'finance'],
+  'alipay-refund': ['owner', 'finance'], 'refund-review': ['owner', 'operations']
 };
-export const sensitiveActions = new Set<ConsoleAction['action']>(['set-expiry', 'fulfill', 'reveal', 'revoke', 'migrate', 'grant', 'create-user', 'update-user', 'reset-user', 'delivery-access']);
+export const sensitiveActions = new Set<ConsoleAction['action']>(['set-expiry', 'fulfill', 'reveal', 'revoke', 'migrate', 'grant', 'create-user', 'update-user', 'reset-user', 'delivery-access', 'alipay-refund', 'refund-review']);
