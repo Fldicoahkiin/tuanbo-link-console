@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 const root = dirname(fileURLToPath(import.meta.url));
 if (process.platform !== 'win32') throw new Error('OBS 原生预览插件必须在 Windows 构建');
 const compiler = join(root, 'compiler', 'zig-x86_64-windows-0.14.1', 'zig.exe');
-const run = (exe, args) => { const result = spawnSync(exe, args, { stdio: 'inherit', windowsHide: true }); if (result.error) throw result.error; if (result.status !== 0) throw new Error(`${exe} 构建失败：${result.status}`); };
+const run = (exe, args, env = process.env) => { const result = spawnSync(exe, args, { stdio: 'inherit', windowsHide: true, env }); if (result.error) throw result.error; if (result.status !== 0) throw new Error(`${exe} 构建失败：${result.status}`); };
 try { await access(compiler); }
 catch (error) {
   if (error.code !== 'ENOENT') throw error;
@@ -18,6 +18,8 @@ catch (error) {
   await mkdir(join(root, 'compiler'), { recursive: true });
   const zip = join(root, 'zig.zip'); await writeFile(zip, bytes);
   const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
-  run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Expand-Archive -LiteralPath ${quote(zip)} -DestinationPath ${quote(join(root, 'compiler'))} -Force`]);
+  // Started from PowerShell 7, the inherited module path makes Windows PowerShell fail to autoload Expand-Archive.
+  const windowsPowerShellEnv = { ...process.env }; delete windowsPowerShellEnv.PSModulePath;
+  run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Expand-Archive -LiteralPath ${quote(zip)} -DestinationPath ${quote(join(root, 'compiler'))} -Force`], windowsPowerShellEnv);
 }
 run(compiler, ['cc', '-target', 'x86_64-windows-gnu', '-shared', '-O2', '-Wall', '-Wextra', join(root, 'preview.c'), '-ladvapi32', '-o', join(root, 'tblink-realtime-preview.dll')]);
