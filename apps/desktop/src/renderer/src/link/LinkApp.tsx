@@ -1,3 +1,5 @@
+import { useSettingsSessionStore } from './stores/settings-session-store';
+import { SettingsConfirm } from './components/SettingsControls';
 import { toUserErrorMessage } from '@tb/core/link';
 import { useMa2ReadStore } from './stores/ma2-read-store';
 import { useDocumentShortcuts } from './useDocumentShortcuts';
@@ -62,11 +64,6 @@ export function LinkApp(): JSX.Element {
   const settingsLocator = useSettingsLocation(settingsLocation, settingsOpen, settingsCategory);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const openLighting = useMa2ReadStore(state => state.openWorkspace);
-  useEffect(() => {
-    if (!openLighting) return;
-    setConnectionsOpen(false); setSettingsOpen(false); setPage('lighting');
-    useMa2ReadStore.setState({ openWorkspace: false });
-  }, [openLighting]);
   const coordinatorDocumentIdRef = useRef<number | null>(null);
   const project = useDocumentStore((state) => state.project);
   const projectPath = useDocumentStore((state) => state.path);
@@ -188,12 +185,16 @@ export function LinkApp(): JSX.Element {
     setSettingsOpen(true);
   }, []);
 
-  const closeSettings = useCallback((): void => {
-    setSettingsLocation(null);
-    setSettingsOpen(false);
-    setConnectionsOpen(false);
-  }, []);
+  const { settingsExit, setSettingsExit, leaveSettings } = useSettingsExit(() => {
+    setSettingsLocation(null); setSettingsOpen(false); setConnectionsOpen(false);
+  });
+  const closeSettings = useCallback((): void => leaveSettings(), [leaveSettings]);
 
+  useEffect(() => {
+    if (!openLighting) return;
+    useMa2ReadStore.setState({ openWorkspace: false });
+    leaveSettings(() => setPage('lighting'));
+  }, [openLighting, leaveSettings]);
   useDocumentShortcuts(playbackLocked, saveProject);
   const documentActions = {
     canUndo: canUndo && (!playbackLocked || lightingUndo), canRedo: canRedo && (!playbackLocked || lightingRedo),
@@ -210,16 +211,17 @@ export function LinkApp(): JSX.Element {
       <AppTopbar actionsHostRef={setLightingActionsHost} details={<ToolbarConnections player={internalPlayer} statusHost={connectionStatusHost} onSettings={(category, focus) => { setSettingsCategory(category); setSettingsLocation({ category, ...(focus ? { focus } : {}) }); openSettings(); }} />} statusHostRef={setConnectionStatusHost} connectHostRef={setConnectHost} toolbarHostRef={setToolbarHost} onWindowAction={controlWindow} />
       <AppSidebar editorHostRef={setEditorSidebarHost} playlistHostRef={setPlaylistHost} settingsCategory={settingsCategory} onSettingsCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }}
         page={page} internal={project?.playbackSource === 'internal'} editingLocked={editingLocked}
-        obsState={obs.status} p1State={processes.p1.status} runtimeState={runtimeState} settingsOpen={connectionsOpen} onPageChange={(next) => { startTransition(() => { closeSettings(); setPage(next); }); }} onSettings={openSettings}
+        obsState={obs.status} p1State={processes.p1.status} runtimeState={runtimeState} settingsOpen={connectionsOpen} onPageChange={(next) => { leaveSettings(() => startTransition(() => setPage(next))); }} onSettings={openSettings}
       />
       <section className={`app-workspace${connectionsOpen ? ' settings-workspace' : ''}`}>
         {connectionsOpen ? <SettingsSectionNavigation selected={settingsCategory} onSelect={category => { setSettingsLocation(null); setSettingsCategory(category); }} /> : null}
         <main className="app-main" id="workspace-content" tabIndex={-1} aria-label={connectionsOpen ? '设置' : NAVIGATION.find(item => item.id === page)?.label}>
-          <div className="content-scroll">{pageContent}<section hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content" ref={settingsLocator.ref}><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsClose={closeSettings} onSettingsOpen={openSettings} /></div></section>
+          <div className="content-scroll">{pageContent}<section hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content" ref={settingsLocator.ref}><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsClose={closeSettings} onSettingsOpen={openSettings} onCreate={() => leaveSettings(beginCreateProject)} onOpen={() => leaveSettings(() => void openProject())} /></div></section>
       <div className="toast-stack" role="region" aria-label="通知"><div role="status" aria-live="polite">{notices.filter(notice => notice.tone === 'info').map((notice) => <div className="toast info" key={notice.id}><span>{notice.message}</span><button aria-label="关闭通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div><div role="alert">{notices.filter(notice => notice.tone === 'error').map((notice) => <div className="toast error" key={notice.id}><span>{notice.message}</span><button aria-label="关闭错误通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div></div></div>
         </main>
       </section>
 
+      {settingsExit ? <SettingsConfirm cancelLabel="继续编辑" title="离开设置？" confirmLabel="放弃未保存修改" onClose={() => setSettingsExit(null)} onConfirm={settingsExit}>连接或启动参数尚未保存。已保存的本机偏好和工程修改会保留。</SettingsConfirm> : null}
       {newProjectOpen ? <ProjectDialog name={newProjectName} error={newProjectError} onNameChange={setNewProjectName} onClose={() => setNewProjectOpen(false)} onCreate={() => void createProject()} /> : null}
     </div>
   </RendererErrorBoundary>;
@@ -420,4 +422,14 @@ function useNewProjectDialog() {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('新建团播工程');
   return { newProjectOpen, setNewProjectOpen, newProjectName, setNewProjectName };
+}
+
+function useSettingsExit(onLeave: () => void) {
+  const [settingsExit, setSettingsExit] = useState<(() => void) | null>(null);
+  const leaveSettings = useCallback((after?: () => void): void => {
+    const leave = (): void => { useSettingsSessionStore.getState().reset(); onLeave(); setSettingsExit(null); after?.(); };
+    if (Object.values(useSettingsSessionStore.getState().dirty).some(Boolean)) setSettingsExit(() => leave);
+    else leave();
+  }, [onLeave]);
+  return { settingsExit, setSettingsExit, leaveSettings };
 }

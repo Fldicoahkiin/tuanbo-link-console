@@ -1,7 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createEmptyLinkProject, parseLinkProject, type Ma2Catalog } from '@tb/schema';
+import { createEmptyLinkProject, parseLinkProject, type Ma2Catalog, type Ma2EffectLibrary } from '@tb/schema';
 import { convertMa2Timecode } from '../src/main/link/ma2-timecode-conversion';
 
 // Network IPC is simulated; P1 parsing, media import, commands, editor and persistence are real.
@@ -43,7 +43,17 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
         return data.scenario === 'partial' ? { ...data.catalog, entries: data.catalog.entries.map(entry => entry.target === 9902 ? { ...entry, preview: undefined, error: '测试读取失败' } : entry) } : data.catalog;
       });
       ipcMain.removeHandler('link:ma2-effect-library');
-      ipcMain.handle('link:ma2-effect-library', () => ({ directory: { ...data.catalog.directory, entries: [] }, readAt: data.catalog.readAt, sequences: [], fixtureUsage: [], errors: [] }));
+      ipcMain.handle('link:ma2-effect-library', () => {
+        const sequences: Ma2EffectLibrary['sequences'] = [];
+        for (const entry of data.catalog.entries) for (const track of entry.preview?.document.tracks ?? []) for (const clip of track.clips) for (const event of clip.events) {
+          if (event.kind !== 'ma2' || event.sequence === undefined || event.cue === undefined) continue;
+          let sequence = sequences.find(value => value.sequence === event.sequence);
+          if (!sequence) { sequence = { sequence: event.sequence, name: `序列 ${event.sequence}`, cues: [] }; sequences.push(sequence); }
+          if (!sequence.cues.some(cue => cue.number === event.cue)) sequence.cues.push({ index: sequence.cues.length + 1, number: event.cue, name: event.label || null });
+        }
+        return { directory: { ...data.catalog.directory, entries: sequences.map(sequence => ({ target: sequence.sequence, name: sequence.name })) },
+          readAt: data.catalog.readAt, sequences, fixtureUsage: [], errors: [] };
+      });
       ipcMain.handle('link:ma2-preview', () => { throw new Error('应使用目录中的完整预览，不重复请求控台'); });
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [data.path] });
     }, { path, catalog, pluginAvailable, scenario });
@@ -57,6 +67,7 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
     if (pluginAvailable) {
       await page.getByLabel('MA2 连接方式').selectOption('local');
       await app.evaluate(({ dialog }, directory) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [directory] }); }, info.outputDir);
+      await page.getByText('控台插件与安装说明', { exact: true }).click();
       await page.getByRole('button', { name: '导出控台插件', exact: true }).click();
       await expect.poll(async () => (await readdir(info.outputDir)).filter(name => name.startsWith('TBLINK-MA2-Bridge-')).length).toBe(1);
       const directory = (await readdir(info.outputDir)).find(name => name.startsWith('TBLINK-MA2-Bridge-'));
@@ -68,6 +79,7 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
     await page.getByLabel('MA2 连接方式').selectOption('network');
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, p1);
     const section = page.getByLabel('MA2 现场节目导入');
+    await section.getByText('从 P1 工程导入歌曲', { exact: true }).click();
     await section.getByRole('button', { name: '导入 P1 音乐并匹配控台 Cue', exact: true }).click();
     if (!pluginAvailable) {
       await expect(page.getByRole('region', { name: '通知' })).toContainText('请先运行控台插件');
@@ -115,8 +127,8 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
     await expect(page.locator('.lighting-timeline-point')).toHaveCount(2);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
-    await expect(page.locator('.cue-material-browser')).toContainText('1.250');
-    await expect(page.locator('.cue-material-browser')).toContainText('7.500');
+    await expect(page.locator('.cue-material-browser').getByRole('button', { name: /试听序列 \d+ 灯光步 1\.250$/ })).toBeVisible();
+    await expect(page.locator('.cue-material-browser').getByRole('button', { name: /试听序列 \d+ 灯光步 7\.500$/ })).toBeVisible();
     await page.screenshot({ path: info.outputPath('imported-cues.png') });
   } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
 });

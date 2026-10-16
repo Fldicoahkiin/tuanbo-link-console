@@ -1,7 +1,10 @@
+import { useSettingsDirty } from '../useSettingsDirty';
+import { useSettingsSessionStore } from '../stores/settings-session-store';
+import { ObsPreviewSetup } from './ObsPreviewSetup';
 import { Button } from './Button';
 import { ObsDeviceSettings } from './ObsDeviceSettings';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
-import { createDefaultIntegrationProfile, mergeIntegrationDraft } from '../view-models/local-integration-profile';
+import { createDefaultIntegrationProfile, mergeIntegrationDraft, programDraftValues, mergeProgramSettings } from '../view-models/local-integration-profile';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -32,7 +35,7 @@ import { DetectionReport, useLocalIntegrationConnection } from './LocalIntegrati
 import { isMtcSignalReady, portName, updatePortProfile } from '../view-models/local-integration-midi';
 import { P1ProjectSyncPanel } from './P1ProjectSyncPanel';
 import { IntegrationHero } from './IntegrationOverview';
-import { isDeviceSettingsCategory, type SettingsCategory } from './settings-navigation';
+import { type SettingsCategory } from './settings-navigation';
 import { IntegrationSettingsDialog } from './IntegrationSettings';
 import { prepareLoopMidi } from '../view-models/loop-midi';
 
@@ -46,9 +49,12 @@ type Props = {
   settingsOpen: boolean;
   onSettingsClose: () => void;
   onSettingsOpen: () => void;
+  onCreate: () => void;
+  onOpen: () => void;
 };
 
-export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, coordinator, notify, settingsOpen, onSettingsClose }: Props): JSX.Element {
+export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, coordinator, notify, settingsOpen, onSettingsClose, onCategoryChange, onCreate, onOpen }: Props): JSX.Element {
+  const revision = useSettingsSessionStore(state => state.revision);
   const storedProfile = useIntegrationStore((state) => state.profile);
   const securityAvailable = useIntegrationStore((state) => state.securityAvailable);
   const obs = useIntegrationStore((state) => state.obs);
@@ -63,6 +69,8 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   const draftBaseline = useRef(draft);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  useSettingsDirty('programs', settingsOpen && JSON.stringify(programDraftValues(draft)) !== JSON.stringify(programDraftValues(storedProfile ?? createDefaultIntegrationProfile())));
+  useEffect(() => { if (!settingsOpen) { const profile = useIntegrationStore.getState().profile ?? createDefaultIntegrationProfile(); setDraft(profile); draftBaseline.current = profile; setPassword(''); } }, [settingsOpen]);
   const connectionProgress = useConnectionCheckStore();
   const localIntegration = useLocalIntegrationConnection({ draft, password, readMidiPorts: () => readAndStoreMidiPorts(midiMonitor), openMidiPorts: (ids, direction) => direction === 'input' ? midiMonitor.openInputs(ids) : midiMonitor.openOutputs(ids), listenToP1: async () => { if (!coordinator) throw new Error('请先打开 P1 跟随工程'); await coordinator.initializeMidi(); }, notify, onDraft: setDraft, onPasswordCleared: () => setPassword(''), onObsPassword: setPassword, onBusyChange: setBusy });
   const lastMtcAt = useRuntimeStore((state) => state.lastMtcAt);
@@ -89,11 +97,12 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
     setPassword('');
     return next;
   };
+  const persistPrograms = (): Promise<IntegrationProfile> => saveProgramSettings(draft);
   const save = async (): Promise<void> => {
     setBusy(true);
     try {
-      await persistDraft();
-      notify('本机集成档案已保存；工程文件未写入机器私有路径或密码。');
+      await persistPrograms();
+      notify('启动设置已保存到本机。');
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     } finally {
@@ -121,7 +130,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   const startProgram = async (id: 'obs' | 'p1'): Promise<void> => {
     setBusy(true);
     try {
-      await persistDraft();
+      await persistPrograms();
       const snapshot = await linkDesktopViewModel.startExternalApplication(id);
       useIntegrationStore.getState().setProcess(snapshot);
       notify(`${id} 已启动或连接；所有权状态已刷新。`);
@@ -166,7 +175,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
   return (<div className="page-stack integration-workspace">
       {quickConnectHost ? createPortal(<button aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '逐项连接全部已启用设备，一项失败不会中断其他连接'} disabled={busy || runtimeActive} onClick={localIntegration.connect}><ScanSearch />{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</button>, quickConnectHost) : null}
       {settingsOpen ? <IntegrationSettingsDialog
-        category={category} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} nestedDialogOpen={false}
+        key={revision} category={category} onNavigate={onCategoryChange} onCreate={onCreate} onOpen={onOpen} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} nestedDialogOpen={false}
         midiPorts={midiPorts} inventory={inventory} notify={notify}
         onRefresh={() => void refresh()} onSave={() => void save()} onRefreshMidi={async () => { await readAndStoreMidiPorts(midiMonitor); }}
         onClose={onSettingsClose}
@@ -193,14 +202,14 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
       </div>
       </div>}
         maintenance={<>
-        {isDeviceSettingsCategory(category) ? <ProgramSettingsCards
+        <ProgramSettingsCards
           draft={draft} setDraft={setDraft} password={password} setPassword={setPassword} busy={busy} runtimeActive={runtimeActive}
           securityAvailable={securityAvailable} processes={processes} midiPorts={midiPorts} inventory={inventory}
-          persistDraft={persistDraft} pickExecutable={pickExecutable} startProgram={startProgram} notify={notify}
-        /> : null}
+          persistDraft={persistPrograms} pickExecutable={pickExecutable} startProgram={startProgram} notify={notify}
+        />
         </>}
       >
-        {isDeviceSettingsCategory(category) ? <ObsDeviceSettings notify={notify} onBusy={setBusy} url={draft.obs.webSocketUrl} password={password} onUrl={(webSocketUrl) => setDraft((value) => ({ ...value, obs: { ...value.obs, webSocketUrl } }))} onPassword={setPassword} disabled={busy || runtimeActive || !securityAvailable} /> : null}
+        <ObsDeviceSettings notify={notify} onBusy={setBusy} url={draft.obs.webSocketUrl} password={password} onUrl={(webSocketUrl) => setDraft((value) => ({ ...value, obs: { ...value.obs, webSocketUrl } }))} onPassword={setPassword} disabled={busy || runtimeActive || !securityAvailable} />
 
       </IntegrationSettingsDialog> : null}
     </div>
@@ -223,28 +232,10 @@ function ProgramSettingsCards({ draft, setDraft, busy, runtimeActive, securityAv
   startProgram: (id: 'obs' | 'p1') => Promise<void>;
   notify: Props['notify'];
 }): JSX.Element {
-  const [repairingBridge, setRepairingBridge] = useState(false);
-  const [bridgeResult, setBridgeResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const repairBridge = async (): Promise<void> => {
-    if (repairingBridge) return;
-    setRepairingBridge(true); setBridgeResult(null);
-    try {
-      await persistDraft();
-      await linkDesktopViewModel.repairObsBridge();
-      useIntegrationStore.getState().setProcess(await linkDesktopViewModel.refreshExternalApplication('obs'));
-      notify('OBS 内置组件已就绪，真实视频帧检查通过。');
-      setBridgeResult({ ok: true, message: 'OBS 预览组件已就绪，真实视频帧验证通过。结果已记录到运行日志。' });
-    } catch (error) {
-      notify(error instanceof Error ? error.message : String(error), 'error');
-      setBridgeResult({ ok: false, message: error instanceof Error ? error.message : String(error) });
-    } finally { setRepairingBridge(false); }
-  };
   const internal = useDocumentStore((state) => state.project?.playbackSource === 'internal');
   return <fieldset className="device-program-list" disabled={runtimeActive}>
     <ProgramProfileCard kind="obs" icon={MonitorUp} title="OBS Studio" process={processes.obs} busy={busy || runtimeActive} settings={draft.obs} acceptedVersion={draft.acceptedVersions.obs} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, obs: value } })} onSettingsChange={(settings) => setDraft({ ...draft, obs: { ...draft.obs, ...settings } })} onPick={() => void pickExecutable('obs')} onStart={() => void startProgram('obs')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('obs'), notify)} maintenanceActions={<Button className="secondary-button" disabled={busy || !securityAvailable} onClick={() => void runAction(async () => { await persistDraft(); useIntegrationStore.getState().setObs(await linkDesktopViewModel.connectObs()); useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory()); }, notify)}><Link2 />重新连接 OBS</Button>}>
-      <div className="device-panel-actions"><Button className="secondary-button" disabled={busy || runtimeActive || repairingBridge || !securityAvailable} onClick={() => { void repairBridge(); }}><Wrench />{repairingBridge ? '正在检查组件…' : '检查并修复 OBS 预览组件'}</Button></div>
-      <p className="settings-note">OBS 有画面，但联动台预览不显示时使用。检查并安装预览组件，再验证是否收到画面；需要管理员授权或重启 OBS 时会提示。</p>
-      {bridgeResult ? <p className={bridgeResult.ok ? 'settings-note' : 'device-error'} role={bridgeResult.ok ? 'status' : 'alert'}>{bridgeResult.message}</p> : null}
+      <ObsPreviewSetup disabled={busy || runtimeActive || !securityAvailable} notify={notify} beforeRepair={async () => { await persistDraft(); }} />
     </ProgramProfileCard>
     {!internal ? <ProgramProfileCard kind="p1" icon={AudioWaveform} title="P1" process={processes.p1} busy={busy || runtimeActive} settings={draft.p1} acceptedVersion={draft.acceptedVersions.p1} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, p1: value } })} onSettingsChange={(settings) => setDraft({ ...draft, p1: { ...draft.p1, ...settings } })} onPick={() => void pickExecutable('p1')} onStart={() => void startProgram('p1')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('p1'), notify)}>
       <MidiPortField label="旧节目 MIDI 输出" direction="output" value={portName(draft, 'lighting-output')} ports={midiPorts} onChange={(value) => setDraft(updatePortProfile(draft, 'lighting-output', 'output', value))} />
@@ -377,4 +368,12 @@ async function runAction(action: () => Promise<unknown>, notify: Props['notify']
   } catch (error) {
     notify(error instanceof Error ? error.message : String(error), 'error');
   }
+}
+
+async function saveProgramSettings(draft: IntegrationProfile): Promise<IntegrationProfile> {
+  const current = useIntegrationStore.getState().profile ?? createDefaultIntegrationProfile();
+  const next = mergeProgramSettings(current, draft);
+  await linkDesktopViewModel.saveIntegrationProfile({ profile: next });
+  useIntegrationStore.getState().setProfile(next);
+  return next;
 }

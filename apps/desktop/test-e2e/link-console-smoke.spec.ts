@@ -32,7 +32,7 @@ async function openProgramProperties(): Promise<void> {
 }
 async function openSoftwareUpdate(): Promise<void> {
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '软件更新', exact: true }).click();
-  await page.locator('.device-panel').getByRole('button', { name: '软件更新', exact: true }).click();
+  await expect(page.getByRole('region', { name: '软件更新设置', exact: true })).toBeVisible();
 }
 async function openMa2ManualSettings(): Promise<void> {
   const panel = page.locator('.ma2-network-settings > .ma2-advanced-settings');
@@ -810,6 +810,7 @@ test('设备地址草稿不会被独立 MIDI 设置覆盖，保存后两项均�
   await page.reload();
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
+  await page.getByText('手动连接', { exact: true }).click();
   const address = page.getByLabel('WebSocket 地址');
   await address.fill('ws://127.0.0.1:4456');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
@@ -937,11 +938,12 @@ test('设置各页面在最小窗口内字段可读且不横向溢出', async ({
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   for (const [index, name] of ['播放', '画面与同步', '设备连接', '外观与更新'].entries()) {
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name, exact: true }).click();
-    await expect(page.locator('.device-console-header h2:visible')).toHaveText(name);
-    await expect.poll(() => page.locator('.device-detail:visible').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    await expect(page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name, exact: true })).toHaveAttribute('aria-current', 'true');
+    await expect(page.locator('.device-console:visible h1')).toBeVisible();
+    await expect.poll(() => page.locator('.device-console:visible').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: testInfo.outputPath(`settings-${index}.png`) });
     if (name === '播放') {
-      await page.getByLabel('播放主控模式').selectOption('internal');
+      await page.getByRole('radio', { name: /本软件播放/ }).check();
       await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放习惯', exact: true }).click();
       const fadeOut = page.getByLabel('淡出时长（秒）');
       await fadeOut.fill('1.2');
@@ -956,15 +958,15 @@ test('设置各页面在最小窗口内字段可读且不横向溢出', async ({
       await fadeOut.fill('2');
       await fadeOut.press('Escape');
       await expect(fadeOut).toHaveValue('1.2');
-      await expect.poll(() => page.locator('.device-detail:visible').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+      await expect.poll(() => page.locator('.device-console:visible').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
       await page.screenshot({ path: testInfo.outputPath('settings-internal-playback.png') });
       await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放主控', exact: true }).click();
-      await page.getByLabel('播放主控模式').selectOption('p1');
-      await page.getByLabel('播放主控模式').selectOption('internal');
+      await page.getByRole('radio', { name: /跟随 P1/ }).check();
+      await page.getByRole('radio', { name: /本软件播放/ }).check();
       await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放习惯', exact: true }).click();
       await expect(page.getByLabel('淡出时长（秒）')).toHaveValue('1.2');
       await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放主控', exact: true }).click();
-      await page.getByLabel('播放主控模式').selectOption('p1');
+      await page.getByRole('radio', { name: /跟随 P1/ }).check();
     }
 
   }
@@ -1250,7 +1252,7 @@ test('设置分类清晰，首页无重复入口，场景在原编辑器编排',
   await expect(page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button')).toHaveText(['设备连接', '播放', '画面与同步', '外观与更新']);
   await expect(page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button').first()).toHaveText('设备连接');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
-  await page.getByLabel('播放主控模式').selectOption('internal');
+  await page.getByRole('radio', { name: /本软件播放/ }).check();
   await page.getByRole('button', { name: '画面与同步', exact: true }).click();
   await expect(page.getByLabel('OBS 输出方式')).toHaveCount(0);
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '场景工作方式', exact: true }).click();
@@ -1574,11 +1576,10 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
   await openSettingsDialog();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '外观与更新', exact: true }).click();
   await openSoftwareUpdate();
-  await expect(page.getByRole('dialog', { name: '软件更新', exact: true }).getByRole('heading', { name: '软件更新' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '软件更新设置', exact: true }).getByRole('heading', { name: '软件更新', exact: true })).toBeVisible();
   await expect(page.getByText('开发模式不执行安装更新，请使用 Windows 安装版验证')).toBeVisible();
   const developmentVersion = (await page.evaluate(() => window.tbLink.getUpdateStatus())).currentVersion;
   await expect(page.getByText(`当前版本 ${developmentVersion}`)).toBeVisible();
-  await page.getByRole('button', { name: '关闭软件更新' }).click();
   await closeSettingsDialog();
 
   await beginNewProject();
@@ -2032,59 +2033,28 @@ test('所有工作区在最小窗口尺寸内保持主视口边界', async () =>
   }
 });
 
-test('软件更新窗口始终位于工作区上方且不会被工具栏裁切', async ({}, testInfo) => {
+test('软件更新设置在最小窗口内可读且不被工具栏遮挡', async ({}, testInfo) => {
   await beginNewProject();
-  await page.getByLabel('工程名称').fill('更新窗口层级验证');
+  await page.getByLabel('工程名称').fill('更新页面布局验证');
   await page.getByRole('button', { name: '创建工程' }).click();
   await addEmptyProgram();
-  await application.evaluate(({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows()[0];
-    if (!window) throw new Error('主窗口不存在');
-    window.setSize(1180, 640);
-  });
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1180, 720));
   await openSettingsDialog();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '外观与更新', exact: true }).click();
   await openSoftwareUpdate();
-  const dialog = page.getByRole('dialog', { name: '软件更新' });
-  await expect(dialog).toBeVisible();
-  await expect(page.getByRole('button', { name: '关闭软件更新' })).toBeVisible();
-  const layout = await page.evaluate(() => {
-    const overlay = document.querySelector<HTMLElement>('.update-overlay');
-    const card = document.querySelector<HTMLElement>('.update-center');
-    if (!overlay || !card) throw new Error('软件更新窗口结构不完整');
-    const cardBox = card.getBoundingClientRect();
-    const samplePoints = [0.15, 0.5, 0.85].map((ratio) => {
-      const topElement = document.elementFromPoint(cardBox.left + cardBox.width / 2, cardBox.top + cardBox.height * ratio);
-      return topElement?.closest('.update-center') === card;
-    });
-    return {
-      mountedAtDocumentRoot: overlay.parentElement === document.body,
-      dialogIsModal: overlay.getAttribute('aria-modal') === 'true',
-      cardTop: cardBox.top,
-      cardBottom: cardBox.bottom,
-      cardWidth: cardBox.width,
-      viewportHeight: window.innerHeight,
-      dialogOnTop: samplePoints.every(Boolean),
-      overlayCoversViewport: overlay.getBoundingClientRect().height === window.innerHeight,
-      nativeDialogOpen: overlay.tagName === 'DIALOG' && (overlay as HTMLDialogElement).open
-    };
+  const panel = page.getByRole('region', { name: '软件更新设置', exact: true });
+  await expect(panel.getByRole('heading', { name: '软件更新', exact: true })).toBeVisible();
+  const layout = await panel.locator('.update-center').evaluate(card => {
+    const rect = card.getBoundingClientRect();
+    return { horizontalOverflow: card.scrollWidth - card.clientWidth, top: rect.top, bottom: rect.bottom,
+      viewportHeight: innerHeight, onTop: [0.15, 0.5, 0.85].every(ratio => card.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height * ratio))) };
   });
-  expect(layout.mountedAtDocumentRoot).toBe(true);
-  expect(layout.dialogIsModal).toBe(true);
-  expect(layout.cardTop).toBeGreaterThanOrEqual(16);
-  expect(layout.cardBottom).toBeLessThanOrEqual(layout.viewportHeight - 16);
-  expect(layout.cardWidth).toBeGreaterThanOrEqual(440);
-  expect(layout.cardWidth).toBeLessThanOrEqual(520);
-  expect(layout.dialogOnTop).toBe(true);
-  expect(layout.overlayCoversViewport).toBe(true);
-  expect(layout.nativeDialogOpen).toBe(true);
-  await expect(page.locator('.app-shell')).toHaveJSProperty('inert', true);
-  await expect(page.getByRole('button', { name: '关闭软件更新' })).toBeFocused();
-  await page.screenshot({ path: testInfo.outputPath('software-update-project-overlay.png') });
-  await page.keyboard.press('Escape');
-  await expect(dialog).toHaveCount(0);
+  expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
+  expect(layout.top).toBeGreaterThanOrEqual(0);
+  expect(layout.bottom).toBeLessThanOrEqual(layout.viewportHeight);
+  expect(layout.onTop).toBe(true);
   await expect(page.locator('.app-shell')).toHaveJSProperty('inert', false);
-  await expect(page.getByRole('dialog', { name: '设置', exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('software-update-settings.png') });
   await closeSettingsDialog();
 });
 
@@ -2116,7 +2086,7 @@ test('取消重启安装后更新按钮会恢复可操作', async () => {
   await expect(install).toBeEnabled();
 });
 
-test('重复打开更新窗口并切换全部工作区不会产生 renderer 异常', async () => {
+test('重复切换更新设置与其他页面不会产生 renderer 异常', async () => {
   const rendererErrors: string[] = [];
   page.on('pageerror', (error) => rendererErrors.push(error.message));
   page.on('console', (message) => {
@@ -2138,9 +2108,9 @@ test('重复打开更新窗口并切换全部工作区不会产生 renderer 异�
   for (let iteration = 0; iteration < 5; iteration += 1) {
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '外观与更新', exact: true }).click();
     await openSoftwareUpdate();
-    await expect(page.getByRole('dialog', { name: '软件更新' })).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(page.getByRole('dialog', { name: '软件更新' })).toHaveCount(0);
+    await expect(page.getByRole('region', { name: '软件更新设置', exact: true })).toBeVisible();
+    await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '界面外观', exact: true }).click();
+    await expect(page.getByRole('region', { name: '软件更新设置', exact: true })).toBeHidden();
     await expect(page.locator('.app-shell')).toHaveJSProperty('inert', false);
   }
 
@@ -2164,7 +2134,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await expect(page.getByRole('button', { name: '播放主控 音乐、画面与灯光' })).toHaveCount(0);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
-  await page.getByLabel('播放主控模式').selectOption('internal');
+  await page.getByRole('radio', { name: /本软件播放/ }).check();
   await closeSettingsDialog();
   await page.getByRole('button', { name: '导入歌曲 / P1', exact: true }).click();
   await page.getByRole('button', { name: /本地音频/ }).click();
@@ -2174,6 +2144,8 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '音频与 MIDI', exact: true }).click();
+  await expect(page.getByLabel('正式播放引擎', { exact: true })).toBeHidden();
+  await page.getByText('高级音频 · 播放引擎', { exact: true }).click();
   await expect(page.locator('.player-connections select:visible')).toHaveCount(4);
   await expect(page.getByLabel('正式播放引擎', { exact: true })).toBeVisible();
   await expect(page.getByLabel('灯光 MIDI 输出')).toBeVisible();
@@ -2256,18 +2228,18 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await expect(mtcOffset).toHaveValue('01:02:03:17');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
-  await expect(page.getByLabel('播放主控模式')).toHaveValue('internal');
+  await expect(page.getByRole('radio', { name: /本软件播放/ })).toBeChecked();
   await closeSettingsDialog();
   await expect(page.locator('.p1-media-card')).toHaveCount(1);
   await openSettingsDialog();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放习惯', exact: true }).click();
-  await expect(page.getByRole('checkbox', { name: /同时播放视频素材原声/ })).not.toBeChecked();
+  await expect(page.getByRole('switch', { name: /同时播放视频素材原声/ })).not.toBeChecked();
   await page.getByRole('button', { name: /节目单/ }).first().click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放主控', exact: true }).click();
-  await page.getByLabel('播放主控模式').selectOption('p1');
+  await page.getByRole('radio', { name: /跟随 P1/ }).check();
   await closeSettingsDialog();
   await expect(page.getByRole('button', { name: '切换为本软件播放', exact: true })).toBeVisible();
 });
@@ -2440,21 +2412,21 @@ test('外观支持深浅两套皮肤、保存选择并实时跟随系统', async
   await addEmptyProgram();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '外观与更新', exact: true }).click();
-  await page.getByLabel('外观', { exact: true }).selectOption('light');
+  await page.getByRole('radio', { name: '浅色', exact: true }).check();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.emulateMedia({ colorScheme: 'dark' });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   const foreground = await page.locator('.main-nav button').nth(1).evaluate((element) => getComputedStyle(element).color);
   await page.screenshot({ path: testInfo.outputPath('appearance-light.png') });
-  await page.getByLabel('外观', { exact: true }).selectOption('dark');
+  await page.getByRole('radio', { name: '深色', exact: true }).check();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect.poll(() => page.locator('.main-nav button').nth(1).evaluate(element => getComputedStyle(element).color)).not.toBe(foreground);
   await page.reload();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '外观与更新', exact: true }).click();
-  await expect(page.getByLabel('外观', { exact: true })).toHaveValue('dark');
+  await expect(page.getByRole('radio', { name: '深色', exact: true })).toBeChecked();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  await page.getByLabel('外观', { exact: true }).selectOption('system');
+  await page.getByRole('radio', { name: '跟随系统', exact: true }).check();
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -2754,13 +2726,13 @@ test('独立素材场景同步、场景长度拖动与低功率切换', async ({
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '画面与同步', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '监看与性能', exact: true }).click();
-  await page.getByRole('combobox', { name: '运行模式' }).selectOption('low-power'); await closeSettingsDialog();
+  await page.getByRole('radio', { name: /低功耗模式/ }).check(); await closeSettingsDialog();
   await page.getByRole('button', { name: '编辑器', exact: true }).click();
   await expect(page.locator('.reference-stage')).toHaveCount(0);
   await expect(page.locator('video')).toHaveCount(0);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '画面与同步', exact: true }).click();
-  await page.getByRole('combobox', { name: '运行模式' }).selectOption('normal'); await closeSettingsDialog();
+  await page.getByRole('radio', { name: /普通模式/ }).check(); await closeSettingsDialog();
   await page.getByRole('button', { name: '编辑器', exact: true }).click();
   await expect(page.locator('.reference-stage')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('scene-duration-and-preview.png') });
@@ -3233,14 +3205,17 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await expect(page.getByLabel('MA2 登录密码')).toHaveValue('synthetic-e2e-password');
     await page.getByLabel('MA2 远程端口').fill(String(port)); await page.getByLabel('MA2 监视端口').fill(String(monitorPort));
+    await expect(page.getByLabel('MA2 登录密码')).toHaveValue('');
+    await page.getByLabel('MA2 登录密码').fill('synthetic-e2e-password');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('button', { name: '保存并连接', exact: true }).click();
-    await expect(page.locator('.ma2-device-status')).toHaveText('已连接');
+    await expect(page.locator('.ma2-device-status')).toHaveText('已登录 · 插件待验证');
     await page.getByRole('button', { name: '详细', exact: true }).click();
     await expect(page.getByRole('button', { name: 'MA2 网络：已连接', exact: true })).toBeVisible();
     expect(executions).toBe(0);
     expect(logins).toBe(1);
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
+    await page.getByText('控台 MIDI 地址与配置说明', { exact: true }).click();
     await page.getByLabel('MA2 MSC 设备号').fill('5'); await page.getByLabel('MA2 MSC 设备号').press('Tab');
     await expect.poll(() => page.evaluate(() => window.tbLink.loadIntegrationProfile())).toMatchObject({ lighting: { mscDeviceId: 5 } });
     await page.getByRole('button', { name: '检测版本兼容性', exact: true }).click();
@@ -3250,6 +3225,7 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
     const destination = testInfo.outputPath('plugin-export'); await mkdir(destination, { recursive: true });
     await application.evaluate(({ dialog }, directory) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [directory] }); }, destination);
     await page.getByLabel('MA2 连接方式').selectOption('local');
+    await page.getByText('控台插件与安装说明', { exact: true }).click();
     await page.getByRole('button', { name: '导出控台插件', exact: true }).click();
     await expect.poll(async () => (await readdir(destination)).length).toBe(1);
     const folder = (await readdir(destination))[0]!;
@@ -3272,11 +3248,11 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
     await expect.poll(() => logins).toBe(2); await navigate(); await openMa2ManualSettings();
     await expect(page.getByLabel('已保存 MA2 控台').locator('option')).toHaveCount(3);
     await expect(page.getByLabel('MA2 控台 IP')).toHaveValue('127.0.0.1'); await expect(page.getByLabel('MA2 登录密码')).toHaveValue('');
-    await expect(page.locator('.ma2-device-status')).toHaveText('已连接');
+    await expect(page.locator('.ma2-device-status')).toHaveText('已登录 · 插件待验证');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await expect(page.getByLabel('MA2 MSC 设备号')).toHaveValue('5');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-    await page.getByRole('button', { name: '断开', exact: true }).click();
+    await page.getByRole('button', { name: '断开 MA2', exact: true }).click();
     await expect(page.locator('.ma2-device-status')).toHaveText('未连接'); expect(logins).toBe(2);
   } finally {
     for (const socket of sockets) socket.destroy();
@@ -3289,21 +3265,24 @@ test('设备连接三种尺寸、跨页草稿与搜索目标隔离', async ({}, 
   await beginNewProject(); await page.getByLabel('工程名称').fill('设备页面验收'); await page.getByRole('button', { name: '创建工程' }).click(); await addEmptyProgram();
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   const menu = page.getByRole('navigation', { name: '设置子菜单' });
-  await menu.getByRole('button', { name: '播放', exact: true }).click(); await page.getByLabel('播放主控模式').selectOption('internal');
+  await menu.getByRole('button', { name: '播放', exact: true }).click(); await page.getByRole('radio', { name: /本软件播放/ }).check();
   await menu.getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('network');
   await openMa2ManualSettings();
   await page.getByLabel('MA2 控台 IP').fill('192.168.1.50'); await page.getByLabel('MA2 登录用户').fill('operator'); await page.getByLabel('MA2 登录密码').fill('draft-only');
   const section = page.getByRole('navigation', { name: '设置子子菜单' });
   await section.getByRole('button', { name: 'OBS Studio', exact: true }).click();
+  await page.getByText('手动连接', { exact: true }).click();
   await page.getByLabel('WebSocket 地址').fill('ws://127.0.0.1:4460'); await page.getByLabel('OBS 密码', { exact: true }).fill('obs-draft');
   await section.getByRole('button', { name: 'MA2 控台', exact: true }).click();
   await page.getByText('高级连接与插件维护', { exact: true }).click();
   await expect(page.getByRole('button', { name: '检测版本兼容性', exact: true })).toBeVisible();
   await page.getByLabel('MA2 远程端口').fill('30002');
+  await expect(page.getByLabel('MA2 登录密码')).toHaveValue('');
+  await page.getByLabel('MA2 登录密码').fill('new-target-draft');
   await menu.getByRole('button', { name: '播放', exact: true }).click(); await menu.getByRole('button', { name: '设备连接', exact: true }).click();
   await section.getByRole('button', { name: 'MA2 控台', exact: true }).click();
-  await expect(page.getByLabel('MA2 登录密码')).toHaveValue('draft-only');
+  await expect(page.getByLabel('MA2 登录密码')).toHaveValue('new-target-draft');
   await section.getByRole('button', { name: 'OBS Studio', exact: true }).click();
   await expect(page.getByLabel('OBS 密码', { exact: true })).toHaveValue('obs-draft');
   await expect(page.getByLabel('WebSocket 地址')).toHaveValue('ws://127.0.0.1:4460');
@@ -3314,7 +3293,7 @@ test('设备连接三种尺寸、跨页草稿与搜索目标隔离', async ({}, 
   for (const [width, height] of [[1920, 1080], [1440, 900], [1200, 800]] as const) {
     await application.evaluate(({ BrowserWindow }, size) => { BrowserWindow.getAllWindows()[0]?.setSize(size.width, size.height); }, { width, height });
     await page.locator('.connections-content').evaluate((element) => { element.scrollTop = 0; });
-    await expect.poll(() => page.locator('.device-detail:visible').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    await expect.poll(() => page.locator('.device-console:visible').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     for (const label of ['MA2 控台 IP', 'MA2 登录用户', 'MA2 登录密码']) {
       const field = (await page.getByLabel(label).boundingBox())!;
       const panel = (await page.getByLabel('MA2 设备面板').boundingBox())!;
@@ -3335,6 +3314,9 @@ test('设备连接三种尺寸、跨页草稿与搜索目标隔离', async ({}, 
   await page.getByRole('button', { name: '选择控台 192.168.1.60:30000', exact: true }).click();
   await expect(page.getByLabel('MA2 控台 IP')).toHaveValue('192.168.1.60'); await expect(page.getByLabel('MA2 登录密码')).toHaveValue('admin');
   await expect(page.getByLabel('MA2 登录用户')).toHaveValue('administrator');
+  await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '离开设置？' })).toBeVisible();
+  await page.getByRole('button', { name: '放弃未保存修改', exact: true }).click();
   await openLightingTools('节目同步');
   await expect(page.getByRole('dialog', { name: '节目同步' })).toContainText('节目 1');
   await expect(page.getByLabel('MA2 节目同步')).toContainText('请先在设备连接中保存并连接控台');
@@ -3421,7 +3403,7 @@ test('维护合并设备连接，外观和更新同页，移除诊断日志入�
   await page.screenshot({ path: testInfo.outputPath('appearance-update.png') });
   await expect(page.getByRole('button', { name: /诊断.*日志/ })).toHaveCount(0);
   await openSoftwareUpdate();
-  await expect(page.getByRole('dialog', { name: '软件更新', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '软件更新设置', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await menu.getByRole('button', { name: '设备连接', exact: true }).click();
   await section.getByRole('button', { name: 'MA2 控台', exact: true }).click();

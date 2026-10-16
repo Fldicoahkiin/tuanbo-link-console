@@ -60,6 +60,7 @@ test('错误激活码明确反馈，运行中禁用激活、联网验证与导�
   await expect(page.getByRole('alert')).toContainText('已绑定其他机器');
   await page.evaluate('window.renderLicense(true)');
   await expect(input).toBeDisabled();
+  await page.getByText('本机信息与授权文件', { exact: true }).click();
   for (const name of ['激活本机', '联网验证授权', '导入授权文件']) await expect(page.getByRole('button', { name })).toBeDisabled();
   await expect(page.getByRole('button', { name: '导出授权申请' })).toBeEnabled();
 });
@@ -212,6 +213,7 @@ async function configurePurchase(page: Page, mode: 'success' | 'lost' | 'failed-
 }
 
 test('未配置购买时明确提示，保留手工激活入口且不展示测试商品', async ({ page }) => {
+  await page.locator('.license-disclosure').filter({ has: page.getByText('购买授权与查询订单', { exact: true }) }).evaluate(element => { if (element instanceof HTMLDetailsElement) element.open = true; });
   await page.getByRole('button', { name: '查看可售授权' }).click();
   await expect(page.getByText('购买尚未开放，请联系发行方。已有订单仍可查询。')).toBeVisible();
   await expect(page.getByRole('button', { name: '创建购买订单' })).toHaveCount(0);
@@ -220,6 +222,7 @@ test('未配置购买时明确提示，保留手工激活入口且不展示测�
 
 test('确认服务器价格后建单，显式打开付款页和领取，不自动绑定企业席位', async ({ page }, info) => {
   await configurePurchase(page, 'success');
+  await page.locator('.license-disclosure').filter({ has: page.getByText('购买授权与查询订单', { exact: true }) }).evaluate(element => { if (element instanceof HTMLDetailsElement) element.open = true; });
   await page.getByRole('button', { name: '查看可售授权' }).click();
   await page.getByLabel('购买主体').selectOption('company');
   await page.getByLabel('授权客户名称').fill('浏览器测试企业');
@@ -249,6 +252,7 @@ test('确认服务器价格后建单，显式打开付款页和领取，不自�
 
 test('响应丢失后展示恢复入口并阻止重复建单，恢复后领取原订单', async ({ page }) => {
   await configurePurchase(page, 'lost');
+  await page.locator('.license-disclosure').filter({ has: page.getByText('购买授权与查询订单', { exact: true }) }).evaluate(element => { if (element instanceof HTMLDetailsElement) element.open = true; });
   await page.getByRole('button', { name: '查看可售授权' }).click();
   await page.getByLabel('授权客户名称').fill('测试购买人');
   await page.getByRole('checkbox', { name: '我已核对价格、机器数量与授权期限' }).check();
@@ -262,6 +266,7 @@ test('响应丢失后展示恢复入口并阻止重复建单，恢复后领取�
 
 test('安全存储失败不出现虚构订单或付款入口', async ({ page }) => {
   await configurePurchase(page, 'failed-storage');
+  await page.locator('.license-disclosure').filter({ has: page.getByText('购买授权与查询订单', { exact: true }) }).evaluate(element => { if (element instanceof HTMLDetailsElement) element.open = true; });
   await page.getByRole('button', { name: '查看可售授权' }).click();
   await page.getByLabel('授权客户名称').fill('测试购买人');
   await page.getByRole('checkbox', { name: '我已核对价格、机器数量与授权期限' }).check();

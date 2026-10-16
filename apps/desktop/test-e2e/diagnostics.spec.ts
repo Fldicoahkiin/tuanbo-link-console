@@ -24,7 +24,7 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
     const textPath = info.outputPath('运行日志.txt');
     await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath }); }, textPath);
     await logs.getByRole('button', { name: '导出日志', exact: true }).click();
-    await expect(logs.getByRole('status')).toContainText(textPath);
+    await expect(logs.getByRole('region', { name: '导出日志与诊断' }).getByRole('status')).toContainText(textPath);
     const text = await readFile(textPath, 'utf8');
     expect(text).toContain('异机灯光测试记录'); expect(text).not.toContain('must-not-export');
     await logs.getByText('附加问题说明与灯光数据（选填）', { exact: true }).click();

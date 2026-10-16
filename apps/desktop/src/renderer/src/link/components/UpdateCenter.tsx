@@ -5,13 +5,16 @@ import type { LinkUpdateStatus } from '@tb/core/link';
 import { CheckCircle2, CloudDownload, Download, LoaderCircle, RefreshCw, X } from 'lucide-react';
 
 type UpdateCenterProps = {
+  inline?: boolean;
+  runtimeActive?: boolean;
   notify: (message: string, tone?: 'info' | 'error') => void;
 };
 
-export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
+export function UpdateCenter({ notify, inline = false, runtimeActive = false }: UpdateCenterProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<LinkUpdateStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState('');
   const dialogRef = useRef<HTMLDialogElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -22,7 +25,7 @@ export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
         if (!cancelled) setStatus(next);
       })
       .catch((error: unknown) => {
-        if (!cancelled) notify(errorMessage(error), 'error');
+        if (!cancelled) { setFailure(errorMessage(error)); notify(errorMessage(error), 'error'); }
       });
     const unsubscribe = window.tbLink.onUpdateStatus((next) => {
       if (!cancelled) setStatus(next);
@@ -56,24 +59,24 @@ export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
   }, [open]);
 
   const run = async (operation: () => Promise<LinkUpdateStatus>, success?: string): Promise<void> => {
-    setBusy(true);
+    setBusy(true); setFailure('');
     try {
       const next = await operation();
       setStatus(next);
       if (success) notify(success);
     } catch (error) {
-      notify(errorMessage(error), 'error');
+      setFailure(errorMessage(error)); notify(errorMessage(error), 'error');
     } finally {
       setBusy(false);
     }
   };
 
   const install = async (): Promise<void> => {
-    setBusy(true);
+    setBusy(true); setFailure('');
     try {
       await window.tbLink.installUpdate();
     } catch (error) {
-      notify(errorMessage(error), 'error');
+      setFailure(errorMessage(error)); notify(errorMessage(error), 'error');
     } finally {
       setBusy(false);
     }
@@ -82,6 +85,33 @@ export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
   const phase = status?.phase ?? 'idle';
   const working = busy || phase === 'checking' || phase === 'downloading';
   const icon = phase === 'downloaded' || phase === 'upToDate' ? <CheckCircle2 /> : working ? <LoaderCircle className="spin" /> : <CloudDownload />;
+
+  const content = <>
+        <div className={`update-summary phase-${phase}`}>
+          <div className="update-summary-icon">{icon}</div>
+          <div>
+            <strong>{status?.message ?? '正在读取更新状态…'}</strong>
+            <span>当前版本 {status?.currentVersion ?? '—'}{status?.availableVersion && status.availableVersion !== status.currentVersion ? ` · 可用版本 ${status.availableVersion}` : ''}</span>
+          </div>
+        </div>
+
+        {phase === 'downloading' ? <div className="update-progress" role="progressbar" aria-label="更新下载进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={status?.progressPercent ?? 0}>
+          <div><span style={{ width: `${status?.progressPercent ?? 0}%` }} /></div>
+          <small>{formatProgress(status)}</small>
+        </div> : null}
+
+        <p className="update-dev-note">{phase === 'disabled' ? '开发模式不会执行下载或安装，请使用 Windows 安装版验证更新。' : '更新由发行方提供。下载后需确认重启安装，请先停止联动并保存工程。'}</p>
+
+        {failure ? <p className="device-error" role="alert">{failure} 请检查网络后重新操作。</p> : null}
+        {runtimeActive ? <p className="settings-note">停止联动并保存工程后，才能重启安装。</p> : null}
+        <div className="modal-actions update-actions">
+          {!inline ? <Button className="secondary-button" onClick={() => setOpen(false)}>关闭</Button> : null}
+          {status?.feedConfigured && phase !== 'downloaded' && phase !== 'available' && phase !== 'disabled' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</Button> : null}
+          {phase === 'available' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</Button> : null}
+          {phase === 'downloaded' ? <Button className="primary-button" disabled={busy || runtimeActive} onClick={() => void install()}><CloudDownload />重启并安装</Button> : null}
+        </div>
+  </>;
+  if (inline) return <div className="update-center">{content}{!status && failure ? <Button onClick={() => void run(() => window.tbLink.getUpdateStatus())}>重新读取更新状态</Button> : null}</div>;
 
   return <>
     <div className="update-installed-version" aria-live="polite">
@@ -113,27 +143,7 @@ export function UpdateCenter({ notify }: UpdateCenterProps): JSX.Element {
           <Button ref={closeButtonRef} className="icon-button" aria-label="关闭软件更新" onClick={() => setOpen(false)}><X /></Button>
         </header>
 
-        <div className={`update-summary phase-${phase}`}>
-          <div className="update-summary-icon">{icon}</div>
-          <div>
-            <strong>{status?.message ?? '正在读取更新状态…'}</strong>
-            <span>当前版本 {status?.currentVersion ?? '—'}{status?.availableVersion && status.availableVersion !== status.currentVersion ? ` · 可用版本 ${status.availableVersion}` : ''}</span>
-          </div>
-        </div>
-
-        {phase === 'downloading' ? <div className="update-progress" aria-label="更新下载进度">
-          <div><span style={{ width: `${status?.progressPercent ?? 0}%` }} /></div>
-          <small>{formatProgress(status)}</small>
-        </div> : null}
-
-        <p className="update-dev-note">{phase === 'disabled' ? '开发模式不会执行下载或安装，请使用 Windows 安装版验证更新。' : '更新由发行方提供。下载后需确认重启安装，请先停止联动并保存工程。'}</p>
-
-        <div className="modal-actions update-actions">
-          <Button className="secondary-button" onClick={() => setOpen(false)}>关闭</Button>
-          {status?.feedConfigured && phase !== 'downloaded' && phase !== 'available' && phase !== 'disabled' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</Button> : null}
-          {phase === 'available' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</Button> : null}
-          {phase === 'downloaded' ? <Button className="primary-button" disabled={busy} onClick={() => void install()}><CloudDownload />重启并安装</Button> : null}
-        </div>
+        {content}
       </section>
     </dialog>, document.body) : null}
   </>;

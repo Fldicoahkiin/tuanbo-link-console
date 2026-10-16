@@ -117,6 +117,7 @@ import { ExternalProcessManager, WindowsProcessTools, type ExternalApplicationId
 import { LinkProjectService } from './link/link-project-service';
 import { MediaMetadataProbe } from './link/media-metadata-probe';
 import { MediaPreviewService } from './link/media-preview-service';
+import { obsMediaCachePaths } from './link/obs-media-paths';
 import { WaveformService } from './link/waveform-service';
 import { AudioEditService } from './link/audio-edit-service';
 import { MusicAnalysisService } from './link/music-analysis-service';
@@ -1243,11 +1244,9 @@ function registerIpc(
       const { asset } = target;
       const absolutePath = projectService.resolveMediaAsset(path, asset.relativePath);
       if (!(await stat(absolutePath)).isFile()) throw new Error(`素材文件不可读：${asset.name}`);
-      const cachePath = join(dirname(path), 'cache', 'obs-seek-jpeg2000', `${asset.sha256}.mkv`);
       const playbackPath = preciseSeeking && asset.kind === 'video'
         ? await mediaPreviewService.ensureObsSeekVideo(path, asset.relativePath, asset.sha256) : absolutePath;
-      await obs.mediaScenes.prepare(project.projectId, asset, absolutePath, playbackPath, [cachePath,
-        ...['.rgba.mkv', '.source-pixels.mkv'].map(extension => join(dirname(path), 'cache', 'obs-seek-jpeg2000', `${asset.sha256}${extension}`))], target);
+      await obs.mediaScenes.prepare(project.projectId, asset, absolutePath, playbackPath, obsMediaCachePaths(path, asset.sha256), target);
     }
   });
   handle('link:obs-source-create', (_event, value: unknown) => obs.sources.create(obsSourceCreateSchema.parse(value)));

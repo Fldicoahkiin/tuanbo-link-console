@@ -8,10 +8,10 @@ export const SETTINGS_GROUPS = [
 ] as const;
 export const SETTINGS_SECTIONS = [
   { id: 'songs', group: 'devices', name: '歌曲导入', detail: '导入 P1 工程或本地歌曲，建立节目单', icon: ListMusic },
-  { id: 'obs', group: 'devices', name: 'OBS Studio', detail: '画面与声音输出', icon: Monitor },
-  { id: 'ma2', group: 'devices', name: 'MA2 控台', detail: '灯光与控台通信', icon: SlidersHorizontal },
-  { id: 'audio', group: 'devices', name: '音频与 MIDI', detail: '声音线路与时间码', icon: AudioLines },
-  { id: 'virtual', group: 'devices', name: '虚拟 MIDI', detail: 'loopMIDI 通道管理', icon: Cable },
+  { id: 'obs', group: 'devices', name: 'OBS Studio', detail: '连接 OBS，控制节目画面与声音', icon: Monitor },
+  { id: 'ma2', group: 'devices', name: 'MA2 控台', detail: '连接灯光控台，读取和同步节目 Cue', icon: SlidersHorizontal },
+  { id: 'audio', group: 'devices', name: '音频与 MIDI', detail: '选择声音从哪里播放、时间码发送到哪里', icon: AudioLines },
+  { id: 'virtual', group: 'devices', name: '虚拟 MIDI', detail: '让同一台电脑上的软件传递 MIDI 信号', icon: Cable },
   { id: 'maintenance', group: 'devices', name: '程序维护', detail: '修复 OBS 预览、设置程序启动位置', icon: Wrench },
   { id: 'logs', group: 'devices', name: '运行日志', detail: '查看记录与导出现场诊断', icon: FileText },
   { id: 'source', group: 'playback', name: '播放主控', detail: '选择内部主控或跟随 P1', icon: Play },
@@ -30,10 +30,17 @@ export type SettingsFocus = 'audio-output' | 'lighting-mtc' | 'lighting-actions'
 export type SettingsLocation = { category: SettingsCategory; focus?: SettingsFocus };
 export type DeviceSettingsCategory = 'songs' | 'obs' | 'ma2' | 'audio' | 'virtual' | 'maintenance' | 'logs';
 export const DEVICE_WORKFLOW_GROUPS = [
-  { name: '01 · 准备歌曲', entries: ['songs'] },
-  { name: '02 · 声音、画面与灯光', entries: ['audio', 'obs', 'ma2'] },
+  { name: '歌曲准备', entries: ['songs'] },
+  { name: '设备连接', entries: ['audio', 'obs', 'ma2'] },
   { name: '辅助工具', entries: ['virtual', 'maintenance', 'logs'] }
 ] as const;
+
+export function settingsScope(category: SettingsCategory): string {
+  if (category === 'source' || category === 'timecode' || category === 'songs') return '工程设置';
+  if (category === 'ma2' || category === 'preferences') return '含两类设置';
+  if (category === 'workflow') return '使用说明';
+  return '本机设置';
+}
 export function isDeviceSettingsCategory(category: SettingsCategory): category is DeviceSettingsCategory {
   return SETTINGS_SECTIONS.find((section) => section.id === category)?.group === 'devices';
 }

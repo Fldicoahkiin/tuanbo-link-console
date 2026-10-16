@@ -20,7 +20,7 @@ test('全新配置与空 PATH：桌面程序能通过真实 IPC 检测本机集�
     await expect(page.getByRole('button', { name: '打开工程', exact: true })).toBeVisible();
     expect(await app.evaluate(() => Object.entries(process.env).filter(([key, value]) => key.toLowerCase() === 'path' && Boolean(value)))).toEqual([]);
     const integrations = await page.evaluate(() => window.tbLink.detectLocalIntegrations());
-    expect(Object.keys(integrations.applications).sort()).toEqual(['obs', 'p1']);
+    expect(Object.keys(integrations.applications).sort()).toEqual(['ma2', 'ma3d', 'obs', 'p1']);
     const midi = await page.evaluate(() => window.tbLink.loopMidi('detect'));
     expect(['missing', 'installed', 'running']).toContain(midi.state);
     await page.screenshot({ path: info.outputPath('windows-empty-path.png') });

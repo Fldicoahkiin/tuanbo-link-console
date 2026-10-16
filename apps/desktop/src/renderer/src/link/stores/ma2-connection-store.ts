@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { useIntegrationStore } from './integration-store';
+import { ma2LocalDirectoryMismatch } from '../view-models/ma2-local-directory';
 import { useConnectionCheckStore } from './connection-check-store';
 import { ma2DiscoverySchema, ma2NetworkStatusSchema, type Ma2Discovery, type Ma2NetworkStatus } from '@tb/schema';
 
@@ -54,6 +56,8 @@ export async function connectLocalMa2(directory: string): Promise<void> {
   useLocalMa2Store.setState({ directory, status: 'connecting', error: null });
   try {
     if (!directory.trim()) throw new Error('请在设备维护中填写本机 onPC 数据目录');
+    const mismatch = ma2LocalDirectoryMismatch(directory.trim(), useIntegrationStore.getState().processes.ma2);
+    if (mismatch) throw new Error(mismatch);
     await window.tbLink.exchangeMa2({ dataDirectory: directory.trim(), target: 1, operation: 'PING', expected: '', desired: '' });
     useLocalMa2Store.setState({ status: 'ready' });
     if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('bridge', 'ready', '本机控台工程通信已响应');

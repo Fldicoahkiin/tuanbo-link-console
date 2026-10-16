@@ -7,17 +7,27 @@ import { reportCoordinatorError } from './runtime-action-log';
 
 type PreviewDesktop = Pick<LinkDesktopApi, 'prepareObsMediaScenes' | 'executeObsAction' | 'seekManagedMedia'>;
 
-export function enqueueEditorPreview(pending: Promise<void>, project: LinkProject, projectPath: string | null,
-  itemId: string, positionMs: number, preciseSeeking: boolean, current: () => boolean) {
-  const operation = pending.then(async () => {
-    if (!current()) return;
-    if (!projectPath) throw new Error('请先保存工程，再定位 OBS 画面');
-    if (useIntegrationStore.getState().obs.status !== 'connected') throw new Error('OBS 未连接，无法跟随时间线定位画面');
-    await previewEditorScene(project, projectPath, itemId, positionMs, preciseSeeking, linkDesktopViewModel, current);
-  });
-  const tail = operation.catch((error: unknown) => reportCoordinatorError(
-    `编辑画面定位失败：${error instanceof Error ? error.message : String(error)}`, message => console.error(message)));
-  return { operation, tail };
+export class EditorScenePreview {
+  private failed = false;
+  private generation = 0;
+  reset(): void { this.failed = false; this.generation += 1; }
+  enqueue(pending: Promise<void>, project: LinkProject, projectPath: string | null,
+    itemId: string, positionMs: number, preciseSeeking: boolean, isCurrent: () => boolean) {
+    const generation = this.generation;
+    const current = () => generation === this.generation && !this.failed && isCurrent();
+    const operation = pending.then(async () => {
+      if (!current()) return;
+      if (!projectPath) throw new Error('请先保存工程，再定位 OBS 画面');
+      if (useIntegrationStore.getState().obs.status !== 'connected') throw new Error('OBS 未连接，无法跟随时间线定位画面');
+      await previewEditorScene(project, projectPath, itemId, positionMs, preciseSeeking, linkDesktopViewModel, current);
+    }).catch((error: unknown) => {
+      if (generation === this.generation) this.failed = true;
+      throw new Error(`${error instanceof Error ? error.message : String(error)}。已停止后续定位请求；处理后点击停止，再重新定位。`, { cause: error });
+    });
+    const tail = operation.catch((error: unknown) => reportCoordinatorError(
+      `编辑画面定位失败：${error instanceof Error ? error.message : String(error)}`, message => console.error(message)));
+    return { operation, tail };
+  }
 }
 
 /** Explicit stopped-cursor preview: OBS renders the frame; no audio clock or Cue session is armed. */

@@ -68,6 +68,7 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     const section = page.getByRole('region', { name: 'MA2 现场节目导入' });
+    await section.getByText('从 P1 工程导入歌曲', { exact: true }).click();
     await section.getByLabel('仅导入 P1 音乐').click();
     await section.getByRole('button', { name: '选择 .hia 文件', exact: true }).click();
     await expect(section.getByRole('button', { name: '读取控台灯光到现有歌曲' })).toBeEnabled({ timeout: 90000 });
@@ -112,9 +113,6 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     throw error;
   } finally {
     if (!page.isClosed()) {
-      await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
-      await page.getByRole('button', { name: '停止播放', exact: true }).click();
-      await expect(page.getByRole('region', { name: '节目播放控制' })).toHaveClass(/status-stopped/);
       await page.evaluate(() => window.tbLink.setDocumentDirty(false));
     }
     if (application.process().exitCode === null) await application.close();

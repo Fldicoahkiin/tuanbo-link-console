@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { AudioWaveform, MonitorUp, type LucideIcon } from 'lucide-react';
 import { type LinkObsInventory } from '@tb/core/link';
 import type { LinkMidiAdapter } from '../../registry/link-midi-adapter';
@@ -9,8 +9,10 @@ import { ShortcutSettings } from './ShortcutSettings';
 import { PlaybackPreferences } from './PlaybackPreferences';
 import { ProjectSettings } from './ProjectSettings';
 import { PowerModeSettings } from './PowerModeSettings';
-import { SETTINGS_GROUPS, SETTINGS_SECTIONS, isDeviceSettingsCategory, type SettingsCategory } from './settings-navigation';
+import { settingsScope, SETTINGS_SECTIONS, isDeviceSettingsCategory, type SettingsCategory } from './settings-navigation';
 import { useDocumentStore } from '../stores/document-store';
+import { SettingsPageHeader, SettingsFeedback } from './SettingsControls';
+import { Button } from './Button';
 import { DeviceConnectionsPage } from './DeviceConnectionsPage';
 
 type Notify = (message: string, tone?: 'info' | 'error') => void;
@@ -38,8 +40,11 @@ function OverviewDevice({ icon: Icon, kind, name, state, note }: {
   return <article className="integration-overview-device"><div className={`program-icon ${kind}`}><Icon /></div><div><strong>{name}</strong><span>{note}</span></div><span className={`status-pill ${ok ? 'ok' : bad ? 'error' : 'pending'}`}>{statusLabel(state)}</span></article>;
 }
 
-export function IntegrationSettingsDialog({ category, busy, runtimeActive, securityAvailable, nestedDialogOpen, midiPorts, inventory, notify, onRefresh, onRefreshMidi, onSave, onClose, onBusy, maintenance, songTools, children }: {
+export function IntegrationSettingsDialog({ category, busy, runtimeActive, securityAvailable, nestedDialogOpen, midiPorts, inventory, notify, onRefresh, onRefreshMidi, onSave, onClose, onBusy, onNavigate, onCreate, onOpen, maintenance, songTools, children }: {
   category: SettingsCategory;
+  onNavigate: (category: SettingsCategory) => void;
+  onCreate: () => void;
+  onOpen: () => void;
   busy: boolean;
   runtimeActive: boolean;
   securityAvailable: boolean;
@@ -59,30 +64,42 @@ export function IntegrationSettingsDialog({ category, busy, runtimeActive, secur
 }): JSX.Element {
   useSettingsEscape(nestedDialogOpen, onClose);
   const internal = useDocumentStore((state) => !state.project || state.project.playbackSource === 'internal');
-  const current = SETTINGS_SECTIONS.find((entry) => entry.id === category)!;
   const deviceCategory = isDeviceSettingsCategory(category);
-  const group = SETTINGS_GROUPS.find((entry) => entry.id === current.group)!;
-  return <>
-    <div hidden={!deviceCategory}><DeviceConnectionsPage selected={deviceCategory ? category : 'obs'} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} internal={internal} midiPorts={midiPorts} inventory={inventory} notify={notify} onRefresh={onRefresh} onRefreshMidi={onRefreshMidi} onSave={onSave} onBusy={onBusy} maintenance={maintenance} songTools={songTools}>{children}</DeviceConnectionsPage></div>
-    {!deviceCategory ? <section data-settings-section={category} className="device-console settings-content-page" aria-label={`${current.name}设置`}>
-    <header className="device-console-header"><div><span className="device-eyebrow">设置</span><h2>{group.name}</h2><p>配置保存在本机；工程设置随当前工程保存。</p></div></header>
-    <div className="device-detail"><header className="device-detail-header"><div><h3>{current.name}</h3><p>{current.detail}</p></div></header><div className="device-panel">
-      {category === 'performance' ? <PowerModeSettings notify={notify} /> : null}
-      {category === 'source' ? <ProjectSettings section="playback" disabled={runtimeActive || busy} notify={notify} /> : null}
-      {category === 'preferences' ? internal ? <PlaybackPreferences disabled={runtimeActive || busy} notify={notify} /> : <p className="settings-note">当前跟随 P1 播放，播放操作在 P1 中完成。切换到本软件播放后可配置播放习惯。</p> : null}
-      {category === 'theme' ? <AppearanceControl /> : null}
-      {category === 'shortcuts' ? <ShortcutSettings /> : null}
-      {category === 'updates' ? <UpdateCenter notify={notify} /> : null}
-      {category === 'license' ? <LicenseSettings runtimeActive={runtimeActive} /> : null}
-      {category === 'seeking' || category === 'timecode' || category === 'workflow' ? <ProjectSettings section={category} disabled={runtimeActive || busy} notify={notify} /> : null}
-    </div></div>
-  </section> : null}</>;
+  const visited = useRef(new Set<SettingsCategory>());
+  visited.current.add(category);
+  const root = useRef<HTMLDivElement>(null);
+  const positions = useRef(new Map<SettingsCategory, number>());
+  useLayoutEffect(() => {
+    const scroll = root.current?.closest('.content-scroll');
+    if (!scroll) return;
+    const savedPositions = positions.current;
+    scroll.scrollTop = savedPositions.get(category) ?? 0;
+    return () => { savedPositions.set(category, scroll.scrollTop); };
+  }, [category]);
+  return <div ref={root} className="settings-session">
+    <div hidden={!deviceCategory}><DeviceConnectionsPage selected={deviceCategory ? category : 'obs'} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} internal={internal} midiPorts={midiPorts} inventory={inventory} notify={notify} onRefresh={onRefresh} onRefreshMidi={onRefreshMidi} onSave={onSave} onBusy={onBusy} maintenance={maintenance} songTools={songTools} onNavigate={onNavigate}>{children}</DeviceConnectionsPage></div>
+    {SETTINGS_SECTIONS.filter(entry => !isDeviceSettingsCategory(entry.id) && visited.current.has(entry.id)).map(current => <section key={current.id} hidden={category !== current.id} data-settings-section={current.id} className="device-console settings-content-page" aria-label={`${current.name}设置`}>
+      <SettingsPageHeader title={current.name} description={current.detail} scope={settingsScope(current.id)} />
+      <div className="device-panel">
+        {current.id === 'performance' ? <PowerModeSettings notify={notify} /> : null}
+        {current.id === 'source' ? <ProjectSettings section="playback" disabled={runtimeActive || busy} notify={notify} onNavigate={onNavigate} onCreate={onCreate} onOpen={onOpen} /> : null}
+        {current.id === 'preferences' ? internal ? <PlaybackPreferences disabled={runtimeActive || busy} notify={notify} /> : <SettingsFeedback>当前跟随 P1 播放，请在 P1 中操作。<Button className="secondary-button" onClick={() => onNavigate('source')}>打开播放主控设置</Button></SettingsFeedback> : null}
+        {current.id === 'theme' ? <AppearanceControl /> : null}
+        {current.id === 'shortcuts' ? <ShortcutSettings /> : null}
+        {current.id === 'updates' ? <UpdateCenter notify={notify} inline runtimeActive={runtimeActive} /> : null}
+        {current.id === 'license' ? <LicenseSettings runtimeActive={runtimeActive} /> : null}
+        {current.id === 'seeking' || current.id === 'timecode' || current.id === 'workflow' ? <ProjectSettings section={current.id} disabled={runtimeActive || busy} notify={notify} onNavigate={onNavigate} onCreate={onCreate} onOpen={onOpen} /> : null}
+      </div>
+    </section>)}
+  </div>;
+
 }
 
 function useSettingsEscape(nestedDialogOpen: boolean, onClose: () => void): void {
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent): void => {
-      const nestedOverlay = document.querySelector('.update-overlay[open], .device-maintenance-backdrop, .diagnostics-log-backdrop');
+      const nestedOverlay = document.querySelector('dialog[open], .device-maintenance-backdrop, .diagnostics-log-backdrop');
+      if (event.target instanceof HTMLSelectElement) return;
       if (event.key === 'Escape' && !event.defaultPrevented && !nestedDialogOpen && !nestedOverlay) onClose();
     };
     window.addEventListener('keydown', closeOnEscape);

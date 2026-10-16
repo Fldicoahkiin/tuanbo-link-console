@@ -49,8 +49,9 @@ test('MA2 设置分组及大量搜索结果保持紧凑', async ({}, info) => {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1180, 720));
     expect(await results.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.getByLabel('MA2 登录用户', { exact: true }).fill('operator');
-    await page.getByRole('button', { name: '使用默认账号', exact: true }).click();
     await page.getByLabel('MA2 控台 IP', { exact: true }).fill('10.39.12.3');
+    await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('');
+    await page.getByRole('button', { name: '使用默认账号', exact: true }).click();
     await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('admin');
     await app.evaluate(({ ipcMain }) => {
       const settings = { host: '10.39.12.3', port: 30000, monitorPort: 30001, username: 'administrator', autoConnect: false };

@@ -47,6 +47,7 @@ test('统一控件连续输入、组合输入、弹窗提交与焦点恢复', as
     await page.keyboard.press('Escape');
     await expect(create).toBeFocused();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByText('手动连接', { exact: true }).click();
     const address = page.getByLabel('WebSocket 地址', { exact: true });
     await address.fill('');
     await address.pressSequentially('ws://127.0.0.1:4455', { delay: 20 });
@@ -54,5 +55,8 @@ test('统一控件连续输入、组合输入、弹窗提交与焦点恢复', as
     await expect(address).toBeFocused();
     await page.screenshot({ path: info.outputPath('focused-settings-input.png') });
     expect(errors).toEqual([]);
-  } finally { await app.close(); }
+  } finally {
+    await (await app.firstWindow()).evaluate(() => window.tbLink.setDocumentDirty(false));
+    await app.close();
+  }
 });

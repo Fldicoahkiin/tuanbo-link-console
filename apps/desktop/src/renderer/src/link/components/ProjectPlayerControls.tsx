@@ -127,7 +127,7 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
     } catch (error) { setError(String(error)); notify(String(error), 'error'); } finally { setSaving(false); onBusy(false); }
   };
   return <div className="player-connections panel"><h3 className="device-form-title">音频输出</h3>
-    <label><span>播放引擎</span><select aria-label="正式播放引擎" disabled={disabled || saving} value={engine} onChange={event => void chooseEngine(event.currentTarget.value === 'native' ? 'native' : 'browser')}><option value="browser">浏览器音频（对照）</option><option value="native">Windows 原生音频（验收中）</option></select></label>
+
     <label><span>音频输出线路</span><select aria-label="音乐监听设备" disabled={disabled || saving} value={chosenOutput} onChange={(event) => void save(port, event.currentTarget.value)}><option value="default">Windows 默认播放设备</option>{chosenOutput !== 'default' && !audioDevices.some(device => device.deviceId === chosenOutput) ? <option value={chosenOutput}>上次选择的输出设备（当前列表不可见）</option> : null}{audioDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || device.deviceId}</option>)}</select>{savedField === 'audio' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
     <label><span>采样率</span><select aria-label="音频采样率" disabled={disabled || saving} value={profile?.internalPlayer?.audioSampleRate ?? 48000} onChange={(event) => void save(port, chosenOutput, inputName, profile?.internalPlayer?.doubleClickPlayback ?? false, event.currentTarget.value === '44100' ? 44100 : 48000)}><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select>{savedField === 'rate' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
 <h3 className="device-form-title">MIDI 时间码</h3>
@@ -136,8 +136,9 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
     <p className="settings-note">替代 P1 播放时，请先完全退出 P1，避免占用同一 MIDI 接口，再刷新端口。</p>
     {inventory.windowsOnly.length ? <p className="settings-note">标注“Windows 原生”的接口可直接选择，将使用 Windows 原生音频与 MIDI 播放。选择后点击“一键连接”检查接口。</p> : null}
     {nativeError ? <p className="device-error" role="status">Windows 设备检测失败：{nativeError}</p> : null}
+    <details className="settings-disclosure"><summary>高级音频 · 播放引擎</summary>    <label><span>播放引擎</span><select aria-label="正式播放引擎" disabled={disabled || saving} value={engine} onChange={event => void chooseEngine(event.currentTarget.value === 'native' ? 'native' : 'browser')}><option value="browser">浏览器音频（对照）</option><option value="native">Windows 原生音频（验收中）</option></select></label></details>
     <details className="settings-disclosure"><summary>远程控制与灯光动作端口</summary><div className="player-connections">
-    <label><span>远程播放输入</span><select aria-label="播放控制 MIDI 输入" disabled={disabled || saving} value={inputName} onChange={(event) => void save(port, chosenOutput, event.currentTarget.value)}><option value="">关闭远程播放控制</option>{[...new Set([...inputs, ...(inputName ? [inputName] : [])])].map((name) => <option key={name}>{name}</option>)}</select>{savedField === 'remote' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
+    <label><span>远程播放输入</span><select aria-label="播放控制 MIDI 输入" disabled={disabled || saving} value={inputName} onChange={(event) => void save(port, chosenOutput, event.currentTarget.value)}><option value="">关闭远程播放控制</option>{[...new Set([...inputs, ...(inputName ? [inputName] : [])])].map((name) => <option key={name} value={name}>{name}{!inputs.includes(name) ? '（当前不可用）' : ''}</option>)}</select>{savedField === 'remote' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
     {children}</div></details>
     {error ? <p className="device-error" role="alert">{error}</p> : null}</div>;
 }

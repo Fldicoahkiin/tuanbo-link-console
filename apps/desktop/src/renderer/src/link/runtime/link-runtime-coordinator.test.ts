@@ -147,6 +147,22 @@ describe('LinkRuntimeCoordinator', () => {
       expect(mocks.executeObsAction).not.toHaveBeenCalled();
     } finally { coordinator.dispose(); }
   });
+  it('定位失败后冻结后续拖动请求，显式停止后才能重新定位', async () => {
+    mocks.executeObsAction.mockClear();
+    mocks.executeObsAction.mockRejectedValueOnce(new Error('OBS 来源冲突')).mockResolvedValue();
+    const project = parseLinkProject({ ...createEmptyLinkProject('错误冻结'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      rundown: [{ id: 'song', title: '节目', cues: [{ id: 'camera', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 2, frames: 0 },
+        actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: 'Camera' }] }] }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:\\show\\show.tblink');
+    try {
+      await expect(coordinator.previewEditor('song', 3000, false)).rejects.toThrow('OBS 来源冲突');
+      for (let position = 3100; position < 4000; position += 100) await coordinator.previewEditor('song', position, false);
+      expect(mocks.executeObsAction).toHaveBeenCalledOnce();
+      coordinator.cancelEditorPreview();
+      await coordinator.previewEditor('song', 4000, false);
+      expect(mocks.executeObsAction).toHaveBeenCalledTimes(2);
+    } finally { coordinator.dispose(); }
+  });
   it('P1 跟随驱动准备和正式 Cue，暂停跳过旧点、断流冻结并取消发送', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     const playMa2Cue = vi.fn<(_request: Ma2PlaybackRequest) => Promise<void>>().mockResolvedValue();

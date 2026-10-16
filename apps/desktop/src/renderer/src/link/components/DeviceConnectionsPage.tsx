@@ -1,6 +1,6 @@
 import { Button } from './Button';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { LinkObsInventory } from '@tb/core/link';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -11,8 +11,9 @@ import { LoopMidiSettings } from './LoopMidiSettings';
 import { IntegrationFooter } from './IntegrationOverview';
 import { LogsWorkspace } from './LogsWorkspace';
 import { SongImportSettings } from './SongImportSettings';
+import { SettingsPageHeader, SettingsFeedback, SettingsDisclosure } from './SettingsControls';
 
-import { SETTINGS_SECTIONS, type DeviceSettingsCategory } from './settings-navigation';
+import { SETTINGS_SECTIONS, settingsScope, type DeviceSettingsCategory } from './settings-navigation';
 
 type Props = {
   selected: DeviceSettingsCategory;
@@ -21,14 +22,16 @@ type Props = {
   notify: (message: string, tone?: 'info' | 'error') => void;
   onRefresh: () => void; onRefreshMidi: () => Promise<void>; onSave: () => void; onBusy: (busy: boolean) => void;
   children: ReactNode; maintenance: ReactNode; songTools: ReactNode;
+  onNavigate: (category: DeviceSettingsCategory) => void;
 };
 
 export function DeviceConnectionsPage(props: Props): JSX.Element {
   const method = useMa2ModeStore((state) => state.method);
   const selected = props.selected;
+  const logsVisited = useRef(false);
+  if (selected === 'logs') logsVisited.current = true;
   const [maintenanceHost, setMaintenanceHost] = useState<HTMLDivElement | null>(null);
   const [refreshingMidi, setRefreshingMidi] = useState(false);
-  const obs = useIntegrationStore((state) => state.obs);
   const disabled = props.busy || props.runtimeActive;
   const current = SETTINGS_SECTIONS.find((device) => device.id === selected)!;
   const refreshMidi = async (): Promise<void> => {
@@ -41,21 +44,21 @@ export function DeviceConnectionsPage(props: Props): JSX.Element {
   const openMa2Maintenance = (): void => {
     const details = maintenanceHost?.closest('details');
     if (details) details.open = true;
-    maintenanceHost?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    maintenanceHost?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
   };
-  if (selected === 'logs') return <section className="device-console settings-content-page" aria-label="运行日志设置"><LogsWorkspace notify={props.notify} /></section>;
   return <section className="device-console" data-device-category={selected} aria-label="设备连接工作区">
-    <header className="device-console-header"><h2>设备连接</h2></header>
-    {props.runtimeActive ? <p className="device-console-notice" role="status">演出运行中，连接参数已锁定。停止播放后可修改。</p> : null}
+    <SettingsPageHeader title={current.name} description={current.detail} scope={settingsScope(selected)} />
+    {props.runtimeActive && selected !== 'logs' ? <SettingsFeedback tone="warning">演出运行中，连接参数已锁定。停止播放后可修改。</SettingsFeedback> : null}
+    {!props.securityAvailable && (selected === 'obs' || selected === 'maintenance') ? <SettingsFeedback tone="warning">Windows 安全存储不可用，OBS 凭证保存与连接暂不可用。其他设置仍可查看和修改。</SettingsFeedback> : null}
     <div className="device-console-layout">
 
       <div className="device-detail">
-        <header className="device-detail-header"><div><h3>{current.name}</h3><p>{current.detail}</p></div>{selected === 'obs' ? <span className={`device-badge ${obs.status === 'connected' ? 'ready' : 'pending'}`}>{obs.status === 'connected' ? '已连接' : obs.status === 'error' ? '连接异常' : '未连接'}</span> : null}</header>
+        <div data-settings-section="logs" hidden={selected !== 'logs'} className="device-panel" role="region" aria-label="运行日志设置">{logsVisited.current ? <LogsWorkspace notify={props.notify} settings /> : null}</div>
         <div data-settings-section="songs" hidden={selected !== 'songs'} className="device-panel"><SongImportSettings disabled={disabled} notify={props.notify}>{props.songTools}</SongImportSettings></div>
         <div data-settings-section="obs" hidden={selected !== 'obs'} className="device-panel" aria-label="OBS 设备面板">{props.children}</div>
         <div data-settings-section="ma2" hidden={selected !== 'ma2'} className="device-panel" aria-label="MA2 设备面板">
-          <Ma2ConnectionSettings disabled={disabled} notify={props.notify} maintenanceHost={maintenanceHost} onMaintenance={openMa2Maintenance} />
-          <LightingMidiSettings maintenance disabled={disabled} notify={props.notify} onBusy={props.onBusy} />
+          <Ma2ConnectionSettings disabled={disabled} notify={props.notify} maintenanceHost={maintenanceHost} onMaintenance={openMa2Maintenance} onAudioSettings={() => props.onNavigate('audio')} />
+          <SettingsDisclosure title="控台 MIDI 地址与配置说明"><LightingMidiSettings maintenance disabled={disabled} notify={props.notify} onBusy={props.onBusy} /></SettingsDisclosure>
           {method !== 'midi' ? <details className="device-advanced"><summary>高级连接与插件维护</summary><div ref={setMaintenanceHost} /></details> : null}
         </div>
         <div data-settings-section="audio" hidden={selected !== 'audio'} className="device-panel" aria-label="音频与 MIDI 设备面板">

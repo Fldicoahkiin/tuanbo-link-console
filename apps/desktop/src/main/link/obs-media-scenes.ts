@@ -3,6 +3,7 @@ import type { OBSWebSocket } from 'obs-websocket-js';
 import type { LinkMediaAsset } from '@tb/schema';
 import { materialSceneNames, type ManagedMediaEvent } from '@tb/core/link';
 import { z } from 'zod';
+import { includesObsMediaPath, sameObsMediaPath, verifyRelocatedObsMediaPath } from './obs-media-paths';
 
 type Request = <T>(operation: () => Promise<T>, label: string) => Promise<T>;
 type MediaState = { mediaState: string; mediaDuration: number; mediaCursor: number };
@@ -34,7 +35,7 @@ function compositionOrderRequests(sceneName: string, layers: string[], items: Ma
 
 /** Only the dedicated input in an application-owned material scene is controlled. */
 export class ObsMediaScenes {
-  private readonly prepared = new Map<string, { path: string; playbackPaths: readonly string[]; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
+  private readonly prepared = new Map<string, { path: string; sha256: string; playbackPaths: readonly string[]; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
   private readonly active = new Set<string>();
   private readonly compositions = new Map<string, string>();
   private readonly compositionItems = new Map<string, Map<string, CompositionItem>>();
@@ -52,7 +53,7 @@ export class ObsMediaScenes {
       if (this.active.has(sourceName)) throw new Error('正在播放的解码器不能重新预备');
       const settings = await this.request(() => this.client.call('GetInputSettings', { inputName: primaryName }), '读取预备素材配置');
       if (settings.inputKind !== 'ffmpeg_source' || typeof settings.inputSettings.local_file !== 'string'
-        || !primary.playbackPaths.includes(settings.inputSettings.local_file)) throw new Error('预备素材配置与原来源不符');
+        || !includesObsMediaPath(primary.playbackPaths, settings.inputSettings.local_file)) throw new Error('预备素材配置与原来源不符');
       const playbackPath = settings.inputSettings.local_file, hardwareDecode = settings.inputSettings.hw_decode;
       if (typeof hardwareDecode !== 'boolean') throw new Error('预备素材解码配置无效');
       const items = await this.request(() => this.client.call('GetSceneItemList', { sceneName: primary.sceneName }), '读取预备素材场景');
@@ -62,8 +63,9 @@ export class ObsMediaScenes {
         if (typeof found.sceneItemId !== 'number') throw new Error('预备素材场景项身份无效');
         const existing = await this.request(() => this.client.call('GetInputSettings', { inputName: sourceName }), '核对预备素材配置');
         const existingPath = existing.inputSettings.local_file;
-        if (existing.inputKind !== settings.inputKind || typeof existingPath !== 'string' || !primary.playbackPaths.includes(existingPath)) throw new Error('预备素材名称已被其他来源占用');
-        if (existingPath !== playbackPath || existing.inputSettings.hw_decode !== hardwareDecode) {
+        if (existing.inputKind !== settings.inputKind || typeof existingPath !== 'string'
+          || !includesObsMediaPath(primary.playbackPaths, existingPath) && !await verifyRelocatedObsMediaPath(existingPath, primary.path, primary.sha256, primary.playbackPaths)) throw new Error('预备素材名称已被其他来源占用');
+        if (!sameObsMediaPath(existingPath, playbackPath) || existing.inputSettings.hw_decode !== hardwareDecode) {
           await this.request(() => this.client.call('SetInputSettings', { inputName: sourceName,
             inputSettings: { local_file: playbackPath, hw_decode: hardwareDecode,
               restart_on_activate: false, close_when_inactive: false, looping: false }, overlay: true }), '更新自有预备素材缓存');
@@ -128,10 +130,13 @@ export class ObsMediaScenes {
         if (!item || typeof item.sceneItemId !== 'number') throw new Error(`素材场景名称被占用或来源已移除：${sceneName}`);
         const settings = await this.request(() => this.client.call('GetInputSettings', { inputName: sourceName }), 'GetInputSettings');
         const existingPath = settings.inputSettings[asset.kind === 'image' ? 'file' : 'local_file'];
-        if (settings.inputKind !== kind || typeof existingPath !== 'string' || ![path, playbackPath, ...cachePaths].includes(existingPath)) throw new Error(`素材来源与工程文件不一致，拒绝覆盖：${sourceName}`);
-        this.prepared.set(sourceName, { path, playbackPaths, sceneName, sceneItemId: item.sceneItemId, kind: asset.kind });
-        if (existingPath !== playbackPath) await this.request(() => this.client.call('SetInputSettings', {
-          inputName: sourceName, inputSettings: { local_file: playbackPath }, overlay: true
+        if (settings.inputKind !== kind || typeof existingPath !== 'string'
+          || !includesObsMediaPath(playbackPaths, existingPath) && !await verifyRelocatedObsMediaPath(existingPath, path, asset.sha256, cachePaths)) {
+          throw new Error(`素材来源与工程文件不一致，拒绝覆盖：${sourceName}。OBS 文件：${typeof existingPath === 'string' ? existingPath : '未配置有效文件'}；工程文件：${path}`);
+        }
+        this.prepared.set(sourceName, { path, sha256: asset.sha256, playbackPaths, sceneName, sceneItemId: item.sceneItemId, kind: asset.kind });
+        if (!sameObsMediaPath(existingPath, playbackPath)) await this.request(() => this.client.call('SetInputSettings', {
+          inputName: sourceName, inputSettings: { [asset.kind === 'image' ? 'file' : 'local_file']: playbackPath }, overlay: true
         }), '切换素材定位文件');
         if (asset.kind === 'image' && settings.inputSettings.unload !== false) await this.request(() => this.client.call('SetInputSettings', {
           inputName: sourceName, inputSettings: { unload: false }, overlay: true
@@ -153,7 +158,7 @@ export class ObsMediaScenes {
             : { is_local_file: true, local_file: playbackPath, looping: false, restart_on_activate: false, close_when_inactive: false, hw_decode: hardwareDecode }
         }), 'CreateInput');
         sceneItemId = created.sceneItemId;
-        this.prepared.set(sourceName, { path, playbackPaths, sceneName, sceneItemId, kind: asset.kind });
+        this.prepared.set(sourceName, { path, sha256: asset.sha256, playbackPaths, sceneName, sceneItemId, kind: asset.kind });
         if (asset.kind !== 'audio') {
           const canvas = await this.request(() => this.client.call('GetVideoSettings'), 'GetVideoSettings');
           await this.request(() => this.client.call('SetSceneItemTransform', { sceneName, sceneItemId, sceneItemTransform: {
@@ -170,7 +175,7 @@ export class ObsMediaScenes {
           await this.waitForState(sourceName, 'OBS_MEDIA_STATE_PAUSED');
         }
       }
-      this.prepared.set(sourceName, { path, playbackPaths, sceneName, sceneItemId, kind: asset.kind });
+      this.prepared.set(sourceName, { path, sha256: asset.sha256, playbackPaths, sceneName, sceneItemId, kind: asset.kind });
       this.active.delete(sourceName);
       this.primed.delete(sourceName);
       if (!exists && sourceName !== baseNames.sourceName && asset.kind !== 'audio') await this.copyPresentation(baseNames.sourceName, sourceName);
