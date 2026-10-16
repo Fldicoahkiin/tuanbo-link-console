@@ -6,6 +6,10 @@
 
 import { defineConfig } from '@playwright/test';
 
+// Launches inherit this instead of whatever the caller's shell holds; license
+// specs that need the real gate pass TBLINK_LOCAL_TEST_ACCESS='0' explicitly.
+process.env.TBLINK_LOCAL_TEST_ACCESS = '1';
+
 export default defineConfig({
   testDir: './test-e2e',
   timeout: 60_000,
