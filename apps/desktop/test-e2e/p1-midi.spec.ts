@@ -96,16 +96,19 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     await expect(page.getByLabel('全部连接状态').getByRole('button', { name: 'MA2 工程通信：未启用', exact: true })).toBeVisible();
     await page.getByLabel('MA2 连接方式').selectOption('local');
     await pick(info.outputDir);
+    await page.getByText('控台插件与安装说明', { exact: true }).click();
     await page.getByRole('button', { name: '导出控台插件', exact: true }).click();
     await expect.poll(async () => (await readdir(info.outputDir)).filter(name => name.startsWith('TBLINK-MA2-Bridge-')).length).toBe(1);
     const pluginDirectory = (await readdir(info.outputDir)).find(name => name.startsWith('TBLINK-MA2-Bridge-'))!;
     await expect.poll(async () => (await readdir(join(info.outputDir, pluginDirectory))).length).toBe(3);
     expect(await readFile(join(info.outputDir, pluginDirectory, 'tblink_bridge.lua'), 'utf8')).toBe(await readFile(join(process.cwd(), '../../tools/ma2/tblink_bridge.lua'), 'utf8'));
     await page.getByLabel('MA2 连接方式').selectOption('midi');
+    await page.getByText('控台 MIDI 地址与配置说明', { exact: true }).click();
     await page.getByLabel('MA2 MSC 设备号').fill('5'); await page.getByLabel('MA2 MSC 设备号').press('Tab');
     await expect(page.getByLabel('MA2 MSC 设备号')).toHaveValue('5');
     await pick(source);
     const panel = page.getByLabel('MA2 设备面板');
+    await panel.getByText('MIDI 连接说明', { exact: true }).click();
     await panel.getByLabel('导入 P1 工程').click();
     await panel.getByRole('button', { name: '选择 .hia 文件', exact: true }).click();
     await expect(panel.getByText('已建立映射', { exact: true })).toBeVisible();
@@ -131,6 +134,7 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     await page.reload();
     await expect(page.getByLabel('当前工程')).toContainText('纯 MIDI 验收');
     await settings(); await pick(source);
+    await panel.getByText('MIDI 连接说明', { exact: true }).click();
     page.on('dialog', dialog => void dialog.accept());
     await panel.getByRole('button', { name: '同步回 P1 工程', exact: true }).click();
     await expect(panel.locator('.p1-sync-summary').first()).toBeVisible();

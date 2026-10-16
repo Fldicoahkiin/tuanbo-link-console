@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { checkNetworkMa2, connectDiscoveredMa2, connectLocalMa2, useLocalMa2Store } from './ma2-connection-store';
+import { useIntegrationStore } from './integration-store';
 
 afterEach(() => { vi.unstubAllGlobals(); useLocalMa2Store.setState({ status: 'disconnected', directory: '', error: null }); });
 it('首次唯一识别到 MA2 时自动准备网络、保存并连接，无需填写 IP', async () => {
@@ -41,6 +42,20 @@ it('本机连接必须收到插件响应，失败不能保留已连接状态', a
   exchangeMa2.mockRejectedValueOnce(new Error('插件超时'));
   await expect(connectLocalMa2('C:/MA2/other')).rejects.toThrow('插件超时');
   expect(useLocalMa2Store.getState()).toMatchObject({ status: 'error', directory: 'C:/MA2/other', error: '插件超时' });
+});
+
+it('本机目录版本与正在运行的 onPC 不符时不发出会超时的插件请求', async () => {
+  const processes = useIntegrationStore.getState().processes;
+  const exchangeMa2 = vi.fn();
+  vi.stubGlobal('window', { tbLink: { exchangeMa2 } });
+  useIntegrationStore.setState({ processes: { ...processes, ma2: { ...processes.ma2,
+    status: 'running', executablePath: 'D:/ma/grandma2 onpc 3.7.0.5/gma2onpc.exe.exe', fileVersion: '3.7.0.5' } } });
+  try {
+    await expect(connectLocalMa2('C:/ProgramData/MA Lighting Technologies/grandma/gma2_V_3.3.4')).rejects.toThrow('正在运行 onPC 3.7.0');
+    expect(exchangeMa2).not.toHaveBeenCalled();
+    expect(useLocalMa2Store.getState().status).toBe('error');
+    expect(useLocalMa2Store.getState().error).toContain('127.0.0.1');
+  } finally { useIntegrationStore.setState({ processes }); }
 });
 
 it('顶部与设备页共享正在进行的检查，登录完成仍需插件 PING', async () => {

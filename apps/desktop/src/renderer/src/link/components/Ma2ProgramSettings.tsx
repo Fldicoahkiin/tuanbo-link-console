@@ -40,7 +40,7 @@ export function Ma2ProgramSettings({ disabled, notify }: {
           <input aria-label={`${title} 程序位置`} readOnly value={settings?.executablePath ?? ''} placeholder="一键识别或选择已安装的程序" />
           <button disabled={disabled || busy} onClick={() => void update(id)} aria-label={`选择 ${title} 程序`}><FolderOpen />浏览</button>
         </div></label>
-        <label className="settings-row"><span>一键启动 {title}</span><input type="checkbox" checked={settings?.connectOnDemand ?? false} disabled={disabled || busy || !settings} onChange={event => void update(id, event.target.checked)} /></label>
+        <label className="settings-row"><span>一键启动 {title}</span><input type="checkbox" role="switch" checked={settings?.connectOnDemand ?? false} disabled={disabled || busy || !settings} onChange={event => void update(id, event.target.checked)} /></label>
         <p className="settings-note">{process.status === 'running' ? `${title} 已运行` : process.error ?? `${title} 未运行`}</p>
       </div>;
     })}

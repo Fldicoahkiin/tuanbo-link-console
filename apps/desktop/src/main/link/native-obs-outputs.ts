@@ -1,4 +1,4 @@
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { stat, statfs } from 'node:fs/promises';
 import { millisecondsToFrameNumber, preciseSeekAssetIds, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type ObsProgramSessionDependencies } from '@tb/core/link';
 import type { NativeObsPrepare } from '@tb/schema';
@@ -12,6 +12,7 @@ import type { LinkRunLogger } from './run-logger';
 import { redactValue } from './run-logger';
 import { ObsMediaPreload } from './obs-media-preload';
 import { obsMediaDecodeTargets } from './obs-media-decode';
+import { obsMediaCachePaths } from './obs-media-paths';
 
 export type NativeObsOutputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport'> & {
   preloadResources: (assertCurrent: () => void, phase?: 'idle' | 'playback' | 'background') => Promise<void>;
@@ -92,14 +93,13 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
             if (!identity.isFile()) throw new Error(`素材文件不可读：${asset.name}`);
             identities.set(absolute, identity);
             assertCurrent();
-            const cache = join(dirname(path), 'cache', 'obs-seek-jpeg2000');
             phase = '定位缓存核验'; timings.push({ phase, atMs: performance.now() - assetStarted });
             const playbackPath = request.preciseSeeking && asset.kind === 'video' && preciseAssets.has(asset.id)
               ? await services.media.ensureObsSeekVideo(path, asset.relativePath, asset.sha256, hardwareDecode ? 'hardware' : 'software') : absolute;
             assertCurrent();
             phase = '来源准备'; timings.push({ phase, atMs: performance.now() - assetStarted });
             await obs.mediaScenes.prepare(project.projectId, asset, absolute, playbackPath,
-              ['.mkv', '.rgba.mkv', '.source-pixels.mkv', '.seek-ready.mkv', '.seek-intra.mkv'].map(extension => join(cache, `${asset.sha256}${extension}`)), target, hardwareDecode);
+              obsMediaCachePaths(path, asset.sha256), target, hardwareDecode);
             preload.register(project.projectId, asset, absolute, target.sourceName);
             assertCurrent();
             const openingEvent = openingDecoders.get(target.sourceName);

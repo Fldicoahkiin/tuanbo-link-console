@@ -116,25 +116,6 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .p1-media-grid .p1-media-card[data-batch-selected=true] > strong { color: var(--text-emphasis); font-weight: 650; }
 .program-selection-rectangle { position: fixed; pointer-events: none; z-index: 20; border: 1px solid var(--selection-border); background: var(--accent-soft-2); }
 
-.device-console, :root[data-theme='light'] .device-console {
-  --device-bg: var(--surface-raised); --device-panel: var(--surface); --device-input: var(--surface);
-  --device-line: var(--separator); --device-text: var(--text-primary); --device-muted: var(--text-secondary);
-  --device-accent: var(--accent); --device-selected: var(--accent-soft); --device-success: var(--success-text);
-  --device-action: var(--accent-fill); --device-error: var(--danger);
-  padding: 24px 32px 32px; font-family: var(--font-ui); font-size: var(--text-body);
-}
-.device-console h2 { font-size: var(--fs-lg); font-weight: 600; }
-.device-console .device-console-header p, .device-console .device-panel-description, .device-console .device-panel-intro p { font-size: var(--text-body); }
-.device-console .device-detail-header { padding: 0 0 16px; }
-.device-console .device-panel { padding: 16px 0; }
-.device-console .device-panel :is(input:not([type='checkbox']):not([type='range']), select) { font-size: var(--text-body); border-color: var(--control-border); }
-.device-console .settings-row, .device-console label > span, .device-console .field > span { font-size: var(--text-body); }
-.device-console .settings-note, .device-console small { font-size: var(--text-control); line-height: 1.65; }
-.settings-section-sidebar { flex-basis: 184px; padding: 24px 8px; background: var(--page-background); }
-.settings-section-sidebar .main-nav > button { min-height: 40px; border-radius: 8px; }
-.settings-section-sidebar .main-nav > button.active { background: var(--accent-soft-2); color: var(--text-1); }
-.settings-section-sidebar .main-nav > button.active > svg { color: var(--accent); }
-
 .modal-card, .settings-dialog, .integration-settings-dialog, .update-dialog { color: var(--text-primary); background: var(--surface-glass-strong); backdrop-filter: blur(20px) saturate(1.5); border: 1px solid var(--border-default); border-radius: var(--r-lg); box-shadow: var(--shadow-2); max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); overflow: auto; overscroll-behavior: contain; }
 .modal-card h2 { font-size: 22px; }
 .modal-card p { color: var(--text-secondary); font-size: var(--text-body); line-height: 1.6; }
@@ -153,47 +134,12 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .cue-point-dialog button { min-height: 34px; padding: 6px 12px; border: 1px solid var(--separator); border-radius: var(--radius-control); color: var(--text-primary); background: var(--surface-raised); }
 .cue-point-dialog footer button:last-child { background: var(--accent-fill); color: var(--on-accent); border-color: transparent; }
 
-:root { --workflow-songs: #f2bd71; --workflow-audio: #67c8bf; --workflow-video: #78b4f0; --workflow-lighting: #b99bef; --workflow-tools: #9ca9bb; }
-:root[data-theme='light'] { --workflow-songs: #916019; --workflow-audio: #177c73; --workflow-video: #286eaf; --workflow-lighting: #7953b3; --workflow-tools: #627087; }
-[data-device-category='songs'] { --workflow-color: var(--workflow-songs); }
-[data-device-category='audio'] { --workflow-color: var(--workflow-audio); }
-[data-device-category='obs'] { --workflow-color: var(--workflow-video); }
-[data-device-category='ma2'] { --workflow-color: var(--workflow-lighting); }
-[data-device-category='virtual'], [data-device-category='maintenance'], [data-device-category='logs'] { --workflow-color: var(--workflow-tools); }
-.settings-section-sidebar .device-workflow-group { display: grid; gap: 4px; margin-bottom: 18px; }
-.settings-section-sidebar .device-workflow-group h3 { margin: 6px 8px 10px; color: var(--text-primary); font-size: 13px; font-weight: 600; line-height: 1.5; }
-.settings-section-sidebar .device-workflow-group button { display: flex; align-items: center; gap: 10px; padding: 10px; min-height: 64px; width: 100%; border-left: 3px solid transparent; border-radius: 8px; }
-.settings-section-sidebar .device-workflow-group button > svg { color: var(--workflow-color); background: color-mix(in srgb, var(--workflow-color) 12%, transparent); padding: 5px; box-sizing: content-box; border-radius: 7px; flex-shrink: 0; }
-.settings-section-sidebar .device-workflow-group button > span { min-width: 0; text-align: left; }
-.settings-section-sidebar .device-workflow-group button strong { font-size: 15px; font-weight: 600; line-height: 1.5; }
-.settings-section-sidebar .device-workflow-group button small { display: block; margin-top: 3px; font-size: 13px; font-weight: 400; color: var(--text-primary); white-space: normal; line-height: 1.5; }
-.settings-section-sidebar .device-workflow-group button.active { border-left-color: var(--workflow-color); background: color-mix(in srgb, var(--workflow-color) 13%, var(--surface)); }
-.settings-section-sidebar .device-workflow-group button.active strong { color: var(--workflow-color); }
-.device-console[data-device-category] .device-detail-header { border-left: 3px solid var(--workflow-color); padding-left: 12px; }
-.song-import-settings { display: grid; gap: 20px; }
-.song-import-settings fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
-.song-source-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.song-source-picker button { display: flex; align-items: center; gap: 10px; padding: 12px; text-align: left; color: var(--text-primary); border: 1px solid var(--separator); border-radius: var(--radius-control); background: var(--surface); }
-.song-source-picker button[aria-pressed='true'] { border-color: var(--workflow-songs); background: color-mix(in srgb, var(--workflow-songs) 9%, var(--surface)); }
-.song-source-picker button svg { color: var(--workflow-songs); flex-shrink: 0; }
-.song-source-picker button strong, .song-source-picker button small { display: block; }
-.song-source-picker button small { font-size: var(--text-caption); color: var(--text-secondary); margin-top: 4px; }
-.song-source-limits { margin-top: 20px; border-top: 1px solid var(--separator); padding-top: 12px; color: var(--text-secondary); font-size: var(--text-control); }
-.song-source-limits h4 { color: var(--text-primary); }
-@media (max-width: 1000px) { .song-source-picker { grid-template-columns: 1fr; } }
 .diagnostic-exports { display: grid; gap: 12px; }
 .diagnostic-export-options { color: var(--text-secondary); font-size: var(--text-caption); }
 .diagnostic-export-options summary { cursor: pointer; }
 .diagnostic-export-fields { display: grid; gap: 12px; padding-top: 12px; }
 .program-maintenance-task { padding: 16px 0; }
 .program-maintenance-task h4 { margin: 0 0 12px; color: var(--text-primary); }
-.device-console .program-maintenance-task .device-panel-actions,
-.device-console .program-maintenance-task .settings-note { margin: 0; }
-.device-console .diagnostic-exports .settings-note,
-.device-console .diagnostic-exports .device-panel-actions { margin: 0; }
-.device-console .diagnostic-export-options { margin: 0; padding: 0; border: 0; background: transparent; }
-.device-console .diagnostic-export-options > summary { padding: 4px 0; }
-.device-console .diagnostic-export-options[open] > :not(summary) { margin: 0; }
 .diagnostic-exports textarea { width: 100%; resize: vertical; min-height: 60px; padding: 8px 10px; color: var(--text-primary); background: var(--surface); border: 1px solid var(--separator); border-radius: var(--radius-control); font: inherit; }
 .diagnostic-export-fields > label { color: var(--text-secondary); font-size: var(--text-caption); }
 .diagnostic-export-result { overflow-wrap: anywhere; user-select: text; }
@@ -259,28 +205,11 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 }
 @media (max-width: 1250px) {
   .content-scroll { padding: 12px; }
-  .device-console { padding: 24px 20px 40px; }
-  .device-console .device-panel { padding: 16px 0; }
   .p1-time-monitor { padding: 12px; }
   .monitor-readings dl { gap: 8px; }
 }
 /* At large UI zoom settings reflow; the time axis keeps its necessary own scrolling. */
 @media (max-width: 980px) {
-  .app-workspace.settings-workspace { flex-direction: column; }
-  .settings-section-sidebar { flex: 0 0 auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--separator); }
-  .settings-section-sidebar > h2 { margin: 4px 8px; }
-  .settings-section-sidebar .main-nav { display: flex; flex-direction: row; overflow-x: auto; gap: 4px; }
-  .settings-section-sidebar .main-nav > button { flex: 0 0 auto; min-width: max-content; }
-  .device-console, :root[data-theme='light'] .device-console { padding: 16px 12px 32px; }
-  .device-console .device-console-header { flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
-  .device-console .device-panel { padding: 16px 0; }
-  .device-console .device-detail-header { padding: 0 0 12px; }
-  .device-console .settings-row, .device-console .settings-path-row, .device-console .player-connections > label, .device-console .ma2-network-fields > label, .device-console .ma2-saved-row > label, .device-console .device-program-card .field { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .device-console .device-actions, .device-console .ma2-saved-row > .settings-header-actions { margin-left: 0; }
-  .device-console .field-save-status { grid-column: 1; }
-  .device-console .appearance-control > label { grid-template-columns: 24px minmax(0, 1fr); gap: 8px; }
-  .device-console .appearance-control select { grid-column: 1 / -1; }
-  .device-console .device-detail-header { flex-wrap: wrap; gap: 8px; }
   .topbar-status { display: none; }
   .persistent-project-toolbar .document-actions { margin-left: auto; }
   .editor-program-name { width: auto; }

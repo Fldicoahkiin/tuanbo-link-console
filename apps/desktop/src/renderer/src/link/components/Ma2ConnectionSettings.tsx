@@ -1,3 +1,4 @@
+import { SettingsDisclosure } from './SettingsControls';
 import { Button } from './Button';
 import { setMa2Method, useMa2ModeStore } from '../stores/ma2-mode-store';
 import { P1ProjectSyncPanel } from './P1ProjectSyncPanel';
@@ -11,12 +12,15 @@ import { useDocumentStore } from '../stores/document-store';
 import { Ma2ProgramSettings } from './Ma2ProgramSettings';
 
 const directoryKey = 'tblink.ma2-onpc-data-directory.v1';
-export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMaintenance }: {
+export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMaintenance, onAudioSettings }: {
   disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void;
+  onAudioSettings: () => void;
   maintenanceHost: HTMLDivElement | null; onMaintenance: () => void;
 }): JSX.Element {
   const [directory, setDirectory] = useMa2Directory(notify);
   const method = useMa2ModeStore((state) => state.method);
+  const networkVisited = useRef(false);
+  if (method === 'network') networkVisited.current = true;
   const setMethod = async (value: 'midi' | 'local' | 'network'): Promise<void> => {
     setBusy(true);
     try { await setMa2Method(value); }
@@ -24,6 +28,8 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
     finally { setBusy(false); }
   };
   const [busy, setBusy] = useState(false);
+  const [networkBusy, setNetworkBusy] = useState(false);
+  const [networkConnected, setNetworkConnected] = useState(false);
   const exportPlugin = async (): Promise<void> => {
     setBusy(true);
     try { const path = await window.tbLink.exportMa2Plugin(); if (path) notify(`插件与安装说明已导出：${path}`); }
@@ -49,18 +55,21 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
     finally { setBusy(false); }
   };
   return <section className="settings-section ma2-device-section" aria-label="MA2 连接设置">
-    <Ma2ProgramSettings disabled={disabled || busy} notify={notify} />
-    <div className="device-section-heading"><h3>连接配置</h3>{method === 'local' ? <span role="status">{status}</span> : null}</div>
-    {method === 'local' ? <div className="settings-row ma2-plugin-row"><span>控台插件</span><div><Button className="secondary-button" disabled={disabled || busy} onClick={() => void exportPlugin()}><Download />导出控台插件</Button><span className="settings-note">插件已内置，可离线导出到 U 盘；在控台导入 XML 与 Lua 后运行。仅 MIDI 时间码或 Cue 触发无需插件。</span></div></div> : null}
-    <label className="settings-path-row"><span>连接方式</span><select aria-label="MA2 连接方式" value={method} disabled={busy || disabled} onChange={(event) => void setMethod(event.target.value === 'midi' ? 'midi' : event.target.value === 'local' ? 'local' : 'network')}><option value="midi">仅 MIDI（时间码与 Cue）</option><option value="network">实体控台 / 网络 onPC</option><option value="local">本机 onPC</option></select></label>
-    {method === 'network' ? <p className="settings-note">连接网线，一键读取控台素材。首次使用需在控台开启远程登录。</p> : null}
-    {method === 'midi' ? <p className="settings-note">声光同步与 Cue 触发均可使用 MIDI：在“音频与 MIDI”选择灯光 MIDI 输出，并在控台选择对应时间码输入。在联动台编排并直接触发 Cue 时，还需配置“灯光动作输出”，在控台启用 MSC MIDI 接收；无需填写 IP、登录控台或安装联动插件。MIDI 连接状态仅表示电脑端口可用，控台接收请在控台确认。</p> : method === 'network' ? <Ma2NetworkSettings disabled={disabled} notify={notify} maintenanceHost={maintenanceHost} onMaintenance={onMaintenance} /> : <>
+    <div className="device-section-heading"><h3>连接</h3>{method === 'local' ? <span role="status">{status}</span> : null}</div>
+
+    <label className="settings-path-row"><span>连接方式</span><select aria-label="MA2 连接方式" value={method} disabled={busy || networkBusy || disabled} onChange={(event) => void setMethod(event.target.value === 'midi' ? 'midi' : event.target.value === 'local' ? 'local' : 'network')}><option value="midi">仅 MIDI（时间码与 Cue）</option><option value="network">实体控台 / 网络 onPC</option><option value="local">本机 onPC</option></select></label>
+    {method === 'midi' ? <div className="settings-connection-block"><div className="settings-connection-summary"><div className="settings-connection-copy"><h2>通过 MIDI 控制灯光</h2><p>发送时间码和 Cue 指令。请先选择要使用的 MIDI 端口。</p></div><Button className="primary-button" onClick={onAudioSettings}>选择 MIDI 端口</Button></div><p className="settings-note">需要读取控台里的 Cue？请把连接方式改为“实体控台 / 网络 onPC”。</p></div> : method === 'local' ? <>
       <label className="settings-row"><span>本机数据目录</span><input aria-label="MA2 onPC 数据目录" value={directory} disabled={disabled || busy} onChange={(event) => { setDirectory(event.target.value); useLocalMa2Store.setState({ status: 'disconnected' }); }} onBlur={saveDirectory} /></label>
-      <p className="settings-note settings-field-help">选择本机 onPC 使用的数据目录，安装联动插件后检查连接。</p>
+      <p className="settings-note settings-field-help">此方式通过文件插件通信。数据目录必须与当前运行的 onPC 版本一致，并在 onPC 中运行联动插件。也可切换到网络直连，填写 127.0.0.1。</p>
+      {local.error ? <p className="device-error" role="alert">{local.error}</p> : null}
+      <Button className="secondary-button" disabled={disabled || busy} onClick={() => void setMethod('network')}>改用本机网络直连</Button>
       <div className="device-actions"><Button className="primary-button" disabled={disabled || busy} onClick={() => void connectLocal()}>连接本机 onPC</Button></div>
-    </>}
-    {method === 'midi' ? <><p className="settings-note">MIDI 线只能传时间码和触发指令，无法读取控台 Cue 列表。要在导入 P1 后读取对应灯光，请选择“实体控台 / 网络 onPC”，完成网络连接。</p><P1ProjectSyncPanel purpose="audio" disabled={disabled || busy} notify={notify} /></> : null}
-    {method !== 'midi' ? <Ma2CatalogSettings method={method} directory={directory} disabled={disabled} notify={notify} onBusy={setBusy} /> : null}
+    </> : null}
+    {networkVisited.current ? <div hidden={method !== 'network'}><Ma2NetworkSettings onConnected={setNetworkConnected} onBusy={setNetworkBusy} disabled={disabled || method !== 'network'} notify={notify} maintenanceHost={method === 'network' ? maintenanceHost : null} onMaintenance={onMaintenance} /></div> : null}
+    {method === 'midi' ? <SettingsDisclosure title="MIDI 连接说明" description="控台接收设置与 P1 歌曲导入"><p className="settings-note">在“音频与 MIDI”选择灯光时间码输出，并在控台选择对应时间码输入。需要触发 Cue 时，选择“灯光动作输出”，并在控台启用 MSC MIDI 接收。</p><p className="settings-note">仅 MIDI 不需要 IP、登录账号或联动插件。端口可用只表示电脑端正常；是否收到时间码，请在控台确认。</p><P1ProjectSyncPanel purpose="audio" disabled={disabled || busy} notify={notify} /></SettingsDisclosure> : null}
+    {method !== 'midi' ? <Ma2CatalogSettings connected={method === 'local' ? status === '插件已响应' : networkConnected} method={method} directory={directory} disabled={disabled || networkBusy} notify={notify} onBusy={setBusy} /> : null}
+    <SettingsDisclosure title="本机程序与预演"><Ma2ProgramSettings disabled={disabled || busy} notify={notify} /></SettingsDisclosure>
+    {method === 'local' ? <SettingsDisclosure title="控台插件与安装说明"><div className="settings-row ma2-plugin-row"><span>控台插件</span><div><Button className="secondary-button" disabled={disabled || busy} onClick={() => void exportPlugin()}><Download />导出控台插件</Button><span className="settings-note">插件已内置，可离线导出到 U 盘；在控台导入 XML 与 Lua 后运行。仅 MIDI 时间码或 Cue 触发无需插件。</span></div></div></SettingsDisclosure> : null}
   </section>;
 }
 

@@ -80,7 +80,7 @@ test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继�
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
     await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
     Object.assign(evidence, { passed: true, before, after, paused, afterEdit, ended, errors,
-      engineSha256: createHash('sha256').update(await readFile(process.env.TBLINK_PLAYBACK_ENGINE_EXE!)).digest('hex') });
+      engineSha256: createHash('sha256').update(await readFile(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(process.cwd(), '../../tools/playback-engine/bin/tblink-playback.exe'))).digest('hex') });
   } finally {
     await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2));
     await page.keyboard.press('Escape');

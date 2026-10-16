@@ -41,7 +41,7 @@ for (const crash of [false, true]) test(`正式节目后台接续：界面繁忙
       return { blockedMs: performance.now() - started, status: await window.tbLink.getNativePlaybackStatus() };
     });
     evidence.after = blocked;
-    evidence.engineSha256 = createHash('sha256').update(await readFile(process.env.TBLINK_PLAYBACK_ENGINE_EXE!)).digest('hex');
+    evidence.engineSha256 = createHash('sha256').update(await readFile(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(process.cwd(), '../../tools/playback-engine/bin/tblink-playback.exe'))).digest('hex');
     expect(blocked.status).toMatchObject({ itemId: 'song-1', status: 'playing', offsetMs: 600000, underruns: 0, audioError: null });
     // A start scheduled only after the renderer wakes is not a successful handoff.
     expect(blocked.status!.positionMs).toBeGreaterThan(2500);

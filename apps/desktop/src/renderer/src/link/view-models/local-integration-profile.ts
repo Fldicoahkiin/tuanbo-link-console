@@ -46,3 +46,20 @@ export function createDefaultIntegrationProfile(): IntegrationProfile {
   };
 }
 
+
+function programSettings(value: Pick<IntegrationProfile['obs'], 'executablePath' | 'workingDirectory' | 'arguments' | 'startupTimeoutMs' | 'shutdownTimeoutMs'>) {
+  return { executablePath: value.executablePath, workingDirectory: value.workingDirectory, arguments: value.arguments, startupTimeoutMs: value.startupTimeoutMs, shutdownTimeoutMs: value.shutdownTimeoutMs };
+}
+
+export function programDraftValues(profile: IntegrationProfile) {
+  return { obs: programSettings(profile.obs), p1: programSettings(profile.p1), obsAudioInputName: profile.p1.obsAudioInputName, expectedFrameRate: profile.p1.expectedFrameRate, acceptedVersions: profile.acceptedVersions, legacyOutput: profile.midiPortProfiles.find(port => port.id === 'lighting-output') };
+}
+
+/** Maintenance owns program launch parameters, never connection credentials or other MIDI drafts. */
+export function mergeProgramSettings(current: IntegrationProfile, draft: IntegrationProfile): IntegrationProfile {
+  const legacyOutput = draft.midiPortProfiles.find(port => port.id === 'lighting-output');
+  return { ...current, updatedAt: new Date().toISOString(), acceptedVersions: draft.acceptedVersions,
+    obs: { ...current.obs, ...programSettings(draft.obs) },
+    p1: { ...current.p1, ...programSettings(draft.p1), obsAudioInputName: draft.p1.obsAudioInputName, expectedFrameRate: draft.p1.expectedFrameRate },
+    midiPortProfiles: [...current.midiPortProfiles.filter(port => port.id !== 'lighting-output'), ...(legacyOutput ? [legacyOutput] : [])] };
+}

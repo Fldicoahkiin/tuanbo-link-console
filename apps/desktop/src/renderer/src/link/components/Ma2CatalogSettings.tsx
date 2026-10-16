@@ -1,3 +1,4 @@
+import { SettingsDisclosure } from './SettingsControls';
 import { useEffect } from 'react';
 import { ma2NetworkStatusSchema, type Ma2CatalogRequest } from '@tb/schema';
 import { Button } from './Button';
@@ -10,7 +11,7 @@ import { P1LightingImportReport } from './P1LightingImportReport';
 import { Ma2ProgramSync } from './Ma2ProgramSync';
 import { useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
 
-export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy }: { onBusy: (busy: boolean) => void; method: 'local' | 'network'; directory: string; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
+export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy, connected }: { connected: boolean; onBusy: (busy: boolean) => void; method: 'local' | 'network'; directory: string; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
   const project = useDocumentStore(state => state.project);
   const cached = project?.ma2ReadState;
   const job = useMa2ReadStore();
@@ -44,10 +45,10 @@ export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy
   return <section className="settings-section ma2-catalog-settings" aria-label="MA2 现场节目导入">
     <section className="ma2-settings-group">
       <h3>控台灯光</h3>
-      <p className="settings-note">读取一次后保存在联动工程。配对、查看和本地编辑在灯光工作台继续。</p>
+      <p className="settings-note">{!project ? '打开工程后，可将控台 Cue 读取到歌曲。' : !connected ? '连接控台后，可读取节目 Cue。' : '读取结果保存在工程中，可到灯光工作台配对和编辑。'}</p>
       <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{automatic.message}</p>
       <div className="device-actions">
-        <Button className="primary-button" disabled={disabled || job.busy || !project} onClick={() => guard(() => read())}>{cached ? '更新控台读取' : '读取控台灯光到现有歌曲'}</Button>
+        <Button className={connected ? "primary-button" : "secondary-button"} disabled={disabled || job.busy || !project || !connected} onClick={() => guard(() => read())}>{cached ? '更新控台读取' : '读取控台灯光到现有歌曲'}</Button>
         {cached ? <><Button className="secondary-button" disabled={disabled || job.busy} onClick={() => guard(() => read(true))}>只补读未完成项</Button>
         <Button className="secondary-button" onClick={() => useMa2ReadStore.setState({ openWorkspace: true, browserOpen: true })}>配对与查看 Cue</Button></> : null}
         <Button className="secondary-button" disabled={!cached} onClick={() => guard(exportSite)}>导出现场核对包</Button>
@@ -57,7 +58,7 @@ export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy
       {cached && project ? <><p className="settings-note">工程缓存 · {cached.source} · Show：{cached.catalog.directory.show} · {new Date(cached.catalog.readAt).toLocaleString()}（非实时状态）</p>
         {cached.catalog.incomplete ? <p role="alert">{cached.catalog.incomplete}</p> : null}
         <P1LightingImportReport project={project} catalog={cached.catalog} /></> : null}
-      {!project?.p1Sync ? <P1ProjectSyncPanel purpose="migration" disabled={disabled || job.busy} notify={notify} afterImport={() => read()} /> : <p className="settings-note">P1 歌曲和原始时间码已保存在工程，无需重新选择 .hia。</p>}
+      {!project?.p1Sync ? <SettingsDisclosure title="从 P1 工程导入歌曲" description="已有 P1 歌曲时，导入歌曲和原始时间码"><P1ProjectSyncPanel purpose="migration" disabled={disabled || job.busy} notify={notify} afterImport={() => read()} /></SettingsDisclosure> : <p className="settings-note">P1 歌曲和原始时间码已保存在工程，无需重新选择 .hia。</p>}
     </section>
     <details className="ma2-advanced-settings"><summary>诊断与手动同步</summary>
       {cached?.catalog.metrics ? <p>本次读取 {(cached.catalog.metrics.elapsedMs / 1000).toFixed(1)} 秒 · {cached.catalog.metrics.requests} 次逻辑请求 · {(cached.catalog.metrics.bytes / 1024).toFixed(0)} KB 解码响应{cached.catalog.metrics.wireCommands !== undefined ? ` · ${cached.catalog.metrics.wireCommands} 条网络命令 · ${((cached.catalog.metrics.receivedBytes ?? 0) / 1024).toFixed(0)} KB 网络接收` : ''}。阶段耗时已保存到核对包。</p> : null}

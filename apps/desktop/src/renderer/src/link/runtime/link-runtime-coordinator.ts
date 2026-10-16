@@ -23,7 +23,7 @@ import { seekInternalRuntime } from './internal-runtime-seek';
 import { prepareInternalRuntime, prepareRuntimeArm } from './internal-runtime-preparation';
 import { prepareNativeCompanionRuntime } from './native-companion-preparation';
 import { InternalPreparationScope } from './internal-preparation-scope';
-import { enqueueEditorPreview } from './editor-scene-preview';
+import { EditorScenePreview } from './editor-scene-preview';
 import { executeTimelineMedia, executeTimelineWork, executeDueCues, synchronizeTimelineTransport, reportSkippedTimelineMedia, executeSkippedTimelineCue } from './timeline-work';
 
 export class LinkRuntimeCoordinator {
@@ -40,6 +40,7 @@ export class LinkRuntimeCoordinator {
   private readonly managedOutput: ManagedOutputRuntime;
   private autoFollow: P1AutoFollowController | null = null;
   private disposed = false;
+  private readonly editorPreview = new EditorScenePreview();
   private internalStopHandler: (() => void) | null = null;
   private internalCaptureActive = false;
   private internalClockActive = false;
@@ -107,9 +108,11 @@ export class LinkRuntimeCoordinator {
   }
   async pauseInternal(): Promise<void> { this.internalClockActive = false; this.pause(); await this.syncMediaTransport('pause'); }
 
+  cancelEditorPreview(): void { this.executionGeneration += 1; this.editorPreview.reset(); }
+
   previewEditor(itemId: string, positionMs: number, preciseSeeking: boolean): Promise<void> {
     const generation = this.executionGeneration;
-    const queued = enqueueEditorPreview(this.cueExecutionTail, this.project, this.projectPath, itemId, positionMs, preciseSeeking,
+    const queued = this.editorPreview.enqueue(this.cueExecutionTail, this.project, this.projectPath, itemId, positionMs, preciseSeeking,
       () => !this.disposed && generation === this.executionGeneration && this.runtime.getState() === 'idle');
     this.cueExecutionTail = queued.tail;
     return queued.operation;
@@ -289,6 +292,7 @@ export class LinkRuntimeCoordinator {
   }
 
   stop(suspendAuto = true): void {
+    this.editorPreview.reset();
     this.internalPreparation.cancel();
     ++this.executionGeneration;
     this.p1Lighting.stop();

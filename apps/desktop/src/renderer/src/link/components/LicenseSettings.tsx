@@ -49,6 +49,7 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
     } catch (failure) {
       const reason = failure instanceof ZodError ? failure.issues.map(issue => issue.message).join('；') : failure instanceof Error ? failure.message : String(failure);
       setError(reason);
+      if (action === 'activate') codeInput.current?.focus();
       if (action === 'activate' || action === 'online') {
         try { setStatus(licenseStatusSchema.parse(await window.tbLink.getLicenseStatus())); }
         catch (readFailure) { setError(`${reason}；读取当前授权状态失败：${readFailure instanceof Error ? readFailure.message : String(readFailure)}`); }
@@ -62,19 +63,19 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
     <p className="settings-note">已有激活码？粘贴后即可在这台电脑上使用。</p>
     {status ? <>
       <form className="license-code-form" onSubmit={event => { event.preventDefault(); if (!busy && !runtimeActive && status.onlineAvailable) void run('activate'); }}>
-        <label className="settings-path-row"><span>激活码</span><span className="license-code-input"><input ref={codeInput} aria-label="激活码" type={showCode ? 'text' : 'password'} autoComplete="off" spellCheck={false} maxLength={36} value={code} placeholder="TBA- 开头的完整激活码" disabled={busy || runtimeActive || !status.onlineAvailable} onChange={event => setCode(event.target.value.trim())} /><Button type="button" aria-label={showCode ? '隐藏激活码' : '显示激活码'} aria-pressed={showCode} onClick={() => setShowCode(value => !value)}>{showCode ? <EyeOff /> : <Eye />}</Button></span></label>
+        <label className="settings-path-row"><span>激活码</span><span className="license-code-input"><input ref={codeInput} aria-label="激活码" aria-invalid={error ? true : undefined} aria-describedby={error ? "license-activation-error" : undefined} type={showCode ? 'text' : 'password'} autoComplete="off" spellCheck={false} maxLength={36} value={code} placeholder="TBA- 开头的完整激活码" disabled={busy || runtimeActive || !status.onlineAvailable} onChange={event => setCode(event.target.value.trim())} /><Button type="button" aria-label={showCode ? '隐藏激活码' : '显示激活码'} aria-pressed={showCode} onClick={() => setShowCode(value => !value)}>{showCode ? <EyeOff /> : <Eye />}</Button></span></label>
         <div className="settings-header-actions"><Button type="submit" className="primary-button" disabled={busy || runtimeActive || !status.onlineAvailable || !code.trim()}><KeyRound />激活本机</Button><Button type="button" className="secondary-button" disabled={busy || runtimeActive || !status.onlineAvailable} onClick={() => void run('online')}><RefreshCw />联网验证授权</Button></div>
       </form>
       {message ? <p className="license-feedback" role="status">{message}</p> : null}
-      {error ? <p className="device-error license-feedback" role="alert">{error}</p> : null}
+      {error ? <p id="license-activation-error" className="device-error license-feedback" role="alert">{error}</p> : null}
       {!status.onlineAvailable ? <p className="settings-note">发行方尚未配置在线授权服务，请联系发行方。</p> : <p className="settings-note license-assurance">一码一机 · 无需注册账户<br />启动时联网验证，演出中断网不影响运行。</p>}
       {claims ? <dl className="license-claims"><dt>授权客户</dt><dd>{claims.customer}</dd><dt>授权类型</dt><dd>{kindLabels[claims.kind]}</dd><dt>使用期限</dt><dd>{claims.useUntil ? new Date(claims.useUntil).toLocaleString('zh-CN') : '永久使用'}</dd><dt>升级服务截止</dt><dd>{new Date(claims.updatesUntil).toLocaleString('zh-CN')}</dd></dl> : null}
       {claims?.online ? <p className="settings-note">本次签名凭证有效至 {new Date(claims.online.leaseUntil).toLocaleString('zh-CN')}。该期限不免除下次启动的联网验证；运行中的演出不会因网络中断而停止。</p> : null}
-      <details className="license-disclosure" open={!onAuthorized}>
+      <details className="license-disclosure">
         <summary><ShoppingCart aria-hidden="true" /><span>购买授权与查询订单</span><ChevronRight className="license-disclosure-chevron" aria-hidden="true" /></summary>
       <PurchaseSettings runtimeActive={runtimeActive || busy || !status.onlineAvailable} license={claims ?? null} onSelectCode={value => { setCode(value); codeInput.current?.focus(); }} />
       </details>
-      <details className="license-disclosure" open={!onAuthorized}>
+      <details className="license-disclosure">
         <summary><Monitor aria-hidden="true" /><span>本机信息与授权文件</span><ChevronRight className="license-disclosure-chevron" aria-hidden="true" /></summary>
         <label className="settings-path-row"><span>本机机器码</span><input aria-label="本机机器码" readOnly value={status.machineCode} onFocus={event => event.currentTarget.select()} /></label>
         <p className="settings-note">{status.message}</p>

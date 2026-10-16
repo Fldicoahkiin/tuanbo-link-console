@@ -1,33 +1,4 @@
-/* Settings use the shared theme with readable form rows and distinct groups. */
-.settings-inline.integration-workspace .settings-detail .settings-form.picture-settings { gap: 18px; }
-.settings-detail .picture-intro { margin: 0; color: var(--text-secondary); font-size: var(--text-control); }
-.settings-inline.integration-workspace .settings-detail .settings-note.picture-lock { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 14px; border: 1px solid var(--separator); border-radius: 8px; background: var(--surface); }
-.settings-detail .picture-panel { min-width: 0; padding: 22px; border: 1px solid var(--separator); border-radius: 12px; background: var(--surface); }
-.settings-detail .picture-panel > header { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
-.settings-detail .picture-icon { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 9px; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.settings-detail .picture-icon svg { width: 19px; height: 19px; }
-.settings-inline.integration-workspace .settings-detail .picture-panel h3 { font-size: 15px; margin: 0 0 3px; }
-.settings-detail .picture-panel header p { margin: 0; color: var(--text-secondary); font-size: var(--text-caption); }
-.settings-inline.integration-workspace .settings-detail .picture-monitor .settings-row { grid-template-columns: minmax(0, 1fr) 220px; gap: 32px; padding: 0; }
-.settings-inline.integration-workspace .settings-detail .picture-monitor small { max-width: 460px; font-size: var(--text-caption); }
-.settings-detail .picture-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-.settings-detail .picture-control { display: flex; justify-content: space-between; align-items: center; gap: 18px; min-height: 44px; }
-.settings-inline.integration-workspace .settings-detail .picture-control small { display: inline-block; margin: 0 0 0 8px; font-size: var(--text-caption); padding: 2px 6px; border-radius: 4px; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.settings-inline.integration-workspace .settings-detail .picture-control select { width: 120px; max-width: 48%; flex-shrink: 0; }
-.settings-detail .picture-help, .settings-detail .picture-warning { margin: 14px 0 0; color: var(--text-secondary); font-size: var(--text-caption); line-height: 1.8; }
-.settings-detail .picture-warning { color: var(--text-primary); border-left: 2px solid var(--accent); padding-left: 10px; }
-.settings-detail .picture-workflow { margin-top: 10px; padding: 22px 0 0; border-top: 1px solid var(--separator); }
-.settings-inline.integration-workspace .settings-detail .picture-workflow h3 { font-size: var(--text-control); margin-bottom: 20px; color: var(--text-secondary); }
-.settings-detail .picture-workflow > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
-.settings-detail .picture-workflow article { min-width: 0; }
-.settings-detail .picture-workflow article > svg { width: 16px; height: 16px; vertical-align: middle; margin-right: 8px; color: var(--text-secondary); }
-.settings-detail .picture-workflow strong { font-size: var(--text-control); font-weight: 550; }
-.settings-detail .picture-workflow p { margin: 9px 0 0; font-size: var(--text-caption); line-height: 1.8; color: var(--text-secondary); }
-@container (max-width: 640px) {
-  .settings-detail .picture-options { grid-template-columns: 1fr; }
-  .settings-inline.integration-workspace .settings-detail .picture-monitor .settings-row { grid-template-columns: 1fr; gap: 12px; }
-  .settings-detail .picture-workflow > div { grid-template-columns: 1fr; gap: 18px; }
-}
+/* Shared form styles for the inline lighting tools and license entry. Settings workspace styles live in device-connections.css. */
 .settings-inline.integration-workspace .settings-detail {
   container-type: inline-size;
   --settings-control-width: 360px;
