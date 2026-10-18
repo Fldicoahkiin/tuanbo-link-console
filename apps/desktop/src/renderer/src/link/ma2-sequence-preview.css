@@ -19,6 +19,7 @@
 .cue-pool-grid button > span { color: var(--accent); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .cue-pool-grid button > strong { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cue-pool-grid button > small { margin-left: auto; white-space: nowrap; }
+.ma2-sequence-step-count { flex-shrink: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ma2-pool-empty { color: var(--text-secondary); font-size: 12px; }
 .ma2-pool-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 18px; font-size: 12px; color: var(--text-secondary); }
 .ma2-pool-status > span { display: inline-flex; align-items: center; gap: 4px; }
