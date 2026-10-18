@@ -52,7 +52,11 @@ describe('无损定位缓存编码选择', () => {
       const original = await frames(source);
       expect(original).toHaveLength(12);
       for (const decode of ['hardware', 'software'] as const) {
-        const cache = await service.ensureObsSeekVideo(join(root, 'show.tblink'), 'assets/reference-media/overlay.mov', sha256, decode);
+        let generated = 0;
+        const cache = await service.ensureObsSeekVideo(join(root, 'show.tblink'), 'assets/reference-media/overlay.mov', sha256, decode, () => { generated++; });
+        expect(generated).toBe(1);
+        await service.ensureObsSeekVideo(join(root, 'show.tblink'), 'assets/reference-media/overlay.mov', sha256, decode, () => { generated++; });
+        expect(generated).toBe(1);
         const probe = (await promisify(execFile)(ffmpegPath, ['-hide_banner', '-i', cache]).catch((error: { stderr: string }) => error)).stderr;
         expect(probe).toMatch(new RegExp(`Video: ${codec}`));
         // tpad appends clone frames after the original duration; the original frames must match exactly.

@@ -28,3 +28,7 @@ export const nativeObsStatusSchema = z.object({ version: z.literal(1), sessionId
   pendingCount: z.number().int().nonnegative(), positionMs: z.number().finite().nonnegative()
 }).strict();
 export type NativeObsStatus = z.infer<typeof nativeObsStatusSchema>;
+/** Sent while a missing OBS seek cache is being generated for one asset. */
+export const obsMediaPreparationSchema = z.object({ assetName: z.string().min(1), index: z.number().int().nonnegative(),
+  total: z.number().int().positive() }).strict().refine(value => value.index < value.total, '素材序号超出总数');
+export type ObsMediaPreparation = z.infer<typeof obsMediaPreparationSchema>;

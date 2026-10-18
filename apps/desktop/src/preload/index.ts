@@ -10,7 +10,7 @@ import { projectArchiveRequestSchema, projectArchiveResultSchema } from '@tb/sch
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
 import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema, nativeMidiCheckSchema } from '@tb/schema';
-import { nativeObsPrepareSchema, nativeObsPreloadSchema, nativeObsStopSchema, nativeObsStatusSchema } from '@tb/schema';
+import { nativeObsPrepareSchema, nativeObsPreloadSchema, nativeObsStopSchema, nativeObsStatusSchema, obsMediaPreparationSchema } from '@tb/schema';
 import type { LinkDesktopApi, LinkDesktopBridgeApi, LinkFileBridge, LinkObsSnapshot, LinkProcessSnapshot, LinkUpdateStatus } from '@tb/core/link';
 
 /** Translate IPC wrappers once, before errors reach any user-facing view. */
@@ -52,6 +52,11 @@ const tbLink: LinkDesktopBridgeApi = {
     const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(nativeObsStatusSchema.parse(value));
     ipcRenderer.on('link:native-obs-status', receive);
     return () => ipcRenderer.removeListener('link:native-obs-status', receive);
+  },
+  onObsMediaPreparation: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(obsMediaPreparationSchema.parse(value));
+    ipcRenderer.on('link:obs-media-preparation', receive);
+    return () => ipcRenderer.removeListener('link:obs-media-preparation', receive);
   },
   getNativePlaybackDevices: async (scope = 'all') => nativePlaybackDevicesSchema.parse(await invoke('link:native-player-devices', { version: 1, scope })),
   checkNativeMidiOutput: request => invoke('link:native-midi-check', nativeMidiCheckSchema.parse(request)),

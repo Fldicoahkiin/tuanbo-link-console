@@ -190,6 +190,7 @@ export class InternalPlaybackController {
     this.dependencies.failed?.(`播放已中断：${message}`, this.state.itemId);
   }
   reportUnavailable(message: string): void { this.appendNotice(message); }
+  reportPreparation(message: string): void { if (this.state.status === 'preparing') this.update({ preparation: message }); }
   runtimeUnavailable(message: string): void { this.disableRuntime(new Error(message)); }
   seek(positionMs: number): Promise<void> {
     if (!this.state.itemId) return Promise.resolve();
@@ -380,7 +381,11 @@ export class InternalPlaybackController {
   }
   private current(generation: number): boolean { return !this.disposed && generation === this.generation; }
   private markPlayed(): void { if (this.state.itemId) this.update({ playedItemIds: [...new Set([...this.state.playedItemIds, this.state.itemId])] }); }
-  private update(patch: Partial<InternalPlayerState>): void { this.state = { ...this.state, ...patch }; this.dependencies.changed({ ...this.state }); }
+  private update(patch: Partial<InternalPlayerState>): void {
+    this.state = { ...this.state, ...patch };
+    if (this.state.status !== 'preparing') this.state.preparation = null;
+    this.dependencies.changed({ ...this.state });
+  }
 }
 
 function waitForAudio(audio: HTMLAudioElement): Promise<void> {

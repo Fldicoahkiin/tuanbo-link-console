@@ -7,7 +7,8 @@ export const programPlayerStateSchema = z.object({
   itemId: z.string().nullable(), positionMs: time, durationMs: time, volume: z.number().min(0).max(100),
   endAction: z.enum(['stop', 'next', 'loop', 'pause']), error: z.string().nullable(), playedItemIds: z.array(z.string()),
   mtcEnabled: z.boolean(), mtcPositionMs: time.nullable(), mtcPortName: z.string().nullable().optional(),
-  mtcSentPositionMs: time.nullable().optional(), errorTitle: z.string().nullable(), notice: z.string().nullable(), mtcConnectionFailed: z.boolean()
+  mtcSentPositionMs: time.nullable().optional(), errorTitle: z.string().nullable(), notice: z.string().nullable(), mtcConnectionFailed: z.boolean(),
+  preparation: z.string().nullable().optional()
 }).strict();
 export type ProgramPlayerState = z.infer<typeof programPlayerStateSchema>;
 export const nativeProgramConfigurationSchema = z.object({

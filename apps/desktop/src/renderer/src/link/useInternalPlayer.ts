@@ -29,6 +29,11 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   useEffect(() => {
     if (controller instanceof RemoteNativeProgramPlayer && obsStatus === 'connected' && selectedItemId) controller.preloadSelected(selectedItemId);
   }, [controller, obsStatus, selectedItemId]);
+  useEffect(() => {
+    if (!(controller instanceof InternalPlaybackController)) return;
+    return desktop.onObsMediaPreparation(progress => controller.reportPreparation(
+      `生成 OBS 定位缓存 ${progress.index + 1}/${progress.total} · ${progress.assetName}`));
+  }, [controller]);
   const requestedEngine = profile?.internalPlayer?.audioEngine ?? 'browser';
   const requestedDevice = (requestedEngine === 'native' ? profile?.internalPlayer?.nativeAudioOutputDeviceId : profile?.internalPlayer?.audioOutputDeviceId) ?? 'default';
   const requestedRate = profile?.internalPlayer?.audioSampleRate ?? 48000;

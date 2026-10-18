@@ -183,6 +183,7 @@ export type LinkDesktopApi = {
   stopNativeObs(request: import('@tb/schema').NativeObsStop): Promise<void>;
   getNativeObsStatus(): Promise<import('@tb/schema').NativeObsStatus | null>;
   onNativeObsStatus(listener: (status: import('@tb/schema').NativeObsStatus) => void): () => void;
+  onObsMediaPreparation(listener: (progress: import('@tb/schema').ObsMediaPreparation) => void): () => void;
   getNativePlaybackDevices(scope?: import('@tb/schema').NativeDeviceQueryRequest['scope']): Promise<import('@tb/schema').NativePlaybackDevices>;
   checkNativeMidiOutput(request: import('@tb/schema').NativeMidiCheck): Promise<void>;
   prepareNativePlayback(request: import('@tb/schema').NativePlayerPrepare): Promise<import('@tb/schema').NativePlayerStatus>;

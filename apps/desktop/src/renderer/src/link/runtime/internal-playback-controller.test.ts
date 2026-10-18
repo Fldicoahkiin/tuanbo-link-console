@@ -155,6 +155,19 @@ it('旧时间码配对失效不阻断网络 Cue；不发 MTC，曲尾等待最�
   expect(f.project.ma2ReadState?.pairings?.['2']?.status).toBe('stale');
   f.controller.dispose();
 });
+it('准备期间显示定位缓存进度，开始播放后清除，迟到的进度不再显示', async () => {
+  const f = fixture();
+  f.deps.prepare.mockImplementationOnce(() => {
+    f.controller.reportPreparation('生成 OBS 定位缓存 2/3 · 扑克牌特效.mov');
+    expect(f.state()).toMatchObject({ status: 'preparing', preparation: '生成 OBS 定位缓存 2/3 · 扑克牌特效.mov' });
+    return Promise.resolve();
+  });
+  await f.controller.play('song-0');
+  expect(f.state()).toMatchObject({ status: 'playing', preparation: null });
+  f.controller.reportPreparation('迟到的进度');
+  expect(f.state().preparation).toBeNull();
+  f.controller.dispose();
+});
 it('OBS 准备和音频启动完成后才启用播放时钟，暂停继续重新确认起点', async () => {
   const f = fixture();
   f.deps.ingest.mockImplementationOnce(async () => { await vi.advanceTimersByTimeAsync(1200); expect(f.deps.started).not.toHaveBeenCalled(); });

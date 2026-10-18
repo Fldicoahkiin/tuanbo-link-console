@@ -22,7 +22,7 @@ import { ObsBridgeSetup } from './link/obs-bridge-setup';
 import { prepareLocalObsConnection, readObsCommandLine } from './link/obs-local-connection';
 import { localObsConnectionResultSchema } from '@tb/schema';
 import { waitForObsEndpoint } from './link/obs-startup';
-import { obsLiveEditSchema } from '@tb/schema';
+import { obsLiveEditSchema, obsMediaPreparationSchema } from '@tb/schema';
 import { beautyApplySchema, beautyBasicValuesSchema, beautyTargetSchema, beautyStartSchema } from '@tb/schema';
 import { BeautyRuntime } from './link/beauty-runtime';
 import { BeautyOutputController } from './link/beauty-output-controller';
@@ -1245,12 +1245,21 @@ function registerIpc(
     const preciseSeeking = z.boolean().parse(preciseSeekingValue);
     if (obs.getSnapshot().status !== 'connected') throw new Error('请先连接 OBS，再同步素材独立场景');
     await projectService.inspectAssets(path, project);
-    for (const target of materialSceneTargets(project)) {
+    const targets = materialSceneTargets(project);
+    for (const [index, target] of targets.entries()) {
       const { asset } = target;
       const absolutePath = projectService.resolveMediaAsset(path, asset.relativePath);
       if (!(await stat(absolutePath)).isFile()) throw new Error(`素材文件不可读：${asset.name}`);
+      const generation = { startedAt: 0 };
       const playbackPath = preciseSeeking && asset.kind === 'video'
-        ? await mediaPreviewService.ensureObsSeekVideo(path, asset.relativePath, asset.sha256) : absolutePath;
+        ? await mediaPreviewService.ensureObsSeekVideo(path, asset.relativePath, asset.sha256, 'hardware', () => {
+          generation.startedAt = performance.now();
+          sendToRenderer('link:obs-media-preparation', obsMediaPreparationSchema.parse({ assetName: asset.name, index, total: targets.length }));
+          void logger.record({ level: 'info', category: 'device', device: 'obs', message: `正在生成 OBS 定位缓存：${asset.name}（${index + 1}/${targets.length}）`, result: 'running' })
+            .catch((error: unknown) => console.error('定位缓存日志未能写入', error));
+        }) : absolutePath;
+      if (generation.startedAt) await logger.record({ level: 'info', category: 'device', device: 'obs', message: `OBS 定位缓存已生成：${asset.name}`,
+        result: 'succeeded', details: { elapsedMs: Math.round(performance.now() - generation.startedAt) } });
       await obs.mediaScenes.prepare(project.projectId, asset, absolutePath, playbackPath, obsMediaCachePaths(path, asset.sha256), target);
     }
   });
