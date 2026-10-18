@@ -185,7 +185,10 @@ export class InternalPlaybackController {
   async reset(): Promise<void> { await this.stop(); if (this.state.status !== 'error') this.update({ itemId: null, playedItemIds: [], durationMs: 0 }); }
 
   externalStop(): void { ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null }); }
-  freeze(message: string): void { ++this.generation; this.silence(); this.update({ status: 'error', error: message, errorTitle: '播放已中断' }); }
+  freeze(message: string): void {
+    ++this.generation; this.silence(); this.update({ status: 'error', error: message, errorTitle: '播放已中断' });
+    this.dependencies.failed?.(`播放已中断：${message}`, this.state.itemId);
+  }
   reportUnavailable(message: string): void { this.appendNotice(message); }
   runtimeUnavailable(message: string): void { this.disableRuntime(new Error(message)); }
   seek(positionMs: number): Promise<void> {
@@ -351,7 +354,11 @@ export class InternalPlaybackController {
     const generation = ++this.generation; let message = toUserErrorMessage(error);
     try { this.silence(); } catch (cleanup) { message += `；灯光释放失败：${toUserErrorMessage(cleanup)}`; }
     this.update({ status: 'error', error: message, errorTitle, notice: null });
-    void this.dependencies.stop('播放失败后清理联动').catch((cleanup: unknown) => { if (this.current(generation)) this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` }); });
+    this.dependencies.failed?.(`${errorTitle}：${message}`, this.state.itemId);
+    void this.dependencies.stop('播放失败后清理联动').catch((cleanup: unknown) => {
+      this.dependencies.failed?.(`播放失败后清理联动未完成：${toUserErrorMessage(cleanup)}`, this.state.itemId);
+      if (this.current(generation)) this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` });
+    });
   }
   private appendNotice(message: string): void {
     if (this.state.notice?.includes(message)) return;

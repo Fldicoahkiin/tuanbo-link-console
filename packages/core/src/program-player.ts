@@ -16,6 +16,7 @@ export type InternalPlayerDependencies = {
   configuration: () => Omit<import('@tb/schema').NativeProgramConfiguration, 'preciseSeeking'>;
   changed: (state: InternalPlayerState) => void;
   notice?: (message: string, itemId: string | null) => void;
+  failed?: (message: string, itemId: string | null) => void;
   obsChanged?: (state: NativeObsStatus) => void;
   preciseSeeking?: () => boolean;
 };

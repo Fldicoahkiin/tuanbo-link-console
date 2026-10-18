@@ -19,7 +19,7 @@ function fixture(grouped = false, nativeSeek = false, mtcInstance?: MediaMtcOutp
   const audio = new FakeAudio();
   const mtc = { connect: vi.fn((portName: string | null) => Promise.resolve(portName)), tick: vi.fn(), stop: vi.fn(), takeSchedulingNotice: vi.fn(() => null) };
   const deps = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), stop: vi.fn(() => Promise.resolve()),
-    started: vi.fn<(positionMs: number) => void>(),
+    started: vi.fn<(positionMs: number) => void>(), failed: vi.fn<(message: string, itemId: string | null) => void>(),
     scrub: nativeSeek ? vi.fn(() => Promise.resolve()) : undefined,
     resolveAudio: vi.fn(() => Promise.resolve('file:///original.wav')), configuration: (): { outputDeviceId: string; mtcPortName: string | null } => ({ outputDeviceId: 'default', mtcPortName: 'MA2' }),
     changed: vi.fn((next: typeof emptyInternalPlayerState) => { state = next; }) };
@@ -33,6 +33,13 @@ function fixture(grouped = false, nativeSeek = false, mtcInstance?: MediaMtcOutp
   return { controller, deps, audio, mtc, project, output, state: () => state };
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+it('播放失败把标题与原因交给失败回调，运行日志不再只剩 status:error', async () => {
+  const f = fixture();
+  f.deps.resolveAudio.mockRejectedValueOnce(new Error("ENOENT: no such file or directory, open 'D:\\show\\0.wav'"));
+  await f.controller.play('song-0');
+  expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：准备失败' });
+  expect(f.deps.failed).toHaveBeenCalledWith('播放未开始：准备失败：所需文件或程序不存在：D:\\show\\0.wav。请重新选择有效路径后重试。', 'song-0');
+});
 it('浏览器播放器读取旧工程保留的 P1 起点，无需重新输入且不叠加源裁剪', async () => {
   const f = fixture();
   f.project.rundown[0]!.p1Media = { sourceKey: 'b'.repeat(64), playlistId: 'p1', sourceFileName: 'song.wav',

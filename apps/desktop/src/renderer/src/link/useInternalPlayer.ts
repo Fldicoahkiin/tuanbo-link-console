@@ -102,6 +102,11 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
           ...(itemId ? { itemId } : {}), device: '正式播放器' })
           .catch((error: unknown) => console.error('正式播放通道提示未能保存到日志', error));
       },
+      failed: (message, itemId) => {
+        void desktop.recordLog({ level: 'error', category: 'state', message, projectId: project.projectId,
+          ...(itemId ? { itemId } : {}), device: '正式播放器', result: 'failed' })
+          .catch((error: unknown) => console.error('正式播放失败未能保存到日志', error));
+      },
       preciseSeeking: () => useDisplayPreferences.getState().preciseSeeking,
       obsChanged: status => {
         if (status.state === 'running' || status.state === 'ready') useRuntimeStore.getState().setState({ currentCueId: status.currentCueId });

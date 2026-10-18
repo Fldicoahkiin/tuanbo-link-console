@@ -38,6 +38,7 @@ import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
 import { useMediaAudioPreparation } from './runtime/use-media-audio-preparation';
 import { useLicenseReminders } from './useLicenseReminders';
+import { recordErrorNotice } from './error-notice-log';
 
 type Page = 'project' | 'cues' | 'lighting';
 type Notice = { id: string; message: string; tone: 'info' | 'error'; key?: string };
@@ -91,6 +92,7 @@ export function LinkApp(): JSX.Element {
   const notify = useCallback((message: string, tone: 'info' | 'error' = 'info', key?: string) => {
     const id = crypto.randomUUID();
     const displayMessage = tone === 'error' ? toUserErrorMessage(message) : message;
+    if (tone === 'error' && message) recordErrorNotice(displayMessage, message);
     setNotices((current) => [...current.filter(notice => notice.message !== displayMessage && (!key || notice.key !== key)), ...(message ? [{ id, message: displayMessage, tone, ...(key ? { key } : {}) }] : [])]);
     if (tone === 'info') window.setTimeout(() => setNotices((current) => current.filter((notice) => notice.id !== id)), 5_000);
   }, []);
