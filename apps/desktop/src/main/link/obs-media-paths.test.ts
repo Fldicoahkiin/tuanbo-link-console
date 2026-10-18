@@ -26,15 +26,25 @@ it('Windows 路径大小写和分隔符不造成错误的来源冲突；其他�
   expect(caches).toContain(join('D:/moved', 'cache', 'obs-seek-jpeg2000', `${digest}.seek-ready.mkv`));
 });
 
-it('迁移工程只有原素材及新旧缓存内容全部核验一致才允许重新绑定', async () => {
-  const cache = caches[2]!;
-  files.checksums.set(`${cache}.sha256`, cacheDigest); files.checksums.set(`${previous}.sha256`, cacheDigest);
-  files.digests.set(source, digest); files.digests.set(cache, cacheDigest); files.digests.set(previous, cacheDigest);
+it('迁移工程：原素材核验一致、旧缓存与自身校验文件一致才允许重新绑定', async () => {
+  files.checksums.set(`${previous}.sha256`, cacheDigest);
+  files.digests.set(source, digest); files.digests.set(previous, cacheDigest);
   await expect(verifyRelocatedObsMediaPath(previous, source, digest, caches)).resolves.toBe(true);
   files.digests.set(previous, 'c'.repeat(64));
   await expect(verifyRelocatedObsMediaPath(previous, source, digest, caches)).resolves.toBe(false);
-  files.digests.set(previous, cacheDigest); files.checksums.delete(`${cache}.sha256`);
+  files.digests.set(previous, cacheDigest); files.digests.set(source, 'c'.repeat(64));
   await expect(verifyRelocatedObsMediaPath(previous, source, digest, caches)).resolves.toBe(false);
+  files.digests.set(source, digest); files.checksums.delete(`${previous}.sha256`);
+  await expect(verifyRelocatedObsMediaPath(previous, source, digest, caches)).resolves.toBe(false);
+});
+
+it('工程复制后重新生成的缓存字节不同，仍可改绑到同一素材的旧缓存（2026-10-19 现场）', async () => {
+  // 两次独立生成的 seek-intra.mkv 校验值不同；新副本的缓存可能已存在也可能尚未生成。
+  const field = join('D:/团播联动台工程/工程资料/reference-audio', 'cache', 'obs-seek-jpeg2000', `${digest}.seek-intra.mkv`);
+  const copy = obsMediaCachePaths('D:/团播联动台工作数据/claude-验证-20261019/11111-副本/11111 联动工程.tblink', digest);
+  files.checksums.set(`${field}.sha256`, cacheDigest); files.checksums.set(`${copy[4]!}.sha256`, 'd'.repeat(64));
+  files.digests.set(source, digest); files.digests.set(field, cacheDigest);
+  await expect(verifyRelocatedObsMediaPath(field, source, digest, copy)).resolves.toBe(true);
 });
 
 it('拒绝另一素材、非缓存目录和未核验的同名原始文件', async () => {

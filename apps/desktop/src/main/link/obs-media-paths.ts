@@ -23,7 +23,10 @@ export function includesObsMediaPath(paths: readonly string[], path: string): bo
 }
 
 /** A copied/moved project retains its scene identity. Rebind only when file
- * contents prove the old input belongs to the same asset; a name is not proof. */
+ * contents prove the old input belongs to the same asset. A cache is named by
+ * the asset digest and checked against its own sidecar; a regenerated cache is
+ * never byte-identical (Matroska writes a random segment UID), so the old and
+ * new cache digests are not compared. */
 export async function verifyRelocatedObsMediaPath(existing: string, source: string, sha256: string, caches: readonly string[]): Promise<boolean> {
   try {
     if (win32.basename(existing).toLowerCase() === win32.basename(source).toLowerCase()) {
@@ -32,10 +35,9 @@ export async function verifyRelocatedObsMediaPath(existing: string, source: stri
     const cache = caches.find(candidate => win32.basename(candidate).toLowerCase() === win32.basename(existing).toLowerCase());
     if (!cache || win32.basename(win32.dirname(existing)).toLowerCase() !== 'obs-seek-jpeg2000'
       || win32.basename(win32.dirname(win32.dirname(existing))).toLowerCase() !== 'cache') return false;
-    const expected = (await readFile(`${cache}.sha256`, 'utf8')).trim();
     const previous = (await readFile(`${existing}.sha256`, 'utf8')).trim();
-    if (!/^[a-f0-9]{64}$/.test(expected) || previous !== expected) return false;
-    return await verified.verify(source, sha256) && await verified.verify(cache, expected) && await verified.verify(existing, expected);
+    if (!/^[a-f0-9]{64}$/.test(previous)) return false;
+    return await verified.verify(source, sha256) && await verified.verify(existing, previous);
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
     throw error;
