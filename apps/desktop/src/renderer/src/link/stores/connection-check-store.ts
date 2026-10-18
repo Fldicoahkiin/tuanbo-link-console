@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 export type ConnectionCheck = {
-  state: 'checking' | 'ready' | 'error' | 'skipped';
+  state: 'waiting' | 'checking' | 'ready' | 'error' | 'skipped';
   detail: string;
   checkedAt: number;
 };
@@ -13,13 +13,15 @@ export const useConnectionCheckStore = create<{
   total: number;
   begin: (ids: string[]) => boolean;
   checking: (id: string) => void;
-  finish: (id: string, state: Exclude<ConnectionCheck['state'], 'checking'>, detail: string) => void;
+  finish: (id: string, state: Exclude<ConnectionCheck['state'], 'checking' | 'waiting'>, detail: string) => void;
   end: () => void;
 }>((set, get) => ({
   running: false, checks: {}, pending: [], completed: 0, total: 0,
   begin: ids => {
     if (get().running) return false;
-    set({ running: true, pending: [...new Set(ids)], completed: 0, total: new Set(ids).size }); return true;
+    // Steps run in sequence; earlier results must not stand in for this run.
+    const waiting = Object.fromEntries([...new Set(ids)].map(id => [id, { state: 'waiting' as const, detail: '等待前序步骤完成', checkedAt: Date.now() }]));
+    set(state => ({ running: true, checks: { ...state.checks, ...waiting }, pending: [...new Set(ids)], completed: 0, total: new Set(ids).size })); return true;
   },
   checking: id => set(state => ({
     checks: { ...state.checks, [id]: { state: 'checking', detail: '正在连接与检查', checkedAt: Date.now() } },
