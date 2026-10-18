@@ -8,7 +8,7 @@ import '../lighting-cue-context-menu.css';
 export function LightingCueContextMenu({x,y,title,categories,categoryIds=[],mixedCategoryIds=[],onConfirm,onRemove,onAdd,onRestore,onRename,onClose}:{
   x:number;y:number;title:string;categories:LightingCategory[];categoryIds?:string[];mixedCategoryIds?:string[];
   onConfirm:(changes:{add:string[];remove:string[]})=>void;onRemove:()=>void;onAdd?:(()=>void)|undefined;onRestore?:()=>void;onClose:()=>void;
-  onRename?:((name:string)=>void)|undefined;
+  onRename?:((name:string)=>void|Promise<void>)|undefined;
 }):JSX.Element {
   const root=useRef<HTMLDivElement>(null);
   const initial=categories.find(category=>categoryIds.includes(category.id));
@@ -20,6 +20,7 @@ export function LightingCueContextMenu({x,y,title,categories,categoryIds=[],mixe
   const [renaming,setRenaming]=useState(false);
   const [name,setName]=useState(title);
   const [renameError,setRenameError]=useState('');
+  const [renameBusy,setRenameBusy]=useState(false);
   const nameInput=useRef<HTMLInputElement>(null);
   useEffect(()=>{if(renaming){nameInput.current?.focus();nameInput.current?.select();}},[renaming]);
   const close=useRef(onClose);close.current=onClose;
@@ -41,10 +42,10 @@ export function LightingCueContextMenu({x,y,title,categories,categoryIds=[],mixe
     event.preventDefault();buttons[(index+(event.key==='ArrowUp'||event.key==='Tab'&&event.shiftKey?-1:1)+buttons.length)%buttons.length]?.focus();
   }}>
     <div className="cue-menu-heading"><div className="cue-menu-title" title={title}>{title}</div>{onRename&&!renaming?<button type="button" aria-label="重命名" title="重命名" onClick={()=>setRenaming(true)}><Pencil/>重命名</button>:null}</div>
-    {renaming?<form className="cue-menu-rename" onSubmit={event=>{event.preventDefault();try{onRename?.(name.trim());onClose();}catch(cause){setRenameError(cause instanceof Error?cause.message:String(cause));}}}>
-      <input ref={nameInput} aria-label="Cue 名称" value={name} maxLength={512} required onChange={event=>{setName(event.target.value);setRenameError('');}}/>
+    {renaming?<form className="cue-menu-rename" onSubmit={event=>{event.preventDefault();if(renameBusy)return;setRenameBusy(true);void Promise.resolve().then(()=>onRename?.(name.trim())).then(onClose).catch((cause:unknown)=>setRenameError(cause instanceof Error?cause.message:String(cause))).finally(()=>setRenameBusy(false));}}>
+      <input ref={nameInput} aria-label="Cue 名称" value={name} maxLength={512} required disabled={renameBusy} onChange={event=>{setName(event.target.value);setRenameError('');}}/>
       {renameError?<p role="alert">{renameError}</p>:null}
-      <footer><button type="button" onClick={()=>{setRenaming(false);setName(title);setRenameError('');}}>取消</button><button className="cue-menu-confirm" type="submit" disabled={!name.trim()||name.trim()===title}>确定</button></footer>
+      <footer><button type="button" disabled={renameBusy} onClick={()=>{setRenaming(false);setName(title);setRenameError('');}}>取消</button><button className="cue-menu-confirm" type="submit" disabled={renameBusy||!name.trim()||name.trim()===title}>{renameBusy?'正在提交…':'确定'}</button></footer>
     </form>:onRestore?<button onClick={()=>apply(onRestore)}><RotateCcw/>恢复素材</button>:<>
       <div className="cue-menu-sections">{([['front','面光',Sun],['rim','轮廓',ScanLine],['effect','效果',Sparkles]] as const).map(([value,name,Icon])=><button key={value} data-section={value} aria-pressed={section===value} onClick={()=>{setSection(value);const previous=categories.find(category=>category.section===value&&(changes[category.id]??categoryIds.includes(category.id)));setTone(previous?.tone??null);setZone(previous?.zone??null);}}><Icon/>{name}</button>)}</div>
       {section && section!=='effect'?<>

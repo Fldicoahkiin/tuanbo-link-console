@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Check, CircleAlert, FolderArchive, FolderOpen, Save, Undo2, Redo2 } from 'lucide-react';
 import type { ProjectArchiveResult } from '@tb/schema';
 import { ma2PendingChanges, ma2UnboundTracks } from '../runtime/ma2-pending-changes';
-import { useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
+import { enableMa2NameSync, useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
 import { archiveMa2Project } from '../runtime/ma2-project-archive';
 import { useDocumentStore } from '../stores/document-store';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
@@ -23,7 +23,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const [detailOpen, setDetailOpen] = useState(false);
   const [notice, setNotice] = useState('');
   if (!project) return null;
-  const active = Boolean(automatic.request) && automatic.status !== 'blocked';
+  const active = Boolean(automatic.request) && automatic.request?.scope !== 'names' && automatic.status !== 'blocked';
   const working = automatic.status === 'writing' || automatic.status === 'reading';
   const count = pending.length + unbound.length + renames.length;
   const status = automatic.status === 'blocked' ? '同步中断' : working ? '同步中' : count ? `待同步 ${count}` : active ? automatic.status === 'verified' ? '已确认' : '同步开启' : '仅本地';
@@ -83,6 +83,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
       <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{notice || automatic.message}</p>
       {playing ? <p>播放中暂存本地，停止后同步。</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}
+      {renames.length ? <button disabled={busy || working} onClick={() => void run(() => enableMa2NameSync(useDocumentStore.getState().documentId))}>同步名称</button> : null}
       {pending.map(item => <p key={`${item.itemId}:${item.bindingId}`}>{item.title} · Timecode {item.target}：{item.error ?? `${item.changes.length} 处修改`}</p>)}
       {unbound.map(item => <p key={`${item.itemId}:${item.trackId}`}>{item.title} · {item.name} · {item.count} 个 Cue：开启同步后自动关联并写入控台。</p>)}
     </div> : null}

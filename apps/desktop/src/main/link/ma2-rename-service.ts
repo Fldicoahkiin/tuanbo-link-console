@@ -4,6 +4,7 @@ import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 export async function renameMa2Object(bridge: Pick<Ma2OnpcBridge, 'request'>, input: Ma2RenameRequest): Promise<Ma2RenameResult> {
   const request = ma2RenameRequestSchema.parse(input);
   const change = request.change;
+  if (change.name === '') throw new Error('原 Cue 没有名称。请在控台清除该名称后重新读取；本次撤销尚未同步，未发送清除指令');
   const endpoint = request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC';
   if (endpoint !== change.endpoint) throw new Error('改名目标属于另一控台，未发送');
   const hex = (value: string) => Buffer.from(value, 'utf8').toString('hex');
