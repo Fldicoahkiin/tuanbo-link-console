@@ -53,6 +53,23 @@ function fixture() {
   return { player, project, deps, api, lighting, emit, state: () => state };
 }
 
+it('引擎异常退出后再次播放不向已退出的引擎发 stop，直接重新准备并播放；销毁时同样不发', async () => {
+  // 修复前：每次播放都先向已退出的引擎发 stop 并被拒绝，同一播放器此后永远停在错误状态。
+  const f = fixture();
+  const commands = (): string[] => f.api.controlNativePlayback.mock.calls.map(([command]) => command.kind);
+  await f.player.play('song-0');
+  f.emit({ status: 'error', audioError: '播放引擎已退出：1' });
+  f.api.controlNativePlayback.mockClear();
+  await f.player.play('song-0');
+  expect(commands()).not.toContain('stop');
+  expect(f.api.prepareNativePlayback).toHaveBeenCalledTimes(2);
+  expect(f.state().status).toBe('playing');
+  f.emit({ status: 'error', audioError: '播放引擎已退出：1' });
+  f.api.controlNativePlayback.mockClear();
+  await f.player.dispose();
+  expect(commands()).not.toContain('stop');
+});
+
 it('选择节目提前预备画面且不出声；重复选择不重做，播放中不能改准备目标', async () => {
   const f = fixture(); f.project.obsOutputMode = 'scenes';
   f.player.preloadSelected('song-0'); f.player.preloadSelected('song-0');

@@ -88,7 +88,8 @@ export class NativeProgramPlayer {
     this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, mtcConnectionFailed: false });
     return this.enqueue(token, async () => {
       if (!this.projectPath) throw new Error('请先保存工程，再播放正式音频');
-      if (this.native && this.native.status !== 'stopped' && this.native.status !== 'ended') await this.command({ kind: 'stop' });
+      // An engine in error has exited and rejects every command; prepare replaces it.
+      if (this.native && this.native.status !== 'stopped' && this.native.status !== 'ended' && this.native.status !== 'error') await this.command({ kind: 'stop' });
       await this.optionalRuntime(() => this.stopObs(), '上次画面清理失败');
       await this.optionalRuntime(() => this.dependencies.stop(), '上次联动清理失败');
       if (!this.current(token)) return;
@@ -229,7 +230,7 @@ export class NativeProgramPlayer {
     ++this.epoch; this.disposed = true; this.unsubscribe(); this.boundaries.clear();
     const cleanup = [
       () => this.cancelScheduled(false),
-      () => this.requestedPreparation ? this.command({ kind: 'stop' }) : undefined,
+      () => this.requestedPreparation && this.native?.status !== 'error' ? this.command({ kind: 'stop' }) : undefined,
       () => this.cancelPreload(), () => this.stopObs(), () => this.dependencies.stop(),
       () => this.lighting.close?.(),
       () => this.tail
