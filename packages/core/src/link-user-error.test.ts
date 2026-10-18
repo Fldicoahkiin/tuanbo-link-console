@@ -29,3 +29,17 @@ it('音频解码错误带底层错误码时仍说明音频问题，不退回笼�
   expect(toUserErrorMessage(new Error('音频解码或读取失败：DEMUXER_ERROR_COULD_NOT_OPEN: FFmpegDemuxer')))
     .toBe('无法读取或解码音频。请检查音频文件是否损坏、格式是否支持；修复或更换音频后重新播放。');
 });
+it('无法归类的异常显示原文第一行，重复翻译不叠加前缀', () => {
+  // 2026-10-16 现场：播放准备失败的原文，第二行起是 FFmpeg 的英文输出。
+  const raw = "Error invoking remote method 'link:obs-media-scenes-prepare': Error: FFmpeg 生成编辑代理失败（退出码 4294967274）：[ffv1 @ 000001794eaed500] Specified pixel format argb is not supported by the ffv1 encoder.\n[vost#0:0/ffv1 @ 000001794eaed000] Error while opening encoder";
+  const message = toUserErrorMessage(new Error(raw));
+  expect(message).toBe('操作未能完成：FFmpeg 生成编辑代理失败（退出码 4294967274）：[ffv1 @ 000001794eaed500] Specified pixel format argb is not supported by the ffv1 encoder.');
+  expect(toUserErrorMessage(new Error(message))).toBe(message);
+});
+it('文件不存在时指出具体路径或程序', () => {
+  expect(toUserErrorMessage(new Error("ENOENT: no such file or directory, stat 'D:\\工程\\assets\\reference-audio\\a.wav'")))
+    .toBe('所需文件或程序不存在：D:\\工程\\assets\\reference-audio\\a.wav。请重新选择有效路径后重试。');
+  const spawn = toUserErrorMessage(new Error('素材没有可解码的音轨：D:\\x.mp4：FFmpeg 启动失败：spawn C:\\Program Files\\ffmpeg.exe ENOENT'));
+  expect(spawn).toBe('所需文件或程序不存在：C:\\Program Files\\ffmpeg.exe。请重新选择有效路径后重试。');
+  expect(toUserErrorMessage(new Error(spawn))).toBe(spawn);
+});

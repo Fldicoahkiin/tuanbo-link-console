@@ -173,6 +173,7 @@ let releaseRendererRuntime: () => Promise<void> = () => Promise.resolve();
 let automaticMusic: AutomaticMusicRuntime | null = null;
 let authorizeOutput: () => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
 let authorizeProduct: (channel: string, value: unknown) => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
+let ipcLogger: LinkRunLogger | null = null;
 let allowWindowClose = false;
 let stopAuditionForQuit: (() => Promise<void>) | null = null;
 let quitFlowRunning = false;
@@ -228,6 +229,7 @@ async function bootstrap(): Promise<void> {
   const processManager = new ExternalProcessManager(new WindowsProcessTools(), obs);
   const integrationDetector = new WindowsIntegrationDetector();
   const logger = new LinkRunLogger(join(app.getPath('userData'), 'link-logs'), () => [...knownSecrets]);
+  ipcLogger = logger;
   await logger.record({ level: 'info', category: 'system', message: `团播联动台 ${desktopPackage.version} 已启动`,
     details: { appVersion: desktopPackage.version, packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
     .catch((error: unknown) => dialog.showErrorBox('运行日志无法写入', error instanceof Error ? error.message : String(error)));
@@ -1686,12 +1688,35 @@ function handle<Arguments extends unknown[], Result>(
 ): void {
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, ...args: Arguments) => {
-    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('拒绝非主窗口的 IPC 请求');
-    // Native playback captures cancellation before awaiting authorization. Its
-    // request adapter performs the same license check before calling the service.
-    if (authorization === 'wrapper') await authorizeProduct(channel, args[0]);
-    return listener(event, ...args);
+    const started = performance.now();
+    try {
+      if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('拒绝非主窗口的 IPC 请求');
+      // Native playback captures cancellation before awaiting authorization. Its
+      // request adapter performs the same license check before calling the service.
+      if (authorization === 'wrapper') await authorizeProduct(channel, args[0]);
+      return await listener(event, ...args);
+    } catch (error) {
+      recordIpcFailure(channel, performance.now() - started, error);
+      throw error;
+    }
   });
+}
+
+const ipcFailureWindowMs = 30_000;
+const ipcFailures = new Map<string, { loggedAt: number; suppressed: number }>();
+
+/** The renderer only receives translated copy; the original stays in the run log.
+ * Polled channels repeat the same failure, so one entry per cause per window. */
+function recordIpcFailure(channel: string, elapsedMs: number, error: unknown): void {
+  const technicalError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  if (!ipcLogger) { console.error(`IPC ${channel} 失败（运行日志尚未就绪）`, error); return; }
+  const key = `${channel}\n${technicalError}`, now = Date.now(), previous = ipcFailures.get(key);
+  if (previous && now - previous.loggedAt < ipcFailureWindowMs) { previous.suppressed++; return; }
+  ipcFailures.set(key, { loggedAt: now, suppressed: 0 });
+  void ipcLogger.record({ level: 'error', category: 'system', device: 'IPC', message: `${channel} 失败：${technicalError.split('\n')[0]!.slice(0, 300)}`,
+    result: 'failed', details: { channel, elapsedMs: Math.round(elapsedMs), technicalError: technicalError.slice(0, 8000),
+      ...(previous ? { repeatsSinceLastEntry: previous.suppressed } : {}) } })
+    .catch((logError: unknown) => console.error(`IPC ${channel} 失败日志未能写入`, logError, error));
 }
 
 function sendToRenderer(channel: string, payload: unknown): void {

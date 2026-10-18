@@ -59,9 +59,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     } catch (error) {
       const raw = typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : String(error);
       const technicalError = options.password ? raw.replaceAll(options.password, '[REDACTED]') : raw;
-      const explanation = toUserErrorMessage(technicalError);
-      const reason = explanation.startsWith('操作未能完成。') ? `操作失败：${technicalError.split('\n')[0]?.slice(0, 300) || '未返回错误内容'}` : explanation;
-      const message = `${label}：${reason}`;
+      const message = `${label}：${toUserErrorMessage(technicalError)}`;
       checks.finish(id, 'error', message); issues.push(message); options.onIssues([...issues]);
       await desktop.recordLog({ level: 'warning', category: 'device', message, result: 'failed', details: { step: id, technicalError } }).catch(console.error);
       return null;
