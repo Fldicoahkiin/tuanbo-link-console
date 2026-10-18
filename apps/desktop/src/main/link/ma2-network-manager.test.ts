@@ -14,7 +14,7 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
     await memory.pause; beforeSend?.();
     const cuePrefix = /TBLINK_CUES_[a-f0-9]{32}:/.exec(line)?.[0];
     if (cuePrefix) {
-      const row = `12;${meiNanCues.map((cue, index) => `${index + 1},${cue},${Buffer.from(`Cue ${cue}`).toString('hex')}`).join(';')}`;
+      const row = `12;${Buffer.from('截图重建序列').toString('hex')};${meiNanCues.map((cue, index) => `${index + 1},${cue},${Buffer.from(`Cue ${cue}`).toString('hex')}`).join(';')}`;
       const chunks: string[] = [];
       for (let index = 0; index < row.length; index += 700) chunks.push(`${cuePrefix}${index + 1}:${row.slice(index, index + 700)}`);
       const response = match(`${chunks.join('\r\n')}\r\n${cuePrefix}END:${row.length}\r\n`);

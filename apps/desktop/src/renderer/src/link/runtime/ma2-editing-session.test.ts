@@ -9,6 +9,7 @@ import { useMa2AutoSyncStore } from './use-ma2-auto-sync';
 import { prepareMa2Editing } from './ma2-editing-session';
 import { scanMa2Materials } from '../stores/ma2-material-read-store';
 vi.mock('../stores/ma2-material-read-store', () => ({ scanMa2Materials: vi.fn() }));
+vi.mock('../stores/ma2-mode-store', () => ({ useMa2ModeStore: vi.fn() }));
 
 vi.mock('../stores/ma2-read-store', async importOriginal => ({
   ...await importOriginal<typeof import('../stores/ma2-read-store')>(), scanMa2: vi.fn(), importCachedMa2: vi.fn()

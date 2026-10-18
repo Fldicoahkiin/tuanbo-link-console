@@ -122,7 +122,22 @@ export function confirmMa2PairingCommand(target: number, itemId: string): LinkCo
     const song = project.rundown.find(item => item.id === itemId);
     const entry = state.catalog.entries.find(item => item.target === target);
     const origin = song && (song.p1Media || song.playback) ? programTimeOrigin(song) : undefined;
-    if (!entry || origin === undefined || !song?.referenceAudio || entry.frameFormat !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(entry.offset ?? '0') || !entry.events.length || entry.events.some(event => !/^\d+(?:\.\d+)?$/.test(event.time) || (Number(event.time) + Number(entry.offset ?? 0)) * 1000 / 30 < origin || (Number(event.time) + Number(entry.offset ?? 0)) * 1000 / 30 >= origin + song.referenceAudio!.durationMs)) throw new Error('时间格式或歌曲范围尚未核对，不能确认配对');
+    if (!entry) throw new Error(`尚未读取 Timecode ${target}，请先读取控台`);
+    if (entry.error) throw new Error(`Timecode ${target} 读取异常：${entry.error}`);
+    if (!song?.referenceAudio || origin === undefined) throw new Error(`歌曲“${song?.title ?? itemId}”缺少音频或原始时间码起点，请先完成歌曲导入`);
+    if (entry.frameFormat !== '30 FPS') throw new Error(`Timecode ${target} 的时间格式为 ${entry.frameFormat ?? '未知'}，当前配对仅支持 30 FPS；未修改控台帧率`);
+    if (!/^\d+(?:\.\d+)?$/.test(entry.offset ?? '0') || !Number.isFinite(Number(entry.offset ?? 0))) throw new Error(`Timecode ${target} 的偏移时间格式无效：${entry.offset ?? '未知'}`);
+    if (!entry.events.length) throw new Error(`Timecode ${target} 没有事件，无需关联歌曲`);
+    const invalid = entry.events.find(event => !/^\d+(?:\.\d+)?$/.test(event.time) || !Number.isFinite(Number(event.time)));
+    if (invalid) throw new Error(`Timecode ${target} 的事件 ${invalid.path} 时间格式无效：${invalid.time}`);
+    const outside = entry.events.find(event => {
+      const time = (Number(event.time) + Number(entry.offset ?? 0)) * 1000 / 30;
+      return time < origin || time >= origin + song.referenceAudio!.durationMs;
+    });
+    if (outside) {
+      const seconds = (Number(outside.time) + Number(entry.offset ?? 0)) / 30;
+      throw new Error(`Timecode ${target} 的事件 ${outside.path} 位于 ${seconds.toFixed(3)} 秒，超出“${song.title}”的歌曲范围 ${(origin / 1000).toFixed(3)}～${((origin + song.referenceAudio.durationMs) / 1000).toFixed(3)} 秒；请核对歌曲原始时间码起点或选择对应歌曲`);
+    }
     const binding = song.lighting?.ma2Bindings?.find(value => value.timecode === target);
     if (binding && (binding.timeOriginMs ?? 0) !== origin) throw new Error('绑定中的歌曲起点已经变化，请先刷新并核对本地 Cue 位置');
     const evidence = ma2PairingEvidence(project, state.source, state.catalog, target, itemId);
