@@ -18,9 +18,9 @@ export async function seekInternalRuntime(project: LinkProject, projectPath: str
   await executeManagedOutputCleanup({ ...cleanup, mediaEvents: cleanup.mediaEvents.filter((event) => !targets.some(target => target.sourceName === event.sourceName)) }, managed, runner);
   assertCurrent();
   const mode = runtime.getMode();
-  apply(runtime.stop()); apply(runtime.completeStop()); apply(runtime.selectItem(itemId));
+  apply(runtime.stop('定位后重新布防')); apply(runtime.completeStop()); apply(runtime.selectItem(itemId));
   apply(runtime.beginPreflight(mode)); apply(runtime.arm(performance.now(), sample));
-  apply(runtime.pauseAutomatic());
+  apply(runtime.pauseAutomatic('定位后保持暂停'));
   for (const entry of work.cues) for (const action of entry.cue.actions) { assertCurrent(); await desktop.executeObsAction(action); }
   for (const event of targets) { assertCurrent(); await desktop.seekManagedMedia({ projectPath, event }); }
   assertCurrent();

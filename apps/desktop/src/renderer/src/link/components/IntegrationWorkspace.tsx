@@ -160,7 +160,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
       }
       const report = await runDesktopPreflight(coordinator, 'live', 'awaiting-external-start');
       if (!report.passed) {
-        coordinator.stop();
+        coordinator.stop(true, '预检未通过');
         notify('设备已启动，但预检存在阻断项；联动没有进入待命。', 'error');
         return;
       }

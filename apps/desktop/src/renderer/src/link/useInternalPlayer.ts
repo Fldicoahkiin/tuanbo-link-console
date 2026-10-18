@@ -85,7 +85,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       ingest: (positionMs) => coordinator.ingestInternal(positionMs),
       started: (positionMs) => coordinator.startInternalClock(positionMs),
       scrub: project.obsOutputMode === 'scenes' ? (positionMs) => coordinator.seekInternal(positionMs) : undefined,
-      pause: () => coordinator.pauseInternal(), stop: () => coordinator.stopAndWait(false),
+      pause: reason => coordinator.pauseInternal(reason), stop: reason => coordinator.stopAndWait(false, reason),
       resolveAudio: (relativePath) => {
         if (!path) throw new Error('请先保存工程');
         return desktop.resolveReferenceAudioUrl({ projectPath: path, relativePath });
@@ -125,7 +125,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       if (audioConfiguration.engine !== 'native' && previous.obs.status === 'connected' && next.obs.status !== 'connected' && useRuntimeStore.getState().state !== 'idle') {
         prepared = null;
         player.runtimeUnavailable('OBS 连接中断；音频继续播放，画面与 OBS 动作已停止。');
-        void coordinator.stopAndWait(false).catch((error: unknown) => player.reportUnavailable(`OBS 清理失败：${String(error)}`));
+        void coordinator.stopAndWait(false, 'OBS 连接断开').catch((error: unknown) => player.reportUnavailable(`OBS 清理失败：${String(error)}`));
       }
     });
     setController(player); view.publish(emptyInternalPlayerState);

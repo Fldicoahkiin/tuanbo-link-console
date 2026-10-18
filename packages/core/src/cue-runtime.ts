@@ -368,13 +368,13 @@ export class CueRuntime {
     return this.update([{ cue: runnableCue, scheduledFrame: timecodeToFrameNumber(runnableCue.timecode, this.project.timebase.frameRate), executionId: crypto.randomUUID() }]);
   }
 
-  stop(): RuntimeUpdate {
+  stop(reason = '操作员请求停止'): RuntimeUpdate {
     this.pendingEdit = null; this.editSessionId = crypto.randomUUID();
     this.state = 'stopping';
     this.lastSample = null;
     this.armedAtMs = null;
     this.manualTakeover = false;
-    return this.update([], '操作员请求停止');
+    return this.update([], reason);
   }
 
   abortStart(reason: string): RuntimeUpdate {

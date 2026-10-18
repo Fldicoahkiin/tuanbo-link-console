@@ -9,8 +9,9 @@ export type InternalPlayerDependencies = {
   ingest: (positionMs: number) => Promise<void>;
   started?: (positionMs: number) => void;
   scrub?: ((positionMs: number) => Promise<void>) | undefined;
-  pause: () => Promise<void>;
-  stop: () => Promise<void>;
+  /** reason: set for programmatic pauses/stops; absent means the operator asked. */
+  pause: (reason?: string) => Promise<void>;
+  stop: (reason?: string) => Promise<void>;
   resolveAudio: (relativePath: string) => Promise<string>;
   configuration: () => Omit<import('@tb/schema').NativeProgramConfiguration, 'preciseSeeking'>;
   changed: (state: InternalPlayerState) => void;

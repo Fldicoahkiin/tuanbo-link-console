@@ -13,11 +13,12 @@ const mocks = vi.hoisted(() => ({
   executeManagedMediaEvent: vi.fn<LinkDesktopApi['executeManagedMediaEvent']>(),
   seekManagedMedia: vi.fn<LinkDesktopApi['seekManagedMedia']>(),
   prepareObsMediaScenes: vi.fn<LinkDesktopApi['prepareObsMediaScenes']>().mockResolvedValue(),
+  recordLog: vi.fn<(entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise<void>>(() => Promise.resolve()),
   listener: null as ((message: MtcQuarterFrameMessage) => void) | null
 }));
 vi.mock('../view-models/link-desktop-view-model', () => ({
   linkDesktopViewModel: {
-    recordLog: vi.fn(() => Promise.resolve()),
+    recordLog: mocks.recordLog,
     activateManagedObsOutput: mocks.activateManagedObsOutput,
     setInternalAudioCapture: mocks.setInternalAudioCapture,
     executeObsAction: mocks.executeObsAction,
@@ -52,6 +53,24 @@ vi.mock('../../registry/link-midi-adapter', () => ({
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); mocks.executeObsAction.mockReset(); mocks.executeManagedMediaEvent.mockReset(); mocks.seekManagedMedia.mockReset(); useRuntimeStore.getState().reset(); });
 
 describe('LinkRuntimeCoordinator', () => {
+  it('内部停止与暂停记录具体原因，不记为操作员动作；操作员停止照旧记录', async () => {
+    vi.stubGlobal('window', globalThis); mocks.recordLog.mockClear();
+    const project = parseLinkProject({ ...createEmptyLinkProject('停止来源'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      rundown: [{ id: 'song', title: '歌曲', cues: [] }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:/shows/test.tblink');
+    const entries = () => mocks.recordLog.mock.calls.map(([entry]) => entry);
+    const stateReasons = () => entries().filter(entry => entry.category === 'state').map(entry => entry.details?.['reason']);
+    const operatorMessages = () => entries().filter(entry => entry.category === 'operator').map(entry => entry.message);
+    try {
+      await coordinator.stopAndWait(false, '开始播放前结束上一会话');
+      expect(stateReasons()).toContain('开始播放前结束上一会话');
+      expect(operatorMessages()).toEqual([]);
+      mocks.recordLog.mockClear();
+      await coordinator.stopAndWait();
+      expect(stateReasons()).toContain('操作员请求停止');
+      expect(operatorMessages()).toEqual(['停止运行会话']);
+    } finally { coordinator.dispose(); }
+  });
   it('OBS 音乐窗口采集失败仍执行开场与后续场景，不要求拖动播放头', async () => {
     vi.stubGlobal('window', globalThis); mocks.executeObsAction.mockResolvedValue();
     const project = parseLinkProject({ ...createEmptyLinkProject('采集通道隔离'), playbackSource: 'internal', obsOutputMode: 'scenes',

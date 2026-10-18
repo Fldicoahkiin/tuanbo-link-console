@@ -52,7 +52,7 @@ export class InternalPlaybackController {
     this.silence(); this.runtimePrepared = false; this.lightingPrepared = false; this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, mtcConnectionFailed: false });
     const operation = this.tail.then(async () => {
       if (!this.current(generation)) return;
-      try { await this.dependencies.stop(); }
+      try { await this.dependencies.stop('开始播放前结束上一会话'); }
       catch (error) { this.appendNotice(`上次联动清理失败：${toUserErrorMessage(error)}。本次仍尝试播放音频。`); }
       if (!this.current(generation)) return;
       const item = this.project.rundown.find((candidate) => candidate.id === itemId && candidate.enabled);
@@ -120,7 +120,7 @@ export class InternalPlaybackController {
         catch (error) { this.disableRuntime(error); }
       }
       if (!this.current(generation)) return;
-      if (paused) { if (this.runtimePrepared) await this.dependencies.pause(); this.update({ status: 'paused' }); return; }
+      if (paused) { if (this.runtimePrepared) await this.dependencies.pause('定位后保持暂停'); this.update({ status: 'paused' }); return; }
       if (config.fadeInMs) this.audio.volume = 0;
       await this.audio.play();
       if (!this.current(generation)) { this.silence(); return; }
@@ -171,11 +171,11 @@ export class InternalPlaybackController {
     } catch (error) { if (this.current(generation)) this.fail(error); }
   }
 
-  async stop(): Promise<void> {
+  async stop(reason?: string): Promise<void> {
     const generation = ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null });
     // Publish cleanup to the same queue before another Play can start preparing OBS.
     const operation = this.tail.then(async () => {
-      const [runtime, lighting] = await Promise.allSettled([this.dependencies.stop(), this.lighting.release()]);
+      const [runtime, lighting] = await Promise.allSettled([this.dependencies.stop(reason), this.lighting.release()]);
       if (lighting.status === 'rejected' && this.current(generation)) this.appendNotice(`灯光关闭未完成：${toUserErrorMessage(lighting.reason)}`);
       if (runtime.status === 'rejected') throw runtime.reason;
     });
@@ -336,13 +336,13 @@ export class InternalPlaybackController {
     if (this.state.endAction === 'pause') {
       const generation = this.generation; this.audio.currentTime = this.state.durationMs / 1000;
       this.update({ status: 'paused', positionMs: this.state.durationMs, mtcPositionMs: this.state.durationMs + this.offsetMs });
-      if (this.runtimePrepared) void this.dependencies.pause().catch((error: unknown) => { if (this.current(generation)) this.disableRuntime(error); }); return;
+      if (this.runtimePrepared) void this.dependencies.pause('播完暂停').catch((error: unknown) => { if (this.current(generation)) this.disableRuntime(error); }); return;
     }
     if (this.state.endAction === 'loop' && this.state.itemId) { void this.play(this.state.itemId); return; }
     const items = playlistItems(this.project, this.state.playlistId ?? 'all').filter((item) => item.enabled && item.referenceAudio);
     const next = items[items.findIndex((item) => item.id === this.state.itemId) + 1];
     if (this.state.endAction === 'next' && next) { void this.play(next.id); return; }
-    void this.stop();
+    void this.stop('播完停止');
   }
   private fail(error: unknown): void {
     const errorTitle = error instanceof PreflightBlockedError ? '播放未开始：预检未通过'
@@ -351,7 +351,7 @@ export class InternalPlaybackController {
     const generation = ++this.generation; let message = toUserErrorMessage(error);
     try { this.silence(); } catch (cleanup) { message += `；灯光释放失败：${toUserErrorMessage(cleanup)}`; }
     this.update({ status: 'error', error: message, errorTitle, notice: null });
-    void this.dependencies.stop().catch((cleanup: unknown) => { if (this.current(generation)) this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` }); });
+    void this.dependencies.stop('播放失败后清理联动').catch((cleanup: unknown) => { if (this.current(generation)) this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` }); });
   }
   private appendNotice(message: string): void {
     if (this.state.notice?.includes(message)) return;

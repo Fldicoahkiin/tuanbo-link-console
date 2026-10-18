@@ -49,15 +49,15 @@ export class LinkRuntimeCoordinator {
   private readonly p1Lighting = new P1LightingOutput();
 
   onInternalStop(handler: (() => void) | null): void { this.internalStopHandler = handler; }
-  async stopAndWait(suspendAuto = true): Promise<void> {
-    this.stop(suspendAuto); await this.cueExecutionTail;
+  async stopAndWait(suspendAuto = true, reason?: string): Promise<void> {
+    this.stop(suspendAuto, reason); await this.cueExecutionTail;
     if (this.runtime.getState() === 'error') throw new Error(useRuntimeStore.getState().reason ?? '停止清理失败');
   }
   async prepareInternal(itemId: string, preflight: (assertCurrent: () => void) => Promise<PreflightReport>, positionMs = 0, signal?: AbortSignal, notice: (message: string) => void = () => undefined): Promise<void> {
     this.internalClockActive = false;
     this.autoFollow?.suspend();
     if (this.disposed) throw new Error('当前播放会话已关闭');
-    await this.internalPreparation.run(() => this.stopAndWait(false), assertCurrent => {
+    await this.internalPreparation.run(() => this.stopAndWait(false, '准备节目前结束上一会话'), assertCurrent => {
       this.internalObsOwner = 'renderer';
       return prepareInternalRuntime(this.project, itemId, positionMs, () => preflight(assertCurrent), {
       assertCurrent, notice, select: () => this.selectItem(itemId, false), capture: () => { this.internalCaptureActive = true; },
@@ -74,7 +74,7 @@ export class LinkRuntimeCoordinator {
     this.internalClockActive = false; this.autoFollow?.suspend();
     if (this.disposed) throw new Error('当前播放会话已关闭');
     await prepareNativeCompanionRuntime(this.project, itemId, positionMs, {
-      scope: this.internalPreparation, stop: () => this.stopAndWait(false),
+      scope: this.internalPreparation, stop: () => this.stopAndWait(false, '准备节目前结束上一会话'),
       select: () => { this.internalObsOwner = 'main'; this.selectItem(itemId, false); },
       runtime: this.runtime, beginPreflight: () => this.beginPreflight('live'),
       initializeMidi: () => this.initializeMidi(false), midi: this.midi,
@@ -97,16 +97,16 @@ export class LinkRuntimeCoordinator {
     this.internalClockActive = false;
     const item = this.currentItem();
     if (this.internalObsOwner === 'main' && item) {
-      await this.prepareNativeCompanion(item.id, positionMs); await this.pauseInternal(); return;
+      await this.prepareNativeCompanion(item.id, positionMs); await this.pauseInternal('定位后保持暂停'); return;
     }
     if (!item || !useRuntimeStore.getState().preflight?.passed || !['running', 'paused'].includes(this.runtime.getState())) throw new Error('当前播放会话不可定位，请重新播放');
-    if (this.runtime.getState() === 'running') this.applyRequiredUpdate(this.runtime.pauseAutomatic());
+    if (this.runtime.getState() === 'running') this.applyRequiredUpdate(this.runtime.pauseAutomatic('定位中暂停'));
     ++this.executionGeneration; await this.cueExecutionTail;
     const sample = internalSample(this.project, positionMs); this.lastSample = sample;
     const operation = seekInternalRuntime(this.project, this.projectPath, item.id, sample, this.runtime, this.managedOutput, this.runner, (update) => this.applyRequiredUpdate(update));
     this.cueExecutionTail = operation.catch((error: unknown) => this.reportRuntimeError(error)); await operation;
   }
-  async pauseInternal(): Promise<void> { this.internalClockActive = false; this.pause(); await this.syncMediaTransport('pause'); }
+  async pauseInternal(reason?: string): Promise<void> { this.internalClockActive = false; this.pause(reason); await this.syncMediaTransport('pause'); }
 
   cancelEditorPreview(): void { this.executionGeneration += 1; this.editorPreview.reset(); }
 
@@ -123,7 +123,7 @@ export class LinkRuntimeCoordinator {
     if (this.autoFollow) { await this.initializeMidi(); this.autoFollow.enable(); return; }
     this.autoFollow = new P1AutoFollowController(this.project, {
       prepare: async (itemId, isCurrent) => {
-        this.stop(false); await this.cueExecutionTail;
+        this.stop(false, 'P1 切歌，结束上一会话'); await this.cueExecutionTail;
         if (!isCurrent()) return;
         this.selectItem(itemId, false);
         const report = await preflight();
@@ -217,9 +217,9 @@ export class LinkRuntimeCoordinator {
     await this.recordOperatorActionAsync('从头布防当前节目');
   }
 
-  pause(): void {
-    this.applyRequiredUpdate(this.runtime.pauseAutomatic());
-    this.recordOperatorAction('暂停自动联动');
+  pause(reason?: string): void {
+    this.applyRequiredUpdate(this.runtime.pauseAutomatic(reason));
+    if (!reason) this.recordOperatorAction('暂停自动联动');
   }
 
   resume(): void {
@@ -291,7 +291,7 @@ export class LinkRuntimeCoordinator {
     if (result.status === 'failed') throw new Error(result.error ?? '单步测试失败');
   }
 
-  stop(suspendAuto = true): void {
+  stop(suspendAuto = true, reason?: string): void {
     this.editorPreview.reset();
     this.internalPreparation.cancel();
     ++this.executionGeneration;
@@ -299,8 +299,8 @@ export class LinkRuntimeCoordinator {
     this.internalClockActive = false;
     if (suspendAuto) { this.internalStopHandler?.(); this.autoFollow?.suspend(); }
     if (this.runtime.getState() === 'stopping') return;
-    this.applyUpdate(this.runtime.stop()); if (this.runtime.getState() === 'idle') return;
-    this.recordOperatorAction('停止运行会话');
+    this.applyUpdate(this.runtime.stop(reason)); if (this.runtime.getState() === 'idle') return;
+    if (!reason) this.recordOperatorAction('停止运行会话');
     const settled = this.internalPreparation.settledBefore(this.cueExecutionTail);
     const cleanupExecution = collectManagedOutputCleanupAfter(settled, this.managedOutput).then(async (cleanup) => {
       await executeManagedOutputCleanup(cleanup, this.managedOutput, this.runner);
