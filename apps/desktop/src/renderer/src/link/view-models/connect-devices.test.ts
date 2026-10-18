@@ -93,7 +93,7 @@ it('开始一键连接时，上一次的结果先重置为等待中，不冒充�
   useConnectionCheckStore.getState().end();
 });
 
-it('保留用户选定路径和关闭选项，不被识别出的其他版本覆盖', async () => {
+it('保留用户选定路径和关闭选项；识别到的未登记程序只报告，不自动登记或启动', async () => {
   const config = options();
   config.draft.ma2 = { ...maProgram('D:\\MA\\chosen.exe'), connectOnDemand: false };
   api.detectLocalIntegrations.mockResolvedValue({ detectedAt: new Date().toISOString(), applications: {
@@ -104,9 +104,11 @@ it('保留用户选定路径和关闭选项，不被识别出的其他版本覆�
   } });
   await connectDevices(config);
   expect(api.startExternalApplication).not.toHaveBeenCalledWith('ma2');
-  expect(api.startExternalApplication).toHaveBeenCalledWith('ma3d');
+  expect(api.startExternalApplication).not.toHaveBeenCalledWith('ma3d');
   expect(useIntegrationStore.getState().profile?.ma2?.executablePath).toBe('D:\\MA\\chosen.exe');
-  expect(useIntegrationStore.getState().profile?.ma3d?.executablePath).toBe('D:\\MA\\MA3D.exe');
+  expect(useIntegrationStore.getState().profile?.ma3d).toBeUndefined();
+  expect(useConnectionCheckStore.getState().checks.ma3d).toMatchObject({ state: 'skipped',
+    detail: '已识别 D:\\MA\\MA3D.exe，未启用；在 MA2 设置中选择并启用后才会由一键连接启动' });
 });
 
 it('onPC 启动失败即停止：不登录控台、不启动 MA 3D，之前的 OBS 已完成', async () => {

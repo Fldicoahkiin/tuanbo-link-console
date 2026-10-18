@@ -38,11 +38,15 @@ function withDeadline<T>(operation: Promise<T>, deadlineMs: number, label: strin
   return Promise.race([operation, deadline]).finally(() => clearTimeout(timer));
 }
 
-async function startMaPrograms(profile: IntegrationProfile, run: ConnectionStep, skip: (id: string, detail: string) => void, connect: () => Promise<void>): Promise<void> {
+async function startMaPrograms(profile: IntegrationProfile, detected: Partial<Record<'ma2' | 'ma3d', string>>, run: ConnectionStep, skip: (id: string, detail: string) => void, connect: () => Promise<void>): Promise<void> {
   const start = async (id: 'ma2' | 'ma3d'): Promise<boolean> => {
     const key = id === 'ma2' ? 'ma2-app' : 'ma3d';
     const label = id === 'ma2' ? 'MA2 onPC' : 'MA 3D';
-    if (!profile[id]?.connectOnDemand) { skip(key, profile[id] ? '已关闭一键启动' : '未配置本机程序；可在 MA2 设置选择程序'); return true; }
+    if (!profile[id]?.connectOnDemand) {
+      const found = detected[id];
+      skip(key, profile[id] ? '已关闭一键启动' : found ? `已识别 ${found}，未启用；在 MA2 设置中选择并启用后才会由一键连接启动` : '未配置本机程序；可在 MA2 设置选择程序');
+      return true;
+    }
     const result = await run(key, label, async () => {
       const snapshot = await desktop.startExternalApplication(id);
       useIntegrationStore.getState().setProcess(snapshot);
@@ -79,6 +83,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     }
   };
   let profile = options.draft;
+  const detectedMaPrograms: Partial<Record<'ma2' | 'ma3d', string>> = {};
   const internal = options.project?.playbackSource === 'internal';
   const connectMa2 = async (): Promise<void> => {
     const method = readMa2Method();
@@ -103,12 +108,10 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
         obs: obs.executablePath && obs.workingDirectory ? { ...profile.obs, executablePath: obs.executablePath, workingDirectory: obs.workingDirectory } : profile.obs,
         p1: p1.executablePath && p1.workingDirectory ? { ...profile.p1, executablePath: p1.executablePath, workingDirectory: p1.workingDirectory } : profile.p1
       };
+      // Detection reports MA programs only; registering one to start is the operator's choice.
       for (const id of ['ma2', 'ma3d'] as const) {
-        const application = detection.value.applications[id];
-        if (!profile[id] && application?.executablePath && application.workingDirectory) {
-          profile = { ...profile, [id]: { executablePath: application.executablePath, workingDirectory: application.workingDirectory,
-            arguments: [], startupTimeoutMs: 30_000, shutdownTimeoutMs: 10_000, connectOnDemand: true } };
-        }
+        const path = detection.value.applications[id]?.executablePath;
+        if (path) detectedMaPrograms[id] = path;
       }
     }
     const loop = await run('loop', '虚拟 MIDI', async () => {
@@ -209,7 +212,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     }, '播放设备可用，正式音频在播放时启用');
     await portsTask();
     await p1Task();
-    await startMaPrograms(profile, run, skip, connectMa2);
+    await startMaPrograms(profile, detectedMaPrograms, run, skip, connectMa2);
   } finally {
     for (const id of useConnectionCheckStore.getState().pending) skip(id, '未执行');
     checks.end(); options.onIssues([...issues]);
