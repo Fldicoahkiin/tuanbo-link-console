@@ -62,6 +62,14 @@ it('连接传入已校验的电脑地址，地址解析失败不建立 TCP 连�
   resolve.mockRejectedValue(new Error('专用地址已不可用'));
   expect((await manager.connect()).error).toBe('专用地址已不可用'); expect(memory.connects).toBe(1);
 });
+it('本机 onPC 未就绪时不建立 TCP 连接、不发送登录，状态给出具体原因', async () => {
+  const awaitListener = vi.fn().mockRejectedValue(new Error('本机 MA2 onPC 未运行，未尝试登录 127.0.0.1:30000'));
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), () => false, undefined, undefined, undefined, awaitListener);
+  await manager.save({ settings: { ...settings, host: '127.0.0.1' } });
+  const connects = memory.connects;
+  expect((await manager.connect()).error).toBe('本机 MA2 onPC 未运行，未尝试登录 127.0.0.1:30000');
+  expect(awaitListener).toHaveBeenCalledWith('127.0.0.1', settings.port); expect(memory.connects).toBe(connects);
+});
 it('网络播放拒绝过期、换目标和停止后排队的指令', async () => {
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
   await manager.save({ settings }); await manager.connect();

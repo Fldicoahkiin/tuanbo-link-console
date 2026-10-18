@@ -1,7 +1,7 @@
 import { materialSceneTargets } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
-import { assertMa2ConnectionOwner, isLocalMa2Address } from './link/ma2-connection-owner';
+import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
 import { ma2AuditionRequestSchema,ma2AuditionControlSchema } from '@tb/schema';
 import { WindowsMidiHealth, midiProbeExecutable, probeWindowsMidi, midiHealthMessage } from './link/windows-midi-health';
 import { LicenseService } from './link/license-service';
@@ -634,6 +634,16 @@ function registerIpc(
     const selected = await processManager.refresh('ma2', processConfiguration(profile, 'ma2'));
     if (selected.pid === null) throw new Error('选定的 MA2 onPC 尚未运行，请先点击一键连接');
     await assertMa2ConnectionOwner(selected.pid, peers);
+  }, async (host, port) => {
+    if (!isLocalMa2Address(host)) return;
+    const profile = await profileStore.loadProfile();
+    if (!profile?.ma2) return;
+    const selected = await processManager.refresh('ma2', processConfiguration(profile, 'ma2'));
+    if (selected.pid === null) throw new Error(`本机 MA2 onPC 未运行，未尝试登录 ${host}:${port}。请先点击一键连接按顺序启动 onPC，或在 MA2 设置中核对控台地址。`);
+    const started = performance.now();
+    const outcome = await waitForMa2Listener(selected.pid, port, profile.ma2.startupTimeoutMs);
+    if (outcome === 'waited') await logger.record({ level: 'info', category: 'device', device: 'MA2', result: 'succeeded',
+      message: `MA2 onPC 远程端口 ${port} 已就绪`, details: { pid: selected.pid, waitedMs: Math.round(performance.now() - started) } });
   });
   const ma2Reads = new Map<string, { senderId: number; controller: AbortController }>();
   const beginMa2Read = (event: IpcMainInvokeEvent, id?: string): { signal: AbortSignal; report: ((progress: Ma2ReadProgressUpdate) => void) | undefined; finish: () => void } => {
