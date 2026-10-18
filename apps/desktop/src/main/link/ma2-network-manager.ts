@@ -175,6 +175,19 @@ export class Ma2NetworkManager {
     finally { this.busy = false; }
     return this.status();
   }
+  /** gma.show.getvar('SHOWFILE'), the value the bridge reports as directory.show.
+   * Hex keeps non-ASCII show names intact over telnet; the H keeps an empty name matchable. */
+  async currentShow(): Promise<string> {
+    const connection = this.connection;
+    if (!connection || connection.state !== 'connected') throw new Error('请先连接 MA2 控台');
+    const marker = `TBLINK_SHOW_${randomBytes(16).toString('hex')}`;
+    const script = `local s=tostring(gma.show.getvar('SHOWFILE') or '');gma.echo('${marker}:H'..(s:gsub('.',function(b)return string.format('%02x',string.byte(b))end)))`;
+    const reply = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, `${marker}:`));
+    if (!/^H(?:[0-9a-f]{2})*$/.test(reply)) throw new Error('控台返回的当前 show 名称格式无效');
+    const show = Buffer.from(reply.slice(1), 'hex').toString('utf8');
+    if (!show) throw new Error('控台没有加载 show');
+    return show;
+  }
   async checkCapabilities(): Promise<Ma2NetworkStatus> {
     if (this.isPlaying()) throw new Error('请停止播放后检测控台兼容性');
     if (this.busy) throw new Error('MA2 正在处理连接请求');

@@ -1,4 +1,4 @@
-import { toUserErrorMessage, type LinkLocalIntegrationDetection } from '@tb/core/link';
+import { expectedMa2Shows, ma2ShowMismatch, toUserErrorMessage, type LinkLocalIntegrationDetection } from '@tb/core/link';
 import { loopMidiStatusSchema, ma2NetworkStatusSchema, obsWebSocketUrlSchema, localObsConnectionResultSchema, type IntegrationProfile, type LinkProject } from '@tb/schema';
 import type { MidiPortSnapshot } from '../../registry/link-midi-adapter';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -36,6 +36,14 @@ function withDeadline<T>(operation: Promise<T>, deadlineMs: number, label: strin
     timer = setTimeout(() => reject(new Error(`${label}超过 ${Math.round(deadlineMs / 1000)} 秒未完成；该操作可能仍在后台进行`)), deadlineMs);
   });
   return Promise.race([operation, deadline]).finally(() => clearTimeout(timer));
+}
+
+/** Cue numbers are only meaningful in the show they were read from. */
+async function assertProjectMa2Show(project: LinkProject | null): Promise<void> {
+  const expected = project ? [...new Set(project.rundown.flatMap(item => expectedMa2Shows(project, item.id)))] : [];
+  if (!expected.length) return;
+  const mismatch = ma2ShowMismatch(expected, await desktop.getMa2CurrentShow());
+  if (mismatch) throw new Error(mismatch);
 }
 
 async function startMaPrograms(profile: IntegrationProfile, detected: Partial<Record<'ma2' | 'ma3d', string>>, run: ConnectionStep, skip: (id: string, detail: string) => void, connect: () => Promise<void>): Promise<void> {
@@ -97,7 +105,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       status = status.settings ? ma2NetworkStatusSchema.parse(await desktop.connectMa2Network()) : await connectDiscoveredMa2();
       if (status.state !== 'connected') throw new Error(status.error ?? '控台登录未完成');
     }, '控台网络登录成功');
-    await run('bridge', 'MA2 工程通信', checkNetworkMa2, '控台工程通信已响应');
+    await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); await assertProjectMa2Show(options.project); }, '控台工程通信已响应');
   };
   try {
     const detection = await run('discovery', '程序识别', () => desktop.detectLocalIntegrations());

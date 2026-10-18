@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
 import type { LinkDesktopApi, LinkProcessSnapshot } from '@tb/core/link';
 import { connectDevices, type DeviceConnectionOptions } from './connect-devices';
 import { createDefaultIntegrationProfile } from './local-integration-profile';
@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
   closeObsLivePreview: vi.fn<LinkDesktopApi['closeObsLivePreview']>(),
   getMa2NetworkStatus: vi.fn<LinkDesktopApi['getMa2NetworkStatus']>(),
   connectMa2Network: vi.fn<LinkDesktopApi['connectMa2Network']>(),
+  getMa2CurrentShow: vi.fn<LinkDesktopApi['getMa2CurrentShow']>(),
   recordLog: vi.fn<LinkDesktopApi['recordLog']>(),
   getNativePlaybackDevices: vi.fn<LinkDesktopApi['getNativePlaybackDevices']>(),
   checkNativeMidiOutput: vi.fn<LinkDesktopApi['checkNativeMidiOutput']>(),
@@ -245,6 +246,23 @@ it('OBS 连接失败即停止：预览不误报就绪，控台与 MIDI 接口均
   expect(config.openMidiPorts).not.toHaveBeenCalled();
   expect(useConnectionCheckStore.getState().checks.preview).toMatchObject({ state: 'skipped', detail: '未执行：OBS 控制未通过，已停止后续步骤' });
   expect(useConnectionCheckStore.getState().checks['port:custom-input']?.state).toBe('skipped');
+});
+it('控台当前 show 与工程灯光依据不一致时工程通信不通过，不再启动 MA 3D；一致时通过', async () => {
+  const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false,
+    channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 5000, timeLock: 'time', muted: false,
+      events: [{ id: 'cue', at: 1000, kind: 'ma2', sequence: 7, cue: '6.000', executor: '', label: '副歌', action: 'goto' }] }] });
+  const config = options(); config.draft.ma3d = maProgram('D:\\MA\\MA3D.exe');
+  config.project = parseLinkProject({ ...createEmptyLinkProject('灯光工程'), schemaVersion: 2, playbackSource: 'internal', rundown: [{ id: 'song', title: '第一首',
+    lighting: { ...createLightingDocument(), outputMode: 'network', tracks: [track], ma2Library: { show: '2hao', readAt: '2026-10-13T00:00:00.000Z', sequences: [] } } }] });
+  api.getMa2CurrentShow.mockResolvedValueOnce('tblink_ui100_20261007');
+  await connectDevices(config);
+  expect(useConnectionCheckStore.getState().checks.bridge?.state).toBe('error');
+  expect(useConnectionCheckStore.getState().checks.bridge?.detail).toContain('控台当前加载的 show 是“tblink_ui100_20261007”，灯光 Cue 依据“2hao”编写');
+  expect(api.startExternalApplication).not.toHaveBeenCalledWith('ma3d');
+  api.getMa2CurrentShow.mockResolvedValueOnce('2hao');
+  await connectDevices(config);
+  expect(useConnectionCheckStore.getState().checks.bridge?.state).toBe('ready');
+  expect(api.startExternalApplication).toHaveBeenCalledWith('ma3d');
 });
 it('程序识别未通过即停止，不再保存配置或连接设备', async () => {
   api.detectLocalIntegrations.mockRejectedValueOnce(new Error('系统命令组件暂不可用'));

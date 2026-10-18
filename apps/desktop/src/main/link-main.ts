@@ -722,6 +722,7 @@ function registerIpc(
   handle('link:ma2-play-cue', (_event, payload: unknown) => sendMa2Cue(payload));
   handle('link:ma2-play-cancel', (_event, sessionId: unknown) => { if (typeof sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(sessionId)) throw new Error('无效的灯光会话'); ma2Network.cancelPlayback(sessionId); });
   handle('link:ma2-network-status', async () => { await ma2NetworkReady; return ma2Network.status(); });
+  handle('link:ma2-current-show', async () => { await ma2NetworkReady; return ma2Network.currentShow(); });
   nativeProgram = new NativeProgramService((project, request, callbacks) => {
     const notice = (message: string, itemId: string | null): void => {
       void logger.record({ level: 'warning', category: 'state', device: '正式播放器', projectId: project.projectId,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { IntegrationProfile, LinkProject } from '@tb/schema';
+import { createLightingDocument, lightingTrackSchema, type IntegrationProfile, type LinkProject } from '@tb/schema';
 import { runLinkPreflight, type PreflightContext } from './link-preflight';
 
 describe('团播联动台预检', () => {
@@ -240,6 +240,22 @@ describe('团播联动台预检', () => {
     expect(report.checks.find((check) => check.id === 'timebase.profileFrameRate')).toMatchObject({ status: 'blocking' });
   });
 
+});
+
+describe('MA2 控台 show', () => {
+  it('与节目灯光依据不一致时阻断，一致时通过，未查询控台时不新增检查项', () => {
+    const value = context();
+    const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false,
+      channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 5000, timeLock: 'time', muted: false,
+        events: [{ id: 'cue', at: 1000, kind: 'ma2', sequence: 7, cue: '6.000', executor: '', label: '副歌', action: 'goto' }] }] });
+    const lighting = { ...createLightingDocument(), outputMode: 'network' as const, tracks: [track], ma2Library: { show: '2hao', readAt: '2026-10-13T00:00:00.000Z', sequences: [] } };
+    value.project = { ...value.project, schemaVersion: 2, rundown: value.project.rundown.map(item => ({ ...item, lighting })) };
+    const showCheck = (ma2Show?: string) => runLinkPreflight({ ...value, ...(ma2Show ? { ma2Show } : {}) }).checks.find(check => check.id === 'ma2.show.item');
+    expect(showCheck()).toBeUndefined();
+    const blocked = showCheck('tblink_ui100_20261007');
+    expect(blocked?.status).toBe('blocking'); expect(blocked?.detail).toContain('灯光 Cue 依据“2hao”编写');
+    expect(showCheck('2hao')).toMatchObject({ status: 'passed', detail: '2hao' });
+  });
 });
 
 function context(): PreflightContext {

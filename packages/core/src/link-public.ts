@@ -7,6 +7,7 @@ export * from './link-command';
 export * from './audio-edit';
 export * from './ibt-beat-result';
 export * from './link-preflight';
+export * from './ma2-show-identity';
 export * from './link-desktop-contract';
 export * from './managed-media-timeline';
 export * from './scene-output-timeline';

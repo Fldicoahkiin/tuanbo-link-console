@@ -1,6 +1,7 @@
 import { parseIntegrationProfile, parseLinkProject, type IntegrationProfile, type LinkAction, type LinkProject, type MtcFrameRate } from '@tb/schema';
 import { compileManagedMediaTimeline } from './managed-media-timeline';
 import { validateP1TimecodeRanges } from './p1-auto-follow';
+import { expectedMa2Shows, ma2ShowMismatch } from './ma2-show-identity';
 
 export type PreflightMode = 'rehearsal' | 'live';
 export type PreflightCheckStatus = 'passed' | 'warning' | 'blocking';
@@ -52,6 +53,8 @@ export type PreflightContext = {
   minimumDiskBytes: number;
   credentialsDecryptable: boolean;
   logRedactionReady: boolean;
+  /** Show loaded on the connected MA2 console; absent when no console was queried. */
+  ma2Show?: string;
   now?: () => string;
 };
 
@@ -87,6 +90,12 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
   if (context.mtcRequirement === 'internal') project = { ...project, rundown: currentItem ? [currentItem] : [] };
 
   for (const item of project.rundown.filter((candidate) => candidate.enabled)) {
+    const expectedShows = expectedMa2Shows(project, item.id);
+    if (context.ma2Show !== undefined && expectedShows.length) {
+      const mismatch = ma2ShowMismatch(expectedShows, context.ma2Show);
+      checks.push(mismatch ? blocking(`ma2.show.${item.id}`, `MA2 控台 show：${item.title}`, mismatch)
+        : passed(`ma2.show.${item.id}`, `MA2 控台 show：${item.title}`, context.ma2Show));
+    }
     if (project.obsOutputMode === 'scenes') {
       const incompatible = item.cues.filter((cue) => cue.enabled).flatMap((cue) => cue.actions).find((action) =>
         action.kind.startsWith('obs.') && action.kind !== 'obs.setProgramScene' && action.kind !== 'obs.setTransition' && action.kind !== 'obs.saveSourceScreenshot');

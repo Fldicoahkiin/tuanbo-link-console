@@ -219,6 +219,8 @@ export type LinkDesktopApi = {
   controlMa2Audition(payload: import('@tb/schema').Ma2AuditionControl): Promise<import('@tb/schema').Ma2AuditionState>;
   onMa2AuditionState(listener:(state:import('@tb/schema').Ma2AuditionState)=>void):()=>void;
   getMa2NetworkStatus(): Promise<import('@tb/schema').Ma2NetworkStatus>;
+  /** Show file loaded on the connected network console. */
+  getMa2CurrentShow(): Promise<string>;
   saveMa2Network(payload: import('@tb/schema').Ma2NetworkSave): Promise<import('@tb/schema').Ma2NetworkStatus>;
   connectMa2Network(): Promise<import('@tb/schema').Ma2NetworkStatus>;
   disconnectMa2Network(): Promise<import('@tb/schema').Ma2NetworkStatus>;
