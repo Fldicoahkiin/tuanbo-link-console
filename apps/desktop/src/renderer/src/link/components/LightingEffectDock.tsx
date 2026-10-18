@@ -1,11 +1,13 @@
 import { createPortal } from 'react-dom';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Layers, Sun, ScanLine, Sparkles } from 'lucide-react';
 import type { LightingDocument } from '@tb/schema';
 import { LightingUserLibrary, type LibraryDraft } from './LightingUserLibrary';
 import { Ma2SequencePreview } from './Ma2SequencePreview';
 import { Ma2CachedBrowser } from './Ma2CachedBrowser';
 import { useMa2ReadStore } from '../stores/ma2-read-store';
+import { useDocumentStore } from '../stores/document-store';
+import { ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
 import { useLightingCueSplit } from './LightingLibrarySplitter';
 import { LightingCueComposer, cueIngredients, saveCueIngredients, type CueIngredient } from './LightingCueComposer';
 import { CONSOLE_CUE_DRAG, consoleCueDragSchema } from './lighting-material-drag';
@@ -26,14 +28,16 @@ export function LightingEffectDock({ onCreated, document, disabled, onChange, ev
   const [draftOpen, setDraftOpen] = useState(false);
   const [error, setError] = useState('');
   const browserOpen = useMa2ReadStore(state => state.browserOpen);
+  const project = useDocumentStore(state => state.project);
+  const library = useMemo(() => ma2SequenceLibrary(project, document), [project, document]);
   const loaded = useRef('');
   useEffect(() => {
-    const events = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => eventId && (event.id === eventId || event.effectGroupId === eventId))));
-    const key = `${eventId ?? ''}:${JSON.stringify(events)}`;
+    const values = cueIngredients(document, eventId, library);
+    const key = `${eventId ?? ''}:${JSON.stringify(values)}`;
     if (loaded.current === key) return;
     loaded.current = key;
-    if (eventId) { setIngredients(cueIngredients(document, eventId)); setTemplateId(undefined); setDraftOpen(false); }
-  }, [eventId, document]);
+    if (eventId) { setIngredients(values); setTemplateId(undefined); setDraftOpen(false); }
+  }, [eventId, document, library]);
   const editorOpen = Boolean(eventId || templateId || draftOpen);
   const commitIngredients = (values: CueIngredient[]): void => {
     if (disabled) return;

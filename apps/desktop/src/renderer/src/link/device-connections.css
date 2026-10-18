@@ -1,5 +1,4 @@
-/* Settings surfaces and type are local; the connection toolbar keeps its appearance. */
-.app-shell[data-workspace='settings'] .app-sidebar,
+/* Settings surfaces and type stay inside the workspace; global navigation is shared. */
 .app-workspace.settings-workspace {
   --surface: #202023;
   --surface-raised: #2b2b2f;
@@ -18,7 +17,6 @@
   --text-control: 15px;
   --text-caption: 14px;
 }
-:root[data-theme='light'] .app-shell[data-workspace='settings'] .app-sidebar,
 :root[data-theme='light'] .app-workspace.settings-workspace {
   --surface: #f7f7f9;
   --surface-raised: #ffffff;
@@ -34,14 +32,8 @@
   --accent-soft-2: #e0edfb;
   --settings-control-border: #85858e;
 }
-.app-shell[data-workspace='settings'] { grid-template-columns: 216px minmax(0, 1fr); }
-.app-shell[data-workspace='settings'] .app-sidebar { min-width: 0; padding: 20px 12px; background: var(--settings-navigation); }
-.app-shell[data-workspace='settings'] .app-sidebar .main-nav { gap: 4px; }
-.app-shell[data-workspace='settings'] .app-sidebar .main-nav button { min-height: 44px; padding: 10px 12px; border-radius: 8px; }
-.app-shell[data-workspace='settings'] .app-sidebar .main-nav button strong { font-size: 15px; font-weight: 500; white-space: normal; }
 .app-shell[data-workspace='settings'] .settings-submenus { border: 0; padding: 8px 0; }
 .app-shell[data-workspace='settings'] .settings-submenus::before { content: none; }
-.app-shell[data-workspace='settings'] .app-sidebar .main-nav > button.active { background: var(--surface-3); box-shadow: none; }
 .app-workspace.settings-workspace { flex-direction: row; background: var(--surface); }
 .settings-workspace > .app-main { position: relative; flex: 1 1 0; min-width: 0; background: var(--surface); }
 .settings-workspace .toast-stack { position: absolute; max-width: calc(100% - 32px); }
@@ -225,14 +217,10 @@
 @media (prefers-reduced-motion: no-preference) { .device-console button { transition: background-color 120ms, border-color 120ms; } }
 @media (prefers-reduced-motion: reduce) { .device-console *, .settings-section-sidebar * { transition: none; animation: none; scroll-behavior: auto; } }
 @media (max-width: 1399px) {
-  .app-shell[data-workspace='settings'] { grid-template-columns: 184px minmax(0,1fr); }
   .settings-section-sidebar { flex-basis: 192px; padding-inline: 8px; }
   .device-console { padding: 24px 24px 40px; }
 }
 @media (max-width: 899px) {
-  .app-shell[data-workspace='settings'] { grid-template-columns: 120px minmax(0,1fr); }
-  .app-shell[data-workspace='settings'] .app-sidebar { padding: 12px 4px; }
-  .app-shell[data-workspace='settings'] .app-sidebar .main-nav button { padding: 8px 4px; gap: 6px; }
   .settings-section-sidebar { flex-basis: 144px; padding: 16px 4px; }
   .settings-section-sidebar .main-nav button { padding: 8px 6px; gap: 6px; }
   .settings-section-sidebar .main-nav button small { display: none; }

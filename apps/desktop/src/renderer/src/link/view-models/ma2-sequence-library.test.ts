@@ -1,7 +1,26 @@
 import { expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument } from '@tb/schema';
-import { ma2SequenceLibrary } from './ma2-sequence-library';
-import { renameConsoleCueCommand } from '@tb/core/link';
+import { ma2ConsoleCueName, ma2ConsoleCuePoolName, ma2ConsoleSequenceName, ma2SequenceLibrary, type LibrarySequence } from './ma2-sequence-library';
+import { confirmMa2RenameCommand, pendingMa2Renames, renameConsoleCueCommand } from '@tb/core/link';
+
+it('控台池显示原始名称：未命名的单步使用所属序列名称，本地别名不覆盖控台名', () => {
+  const sequence: LibrarySequence = { sequence: 170, name: '本地分类名称', originalName: 'xws man 170', complete: true, cues: [] };
+  expect(ma2ConsoleSequenceName(sequence)).toBe('xws man 170');
+  expect(ma2ConsoleCuePoolName(sequence, { number: '1.000', name: null })).toBe('xws man 170');
+  expect(ma2ConsoleCuePoolName(sequence, { number: '1.000', name: '本地改名', originalName: null })).toBe('xws man 170');
+  expect(ma2ConsoleCuePoolName(sequence, { number: '2.500', name: '本地改名', originalName: '  控台副歌  ' })).toBe('  控台副歌  ');
+  expect(ma2ConsoleCuePoolName({ ...sequence, name: null, originalName: null }, { number: '0.500', name: null })).toBe('Cue 0.5');
+});
+
+it('序列内部显示各步的控台 Cue 名称或实际编号，不重复使用序列 346 的名字', () => {
+  const cues = [
+    { number: '1.000', name: null },
+    { number: '2.000', name: '本地别名', originalName: null },
+    { number: '2.500', name: '  控台副歌  ' },
+    { number: '10.100', name: null }
+  ];
+  expect(cues.map(ma2ConsoleCueName)).toEqual(['Cue 1', 'Cue 2', '  控台副歌  ', 'Cue 10.1']);
+});
 
 it('全控台目录覆盖歌曲旧目录，保留小数编号与原生顺序', () => {
   const project = createEmptyLinkProject('库范围验收');
@@ -17,6 +36,14 @@ it('全控台目录覆盖歌曲旧目录，保留小数编号与原生顺序', (
   expect(pool[0]?.cues.map(value => value.number)).toEqual(['1.000', '1.100', '2.000']);
   const renamed=renameConsoleCueCommand({sequence:36,cue:'1.100',kind:'single'},'我的副歌',{endpoint:'192.0.2.1:30000',show:'Show'}).execute(project);
   expect(ma2SequenceLibrary(renamed,document)[0]?.cues[1]).toMatchObject({name:'我的副歌',originalName:'副歌',number:'1.100'});
+  const renamedPool = ma2SequenceLibrary(renamed, document);
+  expect(ma2ConsoleCuePoolName(renamedPool[0]!, renamedPool[0]!.cues[1]!)).toBe('我的副歌');
+  expect(ma2ConsoleCueName(renamedPool[0]!.cues[1]!)).toBe('我的副歌');
+  const confirmed = confirmMa2RenameCommand(pendingMa2Renames(renamed)[0]!).execute(renamed);
+  expect(ma2ConsoleCueName(ma2SequenceLibrary(confirmed, document)[0]!.cues[1]!)).toBe('我的副歌');
+  const sequenceRename = renameConsoleCueCommand({ sequence: 36, cue: '1.000', kind: 'sequence' }, '灯光 2026', { endpoint: '192.0.2.1:30000', show: 'Show' });
+  expect(ma2ConsoleSequenceName(ma2SequenceLibrary(sequenceRename.execute(confirmed), document)[0]!)).toBe('灯光 2026');
+  expect(ma2ConsoleSequenceName(ma2SequenceLibrary(sequenceRename.undo(confirmed), document)[0]!)).toBe('原名称');
   project.ma2ReadState = { source: '192.0.2.2:30000', catalog: { directory: { show: 'Other', generation: 'different', version: '3.7.0.5', entries: [] }, entries: [], readAt: new Date().toISOString() }, pairs: {}, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
   expect(ma2SequenceLibrary(project, document)).toEqual([]);
   expect(ma2SequenceLibrary({...renamed,ma2ReadState:project.ma2ReadState},document)).toEqual([]);
