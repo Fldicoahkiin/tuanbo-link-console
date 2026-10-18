@@ -271,9 +271,11 @@ async function bootstrap(): Promise<void> {
     if (BrowserWindow.getAllWindows().length === 0) restoreMainWindow?.();
   });
   app.on('window-all-closed', () => {
+    recordQuitStep('所有窗口已关闭');
     if (process.platform !== 'darwin' && (allowWindowClose || !quitFlowRunning)) app.quit();
   });
   app.on('before-quit', (event) => {
+    recordQuitStep('收到退出请求');
     if (allowWindowClose || quitFlowRunning) return;
     event.preventDefault();
     if (runtimeActive || nativePlaybackActive()) {
@@ -282,7 +284,10 @@ async function bootstrap(): Promise<void> {
     }
     quitFlowRunning = true;
     void obs.sources.discardPending().then(() => runQuitFlow(profileStore, processManager))
-      .catch((error: unknown) => dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error)))
+      .catch((error: unknown) => {
+        recordQuitStep('退出流程失败', { error: error instanceof Error ? error.message : String(error) });
+        dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error));
+      })
       .finally(() => {
         quitFlowRunning = false;
         if (allowWindowClose && BrowserWindow.getAllWindows().length === 0) app.quit();
@@ -383,6 +388,7 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
     callback(permission === 'speaker-selection');
   });
   mainWindow.on('close', (event) => {
+    recordQuitStep('窗口关闭请求');
     if (allowWindowClose) return;
     if (runtimeActive || nativePlaybackActive()) {
       event.preventDefault();
@@ -1593,19 +1599,24 @@ function registerAssetProtocol(): void {
 }
 
 async function runQuitFlow(profileStore: SecureProfileStore, processManager: ExternalProcessManager): Promise<void> {
+  recordQuitStep('退出前停止灯光试听');
   await stopAuditionForQuit?.();
+  recordQuitStep('退出前关闭正式音频与画面');
   await closeNativePlayer();
   const owned = (['p1', 'ma3d', 'ma2', 'obs'] as const)
     .map((id) => processManager.getSnapshot(id))
     .filter((snapshot) => snapshot.owned && snapshot.pid !== null);
   if (owned.length === 0) {
+    recordQuitStep('退出前关闭音乐分析');
     await automaticMusic?.close();
     allowWindowClose = true;
+    recordQuitStep('退出流程完成');
     app.quit();
     return;
   }
   const closeIds: ExternalApplicationId[] = [];
   for (const snapshot of owned) {
+    recordQuitStep('确认外部程序', { id: snapshot.id, pid: snapshot.pid });
     const decision = await dialog.showMessageBox(mainWindow!, {
       type: 'question',
       title: '逐项确认外部程序',
@@ -1642,13 +1653,24 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
       });
     }
   }
+  recordQuitStep('退出前关闭音乐分析');
   await automaticMusic?.close();
   allowWindowClose = true;
+  recordQuitStep('退出流程完成');
   app.quit();
+}
+
+/** Each quit stage with the flags that gate it, so a hang names its stage. */
+function recordQuitStep(step: string, details: Record<string, unknown> = {}): void {
+  void ipcLogger?.record({ level: 'info', category: 'system', device: '退出流程', message: step,
+    details: { runtimeActive, nativePlayback: nativePlaybackActive(), documentDirty, allowWindowClose, quitFlowRunning,
+      windows: BrowserWindow.getAllWindows().length, ...details } })
+    .catch((error: unknown) => console.error('退出流程日志未能写入', error));
 }
 
 let runtimeExitWarningOpen = false;
 function showRuntimeActiveExitWarning(): void {
+  recordQuitStep('运行会话未停止，拒绝退出');
   if (runtimeExitWarningOpen) return;
   runtimeExitWarningOpen = true;
   const options = {
