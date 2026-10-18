@@ -74,7 +74,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
   if (!checks.begin(tasks)) return;
   const issues: string[] = [];
   let stoppedBy: string | null = null;
-  const skip = (id: string, detail: string): void => checks.finish(id, 'skipped', stoppedBy ? `未执行：${stoppedBy}未通过，已停止后续步骤` : detail);
+  const skip = (id: string, detail: string): void => stoppedBy ? checks.finish(id, 'blocked', `未执行：${stoppedBy}未通过，已停止后续步骤`) : checks.finish(id, 'skipped', detail);
   const run = async <T>(id: string, label: string, operation: () => Promise<T>, detail = '检查通过', deadlineMs = stepDeadlineMs): Promise<{ value: T } | null> => {
     if (stoppedBy) { skip(id, ''); return null; }
     checks.checking(id);

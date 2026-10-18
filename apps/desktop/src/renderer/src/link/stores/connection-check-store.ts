@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 
 export type ConnectionCheck = {
-  state: 'waiting' | 'checking' | 'ready' | 'error' | 'skipped';
+  /** blocked: not run because an earlier step failed; skipped: not applicable. */
+  state: 'waiting' | 'checking' | 'ready' | 'error' | 'skipped' | 'blocked';
   detail: string;
   checkedAt: number;
 };

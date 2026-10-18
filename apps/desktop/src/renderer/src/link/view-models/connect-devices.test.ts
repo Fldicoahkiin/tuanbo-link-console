@@ -66,7 +66,7 @@ it('系统 MIDI 未通过即停止：后续步骤全部标为未执行，不连�
   const state = useConnectionCheckStore.getState();
   expect(state.checks.midi?.state).toBe('error');
   for (const id of ['profile', 'obs', 'obs-inventory', 'preview', 'audio', 'ma2-app', 'ma2', 'bridge', 'ma3d']) {
-    expect(state.checks[id]?.state).toBe('skipped');
+    expect(state.checks[id]?.state).toBe('blocked');
     expect(state.checks[id]?.detail).toBe('未执行：系统 MIDI未通过，已停止后续步骤');
   }
   expect(api.saveIntegrationProfile).not.toHaveBeenCalled(); expect(api.connectObs).not.toHaveBeenCalled();
@@ -124,7 +124,7 @@ it('onPC 启动失败即停止：不登录控台、不启动 MA 3D，之前的 O
   expect(api.connectMa2Network).not.toHaveBeenCalled();
   expect(api.connectObs).toHaveBeenCalled();
   expect(useConnectionCheckStore.getState().checks['ma2-app']?.detail).toContain('所选控台程序不存在');
-  expect(useConnectionCheckStore.getState().checks.ma3d).toMatchObject({ state: 'skipped', detail: '未执行：MA2 onPC未通过，已停止后续步骤' });
+  expect(useConnectionCheckStore.getState().checks.ma3d).toMatchObject({ state: 'blocked', detail: '未执行：MA2 onPC未通过，已停止后续步骤' });
   expect(api.startExternalApplication).not.toHaveBeenCalledWith('ma3d');
 });
 beforeEach(() => {
@@ -244,8 +244,8 @@ it('OBS 连接失败即停止：预览不误报就绪，控台与 MIDI 接口均
   const config = options(); await connectDevices(config);
   expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).not.toHaveBeenCalled();
   expect(config.openMidiPorts).not.toHaveBeenCalled();
-  expect(useConnectionCheckStore.getState().checks.preview).toMatchObject({ state: 'skipped', detail: '未执行：OBS 控制未通过，已停止后续步骤' });
-  expect(useConnectionCheckStore.getState().checks['port:custom-input']?.state).toBe('skipped');
+  expect(useConnectionCheckStore.getState().checks.preview).toMatchObject({ state: 'blocked', detail: '未执行：OBS 控制未通过，已停止后续步骤' });
+  expect(useConnectionCheckStore.getState().checks['port:custom-input']?.state).toBe('blocked');
 });
 it('控台当前 show 与工程灯光依据不一致时工程通信不通过，不再启动 MA 3D；一致时通过', async () => {
   const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false,
@@ -293,7 +293,7 @@ it('配置保存失败即停止：不连接旧目标，后续步骤均未执行'
   await connectDevices(options());
   expect(api.connectObs).not.toHaveBeenCalled(); expect(api.checkNetwork).not.toHaveBeenCalled();
   expect(useConnectionCheckStore.getState().checks.profile?.state).toBe('error');
-  expect(useConnectionCheckStore.getState().checks.audio).toMatchObject({ state: 'skipped', detail: '未执行：连接配置未通过，已停止后续步骤' });
+  expect(useConnectionCheckStore.getState().checks.audio).toMatchObject({ state: 'blocked', detail: '未执行：连接配置未通过，已停止后续步骤' });
 });
 
 it('配置失败保留诊断原文并脱敏密码，不只记录通用提示', async () => {

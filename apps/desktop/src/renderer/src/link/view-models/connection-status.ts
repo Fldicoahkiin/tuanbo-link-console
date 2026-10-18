@@ -21,7 +21,7 @@ export function midiConnectionStatus(input: {
   if (input.inventoryPending) return { state: 'checking', value: '检测中', detail: `正在读取 Windows 接口：${portName}` };
   if (open) return { state: 'ready', value: '已连接', detail: `${portName}；接口已打开，尚不代表控台正在执行灯光` };
   if (check?.state === 'checking') return { state: 'checking', value: '连接中', detail: check.detail };
-  if (check?.state === 'waiting') return { state: 'idle', value: '等待中', detail: check.detail };
+  if (check?.state === 'waiting' || check?.state === 'blocked') return { state: 'idle', value: check.state === 'waiting' ? '等待中' : '未执行', detail: check.detail };
   if (!available) return { state: 'error', value: '未连接', detail: `${portName}；当前未检测到唯一可用接口` };
   if (check?.state === 'error' || !native && systemError) return { state: 'error', value: '未连接', detail: check?.state === 'error' ? check.detail : systemError! };
   return { state: native ? 'ready' : 'idle', value: '可用', detail: `${portName}；${native ? 'Windows 已识别，播放时打开并输出 MIDI' : '系统已识别，点击一键连接打开接口'}` };

@@ -3430,6 +3430,9 @@ test('一键连接仅保留顶部入口，连接中禁止重复点击', async ({
     }
     ipcMain.removeHandler('link:loop-midi');
     ipcMain.handle('link:loop-midi', () => ({ state: 'missing', executablePath: null, pid: null, startTime: null }));
+    ipcMain.removeHandler('link:process-start');
+    Reflect.set(globalThis, '__processStarts', 0);
+    ipcMain.handle('link:process-start', () => { Reflect.set(globalThis, '__processStarts', Number(Reflect.get(globalThis, '__processStarts')) + 1); throw new Error('界面回归：不启动外部程序'); });
     ipcMain.removeHandler('link:detect-local-integrations');
     Reflect.set(globalThis, '__quickConnectCalls', 0);
     ipcMain.handle('link:detect-local-integrations', () => {
@@ -3449,6 +3452,10 @@ test('一键连接仅保留顶部入口，连接中禁止重复点击', async ({
   await expect(page.getByRole('dialog', { name: '设备连接检查结果' })).toHaveCount(0);
   await page.getByRole('button', { name: '详细', exact: true }).click();
   await expect(page.getByLabel('全部连接状态').getByRole('button', { name: '程序识别：待处理', exact: true })).toBeVisible();
+  // The first failed step stops the sequence: later steps are marked not run and no program is launched.
+  await expect(page.getByLabel('全部连接状态').getByRole('button', { name: '系统 MIDI：未执行', exact: true }))
+    .toHaveAttribute('title', '系统 MIDI：未执行\n未执行：程序识别未通过，已停止后续步骤');
+  expect(await application.evaluate(() => Number(Reflect.get(globalThis, '__processStarts')))).toBe(0);
 
   await expect(page.locator('.device-maintenance-section').getByRole('button', { name: '一键识别并连接', exact: true })).toHaveCount(0);
   await top.click(); await expect(top).toBeDisabled();
