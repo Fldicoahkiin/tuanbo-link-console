@@ -11,5 +11,11 @@ export async function waitForObsEndpoint(address: string, pid: number, timeoutMs
     if (listeningPid !== null) throw new Error('OBS 端口由另一个进程占用，请在设备连接中核对端口');
     await new Promise<void>((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error('OBS 已启动，但 WebSocket 服务未在规定时间内就绪。请在 OBS 中启用 WebSocket，再点击检查并修复组件。');
+  throw obsEndpointNotListening(address, pid);
+}
+
+/** A running OBS without a listener is most often waiting on its safe-mode
+ * prompt after a crash or system restart; WebSocket stays off until answered. */
+export function obsEndpointNotListening(address: string, pid: number): Error {
+  return new Error(`OBS 已运行（PID ${pid}），但 WebSocket 服务没有在 ${address} 监听。OBS 可能停在“安全模式”询问框（系统重启或异常退出后首次启动会出现），请在 OBS 窗口中选择正常模式；也请在 OBS“工具 → WebSocket 服务器设置”确认已启用服务。尚未发送密码。`);
 }

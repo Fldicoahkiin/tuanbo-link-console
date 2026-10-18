@@ -21,7 +21,7 @@ import { elevateObsPluginInstall } from './link/obs-plugin-elevation';
 import { ObsBridgeSetup } from './link/obs-bridge-setup';
 import { prepareLocalObsConnection, readObsCommandLine } from './link/obs-local-connection';
 import { localObsConnectionResultSchema } from '@tb/schema';
-import { waitForObsEndpoint } from './link/obs-startup';
+import { obsEndpointNotListening, waitForObsEndpoint } from './link/obs-startup';
 import { obsLiveEditSchema, obsMediaPreparationSchema } from '@tb/schema';
 import { beautyApplySchema, beautyBasicValuesSchema, beautyTargetSchema, beautyStartSchema } from '@tb/schema';
 import { BeautyRuntime } from './link/beauty-runtime';
@@ -1375,7 +1375,9 @@ function registerIpc(
         targetPid = started.pid;
         await waitForObsEndpoint(local.address, started.pid, profile.obs.startupTimeoutMs);
       }
-      if (targetPid === null || await findLocalObsPid(local.address) !== targetPid) throw new Error('OBS 连接端口与选定进程不一致，请检查是否同时运行了多个 OBS；尚未发送密码');
+      const listeningPid = targetPid === null ? null : await findLocalObsPid(local.address);
+      if (targetPid !== null && listeningPid === null) throw obsEndpointNotListening(local.address, targetPid);
+      if (targetPid === null || listeningPid !== targetPid) throw new Error('OBS 连接端口与选定进程不一致，请检查是否同时运行了多个 OBS；尚未发送密码');
       const snapshot = await connectObs();
       return localObsConnectionResultSchema.parse({ version: 1, address: local.address, password: local.password, snapshot });
     } catch (error) {
