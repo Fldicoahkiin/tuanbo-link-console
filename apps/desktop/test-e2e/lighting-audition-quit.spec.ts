@@ -39,8 +39,11 @@ test('退出时灯光试听未能停止：可返回软件处理，也可明确�
       const result = await window.tbLink.connectMa2Network();
       if (result.state !== 'connected') throw new Error(result.error ?? '测试连接失败');
     }, { ...network, autoConnect: false });
-    await page.evaluate(target => window.tbLink.playMa2Audition({ version: 1, generation: 1, network: target, sessionId: crypto.randomUUID(),
-      deadlineAt: Date.now() + 5000, action: { target: 'sequence', sequence: 168, cue: '1.000', action: 'goto' } }), network);
+    await page.evaluate(async target => {
+      const { generation } = await window.tbLink.controlMa2Audition({ version: 1, action: 'status' });
+      await window.tbLink.playMa2Audition({ version: 1, generation, network: target, sessionId: crypto.randomUUID(),
+        deadlineAt: Date.now() + 5000, action: { target: 'sequence', sequence: 168, cue: '1.000', action: 'goto' } });
+    }, network);
     await app.evaluate(({ dialog }) => {
       const answers = [0, 1], titles: string[] = [];
       Reflect.set(globalThis, '__quitDialogs', titles);
