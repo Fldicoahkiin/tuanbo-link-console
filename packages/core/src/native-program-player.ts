@@ -1,4 +1,4 @@
-import { createObsProgramSnapshot } from './obs-program-snapshot';
+import { createObsProgramSnapshot, itemNeedsObs } from './obs-program-snapshot';
 import { lightingTimecodePlaybackNotice } from './lighting-playback';
 import { playlistItems, programPlaylists } from './program-playlists';
 import { toUserErrorMessage } from './link-user-error';
@@ -270,7 +270,11 @@ export class NativeProgramPlayer {
       () => { void this.stopObs().catch(error => this.reportUnavailable(`取消画面准备失败：${toUserErrorMessage(error)}`)); }, '后台画面');
       if (this.current(token) && this.obsSession === envelope) this.receiveObs(status);
       else await this.stopObs();
-    } catch (error) { if (this.current(token)) this.reportUnavailable(`画面未参与：${toUserErrorMessage(error)}；音频继续播放。`); }
+    } catch (error) {
+      // Operator decision 2026-10-19: a song with picture work does not start without its picture.
+      if (this.current(token) && itemNeedsObs(this.project, itemId)) throw new Error(`画面准备失败：${toUserErrorMessage(error)}`, { cause: error });
+      if (this.current(token)) this.reportUnavailable(`画面未参与：${toUserErrorMessage(error)}；音频继续播放。`);
+    }
     finally { if (this.obsSession === envelope) this.obsPreparing = false; }
   }
   private nextObsFiles(itemId: string): NativeObsPrepare['nextFiles'] {

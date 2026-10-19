@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../registry/license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
-import { createEmptyLinkProject, createLightingDocument, parseLinkProject, lightingTrackSchema } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, parseLinkProject, lightingTrackSchema, linkCueSchema } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../view-models/local-integration-profile';
 import { InternalPlaybackController, emptyInternalPlayerState } from './internal-playback-controller';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
@@ -498,7 +498,7 @@ describe('内部正式音乐主控', () => {
     f.controller.fade(false); await vi.advanceTimersByTimeAsync(600); expect(f.audio.volume).toBe(.35);
     f.controller.dispose();
   });
-  it('联动预检阻断保留原因，但不阻断已有音频', async () => {
+  it('联动预检阻断时这首歌不开始播放，并列出阻断原因（操作员决定 2026-10-19）', async () => {
     const f = fixture();
     f.deps.prepare.mockRejectedValueOnce(new PreflightBlockedError({
       checkedAt: new Date().toISOString(), mode: 'live', passed: false, checks: [
@@ -508,12 +508,28 @@ describe('内部正式音乐主控', () => {
       ]
     }));
     await f.controller.play('song-0');
-    expect(f.state().status).toBe('playing');
-    expect(f.state().notice).toContain('显示来源与完整场景模式冲突');
-    expect(f.audio.play).toHaveBeenCalledOnce();
+    expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：预检未通过' });
+    expect(f.state().error).toContain('显示来源与完整场景模式冲突');
+    expect(f.audio.play).not.toHaveBeenCalled();
     expect(f.deps.ingest).not.toHaveBeenCalled();
     await f.controller.play('song-0');
     expect(f.state()).toMatchObject({ status: 'playing', error: null, errorTitle: null });
+    f.controller.dispose();
+  });
+  it('有画面动作的歌，画面准备失败时不开始播放；纯音频的歌照常播放并提示', async () => {
+    const f = fixture();
+    f.project.rundown[0]!.cues = [linkCueSchema.parse({ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+      actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
+    f.deps.prepare.mockRejectedValueOnce(new Error('FFmpeg 生成编辑代理失败：argb is not supported'));
+    await f.controller.play('song-0');
+    expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：准备失败' });
+    expect(f.state().error).toContain('画面与联动准备失败：');
+    expect(f.audio.play).not.toHaveBeenCalled();
+    f.deps.prepare.mockRejectedValueOnce(new Error('OBS 未连接；可用顶部“一键连接”恢复画面联动'));
+    await f.controller.play('song-1');
+    expect(f.state().status).toBe('playing');
+    expect(f.state().notice).toContain('画面与联动未启动：OBS 未连接');
+    expect(f.audio.play).toHaveBeenCalledOnce();
     f.controller.dispose();
   });
   it('灯光循环使用同一音频重新定位 OBS 和 MTC，并释放上一轮音符', async () => {

@@ -1,5 +1,5 @@
 import { optionalOutputReady } from '@tb/core/link';
-import { allocateMediaTimecodeRanges, programTimeOrigin, lightingTimeOrigin, lightingTimecodePlaybackNotice, millisecondsToFrameNumber, playlistItems, programPlaylists, toUserErrorMessage } from '@tb/core/link';
+import { allocateMediaTimecodeRanges, itemNeedsObs, programTimeOrigin, lightingTimeOrigin, lightingTimecodePlaybackNotice, millisecondsToFrameNumber, playlistItems, programPlaylists, toUserErrorMessage } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { LightingMidiOutput } from '../../registry/lighting-midi-output';
@@ -104,7 +104,13 @@ export class InternalPlaybackController {
       if (lightingNotice) this.update({ notice: [this.state.notice, lightingNotice].filter(Boolean).join('；') });
       if (!this.current(generation)) return;
       try { await this.dependencies.prepare(itemId, positionMs, { reuseSession, mtcOutputEnabled: sendMtc && Boolean(mtcPortName) }); this.runtimePrepared = true; }
-      catch (error) { this.appendNotice(`画面与联动未启动：${toUserErrorMessage(error)}。本次继续播放音频。`); }
+      catch (error) {
+        // Operator decision 2026-10-19: a song with picture work, or one its preflight
+        // blocks, does not start when preparation fails. Audio-only songs still play.
+        if (error instanceof PreflightBlockedError) throw error;
+        if (itemNeedsObs(this.project, itemId)) throw new Error(`画面与联动准备失败：${toUserErrorMessage(error)}`, { cause: error });
+        this.appendNotice(`画面与联动未启动：${toUserErrorMessage(error)}。本次继续播放音频。`);
+      }
       if (!this.current(generation)) return;
       this.update({ volume: item.playback?.volume ?? 100, ...(item.playback ? { endAction: item.playback.endAction } : {}) });
       this.audio.currentTime = positionMs / 1000; this.audio.volume = this.state.volume / 100;
