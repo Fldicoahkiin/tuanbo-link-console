@@ -42,9 +42,11 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
     return options.service.execute(body, auth.session(token), requestId, channels);
   }
   if (request.method === 'GET' && path === '/console-api/overview') return options.service.overview();
-  if (request.method === 'GET' && path === '/console-api/export') {
-    const csv = options.service.exportOrders(pageQuerySchema.parse(Object.fromEntries(url.searchParams)), session, requestId);
-    response.setHeader('Content-Type', 'text/csv; charset=utf-8'); response.setHeader('Content-Disposition', 'attachment; filename="orders.csv"');
+  const exported = /^\/console-api\/export(?:\/(finance))?$/.exec(path);
+  if (request.method === 'GET' && exported) {
+    const resource = exported[1] === 'finance' ? 'finance' : 'orders';
+    const csv = options.service.exportCsv(resource, pageQuerySchema.parse(Object.fromEntries(url.searchParams)), session, requestId);
+    response.setHeader('Content-Type', 'text/csv; charset=utf-8'); response.setHeader('Content-Disposition', `attachment; filename="${resource}.csv"`);
     response.end(csv); return null;
   }
   const operation = /^\/console-api\/operations\/([a-f0-9-]{36})$/.exec(path);

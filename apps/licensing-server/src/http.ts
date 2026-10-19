@@ -95,6 +95,11 @@ export function createLicensingServer(service: LicensingService, adminToken: str
             if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝退款尚未启用');
             service.alipayQueryOrder(refund.orderId, checkout.appId, checkout.sellerId);
             return checkout.refund(refund.orderId, refund, alipay);
+          },
+          paymentLink: id => {
+            if (!checkout) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝付款入口尚未启用');
+            const payment = service.prepareAlipayPayment(id, checkout.appId, checkout.sellerId);
+            return { url: checkout.createUrl(payment), expiresAt: payment.expiresAt };
           }
         });
       }

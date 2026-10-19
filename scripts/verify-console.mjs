@@ -68,12 +68,26 @@ try {
   await page.getByRole('heading', { name: '关联授权' }).waitFor(); await page.getByRole('button', { name: '查看详情' }).first().click(); await page.getByRole('heading', { name: '授权详情' }).waitFor();
   assert.equal((await page.locator('body').innerText()).includes('TBA-'), false);
   await page.getByRole('button', { name: '查看完整激活码' }).click(); await dialog.getByLabel('操作原因').fill('测试授权交付'); await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.locator('pre.secret').waitFor(); assert.match(await dialog.locator('pre.secret').innerText(), /^TBA-/); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  // 第二张线下单：隔离夹具未启用支付宝，付款链接给出明确错误；未生成链接的待付款单可关闭。
+  await page.getByRole('button', { name: '订单中心', exact: true }).click(); await page.getByRole('button', { name: '创建线下订单', exact: true }).click();
+  await dialog.getByLabel('业务订单编号').fill('BROWSER-ORDER-2'); await dialog.getByLabel('客户名称').fill('放弃付款客户');
+  await dialog.getByLabel('授权截止时间').fill('2026-11-06T16:00'); await dialog.getByLabel('金额（元）').fill('800'); await dialog.getByLabel('操作原因').fill('隔离验收');
+  await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('线下订单已创建，待核款').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('row', { name: /BROWSER-ORDER-2/ }).getByRole('button', { name: '查看详情' }).click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
+  await page.getByRole('button', { name: '生成支付宝付款链接' }).click(); await dialog.getByLabel('操作原因').fill('客户要求扫码');
+  await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText(/支付宝付款入口尚未启用/).waitFor(); await dialog.getByRole('button', { name: '关闭操作窗口' }).click();
+  await page.getByRole('button', { name: '关闭订单', exact: true }).click(); await dialog.getByLabel('操作原因').fill('客户放弃购买');
+  await dialog.getByRole('button', { name: '确认关闭订单' }).click(); await dialog.getByText('订单已关闭').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: '关闭订单', exact: true }).count(), 0);
+  // 待办数字跳转带上对应筛选。
+  await page.getByRole('button', { name: '工作台', exact: true }).click(); await page.getByRole('button', { name: /七日内到期/ }).click();
+  assert.equal(await page.getByLabel('状态').inputValue(), 'expiring');
   await page.screenshot({ path: fileURLToPath(new URL('owner-desktop.png', shots)), fullPage: true });
   await context.close();
   for (const role of ['operations', 'finance', 'viewer']) {
     const { page, context } = await pageFor(role, role === 'viewer' ? 390 : 1440);
     assert.equal(await page.getByRole('button', { name: '人员管理', exact: true }).count(), 0);
-    await page.getByRole('button', { name: '订单中心', exact: true }).click(); await page.getByRole('button', { name: '查看详情' }).first().click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
+    await page.getByRole('button', { name: '订单中心', exact: true }).click(); await page.getByRole('row', { name: /BROWSER-ORDER-1/ }).getByRole('button', { name: '查看详情' }).click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
     assert.equal(await page.getByRole('button', { name: '重发领取凭据', exact: true }).count(), role === 'operations' ? 1 : 0);
     assert.equal(await page.getByRole('button', { name: '登记已办理的退款', exact: true }).count(), role === 'finance' ? 1 : 0);
     assert.equal((await page.locator('body').innerText()).includes('TBA-'), false);

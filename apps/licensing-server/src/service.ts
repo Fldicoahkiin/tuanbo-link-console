@@ -302,6 +302,13 @@ export class LicensingService {
       this.transition(id, to, reason);
     });
   }
+  /** 未生成任何付款入口且无收款的待付款订单（线下单）由运营关闭；有付款入口的须经渠道查单关闭。 */
+  closeUnlinkedOrder(id: string): void {
+    this.transaction(() => {
+      if (this.order(id).state !== 'pending' || this.hasPayment(id) || this.paymentChannel(id) !== null) throw new ServiceError(409, 'ORDER_STATE_CONFLICT', '只能关闭未收款且未生成付款链接的待付款订单', id);
+      this.transition(id, 'closed', 'console:close-order');
+    });
+  }
   /** 验签通过的支付宝异步通知：成功且无退款的交付；其余落事件表，退款进运营异常队列但不撤销授权。 */
   alipayNotification(input: unknown): void {
     const notice = alipayNoticeSchema.parse(input);

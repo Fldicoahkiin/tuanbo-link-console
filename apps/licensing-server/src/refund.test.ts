@@ -45,7 +45,8 @@ async function setup() {
     const answer = answers[method]!(business);
     return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(new Response(answer));
   };
-  const channels = { reconcile: () => Promise.resolve({}), refund: (request: { orderId: string; refundId: string; amountFen: number; reason: string }) => checkout.refund(request.orderId, request, notifications, channelRequest) };
+  const channels = { reconcile: () => Promise.resolve({}), refund: (request: { orderId: string; refundId: string; amountFen: number; reason: string }) => checkout.refund(request.orderId, request, notifications, channelRequest),
+    paymentLink: () => { throw new Error('退款测试不生成付款链接'); } };
   const execute = (input: ConsoleAction, actor = session) => consoleService.execute({ operationId: randomUUID(), input }, actor, randomUUID(), channels);
   const token = () => `TBD-${randomBytes(32).toString('hex').toUpperCase()}`;
   let trades = 0;
