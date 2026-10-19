@@ -1,6 +1,5 @@
 import { collectCueMidiOutputProfileIds, expectedMa2Shows, runLinkPreflight, type PreflightMode, type PreflightReport } from '@tb/core/link';
 import { ma2NetworkStatusSchema } from '@tb/schema';
-import { readMa2Method } from '../stores/ma2-mode-store';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { useDocumentStore } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -53,7 +52,7 @@ export async function runDesktopPreflight(
   assertCurrent();
   // Cue numbers are only meaningful in the show they were read from.
   const project = document.project;
-  const ma2Show = readMa2Method() === 'network' && rundown.some(item => expectedMa2Shows(project, item.id).length > 0)
+  const ma2Show = rundown.some(item => expectedMa2Shows(project, item.id).length > 0)
     && ma2NetworkStatusSchema.parse(await linkDesktopViewModel.getMa2NetworkStatus()).state === 'connected'
     ? await linkDesktopViewModel.getMa2CurrentShow() : undefined;
   assertCurrent();
