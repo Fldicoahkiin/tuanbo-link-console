@@ -43,3 +43,8 @@ it('文件不存在时指出具体路径或程序', () => {
   expect(spawn).toBe('所需文件或程序不存在：C:\\Program Files\\ffmpeg.exe。请重新选择有效路径后重试。');
   expect(toUserErrorMessage(new Error(spawn))).toBe(spawn);
 });
+it('工程结构校验错误显示第一条问题，而不是 JSON 的第一行“[”', () => {
+  // 2026-10-19 现场：打开工程失败只显示“操作未能完成：[”。
+  const raw = "Error invoking remote method 'link:open-project': Error: [\n  {\n    \"code\": \"custom\",\n    \"message\": \"OBS 显示 Cue“显示来源”尚未分配视觉图层\",\n    \"path\": [\"rundown\", 1]\n  }\n]";
+  expect(toUserErrorMessage(new Error(raw))).toBe('操作未能完成：OBS 显示 Cue“显示来源”尚未分配视觉图层');
+});

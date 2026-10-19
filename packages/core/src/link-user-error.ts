@@ -24,5 +24,13 @@ export function toUserErrorMessage(error: unknown): string {
   if (/NotFoundError|setSinkId|AudioContext.*device .*not found/i.test(text)) return '所选音频输出设备已断开。请在音频输出设置中选择当前设备或 Windows 默认设备。';
   if (/NotSupportedError|unsupported/i.test(text)) return '当前环境不支持此操作。请检查设备、素材格式及软件版本。';
   if (/[\u3400-\u9fff]/u.test(text) && !/Command failed|\b(?:Error|Exception)\b|\bat\s+\S+\(|"(?:code|path|message)"\s*:|#< CLIXML/i.test(text) && !/\b[A-Z_]{5,}\b/.test(text)) return text;
-  return `操作未能完成：${text.split('\n')[0]?.slice(0, 300) || '未返回错误内容'}`;
+  return `操作未能完成：${leadingReason(text)}`;
+}
+
+/** Schema failures arrive as a JSON issue list whose first line is just "["; show the first issue. */
+function leadingReason(text: string): string {
+  const first = text.split('\n')[0]?.trim() ?? '';
+  const issue = /^[[{]$/.test(first) ? /"message"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text)?.[1] : undefined;
+  const decoded: unknown = issue ? JSON.parse(issue) : undefined;
+  return (typeof decoded === 'string' ? decoded : first).slice(0, 300) || '未返回错误内容';
 }
