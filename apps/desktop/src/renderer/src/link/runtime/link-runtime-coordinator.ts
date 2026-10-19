@@ -152,7 +152,7 @@ export class LinkRuntimeCoordinator {
     this.midiSession = new RuntimeMidiSession(this.midi, project.projectId, message => {
       void this.ingestQuarterFrame((message.messageType << 4) | message.value, message.receivedAt).catch(error => this.reportRuntimeError(error));
     }, error => this.reportRuntimeError(error));
-    this.runner = new CueActionRunner([new ObsIpcExecutor(), this.midi], {
+    this.runner = new CueActionRunner([new ObsIpcExecutor(() => this.project), this.midi], {
       onStatus: (event) => recordRuntimeAction(this.project.projectId, this.currentItem(), event)
     });
   }

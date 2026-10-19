@@ -4,6 +4,7 @@ import type { LinkProject } from '@tb/schema';
 import { internalSeekState } from './internal-timeline';
 import type { ManagedOutputRuntime } from '@tb/core/link';
 import { executeManagedOutputCleanup } from './managed-output-cleanup';
+import { executeObsCueAction } from './obs-ipc-executor';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 
 /** Explicit operator seek skips crossed cues and retains the loaded media session. */
@@ -21,7 +22,7 @@ export async function seekInternalRuntime(project: LinkProject, projectPath: str
   apply(runtime.stop('定位后重新布防')); apply(runtime.completeStop()); apply(runtime.selectItem(itemId));
   apply(runtime.beginPreflight(mode)); apply(runtime.arm(performance.now(), sample));
   apply(runtime.pauseAutomatic('定位后保持暂停'));
-  for (const entry of work.cues) for (const action of entry.cue.actions) { assertCurrent(); await desktop.executeObsAction(action); }
+  for (const entry of work.cues) for (const action of entry.cue.actions) { assertCurrent(); await executeObsCueAction(desktop, project, action); }
   for (const event of targets) { assertCurrent(); await desktop.seekManagedMedia({ projectPath, event }); }
   assertCurrent();
   managed.adoptSeek(targets, sample.totalFrames);

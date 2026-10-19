@@ -45,8 +45,10 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
   const outputs: NativeObsOutputs = {
     outputNotice: () => captureNotice,
     now: () => performance.now(), executor: { id: obs.id, supports: action => obs.supports(action),
-      execute: action => obs.execute('inputName' in action ? { ...action, inputName: preload.resolveSource(action.inputName) }
-        : 'sourceName' in action ? { ...action, sourceName: preload.resolveSource(action.sourceName) } : action) },
+      // Program snapshots exist only in full-scene mode: show/hide acts on the scene on program.
+      execute: action => action.kind === 'obs.setSceneItemEnabled' ? obs.setSourceEnabledInProgramScene(preload.resolveSource(action.sourceName), action.enabled)
+        : obs.execute('inputName' in action ? { ...action, inputName: preload.resolveSource(action.inputName) }
+          : 'sourceName' in action ? { ...action, sourceName: preload.resolveSource(action.sourceName) } : action) },
     guardOutput: (canSend, operation) => obs.guardPlaybackOperation(canSend, operation),
     recordLog: entry => logger.recordBuffered(entry.category === 'action' && entry.result === 'failed'
       ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure),

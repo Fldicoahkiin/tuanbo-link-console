@@ -8,6 +8,19 @@ import { ObsWebSocketAdapter } from './obs-websocket-adapter';
 import type { ObsEditorPreview } from './obs-editor-preview';
 
 describe('ObsWebSocketAdapter', () => {
+  it('完整场景模式的显示来源作用于当前播出场景；场景中没有或有多个同名来源时明确报错（操作员决定 2026-10-19）', async () => {
+    const client = fakeObsClient(); const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    client.responses.set('GetCurrentProgramScene', { currentProgramSceneName: '场景 2' });
+    client.responses.set('GetSceneItemList', { sceneItems: [{ sourceName: '显示器采集', sceneItemId: 7 }, { sourceName: '扑克牌特效.mov', sceneItemId: 3 }] });
+    client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('显示器采集', true);
+    expect(client.calls).toEqual([['GetCurrentProgramScene', undefined], ['GetSceneItemList', { sceneName: '场景 2' }],
+      ['SetSceneItemEnabled', { sceneName: '场景 2', sceneItemId: 7, sceneItemEnabled: true }]]);
+    await expect(adapter.setSourceEnabledInProgramScene('显示器采集 3', true)).rejects.toThrow('当前播出场景“场景 2”中没有来源“显示器采集 3”');
+    client.responses.set('GetSceneItemList', { sceneItems: [{ sourceName: '显示器采集', sceneItemId: 7 }, { sourceName: '显示器采集', sceneItemId: 8 }] });
+    await expect(adapter.setSourceEnabledInProgramScene('显示器采集', false)).rejects.toThrow('有多个来源“显示器采集”');
+  });
   it('监听拒绝被桌面音频或模糊进程采集，仅核对专用音频来源且不修改 OBS', async () => {
     const client = fakeObsClient(); const adapter = new ObsWebSocketAdapter(tmpdir(),client as unknown as OBSWebSocket);
     await adapter.connect('ws://127.0.0.1:4455','password');

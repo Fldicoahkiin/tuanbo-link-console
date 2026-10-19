@@ -4,8 +4,9 @@ import { internalSample, internalSeekState } from './internal-timeline';
 import { useIntegrationStore } from '../stores/integration-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { reportCoordinatorError } from './runtime-action-log';
+import { executeObsCueAction } from './obs-ipc-executor';
 
-type PreviewDesktop = Pick<LinkDesktopApi, 'prepareObsMediaScenes' | 'executeObsAction' | 'seekManagedMedia'>;
+type PreviewDesktop = Pick<LinkDesktopApi, 'prepareObsMediaScenes' | 'executeObsAction' | 'setObsProgramSourceEnabled' | 'seekManagedMedia'>;
 
 export class EditorScenePreview {
   private failed = false;
@@ -50,7 +51,7 @@ export async function previewEditorScene(project: LinkProject, projectPath: stri
   }
   for (const entry of work.cues) for (const action of entry.cue.actions) {
     if (!current()) return;
-    await desktop.executeObsAction(action);
+    await executeObsCueAction(desktop, project, action);
   }
   for (const event of media) {
     if (!current()) return;

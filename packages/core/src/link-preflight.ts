@@ -98,7 +98,9 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
     }
     if (project.obsOutputMode === 'scenes') {
       const incompatible = item.cues.filter((cue) => cue.enabled).flatMap((cue) => cue.actions).find((action) =>
-        action.kind.startsWith('obs.') && action.kind !== 'obs.setProgramScene' && action.kind !== 'obs.setTransition' && action.kind !== 'obs.saveSourceScreenshot');
+        action.kind.startsWith('obs.') && action.kind !== 'obs.setProgramScene' && action.kind !== 'obs.setTransition' && action.kind !== 'obs.saveSourceScreenshot'
+        // Show/hide source acts on the scene on program (operator decision 2026-10-19).
+        && action.kind !== 'obs.setSceneItemEnabled');
       checks.push(incompatible
         ? blocking(`obs.sceneMode.${item.id}`, `完整场景模式：${item.title}`, `动作“${incompatible.label}”与完整场景模式冲突。请在该节目的 Cue 编排中移除此动作或停用所在 Cue；需要切换画面时，改用“切换完整场景”动作。`)
         : passed(`obs.sceneMode.${item.id}`, `完整场景模式：${item.title}`, '保留 OBS 场景的变换、裁剪和滤镜；本地视觉素材仅用于参考预览'));

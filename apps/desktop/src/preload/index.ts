@@ -97,6 +97,7 @@ const tbLink: LinkDesktopBridgeApi = {
   controlMa2Audition: async request=>ma2AuditionStateSchema.parse(await invoke('link:ma2-audition-control',ma2AuditionControlSchema.parse(request))),
   onMa2AuditionState: listener=>{const receive=(_event:Electron.IpcRendererEvent,input:unknown):void=>listener(ma2AuditionStateSchema.parse(input));ipcRenderer.on('link:ma2-audition-state',receive);return()=>ipcRenderer.removeListener('link:ma2-audition-state',receive);},
   getMa2NetworkStatus: () => invoke('link:ma2-network-status'),
+  setObsProgramSourceEnabled: (sourceName, enabled) => invoke('link:obs-program-source-enabled', { sourceName, enabled }),
   getMa2CurrentShow: async () => {
     const show = await invoke<unknown>('link:ma2-current-show');
     if (typeof show !== 'string' || !show) throw new Error('控台当前 show 响应无效');

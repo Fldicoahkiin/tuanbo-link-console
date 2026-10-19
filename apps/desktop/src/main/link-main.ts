@@ -1509,6 +1509,10 @@ function registerIpc(
     return obs.editorPreview.getStatus();
   });
   handle('link:obs-execute', (_event, actionValue: unknown) => obs.execute(linkActionSchema.parse(actionValue)));
+  handle('link:obs-program-source-enabled', (_event, value: unknown) => {
+    const request = z.object({ sourceName: z.string().min(1), enabled: z.boolean() }).strict().parse(value);
+    return obs.setSourceEnabledInProgramScene(request.sourceName, request.enabled);
+  });
   handle('link:obs-activate-managed-output', () => obs.activateManagedOutput());
   handle('link:obs-internal-audio', async (_event, value: unknown) => {
     if (!mainWindow) throw new Error('主控窗口不存在');

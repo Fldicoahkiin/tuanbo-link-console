@@ -242,6 +242,16 @@ describe('团播联动台预检', () => {
 
 });
 
+it('完整场景模式允许显示来源动作（作用于当前播出场景），仍阻断改写变换等其他画面动作', () => {
+  const value = context();
+  const withAction = (action: LinkProject['rundown'][number]['cues'][number]['actions'][number]) => ({ ...value, mtcRequirement: 'internal' as const,
+    project: { ...value.project, playbackSource: 'internal' as const, obsOutputMode: 'scenes' as const,
+      rundown: value.project.rundown.map(item => ({ ...item, cues: [{ id: 'cue', name: '画面', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, durationMs: 2000, enabled: true, notes: '', actions: [action] }] })) } });
+  const sceneCheck = (action: Parameters<typeof withAction>[0]) => runLinkPreflight(withAction(action)).checks.find(check => check.id === 'obs.sceneMode.item');
+  expect(sceneCheck({ id: 'show', label: '显示来源 · 显示器采集', kind: 'obs.setSceneItemEnabled', sceneName: '团播联动台输出', sourceName: '显示器采集', enabled: true })?.status).toBe('passed');
+  expect(sceneCheck({ id: 'mute', label: '静音', kind: 'obs.setInputMute', inputName: '桌面音频', muted: true })?.status).toBe('blocking');
+});
+
 describe('MA2 控台 show', () => {
   it('与节目灯光依据不一致时阻断，一致时通过，未查询控台时不新增检查项', () => {
     const value = context();
