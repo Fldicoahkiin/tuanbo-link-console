@@ -17,7 +17,8 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
     auth.limit(`public-auth:${address}`, 30);
     const body = await readBody();
     if (path === '/console-api/login') {
-      const input = loginSchema.parse(body); auth.limit(`account:${input.username.toLowerCase()}`);
+      // 按账号加来源计数：他人刷同一用户名不能锁住本人；每次猜测仍须同时命中密码和验证码。
+      const input = loginSchema.parse(body); auth.limit(`account:${input.username.toLowerCase()}:${address}`);
       const result = await auth.login(input.username, input.password, input.code, requestId);
       response.setHeader('Set-Cookie', `${cookieName}=${result.token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=28800`);
       return sessionSchema.parse(result.session);

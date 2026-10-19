@@ -13,7 +13,7 @@ import { totpCode } from './console-auth';
 const closing: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const close of closing.splice(0).reverse()) await close(); });
 const host = 'admin.tuanbo-link.jinhefilm.com'; const origin = `https://${host}`;
-async function setup() {
+async function setup(trustProxy = false) {
   let time = Date.parse('2026-10-06T00:00:00Z');
   const keys = generateKeyPairSync('ed25519'); const path = join(mkdtempSync(join(tmpdir(), 'console-http-')), 'test.db');
   const service = new LicensingService(path, keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'test', randomBytes(32), () => time);
@@ -26,7 +26,7 @@ async function setup() {
     await consoleService.auth.enroll(user.token, 'long-test-password', code(user.id), randomUUID()); time += 30000;
     const login = await consoleService.auth.login(role, 'long-test-password', code(user.id), randomUUID()); users[role] = { token: login.token, csrf: login.session.csrf, id: user.id };
   }
-  const server = createLicensingServer(service, 'x'.repeat(32), undefined, undefined, undefined, false, undefined, false, { service: consoleService, origin });
+  const server = createLicensingServer(service, 'x'.repeat(32), undefined, undefined, undefined, trustProxy, undefined, false, { service: consoleService, origin });
   await listenHttpTestServer(server); closing.push(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('missing address');
   const send = (path: string, role?: string, body?: unknown, extra: Record<string, string> = {}) => new Promise<{ status: number; body: unknown; cookie: string[] | undefined }>((resolve, reject) => {
@@ -63,4 +63,12 @@ it('登录 Cookie 安全属性、权限变更即时撤销会话', async () => {
   expect(login.status).toBe(200); expect(login.cookie?.[0]).toContain('Secure; HttpOnly; SameSite=Strict');
   const updated = await s.send('/console-api/commands', 'owner', { operationId: randomUUID(), input: { action: 'update-user', id: s.users.viewer!.id, role: 'viewer', enabled: false, reason: '离职' } });
   expect(updated.status).toBe(200); expect((await s.send('/console-api/session', 'viewer')).status).toBe(401);
+});
+it('他人从一个地址反复猜错同一用户名，不锁住负责人从其他地址登录', async () => {
+  const s = await setup(true); s.advance();
+  const wrong = { username: 'owner', password: 'wrong-password', code: '000000' }; const attacker = { 'x-tblink-client-ip': '203.0.113.7' };
+  for (let index = 0; index < 10; index++) expect((await s.send('/console-api/login', undefined, wrong, attacker)).status).toBe(401);
+  expect((await s.send('/console-api/login', undefined, wrong, attacker)).status).toBe(429);
+  const owner = await s.send('/console-api/login', undefined, { username: 'owner', password: 'long-test-password', code: s.code(s.users.owner!.id) }, { 'x-tblink-client-ip': '198.51.100.9' });
+  expect(owner.status).toBe(200);
 });
