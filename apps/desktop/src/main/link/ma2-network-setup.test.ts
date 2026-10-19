@@ -11,12 +11,38 @@ import { NetworkAddressChangeError, networkAddressNativeSource, networkAddressSc
 
 const adapter: Ma2NetworkAdapter = { id: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', index: 3, name: '有线网卡', description: 'Ethernet', connected: true, physical: true, wired: true, addresses: [{ address: '192.168.1.10', prefix: 24 }] };
 const request = { host: '2.97.214.223', prefix: 24 };
+it('电脑已有地址直接复用实际掩码；手填另一网卡地址时正确识别其所属网卡', () => {
+  const consoleAdapter = { ...adapter, id:'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb', addresses:[{address:'2.0.0.97',prefix:8,state:'Preferred' as const}] };
+  expect(planMa2Network([adapter,consoleAdapter],{host:'2.0.0.1',address:'2.0.0.97',prefix:24})).toMatchObject({adapter:consoleAdapter,address:'2.0.0.97',prefix:8,needsChange:false});
+  expect(()=>planMa2Network([adapter,consoleAdapter],{host:'2.0.0.1',address:'192.168.1.10',prefix:24})).toThrow('自动选择电脑 IP');
+  expect(()=>planMa2Network([{...consoleAdapter,addresses:[{address:'2.0.0.97',prefix:8,state:'Duplicate'}]}],{host:'2.0.0.1',address:'2.0.0.97',prefix:24})).toThrow('Duplicate');
+});
+it('读取方案不改变连接来源，复用地址也持久保存网卡选择，重开后可再次自动连接', async()=>{
+  const path=join(await mkdtemp(join(tmpdir(),'tblink-selection-')),'addresses.json');
+  const second={...adapter,id:'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb',index:4,name:'控台网口',addresses:[{address:'192.168.1.11',prefix:24}]};
+  const snapshot=()=>Promise.resolve({bootId:'boot1',adapters:[adapter,second]});const change=vi.fn(()=>Promise.resolve());
+  const setup=new Ma2NetworkSetup(path,{snapshot,change});
+  const plan=await setup.plan({host:'192.168.1.20',adapterId:second.id,prefix:24});
+  expect(await setup.connectionAddress(plan.host)).toBeUndefined();await setup.apply(plan.id);expect(change).not.toHaveBeenCalled();
+  const reopened=new Ma2NetworkSetup(path,{snapshot,change});expect(await reopened.connectionAddress(plan.host)).toBe('192.168.1.11');
+  expect(await reopened.plan({host:plan.host,prefix:24})).toMatchObject({adapter:second,needsChange:false});
+  expect((await reopened.state()).additions).toEqual([]);
+});
+it('区分已有地址、真实冲突、检测超时；超时不冒充冲突，清理失败保留恢复入口',()=>{
+  expect(new NetworkAddressChangeError(5010).message).toContain('已经存在');
+  expect(new NetworkAddressChangeError(41001).message).toContain('确认');
+  expect(new NetworkAddressChangeError(41002).message).toContain('未确认冲突');
+  expect(new NetworkAddressChangeError(41002).needsRestore).toBe(false);
+  expect(new NetworkAddressChangeError(50005).needsRestore).toBe(true);
+});
 it('连接使用所选网卡地址，重开后读取配置记录，地址失效时阻止误走其他网卡', async () => {
   const path = join(await mkdtemp(join(tmpdir(), 'tblink-source-')), 'addresses.json');
   const snapshot = vi.fn(() => Promise.resolve({ bootId: 'boot1', adapters: [adapter] }));
   const change = vi.fn(() => Promise.resolve());
   const setup = new Ma2NetworkSetup(path, { snapshot, change });
-  await setup.plan({ host: '192.168.1.20', prefix: 24 });
+  const existing = await setup.plan({ host: '192.168.1.20', prefix: 24 });
+  expect(await setup.connectionAddress('192.168.1.20')).toBeUndefined();
+  await setup.apply(existing.id);
   expect(await setup.connectionAddress('192.168.1.20')).toBe('192.168.1.10');
   expect(await setup.connectionAddress('127.0.0.1')).toBeUndefined();
   const plan = await setup.plan(request); await setup.apply(plan.id);
@@ -36,7 +62,7 @@ it.runIf(process.platform === 'win32')('原生读取网卡并区分 Windows 测�
 it('自动选择实体网卡并生成同网段独立地址，不误选虚拟网卡、不修改原地址', () => {
   const virtual = { ...adapter, id: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb', physical: false, addresses: [{ address: '2.0.0.3', prefix: 8 }] };
   const plan = planMa2Network([virtual, adapter], request);
-  expect(plan).toMatchObject({ address: '2.97.214.222', needsChange: true, adapter });
+  expect(plan).toMatchObject({ address: '2.97.214.127', needsChange: true, adapter });
   expect(adapter.addresses).toEqual([{ address: '192.168.1.10', prefix: 24 }]);
 });
 it('已在同网段不增加地址，多网卡要求选择，拒绝同地址和越界地址', () => {

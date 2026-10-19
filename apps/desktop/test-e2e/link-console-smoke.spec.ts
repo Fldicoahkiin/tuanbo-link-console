@@ -65,7 +65,7 @@ test('32 轨十万事件只渲染可见灯光点，滚动后可选中远处 Cue'
   await page.locator('.settings-lighting input[type="file"]').setInputFiles({ name: 'scale.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(document)) });
   await page.getByRole('button', { name: '确认导入', exact: true }).click();
   await closeLightingTools(); await main.getByRole('button', { name: '编辑器', exact: true }).click();
-  await expect(page.locator('.lighting-lane')).toHaveCount(33);
+  await expect(page.locator('.lighting-lane')).toHaveCount(1);
   const points = page.locator('.lighting-timeline-point');
   await expect.poll(() => points.count()).toBeGreaterThan(0);
   expect(await points.count()).toBeLessThan(2000);
@@ -348,6 +348,18 @@ test('节目轨道可明确关联 MA2、取消和撤销，并保存待同步绑�
 });
 
 test('MA2 读取预览加入节目、撤销和保存基线完整，未支持事件禁止部分导入', async ({}, testInfo) => {
+  const selectCueSeven = async (): Promise<void> => {
+    const direct = page.getByRole('button', { name: '灯光点 Cue 7.5', exact: true });
+    if (await direct.isVisible()) { await direct.click(); return; }
+    const points = page.locator('.lighting-timeline-point');
+    for (let i = 0; i < await points.count(); i++) {
+      await points.nth(i).click({ button: 'right' });
+      const choice = page.getByRole('button', { name: '选中：Cue 7.5', exact: true });
+      if (await choice.isVisible()) { await choice.click(); return; }
+      await page.keyboard.press('Escape');
+    }
+    throw new Error('叠点菜单中没有 Cue 7.5');
+  };
   await beginNewProject();
   await page.getByLabel('工程名称').fill('MA2 预览验收');
   await page.getByRole('button', { name: '创建工程' }).click();
@@ -400,7 +412,7 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，未支持事�
   await expect(page.getByLabel('Cue 编号', { exact: true })).toHaveValue('7.500');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(displayedLightingEventCount).toBe(3);
-  await page.getByRole('button', { name: '灯光点 Cue 7.5', exact: true }).click();
+  await selectCueSeven();
   await page.getByLabel('灯光点歌曲时间').fill('2');
   await page.getByLabel('灯光点歌曲时间').press('Tab');
   const changedReadback = structuredClone(preview);
@@ -444,7 +456,7 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，未支持事�
   await difference.getByRole('button', { name: '同步节目与 MA2', exact: true }).click();
   await expect(page.getByText(/节目与 Timecode 9902 已同步并核对/)).toBeVisible();
   await closeLightingTools(); await navigation.getByRole('button', { name: '编辑器', exact: true }).click();
-  await page.getByRole('button', { name: '灯光点 Cue 7.5', exact: true }).click();
+  await selectCueSeven();
   await expect(page.getByLabel('灯光点歌曲时间')).toHaveValue('2.5');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   // Confirmed readback rebases sync history; undo still targets the user's move.
@@ -475,7 +487,7 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，未支持事�
   }, aligned);
   await difference.getByRole('button', { name: '同步节目与 MA2', exact: true }).click();
   await closeLightingTools(); await navigation.getByRole('button', { name: '编辑器', exact: true }).click();
-  await page.getByRole('button', { name: '灯光点 Cue 7.5', exact: true }).click();
+  await selectCueSeven();
   await expect(page.getByLabel('灯光点歌曲时间')).toHaveValue('2.033333');
   await page.getByLabel('灯光点歌曲时间').focus();
   await page.getByLabel('灯光点歌曲时间').press('Tab');
@@ -602,7 +614,10 @@ for (const nativeFixture of ['reaper-native-6.05', 'reaper-native-ramp-6.05', 'r
   expect(saved.rundown[0]!.lighting!.markers).toHaveLength(3);
   await page.reload();
   await closeLightingTools(); await main.getByRole('button', { name: '编辑器', exact: true }).click();
-  await expect(page.locator('.lighting-track-name').filter({ hasText: 'TBLINK muted solo sample' })).toBeVisible();
+  await expect(page.locator('.lighting-lane:visible')).toHaveCount(1);
+  await page.locator('.lighting-track-name').click();
+  await page.getByLabel('灯光来源', { exact: true }).selectOption({ label: 'TBLINK muted solo sample' });
+  await expect(page.getByLabel('灯光轨道名称')).toHaveValue('TBLINK muted solo sample');
 });
 
 test('灯光导入保留变速曲线与音符时间，读取失败清除旧预览', async ({}, testInfo) => {
@@ -805,6 +820,7 @@ test('固定 Cue 设置控制时间线连续打点并可撤销', async () => {
 
 test('设备地址草稿不会被独立 MIDI 设置覆盖，保存后两项均保留', async () => {
   const profile = createDefaultIntegrationProfile();
+  profile.obs.autoConnectOnLaunch = false;
   profile.midiPortProfiles.push({ id: 'lighting-events-output', direction: 'output', portName: 'Draft Test Output' });
   await page.evaluate((value) => window.tbLink.saveIntegrationProfile({ profile: value }), profile);
   await page.reload();
@@ -1456,7 +1472,8 @@ test('编辑器共用正式播放器，打点和菜单切换不中断，暂停�
   await expect(page.locator('.lighting-clip')).toHaveCount(2);
   await page.locator('.lighting-track-name').click();
   await page.locator('.reference-timeline').press('KeyM');
-  await expect(page.locator('.lighting-timeline-point')).toHaveCount(2);
+  await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length).toBe(2);
+  await expect(page.locator('.lighting-combined-lane')).toHaveCount(1);
   await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
   await navigation.getByRole('button', { name: '节目单', exact: true }).click();
   await expect(page.locator('.player-transport')).toHaveClass(/status-playing/);
@@ -2934,10 +2951,15 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
     const project = JSON.parse(await readFile(linkPath, 'utf8')) as { rundown: Array<{ lighting?: { tracks: Array<{ clips: Array<{ events: Array<{ kind: string; duration?: number }> }> }> } }> };
     return project.rundown[0]?.lighting?.tracks[0]?.clips.flatMap((clip) => clip.events).find((event) => event.kind === 'note')?.duration ?? 0;
   }).toBeGreaterThan(150);
-  const notePoint = page.getByRole('button', { name: '灯光点 note', exact: true }).first();
+  const notePoint = page.getByRole('button', { name: '灯光点 note', exact: true }).filter({ hasText: '60' });
   if (await notePoint.isVisible()) await notePoint.click();
   else {
-    await page.getByRole('button', { name: '灯光点 cc', exact: true }).click({ button: 'right' });
+    const candidates = page.locator('.lighting-timeline-point');
+    for (let index = 0; index < await candidates.count(); index += 1) {
+      await candidates.nth(index).click({ button: 'right' });
+      if (await page.getByRole('button', { name: '选中：音符 60', exact: true }).isVisible()) break;
+      await page.keyboard.press('Escape');
+    }
     await page.getByRole('button', { name: '选中：音符 60', exact: true }).click();
   }
   const duration = page.getByLabel('持续（秒）', { exact: true });
@@ -3208,8 +3230,8 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
     await expect(page.getByLabel('MA2 登录密码')).toHaveValue('');
     await page.getByLabel('MA2 登录密码').fill('synthetic-e2e-password');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-    await page.getByRole('button', { name: '保存并连接', exact: true }).click();
-    await expect(page.locator('.ma2-device-status')).toHaveText('已登录 · 插件待验证');
+    await page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ }).click();
+    await expect(page.locator('.ma2-device-status')).toHaveText('已连接');
     await page.getByRole('button', { name: '详细', exact: true }).click();
     await expect(page.getByRole('button', { name: 'MA2 网络：已连接', exact: true })).toBeVisible();
     expect(executions).toBe(0);
@@ -3248,11 +3270,11 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
     await expect.poll(() => logins).toBe(2); await navigate(); await openMa2ManualSettings();
     await expect(page.getByLabel('已保存 MA2 控台').locator('option')).toHaveCount(3);
     await expect(page.getByLabel('MA2 控台 IP')).toHaveValue('127.0.0.1'); await expect(page.getByLabel('MA2 登录密码')).toHaveValue('');
-    await expect(page.locator('.ma2-device-status')).toHaveText('已登录 · 插件待验证');
+    await expect(page.locator('.ma2-device-status')).toHaveText('已连接');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await expect(page.getByLabel('MA2 MSC 设备号')).toHaveValue('5');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-    await page.getByRole('button', { name: '断开 MA2', exact: true }).click();
+    await page.locator('.ma2-network-settings').getByRole('button', { name: '断开', exact: true }).click();
     await expect(page.locator('.ma2-device-status')).toHaveText('未连接'); expect(logins).toBe(2);
   } finally {
     for (const socket of sockets) socket.destroy();
@@ -3309,7 +3331,7 @@ test('设备连接三种尺寸、跨页草稿与搜索目标隔离', async ({}, 
     await section.getByRole('button', { name: 'MA2 控台', exact: true }).click();
   }
   await application.evaluate(({ ipcMain }) => { ipcMain.removeHandler('link:ma2-discover'); ipcMain.handle('link:ma2-discover', () => ({ hosts: [{ host: '192.168.1.60', port: 30000, identity: 'ma2' }], ranges: ['192.168.1.0/24'], warnings: [] })); });
-  await page.getByRole('button', { name: '搜索局域网控台', exact: true }).click();
+  await page.getByRole('button', { name: '搜索控台', exact: true }).click();
   await expect(page.getByLabel('MA2 控台 IP')).toHaveValue('192.168.1.50');
   await page.getByRole('button', { name: '选择控台 192.168.1.60:30000', exact: true }).click();
   await expect(page.getByLabel('MA2 控台 IP')).toHaveValue('192.168.1.60'); await expect(page.getByLabel('MA2 登录密码')).toHaveValue('admin');

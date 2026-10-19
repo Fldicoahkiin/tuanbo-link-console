@@ -8,7 +8,7 @@ export function placeConsoleCue(document: LightingDocument, reference: { sequenc
     && value.cueStamp.executor === reference.executor && (reference.executor || value.cueStamp.sequence === reference.sequence))
     ?? lightingTrackSchema.parse({ id: crypto.randomUUID(), name: '灯光', kind: 'ma2', color: '#68c9ed', group: 'effect-canvas', muted: false, solo: false, locked: false,
       channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [], cueStamp: { mode: 'fixed', sequence: reference.sequence, cue: reference.cue, executor: reference.executor } });
-  const event = { id: crypto.randomUUID(), kind: 'ma2' as const, action: 'goto' as const, at: ms, label: reference.name, sequence: reference.sequence, cue: reference.cue, executor: reference.executor };
+  const event = { id: crypto.randomUUID(), kind: 'ma2' as const, ...(document.outputMode === 'timecode' ? {} : { runMode: 'independent' as const }), action: 'goto' as const, at: ms, label: reference.name, sequence: reference.sequence, cue: reference.cue, executor: reference.executor };
   const existing = track.clips.find(clip => clip.timeLock === 'time' && clip.start === 0 && !clip.muted);
   const clip = existing ? { ...existing, duration: Math.max(existing.duration, ms + 1), events: [...existing.events, event] }
     : { id: crypto.randomUUID(), name: reference.name, start: 0, duration: durationMs, timeLock: 'time' as const, muted: false, events: [event] };

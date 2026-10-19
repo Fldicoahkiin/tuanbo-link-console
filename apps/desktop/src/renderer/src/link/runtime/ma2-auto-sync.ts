@@ -6,6 +6,7 @@ import { pendingMa2Renames, confirmMa2RenameCommand, ma2RenameKey } from '@tb/co
 import { ma2RenameResultSchema, type Ma2RenameRequest, type Ma2RenameResult } from '@tb/schema';
 
 export type Ma2AutoSyncStatus = 'off' | 'waiting' | 'staged' | 'reading' | 'writing' | 'verified' | 'blocked';
+export type Ma2AutoSyncScope = 'all' | 'names';
 type State = { project: LinkProject | null; documentId: number; playing: boolean; editing?: boolean };
 export type Ma2AutoSyncDependencies = {
   state: () => State;
@@ -16,7 +17,7 @@ export type Ma2AutoSyncDependencies = {
   compare: (request: Ma2CompareRequest) => Promise<Ma2SyncPreview>;
   apply: (request: Ma2ApplyRequest) => Promise<Ma2ApplyResult>;
   archive: (documentId: number, project: LinkProject) => Promise<string>;
-  execute: (documentId: number, command: LinkCommand) => void;
+  execute: (documentId: number, command: LinkCommand) => void | Promise<void>;
   changed: (status: Ma2AutoSyncStatus, message: string) => void;
 };
 
@@ -26,17 +27,17 @@ export class Ma2AutoSync {
   private busy = false;
   private writing = false;
   private confirmed = false;
-  private session: { connection: Ma2CatalogRequest; directory: Ma2Catalog['directory']; documentId: number } | null = null;
+  private session: { connection: Ma2CatalogRequest; directory: Ma2Catalog['directory']; documentId: number; scope: Ma2AutoSyncScope } | null = null;
   constructor(private readonly dependencies: Ma2AutoSyncDependencies) {}
 
-  start(connection: Ma2CatalogRequest, catalog: Ma2Catalog): void {
+  start(connection: Ma2CatalogRequest, catalog: Ma2Catalog, scope: Ma2AutoSyncScope = 'all'): void {
     if (this.busy) throw new Error('上一次同步尚未结束，请等待回读后启用');
     const state = this.dependencies.state();
     if (!state.project) throw new Error('请先打开工程');
     this.generation += 1;
     this.confirmed = false;
-    this.session = { connection: structuredClone(connection), directory: ma2CatalogSchema.parse(catalog).directory, documentId: state.documentId };
-    this.dependencies.changed('waiting', '编辑后自动同步已启用；控台侧修改请手动刷新');
+    this.session = { connection: structuredClone(connection), directory: ma2CatalogSchema.parse(catalog).directory, documentId: state.documentId, scope };
+    this.dependencies.changed('waiting', scope === 'names' ? '名称同步已启用' : '双向同步已启用，播放期间暂存修改');
   }
 
   stop(): void {
@@ -47,18 +48,24 @@ export class Ma2AutoSync {
   async tick(refreshRemote = false): Promise<void> {
     const session = this.session;
     if (!session || this.busy) return;
+    refreshRemote = refreshRemote && session.scope === 'all';
     const state = this.dependencies.state();
     if (state.documentId !== session.documentId || !state.project) { this.stop(); return; }
     if (state.playing) {
-      const pending = ma2PendingChanges(state.project);
+      const pending = session.scope === 'names' ? [] : ma2PendingChanges(state.project);
       const count = pending.length + pendingMa2Renames(state.project).length;
       this.dependencies.changed(count ? 'staged' : 'waiting', count ? `${count} 项修改待提交；仅保存在本地，停止后核对同步` : '播放期间等待，停止后同步'); return;
     }
     if (state.editing) { this.dependencies.changed('waiting', '等待连续编辑结束'); return; }
-    let pending = ma2PendingChanges(state.project);
-    const unbound = state.project.rundown.filter(item => item.lighting && ma2AutoBindEvents(item.lighting).length);
+    let pending = session.scope === 'names' ? [] : ma2PendingChanges(state.project);
+    const unbound = session.scope === 'names' ? [] : state.project.rundown.filter(item => item.lighting && !item.lighting.consoleSong && ma2AutoBindEvents(item.lighting).length);
     const renames = pendingMa2Renames(state.project);
-    if (!refreshRemote && !pending.length && !unbound.length && !renames.length) { this.dependencies.changed(this.confirmed ? 'verified' : 'waiting', this.confirmed ? '修改已写入并回读确认' : '实时同步已开启，等待修改'); return; }
+    if (!refreshRemote && !pending.length && !unbound.length && !renames.length) {
+      this.dependencies.changed(this.confirmed ? 'verified' : 'waiting', session.scope === 'names'
+        ? (this.confirmed ? '名称已写入控台并回读确认' : '名称实时同步已开启，等待改名')
+        : (this.confirmed ? '修改已写入并回读确认' : '实时同步已开启，等待修改'));
+      return;
+    }
     const stale = pending.find(change => {
       const project = state.project!;
       if (project.ma2ReadState?.pairings?.[change.target]?.status !== 'stale') return false;
@@ -96,15 +103,20 @@ export class Ma2AutoSync {
         const result = ma2RenameResultSchema.parse(await this.dependencies.rename({ ...session.connection, change, generation: session.directory.generation }));
         if (result.name !== change.name || result.sequence !== change.sequence || result.kind !== change.kind || Number(result.cue) !== Number(change.cue) || result.show !== change.show || result.generation !== session.directory.generation) throw new Error('名称回读与目标不一致，未确认同步');
         if (this.dependencies.state().documentId !== session.documentId) throw new Error('控台名称已写入，但工程已切换，请重新读取控台核对');
-        this.dependencies.execute(session.documentId, confirmMa2RenameCommand(change));
+        await this.dependencies.execute(session.documentId, confirmMa2RenameCommand(change));
         this.writing = false; this.confirmed = true;
         if (this.session !== session) { this.dependencies.changed('off', '实时同步已关闭；已发出的名称已回读确认'); return; }
+      }
+      if (session.scope === 'names') {
+        const outstanding = pendingMa2Renames(this.dependencies.state().project).length;
+        this.dependencies.changed(outstanding ? 'staged' : 'verified', outstanding ? '上一笔名称已确认，继续同步后续改名' : '名称已写入控台并回读确认');
+        return;
       }
       for (const item of unbound) {
         if (!current()) return;
         const project = this.dependencies.state().project!;
         const source = project.rundown.find(entry => entry.id === item.id)?.lighting;
-        if (!source || !ma2AutoBindEvents(source).length) continue;
+        if (!source || source.consoleSong || !ma2AutoBindEvents(source).length) continue;
         await this.dependencies.archive(session.documentId, project);
         if (!current()) return;
         this.writing = true;
@@ -114,14 +126,14 @@ export class Ma2AutoSync {
           network: session.connection.network, projectId: project.projectId, itemId: item.id, document: source,
           expectedSource: { show, generation: sourceGeneration, version } }));
         if (this.dependencies.state().documentId !== session.documentId) throw new Error('工程已切换，控台关联已保留，请重新读取后核对');
-        this.dependencies.execute(session.documentId, applyMa2AutoBindingsCommand(item.id, source, prepared.plan));
+        await this.dependencies.execute(session.documentId, applyMa2AutoBindingsCommand(item.id, source, prepared.plan));
         session.directory = prepared.directory;
         this.writing = false;
         if (this.session !== session) { this.dependencies.changed('off', '实时同步已关闭，已完成的控台关联已保存'); return; }
         if (!current()) return;
       }
       const project = this.dependencies.state().project!;
-      if (project.rundown.some(item => item.lighting && ma2AutoBindEvents(item.lighting).length)) {
+      if (project.rundown.some(item => item.lighting && !item.lighting.consoleSong && ma2AutoBindEvents(item.lighting).length)) {
         this.dependencies.changed('waiting', '准备期间新增了 Cue，继续核对新增目标'); return;
       }
       pending = ma2PendingChanges(project);
@@ -155,7 +167,7 @@ export class Ma2AutoSync {
           this.session = null; this.dependencies.changed('blocked', '控台已完成同步，但会话或本地编辑已改变；本地变更已保留，请手动回读确认'); return;
         }
         this.writing = false;
-        this.dependencies.execute(session.documentId, applyMa2ReadbackCommand(target.itemId, binding.id, source, result.confirmed, same(comparison.base, comparison.remote)));
+        await this.dependencies.execute(session.documentId, applyMa2ReadbackCommand(target.itemId, binding.id, source, result.confirmed, same(comparison.base, comparison.remote)));
         this.confirmed = true;
         if (this.session !== session) { this.dependencies.changed('off', '实时同步已关闭；已发出的修改已回读确认'); return; }
       }

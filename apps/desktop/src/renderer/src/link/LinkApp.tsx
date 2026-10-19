@@ -38,6 +38,7 @@ import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
 import { useMediaAudioPreparation } from './runtime/use-media-audio-preparation';
 import { useLicenseReminders } from './useLicenseReminders';
+import { TaskSidebarProgress } from './components/TaskSidebarProgress';
 
 type Page = 'project' | 'cues' | 'lighting';
 type Notice = { id: string; message: string; tone: 'info' | 'error'; key?: string };
@@ -168,7 +169,7 @@ export function LinkApp(): JSX.Element {
       const path = await linkDesktopViewModel.saveProject(current.path, current.project);
       if (!path || useDocumentStore.getState().documentId !== savingDocumentId) return;
       useDocumentStore.getState().markSaved(path, savingRevision, savingDocumentId);
-      notify(`工程已原子保存：${path}`);
+      notify('工程已保存');
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     }
@@ -270,6 +271,7 @@ function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange,
       <div className="sidebar-playlists" hidden={settingsOpen || page !== 'project'} ref={playlistHostRef} />
       <div className="sidebar-editor" hidden={settingsOpen || page === 'project'} ref={editorHostRef} />
       {settingsOpen ? <SettingsNavigation selected={settingsCategory} onSelect={onSettingsCategoryChange} /> : null}
+      <TaskSidebarProgress/>
     </div>
   </aside>;
 }

@@ -55,13 +55,14 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式').selectOption('network');
-    await page.getByRole('button', { name: '连接 MA2 并载入节目 Cue', exact: true }).click();
+    await page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ }).click();
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect.poll(() => app.evaluate(() => process.env.TBLINK_CACHE_TEST_READS)).toBe('1');
     await expect(page.locator('.waveform-cue-point')).toHaveCount(11);
     await expect(page.locator('.project-save-status')).toBeHidden();
     await nav.getByRole('button', { name: '设置', exact: true }).click();
     const exportButton = page.getByRole('button', { name: '导出现场核对包', exact: true });
+    if (!await exportButton.isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
     await expect(exportButton).toBeVisible();
     const diagnosticPath = info.outputPath('现场核对.tbdiag.gz');
     await app.evaluate(({ dialog }, path) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: path }); }, diagnosticPath);
@@ -77,7 +78,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     const sequencePreview = page.getByRole('region', { name: 'MA2 序列预览' });
     await expect(sequencePreview.getByLabel('素材序列', { exact: true })).toHaveAttribute('data-total-cues', '11');
     await sequencePreview.getByRole('button', { name: '试听序列 36 灯光步 1.100', exact: true }).click();
-    await expect(sequencePreview.getByRole('status')).toContainText('指令已发送');
+    await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_AUDITION_CALLS ?? '[]')) as unknown[]).length).toBe(1);
     const calls = JSON.parse(await app.evaluate(() => process.env.TBLINK_AUDITION_CALLS ?? '[]')) as unknown[];
     expect(calls).toHaveLength(1);
     expect(ma2AuditionRequestSchema.parse(calls[0]).action).toEqual({ target: 'executor', executor: '51.101', cue: '1.100', action: 'goto' });
@@ -88,7 +89,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await expect(sequencePreview.getByLabel('序列预览播放目标')).toHaveValue('51.101');
     await sequencePreview.getByRole('button', { name: '试听灯光步 1.100', exact: true }).click();
     await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_AUDITION_CALLS ?? '[]')) as unknown[]).length).toBe(2);
-    await expect(sequencePreview.getByRole('status')).toContainText('未回读播放状态');
+    await expect(sequencePreview.getByText('未回读播放状态', { exact: true })).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('sequence-preview.png') });
     for (const zoom of [1, 2]) {
       await app.evaluate(({ BrowserWindow }, factor) => { const window = BrowserWindow.getAllWindows()[0]!; window.setSize(1180, 760); window.webContents.setZoomFactor(factor); }, zoom);
@@ -108,6 +109,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await page.screenshot({ path: info.outputPath('workbench.png') });
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
+    if (!await page.getByRole('button', { name: '配对与查看 Cue', exact: true }).isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
     await page.getByRole('button', { name: '配对与查看 Cue', exact: true }).click();
     await expect(page.getByRole('region', { name: '控台时间线与歌曲配对' })).toBeVisible();
     await page.getByLabel('时间线状态筛选').selectOption('native');
@@ -127,6 +129,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await expect(page.locator('.waveform-cue-point')).toHaveCount(11);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
+    if (!await page.getByRole('button', { name: '配对与查看 Cue', exact: true }).isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
     await page.getByRole('button', { name: '配对与查看 Cue', exact: true }).click();
     await expect(page.getByLabel('时间线状态筛选')).toHaveValue('native');
     await expect(page.locator('.ma2-browser-events tbody tr')).toHaveCount(24);

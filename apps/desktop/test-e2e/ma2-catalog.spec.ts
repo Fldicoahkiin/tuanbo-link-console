@@ -65,6 +65,7 @@ test('真实 onPC 设置扫描、小数 Cue、歌曲配对、批量导入与保�
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式').selectOption('local');
     await page.getByLabel('MA2 onPC 数据目录').fill(directory);
+    await page.getByText('歌曲导入与同步', { exact: true }).click();
     const section = page.getByLabel('MA2 现场节目导入');
     await expect(section.getByRole('button', { name: '生成点击播放联动工程', exact: true })).toHaveCount(0);
     await section.getByRole('button', { name: '扫描控台全部时间线', exact: true }).click();

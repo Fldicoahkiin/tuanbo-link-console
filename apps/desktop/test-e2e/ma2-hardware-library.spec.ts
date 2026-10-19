@@ -50,7 +50,7 @@ test('实体控台经读取控台入口自动连接并显示真实素材', async
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await expect(page.getByLabel('MA2 控台 IP')).not.toBeVisible();
-    await expect(page.getByRole('button', { name: '连接 MA2 并载入节目 Cue' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ })).toBeVisible();
     if (!process.env.TBLINK_MA2_TEST_HIDDEN) await page.screenshot({ path: info.outputPath('console-settings.png') });
     const status = await page.evaluate(() => window.tbLink.getMa2NetworkStatus());
     expect(status.settings?.host).toBe(process.env.TBLINK_MA2_HARDWARE_HOST);

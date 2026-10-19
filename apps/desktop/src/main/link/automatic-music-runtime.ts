@@ -31,6 +31,5 @@ export class AutomaticMusicRuntime {
 
   cancel(taskId: string): Promise<void> { return this.service.cancel(taskId); }
   resume(taskId: string): void { this.service.resume(taskId); }
-  setPerformanceActive(active: boolean): Promise<void> { return this.service.setPerformanceActive(active); }
   close(): Promise<void> { return this.service.close(); }
 }

@@ -1,57 +1,12 @@
 import { automaticMusicCandidatesSchema, lightingDocumentSchema, musicStructureSchema, type AutomaticMusicCandidates, type LightingDocument, type MusicStructure, type MusicStructureSegment, type ReferenceAudio } from '@tb/schema';
 import { detectedBeatsPerBar } from './music-beat-segments';
 import { musicTempoSegments } from './music-tempo-segments';
+import { musicSegmentSpeed } from './music-segment-tempo';
 
-const median = (values: number[]): number => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
 const round = (value: number): number => Math.round(value * 100) / 100;
 export function matchingMusicStructure(document: LightingDocument | undefined, source: Pick<ReferenceAudio, 'sha256' | 'durationMs'> | undefined): MusicStructure | undefined {
   const result = document?.musicAnalysis;
   return result && source && result.sourceSha256 === source.sha256 && Math.abs(result.durationMs - source.durationMs) <= 50 ? result : undefined;
-}
-
-function segmentSpeed(beats: number[], start: number, end: number, known: boolean): { bpm: number | null; endBpm: number | null } {
-  let periods = beats.slice(1).flatMap((time, index) => beats[index]! >= start && time <= end ? [time - beats[index]!] : []);
-  if (known && periods.length < 3 && beats.some(time => time >= start && time < end)) {
-    // A structure cut is not a break in the beat clock. For short sections use
-    // overlapping intervals and only the immediate neighbours needed to estimate
-    // three intervals. Never bridge a gap or a change in tempo with that context.
-    const overlapping = beats.slice(1).flatMap((time, index) => beats[index]! < end && time > start ? [index] : []);
-    if (overlapping.length) {
-      let first = overlapping[0]!, last = overlapping.at(-1)!;
-      while (last - first + 1 < 3) {
-        if (first > 0 && beats[first - 1]! >= start - 1500) first--;
-        else if (last + 2 < beats.length && beats[last + 2]! <= end + 1500) last++;
-        else break;
-      }
-      const context = beats.slice(first + 1, last + 2).map((time, index) => time - beats[first + index]!);
-      const center = median(context);
-      if (center > 0 && context.every(value => Math.abs(value / center - 1) <= .08)) periods = context;
-    }
-  }
-  // Isolated subdivisions can be detected as two half beats among ordinary
-  // beats. Combine only adjacent pairs supported by at least three full periods;
-  // a sustained faster passage keeps its own median and is not halved.
-  const center = median(periods);
-  if (center > 0 && periods.filter(value => Math.abs(value / center - 1) <= .1).length >= 3) {
-    const combined: number[] = [];
-    for (let index = 0; index < periods.length; index++) {
-      const value = periods[index]!, next = periods[index + 1];
-      if (next !== undefined && value < center * .65 && next < center * .65 && Math.abs((value + next) / center - 1) <= .1) { combined.push(value + next); index++; }
-      else combined.push(value);
-    }
-    periods = combined;
-  }
-  if (!known || periods.length < 3) return { bpm: null, endBpm: null };
-  const period = median(periods), stable = periods.filter(value => Math.abs(value / period - 1) <= .1).length / periods.length;
-  const first = median(periods.slice(0, Math.min(6, periods.length))), last = median(periods.slice(-6));
-  const direction = Math.sign(last - first);
-  const smooth = periods.slice(1).filter((value, index) => Math.abs(value / periods[index]! - 1) <= .12 && direction * (value - periods[index]!) >= -first * .025).length / Math.max(1, periods.length - 1);
-  if (periods.length >= 12 && smooth >= .8 && Math.abs(last / first - 1) >= .1) return { bpm: round(60000 / first), endBpm: round(60000 / last) };
-  // Model times are quantized; a median interval alone can make every section
-  // read 115.38 (= 60 / .52), even when its accumulated beat duration differs.
-  const inliers = periods.filter(value => Math.abs(value / period - 1) <= .1);
-  const localPeriod = inliers.reduce((sum, value) => sum + value, 0) / inliers.length;
-  return stable >= .7 ? { bpm: round(60000 / localPeriod), endBpm: null } : { bpm: null, endBpm: null };
 }
 
 /** Resolve earlier short-section omissions from saved beat evidence without
@@ -59,7 +14,7 @@ function segmentSpeed(beats: number[], start: number, end: number, known: boolea
 export function musicStructureSegments(data: MusicStructure): MusicStructureSegment[] {
   if (data.state !== 'ready') return [];
   const beats = data.beats.map(beat => beat.atMs);
-  return data.segments.map(segment => segment.bpm !== null ? segment : { ...segment, ...segmentSpeed(beats, segment.startMs, segment.endMs, data.bpm !== null) });
+  return data.segments.map((segment, index) => ({ ...segment, name: segment.edited ? segment.name : `段落 ${index + 1}`, ...musicSegmentSpeed(beats, segment.startMs, segment.endMs, data.bpm !== null) }));
 }
 
 /** Actual structure boundaries and sustained tempo changes, never a user-selected beat interval. */
@@ -76,13 +31,12 @@ export function recognizeMusicStructure(input: AutomaticMusicCandidates, taskId:
   }
   for (const at of changes) {
     const nearby = boundaries.find(boundary => boundary.at > 0 && Math.abs(boundary.at - at) <= 200);
-    if (nearby) nearby.reason = 'both'; else if (at > 0 && at < result.durationMs) boundaries.push({ at, reason: 'tempo' });
+    if (nearby) { nearby.at = at; nearby.reason = 'both'; } else if (at > 0 && at < result.durationMs) boundaries.push({ at, reason: 'tempo' });
   }
   boundaries.sort((a, b) => a.at - b.at);
   const segments = beats.length || structures.length ? boundaries.map((boundary, index) => {
     const endMs = boundaries[index + 1]?.at ?? result.durationMs;
-    const structure = structures.find(section => section.startMs <= boundary.at + 200 && section.endMs !== null && section.endMs > boundary.at);
-    return { id: `segment:${round(boundary.at)}`, name: structure?.name ?? `段落 ${index + 1}`, startMs: boundary.at, endMs, reason: boundary.reason, edited: false, ...segmentSpeed(beats, boundary.at, endMs, result.bpm !== null) };
+    return { id: `segment:${round(boundary.at)}`, name: `段落 ${index + 1}`, startMs: boundary.at, endMs, reason: boundary.reason, edited: false, ...musicSegmentSpeed(beats, boundary.at, endMs, result.bpm !== null) };
   }) : [];
   return musicStructureSchema.parse({ version: 1, algorithm: 'music-structure-1', sourceSha256: result.sourceSha256, durationMs: result.durationMs, taskId, state: 'ready', bpm: result.bpm, beatsPerBar: detectedBeatsPerBar(result),
     beats: beats.map(atMs => ({ id: `beat:${round(atMs)}`, atMs, strong: downbeats.has(atMs) })), segments, removedBeatMs: [], removedRanges: [] });
@@ -111,6 +65,6 @@ export function editMusicStructure(document: LightingDocument, action: { kind: '
   } else if (action.kind === 'remove-segment') {
     const segment = current.segments.find(item => item.id === action.id); if (!segment) throw new Error('段落已不存在');
     result = { ...current, segments: current.segments.filter(item => item.id !== action.id), removedRanges: [...current.removedRanges, { startMs: segment.startMs, endMs: segment.endMs }] };
-  } else result = { ...current, segments: current.segments.map(segment => segment.id === action.segment.id ? { ...action.segment, ...segmentSpeed(current.beats.map(beat => beat.atMs), action.segment.startMs, action.segment.endMs, current.bpm !== null), edited: true } : segment).sort((a, b) => a.startMs - b.startMs) };
+  } else result = { ...current, segments: current.segments.map(segment => segment.id === action.segment.id ? { ...action.segment, ...musicSegmentSpeed(current.beats.map(beat => beat.atMs), action.segment.startMs, action.segment.endMs, current.bpm !== null), edited: true } : segment).sort((a, b) => a.startMs - b.startMs) };
   return lightingDocumentSchema.parse({ ...document, musicAnalysis: result });
 }

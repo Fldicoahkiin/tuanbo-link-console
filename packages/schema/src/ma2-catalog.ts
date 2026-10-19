@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ma2NetworkTargetSchema, ma2TimecodePreviewSchema } from './ma2-bridge';
 import { lightingMa2CueCatalogSchema, lightingMa2BindingSchema, lightingTrackSchema } from './lighting';
 
-export const ma2CatalogRequestSchema = z.object({ dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(), progressId: z.string().uuid().optional(), projectPath: z.string().max(4096).optional(), projectId: z.string().min(1).optional(), expectedSource: z.object({ show: z.string(), generation: z.string(), version: z.string() }).strict().optional(), targets: z.array(z.number().int().min(1).max(99999)).max(10000).optional() }).strict();
+export const ma2CatalogRequestSchema = z.object({ details: z.literal('attributes').optional(), dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(), progressId: z.string().uuid().optional(), projectPath: z.string().max(4096).optional(), projectId: z.string().min(1).optional(), expectedSource: z.object({ show: z.string(), generation: z.string(), version: z.string() }).strict().optional(), targets: z.array(z.number().int().min(1).max(99999)).max(10000).optional() }).strict();
 export type Ma2CatalogRequest = z.infer<typeof ma2CatalogRequestSchema>;
 const ma2ReadProgressBaseSchema = z.object({
   id: z.string().uuid(),

@@ -1,3 +1,4 @@
+import { ma2SongBindingSchema } from './ma2-song-binding';
 import { z } from 'zod';
 import { lightingMusicSchema, musicMarkerKinds } from './lighting-music';
 import { musicStructureSchema } from './music-structure';
@@ -11,7 +12,7 @@ export const lightingPreparationSchema = z.object({
   leadMs: z.number().finite().min(100).max(10000)
 }).strict();
 export const lightingEventSchema = z.discriminatedUnion('kind', [
-  z.object({ ...eventBase, kind: z.literal('empty-cue'), label: z.string() }).strict(),
+  z.object({ ...eventBase, kind: z.literal('empty-cue'), label: z.string(), runMode: z.enum(['independent', 'follow']).optional() }).strict(),
   z.object({ ...eventBase, kind: z.literal('raw'), bytes: z.array(z.number().int().min(0).max(255)).min(1).max(65536).refine((bytes) => {
     const status = bytes[0] ?? 0;
     if (status === 0xf0) return bytes.length >= 3 && bytes.at(-1) === 0xf7 && bytes.slice(1, -1).every((byte) => byte < 128);
@@ -22,7 +23,7 @@ export const lightingEventSchema = z.discriminatedUnion('kind', [
   z.object({ ...eventBase, kind: z.literal('note'), note: dataByte, velocity: dataByte.min(1), releaseVelocity: dataByte.optional(), duration: time.positive() }).strict(),
   z.object({ ...eventBase, kind: z.literal('cc'), controller: dataByte, value: dataByte }).strict(),
   z.object({ ...eventBase, kind: z.literal('program'), program: dataByte }).strict(),
-  z.object({ ...eventBase, kind: z.literal('ma2'), cue: z.string().regex(/^\d+(?:\.\d+)?$/).optional(), label: z.string(), action: z.enum(['go', 'goto', 'off']), executor: z.union([z.literal(''), z.string().regex(/^\d+\.\d+$/)]), sequence: z.number().int().positive().optional(), preparation: lightingPreparationSchema.optional() }).strict(),
+  z.object({ ...eventBase, kind: z.literal('ma2'), runMode: z.enum(['independent', 'follow']).optional(), cue: z.string().regex(/^\d+(?:\.\d+)?$/).optional(), label: z.string(), action: z.enum(['go', 'goto', 'off']), executor: z.union([z.literal(''), z.string().regex(/^\d+\.\d+$/)]), sequence: z.number().int().positive().optional(), preparation: lightingPreparationSchema.optional() }).strict(),
   z.object({ ...eventBase, kind: z.literal('ma2-fader'), executor: z.string().regex(/^[1-9]\d*\.[1-9]\d*$/), fader: z.literal('Master'), level: z.number().finite().min(0).max(1), label: z.string() }).strict(),
   z.object({ ...eventBase, kind: z.literal('point'), value: z.number().finite().min(0).max(127), shape: z.enum(['hold', 'linear', 'smooth']), controlValues: z.tuple([z.number().finite().min(0).max(127), z.number().finite().min(0).max(127)]).optional() }).strict()
 ]).superRefine((event, ctx) => {
@@ -85,6 +86,7 @@ export const lightingMa2BindingSchema = z.object({
   cueCatalog: lightingMa2CueCatalogSchema.optional()
 }).strict();
 export const lightingDocumentSchema = z.object({
+  consoleSong: ma2SongBindingSchema.optional(),
   musicAnalysis: musicStructureSchema.optional(),
   ma2Library: z.object({ show: z.string(), readAt: z.string().datetime(), sequences: lightingMa2CueCatalogSchema }).strict().optional(),
   autoCueSource: z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), durationMs: z.number().finite().positive() }).strict().optional(),

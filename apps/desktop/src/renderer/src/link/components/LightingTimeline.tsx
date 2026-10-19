@@ -9,16 +9,15 @@ import { masterCurveY } from './lighting-master-curve';
 
 function groupStackedEvents(tracks: LightingTrack[], map: LightingTempoMap, pixelsPerSecond: number): Map<string, LightingEvent[]> {
   const result = new Map<string, LightingEvent[]>();
-  for (const track of tracks) for (const clip of track.clips) {
-    const groups = new Map<number, LightingEvent[]>();
-    let anchor = -Infinity;
-    for (const event of [...clip.events].sort((a, b) => a.at - b.at)) {
-      const pixel = lightingEventTime(clip, event, map) / 1000 * pixelsPerSecond;
-      if (pixel - anchor >= 16) anchor = pixel;
-      const group = groups.get(anchor) ?? []; group.push(event); groups.set(anchor, group);
-    }
-    for (const group of groups.values()) for (const event of group) result.set(event.id, group);
+  const entries = tracks.flatMap(track => track.clips.flatMap(clip => clip.events.map(event => ({ event, ms: lightingEventTime(clip, event, map) })))).sort((a, b) => a.ms - b.ms);
+  const groups = new Map<number, LightingEvent[]>();
+  let anchor = -Infinity;
+  for (const { event, ms } of entries) {
+    const pixel = ms / 1000 * pixelsPerSecond;
+    if (pixel - anchor >= 16) anchor = pixel;
+    const group = groups.get(anchor) ?? []; group.push(event); groups.set(anchor, group);
   }
+  for (const group of groups.values()) for (const event of group) result.set(event.id, group);
   return result;
 }
 
@@ -59,12 +58,12 @@ export function LightingHeadings(props: LightingTimelineProps & { durationMs: nu
       const track: LightingTrack = { id: crypto.randomUUID(), kind: 'ma2', name: '灯光', color: '#ba8fff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [clip] };
       props.onChange({ ...props.document, tracks: [...props.document.tracks, track] }, '添加灯光轨道'); props.onSelect(track.id, clip.id);
     }}><Plus />添加灯光轨道</button></div>
-    {props.document.tracks.map((track) => <div className={`track-heading lighting-heading ${moving ? 'is-dragging' : ''}`} key={track.id} onContextMenu={(event) => { event.preventDefault(); setContext({ track, x: Math.min(event.clientX, window.innerWidth - 160), y: Math.min(event.clientY, window.innerHeight - 50) }); }} style={{ borderLeft: `3px solid ${track.color}`, order: 50 + (props.document.laneIndex ?? 0) * 100 }}
+    {(props.document.tracks.length ? [props.document.tracks.find(track => track.clips.some(clip => clip.id === props.selectedClipId)) ?? props.document.tracks[0]!] : []).map((track) => <div className={`track-heading lighting-heading ${moving ? 'is-dragging' : ''}`} key="lighting" onContextMenu={(event) => { event.preventDefault(); setContext({ track, x: Math.min(event.clientX, window.innerWidth - 160), y: Math.min(event.clientY, window.innerHeight - 50) }); }} style={{ borderLeft: '3px solid var(--accent)', order: 50 + (props.document.laneIndex ?? 0) * 100 }}
       onPointerDown={(event) => { if (event.button !== 0 || track.locked || !(event.target as Element).closest('.lighting-track-name,.lighting-grip')) return; event.currentTarget.setPointerCapture(event.pointerId); reorder.current = { y: event.clientY, target: props.document.laneIndex ?? 0 }; }}
       onPointerMove={(event) => { if (!reorder.current) return; const rows = [...(event.currentTarget.parentElement?.querySelectorAll('.visual-layer-heading') ?? [])]; reorder.current.target = rows.filter((row) => { const rect = row.getBoundingClientRect(); return event.clientY > rect.top + rect.height / 2; }).length; if (Math.abs(event.clientY - reorder.current.y) > 4) setMoving(true); }}
       onPointerUp={(event) => { const current = reorder.current; reorder.current = null; setMoving(false); if (current && Math.abs(event.clientY - current.y) <= 4) props.onSelect(track.id, track.clips[0]?.id ?? null); if (current && Math.abs(event.clientY - current.y) > 4 && current.target !== (props.document.laneIndex ?? 0)) props.onChange({ ...props.document, laneIndex: current.target }, '移动灯光轨道位置'); }} onPointerCancel={() => { reorder.current = null; setMoving(false); }}>
       <button className="lighting-grip" aria-label="调整灯光轨道顺序" title="上下拖动调整位置"><GripVertical /></button>
-      <button className="lighting-track-name" onClick={() => props.onSelect(track.id, track.clips[0]?.id ?? null)}>{track.name}</button>
+      <button className="lighting-track-name" title={`当前来源：${track.name}`} onClick={() => props.onSelect(track.id, track.clips[0]?.id ?? null)}>{props.document.tracks.length === 1 ? track.name : '灯光'}</button>
       <button aria-label={`${track.name}静音`} aria-pressed={track.muted} onClick={() => update({ ...track, muted: !track.muted })}>{track.muted ? <VolumeX /> : <Volume2 />}</button>
       {props.document.tracks.length > 1 ? <button aria-label={`${track.name}独奏`} aria-pressed={track.solo} onClick={() => update({ ...track, solo: !track.solo })}>S</button> : null}
       <button aria-label={`${track.name}锁定`} aria-pressed={track.locked} onClick={() => update({ ...track, locked: !track.locked })}>{track.locked ? <Lock /> : <LockOpen />}</button>
@@ -78,7 +77,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
   const clipboard = useLightingClipboardStore((state) => state.clipboard);
   const [context, setContext] = useState<{ trackId: string; clipId: string; eventId: string | null; ms: number; x: number; y: number } | null>(null);
   useDismissLightingContext(Boolean(context), setContext);
-  const activeTrack = props.document.tracks.find((entry) => entry.clips.some((clip) => clip.id === props.selectedClipId)) ?? (props.document.tracks.length === 1 ? props.document.tracks[0] : undefined);
+  const activeTrack = props.document.tracks.find((entry) => entry.clips.some((clip) => clip.id === props.selectedClipId)) ?? props.document.tracks[0];
   const activeClip = activeTrack?.clips.find((entry) => entry.id === props.selectedClipId) ?? activeTrack?.clips.find((entry) => { const span = lightingClipSpan(entry, map); return props.playheadMs >= span.startMs && props.playheadMs < span.endMs; });
   const menuTrack = props.document.tracks.find((entry) => entry.id === context?.trackId);
   const menuClip = menuTrack?.clips.find((entry) => entry.id === context?.clipId);
@@ -162,7 +161,8 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
   });
   return <>
     {!props.document.tracks.length ? <div className="timeline-lane lighting-empty-lane" style={{ order: 50 + (props.document.laneIndex ?? 0) * 100 }} /> : null}
-    {props.document.tracks.map((track) => <div key={track.id} className={`timeline-lane lighting-lane ${track.muted ? 'is-muted' : ''}`} style={{ order: 50 + (props.document.laneIndex ?? 0) * 100 }} onClick={(event) => { if (event.target === event.currentTarget) { props.onSeek(props.snapTime?.(props.timeAtClientX(event.clientX)) ?? props.timeAtClientX(event.clientX)); props.onSelect(track.id, null); } }} onDoubleClick={(event) => {
+    {activeTrack ? <div className="timeline-lane lighting-lane lighting-combined-lane" aria-label="灯光时间线" style={{ order: 50 + (props.document.laneIndex ?? 0) * 100 }} onClick={(event) => { if (event.target === event.currentTarget) { props.onSeek(props.snapTime?.(props.timeAtClientX(event.clientX)) ?? props.timeAtClientX(event.clientX)); props.onSelect(activeTrack.id, null); } }} onDoubleClick={(event) => {
+      const track = activeTrack;
       if (track.locked || event.target !== event.currentTarget) return;
       const start = Math.max(0, props.timeAtClientX(event.clientX));
       const previous = track.clips.find((entry) => lightingClipSpan(entry, map).startMs <= start);
@@ -170,10 +170,10 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
       const clip: LightingClip = { id: crypto.randomUUID(), name: track.name, start, duration: 8000, timeLock: 'time', events: [], muted: false };
       props.onChange({ ...props.document, tracks: props.document.tracks.map((entry) => entry.id === track.id ? { ...track, clips: [...track.clips, clip] } : entry) }, '添加灯光片段'); props.onSelect(track.id, clip.id);
     }}>
-      {track.clips.map((clip) => {
+      {props.document.tracks.flatMap(track => track.clips.map((clip) => {
         const previewDuration = drag?.clipId === clip.id ? clip.events.reduce((end, entry) => drag.ids.includes(entry.id) ? Math.max(end, movedAt(clip, entry, drag.deltaMs) + (entry.kind === 'note' ? entry.duration : 0.001)) : end, clip.duration) : clip.duration;
         const span = lightingClipSpan({ ...clip, duration: previewDuration }, map);
-        return <div key={clip.id} role="group" aria-label={`${track.name}时间线片段`} className={`lighting-clip ${props.selectedClipId === clip.id ? 'selected' : ''}`} style={{ left: span.startMs / 1000 * props.pixelsPerSecond, width: Math.max(12, (span.endMs - span.startMs) / 1000 * props.pixelsPerSecond), '--lighting-color': track.color } as React.CSSProperties}
+        return <div key={clip.id} role="group" aria-label={`${track.name}时间线片段`} data-active={activeClip?.id === clip.id} className={`lighting-clip ${props.selectedClipId === clip.id ? 'selected' : ''} ${track.muted || clip.muted ? 'is-muted' : ''}`} style={{ left: span.startMs / 1000 * props.pixelsPerSecond, width: Math.max(12, (span.endMs - span.startMs) / 1000 * props.pixelsPerSecond), '--lighting-color': track.color } as React.CSSProperties}
           onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const id = (event.target as Element).closest<HTMLElement>('[data-lighting-event]')?.dataset.lightingEvent ?? null; if (id && (props.selectedClipId !== clip.id || !selectedIds.has(id))) props.onSelectEvent?.(track.id, clip.id, id, [id]); if (!id) props.onSelect(track.id, clip.id); setContext({ trackId: track.id, clipId: clip.id, eventId: id, ms: props.timeAtClientX(event.clientX), x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 140) }); }}
           onPointerDown={(input) => { if (input.button !== 0 || (input.target as Element).closest('[data-lighting-event]')) return; input.stopPropagation(); input.currentTarget.setPointerCapture(input.pointerId); suppressClick.current = false; marquee.current = { clipId: clip.id, start: props.timeAtClientX(input.clientX), x: input.clientX, ids: (input.ctrlKey || input.metaKey || input.shiftKey) && props.selectedClipId === clip.id ? [...selectedIds] : [] }; }}
           onPointerMove={(input) => { const current = marquee.current; if (!current || current.clipId !== clip.id || Math.abs(input.clientX - current.x) < 4) return; setRange({ clipId: clip.id, start: current.start, end: props.timeAtClientX(input.clientX) }); }}
@@ -181,7 +181,7 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
           onPointerCancel={() => { marquee.current = null; setRange(null); }}
           onClick={(event) => { event.stopPropagation(); if (suppressClick.current) { suppressClick.current = false; return; } props.onSelect(track.id, clip.id); props.onSeek(props.snapTime?.(props.timeAtClientX(event.clientX)) ?? props.timeAtClientX(event.clientX)); }}
           onDoubleClick={(event) => { event.stopPropagation(); add(track, clip, props.timeAtClientX(event.clientX)); }}>
-          {!clip.events.length ? <span className="lighting-clip-caption">双击打点 · M</span> : null}
+          {!clip.events.length && activeTrack.id === track.id ? <span className="lighting-clip-caption">双击打点 · M</span> : null}
           {props.selectedClipId === clip.id ? <LightingMasterCurve clip={clip} map={map} pixelsPerSecond={props.pixelsPerSecond} scrollLeft={props.scrollLeft} viewportWidth={props.viewportWidth} previewEvent={movedEvent} /> : null}
           {range?.clipId === clip.id ? <span className="lighting-marquee" style={{ position: 'absolute', pointerEvents: 'none', top: 0, bottom: 0, left: (Math.min(range.start, range.end) - span.startMs) / 1000 * props.pixelsPerSecond, width: Math.abs(range.end - range.start) / 1000 * props.pixelsPerSecond, background: 'rgb(74 155 255 / 16%)', border: '1px solid var(--accent)' }} /> : null}
           {(visibleEvents.get(clip.id) ?? []).map((stored) => {
@@ -207,10 +207,10 @@ export function LightingLanes(props: LightingTimelineProps & { pixelsPerSecond: 
             </button>;
           })}
         </div>;
-      })}
-    </div>)}
+      }))}
+    </div> : null}
     {context && menuTrack && menuClip ? createPortal(<div className="resource-context-menu lighting-point-menu" style={{ position: 'fixed', left: context.x, top: Math.min(context.y, Math.max(8, window.innerHeight - 280)), maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', zIndex: 10000 }} onPointerDown={(event) => event.stopPropagation()}>
-      {menuEvent && (stackedEvents.get(menuEvent.id)?.length ?? 0) > 1 ? stackedEvents.get(menuEvent.id)?.map((entry) => <button key={entry.id} onClick={() => { props.onSelectEvent?.(menuTrack.id, menuClip.id, entry.id); props.onSeek(lightingEventTime(menuClip, entry, map)); setContext(null); }}>选中：{entry.kind === 'ma2' ? entry.label : entry.kind === 'note' ? `音符 ${entry.note}` : '控制事件'}</button>) : null}
+      {menuEvent && (stackedEvents.get(menuEvent.id)?.length ?? 0) > 1 ? stackedEvents.get(menuEvent.id)?.map((entry) => <button key={entry.id} onClick={() => { for (const track of props.document.tracks) { const clip = track.clips.find(value => value.events.some(event => event.id === entry.id)); if (clip) { props.onSelectEvent?.(track.id, clip.id, entry.id); props.onSeek(lightingEventTime(clip, entry, map)); break; } } setContext(null); }}>选中：{entry.kind === 'ma2' ? entry.label : entry.kind === 'note' ? `音符 ${entry.note}` : '控制事件'}</button>) : null}
       <button disabled={menuTrack.locked} onClick={() => { add(menuTrack, menuClip, context.ms); props.onSeek(context.ms); setContext(null); }}>在这里打点</button>
       {menuTrack.kind === 'ma2' ? <button disabled={menuTrack.locked} onClick={() => { add(menuTrack, menuClip, context.ms, true); props.onSeek(context.ms); setContext(null); }}>添加主推杆点</button> : null}
       {menuEvent ? <><button onClick={() => { copy(menuTrack, menuClip, menuIds); setContext(null); }}>复制灯光点 <kbd>Ctrl+C</kbd></button><button disabled={menuTrack.locked} onClick={() => { copy(menuTrack, menuClip, menuIds, true); setContext(null); }}>剪切灯光点 <kbd>Ctrl+X</kbd></button></> : null}

@@ -7,13 +7,13 @@ import { ma2EffectLibrarySchema, type Ma2CatalogRequest, type Ma2EffectLibrary, 
 import { useDocumentStore } from './document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
-export const useMa2MaterialReadStore = create<{ documentId: number | null; busy: boolean; activeId: string | null; progress: Ma2ReadProgress | null; error: string }>(() => ({ documentId: null, busy: false, activeId: null, progress: null, error: '' }));
+export const useMa2MaterialReadStore = create<{ documentId: number | null; busy: boolean; activeId: string | null; progress: Ma2ReadProgress | null; error: string; message: string }>(() => ({ documentId: null, busy: false, activeId: null, progress: null, error: '', message: '' }));
 
 export async function scanMa2Materials(source: Ma2CatalogRequest, retry = false): Promise<void> {
   if (useMa2MaterialReadStore.getState().busy) return;
   const before = useDocumentStore.getState();
   if (!before.project) throw new Error('请先打开联动工程');
-  useMa2MaterialReadStore.setState({ documentId: before.documentId, busy: true, error: '', progress: null });
+  useMa2MaterialReadStore.setState({ documentId: before.documentId, busy: true, error: '', message: '', progress: null });
   let unsubscribe: (() => void) | undefined;
   try {
     const path = await linkDesktopViewModel.saveProject(before.path, before.project);
@@ -54,6 +54,7 @@ export async function scanMa2Materials(source: Ma2CatalogRequest, retry = false)
     const savedPath = await linkDesktopViewModel.saveProject(path, current.project);
     if (!savedPath) throw new Error('素材已读取，工程保存未完成；恢复检查点保留');
     useDocumentStore.getState().markSaved(savedPath, current.revision, before.documentId);
+    useMa2MaterialReadStore.setState({ message: library.sourceUnverified || library.incomplete ? `读取未完成：${library.incomplete || '来源尚未核对'}；已读取 ${library.sequences.length} 个序列` : `读取完成 · ${library.sequences.length} 个序列 · ${library.sequences.reduce((count, sequence) => count + sequence.cues.length, 0)} 个 Cue · ${library.errors.length} 项失败 · 已保存` });
   } catch (error) { useMa2MaterialReadStore.setState({ error: toUserErrorMessage(error) }); throw error; }
   finally { unsubscribe?.(); useMa2MaterialReadStore.setState({ busy: false, activeId: null, progress: null }); }
 }

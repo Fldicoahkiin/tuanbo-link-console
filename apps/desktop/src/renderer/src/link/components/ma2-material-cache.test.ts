@@ -26,3 +26,13 @@ it('切换工程拒绝迟到结果，同名 Show 不同会话不混用素材', (
   useDocumentStore.getState().setProject(saved, 'saved.tblink');
   expect(loadMa2MaterialCache(original.projectId)).toBeNull();
 });
+
+it('新读取素材目录不会被较早的时间线会话缓存屏蔽', () => {
+  const project = useDocumentStore.getState().project!;
+  project.schemaVersion = 2;
+  project.ma2ReadState = { source: '本机 onPC', catalog: { directory: { ...library.directory, generation: 'old-session' }, readAt: '2026-10-04T00:00:00.000Z', entries: [] }, pairs: {}, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };
+  useDocumentStore.getState().setProject(project, 'saved.tblink');
+  rememberMa2MaterialCache(project.projectId, { dataDirectory: '' }, library);
+  expect(loadMa2MaterialCache(project.projectId)?.library).toEqual(library);
+  expect(useDocumentStore.getState().project?.ma2ReadState?.catalog.directory.generation).toBe('old-session');
+});

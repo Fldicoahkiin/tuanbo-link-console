@@ -48,7 +48,7 @@ def execute(request: WorkerRequest, emit: Callable[[dict[str, object]], None],
             raise ValueError("音源已改变，未开始识别")
         args = argparse.Namespace(**{key: Path(getattr(request, key)) for key in
                                      ("audio", "bundle", "ffmpeg", "output", "cache", "cancel_file")},
-                                  device=request.device, engines="full")
+                                  device=request.device, engines="rhythm-structure")
         with contextlib.redirect_stdout(sys.stderr):
             result = runner(args, on_progress=lambda stage: send("progress", stage=stage))
         if result.audio.source_sha256 != request.source_sha256:
@@ -66,6 +66,14 @@ def execute(request: WorkerRequest, emit: Callable[[dict[str, object]], None],
 
 
 def main() -> int:
+    if sys.platform == "win32":
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        kernel.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel.SetPriorityClass.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+        if not kernel.SetPriorityClass(kernel.GetCurrentProcess(), 0x4000):
+            print("无法将音乐识别设为后台优先级", file=sys.stderr)
+            return 2
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     output = sys.stdout

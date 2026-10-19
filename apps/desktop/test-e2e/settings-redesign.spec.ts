@@ -250,12 +250,12 @@ test('MA2 三种连接方式、凭证隔离、手动保存与搜索取消', asyn
     await select(page, 'ma2');
     await expect(page.getByRole('button', { name: '选择 MIDI 端口' })).toBeVisible();
     await page.getByLabel('MA2 连接方式').selectOption('network');
-    await page.getByText('手动连接与网卡设置（备用）', { exact: true }).click();
+    await page.locator('.ma2-network-settings > .ma2-advanced-settings > summary').click();
     await page.getByLabel('MA2 控台 IP', { exact: true }).fill('192.168.0.10');
     await page.getByLabel('MA2 登录密码', { exact: true }).fill('test-only-password');
     await page.getByRole('button', { name: '显示密码', exact: true }).click();
     await page.getByLabel('MA2 控台 IP', { exact: true }).fill('192.168.0.11');
-    await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('');
+    await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('admin');
     await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveAttribute('type', 'password');
     await page.getByLabel('MA2 登录密码', { exact: true }).fill('second-target-password');
     await select(page, 'audio'); await select(page, 'ma2');
@@ -266,9 +266,9 @@ test('MA2 三种连接方式、凭证隔离、手动保存与搜索取消', asyn
     await page.getByLabel('MA2 连接方式').selectOption('network');
     await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('second-target-password');
     await page.getByRole('button', { name: '仅保存', exact: true }).click();
-    await expect(page.getByText('连接配置已保存到本机，连接与读取结果请分别查看。', { exact: true })).toBeVisible();
+    await expect(page.getByText('连接设置已保存。', { exact: true })).toBeVisible();
     expect((await page.evaluate(() => window.tbLink.getMa2NetworkStatus())).settings?.host).toBe('192.168.0.11');
-    await page.getByRole('button', { name: '搜索局域网控台' }).click();
+    await page.getByRole('button', { name: '搜索控台' }).click();
     await expect(page.getByLabel('MA2 连接方式')).toBeDisabled();
     await page.getByRole('button', { name: '取消搜索', exact: true }).click();
     await expect(page.getByText('未发现开放的远程端口，请检查网络和控台 Telnet 设置，或手动填写 IP。')).toBeVisible();

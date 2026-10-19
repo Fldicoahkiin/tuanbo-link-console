@@ -1,0 +1,252 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<MA tblink_show="tblink_ui100_20261007" tblink_generation="321209.062" tblink_version="3.7.0.5" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.malighting.de/grandma2/xml/MA" xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.7.0/MA.xsd" major_vers="3" minor_vers="7" stream_vers="0">
+	<Info datetime="2026-10-19T23:15:59" showfile="tblink_ui100_20261007" />
+	<Page index="98">
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec tblink_label="100步灯光测试" offset_from_first="0">
+			<Assignment name="100步灯光测试 9907">
+				<No>25</No>
+				<No>1</No>
+				<No>9907</No>
+			</Assignment>
+			<AssignmentExec fader="16384">
+				<Button>12299</Button>
+				<Button>0</Button>
+				<Button>0</Button>
+				<Button>0</Button>
+			</AssignmentExec>
+			<Playback auto_start="true" auto_stop="true" auto_stop_off_time="true" auto_fix="false" loop_breaking_go="false" priority="Normal" soft_ltp="true" playback_master="0" wrap_around="true" restart_mode="0" trigger_is_go="false" cmd_disable="false" tracking="true" release_on_first_step="true" auto_stomp="false" speed_scale="norm" speed_master="0" rate_master="0" stepped_rate="false" swop_protect="false" kill_protect="false" ignore_exec_time="false" off_on_overwritten="true" MIB_always="false" MIB_never="false" chaser="false" cross_fader_mode="false" auto_black_move="false" scale_effect_rate="true" auto_master_go="0" />
+		</Exec>
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec tblink_label="AI 387 · 自动推荐 STAGING" offset_from_first="0">
+			<Assignment name="AI 387 · 自动推荐 STAGING 9001">
+				<No>25</No>
+				<No>1</No>
+				<No>9001</No>
+			</Assignment>
+			<AssignmentExec fader="16384">
+				<Button>12299</Button>
+				<Button>0</Button>
+				<Button>0</Button>
+				<Button>0</Button>
+			</AssignmentExec>
+			<Playback auto_start="true" auto_stop="true" auto_stop_off_time="true" auto_fix="false" loop_breaking_go="false" priority="Normal" soft_ltp="true" playback_master="0" wrap_around="true" restart_mode="0" trigger_is_go="false" cmd_disable="false" tracking="true" release_on_first_step="true" auto_stomp="false" speed_scale="norm" speed_master="0" rate_master="0" stepped_rate="false" swop_protect="false" kill_protect="false" ignore_exec_time="false" off_on_overwritten="true" MIB_always="false" MIB_never="false" chaser="false" cross_fader_mode="false" auto_black_move="false" scale_effect_rate="true" auto_master_go="0" />
+		</Exec>
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+		<Exec xsi:nil="true" />
+	</Page>
+<tblink_sequences><tblink_sequence number="9907" name="100步灯光测试"><tblink_cue index="1" number="1" name="001 暖场"/><tblink_cue index="2" number="2" name="002 蓝光"/><tblink_cue index="3" number="3" name="003 扫光"/><tblink_cue index="4" number="4" name="004 扇形"/><tblink_cue index="5" number="5" name="005 紫光"/><tblink_cue index="6" number="6" name="006 交叉"/><tblink_cue index="7" number="7" name="007 红光"/><tblink_cue index="8" number="8" name="008 追光"/><tblink_cue index="9" number="9" name="009 暖场"/><tblink_cue index="10" number="10" name="010 蓝光"/><tblink_cue index="11" number="11" name="011 扫光"/><tblink_cue index="12" number="12" name="012 扇形"/><tblink_cue index="13" number="13" name="013 紫光"/><tblink_cue index="14" number="14" name="014 交叉"/><tblink_cue index="15" number="15" name="015 红光"/><tblink_cue index="16" number="16" name="016 追光"/><tblink_cue index="17" number="17" name="017 暖场"/><tblink_cue index="18" number="18" name="018 蓝光"/><tblink_cue index="19" number="19" name="019 扫光"/><tblink_cue index="20" number="20" name="020 扇形"/><tblink_cue index="21" number="21" name="021 紫光"/><tblink_cue index="22" number="22" name="022 交叉"/><tblink_cue index="23" number="23" name="023 红光"/><tblink_cue index="24" number="24" name="024 追光"/><tblink_cue index="25" number="25" name="025 暖场"/><tblink_cue index="26" number="26" name="026 蓝光"/><tblink_cue index="27" number="27" name="027 扫光"/><tblink_cue index="28" number="28" name="028 扇形"/><tblink_cue index="29" number="29" name="029 紫光"/><tblink_cue index="30" number="30" name="030 交叉"/><tblink_cue index="31" number="31" name="031 红光"/><tblink_cue index="32" number="32" name="032 追光"/><tblink_cue index="33" number="33" name="033 暖场"/><tblink_cue index="34" number="34" name="034 蓝光"/><tblink_cue index="35" number="35" name="035 扫光"/><tblink_cue index="36" number="36" name="036 扇形"/><tblink_cue index="37" number="37" name="037 紫光"/><tblink_cue index="38" number="38" name="038 交叉"/><tblink_cue index="39" number="39" name="039 红光"/><tblink_cue index="40" number="40" name="040 追光"/><tblink_cue index="41" number="41" name="041 暖场"/><tblink_cue index="42" number="42" name="042 蓝光"/><tblink_cue index="43" number="43" name="043 扫光"/><tblink_cue index="44" number="44" name="044 扇形"/><tblink_cue index="45" number="45" name="045 紫光"/><tblink_cue index="46" number="46" name="046 交叉"/><tblink_cue index="47" number="47" name="047 红光"/><tblink_cue index="48" number="48" name="048 追光"/><tblink_cue index="49" number="49" name="049 暖场"/><tblink_cue index="50" number="50" name="050 蓝光"/><tblink_cue index="51" number="51" name="051 扫光"/><tblink_cue index="52" number="52" name="052 扇形"/><tblink_cue index="53" number="53" name="053 紫光"/><tblink_cue index="54" number="54" name="054 交叉"/><tblink_cue index="55" number="55" name="055 红光"/><tblink_cue index="56" number="56" name="056 追光"/><tblink_cue index="57" number="57" name="057 暖场"/><tblink_cue index="58" number="58" name="058 蓝光"/><tblink_cue index="59" number="59" name="059 扫光"/><tblink_cue index="60" number="60" name="060 扇形"/><tblink_cue index="61" number="61" name="061 紫光"/><tblink_cue index="62" number="62" name="062 交叉"/><tblink_cue index="63" number="63" name="063 红光"/><tblink_cue index="64" number="64" name="064 追光"/><tblink_cue index="65" number="65" name="065 暖场"/><tblink_cue index="66" number="66" name="066 蓝光"/><tblink_cue index="67" number="67" name="067 扫光"/><tblink_cue index="68" number="68" name="068 扇形"/><tblink_cue index="69" number="69" name="069 紫光"/><tblink_cue index="70" number="70" name="070 交叉"/><tblink_cue index="71" number="71" name="071 红光"/><tblink_cue index="72" number="72" name="072 追光"/><tblink_cue index="73" number="73" name="073 暖场"/><tblink_cue index="74" number="74" name="074 蓝光"/><tblink_cue index="75" number="75" name="075 扫光"/><tblink_cue index="76" number="76" name="076 扇形"/><tblink_cue index="77" number="77" name="077 紫光"/><tblink_cue index="78" number="78" name="078 交叉"/><tblink_cue index="79" number="79" name="079 红光"/><tblink_cue index="80" number="80" name="080 追光"/><tblink_cue index="81" number="81" name="081 暖场"/><tblink_cue index="82" number="82" name="082 蓝光"/><tblink_cue index="83" number="83" name="083 扫光"/><tblink_cue index="84" number="84" name="084 扇形"/><tblink_cue index="85" number="85" name="085 紫光"/><tblink_cue index="86" number="86" name="086 交叉"/><tblink_cue index="87" number="87" name="087 红光"/><tblink_cue index="88" number="88" name="088 追光"/><tblink_cue index="89" number="89" name="089 暖场"/><tblink_cue index="90" number="90" name="090 蓝光"/><tblink_cue index="91" number="91" name="091 扫光"/><tblink_cue index="92" number="92" name="092 扇形"/><tblink_cue index="93" number="93" name="093 紫光"/><tblink_cue index="94" number="94" name="094 交叉"/><tblink_cue index="95" number="95" name="095 红光"/><tblink_cue index="96" number="96" name="096 追光"/><tblink_cue index="97" number="97" name="097 暖场"/><tblink_cue index="98" number="98" name="098 蓝光"/><tblink_cue index="99" number="99" name="099 扫光"/><tblink_cue index="100" number="100" name="100 扇形"/></tblink_sequence><tblink_sequence number="9001" name="AI 387 · 自动推荐 STAGING"><tblink_cue index="1" number="1" name="开场乐句 · 开场乐句 · 乐句 1 · 宽扇面 × 中心雕塑 · 电光蓝白"/><tblink_cue index="2" number="2" name="开场乐句 · FILL · Fill 展开"/><tblink_cue index="3" number="3" name="开场乐句 · Effect 生命周期收束"/><tblink_cue index="4" number="4" name="开场乐句 · KICK · Kick 主击"/><tblink_cue index="5" number="5" name="开场乐句 · Dimmer 短击收束"/><tblink_cue index="6" number="6" name="乐句 02 · 乐句 02 · 乐句 1 · 宽扇面 × 满阵终章 · 金色深蓝 + 乐句 02 ·"/><tblink_cue index="7" number="7" name="乐句 02 · KICK · Kick 主击"/><tblink_cue index="8" number="8" name="乐句 02 · Dimmer 短击收束"/><tblink_cue index="9" number="9" name="乐句 02 · FILL · Fill 展开"/><tblink_cue index="10" number="10" name="乐句 02 · Effect 生命周期收束"/><tblink_cue index="11" number="11" name="乐句 02 · 乐句 02 · 乐句 1 · 响尾蛇后墙辅像素反向流"/><tblink_cue index="12" number="12" name="乐句 02 · KICK · Kick 主击"/><tblink_cue index="13" number="13" name="乐句 02 · Dimmer 短击收束"/><tblink_cue index="14" number="14" name="乐句 02 · 像素双向螺旋 · 像素爆开"/><tblink_cue index="15" number="15" name="乐句 02 · Dimmer 短击收束"/><tblink_cue index="16" number="16" name="乐句 03 · 乐句 03 · 乐句 1 · 上下光笼 × 侧翼隧道 · 冷白冰蓝 + 乐句 03"/><tblink_cue index="17" number="17" name="乐句 03 · KICK · Kick 主击"/><tblink_cue index="18" number="18" name="乐句 03 · Dimmer 短击收束"/><tblink_cue index="19" number="19" name="乐句 03 · KICK · Kick 主击"/><tblink_cue index="20" number="20" name="乐句 03 · Dimmer 短击收束"/><tblink_cue index="21" number="21" name="乐句 03 · KICK · Kick 主击"/><tblink_cue index="22" number="22" name="乐句 03 · Dimmer 短击收束"/><tblink_cue index="23" number="23" name="乐句 03 · KICK · Kick 主击"/><tblink_cue index="24" number="24" name="乐句 03 · Dimmer 短击收束"/><tblink_cue index="25" number="25" name="乐句 03 · 乐句 03 · 乐句 1 · TORNADO 地排 Ring PWM 反击"/><tblink_cue index="26" number="26" name="乐句 03 · FILL · Fill 收束"/><tblink_cue index="27" number="27" name="乐句 03 · Effect 生命周期收束"/><tblink_cue index="28" number="28" name="乐句 03 · KICK · Kick 主击"/><tblink_cue index="29" number="29" name="乐句 03 · Dimmer 短击收束"/><tblink_cue index="30" number="30" name="乐句 03 · KICK · Kick 主击"/><tblink_cue index="31" number="31" name="乐句 03 · Dimmer 短击收束"/><tblink_cue index="32" number="32" name="乐句 03 · Effect 生命周期收束"/><tblink_cue index="33" number="33" name="乐句 03 · TORNADO 吊地 Ring 对流 · 吊地呼应"/><tblink_cue index="34" number="34" name="乐句 03 · Dimmer 短击收束"/><tblink_cue index="35" number="35" name="乐句 03 · KICK · Kick 主击"/><tblink_cue index="36" number="36" name="乐句 03 · Dimmer 短击收束"/><tblink_cue index="37" number="37" name="乐句 04 · 乐句 04 · 乐句 1 · 上下光笼 × 中心雕塑 · 琥珀品红"/><tblink_cue index="38" number="38" name="乐句 04 · KICK · Kick 主击"/><tblink_cue index="39" number="39" name="乐句 04 · Dimmer 短击收束"/><tblink_cue index="40" number="40" name="乐句 04 · 乐句 04 · 乐句 1 · TORNADO 吊排 Ring 蓝白浪潮"/><tblink_cue index="41" number="41" name="乐句 04 · KICK · Kick 主击"/><tblink_cue index="42" number="42" name="乐句 04 · Dimmer 短击收束"/><tblink_cue index="43" number="43" name="乐句 04 · KICK · Kick 主击"/><tblink_cue index="44" number="44" name="乐句 04 · Dimmer 短击收束"/><tblink_cue index="45" number="45" name="乐句 04 · SNARE · Snare 镜像"/><tblink_cue index="46" number="46" name="乐句 04 · Dimmer 短击收束"/><tblink_cue index="47" number="47" name="乐句 04 · 乐句 04 · 乐句 1 · TORNADO 地排俯仰波"/><tblink_cue index="48" number="48" name="收束 · 收束 · 乐句 1 · 上下光笼 × 侧翼隧道 · 青蓝冷白"/><tblink_cue index="49" number="49" name="收束 · KICK · Kick 主击"/><tblink_cue index="50" number="50" name="收束 · Dimmer 短击收束"/><tblink_cue index="51" number="51" name="收束 · KICK · Kick 主击"/><tblink_cue index="52" number="52" name="收束 · Dimmer 短击收束"/><tblink_cue index="53" number="53" name="收束 · Outro 逐层收束 · Effect Stop"/></tblink_sequence></tblink_sequences></MA>

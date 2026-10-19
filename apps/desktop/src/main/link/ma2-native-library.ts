@@ -19,7 +19,7 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
     const prefix = `TBLINK_CUES_${randomBytes(16).toString('hex')}:`;
     // The native monitor truncates long echo lines (observed on 3.7.0.5 with
     // 32 Chinese Cue names). Keep each line bounded without truncating names.
-    const script = `local o=gma.show.getobj;local h=o.handle('Sequence ${target}');local r='missing';if h then local n=o.amount(h);local t={tostring(n)};for i=${offset},math.min(n-1,${offset + 31}) do local c=o.child(h,i);if c then local v=tostring(o.number(c));local s=tostring(o.label(c) or '');local x=s:gsub('.',function(b)return string.format('%02x',string.byte(b))end);t[#t+1]=i..','..v..','..x end end;r=table.concat(t,';') end;for p=1,#r,700 do gma.echo('${prefix}'..p..':'..r:sub(p,p+699)) end;gma.echo('${prefix}END:'..#r)`;
+    const script = `local o=gma.show.getobj;local h=o.handle('Sequence ${target}');local r='missing';local function hex(s)return s:gsub('.',function(b)return string.format('%02x',string.byte(b))end)end;if h then local n=o.amount(h);local t={tostring(n),(hex(o.label(h) or ''))};for i=${offset},math.min(n-1,${offset + 31}) do local c=o.child(h,i);if c then local v=tostring(o.number(c));t[#t+1]=i..','..v..','..hex(o.label(c) or '') end end;r=table.concat(t,';') end;for p=1,#r,700 do gma.echo('${prefix}'..p..':'..r:sub(p,p+699)) end;gma.echo('${prefix}END:'..#r)`;
     const response = await connection.command(`Lua "${script}"`, text => readNativeCueChunks(text, prefix));
     measure?.(Buffer.byteLength(response, 'utf8'));
     return response;
@@ -29,6 +29,7 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
     if (signal?.aborted) throw new Error('素材读取已取消');
     try {
       const cues: Ma2EffectLibrary['sequences'][number]['cues'] = [];
+      let sequenceName: string | null = null;
       let count = 1;
       for (let offset = 0; offset < count; offset += 32) {
         if (signal?.aborted) throw new Error('素材读取已取消');
@@ -36,8 +37,12 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
         if (signal?.aborted) throw new Error('素材读取已取消');
         if (response !== await read(entry.target, offset)) throw new Error(`序列 ${entry.target} 在读取期间发生变化，请重新读取`);
         if (signal?.aborted) throw new Error('素材读取已取消');
-        const [total, ...rows] = response.split(';');
+        const [total, nameHex, ...rows] = response.split(';');
         if (!/^\d+$/.test(total ?? '') || Number(total) > 100000) throw new Error(`序列 ${entry.target} 的素材目录无效`);
+        if (nameHex === undefined || !/^(?:[a-f0-9]{2})*$/.test(nameHex)) throw new Error(`序列 ${entry.target} 的名称无效`);
+        const name = Buffer.from(nameHex, 'hex').toString('utf8') || null;
+        if (offset && sequenceName !== name) throw new Error('控台序列名称发生变化，请重新读取');
+        sequenceName = name;
         if (offset && count !== Number(total)) throw new Error('控台 Cue 数量发生变化，请重新读取');
         count = Number(total);
         for (const row of rows) {
@@ -48,7 +53,7 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
           cues.push({ index: Number(match[1]), number: `${Number(whole)}.${fraction.padEnd(3, '0')}`, name: Buffer.from(match[3]!, 'hex').toString('utf8') || null });
         }
       }
-      sequences.push(ma2EffectLibrarySchema.shape.sequences.parse([{ sequence: entry.target, name: entry.name, cues }])[0]!);
+      sequences.push(ma2EffectLibrarySchema.shape.sequences.parse([{ sequence: entry.target, name: sequenceName, cues }])[0]!);
     } catch (cause) {
       if (signal?.aborted || isPlaying()) throw cause;
       errors.push({ sequence: entry.target, message: cause instanceof Error ? cause.message : String(cause) });

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Native isolated onPC 3.7.0.5 test export, 2026-10-17. Info removed. -->
+<MA xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.malighting.de/grandma2/xml/MA" xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.7.0/MA.xsd" major_vers="3" minor_vers="7" stream_vers="0">
+	<Group index="9917" name="Empty">
+		<LayoutData index="0" marker_visible="true" background_color="000000" visible_grid_h="1" visible_grid_w="1" snap_grid_h="0.5" snap_grid_w="0.5" default_gauge="Filled &amp; Symbol" subfixture_view_mode="DMX Layer">
+			<CObjects>
+				<LayoutCObject font_size="Small" center_x="5" center_y="2" size_h="1" size_w="1" background_color="3c3c3c" border_color="5a5a5a" icon="None" show_id="1" show_name="1" show_type="1" function_type="Pool icon" select_group="1">
+					<image />
+					<CObject name="Sequ 9918">
+						<No>25</No>
+						<No>1</No>
+						<No>9918</No>
+					</CObject>
+				</LayoutCObject>
+			</CObjects>
+		</LayoutData>
+	</Group>
+</MA>

@@ -42,7 +42,7 @@ it('顺序处理且重复音源去重，研究结果保持零工程标记', asyn
   await vi.waitFor(() => expect(service.list().every(job => job.state === 'completed')).toBe(true));
   expect(run).toHaveBeenCalledTimes(2);
   expect(service.list()[0]?.summary).toMatchObject({ publication: 'not-validated', visibleResults: 0 });
-  expect(run).toHaveBeenCalledWith(expect.objectContaining({ audio: resolve('实际播放.wav'), source_sha256: first.source.sha256 }));
+  expect(run).toHaveBeenCalledWith(expect.objectContaining({ audio: resolve('实际播放.wav'), source_sha256: first.source.sha256 }), 240000);
 });
 
 it('完整模型结果交付实际候选及数量，长度不符明确失败而非空白结果', async () => {
@@ -84,21 +84,12 @@ it('相同音源在不同工程中保留独立任务身份，不合并取消控�
   await vi.waitFor(() => expect(service.list()[0]?.state).toBe('completed'));
 });
 
-it('开始演出时协作暂停全部任务，结束演出不自动重跑；显式恢复有效', async () => {
-  const { service, run, cancel } = fixture(); const first = request(); const second = request('b'); const task = deferred();
-  run.mockReturnValueOnce(task.promise).mockResolvedValue(result(first)); service.enqueue(first); service.enqueue(second);
+it('长歌按照音源时长获得计算时间，不沿用四分钟整曲截止', async () => {
+  const { service, run } = fixture(); const input = request();
+  input.source.durationMs = 300000;
+  run.mockRejectedValue(new Error('test')); service.enqueue(input);
   await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
-  await service.setPerformanceActive(true);
-  expect(service.list().map(job => job.state)).toEqual(['pausing', 'paused']);
-  expect(() => service.enqueue(request('c'))).toThrow('演出');
-  expect(() => service.resume(second.taskId)).toThrow('演出');
-  task.fail(new Error('音乐识别已取消'));
-  await vi.waitFor(() => expect(service.list()[0]?.state).toBe('paused'));
-  await service.setPerformanceActive(false); await Promise.resolve(); expect(run).toHaveBeenCalledOnce();
-  service.resume(first.taskId);
-  await vi.waitFor(() => expect(service.list()[0]?.state).toBe('completed'));
-  expect(run).toHaveBeenCalledTimes(2); expect(cancel).toHaveBeenCalledExactlyOnceWith(first.taskId);
-  expect(service.list()[1]?.state).toBe('paused');
+  expect(run).toHaveBeenCalledWith(expect.objectContaining({ source_sha256: input.source.sha256 }), 2460000);
 });
 
 it('准备期间取消不会启动重任务，失败明确返回且不自动重试', async () => {

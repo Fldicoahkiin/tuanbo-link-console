@@ -63,6 +63,7 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式').selectOption('network');
+    await page.getByText('歌曲导入与同步', { exact: true }).click();
     await expect(page.getByLabel('MA2 现场节目导入')).toBeVisible();
     if (pluginAvailable) {
       await page.getByLabel('MA2 连接方式').selectOption('local');

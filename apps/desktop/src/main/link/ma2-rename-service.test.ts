@@ -6,6 +6,11 @@ import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 const request: Ma2RenameRequest = { dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, generation: 'session',
   change: { endpoint: '192.0.2.1:30000', show: '测试', sequence: 2, cue: '1.100', kind: 'single', confirmedName: 'Old', name: '面光' } };
 const result = { sequence: 2, cue: '1.100', kind: 'single', show: '测试', generation: 'session', name: '面光', backupFile: `tblink_label_${'a'.repeat(32)}.xml` };
+it('恢复原本未命名对象时明确阻断旧协议不支持的清空，不发送或冒充确认', async () => {
+  const bridge = { request: vi.fn() };
+  await expect(renameMa2Object(bridge, { ...request, change: { ...request.change, name: '' } })).rejects.toThrow('本次撤销尚未同步');
+  expect(bridge.request).not.toHaveBeenCalled();
+});
 it('只发送类型化目标和 UTF-8 十六进制名称，并核对实际回读', async () => {
   const bridge = { request: vi.fn(() => Promise.resolve(JSON.stringify(result))) };
   expect(await renameMa2Object(bridge, request)).toEqual(result);

@@ -26,21 +26,21 @@ for (const cancelled of [false, true]) test(`自动连接配置电脑地址、${
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式', { exact: true }).selectOption('network');
-    await page.locator('.ma2-network-settings > details > summary').click();
+    await page.locator('.ma2-network-settings > .ma2-advanced-settings > summary').click();
     await page.getByLabel('MA2 控台 IP', { exact: true }).fill('2.0.0.98:30000');
-    await page.getByRole('button', { name: '连接 MA2 并载入节目 Cue', exact: true }).click();
+    await page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ }).click();
     await expect(page.locator('.ma2-network-settings [role="alert"]')).toContainText('控台 IP格式不正确');
     expect(await app.evaluate(() => Reflect.get(globalThis, '__networkActions') as string[])).toEqual([]);
     await page.getByLabel('MA2 控台 IP', { exact: true }).fill('２．９７．２１４．２２３');
-    await page.locator('.ma2-network-settings > details > summary').click();
-    await page.getByRole('button', { name: '连接 MA2 并载入节目 Cue', exact: true }).click();
+    await page.locator('.ma2-network-settings > .ma2-advanced-settings > summary').click();
+    await page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ }).click();
     if (cancelled) {
       await expect(page.locator('.ma2-network-settings [role="alert"]')).toContainText('管理员授权已取消');
       expect(await app.evaluate(() => Reflect.get(globalThis, '__networkActions') as string[])).toEqual(['apply']);
     } else {
-      await expect(page.locator('.ma2-network-settings > .ma2-device-status')).toHaveText('已登录 · 插件待验证');
+      await expect(page.locator('.ma2-network-settings .ma2-device-status')).toHaveText('已连接');
       expect(await app.evaluate(() => Reflect.get(globalThis, '__networkActions') as string[])).toEqual(['apply', 'connect']);
-      await page.locator('.ma2-network-settings > details > summary').click();
+      await page.locator('.ma2-network-settings > .ma2-advanced-settings > summary').click();
       await expect(page.getByLabel('控台网卡', { exact: true })).toBeVisible();
       await page.screenshot({ path: info.outputPath('computer-network.png') });
       await page.getByRole('button', { name: '恢复原配置', exact: true }).click();

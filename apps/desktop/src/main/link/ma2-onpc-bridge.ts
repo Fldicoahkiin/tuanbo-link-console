@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { ma2ExecutorPageDirectorySchema } from '@tb/schema';
+import { inspectMa2ExecutorPageXml } from './ma2-timecode-xml';
 import { ma2ObjectDirectorySchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema } from '@tb/schema';
 import { readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
-export type Ma2Operation = 'PING' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR' | 'ASSIGNSEQ' | 'LABEL';
+export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR' | 'ASSIGNSEQ' | 'LABEL';
 export type Ma2Wire = {
   exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void): Promise<string>;
 };
@@ -69,6 +71,8 @@ export class Ma2OnpcBridge {
       const validate = (result: string): { response: string; requestId: string } => {
         if (operation === 'LABEL') { const label = ma2RenameResultSchema.parse(JSON.parse(result)); if (label.sequence !== target) throw new Error('控台名称回读序列不一致'); }
         else if (assigning) { const assigned = ma2SequenceAssignmentSchema.parse(JSON.parse(result)); if (assigned.sequence !== target) throw new Error('控台自动关联序列不一致'); }
+        else if (operation === 'PAGES') ma2ExecutorPageDirectorySchema.parse(JSON.parse(result));
+        else if (operation === 'PAGE') inspectMa2ExecutorPageXml(result, target);
         else if (operation === 'LIST' || operation === 'LISTSEQ') ma2ObjectDirectorySchema.parse(JSON.parse(result));
         else if (operation === 'SEQUENCE') {
           const report = inspectMa2SequenceXml(result);

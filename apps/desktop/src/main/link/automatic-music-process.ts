@@ -26,7 +26,7 @@ export class AutomaticMusicProcess {
     await writeFile(job.cancelFile, 'cancel\n', { flag: 'w' });
   }
 
-  run(request: AutomaticMusicWorkerRequest): Promise<AutomaticMusicRun> {
+  run(request: AutomaticMusicWorkerRequest, timeoutMs = this.timeoutMs): Promise<AutomaticMusicRun> {
     if (this.active) return Promise.reject(new Error('已有音乐识别任务，请等待结束或取消'));
     if (![this.python, this.worker, request.audio, request.bundle, request.ffmpeg, request.output, request.cache, request.cancel_file].every(isAbsolute)) return Promise.reject(new Error('音乐识别路径必须由主进程解析为绝对路径'));
     const encoded = JSON.stringify(request);
@@ -55,7 +55,7 @@ export class AutomaticMusicProcess {
           else terminal = event;
         } catch (cause) { fail(new Error('音乐识别进程协议无效，未提交结果', { cause })); }
       };
-      const deadline = setTimeout(() => fail(new Error('音乐识别超时，已请求协作停止；未提交结果')), this.timeoutMs);
+      const deadline = setTimeout(() => fail(new Error('音乐识别超时，已请求协作停止；未提交结果')), timeoutMs);
       child.stdout.on('data', (chunk: Buffer) => {
         if (failure) return;
         buffer += decoder.write(chunk);

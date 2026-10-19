@@ -12,7 +12,7 @@ export function ma2PlaybackCommand(input: Ma2PlaybackAction): { command: string;
 }
 
 /** Numeric DTOs only. The receipt confirms command dispatch, not physical fixture output. */
-export async function playMa2Cue(connection: Pick<Ma2Telnet, 'command'>, action: Ma2PlaybackAction, beforeSend: () => void, priority:'normal'|'stop'='normal'): Promise<void> {
+export async function playMa2Cue(connection: Pick<Ma2Telnet, 'command'>, action: Ma2PlaybackAction, beforeSend: () => void, priority:'normal'|'playback'|'stop'='playback'): Promise<void> {
   const { command, object } = ma2PlaybackCommand(action);
   const marker = `TBLINK_PLAY_${randomBytes(16).toString('hex')}`;
   // Off is idempotent: a deleted/missing target must not trap audition cleanup.

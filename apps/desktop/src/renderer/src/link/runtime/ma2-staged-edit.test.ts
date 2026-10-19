@@ -123,7 +123,7 @@ it.each(['读取', '写入', '回读'] as const)('%s异常保留暂存，后续�
 it('已确认回读应用后关闭同步不会停留在写入中或误报全部成功', async () => {
   const test = setup(); test.edit(1000); test.stop();
   const execute = test.dependencies.execute;
-  test.dependencies.execute = (id, command) => { execute(id, command); test.runner.stop(); };
+  test.dependencies.execute = async (id, command) => { await execute(id, command); test.runner.stop(); };
   await test.runner.tick();
   expect(test.dependencies.changed).toHaveBeenLastCalledWith('off', expect.any(String));
   expect(pending()).toEqual([]);

@@ -117,7 +117,8 @@ def run(args: argparse.Namespace, on_progress: Callable[[str], None] = progress)
 
     if args.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA 不可用；本次停止，未切换 CPU")
-    torch.set_num_threads(8)
+    # Leave CPU capacity to playback, console I/O and the UI during background analysis.
+    torch.set_num_threads(max(1, min(4, (os.cpu_count() or 2) // 2)) if args.device == "cpu" else 8)
     torch.manual_seed(0)
     np.random.seed(0)
     import random
@@ -168,6 +169,14 @@ def run(args: argparse.Namespace, on_progress: Callable[[str], None] = progress)
             from phrase_structure import refine_sections
             diagnostics["all-in-one"] = refine_sections(audio, sr, diagnostics["all-in-one"])
             timings["all-in-one"] = time.perf_counter() - stage_start
+        elif args.engines == "rhythm-structure":
+            if args.cancel_file and args.cancel_file.exists():
+                raise KeyboardInterrupt
+            on_progress("audio-structure")
+            stage_start = time.perf_counter()
+            from phrase_structure import rhythm_sections
+            diagnostics["audio-structure"] = rhythm_sections(audio, sr, list(diagnostics.values()))
+            timings["audio-structure"] = time.perf_counter() - stage_start
     else:
         diagnostics["silence-guard"] = MusicLabels()
     if args.cancel_file and args.cancel_file.exists():
@@ -200,7 +209,7 @@ def main() -> int:
     parser.add_argument("--ffmpeg", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True, help="New directory; never overwrite an earlier run")
     parser.add_argument("--device", choices=["cuda", "cpu"], required=True)
-    parser.add_argument("--engines", choices=["beat-this", "full"], default="full")
+    parser.add_argument("--engines", choices=["beat-this", "full", "rhythm-structure"], default="full")
     parser.add_argument("--cache", type=Path, help="Optional validated analysis cache")
     parser.add_argument("--cancel-file", type=Path, help="Cooperative cancellation checked between model stages")
     args = parser.parse_args()

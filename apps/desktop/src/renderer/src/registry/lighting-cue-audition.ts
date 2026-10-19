@@ -5,6 +5,7 @@ import { ma2NetworkStatusSchema, ma2PlaybackActionSchema, type Ma2PlaybackAction
 
 /** Explicit operator selection only; never called when restoring editor selection. */
 export class LightingCueAudition {
+  private readonly midiStarted = new Map<string, { output: MIDIOutput; bytes: number[] }>();
   private generation = 0;
   private networkSession: string | null = null;
   cancel(): void { this.generation += 1; const id = this.networkSession; this.networkSession = null; if (id) void window.tbLink.cancelMa2Playback(id).catch((error: unknown) => console.error('取消 Cue 试听失败', error)); }
@@ -53,8 +54,9 @@ export class LightingCueAudition {
     })) };
     const networkPlayback = native || document.outputMode === 'network' || preview.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind === 'ma2' && !event.executor)));
     if (networkPlayback) {
-      const audition=await window.tbLink.controlMa2Audition({version:1,action:'status'});
+      const audition=await window.tbLink.controlMa2Audition({version:1,action:selected.runMode === 'independent' ? 'stop' : 'status'});
       if(audition.phase==='stopping')throw new Error('正在停止试听，请完成后再点击 Cue');
+      if (selected.runMode === 'independent' && audition.phase === 'failed') throw new Error('上一组试听未能停止，本 Cue 尚未发送');
       await requireOutputLicense();
       const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
       if (generation !== this.generation) return 0;
@@ -86,10 +88,21 @@ export class LightingCueAudition {
         if (generation !== this.generation) return 0;
         outputs.set(id, port);
       }
+      if (selected.runMode === 'independent') for (const [key, previous] of this.midiStarted) {
+        if (previous.output.state !== 'connected') throw new Error('上一组 MIDI 输出已断开，无法确认关闭；本 Cue 尚未发送');
+        const separator = previous.bytes.indexOf(0, 6);
+        previous.output.send([...previous.bytes.slice(0, 5), 0x0b, 48, 46, 48, 48, 48, 0, ...previous.bytes.slice(separator + 1)]);
+        this.midiStarted.delete(key);
+      }
       for (const packet of packets) {
         const output = outputs.get(packet.portProfileId);
         if (!output || output.state !== 'connected') throw new Error('Cue 发送中断：MIDI 端口已断开，部分动作可能已发送');
         output.send(packet.bytes);
+        const separator = packet.bytes.indexOf(0, 6);
+        if (packet.bytes[0] === 0xf0 && separator >= 6) {
+          const key = `${packet.portProfileId}:${packet.bytes.slice(separator + 1).join(',')}`;
+          if (packet.bytes[5] === 0x0b) this.midiStarted.delete(key); else this.midiStarted.set(key, { output, bytes: packet.bytes });
+        }
       }
       return packets.length;
     } catch (error) {

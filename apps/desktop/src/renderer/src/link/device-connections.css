@@ -1,5 +1,30 @@
-/* Settings surfaces and type are local; the connection toolbar keeps its appearance. */
-.app-shell[data-workspace='settings'] .app-sidebar,
+/* Settings surfaces and type stay inside the workspace; global navigation is shared. */
+.device-console .ma2-adapter-inventory { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 8px; }
+.device-console .ma2-adapter-inventory li { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--separator); border-radius: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.device-console .ma2-adapter-inventory span { color: var(--text-secondary); }
+.device-console .ma2-device-status { position: static; }
+.device-console .ma2-connect-form { max-width: 640px; margin: 20px 0 0; }
+.device-console .ma2-connect-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+.device-console .ma2-connect-heading label { font-size: 14px; }
+.device-console .ma2-device-status { color: var(--text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; }
+.device-console .ma2-device-status[data-connected='true'] { color: var(--success-text); }
+.device-console .ma2-connect-address { display: flex; align-items: center; gap: 8px; }
+.device-console .ma2-connect-address input { flex: 1; max-width: none; font-variant-numeric: tabular-nums; }
+.device-console .ma2-connect-address button { flex-shrink: 0; min-width: 88px; }
+.device-console .ma2-connect-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.device-console .ma2-connect-shortcuts button { border-color: var(--separator); min-height: 32px; padding: 4px 10px; font-size: 13px; background: transparent; }
+.device-console .ma2-connection-feedback { min-height: 24px; margin-bottom: 16px; }
+.device-console .ma2-connection-feedback p { margin: 4px 0; font-size: 13px; }
+.device-console .ma2-network-settings > .ma2-advanced-settings { margin: 0 0 12px; }
+.device-console .ma2-network-settings > .ma2-advanced-settings > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.device-console .ma2-network-settings > .ma2-advanced-settings > summary > svg { width: 14px; height: 14px; stroke-width: 1.5; }
+.device-console .ma2-network-settings > .ma2-advanced-settings[open] > summary > svg { transform: rotate(90deg); }
+.device-console .ma2-network-settings > .ma2-advanced-settings > summary > span { font-size: 12px; color: var(--text-secondary); font-weight: 400; }
+.device-console .ma2-network-settings > .ma2-advanced-settings[open] > summary { margin-bottom: 20px; }
+.device-console .ma2-network-settings .ma2-network-ports { margin-top: 24px; }
+.device-console .ma2-operation-help { margin: 0 0 16px; font-size: 13px; color: var(--text-secondary); }
+.device-console .ma2-operation-help > summary { cursor: pointer; }
+.device-console .ma2-network-route { padding: 10px 12px; border: 1px solid var(--separator); border-radius: 6px; background: var(--surface); color: var(--text-primary); font-size: 13px; line-height: 1.6; }
 .app-workspace.settings-workspace {
   --surface: #202023;
   --surface-raised: #2b2b2f;
@@ -18,7 +43,6 @@
   --text-control: 15px;
   --text-caption: 14px;
 }
-:root[data-theme='light'] .app-shell[data-workspace='settings'] .app-sidebar,
 :root[data-theme='light'] .app-workspace.settings-workspace {
   --surface: #f7f7f9;
   --surface-raised: #ffffff;
@@ -34,14 +58,8 @@
   --accent-soft-2: #e0edfb;
   --settings-control-border: #85858e;
 }
-.app-shell[data-workspace='settings'] { grid-template-columns: 216px minmax(0, 1fr); }
-.app-shell[data-workspace='settings'] .app-sidebar { min-width: 0; padding: 20px 12px; background: var(--settings-navigation); }
-.app-shell[data-workspace='settings'] .app-sidebar .main-nav { gap: 4px; }
-.app-shell[data-workspace='settings'] .app-sidebar .main-nav button { min-height: 44px; padding: 10px 12px; border-radius: 8px; }
-.app-shell[data-workspace='settings'] .app-sidebar .main-nav button strong { font-size: 15px; font-weight: 500; white-space: normal; }
 .app-shell[data-workspace='settings'] .settings-submenus { border: 0; padding: 8px 0; }
 .app-shell[data-workspace='settings'] .settings-submenus::before { content: none; }
-.app-shell[data-workspace='settings'] .app-sidebar .main-nav > button.active { background: var(--surface-3); box-shadow: none; }
 .app-workspace.settings-workspace { flex-direction: row; background: var(--surface); }
 .settings-workspace > .app-main { position: relative; flex: 1 1 0; min-width: 0; background: var(--surface); }
 .settings-workspace .toast-stack { position: absolute; max-width: calc(100% - 32px); }
@@ -225,14 +243,10 @@
 @media (prefers-reduced-motion: no-preference) { .device-console button { transition: background-color 120ms, border-color 120ms; } }
 @media (prefers-reduced-motion: reduce) { .device-console *, .settings-section-sidebar * { transition: none; animation: none; scroll-behavior: auto; } }
 @media (max-width: 1399px) {
-  .app-shell[data-workspace='settings'] { grid-template-columns: 184px minmax(0,1fr); }
   .settings-section-sidebar { flex-basis: 192px; padding-inline: 8px; }
   .device-console { padding: 24px 24px 40px; }
 }
 @media (max-width: 899px) {
-  .app-shell[data-workspace='settings'] { grid-template-columns: 120px minmax(0,1fr); }
-  .app-shell[data-workspace='settings'] .app-sidebar { padding: 12px 4px; }
-  .app-shell[data-workspace='settings'] .app-sidebar .main-nav button { padding: 8px 4px; gap: 6px; }
   .settings-section-sidebar { flex-basis: 144px; padding: 16px 4px; }
   .settings-section-sidebar .main-nav button { padding: 8px 6px; gap: 6px; }
   .settings-section-sidebar .main-nav button small { display: none; }

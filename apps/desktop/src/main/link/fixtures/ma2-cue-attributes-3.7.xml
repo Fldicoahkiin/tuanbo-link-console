@@ -1,0 +1,426 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Native isolated onPC 3.7.0.5 test export, 2026-10-17. Info removed. -->
+<MA xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.malighting.de/grandma2/xml/MA" xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.7.0/MA.xsd" major_vers="3" minor_vers="7" stream_vers="0">
+	<Sequ index="9917" timecode_slot="255" forced_position_mode="0">
+		<Cue xsi:nil="true" />
+		<Cue index="1">
+			<Number number="1" sub_number="0" />
+			<CueDatas>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="1" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="1" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="1" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="1" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="2" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="2" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="2" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="2" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="3" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="3" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="3" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="3" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="4" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="4" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="4" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="4" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="5" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="5" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="5" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="5" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="6" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="6" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="6" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="6" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="7" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="7" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="7" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="7" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="8" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="8" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="8" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="8" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="9" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="9" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="9" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="9" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="10" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="10" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="10" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="10" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="11" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="11" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="11" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="11" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="12" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="12" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="12" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="12" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="13" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="13" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="13" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="13" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="14" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="14" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="14" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="14" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="15" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="15" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="15" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="15" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="16" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="16" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="16" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="16" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="17" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="17" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="17" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="17" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="18" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="18" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="18" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="18" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="19" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="19" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="19" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="19" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="20" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="20" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="20" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="20" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="21" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="21" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="21" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="21" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="22" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="22" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="22" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="22" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="23" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="23" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="23" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="23" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="24" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="24" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="24" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="24" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="25" attribute_name="DIM" />
+					<Value>70</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="25" attribute_name="PAN" />
+					<Value>40</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="25" attribute_name="TILT" />
+					<Value>25</Value>
+				</CueData>
+				<CueData value_multipart_index="0" effect_multipart_index="0">
+					<Channel fixture_id="25" attribute_name="COLOR1" />
+					<Value>7</Value>
+				</CueData>
+			</CueDatas>
+			<CuePart index="0">
+				<CuePartPresetTiming>
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+				</CuePartPresetTiming>
+			</CuePart>
+		</Cue>
+	</Sequ>
+</MA>

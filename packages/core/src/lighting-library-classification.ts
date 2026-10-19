@@ -73,8 +73,9 @@ export function updateConsoleCueCategoriesCommand(refs:ConsoleCueReference[], ch
       const index=existing.get(key);const old=index===undefined?undefined:entries[index];
       if(old){entries[index!]={...old,categoryIds:[...new Set([...old.categoryIds.filter(id=>!changes.remove.includes(id)),...changes.add])]};continue;}
       if(!changes.add.length)continue;
-      const name=ref.kind==='sequence'?sequence.name:cue.name;
-      const entry=lightingLibraryEntrySchema.parse({id,name,originalName:name,revision:1,kind:ref.kind,categoryIds:[...new Set(changes.add)],favorite:false,
+      const originalName=(ref.kind==='sequence'?sequence.name:cue.name)??'';
+      const name=originalName||sequence.name||`Cue ${cue.number}`;
+      const entry=lightingLibraryEntrySchema.parse({id,name,originalName,revision:1,kind:ref.kind,categoryIds:[...new Set(changes.add)],favorite:false,
         source:{...source,verified:!project.ma2MaterialLibrary!.library!.sourceUnverified},
         track:{id,name,kind:'ma2',color:'#68c9ed',group:'',muted:false,solo:false,locked:false,channel:1,portProfileId:'',controller:7,noteNames:{},clips:[],cueStamp:{mode:'fixed',sequence:ref.sequence,cue:ref.cue,executor:''}}
       });

@@ -17,10 +17,19 @@ it('相同 BPM 的音乐结构变化也分段，结果独立存储而不生成�
   const next = acceptMusicStructure(document, source, candidates(), 'task');
   expect(next.musicAnalysis?.segments.map(segment => [segment.startMs, segment.endMs, segment.bpm])).toEqual([[0, 16000, 120], [16000, 32000, 120]]);
   expect(next.musicAnalysis?.beatsPerBar).toBe(4);
+  expect(next.musicAnalysis?.segments.map(segment => segment.name)).toEqual(['段落 1', '段落 2']);
   expect(next.tempos).toEqual(document.tempos); expect(next.tracks).toEqual(document.tracks); expect(next.markers).toEqual([]);
   expect(matchingMusicStructure(next, { ...source, sha256: 'b'.repeat(64) })).toBeUndefined();
   expect(matchingMusicStructure(next, { ...source, durationMs: 30000 })).toBeUndefined();
   expect(() => acceptMusicStructure(document, { ...source, durationMs: 30000 }, candidates(), 'late')).toThrow('音源');
+});
+it('refreshes cached automatic labels and tempo from beat evidence while retaining manual labels', () => {
+  const data = recognizeMusicStructure(candidates(), 'cached');
+  data.segments[0] = { ...data.segments[0]!, name: '主歌 1', bpm: 333 };
+  data.segments[1] = { ...data.segments[1]!, name: '我的段落', edited: true };
+  const before = structuredClone(data);
+  expect(musicStructureSegments(data).map(segment => [segment.name, segment.bpm])).toEqual([['段落 1', 120], ['我的段落', 120]]);
+  expect(data).toEqual(before);
 });
 it('清除保留 BPM、抑制重新出现；删除修正在重新分析后保留', () => {
   let document = acceptMusicStructure(createLightingDocument(), source, candidates(), 'task');
@@ -50,6 +59,11 @@ it('持续变速、渐变、静音、短段分别处理，不强行切固定拍�
   const values = Array.from({ length: 49 }, (_, i) => i <= 24 ? i * 500 : 12000 + (i - 24) * (60000 / 90));
   const changed = { ...base, items: values.map((at, i) => ({ id: String(i), kind: 'beat' as const, name: '拍点', startMs: at, endMs: null })) };
   expect(recognizeMusicStructure(changed, 'step').segments.map(segment => segment.bpm)).toEqual([120, 90]);
+  const nearby = recognizeMusicStructure({ ...changed, items: [...changed.items,
+    { id: 's0', kind: 'section', name: '前', startMs: 0, endMs: 12150 },
+    { id: 's1', kind: 'section', name: '后', startMs: 12150, endMs: source.durationMs }
+  ] }, 'nearby');
+  expect(nearby.segments.map(segment => [segment.startMs, segment.endMs, segment.bpm, segment.reason])).toEqual([[0, 12000, 120, 'whole'], [12000, 32000, 90, 'both']]);
   let at = 0;
   const ramp = Array.from({ length: 49 }, (_, i) => { const point = { id: String(i), kind: 'beat' as const, name: '拍点', startMs: at, endMs: null }; at += 400 + i * 4; return point; });
   expect(recognizeMusicStructure({ ...base, items: ramp }, 'ramp').segments.some(segment => segment.endBpm !== null)).toBe(true);

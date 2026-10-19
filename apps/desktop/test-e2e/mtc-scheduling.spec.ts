@@ -27,7 +27,10 @@ test('无 MA2 网线时按原偏移发 MTC；长时阻塞只停止发码，音�
     await page.evaluate(value => window.tbLink.saveIntegrationProfile({ profile: value }), profile);
     await page.addInitScript(() => {
       const messages: number[][] = []; Reflect.set(window, '__schedulingMessages', messages);
-      const port = Object.assign(new EventTarget(), { id: 'test', type: 'output', name: '调度测试', state: 'connected', connection: 'open', open: () => Promise.resolve(port), send: (bytes: number[]) => messages.push([...bytes]) });
+      const port = Object.assign(new EventTarget(), { id: 'test', type: 'output', name: '调度测试', state: 'connected', connection: 'open', open: () => Promise.resolve(port), send: (bytes: number[]) => {
+        if (bytes[0] === 0xf0) Reflect.set(window, '__firstMtcAudioPosition', (Reflect.get(window, '__schedulingAudio') as HTMLMediaElement).currentTime);
+        messages.push([...bytes]);
+      } });
       const access = Object.assign(new EventTarget(), { inputs: new Map(), outputs: new Map([['test', port]]) });
       Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
       const play = Reflect.get(HTMLMediaElement.prototype, 'play') as (this: HTMLMediaElement) => Promise<void>;
@@ -66,7 +69,11 @@ test('无 MA2 网线时按原偏移发 MTC；长时阻塞只停止发码，音�
     await expect(page.getByText(/MIDI 时间码已停止.*音频继续播放/).first()).toBeVisible();
     const sentAfterStall = await page.evaluate(() => (Reflect.get(window, '__schedulingMessages') as number[][]).length);
     expect(await page.evaluate(() => (Reflect.get(window, '__schedulingMessages') as number[][]).filter(bytes => bytes[0] === 0xf0).length)).toBe(1);
-    await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__schedulingMessages') as number[][]).find(bytes => bytes[0] === 0xf0)?.slice(5, 9))).toEqual([0x60, 8, 0, 0]);
+    const first = await page.evaluate(() => ({ bytes: (Reflect.get(window, '__schedulingMessages') as number[][]).find(bytes => bytes[0] === 0xf0)!, audio: Number(Reflect.get(window, '__firstMtcAudioPosition')) }));
+    expect(first.bytes.slice(5, 8)).toEqual([0x60, 8, 0]);
+    // The first animation frame may occur after audio has advanced. Compare with
+    // the media clock sampled at send(), allowing only a frame-boundary crossing.
+    expect(Math.abs(first.bytes[8]! - Math.floor(first.audio * 30))).toBeLessThanOrEqual(1);
     expect(await app.evaluate(() => process.env.TBLINK_OFFLINE_NETWORK_CALLS)).toBe('0');
     await expect.poll(audioPosition).toBeGreaterThan(position + 0.5);
     expect(await page.evaluate(() => (Reflect.get(window, '__schedulingMessages') as number[][]).length)).toBe(sentAfterStall);

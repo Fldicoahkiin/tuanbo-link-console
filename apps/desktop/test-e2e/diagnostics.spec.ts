@@ -66,7 +66,11 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
     await maintenance.getByRole('button', { name: '保存启动设置', exact: true }).click();
     await expect.poll(() => page.evaluate(async () => (await window.tbLink.loadIntegrationProfile())?.obs.startupTimeoutMs)).toBe(2500);
     expect(await page.evaluate(async () => (await window.tbLink.loadIntegrationProfile())?.obs.shutdownTimeoutMs)).toBe(4000);
-  } finally { await application.close(); }
+  } finally {
+    const page = await application.firstWindow();
+    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    await application.close();
+  }
 });
 
 test('激活页不显示日志入口，界面错误仍持久化并可由诊断接口导出', async ({}, info) => {

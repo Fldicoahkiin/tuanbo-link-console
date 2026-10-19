@@ -93,6 +93,11 @@ export async function importCachedMa2(target?: number): Promise<void> {
     const entry = state.catalog.entries.find(value => value.target === number);
     if (state.detachedBindings?.some(value => value.itemId === pairs.find(([key]) => Number(key) === number)?.[1] && value.binding.timecode === number)) throw new Error('此歌曲有已归档的本地修改，请先恢复归档关联');
     if (!entry?.preview || entry.error) throw new Error(entry?.error ?? entry?.conversionError ?? '此条尚未取得转换预览，请只补读未完成项');
+    // Validate inside the per-entry read operation so one bad cached pairing is
+    // recorded with its Timecode instead of rolling back all usable selections.
+    const itemId = state.pairs[number];
+    if (!itemId) throw new Error(`Timecode ${number} 尚未选择对应歌曲`);
+    confirmMa2PairingCommand(number, itemId).execute(project);
     return Promise.resolve(entry.preview);
   }, () => { if (useDocumentStore.getState().project !== project || useDocumentStore.getState().documentId !== before.documentId) throw new Error('工程已变化，请重新应用缓存'); }, () => undefined);
   const message = `${result.selections.length} 条已关联 · ${result.selections.filter(value => value.preview.unconverted.length).length} 条原生保留 · ${result.failures.length} 条需处理`;

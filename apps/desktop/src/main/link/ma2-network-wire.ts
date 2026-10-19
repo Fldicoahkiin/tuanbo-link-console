@@ -28,8 +28,11 @@ export class Ma2NetworkWire implements Ma2Wire {
     const reference = operation === 'SYNC' && this.snapshot?.target === target && length === this.snapshot.content.length && data.subarray(newline + 1, newline + 1 + length).equals(this.snapshot.content) ? this.snapshot.id : null;
     if (reference) data = data.subarray(newline + 1 + length);
     let sent = false;
+    let acquired = false;
+    let releaseAttempted = false;
     try {
       if (await this.call(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length}`) !== 'ACK') throw new Error('MA2 未确认传输开始');
+      acquired = true;
       for (let offset = 0; offset < data.length; offset += 256) {
         if (await this.call('chunk', id, `,${offset / 256 + 1},'${data.subarray(offset, offset + 256).toString('hex')}'`) !== 'ACK') throw new Error('MA2 未确认数据片段');
       }
@@ -44,12 +47,19 @@ export class Ma2NetworkWire implements Ma2Wire {
       const response = Buffer.concat(chunks).toString('utf8');
       const match = /^([a-f0-9]{32})\n(OK|ERROR)\n(\d+)\n([\s\S]*)$/.exec(response);
       if (!match || match[1] !== id || Buffer.byteLength(match[4] ?? '') !== Number(match[3])) throw new Error('MA2 回读身份或长度不一致');
+      releaseAttempted = true;
       if (await this.call('release', id) !== 'ACK') throw new Error('MA2 未确认传输结束');
       if (match[2] !== 'OK') throw new Error(`MA2：${match[4]}`);
       if (operation === 'SNAPSHOT' || operation === 'SCOPE') this.snapshot = { id, target, content: Buffer.from(match[4] ?? '') };
       return match[4] ?? '';
     } catch (error) {
-      throw new Ma2BridgeFailure(error instanceof Error ? error.message : String(error), id, sent, { cause: error });
+      let message = error instanceof Error ? error.message : String(error);
+      // Release only this transaction. Never execute it again or clear another client's request.
+      if (acquired && !releaseAttempted) {
+        try { if (await this.call('release', id) !== 'ACK') throw new Error('控台未确认释放'); }
+        catch (cleanupError) { message += `；传输清理未确认：${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`; }
+      }
+      throw new Ma2BridgeFailure(message, id, sent, { cause: error });
     }
   }
   private async readBatch(id: string, offset: number, size: number): Promise<Buffer> {

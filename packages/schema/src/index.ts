@@ -11,6 +11,11 @@ export * from './ma2-audition';
 export * from './ma2-network-setup';
 export * from './ma2-catalog';
 export * from './ma2-effect-library';
+export * from './ma2-cue-attributes';
+export * from './ma2-cue-delete';
+export * from './ma2-layout';
+export * from './ma2-executor-page';
+export * from './ma2-live-playback';
 
 export * from './obs-live-canvas';
 export * from './license';
@@ -31,3 +36,6 @@ export * from './ma2-auto-bind';
 export * from './native-program';
 
 export { musicStructureSchema, musicStructureSegmentSchema, type MusicStructure, type MusicStructureSegment } from './music-structure';
+
+export * from './ma2-song-sequence';
+export * from './ma2-song-binding';

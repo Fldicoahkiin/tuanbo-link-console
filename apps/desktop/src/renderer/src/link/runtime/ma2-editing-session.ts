@@ -51,7 +51,8 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   if (!project || !state) throw new Error('未取得可用的控台读取结果');
   const bindings = project.rundown.flatMap(item => item.lighting?.ma2Bindings ?? []);
   const retained = bindings.filter(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode').length;
-  const summary = `${reuse ? '已恢复工程缓存（控台内容更新请点“更新控台读取”）' : '控台读取完成'}；${bindings.length} 条已关联，${retained} 条含原生保留动作${libraryNotice}`;
+  const pairingNotice = state.failures.length ? `；${state.failures.length} 条未关联，请在“配对与查看 Cue”中查看对应时间线的原因` : '';
+  const summary = `${reuse ? '已恢复工程缓存（控台内容更新请点“更新控台读取”）' : '控台读取完成'}；${bindings.length} 条已关联，${retained} 条含原生保留动作${pairingNotice}${libraryNotice}`;
   const reason = state.catalog.incomplete || state.catalog.sourceUnverified ? '读取尚未完整核对'
     : Object.values(state.pairings ?? {}).some(pair => pair.status === 'stale') ? '已有配对需要重新核对'
     : ma2PendingChanges(project).length ? '有连接前的本地修改，请先核对后提交'

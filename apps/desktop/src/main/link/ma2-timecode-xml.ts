@@ -1,9 +1,177 @@
 import { createHash } from 'node:crypto';
 import { DOMParser, XMLSerializer, type Element as XmlElement } from '@xmldom/xmldom';
 import { z } from 'zod';
+import { ma2CueAttributesSchema, ma2LayoutSnapshotSchema, type Ma2CueAttributes, type Ma2LayoutSnapshot } from '@tb/schema';
+import { inspectMa2CueContent } from './ma2-cue-content';
+import { ma2ExecutorPageSchema, type Ma2ExecutorPage } from '@tb/schema';
 
 const MA_NAMESPACE = 'http://schemas.malighting.de/grandma2/xml/MA';
 export type Ma2ExecutorReport = { version: string; sequence: number; assignmentName: string; executorName?: string };
+
+/** Page exports retain sparse Exec slots. offset_from_first describes a wide executor, not its address. */
+export function inspectMa2ExecutorPageXml(xml: string, target: number): Ma2ExecutorPage {
+  const { root } = parse(xml);
+  const version = ['major_vers', 'minor_vers', 'stream_vers'].map(name => required(root, name)).join('.');
+  if (!['3.3.4', '3.7.0'].includes(version)) throw new Error('此 MA2 执行器页面 XML 版本尚未验证');
+  const page = singleChild(root, 'Page');
+  if (!page || indexOf(page) + 1 !== target) throw new Error('执行器页面回读编号不一致');
+  const slots = children(page, 'Exec');
+  if (slots.length > 240) throw new Error('执行器页面格子数超出已验证范围');
+  const items: Ma2ExecutorPage['items'] = [];
+  for (const [index, executor] of slots.entries()) {
+    if (executor.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance', 'nil') === 'true') continue;
+    const offset = Number(required(executor, 'offset_from_first'));
+    if (!Number.isInteger(offset) || offset < 0 || offset > 14) throw new Error('执行器宽度信息无效');
+    if (offset) {
+      const first = items.find(item => item.slot === index + 1 - offset);
+      if (!first || first.width !== offset) throw new Error('多格执行器起点缺失');
+      first.width += 1; continue;
+    }
+    const assignment = singleChild(executor, 'Assignment');
+    const reference = address(assignment);
+    const sequence = reference.length === 3 && reference[0] === '25' && reference[1] === '1' && /^[1-9]\d*$/.test(reference[2] ?? '') ? Number(reference[2]) : undefined;
+    const buttons = singleChild(executor, 'AssignmentExec');
+    const button = buttons ? children(buttons, 'Button')[0]?.textContent : null;
+    const label = executor.getAttribute('tblink_label');
+    // A native label is authoritative. Never append an internal sequence or executor number.
+    const name = label ?? assignment?.getAttribute('name')?.replace(sequence ? new RegExp(` ${sequence}$`) : /$^/, '') ?? '';
+    items.push({ slot: index + 1, width: 1, name, kind: sequence ? 'sequence' : 'other', ...(sequence ? { sequence } : {}), reference, button: button ? Number(button) : null });
+  }
+  const show = root.getAttribute('tblink_show'); const generation = root.getAttribute('tblink_generation'); const nativeVersion = root.getAttribute('tblink_version');
+  const metadata = singleChild(root, 'tblink_sequences');
+  const sequences = metadata ? children(metadata, 'tblink_sequence').map(value => ({ sequence: Number(required(value, 'number')), name: value.getAttribute('name') || null,
+    cues: children(value, 'tblink_cue').map(cue => {
+      const number = required(cue, 'number');
+      if (!/^\d{1,4}(?:\.\d{1,3})?$/.test(number) || Number(number) <= 0) throw new Error('页面 Cue 编号无效，未采用读取结果');
+      return { index: Number(required(cue, 'index')), number: Number(number).toFixed(3), name: cue.getAttribute('name') || null };
+    }) })) : [];
+  return ma2ExecutorPageSchema.parse({ page: target, name: page.getAttribute('name') ?? '', readAt: new Date().toISOString(), items,
+    sequences,
+    ...(show && generation && nativeVersion ? { source: { show, generation, version: nativeVersion } } : {}) });
+}
+
+/** Native MA2 Layout exports use Group/LayoutData; object coordinates remain in MA units. */
+export function inspectMa2LayoutXml(xml: string, target: number): Ma2LayoutSnapshot {
+  const { root } = parse(xml);
+  const version = ['major_vers', 'minor_vers', 'stream_vers'].map(name => required(root, name)).join('.');
+  if (!['3.3.4', '3.7.0'].includes(version)) throw new Error('此 MA2 Layout XML 版本尚未验证');
+  const group = singleChild(root, 'Group');
+  if (!group || indexOf(group) + 1 !== target) throw new Error('Layout 回读对象不一致');
+  const layout = singleChild(group, 'LayoutData');
+  if (!layout) throw new Error('Layout 缺少画布数据');
+  const objects = singleChild(layout, 'CObjects');
+  const items = (objects ? children(objects, 'LayoutCObject') : []).map((item, index) => {
+    const object = singleChild(item, 'CObject'); const reference = address(object);
+    const sequence = reference.length >= 3 && reference[0] === '25' && reference[1] === '1' && /^[1-9]\d*$/.test(reference[2] ?? '') ? Number(reference[2]) : undefined;
+    const coordinate = (name: string): number => { const value = Number(required(item, name)); if (!Number.isFinite(value) || Math.abs(value) > 100000) throw new Error('Layout 坐标无效'); return value; };
+    // Cue addresses are not silently guessed from internal indices.
+    return { id: String(index), name: object?.getAttribute('name') ?? '', reference, kind: sequence && reference.length === 3 ? 'sequence' as const : 'other' as const, ...(sequence && reference.length === 3 ? { sequence } : {}), x: coordinate('center_x'), y: coordinate('center_y'), width: coordinate('size_w'), height: coordinate('size_h') };
+  });
+  return ma2LayoutSnapshotSchema.parse({ layout: target, name: group.getAttribute('name') ?? '', items, omittedFixtures: layout.getElementsByTagNameNS(MA_NAMESPACE, 'LayoutSubFix').length, readAt: new Date().toISOString() });
+}
+
+export function moveMa2LayoutObjects(xml: string, layout: number, positions: readonly { id: string; x: number; y: number }[], name?: string): string {
+  inspectMa2LayoutXml(xml, layout);
+  const { root, document } = parse(xml); const group = singleChild(root, 'Group')!;
+  if (name !== undefined) group.setAttribute('name', name);
+  const objects = singleChild(singleChild(group, 'LayoutData')!, 'CObjects');
+  const items = objects ? children(objects, 'LayoutCObject') : [];
+  for (const position of positions) {
+    const item = items[Number(position.id)]; if (!item) throw new Error('Layout 对象已不存在');
+    item.setAttribute('center_x', String(position.x)); item.setAttribute('center_y', String(position.y));
+  }
+  return new XMLSerializer().serializeToString(document);
+}
+
+/** A fresh, empty destination prevents current programmer values leaking into a combination. */
+export function emptyMa2SequenceXml(target: number, version: string): string {
+  const base = version.split('.').slice(0,3).join('.');
+  if (!['3.3.4','3.7.0'].includes(base) || !Number.isInteger(target) || target < 1 || target > 99999) throw new Error('新建序列版本或编号无效');
+  const [major,minor,stream] = base.split('.');
+  return `<MA xmlns="${MA_NAMESPACE}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" major_vers="${major}" minor_vers="${minor}" stream_vers="${stream}"><Sequ index="${target-1}"><Cue xsi:nil="true"/><Cue index="1"><Number number="1" sub_number="0"/><CuePart index="0"/></Cue></Sequ></MA>`;
+}
+
+export function emptyMa2LayoutXml(target: number, version: string): string {
+  const sequence=emptyMa2SequenceXml(target,version);
+  return sequence.replace(/<Sequ[\s\S]*<\/Sequ>/,`<Group index="${target-1}"><LayoutData index="0"/></Group>`);
+}
+
+/** Edit only the selected song sequence, retaining every untouched native Cue. */
+export function editMa2SongSequence(xml: string, name: string, changes: readonly { cue: string; name: string; sources?: readonly { xml: string; cue: string }[] }[], removed: readonly string[]): string {
+  inspectMa2SequenceXml(xml);
+  const { document, root } = parse(xml); const sequence = singleChild(root, 'Sequ');
+  if (!sequence) throw new Error('歌曲序列缺失');
+  sequence.setAttribute('name', name);
+  const report = inspectMa2SequenceXml(xml).sequences[0]!;
+  let index = Math.max(0, ...report.cues.map(cue => cue.index));
+  for (const number of removed) {
+    const ref = report.cues.find(cue => Number(cue.number) === Number(number));
+    const element = children(sequence, 'Cue').find(cue => cue.getAttribute('index') === String(ref?.index));
+    if (element) sequence.removeChild(element);
+  }
+  for (const change of changes) {
+    const ref = report.cues.find(cue => Number(cue.number) === Number(change.cue));
+    let cue = children(sequence, 'Cue').find(cue => cue.getAttribute('index') === String(ref?.index));
+    if (!cue) {
+      cue = document.createElementNS(MA_NAMESPACE, 'Cue'); cue.setAttribute('index', String(++index));
+      const number = document.createElementNS(MA_NAMESPACE, 'Number'); const [whole, fraction = ''] = change.cue.split('.');
+      number.setAttribute('number', whole!); number.setAttribute('sub_number', String(Number(fraction.padEnd(3, '0')))); cue.appendChild(number); sequence.appendChild(cue);
+    }
+    if (change.sources !== undefined) {
+      for (const child of [...children(cue, 'CueDatas'), ...children(cue, 'CuePart')]) cue.removeChild(child);
+      const rows = new Map<string, XmlElement>();
+      for (const source of change.sources) {
+        const sourceReport = inspectMa2SequenceXml(source.xml).sequences[0]!;
+        const sourceRef = sourceReport.cues.find(value => Number(value.number) === Number(source.cue));
+        if (!sourceRef) throw new Error(`来源 Cue ${source.cue} 已不存在`);
+        inspectMa2CueData(source.xml, sourceRef.index);
+        const sourceCue = children(singleChild(parse(source.xml).root, 'Sequ')!, 'Cue').find(value => value.getAttribute('index') === String(sourceRef.index))!;
+        if (change.sources.length === 1) {
+          for (const part of children(sourceCue, 'CuePart')) cue.appendChild(document.importNode(part, true));
+        } else if (children(sourceCue, 'CuePart').some(part => part.getAttribute('index') !== '0' || part.childNodes.length > 0)) throw new Error('组合含多 Part 或 Cue 命令，不能静态合成到歌曲序列');
+        const data = singleChild(sourceCue, 'CueDatas');
+        for (const row of data ? children(data, 'CueData') : []) {
+          const key = JSON.stringify(canonicalElement(singleChild(row, 'Channel')!));
+          const existing = rows.get(key);
+          if (!existing) { rows.set(key, document.importNode(row, true)); continue; }
+          for (const layer of children(row, 'Channel').length ? Array.from({ length: row.childNodes.length }, (_, i) => row.childNodes.item(i)).filter((node): node is XmlElement => node?.nodeType === 1 && (node as XmlElement).localName !== 'Channel') : []) {
+            for (const previous of children(existing, layer.localName!)) existing.removeChild(previous);
+            existing.appendChild(document.importNode(layer, true));
+          }
+        }
+      }
+      if (rows.size) { const data = document.createElementNS(MA_NAMESPACE, 'CueDatas'); for (const row of rows.values()) data.appendChild(row); cue.appendChild(data); }
+    }
+    if (!children(cue, 'CuePart').length) { const part = document.createElementNS(MA_NAMESPACE, 'CuePart'); part.setAttribute('index', '0'); cue.appendChild(part); }
+    cue.setAttribute('name', change.name);
+    children(cue, 'CuePart').find(part => part.getAttribute('index') === '0')?.setAttribute('name', change.name);
+  }
+  return new XMLSerializer().serializeToString(document);
+}
+
+/** Explicit values/effect layers for a conservative native merge readback comparison. */
+export function inspectMa2CueData(xml: string, cueIndex: number): Map<string,Record<string,string>> {
+  inspectMa2SequenceXml(xml);
+  const {root}=parse(xml);const sequence=singleChild(root,'Sequ');
+  const cue=sequence&&children(sequence,'Cue').find(value=>value.getAttribute('index')===String(cueIndex));
+  if(!cue)throw new Error('Cue 数据索引不存在');
+  const result=new Map<string,Record<string,string>>();
+  const data=singleChild(cue,'CueDatas');
+  for(const row of data?children(data,'CueData'):[]){
+    const channel=singleChild(row,'Channel');if(!channel)throw new Error('CueData 缺少灯具属性引用');
+    const key=JSON.stringify(canonicalElement(channel));
+    if(result.has(key))throw new Error('同一灯具属性包含多条数据，暂不能静态合成');
+    if(['value_multipart_index','effect_multipart_index'].some(name=>row.hasAttribute(name)&&row.getAttribute(name)!=='0'))throw new Error('暂不能静态合成多 Part Cue，请保留原组合引用');
+    const layers:Record<string,string>={};
+    for(let child=row.firstChild;child;child=child.nextSibling)if(child.nodeType===1&&(child as XmlElement).localName!=='Channel'){
+      const element=child as XmlElement;const name=element.localName??element.nodeName;
+      if(name in layers)throw new Error('属性层包含重复值，暂不能静态合成');
+      layers[name]=JSON.stringify(canonicalElement(element));
+    }
+    result.set(key,layers);
+  }
+  return result;
+}
 
 /** A single-executor export has relative offset zero, not its absolute page/address. */
 export function inspectMa2ExecutorXml(xml: string): Ma2ExecutorReport {
@@ -27,6 +195,36 @@ export type Ma2SequenceReport = {
   version: string;
   sequences: Array<{ number: number; name: string | null; cues: Array<{ index: number; number: string; name: string | null }> }>;
 };
+
+/** Only explicitly stored channels; does not resolve tracking, output or programmer state. */
+export function inspectMa2CueAttributes(xml: string, readAt: string, fullExport = false): Ma2CueAttributes[] {
+  inspectMa2SequenceXml(xml);
+  const { root } = parse(xml);
+  return indexedChildren(root, 'Sequ').flatMap(sequence => {
+    const cues = children(sequence, 'Cue').filter(cue => cue.hasAttribute('index') && cue.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance', 'nil') !== 'true');
+    const contents = cues.map(cue => inspectMa2CueContent(cue, 'none', fullExport));
+    // Tracking can wrap from the last step back to the first. Without executor
+    // settings, no unwritten step in a data-bearing sequence is proven empty.
+    const tracking = contents.some(content => content.state === 'partial') ? 'unverified' : contents.some(content => content.rows.length) ? 'possible' : 'none';
+    return cues.map((cue, cueIndex) => {
+      const content = { ...contents[cueIndex]!, tracking };
+      const attributes = new Set<string>(); const fixtureIds = new Set<number>();
+      let unknownChannels = 0; let hasEffects = false;
+      const channels = cue.getElementsByTagNameNS(MA_NAMESPACE, 'Channel');
+      for (let index = 0; index < channels.length; index++) {
+        const channel = channels.item(index)!;
+        const attribute = channel.getAttribute('attribute_name');
+        if (attribute?.trim()) attributes.add(attribute); else unknownChannels++;
+        const fixture = channel.getAttribute('fixture_id');
+        if (fixture && /^[1-9]\d*$/.test(fixture) && Number.isSafeInteger(Number(fixture))) fixtureIds.add(Number(fixture));
+        else if (!/^[1-9]\d*$/.test(channel.getAttribute('channel_id') ?? '')) unknownChannels++;
+        const data = channel.parentNode;
+        if (data?.nodeType === 1 && (data as XmlElement).getElementsByTagNameNS(MA_NAMESPACE, 'Effect').length > 0) hasEffects = true;
+      }
+      return ma2CueAttributesSchema.parse({ sequence: indexOf(sequence) + 1, cueIndex: indexOf(cue), attributes: [...attributes].sort(), fixtureIds: [...fixtureIds].sort((a,b) => a-b), unknownChannels, hasEffects, content, readAt });
+    });
+  });
+}
 
 /** Explicit fixture references only. Tracking and programmer state are not inferred. */
 export function inspectMa2CueFixtures(xml: string): { sequence: number; cueIndex: number; fixtureIds: number[] }[] {
@@ -66,6 +264,22 @@ export function inspectMa2SequenceXml(xml: string, allowEmpty = false): Ma2Seque
   });
   if (!sequences.length && !allowEmpty) throw new Error('文件中没有 MA2 Sequence 对象');
   return { version, sequences };
+}
+
+/** Compare all surviving Cue metadata and Parts while allowing MA2 to reindex internal steps. */
+export function ma2SequenceCueFingerprints(xml: string): Map<string, string> {
+  const report = inspectMa2SequenceXml(xml);
+  const { root } = parse(xml);
+  const result = new Map<string, string>();
+  for (const sequence of indexedChildren(root, 'Sequ')) for (const cue of children(sequence, 'Cue')) {
+    if (cue.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance', 'nil') === 'true') continue;
+    const number = report.sequences.find(value => value.number === indexOf(sequence) + 1)?.cues.find(value => value.index === indexOf(cue))?.number;
+    if (!number) throw new Error('Cue 编号不能核对');
+    const clone = cue.cloneNode(true) as XmlElement;
+    clone.removeAttribute('index');
+    result.set(number, JSON.stringify(canonicalElement(clone)));
+  }
+  return result;
 }
 
 export function resolveMa2CueReference(address: readonly string[], reports: readonly Ma2SequenceReport[]): { sequence: number; cueIndex: number; cueNumber: string; cueName: string | null } {

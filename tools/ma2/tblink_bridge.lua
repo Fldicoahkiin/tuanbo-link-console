@@ -78,6 +78,63 @@ local function process(data)
     assert(tc and tc >= 1 and tc <= 99999 and tc == math.floor(tc), 'Invalid Timecode')
     assert(#body == tonumber(size), 'Request length mismatch')
     if op == 'PING' then return gma.show.getvar('VERSION') or 'unknown' end
+    if op == 'PAGES' then
+      assert(body == '', 'Page directory request must be empty')
+      local obj = gma.show.getobj
+      local pool = assert(obj.handle('Page'), 'Page pool unavailable')
+      local count = assert(obj.amount(pool))
+      assert(count <= 10000, 'Page directory exceeds limit')
+      local function quote(value) return '"' .. tostring(value):gsub('[%z\1-\31\\"]', function(c) return string.format('\\u%04x', c:byte()) end) .. '"' end
+      local entries = {}
+      for index = 0, count - 1 do
+        local h = obj.child(pool, index)
+        if h then
+          local number = assert(tonumber(obj.number(h)))
+          assert(number >= 1 and number <= 9999 and number == math.floor(number), 'Invalid Page number')
+          entries[#entries + 1] = '{"page":' .. number .. ',"name":' .. quote(obj.label(h) or '') .. '}'
+        end
+      end
+      return '{"show":' .. quote(gma.show.getvar('SHOWFILE')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(gma.show.getvar('VERSION')) .. ',"buttonPage":' .. assert(tonumber(gma.show.getvar('BUTTONPAGE'))) .. ',"faderPage":' .. assert(tonumber(gma.show.getvar('FADERPAGE'))) .. ',"pages":[' .. table.concat(entries, ',') .. ']}'
+    end
+    if op == 'PAGE' then
+      assert(body == '', 'Page request must be empty')
+      local obj = gma.show.getobj
+      assert(obj.handle('Page ' .. tc), 'Executor Page does not exist')
+      local file = 'tblink_page_' .. id
+      gma.cmd('Export Page ' .. tc .. ' ' .. file .. ' /o')
+      local xml = assert(read(root .. '/importexport/' .. file .. '.xml'), 'Page export unavailable')
+      local function escape(value) return tostring(value):gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;') end
+      xml = xml:gsub('<MA%s', function() return '<MA tblink_show="' .. escape(gma.show.getvar('SHOWFILE')) .. '" tblink_generation="' .. escape(generation) .. '" tblink_version="' .. escape(gma.show.getvar('VERSION')) .. '" ' end, 1)
+      -- Metadata only: one native page export, no sequence contents or per-slot network requests.
+      local index = 0
+      xml = xml:gsub('<Exec%s([^>]-)>', function(attributes)
+        index = index + 1
+        if attributes:find('xsi:nil="true"', 1, true) then return '<Exec ' .. attributes .. '>' end
+        local h = assert(obj.handle('Executor ' .. tc .. '.' .. index), 'Executor disappeared during read')
+        local label = obj.label(h) or ''
+        local escaped = label:gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('\r', '&#13;'):gsub('\n', '&#10;')
+        return '<Exec tblink_label="' .. escaped .. '" ' .. attributes .. '>'
+      end)
+      local metadata, seen = {}, {}
+      for assignment in xml:gmatch('<Assignment%s[^>]*>(.-)</Assignment>') do
+        local numbers = {}; for number in assignment:gmatch('<No>%s*(%d+)%s*</No>') do numbers[#numbers + 1] = tonumber(number) end
+        local sequence = #numbers == 3 and numbers[1] == 25 and numbers[2] == 1 and numbers[3] or nil
+        if sequence and not seen[sequence] then
+          seen[sequence] = true
+          local h = assert(obj.handle('Sequence ' .. sequence), 'Assigned Sequence disappeared')
+          local count = assert(obj.amount(h)); assert(count <= 100000, 'Sequence metadata exceeds limit')
+          local cues = {}
+          for i = 0, count - 1 do
+            local cue = obj.child(h, i)
+            if cue and tonumber(obj.number(cue)) and tonumber(obj.number(cue)) > 0 then
+              cues[#cues + 1] = '<tblink_cue index="' .. i .. '" number="' .. escape(obj.number(cue)) .. '" name="' .. escape(obj.label(cue) or '') .. '"/>'
+            end
+          end
+          metadata[#metadata + 1] = '<tblink_sequence number="' .. sequence .. '" name="' .. escape(obj.label(h) or '') .. '">' .. table.concat(cues) .. '</tblink_sequence>'
+        end
+      end
+      return xml:gsub('</MA>%s*$', function() return '<tblink_sequences>' .. table.concat(metadata) .. '</tblink_sequences></MA>' end)
+    end
     if op == 'LABEL' then
       local kind, cue, show_hex, session_hex, old_hex, name_hex = body:match('^(%a+)\n([%d%.]+)\n([a-f0-9]+)\n([a-f0-9]+)\n([a-f0-9]*)\n([a-f0-9]+)$')
       assert(kind == 'single' or kind == 'sequence', 'Invalid label target')
@@ -287,7 +344,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
         base = snapshot_cache.xml
         a = 'SYNC'
       end
-      assert(a == 'PING' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL', 'Invalid operation')
+      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(not network or gma.gettime() > network.expires, 'Another network request is pending')

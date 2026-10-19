@@ -1,8 +1,10 @@
+import { useMa2SongSyncStore, startMa2SongSync, stopMa2SongSync } from '../runtime/ma2-song-sync';
+import { projectLightingLibrary } from '@tb/core/link';
 import { useMemo, useState } from 'react';
 import { Check, CircleAlert, FolderArchive, FolderOpen, Save, Undo2, Redo2 } from 'lucide-react';
 import type { ProjectArchiveResult } from '@tb/schema';
 import { ma2PendingChanges, ma2UnboundTracks } from '../runtime/ma2-pending-changes';
-import { useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
+import { enableMa2NameSync, useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
 import { archiveMa2Project } from '../runtime/ma2-project-archive';
 import { useDocumentStore } from '../stores/document-store';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
@@ -17,16 +19,18 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const unbound = useMemo(() => ma2UnboundTracks(project), [project]);
   const renames = useMemo(() => pendingMa2Renames(project), [project]);
   const automatic = useMa2AutoSyncStore();
+  const songSync = useMa2SongSyncStore(state => state.songs);
+  const songs = Object.values(songSync);
   const [busy, setBusy] = useState(false);
   const [archives, setArchives] = useState<ProjectArchiveResult['entries']>([]);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [notice, setNotice] = useState('');
   if (!project) return null;
-  const active = Boolean(automatic.request) && automatic.status !== 'blocked';
-  const working = automatic.status === 'writing' || automatic.status === 'reading';
+  const active = songs.some(song => song.state !== 'blocked') || Boolean(automatic.request) && automatic.request?.scope !== 'names' && automatic.status !== 'blocked';
+  const working = automatic.status === 'writing' || automatic.status === 'reading' || songs.some(song => song.state === 'syncing');
   const count = pending.length + unbound.length + renames.length;
-  const status = automatic.status === 'blocked' ? '同步中断' : working ? '同步中' : count ? `待同步 ${count}` : active ? automatic.status === 'verified' ? '已确认' : '同步开启' : '仅本地';
+  const status = songs.some(song => song.state === 'blocked') ? '本曲同步中断' : songs.some(song => song.state === 'syncing') ? '本曲同步中' : songs.length && songs.every(song => song.state === 'verified') ? '本曲已回读' : automatic.status === 'blocked' ? '同步中断' : working ? '同步中' : count ? `待同步 ${count}` : automatic.request?.scope === 'names' && automatic.status === 'verified' ? '名称已同步' : active ? automatic.status === 'verified' ? '已确认' : '同步开启' : '仅本地';
   const run = async (action: () => Promise<void>): Promise<void> => {
     if (busy) return;
     setBusy(true);
@@ -35,10 +39,15 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     finally { setBusy(false); }
   };
   const toggle = async (): Promise<void> => {
-    if (active) { useMa2AutoSyncStore.setState({ request: null }); return; }
+    if (active) { useMa2AutoSyncStore.setState({ request: null }); for (const song of songs) stopMa2SongSync(song.itemId); return; }
     const state = useDocumentStore.getState();
     const cache = state.project?.ma2ReadState;
     if (!state.project || !state.path) throw new Error('请先保存工程');
+    const boundSongs = state.project.rundown.filter(item => item.lighting?.consoleSong);
+    if (boundSongs.length) {
+      for (const item of boundSongs) { const binding = item.lighting!.consoleSong!; const settings = projectLightingLibrary(state.project).consoleWorkspace; startMa2SongSync(item.id, binding.name, { layout: binding.layout ?? 999, ...(binding.executor ? { executorPage: Number(binding.executor.split('.')[0]) } : {}), name: settings?.name ?? '歌曲 Cue', nextSequence: binding.sequence, columns: settings?.columns ?? 8 }); }
+      return;
+    }
     const connection = await ma2MaterialConnection();
     if (useDocumentStore.getState().documentId !== state.documentId) throw new Error('工程已切换');
     const source = connection.network ? `${connection.network.host}:${connection.network.port}` : '本机 onPC';
@@ -81,8 +90,10 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     {detailOpen ? <div className="ma2-sync-popover" role="region" aria-label="同步状态详情">
       <header><strong>{status}</strong><button onClick={() => setDetailOpen(false)}>关闭</button></header>
       <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{notice || automatic.message}</p>
+      {songs.map(song => <p key={song.itemId} role={song.state === 'blocked' ? 'alert' : 'status'}>{song.message}</p>)}
       {playing ? <p>播放中暂存本地，停止后同步。</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}
+      {renames.length ? <button disabled={busy || working} onClick={() => void run(() => enableMa2NameSync(useDocumentStore.getState().documentId))}>同步名称</button> : null}
       {pending.map(item => <p key={`${item.itemId}:${item.bindingId}`}>{item.title} · Timecode {item.target}：{item.error ?? `${item.changes.length} 处修改`}</p>)}
       {unbound.map(item => <p key={`${item.itemId}:${item.trackId}`}>{item.title} · {item.name} · {item.count} 个 Cue：开启同步后自动关联并写入控台。</p>)}
     </div> : null}

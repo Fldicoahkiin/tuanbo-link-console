@@ -3,6 +3,28 @@ import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { createEmptyLinkProject, createLightingDocument } from '@tb/schema';
 
+test('编辑灯光随网络连接显示已连接，断开后更新且不依赖一键检查', async ({}, info) => {
+  const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
+  try {
+    const page = await app.firstWindow();
+    await page.getByRole('button', { name: '新建工程', exact: true }).waitFor();
+    await app.evaluate(({ ipcMain }) => {
+      process.env.TBLINK_TOPBAR_NETWORK_STATE = 'connected';
+      ipcMain.removeHandler('link:ma2-network-status');
+      ipcMain.handle('link:ma2-network-status', () => ({ settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, state: process.env.TBLINK_TOPBAR_NETWORK_STATE, version: '3.7.0.5', passwordSaved: false, error: null }));
+    });
+    await page.evaluate(() => localStorage.setItem('tblink.ma2-connection-method.v1', 'network'));
+    await page.reload();
+    const overview = page.getByRole('group', { name: '连接状态概览' });
+    await expect(overview.getByRole('button', { name: '编辑灯光：已连接，前往设置', exact: true })).toHaveClass(/state-ready/);
+    await app.evaluate(() => { process.env.TBLINK_TOPBAR_NETWORK_STATE = 'disconnected'; });
+    await expect(overview.getByRole('button', { name: '编辑灯光：未连接，前往设置', exact: true })).toHaveClass(/state-idle/);
+    await app.evaluate(() => { process.env.TBLINK_TOPBAR_NETWORK_STATE = 'connected'; });
+    await expect(overview.getByRole('button', { name: '编辑灯光：已连接，前往设置', exact: true })).toHaveClass(/state-ready/);
+    await page.screenshot({ path: info.outputPath('editing-connected.png') });
+  } finally { await app.close(); }
+});
+
 test('顶部保留四项连接状态，详细切回完整连接列表且不切工作区', async ({}, info) => {
   const executablePath = process.env.TBLINK_PACKAGED_APP_EXE;
   const app = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...(executablePath ? [] : [join(process.cwd(), 'out/main/index.cjs')])] });
