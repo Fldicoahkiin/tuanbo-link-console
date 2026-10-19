@@ -16,7 +16,7 @@ export function AuthView({ onLogin }: { onLogin: (session: z.infer<typeof sessio
       else { const value = await api('enroll', z.object({ recoveryCodes: z.array(z.string()) }), { token: data.get('token'), password: data.get('password'), code: data.get('code') }); setRecovery(value.recoveryCodes); setInfo(null); setQr(''); }
     } catch (error) { setError(errorMessage(error)); } finally { setBusy(false); }
   }
-  return <main className="auth-shell"><section className="auth-card"><ShieldCheck size={30} aria-hidden="true" /><p className="eyebrow">团播联动台 / 运营管理</p><h1>{recovery.length ? '保存恢复码' : enroll ? '开通管理账号' : '登录运营后台'}</h1><p className="muted">仅供获授权的运营人员使用。客户使用激活码，无需在此注册。</p>
+  return <main className="auth-shell"><section className="auth-card"><ShieldCheck size={30} aria-hidden="true" /><p className="eyebrow">团播联动台 / 运营管理</p><h1>{recovery.length ? '保存恢复码' : enroll ? '开通管理账号' : '登录运营后台'}</h1>
     {error && <p className="alert" role="alert">{error}</p>}
     {recovery.length ? <><p>每枚恢复码只能使用一次。请保存在安全位置，离开后不再显示。</p><pre className="secret">{recovery.join('\n')}</pre><button onClick={() => { setRecovery([]); setEnroll(false); }}>已保存，返回登录</button></> : <form onSubmit={event => { void submit(event); }}>
       {enroll ? <label>一次性开通凭据<input name="token" type="password" required autoComplete="off" readOnly={Boolean(info)} /></label> : <label>用户名<input name="username" required autoComplete="username" /></label>}
