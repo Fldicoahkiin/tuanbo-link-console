@@ -61,7 +61,7 @@ try {
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('业务订单编号').fill('BROWSER-ORDER-1'); await dialog.getByLabel('客户名称').fill('浏览器验收客户');
   await dialog.getByLabel('授权截止时间').fill('2026-11-06T16:00'); await dialog.getByLabel('金额（元）').fill('800'); await dialog.getByLabel('操作原因').fill('隔离验收');
-  await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('线下订单已创建，等待财务核款').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('线下订单已创建，待核款').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   await page.getByRole('button', { name: '查看详情' }).first().click(); await page.getByRole('button', { name: '确认实际收款并发码' }).click();
   await dialog.getByLabel('真实收款流水号').fill('BROWSER-BANK-1'); await dialog.getByLabel('付款方式').fill('测试核款'); await dialog.getByLabel('操作原因').fill('隔离夹具，不是真实收款');
   await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('核款与发码已完成').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
@@ -95,10 +95,10 @@ try {
     if (role === 'finance') {
       await page.getByRole('button', { name: '登记已办理的退款', exact: true }).click();
       await dialog.getByLabel('金额（元）').fill('80'); await dialog.getByLabel('退款渠道凭证编号').fill('BROWSER-REFUND-1'); await dialog.getByLabel('实际办理时间').fill('2026-10-05T00:00'); await dialog.getByLabel('操作原因').fill('隔离人工退款记录');
-      await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('已人工登记退款；系统未调用退款渠道，授权需单独处理').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+      await dialog.getByRole('button', { name: '确认执行' }).click(); await dialog.getByText('退款已登记').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
       await page.getByRole('button', { name: '记录开票进度', exact: true }).click();
       await dialog.getByLabel('购买方抬头').fill('浏览器验收客户'); await dialog.getByLabel('操作原因').fill('人工开票申请'); await dialog.getByRole('button', { name: '确认执行' }).click();
-      await dialog.getByText('开票处理记录已保存；系统未调用开票服务').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+      await dialog.getByText('开票记录已保存').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
       await page.getByRole('button', { name: '财务记录', exact: true }).click(); await page.getByText('BROWSER-REFUND-1', { exact: true }).waitFor();
       // 工作台大字为净收款：800 元收款扣除 80 元退款。
       await page.getByRole('button', { name: '工作台', exact: true }).click(); await page.locator('.balance-primary strong', { hasText: /^¥720\.00$/ }).waitFor();

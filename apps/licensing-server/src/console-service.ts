@@ -104,11 +104,11 @@ export class ConsoleService {
     const refunded = this.db.prepare("SELECT date(handled_at,'+8 hours') AS day,SUM(amount_fen) AS amount FROM console_refunds WHERE handled_at>=? AND handled_at<? GROUP BY day").all(start, end);
     const trend = days.map(day => ({ category: 'cashflow', day, incomeFen: Number(income.find(row => row.day === day)?.amount ?? 0), refundFen: Number(refunded.find(row => row.day === day)?.amount ?? 0) }));
     const netFen = Number(receipts?.onlineFen) + Number(receipts?.manualFen) - Number(refunds?.refundFen);
-    return detailSchema.parse({ item: { ...counts, ...receipts, ...refunds, netFen, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '未知：尚无成功备份回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '未知：尚无恢复任务回执' }, related: [...health, ...trend], history: [] });
+    return detailSchema.parse({ item: { ...counts, ...receipts, ...refunds, netFen, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '暂无回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '暂无回执' }, related: [...health, ...trend], history: [] });
   }
   private authorize(input: ConsoleAction, session: ConsoleSession): void {
     if (!permissions[input.action].includes(session.user.role)) throw new ServiceError(403, 'FORBIDDEN', '当前角色不能执行此操作');
-    if (sensitiveActions.has(input.action) && this.now() - session.verifiedAt >= 300000) throw new ServiceError(403, 'STEP_UP_REQUIRED', '请先在安全设置中完成二次验证');
+    if (sensitiveActions.has(input.action) && this.now() - session.verifiedAt >= 300000) throw new ServiceError(403, 'STEP_UP_REQUIRED', '需要二次验证');
   }
   operation(id: string, session: ConsoleSession): ConsoleResult {
     const row = this.db.prepare('SELECT result,state FROM console_operations WHERE id=? AND actor=?').get(id, session.user.id);
@@ -140,7 +140,7 @@ export class ConsoleService {
         try {
           // Keep payment receipt durable even if the subsequent delivery transaction fails.
           let result: ConsoleResult;
-          if (input.action === 'reconcile') { await channels.reconcile(input.id); result = { id: input.id, message: '查单已完成，请刷新订单查看实际付款与交付状态' }; }
+          if (input.action === 'reconcile') { await channels.reconcile(input.id); result = { id: input.id, message: '查单完成' }; }
           else if (input.action === 'alipay-refund') {
             // 退款请求先落库，渠道结果未确认时保持待确认，运营用新操作编号按原金额重提即复用同一 out_request_no。
             const request = this.service.prepareAlipayRefund(input.id, input.amountFen, input.reason, session.user.id);
@@ -167,24 +167,24 @@ export class ConsoleService {
       case 'create-order': {
         const order = this.service.createOrder({ reference: input.reference, customer: input.customer, customerType: input.customerType, quantity: input.quantity, kind: 'subscription', amountFen: input.amountFen, useUntil: input.useUntil, updatesUntil: input.useUntil });
         this.db.prepare('INSERT OR IGNORE INTO console_order_meta VALUES(?,?,?,?,?)').run(order.id, at, 'manual', input.reason, actor);
-        return success(order.id, '线下订单已创建，等待财务核款');
+        return success(order.id, '线下订单已创建，待核款');
       }
       case 'fulfill': this.service.fulfill(input.id, { amountFen: input.amountFen, paymentReference: input.paymentReference }); this.auth.audit(actor, 'manual-payment-method', input.id, input.paymentMethod, 'success', operationId); return success(input.id, '核款与发码已完成');
       case 'retry-delivery': this.service.retryDelivery(input.id, { reason: input.reason }); return success(input.id, '补交付已完成');
       case 'delivery-access': { const result = this.service.issueDeliveryAccess(input.id, { reason: input.reason }); return { id: input.id, message: '新的领取凭据已签发，旧凭据失效', secret: result.token, expiresAt: result.expiresAt }; }
       case 'revoke-delivery-access': this.service.revokeDeliveryAccess(input.id, { reason: input.reason }); return success(input.id, '领取凭据已撤销');
-      case 'reveal': return { id: input.id, message: '请仅向已核实的授权持有人交付', secret: this.service.consoleReveal(input.id) };
-      case 'set-expiry': { const before = this.service.consoleLicense(input.id).useUntil; this.service.setLicenseExpiry(input.id, input.useUntil, input.reason); this.auth.audit(actor, 'license.expiry-adjusted', input.id, `原截止：${before ?? '永久'}；新截止：${input.useUntil}；${input.reason}`, 'success', operationId); return success(input.id, '到期时间已更新；下次联网验证生效，已签发凭证不会立即失效'); }
-      case 'revoke': this.service.revoke(input.id, { reason: input.reason }); return success(input.id, '授权已撤销；已经开始的会话不会立即停止');
-      case 'migrate': { const result = this.service.migrate(input.id, { reason: input.reason }); return { id: input.id, message: '换机完成，旧码失效，新码尚未绑定', secret: result.code }; }
+      case 'reveal': return { id: input.id, message: '完整激活码', secret: this.service.consoleReveal(input.id) };
+      case 'set-expiry': { const before = this.service.consoleLicense(input.id).useUntil; this.service.setLicenseExpiry(input.id, input.useUntil, input.reason); this.auth.audit(actor, 'license.expiry-adjusted', input.id, `原截止：${before ?? '永久'}；新截止：${input.useUntil}；${input.reason}`, 'success', operationId); return success(input.id, '到期时间已更新，下次联网验证生效'); }
+      case 'revoke': this.service.revoke(input.id, { reason: input.reason }); return success(input.id, '授权已撤销');
+      case 'migrate': { const result = this.service.migrate(input.id, { reason: input.reason }); return { id: input.id, message: '换机完成，旧码已失效', secret: result.code }; }
       case 'grant': {
         const result = this.service.createGrant({ customer: input.customer, customerType: input.customerType, quantity: input.quantity, useUntil: input.useUntil }, `GRANT-${operationId}`);
         this.db.prepare('INSERT INTO console_order_meta VALUES(?,?,?,?,?)').run(result.id, at, input.purpose, input.reason, actor);
-        return success(result.id, '特殊授权已签发，不计入收款台账；在订单详情中查看授权');
+        return success(result.id, '特殊授权已签发');
       }
-      case 'create-user': { const result = this.auth.createUser(input.username, input.role); return { id: result.id, message: '请私下交付一次性开通凭据，24 小时内有效', secret: result.token }; }
-      case 'update-user': this.auth.updateUser(input.id, input.role, input.enabled); return success(input.id, '人员权限已更新，已有会话已撤销');
-      case 'reset-user': { const result = this.auth.resetUser(input.id); return { id: input.id, message: '认证已重置，原会话失效；请交付新的开通凭据', secret: result.token }; }
+      case 'create-user': { const result = this.auth.createUser(input.username, input.role); return { id: result.id, message: '开通凭据 24 小时内有效', secret: result.token }; }
+      case 'update-user': this.auth.updateUser(input.id, input.role, input.enabled); return success(input.id, '已更新，该人员需重新登录');
+      case 'reset-user': { const result = this.auth.resetUser(input.id); return { id: input.id, message: '认证已重置，请交付新的开通凭据', secret: result.token }; }
       case 'create-ticket': {
         this.order(input.id);
         if (input.licenseId && !this.db.prepare('SELECT id FROM licenses WHERE id=? AND (order_id=? OR id IN (SELECT license_id FROM license_renewals WHERE order_id=?))').get(input.licenseId, input.id, input.id)) throw new ServiceError(400, 'LICENSE_ORDER_MISMATCH', '授权不属于此订单');
@@ -205,14 +205,14 @@ export class ConsoleService {
         if (Date.parse(input.handledAt) > this.now()) throw new ServiceError(400, 'FUTURE_REFUND', '实际办理时间不能晚于当前时间');
         if (this.db.prepare('SELECT id FROM console_refunds WHERE reference=?').get(input.reference)) throw new ServiceError(409, 'REFUND_REFERENCE_USED', '退款凭证编号已经登记');
         this.db.prepare('INSERT INTO console_refunds VALUES(?,?,?,?,?,?,?)').run(randomUUID(), input.id, input.amountFen, input.reference, input.handledAt, input.reason, actor);
-        return success(input.id, '已人工登记退款；系统未调用退款渠道，授权需单独处理');
+        return success(input.id, '退款已登记');
       }
       case 'invoice': {
         this.order(input.id);
         if (input.state === 'issued' && !input.reference) throw new ServiceError(400, 'INVOICE_REFERENCE_REQUIRED', '已开票必须填写发票编号');
         if (input.state === 'issued' && this.db.prepare("SELECT id FROM console_invoices WHERE state='issued' AND reference=?").get(input.reference)) throw new ServiceError(409, 'INVOICE_EXISTS', '发票编号已登记');
         this.db.prepare('INSERT INTO console_invoices VALUES(?,?,?,?,?,?,?,?,?)').run(randomUUID(), input.id, input.state, input.buyer, input.taxId, input.reference, input.reason, actor, at);
-        return success(input.id, '开票处理记录已保存；系统未调用开票服务');
+        return success(input.id, '开票记录已保存');
       }
       case 'refund-review': {
         const { revoked } = this.service.reviewRefund(input.id, input.decision, input.reason, actor);
