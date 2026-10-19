@@ -65,6 +65,9 @@ class RecoveryTest(unittest.TestCase):
         self.now = 1800000000
         self.items = []
         self.posts = []
+        self.lapsed = []
+        self.queries = []
+        self.verdict = 'expired'
 
     def receipt(self, number, **updates):
         from datetime import datetime, timezone
@@ -76,6 +79,14 @@ class RecoveryTest(unittest.TestCase):
         return item
 
     def request(self, path, body=None):
+        if path == '/admin/orders/lapsed-payment-links':
+            return {'items': list(self.lapsed)}
+        if path.endswith('/reconcile'):
+            order_id = path.split('/')[3]
+            self.queries.append((order_id, body))
+            if self.verdict != 'pending':
+                self.lapsed.remove(order_id)
+            return {'id': order_id, 'state': self.verdict, 'paymentStatus': 'TRADE_NOT_EXIST', 'needsReview': False}
         if body is None:
             after = int(path.rsplit('=', 1)[1])
             remaining = [item for item in self.items if item['cursor'] > after]
@@ -92,7 +103,7 @@ class RecoveryTest(unittest.TestCase):
         self.receipt(3, lastError='RENEWAL_REVOKED')
         wechat = self.receipt(4, source='wechat')
         result = module.recover_batch(self.request, self.state, self.now)
-        self.assertEqual(result, {'scanned': 4, 'attempted': 2, 'delivered': 2, 'deferred': 0, 'needsReview': 1, 'manualSkipped': 1})
+        self.assertEqual(result, {'scanned': 4, 'attempted': 2, 'delivered': 2, 'deferred': 0, 'needsReview': 1, 'manualSkipped': 1, 'lapsedQueried': 0, 'lapsedSettled': 0})
         self.assertEqual([order for order, _ in self.posts], [eligible['orderId'], wechat['orderId']])
         self.assertIn('1/5', self.posts[0][1]['reason'])
         self.assertEqual(module.recover_batch(self.request, self.state, self.now + 3600)['attempted'], 0)
@@ -177,6 +188,60 @@ class RecoveryTest(unittest.TestCase):
 
         self.assertEqual(module.recover_batch(disconnected, self.state, self.now)['attempted'], 1)
         self.assertEqual(len(self.posts), 1)
+
+    def lapse(self, number):
+        order_id = f'87654321-1234-4234-8234-{number:012d}'
+        self.lapsed.append(order_id)
+        return order_id
+
+    def test_lapsed_unpaid_orders_are_queried_five_per_run(self):
+        orders = [self.lapse(number) for number in range(1, 8)]
+        first = module.recover_batch(self.request, self.state, self.now)
+        self.assertEqual((first['lapsedQueried'], first['lapsedSettled']), (5, 5))
+        self.assertEqual(self.queries, [(order_id, {}) for order_id in orders[:5]])
+        self.assertEqual(module.recover_batch(self.request, self.state, self.now + 60)['lapsedSettled'], 2)
+        self.assertEqual(module.recover_batch(self.request, self.state, self.now + 120)['lapsedQueried'], 0)
+
+    def test_still_pending_backs_off_and_stops_after_five_queries(self):
+        self.verdict = 'pending'
+        self.lapse(1)
+        moment = self.now
+        for attempt in range(1, 6):
+            self.assertEqual(module.recover_batch(self.request, self.state, moment)['lapsedQueried'], 1)
+            self.assertEqual(module.recover_batch(self.request, self.state, moment + 1)['lapsedQueried'], 0)
+            moment += 300 * 2 ** (attempt - 1)
+        self.assertEqual(module.recover_batch(self.request, self.state, moment + 86400)['lapsedQueried'], 0)
+        with contextlib.closing(module.sqlite3.connect(self.state)) as db:
+            self.assertEqual(db.execute('SELECT attempts, blocked, last_error FROM expiry_attempts').fetchone(), (5, 1, 'STILL_PENDING'))
+
+    def test_rejected_query_needs_review_and_bad_lapsed_page_queries_nothing(self):
+        self.lapse(1)
+
+        def rejected(path, body=None):
+            if path.endswith('/reconcile'):
+                self.queries.append(path)
+                raise module.AdminApiError(409, 'AMOUNT_MISMATCH')
+            return self.request(path, body)
+
+        module.recover_batch(rejected, self.state, self.now)
+        self.assertEqual(module.recover_batch(rejected, self.state, self.now + 86400)['lapsedQueried'], 0)
+        self.assertEqual(len(self.queries), 1)
+        self.lapsed = ['../../orders']
+        with self.assertRaises(module.AdminApiError):
+            module.recover_batch(self.request, Path(self.folder.name) / 'other.db', self.now)
+        self.assertEqual(len(self.queries), 1)
+
+    def test_network_failure_in_delivery_skips_lapsed_queries(self):
+        self.receipt(1)
+        self.lapse(1)
+
+        def disconnected(path, body=None):
+            if body is not None and not path.endswith('/reconcile'):
+                raise module.AdminApiError(503, 'NETWORK_ERROR')
+            return self.request(path, body)
+
+        self.assertEqual(module.recover_batch(disconnected, self.state, self.now)['lapsedQueried'], 0)
+        self.assertEqual(self.queries, [])
 
     def test_validate_entire_page_before_any_post(self):
         self.receipt(1)

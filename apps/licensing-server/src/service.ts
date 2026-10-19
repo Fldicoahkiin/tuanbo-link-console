@@ -302,6 +302,11 @@ export class LicensingService {
       this.transition(id, to, reason);
     });
   }
+  /** 支付宝付款期限已过一分钟以上仍待付款、无收款的订单，新近过期的在前；恢复任务逐单查单后由渠道结果关单、过期或交付。 */
+  lapsedPaymentLinks(): { items: string[] } {
+    const rows = this.db.prepare("SELECT o.id FROM orders o JOIN alipay_payment_links a ON a.order_id=o.id WHERE o.state='pending' AND a.expires_at<=? AND NOT EXISTS (SELECT 1 FROM payment_receipts p WHERE p.order_id=o.id) ORDER BY a.expires_at DESC LIMIT 100").all(this.now() - 60000);
+    return { items: rows.map(row => z.string().parse(row.id)) };
+  }
   /** 未生成任何付款入口且无收款的待付款订单（线下单）由运营关闭；有付款入口的须经渠道查单关闭。 */
   closeUnlinkedOrder(id: string): void {
     this.transaction(() => {

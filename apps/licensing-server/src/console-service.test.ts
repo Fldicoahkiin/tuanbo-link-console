@@ -205,6 +205,16 @@ it('线下订单可生成支付宝付款链接或直接关闭；有链接后只�
   await expect(s.execute({ action: 'close-order', id: unlinked.id!, reason: '重复关闭' })).rejects.toThrow('未生成付款链接');
   await expect(s.execute({ action: 'payment-link', id: unlinked.id!, reason: '关闭后付款' })).rejects.toThrow('已关闭');
 });
+it('付款期限过去一分钟以上仍未付款的支付宝订单交给恢复任务查单；已收款、未过期和线下单不列入', async () => {
+  const s = await setup(); const identity = { appId: '2026000000000001', sellerId: '2088000000000001' };
+  const order = (reference: string) => s.service.createOrder({ reference, customer: '客户', customerType: 'company', quantity: 1, kind: 'subscription', amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', updatesUntil: '2026-11-06T00:00:00Z' }).id;
+  const lapsed = order('lapsed'); const paid = order('paid'); const fresh = order('fresh'); order('offline');
+  s.service.prepareAlipayPayment(lapsed, identity.appId, identity.sellerId); s.service.prepareAlipayPayment(paid, identity.appId, identity.sellerId);
+  s.advance(15 * 60000 + 59000); expect(s.service.lapsedPaymentLinks().items).toEqual([]);
+  s.advance(1000); s.service.prepareAlipayPayment(fresh, identity.appId, identity.sellerId);
+  s.service.fulfill(paid, { amountFen: 80000, paymentReference: 'alipay:2026100622001' }, 'alipay', identity);
+  expect(s.service.lapsedPaymentLinks().items).toEqual([lapsed]);
+});
 it('待办筛选、操作日志对象名称与动作筛选、财务合计与导出', async () => {
   const s = await setup(); const granted = await s.execute(grant);
   const licenses = s.consoleService.detail('orders', granted.id!, s.login.session).related;

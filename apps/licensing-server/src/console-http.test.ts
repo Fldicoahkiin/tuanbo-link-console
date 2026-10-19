@@ -44,6 +44,9 @@ it('HTTPS 管理域名、会话、来源与 CSRF 校验不可绕过', async () =
   expect((await s.send('/console-api/logout', 'owner', {}, { origin: 'https://evil.example' })).status).toBe(403);
   expect((await s.send('/console-api/logout', 'owner', {}, { 'x-csrf-token': 'wrong' })).status).toBe(403);
   expect((await s.send('/console-api/overview', 'owner')).status).toBe(200);
+  // 恢复任务读取过期付款链接走管理令牌，不接受后台会话。
+  expect((await s.send('/admin/orders/lapsed-payment-links', 'owner')).status).toBe(401);
+  expect(await s.send('/admin/orders/lapsed-payment-links', undefined, undefined, { authorization: `Bearer ${'x'.repeat(32)}` })).toMatchObject({ status: 200, body: { items: [] } });
 });
 it('四类角色通过真实 HTTP 强制授权，列表不泄露码', async () => {
   const s = await setup(); const command = { operationId: randomUUID(), input: { action: 'grant', customer: '测试', customerType: 'company', quantity: 1, useUntil: '2026-11-06T00:00:00Z', purpose: 'gift', reason: '赠送' } };

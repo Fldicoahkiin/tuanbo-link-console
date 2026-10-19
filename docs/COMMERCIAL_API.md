@@ -99,6 +99,7 @@
 | POST `/admin/orders/:id/payment-link` | 同上，代码和收款配置已启用 | 空对象 `{}` | `id,amountFen,quantity,expiresAt,paymentUrl`；默认 503 未启用 |
 | POST `/admin/orders/:id/reconcile` | 同上，代码和收款配置已启用 | 空对象 `{}` | `id,state,paymentStatus,needsReview`；调用支付宝查单，可信已付结果幂等发码 |
 | GET `/admin/payment-exceptions?after=0` | 回环/运维隧道 + 管理员 Bearer | 非负整数游标，可省略 | 最多 100 条已收款未交付记录与 `nextCursor`，见下文 |
+| GET `/admin/orders/lapsed-payment-links` | 同上 | 无 | `{items}`：支付宝付款期限已过 1 分钟以上、仍待付款且无收款的订单 ID，最多 100 条，新近过期在前 |
 | POST `/admin/orders/:id/retry-delivery` | 同上 | `{"reason":"补发原因"}` | `{id,state}`；按已保存收款事实补交付，不发起扣款 |
 | POST `/admin/licenses/:id/revoke` | 同上 | `{"reason":"原因"}` | `{"revoked":true}` |
 | POST `/admin/licenses/:id/migrate` | 同上 | `{"reason":"原因"}` | `{"code":"TBA-…"}`，同一 license ID 换新码 |
@@ -326,6 +327,8 @@ sudo python3 /opt/tblink-licensing/payment-exceptions.py --retry-order <订单UU
 ```
 
 2026-09-29 增加 `--recover-batch` 自动恢复模式，配套 `tblink-delivery-recovery.service` / `.timer`。它只从上述受保护异常接口读取已核实的支付宝收款，至少等待 60 秒；仅对没有错误码或 `INTERNAL_ERROR` 的本地交付异常调用原补交付接口。每批最多 5 单，同一单最多 5 次，间隔按 60、120、240、480、960 秒递增；次数在请求前写入独立 SQLite 状态，重启或响应丢失不清零。续费撤销等业务错误、异常成功响应和耗尽次数均停止自动尝试，运营仍用原显式补发入口处理。
+
+2026-10-19 起，同一批次在交付恢复之后读取 `/admin/orders/lapsed-payment-links`，对付款链接已过期的未付款订单逐单调用 `/admin/orders/:id/reconcile`：渠道返回交易不存在则转为已过期，仍待付款则关闭原交易并关单，已付款则照常交付。每批最多查 5 单，同一单最多 5 次，间隔 300、600、1200、2400、4800 秒；渠道仍无结论或返回业务错误时停止自动查单，留给运营在订单详情手动查单。交付恢复遇到网络错误时本批不查单。部署时该定时任务与服务一同停止，查单不会在数据库快照比对期间写库。
 
 状态文件默认 `/var/lib/tblink-licensing/delivery-recovery.db`，权限 0600，仅保存订单 ID、尝试次数、下次时间、错误码与分页游标；拒绝把业务主库用作恢复状态库。进程文件锁避免重复运行，分页游标避免前一页故障订单阻塞后续订单。任务每次结束 60 秒后进入下一次调度，实际执行时间受 systemd 默认定时精度影响；授权服务停机时任务失败而不会擅自拉起它，日志只输出统计。
 
