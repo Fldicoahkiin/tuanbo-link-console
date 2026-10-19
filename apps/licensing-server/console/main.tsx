@@ -63,7 +63,7 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
       {busy && <p role="status" className="muted">正在读取…</p>}
       {route === 'overview' && overview && <>
         <div className="audience-summary"><div><span>累计客户</span><strong>{overview.item.customerCount ?? 0}<small>位</small></strong></div><div><span>已绑定授权</span><strong>{overview.item.boundLicenseCount ?? 0}<small>份</small></strong></div><p>客户按已交付订单的名称与类型去重，含内测与赠送；已绑定不代表在线。</p></div>
-        <section className="balance-summary" aria-label="收款概览"><div className="balance-primary"><p>累计确认收款 <span>人民币</span></p><strong>{display('totalFen', Number(overview.item.onlineFen ?? 0) + Number(overview.item.manualFen ?? 0))}</strong><small>线上与人工确认收款合计 · 不含赠送及内测</small></div><Fields row={Object.fromEntries(['onlineFen', 'manualFen', 'refundFen'].map(key => [key, overview.item[key] ?? 0]))} /></section>
+        <section className="balance-summary" aria-label="收款概览"><div className="balance-primary"><p>累计净收款 <span>人民币</span></p><strong>{display('netFen', overview.item.netFen ?? 0)}</strong><small>已扣除退款 · 不含赠送及内测</small></div><Fields row={Object.fromEntries(['onlineFen', 'manualFen', 'refundFen'].map(key => [key, overview.item[key] ?? 0]))} /></section>
         <RevenueTrend rows={overview.related.filter(row => row.category === 'cashflow')} /><div className="desk-columns"><section className="task-list"><div className="section-title"><h2>待办事项</h2><span>当前业务状态</span></div>{[
           { key: 'pendingOrders', route: 'orders', title: '待付款与核款', hint: '查看订单，核对实际到账情况' },
           { key: 'deliveryPending', route: 'exceptions', title: '待完成交付', hint: '已确认收款，尚未完成发码' },

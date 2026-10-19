@@ -77,6 +77,10 @@ it('全额原路退款：未确认时订单与授权不变；换新操作编号�
   expect(s.service.describeOrder(order.id).state).toBe('refunded'); expect(order.licenses().every(license => license.revoked)).toBe(true);
   expect(s.ledger(order.id)).toEqual([{ amount_fen: 160000, reference: `alipay-refund:${refunds[0]!.business.out_request_no}` }]);
   expect(s.exceptions()).toEqual([]);
+  // 工作台净收款扣除原路退款；趋势同日记一笔收款、一笔退款。
+  const dashboard = s.consoleService.overview();
+  expect(dashboard.item).toMatchObject({ onlineFen: 160000, refundFen: 160000, netFen: 0 });
+  expect(dashboard.related.find(row => row.category === 'cashflow' && row.day === '2026-10-06')).toMatchObject({ incomeFen: 160000, refundFen: 160000 });
   await expect(s.execute({ action: 'alipay-refund', id: order.id, amountFen: 1, reason: '再次退款' })).rejects.toThrow('已全额退款');
   expect(s.db.prepare("SELECT detail FROM audit WHERE target=? AND action='order.state-changed'").all(order.id).map(row => row.detail)).toContain('fulfilled->refunded:alipay:console-refund');
 });

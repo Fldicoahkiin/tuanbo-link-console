@@ -103,7 +103,8 @@ export class ConsoleService {
     const income = this.db.prepare("SELECT date(received_at,'+8 hours') AS day,SUM(amount_fen) AS amount FROM payment_receipts WHERE received_at>=? AND received_at<? GROUP BY day").all(start, end);
     const refunded = this.db.prepare("SELECT date(handled_at,'+8 hours') AS day,SUM(amount_fen) AS amount FROM console_refunds WHERE handled_at>=? AND handled_at<? GROUP BY day").all(start, end);
     const trend = days.map(day => ({ category: 'cashflow', day, incomeFen: Number(income.find(row => row.day === day)?.amount ?? 0), refundFen: Number(refunded.find(row => row.day === day)?.amount ?? 0) }));
-    return detailSchema.parse({ item: { ...counts, ...receipts, ...refunds, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '未知：尚无成功备份回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '未知：尚无恢复任务回执' }, related: [...health, ...trend], history: [] });
+    const netFen = Number(receipts?.onlineFen) + Number(receipts?.manualFen) - Number(refunds?.refundFen);
+    return detailSchema.parse({ item: { ...counts, ...receipts, ...refunds, netFen, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '未知：尚无成功备份回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '未知：尚无恢复任务回执' }, related: [...health, ...trend], history: [] });
   }
   private authorize(input: ConsoleAction, session: ConsoleSession): void {
     if (!permissions[input.action].includes(session.user.role)) throw new ServiceError(403, 'FORBIDDEN', '当前角色不能执行此操作');

@@ -10,10 +10,10 @@ export function RevenueTrend({ rows }: { rows: ConsoleRow[] }) {
   const x = (index: number) => 58 + index * 704 / Math.max(1, rows.length - 1);
   const y = (value: number) => 166 - value / maximum * 134;
   const points = (key: string) => rows.map((row, index) => `${x(index)},${y(Number(row[key]))}`).join(' ');
-  return <section className="revenue-trend" aria-label="近30天每日收款和人工登记退款">
+  return <section className="revenue-trend" aria-label="近 30 天每日收款和退款">
     <div className="section-title"><h2>收款趋势</h2><span>近 30 天 · 北京时间</span></div>
-    <div className="trend-readout" aria-live="polite"><span>{String(current.day)}</span><span className="income-key">确认收款 <strong>{money(Number(current.incomeFen))}</strong></span><span className="refund-key">人工登记退款 <strong>{money(Number(current.refundFen))}</strong></span></div>
-    <svg viewBox="0 0 790 200" role="img" aria-label="蓝线为每日确认收款，虚线为人工登记退款；逐日金额可在下方查询">
+    <div className="trend-readout" aria-live="polite"><span>{String(current.day)}</span><span className="income-key">收款 <strong>{money(Number(current.incomeFen))}</strong></span><span className="refund-key">退款 <strong>{money(Number(current.refundFen))}</strong></span></div>
+    <svg viewBox="0 0 790 200" role="img" aria-label="蓝线为每日收款，虚线为每日退款">
       {[0, .5, 1].map(fraction => <g key={fraction}><line x1="58" x2="762" y1={y(maximum * fraction)} y2={y(maximum * fraction)} stroke="#eceef1" /><text x="48" y={y(maximum * fraction) + 4} textAnchor="end">{(maximum * fraction / 100).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</text></g>)}
       <polyline points={points('incomeFen')} fill="none" stroke="#0067d9" strokeWidth="2" strokeLinejoin="round" />
       <polyline points={points('refundFen')} fill="none" stroke="#a66b39" strokeWidth="2" strokeDasharray="5 4" />

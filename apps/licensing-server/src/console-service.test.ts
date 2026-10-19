@@ -70,6 +70,7 @@ it('核款、退款上限及财务导出隔离', async () => {
   expect(csv).toContain("'=1+1"); expect(csv).not.toContain('TBA-'); expect(csv).not.toContain('客户');
   expect(s.consoleService.overview().item.manualFen).toBe(80000);
   expect(s.consoleService.overview().item.refundFen).toBe(70000);
+  expect(s.consoleService.overview().item.netFen).toBe(10000);
 });
 it('换机沿用旧租约等待并吊销旧码', async () => {
   const s = await setup(); const result = await s.execute(grant);

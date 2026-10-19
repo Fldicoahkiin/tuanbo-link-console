@@ -100,6 +100,8 @@ try {
       await dialog.getByLabel('购买方抬头').fill('浏览器验收客户'); await dialog.getByLabel('操作原因').fill('人工开票申请'); await dialog.getByRole('button', { name: '确认执行' }).click();
       await dialog.getByText('开票处理记录已保存；系统未调用开票服务').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
       await page.getByRole('button', { name: '财务记录', exact: true }).click(); await page.getByText('BROWSER-REFUND-1', { exact: true }).waitFor();
+      // 工作台大字为净收款：800 元收款扣除 80 元退款。
+      await page.getByRole('button', { name: '工作台', exact: true }).click(); await page.locator('.balance-primary strong', { hasText: /^¥720\.00$/ }).waitFor();
     }
     assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), true);
     await page.screenshot({ path: fileURLToPath(new URL(`${role}.png`, shots)), fullPage: true }); await context.close();
