@@ -6,6 +6,7 @@ import { pendingMa2Renames, confirmMa2RenameCommand, ma2RenameKey } from '@tb/co
 import { ma2RenameResultSchema, type Ma2RenameRequest, type Ma2RenameResult } from '@tb/schema';
 
 export type Ma2AutoSyncStatus = 'off' | 'waiting' | 'staged' | 'reading' | 'writing' | 'verified' | 'blocked';
+export type Ma2AutoSyncScope = 'all' | 'names';
 type State = { project: LinkProject | null; documentId: number; playing: boolean; editing?: boolean };
 export type Ma2AutoSyncDependencies = {
   state: () => State;
@@ -26,17 +27,17 @@ export class Ma2AutoSync {
   private busy = false;
   private writing = false;
   private confirmed = false;
-  private session: { connection: Ma2CatalogRequest; directory: Ma2Catalog['directory']; documentId: number } | null = null;
+  private session: { connection: Ma2CatalogRequest; directory: Ma2Catalog['directory']; documentId: number; scope: Ma2AutoSyncScope } | null = null;
   constructor(private readonly dependencies: Ma2AutoSyncDependencies) {}
 
-  start(connection: Ma2CatalogRequest, catalog: Ma2Catalog): void {
+  start(connection: Ma2CatalogRequest, catalog: Ma2Catalog, scope: Ma2AutoSyncScope = 'all'): void {
     if (this.busy) throw new Error('上一次同步尚未结束，请等待回读后启用');
     const state = this.dependencies.state();
     if (!state.project) throw new Error('请先打开工程');
     this.generation += 1;
     this.confirmed = false;
-    this.session = { connection: structuredClone(connection), directory: ma2CatalogSchema.parse(catalog).directory, documentId: state.documentId };
-    this.dependencies.changed('waiting', '编辑后自动同步已启用；控台侧修改请手动刷新');
+    this.session = { connection: structuredClone(connection), directory: ma2CatalogSchema.parse(catalog).directory, documentId: state.documentId, scope };
+    this.dependencies.changed('waiting', scope === 'names' ? '名称实时同步已启用；控台侧修改请手动刷新' : '编辑后自动同步已启用；控台侧修改请手动刷新');
   }
 
   stop(): void {
@@ -50,15 +51,20 @@ export class Ma2AutoSync {
     const state = this.dependencies.state();
     if (state.documentId !== session.documentId || !state.project) { this.stop(); return; }
     if (state.playing) {
-      const pending = ma2PendingChanges(state.project);
+      const pending = session.scope === 'names' ? [] : ma2PendingChanges(state.project);
       const count = pending.length + pendingMa2Renames(state.project).length;
       this.dependencies.changed(count ? 'staged' : 'waiting', count ? `${count} 项修改待提交；仅保存在本地，停止后核对同步` : '播放期间等待，停止后同步'); return;
     }
     if (state.editing) { this.dependencies.changed('waiting', '等待连续编辑结束'); return; }
-    let pending = ma2PendingChanges(state.project);
-    const unbound = state.project.rundown.filter(item => item.lighting && ma2AutoBindEvents(item.lighting).length);
+    let pending = session.scope === 'names' ? [] : ma2PendingChanges(state.project);
+    const unbound = session.scope === 'names' ? [] : state.project.rundown.filter(item => item.lighting && ma2AutoBindEvents(item.lighting).length);
     const renames = pendingMa2Renames(state.project);
-    if (!refreshRemote && !pending.length && !unbound.length && !renames.length) { this.dependencies.changed(this.confirmed ? 'verified' : 'waiting', this.confirmed ? '修改已写入并回读确认' : '实时同步已开启，等待修改'); return; }
+    if (!refreshRemote && !pending.length && !unbound.length && !renames.length) {
+      this.dependencies.changed(this.confirmed ? 'verified' : 'waiting', session.scope === 'names'
+        ? (this.confirmed ? '名称已写入控台并回读确认' : '名称实时同步已开启，等待改名')
+        : (this.confirmed ? '修改已写入并回读确认' : '实时同步已开启，等待修改'));
+      return;
+    }
     const stale = pending.find(change => {
       const project = state.project!;
       if (project.ma2ReadState?.pairings?.[change.target]?.status !== 'stale') return false;
@@ -99,6 +105,11 @@ export class Ma2AutoSync {
         this.dependencies.execute(session.documentId, confirmMa2RenameCommand(change));
         this.writing = false; this.confirmed = true;
         if (this.session !== session) { this.dependencies.changed('off', '实时同步已关闭；已发出的名称已回读确认'); return; }
+      }
+      if (session.scope === 'names') {
+        const outstanding = pendingMa2Renames(this.dependencies.state().project).length;
+        this.dependencies.changed(outstanding ? 'staged' : 'verified', outstanding ? '上一笔名称已确认，继续同步后续改名' : '名称已写入控台并回读确认');
+        return;
       }
       for (const item of unbound) {
         if (!current()) return;

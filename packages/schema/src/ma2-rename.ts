@@ -6,7 +6,9 @@ export const ma2RenameRecordSchema = z.object({
   endpoint: z.string().min(1), show: z.string().min(1),
   sequence: z.number().int().min(1).max(99999), kind: z.enum(['single', 'sequence']),
   cue: z.string().regex(/^\d+(?:\.\d{1,3})?$/),
-  confirmedName: z.string().max(512), name: ma2LabelSchema
+  // An undo frame may restore an originally unlabelled console object.
+  // Explicit user edits still pass ma2LabelSchema in queueMa2Rename.
+  confirmedName: z.string().max(512), name: z.union([z.literal(''), ma2LabelSchema])
 }).strict();
 export const ma2RenameRequestSchema = z.object({
   dataDirectory: z.string().max(4096), network: ma2NetworkTargetSchema.optional(),

@@ -1,8 +1,43 @@
 import { expect, it } from 'vitest';
-import { createLightingDocument, lightingDocumentSchema } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, lightingDocumentSchema, linkProjectSchema } from '@tb/schema';
 import { cueEventEntries } from './cue-event-view';
 import { cueIngredients, saveCueIngredients } from './LightingCueComposer';
 import { compileLightingNetworkActions, compileLightingPackets, moveLightingEffect, removeLightingEffects, LightingScheduler } from '@tb/core/link';
+import { ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
+
+it('空名称点位拖入控台素材，保存重开后仍从工程控台目录显示原名，组合名称与素材名称独立', () => {
+  const project = createEmptyLinkProject('素材名称验收');
+  project.schemaVersion = 2;
+  project.ma2MaterialLibrary = { version: 1, source: '192.0.2.1:30000', library: {
+    directory: { show: 'Show', generation: 'session', version: '3.7.0.5', entries: [] },
+    readAt: new Date().toISOString(), fixtureUsage: [], errors: [], sequences: [
+      { sequence: 294, name: 'bj 294', cues: [{ index: 1, number: '1.000', name: null }] },
+      { sequence: 346, name: 'love shot 346', cues: [{ index: 1, number: '0.500', name: null }, { index: 2, number: '2.500', name: '  控台副歌  ' }] }
+    ]
+  } };
+  const materials = [
+    { name: 'bj 294', sequence: 294, cue: '1', executor: '', delayMs: 0 },
+    { name: '控台副歌', sequence: 346, cue: '2.5', executor: '1.101', delayMs: 800 }
+  ];
+  const document = saveCueIngredients({ ...createLightingDocument(), outputMode: 'network' }, materials, '', 2000, 10000, 'point');
+  project.rundown = [{ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], lighting: document }];
+  const reopened = linkProjectSchema.parse(JSON.parse(JSON.stringify(project)));
+  const lighting = reopened.rundown[0]!.lighting!;
+  const library = ma2SequenceLibrary(reopened, lighting);
+  const entries = cueIngredients(lighting, 'point', library);
+  expect(entries.map(value => [value.name, value.sequenceName, value.cue])).toEqual([
+    ['bj 294', 'bj 294', '1'], ['  控台副歌  ', 'love shot 346', '2.5']
+  ]);
+  const renamed = saveCueIngredients(lighting, entries, '我的组合点位', 7000, 10000, 'point');
+  expect(cueIngredients(renamed, 'point', library)).toEqual(entries);
+  expect(compileLightingNetworkActions(renamed)).toEqual(compileLightingNetworkActions(lighting));
+  expect(renamed.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === 'point')).toMatchObject({ label: '我的组合点位', at: 2000 });
+  // A manually edited reference follows its actual Cue, rather than retaining the previous name.
+  const changed = saveCueIngredients(renamed, [{ ...entries[1]!, cue: '0.5', delayMs: 0 }], '我的组合点位', 7000, 10000, 'point');
+  expect(cueIngredients(changed, 'point', library)).toEqual([expect.objectContaining({ name: 'love shot 346', sequenceName: 'love shot 346', cue: '0.5' })]);
+  const updatedLibrary = library.map(sequence => sequence.sequence === 294 ? { ...sequence, originalName: '控台更新名称' } : sequence);
+  expect(cueIngredients(lighting, 'point', updatedLibrary)[0]?.name).toBe('控台更新名称');
+});
 
 it('移除所有素材保留空 Cue，重开后加新素材仅发送新目标并保留原时间和编号', () => {
   const original = saveCueIngredients({ ...createLightingDocument(), outputMode: 'network' }, ingredients, '点位', 2000, 10000, 'cue');

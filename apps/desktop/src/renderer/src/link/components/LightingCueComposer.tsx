@@ -6,9 +6,10 @@ import { lightingDocumentSchema, lightingTrackSchema, type LightingDocument, typ
 import { placeEffect } from './useLightingEffectStamp';
 import { LightingCuePreparation } from './LightingCuePreparation';
 import { CONSOLE_CUE_DRAG } from './lighting-material-drag';
+import { ma2ConsoleCuePoolName, ma2ConsoleSequenceName, ma2SequenceLibrary, type LibrarySequence } from '../view-models/ma2-sequence-library';
 
-export type CueIngredient = { name: string; sequence: number; cue: string; executor: string; delayMs: number; preparation?: Extract<LightingEvent, { kind: 'ma2' }>['preparation'] };
-export function cueIngredients(document: LightingDocument, eventId?: string): CueIngredient[] {
+export type CueIngredient = { name: string; sequenceName?: string; sequence: number; cue: string; executor: string; delayMs: number; preparation?: Extract<LightingEvent, { kind: 'ma2' }>['preparation'] };
+export function cueIngredients(document: LightingDocument, eventId?: string, library: readonly LibrarySequence[] = ma2SequenceLibrary(null, document)): CueIngredient[] {
   if (!eventId) return [];
   const map = new LightingTempoMap(document.tempos);
   const times = new Map(document.tracks.flatMap(track=>track.clips.flatMap(clip=>clip.events.map(event=>[event.id,lightingEventTime(clip,event,map)] as const))));
@@ -16,8 +17,12 @@ export function cueIngredients(document: LightingDocument, eventId?: string): Cu
   const first = Math.min(...events.filter(event=>event.id===eventId||event.effectGroupId===eventId).map(event=>times.get(event.id)!));
   return events.flatMap(event => {
     if (event.kind !== 'ma2' || !(event.id === eventId || event.effectGroupId === eventId) || !event.sequence || !event.cue) return [];
-    const source = document.templates.find(effect => { const binding = effect.track.cueStamp; return binding?.mode === 'fixed' && binding.sequence === event.sequence && binding.cue === event.cue && binding.executor === event.executor; });
-    return [{ name: source?.name ?? (event.label || `Cue ${event.cue}`), sequence: event.sequence, cue: event.cue, executor: event.executor, delayMs: times.get(event.id)! - first, ...(event.preparation ? { preparation: event.preparation } : {}) }];
+    const sequence = library.find(value => value.sequence === event.sequence);
+    const cue = sequence?.cues.find(value => Number(value.number) === Number(event.cue));
+    const source = document.templates.find(effect => { const binding = effect.track.cueStamp; return binding?.mode === 'fixed' && binding.sequence === event.sequence && Number(binding.cue) === Number(event.cue) && binding.executor === event.executor; });
+    // The event label belongs to the timeline point; material names come from the saved console catalog.
+    const name = sequence && cue ? ma2ConsoleCuePoolName(sequence, cue) : source?.name ?? (event.label || `Cue ${Number(event.cue)}`);
+    return [{ name, ...(sequence ? { sequenceName: ma2ConsoleSequenceName(sequence) } : {}), sequence: event.sequence, cue: event.cue, executor: event.executor, delayMs: times.get(event.id)! - first, ...(event.preparation ? { preparation: event.preparation } : {}) }];
   });
 }
 export function saveCueIngredients(document: LightingDocument, ingredients: CueIngredient[], name: string, ms: number, durationMs: number, eventId?: string): LightingDocument {
@@ -96,7 +101,7 @@ export function LightingCueComposer({ templateId, document, eventId, ms, duratio
     <div className="cue-composer-body"><div className="cue-content-heading"><span>包含素材</span><small>{ingredients.length}</small></div>
     <div className="cue-ingredients" aria-label="Cue 内容">{ingredients.map((entry, index) => <div className="cue-ingredient" key={index}>
       <div className="cue-ingredient-title"><Layers /><strong title={entry.name}>{entry.name}</strong><button disabled={disabled} aria-label={`移除素材 ${entry.name}`} onClick={() => { onIngredients(ingredients.filter((_, i) => i !== index)); setSaved(false); }}><X /></button></div>
-      <details><summary>序列 {entry.sequence} · Cue {Number(entry.cue)}{entry.delayMs ? ` · +${entry.delayMs} ms` : ''}</summary><div className="cue-ingredient-fields">
+      <details><summary>{entry.sequenceName && entry.sequenceName !== entry.name ? `${entry.sequenceName} · ` : ''}序列 {entry.sequence} · Cue {Number(entry.cue)}{entry.delayMs ? ` · +${entry.delayMs} ms` : ''}</summary><div className="cue-ingredient-fields">
         <label>序列<PropertyNumberInput label={`素材 ${index + 1} 序列`} min={1} max={99999} value={entry.sequence} disabled={disabled} onCommit={value => onIngredients(ingredients.map((item, i) => i === index ? { ...item, sequence: value } : item))} /></label>
         <label>Cue 编号<input aria-label={`素材 ${index + 1} Cue 编号`} key={entry.cue} defaultValue={entry.cue} disabled={disabled} onBlur={event => onIngredients(ingredients.map((item, i) => i === index ? { ...item, cue: event.target.value } : item))} /></label>
         <label>延迟 ms<PropertyNumberInput label={`素材 ${index + 1} 延迟`} min={0} max={86400000} value={entry.delayMs} disabled={disabled} onCommit={value => onIngredients(ingredients.map((item, i) => i === index ? { ...item, delayMs: value } : item))} /></label>
