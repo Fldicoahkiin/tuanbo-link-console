@@ -42,12 +42,16 @@ export class ConsoleAuth {
     const safeReason = redactConsoleText(reason);
     this.db.prepare('INSERT INTO console_audit VALUES(?,?,?,?,?,?,?,?)').run(randomUUID(), new Date(this.now()).toISOString(), actor, action, target, safeReason, result, requestId);
   }
+  private attempts(key: string): number {
+    this.db.prepare('DELETE FROM console_attempts WHERE until < ?').run(this.now());
+    return Number(this.db.prepare('SELECT count FROM console_attempts WHERE key=?').get(digest(key))?.count ?? 0);
+  }
+  private record(key: string): void {
+    this.db.prepare('INSERT INTO console_attempts VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1').run(digest(key), this.now() + 900000);
+  }
   limit(key: string, max = 10): void {
-    const now = this.now();
-    this.db.prepare('DELETE FROM console_attempts WHERE until < ?').run(now);
-    const row = this.db.prepare('SELECT count FROM console_attempts WHERE key=?').get(digest(key));
-    if (row && Number(row.count) >= max) throw new ServiceError(429, 'RATE_LIMITED', '认证尝试过多，请十五分钟后再试');
-    this.db.prepare('INSERT INTO console_attempts VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1').run(digest(key), now + 900000);
+    if (this.attempts(key) >= max) throw new ServiceError(429, 'RATE_LIMITED', '认证尝试过多，请十五分钟后再试');
+    this.record(key);
   }
   private account(id: string): Account {
     const value = this.db.prepare('SELECT * FROM console_users WHERE id=?').get(id);
@@ -118,7 +122,12 @@ export class ConsoleAuth {
     const [salt, hash] = (initial?.password ?? `unavailable:${'0'.repeat(128)}`).split(':');
     const key = await derive(password, salt!);
     const account = initial ? this.account(initial.id) : null;
-    if (!account || !account.enabled || !account.password || account.password !== initial?.password || !timingSafeEqual(key, Buffer.from(hash!, 'hex')) || !this.consumeCode(account, code, true)) {
+    const passwordValid = account !== null && account.enabled !== 0 && account.password !== null && account.password === initial?.password && timingSafeEqual(key, Buffer.from(hash!, 'hex'));
+    // 密码正确后的验证码失败按账号跨来源计数：不知道密码的人锁不住账号，知道密码的人也不能分散来源穷举验证码。
+    // 锁定期间与其他失败同样返回 401，不暴露密码是否正确。
+    const codeAttempts = `login-code:${initial?.id ?? ''}`;
+    if (!passwordValid || this.attempts(codeAttempts) >= 10 || !this.consumeCode(account, code, true)) {
+      if (passwordValid) this.record(codeAttempts);
       this.audit(account?.id ?? 'anonymous', 'auth.login', account?.id ?? '', '', 'denied', requestId);
       throw new ServiceError(401, 'INVALID_LOGIN', '账号、密码或验证码无效');
     }

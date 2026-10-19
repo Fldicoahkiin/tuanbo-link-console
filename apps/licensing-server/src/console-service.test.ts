@@ -36,6 +36,14 @@ it('一次性开通、TOTP 防重放、恢复码及会话时限', async () => {
   await expect(s.consoleService.auth.login('owner', 'a-secure-test-password', s.recovery.recoveryCodes[0]!, 'repeat')).rejects.toThrow('无效');
   s.advance(1800001); expect(() => s.consoleService.auth.session(recovered.token)).toThrow('登录');
 });
+it('知道密码也不能跨来源穷举验证码，锁定期间同样返回无效登录', async () => {
+  const s = await setup(); s.advance(30000);
+  const wrong = String((Number(s.code(s.first.id)) + 500000) % 1000000).padStart(6, '0');
+  for (let index = 0; index < 10; index++) await expect(s.consoleService.auth.login('owner', 'a-secure-test-password', wrong, 'guess')).rejects.toThrow('无效');
+  await expect(s.consoleService.auth.login('owner', 'a-secure-test-password', s.code(s.first.id), 'locked')).rejects.toThrow('无效');
+  s.advance(900001);
+  expect((await s.consoleService.auth.login('owner', 'a-secure-test-password', s.code(s.first.id), 'after')).session.user.role).toBe('owner');
+});
 it('特殊授权一码一机，不写入收款，重复提交不重复发码', async () => {
   const s = await setup(); const operationId = randomUUID(); const result = await s.execute(grant, s.login.session, operationId);
   await s.execute(grant, s.login.session, operationId);
