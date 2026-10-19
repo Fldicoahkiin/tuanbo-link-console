@@ -182,6 +182,9 @@ it('渠道退款通知进入异常队列且不自动撤销授权，人工登记�
   expect(detail.related.map(row => row.revoked)).toEqual([false]);
   await s.execute({ action: 'refund', id: order.id, amountFen: 80000, reference: 'manual-refund-1', handledAt: new Date(s.now()).toISOString(), reason: '财务登记' });
   expect(exceptions()).toEqual([order.id]);
+  // 渠道通知与人工登记的是同一笔，只扣一次；财务记录只剩登记行。
+  expect(s.consoleService.overview().item).toMatchObject({ refundFen: 80000, netFen: 0 });
+  expect(s.consoleService.list('finance', pageQuerySchema.parse({}), s.login.session).items.map(row => row.state)).toEqual(['人工登记退款']);
   await s.execute({ action: 'refund-review', id: order.id, decision: 'keep', reason: '客户申请退款，核对后保留授权至期满' });
   expect(exceptions()).toEqual([]);
   expect(s.consoleService.detail('orders', order.id, s.login.session).related.map(row => row.revoked)).toEqual([false]);

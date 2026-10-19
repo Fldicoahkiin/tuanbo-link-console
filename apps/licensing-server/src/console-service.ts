@@ -21,6 +21,10 @@ const orderProjection = `SELECT o.id,o.reference,json_extract(o.body,'$.customer
   (SELECT COALESCE(MAX(refund_fen),0) FROM refund_reviews WHERE order_id=o.id) AS reviewedRefundFen
   FROM orders o LEFT JOIN console_order_meta m ON m.order_id=o.id LEFT JOIN payment_receipts p ON p.order_id=o.id
   LEFT JOIN alipay_payment_links a ON a.order_id=o.id LEFT JOIN wechat_payment_links w ON w.order_id=o.id`;
+// 渠道已退而台账未登记的差额（支付宝商户后台直接退款只有渠道通知），按最近一次渠道退款时间记。
+const unledgeredRefunds = `SELECT x.id AS orderId,x.channelRefundFen-x.refundedFen AS amountFen,x.paymentReference AS reference,
+  COALESCE((SELECT MAX(received_at) FROM payment_events WHERE order_id=x.id AND refund_fen>0),(SELECT MAX(confirmed_at) FROM alipay_refunds WHERE order_id=x.id AND state='succeeded')) AS created
+  FROM (${orderProjection}) x WHERE x.channelRefundFen>x.refundedFen`;
 /** 由 HTTP 层注入的渠道调用；控制台只编排，不直接持有支付宝凭据。 */
 export type ConsoleChannels = {
   reconcile: (id: string) => Promise<unknown>;
@@ -56,7 +60,7 @@ export class ConsoleService {
     if (resource === 'tickets') return this.page(`SELECT t.*,o.reference AS orderReference FROM console_tickets t JOIN orders o ON o.id=t.order_id WHERE (t.id LIKE ? ESCAPE '\\' OR o.reference LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\') AND (?='' OR t.state=?) ORDER BY t.created DESC,t.id`, [term, term, term, query.state, query.state], query);
     if (resource === 'finance') {
       this.financial(session);
-      return this.page(`SELECT * FROM (SELECT id,order_id AS orderId,'refund' AS category,amount_fen AS amountFen,reference,handled_at AS created,CASE WHEN reference LIKE 'alipay-refund:%' THEN '支付宝原路退款' ELSE '人工登记退款' END AS state,reason,actor,NULL AS buyer,NULL AS taxId FROM console_refunds UNION ALL SELECT id,order_id,'invoice',NULL,reference,created,state,reason,actor,buyer,tax_id FROM console_invoices) WHERE (orderId LIKE ? ESCAPE '\\' OR reference LIKE ? ESCAPE '\\') ORDER BY created DESC,id`, [term, term], query);
+      return this.page(`SELECT * FROM (SELECT id,order_id AS orderId,'refund' AS category,amount_fen AS amountFen,reference,handled_at AS created,CASE WHEN reference LIKE 'alipay-refund:%' THEN '支付宝原路退款' ELSE '人工登记退款' END AS state,reason,actor,NULL AS buyer,NULL AS taxId FROM console_refunds UNION ALL SELECT 'channel:'||orderId,orderId,'refund',amountFen,reference,created,'支付宝渠道退款（未登记）',NULL,NULL,NULL,NULL FROM (${unledgeredRefunds}) UNION ALL SELECT id,order_id,'invoice',NULL,reference,created,state,reason,actor,buyer,tax_id FROM console_invoices) WHERE (orderId LIKE ? ESCAPE '\\' OR reference LIKE ? ESCAPE '\\') ORDER BY created DESC,id`, [term, term], query);
     }
     if (resource === 'audit') {
       if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '只有负责人可以查看全局日志');
@@ -90,7 +94,8 @@ export class ConsoleService {
   overview() {
     const counts = this.db.prepare(`SELECT SUM(CASE WHEN paymentStatus='pending' AND state='pending' THEN 1 ELSE 0 END) AS pendingOrders,SUM(CASE WHEN paymentStatus='confirmed' AND state IN ('pending','paid') THEN 1 ELSE 0 END) AS deliveryPending,SUM(CASE WHEN channelRefundFen>reviewedRefundFen THEN 1 ELSE 0 END) AS refundReview FROM (${orderProjection})`).get();
     const receipts = this.db.prepare("SELECT COALESCE(SUM(CASE WHEN source='manual' THEN amount_fen ELSE 0 END),0) AS manualFen,COALESCE(SUM(CASE WHEN source!='manual' THEN amount_fen ELSE 0 END),0) AS onlineFen FROM payment_receipts").get();
-    const refunds = this.db.prepare('SELECT COALESCE(SUM(amount_fen),0) AS refundFen FROM console_refunds').get();
+    // 每单退款取台账与渠道累计的较大值：渠道已退未登记的照样扣除，人工登记同一笔不重复扣。
+    const refunds = this.db.prepare(`SELECT COALESCE(SUM(MAX(refundedFen,channelRefundFen)),0) AS refundFen FROM (${orderProjection})`).get();
     const tickets = this.db.prepare("SELECT COUNT(*) AS openTickets FROM console_tickets WHERE state!='closed'").get();
     const expiring = this.db.prepare(`SELECT COUNT(*) AS expiring FROM licenses l JOIN orders o ON o.id=l.order_id WHERE l.revoked=0 AND COALESCE((SELECT use_until FROM license_term_overrides WHERE license_id=l.id),(SELECT MAX(use_until) FROM license_renewals WHERE license_id=l.id),json_extract(o.body,'$.useUntil'))>? AND COALESCE((SELECT use_until FROM license_term_overrides WHERE license_id=l.id),(SELECT MAX(use_until) FROM license_renewals WHERE license_id=l.id),json_extract(o.body,'$.useUntil'))<=?`).get(new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString());
     const health = this.db.prepare('SELECT name,state,checked_at AS checkedAt,detail FROM console_health ORDER BY name').all().map(row => rowSchema.parse(row));
@@ -101,7 +106,7 @@ export class ConsoleService {
     const start = new Date(Date.parse(`${days[0]}T00:00:00+08:00`)).toISOString();
     const end = new Date(Date.parse(`${today}T00:00:00+08:00`) + 86400000).toISOString();
     const income = this.db.prepare("SELECT date(received_at,'+8 hours') AS day,SUM(amount_fen) AS amount FROM payment_receipts WHERE received_at>=? AND received_at<? GROUP BY day").all(start, end);
-    const refunded = this.db.prepare("SELECT date(handled_at,'+8 hours') AS day,SUM(amount_fen) AS amount FROM console_refunds WHERE handled_at>=? AND handled_at<? GROUP BY day").all(start, end);
+    const refunded = this.db.prepare(`SELECT date(at,'+8 hours') AS day,SUM(amount) AS amount FROM (SELECT handled_at AS at,amount_fen AS amount FROM console_refunds UNION ALL SELECT created,amountFen FROM (${unledgeredRefunds})) WHERE at>=? AND at<? GROUP BY day`).all(start, end);
     const trend = days.map(day => ({ category: 'cashflow', day, incomeFen: Number(income.find(row => row.day === day)?.amount ?? 0), refundFen: Number(refunded.find(row => row.day === day)?.amount ?? 0) }));
     const netFen = Number(receipts?.onlineFen) + Number(receipts?.manualFen) - Number(refunds?.refundFen);
     return detailSchema.parse({ item: { ...counts, ...receipts, ...refunds, netFen, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '暂无回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '暂无回执' }, related: [...health, ...trend], history: [] });
