@@ -1617,7 +1617,18 @@ function registerAssetProtocol(): void {
 
 async function runQuitFlow(profileStore: SecureProfileStore, processManager: ExternalProcessManager): Promise<void> {
   recordQuitStep('退出前停止灯光试听');
-  await stopAuditionForQuit?.();
+  try { await stopAuditionForQuit?.(); }
+  catch (error) {
+    // Operator decision 2026-10-19: a console that cannot confirm Off (e.g. disconnected)
+    // must not keep the console app open for good; the operator chooses.
+    const reason = error instanceof Error ? error.message : String(error);
+    recordQuitStep('灯光试听停止未完成', { error: reason });
+    const options = { type: 'warning' as const, title: '灯光试听未能停止', message: '退出前没有确认控台已关闭本次试听。',
+      detail: `${reason}\n\n仍然退出时，控台上可能保留当前灯光状态，请到控台手动处理。`, buttons: ['返回软件', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true };
+    const choice = mainWindow && !mainWindow.isDestroyed() ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
+    if (choice.response !== 1) { recordQuitStep('返回软件处理灯光试听'); return; }
+    recordQuitStep('操作员选择仍然退出', { error: reason });
+  }
   recordQuitStep('退出前关闭正式音频与画面');
   await closeNativePlayer();
   const owned = (['p1', 'ma3d', 'ma2', 'obs'] as const)
