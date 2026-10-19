@@ -4,6 +4,7 @@ import { ma2NetworkStatusSchema, type LightingDocument, type Ma2NetworkTarget } 
 
 /** Explicit network output. Pausing or seeking invalidates unsent work; failures never retry. */
 export class LightingNetworkOutput {
+  private readonly started = new Map<string, import('@tb/schema').Ma2PlaybackAction>();
   private actions: LightingNetworkAction[] = [];
   private cursor = 0;
   private position = 0;
@@ -32,7 +33,7 @@ export class LightingNetworkOutput {
     this.actions = actions; this.locate(positionMs);
   }
   locate(positionMs: number): void {
-    this.cancelSession(); this.failure = null; this.pending = 0; this.tail = Promise.resolve();
+    this.cancelSession(); this.started.clear(); this.failure = null; this.pending = 0; this.tail = Promise.resolve();
     this.sessionId = this.target ? crypto.randomUUID() : null;
     this.position = positionMs;
     const next = this.actions.findIndex(entry => entry.atMs >= positionMs);
@@ -77,7 +78,15 @@ export class LightingNetworkOutput {
       const deadlineAt = Date.now() + 1000;
       this.tail = this.tail.then(async () => {
         if (this.sessionId !== sessionId || this.failure) return;
+        if (entry.releasePrevious) for (const [key, action] of this.started) {
+          if (this.sessionId !== sessionId) return;
+          const off = action.target === 'executor' ? { target: 'executor' as const, executor: action.executor, action: 'off' as const } : { target: 'sequence' as const, sequence: action.sequence, action: 'off' as const };
+          await this.api.playMa2Cue({ sessionId, network, action: off, deadlineAt }); this.started.delete(key);
+        }
+        const key = entry.action.target === 'executor' ? `executor:${entry.action.executor}` : `sequence:${entry.action.sequence}`;
+        if (entry.releaseOnlyIfStarted && !this.started.has(key)) return;
         await this.api.playMa2Cue({ sessionId, network, action: entry.action, deadlineAt });
+        if (this.sessionId === sessionId) { if (entry.action.action === 'off') this.started.delete(key); else this.started.set(key, entry.action); }
       }).catch((error: unknown) => {
         if (this.sessionId !== sessionId) return;
         this.failure = error instanceof Error ? error : new Error(String(error)); this.cancelSession();

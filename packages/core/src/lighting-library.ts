@@ -123,7 +123,7 @@ export function updateLibraryPlacementsCommand(entryId: string, revision: number
             if (item.referenceAudio && at >= item.referenceAudio.durationMs) throw new Error(`“${item.title}”更新后超出歌曲范围`);
             const original = group.originals[index];
             const beatAnchor = original?.beatAnchor === undefined ? undefined : map.msToBeat(at - (lighting.music?.firstBeatMs ?? 0));
-            events.push({ id: [...group.ids][index] ?? crypto.randomUUID(), kind: 'ma2', action: 'goto', label: member.name, at: at - clip.start, sequence: member.sequence, cue: member.cue, executor: member.executor, librarySource: { id: entryId, revision }, ...(beatAnchor === undefined ? {} : {beatAnchor}), ...(members.length > 1 ? { effectGroupId: groupId } : {}) });
+            events.push({ id: [...group.ids][index] ?? crypto.randomUUID(), kind: 'ma2', runMode: group.originals.find(value => value.kind === 'ma2')?.runMode, action: 'goto', label: member.name, at: at - clip.start, sequence: member.sequence, cue: member.cue, executor: member.executor, librarySource: { id: entryId, revision }, ...(beatAnchor === undefined ? {} : {beatAnchor}), ...(members.length > 1 ? { effectGroupId: groupId } : {}) });
           });
         }
         return { ...clip, events, duration: Math.max(clip.duration, ...events.map(event => event.at + (event.kind === 'note' ? event.duration : .001))) };

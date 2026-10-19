@@ -10,6 +10,7 @@ export type Ma2PendingChange = {
 /** These events are provisioned automatically when real-time synchronization is enabled. */
 export function ma2UnboundTracks(project: LinkProject | null): Array<{ itemId: string; title: string; trackId: string; name: string; count: number; reason: string }> {
   return project?.rundown.flatMap(item => {
+    if (item.lighting?.consoleSong) return [];
     const unresolved = new Set(item.lighting ? ma2AutoBindEvents(item.lighting) : []);
     return item.lighting?.tracks.flatMap(track => {
       const events = track.clips.flatMap(clip => clip.events).filter(event => (event.kind === 'ma2' || event.kind === 'ma2-fader') && unresolved.has(event));

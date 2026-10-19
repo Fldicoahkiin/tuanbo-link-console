@@ -38,13 +38,16 @@ public static class TblinkNetworkAddress {
       return DeleteUnicastIpAddressEntry(ref row);
     }
     uint status=CreateUnicastIpAddressEntry(ref row); if(status!=0) return status;
-    for(int i=0;i<25;i++) {
-      Thread.Sleep(200); status=GetUnicastIpAddressEntry(ref row);
+    uint failure=41002;
+    for(int i=0;i<60;i++) {
+      Thread.Sleep(250); status=GetUnicastIpAddressEntry(ref row);
       if(status==0 && row.Dad==4) return 0;
-      if(status!=0 || row.Dad==2) break;
+      if(status!=0) { failure=status; break; }
+      if(row.Dad==2) { failure=41001; break; }
+      if(row.Dad!=1) { failure=41003; break; }
     }
     uint cleanup=DeleteUnicastIpAddressEntry(ref row);
-    return cleanup!=0 ? 50000+cleanup : (status!=0 ? status : 183);
+    return cleanup!=0 ? 50000+cleanup : failure;
   }
 }`;
 
@@ -70,13 +73,19 @@ export async function changeNetworkAddress(plan: Ma2NetworkSetupPlan, remove: bo
   try { result = (await promisify(execFile)(await windowsPowerShellExecutable(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(launcher, 'utf16le').toString('base64')], { windowsHide: true })).stdout; }
   catch (error) { throw new Error('Windows 网卡配置授权未完成，请允许管理员授权后再点自动连接', { cause: error }); }
   const code = Number(result.trim());
-  if (code !== 0) throw new NetworkAddressChangeError(code);
+  if (!Number.isSafeInteger(code) || !result.trim()) throw new Error('Windows 网卡配置没有返回有效结果，请刷新网卡核对地址');
+  if (code !== 0) throw new NetworkAddressChangeError(code, plan.address);
 }
 
 export class NetworkAddressChangeError extends Error {
   readonly needsRestore: boolean;
-  constructor(code: number) {
-    super(code >= 50000 ? `新地址校验失败，自动清理未完成（Windows ${code - 50000}）；请点击“恢复原配置”` : code === 183 || code === 5010 ? '电脑地址已被使用或冲突检测未通过，请在手动设置中换一个电脑 IP' : `网卡配置未完成（Windows ${code}），请检查网卡状态与管理员授权；原有网络配置未被覆盖`);
+  constructor(code: number, address = '') {
+    super(code >= 50000 ? `新地址校验失败，自动清理未完成（Windows ${code - 50000}）；请点击“恢复原配置”`
+      : code === 183 || code === 5010 ? `电脑地址 ${address} 已经存在，并不代表局域网冲突。请刷新网卡，选择使用现有地址后连接。`
+      : code === 41001 ? `Windows 确认 ${address} 与局域网设备地址冲突，已撤回本次添加。请在手动地址中选择同段的其他地址。`
+      : code === 41002 ? `Windows 在 15 秒内尚未完成 ${address} 的地址检测，未确认冲突，已撤回本次添加。请检查网线和网卡状态后重新连接。`
+      : code === 41003 ? `Windows 未将 ${address} 标记为可用地址，已撤回本次添加。请刷新网卡检查地址状态。`
+      : `网卡配置未完成（Windows ${code}），请检查网卡状态与管理员授权；原有网络配置未被覆盖`);
     this.needsRestore = code >= 50000;
   }
 }

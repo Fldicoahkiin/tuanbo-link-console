@@ -27,7 +27,7 @@ export function timelineLayout(props: LayoutInput, contentWidth: number, pixelsP
   const audioRows = Math.max(1, props.audioEditor?.tracks.length ?? 0), audioHeight = props.audioRowHeight ?? 76;
   const rows = [`${timelineRulerHeight(props)}px`, ...Array.from({ length: audioRows }, () => `${audioHeight}px`), ...props.layers.map(() => '50px')];
   const lightingIndex = Math.min(props.layers.length, props.lighting?.document.laneIndex ?? 0);
-  const lightingRows = props.lighting && !props.lightingWorkspace ? Math.max(1, props.lighting.document.tracks.length) : 0;
+  const lightingRows = props.lighting && !props.lightingWorkspace ? 1 : 0;
   rows.splice(1 + audioRows + lightingIndex, 0, ...Array.from({ length: lightingRows }, () => '72px'));
   rows.push(props.lightingWorkspace ? 'minmax(0, 1fr)' : 'minmax(90px, 1fr)');
   const contentStyle: TimelineStyle = { width: contentWidth, gridTemplateRows: rows.join(' '), '--timeline-grid-size': `${gridSize}px` };

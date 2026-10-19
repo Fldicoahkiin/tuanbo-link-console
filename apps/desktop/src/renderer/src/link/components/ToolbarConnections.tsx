@@ -14,7 +14,7 @@ import { useConnectionCheckStore, type ConnectionCheck } from '../stores/connect
 import { midiConnectionTargets, usesNativeMidiOutput } from '../view-models/connection-targets';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 import { assertAudioOutputAvailable } from '../view-models/audio-output-route';
-import { obsConnectionStatus, midiConnectionStatus, lightingConnectionDestination } from '../view-models/connection-status';
+import { obsConnectionStatus, midiConnectionStatus, ma2EditingConnectionStatus, lightingConnectionDestination } from '../view-models/connection-status';
 
 type Row = { id: string; name: string; value: string; state: 'ready' | 'error' | 'checking' | 'idle' | 'skipped'; detail: string; category: SettingsCategory };
 const statusLabel = { checking: '连接中', ready: '已就绪', error: '待处理', skipped: '未启用' };
@@ -53,7 +53,7 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
     if (method !== 'network') return;
     let alive = true; let timer: ReturnType<typeof setTimeout> | undefined;
     const read = async (): Promise<void> => {
-      try { const status = ma2NetworkStatusSchema.parse(await desktop.getMa2NetworkStatus()); if (alive) { setNetwork(status); setNetworkError(null); timer = setTimeout(() => void read(), 3000); } }
+      try { const status = ma2NetworkStatusSchema.parse(await desktop.getMa2NetworkStatus()); if (alive) { setNetwork(status); setNetworkError(null); timer = setTimeout(() => void read(), 1000); } }
       catch (error) { if (alive) setNetworkError(toUserErrorMessage(error)); }
     };
     void read(); return () => { alive = false; clearTimeout(timer); };
@@ -120,7 +120,7 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
     { name: '音频', status: audioStatus, category: internal || !project ? 'audio' : 'source', ...(internal || !project ? { focus: 'audio-output' as const } : {}) },
     { name: '视频', status: row('obs'), category: 'obs', focus: 'obs-connection' },
     { name: '灯光', status: lightingStatus, ...lightingConnectionDestination },
-    { name: '编辑灯光', status: row('bridge'), category: 'ma2', focus: 'ma2-connection' }
+    { name: '编辑灯光', status: ma2EditingConnectionStatus({ method, network, networkError, local, bridge: checks.bridge }), category: 'ma2', focus: 'ma2-connection' }
   ];
   return <div className="toolbar-project-summary"><button type="button" className="topbar-details-trigger" aria-pressed={open} onClick={() => { setOpen(value => !value); setSelected(null); }}>详细</button>
     {statusHost ? createPortal(open ? <><div className="toolbar-connections" aria-label="全部连接状态">

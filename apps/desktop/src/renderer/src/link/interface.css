@@ -165,6 +165,8 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .toast-stack { pointer-events: none; }
 .toast-stack > div { display: grid; gap: 8px; }
 .toast-stack .toast { pointer-events: auto; }
+.toast-stack .toast.info { pointer-events: none; }
+.toast-stack .toast.info button { pointer-events: auto; }
 .toast-stack .toast { padding: 12px 14px; min-width: 0; border: 1px solid var(--separator); border-radius: var(--radius-panel); box-shadow: var(--shadow-popover); font-size: var(--text-control); line-height: 1.5; overflow-wrap: anywhere; }
 .toast-stack .toast.info { color: var(--text-primary); background: var(--surface-glass-strong); backdrop-filter: blur(20px) saturate(1.5); }
 .toast-stack .toast.error { color: var(--danger); background: var(--danger-soft); border-color: rgba(var(--danger-rgb), .22); }

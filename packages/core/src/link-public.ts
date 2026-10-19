@@ -52,6 +52,10 @@ export * from './lighting-library';
 export * from './lighting-empty-cue';
 export * from './ma2-auto-bind';
 export * from './lighting-library-classification';
+export * from './lighting-category-navigation';
+export * from './ma2-cue-attributes';
+export * from './ma2-attribute-filter';
+export * from './ma2-cue-delete';
 export * from './ma2-rename';
 export * from './lighting-music';
 export * from './music-analysis';
@@ -60,3 +64,5 @@ export { musicBeatSegments, saveMusicBeatSegments, musicBeatPrefix, detectedBeat
 
 export { recognizeMusicStructure, matchingMusicStructure, musicStructureSegments, acceptMusicStructure, editMusicStructure } from './music-structure';
 export { setAutomaticMusicAnalysisCommand } from './music-analysis-command';
+
+export * from './ma2-song-sequence';

@@ -47,7 +47,7 @@ export class Ma2Telnet {
         socket.setNoDelay(true); socket.setKeepAlive(true, 5000);
         socket.on('connect', () => { if (index === 1) { monitorReady = true; this.check(); } });
         socket.on('data', (data: Buffer) => { if (this.streams.includes(stream)) this.receive(stream, data); });
-        socket.on('error', (error: NodeJS.ErrnoException) => { if (this.streams.includes(stream)) this.fail(new Error(`MA2 ${index === 0 ? '命令' : '监视'}端口连接失败：${this.address.host}:${port}${this.address.localAddress ? `（电脑 ${this.address.localAddress}）` : ''}（${error.code ?? '网络错误'}）。${error.code === 'EADDRNOTAVAIL' ? '电脑专用地址已失效，请重新点击自动连接。' : '请检查 IP、端口和控台 Telnet 设置'}`)); });
+        socket.on('error', (error: NodeJS.ErrnoException) => { if (this.streams.includes(stream)) this.fail(new Error(`MA2 ${index === 0 ? '命令' : '监视'}端口连接失败：${this.address.host}:${port}${this.address.localAddress ? `（电脑 ${this.address.localAddress}）` : ''}（${error.code ?? '网络错误'}）。${error.code === 'EADDRNOTAVAIL' ? '电脑专用地址已失效，请重新点击自动连接。' : error.code === 'ECONNREFUSED' ? '目标拒绝了此端口，请检查控台 Telnet 是否为 Login Enabled、端口和防火墙；不需要反复更换电脑 IP。' : error.code === 'ENETUNREACH' || error.code === 'EHOSTUNREACH' ? '当前网卡无法到达控台，请检查插控台网线的网卡、网线及所选地址。' : '请检查网线、端口和控台 Telnet 设置。'}`)); });
         socket.on('close', () => { if (this.streams.includes(stream)) this.fail(new Error('MA2 网络连接已断开；未确认的操作不会自动重试')); });
       }
       await this.waitFor((text) => monitorReady && /\[[^\r\n]*\]>/.test(text) ? 'ready' : null, () => {
@@ -81,7 +81,7 @@ export class Ma2Telnet {
       throw error;
     } finally { this.connecting = false; }
   }
-  async command(line: string, match: (response: string) => string | null, beforeSend?: () => void, priority:'normal'|'stop'='normal'): Promise<string> {
+  async command(line: string, match: (response: string) => string | null, beforeSend?: () => void, priority:'normal'|'playback'|'stop'='normal'): Promise<string> {
     if (!this.socket || (this.current !== 'connected' && this.current !== 'authenticating')) throw new Error('MA2 尚未连接');
     if (/[\r\n\u0000]/.test(line) || Buffer.byteLength(line) > 4096) throw new Error('MA2 网络命令格式或长度无效');
     if (this.queuedCommands >= (priority==='stop'?64:32)) throw new Error('控台请求过多，请等待当前操作完成');
@@ -112,7 +112,7 @@ export class Ma2Telnet {
   private waitFor(match: Waiter['match'], timeoutMessage?: () => string): Promise<string> {
     if (this.waiter) return Promise.reject(new Error('MA2 网络请求尚未完成'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error(timeoutMessage?.() ?? (this.current === 'authenticating' ? 'MA2 登录未确认，请检查用户、密码及远程登录权限' : 'MA2 响应超时；操作未确认，不会自动重试'))), this.timeoutMs);
+      const timer = setTimeout(() => this.fail(new Error(timeoutMessage?.() ?? (this.current === 'authenticating' ? 'MA2 网络端口已连通，但登录未确认。请检查登录用户、密码以及 Telnet 的 Login Enabled 设置，无需修改电脑 IP' : 'MA2 响应超时；操作未确认，不会自动重试'))), this.timeoutMs);
       this.waiter = { match, resolve, reject, timer };
       this.check();
     });

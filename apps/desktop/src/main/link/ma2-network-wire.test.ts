@@ -61,6 +61,28 @@ it('上传期间开始播放时不能提交控台写入', async () => {
   const server = peer();
   await expect(new Ma2NetworkWire(server).exchange(id, 'SYNC', 9901, 'data', () => { throw new Error('播放已开始'); })).rejects.toMatchObject({ sent: false });
   expect(server.actions).not.toContain('run');
+  expect(server.actions.at(-1)).toBe('release');
+});
+it('没有取得请求时不释放其他客户端正在进行的传输', async () => {
+  const commands: string[] = [];
+  const connection = { command: (line: string): Promise<string> => {
+    commands.push(line);
+    return Promise.reject(new Error('Another network request is pending'));
+  } };
+  await expect(new Ma2NetworkWire(connection).exchange(id, 'SEQUENCE', 1, '', () => undefined)).rejects.toMatchObject({ sent: false });
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toContain("'begin'");
+});
+it('清理失败保留原始错误和发送状态，不重试清理或写入', async () => {
+  const server = peer({ failRun: true });
+  let releases = 0;
+  const connection = { command: (line: string, match: (text: string) => string | null): Promise<string> => {
+    if (line.includes("'release'")) { releases++; return Promise.reject(new Error('连接已断开')); }
+    return server.command(line, match);
+  } };
+  await expect(new Ma2NetworkWire(connection).exchange(id, 'SYNC', 9901, '', () => undefined)).rejects.toMatchObject({ sent: true, message: 'Disconnected after write；传输清理未确认：连接已断开' });
+  expect(releases).toBe(1);
+  expect(server.actions.filter(action => action === 'run')).toHaveLength(1);
 });
 it('网络传输沿用本机桥的对象验证与播放保护', async () => {
   let calls = 0;

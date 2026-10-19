@@ -3,26 +3,29 @@ import type { LightingDocument, ReferenceAudio } from '@tb/schema';
 import type { useAutomaticMusicAnalysis } from '../runtime/use-automatic-music-analysis';
 import type { MusicBeatSegments } from './useMusicBeatSegments';
 import { useDocumentStore } from '../stores/document-store';
+import { musicSegmentAt, musicSegmentTempoLabel } from '../view-models/music-segment-display';
+import { musicAnalysisHeading } from '../view-models/music-analysis-display';
 
 export type MusicBeatPanelProps = {
   beats: MusicBeatSegments; analysis: ReturnType<typeof useAutomaticMusicAnalysis>;
-  document: LightingDocument; source: ReferenceAudio | undefined; projectPath: string | null; playing: boolean;
+  document: LightingDocument; playheadMs: number; source: ReferenceAudio | undefined; projectPath: string | null; playing: boolean;
   onChange: (value: LightingDocument, label: string) => void; onSeek: (ms: number) => void; onClose: () => void;
 };
 const seconds = (ms: number): string => (ms / 1000).toFixed(2);
-export function MusicBeatPanel({ beats, analysis, source, projectPath, onSeek, onClose }: MusicBeatPanelProps): JSX.Element {
+export function MusicBeatPanel({ beats, analysis, source, projectPath, playheadMs, onSeek, onClose }: MusicBeatPanelProps): JSX.Element {
   const data = beats.data;
+  const current = musicSegmentAt(beats.points, playheadMs);
   const dirty = useDocumentStore(state => state.dirty);
-  const message = !source ? '先添加音乐' : !projectPath ? '先保存工程，随后自动分析' : beats.blocked ? '播放期间暂停分析操作' : beats.error || analysis.error || (beats.busy || analysis.job?.state === 'failed' ? analysis.job?.message : !analysis.status?.available ? analysis.status?.reason : null);
+  const message = !source ? '先添加音乐' : !projectPath ? '先保存工程，随后自动分析' : beats.error || analysis.error || (beats.busy || analysis.job?.state === 'failed' || analysis.job?.state === 'cancelled' ? analysis.job?.message : !analysis.status?.available ? analysis.status?.reason : beats.blocked ? '后台识别继续运行，停止播放后写入分段结果。' : current?.bpm === null ? '该段没有足够的可测拍点，无法计算 BPM；可以检查拍点或重新分析。' : null);
   return <section className="music-analysis-panel" aria-label="音乐节拍分段">
-    <header><strong className="music-bpm">{data?.bpm ?? '—'} BPM</strong><strong>音乐识别</strong><span>{data?.beatsPerBar ? `每小节 ${data.beatsPerBar} 拍` : '小节拍数未确定'}</span><button type="button" aria-label="关闭节拍分段" onClick={onClose}><X size={16} /></button></header>
+    <header><strong className="music-bpm" title={current?.name}>{musicAnalysisHeading(data, current, analysis.job, analysis.submitting, analysis.error)}</strong><strong>音乐分段</strong><span>{data?.beatsPerBar ? `每小节 ${data.beatsPerBar} 拍` : '小节拍数未确定'}</span><button type="button" aria-label="关闭节拍分段" onClick={onClose}><X size={16} /></button></header>
     <div className="music-beat-actions">
-      {beats.busy ? <button type="button" disabled={beats.blocked || analysis.submitting || analysis.job?.state === 'cancelling'} onClick={beats.cancel}>取消分析</button> : <button type="button" disabled={beats.blocked || !source || !projectPath || !analysis.status?.available} onClick={beats.start}><RefreshCw size={14} />{data || analysis.job ? '重新分析' : '分析音乐'}</button>}
+      {beats.busy ? <button type="button" disabled={analysis.submitting || analysis.job?.state === 'cancelling'} onClick={beats.cancel}>取消分析</button> : <button type="button" disabled={beats.blocked || !source || !projectPath || !analysis.status?.available} onClick={beats.start}><RefreshCw size={14} />{data || analysis.job ? '重新分析' : '分析音乐'}</button>}
       <button type="button" disabled={beats.blocked || beats.busy || data?.state !== 'ready'} onClick={beats.clear}><Trash2 size={14} />清除标记</button>
       <span>{data?.state === 'cleared' ? '标记已清除' : data ? `${beats.points.length} 段 · ${dirty ? '待保存' : '已保存到工程'}` : ''}</span>
     </div>
     {message ? <p role="status">{message}</p> : null}
-    {beats.points.length ? <div className="music-beat-overview music-recognized-sections" aria-label="自动音乐分段">{beats.points.map(point => <button key={point.id} type="button" aria-pressed={beats.selected?.id === point.id} onClick={() => { beats.select(point.id); onSeek(point.startMs); }}><i /><span>{point.name}</span>{point.bpm !== null ? <strong>{ `${point.bpm}${point.endBpm === null ? '' : ` → ${point.endBpm}`} BPM`}</strong> : null}<time>{seconds(point.startMs)}–{seconds(point.endMs)}s</time></button>)}</div> : <p className="music-beat-hint">{data?.state === 'ready' ? '未识别到稳定节拍或音乐段落' : beats.busy ? '正在识别速度、节拍与音乐结构…' : '分析完成后，节拍和段落直接显示在时间线上。'}</p>}
+    {beats.points.length ? <div className="music-beat-overview music-recognized-sections" aria-label="自动音乐分段">{beats.points.map(point => <button key={point.id} type="button" aria-pressed={beats.selected?.id === point.id} onClick={() => { beats.select(point.id); onSeek(point.startMs); }}><i /><span>{point.name}</span><strong>{musicSegmentTempoLabel(point)}</strong><time>{seconds(point.startMs)}–{seconds(point.endMs)}s</time></button>)}</div> : <p className="music-beat-hint">{data?.state === 'ready' ? '未识别到稳定节拍或音乐段落' : beats.busy ? '正在识别段落边界与各段速度…' : '分析完成后，节拍和段落直接显示在时间线上。'}</p>}
     {beats.selected ? <form key={`${beats.selected.id}:${beats.selected.name}:${beats.selected.startMs}:${beats.selected.endMs}`} className="music-segment-editor" onSubmit={event => { event.preventDefault(); if (!beats.selected) return; const fields = new FormData(event.currentTarget); beats.update({ ...beats.selected, name: event.currentTarget.querySelector<HTMLInputElement>('[name=name]')!.value.trim(), startMs: Number(fields.get('start')) * 1000, endMs: Number(fields.get('end')) * 1000 }); }}>
       <label>名称<input name="name" aria-label="段落名称" required maxLength={100} defaultValue={beats.selected.name} /></label>
       <label>开始（秒）<input name="start" aria-label="段落开始" type="number" required min="0" step="0.001" defaultValue={beats.selected.startMs / 1000} /></label>
@@ -30,7 +33,7 @@ export function MusicBeatPanel({ beats, analysis, source, projectPath, onSeek, o
       <button type="submit" disabled={beats.blocked || beats.busy}>保存修改</button><button type="button" disabled={beats.blocked || beats.busy} onClick={() => beats.selected && beats.remove(beats.selected.id)}><Trash2 size={14} />删除此段</button>
     </form> : null}
     <details className="analysis-technical-details"><summary>分析信息</summary>
-      <p>模型识别结果；不确定的位置可手动核对。不会移动或触发灯光 Cue。</p>
+      <p>按音乐变化划分段落，不判断主歌或副歌。BPM 根据该段拍点估算；变速显示起止速度，拍点不规则时显示本段中位数估算；没有足够拍点时显示无可测 BPM。</p>
       {analysis.status && analysis.status.devices.length > 1 ? <label>计算设备<select aria-label="音乐分析计算设备" value={analysis.device} disabled={beats.busy} onChange={event => { if (event.target.value === 'cpu' || event.target.value === 'cuda') analysis.setDevice(event.target.value); }}>{analysis.status.devices.map(device => <option key={device} value={device}>{device === 'cuda' ? 'GPU' : 'CPU'}</option>)}</select></label> : null}
       {analysis.job?.summary ? <p className="timeline-analysis-summary">{analysis.job.summary.elapsedSeconds.toFixed(1)} 秒{analysis.job.summary.cached ? ' · 缓存' : ''}</p> : null}
     </details>

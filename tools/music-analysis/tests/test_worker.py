@@ -25,6 +25,7 @@ def test_worker_isolates_library_stdout_and_preserves_unvalidated_gate(tmp_path,
         print("third-party progress")
         on_progress("beat-this-final0")
         assert args.device == "cpu"
+        assert args.engines == "rhythm-structure"
         return AnalysisRun(run_id=str(uuid4()), engine_fingerprint="a" * 64, device="cpu",
                            audio=AudioIdentity(source_sha256=request.source_sha256, pcm_sha256="b" * 64,
                                                sample_rate=48000, sample_count=48000, channels=2),

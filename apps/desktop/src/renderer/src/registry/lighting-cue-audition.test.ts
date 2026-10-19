@@ -48,6 +48,17 @@ it('Cue 网络调用失败直接返回原因，不自动重发或改走 MIDI', a
   await expect(f.audition.play(f.document, 'b', f.profile)).rejects.toThrow('控台没有找到');
   expect(f.play).toHaveBeenCalledTimes(1); expect(f.request).not.toHaveBeenCalled();
 });
+
+it('选中单独运行先结束受管试听，失败时不发送新 Cue', async () => {
+  const f = networkFixture();
+  const event = f.document.tracks[0]!.clips[0]!.events[1]!;
+  if (event.kind !== 'ma2') throw new Error('fixture'); event.runMode = 'independent';
+  await f.audition.play(f.document, 'b', f.profile);
+  expect(window.tbLink.controlMa2Audition).toHaveBeenCalledWith({ version: 1, action: 'stop' });
+  vi.mocked(window.tbLink.controlMa2Audition).mockResolvedValue({ version: 1, revision: 1, generation: 1, phase: 'failed', targets: [] });
+  await expect(f.audition.play(f.document, 'b', f.profile)).rejects.toThrow('上一组试听');
+  expect(f.play).toHaveBeenCalledTimes(1);
+});
 function fixture() {
   const document = createLightingDocument();
   document.tracks = [lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 1000, duration: 5000, timeLock: 'time', muted: false, events: [{ id: 'a', kind: 'ma2', action: 'goto', cue: '1', sequence: 1, executor: '2.101', label: 'A', at: 2000 }, { id: 'b', kind: 'ma2', action: 'goto', cue: '2', sequence: 1, executor: '2.101', label: 'B', at: 4000 }] }] })];

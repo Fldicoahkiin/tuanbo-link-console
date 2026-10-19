@@ -1,5 +1,18 @@
 import { expect, it } from 'vitest';
-import { obsConnectionStatus, midiConnectionStatus, lightingConnectionDestination } from './connection-status';
+import { obsConnectionStatus, midiConnectionStatus, ma2EditingConnectionStatus, lightingConnectionDestination } from './connection-status';
+
+it('编辑灯光跟随实际连接，不依赖一键检查；断开后不沿用旧成功结果', () => {
+  const input = { method: 'network' as const, network: { state: 'connected' as const, error: null }, networkError: null, local: { status: 'disconnected' as const, error: null }, bridge: undefined };
+  expect(ma2EditingConnectionStatus(input)).toMatchObject({ state: 'ready', value: '已连接' });
+  expect(ma2EditingConnectionStatus({ ...input, network: { state: 'disconnected', error: null }, bridge: { state: 'ready', detail: '旧检查通过', checkedAt: 1 } })).toMatchObject({ state: 'idle', value: '未连接' });
+  expect(ma2EditingConnectionStatus({ ...input, network: { state: 'authenticating', error: null } })).toMatchObject({ state: 'checking', value: '连接中' });
+  expect(ma2EditingConnectionStatus({ ...input, networkError: '状态读取失败' })).toMatchObject({ state: 'error', value: '连接异常' });
+  const bridgeFailure = ma2EditingConnectionStatus({ ...input, bridge: { state: 'error', detail: '读写检查失败', checkedAt: 1 } });
+  expect(bridgeFailure).toMatchObject({ state: 'error', value: '已连接' });
+  expect(bridgeFailure.detail).toContain('读写检查失败');
+  expect(ma2EditingConnectionStatus({ ...input, method: 'local', local: { status: 'ready', error: null } })).toMatchObject({ state: 'ready', value: '已连接' });
+  expect(ma2EditingConnectionStatus({ ...input, method: 'midi' })).toMatchObject({ state: 'skipped', value: '未启用' });
+});
 
 it('顶部视频只使用实际 OBS 连接，清单检查不能覆盖连接状态', () => {
   const base = { obsVersion: null, webSocketVersion: null, error: null };

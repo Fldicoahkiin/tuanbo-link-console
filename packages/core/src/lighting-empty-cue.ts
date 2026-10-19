@@ -18,6 +18,6 @@ export function placeEmptyLightingCue(document: LightingDocument, id: string, ms
     id: crypto.randomUUID(), name: 'Cue 点位', start: 0, duration: durationMs, timeLock: 'time' as const, muted: false, events: []
   };
   const updated = { ...track, clips: [...track.clips.filter(entry => entry.id !== clip.id), { ...clip, duration: Math.max(clip.duration, ms + 1),
-    events: [...clip.events, { id, kind: 'empty-cue' as const, at: ms, label }] }] };
+    events: [...clip.events, { id, kind: 'empty-cue' as const, at: ms, label, ...((previous?.event.kind === 'ma2' || previous?.event.kind === 'empty-cue') && previous.event.runMode ? { runMode: previous.event.runMode } : {}) }] }] };
   return lightingDocumentSchema.parse({ ...base, version: 2, tracks: [...base.tracks.filter(entry => entry.id !== track.id), updated] });
 }

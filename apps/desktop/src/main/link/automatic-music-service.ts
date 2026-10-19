@@ -11,6 +11,7 @@ const pending = new Set<AutomaticMusicJob['state']>(['queued', 'checking', 'runn
 const stageNames: Record<Extract<AutomaticMusicWorkerEvent, { type: 'progress' }>['stage'], string> = {
   'verify-assets': '校验离线模型', 'decode-48000-stereo': '解码实际播放音频',
   'beat-this-final0': '识别节拍 · 1/3', 'beat-this-final1': '识别节拍 · 2/3', 'beat-this-final2': '识别节拍 · 3/3',
+  'audio-structure': '分析声音变化并分段',
   'all-in-one-harmonix-all': '识别音乐结构', 'cached-research-only': '读取已校验缓存', 'completed-research-only': '整理分析诊断'
 };
 
@@ -19,7 +20,6 @@ export class AutomaticMusicService {
   private readonly jobs = new Map<string, Job>();
   private active: Job | null = null;
   private completion: Promise<void> | null = null;
-  private performanceActive = false;
   private closed = false;
   constructor(private readonly projects: Pick<LinkProjectService, 'resolveReferenceAudio'>,
     private readonly process: Pick<AutomaticMusicProcess, 'run' | 'cancel'>,
@@ -29,7 +29,6 @@ export class AutomaticMusicService {
 
   enqueue(input: AutomaticMusicRequest): AutomaticMusicJob {
     if (this.closed) throw new Error('音乐识别服务已关闭');
-    if (this.performanceActive) throw new Error('演出正在运行，停止后再开始音乐识别');
     const request = automaticMusicRequestSchema.parse(input);
     const duplicate = [...this.jobs.values()].find(job => pending.has(job.status.state) && job.request.projectPath === request.projectPath && job.request.source.sha256 === request.source.sha256 && job.request.source.durationMs === request.source.durationMs && job.request.source.relativePath === request.source.relativePath && job.request.device === request.device);
     if (duplicate) return automaticMusicJobSchema.parse(duplicate.status);
@@ -63,18 +62,8 @@ export class AutomaticMusicService {
     } else this.update(job, { state: 'cancelled', message: '已取消' });
   }
 
-  async setPerformanceActive(active: boolean): Promise<void> {
-    this.performanceActive = active;
-    if (!active) return; // Leaving a show never resumes a heavy task automatically.
-    for (const job of this.jobs.values()) if (job.status.state === 'queued') this.update(job, { state: 'paused', message: '演出期间暂停，结束后可手动恢复' });
-    if (this.active && ['checking', 'running'].includes(this.active.status.state)) {
-      this.update(this.active, { state: 'pausing', message: '演出已开始，正在协作暂停识别' });
-      await this.process.cancel(this.active.status.taskId);
-    }
-  }
-
   resume(taskId: string): void {
-    if (this.closed || this.performanceActive) throw new Error('请停止演出后恢复音乐识别');
+    if (this.closed) throw new Error('音乐识别服务已关闭');
     const job = this.jobs.get(taskId); if (!job || job.status.state !== 'paused') throw new Error('该音乐识别任务尚未暂停完成');
     this.update(job, { state: 'queued', stage: null, message: '等待重新开始分析' }); this.drain();
   }
@@ -90,7 +79,7 @@ export class AutomaticMusicService {
   }
 
   private drain(): void {
-    if (this.closed || this.performanceActive || this.active) return;
+    if (this.closed || this.active) return;
     const next = [...this.jobs.values()].find(job => job.status.state === 'queued'); if (!next) return;
     this.active = next; this.completion = this.run(next);
   }
@@ -105,11 +94,11 @@ export class AutomaticMusicService {
       const result = await this.process.run({ version: 1, task_id: request.taskId, device: request.device,
         audio: this.projects.resolveReferenceAudio(request.projectPath, request.source.relativePath), source_sha256: request.source.sha256,
         bundle: this.configuration.bundle, ffmpeg: this.configuration.ffmpeg, cache: join(this.configuration.root, 'cache'),
-        output: join(directory, crypto.randomUUID()), cancel_file: join(directory, `${crypto.randomUUID()}.cancel`) });
+        output: join(directory, crypto.randomUUID()), cancel_file: join(directory, `${crypto.randomUUID()}.cancel`) }, Math.min(3_600_000, Math.max(240_000, request.source.durationMs * 8 + 60_000)));
       if (this.interrupted(job)) return;
       const candidates = automaticMusicCandidates(result);
       if (Math.abs(candidates.durationMs - request.source.durationMs) > 50) throw new Error('音源长度已改变，请重新导入当前音乐后分析');
-      this.update(job, { state: 'completed', candidates, message: candidates.items.length ? '分析完成，选择结果后应用到时间线' : '未检测到节拍或段落，请检查音源是否为静音',
+      this.update(job, { state: 'completed', candidates, message: candidates.items.length ? '音乐分析完成' : '未检测到节拍或段落，请检查音源是否为静音',
         summary: { runId: result.run_id, durationMs: result.audio.sample_count / result.audio.sample_rate * 1000,
           elapsedSeconds: result.timings.total_seconds, cached: result.timings.cached, publication: 'not-validated', visibleResults: candidates.items.length } });
     } catch (error) {

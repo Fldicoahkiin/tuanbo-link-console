@@ -11,6 +11,32 @@ from scipy.signal import find_peaks
 from contracts import MusicLabels, Section
 
 
+def rhythm_sections(audio: np.ndarray, sample_rate: int, models: list[MusicLabels]) -> MusicLabels:
+    """Use a continuous supported beat clock and acoustic changes, without vocal separation."""
+    from bisect import bisect_left
+
+    if len(models) != 3:
+        raise ValueError("分段需要完整的三个节拍模型结果")
+
+    def nearest(points: list[float], at: float) -> float:
+        index = bisect_left(points, at)
+        return min(points[max(0, index - 1):index + 1], key=lambda value: abs(value - at), default=float("inf"))
+
+    def agreement(a: list[float], b: list[float]) -> float:
+        return (sum(abs(nearest(b, at) - at) <= .07 for at in a)
+                + sum(abs(nearest(a, at) - at) <= .07 for at in b)) / max(1, len(a) + len(b))
+
+    reference = max(models, key=lambda model: sum(agreement(model.beats, other.beats) for other in models))
+    beats = []
+    for at in reference.beats:
+        votes = sorted(value for model in models if abs((value := nearest(model.beats, at)) - at) <= .07)
+        point = votes[len(votes) // 2] if len(votes) >= 2 else at
+        if not beats or point > beats[-1]:
+            beats.append(point)
+    duration = len(audio) / sample_rate
+    return refine_sections(audio, sample_rate, MusicLabels(beats=beats, sections=[Section(start=0., end=duration, label="section")]))
+
+
 def feature_boundaries(features: np.ndarray, edges: np.ndarray) -> list[tuple[float, float]]:
     """Compare two beats on each side; require a sustained feature discontinuity."""
     if features.shape[1] < 6:

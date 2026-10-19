@@ -18,7 +18,7 @@ export const automaticMusicRunSchema = z.object({
   version: z.literal(1), run_id: z.string().uuid(), engine_fingerprint: sha256, device: z.enum(['cpu', 'cuda']),
   audio: z.object({ source_sha256: sha256, pcm_sha256: sha256, sample_rate: z.literal(48000), sample_count: z.number().int().positive().safe(), channels: z.literal(2) }).strict(),
   timings: z.object({ total_seconds: seconds, decode_seconds: seconds, engine_seconds: z.record(z.string().min(1).max(100), seconds), cached: z.boolean() }).strict(),
-  diagnostics: z.object({ 'beat-this-final0': automaticMusicLabelsSchema, 'beat-this-final1': automaticMusicLabelsSchema, 'beat-this-final2': automaticMusicLabelsSchema, 'all-in-one': automaticMusicLabelsSchema, 'silence-guard': automaticMusicLabelsSchema }).partial().strict(),
+  diagnostics: z.object({ 'beat-this-final0': automaticMusicLabelsSchema, 'beat-this-final1': automaticMusicLabelsSchema, 'beat-this-final2': automaticMusicLabelsSchema, 'all-in-one': automaticMusicLabelsSchema, 'audio-structure': automaticMusicLabelsSchema, 'silence-guard': automaticMusicLabelsSchema }).partial().strict(),
   publication: z.literal('not-validated'), enabled_capabilities: z.array(z.never()).length(0)
 }).strict().superRefine((run, context) => {
   const duration = run.audio.sample_count / run.audio.sample_rate;
@@ -28,13 +28,13 @@ export const automaticMusicRunSchema = z.object({
   }
   const keys = Object.keys(run.diagnostics);
   const silence = keys.length === 1 && keys[0] === 'silence-guard';
-  const full = ['beat-this-final0', 'beat-this-final1', 'beat-this-final2', 'all-in-one'].every(key => keys.includes(key)) && !keys.includes('silence-guard');
+  const full = ['beat-this-final0', 'beat-this-final1', 'beat-this-final2'].every(key => keys.includes(key)) && ['all-in-one', 'audio-structure'].filter(key => keys.includes(key)).length === 1 && !keys.includes('silence-guard');
   if (!silence && !full) context.addIssue({ code: 'custom', message: '自动音乐分析缺少完整模型阶段' });
 });
 
 const envelope = z.object({ version: z.literal(1), taskId: z.string().uuid() });
 export const automaticMusicWorkerEventSchema = z.discriminatedUnion('type', [
-  envelope.extend({ type: z.literal('progress'), stage: z.enum(['verify-assets', 'decode-48000-stereo', 'beat-this-final0', 'beat-this-final1', 'beat-this-final2', 'all-in-one-harmonix-all', 'cached-research-only', 'completed-research-only']) }).strict(),
+  envelope.extend({ type: z.literal('progress'), stage: z.enum(['verify-assets', 'decode-48000-stereo', 'beat-this-final0', 'beat-this-final1', 'beat-this-final2', 'all-in-one-harmonix-all', 'audio-structure', 'cached-research-only', 'completed-research-only']) }).strict(),
   envelope.extend({ type: z.literal('result'), result: automaticMusicRunSchema }).strict(),
   envelope.extend({ type: z.literal('cancelled') }).strict(),
   envelope.extend({ type: z.literal('error'), message: z.string().min(1).max(16_384) }).strict()

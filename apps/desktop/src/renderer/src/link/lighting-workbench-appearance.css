@@ -59,6 +59,21 @@
 .ma2-read-progress > div { display: flex; justify-content: space-between; gap: 16px; font-size: var(--text-control); }
 .ma2-read-progress > div span, .ma2-read-progress small { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .ma2-read-progress progress { width: 100%; height: 8px; accent-color: var(--accent-fill); }
+.ma2-read-progress { flex-shrink: 0; }
+.ma2-read-progress > div { flex-wrap: wrap; }
+.music-progress-compact { display: inline-flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; }
+.music-progress-compact progress { width: 48px; height: 6px; accent-color: var(--accent-fill); }
+.music-analysis-progress strong { overflow-wrap: anywhere; }
+.sidebar-task-progress { display: grid; gap: 8px; padding: 8px; flex-shrink: 0; }
+.sidebar-task-progress:empty { display: none; }
+.sidebar-task-progress .ma2-read-progress { padding: 8px; gap: 5px; background: transparent; border-color: var(--separator); }
+.sidebar-task-progress .ma2-read-progress > div { display: grid; gap: 4px; font-size: var(--text-caption); }
+.sidebar-task-progress :is(p, small) { margin: 0; font-size: var(--text-caption); line-height: 1.5; overflow-wrap: anywhere; }
+.sidebar-task-progress details { font-size: var(--text-caption); color: var(--text-secondary); }
+.sidebar-task-progress details p { max-height: 120px; overflow: auto; margin-top: 6px; }
+.sidebar-task-progress .attribute-read-actions { display: grid; gap: 5px; padding: 0; }
+.sidebar-task-progress .attribute-read-actions button { width: 100%; min-height: 28px; padding: 5px 8px; border: 1px solid var(--separator); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-primary); font: inherit; font-size: var(--text-caption); }
+.sidebar-task-progress .attribute-read-actions small { display: none; }
 .ma2-catalog-settings .ma2-read-progress { max-width: 640px; margin-top: 12px; }
 .lighting-effect-dock .effect-binding-form, .lighting-effect-dock .effect-import-dialog, .lighting-effect-dock .lighting-tools-dialog { width: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; box-shadow: none; border-radius: 0; background: transparent; }
 .lighting-effect-dock .effect-binding-form { display: flex; flex-direction: column; gap: 12px; }
@@ -207,7 +222,7 @@
 .cue-ingredients td button { padding: 4px; min-height: 28px; background: transparent; border: 0; }
 .cue-ingredients .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 
-.lighting-workbench-nav { display: flex; flex-direction: column; gap: 4px; width: 100%; min-height: 0; padding: 8px; overflow-y: auto; }
+.lighting-workbench-nav { display: flex; flex-direction: column; gap: 4px; width: 100%; min-height: 0; padding: 8px; overflow-y: auto; scrollbar-gutter: stable; }
 .lighting-workbench-nav button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px; padding: 8px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
 .lighting-workbench-nav svg { width: 16px; height: 16px; flex-shrink: 0; }
 .lighting-workbench-nav button[aria-current=page] { background: var(--accent-soft); color: var(--accent); }

@@ -23,14 +23,15 @@ test('MA2 设置分组及大量搜索结果保持紧凑', async ({}, info) => {
     const method = page.getByLabel('MA2 连接方式', { exact: true });
     await method.selectOption('local');
     await page.screenshot({ path: info.outputPath('ma2-local-top.png') });
-    await page.locator('.ma2-advanced-settings > summary').click();
+    await page.getByText('歌曲导入与同步', { exact: true }).click();
+    await page.locator('.ma2-catalog-settings > .ma2-advanced-settings > summary').click();
     await page.getByRole('button', { name: '启用编辑后自动同步', exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath('ma2-operation-groups.png') });
     await method.selectOption('network');
     await page.locator('.ma2-network-settings > .ma2-advanced-settings > summary').click();
     await expect(page.getByLabel('MA2 登录用户', { exact: true })).toHaveValue('administrator');
     await expect(page.getByLabel('MA2 登录密码', { exact: true })).toHaveValue('admin');
-    await page.getByRole('button', { name: '搜索局域网控台', exact: true }).click();
+    await page.getByRole('button', { name: '搜索控台', exact: true }).click();
     const results = page.getByLabel('MA2 搜索结果', { exact: true });
     await expect(results.locator('tbody tr')).toHaveCount(215);
     await results.getByLabel('显示待确认地址').uncheck();
@@ -61,6 +62,7 @@ test('MA2 设置分组及大量搜索结果保持紧凑', async ({}, info) => {
       ipcMain.handle('link:ma2-network-setup-state', () => ({ adapters: [adapter], additions: [] }));
       ipcMain.removeHandler('link:ma2-network-setup-plan');
       ipcMain.handle('link:ma2-network-setup-plan', () => ({ id: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb', adapter, host: settings.host, address: '10.39.12.4', prefix: 24, needsChange: false, message: '使用测试网卡' }));
+      ipcMain.removeHandler('link:ma2-network-setup-apply'); ipcMain.handle('link:ma2-network-setup-apply', () => ({adapters:[adapter],additions:[]}));
       ipcMain.removeHandler('link:ma2-network-save');
       ipcMain.handle('link:ma2-network-save', (_event, payload: { password?: string; settings: { username: string } }) => {
         if (payload.password !== 'admin' || payload.settings.username !== 'administrator') throw new Error('默认凭证未提交');
@@ -72,9 +74,9 @@ test('MA2 设置分组及大量搜索结果保持紧凑', async ({}, info) => {
         return { ...status, error: 'MA2 监视端口连接失败：10.39.12.3:30001（ECONNREFUSED）' };
       });
     });
-    await page.getByRole('button', { name: '保存并连接', exact: true }).click();
+    await page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ }).click();
     await expect(page.getByText('正在连接 10.39.12.3:30000，并验证登录…', { exact: true })).toBeVisible();
     await expect(page.locator('.ma2-network-settings [role="alert"]')).toContainText('30001（ECONNREFUSED）');
-    await expect(page.getByRole('button', { name: '保存并连接', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ })).toBeEnabled();
   } finally { await app.close(); }
 });

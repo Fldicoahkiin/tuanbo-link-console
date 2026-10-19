@@ -39,9 +39,10 @@ async function startMaPrograms(profile: IntegrationProfile, saved: boolean, run:
     }, `${label} 已运行；控台通信另行检查`);
     return result !== null;
   };
-  const onpcReady = await start('ma2');
-  if (onpcReady) await connect();
-  else { skip('ma2', '等待 MA2 onPC 启动成功'); skip('bridge', '等待 MA2 onPC 启动成功'); }
+  await start('ma2');
+  // An external console does not depend on local onPC startup. Local connections
+  // still validate the selected process before sending credentials or commands.
+  await connect();
   // MA 3D also opens native remote ports; establish onPC channels first.
   await start('ma3d');
 }
@@ -77,8 +78,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       await run('bridge', 'MA2 工程通信', () => connectLocalMa2(localStorage.getItem('tblink.ma2-onpc-data-directory.v1') ?? ''), '本机控台通信已响应'); return;
     }
     const connected = await run('ma2', 'MA2 网络', async () => {
-      let status = ma2NetworkStatusSchema.parse(await desktop.getMa2NetworkStatus());
-      status = status.settings ? ma2NetworkStatusSchema.parse(await desktop.connectMa2Network()) : await connectDiscoveredMa2();
+      const status = ma2NetworkStatusSchema.parse(await connectDiscoveredMa2());
       if (status.state !== 'connected') throw new Error(status.error ?? '控台登录未完成');
     }, '控台网络登录成功');
     if (connected) await run('bridge', 'MA2 工程通信', checkNetworkMa2, '控台工程通信已响应');

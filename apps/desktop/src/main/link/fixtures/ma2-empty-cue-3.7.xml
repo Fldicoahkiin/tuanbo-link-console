@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?xml-stylesheet type="text/xsl" href="styles/sequ@html@default.xsl"?>
+<?xml-stylesheet type="text/xsl" href="styles/sequ@executorsheet.xsl" alternate="yes"?>
+<?xml-stylesheet type="text/xsl" href="styles/sequ@trackingsheet.xsl" alternate="yes"?>
+<MA xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.malighting.de/grandma2/xml/MA" xsi:schemaLocation="http://schemas.malighting.de/grandma2/xml/MA http://schemas.malighting.de/grandma2/xml/3.7.0/MA.xsd" major_vers="3" minor_vers="7" stream_vers="0">
+	<!-- Native own test Show, empty Cue export, 2026-10-17. -->
+	<Sequ index="9924" name="TBLINK_EMPTY_ACCEPTANCE" timecode_slot="255">
+		<Cue xsi:nil="true" />
+		<Cue index="1">
+			<Number number="1" sub_number="0" />
+			<CuePart index="0">
+				<CuePartPresetTiming>
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+					<PresetTiming />
+				</CuePartPresetTiming>
+			</CuePart>
+		</Cue>
+	</Sequ>
+</MA>

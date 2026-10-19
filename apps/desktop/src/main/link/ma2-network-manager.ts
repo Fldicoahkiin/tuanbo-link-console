@@ -12,8 +12,13 @@ import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ApplyService } from './ma2-apply-service';
 import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
 import { readMa2NativeLibrary } from './ma2-native-library';
+import { readMa2EffectLibrary } from './ma2-effect-library';
+import { Ma2LayoutService } from './ma2-layout-service';
+import { listMa2ExecutorPages, readMa2ExecutorPage } from './ma2-executor-page';
+import { Ma2CueDeleteService } from './ma2-cue-delete-service';
 import { readMa2Catalog } from './ma2-catalog';
 import { readMa2NetworkPreview } from './ma2-network-preview';
+import { Ma2LiveService } from './ma2-live-service';
 
 /** One chosen console, machine settings only. Auto-connect never replays writes. */
 export class Ma2NetworkManager {
@@ -34,6 +39,48 @@ export class Ma2NetworkManager {
     return this.settings!==null&&(['host','port','monitorPort','username'] as const).every(key=>this.settings?.[key]===settings[key]);
   }
   private readonly path: string;
+  private layoutService: Ma2LayoutService | null = null;
+  private liveService: Ma2LiveService | null = null;
+  live(): Ma2LiveService { return this.liveService ??= new Ma2LiveService(`${this.path}.playback.json`, this.secrets, request => this.get(request.network).bridge); }
+  private layouts(): Ma2LayoutService { return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.isPlaying); }
+  private cueDeleteService: Ma2CueDeleteService | null = null;
+  setCueDeletionProjectReader(load: (path: string) => Promise<import('@tb/schema').LinkProject>): void {
+    this.cueDeleteService = new Ma2CueDeleteService(`${this.path}.cue-backups`, load, this.isPlaying);
+  }
+  async prepareCueDeletion(request: import('@tb/schema').Ma2CueDeletePrepare, report?: (value: Ma2ReadProgressUpdate) => void): Promise<import('@tb/schema').Ma2CueDeletePlan> {
+    if (!this.cueDeleteService) throw new Error('控台删除服务尚未就绪');
+    return this.cueDeleteService.prepare(this.get(request.network).bridge, request, report);
+  }
+  async commitCueDeletion(request: import('@tb/schema').Ma2CueDeleteCommit, report?: (value: Ma2ReadProgressUpdate) => void): Promise<import('@tb/schema').Ma2CueDeleteResult> {
+    const { bridge } = this.get(request.network);
+    if (!this.cueDeleteService || !this.connection) throw new Error('控台删除服务尚未就绪');
+    return this.cueDeleteService.commit(this.connection, bridge, request, report);
+  }
+  async listLayouts(request: import('@tb/schema').Ma2LayoutDirectoryRequest): Promise<import('@tb/schema').Ma2LayoutDirectory> {
+    const { bridge } = this.get(request.network); if (!this.connection) throw new Error('请先连接控台');
+    return this.layouts().list(this.connection, bridge, request);
+  }
+  async listExecutorPages(request: import('@tb/schema').Ma2LayoutDirectoryRequest) { return listMa2ExecutorPages(this.get(request.network).bridge, request); }
+  async readExecutorPage(request: import('@tb/schema').Ma2ExecutorPageRequest) { return readMa2ExecutorPage(this.get(request.network).bridge, request); }
+  async updateLayout(request: import('@tb/schema').Ma2LayoutUpdateRequest): Promise<import('@tb/schema').Ma2LayoutSnapshot> {
+    const { bridge } = this.get(request.network); if (!this.connection) throw new Error('请先连接控台');
+    return this.layouts().update(this.connection, bridge, request);
+  }
+  async readLayout(request: import('@tb/schema').Ma2LayoutReadRequest): Promise<import('@tb/schema').Ma2LayoutSnapshot> {
+    const {bridge}=this.get(request.network); const connection=this.connection;
+    if(!connection)throw new Error('请先连接控台');
+    return this.layouts().read(connection,bridge,request);
+  }
+  async syncSong(request: import('@tb/schema').Ma2SongSyncRequest): Promise<import('@tb/schema').Ma2SongSyncResult> {
+    const { bridge } = this.get(request.network); const connection = this.connection;
+    if (!connection) throw new Error('请先连接控台');
+    return this.layouts().syncSong(connection, bridge, request);
+  }
+  async newCue(request: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult> {
+    const {bridge}=this.get(request.network); const connection=this.connection;
+    if(!connection)throw new Error('请先连接控台');
+    return this.layouts().create(connection,bridge,request);
+  }
   constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string, private readonly resolveLocalAddress: (host: string) => Promise<string | undefined> = () => Promise.resolve(undefined), private readonly validatePeers?: (host: string, peers: readonly Ma2ConnectedPeer[]) => Promise<void>) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
   get(target: Ma2NetworkTarget): { bridge: Ma2OnpcBridge; service: Ma2ApplyService } {
     const settings = this.settings;
@@ -48,7 +95,7 @@ export class Ma2NetworkManager {
     this.cancelledPlayback.set(sessionId, now + 180000);
   }
   get connectionGeneration():number { return this.generation; }
-  async playCue(input: Ma2PlaybackRequest, options?:{beforeSend?:()=>void;priority?:'normal'|'stop'}): Promise<void> {
+  async playCue(input: Ma2PlaybackRequest, options?:{beforeSend?:()=>void;priority?:'normal'|'playback'|'stop'}): Promise<void> {
     const request = ma2PlaybackRequestSchema.parse(input);
     const settings = this.settings; const connection = this.connection; const generation = this.generation;
     if (!settings || !connection || connection.state !== 'connected') throw new Error('序列池播放需要先在设备设置连接 MA2 网络');
@@ -104,9 +151,10 @@ export class Ma2NetworkManager {
       return bridge.request('READ', timecode);
     }, targets => readMa2NativeLibrary(connection, bridge, this.isPlaying, undefined, 'library', undefined, targets));
   }
-  async readLibrary(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void | Promise<void>, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], expectedSource?: Ma2CatalogRequest['expectedSource']): Promise<import('@tb/schema').Ma2EffectLibrary> {
+  async readLibrary(target: Ma2NetworkTarget, onProgress?: (progress: Ma2ReadProgressUpdate) => void | Promise<void>, phase: 'library' | 'verification' = 'library', signal?: AbortSignal, targets?: readonly number[], expectedSource?: Ma2CatalogRequest['expectedSource'], details?: Ma2CatalogRequest['details']): Promise<import('@tb/schema').Ma2EffectLibrary> {
     const { bridge } = this.get(target);
     if (!this.connection) throw new Error('请先连接控台');
+    if (details === 'attributes') return readMa2EffectLibrary(bridge, this.isPlaying, onProgress, signal, targets, expectedSource, details, this.connection);
     return readMa2NativeLibrary(this.connection, bridge, this.isPlaying, onProgress, phase, signal, targets, undefined, undefined, expectedSource);
   }
   async initialize(): Promise<void> {
@@ -194,6 +242,7 @@ export class Ma2NetworkManager {
     return this.status();
   }
   disconnect(): Ma2NetworkStatus {
+    this.liveService?.close();
     this.generation += 1;
     const connection = this.connection; this.connection = null;
     connection?.disconnect(); this.version = null; this.services = null; this.capabilities = null;

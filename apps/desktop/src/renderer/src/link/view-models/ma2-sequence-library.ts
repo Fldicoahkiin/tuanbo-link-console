@@ -3,6 +3,14 @@ import { consoleCueKey, pendingMa2Renames, projectLightingLibrary } from '@tb/co
 
 export type LibrarySequence = { sequence: number; name: string | null; originalName?: string | null; renamedName?: string | undefined; cues: { number: string; name: string | null; originalName?: string | null; renamedName?: string | undefined }[]; complete: boolean };
 
+export function currentMa2MaterialLibrary(project: LinkProject | null) {
+  const saved = project?.ma2MaterialLibrary, read = project?.ma2ReadState;
+  if (!saved?.library) return null;
+  const same = !read || saved.source === read.source && saved.library.directory.show === read.catalog.directory.show && saved.library.directory.generation === read.catalog.directory.generation;
+  // A new pool scan supersedes an earlier Timecode session, without rewriting its bindings.
+  return same || Date.parse(saved.library.readAt) > Date.parse(read.catalog.readAt) ? saved.library : null;
+}
+
 function consoleName(value: { name: string | null; originalName?: string | null; renamedName?: string | undefined }): string | null {
   const name = value.renamedName ?? (value.originalName === undefined ? value.name : value.originalName);
   return name?.trim() ? name : null;
@@ -26,7 +34,7 @@ export function ma2SequenceLibrary(project: LinkProject | null, document: Lighti
   const catalog = new Map<number, LibrarySequence>();
   const read = project?.ma2ReadState;
   const saved = project?.ma2MaterialLibrary;
-  const library = saved?.library && (!read || saved.source === read.source && saved.library.directory.show === read.catalog.directory.show && saved.library.directory.generation === read.catalog.directory.generation) ? saved.library : null;
+  const library = currentMa2MaterialLibrary(project);
   // A pool read is authoritative, including an empty or partially read pool.
   // Song references remain in the project, but cannot resurrect deleted objects
   // or objects from a different Show in the console's audition browser.

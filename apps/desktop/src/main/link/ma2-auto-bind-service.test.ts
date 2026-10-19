@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, type Ma2ObjectDirectory } from '@tb/schema';
 import { applyMa2AutoBindingsCommand, ma2AutoBindEvents, setLightingCommand } from '@tb/core/link';
@@ -50,6 +51,23 @@ it('Show 不符和播放中不会创建或分配对象', async () => {
   f.request.expectedSource.show = 'Other';
   await expect(prepareMa2AutoBindings(f.bridge, f.request, () => false)).rejects.toThrow('Show');
   expect(f.bridge.request.mock.calls.map(([op]) => op)).toEqual(['LIST']);
+});
+it('重新打开有软件时间线的工程，核对 SNAPSHOT 后恢复关联而不复制执行器或 Cue', async () => {
+  const f = fixture();
+  const name = `TBLINK_${createHash('sha256').update(`${f.request.projectId}:${f.request.itemId}`).digest('hex').slice(0, 24)}`;
+  f.directory.entries = [{ target: 9902, name: `${name} 9902` }];
+  const snapshot = xml.replace('TBLINK_FRACTIONAL_TIMECODE', name).replace('</MA>', `${sequence.match(/<Sequ\b[\s\S]*<\/Sequ>/)![0]}</MA>`);
+  f.bridge.request.mockImplementation(op => {
+    if (op === 'LIST') return Promise.resolve(JSON.stringify(f.directory));
+    if (op === 'SNAPSHOT') return Promise.resolve(snapshot);
+    if (op === 'EXECUTOR') return Promise.resolve(executor.replace('<Exec ', '<Exec tblink_executor_name="Test sequence" '));
+    throw new Error(`Unexpected write ${op}`);
+  });
+  const result = await prepareMa2AutoBindings(f.bridge, f.request, () => false);
+  expect(result.plan.newBinding).toMatchObject({ timecode: 9902, name });
+  expect(result.plan.newBinding?.mappings).toHaveLength(2);
+  expect(result.plan.assignments).toMatchObject([{ executor: '99.219', sequence: 9901, pool: true }]);
+  expect(f.bridge.request.mock.calls.map(([op]) => op)).toEqual(['LIST', 'SNAPSHOT', 'LIST', 'EXECUTOR']);
 });
 it('多个执行目标拆分后组合与节拍锚点不变，关联不会增加撤销步骤', async () => {
   const f = fixture();

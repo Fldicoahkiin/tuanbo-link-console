@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { ma2NetworkTargetSchema } from './ma2-bridge';
 
-export const ma2LabelSchema = z.string().trim().min(1).max(512).refine(value => !/[\u0000-\u001f\u007f"\\]/u.test(value), '控台名称不能包含双引号、反斜杠或控制字符');
+export { ma2LabelSchema } from './ma2-label';
+import { ma2LabelSchema } from './ma2-label';
 export const ma2RenameRecordSchema = z.object({
   endpoint: z.string().min(1), show: z.string().min(1),
   sequence: z.number().int().min(1).max(99999), kind: z.enum(['single', 'sequence']),

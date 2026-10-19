@@ -36,7 +36,7 @@ test('构造数据：素材读取关闭窗口后继续、保存并重启恢复�
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
-    await page.getByRole('button', { name: '读取控台灯光到现有歌曲', exact: true }).click();
+    await page.getByRole('button', { name: '读取 Cue', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.getByRole('button', { name: '试听序列 36 灯光步 1.100', exact: true })).toBeVisible();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();

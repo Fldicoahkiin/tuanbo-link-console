@@ -161,6 +161,10 @@
 .timeline-content .lighting-lane, .timeline-track-headings .lighting-heading { background-color: color-mix(in srgb, var(--surface) 88%, var(--text-secondary)); }
 .lighting-lane .lighting-clip { border: 0; border-radius: 0; background: transparent; }
 .lighting-lane .lighting-clip.selected { outline: 0; background: transparent; }
+.lighting-combined-lane .lighting-clip { pointer-events: none; }
+.lighting-combined-lane .lighting-clip[data-active='true'] { pointer-events: auto; }
+.lighting-combined-lane .lighting-timeline-point { pointer-events: auto; }
+.lighting-combined-lane .lighting-clip.is-muted .lighting-timeline-point { opacity: .4; }
 .lighting-clip-caption { top: 12px; left: 12px; color: var(--text-secondary); }
 .lighting-timeline-point { top: 8px; height: 28px; border-radius: 3px; max-width: 150px; padding-right: 8px; background: color-mix(in srgb, var(--lighting-color) 20%, var(--surface)); }
 .lighting-timeline-point i { height: 28px; }

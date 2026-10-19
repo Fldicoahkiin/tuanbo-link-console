@@ -1,7 +1,31 @@
 import type { LinkObsSnapshot } from '@tb/core/link';
+import type { Ma2NetworkStatus } from '@tb/schema';
 import type { ConnectionCheck } from '../stores/connection-check-store';
 
 export type ConnectionStatus = { state: 'ready' | 'error' | 'checking' | 'idle' | 'skipped'; value: string; detail: string };
+
+/** The overview reports the live connection; detailed bridge checks remain separate. */
+export function ma2EditingConnectionStatus(input: {
+  method: 'network' | 'local' | 'midi';
+  network: Pick<Ma2NetworkStatus, 'state' | 'error'> | null;
+  networkError: string | null;
+  local: { status: 'disconnected' | 'connecting' | 'ready' | 'error'; error: string | null };
+  bridge: ConnectionCheck | undefined;
+}): ConnectionStatus {
+  if (input.method === 'midi') return { state: 'skipped', value: '未启用', detail: 'MIDI 模式不提供控台工程读写连接' };
+  if (input.method === 'local') {
+    if (input.local.status === 'ready') return { state: 'ready', value: '已连接', detail: '本机控台工程通信已响应' };
+    if (input.local.status === 'connecting') return { state: 'checking', value: '连接中', detail: '正在连接本机控台' };
+    return { state: input.local.status === 'error' ? 'error' : 'idle', value: '未连接', detail: input.local.error ?? '尚未连接本机控台' };
+  }
+  if (input.networkError) return { state: 'error', value: '连接异常', detail: input.networkError };
+  if (input.network?.state === 'connected') return {
+    state: input.bridge?.state === 'error' ? 'error' : 'ready', value: '已连接',
+    detail: input.bridge?.state === 'error' ? `控台网络已连接；编辑通信待处理：${input.bridge.detail}` : input.bridge?.state === 'ready' ? '控台网络已连接，工程通信已响应' : '控台网络已连接；具体读写操作仍会核对通信和内容'
+  };
+  if (input.network?.state === 'connecting' || input.network?.state === 'authenticating') return { state: 'checking', value: '连接中', detail: '正在连接并登录控台' };
+  return { state: input.network?.error ? 'error' : 'idle', value: '未连接', detail: input.network?.error ?? '尚未连接控台' };
+}
 
 /** Live transport state wins over results of an earlier connection/inventory check. */
 export function obsConnectionStatus(obs: LinkObsSnapshot): ConnectionStatus {

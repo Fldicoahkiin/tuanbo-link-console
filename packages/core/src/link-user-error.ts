@@ -5,6 +5,7 @@ export function toUserErrorMessage(error: unknown): string {
     ? error.message : String(error);
   const text = raw.replace(/Error invoking remote method '[^']+':\s*/g, '').replace(/\b(?:Error|TypeError|RangeError|SyntaxError):\s*/g, '').trim();
   if (/^连接配置校验失败[:：]/.test(text)) return text;
+  if (/Another network request is pending/.test(text)) return '控台上一条读取请求尚未释放。请停止重复读取，等待两分钟后再手动读取；已有素材保留。';
   if (/Authentication.*(?:required|failed)|鉴权失败/i.test(text)) return 'OBS 要求认证或拒绝了密码。请在 OBS 的“工具 → WebSocket 服务器设置”核对密码，填入本软件的“OBS 密码”后保存并连接。';
   if (/Invalid URL|Invalid url|ERR_INVALID_URL/i.test(text)) return 'OBS 地址格式不正确，请填写完整地址，例如 ws://127.0.0.1:4455。';
   if (/^音频解码或读取失败[:：]/.test(text)) return '无法读取或解码音频。请检查音频文件是否损坏、格式是否支持；修复或更换音频后重新播放。';

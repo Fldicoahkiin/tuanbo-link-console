@@ -1,6 +1,12 @@
+import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
+import { ma2ExecutorPageDirectorySchema, ma2ExecutorPageSchema, ma2ExecutorPageRequestSchema } from '@tb/schema';
+import { ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2LiveSnapshotSchema } from '@tb/schema';
+import { ma2SongSyncRequestSchema, ma2SongSyncResultSchema } from '@tb/schema';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { ma2AutoBindRequestSchema, ma2AutoBindResultSchema } from '@tb/schema';
 import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
+import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
+import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema } from '@tb/schema';
 import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema } from '@tb/schema';
 import { ma2AuditionRequestSchema,ma2AuditionControlSchema,ma2AuditionStateSchema } from '@tb/schema';
 import { musicAnalysisRequestSchema, musicAnalysisProgressSchema, musicAnalysisControlSchema, musicAnalysisResultSchema } from '@tb/schema';
@@ -23,7 +29,7 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   }
 }
 
-async function readMa2<T>(channel: string, payload: import('@tb/schema').Ma2CatalogRequest, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<T> {
+async function readMa2<T>(channel: string, payload: { progressId?: string | undefined }, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<T> {
   if (!onProgress || !payload.progressId) return invoke(channel, payload);
   const listener = (_event: Electron.IpcRendererEvent, value: unknown): void => {
     const progress = ma2ReadProgressSchema.safeParse(value);
@@ -99,6 +105,19 @@ const tbLink: LinkDesktopBridgeApi = {
   previewMa2: (payload) => invoke('link:ma2-preview', payload),
   readMa2Catalog: (payload, onProgress) => readMa2('link:ma2-catalog', payload, onProgress),
   readMa2EffectLibrary: (payload, onProgress) => readMa2('link:ma2-effect-library', payload, onProgress),
+  listMa2Layouts: async payload => ma2LayoutDirectorySchema.parse(await invoke('link:ma2-layouts', ma2LayoutDirectoryRequestSchema.parse(payload))),
+  listMa2ExecutorPages: async payload => ma2ExecutorPageDirectorySchema.parse(await invoke('link:ma2-executor-pages', ma2LayoutDirectoryRequestSchema.parse(payload))),
+  readMa2ExecutorPage: async payload => ma2ExecutorPageSchema.parse(await invoke('link:ma2-executor-page', ma2ExecutorPageRequestSchema.parse(payload))),
+  connectMa2Live: async payload => ma2LiveSnapshotSchema.parse(await invoke('link:ma2-live-connect', ma2LiveConnectSchema.parse(payload))),
+  readMa2Live: async payload => ma2LiveSnapshotSchema.parse(await invoke('link:ma2-live-read', ma2LiveRequestSchema.parse(payload))),
+  inputMa2Live: async payload => { await invoke('link:ma2-live-input', ma2LiveInputSchema.parse(payload)); },
+  releaseMa2Live: async () => { await invoke('link:ma2-live-release'); },
+  updateMa2Layout: async payload => ma2LayoutSnapshotSchema.parse(await invoke('link:ma2-layout-update', ma2LayoutUpdateRequestSchema.parse(payload))),
+  readMa2Layout: async payload => ma2LayoutSnapshotSchema.parse(await invoke('link:ma2-layout', ma2LayoutReadRequestSchema.parse(payload))),
+  prepareMa2CueDeletion: async (payload, progress) => ma2CueDeletePlanSchema.parse(await readMa2('link:ma2-cue-delete-prepare', ma2CueDeletePrepareSchema.parse(payload), progress)),
+  commitMa2CueDeletion: async (payload, progress) => ma2CueDeleteResultSchema.parse(await readMa2('link:ma2-cue-delete-commit', ma2CueDeleteCommitSchema.parse(payload), progress)),
+  syncMa2Song: async payload => ma2SongSyncResultSchema.parse(await invoke('link:ma2-song-sync', ma2SongSyncRequestSchema.parse(payload))),
+  createMa2Cue: async payload => ma2NewCueResultSchema.parse(await invoke('link:ma2-new-cue', ma2NewCueRequestSchema.parse(payload))),
   cancelMa2Read: (id) => invoke('link:ma2-read-cancel', id),
   createMa2: (payload) => invoke('link:ma2-create', payload),
   readMa2Executor: (payload) => invoke('link:ma2-executor', payload),

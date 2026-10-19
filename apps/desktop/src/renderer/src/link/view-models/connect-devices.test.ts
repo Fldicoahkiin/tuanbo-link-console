@@ -26,7 +26,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('./link-desktop-view-model', () => ({ linkDesktopViewModel: api }));
 vi.mock('../stores/ma2-mode-store', () => ({ readMa2Method: () => 'network' }));
-vi.mock('../stores/ma2-connection-store', () => ({ checkNetworkMa2: api.checkNetwork, connectDiscoveredMa2: vi.fn(), connectLocalMa2: vi.fn() }));
+vi.mock('../stores/ma2-connection-store', () => ({ checkNetworkMa2: api.checkNetwork, connectDiscoveredMa2: () => api.connectMa2Network(), connectLocalMa2: vi.fn() }));
 
 function snapshot(id: LinkProcessSnapshot['id']): LinkProcessSnapshot {
   return { id, status: 'running', pid: 1, processName: id, executablePath: null, startTime: null, windowTitle: null, fileVersion: null, owned: false, error: null };
@@ -70,7 +70,7 @@ it('保留用户选定路径和关闭选项，不被识别出的其他版本覆�
   expect(useIntegrationStore.getState().profile?.ma3d?.executablePath).toBe('D:\\MA\\MA3D.exe');
 });
 
-it('onPC 启动失败会明确阻止后续控台连接，OBS 和 MA 3D 仍单独检查', async () => {
+it('连接外部控台不依赖本机 onPC 启动，程序失败与网络结果分别显示', async () => {
   const config = options();
   config.draft.ma2 = maProgram('D:\\MA\\missing.exe');
   config.draft.ma3d = maProgram('D:\\MA\\MA3D.exe');
@@ -79,7 +79,8 @@ it('onPC 启动失败会明确阻止后续控台连接，OBS 和 MA 3D 仍单独
     return Promise.resolve(snapshot(id));
   });
   await connectDevices(config);
-  expect(api.connectMa2Network).not.toHaveBeenCalled();
+  expect(api.connectMa2Network).toHaveBeenCalledOnce();
+  expect(useConnectionCheckStore.getState().checks.ma2?.state).toBe('ready');
   expect(api.connectObs).toHaveBeenCalled();
   expect(useConnectionCheckStore.getState().checks['ma2-app']?.detail).toContain('所选控台程序不存在');
   expect(useConnectionCheckStore.getState().checks.ma3d?.state).toBe('ready');

@@ -1,8 +1,9 @@
+import { hasIndependentLightingCues, lightingCueTarget, planLightingCueRuns } from './lighting-cue-run';
 import { ma2PlaybackActionSchema, type Ma2PlaybackAction } from '@tb/schema';
 import type { LightingClip, LightingDocument, LightingEvent, LightingTrack } from '@tb/schema';
 import { LightingTempoMap, lightingEventTime, lightingCurveValue } from './lighting-edit';
 
-export type LightingPacket = { atMs: number; portProfileId: string; bytes: number[]; noteKey: string | null; phase: 'on' | 'off' | 'control' };
+export type LightingPacket = { atMs: number; portProfileId: string; bytes: number[]; noteKey: string | null; phase: 'on' | 'off' | 'control'; ma2Target?: string; ma2Off?: boolean; releaseOnlyIfStarted?: boolean; releasePrevious?: boolean };
 /** Inspect connection dependencies without encoding events or expanding automation curves. */
 export function collectLightingOutputProfileIds(document: LightingDocument): string[] {
   return [...new Set(selectedLightingTracks(document)
@@ -23,20 +24,18 @@ export function compileLightingPackets(document: LightingDocument, ma2DeviceId =
   if (!Number.isInteger(ma2DeviceId) || ma2DeviceId < 0 || ma2DeviceId > 127) throw new Error('MA2 MSC 设备号应为 0–127');
   if (document.outputMode === 'timecode') {
     if (document.tracks.some(track => !track.muted && track.clips.some(clip => !clip.muted && clip.events.some(event => event.kind === 'ma2' && event.preparation)))) throw new Error('埋步需要由软件发送准备 Cue，请选择网络直控或 MIDI 执行器触发');
+    if (hasIndependentLightingCues(document)) throw new Error('单独运行需要由联动台关闭前一组 Cue，请选择网络直控或 MIDI 执行器触发；控台时间码不会执行此设置');
     return [];
   }
   const map = new LightingTempoMap(document.tempos);
   const packets: LightingPacket[] = [];
+  const manageRuns = hasIndependentLightingCues(document);
   for (const sourceTrack of activeLightingTracks(document)) {
     // An empty per-track selection explicitly means the configured default lighting output.
     const track = sourceTrack.portProfileId ? sourceTrack : { ...sourceTrack, portProfileId: 'lighting-events-output' };
     for (const clip of track.clips) {
       if (clip.muted || !clip.events.length) continue;
-      for (const event of clip.events.filter(event => event.kind !== 'empty-cue' && (document.outputMode !== 'network' || event.kind !== 'ma2'))) {
-        if (event.kind === 'ma2' && event.preparation) {
-          const atMs = lightingPreparationTime(clip, event, map);
-          appendEvent(packets, track, { ...clip, start: 0, timeLock: 'time' }, { ...event, at: atMs, cue: event.preparation.cue, preparation: undefined }, map, ma2DeviceId);
-        }
+      for (const event of clip.events.filter(event => event.kind !== 'empty-cue' && event.kind !== 'ma2')) {
         appendEvent(packets, track, clip, event, map, ma2DeviceId);
       }
       const points = clip.events.filter((event) => event.kind === 'point').sort((a, b) => a.at - b.at);
@@ -55,6 +54,12 @@ export function compileLightingPackets(document: LightingDocument, ma2DeviceId =
       }
     }
   }
+  if (document.outputMode === 'direct') for (const entry of planLightingCueRuns(document)) {
+    const track = { ...entry.track, portProfileId: entry.track.portProfileId || 'lighting-events-output' };
+    const encoded: LightingPacket[] = [];
+    appendEvent(encoded, track, { id: '', name: '', start: 0, duration: 1, timeLock: 'time', muted: false, events: [] }, { ...entry.event, at: entry.atMs }, map, ma2DeviceId);
+    for (const value of encoded) packets.push(manageRuns ? { ...value, ma2Target: lightingCueTarget(entry.event, track, document.outputMode), ma2Off: entry.event.action === 'off', ...(entry.releaseOnlyIfStarted ? { releaseOnlyIfStarted: true } : {}), ...(entry.releasePrevious ? { releasePrevious: true } : {}) } : value);
+  }
   const rank = { off: 0, control: 1, on: 2 };
   return packets.sort((a, b) => a.atMs - b.atMs || rank[a.phase] - rank[b.phase]);
 }
@@ -64,7 +69,7 @@ export function compileLightingReleasePackets(document: LightingDocument, ma2Dev
   const tracks = activeLightingTracks(document).map(track => ({ ...track, clips: track.clips.filter(clip => !clip.muted).map(clip => ({ ...clip, start: 0, timeLock: 'time' as const,
     events: clip.events.filter(event => event.kind === 'ma2' && event.executor).map(event => {
       if (event.kind !== 'ma2') throw new Error('灯光关闭目标无效');
-      return { ...event, at: 0, action: 'off' as const, cue: undefined, preparation: undefined };
+      return { ...event, at: 0, action: 'off' as const, cue: undefined, preparation: undefined, runMode: undefined };
     }) })) }));
   const packets = compileLightingPackets({ ...document, tracks }, ma2DeviceId);
   return [...new Map(packets.map(packet => [`${packet.portProfileId}:${packet.bytes.join(',')}`, packet])).values()];
@@ -103,12 +108,13 @@ function appendEvent(packets: LightingPacket[], track: LightingTrack, clip: Ligh
 
 export class LightingScheduler {
   private cursor = 0;
+  private readonly ma2Started = new Map<string, LightingPacket>();
   private previousMs: number | null = null;
   private readonly active = new Map<string, { packet: LightingPacket; count: number }>();
   constructor(private readonly packets: LightingPacket[], private readonly send: (packet: LightingPacket) => void) {}
   locate(positionMs: number): void {
     if (!Number.isFinite(positionMs) || positionMs < 0) throw new Error('灯光定位位置无效');
-    this.release();
+    this.release(); this.ma2Started.clear();
     let low = 0; let high = this.packets.length;
     while (low < high) { const mid = (low + high) >>> 1; if ((this.packets[mid]?.atMs ?? Infinity) < positionMs) low = mid + 1; else high = mid; }
     this.cursor = low; this.previousMs = positionMs;
@@ -124,7 +130,9 @@ export class LightingScheduler {
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs < 0 || endMs <= startMs) throw new Error('灯光循环范围无效');
     // Flush the last polling interval, keeping the loop range [start, end).
     this.advance(endMs, true);
+    const started = new Map(this.ma2Started);
     this.locate(startMs);
+    for (const [key, packet] of started) this.ma2Started.set(key, packet);
   }
   private advance(positionMs: number, exclusive: boolean): void {
     if (!Number.isFinite(positionMs) || positionMs < 0) throw new Error('灯光播放位置无效');
@@ -133,18 +141,26 @@ export class LightingScheduler {
     this.previousMs = positionMs;
     while (this.cursor < this.packets.length) {
       const event = this.packets[this.cursor]; if (!event || event.atMs > positionMs || (exclusive && event.atMs === positionMs)) break;
+      if (event.releasePrevious) for (const [key, started] of this.ma2Started) {
+        const separator = started.bytes.indexOf(0, 6);
+        if (separator < 0) throw new Error('MA2 MSC 关闭目标编码无效');
+        this.send({ ...started, atMs: event.atMs, releasePrevious: false, ma2Off: true, bytes: [...started.bytes.slice(0, 5), 0x0b, 48, 46, 48, 48, 48, 0, ...started.bytes.slice(separator + 1)] });
+        this.ma2Started.delete(key);
+      }
+      if (event.releaseOnlyIfStarted && event.ma2Target && !this.ma2Started.has(event.ma2Target)) { this.cursor += 1; continue; }
       if (event.noteKey && event.phase === 'off') {
         const current = this.active.get(event.noteKey);
         if (current && current.count === 1) { this.send(event); this.active.delete(event.noteKey); }
         else if (current) current.count -= 1;
       } else {
         this.send(event);
+        if (event.ma2Target) { if (event.ma2Off) this.ma2Started.delete(event.ma2Target); else this.ma2Started.set(event.ma2Target, event); }
         if (event.noteKey && event.phase === 'on') this.active.set(event.noteKey, { packet: event, count: (this.active.get(event.noteKey)?.count ?? 0) + 1 });
       }
       this.cursor += 1;
     }
   }
-  stop(): void { this.release(); this.previousMs = null; this.cursor = 0; }
+  stop(): void { this.release(); this.ma2Started.clear(); this.previousMs = null; this.cursor = 0; }
   private release(): void {
     const failures: unknown[] = [];
     for (const [key, active] of this.active) {
@@ -155,12 +171,7 @@ export class LightingScheduler {
   }
 }
 
-export type LightingNetworkAction = { atMs: number; action: Ma2PlaybackAction };
-function lightingPreparationTime(clip: LightingClip, event: Extract<LightingEvent, { kind: 'ma2' }>, map: LightingTempoMap): number {
-  const atMs = lightingEventTime(clip, event, map) - (event.preparation?.leadMs ?? 0);
-  if (atMs < 0) throw new Error(`“${event.label}”的埋步早于节目开始，请后移正式 Cue 或缩短提前时间`);
-  return atMs;
-}
+export type LightingNetworkAction = { atMs: number; action: Ma2PlaybackAction; releaseOnlyIfStarted?: boolean; releasePrevious?: boolean };
 /** Timecode carries the song clock; local pool events are not an additional MA2 command channel. */
 export function lightingTimecodePlaybackNotice(document: LightingDocument): string | null {
   if (document.outputMode !== 'timecode') return null;
@@ -171,11 +182,9 @@ export function lightingTimecodePlaybackNotice(document: LightingDocument): stri
 }
 export function compileLightingNetworkActions(document: LightingDocument): LightingNetworkAction[] {
   if (document.outputMode !== 'network') return [];
-  const map = new LightingTempoMap(document.tempos);
-  return activeLightingTracks(document).flatMap(track => track.clips.filter(clip => !clip.muted).flatMap(clip => clip.events.flatMap(event => {
-    if (event.kind !== 'ma2') return [];
-    const action = ma2PlaybackActionSchema.parse(event.executor ? { target: 'executor', executor: event.executor, action: event.action, ...(event.cue ? { cue: event.cue } : {}) } : { target: 'sequence', sequence: event.sequence, cue: event.cue, action: event.action });
-    const formal = { atMs: lightingEventTime(clip, event, map), action };
-    return event.preparation ? [{ atMs: lightingPreparationTime(clip, event, map), action: ma2PlaybackActionSchema.parse({ ...action, cue: event.preparation.cue }) }, formal] : [formal];
-  }))).sort((a, b) => a.atMs - b.atMs);
+  activeLightingTracks(document);
+  return planLightingCueRuns(document).map(({ atMs, event, releaseOnlyIfStarted, releasePrevious }) => ({ atMs,
+    action: ma2PlaybackActionSchema.parse(event.executor ? { target: 'executor', executor: event.executor, action: event.action, ...(event.cue ? { cue: event.cue } : {}) } : { target: 'sequence', sequence: event.sequence, cue: event.cue, action: event.action }),
+    ...(releaseOnlyIfStarted ? { releaseOnlyIfStarted: true } : {}), ...(releasePrevious ? { releasePrevious: true } : {})
+  }));
 }

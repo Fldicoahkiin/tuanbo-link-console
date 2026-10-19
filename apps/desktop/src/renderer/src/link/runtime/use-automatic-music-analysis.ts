@@ -14,7 +14,6 @@ export function useAutomaticMusicAnalysis(projectPath: string | null, source: Re
   const [selectedDevice, setSelectedDevice] = useState<'cpu' | 'cuda' | null>(null);
   const device = selectedDevice ?? status?.device ?? 'cpu';
   const generation = useRef(0);
-  const owned = useRef<string | null>(null);
   const sha256 = source?.sha256;
   const relativePath = source?.relativePath;
   const durationMs = source?.durationMs;
@@ -35,8 +34,7 @@ export function useAutomaticMusicAnalysis(projectPath: string | null, source: Re
     }).catch((cause: unknown) => { if (generation.current === current) fail(cause); });
     return () => {
       generation.current = current + 1; unsubscribe();
-      const taskId = owned.current; owned.current = null;
-      if (taskId) void linkDesktopViewModel.controlAutomaticMusicAnalysis({ version: 1, taskId, action: 'cancel' }).catch((cause: unknown) => reportCoordinatorError(cause instanceof Error ? cause.message : String(cause), message => console.error(message)));
+      // Main-process tasks outlive the view. Only explicit cancellation stops them.
     };
   }, [projectPath, sha256, relativePath, durationMs]);
 
@@ -46,8 +44,8 @@ export function useAutomaticMusicAnalysis(projectPath: string | null, source: Re
     try {
       const value = await linkDesktopViewModel.startAutomaticMusicAnalysis({ version: 1, taskId: crypto.randomUUID(), projectPath, device,
         source: { assetId: source.assetId, relativePath: source.relativePath, sha256: source.sha256, durationMs: source.durationMs } });
-      if (generation.current !== current) { await linkDesktopViewModel.controlAutomaticMusicAnalysis({ version: 1, taskId: value.taskId, action: 'cancel' }); return; }
-      owned.current = value.taskId; receive(value);
+      if (generation.current !== current) return;
+      receive(value);
     } catch (cause) { if (generation.current === current) fail(cause); }
     finally { if (generation.current === current) setSubmitting(false); }
   };

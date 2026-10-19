@@ -21,9 +21,10 @@ it('已保存 IP 直接连接，不要求广播发现；失败明确返回而不
   const status = { state: 'disconnected', settings: { host: '2.97.214.223', port: 30000, monitorPort: 30001, username: 'operator', autoConnect: false }, passwordSaved: true, version: null, error: null };
   const discover = vi.fn(); const connect = vi.fn().mockResolvedValue({ ...status, state: 'connected' });
   vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: () => Promise.resolve(status), discoverMa2: discover, connectMa2Network: connect } });
-  expect((await connectDiscoveredMa2()).state).toBe('connected'); expect(discover).not.toHaveBeenCalled();
+  const prepare=vi.fn().mockResolvedValue(undefined);
+  expect((await connectDiscoveredMa2(undefined,prepare)).state).toBe('connected'); expect(discover).not.toHaveBeenCalled();expect(prepare).toHaveBeenCalledWith(status.settings.host);
   connect.mockResolvedValue({ ...status, error: '命令端口超时' });
-  await expect(connectDiscoveredMa2()).rejects.toThrow('命令端口超时'); expect(connect).toHaveBeenCalledTimes(2);
+  await expect(connectDiscoveredMa2(undefined,prepare)).rejects.toThrow('命令端口超时'); expect(connect).toHaveBeenCalledTimes(2);
 });
 it('首次发现未识别设备时保留结果与网卡诊断，不擅自登录候选端口', async () => {
   const result = { hosts: [{ host: '2.97.214.223', port: 30000, identity: 'candidate' }], ranges: ['本机'], warnings: ['广播端口被占用'] };

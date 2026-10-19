@@ -1,3 +1,6 @@
+import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
+import { ma2ExecutorPageRequestSchema } from '@tb/schema';
+import { ma2SongSyncRequestSchema } from '@tb/schema';
 import { materialSceneTargets } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
@@ -40,6 +43,8 @@ import { readMa2Catalog } from './link/ma2-catalog';
 import { Ma2ReadRecovery } from './link/ma2-read-recovery';
 import { Ma2MaterialRecovery } from './link/ma2-material-recovery';
 import { readMa2EffectLibrary } from './link/ma2-effect-library';
+import { ma2LayoutReadRequestSchema, ma2NewCueRequestSchema } from '@tb/schema';
+import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema } from '@tb/schema';
 import { ma2ExecutorReadRequestSchema } from '@tb/schema';
 import { readMa2Executor } from './link/ma2-executor-read';
 import { Ma2Connections } from './link/ma2-connections';
@@ -47,7 +52,7 @@ import { Ma2DiscoveryService } from './link/ma2-discovery';
 import { Ma2NetworkSetup } from './link/ma2-network-setup';
 import { ma2NetworkSetupRequestSchema } from '@tb/schema';
 import { Ma2NetworkManager } from './link/ma2-network-manager';
-import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema } from '@tb/schema';
+import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema } from '@tb/schema';
 import ma2PluginLua from '../../../../tools/ma2/tblink_bridge.lua?raw';
 import ma2PluginXml from '../../../../tools/ma2/tblink_bridge.xml?raw';
 import ma2PluginInstructions from '../../../../tools/ma2/README.md?raw';
@@ -555,7 +560,6 @@ function registerIpc(
     // Only release close protection after every owned output acknowledged stop.
     await licenseAccess.setActive(false);
     runtimeActive = false;
-    await automaticMusic?.setPerformanceActive(false);
   };
   authorizeOutput = async () => {
     if (licenseChanging) throw new Error('请等待授权操作完成后再执行设备输出');
@@ -619,7 +623,7 @@ function registerIpc(
   const ma2Connections = new Ma2Connections(() => runtimeActive);
   const loopMidiService = new LoopMidiService();
   const ma2NetworkSetup = new Ma2NetworkSetup(join(app.getPath('userData'), 'ma2-network-addresses.json'));
-  const ma2Network = new Ma2NetworkManager(app.getPath('userData'), profileStore, () => runtimeActive, ma2PluginLua, host => ma2NetworkSetup.connectionAddress(host), async (host, peers) => {
+  const ma2Network = new Ma2NetworkManager(app.getPath('userData'), profileStore, () => runtimeActive || nativePlaybackActive(), ma2PluginLua, host => ma2NetworkSetup.connectionAddress(host), async (host, peers) => {
     if (!isLocalMa2Address(host)) return;
     const profile = await profileStore.loadProfile();
     if (!profile?.ma2) return;
@@ -628,6 +632,7 @@ function registerIpc(
     await assertMa2ConnectionOwner(selected.pid, peers);
   });
   const ma2Reads = new Map<string, { senderId: number; controller: AbortController }>();
+  ma2Network.setCueDeletionProjectReader(path => projectService.open(path));
   const beginMa2Read = (event: IpcMainInvokeEvent, id?: string): { signal: AbortSignal; report: ((progress: Ma2ReadProgressUpdate) => void) | undefined; finish: () => void } => {
     if (id && ma2Reads.has(id)) throw new Error('读取任务编号重复');
     const controller = new AbortController();
@@ -798,7 +803,7 @@ function registerIpc(
       if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('素材检查点的工程身份不一致');
       const recovery = request.projectPath && request.projectId ? new Ma2MaterialRecovery(request.projectPath, request.projectId, request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC') : undefined;
       const report = async (update: import('@tb/schema').Ma2ReadProgressUpdate): Promise<void> => { await recovery?.record(update); task.report?.(update); };
-      const result = request.network ? await ma2Network.readLibrary(request.network, report, 'library', task.signal, request.targets, request.expectedSource) : await readMa2EffectLibrary((await getMa2Connection(request)).bridge, () => runtimeActive, report, task.signal, request.targets, request.expectedSource);
+      const result = request.network ? await ma2Network.readLibrary(request.network, report, 'library', task.signal, request.targets, request.expectedSource, request.details) : await readMa2EffectLibrary((await getMa2Connection(request)).bridge, () => runtimeActive, report, task.signal, request.targets, request.expectedSource, request.details);
       await recovery?.complete(result);
       await logger.record({ level: result.errors.length ? 'error' : 'info', category: 'device', device: 'MA2', message: `效果库读取 ${result.sequences.length} 条序列；异常：${JSON.stringify(result.errors)}`, result: result.errors.length ? 'failed' : 'succeeded' });
       return result;
@@ -806,6 +811,65 @@ function registerIpc(
       await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `效果库读取失败：${String(error)}`, result: 'failed' });
       throw error;
     } finally { task.finish(); }
+  });
+  handle('link:ma2-layout', async (_event,value:unknown) => {
+    try { return await ma2Network.readLayout(ma2LayoutReadRequestSchema.parse(value)); }
+    catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`Layout 读取失败：${String(error)}`,result:'failed'}); throw error; }
+  });
+  handle('link:ma2-cue-delete-prepare', async (event,value:unknown) => {
+    if (ma2Reads.size) throw new Error('请等待当前控台读取结束');
+    const request = ma2CueDeletePrepareSchema.parse(value); const task = beginMa2Read(event,request.progressId);
+    try { return await ma2Network.prepareCueDeletion(request,task.report); }
+    catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`空 Cue 删除清单核对失败：${String(error)}`,result:'failed'}); throw error; }
+    finally { task.finish(); }
+  });
+  handle('link:ma2-cue-delete-commit', async (event,value:unknown) => {
+    if (ma2Reads.size) throw new Error('请等待当前控台读取结束');
+    const request = ma2CueDeleteCommitSchema.parse(value); const task = beginMa2Read(event,request.progressId);
+    try {
+      const result = await ma2Network.commitCueDeletion(request,task.report);
+      await logger.record({level:result.error?'error':'info',category:'device',device:'MA2',message:`空 Cue 删除已确认 ${result.deleted.length} 项；备份 ${result.backups.join('；')}；${result.error??'回读通过'}`,result:result.error?'failed':'succeeded'});
+      return result;
+    } catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`空 Cue 删除未完成：${String(error)}`,result:'failed'}); throw error; }
+    finally { task.finish(); }
+  });
+  handle('link:ma2-song-sync', async (_event, value: unknown) => {
+    try {
+      const result = await ma2Network.syncSong(ma2SongSyncRequestSchema.parse(value));
+      if (result.changed) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `歌曲序列 ${result.binding.sequence} · Layout ${result.binding.layout} 已写入并回读，备份 ${result.backupFile}`, result: 'succeeded' });
+      return result;
+    } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `歌曲同步停止：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-layouts', async (_event, value: unknown) => ma2Network.listLayouts(ma2LayoutDirectoryRequestSchema.parse(value)));
+  handle('link:ma2-executor-pages', async (_event, value: unknown) => {
+    try { return await ma2Network.listExecutorPages(ma2LayoutDirectoryRequestSchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `读取执行器页面目录失败：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-live-connect', async (_event, value: unknown) => {
+    const request = ma2LiveConnectSchema.parse(value); knownSecrets.add(request.password);
+    try { return await ma2Network.live().connect(request); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `连接实时推杆失败：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-live-read', async (_event, value: unknown) => {
+    try { return await ma2Network.live().read(ma2LiveRequestSchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `实时推杆读取失败：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-live-input', async (_event, value: unknown) => {
+    try { ma2Network.live().input(ma2LiveInputSchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `推杆操作未完成：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-live-release', () => ma2Network.live().release());
+  handle('link:ma2-executor-page', async (_event, value: unknown) => {
+    try { return await ma2Network.readExecutorPage(ma2ExecutorPageRequestSchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `读取执行器页面失败：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-layout-update', async (_event, value: unknown) => {
+    try { const result = await ma2Network.updateLayout(ma2LayoutUpdateRequestSchema.parse(value)); await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `Layout ${result.layout} 名称与位置已回读`, result: 'succeeded' }); return result; }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `Layout 修改未完成：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-new-cue', async (_event,value:unknown) => {
+    try { const result=await ma2Network.newCue(ma2NewCueRequestSchema.parse(value));await logger.record({level:'info',category:'device',device:'MA2',message:`新建序列 ${result.sequence}，Layout ${result.layout.layout} 已回读核对`,result:'succeeded'});return result; }
+    catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`新建 Cue 未完成：${String(error)}`,result:'failed'});throw error; }
   });
   handle('link:ma2-auto-bind', async (_event, value: unknown) => {
     const request = ma2AutoBindRequestSchema.parse(value);
@@ -912,7 +976,6 @@ function registerIpc(
     await licenseAccess.setActive(active);
     if (active && licenseChanging) { await licenseAccess.setActive(false); throw new Error('授权正在更换，请完成后重新播放'); }
     runtimeActive = active;
-    await automaticMusic?.setPerformanceActive(active);
   });
   handle('link:window-control', (event, actionValue: unknown) => {
     const action = linkWindowControlActionSchema.parse(actionValue);
@@ -1054,13 +1117,11 @@ function registerIpc(
   });
   handle('link:automatic-music-status', () => automaticMusic!.status());
   handle('link:automatic-music-start', (_event, value: unknown) => {
-    if (runtimeActive || nativePlaybackActive()) throw new Error('请停止正式播放后分析音乐');
     return automaticMusic!.start(automaticMusicRequestSchema.parse(value));
   });
   handle('link:automatic-music-control', (_event, value: unknown) => {
     const request = automaticMusicControlSchema.parse(value);
     if (request.action === 'cancel') return automaticMusic!.cancel(request.taskId);
-    if (runtimeActive || nativePlaybackActive()) throw new Error('请停止正式播放后恢复音乐识别');
     automaticMusic!.resume(request.taskId);
   });
   app.once('before-quit', () => musicAnalysis.close());

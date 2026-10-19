@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { acceptMusicStructure, editMusicStructure, matchingMusicStructure, musicStructureSegments, recognizeMusicStructure } from '@tb/core/link';
 import type { ReferenceAudio, LightingDocument, MusicStructureSegment } from '@tb/schema';
 import type { LightingTimelineProps } from './LightingTimeline';
@@ -8,6 +8,7 @@ import { useRuntimeStore } from '../stores/runtime-store';
 // Mounting a tab again must not undo cancellation or reapply an undone result.
 const attempted = new Set<string>();
 const delivered = new Set<string>();
+const requested = new Set<string>();
 const remember = (set: Set<string>, key: string): void => { set.add(key); if (set.size > 2000) set.delete(set.values().next().value!); };
 
 export function useMusicBeatSegments(lighting: LightingTimelineProps | undefined, source: ReferenceAudio | undefined, analysis: ReturnType<typeof useAutomaticMusicAnalysis>, scope: string, projectPath: string | null, playing: boolean) {
@@ -15,7 +16,6 @@ export function useMusicBeatSegments(lighting: LightingTimelineProps | undefined
   const blocked = playing || runtimeBusy;
   const [error, setError] = useState('');
   const [selectedId, select] = useState<string | null>(null);
-  const rerun = useRef<string | null>(null);
   const data = matchingMusicStructure(lighting?.document, source);
   const points = useMemo(() => data ? musicStructureSegments(data) : [], [data]);
   const snapPoints = useMemo(() => data?.state === 'ready' ? [...data.beats.map(beat => beat.atMs), ...data.segments.flatMap(segment => [segment.startMs, segment.endMs])] : [], [data]);
@@ -33,31 +33,31 @@ export function useMusicBeatSegments(lighting: LightingTimelineProps | undefined
     const job = analysis.job;
     if (!lighting || !source || blocked || job?.state !== 'completed' || !job.candidates) return;
     const key = `${scope}:${job.taskId}`;
-    if (delivered.has(key) || data && rerun.current !== scope) return;
-    const automaticSource = rerun.current === scope ? undefined : source;
-    remember(delivered, key); rerun.current = null;
+    if (delivered.has(key) || data && !requested.has(scope)) return;
+    const automaticSource = requested.has(scope) ? undefined : source;
+    remember(delivered, key); requested.delete(scope);
     run(() => commit(acceptMusicStructure(lighting.document, source, job.candidates!, job.taskId), '自动识别音乐节拍与段落', automaticSource));
   }, [analysis.job, lighting, source, scope, blocked, data, run, commit]);
   const start = (): void => {
     if (blocked || busy) return;
-    rerun.current = scope; remember(attempted, scope); setError('');
+    remember(requested, scope); remember(attempted, scope); setError('');
     void analysis.start();
   };
   const clear = (): void => run(() => {
     if (!lighting || !source) return;
     const document = data ? lighting.document : { ...lighting.document, version: 2 as const, musicAnalysis: recognizeMusicStructure({ sourceSha256: source.sha256, durationMs: source.durationMs, bpm: null, items: [] }, 'dismissed') };
     commit(editMusicStructure(document, { kind: 'clear' }), '清除音乐识别标记');
-    remember(attempted, scope); rerun.current = null; analysis.clear(); select(null);
+    remember(attempted, scope); requested.delete(scope); analysis.clear(); select(null);
   });
-  const cancel = (): void => run(() => {
-    remember(attempted, scope); rerun.current = null;
+  const cancel = (): void => {
+    remember(attempted, scope); requested.delete(scope);
     if (analysis.job) remember(delivered, `${scope}:${analysis.job.taskId}`);
-    if (!data && lighting && source) {
+    if (!blocked && !data && lighting && source) run(() => {
       const result = recognizeMusicStructure({ sourceSha256: source.sha256, durationMs: source.durationMs, bpm: null, items: [] }, 'cancelled');
       commit({ ...lighting.document, version: 2, musicAnalysis: { ...result, state: 'cleared' } }, '取消音乐分析');
-    }
+    });
     void analysis.control('cancel');
-  });
+  };
   const remove = (id: string): void => run(() => { if (lighting) { commit(editMusicStructure(lighting.document, { kind: 'remove-segment', id }), '删除音乐段落'); select(null); } });
   const removeBeat = (id: string): void => run(() => { if (lighting) commit(editMusicStructure(lighting.document, { kind: 'remove-beat', id }), '删除音乐拍点'); });
   const update = (segment: MusicStructureSegment): void => run(() => { if (lighting) commit(editMusicStructure(lighting.document, { kind: 'segment', segment }), '修改音乐段落'); });

@@ -1,0 +1,82 @@
+.ma2-layout-panel { min-width: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; border-inline-start: 1px solid var(--separator); grid-column: 3; grid-row: 1; }
+.ma2-layout-panel header, .ma2-layout-read, .ma2-layout-create li { display: flex; align-items: center; gap: 8px; }
+.ma2-layout-panel header strong, .ma2-layout-create li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ma2-layout-panel svg { width: 14px; height: 14px; vertical-align: middle; }
+.ma2-layout-panel p { font-size: 12px; line-height: 1.6; color: var(--text-secondary); margin: 0; }
+.ma2-layout-panel [role=alert] { color: var(--danger); }
+.ma2-layout-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.ma2-layout-panel input, .ma2-layout-panel select { min-width: 0; width: 100%; color: var(--text-primary); background: var(--surface); border: 1px solid var(--separator); border-radius: 5px; padding: 6px 8px; font: inherit; font-size: 12px; }
+.ma2-layout-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-block: 8px; }
+.ma2-layout-read label { flex: 1; }
+.ma2-layout-create { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--separator); border-radius: 8px; }
+.ma2-layout-create ol { margin: 0; padding: 0; max-height: 200px; overflow: auto; }
+.ma2-layout-create li { padding-block: 5px; font-size: 12px; }
+.ma2-layout-create small { display: block; color: var(--text-secondary); }
+.ma2-layout-canvas { position: relative; width: 100%; min-height: 160px; flex: none; background: var(--surface); border: 1px solid var(--separator); overflow: hidden; }
+.ma2-layout-canvas button { position: absolute; display: flex; flex-direction: column; justify-content: center; padding: 3px; min-height: 0; min-width: 0; overflow: hidden; font-size: 11px; }
+.ma2-layout-canvas button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ma2-layout-panel > .ma2-sequence-preview { min-height: 240px; flex: none; }
+
+/* Match the single-Cue pool density; page navigation stays in one compact toolbar. */
+.ma2-layout-view { position: relative; container-type: inline-size; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.ma2-layout-titlebar { display: flex; align-items: center; gap: 4px; padding: 3px; flex-shrink: 0; min-height: 34px; }
+.ma2-layout-titlebar > strong { font-size: 11px; font-weight: 500; flex: 1 1 80px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ma2-layout-titlebar button { flex-shrink: 0; white-space: nowrap; min-height: 28px; padding: 4px 6px; font-size: 11px; border-radius: 6px; }
+.ma2-layout-titlebar svg { width: 14px; height: 14px; stroke-width: 1.5; }
+.ma2-layout-pager, .ma2-layout-pager label { display: flex; align-items: center; gap: 4px; }
+.ma2-layout-pager label { font-size: 0; }
+.ma2-layout-pager input { width: 55px; min-height: 28px; padding: 3px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.ma2-layout-pager input::-webkit-inner-spin-button { appearance: none; }
+.ma2-layout-tools { position: relative; flex-shrink: 0; }
+.ma2-layout-tools > summary { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; list-style: none; cursor: pointer; border-radius: 6px; color: var(--text-secondary); }
+.ma2-layout-tools > summary:hover, .ma2-layout-tools[open] > summary { background: var(--surface); color: var(--text-primary); }
+.ma2-layout-tool-menu, .ma2-layout-page-picker { position: absolute; z-index: 30; background: var(--surface); border: 1px solid var(--separator); border-radius: 8px; box-shadow: 0 8px 24px #0006; padding: 8px; }
+.ma2-layout-tool-menu { right: 0; top: 32px; width: 180px; display: flex; flex-direction: column; gap: 6px; }
+.ma2-layout-tool-menu label { display: flex; align-items: center; gap: 6px; font-size: 12px; min-height: 28px; }
+.ma2-layout-tool-menu label input { min-height: 0; }
+.ma2-layout-zoom { display: flex; gap: 4px; }
+.ma2-layout-zoom button { flex: 1; }
+.ma2-layout-page-picker { right: 4px; top: 38px; width: min(260px, calc(100% - 8px)); }
+.ma2-layout-page-picker header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 6px; }
+.ma2-layout-page-picker select { width: 100%; min-width: 0; border: 0; font-size: 12px; }
+.ma2-layout-page-picker option { padding: 6px; }
+@container (max-width: 520px) { .ma2-layout-titlebar > strong { display: none; } .ma2-layout-titlebar { gap: 3px; } .ma2-layout-pager input { width: 46px; } }
+.ma2-layout-empty { display: flex; align-items: center; justify-content: center; flex: 1; padding: 20px; min-height: 100px; color: var(--text-secondary); font-size: 12px; text-align: center; }
+.ma2-layout-empty[role=alert] { color: var(--danger); }
+.ma2-layout-note { margin: 0; padding: 3px; font-size: 11px; color: var(--text-secondary); }
+
+.ma2-song-panel { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--separator); border-radius: 6px; }
+.ma2-song-panel > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.ma2-song-delete-review { flex-direction: column; }
+.ma2-song-delete-review ul { max-height: 130px; overflow: auto; }
+.ma2-layout-panel > .cue-pool-grid { min-height: 140px; }
+.cue-console-address { color: var(--text-secondary); padding-block: 5px; font-variant-numeric: tabular-nums; }
+
+.ma2-layout-titlebar > select { max-width: 160px; }
+.ma2-layout-titlebar > label { display: flex; align-items: center; white-space: nowrap; gap: 3px; font-size: 11px; }
+.ma2-layout-titlebar > label input { min-height: 0; }
+.ma2-layout-viewport { flex: 1; min-height: 100px; min-width: 0; overflow: auto; position: relative; }
+.ma2-layout-surface { position: relative; }
+.ma2-layout-object { position: absolute; padding: 2px; }
+.ma2-layout-object > button, .ma2-layout-object > .console-cue-cell { width: 100%; height: 100%; min-height: 0; min-width: 0; }
+.ma2-layout-object > button, .ma2-layout-object .console-cue-cell > button:first-child { flex-direction: column; align-items: stretch; justify-content: center; overflow: hidden; border-color: #a58f4e; }
+.ma2-layout-object button > strong, .ma2-layout-object button > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ma2-layout-viewport[data-editing=true] .ma2-layout-object { cursor: move; outline: 1px dashed var(--accent); touch-action: none; }
+.ma2-layout-viewport[data-editing=true] .ma2-layout-object > * { pointer-events: none; }
+.ma2-executor-scroll { flex: 1; min-height: 0; overflow: auto; }
+.ma2-executor-grid { display: grid; grid-template-columns: repeat(15, minmax(66px, 1fr)); grid-auto-rows: 58px; gap: 4px; min-width: 1060px; padding: 4px; }
+.ma2-executor-cell { position: relative; min-width: 0; border: 1px solid var(--separator); border-radius: 6px; background: var(--surface); overflow: hidden; }
+.ma2-executor-cell[data-empty=true] { background: transparent; border-color: color-mix(in srgb, var(--separator) 45%, transparent); }
+.ma2-executor-cell[data-located=true] { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ma2-executor-cell[data-group-start=true] { margin-left: 5px; }
+.ma2-executor-number { position: absolute; z-index: 1; top: 2px; left: 5px; font-size: 10px; line-height: 12px; color: var(--text-secondary); pointer-events: none; font-variant-numeric: tabular-nums; }
+.ma2-executor-cell > button, .ma2-executor-cell > .console-cue-cell { width: 100%; height: 100%; }
+.ma2-executor-cell > button, .ma2-executor-cell .console-cue-cell > button:first-child { display: flex; flex-direction: column; align-items: stretch; justify-content: center; padding: 14px 5px 3px; border: 0; border-radius: 5px; min-width: 0; min-height: 0; }
+.ma2-executor-cell button strong { font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ma2-executor-cell button small { font-size: 10px; color: var(--text-secondary); }
+.ma2-executor-cell button[data-search-match=false] { opacity: .25; }
+.ma2-page-index-progress { display: flex; flex-direction: column; gap: 4px; }
+.ma2-page-index-progress button { min-height: 29px; padding: 5px 8px; color: var(--text-primary); background: var(--surface); border: 1px solid var(--separator); border-radius: 8px; font: inherit; font-size: 11px; cursor: pointer; }
+.ma2-page-index-progress button:hover:not(:disabled) { border-color: var(--accent); }
+.ma2-page-index-progress small { color: var(--text-secondary); font-size: 10px; }
+.ma2-page-index-progress progress { width: 100%; height: 4px; accent-color: var(--accent); }

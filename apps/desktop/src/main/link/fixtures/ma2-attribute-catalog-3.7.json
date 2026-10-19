@@ -1,0 +1,1810 @@
+[
+  {
+    "attribute": "DIM",
+    "attributeName": "Dim",
+    "presetType": "DIMMER",
+    "presetName": "Dimmer",
+    "feature": "DIMMER",
+    "featureName": "Dimmer"
+  },
+  {
+    "attribute": "GOBODIM",
+    "attributeName": "Main Effect Background Dimmer",
+    "presetType": "DIMMER",
+    "presetName": "Dimmer",
+    "feature": "DIMMER",
+    "featureName": "Dimmer"
+  },
+  {
+    "attribute": "PAN",
+    "attributeName": "Pan",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "POSITION",
+    "featureName": "Position"
+  },
+  {
+    "attribute": "TILT",
+    "attributeName": "Tilt",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "POSITION",
+    "featureName": "Position"
+  },
+  {
+    "attribute": "DIST",
+    "attributeName": "Dist",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "POSITION",
+    "featureName": "Position"
+  },
+  {
+    "attribute": "VIRTUAL_POSITION_MODE",
+    "attributeName": "PosMode",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "POSITION",
+    "featureName": "Position"
+  },
+  {
+    "attribute": "ROLL",
+    "attributeName": "Roll",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "POSITION",
+    "featureName": "Position"
+  },
+  {
+    "attribute": "STAGEX",
+    "attributeName": "X",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "STAGE",
+    "featureName": "Stage"
+  },
+  {
+    "attribute": "STAGEY",
+    "attributeName": "Y",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "STAGE",
+    "featureName": "Stage"
+  },
+  {
+    "attribute": "STAGEZ",
+    "attributeName": "Z",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "STAGE",
+    "featureName": "Stage"
+  },
+  {
+    "attribute": "FLIP",
+    "attributeName": "Flip",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "STAGE",
+    "featureName": "Stage"
+  },
+  {
+    "attribute": "MARK",
+    "attributeName": "Mark",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "STAGE",
+    "featureName": "Stage"
+  },
+  {
+    "attribute": "MP_TR_X",
+    "attributeName": "X",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_TR",
+    "featureName": "MP Trans"
+  },
+  {
+    "attribute": "MP_TR_Y",
+    "attributeName": "Y",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_TR",
+    "featureName": "MP Trans"
+  },
+  {
+    "attribute": "MP_TR_Z",
+    "attributeName": "Z",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_TR",
+    "featureName": "MP Trans"
+  },
+  {
+    "attribute": "MP_SC_X",
+    "attributeName": "X",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_SC",
+    "featureName": "MP Scale"
+  },
+  {
+    "attribute": "MP_SC_Y",
+    "attributeName": "Y",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_SC",
+    "featureName": "MP Scale"
+  },
+  {
+    "attribute": "MP_SC_Z",
+    "attributeName": "Z",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_SC",
+    "featureName": "MP Scale"
+  },
+  {
+    "attribute": "MP_ROT_W",
+    "attributeName": "W",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_ROT",
+    "featureName": "MP Rot"
+  },
+  {
+    "attribute": "MP_ROT_X",
+    "attributeName": "X",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_ROT",
+    "featureName": "MP Rot"
+  },
+  {
+    "attribute": "MP_ROT_Y",
+    "attributeName": "Y",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_ROT",
+    "featureName": "MP Rot"
+  },
+  {
+    "attribute": "MP_ROT_Z",
+    "attributeName": "Z",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_ROT",
+    "featureName": "MP Rot"
+  },
+  {
+    "attribute": "CLAMP",
+    "attributeName": "Clamp",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_ROT",
+    "featureName": "MP Rot"
+  },
+  {
+    "attribute": "MP_SPIN_X",
+    "attributeName": "X",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_SPIN",
+    "featureName": "MP Spin"
+  },
+  {
+    "attribute": "MP_SPIN_Y",
+    "attributeName": "Y",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_SPIN",
+    "featureName": "MP Spin"
+  },
+  {
+    "attribute": "MP_SPIN_Z",
+    "attributeName": "Z",
+    "presetType": "POSITION",
+    "presetName": "Position",
+    "feature": "MP_SPIN",
+    "featureName": "MP Spin"
+  },
+  {
+    "attribute": "GOBO1",
+    "attributeName": "G1",
+    "presetType": "GOBO",
+    "presetName": "Gobo",
+    "feature": "GOBO1",
+    "featureName": "Gobo1"
+  },
+  {
+    "attribute": "GOBO1_POS",
+    "attributeName": "G1<>",
+    "presetType": "GOBO",
+    "presetName": "Gobo",
+    "feature": "GOBO1",
+    "featureName": "Gobo1"
+  },
+  {
+    "attribute": "GOBO2",
+    "attributeName": "G2",
+    "presetType": "GOBO",
+    "presetName": "Gobo",
+    "feature": "GOBO2",
+    "featureName": "Gobo2"
+  },
+  {
+    "attribute": "GOBO2_POS",
+    "attributeName": "G2<>",
+    "presetType": "GOBO",
+    "presetName": "Gobo",
+    "feature": "GOBO2",
+    "featureName": "Gobo2"
+  },
+  {
+    "attribute": "GOBO3",
+    "attributeName": "G3",
+    "presetType": "GOBO",
+    "presetName": "Gobo",
+    "feature": "GOBO3",
+    "featureName": "Gobo3"
+  },
+  {
+    "attribute": "GOBO3_POS",
+    "attributeName": "G3<>",
+    "presetType": "GOBO",
+    "presetName": "Gobo",
+    "feature": "GOBO3",
+    "featureName": "Gobo3"
+  },
+  {
+    "attribute": "GOBO3SPEED",
+    "attributeName": "Gobo3 Speed",
+    "presetType": "GOBO",
+    "presetName": "Gobo",
+    "feature": "GOBO3",
+    "featureName": "Gobo3"
+  },
+  {
+    "attribute": "SCROLLER",
+    "attributeName": "Scroller",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORALL",
+    "featureName": "Color"
+  },
+  {
+    "attribute": "COLOR1",
+    "attributeName": "C1",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLOR1",
+    "featureName": "Color1"
+  },
+  {
+    "attribute": "COLOR2",
+    "attributeName": "C2",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLOR2",
+    "featureName": "Color2"
+  },
+  {
+    "attribute": "COLOR3",
+    "attributeName": "C3",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLOR3",
+    "featureName": "Color3"
+  },
+  {
+    "attribute": "COLORRGB1",
+    "attributeName": "R",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB2",
+    "attributeName": "G",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB3",
+    "attributeName": "B",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB4",
+    "attributeName": "Amber",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB5",
+    "attributeName": "White",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB6",
+    "attributeName": "Warm White",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB7",
+    "attributeName": "Cool White",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB8",
+    "attributeName": "Orange",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB9",
+    "attributeName": "Red Orange",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB10",
+    "attributeName": "Purple",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB11",
+    "attributeName": "Indigo",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB12",
+    "attributeName": "Cyan",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB13",
+    "attributeName": "Magenta",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB14",
+    "attributeName": "Yellow",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB15",
+    "attributeName": "UV",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB16",
+    "attributeName": "Green Cyan",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB17",
+    "attributeName": "Medium White",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB18",
+    "attributeName": "Mint Green",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB19",
+    "attributeName": "Lime",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB20",
+    "attributeName": "CongoBlue",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB21",
+    "attributeName": "RoyalBlue",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORRGB22",
+    "attributeName": "LightGreen",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORRGB",
+    "featureName": "MixColor"
+  },
+  {
+    "attribute": "COLORHSB1",
+    "attributeName": "H",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORHSB",
+    "featureName": "HSB"
+  },
+  {
+    "attribute": "COLORHSB2",
+    "attributeName": "S",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORHSB",
+    "featureName": "HSB"
+  },
+  {
+    "attribute": "COLORHSB3",
+    "attributeName": "B",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORHSB",
+    "featureName": "HSB"
+  },
+  {
+    "attribute": "COLORHSBO",
+    "attributeName": "O",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORHSB",
+    "featureName": "HSB"
+  },
+  {
+    "attribute": "VIRTUAL_COLOR_MODE",
+    "attributeName": "Mode",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "COLORHSB",
+    "featureName": "HSB"
+  },
+  {
+    "attribute": "CTO",
+    "attributeName": "CTO",
+    "presetType": "COLOR",
+    "presetName": "Color",
+    "feature": "CTC",
+    "featureName": "CTC"
+  },
+  {
+    "attribute": "SHUTTER",
+    "attributeName": "Shutter",
+    "presetType": "BEAM",
+    "presetName": "Beam",
+    "feature": "SHUTTER",
+    "featureName": "Shutter"
+  },
+  {
+    "attribute": "STROBE_RATIO",
+    "attributeName": "StrobeDutyCycle",
+    "presetType": "BEAM",
+    "presetName": "Beam",
+    "feature": "SHUTTER",
+    "featureName": "Shutter"
+  },
+  {
+    "attribute": "IRIS",
+    "attributeName": "Iris",
+    "presetType": "BEAM",
+    "presetName": "Beam",
+    "feature": "BEAM1",
+    "featureName": "Beam"
+  },
+  {
+    "attribute": "FROST",
+    "attributeName": "Frost",
+    "presetType": "BEAM",
+    "presetName": "Beam",
+    "feature": "BEAM1",
+    "featureName": "Beam"
+  },
+  {
+    "attribute": "PRISMA1",
+    "attributeName": "Prism1",
+    "presetType": "BEAM",
+    "presetName": "Beam",
+    "feature": "BEAM1",
+    "featureName": "Beam"
+  },
+  {
+    "attribute": "PRISMA2",
+    "attributeName": "PRISMA2",
+    "presetType": "BEAM",
+    "presetName": "Beam",
+    "feature": "BEAM1",
+    "featureName": "Beam"
+  },
+  {
+    "attribute": "PRISMA1_POS",
+    "attributeName": "Pos1",
+    "presetType": "BEAM",
+    "presetName": "Beam",
+    "feature": "BEAM1",
+    "featureName": "Beam"
+  },
+  {
+    "attribute": "PRISMA2_POS",
+    "attributeName": "PRISMA2_POS",
+    "presetType": "BEAM",
+    "presetName": "Beam",
+    "feature": "BEAM1",
+    "featureName": "Beam"
+  },
+  {
+    "attribute": "EFFECTRATE",
+    "attributeName": "Main Effect Speed",
+    "presetType": "BEAM",
+    "presetName": "Beam",
+    "feature": "EFFECT",
+    "featureName": "Effect"
+  },
+  {
+    "attribute": "EFFECTWHEEL",
+    "attributeName": "Main Effect",
+    "presetType": "BEAM",
+    "presetName": "Beam",
+    "feature": "EFFECT",
+    "featureName": "Effect"
+  },
+  {
+    "attribute": "FOCUS",
+    "attributeName": "Focus",
+    "presetType": "FOCUS",
+    "presetName": "Focus",
+    "feature": "FOCUS",
+    "featureName": "Focus"
+  },
+  {
+    "attribute": "ZOOM",
+    "attributeName": "Zoom",
+    "presetType": "FOCUS",
+    "presetName": "Focus",
+    "feature": "FOCUS",
+    "featureName": "Focus"
+  },
+  {
+    "attribute": "LAMPCONTROL",
+    "attributeName": "LampControl",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "LAMP",
+    "featureName": "Lamp"
+  },
+  {
+    "attribute": "LAMPPOWER",
+    "attributeName": "LampPower",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "LAMP",
+    "featureName": "Lamp"
+  },
+  {
+    "attribute": "FUNCTION",
+    "attributeName": "FUNCTION",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "RESET",
+    "featureName": "Reset"
+  },
+  {
+    "attribute": "FIXTUREGLOBALRESET",
+    "attributeName": "FixtureGlobal",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "RESET",
+    "featureName": "Reset"
+  },
+  {
+    "attribute": "DUMMY",
+    "attributeName": "Dummy",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "CONTROL",
+    "featureName": "Control"
+  },
+  {
+    "attribute": "UNKNOWN",
+    "attributeName": "Dummy",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "CONTROL",
+    "featureName": "Control"
+  },
+  {
+    "attribute": "V_PM_FADE",
+    "attributeName": "PM-Fade",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "CONTROL",
+    "featureName": "Control"
+  },
+  {
+    "attribute": "ASSERT",
+    "attributeName": "Assert",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "CONTROL",
+    "featureName": "Control"
+  },
+  {
+    "attribute": "PTSPEED",
+    "attributeName": "Tilt Speed",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "CONTROL",
+    "featureName": "Control"
+  },
+  {
+    "attribute": "MODE",
+    "attributeName": "Mode",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "FIXTURE",
+    "featureName": "Fixture"
+  },
+  {
+    "attribute": "POSITIONMSPEED",
+    "attributeName": "Position",
+    "presetType": "CONTROL",
+    "presetName": "Control",
+    "feature": "MSPEED",
+    "featureName": "Mspeed"
+  },
+  {
+    "attribute": "BLADE1A",
+    "attributeName": "1A",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE1B",
+    "attributeName": "1B",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE2A",
+    "attributeName": "2A",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE2B",
+    "attributeName": "2B",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE3A",
+    "attributeName": "3A",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE3B",
+    "attributeName": "3B",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE4A",
+    "attributeName": "4A",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE4B",
+    "attributeName": "4B",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE1ROT",
+    "attributeName": "1Rot",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE2ROT",
+    "attributeName": "2Rot",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE3ROT",
+    "attributeName": "3Rot",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BLADE4ROT",
+    "attributeName": "4Rot",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "SHAPER ROT",
+    "attributeName": "FrameAssembly",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "SHAPER",
+    "featureName": "Frames"
+  },
+  {
+    "attribute": "BARNDOOR1",
+    "attributeName": "Bd1",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "BARNDOORS",
+    "featureName": "Barndoors"
+  },
+  {
+    "attribute": "BARNDOOR2",
+    "attributeName": "Bd2",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "BARNDOORS",
+    "featureName": "Barndoors"
+  },
+  {
+    "attribute": "BARNDOOR3",
+    "attributeName": "Bd3",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "BARNDOORS",
+    "featureName": "Barndoors"
+  },
+  {
+    "attribute": "BARNDOOR4",
+    "attributeName": "Bd4",
+    "presetType": "SHAPERS",
+    "presetName": "Shapers",
+    "feature": "BARNDOORS",
+    "featureName": "Barndoors"
+  },
+  {
+    "attribute": "V_O3DPOOL",
+    "attributeName": "3D-Pool",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "V_OTYPE",
+    "attributeName": "3D-Objects",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "V_OPOOL",
+    "attributeName": "I-Pool",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "V_OIMAGE",
+    "attributeName": "Images",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "V_OIMAGE_MASK",
+    "attributeName": "Mask",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "V_DARKNESS",
+    "attributeName": "Darkness",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "V_DARK_IS_TRANSPAR",
+    "attributeName": "DIT",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "OUTPUT",
+    "attributeName": "Output",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "V_SLT",
+    "attributeName": "Transition",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "V_SLT_TIME",
+    "attributeName": "Transition Time",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "V_SLT_TYPE",
+    "attributeName": "Transition Type",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ",
+    "featureName": "VObj"
+  },
+  {
+    "attribute": "V_OP_X",
+    "attributeName": "X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_POS",
+    "featureName": "VPos"
+  },
+  {
+    "attribute": "V_OP_Y",
+    "attributeName": "Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_POS",
+    "featureName": "VPos"
+  },
+  {
+    "attribute": "V_OP_Z",
+    "attributeName": "Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_POS",
+    "featureName": "VPos"
+  },
+  {
+    "attribute": "V_OP_SCALE",
+    "attributeName": "Scale",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_POS",
+    "featureName": "VPos"
+  },
+  {
+    "attribute": "V_OR_X",
+    "attributeName": "X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_ROT",
+    "featureName": "VRot"
+  },
+  {
+    "attribute": "V_OR_Y",
+    "attributeName": "Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_ROT",
+    "featureName": "VRot"
+  },
+  {
+    "attribute": "V_OR_Z",
+    "attributeName": "Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_ROT",
+    "featureName": "VRot"
+  },
+  {
+    "attribute": "V_ORC_X",
+    "attributeName": "CX",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_ROT",
+    "featureName": "VRot"
+  },
+  {
+    "attribute": "V_ORC_Y",
+    "attributeName": "CY",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_ROT",
+    "featureName": "VRot"
+  },
+  {
+    "attribute": "V_ORC_Z",
+    "attributeName": "CZ",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_ROT",
+    "featureName": "VRot"
+  },
+  {
+    "attribute": "V_OPA_X",
+    "attributeName": "X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_POS_ANI",
+    "featureName": "VPos<>"
+  },
+  {
+    "attribute": "V_OPA_Y",
+    "attributeName": "Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_POS_ANI",
+    "featureName": "VPos<>"
+  },
+  {
+    "attribute": "V_OPA_Z",
+    "attributeName": "Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_POS_ANI",
+    "featureName": "VPos<>"
+  },
+  {
+    "attribute": "V_ORA_X",
+    "attributeName": "X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_ROT_ANI",
+    "featureName": "VRot<>"
+  },
+  {
+    "attribute": "V_ORA_Y",
+    "attributeName": "Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_ROT_ANI",
+    "featureName": "VRot<>"
+  },
+  {
+    "attribute": "V_ORA_Z",
+    "attributeName": "Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_ROT_ANI",
+    "featureName": "VRot<>"
+  },
+  {
+    "attribute": "V_OS_X",
+    "attributeName": "X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_SCALE",
+    "featureName": "VScale"
+  },
+  {
+    "attribute": "V_OS_Y",
+    "attributeName": "Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_SCALE",
+    "featureName": "VScale"
+  },
+  {
+    "attribute": "V_OS_Z",
+    "attributeName": "Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_SCALE",
+    "featureName": "VScale"
+  },
+  {
+    "attribute": "V_OS_ALL",
+    "attributeName": "All",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_OBJ_SCALE",
+    "featureName": "VScale"
+  },
+  {
+    "attribute": "VIDEO_MODE",
+    "attributeName": "Mode",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_PRESET",
+    "featureName": "VPreset"
+  },
+  {
+    "attribute": "V_PRESET1",
+    "attributeName": "VP1",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_PRESET",
+    "featureName": "VPreset"
+  },
+  {
+    "attribute": "V_PRESET2",
+    "attributeName": "VP2",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_PRESET",
+    "featureName": "VPreset"
+  },
+  {
+    "attribute": "V_ISPLT_X",
+    "attributeName": "Split X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_IMAGE",
+    "featureName": "VImg"
+  },
+  {
+    "attribute": "V_ISPLT_Y",
+    "attributeName": "Split Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_IMAGE",
+    "featureName": "VImg"
+  },
+  {
+    "attribute": "V_IOFFS_X",
+    "attributeName": "Offset X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_IMAGE",
+    "featureName": "VImg"
+  },
+  {
+    "attribute": "V_IOFFS_Y",
+    "attributeName": "Offset Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_IMAGE",
+    "featureName": "VImg"
+  },
+  {
+    "attribute": "V_IANI_X",
+    "attributeName": "X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_IMAGE_ANI",
+    "featureName": "VImg<>"
+  },
+  {
+    "attribute": "V_IANI_Y",
+    "attributeName": "Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_IMAGE_ANI",
+    "featureName": "VImg<>"
+  },
+  {
+    "attribute": "V_PLAYMODE",
+    "attributeName": "Playmode",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_VIDEO",
+    "featureName": "VPlayer"
+  },
+  {
+    "attribute": "V_VSPEED",
+    "attributeName": "Speed",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_VIDEO",
+    "featureName": "VPlayer"
+  },
+  {
+    "attribute": "V_VBEGIN",
+    "attributeName": "Begin",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_VIDEO",
+    "featureName": "VPlayer"
+  },
+  {
+    "attribute": "V_VEND",
+    "attributeName": "End",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_VIDEO",
+    "featureName": "VPlayer"
+  },
+  {
+    "attribute": "V_VINDEX",
+    "attributeName": "Index",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_VIDEO",
+    "featureName": "VPlayer"
+  },
+  {
+    "attribute": "V_CPOSX",
+    "attributeName": "X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA_POS",
+    "featureName": "VCamPos"
+  },
+  {
+    "attribute": "V_CPOSY",
+    "attributeName": "Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA_POS",
+    "featureName": "VCamPos"
+  },
+  {
+    "attribute": "V_CPOSZ",
+    "attributeName": "Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA_POS",
+    "featureName": "VCamPos"
+  },
+  {
+    "attribute": "V_CROTX",
+    "attributeName": "X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA_ROT",
+    "featureName": "VCamRot"
+  },
+  {
+    "attribute": "V_CROTY",
+    "attributeName": "Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA_ROT",
+    "featureName": "VCamRot"
+  },
+  {
+    "attribute": "V_CROTZ",
+    "attributeName": "Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA_ROT",
+    "featureName": "VCamRot"
+  },
+  {
+    "attribute": "V_CROTX_CP",
+    "attributeName": "CP-X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA_ROT",
+    "featureName": "VCamRot"
+  },
+  {
+    "attribute": "V_CROTY_CP",
+    "attributeName": "CP-Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA_ROT",
+    "featureName": "VCamRot"
+  },
+  {
+    "attribute": "V_CROTZ_CP",
+    "attributeName": "CP-Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA_ROT",
+    "featureName": "VCamRot"
+  },
+  {
+    "attribute": "V_CFOV",
+    "attributeName": "Fov",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA_FOV",
+    "featureName": "FoV"
+  },
+  {
+    "attribute": "V_EFF1_T",
+    "attributeName": "Type",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_1",
+    "featureName": "VEffect1"
+  },
+  {
+    "attribute": "V_EFF1_P1",
+    "attributeName": "P1",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_1",
+    "featureName": "VEffect1"
+  },
+  {
+    "attribute": "V_EFF1_P2",
+    "attributeName": "P2",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_1",
+    "featureName": "VEffect1"
+  },
+  {
+    "attribute": "V_EFF1_P3",
+    "attributeName": "P3",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_1",
+    "featureName": "VEffect1"
+  },
+  {
+    "attribute": "V_EFF2_T",
+    "attributeName": "Type",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_2",
+    "featureName": "VEffect2"
+  },
+  {
+    "attribute": "V_EFF2_P1",
+    "attributeName": "P1",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_2",
+    "featureName": "VEffect2"
+  },
+  {
+    "attribute": "V_EFF2_P2",
+    "attributeName": "P2",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_2",
+    "featureName": "VEffect2"
+  },
+  {
+    "attribute": "V_EFF2_P3",
+    "attributeName": "P3",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_2",
+    "featureName": "VEffect2"
+  },
+  {
+    "attribute": "V_EFF3_T",
+    "attributeName": "Type",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_3",
+    "featureName": "VEffect3"
+  },
+  {
+    "attribute": "V_EFF3_P1",
+    "attributeName": "P1",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_3",
+    "featureName": "VEffect3"
+  },
+  {
+    "attribute": "V_EFF3_P2",
+    "attributeName": "P2",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_3",
+    "featureName": "VEffect3"
+  },
+  {
+    "attribute": "V_EFF3_P3",
+    "attributeName": "P3",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_3",
+    "featureName": "VEffect3"
+  },
+  {
+    "attribute": "V_EFF4_T",
+    "attributeName": "Type",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_4",
+    "featureName": "VEffect4"
+  },
+  {
+    "attribute": "V_EFF4_P1",
+    "attributeName": "P1",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_4",
+    "featureName": "VEffect4"
+  },
+  {
+    "attribute": "V_EFF4_P2",
+    "attributeName": "P2",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_4",
+    "featureName": "VEffect4"
+  },
+  {
+    "attribute": "V_EFF4_P3",
+    "attributeName": "P3",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_EFFECT_4",
+    "featureName": "VEffect4"
+  },
+  {
+    "attribute": "V_SND_V1",
+    "attributeName": "Volume 1",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SOUND",
+    "featureName": "Sound"
+  },
+  {
+    "attribute": "V_SND_V2",
+    "attributeName": "Volume 2",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SOUND",
+    "featureName": "Sound"
+  },
+  {
+    "attribute": "V_3DKST_PX",
+    "attributeName": "Pos X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_3DKST_PY",
+    "attributeName": "Pos Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_3DKST_PZ",
+    "attributeName": "Pos Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_3DKST_RX",
+    "attributeName": "Rot X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_3DKST_RY",
+    "attributeName": "Rot Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_3DKST_RZ",
+    "attributeName": "Rot Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_3DKST_SX",
+    "attributeName": "Scale X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_3DKST_SY",
+    "attributeName": "Scale Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_3DKST_SZ",
+    "attributeName": "Scale Z",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_3DKST_SALL",
+    "attributeName": "Scale All",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_3DKST_OBJ",
+    "attributeName": "3D-Objects",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "3D_KEYSTONE",
+    "featureName": "3D Key"
+  },
+  {
+    "attribute": "V_KEY_1A",
+    "attributeName": "1A",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "KEYSTONE",
+    "featureName": "Keystone"
+  },
+  {
+    "attribute": "V_KEY_1B",
+    "attributeName": "1B",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "KEYSTONE",
+    "featureName": "Keystone"
+  },
+  {
+    "attribute": "V_KEY_2A",
+    "attributeName": "2A",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "KEYSTONE",
+    "featureName": "Keystone"
+  },
+  {
+    "attribute": "V_KEY_2B",
+    "attributeName": "2B",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "KEYSTONE",
+    "featureName": "Keystone"
+  },
+  {
+    "attribute": "V_KEY_3A",
+    "attributeName": "3A",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "KEYSTONE",
+    "featureName": "Keystone"
+  },
+  {
+    "attribute": "V_KEY_3B",
+    "attributeName": "3B",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "KEYSTONE",
+    "featureName": "Keystone"
+  },
+  {
+    "attribute": "V_KEY_4A",
+    "attributeName": "4A",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "KEYSTONE",
+    "featureName": "Keystone"
+  },
+  {
+    "attribute": "V_KEY_4B",
+    "attributeName": "4B",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "KEYSTONE",
+    "featureName": "Keystone"
+  },
+  {
+    "attribute": "V_KEY_CX",
+    "attributeName": "Corr X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "KEYSTONE",
+    "featureName": "Keystone"
+  },
+  {
+    "attribute": "V_KEY_CY",
+    "attributeName": "Corr Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "KEYSTONE",
+    "featureName": "Keystone"
+  },
+  {
+    "attribute": "V_BORDER_LEFT_SOFT",
+    "attributeName": "Left Soft",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "BORDER",
+    "featureName": "Border"
+  },
+  {
+    "attribute": "V_BORDER_LEFT_HARD",
+    "attributeName": "Left Hard",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "BORDER",
+    "featureName": "Border"
+  },
+  {
+    "attribute": "V_BORDER_RIGHT_SOFT",
+    "attributeName": "Right Soft",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "BORDER",
+    "featureName": "Border"
+  },
+  {
+    "attribute": "V_BORDER_RIGHT_HARD",
+    "attributeName": "Right Hard",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "BORDER",
+    "featureName": "Border"
+  },
+  {
+    "attribute": "V_BORDER_TOP_SOFT",
+    "attributeName": "Top Soft",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "BORDER",
+    "featureName": "Border"
+  },
+  {
+    "attribute": "V_BORDER_TOP_HARD",
+    "attributeName": "Top Hard",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "BORDER",
+    "featureName": "Border"
+  },
+  {
+    "attribute": "V_BORDER_BOTTOM_SOFT",
+    "attributeName": "Bottom Soft",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "BORDER",
+    "featureName": "Border"
+  },
+  {
+    "attribute": "V_BORDER_BOTTOM_HARD",
+    "attributeName": "Bottom Hard",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "BORDER",
+    "featureName": "Border"
+  },
+  {
+    "attribute": "V_SOFTEDGE_1A",
+    "attributeName": "1A",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SOFTEDGE",
+    "featureName": "Softedge"
+  },
+  {
+    "attribute": "V_SOFTEDGE_1B",
+    "attributeName": "1B",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SOFTEDGE",
+    "featureName": "Softedge"
+  },
+  {
+    "attribute": "V_SOFTEDGE_2A",
+    "attributeName": "2A",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SOFTEDGE",
+    "featureName": "Softedge"
+  },
+  {
+    "attribute": "V_SOFTEDGE_2B",
+    "attributeName": "2B",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SOFTEDGE",
+    "featureName": "Softedge"
+  },
+  {
+    "attribute": "V_SOFTEDGE_3A",
+    "attributeName": "3A",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SOFTEDGE",
+    "featureName": "Softedge"
+  },
+  {
+    "attribute": "V_SOFTEDGE_3B",
+    "attributeName": "3B",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SOFTEDGE",
+    "featureName": "Softedge"
+  },
+  {
+    "attribute": "V_SOFTEDGE_4A",
+    "attributeName": "4A",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SOFTEDGE",
+    "featureName": "Softedge"
+  },
+  {
+    "attribute": "V_SOFTEDGE_4B",
+    "attributeName": "4B",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SOFTEDGE",
+    "featureName": "Softedge"
+  },
+  {
+    "attribute": "V_SPLIT_SOX",
+    "attributeName": "Offset X",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SPLITSCREEN",
+    "featureName": "Splitscreen"
+  },
+  {
+    "attribute": "V_SPLIT_SOY",
+    "attributeName": "Offset Y",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "SPLITSCREEN",
+    "featureName": "Splitscreen"
+  },
+  {
+    "attribute": "CAMERA_1",
+    "attributeName": "Cam1",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_CAMERA",
+    "featureName": "Camera"
+  },
+  {
+    "attribute": "COMPOSITION_ANI_TYPE",
+    "attributeName": "Compos Type",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "COMPOS",
+    "featureName": "Composition"
+  },
+  {
+    "attribute": "COMPOSITION_ANI_SPEED",
+    "attributeName": "Compos Speed",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "COMPOS",
+    "featureName": "Composition"
+  },
+  {
+    "attribute": "COMPOSITION_ANI_PARAM1",
+    "attributeName": "Compos P1",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "COMPOS",
+    "featureName": "Composition"
+  },
+  {
+    "attribute": "COMPOSITION_ANI_PARAM2",
+    "attributeName": "Compos P2",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "COMPOS",
+    "featureName": "Composition"
+  },
+  {
+    "attribute": "BLENDING",
+    "attributeName": "Blending",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_MIXMODE",
+    "featureName": "Mixmode"
+  },
+  {
+    "attribute": "BLENDOP",
+    "attributeName": "BlendOp",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_MIXMODE",
+    "featureName": "Mixmode"
+  },
+  {
+    "attribute": "SRCBLEND",
+    "attributeName": "SrcBlend",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_MIXMODE",
+    "featureName": "Mixmode"
+  },
+  {
+    "attribute": "DESTBLEND",
+    "attributeName": "DestBlend",
+    "presetType": "VIDEO",
+    "presetName": "Video",
+    "feature": "V_MIXMODE",
+    "featureName": "Mixmode"
+  }
+]

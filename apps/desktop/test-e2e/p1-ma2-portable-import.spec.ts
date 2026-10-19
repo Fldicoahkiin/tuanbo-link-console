@@ -67,6 +67,7 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     await navigation.getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
+    await page.getByText('歌曲导入与同步', { exact: true }).click();
     const section = page.getByRole('region', { name: 'MA2 现场节目导入' });
     await section.getByText('从 P1 工程导入歌曲', { exact: true }).click();
     await section.getByLabel('仅导入 P1 音乐').click();
@@ -102,6 +103,7 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     await navigation.getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
+    if (!await section.getByRole('button', { name: '更新控台读取' }).isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
     await section.getByRole('button', { name: '更新控台读取' }).click();
     await expect(section.getByText('0 条已关联 · 0 条原生保留 · 0 条需处理', { exact: true })).toBeVisible({ timeout: 90000 });
     await expect(section.getByText('已关联 2 / 2 首歌曲', { exact: false })).toBeVisible({ timeout: 90000 });

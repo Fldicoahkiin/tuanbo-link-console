@@ -1,7 +1,7 @@
 import { writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { test, expect, _electron as electron } from '@playwright/test';
+import { test, expect, _electron as electron, type Locator } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, createLightingUserLibrary, parseLinkProject } from '@tb/schema';
 
 test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存、撤销、重开', async ({}, info) => {
@@ -26,11 +26,20 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await page.getByRole('checkbox', {name: '选中 Cue 实时播放', exact: true}).uncheck();
     await page.locator('.lighting-playback-settings > summary').click();
     const navigation = page.getByRole('navigation', {name: '灯光素材主菜单'});
-    await expect(navigation.getByRole('button')).toHaveText(['控台素材', '面光', '轮廓', '效果']);
+    await expect(navigation.getByRole('button')).toHaveText(['控台素材', '面光', '轮廓', '效果', '分类管理', '新建分类']);
     await expect(page.getByRole('button', {name: '读取控台', exact: true})).toHaveCount(0);
     await expect(page.getByRole('button', {name: 'MA2 同步', exact: true})).toHaveCount(0);
     await page.locator('.waveform-cue-point').first().click();
     const composer = page.locator('.cue-composer');
+    const dragToComposer = async (source: Locator): Promise<void> => {
+      await source.hover();await page.mouse.down();
+      try {
+        // Two moves ensure Chromium delivers dragover before releasing the mouse.
+        // https://playwright.dev/docs/input#dragging-manually
+        await composer.locator('.cue-drop-hint').hover();await composer.locator('.cue-drop-hint').hover();
+        await expect(composer).toHaveAttribute('data-drop-active','true');
+      } finally { await page.mouse.up(); }
+    };
     await expect(composer.getByLabel('Cue 名称', {exact: true})).toHaveValue('开场');
     await navigation.getByRole('button', {name: '面光', exact: true}).click();
     await page.getByRole('button', {name: '添加 灯光素材 2 到当前 Cue', exact: true}).click();
@@ -38,7 +47,7 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await expect.poll(async () => (await events()).length).toBe(2);
     await navigation.getByRole('button', {name: '控台素材', exact: true}).click();
     const source = page.getByRole('button', {name: '试听序列 3 灯光步 1.000', exact: true});
-    await source.dragTo(composer.locator('.cue-drop-hint'));
+    await dragToComposer(source);
     await expect(composer.locator('.cue-ingredient')).toHaveCount(3);
     await expect.poll(async () => (await events()).length).toBe(3);
     await composer.getByRole('button', {name: '移除素材 灯光素材 2', exact: true}).click();
@@ -46,7 +55,7 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await expect(composer.locator('.cue-ingredient')).toHaveCount(3);
     await composer.getByRole('button', {name: '移除素材 灯光素材 3', exact: true}).click();
     await navigation.getByRole('button', {name: '面光', exact: true}).click();
-    await page.locator('.classification-cell').filter({has: page.getByText('灯光素材 3', {exact: true})}).getByRole('button').first().dragTo(composer.locator('.cue-drop-hint'));
+    await dragToComposer(page.locator('.classification-cell').filter({has: page.getByText('灯光素材 3', {exact: true})}).getByRole('button').first());
     await expect(composer.locator('.cue-ingredient')).toHaveCount(3);
     await expect(composer.getByLabel('素材 1 序列', {exact: true})).not.toBeVisible();
     await composer.getByLabel('Cue 名称', {exact: true}).fill('开场组合');
@@ -117,5 +126,5 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await expect(composer.locator('.cue-ingredient')).toHaveCount(0);
     await page.screenshot({path: info.outputPath('empty-cue-reopened.png')});
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } catch (error) { await page.screenshot({ path: info.outputPath('failure.png') }); await writeFile(info.outputPath('failure.txt'), await page.locator('body').innerText()); throw error; } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
 });

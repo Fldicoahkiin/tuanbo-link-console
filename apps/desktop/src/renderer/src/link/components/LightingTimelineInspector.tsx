@@ -18,8 +18,9 @@ export function LightingTimelineInspector(props: LightingTimelineProps & { track
   if (!track) return <div className="inspector-empty">选择灯光轨道查看属性</div>;
   const ids = new Set(props.selectedEventIds ?? []);
   const selected = clip?.events.filter((entry) => ids.has(entry.id)) ?? [];
-  if (clip && selected.length > 1) return <LightingSelectionInspector {...props} track={track} clip={clip} selected={selected} map={map} />;
-  if (!clip || !event) return <LightingTrackInspector {...props} track={track} />;
+  const sourceSelector = props.document.tracks.length > 1 ? <label className="property-row">灯光来源<select aria-label="灯光来源" value={track.id} onChange={input => { const source = props.document.tracks.find(value => value.id === input.target.value); if (source) props.onSelect(source.id, source.clips[0]?.id ?? null); }}>{props.document.tracks.map(source => <option key={source.id} value={source.id}>{source.name}</option>)}</select></label> : null;
+  if (clip && selected.length > 1) return <>{sourceSelector}<LightingSelectionInspector {...props} track={track} clip={clip} selected={selected} map={map} /></>;
+  if (!clip || !event) return <>{sourceSelector}<LightingTrackInspector {...props} track={track} /></>;
   const update = (changed: LightingEvent): void => {
     if (!clip || track.locked) return;
     const previous = clip.events.find((entry) => entry.id === changed.id);
@@ -29,6 +30,7 @@ export function LightingTimelineInspector(props: LightingTimelineProps & { track
     props.onChange({ ...props.document, tracks: props.document.tracks.map((entry) => entry.id === track.id ? { ...track, clips: track.clips.map((entry) => entry.id === clip.id ? { ...clip, duration, events } : entry) } : entry) }, '修改灯光点');
   };
   return <div className="lighting-editor lighting-inspector property-sheet flat-lighting">
+    {sourceSelector}
     <div className="property-identity">
       <div><span className="property-eyebrow">{event ? '灯光点' : '灯光轨道'}{track.locked ? ' · 已锁定' : ''}</span>
         {event?.kind === 'ma2' || event?.kind === 'ma2-fader' ? <input className="property-name" aria-label={event.kind === 'ma2' ? 'Cue 名称' : '推杆点名称'} value={event.label} disabled={track.locked} onChange={(input) => update({ ...event, label: input.target.value })} /> : <strong>{track.name}</strong>}

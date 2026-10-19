@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { lightingTemplateTrackSchema } from './lighting';
 import { ma2RenameRecordSchema } from './ma2-rename';
+import { ma2LayoutSettingsSchema } from './ma2-layout';
 
 export const lightingCategorySchema = z.object({
   id: z.string().min(1), name: z.string().min(1).max(64),
+  custom: z.boolean().optional(),
   section: z.enum(['front', 'rim', 'effect']),
   view: z.enum(['music', 'shape', 'beat']).optional(),
   beats: z.number().finite().positive().max(32).optional(),
@@ -15,6 +17,7 @@ export const lightingLibraryEntrySchema = z.object({
   id: z.string().min(1), name: z.string().trim().min(1).max(512), originalName: z.string(),
   revision: z.number().int().positive(), kind: z.enum(['single', 'sequence', 'combination']),
   categoryIds: z.array(z.string().min(1)), favorite: z.boolean(),
+  autoCategoryIds: z.array(z.string().min(1)).optional(),
   source: z.object({ endpoint: z.string(), show: z.string(), verified: z.boolean() }).strict(),
   track: lightingTemplateTrackSchema,
   members: z.array(z.object({ name: z.string(), sequence: z.number().int().positive(), cue: z.string().regex(/^\d+(?:\.\d+)?$/), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]), delayMs: z.number().finite().nonnegative() }).strict()).optional()
@@ -28,11 +31,14 @@ export const lightingLibrarySelectionsSchema = z.object({
 }).strict();
 export const lightingLibraryViewSchema = z.object({section:z.enum(['front','rim','effect']),tone:z.enum(['bright','middle','dark']),people:z.number().int().positive(),zone:z.enum(['front','middle','back']),view:z.enum(['music','shape']),effectCategory:z.string(),scope:z.enum(['category','all','favorites','unclassified']),query:z.string().max(512),selections:lightingLibrarySelectionsSchema.optional()}).strict();
 export const lightingUserLibrarySchema = z.object({
+  navigation: z.array(z.object({ id: z.string().min(1), display: z.enum(['common', 'more', 'hidden']) }).strict()).optional(),
+  consoleWorkspace: ma2LayoutSettingsSchema.optional(),
   consoleRenames: z.array(ma2RenameRecordSchema).optional(),
   version: z.literal(1), categories: z.array(lightingCategorySchema), entries: z.array(lightingLibraryEntrySchema), view:lightingLibraryViewSchema.optional(),
   hiddenConsoleCues: z.array(z.object({ endpoint:z.string(), show:z.string(), sequence:z.number().int().positive(), cue:z.string(), kind:z.enum(['single','sequence']) }).strict()).optional()
 }).strict().superRefine((library, context) => {
   const categories = new Set(library.categories.map(value => value.id));
+  if (library.navigation && new Set(library.navigation.map(value => value.id)).size !== library.navigation.length) context.addIssue({ code: 'custom', message: '灯光菜单项重复' });
   if (categories.size !== library.categories.length || new Set(library.entries.map(value => value.id)).size !== library.entries.length) context.addIssue({ code: 'custom', message: '灯光分类或素材 ID 重复' });
   for (const entry of library.entries) if (entry.categoryIds.some(id => !categories.has(id))) context.addIssue({ code: 'custom', message: '灯光素材引用不存在的分类' });
 });

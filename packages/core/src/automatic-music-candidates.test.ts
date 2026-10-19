@@ -26,7 +26,7 @@ it('删除仅针对当前音源，单项和整批清除保留手工内容、其�
 it('完整结果提供有位置的候选和 BPM，不伪造灯光事件', () => {
   const f = fixture();
   expect(f.candidates.bpm).toBe(120); expect(f.candidates.items).toHaveLength(6);
-  expect(f.candidates.items.find(item => item.kind === 'section')).toMatchObject({ name: '主歌 1', startMs: 0, endMs: 3000 });
+  expect(f.candidates.items.find(item => item.kind === 'section')).toMatchObject({ name: '段落 1', startMs: 0, endMs: 3000 });
   const next = applyAutomaticMusicCandidates(f.document, f.source, f.candidates, new Set(f.candidates.items.map(item => item.id)));
   expect(next.markers).toHaveLength(5); expect(next.music?.sections).toHaveLength(1);
   expect(next.tracks).toEqual(f.document.tracks); expect(next.tempos).toEqual(f.document.tempos);

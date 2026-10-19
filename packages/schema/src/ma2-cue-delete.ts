@@ -1,0 +1,13 @@
+import { z } from 'zod';
+import { ma2NetworkTargetSchema } from './ma2-bridge';
+import { ma2EffectLibrarySchema } from './ma2-effect-library';
+export const ma2DeleteCueRefSchema = z.object({ sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0) }).strict();
+const context = { network: ma2NetworkTargetSchema, expectedSource: z.object({ show: z.string().min(1), generation: z.string().min(1), version: z.string().min(1) }).strict(), projectId: z.string().uuid(), projectPath: z.string().min(1) };
+export const ma2CueDeletePrepareSchema = z.object({ ...context, refs: z.array(ma2DeleteCueRefSchema).min(1).max(200), progressId: z.string().uuid().optional() }).strict();
+export const ma2CueDeleteCommitSchema = z.object({ ...context, token: z.string().uuid(), progressId: z.string().uuid().optional() }).strict();
+export const ma2CueDeletePlanSchema = z.object({ token: z.string().uuid(), expiresAt: z.string().datetime(), items: z.array(ma2DeleteCueRefSchema.extend({ name: z.string(), eligible: z.boolean(), reason: z.string() }).strict()).max(200) }).strict();
+export const ma2CueDeleteResultSchema = z.object({ deleted: z.array(ma2DeleteCueRefSchema), backups: z.array(z.string()), error: z.string().optional(), library: ma2EffectLibrarySchema.optional() }).strict();
+export type Ma2CueDeletePrepare = z.infer<typeof ma2CueDeletePrepareSchema>;
+export type Ma2CueDeleteCommit = z.infer<typeof ma2CueDeleteCommitSchema>;
+export type Ma2CueDeletePlan = z.infer<typeof ma2CueDeletePlanSchema>;
+export type Ma2CueDeleteResult = z.infer<typeof ma2CueDeleteResultSchema>;

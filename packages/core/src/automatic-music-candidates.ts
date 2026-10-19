@@ -1,8 +1,6 @@
 import { automaticMusicCandidatesSchema, createLightingMusic, lightingDocumentSchema, type AutomaticMusicRun, type AutomaticMusicCandidates, type LightingDocument, type ReferenceAudio } from '@tb/schema';
 import { fuseMusicBeats } from './music-beat-fusion';
 
-const sectionNames: Record<string, string> = { intro: '前奏', verse: '主歌', chorus: '副歌', bridge: '桥段', outro: '尾奏', inst: '间奏', instrumental: '间奏', solo: '独奏', 'pre-chorus': '预副歌', silence: '静音' };
-
 /** Scoped to annotations produced for this source; manual annotations and console objects are untouched. */
 export function removeAutomaticMusicAnnotations(document: LightingDocument, hash: string, ids?: ReadonlySet<string>): LightingDocument {
   const remove = (id: string): boolean => (id.startsWith(`analysis:${hash}:`) || id.startsWith(`music-beat:${hash}:`)) && (!ids || ids.has(id));
@@ -13,7 +11,7 @@ export function removeAutomaticMusicAnnotations(document: LightingDocument, hash
 /** Exposes model predictions for human review, without claiming calibrated accuracy. */
 export function automaticMusicCandidates(run: AutomaticMusicRun): AutomaticMusicCandidates {
   const beats = fuseMusicBeats(run);
-  const structure = run.diagnostics['all-in-one'];
+  const structure = run.diagnostics['audio-structure'] ?? run.diagnostics['all-in-one'];
   const intervals = (beats?.beats ?? []).slice(1).map((at, i) => at - beats.beats[i]!).filter(value => value > 0).sort((a, b) => a - b);
   const median = intervals.length ? intervals[Math.floor(intervals.length / 2)]! : null;
   const stableIntervals = median ? intervals.filter(value => Math.abs(value / median - 1) <= .1) : [];
@@ -22,7 +20,7 @@ export function automaticMusicCandidates(run: AutomaticMusicRun): AutomaticMusic
   for (const kind of ['beat', 'downbeat'] as const) for (const [i, at] of (kind === 'beat' ? beats?.beats ?? [] : beats?.downbeats ?? []).entries()) {
     items.push({ id: `${kind}:${at}`, kind, name: `${kind === 'beat' ? '节拍' : '小节第一拍'} ${i + 1}`, startMs: at * 1000, endMs: null });
   }
-  for (const [i, section] of (structure?.sections ?? []).entries()) items.push({ id: `section:${section.start}:${section.end}`, kind: 'section', name: `${sectionNames[section.label.toLowerCase()] ?? section.label} ${i + 1}`, startMs: section.start * 1000, endMs: section.end * 1000 });
+  for (const [i, section] of (structure?.sections ?? []).entries()) items.push({ id: `section:${section.start}:${section.end}`, kind: 'section', name: `段落 ${i + 1}`, startMs: section.start * 1000, endMs: section.end * 1000 });
   return automaticMusicCandidatesSchema.parse({ sourceSha256: run.audio.source_sha256, durationMs: run.audio.sample_count / run.audio.sample_rate * 1000, bpm: typicalPeriod && !beats.ambiguous ? Math.round(6000 / typicalPeriod) / 100 : null, items: items.sort((a, b) => a.startMs - b.startMs) });
 }
 

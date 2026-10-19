@@ -1,6 +1,7 @@
 import { saveMa2MaterialLibraryCommand } from '@tb/core/link';
 import type { Ma2CatalogRequest, Ma2EffectLibrary } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
+import { currentMa2MaterialLibrary } from '../view-models/ma2-sequence-library';
 
 type MaterialCache = { source: string; library: Ma2EffectLibrary };
 
@@ -9,8 +10,7 @@ export function loadMa2MaterialCache(projectId: string): MaterialCache | null {
   if (project?.projectId !== projectId) return null;
   const cache = project.ma2MaterialLibrary;
   if (!cache?.library) return null;
-  const scan = project.ma2ReadState;
-  if (cache && scan && (cache.source !== scan.source || cache.library.directory.show !== scan.catalog.directory.show || cache.library.directory.generation !== scan.catalog.directory.generation)) return null;
+  if (!currentMa2MaterialLibrary(project)) return null;
   return { source: cache.source, library: cache.library };
 }
 

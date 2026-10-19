@@ -4,6 +4,7 @@ import { ma2NetworkSetupRequestSchema, type Ma2NetworkAdapter, type Ma2NetworkSe
 const value = (address: string): number => address.split('.').reduce((result, part) => result * 256 + Number(part), 0);
 const mask = (prefix: number): number => (0xffffffff << (32 - prefix)) >>> 0;
 export function sameNetwork(a: string, b: string, prefix: number): boolean { return (value(a) & mask(prefix)) === (value(b) & mask(prefix)); }
+export function readyAddress(entry: Ma2NetworkAdapter['addresses'][number]): boolean { return entry.state === undefined || entry.state === 'Preferred'; }
 function usable(address: string, prefix: number): boolean {
   const ip = value(address); const host = (ip & ~mask(prefix)) >>> 0;
   return ip >= 0x01000000 && ip < 0xe0000000 && !address.startsWith('127.') && !address.startsWith('169.254.') && host !== 0 && host !== (~mask(prefix) >>> 0);
@@ -12,18 +13,22 @@ export function planMa2Network(adapters: Ma2NetworkAdapter[], request: Ma2Networ
   const parsed = ma2NetworkSetupRequestSchema.parse(request);
   if (!usable(parsed.host, parsed.prefix)) throw new Error('请填写控台的有效 IPv4 地址，不可使用网络地址、广播地址或本机回环地址');
   const connected = adapters.filter(adapter => adapter.connected);
-  const matching = connected.filter(adapter => adapter.physical && adapter.wired && adapter.addresses.some(entry => entry.prefix > 0 && entry.prefix < 32 && sameNetwork(entry.address, parsed.host, entry.prefix)));
+  const matching = connected.filter(adapter => adapter.physical && adapter.wired && adapter.addresses.some(entry => readyAddress(entry) && entry.prefix > 0 && entry.prefix < 32 && sameNetwork(entry.address, parsed.host, entry.prefix)));
   const candidates = matching.length ? matching : connected.filter(adapter => adapter.physical && adapter.wired);
-  const adapter = parsed.adapterId ? connected.find(adapter => adapter.id === parsed.adapterId) : candidates.length === 1 ? candidates[0] : undefined;
+  const addressOwner = parsed.address ? connected.filter(adapter => adapter.addresses.some(entry => entry.address === parsed.address)) : [];
+  const adapter = parsed.adapterId ? connected.find(adapter => adapter.id === parsed.adapterId) : addressOwner.length === 1 ? addressOwner[0] : candidates.length === 1 ? candidates[0] : undefined;
   if (!adapter) throw new Error(candidates.length > 1 ? '检测到多张可用网卡，请选择插控台网线的那一张，再点自动连接' : '没有找到可用的有线网卡，请插入网线或在手动设置中选择网卡');
   if (adapters.some(adapter => adapter.addresses.some(entry => entry.address === parsed.host))) throw new Error('控台 IP 与电脑现有 IP 相同，请核对控台屏幕上的地址');
-  const existing = adapter.addresses.find(entry => entry.prefix > 0 && entry.prefix < 32 && sameNetwork(entry.address, parsed.host, entry.prefix));
+  const existing = adapter.addresses.find(entry => readyAddress(entry) && entry.prefix > 0 && entry.prefix < 32 && sameNetwork(entry.address, parsed.host, entry.prefix));
   const selected = parsed.address ? adapter.addresses.find(entry => entry.address === parsed.address && entry.prefix > 0 && entry.prefix < 32 && sameNetwork(entry.address, parsed.host, entry.prefix)) : existing;
-  if (selected) return { id: randomUUID(), adapter, host: parsed.host, address: selected.address, prefix: parsed.prefix, needsChange: false, message: `将使用“${adapter.name}”的 ${selected.address} 连接控台 ${parsed.host}；地址在同一网段，通信是否可用以连接结果为准。` };
+  if (selected && !readyAddress(selected)) throw new Error(`电脑 ${selected.address} 的 Windows 地址状态为 ${selected.state}，尚不可用。请刷新网卡；只有 Duplicate 才表示地址冲突。`);
+  if (selected) return { id: randomUUID(), adapter, host: parsed.host, address: selected.address, prefix: selected.prefix, needsChange: false, message: `使用“${adapter.name}”现有地址 ${selected.address}/${selected.prefix} → 控台 ${parsed.host}。无需修改电脑 IP，下一步检查控台端口和登录。` };
+  const owned = parsed.address ? adapters.find(value => value.addresses.some(entry => entry.address === parsed.address)) : undefined;
+  if (owned) throw new Error(`电脑 ${parsed.address} 属于“${owned.name}”，不能用于当前控台 ${parsed.host} 的所选网卡/网段。请选择“自动选择电脑 IP”，软件会显示可用地址，不需要填写上网 IP。`);
   let address = parsed.address;
   if (!address) {
     const target = value(parsed.host); const occupied = new Set(adapters.flatMap(adapter => adapter.addresses.map(entry => entry.address)));
-    for (const offset of [-1, 1, -2, 2, -3, 3]) {
+    for (const offset of [96, 97, 98, 99, 100, -96, -97, -1, 1, -2, 2]) {
       const candidate = target + offset;
       const text = [24, 16, 8, 0].map(shift => (candidate >>> shift) & 255).join('.');
       if (sameNetwork(text, parsed.host, parsed.prefix) && usable(text, parsed.prefix) && !occupied.has(text)) { address = text; break; }
