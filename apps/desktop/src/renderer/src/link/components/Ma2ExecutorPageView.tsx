@@ -1,13 +1,15 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, CornerDownLeft, RefreshCw, List, ArrowLeft, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CornerDownLeft, RefreshCw, List, ArrowLeft, Plus, MoreHorizontal } from 'lucide-react';
 import type { Ma2ExecutorPage } from '@tb/schema';
 import { currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { useMa2ExecutorPageStore, prepareMa2ExecutorPages, loadMa2ExecutorDirectory, loadMa2ExecutorPage, scanMa2ExecutorLocations } from '../stores/ma2-executor-page-store';
 import { useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
 import { Ma2FaderBank } from './Ma2FaderBank';
+import { Ma2MaterialMenu } from './Ma2MaterialMenu';
 
-export function Ma2ExecutorPageView({ typeControl, selected, onBack, onNavigate, onSettings, renderItem, children }: {
+export function Ma2ExecutorPageView({ typeControl, toolbarHost, faderToolbarHost, selected, onBack, onNavigate, onSettings, renderItem, children }: {
+  toolbarHost: HTMLElement | null; faderToolbarHost: HTMLElement | null;
   typeControl: ReactNode; selected: boolean; onBack: () => void; onNavigate: () => void; onSettings?: (() => void) | undefined;
   renderItem: (item: Ma2ExecutorPage['items'][number], page: number) => ReactNode; children: ReactNode;
 }): JSX.Element {
@@ -15,6 +17,7 @@ export function Ma2ExecutorPageView({ typeControl, selected, onBack, onNavigate,
   const scope = currentMa2LayoutScope();
   const [draft, setDraft] = useState(String(state.page)); const [picker, setPicker] = useState(false); const [live, setLive] = useState(true);
   const [inputError, setInputError] = useState('');
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [progressHost, setProgressHost] = useState<HTMLElement | null>(null);
   const snapshot = state.scope === scope ? state.pages[state.page] : undefined;
   useEffect(() => { setProgressHost(window.document.getElementById('ma2-sidebar-read-actions')); }, []);
@@ -55,22 +58,25 @@ export function Ma2ExecutorPageView({ typeControl, selected, onBack, onNavigate,
   const assigned = new Map(snapshot?.items.map(item => [item.slot, item]));
   const continuation = new Set(snapshot?.items.flatMap(item => Array.from({ length: item.width - 1 }, (_, i) => item.slot + i + 1)));
   return <section className="ma2-layout-view ma2-executor-view" aria-label="控台执行器页面">
-    <div className="ma2-layout-titlebar">
-      {typeControl}<strong>{snapshot?.name || `${state.kind === 'fader' ? '推杆' : '按钮'}第 ${state.page} 页`}</strong>
+    {toolbarHost ? createPortal(<div className="ma2-layout-titlebar">
+      {typeControl}
       <form className="ma2-layout-pager" onSubmit={event => { event.preventDefault(); navigate(Number(draft)); }}>
         <button type="button" aria-label="上一个控台页面" disabled={state.busy || state.page <= 1} onClick={() => navigate(state.page - 1)}><ChevronLeft/></button>
-        <label>页面<input aria-label="控台页面编号" type="number" min={1} max={9999} value={draft} onChange={event => setDraft(event.target.value)}/></label>
-        <button type="submit" aria-label="跳转" disabled={state.busy}><CornerDownLeft/></button>
+        <label>页面<input aria-label="控台页面编号" title={`第 ${state.page} 页${snapshot?.name ? ` · ${snapshot.name}` : ''}，输入页码后回车跳转`} type="number" min={1} max={9999} value={draft} onChange={event => setDraft(event.target.value)}/></label>
+        <button type="submit" aria-label="跳转" title="跳转到此页" disabled={state.busy}><CornerDownLeft/></button>
         <button type="button" aria-label="下一个控台页面" disabled={state.busy || state.page >= 9999} onClick={() => navigate(state.page + 1)}><ChevronRight/></button>
       </form>
-      <button aria-label="刷新控台页面" disabled={state.busy} onClick={() => navigate(state.page)}><RefreshCw/></button>
-      <button aria-label="所有页面" aria-expanded={picker} onClick={() => { setPicker(!picker); if (!picker) void loadMa2ExecutorDirectory().catch((cause: unknown) => setInputError(String(cause))); }}><List/></button>
-      <label><input aria-label="实时回读执行器页面" type="checkbox" checked={live} onChange={event => setLive(event.target.checked)}/>实时</label>
-      {selected ? <button onClick={onBack}><ArrowLeft/>返回页面</button> : null}
-      {onSettings ? <button aria-label="新建 Cue" onClick={onSettings}><Plus/><span>新建</span></button> : null}
-    </div>
+      <button aria-label="所有页面" title="所有页面" aria-expanded={picker} onClick={() => { setPicker(!picker); if (!picker) void loadMa2ExecutorDirectory().catch((cause: unknown) => setInputError(String(cause))); }}><List/></button>
+      <Ma2MaterialMenu label="页面选项" trigger={<MoreHorizontal/>} open={optionsOpen} onOpenChange={setOptionsOpen}>
+        <p>{snapshot?.name || `${state.kind === 'fader' ? '推杆' : '按钮'}第 ${state.page} 页`}</p>
+        <button disabled={state.busy} onClick={() => { setOptionsOpen(false); navigate(state.page); }}><RefreshCw/>刷新控台页面</button>
+        <label className="ma2-page-live-option"><input aria-label="实时回读执行器页面" type="checkbox" checked={live} onChange={event => setLive(event.target.checked)}/>实时回读页面</label>
+      </Ma2MaterialMenu>
+      {selected ? <button aria-label="返回页面" title="返回页面" onClick={onBack}><ArrowLeft/></button> : null}
+      {onSettings ? <button aria-label="新建 Cue" title="新建 Cue" onClick={onSettings}><Plus/></button> : null}
+    </div>, toolbarHost) : null}
     {picker ? <div className="ma2-layout-page-picker" role="dialog" aria-label="选择控台页面"><header><strong>执行器页面</strong><button onClick={() => setPicker(false)}>关闭</button></header><select aria-label="控台所有页面" size={8} value={state.page} onChange={event => navigate(Number(event.target.value))}>{state.directory?.pages.map(page => <option key={page.page} value={page.page}>{page.page}{page.name ? ` · ${page.name}` : ''}</option>)}</select></div> : null}
-    {inputError || state.error ? <div className="ma2-layout-empty" role="alert">{inputError || state.error}<button onClick={() => navigate(state.page)}>重新读取本页</button></div> : selected ? children : snapshot && state.kind === 'fader' ? <Ma2FaderBank page={snapshot} scope={scope} renderItem={renderItem}/> : snapshot ? <div className="ma2-executor-scroll"><div className="ma2-executor-grid" aria-label={`${state.kind === 'fader' ? '推杆' : '按钮'}第 ${state.page} 页`}>
+    {inputError || state.error ? <div className="ma2-layout-empty" role="alert">{inputError || state.error}<button onClick={() => navigate(state.page)}>重新读取本页</button></div> : selected ? children : snapshot && state.kind === 'fader' ? <Ma2FaderBank page={snapshot} scope={scope} toolbarHost={faderToolbarHost} renderItem={renderItem}/> : snapshot ? <div className="ma2-executor-scroll"><div className="ma2-executor-grid" aria-label={`${state.kind === 'fader' ? '推杆' : '按钮'}第 ${state.page} 页`}>
       {slots.map(slot => {
         if (continuation.has(slot)) return null;
         const item = assigned.get(slot); const index = slot - start;

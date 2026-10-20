@@ -47,7 +47,7 @@ for (const failure of ['read', 'input'] as const) test(`推杆位置与双向回
     await expect(page.locator('.ma2-fader-strip')).toHaveCount(15);
     await slider.focus(); await slider.press('End');
     await expect(slider).toHaveValue('1');
-    await expect(page.getByText('等待控台回读', { exact: true })).toBeVisible();
+    await expect(page.getByRole('status', { name: '等待控台回读', exact: true })).toBeVisible();
     await expect(page.locator('.ma2-fader-block output').first()).toHaveText('100%');
     await app.evaluate(() => { process.env.TBLINK_FADER_LEVEL = '0.63'; });
     await expect(slider).toHaveValue('0.63');
@@ -59,7 +59,27 @@ for (const failure of ['read', 'input'] as const) test(`推杆位置与双向回
     expect(layout.controls).toBeLessThanOrEqual(layout.viewport + 1);
     const nameBounds = await page.locator('.ma2-fader-strip').first().evaluate(element => ({ strip: element.getBoundingClientRect().right, title: element.querySelector('.ma2-fader-heading button')!.getBoundingClientRect().right }));
     expect(nameBounds.title).toBeLessThanOrEqual(nameBounds.strip);
+    const toolbar = pool.locator('.ma2-material-menubar');
+    const toolbarBounds = (await toolbar.boundingBox())!;
+    expect(toolbarBounds.height).toBeLessThanOrEqual(36);
+    for (const control of [pool.getByRole('button', { name: '控台页面', exact: true }), pool.getByLabel('控台页面类型'), pool.getByLabel('控台页面编号'), pool.getByLabel('推杆范围'), pool.getByLabel('搜索序列或 Cue')]) {
+      const bounds = (await control.boundingBox())!;
+      expect(Math.abs(bounds.y + bounds.height / 2 - toolbarBounds.y - toolbarBounds.height / 2)).toBeLessThanOrEqual(1);
+      expect(bounds.x).toBeGreaterThanOrEqual(toolbarBounds.x);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(toolbarBounds.x + toolbarBounds.width + 1);
+    }
+    const bankBounds = (await page.locator('.ma2-fader-bank').boundingBox())!;
+    expect(bankBounds.y - toolbarBounds.y - toolbarBounds.height).toBeLessThanOrEqual(10);
     await page.screenshot({ path: info.outputPath('fader-page-compact.png') });
+    await pool.getByRole('button', { name: '页面选项', exact: true }).click();
+    const options = page.getByRole('dialog', { name: '页面选项', exact: true });
+    await expect(options.getByRole('checkbox', { name: '实时回读执行器页面' })).toBeInViewport();
+    await options.getByRole('button', { name: '刷新控台页面', exact: true }).click();
+    await expect(options).toHaveCount(0);
+    await expect(slider).toHaveValue('0.63');
+    await pool.getByRole('button', { name: '所有页面', exact: true }).click();
+    await page.getByRole('dialog', { name: '选择控台页面' }).getByLabel('控台所有页面').selectOption('100');
+    await expect(slider).toHaveValue('0.63');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1600, 1000));
     await page.getByRole('button', { name: '执行器 1 Flash', exact: true }).focus(); await page.keyboard.down('Space');
     await page.evaluate(() => window.dispatchEvent(new Event('blur')));

@@ -30,11 +30,12 @@
 .program-lighting-badge { margin-right: 4px; vertical-align: middle; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; line-height: 16px; color: #addeb6; }
 .program-lighting-badge svg { width: 12px; height: 12px; }
 
-.ma2-material-menubar { flex-wrap:nowrap; justify-content:space-between; min-height:32px; }
+.ma2-material-menubar { flex-wrap:nowrap; min-height:32px; }
 .ma2-material-menubar>[role=group] { display:flex; align-items:center; gap:5px; }
+.ma2-material-menubar>[role=group]>button { padding-inline:6px; }
 .ma2-material-menubar .ma2-pool-search { margin-inline-start:auto; }
 
-.ma2-sequence-preview .ma2-material-menubar { display:flex; flex-wrap:nowrap; gap:12px; overflow-x:auto; flex-shrink:0; scrollbar-width:thin; }
+.ma2-sequence-preview .ma2-material-menubar { display:flex; flex-wrap:nowrap; gap:6px; overflow-x:auto; flex-shrink:0; scrollbar-width:thin; }
 .ma2-material-menubar>[role=group] { flex-shrink:0; }
 .ma2-material-menubar .ma2-pool-navigation { flex-wrap:nowrap; gap:4px; flex-shrink:0; padding-inline-start:10px; border-inline-start:1px solid var(--separator); }
 .ma2-material-menubar .ma2-pool-navigation>strong { max-width:140px; width:auto; margin-inline-end:6px; font-size:12px; font-weight:500; }
@@ -42,12 +43,15 @@
 .ma2-material-menubar .ma2-pool-navigation>button { width:30px; min-height:30px; justify-content:center; padding:5px; }
 .ma2-material-menubar .ma2-pool-search { min-width:100px; flex:1; max-width:200px; }
 .ma2-material-menubar .ma2-pool-search>input { width:100%; min-width:80px; }
+.ma2-material-menubar .ma2-pool-search>svg { flex:none; width:14px; }
 
 .ma2-material-menubar .ma2-pool-navigation>strong { max-width:160px; flex-shrink:1; overflow:hidden; text-overflow:ellipsis; }
 .ma2-material-menubar > button { flex-shrink:0; white-space:nowrap; }
+.ma2-material-menubar > .ma2-material-menu-trigger { width:30px; padding:4px; justify-content:center; }
 .ma2-material-menu-trigger { max-width:220px; overflow:hidden; text-overflow:ellipsis; }
 .ma2-material-menu { z-index:10000; width:220px; max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); box-sizing:border-box; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:4px; background:var(--surface-raised); color:var(--text-primary); border:1px solid var(--separator); border-radius:8px; box-shadow:0 8px 24px #0006; }
-.ma2-material-menu button { min-height:30px; padding:5px 8px; background:transparent; color:inherit; border:1px solid transparent; border-radius:5px; font:inherit; font-size:12px; text-align:left; cursor:pointer; }
+.ma2-material-menu button { display:flex; align-items:center; gap:6px; min-height:30px; padding:5px 8px; background:transparent; color:inherit; border:1px solid transparent; border-radius:5px; font:inherit; font-size:12px; text-align:left; cursor:pointer; }
+.ma2-material-menu button svg { width:14px; height:14px; flex:none; }
 .ma2-material-menu button:hover, .ma2-material-menu button:focus-visible { background:var(--surface-hover); border-color:var(--accent); outline:none; }
 .ma2-material-menu button[aria-pressed=true] { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 12%,var(--surface-raised)); }
 .ma2-material-menu p, .ma2-material-menu small { margin:5px; font-size:12px; }

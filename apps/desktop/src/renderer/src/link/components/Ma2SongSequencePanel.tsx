@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ma2SongPoints, setLightingCommand } from '@tb/core/link';
-import type { Ma2LayoutSettings } from '@tb/schema';
+import { ma2SongPoints, projectLightingLibrary, setLightingCommand, setLightingLibraryCommand } from '@tb/core/link';
+import { ma2LayoutSettingsSchema, type Ma2LayoutSettings } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { startMa2SongSync, stopMa2SongSync, useMa2SongSyncStore } from '../runtime/ma2-song-sync';
 import { locateMa2Executor, ma2ExecutorLocationLabel } from '../stores/ma2-executor-page-store';
+import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
 export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; settings: Ma2LayoutSettings }): JSX.Element {
   const item = useDocumentStore(state => state.project?.rundown.find(value => value.id === itemId));
@@ -11,9 +12,35 @@ export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; set
   const binding = item?.lighting?.consoleSong;
   const [name, setName] = useState(binding?.name ?? item?.title ?? '歌曲序列');
   const [editingName, setEditingName] = useState(false);
-  const [executorPage, setExecutorPage] = useState(binding?.executor ? Number(binding.executor.split('.')[0]) : settings.executorPage ?? 1000);
+  const executorPage = settings.executorPage ?? 1000;
+  const [pageDraft, setPageDraft] = useState(String(executorPage));
+  const [savingDefault, setSavingDefault] = useState(false);
+  const [defaultMessage, setDefaultMessage] = useState('');
+  useEffect(() => { setPageDraft(String(executorPage)); }, [executorPage]);
   useEffect(() => { if (!editingName && binding) setName(binding.name); }, [binding, editingName]);
   const [error, setError] = useState(''); const [review, setReview] = useState(false);
+  const saveDefaultPage = async (): Promise<void> => {
+    setSavingDefault(true); setError(''); setDefaultMessage('');
+    try {
+      const page = Number(pageDraft);
+      if (!Number.isInteger(page) || page < 1 || page > 9999) throw new Error('默认创建页请输入 1–9999 的整数');
+      const before = useDocumentStore.getState();
+      if (!before.project) throw new Error('请先打开工程');
+      const library = projectLightingLibrary(before.project);
+      if (library.consoleWorkspace?.executorPage !== page) {
+        const workspace = ma2LayoutSettingsSchema.parse({ ...settings, ...library.consoleWorkspace, executorPage: page });
+        before.execute(setLightingLibraryCommand({ ...library, consoleWorkspace: workspace }, '设置默认歌曲按钮页'));
+      }
+      const current = useDocumentStore.getState();
+      if (!current.project) throw new Error('工程已关闭');
+      const path = await linkDesktopViewModel.saveProject(current.path, current.project);
+      if (!path) throw new Error('默认页已修改，工程尚未保存，请再次点击保存默认');
+      if (useDocumentStore.getState().documentId !== current.documentId) throw new Error('工程已切换，默认页已保存到原工程');
+      current.markSaved(path, current.revision, current.documentId);
+      setPageDraft(String(page)); setDefaultMessage(`默认第 ${page} 页，已随工程保存`);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSavingDefault(false); }
+  };
   const removed = binding?.points.filter(point => !item?.lighting?.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.id === point.id || event.effectGroupId === point.id)))) ?? [];
   const start = (confirmed = false): void => {
     try {
@@ -25,13 +52,18 @@ export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; set
   return <section className="ma2-song-panel" aria-label="本曲控台序列">
     <strong>本曲控台序列</strong>
     <p>{binding ? `${binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`} · 序列 ${binding.sequence} · ${binding.points.length} 步` : `整首歌合为一条多步序列，放进按钮第 ${executorPage} 页的空格。可以在控台继续编灯。`}</p>
-    {binding?.executor ? <button onClick={() => { const [page, slot] = binding.executor!.split('.').map(Number); locateMa2Executor(page!, slot!); }}>定位本曲控台位置</button> : !binding ? <label>按钮页<input aria-label="本曲按钮页" type="number" min={1} max={9999} value={executorPage} onChange={event => setExecutorPage(Number(event.target.value))}/></label> : null}
+    {binding?.executor ? <button onClick={() => { const [page, slot] = binding.executor!.split('.').map(Number); locateMa2Executor(page!, slot!); }}>定位本曲控台位置</button> : null}
+    <form className="ma2-song-default-page" noValidate onSubmit={event => { event.preventDefault(); void saveDefaultPage(); }}>
+      <label>默认创建页<input aria-label="默认创建按钮页" type="number" min={1} max={9999} step={1} value={pageDraft} disabled={savingDefault} onChange={event => { setPageDraft(event.target.value); setDefaultMessage(''); }}/></label>
+      <button disabled={savingDefault}>{savingDefault ? '保存中…' : '保存默认'}</button>
+      <small>{defaultMessage || '本工程后续新建歌曲使用此按钮页，已创建歌曲保持原位置。'}</small>
+    </form>
     <label>序列名称<input aria-label="本曲控台序列名称" value={name} onFocus={() => setEditingName(true)} onChange={event => setName(event.target.value)} onBlur={() => {
       setEditingName(false); if (!binding || !item?.lighting || name === binding.name) return;
       try { useDocumentStore.getState().execute(setLightingCommand(itemId, { ...item.lighting, consoleSong: { ...binding, name: name.trim() } }, '重命名歌曲控台序列')); setError(''); }
       catch (cause) { setError(String(cause)); }
     }}/></label>
-    <div><button disabled={status?.state === 'syncing'} onClick={() => start()}>{binding ? status?.state === 'blocked' ? '重新核对并同步' : '开启本曲双向同步' : `创建到按钮第 ${executorPage} 页并同步`}</button>{status ? <button disabled={status.state === 'syncing'} onClick={() => stopMa2SongSync(itemId)}>暂停同步</button> : null}</div>
+    <div><button disabled={status?.state === 'syncing' || savingDefault || !binding && pageDraft !== String(executorPage)} title={!binding && pageDraft !== String(executorPage) ? '请先保存默认创建页' : undefined} onClick={() => start()}>{binding ? status?.state === 'blocked' ? '重新核对并同步' : '开启本曲双向同步' : `创建到按钮第 ${executorPage} 页并同步`}</button>{status ? <button disabled={status.state === 'syncing'} onClick={() => stopMa2SongSync(itemId)}>暂停同步</button> : null}</div>
     {status ? <p role={status.state === 'blocked' ? 'alert' : 'status'}>{status.message}</p> : null}
     {removed.length ? <button onClick={() => setReview(!review)}>核对控台删除清单 · {removed.length} 项</button> : null}
     {review ? <div className="ma2-song-delete-review"><strong>将同时删除控台 Cue</strong><ul>{removed.map(point => <li key={point.id}>Sequence {binding?.sequence} · Cue {Number(point.cue)}</li>)}</ul><button onClick={() => start(true)}>确认清单并同步删除</button><button onClick={() => setReview(false)}>取消</button></div> : null}

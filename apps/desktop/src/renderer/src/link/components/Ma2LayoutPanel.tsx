@@ -18,7 +18,8 @@ import '../ma2-layout.css';
 export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, onClose }: { itemId: string; document: LightingDocument; ingredients: CueIngredient[]; onIngredients: (value: CueIngredient[]) => void; onClose: () => void }): JSX.Element {
   const project = useDocumentStore(state => state.project);
   const saved = project ? projectLightingLibrary(project).consoleWorkspace : undefined;
-  const [settings, setSettings] = useState<Ma2LayoutSettings>(saved ?? { layout: 999, name: '联动台新建 Cue', nextSequence: 9000, columns: 8 });
+  const [settingsDraft, setSettingsDraft] = useState<Partial<Ma2LayoutSettings>>({});
+  const settings: Ma2LayoutSettings = { layout: 999, name: '联动台新建 Cue', nextSequence: 9000, columns: 8, ...saved, ...settingsDraft };
   const [layout, setLayout] = useState<Ma2LayoutSnapshot | null>(null);
   const [mode, setMode] = useState<'combine' | 'programmer'>('combine');
   const [use, setUse] = useState<'Active' | 'Look'>('Active');
@@ -69,7 +70,7 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
       if(!savedPath)throw new Error('控台已创建，工程保存未完成');
       latest.markSaved(savedPath,latest.revision,before.documentId);
       acceptCreatedMa2Layout(layoutScope,result.layout);
-      setLayout(result.layout);setSettings(nextSettings);setMessage(`“${name}”已创建：序列 ${result.sequence} · Cue 1 · Layout ${result.layout.layout}，回读已确认`);setName('');onIngredients([]);setCreating(false);
+      setLayout(result.layout);setSettingsDraft({});setMessage(`“${name}”已创建：序列 ${result.sequence} · Cue 1 · Layout ${result.layout.layout}，回读已确认`);setName('');onIngredients([]);setCreating(false);
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause));setMessage('');}
     finally{setBusy(false);}
   };
@@ -77,12 +78,12 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
     <header><strong>新建与同步</strong><button onClick={()=>setCreating(!creating)} disabled={busy}><Plus/>新建 Cue</button><button aria-label="关闭 Layout" onClick={onClose} disabled={busy}><X/></button></header>
     <Ma2SongSequencePanel itemId={itemId} settings={settings}/>
     <details><summary><Settings2/>专用页面设置</summary><div className="ma2-layout-settings">
-      <label>Layout 编号<input aria-label="专用 Layout 编号" type="number" min="1" max="9999" value={settings.layout} disabled={busy} onChange={event=>{setSettings({...settings,layout:Number(event.target.value)});setLayout(null);}}/></label>
-      <label>新布局名称<input value={settings.name} disabled={busy} onChange={event=>setSettings({...settings,name:event.target.value})}/></label>
-      <label>起始序列编号<input aria-label="新建 Cue 序列编号" type="number" min="1" max="99999" value={settings.nextSequence} disabled={busy} onChange={event=>setSettings({...settings,nextSequence:Number(event.target.value)})}/></label>
-      <label>每行按钮数<input type="number" min="1" max="24" value={settings.columns} disabled={busy} onChange={event=>setSettings({...settings,columns:Number(event.target.value)})}/></label>
+      <label>Layout 编号<input aria-label="专用 Layout 编号" type="number" min="1" max="9999" value={settings.layout} disabled={busy} onChange={event=>{setSettingsDraft({...settingsDraft,layout:Number(event.target.value)});setLayout(null);}}/></label>
+      <label>新布局名称<input value={settings.name} disabled={busy} onChange={event=>setSettingsDraft({...settingsDraft,name:event.target.value})}/></label>
+      <label>起始序列编号<input aria-label="新建 Cue 序列编号" type="number" min="1" max="99999" value={settings.nextSequence} disabled={busy} onChange={event=>setSettingsDraft({...settingsDraft,nextSequence:Number(event.target.value)})}/></label>
+      <label>每行按钮数<input type="number" min="1" max="24" value={settings.columns} disabled={busy} onChange={event=>setSettingsDraft({...settingsDraft,columns:Number(event.target.value)})}/></label>
     </div><p>第一次新建请选择空 Layout。只追加到本工程创建的专用布局；原有布局可以读取查看。</p></details>
-    <div className="ma2-layout-read"><label>查看 Layout<input aria-label="查看 Layout 编号" type="number" min="1" max="9999" value={settings.layout} disabled={busy} onChange={event=>{setSettings({...settings,layout:Number(event.target.value)});setLayout(null);}}/></label><button onClick={()=>void read()} disabled={busy}><RefreshCw/>读取页面</button></div>
+    <div className="ma2-layout-read"><label>查看 Layout<input aria-label="查看 Layout 编号" type="number" min="1" max="9999" value={settings.layout} disabled={busy} onChange={event=>{setSettingsDraft({...settingsDraft,layout:Number(event.target.value)});setLayout(null);}}/></label><button onClick={()=>void read()} disabled={busy}><RefreshCw/>读取页面</button></div>
     {creating ? <form className="ma2-layout-create" onSubmit={event=>{event.preventDefault();void create();}}><label>Cue 名称<input aria-label="新建控台 Cue 名称" value={name} required maxLength={512} disabled={busy} onChange={event=>setName(event.target.value)}/></label><select aria-label="新建 Cue 方式" value={mode} disabled={busy} onChange={event=>setMode(event.target.value==='combine'?'combine':'programmer')}><option value="combine">组合已有 Cue</option><option value="programmer">保存控台当前灯光</option></select>
       {mode==='combine'?<><p>拖入素材或点击素材旁的 +。只合成已保存属性；重叠属性按下面顺序由后者覆盖，不包含延迟或多步运行过程。</p><ol>{ingredients.map((value,index)=><li key={index}><span>{value.name} <small>{value.sequence} / {value.cue}</small></span><button type="button" aria-label={`移除组合素材 ${index+1}`} disabled={busy} onClick={()=>onIngredients(ingredients.filter((_,i)=>i!==index))}><Trash2/></button></li>)}</ol></>:<><select aria-label="保存当前灯光范围" value={use} disabled={busy} onChange={event=>setUse(event.target.value==='Look'?'Look':'Active')}><option value="Active">Programmer 中已激活的属性</option><option value="Look">当前可见灯光（Look）</option></select><p>使用控台当前 World 和 Store Filter，保留 Programmer 激活状态。</p></>}
       <button type="submit" disabled={busy||!name.trim()||mode==='combine'&&!ingredients.length}>{busy?'正在创建并回读…':`创建到 Layout ${settings.layout}`}</button></form>:null}

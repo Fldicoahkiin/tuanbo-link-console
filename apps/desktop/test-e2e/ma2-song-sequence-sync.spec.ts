@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
 
-test('整曲 40 Cue 默认创建到按钮 1000 页，双向名称回读、运行方式、同一点位恢复编辑', async ({}, info) => {
+for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${targetPage} 页，默认页保存恢复、双向同步保留新默认值与原位置`, async ({}, info) => {
   test.setTimeout(120000);
   const wav = Buffer.alloc(44 + 24000 * 10 * 2);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
@@ -14,16 +14,17 @@ test('整曲 40 Cue 默认创建到按钮 1000 页，双向名称回读、运行
   const source = { show: '歌曲同步验收', generation: 'fixture', version: '3.7.0.5' };
   const project = parseLinkProject({ ...createEmptyLinkProject('歌曲同步验收'), schemaVersion: 2, ma2MaterialLibrary: { version: 1, source: '192.0.2.1:30000', library: { directory: { ...source, entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] } }, rundown: [{ id: 'song', title: '新歌', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting, referenceAudio: { assetId: 'audio', relativePath: 'reference.wav', durationMs: 10000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
   const file = info.outputPath('song.tblink'); await writeFile(file, JSON.stringify(project));
-  const saved = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!;
+  const savedProject = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8')));
+  const saved = async () => (await savedProject()).rundown[0]!.lighting!;
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const page = await app.firstWindow(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
-    await app.evaluate(({ ipcMain, dialog }, { file, source }) => {
+    await app.evaluate(({ ipcMain, dialog }, { file, source, targetPage }) => {
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] });
       process.env.TBLINK_SONG_SYNC_CALLS = '0';
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status', () => ({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, version: '3.7.0.5', passwordSaved: false, error: null }));
       ipcMain.removeHandler('link:ma2-layout'); ipcMain.handle('link:ma2-layout', (_event, request: { layout: number }) => ({ layout: request.layout, name: '指定页面', readAt: new Date().toISOString(), items: [], omittedFixtures: 0 }));
-      ipcMain.removeHandler('link:ma2-executor-pages'); ipcMain.handle('link:ma2-executor-pages', () => ({ ...source, buttonPage: 4, faderPage: 100, pages: [{ page: 4, name: '常用' }, { page: 1000, name: '歌曲编排' }] }));
+      ipcMain.removeHandler('link:ma2-executor-pages'); ipcMain.handle('link:ma2-executor-pages', () => ({ ...source, buttonPage: 4, faderPage: 100, pages: [{ page: 4, name: '常用' }, { page: targetPage, name: '歌曲编排' }] }));
       ipcMain.removeHandler('link:ma2-executor-page'); ipcMain.handle('link:ma2-executor-page', (_event, request: { page: number }) => ({ page: request.page, name: '歌曲编排', readAt: new Date().toISOString(), source, items: [], sequences: [] }));
       ipcMain.removeHandler('link:ma2-song-sync'); ipcMain.handle('link:ma2-song-sync', (_event, request: Ma2SongSyncRequest): Ma2SongSyncResult => {
         process.env.TBLINK_SONG_SYNC_CALLS = String(Number(process.env.TBLINK_SONG_SYNC_CALLS) + 1);
@@ -32,7 +33,7 @@ test('整曲 40 Cue 默认创建到按钮 1000 页，双向名称回读、运行
         const cues = request.points.map((point, i) => ({ index: i + 1, number: `${i + 1}.000`, name: i === 1 && process.env.TBLINK_SONG_REMOTE_NAME ? process.env.TBLINK_SONG_REMOTE_NAME : point.name }));
         return { binding: { endpoint: '192.0.2.1:30000', show: source.show, layout: null, executor: `${request.settings.executorPage}.101`, sequence: target, name: request.name, points: request.points.map((point, i) => ({ id: point.id, cue: cues[i]!.number })), baselineXml: `<Fixture>${JSON.stringify(cues)}</Fixture>` }, library: { directory: { ...source, entries: [{ target, name: request.name }] }, readAt: new Date().toISOString(), sequences: [{ sequence: target, name: request.name, cues }], fixtureUsage: [], errors: [] }, layout: null, changed: !request.binding, removed: [], backupFile: '' };
       });
-    }, { file, source });
+    }, { file, source, targetPage });
     await page.evaluate(() => localStorage.setItem('tblink.ma2-connection-method.v1', 'network'));
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('button', { name: '灯光工作台', exact: true }).click();
@@ -44,16 +45,37 @@ test('整曲 40 Cue 默认创建到按钮 1000 页，双向名称回读、运行
     await pool.getByRole('button', { name: '新建 Cue', exact: true }).click();
     const panel = page.locator('.ma2-layout-panel');
     const song = panel.getByRole('region', { name: '本曲控台序列' });
-    await expect(song.getByLabel('本曲按钮页')).toHaveValue('1000');
-    await song.getByRole('button', { name: '创建到按钮第 1000 页并同步', exact: true }).click();
+    await expect(song.getByLabel('默认创建按钮页')).toHaveValue('1000');
+    if (targetPage !== 1000) {
+      await song.getByLabel('默认创建按钮页').fill('0');
+      await song.getByRole('button', { name: '保存默认', exact: true }).click();
+      await expect(song.getByRole('alert')).toContainText('1–9999');
+      expect((await savedProject()).ma2MaterialLibrary?.userLibrary?.consoleWorkspace?.executorPage).toBeUndefined();
+      await song.getByLabel('默认创建按钮页').fill(String(targetPage));
+      await song.getByRole('button', { name: '保存默认', exact: true }).click();
+      await expect(song).toContainText(`默认第 ${targetPage} 页，已随工程保存`);
+      expect((await savedProject()).ma2MaterialLibrary?.userLibrary?.consoleWorkspace?.executorPage).toBe(targetPage);
+      await page.reload();
+      await page.getByRole('button', { name: '灯光工作台', exact: true }).click();
+      await pool.getByRole('button', { name: '控台页面', exact: true }).click();
+      await pool.getByRole('button', { name: '新建 Cue', exact: true }).click();
+      await expect(song.getByLabel('默认创建按钮页')).toHaveValue(String(targetPage));
+    }
+    await song.getByRole('button', { name: `创建到按钮第 ${targetPage} 页并同步`, exact: true }).click();
     await expect.poll(async () => (await saved()).consoleSong?.points.length).toBe(40);
-    expect((await saved()).consoleSong).toMatchObject({ layout: null, executor: '1000.101', sequence: 9000 });
+    expect((await saved()).consoleSong).toMatchObject({ layout: null, executor: `${targetPage}.101`, sequence: 9000 });
     expect((await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).every(event => event.kind === 'ma2' && event.sequence === 9000)).toBe(true);
-    await expect(pool.getByLabel('控台页面编号')).toHaveValue('1000');
+    await expect(pool.getByLabel('控台页面编号')).toHaveValue(String(targetPage));
+    await expect(panel).toHaveCount(0);
+    await pool.getByRole('button', { name: '新建 Cue', exact: true }).click();
+    await song.getByLabel('默认创建按钮页').fill('2000');
+    await song.getByRole('button', { name: '保存默认', exact: true }).click();
+    await expect(song).toContainText('默认第 2000 页，已随工程保存');
+    await page.screenshot({ path: info.outputPath('default-creation-page.png') });
     await page.locator('.waveform-cue-point').first().click();
     const composer = page.locator('.cue-composer');
     await expect(composer).toBeVisible(); await expect(panel).toHaveCount(0);
-    await expect(composer).toContainText('按钮第 1000 页 · 101 格');
+    await expect(composer).toContainText(`按钮第 ${targetPage} 页 · 101 格`);
     await composer.getByRole('button', { name: '跟随上一个', exact: true }).click();
     await expect(composer.getByRole('button', { name: '跟随上一个', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await composer.getByLabel('Cue 名称', { exact: true }).fill('电脑修改开场');
@@ -61,7 +83,10 @@ test('整曲 40 Cue 默认创建到按钮 1000 页，双向名称回读、运行
     await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_LAST_REQUEST ?? '{}')) as Ma2SongSyncRequest).points?.[0]?.name).toBe('电脑修改开场');
     await app.evaluate(() => { process.env.TBLINK_SONG_REMOTE_NAME = '控台修改第二步'; });
     await expect.poll(async () => (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === 'point-1')).toMatchObject({ label: '控台修改第二步' });
+    expect((await savedProject()).ma2MaterialLibrary?.userLibrary?.consoleWorkspace?.executorPage).toBe(2000);
+    expect((await saved()).consoleSong?.executor).toBe(`${targetPage}.101`);
     await pool.getByRole('button', { name: '新建 Cue', exact: true }).click(); await expect(panel).toBeVisible();
+    await expect(song.getByLabel('默认创建按钮页')).toHaveValue('2000');
     await page.locator('.waveform-cue-point').first().click();
     await expect(panel).toHaveCount(0); await expect(composer).toBeVisible();
     await expect(composer.getByLabel('Cue 名称', { exact: true })).toHaveValue('电脑修改开场');

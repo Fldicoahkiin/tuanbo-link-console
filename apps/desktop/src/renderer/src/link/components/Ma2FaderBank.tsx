@@ -1,4 +1,5 @@
 import { useState, type ReactNode, type PointerEvent } from 'react';
+import { createPortal } from 'react-dom';
 import type { Ma2ExecutorPage, Ma2LiveSnapshot } from '@tb/schema';
 import { useMa2LivePlayback } from './useMa2LivePlayback';
 import '../ma2-faders.css';
@@ -15,7 +16,8 @@ function FaderButton({ value, slot, disabled, send }: { value: LiveButton; slot:
     onKeyUp={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); send(slot, value.id, false); } }}
     onBlur={() => send(slot, value.id, false)}>{value.name === 'Empty' ? '—' : value.name}</button>;
 }
-export function Ma2FaderBank({ page, scope, renderItem }: {
+export function Ma2FaderBank({ page, scope, toolbarHost, renderItem }: {
+  toolbarHost: HTMLElement | null;
   page: Ma2ExecutorPage; scope: string; renderItem: (item: Ma2ExecutorPage['items'][number], page: number) => ReactNode;
 }): JSX.Element {
   const [start, setStart] = useState(1);
@@ -24,11 +26,12 @@ export function Ma2FaderBank({ page, scope, renderItem }: {
   const items = new Map(page.items.map(item => [item.slot, item]));
   const continuation = new Set(page.items.flatMap(item => Array.from({ length: item.width - 1 }, (_, index) => item.slot + index + 1)));
   const slots = Array.from({ length: 15 }, (_, index) => start + index);
+  const liveStatus = live.error ? '实时读取已停止' : !live.snapshot ? '连接实时推杆…' : live.pending.size ? '等待控台回读' : '实时已连接';
   return <div className="ma2-fader-bank">
-    <div className="ma2-fader-bank-toolbar">
-      <label>推杆<select aria-label="推杆范围" value={start} onChange={event => setStart(Number(event.target.value))}>{[1, 16, 31, 46, 61, 76].map(value => <option key={value} value={value}>{value}–{value + 14}</option>)}</select></label>
-      <span role="status">{live.error ? '实时读取已停止' : !live.snapshot ? '连接实时推杆…' : live.pending.size ? '等待控台回读' : '实时已连接'}</span>
-    </div>
+    {toolbarHost ? createPortal(<div className="ma2-fader-bank-toolbar">
+      <select aria-label="推杆范围" title="切换推杆范围" value={start} onChange={event => setStart(Number(event.target.value))}>{[1, 16, 31, 46, 61, 76].map(value => <option key={value} value={value}>{value}–{value + 14}</option>)}</select>
+      <span className="ma2-fader-live-state" role="status" aria-label={liveStatus} title={liveStatus} data-state={live.error ? 'error' : !live.snapshot || live.pending.size ? 'waiting' : 'connected'}>{live.error ? '已停止' : !live.snapshot ? '连接中' : live.pending.size ? '回读中' : '实时'}</span>
+    </div>, toolbarHost) : null}
     {live.error ? <div className="ma2-fader-login"><p role="alert">{live.error}</p><form onSubmit={event => { event.preventDefault(); void live.connect(username, password).then(() => setPassword('')); }}>
       <input aria-label="实时推杆用户" autoComplete="off" placeholder="控台普通用户名" value={username} onChange={event => setUsername(event.target.value)} disabled={live.connecting}/>
       <input aria-label="实时推杆密码" type="password" autoComplete="off" placeholder="密码（如有）" value={password} onChange={event => setPassword(event.target.value)} disabled={live.connecting}/>

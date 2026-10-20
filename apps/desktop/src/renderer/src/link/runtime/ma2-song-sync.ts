@@ -64,7 +64,8 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
             const acknowledged = applyMa2SongReadback(lighting, points, result);
             if (lighting.consoleSong && lighting.consoleSong.name !== item.lighting?.consoleSong?.name) acknowledged.consoleSong = { ...result.binding, name: lighting.consoleSong.name };
             const updated = setLightingCommand(entry.itemId, acknowledged, '回读歌曲 Cue').execute(merged);
-            return setLightingLibraryCommand({ ...projectLightingLibrary(updated), consoleWorkspace: { ...entry.settings, nextSequence: Math.min(99999, result.binding.sequence + 1) } }).execute(updated);
+            const library = projectLightingLibrary(updated);
+            return setLightingLibraryCommand({ ...library, consoleWorkspace: { ...entry.settings, ...library.consoleWorkspace, nextSequence: Math.min(99999, Math.max(library.consoleWorkspace?.nextSequence ?? 1, result.binding.sequence + 1)) } }).execute(updated);
           }, undo: before => before });
           const saved = useDocumentStore.getState(); if (!saved.project) throw new Error('工程已关闭');
           const savedPath = await linkDesktopViewModel.saveProject(path, saved.project);

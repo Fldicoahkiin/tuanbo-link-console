@@ -19,42 +19,38 @@
 
 /* Match the single-Cue pool density; page navigation stays in one compact toolbar. */
 .ma2-layout-view { position: relative; container-type: inline-size; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
-.ma2-layout-titlebar { display: flex; align-items: center; gap: 4px; padding: 3px; flex-shrink: 0; min-height: 34px; }
-.ma2-layout-titlebar > strong { font-size: 11px; font-weight: 500; flex: 1 1 80px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ma2-layout-titlebar button { flex-shrink: 0; white-space: nowrap; min-height: 28px; padding: 4px 6px; font-size: 11px; border-radius: 6px; }
+.ma2-page-toolbar-host { display: flex; align-items: center; flex: none; }
+.ma2-page-toolbar-host:empty { display: none; }
+.ma2-layout-titlebar { display: flex; align-items: center; gap: 4px; flex: none; white-space: nowrap; }
+.ma2-sequence-preview .ma2-layout-titlebar button { flex: none; width: 28px; height: 30px; padding: 4px; justify-content: center; border-radius: var(--radius-control); }
 .ma2-layout-titlebar svg { width: 14px; height: 14px; stroke-width: 1.5; }
 .ma2-layout-pager, .ma2-layout-pager label { display: flex; align-items: center; gap: 4px; }
 .ma2-layout-pager label { font-size: 0; }
 .ma2-layout-pager input { width: 55px; min-height: 28px; padding: 3px; font-size: 11px; font-variant-numeric: tabular-nums; }
 .ma2-layout-pager input::-webkit-inner-spin-button { appearance: none; }
-.ma2-layout-tools { position: relative; flex-shrink: 0; }
-.ma2-layout-tools > summary { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; list-style: none; cursor: pointer; border-radius: 6px; color: var(--text-secondary); }
-.ma2-layout-tools > summary:hover, .ma2-layout-tools[open] > summary { background: var(--surface); color: var(--text-primary); }
-.ma2-layout-tool-menu, .ma2-layout-page-picker { position: absolute; z-index: 30; background: var(--surface); border: 1px solid var(--separator); border-radius: 8px; box-shadow: 0 8px 24px #0006; padding: 8px; }
-.ma2-layout-tool-menu { right: 0; top: 32px; width: 180px; display: flex; flex-direction: column; gap: 6px; }
-.ma2-layout-tool-menu label { display: flex; align-items: center; gap: 6px; font-size: 12px; min-height: 28px; }
-.ma2-layout-tool-menu label input { min-height: 0; }
+.ma2-layout-page-picker { position: absolute; z-index: 30; background: var(--surface); border: 1px solid var(--separator); border-radius: 8px; box-shadow: 0 8px 24px #0006; padding: 8px; }
+.ma2-page-live-option { display: flex; align-items: center; gap: 6px; font-size: 12px; min-height: 30px; padding: 4px 8px; }
+.ma2-page-live-option input { margin: 0; accent-color: var(--accent); }
 .ma2-layout-zoom { display: flex; gap: 4px; }
 .ma2-layout-zoom button { flex: 1; }
-.ma2-layout-page-picker { right: 4px; top: 38px; width: min(260px, calc(100% - 8px)); }
+.ma2-layout-page-picker { inset-inline-end: 4px; top: 0; width: min(260px, calc(100% - 8px)); }
 .ma2-layout-page-picker header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 6px; }
 .ma2-layout-page-picker select { width: 100%; min-width: 0; border: 0; font-size: 12px; }
 .ma2-layout-page-picker option { padding: 6px; }
-@container (max-width: 520px) { .ma2-layout-titlebar > strong { display: none; } .ma2-layout-titlebar { gap: 3px; } .ma2-layout-pager input { width: 46px; } }
 .ma2-layout-empty { display: flex; align-items: center; justify-content: center; flex: 1; padding: 20px; min-height: 100px; color: var(--text-secondary); font-size: 12px; text-align: center; }
 .ma2-layout-empty[role=alert] { color: var(--danger); }
 .ma2-layout-note { margin: 0; padding: 3px; font-size: 11px; color: var(--text-secondary); }
 
 .ma2-song-panel { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--separator); border-radius: 6px; }
 .ma2-song-panel > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.ma2-song-default-page { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 6px; }
+.ma2-song-default-page small { grid-column: 1 / -1; font-size: 11px; color: var(--text-secondary); line-height: 1.5; }
 .ma2-song-delete-review { flex-direction: column; }
 .ma2-song-delete-review ul { max-height: 130px; overflow: auto; }
 .ma2-layout-panel > .cue-pool-grid { min-height: 140px; }
 .cue-console-address { color: var(--text-secondary); padding-block: 5px; font-variant-numeric: tabular-nums; }
 
-.ma2-layout-titlebar > select { max-width: 160px; }
-.ma2-layout-titlebar > label { display: flex; align-items: center; white-space: nowrap; gap: 3px; font-size: 11px; }
-.ma2-layout-titlebar > label input { min-height: 0; }
+.ma2-layout-titlebar > select { width: 90px; }
 .ma2-layout-viewport { flex: 1; min-height: 100px; min-width: 0; overflow: auto; position: relative; }
 .ma2-layout-surface { position: relative; }
 .ma2-layout-object { position: absolute; padding: 2px; }
