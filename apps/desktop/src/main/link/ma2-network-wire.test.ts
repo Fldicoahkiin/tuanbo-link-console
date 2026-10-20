@@ -63,6 +63,19 @@ it('上传期间开始播放时不能提交控台写入', async () => {
   expect(server.actions).not.toContain('run');
   expect(server.actions.at(-1)).toBe('release');
 });
+it('取消在途分段读取后释放本次传输，不继续收取后续数据或重发', async () => {
+  const controller = new AbortController();
+  const server = peer({ value: 'x'.repeat(30000) });
+  const command = async (...args: Parameters<typeof server.command>): Promise<string> => {
+    const result = await server.command(...args);
+    if (server.actions.at(-1) === 'read-batch') controller.abort(new Error('用户停止同步'));
+    return result;
+  };
+  await expect(new Ma2NetworkWire({ command }).exchange(id, 'SEQUENCE', 9000, '', () => undefined, controller.signal)).rejects.toThrow('用户停止同步');
+  expect(server.actions.filter(action => action === 'read-batch')).toHaveLength(1);
+  expect(server.actions.filter(action => action === 'run')).toHaveLength(1);
+  expect(server.actions.at(-1)).toBe('release');
+});
 it('没有取得请求时不释放其他客户端正在进行的传输', async () => {
   const commands: string[] = [];
   const connection = { command: (line: string): Promise<string> => {

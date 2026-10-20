@@ -65,6 +65,14 @@ it('无任何绑定的序列池 Cue 自动准备并写回，首次同步后不�
   await test.runner.tick();
   expect(test.dependencies.prepare).toHaveBeenCalledTimes(1); expect(test.dependencies.apply).toHaveBeenCalledTimes(1);
 });
+it('bound 模式保留已有时间线同步，不为未绑定歌曲创建隐式 Timecode', async () => {
+  const test = setup();
+  delete test.dependencies.state().project!.rundown[0]!.lighting!.ma2Bindings;
+  test.runner.start({ dataDirectory: 'test' }, test.catalog, 'bound');
+  await test.runner.tick(); await test.runner.tick(true);
+  expect(test.dependencies.prepare).not.toHaveBeenCalled();
+  expect(test.dependencies.apply).not.toHaveBeenCalled();
+});
 it('自动准备在途时关闭开关，保留已确认关联但不继续写 Cue', async () => {
   const test = setup();
   const document = test.dependencies.state().project!.rundown[0]!.lighting!;

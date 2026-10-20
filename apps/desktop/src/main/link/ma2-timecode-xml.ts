@@ -8,6 +8,14 @@ import { ma2ExecutorPageSchema, type Ma2ExecutorPage } from '@tb/schema';
 const MA_NAMESPACE = 'http://schemas.malighting.de/grandma2/xml/MA';
 export type Ma2ExecutorReport = { version: string; sequence: number; assignmentName: string; executorName?: string };
 
+/** Exact native blocks are used for the final on-console compare immediately before a move/delete. */
+export function ma2ExecutorNativeBlocks(xml: string, slot: number, width: number): string[] {
+  const blocks = [...xml.matchAll(/<Exec\b[^>]*?(?:\/>|>[\s\S]*?<\/Exec>)/g)].map(match => match[0].replace(/\s+tblink_[\w]+="[^"]*"/g, ''));
+  const result = blocks.slice(slot - 1, slot - 1 + width);
+  if (result.length !== width) throw new Error('执行器原始格子数据不完整');
+  return result;
+}
+
 /** Page exports retain sparse Exec slots. offset_from_first describes a wide executor, not its address. */
 export function inspectMa2ExecutorPageXml(xml: string, target: number): Ma2ExecutorPage {
   const { root } = parse(xml);
@@ -30,13 +38,20 @@ export function inspectMa2ExecutorPageXml(xml: string, target: number): Ma2Execu
     const assignment = singleChild(executor, 'Assignment');
     const reference = address(assignment);
     const sequence = reference.length === 3 && reference[0] === '25' && reference[1] === '1' && /^[1-9]\d*$/.test(reference[2] ?? '') ? Number(reference[2]) : undefined;
-    const buttons = singleChild(executor, 'AssignmentExec');
-    const button = buttons ? children(buttons, 'Button')[0]?.textContent : null;
+    const assignmentExec = singleChild(executor, 'AssignmentExec');
+    const buttons = assignmentExec ? children(assignmentExec, 'Button').map(value => Number(value.textContent)) : [];
+    const playback = singleChild(executor, 'Playback');
+    const color = executor.getAttribute('tblink_color');
+    const priority = playback?.getAttribute('priority');
+    const softLtp = playback?.getAttribute('soft_ltp');
     const label = executor.getAttribute('tblink_label');
     // A native label is authoritative. Never append an internal sequence or executor number.
     const name = label ?? assignment?.getAttribute('name')?.replace(sequence ? new RegExp(` ${sequence}$`) : /$^/, '') ?? '';
-    items.push({ slot: index + 1, width: 1, name, kind: sequence ? 'sequence' : 'other', ...(sequence ? { sequence } : {}), reference, button: button ? Number(button) : null });
+    items.push({ slot: index + 1, width: 1, name, kind: sequence ? 'sequence' : 'other', ...(sequence ? { sequence } : {}), reference, button: buttons[0] ?? null, buttons,
+      ...(color ? { color } : {}), ...(priority ? { priority } : {}), ...(softLtp ? { softLtp: softLtp === 'true' } : {}),
+      ...(assignmentExec?.hasAttribute('fader') ? { fader: Number(assignmentExec.getAttribute('fader')) } : {}) });
   }
+  for (const item of items) item.revision = createHash('sha256').update(ma2ExecutorNativeBlocks(xml, item.slot, item.width).join('')).digest('hex');
   const show = root.getAttribute('tblink_show'); const generation = root.getAttribute('tblink_generation'); const nativeVersion = root.getAttribute('tblink_version');
   const metadata = singleChild(root, 'tblink_sequences');
   const sequences = metadata ? children(metadata, 'tblink_sequence').map(value => ({ sequence: Number(required(value, 'number')), name: value.getAttribute('name') || null,
@@ -45,6 +60,12 @@ export function inspectMa2ExecutorPageXml(xml: string, target: number): Ma2Execu
       if (!/^\d{1,4}(?:\.\d{1,3})?$/.test(number) || Number(number) <= 0) throw new Error('页面 Cue 编号无效，未采用读取结果');
       return { index: Number(required(cue, 'index')), number: Number(number).toFixed(3), name: cue.getAttribute('name') || null };
     }) })) : [];
+  if (metadata) {
+    for (const value of children(metadata, 'tblink_sequence')) {
+      const color = value.getAttribute('color');
+      if (color) for (const item of items) if (item.sequence === Number(required(value, 'number'))) item.color = color;
+    }
+  }
   return ma2ExecutorPageSchema.parse({ page: target, name: page.getAttribute('name') ?? '', readAt: new Date().toISOString(), items,
     sequences,
     ...(show && generation && nativeVersion ? { source: { show, generation, version: nativeVersion } } : {}) });
@@ -98,11 +119,12 @@ export function emptyMa2LayoutXml(target: number, version: string): string {
 
 /** Edit only the selected song sequence, retaining every untouched native Cue. */
 export function editMa2SongSequence(xml: string, name: string, changes: readonly { cue: string; name: string; sources?: readonly { xml: string; cue: string }[] }[], removed: readonly string[]): string {
-  inspectMa2SequenceXml(xml);
+  const report = inspectMa2SequenceXml(xml).sequences[0]!;
   const { document, root } = parse(xml); const sequence = singleChild(root, 'Sequ');
   if (!sequence) throw new Error('歌曲序列缺失');
   sequence.setAttribute('name', name);
-  const report = inspectMa2SequenceXml(xml).sequences[0]!;
+  const sourceCues = new Map<string, Map<number, XmlElement>>();
+  const validated = new Set<XmlElement>();
   let index = Math.max(0, ...report.cues.map(cue => cue.index));
   for (const number of removed) {
     const ref = report.cues.find(cue => Number(cue.number) === Number(number));
@@ -121,12 +143,25 @@ export function editMa2SongSequence(xml: string, name: string, changes: readonly
       for (const child of [...children(cue, 'CueDatas'), ...children(cue, 'CuePart')]) cue.removeChild(child);
       const rows = new Map<string, XmlElement>();
       for (const source of change.sources) {
-        const sourceReport = inspectMa2SequenceXml(source.xml).sequences[0]!;
-        const sourceRef = sourceReport.cues.find(value => Number(value.number) === Number(source.cue));
-        if (!sourceRef) throw new Error(`来源 Cue ${source.cue} 已不存在`);
-        inspectMa2CueData(source.xml, sourceRef.index);
-        const sourceCue = children(singleChild(parse(source.xml).root, 'Sequ')!, 'Cue').find(value => value.getAttribute('index') === String(sourceRef.index))!;
+        let cues = sourceCues.get(source.xml);
+        if (!cues) {
+          const sourceReport = inspectMa2SequenceXml(source.xml).sequences[0]!;
+          const elements = new Map(children(singleChild(parse(source.xml).root, 'Sequ')!, 'Cue').map(value => [Number(value.getAttribute('index')), value]));
+          cues = new Map(sourceReport.cues.map(value => [Number(value.number), elements.get(value.index)!]));
+          sourceCues.set(source.xml, cues);
+        }
+        const sourceCue = cues.get(Number(source.cue));
+        if (!sourceCue) throw new Error(`来源 Cue ${source.cue} 已不存在`);
+        if (!validated.has(sourceCue)) { inspectCueDataElement(sourceCue); validated.add(sourceCue); }
         if (change.sources.length === 1) {
+          for (let index = cue.attributes.length - 1; index >= 0; index--) {
+            const attribute = cue.attributes.item(index);
+            if (attribute && attribute.name !== 'index' && attribute.name !== 'name') cue.removeAttributeNode(attribute);
+          }
+          for (let index = 0; index < sourceCue.attributes.length; index++) {
+            const attribute = sourceCue.attributes.item(index);
+            if (attribute && attribute.name !== 'index' && attribute.name !== 'name') cue.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
+          }
           for (const part of children(sourceCue, 'CuePart')) cue.appendChild(document.importNode(part, true));
         } else if (children(sourceCue, 'CuePart').some(part => part.getAttribute('index') !== '0' || part.childNodes.length > 0)) throw new Error('组合含多 Part 或 Cue 命令，不能静态合成到歌曲序列');
         const data = singleChild(sourceCue, 'CueDatas');
@@ -146,15 +181,38 @@ export function editMa2SongSequence(xml: string, name: string, changes: readonly
     cue.setAttribute('name', change.name);
     children(cue, 'CuePart').find(part => part.getAttribute('index') === '0')?.setAttribute('name', change.name);
   }
+  // MA2 Import pairs per-step metadata by the internal contiguous index, not
+  // solely by the displayed Number. Leaving a hole after a deletion can assign
+  // the following step's Part name to the wrong Cue.
+  const numbered = children(sequence, 'Cue').filter(cue => singleChild(cue, 'Number'));
+  const displayNumber = (cue: XmlElement): number => {
+    const value = singleChild(cue, 'Number')!;
+    return Number(value.getAttribute('number')) * 1000 + Number(value.getAttribute('sub_number') ?? 0);
+  };
+  numbered.sort((a, b) => displayNumber(a) - displayNumber(b)).forEach((cue, ordinal) => {
+    cue.setAttribute('index', String(ordinal + 1)); sequence.appendChild(cue);
+  });
   return new XMLSerializer().serializeToString(document);
 }
 
 /** Explicit values/effect layers for a conservative native merge readback comparison. */
 export function inspectMa2CueData(xml: string, cueIndex: number): Map<string,Record<string,string>> {
+  return inspectMa2SequenceCueData(xml, [cueIndex]).get(cueIndex)!;
+}
+
+/** Parse the song once, rather than reparsing all fixture values for every step. */
+export function inspectMa2SequenceCueData(xml: string, cueIndices: readonly number[]): Map<number, Map<string,Record<string,string>>> {
   inspectMa2SequenceXml(xml);
   const {root}=parse(xml);const sequence=singleChild(root,'Sequ');
-  const cue=sequence&&children(sequence,'Cue').find(value=>value.getAttribute('index')===String(cueIndex));
-  if(!cue)throw new Error('Cue 数据索引不存在');
+  const cues = new Map((sequence ? children(sequence, 'Cue') : []).map(value => [Number(value.getAttribute('index')), value]));
+  return new Map(cueIndices.map(index => {
+    const cue = cues.get(index);
+    if (!cue) throw new Error('Cue 数据索引不存在');
+    return [index, inspectCueDataElement(cue)];
+  }));
+}
+
+function inspectCueDataElement(cue: XmlElement): Map<string,Record<string,string>> {
   const result=new Map<string,Record<string,string>>();
   const data=singleChild(cue,'CueDatas');
   for(const row of data?children(data,'CueData'):[]){
@@ -267,7 +325,7 @@ export function inspectMa2SequenceXml(xml: string, allowEmpty = false): Ma2Seque
 }
 
 /** Compare all surviving Cue metadata and Parts while allowing MA2 to reindex internal steps. */
-export function ma2SequenceCueFingerprints(xml: string): Map<string, string> {
+export function ma2SequenceCueFingerprints(xml: string, includeNames = true): Map<string, string> {
   const report = inspectMa2SequenceXml(xml);
   const { root } = parse(xml);
   const result = new Map<string, string>();
@@ -277,7 +335,29 @@ export function ma2SequenceCueFingerprints(xml: string): Map<string, string> {
     if (!number) throw new Error('Cue 编号不能核对');
     const clone = cue.cloneNode(true) as XmlElement;
     clone.removeAttribute('index');
-    result.set(number, JSON.stringify(canonicalElement(clone)));
+    // Native Import/Copy reorders named Cue children and may materialise ten
+    // empty preset-timing defaults. Those are the same value, while populated
+    // timing, commands, Parts and fixture data must still participate.
+    for (const part of children(clone, 'CuePart')) {
+      for (const timing of children(part, 'CuePartPresetTiming')) {
+        const presets = children(timing, 'PresetTiming');
+        if (!timing.attributes.length && presets.length && presets.every(preset => !preset.attributes.length && !preset.textContent?.trim() && !children(preset).length)) part.removeChild(timing);
+      }
+    }
+    for (const node of [...children(clone)].sort((a, b) => `${a.localName}:${a.getAttribute('index') ?? ''}`.localeCompare(`${b.localName}:${b.getAttribute('index') ?? ''}`))) clone.appendChild(node);
+    if (includeNames) {
+      // Native exports commonly store the visible Cue label only on Part 0.
+      // A retained baseline may carry that same label on Cue as well; adding
+      // this redundant representation must not invalidate a reviewed deletion.
+      const firstPart = children(clone, 'CuePart').find(part => part.getAttribute('index') === '0');
+      const label = clone.getAttribute('name') ?? firstPart?.getAttribute('name') ?? '';
+      clone.setAttribute('name', label);
+      if (firstPart && firstPart.getAttribute('name') === null) firstPart.setAttribute('name', label);
+    } else {
+      clone.removeAttribute('name');
+      for (const part of children(clone, 'CuePart')) part.removeAttribute('name');
+    }
+    result.set(number, hash(JSON.stringify(canonicalElement(clone))));
   }
   return result;
 }
@@ -681,12 +761,12 @@ function attributes(element: XmlElement): Record<string, string> {
   }
   return result;
 }
-function children(element: XmlElement, name: string): XmlElement[] {
+function children(element: XmlElement, name?: string): XmlElement[] {
   const result: XmlElement[] = [];
   for (let child = element.firstChild; child; child = child.nextSibling) {
     if (child.nodeType === 1) {
       const candidate = child as XmlElement;
-      if (candidate.namespaceURI === MA_NAMESPACE && candidate.localName === name) result.push(candidate);
+      if (candidate.namespaceURI === MA_NAMESPACE && (name === undefined || candidate.localName === name)) result.push(candidate);
     }
   }
   return result;

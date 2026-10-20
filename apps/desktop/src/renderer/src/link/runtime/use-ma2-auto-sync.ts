@@ -1,23 +1,18 @@
-import { tickMa2SongSync } from './ma2-song-sync';
+import { markPendingMa2Songs, tickMa2SongSync } from './ma2-song-sync';
+import { prepareMa2RealtimeSession } from './ma2-realtime-session';
+import { useMa2RealtimePreference } from './ma2-realtime-preference';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useEffect, useRef } from 'react';
-import { create } from 'zustand';
-import type { Ma2Catalog, Ma2CatalogRequest } from '@tb/schema';
-import { Ma2AutoSync, type Ma2AutoSyncStatus, type Ma2AutoSyncScope } from './ma2-auto-sync';
+import { Ma2AutoSync } from './ma2-auto-sync';
+import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { useDocumentStore } from '../stores/document-store';
 import { reportCoordinatorError } from './runtime-action-log';
 import { archiveMa2Project } from './ma2-project-archive';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+import { savePendingMa2Edits } from './ma2-local-save';
 
-export const useMa2AutoSyncStore = create<{
-  request: { connection: Ma2CatalogRequest; catalog: Ma2Catalog; scope?: Ma2AutoSyncScope } | null;
-  status: Ma2AutoSyncStatus;
-  message: string;
-  previewPlaying: boolean;
-  timelinePlaying: boolean;
-  commitRequest: number;
-}>(() => ({ request: null, status: 'off', message: '自动同步未启用', previewPlaying: false, timelinePlaying: false, commitRequest: 0 }));
+export { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 
 /** Explicitly renaming a console object starts name synchronization without enrolling song edits. */
 export async function enableMa2NameSync(documentId: number): Promise<void> {
@@ -42,12 +37,35 @@ export async function enableMa2NameSync(documentId: number): Promise<void> {
 }
 
 export function useMa2AutoSync(playing: boolean, notify: (message: string, tone?: 'info' | 'error') => void): void {
+  useEffect(() => {
+    let changedAt = 0;
+    const unsubscribe = useDocumentStore.subscribe((state, previous) => {
+      if (state.project !== previous.project) changedAt = performance.now();
+    });
+    const timer = setInterval(() => { if (performance.now() - changedAt >= 750) void savePendingMa2Edits(); }, 500);
+    return () => { unsubscribe(); clearInterval(timer); };
+  }, []);
   useEffect(() => { useMa2AutoSyncStore.setState({ timelinePlaying: playing }); return () => { useMa2AutoSyncStore.setState({ timelinePlaying: false }); }; }, [playing]);
   const method = useMa2ModeStore((state) => state.method);
   const playingRef = useRef(playing); playingRef.current = playing;
   useEffect(() => {
-    const poll = setInterval(() => { void tickMa2SongSync(playingRef.current || useMa2AutoSyncStore.getState().previewPlaying); }, 1500);
-    return () => clearInterval(poll);
+    let active = true;
+    let busy = false;
+    let changedAt = 0;
+    const tick = async (): Promise<void> => {
+      if (busy || !active || performance.now() - changedAt < 250) return;
+      busy = true;
+      try {
+        const ready = await prepareMa2RealtimeSession();
+        if (ready && active && useMa2ModeStore.getState().method === 'network' && useMa2RealtimePreference.getState().enabled) await tickMa2SongSync(playingRef.current || useMa2AutoSyncStore.getState().previewPlaying);
+      } finally { busy = false; }
+    };
+    const documents = useDocumentStore.subscribe((state, previous) => { if (state.project !== previous.project) { changedAt = performance.now(); markPendingMa2Songs(); } });
+    const preferences = useMa2RealtimePreference.subscribe(() => { void tick(); });
+    const modes = useMa2ModeStore.subscribe(() => { void prepareMa2RealtimeSession(); });
+    const poll = setInterval(() => { void tick(); }, 500);
+    void tick();
+    return () => { active = false; clearInterval(poll); documents(); preferences(); modes(); };
   }, []);
   const notifyRef = useRef(notify); notifyRef.current = notify;
   const runnerRef = useRef<Ma2AutoSync | null>(null);

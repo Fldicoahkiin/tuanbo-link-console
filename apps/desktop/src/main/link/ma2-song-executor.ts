@@ -4,7 +4,7 @@ import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { listMa2ExecutorPages, readMa2ExecutorPage } from './ma2-executor-page';
 import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 
-export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean): Promise<{ address: string; slot: number; pageExists: boolean; assigned: boolean }> {
+export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean, reserved = false): Promise<{ address: string; slot: number; pageExists: boolean; assigned: boolean }> {
   const stopped = (): void => { if (isPlaying()) throw new Error('播放已经开始，未修改执行器位置'); };
   stopped();
   const request = { network: source.network, expectedSource: source.expectedSource };
@@ -12,6 +12,7 @@ export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>
   const snapshot = directory.pages.some(value => value.page === page) ? await readMa2ExecutorPage(bridge, { ...request, page }) : null;
   if (existing) {
     const [oldPage, oldSlot] = existing.split('.').map(Number);
+    if (reserved && oldPage === page && !snapshot?.items.some(item => oldSlot! >= item.slot && oldSlot! < item.slot + item.width)) return { address: existing, slot: oldSlot!, pageExists: snapshot !== null, assigned: false };
     if (oldPage !== page || !snapshot?.items.some(item => item.slot === oldSlot && item.sequence === sequence)) throw new Error(`本曲原位置 ${existing} 已改变，请核对控台；不会覆盖其他灯光`);
     return { address: existing, slot: oldSlot!, pageExists: true, assigned: true };
   }
@@ -22,8 +23,8 @@ export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>
   return { address, slot, pageExists: snapshot !== null, assigned: false };
 }
 
-export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean): Promise<string> {
-  const { address, slot, pageExists, assigned } = await planMa2SongExecutor(bridge, source, sequence, page, existing, isPlaying);
+export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean, reserved = false): Promise<string> {
+  const { address, slot, pageExists, assigned } = await planMa2SongExecutor(bridge, source, sequence, page, existing, isPlaying, reserved);
   if (assigned) return address;
   const stopped = (): void => { if (isPlaying()) throw new Error('播放已经开始，未修改执行器位置'); };
   const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(source.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(source.expectedSource.generation)},'Show or session changed');`;

@@ -4,6 +4,7 @@ import { saveMa2MaterialLibraryCommand } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
 import { enableMa2NameSync, useMa2AutoSyncStore } from './use-ma2-auto-sync';
+vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
 
 vi.mock('../stores/ma2-mode-store', () => ({ useMa2ModeStore: vi.fn() }));
 vi.mock('../stores/ma2-material-read-store', () => ({ ma2MaterialConnection: vi.fn() }));

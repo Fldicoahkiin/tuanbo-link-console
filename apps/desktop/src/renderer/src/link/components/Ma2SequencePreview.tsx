@@ -22,6 +22,8 @@ import { ma2MaterialConnection, scanMa2Materials, useMa2MaterialReadStore } from
 import { readMa2LayoutPage, useMa2LayoutPage } from '../stores/ma2-layout-store';
 import { Ma2LayoutView } from './Ma2LayoutView';
 import { Ma2ExecutorPageView } from './Ma2ExecutorPageView';
+import { Ma2ExecutorKey } from './Ma2ExecutorKey';
+import { useMa2ExecutorInput } from '../runtime/use-ma2-executor-input';
 import { Ma2MaterialMenu } from './Ma2MaterialMenu';
 import { Ma2CueLocations } from './Ma2CueLocations';
 import { useMa2ExecutorPageStore, selectMa2ExecutorPageKind } from '../stores/ma2-executor-page-store';
@@ -49,13 +51,13 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
   const selectedCue = preview.selectedCue;
   const setSelectedCue = (selectedCue: string | null): void => setPreview(current => ({ ...current, selectedCue }));
   const [error, setError] = useState('');
+  const executorInput = useMa2ExecutorInput(setError);
   const classification=useConsoleCueClassification(setError);
   const attributeReader=useMa2AttributeStore();
   const materialReading = useMa2MaterialReadStore(state => state.busy);
   const [refreshing, setRefreshing] = useState(false);
   const [actionsHost, setActionsHost] = useState<HTMLElement | null>(null);
   const [pageToolbarHost, setPageToolbarHost] = useState<HTMLDivElement | null>(null);
-  const [faderToolbarHost, setFaderToolbarHost] = useState<HTMLDivElement | null>(null);
   const publishesActions = Boolean(onBrowseLayout);
   useEffect(() => { setActionsHost(publishesActions ? window.document.getElementById('ma2-sidebar-read-actions') : null); }, [publishesActions]);
   const refreshMaterials = async (): Promise<void> => {
@@ -116,27 +118,29 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
     setCategory('layout'); resetSelection(); onBrowseLayout?.();
     if (pageKind === 'layout' && !layoutPage.snapshot && !layoutPage.busy) void readMa2LayoutPage(layoutPage.page).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
   };
-  const pageTypeControl = <select aria-label="控台页面类型" value={pageKind} onChange={event => {
+  const pageTypeControl = <select aria-label="控台页面类型" value={pageKind === 'layout' ? 'layout' : 'button'} onChange={event => {
     const kind = event.target.value;
     if (kind !== 'button' && kind !== 'fader' && kind !== 'layout') return;
     selectMa2ExecutorPageKind(kind); resetSelection();
     if (kind === 'layout' && !layoutPage.snapshot && !layoutPage.busy) void readMa2LayoutPage(layoutPage.page).catch((cause: unknown) => setError(String(cause)));
-  }}><option value="button">按钮页</option><option value="fader">推杆页</option><option value="layout">Layout 布局</option></select>;
-  const renderExecutorItem = (item: import('@tb/schema').Ma2ExecutorPage['items'][number], page: number): ReactNode => {
+  }}><option value="button">执行器</option><option value="layout">Layout 布局</option></select>;
+  const openExecutorItem = (item: import('@tb/schema').Ma2ExecutorPage['items'][number], page: number): void => {
+    if (!item.sequence) return;
+    if (!libraryById.has(item.sequence)) { setError('此格的序列步骤尚未回读，刷新本页后可编辑'); return; }
+    setSelected(item.sequence); setSingleSequence(null); setSelectedCue(null); setRoute(`${page}.${item.slot}`); setQuery('');
+  };
+  const renderExecutorItem = (item: import('@tb/schema').Ma2ExecutorPage['items'][number], page: number, band: import('../stores/ma2-executor-page-store').Ma2ExecutorBand): ReactNode => {
     const owner = item.sequence ? libraryById.get(item.sequence) : undefined;
     const step = owner?.cues[0]; const address = `${page}.${item.slot}`;
     const name = item.name || (owner ? ma2ConsoleSequenceName(owner) : '未命名对象');
     const matched = `${name} ${item.slot} ${item.sequence ?? ''}`.toLowerCase().includes(query.toLowerCase());
-    const open = (): void => { if (owner) { setSelected(owner.sequence); setSingleSequence(null); setSelectedCue(null); setRoute(address); setQuery(''); } };
-    const button = <button data-search-match={matched} aria-label={`执行器 ${address} · ${name}`} title={`${name} · ${page} 页 ${item.slot} 格${item.sequence ? ` · 序列 ${item.sequence}` : ''} · 左键播放，右键编辑`} disabled={busy || item.kind !== 'sequence'} onContextMenu={event => {
-      if (owner && step) classification.open(event, { sequence: owner.sequence, cue: step.number, kind: owner.cues.length === 1 ? 'single' : 'sequence' }, name, open);
-      else { event.preventDefault(); setError('此格的序列详情尚未读取，请刷新素材目录后编辑；页面播放不受影响'); }
-    }} onClick={() => {
-      setRoute(address); setSingleSequence(item.sequence ?? null); setSelectedCue(step?.number ?? null); setBusy(true); setError('');
-      void output.playAction({ target: 'executor', executor: address, action: step && owner?.cues.length === 1 ? 'goto' : 'go', ...(step && owner?.cues.length === 1 ? { cue: step.number } : {}) }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause))).finally(() => setBusy(false));
-    }}><strong>{name}</strong><small>{owner ? `${owner.cues.length} 步` : item.kind === 'sequence' ? '播放序列' : '其他对象'}</small></button>;
-    if (!owner || !step || !composing) return button;
-    return <div className="console-cue-cell" draggable onDragStart={event => { event.dataTransfer.setData(CONSOLE_CUE_DRAG, JSON.stringify({ sequence: owner.sequence, cue: step.number, name, executor: address })); event.dataTransfer.effectAllowed = 'copy'; }}>{button}<button aria-label={`编辑执行器 ${address} 的步骤`} title="查看步骤并添加到当前 Cue" onClick={open}><Plus/></button></div>;
+    const keys = band === 'fader' ? [0, 1, 2] : [0];
+    return <div className="ma2-executor-content" onDragStart={event => {
+      if (owner && step) event.dataTransfer.setData(CONSOLE_CUE_DRAG, JSON.stringify({ sequence: owner.sequence, cue: step.number, name, executor: address }));
+    }}>
+      <Ma2ExecutorKey item={item} page={page} index={0} primary matched={matched} input={executorInput}><strong>{name}</strong><small>{owner ? `${owner.cues.length} Cue` : item.kind === 'sequence' ? 'Sequence' : item.reference[0] ?? ''}</small></Ma2ExecutorKey>
+      <div className="ma2-executor-functions">{band === 'fader' && item.priority ? <span title="执行器优先级">{item.priority}</span> : null}{keys.map(index => <Ma2ExecutorKey key={index} item={item} page={page} index={index} input={executorInput}/>)}</div>
+    </div>;
   };
   const renderLayoutItem = (item: import('@tb/schema').Ma2LayoutSnapshot['items'][number]): ReactNode => {
     const owner = item.sequence ? libraryById.get(item.sequence) : undefined;
@@ -158,9 +162,9 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
     return materialCell(<button disabled={busy} title={`序列 ${sequence.sequence} · Cue ${Number(value.number)} · ${name} · 点击试听`} aria-pressed={selectedCue === value.number} aria-label={`试听灯光步 ${value.number}`} onContextMenu={event=>classification.open(event,{sequence:sequence.sequence,cue:value.number,kind:'single'},name)} onClick={event => { classification.select({sequence:sequence.sequence,cue:value.number,kind:'single'},event,visibleCues.map(cue=>({sequence:sequence.sequence,cue:cue.number,kind:'single'})));setSelectedCue(value.number); if(!classification.showRemoved && !event.ctrlKey && !event.metaKey && !event.shiftKey && attributeFilter.status !== 'empty')void send('goto', value.number); }}><LightingCategoryColors sections={classification.sections.get(consoleCueKey({sequence:sequence.sequence,cue:value.number,kind:'single'}))??[]}/><Ma2CueCardLabel sequence={sequence} cue={value} name={name}/></button>, sequence, value.number, name);
   }} /> : null;
   return <section className="ma2-sequence-preview" aria-label="MA2 序列预览">
-    <header className="ma2-material-menubar" aria-label="控台素材工具栏"><LightingAuditionStop/><div role="group" aria-label="素材分类">{([['all','全部'],['single','单步'],['multi','多步']] as const).map(([value,title])=><button key={value} aria-pressed={category===value && selected===null} onClick={()=>{setCategory(value);setSelected(null);setSingleSequence(null);setSelectedCue(null);setRoute(null);}}>{title}</button>)}{onBrowseLayout ? <button aria-pressed={category === 'layout'} onClick={openLayout}>控台页面</button> : null}</div>{category === 'layout' ? <><div className="ma2-page-toolbar-host" ref={setPageToolbarHost}/><div className="ma2-page-toolbar-host" ref={setFaderToolbarHost}/></> : null}{controls}{sequence ? <Ma2CueLocations sequence={sequence.sequence}/> : null}<Ma2MaterialMenu label="素材筛选" trigger={<ListFilter/>} open={filtersOpen} onOpenChange={setFiltersOpen}>{classification.picked.length>0?<div className="ma2-classification-selection"><span>已选 {classification.picked.length} 项</span><button onClick={()=>classification.setPicked(visibleRefs)}>全选结果</button><button onClick={()=>classification.setPicked([])}>取消选择</button></div>:null}<button aria-pressed={attributeFilter.status === 'empty'} onClick={() => setAttributeFilter({ ...emptyMa2AttributeFilter, status: attributeFilter.status === 'empty' ? 'all' : 'empty' })}>仅空 Cue</button><button aria-pressed={classification.onlyUnclassified} onClick={()=>classification.setOnlyUnclassified(!classification.onlyUnclassified)}>未分类</button>{classification.hidden.size?<button aria-pressed={classification.showRemoved} onClick={()=>{classification.setShowRemoved(!classification.showRemoved);classification.setPicked([]);}}>已移除</button>:null}</Ma2MaterialMenu>{attributeFilter.status === 'empty' && (category === 'single' || selected !== null) ? <button disabled={attributeReader.busy || materialReading || !deletionCandidates.length} onClick={() => setDeleting(deletionCandidates)}>删除空 Cue</button> : null}<label className="ma2-pool-search"><Search size={15} /><input aria-label="搜索序列或 Cue" placeholder="搜索名称 / 编号" value={query} onChange={event=>setQuery(event.target.value)} /></label></header>
+    <header className="ma2-material-menubar" aria-label="控台素材工具栏"><LightingAuditionStop/><div role="group" aria-label="素材分类">{([['all','全部'],['single','单步'],['multi','多步']] as const).map(([value,title])=><button key={value} aria-pressed={category===value && selected===null} onClick={()=>{setCategory(value);setSelected(null);setSingleSequence(null);setSelectedCue(null);setRoute(null);}}>{title}</button>)}{onBrowseLayout ? <button aria-pressed={category === 'layout'} onClick={openLayout}>控台页面</button> : null}</div>{category === 'layout' ? <><div className="ma2-page-toolbar-host" ref={setPageToolbarHost}/></> : null}{controls}{sequence ? <Ma2CueLocations sequence={sequence.sequence}/> : null}<Ma2MaterialMenu label="素材筛选" trigger={<ListFilter/>} open={filtersOpen} onOpenChange={setFiltersOpen}>{classification.picked.length>0?<div className="ma2-classification-selection"><span>已选 {classification.picked.length} 项</span><button onClick={()=>classification.setPicked(visibleRefs)}>全选结果</button><button onClick={()=>classification.setPicked([])}>取消选择</button></div>:null}<button aria-pressed={attributeFilter.status === 'empty'} onClick={() => setAttributeFilter({ ...emptyMa2AttributeFilter, status: attributeFilter.status === 'empty' ? 'all' : 'empty' })}>仅空 Cue</button><button aria-pressed={classification.onlyUnclassified} onClick={()=>classification.setOnlyUnclassified(!classification.onlyUnclassified)}>未分类</button>{classification.hidden.size?<button aria-pressed={classification.showRemoved} onClick={()=>{classification.setShowRemoved(!classification.showRemoved);classification.setPicked([]);}}>已移除</button>:null}</Ma2MaterialMenu>{attributeFilter.status === 'empty' && (category === 'single' || selected !== null) ? <button disabled={attributeReader.busy || materialReading || !deletionCandidates.length} onClick={() => setDeleting(deletionCandidates)}>删除空 Cue</button> : null}<label className="ma2-pool-search"><Search size={15} /><input aria-label="搜索序列或 Cue" placeholder="搜索名称 / 编号" value={query} onChange={event=>setQuery(event.target.value)} /></label></header>
 
-    {category === 'layout' && pageKind !== 'layout' ? <Ma2ExecutorPageView toolbarHost={pageToolbarHost} faderToolbarHost={faderToolbarHost} typeControl={pageTypeControl} selected={selected !== null} onBack={resetSelection} onNavigate={resetSelection} onSettings={onLayoutSettings} renderItem={renderExecutorItem}>{selectedGrid}</Ma2ExecutorPageView> : category === 'layout' ? <Ma2LayoutView toolbarHost={pageToolbarHost} typeControl={pageTypeControl} selected={selected !== null} onBack={resetSelection} onNavigate={resetSelection} onSettings={onLayoutSettings} renderItem={renderLayoutItem}>{selectedGrid}</Ma2LayoutView> : selectedGrid}
+    {category === 'layout' && pageKind !== 'layout' ? <Ma2ExecutorPageView toolbarHost={pageToolbarHost} typeControl={pageTypeControl} selected={selected !== null} onBack={resetSelection} onNavigate={resetSelection} onSettings={onLayoutSettings} renderItem={renderExecutorItem} onEditItem={openExecutorItem}>{selectedGrid}</Ma2ExecutorPageView> : category === 'layout' ? <Ma2LayoutView toolbarHost={pageToolbarHost} typeControl={pageTypeControl} selected={selected !== null} onBack={resetSelection} onNavigate={resetSelection} onSettings={onLayoutSettings} renderItem={renderLayoutItem}>{selectedGrid}</Ma2LayoutView> : selectedGrid}
     {selected === null && category !== 'layout' ? <>
       {category === 'single' ? <CuePoolGrid keys={singles.map(({sequence,cue})=>`${sequence.sequence}/${cue.number}`)} label="素材序列" cellWidth={156} rowHeight={50} render={index=>{
         const {sequence:owner,cue:step}=singles[index]!;

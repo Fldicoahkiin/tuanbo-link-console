@@ -19,7 +19,8 @@ export class Ma2NetworkWire implements Ma2Wire {
     }
     return result;
   }
-  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void): Promise<string> {
+  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     if (!/^[a-f0-9]{32}$/.test(id) || !Number.isInteger(target) || target < 1 || target > 99999) throw new Error('无效的 MA2 网络请求');
     let data = Buffer.from(body);
     if (data.length > 32 * 1024 * 1024) throw new Error('MA2 交换数据超过 32 MB');
@@ -34,14 +35,16 @@ export class Ma2NetworkWire implements Ma2Wire {
       if (await this.call(reference ? 'beginsync' : 'begin', id, `,'${reference ?? operation}',${target},${data.length}`) !== 'ACK') throw new Error('MA2 未确认传输开始');
       acquired = true;
       for (let offset = 0; offset < data.length; offset += 256) {
+        signal?.throwIfAborted();
         if (await this.call('chunk', id, `,${offset / 256 + 1},'${data.subarray(offset, offset + 256).toString('hex')}'`) !== 'ACK') throw new Error('MA2 未确认数据片段');
       }
-      beforeSend(); sent = true;
+      signal?.throwIfAborted(); beforeSend(); sent = true;
       const receipt = /^DONE:(\d+)$/.exec(await this.call('run', id));
       const size = Number(receipt?.[1]);
       if (!Number.isInteger(size) || size < 1 || size > 33554500) throw new Error('MA2 响应长度无效');
       const chunks: Buffer[] = [];
       for (let offset = 0; offset < size; offset += 8192) {
+        signal?.throwIfAborted();
         chunks.push(await this.readBatch(id, offset, size));
       }
       const response = Buffer.concat(chunks).toString('utf8');

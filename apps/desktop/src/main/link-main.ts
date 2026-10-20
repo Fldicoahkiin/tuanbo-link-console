@@ -1,6 +1,6 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
-import { ma2ExecutorPageRequestSchema } from '@tb/schema';
-import { ma2SongSyncRequestSchema } from '@tb/schema';
+import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
+import { ma2SongCheckRequestSchema, ma2SongSyncRequestSchema } from '@tb/schema';
 import { materialSceneTargets } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
@@ -833,12 +833,16 @@ function registerIpc(
     } catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`空 Cue 删除未完成：${String(error)}`,result:'failed'}); throw error; }
     finally { task.finish(); }
   });
-  handle('link:ma2-song-sync', async (_event, value: unknown) => {
+  handle('link:ma2-song-check', async (_event, value: unknown) => ma2Network.checkSong(ma2SongCheckRequestSchema.parse(value)));
+  handle('link:ma2-song-sync', async (event, value: unknown) => {
+    const request = ma2SongSyncRequestSchema.parse(value);
+    const task = beginMa2Read(event, request.progressId);
     try {
-      const result = await ma2Network.syncSong(ma2SongSyncRequestSchema.parse(value));
-      if (result.changed) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `歌曲序列 ${result.binding.sequence} · Layout ${result.binding.layout} 已写入并回读，备份 ${result.backupFile}`, result: 'succeeded' });
+      const result = await ma2Network.syncSong(request, task.report, task.signal);
+      if (result.changed) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `歌曲序列 ${result.binding.sequence} · ${result.binding.executor ? `执行器 ${result.binding.executor}` : `Layout ${result.binding.layout}`} 已写入并回读，备份 ${result.backupFile}`, result: 'succeeded' });
       return result;
     } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `歌曲同步停止：${String(error)}`, result: 'failed' }); throw error; }
+    finally { task.finish(); }
   });
   handle('link:ma2-layouts', async (_event, value: unknown) => ma2Network.listLayouts(ma2LayoutDirectoryRequestSchema.parse(value)));
   handle('link:ma2-executor-pages', async (_event, value: unknown) => {
@@ -862,6 +866,22 @@ function registerIpc(
   handle('link:ma2-executor-page', async (_event, value: unknown) => {
     try { return await ma2Network.readExecutorPage(ma2ExecutorPageRequestSchema.parse(value)); }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `读取执行器页面失败：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-executor-update', async (_event, value: unknown) => {
+    const request = ma2ExecutorUpdateRequestSchema.parse(value);
+    try {
+      const result = await ma2Network.updateExecutor(request);
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `执行器 ${request.page}.${request.slot} ${request.action.kind} 已回读，备份 ${result.backupFile}`, result: 'succeeded' });
+      return result;
+    } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器修改待核对：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-executor-input', async (_event, value: unknown) => {
+    try { await ma2Network.inputExecutor(ma2ExecutorInputSchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器按键未完成：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-executor-release', async () => {
+    try { await ma2Network.releaseExecutors(); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器松开未回读：${String(error)}`, result: 'failed' }); throw error; }
   });
   handle('link:ma2-layout-update', async (_event, value: unknown) => {
     try { const result = await ma2Network.updateLayout(ma2LayoutUpdateRequestSchema.parse(value)); await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `Layout ${result.layout} 名称与位置已回读`, result: 'succeeded' }); return result; }

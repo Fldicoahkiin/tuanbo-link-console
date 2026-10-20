@@ -2,13 +2,16 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { Ma2NetworkManager } from './ma2-network-manager';
 import { meiNanXml, meiNanCues } from './fixtures/ma2-mei-nan-reconstruction';
 
-const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', pause: null as Promise<void> | null }));
+const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', pause: null as Promise<void> | null, drop: () => undefined }));
 vi.mock('node:fs/promises', () => ({ readFile: () => memory.file === null ? Promise.reject(Object.assign(new Error('Missing'), { code: 'ENOENT' })) : Promise.resolve(memory.file) }));
 vi.mock('./atomic-file', () => ({ writeFileAtomically: (_path: string, value: string) => { memory.file = value; return Promise.resolve(); } }));
 vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typeof import('./ma2-telnet')>(), Ma2Telnet: class {
   state = 'disconnected';
   readTraffic() { return { wireCommands: 0, sentBytes: 0, receivedBytes: 0, queueMs: 0 }; }
-  constructor(address: { localAddress?: string }) { memory.localAddress = address.localAddress; }
+  constructor(address: { localAddress?: string }, onState: (state: 'disconnected') => void) {
+    memory.localAddress = address.localAddress;
+    memory.drop = () => { this.state = 'disconnected'; onState('disconnected'); };
+  }
   async connect(): Promise<string> { memory.connects += 1; await memory.pause; this.state = 'connected'; return memory.version; }
   async command(line: string, match: (text: string) => string | null, beforeSend?: () => void): Promise<string> {
     await memory.pause; beforeSend?.();
@@ -28,6 +31,21 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
 } }));
 beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true'; });
 const settings = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'lighting', autoConnect: true };
+it('意外断线会恢复原控台连接，主动断开则停止恢复且不重放操作', async () => {
+  vi.useFakeTimers();
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore());
+  try {
+    await manager.save({ settings }); await manager.connect();
+    memory.drop();
+    expect(manager.status().state).toBe('disconnected');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(manager.status().state).toBe('connected'); expect(memory.connects).toBe(2);
+    memory.drop();
+    await manager.disconnectByOperator();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(manager.status().state).toBe('disconnected'); expect(memory.connects).toBe(2);
+  } finally { manager.disconnect(); vi.useRealTimers(); }
+});
 it('100 条混合时间线共享序列只取一次元数据；最终只复核目录，不再读全部 XML', async () => {
   memory.version = '3.7.0.5';
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());

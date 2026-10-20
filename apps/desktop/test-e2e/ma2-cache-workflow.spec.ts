@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { z } from 'zod';
 import { test, expect, _electron as electron } from '@playwright/test';
-import { createEmptyLinkProject, parseLinkProject, ma2AuditionRequestSchema } from '@tb/schema';
+import { createEmptyLinkProject, parseLinkProject, ma2AuditionRequestSchema, type Ma2CatalogRequest } from '@tb/schema';
 import { readMa2Catalog } from '../src/main/link/ma2-catalog';
 import { meiNanXml, meiNanSequences } from '../src/main/link/fixtures/ma2-mei-nan-reconstruction';
 
@@ -26,6 +26,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
   try {
     await app.evaluate(({ ipcMain, dialog }, data) => {
       process.env.TBLINK_CACHE_TEST_READS = '0';
+      process.env.TBLINK_CACHE_SOURCE_READS = '0';
       process.env.TBLINK_AUDITION_CALLS = '[]';
       ipcMain.removeHandler('link:ma2-audition-play'); ipcMain.handle('link:ma2-audition-play', (_event, payload: unknown) => {
         const calls = JSON.parse(process.env.TBLINK_AUDITION_CALLS ?? '[]') as unknown[]; calls.push(payload); process.env.TBLINK_AUDITION_CALLS = JSON.stringify(calls);
@@ -35,16 +36,20 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
       ipcMain.removeHandler('link:ma2-network-save'); ipcMain.handle('link:ma2-network-save', () => {
         throw new Error('连接设置未修改，重新读取不应保存设置或中断现有连接');
       });
-      ipcMain.removeHandler('link:ma2-catalog'); ipcMain.handle('link:ma2-catalog', async () => {
+      ipcMain.removeHandler('link:ma2-catalog'); ipcMain.handle('link:ma2-catalog', async (_event, request: Ma2CatalogRequest) => {
+        if (request.targets?.length === 0) {
+          process.env.TBLINK_CACHE_SOURCE_READS = String(Number(process.env.TBLINK_CACHE_SOURCE_READS) + 1);
+          return { directory: data.catalog.directory, readAt: new Date().toISOString(), entries: [] };
+        }
         process.env.TBLINK_CACHE_TEST_READS = String(Number(process.env.TBLINK_CACHE_TEST_READS) + 1);
         await new Promise(resolve => setTimeout(resolve, 1500)); return data.catalog;
       });
       ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => { throw new Error('缓存配对不应再次读取'); });
       // A successful full pool read is authoritative. Return the actual fixture
       // pool instead of relying on old song references to refill an empty pool.
-      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => ({
+      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', (_event, request: Ma2CatalogRequest) => ({
         directory: { ...data.catalog.directory, entries: data.sequences.map(sequence => ({ target: sequence.sequence, name: sequence.name })) },
-        readAt: new Date().toISOString(), sequences: data.sequences, fixtureUsage: [], errors: []
+        readAt: new Date().toISOString(), sequences: request.targets?.length === 0 ? [] : data.sequences, fixtureUsage: [], errors: []
       }));
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [data.file] });
     }, { catalog, file, sequences: meiNanSequences[0]!.sequences.map(sequence => ({ sequence: sequence.number, name: sequence.name, cues: sequence.cues })) });
@@ -71,6 +76,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     const exported = z.object({ context: z.object({ ma2Site: z.object({ raw: z.array(z.object({ target: z.number(), xml: z.string() })), pairings: z.record(z.string(), z.unknown()) }) }) }).parse(JSON.parse(gunzipSync(await readFile(diagnosticPath)).toString('utf8')));
     expect(exported.context.ma2Site.raw.find(entry => entry.target === 2)?.xml).toBe(meiNanXml);
     expect(await app.evaluate(() => process.env.TBLINK_CACHE_TEST_READS)).toBe('1');
+    await expect.poll(() => app.evaluate(() => Number(process.env.TBLINK_CACHE_SOURCE_READS))).toBeGreaterThan(0);
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
     const saved = parseLinkProject(JSON.parse(await readFile(file, 'utf8')));
     expect(saved.ma2ReadState?.catalog.entries.length).toBe(2);
@@ -137,7 +143,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await expect(page.locator('.ma2-browser-body article')).toContainText('读取超时样例');
   } catch (error) {
     if (!page.isClosed()) {
-      await writeFile(info.outputPath('failure-reads.json'), JSON.stringify(await app.evaluate(() => ({ reads: process.env.TBLINK_CACHE_TEST_READS })), null, 2));
+      await writeFile(info.outputPath('failure-reads.json'), JSON.stringify(await app.evaluate(() => ({ fullReads: process.env.TBLINK_CACHE_TEST_READS, sourceReads: process.env.TBLINK_CACHE_SOURCE_READS })), null, 2));
       await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
       await writeFile(info.outputPath('failure-logs.json'), JSON.stringify(await page.evaluate(() => window.tbLink.queryLogs({ limit: 100 })), null, 2));
     }

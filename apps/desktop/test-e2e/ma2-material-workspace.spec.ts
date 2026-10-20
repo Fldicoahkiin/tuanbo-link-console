@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
-import { createEmptyLinkProject, createLightingDocument, ma2EffectLibrarySchema, parseLinkProject } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, ma2EffectLibrarySchema, parseLinkProject, type Ma2CatalogRequest } from '@tb/schema';
 
 const snapshot = join(process.cwd(), '../../artifacts/ma2-hardware-diagnostics/effect-library.json');
 
@@ -17,12 +17,17 @@ test('构造数据：素材读取关闭窗口后继续、保存并重启恢复�
     await app.evaluate(({ ipcMain, dialog }, file) => {
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] });
       process.env.TBLINK_MATERIAL_READS = '0';
+      process.env.TBLINK_MATERIAL_SOURCE_READS = '0';
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status', () => ({ settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, state: 'connected', version: '3.7.0.5', passwordSaved: false, error: null }));
       ipcMain.removeHandler('link:ma2-catalog'); ipcMain.handle('link:ma2-catalog', () => ({ directory: { show: '构造素材 Show', generation: 'test', version: '3.7.0.5', entries: [] }, readAt: new Date().toISOString(), entries: [] }));
-      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', async (event, request: { progressId: string }) => {
-        process.env.TBLINK_MATERIAL_READS = String(Number(process.env.TBLINK_MATERIAL_READS) + 1);
+      ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', async (event, request: Ma2CatalogRequest) => {
         const directory = { show: '构造素材 Show', generation: 'test', version: '3.7.0.5', entries: [{ target: 36, name: '原序列名' }, { target: 37, name: '第二序列' }] };
         const readAt = new Date().toISOString();
+        if (request.targets?.length === 0) {
+          process.env.TBLINK_MATERIAL_SOURCE_READS = String(Number(process.env.TBLINK_MATERIAL_SOURCE_READS) + 1);
+          return { directory, readAt, sequences: [], fixtureUsage: [], errors: [] };
+        }
+        process.env.TBLINK_MATERIAL_READS = String(Number(process.env.TBLINK_MATERIAL_READS) + 1);
         const sequences = directory.entries.map(entry => ({ sequence: entry.target, name: entry.name, cues: [{ index: 1, number: '1.100', name: '原步骤名' }] }));
         event.sender.send('link:ma2-read-progress', { id: request.progressId, phase: 'library', completed: 0, total: 3, detail: '读取目录', checkpoint: { directory, readAt } });
         event.sender.send('link:ma2-read-progress', { id: request.progressId, phase: 'library', completed: 1, total: 3, detail: '已读取第一条', sequences: [sequences[0]] });
@@ -41,6 +46,8 @@ test('构造数据：素材读取关闭窗口后继续、保存并重启恢复�
     await expect(page.getByRole('button', { name: '试听序列 36 灯光步 1.100', exact: true })).toBeVisible();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
     await expect.poll(async () => (JSON.parse(await readFile(file, 'utf8')) as { ma2MaterialLibrary?: { library: { sequences: unknown[]; sourceUnverified?: boolean } } }).ma2MaterialLibrary?.library.sequences.length).toBe(2);
+    expect(await app.evaluate(() => process.env.TBLINK_MATERIAL_READS)).toBe('1');
+    await expect.poll(() => app.evaluate(() => Number(process.env.TBLINK_MATERIAL_SOURCE_READS))).toBeGreaterThan(0);
     expect(await app.evaluate(() => process.env.TBLINK_MATERIAL_READS)).toBe('1');
     await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close();
     app = await launch(); page = await app.firstWindow();
@@ -88,10 +95,15 @@ test('现场 584 个 Cue 在原工作区内可查看、关闭恢复并一次入�
     const first = pool.getByRole('button').first();
     await first.click({ modifiers: ['Control'] });
     await pool.getByRole('button').nth(1).click({ modifiers: ['Control'] });
-    await page.getByRole('button', { name: '全选结果', exact: true }).click();
-    await expect(page.getByText('已选 584 项', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '素材筛选', exact: true }).click();
+    const filters = page.getByRole('dialog', { name: '素材筛选', exact: true });
+    await filters.getByRole('button', { name: '全选结果', exact: true }).click();
+    await expect(filters.getByText('已选 584 项', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '素材筛选', exact: true }).click();
     await first.click({ button: 'right' });
     const menu = page.getByRole('dialog', { name: 'Cue 右键菜单' });
+    await menu.getByRole('button', { name: '设置分类', exact: true }).click();
+    await menu.getByText('面光、轮廓和效果用途', { exact: true }).click();
     await menu.getByRole('button', { name: '效果', exact: true }).click();
     await menu.getByRole('button', { name: '归入 效果 重击', exact: true }).click();
     await menu.getByRole('button', { name: '确定', exact: true }).click();

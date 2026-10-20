@@ -3,6 +3,13 @@ import { projectDocumentEnvelopeSchema } from '@tb/schema';
 import { projectCodec } from '../stores/project-codec';
 import { allowProjectReopen } from '../stores/project-recovery';
 
+let saveTail: Promise<unknown> = Promise.resolve();
+const saveProject: LinkDesktopApi['saveProject'] = (path, project) => {
+  // Preserve caller order across encoding, IPC and the atomic disk write.
+  const result = saveTail.then(async () => window.tbLink.saveProjectDocument(path, await projectCodec.encode(project)));
+  saveTail = result.then(() => undefined, () => undefined);
+  return result;
+};
 /**
  * Renderer 视图模型的桌面能力边界。
  *
@@ -22,6 +29,6 @@ export const linkDesktopViewModel: LinkDesktopApi = {
     const document = projectDocumentEnvelopeSchema.parse(await window.tbLink.openProjectDocument(path));
     return { path: document.path, project: await projectCodec.decode(document.content) };
   },
-  saveProject: async (path, project) => window.tbLink.saveProjectDocument(path, await projectCodec.encode(project))
+  saveProject
 };
 export const linkFileViewModel: LinkFileBridge = window.tbFile;

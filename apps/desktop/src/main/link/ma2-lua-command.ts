@@ -11,7 +11,9 @@ export async function runMa2GuardedLua(connection: Pick<Ma2Telnet, 'command'>, b
   const call = async (code: string): Promise<string> => connection.command(`Lua "${code}"`, text => ma2ResponseLine(text, prefix), beforeSend);
   const script = `${decode}local ok,r=pcall(function() ${body} end);gma.echo('${prefix}'..(ok and 'OK:' or 'ERR:')..tostring(r))`;
   let command = script;
-  if (Buffer.byteLength(script) > 900) {
+  // The native command interpreter consumes $, |, ^ and quotes before Lua
+  // sees them. Transport those scripts as hex, even when they are short.
+  if (Buffer.byteLength(script) > 900 || /["$|^\\\r\n]/.test(script)) {
     if (await call(`${key}={};gma.echo('${prefix}READY')`) !== 'READY') throw new Error('控台操作准备失败');
     const bytes = Buffer.from(script);
     for (let offset = 0; offset < bytes.length; offset += 128) {

@@ -1,8 +1,8 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpdateRequestSchema, type Ma2LayoutDirectoryRequest, type Ma2LayoutDirectory, type Ma2LayoutUpdateRequest } from '@tb/schema';
 import { moveMa2LayoutObjects } from './ma2-timecode-xml';
-import { ma2SongSyncRequestSchema, ma2SongSyncResultSchema, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { planMa2SongSync } from './ma2-song-plan';
-import { editMa2SongSequence, ma2SequenceCueFingerprints, inspectMa2CueAttributes, inspectMa2CueFixtures } from './ma2-timecode-xml';
+import { ma2SongBindingSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema, ma2SongPointSchema, ma2SongConflictSchema, type Ma2SongSyncRequest, type Ma2SongSyncResult, type Ma2ReadProgressUpdate } from '@tb/schema';
+import { ma2SongSyncBaseline, planMa2SongSync } from './ma2-song-plan';
+import { editMa2SongSequence, ma2SequenceCueFingerprints, inspectMa2CueAttributes, inspectMa2CueFixtures, inspectMa2SequenceCueData } from './ma2-timecode-xml';
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
@@ -14,6 +14,7 @@ import { readMa2EffectLibrary } from './ma2-effect-library';
 import { writeFileAtomically } from './atomic-file';
 import { renameMa2Object } from './ma2-rename-service';
 import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor';
+import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recovery';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
@@ -35,7 +36,7 @@ export class Ma2LayoutService {
     const beforeSend=():void=>{if(this.isPlaying())throw new Error('请停止播放后读取或创建控台 Layout');};
     let command=script;
     // MA2's native command line truncates long Lua input; prepare app-owned code in bounded chunks.
-    if(Buffer.byteLength(script)>900){
+    if(Buffer.byteLength(script)>900 || /["$\\\r\n]/.test(script)){
       const key=`TBLINK_LAYOUT_${randomBytes(12).toString('hex')}`;
       const prepare=async(code:string):Promise<void>=>{
         const response=await connection.command(`Lua "${code};gma.echo('${prefix}READY')"`,text=>ma2ResponseLine(text,prefix),beforeSend);
@@ -130,31 +131,106 @@ export class Ma2LayoutService {
     finally { this.busy = false; }
   }
 
-  async syncSong(connection: Connection, bridge: Bridge, input: Ma2SongSyncRequest): Promise<Ma2SongSyncResult> {
+  async syncSong(rawConnection: Connection, rawBridge: Bridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal): Promise<Ma2SongSyncResult> {
     const request = ma2SongSyncRequestSchema.parse(input);
+    const originalPoints = structuredClone(request.points);
     if (this.busy || this.isPlaying()) throw new Error('请停止播放并等待当前控台操作完成');
     if (this.attempted.has(request.requestId)) throw new Error('此请求已执行，请先回读核对');
     this.busy = true; let wrote = false;
+    const deadline = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const received = (): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => deadline.abort(new Error('控台连续 90 秒没有返回新的确认，当前编辑已保留；恢复连接后核对原位置')), 90000);
+    };
+    received();
+    const signal = externalSignal ? AbortSignal.any([externalSignal, deadline.signal]) : deadline.signal;
+    const connection: Connection = { command: (line, match, beforeSend, priority) => {
+      signal.throwIfAborted();
+      return rawConnection.command(line, match, () => { signal.throwIfAborted(); beforeSend?.(); }, priority).then(result => { received(); return result; });
+    } };
+    const bridge: Bridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal).then(result => { received(); return result; }) };
+    const progress = (phase: Ma2ReadProgressUpdate['phase'], completed: number, total: number, detail: string): void => {
+      signal.throwIfAborted(); received(); report?.({ phase, completed, total, detail });
+    };
     const endpoint = `${request.network.host}:${request.network.port}`;
-    const target = request.binding?.sequence ?? request.settings.nextSequence;
-    const layoutRequest = { network: request.network, expectedSource: request.expectedSource, layout: request.binding?.layout ?? request.settings.layout };
-    const executorPage = request.binding?.executor ? Number(request.binding.executor.split('.')[0]) : request.binding?.layout ? undefined : request.settings.executorPage;
+    let target = request.binding?.sequence ?? request.settings.nextSequence;
+    let layoutRequest = { network: request.network, expectedSource: request.expectedSource, layout: request.binding?.layout ?? request.settings.layout };
+    let executorPage = request.binding?.executor ? Number(request.binding.executor.split('.')[0]) : request.binding?.layout ? undefined : request.settings.executorPage;
     let backupFile = '';
+    let recoveringCreation = false;
     try {
+      progress('connecting', 0, 1, '核对控台、歌曲绑定与目标位置');
       const directory = await this.directory(bridge, layoutRequest);
-      if (request.binding && (request.binding.endpoint !== endpoint || request.binding.show !== directory.show || request.binding.layout !== null && request.settings.layout !== request.binding.layout)) throw new Error('本曲绑定的控台、Show 或页面发生变化，请先核对原位置');
       const ownership = `${this.ownershipFile}.songs.json`;
-      const schema = z.array(z.object({ key: z.string(), projectId: z.string(), itemId: z.string() }).strict());
+      const schema = z.array(z.object({ key: z.string(), projectId: z.string(), itemId: z.string(), inputHash: z.string().optional(), binding: ma2SongBindingSchema.optional(),
+        originalPoints: z.array(ma2SongPointSchema).optional(), conflicts: z.array(ma2SongConflictSchema).optional(),
+        draft: z.object({ binding: ma2SongBindingSchema, skeletonXml: z.string(), stages: z.record(z.string(), z.array(z.string())).optional(),
+          heldCues: z.array(z.string()).optional(), heldNames: z.array(z.string()).optional(), heldSequenceName: z.boolean().optional(), reserved: z.boolean().optional()
+        }).strict().optional()
+      }).strict());
       let owners: z.infer<typeof schema>;
       try { owners = schema.parse(JSON.parse(await readFile(ownership, 'utf8'))); }
       catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') owners = []; else throw error; }
+      const inputHash = createHash('sha256').update(JSON.stringify([request.name, request.points.map(({ id, name, cues }) => ({ id, name, cues }))])).digest('hex');
+      const restoredSources = new Map<string, string>();
+      const recoverDraft = async (existing: z.infer<typeof schema>[number]): Promise<void> => {
+        const draft = existing.draft!;
+        const actual = await bridge.request('SEQUENCE', draft.binding.sequence);
+        const recovered = recoverMa2SongCreation(draft.binding, draft.skeletonXml, actual, request.points, existing.originalPoints, draft.stages, draft.heldCues, draft.heldNames, draft.heldSequenceName);
+        for (const restore of recovered.restores) restoredSources.set(restore.cue, restore.xml);
+        const previousBinding = request.binding;
+        request.points = recovered.points;
+        request.binding = previousBinding ? { ...recovered.binding, ...previousBinding, baselineXml: recovered.binding.baselineXml, points: recovered.binding.points } : recovered.binding;
+        target = request.binding.sequence;
+        recoveringCreation = draft.reserved ?? !previousBinding;
+        layoutRequest = { ...layoutRequest, layout: request.binding.layout ?? request.settings.layout };
+        executorPage = request.binding.executor ? Number(request.binding.executor.split('.')[0]) : undefined;
+      };
+      if (!request.binding) {
+        const previous = owners.filter(owner => owner.key.startsWith(`${endpoint}/${directory.show}/`) && owner.projectId === request.projectId && owner.itemId === request.itemId && directory.entries.some(entry => owner.key === `${endpoint}/${directory.show}/${entry.target}`));
+        if (previous.length > 1) throw new Error(`本曲已有多个控台序列记录：${previous.map(owner => owner.key.split('/').at(-1)).join('、')}，请核对；未重复新建`);
+        const existing = previous[0];
+        if (existing) {
+          const savedBinding = existing.binding ?? existing.draft?.binding;
+          if (!savedBinding || existing.inputHash !== inputHash && !existing.originalPoints) throw new Error(`上一次同步已保留序列 ${existing.key.split('/').at(-1)}，请先从控台读取核对；不会重复新建或覆盖`);
+          target = savedBinding.sequence;
+          if (existing.draft && !existing.binding) {
+            await recoverDraft(existing);
+          } else {
+            request.binding = savedBinding;
+            request.points = request.points.map(point => {
+              const saved = savedBinding.points.find(value => value.id === point.id);
+              if (!saved) return point;
+              if (existing.conflicts?.some(conflict => conflict.pointId === point.id && (conflict.field === 'cue-content' || conflict.field === 'cue-removed'))) return point;
+              const original = existing.originalPoints?.find(value => value.id === point.id);
+              if (original && JSON.stringify(original.cues) !== JSON.stringify(point.cues)) return point;
+              return { ...point, cues: [{ sequence: target, cue: saved.cue, delayMs: 0 }] };
+            });
+          }
+          layoutRequest = { ...layoutRequest, layout: savedBinding.layout ?? request.settings.layout };
+          executorPage = savedBinding.executor ? Number(savedBinding.executor.split('.')[0]) : undefined;
+        }
+      } else {
+        const pending = owners.find(owner => owner.key === `${endpoint}/${directory.show}/${request.binding!.sequence}` && owner.projectId === request.projectId && owner.itemId === request.itemId && owner.draft);
+        if (pending) await recoverDraft(pending);
+      }
+      if (!request.binding) {
+        const occupied = new Set(directory.entries.map(entry => entry.target));
+        while (occupied.has(target) && target < 99999) target++;
+        if (occupied.has(target)) throw new Error('起始序列之后没有空位置，请修改起始序列');
+        request.settings.nextSequence = target;
+      }
+      if (request.binding && (request.binding.endpoint !== endpoint || request.binding.show !== directory.show || request.binding.layout !== null && request.settings.layout !== request.binding.layout)) throw new Error('本曲绑定的控台、Show 或页面发生变化，请先核对原位置');
       const key = `${endpoint}/${directory.show}/${target}`;
-      if (request.binding && !owners.some(value => value.key === key && value.projectId === request.projectId && value.itemId === request.itemId)) throw new Error('此序列不是本机为当前歌曲创建的，拒绝覆盖；请核对歌曲绑定');
-      if (!request.binding && directory.entries.some(value => value.target === target)) throw new Error(`序列 ${target} 已占用，请选择空编号`);
+      if (request.binding && owners.some(value => value.key === key && (value.projectId !== request.projectId || value.itemId !== request.itemId))) throw new Error('此位置已关联本机另一歌曲，请核对歌曲绑定');
       // Confirm the destination before importing or renaming any song content.
-      if (executorPage) await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor, this.isPlaying);
+      const destination = executorPage ? await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor, this.isPlaying, recoveringCreation) : null;
       const remoteXml = request.binding ? await bridge.request('SEQUENCE', target) : null;
-      const plan = planMa2SongSync(request, remoteXml);
+      // The saved project carries the console identity and the native three-way baseline.
+      // A new installation/computer has no local ownership cache; validate that binding
+      // instead of permanently rejecting every saved song.
+      const plan = planMa2SongSync(request, remoteXml, [...restoredSources.keys()]);
       const beforeLayout = executorPage ? null : await this.snapshot(connection, layoutRequest);
       const needsLayoutItem = !executorPage && !beforeLayout?.value.items.some(item => item.sequence === target);
       const layoutOwners = await this.readOwners();
@@ -162,11 +238,20 @@ export class Ma2LayoutService {
       if (needsLayoutItem && beforeLayout && !layoutOwners.some(owner => owner.key === layoutKey && owner.projectId === request.projectId && owner.name === beforeLayout.value.name)) throw new Error(`Layout ${layoutRequest.layout} 不属于本工程，请选择空页面，避免改动已有布局`);
       const changes = [];
       const sources = new Map<string, string>();
+      const sourceCount = new Set(plan.changes.flatMap(change => (change.refs ?? []).map(ref => ref.sequence))).size;
+      progress('library', 0, sourceCount, `读取 ${sourceCount} 个来源序列`);
       for (const change of plan.changes) {
         const content: Array<{ xml: string; cue: string }> | undefined = change.refs === undefined ? undefined : [];
         for (const ref of change.refs ?? []) {
+          if (change.restore && request.binding && ref.sequence === target) {
+            content!.push({ xml: restoredSources.get(ref.cue) ?? request.binding.baselineXml, cue: ref.cue }); continue;
+          }
           let xml = sources.get(String(ref.sequence));
-          if (!xml) { xml = ref.sequence === target && remoteXml ? remoteXml : await bridge.request('SEQUENCE', ref.sequence); sources.set(String(ref.sequence), xml); }
+          if (!xml) {
+            xml = ref.sequence === target && remoteXml ? remoteXml : await bridge.request('SEQUENCE', ref.sequence);
+            sources.set(String(ref.sequence), xml);
+            progress('library', sources.size, sourceCount, `已读取来源序列 ${ref.sequence}`);
+          }
           content!.push({ xml, cue: ref.cue });
         }
         changes.push({ cue: change.cue, name: change.name, ...(content === undefined ? {} : { sources: content }) });
@@ -176,7 +261,19 @@ export class Ma2LayoutService {
       const file = `tblink_song_${request.requestId.replaceAll('-', '')}`;
       const desired = changed ? editMa2SongSequence(remoteXml ?? emptyMa2SequenceXml(target, directory.version), plan.name, changes, plan.deletions) : remoteXml;
       const namesOnly = remoteXml && !needsLayoutItem && !plan.deletions.length && changes.every(change => change.sources === undefined);
+      const checkpoint = async (skeletonXml: string, stages?: Record<string, string[]>): Promise<void> => {
+        const binding = { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(destination ? { executor: destination.address } : {}),
+          sequence: target, name: request.name, baselineXml: ma2SongSyncBaseline(request, desired, plan.conflicts), points: plan.points };
+        await writeFileAtomically(ownership, JSON.stringify([...owners.filter(value => value.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints,
+          draft: { binding, skeletonXml, reserved: destination?.assigned === false, ...(stages ? { stages } : {}),
+            heldCues: plan.conflicts.flatMap(conflict => conflict.cue && (conflict.field === 'cue-content' || conflict.field === 'cue-removed' || conflict.field === 'cue-deletion') ? [conflict.cue] : []),
+            heldNames: plan.conflicts.flatMap(conflict => conflict.cue && (conflict.field === 'cue-name' || conflict.field === 'cue-removed' || conflict.field === 'cue-deletion') ? [conflict.cue] : []),
+            heldSequenceName: plan.conflicts.some(conflict => conflict.field === 'sequence-name') }
+        }]));
+      };
       if (changed && namesOnly) {
+        progress('previews', 0, changes.length + 1, '同步歌曲与 Cue 名称');
+        await checkpoint(remoteXml);
         this.attempted.add(request.requestId); wrote = true;
         const remote = inspectMa2SequenceXml(remoteXml).sequences[0]!;
         const names = [...(remote.name !== plan.name ? [{ kind: 'sequence' as const, cue: '0', confirmedName: remote.name ?? '', name: plan.name }] : []), ...changes.map(change => ({ kind: 'single' as const, cue: change.cue, confirmedName: remote.cues.find(cue => Number(cue.number) === Number(change.cue))?.name ?? '', name: change.name }))];
@@ -184,16 +281,49 @@ export class Ma2LayoutService {
           if (this.isPlaying()) throw new Error('播放已开始，后续名称尚未发送');
           const result = await renameMa2Object(bridge, { dataDirectory: '', network: request.network, generation: request.expectedSource.generation, change: { endpoint, show: directory.show, sequence: target, ...change } });
           backupFile ||= result.backupFile;
+          progress('previews', names.indexOf(change) + 1, names.length, `已回读${change.kind === 'sequence' ? '序列名称' : ` Cue ${change.cue} 名称`}`);
         }
       } else if (changed) {
-        await this.prepareXml(connection, layoutRequest, file, desired);
-        if (remoteXml) { backupFile = `${file}_before.xml`; await this.prepareXml(connection, layoutRequest, `${file}_before`, remoteXml); }
+        // New songs can copy their already-present Cue data inside MA2. Only the
+        // small empty structure crosses Telnet, not every fixture value twice.
+        // A resumed create may now contain added, removed or cleared steps.
+        // Replace its verified native snapshot atomically in that case, retaining
+        // all untouched console Cue data instead of pretending Copy creates empties.
+        const nativeCopy = !remoteXml && Boolean(executorPage);
+        const uploaded = nativeCopy ? editMa2SongSequence(emptyMa2SequenceXml(target, directory.version), plan.name, changes.map(change => ({ cue: change.cue, name: change.name, sources: [] })), []) : desired;
+        await this.prepareXml(connection, layoutRequest, file, uploaded, (completed, total) => progress('raw', completed, total, '传输歌曲结构'));
+        const clearing = remoteXml && plan.deletions.length > 0 && inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.every(cue => plan.deletions.includes(cue.number));
+        const replacingAll = clearing && changes.length > 0;
+        if (replacingAll) await this.prepareXml(connection, layoutRequest, `${file}_clear`, editMa2SongSequence(remoteXml, plan.name, [], plan.deletions));
+        if (remoteXml) {
+          backupFile = `${file}_before.xml`;
+          await this.prepareXml(connection, layoutRequest, `${file}_before`, remoteXml);
+        }
         if (!executorPage && !beforeLayout) await this.prepareXml(connection, layoutRequest, `${file}_layout`, emptyMa2LayoutXml(layoutRequest.layout, directory.version));
         for (const [number, xml] of sources) if (canonical(await bridge.request('SEQUENCE', Number(number))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
-        if (!request.binding) await writeFileAtomically(ownership, JSON.stringify([...owners.filter(value => value.key !== key), { key, projectId: request.projectId, itemId: request.itemId }]));
+        await checkpoint(remoteXml ?? uploaded, nativeCopy ? ma2SongCreationStages(uploaded, changes) : undefined);
         const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><'):match('^%s*(.-)%s*$') end;assert(read('${file}_before')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
+        // Import /o can retain the previous native step table when a numbered
+        // Cue disappears from XML. Delete reviewed numbers through MA2 first so
+        // its internal Part table is reindexed before applying the new snapshot.
+        // Deleting the final native Cue deletes the Sequence and all executor
+        // assignments as a side effect. For a reviewed full clear, import the
+        // empty snapshot into the existing Sequence instead; no step table
+        // remains to reindex and the original object/positions can be retained.
+        const remove = clearing ? '' : plan.deletions.map(cue => `gma.cmd('Delete Sequence ${target} Cue ${cue} /nc');assert(not gma.show.getobj.handle('Sequence ${target} Cue ${cue}'),'Cue deletion not confirmed');`).join('');
         this.attempted.add(request.requestId); wrote = true;
-        await this.call(connection, `${this.guard(layoutRequest)}${verify}gma.cmd('Import ${file}.xml At Sequence ${target} /o /nc');assert(gma.show.getobj.handle('Sequence ${target}'),'Sequence creation failed');return 'written'`);
+        const clear = replacingAll ? `gma.cmd('Import ${file}_clear.xml At Sequence ${target} /o /nc');` : '';
+        await this.call(connection, `${this.guard(layoutRequest)}${verify}${remove}${clear}gma.cmd('Import ${file}.xml At Sequence ${target} /o /nc');assert(gma.show.getobj.handle('Sequence ${target}'),'Sequence creation failed');return 'written'`);
+        if (nativeCopy) {
+          progress('previews', 0, plan.changes.length, `控台内部创建 ${plan.changes.length} 个 Cue`);
+          for (const [changeIndex, change] of plan.changes.entries()) {
+            for (const [index, ref] of (change.refs ?? []).entries()) {
+              await this.call(connection, `${this.guard(layoutRequest)}assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /${index ? 'merge' : 'o'} /nc');gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'copied'`);
+            }
+            await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'labelled'`);
+            progress('previews', changeIndex + 1, plan.changes.length, `已写入 Sequence ${target} Cue ${change.cue}`);
+          }
+        }
         if (needsLayoutItem) {
           let slot = beforeLayout?.value.items.length ?? 0;
           const position = (i: number) => ({ x: i % request.settings.columns * 2, y: -Math.floor(i / request.settings.columns) * 2 });
@@ -206,38 +336,56 @@ export class Ma2LayoutService {
           await writeFileAtomically(this.ownershipFile, JSON.stringify([...layoutOwners.filter(value => value.key !== layoutKey), { key: layoutKey, projectId: request.projectId, name: beforeLayout?.value.name ?? request.settings.name }]));
         }
       }
+      progress('verification', 0, 1, `回读序列 ${target}，确认名称、内容和位置`);
       const verifiedXml = changed ? await bridge.request('SEQUENCE', target) : remoteXml;
       const report = inspectMa2SequenceXml(verifiedXml).sequences[0]!;
       if (report.number !== target || report.name !== plan.name) throw new Error('歌曲序列名称回读未通过');
       const actualHashes = ma2SequenceCueFingerprints(verifiedXml);
       const oldHashes = remoteXml ? ma2SequenceCueFingerprints(remoteXml) : new Map<string, string>();
       for (const [number, hash] of oldHashes) if (!changes.some(change => Number(change.cue) === Number(number)) && !plan.deletions.includes(number) && actualHashes.get(number) !== hash) throw new Error(`未修改的 Cue ${number} 回读不同，已停止同步`);
+      const expectedReport = changes.length ? inspectMa2SequenceXml(desired).sequences[0]! : null;
+      const changedNumbers = new Set(changes.map(change => Number(change.cue)));
+      const actualData = changes.length ? inspectMa2SequenceCueData(verifiedXml, report.cues.filter(cue => changedNumbers.has(Number(cue.number))).map(cue => cue.index)) : new Map<number, Map<string, Record<string, string>>>();
+      const expectedData = expectedReport ? inspectMa2SequenceCueData(desired, expectedReport.cues.filter(cue => changedNumbers.has(Number(cue.number))).map(cue => cue.index)) : new Map<number, Map<string, Record<string, string>>>();
       for (const change of changes) {
         const actual = report.cues.find(cue => Number(cue.number) === Number(change.cue));
-        const expected = inspectMa2SequenceXml(desired).sequences[0]!.cues.find(cue => Number(cue.number) === Number(change.cue));
+        const expected = expectedReport?.cues.find(cue => Number(cue.number) === Number(change.cue));
         const normalize = (value: Map<string, Record<string, string>>) => JSON.stringify([...value].sort(([a],[b]) => a.localeCompare(b)).map(([key,layers]) => [key,Object.entries(layers).sort(([a],[b]) => a.localeCompare(b))]));
-        if (!actual || !expected || actual.name !== change.name || normalize(inspectMa2CueData(verifiedXml, actual.index)) !== normalize(inspectMa2CueData(desired, expected.index))) throw new Error(`Cue ${change.cue} 内容或名称回读未通过`);
+        if (!actual || !expected || actual.name !== change.name || normalize(actualData.get(actual.index)!) !== normalize(expectedData.get(expected.index)!)) throw new Error(`Cue ${change.cue} 内容或名称回读未通过`);
       }
       if (plan.deletions.some(number => actualHashes.has(number))) throw new Error('歌曲 Cue 删除回读未通过');
-      const executor = executorPage ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, request.binding?.executor, this.isPlaying) : undefined;
+      const executor = executorPage ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, request.binding?.executor, this.isPlaying, recoveringCreation) : undefined;
       const afterLayout = executorPage ? null : changed ? await this.snapshot(connection, layoutRequest) : beforeLayout;
       if (!executorPage && !afterLayout?.value.items.some(item => item.sequence === target)) throw new Error('Layout 未回读到本曲序列');
       const verifiedDirectory = await this.directory(bridge, layoutRequest); const readAt = new Date().toISOString();
-      return ma2SongSyncResultSchema.parse({ binding: { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(executor ? { executor } : {}), sequence: target, name: report.name, baselineXml: canonical(verifiedXml), points: plan.points },
+      progress('verification', 1, 1, `${executor ? `执行器 ${executor}` : `Layout ${layoutRequest.layout}`} · 序列 ${target} 已确认`);
+      const result = ma2SongSyncResultSchema.parse({ binding: { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(executor ? { executor } : {}), sequence: target, name: plan.conflicts.some(conflict => conflict.field === 'sequence-name') ? request.name : report.name, baselineXml: canonical(ma2SongSyncBaseline(request, verifiedXml, plan.conflicts)), points: plan.points },
         library: { directory: verifiedDirectory, readAt, sequences: [{ sequence: target, name: report.name, cues: report.cues }], errors: [], fixtureDetails: 'included', fixtureUsage: inspectMa2CueFixtures(verifiedXml), cueAttributes: inspectMa2CueAttributes(verifiedXml, readAt, true) },
-        layout: afterLayout?.value ?? null, removed: plan.removed, backupFile, changed });
-    } catch (cause) { throw new Error(`${wrote ? `序列 ${target} 可能已写入，已停止自动同步；请核对，备份 ${backupFile || '新建对象'}。` : ''}${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
-    finally { this.busy = false; }
+        layout: afterLayout?.value ?? null, removed: plan.removed, backupFile, changed, conflicts: plan.conflicts,
+        remoteRevision: createHash('sha256').update(canonical(verifiedXml)).digest('hex') });
+      // Persist the verified binding before returning. If the renderer closes or
+      // saving the project fails, the next explicit check recovers this position.
+      const previousOwner = owners.find(owner => owner.key === key);
+      if (changed || JSON.stringify(previousOwner?.binding) !== JSON.stringify(result.binding) || JSON.stringify(previousOwner?.conflicts ?? []) !== JSON.stringify(result.conflicts ?? [])) {
+        await writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding: result.binding, conflicts: result.conflicts ?? [] }]));
+      }
+      return result;
+    } catch (cause) { throw new Error(`${wrote ? `序列 ${target} 的写入结果待核对，原位置与备份 ${backupFile || '新建对象记录'} 已保留。` : ''}${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
+    finally { clearTimeout(timer!); this.busy = false; }
   }
 
   private async readOwners(): Promise<z.infer<typeof ownersSchema>> {
     try { return ownersSchema.parse(JSON.parse(await readFile(this.ownershipFile, 'utf8'))); }
     catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return []; throw error; }
   }
-  private async prepareXml(connection: Connection, request: Ma2LayoutReadRequest, file: string, xml: string): Promise<void> {
+  private async prepareXml(connection: Connection, request: Ma2LayoutReadRequest, file: string, xml: string, report?: (completed: number, total: number) => void): Promise<void> {
     await this.call(connection, `${this.guard(request)}local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','wb'));f:close();return 'prepared'`);
     const bytes = Buffer.from(xml);
-    for (let offset = 0; offset < bytes.length; offset += 128) await this.call(connection, `${this.guard(request)}local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','ab'));f:write(unhex('${bytes.subarray(offset,offset+128).toString('hex')}'));f:close();return 'prepared'`);
+    report?.(0, bytes.length);
+    for (let offset = 0; offset < bytes.length; offset += 128) {
+      await this.call(connection, `${this.guard(request)}local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','ab'));f:write(unhex('${bytes.subarray(offset,offset+128).toString('hex')}'));f:close();return 'prepared'`);
+      report?.(Math.min(offset + 128, bytes.length), bytes.length);
+    }
   }
 
   async create(connection: Connection, bridge: Bridge, input: Ma2NewCueRequest): Promise<Ma2NewCueResult> {

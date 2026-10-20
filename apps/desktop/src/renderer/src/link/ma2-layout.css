@@ -76,3 +76,10 @@
 .ma2-page-index-progress button:hover:not(:disabled) { border-color: var(--accent); }
 .ma2-page-index-progress small { color: var(--text-secondary); font-size: 10px; }
 .ma2-page-index-progress progress { width: 100%; height: 4px; accent-color: var(--accent); }
+.ma2-song-conflicts { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.ma2-song-conflicts > section { border: 1px solid var(--separator); border-radius: 6px; padding: 8px; }
+.ma2-song-conflicts dl { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 4px; margin: 6px 0; }
+.ma2-song-conflicts dd { margin: 0; overflow-wrap: anywhere; }
+.ma2-song-conflicts dt, .ma2-song-conflicts details { color: var(--text-secondary); }
+.ma2-song-conflicts details { margin-block: 6px; }
+.ma2-song-conflicts section > div { display: flex; gap: 6px; }

@@ -15,10 +15,13 @@ import { readMa2NativeLibrary } from './ma2-native-library';
 import { readMa2EffectLibrary } from './ma2-effect-library';
 import { Ma2LayoutService } from './ma2-layout-service';
 import { listMa2ExecutorPages, readMa2ExecutorPage } from './ma2-executor-page';
+import { Ma2ExecutorMutationService } from './ma2-executor-mutation-service';
+import { Ma2ExecutorInputService } from './ma2-executor-input';
 import { Ma2CueDeleteService } from './ma2-cue-delete-service';
 import { readMa2Catalog } from './ma2-catalog';
 import { readMa2NetworkPreview } from './ma2-network-preview';
 import { Ma2LiveService } from './ma2-live-service';
+import { Ma2SongWatch } from './ma2-song-watch';
 
 /** One chosen console, machine settings only. Auto-connect never replays writes. */
 export class Ma2NetworkManager {
@@ -32,6 +35,25 @@ export class Ma2NetworkManager {
   private passwordSaved = false;
   private busy = false;
   private generation = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectDelay = 1000;
+  private reconnectAllowed = false;
+  private scheduleReconnect(): void {
+    if (!this.reconnectAllowed || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.reconnectAllowed) return;
+      if (this.isPlaying() || this.busy) { this.scheduleReconnect(); return; }
+      void this.connect().then(status => {
+        if (status.state !== 'connected') { this.reconnectDelay = Math.min(30000, this.reconnectDelay * 2); this.scheduleReconnect(); }
+      }, (cause: unknown) => {
+        this.error = `恢复控台连接：${cause instanceof Error ? cause.message : String(cause)}`;
+        this.reconnectDelay = Math.min(30000, this.reconnectDelay * 2);
+        this.scheduleReconnect();
+      });
+    }, this.reconnectDelay);
+    this.reconnectTimer.unref();
+  }
   private services: { bridge: Ma2OnpcBridge; service: Ma2ApplyService } | null = null;
   private beforeConnectionChange: (() => Promise<()=>void>) | null = null;
   setBeforeConnectionChange(handler:()=>Promise<()=>void>):void { this.beforeConnectionChange=handler; }
@@ -40,6 +62,13 @@ export class Ma2NetworkManager {
   }
   private readonly path: string;
   private layoutService: Ma2LayoutService | null = null;
+  private songWatch: Ma2SongWatch | null = null;
+  async checkSong(request: import('@tb/schema').Ma2SongCheckRequest): Promise<boolean> {
+    const { bridge } = this.get(request.network);
+    if (!this.connection) throw new Error('请先连接控台');
+    this.songWatch ??= new Ma2SongWatch(this.isPlaying);
+    return this.songWatch.changed(this.connection, bridge, request);
+  }
   private liveService: Ma2LiveService | null = null;
   live(): Ma2LiveService { return this.liveService ??= new Ma2LiveService(`${this.path}.playback.json`, this.secrets, request => this.get(request.network).bridge); }
   private layouts(): Ma2LayoutService { return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.isPlaying); }
@@ -62,6 +91,32 @@ export class Ma2NetworkManager {
   }
   async listExecutorPages(request: import('@tb/schema').Ma2LayoutDirectoryRequest) { return listMa2ExecutorPages(this.get(request.network).bridge, request); }
   async readExecutorPage(request: import('@tb/schema').Ma2ExecutorPageRequest) { return readMa2ExecutorPage(this.get(request.network).bridge, request); }
+  private executorMutations: Ma2ExecutorMutationService | null = null;
+  private executorInput = new Ma2ExecutorInputService();
+  private executorMutationBusy = false;
+  async inputExecutor(request: import('@tb/schema').Ma2ExecutorInput): Promise<void> {
+    this.get(request.network);
+    const connection = this.connection; const generation = this.generation;
+    if (!connection) throw new Error('请先连接控台');
+    await this.executorInput.input(connection, request, () => {
+      if (this.generation !== generation || connection.state !== 'connected') throw new Error('控台连接已变化，未发送按键');
+      if (request.pressed && this.executorMutationBusy) throw new Error('正在更新执行器位置，请待回读完成后按下');
+    });
+  }
+  async releaseExecutors(): Promise<void> { await this.executorInput.release(); }
+  async updateExecutor(request: import('@tb/schema').Ma2ExecutorUpdateRequest): Promise<import('@tb/schema').Ma2ExecutorUpdateResult> {
+    const { bridge } = this.get(request.network);
+    const connection = this.connection;
+    if (!connection) throw new Error('请先连接控台');
+    if (this.executorMutationBusy) throw new Error('正在回读上一项执行器修改，请稍候');
+    this.executorMutationBusy = true;
+    try {
+      await this.executorInput.release();
+      if (this.connection !== connection || connection.state !== 'connected') throw new Error('控台连接已变化，未修改执行器');
+      this.executorMutations ??= new Ma2ExecutorMutationService(`${this.path}.executor-backups`, this.isPlaying);
+      return await this.executorMutations.update(connection, bridge, request);
+    } finally { this.executorMutationBusy = false; }
+  }
   async updateLayout(request: import('@tb/schema').Ma2LayoutUpdateRequest): Promise<import('@tb/schema').Ma2LayoutSnapshot> {
     const { bridge } = this.get(request.network); if (!this.connection) throw new Error('请先连接控台');
     return this.layouts().update(this.connection, bridge, request);
@@ -71,10 +126,10 @@ export class Ma2NetworkManager {
     if(!connection)throw new Error('请先连接控台');
     return this.layouts().read(connection,bridge,request);
   }
-  async syncSong(request: import('@tb/schema').Ma2SongSyncRequest): Promise<import('@tb/schema').Ma2SongSyncResult> {
+  async syncSong(request: import('@tb/schema').Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal): Promise<import('@tb/schema').Ma2SongSyncResult> {
     const { bridge } = this.get(request.network); const connection = this.connection;
     if (!connection) throw new Error('请先连接控台');
-    return this.layouts().syncSong(connection, bridge, request);
+    return this.layouts().syncSong(connection, bridge, request, report, signal);
   }
   async newCue(request: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult> {
     const {bridge}=this.get(request.network); const connection=this.connection;
@@ -200,7 +255,8 @@ export class Ma2NetworkManager {
     if (this.busy) throw new Error('MA2 正在连接');
     if (!this.settings) throw new Error('请先保存控台 IP 与登录用户');
     if(this.connection?.state==='connected'&&this.services)return this.status();
-    this.disconnect(); this.error = null; this.busy = true;
+    const recovering = this.reconnectAllowed;
+    this.disconnect(); this.reconnectAllowed = recovering; this.error = null; this.busy = true;
     const generation = this.generation;
     try {
       const settings = this.settings;
@@ -208,7 +264,11 @@ export class Ma2NetworkManager {
       const localAddress = await this.resolveLocalAddress(settings.host);
       if (generation !== this.generation) return this.status();
       const connection = new Ma2Telnet({ ...settings, ...(localAddress ? { localAddress } : {}) }, (state) => {
-        if (state === 'disconnected' && this.connection === connection) { this.version = null; this.capabilities = null; this.error = 'MA2 已断开，请重新连接'; }
+        if (state === 'disconnected' && this.connection === connection) {
+          this.version = null; this.capabilities = null;
+          this.error = 'MA2 连接已断开，正在恢复；编辑继续保存在本地';
+          this.scheduleReconnect();
+        }
       }, 5000, this.validatePeers ? peers => this.validatePeers!(settings.host, peers) : undefined);
       this.connection = connection;
       const version = await connection.connect(settings.username, password);
@@ -218,6 +278,7 @@ export class Ma2NetworkManager {
       if (generation !== this.generation) return this.status();
       const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(connection), this.isPlaying);
       this.services = { bridge, service: new Ma2ApplyService(bridge, this.isPlaying) };
+      this.reconnectAllowed = true; this.reconnectDelay = 1000;
     } catch (error) { if (generation === this.generation) { this.connection?.disconnect(); this.services = null; this.error = error instanceof Error ? error.message : String(error); this.version = null; } }
     finally { this.busy = false; }
     return this.status();
@@ -242,6 +303,9 @@ export class Ma2NetworkManager {
     return this.status();
   }
   disconnect(): Ma2NetworkStatus {
+    this.reconnectAllowed = false;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     this.liveService?.close();
     this.generation += 1;
     const connection = this.connection; this.connection = null;

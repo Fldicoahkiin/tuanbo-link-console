@@ -26,3 +26,12 @@ it('wide executors retain their leading slot and do not collapse following empty
 it('does not round a malformed Cue number into a different executable Cue', () => {
   expect(() => inspectMa2ExecutorPageXml(xml.replace(/(<tblink_cue[^>]*number=")[^"]+/, '$11.0004'), 99)).toThrow('Cue 编号无效');
 });
+it('uses only exported appearance and button functions, including the two buttons above a fader', () => {
+  const colored = xml.replace('<tblink_sequence number="9907"', '<tblink_sequence color="#3366cc" number="9907"').replace('<Button>0</Button>', '<Button>12290</Button>');
+  const item = inspectMa2ExecutorPageXml(colored, 99).items[0]!;
+  expect(item.color).toBe('#3366cc');
+  expect(item.buttons).toEqual([12299, 12290, 0, 0]);
+  expect(item.priority).toBe('Normal');
+  expect(item.softLtp).toBe(true);
+  expect(item.revision).toMatch(/^[a-f0-9]{64}$/);
+});

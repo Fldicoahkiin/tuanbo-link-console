@@ -228,6 +228,9 @@ export type LinkDesktopApi = {
   listMa2Layouts(payload: import('@tb/schema').Ma2LayoutDirectoryRequest): Promise<import('@tb/schema').Ma2LayoutDirectory>;
   listMa2ExecutorPages(payload: import('@tb/schema').Ma2LayoutDirectoryRequest): Promise<import('@tb/schema').Ma2ExecutorPageDirectory>;
   readMa2ExecutorPage(payload: import('@tb/schema').Ma2ExecutorPageRequest): Promise<import('@tb/schema').Ma2ExecutorPage>;
+  updateMa2Executor(payload: import('@tb/schema').Ma2ExecutorUpdateRequest): Promise<import('@tb/schema').Ma2ExecutorUpdateResult>;
+  inputMa2Executor(payload: import('@tb/schema').Ma2ExecutorInput): Promise<void>;
+  releaseMa2Executors(): Promise<void>;
   connectMa2Live(payload: import('@tb/schema').Ma2LiveConnect): Promise<import('@tb/schema').Ma2LiveSnapshot>;
   readMa2Live(payload: import('@tb/schema').Ma2LiveRequest): Promise<import('@tb/schema').Ma2LiveSnapshot>;
   inputMa2Live(payload: import('@tb/schema').Ma2LiveInput): Promise<void>;
@@ -236,7 +239,8 @@ export type LinkDesktopApi = {
   readMa2Layout(payload: import('@tb/schema').Ma2LayoutReadRequest): Promise<import('@tb/schema').Ma2LayoutSnapshot>;
   prepareMa2CueDeletion(payload: import('@tb/schema').Ma2CueDeletePrepare, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2CueDeletePlan>;
   commitMa2CueDeletion(payload: import('@tb/schema').Ma2CueDeleteCommit, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2CueDeleteResult>;
-  syncMa2Song(payload: import('@tb/schema').Ma2SongSyncRequest): Promise<import('@tb/schema').Ma2SongSyncResult>;
+  syncMa2Song(payload: import('@tb/schema').Ma2SongSyncRequest, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2SongSyncResult>;
+  checkMa2Song(payload: import('@tb/schema').Ma2SongCheckRequest): Promise<boolean>;
   createMa2Cue(payload: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult>;
   cancelMa2Read(id: string): Promise<void>;
   createMa2(payload: import('@tb/schema').Ma2CreateRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;

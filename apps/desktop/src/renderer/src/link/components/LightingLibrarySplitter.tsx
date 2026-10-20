@@ -14,12 +14,16 @@ export function useLightingCueSplit() {
 }
 
 export function useLightingLibrarySplit() {
-  const [ratio, setRatio] = useState(0.5);
-  const style: CSSProperties = { gridTemplateRows: `minmax(220px, ${ratio * 100}fr) 8px minmax(240px, ${(1 - ratio) * 100}fr)` };
+  const [ratio, setRatio] = useState(0.68);
+  const [adjusted, setAdjusted] = useState(false);
+  const resize = (value: number): void => { setAdjusted(true); setRatio(Math.max(0.25, Math.min(0.8, value))); };
+  const reset = (): void => { setAdjusted(false); setRatio(0.68); };
+  const minimumLibrary = adjusted ? '220px' : 'min(560px, calc(100% - 168px))';
+  const style: CSSProperties = { gridTemplateRows: `minmax(${minimumLibrary}, ${ratio * 100}fr) 8px minmax(160px, ${(1 - ratio) * 100}fr)` };
   const separator = <button className="lighting-library-splitter" role="separator" aria-label="调整效果库和时间线高度" aria-orientation="horizontal" aria-valuemin={25} aria-valuemax={80} aria-valuenow={Math.round(ratio * 100)}
     onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
-    onPointerMove={event => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const parent = event.currentTarget.parentElement; const box = parent?.getBoundingClientRect(); if (box) setRatio(Math.max(0.25, Math.min(0.8, (event.clientY - box.top) / (box.bottom - box.top)))); }}
+    onPointerMove={event => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const parent = event.currentTarget.parentElement; const box = parent?.getBoundingClientRect(); if (box) resize((event.clientY - box.top) / (box.bottom - box.top)); }}
     onPointerUp={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
-    onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); setRatio(value => Math.max(0.25, Math.min(0.8, value + (event.key === 'ArrowUp' ? -0.03 : 0.03)))); } if (event.key === 'Home') setRatio(0.5); }} onDoubleClick={() => setRatio(0.5)}><span /></button>;
+    onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); resize(ratio + (event.key === 'ArrowUp' ? -0.03 : 0.03)); } if (event.key === 'Home') { event.preventDefault(); reset(); } }} onDoubleClick={reset}><span /></button>;
   return { style, separator };
 }

@@ -8,6 +8,22 @@ local root = gma.show.getvar('PATH')
 local request_file = root .. '/temp/tblink_bridge_request.txt'
 local processing_file = root .. '/temp/tblink_bridge_processing_' .. generation .. '.txt'
 local response_file = root .. '/temp/tblink_bridge_response.txt'
+local appearance_cache = {}
+local function sequence_appearance(number, handle)
+  local now = gma.gettime()
+  local cached = appearance_cache[number]
+  if cached and cached.handle == handle and cached.show == gma.show.getvar('SHOWFILE') and now - cached.at < 2 then return cached.color end
+  local file = 'tblink_appearance_' .. number
+  gma.cmd('Export Sequence ' .. number .. ' ' .. file .. ' /o')
+  local input = assert(io.open(root .. '/importexport/' .. file .. '.xml', 'rb'), 'Sequence appearance export unavailable')
+  -- Appearance belongs to Sequ, before the first Cue. Fixture values never cross the network here.
+  local header = input:read(4096) or ''; input:close()
+  local before_cue = header:match('^(.-)<Cue') or header
+  local color = before_cue:match('<Appearance%s+Color="([a-fA-F0-9]+)"')
+  assert(not color or #color == 6, 'Invalid Sequence appearance')
+  appearance_cache[number] = {handle=handle,show=gma.show.getvar('SHOWFILE'),at=now,color=color}
+  return color
+end
 local function read(path)
   local file = io.open(path, 'rb')
   if not file then return nil end
@@ -130,7 +146,8 @@ local function process(data)
               cues[#cues + 1] = '<tblink_cue index="' .. i .. '" number="' .. escape(obj.number(cue)) .. '" name="' .. escape(obj.label(cue) or '') .. '"/>'
             end
           end
-          metadata[#metadata + 1] = '<tblink_sequence number="' .. sequence .. '" name="' .. escape(obj.label(h) or '') .. '">' .. table.concat(cues) .. '</tblink_sequence>'
+          local color = sequence_appearance(sequence, h)
+          metadata[#metadata + 1] = '<tblink_sequence number="' .. sequence .. '" name="' .. escape(obj.label(h) or '') .. '"' .. (color and ' color="#' .. color .. '"' or '') .. '>' .. table.concat(cues) .. '</tblink_sequence>'
         end
       end
       return xml:gsub('</MA>%s*$', function() return '<tblink_sequences>' .. table.concat(metadata) .. '</tblink_sequences></MA>' end)
@@ -391,17 +408,95 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
   end)
   gma.echo('TBLINK_RPC_' .. token .. ':' .. (ok and result or 'ERR:' .. hex(tostring(result))))
 end
+-- Executor keys use the existing authenticated Telnet channel. A lease prevents
+-- Flash/Temp/Swop sticking on after a renderer crash or a broken network cable.
+local executor_keys = {}
+local executor_functions = {
+  [12299]={'Go',false},[12297]={'GoBack',false},[12298]={'Pause',false},[12290]={'Off',false},
+  [12293]={'On',false},[12307]={'Toggle',false},[12302]={'Flash',true},[12291]={'Temp',true},
+  [12306]={'Swop',true},[12322]={'SwopOn',true},[12323]={'SwopGo',true},[12320]={'FlashOn',true},
+  [12321]={'FlashGo',true},[12303]={'Black',true},[12292]={'Top',false},[12301]={'Load',false},
+  [12325]={'LoadNext',false},[12305]={'Select',false},[12295]={'Learn',false},[12308]={'Rate1',false},
+  [12318]={'ToFull',false},[12319]={'ToZero',false}
+}
+local function release_executor_key(key)
+  if key.momentary and gma.show.getvar('SHOWFILE') == key.show and gma.show.getobj.handle(key.address) == key.handle then
+    gma.cmd(key.name .. ' Off ' .. key.address)
+  end
+end
+local function expire_executor_keys()
+  for id,key in pairs(executor_keys) do
+    if not key.expired and (not active or _G.TBLINK_BRIDGE_GENERATION ~= generation or gma.gettime() > key.expires) then
+      release_executor_key(key); key.expired=true
+    end
+    if gma.gettime()>key.expires+600 then executor_keys[id]=nil end
+  end
+end
+_G.TBLINK_EXEC_RELEASE_ALL = function()
+  for id,key in pairs(executor_keys) do release_executor_key(key); executor_keys[id]=nil end
+end
+_G.TBLINK_EXEC_INPUT = function(token,id,page,slot,button,pressed,code,sequence,label_hex,show_hex,generation_hex,reference_hex)
+  if type(token) ~= 'string' or #token ~= 32 or not token:match('^[a-f0-9]+$') then return end
+  local ok,result = pcall(function()
+    local function unhex(value)
+      assert(type(value)=='string' and #value<=4096 and #value%2==0 and not value:find('[^a-f0-9]'),'Invalid encoded text')
+      return (value:gsub('..',function(pair)return string.char(tonumber(pair,16))end))
+    end
+    assert(type(id)=='string' and #id==32 and id:match('^[a-f0-9]+$'),'Invalid press identity')
+    local key = executor_keys[id]
+    if not pressed then
+      if key then release_executor_key(key);key.expired=true;key.expires=gma.gettime()
+      else executor_keys[id]={expired=true,expires=gma.gettime()} end
+      return 'RELEASED'
+    end
+    assert(active and _G.TBLINK_BRIDGE_GENERATION==generation and unhex(generation_hex)==generation,'Bridge session changed')
+    assert(unhex(show_hex)==gma.show.getvar('SHOWFILE'),'Show changed')
+    assert(type(page)=='number' and page>=1 and page<=9999 and page==math.floor(page),'Invalid page')
+    assert(type(slot)=='number' and slot>=1 and slot<=240 and slot==math.floor(slot),'Invalid executor')
+    assert(type(button)=='number' and button>=0 and button<=2 and button==math.floor(button),'Invalid button')
+    local address='Executor '..page..'.'..slot
+    if key then
+      assert(not key.expired,'Press expired; press again')
+      assert(key.address==address and key.code==code and key.button==button,'Press identity changed')
+      assert(gma.show.getobj.handle(address)==key.handle,'Executor moved while pressed')
+      key.expires=gma.gettime()+2; return 'HELD'
+    end
+    local fn=assert(executor_functions[code],'Unsupported executor function')
+    local obj=gma.show.getobj
+    local handle=assert(obj.handle(address),'Executor missing')
+    assert((obj.label(handle) or '')==unhex(label_hex),'Executor name changed')
+    local file='tblink_exec_key_'..token
+    gma.cmd('Export '..address..' '..file..' /o')
+    local xml=assert(read(root..'/importexport/'..file..'.xml'),'Executor export unavailable')
+    local assignment=xml:match('<Assignment%s[^>]*>(.-)</Assignment>')
+    local numbers={};for number in (assignment or ''):gmatch('<No>%s*(%d+)%s*</No>')do numbers[#numbers+1]=tonumber(number)end
+    assert(table.concat(numbers,'.')==unhex(reference_hex),'Executor assignment changed')
+    if sequence>0 then
+      assert(#numbers==3 and numbers[1]==25 and numbers[2]==1 and numbers[3]==sequence,'Executor assignment changed')
+    end
+    local buttons={};for value in xml:gmatch('<Button>%s*(%d+)%s*</Button>')do buttons[#buttons+1]=tonumber(value)end
+    assert(buttons[button+1]==code,'Executor function changed')
+    gma.cmd(fn[1]..(fn[2] and ' On ' or ' ')..address)
+    executor_keys[id]={address=address,handle=handle,name=fn[1],code=code,button=button,momentary=fn[2],show=gma.show.getvar('SHOWFILE'),expires=gma.gettime()+2}
+    return 'SENT'
+  end)
+  local response=ok and result or 'ERR:'..hex(tostring(result))
+  gma.echo('TBLINK_EXEC_'..token..':'..response)
+  return response
+end
 local function main(mode)
   if active then active = false; _G.TBLINK_BRIDGE_READY = false; gma.feedback('TBLINK bridge stopped'); return end
   if mode == 'network' then
     active = true
     _G.TBLINK_BRIDGE_READY = true
+    gma.timer(expire_executor_keys, 0.25, 0)
     return
   end
   -- A restart must not replay a previously sent write with an uncertain outcome.
   os.rename(request_file, root .. '/temp/tblink_bridge_abandoned_' .. generation .. '.txt')
   active = true
   _G.TBLINK_BRIDGE_READY = true
+  gma.timer(expire_executor_keys, 0.25, 0)
   gma.timer(poll, 0.1, 0)
   gma.feedback('TBLINK local onPC bridge ready')
 end

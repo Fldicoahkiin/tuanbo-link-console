@@ -27,7 +27,7 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status', () => status);
       ipcMain.removeHandler('link:ma2-network-save'); ipcMain.handle('link:ma2-network-save', () => status);
       ipcMain.removeHandler('link:ma2-catalog'); ipcMain.handle('link:ma2-catalog', () => data.catalog);
-      ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => data.catalog.entries[0]!.preview);
+      ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => process.env.TBLINK_EDIT_REQUEST ? data.confirmed : data.catalog.entries[0]!.preview);
       ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => ({ directory: { ...data.catalog.directory, entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] }));
       // Only the transport receipt is simulated; renderer, comparison and document saving are real.
       ipcMain.removeHandler('link:ma2-apply'); ipcMain.handle('link:ma2-apply', (_event, request: unknown) => {
@@ -47,7 +47,6 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
     expect(await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST)).toBeUndefined();
-    await page.getByRole('switch', { name: '实时同步', exact: true }).click();
     await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'true');
     const first = await page.locator('.waveform-cue-point').first().boundingBox();
     const second = await page.locator('.waveform-cue-point').nth(1).boundingBox();

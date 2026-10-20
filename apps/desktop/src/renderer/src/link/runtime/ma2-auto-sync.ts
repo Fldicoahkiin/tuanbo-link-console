@@ -6,7 +6,7 @@ import { pendingMa2Renames, confirmMa2RenameCommand, ma2RenameKey } from '@tb/co
 import { ma2RenameResultSchema, type Ma2RenameRequest, type Ma2RenameResult } from '@tb/schema';
 
 export type Ma2AutoSyncStatus = 'off' | 'waiting' | 'staged' | 'reading' | 'writing' | 'verified' | 'blocked';
-export type Ma2AutoSyncScope = 'all' | 'names';
+export type Ma2AutoSyncScope = 'all' | 'bound' | 'names';
 type State = { project: LinkProject | null; documentId: number; playing: boolean; editing?: boolean };
 export type Ma2AutoSyncDependencies = {
   state: () => State;
@@ -48,7 +48,7 @@ export class Ma2AutoSync {
   async tick(refreshRemote = false): Promise<void> {
     const session = this.session;
     if (!session || this.busy) return;
-    refreshRemote = refreshRemote && session.scope === 'all';
+    refreshRemote = refreshRemote && session.scope !== 'names';
     const state = this.dependencies.state();
     if (state.documentId !== session.documentId || !state.project) { this.stop(); return; }
     if (state.playing) {
@@ -58,7 +58,7 @@ export class Ma2AutoSync {
     }
     if (state.editing) { this.dependencies.changed('waiting', '等待连续编辑结束'); return; }
     let pending = session.scope === 'names' ? [] : ma2PendingChanges(state.project);
-    const unbound = session.scope === 'names' ? [] : state.project.rundown.filter(item => item.lighting && !item.lighting.consoleSong && ma2AutoBindEvents(item.lighting).length);
+    const unbound = session.scope !== 'all' ? [] : state.project.rundown.filter(item => item.lighting && !item.lighting.consoleSong && ma2AutoBindEvents(item.lighting).length);
     const renames = pendingMa2Renames(state.project);
     if (!refreshRemote && !pending.length && !unbound.length && !renames.length) {
       this.dependencies.changed(this.confirmed ? 'verified' : 'waiting', session.scope === 'names'
@@ -133,7 +133,7 @@ export class Ma2AutoSync {
         if (!current()) return;
       }
       const project = this.dependencies.state().project!;
-      if (project.rundown.some(item => item.lighting && !item.lighting.consoleSong && ma2AutoBindEvents(item.lighting).length)) {
+      if (session.scope === 'all' && project.rundown.some(item => item.lighting && !item.lighting.consoleSong && ma2AutoBindEvents(item.lighting).length)) {
         this.dependencies.changed('waiting', '准备期间新增了 Cue，继续核对新增目标'); return;
       }
       pending = ma2PendingChanges(project);

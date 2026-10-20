@@ -1,24 +1,28 @@
-import { useMa2SongSyncStore, startMa2SongSync, stopMa2SongSync } from '../runtime/ma2-song-sync';
-import { projectLightingLibrary } from '@tb/core/link';
+import { useMa2SongSyncStore } from '../runtime/ma2-song-sync';
+import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
+import { pauseMa2RealtimeSession, pendingSongSummary, retryMa2RealtimeSession } from '../runtime/ma2-realtime-session';
 import { useMemo, useState } from 'react';
 import { Check, CircleAlert, FolderArchive, FolderOpen, Save, Undo2, Redo2 } from 'lucide-react';
 import type { ProjectArchiveResult } from '@tb/schema';
-import { ma2PendingChanges, ma2UnboundTracks } from '../runtime/ma2-pending-changes';
+import { ma2PendingChanges } from '../runtime/ma2-pending-changes';
 import { enableMa2NameSync, useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
 import { archiveMa2Project } from '../runtime/ma2-project-archive';
 import { useDocumentStore } from '../stores/document-store';
-import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { pendingMa2Renames, ma2RenameKey } from '@tb/core/link';
+import { useMa2LocalSaveStore } from '../runtime/ma2-local-save';
+import { Ma2SongConflicts } from './Ma2SongConflicts';
 
 export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
   const project = useDocumentStore(state => state.project);
   const canUndo = useDocumentStore(state => state.past.length > 0);
   const canRedo = useDocumentStore(state => state.future.length > 0);
   const pending = useMemo(() => ma2PendingChanges(project), [project]);
-  const unbound = useMemo(() => ma2UnboundTracks(project), [project]);
+  const unbound = useMemo(() => pendingSongSummary(project), [project]);
   const renames = useMemo(() => pendingMa2Renames(project), [project]);
   const automatic = useMa2AutoSyncStore();
+  const active = useMa2RealtimePreference(state => state.enabled);
+  const localSaveError = useMa2LocalSaveStore(state => state.error);
   const songSync = useMa2SongSyncStore(state => state.songs);
   const songs = Object.values(songSync);
   const [busy, setBusy] = useState(false);
@@ -27,38 +31,21 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const [detailOpen, setDetailOpen] = useState(false);
   const [notice, setNotice] = useState('');
   if (!project) return null;
-  const active = songs.some(song => song.state !== 'blocked') || Boolean(automatic.request) && automatic.request?.scope !== 'names' && automatic.status !== 'blocked';
-  const working = automatic.status === 'writing' || automatic.status === 'reading' || songs.some(song => song.state === 'syncing');
-  const count = pending.length + unbound.length + renames.length;
-  const status = songs.some(song => song.state === 'blocked') ? '本曲同步中断' : songs.some(song => song.state === 'syncing') ? '本曲同步中' : songs.length && songs.every(song => song.state === 'verified') ? '本曲已回读' : automatic.status === 'blocked' ? '同步中断' : working ? '同步中' : count ? `待同步 ${count}` : automatic.request?.scope === 'names' && automatic.status === 'verified' ? '名称已同步' : active ? automatic.status === 'verified' ? '已确认' : '同步开启' : '仅本地';
-  const run = async (action: () => Promise<void>): Promise<void> => {
+  const working = automatic.status === 'writing' || automatic.status === 'reading' || songs.some(song => song.state === 'syncing' || song.requestId);
+  const count = pending.length + unbound.length + renames.length + songs.filter(song => song.state === 'pending' && !unbound.some(item => item.itemId === song.itemId)).length;
+  const blocked = automatic.status === 'blocked' || songs.some(song => song.state === 'blocked');
+  const status = localSaveError ? '本地保存需处理' : !active ? '已暂停同步' : blocked ? '有修改待核对' : working ? '同步中' : songs.some(song => song.waitingForConnection) ? '等待连接' : count ? `待同步 ${count}` : songs.length && songs.every(song => song.state === 'verified') ? '已回读确认' : automatic.status === 'verified' ? '已回读确认' : '同步已开启';
+  const run = async (action: () => Promise<void> | void): Promise<void> => {
     if (busy) return;
     setBusy(true);
     try { await action(); }
     catch (error) { const message = error instanceof Error ? error.message : String(error); setNotice(message); setDetailOpen(true); notify(message, 'error'); }
     finally { setBusy(false); }
   };
-  const toggle = async (): Promise<void> => {
-    if (active) { useMa2AutoSyncStore.setState({ request: null }); for (const song of songs) stopMa2SongSync(song.itemId); return; }
-    const state = useDocumentStore.getState();
-    const cache = state.project?.ma2ReadState;
-    if (!state.project || !state.path) throw new Error('请先保存工程');
-    const boundSongs = state.project.rundown.filter(item => item.lighting?.consoleSong);
-    if (boundSongs.length) {
-      for (const item of boundSongs) { const binding = item.lighting!.consoleSong!; const settings = projectLightingLibrary(state.project).consoleWorkspace; startMa2SongSync(item.id, binding.name, { layout: binding.layout ?? 999, ...(binding.executor ? { executorPage: Number(binding.executor.split('.')[0]) } : {}), name: settings?.name ?? '歌曲 Cue', nextSequence: binding.sequence, columns: settings?.columns ?? 8 }); }
-      return;
-    }
-    const connection = await ma2MaterialConnection();
-    if (useDocumentStore.getState().documentId !== state.documentId) throw new Error('工程已切换');
-    const source = connection.network ? `${connection.network.host}:${connection.network.port}` : '本机 onPC';
-    if (cache && source !== cache.source) throw new Error('当前连接与工程读取来源不同，请先核对控台');
-    const catalog = await window.tbLink.readMa2Catalog({ ...connection, targets: [] });
-    if (useDocumentStore.getState().documentId !== state.documentId) throw new Error('工程已切换');
-    if (cache && (catalog.directory.show !== cache.catalog.directory.show || catalog.directory.version !== cache.catalog.directory.version)) throw new Error('当前 Show 与工程读取来源不同，请先读取控台');
-    const materials = state.project.ma2MaterialLibrary;
-    if (materials?.library && (materials.source !== source || materials.library.directory.show !== catalog.directory.show || materials.library.directory.version !== catalog.directory.version)) throw new Error('素材来自另一控台或 Show，请先读取当前控台后核对素材');
+  const toggle = (): void => {
     setNotice('');
-    useMa2AutoSyncStore.setState({ request: { connection, catalog } });
+    if (active) pauseMa2RealtimeSession();
+    else retryMa2RealtimeSession();
   };
   const save = async (): Promise<void> => {
     const state = useDocumentStore.getState();
@@ -82,20 +69,22 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   };
   return <div className="ma2-sync-controls" aria-label="灯光同步操作">
     <button className="ma2-realtime-switch" role="switch" aria-label="实时同步" aria-checked={active} disabled={busy || (working && !active)} onClick={() => void run(toggle)} title="编辑结束后自动核对、存档、写回并确认；播放中暂存，停止后同步"><span className="ma2-switch-track" aria-hidden="true"><span /></span><span>实时同步</span></button>
-    <button aria-label="同步状态详情" data-state={automatic.status} onClick={() => { setDetailOpen(value => !value); setArchiveOpen(false); }}>{automatic.status === 'blocked' || count ? <CircleAlert /> : <Check />}<span>{status}</span></button>
-    <button aria-label="撤销灯光修改" title="撤销上一次工程编辑；启用同步后会将撤销结果写回控台" disabled={busy || working || !canUndo} onClick={() => useDocumentStore.getState().undo()}><Undo2 /></button>
-    <button aria-label="重做灯光修改" title="重做上一次撤销" disabled={busy || working || !canRedo} onClick={() => useDocumentStore.getState().redo()}><Redo2 /></button>
-    <button disabled={busy || working} title="保存工程并创建存档" onClick={() => void run(save)}><Save /><span>保存</span></button>
+    <button aria-label="同步状态详情" data-state={blocked ? 'blocked' : automatic.status} onClick={() => { setDetailOpen(value => !value); setArchiveOpen(false); }}>{blocked || count ? <CircleAlert /> : <Check />}<span>{status}</span></button>
+    <button aria-label="撤销灯光修改" title="撤销上一次工程编辑；启用同步后会将撤销结果写回控台" disabled={!canUndo} onClick={() => useDocumentStore.getState().undo()}><Undo2 /></button>
+    <button aria-label="重做灯光修改" title="重做上一次撤销" disabled={!canRedo} onClick={() => useDocumentStore.getState().redo()}><Redo2 /></button>
+    <button disabled={busy} title="保存工程并创建存档" onClick={() => void run(save)}><Save /><span>保存</span></button>
     <button disabled={busy} onClick={() => archiveOpen ? setArchiveOpen(false) : void run(loadArchives)}><FolderArchive /><span>存档</span></button>
     {detailOpen ? <div className="ma2-sync-popover" role="region" aria-label="同步状态详情">
       <header><strong>{status}</strong><button onClick={() => setDetailOpen(false)}>关闭</button></header>
-      <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{notice || automatic.message}</p>
-      {songs.map(song => <p key={song.itemId} role={song.state === 'blocked' ? 'alert' : 'status'}>{song.message}</p>)}
+      {localSaveError ? <p role="alert">{localSaveError}</p> : null}
+      <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{notice || (!active ? '已暂停，修改保留在本地。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : automatic.request || automatic.status === 'blocked' || !songs.length ? automatic.message : '名称与 Cue 内容双向核对，控台位置如下。')}</p>
+      {blocked ? <button disabled={busy || working} onClick={() => { setNotice(''); retryMa2RealtimeSession(); }}>重新核对并同步</button> : null}
+      {songs.map(song => <section key={song.itemId}><p role={song.state === 'blocked' ? 'alert' : 'status'}>{song.message}</p><Ma2SongConflicts itemId={song.itemId}/></section>)}
       {playing ? <p>播放中暂存本地，停止后同步。</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}
       {renames.length ? <button disabled={busy || working} onClick={() => void run(() => enableMa2NameSync(useDocumentStore.getState().documentId))}>同步名称</button> : null}
       {pending.map(item => <p key={`${item.itemId}:${item.bindingId}`}>{item.title} · Timecode {item.target}：{item.error ?? `${item.changes.length} 处修改`}</p>)}
-      {unbound.map(item => <p key={`${item.itemId}:${item.trackId}`}>{item.title} · {item.name} · {item.count} 个 Cue：开启同步后自动关联并写入控台。</p>)}
+      {unbound.map(item => <p key={item.itemId}>{item.title} · {item.count} 个 Cue → 按钮第 {item.page} 页的空格。</p>)}
     </div> : null}
     {archiveOpen ? <div className="ma2-sync-popover" role="region" aria-label="灯光工程存档">
       <header><strong>工程存档 · {archives.length}</strong><button onClick={() => setArchiveOpen(false)}>关闭</button></header>

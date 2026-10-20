@@ -1,8 +1,9 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
-import { ma2ExecutorPageDirectorySchema, ma2ExecutorPageSchema, ma2ExecutorPageRequestSchema } from '@tb/schema';
+import { ma2ExecutorPageDirectorySchema, ma2ExecutorPageSchema, ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorUpdateResultSchema, ma2ExecutorInputSchema } from '@tb/schema';
 import { ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2LiveSnapshotSchema } from '@tb/schema';
-import { ma2SongSyncRequestSchema, ma2SongSyncResultSchema } from '@tb/schema';
+import { ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema } from '@tb/schema';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { z } from 'zod';
 import { ma2AutoBindRequestSchema, ma2AutoBindResultSchema } from '@tb/schema';
 import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
 import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
@@ -108,6 +109,9 @@ const tbLink: LinkDesktopBridgeApi = {
   listMa2Layouts: async payload => ma2LayoutDirectorySchema.parse(await invoke('link:ma2-layouts', ma2LayoutDirectoryRequestSchema.parse(payload))),
   listMa2ExecutorPages: async payload => ma2ExecutorPageDirectorySchema.parse(await invoke('link:ma2-executor-pages', ma2LayoutDirectoryRequestSchema.parse(payload))),
   readMa2ExecutorPage: async payload => ma2ExecutorPageSchema.parse(await invoke('link:ma2-executor-page', ma2ExecutorPageRequestSchema.parse(payload))),
+  updateMa2Executor: async payload => ma2ExecutorUpdateResultSchema.parse(await invoke('link:ma2-executor-update', ma2ExecutorUpdateRequestSchema.parse(payload))),
+  inputMa2Executor: payload => invoke('link:ma2-executor-input', ma2ExecutorInputSchema.parse(payload)),
+  releaseMa2Executors: () => invoke('link:ma2-executor-release'),
   connectMa2Live: async payload => ma2LiveSnapshotSchema.parse(await invoke('link:ma2-live-connect', ma2LiveConnectSchema.parse(payload))),
   readMa2Live: async payload => ma2LiveSnapshotSchema.parse(await invoke('link:ma2-live-read', ma2LiveRequestSchema.parse(payload))),
   inputMa2Live: async payload => { await invoke('link:ma2-live-input', ma2LiveInputSchema.parse(payload)); },
@@ -116,7 +120,8 @@ const tbLink: LinkDesktopBridgeApi = {
   readMa2Layout: async payload => ma2LayoutSnapshotSchema.parse(await invoke('link:ma2-layout', ma2LayoutReadRequestSchema.parse(payload))),
   prepareMa2CueDeletion: async (payload, progress) => ma2CueDeletePlanSchema.parse(await readMa2('link:ma2-cue-delete-prepare', ma2CueDeletePrepareSchema.parse(payload), progress)),
   commitMa2CueDeletion: async (payload, progress) => ma2CueDeleteResultSchema.parse(await readMa2('link:ma2-cue-delete-commit', ma2CueDeleteCommitSchema.parse(payload), progress)),
-  syncMa2Song: async payload => ma2SongSyncResultSchema.parse(await invoke('link:ma2-song-sync', ma2SongSyncRequestSchema.parse(payload))),
+  syncMa2Song: async (payload, onProgress) => ma2SongSyncResultSchema.parse(await readMa2('link:ma2-song-sync', ma2SongSyncRequestSchema.parse(payload), onProgress)),
+  checkMa2Song: async payload => z.boolean().parse(await invoke('link:ma2-song-check', ma2SongCheckRequestSchema.parse(payload))),
   createMa2Cue: async payload => ma2NewCueResultSchema.parse(await invoke('link:ma2-new-cue', ma2NewCueRequestSchema.parse(payload))),
   cancelMa2Read: (id) => invoke('link:ma2-read-cancel', id),
   createMa2: (payload) => invoke('link:ma2-create', payload),

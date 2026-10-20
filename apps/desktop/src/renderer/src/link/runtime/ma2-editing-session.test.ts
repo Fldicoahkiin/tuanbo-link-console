@@ -8,6 +8,7 @@ import { importCachedMa2, scanMa2, useMa2ReadStore } from '../stores/ma2-read-st
 import { useMa2AutoSyncStore } from './use-ma2-auto-sync';
 import { prepareMa2Editing } from './ma2-editing-session';
 import { scanMa2Materials } from '../stores/ma2-material-read-store';
+vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
 vi.mock('../stores/ma2-material-read-store', () => ({ scanMa2Materials: vi.fn() }));
 vi.mock('../stores/ma2-mode-store', () => ({ useMa2ModeStore: vi.fn() }));
 
