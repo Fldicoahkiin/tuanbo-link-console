@@ -36,7 +36,7 @@ export class Ma2LayoutService {
     const beforeSend=():void=>{if(this.isPlaying())throw new Error('请停止播放后读取或创建控台 Layout');};
     let command=script;
     // MA2's native command line truncates long Lua input; prepare app-owned code in bounded chunks.
-    if(Buffer.byteLength(script)>900 || /["$\\\r\n]/.test(script)){
+    if(Buffer.byteLength(script)>900 || /["$|^\\\r\n]/.test(script)){
       const key=`TBLINK_LAYOUT_${randomBytes(12).toString('hex')}`;
       const prepare=async(code:string):Promise<void>=>{
         const response=await connection.command(`Lua "${code};gma.echo('${prefix}READY')"`,text=>ma2ResponseLine(text,prefix),beforeSend);
@@ -116,7 +116,7 @@ export class Ma2LayoutService {
       const xml = moveMa2LayoutObjects(before.xml, request.layout, request.positions, request.name);
       const file = `tblink_layout_move_${randomBytes(12).toString('hex')}`;
       await this.prepareXml(connection, request, file, xml);
-      await this.call(connection, `${this.guard(request)}gma.cmd('Export Layout ${request.layout} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><'):match('^%s*(.-)%s*$') end;assert(read('${before.file}')==read('${file}_check'),'Layout changed during write');gma.cmd('Import ${file}.xml At Layout ${request.layout} /o /nc');return 'written'`);
+      await this.call(connection, `${this.guard(request)}gma.cmd('Export Layout ${request.layout} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${before.file}')==read('${file}_check'),'Layout changed during write');gma.cmd('Import ${file}.xml At Layout ${request.layout} /o /nc');return 'written'`);
       const after = await this.snapshot(connection, request);
       if (!after) throw new Error('Layout 回读缺失');
       const expected = inspectMa2LayoutXml(xml, request.layout);
@@ -302,7 +302,7 @@ export class Ma2LayoutService {
         if (!executorPage && !beforeLayout) await this.prepareXml(connection, layoutRequest, `${file}_layout`, emptyMa2LayoutXml(layoutRequest.layout, directory.version));
         for (const [number, xml] of sources) if (canonical(await bridge.request('SEQUENCE', Number(number))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
         await checkpoint(remoteXml ?? uploaded, nativeCopy ? ma2SongCreationStages(uploaded, changes) : undefined);
-        const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><'):match('^%s*(.-)%s*$') end;assert(read('${file}_before')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
+        const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${file}_before')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
         // Import /o can retain the previous native step table when a numbered
         // Cue disappears from XML. Delete reviewed numbers through MA2 first so
         // its internal Part table is reindexed before applying the new snapshot.

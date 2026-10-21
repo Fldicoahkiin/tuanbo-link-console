@@ -24,7 +24,8 @@ export class Ma2SongWatch {
     const file = cached?.file ?? `tblink_watch_${randomBytes(8).toString('hex')}`;
     const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(request.expectedSource.generation)} and gma.show.getvar('VERSION')==${ma2LuaString(request.expectedSource.version)},'Show or session changed');`;
     const exportObject = (object: string, name: string): string => `assert(gma.show.getobj.handle('${object}'),'Song position missing');gma.cmd('Export ${object} ${name} /o');`;
-    const read = "local function r(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><'):match('^%s*(.-)%s*$')end;";
+    // No $, ^ or |: the native command line consumes them and forces the multi-line chunked path.
+    const read = "local function r(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><')end;";
     const capture = async (suffix: string): Promise<void> => {
       await runMa2GuardedLua(connection, `${guard}${exportObject(`Sequence ${request.sequence}`, `${file}${suffix}`)}${request.executor ? exportObject(`Executor ${request.executor}`, `${file}${suffix}_exec`) : ''}return 'captured'`, stopped);
     };
