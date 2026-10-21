@@ -150,8 +150,9 @@ export class Ma2LayoutService {
       signal.throwIfAborted();
       return rawConnection.command(line, match, () => { signal.throwIfAborted(); beforeSend?.(); }, priority).then(result => { received(); return result; });
     } };
-    const bridge: SongBridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal).then(result => { received(); return result; }),
-      exchange: (operation, target, expected, desired) => rawBridge.exchange(operation, target, expected, desired, signal).then(result => { received(); return result; }) };
+    // Every acknowledged line of a long transfer counts as progress for the 90 s watchdog.
+    const bridge: SongBridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal, received).then(result => { received(); return result; }),
+      exchange: (operation, target, expected, desired) => rawBridge.exchange(operation, target, expected, desired, signal, received).then(result => { received(); return result; }) };
     const progress = (phase: Ma2ReadProgressUpdate['phase'], completed: number, total: number, detail: string): void => {
       signal.throwIfAborted(); received(); report?.({ phase, completed, total, detail });
     };

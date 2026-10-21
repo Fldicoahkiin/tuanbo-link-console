@@ -19,7 +19,7 @@ export class Ma2NetworkWire implements Ma2Wire {
     }
     return result;
   }
-  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal): Promise<string> {
+  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: () => void): Promise<string> {
     signal?.throwIfAborted();
     if (!/^[a-f0-9]{32}$/.test(id) || !Number.isInteger(target) || target < 1 || target > 99999) throw new Error('无效的 MA2 网络请求');
     let data = Buffer.from(body);
@@ -37,6 +37,7 @@ export class Ma2NetworkWire implements Ma2Wire {
       for (let offset = 0; offset < data.length; offset += 256) {
         signal?.throwIfAborted();
         if (await this.call('chunk', id, `,${offset / 256 + 1},'${data.subarray(offset, offset + 256).toString('hex')}'`) !== 'ACK') throw new Error('MA2 未确认数据片段');
+        progress?.();
       }
       signal?.throwIfAborted(); beforeSend(); sent = true;
       const receipt = /^DONE:(\d+)$/.exec(await this.call('run', id));
@@ -46,6 +47,7 @@ export class Ma2NetworkWire implements Ma2Wire {
       for (let offset = 0; offset < size; offset += 8192) {
         signal?.throwIfAborted();
         chunks.push(await this.readBatch(id, offset, size));
+        progress?.();
       }
       const response = Buffer.concat(chunks).toString('utf8');
       const match = /^([a-f0-9]{32})\n(OK|ERROR)\n(\d+)\n([\s\S]*)$/.exec(response);

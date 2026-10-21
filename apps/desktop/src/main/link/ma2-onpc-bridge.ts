@@ -7,7 +7,8 @@ import { join, isAbsolute } from 'node:path';
 import { inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR' | 'ASSIGNSEQ' | 'LABEL';
 export type Ma2Wire = {
-  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal): Promise<string>;
+  /** progress fires after every acknowledged line of a long transfer. */
+  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: () => void): Promise<string>;
 };
 export class Ma2BridgeFailure extends Error {
   constructor(message: string, readonly requestId: string, readonly sent: boolean, options: ErrorOptions, readonly backupFile: string | null = null) { super(message, options); }
@@ -21,17 +22,17 @@ export class Ma2OnpcBridge {
   constructor(private readonly dataDirectory: string | Ma2Wire, private readonly isPlaying: () => boolean) {
     if (typeof dataDirectory === 'string' && !isAbsolute(dataDirectory)) throw new Error('MA2 数据目录必须是绝对路径');
   }
-  async request(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal): Promise<string> {
-    return (await this.exchange(operation, target, expected, desired, signal)).response;
+  async request(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: () => void): Promise<string> {
+    return (await this.exchange(operation, target, expected, desired, signal, progress)).response;
   }
-  async exchange(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal): Promise<{ response: string; requestId: string }> {
+  async exchange(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: () => void): Promise<{ response: string; requestId: string }> {
     signal?.throwIfAborted();
     if (this.queuedExchanges >= 32) throw new Error('控台操作过多，请等待当前操作完成');
     const epoch = this.exchangeEpoch;
     this.queuedExchanges += 1;
     const result = this.exchangeTail.then(async () => {
       if (epoch !== this.exchangeEpoch) throw new Error('前一项控台操作未完成，待处理操作已取消');
-      try { return await this.performExchange(operation, target, expected, desired, signal); }
+      try { return await this.performExchange(operation, target, expected, desired, signal, progress); }
       catch (error) { this.exchangeEpoch += 1; throw error; }
     }).finally(() => { this.queuedExchanges -= 1; });
     // Serialize the entire transaction, including all chunks and response release.
@@ -39,7 +40,7 @@ export class Ma2OnpcBridge {
     this.exchangeTail = result.then(() => undefined, () => undefined);
     return result;
   }
-  private async performExchange(operation: Ma2Operation, target: number, expected: string, desired: string, signal?: AbortSignal): Promise<{ response: string; requestId: string }> {
+  private async performExchange(operation: Ma2Operation, target: number, expected: string, desired: string, signal?: AbortSignal, progress?: () => void): Promise<{ response: string; requestId: string }> {
     signal?.throwIfAborted();
     if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号无效');
     const writing = operation === 'APPLY' || operation === 'SYNC' || operation === 'CREATE';
@@ -94,7 +95,7 @@ export class Ma2OnpcBridge {
         return validate(await this.dataDirectory.exchange(id, operation, target, body, () => {
           if ((writing || assigning) && this.isPlaying()) throw new Error('播放已开始，未发送 MA2 写入请求');
           sent = true;
-        }, signal));
+        }, signal, progress));
       }
       const directory = join(this.dataDirectory, 'temp');
       for (const name of ['temp', 'plugins', 'importexport']) {
