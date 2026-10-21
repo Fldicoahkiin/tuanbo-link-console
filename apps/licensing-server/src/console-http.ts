@@ -41,7 +41,7 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
     const body = await readBody();
     return options.service.execute(body, auth.session(token), requestId, channels);
   }
-  if (request.method === 'GET' && path === '/console-api/overview') return options.service.overview();
+  if (request.method === 'GET' && path === '/console-api/overview') return options.service.overview(session);
   const exported = /^\/console-api\/export(?:\/(finance))?$/.exec(path);
   if (request.method === 'GET' && exported) {
     const resource = exported[1] === 'finance' ? 'finance' : 'orders';

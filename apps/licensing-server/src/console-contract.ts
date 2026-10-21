@@ -50,8 +50,9 @@ export const detailSchema = z.object({ item: rowSchema, related: z.array(rowSche
 export const resultSchema = z.object({ id: z.string().optional(), message: z.string(), secret: z.string().optional(), paymentUrl: z.string().url().optional(), expiresAt: z.string().optional() }).strict();
 export type ConsoleResult = z.infer<typeof resultSchema>;
 export const permissions: Record<ConsoleAction['action'], readonly ConsoleRole[]> = {
-  'create-order': ['owner', 'operations'], fulfill: ['owner', 'finance'], reconcile: ['owner', 'operations'],
-  'payment-link': ['owner', 'operations'], 'close-order': ['owner', 'operations'],
+  // 创建线下订单与确认线下收款不能同属一个非管理员角色，避免一人凭空给自己发码。
+  'create-order': ['owner', 'operations'], fulfill: ['owner', 'finance'], reconcile: ['owner', 'operations', 'finance'],
+  'payment-link': ['owner', 'operations', 'finance'], 'close-order': ['owner', 'operations', 'finance'],
   'retry-delivery': ['owner', 'operations'], 'delivery-access': ['owner', 'operations'], 'revoke-delivery-access': ['owner', 'operations'],
   'set-expiry': ['owner'], reveal: ['owner', 'operations'], revoke: ['owner', 'operations'], migrate: ['owner', 'operations'], grant: ['owner'],
   'create-user': ['owner'], 'update-user': ['owner'], 'reset-user': ['owner'],

@@ -81,8 +81,9 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
       {busy && <p role="status" className="muted">正在读取…</p>}
       {route === 'overview' && overview && <>
         <div className="audience-summary"><div><span>累计客户</span><strong>{overview.item.customerCount ?? 0}<small>位</small></strong></div><div><span>已绑定授权</span><strong>{overview.item.boundLicenseCount ?? 0}<small>份</small></strong></div></div>
-        <section className="balance-summary" aria-label="收款概览"><div className="balance-primary"><p>累计净收款</p><strong>{display('netFen', overview.item.netFen ?? 0)}</strong><small>已扣除退款</small></div><Fields row={Object.fromEntries(['onlineFen', 'manualFen', 'refundFen'].map(key => [key, overview.item[key] ?? 0]))} /></section>
-        <RevenueTrend rows={overview.related.filter(row => row.category === 'cashflow')} /><div className="desk-columns"><section className="task-list"><div className="section-title"><h2>待办事项</h2></div>{[
+        {/* 金额仅返回给管理员和财务，其他角色的概览不含这些字段。 */}
+        {overview.item.netFen !== undefined && <><section className="balance-summary" aria-label="收款概览"><div className="balance-primary"><p>累计净收款</p><strong>{display('netFen', overview.item.netFen ?? 0)}</strong><small>已扣除退款</small></div><Fields row={Object.fromEntries(['onlineFen', 'manualFen', 'refundFen'].map(key => [key, overview.item[key] ?? 0]))} /></section>
+        <RevenueTrend rows={overview.related.filter(row => row.category === 'cashflow')} /></>}<div className="desk-columns"><section className="task-list"><div className="section-title"><h2>待办事项</h2></div>{[
           { key: 'pendingOrders', route: 'orders', title: '待付款与核款', preset: { state: 'pending' } },
           { key: 'deliveryPending', route: 'exceptions', title: '待完成交付', preset: {} },
           { key: 'refundReview', route: 'exceptions', title: '渠道退款待处理', hint: '决定撤销或保留授权', preset: {} },

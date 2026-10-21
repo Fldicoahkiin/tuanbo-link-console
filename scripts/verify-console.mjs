@@ -86,6 +86,10 @@ try {
   await context.close();
   for (const role of ['operations', 'finance', 'viewer']) {
     const { page, context } = await pageFor(role, role === 'viewer' ? 390 : 1440);
+    // 工作台金额只给管理员和财务。
+    await page.getByRole('heading', { name: '待办事项' }).waitFor();
+    assert.equal(await page.getByText('累计净收款').count(), role === 'finance' ? 1 : 0);
+    assert.equal(await page.getByRole('heading', { name: '收款趋势' }).count(), role === 'finance' ? 1 : 0);
     assert.equal(await page.getByRole('button', { name: '人员管理', exact: true }).count(), 0);
     await page.getByRole('button', { name: '订单中心', exact: true }).click(); await page.getByRole('row', { name: /BROWSER-ORDER-1/ }).getByRole('button', { name: '查看详情' }).click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
     assert.equal(await page.getByRole('button', { name: '重发领取凭据', exact: true }).count(), role === 'operations' ? 1 : 0);

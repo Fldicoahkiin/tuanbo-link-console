@@ -59,6 +59,9 @@ it('四类角色通过真实 HTTP 强制授权，列表不泄露码', async () =
   expect((await s.send('/console-api/finance', 'operations')).status).toBe(403);
   expect((await s.send('/console-api/audit', 'finance')).status).toBe(403);
   expect((await s.send('/console-api/users', 'viewer')).status).toBe(403);
+  // 工作台金额由服务端按角色省略，不只是前端隐藏。
+  for (const role of ['operations', 'viewer']) { const body = JSON.stringify((await s.send('/console-api/overview', role)).body); expect(body).not.toMatch(/netFen|onlineFen|manualFen|refundFen|cashflow/); }
+  for (const role of ['owner', 'finance']) expect(JSON.stringify((await s.send('/console-api/overview', role)).body)).toMatch(/"netFen":0/);
 });
 it('登录 Cookie 安全属性、权限变更即时撤销会话', async () => {
   const s = await setup(); s.advance();

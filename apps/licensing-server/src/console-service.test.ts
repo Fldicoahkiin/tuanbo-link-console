@@ -2,7 +2,7 @@ import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { afterEach, expect, it } from 'vitest';
 import { LicensingService } from './service';
 import { totpCode, type ConsoleSession } from './console-auth';
-import { pageQuerySchema, type ConsoleAction } from './console-contract';
+import { pageQuerySchema, permissions, type ConsoleAction } from './console-contract';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
@@ -77,9 +77,9 @@ it('核款、退款上限及财务导出隔离', async () => {
   await expect(s.execute({ action: 'refund', id: result.id!, amountFen: 10001, reference: 'refund-2', handledAt: new Date(s.now()).toISOString(), reason: '超额' })).rejects.toThrow('超过');
   const csv = s.consoleService.exportCsv('orders', pageQuerySchema.parse({}), s.login.session, 'export');
   expect(csv).toContain("'=1+1"); expect(csv).not.toContain('TBA-'); expect(csv).not.toContain('客户');
-  expect(s.consoleService.overview().item.manualFen).toBe(80000);
-  expect(s.consoleService.overview().item.refundFen).toBe(70000);
-  expect(s.consoleService.overview().item.netFen).toBe(10000);
+  expect(s.consoleService.overview(s.login.session).item.manualFen).toBe(80000);
+  expect(s.consoleService.overview(s.login.session).item.refundFen).toBe(70000);
+  expect(s.consoleService.overview(s.login.session).item.netFen).toBe(10000);
 });
 it('换机沿用旧租约等待并吊销旧码', async () => {
   const s = await setup(); const result = await s.execute(grant);
@@ -139,7 +139,7 @@ it('单码期限调整隔离同订单授权、幂等、权限和到期验证', a
   const operation = randomUUID(); await s.execute(input, s.login.session, operation); await s.execute(input, s.login.session, operation);
   expect(s.service.consoleLicense(id).useUntil).toBe(input.useUntil);
   expect(s.service.consoleLicense(other).useUntil).toBe(grant.useUntil);
-  expect(s.consoleService.overview().item.expiring).toBe(1);
+  expect(s.consoleService.overview(s.login.session).item.expiring).toBe(1);
   expect(s.db.prepare("SELECT COUNT(*) AS n FROM console_audit WHERE action='license.expiry-adjusted'").get()?.n).toBe(1);
   const code = s.service.consoleReveal(id);
   expect(s.service.activate({ product: 'tuanbo-link-console', code, machineCode: `TB1-${'D'.repeat(64)}` }).license).toBeTruthy();
@@ -156,11 +156,11 @@ it('单码期限调整隔离同订单授权、幂等、权限和到期验证', a
 it('工作台按已交付客户去重并按北京时间汇总实际收款', async () => {
   const s = await setup(); await s.execute(grant); await s.execute(grant);
   const order = await s.execute({ action: 'create-order', reference: 'trend-test', customer: '付费客户', customerType: 'company', quantity: 2, amountFen: 50000, useUntil: grant.useUntil, reason: '测试' });
-  expect(s.consoleService.overview().item.customerCount).toBe(1);
+  expect(s.consoleService.overview(s.login.session).item.customerCount).toBe(1);
   await s.execute({ action: 'fulfill', id: order.id!, amountFen: 50000, paymentReference: 'trend-payment', paymentMethod: '转账', reason: '到账' });
   s.db.prepare('UPDATE payment_receipts SET received_at=? WHERE order_id=?').run('2026-10-05T16:00:00.000Z', order.id!);
   await s.execute({ action: 'refund', id: order.id!, amountFen: 10000, reference: 'trend-refund', handledAt: '2026-10-05T15:59:00.000Z', reason: '人工登记' });
-  const dashboard = s.consoleService.overview(); const trend = dashboard.related.filter(row => row.category === 'cashflow');
+  const dashboard = s.consoleService.overview(s.login.session); const trend = dashboard.related.filter(row => row.category === 'cashflow');
   expect(dashboard.item.customerCount).toBe(2); expect(dashboard.item.boundLicenseCount).toBe(0);
   expect(trend).toHaveLength(30);
   expect(trend.find(row => row.day === '2026-10-06')?.incomeFen).toBe(50000);
@@ -177,30 +177,49 @@ it('渠道退款通知进入异常队列且不自动撤销授权，人工登记�
   expect(exceptions()).toEqual([]);
   s.service.alipayNotification({ ...notice, status: 'TRADE_CLOSED', refundFen: 80000 });
   expect(exceptions()).toEqual([order.id]);
-  expect(s.consoleService.overview().item.refundReview).toBe(1);
+  expect(s.consoleService.overview(s.login.session).item.refundReview).toBe(1);
   const detail = s.consoleService.detail('orders', order.id, s.login.session);
   expect(detail.item).toMatchObject({ state: 'refunded', channelRefundFen: 80000, reviewedRefundFen: 0, refundedFen: 0 });
   expect(detail.related.map(row => row.revoked)).toEqual([false]);
   await s.execute({ action: 'refund', id: order.id, amountFen: 80000, reference: 'manual-refund-1', handledAt: new Date(s.now()).toISOString(), reason: '财务登记' });
   expect(exceptions()).toEqual([order.id]);
   // 渠道通知与人工登记的是同一笔，只扣一次；财务记录只剩登记行。
-  expect(s.consoleService.overview().item).toMatchObject({ refundFen: 80000, netFen: 0 });
+  expect(s.consoleService.overview(s.login.session).item).toMatchObject({ refundFen: 80000, netFen: 0 });
   expect(s.consoleService.list('finance', pageQuerySchema.parse({}), s.login.session).items.map(row => row.state)).toEqual(['人工登记退款']);
   await s.execute({ action: 'refund-review', id: order.id, decision: 'keep', reason: '客户申请退款，核对后保留授权至期满' });
   expect(exceptions()).toEqual([]);
   expect(s.consoleService.detail('orders', order.id, s.login.session).related.map(row => row.revoked)).toEqual([false]);
-  expect(s.consoleService.overview().item.refundReview).toBe(0);
+  expect(s.consoleService.overview(s.login.session).item.refundReview).toBe(0);
+});
+it('创建线下订单与确认线下收款不落在同一个非管理员角色', () => {
+  for (const role of ['operations', 'finance', 'viewer'] as const) expect(permissions['create-order'].includes(role) && permissions.fulfill.includes(role)).toBe(false);
+});
+it('工作台金额与收款趋势只返回给管理员和财务', async () => {
+  const s = await setup();
+  for (const role of ['owner', 'finance'] as const) {
+    const dashboard = s.consoleService.overview({ ...s.login.session, user: { ...s.login.session.user, role } });
+    expect(dashboard.item).toMatchObject({ netFen: 0, onlineFen: 0, manualFen: 0, refundFen: 0 }); expect(dashboard.related.filter(row => row.category === 'cashflow')).toHaveLength(30);
+  }
+  for (const role of ['operations', 'viewer'] as const) {
+    const dashboard = s.consoleService.overview({ ...s.login.session, user: { ...s.login.session.user, role } });
+    for (const key of ['netFen', 'onlineFen', 'manualFen', 'refundFen']) expect(dashboard.item).not.toHaveProperty(key);
+    expect(dashboard.related.some(row => row.category === 'cashflow')).toBe(false); expect(dashboard.item).toHaveProperty('pendingOrders');
+  }
 });
 it('线下订单可生成支付宝付款链接或直接关闭；有链接后只能经渠道查单关闭', async () => {
   const s = await setup(); const order = { action: 'create-order' as const, customer: '客户', customerType: 'company' as const, quantity: 1, amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', reason: '线下成交' };
   const linked = await s.execute({ ...order, reference: 'link-order' }); const unlinked = await s.execute({ ...order, reference: 'close-order' });
-  for (const role of ['finance', 'viewer'] as const) await expect(s.execute({ action: 'payment-link', id: linked.id!, reason: '越权' }, { ...s.login.session, user: { ...s.login.session.user, role } })).rejects.toThrow('角色');
-  const link = await s.execute({ action: 'payment-link', id: linked.id!, reason: '客户要求扫码付款' });
+  const as = (role: 'finance' | 'viewer') => ({ ...s.login.session, user: { ...s.login.session.user, role } });
+  for (const action of ['payment-link', 'close-order', 'reconcile'] as const) await expect(s.execute({ action, id: linked.id!, reason: '越权' }, as('viewer'))).rejects.toThrow('角色');
+  // 财务可以生成付款链接、关闭未付订单和主动查单，但不能创建线下订单。
+  await expect(s.execute({ ...order, reference: 'finance-order' }, as('finance'))).rejects.toThrow('角色');
+  const link = await s.execute({ action: 'payment-link', id: linked.id!, reason: '客户要求扫码付款' }, as('finance'));
   expect(link).toMatchObject({ message: '付款链接已生成', paymentUrl: expect.stringContaining(linked.id!) as unknown, expiresAt: new Date(s.now() + 15 * 60000).toISOString() });
   expect(s.consoleService.detail('orders', linked.id!, s.login.session).item.channel).toBe('alipay');
   expect((await s.execute({ action: 'payment-link', id: linked.id!, reason: '重发同一链接' })).expiresAt).toBe(link.expiresAt);
+  expect((await s.execute({ action: 'reconcile', id: linked.id!, reason: '财务查单' }, as('finance'))).message).toBe('查单完成');
   await expect(s.execute({ action: 'close-order', id: linked.id!, reason: '客户放弃' })).rejects.toThrow('未生成付款链接');
-  expect((await s.execute({ action: 'close-order', id: unlinked.id!, reason: '客户放弃' })).message).toBe('订单已关闭');
+  expect((await s.execute({ action: 'close-order', id: unlinked.id!, reason: '客户放弃' }, as('finance'))).message).toBe('订单已关闭');
   expect(s.consoleService.detail('orders', unlinked.id!, s.login.session).item.state).toBe('closed');
   await expect(s.execute({ action: 'close-order', id: unlinked.id!, reason: '重复关闭' })).rejects.toThrow('未生成付款链接');
   await expect(s.execute({ action: 'payment-link', id: unlinked.id!, reason: '关闭后付款' })).rejects.toThrow('已关闭');

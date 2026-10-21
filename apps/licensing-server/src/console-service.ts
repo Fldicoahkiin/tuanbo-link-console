@@ -49,7 +49,8 @@ export class ConsoleService {
     if (!value) throw new ServiceError(404, 'ORDER_NOT_FOUND', '订单不存在');
     return rowSchema.parse(value);
   }
-  private financial(user: ConsoleSession): void { if (user.user.role !== 'owner' && user.user.role !== 'finance') throw new ServiceError(403, 'FORBIDDEN', '需要财务或管理员权限'); }
+  private financialRole(session: ConsoleSession): boolean { return session.user.role === 'owner' || session.user.role === 'finance'; }
+  private financial(session: ConsoleSession): void { if (!this.financialRole(session)) throw new ServiceError(403, 'FORBIDDEN', '需要财务或管理员权限'); }
   list(resource: string, query: PageQuery, session: ConsoleSession) {
     const term = `%${query.q.replace(/[\\%_]/g, '\\$&')}%`;
     if (resource === 'orders' || resource === 'exceptions') {
@@ -106,16 +107,21 @@ export class ConsoleService {
     const history = allowedHistory ? this.db.prepare('SELECT a.at,a.action,a.reason,a.result,COALESCE(u.username,a.actor) AS operator FROM console_audit a LEFT JOIN console_users u ON u.id=a.actor WHERE target IN (?,?) ORDER BY a.at DESC LIMIT 100').all(id, orderId).map(row => rowSchema.parse(row)) : [];
     return detailSchema.parse({ item, related, history });
   }
-  overview() {
+  overview(session: ConsoleSession) {
     const counts = this.db.prepare(`SELECT SUM(CASE WHEN paymentStatus='pending' AND state='pending' THEN 1 ELSE 0 END) AS pendingOrders,SUM(CASE WHEN paymentStatus='confirmed' AND state IN ('pending','paid') THEN 1 ELSE 0 END) AS deliveryPending,SUM(CASE WHEN channelRefundFen>reviewedRefundFen THEN 1 ELSE 0 END) AS refundReview FROM (${orderProjection})`).get();
-    const receipts = this.db.prepare("SELECT COALESCE(SUM(CASE WHEN source='manual' THEN amount_fen ELSE 0 END),0) AS manualFen,COALESCE(SUM(CASE WHEN source!='manual' THEN amount_fen ELSE 0 END),0) AS onlineFen FROM payment_receipts").get();
-    // 每单退款取台账与渠道累计的较大值：渠道已退未登记的照样扣除，人工登记同一笔不重复扣。
-    const refunds = this.db.prepare(`SELECT COALESCE(SUM(MAX(refundedFen,channelRefundFen)),0) AS refundFen FROM (${orderProjection})`).get();
     const tickets = this.db.prepare("SELECT COUNT(*) AS openTickets FROM console_tickets WHERE state!='closed'").get();
     const expiring = this.db.prepare(`SELECT COUNT(*) AS expiring FROM licenses l JOIN orders o ON o.id=l.order_id WHERE l.revoked=0 AND ${licenseUseUntil}>? AND ${licenseUseUntil}<=?`).get(new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString());
     const health = this.db.prepare('SELECT name,state,checked_at AS checkedAt,detail FROM console_health ORDER BY name').all().map(row => rowSchema.parse(row));
     const customers = this.db.prepare("SELECT COUNT(*) AS customerCount FROM (SELECT DISTINCT json_extract(body,'$.customer') COLLATE NOCASE,json_extract(body,'$.customerType') FROM orders WHERE state='fulfilled')").get();
     const bindings = this.db.prepare('SELECT COUNT(*) AS boundLicenseCount FROM licenses WHERE machine IS NOT NULL AND revoked=0').get();
+    // 金额与收款趋势只返回给管理员和财务；其他角色只看订单状态类数字。
+    const money = this.financialRole(session) ? this.cashflow() : { item: {}, trend: [] };
+    return detailSchema.parse({ item: { ...counts, ...money.item, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '暂无回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '暂无回执' }, related: [...health, ...money.trend], history: [] });
+  }
+  private cashflow() {
+    const receipts = this.db.prepare("SELECT COALESCE(SUM(CASE WHEN source='manual' THEN amount_fen ELSE 0 END),0) AS manualFen,COALESCE(SUM(CASE WHEN source!='manual' THEN amount_fen ELSE 0 END),0) AS onlineFen FROM payment_receipts").get();
+    // 每单退款取台账与渠道累计的较大值：渠道已退未登记的照样扣除，人工登记同一笔不重复扣。
+    const refunds = this.db.prepare(`SELECT COALESCE(SUM(MAX(refundedFen,channelRefundFen)),0) AS refundFen FROM (${orderProjection})`).get();
     const today = new Date(this.now() + 8 * 3600000).toISOString().slice(0, 10);
     const days = Array.from({ length: 30 }, (_, index) => new Date(Date.parse(`${today}T00:00:00Z`) - (29 - index) * 86400000).toISOString().slice(0, 10));
     const start = new Date(Date.parse(`${days[0]}T00:00:00+08:00`)).toISOString();
@@ -124,7 +130,7 @@ export class ConsoleService {
     const refunded = this.db.prepare(`SELECT date(at,'+8 hours') AS day,SUM(amount) AS amount FROM (SELECT handled_at AS at,amount_fen AS amount FROM console_refunds UNION ALL SELECT created,amountFen FROM (${unledgeredRefunds})) WHERE at>=? AND at<? GROUP BY day`).all(start, end);
     const trend = days.map(day => ({ category: 'cashflow', day, incomeFen: Number(income.find(row => row.day === day)?.amount ?? 0), refundFen: Number(refunded.find(row => row.day === day)?.amount ?? 0) }));
     const netFen = Number(receipts?.onlineFen) + Number(receipts?.manualFen) - Number(refunds?.refundFen);
-    return detailSchema.parse({ item: { ...counts, ...receipts, ...refunds, netFen, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '暂无回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '暂无回执' }, related: [...health, ...trend], history: [] });
+    return { item: { ...receipts, ...refunds, netFen }, trend };
   }
   private authorize(input: ConsoleAction, session: ConsoleSession): void {
     if (!permissions[input.action].includes(session.user.role)) throw new ServiceError(403, 'FORBIDDEN', '当前角色不能执行此操作');
