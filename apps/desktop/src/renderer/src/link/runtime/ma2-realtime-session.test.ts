@@ -1,11 +1,12 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type Ma2SongBinding, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { ma2SongPoints, setLightingCommand } from '@tb/core/link';
+import { legacyMa2Renames, ma2SongPoints, pendingMa2Renames, renameConsoleCueCommand, setLightingCommand } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { useMa2SongSyncStore, startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, resolveMa2SongConflict } from './ma2-song-sync';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary } from './ma2-realtime-session';
+import { convertMa2LegacyNames, legacyMa2ConsoleNames } from './ma2-legacy-names';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
 const { recordLog } = vi.hoisted(() => ({ recordLog: vi.fn(() => Promise.resolve()) }));
@@ -13,7 +14,7 @@ vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel:
 const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
 vi.mock('./ma2-project-archive', () => ({ archiveMa2Project: archive }));
 const source = { show: 'Show', generation: 'session', version: '3.7.0.5' };
-const status = vi.fn(), catalog = vi.fn(), metadata = vi.fn(), cancel = vi.fn(), sync = vi.fn(), check = vi.fn();
+const status = vi.fn(), catalog = vi.fn(), metadata = vi.fn(), cancel = vi.fn(), sync = vi.fn(), check = vi.fn(), rename = vi.fn();
 const storage = new Map<string, string>();
 function project() {
   const value = createEmptyLinkProject('自动同步');
@@ -29,7 +30,7 @@ function project() {
 beforeEach(() => {
   vi.clearAllMocks(); storage.clear(); storage.set('tblink.ma2-connection-method.v1', 'network');
   vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
-  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync, checkMa2Song: check } });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync, checkMa2Song: check, renameMa2Object: rename } });
   status.mockResolvedValue({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' } });
   catalog.mockResolvedValue({ directory: { ...source, entries: [] }, readAt: new Date().toISOString(), entries: [] });
   metadata.mockResolvedValue(project().ma2MaterialLibrary!.library);
@@ -168,6 +169,46 @@ it('中文歌名同步后工程里仍是中文，下一轮只复查不重写；�
   respond('Renamed On Console'); check.mockResolvedValue(true);
   vi.advanceTimersByTime(1001); await tickMa2SongSync(false);
   expect(song().consoleSong?.name).toBe('Renamed On Console');
+});
+function legacyProject() {
+  const value = project();
+  value.rundown[0]!.lighting!.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9000, name: '联动歌曲', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }] };
+  value.ma2MaterialLibrary!.library!.sequences = [{ sequence: 9000, name: '联动歌曲', cues: [{ index: 1, number: '1.000', name: '开场' }] }, { sequence: 2, name: 'Pool', cues: [{ index: 1, number: '1.100', name: 'Front' }] }];
+  return value;
+}
+it('统计控台上以前写入的中文歌名和 Cue 名；已是拼音或控台改过的不计', () => {
+  const value = legacyProject();
+  expect(legacyMa2ConsoleNames(value)).toMatchObject({ songs: ['first'], count: 2 });
+  value.ma2MaterialLibrary!.library!.sequences[0]!.cues[0]!.name = 'KaiChang';
+  expect(legacyMa2ConsoleNames(value)).toMatchObject({ songs: ['first'], count: 1 });
+  value.ma2MaterialLibrary!.library!.sequences[0]!.name = 'Console Song';
+  expect(legacyMa2ConsoleNames(value).count).toBe(0);
+});
+it('只有点击转换后，歌曲下一次同步才带上改写标志；完成后清除，不再改写', async () => {
+  useDocumentStore.getState().setProject(legacyProject(), 'song.tblink');
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  sync.mockRejectedValue(new Error('测试不写入'));
+  expect(useMa2SongSyncStore.getState().songs.first?.rewriteLegacyNames).toBeUndefined();
+  expect(await convertMa2LegacyNames(useDocumentStore.getState().documentId)).toBe(2);
+  expect(rename).not.toHaveBeenCalled();
+  await tickMa2SongSync(false);
+  expect(sync.mock.calls.at(-1)?.[0]).toMatchObject({ itemId: 'first', rewriteLegacyNames: true });
+});
+it('以前以中文确认的改名不自动写，点击转换后逐条写入拼音并确认', async () => {
+  let value = legacyProject();
+  value = renameConsoleCueCommand({ sequence: 2, cue: '1.100', kind: 'single' }, '面光', { endpoint: '192.0.2.1:30000', show: source.show }).execute(value);
+  const library = value.ma2MaterialLibrary!.userLibrary!;
+  value.ma2MaterialLibrary = { ...value.ma2MaterialLibrary!, userLibrary: { ...library, consoleRenames: library.consoleRenames!.map(record => ({ ...record, confirmedName: '面光' })) } };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  expect(pendingMa2Renames(value)).toEqual([]); expect(legacyMa2Renames(value)).toHaveLength(1);
+  rename.mockImplementation((request: { change: { sequence: number; cue: string; kind: string } }) => Promise.resolve({ sequence: request.change.sequence, cue: request.change.cue, kind: request.change.kind, show: source.show, generation: source.generation, name: 'MianGuang', backupFile: `tblink_label_${'a'.repeat(32)}.xml` }));
+  useMa2RealtimePreference.setState({ enabled: false });
+  await expect(convertMa2LegacyNames(useDocumentStore.getState().documentId)).rejects.toThrow('请先开启实时同步');
+  useMa2RealtimePreference.setState({ enabled: true });
+  expect(await convertMa2LegacyNames(useDocumentStore.getState().documentId)).toBe(3);
+  expect(rename).toHaveBeenCalledOnce(); expect(rename.mock.calls[0]?.[0]).toMatchObject({ change: { name: '面光', confirmedName: '面光' } });
+  expect(legacyMa2Renames(useDocumentStore.getState().project)).toEqual([]);
+  expect(archive).toHaveBeenCalledOnce();
 });
 it('未保存、未连接时等待，不弹保存窗口、不自动重连或创建', async () => {
   useDocumentStore.getState().setProject(project(), null);

@@ -12,6 +12,7 @@ import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { pendingMa2Renames, ma2RenameKey } from '@tb/core/link';
 import { useMa2LocalSaveStore } from '../runtime/ma2-local-save';
 import { Ma2SongConflicts } from './Ma2SongConflicts';
+import { convertMa2LegacyNames, legacyMa2ConsoleNames } from '../runtime/ma2-legacy-names';
 
 export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
   const project = useDocumentStore(state => state.project);
@@ -20,6 +21,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const pending = useMemo(() => ma2PendingChanges(project), [project]);
   const unbound = useMemo(() => pendingSongSummary(project), [project]);
   const renames = useMemo(() => pendingMa2Renames(project), [project]);
+  const legacy = useMemo(() => legacyMa2ConsoleNames(project), [project]);
   const automatic = useMa2AutoSyncStore();
   const active = useMa2RealtimePreference(state => state.enabled);
   const localSaveError = useMa2LocalSaveStore(state => state.error);
@@ -83,6 +85,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
       {playing ? <p>播放中暂存本地，停止后同步。</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}
       {renames.length ? <button disabled={busy || working} onClick={() => void run(() => enableMa2NameSync(useDocumentStore.getState().documentId))}>同步名称</button> : null}
+      {legacy.count ? <p>控台上有 {legacy.count} 个以前写入的中文名称，控台只能显示英文和数字。<button disabled={busy || working} onClick={() => void run(async () => { const count = await convertMa2LegacyNames(useDocumentStore.getState().documentId); setNotice(`已提交 ${count} 个名称改为拼音，歌曲名称在下一次同步时写入`); })}>改为拼音</button></p> : null}
       {pending.map(item => <p key={`${item.itemId}:${item.bindingId}`}>{item.title} · Timecode {item.target}：{item.error ?? `${item.changes.length} 处修改`}</p>)}
       {unbound.map(item => <p key={item.itemId}>{item.title} · {item.count} 个 Cue → 按钮第 {item.page} 页的空格。</p>)}
     </div> : null}

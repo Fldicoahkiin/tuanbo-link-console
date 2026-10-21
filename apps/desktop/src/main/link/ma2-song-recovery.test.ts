@@ -38,7 +38,7 @@ it('中断后软件新增、改名、清空及换内容均保持原有点位编�
   expect(recovered.points).toEqual(edited);
   const plan = planMa2SongSync({ network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, expectedSource: { show: 'test', generation: 'g', version: '3.7.0.5' }, projectId: randomUUID(), itemId: 'song', requestId: randomUUID(), settings: { layout: 1000, name: '歌曲', nextSequence: 9000, columns: 8 }, name: '歌曲', ...recovered }, partial);
   expect(plan.points).toEqual([...binding.points, { id: 'new', cue: '4.000' }]);
-  expect(plan.changes[0]).toEqual({ cue: '1.000', name: '离线新名称', refs: [] });
+  expect(plan.changes[0]).toEqual({ cue: '1.000', name: 'LiXianXinMingCheng', refs: [] });
 });
 it('多来源 Cue 在第一笔 Copy 后断开，通过事先保存的阶段指纹核对后继续', () => {
   const simple = `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" major_vers="3" minor_vers="7" stream_vers="0"><Sequ index="1"><Cue index="1"><Number number="1" sub_number="0"/><CuePart index="0"/><CueDatas><CueData><Channel fixture_id="1" attribute_name="DIM"/><Value>70</Value></CueData></CueDatas></Cue><Cue index="2"><Number number="2" sub_number="0"/><CuePart index="0"/><CueDatas><CueData><Channel fixture_id="1" attribute_name="PAN"/><Value>40</Value></CueData></CueDatas></Cue></Sequ></MA>`;

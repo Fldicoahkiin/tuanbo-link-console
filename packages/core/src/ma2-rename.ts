@@ -7,8 +7,12 @@ export function ma2RenameKey(value: Pick<Ma2RenameRecord, 'endpoint' | 'show' | 
   return JSON.stringify([value.endpoint, value.show, value.sequence, value.kind, value.kind === 'sequence' ? '' : Number(value.cue)]);
 }
 export function pendingMa2Renames(project: LinkProject | null): Ma2RenameRecord[] {
-  // confirmedName holds the console's own label; a Chinese name is pending until its pinyin is there.
-  return project?.ma2MaterialLibrary?.userLibrary?.consoleRenames?.filter(change => consoleLabelText(change.name) !== change.confirmedName) ?? [];
+  // confirmedName holds the console's own label. A name an earlier version confirmed in Chinese is
+  // not pending; legacyMa2Renames() lists those for the operator's explicit pinyin conversion.
+  return project?.ma2MaterialLibrary?.userLibrary?.consoleRenames?.filter(change => consoleLabelText(change.name) !== change.confirmedName && change.name !== change.confirmedName) ?? [];
+}
+export function legacyMa2Renames(project: LinkProject | null): Ma2RenameRecord[] {
+  return project?.ma2MaterialLibrary?.userLibrary?.consoleRenames?.filter(change => change.name === change.confirmedName && consoleLabelText(change.name) !== change.name) ?? [];
 }
 /** Only an explicit rename enrolls an object; old local aliases never become a bulk write. */
 export function queueMa2Rename(library: LightingUserLibrary, change: Ma2RenameRecord): LightingUserLibrary {

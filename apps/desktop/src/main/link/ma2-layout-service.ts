@@ -136,9 +136,8 @@ export class Ma2LayoutService {
 
   async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal): Promise<Ma2SongSyncResult> {
     const request = ma2SongSyncRequestSchema.parse(input);
-    // Every name below is what the console stores and reads back: Chinese is written as pinyin.
-    request.name = toConsoleLabel(request.name); request.settings.name = toConsoleLabel(request.settings.name);
-    request.points = request.points.map(point => point.name ? { ...point, name: toConsoleLabel(point.name) } : point);
+    // The plan converts the song and Cue names it writes; the Layout name is only ever written.
+    request.settings.name = toConsoleLabel(request.settings.name);
     const originalPoints = structuredClone(request.points);
     if (this.busy || this.isPlaying()) throw new Error('请停止播放并等待当前控台操作完成');
     if (this.attempted.has(request.requestId)) throw new Error('此请求已执行，请先回读核对');

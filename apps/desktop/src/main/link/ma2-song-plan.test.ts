@@ -24,16 +24,16 @@ it('灯具属性复制与改名保留其他步，改名不清除本步灯光数�
 });
 it('40 个时间线点位生成同一序列的 40 个 Cue，保存后稳定且不重复创建', () => {
   const { input, xml } = linked(); const report = inspectMa2SequenceXml(xml).sequences[0]!;
-  expect(report.cues).toHaveLength(40); expect(report.cues[39]).toMatchObject({ number: '40.000', name: '段落 40' });
+  expect(report.cues).toHaveLength(40); expect(report.cues[39]).toMatchObject({ number: '40.000', name: 'DuanLuo 40' });
   const next = planMa2SongSync(input, xml); expect(next.changes).toEqual([]); expect(next.points).toEqual(input.binding?.points);
 });
 it('控台编灯和软件改名可以合并，名称变化不覆盖控台刚编的灯光', () => {
   const { input, xml } = linked();
   const source = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');
-  const remote = editMa2SongSequence(xml, '歌曲', [{ cue: '1.000', name: '段落 1', sources: [{ xml: source, cue: '1.000' }] }], []);
+  const remote = editMa2SongSequence(xml, '歌曲', [{ cue: '1.000', name: 'DuanLuo 1', sources: [{ xml: source, cue: '1.000' }] }], []);
   input.points[0]!.name = '电脑新名称';
   const plan = planMa2SongSync(input, remote);
-  expect(plan.changes).toEqual([{ cue: '1.000', name: '电脑新名称' }]);
+  expect(plan.changes).toEqual([{ cue: '1.000', name: 'DianNaoXinMingCheng' }]);
   const merged = editMa2SongSequence(remote, plan.name, plan.changes, []);
   expect(inspectMa2CueData(merged, 1)).toEqual(inspectMa2CueData(source, 1));
 });
@@ -45,7 +45,7 @@ it('控台改名和软件更换内容可以合并，内容指纹不误含名称'
 });
 it('软件重命名写出，控台重命名回读，同一 Cue 双方修改明确冲突', () => {
   const { input, xml } = linked(); input.points[0]!.name = '电脑修改';
-  expect(planMa2SongSync(input, xml).changes).toEqual([{ cue: '1.000', name: '电脑修改' }]);
+  expect(planMa2SongSync(input, xml).changes).toEqual([{ cue: '1.000', name: 'DianNaoXiuGai' }]);
   const remote = editMa2SongSequence(xml, '控台歌名', [{ cue: '1.000', name: '控台修改' }], []);
   expect(planMa2SongSync(input, remote).conflicts).toMatchObject([{ field: 'cue-name', cue: '1.000', local: '电脑修改', console: '控台修改' }]);
   input.points[0]!.name = '段落 1'; expect(planMa2SongSync(input, remote)).toMatchObject({ name: '控台歌名', changes: [] });
@@ -77,10 +77,10 @@ it('冲突只保留对应字段，其他 Cue 继续同步，选择核对后的�
   input.points[0]!.name = '软件名称'; input.points[1]!.name = '其他正常修改';
   const remote = editMa2SongSequence(xml, '歌曲', [{ cue: '1.000', name: '控台名称' }], []);
   const plan = planMa2SongSync(input, remote);
-  expect(plan.changes).toEqual([{ cue: '2.000', name: '其他正常修改' }]);
+  expect(plan.changes).toEqual([{ cue: '2.000', name: 'QiTaZhengChangXiuGai' }]);
   const issue = plan.conflicts[0]!;
   input.conflictResolutions = [{ key: issue.key, token: issue.token, choice: 'local' }];
-  expect(planMa2SongSync(input, remote).changes[0]).toEqual({ cue: '1.000', name: '软件名称' });
+  expect(planMa2SongSync(input, remote).changes[0]).toEqual({ cue: '1.000', name: 'RuanJianMingCheng' });
   input.conflictResolutions[0]!.choice = 'console';
   expect(planMa2SongSync(input, remote).conflicts).toEqual([]);
   const changedAgain = editMa2SongSequence(remote, '歌曲', [{ cue: '1.000', name: '控台第三个名称' }], []);
@@ -93,7 +93,7 @@ it('保存重开后仍保留未解决字段的旧基线，控台实际修改不�
   const plan = planMa2SongSync(input, remote);
   const verified = editMa2SongSequence(remote, plan.name, plan.changes, []);
   const baseline = ma2SongSyncBaseline(input, verified, plan.conflicts);
-  expect(inspectMa2SequenceXml(baseline).sequences[0]?.cues.slice(0, 2).map(cue => cue.name)).toEqual(['段落 1', '另一改名']);
+  expect(inspectMa2SequenceXml(baseline).sequences[0]?.cues.slice(0, 2).map(cue => cue.name)).toEqual(['DuanLuo 1', 'LingYiGaiMing']);
   input.binding = { ...input.binding!, baselineXml: baseline };
   const reopened = planMa2SongSync(input, verified);
   expect(reopened.changes).toEqual([]);
@@ -120,8 +120,8 @@ it('删除中间步后内部index连续，显示Cue编号与名称保持原对�
   const { xml } = linked();
   const edited = editMa2SongSequence(xml, '歌曲', [], ['3.000']);
   const cues = inspectMa2SequenceXml(edited).sequences[0]!.cues;
-  expect(cues[2]).toMatchObject({ index: 3, number: '4.000', name: '段落 4' });
-  expect(cues.at(-1)).toMatchObject({ index: 39, number: '40.000', name: '段落 40' });
+  expect(cues[2]).toMatchObject({ index: 3, number: '4.000', name: 'DuanLuo 4' });
+  expect(cues.at(-1)).toMatchObject({ index: 39, number: '40.000', name: 'DuanLuo 40' });
 });
 it('已绑定歌曲清空先逐项核对，全部确认后保留空序列；未绑定空曲不能新建', () => {
   const { input, xml } = linked(); input.points = [];
