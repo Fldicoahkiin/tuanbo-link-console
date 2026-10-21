@@ -3,11 +3,14 @@ import { currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { loadMa2ExecutorDirectory, loadMa2ExecutorPage, useMa2ExecutorPageStore } from '../stores/ma2-executor-page-store';
 import { useMa2AutoSyncStore } from './use-ma2-auto-sync';
 import { useMa2SongSyncStore } from './ma2-song-sync';
+import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 
-function writesPending(): boolean {
+/** Page polling yields the single console channel to writes, material reads and playback. */
+export function pageReadsPaused(): boolean {
   const current = useMa2ExecutorPageStore.getState();
   const automatic = useMa2AutoSyncStore.getState();
   return current.mutating || current.scanning || automatic.status === 'writing' || automatic.status === 'reading'
+    || automatic.timelinePlaying || automatic.previewPlaying || useMa2MaterialReadStore.getState().busy
     || Object.values(useMa2SongSyncStore.getState().songs).some(song => song.state === 'syncing');
 }
 
@@ -21,15 +24,15 @@ export function useMa2ExecutorPages(scope: string, pageKey: string, live: boolea
     const read = async (): Promise<void> => {
       let current = useMa2ExecutorPageStore.getState();
       if (stopped || current.scope !== scope) return;
-      if (!writesPending() && Date.now() >= directoryNextRead.current) {
+      if (!pageReadsPaused() && Date.now() >= directoryNextRead.current) {
         directoryNextRead.current = Date.now() + 10000;
         try { await loadMa2ExecutorDirectory(); }
         catch (cause) { report(cause); }
         current = useMa2ExecutorPageStore.getState();
       }
-      if (!writesPending()) for (const page of [...new Set(Object.values(current.bandPages).filter((value): value is number => value !== null))]) {
+      if (!pageReadsPaused()) for (const page of [...new Set(Object.values(current.bandPages).filter((value): value is number => value !== null))]) {
         if (stopped || currentMa2LayoutScope() !== scope) return;
-        if (writesPending()) break;
+        if (pageReadsPaused()) break;
         if (!live && current.pages[page]) continue;
         if ((failures.get(page)?.retryAt ?? 0) > Date.now()) continue;
         try { await loadMa2ExecutorPage(page, true); failures.delete(page); }
