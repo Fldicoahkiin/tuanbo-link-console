@@ -1,6 +1,11 @@
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { readFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { ma2ObjectDirectorySchema } from '@tb/schema';
+import { Ma2LayoutService } from './ma2-layout-service';
+import { Ma2SongWatch } from './ma2-song-watch';
+import { listMa2ExecutorPages } from './ma2-executor-page';
 import { expect, it } from 'vitest';
 import { Ma2Telnet, ma2ResponseLine } from './ma2-telnet';
 import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
@@ -120,3 +125,67 @@ it.runIf(Boolean(process.env.TBLINK_MA2_LENGTH_PROBE && process.env.TBLINK_MA2_H
   console.info(JSON.stringify(results));
   expect(results['*']).toBeDefined();
 }, 120000);
+
+// Writes only objects it creates: a free Sequence >= 9950 and a new executor Page >= 9890, both deleted afterwards.
+it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK_MA2_HARDWARE_HOST))('onPC 歌曲序列新建、改一个 Cue 内容与复查的实测往返', async () => {
+  const raw = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });
+  const traffic = { commands: 0, bytes: 0 };
+  const connection: Pick<Ma2Telnet, 'command'> = { command: (line, match, beforeSend, priority) => { traffic.commands += 1; traffic.bytes += Buffer.byteLength(line); return raw.command(line, match, beforeSend, priority); } };
+  const measured: Record<string, { ms: number; commands: number; bytes: number }> = {};
+  const step = async <T>(name: string, run: () => Promise<T>): Promise<T> => {
+    const before = { ...traffic }; const started = performance.now();
+    const value = await run();
+    measured[name] = { ms: Math.round(performance.now() - started), commands: traffic.commands - before.commands, bytes: traffic.bytes - before.bytes };
+    return value;
+  };
+  let created: { sequence: number; page: number } | null = null;
+  const operations: Array<{ label: string; ms: number; commands: number; received: number }> = [];
+  try {
+    await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
+    await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
+    const native = new Ma2OnpcBridge(new Ma2NetworkWire(connection), () => false);
+    const timed = async <T extends string | { response: string }>(label: string, run: () => Promise<T>): Promise<T> => {
+      const before = { ...traffic }; const started = performance.now();
+      try { const value = await run(); operations.push({ label, ms: Math.round(performance.now() - started), commands: traffic.commands - before.commands, received: Buffer.byteLength(typeof value === 'string' ? value : value.response) }); return value; }
+      catch (error) { operations.push({ label: `${label} 失败`, ms: Math.round(performance.now() - started), commands: traffic.commands - before.commands, received: 0 }); throw error; }
+    };
+    const bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'> = {
+      request: (operation, target, expected, desired, signal) => timed(`${operation} ${target}`, () => native.request(operation, target, expected, desired, signal)),
+      exchange: (operation, target, expected, desired, signal) => timed(`${operation} ${target}`, () => native.exchange(operation, target, expected, desired, signal))
+    };
+    const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
+    const pages = await listMa2ExecutorPages(bridge, { network: { host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001, username: 'administrator' }, expectedSource: { show: directory.show, generation: directory.generation, version: directory.version } });
+    const library = await readMa2NativeLibrary(connection, bridge, () => false, undefined, 'library', undefined, directory.entries.filter(entry => entry.target < 9950).slice(0, 12).map(entry => entry.target));
+    const source = library.sequences.find(value => value.cues.length >= 2);
+    if (!source) throw new Error('测试 Show 前 12 个序列中没有至少 2 个 Cue 的序列');
+    let sequence = 9950; while (directory.entries.some(entry => entry.target === sequence)) sequence += 1;
+    let page = 9890; while (pages.pages.some(value => value.page === page)) page += 1;
+    created = { sequence, page };
+    const network = { host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001, username: 'administrator' };
+    const expectedSource = { show: directory.show, generation: directory.generation, version: directory.version };
+    const ref = (index: number) => [{ sequence: source.sequence, cue: source.cues[index]!.number, delayMs: 0 }];
+    const points = [{ id: 'p1', name: 'TBLINK_PROBE_1', atMs: 0, cues: ref(0) }, { id: 'p2', name: 'TBLINK_PROBE_2', atMs: 1000, cues: ref(1) }, { id: 'p3', name: 'TBLINK_PROBE_3', atMs: 2000, cues: [] }];
+    const service = new Ma2LayoutService(resolve(await mkdtemp(join(tmpdir(), 'tblink-song-probe-')), 'layouts.json'), () => false);
+    const base = { network, expectedSource, projectId: randomUUID(), itemId: 'probe', settings: { layout: 999, name: 'TBLINK', nextSequence: sequence, columns: 8, executorPage: page }, name: 'TBLINK_PROBE' };
+    const first = await step('create', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), points }));
+    const second = await step('changeOneCue', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: first.binding,
+      points: first.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 2 ? ref(0) : [{ sequence, cue: point.cue, delayMs: 0 }] })) }));
+    const watch = new Ma2SongWatch(() => false);
+    const check = { network, expectedSource, sequence, executor: second.binding.executor!, revision: second.remoteRevision! };
+    await step('firstCheck', () => watch.changed(connection, bridge, check));
+    const unchanged = await step('cachedCheck', () => watch.changed(connection, bridge, check));
+    await mkdir(resolve('artifacts/ma2-hardware-diagnostics'), { recursive: true });
+    await writeFile(resolve('artifacts/ma2-hardware-diagnostics/song-transfer.json'), JSON.stringify({ at: new Date().toISOString(), show: directory.show, version: directory.version, source: source.sequence, sequence, page, backupFile: second.backupFile, measured }, null, 2));
+    console.info(JSON.stringify({ sequence, page, backupFile: second.backupFile, measured }));
+    expect(second.changed).toBe(true); expect(unchanged).toBe(false);
+    expect(second.backupFile).toMatch(/^tblink_library_[a-f0-9]{32}\.xml$/);
+  } finally {
+    console.info(JSON.stringify({ operations, measured }));
+    if (created && raw.state === 'connected') {
+      const marker = `TBLINK_CLEAN_${randomBytes(16).toString('hex')}:`;
+      const removed = await raw.command(`Lua "gma.cmd('Delete Sequence ${created.sequence} /nc');gma.cmd('Delete Page ${created.page} /nc');gma.echo('${marker}'..tostring(gma.show.getobj.handle('Sequence ${created.sequence}')==nil and gma.show.getobj.handle('Page ${created.page}')==nil))"`, text => ma2ResponseLine(text, marker));
+      expect(removed).toBe('true');
+    }
+    raw.disconnect();
+  }
+}, 600000);
