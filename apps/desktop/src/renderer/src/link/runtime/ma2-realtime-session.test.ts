@@ -11,7 +11,7 @@ vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel:
 const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
 vi.mock('./ma2-project-archive', () => ({ archiveMa2Project: archive }));
 const source = { show: 'Show', generation: 'session', version: '3.7.0.5' };
-const status = vi.fn(), catalog = vi.fn(), metadata = vi.fn(), cancel = vi.fn(), sync = vi.fn();
+const status = vi.fn(), catalog = vi.fn(), metadata = vi.fn(), cancel = vi.fn(), sync = vi.fn(), check = vi.fn();
 const storage = new Map<string, string>();
 function project() {
   const value = createEmptyLinkProject('自动同步');
@@ -27,7 +27,7 @@ function project() {
 beforeEach(() => {
   vi.clearAllMocks(); storage.clear(); storage.set('tblink.ma2-connection-method.v1', 'network');
   vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
-  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync } });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync, checkMa2Song: check } });
   status.mockResolvedValue({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' } });
   catalog.mockResolvedValue({ directory: { ...source, entries: [] }, readAt: new Date().toISOString(), entries: [] });
   metadata.mockResolvedValue(project().ma2MaterialLibrary!.library);
@@ -79,6 +79,28 @@ it('已绑定歌曲清空仍进入原位置核对；确认前保留清单，选�
   await tickMa2SongSync(false);
   expect(useDocumentStore.getState().project?.rundown[0]?.lighting?.consoleSong).toMatchObject({ sequence: 9000, executor: '1234.101', points: [] });
   expect(useMa2SongSyncStore.getState().songs.first?.state).toBe('verified');
+});
+it('有冲突的歌曲每秒复查时保持待核对和原提示，不进入同步中、不重复存档', async () => {
+  vi.useFakeTimers();
+  const value = project();
+  const lighting = value.rundown[0]!.lighting!;
+  lighting.tracks[0]!.clips[0]!.events = [];
+  lighting.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9000, name: 'first', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }] };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  sync.mockImplementation((request: Ma2SongSyncRequest): Promise<Ma2SongSyncResult> => Promise.resolve({ binding: request.binding!, layout: null, removed: [], backupFile: '', changed: false,
+    conflicts: [{ key: 'point-first:cue-deletion', field: 'cue-deletion', pointId: 'point-first', cue: '1.000', baseline: '开场', local: '软件已移除', console: '开场', token: '0'.repeat(64) }],
+    library: { directory: { ...source, entries: [{ target: 9000, name: 'first' }] }, readAt: new Date().toISOString(), sequences: [{ sequence: 9000, name: 'first', cues: [{ index: 1, number: '1.000', name: '开场' }] }], fixtureUsage: [], errors: [] } }));
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  await tickMa2SongSync(false);
+  const blocked = useMa2SongSyncStore.getState().songs.first!;
+  expect(blocked).toMatchObject({ state: 'blocked' });
+  const during: string[] = [];
+  check.mockImplementation(() => { during.push(useMa2SongSyncStore.getState().songs.first!.state); return Promise.resolve(false); });
+  vi.advanceTimersByTime(1001);
+  await tickMa2SongSync(false);
+  expect(check).toHaveBeenCalledTimes(1); expect(during).toEqual(['blocked']);
+  expect(useMa2SongSyncStore.getState().songs.first).toMatchObject({ state: 'blocked', message: blocked.message });
+  expect(sync).toHaveBeenCalledTimes(1); expect(archive).toHaveBeenCalledTimes(1);
 });
 it('未保存、未连接时等待，不弹保存窗口、不自动重连或创建', async () => {
   useDocumentStore.getState().setProject(project(), null);
