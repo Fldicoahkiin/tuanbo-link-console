@@ -11,7 +11,7 @@ import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 
-type SongSync = { sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings; state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string; requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; acknowledged?: string; remoteRevision?: string; confirmedDeletions?: string[]; blockedRevision?: number; nextCheckAt?: number; waitingForConnection?: boolean; conflicts?: Ma2SongConflict[]; conflictResolutions?: Ma2SongConflictResolution[]; consecutiveFailures?: number };
+type SongSync = { sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings; state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string; requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; acknowledged?: string; remoteRevision?: string; confirmedDeletions?: string[]; blockedRevision?: number; nextCheckAt?: number; waitingForConnection?: boolean; conflicts?: Ma2SongConflict[]; conflictResolutions?: Ma2SongConflictResolution[]; consecutiveFailures?: number; archivedSignature?: string };
 export const useMa2SongSyncStore = create<{ songs: Record<string, SongSync> }>(() => ({ songs: {} }));
 let running = false;
 export function markPendingMa2Songs(): void {
@@ -135,7 +135,8 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const scope = currentMa2LayoutScope();
         const settings = ma2SongSyncSettings(before.project, entry.itemId);
         const archived = entry.acknowledged !== signature;
-        if (archived) await archiveMa2Project(entry.documentId, before.project);
+        // Retries of the same unconfirmed content reuse the archive taken before its first attempt.
+        if (archived && entry.archivedSignature !== signature) { await archiveMa2Project(entry.documentId, before.project); update(entry, { archivedSignature: signature }); }
         if (!canContinue(entry)) continue;
         if (useMa2AutoSyncStore.getState().timelinePlaying || useMa2AutoSyncStore.getState().previewPlaying) {
           update(entry, { state: 'pending', message: '播放中保留当前修改；停止后核对原位置并继续同步' }); continue;

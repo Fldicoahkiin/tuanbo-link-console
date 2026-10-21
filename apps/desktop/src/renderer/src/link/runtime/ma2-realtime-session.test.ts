@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type Ma2SongBinding, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
+import { setLightingCommand } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { useMa2SongSyncStore, startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, resolveMa2SongConflict } from './ma2-song-sync';
@@ -101,6 +102,23 @@ it('有冲突的歌曲每秒复查时保持待核对和原提示，不进入同�
   expect(check).toHaveBeenCalledTimes(1); expect(during).toEqual(['blocked']);
   expect(useMa2SongSyncStore.getState().songs.first).toMatchObject({ state: 'blocked', message: blocked.message });
   expect(sync).toHaveBeenCalledTimes(1); expect(archive).toHaveBeenCalledTimes(1);
+});
+it('同步失败退避重试时同一份本地内容只存档一次，编辑后才存新档', async () => {
+  vi.useFakeTimers();
+  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  await tickMa2SongSync(false);
+  vi.advanceTimersByTime(30001); await tickMa2SongSync(false);
+  vi.advanceTimersByTime(30001); await tickMa2SongSync(false);
+  expect(sync).toHaveBeenCalledTimes(3); expect(archive).toHaveBeenCalledTimes(1);
+  const lighting = structuredClone(useDocumentStore.getState().project!.rundown[0]!.lighting!);
+  const event = lighting.tracks[0]!.clips[0]!.events[0]!;
+  if (event.kind !== 'empty-cue') throw new Error('fixture 应为空 Cue');
+  event.label = '开场改';
+  useDocumentStore.getState().execute(setLightingCommand('first', lighting));
+  vi.advanceTimersByTime(30001); await tickMa2SongSync(false);
+  expect(sync).toHaveBeenCalledTimes(4);
+  expect(archive).toHaveBeenCalledTimes(2);
 });
 it('未保存、未连接时等待，不弹保存窗口、不自动重连或创建', async () => {
   useDocumentStore.getState().setProject(project(), null);

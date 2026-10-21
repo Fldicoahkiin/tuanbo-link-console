@@ -28,6 +28,8 @@ export class Ma2AutoSync {
   private writing = false;
   private confirmed = false;
   private session: { connection: Ma2CatalogRequest; directory: Ma2Catalog['directory']; documentId: number; scope: Ma2AutoSyncScope } | null = null;
+  /** The project content last archived; a retry of unchanged content adds no file. */
+  private archivedProject: LinkProject | null = null;
   constructor(private readonly dependencies: Ma2AutoSyncDependencies) {}
 
   start(connection: Ma2CatalogRequest, catalog: Ma2Catalog, scope: Ma2AutoSyncScope = 'all'): void {
@@ -84,6 +86,14 @@ export class Ma2AutoSync {
     const generation = this.generation;
     this.busy = true;
     const current = (): boolean => this.generation === generation && this.session === session && this.dependencies.state().documentId === session.documentId && !this.dependencies.state().playing && !this.dependencies.state().editing;
+    // One archive before the first console write of a pass; it already holds the pre-sync state.
+    let archived = false;
+    const archiveBeforeWrite = async (): Promise<void> => {
+      if (archived) return;
+      const project = this.dependencies.state().project!;
+      if (project !== this.archivedProject) { await this.dependencies.archive(session.documentId, project); this.archivedProject = project; }
+      archived = true;
+    };
     try {
       this.dependencies.changed('reading', '正在检查控台与节目修改');
       const catalog = ma2CatalogSchema.parse(await this.dependencies.catalog({ ...session.connection, targets: [] }));
@@ -95,7 +105,7 @@ export class Ma2AutoSync {
         if (change.endpoint !== endpoint || change.show !== session.directory.show) throw new Error('待改名 Cue 属于另一控台或 Show，未发送');
         const stillPending = () => pendingMa2Renames(this.dependencies.state().project).some(value => ma2RenameKey(value) === ma2RenameKey(change) && value.name === change.name && value.confirmedName === change.confirmedName);
         if (!stillPending()) continue;
-        await this.dependencies.archive(session.documentId, this.dependencies.state().project!);
+        await archiveBeforeWrite();
         if (!current()) return;
         if (!stillPending()) continue;
         this.writing = true;
@@ -117,7 +127,7 @@ export class Ma2AutoSync {
         const project = this.dependencies.state().project!;
         const source = project.rundown.find(entry => entry.id === item.id)?.lighting;
         if (!source || source.consoleSong || !ma2AutoBindEvents(source).length) continue;
-        await this.dependencies.archive(session.documentId, project);
+        await archiveBeforeWrite();
         if (!current()) return;
         this.writing = true;
         this.dependencies.changed('writing', '正在自动准备控台执行位置');
@@ -156,7 +166,7 @@ export class Ma2AutoSync {
         const same = (left: Ma2SyncPreview['base'], right: Ma2SyncPreview['base']): boolean => JSON.stringify(left.objects) === JSON.stringify(right.objects);
         if (same(comparison.base, comparison.local) && same(comparison.base, comparison.remote)) continue;
         if (this.dependencies.state().project?.rundown.find(item => item.id === target.itemId)?.lighting !== source) { this.dependencies.changed('waiting', '编辑尚未结束，等待下一次检查'); return; }
-        await this.dependencies.archive(session.documentId, this.dependencies.state().project!);
+        await archiveBeforeWrite();
         if (!current()) return;
         if (this.dependencies.state().project?.rundown.find(item => item.id === target.itemId)?.lighting !== source) { this.dependencies.changed('waiting', '存档期间本地修改已变化，等待下一次检查'); return; }
         this.writing = true;
