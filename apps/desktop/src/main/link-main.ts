@@ -480,7 +480,7 @@ function registerIpc(
   handle('link:native-obs-stop', (_event, value: unknown) => obsRequests.stop(value));
   handle('link:native-obs-status', () => nativeObs?.status ?? null);
   obs.subscribe(state => { if (state.status !== 'connected') {
-    nativeObs?.disconnect(state.error ?? 'OBS 已断开，画面通道停止');
+    nativeObs?.disconnect(state.error || 'OBS 已断开');
     void obsPreload.close().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message: `关闭节目预备失败：${String(error)}`, result: 'failed' })
       .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
   } });
