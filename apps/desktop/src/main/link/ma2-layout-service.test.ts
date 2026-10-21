@@ -4,9 +4,15 @@ import { Ma2LayoutService } from './ma2-layout-service';
 import type { Ma2NewCueRequest, Ma2SongSyncRequest } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
-import { emptyMa2SequenceXml, inspectMa2CueData, inspectMa2SequenceXml, emptyMa2LayoutXml, inspectMa2LayoutXml } from './ma2-timecode-xml';
+import { editMa2SongSequence, emptyMa2SequenceXml, inspectMa2CueData, inspectMa2SequenceXml, emptyMa2LayoutXml, inspectMa2LayoutXml } from './ma2-timecode-xml';
+import { planMa2SongSync } from './ma2-song-plan';
+import { readFileSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const source={show:'test',generation:'one',version:'3.7.0.5'};
+function songRequest():Ma2SongSyncRequest{return {network:{host:'192.0.2.1',port:30000,monitorPort:30001,username:'test'},expectedSource:source,projectId:randomUUID(),itemId:'song',requestId:randomUUID(),settings:{layout:999,name:'歌曲',nextSequence:9000,columns:8,executorPage:1000},name:'歌曲',points:[]};}
 function request():Ma2NewCueRequest{return {network:{host:'192.0.2.1',port:30000,monitorPort:30001,username:'test'},expectedSource:source,projectId:randomUUID(),requestId:randomUUID(),settings:{layout:999,name:'专用布局',nextSequence:9000,columns:8},name:'位置',content:{kind:'programmer',use:'Active'}};}
 it('rejects an occupied Sequence and changed Show before sending any native command',async()=>{
   const command=vi.fn<Ma2Telnet['command']>();
@@ -36,8 +42,72 @@ it('rejects a full song executor page before importing or renaming any Sequence'
     if (op === 'PAGES') return Promise.resolve(JSON.stringify({ ...source, buttonPage: 1000, faderPage: 1, pages: [{ page: 1000, name: '已有灯光' }] }));
     if (op === 'PAGE') return Promise.resolve(full);
     throw new Error(`Unexpected ${op}`);
-  }) };
+  }), exchange: vi.fn<Ma2OnpcBridge['exchange']>(op => Promise.reject(new Error(`Unexpected ${op}`))) };
   await expect(new Ma2LayoutService(`unused-${randomUUID()}.json`, () => false).syncSong({ command }, bridge, song)).rejects.toThrow('已经放满');
   expect(command).not.toHaveBeenCalled();
   expect(bridge.request.mock.calls.map(([op]) => op)).toEqual(['LISTSEQ', 'PAGES', 'PAGE']);
+});
+
+/** In-memory console for syncSong: emulates only the script shapes that path sends. */
+function songConsole(sequences: Map<number, string>) {
+  const files = new Map<string, Buffer>(); const lines: string[] = []; const ops: string[] = [];
+  const pending = new Map<string, Buffer[]>();
+  const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
+  const run = (script: string): string => {
+    let match = /importexport\/(\w+)\.xml','wb'\)/.exec(script);
+    if (match) { files.set(match[1]!, Buffer.alloc(0)); return 'prepared'; }
+    match = /importexport\/(\w+)\.xml','ab'\)\);f:write\(unhex\('([a-f0-9]*)'\)\)/.exec(script);
+    if (match) { files.set(match[1]!, Buffer.concat([files.get(match[1]!)!, Buffer.from(match[2]!, 'hex')])); return 'prepared'; }
+    match = /gma\.cmd\('Import (\w+)\.xml At Sequence (\d+) \/o \/nc'\)/.exec(script);
+    if (match) {
+      const target = Number(match[2]);
+      const check = /read\('(\w+)'\)==read\('\w+_check'\)/.exec(script);
+      if (check && canonical(files.get(check[1]!)!.toString('utf8')) !== canonical(sequences.get(target)!)) return 'ERR:Sequence changed during write';
+      if (script.includes('Delete Sequence')) throw new Error('测试未覆盖删除');
+      sequences.set(target, files.get(match[1]!)!.toString('utf8')); return 'written';
+    }
+    throw new Error(`假控台未识别的脚本：${script.slice(0, 200)}`);
+  };
+  const command = vi.fn<Ma2Telnet['command']>((line, match) => {
+    lines.push(line);
+    const body = /^Lua "(.*)"$/.exec(line)![1]!;
+    let script = body; let prefix = /TBLINK_LAYOUT_[a-f0-9]{24}:/.exec(body)?.[0];
+    const key = /(TBLINK_LAYOUT_[a-f0-9]{24})=\{\}/.exec(body)?.[1];
+    if (key) { pending.set(key, []); return Promise.resolve(match(`${prefix}READY\r\n`)!); }
+    const part = /(TBLINK_LAYOUT_[a-f0-9]{24})\[#\1\+1\]=unhex\('([a-f0-9]+)'\)/.exec(body);
+    if (part) { pending.get(part[1]!)!.push(Buffer.from(part[2]!, 'hex')); return Promise.resolve(match(`${prefix}READY\r\n`)!); }
+    const assembled = /local s=table\.concat\((TBLINK_LAYOUT_[a-f0-9]{24})\)/.exec(body)?.[1];
+    if (assembled) { script = Buffer.concat(pending.get(assembled)!).toString('utf8'); pending.delete(assembled); prefix = /TBLINK_LAYOUT_[a-f0-9]{24}:/.exec(script)?.[0]; }
+    const result = run(script);
+    return Promise.resolve(match(`${prefix}${result.startsWith('ERR:') ? result : `OK:${result}`}\r\n`)!);
+  });
+  const page = `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" major_vers="3" minor_vers="7" stream_vers="0" tblink_show="test" tblink_generation="one" tblink_version="3.7.0.5"><Page index="999">${'<Exec xsi:nil="true"/>'.repeat(100)}<Exec offset_from_first="0"><Assignment><No>25</No><No>1</No><No>9000</No></Assignment></Exec></Page></MA>`;
+  const exchange = vi.fn<Ma2OnpcBridge['exchange']>((operation, target) => {
+    ops.push(`${operation} ${target}`);
+    const requestId = randomUUID().replaceAll('-', '');
+    if (operation === 'LISTSEQ') return Promise.resolve({ requestId, response: JSON.stringify({ ...source, entries: [...sequences.keys()].map(number => ({ target: number, name: `S${number}` })) }) });
+    if (operation === 'SEQUENCE') { const xml = sequences.get(target)!; files.set(`tblink_library_${requestId}`, Buffer.from(xml)); return Promise.resolve({ requestId, response: xml }); }
+    if (operation === 'PAGES') return Promise.resolve({ requestId, response: JSON.stringify({ ...source, buttonPage: 1000, faderPage: 1, pages: [{ page: 1000, name: '歌曲' }] }) });
+    if (operation === 'PAGE') return Promise.resolve({ requestId, response: page });
+    return Promise.reject(new Error(`Unexpected ${operation}`));
+  });
+  return { files, lines, ops, connection: { command }, bridge: { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response } };
+}
+it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份传回控台，写前比对用控台读取时的原导出', async () => {
+  const attributes = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');
+  const sourceNumber = inspectMa2SequenceXml(attributes).sequences[0]!.number;
+  const points = Array.from({ length: 8 }, (_, index) => ({ id: `point-${index}`, name: `段落 ${index + 1}`, atMs: index * 1000, cues: [] as Ma2SongSyncRequest['points'][number]['cues'] }));
+  const base: Ma2SongSyncRequest = { ...songRequest(), points };
+  const plan = planMa2SongSync(base, null);
+  const xml = editMa2SongSequence(emptyMa2SequenceXml(9000, '3.7.0.5'), base.name, plan.changes.map(value => ({ ...value, sources: [] })), []);
+  const song: Ma2SongSyncRequest = { ...base, binding: { endpoint: '192.0.2.1:30000', show: source.show, layout: null, executor: '1000.101', sequence: 9000, name: base.name, baselineXml: xml, points: plan.points },
+    points: points.map((point, index) => ({ ...point, cues: index === 0 ? [{ sequence: sourceNumber, cue: '1.000', delayMs: 0 }] : [{ sequence: 9000, cue: plan.points[index]!.cue, delayMs: 0 }] })) };
+  const fake = songConsole(new Map([[9000, xml], [sourceNumber, attributes]]));
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-song-'));
+  const result = await new Ma2LayoutService(join(directory, 'layouts.json'), () => false).syncSong(fake.connection, fake.bridge, song);
+  console.info(JSON.stringify({ commands: fake.lines.length, bytes: fake.lines.reduce((total, line) => total + Buffer.byteLength(line), 0), ops: fake.ops }));
+  expect(result.changed).toBe(true);
+  expect([...fake.files.keys()].some(name => name.endsWith('_before'))).toBe(false);
+  expect(result.backupFile).toMatch(/^tblink_library_[a-f0-9]{32}\.xml$/);
+  expect(fake.files.has(result.backupFile.replace(/\.xml$/, ''))).toBe(true);
 });

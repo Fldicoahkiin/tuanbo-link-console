@@ -18,6 +18,7 @@ import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recove
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
+type SongBridge = Pick<Ma2OnpcBridge, 'request' | 'exchange'>;
 const ownersSchema = z.array(z.object({ key: z.string(), projectId: z.string(), name: z.string() }).strict());
 const hex = (text: string): string => Buffer.from(text).toString('hex');
 const decode = (text: string): string => `unhex('${hex(text)}')`;
@@ -131,7 +132,7 @@ export class Ma2LayoutService {
     finally { this.busy = false; }
   }
 
-  async syncSong(rawConnection: Connection, rawBridge: Bridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal): Promise<Ma2SongSyncResult> {
+  async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal): Promise<Ma2SongSyncResult> {
     const request = ma2SongSyncRequestSchema.parse(input);
     const originalPoints = structuredClone(request.points);
     if (this.busy || this.isPlaying()) throw new Error('请停止播放并等待当前控台操作完成');
@@ -149,7 +150,8 @@ export class Ma2LayoutService {
       signal.throwIfAborted();
       return rawConnection.command(line, match, () => { signal.throwIfAborted(); beforeSend?.(); }, priority).then(result => { received(); return result; });
     } };
-    const bridge: Bridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal).then(result => { received(); return result; }) };
+    const bridge: SongBridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal).then(result => { received(); return result; }),
+      exchange: (operation, target, expected, desired) => rawBridge.exchange(operation, target, expected, desired, signal).then(result => { received(); return result; }) };
     const progress = (phase: Ma2ReadProgressUpdate['phase'], completed: number, total: number, detail: string): void => {
       signal.throwIfAborted(); received(); report?.({ phase, completed, total, detail });
     };
@@ -226,7 +228,11 @@ export class Ma2LayoutService {
       if (request.binding && owners.some(value => value.key === key && (value.projectId !== request.projectId || value.itemId !== request.itemId))) throw new Error('此位置已关联本机另一歌曲，请核对歌曲绑定');
       // Confirm the destination before importing or renaming any song content.
       const destination = executorPage ? await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor, this.isPlaying, recoveringCreation) : null;
-      const remoteXml = request.binding ? await bridge.request('SEQUENCE', target) : null;
+      // SEQUENCE leaves its native export as importexport/tblink_library_<request id>.xml on the
+      // console; the write guard and the backup use that file instead of uploading the XML again.
+      const remote = request.binding ? await bridge.exchange('SEQUENCE', target) : null;
+      const remoteXml = remote?.response ?? null;
+      const remoteExport = remote ? `tblink_library_${remote.requestId}` : null;
       // The saved project carries the console identity and the native three-way baseline.
       // A new installation/computer has no local ownership cache; validate that binding
       // instead of permanently rejecting every saved song.
@@ -295,14 +301,11 @@ export class Ma2LayoutService {
         const clearing = remoteXml && plan.deletions.length > 0 && inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.every(cue => plan.deletions.includes(cue.number));
         const replacingAll = clearing && changes.length > 0;
         if (replacingAll) await this.prepareXml(connection, layoutRequest, `${file}_clear`, editMa2SongSequence(remoteXml, plan.name, [], plan.deletions));
-        if (remoteXml) {
-          backupFile = `${file}_before.xml`;
-          await this.prepareXml(connection, layoutRequest, `${file}_before`, remoteXml);
-        }
+        if (remoteExport) backupFile = `${remoteExport}.xml`;
         if (!executorPage && !beforeLayout) await this.prepareXml(connection, layoutRequest, `${file}_layout`, emptyMa2LayoutXml(layoutRequest.layout, directory.version));
         for (const [number, xml] of sources) if (canonical(await bridge.request('SEQUENCE', Number(number))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
         await checkpoint(remoteXml ?? uploaded, nativeCopy ? ma2SongCreationStages(uploaded, changes) : undefined);
-        const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${file}_before')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
+        const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${remoteExport}')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
         // Import /o can retain the previous native step table when a numbered
         // Cue disappears from XML. Delete reviewed numbers through MA2 first so
         // its internal Part table is reindexed before applying the new snapshot.
