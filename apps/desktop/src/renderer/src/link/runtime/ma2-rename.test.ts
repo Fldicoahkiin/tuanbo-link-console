@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject, type Ma2RenameRequest, type Ma2RenameResult } from '@tb/schema';
-import { saveMa2MaterialLibraryCommand, renameConsoleCueCommand, renameLightingLibraryEntryCommand, setLightingLibraryViewCommand, pendingMa2Renames } from '@tb/core/link';
+import { saveMa2MaterialLibraryCommand, renameConsoleCueCommand, renameLightingLibraryEntryCommand, setLightingLibraryViewCommand, pendingMa2Renames, toConsoleLabel } from '@tb/core/link';
 import { Ma2AutoSync, type Ma2AutoSyncDependencies } from './ma2-auto-sync';
 import { useDocumentStore as store } from '../stores/document-store';
 
@@ -14,12 +14,12 @@ function setup(original = 'Original') {
   let playing = false;
   let remote = original;
   const catalog = { directory, readAt: new Date().toISOString(), entries: [] };
-  const result = (request: Ma2RenameRequest): Ma2RenameResult => ({ sequence: 2, cue: '1.100', kind: 'single', show: source.show, generation: 'session', name: request.change.name, backupFile: `tblink_label_${'a'.repeat(32)}.xml` });
+  const result = (request: Ma2RenameRequest): Ma2RenameResult => ({ sequence: 2, cue: '1.100', kind: 'single', show: source.show, generation: 'session', name: toConsoleLabel(request.change.name), backupFile: `tblink_label_${'a'.repeat(32)}.xml` });
   const dependencies: Ma2AutoSyncDependencies = {
     state: () => ({ ...store.getState(), playing }), catalog: vi.fn(() => Promise.resolve(catalog)),
     prepare: () => Promise.reject(new Error('Unexpected prepare')), read: () => Promise.reject(new Error('Unexpected read')),
     compare: () => Promise.reject(new Error('Unexpected compare')), apply: () => Promise.reject(new Error('Unexpected apply')),
-    rename: vi.fn<Ma2AutoSyncDependencies['rename']>(request => { if (request.change.confirmedName !== remote) return Promise.reject(new Error('控台名称冲突')); remote = request.change.name; return Promise.resolve(result(request)); }),
+    rename: vi.fn<Ma2AutoSyncDependencies['rename']>(request => { if (request.change.confirmedName !== remote) return Promise.reject(new Error('控台名称冲突')); remote = toConsoleLabel(request.change.name); return Promise.resolve(result(request)); }),
     archive: vi.fn(() => Promise.resolve('archive')), execute: (id, command) => store.getState().executeForDocument(id, command), changed: vi.fn()
   };
   const runner = new Ma2AutoSync(dependencies);
@@ -41,10 +41,10 @@ it('原名为空的 Cue 写入后能确认并保存，撤销历史保留真实�
 it('开关关闭不写入，开启后小数 Cue 中文改名；保存重开、撤销、重做正确', async () => {
   const t = setup(); t.rename('中文面光'); await t.runner.tick(); expect(t.remote()).toBe('Original');
   expect(pendingMa2Renames(parseLinkProject(JSON.parse(JSON.stringify(store.getState().project))))).toHaveLength(1);
-  t.start(); await t.runner.tick(); expect(t.remote()).toBe('中文面光'); expect(pendingMa2Renames(store.getState().project)).toEqual([]);
+  t.start(); await t.runner.tick(); expect(t.remote()).toBe('ZhongWenMianGuang'); expect(pendingMa2Renames(store.getState().project)).toEqual([]);
   expect(store.getState().past).toHaveLength(1);
   store.getState().undo(); await t.runner.tick(); expect(t.remote()).toBe('Original');
-  store.getState().redo(); await t.runner.tick(); expect(t.remote()).toBe('中文面光');
+  store.getState().redo(); await t.runner.tick(); expect(t.remote()).toBe('ZhongWenMianGuang');
   expect(pendingMa2Renames(parseLinkProject(JSON.parse(JSON.stringify(store.getState().project))))).toEqual([]);
 });
 it('播放中暂存；停止后改名，无时间线或执行器也可同步', async () => {
@@ -99,7 +99,7 @@ it('右键名称同步独立于歌曲：不为未关联 Cue 创建控台对象�
   store.getState().setProject(project, null);
   t.rename('新的控台名称'); t.start('names');
   await t.runner.tick();
-  expect(t.remote()).toBe('新的控台名称');
+  expect(t.remote()).toBe('XinDeKongTaiMingCheng');
   expect(store.getState().project?.rundown[0]?.lighting).toEqual(lighting);
   expect(t.dependencies.changed).toHaveBeenLastCalledWith('verified', '名称已写入控台并回读确认');
   store.getState().undo(); await t.runner.tick();

@@ -2,7 +2,7 @@ import { applyMa2AutoBindingsCommand, ma2AutoBindEvents, applyMa2ReadbackCommand
 import { ma2AutoBindResultSchema, type Ma2AutoBindRequest, type Ma2AutoBindResult } from '@tb/schema';
 import { ma2ApplyResultSchema, ma2CatalogSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2Catalog, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
 import { ma2PendingChanges } from './ma2-pending-changes';
-import { pendingMa2Renames, confirmMa2RenameCommand, ma2RenameKey } from '@tb/core/link';
+import { pendingMa2Renames, confirmMa2RenameCommand, ma2RenameKey, toConsoleLabel } from '@tb/core/link';
 import { ma2RenameResultSchema, type Ma2RenameRequest, type Ma2RenameResult } from '@tb/schema';
 
 export type Ma2AutoSyncStatus = 'off' | 'waiting' | 'staged' | 'reading' | 'writing' | 'verified' | 'blocked';
@@ -111,7 +111,7 @@ export class Ma2AutoSync {
         this.writing = true;
         this.dependencies.changed('writing', `正在同步名称：${change.name}`);
         const result = ma2RenameResultSchema.parse(await this.dependencies.rename({ ...session.connection, change, generation: session.directory.generation }));
-        if (result.name !== change.name || result.sequence !== change.sequence || result.kind !== change.kind || Number(result.cue) !== Number(change.cue) || result.show !== change.show || result.generation !== session.directory.generation) throw new Error('名称回读与目标不一致，未确认同步');
+        if (result.name !== toConsoleLabel(change.name) || result.sequence !== change.sequence || result.kind !== change.kind || Number(result.cue) !== Number(change.cue) || result.show !== change.show || result.generation !== session.directory.generation) throw new Error('名称回读与目标不一致，未确认同步');
         if (this.dependencies.state().documentId !== session.documentId) throw new Error('控台名称已写入，但工程已切换，请重新读取控台核对');
         await this.dependencies.execute(session.documentId, confirmMa2RenameCommand(change));
         this.writing = false; this.confirmed = true;

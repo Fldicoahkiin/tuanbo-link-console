@@ -41,6 +41,10 @@ it('全控台目录覆盖歌曲旧目录，保留小数编号与原生顺序', (
   expect(ma2ConsoleCueName(renamedPool[0]!.cues[1]!)).toBe('我的副歌');
   const confirmed = confirmMa2RenameCommand(pendingMa2Renames(renamed)[0]!).execute(renamed);
   expect(ma2ConsoleCueName(ma2SequenceLibrary(confirmed, document)[0]!.cues[1]!)).toBe('我的副歌');
+  expect(confirmed.ma2MaterialLibrary?.library?.sequences[0]?.cues.find(cue => cue.number === '1.100')?.name).toBe('WoDeFuGe');
+  const changedOnConsole = structuredClone(confirmed);
+  changedOnConsole.ma2MaterialLibrary!.library!.sequences[0]!.cues.find(cue => cue.number === '1.100')!.name = 'Console Chorus';
+  expect(ma2ConsoleCueName(ma2SequenceLibrary(changedOnConsole, document)[0]!.cues[1]!)).toBe('Console Chorus');
   const sequenceRename = renameConsoleCueCommand({ sequence: 36, cue: '1.000', kind: 'sequence' }, '灯光 2026', { endpoint: '192.0.2.1:30000', show: 'Show' });
   expect(ma2ConsoleSequenceName(ma2SequenceLibrary(sequenceRename.execute(confirmed), document)[0]!)).toBe('灯光 2026');
   expect(ma2ConsoleSequenceName(ma2SequenceLibrary(sequenceRename.undo(confirmed), document)[0]!)).toBe('原名称');
