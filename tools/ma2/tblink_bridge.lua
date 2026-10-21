@@ -266,6 +266,42 @@ local function process(data)
       assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
       return xml
     end
+    if op == 'SEQCUES' then
+      -- The complete export stays on the console; only the requested Cue elements cross the network.
+      assert(#body > 0 and #body <= 4096 and not body:find('[^%d%.,]'), 'Invalid Cue list')
+      assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
+      local wanted = {}
+      for value in body:gmatch('[^,]+') do
+        local whole, fraction = value:match('^(%d+)%.(%d%d%d)$')
+        assert(whole, 'Invalid Cue number')
+        wanted[tonumber(whole) * 1000 + tonumber(fraction)] = true
+      end
+      local name = 'tblink_library_' .. id
+      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
+      local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
+      gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
+      assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
+      local head = assert(xml:match('^(.-<Sequ%s[^>]*>)'), 'Sequence XML unavailable')
+      assert(head:sub(-2) ~= '/>', 'Sequence has no Cues')
+      local parts, position = { head }, 1
+      while true do
+        local first, last, attributes = xml:find('<Cue%s([^>]*)>', position)
+        if not first then break end
+        position = last + 1
+        if attributes:sub(-1) ~= '/' then
+          local _, close = xml:find('</Cue>', position, true)
+          assert(close, 'Sequence XML unavailable')
+          local cue = xml:sub(first, close)
+          local tag = cue:match('<Number%s[^>]*>') or ''
+          local whole = tonumber(tag:match('%snumber="(%d+)"'))
+          local fraction = tonumber(tag:match('sub_number="(%d+)"') or '0')
+          if whole and fraction and wanted[whole * 1000 + fraction] then parts[#parts + 1] = cue end
+          position = close + 1
+        end
+      end
+      parts[#parts + 1] = '</Sequ></MA>'
+      return table.concat(parts, '\n')
+    end
     if op == 'EXECUTOR' then
       assert(body:match('^[1-9]%d*$') and tonumber(body) <= 99999, 'Invalid Executor number')
       local address = 'Executor ' .. tc .. '.' .. body
@@ -361,7 +397,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
         base = snapshot_cache.xml
         a = 'SYNC'
       end
-      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL', 'Invalid operation')
+      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(not network or gma.gettime() > network.expires, 'Another network request is pending')

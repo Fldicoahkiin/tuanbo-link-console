@@ -94,7 +94,7 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     return Promise.resolve(match(`${prefix}${result.startsWith('ERR:') ? result : `OK:${result}`}\r\n`)!);
   });
   const page = `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" major_vers="3" minor_vers="7" stream_vers="0" tblink_show="test" tblink_generation="one" tblink_version="3.7.0.5"><Page index="999">${'<Exec xsi:nil="true"/>'.repeat(100)}<Exec offset_from_first="0"><Assignment><No>25</No><No>1</No><No>9000</No></Assignment></Exec></Page></MA>`;
-  const exchange = vi.fn<Ma2OnpcBridge['exchange']>(async (operation, target, _expected, _desired, _signal, progress) => {
+  const exchange = vi.fn<Ma2OnpcBridge['exchange']>(async (operation, target, expected, _desired, _signal, progress) => {
     ops.push(`${operation} ${target}`);
     if (slowRead && operation === 'SEQUENCE' && target === slowRead.target && ops.filter(op => op === `SEQUENCE ${target}`).length === 1) {
       for (let elapsed = 0; elapsed < slowRead.ms; elapsed += 5000) { await new Promise(resolve => setTimeout(resolve, 5000)); progress?.(); }
@@ -103,6 +103,15 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     const requestId = randomUUID().replaceAll('-', '');
     if (operation === 'LISTSEQ') return Promise.resolve({ requestId, response: JSON.stringify({ ...source, entries: [...sequences.keys()].map(number => ({ target: number, name: `S${number}` })) }) });
     if (operation === 'SEQUENCE') { const xml = sequences.get(target)!; files.set(`tblink_library_${requestId}`, Buffer.from(xml)); return Promise.resolve({ requestId, response: xml }); }
+    if (operation === 'SEQCUES') {
+      const xml = sequences.get(target)!; files.set(`tblink_library_${requestId}`, Buffer.from(xml));
+      const wanted = new Set(expected!.split(',').map(Number));
+      const cues = [...xml.matchAll(/<Cue\s[^>]*[^/]>[\s\S]*?<\/Cue>/g)].map(value => value[0]).filter(cue => {
+        const tag = /<Number\s[^>]*>/.exec(cue)?.[0] ?? '';
+        return wanted.has(Number(/\snumber="(\d+)"/.exec(tag)?.[1]) + Number(/sub_number="(\d+)"/.exec(tag)?.[1] ?? 0) / 1000);
+      });
+      return Promise.resolve({ requestId, response: `${/^[\s\S]*?<Sequ\s[^>]*>/.exec(xml)![0]}\n${cues.join('\n')}\n</Sequ></MA>` });
+    }
     if (operation === 'PAGES') return Promise.resolve({ requestId, response: JSON.stringify({ ...source, buttonPage: 1000, faderPage: 1, pages: [{ page: 1000, name: '歌曲' }] }) });
     if (operation === 'PAGE') return Promise.resolve({ requestId, response: page });
     return Promise.reject(new Error(`Unexpected ${operation}`));
@@ -136,7 +145,7 @@ it('一次大读取持续超过 90 秒但每批都有回包时不判为无进展
   } finally { vi.useRealTimers(); }
 });
 it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份传回控台，写前比对用控台读取时的原导出', async () => {
-  const { song, sequences } = boundSong();
+  const { song, sourceNumber, sequences } = boundSong();
   const fake = songConsole(sequences);
   const directory = await mkdtemp(join(tmpdir(), 'tblink-song-'));
   const result = await new Ma2LayoutService(join(directory, 'layouts.json'), () => false).syncSong(fake.connection, fake.bridge, song);
@@ -147,4 +156,6 @@ it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份�
   expect(fake.files.has(result.backupFile.replace(/\.xml$/, ''))).toBe(true);
   expect(fake.lines.every(line => Buffer.byteLength(line) <= 900)).toBe(true);
   expect(fake.lines.length).toBeLessThanOrEqual(60); expect(fake.writers.size).toBe(0);
+  expect(fake.ops.filter(op => op.startsWith('SEQUENCE ') && op !== 'SEQUENCE 9000')).toEqual([]);
+  expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(2);
 });

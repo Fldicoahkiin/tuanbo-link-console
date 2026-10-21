@@ -246,6 +246,14 @@ export class Ma2LayoutService {
       const changes = [];
       const sources = new Map<string, string>();
       const sourceCount = new Set(plan.changes.flatMap(change => (change.refs ?? []).map(ref => ref.sequence))).size;
+      // Read only the Cues the song copies from each source Sequence; the full export stays on the console.
+      const wanted = new Map<number, Set<string>>();
+      for (const change of plan.changes) for (const ref of change.refs ?? []) {
+        if (ref.sequence === target && remoteXml) continue;
+        const [whole, fraction = ''] = ref.cue.split('.');
+        wanted.set(ref.sequence, (wanted.get(ref.sequence) ?? new Set<string>()).add(`${Number(whole)}.${fraction.padEnd(3, '0')}`));
+      }
+      const sourceCues = (sequence: number): string => [...wanted.get(sequence) ?? []].join(',');
       progress('library', 0, sourceCount, `读取 ${sourceCount} 个来源序列`);
       for (const change of plan.changes) {
         const content: Array<{ xml: string; cue: string }> | undefined = change.refs === undefined ? undefined : [];
@@ -255,7 +263,7 @@ export class Ma2LayoutService {
           }
           let xml = sources.get(String(ref.sequence));
           if (!xml) {
-            xml = ref.sequence === target && remoteXml ? remoteXml : await bridge.request('SEQUENCE', ref.sequence);
+            xml = ref.sequence === target && remoteXml ? remoteXml : await bridge.request('SEQCUES', ref.sequence, sourceCues(ref.sequence));
             sources.set(String(ref.sequence), xml);
             progress('library', sources.size, sourceCount, `已读取来源序列 ${ref.sequence}`);
           }
@@ -304,7 +312,8 @@ export class Ma2LayoutService {
         if (replacingAll) await this.prepareXml(connection, layoutRequest, `${file}_clear`, editMa2SongSequence(remoteXml, plan.name, [], plan.deletions));
         if (remoteExport) backupFile = `${remoteExport}.xml`;
         if (!executorPage && !beforeLayout) await this.prepareXml(connection, layoutRequest, `${file}_layout`, emptyMa2LayoutXml(layoutRequest.layout, directory.version));
-        for (const [number, xml] of sources) if (canonical(await bridge.request('SEQUENCE', Number(number))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
+        // The song's own Sequence is compared with its console export inside the write command below.
+        for (const [number, xml] of sources) if (Number(number) !== target && canonical(await bridge.request('SEQCUES', Number(number), sourceCues(Number(number)))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
         await checkpoint(remoteXml ?? uploaded, nativeCopy ? ma2SongCreationStages(uploaded, changes) : undefined);
         const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${remoteExport}')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
         // Import /o can retain the previous native step table when a numbered
