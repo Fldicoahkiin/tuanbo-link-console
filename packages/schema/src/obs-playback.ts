@@ -24,6 +24,8 @@ export const nativeObsStatusSchema = z.object({ version: z.literal(1), sessionId
   generation: z.number().int().positive(), itemId: z.string().min(1), revision: z.number().int().nonnegative(),
   state: z.enum(['preparing', 'ready', 'running', 'paused', 'stopped', 'failed']), reason: z.string().nullable(),
   notice: z.string().nullable().optional(),
+  /** Latest live output fault; the channel keeps running. */
+  fault: z.string().nullable().optional(),
   nextCueId: z.string().nullable(), currentCueId: z.string().nullable(),
   pendingCount: z.number().int().nonnegative(), positionMs: z.number().finite().nonnegative()
 }).strict();

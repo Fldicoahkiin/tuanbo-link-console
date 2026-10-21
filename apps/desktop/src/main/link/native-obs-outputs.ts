@@ -14,7 +14,7 @@ import { ObsMediaPreload } from './obs-media-preload';
 import { obsMediaDecodeTargets } from './obs-media-decode';
 import { obsMediaCachePaths } from './obs-media-paths';
 
-export type NativeObsOutputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport'> & {
+export type NativeObsOutputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault'> & {
   preloadResources: (assertCurrent: () => void, phase?: 'idle' | 'playback' | 'background') => Promise<void>;
 };
 
@@ -49,7 +49,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       execute: action => action.kind === 'obs.setSceneItemEnabled' ? obs.setSourceEnabledInProgramScene(preload.resolveSource(action.sourceName), action.enabled)
         : obs.execute('inputName' in action ? { ...action, inputName: preload.resolveSource(action.inputName) }
           : 'sourceName' in action ? { ...action, sourceName: preload.resolveSource(action.sourceName) } : action) },
-    guardOutput: (canSend, operation) => obs.guardPlaybackOperation(canSend, operation),
+    guardOutput: (canSend, operation, dispatched) => obs.guardPlaybackOperation(canSend, operation, dispatched),
     recordLog: entry => logger.recordBuffered(entry.category === 'action' && entry.result === 'failed'
       ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure),
     preloadResources: async (assertCurrent, preparationPhase = 'idle') => {

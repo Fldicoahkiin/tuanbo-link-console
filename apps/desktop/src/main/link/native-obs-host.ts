@@ -4,7 +4,7 @@ import { nativeObsPrepareSchema, nativeObsStopSchema, nativeObsStatusSchema, typ
 type Entry = { request: NativeObsPrepare; session: ObsProgramSession; state: NativeObsStatus; awaitingPause: boolean; ended: boolean; filesStarted: boolean; now: () => number };
 type Dependencies = {
   audio: () => NativePlayerStatus | null;
-  outputs: (request: NativeObsPrepare, positionMs: number, assertCurrent: () => void) => Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport'> | Promise<Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport'>>;
+  outputs: (request: NativeObsPrepare, positionMs: number, assertCurrent: () => void) => Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault'> | Promise<Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault'>>;
   changed: (status: NativeObsStatus) => void;
   error: (message: string) => void;
   prepareNextFiles?: (request: NativeObsPrepare, assertCurrent: () => void) => Promise<void>;
@@ -30,8 +30,16 @@ export class NativeObsHost {
     return this.stop();
   }
 
+  /** A song being prepared cannot start without OBS. Once admitted, the live
+   * channel stays: requests fail in red until the operator reconnects OBS. */
   disconnect(reason: string): void {
     if (!this.entry || ['stopped', 'failed'].includes(this.entry.state.state)) return;
+    if (this.entry.state.state !== 'preparing') {
+      // Every connection-state update repeats the loss; record it once.
+      const message = `OBS 连接中断：${reason}；画面动作失败直到重新连接 OBS，之后从下一画面事件继续`;
+      if (this.entry.state.fault !== message) this.fault(message);
+      return;
+    }
     ++this.epoch;
     this.entry.session.abort(reason);
   }
@@ -77,16 +85,18 @@ export class NativeObsHost {
         if (this.entry?.request !== request) return;
         if (update.state === 'error' || update.state === 'timecodeLost') this.fail(update.reason ?? '后台画面会话失效');
       },
+      // Failed actions are already in the action log; show them without ending the channel.
       cueReport: report => {
         if (this.entry?.request !== request) return;
         const failed = report.results.find(result => result.status === 'failed');
-        if (failed) this.fail(failed.error ?? 'OBS 动作失败');
-        else if (report.results.some(result => result.status === 'succeeded')) this.patch({ currentCueId: report.cueId });
+        if (failed) this.patch({ fault: `画面动作失败：${failed.action.label} · ${failed.error ?? '未知错误'}` });
+        if (report.results.some(result => result.status === 'succeeded')) this.patch({ currentCueId: report.cueId });
       },
       mediaReport: report => {
         if (this.entry?.request !== request) return;
-        if (report.status === 'failed') this.fail(report.error ?? 'OBS 素材失败');
-      }
+        if (report.status === 'failed') this.patch({ fault: `素材播放失败：${report.event.assetName} · ${report.error ?? '未知错误'}` });
+      },
+      fault: message => { if (this.entry?.request === request) this.fault(message); }
     });
     const entry = { request, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now }; this.entry = entry; this.publish();
     try {
@@ -180,6 +190,10 @@ export class NativeObsHost {
       || status.generation !== previous.generation || status.state !== previous.state || status.reason !== previous.reason;
     if (!urgent && now - this.displayedAt < 50) return;
     this.displayed = status; this.displayedAt = now; this.dependencies.changed(status);
+  }
+  private fault(message: string): void {
+    if (!this.entry || ['stopped', 'failed'].includes(this.entry.state.state)) return;
+    this.patch({ fault: message }); this.dependencies.error(message);
   }
   private fail(reason: string): void {
     if (!this.entry || this.entry.state.state === 'failed') return;

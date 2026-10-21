@@ -203,8 +203,8 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     return this.requests.run(urgent ? 'urgent' : 'control', () => this.executeAction(action));
   }
 
-  guardPlaybackOperation<T>(canSend: () => boolean, operation: () => Promise<T>): Promise<T> {
-    return this.requests.guarded(canSend, operation);
+  guardPlaybackOperation<T>(canSend: () => boolean, operation: () => Promise<T>, dispatched?: () => void): Promise<T> {
+    return this.requests.guarded(canSend, operation, dispatched);
   }
   preparePlaybackMedia<T>(operation: () => Promise<T>): Promise<T> {
     return this.requests.run('background', operation);

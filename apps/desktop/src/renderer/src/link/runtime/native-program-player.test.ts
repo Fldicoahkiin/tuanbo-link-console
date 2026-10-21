@@ -69,6 +69,26 @@ it('有画面动作的歌，后台画面准备失败时不开始播放；纯音�
   await f.player.dispose();
 });
 
+it('播放中画面通道的直播故障显示为输出异常，音频继续；下一次播放清除', async () => {
+  const f = fixture(); f.project.obsOutputMode = 'scenes';
+  f.project.rundown[0]!.cues = [linkCueSchema.parse({ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+    actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
+  let receive: ((value: NativeObsStatus) => void) | null = null;
+  f.api.onNativeObsStatus.mockImplementation(listener => { receive = listener; return () => undefined; });
+  const player = new NativeProgramPlayer(f.project, 'C:/test/project.tblink', 7, f.deps, f.api, f.lighting);
+  await player.play('song-0');
+  const request = f.api.prepareNativeObs.mock.calls.at(-1)![0];
+  const running: NativeObsStatus = { version: 1, sessionId: request.sessionId, generation: request.generation, itemId: 'song-0', revision: 7,
+    state: 'running', reason: null, currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: 1000 };
+  receive!({ ...running, fault: '画面动作失败：机位 · OBS 无响应' });
+  expect(f.state()).toMatchObject({ status: 'playing', fault: '画面动作失败：机位 · OBS 无响应' });
+  receive!({ ...running, state: 'failed', reason: '实际音频位置无效' });
+  expect(f.state()).toMatchObject({ status: 'playing', fault: '画面通道已停止：实际音频位置无效' });
+  await player.play('song-1');
+  expect(f.state().fault).toBeNull();
+  await player.dispose();
+});
+
 it('引擎异常退出后再次播放不向已退出的引擎发 stop，直接重新准备并播放；销毁时同样不发', async () => {
   // 修复前：每次播放都先向已退出的引擎发 stop 并被拒绝，同一播放器此后永远停在错误状态。
   const f = fixture();
