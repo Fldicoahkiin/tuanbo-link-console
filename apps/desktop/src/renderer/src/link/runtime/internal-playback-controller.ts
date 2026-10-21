@@ -316,7 +316,7 @@ export class InternalPlaybackController {
       }
       const schedulingNotice = this.mtc.takeSchedulingNotice();
       if (schedulingNotice) { this.dependencies.notice?.(schedulingNotice, this.state.itemId); this.reportFault(schedulingNotice); }
-      if (this.lightingPrepared) try { this.lighting.tick(positionMs); }
+      if (this.lightingPrepared) try { this.lighting.tick(positionMs); this.reportLightingFault(); }
       catch (error) { this.lightingPrepared = false; this.lighting.stop(); this.appendNotice(`灯光动作已停止：${toUserErrorMessage(error)}。音频继续播放。`); }
       const frame = millisecondsToFrameNumber(positionMs, this.project.timebase.frameRate);
       if (frame !== this.lastFrame) {
@@ -338,7 +338,7 @@ export class InternalPlaybackController {
       const generation = this.generation; this.finishingLighting = true;
       void pending.then(() => {
         if (!this.current(generation)) return;
-        this.finishingLighting = false; complete();
+        this.reportLightingFault(); this.finishingLighting = false; complete();
       }, (error: unknown) => { if (this.current(generation)) { this.lightingPrepared = false; this.appendNotice(`灯光收尾失败：${toUserErrorMessage(error)}`); complete(); } });
     } catch (error) { this.lightingPrepared = false; this.appendNotice(`灯光收尾失败：${toUserErrorMessage(error)}`); complete(); }
   }
@@ -368,6 +368,10 @@ export class InternalPlaybackController {
       this.dependencies.failed?.(`播放失败后清理联动未完成：${toUserErrorMessage(cleanup)}`, this.state.itemId);
       if (this.current(generation)) this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` });
     });
+  }
+  private reportLightingFault(): void {
+    const fault = this.lighting.takeFault();
+    if (fault) { this.dependencies.notice?.(fault, this.state.itemId); this.reportFault(fault); }
   }
   private appendNotice(message: string): void {
     if (this.state.notice?.includes(message)) return;

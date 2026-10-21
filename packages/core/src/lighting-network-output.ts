@@ -2,7 +2,8 @@ import { compileLightingNetworkActions, type LightingNetworkAction } from './lig
 import type { LinkDesktopApi } from './link-desktop-contract';
 import { ma2NetworkStatusSchema, type LightingDocument, type Ma2NetworkTarget } from '@tb/schema';
 
-/** Explicit network output. Pausing or seeking invalidates unsent work; failures never retry. */
+/** Explicit network output. Pausing or seeking invalidates unsent work; failures never retry.
+ * A failed Cue is reported through takeFault() and later Cues still run (live mode). */
 export class LightingNetworkOutput {
   private readonly started = new Map<string, import('@tb/schema').Ma2PlaybackAction>();
   private actions: LightingNetworkAction[] = [];
@@ -12,6 +13,7 @@ export class LightingNetworkOutput {
   private target: Ma2NetworkTarget | null = null;
   private tail: Promise<void> = Promise.resolve();
   private failure: Error | null = null;
+  private fault: string | null = null;
   private pending = 0;
   private generation = 0;
   private cancellation = 0;
@@ -40,6 +42,8 @@ export class LightingNetworkOutput {
     this.cursor = next < 0 ? this.actions.length : next;
   }
   tick(positionMs: number): void { this.advance(positionMs, false); }
+  /** The latest live Cue failure since the previous call. */
+  takeFault(): string | null { const fault = this.fault; this.fault = null; return fault; }
   async finish(positionMs: number): Promise<void> { this.advance(positionMs, true); await this.tail; if (this.failure) throw this.failure; }
   loop(startMs: number, endMs: number): void {
     this.advance(endMs, true);
@@ -73,23 +77,29 @@ export class LightingNetworkOutput {
     while (this.cursor < this.actions.length) {
       const entry = this.actions[this.cursor]!;
       if (entry.atMs > positionMs || exclusive && entry.atMs === positionMs) break;
-      if (this.pending >= 32) { this.stop(); throw new Error('灯光网络指令积压，已停止输出；请减少同时调用的素材并重新定位'); }
-      this.cursor += 1; this.pending += 1;
+      this.cursor += 1;
+      if (this.pending >= 32) { this.fault = '灯光网络指令积压超过 32 条，本条未发送；控台响应过慢，请减少同时调用的素材'; continue; }
+      this.pending += 1;
       const deadlineAt = Date.now() + 1000;
+      const play = async (action: import('@tb/schema').Ma2PlaybackAction): Promise<boolean> => {
+        try { await this.api.playMa2Cue({ sessionId, network, action, deadlineAt }); return true; }
+        catch (error) {
+          if (this.sessionId === sessionId) this.fault = `灯光网络 Cue 未执行：${action.target === 'executor' ? `执行器 ${action.executor}` : `序列 ${action.sequence}`} ${action.action === 'off' ? '关闭' : action.cue ?? ''} · ${error instanceof Error ? error.message : String(error)}`;
+          return false;
+        }
+      };
       this.tail = this.tail.then(async () => {
         if (this.sessionId !== sessionId || this.failure) return;
         if (entry.releasePrevious) for (const [key, action] of this.started) {
           if (this.sessionId !== sessionId) return;
           const off = action.target === 'executor' ? { target: 'executor' as const, executor: action.executor, action: 'off' as const } : { target: 'sequence' as const, sequence: action.sequence, action: 'off' as const };
-          await this.api.playMa2Cue({ sessionId, network, action: off, deadlineAt }); this.started.delete(key);
+          // A release is attempted once; a failed one is reported, never resent.
+          await play(off); this.started.delete(key);
         }
         const key = entry.action.target === 'executor' ? `executor:${entry.action.executor}` : `sequence:${entry.action.sequence}`;
-        if (entry.releaseOnlyIfStarted && !this.started.has(key)) return;
-        await this.api.playMa2Cue({ sessionId, network, action: entry.action, deadlineAt });
-        if (this.sessionId === sessionId) { if (entry.action.action === 'off') this.started.delete(key); else this.started.set(key, entry.action); }
-      }).catch((error: unknown) => {
-        if (this.sessionId !== sessionId) return;
-        this.failure = error instanceof Error ? error : new Error(String(error)); this.cancelSession();
+        if (this.sessionId !== sessionId || entry.releaseOnlyIfStarted && !this.started.has(key)) return;
+        const sent = await play(entry.action);
+        if (this.sessionId === sessionId) { if (entry.action.action === 'off') this.started.delete(key); else if (sent) this.started.set(key, entry.action); }
       }).finally(() => { if (this.sessionId === sessionId) this.pending -= 1; });
     }
   }

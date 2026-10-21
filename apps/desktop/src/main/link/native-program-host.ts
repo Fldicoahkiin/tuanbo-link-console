@@ -74,7 +74,7 @@ export class NativeProgramHost {
       // below may tick lighting; otherwise a slow preparation would look stale
       // as soon as the play command is acknowledged, before the first sample.
       tick: () => undefined,
-      finish: positionMs => this.lightingSession?.ready ? this.lighting.finish(positionMs) : Promise.resolve(),
+      finish: async positionMs => { if (this.lightingSession?.ready) { await this.lighting.finish(positionMs); this.reportLightingFault(); } },
       stop: () => this.stopLighting(), close: () => { this.lightingSession = null; return this.lighting.close(); }
     });
   }
@@ -90,7 +90,7 @@ export class NativeProgramHost {
       } else if (qpc100ns && qpc100ns !== '0' && lighting.ready) {
         this.lighting.observe(status.positionMs, Number(qpc100ns) / 10000);
         if (status.status === 'playing') {
-          try { this.lighting.tick(status.positionMs); }
+          try { this.lighting.tick(status.positionMs); this.reportLightingFault(); }
           catch (error) { this.controller.reportUnavailable(`灯光动作已停止：${String(error)}`); this.stopLighting(); }
         }
       }
@@ -106,6 +106,10 @@ export class NativeProgramHost {
       && ['pause', 'stop', 'seek'].includes(request.kind)) this.stopLighting();
   }
 
+  private reportLightingFault(): void {
+    const fault = this.lighting.takeFault();
+    if (fault) { this.dependencies.notice(fault, this.lightingSession?.itemId ?? null); this.controller.reportFault(fault); }
+  }
   private stopLighting(): void { this.lightingSession = null; this.lighting.stop(); }
 
   close(): Promise<void> {

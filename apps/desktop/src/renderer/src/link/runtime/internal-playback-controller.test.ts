@@ -155,6 +155,22 @@ it('旧时间码配对失效不阻断网络 Cue；不发 MTC，曲尾等待最�
   expect(f.project.ma2ReadState?.pairings?.['2']?.status).toBe('stale');
   f.controller.dispose();
 });
+it('直播中某条网络灯光 Cue 失败时播放栏标出输出异常，后续 Cue 照常发送，音频继续', async () => {
+  const f = fixture();
+  const playMa2Cue = vi.fn(() => Promise.resolve()).mockRejectedValueOnce(new Error('控台无应答'));
+  vi.stubGlobal('window', { tbLink: { playMa2Cue, cancelMa2Playback: vi.fn(async () => {}), getMa2NetworkStatus: () => Promise.resolve({ state: 'connected', settings: { host: '192.168.0.10', port: 30000, monitorPort: 30001, username: 'operator' }, passwordSaved: false, error: null, version: '3.9.60.74' }) } });
+  const lighting = createLightingDocument(); lighting.outputMode = 'network';
+  lighting.tracks = [lightingTrackSchema.parse({ id: 'pool', name: '池', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {},
+    clips: [{ id: 'clip', name: '两步', start: 0, duration: 10000, timeLock: 'time', muted: false, events: [1, 2].map(step => ({ id: `step-${step}`, at: step * 1000, kind: 'ma2', action: 'goto', sequence: 168, cue: `${step}`, executor: '', label: `步骤 ${step}` })) }] })];
+  f.project.rundown[0]!.lighting = lighting;
+  await f.controller.play('song-0');
+  f.audio.currentTime = 1.1; await vi.advanceTimersByTimeAsync(8); await vi.advanceTimersByTimeAsync(0);
+  f.audio.currentTime = 1.2; await vi.advanceTimersByTimeAsync(8);
+  expect(f.state()).toMatchObject({ status: 'playing' }); expect(f.state().fault).toContain('控台无应答');
+  f.audio.currentTime = 2.1; await vi.advanceTimersByTimeAsync(8); await vi.advanceTimersByTimeAsync(0);
+  expect(playMa2Cue).toHaveBeenCalledTimes(2); expect(f.state().status).toBe('playing');
+  f.controller.dispose();
+});
 it('准备期间显示定位缓存进度，开始播放后清除，迟到的进度不再显示', async () => {
   const f = fixture();
   f.deps.prepare.mockImplementationOnce(() => {

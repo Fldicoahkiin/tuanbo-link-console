@@ -30,14 +30,15 @@ it('MIDI 定位不会关闭本次没有启动的执行器，连续播放则先 O
   scheduler.locate(50); scheduler.tick(100); expect(sent).toEqual([1]);
   sent.length = 0; scheduler.locate(0); scheduler.tick(0); scheduler.tick(100); expect(sent).toEqual([1,11,1]);
 });
-it('网络定位只释放本会话成功触发的目标，关闭失败后不发送新 Cue', async () => {
+it('网络定位只释放本会话成功触发的目标；直播中关闭失败标红，后续 Cue 照常发送', async () => {
   const playMa2Cue = vi.fn<(request: Ma2PlaybackRequest) => Promise<void>>().mockResolvedValue(undefined); const cancelMa2Playback = vi.fn().mockResolvedValue(undefined);
   const api = { playMa2Cue, cancelMa2Playback, getMa2NetworkStatus: vi.fn().mockResolvedValue({ state: 'connected', version: '3.7.0.5', passwordSaved: false, error: null, settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false } }) };
   const value = document([cue('a',1,0),cue('b',2,100,'independent')]);
   const output = new LightingNetworkOutput(api, error => { throw error; });
   await output.prepare(value, 50); await output.finish(101); expect(playMa2Cue.mock.calls.map(call => call[0].action.action)).toEqual(['goto']);
   playMa2Cue.mockClear(); await output.prepare(value, 0); playMa2Cue.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('off failed'));
-  await expect(output.finish(101)).rejects.toThrow('off failed'); expect(playMa2Cue.mock.calls.map(call => call[0].action.action)).toEqual(['goto','off']); await output.close();
+  await expect(output.finish(101)).resolves.toBeUndefined(); expect(playMa2Cue.mock.calls.map(call => call[0].action.action)).toEqual(['goto','off','goto']);
+  expect(output.takeFault()).toContain('off failed'); await output.close();
 });
 
 it('MIDI 循环回到单独运行 Cue 时关闭上轮实际启动的目标', () => {
