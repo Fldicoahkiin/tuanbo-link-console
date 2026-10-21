@@ -106,6 +106,26 @@ it('来源不符保留修改，只检查连接状态；恢复原控台后自动�
   await prepareMa2RealtimeSession();
   expect(Object.keys(useMa2SongSyncStore.getState().songs)).toEqual(['first', 'second']);
 });
+it('会话检查偶发失败后，下一次核对成功即解除待核对，不需要手动按钮', async () => {
+  vi.useFakeTimers();
+  metadata.mockRejectedValueOnce(new Error('控台工程或序列目录发生变化，请重新读取'));
+  expect(await prepareMa2RealtimeSession()).toBe(false);
+  expect(useMa2AutoSyncStore.getState()).toMatchObject({ status: 'blocked', message: '控台工程或序列目录发生变化，请重新读取' });
+  vi.advanceTimersByTime(1001);
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(useMa2AutoSyncStore.getState().status).not.toBe('blocked');
+  expect(useMa2AutoSyncStore.getState().message).not.toContain('序列目录发生变化');
+});
+it('自动同步自身的阻断不会被会话检查成功清掉', async () => {
+  const request = { connection: { dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' } }, catalog: { directory: { ...source, entries: [] }, readAt: new Date().toISOString(), entries: [] }, scope: 'bound' as const };
+  vi.useFakeTimers();
+  await prepareMa2RealtimeSession();
+  useMa2AutoSyncStore.setState({ request, status: 'blocked', message: 'Timecode 1 有 1 处冲突' });
+  vi.advanceTimersByTime(5001);
+  await prepareMa2RealtimeSession();
+  expect(metadata).toHaveBeenCalledTimes(2);
+  expect(useMa2AutoSyncStore.getState()).toMatchObject({ status: 'blocked', message: 'Timecode 1 有 1 处冲突' });
+});
 it('桥重启后先核对同一 Show 的新 generation，再续接原歌曲，不反复读整曲', async () => {
   vi.useFakeTimers();
   await prepareMa2RealtimeSession();
