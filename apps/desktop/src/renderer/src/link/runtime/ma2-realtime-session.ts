@@ -13,6 +13,8 @@ let sessionDocument = -1;
 let blockedContext = '';
 let verifiedSource = '';
 let nextSourceCheck = 0;
+/** Set only when this session check raised 'blocked', so a recovery never clears Ma2AutoSync's own block. */
+let sessionBlocked = false;
 /** Network song creation never enters the legacy implicit Timecode provisioning path. */
 export async function prepareMa2RealtimeSession(): Promise<boolean> {
   if (preparing) return false;
@@ -94,6 +96,11 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       nextSourceCheck = Date.now() + 5000;
     }
     if (!current()) return false;
+    if (sessionBlocked) {
+      sessionBlocked = false; blockedContext = '';
+      const automatic = useMa2AutoSyncStore.getState();
+      if (automatic.status === 'blocked' && !automatic.request) useMa2AutoSyncStore.setState({ status: 'waiting', message: '控台已重新核对，继续同步' });
+    }
     const project = useDocumentStore.getState().project;
     if (!project) return false;
     for (const item of project.rundown) {
@@ -111,7 +118,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     const source = project.ma2MaterialLibrary!.library!.directory;
     if (catalog.directory.show !== source.show || catalog.directory.generation !== source.generation || catalog.directory.version !== source.version) throw new Error('控台 Show 或会话已变化，请刷新素材后核对');
     if (!current()) return false;
-    blockedContext = context;
+    blockedContext = context; sessionBlocked = false;
     useMa2AutoSyncStore.setState({ request: { connection, catalog, scope: hasBindings ? 'bound' : 'names' } });
     return true;
   } catch (cause) {
@@ -120,7 +127,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       const message = cause instanceof Error ? cause.message : String(cause);
       const errorContext = `${context}:${message}`;
       const reported = blockedContext === errorContext;
-      blockedContext = errorContext;
+      blockedContext = errorContext; sessionBlocked = true;
       useMa2AutoSyncStore.setState({ status: 'blocked', message });
       if (!reported) reportCoordinatorError(message, reason => { useMa2AutoSyncStore.setState({ message: reason }); });
     }

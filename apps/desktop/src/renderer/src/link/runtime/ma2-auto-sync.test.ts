@@ -64,6 +64,7 @@ it('无任何绑定的序列池 Cue 自动准备并写回，首次同步后不�
   expect(preview.mappings).toHaveLength(2);
   await test.runner.tick();
   expect(test.dependencies.prepare).toHaveBeenCalledTimes(1); expect(test.dependencies.apply).toHaveBeenCalledTimes(1);
+  expect(test.dependencies.archive).toHaveBeenCalledTimes(1);
 });
 it('bound 模式保留已有时间线同步，不为未绑定歌曲创建隐式 Timecode', async () => {
   const test = setup();
@@ -93,6 +94,13 @@ it('写入不确定时锁住后续周期，不自动重试', async () => {
   const test = setup(); test.edit(); await test.runner.tick(); await test.runner.tick();
   expect(test.dependencies.apply).toHaveBeenCalledTimes(1);
   expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('backup.xml'));
+});
+it('写入失败后重新启用，同一份本地内容不再重复存档；再编辑才存新档', async () => {
+  const test = setup(); test.edit(); await test.runner.tick();
+  test.runner.start({ dataDirectory: 'test' }, test.catalog); await test.runner.tick();
+  expect(test.dependencies.apply).toHaveBeenCalledTimes(2); expect(test.dependencies.archive).toHaveBeenCalledTimes(1);
+  test.edit(); test.runner.start({ dataDirectory: 'test' }, test.catalog); await test.runner.tick();
+  expect(test.dependencies.archive).toHaveBeenCalledTimes(2);
 });
 it('播放期间不读取或写入', async () => {
   const test = setup(); test.edit(); test.play(); await test.runner.tick();

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { applyMa2SongReadback, ma2SongPoints, mergeMa2AttributesCommand, projectLightingLibrary, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
-import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongConflict, Ma2SongConflictResolution } from '@tb/schema';
+import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding, Ma2SongConflict, Ma2SongConflictResolution } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -11,7 +11,7 @@ import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 
-type SongSync = { sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings; state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string; requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; acknowledged?: string; remoteRevision?: string; confirmedDeletions?: string[]; blockedRevision?: number; nextCheckAt?: number; waitingForConnection?: boolean; conflicts?: Ma2SongConflict[]; conflictResolutions?: Ma2SongConflictResolution[]; consecutiveFailures?: number };
+type SongSync = { sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings; state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string; requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; acknowledged?: string; remoteRevision?: string; confirmedDeletions?: string[]; blockedRevision?: number; nextCheckAt?: number; waitingForConnection?: boolean; conflicts?: Ma2SongConflict[]; conflictResolutions?: Ma2SongConflictResolution[]; consecutiveFailures?: number; archivedSignature?: string };
 export const useMa2SongSyncStore = create<{ songs: Record<string, SongSync> }>(() => ({ songs: {} }));
 let running = false;
 export function markPendingMa2Songs(): void {
@@ -66,6 +66,10 @@ function update(entry: SongSync, patch: Partial<SongSync>): void {
     return { songs: { ...state.songs, [entry.itemId]: { ...current, ...patch, ...(current.state === 'paused' ? { state: 'paused' as const } : {}) } } };
   });
 }
+function confirmedMessage(binding: Ma2SongBinding, conflicts: number): string {
+  const location = binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`;
+  return `${location} · 序列 ${binding.sequence} · ${conflicts ? `${conflicts} 项需要选择保留内容，其余已回读` : `${binding.points.length} 步已回读`}`;
+}
 function canContinue(entry: SongSync): boolean {
   const document = useDocumentStore.getState();
   const session = useMa2SongSyncStore.getState().songs[entry.itemId];
@@ -109,17 +113,20 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           update(entry, { state: 'pending', checking: false, waitingForConnection: true, nextCheckAt: Date.now() + 1000, message: '等待控台连接；可以继续编辑，连接恢复后核对并续传' });
           continue;
         }
-        update(entry, entry.state === 'verified' && entry.acknowledged === signature ? { checking: true } : { checking: true, state: 'syncing', message: `核对本曲 ${points.length} 个 Cue…` });
+        const checkOnly = entry.acknowledged === signature && Boolean(entry.remoteRevision) && Boolean(item.lighting.consoleSong) && !entry.conflictResolutions?.length;
+        // A periodic re-check of a confirmed or conflicted song keeps its state and
+        // message, so the review buttons stay usable between checks.
+        update(entry, checkOnly && (entry.state === 'verified' || entry.state === 'blocked') ? { checking: true } : { checking: true, state: 'syncing', message: `核对本曲 ${points.length} 个 Cue…` });
         const { host, port, monitorPort, username } = networkStatus.settings;
         const network = { host, port, monitorPort, username };
         const endpoint = `${host}:${port}`;
         if (endpoint !== materials.source) throw new Error('素材来源与当前控台不一致');
         const { show, generation, version } = materials.library.directory;
-        if (entry.acknowledged === signature && entry.remoteRevision && item.lighting.consoleSong && !entry.conflictResolutions?.length) {
+        if (checkOnly && entry.remoteRevision && item.lighting.consoleSong) {
           const binding = item.lighting.consoleSong;
           const changed = await window.tbLink.checkMa2Song({ network, expectedSource: { show, generation, version }, sequence: binding.sequence, ...(binding.executor ? { executor: binding.executor } : {}), revision: entry.remoteRevision });
           if (!canContinue(entry)) continue;
-          if (!changed) { update(entry, { checking: false, state: entry.conflicts?.length ? 'blocked' : 'verified', waitingForConnection: false, nextCheckAt: Date.now() + 1000 }); continue; }
+          if (!changed) { update(entry, { checking: false, state: entry.conflicts?.length ? 'blocked' : 'verified', waitingForConnection: false, nextCheckAt: Date.now() + 1000, message: confirmedMessage(binding, entry.conflicts?.length ?? 0) }); continue; }
         }
         const path = before.path ?? await linkDesktopViewModel.saveProject(null, before.project);
         if (!path) throw new Error('请先保存工程');
@@ -128,7 +135,8 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const scope = currentMa2LayoutScope();
         const settings = ma2SongSyncSettings(before.project, entry.itemId);
         const archived = entry.acknowledged !== signature;
-        if (archived) await archiveMa2Project(entry.documentId, before.project);
+        // Retries of the same unconfirmed content reuse the archive taken before its first attempt.
+        if (archived && entry.archivedSignature !== signature) { await archiveMa2Project(entry.documentId, before.project); update(entry, { archivedSignature: signature }); }
         if (!canContinue(entry)) continue;
         if (useMa2AutoSyncStore.getState().timelinePlaying || useMa2AutoSyncStore.getState().previewPlaying) {
           update(entry, { state: 'pending', message: '播放中保留当前修改；停止后核对原位置并继续同步' }); continue;
@@ -178,13 +186,12 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           locateMa2Executor(page!, slot!); await loadMa2ExecutorPage(page!);
         }
         const confirmed = applyMa2SongReadback(item.lighting, points, result);
-        const location = result.binding.executor ? ma2ExecutorLocationLabel(Number(result.binding.executor.split('.')[0]), Number(result.binding.executor.split('.')[1])) : `Layout ${result.binding.layout}`;
         const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(result.binding.baselineXml));
         const remoteRevision = result.remoteRevision ?? Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
         const conflicts = result.conflicts ?? [];
         update(entry, { state: conflicts.length ? 'blocked' : 'verified', checking: false, waitingForConnection: false, nextCheckAt: Date.now() + 1000, remoteRevision, consecutiveFailures: 0,
           conflicts, conflictResolutions: [], acknowledged: JSON.stringify([ma2SongPoints(confirmed), result.binding.name]),
-          message: `${location} · 序列 ${result.binding.sequence} · ${conflicts.length ? `${conflicts.length} 项需要选择保留内容，其余已回读` : `${result.binding.points.length} 步已回读`}`, confirmedDeletions: [] });
+          message: confirmedMessage(result.binding, conflicts.length), confirmedDeletions: [] });
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
         // A transport loss is a wait state. After reconnect, the service reads
