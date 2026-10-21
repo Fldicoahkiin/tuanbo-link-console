@@ -67,6 +67,20 @@ describe('CueRuntime', () => {
     expect(runtime.ingest(sample(60, 2000))).toMatchObject({ state: 'running', missedCueIds: ['cue-1'] });
     expect(runtime.getNextCueId(60)).toBeNull();
   });
+  it('错过的显示来源不再在结束帧隐藏：卡顿与从当前位置布防都不留下孤立的隐藏动作', () => {
+    const value = { ...project(), playbackSource: 'internal' as const };
+    value.rundown[0]!.cues = [{ id: 'show', name: '显示来源', timecode: frameNumberToTimecode(30, '30'), durationMs: 3_000, enabled: true, notes: '', layerId: 'layer',
+      actions: [{ id: 'show-action', label: '显示来源 · 扑克牌', kind: 'obs.setSceneItemEnabled', sceneName: '团播联动台输出', sourceName: '扑克牌', enabled: true }] }];
+    const gap = new CueRuntime(value); gap.selectItem('item'); gap.beginPreflight('live'); gap.arm(0);
+    gap.ingest(sample(0, 0)); gap.ingest(sample(27, 900));
+    const stalled = gap.ingest(sample(48, 1_600));
+    expect(stalled).toMatchObject({ state: 'running', dueCues: [], missedCueIds: ['show'] });
+    expect(stalled.reason).toContain('错过 1 个联动 Cue');
+    for (let frame = 60; frame <= 120; frame += 30) expect(gap.ingest(sample(frame, 1_600 + (frame - 48) * 1000 / 30)).dueCues).toEqual([]);
+    const current = new CueRuntime(value); current.selectItem('item'); current.beginPreflight('live');
+    expect(current.arm(0, sample(45, 0)).missedCueIds).toEqual(['show']);
+    for (let frame = 60; frame <= 120; frame += 15) expect(current.ingest(sample(frame, (frame - 45) * 1000 / 30)).dueCues).toEqual([]);
+  });
   it('本机音频时钟位置与经过时间不符的跳变、外部 MTC 的断流仍冻结自动 Cue', () => {
     const internal = new CueRuntime({ ...project(), playbackSource: 'internal' });
     internal.selectItem('item'); internal.beginPreflight('live'); internal.arm(0);

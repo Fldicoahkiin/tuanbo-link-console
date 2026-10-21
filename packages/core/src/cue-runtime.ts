@@ -462,7 +462,11 @@ function collectDueCues(
 ): DueCue[] {
   const due: DueCue[] = [];
   for (const { cue, scheduledFrame } of eventsBetween(events, previousFrame, currentFrame)) {
-    if (!executed.has(cue.id) && !missed.has(cue.id)) due.push({ cue, scheduledFrame, executionId: crypto.randomUUID() });
+    if (executed.has(cue.id) || missed.has(cue.id)) continue;
+    // A duration end only hides what its own start showed. After a missed start
+    // there is nothing to undo, and that miss was already reported.
+    if (cue.id.endsWith(':duration-end') && !executed.has(cue.id.slice(0, -':duration-end'.length))) continue;
+    due.push({ cue, scheduledFrame, executionId: crypto.randomUUID() });
   }
   return due;
 }
