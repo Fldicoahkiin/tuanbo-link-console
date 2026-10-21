@@ -99,3 +99,24 @@ it.runIf(Boolean(process.env.TBLINK_MA2_LENGTH_PROBE && process.env.TBLINK_MA2_H
   console.info(JSON.stringify(results));
   expect(results[0]?.echoed).toBe(600);
 }, 120000);
+
+// Read-only probe: which characters reach Lua unchanged through the native command interpreter.
+it.runIf(Boolean(process.env.TBLINK_MA2_LENGTH_PROBE && process.env.TBLINK_MA2_HARDWARE_HOST))('控台命令行字符原样传递只读探测', async () => {
+  const characters = ['*', '%', '[', ']', '(', ')', '-', '+', '.', ',', ';', ':', '/', '<', '>', '=', '#', '@', '!', '~', '&', '{', '}', '?', '_', '|', '^', '$'];
+  const connection = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 }, () => undefined, 3000);
+  const results: Record<string, string> = {};
+  try {
+    await connection.connect('administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
+    for (const character of characters) {
+      const marker = `TBLINK_CHR_${randomBytes(16).toString('hex')}:`;
+      try {
+        const reply = await connection.command(`Lua "local s='x${character}y';gma.echo('${marker}'..(s:gsub('.',function(c)return string.format('%02x',c:byte())end)))"`, text => ma2ResponseLine(text, marker));
+        results[character] = Buffer.from(reply, 'hex').toString('utf8') === `x${character}y` ? 'same' : `changed:${Buffer.from(reply, 'hex').toString('utf8')}`;
+      } catch (error) { results[character] = `error:${error instanceof Error ? error.message : String(error)}`; break; }
+    }
+  } finally { connection.disconnect(); }
+  await mkdir(resolve('artifacts/ma2-hardware-diagnostics'), { recursive: true });
+  await writeFile(resolve('artifacts/ma2-hardware-diagnostics/command-characters.json'), JSON.stringify(results, null, 2));
+  console.info(JSON.stringify(results));
+  expect(results['*']).toBeDefined();
+}, 120000);
