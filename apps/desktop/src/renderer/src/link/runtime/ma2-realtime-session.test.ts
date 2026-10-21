@@ -8,7 +8,8 @@ import { useMa2RealtimePreference } from './ma2-realtime-preference';
 import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary } from './ma2-realtime-session';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
-vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { recordLog: vi.fn(() => Promise.resolve()), saveProject: vi.fn(() => Promise.resolve('song.tblink')) } }));
+const { recordLog } = vi.hoisted(() => ({ recordLog: vi.fn(() => Promise.resolve()) }));
+vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { recordLog, saveProject: vi.fn(() => Promise.resolve('song.tblink')) } }));
 const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
 vi.mock('./ma2-project-archive', () => ({ archiveMa2Project: archive }));
 const source = { show: 'Show', generation: 'session', version: '3.7.0.5' };
@@ -183,6 +184,22 @@ it('会话检查偶发失败后，下一次核对成功即解除待核对，不�
   expect(await prepareMa2RealtimeSession()).toBe(true);
   expect(useMa2AutoSyncStore.getState().status).not.toBe('blocked');
   expect(useMa2AutoSyncStore.getState().message).not.toContain('序列目录发生变化');
+});
+it('目录核对通过但后续读取持续失败时保持待核对，不来回跳也不重复写日志', async () => {
+  vi.useFakeTimers();
+  const value = project();
+  const preview = { name: 'TC', readAt: new Date().toISOString(), sourceXml: '<MA/>' };
+  value.rundown[0]!.lighting!.ma2Bindings = [{ id: 'bound', timecode: 9901, ...preview, baselineTracks: [], mappings: [], trackMappings: [] }];
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  catalog.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  const statuses: string[] = [];
+  const unsubscribe = useMa2AutoSyncStore.subscribe(state => { if (statuses.at(-1) !== state.status) statuses.push(state.status); });
+  try {
+    await prepareMa2RealtimeSession();
+    for (let attempt = 0; attempt < 3; attempt++) { vi.advanceTimersByTime(1001); await prepareMa2RealtimeSession(); }
+  } finally { unsubscribe(); }
+  expect(statuses).toEqual(['waiting', 'blocked']);
+  expect(recordLog).toHaveBeenCalledTimes(1);
 });
 it('自动同步自身的阻断不会被会话检查成功清掉', async () => {
   const request = { connection: { dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' } }, catalog: { directory: { ...source, entries: [] }, readAt: new Date().toISOString(), entries: [] }, scope: 'bound' as const };
