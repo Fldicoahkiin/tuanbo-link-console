@@ -55,6 +55,14 @@ export class Ma2NetworkManager {
     this.reconnectTimer.unref();
   }
   private services: { bridge: Ma2OnpcBridge; service: Ma2ApplyService } | null = null;
+  private wire: Ma2NetworkWire | null = null;
+  /** A plugin transaction left open by a dropped connection, released once on the next login to the same console. */
+  private unreleased: { id: string; settings: Ma2NetworkSettings } | null = null;
+  private keepUnreleased(): void {
+    const id = this.wire?.unreleasedRequest;
+    if (id && this.settings) this.unreleased = { id, settings: this.settings };
+    this.wire = null;
+  }
   private beforeConnectionChange: (() => Promise<()=>void>) | null = null;
   setBeforeConnectionChange(handler:()=>Promise<()=>void>):void { this.beforeConnectionChange=handler; }
   private sameTarget(settings:Ma2NetworkSettings):boolean {
@@ -136,7 +144,7 @@ export class Ma2NetworkManager {
     if(!connection)throw new Error('请先连接控台');
     return this.layouts().create(connection,bridge,request);
   }
-  constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string, private readonly resolveLocalAddress: (host: string) => Promise<string | undefined> = () => Promise.resolve(undefined), private readonly validatePeers?: (host: string, peers: readonly Ma2ConnectedPeer[]) => Promise<void>, private readonly awaitListener?: (host: string, port: number) => Promise<void>) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
+  constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string, private readonly resolveLocalAddress: (host: string) => Promise<string | undefined> = () => Promise.resolve(undefined), private readonly validatePeers?: (host: string, peers: readonly Ma2ConnectedPeer[]) => Promise<void>, private readonly awaitListener?: (host: string, port: number) => Promise<void>, private readonly notice?: (level: 'info' | 'warning', message: string) => void) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
   get(target: Ma2NetworkTarget): { bridge: Ma2OnpcBridge; service: Ma2ApplyService } {
     const settings = this.settings;
     if (!settings || target.host !== settings.host || target.port !== settings.port || target.monitorPort !== settings.monitorPort || target.username !== settings.username) throw new Error('MA2 连接目标已改变，请重新读取控台');
@@ -266,6 +274,7 @@ export class Ma2NetworkManager {
       if (generation !== this.generation) return this.status();
       const connection = new Ma2Telnet({ ...settings, ...(localAddress ? { localAddress } : {}) }, (state) => {
         if (state === 'disconnected' && this.connection === connection) {
+          this.keepUnreleased();
           this.version = null; this.capabilities = null;
           this.error = 'MA2 连接已断开，正在恢复；编辑继续保存在本地';
           this.scheduleReconnect();
@@ -275,9 +284,17 @@ export class Ma2NetworkManager {
       const version = await connection.connect(settings.username, password);
       if (generation !== this.generation) return this.status();
       this.version = version;
+      // Free the slot before installing or upgrading the bridge: an upgrade needs an idle transaction too.
+      const abandoned = this.unreleased; this.unreleased = null;
+      if (abandoned && this.sameTarget(abandoned.settings)) {
+        try { await new Ma2NetworkWire(connection).releaseAbandoned(abandoned.id); this.notice?.('info', `已释放上次断线时未完成的控台请求 ${abandoned.id}`); }
+        catch (cause) { this.notice?.('warning', `上次断线时未完成的控台请求 ${abandoned.id} 未能释放：${cause instanceof Error ? cause.message : String(cause)}；控台插件会在 2 分钟内自动释放`); }
+      }
+      if (generation !== this.generation) return this.status();
       if (this.bundledBridge) await ensureMa2NetworkBridge(connection, this.bundledBridge);
       if (generation !== this.generation) return this.status();
-      const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(connection), this.isPlaying);
+      const wire = new Ma2NetworkWire(connection); this.wire = wire;
+      const bridge = new Ma2OnpcBridge(wire, this.isPlaying);
       this.services = { bridge, service: new Ma2ApplyService(bridge, this.isPlaying) };
       this.reconnectAllowed = true; this.reconnectDelay = 1000;
     } catch (error) { if (generation === this.generation) { this.connection?.disconnect(); this.services = null; this.error = error instanceof Error ? error.message : String(error); this.version = null; } }
@@ -321,6 +338,7 @@ export class Ma2NetworkManager {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.liveService?.close();
+    this.keepUnreleased();
     this.generation += 1;
     const connection = this.connection; this.connection = null;
     connection?.disconnect(); this.version = null; this.services = null; this.capabilities = null;

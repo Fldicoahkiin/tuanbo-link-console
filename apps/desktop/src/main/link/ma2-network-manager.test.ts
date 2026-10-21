@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { Ma2NetworkManager } from './ma2-network-manager';
 import { meiNanXml, meiNanCues } from './fixtures/ma2-mei-nan-reconstruction';
 
-const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', show: '', pause: null as Promise<void> | null, drop: () => undefined }));
+const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', show: '', pause: null as Promise<void> | null, drop: () => undefined, rpc: [] as string[], dropOnRun: false }));
 vi.mock('node:fs/promises', () => ({ readFile: () => memory.file === null ? Promise.reject(Object.assign(new Error('Missing'), { code: 'ENOENT' })) : Promise.resolve(memory.file) }));
 vi.mock('./atomic-file', () => ({ writeFileAtomically: (_path: string, value: string) => { memory.file = value; return Promise.resolve(); } }));
 vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typeof import('./ma2-telnet')>(), Ma2Telnet: class {
@@ -23,6 +23,12 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
       const response = match(`${chunks.join('\r\n')}\r\n${cuePrefix}END:${row.length}\r\n`);
       if (!response) throw new Error('No cue response'); return response;
     }
+    const rpc = /TBLINK_NET\('([a-f0-9]{32})','(\w+)','([a-f0-9]{32})'/.exec(line);
+    if (rpc) {
+      memory.rpc.push(`${rpc[2]}:${rpc[3]}`);
+      if (rpc[2] === 'run' && memory.dropOnRun) { memory.dropOnRun = false; memory.drop(); throw new Error('MA2 网络连接已断开；未确认的操作不会自动重试'); }
+      return match(`TBLINK_RPC_${rpc[1]}:ACK\r\n`) ?? Promise.reject(new Error('No rpc response'));
+    }
     const show = /TBLINK_SHOW_[a-f0-9]{32}/.exec(line)?.[0];
     if (show) return match(`${show}:H${Buffer.from(memory.show).toString('hex')}\r\n`) ?? Promise.reject(new Error('No show response'));
     const token = /TBLINK_(?:CAP|PLAY)_[a-f0-9]{32}/.exec(line)?.[0];
@@ -31,7 +37,7 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
   }
   disconnect(): void { memory.closes += 1; this.state = 'disconnected'; }
 } }));
-beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true'; memory.show = ''; });
+beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true'; memory.show = ''; memory.rpc = []; memory.dropOnRun = false; });
 const settings = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'lighting', autoConnect: true };
 it('意外断线会恢复原控台连接，主动断开则停止恢复且不重放操作', async () => {
   vi.useFakeTimers();
@@ -47,6 +53,22 @@ it('意外断线会恢复原控台连接，主动断开则停止恢复且不重�
     await vi.advanceTimersByTimeAsync(60000);
     expect(manager.status().state).toBe('disconnected'); expect(memory.connects).toBe(2);
   } finally { manager.disconnect(); vi.useRealTimers(); }
+});
+it('请求中途断线后重连，先按原请求编号释放控台插件的占用，只发一次并记录结果', async () => {
+  const notices: string[] = [];
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), () => false, undefined, undefined, undefined, undefined, (_level, message) => notices.push(message));
+  try {
+    await manager.save({ settings }); await manager.connect();
+    memory.dropOnRun = true;
+    await expect(manager.listExecutorPages({ network: { host: settings.host, port: settings.port, monitorPort: settings.monitorPort, username: settings.username }, expectedSource: { show: 'S', generation: 'g', version: '3.7.0.5' } })).rejects.toThrow('断开');
+    const begun = memory.rpc.find(value => value.startsWith('begin:'))!.slice(6);
+    memory.rpc = [];
+    await manager.connect();
+    expect(memory.rpc).toEqual([`release:${begun}`]);
+    expect(notices.join('')).toContain('已释放');
+    memory.rpc = []; manager.disconnect(); await manager.connect();
+    expect(memory.rpc).toEqual([]);
+  } finally { manager.disconnect(); }
 });
 it('100 条混合时间线共享序列只取一次元数据；最终只复核目录，不再读全部 XML', async () => {
   memory.version = '3.7.0.5';

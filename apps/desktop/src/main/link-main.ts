@@ -648,6 +648,8 @@ function registerIpc(
     const outcome = await waitForMa2Listener(selected.pid, port, profile.ma2.startupTimeoutMs);
     if (outcome === 'waited') await logger.record({ level: 'info', category: 'device', device: 'MA2', result: 'succeeded',
       message: `MA2 onPC 远程端口 ${port} 已就绪`, details: { pid: selected.pid, waitedMs: Math.round(performance.now() - started) } });
+  }, (level, message) => {
+    void logger.record({ level, category: 'device', device: 'MA2', message }).catch((error: unknown) => console.error('MA2 连接提示日志未能保存', error));
   });
   const ma2Reads = new Map<string, { senderId: number; controller: AbortController }>();
   ma2Network.setCueDeletionProjectReader(path => projectService.open(path));

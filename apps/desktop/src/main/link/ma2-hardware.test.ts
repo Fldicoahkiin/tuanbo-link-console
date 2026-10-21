@@ -189,3 +189,30 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     raw.disconnect();
   }
 }, 600000);
+
+// Read-only: a PING transaction left open by a dropped session is released by its id from a new session.
+it.runIf(Boolean(process.env.TBLINK_MA2_LENGTH_PROBE && process.env.TBLINK_MA2_HARDWARE_HOST))('断线遗留的插件占用可在新会话按原编号释放', async () => {
+  const open = async (): Promise<Ma2Telnet> => {
+    const connection = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });
+    await connection.connect('administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
+    await ensureMa2NetworkBridge(connection, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
+    return connection;
+  };
+  const rpc = async (connection: Ma2Telnet, action: string, id: string, args = ''): Promise<string> => {
+    const token = randomBytes(16).toString('hex');
+    return connection.command(`Lua "TBLINK_NET('${token}','${action}','${id}'${args})"`, text => ma2ResponseLine(text, `TBLINK_RPC_${token}:`));
+  };
+  const stale = randomBytes(16).toString('hex');
+  const first = await open();
+  expect(await rpc(first, 'begin', stale, ",'PING',1,0")).toBe('ACK');
+  first.disconnect();
+  const second = await open();
+  try {
+    const blocked = await rpc(second, 'begin', randomBytes(16).toString('hex'), ",'PING',1,0");
+    expect(Buffer.from(blocked.replace(/^ERR:/, ''), 'hex').toString('utf8')).toContain('Another network request is pending');
+    expect(await rpc(second, 'release', stale)).toBe('ACK');
+    const fresh = randomBytes(16).toString('hex');
+    expect(await rpc(second, 'begin', fresh, ",'PING',1,0")).toBe('ACK');
+    expect(await rpc(second, 'release', fresh)).toBe('ACK');
+  } finally { second.disconnect(); }
+}, 120000);
