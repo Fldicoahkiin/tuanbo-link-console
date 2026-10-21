@@ -28,7 +28,7 @@ function fixture(grouped = false, nativeSeek = false, mtcInstance?: MediaMtcOutp
     id: `song-${index}`, title: `歌曲 ${index}`, referenceAudio: { assetId: `audio-${index}`, relativePath: `${index}.wav`, sha256: 'a'.repeat(64), durationMs: 10_000 }
   })) });
   if (grouped) { project.playlists = [{ id: 'selected', name: '当前列表' }]; project.rundown[0]!.playlistId = 'selected'; project.rundown[2]!.playlistId = 'selected'; }
-  const output = { prepare: vi.fn((): Promise<void | 'default-fallback'> => Promise.resolve()), captureMonitoringStream: vi.fn((): MediaStream | null => null), getAnalysis: () => null, dispose: () => Promise.resolve() };
+  const output = { prepare: vi.fn((): Promise<void> => Promise.resolve()), captureMonitoringStream: vi.fn((): MediaStream | null => null), getAnalysis: () => null, dispose: () => Promise.resolve() };
   const controller = new InternalPlaybackController(project, deps, audio as unknown as HTMLAudioElement, mtcInstance ?? mtc as unknown as MediaMtcOutput, output);
   return { controller, deps, audio, mtc, project, output, state: () => state };
 }
@@ -237,15 +237,13 @@ it('直接 MIDI 动作不可用也不阻断音频，并说明灯光未启动', a
   expect(f.state().notice).toContain('灯光动作未启动');
   f.controller.dispose();
 });
-it('旧音频设备消失后改用 Windows 默认输出并在播放中显示明确提示', async () => {
+it('旧音频设备消失时不开始播放并说明原因，不改用其他线路', async () => {
   const f = fixture();
-  f.output.prepare.mockResolvedValueOnce('default-fallback');
+  f.output.prepare.mockRejectedValueOnce(new Error('选择的正式音频输出已断开；不会自动切换线路。请在音频输出设置中选择当前设备或 Windows 默认设备后重新播放'));
   await f.controller.play('song-0');
-  expect(f.state()).toMatchObject({ status: 'playing', error: null });
-  expect(f.state().notice).toContain('Windows 默认设备');
-  expect(f.audio.play).toHaveBeenCalledOnce();
-  await f.controller.stop();
-  expect(f.state().notice).toBeNull();
+  expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：准备失败' });
+  expect(f.state().error).toContain('不会自动切换线路');
+  expect(f.audio.play).not.toHaveBeenCalled();
   f.controller.dispose();
 });
 it('只导入 P1、不绑定 MA2 时间线，也从原歌曲起始时间码输出 MIDI', async () => {

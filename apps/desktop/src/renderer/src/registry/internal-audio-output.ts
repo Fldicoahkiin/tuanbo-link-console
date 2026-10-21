@@ -10,7 +10,7 @@ export class InternalAudioOutput {
   private analysisNodes: AnalyserNode[] = [];
   private splitter: ChannelSplitterNode | null = null;
 
-  async prepare(audio: HTMLAudioElement, deviceId: string, sampleRate: 44100 | 48000): Promise<void | 'default-fallback'> {
+  async prepare(audio: HTMLAudioElement, deviceId: string, sampleRate: 44100 | 48000): Promise<void> {
     if (!this.context) {
       this.context = new AudioContext({ sampleRate, latencyHint: 'interactive' });
       this.source = this.context.createMediaElementSource(audio);
@@ -39,13 +39,11 @@ export class InternalAudioOutput {
     if (!context.setSinkId) throw new Error('当前音频引擎不支持选择输出线路');
     try { await context.setSinkId(deviceId === 'default' ? '' : deviceId); }
     catch (error) {
-      if (deviceId !== 'default' && error instanceof Error && (error.name === 'NotFoundError' || /device .* is not found/i.test(error.message))) {
-        try { await context.setSinkId(''); }
-        catch { throw new Error('原音频输出设备已断开，Windows 默认输出设备也不可用，请检查系统声音设置'); }
-        await this.context.resume();
-        return 'default-fallback';
+      // Like the native engine, never move the formal music to another line on its own.
+      if (error instanceof Error && (error.name === 'NotFoundError' || /device .* is not found/i.test(error.message))) {
+        throw new Error(deviceId === 'default' ? 'Windows 默认音频输出设备不可用，请检查系统声音设置'
+          : '选择的正式音频输出已断开；不会自动切换线路。请在音频输出设置中选择当前设备或 Windows 默认设备后重新播放');
       }
-      if (error instanceof Error && (error.name === 'NotFoundError' || /device .* is not found/i.test(error.message))) throw new Error('Windows 默认音频输出设备不可用，请检查系统声音设置');
       throw error;
     }
     await this.context.resume();

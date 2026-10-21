@@ -71,9 +71,8 @@ export class InternalPlaybackController {
         this.loadedAudioUrl = url;
       }
       if (!this.current(generation)) return;
-      const outputRoute = await this.output.prepare(this.audio, config.outputDeviceId, config.audioSampleRate ?? 48000);
+      await this.output.prepare(this.audio, config.outputDeviceId, config.audioSampleRate ?? 48000);
       if (!this.current(generation)) return;
-      if (outputRoute === 'default-fallback') this.update({ notice: '原音频输出设备已断开，本次播放改用 Windows 默认设备。请在音频输出设置中确认线路。' });
       this.directLighting = item.lighting?.outputMode === 'direct' || item.lighting?.outputMode === 'network';
       const sendMtc = !this.directLighting && this.state.mtcEnabled;
       let mtcPortName: string | null | undefined;
