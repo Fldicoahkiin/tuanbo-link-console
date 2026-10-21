@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { ma2AuditionRequestSchema, ma2AuditionStateSchema, type Ma2AuditionRequest, type Ma2AuditionState, type Ma2PlaybackRequest } from '@tb/schema';
 type Target=Ma2AuditionState['targets'][number]&{epoch:number;possiblySent:boolean;pending:number};
+/** Upper bound per Off, beyond the 7 s send deadline the transport already enforces. */
+const offTimeoutMs=8000;
 export type AuditionNetwork={readonly connectionGeneration:number;cancelPlayback:(id:string)=>void;playCue:(request:Ma2PlaybackRequest,options?:{beforeSend?:()=>void;priority?:'normal'|'stop'})=>Promise<void>};
 /** App-lifetime ownership of audition outputs. Component cancellation never forgets lit targets. */
 export class Ma2AuditionService {
@@ -50,17 +52,27 @@ export class Ma2AuditionService {
     if(this.stopping)return this.stopping;
     this.generation++;this.phase='stopping';for(const id of this.sessions.keys())this.network.cancelPlayback(id);
     const targets=[...this.targets.values()];for(const target of targets)if(!target.possiblySent)this.targets.delete(target.id);
-    this.changed();
     this.stopping=Promise.resolve().then(async()=>{
-      for(const target of targets.filter(value=>value.possiblySent)){
-        try{
-          if(target.epoch!==this.network.connectionGeneration)throw new Error('控台连接已改变，原试听目标尚未确认关闭');
-          await this.network.playCue({network:target.network,action:target.action,sessionId:randomUUID(),deadlineAt:Date.now()+7000},{priority:'stop',beforeSend:()=>{if(target.epoch!==this.network.connectionGeneration)throw new Error('控台连接已改变，停止未发送');}});
-          this.targets.delete(target.id);
-        }catch(error){target.state='failed';target.error=error instanceof Error?error.message:String(error);}
+      // The phase always leaves 'stopping', even when publishing state fails;
+      // otherwise every later Cue click is refused until the app restarts.
+      try{
         this.changed();
-      }
-      this.phase=this.targets.size?'failed':'sent';this.changed();return this.status();
+        // Queue every Off at once so they reach the wire back to back at stop priority.
+        await Promise.all(targets.filter(value=>value.possiblySent).map(async target=>{
+          try{
+            if(target.epoch!==this.network.connectionGeneration)throw new Error('控台连接已改变，原试听目标尚未确认关闭');
+            await this.sendOff(target);
+            this.targets.delete(target.id);
+          }catch(error){target.state='failed';target.error=error instanceof Error?error.message:String(error);}
+        }));
+      }finally{this.phase=this.targets.size?'failed':'sent';this.changed();}
+      return this.status();
     }).finally(()=>{this.stopping=null;});return this.stopping;
+  }
+  private async sendOff(target:Target):Promise<void>{
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    const timeout=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(`停止指令 ${offTimeoutMs/1000} 秒内未确认关闭，目标可能仍在输出；请再次停止或在控台核对`)),offTimeoutMs);});
+    try{await Promise.race([this.network.playCue({network:target.network,action:target.action,sessionId:randomUUID(),deadlineAt:Date.now()+7000},{priority:'stop',beforeSend:()=>{if(target.epoch!==this.network.connectionGeneration)throw new Error('控台连接已改变，停止未发送');}}),timeout]);}
+    finally{clearTimeout(timer);}
   }
 }
