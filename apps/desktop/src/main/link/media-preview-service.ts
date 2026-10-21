@@ -2,10 +2,14 @@ import { constants } from 'node:fs';
 import { access, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import { constants as osConstants, setPriority } from 'node:os';
 import ffmpegPath from 'ffmpeg-static';
 import { hashFile, LinkProjectService } from './link-project-service';
 import { VerifiedMediaFiles } from './verified-media-files';
 import { inspectObsSeekPixelFormat, obsSeekEncoding } from './obs-seek-encoding';
+
+/** 'background' work (the next song's caches while a song plays) yields the CPU to OBS and audio. */
+export type EncodePriority = 'normal' | 'background';
 
 export class MediaPreviewService {
   private readonly pending = new Map<string, Promise<string>>();
@@ -17,7 +21,7 @@ export class MediaPreviewService {
 
   constructor(
     private readonly projects: LinkProjectService,
-    private readonly executeFfmpeg: (executable: string, arguments_: string[]) => Promise<void> = runFfmpeg,
+    private readonly executeFfmpeg: (executable: string, arguments_: string[], priority?: EncodePriority) => Promise<void> = runFfmpeg,
     private readonly resolveExecutable: () => string = resolveFfmpegExecutable,
     private readonly inspectPixelFormat: (executable: string, source: string) => Promise<string> = inspectObsSeekPixelFormat
   ) {}
@@ -72,7 +76,7 @@ export class MediaPreviewService {
   }
 
   /** onGenerate runs only when the cache is missing and FFmpeg is about to build it. */
-  async ensureObsSeekVideo(projectPath: string, relativePath: string, sha256: string, decode: 'hardware' | 'software' = 'hardware', onGenerate?: () => void): Promise<string> {
+  async ensureObsSeekVideo(projectPath: string, relativePath: string, sha256: string, decode: 'hardware' | 'software' = 'hardware', onGenerate?: () => void, priority: EncodePriority = 'normal'): Promise<string> {
     assertSha256(sha256);
     // Several assets may share one content-addressed output, but each source
     // path must be verified before joining that work. Otherwise preloading only
@@ -82,12 +86,12 @@ export class MediaPreviewService {
     const key = `obs-seek:${decode}:${resolve(projectPath)}:${sha256}`;
     const current = this.pending.get(key);
     if (current) return current;
-    const operation = this.createObsSeekVideo(projectPath, relativePath, sha256, decode, onGenerate).finally(() => this.pending.delete(key));
+    const operation = this.createObsSeekVideo(projectPath, relativePath, sha256, decode, onGenerate, priority).finally(() => this.pending.delete(key));
     this.pending.set(key, operation);
     return operation;
   }
 
-  private async createObsSeekVideo(projectPath: string, relativePath: string, sha256: string, decode: 'hardware' | 'software', onGenerate?: () => void): Promise<string> {
+  private async createObsSeekVideo(projectPath: string, relativePath: string, sha256: string, decode: 'hardware' | 'software', onGenerate: (() => void) | undefined, priority: EncodePriority): Promise<string> {
     const source = this.projects.resolveMediaAsset(projectPath, relativePath);
     const directory = join(dirname(resolve(projectPath)), 'cache', 'obs-seek-jpeg2000');
     const destination = join(directory, `${sha256}.${decode === 'hardware' ? 'seek-intra' : 'seek-ready'}.mkv`);
@@ -107,7 +111,7 @@ export class MediaPreviewService {
         '-hide_banner', '-loglevel', 'error', '-y', '-threads', '2', '-filter_threads', '1', '-i', source,
         '-map', '0:v:0', '-map', '0:a:0?', ...encoding,
         '-c:a', 'copy', '-avoid_negative_ts', 'disabled', temporaryPath
-      ]);
+      ], priority);
       if (!await this.verified.verify(source, sha256)) throw new Error('原素材在生成定位缓存时发生变化');
     }));
     // Publish the checksum through the same identity-checked cache used during
@@ -195,9 +199,13 @@ function resolveFfmpegExecutable(): string {
   return ffmpegPath.includes('app.asar') ? ffmpegPath.replace('app.asar', 'app.asar.unpacked') : ffmpegPath;
 }
 
-function runFfmpeg(executable: string, arguments_: string[]): Promise<void> {
+function runFfmpeg(executable: string, arguments_: string[], priority: EncodePriority = 'normal'): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     const process = spawn(executable, arguments_, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    if (priority === 'background' && process.pid !== undefined) {
+      try { setPriority(process.pid, osConstants.priority.PRIORITY_BELOW_NORMAL); }
+      catch (error) { process.kill(); reject(new Error(`无法降低后台编码优先级，本次未生成缓存：${error instanceof Error ? error.message : String(error)}`, { cause: error })); return; }
+    }
     let errorOutput = '';
     process.stderr.setEncoding('utf8');
     process.stderr.on('data', (chunk: string) => { errorOutput = `${errorOutput}${chunk}`.slice(-8_000); });
