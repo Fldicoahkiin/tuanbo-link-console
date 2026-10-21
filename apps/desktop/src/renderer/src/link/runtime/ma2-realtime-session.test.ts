@@ -149,6 +149,26 @@ it('复查发现控台变化后转入同步，期间显示同步中', async () =
   await tickMa2SongSync(false);
   expect(during).toEqual(['syncing']);
 });
+it('中文歌名同步后工程里仍是中文，下一轮只复查不重写；控台上改过的歌名才回读', async () => {
+  vi.useFakeTimers();
+  const value = project();
+  value.rundown[0]!.lighting!.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9000, name: '联动歌曲', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }] };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  const respond = (name: string) => sync.mockImplementation((request: Ma2SongSyncRequest): Promise<Ma2SongSyncResult> => Promise.resolve({ binding: { ...request.binding!, name, baselineXml: `<baseline-${name}/>` }, layout: null, removed: [], backupFile: '', changed: true, conflicts: [],
+    library: { directory: { ...source, entries: [{ target: 9000, name }] }, readAt: new Date().toISOString(), sequences: [{ sequence: 9000, name, cues: [{ index: 1, number: '1.000', name: 'KaiChang' }] }], fixtureUsage: [], errors: [] } }));
+  respond('LianDongGeQu');
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  await tickMa2SongSync(false);
+  const song = () => useDocumentStore.getState().project!.rundown[0]!.lighting!;
+  expect(song().consoleSong?.name).toBe('联动歌曲');
+  expect(ma2SongPoints(song()).map(point => point.name)).toEqual(['开场']);
+  check.mockResolvedValue(false);
+  vi.advanceTimersByTime(1001); await tickMa2SongSync(false);
+  expect(sync).toHaveBeenCalledTimes(1); expect(check).toHaveBeenCalledTimes(1);
+  respond('Renamed On Console'); check.mockResolvedValue(true);
+  vi.advanceTimersByTime(1001); await tickMa2SongSync(false);
+  expect(song().consoleSong?.name).toBe('Renamed On Console');
+});
 it('未保存、未连接时等待，不弹保存窗口、不自动重连或创建', async () => {
   useDocumentStore.getState().setProject(project(), null);
   await prepareMa2RealtimeSession(); expect(status).not.toHaveBeenCalled();

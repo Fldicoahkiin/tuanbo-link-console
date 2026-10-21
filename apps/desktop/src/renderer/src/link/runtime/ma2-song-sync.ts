@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { applyMa2SongReadback, ma2SongPoints, mergeMa2AttributesCommand, projectLightingLibrary, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
+import { applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, projectLightingLibrary, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
 import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding, Ma2SongConflict, Ma2SongConflictResolution } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-layout-store';
@@ -146,12 +146,15 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         }
         const requestId = crypto.randomUUID();
         update(entry, { requestId, progress: null });
-        const result = await window.tbLink.syncMa2Song({ network, expectedSource: { show, generation, version }, projectId: before.project.projectId, itemId: item.id,
-          requestId, progressId: requestId, settings, name: item.lighting.consoleSong?.name ?? entry.name, points,
+        const requestedName = item.lighting.consoleSong?.name ?? entry.name;
+        const synced = await window.tbLink.syncMa2Song({ network, expectedSource: { show, generation, version }, projectId: before.project.projectId, itemId: item.id,
+          requestId, progressId: requestId, settings, name: requestedName, points,
           ...(item.lighting.consoleSong ? { binding: item.lighting.consoleSong } : {}), ...(entry.confirmedDeletions ? { confirmedDeletions: entry.confirmedDeletions } : {}),
           ...(entry.conflictResolutions?.length ? { conflictResolutions: entry.conflictResolutions } : {}) },
           progress => update(entry, { progress }));
         update(entry, { requestId: null, progress: null });
+        // The console holds the pinyin of a Chinese song name; keep the local name unless it was changed there.
+        const result = synced.binding.name === consoleLabelText(requestedName) ? { ...synced, binding: { ...synced.binding, name: requestedName } } : synced;
         // A completed command belongs to the captured song session. The durable
         // main-process journal recovers its result later if the editor has moved
         // on, paused, or changed output mode in the meantime.
