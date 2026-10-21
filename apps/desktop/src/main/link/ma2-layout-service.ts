@@ -150,8 +150,9 @@ export class Ma2LayoutService {
       signal.throwIfAborted();
       return rawConnection.command(line, match, () => { signal.throwIfAborted(); beforeSend?.(); }, priority).then(result => { received(); return result; });
     } };
-    const bridge: SongBridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal).then(result => { received(); return result; }),
-      exchange: (operation, target, expected, desired) => rawBridge.exchange(operation, target, expected, desired, signal).then(result => { received(); return result; }) };
+    // Every acknowledged line of a long transfer counts as progress for the 90 s watchdog.
+    const bridge: SongBridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal, received).then(result => { received(); return result; }),
+      exchange: (operation, target, expected, desired) => rawBridge.exchange(operation, target, expected, desired, signal, received).then(result => { received(); return result; }) };
     const progress = (phase: Ma2ReadProgressUpdate['phase'], completed: number, total: number, detail: string): void => {
       signal.throwIfAborted(); received(); report?.({ phase, completed, total, detail });
     };
@@ -245,6 +246,14 @@ export class Ma2LayoutService {
       const changes = [];
       const sources = new Map<string, string>();
       const sourceCount = new Set(plan.changes.flatMap(change => (change.refs ?? []).map(ref => ref.sequence))).size;
+      // Read only the Cues the song copies from each source Sequence; the full export stays on the console.
+      const wanted = new Map<number, Set<string>>();
+      for (const change of plan.changes) for (const ref of change.refs ?? []) {
+        if (ref.sequence === target && remoteXml) continue;
+        const [whole, fraction = ''] = ref.cue.split('.');
+        wanted.set(ref.sequence, (wanted.get(ref.sequence) ?? new Set<string>()).add(`${Number(whole)}.${fraction.padEnd(3, '0')}`));
+      }
+      const sourceCues = (sequence: number): string => [...wanted.get(sequence) ?? []].join(',');
       progress('library', 0, sourceCount, `读取 ${sourceCount} 个来源序列`);
       for (const change of plan.changes) {
         const content: Array<{ xml: string; cue: string }> | undefined = change.refs === undefined ? undefined : [];
@@ -254,7 +263,7 @@ export class Ma2LayoutService {
           }
           let xml = sources.get(String(ref.sequence));
           if (!xml) {
-            xml = ref.sequence === target && remoteXml ? remoteXml : await bridge.request('SEQUENCE', ref.sequence);
+            xml = ref.sequence === target && remoteXml ? remoteXml : await bridge.request('SEQCUES', ref.sequence, sourceCues(ref.sequence));
             sources.set(String(ref.sequence), xml);
             progress('library', sources.size, sourceCount, `已读取来源序列 ${ref.sequence}`);
           }
@@ -303,7 +312,8 @@ export class Ma2LayoutService {
         if (replacingAll) await this.prepareXml(connection, layoutRequest, `${file}_clear`, editMa2SongSequence(remoteXml, plan.name, [], plan.deletions));
         if (remoteExport) backupFile = `${remoteExport}.xml`;
         if (!executorPage && !beforeLayout) await this.prepareXml(connection, layoutRequest, `${file}_layout`, emptyMa2LayoutXml(layoutRequest.layout, directory.version));
-        for (const [number, xml] of sources) if (canonical(await bridge.request('SEQUENCE', Number(number))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
+        // The song's own Sequence is compared with its console export inside the write command below.
+        for (const [number, xml] of sources) if (Number(number) !== target && canonical(await bridge.request('SEQCUES', Number(number), sourceCues(Number(number)))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
         await checkpoint(remoteXml ?? uploaded, nativeCopy ? ma2SongCreationStages(uploaded, changes) : undefined);
         const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${remoteExport}')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
         // Import /o can retain the previous native step table when a numbered
@@ -382,12 +392,18 @@ export class Ma2LayoutService {
     catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return []; throw error; }
   }
   private async prepareXml(connection: Connection, request: Ma2LayoutReadRequest, file: string, xml: string, report?: (completed: number, total: number) => void): Promise<void> {
-    await this.call(connection, `${this.guard(request)}local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','wb'));f:close();return 'prepared'`);
+    // One guarded command creates the file and a writer bound to it. Each data line then only calls
+    // that writer: 360 bytes per line instead of 128, and no Show name, so it stays under 900 bytes.
+    const writer = `TBLINK_W_${randomBytes(12).toString('hex')}`;
+    const beforeSend = (): void => { if (this.isPlaying()) throw new Error('请停止播放后读取或创建控台 Layout'); };
+    await this.call(connection, `${this.guard(request)}local p=gma.show.getvar('PATH')..'/importexport/${file}.xml';local f=assert(io.open(p,'wb'));f:close();${writer}=function(i,h,e)local ok,r=pcall(function()local f=assert(io.open(p,'ab'));f:write(unhex(h));f:close()end);if e then ${writer}=nil end;gma.echo('${writer}:'..i..':'..(ok and 'OK' or 'ERR:'..tostring(r)))end;return 'prepared'`);
     const bytes = Buffer.from(xml);
     report?.(0, bytes.length);
-    for (let offset = 0; offset < bytes.length; offset += 128) {
-      await this.call(connection, `${this.guard(request)}local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','ab'));f:write(unhex('${bytes.subarray(offset,offset+128).toString('hex')}'));f:close();return 'prepared'`);
-      report?.(Math.min(offset + 128, bytes.length), bytes.length);
+    for (let offset = 0, index = 0; offset < bytes.length; offset += 360, index++) {
+      const prefix = `${writer}:${index}:`;
+      const result = await connection.command(`Lua "if ${writer} then ${writer}(${index},'${bytes.subarray(offset, offset + 360).toString('hex')}'${offset + 360 >= bytes.length ? ',1' : ''}) else gma.echo('${prefix}ERR:missing') end"`, text => ma2ResponseLine(text, prefix), beforeSend);
+      if (result !== 'OK') throw new Error(`控台文件写入未确认：${result.replace(/^ERR:/, '')}`);
+      report?.(Math.min(offset + 360, bytes.length), bytes.length);
     }
   }
 

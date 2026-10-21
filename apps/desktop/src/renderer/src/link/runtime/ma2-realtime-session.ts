@@ -96,11 +96,6 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       nextSourceCheck = Date.now() + 5000;
     }
     if (!current()) return false;
-    if (sessionBlocked) {
-      sessionBlocked = false; blockedContext = '';
-      const automatic = useMa2AutoSyncStore.getState();
-      if (automatic.status === 'blocked' && !automatic.request) useMa2AutoSyncStore.setState({ status: 'waiting', message: '控台已重新核对，继续同步' });
-    }
     const project = useDocumentStore.getState().project;
     if (!project) return false;
     for (const item of project.rundown) {
@@ -113,7 +108,14 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     }
     const automatic = useMa2AutoSyncStore.getState();
     const hasBindings = project.rundown.some(item => item.lighting?.ma2Bindings?.length);
-    if ((!hasBindings && !pendingMa2Renames(project).length) || automatic.request) return true;
+    if ((!hasBindings && !pendingMa2Renames(project).length) || automatic.request) {
+      // The whole check succeeded: lift a block this session raised earlier, never Ma2AutoSync's own.
+      if (sessionBlocked) {
+        sessionBlocked = false; blockedContext = '';
+        if (automatic.status === 'blocked' && !automatic.request) useMa2AutoSyncStore.setState({ status: 'waiting', message: '控台已重新核对，继续同步' });
+      }
+      return true;
+    }
     const catalog = await window.tbLink.readMa2Catalog({ ...connection, targets: [] });
     const source = project.ma2MaterialLibrary!.library!.directory;
     if (catalog.directory.show !== source.show || catalog.directory.generation !== source.generation || catalog.directory.version !== source.version) throw new Error('控台 Show 或会话已变化，请刷新素材后核对');

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { createMa2TimecodeXml } from './ma2-create';
+import { emptyMa2SequenceXml } from './ma2-timecode-xml';
 
 const wire = vi.hoisted(() => ({ id: '', response: '', backup: null as string | null }));
 vi.mock('node:fs/promises', () => ({
@@ -80,4 +81,10 @@ it('快照只接受 Timecode 引用的序列，且不能作为写入 XML 使用'
   await expect(bridge.request('SNAPSHOT', 9902)).rejects.toThrow('关联序列缺失');
   wire.response = tc.replace('</MA>', `${object.replace('index="9900"', 'index="9990"')}</MA>`);
   await expect(bridge.request('SNAPSHOT', 9902)).rejects.toThrow('关联序列缺失');
+});
+it('来源序列 Cue 读取接受数百个编号，拒绝非编号文本', async () => {
+  const bridge = new Ma2OnpcBridge(process.cwd(), () => false);
+  wire.response = emptyMa2SequenceXml(9000, '3.7.0.5');
+  await expect(bridge.request('SEQCUES', 9000, Array.from({ length: 600 }, (_, index) => `${index + 1}.000`).join(','))).resolves.toBe(wire.response);
+  await expect(bridge.request('SEQCUES', 9000, '1.000;Delete Sequence 1')).rejects.toThrow('范围无效');
 });

@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type Ma2SongBinding, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { setLightingCommand } from '@tb/core/link';
+import { ma2SongPoints, setLightingCommand } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { useMa2SongSyncStore, startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, resolveMa2SongConflict } from './ma2-song-sync';
@@ -8,7 +8,8 @@ import { useMa2RealtimePreference } from './ma2-realtime-preference';
 import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary } from './ma2-realtime-session';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
-vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { recordLog: vi.fn(() => Promise.resolve()), saveProject: vi.fn(() => Promise.resolve('song.tblink')) } }));
+const { recordLog } = vi.hoisted(() => ({ recordLog: vi.fn(() => Promise.resolve()) }));
+vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { recordLog, saveProject: vi.fn(() => Promise.resolve('song.tblink')) } }));
 const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
 vi.mock('./ma2-project-archive', () => ({ archiveMa2Project: archive }));
 const source = { show: 'Show', generation: 'session', version: '3.7.0.5' };
@@ -120,6 +121,34 @@ it('同步失败退避重试时同一份本地内容只存档一次，编辑后�
   expect(sync).toHaveBeenCalledTimes(4);
   expect(archive).toHaveBeenCalledTimes(2);
 });
+it('有本地修改的歌先同步，已确认歌曲的周期复查排在后面', async () => {
+  const value = project();
+  value.rundown[0]!.lighting!.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9000, name: 'first', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }] };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  await prepareMa2RealtimeSession();
+  const lighting = value.rundown[0]!.lighting!;
+  const first = useMa2SongSyncStore.getState().songs.first!;
+  useMa2SongSyncStore.setState(state => ({ songs: { ...state.songs, first: { ...first, state: 'verified', acknowledged: JSON.stringify([ma2SongPoints(lighting), 'first']), remoteRevision: 'a'.repeat(64) } } }));
+  const order: string[] = [];
+  check.mockImplementation(() => { order.push('check:first'); return Promise.resolve(false); });
+  sync.mockImplementation((request: Ma2SongSyncRequest) => { order.push(`sync:${request.itemId}`); return Promise.reject(new Error('测试不写入')); });
+  await tickMa2SongSync(false);
+  expect(order).toEqual(['sync:second', 'check:first']);
+});
+it('复查发现控台变化后转入同步，期间显示同步中', async () => {
+  const value = project();
+  value.rundown[0]!.lighting!.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9000, name: 'first', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }] };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  const lighting = value.rundown[0]!.lighting!;
+  const first = useMa2SongSyncStore.getState().songs.first!;
+  useMa2SongSyncStore.setState(state => ({ songs: { ...state.songs, first: { ...first, state: 'verified', acknowledged: JSON.stringify([ma2SongPoints(lighting), 'first']), remoteRevision: 'a'.repeat(64) } } }));
+  check.mockResolvedValue(true);
+  const during: string[] = [];
+  sync.mockImplementation(() => { during.push(useMa2SongSyncStore.getState().songs.first!.state); return Promise.reject(new Error('测试不写入')); });
+  await tickMa2SongSync(false);
+  expect(during).toEqual(['syncing']);
+});
 it('未保存、未连接时等待，不弹保存窗口、不自动重连或创建', async () => {
   useDocumentStore.getState().setProject(project(), null);
   await prepareMa2RealtimeSession(); expect(status).not.toHaveBeenCalled();
@@ -155,6 +184,22 @@ it('会话检查偶发失败后，下一次核对成功即解除待核对，不�
   expect(await prepareMa2RealtimeSession()).toBe(true);
   expect(useMa2AutoSyncStore.getState().status).not.toBe('blocked');
   expect(useMa2AutoSyncStore.getState().message).not.toContain('序列目录发生变化');
+});
+it('目录核对通过但后续读取持续失败时保持待核对，不来回跳也不重复写日志', async () => {
+  vi.useFakeTimers();
+  const value = project();
+  const preview = { name: 'TC', readAt: new Date().toISOString(), sourceXml: '<MA/>' };
+  value.rundown[0]!.lighting!.ma2Bindings = [{ id: 'bound', timecode: 9901, ...preview, baselineTracks: [], mappings: [], trackMappings: [] }];
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  catalog.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  const statuses: string[] = [];
+  const unsubscribe = useMa2AutoSyncStore.subscribe(state => { if (statuses.at(-1) !== state.status) statuses.push(state.status); });
+  try {
+    await prepareMa2RealtimeSession();
+    for (let attempt = 0; attempt < 3; attempt++) { vi.advanceTimersByTime(1001); await prepareMa2RealtimeSession(); }
+  } finally { unsubscribe(); }
+  expect(statuses).toEqual(['waiting', 'blocked']);
+  expect(recordLog).toHaveBeenCalledTimes(1);
 });
 it('自动同步自身的阻断不会被会话检查成功清掉', async () => {
   const request = { connection: { dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' } }, catalog: { directory: { ...source, entries: [] }, readAt: new Date().toISOString(), entries: [] }, scope: 'bound' as const };

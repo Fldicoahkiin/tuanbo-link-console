@@ -49,11 +49,14 @@ it('rejects a full song executor page before importing or renaming any Sequence'
 });
 
 /** In-memory console for syncSong: emulates only the script shapes that path sends. */
-function songConsole(sequences: Map<number, string>) {
-  const files = new Map<string, Buffer>(); const lines: string[] = []; const ops: string[] = [];
+function songConsole(sequences: Map<number, string>, slowRead?: { target: number; ms: number }) {
+  const files = new Map<string, Buffer>(); const lines: string[] = []; const ops: string[] = []; const slow = { done: false };
   const pending = new Map<string, Buffer[]>();
   const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
   const run = (script: string): string => {
+    const writer = /(TBLINK_W_[a-f0-9]{24})=function/.exec(script)?.[1];
+    const opened = /importexport\/(\w+)\.xml';local f=assert\(io\.open\(p,'wb'\)\)/.exec(script);
+    if (writer && opened) { files.set(opened[1]!, Buffer.alloc(0)); writers.set(writer, opened[1]!); return 'prepared'; }
     let match = /importexport\/(\w+)\.xml','wb'\)/.exec(script);
     if (match) { files.set(match[1]!, Buffer.alloc(0)); return 'prepared'; }
     match = /importexport\/(\w+)\.xml','ab'\)\);f:write\(unhex\('([a-f0-9]*)'\)\)/.exec(script);
@@ -68,9 +71,18 @@ function songConsole(sequences: Map<number, string>) {
     }
     throw new Error(`假控台未识别的脚本：${script.slice(0, 200)}`);
   };
+  const writers = new Map<string, string>();
   const command = vi.fn<Ma2Telnet['command']>((line, match) => {
     lines.push(line);
     const body = /^Lua "(.*)"$/.exec(line)![1]!;
+    const chunk = /^if (TBLINK_W_[a-f0-9]{24}) then \1\((\d+),'([a-f0-9]*)'(,1)?\)/.exec(body);
+    if (chunk) {
+      const file = writers.get(chunk[1]!);
+      if (!file) return Promise.resolve(match(`${chunk[1]}:${chunk[2]}:ERR:missing\r\n`)!);
+      files.set(file, Buffer.concat([files.get(file)!, Buffer.from(chunk[3]!, 'hex')]));
+      if (chunk[4]) writers.delete(chunk[1]!);
+      return Promise.resolve(match(`${chunk[1]}:${chunk[2]}:OK\r\n`)!);
+    }
     let script = body; let prefix = /TBLINK_LAYOUT_[a-f0-9]{24}:/.exec(body)?.[0];
     const key = /(TBLINK_LAYOUT_[a-f0-9]{24})=\{\}/.exec(body)?.[1];
     if (key) { pending.set(key, []); return Promise.resolve(match(`${prefix}READY\r\n`)!); }
@@ -82,18 +94,31 @@ function songConsole(sequences: Map<number, string>) {
     return Promise.resolve(match(`${prefix}${result.startsWith('ERR:') ? result : `OK:${result}`}\r\n`)!);
   });
   const page = `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" major_vers="3" minor_vers="7" stream_vers="0" tblink_show="test" tblink_generation="one" tblink_version="3.7.0.5"><Page index="999">${'<Exec xsi:nil="true"/>'.repeat(100)}<Exec offset_from_first="0"><Assignment><No>25</No><No>1</No><No>9000</No></Assignment></Exec></Page></MA>`;
-  const exchange = vi.fn<Ma2OnpcBridge['exchange']>((operation, target) => {
+  const exchange = vi.fn<Ma2OnpcBridge['exchange']>(async (operation, target, expected, _desired, _signal, progress) => {
     ops.push(`${operation} ${target}`);
+    if (slowRead && operation === 'SEQUENCE' && target === slowRead.target && ops.filter(op => op === `SEQUENCE ${target}`).length === 1) {
+      for (let elapsed = 0; elapsed < slowRead.ms; elapsed += 5000) { await new Promise(resolve => setTimeout(resolve, 5000)); progress?.(); }
+      slow.done = true;
+    }
     const requestId = randomUUID().replaceAll('-', '');
     if (operation === 'LISTSEQ') return Promise.resolve({ requestId, response: JSON.stringify({ ...source, entries: [...sequences.keys()].map(number => ({ target: number, name: `S${number}` })) }) });
     if (operation === 'SEQUENCE') { const xml = sequences.get(target)!; files.set(`tblink_library_${requestId}`, Buffer.from(xml)); return Promise.resolve({ requestId, response: xml }); }
+    if (operation === 'SEQCUES') {
+      const xml = sequences.get(target)!; files.set(`tblink_library_${requestId}`, Buffer.from(xml));
+      const wanted = new Set(expected!.split(',').map(Number));
+      const cues = [...xml.matchAll(/<Cue\s[^>]*[^/]>[\s\S]*?<\/Cue>/g)].map(value => value[0]).filter(cue => {
+        const tag = /<Number\s[^>]*>/.exec(cue)?.[0] ?? '';
+        return wanted.has(Number(/\snumber="(\d+)"/.exec(tag)?.[1]) + Number(/sub_number="(\d+)"/.exec(tag)?.[1] ?? 0) / 1000);
+      });
+      return Promise.resolve({ requestId, response: `${/^[\s\S]*?<Sequ\s[^>]*>/.exec(xml)![0]}\n${cues.join('\n')}\n</Sequ></MA>` });
+    }
     if (operation === 'PAGES') return Promise.resolve({ requestId, response: JSON.stringify({ ...source, buttonPage: 1000, faderPage: 1, pages: [{ page: 1000, name: '歌曲' }] }) });
     if (operation === 'PAGE') return Promise.resolve({ requestId, response: page });
     return Promise.reject(new Error(`Unexpected ${operation}`));
   });
-  return { files, lines, ops, connection: { command }, bridge: { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response } };
+  return { files, lines, ops, writers, slow, connection: { command }, bridge: { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response } };
 }
-it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份传回控台，写前比对用控台读取时的原导出', async () => {
+function boundSong() {
   const attributes = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');
   const sourceNumber = inspectMa2SequenceXml(attributes).sequences[0]!.number;
   const points = Array.from({ length: 8 }, (_, index) => ({ id: `point-${index}`, name: `段落 ${index + 1}`, atMs: index * 1000, cues: [] as Ma2SongSyncRequest['points'][number]['cues'] }));
@@ -102,7 +127,26 @@ it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份�
   const xml = editMa2SongSequence(emptyMa2SequenceXml(9000, '3.7.0.5'), base.name, plan.changes.map(value => ({ ...value, sources: [] })), []);
   const song: Ma2SongSyncRequest = { ...base, binding: { endpoint: '192.0.2.1:30000', show: source.show, layout: null, executor: '1000.101', sequence: 9000, name: base.name, baselineXml: xml, points: plan.points },
     points: points.map((point, index) => ({ ...point, cues: index === 0 ? [{ sequence: sourceNumber, cue: '1.000', delayMs: 0 }] : [{ sequence: 9000, cue: plan.points[index]!.cue, delayMs: 0 }] })) };
-  const fake = songConsole(new Map([[9000, xml], [sourceNumber, attributes]]));
+  return { song, sourceNumber, sequences: new Map([[9000, xml], [sourceNumber, attributes]]) };
+}
+it('一次大读取持续超过 90 秒但每批都有回包时不判为无进展', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    const { song, sequences } = boundSong();
+    const fake = songConsole(sequences, { target: 9000, ms: 100000 });
+    const directory = await mkdtemp(join(tmpdir(), 'tblink-song-'));
+    const sync = new Ma2LayoutService(join(directory, 'layouts.json'), () => false).syncSong(fake.connection, fake.bridge, song);
+    let settled = false; void sync.finally(() => { settled = true; }).catch(() => undefined);
+    // Fake time runs only during the slow read; the service also waits on real file I/O.
+    for (let step = 0; step < 200 && !settled && !fake.slow.done; step++) { await new Promise(resolve => setImmediate(resolve)); await vi.advanceTimersByTimeAsync(1000); }
+    vi.useRealTimers();
+    expect(fake.slow.done).toBe(true);
+    await expect(sync).resolves.toMatchObject({ changed: true });
+  } finally { vi.useRealTimers(); }
+});
+it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份传回控台，写前比对用控台读取时的原导出', async () => {
+  const { song, sourceNumber, sequences } = boundSong();
+  const fake = songConsole(sequences);
   const directory = await mkdtemp(join(tmpdir(), 'tblink-song-'));
   const result = await new Ma2LayoutService(join(directory, 'layouts.json'), () => false).syncSong(fake.connection, fake.bridge, song);
   console.info(JSON.stringify({ commands: fake.lines.length, bytes: fake.lines.reduce((total, line) => total + Buffer.byteLength(line), 0), ops: fake.ops }));
@@ -110,4 +154,8 @@ it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份�
   expect([...fake.files.keys()].some(name => name.endsWith('_before'))).toBe(false);
   expect(result.backupFile).toMatch(/^tblink_library_[a-f0-9]{32}\.xml$/);
   expect(fake.files.has(result.backupFile.replace(/\.xml$/, ''))).toBe(true);
+  expect(fake.lines.every(line => Buffer.byteLength(line) <= 900)).toBe(true);
+  expect(fake.lines.length).toBeLessThanOrEqual(60); expect(fake.writers.size).toBe(0);
+  expect(fake.ops.filter(op => op.startsWith('SEQUENCE ') && op !== 'SEQUENCE 9000')).toEqual([]);
+  expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(2);
 });
