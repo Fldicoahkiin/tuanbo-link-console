@@ -136,7 +136,7 @@ export class Ma2NetworkManager {
     if(!connection)throw new Error('请先连接控台');
     return this.layouts().create(connection,bridge,request);
   }
-  constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string, private readonly resolveLocalAddress: (host: string) => Promise<string | undefined> = () => Promise.resolve(undefined), private readonly validatePeers?: (host: string, peers: readonly Ma2ConnectedPeer[]) => Promise<void>) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
+  constructor(directory: string, private readonly secrets: Pick<SecureProfileStore, 'hasCredential' | 'saveCredential' | 'loadCredential'>, private readonly isPlaying: () => boolean = () => false, private readonly bundledBridge?: string, private readonly resolveLocalAddress: (host: string) => Promise<string | undefined> = () => Promise.resolve(undefined), private readonly validatePeers?: (host: string, peers: readonly Ma2ConnectedPeer[]) => Promise<void>, private readonly awaitListener?: (host: string, port: number) => Promise<void>) { this.path = join(directory, 'link-integrations', 'ma2-network.json'); }
   get(target: Ma2NetworkTarget): { bridge: Ma2OnpcBridge; service: Ma2ApplyService } {
     const settings = this.settings;
     if (!settings || target.host !== settings.host || target.port !== settings.port || target.monitorPort !== settings.monitorPort || target.username !== settings.username) throw new Error('MA2 连接目标已改变，请重新读取控台');
@@ -262,6 +262,7 @@ export class Ma2NetworkManager {
       const settings = this.settings;
       const password = this.passwordSaved ? await this.secrets.loadCredential(this.credentialId(settings)) : '';
       const localAddress = await this.resolveLocalAddress(settings.host);
+      await this.awaitListener?.(settings.host, settings.port);
       if (generation !== this.generation) return this.status();
       const connection = new Ma2Telnet({ ...settings, ...(localAddress ? { localAddress } : {}) }, (state) => {
         if (state === 'disconnected' && this.connection === connection) {
@@ -282,6 +283,19 @@ export class Ma2NetworkManager {
     } catch (error) { if (generation === this.generation) { this.connection?.disconnect(); this.services = null; this.error = error instanceof Error ? error.message : String(error); this.version = null; } }
     finally { this.busy = false; }
     return this.status();
+  }
+  /** gma.show.getvar('SHOWFILE'), the value the bridge reports as directory.show.
+   * Hex keeps non-ASCII show names intact over telnet; the H keeps an empty name matchable. */
+  async currentShow(): Promise<string> {
+    const connection = this.connection;
+    if (!connection || connection.state !== 'connected') throw new Error('请先连接 MA2 控台');
+    const marker = `TBLINK_SHOW_${randomBytes(16).toString('hex')}`;
+    const script = `local s=tostring(gma.show.getvar('SHOWFILE') or '');gma.echo('${marker}:H'..(s:gsub('.',function(b)return string.format('%02x',string.byte(b))end)))`;
+    const reply = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, `${marker}:`));
+    if (!/^H(?:[0-9a-f]{2})*$/.test(reply)) throw new Error('控台返回的当前 show 名称格式无效');
+    const show = Buffer.from(reply.slice(1), 'hex').toString('utf8');
+    if (!show) throw new Error('控台没有加载 show');
+    return show;
   }
   async checkCapabilities(): Promise<Ma2NetworkStatus> {
     if (this.isPlaying()) throw new Error('请停止播放后检测控台兼容性');

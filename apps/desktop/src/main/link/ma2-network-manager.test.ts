@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { Ma2NetworkManager } from './ma2-network-manager';
 import { meiNanXml, meiNanCues } from './fixtures/ma2-mei-nan-reconstruction';
 
-const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', pause: null as Promise<void> | null, drop: () => undefined }));
+const memory = vi.hoisted(() => ({ file: null as string | null, localAddress: undefined as string | undefined, connects: 0, closes: 0, version: '3.3.4.3', capabilities: 'Lua 5.3:true:true:true', show: '', pause: null as Promise<void> | null, drop: () => undefined }));
 vi.mock('node:fs/promises', () => ({ readFile: () => memory.file === null ? Promise.reject(Object.assign(new Error('Missing'), { code: 'ENOENT' })) : Promise.resolve(memory.file) }));
 vi.mock('./atomic-file', () => ({ writeFileAtomically: (_path: string, value: string) => { memory.file = value; return Promise.resolve(); } }));
 vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typeof import('./ma2-telnet')>(), Ma2Telnet: class {
@@ -23,13 +23,15 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
       const response = match(`${chunks.join('\r\n')}\r\n${cuePrefix}END:${row.length}\r\n`);
       if (!response) throw new Error('No cue response'); return response;
     }
+    const show = /TBLINK_SHOW_[a-f0-9]{32}/.exec(line)?.[0];
+    if (show) return match(`${show}:H${Buffer.from(memory.show).toString('hex')}\r\n`) ?? Promise.reject(new Error('No show response'));
     const token = /TBLINK_(?:CAP|PLAY)_[a-f0-9]{32}/.exec(line)?.[0];
     const result = match(`${token}:${token?.includes('_PLAY_') ? 'SENT' : memory.capabilities}\r\n`);
     if (!result) throw new Error('No response'); return result;
   }
   disconnect(): void { memory.closes += 1; this.state = 'disconnected'; }
 } }));
-beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true'; });
+beforeEach(() => { memory.file = null; memory.connects = 0; memory.closes = 0; memory.pause = null; memory.version = '3.3.4.3'; memory.capabilities = 'Lua 5.3:true:true:true'; memory.show = ''; });
 const settings = { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'lighting', autoConnect: true };
 it('意外断线会恢复原控台连接，主动断开则停止恢复且不重放操作', async () => {
   vi.useFakeTimers();
@@ -79,6 +81,24 @@ it('连接传入已校验的电脑地址，地址解析失败不建立 TCP 连�
   manager.disconnect();
   resolve.mockRejectedValue(new Error('专用地址已不可用'));
   expect((await manager.connect()).error).toBe('专用地址已不可用'); expect(memory.connects).toBe(1);
+});
+it('读取控台当前 show 原名，中文名不经 telnet 编码损坏；未加载 show 时明确报错', async () => {
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore());
+  await manager.save({ settings });
+  await expect(manager.currentShow()).rejects.toThrow('请先连接 MA2 控台');
+  await manager.connect();
+  memory.show = '2号厅·正式演出';
+  await expect(manager.currentShow()).resolves.toBe('2号厅·正式演出');
+  memory.show = '';
+  await expect(manager.currentShow()).rejects.toThrow('控台没有加载 show');
+});
+it('本机 onPC 未就绪时不建立 TCP 连接、不发送登录，状态给出具体原因', async () => {
+  const awaitListener = vi.fn().mockRejectedValue(new Error('本机 MA2 onPC 未运行，未尝试登录 127.0.0.1:30000'));
+  const manager = new Ma2NetworkManager(process.cwd(), secretStore(), () => false, undefined, undefined, undefined, awaitListener);
+  await manager.save({ settings: { ...settings, host: '127.0.0.1' } });
+  const connects = memory.connects;
+  expect((await manager.connect()).error).toBe('本机 MA2 onPC 未运行，未尝试登录 127.0.0.1:30000');
+  expect(awaitListener).toHaveBeenCalledWith('127.0.0.1', settings.port); expect(memory.connects).toBe(connects);
 });
 it('网络播放拒绝过期、换目标和停止后排队的指令', async () => {
   const manager = new Ma2NetworkManager(process.cwd(), secretStore());
