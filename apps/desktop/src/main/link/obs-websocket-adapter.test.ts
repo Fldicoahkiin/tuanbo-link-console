@@ -18,8 +18,21 @@ describe('ObsWebSocketAdapter', () => {
     expect(client.calls).toEqual([['GetCurrentProgramScene', undefined], ['GetSceneItemList', { sceneName: '场景 2' }],
       ['SetSceneItemEnabled', { sceneName: '场景 2', sceneItemId: 7, sceneItemEnabled: true }]]);
     await expect(adapter.setSourceEnabledInProgramScene('显示器采集 3', true)).rejects.toThrow('当前播出场景“场景 2”中没有来源“显示器采集 3”');
-    client.responses.set('GetSceneItemList', { sceneItems: [{ sourceName: '显示器采集', sceneItemId: 7 }, { sourceName: '显示器采集', sceneItemId: 8 }] });
-    await expect(adapter.setSourceEnabledInProgramScene('显示器采集', false)).rejects.toThrow('有多个来源“显示器采集”');
+    client.responses.set('GetSceneItemList', { sceneItems: [{ sourceName: '扑克牌特效.mov', sceneItemId: 3 }, { sourceName: '扑克牌特效.mov', sceneItemId: 4 }] });
+    await expect(adapter.setSourceEnabledInProgramScene('扑克牌特效.mov', true)).rejects.toThrow('有多个来源“扑克牌特效.mov”');
+  });
+  it('显示来源后播出场景已切换，隐藏仍作用于当初显示它的场景，不在新播出场景里找', async () => {
+    const client = fakeObsClient(); const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket);
+    await adapter.connect('ws://127.0.0.1:4455', 'password');
+    client.responses.set('GetCurrentProgramScene', { currentProgramSceneName: '场景 2' });
+    client.responses.set('GetSceneItemList', { sceneItems: [{ sourceName: '扑克牌特效.mov', sceneItemId: 3 }] });
+    await adapter.setSourceEnabledInProgramScene('扑克牌特效.mov', true);
+    client.responses.set('GetCurrentProgramScene', { currentProgramSceneName: '团播联动台·素材·387..MP4' });
+    client.responses.set('GetSceneItemList', { sceneItems: [{ sourceName: '387..MP4·来源', sceneItemId: 1 }] });
+    client.calls.length = 0;
+    await adapter.setSourceEnabledInProgramScene('扑克牌特效.mov', false);
+    expect(client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '场景 2', sceneItemId: 3, sceneItemEnabled: false }]]);
+    await expect(adapter.setSourceEnabledInProgramScene('扑克牌特效.mov', false)).rejects.toThrow('中没有来源“扑克牌特效.mov”');
   });
   it('监听拒绝被桌面音频或模糊进程采集，仅核对专用音频来源且不修改 OBS', async () => {
     const client = fakeObsClient(); const adapter = new ObsWebSocketAdapter(tmpdir(),client as unknown as OBSWebSocket);
