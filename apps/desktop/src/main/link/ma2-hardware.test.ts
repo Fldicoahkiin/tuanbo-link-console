@@ -130,7 +130,16 @@ it.runIf(Boolean(process.env.TBLINK_MA2_LENGTH_PROBE && process.env.TBLINK_MA2_H
 it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK_MA2_HARDWARE_HOST))('onPC 歌曲序列新建、改一个 Cue 内容与复查的实测往返', async () => {
   const raw = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });
   const traffic = { commands: 0, bytes: 0 };
-  const connection: Pick<Ma2Telnet, 'command'> = { command: (line, match, beforeSend, priority) => { traffic.commands += 1; traffic.bytes += Buffer.byteLength(line); return raw.command(line, match, beforeSend, priority); } };
+  const slowest: Array<{ action: string; ms: number }> = [];
+  const connection: Pick<Ma2Telnet, 'command'> = { command: async (line, match, beforeSend, priority) => {
+    traffic.commands += 1; traffic.bytes += Buffer.byteLength(line);
+    const started = performance.now();
+    try { return await raw.command(line, match, beforeSend, priority); }
+    finally {
+      const action = /TBLINK_NET\('[a-f0-9]+','(\w+)'/.exec(line)?.[1] ?? /^Lua "([^;(]{0,24})/.exec(line)?.[1] ?? 'other';
+      slowest.push({ action, ms: Math.round(performance.now() - started) }); slowest.sort((a, b) => b.ms - a.ms); slowest.splice(5);
+    }
+  } };
   const measured: Record<string, { ms: number; commands: number; bytes: number }> = {};
   const step = async <T>(name: string, run: () => Promise<T>): Promise<T> => {
     const before = { ...traffic }; const started = performance.now();
@@ -164,9 +173,9 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     const network = { host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001, username: 'administrator' };
     const expectedSource = { show: directory.show, generation: directory.generation, version: directory.version };
     const ref = (index: number) => [{ sequence: source.sequence, cue: source.cues[index]!.number, delayMs: 0 }];
-    const points = [{ id: 'p1', name: 'TBLINK_PROBE_1', atMs: 0, cues: ref(0) }, { id: 'p2', name: 'TBLINK_PROBE_2', atMs: 1000, cues: ref(1) }, { id: 'p3', name: 'TBLINK_PROBE_3', atMs: 2000, cues: [] }];
+    const points = [{ id: 'p1', name: '探针开场', atMs: 0, cues: ref(0) }, { id: 'p2', name: '探针副歌', atMs: 1000, cues: ref(1) }, { id: 'p3', name: '探针尾声', atMs: 2000, cues: [] }];
     const service = new Ma2LayoutService(resolve(await mkdtemp(join(tmpdir(), 'tblink-song-probe-')), 'layouts.json'), () => false);
-    const base = { network, expectedSource, projectId: randomUUID(), itemId: 'probe', settings: { layout: 999, name: 'TBLINK', nextSequence: sequence, columns: 8, executorPage: page }, name: 'TBLINK_PROBE' };
+    const base = { network, expectedSource, projectId: randomUUID(), itemId: 'probe', settings: { layout: 999, name: 'TBLINK', nextSequence: sequence, columns: 8, executorPage: page }, name: '联动探针歌曲' };
     const first = await step('create', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), points }));
     const second = await step('changeOneCue', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: first.binding,
       points: first.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 2 ? ref(0) : [{ sequence, cue: point.cue, delayMs: 0 }] })) }));
@@ -178,9 +187,11 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     await writeFile(resolve('artifacts/ma2-hardware-diagnostics/song-transfer.json'), JSON.stringify({ at: new Date().toISOString(), show: directory.show, version: directory.version, source: source.sequence, sequence, page, backupFile: second.backupFile, measured }, null, 2));
     console.info(JSON.stringify({ sequence, page, backupFile: second.backupFile, measured }));
     expect(second.changed).toBe(true); expect(unchanged).toBe(false);
+    expect(second.binding.name).toBe('LianDongTanZhenGeQu');
+    expect(second.library.sequences[0]?.cues.map(cue => cue.name)).toEqual(['TanZhenKaiChang', 'TanZhenFuGe', 'TanZhenWeiSheng']);
     expect(second.backupFile).toMatch(/^tblink_library_[a-f0-9]{32}\.xml$/);
   } finally {
-    console.info(JSON.stringify({ operations, measured }));
+    console.info(JSON.stringify({ operations, measured, slowest }));
     if (created && raw.state === 'connected') {
       const marker = `TBLINK_CLEAN_${randomBytes(16).toString('hex')}:`;
       const removed = await raw.command(`Lua "gma.cmd('Delete Sequence ${created.sequence} /nc');gma.cmd('Delete Page ${created.page} /nc');gma.echo('${marker}'..tostring(gma.show.getobj.handle('Sequence ${created.sequence}')==nil and gma.show.getobj.handle('Page ${created.page}')==nil))"`, text => ma2ResponseLine(text, marker));
