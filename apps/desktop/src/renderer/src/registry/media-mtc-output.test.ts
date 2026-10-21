@@ -53,15 +53,15 @@ describe('Electron 原生 MIDI 时间码输出', () => {
     expect(() => output.tick(8, '30', 8)).toThrow('连接已失效');
     expect(send).not.toHaveBeenCalled();
   });
-  it('媒体时钟回跳而未显式定位时立即失败，避免等待旧位置造成静默断流', async () => {
+  it('媒体时钟回跳而未显式定位时按实际位置整帧重新同步并标出，不等待旧位置造成静默断流', async () => {
     const send = vi.fn();
     vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
     const output = new MediaMtcOutput(); await output.connect('MA2'); output.tick(10000, '30', 0);
     send.mockClear();
-    expect(() => output.tick(9000, '30', 8)).toThrow('回跳');
-    expect(send).not.toHaveBeenCalled();
-    output.stop(); output.tick(9000, '30', 16);
-    expect(send.mock.calls[0]?.[0]?.[0]).toBe(0xf0);
+    expect(output.tick(9000, '30', 8)).toBe(true);
+    expect(send.mock.calls[0]?.[0]).toEqual([240, 127, 127, 1, 1, 96, 0, 9, 0, 247]);
+    expect(output.takeSchedulingNotice()).toContain('音频位置回跳');
+    expect(send.mock.calls[1]?.[0]).toEqual([0xf1, 0]);
   });
   it('运行中无效媒体位置明确报错，不会静默停发', async () => {
     vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send: () => undefined }]]) }) });
@@ -115,23 +115,28 @@ describe('Electron 原生 MIDI 时间码输出', () => {
     output.tick(63_000, '30', 3000);
     expect(send.mock.calls.at(-2)?.[0]).toEqual([240, 127, 127, 1, 1, 96, 1, 3, 0, 247]);
   });
-  it.each(['24', '25', '29.97df', '30'] as const)('%s fps 超过一帧停止输出，不补发、不自动重定位', async rate => {
+  it.each(['24', '25', '29.97df', '30'] as const)('%s fps 滞后超过一帧不补发过期四分之一帧，按当前位置整帧重新同步并继续', async rate => {
     const send = vi.fn();
     vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
     const output = new MediaMtcOutput(); await output.connect('MA2'); output.tick(0, rate, 0); output.tick(16, rate, 16);
     send.mockClear();
-    expect(() => output.tick(80, rate, 80)).toThrow('超过一帧');
-    expect(send).not.toHaveBeenCalled();
+    expect(output.tick(80, rate, 80)).toBe(true);
+    // Full Frame first; on an exact frame boundary only that boundary's first quarter follows.
+    expect(send.mock.calls.map(([message]) => (message as number[])[0])).toEqual(rate === '25' ? [0xf0, 0xf1] : [0xf0]);
+    expect(output.takeSchedulingNotice()).toContain('滞后超过一帧');
     expect(output.takeSchedulingNotice()).toBeNull();
-    output.stop(); output.tick(80, rate, 80);
-    expect(send.mock.calls[0]?.[0]?.[0]).toBe(0xf0);
+    for (let now = 81; now <= 200; now += 1) output.tick(now, rate, now);
+    expect(send.mock.calls.filter(([message]) => (message as number[])[0] === 0xf1).length).toBeGreaterThan(10);
   });
-  it.each([[600, 600], [2000, 200], [0, 200]])('长时间中断或音频跳变仍阻断：位置 %s / 时钟 %s', async (position, now) => {
+  it.each([[600, 600, '调度中断'], [2000, 200, '不一致'], [0, 200, '不一致']])('长时间中断或音频跳变：位置 %s / 时钟 %s 重新整帧同步并报告', async (position, now, reason) => {
     const send = vi.fn();
     vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
     const output = new MediaMtcOutput(); await output.connect('MA2'); output.tick(0, '30', 0);
-    send.mockClear(); expect(() => output.tick(position, '30', now)).toThrow('已停止');
-    expect(send).not.toHaveBeenCalled(); expect(output.takeSchedulingNotice()).toBeNull();
+    send.mockClear(); output.tick(position, '30', now);
+    expect(send.mock.calls.map(([message]) => (message as number[])[0])).toEqual([0xf0, 0xf1]);
+    expect(send.mock.calls[1]?.[0]).toEqual([0xf1, expect.any(Number)]);
+    expect(((send.mock.calls[1]?.[0] as number[] | undefined)?.[1] ?? -1) >> 4).toBe(0);
+    expect(output.takeSchedulingNotice()).toContain(reason);
   });
   it.each(['24', '25', '29.97df', '30'] as const)('%s fps 一小时确定性调度保持顺序和有界误差（非实体或实时验收）', async (rate) => {
     const decoder = new MtcQuarterFrameDecoder();

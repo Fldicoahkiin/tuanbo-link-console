@@ -115,7 +115,7 @@ it('时间码模式遇到本地序列池 Cue 时照常播放音频并发原偏�
   await f.controller.resume(); expect(f.state().status).toBe('playing');
   f.controller.dispose();
 });
-it('界面阻塞 200ms 后仅停止时间码，音乐继续且不自动重发', async () => {
+it('界面阻塞 200ms 后时间码不补发过期帧，按音频位置整帧重新同步并继续，播放栏标出输出异常', async () => {
   const send = vi.fn();
   vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
   const f = fixture(false, false, new MediaMtcOutput());
@@ -124,14 +124,14 @@ it('界面阻塞 200ms 后仅停止时间码，音乐继续且不自动重发', 
   const beforeStall = send.mock.calls.length;
   const clock = vi.spyOn(performance, 'now').mockReturnValue(208);
   f.audio.currentTime = 0.208; await vi.advanceTimersByTimeAsync(8);
-  expect(f.state()).toMatchObject({ status: 'playing', error: null });
-  expect(f.state().notice).toContain('超过一帧');
-  expect(f.state().mtcConnectionFailed).toBe(true);
-  expect(send).toHaveBeenCalledTimes(beforeStall);
-  clock.mockReturnValue(224); f.audio.currentTime = 0.224;
+  expect(f.state()).toMatchObject({ status: 'playing', error: null, mtcConnectionFailed: false });
+  expect(f.state().fault).toContain('时间码中断 1 次');
+  const relocated = send.mock.calls.slice(beforeStall).map(([message]) => (message as number[])[0]);
+  expect(relocated[0]).toBe(0xf0); expect(relocated.filter(type => type === 0xf1).length).toBeLessThanOrEqual(1);
+  clock.mockReturnValue(300); f.audio.currentTime = 0.3;
   await vi.advanceTimersByTimeAsync(16);
   expect(f.state().status).toBe('playing');
-  expect(send).toHaveBeenCalledTimes(beforeStall);
+  expect(send.mock.calls.length).toBeGreaterThan(beforeStall + relocated.length);
   await f.controller.pause(); const count = send.mock.calls.length;
   await vi.advanceTimersByTimeAsync(100); expect(send).toHaveBeenCalledTimes(count);
   clock.mockRestore(); f.controller.dispose();
