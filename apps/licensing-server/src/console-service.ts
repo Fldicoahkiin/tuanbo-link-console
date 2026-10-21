@@ -49,7 +49,7 @@ export class ConsoleService {
     if (!value) throw new ServiceError(404, 'ORDER_NOT_FOUND', '订单不存在');
     return rowSchema.parse(value);
   }
-  private financial(user: ConsoleSession): void { if (user.user.role !== 'owner' && user.user.role !== 'finance') throw new ServiceError(403, 'FORBIDDEN', '需要财务或负责人权限'); }
+  private financial(user: ConsoleSession): void { if (user.user.role !== 'owner' && user.user.role !== 'finance') throw new ServiceError(403, 'FORBIDDEN', '需要财务或管理员权限'); }
   list(resource: string, query: PageQuery, session: ConsoleSession) {
     const term = `%${query.q.replace(/[\\%_]/g, '\\$&')}%`;
     if (resource === 'orders' || resource === 'exceptions') {
@@ -72,7 +72,7 @@ export class ConsoleService {
       return pageSchema.parse({ ...this.page(`${finance} ORDER BY created DESC,id`, params, query), summary });
     }
     if (resource === 'audit') {
-      if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '只有负责人可以查看全局日志');
+      if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '只有管理员可以查看全局日志');
       // 对象显示为订单编号、授权所属客户、工单所属订单或用户名；订单、授权、工单可跳转详情。
       return this.page(`SELECT * FROM (SELECT a.*,COALESCE(u.username,a.actor) AS operator,
         CASE WHEN o.id IS NOT NULL THEN 'orders' WHEN l.id IS NOT NULL THEN 'licenses' WHEN t.id IS NOT NULL THEN 'tickets' END AS targetType,
@@ -82,7 +82,7 @@ export class ConsoleService {
         WHERE (target LIKE ? ESCAPE '\\' OR targetLabel LIKE ? ESCAPE '\\' OR operator LIKE ? ESCAPE '\\' OR reason LIKE ? ESCAPE '\\') AND (?='' OR action=?) ORDER BY at DESC,id`, [term, term, term, term, query.state, query.state], query);
     }
     if (resource === 'users') {
-      if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '只有负责人可以管理人员');
+      if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '只有管理员可以管理人员');
       return pageSchema.parse({ items: this.auth.users(), page: 1, hasMore: false });
     }
     throw new ServiceError(404, 'NOT_FOUND', '页面不存在');

@@ -67,7 +67,7 @@ it('登录 Cookie 安全属性、权限变更即时撤销会话', async () => {
   const updated = await s.send('/console-api/commands', 'owner', { operationId: randomUUID(), input: { action: 'update-user', id: s.users.viewer!.id, role: 'viewer', enabled: false, reason: '离职' } });
   expect(updated.status).toBe(200); expect((await s.send('/console-api/session', 'viewer')).status).toBe(401);
 });
-it('他人从一个地址反复猜错同一用户名，不锁住负责人从其他地址登录', async () => {
+it('他人从一个地址反复猜错同一用户名，不锁住管理员从其他地址登录', async () => {
   const s = await setup(true); s.advance();
   const wrong = { username: 'owner', password: 'wrong-password', code: '000000' }; const attacker = { 'x-tblink-client-ip': '203.0.113.7' };
   for (let index = 0; index < 10; index++) expect((await s.send('/console-api/login', undefined, wrong, attacker)).status).toBe(401);

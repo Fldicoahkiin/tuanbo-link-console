@@ -15,5 +15,5 @@ try {
   writeFileSync(config.CONSOLE_BOOTSTRAP_OUTPUT, '', { flag: 'wx', mode: 0o600 });
   const result = auth.bootstrap(config.CONSOLE_BOOTSTRAP_USERNAME);
   writeFileSync(config.CONSOLE_BOOTSTRAP_OUTPUT, JSON.stringify(result), { mode: 0o600 });
-  console.log('负责人开通凭据已写入受限输出文件；24 小时内在管理站的账号开通页使用。');
+  console.log('管理员开通凭据已写入受限输出文件；24 小时内在管理站的账号开通页使用。');
 } finally { db.close(); }

@@ -3,7 +3,7 @@ export type Field = { key: string; label: string; type?: 'number' | 'datetime-lo
 const reason: Field = { key: 'reason', label: '操作原因', type: 'textarea' };
 const customer: Field[] = [{ key: 'customer', label: '客户名称' }, { key: 'customerType', label: '客户类型', type: 'select', options: [['company', '企业'], ['personal', '个人']] }, { key: 'quantity', label: '授权数量（1–100）', type: 'number' }, { key: 'useUntil', label: '授权截止时间（北京时间）', type: 'datetime-local' }];
 const amount: Field = { key: 'amountFen', label: '金额（元）', type: 'number' };
-const roles: [string, string][] = [['owner', '负责人'], ['operations', '运营'], ['finance', '财务'], ['viewer', '只读']];
+const roles: [string, string][] = [['owner', '管理员'], ['operations', '运营'], ['finance', '财务'], ['viewer', '只读']];
 export const roleNames = Object.fromEntries(roles);
 export const forms: Record<ConsoleAction['action'], { title: string; note?: string; fields: Field[] }> = {
   'create-order': { title: '创建线下订单', fields: [{ key: 'reference', label: '业务订单编号' }, ...customer, amount, reason] },

@@ -60,7 +60,7 @@ it('特殊授权一码一机，不写入收款，重复提交不重复发码', a
   expect(JSON.stringify(s.consoleService.list('licenses', pageQuerySchema.parse({}), s.login.session))).not.toContain(revealed.secret);
   expect(JSON.stringify(s.db.prepare('SELECT * FROM console_audit').all())).not.toContain(revealed.secret);
 });
-it('服务端角色、近期验证与最后负责人保护', async () => {
+it('服务端角色、近期验证与最后管理员保护', async () => {
   const s = await setup();
   for (const role of ['operations', 'finance', 'viewer'] as const) {
     const session: ConsoleSession = { ...s.login.session, user: { ...s.login.session.user, role } };

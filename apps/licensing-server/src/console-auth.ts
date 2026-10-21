@@ -73,7 +73,7 @@ export class ConsoleAuth {
       const existing = this.db.prepare('SELECT * FROM console_users').all();
       if (existing.length) {
         const prior = existing.length === 1 ? accountSchema.parse(existing[0]) : null;
-        if (!prior || prior.password || prior.role !== 'owner' || prior.username !== username) throw new Error('已有管理员，请使用现有负责人管理人员');
+        if (!prior || prior.password || prior.role !== 'owner' || prior.username !== username) throw new Error('已有管理员，请由现有管理员管理人员');
         const token = randomBytes(32).toString('hex');
         this.db.prepare('UPDATE console_users SET invite_hash=?,invite_until=?,totp=?,last_step=-1 WHERE id=?').run(digest(token), this.now() + 86400000, this.seal(randomBytes(20).toString('hex')), prior.id);
         this.db.exec('COMMIT'); return { id: prior.id, token };
@@ -160,14 +160,14 @@ export class ConsoleAuth {
     const prior = this.account(id);
     if (prior.role === 'owner' && prior.enabled && prior.password && (role !== 'owner' || !enabled)) {
       const owners = this.db.prepare("SELECT COUNT(*) AS n FROM console_users WHERE role='owner' AND enabled=1 AND password IS NOT NULL").get();
-      if (Number(owners?.n) <= 1) throw new ServiceError(409, 'LAST_OWNER', '不能禁用或降级最后一个已开通的负责人');
+      if (Number(owners?.n) <= 1) throw new ServiceError(409, 'LAST_OWNER', '不能禁用或降级最后一个已开通的管理员');
     }
     this.db.prepare('UPDATE console_users SET role=?,enabled=? WHERE id=?').run(role, Number(enabled), id);
     this.db.prepare('DELETE FROM console_sessions WHERE user_id=?').run(id);
   }
   resetUser(id: string): { token: string } {
     const account = this.account(id);
-    if (account.role === 'owner' && account.password && Number(this.db.prepare("SELECT COUNT(*) AS n FROM console_users WHERE role='owner' AND enabled=1 AND password IS NOT NULL").get()?.n) <= 1) throw new ServiceError(409, 'LAST_OWNER', '请先开通另一名负责人，再重置此账号');
+    if (account.role === 'owner' && account.password && Number(this.db.prepare("SELECT COUNT(*) AS n FROM console_users WHERE role='owner' AND enabled=1 AND password IS NOT NULL").get()?.n) <= 1) throw new ServiceError(409, 'LAST_OWNER', '请先开通另一名管理员，再重置此账号');
     const token = randomBytes(32).toString('hex');
     this.db.prepare("UPDATE console_users SET password=NULL,totp=?,last_step=-1,recovery='[]',invite_hash=?,invite_until=? WHERE id=?").run(this.seal(randomBytes(20).toString('hex')), digest(token), this.now() + 86400000, id);
     this.db.prepare('DELETE FROM console_sessions WHERE user_id=?').run(id); return { token };
