@@ -300,7 +300,7 @@ export class NativeProgramPlayer {
     const output = this.native; if (!output || this.finishing) return;
     this.update({ positionMs: output.positionMs, mtcPositionMs: this.allowMtc ? output.positionMs + output.offsetMs : null,
       ...(this.reflectGain ? { volume: output.gain * 100 } : {}) });
-    if (output.status === 'ended') { void this.finish(); return; }
+    if (output.status === 'ended') { void this.finish(output.positionMs); return; }
     if (output.status !== 'playing' || output.positionMs === this.lastPosition) return;
     this.lastPosition = output.positionMs;
     if (this.lightingPrepared) try { this.lighting.tick(output.positionMs); } catch (error) { this.lightingPrepared = false; this.lighting.stop(); this.reportUnavailable(`灯光动作已停止：${toUserErrorMessage(error)}`); }
@@ -318,11 +318,13 @@ export class NativeProgramPlayer {
     catch (error) { if (this.current(token)) this.runtimeUnavailable(`通用 MIDI Cue 已停止：${toUserErrorMessage(error)}`); }
     finally { this.ingestPending = false; }
   }
-  private async finish(): Promise<void> {
+  /** `endedAt` is the engine's final position: whole samples, so at 44.1 kHz it
+   * can differ from the nominal end by a fraction of a millisecond. */
+  private async finish(endedAt: number): Promise<void> {
     const token = this.epoch; this.finishing = true;
     try {
       if (this.lightingPrepared) {
-        try { await this.lighting.finish(this.state.durationMs); }
+        try { await this.lighting.finish(endedAt); }
         catch (error) {
           if (!this.current(token)) return;
           this.lightingPrepared = false; this.lighting.stop();

@@ -219,6 +219,19 @@ describe('原生正式播放器的操作与会话', () => {
     if (endAction === 'pause') expect(f.state().notice).toContain('曲尾灯光网络断开');
     await f.player.stop();
   });
+  it('44.1kHz 曲尾位置按整采样取整，灯光收尾使用引擎实际结束位置，不用名义结束时间', async () => {
+    const f = fixture();
+    f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: 'network' };
+    f.project.rundown[0]!.playback!.endMs = 9499.99;
+    await f.player.play('song-0');
+    // The engine ends on a whole sample: llround(9499.99 × 44.1) = 418950 samples = 9500 ms.
+    const endedAt = Math.round(9499.99 * 44.1) / 44.1;
+    expect(endedAt).not.toBe(9499.99);
+    f.emit({ status: 'ended', positionMs: endedAt });
+    await vi.waitFor(() => expect(f.lighting.finish).toHaveBeenCalledOnce());
+    expect(f.lighting.finish).toHaveBeenCalledWith(endedAt);
+    await f.player.stop();
+  });
   it('界面伴随 Cue 启动失败不停止已开始的后台音频与 OBS', async () => {
     const f = fixture(); f.deps.started.mockImplementation(() => { throw new Error('本地 MIDI 起点已错过'); });
     await f.player.play('song-0');
