@@ -3,7 +3,7 @@ import type { LinkCue, LinkProject } from '@tb/schema';
 import { ManagedMediaExecutionError, type ManagedOutputRuntime } from '@tb/core/link';
 import { useRuntimeStore } from '../stores/runtime-store';
 import { sceneOutputAt } from '@tb/core/link';
-import { appendCueReport, appendMediaReport } from './runtime-report-store';
+import { appendCueReport, appendMediaReport, appendRetryActionReport } from './runtime-report-store';
 
 export async function executeTimelineMedia(event: ManagedMediaEvent, managed: ManagedOutputRuntime,
   mode: PreflightMode, frame: number | null): Promise<void> {
@@ -26,9 +26,12 @@ export async function executeSkippedTimelineCue(cue: LinkCue, reason: string, ru
 }
 
 export async function synchronizeTimelineTransport(project: LinkProject, itemId: string | undefined, action: 'pause' | 'start', frame: number,
-  managed: ManagedOutputRuntime, runner: CueActionRunner,
+  managed: ManagedOutputRuntime, runner: CueActionRunner, mode: PreflightMode,
   execute: (cues: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[]) => Promise<void>): Promise<void> {
-  await managed.executeTransport(runner, action, frame);
+  // Live failures are shown on their action; the restored composition below still runs.
+  const failures = await managed.executeTransport(runner, action, frame, mode);
+  for (const result of failures.actions) appendRetryActionReport(result, mode);
+  for (const report of failures.media) appendMediaReport(report);
   if (action !== 'start' || project.obsOutputMode !== 'scenes' || !itemId) return;
   const work = sceneOutputAt(project, itemId, frame);
   // Internal audio resumes the paused decoder; don't seek/restart it a second time.

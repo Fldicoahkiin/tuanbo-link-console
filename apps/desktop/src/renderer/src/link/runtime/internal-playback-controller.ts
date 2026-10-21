@@ -49,7 +49,7 @@ export class InternalPlaybackController {
     const reuseSession = this.state.itemId === itemId && ['playing', 'paused'].includes(this.state.status);
     if (this.state.itemId && this.state.itemId !== itemId && ['playing', 'paused'].includes(this.state.status)) this.markPlayed();
     const generation = ++this.generation;
-    this.silence(); this.runtimePrepared = false; this.lightingPrepared = false; this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, mtcConnectionFailed: false });
+    this.silence(); this.runtimePrepared = false; this.lightingPrepared = false; this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, fault: null, mtcConnectionFailed: false });
     const operation = this.tail.then(async () => {
       if (!this.current(generation)) return;
       try { await this.dependencies.stop('开始播放前结束上一会话'); }
@@ -178,7 +178,7 @@ export class InternalPlaybackController {
   }
 
   async stop(reason?: string): Promise<void> {
-    const generation = ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null });
+    const generation = ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null, fault: null });
     // Publish cleanup to the same queue before another Play can start preparing OBS.
     const operation = this.tail.then(async () => {
       const [runtime, lighting] = await Promise.allSettled([this.dependencies.stop(reason), this.lighting.release()]);
@@ -190,13 +190,15 @@ export class InternalPlaybackController {
   }
   async reset(): Promise<void> { await this.stop(); if (this.state.status !== 'error') this.update({ itemId: null, playedItemIds: [], durationMs: 0 }); }
 
-  externalStop(): void { ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null }); }
+  externalStop(): void { ++this.generation; this.silence(); this.update({ status: 'stopped', positionMs: 0, notice: null, fault: null }); }
   freeze(message: string): void {
     ++this.generation; this.silence(); this.update({ status: 'error', error: message, errorTitle: '播放已中断' });
     this.dependencies.failed?.(`播放已中断：${message}`, this.state.itemId);
   }
   reportUnavailable(message: string): void { this.appendNotice(message); }
   reportPreparation(message: string): void { if (this.state.status === 'preparing') this.update({ preparation: message }); }
+  /** A live output failure: shown in red; audio and the remaining actions continue. */
+  reportFault(message: string): void { if (['playing', 'paused'].includes(this.state.status) && this.state.fault !== message) this.update({ fault: message }); }
   runtimeUnavailable(message: string): void { this.disableRuntime(new Error(message)); }
   seek(positionMs: number): Promise<void> {
     if (!this.state.itemId) return Promise.resolve();

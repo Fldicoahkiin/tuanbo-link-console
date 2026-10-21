@@ -416,7 +416,7 @@ export class LinkRuntimeCoordinator {
     if (this.internalObsOwner === 'main') return;
     const generation = this.executionGeneration;
     const execution = this.cueExecutionTail.then(() => synchronizeTimelineTransport(this.project, this.currentItem()?.id, action, this.lastSample?.totalFrames ?? 0,
-      this.managedOutput, this.runner, (cues, media) => this.executeTimelineWork(cues, media, generation)));
+      this.managedOutput, this.runner, this.runtime.getMode(), (cues, media) => this.executeTimelineWork(cues, media, generation)));
     this.cueExecutionTail = execution.catch((error: unknown) => this.reportRuntimeError(error));
     await execution;
   }
