@@ -165,7 +165,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await expect(realtime).toBeChecked();
     const renameCalls = JSON.parse(await application.evaluate(() => process.env.TBLINK_RENAME_CALLS ?? '[]')) as Ma2RenameRequest[];
     expect(renameCalls.map(call => call.change.name)).toEqual(['前区暖白','控台原名－前区面光暖白完整名称','前区暖白','分类暖白']);
-    expect(renameCalls.at(-1)!.change).toMatchObject({ sequence: 2, cue: '1.000', kind: 'single', name: '分类暖白', confirmedName: '前区暖白' });
+    expect(renameCalls.at(-1)!.change).toMatchObject({ sequence: 2, cue: '1.000', kind: 'single', name: '分类暖白', confirmedName: toConsoleLabel('前区暖白') });
     await realtime.click();
     await expect(realtime).not.toBeChecked();
     await page.getByRole('button', { name: '撤销', exact: true }).click();
