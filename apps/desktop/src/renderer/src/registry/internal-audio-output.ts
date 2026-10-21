@@ -49,6 +49,10 @@ export class InternalAudioOutput {
     await this.context.resume();
   }
 
+  /** How far the audible sound trails the media element's position (about 52 ms
+   * on the field machine, 2026-10-22). Zero before the graph exists. */
+  latencyMs(): number { return this.context ? (this.context.baseLatency + this.context.outputLatency) * 1000 : 0; }
+
   /** Prepared before audio.play(). UI consumers read these nodes, never create
    * additional output contexts or close the shared playback graph on unmount. */
   getAnalysis(): AudioAnalysis | null { return this.analysis; }

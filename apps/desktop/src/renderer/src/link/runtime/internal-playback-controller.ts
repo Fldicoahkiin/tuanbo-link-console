@@ -29,11 +29,12 @@ export class InternalPlaybackController {
   private mtcSentPositionMs: number | null = null;
   private disposed = false;
   private loadedAudioUrl: string | null = null;
+  private audibleMs = 0;
   private readonly lighting = new LightingMidiOutput();
 
   constructor(private readonly project: LinkProject, private readonly dependencies: InternalPlayerDependencies,
     private readonly audio: HTMLAudioElement = new Audio(), private readonly mtc = new MediaMtcOutput(),
-    private readonly output: Pick<InternalAudioOutput, 'prepare' | 'captureMonitoringStream' | 'getAnalysis' | 'dispose'> = new InternalAudioOutput()) {
+    private readonly output: Pick<InternalAudioOutput, 'prepare' | 'captureMonitoringStream' | 'getAnalysis' | 'dispose' | 'latencyMs'> = new InternalAudioOutput()) {
     audio.preload = 'auto';
     audio.crossOrigin = 'anonymous';
     audio.onended = () => this.finish();
@@ -127,9 +128,10 @@ export class InternalPlaybackController {
       if (!this.current(generation)) return;
       if (paused) { if (this.runtimePrepared) await this.dependencies.pause('定位后保持暂停'); this.update({ status: 'paused' }); return; }
       if (config.fadeInMs) this.audio.volume = 0;
+      this.audibleMs = this.audio.currentTime * 1000;
       await this.audio.play();
       if (!this.current(generation)) { this.silence(); return; }
-      if (this.runtimePrepared) this.dependencies.started?.(this.audio.currentTime * 1000);
+      if (this.runtimePrepared) this.dependencies.started?.(this.audiblePosition(this.audio.currentTime * 1000));
       this.update({ status: 'playing', positionMs: this.audio.currentTime * 1000, mtcPositionMs: this.audio.currentTime * 1000 + this.offsetMs });
       this.lastAdvanced = performance.now();
       if (config.fadeInMs) this.ramp(0, this.state.volume / 100, config.fadeInMs, false);
@@ -168,10 +170,10 @@ export class InternalPlaybackController {
       if (lighting && this.lightingPrepared) try { await this.lighting.prepare(lighting, this.dependencies.configuration().lightingProfile ?? null, this.audio.currentTime * 1000); }
       catch (error) { if (!this.current(generation)) return; this.lightingPrepared = false; this.lighting.stop(); this.appendNotice(`灯光动作已停止：${toUserErrorMessage(error)}`); }
       if (!this.current(generation)) return;
-      this.audio.volume = this.state.volume / 100; await this.audio.play();
+      this.audio.volume = this.state.volume / 100; this.audibleMs = this.audio.currentTime * 1000; await this.audio.play();
       if (!this.current(generation)) return;
       this.lastAdvanced = performance.now();
-      if (this.runtimePrepared) this.dependencies.started?.(this.audio.currentTime * 1000);
+      if (this.runtimePrepared) this.dependencies.started?.(this.audiblePosition(this.audio.currentTime * 1000));
       this.update({ status: 'playing' }); this.timer = setInterval(() => this.tick(), 8);
     } catch (error) { if (this.current(generation)) this.fail(error); }
   }
@@ -309,18 +311,20 @@ export class InternalPlaybackController {
         return;
       }
       if (positionMs >= this.state.durationMs) { this.finish(); return; }
+      // Outputs follow what the audience hears, not the element's decode position.
+      const audibleMs = this.audiblePosition(positionMs);
       if (this.state.mtcEnabled && !this.directLighting && this.state.mtcPortName) {
-        try { if (this.mtc.tick(positionMs + this.offsetMs, this.project.timebase.frameRate, now)) this.mtcSentPositionMs = positionMs + this.offsetMs; }
+        try { if (this.mtc.tick(audibleMs + this.offsetMs, this.project.timebase.frameRate, now)) this.mtcSentPositionMs = audibleMs + this.offsetMs; }
         catch (error) { this.mtc.stop(); this.update({ mtcPortName: null, mtcConnectionFailed: true }); this.appendNotice(`MIDI 时间码已停止：${toUserErrorMessage(error)}。音频继续播放。`); }
       }
       const schedulingNotice = this.mtc.takeSchedulingNotice();
       if (schedulingNotice) { this.dependencies.notice?.(schedulingNotice, this.state.itemId); this.reportFault(schedulingNotice); }
-      if (this.lightingPrepared) try { this.lighting.tick(positionMs); this.reportLightingFault(); }
+      if (this.lightingPrepared) try { this.lighting.tick(audibleMs); this.reportLightingFault(); }
       catch (error) { this.lightingPrepared = false; this.lighting.stop(); this.appendNotice(`灯光动作已停止：${toUserErrorMessage(error)}。音频继续播放。`); }
-      const frame = millisecondsToFrameNumber(positionMs, this.project.timebase.frameRate);
+      const frame = millisecondsToFrameNumber(audibleMs, this.project.timebase.frameRate);
       if (frame !== this.lastFrame) {
         this.lastFrame = frame; const generation = this.generation;
-        if (this.runtimePrepared) void this.dependencies.ingest(positionMs).catch((error: unknown) => { if (this.current(generation)) this.disableRuntime(error); });
+        if (this.runtimePrepared) void this.dependencies.ingest(audibleMs).catch((error: unknown) => { if (this.current(generation)) this.disableRuntime(error); });
       }
       if (now - this.lastRendered > 50) { this.lastRendered = now; this.update({ positionMs, mtcPositionMs: positionMs + this.offsetMs, mtcSentPositionMs: this.mtcSentPositionMs }); }
     } catch (error) { this.fail(error); }
@@ -370,6 +374,12 @@ export class InternalPlaybackController {
   }
   /** An output that could not join this song: logged and shown in red, the song still starts. */
   private startFault(message: string): void { this.dependencies.notice?.(message, this.state.itemId); this.reportFault(message); }
+  /** Never earlier than the start of this playing segment and never backwards,
+   * so a latency reading that grows cannot make timecode or Cues jump back. */
+  private audiblePosition(positionMs: number): number {
+    this.audibleMs = Math.max(this.audibleMs, positionMs - this.output.latencyMs());
+    return this.audibleMs;
+  }
   private reportLightingFault(): void {
     const fault = this.lighting.takeFault();
     if (fault) { this.dependencies.notice?.(fault, this.state.itemId); this.reportFault(fault); }

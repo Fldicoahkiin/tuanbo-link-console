@@ -28,7 +28,7 @@ function fixture(grouped = false, nativeSeek = false, mtcInstance?: MediaMtcOutp
     id: `song-${index}`, title: `歌曲 ${index}`, referenceAudio: { assetId: `audio-${index}`, relativePath: `${index}.wav`, sha256: 'a'.repeat(64), durationMs: 10_000 }
   })) });
   if (grouped) { project.playlists = [{ id: 'selected', name: '当前列表' }]; project.rundown[0]!.playlistId = 'selected'; project.rundown[2]!.playlistId = 'selected'; }
-  const output = { prepare: vi.fn((): Promise<void> => Promise.resolve()), captureMonitoringStream: vi.fn((): MediaStream | null => null), getAnalysis: () => null, dispose: () => Promise.resolve() };
+  const output = { prepare: vi.fn((): Promise<void> => Promise.resolve()), captureMonitoringStream: vi.fn((): MediaStream | null => null), getAnalysis: () => null, dispose: () => Promise.resolve(), latencyMs: vi.fn(() => 0) };
   const controller = new InternalPlaybackController(project, deps, audio as unknown as HTMLAudioElement, mtcInstance ?? mtc as unknown as MediaMtcOutput, output);
   return { controller, deps, audio, mtc, project, output, state: () => state };
 }
@@ -236,6 +236,21 @@ it('直接 MIDI 动作不可用也不阻断音频，并说明灯光未启动', a
   expect(f.state()).toMatchObject({ status: 'playing', mtcConnectionFailed: false });
   expect(f.state().fault).toContain('灯光动作未启动');
   f.controller.dispose();
+});
+it('时间码与 Cue 跟随听到的声音：扣除 52ms 输出延迟，开播时不早于起点、不回跳', async () => {
+  const f = fixture(); f.output.latencyMs.mockReturnValue(52);
+  try {
+    await f.controller.play('song-0');
+    const offset = f.state().mtcPositionMs! - f.state().positionMs;
+    expect(f.deps.started).toHaveBeenLastCalledWith(0);
+    f.audio.currentTime = 0.03; await vi.advanceTimersByTimeAsync(8);
+    expect(f.mtc.tick).toHaveBeenLastCalledWith(offset, '30', expect.any(Number));
+    f.audio.currentTime = 1.052; await vi.advanceTimersByTimeAsync(8);
+    expect(f.mtc.tick).toHaveBeenLastCalledWith(offset + 1000, '30', expect.any(Number));
+    expect(f.deps.ingest).toHaveBeenLastCalledWith(1000);
+    f.output.latencyMs.mockReturnValue(70); f.audio.currentTime = 1.06; await vi.advanceTimersByTimeAsync(8);
+    expect(f.mtc.tick).toHaveBeenLastCalledWith(offset + 1000, '30', expect.any(Number));
+  } finally { f.controller.dispose(); }
 });
 it('旧音频设备消失时不开始播放并说明原因，不改用其他线路', async () => {
   const f = fixture();
