@@ -63,3 +63,25 @@ it('切换连接先停止输出，直至切换结束拒绝新试听；停止失�
   f.api.playCue=send;await f.service.play(request(3,2));
   expect(f.service.status().targets).toHaveLength(2);
 });
+it('Off 永不回包时按超时标记失败，停止状态一定结束，可再次停止',async()=>{
+  vi.useFakeTimers();
+  try{
+    const f=fixture();await f.service.play(request(1));
+    f.api.playCue=()=>new Promise<void>(()=>undefined);
+    const stop=f.service.stop();
+    await vi.advanceTimersByTimeAsync(10000);
+    const result=await stop;
+    expect(result.phase).toBe('failed');expect(f.service.status().phase).toBe('failed');
+    expect(result.targets[0]?.error).toContain('未确认关闭');
+  }finally{vi.useRealTimers();}
+});
+it('状态发布失败不会把试听卡在停止中',async()=>{
+  let closed=true;
+  const f=fixture();
+  const service=new Ma2AuditionService(f.api,state=>{if(closed&&state.phase==='stopping')throw new Error('窗口已关闭');});
+  await service.play(request(1));
+  await expect(Promise.resolve().then(()=>service.stop())).rejects.toThrow('窗口已关闭');
+  expect(service.status().phase).toBe('failed');expect(service.status().targets).toHaveLength(1);
+  closed=false;
+  const retry=await service.stop();expect(retry.phase).toBe('sent');expect(retry.targets).toEqual([]);
+});
