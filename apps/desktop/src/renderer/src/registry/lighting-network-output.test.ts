@@ -127,3 +127,17 @@ it('控台响应过慢积压超过 32 条时跳过新 Cue 并标红，不停止�
   expect(f.output.takeFault()).toContain('积压');
   f.output.stop();
 });
+
+it('网络 Cue 晚于 150ms 才执行时标出迟到时长，仍执行且不影响后续', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = setup();
+    f.api.playMa2Cue.mockImplementationOnce(() => new Promise<void>(resolve => { setTimeout(resolve, 400); }));
+    await f.output.prepare(f.document, 0);
+    f.output.tick(100); await vi.advanceTimersByTimeAsync(400);
+    expect(f.output.takeFault()).toMatch(/灯光网络 Cue 晚 4\d\d ms 执行/);
+    f.output.tick(200); await vi.advanceTimersByTimeAsync(10);
+    expect(f.api.playMa2Cue).toHaveBeenCalledTimes(2); expect(f.output.takeFault()).toBeNull();
+    f.output.stop();
+  } finally { vi.useRealTimers(); }
+});

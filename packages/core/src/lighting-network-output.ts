@@ -80,9 +80,16 @@ export class LightingNetworkOutput {
       this.cursor += 1;
       if (this.pending >= 32) { this.fault = '灯光网络指令积压超过 32 条，本条未发送；控台响应过慢，请减少同时调用的素材'; continue; }
       this.pending += 1;
-      const deadlineAt = Date.now() + 1000;
+      const dueAt = Date.now(), deadlineAt = dueAt + 1000;
+      // A late look change beats a missing one, so a Cue may run up to 1 s late;
+      // anything past 150 ms is reported so the operator knows it was late.
       const play = async (action: import('@tb/schema').Ma2PlaybackAction): Promise<boolean> => {
-        try { await this.api.playMa2Cue({ sessionId, network, action, deadlineAt }); return true; }
+        try {
+          await this.api.playMa2Cue({ sessionId, network, action, deadlineAt });
+          const lateMs = Date.now() - dueAt;
+          if (lateMs > 150 && this.sessionId === sessionId) this.fault = `灯光网络 Cue 晚 ${lateMs} ms 执行：${action.target === 'executor' ? `执行器 ${action.executor}` : `序列 ${action.sequence}`} ${action.action === 'off' ? '关闭' : action.cue ?? ''}`;
+          return true;
+        }
         catch (error) {
           if (this.sessionId === sessionId) this.fault = `灯光网络 Cue 未执行：${action.target === 'executor' ? `执行器 ${action.executor}` : `序列 ${action.sequence}`} ${action.action === 'off' ? '关闭' : action.cue ?? ''} · ${error instanceof Error ? error.message : String(error)}`;
           return false;
