@@ -10,7 +10,7 @@
 .player-now .player-track-icon, .player-now .player-next { display: none; }
 .player-now h2 { font-size: 15px; max-width: 245px; margin: 3px 0; }
 .player-now small { font-size: var(--text-caption); }
-.player-now small.player-fault { color: var(--danger); font-weight: 600; }
+.player-transport .player-now > div > small.player-fault { color: var(--danger); font-weight: 600; }
 .player-buttons { gap: 6px; flex-wrap: nowrap; }
 .player-buttons button { width: 32px; min-width: 0; height: 36px; border-radius: 8px; padding: 0; flex-shrink: 0; }
 .player-buttons button.primary-button { flex: 1; min-width: 68px; padding: 0 4px; gap: 4px; font-size: var(--text-caption); white-space: nowrap; }
