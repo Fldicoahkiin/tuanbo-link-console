@@ -64,7 +64,8 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
   await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: '核对控台序列目录' });
   const verified = sessionDirectory ?? ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
   if (signal?.aborted) throw new Error('素材读取已取消');
-  if (isPlaying() || JSON.stringify(directory) !== JSON.stringify(verified)) throw new Error('控台工程或序列目录发生变化，请重新读取');
+  if (isPlaying()) throw new Error('播放已开始，素材核对已停止，停止播放后重新核对');
+  if (JSON.stringify(directory) !== JSON.stringify(verified)) throw new Error('控台工程或序列目录发生变化，请重新读取');
   const result = ma2EffectLibrarySchema.parse({ directory, sequences, fixtureUsage: [], fixtureDetails: 'unavailable', errors, readAt });
   await onProgress?.({ phase, completed: directory.entries.length + 1, total: directory.entries.length + 1, detail: '序列目录已核对' });
   return result;

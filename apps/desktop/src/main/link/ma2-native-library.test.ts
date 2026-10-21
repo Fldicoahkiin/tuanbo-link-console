@@ -95,3 +95,13 @@ it('序列标签跨分页改变时拒绝混合快照，不截掉名称本身的�
   expect(result.sequences).toEqual([]);
   expect(result.errors[0]?.message).toContain('序列名称发生变化');
 });
+
+it('最终复核时开始播放与目录真的变化分别报告，不把播放误报成控台改动', async () => {
+  const row = `1;${Buffer.from('灯光序列 7').toString('hex')};1,1,${Buffer.from('开场').toString('hex')}`;
+  let playing = false;
+  const request = vi.fn<Ma2OnpcBridge['request']>().mockImplementation(() => Promise.resolve(JSON.stringify(directory)));
+  request.mockImplementationOnce(() => Promise.resolve(JSON.stringify(directory))).mockImplementationOnce(() => { playing = true; return Promise.resolve(JSON.stringify(directory)); });
+  await expect(readMa2NativeLibrary(connection([row, row]), { request }, () => playing)).rejects.toThrow('播放已开始，素材核对已停止');
+  const changed = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(JSON.stringify({ ...directory, entries: [...directory.entries, { target: 8, name: '新序列' }] }));
+  await expect(readMa2NativeLibrary(connection([row, row]), { request: changed }, () => false)).rejects.toThrow('控台工程或序列目录发生变化');
+});
