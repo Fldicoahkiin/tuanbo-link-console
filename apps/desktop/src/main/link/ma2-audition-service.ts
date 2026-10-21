@@ -55,8 +55,10 @@ export class Ma2AuditionService {
     this.stopping=Promise.resolve().then(async()=>{
       // The phase always leaves 'stopping', even when publishing state fails;
       // otherwise every later Cue click is refused until the app restarts.
+      // A failed publish never holds back the Offs; it is reported after them.
+      let published:Error|null=null;
       try{
-        this.changed();
+        try{this.changed();}catch(error){published=error instanceof Error?error:new Error(String(error));}
         // Queue every Off at once so they reach the wire back to back at stop priority.
         await Promise.all(targets.filter(value=>value.possiblySent).map(async target=>{
           try{
@@ -66,6 +68,7 @@ export class Ma2AuditionService {
           }catch(error){target.state='failed';target.error=error instanceof Error?error.message:String(error);}
         }));
       }finally{this.phase=this.targets.size?'failed':'sent';this.changed();}
+      if(published)throw published;
       return this.status();
     }).finally(()=>{this.stopping=null;});return this.stopping;
   }

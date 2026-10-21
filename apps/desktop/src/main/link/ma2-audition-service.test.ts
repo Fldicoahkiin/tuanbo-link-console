@@ -75,13 +75,11 @@ it('Off 永不回包时按超时标记失败，停止状态一定结束，可再
     expect(result.targets[0]?.error).toContain('未确认关闭');
   }finally{vi.useRealTimers();}
 });
-it('状态发布失败不会把试听卡在停止中',async()=>{
-  let closed=true;
+it('状态发布失败不会把试听卡在停止中，也不会拦下关灯指令',async()=>{
   const f=fixture();
-  const service=new Ma2AuditionService(f.api,state=>{if(closed&&state.phase==='stopping')throw new Error('窗口已关闭');});
+  const service=new Ma2AuditionService(f.api,state=>{if(state.phase==='stopping')throw new Error('窗口已关闭');});
   await service.play(request(1));
   await expect(Promise.resolve().then(()=>service.stop())).rejects.toThrow('窗口已关闭');
-  expect(service.status().phase).toBe('failed');expect(service.status().targets).toHaveLength(1);
-  closed=false;
-  const retry=await service.stop();expect(retry.phase).toBe('sent');expect(retry.targets).toEqual([]);
+  expect(f.actions.at(-1)?.action).toEqual({target:'sequence',sequence:1,action:'off'});
+  expect(service.status().phase).toBe('sent');expect(service.status().targets).toEqual([]);
 });
