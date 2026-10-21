@@ -268,7 +268,7 @@ local function process(data)
     end
     if op == 'SEQCUES' then
       -- The complete export stays on the console; only the requested Cue elements cross the network.
-      assert(#body > 0 and #body <= 4096 and not body:find('[^%d%.,]'), 'Invalid Cue list')
+      assert(#body > 0 and #body <= 65536 and not body:find('[^%d%.,]'), 'Invalid Cue list')
       assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
       local wanted = {}
       for value in body:gmatch('[^,]+') do
