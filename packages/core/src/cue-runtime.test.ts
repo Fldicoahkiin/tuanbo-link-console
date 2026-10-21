@@ -13,7 +13,9 @@ describe('CueRuntime', () => {
     expect(runtime.manualGo('cue-1').dueCues).toEqual([]);
     runtime.pauseAutomatic(); expect(runtime.resumeMedia(sample(126, 9000)).state).toBe('running');
     runtime.stop(); runtime.completeStop(); runtime.beginPreflight('live'); runtime.arm(10000);
-    runtime.ingest(sample(0, 10000)); expect(runtime.tick(10501).state).toBe('timecodeLost');
+    // Local Cues on the formal audio clock: a quiet observer is not a loss, a jump still freezes.
+    runtime.ingest(sample(0, 10000)); expect(runtime.tick(10501).state).toBe('running');
+    expect(runtime.ingest(sample(300, 10600)).state).toBe('timecodeLost');
     for (const source of ['p1', 'internal'] as const) {
       const blocked = project(); blocked.playbackSource = source;
       if (source === 'internal') blocked.rundown[0]!.cues[0]!.actions = [{ id: 'midi', label: '不可旁路', kind: 'midi.noteOn', portProfileId: 'out', channel: 1, note: 60, velocity: 100 }];
@@ -44,14 +46,36 @@ describe('CueRuntime', () => {
     expect(runtime.getNextCueId(30)).toBe('cue-2');
     expect(runtime.getNextCueId(60)).toBeNull();
   });
-  it('本机音频准备后重建时钟基准，保留已执行 Cue 且继续检测真实断流', () => {
+  it('本机音频准备后重建时钟基准，保留已执行 Cue；观察间隔不当作断流，位置不一致仍拒绝', () => {
     const runtime = new CueRuntime({ ...project(), playbackSource: 'internal' });
     runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);
     expect(runtime.ingest(sample(30, 1000)).dueCues.map(due => due.cue.id)).toEqual(['cue-1']);
     expect(runtime.anchorMediaClock(sample(30, 5000)).state).toBe('running');
     expect(runtime.ingest(sample(31, 5034)).dueCues).toEqual([]);
-    expect(runtime.tick(5600).state).toBe('timecodeLost');
-    expect(runtime.anchorMediaClock(sample(31, 5700)).state).toBe('error');
+    expect(runtime.tick(5600).state).toBe('running');
+    expect(runtime.anchorMediaClock(sample(20, 5700)).state).toBe('error');
+  });
+  it('本机音频时钟：界面卡顿超过 500ms 不判定时间码丢失，期间 Cue 记为错过且不补发，之后的 Cue 照常执行', () => {
+    const runtime = new CueRuntime({ ...project(), playbackSource: 'internal' });
+    runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);
+    runtime.ingest(sample(0, 0)); runtime.ingest(sample(3, 100));
+    expect(runtime.tick(1200).state).toBe('running');
+    const gap = runtime.ingest(sample(45, 1500));
+    expect(gap).toMatchObject({ state: 'running', dueCues: [], missedCueIds: ['cue-1'] });
+    expect(gap.reason).toContain('错过');
+    runtime.ingest(sample(46, 1534));
+    expect(runtime.ingest(sample(60, 2000))).toMatchObject({ state: 'running', missedCueIds: ['cue-1'] });
+    expect(runtime.getNextCueId(60)).toBeNull();
+  });
+  it('本机音频时钟位置与经过时间不符的跳变、外部 MTC 的断流仍冻结自动 Cue', () => {
+    const internal = new CueRuntime({ ...project(), playbackSource: 'internal' });
+    internal.selectItem('item'); internal.beginPreflight('live'); internal.arm(0);
+    internal.ingest(sample(0, 0));
+    expect(internal.ingest(sample(300, 100)).state).toBe('timecodeLost');
+    const external = new CueRuntime(project());
+    external.selectItem('item'); external.beginPreflight('live'); external.arm(0);
+    external.ingest(sample(0, 0)); external.ingest(sample(3, 100));
+    expect(external.ingest(sample(45, 1500)).state).toBe('timecodeLost');
   });
   it('本机时钟准备接口不能掩盖位置跳变或用于 P1 模式', () => {
     for (const source of ['internal', 'p1'] as const) {

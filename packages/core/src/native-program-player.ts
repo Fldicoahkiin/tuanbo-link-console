@@ -186,6 +186,8 @@ export class NativeProgramPlayer {
   externalStop(): void { void this.stop(); }
   freeze(message: string): void { void this.stop().then(() => this.update({ status: 'error', error: message, errorTitle: '播放已中断' })); }
   runtimeUnavailable(message: string): void { this.runtimePrepared = false; this.reportUnavailable(message); }
+  /** A live output failure: shown in red; audio and the remaining actions continue. */
+  reportFault(message: string): void { if (['playing', 'paused'].includes(this.state.status) && this.state.fault !== message) this.update({ fault: message }); }
   reportUnavailable(message: string): void {
     if (this.state.notice?.includes(message)) return;
     this.dependencies.notice?.(message, this.state.itemId);
@@ -246,7 +248,7 @@ export class NativeProgramPlayer {
     if (this.disposed || status.sessionId !== this.sessionId || status.generation !== this.nativeGeneration) return;
     const interrupted = status.mtcInterruptions > (this.native?.sessionId === status.sessionId ? this.native.mtcInterruptions : 0);
     this.native = status;
-    if (interrupted && ['playing', 'paused'].includes(this.state.status)) this.update({ fault: `时间码中断 ${status.mtcInterruptions} 次：迟到部分未补发，已按音频位置整帧重新同步，控台会跳到当前位置` });
+    if (interrupted) this.reportFault(`时间码中断 ${status.mtcInterruptions} 次：迟到部分未补发，已按音频位置整帧重新同步，控台会跳到当前位置`);
     if (status.mtcError) this.reportUnavailable(`时间码未参与：${status.mtcError}；音频继续播放。`);
     this.update({ mtcConnectionFailed: Boolean(status.mtcError), mtcPortName: status.mtcError ? null : status.mtcPortName,
       mtcSentPositionMs: status.mtcPortName && !status.mtcError && status.mtcSent ? status.offsetMs + status.positionMs : null });
@@ -260,7 +262,7 @@ export class NativeProgramPlayer {
     if (status.notice) this.reportUnavailable(status.notice);
     if (status.state === 'failed' || status.state === 'stopped' && status.reason) this.reportUnavailable(`画面通道未参与或已停止：${status.reason ?? '未知错误'}；音频继续播放。`);
     const fault = status.state === 'failed' ? `画面通道已停止：${status.reason ?? '未知错误'}` : status.fault;
-    if (fault && fault !== this.state.fault && ['playing', 'paused'].includes(this.state.status)) this.update({ fault });
+    if (fault) this.reportFault(fault);
   }
   private async prepareObs(itemId: string, token: number): Promise<void> {
     if (!this.current(token) || !this.native) return;

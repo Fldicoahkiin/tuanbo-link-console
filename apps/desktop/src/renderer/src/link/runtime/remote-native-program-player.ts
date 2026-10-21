@@ -56,6 +56,7 @@ export class RemoteNativeProgramPlayer {
   freeze(message: string): void { void this.send({ kind: 'freeze', message }); }
   reportUnavailable(message: string): void { void this.send({ kind: 'unavailable', message }); }
   runtimeUnavailable(message: string): void { void this.send({ kind: 'runtimeUnavailable', message }); }
+  reportFault(message: string): void { void this.send({ kind: 'fault', message }); }
   setVolume(volume: number): void { void this.send({ kind: 'volume', volume }); }
   setEndAction(endAction: InternalPlayerState['endAction']): void { void this.send({ kind: 'endAction', endAction }); }
   setPlaylist(playlistId: string): void { void this.send({ kind: 'playlist', playlistId }); }

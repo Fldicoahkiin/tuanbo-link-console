@@ -209,6 +209,16 @@ export class CueRuntime {
       return this.loseTimecode('MTC 首帧未从节目开头开始');
     }
     if (this.lastSample && sample.receivedAtMs - this.lastSample.receivedAtMs > MTC_LOSS_MS) {
+      // The formal audio clock is the timeline itself. A late observation whose
+      // position kept time is a gap in watching, not a lost timecode: Cues in
+      // the gap are missed and never sent late; later Cues run as usual.
+      if (this.ownsInternalClock() && !isUnexpectedJump(this.lastSample, sample)) {
+        const missed = this.missedCueIds.size;
+        this.markCrossedCuesAsMissed(sample.totalFrames);
+        this.previousFrame = sample.totalFrames; this.lastSample = sample;
+        const skipped = this.missedCueIds.size - missed;
+        return this.update([], skipped ? `界面卡顿，错过 ${skipped} 个联动 Cue，未补发` : undefined);
+      }
       this.lastSample = sample;
       return this.loseTimecode('MTC 信号中断');
     }
@@ -245,7 +255,7 @@ export class CueRuntime {
     }
     if (
       (this.state === 'armed' || this.state === 'running' || (this.state === 'paused' && !this.manualTakeover))
-      && this.lastSample
+      && this.lastSample && !this.ownsInternalClock()
       && nowMs - this.lastSample.receivedAtMs > MTC_LOSS_MS
     ) {
       return this.loseTimecode('MTC 信号中断');
@@ -400,6 +410,9 @@ export class CueRuntime {
   getMode(): LinkRunMode {
     return this.mode;
   }
+
+  /** The local formal audio clock; its own player reports a stalled position. */
+  private ownsInternalClock(): boolean { return this.project.playbackSource === 'internal' && this.executionOwner === 'local'; }
 
   private markCrossedCuesAsMissed(currentFrame: number): void {
     if (!this.selectedItem) return;

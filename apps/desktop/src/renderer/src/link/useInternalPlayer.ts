@@ -140,7 +140,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       }
     });
     const unsubscribeFaults = useRuntimeStore.subscribe((next, previous) => {
-      if (!(player instanceof InternalPlaybackController)) return;
+      if (next.state === 'running' && next.missedCueIds.length > previous.missedCueIds.length) player.reportFault(next.reason ?? `错过 ${next.missedCueIds.length} 个联动 Cue，未补发`);
       const report = next.reports !== previous.reports ? next.reports.at(-1) : undefined;
       const failed = report?.mode === 'live' ? report.results.find(result => result.status === 'failed') : undefined;
       if (failed) player.reportFault(`联动动作失败：${failed.action.label} · ${failed.error ?? '未知错误'}`);

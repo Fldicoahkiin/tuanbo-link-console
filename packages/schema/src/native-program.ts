@@ -37,7 +37,7 @@ const operation = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('preload'), itemId: z.string() }).strict(),
   z.object({ kind: z.literal('fade'), out: z.boolean() }).strict(),
   z.object({ kind: z.literal('midi'), bytes: z.array(z.number().int().min(0).max(255)).max(65536) }).strict(),
-  z.object({ kind: z.enum(['freeze', 'unavailable', 'runtimeUnavailable']), message: z.string() }).strict(),
+  z.object({ kind: z.enum(['freeze', 'unavailable', 'runtimeUnavailable', 'fault']), message: z.string() }).strict(),
   z.object({ kind: z.literal('configure'), configuration: nativeProgramConfigurationSchema }).strict()
 ]);
 export const nativeProgramControlSchema = z.object({ version: z.literal(1), ownerId: z.string().uuid(), operation,

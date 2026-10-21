@@ -159,7 +159,7 @@ describe('LinkRuntimeCoordinator', () => {
       expect(mocks.executeMidiAction).not.toHaveBeenCalled(); expect(mocks.executeObsAction).not.toHaveBeenCalled();
     } finally { coordinator.dispose(); }
   });
-  it('仍在界面执行的通用 MIDI 遇到四秒阻塞必须冻结，不补发过去动作', async () => {
+  it('仍在界面执行的通用 MIDI 遇到四秒阻塞：期间的动作记为错过且不补发，之后的动作照常执行', async () => {
     vi.useFakeTimers({ toFake: ['performance'] }); vi.stubGlobal('window', { setInterval: () => 1, clearInterval: () => undefined });
     mocks.executeMidiAction.mockClear();
     const project = parseLinkProject({ ...createEmptyLinkProject('通用 MIDI 边界'), playbackSource: 'internal', rundown: [{ id: 'song', title: '歌曲',
@@ -168,9 +168,13 @@ describe('LinkRuntimeCoordinator', () => {
     const coordinator = new LinkRuntimeCoordinator(project, 'C:/shows/test.tblink');
     try {
       await coordinator.prepareNativeCompanion('song', 0); await coordinator.ingestInternal(0); coordinator.startInternalClock(0);
-      vi.advanceTimersByTime(4000); await coordinator.ingestInternal(4000); await coordinator.ingestInternal(5000);
+      vi.advanceTimersByTime(4000); await coordinator.ingestInternal(4000);
+      expect(useRuntimeStore.getState()).toMatchObject({ state: 'running', missedCueIds: ['cue-1'] });
+      for (let position = 4100; position <= 5000; position += 100) { vi.advanceTimersByTime(100); await coordinator.ingestInternal(position); }
+      expect(useRuntimeStore.getState().state).toBe('running');
+      expect(mocks.executeMidiAction.mock.calls.map(([action]) => action.id)).toEqual(['midi-0', 'midi-5']);
+      vi.advanceTimersByTime(10); await coordinator.ingestInternal(9000);
       expect(useRuntimeStore.getState().state).toBe('timecodeLost');
-      expect(mocks.executeMidiAction.mock.calls.map(([action]) => action.id)).toEqual(['midi-0']);
       await coordinator.stopAndWait(false);
     } finally { coordinator.dispose(); }
   });
@@ -261,7 +265,7 @@ describe('LinkRuntimeCoordinator', () => {
       expect(useRuntimeStore.getState().state).toBe('idle');
     } finally { coordinator.dispose(); }
   });
-  it('慢速准备与暂停继续不误报断流、不重复启动素材；真正开始后仍检测断流', async () => {
+  it('慢速准备与暂停继续不误报断流、不重复启动素材；开始后观察间隔不判定断流，停滞由本机播放器报告', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     vi.stubGlobal('window', { setInterval, clearInterval });
     mocks.executeObsAction.mockResolvedValue(); mocks.executeManagedMediaEvent.mockResolvedValue(); mocks.seekManagedMedia.mockResolvedValue();
@@ -291,7 +295,7 @@ describe('LinkRuntimeCoordinator', () => {
       await vi.advanceTimersByTimeAsync(1000);
       await coordinator.ingestInternal(1200); coordinator.startInternalClock(1200);
       await vi.advanceTimersByTimeAsync(600);
-      expect(useRuntimeStore.getState().state).toBe('timecodeLost');
+      expect(useRuntimeStore.getState().state).toBe('running');
     } finally { coordinator.dispose(); }
   });
   it('显式停止将界面状态同步到已待机的控制器，不遗留暂停锁', async () => {
