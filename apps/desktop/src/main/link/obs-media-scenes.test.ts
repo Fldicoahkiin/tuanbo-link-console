@@ -149,7 +149,8 @@ describe('素材独立场景播放', () => {
       const { scenes, calls, setMediaState, deferPause } = fixture();
       await scenes.prepare('project', asset, 'C:/dance.mp4'); await held(scenes.execute(event, 'C:/dance.mp4'));
       calls.length = 0; setMediaState('OBS_MEDIA_STATE_PLAYING', 50); deferPause();
-      const execution = scenes.execute({ ...event, sourceOffsetMs: 100, deferSceneSwitch: true }, 'C:/dance.mp4');
+      // A new clip of the same source: its stale cursor is never taken as in step.
+      const execution = scenes.execute({ ...event, clipId: 'next', sourceOffsetMs: 100, deferSceneSwitch: true }, 'C:/dance.mp4');
       await vi.advanceTimersByTimeAsync(40);
       expect(calls.filter(call => call.requestType === 'SetMediaInputCursor')).toHaveLength(0);
       expect(calls.filter(call => call.requestType === 'TriggerMediaInputAction')).toHaveLength(1);
@@ -506,6 +507,14 @@ describe('素材独立场景播放', () => {
       expect(actions.lastIndexOf(actions.filter(action => action.includes('ACTION_PLAY')).at(-1) ?? 'none')).toBeGreaterThan(calls.findIndex(call => call.requestType === 'SetMediaInputCursor'));
       expect(performance.now() - start).toBeGreaterThanOrEqual(500);
     } finally { vi.useRealTimers(); }
+  });
+  it('同一片段从机位下返回且与音乐相差 100ms 以内时不暂停重定位，避免画面卡顿', async () => {
+    const { scenes, calls, setMediaState } = fixture();
+    await scenes.prepare('project', asset, 'C:/dance.mp4'); await scenes.execute(event, 'C:/dance.mp4');
+    calls.length = 0; setMediaState('OBS_MEDIA_STATE_PLAYING', 3380);
+    await scenes.execute({ ...event, sourceOffsetMs: 3300 }, 'C:/dance.mp4');
+    expect(seekTargets(calls)).toEqual([]);
+    expect(calls.some(call => JSON.stringify(call.requestData).includes('ACTION_PAUSE'))).toBe(false);
   });
   it('暂停完成精确定位后再继续，首次入场及机位返回每次只定位一次', async () => {
     const { scenes, calls } = fixture(false, true);

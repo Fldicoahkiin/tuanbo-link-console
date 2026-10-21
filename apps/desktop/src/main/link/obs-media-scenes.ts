@@ -40,11 +40,13 @@ const MEDIA_START_LEAD_MS = 200;
 export class ObsMediaScenes {
   private readonly prepared = new Map<string, { path: string; sha256: string; playbackPaths: readonly string[]; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
   private readonly active = new Set<string>();
+  /** Clip each running decoder was last started for; a start of the same clip continues it. */
+  private readonly startedClips = new Map<string, string>();
   private readonly compositions = new Map<string, string>();
   private readonly compositionItems = new Map<string, Map<string, CompositionItem>>();
   private readonly primed = new Map<string, 'preparing' | 'ready'>();
   constructor(private readonly client: OBSWebSocket, private readonly request: Request, private readonly run: ObsOperationRunner) {}
-  clear(): void { this.prepared.clear(); this.active.clear(); this.compositions.clear(); this.compositionItems.clear(); this.primed.clear(); }
+  clear(): void { this.prepared.clear(); this.active.clear(); this.startedClips.clear(); this.compositions.clear(); this.compositionItems.clear(); this.primed.clear(); }
 
   /** A second decoder inside the same owned scene. The logical scene remains
    * stable for composition, while only the visible input changes at a boundary. */
@@ -255,8 +257,11 @@ export class ObsMediaScenes {
           { requestType: 'TriggerMediaInputAction', requestData: { inputName: previousSource, mediaAction: retirement === 'pause' ? 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE' : 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP' } }
         );
       }
+      // Set when this start seeked and released the decoder in step with the music.
+      let seekedStart: { lateMs: number } | null = null;
       if (event.phase === 'start') {
         const wasActive = this.active.has(event.sourceName);
+        const continuing = wasActive && this.startedClips.get(event.sourceName) === event.clipId;
         this.active.add(event.sourceName);
         const primed = this.primed.get(event.sourceName) === 'ready';
         if (this.primed.has(event.sourceName) && !primed) throw new Error(`素材预热尚未完成：${event.assetName}`);
@@ -290,7 +295,7 @@ export class ObsMediaScenes {
         }
         if (!event.deferSceneSwitch) requests.push(...this.muteOtherSources(target.sceneName));
         if (event.assetKind !== 'image') {
-          if (!primed) await this.positionMedia(event.sourceName, () => event.sourceOffsetMs + performance.now() - startedAt);
+          if (!primed) seekedStart = await this.positionMedia(event.sourceName, () => event.sourceOffsetMs + performance.now() - startedAt, continuing ? 100 : 30);
           requests.push(
           { requestType: 'SetInputMute', requestData: { inputName: event.sourceName, inputMuted: !event.embeddedAudioEnabled } }
           );
@@ -316,11 +321,18 @@ export class ObsMediaScenes {
         // every layer start, which needlessly spends the output deadline.
         const status = await this.waitForState(event.sourceName, 'OBS_MEDIA_STATE_PLAYING');
         const expected = Math.round(event.sourceOffsetMs + performance.now() - startedAt);
-        if (typeof status.mediaCursor !== 'number' || Math.abs(status.mediaCursor - expected) > 100) {
+        // Right after a seek and PLAY, OBS reports a cursor about 500 ms ahead
+        // that stays frozen for a few hundred ms (measured on the field machine,
+        // 2026-10-22). That start was verified before PLAY: the paused frame and
+        // the moment the music reached it.
+        // A decoder that OBS reset behind the music is still caught.
+        if (seekedStart && seekedStart.lateMs > 100) throw new Error(`素材起播落后音乐 ${Math.round(seekedStart.lateMs)} ms：${event.assetName} 定位解码耗时过长`);
+        if (typeof status.mediaCursor !== 'number' || status.mediaCursor < expected - 100 || !seekedStart && status.mediaCursor > expected + 100) {
           throw new Error(`切场景后素材位置不一致：${event.assetName}，按音乐应在 ${expected} ms，OBS 实际 ${status.mediaCursor ?? '未知'} ms`);
         }
       }
-      if (event.phase === 'start') this.active.add(event.sourceName); else this.active.delete(event.sourceName);
+      if (event.phase === 'start') { this.active.add(event.sourceName); this.startedClips.set(event.sourceName, event.clipId); }
+      else { this.active.delete(event.sourceName); this.startedClips.delete(event.sourceName); }
     });
   }
 
@@ -514,15 +526,16 @@ export class ObsMediaScenes {
   /** Starts the decoder in step with the music. `aligned` is the source position
    * the music is at now. The decoder is held paused on a frame slightly ahead
    * and started when the music reaches it, so seek and decode time do not leave
-   * the picture behind. A seek that settles too late is reported by the caller. */
-  private async positionMedia(inputName: string, aligned: () => number): Promise<void> {
+   * the picture behind. Returns null when the decoder was already in step, or
+   * how late it was released when the seek settled after the music passed it. */
+  private async positionMedia(inputName: string, aligned: () => number, inStepMs: number): Promise<{ lateMs: number } | null> {
     const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName }), '读取素材实际位置');
     // The output error budget is not a seek tolerance: a new clip at 100ms
     // must not reuse a stale zero cursor. A continuing clip is handled by the
     // session's active-clip check before reaching this method.
-    // A decoder already running in step (a fresh restart from zero, a clip
-    // returning from under a camera) is left alone; pausing it would stutter.
-    if (status.mediaState === 'OBS_MEDIA_STATE_PLAYING' && typeof status.mediaCursor === 'number' && Math.abs(status.mediaCursor - aligned()) < 30) return;
+    // A decoder already running in step (a fresh restart from zero, the same
+    // clip returning from under a camera) is left alone; pausing it would stutter.
+    if (status.mediaState === 'OBS_MEDIA_STATE_PLAYING' && typeof status.mediaCursor === 'number' && Math.abs(status.mediaCursor - aligned()) <= inStepMs) return null;
     let cursor = status.mediaState === 'OBS_MEDIA_STATE_PAUSED' && typeof status.mediaCursor === 'number'
       && status.mediaCursor >= aligned() - 1 && status.mediaCursor <= aligned() + MEDIA_START_LEAD_MS ? status.mediaCursor : null;
     if (cursor === null) {
@@ -550,5 +563,6 @@ export class ObsMediaScenes {
     const hold = cursor - aligned();
     if (hold > 0) await new Promise<void>((resolve) => setTimeout(resolve, hold));
     await this.request(() => this.client.call('TriggerMediaInputAction', { inputName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' }), '定位确认后继续素材');
+    return { lateMs: Math.max(0, -hold) };
   }
 }
