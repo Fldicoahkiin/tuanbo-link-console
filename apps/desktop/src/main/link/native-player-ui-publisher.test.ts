@@ -8,7 +8,7 @@ it('密集时钟只向界面发布每50ms最新位置，故障/切歌/代数变�
   const publisher = new NativePlayerUiPublisher(status => sent.push(status), () => now);
   const state: NativePlayerStatus = { version: 1, sessionId: 'song', generation: 1, itemId: 'one', status: 'playing',
     positionMs: 0, offsetMs: 480000, sampleRate: 48000, enginePid: 1, engineTitle: 'test', mtcPortName: null,
-    mtcSent: 0, audioError: null, mtcError: null, underruns: 0, gain: 1, analysis: null };
+    mtcSent: 0, audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: 1, analysis: null };
   for (now = 0; now <= 100; now += 10) publisher.publish({ ...state, positionMs: now });
   expect(sent.map(status => status.positionMs)).toEqual([0, 50, 100]);
   now = 101; publisher.publish({ ...state, audioError: '设备失效', status: 'error' });

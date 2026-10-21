@@ -35,8 +35,8 @@ typedef struct {
   HMIDIOUT midi;
   MIDIHDR midi_header;
   unsigned char full_frame[10];
-  UINT32 fps, midi_generation, midi_sent, midi_epoch;
-  int32_t midi_error, midi_worker_error;
+  UINT32 fps, midi_generation, midi_sent, midi_epoch, midi_interruptions;
+  int32_t midi_error, midi_worker_error, midi_interruption;
   BOOL midi_suspended;
   double max_late;
   double midi_wake_gap_ms, midi_lock_wait_ms, midi_audio_lock_wait_ms, midi_send_ms;

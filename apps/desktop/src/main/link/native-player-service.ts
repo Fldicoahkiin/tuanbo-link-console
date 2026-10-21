@@ -33,6 +33,7 @@ export class NativePlayerService {
   private requestId = 0;
   private closing = false;
   private volume = 1;
+  private engineInterruptions = 0;
   private readonly preload: NativeAudioPreload;
   private readonly deviceQuery: NativeDeviceQuery;
   private readonly audioDeviceQuery: NativeDeviceQuery;
@@ -74,7 +75,7 @@ export class NativePlayerService {
     this.state = { version: 1, sessionId: request.sessionId, generation: request.generation,
       itemId: request.snapshot.itemId, status: 'preparing', positionMs: request.snapshot.positionMs, offsetMs: request.snapshot.offsetMs,
       sampleRate: request.snapshot.sampleRate, enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0,
-      audioError: null, mtcError: null, underruns: 0, gain: request.snapshot.volume, analysis: null };
+      audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: request.snapshot.volume, analysis: null };
     this.publish();
     const operation = this.pending.then(async () => {
       let measuredAt = performance.now();
@@ -253,8 +254,13 @@ export class NativePlayerService {
     const mtcError = clock.midiError ? `Windows MIDI 输出失败${this.state.mtcPortName ? `（${this.state.mtcPortName}）` : ''}：${clock.midiError === 4 ? '端口资源已被占用（错误码 4）；请完全退出 P1 等使用该接口的软件后手动重新播放' : `错误码 ${clock.midiError}，请检查接口和驱动后手动重新播放`}` : this.state.mtcError;
     if (audioError && audioError !== this.state.audioError) this.options.error(audioError);
     if (mtcError && mtcError !== this.state.mtcError) this.options.error(mtcError);
+    // The engine restarts its count on every prepare; keep the song's total here.
+    const added = clock.midiInterruptions >= this.engineInterruptions ? clock.midiInterruptions - this.engineInterruptions : clock.midiInterruptions;
+    this.engineInterruptions = clock.midiInterruptions;
+    const mtcInterruptions = this.state.mtcInterruptions + added;
+    if (added) this.options.error(`时间码输出中断（${clock.midiInterruption === -2 ? '音频时钟超过一帧未更新' : '发送线程迟到超过一帧'}），迟到的时间码未补发，已按实际音频位置用整帧重新同步；本首共 ${mtcInterruptions} 次`);
     this.patch({ status: clock.state === 'empty' ? 'stopped' : clock.state, positionMs: clock.positionMs,
-      mtcSent: clock.midiSent, underruns: clock.underruns,
+      mtcSent: clock.midiSent, underruns: clock.underruns, mtcInterruptions,
       audioError, mtcError, gain: clock.gain, analysis: clock.analysis }, clock.qpc100ns);
   }
   private fail(error: Error): void {

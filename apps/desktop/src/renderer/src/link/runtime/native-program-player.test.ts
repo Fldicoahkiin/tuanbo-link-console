@@ -27,7 +27,7 @@ function fixture() {
       status = { version: 1, sessionId: request.sessionId, generation: request.generation, itemId: s.itemId,
         status: 'ready', positionMs: s.positionMs, offsetMs: s.offsetMs, sampleRate: s.sampleRate,
         enginePid: 123, engineTitle: 'TBLINK Audio 123', mtcPortName: request.midiPortName, mtcSent: 0,
-        audioError: null, mtcError: null, underruns: 0, gain: s.volume, analysis: null };
+        audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: s.volume, analysis: null };
       return Promise.resolve(emit());
     }),
     controlNativePlayback: vi.fn((command: NativePlayerControl): Promise<NativePlayerStatus> => {
@@ -87,6 +87,20 @@ it('播放中画面通道的直播故障显示为输出异常，音频继续；�
   await player.play('song-1');
   expect(f.state().fault).toBeNull();
   await player.dispose();
+});
+
+it('时间码短暂中断显示为输出异常，音频与时间码继续；同一次数不重复提示', async () => {
+  const f = fixture();
+  await f.player.play('song-0');
+  expect(f.state()).toMatchObject({ status: 'playing', fault: null });
+  f.emit({ mtcInterruptions: 1 });
+  expect(f.state()).toMatchObject({ status: 'playing', mtcConnectionFailed: false });
+  expect(f.state().fault).toContain('时间码中断 1 次');
+  f.emit({ positionMs: 2000 });
+  expect(f.state().fault).toContain('时间码中断 1 次');
+  f.emit({ mtcInterruptions: 2 });
+  expect(f.state().fault).toContain('时间码中断 2 次');
+  await f.player.dispose();
 });
 
 it('引擎异常退出后再次播放不向已退出的引擎发 stop，直接重新准备并播放；销毁时同样不发', async () => {
@@ -253,7 +267,7 @@ describe('原生正式播放器的操作与会话', () => {
       rejectPreparation!(new Error('播放请求在等待许可时已被取消'));
       return Promise.resolve({ version: 1, sessionId: request.sessionId, generation: command.generation, itemId: snapshot.itemId,
         status: 'stopped', positionMs: snapshot.positionMs, offsetMs: snapshot.offsetMs, sampleRate: snapshot.sampleRate,
-        enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, gain: snapshot.volume, analysis: null });
+        enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: snapshot.volume, analysis: null });
     });
     const playing = f.player.play('song-0');
     await vi.waitFor(() => expect(f.api.prepareNativePlayback).toHaveBeenCalledOnce());

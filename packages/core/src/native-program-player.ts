@@ -244,7 +244,9 @@ export class NativeProgramPlayer {
 
   private receive(status: NativePlayerStatus): void {
     if (this.disposed || status.sessionId !== this.sessionId || status.generation !== this.nativeGeneration) return;
+    const interrupted = status.mtcInterruptions > (this.native?.sessionId === status.sessionId ? this.native.mtcInterruptions : 0);
     this.native = status;
+    if (interrupted && ['playing', 'paused'].includes(this.state.status)) this.update({ fault: `时间码中断 ${status.mtcInterruptions} 次：迟到部分未补发，已按音频位置整帧重新同步，控台会跳到当前位置` });
     if (status.mtcError) this.reportUnavailable(`时间码未参与：${status.mtcError}；音频继续播放。`);
     this.update({ mtcConnectionFailed: Boolean(status.mtcError), mtcPortName: status.mtcError ? null : status.mtcPortName,
       mtcSentPositionMs: status.mtcPortName && !status.mtcError && status.mtcSent ? status.offsetMs + status.positionMs : null });

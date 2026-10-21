@@ -77,13 +77,13 @@ DWORD WINAPI telemetry_worker(void *unused) {
       playback_analyze(samples, previous, bins, peaks); last_analysis = now;
     }
     EnterCriticalSection(&engine.midi_lock);
-    UINT32 sent = engine.midi_sent; int32_t midi_error = engine.midi_error; double late = engine.max_late;
+    UINT32 sent = engine.midi_sent, interruptions = engine.midi_interruptions; int32_t midi_error = engine.midi_error, interruption = engine.midi_interruption; double late = engine.max_late;
     double wake_gap = engine.midi_wake_gap_ms, midi_lock_wait = engine.midi_lock_wait_ms,
       audio_lock_wait = engine.midi_audio_lock_wait_ms, midi_send = engine.midi_send_ms;
     LeaveCriticalSection(&engine.midi_lock);
     TelemetryMessage message;
-    int size = snprintf(message.bytes, TELEMETRY_BYTES, "{\"protocol\":4,\"kind\":\"clock\",\"generation\":%u,\"state\":\"%s\",\"positionMs\":%.6f,\"qpc100ns\":\"%llu\",\"clockFrequency\":%llu,\"sampleRate\":%u,\"underruns\":%u,\"midiSent\":%u,\"midiError\":%d,\"audioError\":%d,\"maxMidiLatenessMs\":%.6f,\"bufferedFrames\":%llu,\"gain\":%.8f,\"analysis\":{\"fftSize\":2048,\"peaks\":[%.8f,%.8f],\"spectrum\":[",
-      generation, states[state], position, (unsigned long long)qpc, (unsigned long long)frequency, rate, underruns, sent, midi_error, audio_error, late, (unsigned long long)buffered, gain, peaks[0], peaks[1]);
+    int size = snprintf(message.bytes, TELEMETRY_BYTES, "{\"protocol\":4,\"kind\":\"clock\",\"generation\":%u,\"state\":\"%s\",\"positionMs\":%.6f,\"qpc100ns\":\"%llu\",\"clockFrequency\":%llu,\"sampleRate\":%u,\"underruns\":%u,\"midiSent\":%u,\"midiError\":%d,\"midiInterruptions\":%u,\"midiInterruption\":%d,\"audioError\":%d,\"maxMidiLatenessMs\":%.6f,\"bufferedFrames\":%llu,\"gain\":%.8f,\"analysis\":{\"fftSize\":2048,\"peaks\":[%.8f,%.8f],\"spectrum\":[",
+      generation, states[state], position, (unsigned long long)qpc, (unsigned long long)frequency, rate, underruns, sent, midi_error, interruptions, interruption, audio_error, late, (unsigned long long)buffered, gain, peaks[0], peaks[1]);
     BOOL valid = size > 0 && size < (int)TELEMETRY_BYTES;
     for (unsigned i = 0; valid && i < ANALYSIS_BINS; i++) {
       int written = snprintf(message.bytes + size, TELEMETRY_BYTES - (size_t)size, "%s%u", i ? "," : "", bins[i]);

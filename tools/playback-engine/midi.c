@@ -19,6 +19,7 @@ MMRESULT midi_prepare(UINT device, UINT fps) {
   if (released != MMSYSERR_NOERROR) return released;
   EnterCriticalSection(&engine.midi_lock);
   engine.fps = fps; engine.midi_error = 0; engine.midi_sent = 0; engine.max_late = 0;
+  engine.midi_interruptions = 0; engine.midi_interruption = 0;
   engine.midi_wake_gap_ms = engine.midi_lock_wait_ms = engine.midi_audio_lock_wait_ms = engine.midi_send_ms = 0;
   MMRESULT result = MMSYSERR_NOERROR;
   if (device != 0xffffffffu) {
@@ -39,6 +40,13 @@ static void parts(UINT64 frame, UINT fps, unsigned char *out) {
   out[2] = (unsigned char)(frame % 60); frame /= 60;
   out[1] = (unsigned char)(frame % 60); frame /= 60;
   out[0] = (unsigned char)((frame % 24) | ((fps == 24 ? 0 : fps == 25 ? 1 : 3) << 5));
+}
+/* A stale audio clock (-2) or a late wake-up (-1) is transient: nothing is sent
+ * late, the interruption is counted once, and the next fresh clock relocates the
+ * receiver with a Full Frame at the actual audio position. Caller holds midi_lock. */
+static void midi_interrupt(int32_t reason, BOOL *running) {
+  if (*running) { engine.midi_interruptions++; engine.midi_interruption = reason; }
+  *running = FALSE;
 }
 DWORD WINAPI midi_worker(void *unused) {
   (void)unused;
@@ -80,7 +88,7 @@ DWORD WINAPI midi_worker(void *unused) {
     double frame_ms = 1000.0 / engine.fps;
     LARGE_INTEGER now; QueryPerformanceCounter(&now);
     double clock_age_ms = ((double)now.QuadPart * 10000000.0 / frequency.QuadPart - (double)clock_qpc) / 10000.0;
-    if (clock_age_ms > frame_ms) { engine.midi_error = -2; LeaveCriticalSection(&engine.midi_lock); continue; }
+    if (clock_age_ms > frame_ms) { midi_interrupt(-2, &running); LeaveCriticalSection(&engine.midi_lock); continue; }
     if (!running || generation != current_generation || epoch != current_epoch) {
       if ((engine.midi_header.dwFlags & MHDR_INQUEUE) != 0) { LeaveCriticalSection(&engine.midi_lock); continue; }
       parts((UINT64)floor(position / frame_ms), engine.fps, time);
@@ -93,7 +101,7 @@ DWORD WINAPI midi_worker(void *unused) {
     }
     double late = position - (double)quarter * frame_ms / 4.0;
     if (late > engine.max_late) engine.max_late = late;
-    if (late > frame_ms) { engine.midi_error = -1; LeaveCriticalSection(&engine.midi_lock); continue; }
+    if (late > frame_ms) { midi_interrupt(-1, &running); LeaveCriticalSection(&engine.midi_lock); continue; }
     while ((double)quarter * frame_ms / 4.0 <= position) {
       if (!piece) parts(quarter / 4, engine.fps, time);
       unsigned char nibbles[] = { time[3] & 15, (time[3] >> 4) & 1, time[2] & 15, (time[2] >> 4) & 3,

@@ -61,5 +61,5 @@ function cancelledStatus(session: Session, generation: number): NativePlayerStat
   return { version: 1, sessionId: request.sessionId, generation, itemId: snapshot.itemId, status: 'stopped',
     positionMs: snapshot.positionMs, offsetMs: snapshot.offsetMs, sampleRate: snapshot.sampleRate,
     enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null,
-    underruns: 0, gain: snapshot.volume, analysis: null };
+    underruns: 0, mtcInterruptions: 0, gain: snapshot.volume, analysis: null };
 }
