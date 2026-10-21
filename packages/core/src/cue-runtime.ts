@@ -213,11 +213,11 @@ export class CueRuntime {
       // position kept time is a gap in watching, not a lost timecode: Cues in
       // the gap are missed and never sent late; later Cues run as usual.
       if (this.ownsInternalClock() && !isUnexpectedJump(this.lastSample, sample)) {
-        const missed = this.missedCueIds.size;
+        const missed = this.missedCueIds.size, gapMs = Math.round(sample.receivedAtMs - this.lastSample.receivedAtMs);
         this.markCrossedCuesAsMissed(sample.totalFrames);
         this.previousFrame = sample.totalFrames; this.lastSample = sample;
         const skipped = this.missedCueIds.size - missed;
-        return this.update([], skipped ? `界面卡顿，错过 ${skipped} 个联动 Cue，未补发` : undefined);
+        return this.update([], skipped ? `播放位置更新中断 ${gapMs}ms，错过 ${skipped} 个联动 Cue，未补发` : undefined);
       }
       this.lastSample = sample;
       return this.loseTimecode('MTC 信号中断');

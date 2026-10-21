@@ -62,7 +62,7 @@ describe('CueRuntime', () => {
     expect(runtime.tick(1200).state).toBe('running');
     const gap = runtime.ingest(sample(45, 1500));
     expect(gap).toMatchObject({ state: 'running', dueCues: [], missedCueIds: ['cue-1'] });
-    expect(gap.reason).toContain('错过');
+    expect(gap.reason).toBe('播放位置更新中断 1400ms，错过 1 个联动 Cue，未补发');
     runtime.ingest(sample(46, 1534));
     expect(runtime.ingest(sample(60, 2000))).toMatchObject({ state: 'running', missedCueIds: ['cue-1'] });
     expect(runtime.getNextCueId(60)).toBeNull();

@@ -141,6 +141,8 @@ export class ObsProgramSession {
         if (!this.advancing && previousFrame >= 0) this.requireUpdate(this.runtime.anchorMediaClock(sample));
         update = this.runtime.ingest(sample);
         this.requireUpdate(update);
+        // Cues missed while position updates stalled are never sent late; say so.
+        if (update.state === 'running' && update.reason) this.fault(update.reason);
       }
       this.advancing = true; this.frame = sample.totalFrames;
       if (update.state !== 'running') return;
