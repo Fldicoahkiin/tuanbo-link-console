@@ -14,8 +14,8 @@ function fixture(): LinkProject {
 }
 function setup(project = fixture(), execute?: (action: LinkAction) => Promise<void>) {
   let now = 0;
-  const actions: LinkAction[] = [], reports: CueExecutionReport[] = [], states: RuntimeUpdate[] = [];
-  const dependencies = { now: () => now, recordLog: vi.fn<LinkDesktopApi['recordLog']>(entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now })), executeManagedMediaEvent: vi.fn<LinkDesktopApi['executeManagedMediaEvent']>(() => Promise.resolve()),
+  const actions: LinkAction[] = [], reports: CueExecutionReport[] = [], states: RuntimeUpdate[] = [], faults: string[] = [];
+  const dependencies = { now: () => now, fault: (message: string) => faults.push(message), recordLog: vi.fn<LinkDesktopApi['recordLog']>(entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now })), executeManagedMediaEvent: vi.fn<LinkDesktopApi['executeManagedMediaEvent']>(() => Promise.resolve()),
     guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
     prepareOutputs: vi.fn(() => Promise.resolve()), releaseOutputs: vi.fn(() => Promise.resolve()),
     prepareUpcoming: vi.fn<NonNullable<import('./obs-program-session').ObsProgramSessionDependencies['prepareUpcoming']>>(() => Promise.resolve()),
@@ -27,7 +27,7 @@ function setup(project = fixture(), execute?: (action: LinkAction) => Promise<vo
   const advance = async (from: number, through: number) => {
     for (let time = from; time <= through; time += 100) { now = time; session.clock(time); await session.settled(); }
   };
-  return { session, actions, reports, states, dependencies, advance, time: (value: number) => { now = value; } };
+  return { session, actions, reports, states, faults, dependencies, advance, time: (value: number) => { now = value; } };
 }
 
 it('后台预备最多一个在途，停止使其失效并等待完成再清理', async () => {
@@ -47,12 +47,13 @@ it('后台预备最多一个在途，停止使其失效并等待完成再清理'
   expect(test.dependencies.prepareUpcoming).toHaveBeenCalledTimes(1);
 });
 
-it('后台预备失败结束画面通道，不重试，不补发后续动作', async () => {
-  const test = setup(); test.dependencies.prepareUpcoming.mockRejectedValue(new Error('下一视频不能解码'));
+it('直播中后台预备失败标红，不重试，后续画面动作照常执行', async () => {
+  const test = setup(); test.dependencies.prepareUpcoming.mockRejectedValueOnce(new Error('下一视频不能解码'));
   await test.session.prepare(0); await test.advance(0, 3000);
-  expect(test.session.error?.message).toBe('下一视频不能解码');
-  expect(test.dependencies.prepareUpcoming).toHaveBeenCalledTimes(1);
-  expect(test.actions.some(action => action.id === 'action-1')).toBe(false);
+  expect(test.session.error).toBeNull();
+  expect(test.faults[0]).toContain('下一视频不能解码');
+  expect(test.dependencies.prepareUpcoming.mock.calls.filter(call => call[0] === 0)).toHaveLength(1);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-2', 'action-3']);
   await test.session.stop(); expect(test.dependencies.releaseOutputs).toHaveBeenCalledOnce();
 });
 
@@ -64,21 +65,25 @@ it('原生时钟驱动节目顺序，不需要界面回调；重复设备位置�
   expect(test.session.error).toBeNull(); expect(test.session.pendingCount).toBe(0);
 });
 
-it('管道中积压的位置不能按收到时刻重新获得执行窗口', async () => {
+it('管道中积压的位置不能按收到时刻重新获得执行窗口；直播标红后由下一新鲜位置继续', async () => {
   const test = setup(); await test.session.prepare(0);
   test.time(200); test.session.clock(0, 0); await test.session.settled();
   expect(test.actions).toEqual([]);
-  expect(test.session.error?.message).toContain('100ms');
+  expect(test.faults[0]).toContain('100ms'); expect(test.session.error).toBeNull();
   test.time(250); test.session.clock(250, 250); await test.session.settled();
   expect(test.actions).toEqual([]);
+  for (let at = 300; at <= 1000; at += 100) { test.time(at); test.session.clock(at); await test.session.settled(); }
+  expect(test.actions.map(action => action.id)).toEqual(['action-1']);
 });
 
-it('设备观察年龄和本机排队耗时共同计入画面执行边界', async () => {
+it('设备观察年龄和本机排队耗时共同计入画面执行边界；迟到动作不补发，后续动作继续', async () => {
   const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
   test.time(1060); test.session.clock(1000, 1000);
   test.time(1110); await test.session.settled();
   expect(test.actions.map(action => action.id)).toEqual(['action-0']);
-  expect(test.session.error?.message).toContain('100ms');
+  expect(test.faults.join()).toContain('100ms'); expect(test.session.error).toBeNull();
+  await test.advance(1200, 2000);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-2']);
 });
 
 it('从中间准备只恢复当前画面，不补发已越过的历史动作，未来事件继续一次', async () => {
@@ -114,21 +119,25 @@ it('停止先使旧代数失效，在途动作完成后不再发送队列里的�
   expect(test.states.at(-1)?.state).toBe('idle');
 });
 
-it('请求拖延后不补发过时画面，并明确标识该通道失败', async () => {
+it('请求拖延后不补发过时画面并标红，通道继续执行后续画面', async () => {
   const test = setup(); await test.session.prepare(0);
   test.session.clock(0); test.time(101); await test.session.settled();
   expect(test.actions).toEqual([]);
-  expect(test.session.error?.message).toContain('100ms');
-  test.time(1000); test.session.clock(1000); await test.session.settled();
-  expect(test.actions).toEqual([]);
+  expect(test.faults[0]).toContain('100ms'); expect(test.session.error).toBeNull();
+  expect(test.reports[0]?.results.map(result => result.status)).toEqual(['skipped']);
+  await test.advance(200, 1000);
+  expect(test.actions.map(action => action.id)).toEqual(['action-1']);
 });
 
-it('OBS 失败不继续该通道的后续动作，不自动重试', async () => {
+it('直播中 OBS 动作失败标红并继续后续动作，失败动作不自动重试', async () => {
   const project = fixture(); project.rundown[0]!.cues[0]!.actions.push({ id: 'next', label: '滤镜', kind: 'obs.setSourceFilterEnabled', sourceName: '机位', filterName: '调整', enabled: true });
-  const test = setup(project, () => Promise.reject(new Error('OBS 无响应')));
+  const test = setup(project, action => action.id === 'action-0' ? Promise.reject(new Error('OBS 无响应')) : Promise.resolve());
   await test.session.prepare(0); test.session.clock(0); await test.session.settled();
-  expect(test.actions).toHaveLength(1); expect(test.session.error?.message).toContain('OBS 无响应');
-  await test.advance(100, 2000); expect(test.actions).toHaveLength(1);
+  expect(test.actions.map(action => action.id).sort()).toEqual(['action-0', 'next']);
+  expect(test.reports.flatMap(report => report.results).map(result => [result.actionId, result.status]).sort()).toEqual([['action-0', 'failed'], ['next', 'succeeded']]);
+  expect(test.session.error).toBeNull();
+  await test.advance(100, 2000);
+  expect(test.actions.map(action => action.id).slice(2)).toEqual(['action-1', 'action-2']);
 });
 
 it('无效或跳变的实际音频位置会冻结通道，不猜测补发', async () => {
@@ -153,7 +162,7 @@ it('准备期间取消，迟到场景确认不会继续后续初始化', async (
 it('晚收到设备时钟也按事件原定位置计算延迟，不将收包时间当作事件时间', async () => {
   const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
   test.time(1150); test.session.clock(1150); await test.session.settled();
-  expect(test.session.error?.message).toContain('100ms');
+  expect(test.faults.join()).toContain('100ms'); expect(test.session.error).toBeNull();
   expect(test.actions.map(action => action.id)).toEqual(['action-0']);
 });
 
@@ -236,7 +245,7 @@ it('素材动作日志等待期间过期，不在日志返回后补发媒体启�
   });
   await test.session.prepare(0); test.session.clock(0); await test.session.settled();
   expect(test.dependencies.executeManagedMediaEvent).not.toHaveBeenCalled();
-  expect(test.session.error?.message).toContain('100ms');
+  expect(test.faults.join()).toContain('100ms'); expect(test.session.error).toBeNull();
 });
 
 it('暂停和继续只改变活动视频播放状态，不重建片段或从头重播', async () => {
@@ -253,5 +262,44 @@ it('恢复媒体也遵守设备观察的截止时间，排队过期不会迟到�
   await test.session.pause();
   test.time(5060); test.session.clock(1000, 5000); test.time(5110); await test.session.settled();
   expect(test.actions.map(action => action.kind === 'obs.mediaAction' ? action.action : action.kind)).toEqual(['pause']);
-  expect(test.session.error?.message).toContain('100ms');
+  expect(test.faults.join()).toContain('100ms'); expect(test.session.error).toBeNull();
+});
+
+it('动作按时开始发送后，后续子请求不被截止打断：切场景与播放要么都发送，要么都不发送', async () => {
+  const project = videoFixture();
+  const test = setup(project), sent: string[] = [];
+  let guard: { canSend: () => boolean; dispatched?: () => void } | null = null;
+  test.dependencies.guardOutput = <T>(canSend: () => boolean, operation: () => Promise<T>, dispatched?: () => void) => {
+    const previous = guard; guard = { canSend, ...(dispatched ? { dispatched } : {}) };
+    return operation().finally(() => { guard = previous; });
+  };
+  const send = (label: string): void => {
+    if (!guard?.canSend()) throw new Error(`尚未发送：${label}`);
+    guard.dispatched?.(); sent.push(label);
+  };
+  test.dependencies.executeManagedMediaEvent.mockImplementation(payload => {
+    if (payload.event.phase !== 'start') return Promise.resolve();
+    send('切换素材场景'); test.time(150); send('播放');
+    return Promise.resolve();
+  });
+  await test.session.prepare(0); test.session.clock(0); await test.session.settled();
+  expect(sent).toEqual(['切换素材场景', '播放']);
+  expect(test.faults).toEqual([]);
+});
+
+it('画面队列积压时标红并跳过新批次，不结束画面通道', async () => {
+  let release = (): void => { throw new Error('测试未初始化'); };
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const project = fixture();
+  // One cue every 100 ms at 30 fps; each observation crosses exactly one.
+  project.rundown[0]!.cues = Array.from({ length: 81 }, (_value, index) => ({ id: `cue-${index}`, name: `机位 ${index}`, notes: '', enabled: true,
+    timecode: { hours: 0, minutes: 0, seconds: Math.floor(index / 10), frames: (index % 10) * 3 },
+    actions: [{ id: `action-${index}`, kind: 'obs.setProgramScene' as const, label: '切机位', sceneName: `场景 ${index}` }] }));
+  const test = setup(parseLinkProject(project), action => action.id === 'action-0' ? gate : Promise.resolve());
+  await test.session.prepare(0);
+  for (let index = 0; index < 80; index++) { test.time(index * 100); test.session.clock(index * 100); }
+  expect(test.faults.join()).toContain('积压'); expect(test.session.error).toBeNull();
+  release(); await test.session.settled();
+  test.time(8000); test.session.clock(8000); await test.session.settled();
+  expect(test.session.error).toBeNull(); expect(test.actions.at(-1)?.id).toBe('action-80');
 });

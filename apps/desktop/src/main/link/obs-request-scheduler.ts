@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 export type ObsRequestPriority = 'urgent' | 'control' | 'background' | 'preview';
 export type ObsOperationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
-type Context = { generation: number; priority?: ObsRequestPriority; canSend?: () => boolean };
+type Context = { generation: number; priority?: ObsRequestPriority; canSend?: () => boolean; dispatched?: () => void };
 type Job = { priority: ObsRequestPriority; generation: number; started: boolean; settled: boolean;
   timer: ReturnType<typeof setTimeout>; start: () => void; reject: (error: Error) => void };
 export type ObsRequestTiming = { label: string; priority: ObsRequestPriority; queuedAt: number;
@@ -38,11 +38,14 @@ export class ObsRequestScheduler {
   }
 
   /** The guard follows every awaited sub-request, including time spent in this
-   * scheduler's queue. Checking only before calling the adapter is too early. */
-  guarded<T>(canSend: () => boolean, operation: () => Promise<T>): Promise<T> {
+   * scheduler's queue. Checking only before calling the adapter is too early.
+   * `dispatched` runs each time one of the operation's requests is sent. */
+  guarded<T>(canSend: () => boolean, operation: () => Promise<T>, dispatched?: () => void): Promise<T> {
     const current = this.context.getStore() ?? { generation: this.generation };
     const guard = current.canSend ? () => current.canSend!() && canSend() : canSend;
-    return this.context.run({ ...current, canSend: guard }, operation);
+    const outer = current.dispatched;
+    const notify = outer && dispatched ? () => { outer(); dispatched(); } : dispatched ?? outer;
+    return this.context.run({ ...current, canSend: guard, ...(notify ? { dispatched: notify } : {}) }, operation);
   }
 
   getStats(): { queued: number; active: number; requests: number; maximumQueued: number; maximumActive: number } {
@@ -86,7 +89,7 @@ export class ObsRequestScheduler {
           Promise.resolve().then(() => {
             if (job.settled || job.generation !== this.generation) throw new Error('OBS 请求在发送前已取消');
             if (context.canSend && !context.canSend()) throw new Error(`OBS 动作已取消或超过执行边界；尚未发送：${label}`);
-            job.started = true; startedAt = performance.now(); this.requestCount++;
+            job.started = true; startedAt = performance.now(); this.requestCount++; context.dispatched?.();
             return this.context.run(context, operation);
           }).then(value => finish(null, value), error => finish(error));
         }

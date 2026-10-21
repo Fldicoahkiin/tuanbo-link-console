@@ -85,7 +85,7 @@ export class NativeProgramPlayer {
     const reuseSession = itemId === this.state.itemId && ['playing', 'paused'].includes(this.state.status);
     if (this.state.itemId !== itemId && this.state.status === 'playing') this.markPlayed();
     this.cancelScheduled(); this.runtimePrepared = false; this.boundary('seek');
-    this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, mtcConnectionFailed: false });
+    this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, fault: null, mtcConnectionFailed: false });
     return this.enqueue(token, async () => {
       if (!this.projectPath) throw new Error('请先保存工程，再播放正式音频');
       // An engine in error has exited and rejects every command; prepare replaces it.
@@ -175,7 +175,7 @@ export class NativeProgramPlayer {
     });
   }
   stop(): Promise<void> {
-    const token = ++this.epoch; this.cancelScheduled(); this.update({ status: 'stopped', notice: null });
+    const token = ++this.epoch; this.cancelScheduled(); this.update({ status: 'stopped', notice: null, fault: null });
     // Stop reaches the main service immediately if preparation has already
     // published its session; otherwise the queued prepare cannot start audio.
     const stopping = (this.requestedPreparation ? this.command({ kind: 'stop' }) : Promise.resolve()).catch(error => { if (this.current(token)) this.fail(error); });
@@ -257,6 +257,8 @@ export class NativeProgramPlayer {
     this.dependencies.obsChanged?.(status);
     if (status.notice) this.reportUnavailable(status.notice);
     if (status.state === 'failed' || status.state === 'stopped' && status.reason) this.reportUnavailable(`画面通道未参与或已停止：${status.reason ?? '未知错误'}；音频继续播放。`);
+    const fault = status.state === 'failed' ? `画面通道已停止：${status.reason ?? '未知错误'}` : status.fault;
+    if (fault && fault !== this.state.fault && ['playing', 'paused'].includes(this.state.status)) this.update({ fault });
   }
   private async prepareObs(itemId: string, token: number): Promise<void> {
     if (!this.current(token) || !this.native) return;

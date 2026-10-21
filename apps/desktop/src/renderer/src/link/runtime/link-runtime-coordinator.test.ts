@@ -8,7 +8,7 @@ import { useRuntimeStore } from '../stores/runtime-store';
 const mocks = vi.hoisted(() => ({
   activateManagedObsOutput: vi.fn(() => Promise.resolve()),
   setInternalAudioCapture: vi.fn(() => Promise.resolve()),
-  executeObsAction: vi.fn<() => Promise<void>>(),
+  executeObsAction: vi.fn<(action: LinkAction) => Promise<void>>(),
   executeMidiAction: vi.fn<(action: LinkAction) => Promise<void>>(() => Promise.resolve()),
   executeManagedMediaEvent: vi.fn<LinkDesktopApi['executeManagedMediaEvent']>(),
   seekManagedMedia: vi.fn<LinkDesktopApi['seekManagedMedia']>(),
@@ -91,6 +91,53 @@ describe('LinkRuntimeCoordinator', () => {
       expect(mocks.executeObsAction).toHaveBeenNthCalledWith(1, expect.objectContaining({ sceneName: 'Camera 0' }));
       expect(mocks.executeObsAction).toHaveBeenNthCalledWith(2, expect.objectContaining({ sceneName: 'Camera 1' }));
       expect(notice).toHaveBeenCalledWith(expect.stringContaining('OBS 音乐采集未就绪'));
+    } finally { coordinator.dispose(); }
+  });
+  it('直播中 OBS 动作或素材失败只标红该动作，后续画面照常执行，运行不进入错误', async () => {
+    vi.stubGlobal('window', globalThis);
+    mocks.executeObsAction.mockRejectedValueOnce(new Error('OBS 无响应')).mockResolvedValue();
+    mocks.executeManagedMediaEvent.mockRejectedValue(new Error('素材来源丢失'));
+    const project = parseLinkProject({ ...createEmptyLinkProject('直播继续'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      mediaAssets: [{ id: 'video', name: '视频', kind: 'video', relativePath: 'assets/video.mp4', sha256: 'a'.repeat(64), byteLength: 1, durationMs: 10000, width: 1920, height: 1080 }],
+      rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'video-layer', name: '视频' }],
+        referenceMediaClips: [{ id: 'clip', assetId: 'video', layerId: 'video-layer', label: '视频', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 15 }, durationMs: 1000 }],
+        cues: [0, 1, 2].map(seconds => ({ id: `cue-${seconds}`, name: '画面', timecode: { hours: 0, minutes: 0, seconds, frames: 0 },
+          actions: [{ id: `scene-${seconds}`, label: '画面', kind: 'obs.setProgramScene', sceneName: `Camera ${seconds}` }] })) }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:/shows/test.tblink');
+    try {
+      await coordinator.prepareInternal('song', async () => {
+        coordinator.beginPreflight('live'); const report = { checkedAt: new Date().toISOString(), mode: 'live' as const, passed: true, checks: [] };
+        await coordinator.applyPreflight(report); return report;
+      });
+      for (let time = 0; time <= 2000; time += 100) await coordinator.ingestInternal(time);
+      expect(mocks.executeManagedMediaEvent).toHaveBeenCalled();
+      expect(mocks.executeObsAction.mock.calls.flatMap(([action]) => action.kind === 'obs.setProgramScene' && action.sceneName.startsWith('Camera') ? [action.sceneName] : [])).toEqual(['Camera 0', 'Camera 1', 'Camera 2']);
+      expect(useRuntimeStore.getState()).toMatchObject({ state: 'running', reason: null });
+      expect(useRuntimeStore.getState().reports.flatMap(report => report.results).some(result => result.status === 'failed')).toBe(true);
+    } finally { coordinator.dispose(); }
+  });
+  it('直播中继续播放时 OBS 素材恢复失败只标红，运行不进入错误，后续画面照常执行', async () => {
+    vi.stubGlobal('window', globalThis);
+    mocks.executeManagedMediaEvent.mockResolvedValue();
+    mocks.executeObsAction.mockImplementation(action => action.kind === 'obs.mediaAction' && action.action === 'start'
+      ? Promise.reject(new Error('OBS 无响应')) : Promise.resolve());
+    const project = parseLinkProject({ ...createEmptyLinkProject('恢复继续'), playbackSource: 'internal', obsOutputMode: 'scenes',
+      mediaAssets: [{ id: 'video', name: '视频', kind: 'video', relativePath: 'assets/video.mp4', sha256: 'a'.repeat(64), byteLength: 1, durationMs: 10000, width: 1920, height: 1080 }],
+      rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'video-layer', name: '视频' }],
+        referenceMediaClips: [{ id: 'clip', assetId: 'video', layerId: 'video-layer', label: '视频', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 10000 }],
+        cues: [{ id: 'cue-2', name: '画面', timecode: { hours: 0, minutes: 0, seconds: 2, frames: 0 },
+          actions: [{ id: 'scene-2', label: '画面', kind: 'obs.setProgramScene', sceneName: 'Camera 2' }] }] }] });
+    const coordinator = new LinkRuntimeCoordinator(project, 'C:/shows/test.tblink');
+    try {
+      await coordinator.prepareInternal('song', async () => {
+        coordinator.beginPreflight('live'); const report = { checkedAt: new Date().toISOString(), mode: 'live' as const, passed: true, checks: [] };
+        await coordinator.applyPreflight(report); return report;
+      });
+      for (let time = 0; time <= 1000; time += 100) await coordinator.ingestInternal(time);
+      await coordinator.pauseInternal();
+      for (let time = 1000; time <= 2000; time += 100) await coordinator.ingestInternal(time);
+      expect(useRuntimeStore.getState()).toMatchObject({ state: 'running', reason: null });
+      expect(mocks.executeObsAction.mock.calls.some(([action]) => action.kind === 'obs.setProgramScene' && action.sceneName === 'Camera 2')).toBe(true);
     } finally { coordinator.dispose(); }
   });
   it('后台播放的界面观察不把四秒交付间隔当成 MTC 断流，不伪造 Cue 执行', async () => {

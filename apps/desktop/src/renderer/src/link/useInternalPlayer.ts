@@ -131,16 +131,25 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     const unsubscribe = useRuntimeStore.subscribe((next, previous) => {
       if (next.state !== previous.state && ['error', 'timecodeLost'].includes(next.state)) player.runtimeUnavailable(next.reason ?? '联动已中断');
     });
+    // Live: an OBS loss is shown in red; OBS actions fail until the operator
+    // reconnects, and MIDI cues and audio keep running.
     const unsubscribeObs = useIntegrationStore.subscribe((next, previous) => {
-      if (audioConfiguration.engine !== 'native' && previous.obs.status === 'connected' && next.obs.status !== 'connected' && useRuntimeStore.getState().state !== 'idle') {
-        prepared = null;
-        player.runtimeUnavailable('OBS 连接中断；音频继续播放，画面与 OBS 动作已停止。');
-        void coordinator.stopAndWait(false, 'OBS 连接断开').catch((error: unknown) => player.reportUnavailable(`OBS 清理失败：${String(error)}`));
+      if (previous.obs.status === 'connected' && next.obs.status !== 'connected') prepared = null;
+      if (player instanceof InternalPlaybackController && previous.obs.status === 'connected' && next.obs.status !== 'connected' && useRuntimeStore.getState().state !== 'idle') {
+        player.reportFault('OBS 连接中断：画面动作失败直到重新连接 OBS，之后从下一画面事件继续');
       }
+    });
+    const unsubscribeFaults = useRuntimeStore.subscribe((next, previous) => {
+      if (!(player instanceof InternalPlaybackController)) return;
+      const report = next.reports !== previous.reports ? next.reports.at(-1) : undefined;
+      const failed = report?.mode === 'live' ? report.results.find(result => result.status === 'failed') : undefined;
+      if (failed) player.reportFault(`联动动作失败：${failed.action.label} · ${failed.error ?? '未知错误'}`);
+      const media = next.mediaReports !== previous.mediaReports ? next.mediaReports.at(-1) : undefined;
+      if (media?.status === 'failed') player.reportFault(`素材播放失败：${media.event.assetName} · ${media.error ?? '未知错误'}`);
     });
     setController(player); view.publish(emptyInternalPlayerState);
     return () => {
-      unsubscribe(); unsubscribeObs(); coordinator.onInternalStop(null);
+      unsubscribe(); unsubscribeObs(); unsubscribeFaults(); coordinator.onInternalStop(null);
       if (player instanceof RemoteNativeProgramPlayer) void player.dispose().catch(error => dependencies.notice?.(`关闭播放器失败：${toUserErrorMessage(error)}`, null));
       else player.dispose();
     };

@@ -48,14 +48,15 @@ it('跨工程或跨修订的下一节目不能随当前节目准备', async () =
   expect(test.execute).not.toHaveBeenCalled(); expect(test.prepareNextFiles).not.toHaveBeenCalled();
 });
 
-it('状态更新不能冒充设备采样；旧 QPC 触发画面保护，后续新采样不自动恢复', async () => {
+it('状态更新不能冒充设备采样；旧 QPC 不执行画面并标红，过时动作不补发，后续新采样继续', async () => {
   const test = setup(); await test.host.prepare(test.request);
   test.change({ status: 'playing', generation: 2 }); test.host.observe(test.audio());
   await new Promise(resolve => setTimeout(resolve, 0)); expect(test.execute).not.toHaveBeenCalled();
   test.observe({ positionMs: 0 }, 200, 200);
-  expect(test.host.status).toMatchObject({ state: 'failed' }); expect(test.failures[0]).toContain('100ms');
-  test.observe({ positionMs: 250 }, 250);
-  await new Promise(resolve => setTimeout(resolve, 0)); expect(test.execute).not.toHaveBeenCalled();
+  expect(test.host.status?.state).not.toBe('failed'); expect(test.host.status?.fault).toContain('100ms'); expect(test.failures[0]).toContain('100ms');
+  for (let time = 250; time <= 1000; time += 50) { test.observe({ positionMs: time }, time); await new Promise(resolve => setTimeout(resolve, 0)); }
+  expect(test.execute).toHaveBeenCalledTimes(1);
+  expect(test.host.status?.state).toBe('running');
   expect(test.audio().status).toBe('playing');
 });
 
@@ -104,10 +105,10 @@ it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('真实 WASAPI 管道�
     expect(test.execute).toHaveBeenCalledTimes(1); expect(test.failures).toEqual([]);
     const boundary = performance.now() + 500;
     while (performance.now() < boundary) { /* deliberate main-thread stall */ }
-    await expect.poll(() => test.host.status?.state).toBe('failed');
+    await expect.poll(() => test.host.status?.fault).toContain('100ms');
     await expect.poll(() => client.clock?.positionMs).toBeGreaterThan(1500);
     expect(test.execute).toHaveBeenCalledTimes(1);
-    expect(test.host.status?.reason).toContain('100ms'); expect(Math.max(...ages)).toBeGreaterThan(100);
+    expect(test.host.status?.state).toBe('running'); expect(Math.max(...ages)).toBeGreaterThan(100);
     expect(client.clock).toMatchObject({ state: 'playing', underruns: 0, audioError: 0 }); expect(audioFailures).toEqual([]);
   } finally {
     await writeFile(join(directory, 'evidence.json'), JSON.stringify({ ages, audioFailures, obsFailures: test.failures, sent: test.execute.mock.calls.length }, null, 2));
@@ -156,14 +157,14 @@ it('准备已经迟到不能中途加入播放，旧请求仍明确失败', asyn
   expect(test.execute).not.toHaveBeenCalled();
 });
 
-it('OBS 拒绝动作使通道失败，音频的状态和偏移不被改写', async () => {
+it('直播中 OBS 拒绝动作标红，通道继续后续画面，音频的状态和偏移不被改写', async () => {
   const test = setup(); test.execute.mockRejectedValueOnce(new Error('OBS 断开'));
   await test.host.prepare(test.request); test.observe({ status: 'playing', positionMs: 0 }, 0);
   await new Promise(resolve => setTimeout(resolve, 0));
-  expect(test.host.status).toMatchObject({ state: 'failed', reason: 'OBS 断开' });
+  expect(test.host.status).toMatchObject({ state: 'running', fault: '画面动作失败：切机位 · OBS 断开' });
   expect(test.audio()).toMatchObject({ status: 'playing', offsetMs: 480000 });
-  expect(test.failures).toEqual(['OBS 断开']);
-  test.observe({ status: 'playing', positionMs: 1000 }, 1000); expect(test.execute).toHaveBeenCalledTimes(1);
+  for (let time = 100; time <= 1000; time += 100) { test.observe({ status: 'playing', positionMs: time }, time); await new Promise(resolve => setTimeout(resolve, 0)); }
+  expect(test.execute).toHaveBeenCalledTimes(2); expect(test.host.status?.currentCueId).toBe('cue-1');
 });
 
 it('初始化在途时音频先启动，立即作废准备，迟到结果不能继续加入', async () => {
@@ -181,17 +182,30 @@ it('初始化在途时音频先启动，立即作废准备，迟到结果不能�
   expect(test.execute).toHaveBeenCalledTimes(1);
 });
 
-it('旧准备的停止不得取消新节目；断线后冻结画面不影响音频', async () => {
+it('旧准备的停止不得取消新节目；播放中断线标红但画面通道保留，重新连接后继续', async () => {
   const test = setup(); await test.host.prepare(test.request);
   test.change({ generation: 2 }); await test.host.prepare({ ...test.request, generation: 2 });
   await expect(test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 1 })).rejects.toThrow('旧准备');
   expect(test.host.status?.state).toBe('ready');
   test.observe({ status: 'playing', generation: 3, positionMs: 0 }, 0);
-  test.host.disconnect('OBS 网络断开');
+  test.host.disconnect('OBS 网络断开'); test.host.disconnect('OBS 网络断开');
   await new Promise(resolve => setTimeout(resolve, 0));
-  expect(test.execute).not.toHaveBeenCalled(); expect(test.host.status).toMatchObject({ state: 'failed', reason: 'OBS 网络断开' });
+  expect(test.host.status).toMatchObject({ state: 'running' }); expect(test.host.status?.fault).toContain('OBS 网络断开');
+  expect(test.failures).toHaveLength(1);
   expect(test.audio().status).toBe('playing');
-  test.observe({ positionMs: 1000 }, 1000); expect(test.execute).not.toHaveBeenCalled();
+  for (let time = 100; time <= 1000; time += 100) { test.observe({ positionMs: time }, time); await new Promise(resolve => setTimeout(resolve, 0)); }
+  expect(test.execute).toHaveBeenCalledTimes(2);
+});
+
+it('准备阶段断线仍取消本轮画面，不带着未就绪的画面开播', async () => {
+  const test = setup();
+  let release: () => void = () => { throw new Error('未开始'); };
+  test.execute.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+  test.change({ positionMs: 500 });
+  const preparing = expect(test.host.prepare(test.request)).rejects.toThrow();
+  await vi.waitFor(() => expect(test.execute).toHaveBeenCalledTimes(1));
+  test.host.disconnect('OBS 网络断开'); release(); await preparing;
+  expect(test.host.status?.state).toBe('failed');
 });
 
 it('暂停请求准入即取消排队画面，迟到的播放状态不能重新触发；确认后才显示暂停', async () => {

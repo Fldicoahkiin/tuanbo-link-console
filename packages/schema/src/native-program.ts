@@ -8,7 +8,9 @@ export const programPlayerStateSchema = z.object({
   endAction: z.enum(['stop', 'next', 'loop', 'pause']), error: z.string().nullable(), playedItemIds: z.array(z.string()),
   mtcEnabled: z.boolean(), mtcPositionMs: time.nullable(), mtcPortName: z.string().nullable().optional(),
   mtcSentPositionMs: time.nullable().optional(), errorTitle: z.string().nullable(), notice: z.string().nullable(), mtcConnectionFailed: z.boolean(),
-  preparation: z.string().nullable().optional()
+  preparation: z.string().nullable().optional(),
+  /** Latest live output failure of this song; playback continues. */
+  fault: z.string().nullable().optional()
 }).strict();
 export type ProgramPlayerState = z.infer<typeof programPlayerStateSchema>;
 export const nativeProgramConfigurationSchema = z.object({

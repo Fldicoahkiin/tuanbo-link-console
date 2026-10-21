@@ -1,5 +1,5 @@
 import { MANAGED_OBS_SCENE_NAME, collectCrossedManagedMediaEvents, compileManagedMediaTimeline, type ManagedMediaEvent } from './managed-media-timeline';
-import type { CueActionRunner } from './cue-action-runner';
+import type { ActionExecutionResult, CueActionRunner } from './cue-action-runner';
 import { playbackFramesPerSecond } from './mtc-timecode';
 import type { LinkDesktopApi } from './link-desktop-contract';
 import type { LinkRunMode } from './cue-runtime';
@@ -72,18 +72,24 @@ export class ManagedOutputRuntime {
       + Math.round(Math.max(0, currentFrame - original.frameNumber) * 1000 / playbackFramesPerSecond(this.project.timebase.frameRate)) };
   }
 
-  async executeTransport(runner: CueActionRunner, action: 'pause' | 'start', currentFrame: number): Promise<void> {
+  /** Rehearsal throws on the first failure. Live returns the failures to be shown and continues. */
+  async executeTransport(runner: CueActionRunner, action: 'pause' | 'start', currentFrame: number, mode: LinkRunMode = 'rehearsal'): Promise<{ actions: ActionExecutionResult[]; media: ManagedMediaExecutionReport[] }> {
+    const failures: { actions: ActionExecutionResult[]; media: ManagedMediaExecutionReport[] } = { actions: [], media: [] };
     if (action === 'start' && this.project.obsOutputMode !== 'scenes') {
       const events = [...this.activeMediaByLayer.values()].flatMap((entries) => [...entries.values()]);
       for (const event of events.filter((entry) => entry.assetKind !== 'image')) {
-        await this.executeMedia(this.alignEvent(event, currentFrame), 'rehearsal');
+        const report = await this.executeMedia(this.alignEvent(event, currentFrame), mode);
+        if (report.status === 'failed') failures.media.push(report);
       }
-      return;
+      return failures;
     }
     for (const command of this.transportActions(action)) {
       const result = await runner.retry('p1-transport', command);
-      if (result.status === 'failed') throw new Error(result.error ?? 'OBS 媒体同步失败');
+      if (result.status !== 'failed') continue;
+      if (mode === 'rehearsal') throw new Error(result.error ?? 'OBS 媒体同步失败');
+      failures.actions.push(result);
     }
+    return failures;
   }
 
   collectCrossed(previousFrame: number, currentFrame: number): ManagedMediaEvent[] {

@@ -46,6 +46,21 @@ describe('OBS 有界请求调度', () => {
     expect(sent).toHaveBeenCalledTimes(1);
   });
 
+  it('请求真正发出时才通知保护方；排队中被取消的请求不算发出', async () => {
+    const scheduler = new ObsRequestScheduler(2000, () => undefined); scheduler.connect();
+    const gate = deferred<void>(), sent = vi.fn(() => Promise.resolve()), dispatched = vi.fn(), outer = vi.fn();
+    const busy = Array.from({ length: 4 }, () => scheduler.request(() => gate.promise, '占用通道'));
+    let current = true;
+    const cancelled = scheduler.guarded(() => current, () => scheduler.request(sent, '迟到动作'), dispatched);
+    const rejected = expect(cancelled).rejects.toThrow('尚未发送');
+    await Promise.resolve(); current = false; gate.resolve(); await Promise.all(busy); await rejected;
+    expect(dispatched).not.toHaveBeenCalled();
+    await scheduler.guarded(() => true, () => scheduler.guarded(() => true, async () => {
+      await scheduler.request(sent, '第一步'); await scheduler.request(sent, '第二步');
+    }, dispatched), outer);
+    expect(dispatched).toHaveBeenCalledTimes(2); expect(outer).toHaveBeenCalledTimes(2);
+  });
+
   it('预览最多一个在途，目录保留控制通路，停止优先于普通待发动作', async () => {
     const scheduler = new ObsRequestScheduler(2000, () => undefined); scheduler.connect();
     const calls: string[] = [];
