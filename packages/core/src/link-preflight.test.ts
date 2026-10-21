@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { IntegrationProfile, LinkProject } from '@tb/schema';
+import { createLightingDocument, lightingTrackSchema, type IntegrationProfile, type LinkProject } from '@tb/schema';
 import { runLinkPreflight, type PreflightContext } from './link-preflight';
 
 describe('团播联动台预检', () => {
@@ -240,6 +240,32 @@ describe('团播联动台预检', () => {
     expect(report.checks.find((check) => check.id === 'timebase.profileFrameRate')).toMatchObject({ status: 'blocking' });
   });
 
+});
+
+it('完整场景模式允许显示来源动作（作用于当前播出场景），仍阻断改写变换等其他画面动作', () => {
+  const value = context();
+  const withAction = (action: LinkProject['rundown'][number]['cues'][number]['actions'][number]) => ({ ...value, mtcRequirement: 'internal' as const,
+    project: { ...value.project, playbackSource: 'internal' as const, obsOutputMode: 'scenes' as const,
+      rundown: value.project.rundown.map(item => ({ ...item, cues: [{ id: 'cue', name: '画面', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 }, durationMs: 2000, enabled: true, notes: '', actions: [action] }] })) } });
+  const sceneCheck = (action: Parameters<typeof withAction>[0]) => runLinkPreflight(withAction(action)).checks.find(check => check.id === 'obs.sceneMode.item');
+  expect(sceneCheck({ id: 'show', label: '显示来源 · 显示器采集', kind: 'obs.setSceneItemEnabled', sceneName: '团播联动台输出', sourceName: '显示器采集', enabled: true })?.status).toBe('passed');
+  expect(sceneCheck({ id: 'mute', label: '静音', kind: 'obs.setInputMute', inputName: '桌面音频', muted: true })?.status).toBe('blocking');
+});
+
+describe('MA2 控台 show', () => {
+  it('与节目灯光依据不一致时阻断，一致时通过，未查询控台时不新增检查项', () => {
+    const value = context();
+    const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false,
+      channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 5000, timeLock: 'time', muted: false,
+        events: [{ id: 'cue', at: 1000, kind: 'ma2', sequence: 7, cue: '6.000', executor: '', label: '副歌', action: 'goto' }] }] });
+    const lighting = { ...createLightingDocument(), outputMode: 'network' as const, tracks: [track], ma2Library: { show: '2hao', readAt: '2026-10-13T00:00:00.000Z', sequences: [] } };
+    value.project = { ...value.project, schemaVersion: 2, rundown: value.project.rundown.map(item => ({ ...item, lighting })) };
+    const showCheck = (ma2Show?: string) => runLinkPreflight({ ...value, ...(ma2Show ? { ma2Show } : {}) }).checks.find(check => check.id === 'ma2.show.item');
+    expect(showCheck()).toBeUndefined();
+    const blocked = showCheck('tblink_ui100_20261007');
+    expect(blocked?.status).toBe('blocking'); expect(blocked?.detail).toContain('灯光 Cue 依据“2hao”编写');
+    expect(showCheck('2hao')).toMatchObject({ status: 'passed', detail: '2hao' });
+  });
 });
 
 function context(): PreflightContext {

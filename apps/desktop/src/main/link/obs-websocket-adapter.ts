@@ -654,6 +654,22 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     return { streaming: stream.outputActive, recording: record.outputActive };
   }
 
+  /** Full-scene mode: a show/hide-source cue acts on the scene now on program,
+   * whatever scene it was authored against (operator decision 2026-10-19). */
+  async setSourceEnabledInProgramScene(sourceName: string, enabled: boolean): Promise<void> {
+    this.assertConnected();
+    const current = await this.request(() => this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
+    const sceneName = current.currentProgramSceneName;
+    if (!sceneName) throw new Error('无法读取 OBS 当前播出场景');
+    const items = await this.request(() => this.client.call('GetSceneItemList', { sceneName }), 'GetSceneItemList');
+    const matches = items.sceneItems.filter(item => item.sourceName === sourceName);
+    const sceneItemId = matches[0]?.sceneItemId;
+    if (matches.length !== 1 || typeof sceneItemId !== 'number') {
+      throw new Error(matches.length ? `当前播出场景“${sceneName}”中有多个来源“${sourceName}”，无法确定显示哪一个` : `当前播出场景“${sceneName}”中没有来源“${sourceName}”`);
+    }
+    await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName, sceneItemId, sceneItemEnabled: enabled }), 'SetSceneItemEnabled');
+  }
+
   private async getSceneItemId(sceneName: string, sourceName: string): Promise<number> {
     const response = await this.request(() => this.client.call('GetSceneItemId', { sceneName, sourceName }), 'GetSceneItemId');
     return response.sceneItemId;

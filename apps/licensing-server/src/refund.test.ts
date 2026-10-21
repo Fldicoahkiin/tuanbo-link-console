@@ -45,7 +45,8 @@ async function setup() {
     const answer = answers[method]!(business);
     return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(new Response(answer));
   };
-  const channels = { reconcile: () => Promise.resolve({}), refund: (request: { orderId: string; refundId: string; amountFen: number; reason: string }) => checkout.refund(request.orderId, request, notifications, channelRequest) };
+  const channels = { reconcile: () => Promise.resolve({}), refund: (request: { orderId: string; refundId: string; amountFen: number; reason: string }) => checkout.refund(request.orderId, request, notifications, channelRequest),
+    paymentLink: () => { throw new Error('退款测试不生成付款链接'); } };
   const execute = (input: ConsoleAction, actor = session) => consoleService.execute({ operationId: randomUUID(), input }, actor, randomUUID(), channels);
   const token = () => `TBD-${randomBytes(32).toString('hex').toUpperCase()}`;
   let trades = 0;
@@ -77,6 +78,10 @@ it('全额原路退款：未确认时订单与授权不变；换新操作编号�
   expect(s.service.describeOrder(order.id).state).toBe('refunded'); expect(order.licenses().every(license => license.revoked)).toBe(true);
   expect(s.ledger(order.id)).toEqual([{ amount_fen: 160000, reference: `alipay-refund:${refunds[0]!.business.out_request_no}` }]);
   expect(s.exceptions()).toEqual([]);
+  // 工作台净收款扣除原路退款；趋势同日记一笔收款、一笔退款。
+  const dashboard = s.consoleService.overview();
+  expect(dashboard.item).toMatchObject({ onlineFen: 160000, refundFen: 160000, netFen: 0 });
+  expect(dashboard.related.find(row => row.category === 'cashflow' && row.day === '2026-10-06')).toMatchObject({ incomeFen: 160000, refundFen: 160000 });
   await expect(s.execute({ action: 'alipay-refund', id: order.id, amountFen: 1, reason: '再次退款' })).rejects.toThrow('已全额退款');
   expect(s.db.prepare("SELECT detail FROM audit WHERE target=? AND action='order.state-changed'").all(order.id).map(row => row.detail)).toContain('fulfilled->refunded:alipay:console-refund');
 });
@@ -107,6 +112,11 @@ it('支付宝后台直接退款只经验签通知记录并标记，不自动撤�
   const receipt = z.object({ payment_reference: z.string() }).parse(s.db.prepare('SELECT payment_reference FROM payment_receipts WHERE order_id=?').get(order.id));
   s.service.alipayNotification({ orderId: order.id, ...identity, status: 'TRADE_CLOSED', amountFen: 80000, refundFen: 80000, paymentReference: receipt.payment_reference });
   expect(s.service.describeOrder(order.id).state).toBe('refunded'); expect(order.licenses()[0]!.revoked).toBe(false);
+  // 只有渠道通知、未登记的退款同样从净收款扣除，并在财务记录和趋势中出现。
+  const dashboard = s.consoleService.overview();
+  expect(dashboard.item).toMatchObject({ onlineFen: 80000, refundFen: 80000, netFen: 0 });
+  expect(dashboard.related.filter(row => row.category === 'cashflow').reduce((sum, row) => sum + Number(row.refundFen), 0)).toBe(80000);
+  expect(s.consoleService.list('finance', pageQuerySchema.parse({}), s.session).items).toMatchObject([{ orderId: order.id, amountFen: 80000, state: '支付宝渠道退款（未登记）' }]);
   expect(s.exceptions()).toEqual([order.id]);
   for (const role of ['finance', 'viewer'] as const) await expect(s.execute({ action: 'refund-review', id: order.id, decision: 'revoke', reason: '越权' }, { ...s.session, user: { ...s.session.user, role } })).rejects.toThrow('角色');
   await expect(s.execute({ action: 'alipay-refund', id: order.id, amountFen: 1, reason: '越权' }, { ...s.session, user: { ...s.session.user, role: 'operations' } })).rejects.toThrow('角色');

@@ -23,7 +23,8 @@ async function setup() {
   const recovery = await consoleService.auth.enroll(first.token, 'a-secure-test-password', code(first.id), 'enroll');
   time += 30000;
   const login = await consoleService.auth.login('owner', 'a-secure-test-password', code(first.id), 'login');
-  const execute = (input: ConsoleAction, session = login.session, operationId = randomUUID()) => consoleService.execute({ operationId, input }, session, randomUUID(), { reconcile: () => Promise.resolve({}), refund: () => Promise.reject(new Error('测试未接入支付宝')) });
+  const paymentLink = (id: string) => { const payment = service.prepareAlipayPayment(id, '2026000000000001', '2088000000000001'); return { url: `https://openapi.alipay.com/gateway.do?order=${payment.id}`, expiresAt: payment.expiresAt }; };
+  const execute = (input: ConsoleAction, session = login.session, operationId = randomUUID()) => consoleService.execute({ operationId, input }, session, randomUUID(), { reconcile: () => Promise.resolve({}), refund: () => Promise.reject(new Error('测试未接入支付宝')), paymentLink });
   return { service, consoleService, db, first, login, recovery, code, execute, advance: (n: number) => { time += n; }, now: () => time };
 }
 const grant = { action: 'grant' as const, customer: '内测客户', customerType: 'company' as const, quantity: 2, useUntil: '2026-11-06T00:00:00Z', purpose: 'test' as const, reason: '现场兼容验收' };
@@ -35,6 +36,14 @@ it('一次性开通、TOTP 防重放、恢复码及会话时限', async () => {
   expect(recovered.session.user.role).toBe('owner');
   await expect(s.consoleService.auth.login('owner', 'a-secure-test-password', s.recovery.recoveryCodes[0]!, 'repeat')).rejects.toThrow('无效');
   s.advance(1800001); expect(() => s.consoleService.auth.session(recovered.token)).toThrow('登录');
+});
+it('知道密码也不能跨来源穷举验证码，锁定期间同样返回无效登录', async () => {
+  const s = await setup(); s.advance(30000);
+  const wrong = String((Number(s.code(s.first.id)) + 500000) % 1000000).padStart(6, '0');
+  for (let index = 0; index < 10; index++) await expect(s.consoleService.auth.login('owner', 'a-secure-test-password', wrong, 'guess')).rejects.toThrow('无效');
+  await expect(s.consoleService.auth.login('owner', 'a-secure-test-password', s.code(s.first.id), 'locked')).rejects.toThrow('无效');
+  s.advance(900001);
+  expect((await s.consoleService.auth.login('owner', 'a-secure-test-password', s.code(s.first.id), 'after')).session.user.role).toBe('owner');
 });
 it('特殊授权一码一机，不写入收款，重复提交不重复发码', async () => {
   const s = await setup(); const operationId = randomUUID(); const result = await s.execute(grant, s.login.session, operationId);
@@ -66,10 +75,11 @@ it('核款、退款上限及财务导出隔离', async () => {
   await s.execute({ action: 'fulfill', id: result.id!, amountFen: 80000, paymentReference: 'bank-1', paymentMethod: '对公转账', reason: '已核实' });
   await s.execute({ action: 'refund', id: result.id!, amountFen: 70000, reference: 'refund-1', handledAt: new Date(s.now()).toISOString(), reason: '线下退款已办理' });
   await expect(s.execute({ action: 'refund', id: result.id!, amountFen: 10001, reference: 'refund-2', handledAt: new Date(s.now()).toISOString(), reason: '超额' })).rejects.toThrow('超过');
-  const csv = s.consoleService.exportOrders(pageQuerySchema.parse({}), s.login.session, 'export');
+  const csv = s.consoleService.exportCsv('orders', pageQuerySchema.parse({}), s.login.session, 'export');
   expect(csv).toContain("'=1+1"); expect(csv).not.toContain('TBA-'); expect(csv).not.toContain('客户');
   expect(s.consoleService.overview().item.manualFen).toBe(80000);
   expect(s.consoleService.overview().item.refundFen).toBe(70000);
+  expect(s.consoleService.overview().item.netFen).toBe(10000);
 });
 it('换机沿用旧租约等待并吊销旧码', async () => {
   const s = await setup(); const result = await s.execute(grant);
@@ -173,8 +183,60 @@ it('渠道退款通知进入异常队列且不自动撤销授权，人工登记�
   expect(detail.related.map(row => row.revoked)).toEqual([false]);
   await s.execute({ action: 'refund', id: order.id, amountFen: 80000, reference: 'manual-refund-1', handledAt: new Date(s.now()).toISOString(), reason: '财务登记' });
   expect(exceptions()).toEqual([order.id]);
+  // 渠道通知与人工登记的是同一笔，只扣一次；财务记录只剩登记行。
+  expect(s.consoleService.overview().item).toMatchObject({ refundFen: 80000, netFen: 0 });
+  expect(s.consoleService.list('finance', pageQuerySchema.parse({}), s.login.session).items.map(row => row.state)).toEqual(['人工登记退款']);
   await s.execute({ action: 'refund-review', id: order.id, decision: 'keep', reason: '客户申请退款，核对后保留授权至期满' });
   expect(exceptions()).toEqual([]);
   expect(s.consoleService.detail('orders', order.id, s.login.session).related.map(row => row.revoked)).toEqual([false]);
   expect(s.consoleService.overview().item.refundReview).toBe(0);
+});
+it('线下订单可生成支付宝付款链接或直接关闭；有链接后只能经渠道查单关闭', async () => {
+  const s = await setup(); const order = { action: 'create-order' as const, customer: '客户', customerType: 'company' as const, quantity: 1, amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', reason: '线下成交' };
+  const linked = await s.execute({ ...order, reference: 'link-order' }); const unlinked = await s.execute({ ...order, reference: 'close-order' });
+  for (const role of ['finance', 'viewer'] as const) await expect(s.execute({ action: 'payment-link', id: linked.id!, reason: '越权' }, { ...s.login.session, user: { ...s.login.session.user, role } })).rejects.toThrow('角色');
+  const link = await s.execute({ action: 'payment-link', id: linked.id!, reason: '客户要求扫码付款' });
+  expect(link).toMatchObject({ message: '付款链接已生成', paymentUrl: expect.stringContaining(linked.id!) as unknown, expiresAt: new Date(s.now() + 15 * 60000).toISOString() });
+  expect(s.consoleService.detail('orders', linked.id!, s.login.session).item.channel).toBe('alipay');
+  expect((await s.execute({ action: 'payment-link', id: linked.id!, reason: '重发同一链接' })).expiresAt).toBe(link.expiresAt);
+  await expect(s.execute({ action: 'close-order', id: linked.id!, reason: '客户放弃' })).rejects.toThrow('未生成付款链接');
+  expect((await s.execute({ action: 'close-order', id: unlinked.id!, reason: '客户放弃' })).message).toBe('订单已关闭');
+  expect(s.consoleService.detail('orders', unlinked.id!, s.login.session).item.state).toBe('closed');
+  await expect(s.execute({ action: 'close-order', id: unlinked.id!, reason: '重复关闭' })).rejects.toThrow('未生成付款链接');
+  await expect(s.execute({ action: 'payment-link', id: unlinked.id!, reason: '关闭后付款' })).rejects.toThrow('已关闭');
+});
+it('付款期限过去一分钟以上仍未付款的支付宝订单交给恢复任务查单；已收款、未过期和线下单不列入', async () => {
+  const s = await setup(); const identity = { appId: '2026000000000001', sellerId: '2088000000000001' };
+  const order = (reference: string) => s.service.createOrder({ reference, customer: '客户', customerType: 'company', quantity: 1, kind: 'subscription', amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', updatesUntil: '2026-11-06T00:00:00Z' }).id;
+  const lapsed = order('lapsed'); const paid = order('paid'); const fresh = order('fresh'); order('offline');
+  s.service.prepareAlipayPayment(lapsed, identity.appId, identity.sellerId); s.service.prepareAlipayPayment(paid, identity.appId, identity.sellerId);
+  s.advance(15 * 60000 + 59000); expect(s.service.lapsedPaymentLinks().items).toEqual([]);
+  s.advance(1000); s.service.prepareAlipayPayment(fresh, identity.appId, identity.sellerId);
+  s.service.fulfill(paid, { amountFen: 80000, paymentReference: 'alipay:2026100622001' }, 'alipay', identity);
+  expect(s.service.lapsedPaymentLinks().items).toEqual([lapsed]);
+});
+it('待办筛选、操作日志对象名称与动作筛选、财务合计与导出', async () => {
+  const s = await setup(); const granted = await s.execute(grant);
+  const licenses = s.consoleService.detail('orders', granted.id!, s.login.session).related;
+  await s.execute({ action: 'set-expiry', id: String(licenses[0]!.id), useUntil: '2026-10-08T00:00:00Z', reason: '即将到期' });
+  const query = (value: Record<string, string>) => pageQuerySchema.parse(value);
+  expect(s.consoleService.list('licenses', query({ state: 'expiring' }), s.login.session).items.map(row => row.id)).toEqual([licenses[0]!.id]);
+  const ticket = await s.execute({ action: 'create-ticket', id: granted.id!, licenseId: null, category: 'other', note: '问题', reason: '记录' });
+  const closed = await s.execute({ action: 'create-ticket', id: granted.id!, licenseId: null, category: 'other', note: '已处理', reason: '记录' });
+  await s.execute({ action: 'update-ticket', id: closed.id!, state: 'closed', conclusion: '无需变更', reason: '完成' });
+  expect(s.consoleService.list('tickets', query({ state: 'active' }), s.login.session).items.map(row => row.id)).toEqual([ticket.id]);
+  const reference = String(s.consoleService.detail('orders', granted.id!, s.login.session).item.reference);
+  expect(s.consoleService.list('audit', query({ state: 'grant' }), s.login.session).items).toMatchObject([{ action: 'grant', targetType: 'orders', targetLabel: reference }]);
+  expect(s.consoleService.list('audit', query({ q: '即将到期' }), s.login.session).items.map(row => row.targetLabel)).toEqual(['内测客户 的授权', '内测客户 的授权']);
+  const sale = await s.execute({ action: 'create-order', reference: 'finance-sale', customer: '客户', customerType: 'company', quantity: 1, amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', reason: '成交' });
+  await s.execute({ action: 'fulfill', id: sale.id!, amountFen: 80000, paymentReference: 'finance-bank', paymentMethod: '转账', reason: '到账' });
+  await s.execute({ action: 'refund', id: sale.id!, amountFen: 30000, reference: 'refund-old', handledAt: '2026-10-01T02:00:00Z', reason: '早先退款' });
+  await s.execute({ action: 'refund', id: sale.id!, amountFen: 20000, reference: 'refund-new', handledAt: '2026-10-05T02:00:00Z', reason: '近期退款' });
+  await s.execute({ action: 'invoice', id: sale.id!, state: 'requested', buyer: '抬头', taxId: '', reference: '', reason: '申请' });
+  expect(s.consoleService.list('finance', query({}), s.login.session).summary).toEqual({ refundFen: 50000, refundCount: 2, invoiceCount: 1 });
+  const recent = s.consoleService.list('finance', query({ state: 'refund', from: '2026-10-03' }), s.login.session);
+  expect(recent.items.map(row => row.reference)).toEqual(['refund-new']); expect(recent.summary).toEqual({ refundFen: 20000, refundCount: 1, invoiceCount: 0 });
+  const csv = s.consoleService.exportCsv('finance', query({ state: 'refund' }), s.login.session, 'export');
+  expect(csv.split('\r\n')).toHaveLength(3); expect(csv).toContain('"refund-old"');
+  await expect(Promise.resolve().then(() => s.consoleService.exportCsv('finance', query({}), { ...s.login.session, user: { ...s.login.session.user, role: 'operations' } }, 'export'))).rejects.toThrow('财务');
 });

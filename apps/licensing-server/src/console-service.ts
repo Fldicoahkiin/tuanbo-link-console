@@ -21,10 +21,19 @@ const orderProjection = `SELECT o.id,o.reference,json_extract(o.body,'$.customer
   (SELECT COALESCE(MAX(refund_fen),0) FROM refund_reviews WHERE order_id=o.id) AS reviewedRefundFen
   FROM orders o LEFT JOIN console_order_meta m ON m.order_id=o.id LEFT JOIN payment_receipts p ON p.order_id=o.id
   LEFT JOIN alipay_payment_links a ON a.order_id=o.id LEFT JOIN wechat_payment_links w ON w.order_id=o.id`;
+// 渠道已退而台账未登记的差额（支付宝商户后台直接退款只有渠道通知），按最近一次渠道退款时间记。
+const unledgeredRefunds = `SELECT x.id AS orderId,x.channelRefundFen-x.refundedFen AS amountFen,x.paymentReference AS reference,
+  COALESCE((SELECT MAX(received_at) FROM payment_events WHERE order_id=x.id AND refund_fen>0),(SELECT MAX(confirmed_at) FROM alipay_refunds WHERE order_id=x.id AND state='succeeded')) AS created
+  FROM (${orderProjection}) x WHERE x.channelRefundFen>x.refundedFen`;
+// 授权当前截止：单码调整优先，其次最近续费，最后原订单。
+const licenseUseUntil = "COALESCE((SELECT use_until FROM license_term_overrides WHERE license_id=l.id),(SELECT MAX(use_until) FROM license_renewals WHERE license_id=l.id),json_extract(o.body,'$.useUntil'))";
+const beijingDayStart = (day: string) => new Date(`${day}T00:00:00+08:00`).toISOString();
+const beijingDayEnd = (day: string) => new Date(Date.parse(`${day}T00:00:00+08:00`) + 86400000).toISOString();
 /** 由 HTTP 层注入的渠道调用；控制台只编排，不直接持有支付宝凭据。 */
 export type ConsoleChannels = {
   reconcile: (id: string) => Promise<unknown>;
   refund: (request: ReturnType<LicensingService['prepareAlipayRefund']>) => Promise<{ confirmed: boolean; refundedTotalFen: number }>;
+  paymentLink: (id: string) => { url: string; expiresAt: string };
 };
 export class ConsoleService {
   readonly auth: ConsoleAuth;
@@ -47,20 +56,30 @@ export class ConsoleService {
       // 异常队列：已收款未交付，或渠道累计退款尚未由运营决定授权去留。
       const extra = resource === 'exceptions' ? " AND (paymentStatus='confirmed' AND state IN ('pending','paid') OR channelRefundFen>reviewedRefundFen)" : '';
       return this.page(`SELECT * FROM (${orderProjection}) WHERE (id LIKE ? ESCAPE '\\' OR reference LIKE ? ESCAPE '\\' OR customer LIKE ? ESCAPE '\\') AND (?='' OR state=?) AND (?='' OR channel=?) AND (?='' OR created>=?) AND (?='' OR created<?)${extra} ORDER BY created DESC,id`,
-        [term, term, term, query.state, query.state, query.channel, query.channel, query.from, query.from ? new Date(`${query.from}T00:00:00+08:00`).toISOString() : '', query.to, query.to ? new Date(Date.parse(`${query.to}T00:00:00+08:00`) + 86400000).toISOString() : ''], query);
+        [term, term, term, query.state, query.state, query.channel, query.channel, query.from, query.from ? beijingDayStart(query.from) : '', query.to, query.to ? beijingDayEnd(query.to) : ''], query);
     }
     if (resource === 'licenses') {
-      const selected = this.page(`SELECT l.id,m.source AS source FROM licenses l JOIN orders o ON o.id=l.order_id LEFT JOIN console_order_meta m ON m.order_id=o.id WHERE (l.id LIKE ? ESCAPE '\\' OR json_extract(o.body,'$.customer') LIKE ? ESCAPE '\\' OR l.machine LIKE ? ESCAPE '\\') AND (?='' OR (?='revoked' AND l.revoked=1) OR (?='bound' AND l.machine IS NOT NULL AND l.revoked=0) OR (?='unbound' AND l.machine IS NULL AND l.revoked=0)) ORDER BY l.rowid DESC`, [term, term, term, query.state, query.state, query.state, query.state], query);
+      const selected = this.page(`SELECT l.id,m.source AS source FROM licenses l JOIN orders o ON o.id=l.order_id LEFT JOIN console_order_meta m ON m.order_id=o.id WHERE (l.id LIKE ? ESCAPE '\\' OR json_extract(o.body,'$.customer') LIKE ? ESCAPE '\\' OR l.machine LIKE ? ESCAPE '\\') AND (?='' OR (?='revoked' AND l.revoked=1) OR (?='bound' AND l.machine IS NOT NULL AND l.revoked=0) OR (?='unbound' AND l.machine IS NULL AND l.revoked=0) OR (?='expiring' AND l.revoked=0 AND ${licenseUseUntil}>? AND ${licenseUseUntil}<=?)) ORDER BY l.rowid DESC`, [term, term, term, query.state, query.state, query.state, query.state, query.state, new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString()], query);
       return pageSchema.parse({ ...selected, items: selected.items.map(row => ({ ...this.service.consoleLicense(z.string().parse(row.id)), source: row.source ?? 'sale' })) });
     }
-    if (resource === 'tickets') return this.page(`SELECT t.*,o.reference AS orderReference FROM console_tickets t JOIN orders o ON o.id=t.order_id WHERE (t.id LIKE ? ESCAPE '\\' OR o.reference LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\') AND (?='' OR t.state=?) ORDER BY t.created DESC,t.id`, [term, term, term, query.state, query.state], query);
+    if (resource === 'tickets') return this.page(`SELECT t.*,o.reference AS orderReference FROM console_tickets t JOIN orders o ON o.id=t.order_id WHERE (t.id LIKE ? ESCAPE '\\' OR o.reference LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\') AND (?='' OR t.state=? OR ?='active' AND t.state!='closed') ORDER BY t.created DESC,t.id`, [term, term, term, query.state, query.state, query.state], query);
     if (resource === 'finance') {
       this.financial(session);
-      return this.page(`SELECT * FROM (SELECT id,order_id AS orderId,'refund' AS category,amount_fen AS amountFen,reference,handled_at AS created,CASE WHEN reference LIKE 'alipay-refund:%' THEN '支付宝原路退款' ELSE '人工登记退款' END AS state,reason,actor,NULL AS buyer,NULL AS taxId FROM console_refunds UNION ALL SELECT id,order_id,'invoice',NULL,reference,created,state,reason,actor,buyer,tax_id FROM console_invoices) WHERE (orderId LIKE ? ESCAPE '\\' OR reference LIKE ? ESCAPE '\\') ORDER BY created DESC,id`, [term, term], query);
+      const finance = `SELECT * FROM (SELECT id,order_id AS orderId,'refund' AS category,amount_fen AS amountFen,reference,handled_at AS created,CASE WHEN reference LIKE 'alipay-refund:%' THEN '支付宝原路退款' ELSE '人工登记退款' END AS state,reason,actor,NULL AS buyer,NULL AS taxId FROM console_refunds UNION ALL SELECT 'channel:'||orderId,orderId,'refund',amountFen,reference,created,'支付宝渠道退款（未登记）',NULL,NULL,NULL,NULL FROM (${unledgeredRefunds}) UNION ALL SELECT id,order_id,'invoice',NULL,reference,created,state,reason,actor,buyer,tax_id FROM console_invoices) WHERE (orderId LIKE ? ESCAPE '\\' OR reference LIKE ? ESCAPE '\\') AND (?='' OR category=?) AND (?='' OR created>=?) AND (?='' OR created<?)`;
+      const params = [term, term, query.state, query.state, query.from, query.from ? beijingDayStart(query.from) : '', query.to, query.to ? beijingDayEnd(query.to) : ''];
+      // 合计覆盖全部筛选结果，不只是当前页。
+      const summary = this.db.prepare(`SELECT COALESCE(SUM(CASE WHEN category='refund' THEN amountFen END),0) AS refundFen,COALESCE(SUM(category='refund'),0) AS refundCount,COALESCE(SUM(category='invoice'),0) AS invoiceCount FROM (${finance})`).get(...params);
+      return pageSchema.parse({ ...this.page(`${finance} ORDER BY created DESC,id`, params, query), summary });
     }
     if (resource === 'audit') {
       if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '只有负责人可以查看全局日志');
-      return this.page("SELECT a.*,COALESCE(u.username,a.actor) AS operator FROM console_audit a LEFT JOIN console_users u ON u.id=a.actor WHERE (a.target LIKE ? ESCAPE '\\' OR a.action LIKE ? ESCAPE '\\') ORDER BY a.at DESC,a.id", [term, term], query);
+      // 对象显示为订单编号、授权所属客户、工单所属订单或用户名；订单、授权、工单可跳转详情。
+      return this.page(`SELECT * FROM (SELECT a.*,COALESCE(u.username,a.actor) AS operator,
+        CASE WHEN o.id IS NOT NULL THEN 'orders' WHEN l.id IS NOT NULL THEN 'licenses' WHEN t.id IS NOT NULL THEN 'tickets' END AS targetType,
+        COALESCE(o.reference,json_extract(lo.body,'$.customer')||' 的授权',tor.reference||' 的工单',tu.username,NULLIF(a.target,'')) AS targetLabel
+        FROM console_audit a LEFT JOIN console_users u ON u.id=a.actor LEFT JOIN orders o ON o.id=a.target LEFT JOIN licenses l ON l.id=a.target LEFT JOIN orders lo ON lo.id=l.order_id
+        LEFT JOIN console_tickets t ON t.id=a.target LEFT JOIN orders tor ON tor.id=t.order_id LEFT JOIN console_users tu ON tu.id=a.target)
+        WHERE (target LIKE ? ESCAPE '\\' OR targetLabel LIKE ? ESCAPE '\\' OR operator LIKE ? ESCAPE '\\' OR reason LIKE ? ESCAPE '\\') AND (?='' OR action=?) ORDER BY at DESC,id`, [term, term, term, term, query.state, query.state], query);
     }
     if (resource === 'users') {
       if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '只有负责人可以管理人员');
@@ -79,7 +98,7 @@ export class ConsoleService {
       item = rowSchema.parse(this.service.consoleLicense(id)); orderId = z.string().parse(item.orderId);
       related = this.db.prepare('SELECT order_id AS id,use_until AS useUntil,updates_until AS updatesUntil FROM license_renewals WHERE license_id=? ORDER BY rowid DESC').all(id).map(row => rowSchema.parse(row));
     } else if (resource === 'tickets') {
-      const row = this.db.prepare('SELECT * FROM console_tickets WHERE id=?').get(id);
+      const row = this.db.prepare('SELECT t.id,t.order_id,t.license_id,t.category,t.note,t.state,t.conclusion,t.created,t.updated,COALESCE(u.username,t.actor) AS operator FROM console_tickets t LEFT JOIN console_users u ON u.id=t.actor WHERE t.id=?').get(id);
       if (!row) throw new ServiceError(404, 'NOT_FOUND', '工单不存在');
       item = rowSchema.parse(row); orderId = z.string().parse(item.order_id); related = [this.order(orderId)];
     } else throw new ServiceError(404, 'NOT_FOUND', '详情不存在');
@@ -90,9 +109,10 @@ export class ConsoleService {
   overview() {
     const counts = this.db.prepare(`SELECT SUM(CASE WHEN paymentStatus='pending' AND state='pending' THEN 1 ELSE 0 END) AS pendingOrders,SUM(CASE WHEN paymentStatus='confirmed' AND state IN ('pending','paid') THEN 1 ELSE 0 END) AS deliveryPending,SUM(CASE WHEN channelRefundFen>reviewedRefundFen THEN 1 ELSE 0 END) AS refundReview FROM (${orderProjection})`).get();
     const receipts = this.db.prepare("SELECT COALESCE(SUM(CASE WHEN source='manual' THEN amount_fen ELSE 0 END),0) AS manualFen,COALESCE(SUM(CASE WHEN source!='manual' THEN amount_fen ELSE 0 END),0) AS onlineFen FROM payment_receipts").get();
-    const refunds = this.db.prepare('SELECT COALESCE(SUM(amount_fen),0) AS refundFen FROM console_refunds').get();
+    // 每单退款取台账与渠道累计的较大值：渠道已退未登记的照样扣除，人工登记同一笔不重复扣。
+    const refunds = this.db.prepare(`SELECT COALESCE(SUM(MAX(refundedFen,channelRefundFen)),0) AS refundFen FROM (${orderProjection})`).get();
     const tickets = this.db.prepare("SELECT COUNT(*) AS openTickets FROM console_tickets WHERE state!='closed'").get();
-    const expiring = this.db.prepare(`SELECT COUNT(*) AS expiring FROM licenses l JOIN orders o ON o.id=l.order_id WHERE l.revoked=0 AND COALESCE((SELECT use_until FROM license_term_overrides WHERE license_id=l.id),(SELECT MAX(use_until) FROM license_renewals WHERE license_id=l.id),json_extract(o.body,'$.useUntil'))>? AND COALESCE((SELECT use_until FROM license_term_overrides WHERE license_id=l.id),(SELECT MAX(use_until) FROM license_renewals WHERE license_id=l.id),json_extract(o.body,'$.useUntil'))<=?`).get(new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString());
+    const expiring = this.db.prepare(`SELECT COUNT(*) AS expiring FROM licenses l JOIN orders o ON o.id=l.order_id WHERE l.revoked=0 AND ${licenseUseUntil}>? AND ${licenseUseUntil}<=?`).get(new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString());
     const health = this.db.prepare('SELECT name,state,checked_at AS checkedAt,detail FROM console_health ORDER BY name').all().map(row => rowSchema.parse(row));
     const customers = this.db.prepare("SELECT COUNT(*) AS customerCount FROM (SELECT DISTINCT json_extract(body,'$.customer') COLLATE NOCASE,json_extract(body,'$.customerType') FROM orders WHERE state='fulfilled')").get();
     const bindings = this.db.prepare('SELECT COUNT(*) AS boundLicenseCount FROM licenses WHERE machine IS NOT NULL AND revoked=0').get();
@@ -101,13 +121,14 @@ export class ConsoleService {
     const start = new Date(Date.parse(`${days[0]}T00:00:00+08:00`)).toISOString();
     const end = new Date(Date.parse(`${today}T00:00:00+08:00`) + 86400000).toISOString();
     const income = this.db.prepare("SELECT date(received_at,'+8 hours') AS day,SUM(amount_fen) AS amount FROM payment_receipts WHERE received_at>=? AND received_at<? GROUP BY day").all(start, end);
-    const refunded = this.db.prepare("SELECT date(handled_at,'+8 hours') AS day,SUM(amount_fen) AS amount FROM console_refunds WHERE handled_at>=? AND handled_at<? GROUP BY day").all(start, end);
+    const refunded = this.db.prepare(`SELECT date(at,'+8 hours') AS day,SUM(amount) AS amount FROM (SELECT handled_at AS at,amount_fen AS amount FROM console_refunds UNION ALL SELECT created,amountFen FROM (${unledgeredRefunds})) WHERE at>=? AND at<? GROUP BY day`).all(start, end);
     const trend = days.map(day => ({ category: 'cashflow', day, incomeFen: Number(income.find(row => row.day === day)?.amount ?? 0), refundFen: Number(refunded.find(row => row.day === day)?.amount ?? 0) }));
-    return detailSchema.parse({ item: { ...counts, ...receipts, ...refunds, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '未知：尚无成功备份回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '未知：尚无恢复任务回执' }, related: [...health, ...trend], history: [] });
+    const netFen = Number(receipts?.onlineFen) + Number(receipts?.manualFen) - Number(refunds?.refundFen);
+    return detailSchema.parse({ item: { ...counts, ...receipts, ...refunds, netFen, ...tickets, ...expiring, ...customers, ...bindings, service: '正常', backup: health.find(row => row.name === 'backup-last-success')?.checkedAt ?? '暂无回执', recovery: health.find(row => row.name === 'delivery-recovery')?.checkedAt ?? '暂无回执' }, related: [...health, ...trend], history: [] });
   }
   private authorize(input: ConsoleAction, session: ConsoleSession): void {
     if (!permissions[input.action].includes(session.user.role)) throw new ServiceError(403, 'FORBIDDEN', '当前角色不能执行此操作');
-    if (sensitiveActions.has(input.action) && this.now() - session.verifiedAt >= 300000) throw new ServiceError(403, 'STEP_UP_REQUIRED', '请先在安全设置中完成二次验证');
+    if (sensitiveActions.has(input.action) && this.now() - session.verifiedAt >= 300000) throw new ServiceError(403, 'STEP_UP_REQUIRED', '需要二次验证');
   }
   operation(id: string, session: ConsoleSession): ConsoleResult {
     const row = this.db.prepare('SELECT result,state FROM console_operations WHERE id=? AND actor=?').get(id, session.user.id);
@@ -139,7 +160,7 @@ export class ConsoleService {
         try {
           // Keep payment receipt durable even if the subsequent delivery transaction fails.
           let result: ConsoleResult;
-          if (input.action === 'reconcile') { await channels.reconcile(input.id); result = { id: input.id, message: '查单已完成，请刷新订单查看实际付款与交付状态' }; }
+          if (input.action === 'reconcile') { await channels.reconcile(input.id); result = { id: input.id, message: '查单完成' }; }
           else if (input.action === 'alipay-refund') {
             // 退款请求先落库，渠道结果未确认时保持待确认，运营用新操作编号按原金额重提即复用同一 out_request_no。
             const request = this.service.prepareAlipayRefund(input.id, input.amountFen, input.reason, session.user.id);
@@ -154,6 +175,7 @@ export class ConsoleService {
           throw error;
         }
       }
+      if (input.action === 'payment-link') return this.service.consoleTransaction(() => { begin(); const link = channels.paymentLink(input.id); return finish({ id: input.id, message: '付款链接已生成', paymentUrl: link.url, expiresAt: link.expiresAt }); });
       return this.service.consoleTransaction(() => { begin(); return finish(this.perform(safeInput, session, operationId)); });
     } catch (error) {
       this.auth.audit(session.user.id, input.action, target, input.reason, error instanceof ServiceError ? error.code : 'INTERNAL_ERROR', requestId); throw error;
@@ -166,24 +188,25 @@ export class ConsoleService {
       case 'create-order': {
         const order = this.service.createOrder({ reference: input.reference, customer: input.customer, customerType: input.customerType, quantity: input.quantity, kind: 'subscription', amountFen: input.amountFen, useUntil: input.useUntil, updatesUntil: input.useUntil });
         this.db.prepare('INSERT OR IGNORE INTO console_order_meta VALUES(?,?,?,?,?)').run(order.id, at, 'manual', input.reason, actor);
-        return success(order.id, '线下订单已创建，等待财务核款');
+        return success(order.id, '线下订单已创建，待核款');
       }
       case 'fulfill': this.service.fulfill(input.id, { amountFen: input.amountFen, paymentReference: input.paymentReference }); this.auth.audit(actor, 'manual-payment-method', input.id, input.paymentMethod, 'success', operationId); return success(input.id, '核款与发码已完成');
       case 'retry-delivery': this.service.retryDelivery(input.id, { reason: input.reason }); return success(input.id, '补交付已完成');
+      case 'close-order': this.service.closeUnlinkedOrder(input.id); return success(input.id, '订单已关闭');
       case 'delivery-access': { const result = this.service.issueDeliveryAccess(input.id, { reason: input.reason }); return { id: input.id, message: '新的领取凭据已签发，旧凭据失效', secret: result.token, expiresAt: result.expiresAt }; }
       case 'revoke-delivery-access': this.service.revokeDeliveryAccess(input.id, { reason: input.reason }); return success(input.id, '领取凭据已撤销');
-      case 'reveal': return { id: input.id, message: '请仅向已核实的授权持有人交付', secret: this.service.consoleReveal(input.id) };
-      case 'set-expiry': { const before = this.service.consoleLicense(input.id).useUntil; this.service.setLicenseExpiry(input.id, input.useUntil, input.reason); this.auth.audit(actor, 'license.expiry-adjusted', input.id, `原截止：${before ?? '永久'}；新截止：${input.useUntil}；${input.reason}`, 'success', operationId); return success(input.id, '到期时间已更新；下次联网验证生效，已签发凭证不会立即失效'); }
-      case 'revoke': this.service.revoke(input.id, { reason: input.reason }); return success(input.id, '授权已撤销；已经开始的会话不会立即停止');
-      case 'migrate': { const result = this.service.migrate(input.id, { reason: input.reason }); return { id: input.id, message: '换机完成，旧码失效，新码尚未绑定', secret: result.code }; }
+      case 'reveal': return { id: input.id, message: '完整激活码', secret: this.service.consoleReveal(input.id) };
+      case 'set-expiry': { const before = this.service.consoleLicense(input.id).useUntil; this.service.setLicenseExpiry(input.id, input.useUntil, input.reason); this.auth.audit(actor, 'license.expiry-adjusted', input.id, `原截止：${before ?? '永久'}；新截止：${input.useUntil}；${input.reason}`, 'success', operationId); return success(input.id, '到期时间已更新，下次联网验证生效'); }
+      case 'revoke': this.service.revoke(input.id, { reason: input.reason }); return success(input.id, '授权已撤销');
+      case 'migrate': { const result = this.service.migrate(input.id, { reason: input.reason }); return { id: input.id, message: '换机完成，旧码已失效', secret: result.code }; }
       case 'grant': {
         const result = this.service.createGrant({ customer: input.customer, customerType: input.customerType, quantity: input.quantity, useUntil: input.useUntil }, `GRANT-${operationId}`);
         this.db.prepare('INSERT INTO console_order_meta VALUES(?,?,?,?,?)').run(result.id, at, input.purpose, input.reason, actor);
-        return success(result.id, '特殊授权已签发，不计入收款台账；在订单详情中查看授权');
+        return success(result.id, '特殊授权已签发');
       }
-      case 'create-user': { const result = this.auth.createUser(input.username, input.role); return { id: result.id, message: '请私下交付一次性开通凭据，24 小时内有效', secret: result.token }; }
-      case 'update-user': this.auth.updateUser(input.id, input.role, input.enabled); return success(input.id, '人员权限已更新，已有会话已撤销');
-      case 'reset-user': { const result = this.auth.resetUser(input.id); return { id: input.id, message: '认证已重置，原会话失效；请交付新的开通凭据', secret: result.token }; }
+      case 'create-user': { const result = this.auth.createUser(input.username, input.role); return { id: result.id, message: '开通凭据 24 小时内有效', secret: result.token }; }
+      case 'update-user': this.auth.updateUser(input.id, input.role, input.enabled); return success(input.id, '已更新，该人员需重新登录');
+      case 'reset-user': { const result = this.auth.resetUser(input.id); return { id: input.id, message: '认证已重置，请交付新的开通凭据', secret: result.token }; }
       case 'create-ticket': {
         this.order(input.id);
         if (input.licenseId && !this.db.prepare('SELECT id FROM licenses WHERE id=? AND (order_id=? OR id IN (SELECT license_id FROM license_renewals WHERE order_id=?))').get(input.licenseId, input.id, input.id)) throw new ServiceError(400, 'LICENSE_ORDER_MISMATCH', '授权不属于此订单');
@@ -204,20 +227,20 @@ export class ConsoleService {
         if (Date.parse(input.handledAt) > this.now()) throw new ServiceError(400, 'FUTURE_REFUND', '实际办理时间不能晚于当前时间');
         if (this.db.prepare('SELECT id FROM console_refunds WHERE reference=?').get(input.reference)) throw new ServiceError(409, 'REFUND_REFERENCE_USED', '退款凭证编号已经登记');
         this.db.prepare('INSERT INTO console_refunds VALUES(?,?,?,?,?,?,?)').run(randomUUID(), input.id, input.amountFen, input.reference, input.handledAt, input.reason, actor);
-        return success(input.id, '已人工登记退款；系统未调用退款渠道，授权需单独处理');
+        return success(input.id, '退款已登记');
       }
       case 'invoice': {
         this.order(input.id);
         if (input.state === 'issued' && !input.reference) throw new ServiceError(400, 'INVOICE_REFERENCE_REQUIRED', '已开票必须填写发票编号');
         if (input.state === 'issued' && this.db.prepare("SELECT id FROM console_invoices WHERE state='issued' AND reference=?").get(input.reference)) throw new ServiceError(409, 'INVOICE_EXISTS', '发票编号已登记');
         this.db.prepare('INSERT INTO console_invoices VALUES(?,?,?,?,?,?,?,?,?)').run(randomUUID(), input.id, input.state, input.buyer, input.taxId, input.reference, input.reason, actor, at);
-        return success(input.id, '开票处理记录已保存；系统未调用开票服务');
+        return success(input.id, '开票记录已保存');
       }
       case 'refund-review': {
         const { revoked } = this.service.reviewRefund(input.id, input.decision, input.reason, actor);
         return success(input.id, input.decision === 'revoke' ? `已撤销本订单 ${revoked.length} 份授权，渠道退款处理完成` : '已保留授权，渠道退款处理完成');
       }
-      case 'reconcile': case 'alipay-refund': throw new ServiceError(500, 'INVALID_DISPATCH', '渠道操作必须通过异步通道执行');
+      case 'reconcile': case 'alipay-refund': case 'payment-link': throw new ServiceError(500, 'INVALID_DISPATCH', '渠道操作必须通过渠道通道执行');
     }
   }
   private recordAlipayRefund(request: ReturnType<LicensingService['prepareAlipayRefund']>, refundedTotalFen: number, actor: string): ConsoleResult {
@@ -227,16 +250,17 @@ export class ConsoleService {
     if (confirmed.full && !confirmed.renewal) return { id: request.orderId, message: `支付宝已全额退款，订单已标记退款并撤销 ${confirmed.revoked.length} 份授权` };
     return { id: request.orderId, message: confirmed.renewal ? '支付宝已退款。续费订单不自动撤销原授权，已进入异常队列，请调整原授权到期时间后处理' : '支付宝已部分退款，授权未变，已进入异常队列待处理' };
   }
-  exportOrders(query: PageQuery, session: ConsoleSession, requestId: string): string {
+  exportCsv(resource: 'orders' | 'finance', query: PageQuery, session: ConsoleSession, requestId: string): string {
     this.financial(session); const rows: ConsoleRow[] = [];
     for (let page = 1; page <= 201; page++) {
-      const result = this.list('orders', { ...query, page }, session); rows.push(...result.items);
+      const result = this.list(resource, { ...query, page }, session); rows.push(...result.items);
       if (rows.length > 10000) throw new ServiceError(400, 'EXPORT_TOO_LARGE', '请缩小筛选范围，单次最多导出一万条');
       if (!result.hasMore) break;
     }
-    const fields = ['id', 'reference', 'channel', 'amountFen', 'paymentStatus', 'state', 'paymentReference', 'receivedAt', 'refundedFen'];
+    const fields = resource === 'orders' ? ['id', 'reference', 'channel', 'amountFen', 'paymentStatus', 'state', 'paymentReference', 'receivedAt', 'refundedFen', 'channelRefundFen']
+      : ['orderId', 'category', 'amountFen', 'reference', 'state', 'created', 'reason', 'buyer', 'taxId'];
     const escape = (value: ConsoleRow[string] | undefined) => { let text = value === null || value === undefined ? '' : String(value); if (/^[\s\u0000-\u001f]*[=+\-@]/.test(text) || /^[\t\r\n]/.test(text) || /^\d{16,}$/.test(text)) text = `'${text}`; return `"${text.replaceAll('"', '""')}"`; };
-    this.auth.audit(session.user.id, 'orders.export', '', `记录数 ${rows.length}`, 'success', requestId);
+    this.auth.audit(session.user.id, `${resource}.export`, '', `记录数 ${rows.length}`, 'success', requestId);
     return '\uFEFF' + [fields.join(','), ...rows.map(row => fields.map(field => escape(row[field])).join(','))].join('\r\n');
   }
 }

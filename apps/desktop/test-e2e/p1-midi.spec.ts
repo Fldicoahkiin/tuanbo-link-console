@@ -25,7 +25,12 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
       ipcMain.handle('link:detect-local-integrations', () => ({ detectedAt: new Date().toISOString(), applications: Object.fromEntries(['obs', 'p1'].map(id => [id, { id, executablePath: null, workingDirectory: null, processName: null, windowTitle: null, version: null, running: false }])) }));
       ipcMain.removeHandler('link:midi-recheck'); ipcMain.handle('link:midi-recheck', () => undefined);
       ipcMain.removeHandler('link:obs-connect'); ipcMain.handle('link:obs-connect', () => { throw new Error('隔离 MIDI 测试不连接 OBS'); });
-      ipcMain.removeHandler('link:obs-connect-local'); ipcMain.handle('link:obs-connect-local', () => { throw new Error('隔离 MIDI 测试不连接本地 OBS'); });
+      // Connect-all stops at the first failed step; isolated OBS steps succeed so the MIDI steps run.
+      ipcMain.removeHandler('link:obs-connect-local'); ipcMain.handle('link:obs-connect-local', () => ({ version: 1, address: 'ws://127.0.0.1:4455', password: '',
+        snapshot: { status: 'connected', obsVersion: '32.2.2', webSocketVersion: '5.7.4', error: null } }));
+      ipcMain.removeHandler('link:obs-inventory'); ipcMain.handle('link:obs-inventory', () => ({ scenes: [], inputs: [], inputKinds: {}, inputAudioStates: {}, sceneItems: {}, filters: {}, transitions: [], sourceSizes: {} }));
+      ipcMain.removeHandler('link:obs-live-frame'); ipcMain.handle('link:obs-live-frame', () => ({ width: 1, height: 1, rgba: new Uint8Array(4), sequence: 1, timestampNs: '1' }));
+      ipcMain.removeHandler('link:obs-live-close'); ipcMain.handle('link:obs-live-close', () => undefined);
       ipcMain.removeHandler('link:process-start'); ipcMain.handle('link:process-start', () => { throw new Error('隔离测试不启动外部程序'); });
     }, path);
     await page.evaluate(() => {
@@ -45,7 +50,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     const connectionResult = page.getByLabel('全部连接状态', { exact: true });
     await page.getByRole('button', { name: '详细', exact: true }).click();
     await expect(connectionResult.getByRole('button', { name: '灯光 Cue 输出：已连接', exact: true })).toBeVisible();
-    await connectionResult.getByRole('button', { name: 'OBS 控制：未连接', exact: true }).click();
+    await connectionResult.getByRole('button', { name: 'OBS 控制：已连接', exact: true }).click();
     await page.getByRole('region', { name: '连接详情' }).getByRole('button', { name: '前往设置', exact: true }).click();
     await expect(page.getByRole('navigation', { name: '设置子子菜单' })).toBeVisible();
     const packets = () => page.evaluate(() => Reflect.get(window, '__cuePackets') as number[][]);

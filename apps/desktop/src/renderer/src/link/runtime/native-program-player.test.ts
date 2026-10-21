@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, linkCueSchema, parseLinkProject, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
 import { NativeProgramPlayer } from '@tb/core/link';
 import { emptyInternalPlayerState } from './internal-playback-controller';
 import { nativeProgramSnapshot } from '@tb/core/link';
@@ -52,6 +52,39 @@ function fixture() {
   const player = new NativeProgramPlayer(project, 'C:/test/project.tblink', 7, deps, api, lighting);
   return { player, project, deps, api, lighting, emit, state: () => state };
 }
+
+it('有画面动作的歌，后台画面准备失败时不开始播放；纯音频的歌照常播放并提示', async () => {
+  const f = fixture(); f.project.obsOutputMode = 'scenes';
+  f.project.rundown[0]!.cues = [linkCueSchema.parse({ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+    actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
+  f.api.prepareNativeObs.mockRejectedValueOnce(new Error('素材来源与工程文件不一致，拒绝覆盖'));
+  await f.player.play('song-0');
+  expect(f.state()).toMatchObject({ status: 'error' });
+  expect(f.state().error).toContain('画面准备失败：素材来源与工程文件不一致');
+  expect(f.api.controlNativePlayback.mock.calls.map(([command]) => command.kind)).not.toContain('play');
+  f.api.prepareNativeObs.mockRejectedValueOnce(new Error('OBS 未连接'));
+  await f.player.play('song-1');
+  expect(f.state().status).toBe('playing');
+  expect(f.deps.notice).toHaveBeenCalledWith(expect.stringContaining('画面未参与：OBS 未连接'), 'song-1');
+  await f.player.dispose();
+});
+
+it('引擎异常退出后再次播放不向已退出的引擎发 stop，直接重新准备并播放；销毁时同样不发', async () => {
+  // 修复前：每次播放都先向已退出的引擎发 stop 并被拒绝，同一播放器此后永远停在错误状态。
+  const f = fixture();
+  const commands = (): string[] => f.api.controlNativePlayback.mock.calls.map(([command]) => command.kind);
+  await f.player.play('song-0');
+  f.emit({ status: 'error', audioError: '播放引擎已退出：1' });
+  f.api.controlNativePlayback.mockClear();
+  await f.player.play('song-0');
+  expect(commands()).not.toContain('stop');
+  expect(f.api.prepareNativePlayback).toHaveBeenCalledTimes(2);
+  expect(f.state().status).toBe('playing');
+  f.emit({ status: 'error', audioError: '播放引擎已退出：1' });
+  f.api.controlNativePlayback.mockClear();
+  await f.player.dispose();
+  expect(commands()).not.toContain('stop');
+});
 
 it('选择节目提前预备画面且不出声；重复选择不重做，播放中不能改准备目标', async () => {
   const f = fixture(); f.project.obsOutputMode = 'scenes';

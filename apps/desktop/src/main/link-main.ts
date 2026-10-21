@@ -4,7 +4,7 @@ import { ma2SongCheckRequestSchema, ma2SongSyncRequestSchema } from '@tb/schema'
 import { materialSceneTargets } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
-import { assertMa2ConnectionOwner, isLocalMa2Address } from './link/ma2-connection-owner';
+import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
 import { ma2AuditionRequestSchema,ma2AuditionControlSchema } from '@tb/schema';
 import { WindowsMidiHealth, midiProbeExecutable, probeWindowsMidi, midiHealthMessage } from './link/windows-midi-health';
 import { LicenseService } from './link/license-service';
@@ -24,8 +24,8 @@ import { elevateObsPluginInstall } from './link/obs-plugin-elevation';
 import { ObsBridgeSetup } from './link/obs-bridge-setup';
 import { prepareLocalObsConnection, readObsCommandLine } from './link/obs-local-connection';
 import { localObsConnectionResultSchema } from '@tb/schema';
-import { waitForObsEndpoint } from './link/obs-startup';
-import { obsLiveEditSchema } from '@tb/schema';
+import { obsEndpointNotListening, waitForObsEndpoint } from './link/obs-startup';
+import { obsLiveEditSchema, obsMediaPreparationSchema } from '@tb/schema';
 import { beautyApplySchema, beautyBasicValuesSchema, beautyTargetSchema, beautyStartSchema } from '@tb/schema';
 import { BeautyRuntime } from './link/beauty-runtime';
 import { BeautyOutputController } from './link/beauty-output-controller';
@@ -178,6 +178,7 @@ let releaseRendererRuntime: () => Promise<void> = () => Promise.resolve();
 let automaticMusic: AutomaticMusicRuntime | null = null;
 let authorizeOutput: () => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
 let authorizeProduct: (channel: string, value: unknown) => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
+let ipcLogger: LinkRunLogger | null = null;
 let allowWindowClose = false;
 let stopAuditionForQuit: (() => Promise<void>) | null = null;
 let quitFlowRunning = false;
@@ -233,6 +234,7 @@ async function bootstrap(): Promise<void> {
   const processManager = new ExternalProcessManager(new WindowsProcessTools(), obs);
   const integrationDetector = new WindowsIntegrationDetector();
   const logger = new LinkRunLogger(join(app.getPath('userData'), 'link-logs'), () => [...knownSecrets]);
+  ipcLogger = logger;
   await logger.record({ level: 'info', category: 'system', message: `团播联动台 ${desktopPackage.version} 已启动`,
     details: { appVersion: desktopPackage.version, packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
     .catch((error: unknown) => dialog.showErrorBox('运行日志无法写入', error instanceof Error ? error.message : String(error)));
@@ -274,9 +276,11 @@ async function bootstrap(): Promise<void> {
     if (BrowserWindow.getAllWindows().length === 0) restoreMainWindow?.();
   });
   app.on('window-all-closed', () => {
+    recordQuitStep('所有窗口已关闭');
     if (process.platform !== 'darwin' && (allowWindowClose || !quitFlowRunning)) app.quit();
   });
   app.on('before-quit', (event) => {
+    recordQuitStep('收到退出请求');
     if (allowWindowClose || quitFlowRunning) return;
     event.preventDefault();
     if (runtimeActive || nativePlaybackActive()) {
@@ -285,7 +289,10 @@ async function bootstrap(): Promise<void> {
     }
     quitFlowRunning = true;
     void obs.sources.discardPending().then(() => runQuitFlow(profileStore, processManager))
-      .catch((error: unknown) => dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error)))
+      .catch((error: unknown) => {
+        recordQuitStep('退出流程失败', { error: error instanceof Error ? error.message : String(error) });
+        dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error));
+      })
       .finally(() => {
         quitFlowRunning = false;
         if (allowWindowClose && BrowserWindow.getAllWindows().length === 0) app.quit();
@@ -386,6 +393,7 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
     callback(permission === 'speaker-selection');
   });
   mainWindow.on('close', (event) => {
+    recordQuitStep('窗口关闭请求');
     if (allowWindowClose) return;
     if (runtimeActive || nativePlaybackActive()) {
       event.preventDefault();
@@ -630,6 +638,16 @@ function registerIpc(
     const selected = await processManager.refresh('ma2', processConfiguration(profile, 'ma2'));
     if (selected.pid === null) throw new Error('选定的 MA2 onPC 尚未运行，请先点击一键连接');
     await assertMa2ConnectionOwner(selected.pid, peers);
+  }, async (host, port) => {
+    if (!isLocalMa2Address(host)) return;
+    const profile = await profileStore.loadProfile();
+    if (!profile?.ma2) return;
+    const selected = await processManager.refresh('ma2', processConfiguration(profile, 'ma2'));
+    if (selected.pid === null) throw new Error(`本机 MA2 onPC 未运行，未尝试登录 ${host}:${port}。请先点击一键连接按顺序启动 onPC，或在 MA2 设置中核对控台地址。`);
+    const started = performance.now();
+    const outcome = await waitForMa2Listener(selected.pid, port, profile.ma2.startupTimeoutMs);
+    if (outcome === 'waited') await logger.record({ level: 'info', category: 'device', device: 'MA2', result: 'succeeded',
+      message: `MA2 onPC 远程端口 ${port} 已就绪`, details: { pid: selected.pid, waitedMs: Math.round(performance.now() - started) } });
   });
   const ma2Reads = new Map<string, { senderId: number; controller: AbortController }>();
   ma2Network.setCueDeletionProjectReader(path => projectService.open(path));
@@ -709,6 +727,7 @@ function registerIpc(
   handle('link:ma2-play-cue', (_event, payload: unknown) => sendMa2Cue(payload));
   handle('link:ma2-play-cancel', (_event, sessionId: unknown) => { if (typeof sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(sessionId)) throw new Error('无效的灯光会话'); ma2Network.cancelPlayback(sessionId); });
   handle('link:ma2-network-status', async () => { await ma2NetworkReady; return ma2Network.status(); });
+  handle('link:ma2-current-show', async () => { await ma2NetworkReady; return ma2Network.currentShow(); });
   nativeProgram = new NativeProgramService((project, request, callbacks) => {
     const notice = (message: string, itemId: string | null): void => {
       void logger.record({ level: 'warning', category: 'state', device: '正式播放器', projectId: project.projectId,
@@ -1324,12 +1343,21 @@ function registerIpc(
     const preciseSeeking = z.boolean().parse(preciseSeekingValue);
     if (obs.getSnapshot().status !== 'connected') throw new Error('请先连接 OBS，再同步素材独立场景');
     await projectService.inspectAssets(path, project);
-    for (const target of materialSceneTargets(project)) {
+    const targets = materialSceneTargets(project);
+    for (const [index, target] of targets.entries()) {
       const { asset } = target;
       const absolutePath = projectService.resolveMediaAsset(path, asset.relativePath);
       if (!(await stat(absolutePath)).isFile()) throw new Error(`素材文件不可读：${asset.name}`);
+      const generation = { startedAt: 0 };
       const playbackPath = preciseSeeking && asset.kind === 'video'
-        ? await mediaPreviewService.ensureObsSeekVideo(path, asset.relativePath, asset.sha256) : absolutePath;
+        ? await mediaPreviewService.ensureObsSeekVideo(path, asset.relativePath, asset.sha256, 'hardware', () => {
+          generation.startedAt = performance.now();
+          sendToRenderer('link:obs-media-preparation', obsMediaPreparationSchema.parse({ assetName: asset.name, index, total: targets.length }));
+          void logger.record({ level: 'info', category: 'device', device: 'obs', message: `正在生成 OBS 定位缓存：${asset.name}（${index + 1}/${targets.length}）`, result: 'running' })
+            .catch((error: unknown) => console.error('定位缓存日志未能写入', error));
+        }) : absolutePath;
+      if (generation.startedAt) await logger.record({ level: 'info', category: 'device', device: 'obs', message: `OBS 定位缓存已生成：${asset.name}`,
+        result: 'succeeded', details: { elapsedMs: Math.round(performance.now() - generation.startedAt) } });
       await obs.mediaScenes.prepare(project.projectId, asset, absolutePath, playbackPath, obsMediaCachePaths(path, asset.sha256), target);
     }
   });
@@ -1439,7 +1467,9 @@ function registerIpc(
         targetPid = started.pid;
         await waitForObsEndpoint(local.address, started.pid, profile.obs.startupTimeoutMs);
       }
-      if (targetPid === null || await findLocalObsPid(local.address) !== targetPid) throw new Error('OBS 连接端口与选定进程不一致，请检查是否同时运行了多个 OBS；尚未发送密码');
+      const listeningPid = targetPid === null ? null : await findLocalObsPid(local.address);
+      if (targetPid !== null && listeningPid === null) throw obsEndpointNotListening(local.address, targetPid);
+      if (targetPid === null || listeningPid !== targetPid) throw new Error('OBS 连接端口与选定进程不一致，请检查是否同时运行了多个 OBS；尚未发送密码');
       const snapshot = await connectObs();
       return localObsConnectionResultSchema.parse({ version: 1, address: local.address, password: local.password, snapshot });
     } catch (error) {
@@ -1560,6 +1590,10 @@ function registerIpc(
     return obs.editorPreview.getStatus();
   });
   handle('link:obs-execute', (_event, actionValue: unknown) => obs.execute(linkActionSchema.parse(actionValue)));
+  handle('link:obs-program-source-enabled', (_event, value: unknown) => {
+    const request = z.object({ sourceName: z.string().min(1), enabled: z.boolean() }).strict().parse(value);
+    return obs.setSourceEnabledInProgramScene(request.sourceName, request.enabled);
+  });
   handle('link:obs-activate-managed-output', () => obs.activateManagedOutput());
   handle('link:obs-internal-audio', async (_event, value: unknown) => {
     if (!mainWindow) throw new Error('主控窗口不存在');
@@ -1663,19 +1697,35 @@ function registerAssetProtocol(): void {
 }
 
 async function runQuitFlow(profileStore: SecureProfileStore, processManager: ExternalProcessManager): Promise<void> {
-  await stopAuditionForQuit?.();
+  recordQuitStep('退出前停止灯光试听');
+  try { await stopAuditionForQuit?.(); }
+  catch (error) {
+    // Operator decision 2026-10-19: a console that cannot confirm Off (e.g. disconnected)
+    // must not keep the console app open for good; the operator chooses.
+    const reason = error instanceof Error ? error.message : String(error);
+    recordQuitStep('灯光试听停止未完成', { error: reason });
+    const options = { type: 'warning' as const, title: '灯光试听未能停止', message: '退出前没有确认控台已关闭本次试听。',
+      detail: `${reason}\n\n仍然退出时，控台上可能保留当前灯光状态，请到控台手动处理。`, buttons: ['返回软件', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true };
+    const choice = mainWindow && !mainWindow.isDestroyed() ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
+    if (choice.response !== 1) { recordQuitStep('返回软件处理灯光试听'); return; }
+    recordQuitStep('操作员选择仍然退出', { error: reason });
+  }
+  recordQuitStep('退出前关闭正式音频与画面');
   await closeNativePlayer();
   const owned = (['p1', 'ma3d', 'ma2', 'obs'] as const)
     .map((id) => processManager.getSnapshot(id))
     .filter((snapshot) => snapshot.owned && snapshot.pid !== null);
   if (owned.length === 0) {
+    recordQuitStep('退出前关闭音乐分析');
     await automaticMusic?.close();
     allowWindowClose = true;
+    recordQuitStep('退出流程完成');
     app.quit();
     return;
   }
   const closeIds: ExternalApplicationId[] = [];
   for (const snapshot of owned) {
+    recordQuitStep('确认外部程序', { id: snapshot.id, pid: snapshot.pid });
     const decision = await dialog.showMessageBox(mainWindow!, {
       type: 'question',
       title: '逐项确认外部程序',
@@ -1712,13 +1762,24 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
       });
     }
   }
+  recordQuitStep('退出前关闭音乐分析');
   await automaticMusic?.close();
   allowWindowClose = true;
+  recordQuitStep('退出流程完成');
   app.quit();
+}
+
+/** Each quit stage with the flags that gate it, so a hang names its stage. */
+function recordQuitStep(step: string, details: Record<string, unknown> = {}): void {
+  void ipcLogger?.record({ level: 'info', category: 'system', device: '退出流程', message: step,
+    details: { runtimeActive, nativePlayback: nativePlaybackActive(), documentDirty, allowWindowClose, quitFlowRunning,
+      windows: BrowserWindow.getAllWindows().length, ...details } })
+    .catch((error: unknown) => console.error('退出流程日志未能写入', error));
 }
 
 let runtimeExitWarningOpen = false;
 function showRuntimeActiveExitWarning(): void {
+  recordQuitStep('运行会话未停止，拒绝退出');
   if (runtimeExitWarningOpen) return;
   runtimeExitWarningOpen = true;
   const options = {
@@ -1767,12 +1828,35 @@ function handle<Arguments extends unknown[], Result>(
 ): void {
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, ...args: Arguments) => {
-    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('拒绝非主窗口的 IPC 请求');
-    // Native playback captures cancellation before awaiting authorization. Its
-    // request adapter performs the same license check before calling the service.
-    if (authorization === 'wrapper') await authorizeProduct(channel, args[0]);
-    return listener(event, ...args);
+    const started = performance.now();
+    try {
+      if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('拒绝非主窗口的 IPC 请求');
+      // Native playback captures cancellation before awaiting authorization. Its
+      // request adapter performs the same license check before calling the service.
+      if (authorization === 'wrapper') await authorizeProduct(channel, args[0]);
+      return await listener(event, ...args);
+    } catch (error) {
+      recordIpcFailure(channel, performance.now() - started, error);
+      throw error;
+    }
   });
+}
+
+const ipcFailureWindowMs = 30_000;
+const ipcFailures = new Map<string, { loggedAt: number; suppressed: number }>();
+
+/** The renderer only receives translated copy; the original stays in the run log.
+ * Polled channels repeat the same failure, so one entry per cause per window. */
+function recordIpcFailure(channel: string, elapsedMs: number, error: unknown): void {
+  const technicalError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  if (!ipcLogger) { console.error(`IPC ${channel} 失败（运行日志尚未就绪）`, error); return; }
+  const key = `${channel}\n${technicalError}`, now = Date.now(), previous = ipcFailures.get(key);
+  if (previous && now - previous.loggedAt < ipcFailureWindowMs) { previous.suppressed++; return; }
+  ipcFailures.set(key, { loggedAt: now, suppressed: 0 });
+  void ipcLogger.record({ level: 'error', category: 'system', device: 'IPC', message: `${channel} 失败：${technicalError.split('\n')[0]!.slice(0, 300)}`,
+    result: 'failed', details: { channel, elapsedMs: Math.round(elapsedMs), technicalError: technicalError.slice(0, 8000),
+      ...(previous ? { repeatsSinceLastEntry: previous.suppressed } : {}) } })
+    .catch((logError: unknown) => console.error(`IPC ${channel} 失败日志未能写入`, logError, error));
 }
 
 function sendToRenderer(channel: string, payload: unknown): void {

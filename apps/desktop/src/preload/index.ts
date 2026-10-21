@@ -17,7 +17,7 @@ import { projectArchiveRequestSchema, projectArchiveResultSchema } from '@tb/sch
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
 import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema, nativeMidiCheckSchema } from '@tb/schema';
-import { nativeObsPrepareSchema, nativeObsPreloadSchema, nativeObsStopSchema, nativeObsStatusSchema } from '@tb/schema';
+import { nativeObsPrepareSchema, nativeObsPreloadSchema, nativeObsStopSchema, nativeObsStatusSchema, obsMediaPreparationSchema } from '@tb/schema';
 import type { LinkDesktopApi, LinkDesktopBridgeApi, LinkFileBridge, LinkObsSnapshot, LinkProcessSnapshot, LinkUpdateStatus } from '@tb/core/link';
 
 /** Translate IPC wrappers once, before errors reach any user-facing view. */
@@ -60,6 +60,11 @@ const tbLink: LinkDesktopBridgeApi = {
     ipcRenderer.on('link:native-obs-status', receive);
     return () => ipcRenderer.removeListener('link:native-obs-status', receive);
   },
+  onObsMediaPreparation: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(obsMediaPreparationSchema.parse(value));
+    ipcRenderer.on('link:obs-media-preparation', receive);
+    return () => ipcRenderer.removeListener('link:obs-media-preparation', receive);
+  },
   getNativePlaybackDevices: async (scope = 'all') => nativePlaybackDevicesSchema.parse(await invoke('link:native-player-devices', { version: 1, scope })),
   checkNativeMidiOutput: request => invoke('link:native-midi-check', nativeMidiCheckSchema.parse(request)),
   prepareNativePlayback: async request => nativePlayerStatusSchema.parse(await invoke('link:native-player-prepare', nativePlayerPrepareSchema.parse(request))),
@@ -99,6 +104,12 @@ const tbLink: LinkDesktopBridgeApi = {
   controlMa2Audition: async request=>ma2AuditionStateSchema.parse(await invoke('link:ma2-audition-control',ma2AuditionControlSchema.parse(request))),
   onMa2AuditionState: listener=>{const receive=(_event:Electron.IpcRendererEvent,input:unknown):void=>listener(ma2AuditionStateSchema.parse(input));ipcRenderer.on('link:ma2-audition-state',receive);return()=>ipcRenderer.removeListener('link:ma2-audition-state',receive);},
   getMa2NetworkStatus: () => invoke('link:ma2-network-status'),
+  setObsProgramSourceEnabled: (sourceName, enabled) => invoke('link:obs-program-source-enabled', { sourceName, enabled }),
+  getMa2CurrentShow: async () => {
+    const show = await invoke<unknown>('link:ma2-current-show');
+    if (typeof show !== 'string' || !show) throw new Error('控台当前 show 响应无效');
+    return show;
+  },
   saveMa2Network: (payload) => invoke('link:ma2-network-save', payload),
   connectMa2Network: () => invoke('link:ma2-network-connect'),
   disconnectMa2Network: () => invoke('link:ma2-network-disconnect'),

@@ -29,6 +29,11 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   useEffect(() => {
     if (controller instanceof RemoteNativeProgramPlayer && obsStatus === 'connected' && selectedItemId) controller.preloadSelected(selectedItemId);
   }, [controller, obsStatus, selectedItemId]);
+  useEffect(() => {
+    if (!(controller instanceof InternalPlaybackController)) return;
+    return desktop.onObsMediaPreparation(progress => controller.reportPreparation(
+      `生成 OBS 定位缓存 ${progress.index + 1}/${progress.total} · ${progress.assetName}`));
+  }, [controller]);
   const requestedEngine = profile?.internalPlayer?.audioEngine ?? 'browser';
   const requestedDevice = (requestedEngine === 'native' ? profile?.internalPlayer?.nativeAudioOutputDeviceId : profile?.internalPlayer?.audioOutputDeviceId) ?? 'default';
   const requestedRate = profile?.internalPlayer?.audioSampleRate ?? 48000;
@@ -85,7 +90,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       ingest: (positionMs) => coordinator.ingestInternal(positionMs),
       started: (positionMs) => coordinator.startInternalClock(positionMs),
       scrub: project.obsOutputMode === 'scenes' ? (positionMs) => coordinator.seekInternal(positionMs) : undefined,
-      pause: () => coordinator.pauseInternal(), stop: () => coordinator.stopAndWait(false),
+      pause: reason => coordinator.pauseInternal(reason), stop: reason => coordinator.stopAndWait(false, reason),
       resolveAudio: (relativePath) => {
         if (!path) throw new Error('请先保存工程');
         return desktop.resolveReferenceAudioUrl({ projectPath: path, relativePath });
@@ -101,6 +106,11 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
         void desktop.recordLog({ level: 'warning', category: 'state', message, projectId: project.projectId,
           ...(itemId ? { itemId } : {}), device: '正式播放器' })
           .catch((error: unknown) => console.error('正式播放通道提示未能保存到日志', error));
+      },
+      failed: (message, itemId) => {
+        void desktop.recordLog({ level: 'error', category: 'state', message, projectId: project.projectId,
+          ...(itemId ? { itemId } : {}), device: '正式播放器', result: 'failed' })
+          .catch((error: unknown) => console.error('正式播放失败未能保存到日志', error));
       },
       preciseSeeking: () => useDisplayPreferences.getState().preciseSeeking,
       obsChanged: status => {
@@ -125,7 +135,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       if (audioConfiguration.engine !== 'native' && previous.obs.status === 'connected' && next.obs.status !== 'connected' && useRuntimeStore.getState().state !== 'idle') {
         prepared = null;
         player.runtimeUnavailable('OBS 连接中断；音频继续播放，画面与 OBS 动作已停止。');
-        void coordinator.stopAndWait(false).catch((error: unknown) => player.reportUnavailable(`OBS 清理失败：${String(error)}`));
+        void coordinator.stopAndWait(false, 'OBS 连接断开').catch((error: unknown) => player.reportUnavailable(`OBS 清理失败：${String(error)}`));
       }
     });
     setController(player); view.publish(emptyInternalPlayerState);

@@ -81,8 +81,53 @@ def validated_page(value, after):
     return value['items'], next_cursor
 
 
+def lapsed_orders(value):
+    if not isinstance(value, dict) or not isinstance(value.get('items'), list) or len(value['items']) > 100:
+        raise AdminApiError(502, 'INVALID_LAPSED_PAGE')
+    for order_id in value['items']:
+        try:
+            if not isinstance(order_id, str) or str(uuid.UUID(order_id)) != order_id:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            raise AdminApiError(502, 'INVALID_LAPSED_PAGE') from None
+    return value['items']
+
+
+def expire_lapsed(request, db, now, result):
+    """Query the channel for unpaid orders whose payment link lapsed; the service then closes, expires or delivers them."""
+    for order_id in lapsed_orders(request('/admin/orders/lapsed-payment-links')):
+        old = db.execute('SELECT attempts, next_at, blocked FROM expiry_attempts WHERE order_id=?', (order_id,)).fetchone()
+        attempts, next_at, blocked = old or (0, 0, 0)
+        if blocked or next_at > now:
+            continue
+        attempts += 1
+        # Persist before the request, like delivery recovery: lost responses cannot reset the five-query budget.
+        with db:
+            db.execute('INSERT INTO expiry_attempts VALUES (?, ?, ?, 0, NULL) ON CONFLICT(order_id) DO UPDATE SET attempts=excluded.attempts, next_at=excluded.next_at',
+                       (order_id, attempts, now + 300 * 2 ** (attempts - 1)))
+        result['lapsedQueried'] += 1
+        try:
+            response = request(f'/admin/orders/{order_id}/reconcile', {})
+            if not isinstance(response, dict) or response.get('id') != order_id or response.get('state') not in ('pending', 'paid', 'fulfilled', 'closed', 'expired'):
+                raise AdminApiError(502, 'INVALID_RECONCILE_RESPONSE')
+            if response['state'] == 'pending':
+                # No channel verdict yet: retry with backoff, then leave it for an operator after five queries.
+                with db:
+                    db.execute('UPDATE expiry_attempts SET blocked=?, last_error=? WHERE order_id=?', (int(attempts >= 5), 'STILL_PENDING', order_id))
+            else:
+                result['lapsedSettled'] += 1
+        except AdminApiError as error:
+            blocked = attempts >= 5 or 400 <= error.status < 500 and error.status not in (408, 429) or error.code == 'INVALID_RECONCILE_RESPONSE'
+            with db:
+                db.execute('UPDATE expiry_attempts SET blocked=?, last_error=? WHERE order_id=?', (int(blocked), error.code, order_id))
+            if error.code == 'NETWORK_ERROR':
+                break
+        if result['lapsedQueried'] >= 5:
+            break
+
+
 def recover_batch(request, state_path, now):
-    """Only a persisted, verified payment can reach retry-delivery; no channel calls."""
+    """Only a persisted, verified payment can reach retry-delivery; lapsed unpaid orders are queried through the service, at most five per run."""
     state_path = Path(state_path)
     if state_path.is_symlink():
         raise RuntimeError('Recovery state must not be a symlink')
@@ -92,11 +137,14 @@ def recover_batch(request, state_path, now):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with closing(sqlite3.connect(state_path, timeout=1)) as db:
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if tables - {'delivery_attempts', 'recovery_cursor'}:
+            if tables - {'delivery_attempts', 'recovery_cursor', 'expiry_attempts'}:
                 raise RuntimeError('Refusing to use a non-recovery database')
             os.chmod(state_path, 0o600)
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS delivery_attempts
+                  (order_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, next_at REAL NOT NULL,
+                   blocked INTEGER NOT NULL DEFAULT 0, last_error TEXT);
+                CREATE TABLE IF NOT EXISTS expiry_attempts
                   (order_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, next_at REAL NOT NULL,
                    blocked INTEGER NOT NULL DEFAULT 0, last_error TEXT);
                 CREATE TABLE IF NOT EXISTS recovery_cursor (id INTEGER PRIMARY KEY CHECK(id=1), after_id INTEGER NOT NULL);
@@ -104,7 +152,8 @@ def recover_batch(request, state_path, now):
             """)
             after = db.execute('SELECT after_id FROM recovery_cursor WHERE id=1').fetchone()[0]
             items, next_cursor = validated_page(request(f'/admin/payment-exceptions?after={after}'), after)
-            result = {'scanned': 0, 'attempted': 0, 'delivered': 0, 'deferred': 0, 'needsReview': 0, 'manualSkipped': 0}
+            result = {'scanned': 0, 'attempted': 0, 'delivered': 0, 'deferred': 0, 'needsReview': 0, 'manualSkipped': 0, 'lapsedQueried': 0, 'lapsedSettled': 0}
+            error_code = None
             for index, item in enumerate(items):
                 result['scanned'] += 1
                 order_id = item['orderId']
@@ -149,6 +198,8 @@ def recover_batch(request, state_path, now):
                     break
             with db:
                 db.execute('UPDATE recovery_cursor SET after_id=? WHERE id=1', (next_cursor or 0,))
+            if error_code != 'NETWORK_ERROR':
+                expire_lapsed(request, db, now, result)
             return result
 
 

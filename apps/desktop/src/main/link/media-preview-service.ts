@@ -71,7 +71,8 @@ export class MediaPreviewService {
     return operation;
   }
 
-  async ensureObsSeekVideo(projectPath: string, relativePath: string, sha256: string, decode: 'hardware' | 'software' = 'hardware'): Promise<string> {
+  /** onGenerate runs only when the cache is missing and FFmpeg is about to build it. */
+  async ensureObsSeekVideo(projectPath: string, relativePath: string, sha256: string, decode: 'hardware' | 'software' = 'hardware', onGenerate?: () => void): Promise<string> {
     assertSha256(sha256);
     // Several assets may share one content-addressed output, but each source
     // path must be verified before joining that work. Otherwise preloading only
@@ -81,12 +82,12 @@ export class MediaPreviewService {
     const key = `obs-seek:${decode}:${resolve(projectPath)}:${sha256}`;
     const current = this.pending.get(key);
     if (current) return current;
-    const operation = this.createObsSeekVideo(projectPath, relativePath, sha256, decode).finally(() => this.pending.delete(key));
+    const operation = this.createObsSeekVideo(projectPath, relativePath, sha256, decode, onGenerate).finally(() => this.pending.delete(key));
     this.pending.set(key, operation);
     return operation;
   }
 
-  private async createObsSeekVideo(projectPath: string, relativePath: string, sha256: string, decode: 'hardware' | 'software'): Promise<string> {
+  private async createObsSeekVideo(projectPath: string, relativePath: string, sha256: string, decode: 'hardware' | 'software', onGenerate?: () => void): Promise<string> {
     const source = this.projects.resolveMediaAsset(projectPath, relativePath);
     const directory = join(dirname(resolve(projectPath)), 'cache', 'obs-seek-jpeg2000');
     const destination = join(directory, `${sha256}.${decode === 'hardware' ? 'seek-intra' : 'seek-ready'}.mkv`);
@@ -97,6 +98,7 @@ export class MediaPreviewService {
       if (!await this.verified.verify(destination, digest)) throw new Error(`OBS 定位缓存已损坏，请移除对应缓存后重新准备：${destination}`);
       return destination;
     }
+    onGenerate?.();
     await mkdir(directory, { recursive: true });
     const temporaryPath = join(directory, `.${sha256}.${crypto.randomUUID()}.tmp.mkv`);
     await this.videoSlot(() => generateTemporaryOutput(temporaryPath, destination, async () => {

@@ -27,7 +27,7 @@ export function usePlayProgram(player: ProjectPlayer, busy: boolean, setBusy: (b
     processing.current = true; setBusy(true);
     void (async () => {
       try {
-        await controller.stop();
+        await controller.stop('恢复原声音轨前停止播放');
         if (useDocumentStore.getState().documentId !== documentId) throw new Error('工程已切换，已取消恢复音轨');
         notify(`正在从“${item.title}”的已有视频恢复原声音轨…`);
         await recoverProgramAudio(item.id);

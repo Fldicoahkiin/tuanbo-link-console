@@ -93,3 +93,24 @@ test('激活页不显示日志入口，界面错误仍持久化并可由诊断�
     } finally { await application.close(); }
   }
 });
+
+test('IPC 失败：界面给出带路径的原因，运行日志保留通道、耗时与原文，重复失败只记一次', async ({}, info) => {
+  const application = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
+  try {
+    const page = await application.firstWindow();
+    await page.getByRole('button', { name: '新建工程', exact: true }).waitFor();
+    const missing = info.outputPath('不存在的工程.tblink');
+    const open = (path: string) => page.evaluate(target => window.tbLink.openProjectDocument(target).then(() => 'opened', (error: Error) => error.message), path);
+    const message = await open(missing);
+    expect(message).toBe(`所需文件或程序不存在：${missing}。请重新选择有效路径后重试。`);
+    expect(await open(missing)).toBe(message);
+    const entries = z.array(z.object({ device: z.string().optional(), message: z.string(), details: z.record(z.string(), z.unknown()).optional() }))
+      .parse(await page.evaluate(() => window.tbLink.queryLogs({})));
+    const failures = entries.filter(entry => entry.device === 'IPC' && entry.details?.channel === 'link:open-project');
+    expect(failures).toHaveLength(1);
+    expect(failures[0]!.message).toContain('link:open-project 失败：');
+    expect(String(failures[0]!.details?.technicalError)).toContain('ENOENT');
+    expect(String(failures[0]!.details?.technicalError)).toContain(missing);
+    expect(typeof failures[0]!.details?.elapsedMs).toBe('number');
+  } finally { await application.close(); }
+});

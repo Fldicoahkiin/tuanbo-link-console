@@ -183,6 +183,7 @@ export type LinkDesktopApi = {
   stopNativeObs(request: import('@tb/schema').NativeObsStop): Promise<void>;
   getNativeObsStatus(): Promise<import('@tb/schema').NativeObsStatus | null>;
   onNativeObsStatus(listener: (status: import('@tb/schema').NativeObsStatus) => void): () => void;
+  onObsMediaPreparation(listener: (progress: import('@tb/schema').ObsMediaPreparation) => void): () => void;
   getNativePlaybackDevices(scope?: import('@tb/schema').NativeDeviceQueryRequest['scope']): Promise<import('@tb/schema').NativePlaybackDevices>;
   checkNativeMidiOutput(request: import('@tb/schema').NativeMidiCheck): Promise<void>;
   prepareNativePlayback(request: import('@tb/schema').NativePlayerPrepare): Promise<import('@tb/schema').NativePlayerStatus>;
@@ -218,6 +219,8 @@ export type LinkDesktopApi = {
   controlMa2Audition(payload: import('@tb/schema').Ma2AuditionControl): Promise<import('@tb/schema').Ma2AuditionState>;
   onMa2AuditionState(listener:(state:import('@tb/schema').Ma2AuditionState)=>void):()=>void;
   getMa2NetworkStatus(): Promise<import('@tb/schema').Ma2NetworkStatus>;
+  /** Show file loaded on the connected network console. */
+  getMa2CurrentShow(): Promise<string>;
   saveMa2Network(payload: import('@tb/schema').Ma2NetworkSave): Promise<import('@tb/schema').Ma2NetworkStatus>;
   connectMa2Network(): Promise<import('@tb/schema').Ma2NetworkStatus>;
   disconnectMa2Network(): Promise<import('@tb/schema').Ma2NetworkStatus>;
@@ -344,6 +347,8 @@ export type LinkDesktopApi = {
   repairObsBridge(): Promise<void>;
   getObsSourceScreenshot(payload: { sourceName: string; width?: number; height?: number }): Promise<string>;
   executeObsAction(action: LinkAction): Promise<void>;
+  /** Full-scene mode: show or hide a source in the scene currently on program. */
+  setObsProgramSourceEnabled(sourceName: string, enabled: boolean): Promise<void>;
   activateManagedObsOutput(): Promise<void>;
   setInternalAudioCapture(enabled: boolean, sceneNames?: string[]): Promise<void>;
   executeManagedMediaEvent(payload: { projectPath: string; event: import('./managed-media-timeline').ManagedMediaEvent }): Promise<void>;

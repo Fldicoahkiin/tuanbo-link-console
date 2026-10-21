@@ -160,7 +160,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
       }
       const report = await runDesktopPreflight(coordinator, 'live', 'awaiting-external-start');
       if (!report.passed) {
-        coordinator.stop();
+        coordinator.stop(true, '预检未通过');
         notify('设备已启动，但预检存在阻断项；联动没有进入待命。', 'error');
         return;
       }
@@ -173,7 +173,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
     }
   };
   return (<div className="page-stack integration-workspace">
-      {quickConnectHost ? createPortal(<button aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '逐项连接全部已启用设备，一项失败不会中断其他连接'} disabled={busy || runtimeActive} onClick={localIntegration.connect}><ScanSearch />{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</button>, quickConnectHost) : null}
+      {quickConnectHost ? createPortal(<button aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '按顺序逐步连接已启用设备；任一步未通过即停止，后续步骤不执行'} disabled={busy || runtimeActive} onClick={localIntegration.connect}><ScanSearch />{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</button>, quickConnectHost) : null}
       {settingsOpen ? <IntegrationSettingsDialog
         key={revision} category={category} onNavigate={onCategoryChange} onCreate={onCreate} onOpen={onOpen} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} nestedDialogOpen={false}
         midiPorts={midiPorts} inventory={inventory} notify={notify}

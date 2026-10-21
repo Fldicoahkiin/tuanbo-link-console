@@ -95,6 +95,11 @@ export function createLicensingServer(service: LicensingService, adminToken: str
             if (!checkout || !alipay) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝退款尚未启用');
             service.alipayQueryOrder(refund.orderId, checkout.appId, checkout.sellerId);
             return checkout.refund(refund.orderId, refund, alipay);
+          },
+          paymentLink: id => {
+            if (!checkout) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝付款入口尚未启用');
+            const payment = service.prepareAlipayPayment(id, checkout.appId, checkout.sellerId);
+            return { url: checkout.createUrl(payment), expiresAt: payment.expiresAt };
           }
         });
       }
@@ -193,6 +198,7 @@ export function createLicensingServer(service: LicensingService, adminToken: str
       if (!timingSafeEqual(digest(request.headers.authorization ?? ''), expected)) throw new ServiceError(401, 'UNAUTHORIZED', '后台认证失败');
       const exceptions = /^\/admin\/payment-exceptions(?:\?after=(0|[1-9]\d{0,15}))?$/.exec(request.url);
       if (request.method === 'GET' && exceptions) return service.paymentExceptions(Number(exceptions[1] ?? 0));
+      if (request.method === 'GET' && request.url === '/admin/orders/lapsed-payment-links') return service.lapsedPaymentLinks();
       const retry = /^\/admin\/orders\/([a-f0-9-]{36})\/retry-delivery$/.exec(request.url);
       if (request.method === 'POST' && retry) {
         const result = service.retryDelivery(retry[1]!, await readBody(request));

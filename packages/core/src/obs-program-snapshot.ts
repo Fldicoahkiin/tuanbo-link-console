@@ -20,6 +20,14 @@ export function createObsProgramSnapshot(project: LinkProject, itemId: string, r
     assets: project.mediaAssets.filter(asset => ids.has(asset.id)).map(asset => ({ ...asset, folderId: null })) };
 }
 
+/** Picture work: an enabled cue drives OBS or the song places media in OBS.
+ * Such a song does not start when its picture cannot be prepared. */
+export function itemNeedsObs(project: LinkProject, itemId: string): boolean {
+  const item = project.rundown.find(entry => entry.id === itemId);
+  return Boolean(item && (item.referenceMediaClips.length > 0
+    || item.cues.some(cue => cue.enabled && cue.actions.some(action => action.kind.startsWith('obs.')))));
+}
+
 export function projectFromObsSnapshot(snapshot: ObsProgramSnapshot): LinkProject {
   return parseLinkProject({ ...createEmptyLinkProject(snapshot.item.title), projectId: snapshot.projectId,
     playbackSource: 'internal', obsOutputMode: 'scenes', internalVideoAudio: snapshot.internalVideoAudio,

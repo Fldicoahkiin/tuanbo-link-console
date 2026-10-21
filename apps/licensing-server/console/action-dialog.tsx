@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { X, Copy } from 'lucide-react';
+import { X, Copy, ExternalLink } from 'lucide-react';
+import QRCode from 'qrcode';
 import { actionSchema, resultSchema, type ConsoleAction, type ConsoleResult, type ConsoleRow } from '../src/console-contract';
 import { api, errorMessage, ApiError, messageSchema } from './api';
-import { destructiveActions, forms } from './forms';
+import { beijingTime, destructiveActions, forms } from './forms';
 
 export function ActionDialog({ action, row, csrf, close, changed }: { action: ConsoleAction['action']; row: ConsoleRow | null; csrf: string; close: () => void; changed: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null); const formRef = useRef<HTMLFormElement>(null);
@@ -11,7 +12,10 @@ export function ActionDialog({ action, row, csrf, close, changed }: { action: Co
   const [needsVerification, setNeedsVerification] = useState(false);
   const spec = forms[action];
   useEffect(() => { dialog.current?.showModal(); }, []);
-  useEffect(() => { if (!result?.secret) return; const timer = window.setTimeout(() => setResult(value => value ? { ...(value.id ? { id: value.id } : {}), message: '敏感凭据已自动隐藏。如需查看，请重新进行受保护的操作。' } : null), 60000); return () => window.clearTimeout(timer); }, [result?.secret]);
+  useEffect(() => { if (!result?.secret) return; const timer = window.setTimeout(() => setResult(value => value ? { ...(value.id ? { id: value.id } : {}), message: '凭据已隐藏。' } : null), 60000); return () => window.clearTimeout(timer); }, [result?.secret]);
+  const [qr, setQr] = useState('');
+  useEffect(() => { if (result?.paymentUrl) QRCode.toDataURL(result.paymentUrl, { width: 200, margin: 1 }).then(setQr, () => setError('二维码生成失败，请复制链接发给客户。')); }, [result?.paymentUrl]);
+  const copy = (text: string) => { void navigator.clipboard.writeText(text).then(() => setError('已复制。'), () => setError('浏览器拒绝复制，请手动选择复制。')); };
   async function send(command: { operationId: string; input: ConsoleAction }) {
     setBusy(true); setError('');
     try { setResult(await api('commands', resultSchema, command, csrf)); setPending(null); changed(); }
@@ -29,7 +33,7 @@ export function ActionDialog({ action, row, csrf, close, changed }: { action: Co
       const data = new FormData(event.currentTarget); const value: Record<string, unknown> = { action, ...(row?.id ? { id: row.id } : {}) };
       for (const field of spec.fields) {
         const entry = data.get(field.key); const raw = typeof entry === 'string' ? entry : '';
-        value[field.key] = field.key === 'amountFen' ? Math.round(Number(raw) * 100) : field.type === 'number' ? Number(raw) : field.type === 'datetime-local' ? new Date(action === 'set-expiry' ? `${raw}+08:00` : raw).toISOString() : field.key === 'enabled' ? raw === 'true' : field.key === 'licenseId' ? raw || null : raw;
+        value[field.key] = field.key === 'amountFen' ? Math.round(Number(raw) * 100) : field.type === 'number' ? Number(raw) : field.type === 'datetime-local' ? new Date(`${raw}+08:00`).toISOString() : field.key === 'enabled' ? raw === 'true' : field.key === 'licenseId' ? raw || null : raw;
       }
       const input = actionSchema.parse(value); void send({ operationId: crypto.randomUUID(), input });
     } catch { setError('请检查必填字段、金额、数量、日期及编号格式。'); }
@@ -46,12 +50,12 @@ export function ActionDialog({ action, row, csrf, close, changed }: { action: Co
     catch (error) { setError(errorMessage(error)); } finally { setBusy(false); }
   }
   return <dialog ref={dialog} className="action-dialog" onCancel={event => { if (busy) event.preventDefault(); else close(); }}><header><h2>{spec.title}</h2><button aria-label="关闭操作窗口" disabled={busy} onClick={close}><X size={18} /></button></header>
-    <p className="muted">{spec.note}</p>{row?.id && <p className="identifier">对象：{row.id}</p>}
+    {spec.note && <p className="muted">{spec.note}</p>}{row?.id && <p className="identifier">对象：{String(row.reference ?? row.username ?? row.id)}</p>}
     {error && <p className="alert" role="alert">{error}</p>}
     {needsVerification && <form onSubmit={event => { void verify(event); }}><label>二次验证码或恢复码<input name="code" autoComplete="one-time-code" required /></label><button disabled={busy}>验证后继续原操作</button></form>}
-    {result ? <div role="status"><p>{result.message}</p>{result.id && <p className="identifier">编号：{result.id}</p>}{result.expiresAt && <p>截止时间：{new Date(result.expiresAt).toLocaleString('zh-CN')}</p>}{result.secret && <><pre className="secret">{result.secret}</pre><button onClick={() => { void navigator.clipboard.writeText(result.secret!).then(() => setError('已复制，请仅交付给核实后的接收人。'), () => setError('浏览器拒绝复制，请手动选择凭据复制。')); }}><Copy size={16} />复制凭据</button><p className="muted">60 秒后自动隐藏。</p></>}<button className="primary" onClick={close}>完成</button></div> : <form ref={formRef} onSubmit={submit}>
+    {result ? <div role="status"><p>{result.message}</p>{result.id && <p className="identifier">编号：{result.id}</p>}{result.expiresAt && <p>有效期至：{beijingTime(result.expiresAt)}</p>}{result.paymentUrl && <div className="payment-link">{qr && <img src={qr} width={200} height={200} alt="支付宝付款二维码" />}<div className="actions"><button onClick={() => copy(result.paymentUrl!)}><Copy size={16} />复制链接</button><a className="button" href={result.paymentUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} />打开付款页</a></div></div>}{result.secret && <><pre className="secret">{result.secret}</pre><button onClick={() => copy(result.secret!)}><Copy size={16} />复制凭据</button><p className="muted">60 秒后自动隐藏。</p></>}<button className="primary" onClick={close}>完成</button></div> : <form ref={formRef} onSubmit={submit}>
       <fieldset disabled={busy || Boolean(pending)}>{spec.fields.map(field => <label key={field.key}>{field.label}{field.type === 'select' ? <select name={field.key} defaultValue={String(row?.[field.key] ?? field.options?.[0]?.[0] ?? '')}>{field.options?.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : field.type === 'textarea' ? <textarea name={field.key} required={!field.optional} maxLength={500} rows={3} /> : <input name={field.key} type={field.type ?? 'text'} required={!field.optional} step={field.key === 'amountFen' ? '0.01' : field.type === 'number' ? '1' : undefined} min={field.type === 'number' ? field.key === 'amountFen' ? '0.01' : '1' : undefined} max={field.key === 'quantity' ? 100 : undefined} defaultValue={action === 'set-expiry' && field.key === 'useUntil' && typeof row?.useUntil === 'string' ? new Date(Date.parse(row.useUntil) + 8 * 3600000).toISOString().slice(0, 16) : field.key === 'quantity' ? 1 : field.key === 'amountFen' && action === 'fulfill' && typeof row?.amountFen === 'number' ? row.amountFen / 100 : undefined} autoComplete="off" />}</label>)}</fieldset>
-      {pending && <div className="pending"><p>操作编号：<code>{pending.operationId}</code></p><button type="button" disabled={busy} onClick={() => { void query(); }}>查询原操作结果</button>{retry && <button type="button" disabled={busy} onClick={() => { setPending(null); setRetry(false); setError('已解除表单锁定。确认对象状态后再提交。'); }}>返回修改表单</button>}</div>}
+      {pending && <div className="pending"><p>操作编号：<code>{pending.operationId}</code></p><button type="button" disabled={busy} onClick={() => { void query(); }}>查询原操作结果</button>{retry && <button type="button" disabled={busy} onClick={() => { setPending(null); setRetry(false); setError('确认对象状态后再提交。'); }}>返回修改表单</button>}</div>}
       <button className={destructiveActions[action] ? 'danger-confirm' : 'primary'} disabled={busy || Boolean(pending && !retry)}>{busy ? '正在处理…' : pending ? '按原编号重试' : destructiveActions[action] ?? '确认执行'}</button>
     </form>}
   </dialog>;

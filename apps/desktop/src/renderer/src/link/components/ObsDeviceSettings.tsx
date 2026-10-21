@@ -62,8 +62,7 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
     } catch (failure) {
       const raw = typeof failure === 'object' && failure !== null && 'message' in failure ? String(failure.message) : String(failure);
       const technicalError = password ? raw.replaceAll(password, '[REDACTED]') : raw;
-      const explanation = toUserErrorMessage(technicalError);
-      const reason = explanation.startsWith('操作未能完成。') ? `OBS 操作失败：${technicalError.split('\n')[0]?.slice(0, 300) || '未返回错误内容'}` : explanation;
+      const reason = toUserErrorMessage(technicalError);
       setError(reason); setManualOpen(true);
       await linkDesktopViewModel.recordLog({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: reason,
         details: { step: connect ? 'save-and-connect' : 'save', technicalError } }).catch(console.error);

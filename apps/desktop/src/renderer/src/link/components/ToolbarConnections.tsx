@@ -19,6 +19,7 @@ import { obsConnectionStatus, midiConnectionStatus, ma2EditingConnectionStatus, 
 type Row = { id: string; name: string; value: string; state: 'ready' | 'error' | 'checking' | 'idle' | 'skipped'; detail: string; category: SettingsCategory };
 const statusLabel = { checking: '连接中', ready: '已就绪', error: '待处理', skipped: '未启用' };
 function checked(row: Row, check: ConnectionCheck | undefined): Row {
+  if (check?.state === 'waiting' || check?.state === 'blocked') return { ...row, state: 'idle', value: check.state === 'waiting' ? '等待中' : '未执行', detail: check.detail };
   return check ? { ...row, state: check.state, value: statusLabel[check.state], detail: check.detail } : row;
 }
 

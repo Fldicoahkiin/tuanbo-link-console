@@ -9,12 +9,21 @@ import { spawn } from 'node:child_process';
 // remain those of the original. Higher bit depths / alpha keep FFV1.
 export function obsSeekEncoding(pixelFormat: string, decode: 'hardware' | 'software' = 'hardware'): string[] {
   if (!pixelFormat || /[^a-z0-9]/.test(pixelFormat)) throw new Error('无法识别素材像素格式，未生成定位缓存');
-  const utVideo = ['yuv420p', 'yuv422p', 'yuv444p', 'gbrp', 'gbrap'].includes(pixelFormat);
+  // Neither encoder accepts packed 8-bit RGB such as QuickTime Animation's
+  // argb. Reorder to a layout holding identical samples: alpha goes to FFV1
+  // bgra (gbrap conversion rounds alpha by one), opaque RGB to planar gbrp.
+  const reordered = packedRgbLayouts[pixelFormat];
+  const utVideo = reordered === 'gbrp' || ['yuv420p', 'yuv422p', 'yuv444p', 'gbrp', 'gbrap'].includes(pixelFormat);
   return [...(pixelFormat === 'yuv420p' && decode === 'hardware' ? ['-c:v', 'libx265', '-preset', 'ultrafast',
     '-x265-params', 'lossless=1:keyint=1:bframes=0:pools=2:frame-threads=1'] : utVideo ? ['-c:v', 'utvideo']
     : ['-c:v', 'ffv1', '-level', '3', '-g', '1']),
-    '-pix_fmt', '+', '-vf', 'tpad=stop_mode=clone:stop=32', '-fps_mode', 'passthrough', '-threads', '2'];
+    '-pix_fmt', reordered ?? '+', '-vf', 'tpad=stop_mode=clone:stop=32', '-fps_mode', 'passthrough', '-threads', '2'];
 }
+
+const packedRgbLayouts: Readonly<Record<string, 'bgra' | 'gbrp'>> = {
+  argb: 'bgra', rgba: 'bgra', abgr: 'bgra',
+  rgb24: 'gbrp', bgr24: 'gbrp', '0rgb': 'gbrp', rgb0: 'gbrp', '0bgr': 'gbrp'
+};
 
 /** Decode one frame with the same bundled FFmpeg used by the encoder. Reading
  * the filter's format avoids guessing from file extensions or codec names. */

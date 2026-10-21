@@ -15,6 +15,8 @@ export const actionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('create-order'), reference: text, customer: text, customerType: z.enum(['personal', 'company']), quantity: z.number().int().min(1).max(100), amountFen: z.number().int().positive().max(100_000_000), useUntil: date, reason: reasonSchema }),
   z.object({ action: z.literal('fulfill'), id, amountFen: z.number().int().positive(), paymentReference: text, paymentMethod: text, reason: reasonSchema }),
   z.object({ action: z.literal('reconcile'), id, reason: reasonSchema }),
+  z.object({ action: z.literal('payment-link'), id, reason: reasonSchema }),
+  z.object({ action: z.literal('close-order'), id, reason: reasonSchema }),
   z.object({ action: z.literal('retry-delivery'), id, reason: reasonSchema }),
   z.object({ action: z.literal('delivery-access'), id, reason: reasonSchema }),
   z.object({ action: z.literal('revoke-delivery-access'), id, reason: reasonSchema }),
@@ -43,12 +45,13 @@ export type PageQuery = z.infer<typeof pageQuerySchema>;
 export const cellSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 export const rowSchema = z.record(z.string(), cellSchema);
 export type ConsoleRow = z.infer<typeof rowSchema>;
-export const pageSchema = z.object({ items: z.array(rowSchema), page: z.number().int(), hasMore: z.boolean() });
+export const pageSchema = z.object({ items: z.array(rowSchema), page: z.number().int(), hasMore: z.boolean(), summary: rowSchema.optional() });
 export const detailSchema = z.object({ item: rowSchema, related: z.array(rowSchema), history: z.array(rowSchema) });
-export const resultSchema = z.object({ id: z.string().optional(), message: z.string(), secret: z.string().optional(), expiresAt: z.string().optional() }).strict();
+export const resultSchema = z.object({ id: z.string().optional(), message: z.string(), secret: z.string().optional(), paymentUrl: z.string().url().optional(), expiresAt: z.string().optional() }).strict();
 export type ConsoleResult = z.infer<typeof resultSchema>;
 export const permissions: Record<ConsoleAction['action'], readonly ConsoleRole[]> = {
   'create-order': ['owner', 'operations'], fulfill: ['owner', 'finance'], reconcile: ['owner', 'operations'],
+  'payment-link': ['owner', 'operations'], 'close-order': ['owner', 'operations'],
   'retry-delivery': ['owner', 'operations'], 'delivery-access': ['owner', 'operations'], 'revoke-delivery-access': ['owner', 'operations'],
   'set-expiry': ['owner'], reveal: ['owner', 'operations'], revoke: ['owner', 'operations'], migrate: ['owner', 'operations'], grant: ['owner'],
   'create-user': ['owner'], 'update-user': ['owner'], 'reset-user': ['owner'],

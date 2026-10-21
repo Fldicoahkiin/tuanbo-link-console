@@ -42,7 +42,9 @@ GitHub 已确认存在 `TBLINK_DEPLOY_SSH_KEY`、`TBLINK_DEPLOY_KNOWN_HOSTS`，�
 3. `deploy-from-ci.py` 再核对 Git HEAD、仓库、分支及跟踪文件无修改，生成全部产物（服务 JS、运营后台、官网页面与媒体）的来源／摘要清单。部署分两次连接：先只发送清单，接收器核对部署工具与 Nginx 摘要后，返回生产环境中缺失或摘要不同的产物；再只上传这些产物。生产已与本次构建一致时跳过上传并写入 Actions summary。固定 SSH 目标与主机公钥校验；私钥只在 runner 的受限临时目录使用，用后清空。
 4. 服务器接收器上传窗口 900 秒（海外 runner 到上海实测约 15 KB/s），每个成员不超过 2,000,000 字节（演示视频 40 MB）。拒绝额外文件、重复成员、软链接、目录穿越、摘要不一致和不支持的元数据。未上传的产物从当前生产副本读取，并按清单摘要逐一复核，不一致即拒绝；组装出的完整包再进入后续流程。CI 不能上传环境文件、Nginx 配置、Python 部署工具或数据库。
 5. 验证后的包写入 root 所有、0700 的任务目录；通过 systemd transient service 执行，SSH 断开不会直接终止发布。工作流不取消进行中的运行，服务器文件锁再次限制并发；已完成或更旧的 run ID／attempt 被拒绝。
-6. 服务器核对已安装的三项部署工具与本次源码的摘要一致，并核对 Nginx 与操作员批准的摘要一致。需要修改部署工具或代理时，必须先单独检查并安装它们，不能借上传包获得任意 root 脚本执行能力。
+6. 服务器核对已安装的四项部署工具（`activate-release.py`、`publish-website.py`、`publish-console.py`、`receive-release.py`）与本次源码的摘要逐字节一致，并核对 Nginx 与操作员批准的摘要一致。需要修改部署工具或代理时，必须先单独检查并安装它们，不能借上传包获得任意 root 脚本执行能力。
+   - 任何修改 `apps/licensing-server/deploy/` 下这四个文件的提交合入 master 后，运维都要先重装对应工具，否则之后每次部署都会以 `Deployment tools or proxy require an operator-reviewed update` 拒绝。安装内容取 `git show <提交>:apps/licensing-server/deploy/<文件>` 的原始字节；不要从 Windows 工作区复制，CRLF 换行会让摘要不一致（2026-10-13 至 10-19 的部署全部因此被拒）。
+   - CI 只部署服务 bundle、官网和后台静态文件。`deploy/` 下的运维脚本（如交付恢复定时任务调用的 `payment-exceptions.py`）和 systemd 单元不随部署更新，改动合入后需人工安装到 `/opt/tblink-licensing/`，取 `git show` 原始字节，保持原属主和权限，先备份，且不得在部署进行中安装。若新脚本依赖新的服务接口，须等对应服务部署成功后再装。
 7. 复用 `activate-release.py` 执行维护、SQLite 备份及恢复校验、既有表比较、服务切换和商品目录比较；随后复用 `publish-website.py` 原子切换官网并核对页面。最后逐文件比较 CI 摘要，保存服务／官网备份路径和部署回执。
 
 ## 服务器身份和文件

@@ -1,4 +1,4 @@
-import { createObsProgramSnapshot } from './obs-program-snapshot';
+import { createObsProgramSnapshot, itemNeedsObs } from './obs-program-snapshot';
 import { lightingTimecodePlaybackNotice } from './lighting-playback';
 import { playlistItems, programPlaylists } from './program-playlists';
 import { toUserErrorMessage } from './link-user-error';
@@ -88,7 +88,8 @@ export class NativeProgramPlayer {
     this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, mtcConnectionFailed: false });
     return this.enqueue(token, async () => {
       if (!this.projectPath) throw new Error('请先保存工程，再播放正式音频');
-      if (this.native && this.native.status !== 'stopped' && this.native.status !== 'ended') await this.command({ kind: 'stop' });
+      // An engine in error has exited and rejects every command; prepare replaces it.
+      if (this.native && this.native.status !== 'stopped' && this.native.status !== 'ended' && this.native.status !== 'error') await this.command({ kind: 'stop' });
       await this.optionalRuntime(() => this.stopObs(), '上次画面清理失败');
       await this.optionalRuntime(() => this.dependencies.stop(), '上次联动清理失败');
       if (!this.current(token)) return;
@@ -229,7 +230,7 @@ export class NativeProgramPlayer {
     ++this.epoch; this.disposed = true; this.unsubscribe(); this.boundaries.clear();
     const cleanup = [
       () => this.cancelScheduled(false),
-      () => this.requestedPreparation ? this.command({ kind: 'stop' }) : undefined,
+      () => this.requestedPreparation && this.native?.status !== 'error' ? this.command({ kind: 'stop' }) : undefined,
       () => this.cancelPreload(), () => this.stopObs(), () => this.dependencies.stop(),
       () => this.lighting.close?.(),
       () => this.tail
@@ -269,7 +270,11 @@ export class NativeProgramPlayer {
       () => { void this.stopObs().catch(error => this.reportUnavailable(`取消画面准备失败：${toUserErrorMessage(error)}`)); }, '后台画面');
       if (this.current(token) && this.obsSession === envelope) this.receiveObs(status);
       else await this.stopObs();
-    } catch (error) { if (this.current(token)) this.reportUnavailable(`画面未参与：${toUserErrorMessage(error)}；音频继续播放。`); }
+    } catch (error) {
+      // Operator decision 2026-10-19: a song with picture work does not start without its picture.
+      if (this.current(token) && itemNeedsObs(this.project, itemId)) throw new Error(`画面准备失败：${toUserErrorMessage(error)}`, { cause: error });
+      if (this.current(token)) this.reportUnavailable(`画面未参与：${toUserErrorMessage(error)}；音频继续播放。`);
+    }
     finally { if (this.obsSession === envelope) this.obsPreparing = false; }
   }
   private nextObsFiles(itemId: string): NativeObsPrepare['nextFiles'] {

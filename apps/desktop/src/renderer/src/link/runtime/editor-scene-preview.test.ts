@@ -15,6 +15,7 @@ function fixture() {
           { id: 'light', label: '灯光', kind: 'midi.noteOn', portProfileId: 'lighting', channel: 1, note: 60, velocity: 127 }] }] }] });
   const desktop = { prepareObsMediaScenes: vi.fn<LinkDesktopApi['prepareObsMediaScenes']>().mockResolvedValue(),
     executeObsAction: vi.fn<LinkDesktopApi['executeObsAction']>().mockResolvedValue(),
+    setObsProgramSourceEnabled: vi.fn<LinkDesktopApi['setObsProgramSourceEnabled']>().mockResolvedValue(),
     seekManagedMedia: vi.fn<LinkDesktopApi['seekManagedMedia']>().mockResolvedValue() };
   const preview = (position: number, current = () => true) => previewEditorScene(project, 'C:\\show\\show.tblink', 'song', position, false, desktop, current);
   return { project, desktop, preview };
