@@ -85,7 +85,9 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
   if (running || readMa2Method() !== 'network' || !useMa2RealtimePreference.getState().enabled) return;
   running = true;
   try {
-    for (const entry of Object.values(useMa2SongSyncStore.getState().songs)) {
+    // Songs with unconfirmed local edits go first; periodic checks of confirmed songs follow.
+    const order = { pending: 0, syncing: 0, blocked: 1, verified: 2, paused: 3 } as const;
+    for (const entry of Object.values(useMa2SongSyncStore.getState().songs).sort((a, b) => order[a.state] - order[b.state])) {
       if (entry.documentId !== useDocumentStore.getState().documentId) { stopMa2SongSync(entry.itemId); continue; }
       if (entry.state === 'paused') continue;
       if (entry.nextCheckAt && Date.now() < entry.nextCheckAt && (!entry.consecutiveFailures || entry.blockedRevision === useDocumentStore.getState().revision)) continue;

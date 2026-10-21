@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type Ma2SongBinding, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
-import { setLightingCommand } from '@tb/core/link';
+import { ma2SongPoints, setLightingCommand } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { useMa2SongSyncStore, startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, resolveMa2SongConflict } from './ma2-song-sync';
@@ -119,6 +119,20 @@ it('同步失败退避重试时同一份本地内容只存档一次，编辑后�
   vi.advanceTimersByTime(30001); await tickMa2SongSync(false);
   expect(sync).toHaveBeenCalledTimes(4);
   expect(archive).toHaveBeenCalledTimes(2);
+});
+it('有本地修改的歌先同步，已确认歌曲的周期复查排在后面', async () => {
+  const value = project();
+  value.rundown[0]!.lighting!.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9000, name: 'first', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }] };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  await prepareMa2RealtimeSession();
+  const lighting = value.rundown[0]!.lighting!;
+  const first = useMa2SongSyncStore.getState().songs.first!;
+  useMa2SongSyncStore.setState(state => ({ songs: { ...state.songs, first: { ...first, state: 'verified', acknowledged: JSON.stringify([ma2SongPoints(lighting), 'first']), remoteRevision: 'a'.repeat(64) } } }));
+  const order: string[] = [];
+  check.mockImplementation(() => { order.push('check:first'); return Promise.resolve(false); });
+  sync.mockImplementation((request: Ma2SongSyncRequest) => { order.push(`sync:${request.itemId}`); return Promise.reject(new Error('测试不写入')); });
+  await tickMa2SongSync(false);
+  expect(order).toEqual(['sync:second', 'check:first']);
 });
 it('未保存、未连接时等待，不弹保存窗口、不自动重连或创建', async () => {
   useDocumentStore.getState().setProject(project(), null);
