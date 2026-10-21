@@ -129,6 +129,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           const changed = await window.tbLink.checkMa2Song({ network, expectedSource: { show, generation, version }, sequence: binding.sequence, ...(binding.executor ? { executor: binding.executor } : {}), revision: entry.remoteRevision });
           if (!canContinue(entry)) continue;
           if (!changed) { update(entry, { checking: false, state: entry.conflicts?.length ? 'blocked' : 'verified', waitingForConnection: false, nextCheckAt: Date.now() + 1000, message: confirmedMessage(binding, entry.conflicts?.length ?? 0) }); continue; }
+          update(entry, { state: 'syncing', message: `控台有变化，核对本曲 ${points.length} 个 Cue…` });
         }
         const path = before.path ?? await linkDesktopViewModel.saveProject(null, before.project);
         if (!path) throw new Error('请先保存工程');
