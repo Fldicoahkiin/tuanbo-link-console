@@ -34,6 +34,9 @@ function compositionOrderRequests(sceneName: string, layers: string[], items: Ma
 }
 
 /** Only the dedicated input in an application-owned material scene is controlled. */
+/** A paused seek lands this far ahead of the music, covering seek and decode time. */
+const MEDIA_START_LEAD_MS = 200;
+
 export class ObsMediaScenes {
   private readonly prepared = new Map<string, { path: string; sha256: string; playbackPaths: readonly string[]; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
   private readonly active = new Set<string>();
@@ -287,7 +290,7 @@ export class ObsMediaScenes {
         }
         if (!event.deferSceneSwitch) requests.push(...this.muteOtherSources(target.sceneName));
         if (event.assetKind !== 'image') {
-          if (!primed) await this.positionMedia(event.sourceName, event.sourceOffsetMs);
+          if (!primed) await this.positionMedia(event.sourceName, () => event.sourceOffsetMs + performance.now() - startedAt);
           requests.push(
           { requestType: 'SetInputMute', requestData: { inputName: event.sourceName, inputMuted: !event.embeddedAudioEnabled } }
           );
@@ -312,9 +315,9 @@ export class ObsMediaScenes {
         // Validate that same observation instead of adding a second RPC after
         // every layer start, which needlessly spends the output deadline.
         const status = await this.waitForState(event.sourceName, 'OBS_MEDIA_STATE_PLAYING');
-        const elapsed = performance.now() - startedAt;
-        if (typeof status.mediaCursor !== 'number' || Math.abs(status.mediaCursor - (event.sourceOffsetMs + elapsed)) > 100) {
-          throw new Error(`切场景后素材位置不一致：${event.assetName}，目标 ${event.sourceOffsetMs} ms，OBS 实际 ${status.mediaCursor ?? '未知'} ms`);
+        const expected = Math.round(event.sourceOffsetMs + performance.now() - startedAt);
+        if (typeof status.mediaCursor !== 'number' || Math.abs(status.mediaCursor - expected) > 100) {
+          throw new Error(`切场景后素材位置不一致：${event.assetName}，按音乐应在 ${expected} ms，OBS 实际 ${status.mediaCursor ?? '未知'} ms`);
         }
       }
       if (event.phase === 'start') this.active.add(event.sourceName); else this.active.delete(event.sourceName);
@@ -508,37 +511,44 @@ export class ObsMediaScenes {
     return state;
   }
 
-  private async positionMedia(inputName: string, positionMs: number): Promise<void> {
+  /** Starts the decoder in step with the music. `aligned` is the source position
+   * the music is at now. The decoder is held paused on a frame slightly ahead
+   * and started when the music reaches it, so seek and decode time do not leave
+   * the picture behind. A seek that settles too late is reported by the caller. */
+  private async positionMedia(inputName: string, aligned: () => number): Promise<void> {
     const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName }), '读取素材实际位置');
     // The output error budget is not a seek tolerance: a new clip at 100ms
     // must not reuse a stale zero cursor. A continuing clip is handled by the
     // session's active-clip check before reaching this method.
-    if (typeof status.mediaCursor === 'number' && Math.abs(status.mediaCursor - positionMs) < 1) {
-      if (status.mediaState === 'OBS_MEDIA_STATE_PAUSED') await this.request(() => this.client.call('TriggerMediaInputAction', { inputName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' }), '继续已定位素材');
-      return;
-    }
-    if (status.mediaState === 'OBS_MEDIA_STATE_PLAYING') {
-      await this.request(() => this.client.call('TriggerMediaInputAction', { inputName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE' }), '暂停解码后精确定位');
-      // OBS dispatches media controls on its task queue. The RPC reply does
-      // not acknowledge the decoder pause, which must precede a paused seek.
-      await this.waitForState(inputName, 'OBS_MEDIA_STATE_PAUSED');
-    }
-    await this.request(() => this.client.call('SetMediaInputCursor', { inputName, mediaCursor: positionMs }), '定位素材');
-    // OBS seeks to a preceding keyframe even while paused. Precise playback
-    // must prepare an intra-frame cache; pausing alone cannot make a GOP source
-    // frame accurate. Require the decoded cursor before resuming, never resend.
-    const deadline = performance.now() + 2000;
-    let actual: number | null = null;
-    do {
-      const result = await this.request(() => this.client.call('GetMediaInputStatus', { inputName }), '确认素材定位');
-      actual = result.mediaCursor;
-      if (result.mediaState === 'OBS_MEDIA_STATE_PAUSED' && typeof actual === 'number'
-        && actual >= Math.floor(positionMs) && actual <= positionMs + 100) {
-        await this.request(() => this.client.call('TriggerMediaInputAction', { inputName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' }), '定位确认后继续素材');
-        return;
+    // A decoder already running in step (a fresh restart from zero, a clip
+    // returning from under a camera) is left alone; pausing it would stutter.
+    if (status.mediaState === 'OBS_MEDIA_STATE_PLAYING' && typeof status.mediaCursor === 'number' && Math.abs(status.mediaCursor - aligned()) < 30) return;
+    let cursor = status.mediaState === 'OBS_MEDIA_STATE_PAUSED' && typeof status.mediaCursor === 'number'
+      && status.mediaCursor >= aligned() - 1 && status.mediaCursor <= aligned() + MEDIA_START_LEAD_MS ? status.mediaCursor : null;
+    if (cursor === null) {
+      if (status.mediaState === 'OBS_MEDIA_STATE_PLAYING') {
+        await this.request(() => this.client.call('TriggerMediaInputAction', { inputName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE' }), '暂停解码后精确定位');
+        // OBS dispatches media controls on its task queue. The RPC reply does
+        // not acknowledge the decoder pause, which must precede a paused seek.
+        await this.waitForState(inputName, 'OBS_MEDIA_STATE_PAUSED');
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
-    } while (performance.now() < deadline);
-    throw new Error(`素材定位未完成：${inputName}，目标 ${positionMs} ms，OBS 实际 ${actual ?? '未知'} ms`);
+      const target = Math.round(aligned() + MEDIA_START_LEAD_MS);
+      await this.request(() => this.client.call('SetMediaInputCursor', { inputName, mediaCursor: target }), '定位素材');
+      // OBS seeks to a preceding keyframe even while paused. Precise playback
+      // must prepare an intra-frame cache; pausing alone cannot make a GOP source
+      // frame accurate. Require the decoded cursor before resuming, never resend.
+      const deadline = performance.now() + 2000;
+      let actual: number | null = null;
+      do {
+        const result = await this.request(() => this.client.call('GetMediaInputStatus', { inputName }), '确认素材定位');
+        actual = result.mediaCursor;
+        if (result.mediaState === 'OBS_MEDIA_STATE_PAUSED' && typeof actual === 'number' && actual >= target && actual <= target + 100) { cursor = actual; break; }
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      } while (performance.now() < deadline);
+      if (cursor === null) throw new Error(`素材定位未完成：${inputName}，目标 ${target} ms，OBS 实际 ${actual ?? '未知'} ms`);
+    }
+    const hold = cursor - aligned();
+    if (hold > 0) await new Promise<void>((resolve) => setTimeout(resolve, hold));
+    await this.request(() => this.client.call('TriggerMediaInputAction', { inputName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' }), '定位确认后继续素材');
   }
 }

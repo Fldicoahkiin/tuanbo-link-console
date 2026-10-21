@@ -49,6 +49,15 @@ function fixture(resetOnSceneSwitch = false, startsNearOrigin = false) {
   return { client, calls, responses, setMediaState, deferSeek: () => { deferSeek = true; }, deferPause: () => { deferPause = true; }, scenes: new ObsMediaScenes(client as unknown as OBSWebSocket, (operation) => operation(), (operation) => operation()) };
 }
 
+function seekTargets(calls: Array<{ requestType: string; requestData?: unknown }>): number[] {
+  return calls.flatMap(call => call.requestType === 'SetMediaInputCursor' && typeof call.requestData === 'object' && call.requestData !== null
+    && 'mediaCursor' in call.requestData && typeof call.requestData.mediaCursor === 'number' ? [call.requestData.mediaCursor] : []);
+}
+/** Under fake timers, lets a start pass its hold until the music reaches the seeked frame. */
+async function held<T>(operation: Promise<T>): Promise<T> {
+  await vi.advanceTimersByTimeAsync(400); return operation;
+}
+
 describe('素材独立场景播放', () => {
   it.each([true, false])('预备解码器只接受已核验的同素材旧缓存，拒绝其他文件（自有=%s）', async owned => {
     const { scenes, client, calls, responses } = fixture();
@@ -138,14 +147,14 @@ describe('素材独立场景播放', () => {
     vi.useFakeTimers();
     try {
       const { scenes, calls, setMediaState, deferPause } = fixture();
-      await scenes.prepare('project', asset, 'C:/dance.mp4'); await scenes.execute(event, 'C:/dance.mp4');
+      await scenes.prepare('project', asset, 'C:/dance.mp4'); await held(scenes.execute(event, 'C:/dance.mp4'));
       calls.length = 0; setMediaState('OBS_MEDIA_STATE_PLAYING', 50); deferPause();
       const execution = scenes.execute({ ...event, sourceOffsetMs: 100, deferSceneSwitch: true }, 'C:/dance.mp4');
       await vi.advanceTimersByTimeAsync(40);
       expect(calls.filter(call => call.requestType === 'SetMediaInputCursor')).toHaveLength(0);
       expect(calls.filter(call => call.requestType === 'TriggerMediaInputAction')).toHaveLength(1);
       setMediaState('OBS_MEDIA_STATE_PAUSED', 50);
-      await vi.advanceTimersByTimeAsync(20); await execution;
+      await vi.advanceTimersByTimeAsync(20); await held(execution);
       expect(calls.filter(call => call.requestType === 'SetMediaInputCursor')).toHaveLength(1);
     } finally { vi.useRealTimers(); }
   });
@@ -154,17 +163,18 @@ describe('素材独立场景播放', () => {
     try {
       const { scenes, calls, setMediaState, deferSeek } = fixture();
       await scenes.prepare('project', asset, 'C:/dance.mp4');
-      await scenes.execute(event, 'C:/dance.mp4');
+      await held(scenes.execute(event, 'C:/dance.mp4'));
       calls.length = 0; setMediaState('OBS_MEDIA_STATE_PLAYING', 50); deferSeek();
       let completed = false;
       const execution = scenes.execute({ ...event, clipId: 'next', sourceOffsetMs: 100, deferSceneSwitch: true }, 'C:/dance.mp4')
         .then(() => { completed = true; });
       await vi.advanceTimersByTimeAsync(20);
       expect(completed).toBe(false);
+      // Seek lands one lead ahead of the music-aligned 100 ms start.
       expect(calls.filter(call => call.requestType === 'SetMediaInputCursor').map(call => call.requestData))
-        .toEqual([{ inputName: names.sourceName, mediaCursor: 100 }]);
-      setMediaState('OBS_MEDIA_STATE_PAUSED', 120);
-      await vi.advanceTimersByTimeAsync(20); await execution;
+        .toEqual([{ inputName: names.sourceName, mediaCursor: 300 }]);
+      setMediaState('OBS_MEDIA_STATE_PAUSED', 320);
+      await vi.advanceTimersByTimeAsync(20); await held(execution);
       expect(completed).toBe(true);
       expect(calls.filter(call => call.requestType === 'SetMediaInputCursor')).toHaveLength(1);
     } finally { vi.useRealTimers(); }
@@ -173,13 +183,13 @@ describe('素材独立场景播放', () => {
     vi.useFakeTimers();
     try {
       const { scenes, calls, setMediaState } = fixture();
-      await scenes.prepare('project', asset, 'C:/dance.mp4'); await scenes.execute(event, 'C:/dance.mp4');
+      await scenes.prepare('project', asset, 'C:/dance.mp4'); await held(scenes.execute(event, 'C:/dance.mp4'));
       calls.length = 0; setMediaState('OBS_MEDIA_STATE_PLAYING', 0);
       const execution = scenes.execute({ ...event, clipId: 'next', sourceOffsetMs: 100, deferSceneSwitch: true }, 'C:/dance.mp4');
       await vi.advanceTimersByTimeAsync(12);
       expect(calls.some(call => call.requestType === 'SetMediaInputCursor' || call.requestType === 'TriggerMediaInputAction')).toBe(false);
       setMediaState('OBS_MEDIA_STATE_ENDED', 0);
-      await vi.advanceTimersByTimeAsync(4); await execution;
+      await vi.advanceTimersByTimeAsync(4); await held(execution);
       expect(calls.filter(call => call.requestType === 'SetMediaInputCursor')).toHaveLength(1);
       expect(calls.filter(call => call.requestType === 'TriggerMediaInputAction').map(call => call.requestData))
         .toContainEqual({ inputName: names.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART' });
@@ -473,14 +483,39 @@ describe('素材独立场景播放', () => {
       expect(calls.filter(call => call.requestType === 'TriggerMediaInputAction')).toHaveLength(1);
     } finally { vi.useRealTimers(); }
   });
+  it('解码器重启耗时 300ms 时按音乐此刻位置定位，等音乐到达该帧再播放，画面不落后于音乐', async () => {
+    vi.useFakeTimers();
+    try {
+      const { scenes, calls, setMediaState, client } = fixture();
+      await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
+      const batch = client.callBatch;
+      client.callBatch = entries => {
+        const result = batch(entries);
+        if (entries.some(entry => JSON.stringify(entry.requestData).includes('RESTART'))) {
+          setMediaState('OBS_MEDIA_STATE_OPENING', 0); setTimeout(() => setMediaState('OBS_MEDIA_STATE_PLAYING', 0), 300);
+        }
+        return result;
+      };
+      const start = performance.now();
+      const execution = scenes.execute(event, 'C:/dance.mp4');
+      await vi.advanceTimersByTimeAsync(1000); await execution;
+      expect(seekTargets(calls)).toHaveLength(1);
+      const lead = seekTargets(calls)[0]! - 2300;
+      expect(lead).toBeGreaterThanOrEqual(500); expect(lead).toBeLessThan(560);
+      const actions = calls.map(call => JSON.stringify(call.requestData));
+      expect(actions.lastIndexOf(actions.filter(action => action.includes('ACTION_PLAY')).at(-1) ?? 'none')).toBeGreaterThan(calls.findIndex(call => call.requestType === 'SetMediaInputCursor'));
+      expect(performance.now() - start).toBeGreaterThanOrEqual(500);
+    } finally { vi.useRealTimers(); }
+  });
   it('暂停完成精确定位后再继续，首次入场及机位返回每次只定位一次', async () => {
     const { scenes, calls } = fixture(false, true);
     await scenes.prepare('project', asset, 'C:/dance.mp4');
     await scenes.execute(event, 'C:/dance.mp4');
     await scenes.switchScene('机位');
     await scenes.execute({ ...event, sourceOffsetMs: 6534 }, 'C:/dance.mp4');
-    expect(calls.filter((entry) => entry.requestType === 'SetMediaInputCursor').map((entry) => entry.requestData))
-      .toEqual([2300, 6534].map((mediaCursor) => ({ inputName: names.sourceName, mediaCursor })));
+    expect(seekTargets(calls)).toHaveLength(2);
+    seekTargets(calls).forEach((target, index) => expect(target - [2300, 6534][index]!).toBeGreaterThanOrEqual(200));
+    seekTargets(calls).forEach((target, index) => expect(target - [2300, 6534][index]!).toBeLessThan(400));
   });
   it('预检不重播未激活的来源，避免重播与暂停争用解码器', async () => {
     const { scenes, calls } = fixture();
@@ -503,13 +538,14 @@ describe('素材独立场景播放', () => {
   it('切场景前位置正确、切场景后被 OBS 重置时不能报告成功', async () => {
     const { scenes } = fixture(true);
     await scenes.prepare('project', asset, 'C:/dance.mp4');
-    await expect(scenes.execute(event, 'C:/dance.mp4')).rejects.toThrow('切场景后素材位置不一致：舞蹈.mp4，目标 2300 ms，OBS 实际 0 ms');
+    await expect(scenes.execute(event, 'C:/dance.mp4')).rejects.toThrow(/切场景后素材位置不一致：舞蹈\.mp4，按音乐应在 2\d{3} ms，OBS 实际 0 ms/);
   });
   it('播放时启动解码器并按位置切换，回读实际状态', async () => {
     const { scenes, calls } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
     await scenes.execute(event, 'C:/dance.mp4');
     expect(calls.slice(0, 4).map((call) => call.requestType)).toEqual(['SetInputMute', 'SetSceneItemEnabled', 'SetCurrentProgramScene', 'TriggerMediaInputAction']);
-    expect(calls.find((call) => call.requestType === 'SetMediaInputCursor')?.requestData).toEqual({ inputName: names.sourceName, mediaCursor: 2300 });
+    // One seek, one lead ahead of the music-aligned 2300 ms start.
+    expect(seekTargets(calls)).toHaveLength(1); expect(seekTargets(calls)[0]! - 2300).toBeGreaterThanOrEqual(200); expect(seekTargets(calls)[0]! - 2300).toBeLessThan(400);
     expect(calls[2]?.requestData).toEqual({ sceneName: names.sceneName });
   });
   it('机位插入只静音底层视频，切回对应位置不发重播或重新定位', async () => {
