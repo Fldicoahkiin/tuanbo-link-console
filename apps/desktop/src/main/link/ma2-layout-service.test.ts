@@ -159,3 +159,15 @@ it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份�
   expect(fake.ops.filter(op => op.startsWith('SEQUENCE ') && op !== 'SEQUENCE 9000')).toEqual([]);
   expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(2);
 });
+it('写入控台的歌曲名和 Cue 名均为拼音，用回读结果再次同步不再判为改名', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false);
+  const first = await service.syncSong(fake.connection, fake.bridge, song);
+  const written = inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!;
+  expect(written.name).toBe('GeQu');
+  expect(written.cues.map(cue => cue.name)).toEqual(Array.from({ length: 8 }, (_, index) => `DuanLuo ${index + 1}`));
+  const again = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: first.binding,
+    points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: first.binding.points[index]!.cue, delayMs: 0 }] })) });
+  expect(again.changed).toBe(false); expect(again.conflicts).toEqual([]);
+});

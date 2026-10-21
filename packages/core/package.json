@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tb/schema": "workspace:*",
-    "midi-file": "1.2.4"
+    "midi-file": "1.2.4",
+    "pinyin-pro": "3.29.4"
   }
 }

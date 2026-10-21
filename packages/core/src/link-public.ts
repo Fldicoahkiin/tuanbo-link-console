@@ -58,6 +58,7 @@ export * from './ma2-cue-attributes';
 export * from './ma2-attribute-filter';
 export * from './ma2-cue-delete';
 export * from './ma2-rename';
+export * from './ma2-console-label';
 export * from './lighting-music';
 export * from './music-analysis';
 export { automaticMusicCandidates, applyAutomaticMusicCandidates, removeAutomaticMusicAnnotations } from './automatic-music-candidates';
