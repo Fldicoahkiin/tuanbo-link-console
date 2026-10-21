@@ -54,6 +54,9 @@ function songConsole(sequences: Map<number, string>) {
   const pending = new Map<string, Buffer[]>();
   const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
   const run = (script: string): string => {
+    const writer = /(TBLINK_W_[a-f0-9]{24})=function/.exec(script)?.[1];
+    const opened = /importexport\/(\w+)\.xml';local f=assert\(io\.open\(p,'wb'\)\)/.exec(script);
+    if (writer && opened) { files.set(opened[1]!, Buffer.alloc(0)); writers.set(writer, opened[1]!); return 'prepared'; }
     let match = /importexport\/(\w+)\.xml','wb'\)/.exec(script);
     if (match) { files.set(match[1]!, Buffer.alloc(0)); return 'prepared'; }
     match = /importexport\/(\w+)\.xml','ab'\)\);f:write\(unhex\('([a-f0-9]*)'\)\)/.exec(script);
@@ -68,9 +71,18 @@ function songConsole(sequences: Map<number, string>) {
     }
     throw new Error(`假控台未识别的脚本：${script.slice(0, 200)}`);
   };
+  const writers = new Map<string, string>();
   const command = vi.fn<Ma2Telnet['command']>((line, match) => {
     lines.push(line);
     const body = /^Lua "(.*)"$/.exec(line)![1]!;
+    const chunk = /^if (TBLINK_W_[a-f0-9]{24}) then \1\((\d+),'([a-f0-9]*)'(,1)?\)/.exec(body);
+    if (chunk) {
+      const file = writers.get(chunk[1]!);
+      if (!file) return Promise.resolve(match(`${chunk[1]}:${chunk[2]}:ERR:missing\r\n`)!);
+      files.set(file, Buffer.concat([files.get(file)!, Buffer.from(chunk[3]!, 'hex')]));
+      if (chunk[4]) writers.delete(chunk[1]!);
+      return Promise.resolve(match(`${chunk[1]}:${chunk[2]}:OK\r\n`)!);
+    }
     let script = body; let prefix = /TBLINK_LAYOUT_[a-f0-9]{24}:/.exec(body)?.[0];
     const key = /(TBLINK_LAYOUT_[a-f0-9]{24})=\{\}/.exec(body)?.[1];
     if (key) { pending.set(key, []); return Promise.resolve(match(`${prefix}READY\r\n`)!); }
@@ -91,7 +103,7 @@ function songConsole(sequences: Map<number, string>) {
     if (operation === 'PAGE') return Promise.resolve({ requestId, response: page });
     return Promise.reject(new Error(`Unexpected ${operation}`));
   });
-  return { files, lines, ops, connection: { command }, bridge: { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response } };
+  return { files, lines, ops, writers, connection: { command }, bridge: { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response } };
 }
 it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份传回控台，写前比对用控台读取时的原导出', async () => {
   const attributes = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');
@@ -110,4 +122,6 @@ it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份�
   expect([...fake.files.keys()].some(name => name.endsWith('_before'))).toBe(false);
   expect(result.backupFile).toMatch(/^tblink_library_[a-f0-9]{32}\.xml$/);
   expect(fake.files.has(result.backupFile.replace(/\.xml$/, ''))).toBe(true);
+  expect(fake.lines.every(line => Buffer.byteLength(line) <= 900)).toBe(true);
+  expect(fake.lines.length).toBeLessThanOrEqual(60); expect(fake.writers.size).toBe(0);
 });

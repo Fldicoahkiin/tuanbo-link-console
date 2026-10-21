@@ -382,12 +382,18 @@ export class Ma2LayoutService {
     catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return []; throw error; }
   }
   private async prepareXml(connection: Connection, request: Ma2LayoutReadRequest, file: string, xml: string, report?: (completed: number, total: number) => void): Promise<void> {
-    await this.call(connection, `${this.guard(request)}local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','wb'));f:close();return 'prepared'`);
+    // One guarded command creates the file and a writer bound to it. Each data line then only calls
+    // that writer: 360 bytes per line instead of 128, and no Show name, so it stays under 900 bytes.
+    const writer = `TBLINK_W_${randomBytes(12).toString('hex')}`;
+    const beforeSend = (): void => { if (this.isPlaying()) throw new Error('请停止播放后读取或创建控台 Layout'); };
+    await this.call(connection, `${this.guard(request)}local p=gma.show.getvar('PATH')..'/importexport/${file}.xml';local f=assert(io.open(p,'wb'));f:close();${writer}=function(i,h,e)local ok,r=pcall(function()local f=assert(io.open(p,'ab'));f:write(unhex(h));f:close()end);if e then ${writer}=nil end;gma.echo('${writer}:'..i..':'..(ok and 'OK' or 'ERR:'..tostring(r)))end;return 'prepared'`);
     const bytes = Buffer.from(xml);
     report?.(0, bytes.length);
-    for (let offset = 0; offset < bytes.length; offset += 128) {
-      await this.call(connection, `${this.guard(request)}local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','ab'));f:write(unhex('${bytes.subarray(offset,offset+128).toString('hex')}'));f:close();return 'prepared'`);
-      report?.(Math.min(offset + 128, bytes.length), bytes.length);
+    for (let offset = 0, index = 0; offset < bytes.length; offset += 360, index++) {
+      const prefix = `${writer}:${index}:`;
+      const result = await connection.command(`Lua "if ${writer} then ${writer}(${index},'${bytes.subarray(offset, offset + 360).toString('hex')}'${offset + 360 >= bytes.length ? ',1' : ''}) else gma.echo('${prefix}ERR:missing') end"`, text => ma2ResponseLine(text, prefix), beforeSend);
+      if (result !== 'OK') throw new Error(`控台文件写入未确认：${result.replace(/^ERR:/, '')}`);
+      report?.(Math.min(offset + 360, bytes.length), bytes.length);
     }
   }
 
