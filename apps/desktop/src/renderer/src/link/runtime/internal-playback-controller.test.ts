@@ -74,7 +74,7 @@ it('MIDI 准备超出窗口后音频开始，迟到的端口结果不在歌中�
   await vi.advanceTimersByTimeAsync(1001);
   await playing;
   expect(f.state().status).toBe('playing');
-  expect(f.state().notice).toContain('准备窗口内未就绪');
+  expect(f.state().fault).toContain('准备窗口内未就绪');
   const send = vi.fn(), open = vi.fn();
   resolveAccess?.({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open, send }]]) } as unknown as MIDIAccess);
   await vi.advanceTimersByTimeAsync(8);
@@ -217,7 +217,7 @@ it('时间码连接失败时明确提示并继续播放音频', async () => {
   const f = fixture(false, false, new MediaMtcOutput());
   await f.controller.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', mtcEnabled: true, mtcConnectionFailed: true, mtcPortName: null });
-  expect(f.state().notice).toContain('本次继续播放音频');
+  expect(f.state().fault).toContain('本次继续播放音频');
   expect(f.deps.prepare).toHaveBeenCalledWith('song-0', 0, { reuseSession: false, mtcOutputEnabled: false });
   expect(f.audio.play).toHaveBeenCalledOnce();
   await f.controller.stop();
@@ -234,7 +234,7 @@ it('直接 MIDI 动作不可用也不阻断音频，并说明灯光未启动', a
   await f.controller.play('song-0');
   expect(f.audio.play).toHaveBeenCalledOnce();
   expect(f.state()).toMatchObject({ status: 'playing', mtcConnectionFailed: false });
-  expect(f.state().notice).toContain('灯光动作未启动');
+  expect(f.state().fault).toContain('灯光动作未启动');
   f.controller.dispose();
 });
 it('旧音频设备消失时不开始播放并说明原因，不改用其他线路', async () => {
@@ -685,7 +685,7 @@ it('无 MIDI 输出时继续音频且不显示为时间码已发送', async () =
   f.project.rundown[0]!.lighting = { ...createLightingDocument(), ma2Bindings: [{ id: 'binding', timecode: 1, name: 'TC', readAt: new Date().toISOString(), sourceXml: '<MA/>', baselineTracks: [], mappings: [], timeOriginMs: 120000 }] };
   await f.controller.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', mtcPortName: null, mtcSentPositionMs: null });
-  expect(f.state().notice).toContain('未检测到灯光 MIDI 输出');
+  expect(f.state().fault).toContain('未检测到灯光 MIDI 输出');
   expect(f.audio.play).toHaveBeenCalledOnce();
   f.controller.dispose();
 });

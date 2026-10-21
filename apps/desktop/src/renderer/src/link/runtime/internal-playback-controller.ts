@@ -84,7 +84,7 @@ export class InternalPlaybackController {
           try {
             mtcPortName = await optionalOutputReady(this.mtc.connect(sendMtc && !stalePairing ? config.mtcPortName : null, sendMtc && !stalePairing && Boolean(item.p1Media || item.lighting?.ma2Bindings?.length || item.lighting?.tracks.some(track => track.clips.some(clip => clip.events.length)))), () => this.mtc.stop(), 'MIDI 时间码');
           } catch (error) {
-            if (this.current(generation)) { this.mtc.stop(); this.update({ mtcConnectionFailed: true }); this.appendNotice(`MIDI 时间码未输出：${toUserErrorMessage(error)}。本次继续播放音频。`); }
+            if (this.current(generation)) { this.mtc.stop(); this.update({ mtcConnectionFailed: true }); this.startFault(`MIDI 时间码未输出：${toUserErrorMessage(error)}。本次继续播放音频。`); }
           }
         })(),
         (async () => {
@@ -93,7 +93,7 @@ export class InternalPlaybackController {
             await optionalOutputReady(this.lighting.prepare(item.lighting, config.lightingProfile ?? null, positionMs), () => this.lighting.stop(), '灯光动作');
             if (this.current(generation)) this.lightingPrepared = true;
           } catch (error) {
-            if (this.current(generation)) { this.lighting.stop(); this.appendNotice(`灯光动作未启动：${toUserErrorMessage(error)}。本次继续播放音频。`); }
+            if (this.current(generation)) { this.lighting.stop(); this.startFault(`灯光动作未启动：${toUserErrorMessage(error)}。本次继续播放音频。`); }
           }
         })()
       ]);
@@ -197,7 +197,7 @@ export class InternalPlaybackController {
   reportUnavailable(message: string): void { this.appendNotice(message); }
   reportPreparation(message: string): void { if (this.state.status === 'preparing') this.update({ preparation: message }); }
   /** A live output failure: shown in red; audio and the remaining actions continue. */
-  reportFault(message: string): void { if (['playing', 'paused'].includes(this.state.status) && this.state.fault !== message) this.update({ fault: message }); }
+  reportFault(message: string): void { if (['preparing', 'playing', 'paused'].includes(this.state.status) && this.state.fault !== message) this.update({ fault: message }); }
   runtimeUnavailable(message: string): void { this.disableRuntime(new Error(message)); }
   seek(positionMs: number): Promise<void> {
     if (!this.state.itemId) return Promise.resolve();
@@ -368,6 +368,8 @@ export class InternalPlaybackController {
       if (this.current(generation)) this.update({ error: `${message}；清理失败：${toUserErrorMessage(cleanup)}` });
     });
   }
+  /** An output that could not join this song: logged and shown in red, the song still starts. */
+  private startFault(message: string): void { this.dependencies.notice?.(message, this.state.itemId); this.reportFault(message); }
   private reportLightingFault(): void {
     const fault = this.lighting.takeFault();
     if (fault) { this.dependencies.notice?.(fault, this.state.itemId); this.reportFault(fault); }

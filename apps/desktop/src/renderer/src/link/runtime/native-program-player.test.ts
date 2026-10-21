@@ -103,6 +103,24 @@ it('时间码短暂中断显示为输出异常，音频与时间码继续；同�
   await f.player.dispose();
 });
 
+it('有画面的歌等待画面准备完成（例如首次生成定位缓存）再开始，不因一秒窗口放弃画面', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = fixture(); f.project.obsOutputMode = 'scenes';
+    f.project.rundown[0]!.cues = [linkCueSchema.parse({ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+      actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
+    const ready = f.api.prepareNativeObs.getMockImplementation()!;
+    f.api.prepareNativeObs.mockImplementationOnce(request => new Promise(resolve => { setTimeout(() => resolve(ready(request)), 3000); }));
+    const playing = f.player.play('song-0');
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(f.state().status).toBe('preparing'); expect(f.api.stopNativeObs).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2000); await playing;
+    expect(f.state()).toMatchObject({ status: 'playing', error: null });
+    expect(f.api.controlNativePlayback.mock.calls.map(([command]) => command.kind)).toContain('play');
+    await f.player.dispose();
+  } finally { vi.useRealTimers(); }
+});
+
 it('引擎异常退出后再次播放不向已退出的引擎发 stop，直接重新准备并播放；销毁时同样不发', async () => {
   // 修复前：每次播放都先向已退出的引擎发 stop 并被拒绝，同一播放器此后永远停在错误状态。
   const f = fixture();
