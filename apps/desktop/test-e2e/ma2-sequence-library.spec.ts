@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type Ma2AuditionRequest, type Ma2AuditionState, type Ma2CatalogRequest, type Ma2RenameRequest } from '@tb/schema';
+import { toConsoleLabel } from '@tb/core/link';
 
 test('界面样本：单步分类点击出灯，多步进入原编号子菜单，移除冗余按钮', async ({}, info) => {
   const project = createEmptyLinkProject('灯光素材分类界面样本');
@@ -20,7 +21,9 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
   const page = await application.firstWindow();
   page.on('pageerror', error => console.error('界面运行错误', error.message));
   try {
-    await application.evaluate(({ ipcMain, dialog }, { path, directory }) => {
+    // The main process writes renamed Chinese labels as pinyin; this stand-in console reads them back the same way.
+    const labels = Object.fromEntries(['前区暖白', '分类暖白', '控台原名－前区面光暖白完整名称'].map(name => [name, toConsoleLabel(name)]));
+    await application.evaluate(({ ipcMain, dialog }, { path, directory, labels }) => {
       process.env.TBLINK_LIBRARY_CALLS = '[]';
       process.env.TBLINK_RENAME_CALLS = '[]';
       // This test owns rename history; background music analysis is a separate workflow.
@@ -37,7 +40,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
       ipcMain.handle('link:ma2-rename', (_event, input: Ma2RenameRequest) => {
         const calls = JSON.parse(process.env.TBLINK_RENAME_CALLS ?? '[]') as unknown[];
         calls.push(input); process.env.TBLINK_RENAME_CALLS = JSON.stringify(calls);
-        return { sequence: input.change.sequence, cue: input.change.cue, kind: input.change.kind, show: input.change.show, generation: input.generation, name: input.change.name, backupFile: `tblink_label_${'a'.repeat(32)}.xml` };
+        return { sequence: input.change.sequence, cue: input.change.cue, kind: input.change.kind, show: input.change.show, generation: input.generation, name: labels[input.change.name] ?? input.change.name, backupFile: `tblink_label_${'a'.repeat(32)}.xml` };
       });
       ipcMain.removeHandler('link:ma2-network-status');
       ipcMain.handle('link:ma2-network-status', () => ({ settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, state: 'connected', version: '3.7.0.5', passwordSaved: false, error: null }));
@@ -47,7 +50,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
       ipcMain.removeHandler('link:ma2-audition-control');ipcMain.handle('link:ma2-audition-control',(_event,input:{action:string})=>{if(input.action==='stop'){const calls=JSON.parse(process.env.TBLINK_LIBRARY_CALLS??'[]') as unknown[];calls.push(...audition.targets.map(target=>({action:target.action})));process.env.TBLINK_LIBRARY_CALLS=JSON.stringify(calls);audition={...audition,generation:audition.generation+1,revision:audition.revision+1,phase:'sent',targets:[]};_event.sender.send('link:ma2-audition-state',audition);}return audition;});
       ipcMain.handle('link:ma2-play-cue', (_event, payload: unknown) => { const calls = JSON.parse(process.env.TBLINK_LIBRARY_CALLS ?? '[]') as unknown[]; calls.push(payload); process.env.TBLINK_LIBRARY_CALLS = JSON.stringify(calls); });
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] });
-    }, { path: file, directory });
+    }, { path: file, directory, labels });
     await page.evaluate(() => localStorage.setItem('tblink.ma2-connection-method.v1', 'network'));
     await page.reload();
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
