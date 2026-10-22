@@ -95,6 +95,8 @@ import {
   linkMediaAssetResolvePayloadSchema,
   linkMediaPreviewPayloadSchema,
   linkMediaInspectionPayloadSchema,
+  linkProjectAssetFilesPayloadSchema,
+  linkProjectAssetRelinkPayloadSchema,
   linkManagedMediaExecutionPayloadSchema,
   linkObsSourcePreviewPayloadSchema,
   linkOptionalFilePathSchema,
@@ -1229,6 +1231,24 @@ function registerIpc(
   handle('link:inspect-media-assets', (_event, value: unknown) => {
     const payload = linkMediaInspectionPayloadSchema.parse(value);
     return projectService.inspectMediaAssets(payload.projectPath, payload.assets);
+  });
+  handle('link:find-missing-asset-files', (_event, value: unknown) => {
+    const payload = linkProjectAssetFilesPayloadSchema.parse(value);
+    return projectService.findMissingAssetFiles(payload.projectPath, payload.files);
+  });
+  handle('link:pick-asset-source-directory', async (_event, pathValue: unknown) => {
+    const projectPath = linkFilePathSchema.parse(pathValue);
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: '选择原工程文件夹（原 .tblink 所在的文件夹）',
+      defaultPath: dirname(projectPath),
+      properties: ['openDirectory']
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  handle('link:relink-asset-files', (_event, value: unknown) => {
+    if (runtimeActive) throw new Error('请停止播放后找回素材');
+    const payload = linkProjectAssetRelinkPayloadSchema.parse(value);
+    return projectService.relinkAssetFiles(payload.projectPath, payload.sourceDirectory, payload.files);
   });
   handle('link:p1-detect-current-project', async () => {
     const detection = await integrationDetector.detect();

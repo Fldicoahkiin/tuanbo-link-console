@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowDown, ArrowUp, Check, Copy,
-  FileAudio, FilePlus2, FolderOpen,
+  FileAudio, FilePlus2, FileSearch, FolderOpen,
   Search, List, LayoutGrid, Plus, X,
   SlidersHorizontal,
   Trash2,
@@ -43,6 +43,7 @@ import { ProjectWelcome } from './ProjectWelcome';
 import { ProgramPlaylistPane } from './ProgramPlaylistPane';
 import { type ProjectPlayer } from './ProjectPlayerControls';
 import { formatDuration } from './media-utils';
+import { MissingAssetsDialog } from './MissingAssetsDialog';
 
 type Props = {
   toolbarHost: HTMLDivElement | null;
@@ -66,6 +67,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
   const revision = useDocumentStore((state) => state.revision);
   const currentItemId = useRuntimeStore((state) => state.currentItemId);
   const [busy, setBusy] = useState(false);
+  const [missingAssetsRequest, setMissingAssetsRequest] = useState(0);
   const importPending = useRef(false);
   const locked = editingLocked || busy;
   const internal = project?.playbackSource === 'internal';
@@ -154,8 +156,9 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
 
   return (
     <div className="p1-project-workspace">
+      <MissingAssetsDialog request={missingAssetsRequest} locked={locked} notify={notify} />
       {toolbarHost ? createPortal(<header className="p1-project-ribbon" title={projectPath ?? undefined}>
-        <details className="project-file-menu"><summary aria-label="工程菜单" title="工程 · 打开或新建"><FolderOpen /></summary><div className="project-file-menu-items"><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onOpen(); }}><FolderOpen />打开工程</button><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onCreate(); }}><FilePlus2 />新建独立工程</button></div></details>
+        <details className="project-file-menu"><summary aria-label="工程菜单" title="工程 · 打开或新建"><FolderOpen /></summary><div className="project-file-menu-items"><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onOpen(); }}><FolderOpen />打开工程</button><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onCreate(); }}><FilePlus2 />新建独立工程</button><button disabled={locked || !projectPath} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); setMissingAssetsRequest((request) => request + 1); }}><FileSearch />找回缺失素材</button></div></details>
         <strong className="topbar-project-title" aria-label="当前工程">{project.name}</strong>
         <div className="toolbar-drag-space" />
         <fieldset className="p1-project-actions" disabled={locked}>

@@ -14,6 +14,7 @@ import { musicAnalysisRequestSchema, musicAnalysisProgressSchema, musicAnalysisC
 import { automaticMusicRequestSchema, automaticMusicControlSchema, automaticMusicJobSchema, automaticMusicStatusSchema } from '@tb/schema';
 import { musicMonitorRequestSchema, musicMonitorStatusSchema } from '@tb/schema';
 import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsActionSchema, projectArchiveSettingsStatusSchema } from '@tb/schema';
+import { linkProjectAssetFilesPayloadSchema, linkProjectAssetRelinkPayloadSchema, linkProjectAssetRelinkResultSchema } from '@tb/schema';
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
 import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema, nativeMidiCheckSchema } from '@tb/schema';
@@ -186,6 +187,9 @@ const tbLink: LinkDesktopBridgeApi = {
   saveWaveformCache: (payload) => invoke('link:save-waveform-cache', payload),
   inspectProjectAssets: (path, project) => invoke('link:inspect-project-assets', path, project),
   inspectMediaAssets: (payload) => invoke('link:inspect-media-assets', payload),
+  findMissingAssetFiles: (payload) => invoke('link:find-missing-asset-files', linkProjectAssetFilesPayloadSchema.parse(payload)),
+  pickAssetSourceDirectory: (projectPath) => invoke('link:pick-asset-source-directory', projectPath),
+  relinkAssetFiles: async (payload) => linkProjectAssetRelinkResultSchema.parse(await invoke('link:relink-asset-files', linkProjectAssetRelinkPayloadSchema.parse(payload))),
   detectCurrentP1Project: () => invoke('link:p1-detect-current-project'),
   pickP1Project: () => invoke('link:p1-pick-project'),
   importP1Project: async (payload, onProgress) => {

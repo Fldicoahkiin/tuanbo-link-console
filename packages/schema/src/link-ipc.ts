@@ -84,6 +84,25 @@ export const linkMediaInspectionPayloadSchema = z.object({
 }).strict();
 export type LinkMediaInspectionPayload = z.infer<typeof linkMediaInspectionPayloadSchema>;
 
+const linkProjectAssetFileSchema = z.object({ relativePath: z.string().min(1).max(1024), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const linkProjectAssetFilesPayloadSchema = z.object({
+  projectPath: linkFilePathSchema,
+  files: z.array(linkProjectAssetFileSchema).min(1).max(512)
+}).strict();
+export type LinkProjectAssetFilesPayload = z.infer<typeof linkProjectAssetFilesPayloadSchema>;
+/** Small batches: each file may be a multi-gigabyte video that is hashed and copied. */
+export const linkProjectAssetRelinkPayloadSchema = z.object({
+  projectPath: linkFilePathSchema,
+  sourceDirectory: linkFilePathSchema,
+  files: z.array(linkProjectAssetFileSchema).min(1).max(8)
+}).strict();
+export type LinkProjectAssetRelinkPayload = z.infer<typeof linkProjectAssetRelinkPayloadSchema>;
+export const linkProjectAssetRelinkResultSchema = z.array(z.object({
+  relativePath: z.string(),
+  status: z.enum(['restored', 'present', 'not-found', 'mismatch'])
+}).strict());
+export type LinkProjectAssetRelinkResult = z.infer<typeof linkProjectAssetRelinkResultSchema>;
+
 export const linkP1ProjectImportPayloadSchema = z.object({
   p1ProjectPath: linkFilePathSchema,
   linkProjectPath: linkFilePathSchema,

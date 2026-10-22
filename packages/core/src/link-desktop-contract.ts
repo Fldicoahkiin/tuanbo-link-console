@@ -298,6 +298,9 @@ export type LinkDesktopApi = {
   saveWaveformCache(payload: { projectPath: string; sha256: string; peaks: number[] }): Promise<void>;
   inspectProjectAssets(path: string, project: LinkProject): Promise<LinkProjectAssetInspection>;
   inspectMediaAssets(payload: import('@tb/schema').LinkMediaInspectionPayload): Promise<LinkProjectAssetInspection['media']>;
+  findMissingAssetFiles(payload: import('@tb/schema').LinkProjectAssetFilesPayload): Promise<string[]>;
+  pickAssetSourceDirectory(projectPath: string): Promise<string | null>;
+  relinkAssetFiles(payload: import('@tb/schema').LinkProjectAssetRelinkPayload): Promise<import('@tb/schema').LinkProjectAssetRelinkResult>;
   ensureMediaThumbnailUrl(payload: { projectPath: string; relativePath: string; sha256: string; kind: LinkMediaKind }): Promise<string>;
   detectCurrentP1Project(): Promise<string>;
   pickP1Project(): Promise<string | null>;

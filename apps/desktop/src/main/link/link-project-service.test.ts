@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { createEmptyLinkProject, createLightingUserLibrary } from '@tb/schema';
@@ -187,6 +187,45 @@ describe('LinkProjectService', () => {
     });
   });
 
+  it('只挪动 .tblink 后，从原工程文件夹按相同相对路径找回素材，核对内容后复制', async () => {
+    const original = await createTestDirectory(); const moved = await createTestDirectory();
+    for (const root of [original, moved]) cleanupDirectories.push(join(root, 'assets'), join(root, 'assets', 'reference-audio'), join(root, 'assets', 'reference-media'));
+    const service = new LinkProjectService();
+    const audioSource = join(original, 'song.wav'); const videoSource = join(original, 'opening.mp4');
+    cleanupFiles.push(audioSource, videoSource);
+    await writeFile(audioSource, Buffer.from('song-audio')); await writeFile(videoSource, Buffer.from('opening-video'));
+    const originalProject = join(original, 'show.tblink'); const movedProject = join(moved, 'show.tblink');
+    const audio = await service.importReferenceAudio(originalProject, audioSource, 1_000);
+    const video = await service.importMediaAsset(originalProject, videoSource, { name: '开场', kind: 'video', durationMs: 1_000, width: 64, height: 64 });
+    const replaced = { relativePath: 'assets/reference-media/replaced.mp4', sha256: sha256('expected') };
+    const absent = { relativePath: 'assets/reference-media/absent.mp4', sha256: sha256('absent') };
+    await writeFile(join(original, replaced.relativePath), 'other-bytes');
+    for (const relativePath of [audio.relativePath, video.relativePath, replaced.relativePath]) cleanupFiles.push(join(original, relativePath));
+    for (const relativePath of [audio.relativePath, video.relativePath]) cleanupFiles.push(join(moved, relativePath));
+    const files = [audio, video, replaced, absent].map(({ relativePath, sha256 }) => ({ relativePath, sha256 }));
+
+    expect(await service.findMissingAssetFiles(movedProject, files)).toEqual(files.map(file => file.relativePath));
+    expect(await service.relinkAssetFiles(movedProject, original, files)).toEqual([
+      { relativePath: audio.relativePath, status: 'restored' },
+      { relativePath: video.relativePath, status: 'restored' },
+      { relativePath: replaced.relativePath, status: 'mismatch' },
+      { relativePath: absent.relativePath, status: 'not-found' }
+    ]);
+    await expect(readFile(join(moved, audio.relativePath), 'utf8')).resolves.toBe('song-audio');
+    await expect(readFile(join(moved, video.relativePath), 'utf8')).resolves.toBe('opening-video');
+    expect(await readdir(join(moved, 'assets', 'reference-media'))).toEqual([video.relativePath.split('/').at(-1)]);
+    expect(await service.findMissingAssetFiles(movedProject, files)).toEqual([replaced.relativePath, absent.relativePath]);
+    expect((await service.relinkAssetFiles(movedProject, original, files.slice(0, 1)))[0]?.status).toBe('present');
+  });
+
+  it('找回素材不读写工程文件夹或所选文件夹以外的路径', async () => {
+    const directory = await createTestDirectory();
+    const service = new LinkProjectService(); const file = { relativePath: '../outside.wav', sha256: sha256('outside') };
+    await expect(service.relinkAssetFiles(join(directory, 'show.tblink'), directory, [file])).rejects.toThrow('必须位于工程目录内');
+    await expect(service.findMissingAssetFiles(join(directory, 'show.tblink'), [file])).rejects.toThrow('必须位于工程目录内');
+    await expect(service.relinkAssetFiles(join(directory, 'show.tblink'), 'relative-folder', [{ relativePath: 'a.wav', sha256: sha256('a') }])).rejects.toThrow('完整路径');
+  });
+
   it.runIf(process.platform === 'win32')('拒绝把跨盘绝对路径解析为工程内素材', async () => {
     const directory = await createTestDirectory();
     const projectPath = join(directory, 'show.tblink');
@@ -203,6 +242,10 @@ async function createTestDirectory(): Promise<string> {
   await mkdir(directory);
   cleanupDirectories.push(directory);
   return directory;
+}
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
 }
 
 function ignoreMissing(error: unknown): void {
