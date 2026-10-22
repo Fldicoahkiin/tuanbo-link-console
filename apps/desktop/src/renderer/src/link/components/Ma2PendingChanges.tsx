@@ -32,6 +32,8 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [notice, setNotice] = useState('');
+  const [archivingOff, setArchivingOff] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   if (!project) return null;
   const working = automatic.status === 'writing' || automatic.status === 'reading' || songs.some(song => song.state === 'syncing' || song.requestId);
   const count = pending.length + unbound.length + renames.length + songs.filter(song => song.state === 'pending' && !unbound.some(item => item.itemId === song.itemId)).length;
@@ -56,13 +58,25 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     if (!path) return;
     useDocumentStore.getState().markSaved(path, state.revision, state.documentId);
     const archived = await archiveMa2Project(state.documentId, state.project, 'manual');
-    setNotice(`本地已保存并存档：${archived}`); notify('本地已保存并创建存档');
+    setNotice(`本地已保存并存档：${archived ?? ''}`); notify('本地已保存并创建存档');
   };
   const loadArchives = async (): Promise<void> => {
     const path = useDocumentStore.getState().path;
     if (!path) throw new Error('请先保存工程');
     const result = await linkDesktopViewModel.projectArchives({ version: 1, action: 'list', projectPath: path });
     setArchives(result.entries); setArchiveOpen(true); setDetailOpen(false);
+  };
+  const restore = async (name: string): Promise<void> => {
+    const state = useDocumentStore.getState();
+    if (!state.path || !state.project) throw new Error('请先保存工程');
+    if (playing) throw new Error('播放中不能恢复存档，请停止后再恢复');
+    // Save first, so the "恢复前" copy the restore makes holds the latest edits.
+    const saved = await linkDesktopViewModel.saveProject(state.path, state.project);
+    if (!saved) throw new Error('当前工程保存未完成，未恢复存档');
+    await linkDesktopViewModel.projectArchives({ version: 1, action: 'restore', projectPath: saved, name });
+    const reopened = await linkDesktopViewModel.openProject(saved);
+    useDocumentStore.getState().setProject(reopened.project, reopened.path);
+    setConfirmRestore(null); setArchiveOpen(false); notify('已恢复存档；恢复前的工程另存为“恢复前”存档');
   };
   const reveal = async (name?: string): Promise<void> => {
     const path = useDocumentStore.getState().path;
@@ -71,7 +85,10 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   };
   return <div className="ma2-sync-controls" aria-label="灯光同步操作">
     <button className="ma2-realtime-switch" role="switch" aria-label="实时同步" aria-checked={active} disabled={busy || (working && !active)} onClick={() => void run(toggle)} title="编辑结束后自动核对、存档、写回并确认；播放中暂存，停止后同步"><span className="ma2-switch-track" aria-hidden="true"><span /></span><span>实时同步</span></button>
-    <button aria-label="同步状态详情" data-state={blocked ? 'blocked' : automatic.status} onClick={() => { setDetailOpen(value => !value); setArchiveOpen(false); }}>{blocked || count ? <CircleAlert /> : <Check />}<span>{status}</span></button>
+    <button aria-label="同步状态详情" data-state={blocked ? 'blocked' : automatic.status} onClick={() => {
+      if (!detailOpen) void linkDesktopViewModel.projectArchiveSettings({ action: 'status' }).then(value => setArchivingOff(!value.settings.enabled), (error: unknown) => setNotice(`存档设置读取失败：${error instanceof Error ? error.message : String(error)}`));
+      setDetailOpen(value => !value); setArchiveOpen(false);
+    }}>{blocked || count ? <CircleAlert /> : <Check />}<span>{status}</span></button>
     <button aria-label="撤销灯光修改" title="撤销上一次工程编辑；启用同步后会将撤销结果写回控台" disabled={!canUndo} onClick={() => useDocumentStore.getState().undo()}><Undo2 /></button>
     <button aria-label="重做灯光修改" title="重做上一次撤销" disabled={!canRedo} onClick={() => useDocumentStore.getState().redo()}><Redo2 /></button>
     <button disabled={busy} title="保存工程并创建存档" onClick={() => void run(save)}><Save /><span>保存</span></button>
@@ -79,6 +96,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     {detailOpen ? <div className="ma2-sync-popover" role="region" aria-label="同步状态详情">
       <header><strong>{status}</strong><button onClick={() => setDetailOpen(false)}>关闭</button></header>
       {localSaveError ? <p role="alert">{localSaveError}</p> : null}
+      {archivingOff ? <p>已关闭存档，写入前不再备份。</p> : null}
       <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{notice || (!active ? '已暂停，修改保留在本地。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : automatic.request || automatic.status === 'blocked' || !songs.length ? automatic.message : '名称与 Cue 内容双向核对，控台位置如下。')}</p>
       {blocked ? <button disabled={busy || working} onClick={() => { setNotice(''); retryMa2RealtimeSession(); }}>重新核对并同步</button> : null}
       {songs.map(song => <section key={song.itemId}><p role={song.state === 'blocked' ? 'alert' : 'status'}>{song.message}</p><Ma2SongConflicts itemId={song.itemId}/></section>)}
@@ -91,9 +109,9 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     </div> : null}
     {archiveOpen ? <div className="ma2-sync-popover" role="region" aria-label="灯光工程存档">
       <header><strong>工程存档 · {archives.length}</strong><button onClick={() => setArchiveOpen(false)}>关闭</button></header>
-      <p>保存整个工程及原始 XML；同步前自动存一份。存档与工程同目录，共用原素材。</p>
+      <p>保存整个工程及原始 XML；同步前自动存一份。恢复会写回原工程位置，恢复前的工程另存一份。</p>
       <button onClick={() => void run(() => reveal())}><FolderOpen />打开存档位置</button>
-      {!archives.length ? <p>暂无存档，点击“保存”创建。</p> : <ul>{archives.slice(0,100).map(entry => <li key={entry.name}><span>{new Date(entry.createdAt).toLocaleString()} · {entry.reason === 'manual' ? '手动保存' : '同步前'}</span><button aria-label={`定位存档 ${entry.name}`} onClick={() => void run(() => reveal(entry.name))}>定位文件</button></li>)}</ul>}
+      {!archives.length ? <p>暂无存档，点击“保存”创建。</p> : <ul>{archives.slice(0,100).map(entry => <li key={entry.name}><span>{new Date(entry.createdAt).toLocaleString()} · {entry.reason === 'manual' ? '手动保存' : '同步前'}</span><button aria-label={`定位存档 ${entry.name}`} onClick={() => void run(() => reveal(entry.name))}>定位文件</button>{confirmRestore === entry.name ? <button aria-label={`确认恢复存档 ${entry.name}`} disabled={busy || playing} onClick={() => void run(() => restore(entry.name))}>确认恢复</button> : <button aria-label={`恢复存档 ${entry.name}`} disabled={busy || playing} onClick={() => setConfirmRestore(entry.name)}>恢复</button>}</li>)}</ul>}
     </div> : null}
   </div>;
 }

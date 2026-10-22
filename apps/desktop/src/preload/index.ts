@@ -13,7 +13,7 @@ import { ma2AuditionRequestSchema,ma2AuditionControlSchema,ma2AuditionStateSchem
 import { musicAnalysisRequestSchema, musicAnalysisProgressSchema, musicAnalysisControlSchema, musicAnalysisResultSchema } from '@tb/schema';
 import { automaticMusicRequestSchema, automaticMusicControlSchema, automaticMusicJobSchema, automaticMusicStatusSchema } from '@tb/schema';
 import { musicMonitorRequestSchema, musicMonitorStatusSchema } from '@tb/schema';
-import { projectArchiveRequestSchema, projectArchiveResultSchema } from '@tb/schema';
+import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsActionSchema, projectArchiveSettingsStatusSchema } from '@tb/schema';
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
 import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema, nativeMidiCheckSchema } from '@tb/schema';
@@ -50,6 +50,7 @@ const tbLink: LinkDesktopBridgeApi = {
     return () => ipcRenderer.removeListener('link:native-program-event', receive);
   },
   projectArchives: async request => projectArchiveResultSchema.parse(await invoke('link:project-archives', projectArchiveRequestSchema.parse(request))),
+  projectArchiveSettings: async request => projectArchiveSettingsStatusSchema.parse(await invoke('link:project-archive-settings', projectArchiveSettingsActionSchema.parse(request))),
   preloadNativeObs: request => invoke('link:native-obs-preload', nativeObsPreloadSchema.parse(request)),
   cancelNativeObsPreload: request => invoke('link:native-obs-preload-cancel', nativeObsStopSchema.parse(request)),
   prepareNativeObs: async request => nativeObsStatusSchema.parse(await invoke('link:native-obs-prepare', nativeObsPrepareSchema.parse(request))),
