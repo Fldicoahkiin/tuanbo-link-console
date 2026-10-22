@@ -291,6 +291,10 @@ it.runIf(process.env.TBLINK_MA2_COPY_PROBE === '1' && Boolean(process.env.TBLINK
     await lua('merge-second', `gma.cmd('Copy Sequence ${S} Cue ${c1} At Sequence ${T} Cue 1 /merge /nc');TBPR=TBPS(${T},'1','0')`);
     await lua('attributes-kept', `local a=TBPX(TBPC(${T},'1','0'));TBPR=tostring(a==TBPB)..(a==TBPB and '' or ' after='..a:sub(1,600))`);
     await lua('reference-merge', `gma.cmd('Copy Sequence ${S} Cue ${c2} At Sequence ${T} Cue 3 /o /nc');gma.cmd('Copy Sequence ${S} Cue ${c1} At Sequence ${T} Cue 3 /merge /nc');TBPR=TBPQ(${T},'1','0',${T},'3','0')`);
+    // Q4: which elements a plain Cue and a Cue with a command carry besides its data (static merge rejects commands).
+    await lua('define-elements', "_G.TBPE=function(c) local seen,list={},{};for n in TBPX(c):gmatch('<(%a[%w_]*)') do if not seen[n] then seen[n]=true;list[#list+1]=n end end;return table.concat(list,',') end;TBPR='ok'");
+    await lua('elements-plain', `TBPR=TBPE(TBPC(${S},${parts(c1)}))`);
+    await lua('assign-command', `gma.cmd('Copy Sequence ${S} Cue ${c1} At Sequence ${T} Cue 5 /o /nc');gma.cmd('Assign Sequence ${T} Cue 5 /cmd='..string.char(34)..'Off Sequence 99998'..string.char(34));local c=TBPX(TBPC(${T},'5','0'));TBPR=TBPE(TBPC(${T},'5','0'))..' cue='..c:sub(1,500)`);
     // Single source: Copy /o should leave the Cue exactly as its source, as the snapshot import did.
     await lua('single-source-as-source', `gma.cmd('Copy Sequence ${S} Cue ${c2} At Sequence ${T} Cue 4 /o /nc');local a,b=TBPX(TBPC(${T},'4','0')),TBPX(TBPC(${S},${parts(c2)}));TBPR=tostring(a==b)..(a==b and '' or ' target='..a:sub(1,300)..' source='..b:sub(1,300))`);
     await mkdir(resolve('artifacts/ma2-hardware-diagnostics'), { recursive: true });
