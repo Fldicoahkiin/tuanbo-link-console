@@ -9,6 +9,7 @@ export * from './ibt-beat-result';
 export * from './link-preflight';
 export * from './ma2-show-identity';
 export * from './link-desktop-contract';
+export * from './project-asset-files';
 export * from './managed-media-timeline';
 export * from './scene-output-timeline';
 export * from './managed-output-runtime';

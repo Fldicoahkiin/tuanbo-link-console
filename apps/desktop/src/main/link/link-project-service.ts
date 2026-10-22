@@ -8,7 +8,8 @@ import {
   serializeLinkProject,
   type LinkMediaAsset,
   type LinkMediaKind,
-  type LinkProject
+  type LinkProject,
+  type LinkProjectAssetRelinkResult
 } from '@tb/schema';
 import type { LinkProjectAssetInspection } from '@tb/core/link';
 import { writeFileAtomically } from './atomic-file';
@@ -324,6 +325,36 @@ export class LinkProjectService {
     });
   }
 
+  /** Relative paths of the given files that are absent from the project folder. */
+  async findMissingAssetFiles(projectPath: string, files: readonly { relativePath: string }[]): Promise<string[]> {
+    const missing: string[] = [];
+    for (const file of files) {
+      if (!await pathExists(resolveProjectAsset(projectPath, file.relativePath, '工程素材'))) missing.push(file.relativePath);
+    }
+    return missing;
+  }
+
+  /** Brings back files missing from the project folder from the same relative
+   * path under sourceDirectory, for example the folder the .tblink was moved
+   * out of. Only a file with the recorded SHA-256 is copied; nothing else is
+   * searched for. The project document itself does not change. */
+  async relinkAssetFiles(projectPath: string, sourceDirectory: string, files: readonly { relativePath: string; sha256: string }[]): Promise<LinkProjectAssetRelinkResult> {
+    assertProjectExtension(projectPath);
+    if (!isAbsolute(sourceDirectory)) throw new Error('原工程文件夹必须是完整路径');
+    const result: LinkProjectAssetRelinkResult = [];
+    for (const file of files) {
+      const destination = resolveProjectAsset(projectPath, file.relativePath, '工程素材');
+      if (await pathExists(destination)) { result.push({ relativePath: file.relativePath, status: 'present' }); continue; }
+      const source = resolveInsideFolder(resolve(sourceDirectory), file.relativePath, '工程素材');
+      if (!await pathExists(source)) { result.push({ relativePath: file.relativePath, status: 'not-found' }); continue; }
+      if (await hashFile(source) !== file.sha256) { result.push({ relativePath: file.relativePath, status: 'mismatch' }); continue; }
+      await mkdir(dirname(destination), { recursive: true });
+      await copyIntoProject(source, destination, dirname(destination), '找回素材', file.sha256);
+      result.push({ relativePath: file.relativePath, status: 'restored' });
+    }
+    return result;
+  }
+
   resolveReferenceAudio(projectPath: string, relativePath: string): string {
     return resolveProjectAsset(projectPath, relativePath, '参考音频');
   }
@@ -355,7 +386,10 @@ async function copyIntoProject(
 }
 
 function resolveProjectAsset(projectPath: string, relativePath: string, label: string): string {
-  const projectDirectory = dirname(resolve(projectPath));
+  return resolveInsideFolder(dirname(resolve(projectPath)), relativePath, label);
+}
+
+function resolveInsideFolder(projectDirectory: string, relativePath: string, label: string): string {
   const resolved = resolve(projectDirectory, relativePath);
   const relativeResolved = relative(projectDirectory, resolved);
   if (
