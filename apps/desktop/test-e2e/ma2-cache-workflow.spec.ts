@@ -64,7 +64,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect.poll(() => app.evaluate(() => process.env.TBLINK_CACHE_TEST_READS)).toBe('1');
     await expect(page.locator('.waveform-cue-point')).toHaveCount(11);
-    await expect(page.locator('.project-save-status')).toBeHidden();
+    await page.keyboard.press('Control+S'); await expect(page.locator('.project-save-status')).toBeHidden();
     await nav.getByRole('button', { name: '设置', exact: true }).click();
     const exportButton = page.getByRole('button', { name: '导出现场核对包', exact: true });
     if (!await exportButton.isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
@@ -109,7 +109,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     const editor = page.getByRole('dialog', { name: '修改 Cue 卡点' });
     await editor.getByLabel('时间（秒）').fill('0.200');
     await editor.getByRole('button', { name: '保存卡点' }).click();
-    await expect(page.locator('.project-save-status')).toBeHidden();
+    await page.keyboard.press('Control+S'); await expect(page.locator('.project-save-status')).toBeHidden();
     expect(parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks[1]?.clips[0]?.events[0]?.at).toBe(200);
     expect(parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.sourceXml).toBe(meiNanXml);
     await page.screenshot({ path: info.outputPath('workbench.png') });
@@ -126,7 +126,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.getByLabel('时间线状态筛选')).toHaveValue('native');
     expect(await app.evaluate(() => process.env.TBLINK_CACHE_TEST_READS)).toBe('1');
-    await expect(page.locator('.project-save-status')).toBeHidden();
+    await page.keyboard.press('Control+S'); await expect(page.locator('.project-save-status')).toBeHidden();
     expect(parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).ma2ReadState?.filter).toBe('native');
     await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close();
     app = await launch(); page = await app.firstWindow();
