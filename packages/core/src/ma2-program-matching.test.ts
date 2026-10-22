@@ -29,3 +29,29 @@ it('缺原始起点时不因同名硬配；缺文件占位不参与匹配', () =
   project.rundown[0]!.p1UnavailableSourceKey = 'missing';
   expect(matchMa2Programs(project, catalog).pairs).toEqual({});
 });
+
+function matchStartCode(songs: Array<{ id: string; startMs: number; durationMs: number }>, offset: string, times: string[], length?: string): ReturnType<typeof matchMa2Programs> {
+  const project = createEmptyLinkProject('起始码');
+  project.rundown = songs.map(song => ({ id: song.id, title: `歌曲${song.id}`, enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], referenceAudio: { assetId: song.id, relativePath: `${song.id}.wav`, sha256: 'a'.repeat(64), durationMs: song.durationMs }, playback: { volume: 100, endAction: 'stop' as const, startMs: 0, endMs: 0, mtcOffsetMs: song.startMs, shortcut: '' } }));
+  const catalog: Ma2Catalog = { directory: { show: 'show', version: '3.7.0.5', generation: '1', entries: [] }, readAt: new Date().toISOString(), entries: [{ target: 7, name: '灯光', eventCount: times.length, frameFormat: '30 FPS', offset, slot: 'TC Slot 1', ...(length ? { length } : {}), events: times.map(time => ({ path: time, time, action: 'Goto', executor: '1.1', cue: '1', name: 'Cue' })), error: null, warnings: [] }] };
+  return matchMa2Programs(project, catalog);
+}
+
+it('起始码与歌曲起点（按 30 帧）精确相等时优先配对，区间重叠的另一首不再造成歧义', () => {
+  expect(matchStartCode([{ id: 'A', startMs: 60000, durationMs: 10000 }, { id: 'B', startMs: 55000, durationMs: 20000 }], '1800', ['30']).pairs).toEqual({ 7: 'A' });
+});
+
+it('多首歌起始码相同时先按事件区间、再按控台节目长度区分；仍分不出时列出候选，不猜', () => {
+  const songs = [{ id: 'A', startMs: 0, durationMs: 10000 }, { id: 'B', startMs: 0, durationMs: 5000 }];
+  expect(matchStartCode(songs, '0', ['30', '200']).pairs).toEqual({ 7: 'A' });
+  expect(matchStartCode(songs, '0', ['30'], '270').pairs).toEqual({ 7: 'A' });
+  const ambiguous = matchStartCode(songs, '0', ['30']);
+  expect(ambiguous.pairs).toEqual({});
+  expect(ambiguous.unresolved[0]?.reason).toContain('歌曲A'); expect(ambiguous.unresolved[0]?.reason).toContain('歌曲B');
+});
+
+it('起始码相同但事件超出这首歌的时长：不配对并说明原因', () => {
+  const result = matchStartCode([{ id: 'A', startMs: 60000, durationMs: 10000 }, { id: 'B', startMs: 50000, durationMs: 30000 }], '1800', ['30', '600']);
+  expect(result.pairs).toEqual({});
+  expect(result.unresolved[0]?.reason).toContain('超出');
+});

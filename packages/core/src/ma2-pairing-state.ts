@@ -1,6 +1,6 @@
 import { parseLinkProject, type LinkProject, type Ma2Catalog, type Ma2ReadState } from '@tb/schema';
 import type { LinkCommand } from './link-command';
-import { matchMa2Programs } from './ma2-program-matching';
+import { ma2EventOutsideSong, matchMa2Programs } from './ma2-program-matching';
 import { programTimeOrigin } from './ma2-time-origin';
 import { importMa2TimecodeCommand } from './ma2-import';
 
@@ -147,10 +147,7 @@ export function confirmMa2PairingCommand(target: number, itemId: string): LinkCo
     if (!entry.events.length) throw new Error(`Timecode ${target} 没有事件，无需关联歌曲`);
     const invalid = entry.events.find(event => !/^\d+(?:\.\d+)?$/.test(event.time) || !Number.isFinite(Number(event.time)));
     if (invalid) throw new Error(`Timecode ${target} 的事件 ${invalid.path} 时间格式无效：${invalid.time}`);
-    const outside = entry.events.find(event => {
-      const time = (Number(event.time) + Number(entry.offset ?? 0)) * 1000 / 30;
-      return time < origin || time >= origin + song.referenceAudio!.durationMs;
-    });
+    const outside = ma2EventOutsideSong(entry, origin, song.referenceAudio.durationMs);
     if (outside) {
       const seconds = (Number(outside.time) + Number(entry.offset ?? 0)) / 30;
       throw new Error(`Timecode ${target} 的事件 ${outside.path} 位于 ${seconds.toFixed(3)} 秒，超出“${song.title}”的歌曲范围 ${(origin / 1000).toFixed(3)}～${((origin + song.referenceAudio.durationMs) / 1000).toFixed(3)} 秒；请核对歌曲原始时间码起点或选择对应歌曲`);
