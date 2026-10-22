@@ -362,7 +362,9 @@ export class Ma2LayoutService {
           progress('previews', 0, plan.changes.length, `控台内部${nativeCopy ? '创建' : '写入'} ${plan.changes.length} 个 Cue`);
           // Copy /o takes the first source's attributes; a combined Cue already on the console keeps its own.
           const consoleCues = remoteXml && copyInPlace ? new Set(inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.map(cue => Number(cue.number))) : new Set<number>();
-          let scratch = 99999; while (directory.entries.some(entry => entry.target === scratch)) scratch -= 1;
+          // onPC 3.7 refused to create Sequence 9990 and above (99999 included); the free number right
+          // after the song's own Sequence was created there, so the scratch Sequence goes next to it.
+          let scratch = target + 1; while (directory.entries.some(entry => entry.target === scratch)) scratch += 1;
           for (const [changeIndex, change] of plan.changes.entries()) {
             const keep = remoteExport !== null && (change.refs?.length ?? 0) > 1 && consoleCues.has(Number(change.cue));
             if (keep) await this.call(connection, `${this.guard(layoutRequest)}${keepCueAttributes(remoteExport, target, change.cue, scratch, `${file}_attrs`)}return 'kept'`);
