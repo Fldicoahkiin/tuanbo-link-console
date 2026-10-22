@@ -81,6 +81,8 @@ export class NativeProgramPlayer {
 
   play(itemId: string, positionMs?: number, paused = false): Promise<void> {
     const config = this.dependencies.configuration(), token = ++this.epoch;
+    // The service discards another song's preselected picture for this play; that is not a failure.
+    if (this.selectedPreload?.itemId !== itemId) this.selectedPreload = null;
     this.mtcSuppressed = !this.state.mtcEnabled;
     const reuseSession = itemId === this.state.itemId && ['playing', 'paused'].includes(this.state.status);
     if (this.state.itemId !== itemId && this.state.status === 'playing') this.markPlayed();

@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type NativeObsPreload } from '@tb/schema';
 import { createObsProgramSnapshot, materialSceneNames } from '@tb/core/link';
 import { NativeObsPreloadPool } from './native-obs-preload';
-import type { NativeObsOutputs } from './native-obs-outputs';
+import { ObsPreparationCancelled, type NativeObsOutputs } from './native-obs-outputs';
 
 function setup() {
   const project = parseLinkProject({ ...createEmptyLinkProject('预备'), playbackSource: 'internal', obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '歌曲' }] });
@@ -42,7 +42,7 @@ it.each(['修订', '起点', '所有者'] as const)('%s 改变后先释放旧资
 it('许可等待中取消不创建素材；新一代可以明确重新准备', async () => {
   const t = setup(); let permit: () => void = () => { throw new Error('未设置许可'); };
   t.authorize.mockImplementationOnce(() => new Promise<void>(resolve => { permit = resolve; }));
-  const job = t.pool.preload(t.request); const rejected = expect(job).rejects.toThrow('取消');
+  const job = t.pool.preload(t.request); const rejected = expect(job).rejects.toBeInstanceOf(ObsPreparationCancelled);
   await vi.waitFor(() => expect(t.authorize).toHaveBeenCalledTimes(1));
   const cancel = t.pool.cancel(t.stop); permit(); await cancel; await rejected;
   expect(t.create).not.toHaveBeenCalled();

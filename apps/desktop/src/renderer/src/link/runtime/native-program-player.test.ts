@@ -145,6 +145,16 @@ it('选择节目提前预备画面且不出声；重复选择不重做，播放�
   await f.player.dispose();
 });
 
+it('播放另一首时后台丢弃预选节目的画面预备，这是正常切换，不提示“节目画面预备未完成”', async () => {
+  const f = fixture(); f.project.obsOutputMode = 'scenes';
+  let cancel: (error: Error) => void = () => { throw new Error('预备未开始'); };
+  f.api.preloadNativeObs.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { cancel = reject; }));
+  f.player.preloadSelected('song-1');
+  await f.player.play('song-0'); cancel(new Error('节目预备已取消')); await Promise.resolve(); await Promise.resolve();
+  expect(f.state().notice ?? '').not.toContain('节目画面预备未完成');
+  await f.player.dispose();
+});
+
 it('后台画面可用而音乐采集失败时保留播放并展示、记录采集原因', async () => {
   const f = fixture(); f.project.obsOutputMode = 'scenes';
   f.api.prepareNativeObs.mockImplementationOnce(request => Promise.resolve({ version: 1, sessionId: request.sessionId,

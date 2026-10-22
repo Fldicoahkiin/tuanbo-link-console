@@ -1,5 +1,5 @@
 import { nativeObsPreloadSchema, nativeObsStopSchema, type NativeObsPrepare, type NativeObsPreload, type NativeObsStop } from '@tb/schema';
-import type { NativeObsOutputs } from './native-obs-outputs';
+import { ObsPreparationCancelled, type NativeObsOutputs } from './native-obs-outputs';
 import { materialSceneTargets, projectFromObsSnapshot } from '@tb/core/link';
 
 type Entry = { origin: 'selection' | 'next'; request: NativeObsPreload; cancelled: boolean; outputs: NativeObsOutputs | null; task: Promise<void>; assertOwner: (() => void) | null };
@@ -41,7 +41,7 @@ export class NativeObsPreloadPool {
     };
     this.entry = entry;
     const current = (): void => {
-      if (entry.cancelled) throw new Error('下一节目预备已取消');
+      if (entry.cancelled) throw new ObsPreparationCancelled('下一节目预备已取消');
       if (entry.assertOwner) entry.assertOwner(); else assertCurrent();
     };
     entry.task = (async () => {
@@ -59,7 +59,7 @@ export class NativeObsPreloadPool {
     if (this.entry?.origin === 'selection' && this.entry.request.sessionId === request.sessionId && request.generation <= this.entry.request.generation) return Promise.reject(new Error('节目预备请求已过期'));
     const previous = this.discard();
     const entry: Entry = { origin: 'selection', request, cancelled: false, outputs: null, task: Promise.resolve(), assertOwner: null }; this.entry = entry;
-    const current = (): void => { if (entry.cancelled) throw new Error('节目预备已取消'); entry.assertOwner?.(); };
+    const current = (): void => { if (entry.cancelled) throw new ObsPreparationCancelled('节目预备已取消'); entry.assertOwner?.(); };
     entry.task = (async () => {
       await previous; current(); await this.dependencies.authorize(request); current();
       entry.outputs = this.dependencies.create(request, request.positionMs);
