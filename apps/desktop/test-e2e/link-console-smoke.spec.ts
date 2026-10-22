@@ -1955,21 +1955,24 @@ test('素材缩略图生成失败会明确显示原因而不是静默降级', as
   await expect(page.locator('.media-thumbnail.failed')).toContainText('失败');
 });
 
-test('新建工程不会静默覆盖当前未保存修改', async () => {
+test('新建工程不会静默覆盖当前未保存修改：取消保留当前节目，不保存才新建', async () => {
   await beginNewProject();
   await page.getByLabel('工程名称').fill('需要保护的工程');
   await page.getByRole('button', { name: '创建工程' }).click();
   await addEmptyProgram();
-  await expect(page.getByRole('button', { name: '保存工程', exact: true })).toBeVisible();
-
-  await page.evaluate(() => { window.confirm = () => false; });
+  await expect(page.locator('.project-save-status')).toBeVisible();
+  await application.evaluate(({ dialog }) => {
+    const answers = [2, 1];
+    Reflect.set(dialog, 'showMessageBox', () => Promise.resolve({ response: answers.shift() ?? 2, checkboxChecked: false }));
+  });
   await beginNewProject();
-  await expect(page.getByRole('heading', { name: '新建联动工程' })).toHaveCount(0);
-  await expect(page.locator('.p1-project-workspace')).toBeVisible();
-
-  await page.evaluate(() => { window.confirm = () => true; });
-  await beginNewProject();
+  await page.getByRole('button', { name: '创建工程' }).click();
   await expect(page.getByRole('heading', { name: '新建联动工程' })).toBeVisible();
+  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await page.getByRole('button', { name: '创建工程' }).click();
+  await expect(page.getByRole('heading', { name: '新建联动工程' })).toHaveCount(0);
+  await expect(page.locator('.p1-media-card')).toHaveCount(0);
+  await expect(page.locator('.project-save-status')).toBeHidden();
 });
 
 test('损坏的工作区布局会明确告警而不是静默清零', async () => {
