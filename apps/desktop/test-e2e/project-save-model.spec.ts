@@ -252,7 +252,8 @@ test('另存为写到新位置，原文件不变；之后的保存写新位置',
     await openFile(app, page, path);
     await renameProgram(page, '另存的修改');
     await answerDialogs(app, {}, copy);
-    await page.getByRole('button', { name: '另存为', exact: true }).click();
+    await page.locator('.project-file-menu > summary').click();
+    await page.getByRole('button', { name: '另存为…', exact: true }).click();
     await expect(unsaved(page)).toBeHidden();
     expect(await savedTitle(copy)).toBe('另存的修改');
     expect(await savedTitle(path)).toBe('原节目');
