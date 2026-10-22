@@ -16,7 +16,8 @@ let saveTail: Promise<unknown> = Promise.resolve();
  */
 export function saveDocument(mode: 'save' | 'save-as' = 'save'): Promise<SaveOutcome> {
   const result = saveTail.then(() => writeDocument(mode));
-  saveTail = result;
+  // The caller owns the outcome; the settled tail only keeps saves in order.
+  saveTail = result.then(() => undefined, () => undefined);
   return result;
 }
 

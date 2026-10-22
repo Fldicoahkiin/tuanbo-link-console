@@ -1,9 +1,12 @@
 import { chmod, cp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { createEmptyLinkProject, parseLinkProject, serializeLinkProject } from '@tb/schema';
 
+const execFileAsync = promisify(execFile);
 const desktopEntry = join(process.cwd(), process.env.TBLINK_E2E_BUILD_DIR ?? 'out', 'main/index.cjs');
 type Shown = { title: string; detail: string };
 
@@ -193,7 +196,10 @@ test('进程被强制结束后重新打开工程：提示恢复，恢复后内�
   await renameProgram(first.page, '崩溃前的修改');
   await expect.poll(() => recoveryCopies(crashed)).toHaveLength(1);
   const killed = first.app.waitForEvent('close');
-  first.app.process().kill('SIGKILL');
+  // Playwright starts Electron through a shell on Windows: end the whole tree, as a crash would.
+  const pid = first.app.process().pid;
+  if (process.platform === 'win32' && pid) await execFileAsync('taskkill', ['/F', '/T', '/PID', String(pid)]);
+  else first.app.process().kill('SIGKILL');
   await killed;
   expect(await savedTitle(path)).toBe('原节目');
   // A fresh profile with only the recovery copies: the restart must not reopen the

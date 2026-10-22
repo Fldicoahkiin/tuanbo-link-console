@@ -21,6 +21,12 @@ async function displayedLightingEventCount(): Promise<number> {
 }
 
 
+/** Edits stay in memory and the recovery copy until saved: write the project file and wait until it is clean. */
+async function saveWithShortcut(): Promise<void> {
+  await page.keyboard.press('Control+S');
+  await expect(page.locator('.project-save-status')).toBeHidden();
+}
+
 async function closeLightingTools(): Promise<void> {
   const close = page.getByRole('button', { name: '关闭灯光工具', exact: true });
   if (await close.isVisible()) await close.click();
@@ -344,6 +350,7 @@ test('节目轨道可明确关联 MA2、取消和撤销，并保存待同步绑�
   await page.keyboard.press('m');
   await expect(page.getByLabel('Cue 编号', { exact: true })).toHaveValue('1.250');
   await page.keyboard.press('Control+s');
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.lighting!.tracks[0]!.cueStamp).toEqual({ mode: 'fixed', cue: '1.250', sequence: 9901, executor: '99.219' });
 });
 
@@ -572,6 +579,7 @@ for (const nativeFixture of ['reaper-native-6.05', 'reaper-native-ramp-6.05', 'r
   await expect(page.getByRole('region', { name: '灯光导入预览' })).toBeVisible();
   await page.getByRole('button', { name: '确认导入', exact: true }).click();
   const readTrack = async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]?.lighting?.tracks.find((track) => track.name === 'TBLINK muted solo sample');
+  await saveWithShortcut();
   if (nativeFixture === 'reaper-native-6.05') await expect.poll(readTrack).toMatchObject({ muted: true, solo: true, clips: [{ start: 0, duration: 8000, events: [expect.objectContaining({ kind: 'note', at: 1000, duration: 1000, note: 60, velocity: 100 })] }] });
   else {
     await expect.poll(readTrack).toBeDefined();
@@ -607,8 +615,10 @@ for (const nativeFixture of ['reaper-native-6.05', 'reaper-native-ramp-6.05', 'r
   }
   await closeLightingTools(); await main.getByRole('button', { name: '编辑器', exact: true }).click();
   await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(readTrack).toBeUndefined();
   await page.getByRole('button', { name: '重做', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(readTrack).toBeDefined();
   const saved = parseLinkProject(JSON.parse(await readFile(destination, 'utf8')));
   expect(saved.rundown[0]!.lighting!.markers).toHaveLength(3);
@@ -646,11 +656,13 @@ test('灯光导入保留变速曲线与音符时间，读取失败清除旧预�
   await expect(page.getByRole('region', { name: '灯光导入预览' })).toHaveCount(0);
   await file.setInputFiles({ name: 'lighting.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(source)) });
   await page.getByRole('button', { name: '确认导入', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(async () => JSON.parse(await readFile(destination, 'utf8')) as unknown).toMatchObject({ rundown: [{ lighting: { tracks: [expect.anything(), expect.objectContaining({ name: '变速导入', clips: [expect.objectContaining({ timeLock: 'time', duration: 6000, events: expect.arrayContaining([
     expect.objectContaining({ kind: 'point', at: 2000, value: 50 }), expect.objectContaining({ kind: 'note', at: 1000, duration: 3000 })
   ]) })] })], tempos: saved.rundown[0]!.lighting.tempos } }] });
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
   await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(async () => (JSON.parse(await readFile(destination, 'utf8')) as typeof saved).rundown[0]!.lighting.tracks.length).toBe(1);
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   await openLightingTools('导入与导出');
@@ -677,12 +689,14 @@ E 960 80 3c 00
   await file.setInputFiles({ name: 'states.rpp', mimeType: 'text/plain', buffer: Buffer.from(rpp) });
   await expect(page.getByRole('region', { name: '灯光导入预览' })).toBeVisible();
   await page.getByRole('button', { name: '确认导入', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(async () => JSON.parse(await readFile(destination, 'utf8')) as unknown).toMatchObject({ rundown: [{ lighting: {
     tracks: [expect.anything(), expect.objectContaining({ name: 'RPP state', muted: true, solo: true, locked: true })],
     markers: expect.arrayContaining([expect.objectContaining({ name: 'Intro', startMs: 1000, endMs: null }), expect.objectContaining({ name: 'Chorus', startMs: 2000, endMs: 5000 })])
   } }] });
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
   await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(async () => (JSON.parse(await readFile(destination, 'utf8')) as typeof saved).rundown[0]!.lighting.markers).toHaveLength(0);
   const leftDirectory = testInfo.outputPath('left'); const rightDirectory = testInfo.outputPath('right');
   await mkdir(leftDirectory, { recursive: true }); await mkdir(rightDirectory, { recursive: true });
@@ -702,6 +716,7 @@ E 960 80 3c 00
   await file.setInputFiles([rppPath, rightMidi, leftMidi]);
   await expect(page.getByRole('region', { name: '灯光导入预览' })).toBeVisible();
   await page.getByRole('button', { name: '确认导入', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(async () => JSON.parse(await readFile(destination, 'utf8')) as unknown).toMatchObject({ rundown: [{ lighting: { tracks: [expect.anything(), expect.objectContaining({ clips: [expect.objectContaining({ events: [expect.objectContaining({ kind: 'note', note: 72 })] })] })] } }] });
   await writeFile(rppPath, externalRpp.replace('TEMPO 120', 'TEMPO 60\n<TEMPOENVEX\nACT 1 -1\nPT 0 60 0\nPT 4 180 1\n>'));
   await file.setInputFiles([rppPath, rightMidi, leftMidi]);
@@ -745,6 +760,7 @@ test('只做标记可在时间尺拖动改名删除并撤销保存', async ({}, 
   const destination = testInfo.outputPath('markers.tblink');
   await application.evaluate(({ dialog }, path) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: path }); }, destination);
   await page.keyboard.press('Control+s');
+  await saveWithShortcut();
   await expect.poll(async () => { try { return parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]?.lighting?.markers; } catch { return null; } }).toMatchObject([{ name: '副歌开始', startMs: 0, endMs: null }]);
   await page.screenshot({ path: testInfo.outputPath('timeline-markers.png') });
   await closeLightingTools(); await main.getByRole('button', { name: '设置', exact: true }).click();
@@ -871,6 +887,7 @@ test('渐变节拍设置移动节拍 Cue，撤销重做与重开保持一致', a
   await page.locator('.tempo-points > summary').click();
   await expect(page.getByLabel('变速点 2 变化方式')).toHaveCount(0);
   await page.getByLabel('变速点 1 变化方式').selectOption('linear');
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.lighting!.tempos[0]!.transition).toBe('linear');
   await page.screenshot({ path: testInfo.outputPath('tempo-ramp-settings.png') });
   await closeLightingTools(); await main.getByRole('button', { name: '编辑器', exact: true }).click();
@@ -1052,6 +1069,7 @@ test('灯光直接在时间线打点拖动，歌曲时间一致，自动保存�
   await expect(cueNumber).toHaveCount(0);
   await expect(page.getByLabel('序列', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('执行器', { exact: true })).toBeVisible();
+  await saveWithShortcut();
   await expect.poll(async () => JSON.parse(await readFile(destination, 'utf8')) as unknown).toMatchObject({ rundown: [{ lighting: { tracks: [{ clips: [{ events: [{ action: 'go' }] }] }] } }] });
   await ma2Action.selectOption('off');
   await expect(cueNumber).toHaveCount(0);
@@ -1086,6 +1104,7 @@ test('灯光直接在时间线打点拖动，歌曲时间一致，自动保存�
   await point.click();
   await page.keyboard.press('m');
   await expect.poll(displayedLightingEventCount).toBe(2);
+  await saveWithShortcut();
   await expect.poll(async () => JSON.parse(await readFile(destination, 'utf8')) as unknown).toMatchObject({ schemaVersion: 2, rundown: [{ lighting: { tracks: [{ clips: [{ events: [expect.objectContaining({ kind: 'ma2', label: '主歌亮起' }), expect.objectContaining({ kind: 'ma2', cue: '2' })] }] }] } }] });
   await expect(page.getByLabel('灯光点时间显示')).toBeVisible();
   await expect(page.locator('.lighting-timeline-point:visible')).toHaveCount(1);
@@ -1123,6 +1142,7 @@ test('灯光直接在时间线打点拖动，歌曲时间一致，自动保存�
   await page.locator('.lighting-heading').filter({ has: page.getByRole('button', { name: '删除灯光轨道', exact: true }) }).click({ button: 'right' });
   await page.locator('.resource-context-menu').getByRole('button', { name: '删除灯光轨道', exact: true }).click();
   await expect(page.locator('.lighting-lane')).toHaveCount(0);
+  await saveWithShortcut();
   await expect.poll(async () => JSON.parse(await readFile(destination, 'utf8')) as unknown).toMatchObject({ rundown: [{ lighting: { tracks: [] } }] });
   await page.reload();
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
@@ -1166,6 +1186,7 @@ test('打开编辑器保留 OBS 原场景且不产生整理图层的撤销步骤
   await expect(name).toHaveValue('旧打点');
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect(name).toHaveValue('修改打点');
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.cues[1]!.name).toBe('修改打点');
   const saved = parseLinkProject(JSON.parse(await readFile(destination, 'utf8')));
   expect(saved.rundown[0]!.cues[0]!.actions).toEqual(project.rundown[0]!.cues[0]!.actions);
@@ -1246,6 +1267,7 @@ test('节目属性拒绝空名称，无修改不产生撤销，改名备注可�
   await expect(undo).toBeDisabled();
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await page.getByRole('button', { name: '重做', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.notes).toBe('修改备注');
   await page.reload();
   await openProgramProperties();
@@ -1472,6 +1494,7 @@ test('编辑器共用正式播放器，打点和菜单切换不中断，暂停�
   await expect(page.locator('.lighting-clip')).toHaveCount(2);
   await page.locator('.lighting-track-name').click();
   await page.locator('.reference-timeline').press('KeyM');
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown[0]?.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length).toBe(2);
   await expect(page.locator('.lighting-combined-lane')).toHaveCount(1);
   await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
@@ -1492,6 +1515,7 @@ test('编辑器共用正式播放器，打点和菜单切换不中断，暂停�
   expect(await application.evaluate((): unknown => Reflect.get(globalThis, '__transportActions'))).toEqual(Array.from({ length: 3 }, () => expect.objectContaining({ kind: 'obs.setProgramScene', sceneName: '测试场景' })));
   await page.getByRole('button', { name: '停止时间线', exact: true }).click();
   await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible();
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown[0]?.lighting?.tracks[0]?.clips[0]?.events.length).toBe(1);
   await page.screenshot({ path: testInfo.outputPath('shared-transport.png') });
 });
@@ -1615,6 +1639,7 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
   await expect(page.getByLabel('工程输出分辨率')).toHaveCount(0);
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '场景工作方式', exact: true }).click();
   await expect(page.getByText('分辨率、画面方向在 OBS 设置。素材与机位时长在时间线调整。', { exact: true })).toBeVisible();
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).outputCanvas).toEqual({ width: 1080, height: 1920 });
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '时间码同步', exact: true }).click();
   await expect(page.getByLabel('工程帧率')).toHaveValue('30');
@@ -1726,7 +1751,7 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
   await expect(page.locator('.timeline-clip')).toHaveCount(1);
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect(page.locator('.timeline-clip')).toHaveCount(2);
-  await expect(page.locator('.project-save-status')).toBeHidden();
+  await saveWithShortcut();
   await page.screenshot({ path: testInfo.outputPath('obs-scene-editor.png') });
   await page.reload();
   await page.getByRole('button', { name: /编辑器/ }).click();
@@ -1914,6 +1939,7 @@ test('素材缩略图生成失败会明确显示原因而不是静默降级', as
   await createHevcFixture(mediaPath);
   await page.locator('.resource-library input[type="file"]').setInputFiles(mediaPath);
   await expect(page.locator('.asset-row').filter({ hasText: 'thumbnail-source.mp4' })).toBeVisible({ timeout: 30_000 });
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).mediaAssets.length).toBe(1);
 
   await application.evaluate(({ ipcMain }) => {
@@ -2185,6 +2211,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await page.getByRole('button', { name: '导入歌曲 / P1', exact: true }).click();
   await page.getByRole('button', { name: /本地音频/ }).click();
   await page.getByLabel('导入本地音频文件').setInputFiles(audioPath);
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown.length).toBe(1);
   await closeSettingsDialog();
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -2254,6 +2281,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await songVolume.fill('45'); await songVolume.press('Enter');
   await openProgramProperties();
   await expect(page.getByRole('spinbutton', { name: '歌曲音量', exact: true })).toHaveValue('45');
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown[0]?.playback?.volume).toBe(45);
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown[0]?.playback?.mtcOffsetMs).toBe(3723567);
   const midiNotice = page.locator('.toast.error').filter({ hasText: /Windows MIDI (?:端口枚举未响应|服务正在停止)/ });
@@ -2265,7 +2293,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await expect(page.locator('.p1-project-workspace')).toBeHidden();
   await page.getByRole('button', { name: /节目单/ }).first().click();
 
-  await expect(page.locator('.project-save-status')).toBeHidden();
+  await saveWithShortcut();
   await page.reload(); await expect(page.getByRole('button', { name: '播放主控 音乐、画面与灯光' })).toHaveCount(0);
   await openProgramProperties();
   await expect(page.getByRole('spinbutton', { name: '歌曲音量', exact: true })).toHaveValue('45');
@@ -2289,7 +2317,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await expect(page.getByRole('button', { name: '切换为本软件播放', exact: true })).toBeVisible();
 });
 
-test('已保存工程会自动保存修改并在重新打开时恢复', async ({}, testInfo) => {
+test('已保存工程的修改在保存后重新打开仍然存在', async ({}, testInfo) => {
   await beginNewProject();
   await page.getByLabel('工程名称').fill('自动恢复工程');
   await page.getByRole('button', { name: '创建工程' }).click();
@@ -2302,6 +2330,7 @@ test('已保存工程会自动保存修改并在重新打开时恢复', async ({
 
   await addEmptyProgram();
   await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown.length).toBe(1);
 
   await page.reload();
@@ -2352,7 +2381,6 @@ test('Cue 时间线的统一图层、取消拖动、适配、滚动和播放键�
   await addEmptyProgram();
   const firstAudioPath = testInfo.outputPath('timeline-a.wav');
   await createAudioFixture(firstAudioPath);
-  await expect(page.locator('.document-save-button')).toHaveCount(0);
   await openProgramProperties();
   const chooseAudio = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: '添加音频', exact: true }).click();
@@ -2388,7 +2416,7 @@ test('Cue 时间线的统一图层、取消拖动、适配、滚动和播放键�
   await expect(page.locator('.timeline-clip.audio')).toHaveCount(2);
   await expect(page.locator('.visual-layer-heading')).toHaveCount(2);
   await expect(page.locator('audio.timeline-audio-engine')).toHaveCount(1, { timeout: 10_000 });
-  await expect(page.locator('.project-save-status')).toBeHidden();
+  await saveWithShortcut();
   const savedAudioProject = parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8')));
   const topAudio = savedAudioProject.mediaAssets.find((asset) => asset.name === 'timeline-b.wav');
   expect(topAudio).toBeDefined();
@@ -2503,20 +2531,33 @@ async function beginNewProject(): Promise<void> {
   await page.getByRole('button', { name: '新建独立工程', exact: true }).click();
 }
 
-test('新建独立工程先保存原节目，取消保存不会清空当前内容', async ({}, testInfo) => {
+test('新建独立工程前询问未保存修改：保存框取消会再次询问，取消不会清空当前内容，保存后再新建', async ({}, testInfo) => {
   await beginNewProject();
   await page.getByLabel('工程名称').fill('需要保留的节目单');
   await page.getByRole('button', { name: '创建工程', exact: true }).click();
   await addEmptyProgram();
-  await page.evaluate(() => { window.confirm = () => true; });
-  await application.evaluate(({ dialog }) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: true, filePath: '' }); });
+  // 保存, then cancel the location: asked again; 取消 keeps the current programme.
+  await application.evaluate(({ dialog }) => {
+    const answers = [0, 2], titles: string[] = [];
+    Reflect.set(globalThis, '__unsavedTitles', titles);
+    Reflect.set(dialog, 'showMessageBox', (...args: unknown[]) => {
+      const options = args.at(-1) as { title?: string };
+      titles.push(options.title ?? '');
+      return Promise.resolve({ response: answers.shift() ?? 2, checkboxChecked: false });
+    });
+    Reflect.set(dialog, 'showSaveDialog', () => Promise.resolve({ canceled: true, filePath: '' }));
+  });
   await beginNewProject();
   await page.getByLabel('工程名称').fill('另一份节目单');
   await page.getByRole('button', { name: '创建工程', exact: true }).click();
+  await expect.poll(() => application.evaluate(() => [...(Reflect.get(globalThis, '__unsavedTitles') as string[])])).toEqual(['工程尚未保存', '工程尚未保存']);
   await expect(page.getByRole('heading', { name: '新建联动工程' })).toBeVisible();
   await expect(page.locator('.p1-media-card')).toHaveCount(1);
   const originalPath = testInfo.outputPath('preserved.tblink');
-  await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath }); }, originalPath);
+  await application.evaluate(({ dialog }, filePath) => {
+    Reflect.set(dialog, 'showMessageBox', () => Promise.resolve({ response: 0, checkboxChecked: false }));
+    Reflect.set(dialog, 'showSaveDialog', () => Promise.resolve({ canceled: false, filePath }));
+  }, originalPath);
   await page.getByRole('button', { name: '创建工程', exact: true }).click();
   await expect(page.getByRole('heading', { name: '新建联动工程' })).toHaveCount(0);
   await expect(page.locator('.p1-media-card')).toHaveCount(0);
@@ -2654,6 +2695,7 @@ test('编辑器恢复最后选择的节目，顶部改名自动保存，删除�
   await page.getByRole('textbox', { name: '当前节目名称', exact: true }).fill('第二幕');
   await page.getByRole('textbox', { name: '当前节目名称', exact: true }).press('Enter');
   await expect(page.getByRole('button', { name: '修改节目名称：第二幕', exact: true })).toBeVisible();
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(testInfo.outputPath('editor-selection.tblink'), 'utf8'))).rundown.at(-1)?.title).toBe('第二幕');
   await page.screenshot({ path: testInfo.outputPath('editor-program-name.png') });
   await page.reload();
@@ -2737,6 +2779,7 @@ test('独立素材场景同步、场景长度拖动与低功率切换', async ({
   await page.getByLabel('Cue OBS 转场', { exact: true }).selectOption('Fade');
   await page.getByLabel('Cue 过渡时长（毫秒）', { exact: true }).fill('650');
   await page.getByLabel('Cue 过渡时长（毫秒）', { exact: true }).press('Enter');
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]?.cues[0]?.actions[0]).toMatchObject({ transition: { name: 'Fade', durationMs: 650 } });
   await expect(page.locator('.project-save-status')).not.toBeVisible();
   const project = JSON.parse(await readFile(destination, 'utf8')) as { rundown: { cues: { actions: { kind: string; sceneName: string }[] }[] }[] };
@@ -2782,7 +2825,7 @@ test('独立素材场景同步、场景长度拖动与低功率切换', async ({
   await expect(page.locator('.reference-stage')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('scene-duration-and-preview.png') });
   await expect(page.locator('.timeline-cue')).toHaveCount(1);
-  await expect(page.locator('.project-save-status')).toBeHidden();
+  await saveWithShortcut();
   const saved = parseLinkProject(JSON.parse(await readFile(destination, 'utf8')));
   const material = saved.mediaAssets[0]!;
   const materialScene = materialSceneNames(saved.projectId, material).sceneName;
@@ -2794,7 +2837,7 @@ test('独立素材场景同步、场景长度拖动与低功率切换', async ({
   await page.getByRole('button', { name: /^OBS 场景/ }).click();
   await page.locator('.obs-camera-row').filter({ hasText: materialScene }).dblclick();
   await expect(page.locator('.timeline-cue')).toHaveCount(1);
-  await expect(page.locator('.project-save-status')).toBeHidden();
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.referenceMediaClips.length).toBe(1);
   const mediaClip = parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.referenceMediaClips[0]!;
   expect(mediaClip.assetId).toBe(material.id);
@@ -3390,8 +3433,10 @@ test('无灯光轨道的节目可以从节目同步导入并撤销', async ({}, 
   await openLightingTools('节目同步');
   await expect(page.getByRole('dialog', { name: '节目同步' })).toContainText('未编排节目');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902'); await page.getByRole('button', { name: '读取灯光编排', exact: true }).click(); await page.getByRole('button', { name: '加入当前节目', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.lighting!.tracks.length).toBeGreaterThan(0);
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click(); await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.lighting!.tracks.length).toBe(0);
 });
 
