@@ -192,7 +192,26 @@ it('已绑定歌曲换一个 Cue 的内容：在控台内 Copy，不上传歌曲
   expect(copied).toHaveLength(1);
   expect(inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues.map(cue => cue.name)).toEqual(Array.from({ length: 8 }, (_, index) => `段落 ${index + 1}`));
   expect(fake.ops.filter(op => op.startsWith('SEQUENCE ') && op !== 'SEQUENCE 9000')).toEqual([]);
-  expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(2);
+  expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(1);
+});
+it('Copy 路径不再二次读取来源：来源在读取后被改，回读校验报出是哪个来源，结果待核对，写前备份保留且不进轮转', async () => {
+  const { song, sourceNumber, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const read = fake.bridge.exchange;
+  fake.bridge.exchange = vi.fn<Ma2OnpcBridge['exchange']>(async (operation, target, ...rest) => {
+    const result = await read(operation, target, ...rest);
+    // The operator edits the source on the console right after the program read it.
+    if (operation === 'SEQCUES' && target === sourceNumber) sequences.set(sourceNumber, sequences.get(sourceNumber)!.replace('<Value>70</Value>', '<Value>71</Value>'));
+    return result;
+  });
+  fake.bridge.request = async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await fake.bridge.exchange(...args)).response;
+  noBackups.record.mockClear();
+  const sync = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song);
+  await expect(sync).rejects.toThrow(/写入结果待核对[\s\S]*tblink_library_[a-f0-9]{32}\.xml 已保留[\s\S]*来源 序列 \d+ · Cue 1\.000[\s\S]*控台上的来源可能在同步期间被改过/);
+  expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(1);
+  const backup = [...fake.files.keys()].find(name => name.startsWith('tblink_library_'));
+  expect(backup).toBeDefined();
+  expect(noBackups.record).not.toHaveBeenCalled();
 });
 it('已绑定歌曲把已有 Cue 换成两个来源的组合：先用控台导出复原该 Cue 自身属性，两个来源都 /merge', async () => {
   const { song, sequences } = boundSong();

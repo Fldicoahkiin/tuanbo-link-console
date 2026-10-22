@@ -313,6 +313,7 @@ export class Ma2LayoutService {
             heldSequenceName: plan.conflicts.some(conflict => conflict.field === 'sequence-name') }
         }]));
       };
+      let copiedOnConsole = false;
       if (changed && namesOnly) {
         progress('previews', 0, changes.length + 1, '同步歌曲与 Cue 名称');
         await checkpoint(remoteXml);
@@ -338,13 +339,16 @@ export class Ma2LayoutService {
         // emptied Cue and a full clear have nothing on the console to copy, so they import the snapshot.
         const copyInPlace = remoteXml !== null && !clearing && plan.changes.every(change => !change.restore && (change.refs === undefined || change.refs.length > 0 && change.refs.every(ref => ref.sequence !== target)));
         const uploaded = nativeCopy ? editMa2SongSequence(emptyMa2SequenceXml(target, directory.version), plan.name, changes.map(change => ({ cue: change.cue, name: change.name, sources: [] })), []) : desired;
+        copiedOnConsole = copyInPlace;
         if (!copyInPlace) await this.prepareXml(connection, layoutRequest, file, uploaded, (completed, total) => progress('raw', completed, total, '传输歌曲结构'));
         const replacingAll = clearing && changes.length > 0;
         if (replacingAll) await this.prepareXml(connection, layoutRequest, `${file}_clear`, editMa2SongSequence(remoteXml, plan.name, [], plan.deletions));
         if (remoteExport) backupFile = `${remoteExport}.xml`;
         if (!executorPage && !beforeLayout) await this.prepareXml(connection, layoutRequest, `${file}_layout`, emptyMa2LayoutXml(layoutRequest.layout, directory.version));
         // The song's own Sequence is compared with its console export inside the write command below.
-        for (const [number, xml] of sources) if (Number(number) !== target && canonical(await bridge.request('SEQCUES', Number(number), sourceCues(Number(number)))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
+        // Copy takes each source Cue as the console holds it at that moment, so a source edited since
+        // it was read shows up in the read-back check below; only the uploaded snapshot reads it twice.
+        if (!copyInPlace) for (const [number, xml] of sources) if (Number(number) !== target && canonical(await bridge.request('SEQCUES', Number(number), sourceCues(Number(number)))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
         await checkpoint(remoteXml ?? uploaded, nativeCopy || copyInPlace ? ma2SongCreationStages(remoteXml ?? uploaded, changes) : undefined);
         const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${remoteExport}')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
         // Import /o can retain the previous native step table when a numbered
@@ -404,7 +408,13 @@ export class Ma2LayoutService {
         const actual = report.cues.find(cue => Number(cue.number) === Number(change.cue));
         const expected = expectedReport?.cues.find(cue => Number(cue.number) === Number(change.cue));
         const normalize = (value: Map<string, Record<string, string>>) => JSON.stringify([...value].sort(([a],[b]) => a.localeCompare(b)).map(([key,layers]) => [key,Object.entries(layers).sort(([a],[b]) => a.localeCompare(b))]));
-        if (!actual || !expected || actual.name !== change.name || normalize(actualData.get(actual.index)!) !== normalize(expectedData.get(expected.index)!)) throw new Error(`Cue ${change.cue} 内容或名称回读未通过`);
+        if (!actual || !expected || actual.name !== change.name) throw new Error(`Cue ${change.cue} 名称回读未通过`);
+        if (normalize(actualData.get(actual.index)!) !== normalize(expectedData.get(expected.index)!)) {
+          const refs = plan.changes.find(value => Number(value.cue) === Number(change.cue))?.refs ?? [];
+          throw new Error(copiedOnConsole && refs.length
+            ? `Cue ${change.cue} 的灯光内容与来源 ${refs.map(ref => `序列 ${ref.sequence} · Cue ${ref.cue}`).join(' + ')} 回读不一致：控台上的来源可能在同步期间被改过，请核对来源后重新同步`
+            : `Cue ${change.cue} 内容回读未通过`);
+        }
       }
       if (plan.deletions.some(number => actualHashes.has(number))) throw new Error('歌曲 Cue 删除回读未通过');
       const executor = executorPage ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, request.binding?.executor, this.isPlaying, recoveringCreation) : undefined;
