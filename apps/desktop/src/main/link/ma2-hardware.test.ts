@@ -177,10 +177,25 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     const service = new Ma2LayoutService(resolve(await mkdtemp(join(tmpdir(), 'tblink-song-probe-')), 'layouts.json'), () => false);
     const base = { network, expectedSource, projectId: randomUUID(), itemId: 'probe', settings: { layout: 999, name: 'TBLINK', nextSequence: sequence, columns: 8, executorPage: page }, name: '联动探针歌曲' };
     const first = await step('create', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), points }));
+    // The operator tunes the first Cue's fade on the console; the next sync adopts it into the baseline.
+    const tuned = first.binding.points[0]!.cue;
+    const marker = `TBLINK_FADE_${randomBytes(16).toString('hex')}:`;
+    expect(await raw.command(`Lua "gma.cmd('Assign Sequence ${sequence} Cue ${tuned} /fade=7');gma.echo('${marker}ok')"`, text => ma2ResponseLine(text, marker))).toBe('ok');
     const second = await step('changeOneCue', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: first.binding,
       points: first.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 2 ? ref(0) : [{ sequence, cue: point.cue, delayMs: 0 }] })) }));
+    const fadeOf = (xml: string): string | undefined => {
+      const [whole, fraction = ''] = tuned.split('.');
+      const cue = xml.split('<Cue index=').find(part => part.includes(`<Number number="${Number(whole)}" sub_number="${Number(fraction.padEnd(3, '0'))}"`));
+      return /<CuePart\b[^>]*\bbasic_fade="([^"]*)"/.exec(cue ?? '')?.[1];
+    };
+    expect(fadeOf(await bridge.request('SEQUENCE', sequence))).toBe('7');
+    // Combining two sources into that Cue keeps the console's fade instead of the first source's.
+    const combined = await step('combineExisting', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: second.binding,
+      points: second.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 0 ? [...ref(0), ...ref(1)] : [{ sequence, cue: point.cue, delayMs: 0 }] })) }));
+    expect(combined.changed).toBe(true);
+    expect(fadeOf(await bridge.request('SEQUENCE', sequence))).toBe('7');
     const watch = new Ma2SongWatch(() => false);
-    const check = { network, expectedSource, sequence, executor: second.binding.executor!, revision: second.remoteRevision! };
+    const check = { network, expectedSource, sequence, executor: combined.binding.executor!, revision: combined.remoteRevision! };
     await step('firstCheck', () => watch.changed(connection, bridge, check));
     const unchanged = await step('cachedCheck', () => watch.changed(connection, bridge, check));
     await mkdir(resolve('artifacts/ma2-hardware-diagnostics'), { recursive: true });
@@ -281,7 +296,7 @@ it.runIf(process.env.TBLINK_MA2_COPY_PROBE === '1' && Boolean(process.env.TBLINK
     // console's own export without CueDatas, imported into a scratch Sequence and copied back with /o;
     // the sources are then merged, and /merge keeps the target's attributes.
     let scratch = T + 1; while (directory.entries.some(entry => entry.target === scratch)) scratch += 1;
-    await lua('define-strip', "_G.TBPX=function(c) return (c:gsub('<CueDatas>.-</CueDatas>',''):gsub('<CueDatas%s*/>',''):gsub(' index=.%d+.',''):gsub('%s+',' ')) end;TBPR='ok'");
+    await lua('define-strip', "_G.TBPX=function(c) return (c:gsub('<CueDatas>.-</CueDatas>',''):gsub('<CueDatas%s*/>',''):gsub(' index=.%d+.',''):gsub('<Number number=.-/>',''):gsub('%s+',' ')) end;TBPR='ok'");
     await lua('define-attributes', "_G.TBPY=function(t,w) local q=string.char(34);local p=gma.show.getvar('PATH')..'/importexport/';gma.cmd('Export Sequence '..t..' tblink_probe_src /o');local f=io.open(p..'tblink_probe_src.xml','rb');local x=f:read('*a');f:close();os.remove(p..'tblink_probe_src.xml');local i=x:find('<Number number='..q..w..q..' sub_number='..q..'0'..q,1,true);local a=1;while true do local j=x:find('<Cue index=',a,true);if not j or j>i then break end;a=j+1 end;local c=x:sub(a-1,x:find('</Cue>',i,true)+5);c=c:gsub('<CueDatas>.-</CueDatas>',''):gsub('<CueDatas%s*/>',''):gsub('<Cue index=.%d+.','<Cue index='..q..'1'..q,1);return x:sub(1,x:find('<Cue index=',1,true)-1)..c..'</Sequ></MA>' end;TBPR='ok'");
     await lua('define-reset', "_G.TBPZ=function(t,w,s) local p=gma.show.getvar('PATH')..'/importexport/';local o=io.open(p..'tblink_probe_attrs.xml','wb');o:write(TBPY(t,w));o:close();gma.cmd('Import tblink_probe_attrs.xml At Sequence '..s..' /nc');local ok=not (gma.show.getobj.handle('Sequence '..s..' Cue '..w)==nil);if ok then gma.cmd('Copy Sequence '..s..' Cue '..w..' At Sequence '..t..' Cue '..w..' /o /nc') end;gma.cmd('Delete Sequence '..s..' /nc');os.remove(p..'tblink_probe_attrs.xml');return tostring(ok)..','..tostring(gma.show.getobj.handle('Sequence '..s)==nil) end;TBPR='ok'");
     for (const option of ['/delay=2', '/outfade=3', '/outdelay=1', '/trig=Time', '/trigtime=4']) await lua(`assign ${option}`, `gma.cmd('Assign Sequence ${T} Cue 1 ${option}');TBPR=TBPS(${T},'1','0')`);
