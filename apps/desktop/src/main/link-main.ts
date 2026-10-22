@@ -1,5 +1,5 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
-import { projectArchiveSettingsActionSchema } from '@tb/schema';
+import { projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyWriteSchema } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
 import { ma2SongCheckRequestSchema, ma2SongSyncRequestSchema } from '@tb/schema';
 import { materialSceneTargets } from '@tb/core/link';
@@ -63,6 +63,7 @@ import { readFile, stat, statfs, mkdtemp, writeFile, mkdir } from 'node:fs/promi
 import { assetResponse } from './link/asset-response';
 import { ProjectDocumentService } from './link/project-document-service';
 import { ProjectArchiveSettingsStore, projectArchives } from './link/project-archives';
+import { RecoveryCopies } from './link/recovery-copies';
 import { cpus, release, totalmem, freemem } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
@@ -1101,6 +1102,10 @@ function registerIpc(
     }
     return destination;
   });
+  const recoveryCopies = new RecoveryCopies(join(app.getPath('userData'), 'link-recovery'), projectDocuments);
+  // The renderer records a failed write once, with the reason shown to the operator.
+  handle('link:write-recovery-copy', (_event, payload: unknown) => recoveryCopies.write(recoveryCopyWriteSchema.parse(payload)));
+  handle('link:discard-recovery-copy', (_event, payload: unknown) => recoveryCopies.discard(recoveryCopyDiscardSchema.parse(payload)));
   const archiveSettings = new ProjectArchiveSettingsStore(join(app.getPath('userData'), 'link-integrations', 'archive-settings.json'), join(app.getPath('documents'), '团播联动台', '存档'));
   // A failed trim leaves the extra archive in place and is logged; it never blocks the sync that archived.
   handle('link:project-archives', (_event, payload: unknown) => projectArchives(payload, projectDocuments, archiveSettings, path => shell.showItemInFolder(path), async path => {

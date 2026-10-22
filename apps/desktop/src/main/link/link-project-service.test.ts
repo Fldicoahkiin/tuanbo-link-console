@@ -33,6 +33,15 @@ describe('LinkProjectService', () => {
     expect(JSON.parse(await readFile(backup,'utf8'))).toEqual(original);
     await service.save(path,{...next,name:'新名字'});expect(JSON.parse(await readFile(backup,'utf8'))).toEqual(original);
   });
+  it('副本写入不创建升级备份，也不改动同目录的工程文件', async () => {
+    const directory=await createTestDirectory();const copy=join(directory,'copy.tblink');cleanupFiles.push(copy);
+    const project={...createEmptyLinkProject('副本'),schemaVersion:2 as const,ma2MaterialLibrary:{version:2 as const,source:'local',userLibrary:createLightingUserLibrary()}};
+    await writeFile(copy,JSON.stringify(createEmptyLinkProject('旧副本')));
+    await new LinkProjectService().writeCopy(copy,project);
+    expect(JSON.parse(await readFile(copy,'utf8'))).toMatchObject({name:'副本'});
+    await expect(readFile(`${copy}.before-lighting-library.bak`,'utf8')).rejects.toThrow();
+    await expect(new LinkProjectService().writeCopy(join(directory,'copy.json'),project)).rejects.toThrow('.tblink');
+  });
   it('拒绝复用被篡改的同名素材，避免把损坏文件当作原画质素材', async () => {
     const directory = await createTestDirectory();
     cleanupDirectories.push(join(directory, 'assets'), join(directory, 'assets', 'reference-media'));

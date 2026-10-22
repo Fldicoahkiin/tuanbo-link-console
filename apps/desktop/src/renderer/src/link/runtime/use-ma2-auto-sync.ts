@@ -10,7 +10,6 @@ import { reportCoordinatorError } from './runtime-action-log';
 import { archiveMa2Project } from './ma2-project-archive';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
-import { savePendingMa2Edits } from './ma2-local-save';
 
 export { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 
@@ -37,14 +36,6 @@ export async function enableMa2NameSync(documentId: number): Promise<void> {
 }
 
 export function useMa2AutoSync(playing: boolean, notify: (message: string, tone?: 'info' | 'error') => void): void {
-  useEffect(() => {
-    let changedAt = 0;
-    const unsubscribe = useDocumentStore.subscribe((state, previous) => {
-      if (state.project !== previous.project) changedAt = performance.now();
-    });
-    const timer = setInterval(() => { if (performance.now() - changedAt >= 750) void savePendingMa2Edits(); }, 500);
-    return () => { unsubscribe(); clearInterval(timer); };
-  }, []);
   useEffect(() => { useMa2AutoSyncStore.setState({ timelinePlaying: playing }); return () => { useMa2AutoSyncStore.setState({ timelinePlaying: false }); }; }, [playing]);
   const method = useMa2ModeStore((state) => state.method);
   const playingRef = useRef(playing); playingRef.current = playing;

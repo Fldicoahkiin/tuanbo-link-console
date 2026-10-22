@@ -268,6 +268,10 @@ export type LinkDesktopApi = {
   pickOpenProject(): Promise<LinkProjectFile | null>;
   openProject(path: string): Promise<LinkProjectFile>;
   saveProject(path: string | null, project: LinkProject): Promise<string | null>;
+  /** Unsaved edits go to a recovery copy in the program's data folder, never over the project file. */
+  writeRecoveryCopy(payload: import('@tb/schema').RecoveryCopyWrite): Promise<void>;
+  /** Removes a recovery copy; with `keep`, a copy that session wrote after that revision stays. */
+  discardRecoveryCopy(payload: import('@tb/schema').RecoveryCopyDiscard): Promise<boolean>;
   importReferenceAudio(payload: { projectPath: string; sourcePath: string; durationMs: number }): Promise<ReferenceAudio>;
   resolveReferenceAudioUrl(payload: { projectPath: string; relativePath: string }): Promise<string>;
   importMediaAsset(payload: {

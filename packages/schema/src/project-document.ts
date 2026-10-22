@@ -3,6 +3,17 @@ import { z } from 'zod';
 export const projectDocumentTextSchema = z.string().min(1).max(256 * 1024 * 1024);
 export const projectDocumentEnvelopeSchema = z.object({ version: z.literal(1), path: z.string().min(1).max(4096), content: projectDocumentTextSchema }).strict();
 
+/** A document's recovery copy belongs to its project file, or to an unnamed project by id. */
+const recoveryOwner = { projectPath: z.string().min(1).max(4096).nullable(), projectId: z.string().min(1).max(200) };
+/** Unsaved edits written beside the program's data, never over the project file. */
+export const recoveryCopyWriteSchema = z.object({ version: z.literal(1), ...recoveryOwner, name: z.string().max(512),
+  sessionId: z.uuid(), revision: z.number().int().nonnegative(), content: projectDocumentTextSchema }).strict();
+/** With `keep`, a copy that session wrote after that revision stays: it holds edits made after the save. */
+export const recoveryCopyDiscardSchema = z.object({ version: z.literal(1), ...recoveryOwner,
+  keep: z.object({ sessionId: z.uuid(), revision: z.number().int().nonnegative() }).strict().optional() }).strict();
+export type RecoveryCopyWrite = z.infer<typeof recoveryCopyWriteSchema>;
+export type RecoveryCopyDiscard = z.infer<typeof recoveryCopyDiscardSchema>;
+
 const archiveBase = z.object({ version: z.literal(1), projectPath: z.string().min(1).max(4096) });
 export const projectArchiveRequestSchema = z.discriminatedUnion('action', [
   archiveBase.extend({ action: z.literal('create'), content: projectDocumentTextSchema, reason: z.enum(['manual', 'before-sync']) }).strict(),

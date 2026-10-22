@@ -4,7 +4,7 @@ import { projectDocumentRequestSchema, projectDocumentResponseSchema, type Proje
 
 type Payload = ProjectDocumentRequest extends infer T ? T extends ProjectDocumentRequest ? Omit<T, 'version' | 'id'> : never : never;
 type Pending = { kind: Payload['kind']; resolve: (result: ProjectDocumentResponse) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
-const resultKinds = { open: 'opened', save: 'saved', inspect: 'inspected' } as const;
+const resultKinds = { open: 'opened', save: 'saved', copy: 'saved', inspect: 'inspected' } as const;
 
 export class ProjectDocumentService {
   private worker: Worker | null = null;
@@ -26,6 +26,10 @@ export class ProjectDocumentService {
   async save(path: string, content: string): Promise<void> {
     const response = await this.request({ kind: 'save', path, content });
     if (response.kind !== 'saved') throw new Error('工程保存返回类型不正确');
+  }
+  async writeCopy(path: string, content: string): Promise<void> {
+    const response = await this.request({ kind: 'copy', path, content });
+    if (response.kind !== 'saved') throw new Error('工程副本写入返回类型不正确');
   }
   private request(payload: Payload): Promise<ProjectDocumentResponse> {
     if (this.failure) return Promise.reject(this.failure);

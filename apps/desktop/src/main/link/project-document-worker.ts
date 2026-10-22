@@ -18,6 +18,10 @@ async function execute(request: ProjectDocumentRequest): Promise<ProjectDocument
       await projects.save(request.path, project);
       return { ...envelope, kind: 'saved' };
     }
+    case 'copy': {
+      await projects.writeCopy(request.path, parseLinkProject(JSON.parse(request.content)));
+      return { ...envelope, kind: 'saved' };
+    }
   }
 }
 parentPort?.on('message', (value: unknown) => {

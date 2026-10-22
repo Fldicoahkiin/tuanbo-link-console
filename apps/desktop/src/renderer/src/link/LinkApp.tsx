@@ -33,6 +33,7 @@ import { useIntegrationStore } from './stores/integration-store';
 import { useRuntimeStore } from './stores/runtime-store';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 import { useProjectPersistence } from './useProjectPersistence';
+import { useRecoveryCopyWriter } from './recovery-copy-writer';
 import { useP1AutoFollow } from './useP1AutoFollow';
 import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
@@ -100,7 +101,7 @@ export function LinkApp(): JSX.Element {
 
   const midiMonitor = useDesktopIntegrationEvents(notify); useEffect(() => { try { useDisplayPreferences.getState().load(); } catch (error) { notify(`显示设置读取失败：${String(error)}`, 'error'); } }, [notify]);
   useMa2AutoSync(editingLocked || internalPlayer.state.status === 'playing', notify);
-  useProjectPersistence(notify); useMediaAudioPreparation(playbackLocked, notify);
+  useProjectPersistence(notify); useRecoveryCopyWriter(); useMediaAudioPreparation(playbackLocked, notify);
 
   useDocumentDirty(dirty, notify);
 

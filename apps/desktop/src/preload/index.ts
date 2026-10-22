@@ -13,7 +13,7 @@ import { ma2AuditionRequestSchema,ma2AuditionControlSchema,ma2AuditionStateSchem
 import { musicAnalysisRequestSchema, musicAnalysisProgressSchema, musicAnalysisControlSchema, musicAnalysisResultSchema } from '@tb/schema';
 import { automaticMusicRequestSchema, automaticMusicControlSchema, automaticMusicJobSchema, automaticMusicStatusSchema } from '@tb/schema';
 import { musicMonitorRequestSchema, musicMonitorStatusSchema } from '@tb/schema';
-import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsActionSchema, projectArchiveSettingsStatusSchema } from '@tb/schema';
+import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsActionSchema, projectArchiveSettingsStatusSchema, recoveryCopyDiscardSchema, recoveryCopyWriteSchema } from '@tb/schema';
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
 import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema, nativeMidiCheckSchema } from '@tb/schema';
@@ -157,6 +157,8 @@ const tbLink: LinkDesktopBridgeApi = {
   pickProjectDocument: () => invoke('link:pick-open-project'),
   openProjectDocument: (path) => invoke('link:open-project', path),
   saveProjectDocument: (path, content) => invoke('link:save-project', path, content),
+  writeRecoveryCopy: (payload) => invoke('link:write-recovery-copy', recoveryCopyWriteSchema.parse(payload)),
+  discardRecoveryCopy: async (payload) => z.boolean().parse(await invoke('link:discard-recovery-copy', recoveryCopyDiscardSchema.parse(payload))),
   importReferenceAudio: (payload) => invoke('link:import-reference-audio', payload),
   resolveReferenceAudioUrl: (payload) => invoke('link:resolve-reference-audio-url', payload),
   importMediaAsset: (payload) => invoke('link:import-media-asset', payload),

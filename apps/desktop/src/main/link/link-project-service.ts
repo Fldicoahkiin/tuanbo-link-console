@@ -81,6 +81,12 @@ export class LinkProjectService {
     return this.pendingSaves.enqueue(projectPath, project);
   }
 
+  /** A copy outside any project file, e.g. a recovery copy: atomic, without upgrade backups. */
+  async writeCopy(copyPath: string, project: LinkProject): Promise<void> {
+    assertProjectExtension(copyPath);
+    return this.withProjectFile(copyPath, () => this.writeProject(copyPath, serializeLinkProject(project)));
+  }
+
   private async writeSavedProject(absolutePath: string, project: LinkProject): Promise<void> {
     const content = serializeLinkProject(project);
       if (project.rundown.some(item => item.lighting?.musicAnalysis)) {
