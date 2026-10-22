@@ -190,6 +190,24 @@ it('素材预备晚于播放边界：起播失败标红，预备完成后按当�
   expect(calls).toHaveLength(2); expect(test.session.error).toBeNull();
 });
 
+it('长片段每 5 秒按当前位置检查一次漂移，校正时标红；起播、定位后 1 秒内不检查', async () => {
+  const test = setup(videoFixture()), correct = vi.fn<(event: import('./managed-media-timeline').ManagedMediaEvent) => Promise<number | null>>(() => Promise.resolve(null));
+  const drift = { ...test.dependencies, correctMediaDrift: correct };
+  const session = new ObsProgramSession(videoFixture(), 'C:/shows/test.tblink', 'song', drift);
+  await session.prepare(0);
+  for (let time = 0; time <= 5000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
+  expect(correct.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([5000]);
+  correct.mockResolvedValueOnce(450);
+  for (let time = 5100; time <= 10000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
+  expect(correct.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([5000, 10000]);
+  expect(test.faults).toEqual(['素材与音乐偏差 450ms，已按当前位置校正：视频']);
+  await session.stop();
+  const seeked = new ObsProgramSession(videoFixture(), 'C:/shows/test.tblink', 'song', drift); correct.mockClear();
+  test.time(20000); await seeked.prepare(4500);
+  for (let time = 4500; time <= 5600; time += 100) { test.time(20000 + time); seeked.clock(time); await seeked.settled(); }
+  expect(correct.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([5500]); await seeked.stop();
+});
+
 it.each([0, 150])('机位覆盖结束只恢复叠加显隐，持续播放的视频不重发；应答耗时 %i ms', async latency => {
   const project = videoFixture(), item = project.rundown[0]!;
   project.mediaAssets.push({ ...project.mediaAssets[0]!, id: 'overlay', kind: 'image', name: '叠加', relativePath: 'assets/overlay.png' });

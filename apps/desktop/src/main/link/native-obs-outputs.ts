@@ -235,6 +235,10 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         throw error;
       }
     },
+    correctMediaDrift: event => {
+      const received = performance.now();
+      return obs.mediaScenes.correctDrift({ ...event, sourceName: preload.resolveSource(event.sourceName) }, () => event.sourceOffsetMs + performance.now() - received);
+    },
     seekMedia: async event => {
       if (!address) throw new Error('后台画面连接尚未准备');
       const target = address;

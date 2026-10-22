@@ -516,6 +516,22 @@ describe('素材独立场景播放', () => {
     expect(seekTargets(calls)).toEqual([]);
     expect(calls.some(call => JSON.stringify(call.requestData).includes('ACTION_PAUSE'))).toBe(false);
   });
+  it('长片段漂移超过 300ms 才按音乐精确重定位并返回偏差；在容差内、未播放或非本片段不动', async () => {
+    const { scenes, calls, setMediaState } = fixture();
+    await scenes.prepare('project', asset, 'C:/dance.mp4'); await scenes.execute(event, 'C:/dance.mp4');
+    calls.length = 0; setMediaState('OBS_MEDIA_STATE_PLAYING', 8250);
+    expect(await scenes.correctDrift(event, () => 8000)).toBeNull();
+    expect(await scenes.correctDrift({ ...event, clipId: 'other' }, () => 7000)).toBeNull();
+    setMediaState('OBS_MEDIA_STATE_PAUSED', 9000); expect(await scenes.correctDrift(event, () => 8000)).toBeNull();
+    expect(seekTargets(calls)).toEqual([]);
+    vi.useFakeTimers();
+    try {
+      setMediaState('OBS_MEDIA_STATE_PLAYING', 8450);
+      expect(await held(scenes.correctDrift(event, () => 8000))).toBe(450);
+      expect(seekTargets(calls)).toEqual([8200]);
+      expect(calls.at(-1)?.requestData).toMatchObject({ mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' });
+    } finally { vi.useRealTimers(); }
+  });
   it('暂停完成精确定位后再继续，首次入场及机位返回每次只定位一次', async () => {
     const { scenes, calls } = fixture(false, true);
     await scenes.prepare('project', asset, 'C:/dance.mp4');

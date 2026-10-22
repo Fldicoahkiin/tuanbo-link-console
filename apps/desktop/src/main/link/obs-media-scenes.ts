@@ -36,6 +36,8 @@ function compositionOrderRequests(sceneName: string, layers: string[], items: Ma
 /** Only the dedicated input in an application-owned material scene is controlled. */
 /** A paused seek lands this far ahead of the music, covering seek and decode time. */
 const MEDIA_START_LEAD_MS = 200;
+/** Above the measured 66–100 ms steady cursor offset, so a clip in step is never repositioned. */
+const MEDIA_DRIFT_TOLERANCE_MS = 300;
 
 export class ObsMediaScenes {
   private readonly prepared = new Map<string, { path: string; sha256: string; playbackPaths: readonly string[]; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
@@ -521,6 +523,22 @@ export class ObsMediaScenes {
       if (performance.now() >= deadline) throw new Error(`素材解码状态未确认：${inputName}`);
     }
     return state;
+  }
+
+  /** Recovery rule B for a long-running clip: when OBS's cursor has drifted
+   * from the music by more than the tolerance, reposition it in step. Returns
+   * the drift that was corrected, or null when the clip was in step or is not
+   * this decoder's playing clip. */
+  async correctDrift(event: ManagedMediaEvent, aligned: () => number): Promise<number | null> {
+    return this.run(async () => {
+      if (!this.active.has(event.sourceName) || this.startedClips.get(event.sourceName) !== event.clipId) return null;
+      const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName: event.sourceName }), '读取素材播放位置');
+      if (status.mediaState !== 'OBS_MEDIA_STATE_PLAYING' || typeof status.mediaCursor !== 'number') return null;
+      const drift = Math.round(status.mediaCursor - aligned());
+      if (Math.abs(drift) <= MEDIA_DRIFT_TOLERANCE_MS) return null;
+      await this.positionMedia(event.sourceName, aligned, MEDIA_DRIFT_TOLERANCE_MS);
+      return drift;
+    });
   }
 
   /** Starts the decoder in step with the music. `aligned` is the source position

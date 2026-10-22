@@ -50,6 +50,8 @@ export class ManagedOutputRuntime {
     this.activeMediaByLayer.clear();
     this.activeObsSourcesByLayer.clear();
   }
+  /** Clips started in this run and not stopped since, one per source and layer. */
+  activeMedia(): ManagedMediaEvent[] { return [...this.activeMediaByLayer.values()].flatMap(entries => [...entries.values()]); }
   isActiveMedia(event: ManagedMediaEvent): boolean {
     return this.activeMediaByLayer.get(event.layerId)?.get(event.sourceName)?.clipId === event.clipId;
   }
