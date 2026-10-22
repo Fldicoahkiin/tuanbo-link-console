@@ -22,6 +22,7 @@ import { readMa2Catalog } from './ma2-catalog';
 import { readMa2NetworkPreview } from './ma2-network-preview';
 import { Ma2LiveService } from './ma2-live-service';
 import { Ma2SongWatch } from './ma2-song-watch';
+import type { Ma2ConsoleBackups } from './ma2-console-backups';
 
 /** One chosen console, machine settings only. Auto-connect never replays writes. */
 export class Ma2NetworkManager {
@@ -79,7 +80,12 @@ export class Ma2NetworkManager {
   }
   private liveService: Ma2LiveService | null = null;
   live(): Ma2LiveService { return this.liveService ??= new Ma2LiveService(`${this.path}.playback.json`, this.secrets, request => this.get(request.network).bridge); }
-  private layouts(): Ma2LayoutService { return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.isPlaying); }
+  private layouts(): Ma2LayoutService {
+    if (!this.consoleBackups) throw new Error('控台备份记录尚未就绪');
+    return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.isPlaying, this.consoleBackups);
+  }
+  private consoleBackups: Ma2ConsoleBackups | null = null;
+  setConsoleBackups(backups: Ma2ConsoleBackups): void { this.consoleBackups = backups; }
   private cueDeleteService: Ma2CueDeleteService | null = null;
   setCueDeletionProjectReader(load: (path: string) => Promise<import('@tb/schema').LinkProject>): void {
     this.cueDeleteService = new Ma2CueDeleteService(`${this.path}.cue-backups`, load, this.isPlaying);

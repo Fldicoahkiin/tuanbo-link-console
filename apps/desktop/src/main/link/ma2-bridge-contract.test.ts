@@ -88,3 +88,12 @@ it('来源序列 Cue 读取接受数百个编号，拒绝非编号文本', async
   await expect(bridge.request('SEQCUES', 9000, Array.from({ length: 600 }, (_, index) => `${index + 1}.000`).join(','))).resolves.toBe(wire.response);
   await expect(bridge.request('SEQCUES', 9000, '1.000;Delete Sequence 1')).rejects.toThrow('范围无效');
 });
+it('清理旧备份只接受本软件的写前备份文件名，回执只能是请求里的名字', async () => {
+  const bridge = new Ma2OnpcBridge(process.cwd(), () => false);
+  const backup = `tblink_library_${'a'.repeat(32)}`;
+  wire.response = backup;
+  await expect(bridge.request('DISCARD', 1, `${backup},tblink_backup_${'b'.repeat(32)}`)).resolves.toBe(backup);
+  for (const list of ['tblink_layout_' + 'a'.repeat(32), '../show', `${backup};os.remove`, `tblink_watch_${'a'.repeat(16)}`]) await expect(bridge.request('DISCARD', 1, list)).rejects.toThrow('清理列表无效');
+  wire.response = `tblink_label_${'c'.repeat(32)}`;
+  await expect(bridge.request('DISCARD', 1, backup)).rejects.toThrow('回执与请求不一致');
+});

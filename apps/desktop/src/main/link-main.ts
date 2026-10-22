@@ -53,6 +53,7 @@ import { Ma2DiscoveryService } from './link/ma2-discovery';
 import { Ma2NetworkSetup } from './link/ma2-network-setup';
 import { ma2NetworkSetupRequestSchema } from '@tb/schema';
 import { Ma2NetworkManager } from './link/ma2-network-manager';
+import { Ma2ConsoleBackups } from './link/ma2-console-backups';
 import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema } from '@tb/schema';
 import ma2PluginLua from '../../../../tools/ma2/tblink_bridge.lua?raw';
 import ma2PluginXml from '../../../../tools/ma2/tblink_bridge.xml?raw';
@@ -656,6 +657,10 @@ function registerIpc(
   });
   const ma2Reads = new Map<string, { senderId: number; controller: AbortController }>();
   ma2Network.setCueDeletionProjectReader(path => projectService.open(path));
+  const ma2ConsoleBackups = new Ma2ConsoleBackups(join(app.getPath('userData'), 'link-integrations', 'ma2-console-backups.json'), () => runtimeActive || nativePlaybackActive(),
+    message => logger.record({ level: 'warning', category: 'device', device: 'MA2', message, result: 'failed' }));
+  ma2Network.setConsoleBackups(ma2ConsoleBackups);
+  const ma2ConsoleKey = (request: { dataDirectory: string; network?: import('@tb/schema').Ma2NetworkTarget | undefined }): string => request.network ? `${request.network.host}:${request.network.port}` : `onPC ${request.dataDirectory}`;
   const beginMa2Read = (event: IpcMainInvokeEvent, id?: string): { signal: AbortSignal; report: ((progress: Ma2ReadProgressUpdate) => void) | undefined; finish: () => void } => {
     if (id && ma2Reads.has(id)) throw new Error('读取任务编号重复');
     const controller = new AbortController();
@@ -929,7 +934,9 @@ function registerIpc(
   handle('link:ma2-rename', async (_event, value: unknown) => {
     const request = ma2RenameRequestSchema.parse(value);
     try {
-      const result = await renameMa2Object((await getMa2Connection(request)).bridge, request);
+      const { bridge } = await getMa2Connection(request);
+      const result = await renameMa2Object(bridge, request);
+      await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object: `Sequence ${result.sequence}`, files: [result.backupFile] });
       await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `控台改名已回读：Sequence ${result.sequence} ${result.kind === 'single' ? `Cue ${result.cue}` : ''} → ${result.name}；备份 ${result.backupFile}`, result: 'succeeded' });
       return result;
     } catch (error) {
@@ -966,9 +973,10 @@ function registerIpc(
   });
   handle('link:ma2-apply', async (_event, value: unknown) => {
     const request = ma2ApplyRequestSchema.parse(value);
-    const { service } = await getMa2Connection(request);
+    const { bridge, service } = await getMa2Connection(request);
     await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: `开始同步 Timecode ${request.readback.target}`, result: 'running' });
     const result = await service.apply(request);
+    if (result.status === 'verified' && result.backupFile) await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object: `Timecode ${request.readback.target}`, files: [result.backupFile] });
     await logger.record({ level: result.status === 'verified' ? 'info' : 'error', category: 'device', device: 'MA2', message: result.status === 'verified' ? 'MA2 回读已核对，等待节目应用' : result.message, result: result.status === 'verified' ? 'succeeded' : 'failed', details: result.status === 'verified' ? { backupFile: result.backupFile } : { stage: result.stage, mayHaveWritten: result.mayHaveWritten, backupFile: result.backupFile } });
     return result;
   });

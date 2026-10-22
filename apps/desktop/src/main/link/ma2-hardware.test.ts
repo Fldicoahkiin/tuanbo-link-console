@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { ma2ObjectDirectorySchema } from '@tb/schema';
 import { Ma2LayoutService } from './ma2-layout-service';
+import { Ma2ConsoleBackups } from './ma2-console-backups';
 import { Ma2SongWatch } from './ma2-song-watch';
 import { listMa2ExecutorPages } from './ma2-executor-page';
 import { expect, it } from 'vitest';
@@ -174,7 +175,8 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     const expectedSource = { show: directory.show, generation: directory.generation, version: directory.version };
     const ref = (index: number) => [{ sequence: source.sequence, cue: source.cues[index]!.number, delayMs: 0 }];
     const points = [{ id: 'p1', name: '探针开场', atMs: 0, cues: ref(0) }, { id: 'p2', name: '探针副歌', atMs: 1000, cues: ref(1) }, { id: 'p3', name: '探针尾声', atMs: 2000, cues: [] }];
-    const service = new Ma2LayoutService(resolve(await mkdtemp(join(tmpdir(), 'tblink-song-probe-')), 'layouts.json'), () => false);
+    const workspace = await mkdtemp(join(tmpdir(), 'tblink-song-probe-'));
+    const service = new Ma2LayoutService(resolve(workspace, 'layouts.json'), () => false, new Ma2ConsoleBackups(resolve(workspace, 'backups.json'), () => false, message => Promise.reject(new Error(message))));
     const base = { network, expectedSource, projectId: randomUUID(), itemId: 'probe', settings: { layout: 999, name: 'TBLINK', nextSequence: sequence, columns: 8, executorPage: page }, name: '联动探针歌曲' };
     const first = await step('create', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), points }));
     // The operator tunes the first Cue's fade on the console; the next sync adopts it into the baseline.
@@ -279,7 +281,8 @@ it.runIf(process.env.TBLINK_MA2_COPY_PROBE === '1' && Boolean(process.env.TBLINK
       let page = 9890; const pages = await listMa2ExecutorPages(bridge, { network: { host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001, username: 'administrator' }, expectedSource: { show: directory.show, generation: directory.generation, version: directory.version } });
       while (pages.pages.some(value => value.page === page)) page += 1;
       created = { sequence: T, page };
-      const service = new Ma2LayoutService(resolve(await mkdtemp(join(tmpdir(), 'tblink-copy-probe-')), 'layouts.json'), () => false);
+      const workspace = await mkdtemp(join(tmpdir(), 'tblink-copy-probe-'));
+      const service = new Ma2LayoutService(resolve(workspace, 'layouts.json'), () => false, new Ma2ConsoleBackups(resolve(workspace, 'backups.json'), () => false, message => Promise.reject(new Error(message))));
       await service.syncSong(raw, bridge, { network: { host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001, username: 'administrator' }, expectedSource: { show: directory.show, generation: directory.generation, version: directory.version },
         projectId: randomUUID(), itemId: 'copy-probe', requestId: randomUUID(), settings: { layout: 999, name: 'TBLINK', nextSequence: T, columns: 8, executorPage: page }, name: 'CopyProbe',
         points: [{ id: 'p1', name: 'Probe', atMs: 0, cues: [{ sequence: S, cue: c1, delayMs: 0 }] }] });
@@ -325,3 +328,38 @@ it.runIf(process.env.TBLINK_MA2_COPY_PROBE === '1' && Boolean(process.env.TBLINK
     raw.disconnect();
   }
 }, 600000);
+
+// Writes 12 backup exports of one existing Sequence on the console and removes them all again.
+it.runIf(process.env.TBLINK_MA2_BACKUP_ROTATION === '1' && Boolean(process.env.TBLINK_MA2_HARDWARE_HOST))('onPC 写前备份每个对象只留最近 10 份', async () => {
+  const raw = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });
+  const created: string[] = [];
+  const lua = async (code: string): Promise<string> => {
+    const marker = `TBLINK_ROTATE_${randomBytes(16).toString('hex')}:`;
+    return await raw.command(`Lua "${code};gma.echo('${marker}'..tostring(R))"`, text => ma2ResponseLine(text, marker));
+  };
+  const exists = (file: string): Promise<string> => lua(`local f=io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','rb');R=not (f==nil);if f then f:close() end`);
+  try {
+    await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
+    await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
+    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), () => false);
+    const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
+    const sequence = directory.entries[0]!.target;
+    const backups = new Ma2ConsoleBackups(resolve(await mkdtemp(join(tmpdir(), 'tblink-rotation-')), 'backups.json'), () => false, message => Promise.reject(new Error(message)));
+    for (let index = 0; index < 12; index++) {
+      const file = `tblink_library_${randomBytes(16).toString('hex')}`;
+      expect(await lua(`gma.cmd('Export Sequence ${sequence} ${file} /o');local f=io.open(gma.show.getvar('PATH')..'/importexport/${file}.xml','rb');R=not (f==nil);if f then f:close() end`)).toBe('true');
+      created.push(file);
+      await backups.record(bridge, { console: 'onpc-rotation-test', object: `Sequence ${sequence}`, files: [file] });
+    }
+    const present = await Promise.all(created.map(exists));
+    console.info(JSON.stringify({ sequence, present }));
+    expect(present).toEqual([...Array<string>(2).fill('false'), ...Array<string>(10).fill('true')]);
+  } finally {
+    if (created.length && raw.state === 'connected') {
+      const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), () => false);
+      await bridge.request('DISCARD', 1, created.join(','));
+      expect((await Promise.all(created.map(exists))).every(value => value === 'false')).toBe(true);
+    }
+    raw.disconnect();
+  }
+}, 300000);

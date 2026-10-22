@@ -16,6 +16,7 @@ import { writeFileAtomically } from './atomic-file';
 import { renameMa2Object } from './ma2-rename-service';
 import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor';
 import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recovery';
+import type { Ma2ConsoleBackups } from './ma2-console-backups';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
@@ -49,7 +50,7 @@ const keepCueAttributes = (exportName: string, target: number, cue: string, scra
 export class Ma2LayoutService {
   private busy = false;
   private readonly attempted = new Set<string>();
-  constructor(private readonly ownershipFile: string, private readonly isPlaying: () => boolean) {}
+  constructor(private readonly ownershipFile: string, private readonly isPlaying: () => boolean, private readonly backups: Pick<Ma2ConsoleBackups, 'record'>) {}
 
   private async call(connection: Connection, body: string): Promise<string> {
     const prefix = `TBLINK_LAYOUT_${randomBytes(12).toString('hex')}:`;
@@ -259,6 +260,7 @@ export class Ma2LayoutService {
       const remote = request.binding ? await bridge.exchange('SEQUENCE', target, 'keep') : null;
       const remoteXml = remote?.response ?? null;
       const remoteExport = remote ? `tblink_library_${remote.requestId}` : null;
+      const labelBackups: string[] = [];
       // The saved project carries the console identity and the native three-way baseline.
       // A new installation/computer has no local ownership cache; validate that binding
       // instead of permanently rejecting every saved song.
@@ -320,7 +322,7 @@ export class Ma2LayoutService {
         for (const change of names) {
           if (this.isPlaying()) throw new Error('播放已开始，后续名称尚未发送');
           const result = await renameMa2Object(bridge, { dataDirectory: '', network: request.network, generation: request.expectedSource.generation, change: { endpoint, show: directory.show, sequence: target, ...change } });
-          backupFile ||= result.backupFile;
+          backupFile ||= result.backupFile; labelBackups.push(result.backupFile);
           progress('previews', names.indexOf(change) + 1, names.length, `已回读${change.kind === 'sequence' ? '序列名称' : ` Cue ${change.cue} 名称`}`);
         }
       } else if (changed) {
@@ -420,6 +422,9 @@ export class Ma2LayoutService {
       if (changed || JSON.stringify(previousOwner?.binding) !== JSON.stringify(result.binding) || JSON.stringify(previousOwner?.conflicts ?? []) !== JSON.stringify(result.conflicts ?? [])) {
         await writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding: result.binding, conflicts: result.conflicts ?? [] }]));
       }
+      // The write-before export and any name backups join this Sequence's rotation once the sync is confirmed.
+      const backups = [...remoteExport ? [remoteExport] : [], ...labelBackups];
+      if (backups.length) await this.backups.record(rawBridge, { console: endpoint, object: `Sequence ${target}`, files: backups });
       return result;
     } catch (cause) { throw new Error(`${wrote ? `序列 ${target} 的写入结果待核对，原位置与备份 ${backupFile || '新建对象记录'} 已保留。` : ''}${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
     finally { clearTimeout(timer!); this.busy = false; }
