@@ -25,15 +25,15 @@ export class Ma2SongWatch {
     const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(request.expectedSource.generation)} and gma.show.getvar('VERSION')==${ma2LuaString(request.expectedSource.version)},'Show or session changed');`;
     const exportObject = (object: string, name: string): string => `assert(gma.show.getobj.handle('${object}'),'Song position missing');gma.cmd('Export ${object} ${name} /o');`;
     // No $, ^ or |: the native command line consumes them and forces the multi-line chunked path.
-    const read = "local function r(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><')end;";
+    // r(name, 1) also removes the file once read: the baseline export stays for the next check.
+    const read = "local function r(n,x)local p=gma.show.getvar('PATH')..'/importexport/'..n..'.xml';local f=assert(io.open(p,'rb'));local s=f:read('*a');f:close();if x then os.remove(p)end;return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><')end;";
     const capture = async (suffix: string): Promise<void> => {
       await runMa2GuardedLua(connection, `${guard}${exportObject(`Sequence ${request.sequence}`, `${file}${suffix}`)}${request.executor ? exportObject(`Executor ${request.executor}`, `${file}${suffix}_exec`) : ''}return 'captured'`, stopped);
     };
     const same = async (): Promise<boolean> => {
       await capture('_check');
-      // The baseline export stays for the next check; the check exports are removed once compared.
-      const remove = (name: string): string => `os.remove(gma.show.getvar('PATH')..'/importexport/${name}.xml');`;
-      return await runMa2GuardedLua(connection, `${guard}${read}local same=r('${file}')==r('${file}_check')${request.executor ? ` and r('${file}_exec')==r('${file}_check_exec')` : ''};${remove(`${file}_check`)}${request.executor ? remove(`${file}_check_exec`) : ''}return same`, stopped) === 'true';
+      // Both comparisons run before combining them, so both check exports are removed.
+      return await runMa2GuardedLua(connection, `${guard}${read}local a=r('${file}')==r('${file}_check',1)${request.executor ? `;local b=r('${file}_exec')==r('${file}_check_exec',1);return a and b` : ';return a'}`, stopped) === 'true';
     };
     try {
       if (cached) {
