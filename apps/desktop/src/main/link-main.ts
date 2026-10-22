@@ -67,7 +67,7 @@ import { offerRecoveryCopy, RecoveryCopies, type RecoveryOffer } from './link/re
 import { cpus, release, totalmem, freemem } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
-import { projectDocumentTextSchema } from '@tb/schema';
+import { projectDocumentTextSchema, projectSaveOptionsSchema } from '@tb/schema';
 import {
   app,
   BrowserWindow,
@@ -1083,13 +1083,15 @@ function registerIpc(
     const path = linkFilePathSchema.parse(pathValue);
     return { version: 1, path, content: await projectDocuments.read(path) };
   });
-  handle('link:save-project', async (_event, pathValue: unknown, projectValue: unknown) => {
+  handle('link:save-project', async (_event, pathValue: unknown, projectValue: unknown, optionsValue: unknown) => {
     const content = projectDocumentTextSchema.parse(projectValue);
+    const options = projectSaveOptionsSchema.parse(optionsValue);
     let destination = linkOptionalFilePathSchema.parse(pathValue);
     if (!destination) {
+      const fileName = `${safeFileName(await projectDocuments.inspect(content))}.tblink`;
       const result = await dialog.showSaveDialog(mainWindow!, {
-        title: '保存团播联动工程',
-        defaultPath: `${safeFileName(await projectDocuments.inspect(content))}.tblink`,
+        title: options.defaultPath ? '另存团播联动工程' : '保存团播联动工程',
+        defaultPath: options.defaultPath ? join(dirname(options.defaultPath), fileName) : fileName,
         filters: [{ name: '团播联动工程', extensions: ['tblink'] }]
       });
       if (result.canceled || !result.filePath) return null;
@@ -1105,6 +1107,13 @@ function registerIpc(
   const recoveryCopies = new RecoveryCopies(join(app.getPath('userData'), 'link-recovery'), projectDocuments);
   // The renderer records a failed write once, with the reason shown to the operator.
   handle('link:write-recovery-copy', (_event, payload: unknown) => recoveryCopies.write(recoveryCopyWriteSchema.parse(payload)));
+  handle('link:confirm-project-location', async (_event, purposeValue: unknown) => {
+    const purpose = z.string().min(1).max(200).parse(purposeValue);
+    const { response } = await dialog.showMessageBox(mainWindow!, { type: 'question', title: '选择工程保存位置', noLink: true,
+      message: `${purpose}需要先保存工程。`, detail: '素材和读取检查点会放在工程文件旁边。选择位置保存后继续；取消则不执行。',
+      buttons: ['选择保存位置', '取消'], defaultId: 0, cancelId: 1 });
+    return response === 0;
+  });
   handle('link:discard-recovery-copy', (_event, payload: unknown) => recoveryCopies.discard(recoveryCopyDiscardSchema.parse(payload)));
   handle('link:resolve-recovery-copy', async (_event, payload: unknown) => {
     const content = await offerRecoveryCopy(recoveryCopyQuerySchema.parse(payload), {

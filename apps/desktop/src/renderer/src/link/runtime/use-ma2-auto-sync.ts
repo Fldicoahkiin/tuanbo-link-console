@@ -9,7 +9,6 @@ import { useDocumentStore } from '../stores/document-store';
 import { reportCoordinatorError } from './runtime-action-log';
 import { archiveMa2Project } from './ma2-project-archive';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
-import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
 export { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 
@@ -74,17 +73,13 @@ export function useMa2AutoSync(playing: boolean, notify: (message: string, tone?
       compare: request => window.tbLink.compareMa2(request),
       apply: request => window.tbLink.applyMa2(request),
       archive: archiveMa2Project,
-      execute: async (documentId, command) => {
+      // The console readback joins the unsaved edits; the recovery copy and the operator's save keep it.
+      execute: (documentId, command) => {
         applyingReadback = true;
         try { useDocumentStore.getState().executeForDocument(documentId, command); }
         finally { applyingReadback = false; }
-        const saved = useDocumentStore.getState();
-        if (saved.documentId !== documentId || !saved.project || !saved.path) throw new Error('控台关联已确认，但工程保存位置已改变，请保存当前工程后继续');
-        try {
-          const path = await linkDesktopViewModel.saveProject(saved.path, saved.project);
-          if (!path) throw new Error('保存未完成');
-          saved.markSaved(path, saved.stateId, documentId);
-        } catch (cause) { throw new Error(`控台关联已回读，但工程保存失败：${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
+        useDocumentStore.getState().markConsoleSynced(documentId);
+        return Promise.resolve();
       },
       changed: (status, message) => {
         const previous = useMa2AutoSyncStore.getState().status;

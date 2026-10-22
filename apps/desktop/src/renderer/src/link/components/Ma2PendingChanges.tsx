@@ -11,6 +11,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { pendingMa2Renames, ma2RenameKey } from '@tb/core/link';
 import { useRecoveryCopyStore } from '../recovery-copy-writer';
+import { saveDocument } from '../project-document';
 import { Ma2SongConflicts } from './Ma2SongConflicts';
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from '../runtime/ma2-legacy-names';
 
@@ -54,9 +55,9 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const save = async (): Promise<void> => {
     const state = useDocumentStore.getState();
     if (!state.project) return;
-    const path = await linkDesktopViewModel.saveProject(state.path, state.project);
-    if (!path) return;
-    useDocumentStore.getState().markSaved(path, state.stateId, state.documentId);
+    const outcome = await saveDocument();
+    if (outcome.status === 'failed') throw new Error(outcome.message);
+    if (outcome.status === 'canceled') return;
     const archived = await archiveMa2Project(state.documentId, state.project, 'manual');
     setNotice(`本地已保存并存档：${archived ?? ''}`); notify('本地已保存并创建存档');
   };
@@ -71,8 +72,10 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     if (!state.path || !state.project) throw new Error('请先保存工程');
     if (playing) throw new Error('播放中不能恢复存档，请停止后再恢复');
     // Save first, so the "恢复前" copy the restore makes holds the latest edits.
-    const saved = await linkDesktopViewModel.saveProject(state.path, state.project);
-    if (!saved) throw new Error('当前工程保存未完成，未恢复存档');
+    const outcome = await saveDocument();
+    if (outcome.status === 'failed') throw new Error(outcome.message);
+    if (outcome.status === 'canceled') throw new Error('当前工程保存未完成，未恢复存档');
+    const saved = outcome.path;
     await linkDesktopViewModel.projectArchives({ version: 1, action: 'restore', projectPath: saved, name });
     const reopened = await linkDesktopViewModel.openProject(saved);
     useDocumentStore.getState().setProject(reopened.project, reopened.path);

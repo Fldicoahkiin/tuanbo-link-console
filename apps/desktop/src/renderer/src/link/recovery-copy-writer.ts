@@ -125,9 +125,11 @@ export class RecoveryCopyWriter {
 let activeWriter: RecoveryCopyWriter | null = null;
 
 /** Writes the current unsaved content to its recovery copy immediately. */
-export function flushRecoveryCopy(): Promise<void> {
-  if (!activeWriter) return Promise.reject(new Error('恢复副本写入尚未启动'));
-  return activeWriter.flush();
+export async function flushRecoveryCopy(): Promise<void> {
+  if (!activeWriter) throw new Error('恢复副本写入尚未启动');
+  await activeWriter.flush();
+  const error = useRecoveryCopyStore.getState().error;
+  if (error) throw new Error(error);
 }
 
 export function useRecoveryCopyWriter(): void {

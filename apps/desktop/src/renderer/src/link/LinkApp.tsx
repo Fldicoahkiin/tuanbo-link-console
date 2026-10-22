@@ -34,7 +34,7 @@ import { useRuntimeStore } from './stores/runtime-store';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 import { useProjectPersistence } from './useProjectPersistence';
 import { useRecoveryCopyWriter } from './recovery-copy-writer';
-import { showOpenedProject } from './project-document';
+import { saveDocument, showOpenedProject } from './project-document';
 import { useP1AutoFollow } from './useP1AutoFollow';
 import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
@@ -166,17 +166,10 @@ export function LinkApp(): JSX.Element {
   };
 
   const saveProject = async (): Promise<void> => {
-    const current = useDocumentStore.getState();
-    if (!current.project) return;
-    const savingState = current.stateId; const savingDocumentId = current.documentId;
-    try {
-      const path = await linkDesktopViewModel.saveProject(current.path, current.project);
-      if (!path || useDocumentStore.getState().documentId !== savingDocumentId) return;
-      useDocumentStore.getState().markSaved(path, savingState, savingDocumentId);
-      notify('工程已保存');
-    } catch (error) {
-      notify(error instanceof Error ? error.message : String(error), 'error');
-    }
+    if (!useDocumentStore.getState().project) return;
+    const outcome = await saveDocument();
+    if (outcome.status === 'saved') notify('工程已保存');
+    else if (outcome.status === 'failed') notify(outcome.message, 'error');
   };
 
 
@@ -416,14 +409,9 @@ function useDocumentErrorNotification(
 async function saveBeforeNewProject(): Promise<boolean> {
   const current = useDocumentStore.getState();
   if (!current.project || !current.dirty) return true;
-  const savedPath = await linkDesktopViewModel.saveProject(current.path, current.project);
-  if (!savedPath) return false;
-  const latest = useDocumentStore.getState();
-  if (latest.documentId !== current.documentId || latest.revision !== current.revision) {
-    throw new Error('保存期间工程发生变化，请再次创建。');
-  }
-  latest.markSaved(savedPath, current.stateId, current.documentId);
-  return true;
+  const outcome = await saveDocument();
+  if (outcome.status === 'failed') throw new Error(outcome.message);
+  return outcome.status === 'saved' && !useDocumentStore.getState().dirty;
 }
 
 function useNewProjectDialog() {

@@ -93,7 +93,7 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
       expect((await savedProject()).ma2MaterialLibrary?.userLibrary?.consoleWorkspace?.executorPage).toBeUndefined();
       await song.getByLabel('默认创建按钮页').fill(String(targetPage));
       await song.getByRole('button', { name: '保存默认', exact: true }).click();
-      await expect(song).toContainText(`默认第 ${targetPage} 页，已随工程保存`);
+      await expect(song).toContainText(`默认第 ${targetPage} 页，保存工程后写入工程文件`);
       expect((await savedProject()).ma2MaterialLibrary?.userLibrary?.consoleWorkspace?.executorPage).toBe(targetPage);
       await page.reload();
       await page.getByRole('button', { name: '灯光工作台', exact: true }).click();
@@ -117,7 +117,7 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await pool.getByRole('button', { name: '新建 Cue', exact: true }).click();
     await song.getByLabel('默认创建按钮页').fill('2000');
     await song.getByRole('button', { name: '保存默认', exact: true }).click();
-    await expect(song).toContainText('默认第 2000 页，已随工程保存');
+    await expect(song).toContainText('默认第 2000 页，保存工程后写入工程文件');
     await page.screenshot({ path: info.outputPath('default-creation-page.png') });
     await page.locator('.waveform-cue-point').first().click();
     const composer = page.locator('.cue-composer');
