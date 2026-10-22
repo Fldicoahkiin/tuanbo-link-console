@@ -26,6 +26,12 @@ it('目录扫描解析实际小数 Cue 编号，保留原始时间和执行器�
   expect(result.entries[0]).toMatchObject({ target: 9902, eventCount: 2, error: null });
   expect(result.entries[0]?.events.map(event => event.cue)).toEqual(['9901 / 1.250', '9901 / 7.500']);
   expect(request.mock.calls.map(call => call[0])).toEqual(['LIST', 'READ', 'SNAPSHOT', 'LIST']);
+  expect(result.entries[0]?.length).toBeNull();
+});
+it('读取控台节目长度（MA2 属性 lenght，30 Hz）', async () => {
+  const sized = tc.replace('<Timecode index="9901"', '<Timecode lenght="6000" index="9901"');
+  const request = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(sized).mockResolvedValueOnce(sized.replace('</MA>', `${seq}</MA>`)).mockResolvedValueOnce(JSON.stringify(directory));
+  expect((await readMa2Catalog({ request }, () => false)).entries[0]?.length).toBe('6000');
 });
 it('对象读取失败仍列出，不把部分结果冒充完整成功，不自动重试', async () => {
   const request = vi.fn().mockResolvedValueOnce(JSON.stringify(directory)).mockRejectedValueOnce(new Error('对象被删除')).mockResolvedValueOnce(JSON.stringify(directory));
