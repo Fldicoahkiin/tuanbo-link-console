@@ -27,6 +27,23 @@ const decoder = "local function unhex(h)return (h:gsub('..',function(x)return st
 const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
 /** Lua that removes app-generated upload and comparison files once the command that needed them succeeded. */
 const removeFiles = (...names: string[]): string => names.map(name => `os.remove(gma.show.getvar('PATH')..'/importexport/${name}.xml');`).join('');
+/**
+ * Lua that empties a Cue's data but keeps every attribute it has on the console (fade, delay, trigger …):
+ * the Cue is taken from the write-before export without CueDatas (the header keeps the empty Cue 0 slot
+ * MA2 needs to import a Sequence), imported into a scratch Sequence,
+ * copied back with /o, and the scratch Sequence is deleted. Sources merged afterwards keep these attributes.
+ */
+const keepCueAttributes = (exportName: string, target: number, cue: string, scratch: number, file: string): string => {
+  const [whole, fraction = ''] = cue.split('.');
+  return `local p=gma.show.getvar('PATH')..'/importexport/';local f=assert(io.open(p..'${exportName}.xml','rb'));local x=f:read('*a');f:close();`
+    + `local i=assert(x:find('<Number number="${Number(whole)}" sub_number="${Number(fraction.padEnd(3, '0'))}"',1,true),'Cue missing from the write-before export');`
+    + `local a=1;while true do local j=x:find('<Cue index=',a,true);if not j or j>i then break end;a=j+1 end;`
+    + `local c=x:sub(a-1,assert(x:find('</Cue>',i,true),'Cue end missing')+5):gsub('<CueDatas>.-</CueDatas>',''):gsub('<CueDatas%s*/>',''):gsub('<Cue index="%d+"','<Cue index="1"',1);`
+    + `local o=assert(io.open(p..'${file}.xml','wb'));o:write(x:sub(1,x:find('<Cue index=',1,true)-1)..c..'</Sequ></MA>');o:close();`
+    + `assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence occupied');gma.cmd('Import ${file}.xml At Sequence ${scratch} /nc');`
+    + `local ok=gma.show.getobj.handle('Sequence ${scratch} Cue ${cue}')~=nil;if ok then gma.cmd('Copy Sequence ${scratch} Cue ${cue} At Sequence ${target} Cue ${cue} /o /nc') end;`
+    + `gma.cmd('Delete Sequence ${scratch} /nc');os.remove(p..'${file}.xml');assert(ok,'Cue attributes import failed');assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence not removed');`;
+};
 
 /** New objects only; destination is checked again inside the same native command that writes it. */
 export class Ma2LayoutService {
@@ -343,9 +360,14 @@ export class Ma2LayoutService {
         if (copyInPlace && existingName !== plan.name) await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} "${plan.name}"`)});return 'labelled'`);
         if (nativeCopy || copyInPlace) {
           progress('previews', 0, plan.changes.length, `控台内部${nativeCopy ? '创建' : '写入'} ${plan.changes.length} 个 Cue`);
+          // Copy /o takes the first source's attributes; a combined Cue already on the console keeps its own.
+          const consoleCues = remoteXml && copyInPlace ? new Set(inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.map(cue => Number(cue.number))) : new Set<number>();
+          let scratch = 99999; while (directory.entries.some(entry => entry.target === scratch)) scratch -= 1;
           for (const [changeIndex, change] of plan.changes.entries()) {
+            const keep = remoteExport !== null && (change.refs?.length ?? 0) > 1 && consoleCues.has(Number(change.cue));
+            if (keep) await this.call(connection, `${this.guard(layoutRequest)}${keepCueAttributes(remoteExport, target, change.cue, scratch, `${file}_attrs`)}return 'kept'`);
             for (const [index, ref] of (change.refs ?? []).entries()) {
-              await this.call(connection, `${this.guard(layoutRequest)}assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /${index ? 'merge' : 'o'} /nc');gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'copied'`);
+              await this.call(connection, `${this.guard(layoutRequest)}assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /${index || keep ? 'merge' : 'o'} /nc');gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'copied'`);
             }
             await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'labelled'`);
             progress('previews', changeIndex + 1, plan.changes.length, `已写入 Sequence ${target} Cue ${change.cue}`);
