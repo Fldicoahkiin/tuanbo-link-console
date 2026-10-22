@@ -3,7 +3,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication, type Page, type TestInfo } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { createEmptyLinkProject, parseLinkProject, serializeLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
@@ -190,8 +190,12 @@ test('不保存后退出流程被取消（灯光试听未停止，返回软件�
   }
 });
 
-test('进程被强制结束后重新打开工程：提示恢复，恢复后内容回来且标记未保存，保存后副本清除', async ({}, info) => {
-  const crashed = info.outputPath('crashed-profile'); const userData = info.outputPath('profile'); const path = info.outputPath('crash.tblink');
+/**
+ * Edits the project, then force-ends the app as a crash would, and puts its recovery copy
+ * into a fresh profile: the restart must not reopen the file by itself before the dialog answers are in place.
+ */
+async function crashWithUnsavedEdit(info: TestInfo, path: string, userData: string): Promise<void> {
+  const crashed = info.outputPath('crashed-profile');
   await showFile(path);
   const first = await launch(crashed);
   await openFile(first.app, first.page, path);
@@ -204,9 +208,12 @@ test('进程被强制结束后重新打开工程：提示恢复，恢复后内�
   else first.app.process().kill('SIGKILL');
   await killed;
   expect(await savedTitle(path)).toBe('原节目');
-  // A fresh profile with only the recovery copies: the restart must not reopen the
-  // file by itself before the dialog answers are in place.
   await cp(join(crashed, 'link-recovery'), join(userData, 'link-recovery'), { recursive: true });
+}
+
+test('进程被强制结束后重新打开工程：提示恢复，恢复后内容回来且标记未保存，保存后副本清除', async ({}, info) => {
+  const userData = info.outputPath('profile'); const path = info.outputPath('crash.tblink');
+  await crashWithUnsavedEdit(info, path, userData);
 
   const { app, page } = await launch(userData);
   try {
@@ -220,6 +227,24 @@ test('进程被强制结束后重新打开工程：提示恢复，恢复后内�
     await expect(unsaved(page)).toBeHidden();
     expect(await savedTitle(path)).toBe('崩溃前的修改');
     await expect.poll(() => recoveryCopies(userData)).toHaveLength(0);
+  } finally { await closeWithoutSaving(app, page); }
+});
+
+test('启动时把超过 30 天的恢复副本移到回收站，打开工程不再提示', async ({}, info) => {
+  const userData = info.outputPath('profile'); const path = info.outputPath('expired.tblink');
+  await crashWithUnsavedEdit(info, path, userData);
+  const directory = join(userData, 'link-recovery');
+  const [record] = (await readdir(directory)).filter(name => name.endsWith('.json'));
+  const manifest = JSON.parse(await readFile(join(directory, record!), 'utf8')) as Record<string, unknown>;
+  await writeFile(join(directory, record!), JSON.stringify({ ...manifest, savedAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString() }));
+  const { app, page } = await launch(userData);
+  try {
+    // An interrupted write's temporary file stays for an hour; only copies and records count here.
+    await expect.poll(async () => (await readdir(directory)).filter(name => !name.endsWith('.tmp'))).toEqual([]);
+    await answerDialogs(app, {});
+    await openFile(app, page, path);
+    await expect(page.getByText('原节目').first()).toBeVisible();
+    expect(await shownDialogs(app)).toEqual([]);
   } finally { await closeWithoutSaving(app, page); }
 });
 

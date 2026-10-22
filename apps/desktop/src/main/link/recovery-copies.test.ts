@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { offerRecoveryCopy, RecoveryCopies } from './recovery-copies';
 
@@ -83,6 +83,49 @@ describe('RecoveryCopies', () => {
     const [copy] = (await readdir(directory)).filter(name => name.endsWith('.tblink'));
     await unlink(join(directory, copy!));
     expect(await store.find(named)).toBeNull();
+  });
+
+  it('清理：超过 30 天的副本移到回收站并删除记录，较新的保留', async () => {
+    const { store } = await copies(['2026-09-01T08:00:00.000Z', '2026-10-21T08:00:00.000Z']);
+    const old = { projectPath: 'C:\\shows\\旧.tblink', projectId: 'old' };
+    await store.write(write(old, 1));
+    await store.write(write(named, 1));
+    const oldCopy = (await store.find(old))!.copyPath;
+    const trashed: string[] = [];
+    const pruned = await store.prune(async path => { trashed.push(path); await unlink(path); });
+    expect(trashed).toEqual([oldCopy]);
+    expect(pruned).toHaveLength(1);
+    expect(pruned).toMatchObject([{ reason: 'expired', manifest: { projectPath: old.projectPath, projectId: 'old' } }]);
+    expect(await store.find(old)).toBeNull();
+    expect(await store.find(named)).not.toBeNull();
+  });
+
+  it('清理：最多保留 20 份，超出的从最旧的开始移到回收站', async () => {
+    const times = Array.from({ length: 21 }, (_, index) => `2026-10-21T${String(index).padStart(2, '0')}:00:00.000Z`);
+    const { store } = await copies(times);
+    for (let index = 0; index < 21; index += 1) await store.write(write({ projectPath: null, projectId: `p${index}` }, 1));
+    const trashed: string[] = [];
+    const pruned = await store.prune(async path => { trashed.push(path); await unlink(path); });
+    expect(pruned).toHaveLength(1);
+    expect(pruned).toMatchObject([{ reason: 'over-limit', manifest: { projectId: 'p0' } }]);
+    expect(trashed).toHaveLength(1);
+    expect(await store.find({ projectPath: null, projectId: 'p0' })).toBeNull();
+    expect(await store.find({ projectPath: null, projectId: 'p1' })).not.toBeNull();
+  });
+
+  it('清理：没有记录的副本文件、没有副本文件的记录和中断写入留下的临时文件一并清除', async () => {
+    const { store, directory } = await copies();
+    await store.write(write(named, 1));
+    await writeFile(join(directory, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tblink'), '{}');
+    await writeFile(join(directory, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json'), JSON.stringify({ version: 1, projectPath: null, projectId: 'gone', name: '演出', sessionId: session, revision: 1, savedAt: '2026-10-21T08:00:00.000Z' }));
+    await writeFile(join(directory, '.0d6c1a2e-2f4a-4c55-9a43-7c1b1f0e9d11.tmp'), 'partial');
+    await utimes(join(directory, '.0d6c1a2e-2f4a-4c55-9a43-7c1b1f0e9d11.tmp'), new Date('2026-10-21T08:00:00.000Z'), new Date('2026-10-21T08:00:00.000Z'));
+    const trashed: string[] = [];
+    const pruned = await store.prune(async path => { trashed.push(path); await unlink(path); });
+    expect(pruned.map(entry => entry.reason).sort()).toEqual(['orphan', 'orphan', 'orphan']);
+    expect(trashed.map(path => basename(path)).sort()).toEqual(['.0d6c1a2e-2f4a-4c55-9a43-7c1b1f0e9d11.tmp', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tblink']);
+    expect(await readdir(directory)).toHaveLength(2);
+    expect(await store.find(named)).not.toBeNull();
   });
 });
 

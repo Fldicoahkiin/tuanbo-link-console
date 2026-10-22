@@ -1147,8 +1147,16 @@ function registerIpc(
   });
   const copies = new RecoveryCopies(join(app.getPath('userData'), 'link-recovery'), projectDocuments);
   recoveryCopies = copies;
+  // Copies are written and offered only after the startup cleanup, so it never removes one in use.
+  // A failed cleanup is logged and retried at the next startup; it never blocks opening or editing.
+  const pruning = copies.prune(path => shell.trashItem(path)).then(async pruned => {
+    for (const entry of pruned) await logger.record({ level: 'info', category: 'system', message: entry.reason === 'orphan' ? `清除残留的恢复副本文件：${entry.file}`
+      : `恢复副本${entry.reason === 'expired' ? '超过 30 天' : '超过 20 份'}，已移到回收站：${entry.manifest.name}`, details: entry.reason === 'orphan' ? {} : { projectPath: entry.manifest.projectPath, savedAt: entry.manifest.savedAt } });
+  }).catch(async (error: unknown) => {
+    await logger.record({ level: 'warning', category: 'system', message: '恢复副本清理未完成，下次启动再试', details: { error: error instanceof Error ? error.message : String(error) } });
+  });
   // The renderer records a failed write once, with the reason shown to the operator.
-  handle('link:write-recovery-copy', (_event, payload: unknown) => copies.write(recoveryCopyWriteSchema.parse(payload)));
+  handle('link:write-recovery-copy', async (_event, payload: unknown) => { await pruning; return copies.write(recoveryCopyWriteSchema.parse(payload)); });
   handle('link:confirm-project-location', async (_event, purposeValue: unknown) => {
     const purpose = z.string().min(1).max(200).parse(purposeValue);
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'question', title: '选择工程保存位置', noLink: true,
@@ -1178,6 +1186,7 @@ function registerIpc(
   });
   handle('link:discard-recovery-copy', (_event, payload: unknown) => copies.discard(recoveryCopyDiscardSchema.parse(payload)));
   handle('link:resolve-recovery-copy', async (_event, payload: unknown) => {
+    await pruning;
     const content = await offerRecoveryCopy(recoveryCopyQuerySchema.parse(payload), {
       copies,
       read: path => projectDocuments.read(path),

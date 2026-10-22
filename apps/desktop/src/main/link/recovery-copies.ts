@@ -10,6 +10,14 @@ const manifestSchema = z.object({ version: z.literal(1), projectPath: z.string()
 export type RecoveryCopyManifest = z.infer<typeof manifestSchema>;
 export type RecoveryCopyOwner = { projectPath: string | null; projectId: string };
 export type RecoveryCopy = { manifest: RecoveryCopyManifest; copyPath: string };
+export type PrunedRecoveryCopy = { reason: 'expired' | 'over-limit'; manifest: RecoveryCopyManifest } | { reason: 'orphan'; file: string };
+
+/** Copies older than this go to the recycle bin at startup. */
+const MAX_COPY_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+/** At most this many copies stay; older ones beyond it go to the recycle bin at startup. */
+const MAX_COPIES = 20;
+/** A temporary file this old is left from an interrupted write. */
+const STALE_TEMPORARY_MS = 60 * 60 * 1000;
 
 const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 
@@ -60,15 +68,66 @@ export class RecoveryCopies {
 
   /** The most recently written copy of an unnamed project. */
   async latestUnnamed(): Promise<RecoveryCopy | null> {
-    let names: string[];
-    try { names = await readdir(this.directory); }
-    catch (error) { if (isMissing(error)) return null; throw error; }
-    const copies: RecoveryCopy[] = [];
+    return latest((await this.all()).filter(copy => copy.manifest.projectPath === null));
+  }
+
+  /**
+   * Startup cleanup: copies older than 30 days and all but the newest 20 go to the recycle bin,
+   * with copy files that have no record, records without a copy and leftovers of interrupted writes.
+   */
+  async prune(trash: (path: string) => Promise<void>): Promise<PrunedRecoveryCopy[]> {
+    const names = await this.names();
+    const pruned: PrunedRecoveryCopy[] = [];
+    const now = this.now().getTime();
+    const kept: RecoveryCopy[] = [];
     for (const name of names.filter(value => value.endsWith('.json'))) {
-      const copy = await this.serialize(name.slice(0, -5), () => this.load(name.slice(0, -5)));
-      if (copy && copy.manifest.projectPath === null) copies.push(copy);
+      const id = name.slice(0, -5);
+      const copy = await this.serialize(id, () => this.load(id));
+      if (!copy) {
+        await this.serialize(id, () => unlink(this.manifestPath(id)));
+        pruned.push({ reason: 'orphan', file: this.manifestPath(id) });
+      } else if (now - Date.parse(copy.manifest.savedAt) > MAX_COPY_AGE_MS) {
+        await this.remove(copy, trash);
+        pruned.push({ reason: 'expired', manifest: copy.manifest });
+      } else kept.push(copy);
     }
-    return copies.sort((a, b) => b.manifest.savedAt.localeCompare(a.manifest.savedAt))[0] ?? null;
+    for (const copy of kept.sort((a, b) => b.manifest.savedAt.localeCompare(a.manifest.savedAt)).slice(MAX_COPIES)) {
+      await this.remove(copy, trash);
+      pruned.push({ reason: 'over-limit', manifest: copy.manifest });
+    }
+    const records = new Set(names.filter(value => value.endsWith('.json')).map(value => value.slice(0, -5)));
+    for (const name of names) {
+      const path = join(this.directory, name);
+      const orphanCopy = name.endsWith('.tblink') && !records.has(name.slice(0, -7));
+      const staleTemporary = name.startsWith('.') && name.endsWith('.tmp') && now - (await stat(path)).mtime.getTime() > STALE_TEMPORARY_MS;
+      if (!orphanCopy && !staleTemporary) continue;
+      await trash(path);
+      pruned.push({ reason: 'orphan', file: path });
+    }
+    return pruned;
+  }
+
+  private remove(copy: RecoveryCopy, trash: (path: string) => Promise<void>): Promise<void> {
+    const id = copyId(copy.manifest);
+    return this.serialize(id, async () => {
+      // The record goes first: a copy file without a record is never offered.
+      await unlink(this.manifestPath(id));
+      await trash(copy.copyPath);
+    });
+  }
+
+  private async names(): Promise<string[]> {
+    try { return await readdir(this.directory); }
+    catch (error) { if (isMissing(error)) return []; throw error; }
+  }
+
+  private async all(): Promise<RecoveryCopy[]> {
+    const copies: RecoveryCopy[] = [];
+    for (const name of (await this.names()).filter(value => value.endsWith('.json'))) {
+      const copy = await this.serialize(name.slice(0, -5), () => this.load(name.slice(0, -5)));
+      if (copy) copies.push(copy);
+    }
+    return copies;
   }
 
   private async load(id: string): Promise<RecoveryCopy | null> {
@@ -101,6 +160,10 @@ export class RecoveryCopies {
 
   private copyPath(id: string): string { return join(this.directory, `${id}.tblink`); }
   private manifestPath(id: string): string { return join(this.directory, `${id}.json`); }
+}
+
+function latest(copies: RecoveryCopy[]): RecoveryCopy | null {
+  return copies.sort((a, b) => b.manifest.savedAt.localeCompare(a.manifest.savedAt))[0] ?? null;
 }
 
 function copyId(owner: RecoveryCopyOwner): string {
