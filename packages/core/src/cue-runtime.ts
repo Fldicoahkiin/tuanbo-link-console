@@ -413,6 +413,20 @@ export class CueRuntime {
   /** The local formal audio clock; its own player reports a stalled position. */
   private ownsInternalClock(): boolean { return this.project.playbackSource === 'internal' && this.executionOwner === 'local'; }
 
+  /** Recovery rule B when OBS lost its state (a reconnect): the show-source Cues
+   * whose span covers `frame`, due now and counted as executed so their ends still hide. */
+  shownSourcesAt(frame: number): DueCue[] {
+    if (!this.ownsInternalClock() || !this.selectedItem) return [];
+    const due: DueCue[] = [];
+    for (const { cue } of eventsBetween(this.scheduledCues, -1, frame)) {
+      const end = cue.id.endsWith(':duration-end') ? undefined : this.scheduledCues.find(entry => entry.cue.id === `${cue.id}:duration-end`)?.scheduledFrame;
+      if (end === undefined || end <= frame) continue;
+      this.missedCueIds.delete(cue.id); this.executedCueIds.add(cue.id);
+      due.push({ cue, scheduledFrame: frame, executionId: crypto.randomUUID() });
+    }
+    return due;
+  }
+
   /** Recovery rule B: shown sources are state, so a show still within its span
    * goes out now and a hide whose show went out is sent. Point actions in the
    * gap are missed, never replayed. Everything is due at the current frame. */

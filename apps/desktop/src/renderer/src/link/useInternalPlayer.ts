@@ -7,6 +7,7 @@ import { InternalPlaybackController, emptyInternalPlayerState, type InternalPlay
 import { toUserErrorMessage } from '@tb/core/link';
 import { RemoteNativeProgramPlayer } from './runtime/remote-native-program-player';
 import type { ProgramPlayerControls } from './runtime/program-player-controls';
+import { recoverInternalObs } from './runtime/internal-obs-recovery';
 import type { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
 import { useDocumentStore } from './stores/document-store';
 import { useIntegrationStore } from './stores/integration-store';
@@ -136,7 +137,11 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     const unsubscribeObs = useIntegrationStore.subscribe((next, previous) => {
       if (previous.obs.status === 'connected' && next.obs.status !== 'connected') prepared = null;
       if (player instanceof InternalPlaybackController && previous.obs.status === 'connected' && next.obs.status !== 'connected' && useRuntimeStore.getState().state !== 'idle') {
-        player.reportFault('OBS 连接中断：画面动作失败直到重新连接 OBS，之后从下一画面事件继续');
+        player.reportFault('OBS 连接中断：画面动作失败，重新连接后按当前位置重建画面');
+      }
+      if (player instanceof InternalPlaybackController && previous.obs.status !== 'connected' && next.obs.status === 'connected' && path) {
+        const control = view.readControl();
+        void recoverInternalObs({ project, path, status: control.status, itemId: control.itemId, positionMs: view.readClock().positionMs, coordinator, player, notice: (message, itemId) => dependencies.notice?.(message, itemId) });
       }
     });
     const unsubscribeFaults = useRuntimeStore.subscribe((next, previous) => {

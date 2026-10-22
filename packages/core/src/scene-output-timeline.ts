@@ -92,12 +92,23 @@ export class SceneOutputTimeline {
     const started = new Set(media.filter(event => event.phase === 'start').map(event => event.clipId));
     const stops = media.filter(event => event.phase === 'stop' && !started.has(event.clipId)).map(event => ({ ...event, frameNumber: frame }));
     const work = boundaryWork(this.index.itemId, frame, [], stops, this.at(previous), this.at(frame));
-    const shown = due.flatMap((entry) => {
-      const actions = entry.cue.actions.filter((action) => action.kind !== 'obs.setProgramScene');
-      return actions.length ? [{ ...entry, cue: { ...entry.cue, actions }, scheduledFrame: frame }] : [];
-    });
-    return { cues: [...work.cues, ...shown], media: work.media };
+    return { cues: [...work.cues, ...shownAt(due, frame)], media: work.media };
   }
+  /** Recovery rule B when OBS's picture state is unknown (after a reconnect): the
+   * picture at `frame` from nothing, with every clip on air entering at `frame`. */
+  restore(frame: number, shown: RuntimeUpdate['dueCues']): SceneWork {
+    const work = boundaryWork(this.index.itemId, frame, [], [], { cues: [], media: [] }, this.at(frame));
+    return { cues: [...work.cues, ...shownAt(shown, frame)], media: work.media };
+  }
+}
+
+/** Shown-source actions one frame after the scene and clips they land on, since a
+ * show acts on the scene then on program; camera switches come from the timeline. */
+function shownAt(due: RuntimeUpdate['dueCues'], frame: number): RuntimeUpdate['dueCues'] {
+  return due.flatMap((entry) => {
+    const actions = entry.cue.actions.filter((action) => action.kind !== 'obs.setProgramScene');
+    return actions.length ? [{ ...entry, cue: { ...entry.cue, actions }, scheduledFrame: frame + 1 }] : [];
+  });
 }
 
 /** A finite camera clip temporarily covers lower tracks; its end reveals their current position. */

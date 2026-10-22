@@ -24,7 +24,7 @@ import { prepareInternalRuntime, prepareRuntimeArm } from './internal-runtime-pr
 import { prepareNativeCompanionRuntime } from './native-companion-preparation';
 import { InternalPreparationScope } from './internal-preparation-scope';
 import { EditorScenePreview } from './editor-scene-preview';
-import { executeTimelineMedia, executeTimelineWork, executeDueCues, synchronizeTimelineTransport, reportSkippedTimelineMedia, executeSkippedTimelineCue, retryReportedAction } from './timeline-work';
+import { executeTimelineMedia, executeTimelineWork, executeDueCues, synchronizeTimelineTransport, reportSkippedTimelineMedia, executeSkippedTimelineCue, retryReportedAction, rebuildTimelinePicture } from './timeline-work';
 
 export class LinkRuntimeCoordinator {
   private readonly runtime: CueRuntime;
@@ -105,6 +105,12 @@ export class LinkRuntimeCoordinator {
     const sample = internalSample(this.project, positionMs); this.lastSample = sample;
     const operation = seekInternalRuntime(this.project, this.projectPath, item.id, sample, this.runtime, this.managedOutput, this.runner, (update) => this.applyRequiredUpdate(update));
     this.cueExecutionTail = operation.catch((error: unknown) => this.reportRuntimeError(error)); await operation;
+  }
+  /** Recovery rule B after OBS reconnects while internal audio plays; returns how many outputs were rebuilt. */
+  rebuildPicture(): Promise<number> {
+    if (this.internalObsOwner === 'main' || !this.lastSample || this.runtime.getState() !== 'running') return Promise.resolve(0);
+    const generation = this.executionGeneration, execution = this.cueExecutionTail.then(() => rebuildTimelinePicture(() => this.lastSample?.totalFrames ?? 0, this.runtime, this.managedOutput, (cues, media) => this.executeTimelineWork(cues, media, generation)));
+    this.cueExecutionTail = execution.then(() => undefined, (error: unknown) => this.reportRuntimeError(error)); return execution;
   }
   async pauseInternal(reason?: string): Promise<void> { this.internalClockActive = false; this.pause(reason); await this.syncMediaTransport('pause'); }
 
