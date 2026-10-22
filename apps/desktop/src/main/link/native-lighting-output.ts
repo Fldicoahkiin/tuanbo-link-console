@@ -1,4 +1,4 @@
-import { compileLightingPackets, LightingNetworkOutput, LightingScheduler, type LightingPacket,
+import { compileLightingPackets, LightingNetworkOutput, LightingScheduler, type LightingOnAir, type LightingPacket,
   type LinkDesktopApi, type ProgramLightingOutput } from '@tb/core/link';
 import type { IntegrationProfile, LightingDocument } from '@tb/schema';
 import { NativeMidiPorts } from './native-midi-ports';
@@ -28,6 +28,10 @@ export class NativeLightingOutput implements ProgramLightingOutput {
   private readonly pending = new Set<Promise<void>>();
   private position = 0;
   private observedAt = 0;
+  private ticked: number | null = null;
+  private document: LightingDocument | null = null;
+  /** What this song left on the console when it was paused or relocated. */
+  private carried: { document: LightingDocument; onAir: LightingOnAir } | null = null;
 
   constructor(private readonly dependencies: Dependencies) {
     this.now = dependencies.now ?? (() => Number(process.hrtime.bigint()) / 1e6);
@@ -50,10 +54,15 @@ export class NativeLightingOutput implements ProgramLightingOutput {
     try {
       await ports.prepare([...new Set(packets.map(packet => packet.portProfileId))], aborted.signal);
       if (generation !== this.generation) throw new Error('灯光准备已取消');
-      await this.network.prepare(document, positionMs);
+      const restored = await this.network.prepare(document, positionMs, true);
       if (generation !== this.generation) throw new Error('灯光准备已取消');
-      this.scheduler = new LightingScheduler(packets, packet => this.send(packet));
-      this.position = positionMs; this.scheduler.locate(positionMs);
+      this.scheduler = new LightingScheduler(packets, packet => this.send(packet), this.carried?.document === document ? this.carried.onAir : undefined);
+      this.document = document; this.carried = null;
+      // Resume and seek rebuild the state at this position from the timeline;
+      // only the differences go out now, before audio continues.
+      this.position = positionMs; this.observedAt = this.now(); this.ticked = positionMs;
+      const sent = restored + this.scheduler.restore(positionMs);
+      if (sent) this.fault = `灯光按播放位置重建：发送 ${sent} 条，中间事件不补发`;
     } catch (error) { if (generation === this.generation) this.stop(); throw error; }
   }
 
@@ -68,6 +77,11 @@ export class NativeLightingOutput implements ProgramLightingOutput {
     this.requireClock(positionMs);
     const age = this.now() - this.observedAt;
     if (age > 100) { this.fault = `灯光音频时钟晚到 ${Math.round(age)}ms，本次位置未发送灯光，不补发`; return; }
+    const gap = this.ticked === null ? 0 : positionMs - this.ticked; this.ticked = positionMs;
+    if (gap > 100) {
+      const sent = this.network.restore(positionMs) + (this.scheduler?.restore(positionMs) ?? 0);
+      this.fault = `灯光位置更新中断 ${Math.round(gap)}ms：按当前位置重建，发送 ${sent} 条，中间事件不补发`; return;
+    }
     this.network.tick(positionMs); this.scheduler?.tick(positionMs);
   }
   async finish(positionMs: number): Promise<void> {
@@ -80,8 +94,12 @@ export class NativeLightingOutput implements ProgramLightingOutput {
     const fault = this.network.takeFault() ?? this.fault; this.fault = null; return fault;
   }
 
+  /** The player stopped the song: nothing of it is assumed on air for the next play. */
+  release(): Promise<void> { this.carried = null; this.document = null; this.network.forget(); return Promise.resolve(); }
+
   stop(): void {
-    this.generation++; this.abort?.abort(); this.abort = null;
+    if (this.scheduler && this.document) this.carried = { document: this.document, onAir: this.scheduler.onAir() };
+    this.generation++; this.abort?.abort(); this.abort = null; this.ticked = null;
     // The native port owns acknowledged notes. Closing it releases only those
     // notes, including an in-flight Note On whose acknowledgement arrived late.
     this.scheduler = null; this.network.stop();

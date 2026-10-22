@@ -30,7 +30,7 @@ export class InternalPlaybackController {
   private disposed = false;
   private loadedAudioUrl: string | null = null;
   private audibleMs = 0;
-  private readonly lighting = new LightingMidiOutput();
+  private readonly lighting = new LightingMidiOutput(true);
 
   constructor(private readonly project: LinkProject, private readonly dependencies: InternalPlayerDependencies,
     private readonly audio: HTMLAudioElement = new Audio(), private readonly mtc = new MediaMtcOutput(),

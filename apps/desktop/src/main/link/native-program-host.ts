@@ -75,7 +75,7 @@ export class NativeProgramHost {
       // as soon as the play command is acknowledged, before the first sample.
       tick: () => undefined,
       finish: async positionMs => { if (this.lightingSession?.ready) { await this.lighting.finish(positionMs); this.reportLightingFault(); } },
-      stop: () => this.stopLighting(), close: () => { this.lightingSession = null; return this.lighting.close(); }
+      stop: () => this.stopLighting(), release: () => this.lighting.release(), close: () => { this.lightingSession = null; return this.lighting.close(); }
     });
   }
 

@@ -40,3 +40,18 @@ it('控台时间线模式不重复发送 Cue', async () => {
   await f.output.prepare(f.document, f.profile, 0); f.output.tick(100);
   expect(f.send).not.toHaveBeenCalled();
 });
+
+it('本机播放按当前位置重建：继续时控台已在的 Cue 不重发，定位与位置更新中断只补差异并标红；跟随 P1 不重建', async () => {
+  const f = setup(); const output = new LightingMidiOutput(true);
+  const cues = () => f.send.mock.calls.map(call => (call[0] as number[])[5]);
+  await output.prepare(f.document, f.profile, 0); output.tick(50); output.tick(100); expect(cues()).toEqual([1]);
+  output.stop(); await output.prepare(f.document, f.profile, 120); output.tick(130);
+  expect(cues()).toEqual([1]); expect(output.takeFault()).toBeNull();
+  output.stop(); await output.prepare(f.document, f.profile, 50);
+  expect(cues()).toEqual([1, 0x0b]); expect(output.takeFault()).toBe('灯光按播放位置重建：发送 1 条，中间事件不补发');
+  output.tick(60); output.tick(300);
+  expect(cues()).toEqual([1, 0x0b, 1]); expect(output.takeFault()).toBe('灯光位置更新中断 240ms：按当前位置重建，发送 1 条，中间事件不补发');
+  output.stop(); f.send.mockClear();
+  await f.output.prepare(f.document, f.profile, 50); f.output.tick(300); expect(cues()).toEqual([1]); expect(f.output.takeFault()).toBeNull();
+  f.output.stop();
+});

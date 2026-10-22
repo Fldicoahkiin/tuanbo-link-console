@@ -30,6 +30,16 @@ it('MIDI 定位不会关闭本次没有启动的执行器，连续播放则先 O
   scheduler.locate(50); scheduler.tick(100); expect(sent).toEqual([1]);
   sent.length = 0; scheduler.locate(0); scheduler.tick(0); scheduler.tick(100); expect(sent).toEqual([1,11,1]);
 });
+it('本机播放继续时沿用暂停前已在控台上的执行器：相同 Cue 不重发，之后的单独运行仍能关闭它；定位只补差异', () => {
+  const packets = compileLightingPackets({ ...document([cue('a',1,0),cue('b',2,100,'independent')]), outputMode: 'direct' });
+  const sent: number[] = []; const first = new LightingScheduler(packets, value => sent.push(value.bytes[5]!));
+  first.restore(0); first.tick(50); expect(sent).toEqual([1]);
+  const onAir = first.onAir(); first.stop(); sent.length = 0;
+  const resumed = new LightingScheduler(packets, value => sent.push(value.bytes[5]!), onAir);
+  expect(resumed.restore(50)).toBe(0); resumed.tick(100); expect(sent).toEqual([11,1]);
+  sent.length = 0; const seeked = new LightingScheduler(packets, value => sent.push(value.bytes[5]!), onAir);
+  expect(seeked.restore(150)).toBe(2); expect(sent).toEqual([11,1]);
+});
 it('网络定位只释放本会话成功触发的目标；直播中关闭失败标红，后续 Cue 照常发送', async () => {
   const playMa2Cue = vi.fn<(request: Ma2PlaybackRequest) => Promise<void>>().mockResolvedValue(undefined); const cancelMa2Playback = vi.fn().mockResolvedValue(undefined);
   const api = { playMa2Cue, cancelMa2Playback, getMa2NetworkStatus: vi.fn().mockResolvedValue({ state: 'connected', version: '3.7.0.5', passwordSaved: false, error: null, settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false } }) };
@@ -39,6 +49,21 @@ it('网络定位只释放本会话成功触发的目标；直播中关闭失败�
   playMa2Cue.mockClear(); await output.prepare(value, 0); playMa2Cue.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('off failed'));
   await expect(output.finish(101)).resolves.toBeUndefined(); expect(playMa2Cue.mock.calls.map(call => call[0].action.action)).toEqual(['goto','off','goto']);
   expect(output.takeFault()).toContain('off failed'); await output.close();
+});
+
+it('网络直控按当前位置重建：继续播放不重发控台上已有的 Cue，单独运行仍关闭继续前的目标，定位只补差异', async () => {
+  const playMa2Cue = vi.fn<(request: Ma2PlaybackRequest) => Promise<void>>().mockResolvedValue(undefined); const cancelMa2Playback = vi.fn().mockResolvedValue(undefined);
+  const api = { playMa2Cue, cancelMa2Playback, getMa2NetworkStatus: vi.fn().mockResolvedValue({ state: 'connected', version: '3.7.0.5', passwordSaved: false, error: null, settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false } }) };
+  const value = document([cue('a',1,0),cue('b',2,100,'independent')]);
+  const sent = () => playMa2Cue.mock.calls.map(call => `${call[0].action.action}:${call[0].action.target === 'executor' ? call[0].action.executor : ''}`);
+  const output = new LightingNetworkOutput(api, error => { throw error; });
+  expect(await output.prepare(value, 0, true)).toBe(0); await output.finish(50); expect(sent()).toEqual(['goto:1.101']);
+  output.stop(); playMa2Cue.mockClear();
+  expect(await output.prepare(value, 50, true)).toBe(0); await output.finish(101); expect(sent()).toEqual(['off:1.101','goto:1.102']);
+  output.stop(); playMa2Cue.mockClear();
+  expect(await output.prepare(value, 50, true)).toBe(2); await output.finish(50); expect(sent()).toEqual(['off:1.102','goto:1.101']);
+  output.forget(); playMa2Cue.mockClear();
+  expect(await output.prepare(value, 150, true)).toBe(1); await output.finish(150); expect(sent()).toEqual(['goto:1.102']); await output.close();
 });
 
 it('MIDI 循环回到单独运行 Cue 时关闭上轮实际启动的目标', () => {
