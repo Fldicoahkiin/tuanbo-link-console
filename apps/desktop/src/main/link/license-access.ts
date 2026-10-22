@@ -13,7 +13,9 @@ const publicCalls = new Set([
   'link:purchase-copy-code',
   'link:app-info', 'link:process-stop', 'link:obs-disconnect', 'link:ma2-network-disconnect',
   'link:obs-source-cancel', 'link:obs-live-close', 'link:ma2-read-cancel',
-  'link:ma2-discovery-cancel', 'link:p1-import-cancel', 'link:set-document-dirty'
+  'link:ma2-discovery-cancel', 'link:p1-import-cancel',
+  // Protecting unsaved work never waits for a license: the save itself follows the save rule.
+  'link:set-document-state', 'link:resolve-unsaved-changes', 'link:save-response'
 ]);
 
 const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy']);

@@ -61,5 +61,5 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     const sent = await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST);
     expect(ma2ApplyRequestSchema.parse(JSON.parse(sent ?? 'null')).document.tracks[0]!.clips[0]!.events[0]!.at).toBeCloseTo(700, -1);
     await page.screenshot({ path: info.outputPath('编辑后已回读.png') });
-  } finally { await (await app.firstWindow()).evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await (await app.firstWindow()).evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

@@ -59,7 +59,7 @@ test('两首歌分别导入控台时间线后，编辑器仅显示当前歌曲�
     await expect(page.locator('.lighting-timeline-point')).toHaveAttribute('title', /乙的副歌 Cue · Cue 2\.500/);
     await expect(page.locator('.lighting-timeline-point')).not.toHaveAttribute('title', /甲的开场 Cue/);
   } finally {
-    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     if (application.process().exitCode === null) await application.close();
   }
 });

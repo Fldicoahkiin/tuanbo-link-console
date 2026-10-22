@@ -6,6 +6,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { z } from 'zod';
 import { ma2AutoBindRequestSchema, ma2AutoBindResultSchema } from '@tb/schema';
 import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
+import { linkDocumentStateSchema, linkSaveRequestSchema, linkUnsavedChangesDecisionSchema } from '@tb/schema';
 import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
 import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema } from '@tb/schema';
 import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema } from '@tb/schema';
@@ -147,7 +148,18 @@ const tbLink: LinkDesktopBridgeApi = {
   checkForUpdates: () => invoke('link:update-check'),
   downloadUpdate: () => invoke('link:update-download'),
   installUpdate: () => invoke('link:update-install'),
-  setDocumentDirty: (dirty) => invoke('link:set-document-dirty', dirty),
+  setDocumentState: (state) => invoke('link:set-document-state', linkDocumentStateSchema.parse(state)),
+  resolveUnsavedChanges: async (reason) => linkUnsavedChangesDecisionSchema.parse(await invoke('link:resolve-unsaved-changes', reason)),
+  onSaveRequest: (handler) => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => {
+      const { id } = linkSaveRequestSchema.parse(value);
+      void handler().catch((error: unknown) => ({ status: 'failed' as const, message: `工程保存失败：${toUserErrorMessage(error)}` }))
+        .then(result => invoke('link:save-response', { version: 1, id, result }))
+        .catch((error: unknown) => console.error('保存结果未能送回主进程', error));
+    };
+    ipcRenderer.on('link:save-request', receive);
+    return () => { ipcRenderer.removeListener('link:save-request', receive); };
+  },
   setRuntimeActive: (active) => invoke('link:set-runtime-active', active),
   controlWindow: (action) => invoke('link:window-control', action),
   detectLocalIntegrations: () => invoke('link:detect-local-integrations'),

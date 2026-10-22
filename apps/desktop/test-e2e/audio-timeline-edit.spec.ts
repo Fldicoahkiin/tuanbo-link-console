@@ -106,5 +106,5 @@ for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '�
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

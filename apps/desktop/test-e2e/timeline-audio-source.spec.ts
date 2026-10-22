@@ -44,5 +44,5 @@ test('时间线更换工程后音源缺失，不沿用上一首音频或空跑',
     await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toHaveCount(0);
     await page.waitForTimeout(250);
     await expect(page.locator('.timeline-transport code')).toHaveText('00:00');
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

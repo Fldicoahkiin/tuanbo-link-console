@@ -66,7 +66,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     await page.getByRole('button', { name: '音频 Cue 2', exact: true }).click();
     await expect.poll(async () => (await packets()).length).toBe(2);
     await expect(page.getByText('已发送 1 条 Cue 指令（MIDI 无回执）', { exact: true })).toBeVisible();
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 导出', async ({}, info) => {
@@ -156,5 +156,5 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     expect(exported).toContain('.hia');
     expect(await readFile(exported.trim(), 'utf8')).toContain('audio_caption_="异常歌曲"');
     expect(await readFile(exported.trim(), 'utf8')).toContain('audio_caption_="待补歌曲"');
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

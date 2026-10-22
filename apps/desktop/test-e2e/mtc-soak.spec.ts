@@ -266,7 +266,7 @@ test('真实媒体时钟与 Windows MIDI 回环持续测量', async ({}, info) =
       return { cpu: result, metrics };
     });
     await writeFile(info.outputPath('renderer.cpuprofile'), JSON.stringify(cpu));
-    await page.evaluate(async () => { (Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement | undefined)?.pause(); const input = Reflect.get(window, '__mtcSoakInput') as MIDIInput | undefined; if (input) { input.onmidimessage = null; await input.close(); } await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+    await page.evaluate(async () => { (Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement | undefined)?.pause(); const input = Reflect.get(window, '__mtcSoakInput') as MIDIInput | undefined; if (input) { input.onmidimessage = null; await input.close(); } await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
     await application.close();
   }
 });

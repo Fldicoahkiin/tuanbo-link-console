@@ -128,7 +128,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     expect(await app.evaluate(() => process.env.TBLINK_CACHE_TEST_READS)).toBe('1');
     await expect(page.locator('.project-save-status')).toBeHidden();
     expect(parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).ma2ReadState?.filter).toBe('native');
-    await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close();
+    await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close();
     app = await launch(); page = await app.firstWindow();
     await expect(page.getByText('MA2 缓存流程软件验收', { exact: true }).first()).toBeVisible();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
@@ -148,7 +148,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
       await writeFile(info.outputPath('failure-logs.json'), JSON.stringify(await page.evaluate(() => window.tbLink.queryLogs({ limit: 100 })), null, 2));
     }
     throw error;
-  } finally { if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false)); if (app.process().exitCode === null) await app.close(); }
+  } finally { if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); if (app.process().exitCode === null) await app.close(); }
 });
 
 

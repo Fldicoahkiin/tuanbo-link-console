@@ -39,6 +39,6 @@ test('纵向滚动显示真实轨道 Cue，选中项和撤销不因离开视口�
     await viewport.evaluate(element => { element.scrollTop = element.scrollHeight; });
     await expect(last).toBeVisible();
     await page.screenshot({ path: info.outputPath('tracks-bottom.png') });
-    await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
   } finally { await app.close(); }
 });

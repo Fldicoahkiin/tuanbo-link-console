@@ -42,7 +42,7 @@ test('时间码关联待核对：反复切换和播放只显示一条准确提�
     expect(errors).toEqual([]);
     await page.screenshot({ path: info.outputPath('timecode-pairing-review.png') });
   } finally {
-    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
     await app.close();
   }
 });

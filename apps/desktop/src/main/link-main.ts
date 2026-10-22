@@ -65,6 +65,7 @@ import { assetResponse } from './link/asset-response';
 import { ProjectDocumentService } from './link/project-document-service';
 import { ProjectArchiveSettingsStore, projectArchives } from './link/project-archives';
 import { offerRecoveryCopy, RecoveryCopies, type RecoveryOffer } from './link/recovery-copies';
+import { RendererSaveRequests, UnsavedChangesGuard, unsavedChangesPrompt } from './link/unsaved-changes-guard';
 import { cpus, release, totalmem, freemem } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
@@ -85,7 +86,10 @@ import {
 import {
   createEmptyLinkProject,
   linkDiagnosticContextSchema,
-  linkDocumentDirtySchema,
+  linkDocumentStateSchema,
+  linkSaveResponseSchema,
+  linkUnsavedChangesReasonSchema,
+  type LinkDocumentState,
   linkRuntimeActiveSchema,
   linkInternalAudioCaptureSchema,
   linkExternalApplicationIdSchema,
@@ -175,7 +179,28 @@ if (internalDistribution) app.setName(internalDistribution.channel === 'portable
 crashReporter.start({ uploadToServer: false });
 
 let mainWindow: BrowserWindow | null = null;
-let documentDirty = false;
+/** The open document as the window last reported it; the unsaved-changes guard reads it. */
+let documentState: LinkDocumentState = { version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null };
+/** The operator chose 不保存 for this quit; its recovery copy goes once the quit completes. */
+let discardOnQuit = false;
+let recoveryCopies: RecoveryCopies | null = null;
+const rendererSaves = new RendererSaveRequests(() => {
+  const window = mainWindow;
+  if (!window || window.isDestroyed() || window.webContents.isCrashed()) return null;
+  return { send: id => window.webContents.send('link:save-request', { version: 1, id }) };
+});
+const unsavedChanges = new UnsavedChangesGuard({
+  state: () => documentState,
+  ask: async prompt => {
+    const options = unsavedChangesPrompt(prompt);
+    const { response } = mainWindow && !mainWindow.isDestroyed() ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
+    return response === 0 ? 'save' : response === 1 ? 'discard' : 'cancel';
+  },
+  save: () => rendererSaves.request(),
+  log: message => { void ipcLogger?.record({ level: 'warning', category: 'system', message }).catch((error: unknown) => console.error('记录未保存修改处理失败', error)); }
+});
+/** Every quit (window close, app.quit, Windows session end) goes through here. */
+let requestQuit: () => void = () => { app.quit(); };
 let runtimeActive = false;
 let releaseRendererRuntime: () => Promise<void> = () => Promise.resolve();
 let automaticMusic: AutomaticMusicRuntime | null = null;
@@ -282,24 +307,35 @@ async function bootstrap(): Promise<void> {
     recordQuitStep('所有窗口已关闭');
     if (process.platform !== 'darwin' && (allowWindowClose || !quitFlowRunning)) app.quit();
   });
-  app.on('before-quit', (event) => {
-    recordQuitStep('收到退出请求');
-    if (allowWindowClose || quitFlowRunning) return;
-    event.preventDefault();
+  requestQuit = () => {
+    if (quitFlowRunning) { recordQuitStep('退出流程进行中，忽略重复请求'); return; }
     if (runtimeActive || nativePlaybackActive()) {
       showRuntimeActiveExitWarning();
       return;
     }
     quitFlowRunning = true;
-    void obs.sources.discardPending().then(() => runQuitFlow(profileStore, processManager))
-      .catch((error: unknown) => {
-        recordQuitStep('退出流程失败', { error: error instanceof Error ? error.message : String(error) });
-        dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => {
-        quitFlowRunning = false;
-        if (allowWindowClose && BrowserWindow.getAllWindows().length === 0) app.quit();
-      });
+    void (async () => {
+      const decision = await unsavedChanges.resolve('quit');
+      recordQuitStep('未保存修改已处理', { decision });
+      if (decision === 'cancelled') return;
+      discardOnQuit = decision === 'discarded';
+      await obs.sources.discardPending();
+      await runQuitFlow(profileStore, processManager);
+    })().catch((error: unknown) => {
+      recordQuitStep('退出流程失败', { error: error instanceof Error ? error.message : String(error) });
+      dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error));
+    }).finally(() => {
+      quitFlowRunning = false;
+      // A cancelled quit keeps the edits, and their recovery copy, as they are.
+      if (!allowWindowClose) discardOnQuit = false;
+      if (allowWindowClose && BrowserWindow.getAllWindows().length === 0) app.quit();
+    });
+  };
+  app.on('before-quit', (event) => {
+    recordQuitStep('收到退出请求');
+    if (allowWindowClose) return;
+    event.preventDefault();
+    requestQuit();
   });
 }
 
@@ -338,6 +374,11 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
   });
   mainWindow.webContents.on('will-navigate', event => event.preventDefault());
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    // Nothing can be saved from a window that exited: the recovery copy holds the
+    // edits and is offered when the project opens again, so quitting does not ask.
+    rendererSaves.failAll('界面进程已退出，无法保存；未保存的修改保留在恢复副本中，下次打开工程时可以恢复');
+    if (documentState.dirty) recordQuitStep('界面进程退出，未保存的修改以恢复副本为准');
+    documentState = { ...documentState, dirty: false, consoleSynced: false };
     void closeNativePlayer().then(() => releaseRendererRuntime()).catch((error: unknown) => {
       void logger.record({ level: 'error', category: 'device', device: '正式音频', message: `界面退出后停止音频失败：${String(error)}`, result: 'failed' })
         .catch((loggingError: unknown) => console.error('记录音频停止失败', loggingError));
@@ -347,6 +388,7 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
       result: 'failed' }).catch((error: unknown) => console.error('记录 Electron 界面崩溃失败', error));
   });
   mainWindow.on('unresponsive', () => {
+    rendererSaves.failAll('界面无响应，保存未完成；未保存的修改保留在恢复副本中');
     void logger.record({ level: 'error', category: 'system', message: '界面无响应', result: 'failed' })
       .catch((error: unknown) => console.error('记录界面无响应失败', error));
   });
@@ -366,15 +408,20 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
     mainWindow.webContents.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown' || !input.alt || input.control || input.meta || input.key.toLowerCase() !== 'r') return;
       event.preventDefault();
-      if (runtimeActive || documentDirty) {
+      if (runtimeActive) {
         dialog.showMessageBoxSync(mainWindow!, {
           type: 'info', title: '刷新开发界面',
-          message: runtimeActive ? '停止播放后再按 Alt+R 刷新。' : '保存工程后再按 Alt+R 刷新。',
+          message: '停止播放后再按 Alt+R 刷新。',
           buttons: ['知道了'], noLink: true
         });
         return;
       }
-      void obs.sources.discardPending().then(() => mainWindow?.webContents.reload()).catch((error: unknown) => dialog.showErrorBox('刷新失败', error instanceof Error ? error.message : String(error)));
+      void unsavedChanges.resolve('reload').then(async decision => {
+        if (decision === 'cancelled') return;
+        if (decision === 'discarded') await discardOpenDocumentRecovery();
+        await obs.sources.discardPending();
+        mainWindow?.webContents.reload();
+      }).catch((error: unknown) => dialog.showErrorBox('刷新失败', error instanceof Error ? error.message : String(error)));
     });
   }
 
@@ -398,34 +445,11 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
   mainWindow.on('close', (event) => {
     recordQuitStep('窗口关闭请求');
     if (allowWindowClose) return;
-    if (runtimeActive || nativePlaybackActive()) {
-      event.preventDefault();
-      showRuntimeActiveExitWarning();
-      return;
-    }
-    if (documentDirty) {
-      const response = dialog.showMessageBoxSync(mainWindow!, {
-        type: 'warning',
-        title: '工程尚未保存',
-        message: '当前工程包含未保存修改。',
-        detail: '返回联动台保存工程，或明确放弃本次修改。',
-        buttons: ['返回工程', '放弃修改并退出'],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true
-      });
-      if (response === 0) {
-        event.preventDefault();
-        return;
-      }
-      // Keep the unsaved mark: the quit flow may still be cancelled (lighting
-      // audition or an external program), and the edits are then still here.
-      // A completed quit closes the window with allowWindowClose set.
-    }
     event.preventDefault();
-    app.quit();
+    requestQuit();
   });
   mainWindow.on('closed', () => {
+    rendererSaves.failAll('界面已关闭，无法保存；未保存的修改保留在恢复副本中，下次打开工程时可以恢复');
     mainWindow = null;
   });
 
@@ -998,7 +1022,6 @@ function registerIpc(
   handle('link:update-download', (): Promise<LinkUpdateStatus> => updateManager.download());
   handle('link:update-install', async () => {
     if (runtimeActive || nativePlaybackActive()) throw new Error('联动尚未停止；请先到集成中心停止联动并完成 OBS 清理，再安装更新');
-    if (documentDirty) throw new Error('当前工程尚未保存，保存后才能安装更新');
     const decision = await dialog.showMessageBox(mainWindow!, {
       type: 'question',
       title: '安装团播联动台更新',
@@ -1010,7 +1033,10 @@ function registerIpc(
       noLink: true
     });
     if (decision.response !== 1) return;
-    if (runtimeActive || nativePlaybackActive() || documentDirty) throw new Error('播放或工程状态已变化，请停止联动并保存工程后重新安装');
+    const unsaved = await unsavedChanges.resolve('update');
+    if (unsaved === 'cancelled') return;
+    if (runtimeActive || nativePlaybackActive()) throw new Error('播放状态已变化，请停止联动后重新安装');
+    if (unsaved === 'discarded') await discardOpenDocumentRecovery();
     await closeNativePlayer();
     allowWindowClose = true;
     try {
@@ -1020,8 +1046,13 @@ function registerIpc(
       throw error;
     }
   });
-  handle('link:set-document-dirty', (_event, dirtyValue: unknown) => {
-    documentDirty = linkDocumentDirtySchema.parse(dirtyValue);
+  handle('link:set-document-state', (_event, stateValue: unknown) => {
+    documentState = linkDocumentStateSchema.parse(stateValue);
+  });
+  handle('link:resolve-unsaved-changes', (_event, reasonValue: unknown) => unsavedChanges.resolve(linkUnsavedChangesReasonSchema.parse(reasonValue)));
+  handle('link:save-response', (_event, responseValue: unknown) => {
+    const response = linkSaveResponseSchema.parse(responseValue);
+    rendererSaves.answer(response.id, response.result);
   });
   handle('link:set-runtime-active', async (_event, activeValue: unknown) => {
     if (licenseChanging && activeValue === true) throw new Error('请等待授权操作完成后再播放');
@@ -1112,9 +1143,10 @@ function registerIpc(
     }
     return destination;
   });
-  const recoveryCopies = new RecoveryCopies(join(app.getPath('userData'), 'link-recovery'), projectDocuments);
+  const copies = new RecoveryCopies(join(app.getPath('userData'), 'link-recovery'), projectDocuments);
+  recoveryCopies = copies;
   // The renderer records a failed write once, with the reason shown to the operator.
-  handle('link:write-recovery-copy', (_event, payload: unknown) => recoveryCopies.write(recoveryCopyWriteSchema.parse(payload)));
+  handle('link:write-recovery-copy', (_event, payload: unknown) => copies.write(recoveryCopyWriteSchema.parse(payload)));
   handle('link:confirm-project-location', async (_event, purposeValue: unknown) => {
     const purpose = z.string().min(1).max(200).parse(purposeValue);
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'question', title: '选择工程保存位置', noLink: true,
@@ -1122,10 +1154,10 @@ function registerIpc(
       buttons: ['选择保存位置', '取消'], defaultId: 0, cancelId: 1 });
     return response === 0;
   });
-  handle('link:discard-recovery-copy', (_event, payload: unknown) => recoveryCopies.discard(recoveryCopyDiscardSchema.parse(payload)));
+  handle('link:discard-recovery-copy', (_event, payload: unknown) => copies.discard(recoveryCopyDiscardSchema.parse(payload)));
   handle('link:resolve-recovery-copy', async (_event, payload: unknown) => {
     const content = await offerRecoveryCopy(recoveryCopyQuerySchema.parse(payload), {
-      copies: recoveryCopies,
+      copies,
       read: path => projectDocuments.read(path),
       modifiedAt: async path => (await stat(path)).mtime,
       ask: async offer => {
@@ -1784,6 +1816,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   if (owned.length === 0) {
     recordQuitStep('退出前关闭音乐分析');
     await automaticMusic?.close();
+    if (discardOnQuit) await discardOpenDocumentRecovery();
     allowWindowClose = true;
     recordQuitStep('退出流程完成');
     app.quit();
@@ -1830,9 +1863,23 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   }
   recordQuitStep('退出前关闭音乐分析');
   await automaticMusic?.close();
+  if (discardOnQuit) await discardOpenDocumentRecovery();
   allowWindowClose = true;
   recordQuitStep('退出流程完成');
   app.quit();
+}
+
+/** After 不保存: the open document's recovery copy is removed. A failure is logged and never blocks
+ * the action; the copy is then offered again the next time the project opens. */
+async function discardOpenDocumentRecovery(): Promise<void> {
+  const { projectPath, projectId } = documentState;
+  if (!recoveryCopies || !projectId) return;
+  try {
+    await recoveryCopies.discard({ version: 1, projectPath, projectId });
+    recordQuitStep('已按“不保存”清除恢复副本', { projectPath });
+  } catch (error) {
+    recordQuitStep('恢复副本未能清除，下次打开工程时会再次提示', { projectPath, error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 function recoveryPrompt(offer: RecoveryOffer): Electron.MessageBoxOptions {
@@ -1849,7 +1896,7 @@ function recoveryPrompt(offer: RecoveryOffer): Electron.MessageBoxOptions {
 /** Each quit stage with the flags that gate it, so a hang names its stage. */
 function recordQuitStep(step: string, details: Record<string, unknown> = {}): void {
   void ipcLogger?.record({ level: 'info', category: 'system', device: '退出流程', message: step,
-    details: { runtimeActive, nativePlayback: nativePlaybackActive(), documentDirty, allowWindowClose, quitFlowRunning,
+    details: { runtimeActive, nativePlayback: nativePlaybackActive(), documentDirty: documentState.dirty, allowWindowClose, quitFlowRunning,
       windows: BrowserWindow.getAllWindows().length, ...details } })
     .catch((error: unknown) => console.error('退出流程日志未能写入', error));
 }

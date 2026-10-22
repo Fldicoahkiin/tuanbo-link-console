@@ -34,7 +34,7 @@ import { useRuntimeStore } from './stores/runtime-store';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 import { useProjectPersistence } from './useProjectPersistence';
 import { useRecoveryCopyWriter } from './recovery-copy-writer';
-import { saveDocument, showOpenedProject } from './project-document';
+import { confirmReplaceDocument, saveDocument, showOpenedProject, useDocumentStateReport } from './project-document';
 import { useP1AutoFollow } from './useP1AutoFollow';
 import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
@@ -74,7 +74,6 @@ export function LinkApp(): JSX.Element {
   const project = useDocumentStore((state) => state.project);
   const projectPath = useDocumentStore((state) => state.path);
   const documentId = useDocumentStore((state) => state.documentId);
-  const dirty = useDocumentStore((state) => state.dirty);
   const documentError = useDocumentStore((state) => state.error);
   const canUndo = useDocumentStore(selectCanUndo);
   const canRedo = useDocumentStore(selectCanRedo);
@@ -104,7 +103,7 @@ export function LinkApp(): JSX.Element {
   useMa2AutoSync(editingLocked || internalPlayer.state.status === 'playing', notify);
   useProjectPersistence(notify); useRecoveryCopyWriter(); useMediaAudioPreparation(playbackLocked, notify);
 
-  useDocumentDirty(dirty, notify);
+  useDocumentStateReport(notify);
 
   useRuntimeCloseProtection(internalPlayer.state.status === 'preparing' ? 'preflight' : runtimeState, notify);
 
@@ -137,9 +136,11 @@ export function LinkApp(): JSX.Element {
   const createProject = async (): Promise<void> => {
     setNewProjectError(null);
     try {
-      if (!await saveBeforeNewProject()) return;
+      const replaced = await confirmReplaceDocument('new');
+      if (!replaced) return;
       const next = await linkDesktopViewModel.createProject(newProjectName);
       useDocumentStore.getState().setProject(next, null);
+      await replaced();
       setNewProjectOpen(false); setPage('project');
     } catch (error) {
       setNewProjectError(`无法创建工程：${error instanceof Error ? error.message : String(error)}。请检查保存位置后重试。`);
@@ -148,17 +149,18 @@ export function LinkApp(): JSX.Element {
   };
 
   const beginCreateProject = (): void => {
-    if (dirty && !window.confirm('新建独立工程会切换到空节目单，当前工程将先保存。是否继续？')) return;
     setNewProjectError(null);
     setNewProjectOpen(true);
   };
 
   const openProject = async (): Promise<void> => {
-    if (dirty && !window.confirm('当前工程有未保存修改，确认打开其他工程？')) return;
     try {
       const result = await linkDesktopViewModel.pickOpenProject();
       if (!result) return;
+      const replaced = await confirmReplaceDocument('open');
+      if (!replaced) return;
       const detail = await showOpenedProject(result);
+      await replaced();
       notify(`已打开：${result.project.name}${detail ? `；${detail}` : ''}`);
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
@@ -234,12 +236,6 @@ function useConnectionsEscape(open: boolean, onClose: () => void): void {
     window.addEventListener('keydown', close);
     return () => window.removeEventListener('keydown', close);
   }, [open, onClose]);
-}
-
-function useDocumentDirty(dirty: boolean, notify: (message: string, tone?: 'info' | 'error') => void): void {
-  useEffect(() => {
-    void linkDesktopViewModel.setDocumentDirty(dirty).catch((error: unknown) => notify(error instanceof Error ? error.message : String(error), 'error'));
-  }, [dirty, notify]);
 }
 
 function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange, playlistHostRef, page, internal, editingLocked, settingsOpen, onPageChange, onSettings }: {
@@ -404,14 +400,6 @@ function useDocumentErrorNotification(
     notify(documentError, 'error');
     useDocumentStore.getState().clearError();
   }, [documentError, notify]);
-}
-
-async function saveBeforeNewProject(): Promise<boolean> {
-  const current = useDocumentStore.getState();
-  if (!current.project || !current.dirty) return true;
-  const outcome = await saveDocument();
-  if (outcome.status === 'failed') throw new Error(outcome.message);
-  return outcome.status === 'saved' && !useDocumentStore.getState().dirty;
 }
 
 function useNewProjectDialog() {

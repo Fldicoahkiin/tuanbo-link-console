@@ -68,7 +68,7 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
     expect(await page.evaluate(async () => (await window.tbLink.loadIntegrationProfile())?.obs.shutdownTimeoutMs)).toBe(4000);
   } finally {
     const page = await application.firstWindow();
-    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     await application.close();
   }
 });

@@ -131,5 +131,5 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
     await expect(page.locator('.cue-material-browser').getByRole('button', { name: /试听序列 \d+ 灯光步 1\.250$/ })).toBeVisible();
     await expect(page.locator('.cue-material-browser').getByRole('button', { name: /试听序列 \d+ 灯光步 7\.500$/ })).toBeVisible();
     await page.screenshot({ path: info.outputPath('imported-cues.png') });
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

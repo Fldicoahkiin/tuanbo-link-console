@@ -132,7 +132,7 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
     }
     expect(errors).toEqual([]);
   } finally {
-    if(!page.isClosed()){await page.screenshot({path:info.outputPath('final.png')});await writeFile(info.outputPath('page.txt'),await page.locator('body').innerText());await page.evaluate(()=>window.tbLink.setDocumentDirty(false));}
+    if(!page.isClosed()){await page.screenshot({path:info.outputPath('final.png')});await writeFile(info.outputPath('page.txt'),await page.locator('body').innerText());await page.evaluate(()=>window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));}
     if(application.process().exitCode===null) await application.close();
   }
 });

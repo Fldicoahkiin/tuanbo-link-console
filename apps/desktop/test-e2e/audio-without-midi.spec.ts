@@ -61,7 +61,7 @@ test('OBS 和 MIDI 均未连接时，有音频仍可开始播放', async ({}, in
     await page.screenshot({ path: info.outputPath('playback-compact.png') });
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
   } finally {
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setRuntimeActive(false).then(() => window.tbLink.setDocumentDirty(false))'));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setRuntimeActive(false).then(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }))'));
     await app.close();
   }
 });
@@ -114,7 +114,7 @@ test('真实损坏音频报错不挤压播放器，修复文件后可重新播�
     expect(errors).toEqual([]);
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
   } finally {
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setRuntimeActive(false).then(() => window.tbLink.setDocumentDirty(false))'));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setRuntimeActive(false).then(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }))'));
     await app.close();
   }
 });

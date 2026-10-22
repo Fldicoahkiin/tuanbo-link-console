@@ -76,7 +76,7 @@ test('预览最小化释放帧连接，恢复重建，低功率停止拉帧并�
     measurements.push(await metrics('low-power'));
     await writeFile(info.outputPath('resource-metrics.json'), JSON.stringify({ syntheticObs: true, measurements, errors }, null, 2));
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await application.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await application.close(); }
 });
 
 test('五百音频片段仅为视口内片段创建波形', async ({}, info) => {
@@ -113,5 +113,5 @@ test('五百音频片段仅为视口内片段创建波形', async ({}, info) => 
     await writeFile(info.outputPath('waveform-resource-metrics.json'), JSON.stringify({ initial, scrolled, processes, errors }, null, 2));
     expect(initial).toBeLessThan(30); expect(scrolled).toBeLessThan(30);
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await application.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await application.close(); }
 });

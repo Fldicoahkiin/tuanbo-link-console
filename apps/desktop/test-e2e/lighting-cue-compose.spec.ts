@@ -126,5 +126,5 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await expect(composer.locator('.cue-ingredient')).toHaveCount(0);
     await page.screenshot({path: info.outputPath('empty-cue-reopened.png')});
     expect(errors).toEqual([]);
-  } catch (error) { await page.screenshot({ path: info.outputPath('failure.png') }); await writeFile(info.outputPath('failure.txt'), await page.locator('body').innerText()); throw error; } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } catch (error) { await page.screenshot({ path: info.outputPath('failure.png') }); await writeFile(info.outputPath('failure.txt'), await page.locator('body').innerText()); throw error; } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

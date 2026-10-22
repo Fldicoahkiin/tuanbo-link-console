@@ -41,7 +41,7 @@ test('真实 P1 文件与音频一键匹配真实 onPC 时间线，保留无法�
     expect(await readFile(join(info.outputDir, saved.rundown[0]!.referenceAudio!.relativePath))).toEqual(wav);
     expect(saved.rundown[0]!.p1Media?.midiStartTime).toBe('0');
     await page.screenshot({ path: info.outputPath('one-click.png') });
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await application.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await application.close(); }
 });
 
 test('真实 onPC 设置扫描、小数 Cue、歌曲配对、批量导入与保存', async ({}, info) => {
@@ -101,7 +101,7 @@ test('真实 onPC 设置扫描、小数 Cue、歌曲配对、批量导入与保�
     await section.getByRole('button', { name: '关闭自动双向同步', exact: true }).click();
     await page.screenshot({ path: info.outputPath('automatic-after-editor.png') });
   } finally {
-    await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await application.close();
+    await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await application.close();
     const current = await bridge.request('READ', 9902);
     if (!sameMa2XmlObjects(current, original)) await bridge.exchange('APPLY', 9902, current, original);
     expect(sameMa2XmlObjects(await bridge.request('READ', 9902), original)).toBe(true);

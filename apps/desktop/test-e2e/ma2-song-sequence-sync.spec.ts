@@ -212,5 +212,5 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await page.getByRole('switch', { name: '实时同步', exact: true }).click();
     await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'false');
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

@@ -115,7 +115,7 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     throw error;
   } finally {
     if (!page.isClosed()) {
-      await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+      await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     }
     if (application.process().exitCode === null) await application.close();
   }

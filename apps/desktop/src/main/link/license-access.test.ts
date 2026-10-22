@@ -41,6 +41,7 @@ it('仅授权入口和安全停止豁免，新接口默认需要付费', () => {
   for (const channel of ['link:license-status', 'link:license-activate-code', 'link:license-import', 'link:purchase-catalog', 'link:purchase-list', 'link:purchase-create', 'link:purchase-refresh', 'link:purchase-open-payment', 'link:window-control', 'link:process-stop', 'link:obs-disconnect', 'link:ma2-network-disconnect', 'link:obs-source-cancel']) expect(needsProductLicense(channel, undefined)).toBe(false);
   expect(needsProductLicense('link:set-runtime-active', false)).toBe(false);
   expect(needsProductLicense('link:purchase-copy-code', undefined)).toBe(false);
+  for (const channel of ['link:set-document-state', 'link:resolve-unsaved-changes', 'link:save-response']) expect(needsProductLicense(channel, undefined)).toBe(false);
   expect(needsProductLicense('link:set-runtime-active', true)).toBe(true);
   expect(needsProductLicense('link:obs-execute', { id: 'stop', label: '停止', kind: 'obs.mediaAction', inputName: 'media', action: 'stop' })).toBe(false);
   expect(needsProductLicense('link:obs-execute', { id: 'start', label: '开始', kind: 'obs.mediaAction', inputName: 'media', action: 'start' })).toBe(true);

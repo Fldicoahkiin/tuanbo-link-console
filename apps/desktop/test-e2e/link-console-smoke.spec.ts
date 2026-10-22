@@ -1520,7 +1520,7 @@ test.afterEach(async ({}, info) => {
     await writeFile(info.outputPath('failure-logs.json'), JSON.stringify(await page.evaluate(() => window.tbLink.queryLogs({ limit: 100 })), null, 2));
   }
   await page.evaluate(() => Promise.all([
-    window.tbLink.setDocumentDirty(false),
+    window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }),
     window.tbLink.setRuntimeActive(false)
   ]));
   await application.close();
@@ -1738,53 +1738,53 @@ test('保存旧快照不会清除后来修改的退出保护', async ({}, testIn
   await expect(page.locator('.project-welcome')).toBeVisible();
   await page.evaluate(async (destination) => {
     const project = await window.tbLink.createProject('旧快照');
-    await window.tbLink.setDocumentDirty(true);
+    await window.tbLink.setDocumentState({ version: 1, dirty: true, consoleSynced: false, name: '旧快照', projectPath: null, projectId: project.projectId });
     await window.tbLink.saveProjectDocument(destination, JSON.stringify(project));
   }, testInfo.outputPath('snapshot.tblink'));
   const result = await application.evaluate(async ({ BrowserWindow, dialog }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (!window) throw new Error('主窗口不存在');
-    let warningTitle = '';
-    const mutableDialog = dialog as unknown as { showMessageBoxSync: (...args: unknown[]) => number };
-    mutableDialog.showMessageBoxSync = (...args: unknown[]) => {
-      const options = (args.length > 1 ? args[1] : args[0]) as { title?: string } | undefined;
-      warningTitle = options?.title ?? '';
-      return 0;
+    const mutableDialog = dialog as unknown as { showMessageBox: (...args: unknown[]) => Promise<{ response: number; checkboxChecked: boolean }> };
+    const original = mutableDialog.showMessageBox;
+    const titles: string[] = [];
+    mutableDialog.showMessageBox = (...args: unknown[]) => {
+      const options = args.at(-1) as { title?: string } | undefined;
+      titles.push(options?.title ?? '');
+      return Promise.resolve({ response: 2, checkboxChecked: false });
     };
-    window.close();
-    await new Promise<void>(resolve => setImmediate(resolve));
-    return { warningTitle, destroyed: window.isDestroyed() };
+    try {
+      window.close();
+      await new Promise<void>(resolve => setTimeout(resolve, 300));
+      return { titles, destroyed: window.isDestroyed() };
+    } finally { mutableDialog.showMessageBox = original; }
   });
-  expect(result).toEqual({ warningTitle: '工程尚未保存', destroyed: false });
+  expect(result).toEqual({ titles: ['工程尚未保存'], destroyed: false });
+  await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
 });
 
-test('放弃修改后退出流程被取消，再次关闭仍提示未保存修改', async () => {
+test('不经过关闭窗口的退出同样询问未保存修改；取消后再次关闭仍询问', async () => {
   await expect(page.locator('.project-welcome')).toBeVisible();
-  await page.evaluate(() => window.tbLink.setDocumentDirty(true));
+  await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: true, consoleSynced: false, name: '未保存', projectPath: null, projectId: 'unsaved-test' }));
   const result = await application.evaluate(async ({ app, BrowserWindow, dialog }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (!window) throw new Error('主窗口不存在');
-    const mutableDialog = dialog as unknown as { showMessageBoxSync: (...args: unknown[]) => number };
-    const mutableApp = app as unknown as { quit: () => void };
-    const originalDialog = mutableDialog.showMessageBoxSync, originalQuit = mutableApp.quit;
+    const mutableDialog = dialog as unknown as { showMessageBox: (...args: unknown[]) => Promise<{ response: number; checkboxChecked: boolean }> };
+    const original = mutableDialog.showMessageBox;
     const titles: string[] = [];
-    // 选“放弃修改并退出”，随后退出流程被取消（灯光试听“返回软件”或外部程序“取消退出”）：软件保持打开。
-    mutableDialog.showMessageBoxSync = (...args: unknown[]) => {
-      const options = (args.length > 1 ? args[1] : args[0]) as { title?: string } | undefined;
+    // 取消：软件保持打开，修改仍未保存。
+    mutableDialog.showMessageBox = (...args: unknown[]) => {
+      const options = args.at(-1) as { title?: string } | undefined;
       titles.push(options?.title ?? '');
-      return 1;
+      return Promise.resolve({ response: 2, checkboxChecked: false });
     };
-    mutableApp.quit = () => undefined;
     try {
-      window.close(); await new Promise<void>(resolve => setImmediate(resolve));
-      window.close(); await new Promise<void>(resolve => setImmediate(resolve));
+      app.quit(); await new Promise<void>(resolve => setTimeout(resolve, 300));
+      window.close(); await new Promise<void>(resolve => setTimeout(resolve, 300));
       return { titles, destroyed: window.isDestroyed() };
-    } finally {
-      mutableDialog.showMessageBoxSync = originalDialog; mutableApp.quit = originalQuit;
-    }
+    } finally { mutableDialog.showMessageBox = original; }
   });
   expect(result).toEqual({ titles: ['工程尚未保存', '工程尚未保存'], destroyed: false });
-  await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+  await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
 });
 
 test('运行会话未停止时主进程拒绝关闭窗口', async () => {

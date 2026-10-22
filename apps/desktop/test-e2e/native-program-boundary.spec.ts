@@ -61,7 +61,7 @@ for (const crash of [false, true]) test(`正式节目后台接续：界面繁忙
       await page.keyboard.press('Escape');
       await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
       await expect(page.locator('.player-transport.status-stopped')).toBeVisible();
-      await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+      await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
     }
     await app.close();
   }

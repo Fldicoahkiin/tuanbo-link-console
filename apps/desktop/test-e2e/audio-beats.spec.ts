@@ -52,7 +52,7 @@ test('真实音频检测三级节拍、保存标记、灯光放置与拖动吸�
     await page.screenshot({ path: testInfo.outputPath('audio-beat-lighting.png') });
     await page.reload(); await page.getByRole('button', { name: '编辑器', exact: true }).click();
     await expect(page.locator('.audio-beat-marker')).toHaveCount(counts[1]!);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await application.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await application.close(); }
 });
 
 function drumAudio(): Buffer {

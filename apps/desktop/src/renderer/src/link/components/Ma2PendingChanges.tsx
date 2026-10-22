@@ -11,7 +11,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { pendingMa2Renames, ma2RenameKey } from '@tb/core/link';
 import { useRecoveryCopyStore } from '../recovery-copy-writer';
-import { saveDocument } from '../project-document';
+import { confirmReplaceDocument, saveDocument } from '../project-document';
 import { Ma2SongConflicts } from './Ma2SongConflicts';
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from '../runtime/ma2-legacy-names';
 
@@ -71,14 +71,15 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     const state = useDocumentStore.getState();
     if (!state.path || !state.project) throw new Error('请先保存工程');
     if (playing) throw new Error('播放中不能恢复存档，请停止后再恢复');
-    // Save first, so the "恢复前" copy the restore makes holds the latest edits.
-    const outcome = await saveDocument();
-    if (outcome.status === 'failed') throw new Error(outcome.message);
-    if (outcome.status === 'canceled') throw new Error('当前工程保存未完成，未恢复存档');
-    const saved = outcome.path;
-    await linkDesktopViewModel.projectArchives({ version: 1, action: 'restore', projectPath: saved, name });
-    const reopened = await linkDesktopViewModel.openProject(saved);
+    // 保存 puts the latest edits into the "恢复前" archive the restore makes; 不保存 drops them.
+    const replaced = await confirmReplaceDocument('restore-archive');
+    if (!replaced) return;
+    const projectPath = useDocumentStore.getState().path;
+    if (!projectPath) throw new Error('请先保存工程');
+    await linkDesktopViewModel.projectArchives({ version: 1, action: 'restore', projectPath, name });
+    const reopened = await linkDesktopViewModel.openProject(projectPath);
     useDocumentStore.getState().setProject(reopened.project, reopened.path, { upgraded: reopened.upgraded });
+    await replaced();
     setConfirmRestore(null); setArchiveOpen(false); notify('已恢复存档；恢复前的工程另存为“恢复前”存档');
   };
   const reveal = async (name?: string): Promise<void> => {

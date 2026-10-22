@@ -81,6 +81,8 @@ export class RecoveryCopyWriter {
     useRecoveryCopyStore.setState({ writing: true });
     try {
       const content = await this.dependencies.encode(state.project);
+      // A document replaced meanwhile was saved or discarded by the operator: no copy for it.
+      if (useDocumentStore.getState().sessionId !== owner.sessionId) return;
       await this.dependencies.write({ version: 1, projectPath: owner.projectPath, projectId: owner.projectId, name: state.project.name,
         sessionId: owner.sessionId, revision: state.revision, content });
       // After Save As the copy kept under the previous owner is out of date.

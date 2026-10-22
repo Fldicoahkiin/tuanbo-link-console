@@ -1,5 +1,7 @@
+import { useEffect } from 'react';
 import type { LinkProjectFile } from '@tb/core/link';
-import { useDocumentStore } from './stores/document-store';
+import type { LinkDocumentState } from '@tb/schema';
+import { useDocumentStore, type DocumentStoreState } from './stores/document-store';
 import { projectCodec } from './stores/project-codec';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 
@@ -80,4 +82,45 @@ export async function restoreUnnamedProject(): Promise<string | null> {
   if (!restored) return null;
   useDocumentStore.getState().setProject(restored, null, { restored: true });
   return restored.name;
+}
+
+function stateReport(state: DocumentStoreState): LinkDocumentState {
+  return { version: 1, dirty: state.dirty, consoleSynced: state.consoleSynced, name: state.project?.name ?? null,
+    projectPath: state.path, projectId: state.project?.projectId ?? null };
+}
+
+/**
+ * Keeps the main process's view of the open document current, and answers its
+ * save requests (quit, reload, update) with the same save as Ctrl+S.
+ */
+export function useDocumentStateReport(notify: (message: string, tone?: 'info' | 'error') => void): void {
+  const dirty = useDocumentStore(state => state.dirty);
+  const consoleSynced = useDocumentStore(state => state.consoleSynced);
+  const name = useDocumentStore(state => state.project?.name ?? null);
+  const path = useDocumentStore(state => state.path);
+  const projectId = useDocumentStore(state => state.project?.projectId ?? null);
+  useEffect(() => {
+    void linkDesktopViewModel.setDocumentState({ version: 1, dirty, consoleSynced, name, projectPath: path, projectId })
+      .catch((error: unknown) => notify(`同步工程保存状态失败：${error instanceof Error ? error.message : String(error)}`, 'error'));
+  }, [consoleSynced, dirty, name, notify, path, projectId]);
+  useEffect(() => linkDesktopViewModel.onSaveRequest(async () => {
+    const outcome = await saveDocument();
+    return outcome.status === 'saved' ? { status: 'saved' as const } : outcome;
+  }), []);
+}
+
+/**
+ * Before the open document is replaced (open, new, restore an archive): the same
+ * 保存 / 不保存 / 取消 question as quitting. Null means stay. Otherwise call the
+ * returned function once the document was replaced: after 不保存 it removes the
+ * replaced document's recovery copy.
+ */
+export async function confirmReplaceDocument(reason: 'open' | 'new' | 'restore-archive'): Promise<(() => Promise<void>) | null> {
+  const state = useDocumentStore.getState();
+  await linkDesktopViewModel.setDocumentState(stateReport(state));
+  const decision = await linkDesktopViewModel.resolveUnsavedChanges(reason);
+  if (decision === 'cancelled') return null;
+  const project = state.project;
+  if (decision !== 'discarded' || !project) return () => Promise.resolve();
+  return async () => { await linkDesktopViewModel.discardRecoveryCopy({ version: 1, projectPath: state.path, projectId: project.projectId }); };
 }

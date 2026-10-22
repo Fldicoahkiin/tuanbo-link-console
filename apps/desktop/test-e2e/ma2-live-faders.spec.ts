@@ -35,5 +35,5 @@ test('中层显示紧凑执行器按键，沿既有连接读回改名，不建�
     expect(await app.evaluate(() => process.env.TBLINK_EXECUTOR_LIVE_CALLS)).toBe('0');
     await page.screenshot({ path: info.outputPath('executor-middle-compact.png') });
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

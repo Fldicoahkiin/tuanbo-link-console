@@ -89,5 +89,5 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     await expect(pending).toContainText('1 处修改');
     expect(await app.evaluate(() => process.env.TBLINK_STAGED_WRITE_CALLS)).toBe('0');
     expect(errors).toEqual([]);
-  } finally { const page = await app.firstWindow(); await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { const page = await app.firstWindow(); await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

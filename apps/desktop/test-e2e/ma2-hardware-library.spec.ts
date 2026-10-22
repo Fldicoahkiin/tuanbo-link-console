@@ -81,7 +81,7 @@ test('实体控台经读取控台入口自动连接并显示真实素材', async
     }
 
   } finally {
-    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     if (application.process().exitCode === null) await application.close();
   }
 });

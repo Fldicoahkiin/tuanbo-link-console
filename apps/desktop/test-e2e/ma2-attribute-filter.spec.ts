@@ -148,7 +148,7 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
     await writeFile(info.outputPath('failure.txt'),await page.locator('body').innerText());
     throw error;
   } finally {
-    if(!page.isClosed()) await page.evaluate(()=>window.tbLink.setDocumentDirty(false));
+    if(!page.isClosed()) await page.evaluate(()=>window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     await app.close();
   }
 });

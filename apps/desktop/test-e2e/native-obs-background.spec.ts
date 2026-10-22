@@ -66,7 +66,7 @@ test('后台画面服务在渲染器阻塞时按实际音频时钟切换隔离 O
     await page.evaluate(async audio => {
       const state = await window.tbLink.getNativePlaybackStatus();
       if (state) await window.tbLink.controlNativePlayback({ version: 1, sessionId: audio.sessionId, generation: 100, kind: 'stop' });
-      await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false);
+      await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null });
     }, audio);
     await app.close(); await obs.disconnect();
   }

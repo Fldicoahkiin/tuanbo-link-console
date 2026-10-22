@@ -99,5 +99,5 @@ test('构造控台页面：顶部入口、999 页、翻页与失败清空、紧�
     await view.getByRole('button', { name: '页面序列 12 · 第二页独有', exact: true }).click();
     await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_LAYOUT_PAGE_AUDITIONS ?? '[]')) as { action: unknown }[]).map(value => value.action)).toEqual([{ target: 'sequence', sequence: 12, action: 'goto', cue: '1.000' }]);
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

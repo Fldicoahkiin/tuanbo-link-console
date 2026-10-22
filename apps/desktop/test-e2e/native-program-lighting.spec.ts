@@ -87,7 +87,7 @@ for (const failSecond of [false, true]) test(`正式原生灯光后台调度：$
   } finally {
     await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2));
     await page.keyboard.press('Escape');
-    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
     await app.close(); for (const socket of sockets) socket.destroy();
     await Promise.all([monitor, command].map(server => new Promise<void>(resolve => server.close(() => resolve()))));
   }

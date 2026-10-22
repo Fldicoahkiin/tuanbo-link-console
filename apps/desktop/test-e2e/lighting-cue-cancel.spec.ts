@@ -46,5 +46,5 @@ test('波形 Cue 拖动可用 Escape 或失焦取消，正常拖动和撤销保�
     await page.reload(); await page.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(point).toBeVisible();
     expect((await saved()).tracks).toEqual(lighting.tracks);
-  } finally { if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

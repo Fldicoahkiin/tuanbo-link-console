@@ -98,7 +98,7 @@ test('三层执行器保留原格位和独立页码，翻页不播放，紧凑�
     await pool.getByRole('button', { name: '控台页面', exact: true }).click();
     await expect(splitter).toHaveAttribute('aria-valuenow', '65');
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 test('执行器重命名、拖到空格和删除均按回读结果刷新，底层序列保留', async ({}, info) => {
@@ -143,7 +143,7 @@ test('执行器重命名、拖到空格和删除均按回读结果刷新，底�
     expect(pages[4]!.sequences.some(value => value.sequence === 79)).toBe(true);
     await pool.getByRole('button', { name: '多步', exact: true }).click();
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 test('一层读取异常保留其它层与换页操作，恢复后继续回读', async ({}, info) => {
@@ -163,5 +163,5 @@ test('一层读取异常保留其它层与换页操作，恢复后继续回读',
     await app.evaluate(() => { delete process.env.TBLINK_EXECUTOR_READ_FAILURE; process.env.TBLINK_EXECUTOR_REMOTE_NAME = '恢复后控台改名'; });
     await expect(fader.getByRole('button', { name: '执行器 100.1 · 恢复后控台改名', exact: true })).toBeVisible();
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

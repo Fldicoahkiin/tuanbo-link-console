@@ -257,7 +257,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
 
   } finally {
     if (!page.isClosed()) { await page.screenshot({ path: info.outputPath('final.png') }); await writeFile(info.outputPath('page.txt'), await page.locator('body').innerText()); }
-    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     if (application.process().exitCode === null) await application.close();
   }
 });

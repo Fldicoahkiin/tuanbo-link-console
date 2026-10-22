@@ -110,6 +110,25 @@ describe('RecoveryCopyWriter', () => {
     expect(discards).toHaveLength(0);
   });
 
+  it('编码期间工程被替换（已保存或已放弃）时不再写它的副本', async () => {
+    let finish: (content: string) => void = () => { throw new Error('编码尚未开始'); };
+    stop();
+    writer = new RecoveryCopyWriter({
+      encode: () => new Promise<string>(resolve => { finish = resolve; }),
+      write: payload => { writes.push(payload); return Promise.resolve(); },
+      discard: payload => { discards.push(payload); return Promise.resolve(true); },
+      report: message => { reports.push(message); }
+    });
+    stop = writer.start();
+    rename('替换前');
+    const flushing = writer.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    open('C:\\shows\\新工程.tblink');
+    finish('{}');
+    await flushing;
+    expect(writes).toHaveLength(0);
+  });
+
   it('flush 立即写入当前未保存内容', async () => {
     rename('立即');
     await writer.flush();

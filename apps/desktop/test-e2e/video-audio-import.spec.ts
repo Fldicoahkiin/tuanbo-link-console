@@ -46,7 +46,7 @@ test('44 秒 MP4 加入节目，短原声音轨及非整毫秒落点保存重开
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 for (const dimensions of [{ width: 1920, height: 1080 }, { width: 3840, height: 2160 }]) {
@@ -95,7 +95,7 @@ test(`40 秒 ${dimensions.width} 视频打开后立即拖入与缓存复用：�
     await writeFile(info.outputPath('drop-latency.json'), JSON.stringify(result, null, 2));
     await info.attach('拖入耗时', { body: JSON.stringify(result), contentType: 'application/json' });
     expect(result.warmP95Ms).toBeLessThanOrEqual(100);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 }
 
@@ -146,7 +146,7 @@ test('已有音乐时首次拖入 4K 视频：十个不同落点不复用混音�
       scope: '40 秒已有音乐 + 40 秒 4K 视频，源音轨已准备；十个新落点首次混音，计时至音画片段出现，不代表 OBS 首帧' };
     await writeFile(info.outputPath('multitrack-drop-latency.json'), JSON.stringify(result, null, 2));
     await info.attach('已有音乐拖入耗时', { body: JSON.stringify(result), contentType: 'application/json' });
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 async function timedVideoDrop(page: Page, options = { audioCount: 1, offset: 0 }): Promise<number> {

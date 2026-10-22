@@ -85,7 +85,7 @@ test('无 MA2 网线时按原偏移发 MTC；长时阻塞只停止发码，音�
     await expect(page.getByText(/MIDI 时间码已停止.*音频继续播放/).first()).toBeVisible();
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
   } finally {
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setRuntimeActive(false).then(() => window.tbLink.setDocumentDirty(false))'));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setRuntimeActive(false).then(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }))'));
     await app.close();
   }
 });
