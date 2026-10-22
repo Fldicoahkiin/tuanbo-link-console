@@ -28,3 +28,16 @@ export async function closeDiscarding(application: ElectronApplication): Promise
     'window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })'))));
   await application.close();
 }
+
+/**
+ * For polls on the saved .tblink: each attempt saves first when there are unsaved
+ * edits, since results such as a console readback or an import land after the poll starts.
+ */
+export async function savedValue<T>(page: Page, read: () => Promise<T>): Promise<T> {
+  const status = page.locator('.project-save-status');
+  if (await status.isVisible()) {
+    await page.keyboard.press('Control+S');
+    await status.waitFor({ state: 'hidden', timeout: 5000 });
+  }
+  return read();
+}

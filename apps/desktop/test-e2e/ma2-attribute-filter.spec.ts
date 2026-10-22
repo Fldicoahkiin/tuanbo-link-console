@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type Ma2CueAttributes, type Ma2CueDeletePrepare } from '@tb/schema';
 import { mergeMa2AttributesCommand } from '@tb/core/link';
+import { savedValue } from './save-questions';
 
 test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 Cue 清单、自定义分类与侧栏尺寸', async ({}, info) => {
   test.setTimeout(120000);
@@ -100,7 +101,7 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
     expect(await app.evaluate(()=>process.env.TBLINK_DELETE_COMMITS)).toBe('1');
     await pool.getByRole('button',{name:'单步',exact:true}).click();
     await expect(grid).toHaveAttribute('data-total-cues','1');
-    await expect.poll(async()=>parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.library?.sequences.find(value=>value.sequence===11)?.cues.length).toBe(0);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.library?.sequences.find(value=>value.sequence===11)?.cues.length)).toBe(0);
     for (const size of [[1180,720],[1440,900],[1920,1080]]) {
       await app.evaluate(({BrowserWindow},size)=>BrowserWindow.getAllWindows()[0]!.setSize(size[0]!,size[1]!),size);
       const width=(await nav.boundingBox())!.width;
@@ -133,7 +134,7 @@ test('构造数据：移除属性分类后保留紧凑菜单、属性值、空 C
     await expect(materialMenu.getByRole('button',{name:'视频 / 媒体',exact:true})).toHaveCount(0);
     await expect(materialMenu.getByRole('button').nth(1)).toHaveText('面光备用');
     await page.getByRole('button',{name:'保存',exact:true}).click();
-    await expect.poll(async()=>parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.categories.some(value=>value.name==='面光备用')).toBe(true);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.categories.some(value=>value.name==='面光备用'))).toBe(true);
     await page.reload();await nav.getByRole('button',{name:'灯光工作台',exact:true}).click();
     await expect(materialMenu.getByRole('button').nth(1)).toHaveText('面光备用');
     await expect(materialMenu.getByRole('button',{name:'面光备用',exact:true})).toBeVisible();

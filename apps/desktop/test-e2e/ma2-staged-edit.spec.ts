@@ -7,6 +7,7 @@ import { importMa2TimecodeCommand } from '@tb/core/link';
 import { convertMa2Timecode } from '../src/main/link/ma2-timecode-conversion';
 import { readMa2Catalog } from '../src/main/link/ma2-catalog';
 import { inspectMa2SequenceXml } from '../src/main/link/ma2-timecode-xml';
+import { savedValue } from './save-questions';
 
 test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提交列表', async ({}, info) => {
   const xml = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-timecode-fractional-3.3.xml'), 'utf8');
@@ -71,7 +72,7 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     await expect(pending).not.toContainText('1 处修改');
     await expect(realtime).toHaveAttribute('aria-checked', 'true');
     await page.getByRole('button', { name: '重做', exact: true }).click(); await expect(badge).toContainText('待同步 1');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks[0]?.clips[0]?.events[0]?.at).toBe(2000);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.lighting?.tracks[0]?.clips[0]?.events[0]?.at)).toBe(2000);
     expect(await app.evaluate(() => process.env.TBLINK_STAGED_WRITE_CALLS)).toBe('0');
     await realtime.click();
     await expect(realtime).toHaveAttribute('aria-checked', 'false');
