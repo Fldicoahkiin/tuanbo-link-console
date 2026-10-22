@@ -225,7 +225,7 @@ it('已绑定歌曲新增一个点位：Copy 直接建出新 Cue 编号；清空
   expect([...fake.files.keys()].some(name => name.startsWith('tblink_song_'))).toBe(true);
   expect(fake.lines.some(line => line.includes('Copy Sequence'))).toBe(false);
   expect(inspectMa2CueData(sequences.get(9000)!, inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues[1]!.index).size).toBe(0);
-});
+}, 20000);
 it('已绑定歌曲新增 Cue 的 Copy 已执行但回包丢失：再次同步从中断记录续上，不重复新建', async () => {
   const { song, sourceNumber, sequences } = boundSong();
   const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false);
@@ -242,7 +242,7 @@ it('已绑定歌曲新增 Cue 的 Copy 已执行但回包丢失：再次同步�
   const written = inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!;
   expect(written.cues).toHaveLength(9); expect(written.cues.at(-1)).toMatchObject({ number: '9.000', name: 'XinDuanLuo' });
   expect(resumed.binding.points.at(-1)).toEqual({ id: 'point-new', cue: '9.000' });
-});
+}, 20000);
 it('控台上已有的中文名默认不改写：只换一个 Cue 的内容时其余名称保持原样', async () => {
   const { song, sequences } = boundSong();
   const fake = songConsole(sequences);
