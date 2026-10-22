@@ -8,7 +8,8 @@ const asset: LinkMediaAsset = { id: 'clip', name: '舞蹈.mp4', kind: 'video', f
 const names = materialSceneNames('project', asset);
 const event: ManagedMediaEvent = { ...names, id: 'start', phase: 'start', frameNumber: 194, itemId: 'song', clipId: 'clip', layerId: 'layer', layerIndex: 0, layerCount: 1, assetId: asset.id, assetName: asset.name, assetKind: 'video', relativePath: asset.relativePath, sourceOffsetMs: 2300, embeddedAudioEnabled: false, transform: { x: 0.5, y: 0.5, scale: 1, scaleX: 1, scaleY: 1, rotation: 0 } };
 
-function fixture(resetOnSceneSwitch = false, startsNearOrigin = false) {
+/** `aheadOnPlay`: OBS's transient cursor right after PLAY, reported ahead of the decoder. */
+function fixture(resetOnSceneSwitch = false, startsNearOrigin = false, aheadOnPlay = 0) {
   const calls: Array<{ requestType: string; requestData?: unknown }> = [];
   const responses = new Map<string, unknown>([
     ['GetSceneList', { scenes: [] }], ['CreateInput', { sceneItemId: 1 }],
@@ -34,6 +35,7 @@ function fixture(resetOnSceneSwitch = false, startsNearOrigin = false) {
     if (deferPause && data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE') return;
     if (data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART') mediaCursor = 0;
     mediaState = data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE' ? 'OBS_MEDIA_STATE_PAUSED' : 'OBS_MEDIA_STATE_PLAYING';
+    if (data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY') mediaCursor += aheadOnPlay;
     if (mediaState === 'OBS_MEDIA_STATE_PLAYING' && pendingCursor !== undefined) {
       mediaCursor = pendingCursor; pendingCursor = undefined;
     }
@@ -325,6 +327,13 @@ describe('素材独立场景播放', () => {
       .toEqual([{ inputName: names.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' }]);
     expect(calls.some(call => call.requestType === 'SetMediaInputCursor')).toBe(false);
     expect(calls.at(-1)?.requestType).toBe('GetMediaInputStatus');
+  });
+  it('预热素材在 PLAY 前已核对位置；PLAY 后 OBS 报告的超前游标不判为失败', async () => {
+    const { scenes, setMediaState } = fixture(false, false, 500);
+    await scenes.prepare('project', asset, 'C:/dance.mp4');
+    const opening = { ...event, sourceOffsetMs: 0, deferSceneSwitch: true };
+    await scenes.prime(opening, 'C:/dance.mp4', () => { setMediaState('OBS_MEDIA_STATE_PAUSED', 0); return Promise.resolve(); });
+    await expect(scenes.execute({ ...opening, sourceOffsetMs: 23 }, 'C:/dance.mp4')).resolves.toBeUndefined();
   });
   it('预热后外部更改位置，拒绝使用旧的准备结果，不自动重播', async () => {
     const { scenes, calls, setMediaState } = fixture();
