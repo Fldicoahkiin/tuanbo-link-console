@@ -21,13 +21,16 @@ export function saveDocument(mode: 'save' | 'save-as' = 'save'): Promise<SaveOut
 async function writeDocument(mode: 'save' | 'save-as'): Promise<SaveOutcome> {
   const state = useDocumentStore.getState();
   if (!state.project) return { status: 'failed', message: '工程保存失败：尚未打开工程' };
-  const { project, path, stateId, documentId } = state;
+  const { project, path, stateId, documentId, upgradeBackupPending } = state;
   let content: string;
   try { content = await projectCodec.encode(project); }
   catch (error) { return failed(error, true); }
   let saved: string | null;
   // The main process records a failed write with its path.
-  try { saved = await window.tbLink.saveProjectDocument(mode === 'save' ? path : null, content, mode === 'save-as' && path ? { defaultPath: path } : {}); }
+  const options = mode === 'save-as' ? path ? { defaultPath: path } : {}
+    // The first save over a file upgraded in memory keeps the original beside it.
+    : upgradeBackupPending && path ? { backupOriginal: true } : {};
+  try { saved = await window.tbLink.saveProjectDocument(mode === 'save' ? path : null, content, options); }
   catch (error) { return failed(error, false); }
   if (saved === null) return { status: 'canceled' };
   if (useDocumentStore.getState().documentId !== documentId) return failed(new Error('保存期间已切换到其他工程，当前工程未保存'), true);
@@ -64,14 +67,11 @@ export function requireSavedProjectPath(action: string): string {
 }
 
 /** Shows an opened file; a recovery copy with unsaved edits is offered first. */
-export async function showOpenedProject(file: LinkProjectFile): Promise<'opened' | 'restored'> {
+export async function showOpenedProject(file: LinkProjectFile): Promise<string> {
   const restored = await linkDesktopViewModel.resolveRecoveryCopy({ version: 1, projectPath: file.path, projectId: file.project.projectId });
-  if (restored) {
-    useDocumentStore.getState().setProject(restored, file.path, { restored: true });
-    return 'restored';
-  }
-  useDocumentStore.getState().setProject(file.project, file.path);
-  return 'opened';
+  useDocumentStore.getState().setProject(restored ?? file.project, file.path, { restored: restored !== null, upgraded: file.upgraded });
+  const upgraded = useDocumentStore.getState().upgradeBackupPending;
+  return [restored ? '已恢复未保存的改动' : '', upgraded ? '工程已按当前版本格式载入，尚未写回；第一次保存时会在原位置保留原文件 .bak' : ''].filter(Boolean).join('；');
 }
 
 /** At startup, before reopening the last file: an unnamed project's unsaved edits, if the operator restores them. */

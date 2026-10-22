@@ -158,8 +158,8 @@ export function LinkApp(): JSX.Element {
     try {
       const result = await linkDesktopViewModel.pickOpenProject();
       if (!result) return;
-      const shown = await showOpenedProject(result);
-      notify(shown === 'restored' ? `已打开并恢复未保存的改动：${result.project.name}` : `已打开：${result.project.name}`);
+      const detail = await showOpenedProject(result);
+      notify(`已打开：${result.project.name}${detail ? `；${detail}` : ''}`);
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     }

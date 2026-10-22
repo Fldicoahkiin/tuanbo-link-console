@@ -14,17 +14,21 @@ export class ProjectDocumentService {
   constructor(private readonly workerPath = join(__dirname, 'project-document-worker.cjs')) {}
 
   async read(path: string): Promise<string> {
+    return (await this.open(path)).content;
+  }
+  /** `upgraded`: the content differs from the file; it stays unchanged until the operator saves. */
+  async open(path: string): Promise<{ content: string; upgraded: boolean }> {
     const response = await this.request({ kind: 'open', path });
     if (response.kind !== 'opened') throw new Error('工程读取返回类型不正确');
-    return response.content;
+    return { content: response.content, upgraded: response.upgraded };
   }
   async inspect(content: string): Promise<string> {
     const response = await this.request({ kind: 'inspect', content });
     if (response.kind !== 'inspected') throw new Error('工程检查返回类型不正确');
     return response.name;
   }
-  async save(path: string, content: string): Promise<void> {
-    const response = await this.request({ kind: 'save', path, content });
+  async save(path: string, content: string, backupOriginal = false): Promise<void> {
+    const response = await this.request({ kind: 'save', path, content, backupOriginal });
     if (response.kind !== 'saved') throw new Error('工程保存返回类型不正确');
   }
   async writeCopy(path: string, content: string): Promise<void> {

@@ -16,11 +16,11 @@ export const linkDesktopViewModel: LinkDesktopApi = {
     const document = projectDocumentEnvelopeSchema.parse(result);
     const project = await projectCodec.decode(document.content);
     allowProjectReopen(document.path);
-    return { path: document.path, project };
+    return { path: document.path, project, upgraded: document.upgraded };
   },
   openProject: async path => {
     const document = projectDocumentEnvelopeSchema.parse(await window.tbLink.openProjectDocument(path));
-    return { path: document.path, project: await projectCodec.decode(document.content) };
+    return { path: document.path, project: await projectCodec.decode(document.content), upgraded: document.upgraded };
   },
   resolveRecoveryCopy: async query => {
     const copy = await window.tbLink.resolveRecoveryCopyDocument(query);

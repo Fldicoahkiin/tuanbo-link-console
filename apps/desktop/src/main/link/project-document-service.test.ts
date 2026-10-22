@@ -25,7 +25,7 @@ it('单次写盘失败不会确认保存，之后显式请求仍可处理且不�
   await failed;
   expect(workers.post).toHaveBeenCalledTimes(1);
   const read = service.read(path);
-  response({ version: 1, id: 2, kind: 'opened', content: '{"name":"原工程"}' });
+  response({ version: 1, id: 2, kind: 'opened', content: '{"name":"原工程"}', upgraded: false });
   await expect(read).resolves.toContain('原工程');
   expect(workers.unref).toHaveBeenCalledTimes(2);
 });
@@ -49,7 +49,7 @@ it.each(['exit', 'error', 'wrong-result', 'unknown-id', 'invalid-dto', 'send-err
   const worker = workers.instances[0]!;
   if (failure === 'exit') worker.emit('exit', 1);
   else if (failure === 'error') worker.emit('error', new Error('线程崩溃'));
-  else if (failure === 'wrong-result') response({ version: 1, id: 1, kind: 'opened', content: '{}' });
+  else if (failure === 'wrong-result') response({ version: 1, id: 1, kind: 'opened', content: '{}', upgraded: false });
   else if (failure === 'unknown-id') response({ version: 1, id: 999, kind: 'saved' });
   else if (failure === 'invalid-dto') response({ version: 99, id: 1, kind: 'saved' });
   else {

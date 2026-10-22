@@ -51,6 +51,21 @@ describe('saveDocument', () => {
     expect(useDocumentStore.getState().path).toBe('D:\\备份\\保存 副本.tblink');
   });
 
+  it('打开时升级过的工程：第一次保存到原文件时要求保留 .bak，之后不再要求；另存为不备份原文件', async () => {
+    useDocumentStore.getState().setProject(createEmptyLinkProject('旧格式'), 'C:\\shows\\旧.tblink', { upgraded: true });
+    bridge.saveProjectDocument.mockResolvedValue('C:\\shows\\旧.tblink');
+    await saveDocument();
+    expect(bridge.saveProjectDocument).toHaveBeenLastCalledWith('C:\\shows\\旧.tblink', expect.any(String), { backupOriginal: true });
+    useDocumentStore.getState().execute(renameProjectCommand('再改'));
+    await saveDocument();
+    expect(bridge.saveProjectDocument).toHaveBeenLastCalledWith('C:\\shows\\旧.tblink', expect.any(String), {});
+    useDocumentStore.getState().setProject(createEmptyLinkProject('旧格式'), 'C:\\shows\\旧.tblink', { upgraded: true });
+    bridge.saveProjectDocument.mockResolvedValue('D:\\新.tblink');
+    await saveDocument('save-as');
+    expect(bridge.saveProjectDocument).toHaveBeenLastCalledWith(null, expect.any(String), { defaultPath: 'C:\\shows\\旧.tblink' });
+    expect(useDocumentStore.getState().upgradeBackupPending).toBe(false);
+  });
+
   it('取消保存对话框不改变工程状态', async () => {
     open(null); useDocumentStore.getState().execute(renameProjectCommand('未命名'));
     bridge.saveProjectDocument.mockResolvedValue(null);

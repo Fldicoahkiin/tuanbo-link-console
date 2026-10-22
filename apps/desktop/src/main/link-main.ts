@@ -1077,11 +1077,11 @@ function registerIpc(
     });
     const path = result.filePaths[0];
     if (result.canceled || !path) return null;
-    return { version: 1, path, content: await projectDocuments.read(path) };
+    return { version: 1, path, ...await projectDocuments.open(path) };
   });
   handle('link:open-project', async (_event, pathValue: unknown) => {
     const path = linkFilePathSchema.parse(pathValue);
-    return { version: 1, path, content: await projectDocuments.read(path) };
+    return { version: 1, path, ...await projectDocuments.open(path) };
   });
   handle('link:save-project', async (_event, pathValue: unknown, projectValue: unknown, optionsValue: unknown) => {
     const content = projectDocumentTextSchema.parse(projectValue);
@@ -1097,7 +1097,7 @@ function registerIpc(
       if (result.canceled || !result.filePath) return null;
       destination = result.filePath;
     }
-    try { await projectDocuments.save(destination, content); }
+    try { await projectDocuments.save(destination, content, options.backupOriginal === true); }
     catch (error) {
       await logger.record({ level:'error', category:'system', message:'工程保存失败，未确认落盘', result:'failed', details:{ path:destination, error:error instanceof Error ? error.message : String(error) } });
       throw error;

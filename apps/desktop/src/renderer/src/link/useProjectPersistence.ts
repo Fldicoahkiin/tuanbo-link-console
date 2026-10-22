@@ -48,8 +48,8 @@ async function openStartupDocument(notify: (message: string, tone?: 'info' | 'er
   try {
     const result = await linkDesktopViewModel.openProject(lastPath);
     if (useDocumentStore.getState().project) return;
-    const shown = await showOpenedProject(result);
-    notify(shown === 'restored' ? `已恢复上次工程和未保存的改动：${result.project.name}` : `已恢复上次工程：${result.project.name}`);
+    const detail = await showOpenedProject(result);
+    notify(`已恢复上次工程：${result.project.name}${detail ? `；${detail}` : ''}`);
   } catch (error) {
     notify(`上次工程恢复失败：${toMessage(error)}`, 'error');
   }

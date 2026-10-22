@@ -25,10 +25,11 @@ export type LinkAppInfo = {
 /** Keep large project graphs out of Electron's synchronous contextBridge copy.
  * The renderer facade decodes/validates these documents in its worker. */
 export type LinkDesktopBridgeApi = Omit<LinkDesktopApi, 'pickOpenProject' | 'openProject' | 'resolveRecoveryCopy'> & {
-  pickProjectDocument(): Promise<{ version: 1; path: string; content: string } | null>;
-  openProjectDocument(path: string): Promise<{ version: 1; path: string; content: string }>;
-  /** `defaultPath` suggests a location when the save dialog opens (path null). */
-  saveProjectDocument(path: string | null, content: string, options?: { defaultPath?: string }): Promise<string | null>;
+  pickProjectDocument(): Promise<{ version: 1; path: string; content: string; upgraded: boolean } | null>;
+  openProjectDocument(path: string): Promise<{ version: 1; path: string; content: string; upgraded: boolean }>;
+  /** `defaultPath` suggests a location when the save dialog opens (path null); `backupOriginal` keeps the
+   * file as it was before the first save after an in-memory upgrade. */
+  saveProjectDocument(path: string | null, content: string, options?: { defaultPath?: string; backupOriginal?: boolean }): Promise<string | null>;
   resolveRecoveryCopyDocument(payload: import('@tb/schema').RecoveryCopyQuery): Promise<{ version: 1; content: string } | null>;
 };
 
@@ -58,6 +59,8 @@ export type LinkUpdateStatus = {
 export type LinkProjectFile = {
   path: string;
   project: LinkProject;
+  /** The project differs from the file (format upgrade or merged read checkpoints); the file is unchanged. */
+  upgraded: boolean;
 };
 
 export type LinkProjectAssetInspection = {

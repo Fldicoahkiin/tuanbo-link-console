@@ -78,7 +78,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     const saved = outcome.path;
     await linkDesktopViewModel.projectArchives({ version: 1, action: 'restore', projectPath: saved, name });
     const reopened = await linkDesktopViewModel.openProject(saved);
-    useDocumentStore.getState().setProject(reopened.project, reopened.path);
+    useDocumentStore.getState().setProject(reopened.project, reopened.path, { upgraded: reopened.upgraded });
     setConfirmRestore(null); setArchiveOpen(false); notify('已恢复存档；恢复前的工程另存为“恢复前”存档');
   };
   const reveal = async (name?: string): Promise<void> => {

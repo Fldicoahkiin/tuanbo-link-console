@@ -9,13 +9,16 @@ const projects = new LinkProjectService();
 async function execute(request: ProjectDocumentRequest): Promise<ProjectDocumentResponse> {
   const envelope = { version: 1 as const, id: request.id };
   switch (request.kind) {
-    case 'open': return { ...envelope, kind: 'opened', content: JSON.stringify(await projects.open(request.path)) };
+    case 'open': {
+      const opened = await projects.openDocument(request.path);
+      return { ...envelope, kind: 'opened', content: JSON.stringify(opened.project), upgraded: opened.upgraded };
+    }
     case 'inspect': return { ...envelope, kind: 'inspected', name: parseLinkProject(JSON.parse(request.content)).name };
     case 'save': {
       // Validate before admitting to the write queue. An invalid intermediate
       // request must fail even when a later valid revision supersedes it.
       const project = parseLinkProject(JSON.parse(request.content));
-      await projects.save(request.path, project);
+      await projects.save(request.path, project, request.backupOriginal);
       return { ...envelope, kind: 'saved' };
     }
     case 'copy': {
