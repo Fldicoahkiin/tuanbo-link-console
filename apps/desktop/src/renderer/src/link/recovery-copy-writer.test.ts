@@ -69,6 +69,15 @@ describe('RecoveryCopyWriter', () => {
     expect(discards).toEqual([{ version: 1, projectPath: 'C:\\shows\\恢复.tblink', projectId: state.project!.projectId, keep: { sessionId: state.sessionId, revision: state.revision } }]);
   });
 
+  it('保存后立刻切换到其他工程：仍按保存时的工程清除它的副本', async () => {
+    rename('保存后切换'); await vi.advanceTimersByTimeAsync(1000);
+    const saved = useDocumentStore.getState();
+    save('C:\\shows\\恢复.tblink');
+    open('C:\\shows\\其他.tblink');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(discards).toEqual([{ version: 1, projectPath: 'C:\\shows\\恢复.tblink', projectId: saved.project!.projectId, keep: { sessionId: saved.sessionId, revision: saved.revision } }]);
+  });
+
   it('撤销回到保存时的状态同样清除副本', async () => {
     save('C:\\shows\\恢复.tblink');
     rename('临时'); await vi.advanceTimersByTimeAsync(1000);

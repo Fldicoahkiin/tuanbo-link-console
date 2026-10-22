@@ -50,7 +50,14 @@ export class RecoveryCopyWriter {
       this.cancel(); this.written.clear(); this.lastWritten = ''; this.failed = '';
       return;
     }
-    if (previous.dirty && !state.dirty) { this.cancel(); void this.enqueue(() => this.cleanUp()); return; }
+    if (previous.dirty && !state.dirty && state.project) {
+      // Captured now: a document opened right after the save must not decide which copies go.
+      // The current owner may hold a copy from an earlier session that was restored and is now saved.
+      const current: Owner = { projectPath: state.path, projectId: state.project.projectId, sessionId: state.sessionId };
+      const owners = new Map(this.written); owners.set(ownerKey(current), current);
+      this.cancel(); void this.enqueue(() => this.cleanUp(owners, state.sessionId, state.revision));
+      return;
+    }
     if (state.dirty && state.revision > 0 && (state.stateId !== previous.stateId || state.path !== previous.path)) this.schedule();
   }
 
@@ -104,15 +111,10 @@ export class RecoveryCopyWriter {
     }
   }
 
-  private async cleanUp(): Promise<void> {
-    const state = useDocumentStore.getState();
-    if (state.dirty || !state.project) return;
-    const current: Owner = { projectPath: state.path, projectId: state.project.projectId, sessionId: state.sessionId };
-    // The current owner may hold a copy from an earlier session that was restored and is now saved.
-    const owners = new Map(this.written); owners.set(ownerKey(current), current);
+  private async cleanUp(owners: ReadonlyMap<string, Owner>, sessionId: string, revision: number): Promise<void> {
     try {
       for (const [key, owner] of owners) {
-        await this.dependencies.discard({ version: 1, projectPath: owner.projectPath, projectId: owner.projectId, keep: { sessionId: state.sessionId, revision: state.revision } });
+        await this.dependencies.discard({ version: 1, projectPath: owner.projectPath, projectId: owner.projectId, keep: { sessionId, revision } });
         this.written.delete(key);
       }
       this.lastWritten = '';
