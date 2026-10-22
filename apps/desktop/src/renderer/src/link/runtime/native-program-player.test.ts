@@ -89,17 +89,12 @@ it('播放中画面通道的直播故障显示为输出异常，音频继续；�
   await player.dispose();
 });
 
-it('时间码短暂中断显示为输出异常，音频与时间码继续；同一次数不重复提示', async () => {
+it('时间码短暂中断和 P1 一样按整帧继续，不标红；音频与时间码继续', async () => {
   const f = fixture();
   await f.player.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', fault: null });
-  f.emit({ mtcInterruptions: 1 });
-  expect(f.state()).toMatchObject({ status: 'playing', mtcConnectionFailed: false });
-  expect(f.state().fault).toContain('时间码中断 1 次');
-  f.emit({ positionMs: 2000 });
-  expect(f.state().fault).toContain('时间码中断 1 次');
-  f.emit({ mtcInterruptions: 2 });
-  expect(f.state().fault).toContain('时间码中断 2 次');
+  f.emit({ mtcInterruptions: 1 }); f.emit({ positionMs: 2000 }); f.emit({ mtcInterruptions: 2 });
+  expect(f.state()).toMatchObject({ status: 'playing', mtcConnectionFailed: false, fault: null });
   await f.player.dispose();
 });
 

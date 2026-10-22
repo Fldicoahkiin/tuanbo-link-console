@@ -19,7 +19,7 @@ function fixture(grouped = false, nativeSeek = false, mtcInstance?: MediaMtcOutp
   const audio = new FakeAudio();
   const mtc = { connect: vi.fn((portName: string | null) => Promise.resolve(portName)), tick: vi.fn(), stop: vi.fn(), takeSchedulingNotice: vi.fn(() => null) };
   const deps = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), stop: vi.fn(() => Promise.resolve()),
-    started: vi.fn<(positionMs: number) => void>(), failed: vi.fn<(message: string, itemId: string | null) => void>(),
+    started: vi.fn<(positionMs: number) => void>(), failed: vi.fn<(message: string, itemId: string | null) => void>(), notice: vi.fn<(message: string, itemId: string | null) => void>(),
     scrub: nativeSeek ? vi.fn(() => Promise.resolve()) : undefined,
     resolveAudio: vi.fn(() => Promise.resolve('file:///original.wav')), configuration: (): { outputDeviceId: string; mtcPortName: string | null } => ({ outputDeviceId: 'default', mtcPortName: 'MA2' }),
     changed: vi.fn((next: typeof emptyInternalPlayerState) => { state = next; }) };
@@ -124,7 +124,7 @@ it('时间码模式遇到本地序列池 Cue 时照常播放音频并发原偏�
   await f.controller.resume(); expect(f.state().status).toBe('playing');
   f.controller.dispose();
 });
-it('界面阻塞 200ms 后时间码不补发过期帧，按音频位置整帧重新同步并继续，播放栏标出输出异常', async () => {
+it('界面阻塞 200ms 后时间码不补发过期帧，和 P1 一样按音频位置整帧重新同步并继续，只记日志不标红', async () => {
   const send = vi.fn();
   vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
   const f = fixture(false, false, new MediaMtcOutput());
@@ -133,8 +133,8 @@ it('界面阻塞 200ms 后时间码不补发过期帧，按音频位置整帧重
   const beforeStall = send.mock.calls.length;
   const clock = vi.spyOn(performance, 'now').mockReturnValue(208);
   f.audio.currentTime = 0.208; await vi.advanceTimersByTimeAsync(8);
-  expect(f.state()).toMatchObject({ status: 'playing', error: null, mtcConnectionFailed: false });
-  expect(f.state().fault).toContain('时间码中断 1 次');
+  expect(f.state()).toMatchObject({ status: 'playing', error: null, mtcConnectionFailed: false, fault: null });
+  expect(f.deps.notice).toHaveBeenCalledWith(expect.stringContaining('时间码中断 1 次'), 'song-0');
   const relocated = send.mock.calls.slice(beforeStall).map(([message]) => (message as number[])[0]);
   expect(relocated[0]).toBe(0xf0); expect(relocated.filter(type => type === 0xf1).length).toBeLessThanOrEqual(1);
   clock.mockReturnValue(300); f.audio.currentTime = 0.3;

@@ -319,7 +319,8 @@ export class InternalPlaybackController {
         catch (error) { this.mtc.stop(); this.update({ mtcPortName: null, mtcConnectionFailed: true }); this.appendNotice(`MIDI 时间码已停止：${toUserErrorMessage(error)}。音频继续播放。`); }
       }
       const schedulingNotice = this.mtc.takeSchedulingNotice();
-      if (schedulingNotice) { this.dependencies.notice?.(schedulingNotice, this.state.itemId); this.reportFault(schedulingNotice); }
+      // Like P1, an interrupted timecode resumes with a full frame; it is logged, not shown in red.
+      if (schedulingNotice) this.dependencies.notice?.(schedulingNotice, this.state.itemId);
       if (this.lightingPrepared) try { this.lighting.tick(audibleMs); this.reportLightingFault(); }
       catch (error) { this.lightingPrepared = false; this.lighting.stop(); this.appendNotice(`灯光动作已停止：${toUserErrorMessage(error)}。音频继续播放。`); }
       const frame = millisecondsToFrameNumber(audibleMs, this.project.timebase.frameRate);
