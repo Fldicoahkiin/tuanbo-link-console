@@ -13,7 +13,7 @@ import { useRuntimeStore } from '../stores/runtime-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { midiOutputInventory, readNativeDevices } from '../view-models/midi-device-inventory';
-import { internalAudioEngine, internalAudioEngineLabel } from '../view-models/internal-audio-engine';
+import { chosenAudioEngine, internalAudioEngine, internalAudioEngineLabel } from '../view-models/internal-audio-engine';
 
 import { ImportPlayerMusic } from './ImportPlayerMusic';
 import { PlayerStatusDetails } from './PlayerStatusDetails';
@@ -77,7 +77,7 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
   const inputs = ports.filter(port => port.direction === 'input' && port.state === 'connected').map(port => port.name);
   const [devices, setDevices] = useState<{ deviceId: string; label: string }[]>([]);
   const project = useDocumentStore((state) => state.project);
-  const engine = profile?.internalPlayer?.audioEngine ?? 'browser', choice = internalAudioEngine(profile, project);
+  const engine = chosenAudioEngine(profile?.internalPlayer), choice = internalAudioEngine(profile, project);
   const [savedField, setSavedField] = useState('');
   const [error, setError] = useState('');
   useEffect(() => { if (!savedField) return; const timer = setTimeout(() => setSavedField(''), 2000); return () => clearTimeout(timer); }, [savedField]);
