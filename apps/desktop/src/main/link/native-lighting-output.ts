@@ -29,6 +29,8 @@ export class NativeLightingOutput implements ProgramLightingOutput {
   private position = 0;
   private observedAt = 0;
   private ticked: number | null = null;
+  /** Direct or network lighting is sent from here; console timecode sends nothing locally. */
+  private local = false;
   private document: LightingDocument | null = null;
   /** What this song left on the console when it was paused or relocated. */
   private carried: { document: LightingDocument; onAir: LightingOnAir } | null = null;
@@ -57,7 +59,7 @@ export class NativeLightingOutput implements ProgramLightingOutput {
       const restored = await this.network.prepare(document, positionMs, true);
       if (generation !== this.generation) throw new Error('灯光准备已取消');
       this.scheduler = new LightingScheduler(packets, packet => this.send(packet), this.carried?.document === document ? this.carried.onAir : undefined);
-      this.document = document; this.carried = null;
+      this.document = document; this.carried = null; this.local = packets.length > 0 || document.outputMode === 'network';
       // Resume and seek rebuild the state at this position from the timeline;
       // only the differences go out now, before audio continues.
       this.position = positionMs; this.observedAt = this.now(); this.ticked = positionMs;
@@ -78,7 +80,7 @@ export class NativeLightingOutput implements ProgramLightingOutput {
     const age = this.now() - this.observedAt;
     if (age > 100) { this.fault = `灯光音频时钟晚到 ${Math.round(age)}ms，本次位置未发送灯光，不补发`; return; }
     const gap = this.ticked === null ? 0 : positionMs - this.ticked; this.ticked = positionMs;
-    if (gap > 100) {
+    if (this.local && gap > 100) {
       const sent = this.network.restore(positionMs) + (this.scheduler?.restore(positionMs) ?? 0);
       this.fault = `灯光位置更新中断 ${Math.round(gap)}ms：按当前位置重建，发送 ${sent} 条，中间事件不补发`; return;
     }

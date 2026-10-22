@@ -18,6 +18,8 @@ export class LightingMidiOutput {
   private document: LightingDocument | null = null;
   private carried: { document: LightingDocument; onAir: LightingOnAir } | null = null;
   private ticked: number | null = null;
+  /** Direct or network lighting is sent from here; console timecode sends nothing locally. */
+  private local = false;
   private fault: string | null = null;
   constructor(private readonly rebuild = false) {}
   async prepare(document: LightingDocument, profile: IntegrationProfile | null, positionMs: number): Promise<void> {
@@ -49,14 +51,14 @@ export class LightingMidiOutput {
       return { output, packet };
     });
     this.scheduler = new LightingScheduler(packets, (packet) => this.send(packet), this.rebuild && this.carried?.document === document ? this.carried.onAir : undefined);
-    this.document = document; this.carried = null; this.ticked = positionMs;
+    this.document = document; this.carried = null; this.ticked = positionMs; this.local = packets.length > 0 || this.networkEnabled;
     if (!this.rebuild) { this.scheduler.locate(positionMs); return; }
     const sent = restored + this.scheduler.restore(positionMs);
     if (sent) this.fault = `灯光按播放位置重建：发送 ${sent} 条，中间事件不补发`;
   }
   tick(positionMs: number): void {
     const gap = this.ticked === null ? 0 : positionMs - this.ticked; this.ticked = positionMs;
-    if (this.rebuild && gap > 100) {
+    if (this.rebuild && this.local && gap > 100) {
       const sent = (this.networkEnabled ? this.network.restore(positionMs) : 0) + (this.scheduler?.restore(positionMs) ?? 0);
       this.fault = `灯光位置更新中断 ${Math.round(gap)}ms：按当前位置重建，发送 ${sent} 条，中间事件不补发`; return;
     }

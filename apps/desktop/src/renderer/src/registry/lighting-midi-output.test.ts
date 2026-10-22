@@ -35,10 +35,13 @@ it('指定独立端口断开时不改发默认端口，缺少默认配置也明�
   expect(f.send).not.toHaveBeenCalled();
 });
 
-it('控台时间线模式不重复发送 Cue', async () => {
+it('控台时间线模式不重复发送 Cue，本机不发灯光时位置中断也不报灯光重建', async () => {
   const f = setup(); f.document.outputMode = 'timecode';
   await f.output.prepare(f.document, f.profile, 0); f.output.tick(100);
   expect(f.send).not.toHaveBeenCalled();
+  const internal = new LightingMidiOutput(true);
+  await internal.prepare(f.document, f.profile, 0); internal.tick(10); internal.tick(700);
+  expect(internal.takeFault()).toBeNull(); expect(f.send).not.toHaveBeenCalled();
 });
 
 it('本机播放按当前位置重建：继续时控台已在的 Cue 不重发，定位与位置更新中断只补差异并标红；跟随 P1 不重建', async () => {

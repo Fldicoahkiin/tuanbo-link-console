@@ -30,6 +30,7 @@ it('直接灯光由设备位置调用；曲尾提前释放使用当前位置，�
 it('时间码模式保留控台原生执行，不额外发送本地 MIDI 或网络灯光', async () => {
   const f = fixture(); f.document.outputMode = 'timecode';
   await f.output.prepare(f.document, null, 0); f.output.observe(500, 1000); f.output.tick(500);
+  expect(f.output.takeFault()).toBeNull();
   await f.output.finish(500); expect(f.ports.prepare).toHaveBeenCalledWith([], expect.any(AbortSignal));
   expect(f.ports.send).not.toHaveBeenCalled(); expect(f.network.getMa2NetworkStatus).not.toHaveBeenCalled();
   expect(f.network.playMa2Cue).not.toHaveBeenCalled(); await f.output.close();
