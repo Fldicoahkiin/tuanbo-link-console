@@ -281,6 +281,8 @@ export type LinkDesktopApi = {
   writeRecoveryCopy(payload: import('@tb/schema').RecoveryCopyWrite): Promise<void>;
   /** An unnamed project asks once before an action that needs a location: 选择保存位置 / 取消. */
   confirmProjectLocation(purpose: string): Promise<boolean>;
+  /** 恢复到上次保存 drops every unsaved edit; asked before it happens. */
+  confirmRevertToSaved(payload: { name: string; consoleSynced: boolean }): Promise<boolean>;
   /** Asks whether to restore a recovery copy newer than the project file (or, at startup, of an unnamed project). */
   resolveRecoveryCopy(payload: import('@tb/schema').RecoveryCopyQuery): Promise<LinkProject | null>;
   /** Removes a recovery copy; with `keep`, a copy that session wrote after that revision stays. */

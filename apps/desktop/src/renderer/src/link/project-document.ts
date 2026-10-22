@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import type { LinkProjectFile } from '@tb/core/link';
 import type { LinkDocumentState } from '@tb/schema';
 import { useDocumentStore, type DocumentStoreState } from './stores/document-store';
@@ -68,6 +68,19 @@ export function requireSavedProjectPath(action: string): string {
   return path;
 }
 
+/** 恢复到上次保存: after confirmation, drops every unsaved edit, the undo history and the recovery copy, and reopens the file. */
+export async function revertToSaved(): Promise<'reverted' | 'cancelled'> {
+  const state = useDocumentStore.getState();
+  if (!state.project || !state.path) throw new Error('工程尚未保存过，没有可恢复的版本');
+  const { path, documentId } = state, projectId = state.project.projectId;
+  if (!await linkDesktopViewModel.confirmRevertToSaved({ name: state.project.name, consoleSynced: state.consoleSynced })) return 'cancelled';
+  const file = await linkDesktopViewModel.openProject(path);
+  if (useDocumentStore.getState().documentId !== documentId) throw new Error('工程已切换，未恢复到上次保存');
+  useDocumentStore.getState().setProject(file.project, file.path, { upgraded: file.upgraded });
+  await linkDesktopViewModel.discardRecoveryCopy({ version: 1, projectPath: path, projectId });
+  return 'reverted';
+}
+
 /** Shows an opened file; a recovery copy with unsaved edits is offered first. */
 export async function showOpenedProject(file: LinkProjectFile): Promise<string> {
   const restored = await linkDesktopViewModel.resolveRecoveryCopy({ version: 1, projectPath: file.path, projectId: file.project.projectId });
@@ -123,4 +136,21 @@ export async function confirmReplaceDocument(reason: 'open' | 'new' | 'restore-a
   const project = state.project;
   if (decision !== 'discarded' || !project) return () => Promise.resolve();
   return async () => { await linkDesktopViewModel.discardRecoveryCopy({ version: 1, projectPath: state.path, projectId: project.projectId }); };
+}
+
+/** Save, Save As and 恢复到上次保存 for the toolbar and the shortcuts, each reporting its outcome. */
+export function useDocumentCommands(notify: (message: string, tone?: 'info' | 'error') => void): { save: () => Promise<void>; saveAs: () => Promise<void>; revert: () => Promise<void> } {
+  const run = useCallback(async (mode: 'save' | 'save-as'): Promise<void> => {
+    if (!useDocumentStore.getState().project) return;
+    const outcome = await saveDocument(mode);
+    if (outcome.status === 'saved') notify(mode === 'save' ? '工程已保存' : `已另存为：${outcome.path}`);
+    else if (outcome.status === 'failed') notify(outcome.message, 'error');
+  }, [notify]);
+  const save = useCallback(() => run('save'), [run]);
+  const saveAs = useCallback(() => run('save-as'), [run]);
+  const revert = useCallback(async (): Promise<void> => {
+    try { if (await revertToSaved() === 'reverted') notify('已恢复到上次保存'); }
+    catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
+  }, [notify]);
+  return { save, saveAs, revert };
 }

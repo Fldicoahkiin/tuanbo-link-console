@@ -34,7 +34,7 @@ import { useRuntimeStore } from './stores/runtime-store';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 import { useProjectPersistence } from './useProjectPersistence';
 import { useRecoveryCopyWriter } from './recovery-copy-writer';
-import { confirmReplaceDocument, saveDocument, showOpenedProject, useDocumentStateReport } from './project-document';
+import { confirmReplaceDocument, showOpenedProject, useDocumentCommands, useDocumentStateReport } from './project-document';
 import { useP1AutoFollow } from './useP1AutoFollow';
 import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
@@ -167,12 +167,7 @@ export function LinkApp(): JSX.Element {
     }
   };
 
-  const saveProject = async (): Promise<void> => {
-    if (!useDocumentStore.getState().project) return;
-    const outcome = await saveDocument();
-    if (outcome.status === 'saved') notify('工程已保存');
-    else if (outcome.status === 'failed') notify(outcome.message, 'error');
-  };
+  const { save: saveProject, saveAs: saveProjectAs, revert: revertProject } = useDocumentCommands(notify);
 
 
   const controlWindow = (action: 'minimize' | 'toggleMaximize' | 'close'): void => {
@@ -197,13 +192,16 @@ export function LinkApp(): JSX.Element {
     useMa2ReadStore.setState({ openWorkspace: false });
     leaveSettings(() => setPage('lighting'));
   }, [openLighting, leaveSettings]);
-  useDocumentShortcuts(playbackLocked, saveProject);
+  useDocumentShortcuts(playbackLocked, saveProject, saveProjectAs);
   const documentActions = {
     canUndo: canUndo && (!playbackLocked || lightingUndo), canRedo: canRedo && (!playbackLocked || lightingRedo),
     historyDisabled: false,
-    disabled: editingLocked || !project,
+    // Saving keeps the path, so it stays available while playing; Save As and revert do not.
+    disabled: !project,
+    replaceDisabled: playbackLocked || !project,
     onUndo: () => useDocumentStore.getState().undo(),
-    onRedo: () => useDocumentStore.getState().redo(), onSave: () => void saveProject()
+    onRedo: () => useDocumentStore.getState().redo(), onSave: () => void saveProject(),
+    onSaveAs: () => void saveProjectAs(), onRevert: () => void revertProject()
   };
   const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace actionsHost={lightingActionsHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
 

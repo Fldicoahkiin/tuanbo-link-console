@@ -1154,6 +1154,14 @@ function registerIpc(
       buttons: ['选择保存位置', '取消'], defaultId: 0, cancelId: 1 });
     return response === 0;
   });
+  handle('link:confirm-revert-to-saved', async (_event, payloadValue: unknown) => {
+    const payload = z.object({ name: z.string().max(512), consoleSynced: z.boolean() }).strict().parse(payloadValue);
+    const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '恢复到上次保存', noLink: true,
+      message: `放弃对「${payload.name}」的所有未保存修改？`,
+      detail: ['重新打开工程文件中上次保存的内容，撤销记录会清空，恢复副本移除。', ...payload.consoleSynced ? ['已同步到控台的改动不会撤回。'] : []].join('\n'),
+      buttons: ['恢复到上次保存', '取消'], defaultId: 1, cancelId: 1 });
+    return response === 0;
+  });
   handle('link:discard-recovery-copy', (_event, payload: unknown) => copies.discard(recoveryCopyDiscardSchema.parse(payload)));
   handle('link:resolve-recovery-copy', async (_event, payload: unknown) => {
     const content = await offerRecoveryCopy(recoveryCopyQuerySchema.parse(payload), {

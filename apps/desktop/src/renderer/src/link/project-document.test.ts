@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renameProjectCommand } from '@tb/core/link';
 import { createEmptyLinkProject } from '@tb/schema';
 import { useDocumentStore } from './stores/document-store';
-import { requireProjectLocation, requireSavedProjectPath, saveDocument } from './project-document';
+import { requireProjectLocation, requireSavedProjectPath, revertToSaved, saveDocument } from './project-document';
 
-const bridge = vi.hoisted(() => ({ saveProjectDocument: vi.fn(), confirmProjectLocation: vi.fn(), recordLog: vi.fn(), encode: vi.fn() }));
-vi.mock('./view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { confirmProjectLocation: bridge.confirmProjectLocation, recordLog: bridge.recordLog } }));
+const bridge = vi.hoisted(() => ({ saveProjectDocument: vi.fn(), confirmProjectLocation: vi.fn(), recordLog: vi.fn(), encode: vi.fn(), confirmRevertToSaved: vi.fn(), openProject: vi.fn(), discardRecoveryCopy: vi.fn() }));
+vi.mock('./view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { confirmProjectLocation: bridge.confirmProjectLocation, recordLog: bridge.recordLog,
+  confirmRevertToSaved: bridge.confirmRevertToSaved, openProject: bridge.openProject, discardRecoveryCopy: bridge.discardRecoveryCopy } }));
 vi.mock('./stores/project-codec', () => ({ projectCodec: { encode: bridge.encode }, isWorkerValidatedProject: () => false }));
 
 function open(path: string | null): void {
@@ -132,5 +133,34 @@ describe('requireProjectLocation', () => {
     expect(() => requireSavedProjectPath('同步控台')).toThrow('工程未保存：请先保存工程，再同步控台');
     open('C:\\shows\\a.tblink');
     expect(requireSavedProjectPath('同步控台')).toBe('C:\\shows\\a.tblink');
+  });
+});
+
+describe('revertToSaved', () => {
+  it('确认后重新打开磁盘上的工程文件，丢弃改动、撤销记录和恢复副本', async () => {
+    const disk = createEmptyLinkProject('磁盘版本'); disk.obsOutputMode = 'scenes';
+    useDocumentStore.getState().setProject(disk, 'C:\\shows\\恢复.tblink');
+    useDocumentStore.getState().execute(renameProjectCommand('未保存修改'));
+    useDocumentStore.getState().markConsoleSynced(useDocumentStore.getState().documentId);
+    bridge.confirmRevertToSaved.mockResolvedValue(true);
+    bridge.openProject.mockResolvedValue({ path: 'C:\\shows\\恢复.tblink', project: disk, upgraded: false });
+    bridge.discardRecoveryCopy.mockResolvedValue(true);
+    expect(await revertToSaved()).toBe('reverted');
+    expect(bridge.confirmRevertToSaved).toHaveBeenCalledWith({ name: '未保存修改', consoleSynced: true });
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: false, project: { name: '磁盘版本' }, past: [] });
+    expect(bridge.discardRecoveryCopy).toHaveBeenCalledWith({ version: 1, projectPath: 'C:\\shows\\恢复.tblink', projectId: disk.projectId });
+  });
+
+  it('取消时保留当前修改', async () => {
+    useDocumentStore.getState().execute(renameProjectCommand('保留'));
+    bridge.confirmRevertToSaved.mockResolvedValue(false);
+    expect(await revertToSaved()).toBe('cancelled');
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: true, project: { name: '保留' } });
+    expect(bridge.openProject).not.toHaveBeenCalled();
+  });
+
+  it('未命名工程没有可恢复的版本', async () => {
+    open(null);
+    await expect(revertToSaved()).rejects.toThrow('没有可恢复的版本');
   });
 });

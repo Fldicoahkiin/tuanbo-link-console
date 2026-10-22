@@ -170,6 +170,7 @@ const tbLink: LinkDesktopBridgeApi = {
   openProjectDocument: (path) => invoke('link:open-project', path),
   saveProjectDocument: (path, content, options) => invoke('link:save-project', path, content, options ?? {}),
   confirmProjectLocation: async (purpose) => z.boolean().parse(await invoke('link:confirm-project-location', purpose)),
+  confirmRevertToSaved: async (payload) => z.boolean().parse(await invoke('link:confirm-revert-to-saved', payload)),
   writeRecoveryCopy: (payload) => invoke('link:write-recovery-copy', recoveryCopyWriteSchema.parse(payload)),
   resolveRecoveryCopyDocument: async (payload) => recoveryCopyContentSchema.nullable().parse(await invoke('link:resolve-recovery-copy', recoveryCopyQuerySchema.parse(payload))),
   discardRecoveryCopy: async (payload) => z.boolean().parse(await invoke('link:discard-recovery-copy', recoveryCopyDiscardSchema.parse(payload))),
