@@ -8,7 +8,7 @@ function fixture() {
     cues: [{ id: 'cue', name: '动作', timecode: frameNumberToTimecode(0, '30'), actions: [{ id: 'pc', label: 'PC', kind: 'midi.programChange', portProfileId: 'out', channel: 1, program: 1 }] }] }] });
   let audio: NativePlayerStatus = { version: 1, sessionId: '4d081ed2-7f76-44c8-9c45-b0e06e860870', generation: 1, itemId: 'song',
     status: 'ready', positionMs: 0, offsetMs: 480000, sampleRate: 48000, enginePid: 1, engineTitle: '验收',
-    mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, gain: 1, analysis: null };
+    mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: 1, analysis: null };
   const identity = { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId };
   const ports = { prepare: vi.fn<() => Promise<void>>(() => Promise.resolve()), send: vi.fn<() => Promise<void>>(() => Promise.resolve()), close: vi.fn<() => Promise<void>>(() => Promise.resolve()) };
   const states: NativeMidiChannelState[] = [], errors: string[] = [];

@@ -46,4 +46,6 @@ export type ProgramLightingOutput = {
   stop(): void;
   release?(): Promise<void>;
   close?(): Promise<void>;
+  /** The latest live lighting fault since the previous call; the channel keeps running. */
+  takeFault?(): string | null;
 };

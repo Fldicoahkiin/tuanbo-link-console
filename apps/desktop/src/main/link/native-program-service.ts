@@ -73,6 +73,7 @@ export class NativeProgramService {
       case 'freeze': return player.freeze(operation.message);
       case 'unavailable': return player.reportUnavailable(operation.message);
       case 'runtimeUnavailable': return player.runtimeUnavailable(operation.message);
+      case 'fault': return player.reportFault(operation.message);
       case 'configure': entry.configuration = operation.configuration; return;
     }
   }

@@ -43,6 +43,7 @@ export class LightingMidiOutput {
     this.scheduler = new LightingScheduler(packets, (packet) => this.send(packet)); this.scheduler.locate(positionMs);
   }
   tick(positionMs: number): void { this.network.tick(positionMs); this.scheduler?.tick(positionMs); }
+  takeFault(): string | null { return this.network.takeFault(); }
   async release(): Promise<void> {
     const packets = this.releasePackets; this.releasePackets = [];
     for (const { output, packet } of packets) {

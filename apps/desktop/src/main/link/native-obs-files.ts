@@ -28,7 +28,8 @@ export async function prepareNextObsFiles(request: NativeObsPrepare, services: {
         const modes = new Set(targets.filter(target => target.asset.id === asset.id)
           .map(target => target.hardwareDecode ? 'hardware' as const : 'software' as const));
         for (const mode of modes) {
-          await services.media.ensureObsSeekVideo(request.projectPath, asset.relativePath, asset.sha256, mode);
+          // Runs while the current song plays: yield the CPU to OBS and audio.
+          await services.media.ensureObsSeekVideo(request.projectPath, asset.relativePath, asset.sha256, mode, undefined, 'background');
           assertCurrent();
         }
       }

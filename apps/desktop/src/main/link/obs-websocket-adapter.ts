@@ -67,6 +67,8 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   private readonly listeners = new Set<StatusListener>();
   private readonly inventoryListeners = new Set<() => void>();
   private readonly programListeners = new Set<() => void>();
+  /** Where each program-scene source was shown, so hiding it later acts on that scene. */
+  private readonly shownInProgram = new Map<string, { sceneName: string; sceneItemId: number }>();
   private snapshot: ObsConnectionSnapshot = {
     status: 'disconnected',
     obsVersion: null,
@@ -163,6 +165,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
 
   async connect(url: string, password: string, timeoutMs = 10_000): Promise<ObsConnectionSnapshot> {
     this.requests.invalidate(new Error('OBS 正在更换连接，旧请求已取消'));
+    this.shownInProgram.clear();
     this.updateSnapshot({
       status: this.snapshot.status === 'disconnected' ? 'connecting' : 'reconnecting',
       error: null
@@ -658,6 +661,13 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
    * whatever scene it was authored against (operator decision 2026-10-19). */
   async setSourceEnabledInProgramScene(sourceName: string, enabled: boolean): Promise<void> {
     this.assertConnected();
+    const shown = enabled ? undefined : this.shownInProgram.get(sourceName);
+    if (shown) {
+      // The program may have changed since; hide the item where it was shown.
+      this.shownInProgram.delete(sourceName);
+      await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName: shown.sceneName, sceneItemId: shown.sceneItemId, sceneItemEnabled: false }), 'SetSceneItemEnabled');
+      return;
+    }
     const current = await this.request(() => this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
     const sceneName = current.currentProgramSceneName;
     if (!sceneName) throw new Error('无法读取 OBS 当前播出场景');
@@ -668,6 +678,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       throw new Error(matches.length ? `当前播出场景“${sceneName}”中有多个来源“${sourceName}”，无法确定显示哪一个` : `当前播出场景“${sceneName}”中没有来源“${sourceName}”`);
     }
     await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName, sceneItemId, sceneItemEnabled: enabled }), 'SetSceneItemEnabled');
+    if (enabled) this.shownInProgram.set(sourceName, { sceneName, sceneItemId });
   }
 
   private async getSceneItemId(sceneName: string, sourceName: string): Promise<number> {

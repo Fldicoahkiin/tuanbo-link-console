@@ -23,6 +23,7 @@ export class NativeLightingOutput implements ProgramLightingOutput {
   private abort: AbortController | null = null;
   private generation = 0;
   private failure: Error | null = null;
+  private fault: string | null = null;
   private closing: Promise<void> = Promise.resolve();
   private readonly pending = new Set<Promise<void>>();
   private position = 0;
@@ -61,13 +62,22 @@ export class NativeLightingOutput implements ProgramLightingOutput {
   observe(positionMs: number, observedAtMs: number): void {
     this.position = positionMs; this.observedAt = observedAtMs;
   }
+  /** A stale observation sends nothing and is reported; the next fresh one
+   * continues. Events inside the gap reach send(), which drops late starts. */
   tick(positionMs: number): void {
-    this.requireClock(positionMs); this.network.tick(positionMs); this.scheduler?.tick(positionMs);
+    this.requireClock(positionMs);
+    const age = this.now() - this.observedAt;
+    if (age > 100) { this.fault = `灯光音频时钟晚到 ${Math.round(age)}ms，本次位置未发送灯光，不补发`; return; }
+    this.network.tick(positionMs); this.scheduler?.tick(positionMs);
   }
   async finish(positionMs: number): Promise<void> {
     this.requireClock(positionMs); this.scheduler?.finish(positionMs);
     await Promise.all([this.network.finish(positionMs), ...this.pending]);
     if (this.failure) throw this.failure;
+  }
+  /** The latest live lighting fault since the previous call; the channel keeps running. */
+  takeFault(): string | null {
+    const fault = this.network.takeFault() ?? this.fault; this.fault = null; return fault;
   }
 
   stop(): void {
@@ -89,18 +99,23 @@ export class NativeLightingOutput implements ProgramLightingOutput {
   private requireClock(positionMs: number): void {
     if (this.failure) throw this.failure;
     const age = this.now() - this.observedAt;
-    if (!Number.isFinite(positionMs) || positionMs < 0 || positionMs !== this.position || !Number.isFinite(age) || age < 0 || age > 100) {
-      const error = new Error('灯光音频时钟过期或位置不一致，停止该通道，不补发'); this.fail(error); throw error;
+    if (!Number.isFinite(positionMs) || positionMs < 0 || positionMs !== this.position || !Number.isFinite(age) || age < 0) {
+      const error = new Error('灯光音频时钟无效或位置不一致，停止该通道，不补发'); this.fail(error); throw error;
     }
   }
   private send(packet: LightingPacket): void {
     const ports = this.ports;
     if (!ports || this.failure) throw this.failure ?? new Error('灯光 MIDI 尚未准备');
-    if (this.pending.size >= 32) throw new Error('灯光 MIDI 动作积压，停止该通道');
-    const generation = this.generation;
-    const deadline = this.observedAt + 100 - Math.max(0, this.position - packet.atMs);
+    if (this.pending.size >= 32) { this.fault = '灯光 MIDI 动作积压超过 32 条，本条未发送'; return; }
+    const generation = this.generation, now = this.now();
+    let deadline = this.observedAt + 100 - Math.max(0, this.position - packet.atMs);
+    if (now > deadline) {
+      // A late start is never sent. A late release still is, so nothing stays on.
+      if (packet.phase !== 'off' && !packet.ma2Off) { this.fault = `灯光动作晚于 100ms 执行边界，未发送（${Math.round(now - deadline)}ms）`; return; }
+      deadline = now + 100;
+    }
     const sending = ports.send(packet.portProfileId, packet.bytes, deadline).catch(error => {
-      if (generation === this.generation) this.fail(toError(error));
+      if (generation === this.generation) this.fault = `灯光动作发送失败：${toError(error).message}`;
     }).finally(() => { this.pending.delete(sending); });
     this.pending.add(sending);
   }

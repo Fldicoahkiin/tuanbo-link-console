@@ -29,6 +29,7 @@ it('下一节目文件按两路准备，未接入任何设备控制，也不改�
   await prepareNextObsFiles(t.request, t.services, () => undefined);
   expect(t.maximum()).toBe(2); expect(t.inspectMediaAssets).toHaveBeenCalledTimes(6);
   expect(t.ensureObsSeekVideo).toHaveBeenCalledTimes(6); expect(JSON.stringify(t.request)).toBe(original);
+  expect(t.ensureObsSeekVideo.mock.calls.every(call => call[5] === 'background')).toBe(true);
   expect(t.ensureObsSeekVideo.mock.calls.map(call => [call[1], call[3]])).toEqual([
     ['assets/0.mp4', 'hardware'], ['assets/1.mp4', 'hardware'],
     ['assets/2.mp4', 'software'], ['assets/3.mp4', 'software'],

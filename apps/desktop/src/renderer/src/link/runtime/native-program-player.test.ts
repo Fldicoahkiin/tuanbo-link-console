@@ -27,7 +27,7 @@ function fixture() {
       status = { version: 1, sessionId: request.sessionId, generation: request.generation, itemId: s.itemId,
         status: 'ready', positionMs: s.positionMs, offsetMs: s.offsetMs, sampleRate: s.sampleRate,
         enginePid: 123, engineTitle: 'TBLINK Audio 123', mtcPortName: request.midiPortName, mtcSent: 0,
-        audioError: null, mtcError: null, underruns: 0, gain: s.volume, analysis: null };
+        audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: s.volume, analysis: null };
       return Promise.resolve(emit());
     }),
     controlNativePlayback: vi.fn((command: NativePlayerControl): Promise<NativePlayerStatus> => {
@@ -87,6 +87,38 @@ it('播放中画面通道的直播故障显示为输出异常，音频继续；�
   await player.play('song-1');
   expect(f.state().fault).toBeNull();
   await player.dispose();
+});
+
+it('时间码短暂中断显示为输出异常，音频与时间码继续；同一次数不重复提示', async () => {
+  const f = fixture();
+  await f.player.play('song-0');
+  expect(f.state()).toMatchObject({ status: 'playing', fault: null });
+  f.emit({ mtcInterruptions: 1 });
+  expect(f.state()).toMatchObject({ status: 'playing', mtcConnectionFailed: false });
+  expect(f.state().fault).toContain('时间码中断 1 次');
+  f.emit({ positionMs: 2000 });
+  expect(f.state().fault).toContain('时间码中断 1 次');
+  f.emit({ mtcInterruptions: 2 });
+  expect(f.state().fault).toContain('时间码中断 2 次');
+  await f.player.dispose();
+});
+
+it('有画面的歌等待画面准备完成（例如首次生成定位缓存）再开始，不因一秒窗口放弃画面', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = fixture(); f.project.obsOutputMode = 'scenes';
+    f.project.rundown[0]!.cues = [linkCueSchema.parse({ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+      actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
+    const ready = f.api.prepareNativeObs.getMockImplementation()!;
+    f.api.prepareNativeObs.mockImplementationOnce(request => new Promise(resolve => { setTimeout(() => resolve(ready(request)), 3000); }));
+    const playing = f.player.play('song-0');
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(f.state().status).toBe('preparing'); expect(f.api.stopNativeObs).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2000); await playing;
+    expect(f.state()).toMatchObject({ status: 'playing', error: null });
+    expect(f.api.controlNativePlayback.mock.calls.map(([command]) => command.kind)).toContain('play');
+    await f.player.dispose();
+  } finally { vi.useRealTimers(); }
 });
 
 it('引擎异常退出后再次播放不向已退出的引擎发 stop，直接重新准备并播放；销毁时同样不发', async () => {
@@ -205,6 +237,19 @@ describe('原生正式播放器的操作与会话', () => {
     if (endAction === 'pause') expect(f.state().notice).toContain('曲尾灯光网络断开');
     await f.player.stop();
   });
+  it('44.1kHz 曲尾位置按整采样取整，灯光收尾使用引擎实际结束位置，不用名义结束时间', async () => {
+    const f = fixture();
+    f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: 'network' };
+    f.project.rundown[0]!.playback!.endMs = 9499.99;
+    await f.player.play('song-0');
+    // The engine ends on a whole sample: llround(9499.99 × 44.1) = 418950 samples = 9500 ms.
+    const endedAt = Math.round(9499.99 * 44.1) / 44.1;
+    expect(endedAt).not.toBe(9499.99);
+    f.emit({ status: 'ended', positionMs: endedAt });
+    await vi.waitFor(() => expect(f.lighting.finish).toHaveBeenCalledOnce());
+    expect(f.lighting.finish).toHaveBeenCalledWith(endedAt);
+    await f.player.stop();
+  });
   it('界面伴随 Cue 启动失败不停止已开始的后台音频与 OBS', async () => {
     const f = fixture(); f.deps.started.mockImplementation(() => { throw new Error('本地 MIDI 起点已错过'); });
     await f.player.play('song-0');
@@ -253,7 +298,7 @@ describe('原生正式播放器的操作与会话', () => {
       rejectPreparation!(new Error('播放请求在等待许可时已被取消'));
       return Promise.resolve({ version: 1, sessionId: request.sessionId, generation: command.generation, itemId: snapshot.itemId,
         status: 'stopped', positionMs: snapshot.positionMs, offsetMs: snapshot.offsetMs, sampleRate: snapshot.sampleRate,
-        enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, gain: snapshot.volume, analysis: null });
+        enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: snapshot.volume, analysis: null });
     });
     const playing = f.player.play('song-0');
     await vi.waitFor(() => expect(f.api.prepareNativePlayback).toHaveBeenCalledOnce());

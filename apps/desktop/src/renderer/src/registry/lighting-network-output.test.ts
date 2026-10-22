@@ -58,13 +58,19 @@ it('准备期间停止不会恢复输出，定位不会补发之前的 Cue，尾
   expect(f.midi).not.toHaveBeenCalled(); f.output.stop();
 });
 
-it('停止取消未发送队列；首条失败阻止后续，不重试也不改走 MIDI', async () => {
+it('停止取消未发送队列；直播中某条 Cue 失败标红，后续 Cue 照常发送，不重试也不改走 MIDI', async () => {
   const f = setup(); await f.output.prepare(f.document, 0); f.output.tick(200); f.output.stop();
   await Promise.resolve(); expect(f.api.playMa2Cue).not.toHaveBeenCalled();
   await f.output.prepare(f.document, 0); f.api.playMa2Cue.mockRejectedValueOnce(new Error('网络已断开'));
-  await expect(f.output.finish(201)).rejects.toThrow('网络已断开');
-  expect(f.api.playMa2Cue).toHaveBeenCalledOnce(); expect(f.api.cancelMa2Playback).toHaveBeenCalled();
-  expect(f.midi).not.toHaveBeenCalled();
+  const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    await expect(f.output.finish(201)).resolves.toBeUndefined();
+    expect(f.api.playMa2Cue).toHaveBeenCalledTimes(2);
+    for (const value of [1, 2]) expect(f.api.playMa2Cue).toHaveBeenCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 168, cue: `${value}.250`, action: 'goto' } }));
+    expect(f.output.takeFault()).toContain('网络已断开'); expect(f.output.takeFault()).toBeNull();
+    expect(f.api.cancelMa2Playback).not.toHaveBeenCalledTimes(2);
+    expect(f.midi).not.toHaveBeenCalled();
+  } finally { diagnostic.mockRestore(); }
 });
 
 it('上一首的取消回执迟到失败不能污染新歌曲，错误仍保留诊断', async () => {
@@ -110,4 +116,28 @@ it('网络埋步按播放位置触发，停播取消，直接预览只发送正�
   expect(f.api.playMa2Cue).not.toHaveBeenCalled();
   expect(f.api.playMa2Audition).toHaveBeenCalledOnce();
   expect(f.api.playMa2Audition).toHaveBeenLastCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 168, cue: '2', action: 'goto' } }));
+});
+
+it('控台响应过慢积压超过 32 条时跳过新 Cue 并标红，不停止整首灯光', async () => {
+  const f = setup();
+  f.document.tracks[0]!.clips[0]!.events = Array.from({ length: 40 }, (_value, index) => ({ id: `step-${index}`, at: index * 10, kind: 'ma2' as const, action: 'goto' as const, sequence: 168, cue: `${index + 1}`, executor: '', label: `步骤 ${index + 1}` }));
+  f.api.playMa2Cue.mockImplementation(() => new Promise<void>(() => undefined));
+  await f.output.prepare(f.document, 0);
+  expect(() => f.output.tick(400)).not.toThrow();
+  expect(f.output.takeFault()).toContain('积压');
+  f.output.stop();
+});
+
+it('网络 Cue 晚于 150ms 才执行时标出迟到时长，仍执行且不影响后续', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = setup();
+    f.api.playMa2Cue.mockImplementationOnce(() => new Promise<void>(resolve => { setTimeout(resolve, 400); }));
+    await f.output.prepare(f.document, 0);
+    f.output.tick(100); await vi.advanceTimersByTimeAsync(400);
+    expect(f.output.takeFault()).toMatch(/灯光网络 Cue 晚 4\d\d ms 执行/);
+    f.output.tick(200); await vi.advanceTimersByTimeAsync(10);
+    expect(f.api.playMa2Cue).toHaveBeenCalledTimes(2); expect(f.output.takeFault()).toBeNull();
+    f.output.stop();
+  } finally { vi.useRealTimers(); }
 });

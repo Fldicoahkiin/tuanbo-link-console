@@ -35,7 +35,9 @@ export const nativePlaybackEventSchema = z.discriminatedUnion('kind', [
     state: z.enum(['empty', 'ready', 'playing', 'paused', 'stopped', 'ended', 'error']),
     positionMs: z.number().finite().nonnegative(), qpc100ns: z.string().regex(/^\d+$/), clockFrequency: z.number().nonnegative(),
     sampleRate: z.number().int().nonnegative(), underruns: z.number().int().nonnegative(),
-    midiSent: z.number().int().nonnegative(), midiError: z.number().int(), audioError: z.number().int(),
+    midiSent: z.number().int().nonnegative(), midiError: z.number().int(),
+    // Stale clock (-2) or late worker (-1): nothing sent late, then a Full Frame relocates.
+    midiInterruptions: z.number().int().nonnegative(), midiInterruption: z.number().int(), audioError: z.number().int(),
     maxMidiLatenessMs: z.number().finite().nonnegative(), bufferedFrames: z.number().int().nonnegative(),
     midiTiming: z.object({ wakeGapMs: z.number().finite().nonnegative(), midiLockWaitMs: z.number().finite().nonnegative(),
       audioLockWaitMs: z.number().finite().nonnegative(), sendMs: z.number().finite().nonnegative() }).strict().optional(),
@@ -91,6 +93,8 @@ export const nativePlayerStatusSchema = z.object({ ...playerSession, itemId: z.s
   enginePid: z.number().int().positive().nullable(), engineTitle: z.string().max(256).nullable(),
   mtcPortName: z.string().max(256).nullable(), mtcSent: z.number().int().nonnegative(),
   audioError: z.string().nullable(), mtcError: z.string().nullable(), underruns: z.number().int().nonnegative(),
+  /** Timecode interruptions in this song, each followed by a Full Frame relocation. */
+  mtcInterruptions: z.number().int().nonnegative(),
   gain: z.number().finite().min(0).max(1), analysis: playbackAnalysisSchema.nullable()
 }).strict();
 export type NativePlayerStatus = z.infer<typeof nativePlayerStatusSchema>;

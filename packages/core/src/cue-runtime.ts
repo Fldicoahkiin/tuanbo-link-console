@@ -209,6 +209,16 @@ export class CueRuntime {
       return this.loseTimecode('MTC 首帧未从节目开头开始');
     }
     if (this.lastSample && sample.receivedAtMs - this.lastSample.receivedAtMs > MTC_LOSS_MS) {
+      // The formal audio clock is the timeline itself. A late observation whose
+      // position kept time is a gap in watching, not a lost timecode: Cues in
+      // the gap are missed and never sent late; later Cues run as usual.
+      if (this.ownsInternalClock() && !isUnexpectedJump(this.lastSample, sample)) {
+        const missed = this.missedCueIds.size, gapMs = Math.round(sample.receivedAtMs - this.lastSample.receivedAtMs);
+        this.markCrossedCuesAsMissed(sample.totalFrames);
+        this.previousFrame = sample.totalFrames; this.lastSample = sample;
+        const skipped = this.missedCueIds.size - missed;
+        return this.update([], skipped ? `播放位置更新中断 ${gapMs}ms，错过 ${skipped} 个联动 Cue，未补发` : undefined);
+      }
       this.lastSample = sample;
       return this.loseTimecode('MTC 信号中断');
     }
@@ -245,7 +255,7 @@ export class CueRuntime {
     }
     if (
       (this.state === 'armed' || this.state === 'running' || (this.state === 'paused' && !this.manualTakeover))
-      && this.lastSample
+      && this.lastSample && !this.ownsInternalClock()
       && nowMs - this.lastSample.receivedAtMs > MTC_LOSS_MS
     ) {
       return this.loseTimecode('MTC 信号中断');
@@ -401,6 +411,9 @@ export class CueRuntime {
     return this.mode;
   }
 
+  /** The local formal audio clock; its own player reports a stalled position. */
+  private ownsInternalClock(): boolean { return this.project.playbackSource === 'internal' && this.executionOwner === 'local'; }
+
   private markCrossedCuesAsMissed(currentFrame: number): void {
     if (!this.selectedItem) return;
     for (const event of eventsBetween(this.scheduledCues, this.previousFrame, currentFrame)) {
@@ -449,7 +462,11 @@ function collectDueCues(
 ): DueCue[] {
   const due: DueCue[] = [];
   for (const { cue, scheduledFrame } of eventsBetween(events, previousFrame, currentFrame)) {
-    if (!executed.has(cue.id) && !missed.has(cue.id)) due.push({ cue, scheduledFrame, executionId: crypto.randomUUID() });
+    if (executed.has(cue.id) || missed.has(cue.id)) continue;
+    // A duration end only hides what its own start showed. After a missed start
+    // there is nothing to undo, and that miss was already reported.
+    if (cue.id.endsWith(':duration-end') && !executed.has(cue.id.slice(0, -':duration-end'.length))) continue;
+    due.push({ cue, scheduledFrame, executionId: crypto.randomUUID() });
   }
   return due;
 }

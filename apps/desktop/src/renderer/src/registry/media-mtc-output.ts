@@ -14,6 +14,7 @@ export class MediaMtcOutput {
   private locate = true;
   private connectionAttempt: AbortController | null = null;
   private schedulingNotice: string | null = null;
+  private interruptions = 0;
 
   takeSchedulingNotice(): string | null {
     const notice = this.schedulingNotice; this.schedulingNotice = null; return notice;
@@ -62,23 +63,24 @@ export class MediaMtcOutput {
     // send() implicitly reopens a closed Web MIDI port. A lost connection must
     // instead fail this session and require an explicit operator action.
     if (this.output.connection !== 'open') throw new Error('灯光 MIDI 输出连接已失效，时间码输出已停止；请检查端口后手动重新播放');
-    if (this.rate !== rate) { this.stop(); this.rate = rate; }
-    if (this.lastPositionMs !== null && positionMs < this.lastPositionMs) throw new Error('音频位置回跳且未重新定位，已停止 MIDI 时间码输出');
+    if (this.rate !== rate) { this.reset(); this.rate = rate; }
     const elapsed = this.lastTickAt === null ? 0 : now - this.lastTickAt;
     const advanced = this.lastPositionMs === null ? 0 : positionMs - this.lastPositionMs;
     if (elapsed < 0) throw new Error('MIDI 时间码调度时钟回跳，时间码输出已停止');
-    if (elapsed > 500) throw new Error(`MIDI 时间码调度中断 ${Math.round(elapsed)}ms，时间码输出已停止；音频继续播放`);
-    if (Math.abs(advanced - elapsed) > 100) throw new Error('音频位置与播放时钟不一致，已停止 MIDI 时间码输出；请手动重新定位');
     this.lastTickAt = now;
     this.lastPositionMs = positionMs;
     const fps = playbackFramesPerSecond(rate);
     const frameMs = 1000 / fps;
-    // A stalled renderer must never burst expired quarters into the console.
-    // Freeze only this output channel; the player keeps the audio running and
-    // requires an explicit restart. In particular, a Full Frame relocation is
-    // not evidence that a physical console has recovered playback correctly.
-    if (!this.locate && positionMs - this.nextQuarterFrame * frameMs / 4 > frameMs) {
-      throw new Error(`MIDI 时间码调度滞后超过一帧（${Math.round(frameMs)}ms），已停止此通道；请手动重新定位`);
+    // A stalled renderer or a jumping audio position never bursts expired
+    // quarters into the console. The stream relocates with a Full Frame at
+    // the actual audio position and continues; the interruption is reported.
+    const interruption = advanced < 0 ? '音频位置回跳'
+      : elapsed > 500 ? `调度中断 ${Math.round(elapsed)}ms`
+        : Math.abs(advanced - elapsed) > 100 ? '音频位置与播放时钟不一致'
+          : !this.locate && positionMs - this.nextQuarterFrame * frameMs / 4 > frameMs ? `调度滞后超过一帧（${Math.round(frameMs)}ms）` : null;
+    if (interruption) {
+      this.locate = true; this.piece = 0; this.messages = [];
+      this.schedulingNotice = `时间码中断 ${++this.interruptions} 次（${interruption}）：迟到部分未补发，已按音频位置整帧重新同步，控台会跳到当前位置`;
     }
     if (this.locate) {
       this.output.send(encodeMediaTimecode(positionMs, rate).fullFrame);
@@ -106,7 +108,10 @@ export class MediaMtcOutput {
 
   stop(): void {
     this.connectionAttempt?.abort(); this.connectionAttempt = null;
-    this.nextQuarterFrame = 0; this.lastTickAt = null; this.lastPositionMs = null; this.rate = null; this.piece = 0; this.messages = []; this.locate = true; this.schedulingNotice = null;
+    this.reset(); this.schedulingNotice = null; this.interruptions = 0;
+  }
+  private reset(): void {
+    this.nextQuarterFrame = 0; this.lastTickAt = null; this.lastPositionMs = null; this.rate = null; this.piece = 0; this.messages = []; this.locate = true;
   }
 }
 

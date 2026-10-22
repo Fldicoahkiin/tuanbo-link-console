@@ -76,6 +76,15 @@ it('管道中积压的位置不能按收到时刻重新获得执行窗口；直�
   expect(test.actions.map(action => action.id)).toEqual(['action-1']);
 });
 
+it('位置更新中断期间的 Cue 记为错过并标红，不补发，后续动作继续', async () => {
+  const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
+  test.time(1700); test.session.clock(1700); await test.session.settled();
+  expect(test.faults).toEqual(['播放位置更新中断 800ms，错过 1 个联动 Cue，未补发']);
+  expect(test.session.error).toBeNull();
+  await test.advance(1800, 2000);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-2']);
+});
+
 it('设备观察年龄和本机排队耗时共同计入画面执行边界；迟到动作不补发，后续动作继续', async () => {
   const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
   test.time(1060); test.session.clock(1000, 1000);

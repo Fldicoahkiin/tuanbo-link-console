@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { NativePlaybackCommand, NativePlaybackEvent, NativePlaybackDevices, NativePlayerPrepare } from '@tb/schema';
 import { NativePlayerService } from './native-player-service';
 
-const native = vi.hoisted(() => ({ devices: vi.fn<() => Promise<NativePlaybackDevices>>(), commands: vi.fn<(command: NativePlaybackCommand) => void>() }));
+const native = vi.hoisted(() => ({ devices: vi.fn<() => Promise<NativePlaybackDevices>>(), commands: vi.fn<(command: NativePlaybackCommand) => void>(),
+  emit: null as ((patch: Partial<Extract<NativePlaybackEvent, { kind: 'clock' }>>) => void) | null }));
 vi.mock('./native-device-query', () => ({ NativeDeviceQuery: class {
   read = native.devices;
   reopenForPreparation() { return Promise.resolve(); }
@@ -14,11 +15,13 @@ vi.mock('./native-playback-client', () => ({
     readonly identity = { pid: 123, title: 'test', windowClass: 'Static' as const };
     private clock: Extract<NativePlaybackEvent, { kind: 'clock' }> = {
       protocol: 4, kind: 'clock', generation: 0, state: 'empty', positionMs: 0, qpc100ns: '1',
-      clockFrequency: 48000, sampleRate: 48000, underruns: 0, midiSent: 0, midiError: 0, audioError: 0,
+      clockFrequency: 48000, sampleRate: 48000, underruns: 0, midiSent: 0, midiError: 0, midiInterruptions: 0, midiInterruption: 0, audioError: 0,
       maxMidiLatenessMs: 0, bufferedFrames: 1000, gain: 1,
       analysis: { fftSize: 2048, peaks: [0, 0], spectrum: Array.from({ length: 1024 }, () => 0) }
     };
-    constructor(_executable: string, private readonly changed: (event: NativePlaybackEvent) => void) {}
+    constructor(_executable: string, private readonly changed: (event: NativePlaybackEvent) => void) {
+      native.emit = patch => { this.clock = { ...this.clock, ...patch }; this.changed(this.clock); };
+    }
     start() { return Promise.resolve(); }
     close() { return Promise.resolve(); }
     command(command: NativePlaybackCommand) {
@@ -129,4 +132,23 @@ it('定位设备查询未返回时切歌，旧设备缺失结果不能清除新�
     expect(f.service.status).toMatchObject({ itemId: 'next', status: 'ready', mtcPortName: 'test-mtc', mtcError: null, audioError: null });
     expect(f.error).not.toHaveBeenCalled();
   } finally { release?.(f.devices); await f.service.close(); }
+});
+
+it('时间码短暂中断：每次记录一次并累计本首次数，不当作 MIDI 故障；定位后引擎重新计数不漏记', async () => {
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId };
+  try {
+    await f.service.prepare(f.request);
+    await f.service.control({ ...envelope, generation: 2, kind: 'play' });
+    native.emit!({ midiInterruptions: 1, midiInterruption: -1, qpc100ns: '2' });
+    native.emit!({ midiInterruptions: 1, midiInterruption: -1, qpc100ns: '3' });
+    expect(f.service.status).toMatchObject({ status: 'playing', mtcInterruptions: 1, mtcError: null });
+    expect(f.error).toHaveBeenCalledOnce();
+    expect(f.error.mock.calls[0]?.[0]).toContain('发送线程迟到超过一帧');
+    await f.service.control({ ...envelope, generation: 3, kind: 'seek', positionMs: 2000 });
+    native.emit!({ midiInterruptions: 0, qpc100ns: '4' });
+    native.emit!({ midiInterruptions: 1, midiInterruption: -2, qpc100ns: '5' });
+    expect(f.service.status).toMatchObject({ mtcInterruptions: 2, mtcError: null });
+    expect(f.error).toHaveBeenCalledTimes(2);
+    expect(f.error.mock.calls[1]?.[0]).toContain('音频时钟超过一帧未更新');
+  } finally { await f.service.close(); }
 });

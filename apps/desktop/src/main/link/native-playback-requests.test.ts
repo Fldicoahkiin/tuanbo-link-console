@@ -16,7 +16,7 @@ function deferred() {
 function service() {
   const prepare = vi.fn((r: NativePlayerPrepare): Promise<NativePlayerStatus> => Promise.resolve({ version: 1, sessionId: r.sessionId,
     generation: r.generation, itemId: r.snapshot.itemId, status: 'ready', positionMs: r.snapshot.positionMs, offsetMs: r.snapshot.offsetMs,
-    sampleRate: 48000, enginePid: 123, engineTitle: 'test', mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, gain: 0.5, analysis: null }));
+    sampleRate: 48000, enginePid: 123, engineTitle: 'test', mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: 0.5, analysis: null }));
   return { prepare, control: vi.fn((): Promise<NativePlayerStatus> => Promise.reject(new Error('unexpected output'))) };
 }
 

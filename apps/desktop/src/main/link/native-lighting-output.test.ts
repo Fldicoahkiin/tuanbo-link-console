@@ -13,8 +13,9 @@ function fixture() {
   const errors: string[] = [];
   const status: Ma2NetworkStatus = { state: 'connected', settings: { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, passwordSaved: false, version: null, error: null };
   const network = { getMa2NetworkStatus: vi.fn(() => Promise.resolve(status)), cancelMa2Playback: vi.fn<() => Promise<void>>(() => Promise.resolve()), playMa2Cue: vi.fn<() => Promise<void>>(() => Promise.resolve()) };
-  const output = new NativeLightingOutput({ executable: 'unused', network, now: () => 1000, authorize: () => Promise.resolve(), ports: () => ports, error: message => errors.push(message) });
-  return { document, ports, output, errors, network };
+  let now = 1000;
+  const output = new NativeLightingOutput({ executable: 'unused', network, now: () => now, authorize: () => Promise.resolve(), ports: () => ports, error: message => errors.push(message) });
+  return { document, ports, output, errors, network, time: (value: number) => { now = value; } };
 }
 
 it('直接灯光由设备位置调用；曲尾提前释放使用当前位置，不沿用旧 Note On 截止时间', async () => {
@@ -52,13 +53,26 @@ it('端口准备途中停止不会产生迟到灯光；关闭等待已打开的�
   f.output.stop(); complete!(); await prepared; await f.output.close(); expect(f.ports.send).not.toHaveBeenCalled();
 });
 
-it('拒绝过期或与音频不一致的位置，不让 UI 的播放头成为输出时钟', async () => {
+it('过期位置本次不发送并标红，通道继续；与音频不一致的位置仍拒绝，不让 UI 的播放头成为输出时钟', async () => {
   const f = fixture(); await f.output.prepare(f.document, null, 0); f.output.observe(0, 899);
-  expect(() => f.output.tick(0)).toThrow('时钟过期'); expect(f.ports.send).not.toHaveBeenCalled(); await f.output.close();
+  expect(() => f.output.tick(0)).not.toThrow(); expect(f.ports.send).not.toHaveBeenCalled();
+  expect(f.output.takeFault()).toContain('晚到'); expect(f.output.takeFault()).toBeNull();
+  f.output.observe(0, 1000); expect(() => f.output.tick(1)).toThrow('位置不一致');
+  await f.output.close();
 });
 
-it('驱动拒绝发送时曲尾返回失败，不将发送错误吞成同步成功', async () => {
+it('驱动拒绝某条发送时标红并继续，曲尾照常完成，错误不被吞掉', async () => {
   const f = fixture(); f.ports.send.mockRejectedValueOnce(new Error('端口已拔除')); await f.output.prepare(f.document, null, 0);
-  f.output.observe(1, 1000); await expect(f.output.finish(1)).rejects.toThrow('端口已拔除');
-  expect(f.errors.some(error => error.includes('端口已拔除'))).toBe(true); await f.output.close();
+  f.output.observe(1, 1000); await expect(f.output.finish(1)).resolves.toBeUndefined();
+  expect(f.output.takeFault()).toContain('端口已拔除'); await f.output.close();
+});
+
+it('卡顿后迟到的 Note On 不补发并标红，对应 Note Off 仍发送以免灯光卡住', async () => {
+  const f = fixture(); await f.output.prepare(f.document, null, 0);
+  f.time(1500); f.output.observe(500, 1450); f.output.tick(500);
+  expect(f.ports.send).not.toHaveBeenCalled(); expect(f.output.takeFault()).toContain('晚于 100ms');
+  f.time(2100); f.output.observe(1100, 2050); f.output.tick(1100);
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
+  expect(f.ports.send.mock.calls[0]).toEqual(['out', [0x80, 60, 0], 2200]);
+  await f.output.close();
 });
