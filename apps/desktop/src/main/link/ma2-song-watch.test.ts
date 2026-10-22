@@ -37,3 +37,15 @@ it('带执行器的歌曲每次复查同样只发两条命令；两份复查导�
   const compare = lines.at(-1)!;
   expect(compare.match(/_check(?:_exec)?',1\)/g)).toHaveLength(2);
 });
+it('同一首歌的复查基线用固定文件名，重新启动后覆盖而不是在控台上越积越多', async () => {
+  const bridge: Pick<Ma2OnpcBridge, 'request'> = { request: vi.fn<Ma2OnpcBridge['request']>(() => Promise.resolve('<MA><Sequ index="8999"/></MA>')) };
+  const baseline = async (generation = 'session'): Promise<string[]> => {
+    const { connection, lines } = console();
+    await new Ma2SongWatch(() => false).changed(connection, bridge, { ...request, expectedSource: { ...request.expectedSource, generation } });
+    return [...new Set(lines.flatMap(line => [...line.matchAll(/tblink_watch_[a-f0-9]+/g)].map(match => match[0])))];
+  };
+  const first = await baseline();
+  expect(first).toHaveLength(1);
+  expect(await baseline()).toEqual(first);
+  expect(await baseline('plugin-restarted')).toEqual(first);
+});

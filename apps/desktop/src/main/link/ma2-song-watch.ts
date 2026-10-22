@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { Ma2SongCheckRequest } from '@tb/schema';
 import { ma2SongCheckRequestSchema } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
@@ -21,7 +21,9 @@ export class Ma2SongWatch {
     stopped(); this.busy = true;
     const key = JSON.stringify([request.network, request.expectedSource, request.sequence, request.executor]);
     const cached = this.snapshots.get(key);
-    const file = cached?.file ?? `tblink_watch_${randomBytes(8).toString('hex')}`;
+    // One baseline file per song position: the next start overwrites it instead of leaving another copy.
+    const position = JSON.stringify([request.network.host, request.network.port, request.expectedSource.show, request.sequence, request.executor]);
+    const file = cached?.file ?? `tblink_watch_${createHash('sha256').update(position).digest('hex').slice(0, 16)}`;
     const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(request.expectedSource.generation)} and gma.show.getvar('VERSION')==${ma2LuaString(request.expectedSource.version)},'Show or session changed');`;
     const exportObject = (object: string, name: string): string => `assert(gma.show.getobj.handle('${object}'),'Song position missing');gma.cmd('Export ${object} ${name} /o');`;
     // No $, ^ or |: the native command line consumes them and forces the multi-line chunked path.
