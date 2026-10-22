@@ -6,6 +6,7 @@ import { currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { useMa2ExecutorPageStore, prepareMa2ExecutorPages, loadMa2ExecutorDirectory, loadMa2ExecutorPage, scanMa2ExecutorLocations, selectMa2ExecutorBandPage, updateMa2ExecutorPageItem, type Ma2ExecutorBand } from '../stores/ma2-executor-page-store';
 import { useMa2ExecutorPages } from '../runtime/use-ma2-executor-pages';
 import { Ma2MaterialMenu } from './Ma2MaterialMenu';
+import { Ma2ConsoleName } from './Ma2ConsoleName';
 import '../ma2-executor.css';
 
 const bands = [
@@ -168,7 +169,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
     }}>
       <strong>{editing.kind === 'rename' ? '重命名' : editing.kind === 'move' ? '移动到' : '删除执行器'}</strong>
       <p>{editing.selection.page} 页 · {editing.selection.item.slot} 格 · {editing.selection.item.name}</p>
-      {editing.kind === 'rename' ? <label>执行器名称<input aria-label="执行器名称" autoFocus maxLength={512} value={name} onChange={event => setName(event.target.value)}/></label> : editing.kind === 'move' ? <div className="ma2-executor-destination"><label>目标页码<input aria-label="目标页码" type="number" min={1} max={9999} value={targetPage} onChange={event => setTargetPage(event.target.value)}/></label><label>目标格子<input aria-label="目标格子" type="number" min={1} max={240} value={targetSlot} onChange={event => setTargetSlot(event.target.value)}/></label></div> : <p>删除这个格子的执行器分配，保留 Sequence {editing.selection.item.sequence ?? ''} 及其全部 Cue。</p>}
+      {editing.kind === 'rename' ? <label>执行器名称<input aria-label="执行器名称" autoFocus maxLength={512} value={name} onChange={event => setName(event.target.value)}/><Ma2ConsoleName name={name}/></label> : editing.kind === 'move' ? <div className="ma2-executor-destination"><label>目标页码<input aria-label="目标页码" type="number" min={1} max={9999} value={targetPage} onChange={event => setTargetPage(event.target.value)}/></label><label>目标格子<input aria-label="目标格子" type="number" min={1} max={240} value={targetSlot} onChange={event => setTargetSlot(event.target.value)}/></label></div> : <p>删除这个格子的执行器分配，保留 Sequence {editing.selection.item.sequence ?? ''} 及其全部 Cue。</p>}
       {notice ? <p role="alert">{notice}</p> : null}
       <footer><button type="button" onClick={() => setEditing(null)}>取消</button><button disabled={state.mutating || editing.kind === 'rename' && !name.trim()}>{state.mutating ? '正在回读…' : editing.kind === 'rename' ? '保存名称' : editing.kind === 'move' ? '确认移动' : '删除执行器'}</button></footer>
     </form></div>, window.document.body) : null}

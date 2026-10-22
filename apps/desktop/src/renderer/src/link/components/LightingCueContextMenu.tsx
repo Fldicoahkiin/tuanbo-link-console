@@ -3,15 +3,18 @@ import { createPortal } from 'react-dom';
 import { Plus, Trash2, Sun, ScanLine, Sparkles, RotateCcw, Check, Minus, Pencil, ArrowLeft, ChevronRight, Tags, ListFilter } from 'lucide-react';
 import type { LightingCategory, LightingUserLibrary } from '@tb/schema';
 import { lightingCategoryNavigation } from '@tb/core/link';
+import { Ma2ConsoleName } from './Ma2ConsoleName';
 import '../lighting-cue-context-menu.css';
 
 /** One small menu for both console cues and classified cues. Changes remain local until the operator confirms. */
-export function LightingCueContextMenu({x,y,title,categories,navigation,categoryIds=[],mixedCategoryIds=[],onConfirm,onRemove,onAdd,onRestore,onRename,onAttributes,onEdit,onClose}:{
+export function LightingCueContextMenu({x,y,title,categories,navigation,categoryIds=[],mixedCategoryIds=[],onConfirm,onRemove,onAdd,onRestore,onRename,renamesOnConsole=false,onAttributes,onEdit,onClose}:{
   onEdit?: (() => void) | undefined;
   x:number;y:number;title:string;categories:LightingCategory[];categoryIds?:string[];mixedCategoryIds?:string[];
   navigation?: LightingUserLibrary['navigation'];
   onConfirm:(changes:{add:string[];remove:string[]})=>void;onRemove:()=>void;onAdd?:(()=>void)|undefined;onRestore?:()=>void;onClose:()=>void;
   onRename?:((name:string)=>void|Promise<void>)|undefined;
+  /** The new name is also written to MA2, so the menu shows how the console will display it. */
+  renamesOnConsole?:boolean;
   onAttributes?: (() => void) | undefined;
 }):JSX.Element {
   const root=useRef<HTMLDivElement>(null);
@@ -57,6 +60,7 @@ export function LightingCueContextMenu({x,y,title,categories,navigation,category
     <div className="cue-menu-heading">{classifying && !renaming ? <button aria-label="返回右键菜单" onClick={() => setClassifying(false)}><ArrowLeft/></button> : null}<div className="cue-menu-title" title={title}>{classifying ? '设置分类' : title}</div></div>
     {renaming?<form className="cue-menu-rename" onSubmit={event=>{event.preventDefault();if(renameBusy)return;setRenameBusy(true);void Promise.resolve().then(()=>onRename?.(name.trim())).then(onClose).catch((cause:unknown)=>setRenameError(cause instanceof Error?cause.message:String(cause))).finally(()=>setRenameBusy(false));}}>
       <input ref={nameInput} aria-label="Cue 名称" value={name} maxLength={512} required disabled={renameBusy} onChange={event=>{setName(event.target.value);setRenameError('');}}/>
+      {renamesOnConsole?<Ma2ConsoleName name={name}/>:null}
       {renameError?<p role="alert">{renameError}</p>:null}
       <footer><button type="button" disabled={renameBusy} onClick={()=>{setRenaming(false);setName(title);setRenameError('');}}>取消</button><button className="cue-menu-confirm" type="submit" disabled={renameBusy||!name.trim()||name.trim()===title}>{renameBusy?'正在提交…':'确定'}</button></footer>
     </form>:onRestore?<button onClick={()=>apply(onRestore)}><RotateCcw/>恢复素材</button>:!classifying?<div className="cue-menu-actions">

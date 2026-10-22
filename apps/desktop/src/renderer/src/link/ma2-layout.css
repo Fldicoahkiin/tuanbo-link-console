@@ -49,6 +49,7 @@
 .ma2-song-delete-review ul { max-height: 130px; overflow: auto; }
 .ma2-layout-panel > .cue-pool-grid { min-height: 140px; }
 .cue-console-address { color: var(--text-secondary); padding-block: 5px; font-variant-numeric: tabular-nums; }
+.ma2-console-name { display: block; font-size: 11px; line-height: 1.5; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 .ma2-layout-titlebar > select { width: 90px; }
 .ma2-layout-viewport { flex: 1; min-height: 100px; min-width: 0; overflow: auto; position: relative; }

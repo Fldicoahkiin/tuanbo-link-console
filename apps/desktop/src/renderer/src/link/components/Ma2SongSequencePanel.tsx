@@ -7,6 +7,7 @@ import { pauseMa2RealtimeSession, retryMa2RealtimeSession } from '../runtime/ma2
 import { locateMa2Executor, ma2ExecutorLocationLabel } from '../stores/ma2-executor-page-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { Ma2SongConflicts } from './Ma2SongConflicts';
+import { Ma2ConsoleName } from './Ma2ConsoleName';
 
 export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; settings: Ma2LayoutSettings }): JSX.Element {
   const item = useDocumentStore(state => state.project?.rundown.find(value => value.id === itemId));
@@ -66,6 +67,7 @@ export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; set
       try { useDocumentStore.getState().execute(setLightingCommand(itemId, { ...item.lighting, consoleSong: { ...binding, name: name.trim() } }, '重命名歌曲控台序列')); setError(''); }
       catch (cause) { setError(String(cause)); }
     }}/></label>
+    <Ma2ConsoleName name={name}/>
     <div><button disabled={status?.state === 'syncing' || savingDefault || !binding && pageDraft !== String(executorPage)} title={!binding && pageDraft !== String(executorPage) ? '请先保存默认创建页' : undefined} onClick={() => start()}>{binding ? status?.state === 'blocked' ? '重新核对并同步' : '开启本曲双向同步' : `创建到按钮第 ${executorPage} 页并同步`}</button>{status ? <button onClick={pauseMa2RealtimeSession}>暂停同步</button> : null}</div>
     {status ? <p role={status.state === 'blocked' ? 'alert' : 'status'}>{status.message}</p> : null}
     <Ma2SongConflicts itemId={itemId} deletionChecklist={removed.map(point => point.cue)}/>

@@ -6,6 +6,7 @@ import { lightingDocumentSchema, lightingTrackSchema, type LightingDocument, typ
 import { placeEffect } from './useLightingEffectStamp';
 import { LightingCuePreparation } from './LightingCuePreparation';
 import { CONSOLE_CUE_DRAG } from './lighting-material-drag';
+import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { ma2ConsoleCuePoolName, ma2ConsoleSequenceName, ma2SequenceLibrary, type LibrarySequence } from '../view-models/ma2-sequence-library';
 
 export type CueIngredient = { name: string; sequenceName?: string; sequence: number; cue: string; executor: string; delayMs: number; preparation?: Extract<LightingEvent, { kind: 'ma2' }>['preparation'] };
@@ -107,6 +108,7 @@ export function LightingCueComposer({ templateId, document, eventId, ms, duratio
       catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     }} />
     {document.consoleSong?.points.some(point => point.id === targetId) ? <small className="cue-console-address">{document.consoleSong.executor ? `按钮第 ${document.consoleSong.executor.split('.')[0]} 页 · ${document.consoleSong.executor.split('.')[1]} 格` : `Layout ${document.consoleSong.layout}`} · 序列 {document.consoleSong.sequence} · Cue {Number(document.consoleSong.points.find(point => point.id === targetId)?.cue)}</small> : null}
+    {document.consoleSong?.points.some(point => point.id === targetId) ? <Ma2ConsoleName name={name}/> : null}
     {stored?.kind === 'ma2' || stored?.kind === 'empty-cue' ? <div className="cue-run-settings">
       <div className="cue-run-mode" role="group" aria-label="Cue 运行方式">{([['independent', '单独运行'], ['follow', '跟随上一个']] as const).map(([value, title]) => <button key={value} aria-pressed={(stored.runMode ?? 'follow') === value} disabled={disabled || value === 'independent' && document.outputMode === 'timecode'} onClick={() => {
         try {
