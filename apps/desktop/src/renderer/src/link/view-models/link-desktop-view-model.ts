@@ -29,6 +29,10 @@ export const linkDesktopViewModel: LinkDesktopApi = {
     const document = projectDocumentEnvelopeSchema.parse(await window.tbLink.openProjectDocument(path));
     return { path: document.path, project: await projectCodec.decode(document.content) };
   },
-  saveProject
+  saveProject,
+  resolveRecoveryCopy: async query => {
+    const copy = await window.tbLink.resolveRecoveryCopyDocument(query);
+    return copy ? projectCodec.decode(copy.content) : null;
+  }
 };
 export const linkFileViewModel: LinkFileBridge = window.tbFile;

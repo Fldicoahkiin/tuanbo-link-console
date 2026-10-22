@@ -112,3 +112,50 @@ function normalizePath(path: string): string {
   const absolute = resolve(path);
   return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
 }
+
+export type RecoveryOffer =
+  | { kind: 'file'; name: string; copySavedAt: Date; fileModifiedAt: Date }
+  | { kind: 'unnamed'; name: string; copySavedAt: Date };
+
+/**
+ * Before a project file is shown (or, for `projectPath: null`, at startup),
+ * asks whether to restore its recovery copy. Returns the copy's content to
+ * restore, or null to use the file. A discarded copy goes to the recycle bin.
+ */
+export async function offerRecoveryCopy(request: { projectPath: string | null; projectId?: string | undefined }, deps: {
+  copies: Pick<RecoveryCopies, 'find' | 'latestUnnamed' | 'discard'>;
+  /** Reads a project through the document worker, as normalized JSON. */
+  read(path: string): Promise<string>;
+  modifiedAt(path: string): Promise<Date>;
+  ask(offer: RecoveryOffer): Promise<'restore' | 'discard'>;
+  trash(path: string): Promise<void>;
+  log(message: string): void;
+}): Promise<string | null> {
+  let copy: RecoveryCopy | null;
+  let offer: RecoveryOffer;
+  if (request.projectPath === null) {
+    copy = await deps.copies.latestUnnamed();
+    if (!copy) return null;
+    offer = { kind: 'unnamed', name: copy.manifest.name, copySavedAt: new Date(copy.manifest.savedAt) };
+  } else {
+    if (!request.projectId) throw new Error('查找恢复副本需要工程身份');
+    copy = await deps.copies.find({ projectPath: request.projectPath, projectId: request.projectId });
+    if (!copy) return null;
+    if (copy.manifest.projectId !== request.projectId) {
+      deps.log(`恢复副本不是同一工程，未提示：${request.projectPath}`);
+      return null;
+    }
+    const [copied, saved] = await Promise.all([deps.read(copy.copyPath), deps.read(request.projectPath)]);
+    if (copied === saved) {
+      await deps.copies.discard({ version: 1, projectPath: request.projectPath, projectId: request.projectId });
+      deps.log(`恢复副本与工程文件相同，已清除：${request.projectPath}`);
+      return null;
+    }
+    offer = { kind: 'file', name: copy.manifest.name, copySavedAt: new Date(copy.manifest.savedAt), fileModifiedAt: await deps.modifiedAt(request.projectPath) };
+  }
+  const owner = { version: 1 as const, projectPath: copy.manifest.projectPath, projectId: copy.manifest.projectId };
+  if (await deps.ask(offer) === 'restore') return deps.read(copy.copyPath);
+  await deps.trash(copy.copyPath);
+  await deps.copies.discard(owner);
+  return null;
+}

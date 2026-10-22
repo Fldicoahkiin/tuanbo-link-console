@@ -24,10 +24,11 @@ export type LinkAppInfo = {
 
 /** Keep large project graphs out of Electron's synchronous contextBridge copy.
  * The renderer facade decodes/validates these documents in its worker. */
-export type LinkDesktopBridgeApi = Omit<LinkDesktopApi, 'pickOpenProject' | 'openProject' | 'saveProject'> & {
+export type LinkDesktopBridgeApi = Omit<LinkDesktopApi, 'pickOpenProject' | 'openProject' | 'saveProject' | 'resolveRecoveryCopy'> & {
   pickProjectDocument(): Promise<{ version: 1; path: string; content: string } | null>;
   openProjectDocument(path: string): Promise<{ version: 1; path: string; content: string }>;
   saveProjectDocument(path: string | null, content: string): Promise<string | null>;
+  resolveRecoveryCopyDocument(payload: import('@tb/schema').RecoveryCopyQuery): Promise<{ version: 1; content: string } | null>;
 };
 
 export type LinkUpdatePhase =
@@ -270,6 +271,8 @@ export type LinkDesktopApi = {
   saveProject(path: string | null, project: LinkProject): Promise<string | null>;
   /** Unsaved edits go to a recovery copy in the program's data folder, never over the project file. */
   writeRecoveryCopy(payload: import('@tb/schema').RecoveryCopyWrite): Promise<void>;
+  /** Asks whether to restore a recovery copy newer than the project file (or, at startup, of an unnamed project). */
+  resolveRecoveryCopy(payload: import('@tb/schema').RecoveryCopyQuery): Promise<LinkProject | null>;
   /** Removes a recovery copy; with `keep`, a copy that session wrote after that revision stays. */
   discardRecoveryCopy(payload: import('@tb/schema').RecoveryCopyDiscard): Promise<boolean>;
   importReferenceAudio(payload: { projectPath: string; sourcePath: string; durationMs: number }): Promise<ReferenceAudio>;

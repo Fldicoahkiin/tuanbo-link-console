@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { RecoveryCopies } from './recovery-copies';
+import { offerRecoveryCopy, RecoveryCopies } from './recovery-copies';
 
 const session = '11111111-1111-4111-8111-111111111111';
 const otherSession = '22222222-2222-4222-8222-222222222222';
@@ -83,5 +83,70 @@ describe('RecoveryCopies', () => {
     const [copy] = (await readdir(directory)).filter(name => name.endsWith('.tblink'));
     await unlink(join(directory, copy!));
     expect(await store.find(named)).toBeNull();
+  });
+});
+
+describe('offerRecoveryCopy', () => {
+  type Offer = Parameters<Parameters<typeof offerRecoveryCopy>[1]['ask']>[0];
+  async function setup(choice: 'restore' | 'discard', contents: Record<string, string> = {}) {
+    const { store } = await copies(['2026-10-22T09:00:00.000Z', '2026-10-22T09:30:00.000Z']);
+    const asked: Offer[] = []; const trashed: string[] = []; const logs: string[] = [];
+    const deps = {
+      copies: store,
+      read: async (path: string) => contents[path] ?? (await readFile(path, 'utf8')),
+      modifiedAt: () => Promise.resolve(new Date('2026-10-22T08:00:00.000Z')),
+      ask: (offer: Offer) => { asked.push(offer); return Promise.resolve(choice); },
+      trash: async (path: string) => { trashed.push(path); await unlink(path); },
+      log: (message: string) => { logs.push(message); }
+    };
+    return { store, deps, asked, trashed, logs };
+  }
+
+  it('没有副本时不提示', async () => {
+    const { deps, asked } = await setup('restore');
+    expect(await offerRecoveryCopy({ projectPath: named.projectPath, projectId: named.projectId }, deps)).toBeNull();
+    expect(asked).toHaveLength(0);
+  });
+
+  it('副本与工程文件内容相同（保存后未及清理）时直接清除，不提示', async () => {
+    const { store, deps, asked, logs } = await setup('restore', { [named.projectPath]: '{"revision":1}' });
+    await store.write(write(named, 1));
+    expect(await offerRecoveryCopy({ projectPath: named.projectPath, projectId: named.projectId }, deps)).toBeNull();
+    expect(asked).toHaveLength(0);
+    expect(await store.find(named)).toBeNull();
+    expect(logs).toEqual([expect.stringContaining('与工程文件相同')]);
+  });
+
+  it('选择恢复返回副本内容并保留副本，直到保存', async () => {
+    const { store, deps, asked } = await setup('restore', { [named.projectPath]: '{"revision":0}' });
+    await store.write(write(named, 4));
+    expect(await offerRecoveryCopy({ projectPath: named.projectPath, projectId: named.projectId }, deps)).toBe('{"revision":4}');
+    expect(asked).toEqual([{ kind: 'file', name: '演出', copySavedAt: new Date('2026-10-22T09:00:00.000Z'), fileModifiedAt: new Date('2026-10-22T08:00:00.000Z') }]);
+    expect(await store.find(named)).not.toBeNull();
+  });
+
+  it('选择丢弃把副本移到回收站并删除记录', async () => {
+    const { store, deps, trashed } = await setup('discard', { [named.projectPath]: '{"revision":0}' });
+    await store.write(write(named, 4));
+    const copyPath = (await store.find(named))!.copyPath;
+    expect(await offerRecoveryCopy({ projectPath: named.projectPath, projectId: named.projectId }, deps)).toBeNull();
+    expect(trashed).toEqual([copyPath]);
+    expect(await store.find(named)).toBeNull();
+  });
+
+  it('同一路径现在是另一个工程时不提示，也不删除副本', async () => {
+    const { store, deps, asked, logs } = await setup('restore', { [named.projectPath]: '{"revision":0}' });
+    await store.write(write(named, 4));
+    expect(await offerRecoveryCopy({ projectPath: named.projectPath, projectId: 'another-project' }, deps)).toBeNull();
+    expect(asked).toHaveLength(0);
+    expect(await store.find(named)).not.toBeNull();
+    expect(logs).toEqual([expect.stringContaining('不是同一工程')]);
+  });
+
+  it('启动时提示最近的未命名工程副本', async () => {
+    const { store, deps, asked } = await setup('restore');
+    await store.write(write({ projectPath: null, projectId: 'unnamed' }, 2));
+    expect(await offerRecoveryCopy({ projectPath: null }, deps)).toBe('{"revision":2}');
+    expect(asked).toEqual([{ kind: 'unnamed', name: '演出', copySavedAt: new Date('2026-10-22T09:00:00.000Z') }]);
   });
 });

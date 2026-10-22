@@ -1,5 +1,5 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
-import { projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyWriteSchema } from '@tb/schema';
+import { projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
 import { ma2SongCheckRequestSchema, ma2SongSyncRequestSchema } from '@tb/schema';
 import { materialSceneTargets } from '@tb/core/link';
@@ -63,7 +63,7 @@ import { readFile, stat, statfs, mkdtemp, writeFile, mkdir } from 'node:fs/promi
 import { assetResponse } from './link/asset-response';
 import { ProjectDocumentService } from './link/project-document-service';
 import { ProjectArchiveSettingsStore, projectArchives } from './link/project-archives';
-import { RecoveryCopies } from './link/recovery-copies';
+import { offerRecoveryCopy, RecoveryCopies, type RecoveryOffer } from './link/recovery-copies';
 import { cpus, release, totalmem, freemem } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
@@ -1106,6 +1106,22 @@ function registerIpc(
   // The renderer records a failed write once, with the reason shown to the operator.
   handle('link:write-recovery-copy', (_event, payload: unknown) => recoveryCopies.write(recoveryCopyWriteSchema.parse(payload)));
   handle('link:discard-recovery-copy', (_event, payload: unknown) => recoveryCopies.discard(recoveryCopyDiscardSchema.parse(payload)));
+  handle('link:resolve-recovery-copy', async (_event, payload: unknown) => {
+    const content = await offerRecoveryCopy(recoveryCopyQuerySchema.parse(payload), {
+      copies: recoveryCopies,
+      read: path => projectDocuments.read(path),
+      modifiedAt: async path => (await stat(path)).mtime,
+      ask: async offer => {
+        const { response } = await dialog.showMessageBox(mainWindow!, recoveryPrompt(offer));
+        const choice = response === 0 ? 'restore' as const : 'discard' as const;
+        await logger.record({ level: 'info', category: 'system', message: choice === 'restore' ? `恢复未保存的改动：${offer.name}` : `丢弃恢复副本（已移到回收站）：${offer.name}` });
+        return choice;
+      },
+      trash: path => shell.trashItem(path),
+      log: message => { void logger.record({ level: 'info', category: 'system', message }).catch((error: unknown) => console.error('记录恢复副本失败', error)); }
+    });
+    return content === null ? null : { version: 1 as const, content };
+  });
   const archiveSettings = new ProjectArchiveSettingsStore(join(app.getPath('userData'), 'link-integrations', 'archive-settings.json'), join(app.getPath('documents'), '团播联动台', '存档'));
   // A failed trim leaves the extra archive in place and is logged; it never blocks the sync that archived.
   handle('link:project-archives', (_event, payload: unknown) => projectArchives(payload, projectDocuments, archiveSettings, path => shell.showItemInFolder(path), async path => {
@@ -1800,6 +1816,17 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   allowWindowClose = true;
   recordQuitStep('退出流程完成');
   app.quit();
+}
+
+function recoveryPrompt(offer: RecoveryOffer): Electron.MessageBoxOptions {
+  const time = (value: Date): string => value.toLocaleString('zh-CN', { hour12: false });
+  const detail = offer.kind === 'file'
+    ? [`恢复副本：${time(offer.copySavedAt)}`, `工程文件：${time(offer.fileModifiedAt)}`, '',
+      '恢复：载入这些改动，保存后才写入工程文件。', '丢弃：把恢复副本移到回收站，打开工程文件中的内容。',
+      ...offer.copySavedAt < offer.fileModifiedAt ? ['', '恢复副本早于工程文件，工程文件可能在别处被修改过，请确认后再选择。'] : []]
+    : [`恢复副本：${time(offer.copySavedAt)}`, '', '恢复：打开这些内容，保存时选择位置。', '丢弃：把恢复副本移到回收站。'];
+  return { type: 'question', title: '发现未保存的改动', noLink: true, buttons: ['恢复', '丢弃'], defaultId: 0, cancelId: 0,
+    message: offer.kind === 'file' ? `工程「${offer.name}」有未保存的改动。` : `未命名工程「${offer.name}」有未保存的改动。`, detail: detail.join('\n') };
 }
 
 /** Each quit stage with the flags that gate it, so a hang names its stage. */

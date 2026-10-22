@@ -34,6 +34,7 @@ import { useRuntimeStore } from './stores/runtime-store';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 import { useProjectPersistence } from './useProjectPersistence';
 import { useRecoveryCopyWriter } from './recovery-copy-writer';
+import { showOpenedProject } from './project-document';
 import { useP1AutoFollow } from './useP1AutoFollow';
 import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
@@ -157,8 +158,8 @@ export function LinkApp(): JSX.Element {
     try {
       const result = await linkDesktopViewModel.pickOpenProject();
       if (!result) return;
-      useDocumentStore.getState().setProject(result.project, result.path);
-      notify(`已打开：${result.project.name}`);
+      const shown = await showOpenedProject(result);
+      notify(shown === 'restored' ? `已打开并恢复未保存的改动：${result.project.name}` : `已打开：${result.project.name}`);
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     }
