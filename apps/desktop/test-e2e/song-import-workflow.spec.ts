@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseLinkProject } from '@tb/schema';
+import { answerSaveQuestions, saveProject } from './save-questions';
 
 async function audioFixture(path: string): Promise<void> {
   const samples = 48000 * 3;
@@ -26,12 +27,14 @@ test('从首页直接导入 P1 歌曲并保存原始时间码，内部主控仍�
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [paths.source] });
       dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: paths.target });
     }, { source, target });
+    await answerSaveQuestions(application);
     const songs = page.getByRole('region', { name: '歌曲导入', exact: true });
     await expect(songs.getByRole('button', { name: '导入 P1 歌曲（.hia）', exact: true })).toBeVisible();
     await expect(page.locator('.settings-location-highlight')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('song-workflow-dark.png'), animations: 'disabled' });
     await songs.getByRole('button', { name: '导入 P1 歌曲（.hia）', exact: true }).click();
     await expect(songs.locator('.p1-sync-summary')).toContainText('1 首音频');
+    await saveProject(page);
     const saved = parseLinkProject(JSON.parse(await readFile(target, 'utf8')));
     expect(saved.playbackSource).toBe('internal');
     expect(saved.rundown[0]?.title).toBe('歌曲原名');
@@ -59,8 +62,10 @@ test('小红花入口可导入自有音频并明确不支持备份包和播放�
     await songs.getByRole('button', { name: /小红花音效助手/ }).click();
     await expect(songs.getByText(/尚未接入：小红花备份包/)).toBeVisible();
     await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath }); }, target);
+    await answerSaveQuestions(application);
     await songs.getByLabel('导入本地音频文件', { exact: true }).setInputFiles(audio);
     await expect(songs.getByRole('status')).toContainText('已添加 1 个节目');
+    await saveProject(page);
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(target, 'utf8'))).rundown.length).toBe(1);
     const saved = parseLinkProject(JSON.parse(await readFile(target, 'utf8')));
     expect(saved.playbackSource).toBe('internal'); expect(saved.rundown[0]?.title).toBe('自有音效.wav');

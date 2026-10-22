@@ -12,6 +12,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import ffmpegPath from 'ffmpeg-static';
 import { convertMa2Snapshot } from '../src/main/link/ma2-timecode-conversion';
 import { createMa2TimecodeXml } from '../src/main/link/ma2-create';
+import { answerSaveQuestions } from './save-questions';
 
 const execFileAsync = promisify(execFile);
 const desktopEntry = join(process.cwd(), process.env.TBLINK_E2E_BUILD_DIR ?? 'out', 'main/index.cjs');
@@ -721,6 +722,7 @@ E 960 80 3c 00
   await writeFile(rppPath, externalRpp.replace('TEMPO 120', 'TEMPO 60\n<TEMPOENVEX\nACT 1 -1\nPT 0 60 0\nPT 4 180 1\n>'));
   await file.setInputFiles([rppPath, rightMidi, leftMidi]);
   await page.getByRole('button', { name: '确认导入', exact: true }).click();
+  await saveWithShortcut();
   await expect.poll(async () => {
     const lighting = parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.lighting!;
     const note = lighting.tracks[2]?.clips[0]?.events[0];
@@ -781,6 +783,7 @@ test('只做标记可在时间尺拖动改名删除并撤销保存', async ({}, 
   await closeLightingTools(); await main.getByRole('button', { name: '编辑器', exact: true }).click();
   const savedRegion = async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.lighting!.markers[0]!;
   await page.keyboard.press('Control+s');
+  await saveWithShortcut();
   await expect.poll(savedRegion).toMatchObject({ startMs: 0, endMs: 10000 });
   const endHandle = page.getByRole('button', { name: '副歌开始 区域终点', exact: true });
   const endBox = await endHandle.boundingBox(); if (!endBox) throw new Error('区域终点不可见');
@@ -790,17 +793,21 @@ test('只做标记可在时间尺拖动改名删除并撤销保存', async ({}, 
   await expect(endHandle).toHaveCSS('left', `${endBox.x + 4 - (await renamed.boundingBox())!.x}px`);
   await page.mouse.move(endBox.x + 4, endBox.y + 4); await page.mouse.down();
   await page.mouse.move(endBox.x + 64, endBox.y + 4, { steps: 5 }); await page.mouse.up();
+  await saveWithShortcut();
   await expect.poll(async () => (await savedRegion()).endMs).toBeGreaterThan(10000);
   await expect.poll(async () => (await savedRegion()).startMs).toBe(0);
   await page.keyboard.press('Control+z');
+  await saveWithShortcut();
   await expect.poll(savedRegion).toMatchObject({ startMs: 0, endMs: 10000 });
   const startHandle = page.getByRole('button', { name: '副歌开始 区域起点', exact: true });
   const startBox = await startHandle.boundingBox(); if (!startBox) throw new Error('区域起点不可见');
   await page.mouse.move(startBox.x + 5, startBox.y + 4); await page.mouse.down();
   await page.mouse.move(startBox.x + 45, startBox.y + 4, { steps: 5 }); await page.mouse.up();
+  await saveWithShortcut();
   await expect.poll(async () => (await savedRegion()).startMs).toBeGreaterThan(0);
   await expect.poll(async () => (await savedRegion()).endMs).toBe(10000);
   await page.keyboard.press('Control+z');
+  await saveWithShortcut();
   await expect.poll(savedRegion).toMatchObject({ startMs: 0, endMs: 10000 });
   await page.screenshot({ path: testInfo.outputPath('timeline-region-handles.png') });
 });
@@ -1283,6 +1290,7 @@ test('设置分类清晰，首页无重复入口，场景在原编辑器编排',
   await page.getByRole('button', { name: '创建工程' }).click();
   await application.evaluate(({ dialog }, destination) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: destination }); }, testInfo.outputPath('simple.tblink'));
   await page.getByRole('button', { name: '保存工程', exact: true }).click();
+  await expect(page.getByText('工程已保存', { exact: true }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: '导入 IBC 工程' })).toHaveCount(0);
   await expect(page.getByText('画面设置', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '连接与设备', exact: true })).toHaveCount(0);
@@ -1326,7 +1334,6 @@ test('设置分类清晰，首页无重复入口，场景在原编辑器编排',
   await expect(page.locator('.action-card')).toHaveCount(1);
   await expect(page.locator('.action-card select').first()).toHaveValue('obs.setProgramScene');
   await expect(page.locator('.cue-inspector')).toContainText('场景');
-  await expect(page.getByRole('button', { name: '保存工程', exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('simple-editor.png') });
   await expect(page.getByRole('button', { name: '人像美颜', exact: true })).toHaveCount(0);
   await expect(page.locator('.beauty-workspace')).toHaveCount(0);
@@ -1525,6 +1532,7 @@ test.beforeEach(async ({}, testInfo) => {
     args: [`--user-data-dir=${testInfo.outputPath('user-data')}`, desktopEntry]
   });
   page = await application.firstWindow();
+  await answerSaveQuestions(application);
   await page.evaluate(() => {
     localStorage.removeItem('tblink.cue-workspace-layout.v1');
     localStorage.removeItem('tblink.last-project-path.v1');
@@ -1933,6 +1941,7 @@ test('素材缩略图生成失败会明确显示原因而不是静默降级', as
     dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: destination });
   }, projectPath);
   await page.getByRole('button', { name: '保存工程', exact: true }).click();
+  await expect(page.getByText('工程已保存', { exact: true }).first()).toBeVisible();
   await addEmptyProgram();
   await page.getByRole('button', { name: /编辑器/ }).click();
   const mediaPath = testInfo.outputPath('thumbnail-source.mp4');
@@ -2206,6 +2215,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await page.getByLabel('工程名称').fill('内部歌曲工程'); await page.getByRole('button', { name: '创建工程' }).click();
   await application.evaluate(({ dialog }, destination) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: destination }); }, projectPath);
   await page.getByRole('button', { name: '保存工程', exact: true }).click();
+  await expect(page.getByText('工程已保存', { exact: true }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: '播放主控 音乐、画面与灯光' })).toHaveCount(0);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
@@ -2214,6 +2224,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await page.getByRole('button', { name: '导入歌曲 / P1', exact: true }).click();
   await page.getByRole('button', { name: /本地音频/ }).click();
   await page.getByLabel('导入本地音频文件').setInputFiles(audioPath);
+  await expect(page.getByRole('region', { name: '歌曲导入', exact: true }).getByRole('status')).toContainText('已添加 1 个节目');
   await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown.length).toBe(1);
   await closeSettingsDialog();
@@ -2381,6 +2392,7 @@ test('Cue 时间线的统一图层、取消拖动、适配、滚动和播放键�
     dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: destination });
   }, projectPath);
   await page.getByRole('button', { name: '保存工程', exact: true }).click();
+  await expect(page.getByText('工程已保存', { exact: true }).first()).toBeVisible();
   await addEmptyProgram();
   const firstAudioPath = testInfo.outputPath('timeline-a.wav');
   await createAudioFixture(firstAudioPath);
@@ -2732,6 +2744,7 @@ test('独立素材场景同步、场景长度拖动与低功率切换', async ({
   const destination = testInfo.outputPath('sources.tblink');
   await application.evaluate(({ dialog }, path) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: path }); }, destination);
   await page.getByRole('button', { name: '保存工程', exact: true }).click();
+  await expect(page.getByText('工程已保存', { exact: true }).first()).toBeVisible();
   await addEmptyProgram();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '画面与同步', exact: true }).click();

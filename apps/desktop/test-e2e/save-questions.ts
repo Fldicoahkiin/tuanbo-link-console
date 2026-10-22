@@ -1,0 +1,23 @@
+import { expect, type ElectronApplication, type Page } from '@playwright/test';
+
+/**
+ * Answers the explicit save model's two questions with their first button:
+ * 选择工程保存位置 → 选择保存位置, 工程尚未保存 → 保存. Every other message box is untouched.
+ * Pair with a stubbed showSaveDialog so the save has a destination.
+ */
+export async function answerSaveQuestions(application: ElectronApplication): Promise<void> {
+  await application.evaluate(({ dialog }) => {
+    const original = dialog.showMessageBox.bind(dialog);
+    Reflect.set(dialog, 'showMessageBox', (...args: unknown[]) => {
+      const options = args.at(-1) as { title?: string };
+      if (options.title === '选择工程保存位置' || options.title === '工程尚未保存') return Promise.resolve({ response: 0, checkboxChecked: false });
+      return Reflect.apply(original, dialog, args) as unknown;
+    });
+  });
+}
+
+/** Edits are written to the .tblink only by an explicit save. */
+export async function saveProject(page: Page): Promise<void> {
+  await page.keyboard.press('Control+S');
+  await expect(page.locator('.project-save-status')).toBeHidden();
+}
