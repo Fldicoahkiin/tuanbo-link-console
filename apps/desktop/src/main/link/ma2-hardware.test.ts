@@ -191,15 +191,28 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
       return /<CuePart\b[^>]*\bbasic_fade="([^"]*)"/.exec(cue ?? '')?.[1];
     };
     expect(fadeOf(await bridge.request('SEQUENCE', sequence))).toBe('7');
+    // A full check leaves a console baseline; the next syncs plan from the saved baseline instead of reading the Sequence.
+    const watch = new Ma2SongWatch(() => false);
+    const checkOf = (result: typeof second) => ({ network, expectedSource, sequence, executor: result.binding.executor!, revision: result.remoteRevision! });
+    const self = (point: { cue: string }) => [{ sequence, cue: point.cue, delayMs: 0 }];
+    const recheck = async (result: typeof second, label: string): Promise<string> => {
+      await step(label, async () => { if (await watch.changed(connection, bridge, checkOf(result))) expect(await watch.changed(connection, bridge, checkOf(result))).toBe(false); });
+      const baseline = await watch.unchangedBaseline(connection, { network, expectedSource, sequence, executor: result.binding.executor! }, result.binding.baselineXml);
+      expect(baseline).toMatch(/^tblink_watch_[a-f0-9]{16}$/);
+      return baseline!;
+    };
+    await step('firstCheck', () => watch.changed(connection, bridge, checkOf(second)));
+    const unchanged = await step('cachedCheck', () => watch.changed(connection, bridge, checkOf(second)));
+    const warmBaseline = await recheck(second, 'baselineCheck');
+    const warm = await step('changeOneCueWarm', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: second.binding,
+      points: second.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 1 ? ref(0) : self(point) })) }, undefined, undefined, warmBaseline));
+    expect(warm.changed).toBe(true);
     // Combining two sources into that Cue keeps the console's fade instead of the first source's.
-    const combined = await step('combineExisting', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: second.binding,
-      points: second.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 0 ? [...ref(0), ...ref(1)] : [{ sequence, cue: point.cue, delayMs: 0 }] })) }));
+    const combineBaseline = await recheck(warm, 'checkAfterWarm');
+    const combined = await step('combineExistingWarm', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: warm.binding,
+      points: warm.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 0 ? [...ref(0), ...ref(1)] : self(point) })) }, undefined, undefined, combineBaseline));
     expect(combined.changed).toBe(true);
     expect(fadeOf(await bridge.request('SEQUENCE', sequence))).toBe('7');
-    const watch = new Ma2SongWatch(() => false);
-    const check = { network, expectedSource, sequence, executor: combined.binding.executor!, revision: combined.remoteRevision! };
-    await step('firstCheck', () => watch.changed(connection, bridge, check));
-    const unchanged = await step('cachedCheck', () => watch.changed(connection, bridge, check));
     await mkdir(resolve('artifacts/ma2-hardware-diagnostics'), { recursive: true });
     await writeFile(resolve('artifacts/ma2-hardware-diagnostics/song-transfer.json'), JSON.stringify({ at: new Date().toISOString(), show: directory.show, version: directory.version, source: source.sequence, sequence, page, backupFile: second.backupFile, measured }, null, 2));
     console.info(JSON.stringify({ sequence, page, backupFile: second.backupFile, measured }));
