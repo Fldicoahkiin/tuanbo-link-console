@@ -72,10 +72,9 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     }
     let prepared: { report: PreflightReport; profile: ReturnType<typeof useIntegrationStore.getState>['profile']; mtcOutputEnabled: boolean } | null = null;
     const dependencies: InternalPlayerDependencies = {
+      // Refused before any output is prepared; the engine is never switched here.
+      refusal: () => internalAudioEngine(useIntegrationStore.getState().profile, project).blocked,
       prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled, signal }) => {
-        // Refused before any output starts; the engine is never switched here.
-        const blocked = internalAudioEngine(useIntegrationStore.getState().profile, project).blocked;
-        if (blocked) throw new Error(blocked);
         if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
         if (!path) throw new Error('请先保存工程，再播放正式音频');
         if (useIntegrationStore.getState().obs.status !== 'connected') {

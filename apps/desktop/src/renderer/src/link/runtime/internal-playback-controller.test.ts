@@ -40,6 +40,15 @@ it('播放失败把标题与原因交给失败回调，运行日志不再只剩 
   expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：准备失败' });
   expect(f.deps.failed).toHaveBeenCalledWith('播放未开始：准备失败：所需文件或程序不存在：D:\\show\\0.wav。请重新选择有效路径后重试。', 'song-0');
 });
+it('播放引擎不符时在准备任何输出之前拒绝：不读音频、不开时间码端口、不准备联动', async () => {
+  const f = fixture(), refusal = '已启用 MIDI 时间码输出：正式播放需使用 Windows 原生音频';
+  const controller = new InternalPlaybackController(f.project, { ...f.deps, refusal: () => refusal }, f.audio as unknown as HTMLAudioElement, f.mtc as unknown as MediaMtcOutput, f.output);
+  await controller.play('song-0', 4000);
+  expect(f.state()).toMatchObject({ status: 'error', error: refusal });
+  expect(f.deps.resolveAudio).not.toHaveBeenCalled(); expect(f.output.prepare).not.toHaveBeenCalled();
+  expect(f.mtc.connect).not.toHaveBeenCalled(); expect(f.deps.prepare).not.toHaveBeenCalled();
+  expect(f.deps.failed).toHaveBeenCalledWith(`播放未开始：准备失败：${refusal}`, 'song-0');
+});
 it('浏览器播放器读取旧工程保留的 P1 起点，无需重新输入且不叠加源裁剪', async () => {
   const f = fixture();
   f.project.rundown[0]!.p1Media = { sourceKey: 'b'.repeat(64), playlistId: 'p1', sourceFileName: 'song.wav',

@@ -19,6 +19,8 @@ export type InternalPlayerDependencies = {
   failed?: (message: string, itemId: string | null) => void;
   obsChanged?: (state: NativeObsStatus) => void;
   preciseSeeking?: () => boolean;
+  /** Why playback must not start now; checked before any output is prepared. */
+  refusal?: () => string | null;
 };
 
 /** Read-only transport data. Editors may observe the output clock, but can
