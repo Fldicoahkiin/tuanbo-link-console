@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { createEmptyLinkProject, parseLinkProject, serializeLinkProject } from '@tb/schema';
+import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
 
 const execFileAsync = promisify(execFile);
 const desktopEntry = join(process.cwd(), process.env.TBLINK_E2E_BUILD_DIR ?? 'out', 'main/index.cjs');
@@ -288,4 +290,48 @@ test('打开旧格式工程：只在内存升级、标记未保存、不写回�
     await expect(unsaved(page)).toBeHidden();
     expect(await backups()).toHaveLength(1);
   } finally { await closeWithoutSaving(app, page); }
+});
+
+test('播放中按 Ctrl+S 写入工程文件，播放不中断', async ({}, info) => {
+  test.skip(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1', '需要真实 WASAPI；不占用 MIDI 端口');
+  const wav = Buffer.alloc(44 + 48000 * 4 * 10);
+  wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(192000, 28);
+  wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+  await writeFile(info.outputPath('tone.wav'), wav);
+  const sha256 = createHash('sha256').update(wav).digest('hex');
+  // No visual layers: the file opens upgraded in memory, so it is unsaved before playback starts.
+  const project = parseLinkProject({ ...createEmptyLinkProject('播放中保存'), playbackSource: 'internal', obsOutputMode: 'scenes',
+    rundown: [{ id: 'song', title: '静音音频', referenceAudio: { assetId: 'audio', relativePath: 'tone.wav', sha256, durationMs: 10000 },
+      playback: { startMs: 0, endMs: 10000, mtcOffsetMs: 0, volume: 0, endAction: 'pause', shortcut: '' } }] });
+  const path = info.outputPath('playing.tblink'); const original = JSON.stringify(project);
+  await writeFile(path, original);
+  const profile = createDefaultIntegrationProfile(); profile.obs.autoConnectOnLaunch = false;
+  profile.internalPlayer = { audioEngine: 'native', nativeAudioOutputDeviceId: 'default', audioOutputDeviceId: 'default', mtcOutputPortProfileId: null, audioSampleRate: 48000, fadeInMs: 300 };
+  const { app, page } = await launch(info.outputPath('profile'));
+  try {
+    await page.evaluate(value => window.tbLink.saveIntegrationProfile({ profile: value }), profile); await page.reload();
+    await page.waitForFunction(() => Boolean(window.tbLink));
+    await page.evaluate(({ path, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: path, sha256, peaks: Array.from({ length: 1200 }, () => 0) }), { path, sha256 });
+    await openFile(app, page, path);
+    await expect(unsaved(page)).toBeVisible();
+    await page.locator('.player-transport .primary-button').click();
+    await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    const before = await page.evaluate(() => window.tbLink.getNativePlaybackStatus());
+    expect(before).toMatchObject({ status: 'playing', audioError: null });
+    await page.keyboard.press('Control+S');
+    await expect(unsaved(page)).toBeHidden();
+    expect(await readFile(path, 'utf8')).not.toBe(original);
+    expect(parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]!.visualLayers.length).toBeGreaterThan(0);
+    await page.waitForTimeout(500);
+    const after = await page.evaluate(() => window.tbLink.getNativePlaybackStatus());
+    expect(after).toMatchObject({ status: 'playing', audioError: null, underruns: 0 });
+    expect(after!.positionMs).toBeGreaterThan(before!.positionMs + 400);
+  } finally {
+    // Playback must stop before quitting; the quit only offers 返回软件 while it runs.
+    await page.getByRole('button', { name: '停止播放', exact: true }).click();
+    await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
+    await page.evaluate(() => window.tbLink.setRuntimeActive(false));
+    await closeWithoutSaving(app, page);
+  }
 });
