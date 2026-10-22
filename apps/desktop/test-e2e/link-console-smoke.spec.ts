@@ -12,7 +12,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import ffmpegPath from 'ffmpeg-static';
 import { convertMa2Snapshot } from '../src/main/link/ma2-timecode-conversion';
 import { createMa2TimecodeXml } from '../src/main/link/ma2-create';
-import { answerSaveQuestions, saveProject } from './save-questions';
+import { answerSaveQuestions, saveProject, savedValue } from './save-questions';
 
 const execFileAsync = promisify(execFile);
 const desktopEntry = join(process.cwd(), process.env.TBLINK_E2E_BUILD_DIR ?? 'out', 'main/index.cjs');
@@ -3020,10 +3020,10 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
   });
   await expect(page.getByRole('button', { name: '录制灯光', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
-  await expect.poll(async () => {
+  await expect.poll(() => savedValue(page, async () => {
     const project = JSON.parse(await readFile(linkPath, 'utf8')) as { rundown: Array<{ lighting?: { tracks: Array<{ clips: Array<{ events: Array<{ kind: string; at: number }> }> }> } }> };
     return project.rundown[0]?.lighting?.tracks[0]?.clips.flatMap((clip) => clip.events).find((event) => event.kind === 'cc')?.at;
-  }).toBeCloseTo(recordedMs, 0);
+  })).toBeCloseTo(recordedMs, 0);
   await expect.poll(async () => {
     const project = JSON.parse(await readFile(linkPath, 'utf8')) as { rundown: Array<{ lighting?: { tracks: Array<{ clips: Array<{ events: Array<{ kind: string; cue?: string; executor?: string; sequence?: number; at: number }> }> }> } }> };
     return project.rundown[0]?.lighting?.tracks[0]?.clips.flatMap((clip) => clip.events).find((event) => event.kind === 'ma2' && event.cue === '37.200');
@@ -3055,10 +3055,10 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
   await expect(duration).toBeVisible();
   await duration.fill('2.5');
   await duration.press('Tab');
-  await expect.poll(async () => {
+  await expect.poll(() => savedValue(page, async () => {
     const project = JSON.parse(await readFile(linkPath, 'utf8')) as { rundown: Array<{ lighting?: { tracks: Array<{ clips: Array<{ events: Array<{ kind: string; duration?: number }> }> }> } }> };
     return project.rundown[0]?.lighting?.tracks[0]?.clips.flatMap((clip) => clip.events).find((event) => event.kind === 'note')?.duration;
-  }).toBe(2500);
+  })).toBe(2500);
   const velocity = page.getByLabel('力度', { exact: true });
   await velocity.fill('128');
   await velocity.press('Tab');
