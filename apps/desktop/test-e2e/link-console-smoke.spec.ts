@@ -1758,6 +1758,35 @@ test('保存旧快照不会清除后来修改的退出保护', async ({}, testIn
   expect(result).toEqual({ warningTitle: '工程尚未保存', destroyed: false });
 });
 
+test('放弃修改后退出流程被取消，再次关闭仍提示未保存修改', async () => {
+  await expect(page.locator('.project-welcome')).toBeVisible();
+  await page.evaluate(() => window.tbLink.setDocumentDirty(true));
+  const result = await application.evaluate(async ({ app, BrowserWindow, dialog }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (!window) throw new Error('主窗口不存在');
+    const mutableDialog = dialog as unknown as { showMessageBoxSync: (...args: unknown[]) => number };
+    const mutableApp = app as unknown as { quit: () => void };
+    const originalDialog = mutableDialog.showMessageBoxSync, originalQuit = mutableApp.quit;
+    const titles: string[] = [];
+    // 选“放弃修改并退出”，随后退出流程被取消（灯光试听“返回软件”或外部程序“取消退出”）：软件保持打开。
+    mutableDialog.showMessageBoxSync = (...args: unknown[]) => {
+      const options = (args.length > 1 ? args[1] : args[0]) as { title?: string } | undefined;
+      titles.push(options?.title ?? '');
+      return 1;
+    };
+    mutableApp.quit = () => undefined;
+    try {
+      window.close(); await new Promise<void>(resolve => setImmediate(resolve));
+      window.close(); await new Promise<void>(resolve => setImmediate(resolve));
+      return { titles, destroyed: window.isDestroyed() };
+    } finally {
+      mutableDialog.showMessageBoxSync = originalDialog; mutableApp.quit = originalQuit;
+    }
+  });
+  expect(result).toEqual({ titles: ['工程尚未保存', '工程尚未保存'], destroyed: false });
+  await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+});
+
 test('运行会话未停止时主进程拒绝关闭窗口', async () => {
   await expect(page.locator('.project-welcome')).toBeVisible();
   await page.evaluate(() => window.tbLink.setRuntimeActive(true));

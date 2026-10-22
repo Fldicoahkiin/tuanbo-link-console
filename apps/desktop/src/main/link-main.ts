@@ -416,7 +416,9 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
         event.preventDefault();
         return;
       }
-      documentDirty = false;
+      // Keep the unsaved mark: the quit flow may still be cancelled (lighting
+      // audition or an external program), and the edits are then still here.
+      // A completed quit closes the window with allowWindowClose set.
     }
     event.preventDefault();
     app.quit();
