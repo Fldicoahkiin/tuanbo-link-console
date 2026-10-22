@@ -92,7 +92,7 @@ export function useMa2AutoSync(playing: boolean, notify: (message: string, tone?
         try {
           const path = await linkDesktopViewModel.saveProject(saved.path, saved.project);
           if (!path) throw new Error('保存未完成');
-          saved.markSaved(path, saved.revision, documentId);
+          saved.markSaved(path, saved.stateId, documentId);
         } catch (cause) { throw new Error(`控台关联已回读，但工程保存失败：${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
       },
       changed: (status, message) => {

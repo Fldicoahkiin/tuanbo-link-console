@@ -166,11 +166,11 @@ export function LinkApp(): JSX.Element {
   const saveProject = async (): Promise<void> => {
     const current = useDocumentStore.getState();
     if (!current.project) return;
-    const savingRevision = current.revision; const savingDocumentId = current.documentId;
+    const savingState = current.stateId; const savingDocumentId = current.documentId;
     try {
       const path = await linkDesktopViewModel.saveProject(current.path, current.project);
       if (!path || useDocumentStore.getState().documentId !== savingDocumentId) return;
-      useDocumentStore.getState().markSaved(path, savingRevision, savingDocumentId);
+      useDocumentStore.getState().markSaved(path, savingState, savingDocumentId);
       notify('工程已保存');
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
@@ -420,7 +420,7 @@ async function saveBeforeNewProject(): Promise<boolean> {
   if (latest.documentId !== current.documentId || latest.revision !== current.revision) {
     throw new Error('保存期间工程发生变化，请再次创建。');
   }
-  latest.markSaved(savedPath, current.revision, current.documentId);
+  latest.markSaved(savedPath, current.stateId, current.documentId);
   return true;
 }
 

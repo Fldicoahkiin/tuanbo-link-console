@@ -56,7 +56,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     if (!state.project) return;
     const path = await linkDesktopViewModel.saveProject(state.path, state.project);
     if (!path) return;
-    useDocumentStore.getState().markSaved(path, state.revision, state.documentId);
+    useDocumentStore.getState().markSaved(path, state.stateId, state.documentId);
     const archived = await archiveMa2Project(state.documentId, state.project, 'manual');
     setNotice(`本地已保存并存档：${archived ?? ''}`); notify('本地已保存并创建存档');
   };

@@ -51,11 +51,11 @@ export function useProjectPersistence(notify: (message: string, tone?: 'info' | 
       saveChainRef.current = saveChainRef.current.then(async () => {
         const document = useDocumentStore.getState();
         if (!document.dirty || !document.project || !document.path) return;
-        const savingRevision = document.revision;
+        const savingState = document.stateId;
         const savingDocumentId = document.documentId;
         const savedPath = await linkDesktopViewModel.saveProject(document.path, document.project);
         if (!savedPath) throw new Error('自动保存未返回工程路径');
-        useDocumentStore.getState().markSaved(savedPath, savingRevision, savingDocumentId);
+        useDocumentStore.getState().markSaved(savedPath, savingState, savingDocumentId);
       }).catch((error: unknown) => {
         notify(`工程自动保存失败：${error instanceof Error ? error.message : String(error)}`, 'error');
       });

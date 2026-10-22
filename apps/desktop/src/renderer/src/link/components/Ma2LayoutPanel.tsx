@@ -58,7 +58,7 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
       const path=await linkDesktopViewModel.saveProject(before.path,before.project);
       if(!path)throw new Error('请先保存工程');
       if(useDocumentStore.getState().documentId!==before.documentId)throw new Error('工程已切换');
-      before.markSaved(path,before.revision,before.documentId);
+      before.markSaved(path,before.stateId,before.documentId);
       const result=await window.tbLink.createMa2Cue({network:context.network,expectedSource:context.expectedSource,projectId:before.project.projectId,requestId:crypto.randomUUID(),settings:parsed,name,content:mode==='combine'?{kind:'combine',cues:ingredients.map(value=>({sequence:value.sequence,cue:value.cue}))}:{kind:'programmer',use}});
       const after=useDocumentStore.getState();
       if(after.documentId!==before.documentId||!after.project)throw new Error('控台已创建，但工程已切换，请重新读取控台');
@@ -69,7 +69,7 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
       const latest=useDocumentStore.getState();if(!latest.project)throw new Error('工程已关闭');
       const savedPath=await linkDesktopViewModel.saveProject(path,latest.project);
       if(!savedPath)throw new Error('控台已创建，工程保存未完成');
-      latest.markSaved(savedPath,latest.revision,before.documentId);
+      latest.markSaved(savedPath,latest.stateId,before.documentId);
       acceptCreatedMa2Layout(layoutScope,result.layout);
       setLayout(result.layout);setSettingsDraft({});setMessage(`“${name}”已创建：序列 ${result.sequence} · Cue 1 · Layout ${result.layout.layout}，回读已确认`);setName('');onIngredients([]);setCreating(false);
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause));setMessage('');}

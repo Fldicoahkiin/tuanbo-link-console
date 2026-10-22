@@ -68,6 +68,6 @@ export async function convertMa2LegacyNames(documentId: number): Promise<number>
   const saved = useDocumentStore.getState();
   const path = await linkDesktopViewModel.saveProject(saved.path, current());
   if (!path) throw new Error('控台名称已改为拼音，工程保存未完成');
-  saved.markSaved(path, saved.revision, documentId);
+  saved.markSaved(path, saved.stateId, documentId);
   return legacy.count;
 }

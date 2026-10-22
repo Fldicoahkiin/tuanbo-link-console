@@ -16,7 +16,7 @@ export async function importProgramFiles(files: File[], playlistId: string, noti
     if (!path) {
       path = await linkDesktopViewModel.saveProject(null, document.project);
       if (!path) return;
-      assertDocumentSession(document.documentId).markSaved(path, document.revision, document.documentId);
+      assertDocumentSession(document.documentId).markSaved(path, document.stateId, document.documentId);
     }
     for (const file of files) {
       assertDocumentSession(document.documentId);

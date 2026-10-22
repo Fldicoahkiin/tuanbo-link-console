@@ -18,7 +18,7 @@ async function persist(documentId: number): Promise<void> {
   if (current.documentId !== documentId || !current.project || !current.path) return;
   const path = await linkDesktopViewModel.saveProject(current.path, current.project);
   if (!path) throw new Error('控台缓存已加入工程，但保存未完成');
-  useDocumentStore.getState().markSaved(path, current.revision, documentId);
+  useDocumentStore.getState().markSaved(path, current.stateId, documentId);
 }
 
 /** Component unmount is not a cancellation. The document owns results, this store owns the job. */
@@ -37,7 +37,7 @@ async function runScan(source: Ma2CatalogRequest, retry: boolean): Promise<void>
     const savedPath = await linkDesktopViewModel.saveProject(before.path, before.project);
     if (!savedPath) throw new Error('请先保存联动工程，再读取控台；本次尚未开始扫描');
     if (useDocumentStore.getState().documentId !== before.documentId) throw new Error('保存期间工程已切换');
-    useDocumentStore.getState().markSaved(savedPath, before.revision, before.documentId);
+    useDocumentStore.getState().markSaved(savedPath, before.stateId, before.documentId);
     before = useDocumentStore.getState();
   }
   if (!before.project || !before.path) throw new Error('工程保存未完成');

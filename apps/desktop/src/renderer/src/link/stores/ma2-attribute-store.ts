@@ -23,7 +23,7 @@ export async function readMa2Attributes(targets?: number[], autoClassify = false
     const path = await linkDesktopViewModel.saveProject(before.path, before.project);
     if (!path) throw new Error('请先保存工程');
     if (useDocumentStore.getState().documentId !== before.documentId) throw new Error('工程已切换');
-    before.markSaved(path, before.revision, before.documentId);
+    before.markSaved(path, before.stateId, before.documentId);
     unsubscribe = useDocumentStore.subscribe(state => {
       if (state.documentId !== before.documentId) void window.tbLink.cancelMa2Read(progressId).catch((error: unknown) => useMa2AttributeStore.setState({ message: String(error) }));
     });
@@ -37,7 +37,7 @@ export async function readMa2Attributes(targets?: number[], autoClassify = false
     if (!after.project) throw new Error('工程已关闭');
     const saved = await linkDesktopViewModel.saveProject(path, after.project);
     if (!saved) throw new Error('属性已读取，但工程尚未保存');
-    after.markSaved(saved, after.revision, before.documentId);
+    after.markSaved(saved, after.stateId, before.documentId);
     const review = result.cueAttributes?.filter(value => value.content?.state !== 'complete' || classifyMa2Attributes(value).roles.includes('unresolved')).length ?? 0;
     const errors = after.project.ma2MaterialLibrary?.library?.errors.filter(value => selected.includes(value.sequence)) ?? [];
     const accepted = result.cueAttributes?.filter(value => !errors.some(error => error.sequence === value.sequence)).length ?? 0;

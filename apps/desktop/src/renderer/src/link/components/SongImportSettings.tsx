@@ -35,7 +35,7 @@ export function SongImportSettings({ disabled, notify, children }: Props): JSX.E
         const updated = assertDocumentSession(document.documentId);
         if (updated.path && updated.project) {
           const saved = await linkDesktopViewModel.saveProject(updated.path, updated.project);
-          if (saved) assertDocumentSession(document.documentId).markSaved(saved, updated.revision, document.documentId);
+          if (saved) assertDocumentSession(document.documentId).markSaved(saved, updated.stateId, document.documentId);
         }
       }
     } catch (error) { const message = error instanceof Error ? error.message : String(error); setResult(message); notify(message, 'error'); }

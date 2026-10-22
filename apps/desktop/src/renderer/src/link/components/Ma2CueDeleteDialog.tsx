@@ -32,7 +32,7 @@ export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReferenc
     const path = await linkDesktopViewModel.saveProject(current.path,current.project);
     if (!path) throw new Error('请先保存工程');
     if (useDocumentStore.getState().documentId !== current.documentId) throw new Error('工程已切换');
-    current.markSaved(path,current.revision,current.documentId);
+    current.markSaved(path,current.stateId,current.documentId);
     return { path, documentId: current.documentId, projectId: current.project.projectId };
   };
   const prepare = (): void => { void run(async () => {

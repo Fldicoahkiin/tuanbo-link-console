@@ -13,7 +13,7 @@ export function ImportPlayerMusic({ disabled, notify, onBusy, playlistId }: { di
       if (!document.path) {
         const path = await linkDesktopViewModel.saveProject(null, document.project);
         if (!path) return;
-        useDocumentStore.getState().markSaved(path, document.revision, document.documentId);
+        useDocumentStore.getState().markSaved(path, document.stateId, document.documentId);
       }
       input.current?.click();
     } catch (error) { notify(String(error), 'error'); }

@@ -19,7 +19,7 @@ export async function savePendingMa2Edits(): Promise<void> {
   try {
     const path = await linkDesktopViewModel.saveProject(state.path, state.project);
     if (!path) throw new Error('工程保存未完成，当前修改仍在内存中');
-    useDocumentStore.getState().markSaved(path, state.revision, state.documentId);
+    useDocumentStore.getState().markSaved(path, state.stateId, state.documentId);
     failedRevision = '';
   } catch (cause) {
     failedRevision = revision;

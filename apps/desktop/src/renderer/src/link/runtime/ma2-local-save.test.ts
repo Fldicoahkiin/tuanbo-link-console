@@ -9,7 +9,7 @@ function load() {
   project.schemaVersion = 2;
   project.rundown = [{ id: 'song', title: '歌曲', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting: createLightingDocument() }];
   useDocumentStore.getState().setProject(project, 'C:/song.tblink');
-  useDocumentStore.setState({ dirty: true, revision: 1 });
+  useDocumentStore.setState({ dirty: true, revision: 1, stateId: 'edit-1' });
 }
 beforeEach(() => {
   vi.clearAllMocks(); save.mockResolvedValue('C:/song.tblink'); log.mockResolvedValue(undefined);
@@ -25,7 +25,7 @@ it('保存期间仍可编辑；旧保存完成不清除新修改，也不并行�
   let finish: (path: string) => void = () => { throw new Error('save not started'); };
   save.mockImplementationOnce(() => new Promise<string>(resolve => { finish = resolve; }));
   const pending = savePendingMa2Edits();
-  useDocumentStore.setState({ revision: 2, dirty: true });
+  useDocumentStore.setState({ revision: 2, dirty: true, stateId: 'edit-2' });
   await savePendingMa2Edits(); expect(save).toHaveBeenCalledOnce();
   finish('C:/song.tblink'); await pending;
   expect(useDocumentStore.getState().dirty).toBe(true);

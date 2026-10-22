@@ -184,7 +184,7 @@ async function saveUnsavedDocument(documentId: number): Promise<string | null> {
   if (!document.project) throw new Error('联动工程状态丢失');
   const savedPath = await linkDesktopViewModel.saveProject(null, document.project);
   if (!savedPath) return null;
-  assertDocumentSession(documentId).markSaved(savedPath, document.revision, documentId);
+  assertDocumentSession(documentId).markSaved(savedPath, document.stateId, documentId);
   return savedPath;
 }
 
@@ -193,5 +193,5 @@ async function persistCurrentDocument(path: string, documentId: number): Promise
   if (!document.project) throw new Error('P1 同步后联动工程状态丢失');
   const savedPath = await linkDesktopViewModel.saveProject(path, document.project);
   if (!savedPath) throw new Error('P1 同步完成，但联动工程保存被取消');
-  assertDocumentSession(documentId).markSaved(savedPath, document.revision, documentId);
+  assertDocumentSession(documentId).markSaved(savedPath, document.stateId, documentId);
 }

@@ -133,7 +133,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         }
         const path = before.path ?? await linkDesktopViewModel.saveProject(null, before.project);
         if (!path) throw new Error('请先保存工程');
-        if (!before.path) before.markSaved(path, before.revision, entry.documentId);
+        if (!before.path) before.markSaved(path, before.stateId, entry.documentId);
         if (!canContinue(entry)) continue;
         const scope = currentMa2LayoutScope();
         const settings = ma2SongSyncSettings(before.project, entry.itemId);
@@ -183,7 +183,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           const saved = useDocumentStore.getState(); if (!saved.project) throw new Error('工程已关闭');
           const savedPath = await linkDesktopViewModel.saveProject(path, saved.project);
           if (!savedPath) throw new Error('控台已同步，工程保存未完成');
-          saved.markSaved(savedPath, saved.revision, entry.documentId);
+          saved.markSaved(savedPath, saved.stateId, entry.documentId);
         }
         if (!canContinue(entry)) continue;
         if (result.layout) acceptCreatedMa2Layout(scope, result.layout, !item.lighting.consoleSong);

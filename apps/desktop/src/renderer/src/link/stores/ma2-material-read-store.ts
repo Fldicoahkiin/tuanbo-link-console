@@ -19,7 +19,7 @@ export async function scanMa2Materials(source: Ma2CatalogRequest, retry = false)
     const path = await linkDesktopViewModel.saveProject(before.path, before.project);
     if (!path) throw new Error('请先保存工程，再读取素材；本次尚未扫描');
     if (useDocumentStore.getState().documentId !== before.documentId) throw new Error('工程已切换');
-    before.markSaved(path, before.revision, before.documentId);
+    before.markSaved(path, before.stateId, before.documentId);
     const sourceName = source.network ? `${source.network.host}:${source.network.port}` : '本机 onPC';
     const saved = before.project.ma2MaterialLibrary;
     const cached = saved?.library ? { source: saved.source, library: saved.library } : undefined;
@@ -53,7 +53,7 @@ export async function scanMa2Materials(source: Ma2CatalogRequest, retry = false)
     if (!current.project) throw new Error('工程已关闭');
     const savedPath = await linkDesktopViewModel.saveProject(path, current.project);
     if (!savedPath) throw new Error('素材已读取，工程保存未完成；恢复检查点保留');
-    useDocumentStore.getState().markSaved(savedPath, current.revision, before.documentId);
+    useDocumentStore.getState().markSaved(savedPath, current.stateId, before.documentId);
     useMa2MaterialReadStore.setState({ message: library.sourceUnverified || library.incomplete ? `读取未完成：${library.incomplete || '来源尚未核对'}；已读取 ${library.sequences.length} 个序列` : `读取完成 · ${library.sequences.length} 个序列 · ${library.sequences.reduce((count, sequence) => count + sequence.cues.length, 0)} 个 Cue · ${library.errors.length} 项失败 · 已保存` });
   } catch (error) { useMa2MaterialReadStore.setState({ error: toUserErrorMessage(error) }); throw error; }
   finally { unsubscribe?.(); useMa2MaterialReadStore.setState({ busy: false, activeId: null, progress: null }); }

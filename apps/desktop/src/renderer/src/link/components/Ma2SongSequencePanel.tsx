@@ -39,7 +39,7 @@ export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; set
       const path = await linkDesktopViewModel.saveProject(current.path, current.project);
       if (!path) throw new Error('默认页已修改，工程尚未保存，请再次点击保存默认');
       if (useDocumentStore.getState().documentId !== current.documentId) throw new Error('工程已切换，默认页已保存到原工程');
-      current.markSaved(path, current.revision, current.documentId);
+      current.markSaved(path, current.stateId, current.documentId);
       setPageDraft(String(page)); setDefaultMessage(`默认第 ${page} 页，已随工程保存`);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setSavingDefault(false); }
