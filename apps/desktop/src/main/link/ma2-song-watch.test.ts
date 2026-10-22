@@ -49,3 +49,21 @@ it('同一首歌的复查基线用固定文件名，重新启动后覆盖而不�
   expect(await baseline()).toEqual(first);
   expect(await baseline('plugin-restarted')).toEqual(first);
 });
+it('同步前查询复查缓存：控台未变且指纹等于本地基线时给出控台上的基线文件；没缓存、指纹不同或控台已变都返回 null', async () => {
+  const xml = '<MA><Sequ index="8999"/></MA>';
+  const { createHash } = await import('node:crypto');
+  const { connection, lines } = console();
+  const bridge: Pick<Ma2OnpcBridge, 'request'> = { request: vi.fn<Ma2OnpcBridge['request']>(() => Promise.resolve(xml)) };
+  const watch = new Ma2SongWatch(() => false);
+  const position = { network: request.network, expectedSource: request.expectedSource, sequence: request.sequence };
+  expect(await watch.unchangedBaseline(connection, position, xml)).toBeNull();
+  expect(lines).toHaveLength(0);
+  await watch.changed(connection, bridge, { ...request, revision: createHash('sha256').update(xml).digest('hex') });
+  const before = lines.length;
+  expect(await watch.unchangedBaseline(connection, position, xml)).toMatch(/^tblink_watch_[a-f0-9]{16}$/);
+  expect(lines.length - before).toBe(2);
+  expect(await watch.unchangedBaseline(connection, position, '<MA><Sequ index="8999" name="冲突后保留"/></MA>')).toBeNull();
+  vi.mocked(connection.command).mockImplementation((line, match) => Promise.resolve(match(`${/TBLINK_CUE_[a-f0-9]{24}/.exec(line)?.[0]}:${line.includes("READY')") ? 'READY' : line.includes('==r(') ? 'OK:false' : 'OK:captured'}\r\n`)!));
+  expect(await watch.unchangedBaseline(connection, position, xml)).toBeNull();
+  expect(await watch.unchangedBaseline(connection, position, xml)).toBeNull();
+});
