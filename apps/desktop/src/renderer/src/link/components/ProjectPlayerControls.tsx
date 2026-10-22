@@ -13,11 +13,13 @@ import { useRuntimeStore } from '../stores/runtime-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { midiOutputInventory, readNativeDevices } from '../view-models/midi-device-inventory';
+import { internalAudioEngine, internalAudioEngineLabel } from '../view-models/internal-audio-engine';
 
 import { ImportPlayerMusic } from './ImportPlayerMusic';
 import { PlayerStatusDetails } from './PlayerStatusDetails';
 
-export type ProjectPlayer = { controller: ProgramPlayerControls | null; state: PlayerControlState; view: PlayerViewStore };
+/** `engine` names the audio engine this player uses, for the operator. */
+export type ProjectPlayer = { controller: ProgramPlayerControls | null; state: PlayerControlState; view: PlayerViewStore; engine: string };
 type SetupProps = { locked: boolean; notify: (message: string, tone?: 'info' | 'error') => void; onBusy: (busy: boolean) => void; playlistId: string };
 export function ProjectPlayerSetup({ locked, notify, onBusy, playlistId }: SetupProps): JSX.Element {
   const project = useDocumentStore((value) => value.project);
@@ -27,7 +29,7 @@ export function ProjectPlayerSetup({ locked, notify, onBusy, playlistId }: Setup
 export function ProjectMusicConnections({ disabled, notify, onBusy, children }: { disabled: boolean; notify: SetupProps['notify']; onBusy: (busy: boolean) => void; children?: ReactNode }): JSX.Element {
   return <PlayerConnections disabled={disabled} notify={notify} onBusy={onBusy}>{children}</PlayerConnections>;
 }
-export function ProjectPlayerTransport({ controller, state, selectedItem }: ProjectPlayer & { selectedItem?: RundownItem | null | undefined }): JSX.Element {
+export function ProjectPlayerTransport({ controller, state, engine, selectedItem }: ProjectPlayer & { selectedItem?: RundownItem | null | undefined }): JSX.Element {
   const project = useDocumentStore((value) => value.project);
   const reason = useRuntimeStore((value) => value.reason);
   const items = project ? playlistItems(project, state.playlistId ?? 'all').filter((item) => item.enabled && item.referenceAudio) : [];
@@ -46,7 +48,7 @@ export function ProjectPlayerTransport({ controller, state, selectedItem }: Proj
   return (
       <section className={`player-transport panel status-${state.status}`} aria-label="节目播放控制">
         <div className="home-section-heading"><h2>播放主控</h2><span>音乐 · 画面 · 灯光</span></div>
-        <div className="player-now"><div className="player-track-icon"><Music2 /></div><div>{state.fault ? <small className="player-fault" role="alert" title={state.fault}>{statusLabel(state.status)} · 输出异常</small> : <small title={state.error ?? reason ?? undefined}>{state.status === 'preparing' && state.preparation ? `准备中 · ${state.preparation}` : statusLabel(state.status)}</small>}<h2>{selected?.title ?? '未播放'}</h2></div><span className="player-next"><small>{state.itemId ? '接下来' : '就绪'}</small><strong title={next?.title}>{state.itemId ? next?.title ?? '播完停止' : `${items.length} 首歌曲`}</strong></span><PlayerStatusDetails error={state.error} errorTitle={state.errorTitle} notice={state.notice} fault={state.fault ?? null} /></div>
+        <div className="player-now"><div className="player-track-icon"><Music2 /></div><div>{state.fault ? <small className="player-fault" role="alert" title={state.fault}>{statusLabel(state.status)} · 输出异常</small> : <small title={state.error ?? reason ?? undefined}>{state.status === 'preparing' && state.preparation ? `准备中 · ${state.preparation}` : statusLabel(state.status)}</small>}<h2>{selected?.title ?? '未播放'}</h2></div><span className="player-next"><small>{state.itemId ? '接下来' : '就绪'}</small><strong title={next?.title}>{state.itemId ? next?.title ?? '播完停止' : `${items.length} 首歌曲`}</strong></span><PlayerStatusDetails error={state.error} errorTitle={state.errorTitle} notice={state.notice} fault={state.fault ?? null} engine={engine} /></div>
         <div className="player-buttons">
           <button aria-label="上一首" title="上一首" disabled={!controller || !items.length} onClick={() => void controller?.skip(-1)}><SkipBack /></button>
           <Button className="primary-button" title={unavailable ?? (state.status === 'playing' ? '暂停播放' : state.status === 'paused' ? '继续播放' : `播放 ${target?.title ?? ''}`)} loading={state.status === 'preparing'} disabled={unavailable !== null} onClick={() => {
@@ -74,7 +76,8 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
   const nativeError = useIntegrationStore(state => state.nativeDeviceError);
   const inputs = ports.filter(port => port.direction === 'input' && port.state === 'connected').map(port => port.name);
   const [devices, setDevices] = useState<{ deviceId: string; label: string }[]>([]);
-  const engine = profile?.internalPlayer?.audioEngine ?? 'browser';
+  const project = useDocumentStore((state) => state.project);
+  const engine = profile?.internalPlayer?.audioEngine ?? 'browser', choice = internalAudioEngine(profile, project);
   const [savedField, setSavedField] = useState('');
   const [error, setError] = useState('');
   useEffect(() => { if (!savedField) return; const timer = setTimeout(() => setSavedField(''), 2000); return () => clearTimeout(timer); }, [savedField]);
@@ -127,6 +130,8 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
     } catch (error) { setError(String(error)); notify(String(error), 'error'); } finally { setSaving(false); onBusy(false); }
   };
   return <div className="player-connections panel"><h3 className="device-form-title">音频输出</h3>
+    <p className="settings-note">当前播放引擎：{internalAudioEngineLabel(choice)}</p>
+    {choice.blocked ? <p className="device-error" role="alert">{choice.blocked}</p> : null}
 
     <label><span>音频输出线路</span><select aria-label="音乐监听设备" disabled={disabled || saving} value={chosenOutput} onChange={(event) => void save(port, event.currentTarget.value)}><option value="default">Windows 默认播放设备</option>{chosenOutput !== 'default' && !audioDevices.some(device => device.deviceId === chosenOutput) ? <option value={chosenOutput}>上次选择的输出设备（当前列表不可见）</option> : null}{audioDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || device.deviceId}</option>)}</select>{savedField === 'audio' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
     <label><span>采样率</span><select aria-label="音频采样率" disabled={disabled || saving} value={profile?.internalPlayer?.audioSampleRate ?? 48000} onChange={(event) => void save(port, chosenOutput, inputName, profile?.internalPlayer?.doubleClickPlayback ?? false, event.currentTarget.value === '44100' ? 44100 : 48000)}><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select>{savedField === 'rate' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
@@ -136,7 +141,7 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
     <p className="settings-note">替代 P1 播放时，请先完全退出 P1，避免占用同一 MIDI 接口，再刷新端口。</p>
     {inventory.windowsOnly.length ? <p className="settings-note">标注“Windows 原生”的接口可直接选择，将使用 Windows 原生音频与 MIDI 播放。选择后点击“一键连接”检查接口。</p> : null}
     {nativeError ? <p className="device-error" role="status">Windows 设备检测失败：{nativeError}</p> : null}
-    <details className="settings-disclosure"><summary>高级音频 · 播放引擎</summary>    <label><span>播放引擎</span><select aria-label="正式播放引擎" disabled={disabled || saving} value={engine} onChange={event => void chooseEngine(event.currentTarget.value === 'native' ? 'native' : 'browser')}><option value="browser">浏览器音频（对照）</option><option value="native">Windows 原生音频（验收中）</option></select></label></details>
+    <details className="settings-disclosure" open={choice.blocked !== null || undefined}><summary>高级音频 · 播放引擎</summary>    <label><span>播放引擎</span><select aria-label="正式播放引擎" disabled={disabled || saving} value={engine} onChange={event => void chooseEngine(event.currentTarget.value === 'native' ? 'native' : 'browser')}><option value="browser" disabled={choice.outputsMtc && engine === 'native'}>{choice.outputsMtc ? '浏览器音频（输出 MIDI 时间码时不可用）' : '浏览器音频（对照）'}</option><option value="native">Windows 原生音频（验收中）</option></select></label></details>
     <details className="settings-disclosure"><summary>远程控制与灯光动作端口</summary><div className="player-connections">
     <label><span>远程播放输入</span><select aria-label="播放控制 MIDI 输入" disabled={disabled || saving} value={inputName} onChange={(event) => void save(port, chosenOutput, event.currentTarget.value)}><option value="">关闭远程播放控制</option>{[...new Set([...inputs, ...(inputName ? [inputName] : [])])].map((name) => <option key={name} value={name}>{name}{!inputs.includes(name) ? '（当前不可用）' : ''}</option>)}</select>{savedField === 'remote' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
     {children}</div></details>

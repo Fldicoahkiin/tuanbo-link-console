@@ -8,6 +8,7 @@ import { toUserErrorMessage } from '@tb/core/link';
 import { RemoteNativeProgramPlayer } from './runtime/remote-native-program-player';
 import type { ProgramPlayerControls } from './runtime/program-player-controls';
 import { recoverInternalObs } from './runtime/internal-obs-recovery';
+import { internalAudioEngine, internalAudioEngineLabel } from './view-models/internal-audio-engine';
 import type { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
 import { useDocumentStore } from './stores/document-store';
 import { useIntegrationStore } from './stores/integration-store';
@@ -35,7 +36,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     return desktop.onObsMediaPreparation(progress => controller.reportPreparation(
       `生成 OBS 定位缓存 ${progress.index + 1}/${progress.total} · ${progress.assetName}`));
   }, [controller]);
-  const requestedEngine = profile?.internalPlayer?.audioEngine ?? 'browser';
+  const engineChoice = internalAudioEngine(profile, project), requestedEngine = engineChoice.engine;
   const requestedDevice = (requestedEngine === 'native' ? profile?.internalPlayer?.nativeAudioOutputDeviceId : profile?.internalPlayer?.audioOutputDeviceId) ?? 'default';
   const requestedRate = profile?.internalPlayer?.audioSampleRate ?? 48000;
   const [audioConfiguration, setAudioConfiguration] = useState({ deviceId: requestedDevice, sampleRate: requestedRate, engine: requestedEngine });
@@ -72,6 +73,9 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     let prepared: { report: PreflightReport; profile: ReturnType<typeof useIntegrationStore.getState>['profile']; mtcOutputEnabled: boolean } | null = null;
     const dependencies: InternalPlayerDependencies = {
       prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled, signal }) => {
+        // Refused before any output starts; the engine is never switched here.
+        const blocked = internalAudioEngine(useIntegrationStore.getState().profile, project).blocked;
+        if (blocked) throw new Error(blocked);
         if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
         if (!path) throw new Error('请先保存工程，再播放正式音频');
         if (useIntegrationStore.getState().obs.status !== 'connected') {
@@ -163,5 +167,6 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       else player.dispose();
     };
   }, [coordinator, project, path, ready, audioConfiguration, view]);
-  return useMemo(() => ({ controller, state, view }), [controller, state, view]);
+  const engine = internalAudioEngineLabel({ ...engineChoice, engine: audioConfiguration.engine });
+  return useMemo(() => ({ controller, state, view, engine }), [controller, state, view, engine]);
 }
