@@ -227,3 +227,66 @@ it.runIf(Boolean(process.env.TBLINK_MA2_LENGTH_PROBE && process.env.TBLINK_MA2_H
     expect(await rpc(second, 'release', fresh)).toBe('ACK');
   } finally { second.disconnect(); }
 }, 120000);
+
+// Writes one scratch Sequence (deleted afterwards): how Copy behaves on a song that already exists on the console.
+it.runIf(process.env.TBLINK_MA2_COPY_PROBE === '1' && Boolean(process.env.TBLINK_MA2_HARDWARE_HOST))('onPC 已有序列内 Copy Cue 的语义探测', async () => {
+  const raw = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });
+  const results: Record<string, string> = {};
+  let created: { sequence: number; page: number | null } | null = null;
+  // Lua runs inside Lua "…": no double quotes, and MA consumes $ ^ | on the command line.
+  const lua = async (label: string, code: string): Promise<string> => {
+    const marker = `TBLINK_PROBE_${randomBytes(16).toString('hex')}:`;
+    const value = await raw.command(`Lua "${code};gma.echo('${marker}'..tostring(TBPR))"`, text => ma2ResponseLine(text, marker));
+    results[label] = value; return value;
+  };
+  try {
+    await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
+    await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
+    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), () => false);
+    const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
+    const library = await readMa2NativeLibrary(raw, bridge, () => false, undefined, 'library', undefined, directory.entries.filter(entry => entry.target < 9950).slice(0, 12).map(entry => entry.target));
+    const source = library.sequences.find(value => value.cues.length >= 2);
+    if (!source) throw new Error('测试 Show 前 12 个序列中没有至少 2 个 Cue 的序列');
+    const parts = (cue: string): string => { const [whole, fraction = ''] = cue.split('.'); return `'${Number(whole)}','${Number(fraction.padEnd(3, '0'))}'`; };
+    const [c1, c2] = [source.cues[0]!.number, source.cues[1]!.number];
+    const S = source.sequence;
+    let T = 9950; while (directory.entries.some(entry => entry.target === T)) T += 1;
+    created = { sequence: T, page: null };
+    await lua('define-find', "_G.TBPC=function(s,w,u) local q=string.char(34);local n='tblink_probe_'..s;gma.cmd('Export Sequence '..s..' '..n..' /o');local p=gma.show.getvar('PATH')..'/importexport/'..n..'.xml';local f=io.open(p,'rb');if not f then return nil end;local x=f:read('*a');f:close();os.remove(p);local i=x:find('<Number number='..q..w..q..' sub_number='..q..u..q,1,true);if not i then return nil end;local a=1;while true do local j=x:find('<Cue index=',a,true);if not j or j>i then break end;a=j+1 end;return x:sub(a-1,x:find('</Cue>',i,true)) end;TBPR='ok'");
+    await lua('define-summary', "_G.TBPS=function(s,w,u) local c=TBPC(s,w,u);if not c then return 'nocue' end;local h=c:sub(1,c:find('>',1,true));local i=c:find('<CuePart',1,true);local p=i and c:sub(i,c:find('>',i,true)) or '';local r=0;for _ in c:gmatch('<CueData[ >]') do r=r+1 end;return h..p..' rows='..r end;TBPR='ok'");
+    await lua('define-compare', "_G.TBPD=function(c) local a=c and c:find('<CueDatas',1,true);local b=c and c:find('</CueDatas>',1,true);return a and b and c:sub(a,b) or '' end;_G.TBPQ=function(s1,w1,u1,s2,w2,u2) return tostring(TBPD(TBPC(s1,w1,u1))==TBPD(TBPC(s2,w2,u2))) end;TBPR='ok'");
+    const exists = (address: string): string => `tostring(not (gma.show.getobj.handle('${address}')==nil))`;
+    await lua('source-c1', `TBPR=TBPS(${S},${parts(c1)})`);
+    await lua('source-c2', `TBPR=TBPS(${S},${parts(c2)})`);
+    // Q0: does Copy create a Sequence that does not exist yet?
+    await lua('copy-into-missing-sequence', `gma.cmd('Copy Sequence ${S} Cue ${c1} At Sequence ${T} Cue 1 /o /nc');TBPR=${exists(`Sequence ${T}`)}..','..${exists(`Sequence ${T} Cue 1`)}`);
+    if (results['copy-into-missing-sequence'] !== 'true,true') {
+      let page = 9890; const pages = await listMa2ExecutorPages(bridge, { network: { host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001, username: 'administrator' }, expectedSource: { show: directory.show, generation: directory.generation, version: directory.version } });
+      while (pages.pages.some(value => value.page === page)) page += 1;
+      created = { sequence: T, page };
+      const service = new Ma2LayoutService(resolve(await mkdtemp(join(tmpdir(), 'tblink-copy-probe-')), 'layouts.json'), () => false);
+      await service.syncSong(raw, bridge, { network: { host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001, username: 'administrator' }, expectedSource: { show: directory.show, generation: directory.generation, version: directory.version },
+        projectId: randomUUID(), itemId: 'copy-probe', requestId: randomUUID(), settings: { layout: 999, name: 'TBLINK', nextSequence: T, columns: 8, executorPage: page }, name: 'CopyProbe',
+        points: [{ id: 'p1', name: 'Probe', atMs: 0, cues: [{ sequence: S, cue: c1, delayMs: 0 }] }] });
+    }
+    // Q1: does Copy /o create a Cue number the target Sequence does not have yet?
+    await lua('copy-new-cue-number', `gma.cmd('Copy Sequence ${S} Cue ${c2} At Sequence ${T} Cue 7 /o /nc');TBPR=${exists(`Sequence ${T} Cue 7`)}..','..TBPQ(${S},${parts(c2)},${T},'7','0')`);
+    // Q2: which Cue attributes survive Copy /o and a following /merge on an existing Cue?
+    await lua('target-before', `TBPR=TBPS(${T},'1','0')`);
+    await lua('assign-fade', `gma.cmd('Assign Sequence ${T} Cue 1 /fade=7');TBPR=TBPS(${T},'1','0')`);
+    await lua('copy-overwrite', `gma.cmd('Copy Sequence ${S} Cue ${c2} At Sequence ${T} Cue 1 /o /nc');TBPR=TBPS(${T},'1','0')..' sameData='..TBPQ(${S},${parts(c2)},${T},'1','0')`);
+    await lua('assign-fade-again', `gma.cmd('Assign Sequence ${T} Cue 1 /fade=7');TBPR=TBPS(${T},'1','0')`);
+    await lua('copy-merge', `gma.cmd('Copy Sequence ${S} Cue ${c1} At Sequence ${T} Cue 1 /merge /nc');TBPR=TBPS(${T},'1','0')`);
+    await mkdir(resolve('artifacts/ma2-hardware-diagnostics'), { recursive: true });
+    await writeFile(resolve('artifacts/ma2-hardware-diagnostics/copy-probe.json'), JSON.stringify({ at: new Date().toISOString(), show: directory.show, version: directory.version, source: S, c1, c2, target: T, results }, null, 2));
+  } finally {
+    console.info(JSON.stringify({ created, results }));
+    if (created && raw.state === 'connected') {
+      const marker = `TBLINK_CLEAN_${randomBytes(16).toString('hex')}:`;
+      const page = created.page === null ? '' : `gma.cmd('Delete Page ${created.page} /nc');`;
+      const removed = await raw.command(`Lua "gma.cmd('Delete Sequence ${created.sequence} /nc');${page}gma.echo('${marker}'..tostring(gma.show.getobj.handle('Sequence ${created.sequence}')==nil))"`, text => ma2ResponseLine(text, marker));
+      expect(removed).toBe('true');
+    }
+    raw.disconnect();
+  }
+}, 600000);
