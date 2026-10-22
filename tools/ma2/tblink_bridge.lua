@@ -2,7 +2,8 @@
 -- Requests are data, never executable Lua. Only one explicitly addressed Timecode is touched.
 local active = false
 -- Remove every export a request makes only to read or compare once it is done. Kept: write
--- backups (tblink_backup_, tblink_label_) and a SEQUENCE export requested with body 'keep'.
+-- backups (tblink_backup_, tblink_label_) and a SEQUENCE export requested with body 'keep';
+-- the program rotates those out later with DISCARD.
 local remove_scratch = true
 local last = ''
 local generation = tostring(gma.gettime())
@@ -106,6 +107,17 @@ local function process(data)
     assert(tc and tc >= 1 and tc <= 99999 and tc == math.floor(tc), 'Invalid Timecode')
     assert(#body == tonumber(size), 'Request length mismatch')
     if op == 'PING' then return gma.show.getvar('VERSION') or 'unknown' end
+    -- Removes write-before backups the program's ledger rotated out; answers with the names now gone.
+    if op == 'DISCARD' then
+      assert(#body > 0 and #body <= 4096, 'Invalid backup list')
+      local gone = {}
+      for name in body:gmatch('[^,]+') do
+        assert(name:match('^tblink_backup_%x+$') or name:match('^tblink_label_%x+$') or name:match('^tblink_library_%x+$'), 'Invalid backup name')
+        local removed, reason = os.remove(root .. '/importexport/' .. name .. '.xml')
+        if removed or tostring(reason):find('No such file', 1, true) then gone[#gone + 1] = name end
+      end
+      return table.concat(gone, ',')
+    end
     if op == 'PAGES' then
       assert(body == '', 'Page directory request must be empty')
       local obj = gma.show.getobj
@@ -419,7 +431,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
         base = snapshot_cache.xml
         a = 'SYNC'
       end
-      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL', 'Invalid operation')
+      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL' or a == 'DISCARD', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(not network or gma.gettime() > network.expires, 'Another network request is pending')

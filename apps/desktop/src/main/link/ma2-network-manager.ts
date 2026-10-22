@@ -22,6 +22,7 @@ import { readMa2Catalog } from './ma2-catalog';
 import { readMa2NetworkPreview } from './ma2-network-preview';
 import { Ma2LiveService } from './ma2-live-service';
 import { Ma2SongWatch } from './ma2-song-watch';
+import type { Ma2ConsoleBackups } from './ma2-console-backups';
 
 /** One chosen console, machine settings only. Auto-connect never replays writes. */
 export class Ma2NetworkManager {
@@ -79,7 +80,12 @@ export class Ma2NetworkManager {
   }
   private liveService: Ma2LiveService | null = null;
   live(): Ma2LiveService { return this.liveService ??= new Ma2LiveService(`${this.path}.playback.json`, this.secrets, request => this.get(request.network).bridge); }
-  private layouts(): Ma2LayoutService { return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.isPlaying); }
+  private layouts(): Ma2LayoutService {
+    if (!this.consoleBackups) throw new Error('控台备份记录尚未就绪');
+    return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.isPlaying, this.consoleBackups);
+  }
+  private consoleBackups: Ma2ConsoleBackups | null = null;
+  setConsoleBackups(backups: Ma2ConsoleBackups): void { this.consoleBackups = backups; }
   private cueDeleteService: Ma2CueDeleteService | null = null;
   setCueDeletionProjectReader(load: (path: string) => Promise<import('@tb/schema').LinkProject>): void {
     this.cueDeleteService = new Ma2CueDeleteService(`${this.path}.cue-backups`, load, this.isPlaying);
@@ -137,7 +143,10 @@ export class Ma2NetworkManager {
   async syncSong(request: import('@tb/schema').Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal): Promise<import('@tb/schema').Ma2SongSyncResult> {
     const { bridge } = this.get(request.network); const connection = this.connection;
     if (!connection) throw new Error('请先连接控台');
-    return this.layouts().syncSong(connection, bridge, request, report, signal);
+    // A cached song check that still matches the console saves reading the whole Sequence again.
+    const binding = request.binding;
+    const baseline = binding && this.songWatch ? await this.songWatch.unchangedBaseline(connection, { network: request.network, expectedSource: request.expectedSource, sequence: binding.sequence, ...binding.executor ? { executor: binding.executor } : {} }, binding.baselineXml) : null;
+    return this.layouts().syncSong(connection, bridge, request, report, signal, baseline);
   }
   async newCue(request: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult> {
     const {bridge}=this.get(request.network); const connection=this.connection;

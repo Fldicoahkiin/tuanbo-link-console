@@ -16,6 +16,7 @@ import { writeFileAtomically } from './atomic-file';
 import { renameMa2Object } from './ma2-rename-service';
 import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor';
 import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recovery';
+import type { Ma2ConsoleBackups } from './ma2-console-backups';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
@@ -49,7 +50,7 @@ const keepCueAttributes = (exportName: string, target: number, cue: string, scra
 export class Ma2LayoutService {
   private busy = false;
   private readonly attempted = new Set<string>();
-  constructor(private readonly ownershipFile: string, private readonly isPlaying: () => boolean) {}
+  constructor(private readonly ownershipFile: string, private readonly isPlaying: () => boolean, private readonly backups: Pick<Ma2ConsoleBackups, 'record'>) {}
 
   private async call(connection: Connection, body: string): Promise<string> {
     const prefix = `TBLINK_LAYOUT_${randomBytes(12).toString('hex')}:`;
@@ -155,7 +156,8 @@ export class Ma2LayoutService {
     finally { this.busy = false; }
   }
 
-  async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal): Promise<Ma2SongSyncResult> {
+  /** `consoleBaseline` names a console export the song check confirmed equals the binding's baseline. */
+  async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal, consoleBaseline: string | null = null): Promise<Ma2SongSyncResult> {
     const request = ma2SongSyncRequestSchema.parse(input);
     // The plan converts the song and Cue names it writes; the Layout name is only ever written.
     request.settings.name = toConsoleLabel(request.settings.name);
@@ -256,9 +258,18 @@ export class Ma2LayoutService {
       const destination = executorPage ? await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor, this.isPlaying, recoveringCreation) : null;
       // With 'keep', SEQUENCE leaves its native export as importexport/tblink_library_<request id>.xml
       // on the console; the write guard and the backup use that file instead of uploading the XML again.
-      const remote = request.binding ? await bridge.exchange('SEQUENCE', target, 'keep') : null;
+      // When the song check confirmed the console still equals the saved baseline, that check's export
+      // is copied on the console instead, and the Sequence is not read over Telnet at all.
+      let remote: { response: string; requestId: string } | null = null;
+      if (request.binding && consoleBaseline) {
+        if (!/^tblink_watch_[a-f0-9]{16}$/.test(consoleBaseline)) throw new Error('歌曲复查基线文件名无效');
+        const requestId = randomBytes(16).toString('hex');
+        await this.call(connection, `${this.guard(layoutRequest)}local p=gma.show.getvar('PATH')..'/importexport/';local f=assert(io.open(p..'${consoleBaseline}.xml','rb'));local s=f:read('*a');f:close();local o=assert(io.open(p..'tblink_library_${requestId}.xml','wb'));o:write(s);o:close();return 'copied'`);
+        remote = { response: request.binding.baselineXml, requestId };
+      } else if (request.binding) remote = await bridge.exchange('SEQUENCE', target, 'keep');
       const remoteXml = remote?.response ?? null;
       const remoteExport = remote ? `tblink_library_${remote.requestId}` : null;
+      const labelBackups: string[] = [];
       // The saved project carries the console identity and the native three-way baseline.
       // A new installation/computer has no local ownership cache; validate that binding
       // instead of permanently rejecting every saved song.
@@ -311,6 +322,7 @@ export class Ma2LayoutService {
             heldSequenceName: plan.conflicts.some(conflict => conflict.field === 'sequence-name') }
         }]));
       };
+      let copiedOnConsole = false;
       if (changed && namesOnly) {
         progress('previews', 0, changes.length + 1, '同步歌曲与 Cue 名称');
         await checkpoint(remoteXml);
@@ -320,7 +332,7 @@ export class Ma2LayoutService {
         for (const change of names) {
           if (this.isPlaying()) throw new Error('播放已开始，后续名称尚未发送');
           const result = await renameMa2Object(bridge, { dataDirectory: '', network: request.network, generation: request.expectedSource.generation, change: { endpoint, show: directory.show, sequence: target, ...change } });
-          backupFile ||= result.backupFile;
+          backupFile ||= result.backupFile; labelBackups.push(result.backupFile);
           progress('previews', names.indexOf(change) + 1, names.length, `已回读${change.kind === 'sequence' ? '序列名称' : ` Cue ${change.cue} 名称`}`);
         }
       } else if (changed) {
@@ -336,13 +348,16 @@ export class Ma2LayoutService {
         // emptied Cue and a full clear have nothing on the console to copy, so they import the snapshot.
         const copyInPlace = remoteXml !== null && !clearing && plan.changes.every(change => !change.restore && (change.refs === undefined || change.refs.length > 0 && change.refs.every(ref => ref.sequence !== target)));
         const uploaded = nativeCopy ? editMa2SongSequence(emptyMa2SequenceXml(target, directory.version), plan.name, changes.map(change => ({ cue: change.cue, name: change.name, sources: [] })), []) : desired;
+        copiedOnConsole = copyInPlace;
         if (!copyInPlace) await this.prepareXml(connection, layoutRequest, file, uploaded, (completed, total) => progress('raw', completed, total, '传输歌曲结构'));
         const replacingAll = clearing && changes.length > 0;
         if (replacingAll) await this.prepareXml(connection, layoutRequest, `${file}_clear`, editMa2SongSequence(remoteXml, plan.name, [], plan.deletions));
         if (remoteExport) backupFile = `${remoteExport}.xml`;
         if (!executorPage && !beforeLayout) await this.prepareXml(connection, layoutRequest, `${file}_layout`, emptyMa2LayoutXml(layoutRequest.layout, directory.version));
         // The song's own Sequence is compared with its console export inside the write command below.
-        for (const [number, xml] of sources) if (Number(number) !== target && canonical(await bridge.request('SEQCUES', Number(number), sourceCues(Number(number)))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
+        // Copy takes each source Cue as the console holds it at that moment, so a source edited since
+        // it was read shows up in the read-back check below; only the uploaded snapshot reads it twice.
+        if (!copyInPlace) for (const [number, xml] of sources) if (Number(number) !== target && canonical(await bridge.request('SEQCUES', Number(number), sourceCues(Number(number)))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
         await checkpoint(remoteXml ?? uploaded, nativeCopy || copyInPlace ? ma2SongCreationStages(remoteXml ?? uploaded, changes) : undefined);
         const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${remoteExport}')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
         // Import /o can retain the previous native step table when a numbered
@@ -402,7 +417,13 @@ export class Ma2LayoutService {
         const actual = report.cues.find(cue => Number(cue.number) === Number(change.cue));
         const expected = expectedReport?.cues.find(cue => Number(cue.number) === Number(change.cue));
         const normalize = (value: Map<string, Record<string, string>>) => JSON.stringify([...value].sort(([a],[b]) => a.localeCompare(b)).map(([key,layers]) => [key,Object.entries(layers).sort(([a],[b]) => a.localeCompare(b))]));
-        if (!actual || !expected || actual.name !== change.name || normalize(actualData.get(actual.index)!) !== normalize(expectedData.get(expected.index)!)) throw new Error(`Cue ${change.cue} 内容或名称回读未通过`);
+        if (!actual || !expected || actual.name !== change.name) throw new Error(`Cue ${change.cue} 名称回读未通过`);
+        if (normalize(actualData.get(actual.index)!) !== normalize(expectedData.get(expected.index)!)) {
+          const refs = plan.changes.find(value => Number(value.cue) === Number(change.cue))?.refs ?? [];
+          throw new Error(copiedOnConsole && refs.length
+            ? `Cue ${change.cue} 的灯光内容与来源 ${refs.map(ref => `序列 ${ref.sequence} · Cue ${ref.cue}`).join(' + ')} 回读不一致：控台上的来源可能在同步期间被改过，请核对来源后重新同步`
+            : `Cue ${change.cue} 内容回读未通过`);
+        }
       }
       if (plan.deletions.some(number => actualHashes.has(number))) throw new Error('歌曲 Cue 删除回读未通过');
       const executor = executorPage ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, request.binding?.executor, this.isPlaying, recoveringCreation) : undefined;
@@ -420,6 +441,9 @@ export class Ma2LayoutService {
       if (changed || JSON.stringify(previousOwner?.binding) !== JSON.stringify(result.binding) || JSON.stringify(previousOwner?.conflicts ?? []) !== JSON.stringify(result.conflicts ?? [])) {
         await writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding: result.binding, conflicts: result.conflicts ?? [] }]));
       }
+      // The write-before export and any name backups join this Sequence's rotation once the sync is confirmed.
+      const backups = [...remoteExport ? [remoteExport] : [], ...labelBackups];
+      if (backups.length) await this.backups.record(rawBridge, { console: endpoint, object: `Sequence ${target}`, files: backups });
       return result;
     } catch (cause) { throw new Error(`${wrote ? `序列 ${target} 的写入结果待核对，原位置与备份 ${backupFile || '新建对象记录'} 已保留。` : ''}${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
     finally { clearTimeout(timer!); this.busy = false; }
