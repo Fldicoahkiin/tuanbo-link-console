@@ -15,7 +15,7 @@ import { MtcStabilityTracker } from './mtc-stability-tracker';
 import { ObsIpcExecutor } from './obs-ipc-executor';
 import { recordRuntimeAction, recordRuntimeOperator, reportCoordinatorError } from './runtime-action-log';
 import { RuntimeMidiSession } from './runtime-midi-session';
-import { appendMediaReport, appendRetryActionReport } from './runtime-report-store';
+import { appendMediaReport } from './runtime-report-store';
 import { applyRuntimeState, resetRuntimeExecutionView } from './runtime-state-application';
 import { P1AutoFollowController } from './p1-auto-follow-controller';
 import { internalSample } from './internal-timeline';
@@ -24,7 +24,7 @@ import { prepareInternalRuntime, prepareRuntimeArm } from './internal-runtime-pr
 import { prepareNativeCompanionRuntime } from './native-companion-preparation';
 import { InternalPreparationScope } from './internal-preparation-scope';
 import { EditorScenePreview } from './editor-scene-preview';
-import { executeTimelineMedia, executeTimelineWork, executeDueCues, synchronizeTimelineTransport, reportSkippedTimelineMedia, executeSkippedTimelineCue } from './timeline-work';
+import { executeTimelineMedia, executeTimelineWork, executeDueCues, synchronizeTimelineTransport, reportSkippedTimelineMedia, executeSkippedTimelineCue, retryReportedAction } from './timeline-work';
 
 export class LinkRuntimeCoordinator {
   private readonly runtime: CueRuntime;
@@ -267,15 +267,7 @@ export class LinkRuntimeCoordinator {
 
   async retryAction(cueId: string, actionId: string): Promise<void> {
     await this.recordOperatorActionAsync('重试失败或遗漏动作', { cueId, actionId });
-    const action = useRuntimeStore.getState().reports
-      .flatMap((report) => report.results)
-      .reverse()
-      .find((result) => result.cueId === cueId && result.actionId === actionId)?.action;
-    if (!action) throw new Error('重试目标动作不存在');
-    this.managedOutput.trackVisualActionAttempt(cueId, action); const result = await this.runner.retry(cueId, action);
-    this.managedOutput.applyRetriedVisualAction(cueId, action, result.status);
-    appendRetryActionReport(result, this.runtime.getMode());
-    if (result.status === 'failed') throw new Error(result.error ?? '动作重试失败');
+    await retryReportedAction(cueId, actionId, this.runner, this.managedOutput, this.runtime.getMode());
   }
 
   async retryManagedMedia(event: ManagedMediaEvent): Promise<void> {

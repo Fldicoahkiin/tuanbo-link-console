@@ -38,6 +38,19 @@ export async function synchronizeTimelineTransport(project: LinkProject, itemId:
   await execute(work.cues, project.playbackSource === 'internal' ? [] : work.media);
 }
 
+/** Operator retry of a failed or missed action, as last reported in this run. */
+export async function retryReportedAction(cueId: string, actionId: string, runner: CueActionRunner, managed: ManagedOutputRuntime, mode: PreflightMode): Promise<void> {
+  const action = useRuntimeStore.getState().reports
+    .flatMap((report) => report.results)
+    .reverse()
+    .find((result) => result.cueId === cueId && result.actionId === actionId)?.action;
+  if (!action) throw new Error('重试目标动作不存在');
+  managed.trackVisualActionAttempt(cueId, action); const result = await runner.retry(cueId, action);
+  managed.applyRetriedVisualAction(cueId, action, result.status);
+  appendRetryActionReport(result, mode);
+  if (result.status === 'failed') throw new Error(result.error ?? '动作重试失败');
+}
+
 export async function executeDueCues(cues: LinkCue[], runner: CueActionRunner, managed: ManagedOutputRuntime,
   mode: PreflightMode, canExecute: () => boolean, nextCueId: () => string | null): Promise<void> {
   for (const cue of cues) {
