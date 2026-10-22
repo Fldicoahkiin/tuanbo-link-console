@@ -47,12 +47,8 @@ function showFile(path: string, name = '原节目'): Promise<void> {
 
 async function openFile(app: ElectronApplication, page: Page, path: string): Promise<void> {
   await app.evaluate(({ dialog }, file) => { Reflect.set(dialog, 'showOpenDialog', () => Promise.resolve({ canceled: false, filePaths: [file] })); }, path);
-  const open = page.getByRole('button', { name: '打开工程', exact: true });
-  if (await open.isVisible()) await open.click();
-  else {
-    await page.locator('.project-file-menu > summary').click();
-    await page.getByRole('button', { name: '打开工程', exact: true }).click();
-  }
+  // Every test opens its file from the welcome screen of a fresh window.
+  await page.getByRole('button', { name: '打开工程', exact: true }).click();
 }
 
 async function renameProgram(page: Page, title: string): Promise<void> {
