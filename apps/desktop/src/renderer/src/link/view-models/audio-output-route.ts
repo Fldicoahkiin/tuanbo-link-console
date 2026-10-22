@@ -1,10 +1,11 @@
 import type { IntegrationProfile } from '@tb/schema';
 import { linkDesktopViewModel as desktop } from './link-desktop-view-model';
+import { chosenAudioEngine } from './internal-audio-engine';
 
 export async function assertAudioOutputAvailable(route: IntegrationProfile['internalPlayer']): Promise<void> {
-  if (route?.audioEngine === 'native') {
+  if (chosenAudioEngine(route) === 'native') {
     const devices = await desktop.getNativePlaybackDevices('audio');
-    const id = route.nativeAudioOutputDeviceId ?? 'default';
+    const id = route?.nativeAudioOutputDeviceId ?? 'default';
     if (!devices.audio.some(device => id === 'default' ? device.isDefault : device.id === id)) throw new Error('所选 Windows 原生播放设备不可用，请重新选择输出线路');
   } else {
     const devices = await navigator.mediaDevices.enumerateDevices();

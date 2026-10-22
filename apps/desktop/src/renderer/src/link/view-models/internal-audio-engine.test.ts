@@ -13,10 +13,12 @@ function profile(audioEngine: 'browser' | 'native' | undefined, mtcPort: boolean
   return value;
 }
 
-it('输出 MIDI 时间码时只用原生引擎：仍选浏览器引擎就开播前拒绝，不偷偷切换', () => {
-  const field = internalAudioEngine(profile(undefined, true), project());
-  expect(field).toMatchObject({ engine: 'browser', outputsMtc: true });
-  expect(field.blocked).toContain('请在“播放设置 › 高级音频 · 播放引擎”选择 Windows 原生音频');
+it('未单独设置引擎的档案默认用原生引擎；输出时间码时明确选了浏览器引擎就开播前拒绝，不偷偷切换', () => {
+  expect(internalAudioEngine(profile(undefined, true), project())).toEqual({ engine: 'native', outputsMtc: true, blocked: null });
+  expect(internalAudioEngine(profile(undefined, false), project())).toEqual({ engine: 'native', outputsMtc: false, blocked: null });
+  const chosen = internalAudioEngine(profile('browser', true), project());
+  expect(chosen).toMatchObject({ engine: 'browser', outputsMtc: true });
+  expect(chosen.blocked).toContain('请在“播放设置”点“改用 Windows 原生音频”后再播放');
   expect(internalAudioEngine(profile('browser', false), project('timecode')).blocked).not.toBeNull();
   const native = internalAudioEngine(profile('native', true), project('timecode'));
   expect(native).toEqual({ engine: 'native', outputsMtc: true, blocked: null });

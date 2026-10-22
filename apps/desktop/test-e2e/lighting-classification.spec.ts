@@ -25,14 +25,17 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
   let application = await launch();
   let page = await application.firstWindow(); const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
   const readSaved=async()=>parseLinkProject(JSON.parse(await page.evaluate(async path=>(await window.tbLink.openProjectDocument(path)).content,file)));
+  // This test owns the undo history; background music analysis has its own spec and needs the offline runtime.
+  const stubDialogAndAnalysis=()=>application.evaluate(({dialog,ipcMain},path)=>{
+    dialog.showOpenDialog=()=>Promise.resolve({canceled:false,filePaths:[path]});
+    ipcMain.removeHandler('link:automatic-music-status');
+    ipcMain.handle('link:automatic-music-status',()=>({version:1,available:false,device:'cpu',devices:['cpu'],reason:'分类编排验收不运行音乐分析',publication:'not-validated',jobs:[]}));
+  },file);
   try {
-    await application.evaluate(({dialog},path)=>{dialog.showOpenDialog=()=>Promise.resolve({canceled:false,filePaths:[path]});},file);
+    await stubDialogAndAnalysis();
     await page.getByRole('button',{name:'打开工程',exact:true}).click();
     await page.getByRole('navigation',{name:'主要工作区'}).getByRole('button',{name:'灯光工作台',exact:true}).click();
     await expect(page.locator('.timeline-shell')).toBeVisible();
-    // Analysis is a separate undoable operation; finish it before measuring
-    // classification edits so Undo targets the edit this scenario just made.
-    await expect.poll(async () => (await readSaved()).rundown[0]?.lighting?.musicAnalysis?.state, { timeout: 45000 }).toBe('ready');
     expect((await page.locator('.timeline-shell').boundingBox())!.height).toBeGreaterThan(100);
     const tabs=page.getByRole('navigation',{name:'灯光素材主菜单'});await tabs.getByRole('button',{name:'面光',exact:true}).click();
     await expect(tabs.getByRole('button')).toHaveText(['控台素材','面光','轮廓','效果','分类管理','新建分类']);
@@ -92,7 +95,7 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
     await page.getByRole('button',{name:'撤销',exact:true}).click();await page.keyboard.press('Control+s');
     await expect.poll(async()=>(await readSaved()).rundown[0]?.lighting?.tracks.flatMap(track=>track.clips.flatMap(clip=>clip.events)).length).toBe(originalCues);
     await application.close();application=await launch();page=await application.firstWindow();page.on('pageerror',error=>errors.push(error.message));
-    await application.evaluate(({dialog},path)=>{dialog.showOpenDialog=()=>Promise.resolve({canceled:false,filePaths:[path]});},file);
+    await stubDialogAndAnalysis();
     await page.getByRole('button',{name:'打开工程',exact:true}).click();
     await page.getByRole('navigation',{name:'主要工作区'}).getByRole('button',{name:'灯光工作台',exact:true}).click();
     await page.getByRole('navigation',{name:'灯光素材主菜单'}).getByRole('button',{name:'面光',exact:true}).click();

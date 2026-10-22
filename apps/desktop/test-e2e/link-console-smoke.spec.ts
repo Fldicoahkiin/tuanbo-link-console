@@ -2161,10 +2161,9 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '音频与 MIDI', exact: true }).click();
-  await expect(page.getByLabel('正式播放引擎', { exact: true })).toBeHidden();
-  await page.getByText('高级音频 · 播放引擎', { exact: true }).click();
-  await expect(page.locator('.player-connections select:visible')).toHaveCount(4);
-  await expect(page.getByLabel('正式播放引擎', { exact: true })).toBeVisible();
+  await expect(page.getByText(/当前播放引擎：Windows 原生音频/)).toBeVisible();
+  await expect(page.getByLabel('正式播放引擎', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.player-connections select:visible')).toHaveCount(3);
   await expect(page.getByLabel('灯光 MIDI 输出')).toBeVisible();
   await expect(page.getByLabel('音乐监听设备')).toBeVisible();
   await page.getByLabel('音频采样率').selectOption('44100');

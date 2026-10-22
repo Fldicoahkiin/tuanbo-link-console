@@ -4,6 +4,7 @@ import { useIntegrationStore } from './stores/integration-store';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 import { prepareLoopMidi } from './view-models/loop-midi';
 import { readNativeDevices } from './view-models/midi-device-inventory';
+import { chosenAudioEngine } from './view-models/internal-audio-engine';
 
 type ObsSnapshot = Awaited<ReturnType<typeof linkDesktopViewModel.getObsSnapshot>>;
 type ProcessSnapshots = Awaited<ReturnType<typeof linkDesktopViewModel.getExternalSnapshots>>;
@@ -20,7 +21,7 @@ export function initializeStartupDevices(
     void linkDesktopViewModel.recordLog({ level: 'warning', category: 'device', device, message }).catch(console.error);
   };
   void prepareLoopMidi(profile).catch(error => warn('midi', '启动时虚拟 MIDI 未就绪', error));
-  if (profile.internalPlayer?.audioEngine === 'native') {
+  if (chosenAudioEngine(profile.internalPlayer) === 'native') {
     void readNativeDevices().catch(error => warn('midi', '启动时 Windows MIDI 设备读取失败', error));
   }
   void linkDesktopViewModel.refreshExternalApplication('p1')

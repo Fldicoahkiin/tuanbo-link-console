@@ -130,6 +130,8 @@ it('onPC 启动失败即停止：不登录控台、不启动 MA 3D，之前的 O
 beforeEach(() => {
   vi.resetAllMocks();
   api.checkNativeMidiOutput.mockResolvedValue();
+  // Profiles without an engine choice play with Windows native audio.
+  api.getNativePlaybackDevices.mockResolvedValue({ protocol: 4, audio: [{ id: 'native-default', name: '默认播放设备', isDefault: true }], midiOutputs: [] });
   useIntegrationStore.getState().setNativeDevices(null, null);
   useConnectionCheckStore.setState({ running: false, checks: {}, pending: [], completed: 0, total: 0 });
   useIntegrationStore.getState().setObs({ status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null });

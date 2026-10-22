@@ -13,7 +13,7 @@ import { useRuntimeStore } from '../stores/runtime-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { midiOutputInventory, readNativeDevices } from '../view-models/midi-device-inventory';
-import { internalAudioEngine, internalAudioEngineLabel } from '../view-models/internal-audio-engine';
+import { chosenAudioEngine, internalAudioEngine, internalAudioEngineLabel } from '../view-models/internal-audio-engine';
 
 import { ImportPlayerMusic } from './ImportPlayerMusic';
 import { PlayerStatusDetails } from './PlayerStatusDetails';
@@ -77,7 +77,7 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
   const inputs = ports.filter(port => port.direction === 'input' && port.state === 'connected').map(port => port.name);
   const [devices, setDevices] = useState<{ deviceId: string; label: string }[]>([]);
   const project = useDocumentStore((state) => state.project);
-  const engine = profile?.internalPlayer?.audioEngine ?? 'browser', choice = internalAudioEngine(profile, project);
+  const engine = chosenAudioEngine(profile?.internalPlayer), choice = internalAudioEngine(profile, project);
   const [savedField, setSavedField] = useState('');
   const [error, setError] = useState('');
   useEffect(() => { if (!savedField) return; const timer = setTimeout(() => setSavedField(''), 2000); return () => clearTimeout(timer); }, [savedField]);
@@ -141,7 +141,7 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
     <p className="settings-note">替代 P1 播放时，请先完全退出 P1，避免占用同一 MIDI 接口，再刷新端口。</p>
     {inventory.windowsOnly.length ? <p className="settings-note">标注“Windows 原生”的接口可直接选择，将使用 Windows 原生音频与 MIDI 播放。选择后点击“一键连接”检查接口。</p> : null}
     {nativeError ? <p className="device-error" role="status">Windows 设备检测失败：{nativeError}</p> : null}
-    <details className="settings-disclosure" open={choice.blocked !== null || undefined}><summary>高级音频 · 播放引擎</summary>    <label><span>播放引擎</span><select aria-label="正式播放引擎" disabled={disabled || saving} value={engine} onChange={event => void chooseEngine(event.currentTarget.value === 'native' ? 'native' : 'browser')}><option value="browser" disabled={choice.outputsMtc && engine === 'native'}>{choice.outputsMtc ? '浏览器音频（输出 MIDI 时间码时不可用）' : '浏览器音频（对照）'}</option><option value="native">Windows 原生音频（验收中）</option></select></label></details>
+    {engine === 'browser' ? <><p className="settings-note">这份配置还在用旧的浏览器音频播放。</p><Button className="secondary-button" disabled={disabled || saving} onClick={() => void chooseEngine('native')}>改用 Windows 原生音频</Button></> : null}
     <details className="settings-disclosure"><summary>远程控制与灯光动作端口</summary><div className="player-connections">
     <label><span>远程播放输入</span><select aria-label="播放控制 MIDI 输入" disabled={disabled || saving} value={inputName} onChange={(event) => void save(port, chosenOutput, event.currentTarget.value)}><option value="">关闭远程播放控制</option>{[...new Set([...inputs, ...(inputName ? [inputName] : [])])].map((name) => <option key={name} value={name}>{name}{!inputs.includes(name) ? '（当前不可用）' : ''}</option>)}</select>{savedField === 'remote' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
     {children}</div></details>

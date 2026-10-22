@@ -14,6 +14,9 @@ import { ObsMediaPreload } from './obs-media-preload';
 import { obsMediaDecodeTargets } from './obs-media-decode';
 import { obsMediaCachePaths } from './obs-media-paths';
 
+/** A picture preparation superseded by another song or a stop; not a failed output. */
+export class ObsPreparationCancelled extends Error {}
+
 export type NativeObsOutputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault'> & {
   preloadResources: (assertCurrent: () => void, phase?: 'idle' | 'playback' | 'background') => Promise<void>;
 };
@@ -126,7 +129,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
               itemId: request.snapshot.item.id, message: `素材准备完成：${asset.name}`, result: 'succeeded',
               details: { assetId: asset.id, hardwareDecode, elapsedMs: performance.now() - assetStarted, timings } });
           } catch (error) {
-            await logger.record({ level: 'error', category: 'preflight', device: '后台画面', projectId: project.projectId,
+            if (!(error instanceof ObsPreparationCancelled)) await logger.record({ level: 'error', category: 'preflight', device: '后台画面', projectId: project.projectId,
               itemId: request.snapshot.item.id, message: `素材准备未完成：${asset.name}`, result: 'failed',
               details: { assetId: asset.id, phase, elapsedMs: performance.now() - assetStarted, timings,
                 error: error instanceof Error ? error.message : String(error) } });

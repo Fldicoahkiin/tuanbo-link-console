@@ -89,17 +89,12 @@ it('播放中画面通道的直播故障显示为输出异常，音频继续；�
   await player.dispose();
 });
 
-it('时间码短暂中断显示为输出异常，音频与时间码继续；同一次数不重复提示', async () => {
+it('时间码短暂中断和 P1 一样按整帧继续，不标红；音频与时间码继续', async () => {
   const f = fixture();
   await f.player.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', fault: null });
-  f.emit({ mtcInterruptions: 1 });
-  expect(f.state()).toMatchObject({ status: 'playing', mtcConnectionFailed: false });
-  expect(f.state().fault).toContain('时间码中断 1 次');
-  f.emit({ positionMs: 2000 });
-  expect(f.state().fault).toContain('时间码中断 1 次');
-  f.emit({ mtcInterruptions: 2 });
-  expect(f.state().fault).toContain('时间码中断 2 次');
+  f.emit({ mtcInterruptions: 1 }); f.emit({ positionMs: 2000 }); f.emit({ mtcInterruptions: 2 });
+  expect(f.state()).toMatchObject({ status: 'playing', mtcConnectionFailed: false, fault: null });
   await f.player.dispose();
 });
 
@@ -147,6 +142,16 @@ it('选择节目提前预备画面且不出声；重复选择不重做，播放�
   await f.player.play('song-0'); f.player.preloadSelected('song-1');
   expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(1);
   await f.player.stop(); expect(f.api.cancelNativeObsPreload).toHaveBeenCalledTimes(1);
+  await f.player.dispose();
+});
+
+it('播放另一首时后台丢弃预选节目的画面预备，这是正常切换，不提示“节目画面预备未完成”', async () => {
+  const f = fixture(); f.project.obsOutputMode = 'scenes';
+  let cancel: (error: Error) => void = () => { throw new Error('预备未开始'); };
+  f.api.preloadNativeObs.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { cancel = reject; }));
+  f.player.preloadSelected('song-1');
+  await f.player.play('song-0'); cancel(new Error('节目预备已取消')); await Promise.resolve(); await Promise.resolve();
+  expect(f.state().notice ?? '').not.toContain('节目画面预备未完成');
   await f.player.dispose();
 });
 

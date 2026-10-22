@@ -1,12 +1,12 @@
 import type { IntegrationProfile, LinkProject } from '@tb/schema';
 import { collectCueMidiOutputProfileIds, collectLightingOutputProfileIds } from '@tb/core/link';
-import { projectOutputsMtc } from './internal-audio-engine';
+import { chosenAudioEngine, projectOutputsMtc } from './internal-audio-engine';
 
 export type MidiConnectionTarget = { id: string; name: string; direction: 'input' | 'output'; required: boolean };
 
 /** Native playback owns every output port; inputs still use the Web MIDI monitor. */
 export function usesNativeMidiOutput(profile: IntegrationProfile | null, project: LinkProject | null, direction: 'input' | 'output'): boolean {
-  return direction === 'output' && profile?.internalPlayer?.audioEngine === 'native' && (!project || project.playbackSource === 'internal');
+  return direction === 'output' && chosenAudioEngine(profile?.internalPlayer) === 'native' && (!project || project.playbackSource === 'internal');
 }
 
 /** Every configured port and every port referenced by the show must remain visible. */

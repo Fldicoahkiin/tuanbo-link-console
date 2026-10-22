@@ -81,6 +81,8 @@ export class NativeProgramPlayer {
 
   play(itemId: string, positionMs?: number, paused = false): Promise<void> {
     const config = this.dependencies.configuration(), token = ++this.epoch;
+    // The service discards another song's preselected picture for this play; that is not a failure.
+    if (this.selectedPreload?.itemId !== itemId) this.selectedPreload = null;
     this.mtcSuppressed = !this.state.mtcEnabled;
     const reuseSession = itemId === this.state.itemId && ['playing', 'paused'].includes(this.state.status);
     if (this.state.itemId !== itemId && this.state.status === 'playing') this.markPlayed();
@@ -248,9 +250,8 @@ export class NativeProgramPlayer {
 
   private receive(status: NativePlayerStatus): void {
     if (this.disposed || status.sessionId !== this.sessionId || status.generation !== this.nativeGeneration) return;
-    const interrupted = status.mtcInterruptions > (this.native?.sessionId === status.sessionId ? this.native.mtcInterruptions : 0);
+    // Like P1, an interrupted timecode resumes with a full frame; the service logs it, nothing turns red.
     this.native = status;
-    if (interrupted) this.reportFault(`时间码中断 ${status.mtcInterruptions} 次：迟到部分未补发，已按音频位置整帧重新同步，控台会跳到当前位置`);
     if (status.mtcError && !this.state.fault?.includes(status.mtcError)) this.startFault(`时间码未参与：${status.mtcError}；音频继续播放。`);
     this.update({ mtcConnectionFailed: Boolean(status.mtcError), mtcPortName: status.mtcError ? null : status.mtcPortName,
       mtcSentPositionMs: status.mtcPortName && !status.mtcError && status.mtcSent ? status.offsetMs + status.positionMs : null });
