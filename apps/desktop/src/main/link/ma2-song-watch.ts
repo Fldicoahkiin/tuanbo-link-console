@@ -31,7 +31,9 @@ export class Ma2SongWatch {
     };
     const same = async (): Promise<boolean> => {
       await capture('_check');
-      return await runMa2GuardedLua(connection, `${guard}${read}return r('${file}')==r('${file}_check')${request.executor ? ` and r('${file}_exec')==r('${file}_check_exec')` : ''}`, stopped) === 'true';
+      // The baseline export stays for the next check; the check exports are removed once compared.
+      const remove = (name: string): string => `os.remove(gma.show.getvar('PATH')..'/importexport/${name}.xml');`;
+      return await runMa2GuardedLua(connection, `${guard}${read}local same=r('${file}')==r('${file}_check')${request.executor ? ` and r('${file}_exec')==r('${file}_check_exec')` : ''};${remove(`${file}_check`)}${request.executor ? remove(`${file}_check_exec`) : ''}return same`, stopped) === 'true';
     };
     try {
       if (cached) {

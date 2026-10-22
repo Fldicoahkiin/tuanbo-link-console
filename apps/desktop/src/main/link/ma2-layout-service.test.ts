@@ -102,7 +102,7 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     }
     const requestId = randomUUID().replaceAll('-', '');
     if (operation === 'LISTSEQ') return Promise.resolve({ requestId, response: JSON.stringify({ ...source, entries: [...sequences.keys()].map(number => ({ target: number, name: `S${number}` })) }) });
-    if (operation === 'SEQUENCE') { const xml = sequences.get(target)!; files.set(`tblink_library_${requestId}`, Buffer.from(xml)); return Promise.resolve({ requestId, response: xml }); }
+    if (operation === 'SEQUENCE') { const xml = sequences.get(target)!; if (expected === 'keep') files.set(`tblink_library_${requestId}`, Buffer.from(xml)); return Promise.resolve({ requestId, response: xml }); }
     if (operation === 'SEQCUES') {
       const xml = sequences.get(target)!; files.set(`tblink_library_${requestId}`, Buffer.from(xml));
       const wanted = new Set(expected!.split(',').map(Number));
@@ -156,7 +156,7 @@ it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份�
   expect(result.backupFile).toMatch(/^tblink_library_[a-f0-9]{32}\.xml$/);
   expect(fake.files.has(result.backupFile.replace(/\.xml$/, ''))).toBe(true);
   expect(fake.lines.every(line => Buffer.byteLength(line) <= 900)).toBe(true);
-  expect(fake.lines.length).toBeLessThanOrEqual(60); expect(fake.writers.size).toBe(0);
+  expect(fake.lines.length).toBeLessThanOrEqual(64); expect(fake.writers.size).toBe(0);
   expect(fake.ops.filter(op => op.startsWith('SEQUENCE ') && op !== 'SEQUENCE 9000')).toEqual([]);
   expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(2);
 });
