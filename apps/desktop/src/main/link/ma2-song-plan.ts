@@ -1,4 +1,5 @@
 import type { Ma2SongConflict, Ma2SongSyncRequest } from '@tb/schema';
+import { consoleLabelText, toConsoleLabel } from '@tb/core/link';
 import { createHash } from 'node:crypto';
 import { editMa2SongSequence, inspectMa2SequenceXml, ma2SequenceCueFingerprints } from './ma2-timecode-xml';
 
@@ -25,12 +26,17 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
     conflicts.push({ ...value, token }); return undefined;
   };
   const describe = (refs: Ma2SongSyncRequest['points'][number]['cues']): string => refs.length ? refs.map(ref => `序列 ${ref.sequence} · Cue ${ref.cue}`).join(' + ') : '空 Cue';
+  // Names are written as pinyin. A Chinese name an earlier version wrote still counts as equal,
+  // so nothing on the console is renamed until the operator asks for rewriteLegacyNames.
+  const sameName = (local: string, console: string | null | undefined): boolean => (console ?? '') === consoleLabelText(local) || !request.rewriteLegacyNames && (console ?? '') === local;
+  const written = (local: string): string => local ? toConsoleLabel(local) : '';
   let name = request.name;
   if (base && remote && remote.name !== base.name) {
-    const decision = request.name !== base.name && request.name !== remote.name
+    const decision = !sameName(request.name, base.name) && !sameName(request.name, remote.name)
       ? conflict({ key: 'sequence-name', field: 'sequence-name', baseline: base.name ?? '', local: request.name, console: remote.name ?? '' }, [base.name, remote.name]) : 'console';
     name = decision === 'local' ? request.name : remote.name || request.name;
   }
+  name = remote?.name && sameName(name, remote.name) ? remote.name : toConsoleLabel(name);
   for (const point of request.points) {
     if (point.cues.some(cue => cue.delayMs !== 0)) throw new Error(`“${point.name || '未命名 Cue'}”包含延迟，不能压成控台单步；请先拆为时间线点位`);
     const old = binding?.points.find(value => value.id === point.id);
@@ -39,13 +45,13 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
     const self = point.cues.length === 1 && point.cues[0]?.sequence === target;
     const restore = old && restoredCues.includes(old.cue);
     let contentChanged = old ? restore || !self || Number(point.cues[0]?.cue) !== Number(old.cue) : true;
-    let nameChanged = old ? point.name !== (baseCue?.name ?? '') : true;
+    let nameChanged = old ? !sameName(point.name, baseCue?.name) : true;
     if (old && !remoteCue) {
       const decision = contentChanged || nameChanged ? conflict({ key: `${point.id}:cue-removed`, field: 'cue-removed', pointId: point.id, cue: old.cue,
         baseline: baseCue?.name ?? `Cue ${old.cue}`, local: `${point.name} · ${describe(point.cues)}`, console: '控台已删除' }, [baseHashes.get(old.cue), point]) : 'console';
       if (decision === 'console') { removed.push(point.id); continue; }
       points.push(old);
-      if (decision === 'local') changes.push({ cue: old.cue, name: point.name || `Cue ${Number(old.cue)}`, refs: point.cues, ...(!contentChanged || restore ? { restore: true } : {}) });
+      if (decision === 'local') changes.push({ cue: old.cue, name: written(point.name) || `Cue ${Number(old.cue)}`, refs: point.cues, ...(!contentChanged || restore ? { restore: true } : {}) });
       continue;
     }
     if (old && contentChanged && baseContent.get(old.cue) !== remoteContent.get(old.cue)) {
@@ -54,7 +60,7 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
       [baseContent.get(old.cue), remoteContent.get(old.cue), point.cues]);
       if (decision !== 'local') contentChanged = false;
     }
-    if (old && nameChanged && remoteCue?.name !== baseCue?.name && point.name !== remoteCue?.name) {
+    if (old && nameChanged && remoteCue?.name !== baseCue?.name && !sameName(point.name, remoteCue?.name)) {
       const decision = conflict({ key: `${point.id}:cue-name`, field: 'cue-name', pointId: point.id, cue: old.cue,
         baseline: baseCue?.name ?? '', local: point.name, console: remoteCue?.name ?? '' }, [baseCue?.name, remoteCue?.name]);
       if (decision !== 'local') nameChanged = false;
@@ -66,7 +72,7 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
     if (points.some(value => Number(value.cue) === Number(number))) throw new Error('同一控台 Cue 已对应另一个时间线点位');
     points.push({ id: point.id, cue: number });
     if (adopted) continue;
-    if (contentChanged || nameChanged) changes.push({ cue: number, name: nameChanged ? point.name || remoteCue?.name || `Cue ${Number(number)}` : remoteCue?.name || point.name || `Cue ${Number(number)}`, ...(contentChanged ? { refs: point.cues, ...(restore ? { restore: true } : {}) } : {}) });
+    if (contentChanged || nameChanged) changes.push({ cue: number, name: nameChanged ? written(point.name) || remoteCue?.name || `Cue ${Number(number)}` : remoteCue?.name || written(point.name) || `Cue ${Number(number)}`, ...(contentChanged ? { refs: point.cues, ...(restore ? { restore: true } : {}) } : {}) });
   }
   for (const old of binding?.points ?? []) if (!request.points.some(value => value.id === old.id) && remoteHashes.has(old.cue)) {
     const confirmed = request.confirmedDeletions?.some(cue => Number(cue) === Number(old.cue)) && baseHashes.get(old.cue) === remoteHashes.get(old.cue);

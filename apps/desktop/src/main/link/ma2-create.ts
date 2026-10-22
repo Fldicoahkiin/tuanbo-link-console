@@ -2,6 +2,7 @@ import { DOMImplementation, XMLSerializer } from '@xmldom/xmldom';
 import { type Ma2TimecodePreview } from '@tb/schema';
 import { convertMa2Timecode } from './ma2-timecode-conversion';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
+import { toConsoleLabel } from '@tb/core/link';
 
 export function createMa2TimecodeXml(target: number, name: string, version: string): string {
   if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号应为 1–99999');
@@ -21,7 +22,7 @@ export function createMa2TimecodeXml(target: number, name: string, version: stri
 
 export async function createMa2Timecode(bridge: Pick<Ma2OnpcBridge, 'request'>, target: number, name: string): Promise<Ma2TimecodePreview> {
   const version = await bridge.request('PING', target);
-  const xml = createMa2TimecodeXml(target, name, version);
+  const xml = createMa2TimecodeXml(target, toConsoleLabel(name), version);
   const confirmed = await bridge.request('CREATE', target, '', xml);
   return convertMa2Timecode(confirmed, [], target);
 }

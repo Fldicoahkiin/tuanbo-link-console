@@ -4,15 +4,16 @@ import { convertMa2Timecode } from './ma2-timecode-conversion';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { inspectMa2TimecodeXml } from './ma2-timecode-xml';
 
-it('生成空 Timecode，名称转义且拒绝未验证版本和目标', async () => {
+it('生成空 Timecode，名称转义且拒绝未验证版本和目标；写入控台的中文名称为拼音', async () => {
   const xml = createMa2TimecodeXml(9903, 'TBLINK & <测试>', '3.3.4.3');
   expect(convertMa2Timecode(xml, [], 9903)).toMatchObject({ name: 'TBLINK & <测试>', document: { tracks: [] }, unconverted: [] });
   expect(() => createMa2TimecodeXml(0, '测试', '3.3.4.3')).toThrow('编号');
   expect(() => createMa2TimecodeXml(1, '', '3.3.4.3')).toThrow('名称');
   expect(() => createMa2TimecodeXml(1, '测试', '3.9.60')).toThrow('版本');
-  const request = vi.fn().mockResolvedValueOnce('3.3.4.3').mockResolvedValueOnce(xml);
-  expect(await createMa2Timecode({ request }, 9903, 'TBLINK & <测试>')).toMatchObject({ target: 9903 });
-  expect(request.mock.calls[1]).toEqual(['CREATE', 9903, '', xml]);
+  const written = createMa2TimecodeXml(9903, 'TBLINK & <CeShi>', '3.3.4.3');
+  const request = vi.fn().mockResolvedValueOnce('3.3.4.3').mockResolvedValueOnce(written);
+  expect(await createMa2Timecode({ request }, 9903, 'TBLINK & <测试>')).toMatchObject({ target: 9903, name: 'TBLINK & <CeShi>' });
+  expect(request.mock.calls[1]).toEqual(['CREATE', 9903, '', written]);
 });
 
 it.skipIf(!process.env.MA2_ONPC_CREATE_TARGET)('新建专用 Timecode 回读确认，重复创建拒绝覆盖', async () => {

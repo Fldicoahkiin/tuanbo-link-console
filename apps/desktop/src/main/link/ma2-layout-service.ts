@@ -11,6 +11,7 @@ import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { emptyMa2SequenceXml, emptyMa2LayoutXml, inspectMa2LayoutXml, inspectMa2SequenceXml, resolveMa2CueNumber, inspectMa2CueData } from './ma2-timecode-xml';
 import { readMa2EffectLibrary } from './ma2-effect-library';
+import { toConsoleLabel } from '@tb/core/link';
 import { writeFileAtomically } from './atomic-file';
 import { renameMa2Object } from './ma2-rename-service';
 import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor';
@@ -108,6 +109,7 @@ export class Ma2LayoutService {
 
   async update(connection: Connection, bridge: Bridge, input: Ma2LayoutUpdateRequest): Promise<Ma2LayoutSnapshot> {
     const request = ma2LayoutUpdateRequestSchema.parse(input);
+    if (request.name !== undefined) request.name = toConsoleLabel(request.name);
     if (this.busy || this.isPlaying()) throw new Error('请停止播放并等待当前控台操作完成');
     this.busy = true; let backup = '';
     try {
@@ -134,6 +136,8 @@ export class Ma2LayoutService {
 
   async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal): Promise<Ma2SongSyncResult> {
     const request = ma2SongSyncRequestSchema.parse(input);
+    // The plan converts the song and Cue names it writes; the Layout name is only ever written.
+    request.settings.name = toConsoleLabel(request.settings.name);
     const originalPoints = structuredClone(request.points);
     if (this.busy || this.isPlaying()) throw new Error('请停止播放并等待当前控台操作完成');
     if (this.attempted.has(request.requestId)) throw new Error('此请求已执行，请先回读核对');
@@ -409,6 +413,7 @@ export class Ma2LayoutService {
 
   async create(connection: Connection, bridge: Bridge, input: Ma2NewCueRequest): Promise<Ma2NewCueResult> {
     const request = ma2NewCueRequestSchema.parse(input);
+    request.name = toConsoleLabel(request.name); request.settings.name = toConsoleLabel(request.settings.name);
     if (this.busy || this.isPlaying()) throw new Error('请停止播放并等待当前控台操作完成');
     if (this.attempted.has(request.requestId)) throw new Error('此新建请求已经执行过，请读取控台核对结果');
     this.busy = true;

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { toConsoleLabel } from '@tb/core/link';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ma2ExecutorUpdateRequestSchema, ma2ExecutorUpdateResultSchema, type Ma2ExecutorPage, type Ma2ExecutorUpdateRequest, type Ma2ExecutorUpdateResult } from '@tb/schema';
@@ -31,7 +32,7 @@ export class Ma2ExecutorMutationService {
       if (!source.source || Object.entries(request.expectedSource).some(([key, value]) => Reflect.get(source.source!, key) !== value)) throw new Error('控台 Show 或连接会话已变化，请重新读取此页');
       const item = source.items.find(value => value.slot === request.slot);
       if (!item || !request.expectedItem.revision || identity(item) !== identity(request.expectedItem)) throw new Error(`执行器 ${sourceAddress} 已变化，请读取此页后再修改`);
-      const action = request.action;
+      const action = request.action.kind === 'rename' ? { ...request.action, name: toConsoleLabel(request.action.name) } : request.action;
       if (action.kind === 'move' && action.page === request.page && action.slot === request.slot) throw new Error('目标与原位置相同，无需移动');
       const base = { network: request.network, expectedSource: request.expectedSource };
       const destinationPage = action.kind === 'move' ? action.page : request.page;

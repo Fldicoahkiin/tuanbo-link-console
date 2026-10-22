@@ -1,5 +1,5 @@
 import type { LightingDocument, LinkProject } from '@tb/schema';
-import { consoleCueKey, pendingMa2Renames, projectLightingLibrary } from '@tb/core/link';
+import { consoleCueKey, consoleLabelText, projectLightingLibrary } from '@tb/core/link';
 
 export type LibrarySequence = { sequence: number; name: string | null; originalName?: string | null; renamedName?: string | undefined; cues: { number: string; name: string | null; originalName?: string | null; renamedName?: string | undefined }[]; complete: boolean };
 
@@ -55,14 +55,20 @@ export function ma2SequenceLibrary(project: LinkProject | null, document: Lighti
     entry.cues.sort((a, b) => Number(a.number) - Number(b.number)); catalog.set(stamp.sequence, entry);
   }
   const names=new Map<string,string>();
-  const renames = library && saved ? pendingMa2Renames(project).filter(change => change.endpoint === saved.source && change.show === library.directory.show) : [];
+  const records = library && saved ? (project?.ma2MaterialLibrary?.userLibrary?.consoleRenames ?? []).filter(change => change.endpoint === saved.source && change.show === library.directory.show) : [];
+  // A pending rename shows its new name; a confirmed one keeps its Chinese name while the console still holds its pinyin.
+  const renamedName = (record: (typeof records)[number] | undefined, consoleName: string | null): string | undefined => {
+    if (!record) return undefined;
+    const label = consoleLabelText(record.name);
+    return label !== record.confirmedName || label === (consoleName ?? '') ? record.name : undefined;
+  };
   if(project&&saved&&library) for(const entry of projectLightingLibrary(project).entries){
     const ref=entry.track.cueStamp;
     if(ref?.mode==='fixed'&&ref.executor===''&&entry.kind!=='combination'&&entry.name!==entry.originalName&&entry.source.endpoint===saved.source&&entry.source.show===library.directory.show) names.set(consoleCueKey({...ref,kind:entry.kind}),entry.name);
   }
   return [...catalog.values()].sort((a, b) => a.sequence - b.sequence).map(sequence=>{
-    const cues=sequence.cues.map(cue=>({...cue,originalName:cue.name,name:names.get(consoleCueKey({sequence:sequence.sequence,cue:cue.number,kind:'single'}))??cue.name, renamedName: renames.find(change => change.kind === 'single' && change.sequence === sequence.sequence && Number(change.cue) === Number(cue.number))?.name}));
+    const cues=sequence.cues.map(cue=>({...cue,originalName:cue.name,name:names.get(consoleCueKey({sequence:sequence.sequence,cue:cue.number,kind:'single'}))??cue.name, renamedName: renamedName(records.find(change => change.kind === 'single' && change.sequence === sequence.sequence && Number(change.cue) === Number(cue.number)), cue.name)}));
     const sequenceName=sequence.cues.flatMap(cue=>names.get(consoleCueKey({sequence:sequence.sequence,cue:cue.number,kind:'sequence'}))??[])[0];
-    return {...sequence,originalName:sequence.name,name:sequenceName??(cues.length===1&&cues[0]!.name!==cues[0]!.originalName?cues[0]!.name:sequence.name),renamedName: renames.find(change => change.kind === 'sequence' && change.sequence === sequence.sequence)?.name,cues};
+    return {...sequence,originalName:sequence.name,name:sequenceName??(cues.length===1&&cues[0]!.name!==cues[0]!.originalName?cues[0]!.name:sequence.name),renamedName: renamedName(records.find(change => change.kind === 'sequence' && change.sequence === sequence.sequence), sequence.name),cues};
   });
 }

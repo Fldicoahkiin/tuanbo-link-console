@@ -1098,7 +1098,11 @@ function registerIpc(
     }
     return destination;
   });
-  handle('link:project-archives', (_event, payload: unknown) => projectArchives(payload, projectDocuments, path => shell.showItemInFolder(path)));
+  // A failed trim leaves the extra archive in place and is logged; it never blocks the sync that archived.
+  handle('link:project-archives', (_event, payload: unknown) => projectArchives(payload, projectDocuments, path => shell.showItemInFolder(path), async path => {
+    try { await shell.trashItem(path); }
+    catch (error) { await logger.record({ level: 'warning', category: 'system', message: '自动存档超出保留数量，移到回收站未完成', details: { path, error: error instanceof Error ? error.message : String(error) } }); }
+  }));
   handle('link:import-reference-audio', async (_event, payloadValue: unknown) => {
     const payload = linkReferenceAudioImportPayloadSchema.parse(payloadValue);
     return projectService.importReferenceAudio(payload.projectPath, payload.sourcePath, payload.durationMs);

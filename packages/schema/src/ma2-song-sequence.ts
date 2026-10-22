@@ -24,7 +24,9 @@ export const ma2SongSyncRequestSchema = z.object({ network: ma2NetworkTargetSche
   settings: ma2LayoutSettingsSchema, name: ma2LabelSchema, points: z.array(ma2SongPointSchema).max(9999), binding: ma2SongBindingSchema.optional(),
   progressId: z.string().uuid().optional(),
   confirmedDeletions: z.array(cueNumber).max(9999).optional(),
-  conflictResolutions: z.array(ma2SongConflictResolutionSchema).max(30000).optional()
+  conflictResolutions: z.array(ma2SongConflictResolutionSchema).max(30000).optional(),
+  /** Explicit operator request: rewrite names the app once wrote in Chinese as their pinyin. */
+  rewriteLegacyNames: z.boolean().optional()
 }).strict().superRefine((value, ctx) => {
   if (!value.points.length && !value.binding) ctx.addIssue({ code: 'custom', message: '新歌曲需先添加 Cue；已绑定歌曲可以核对后清空' });
   if (new Set(value.points.map(point => point.id)).size !== value.points.length) ctx.addIssue({ code: 'custom', message: '歌曲 Cue 身份重复' });

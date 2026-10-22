@@ -124,7 +124,8 @@ function boundSong() {
   const points = Array.from({ length: 8 }, (_, index) => ({ id: `point-${index}`, name: `段落 ${index + 1}`, atMs: index * 1000, cues: [] as Ma2SongSyncRequest['points'][number]['cues'] }));
   const base: Ma2SongSyncRequest = { ...songRequest(), points };
   const plan = planMa2SongSync(base, null);
-  const xml = editMa2SongSequence(emptyMa2SequenceXml(9000, '3.7.0.5'), base.name, plan.changes.map(value => ({ ...value, sources: [] })), []);
+  // A song an earlier version wrote: its Sequence and Cue names are still the Chinese originals.
+  const xml = editMa2SongSequence(emptyMa2SequenceXml(9000, '3.7.0.5'), base.name, plan.points.map((point, index) => ({ cue: point.cue, name: points[index]!.name, sources: [] })), []);
   const song: Ma2SongSyncRequest = { ...base, binding: { endpoint: '192.0.2.1:30000', show: source.show, layout: null, executor: '1000.101', sequence: 9000, name: base.name, baselineXml: xml, points: plan.points },
     points: points.map((point, index) => ({ ...point, cues: index === 0 ? [{ sequence: sourceNumber, cue: '1.000', delayMs: 0 }] : [{ sequence: 9000, cue: plan.points[index]!.cue, delayMs: 0 }] })) };
   return { song, sourceNumber, sequences: new Map([[9000, xml], [sourceNumber, attributes]]) };
@@ -158,4 +159,36 @@ it('已绑定歌曲换一个 Cue 的内容：控台已有的序列不再整份�
   expect(fake.lines.length).toBeLessThanOrEqual(60); expect(fake.writers.size).toBe(0);
   expect(fake.ops.filter(op => op.startsWith('SEQUENCE ') && op !== 'SEQUENCE 9000')).toEqual([]);
   expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(2);
+});
+it('控台上已有的中文名默认不改写：只换一个 Cue 的内容时其余名称保持原样', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false);
+  const result = await service.syncSong(fake.connection, fake.bridge, song);
+  const written = inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!;
+  expect(written.name).toBe('歌曲');
+  expect(written.cues.map(cue => cue.name)).toEqual(Array.from({ length: 8 }, (_, index) => `段落 ${index + 1}`));
+  const again = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: result.binding,
+    points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: result.binding.points[index]!.cue, delayMs: 0 }] })) });
+  expect(again.changed).toBe(false); expect(again.conflicts).toEqual([]);
+});
+it('只改名字时写入拼音；新歌和新 Cue 直接写拼音', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false);
+  const renamed = { ...song, points: song.points.map((point, index) => index === 1 ? { ...point, name: '新副歌' } : point) };
+  await service.syncSong(fake.connection, fake.bridge, renamed);
+  expect(inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues.map(cue => cue.name).slice(0, 3)).toEqual(['段落 1', 'XinFuGe', '段落 3']);
+});
+it('显式要求时把控台上软件写过的中文名改为拼音，用回读结果再次同步不再判为改名', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false);
+  const first = await service.syncSong(fake.connection, fake.bridge, { ...song, rewriteLegacyNames: true });
+  const written = inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!;
+  expect(written.name).toBe('GeQu');
+  expect(written.cues.map(cue => cue.name)).toEqual(Array.from({ length: 8 }, (_, index) => `DuanLuo ${index + 1}`));
+  const again = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: first.binding,
+    points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: first.binding.points[index]!.cue, delayMs: 0 }] })) });
+  expect(again.changed).toBe(false); expect(again.conflicts).toEqual([]);
 });

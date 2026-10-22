@@ -40,3 +40,9 @@ it('等待回读期间的新编辑保留，不被旧请求覆盖', () => {
   const merged = ma2SongPoints(applyMa2SongReadback(document, observed, result));
   expect(merged[0]).toMatchObject({ name: '刚刚编辑', cues: [{ sequence: 2, cue: '1' }] });
 });
+it('控台保存的是中文转成的拼音时保留本地中文标签，控台上改过的名称才回读到软件', () => {
+  const { document, result } = sample();
+  result.library.sequences[0]!.cues = [{ index: 1, number: '1.000', name: 'RuanJianMingCheng' }, { index: 2, number: '2.000', name: 'NewOnConsole' }];
+  const merged = ma2SongPoints(applyMa2SongReadback(document, ma2SongPoints(document), result));
+  expect(merged.map(point => point.name)).toEqual(['软件名称', 'NewOnConsole']);
+});

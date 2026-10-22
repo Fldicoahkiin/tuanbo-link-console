@@ -1,6 +1,9 @@
 -- Local onPC bridge. Start once from a plugin; stop by running this plugin again.
 -- Requests are data, never executable Lua. Only one explicitly addressed Timecode is touched.
 local active = false
+-- Remove the second export made only to compare with the first, and page exports once read.
+-- Exports kept as write baselines or backups (tblink_library_, tblink_backup_, tblink_label_) stay.
+local remove_scratch = true
 local last = ''
 local generation = tostring(gma.gettime())
 _G.TBLINK_BRIDGE_GENERATION = generation
@@ -31,6 +34,10 @@ local function read(path)
   file:close()
   assert(#data <= 33554432, 'Bridge file exceeds limit')
   return data
+end
+local function discard(name)
+  -- A copy that cannot be removed stays in importexport, as every copy did before this cleanup.
+  if remove_scratch then os.remove(root .. '/importexport/' .. name .. '.xml') end
 end
 local function write(path, data)
   local file = assert(io.open(path, 'wb'))
@@ -79,8 +86,10 @@ local function snapshot(tc, id, additional)
     gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
     local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'))
     assert(canonical(full) == canonical(check), 'Sequence changed during snapshot')
+    discard(name .. '_verify')
   end
   assert(canonical(xml) == canonical(export(tc, 'tblink_snapshot_verify_' .. id)), 'Timecode changed during snapshot')
+  discard('tblink_snapshot_verify_' .. id)
   local result, replaced = xml:gsub('</MA>%s*$', function() return table.concat(parts, '\n') .. '\n</MA>' end)
   assert(replaced == 1 and #result <= 33554432, 'Snapshot XML invalid or too large')
   return result
@@ -119,6 +128,7 @@ local function process(data)
       local file = 'tblink_page_' .. id
       gma.cmd('Export Page ' .. tc .. ' ' .. file .. ' /o')
       local xml = assert(read(root .. '/importexport/' .. file .. '.xml'), 'Page export unavailable')
+      discard(file)
       local function escape(value) return tostring(value):gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;') end
       xml = xml:gsub('<MA%s', function() return '<MA tblink_show="' .. escape(gma.show.getvar('SHOWFILE')) .. '" tblink_generation="' .. escape(generation) .. '" tblink_version="' .. escape(gma.show.getvar('VERSION')) .. '" ' end, 1)
       -- Metadata only: one native page export, no sequence contents or per-slot network requests.
@@ -264,6 +274,7 @@ local function process(data)
       local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
       gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
       assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
+      discard(name .. '_verify')
       return xml
     end
     if op == 'SEQCUES' then
@@ -281,6 +292,7 @@ local function process(data)
       local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Sequence export unavailable')
       gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
       assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
+      discard(name .. '_verify')
       local head = assert(xml:match('^(.-<Sequ%s[^>]*>)'), 'Sequence XML unavailable')
       assert(head:sub(-2) ~= '/>', 'Sequence has no Cues')
       local parts, position = { head }, 1
@@ -314,6 +326,7 @@ local function process(data)
       gma.cmd('Export ' .. address .. ' "' .. name .. '_verify" /o')
       local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'), 'Executor verification unavailable')
       assert(canonical(xml) == canonical(check), 'Executor changed during read')
+      discard(name .. '_verify')
       assert(gma.show.getobj.name(assert(gma.show.getobj.handle(address))) == executor_name, 'Executor name changed during read')
       local escaped = executor_name:gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('\r', '&#13;'):gsub('\n', '&#10;'):gsub('\t', '&#9;')
       local result, count = xml:gsub('<Exec%s', function() return '<Exec tblink_executor_name="' .. escaped .. '" ' end)

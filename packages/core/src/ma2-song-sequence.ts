@@ -1,5 +1,6 @@
 import { lightingDocumentSchema, type LightingDocument, type LightingEvent, type Ma2SongPoint, type Ma2SongSyncResult } from '@tb/schema';
 import { LightingTempoMap, lightingEventTime } from './lighting-edit';
+import { consoleLabelText } from './ma2-console-label';
 
 /** Song positions are stable identities; pool Cue numbers are never inferred from labels. */
 export function ma2SongPoints(document: LightingDocument): Ma2SongPoint[] {
@@ -30,7 +31,9 @@ export function applyMa2SongReadback(document: LightingDocument, observed: Ma2So
     if (!unchanged.has(id)) return [event];
     if (removed.has(id)) return [];
     const cue = mapping.get(id); if (!cue || event.kind !== 'ma2' && event.kind !== 'empty-cue') return [event];
-    const label = nameConflicts.has(id) ? event.label : cues.find(value => Number(value.number) === Number(cue))?.name ?? event.label;
+    // The console holds pinyin for a Chinese label; only a name changed on the console replaces it.
+    const consoleName = cues.find(value => Number(value.number) === Number(cue))?.name;
+    const label = nameConflicts.has(id) || !consoleName || consoleName === consoleLabelText(event.label) ? event.label : consoleName;
     if (contentConflicts.has(id)) return [{ ...event, ...(event.id === id ? { label } : {}) }];
     if (event.id !== id) return [];
     return [{ id, kind: 'ma2', at: event.at, action: 'goto', executor: result.binding.executor ?? '', sequence: result.binding.sequence, cue,

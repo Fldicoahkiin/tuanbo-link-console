@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { applyMa2SongReadback, ma2SongPoints, mergeMa2AttributesCommand, projectLightingLibrary, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
+import { applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, projectLightingLibrary, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
 import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding, Ma2SongConflict, Ma2SongConflictResolution } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-layout-store';
@@ -11,7 +11,7 @@ import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 
-type SongSync = { sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings; state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string; requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; acknowledged?: string; remoteRevision?: string; confirmedDeletions?: string[]; blockedRevision?: number; nextCheckAt?: number; waitingForConnection?: boolean; conflicts?: Ma2SongConflict[]; conflictResolutions?: Ma2SongConflictResolution[]; consecutiveFailures?: number; archivedSignature?: string };
+type SongSync = { sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings; state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string; requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; acknowledged?: string; remoteRevision?: string; confirmedDeletions?: string[]; blockedRevision?: number; nextCheckAt?: number; waitingForConnection?: boolean; conflicts?: Ma2SongConflict[]; conflictResolutions?: Ma2SongConflictResolution[]; consecutiveFailures?: number; archivedSignature?: string; rewriteLegacyNames?: boolean };
 export const useMa2SongSyncStore = create<{ songs: Record<string, SongSync> }>(() => ({ songs: {} }));
 let running = false;
 export function markPendingMa2Songs(): void {
@@ -115,7 +115,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           update(entry, { state: 'pending', checking: false, waitingForConnection: true, nextCheckAt: Date.now() + 1000, message: '等待控台连接；可以继续编辑，连接恢复后核对并续传' });
           continue;
         }
-        const checkOnly = entry.acknowledged === signature && Boolean(entry.remoteRevision) && Boolean(item.lighting.consoleSong) && !entry.conflictResolutions?.length;
+        const checkOnly = entry.acknowledged === signature && Boolean(entry.remoteRevision) && Boolean(item.lighting.consoleSong) && !entry.conflictResolutions?.length && !entry.rewriteLegacyNames;
         // A periodic re-check of a confirmed or conflicted song keeps its state and
         // message, so the review buttons stay usable between checks.
         update(entry, checkOnly && (entry.state === 'verified' || entry.state === 'blocked') ? { checking: true } : { checking: true, state: 'syncing', message: `核对本曲 ${points.length} 个 Cue…` });
@@ -146,12 +146,15 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         }
         const requestId = crypto.randomUUID();
         update(entry, { requestId, progress: null });
-        const result = await window.tbLink.syncMa2Song({ network, expectedSource: { show, generation, version }, projectId: before.project.projectId, itemId: item.id,
-          requestId, progressId: requestId, settings, name: item.lighting.consoleSong?.name ?? entry.name, points,
+        const requestedName = item.lighting.consoleSong?.name ?? entry.name;
+        const synced = await window.tbLink.syncMa2Song({ network, expectedSource: { show, generation, version }, projectId: before.project.projectId, itemId: item.id,
+          requestId, progressId: requestId, settings, name: requestedName, points,
           ...(item.lighting.consoleSong ? { binding: item.lighting.consoleSong } : {}), ...(entry.confirmedDeletions ? { confirmedDeletions: entry.confirmedDeletions } : {}),
-          ...(entry.conflictResolutions?.length ? { conflictResolutions: entry.conflictResolutions } : {}) },
+          ...(entry.conflictResolutions?.length ? { conflictResolutions: entry.conflictResolutions } : {}), ...(entry.rewriteLegacyNames ? { rewriteLegacyNames: true } : {}) },
           progress => update(entry, { progress }));
         update(entry, { requestId: null, progress: null });
+        // The console holds the pinyin of a Chinese song name; keep the local name unless it was changed there.
+        const result = synced.binding.name === consoleLabelText(requestedName) ? { ...synced, binding: { ...synced.binding, name: requestedName } } : synced;
         // A completed command belongs to the captured song session. The durable
         // main-process journal recovers its result later if the editor has moved
         // on, paused, or changed output mode in the meantime.
@@ -193,7 +196,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const remoteRevision = result.remoteRevision ?? Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
         const conflicts = result.conflicts ?? [];
         update(entry, { state: conflicts.length ? 'blocked' : 'verified', checking: false, waitingForConnection: false, nextCheckAt: Date.now() + 1000, remoteRevision, consecutiveFailures: 0,
-          conflicts, conflictResolutions: [], acknowledged: JSON.stringify([ma2SongPoints(confirmed), result.binding.name]),
+          conflicts, conflictResolutions: [], rewriteLegacyNames: false, acknowledged: JSON.stringify([ma2SongPoints(confirmed), result.binding.name]),
           message: confirmedMessage(result.binding, conflicts.length), confirmedDeletions: [] });
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
