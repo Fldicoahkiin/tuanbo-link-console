@@ -1191,6 +1191,10 @@ function registerIpc(
       copies,
       read: path => projectDocuments.read(path),
       modifiedAt: async path => (await stat(path)).mtime,
+      exists: path => stat(path).then(() => true, (error: unknown) => {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
+        throw error;
+      }),
       ask: async offer => {
         const { response } = await dialog.showMessageBox(mainWindow!, recoveryPrompt(offer));
         const choice = response === 0 ? 'restore' as const : 'discard' as const;
@@ -1934,10 +1938,11 @@ async function discardOpenDocumentRecovery(): Promise<void> {
 function recoveryPrompt(offer: RecoveryOffer): Electron.MessageBoxOptions {
   const time = (value: Date): string => value.toLocaleString('zh-CN', { hour12: false });
   const detail = offer.kind === 'file'
-    ? [`恢复副本：${time(offer.copySavedAt)}`, `工程文件：${time(offer.fileModifiedAt)}`, '',
+    ? [`位置：${offer.projectPath}`, ...offer.movedFrom === undefined ? [] : [`原位置：${offer.movedFrom}（工程文件已移到当前位置）`],
+      `未保存改动的最后修改：${time(offer.copySavedAt)}`, `工程文件上次保存：${time(offer.fileModifiedAt)}`, '',
       '恢复：载入这些改动，保存后才写入工程文件。', '丢弃：把恢复副本移到回收站，打开工程文件中的内容。',
       ...offer.copySavedAt < offer.fileModifiedAt ? ['', '恢复副本早于工程文件，工程文件可能在别处被修改过，请确认后再选择。'] : []]
-    : [`恢复副本：${time(offer.copySavedAt)}`, '', '恢复：打开这些内容，保存时选择位置。', '丢弃：把恢复副本移到回收站。'];
+    : [`未保存改动的最后修改：${time(offer.copySavedAt)}`, '', '恢复：打开这些内容，保存时选择位置。', '丢弃：把恢复副本移到回收站。'];
   return { type: 'question', title: '发现未保存的改动', noLink: true, buttons: ['恢复', '丢弃'], defaultId: 0, cancelId: 0,
     message: offer.kind === 'file' ? `工程「${offer.name}」有未保存的改动。` : `未命名工程「${offer.name}」有未保存的改动。`, detail: detail.join('\n') };
 }

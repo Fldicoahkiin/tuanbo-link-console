@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, readdir, stat, unlink } from 'node:fs/promises';
+import { readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { recoveryCopyDiscardSchema, recoveryCopyWriteSchema, type RecoveryCopyDiscard, type RecoveryCopyWrite } from '@tb/schema';
@@ -69,6 +69,32 @@ export class RecoveryCopies {
   /** The most recently written copy of an unnamed project. */
   async latestUnnamed(): Promise<RecoveryCopy | null> {
     return latest((await this.all()).filter(copy => copy.manifest.projectPath === null));
+  }
+
+  /**
+   * The copy of a project file that has since been moved: same project identity, written
+   * for another path where no file exists any more. A file still at the old path keeps its copy.
+   */
+  async findMoved(owner: { projectPath: string; projectId: string }, exists: (path: string) => Promise<boolean>): Promise<RecoveryCopy | null> {
+    const candidates: RecoveryCopy[] = [];
+    for (const copy of await this.all()) {
+      const { projectPath, projectId } = copy.manifest;
+      if (projectId !== owner.projectId || projectPath === null || normalizePath(projectPath) === normalizePath(owner.projectPath)) continue;
+      if (!await exists(projectPath)) candidates.push(copy);
+    }
+    return latest(candidates);
+  }
+
+  /** Files the copy under the project's new path, so a later save or discard finds it there. */
+  relocate(copy: RecoveryCopy, projectPath: string): Promise<void> {
+    const from = copyId(copy.manifest), to = copyId({ projectPath, projectId: copy.manifest.projectId });
+    return this.serialize(from, () => this.serialize(to, async () => {
+      if (await this.readManifest(to)) throw new Error(`新位置已有恢复副本，未迁移：${projectPath}`);
+      // The copy moves first: a record without its copy is never offered, and is cleared at the next startup.
+      await rename(this.copyPath(from), this.copyPath(to));
+      await writeFileAtomically(this.manifestPath(to), JSON.stringify({ ...copy.manifest, projectPath }));
+      await unlink(this.manifestPath(from));
+    }));
   }
 
   /**
@@ -177,7 +203,7 @@ function normalizePath(path: string): string {
 }
 
 export type RecoveryOffer =
-  | { kind: 'file'; name: string; copySavedAt: Date; fileModifiedAt: Date }
+  | { kind: 'file'; name: string; projectPath: string; movedFrom?: string; copySavedAt: Date; fileModifiedAt: Date }
   | { kind: 'unnamed'; name: string; copySavedAt: Date };
 
 /**
@@ -186,10 +212,11 @@ export type RecoveryOffer =
  * restore, or null to use the file. A discarded copy goes to the recycle bin.
  */
 export async function offerRecoveryCopy(request: { projectPath: string | null; projectId?: string | undefined }, deps: {
-  copies: Pick<RecoveryCopies, 'find' | 'latestUnnamed' | 'discard'>;
+  copies: Pick<RecoveryCopies, 'find' | 'findMoved' | 'relocate' | 'latestUnnamed' | 'discard'>;
   /** Reads a project through the document worker, as normalized JSON. */
   read(path: string): Promise<string>;
   modifiedAt(path: string): Promise<Date>;
+  exists(path: string): Promise<boolean>;
   ask(offer: RecoveryOffer): Promise<'restore' | 'discard'>;
   trash(path: string): Promise<void>;
   log(message: string): void;
@@ -202,7 +229,8 @@ export async function offerRecoveryCopy(request: { projectPath: string | null; p
     offer = { kind: 'unnamed', name: copy.manifest.name, copySavedAt: new Date(copy.manifest.savedAt) };
   } else {
     if (!request.projectId) throw new Error('查找恢复副本需要工程身份');
-    copy = await deps.copies.find({ projectPath: request.projectPath, projectId: request.projectId });
+    const direct = await deps.copies.find({ projectPath: request.projectPath, projectId: request.projectId });
+    copy = direct ?? await deps.copies.findMoved({ projectPath: request.projectPath, projectId: request.projectId }, path => deps.exists(path));
     if (!copy) return null;
     if (copy.manifest.projectId !== request.projectId) {
       deps.log(`恢复副本不是同一工程，未提示：${request.projectPath}`);
@@ -210,14 +238,23 @@ export async function offerRecoveryCopy(request: { projectPath: string | null; p
     }
     const [copied, saved] = await Promise.all([deps.read(copy.copyPath), deps.read(request.projectPath)]);
     if (copied === saved) {
-      await deps.copies.discard({ version: 1, projectPath: request.projectPath, projectId: request.projectId });
+      await deps.copies.discard({ version: 1, projectPath: copy.manifest.projectPath, projectId: request.projectId });
       deps.log(`恢复副本与工程文件相同，已清除：${request.projectPath}`);
       return null;
     }
-    offer = { kind: 'file', name: copy.manifest.name, copySavedAt: new Date(copy.manifest.savedAt), fileModifiedAt: await deps.modifiedAt(request.projectPath) };
+    const movedFrom = direct ? null : copy.manifest.projectPath;
+    offer = { kind: 'file', name: copy.manifest.name, projectPath: request.projectPath, ...movedFrom === null ? {} : { movedFrom },
+      copySavedAt: new Date(copy.manifest.savedAt), fileModifiedAt: await deps.modifiedAt(request.projectPath) };
   }
   const owner = { version: 1 as const, projectPath: copy.manifest.projectPath, projectId: copy.manifest.projectId };
-  if (await deps.ask(offer) === 'restore') return deps.read(copy.copyPath);
+  if (await deps.ask(offer) === 'restore') {
+    const content = await deps.read(copy.copyPath);
+    if (offer.kind === 'file' && offer.movedFrom !== undefined) {
+      await deps.copies.relocate(copy, offer.projectPath);
+      deps.log(`恢复副本已随工程迁到新位置：${offer.movedFrom} → ${offer.projectPath}`);
+    }
+    return content;
+  }
   await deps.trash(copy.copyPath);
   await deps.copies.discard(owner);
   return null;

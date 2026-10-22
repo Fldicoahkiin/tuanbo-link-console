@@ -138,6 +138,7 @@ describe('offerRecoveryCopy', () => {
       copies: store,
       read: async (path: string) => contents[path] ?? (await readFile(path, 'utf8')),
       modifiedAt: () => Promise.resolve(new Date('2026-10-22T08:00:00.000Z')),
+      exists: (path: string) => Promise.resolve(path in contents),
       ask: (offer: Offer) => { asked.push(offer); return Promise.resolve(choice); },
       trash: async (path: string) => { trashed.push(path); await unlink(path); },
       log: (message: string) => { logs.push(message); }
@@ -164,7 +165,7 @@ describe('offerRecoveryCopy', () => {
     const { store, deps, asked } = await setup('restore', { [named.projectPath]: '{"revision":0}' });
     await store.write(write(named, 4));
     expect(await offerRecoveryCopy({ projectPath: named.projectPath, projectId: named.projectId }, deps)).toBe('{"revision":4}');
-    expect(asked).toEqual([{ kind: 'file', name: '演出', copySavedAt: new Date('2026-10-22T09:00:00.000Z'), fileModifiedAt: new Date('2026-10-22T08:00:00.000Z') }]);
+    expect(asked).toEqual([{ kind: 'file', name: '演出', projectPath: named.projectPath, copySavedAt: new Date('2026-10-22T09:00:00.000Z'), fileModifiedAt: new Date('2026-10-22T08:00:00.000Z') }]);
     expect(await store.find(named)).not.toBeNull();
   });
 
@@ -184,6 +185,37 @@ describe('offerRecoveryCopy', () => {
     expect(asked).toHaveLength(0);
     expect(await store.find(named)).not.toBeNull();
     expect(logs).toEqual([expect.stringContaining('不是同一工程')]);
+  });
+
+  const moved = 'D:\\演出备份\\演出.tblink';
+
+  it('工程文件被移走后在新位置打开：按工程身份找到原位置的副本并注明原位置；恢复后副本随工程迁到新位置', async () => {
+    const { store, deps, asked } = await setup('restore', { [moved]: '{"revision":0}' });
+    await store.write(write(named, 4));
+    expect(await offerRecoveryCopy({ projectPath: moved, projectId: named.projectId }, deps)).toBe('{"revision":4}');
+    expect(asked).toEqual([{ kind: 'file', name: '演出', projectPath: moved, movedFrom: named.projectPath,
+      copySavedAt: new Date('2026-10-22T09:00:00.000Z'), fileModifiedAt: new Date('2026-10-22T08:00:00.000Z') }]);
+    expect(await store.find(named)).toBeNull();
+    const relocated = await store.find({ projectPath: moved, projectId: named.projectId });
+    expect(relocated?.manifest).toMatchObject({ projectPath: moved, projectId: named.projectId, revision: 4 });
+    expect(await readFile(relocated!.copyPath, 'utf8')).toBe('{"revision":4}');
+  });
+
+  it('原位置的工程文件仍在（复制出来的另一份）时不提示，副本仍属于原文件', async () => {
+    const { store, deps, asked } = await setup('restore', { [moved]: '{"revision":0}', [named.projectPath]: '{"revision":0}' });
+    await store.write(write(named, 4));
+    expect(await offerRecoveryCopy({ projectPath: moved, projectId: named.projectId }, deps)).toBeNull();
+    expect(asked).toHaveLength(0);
+    expect(await store.find(named)).not.toBeNull();
+  });
+
+  it('移走的工程选择丢弃：原位置的副本移到回收站并删除记录', async () => {
+    const { store, deps, trashed } = await setup('discard', { [moved]: '{"revision":0}' });
+    await store.write(write(named, 4));
+    const copyPath = (await store.find(named))!.copyPath;
+    expect(await offerRecoveryCopy({ projectPath: moved, projectId: named.projectId }, deps)).toBeNull();
+    expect(trashed).toEqual([copyPath]);
+    expect(await store.find(named)).toBeNull();
   });
 
   it('启动时提示最近的未命名工程副本', async () => {

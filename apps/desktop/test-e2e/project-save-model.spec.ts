@@ -1,4 +1,4 @@
-import { chmod, cp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -226,6 +226,28 @@ test('进程被强制结束后重新打开工程：提示恢复，恢复后内�
     await page.keyboard.press('Control+S');
     await expect(unsaved(page)).toBeHidden();
     expect(await savedTitle(path)).toBe('崩溃前的修改');
+    await expect.poll(() => recoveryCopies(userData)).toHaveLength(0);
+  } finally { await closeWithoutSaving(app, page); }
+});
+
+test('崩溃后工程文件被移到别处：在新位置打开时提示恢复并写明原位置，保存后副本清除', async ({}, info) => {
+  const userData = info.outputPath('profile'); const path = info.outputPath('before-move.tblink');
+  await crashWithUnsavedEdit(info, path, userData);
+  await mkdir(info.outputPath('moved'));
+  const moved = join(info.outputPath('moved'), 'after-move.tblink');
+  await rename(path, moved);
+  const { app, page } = await launch(userData);
+  try {
+    await answerDialogs(app, { 发现未保存的改动: [0] });
+    await openFile(app, page, moved);
+    await expect(page.getByText('崩溃前的修改').first()).toBeVisible();
+    const shown = await shownDialogs(app);
+    expect(shown.map(value => value.title)).toEqual(['发现未保存的改动']);
+    expect(shown[0]!.detail).toContain(`位置：${moved}`);
+    expect(shown[0]!.detail).toContain(`原位置：${path}`);
+    await page.keyboard.press('Control+S');
+    await expect(unsaved(page)).toBeHidden();
+    expect(await savedTitle(moved)).toBe('崩溃前的修改');
     await expect.poll(() => recoveryCopies(userData)).toHaveLength(0);
   } finally { await closeWithoutSaving(app, page); }
 });
