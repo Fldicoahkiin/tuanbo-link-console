@@ -16,6 +16,8 @@ const publicCalls = new Set([
   'link:ma2-discovery-cancel', 'link:p1-import-cancel', 'link:set-document-dirty'
 ]);
 
+const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy']);
+
 export function needsProductLicense(channel: string, value: unknown): boolean {
   if (publicCalls.has(channel)) return false;
   if (channel === 'link:native-player-control') {
@@ -41,8 +43,8 @@ export class LicenseAccess {
   private workspaceGranted = false;
   constructor(private readonly status: () => Promise<LicenseStatus>) {}
   async authorize(channel: string, value: unknown): Promise<void> {
-    // Saving work admitted under a paid license must remain possible after expiry.
-    if (channel === 'link:save-project' && this.workspaceGranted) return;
+    // Saving work admitted under a paid license, and its recovery copy, must remain possible after expiry.
+    if (workspaceSaveCalls.has(channel) && this.workspaceGranted) return;
     if (needsProductLicense(channel, value)) await this.requireOutput();
   }
   async requireOutput(): Promise<void> {
