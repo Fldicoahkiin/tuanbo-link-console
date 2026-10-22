@@ -19,30 +19,17 @@ export class Ma2SongWatch {
     if (this.busy) throw new Error('歌曲回读检查尚未结束');
     const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停歌曲回读'); };
     stopped(); this.busy = true;
-    const key = JSON.stringify([request.network, request.expectedSource, request.sequence, request.executor]);
+    const key = this.key(request);
     const cached = this.snapshots.get(key);
     // One baseline file per song position: the next start overwrites it instead of leaving another copy.
     const position = JSON.stringify([request.network.host, request.network.port, request.expectedSource.show, request.sequence, request.executor]);
     const file = cached?.file ?? `tblink_watch_${createHash('sha256').update(position).digest('hex').slice(0, 16)}`;
-    const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(request.expectedSource.generation)} and gma.show.getvar('VERSION')==${ma2LuaString(request.expectedSource.version)},'Show or session changed');`;
-    const exportObject = (object: string, name: string): string => `assert(gma.show.getobj.handle('${object}'),'Song position missing');gma.cmd('Export ${object} ${name} /o');`;
-    // No $, ^ or |: the native command line consumes them and forces the multi-line chunked path.
-    // r(name, 1) also removes the file once read: the baseline export stays for the next check.
-    const read = "local function r(n,x)local p=gma.show.getvar('PATH')..'/importexport/'..n..'.xml';local f=assert(io.open(p,'rb'));local s=f:read('*a');f:close();if x then os.remove(p)end;return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><')end;";
-    const capture = async (suffix: string): Promise<void> => {
-      await runMa2GuardedLua(connection, `${guard}${exportObject(`Sequence ${request.sequence}`, `${file}${suffix}`)}${request.executor ? exportObject(`Executor ${request.executor}`, `${file}${suffix}_exec`) : ''}return 'captured'`, stopped);
-    };
-    const same = async (): Promise<boolean> => {
-      await capture('_check');
-      // Both comparisons run before combining them, so both check exports are removed.
-      return await runMa2GuardedLua(connection, `${guard}${read}local a=r('${file}')==r('${file}_check',1)${request.executor ? `;local b=r('${file}_exec')==r('${file}_check_exec',1);return a and b` : ';return a'}`, stopped) === 'true';
-    };
     try {
       if (cached) {
-        if (await same()) return cached.revision !== request.revision;
+        if (await this.same(connection, request, file, stopped)) return cached.revision !== request.revision;
         this.snapshots.delete(key); return true;
       }
-      await capture('');
+      await this.capture(connection, request, file, '', stopped);
       const xml = await bridge.request('SEQUENCE', request.sequence);
       if (request.executor) {
         const [page, slot] = request.executor.split('.');
@@ -51,12 +38,47 @@ export class Ma2SongWatch {
       }
       // This is a read-only race, not an unsuccessful write. Tell the coordinator
       // to obtain a fresh sequence before planning any changes.
-      if (!await same()) return true;
+      if (!await this.same(connection, request, file, stopped)) return true;
       const revision = createHash('sha256').update(canonical(xml)).digest('hex');
       if (this.snapshots.size >= 16) this.snapshots.delete(this.snapshots.keys().next().value!);
       this.snapshots.set(key, { file, revision });
       return revision !== request.revision;
     } catch (cause) { this.snapshots.delete(key); throw cause; }
     finally { this.busy = false; }
+  }
+
+  /**
+   * The console export that holds this song's Sequence exactly as `baselineXml`, when a cached check
+   * still matches the console; null when there is no such check, one is running or a song is playing. It never reads
+   * the Sequence, so a null only means the caller reads it as before.
+   */
+  async unchangedBaseline(connection: Pick<Ma2Telnet, 'command'>, input: Omit<Ma2SongCheckRequest, 'revision'>, baselineXml: string): Promise<string | null> {
+    const request = ma2SongCheckRequestSchema.parse({ ...input, revision: createHash('sha256').update(canonical(baselineXml)).digest('hex') });
+    const cached = this.snapshots.get(this.key(request));
+    if (this.busy || this.isPlaying() || !cached || cached.revision !== request.revision) return null;
+    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停歌曲回读'); };
+    stopped(); this.busy = true;
+    try {
+      if (await this.same(connection, request, cached.file, stopped)) return cached.file;
+      this.snapshots.delete(this.key(request)); return null;
+    } catch (cause) { this.snapshots.delete(this.key(request)); throw cause; }
+    finally { this.busy = false; }
+  }
+
+  private key(request: Ma2SongCheckRequest): string { return JSON.stringify([request.network, request.expectedSource, request.sequence, request.executor]); }
+  private guard(request: Ma2SongCheckRequest): string {
+    return `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(request.expectedSource.generation)} and gma.show.getvar('VERSION')==${ma2LuaString(request.expectedSource.version)},'Show or session changed');`;
+  }
+  private async capture(connection: Pick<Ma2Telnet, 'command'>, request: Ma2SongCheckRequest, file: string, suffix: string, stopped: () => void): Promise<void> {
+    const exportObject = (object: string, name: string): string => `assert(gma.show.getobj.handle('${object}'),'Song position missing');gma.cmd('Export ${object} ${name} /o');`;
+    await runMa2GuardedLua(connection, `${this.guard(request)}${exportObject(`Sequence ${request.sequence}`, `${file}${suffix}`)}${request.executor ? exportObject(`Executor ${request.executor}`, `${file}${suffix}_exec`) : ''}return 'captured'`, stopped);
+  }
+  private async same(connection: Pick<Ma2Telnet, 'command'>, request: Ma2SongCheckRequest, file: string, stopped: () => void): Promise<boolean> {
+    await this.capture(connection, request, file, '_check', stopped);
+    // No $, ^ or |: the native command line consumes them and forces the multi-line chunked path.
+    // r(name, 1) also removes the file once read: the baseline export stays for the next check.
+    const read = "local function r(n,x)local p=gma.show.getvar('PATH')..'/importexport/'..n..'.xml';local f=assert(io.open(p,'rb'));local s=f:read('*a');f:close();if x then os.remove(p)end;return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><')end;";
+    // Both comparisons run before combining them, so both check exports are removed.
+    return await runMa2GuardedLua(connection, `${this.guard(request)}${read}local a=r('${file}')==r('${file}_check',1)${request.executor ? `;local b=r('${file}_exec')==r('${file}_check_exec',1);return a and b` : ';return a'}`, stopped) === 'true';
   }
 }

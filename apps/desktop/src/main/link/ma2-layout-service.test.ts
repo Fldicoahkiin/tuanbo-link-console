@@ -63,6 +63,9 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     if (match) { files.set(match[1]!, Buffer.alloc(0)); return 'prepared'; }
     match = /importexport\/(\w+)\.xml','ab'\)\);f:write\(unhex\('([a-f0-9]*)'\)\)/.exec(script);
     if (match) { files.set(match[1]!, Buffer.concat([files.get(match[1]!)!, Buffer.from(match[2]!, 'hex')])); return 'prepared'; }
+    // The song check's console export copied as the write-before export, without reading the Sequence.
+    const copied = /io\.open\(p\.\.'(tblink_watch_[a-f0-9]{16})\.xml','rb'\)\);local s=f:read\('\*a'\);f:close\(\);local o=assert\(io\.open\(p\.\.'(tblink_library_[a-f0-9]{32})\.xml','wb'\)\)/.exec(script);
+    if (copied) { files.set(copied[2]!, files.get(copied[1]!)!); return 'copied'; }
     // Copy /o replaces the Cue with its source, /merge adds the source's rows; names come from Label.
     const song = (target: number) => inspectMa2SequenceXml(sequences.get(target)!).sequences[0]!;
     // Keeping a combined Cue's attributes: later /merge copies rebuild its data from the sources alone.
@@ -193,6 +196,20 @@ it('已绑定歌曲换一个 Cue 的内容：在控台内 Copy，不上传歌曲
   expect(inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues.map(cue => cue.name)).toEqual(Array.from({ length: 8 }, (_, index) => `段落 ${index + 1}`));
   expect(fake.ops.filter(op => op.startsWith('SEQUENCE ') && op !== 'SEQUENCE 9000')).toEqual([]);
   expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(1);
+});
+it('复查确认控台仍等于本地基线时，写前不再整读本曲序列：在控台上复制复查导出作写前守卫和备份', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const baseline = 'tblink_watch_0123456789abcdef';
+  fake.files.set(baseline, Buffer.from(sequences.get(9000)!));
+  noBackups.record.mockClear();
+  const result = await new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song, undefined, undefined, baseline);
+  expect(result.changed).toBe(true);
+  expect(fake.ops.filter(op => op === 'SEQUENCE 9000')).toHaveLength(1);
+  expect(result.backupFile).toMatch(/^tblink_library_[a-f0-9]{32}\.xml$/);
+  expect(fake.files.get(result.backupFile.replace(/\.xml$/, ''))?.toString('utf8')).toBe(fake.files.get(baseline)?.toString('utf8'));
+  expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ object: 'Sequence 9000', files: [result.backupFile.replace(/\.xml$/, '')] }));
+  await expect(new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID() }, undefined, undefined, "x');os.remove('a")).rejects.toThrow('基线文件名无效');
 });
 it('Copy 路径不再二次读取来源：来源在读取后被改，回读校验报出是哪个来源，结果待核对，写前备份保留且不进轮转', async () => {
   const { song, sourceNumber, sequences } = boundSong();

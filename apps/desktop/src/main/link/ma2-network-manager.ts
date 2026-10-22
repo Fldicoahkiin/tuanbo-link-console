@@ -143,7 +143,10 @@ export class Ma2NetworkManager {
   async syncSong(request: import('@tb/schema').Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, signal?: AbortSignal): Promise<import('@tb/schema').Ma2SongSyncResult> {
     const { bridge } = this.get(request.network); const connection = this.connection;
     if (!connection) throw new Error('请先连接控台');
-    return this.layouts().syncSong(connection, bridge, request, report, signal);
+    // A cached song check that still matches the console saves reading the whole Sequence again.
+    const binding = request.binding;
+    const baseline = binding && this.songWatch ? await this.songWatch.unchangedBaseline(connection, { network: request.network, expectedSource: request.expectedSource, sequence: binding.sequence, ...binding.executor ? { executor: binding.executor } : {} }, binding.baselineXml) : null;
+    return this.layouts().syncSong(connection, bridge, request, report, signal, baseline);
   }
   async newCue(request: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult> {
     const {bridge}=this.get(request.network); const connection=this.connection;

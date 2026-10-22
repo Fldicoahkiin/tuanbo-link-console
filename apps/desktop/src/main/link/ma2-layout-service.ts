@@ -156,7 +156,8 @@ export class Ma2LayoutService {
     finally { this.busy = false; }
   }
 
-  async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal): Promise<Ma2SongSyncResult> {
+  /** `consoleBaseline` names a console export the song check confirmed equals the binding's baseline. */
+  async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal, consoleBaseline: string | null = null): Promise<Ma2SongSyncResult> {
     const request = ma2SongSyncRequestSchema.parse(input);
     // The plan converts the song and Cue names it writes; the Layout name is only ever written.
     request.settings.name = toConsoleLabel(request.settings.name);
@@ -257,7 +258,15 @@ export class Ma2LayoutService {
       const destination = executorPage ? await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor, this.isPlaying, recoveringCreation) : null;
       // With 'keep', SEQUENCE leaves its native export as importexport/tblink_library_<request id>.xml
       // on the console; the write guard and the backup use that file instead of uploading the XML again.
-      const remote = request.binding ? await bridge.exchange('SEQUENCE', target, 'keep') : null;
+      // When the song check confirmed the console still equals the saved baseline, that check's export
+      // is copied on the console instead, and the Sequence is not read over Telnet at all.
+      let remote: { response: string; requestId: string } | null = null;
+      if (request.binding && consoleBaseline) {
+        if (!/^tblink_watch_[a-f0-9]{16}$/.test(consoleBaseline)) throw new Error('歌曲复查基线文件名无效');
+        const requestId = randomBytes(16).toString('hex');
+        await this.call(connection, `${this.guard(layoutRequest)}local p=gma.show.getvar('PATH')..'/importexport/';local f=assert(io.open(p..'${consoleBaseline}.xml','rb'));local s=f:read('*a');f:close();local o=assert(io.open(p..'tblink_library_${requestId}.xml','wb'));o:write(s);o:close();return 'copied'`);
+        remote = { response: request.binding.baselineXml, requestId };
+      } else if (request.binding) remote = await bridge.exchange('SEQUENCE', target, 'keep');
       const remoteXml = remote?.response ?? null;
       const remoteExport = remote ? `tblink_library_${remote.requestId}` : null;
       const labelBackups: string[] = [];
