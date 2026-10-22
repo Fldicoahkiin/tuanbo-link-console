@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type Ma2AuditionRequest, type Ma2AuditionState, type Ma2CatalogRequest, type Ma2RenameRequest } from '@tb/schema';
 import { toConsoleLabel } from '@tb/core/link';
-import { savedValue } from './save-questions';
+import { answerSaveQuestions, savedValue } from './save-questions';
 
 test('界面样本：单步分类点击出灯，多步进入原编号子菜单，移除冗余按钮', async ({}, info) => {
   const project = createEmptyLinkProject('灯光素材分类界面样本');
@@ -20,6 +20,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const application = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [process.env.TBLINK_MA2_TEST_MAIN ?? join(process.cwd(), 'out/main/index.cjs')]] });
   const page = await application.firstWindow();
+  await answerSaveQuestions(application);
   page.on('pageerror', error => console.error('界面运行错误', error.message));
   try {
     // The main process writes renamed Chinese labels as pinyin; this stand-in console reads them back the same way.

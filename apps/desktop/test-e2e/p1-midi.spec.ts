@@ -3,7 +3,7 @@ import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createEmptyLinkProject, parseLinkProject, createLightingDocument, lightingTrackSchema } from '@tb/schema';
-import { saveProject, savedValue } from './save-questions';
+import { answerSaveQuestions, saveProject, savedValue } from './save-questions';
 
 test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', async ({}, info) => {
   const wav = Buffer.alloc(44 + 8000 * 10, 128);
@@ -19,6 +19,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const app = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), 'out/main/index.cjs')]] });
   const page = await app.firstWindow();
+  await answerSaveQuestions(app);
   try {
     await app.evaluate(({ ipcMain, dialog }, file) => {
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] });
@@ -85,6 +86,7 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const app = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), 'out/main/index.cjs')]] });
   const page = await app.firstWindow();
+  await answerSaveQuestions(app);
   const pick = async (file: string): Promise<void> => { await app.evaluate(({ dialog }, value) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [value] }); }, file); };
   const settings = async (): Promise<void> => {
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();

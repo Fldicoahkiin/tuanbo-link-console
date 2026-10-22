@@ -3,7 +3,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, ma2PlaybackRequestSchema, parseLinkProject } from '@tb/schema';
-import { closeDiscarding } from './save-questions';
+import { answerSaveQuestions, closeDiscarding } from './save-questions';
 
 for (const playbackSource of ['internal', 'p1'] as const) test(`埋步 ${playbackSource} 编辑、保存重开、时间线跟随与关闭`, async ({}, info) => {
   const wav = Buffer.alloc(44 + 48000 * 12 * 2);
@@ -18,6 +18,7 @@ for (const playbackSource of ['internal', 'p1'] as const) test(`埋步 ${playbac
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   try {
     const page = await app.firstWindow();
+    await answerSaveQuestions(app);
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setSize(1400, 900); });
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);

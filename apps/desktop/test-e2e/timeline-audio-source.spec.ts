@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
+import { answerSaveQuestions } from './save-questions';
 
 test('时间线更换工程后音源缺失，不沿用上一首音频或空跑', async ({}, info) => {
   const wav = Buffer.alloc(44 + 24000 * 4 * 2);
@@ -21,6 +22,7 @@ test('时间线更换工程后音源缺失，不沿用上一首音频或空跑',
   }
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const page = await app.firstWindow();
+  await answerSaveQuestions(app);
   page.on('dialog', dialog => void dialog.accept());
   try {
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, files[0]!);

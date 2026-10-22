@@ -16,10 +16,14 @@ export async function answerSaveQuestions(application: ElectronApplication): Pro
   });
 }
 
-/** Edits are written to the .tblink only by an explicit save. */
+/**
+ * Edits are written to the .tblink only by an explicit save. Waits for this save's own
+ * 工程已保存 notice, which shows on every page (the toolbar marker does not).
+ */
 export async function saveProject(page: Page): Promise<void> {
+  await page.evaluate(() => { for (const toast of document.querySelectorAll('.toast')) toast.setAttribute('data-before-save', ''); });
   await page.keyboard.press('Control+S');
-  await expect(page.locator('.project-save-status')).toBeHidden();
+  await expect(page.locator('.toast.info:not([data-before-save])', { hasText: '工程已保存' }).first()).toBeVisible();
 }
 
 /** Test teardown: unsaved edits are dropped, so quitting does not stop at 工程尚未保存. */
@@ -33,14 +37,10 @@ export async function closeDiscarding(application: ElectronApplication): Promise
 }
 
 /**
- * For polls on the saved .tblink: each attempt saves first when there are unsaved
- * edits, since results such as a console readback or an import land after the poll starts.
+ * For polls on the saved .tblink: each attempt saves first, since results such as a
+ * console readback or an import land after the poll starts.
  */
 export async function savedValue<T>(page: Page, read: () => Promise<T>): Promise<T> {
-  const status = page.locator('.project-save-status');
-  if (await status.isVisible()) {
-    await page.keyboard.press('Control+S');
-    await status.waitFor({ state: 'hidden', timeout: 5000 });
-  }
+  await saveProject(page);
   return read();
 }

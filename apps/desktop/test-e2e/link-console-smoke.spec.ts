@@ -12,7 +12,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import ffmpegPath from 'ffmpeg-static';
 import { convertMa2Snapshot } from '../src/main/link/ma2-timecode-conversion';
 import { createMa2TimecodeXml } from '../src/main/link/ma2-create';
-import { answerSaveQuestions } from './save-questions';
+import { answerSaveQuestions, saveProject } from './save-questions';
 
 const execFileAsync = promisify(execFile);
 const desktopEntry = join(process.cwd(), process.env.TBLINK_E2E_BUILD_DIR ?? 'out', 'main/index.cjs');
@@ -2961,6 +2961,8 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
     if (!profile) throw new Error('测试配置未保存');
     await window.tbLink.saveIntegrationProfile({ profile: { ...profile, midiPortProfiles: [...profile.midiPortProfiles, { id: 'lighting-record-input', direction: 'input', portName: 'Test Lighting Input' }] } });
   });
+  // The P1 import is unsaved; save it so the reload reopens the file instead of offering its recovery copy.
+  await saveProject(page);
   await page.reload();
   await expect.poll(() => page.evaluate(async () => (await window.tbLink.loadIntegrationProfile())?.midiPortProfiles.find((port) => port.id === 'lighting-record-input')?.portName)).toBe('Test Lighting Input');
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();

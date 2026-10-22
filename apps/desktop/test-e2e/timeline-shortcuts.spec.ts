@@ -3,7 +3,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
-import { closeDiscarding } from './save-questions';
+import { closeDiscarding, savedValue } from './save-questions';
 
 test('灯光打点按钮、M 与快捷键修改', async ({}, info) => {
   const wav = Buffer.alloc(44 + 48000 * 3 * 2);
@@ -44,7 +44,7 @@ test('灯光打点按钮、M 与快捷键修改', async ({}, info) => {
     await page.locator('.waveform-lane').first().click({ button: 'right', position: { x: 220, y: 70 } });
     const rightClickCue = page.getByRole('button', { name: '音频 Cue 4', exact: true });
     await expect(rightClickCue).toHaveCount(1);
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length).toBe(4);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length)).toBe(4);
     await expect(rightClickCue).toHaveAttribute('title', /^Cue 4 · (?:\d{2}:){1,3}\d{2} ·/);
     await rightClickCue.click();
     await expect(rightClickCue).toHaveAttribute('aria-pressed', 'true');
