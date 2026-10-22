@@ -55,28 +55,36 @@ describe('CueRuntime', () => {
     expect(runtime.tick(5600).state).toBe('running');
     expect(runtime.anchorMediaClock(sample(20, 5700)).state).toBe('error');
   });
-  it('本机音频时钟：界面卡顿超过 500ms 不判定时间码丢失，期间 Cue 记为错过且不补发，之后的 Cue 照常执行', () => {
+  it('本机音频时钟：界面卡顿超过 500ms 不判定时间码丢失，按当前位置重建，期间点动作记为错过且不补发，之后的 Cue 照常执行', () => {
     const runtime = new CueRuntime({ ...project(), playbackSource: 'internal' });
     runtime.selectItem('item'); runtime.beginPreflight('live'); runtime.arm(0);
     runtime.ingest(sample(0, 0)); runtime.ingest(sample(3, 100));
     expect(runtime.tick(1200).state).toBe('running');
     const gap = runtime.ingest(sample(45, 1500));
-    expect(gap).toMatchObject({ state: 'running', dueCues: [], missedCueIds: ['cue-1'] });
-    expect(gap.reason).toBe('播放位置更新中断 1400ms，错过 1 个联动 Cue，未补发');
+    expect(gap).toMatchObject({ state: 'running', dueCues: [], missedCueIds: ['cue-1'], rebuild: true });
+    expect(gap.reason).toBe('播放位置更新中断 1400ms：画面按当前位置重建，错过 1 个联动 Cue，未补发');
     runtime.ingest(sample(46, 1534));
     expect(runtime.ingest(sample(60, 2000))).toMatchObject({ state: 'running', missedCueIds: ['cue-1'] });
     expect(runtime.getNextCueId(60)).toBeNull();
   });
-  it('错过的显示来源不再在结束帧隐藏：卡顿与从当前位置布防都不留下孤立的隐藏动作', () => {
+  it('卡顿后显示来源按区间状态重建：区间内的此刻显示，已显示的在结束后隐藏；从当前位置布防错过的不留孤立隐藏', () => {
     const value = { ...project(), playbackSource: 'internal' as const };
     value.rundown[0]!.cues = [{ id: 'show', name: '显示来源', timecode: frameNumberToTimecode(30, '30'), durationMs: 3_000, enabled: true, notes: '', layerId: 'layer',
       actions: [{ id: 'show-action', label: '显示来源 · 扑克牌', kind: 'obs.setSceneItemEnabled', sceneName: '团播联动台输出', sourceName: '扑克牌', enabled: true }] }];
     const gap = new CueRuntime(value); gap.selectItem('item'); gap.beginPreflight('live'); gap.arm(0);
     gap.ingest(sample(0, 0)); gap.ingest(sample(27, 900));
     const stalled = gap.ingest(sample(48, 1_600));
-    expect(stalled).toMatchObject({ state: 'running', dueCues: [], missedCueIds: ['show'] });
-    expect(stalled.reason).toContain('错过 1 个联动 Cue');
-    for (let frame = 60; frame <= 120; frame += 30) expect(gap.ingest(sample(frame, 1_600 + (frame - 48) * 1000 / 30)).dueCues).toEqual([]);
+    expect(stalled).toMatchObject({ state: 'running', missedCueIds: [], rebuild: true, reason: '播放位置更新中断 700ms：画面按当前位置重建' });
+    expect(stalled.dueCues.map(due => [due.cue.id, due.scheduledFrame])).toEqual([['show', 48]]);
+    for (let frame = 51; frame <= 117; frame += 3) expect(gap.ingest(sample(frame, 1_600 + (frame - 48) * 1000 / 30)).dueCues).toEqual([]);
+    const hidden = gap.ingest(sample(120, 1_600 + 72_000 / 30));
+    expect(hidden.dueCues.map(due => [due.cue.id, due.scheduledFrame])).toEqual([['show:duration-end', 120]]);
+    const brief = new CueRuntime(value); brief.selectItem('item'); brief.beginPreflight('live'); brief.arm(0);
+    brief.ingest(sample(0, 0)); brief.ingest(sample(27, 900));
+    expect(brief.ingest(sample(130, 4_300))).toMatchObject({ dueCues: [], missedCueIds: ['show'], reason: '播放位置更新中断 3400ms：画面按当前位置重建，错过 1 个联动 Cue，未补发' });
+    const shown = new CueRuntime(value); shown.selectItem('item'); shown.beginPreflight('live'); shown.arm(0);
+    for (let frame = 0; frame <= 30; frame += 3) shown.ingest(sample(frame, frame * 1000 / 30));
+    expect(shown.ingest(sample(130, 4_333)).dueCues.map(due => [due.cue.id, due.scheduledFrame])).toEqual([['show:duration-end', 130]]);
     const current = new CueRuntime(value); current.selectItem('item'); current.beginPreflight('live');
     expect(current.arm(0, sample(45, 0)).missedCueIds).toEqual(['show']);
     for (let frame = 60; frame <= 120; frame += 15) expect(current.ingest(sample(frame, (frame - 45) * 1000 / 30)).dueCues).toEqual([]);

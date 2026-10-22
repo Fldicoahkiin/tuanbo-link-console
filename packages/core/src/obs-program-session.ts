@@ -68,7 +68,9 @@ export class ObsProgramSession {
     // Other outputs belong to independent channels, never pretend that an OBS
     // executor sent MIDI or a console action.
     if (item.cues.some(cue => cue.actions.some(action => !action.kind.startsWith('obs.')))) throw new Error('后台画面快照含非 OBS 动作，必须先分配到对应输出通道');
-    this.runtime = new CueRuntime(project);
+    // Picture actions have a 100 ms execution boundary; any longer silence between
+    // device observations is a gap rebuilt at the current position (rule B).
+    this.runtime = new CueRuntime(project, 100);
     this.managed = new ManagedOutputRuntime(project, projectPath, dependencies);
     // Live mode: a failed action is reported in red and later actions still run.
     this.runner = new CueActionRunner([dependencies.executor], { now: dependencies.now,
@@ -141,14 +143,15 @@ export class ObsProgramSession {
         if (!this.advancing && previousFrame >= 0) this.requireUpdate(this.runtime.anchorMediaClock(sample));
         update = this.runtime.ingest(sample);
         this.requireUpdate(update);
-        // Cues missed while position updates stalled are never sent late; say so.
+        // A rebuild after stalled position updates is always reported.
         if (update.state === 'running' && update.reason) this.fault(update.reason);
       }
       this.advancing = true; this.frame = sample.totalFrames;
       if (update.state !== 'running') return;
       this.preload(sample.totalFrames);
       const media = this.managed.collectCrossed(previousFrame, sample.totalFrames);
-      const work = this.managed.sceneTimeline!.cross(previousFrame, sample.totalFrames, update.dueCues, media);
+      const work = update.rebuild ? this.managed.sceneTimeline!.rebuild(previousFrame, sample.totalFrames, update.dueCues, media)
+        : this.managed.sceneTimeline!.cross(previousFrame, sample.totalFrames, update.dueCues, media);
       if (!work.cues.length && !work.media.length) return;
       const generation = this.generation;
       const current = (): boolean => generation === this.generation && !this.closed && !this.failure;

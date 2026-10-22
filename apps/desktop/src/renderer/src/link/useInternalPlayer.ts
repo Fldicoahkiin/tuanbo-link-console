@@ -140,7 +140,8 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       }
     });
     const unsubscribeFaults = useRuntimeStore.subscribe((next, previous) => {
-      if (next.state === 'running' && next.missedCueIds.length > previous.missedCueIds.length) {
+      // A rebuild after a position gap carries a reason even when nothing was missed.
+      if (next.state === 'running' && (next.missedCueIds.length > previous.missedCueIds.length || next.reason && next.reason !== previous.reason)) {
         const message = next.reason ?? `错过 ${next.missedCueIds.length} 个联动 Cue，未补发`;
         dependencies.notice?.(message, next.currentItemId); player.reportFault(message);
       }

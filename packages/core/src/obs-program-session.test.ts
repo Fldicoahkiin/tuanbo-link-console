@@ -76,13 +76,14 @@ it('管道中积压的位置不能按收到时刻重新获得执行窗口；直�
   expect(test.actions.map(action => action.id)).toEqual(['action-1']);
 });
 
-it('位置更新中断期间的 Cue 记为错过并标红，不补发，后续动作继续', async () => {
+it('位置更新中断超过 100ms 按当前位置重建画面并标红：间隔内的机位此刻切换，后续动作继续', async () => {
   const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
-  test.time(1700); test.session.clock(1700); await test.session.settled();
-  expect(test.faults).toEqual(['播放位置更新中断 800ms，错过 1 个联动 Cue，未补发']);
+  test.time(1100); test.session.clock(1100); await test.session.settled();
+  expect(test.faults).toEqual(['播放位置更新中断 200ms：画面按当前位置重建']);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1']);
   expect(test.session.error).toBeNull();
-  await test.advance(1800, 2000);
-  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-2']);
+  await test.advance(1200, 2000);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-2']);
 });
 
 it('设备观察年龄和本机排队耗时共同计入画面执行边界；迟到动作不补发，后续动作继续', async () => {
@@ -166,13 +167,6 @@ it('准备期间取消，迟到场景确认不会继续后续初始化', async (
   await started;
   const stopping = test.session.stop(); release(); await preparing; await stopping;
   expect(test.dependencies.seekMedia).not.toHaveBeenCalled(); expect(test.states.at(-1)?.state).toBe('idle');
-});
-
-it('晚收到设备时钟也按事件原定位置计算延迟，不将收包时间当作事件时间', async () => {
-  const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
-  test.time(1150); test.session.clock(1150); await test.session.settled();
-  expect(test.faults.join()).toContain('100ms'); expect(test.session.error).toBeNull();
-  expect(test.actions.map(action => action.id)).toEqual(['action-0']);
 });
 
 function videoFixture(): LinkProject {

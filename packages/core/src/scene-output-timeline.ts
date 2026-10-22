@@ -84,6 +84,20 @@ export class SceneOutputTimeline {
       ...media.map(event => event.frameNumber));
     return boundaryWork(this.index.itemId, boundary, due, media, this.at(previous), this.at(frame));
   }
+  /** Recovery rule B after a position gap: the picture at `frame`, whatever was
+   * crossed on the way. Scenes go first so rebuilt shown sources land on the
+   * scene now on program; everything is scheduled at `frame`. */
+  rebuild(previous: number, frame: number, due: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[]): SceneWork {
+    // A clip that started and stopped inside the gap never played; there is nothing to stop.
+    const started = new Set(media.filter(event => event.phase === 'start').map(event => event.clipId));
+    const stops = media.filter(event => event.phase === 'stop' && !started.has(event.clipId)).map(event => ({ ...event, frameNumber: frame }));
+    const work = boundaryWork(this.index.itemId, frame, [], stops, this.at(previous), this.at(frame));
+    const shown = due.flatMap((entry) => {
+      const actions = entry.cue.actions.filter((action) => action.kind !== 'obs.setProgramScene');
+      return actions.length ? [{ ...entry, cue: { ...entry.cue, actions }, scheduledFrame: frame }] : [];
+    });
+    return { cues: [...work.cues, ...shown], media: work.media };
+  }
 }
 
 /** A finite camera clip temporarily covers lower tracks; its end reveals their current position. */

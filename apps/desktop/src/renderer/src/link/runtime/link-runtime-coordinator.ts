@@ -359,7 +359,8 @@ export class LinkRuntimeCoordinator {
     const skippedMedia = previousState === 'paused' && update.state === 'paused' && !update.manualTakeover
       ? this.managedOutput.collectCrossed(previousFrame, sample.totalFrames)
       : [];
-    const work = update.state === 'running' && this.managedOutput.sceneTimeline ? this.managedOutput.sceneTimeline.cross(previousFrame, sample.totalFrames, update.dueCues, managedMedia) : { cues: update.dueCues, media: managedMedia };
+    const scenes = update.state === 'running' ? this.managedOutput.sceneTimeline : null;
+    const work = scenes ? scenes[update.rebuild ? 'rebuild' : 'cross'](previousFrame, sample.totalFrames, update.dueCues, managedMedia) : { cues: update.dueCues, media: managedMedia };
     await this.enqueueTimelineWork(work.cues, work.media);
     await this.enqueueSkippedMedia(skippedMedia, '自动联动暂停期间已越过该素材边界；系统未自动补执行');
   }
