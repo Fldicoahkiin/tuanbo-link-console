@@ -11,7 +11,9 @@ export function ma2SongCreationStages(skeletonXml: string, changes: readonly {
   const report = inspectMa2SequenceXml(skeletonXml);
   const empty = emptyMa2SequenceXml(report.sequences[0]!.number, report.version);
   return Object.fromEntries(changes.map(change => {
-    const states = [skeleton.get(change.cue)!];
+    // A Cue added to a bound song has no state before its first Copy.
+    const before = skeleton.get(change.cue);
+    const states = before === undefined ? [] : [before];
     for (let count = 1; count <= (change.sources?.length ?? 0); count++) {
       const xml = editMa2SongSequence(empty, '', [{ ...change, sources: change.sources!.slice(0, count) }], []);
       states.push(ma2SequenceCueFingerprints(xml, false).get(change.cue)!);

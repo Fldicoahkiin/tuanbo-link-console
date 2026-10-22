@@ -313,16 +313,20 @@ export class Ma2LayoutService {
         // Replace its verified native snapshot atomically in that case, retaining
         // all untouched console Cue data instead of pretending Copy creates empties.
         const nativeCopy = !remoteXml && Boolean(executorPage);
-        const uploaded = nativeCopy ? editMa2SongSequence(emptyMa2SequenceXml(target, directory.version), plan.name, changes.map(change => ({ cue: change.cue, name: change.name, sources: [] })), []) : desired;
-        await this.prepareXml(connection, layoutRequest, file, uploaded, (completed, total) => progress('raw', completed, total, '传输歌曲结构'));
         const clearing = remoteXml && plan.deletions.length > 0 && inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.every(cue => plan.deletions.includes(cue.number));
+        // A bound song copies changed Cues into its console Sequence the same way; Copy creates a missing
+        // Cue number. Content kept only in the local baseline, Cues taken from this same Sequence, an
+        // emptied Cue and a full clear have nothing on the console to copy, so they import the snapshot.
+        const copyInPlace = remoteXml !== null && !clearing && plan.changes.every(change => !change.restore && (change.refs === undefined || change.refs.length > 0 && change.refs.every(ref => ref.sequence !== target)));
+        const uploaded = nativeCopy ? editMa2SongSequence(emptyMa2SequenceXml(target, directory.version), plan.name, changes.map(change => ({ cue: change.cue, name: change.name, sources: [] })), []) : desired;
+        if (!copyInPlace) await this.prepareXml(connection, layoutRequest, file, uploaded, (completed, total) => progress('raw', completed, total, '传输歌曲结构'));
         const replacingAll = clearing && changes.length > 0;
         if (replacingAll) await this.prepareXml(connection, layoutRequest, `${file}_clear`, editMa2SongSequence(remoteXml, plan.name, [], plan.deletions));
         if (remoteExport) backupFile = `${remoteExport}.xml`;
         if (!executorPage && !beforeLayout) await this.prepareXml(connection, layoutRequest, `${file}_layout`, emptyMa2LayoutXml(layoutRequest.layout, directory.version));
         // The song's own Sequence is compared with its console export inside the write command below.
         for (const [number, xml] of sources) if (Number(number) !== target && canonical(await bridge.request('SEQCUES', Number(number), sourceCues(Number(number)))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
-        await checkpoint(remoteXml ?? uploaded, nativeCopy ? ma2SongCreationStages(uploaded, changes) : undefined);
+        await checkpoint(remoteXml ?? uploaded, nativeCopy || copyInPlace ? ma2SongCreationStages(remoteXml ?? uploaded, changes) : undefined);
         const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${remoteExport}')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
         // Import /o can retain the previous native step table when a numbered
         // Cue disappears from XML. Delete reviewed numbers through MA2 first so
@@ -334,9 +338,11 @@ export class Ma2LayoutService {
         const remove = clearing ? '' : plan.deletions.map(cue => `gma.cmd('Delete Sequence ${target} Cue ${cue} /nc');assert(not gma.show.getobj.handle('Sequence ${target} Cue ${cue}'),'Cue deletion not confirmed');`).join('');
         this.attempted.add(request.requestId); wrote = true;
         const clear = replacingAll ? `gma.cmd('Import ${file}_clear.xml At Sequence ${target} /o /nc');` : '';
-        await this.call(connection, `${this.guard(layoutRequest)}${verify}${remove}${clear}gma.cmd('Import ${file}.xml At Sequence ${target} /o /nc');assert(gma.show.getobj.handle('Sequence ${target}'),'Sequence creation failed');${removeFiles(file, `${file}_check`, `${file}_clear`)}return 'written'`);
-        if (nativeCopy) {
-          progress('previews', 0, plan.changes.length, `控台内部创建 ${plan.changes.length} 个 Cue`);
+        const write = copyInPlace ? '' : `gma.cmd('Import ${file}.xml At Sequence ${target} /o /nc');assert(gma.show.getobj.handle('Sequence ${target}'),'Sequence creation failed');`;
+        await this.call(connection, `${this.guard(layoutRequest)}${verify}${remove}${clear}${write}${removeFiles(file, `${file}_check`, `${file}_clear`)}return 'written'`);
+        if (copyInPlace && existingName !== plan.name) await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} "${plan.name}"`)});return 'labelled'`);
+        if (nativeCopy || copyInPlace) {
+          progress('previews', 0, plan.changes.length, `控台内部${nativeCopy ? '创建' : '写入'} ${plan.changes.length} 个 Cue`);
           for (const [changeIndex, change] of plan.changes.entries()) {
             for (const [index, ref] of (change.refs ?? []).entries()) {
               await this.call(connection, `${this.guard(layoutRequest)}assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /${index ? 'merge' : 'o'} /nc');gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'copied'`);
