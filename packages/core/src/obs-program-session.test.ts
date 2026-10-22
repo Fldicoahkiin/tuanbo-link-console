@@ -18,7 +18,7 @@ function setup(project = fixture(), execute?: (action: LinkAction) => Promise<vo
   const dependencies = { now: () => now, fault: (message: string) => faults.push(message), recordLog: vi.fn<LinkDesktopApi['recordLog']>(entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now })), executeManagedMediaEvent: vi.fn<LinkDesktopApi['executeManagedMediaEvent']>(() => Promise.resolve()),
     guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
     prepareOutputs: vi.fn(() => Promise.resolve()), releaseOutputs: vi.fn(() => Promise.resolve()),
-    prepareUpcoming: vi.fn<NonNullable<import('./obs-program-session').ObsProgramSessionDependencies['prepareUpcoming']>>(() => Promise.resolve()),
+    prepareUpcoming: vi.fn<NonNullable<import('./obs-program-session').ObsProgramSessionDependencies['prepareUpcoming']>>(() => Promise.resolve(null)),
     seekMedia: vi.fn(() => Promise.resolve()), mediaReport: vi.fn(), cueReport: (report: CueExecutionReport) => reports.push(report),
     state: (state: RuntimeUpdate) => states.push(state),
     executor: { id: 'obs-test', supports: (action: LinkAction) => action.kind.startsWith('obs.'),
@@ -34,7 +34,7 @@ it('后台预备最多一个在途，停止使其失效并等待完成再清理'
   const test = setup();
   let release = (): void => { throw new Error('测试未初始化'); };
   test.dependencies.prepareUpcoming.mockImplementation(async (_frame, assertCurrent) => {
-    await new Promise<void>(resolve => { release = resolve; }); assertCurrent();
+    await new Promise<void>(resolve => { release = resolve; }); assertCurrent(); return null;
   });
   await test.session.prepare(0); await test.advance(0, 500);
   expect(test.dependencies.prepareUpcoming).toHaveBeenCalledTimes(1);
@@ -174,6 +174,21 @@ function videoFixture(): LinkProject {
     mediaAssets: [{ id: 'video', name: '视频', kind: 'video', relativePath: 'assets/video.mp4', sha256: 'a'.repeat(64), byteLength: 1, durationMs: 10000, width: 1920, height: 1080 }],
     rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'video-layer', name: '视频' }], referenceMediaClips: [{ id: 'clip', assetId: 'video', layerId: 'video-layer', label: '视频', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 10000 }], cues: [] }] });
 }
+
+it('素材预备晚于播放边界：起播失败标红，预备完成后按当前位置起播一次并标红，同一片段不再重复', async () => {
+  const project = videoFixture(); project.rundown[0]!.referenceMediaClips[0]!.startTimecode.seconds = 1;
+  const test = setup(project), calls = test.dependencies.executeManagedMediaEvent.mock.calls;
+  test.dependencies.executeManagedMediaEvent.mockRejectedValueOnce(new Error('下一素材未在播放边界前准备完成：视频'));
+  await test.session.prepare(0); await test.advance(0, 1100);
+  expect(calls).toHaveLength(1); const overdue = calls[0]![0].event;
+  test.dependencies.prepareUpcoming.mockResolvedValueOnce(overdue); await test.advance(1200, 1600);
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  const late = calls[1]![0].event, lateMs = late.sourceOffsetMs;
+  expect(late).toMatchObject({ clipId: overdue.clipId, phase: 'start' }); expect(lateMs).toBeGreaterThanOrEqual(200);
+  expect(test.faults).toContain(`素材预备晚于播放边界，已按当前位置起播：视频（晚 ${lateMs}ms）`);
+  test.dependencies.prepareUpcoming.mockResolvedValueOnce(overdue); await test.advance(1700, 2400); await test.session.settled();
+  expect(calls).toHaveLength(2); expect(test.session.error).toBeNull();
+});
 
 it.each([0, 150])('机位覆盖结束只恢复叠加显隐，持续播放的视频不重发；应答耗时 %i ms', async latency => {
   const project = videoFixture(), item = project.rundown[0]!;

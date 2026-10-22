@@ -10,7 +10,10 @@ type Scenes = Pick<ObsMediaScenes, 'prepareStandby' | 'copyPresentation' | 'prim
  * never starts output and is driven by the formal audio clock, not the UI. */
 export class ObsMediaPreload {
   private readonly media = new Map<string, Media>();
+  private readonly timeline: SceneOutputTimeline;
   private readonly starts: ManagedMediaEvent[];
+  /** Clips prepared after their boundary (recovery rule B); each at most once. */
+  private readonly late = new Set<string>();
   private readonly lookaheadFrames: number;
   private readonly preparationSpacingFrames: number;
   private nextPreparationFrame = -Infinity;
@@ -18,7 +21,8 @@ export class ObsMediaPreload {
   private closing: Promise<void> | null = null;
   constructor(project: LinkProject, itemId: string, private readonly scenes: Scenes,
     private readonly native: { prime: (name: string, restartRetained: boolean, kind: 'audio' | 'video') => Promise<void>; seek: (name: string, positionMs: number) => Promise<void> }) {
-    this.starts = new SceneOutputTimeline(project, itemId).preloadEntries();
+    this.timeline = new SceneOutputTimeline(project, itemId);
+    this.starts = this.timeline.preloadEntries();
     this.lookaheadFrames = Math.ceil(10 * playbackFramesPerSecond(project.timebase.frameRate));
     // Eight live layers can still prepare inside the ten-second horizon.
     // Leave rendering time between decoder flush/upload bursts, rather than
@@ -64,9 +68,18 @@ export class ObsMediaPreload {
     media.retained.delete(sourceName);
   }
 
-  async upcoming(frame: number, assertCurrent: () => void): Promise<void> {
+  /** Prepares at most one clip and returns it. A clip on air now whose decoder
+   * missed its boundary goes first, once, so the program can start it late at
+   * the current position. */
+  async upcoming(frame: number, assertCurrent: () => void): Promise<ManagedMediaEvent | null> {
     assertCurrent();
-    if (frame < this.nextPreparationFrame) return;
+    if (frame < this.nextPreparationFrame) return null;
+    const overdue = this.timeline.at(frame).media.find(event => (event.assetKind === 'audio' || event.assetKind === 'video')
+      && !this.late.has(event.clipId) && this.require(event).current?.event.clipId !== event.clipId && this.require(event).pending === null);
+    if (overdue) {
+      this.late.add(overdue.clipId); this.nextPreparationFrame = frame + this.preparationSpacingFrames;
+      await this.prime(overdue, assertCurrent); return overdue;
+    }
     const next = new Map<string, ManagedMediaEvent>();
     let low = 0, high = this.starts.length;
     while (low < high) { const middle = (low + high) >>> 1; if (this.starts[middle]!.frameNumber <= frame) low = middle + 1; else high = middle; }
@@ -84,12 +97,12 @@ export class ObsMediaPreload {
       return media.current?.event.clipId !== event.clipId && media.pending === null;
     });
     const target = targets[0];
-    if (!target) return;
+    if (!target) return null;
     // Keep initial preparation separate. While output is live, spreading GPU
     // uploads across audio observations avoids a four-decoder burst. Preparation
     // remains inside the same ten-second horizon and never delays an event.
     this.nextPreparationFrame = frame + this.preparationSpacingFrames;
-    await this.prime(target, assertCurrent);
+    await this.prime(target, assertCurrent); return target;
   }
 
   /** Allocate and warm the second decoder before the formal clock starts.

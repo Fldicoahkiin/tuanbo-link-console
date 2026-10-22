@@ -10,7 +10,8 @@ export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
   guardOutput: <T>(canSend: () => boolean, operation: () => Promise<T>, dispatched?: () => void) => Promise<T>;
   prepareOutputs: (assertCurrent: () => void) => Promise<void>;
   outputNotice?: () => string | null;
-  prepareUpcoming?: (frame: number, assertCurrent: () => void) => Promise<void>;
+  /** Returns the clip it made ready; one already past its boundary starts late (rule B). */
+  prepareUpcoming?: (frame: number, assertCurrent: () => void) => Promise<ManagedMediaEvent | null>;
   releaseOutputs: () => Promise<void>;
   executor: LinkActionExecutor;
   seekMedia: (event: ManagedMediaEvent) => Promise<void>;
@@ -45,6 +46,8 @@ type TimelineEntry = { frame: number; priority: number; cue: LinkCue } | { frame
  * prepare resources and bind this session to a specific native audio generation. */
 export class ObsProgramSession {
   private preloadWork: Promise<void> | null = null;
+  /** Clip starts that failed this session; a late-ready decoder may start each once. */
+  private readonly failedStarts = new Set<string>();
   private preloadFrame = -Infinity;
   private readonly runtime: CueRuntime;
   private readonly managed: ManagedOutputRuntime;
@@ -239,6 +242,7 @@ export class ObsProgramSession {
     }
     const report = await this.dependencies.guardOutput(gate.allowed,
       () => this.managed.executeMedia(this.managed.alignEvent(event, this.frame), 'live', gate.allowed), gate.dispatched);
+    if (event.phase === 'start' && report.status === 'failed') this.failedStarts.add(event.clipId);
     this.dependencies.mediaReport(report);
   }
 
@@ -256,8 +260,24 @@ export class ObsProgramSession {
     const allowed = (): boolean => !this.closed && !this.failure;
     this.preloadWork = this.dependencies.guardOutput(allowed, () => prepare(frame, () => {
       if (!allowed()) throw new Error('后续素材准备已取消');
-    })).catch(error => { if (!this.closed && !this.failure) this.fault(`后续素材预备失败：${error instanceof Error ? error.message : String(error)}；不重试，到点的素材可能无法播放`); })
+    })).then(prepared => { if (prepared) this.startLate(prepared); }).catch(error => { if (!this.closed && !this.failure) this.fault(`后续素材预备失败：${error instanceof Error ? error.message : String(error)}；不重试，到点的素材可能无法播放`); })
       .finally(() => { this.preloadWork = null; });
+  }
+
+  /** Recovery rule B for a decoder that missed its boundary: once it is ready,
+   * the clip starts at the current position if it should be on air now. */
+  private startLate(prepared: ManagedMediaEvent): void {
+    const generation = this.generation;
+    this.enqueue(async () => {
+      if (this.runtime.getState() !== 'running' || !this.failedStarts.delete(prepared.clipId)) return;
+      const event = this.managed.sceneTimeline!.at(this.frame).media.find(entry => entry.clipId === prepared.clipId);
+      if (!event) return;
+      const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
+      const lateMs = Math.round((this.frame - event.frameNumber) * 1000 / playbackFramesPerSecond(this.project.timebase.frameRate));
+      const report = await this.dependencies.guardOutput(current, () => this.managed.executeMedia(this.managed.alignEvent(event, this.frame), 'live', current));
+      this.dependencies.mediaReport(report);
+      if (report.status === 'succeeded') this.fault(`素材预备晚于播放边界，已按当前位置起播：${event.assetName}（晚 ${lateMs}ms）`);
+    });
   }
 
   async pause(): Promise<void> {
