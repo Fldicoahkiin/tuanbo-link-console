@@ -21,3 +21,10 @@ export async function saveProject(page: Page): Promise<void> {
   await page.keyboard.press('Control+S');
   await expect(page.locator('.project-save-status')).toBeHidden();
 }
+
+/** Test teardown: unsaved edits are dropped, so quitting does not stop at 工程尚未保存. */
+export async function closeDiscarding(application: ElectronApplication): Promise<void> {
+  await application.evaluate(({ BrowserWindow }) => Promise.all(BrowserWindow.getAllWindows().map(window => window.webContents.executeJavaScript(
+    'window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })'))));
+  await application.close();
+}

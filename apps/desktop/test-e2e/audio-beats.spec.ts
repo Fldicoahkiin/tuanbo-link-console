@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
+import { saveProject } from './save-questions';
 
 test('真实音频检测三级节拍、保存标记、灯光放置与拖动吸附', async ({}, testInfo) => {
   const directory = testInfo.outputPath('project'); await mkdir(directory, { recursive: true });
@@ -31,6 +32,7 @@ test('真实音频检测三级节拍、保存标记、灯光放置与拖动吸�
     await page.getByRole('button', { name: '每两拍', exact: true }).click();
     await page.getByRole('button', { name: '应用标记', exact: true }).click();
     const load = async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
+    await saveProject(page);
     await expect.poll(async () => (await load()).rundown[0]!.referenceAudio?.beats?.pointsMs.length ?? 0).toBe(counts[1]);
     const saved = (await load()).rundown[0]!.referenceAudio!;
     expect(saved.sha256).toBe(sha256); expect(saved.durationMs).toBe(6000); expect(saved.timeline).toBeUndefined();
@@ -39,14 +41,17 @@ test('真实音频检测三级节拍、保存标记、灯光放置与拖动吸�
     if (!bounds || markers.length < 2) throw new Error('测试节拍点或灯光轨道缺失');
     await page.mouse.dblclick(markers[0]! + 3, bounds.y + 28);
     await expect(page.locator('.lighting-timeline-point')).toHaveCount(1);
+    await saveProject(page);
     await expect.poll(async () => (await load()).rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]?.at ?? -1).toBe(saved.beats!.pointsMs[0]);
     const cue = await page.locator('.lighting-timeline-point').boundingBox(); if (!cue) throw new Error('灯光点未显示');
     await page.mouse.move(cue.x + 3, cue.y + 8); await page.mouse.down();
     await page.mouse.move(cue.x + 3 + markers[1]! - markers[0]! + 2, cue.y + 8, { steps: 6 }); await page.mouse.up();
+    await saveProject(page);
     await expect.poll(async () => (await load()).rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]?.at ?? -1).toBe(saved.beats!.pointsMs[1]);
     await page.getByRole('button', { name: '关闭吸附', exact: true }).click();
     const currentBounds = await clip.boundingBox(); if (!currentBounds) throw new Error('灯光轨道未显示');
     await page.mouse.dblclick(markers[0]! + 8, currentBounds.y + currentBounds.height - 6);
+    await saveProject(page);
     await expect.poll(async () => (await load()).rundown[0]!.lighting!.tracks[0]!.clips[0]!.events.length).toBe(2);
     expect((await load()).rundown[0]!.lighting!.tracks[0]!.clips[0]!.events.at(-1)!.at).not.toBe(saved.beats!.pointsMs[0]);
     await page.screenshot({ path: testInfo.outputPath('audio-beat-lighting.png') });

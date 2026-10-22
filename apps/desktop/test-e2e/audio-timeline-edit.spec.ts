@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
+import { saveProject } from './save-questions';
 
 for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '编辑器' ? '编辑器：音频移动、裁剪、分割、删除、撤销和恢复' : '灯光工作台：波形只定位和打点，没有音频编辑或白框', async ({}, info) => {
   test.setTimeout(120_000);
@@ -40,6 +41,7 @@ for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '�
       await clip.click({ button: 'right' });
       await expect(page.getByRole('menu', { name: '音频片段菜单' })).toHaveCount(0);
       await expect(page.getByRole('dialog', { name: '编辑音频片段' })).toHaveCount(0);
+      await saveProject(page);
       await expect.poll(async () => (await load()).rundown[0]!.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length).toBe(1);
       await expect(page.locator('.waveform-cue-point[aria-pressed="true"]')).toHaveCount(1);
       await clip.click({ position: { x: 80, y: 80 } });
@@ -102,6 +104,7 @@ for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '�
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);
     expect((await segments())?.[0]).toMatchObject({ startMs: 1000, sourceOffsetMs: 1000, durationMs: 5000 });
     await page.locator('.audio-timeline-segment').click(); await page.keyboard.press('Delete');
+    await saveProject(page);
     await expect.poll(async () => (await load()).rundown[0]!.referenceAudio).toBeUndefined();
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);

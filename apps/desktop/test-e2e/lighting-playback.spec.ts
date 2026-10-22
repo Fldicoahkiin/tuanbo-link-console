@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, ma2PlaybackRequestSchema, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 for (const scenario of ['connected', 'disconnected', 'empty'] as const) test(`灯光时间线默认驱动输出：${scenario}`, async ({}, info) => {
   const connected = scenario === 'connected';
@@ -98,5 +99,5 @@ for (const scenario of ['connected', 'disconnected', 'empty'] as const) test(`�
     await expect.poll(() => calls.filter(call => call.action === 'off').length).toBe(1);
     await expect(page.locator('.timeline-transport code')).toHaveText('00:00');
     await page.screenshot({ path: info.outputPath('playback.png') });
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

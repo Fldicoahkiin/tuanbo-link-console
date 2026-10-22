@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
+import { saveProject } from './save-questions';
 
 for (const native of [false, true]) test(`无 MIDI 设备时切换灯光模式、保存并重启，原生绑定=${native}`, async ({}, info) => {
   test.setTimeout(120_000);
@@ -28,6 +29,7 @@ for (const native of [false, true]) test(`无 MIDI 设备时切换灯光模式�
       await current.page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
       await current.page.getByRole('combobox', { name: '灯光输出方式' }).selectOption(mode);
       await expect(current.page.getByRole('combobox', { name: '灯光输出方式' })).toHaveValue(mode);
+      await saveProject(current.page);
       await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.outputMode).toBe(mode);
       await current.app.close();
       current = await launch();
