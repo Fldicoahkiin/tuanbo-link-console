@@ -177,6 +177,7 @@ export type LinkDesktopApi = {
   controlNativeProgram(request: import('@tb/schema').NativeProgramControl): Promise<void>;
   onNativeProgramEvent(listener: (event: import('@tb/schema').NativeProgramEvent) => void): () => void;
   projectArchives(request: import('@tb/schema').ProjectArchiveRequest): Promise<import('@tb/schema').ProjectArchiveResult>;
+  projectArchiveSettings(request: import('@tb/schema').ProjectArchiveSettingsAction): Promise<import('@tb/schema').ProjectArchiveSettingsStatus>;
   prepareNativeObs(request: import('@tb/schema').NativeObsPrepare): Promise<import('@tb/schema').NativeObsStatus>;
   preloadNativeObs(request: import('@tb/schema').NativeObsPreload): Promise<void>;
   cancelNativeObsPreload(request: import('@tb/schema').NativeObsStop): Promise<void>;

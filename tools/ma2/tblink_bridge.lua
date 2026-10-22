@@ -1,8 +1,8 @@
 -- Local onPC bridge. Start once from a plugin; stop by running this plugin again.
 -- Requests are data, never executable Lua. Only one explicitly addressed Timecode is touched.
 local active = false
--- Remove the second export made only to compare with the first, and page exports once read.
--- Exports kept as write baselines or backups (tblink_library_, tblink_backup_, tblink_label_) stay.
+-- Remove every export a request makes only to read or compare once it is done. Kept: write
+-- backups (tblink_backup_, tblink_label_) and a SEQUENCE export requested with body 'keep'.
 local remove_scratch = true
 local last = ''
 local generation = tostring(gma.gettime())
@@ -12,6 +12,10 @@ local request_file = root .. '/temp/tblink_bridge_request.txt'
 local processing_file = root .. '/temp/tblink_bridge_processing_' .. generation .. '.txt'
 local response_file = root .. '/temp/tblink_bridge_response.txt'
 local appearance_cache = {}
+local function discard(name)
+  -- A copy that cannot be removed stays in importexport, as every copy did before this cleanup.
+  if remove_scratch then os.remove(root .. '/importexport/' .. name .. '.xml') end
+end
 local function sequence_appearance(number, handle)
   local now = gma.gettime()
   local cached = appearance_cache[number]
@@ -20,7 +24,7 @@ local function sequence_appearance(number, handle)
   gma.cmd('Export Sequence ' .. number .. ' ' .. file .. ' /o')
   local input = assert(io.open(root .. '/importexport/' .. file .. '.xml', 'rb'), 'Sequence appearance export unavailable')
   -- Appearance belongs to Sequ, before the first Cue. Fixture values never cross the network here.
-  local header = input:read(4096) or ''; input:close()
+  local header = input:read(4096) or ''; input:close(); discard(file)
   local before_cue = header:match('^(.-)<Cue') or header
   local color = before_cue:match('<Appearance%s+Color="([a-fA-F0-9]+)"')
   assert(not color or #color == 6, 'Invalid Sequence appearance')
@@ -34,10 +38,6 @@ local function read(path)
   file:close()
   assert(#data <= 33554432, 'Bridge file exceeds limit')
   return data
-end
-local function discard(name)
-  -- A copy that cannot be removed stays in importexport, as every copy did before this cleanup.
-  if remove_scratch then os.remove(root .. '/importexport/' .. name .. '.xml') end
 end
 local function write(path, data)
   local file = assert(io.open(path, 'wb'))
@@ -53,6 +53,9 @@ local function export(tc, name)
   gma.cmd('Export Timecode ' .. tc .. ' "' .. name .. '" /o')
   return assert(read(root .. '/importexport/' .. name .. '.xml'), 'Export unavailable')
 end
+local function export_scratch(tc, name)
+  local xml = export(tc, name); discard(name); return xml
+end
 local function references(xml)
   local numbers, seen = {}, {}
   for cue in xml:gmatch('<Cue[^>]*>(.-)</Cue>') do
@@ -66,7 +69,7 @@ local function references(xml)
   return numbers
 end
 local function snapshot(tc, id, additional)
-  local xml = export(tc, 'tblink_snapshot_' .. id)
+  local xml = export_scratch(tc, 'tblink_snapshot_' .. id)
   local numbers, seen = references(xml), {}
   for _, number in ipairs(numbers) do seen[number] = true end
   for _, number in ipairs(additional or {}) do
@@ -86,7 +89,7 @@ local function snapshot(tc, id, additional)
     gma.cmd('Export Sequence ' .. number .. ' "' .. name .. '_verify" /o')
     local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'))
     assert(canonical(full) == canonical(check), 'Sequence changed during snapshot')
-    discard(name .. '_verify')
+    discard(name); discard(name .. '_verify')
   end
   assert(canonical(xml) == canonical(export(tc, 'tblink_snapshot_verify_' .. id)), 'Timecode changed during snapshot')
   discard('tblink_snapshot_verify_' .. id)
@@ -207,6 +210,7 @@ local function process(data)
         local name = 'tblink_assignment_' .. id
         gma.cmd('Export Executor ' .. address .. ' "' .. name .. '" /o')
         local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Executor export unavailable')
+        discard(name)
         local assignment = xml:match('<Assignment%s[^>]*>(.-)</Assignment>')
         if not assignment then return nil end
         local values = {}; for number in assignment:gmatch('<No>%s*(%d+)%s*</No>') do values[#values + 1] = tonumber(number) end
@@ -267,7 +271,7 @@ local function process(data)
       return '{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(assert(gma.show.getvar('VERSION'))) .. ',"entries":[' .. table.concat(entries, ',') .. ']}'
     end
     if op == 'SEQUENCE' then
-      assert(body == '', 'Sequence request must be empty')
+      assert(body == '' or body == 'keep', 'Sequence request must be empty or keep')
       assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
       local name = 'tblink_library_' .. id
       gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '" /o')
@@ -275,6 +279,7 @@ local function process(data)
       gma.cmd('Export Sequence ' .. tc .. ' "' .. name .. '_verify" /o')
       assert(canonical(xml) == canonical(assert(read(root .. '/importexport/' .. name .. '_verify.xml'))), 'Sequence changed during read')
       discard(name .. '_verify')
+      if body ~= 'keep' then discard(name) end
       return xml
     end
     if op == 'SEQCUES' then
@@ -312,6 +317,7 @@ local function process(data)
         end
       end
       parts[#parts + 1] = '</Sequ></MA>'
+      discard(name)
       return table.concat(parts, '\n')
     end
     if op == 'EXECUTOR' then
@@ -326,7 +332,7 @@ local function process(data)
       gma.cmd('Export ' .. address .. ' "' .. name .. '_verify" /o')
       local check = assert(read(root .. '/importexport/' .. name .. '_verify.xml'), 'Executor verification unavailable')
       assert(canonical(xml) == canonical(check), 'Executor changed during read')
-      discard(name .. '_verify')
+      discard(name); discard(name .. '_verify')
       assert(gma.show.getobj.name(assert(gma.show.getobj.handle(address))) == executor_name, 'Executor name changed during read')
       local escaped = executor_name:gsub('&', '&amp;'):gsub('"', '&quot;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('\r', '&#13;'):gsub('\n', '&#10;'):gsub('\t', '&#9;')
       local result, count = xml:gsub('<Exec%s', function() return '<Exec tblink_executor_name="' .. escaped .. '" ' end)
@@ -345,10 +351,11 @@ local function process(data)
       assert(not gma.show.getobj.handle('Timecode ' .. tc), 'Timecode appeared before creation')
       gma.cmd('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /nc')
       assert(gma.show.getobj.handle('Timecode ' .. tc), 'Timecode creation unconfirmed')
-      return export(tc, 'tblink_created_' .. id)
+      discard(name)
+      return export_scratch(tc, 'tblink_created_' .. id)
     end
     assert(gma.show.getobj.handle('Timecode ' .. tc), 'Timecode does not exist')
-    if op == 'READ' then return export(tc, 'tblink_read_' .. id) end
+    if op == 'READ' then return export_scratch(tc, 'tblink_read_' .. id) end
     if op == 'SNAPSHOT' then return snapshot(tc, id) end
     if op == 'SCOPE' then
       assert(#body > 0 and not body:find('[^%d,]') and not body:find(',,') and body:sub(1, 1) ~= ',' and body:sub(-1) ~= ',', 'Invalid Sequence scope')
@@ -379,7 +386,9 @@ local function process(data)
     local name = 'tblink_write_' .. id
     write(root .. '/importexport/' .. name .. '.xml', desired)
     gma.cmd('Import "' .. name .. '.xml" At Timecode ' .. tc .. ' /o /nc')
-    return export(tc, 'tblink_verify_' .. id)
+    local verified = export_scratch(tc, 'tblink_verify_' .. id)
+    discard(name)
+    return verified
   end)
   local output = tostring(result)
   return id .. '\n' .. (ok and 'OK' or 'ERROR') .. '\n' .. #output .. '\n' .. output
@@ -517,6 +526,7 @@ _G.TBLINK_EXEC_INPUT = function(token,id,page,slot,button,pressed,code,sequence,
     local file='tblink_exec_key_'..token
     gma.cmd('Export '..address..' '..file..' /o')
     local xml=assert(read(root..'/importexport/'..file..'.xml'),'Executor export unavailable')
+    discard(file)
     local assignment=xml:match('<Assignment%s[^>]*>(.-)</Assignment>')
     local numbers={};for number in (assignment or ''):gmatch('<No>%s*(%d+)%s*</No>')do numbers[#numbers+1]=tonumber(number)end
     assert(table.concat(numbers,'.')==unhex(reference_hex),'Executor assignment changed')

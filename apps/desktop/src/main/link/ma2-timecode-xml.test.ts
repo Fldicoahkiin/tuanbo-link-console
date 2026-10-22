@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { editMa2TimecodeEvents, extendMa2TimecodeLength, inspectMa2SequenceXml, inspectMa2TimecodeXml, patchMa2EventTimes, prepareMa2TimecodeEvents, resolveMa2CueNumber, sameMa2XmlObjects, validateMa2TimecodeSnapshot } from './ma2-timecode-xml';
+import { editMa2SongSequence, editMa2TimecodeEvents, emptyMa2SequenceXml, extendMa2TimecodeLength, inspectMa2CueData, inspectMa2SequenceXml, inspectMa2TimecodeXml, patchMa2EventTimes, prepareMa2TimecodeEvents, resolveMa2CueNumber, sameMa2XmlObjects, validateMa2TimecodeSnapshot } from './ma2-timecode-xml';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { convertMa2Timecode } from './ma2-timecode-conversion';
 
@@ -300,4 +300,16 @@ describe('本机 3.3.4 Master 推杆真实样例', () => {
     ]);
     expect(preview.sourceXml).toBe(master);
   });
+});
+
+it('多来源合成接受只带预设时间的 Part（3.7 每个 Cue 都有），拒绝 Cue 命令和第二个 Part', () => {
+  const exported = readFileSync(new URL('./fixtures/ma2-cue-attributes-3.7.xml', import.meta.url), 'utf8');
+  const song = emptyMa2SequenceXml(9000, '3.7.0.5');
+  const sources = (xml: string) => [{ xml, cue: '1.000' }, { xml, cue: '1.000' }];
+  const merged = editMa2SongSequence(song, '歌曲', [{ cue: '1.000', name: '组合', sources: sources(exported) }], []);
+  expect(inspectMa2CueData(merged, inspectMa2SequenceXml(merged).sequences[0]!.cues[0]!.index).size).toBeGreaterThan(0);
+  const command = exported.replace('<CuePart index="0">', '<CuePart index="0"><macro_text>Off Sequence 1</macro_text>');
+  expect(() => editMa2SongSequence(song, '歌曲', [{ cue: '1.000', name: '组合', sources: sources(command) }], [])).toThrow('Cue 命令');
+  const parts = exported.replace('<CuePart index="0">', '<CuePart index="1"/><CuePart index="0">');
+  expect(() => editMa2SongSequence(song, '歌曲', [{ cue: '1.000', name: '组合', sources: sources(parts) }], [])).toThrow('多 Part');
 });

@@ -163,7 +163,9 @@ export function editMa2SongSequence(xml: string, name: string, changes: readonly
             if (attribute && attribute.name !== 'index' && attribute.name !== 'name') cue.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
           }
           for (const part of children(sourceCue, 'CuePart')) cue.appendChild(document.importNode(part, true));
-        } else if (children(sourceCue, 'CuePart').some(part => part.getAttribute('index') !== '0' || part.childNodes.length > 0)) throw new Error('组合含多 Part 或 Cue 命令，不能静态合成到歌曲序列');
+        // Every 3.7 Part carries CuePartPresetTiming; a Cue command arrives as macro_text, and anything
+        // else in a Part is refused as well rather than merged blindly.
+        } else if (children(sourceCue, 'CuePart').some(part => part.getAttribute('index') !== '0' || children(part).some(child => child.localName !== 'CuePartPresetTiming'))) throw new Error('组合含多 Part 或 Cue 命令，不能静态合成到歌曲序列');
         const data = singleChild(sourceCue, 'CueDatas');
         for (const row of data ? children(data, 'CueData') : []) {
           const key = JSON.stringify(canonicalElement(singleChild(row, 'Channel')!));

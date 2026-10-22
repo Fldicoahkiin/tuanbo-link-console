@@ -29,13 +29,27 @@ it('确认保持；时间依据变化后保留人选但失效，不静默换歌'
   expect(() => confirmMa2PairingCommand(2, '歌曲甲').execute(confirmed)).toThrow('歌曲范围');
 });
 
-it('切换控台、同名 Show 新会话也必须重新核对', () => {
+it('切换控台必须重新核对；同一控台重新读取、插件重启或升级版本不使已确认配对失效', () => {
   const { project, catalog } = fixture();
   project.ma2ReadState = reconcileMa2ReadState(project, 'console', catalog);
   const confirmed = confirmMa2PairingCommand(2, '歌曲甲').execute(project);
   expect(reconcileMa2ReadState(confirmed, 'other-console', catalog).pairings?.[2]?.status).toBe('stale');
-  catalog.directory.generation = 'another-session';
-  expect(reconcileMa2ReadState(confirmed, 'console', catalog).pairings?.[2]?.status).toBe('stale');
+  const reread = structuredClone(catalog); reread.directory.generation = 'another-session'; reread.directory.version = '3.7.0.6';
+  expect(reconcileMa2ReadState(confirmed, 'console', reread).pairings?.[2]?.status).toBe('confirmed');
+});
+
+it('旧版本保存的配对依据（含控台会话号和版本）在同一控台重新读取后仍为已确认', () => {
+  const { project, catalog } = fixture();
+  project.ma2ReadState = reconcileMa2ReadState(project, 'console', catalog);
+  const confirmed = confirmMa2PairingCommand(2, '歌曲甲').execute(project);
+  const pairing = confirmed.ma2ReadState!.pairings![2]!;
+  const current = JSON.parse(pairing.evidence) as Record<string, unknown>;
+  const { source, show, ...rest } = current;
+  pairing.evidence = JSON.stringify({ source, show, version: catalog.directory.version, generation: catalog.directory.generation, ...rest });
+  const reread = structuredClone(catalog); reread.directory.generation = 'after-upgrade';
+  expect(reconcileMa2ReadState(confirmed, 'console', reread).pairings?.[2]?.status).toBe('confirmed');
+  const touched = withMa2PairingValidation({ id: 'rename', label: '改名', execute: value => { const next = structuredClone(value); next.rundown[0]!.title = '歌曲甲（新）'; return next; }, undo: before => before });
+  expect(touched.execute(confirmed).ma2ReadState?.pairings?.[2]?.status).toBe('confirmed');
 });
 
 it('拒绝缺起点、未知帧率和错误歌曲的人工确认', () => {

@@ -1,4 +1,5 @@
 import { Button } from './Button';
+import { ArchiveSettings } from './ArchiveSettings';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useRef, useState, type ReactNode } from 'react';
 import { RefreshCw } from 'lucide-react';
@@ -54,6 +55,7 @@ export function DeviceConnectionsPage(props: Props): JSX.Element {
 
       <div className="device-detail">
         <div data-settings-section="logs" hidden={selected !== 'logs'} className="device-panel" role="region" aria-label="运行日志设置">{logsVisited.current ? <LogsWorkspace notify={props.notify} settings /> : null}</div>
+        <div data-settings-section="archives" hidden={selected !== 'archives'} className="device-panel" role="region" aria-label="工程存档设置">{selected === 'archives' ? <ArchiveSettings disabled={disabled} /> : null}</div>
         <div data-settings-section="songs" hidden={selected !== 'songs'} className="device-panel"><SongImportSettings disabled={disabled} notify={props.notify}>{props.songTools}</SongImportSettings></div>
         <div data-settings-section="obs" hidden={selected !== 'obs'} className="device-panel" aria-label="OBS 设备面板">{props.children}</div>
         <div data-settings-section="ma2" hidden={selected !== 'ma2'} className="device-panel" aria-label="MA2 设备面板">

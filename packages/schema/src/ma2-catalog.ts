@@ -26,6 +26,8 @@ export const ma2CatalogEntrySchema = z.object({
   readAt: z.string().datetime().optional(),
   target: z.number().int().min(1).max(99999), name: z.string(), eventCount: z.number().int().nonnegative().nullable(),
   frameFormat: z.string().nullable(), offset: z.string().nullable(), slot: z.string().nullable(),
+  // MA2 spells it `lenght`: 30 Hz ticks after the offset. Older saved catalogs have no length.
+  length: z.string().nullable().optional(),
   events: z.array(z.object({ path: z.string(), time: z.string(), action: z.string(), executor: z.string(), cue: z.string().nullable(), name: z.string().nullable() }).strict()),
   error: z.string().nullable(), warnings: z.array(z.string())
 }).strict();

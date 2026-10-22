@@ -1,20 +1,37 @@
 import { parseLinkProject, type LinkProject, type Ma2Catalog, type Ma2ReadState } from '@tb/schema';
 import type { LinkCommand } from './link-command';
-import { matchMa2Programs } from './ma2-program-matching';
+import { ma2EventOutsideSong, matchMa2Programs } from './ma2-program-matching';
 import { programTimeOrigin } from './ma2-time-origin';
 import { importMa2TimecodeCommand } from './ma2-import';
 
+/**
+ * What a confirmed pairing rests on: the console, the Show, the Timecode's timing and the song's start
+ * and audio. The bridge session and console version are not part of it, so reading the same console
+ * again, a restarted plugin or an upgrade keeps confirmations.
+ */
 export function ma2PairingEvidence(project: LinkProject, source: string, catalog: Ma2Catalog, target: number, itemId: string): string {
   const item = project.rundown.find(value => value.id === itemId);
   const entry = catalog.entries.find(value => value.target === target);
   if (!item?.referenceAudio || !entry || entry.error || item.p1UnavailableSourceKey || item.p1Media?.importedFullSource || !item.p1Media && !item.playback) return '';
   try {
-    return JSON.stringify({ source, show: catalog.directory.show, version: catalog.directory.version, generation: catalog.directory.generation,
+    return JSON.stringify({ source, show: catalog.directory.show,
       frame: entry.frameFormat, offset: entry.offset, times: entry.events.map(event => event.time),
       origin: programTimeOrigin(item),
       audio: item.referenceAudio.sha256, duration: item.referenceAudio.durationMs, trim: item.p1Media?.sourceTrim,
       fullSource: item.p1Media?.importedFullSource });
   } catch { return ''; }
+}
+
+/** Evidence saved by earlier versions also carried the bridge session and console version; neither counts. */
+function sameMa2PairingEvidence(saved: string, current: string): boolean {
+  if (saved === current) return current !== '';
+  if (!saved || !current) return false;
+  const timing = (text: string): string => {
+    const value = JSON.parse(text) as Record<string, unknown>;
+    delete value.version; delete value.generation;
+    return JSON.stringify(value);
+  };
+  return timing(saved) === timing(current);
 }
 
 /** Legacy automatic suggestions never become operator confirmations on a new scan. */
@@ -30,7 +47,7 @@ export function reconcileMa2ReadState(project: LinkProject, source: string, cata
     if (!itemId) continue;
     const evidence = ma2PairingEvidence(project, source, catalog, entry.target, itemId);
     const sameSource = previous?.source === source && previous.catalog.directory.show === catalog.directory.show;
-    const confirmed = old?.status === 'confirmed' && sameSource && evidence !== '' && old.evidence === evidence;
+    const confirmed = old?.status === 'confirmed' && sameSource && sameMa2PairingEvidence(old.evidence, evidence);
     const retained = Boolean(bound || old?.status === 'confirmed' || old?.status === 'stale');
     pairings[key] = { itemId, evidence, status: confirmed ? 'confirmed' : retained ? 'stale' : 'suggested',
       ...(retained && !confirmed ? { reason: '来源或时间依据需要重新核对；已有灯光与本地编辑保留' } : {}) };
@@ -106,7 +123,7 @@ export function withMa2PairingValidation(command: LinkCommand): LinkCommand {
     const next = command.execute(project);
     const state = next.ma2ReadState;
     if (!state?.pairings) return next;
-    const invalid = Object.entries(state.pairings).filter(([target, value]) => value.status !== 'stale' && value.evidence !== ma2PairingEvidence(next, state.source, state.catalog, Number(target), value.itemId));
+    const invalid = Object.entries(state.pairings).filter(([target, value]) => value.status !== 'stale' && !sameMa2PairingEvidence(value.evidence, ma2PairingEvidence(next, state.source, state.catalog, Number(target), value.itemId)));
     if (!invalid.length) return next;
     const pairs = { ...state.pairs }, pairings = { ...state.pairings };
     for (const [target, value] of invalid) { delete pairs[target]; pairings[target] = { ...value, status: 'stale', reason: '歌曲起点或音频范围已修改，请重新核对配对' }; }
@@ -130,10 +147,7 @@ export function confirmMa2PairingCommand(target: number, itemId: string): LinkCo
     if (!entry.events.length) throw new Error(`Timecode ${target} 没有事件，无需关联歌曲`);
     const invalid = entry.events.find(event => !/^\d+(?:\.\d+)?$/.test(event.time) || !Number.isFinite(Number(event.time)));
     if (invalid) throw new Error(`Timecode ${target} 的事件 ${invalid.path} 时间格式无效：${invalid.time}`);
-    const outside = entry.events.find(event => {
-      const time = (Number(event.time) + Number(entry.offset ?? 0)) * 1000 / 30;
-      return time < origin || time >= origin + song.referenceAudio!.durationMs;
-    });
+    const outside = ma2EventOutsideSong(entry, origin, song.referenceAudio.durationMs);
     if (outside) {
       const seconds = (Number(outside.time) + Number(entry.offset ?? 0)) / 30;
       throw new Error(`Timecode ${target} 的事件 ${outside.path} 位于 ${seconds.toFixed(3)} 秒，超出“${song.title}”的歌曲范围 ${(origin / 1000).toFixed(3)}～${((origin + song.referenceAudio.durationMs) / 1000).toFixed(3)} 秒；请核对歌曲原始时间码起点或选择对应歌曲`);

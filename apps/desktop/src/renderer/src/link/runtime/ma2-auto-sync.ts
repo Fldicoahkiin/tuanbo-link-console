@@ -16,7 +16,7 @@ export type Ma2AutoSyncDependencies = {
   read: (request: Ma2ReadRequest) => Promise<Ma2TimecodePreview>;
   compare: (request: Ma2CompareRequest) => Promise<Ma2SyncPreview>;
   apply: (request: Ma2ApplyRequest) => Promise<Ma2ApplyResult>;
-  archive: (documentId: number, project: LinkProject) => Promise<string>;
+  archive: (documentId: number, project: LinkProject) => Promise<string | null>;
   execute: (documentId: number, command: LinkCommand) => void | Promise<void>;
   changed: (status: Ma2AutoSyncStatus, message: string) => void;
 };

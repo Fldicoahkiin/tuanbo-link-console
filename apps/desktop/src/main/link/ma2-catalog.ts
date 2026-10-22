@@ -37,7 +37,7 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isP
       if (!tc || tc.index !== object.target - 1 || report.timecodes.length !== 1) throw new Error('读取对象与目录不一致');
       entry.name = tc.attributes.name ?? object.name;
       entry.frameFormat = tc.attributes.frame_format ?? null;
-      entry.offset = tc.attributes.offset ?? '0'; entry.slot = tc.attributes.slot ?? null;
+      entry.offset = tc.attributes.offset ?? '0'; entry.slot = tc.attributes.slot ?? null; entry.length = tc.attributes.lenght ?? null;
       entry.warnings = report.warnings;
       entry.eventCount = tc.tracks.reduce((sum, track) => sum + track.subtracks.reduce((count, subtrack) => count + subtrack.events.length, 0), 0);
       totalEvents += entry.eventCount;

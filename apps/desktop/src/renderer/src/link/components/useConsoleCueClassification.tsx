@@ -52,6 +52,6 @@ export function useConsoleCueClassification(onError:(message:string)=>void){
     const state=useDocumentStore.getState();if(state.project?.projectId!==context.projectId)throw new Error('工程已切换，请重新选择 Cue');
     state.execute(renameConsoleCueCommand(context.refs[0]!,name,context.source));onError('');
     await enableMa2NameSync(state.documentId);
-  }:undefined} onConfirm={changes=>execute('classify',changes)} onRemove={()=>execute('remove')} {...showRemoved?{onRestore:()=>execute('restore')}:{} }/>:null;
+  }:undefined} renamesOnConsole onConfirm={changes=>execute('classify',changes)} onRemove={()=>execute('remove')} {...showRemoved?{onRestore:()=>execute('restore')}:{} }/>:null;
   return {sections,isVisible,select,open,menu:<>{menu}{attributes?<LightingCueAttributes {...attributes} onClose={()=>setAttributes(null)}/>:null}</>,picked,setPicked,classified,hidden,showRemoved,setShowRemoved,onlyUnclassified,setOnlyUnclassified,message};
 }

@@ -1,4 +1,5 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
+import { projectArchiveSettingsActionSchema } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
 import { ma2SongCheckRequestSchema, ma2SongSyncRequestSchema } from '@tb/schema';
 import { materialSceneTargets } from '@tb/core/link';
@@ -61,7 +62,7 @@ import { convertMa2Snapshot } from './link/ma2-timecode-conversion';
 import { readFile, stat, statfs, mkdtemp, writeFile, mkdir } from 'node:fs/promises';
 import { assetResponse } from './link/asset-response';
 import { ProjectDocumentService } from './link/project-document-service';
-import { projectArchives } from './link/project-archives';
+import { ProjectArchiveSettingsStore, projectArchives } from './link/project-archives';
 import { cpus, release, totalmem, freemem } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
@@ -1098,11 +1099,30 @@ function registerIpc(
     }
     return destination;
   });
+  const archiveSettings = new ProjectArchiveSettingsStore(join(app.getPath('userData'), 'link-integrations', 'archive-settings.json'), join(app.getPath('documents'), '团播联动台', '存档'));
   // A failed trim leaves the extra archive in place and is logged; it never blocks the sync that archived.
-  handle('link:project-archives', (_event, payload: unknown) => projectArchives(payload, projectDocuments, path => shell.showItemInFolder(path), async path => {
-    try { await shell.trashItem(path); }
-    catch (error) { await logger.record({ level: 'warning', category: 'system', message: '自动存档超出保留数量，移到回收站未完成', details: { path, error: error instanceof Error ? error.message : String(error) } }); }
+  handle('link:project-archives', (_event, payload: unknown) => projectArchives(payload, projectDocuments, archiveSettings, path => shell.showItemInFolder(path), async path => {
+    try { await shell.trashItem(path); return true; }
+    catch (error) { await logger.record({ level: 'warning', category: 'system', message: '自动存档超出保留数量，移到回收站未完成', details: { path, error: error instanceof Error ? error.message : String(error) } }); return false; }
   }));
+  handle('link:project-archive-settings', async (_event, payload: unknown) => {
+    const request = projectArchiveSettingsActionSchema.parse(payload);
+    const settings = await archiveSettings.read();
+    if (request.action === 'save') await archiveSettings.write({ ...settings, enabled: request.enabled, keep: request.keep, nameTemplate: request.nameTemplate });
+    if (request.action === 'reset-directory') await archiveSettings.write({ ...settings, directory: null });
+    if (request.action === 'choose-directory') {
+      const result = await dialog.showOpenDialog(mainWindow!, { title: '选择工程存档位置', defaultPath: archiveSettings.root(settings), properties: ['openDirectory', 'createDirectory'] });
+      const directory = result.filePaths[0];
+      if (!result.canceled && directory) await archiveSettings.write({ ...settings, directory });
+    }
+    if (request.action === 'open-directory') {
+      const root = archiveSettings.root(settings);
+      await mkdir(root, { recursive: true });
+      const failure = await shell.openPath(root);
+      if (failure) throw new Error(`无法打开存档位置：${failure}`);
+    }
+    return archiveSettings.status();
+  });
   handle('link:import-reference-audio', async (_event, payloadValue: unknown) => {
     const payload = linkReferenceAudioImportPayloadSchema.parse(payloadValue);
     return projectService.importReferenceAudio(payload.projectPath, payload.sourcePath, payload.durationMs);

@@ -10,6 +10,7 @@ import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { CONSOLE_CUE_DRAG, consoleCueDragSchema } from './lighting-material-drag';
 import { ma2ConsoleSequenceName, ma2ConsoleCuePoolName, ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
 import { CuePoolGrid } from './CuePoolGrid';
+import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { Ma2SequencePreview } from './Ma2SequencePreview';
 import type { LightingDocument } from '@tb/schema';
 import type { CueIngredient } from './LightingCueComposer';
@@ -84,7 +85,7 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
       <label>每行按钮数<input type="number" min="1" max="24" value={settings.columns} disabled={busy} onChange={event=>setSettingsDraft({...settingsDraft,columns:Number(event.target.value)})}/></label>
     </div><p>第一次新建请选择空 Layout。只追加到本工程创建的专用布局；原有布局可以读取查看。</p></details>
     <div className="ma2-layout-read"><label>查看 Layout<input aria-label="查看 Layout 编号" type="number" min="1" max="9999" value={settings.layout} disabled={busy} onChange={event=>{setSettingsDraft({...settingsDraft,layout:Number(event.target.value)});setLayout(null);}}/></label><button onClick={()=>void read()} disabled={busy}><RefreshCw/>读取页面</button></div>
-    {creating ? <form className="ma2-layout-create" onSubmit={event=>{event.preventDefault();void create();}}><label>Cue 名称<input aria-label="新建控台 Cue 名称" value={name} required maxLength={512} disabled={busy} onChange={event=>setName(event.target.value)}/></label><select aria-label="新建 Cue 方式" value={mode} disabled={busy} onChange={event=>setMode(event.target.value==='combine'?'combine':'programmer')}><option value="combine">组合已有 Cue</option><option value="programmer">保存控台当前灯光</option></select>
+    {creating ? <form className="ma2-layout-create" onSubmit={event=>{event.preventDefault();void create();}}><label>Cue 名称<input aria-label="新建控台 Cue 名称" value={name} required maxLength={512} disabled={busy} onChange={event=>setName(event.target.value)}/></label><Ma2ConsoleName name={name}/><select aria-label="新建 Cue 方式" value={mode} disabled={busy} onChange={event=>setMode(event.target.value==='combine'?'combine':'programmer')}><option value="combine">组合已有 Cue</option><option value="programmer">保存控台当前灯光</option></select>
       {mode==='combine'?<><p>拖入素材或点击素材旁的 +。只合成已保存属性；重叠属性按下面顺序由后者覆盖，不包含延迟或多步运行过程。</p><ol>{ingredients.map((value,index)=><li key={index}><span>{value.name} <small>{value.sequence} / {value.cue}</small></span><button type="button" aria-label={`移除组合素材 ${index+1}`} disabled={busy} onClick={()=>onIngredients(ingredients.filter((_,i)=>i!==index))}><Trash2/></button></li>)}</ol></>:<><select aria-label="保存当前灯光范围" value={use} disabled={busy} onChange={event=>setUse(event.target.value==='Look'?'Look':'Active')}><option value="Active">Programmer 中已激活的属性</option><option value="Look">当前可见灯光（Look）</option></select><p>使用控台当前 World 和 Store Filter，保留 Programmer 激活状态。</p></>}
       <button type="submit" disabled={busy||!name.trim()||mode==='combine'&&!ingredients.length}>{busy?'正在创建并回读…':`创建到 Layout ${settings.layout}`}</button></form>:null}
     {layout ? <><strong>{layout.name || `Layout ${layout.layout}`}</strong><CuePoolGrid keys={layout.items.map(item => item.id)} label="本页控台素材" cellWidth={156} rowHeight={50} render={index => {
