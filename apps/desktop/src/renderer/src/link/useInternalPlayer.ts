@@ -7,6 +7,8 @@ import { InternalPlaybackController, emptyInternalPlayerState, type InternalPlay
 import { toUserErrorMessage } from '@tb/core/link';
 import { RemoteNativeProgramPlayer } from './runtime/remote-native-program-player';
 import type { ProgramPlayerControls } from './runtime/program-player-controls';
+import { recoverInternalObs } from './runtime/internal-obs-recovery';
+import { internalAudioEngine, internalAudioEngineLabel } from './view-models/internal-audio-engine';
 import type { LinkRuntimeCoordinator } from './runtime/link-runtime-coordinator';
 import { useDocumentStore } from './stores/document-store';
 import { useIntegrationStore } from './stores/integration-store';
@@ -34,7 +36,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     return desktop.onObsMediaPreparation(progress => controller.reportPreparation(
       `生成 OBS 定位缓存 ${progress.index + 1}/${progress.total} · ${progress.assetName}`));
   }, [controller]);
-  const requestedEngine = profile?.internalPlayer?.audioEngine ?? 'browser';
+  const engineChoice = internalAudioEngine(profile, project), requestedEngine = engineChoice.engine;
   const requestedDevice = (requestedEngine === 'native' ? profile?.internalPlayer?.nativeAudioOutputDeviceId : profile?.internalPlayer?.audioOutputDeviceId) ?? 'default';
   const requestedRate = profile?.internalPlayer?.audioSampleRate ?? 48000;
   const [audioConfiguration, setAudioConfiguration] = useState({ deviceId: requestedDevice, sampleRate: requestedRate, engine: requestedEngine });
@@ -70,6 +72,8 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     }
     let prepared: { report: PreflightReport; profile: ReturnType<typeof useIntegrationStore.getState>['profile']; mtcOutputEnabled: boolean } | null = null;
     const dependencies: InternalPlayerDependencies = {
+      // Refused before any output is prepared; the engine is never switched here.
+      refusal: () => internalAudioEngine(useIntegrationStore.getState().profile, project).blocked,
       prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled, signal }) => {
         if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
         if (!path) throw new Error('请先保存工程，再播放正式音频');
@@ -136,11 +140,16 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     const unsubscribeObs = useIntegrationStore.subscribe((next, previous) => {
       if (previous.obs.status === 'connected' && next.obs.status !== 'connected') prepared = null;
       if (player instanceof InternalPlaybackController && previous.obs.status === 'connected' && next.obs.status !== 'connected' && useRuntimeStore.getState().state !== 'idle') {
-        player.reportFault('OBS 连接中断：画面动作失败直到重新连接 OBS，之后从下一画面事件继续');
+        player.reportFault('OBS 连接中断：画面动作失败，重新连接后按当前位置重建画面');
+      }
+      if (player instanceof InternalPlaybackController && previous.obs.status !== 'connected' && next.obs.status === 'connected' && path) {
+        const control = view.readControl();
+        void recoverInternalObs({ project, path, status: control.status, itemId: control.itemId, positionMs: view.readClock().positionMs, coordinator, player, notice: (message, itemId) => dependencies.notice?.(message, itemId) });
       }
     });
     const unsubscribeFaults = useRuntimeStore.subscribe((next, previous) => {
-      if (next.state === 'running' && next.missedCueIds.length > previous.missedCueIds.length) {
+      // A rebuild after a position gap carries a reason even when nothing was missed.
+      if (next.state === 'running' && (next.missedCueIds.length > previous.missedCueIds.length || next.reason && next.reason !== previous.reason)) {
         const message = next.reason ?? `错过 ${next.missedCueIds.length} 个联动 Cue，未补发`;
         dependencies.notice?.(message, next.currentItemId); player.reportFault(message);
       }
@@ -157,5 +166,6 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       else player.dispose();
     };
   }, [coordinator, project, path, ready, audioConfiguration, view]);
-  return useMemo(() => ({ controller, state, view }), [controller, state, view]);
+  const engine = internalAudioEngineLabel({ ...engineChoice, engine: audioConfiguration.engine });
+  return useMemo(() => ({ controller, state, view, engine }), [controller, state, view, engine]);
 }

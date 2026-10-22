@@ -283,6 +283,21 @@ describe('灯光输出调度', () => {
     scheduler.locate(0); scheduler.tick(100); expect(sent[0]?.bytes).toEqual([0x90, 60, 100]);
     scheduler.tick(3000); expect(sent).toHaveLength(1); scheduler.stop(); expect(sent[1]?.bytes).toEqual([0x80, 60, 0]);
   });
+  it('本机播放按当前位置重建：继续播放补发仍按住的长音符，推杆值未变不重发，中间事件不重放', () => {
+    const value = document();
+    value.tracks[0]!.clips[0]!.events.push({ id: 'low', kind: 'cc', at: 500, controller: 7, value: 10 }, { id: 'short', kind: 'note', at: 600, note: 62, velocity: 90, duration: 100 },
+      { id: 'high', kind: 'cc', at: 1500, controller: 7, value: 80 });
+    const sent: LightingPacket[] = [];
+    const first = new LightingScheduler(compileLightingPackets(value), (packet) => sent.push(packet));
+    expect(first.restore(0)).toBe(0); first.tick(2000);
+    const onAir = first.onAir(); first.stop(); sent.length = 0;
+    const resumed = new LightingScheduler(compileLightingPackets(value), (packet) => sent.push(packet), onAir);
+    expect(resumed.restore(2000)).toBe(1); expect(sent.map((packet) => packet.bytes)).toEqual([[0x90, 60, 100]]);
+    resumed.tick(4200); expect(sent.at(-1)?.bytes).toEqual([0x80, 60, 0]);
+    sent.length = 0;
+    const seeked = new LightingScheduler(compileLightingPackets(value), (packet) => sent.push(packet));
+    expect(seeked.restore(1000)).toBe(2); expect(sent.map((packet) => packet.bytes)).toEqual([[0x90, 60, 100], [0xb0, 7, 10]]);
+  });
   it('中途定位不补发历史音符或无主释放', () => {
     const sent: LightingPacket[] = []; const scheduler = new LightingScheduler(compileLightingPackets(document()), (packet) => sent.push(packet));
     scheduler.locate(2000); scheduler.tick(5000); expect(sent).toEqual([]);

@@ -147,6 +147,18 @@ it('预备未完成、失败、过期时均不能把下一片段显示为可播�
   await expect(t.preload.seek(event, t.path)).rejects.toThrow('会话已改变');
 });
 
+it('错过播放边界的片段在当前位置仍应播出时先预备一次并交回，之后不再重复预备', async () => {
+  const t = setup(), [first, second] = t.events;
+  await t.preload.prime(first!, current); await t.preload.execute(first!, t.path);
+  await expect(t.preload.execute(second!, t.path)).rejects.toThrow('未在播放边界前');
+  expect(await t.preload.upcoming(390, current)).toMatchObject({ clipId: second!.clipId });
+  await t.preload.execute({ ...second!, sourceOffsetMs: 1100 }, t.path);
+  expect(t.native.prime).toHaveBeenCalledTimes(2);
+  expect(await t.preload.upcoming(420, current)).toMatchObject({ clipId: 'clip-2' });
+  expect(t.scenes.prime.mock.calls.map(([event]) => event.clipId)).toEqual(['clip-0', 'clip-1', 'clip-2']);
+  await t.preload.close();
+});
+
 it('一个输入停止失败仍清理另一输入，错误返回上层', async () => {
   const t = setup(), first = t.events[0]!;
   await t.preload.prime(first, current); await t.preload.execute(first, t.path); await t.preload.upcoming(60, current);

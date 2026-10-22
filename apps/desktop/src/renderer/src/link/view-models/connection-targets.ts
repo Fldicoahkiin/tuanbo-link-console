@@ -1,5 +1,6 @@
 import type { IntegrationProfile, LinkProject } from '@tb/schema';
 import { collectCueMidiOutputProfileIds, collectLightingOutputProfileIds } from '@tb/core/link';
+import { projectOutputsMtc } from './internal-audio-engine';
 
 export type MidiConnectionTarget = { id: string; name: string; direction: 'input' | 'output'; required: boolean };
 
@@ -18,7 +19,7 @@ export function midiConnectionTargets(profile: IntegrationProfile | null, projec
   };
   add(profile?.p1.mtcInputPortProfileId ?? 'p1-mtc', 'P1 时间码输入', 'input', Boolean(project && !internal));
   add(profile?.p1.controlOutputPortProfileId ?? 'p1-output', 'P1 控制输出', 'output', Boolean(project && !internal));
-  add(profile?.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output', '灯光时间码输出', 'output', Boolean(internal && project?.rundown.some(item => item.enabled && item.lighting?.outputMode !== 'network' && item.lighting?.outputMode !== 'direct' && (item.p1Media || item.lighting?.outputMode === 'timecode'))));
+  add(profile?.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output', '灯光时间码输出', 'output', projectOutputsMtc(project));
   add(profile?.internalPlayer?.controlInputPortProfileId ?? 'internal-control-input', '播放控制输入', 'input', Boolean(profile?.internalPlayer?.controlInputPortProfileId));
   add('lighting-events-output', '灯光 Cue 输出', 'output', false);
   if (project) {

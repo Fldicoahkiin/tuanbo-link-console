@@ -18,7 +18,7 @@ function setup(project = fixture(), execute?: (action: LinkAction) => Promise<vo
   const dependencies = { now: () => now, fault: (message: string) => faults.push(message), recordLog: vi.fn<LinkDesktopApi['recordLog']>(entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now })), executeManagedMediaEvent: vi.fn<LinkDesktopApi['executeManagedMediaEvent']>(() => Promise.resolve()),
     guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
     prepareOutputs: vi.fn(() => Promise.resolve()), releaseOutputs: vi.fn(() => Promise.resolve()),
-    prepareUpcoming: vi.fn<NonNullable<import('./obs-program-session').ObsProgramSessionDependencies['prepareUpcoming']>>(() => Promise.resolve()),
+    prepareUpcoming: vi.fn<NonNullable<import('./obs-program-session').ObsProgramSessionDependencies['prepareUpcoming']>>(() => Promise.resolve(null)),
     seekMedia: vi.fn(() => Promise.resolve()), mediaReport: vi.fn(), cueReport: (report: CueExecutionReport) => reports.push(report),
     state: (state: RuntimeUpdate) => states.push(state),
     executor: { id: 'obs-test', supports: (action: LinkAction) => action.kind.startsWith('obs.'),
@@ -34,7 +34,7 @@ it('后台预备最多一个在途，停止使其失效并等待完成再清理'
   const test = setup();
   let release = (): void => { throw new Error('测试未初始化'); };
   test.dependencies.prepareUpcoming.mockImplementation(async (_frame, assertCurrent) => {
-    await new Promise<void>(resolve => { release = resolve; }); assertCurrent();
+    await new Promise<void>(resolve => { release = resolve; }); assertCurrent(); return null;
   });
   await test.session.prepare(0); await test.advance(0, 500);
   expect(test.dependencies.prepareUpcoming).toHaveBeenCalledTimes(1);
@@ -76,13 +76,14 @@ it('管道中积压的位置不能按收到时刻重新获得执行窗口；直�
   expect(test.actions.map(action => action.id)).toEqual(['action-1']);
 });
 
-it('位置更新中断期间的 Cue 记为错过并标红，不补发，后续动作继续', async () => {
+it('位置更新中断超过 100ms 按当前位置重建画面并标红：间隔内的机位此刻切换，后续动作继续', async () => {
   const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
-  test.time(1700); test.session.clock(1700); await test.session.settled();
-  expect(test.faults).toEqual(['播放位置更新中断 800ms，错过 1 个联动 Cue，未补发']);
+  test.time(1100); test.session.clock(1100); await test.session.settled();
+  expect(test.faults).toEqual(['播放位置更新中断 200ms：画面按当前位置重建']);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1']);
   expect(test.session.error).toBeNull();
-  await test.advance(1800, 2000);
-  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-2']);
+  await test.advance(1200, 2000);
+  expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1', 'action-2']);
 });
 
 it('设备观察年龄和本机排队耗时共同计入画面执行边界；迟到动作不补发，后续动作继续', async () => {
@@ -168,18 +169,44 @@ it('准备期间取消，迟到场景确认不会继续后续初始化', async (
   expect(test.dependencies.seekMedia).not.toHaveBeenCalled(); expect(test.states.at(-1)?.state).toBe('idle');
 });
 
-it('晚收到设备时钟也按事件原定位置计算延迟，不将收包时间当作事件时间', async () => {
-  const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
-  test.time(1150); test.session.clock(1150); await test.session.settled();
-  expect(test.faults.join()).toContain('100ms'); expect(test.session.error).toBeNull();
-  expect(test.actions.map(action => action.id)).toEqual(['action-0']);
-});
-
 function videoFixture(): LinkProject {
   return parseLinkProject({ ...createEmptyLinkProject('视频'), playbackSource: 'internal', obsOutputMode: 'scenes',
     mediaAssets: [{ id: 'video', name: '视频', kind: 'video', relativePath: 'assets/video.mp4', sha256: 'a'.repeat(64), byteLength: 1, durationMs: 10000, width: 1920, height: 1080 }],
     rundown: [{ id: 'song', title: '歌曲', visualLayers: [{ id: 'video-layer', name: '视频' }], referenceMediaClips: [{ id: 'clip', assetId: 'video', layerId: 'video-layer', label: '视频', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 10000 }], cues: [] }] });
 }
+
+it('素材预备晚于播放边界：起播失败标红，预备完成后按当前位置起播一次并标红，同一片段不再重复', async () => {
+  const project = videoFixture(); project.rundown[0]!.referenceMediaClips[0]!.startTimecode.seconds = 1;
+  const test = setup(project), calls = test.dependencies.executeManagedMediaEvent.mock.calls;
+  test.dependencies.executeManagedMediaEvent.mockRejectedValueOnce(new Error('下一素材未在播放边界前准备完成：视频'));
+  await test.session.prepare(0); await test.advance(0, 1100);
+  expect(calls).toHaveLength(1); const overdue = calls[0]![0].event;
+  test.dependencies.prepareUpcoming.mockResolvedValueOnce(overdue); await test.advance(1200, 1600);
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  const late = calls[1]![0].event, lateMs = late.sourceOffsetMs;
+  expect(late).toMatchObject({ clipId: overdue.clipId, phase: 'start' }); expect(lateMs).toBeGreaterThanOrEqual(200);
+  expect(test.faults).toContain(`素材预备晚于播放边界，已按当前位置起播：视频（晚 ${lateMs}ms）`);
+  test.dependencies.prepareUpcoming.mockResolvedValueOnce(overdue); await test.advance(1700, 2400); await test.session.settled();
+  expect(calls).toHaveLength(2); expect(test.session.error).toBeNull();
+});
+
+it('长片段每 5 秒按当前位置检查一次漂移，校正时标红；起播、定位后 1 秒内不检查', async () => {
+  const test = setup(videoFixture()), correct = vi.fn<(event: import('./managed-media-timeline').ManagedMediaEvent) => Promise<number | null>>(() => Promise.resolve(null));
+  const drift = { ...test.dependencies, correctMediaDrift: correct };
+  const session = new ObsProgramSession(videoFixture(), 'C:/shows/test.tblink', 'song', drift);
+  await session.prepare(0);
+  for (let time = 0; time <= 5000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
+  expect(correct.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([5000]);
+  correct.mockResolvedValueOnce(450);
+  for (let time = 5100; time <= 10000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
+  expect(correct.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([5000, 10000]);
+  expect(test.faults).toEqual(['素材与音乐偏差 450ms，已按当前位置校正：视频']);
+  await session.stop();
+  const seeked = new ObsProgramSession(videoFixture(), 'C:/shows/test.tblink', 'song', drift); correct.mockClear();
+  test.time(20000); await seeked.prepare(4500);
+  for (let time = 4500; time <= 5600; time += 100) { test.time(20000 + time); seeked.clock(time); await seeked.settled(); }
+  expect(correct.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([5500]); await seeked.stop();
+});
 
 it.each([0, 150])('机位覆盖结束只恢复叠加显隐，持续播放的视频不重发；应答耗时 %i ms', async latency => {
   const project = videoFixture(), item = project.rundown[0]!;

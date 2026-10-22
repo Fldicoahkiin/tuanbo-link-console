@@ -59,3 +59,44 @@ windowsTest('正式后台宿主使用真实 WASAPI 换歌、暂停恢复；空�
     expect(notices.filter(message => /灯光|MIDI Cue/.test(message))).toEqual([]);
   } finally { await host.close(); await service.close(); }
 }, 15000);
+
+// Item 10 end to end: at 44.1 kHz a song end of 1203 ms is 53052.3 samples; the
+// engine ends on sample 53052 (1202.993 ms) and lighting must finish there.
+windowsTest('44.1kHz 真实引擎曲尾不在整采样上时，灯光按引擎实际结束位置收尾，不报曲尾灯光未完成', async () => {
+  if (!ffmpeg) throw new Error('测试缺少 FFmpeg');
+  const directory = await mkdtemp(join(tmpdir(), 'tblink-441-tail-'));
+  const wav = Buffer.alloc(44 + 44100 * 4 * 2);
+  wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22); wav.writeUInt32LE(44100, 24); wav.writeUInt32LE(176400, 28);
+  wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+  const path = join(directory, 'silence.wav'); await writeFile(path, wav);
+  const project = parseLinkProject({ ...createEmptyLinkProject('44.1kHz 曲尾'), schemaVersion: 2, playbackSource: 'internal', obsOutputMode: 'scenes',
+    rundown: [{ id: 'song', title: '静音', referenceAudio: { assetId: 'audio', relativePath: 'silence.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 2000 },
+      lighting: createLightingDocument(), playback: { startMs: 500, endMs: 1203, mtcOffsetMs: 480000, volume: 0, endAction: 'pause', shortcut: '' } }] });
+  let host: NativeProgramHost | null = null, state: InternalPlayerState = { ...emptyInternalPlayerState };
+  const errors: string[] = [], notices: string[] = [];
+  const executable = resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tools/playback-engine/bin/tblink-playback.exe');
+  const service = new NativePlayerService({ executable, cache: new NativeAudioCache(join(directory, 'cache'), ffmpeg), resolveAudio: () => path,
+    checkDeviceHealth: () => Promise.resolve(),
+    changed: (status, qpc) => host?.observe(status, qpc), beforeControl: request => host?.interrupt(request), error: message => errors.push(message) });
+  host = new NativeProgramHost(project, join(directory, 'project.tblink'), 1, {
+    executable, audio: () => service.status, authorize: () => Promise.resolve(), preciseSeeking: () => false,
+    configuration: () => ({ outputDeviceId: 'default', audioSampleRate: 44100, mtcPortName: null, preload: false }),
+    changed: value => { state = value; }, midiChanged: () => undefined, notice: message => notices.push(message),
+    api: { prepareNativePlayback: request => service.prepare(request), controlNativePlayback: request => service.control(request),
+      getNativePlaybackDevices: () => service.devices(), prepareNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')),
+      stopNativeObs: () => Promise.resolve(), onNativeObsStatus: () => () => undefined,
+      preloadNativeObs: () => Promise.reject(new Error('隔离测试没有 OBS')), cancelNativeObsPreload: () => Promise.resolve() },
+    network: { getMa2NetworkStatus: () => Promise.reject(new Error('空灯光不应访问控台')),
+      playMa2Cue: () => Promise.reject(new Error('隔离测试禁止网络灯光输出')), cancelMa2Playback: () => Promise.resolve() }
+  });
+  host.controller.toggleMtc();
+  try {
+    await host.controller.play('song');
+    await expect.poll(() => state.status, { timeout: 4000 }).toBe('paused');
+    expect(service.status?.positionMs).not.toBe(1203);
+    expect(Math.abs((service.status?.positionMs ?? 0) - 1203)).toBeLessThan(1);
+    expect(errors).toEqual([]);
+    expect(notices.filter(message => /灯光/.test(message))).toEqual([]);
+  } finally { await host.close(); await service.close(); }
+}, 15000);

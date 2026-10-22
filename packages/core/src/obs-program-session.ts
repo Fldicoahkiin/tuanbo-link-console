@@ -10,10 +10,13 @@ export type ObsProgramSessionDependencies = ManagedOutputRuntimeDependencies & {
   guardOutput: <T>(canSend: () => boolean, operation: () => Promise<T>, dispatched?: () => void) => Promise<T>;
   prepareOutputs: (assertCurrent: () => void) => Promise<void>;
   outputNotice?: () => string | null;
-  prepareUpcoming?: (frame: number, assertCurrent: () => void) => Promise<void>;
+  /** Returns the clip it made ready; one already past its boundary starts late (rule B). */
+  prepareUpcoming?: (frame: number, assertCurrent: () => void) => Promise<ManagedMediaEvent | null>;
   releaseOutputs: () => Promise<void>;
   executor: LinkActionExecutor;
   seekMedia: (event: ManagedMediaEvent) => Promise<void>;
+  /** Puts a playing clip back in step with the music; returns the drift corrected, or null. */
+  correctMediaDrift?: (event: ManagedMediaEvent) => Promise<number | null>;
   cueReport: (report: CueExecutionReport) => void;
   mediaReport: (report: ManagedMediaExecutionReport) => void;
   state: (update: RuntimeUpdate) => void;
@@ -45,6 +48,10 @@ type TimelineEntry = { frame: number; priority: number; cue: LinkCue } | { frame
  * prepare resources and bind this session to a specific native audio generation. */
 export class ObsProgramSession {
   private preloadWork: Promise<void> | null = null;
+  /** Clip starts that failed this session; a late-ready decoder may start each once. */
+  private readonly failedStarts = new Set<string>();
+  /** Drift is checked every 5 s, never within 1 s of a media start, resume or seek. */
+  private nextDriftCheck = -Infinity;
   private preloadFrame = -Infinity;
   private readonly runtime: CueRuntime;
   private readonly managed: ManagedOutputRuntime;
@@ -68,7 +75,9 @@ export class ObsProgramSession {
     // Other outputs belong to independent channels, never pretend that an OBS
     // executor sent MIDI or a console action.
     if (item.cues.some(cue => cue.actions.some(action => !action.kind.startsWith('obs.')))) throw new Error('后台画面快照含非 OBS 动作，必须先分配到对应输出通道');
-    this.runtime = new CueRuntime(project);
+    // Picture actions have a 100 ms execution boundary; any longer silence between
+    // device observations is a gap rebuilt at the current position (rule B).
+    this.runtime = new CueRuntime(project, 100);
     this.managed = new ManagedOutputRuntime(project, projectPath, dependencies);
     // Live mode: a failed action is reported in red and later actions still run.
     this.runner = new CueActionRunner([dependencies.executor], { now: dependencies.now,
@@ -113,7 +122,7 @@ export class ObsProgramSession {
       const targets = work.media.map(event => this.managed.alignEvent(event, sample.totalFrames));
       // A seek may reach OBS before its acknowledgement is interrupted. Retain
       // the intended owned targets so cancellation can clean them up as well.
-      this.managed.adoptSeek(targets, sample.totalFrames);
+      this.managed.adoptSeek(targets, sample.totalFrames); this.settleMedia(sample.totalFrames);
       for (const event of targets) {
         this.requireCurrent(generation);
         await this.dependencies.guardOutput(() => generation === this.generation && !this.closed, () => this.dependencies.seekMedia(event));
@@ -141,15 +150,17 @@ export class ObsProgramSession {
         if (!this.advancing && previousFrame >= 0) this.requireUpdate(this.runtime.anchorMediaClock(sample));
         update = this.runtime.ingest(sample);
         this.requireUpdate(update);
-        // Cues missed while position updates stalled are never sent late; say so.
+        // A rebuild after stalled position updates is always reported.
         if (update.state === 'running' && update.reason) this.fault(update.reason);
       }
       this.advancing = true; this.frame = sample.totalFrames;
       if (update.state !== 'running') return;
-      this.preload(sample.totalFrames);
+      this.preload(sample.totalFrames); this.watchDrift(sample.totalFrames);
       const media = this.managed.collectCrossed(previousFrame, sample.totalFrames);
-      const work = this.managed.sceneTimeline!.cross(previousFrame, sample.totalFrames, update.dueCues, media);
+      const work = update.rebuild ? this.managed.sceneTimeline!.rebuild(previousFrame, sample.totalFrames, update.dueCues, media)
+        : this.managed.sceneTimeline!.cross(previousFrame, sample.totalFrames, update.dueCues, media);
       if (!work.cues.length && !work.media.length) return;
+      if (work.media.length) this.settleMedia(sample.totalFrames);
       const generation = this.generation;
       const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
       const onTime = (scheduledFrame: number): boolean => this.dependencies.now()
@@ -236,6 +247,7 @@ export class ObsProgramSession {
     }
     const report = await this.dependencies.guardOutput(gate.allowed,
       () => this.managed.executeMedia(this.managed.alignEvent(event, this.frame), 'live', gate.allowed), gate.dispatched);
+    if (event.phase === 'start' && report.status === 'failed') this.failedStarts.add(event.clipId);
     this.dependencies.mediaReport(report);
   }
 
@@ -253,8 +265,44 @@ export class ObsProgramSession {
     const allowed = (): boolean => !this.closed && !this.failure;
     this.preloadWork = this.dependencies.guardOutput(allowed, () => prepare(frame, () => {
       if (!allowed()) throw new Error('后续素材准备已取消');
-    })).catch(error => { if (!this.closed && !this.failure) this.fault(`后续素材预备失败：${error instanceof Error ? error.message : String(error)}；不重试，到点的素材可能无法播放`); })
+    })).then(prepared => { if (prepared) this.startLate(prepared); }).catch(error => { if (!this.closed && !this.failure) this.fault(`后续素材预备失败：${error instanceof Error ? error.message : String(error)}；不重试，到点的素材可能无法播放`); })
       .finally(() => { this.preloadWork = null; });
+  }
+
+  private settleMedia(frame: number): void {
+    this.nextDriftCheck = Math.max(this.nextDriftCheck, frame + playbackFramesPerSecond(this.project.timebase.frameRate));
+  }
+  /** Recovery rule B for OBS video drifting from the music over a long clip. */
+  private watchDrift(frame: number): void {
+    const correct = this.dependencies.correctMediaDrift;
+    if (!correct || frame < this.nextDriftCheck) return;
+    this.nextDriftCheck = frame + 5 * playbackFramesPerSecond(this.project.timebase.frameRate);
+    const generation = this.generation;
+    this.enqueue(async () => {
+      for (const event of this.managed.activeMedia()) {
+        const current = (): boolean => generation === this.generation && !this.closed && !this.failure && this.runtime.getState() === 'running';
+        if (event.assetKind === 'image' || !current()) continue;
+        const drift = await this.dependencies.guardOutput(current, () => correct(this.managed.alignEvent(event, this.frame)));
+        if (drift !== null) this.fault(`素材与音乐偏差 ${drift}ms，已按当前位置校正：${event.assetName}`);
+      }
+    });
+  }
+
+  /** Recovery rule B for a decoder that missed its boundary: once it is ready,
+   * the clip starts at the current position if it should be on air now. */
+  private startLate(prepared: ManagedMediaEvent): void {
+    const generation = this.generation;
+    this.enqueue(async () => {
+      if (this.runtime.getState() !== 'running' || !this.failedStarts.delete(prepared.clipId)) return;
+      const event = this.managed.sceneTimeline!.at(this.frame).media.find(entry => entry.clipId === prepared.clipId);
+      if (!event) return;
+      const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
+      const lateMs = Math.round((this.frame - event.frameNumber) * 1000 / playbackFramesPerSecond(this.project.timebase.frameRate));
+      this.settleMedia(this.frame);
+      const report = await this.dependencies.guardOutput(current, () => this.managed.executeMedia(this.managed.alignEvent(event, this.frame), 'live', current));
+      this.dependencies.mediaReport(report);
+      if (report.status === 'succeeded') this.fault(`素材预备晚于播放边界，已按当前位置起播：${event.assetName}（晚 ${lateMs}ms）`);
+    });
   }
 
   async pause(): Promise<void> {
@@ -313,7 +361,7 @@ export class ObsProgramSession {
     return report;
   }
   private enqueueTransport(action: 'start' | 'pause', observedAt = this.dependencies.now()): void {
-    const generation = this.generation;
+    const generation = this.generation; this.settleMedia(Math.max(0, this.frame));
     this.enqueue(async () => {
       const actions = this.managed.transportActions(action);
       if (!actions.length) return;

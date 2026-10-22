@@ -58,7 +58,10 @@ export function compileLightingPackets(document: LightingDocument, ma2DeviceId =
     const track = { ...entry.track, portProfileId: entry.track.portProfileId || 'lighting-events-output' };
     const encoded: LightingPacket[] = [];
     appendEvent(encoded, track, { id: '', name: '', start: 0, duration: 1, timeLock: 'time', muted: false, events: [] }, { ...entry.event, at: entry.atMs }, map, ma2DeviceId);
-    for (const value of encoded) packets.push(manageRuns ? { ...value, ma2Target: lightingCueTarget(entry.event, track, document.outputMode), ma2Off: entry.event.action === 'off', ...(entry.releaseOnlyIfStarted ? { releaseOnlyIfStarted: true } : {}), ...(entry.releasePrevious ? { releasePrevious: true } : {}) } : value);
+    // Every Cue names its executor so the state at any position can be rebuilt;
+    // only independent runs release earlier Cues.
+    for (const value of encoded) packets.push({ ...value, ma2Target: lightingCueTarget(entry.event, track, document.outputMode), ma2Off: entry.event.action === 'off',
+      ...(manageRuns && entry.releaseOnlyIfStarted ? { releaseOnlyIfStarted: true } : {}), ...(manageRuns && entry.releasePrevious ? { releasePrevious: true } : {}) });
   }
   const rank = { off: 0, control: 1, on: 2 };
   return packets.sort((a, b) => a.atMs - b.atMs || rank[a.phase] - rank[b.phase]);
@@ -106,18 +109,88 @@ function appendEvent(packets: LightingPacket[], track: LightingTrack, clip: Ligh
   }
 }
 
+/** What the console keeps after a song's notes are released: executors on their
+ * Cues and the last value of each controller. */
+export type LightingOnAir = { started: ReadonlyMap<string, LightingPacket>; controls: ReadonlyMap<string, LightingPacket> };
+type LightingState = { started: Map<string, LightingPacket>; active: Map<string, { packet: LightingPacket; count: number }>; controls: Map<string, LightingPacket> };
+
+/** Controller and program changes hold a value; other control bytes are one-shot. */
+function lightingControlKey(packet: LightingPacket): string | null {
+  if (packet.phase !== 'control' || packet.ma2Target) return null;
+  const status = (packet.bytes[0] ?? 0) & 0xf0;
+  if (status === 0xb0) return `${packet.portProfileId}:${packet.bytes[0]}:${packet.bytes[1]}`;
+  return status === 0xc0 ? `${packet.portProfileId}:${packet.bytes[0]}` : null;
+}
+function sameLightingBytes(left: LightingPacket | undefined, right: LightingPacket): boolean {
+  return left !== undefined && left.bytes.length === right.bytes.length && left.bytes.every((value, index) => value === right.bytes[index]);
+}
+function ma2OffPacket(started: LightingPacket, atMs: number): LightingPacket {
+  const separator = started.bytes.indexOf(0, 6);
+  if (separator < 0) throw new Error('MA2 MSC 关闭目标编码无效');
+  return { ...started, atMs, releasePrevious: false, releaseOnlyIfStarted: false, ma2Off: true, bytes: [...started.bytes.slice(0, 5), 0x0b, 48, 46, 48, 48, 48, 0, ...started.bytes.slice(separator + 1)] };
+}
+
 export class LightingScheduler {
   private cursor = 0;
   private readonly ma2Started = new Map<string, LightingPacket>();
   private previousMs: number | null = null;
   private readonly active = new Map<string, { packet: LightingPacket; count: number }>();
-  constructor(private readonly packets: LightingPacket[], private readonly send: (packet: LightingPacket) => void) {}
+  private readonly controls = new Map<string, LightingPacket>();
+  /** `onAir` is what an earlier scheduler of the same song left on the console. */
+  constructor(private readonly packets: LightingPacket[], private readonly send: (packet: LightingPacket) => void, onAir?: LightingOnAir) {
+    for (const [key, packet] of onAir?.started ?? []) this.ma2Started.set(key, packet);
+    for (const [key, packet] of onAir?.controls ?? []) this.controls.set(key, packet);
+  }
+  /** Take before stop(): stop releases the notes, not executors or controller values. */
+  onAir(): LightingOnAir { return { started: new Map(this.ma2Started), controls: new Map(this.controls) }; }
+  /** Internal playback after a pause, seek or clock gap: move to `positionMs` and
+   * send only what differs from the state the timeline prescribes there. Events
+   * between are not replayed. Returns the number of packets sent. */
+  restore(positionMs: number): number {
+    if (!Number.isFinite(positionMs) || positionMs < 0) throw new Error('灯光定位位置无效');
+    const cursor = this.firstAtOrAfter(positionMs), target = this.stateBefore(cursor);
+    let sent = 0;
+    const emit = (packet: LightingPacket): void => { this.send({ ...packet, atMs: positionMs }); sent += 1; };
+    for (const [key, held] of this.active) if (!target.active.has(key)) {
+      emit({ ...held.packet, phase: 'off', bytes: [0x80 | ((held.packet.bytes[0] ?? 0) & 15), held.packet.bytes[1] ?? 0, 0] }); this.active.delete(key);
+    }
+    for (const [key, held] of target.active) {
+      if (!this.active.has(key)) emit(held.packet);
+      this.active.set(key, held);
+    }
+    for (const [key, started] of this.ma2Started) if (!target.started.has(key)) { emit(ma2OffPacket(started, positionMs)); this.ma2Started.delete(key); }
+    for (const [key, packet] of target.started) if (!sameLightingBytes(this.ma2Started.get(key), packet)) { emit(packet); this.ma2Started.set(key, packet); }
+    for (const [key, packet] of target.controls) if (!sameLightingBytes(this.controls.get(key), packet)) { emit(packet); this.controls.set(key, packet); }
+    this.cursor = cursor; this.previousMs = positionMs;
+    return sent;
+  }
   locate(positionMs: number): void {
     if (!Number.isFinite(positionMs) || positionMs < 0) throw new Error('灯光定位位置无效');
     this.release(); this.ma2Started.clear();
+    this.cursor = this.firstAtOrAfter(positionMs); this.previousMs = positionMs;
+  }
+  private firstAtOrAfter(positionMs: number): number {
     let low = 0; let high = this.packets.length;
     while (low < high) { const mid = (low + high) >>> 1; if ((this.packets[mid]?.atMs ?? Infinity) < positionMs) low = mid + 1; else high = mid; }
-    this.cursor = low; this.previousMs = positionMs;
+    return low;
+  }
+  /** The bookkeeping of advance(), replayed over the packets before `cursor` without sending. */
+  private stateBefore(cursor: number): LightingState {
+    const state: LightingState = { started: new Map(), active: new Map(), controls: new Map() };
+    for (const event of this.packets.slice(0, cursor)) {
+      if (event.releasePrevious) state.started.clear();
+      if (event.releaseOnlyIfStarted && event.ma2Target && !state.started.has(event.ma2Target)) continue;
+      if (event.noteKey && event.phase === 'off') {
+        const current = state.active.get(event.noteKey);
+        if (current && current.count === 1) state.active.delete(event.noteKey); else if (current) current.count -= 1;
+        continue;
+      }
+      if (event.ma2Target) { if (event.ma2Off) state.started.delete(event.ma2Target); else state.started.set(event.ma2Target, event); }
+      if (event.noteKey && event.phase === 'on') state.active.set(event.noteKey, { packet: event, count: (state.active.get(event.noteKey)?.count ?? 0) + 1 });
+      const control = lightingControlKey(event);
+      if (control) state.controls.set(control, event);
+    }
+    return state;
   }
   tick(positionMs: number): void { this.advance(positionMs, false); }
   finish(positionMs: number): void {
@@ -142,9 +215,7 @@ export class LightingScheduler {
     while (this.cursor < this.packets.length) {
       const event = this.packets[this.cursor]; if (!event || event.atMs > positionMs || (exclusive && event.atMs === positionMs)) break;
       if (event.releasePrevious) for (const [key, started] of this.ma2Started) {
-        const separator = started.bytes.indexOf(0, 6);
-        if (separator < 0) throw new Error('MA2 MSC 关闭目标编码无效');
-        this.send({ ...started, atMs: event.atMs, releasePrevious: false, ma2Off: true, bytes: [...started.bytes.slice(0, 5), 0x0b, 48, 46, 48, 48, 48, 0, ...started.bytes.slice(separator + 1)] });
+        this.send(ma2OffPacket(started, event.atMs));
         this.ma2Started.delete(key);
       }
       if (event.releaseOnlyIfStarted && event.ma2Target && !this.ma2Started.has(event.ma2Target)) { this.cursor += 1; continue; }
@@ -156,11 +227,13 @@ export class LightingScheduler {
         this.send(event);
         if (event.ma2Target) { if (event.ma2Off) this.ma2Started.delete(event.ma2Target); else this.ma2Started.set(event.ma2Target, event); }
         if (event.noteKey && event.phase === 'on') this.active.set(event.noteKey, { packet: event, count: (this.active.get(event.noteKey)?.count ?? 0) + 1 });
+        const control = lightingControlKey(event);
+        if (control) this.controls.set(control, event);
       }
       this.cursor += 1;
     }
   }
-  stop(): void { this.release(); this.ma2Started.clear(); this.previousMs = null; this.cursor = 0; }
+  stop(): void { this.release(); this.ma2Started.clear(); this.controls.clear(); this.previousMs = null; this.cursor = 0; }
   private release(): void {
     const failures: unknown[] = [];
     for (const [key, active] of this.active) {

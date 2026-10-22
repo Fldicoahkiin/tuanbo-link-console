@@ -15,7 +15,7 @@ import { MtcStabilityTracker } from './mtc-stability-tracker';
 import { ObsIpcExecutor } from './obs-ipc-executor';
 import { recordRuntimeAction, recordRuntimeOperator, reportCoordinatorError } from './runtime-action-log';
 import { RuntimeMidiSession } from './runtime-midi-session';
-import { appendMediaReport, appendRetryActionReport } from './runtime-report-store';
+import { appendMediaReport } from './runtime-report-store';
 import { applyRuntimeState, resetRuntimeExecutionView } from './runtime-state-application';
 import { P1AutoFollowController } from './p1-auto-follow-controller';
 import { internalSample } from './internal-timeline';
@@ -24,7 +24,7 @@ import { prepareInternalRuntime, prepareRuntimeArm } from './internal-runtime-pr
 import { prepareNativeCompanionRuntime } from './native-companion-preparation';
 import { InternalPreparationScope } from './internal-preparation-scope';
 import { EditorScenePreview } from './editor-scene-preview';
-import { executeTimelineMedia, executeTimelineWork, executeDueCues, synchronizeTimelineTransport, reportSkippedTimelineMedia, executeSkippedTimelineCue } from './timeline-work';
+import { executeTimelineMedia, executeTimelineWork, executeDueCues, synchronizeTimelineTransport, reportSkippedTimelineMedia, executeSkippedTimelineCue, retryReportedAction, rebuildTimelinePicture } from './timeline-work';
 
 export class LinkRuntimeCoordinator {
   private readonly runtime: CueRuntime;
@@ -105,6 +105,12 @@ export class LinkRuntimeCoordinator {
     const sample = internalSample(this.project, positionMs); this.lastSample = sample;
     const operation = seekInternalRuntime(this.project, this.projectPath, item.id, sample, this.runtime, this.managedOutput, this.runner, (update) => this.applyRequiredUpdate(update));
     this.cueExecutionTail = operation.catch((error: unknown) => this.reportRuntimeError(error)); await operation;
+  }
+  /** Recovery rule B after OBS reconnects while internal audio plays; returns how many outputs were rebuilt. */
+  rebuildPicture(): Promise<number> {
+    if (this.internalObsOwner === 'main' || !this.lastSample || this.runtime.getState() !== 'running') return Promise.resolve(0);
+    const generation = this.executionGeneration, execution = this.cueExecutionTail.then(() => rebuildTimelinePicture(() => this.lastSample?.totalFrames ?? 0, this.runtime, this.managedOutput, (cues, media) => this.executeTimelineWork(cues, media, generation)));
+    this.cueExecutionTail = execution.then(() => undefined, (error: unknown) => this.reportRuntimeError(error)); return execution;
   }
   async pauseInternal(reason?: string): Promise<void> { this.internalClockActive = false; this.pause(reason); await this.syncMediaTransport('pause'); }
 
@@ -267,15 +273,7 @@ export class LinkRuntimeCoordinator {
 
   async retryAction(cueId: string, actionId: string): Promise<void> {
     await this.recordOperatorActionAsync('重试失败或遗漏动作', { cueId, actionId });
-    const action = useRuntimeStore.getState().reports
-      .flatMap((report) => report.results)
-      .reverse()
-      .find((result) => result.cueId === cueId && result.actionId === actionId)?.action;
-    if (!action) throw new Error('重试目标动作不存在');
-    this.managedOutput.trackVisualActionAttempt(cueId, action); const result = await this.runner.retry(cueId, action);
-    this.managedOutput.applyRetriedVisualAction(cueId, action, result.status);
-    appendRetryActionReport(result, this.runtime.getMode());
-    if (result.status === 'failed') throw new Error(result.error ?? '动作重试失败');
+    await retryReportedAction(cueId, actionId, this.runner, this.managedOutput, this.runtime.getMode());
   }
 
   async retryManagedMedia(event: ManagedMediaEvent): Promise<void> {
@@ -359,7 +357,8 @@ export class LinkRuntimeCoordinator {
     const skippedMedia = previousState === 'paused' && update.state === 'paused' && !update.manualTakeover
       ? this.managedOutput.collectCrossed(previousFrame, sample.totalFrames)
       : [];
-    const work = update.state === 'running' && this.managedOutput.sceneTimeline ? this.managedOutput.sceneTimeline.cross(previousFrame, sample.totalFrames, update.dueCues, managedMedia) : { cues: update.dueCues, media: managedMedia };
+    const scenes = update.state === 'running' ? this.managedOutput.sceneTimeline : null;
+    const work = scenes ? scenes[update.rebuild ? 'rebuild' : 'cross'](previousFrame, sample.totalFrames, update.dueCues, managedMedia) : { cues: update.dueCues, media: managedMedia };
     await this.enqueueTimelineWork(work.cues, work.media);
     await this.enqueueSkippedMedia(skippedMedia, '自动联动暂停期间已越过该素材边界；系统未自动补执行');
   }

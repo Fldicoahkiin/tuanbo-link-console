@@ -9,7 +9,7 @@ function fixture() {
     clips: [{ id: 'clip', name: '脉冲', start: 0, duration: 2000, timeLock: 'time', muted: false, events: [
       { id: 'note', at: 0, kind: 'note', note: 60, velocity: 100, duration: 1000 }
     ] }] })];
-  const ports = { prepare: vi.fn<() => Promise<void>>(() => Promise.resolve()), send: vi.fn<() => Promise<void>>(() => Promise.resolve()), close: vi.fn<() => Promise<void>>(() => Promise.resolve()) };
+  const ports = { prepare: vi.fn<() => Promise<void>>(() => Promise.resolve()), send: vi.fn<(port: string, bytes: number[], deadline: number) => Promise<void>>(() => Promise.resolve()), close: vi.fn<() => Promise<void>>(() => Promise.resolve()) };
   const errors: string[] = [];
   const status: Ma2NetworkStatus = { state: 'connected', settings: { host: '127.0.0.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, passwordSaved: false, version: null, error: null };
   const network = { getMa2NetworkStatus: vi.fn(() => Promise.resolve(status)), cancelMa2Playback: vi.fn<() => Promise<void>>(() => Promise.resolve()), playMa2Cue: vi.fn<() => Promise<void>>(() => Promise.resolve()) };
@@ -30,6 +30,7 @@ it('直接灯光由设备位置调用；曲尾提前释放使用当前位置，�
 it('时间码模式保留控台原生执行，不额外发送本地 MIDI 或网络灯光', async () => {
   const f = fixture(); f.document.outputMode = 'timecode';
   await f.output.prepare(f.document, null, 0); f.output.observe(500, 1000); f.output.tick(500);
+  expect(f.output.takeFault()).toBeNull();
   await f.output.finish(500); expect(f.ports.prepare).toHaveBeenCalledWith([], expect.any(AbortSignal));
   expect(f.ports.send).not.toHaveBeenCalled(); expect(f.network.getMa2NetworkStatus).not.toHaveBeenCalled();
   expect(f.network.playMa2Cue).not.toHaveBeenCalled(); await f.output.close();
@@ -67,12 +68,27 @@ it('驱动拒绝某条发送时标红并继续，曲尾照常完成，错误不�
   expect(f.output.takeFault()).toContain('端口已拔除'); await f.output.close();
 });
 
-it('卡顿后迟到的 Note On 不补发并标红，对应 Note Off 仍发送以免灯光卡住', async () => {
+it('卡顿后按当前位置重建并标红：仍应按住的音符此刻发出，中间事件不补发，之后照常释放', async () => {
   const f = fixture(); await f.output.prepare(f.document, null, 0);
   f.time(1500); f.output.observe(500, 1450); f.output.tick(500);
-  expect(f.ports.send).not.toHaveBeenCalled(); expect(f.output.takeFault()).toContain('晚于 100ms');
+  expect(f.ports.send.mock.calls).toEqual([['out', [0x90, 60, 100], 1550]]);
+  expect(f.output.takeFault()).toBe('灯光位置更新中断 500ms：按当前位置重建，发送 1 条，中间事件不补发');
   f.time(2100); f.output.observe(1100, 2050); f.output.tick(1100);
-  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
-  expect(f.ports.send.mock.calls[0]).toEqual(['out', [0x80, 60, 0], 2200]);
+  expect(f.ports.send.mock.calls[1]).toEqual(['out', [0x80, 60, 0], 2150]);
+  await f.output.close();
+});
+
+it('暂停后继续按当前位置重建：补发仍按住的音符，控台上已在的执行器 Cue 不重发；停止后下一次播放不沿用', async () => {
+  const f = fixture();
+  f.document.tracks[0]!.clips[0]!.events.push({ id: 'cue', kind: 'ma2', at: 0, action: 'goto', cue: '1', sequence: 1, executor: '1.101', label: 'A' });
+  await f.output.prepare(f.document, null, 0); f.output.observe(0, 1000); f.output.tick(0);
+  f.output.observe(80, 1000); f.output.tick(80); expect(f.ports.send).toHaveBeenCalledTimes(2);
+  f.output.stop(); f.ports.send.mockClear();
+  await f.output.prepare(f.document, null, 80);
+  expect(f.ports.send.mock.calls.map(call => call[1])).toEqual([[0x90, 60, 100]]);
+  expect(f.output.takeFault()).toBe('灯光按播放位置重建：发送 1 条，中间事件不补发');
+  f.output.stop(); await f.output.release(); f.ports.send.mockClear();
+  await f.output.prepare(f.document, null, 80);
+  expect(f.ports.send.mock.calls.map(call => call[1][0])).toEqual([0x90, 0xf0]);
   await f.output.close();
 });

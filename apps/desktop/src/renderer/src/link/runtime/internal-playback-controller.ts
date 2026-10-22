@@ -30,7 +30,7 @@ export class InternalPlaybackController {
   private disposed = false;
   private loadedAudioUrl: string | null = null;
   private audibleMs = 0;
-  private readonly lighting = new LightingMidiOutput();
+  private readonly lighting = new LightingMidiOutput(true);
 
   constructor(private readonly project: LinkProject, private readonly dependencies: InternalPlayerDependencies,
     private readonly audio: HTMLAudioElement = new Audio(), private readonly mtc = new MediaMtcOutput(),
@@ -56,6 +56,7 @@ export class InternalPlaybackController {
       try { await this.dependencies.stop('开始播放前结束上一会话'); }
       catch (error) { this.appendNotice(`上次联动清理失败：${toUserErrorMessage(error)}。本次仍尝试播放音频。`); }
       if (!this.current(generation)) return;
+      const refusal = this.dependencies.refusal?.(); if (refusal) throw new Error(refusal);
       const item = this.project.rundown.find((candidate) => candidate.id === itemId && candidate.enabled);
       if (!item?.referenceAudio) throw new Error('节目没有可播放的音频');
       const durationMs = item.referenceAudio.durationMs;

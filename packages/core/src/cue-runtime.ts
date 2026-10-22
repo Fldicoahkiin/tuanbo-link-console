@@ -20,6 +20,9 @@ export type RuntimeUpdate = {
   dueCues: DueCue[];
   missedCueIds: string[];
   reason?: string;
+  /** Internal clock gap (recovery rule B): outputs rebuild the state at this
+   * frame instead of crossing the events in between. */
+  rebuild?: true;
 };
 
 const MTC_LOSS_MS = 500;
@@ -43,7 +46,9 @@ export class CueRuntime {
   private manualTakeover = false;
   private executionOwner: 'local' | 'external' = 'local';
 
-  constructor(private readonly project: LinkProject) {}
+  /** `observationGapMs`: on the internal clock, a longer silence between position
+   * observations is a gap to rebuild across, not a lost timecode. */
+  constructor(private readonly project: LinkProject, private readonly observationGapMs = MTC_LOSS_MS) {}
 
   getState(): LinkRuntimeState {
     return this.state;
@@ -208,17 +213,11 @@ export class CueRuntime {
       this.lastSample = sample;
       return this.loseTimecode('MTC 首帧未从节目开头开始');
     }
+    // The formal audio clock is the timeline itself. A late observation whose
+    // position kept time is a gap in watching, not a lost timecode.
+    if (this.lastSample && this.ownsInternalClock() && sample.receivedAtMs - this.lastSample.receivedAtMs > this.observationGapMs
+      && !isUnexpectedJump(this.lastSample, sample)) return this.rebuildAt(sample);
     if (this.lastSample && sample.receivedAtMs - this.lastSample.receivedAtMs > MTC_LOSS_MS) {
-      // The formal audio clock is the timeline itself. A late observation whose
-      // position kept time is a gap in watching, not a lost timecode: Cues in
-      // the gap are missed and never sent late; later Cues run as usual.
-      if (this.ownsInternalClock() && !isUnexpectedJump(this.lastSample, sample)) {
-        const missed = this.missedCueIds.size, gapMs = Math.round(sample.receivedAtMs - this.lastSample.receivedAtMs);
-        this.markCrossedCuesAsMissed(sample.totalFrames);
-        this.previousFrame = sample.totalFrames; this.lastSample = sample;
-        const skipped = this.missedCueIds.size - missed;
-        return this.update([], skipped ? `播放位置更新中断 ${gapMs}ms，错过 ${skipped} 个联动 Cue，未补发` : undefined);
-      }
       this.lastSample = sample;
       return this.loseTimecode('MTC 信号中断');
     }
@@ -413,6 +412,40 @@ export class CueRuntime {
 
   /** The local formal audio clock; its own player reports a stalled position. */
   private ownsInternalClock(): boolean { return this.project.playbackSource === 'internal' && this.executionOwner === 'local'; }
+
+  /** Recovery rule B when OBS lost its state (a reconnect): the show-source Cues
+   * whose span covers `frame`, due now and counted as executed so their ends still hide. */
+  shownSourcesAt(frame: number): DueCue[] {
+    if (!this.ownsInternalClock() || !this.selectedItem) return [];
+    const due: DueCue[] = [];
+    for (const { cue } of eventsBetween(this.scheduledCues, -1, frame)) {
+      const end = cue.id.endsWith(':duration-end') ? undefined : this.scheduledCues.find(entry => entry.cue.id === `${cue.id}:duration-end`)?.scheduledFrame;
+      if (end === undefined || end <= frame) continue;
+      this.missedCueIds.delete(cue.id); this.executedCueIds.add(cue.id);
+      due.push({ cue, scheduledFrame: frame, executionId: crypto.randomUUID() });
+    }
+    return due;
+  }
+
+  /** Recovery rule B: shown sources are state, so a show still within its span
+   * goes out now and a hide whose show went out is sent. Point actions in the
+   * gap are missed, never replayed. Everything is due at the current frame. */
+  private rebuildAt(sample: MtcSample): RuntimeUpdate {
+    const gapMs = Math.round(sample.receivedAtMs - this.lastSample!.receivedAtMs), frame = sample.totalFrames;
+    const due: DueCue[] = []; let missed = 0;
+    const now = (cue: LinkCue): void => { due.push({ cue, scheduledFrame: frame, executionId: crypto.randomUUID() }); this.executedCueIds.add(cue.id); };
+    if (this.selectedItem) for (const { cue } of eventsBetween(this.scheduledCues, this.previousFrame, frame)) {
+      if (this.executedCueIds.has(cue.id) || this.missedCueIds.has(cue.id)) continue;
+      if (cue.id.endsWith(':duration-end')) { if (this.executedCueIds.has(cue.id.slice(0, -':duration-end'.length))) now(cue); continue; }
+      const end = this.scheduledCues.find(entry => entry.cue.id === `${cue.id}:duration-end`)?.scheduledFrame;
+      if (end !== undefined && end > frame) { now(cue); continue; }
+      // In full-scene mode the scene timeline rebuilds camera switches itself.
+      if (this.project.obsOutputMode === 'scenes' && cue.actions.length && cue.actions.every(action => action.kind === 'obs.setProgramScene')) { this.executedCueIds.add(cue.id); continue; }
+      this.missedCueIds.add(cue.id); missed += 1;
+    }
+    this.previousFrame = frame; this.lastSample = sample; this.armedAtMs = null; this.state = 'running';
+    return { ...this.update(due, `播放位置更新中断 ${gapMs}ms：画面按当前位置重建${missed ? `，错过 ${missed} 个联动 Cue，未补发` : ''}`), rebuild: true };
+  }
 
   private markCrossedCuesAsMissed(currentFrame: number): void {
     if (!this.selectedItem) return;

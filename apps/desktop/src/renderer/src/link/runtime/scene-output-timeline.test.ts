@@ -46,6 +46,19 @@ describe('机位片段结束恢复素材', () => {
     expect(runtime.alignEvent(original, restored.frameNumber).sourceOffsetMs).toBe(expected);
     expect(expected - (2000 + Math.round((restored.frameNumber - original.frameNumber) * 1000 / 30))).toBeGreaterThan(500);
   });
+  it('位置更新中断后按当前位置重建：只有机位切换也恢复，仍在区间内的素材按当前位置起播，间隙内起止的素材不发停止', () => {
+    const project = projectFixture(), item = project.rundown[0]!;
+    item.visualLayers.unshift({ id: 'flash-layer', name: '闪现', visible: true, locked: false });
+    item.referenceMediaClips.push({ ...item.referenceMediaClips[0]!, id: 'flash', layerId: 'flash-layer', startTimecode: { hours: 0, minutes: 0, seconds: 7, frames: 0 }, durationMs: 1000, sourceOffsetMs: 0 });
+    const timeline = new SceneOutputTimeline(project, 'song'), events = compileManagedMediaTimeline(project, 'song').events;
+    const crossed = (previous: number, frame: number) => events.filter(event => event.frameNumber > previous && event.frameNumber <= frame);
+    const camera = timeline.rebuild(270, 330, [], crossed(270, 330));
+    expect(camera.cues.map(entry => [entry.cue.id, entry.scheduledFrame])).toEqual([['camera', 330]]); expect(camera.media).toEqual([]);
+    expect(timeline.cross(270, 330, [], crossed(270, 330))).toEqual({ cues: [], media: [] });
+    const entering = timeline.rebuild(150, 200, [], crossed(150, 200));
+    expect(entering.media.map(event => [event.clipId, event.phase, event.frameNumber])).toEqual([['clip', 'start', 200]]);
+    expect(timeline.rebuild(200, 250, [], crossed(200, 250))).toEqual({ cues: [], media: [] });
+  });
   it('同来源紧邻片段直接重新定位，真实间隙仍停止来源', () => {
     const project = projectFixture(), item = project.rundown[0]!;
     item.cues = [];

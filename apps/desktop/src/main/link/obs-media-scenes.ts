@@ -36,6 +36,8 @@ function compositionOrderRequests(sceneName: string, layers: string[], items: Ma
 /** Only the dedicated input in an application-owned material scene is controlled. */
 /** A paused seek lands this far ahead of the music, covering seek and decode time. */
 const MEDIA_START_LEAD_MS = 200;
+/** Above the measured 66–100 ms steady cursor offset, so a clip in step is never repositioned. */
+const MEDIA_DRIFT_TOLERANCE_MS = 300;
 
 export class ObsMediaScenes {
   private readonly prepared = new Map<string, { path: string; sha256: string; playbackPaths: readonly string[]; sceneName: string; sceneItemId: number; kind: LinkMediaAsset['kind'] }>();
@@ -258,12 +260,12 @@ export class ObsMediaScenes {
         );
       }
       // Set when this start seeked and released the decoder in step with the music.
-      let seekedStart: { lateMs: number } | null = null;
+      let seekedStart: { lateMs: number } | null = null, primedStart = false;
       if (event.phase === 'start') {
         const wasActive = this.active.has(event.sourceName);
         const continuing = wasActive && this.startedClips.get(event.sourceName) === event.clipId;
         this.active.add(event.sourceName);
-        const primed = this.primed.get(event.sourceName) === 'ready';
+        const primed = this.primed.get(event.sourceName) === 'ready'; primedStart = primed;
         if (this.primed.has(event.sourceName) && !primed) throw new Error(`素材预热尚未完成：${event.assetName}`);
         this.primed.delete(event.sourceName);
         if (primed) {
@@ -321,13 +323,13 @@ export class ObsMediaScenes {
         // every layer start, which needlessly spends the output deadline.
         const status = await this.waitForState(event.sourceName, 'OBS_MEDIA_STATE_PLAYING');
         const expected = Math.round(event.sourceOffsetMs + performance.now() - startedAt);
-        // Right after a seek and PLAY, OBS reports a cursor about 500 ms ahead
-        // that stays frozen for a few hundred ms (measured on the field machine,
-        // 2026-10-22). That start was verified before PLAY: the paused frame and
-        // the moment the music reached it.
+        // Right after PLAY on a paused decoder, OBS reports a cursor about 500 ms
+        // ahead that stays frozen for a few hundred ms (measured on the field
+        // machine, 2026-10-22). Seeked and primed starts were verified before
+        // PLAY: the paused frame, and for a seek the moment the music reached it.
         // A decoder that OBS reset behind the music is still caught.
         if (seekedStart && seekedStart.lateMs > 100) throw new Error(`素材起播落后音乐 ${Math.round(seekedStart.lateMs)} ms：${event.assetName} 定位解码耗时过长`);
-        if (typeof status.mediaCursor !== 'number' || status.mediaCursor < expected - 100 || !seekedStart && status.mediaCursor > expected + 100) {
+        if (typeof status.mediaCursor !== 'number' || status.mediaCursor < expected - 100 || !seekedStart && !primedStart && status.mediaCursor > expected + 100) {
           throw new Error(`切场景后素材位置不一致：${event.assetName}，按音乐应在 ${expected} ms，OBS 实际 ${status.mediaCursor ?? '未知'} ms`);
         }
       }
@@ -521,6 +523,22 @@ export class ObsMediaScenes {
       if (performance.now() >= deadline) throw new Error(`素材解码状态未确认：${inputName}`);
     }
     return state;
+  }
+
+  /** Recovery rule B for a long-running clip: when OBS's cursor has drifted
+   * from the music by more than the tolerance, reposition it in step. Returns
+   * the drift that was corrected, or null when the clip was in step or is not
+   * this decoder's playing clip. */
+  async correctDrift(event: ManagedMediaEvent, aligned: () => number): Promise<number | null> {
+    return this.run(async () => {
+      if (!this.active.has(event.sourceName) || this.startedClips.get(event.sourceName) !== event.clipId) return null;
+      const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName: event.sourceName }), '读取素材播放位置');
+      if (status.mediaState !== 'OBS_MEDIA_STATE_PLAYING' || typeof status.mediaCursor !== 'number') return null;
+      const drift = Math.round(status.mediaCursor - aligned());
+      if (Math.abs(drift) <= MEDIA_DRIFT_TOLERANCE_MS) return null;
+      await this.positionMedia(event.sourceName, aligned, MEDIA_DRIFT_TOLERANCE_MS);
+      return drift;
+    });
   }
 
   /** Starts the decoder in step with the music. `aligned` is the source position

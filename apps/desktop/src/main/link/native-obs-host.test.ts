@@ -75,7 +75,7 @@ it('密集设备时钟继续驱动输出但界面位置限频，停止立即显�
 
 it('曲尾只处理一次最终位置，后续冻结的设备时间戳不造成虚假故障', async () => {
   const test = setup(); await test.host.prepare(test.request);
-  for (let time = 0; time <= 1000; time += 100) {
+  for (let time = 0; time <= 1000; time += 50) {
     test.observe({ status: time === 1000 ? 'ended' : 'playing', positionMs: time, generation: 2 }, time);
     await new Promise(resolve => setTimeout(resolve, 0));
   }
@@ -84,7 +84,7 @@ it('曲尾只处理一次最终位置，后续冻结的设备时间戳不造成�
   expect(test.execute).toHaveBeenCalledTimes(2);
 });
 
-it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('真实 WASAPI 管道在主进程阻塞后保留采样年龄，不补发过时机位且音频继续', async () => {
+it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('真实 WASAPI 管道在主进程阻塞后保留采样年龄，按当前位置重建机位并标红，音频继续', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-clock-backlog-')), path = join(directory, 'silence.pcm');
   await writeFile(path, Buffer.alloc(48000 * 4 * 4));
   const test = setup(), audioFailures: string[] = [], ages: number[] = [];
@@ -105,9 +105,9 @@ it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('真实 WASAPI 管道�
     expect(test.execute).toHaveBeenCalledTimes(1); expect(test.failures).toEqual([]);
     const boundary = performance.now() + 500;
     while (performance.now() < boundary) { /* deliberate main-thread stall */ }
-    await expect.poll(() => test.host.status?.fault).toContain('100ms');
+    await expect.poll(() => test.host.status?.fault).toContain('画面按当前位置重建');
     await expect.poll(() => client.clock?.positionMs).toBeGreaterThan(1500);
-    expect(test.execute).toHaveBeenCalledTimes(1);
+    expect(test.execute).toHaveBeenCalledTimes(2);
     expect(test.host.status?.state).toBe('running'); expect(Math.max(...ages)).toBeGreaterThan(100);
     expect(client.clock).toMatchObject({ state: 'playing', underruns: 0, audioError: 0 }); expect(audioFailures).toEqual([]);
   } finally {
@@ -129,7 +129,7 @@ it('主进程音频观察推进画面；旧会话消息不能扰动当前会话'
   const test = setup(); await test.host.prepare(test.request);
   test.host.observe({ ...test.audio(), sessionId: crypto.randomUUID(), status: 'stopped' });
   expect(test.host.status?.state).toBe('ready');
-  for (let time = 0; time <= 1000; time += 100) {
+  for (let time = 0; time <= 1000; time += 50) {
     test.observe({ status: 'playing', positionMs: time, generation: 2 }, time);
     await new Promise(resolve => setTimeout(resolve, 0));
   }

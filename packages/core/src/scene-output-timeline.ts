@@ -84,6 +84,31 @@ export class SceneOutputTimeline {
       ...media.map(event => event.frameNumber));
     return boundaryWork(this.index.itemId, boundary, due, media, this.at(previous), this.at(frame));
   }
+  /** Recovery rule B after a position gap: the picture at `frame`, whatever was
+   * crossed on the way. Scenes go first so rebuilt shown sources land on the
+   * scene now on program; everything is scheduled at `frame`. */
+  rebuild(previous: number, frame: number, due: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[]): SceneWork {
+    // A clip that started and stopped inside the gap never played; there is nothing to stop.
+    const started = new Set(media.filter(event => event.phase === 'start').map(event => event.clipId));
+    const stops = media.filter(event => event.phase === 'stop' && !started.has(event.clipId)).map(event => ({ ...event, frameNumber: frame }));
+    const work = boundaryWork(this.index.itemId, frame, [], stops, this.at(previous), this.at(frame));
+    return { cues: [...work.cues, ...shownAt(due, frame)], media: work.media };
+  }
+  /** Recovery rule B when OBS's picture state is unknown (after a reconnect): the
+   * picture at `frame` from nothing, with every clip on air entering at `frame`. */
+  restore(frame: number, shown: RuntimeUpdate['dueCues']): SceneWork {
+    const work = boundaryWork(this.index.itemId, frame, [], [], { cues: [], media: [] }, this.at(frame));
+    return { cues: [...work.cues, ...shownAt(shown, frame)], media: work.media };
+  }
+}
+
+/** Shown-source actions one frame after the scene and clips they land on, since a
+ * show acts on the scene then on program; camera switches come from the timeline. */
+function shownAt(due: RuntimeUpdate['dueCues'], frame: number): RuntimeUpdate['dueCues'] {
+  return due.flatMap((entry) => {
+    const actions = entry.cue.actions.filter((action) => action.kind !== 'obs.setProgramScene');
+    return actions.length ? [{ ...entry, cue: { ...entry.cue, actions }, scheduledFrame: frame + 1 }] : [];
+  });
 }
 
 /** A finite camera clip temporarily covers lower tracks; its end reveals their current position. */
