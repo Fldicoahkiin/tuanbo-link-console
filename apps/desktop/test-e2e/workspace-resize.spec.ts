@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 test('编辑器分区自由调整并恢复实际尺寸', async ({}, info) => {
   const file = info.outputPath('resize.tblink');
@@ -44,5 +45,5 @@ test('编辑器分区自由调整并恢复实际尺寸', async ({}, info) => {
     await page.getByRole('button', { name: '调整属性面板宽度', exact: true }).focus();
     await page.keyboard.press('ArrowLeft');
     expect(await page.locator('body').evaluate(element => element.classList.contains('is-resizing-workspace'))).toBe(false);
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

@@ -1,6 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
+import { closeDiscarding } from './save-questions';
 
 // Operator decision 2026-10-19: when the console cannot confirm Off on quit, the
 // operator chooses between returning to the app and quitting anyway.
@@ -62,7 +63,7 @@ test('退出时灯光试听未能停止：可返回软件处理，也可明确�
     await app.evaluate(({ app: electronApp }) => { electronApp.quit(); });
     await expect.poll(() => exited, { timeout: 15_000 }).toBe(true);
   } finally {
-    if (!exited) await app.close();
+    if (!exited) await closeDiscarding(app);
     for (const socket of sockets) socket.destroy();
     command.close(); monitor.close();
   }

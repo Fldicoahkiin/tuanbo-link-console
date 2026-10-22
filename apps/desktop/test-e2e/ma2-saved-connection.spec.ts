@@ -1,6 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
+import { closeDiscarding } from './save-questions';
 
 test('已保存控台直接连接，失败保持布局并显示具体端口', async ({}, info) => {
   const executablePath = process.env.TBLINK_MA2_PACKAGED_EXE;
@@ -39,5 +40,5 @@ test('已保存控台直接连接，失败保持布局并显示具体端口', as
     await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
     await page.screenshot({ path: info.outputPath('failure-ui.png') });
     throw error;
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

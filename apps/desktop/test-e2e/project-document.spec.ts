@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 test('真实工程 Worker 与文本桥拒绝损坏及未来格式，失败不覆盖原文件', async ({}, info) => {
   const valid = JSON.stringify(createEmptyLinkProject('工程读写边界'));
@@ -28,5 +29,5 @@ test('真实工程 Worker 与文本桥拒绝损坏及未来格式，失败不覆
     expect(results.filter(result => result === 'rejected')).toHaveLength(1);
     expect(results[10]).toBe('rejected');
     expect(parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).name).toBe('保存修订 19');
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

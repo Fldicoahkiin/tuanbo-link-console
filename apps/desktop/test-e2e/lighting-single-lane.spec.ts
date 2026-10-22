@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 test('40 个来源只显示一条灯光轨，跨来源选点、移动和撤销不改变绑定', async ({}, info) => {
   const lighting = createLightingDocument();
@@ -38,5 +39,5 @@ test('40 个来源只显示一条灯光轨，跨来源选点、移动和撤销�
     await expect.poll(async () => (await saved()).tracks).toEqual(lighting.tracks);
     await page.screenshot({ path: info.outputPath('single-lighting-lane.png') });
     expect(errors).toEqual([]);
-  } catch (error) { const page = await app.firstWindow(); await page.screenshot({ path: info.outputPath('failure.png') }); await writeFile(info.outputPath('failure.txt'), await page.locator('body').innerText()); throw error; } finally { await app.close(); }
+  } catch (error) { const page = await app.firstWindow(); await page.screenshot({ path: info.outputPath('failure.png') }); await writeFile(info.outputPath('failure.txt'), await page.locator('body').innerText()); throw error; } finally { await closeDiscarding(app); }
 });

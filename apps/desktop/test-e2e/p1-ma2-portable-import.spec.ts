@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, test, _electron as electron } from '@playwright/test';
 import { createLightingDocument, parseLinkProject, type Ma2Catalog, type Ma2TimecodePreview } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 function wave(): Buffer {
   const samples = 8000 * 5;
@@ -117,6 +118,6 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     if (!page.isClosed()) {
       await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     }
-    if (application.process().exitCode === null) await application.close();
+    if (application.process().exitCode === null) await closeDiscarding(application);
   }
 });

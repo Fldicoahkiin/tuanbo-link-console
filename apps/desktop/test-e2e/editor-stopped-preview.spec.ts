@@ -9,6 +9,7 @@ import OBSWebSocket from 'obs-websocket-js';
 import { materialSceneNames } from '@tb/core/link';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
+import { closeDiscarding } from './save-questions';
 
 test('停止时拖动黄线显示实际 OBS 视频帧，机位切回后定位正确且不锁编辑器', async ({}, info) => {
   test.skip(!process.env.TBLINK_OVERLAY_OBS_EXE || !process.env.TBLINK_OVERLAY_OBS_URL, '需要独立测试 OBS，禁止使用现场 OBS');
@@ -75,5 +76,5 @@ test('停止时拖动黄线显示实际 OBS 视频帧，机位切回后定位正
     await page.getByRole('button', { name: '从时间线移除', exact: true }).click();
     await expect(page.locator('.timeline-clip.video')).toHaveCount(0);
     await expect(page.locator('.toast.error')).toHaveCount(0);
-  } finally { await socket.disconnect(); await app.close(); }
+  } finally { await socket.disconnect(); await closeDiscarding(app); }
 });

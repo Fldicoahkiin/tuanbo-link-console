@@ -3,7 +3,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingUserLibrary, parseLinkProject, ma2AuditionRequestSchema } from '@tb/schema';
-import { saveProject } from './save-questions';
+import { saveProject, closeDiscarding } from './save-questions';
 
 for (const playbackSource of ['p1', 'internal'] as const) {
 test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, async ({}, info) => {
@@ -177,5 +177,5 @@ async function closeWorkbench(app: Awaited<ReturnType<typeof electron.launch>>):
     if (await stop.isVisible()) await stop.click();
     await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
   }
-  await app.close();
+  await closeDiscarding(app);
 }

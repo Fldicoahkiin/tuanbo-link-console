@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { licenseRequestSchema } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 for (const credential of ['missing', 'tampered'] as const) {
   test(`Windows ${credential} credential blocks workspace and main-process calls`, async ({}, info) => {
@@ -53,6 +54,6 @@ for (const credential of ['missing', 'tampered'] as const) {
       await panel.getByRole('button', { name: '导出授权申请' }).click();
       await expect(panel.getByText('机器信息已导出，可用于向发行方核对授权。')).toBeVisible();
       expect(licenseRequestSchema.parse(JSON.parse(await readFile(request, 'utf8'))).machineCode).toBe(await panel.getByLabel('本机机器码').inputValue());
-    } finally { await application.close(); }
+    } finally { await closeDiscarding(application); }
   });
 }

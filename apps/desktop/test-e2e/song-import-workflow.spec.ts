@@ -2,7 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseLinkProject } from '@tb/schema';
-import { answerSaveQuestions, saveProject } from './save-questions';
+import { answerSaveQuestions, saveProject, closeDiscarding } from './save-questions';
 
 async function audioFixture(path: string): Promise<void> {
   const samples = 48000 * 3;
@@ -48,7 +48,7 @@ test('从首页直接导入 P1 歌曲并保存原始时间码，内部主控仍�
     await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
     await expect(page.locator('.settings-location-highlight')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('song-workflow-light.png'), animations: 'disabled' });
-  } finally { await application.close(); }
+  } finally { await closeDiscarding(application); }
 });
 
 test('小红花入口可导入自有音频并明确不支持备份包和播放跟随', async ({}, info) => {
@@ -71,5 +71,5 @@ test('小红花入口可导入自有音频并明确不支持备份包和播放�
     expect(saved.playbackSource).toBe('internal'); expect(saved.rundown[0]?.title).toBe('自有音效.wav');
     expect(saved.rundown[0]?.p1Media).toBeUndefined();
     await page.screenshot({ path: info.outputPath('xiaohonghua-scope.png') });
-  } finally { await application.close(); }
+  } finally { await closeDiscarding(application); }
 });

@@ -3,6 +3,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, ma2PlaybackRequestSchema, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 for (const playbackSource of ['internal', 'p1'] as const) test(`埋步 ${playbackSource} 编辑、保存重开、时间线跟随与关闭`, async ({}, info) => {
   const wav = Buffer.alloc(44 + 48000 * 12 * 2);
@@ -80,5 +81,5 @@ for (const playbackSource of ['internal', 'p1'] as const) test(`埋步 ${playbac
     await page.keyboard.press('Control+s');
     await expect.poll(async () => { const cue = await savedCue(); return cue?.kind === 'ma2' ? cue.preparation ?? null : 'missing'; }).toBe(null);
     expect(errors).toEqual([]);
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

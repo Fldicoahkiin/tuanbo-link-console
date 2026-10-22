@@ -3,6 +3,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 test('灯光打点按钮、M 与快捷键修改', async ({}, info) => {
   const wav = Buffer.alloc(44 + 48000 * 3 * 2);
@@ -75,5 +76,5 @@ test('灯光打点按钮、M 与快捷键修改', async ({}, info) => {
     expect(await page.locator('.wavesurfer-surface').first().evaluate(element => element.clientHeight)).toBeGreaterThan(1);
     await page.locator('.reference-timeline').screenshot({ path: info.outputPath('cue-editor.png') });
     await page.screenshot({ path: info.outputPath('shortcuts.png') });
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

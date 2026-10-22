@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, createLightingMusic, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 for (const dense of [false, true]) test(`底部时间线：${dense ? '密集' : '常规'} Cue 拖动、吸附、撤销，上方布局保持原样`, async ({}, info) => {
   const wav = Buffer.alloc(44 + 48000 * 51 * 2);
@@ -121,5 +122,5 @@ for (const dense of [false, true]) test(`底部时间线：${dense ? '密集' : 
   } catch (error) {
     await page.screenshot({ path: info.outputPath('failure.png') });
     throw error;
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

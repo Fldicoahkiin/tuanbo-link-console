@@ -3,6 +3,7 @@ import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 async function openProject(app: ElectronApplication, file: string, first: boolean) {
   const page = await app.firstWindow();
@@ -40,7 +41,7 @@ for (const device of ['cuda', 'cpu'] as const) test(`自动识别 ${device}：�
     await openProject(app, file, false);
     expect((await page.evaluate(() => window.tbLink.getAutomaticMusicStatus())).jobs).toHaveLength(2);
     expect((await saved()).tracks).toEqual(lighting.tracks);
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });
 
 test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢复和重分析', async ({}, info) => {
@@ -95,7 +96,7 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
     await page.setViewportSize({ width: 1060, height: 720 });
     await expect(panel.getByRole('button', { name: '清除标记', exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('automatic-structure-compact.png') });
-    await app.close();
+    await closeDiscarding(app);
     // Older short-section results stored null BPM. Resolve from their saved beat
     // evidence on reopening, without rerunning models or rewriting user edits.
     const oldProject = parseLinkProject(JSON.parse(await readFile(file, 'utf8')));
@@ -117,5 +118,5 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
     await expect.poll(async () => (await saved()).musicAnalysis?.state).toBe('ready');
     await writeFile(info.outputPath('report.json'), JSON.stringify({ bpm: original.bpm, beatsPerBar: original.beatsPerBar, beats: original.beats.length, segments: original.segments, errors }, null, 2));
     expect(errors).toEqual([]);
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });
