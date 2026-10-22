@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renameProjectCommand } from '@tb/core/link';
 import { createEmptyLinkProject } from '@tb/schema';
 import { useDocumentStore } from './stores/document-store';
-import { requireProjectLocation, requireSavedProjectPath, revertToSaved, saveDocument } from './project-document';
+import { requireProjectLocation, requireSavedProjectPath, revertToSaved, saveDocument, saveDocumentWithRecovery } from './project-document';
 
-const bridge = vi.hoisted(() => ({ saveProjectDocument: vi.fn(), confirmProjectLocation: vi.fn(), recordLog: vi.fn(), encode: vi.fn(), confirmRevertToSaved: vi.fn(), openProject: vi.fn(), discardRecoveryCopy: vi.fn() }));
+const bridge = vi.hoisted(() => ({ saveProjectDocument: vi.fn(), confirmProjectLocation: vi.fn(), recordLog: vi.fn(), encode: vi.fn(), confirmRevertToSaved: vi.fn(), openProject: vi.fn(), discardRecoveryCopy: vi.fn(),
+  workerState: vi.fn(), restartWorker: vi.fn(), codecFailure: vi.fn(), codecRestart: vi.fn() }));
 vi.mock('./view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { confirmProjectLocation: bridge.confirmProjectLocation, recordLog: bridge.recordLog,
-  confirmRevertToSaved: bridge.confirmRevertToSaved, openProject: bridge.openProject, discardRecoveryCopy: bridge.discardRecoveryCopy } }));
-vi.mock('./stores/project-codec', () => ({ projectCodec: { encode: bridge.encode }, isWorkerValidatedProject: () => false }));
+  confirmRevertToSaved: bridge.confirmRevertToSaved, openProject: bridge.openProject, discardRecoveryCopy: bridge.discardRecoveryCopy,
+  projectDocumentWorkerState: bridge.workerState, restartProjectDocumentWorker: bridge.restartWorker } }));
+vi.mock('./stores/project-codec', () => ({ projectCodec: { encode: bridge.encode, failureReason: bridge.codecFailure, restart: bridge.codecRestart }, isWorkerValidatedProject: () => false }));
 
 function open(path: string | null): void {
   const project = createEmptyLinkProject('保存测试'); project.obsOutputMode = 'scenes';
@@ -162,5 +164,40 @@ describe('revertToSaved', () => {
   it('未命名工程没有可恢复的版本', async () => {
     open(null);
     await expect(revertToSaved()).rejects.toThrow('没有可恢复的版本');
+  });
+});
+
+describe('saveDocumentWithRecovery', () => {
+  beforeEach(() => { bridge.codecFailure.mockReturnValue(null); bridge.workerState.mockResolvedValue({ stalled: null }); });
+
+  it('普通失败不重试，也不询问重启', async () => {
+    bridge.saveProjectDocument.mockRejectedValue(new Error('磁盘已满'));
+    expect((await saveDocumentWithRecovery()).status).toBe('failed');
+    expect(bridge.restartWorker).not.toHaveBeenCalled();
+    expect(bridge.saveProjectDocument).toHaveBeenCalledOnce();
+  });
+
+  it('主进程工程处理超时：操作员确认重启后再保存一次', async () => {
+    useDocumentStore.getState().execute(renameProjectCommand('重启后保存'));
+    bridge.saveProjectDocument.mockRejectedValueOnce(new Error('工程处理超过 30 秒')).mockResolvedValueOnce('C:\\shows\\保存.tblink');
+    bridge.workerState.mockResolvedValue({ stalled: '工程处理超过 30 秒' });
+    bridge.restartWorker.mockResolvedValue(true);
+    expect(await saveDocumentWithRecovery()).toEqual({ status: 'saved', path: 'C:\\shows\\保存.tblink' });
+    expect(bridge.restartWorker).toHaveBeenCalledWith('工程处理超过 30 秒');
+    expect(bridge.codecRestart).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState().dirty).toBe(false);
+  });
+
+  it('界面端工程处理失效：确认后重启它再保存；拒绝则保留失败', async () => {
+    bridge.encode.mockRejectedValueOnce(new Error('工程处理超过 30 秒；原文件未改变'));
+    bridge.codecFailure.mockReturnValue('工程处理超过 30 秒；原文件未改变');
+    bridge.restartWorker.mockResolvedValueOnce(false);
+    expect((await saveDocumentWithRecovery()).status).toBe('failed');
+    expect(bridge.codecRestart).not.toHaveBeenCalled();
+    bridge.encode.mockRejectedValueOnce(new Error('工程处理超过 30 秒；原文件未改变'));
+    bridge.restartWorker.mockResolvedValueOnce(true);
+    bridge.saveProjectDocument.mockResolvedValue('C:\\shows\\保存.tblink');
+    expect((await saveDocumentWithRecovery()).status).toBe('saved');
+    expect(bridge.codecRestart).toHaveBeenCalledOnce();
   });
 });

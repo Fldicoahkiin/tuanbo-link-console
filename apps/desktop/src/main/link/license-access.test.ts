@@ -31,7 +31,7 @@ it('未付费拒绝工程和设备操作，到期会话可完成，停止后不�
   await expect(access.requireOutput()).rejects.toThrow('expired');
   await expect(access.authorize('link:save-project', undefined)).resolves.toBeUndefined();
   // Recovery copies protect the same work as a save.
-  for (const channel of ['link:write-recovery-copy', 'link:discard-recovery-copy']) await expect(access.authorize(channel, undefined)).resolves.toBeUndefined();
+  for (const channel of ['link:write-recovery-copy', 'link:discard-recovery-copy', 'link:project-document-worker', 'link:restart-project-document-worker']) await expect(access.authorize(channel, undefined)).resolves.toBeUndefined();
 });
 it('未曾授权时恢复副本写入与保存一样被拒绝', async () => {
   const access = new LicenseAccess(() => Promise.resolve({ ...valid, state: 'inactive', message: 'inactive' }));

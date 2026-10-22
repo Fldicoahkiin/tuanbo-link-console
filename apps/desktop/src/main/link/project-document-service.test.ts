@@ -72,3 +72,27 @@ it('队列有界，超量请求不发送且不会取消已经在途的保存', a
   await Promise.all(pending);
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it('超时后暂停新请求并说明原因；操作员确认重启后终止卡住的线程，新线程可继续保存，旧线程迟到结果被忽略', async () => {
+  const service = new ProjectDocumentService();
+  const stuck = expect(service.save(path, '{}')).rejects.toThrow('超过 30 秒');
+  await vi.advanceTimersByTimeAsync(30000);
+  await stuck;
+  expect(service.stalledReason()).toContain('超过 30 秒');
+  await expect(service.save(path, '{}')).rejects.toThrow('超过 30 秒');
+  const old = workers.instances[0]!;
+  service.restart();
+  expect(workers.terminate).toHaveBeenCalledOnce();
+  expect(service.stalledReason()).toBeNull();
+  const saving = service.save(path, '{}');
+  expect(workers.instances).toHaveLength(2);
+  old.emit('message', { version: 1, id: 1, kind: 'saved' });
+  workers.instances[1]!.emit('message', { version: 1, id: 2, kind: 'saved' });
+  await expect(saving).resolves.toBeUndefined();
+});
+
+it('没有卡住时不需要也不允许重启', () => {
+  const service = new ProjectDocumentService();
+  expect(service.stalledReason()).toBeNull();
+  expect(() => service.restart()).toThrow('工程处理线程运行正常');
+});

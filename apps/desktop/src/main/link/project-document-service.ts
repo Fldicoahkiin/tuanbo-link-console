@@ -35,6 +35,22 @@ export class ProjectDocumentService {
     const response = await this.request({ kind: 'copy', path, content });
     if (response.kind !== 'saved') throw new Error('工程副本写入返回类型不正确');
   }
+  /** Why new requests are refused (a timeout or a broken worker); null while the worker works. */
+  stalledReason(): string | null {
+    return this.failure?.message ?? null;
+  }
+  /**
+   * Only after the operator confirms: ends the stuck worker and lets the next request start a new
+   * one. An atomic save the old worker had begun is either complete or absent on disk; it is not
+   * repeated here, the operator saves again.
+   */
+  restart(): void {
+    if (!this.failure) throw new Error('工程处理线程运行正常，无需重启');
+    const stuck = this.worker;
+    this.worker = null; this.failure = null;
+    stuck?.removeAllListeners();
+    void stuck?.terminate();
+  }
   private request(payload: Payload): Promise<ProjectDocumentResponse> {
     if (this.failure) return Promise.reject(this.failure);
     if (this.pending.size >= 64) return Promise.reject(new Error('工程处理队列已满；此次请求未入队'));
@@ -56,7 +72,7 @@ export class ProjectDocumentService {
     }
     this.worker.ref();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒；未确认的保存可能已写入，请重开核对，不会自动重试')), 30000);
+      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒；未确认的保存可能已写入，不会自动重试。可在提示中重启工程处理后再保存')), 30000);
       this.pending.set(request.id, { kind: payload.kind, resolve, reject, timer });
       try { this.worker!.postMessage(request); }
       catch (error) { this.fail(error); }
@@ -68,7 +84,7 @@ export class ProjectDocumentService {
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(this.failure); }
     this.pending.clear();
     // Do not terminate an in-flight atomic save on a timeout. Its result remains
-    // unconfirmed and this service refuses new work until the app is restarted.
+    // unconfirmed and this service refuses new work until the operator restarts it.
     this.worker?.removeAllListeners('message'); this.worker?.unref();
   }
 }

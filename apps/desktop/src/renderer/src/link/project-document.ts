@@ -40,6 +40,22 @@ async function writeDocument(mode: 'save' | 'save-as'): Promise<SaveOutcome> {
   return { status: 'saved', path: saved };
 }
 
+/**
+ * A save that failed because a document worker (in this window or in the main process)
+ * stopped responding can run once more, after the operator confirms restarting it.
+ * It is never repeated automatically.
+ */
+export async function saveDocumentWithRecovery(mode: 'save' | 'save-as' = 'save'): Promise<SaveOutcome> {
+  const outcome = await saveDocument(mode);
+  if (outcome.status !== 'failed') return outcome;
+  const local = projectCodec.failureReason();
+  const remote = (await linkDesktopViewModel.projectDocumentWorkerState()).stalled;
+  const reason = local ?? remote;
+  if (!reason || !await linkDesktopViewModel.restartProjectDocumentWorker(reason)) return outcome;
+  if (local) projectCodec.restart();
+  return saveDocument(mode);
+}
+
 function failed(error: unknown, record: boolean): SaveOutcome {
   const message = `工程保存失败：${error instanceof Error ? error.message : String(error)}`;
   if (record) void linkDesktopViewModel.recordLog({ level: 'error', category: 'system', message }).catch((failure: unknown) => console.error('工程保存失败未能写入日志', failure));
@@ -117,7 +133,7 @@ export function useDocumentStateReport(notify: (message: string, tone?: 'info' |
       .catch((error: unknown) => notify(`同步工程保存状态失败：${error instanceof Error ? error.message : String(error)}`, 'error'));
   }, [consoleSynced, dirty, name, notify, path, projectId]);
   useEffect(() => linkDesktopViewModel.onSaveRequest(async () => {
-    const outcome = await saveDocument();
+    const outcome = await saveDocumentWithRecovery();
     return outcome.status === 'saved' ? { status: 'saved' as const } : outcome;
   }), []);
 }
@@ -142,7 +158,7 @@ export async function confirmReplaceDocument(reason: 'open' | 'new' | 'restore-a
 export function useDocumentCommands(notify: (message: string, tone?: 'info' | 'error') => void): { save: () => Promise<void>; saveAs: () => Promise<void>; revert: () => Promise<void> } {
   const run = useCallback(async (mode: 'save' | 'save-as'): Promise<void> => {
     if (!useDocumentStore.getState().project) return;
-    const outcome = await saveDocument(mode);
+    const outcome = await saveDocumentWithRecovery(mode);
     if (outcome.status === 'saved') notify(mode === 'save' ? '工程已保存' : `已另存为：${outcome.path}`);
     else if (outcome.status === 'failed') notify(outcome.message, 'error');
   }, [notify]);

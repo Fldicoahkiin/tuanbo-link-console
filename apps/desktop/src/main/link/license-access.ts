@@ -18,7 +18,8 @@ const publicCalls = new Set([
   'link:set-document-state', 'link:resolve-unsaved-changes', 'link:save-response'
 ]);
 
-const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy']);
+const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy',
+  'link:project-document-worker', 'link:restart-project-document-worker']);
 
 export function needsProductLicense(channel: string, value: unknown): boolean {
   if (publicCalls.has(channel)) return false;

@@ -24,6 +24,13 @@ class ProjectCodec {
     if (result.kind !== 'encoded') throw new Error('工程序列化返回了错误的结果类型');
     return result.content;
   }
+  /** Why encoding and decoding stopped; null while the worker works. */
+  failureReason(): string | null { return this.failure?.message ?? null; }
+  /** After the operator confirms: the failed worker is already gone; the next request starts a new one. */
+  restart(): void {
+    if (!this.failure) throw new Error('工程处理线程运行正常，无需重启');
+    this.failure = null;
+  }
   private request(payload: { kind: 'decode'; content: string } | { kind: 'encode'; project: LinkProject }): Promise<ProjectCodecResponse> {
     if (this.failure) return Promise.reject(this.failure);
     if (this.pending.size >= 4) return Promise.reject(new Error('工程处理队列已满；此次操作未入队，请待当前任务结束后重试'));
@@ -42,7 +49,7 @@ class ProjectCodec {
     }
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒；原文件未改变，请重启软件后重试')), 30000);
+      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒；原文件未改变，可在提示中重启工程处理后重试')), 30000);
       this.pending.set(id, { resolve, reject, timer });
       try { this.worker!.postMessage({ version: 1, id, ...payload }); }
       catch (error) { this.pending.delete(id); clearTimeout(timer); reject(error instanceof Error ? error : new Error(String(error))); }

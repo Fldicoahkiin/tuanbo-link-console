@@ -1154,6 +1154,18 @@ function registerIpc(
       buttons: ['选择保存位置', '取消'], defaultId: 0, cancelId: 1 });
     return response === 0;
   });
+  handle('link:project-document-worker', () => ({ stalled: projectDocuments.stalledReason() }));
+  handle('link:restart-project-document-worker', async (_event, reasonValue: unknown) => {
+    const reason = z.string().min(1).max(8192).parse(reasonValue);
+    const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '工程处理未响应', noLink: true,
+      message: '保存没有完成：工程处理超过 30 秒未响应。',
+      detail: `${reason}\n\n重启工程处理后再保存一次。上一次未确认的保存可能已经写入，再次保存后以本次内容为准。`,
+      buttons: ['重启并保存', '取消'], defaultId: 0, cancelId: 1 });
+    if (response !== 0) return false;
+    if (projectDocuments.stalledReason()) projectDocuments.restart();
+    await logger.record({ level: 'warning', category: 'system', message: '操作员确认重启工程处理并再保存一次', details: { reason } });
+    return true;
+  });
   handle('link:confirm-revert-to-saved', async (_event, payloadValue: unknown) => {
     const payload = z.object({ name: z.string().max(512), consoleSynced: z.boolean() }).strict().parse(payloadValue);
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '恢复到上次保存', noLink: true,
