@@ -277,6 +277,22 @@ it.runIf(process.env.TBLINK_MA2_COPY_PROBE === '1' && Boolean(process.env.TBLINK
     await lua('copy-overwrite', `gma.cmd('Copy Sequence ${S} Cue ${c2} At Sequence ${T} Cue 1 /o /nc');TBPR=TBPS(${T},'1','0')..' sameData='..TBPQ(${S},${parts(c2)},${T},'1','0')`);
     await lua('assign-fade-again', `gma.cmd('Assign Sequence ${T} Cue 1 /fade=7');TBPR=TBPS(${T},'1','0')`);
     await lua('copy-merge', `gma.cmd('Copy Sequence ${S} Cue ${c1} At Sequence ${T} Cue 1 /merge /nc');TBPR=TBPS(${T},'1','0')`);
+    // Q3: keep every attribute of an existing Cue while replacing its data. The Cue is taken from the
+    // console's own export without CueDatas, imported into a scratch Sequence and copied back with /o;
+    // the sources are then merged, and /merge keeps the target's attributes.
+    let scratch = T + 1; while (directory.entries.some(entry => entry.target === scratch)) scratch += 1;
+    await lua('define-strip', "_G.TBPX=function(c) return (c:gsub('<CueDatas>.-</CueDatas>',''):gsub('<CueDatas%s*/>',''):gsub(' index=.%d+.',''):gsub('%s+',' ')) end;TBPR='ok'");
+    await lua('define-attributes', "_G.TBPY=function(t,w) local q=string.char(34);local p=gma.show.getvar('PATH')..'/importexport/';gma.cmd('Export Sequence '..t..' tblink_probe_src /o');local f=io.open(p..'tblink_probe_src.xml','rb');local x=f:read('*a');f:close();os.remove(p..'tblink_probe_src.xml');local i=x:find('<Number number='..q..w..q..' sub_number='..q..'0'..q,1,true);local a=1;while true do local j=x:find('<Cue index=',a,true);if not j or j>i then break end;a=j+1 end;local c=x:sub(a-1,x:find('</Cue>',i,true)+5);c=c:gsub('<CueDatas>.-</CueDatas>',''):gsub('<CueDatas%s*/>',''):gsub('<Cue index=.%d+.','<Cue index='..q..'1'..q,1);return x:sub(1,x:find('<Cue',1,true)-1)..c..'</Sequ></MA>' end;TBPR='ok'");
+    await lua('define-reset', "_G.TBPZ=function(t,w,s) local p=gma.show.getvar('PATH')..'/importexport/';local o=io.open(p..'tblink_probe_attrs.xml','wb');o:write(TBPY(t,w));o:close();gma.cmd('Import tblink_probe_attrs.xml At Sequence '..s..' /nc');local ok=not (gma.show.getobj.handle('Sequence '..s..' Cue '..w)==nil);if ok then gma.cmd('Copy Sequence '..s..' Cue '..w..' At Sequence '..t..' Cue '..w..' /o /nc') end;gma.cmd('Delete Sequence '..s..' /nc');os.remove(p..'tblink_probe_attrs.xml');return tostring(ok)..','..tostring(gma.show.getobj.handle('Sequence '..s)==nil) end;TBPR='ok'");
+    for (const option of ['/delay=2', '/outfade=3', '/outdelay=1', '/trig=Time', '/trigtime=4']) await lua(`assign ${option}`, `gma.cmd('Assign Sequence ${T} Cue 1 ${option}');TBPR=TBPS(${T},'1','0')`);
+    await lua('attributes-before', `TBPB=TBPX(TBPC(${T},'1','0'));TBPR=TBPB:sub(1,600)`);
+    await lua('reset-to-attributes', `TBPR=TBPZ(${T},'1',${scratch})..' '..TBPS(${T},'1','0')`);
+    await lua('merge-first', `gma.cmd('Copy Sequence ${S} Cue ${c2} At Sequence ${T} Cue 1 /merge /nc');TBPR=TBPS(${T},'1','0')`);
+    await lua('merge-second', `gma.cmd('Copy Sequence ${S} Cue ${c1} At Sequence ${T} Cue 1 /merge /nc');TBPR=TBPS(${T},'1','0')`);
+    await lua('attributes-kept', `local a=TBPX(TBPC(${T},'1','0'));TBPR=tostring(a==TBPB)..(a==TBPB and '' or ' after='..a:sub(1,600))`);
+    await lua('reference-merge', `gma.cmd('Copy Sequence ${S} Cue ${c2} At Sequence ${T} Cue 3 /o /nc');gma.cmd('Copy Sequence ${S} Cue ${c1} At Sequence ${T} Cue 3 /merge /nc');TBPR=TBPQ(${T},'1','0',${T},'3','0')`);
+    // Single source: Copy /o should leave the Cue exactly as its source, as the snapshot import did.
+    await lua('single-source-as-source', `gma.cmd('Copy Sequence ${S} Cue ${c2} At Sequence ${T} Cue 4 /o /nc');local a,b=TBPX(TBPC(${T},'4','0')),TBPX(TBPC(${S},${parts(c2)}));TBPR=tostring(a==b)..(a==b and '' or ' target='..a:sub(1,300)..' source='..b:sub(1,300))`);
     await mkdir(resolve('artifacts/ma2-hardware-diagnostics'), { recursive: true });
     await writeFile(resolve('artifacts/ma2-hardware-diagnostics/copy-probe.json'), JSON.stringify({ at: new Date().toISOString(), show: directory.show, version: directory.version, source: S, c1, c2, target: T, results }, null, 2));
   } finally {
