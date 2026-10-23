@@ -9,6 +9,9 @@ MMRESULT midi_release(void) {
     result = midiOutReset(engine.midi);
     if (result == MMSYSERR_NOERROR && (engine.midi_header.dwFlags & MHDR_PREPARED)) result = midiOutUnprepareHeader(engine.midi, &engine.midi_header, sizeof(MIDIHDR));
     if (result == MMSYSERR_NOERROR) result = midiOutClose(engine.midi);
+    /* An unplugged port (MMSYSERR_NODRIVER) can be neither reset nor closed and its
+     * handle is dead. Forget it, so the port opens again by name once it is back. */
+    if (result == MMSYSERR_NODRIVER) { (void)midiOutClose(engine.midi); result = MMSYSERR_NOERROR; }
     if (result == MMSYSERR_NOERROR) engine.midi = NULL;
     else engine.midi_error = (int32_t)result;
   }
