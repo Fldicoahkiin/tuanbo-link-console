@@ -486,3 +486,14 @@ it('准备阶段音频读取失败时标明播放未开始，并给出处理音�
   expect(f.state().error).toContain('修复或更换音频后重新播放');
 });
 
+it('没有画面动作的歌，OBS 未连接只提示画面未参与，不标成输出异常', async () => {
+  const f = fixture(); f.project.obsOutputMode = 'scenes';
+  f.api.prepareNativeObs.mockImplementation(request => Promise.resolve({ version: 1, sessionId: request.sessionId, generation: request.generation,
+    itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'failed', reason: 'OBS 未连接，画面通道本轮不参与',
+    currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: 0 }));
+  await f.player.play('song-0');
+  expect(f.state()).toMatchObject({ status: 'playing', fault: null });
+  expect(f.state().notice).toContain('OBS 未连接');
+  await f.player.dispose();
+});
+

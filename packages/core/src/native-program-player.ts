@@ -275,7 +275,8 @@ export class NativeProgramPlayer {
     this.dependencies.obsChanged?.(status);
     if (status.notice) this.reportUnavailable(status.notice);
     if (status.state === 'failed' || status.state === 'stopped' && status.reason) this.reportUnavailable(`画面通道未参与或已停止：${status.reason ?? '未知错误'}；音频继续播放。`);
-    const fault = status.state === 'failed' ? `画面通道已停止：${status.reason ?? '未知错误'}` : status.fault;
+    // A stopped picture channel is an output fault for a song with picture work; for one without, the notice above is all.
+    const fault = status.state === 'failed' && itemNeedsObs(this.project, status.itemId) ? `画面通道已停止：${status.reason ?? '未知错误'}` : status.fault;
     if (fault) this.reportFault(fault);
   }
   private async prepareObs(itemId: string, token: number): Promise<void> {
