@@ -2,7 +2,7 @@ import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { afterEach, expect, it } from 'vitest';
 import { LicensingService } from './service';
 import { totpCode, type ConsoleSession } from './console-auth';
-import { pageQuerySchema, permissions, type ConsoleAction } from './console-contract';
+import { actionSchema, pageQuerySchema, permissions, type ConsoleAction } from './console-contract';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
@@ -208,6 +208,21 @@ it('授权生命周期状态由服务端统一计算：列表、页签计数、�
   expect(s.consoleService.detail('licenses', ids[2]!, s.login.session).item).toMatchObject({ status: 'revoked', orderReference: expect.stringMatching(/^GRANT-/) as unknown });
   expect(s.consoleService.overview(s.login.session).item.expiring).toBe(1);
   expect(s.consoleService.list('users', query(''), s.login.session).items.map(row => row.status)).toEqual(['enabled']);
+});
+it('原因分档：选填操作留空可执行且审计照记操作人、操作、对象和时间；必填操作留空被拒', async () => {
+  const id = randomUUID();
+  for (const action of ['reconcile', 'payment-link', 'retry-delivery', 'delivery-access'] as const) expect(actionSchema.safeParse({ action, id, reason: '' }).success).toBe(true);
+  for (const action of ['revoke', 'migrate', 'reveal', 'revoke-delivery-access', 'close-order', 'reset-user'] as const) expect(actionSchema.safeParse({ action, id, reason: ' ' }).success).toBe(false);
+  expect(actionSchema.safeParse({ action: 'refund-review', id, decision: 'revoke', reason: '' }).success).toBe(false);
+  expect(actionSchema.safeParse({ action: 'update-ticket', id, state: 'processing', conclusion: '', reason: '' }).success).toBe(false);
+  const s = await setup();
+  const order = await s.execute({ action: 'create-order', reference: 'no-note', customer: '客户', customerType: 'company', quantity: 1, amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', reason: '' });
+  await s.execute({ action: 'fulfill', id: order.id!, amountFen: 80000, paymentReference: 'no-note-bank', paymentMethod: '转账', reason: '到账' });
+  expect((await s.execute({ action: 'delivery-access', id: order.id!, reason: '' })).secret).toMatch(/^TBD-/);
+  for (const action of ['create-order', 'delivery-access']) {
+    expect(s.db.prepare('SELECT actor,action,target,reason,result FROM console_audit WHERE action=?').get(action)).toEqual({ actor: s.first.id, action, target: order.id, reason: '', result: 'success' });
+  }
+  expect(s.db.prepare("SELECT detail FROM audit WHERE action='order.delivery-access-issued'").get()).toEqual({ detail: '后台重发领取凭据' });
 });
 it('创建线下订单与确认线下收款不落在同一个非管理员角色', () => {
   for (const role of ['operations', 'finance', 'viewer'] as const) expect(permissions['create-order'].includes(role) && permissions.fulfill.includes(role)).toBe(false);

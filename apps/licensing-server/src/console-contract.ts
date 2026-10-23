@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const roleSchema = z.enum(['owner', 'operations', 'finance', 'viewer']);
 export type ConsoleRole = z.infer<typeof roleSchema>;
 export const reasonSchema = z.string().trim().min(1).max(500);
+// 选填备注：查询、生成链接、补发、建单、建工单这类可重复或无损的操作不强制写原因；审计照记操作人、操作、对象和时间。
+const noteSchema = z.string().trim().max(500).default('');
 const id = z.string().uuid();
 const text = z.string().trim().min(1).max(160);
 const date = z.string().datetime();
@@ -12,13 +14,13 @@ export const sessionSchema = z.object({ user: userSchema, csrf: z.string(), veri
 export const loginSchema = z.object({ username: text, password: z.string().min(1).max(256), code: z.string().min(6).max(100) }).strict();
 export const enrollmentSchema = z.object({ token: z.string().min(32).max(128), password: z.string().min(12).max(256), code: z.string().regex(/^\d{6}$/) }).strict();
 export const actionSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('create-order'), reference: text, customer: text, customerType: z.enum(['personal', 'company']), quantity: z.number().int().min(1).max(100), amountFen: z.number().int().positive().max(100_000_000), useUntil: date, reason: reasonSchema }),
+  z.object({ action: z.literal('create-order'), reference: text, customer: text, customerType: z.enum(['personal', 'company']), quantity: z.number().int().min(1).max(100), amountFen: z.number().int().positive().max(100_000_000), useUntil: date, reason: noteSchema }),
   z.object({ action: z.literal('fulfill'), id, amountFen: z.number().int().positive(), paymentReference: text, paymentMethod: text, reason: reasonSchema }),
-  z.object({ action: z.literal('reconcile'), id, reason: reasonSchema }),
-  z.object({ action: z.literal('payment-link'), id, reason: reasonSchema }),
+  z.object({ action: z.literal('reconcile'), id, reason: noteSchema }),
+  z.object({ action: z.literal('payment-link'), id, reason: noteSchema }),
   z.object({ action: z.literal('close-order'), id, reason: reasonSchema }),
-  z.object({ action: z.literal('retry-delivery'), id, reason: reasonSchema }),
-  z.object({ action: z.literal('delivery-access'), id, reason: reasonSchema }),
+  z.object({ action: z.literal('retry-delivery'), id, reason: noteSchema }),
+  z.object({ action: z.literal('delivery-access'), id, reason: noteSchema }),
   z.object({ action: z.literal('revoke-delivery-access'), id, reason: reasonSchema }),
   z.object({ action: z.literal('reveal'), id, reason: reasonSchema }),
   z.object({ action: z.literal('set-expiry'), id, useUntil: date, reason: reasonSchema }),
@@ -28,7 +30,7 @@ export const actionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('create-user'), username: z.string().regex(/^[a-zA-Z0-9._-]{3,64}$/), role: roleSchema, reason: reasonSchema }),
   z.object({ action: z.literal('update-user'), id, role: roleSchema, enabled: z.boolean(), reason: reasonSchema }),
   z.object({ action: z.literal('reset-user'), id, reason: reasonSchema }),
-  z.object({ action: z.literal('create-ticket'), id, licenseId: id.nullable(), category: z.enum(['migration', 'refund', 'invoice', 'recovery', 'other']), note: reasonSchema, reason: reasonSchema }),
+  z.object({ action: z.literal('create-ticket'), id, licenseId: id.nullable(), category: z.enum(['migration', 'refund', 'invoice', 'recovery', 'other']), note: reasonSchema, reason: noteSchema }),
   z.object({ action: z.literal('update-ticket'), id, state: z.enum(['open', 'processing', 'closed']), conclusion: z.string().trim().max(500), reason: reasonSchema }),
   z.object({ action: z.literal('refund'), id, amountFen: z.number().int().positive(), reference: text, handledAt: date, reason: reasonSchema }),
   // 支付宝 refund_reason 会展示在买卖双方退款账单中，上限 256 字符，超长直接拒绝而不截断。

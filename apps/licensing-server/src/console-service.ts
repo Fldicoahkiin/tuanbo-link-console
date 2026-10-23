@@ -220,9 +220,10 @@ export class ConsoleService {
         return success(order.id, '线下订单已创建，待核款');
       }
       case 'fulfill': this.service.fulfill(input.id, { amountFen: input.amountFen, paymentReference: input.paymentReference }); this.auth.audit(actor, 'manual-payment-method', input.id, input.paymentMethod, 'success', operationId); return success(input.id, '核款与发码已完成');
-      case 'retry-delivery': this.service.retryDelivery(input.id, { reason: input.reason }); return success(input.id, '补交付已完成');
+      // 服务层与本机管理接口仍要求非空原因；后台备注留空时传固定标签。
+      case 'retry-delivery': this.service.retryDelivery(input.id, { reason: input.reason || '后台补交付' }); return success(input.id, '补交付已完成');
       case 'close-order': this.service.closeUnlinkedOrder(input.id); return success(input.id, '订单已关闭');
-      case 'delivery-access': { const result = this.service.issueDeliveryAccess(input.id, { reason: input.reason }); return { id: input.id, message: '新的领取凭据已签发，旧凭据失效', secret: result.token, expiresAt: result.expiresAt }; }
+      case 'delivery-access': { const result = this.service.issueDeliveryAccess(input.id, { reason: input.reason || '后台重发领取凭据' }); return { id: input.id, message: '新的领取凭据已签发，旧凭据失效', secret: result.token, expiresAt: result.expiresAt }; }
       case 'revoke-delivery-access': this.service.revokeDeliveryAccess(input.id, { reason: input.reason }); return success(input.id, '领取凭据已撤销');
       case 'reveal': return { id: input.id, message: '完整激活码', secret: this.service.consoleReveal(input.id) };
       case 'set-expiry': { const before = this.service.consoleLicense(input.id).useUntil; this.service.setLicenseExpiry(input.id, input.useUntil, input.reason); this.auth.audit(actor, 'license.expiry-adjusted', input.id, `原截止：${before ?? '永久'}；新截止：${input.useUntil}；${input.reason}`, 'success', operationId); return success(input.id, '到期时间已更新，下次联网验证生效'); }
