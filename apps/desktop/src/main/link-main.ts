@@ -130,6 +130,7 @@ import type {
 import { ExternalProcessManager, WindowsProcessTools, type ExternalApplicationId } from './link/external-process-manager';
 import { LinkProjectService } from './link/link-project-service';
 import { AssetRelinkRequests } from './link/asset-relink-requests';
+import { ProjectAccess } from './link/project-access';
 import { MediaMetadataProbe } from './link/media-metadata-probe';
 import { MediaPreviewService } from './link/media-preview-service';
 import { obsMediaCachePaths } from './link/obs-media-paths';
@@ -244,7 +245,6 @@ function nativePlaybackActive(): boolean {
 const midiHealth = new WindowsMidiHealth(() => probeWindowsMidi(midiProbeExecutable(app.isPackaged ? process.resourcesPath : undefined)));
 
 const projectService = new LinkProjectService();
-const assetRelinkRequests = new AssetRelinkRequests({ projects: projectService, openProjectPath: () => documentState.projectPath });
 const projectDocuments = new ProjectDocumentService();
 const p1ProjectService = new P1ProjectService(projectService);
 const mediaMetadataProbe = new MediaMetadataProbe();
@@ -493,6 +493,10 @@ function registerIpc(
   integrationDetector: WindowsIntegrationDetector,
   updateManager: LinkUpdateManager
 ): void {
+  const projectAccess = new ProjectAccess(join(app.getPath('userData'), 'link-integrations', 'last-project.json'));
+  const assetRelinkRequests = new AssetRelinkRequests({ projects: projectService, access: projectAccess });
+  /** Recovery copies are named by a project the main process approved, or by none (unnamed). */
+  const requireApprovedOrUnnamed = (projectPath: string | null): void => { if (projectPath !== null) projectAccess.requireApproved(projectPath); };
   const nativeSeek = new ObsNativeSeek();
   const programObsListeners = new Set<(status: import('@tb/schema').NativeObsStatus) => void>();
   const obsPreload = new NativeObsPreloadPool({
@@ -1078,8 +1082,13 @@ function registerIpc(
       throw error;
     }
   });
-  handle('link:set-document-state', (_event, stateValue: unknown) => {
-    documentState = linkDocumentStateSchema.parse(stateValue);
+  // The window only selects among projects the main process approved. A failed last-project
+  // record is reported after the state is taken, so the quit guard still sees it.
+  handle('link:set-document-state', async (_event, stateValue: unknown) => {
+    const state = linkDocumentStateSchema.parse(stateValue);
+    requireApprovedOrUnnamed(state.projectPath);
+    documentState = state;
+    await projectAccess.show(state.projectPath);
   });
   handle('link:resolve-unsaved-changes', (_event, reasonValue: unknown) => unsavedChanges.resolve(linkUnsavedChangesReasonSchema.parse(reasonValue)));
   handle('link:save-response', (_event, responseValue: unknown) => {
@@ -1148,17 +1157,24 @@ function registerIpc(
     });
     const path = result.filePaths[0];
     if (result.canceled || !path) return null;
-    return { version: 1, path, ...await projectDocuments.open(path) };
+    const document = await projectDocuments.open(path);
+    projectAccess.approve(path);
+    return { version: 1, path, ...document };
   });
+  // Reopening only: the last project, the shown one (恢复到上次保存, archive restore) or another approved path.
   handle('link:open-project', async (_event, pathValue: unknown) => {
     const path = linkFilePathSchema.parse(pathValue);
+    projectAccess.requireApproved(path);
     return { version: 1, path, ...await projectDocuments.open(path) };
   });
+  handle('link:last-project', () => projectAccess.lastProject());
   handle('link:save-project', async (_event, pathValue: unknown, projectValue: unknown, optionsValue: unknown) => {
     const content = projectDocumentTextSchema.parse(projectValue);
     const options = projectSaveOptionsSchema.parse(optionsValue);
     let destination = linkOptionalFilePathSchema.parse(pathValue);
-    if (!destination) {
+    // A named save writes the shown project; any other destination comes from the save dialog.
+    if (destination) projectAccess.requireShown(destination);
+    else {
       const fileName = `${safeFileName(await projectDocuments.inspect(content))}.tblink`;
       const result = await dialog.showSaveDialog(mainWindow!, {
         title: options.defaultPath ? '另存团播联动工程' : '保存团播联动工程',
@@ -1167,6 +1183,7 @@ function registerIpc(
       });
       if (result.canceled || !result.filePath) return null;
       destination = result.filePath;
+      projectAccess.approve(destination);
     }
     try { await projectDocuments.save(destination, content, options.backupOriginal === true); }
     catch (error) {
@@ -1186,7 +1203,11 @@ function registerIpc(
     await logger.record({ level: 'warning', category: 'system', message: '恢复副本清理未完成，下次启动再试', details: { error: error instanceof Error ? error.message : String(error) } });
   });
   // The renderer records a failed write once, with the reason shown to the operator.
-  handle('link:write-recovery-copy', async (_event, payload: unknown) => { await pruning; return copies.write(recoveryCopyWriteSchema.parse(payload)); });
+  handle('link:write-recovery-copy', async (_event, payload: unknown) => {
+    const copy = recoveryCopyWriteSchema.parse(payload);
+    requireApprovedOrUnnamed(copy.projectPath);
+    await pruning; return copies.write(copy);
+  });
   handle('link:confirm-project-location', async (_event, purposeValue: unknown) => {
     const purpose = z.string().min(1).max(200).parse(purposeValue);
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'question', title: '选择工程保存位置', noLink: true,
@@ -1214,10 +1235,16 @@ function registerIpc(
       buttons: ['恢复到上次保存', '取消'], defaultId: 1, cancelId: 1 });
     return response === 0;
   });
-  handle('link:discard-recovery-copy', (_event, payload: unknown) => copies.discard(recoveryCopyDiscardSchema.parse(payload)));
+  handle('link:discard-recovery-copy', (_event, payload: unknown) => {
+    const discard = recoveryCopyDiscardSchema.parse(payload);
+    requireApprovedOrUnnamed(discard.projectPath);
+    return copies.discard(discard);
+  });
   handle('link:resolve-recovery-copy', async (_event, payload: unknown) => {
+    const query = recoveryCopyQuerySchema.parse(payload);
+    requireApprovedOrUnnamed(query.projectPath);
     await pruning;
-    const content = await offerRecoveryCopy(recoveryCopyQuerySchema.parse(payload), {
+    const content = await offerRecoveryCopy(query, {
       copies,
       read: path => projectDocuments.read(path),
       modifiedAt: async path => (await stat(path)).mtime,

@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createServer, type Server, type Socket } from 'node:net';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -1540,7 +1540,6 @@ test.beforeEach(async ({}, testInfo) => {
   await answerSaveQuestions(application);
   await page.evaluate(() => {
     localStorage.removeItem('tblink.cue-workspace-layout.v1');
-    localStorage.removeItem('tblink.last-project-path.v1');
   });
   await page.reload();
 });
@@ -1774,11 +1773,12 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
 
 test('保存旧快照不会清除后来修改的退出保护', async ({}, testInfo) => {
   await expect(page.locator('.project-welcome')).toBeVisible();
-  await page.evaluate(async (destination) => {
+  await application.evaluate(({ dialog }, destination) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: destination }); }, testInfo.outputPath('snapshot.tblink'));
+  await page.evaluate(async () => {
     const project = await window.tbLink.createProject('旧快照');
     await window.tbLink.setDocumentState({ version: 1, dirty: true, consoleSynced: false, name: '旧快照', projectPath: null, projectId: project.projectId });
-    await window.tbLink.saveProjectDocument(destination, JSON.stringify(project));
-  }, testInfo.outputPath('snapshot.tblink'));
+    await window.tbLink.saveProjectDocument(null, JSON.stringify(project));
+  });
   const result = await application.evaluate(async ({ BrowserWindow, dialog }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (!window) throw new Error('主窗口不存在');
@@ -2000,14 +2000,11 @@ test('损坏的工作区布局会明确告警而不是静默清零', async () =>
 });
 
 test('工程恢复存储不可用时明确告警且界面保持可用', async ({}, testInfo) => {
-  await page.addInitScript(() => {
-    Storage.prototype.getItem = function getItem(key: string): string | null {
-      if (key === 'tblink.last-project-path.v1') throw new Error('模拟恢复存储不可用');
-      return null;
-    };
-  });
+  // The main process keeps the last project record in its own data folder.
+  const record = join(testInfo.outputPath('user-data'), 'link-integrations', 'last-project.json');
+  await mkdir(dirname(record), { recursive: true }); await writeFile(record, '模拟恢复存储损坏');
   await page.reload();
-  await expect(page.locator('.toast.error')).toContainText('读取上次工程路径失败：模拟恢复存储不可用');
+  await expect(page.locator('.toast.error')).toContainText('读取上次工程路径失败：上次工程记录损坏');
   await expect(page.getByRole('button', { name: '新建工程', exact: true })).toBeEnabled();
 
   await beginNewProject();

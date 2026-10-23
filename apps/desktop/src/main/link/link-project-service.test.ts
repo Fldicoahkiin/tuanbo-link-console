@@ -344,7 +344,7 @@ describe('LinkProjectService', () => {
     cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio')); cleanupFiles.push(join(moved, audio.file.relativePath));
     for (const relativePath of ['song.wav', 'assets/song.wav', 'assets/cache/song.wav', 'assets/reference-audio/nested/song.wav',
       'assets/reference-audio/song.exe', 'assets/reference-audio/song.mp4', 'assets/reference-media/notes.txt', 'cache/waveforms/song.json', 'assets\\reference-audio\\song.wav']) {
-      await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file, { relativePath, sha256: sha256('song') }])).rejects.toThrow('只能检查和找回');
+      await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file, { relativePath, sha256: sha256('song') }])).rejects.toThrow('只能使用');
     }
     expect(await readdir(moved)).toEqual([]);
     expect(await service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file, { relativePath: 'assets/reference-media/clip.MOV', sha256: sha256('clip') }]))
@@ -356,7 +356,7 @@ describe('LinkProjectService', () => {
     await writeFile(secret, 'secret');
     const service = new LinkProjectService();
     for (const relativePath of ['secret.txt', 'assets/reference-audio/../../secret.txt', 'assets/reference-media/secret.txt']) {
-      await expect(service.findMissingAssetFiles(join(directory, 'show.tblink'), [{ relativePath }])).rejects.toThrow('只能检查和找回');
+      await expect(service.findMissingAssetFiles(join(directory, 'show.tblink'), [{ relativePath }])).rejects.toThrow('只能使用');
     }
   });
 

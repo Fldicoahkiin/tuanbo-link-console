@@ -265,6 +265,8 @@ export type LinkDesktopApi = {
   installUpdate(): Promise<void>;
   /** The main process asks before quitting with what the window last reported here. */
   setDocumentState(state: import('@tb/schema').LinkDocumentState): Promise<void>;
+  /** The last project the main process recorded; it may then be reopened by path. */
+  lastProjectPath(): Promise<string | null>;
   /** 保存 / 不保存 / 取消 before the open document is replaced; the same question as quitting. */
   resolveUnsavedChanges(reason: 'open' | 'new' | 'restore-archive'): Promise<'clean' | 'saved' | 'discarded' | 'cancelled'>;
   /** The main process asks the window to save (quit, reload, update); the handler's result is sent back. */

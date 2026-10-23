@@ -4,25 +4,13 @@ import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 import { isProjectReopenSuspended } from './stores/project-recovery';
 import { restoreUnnamedProject, showOpenedProject } from './project-document';
 
-const LAST_PROJECT_PATH_KEY = 'tblink.last-project-path.v1';
 // Once per renderer: React's development double effects must not ask about recovery twice.
 let startup: Promise<void> | null = null;
 
 export function useProjectPersistence(notify: (message: string, tone?: 'info' | 'error') => void): void {
-  const path = useDocumentStore((state) => state.path);
-
   useEffect(() => {
     startup ??= openStartupDocument(notify);
   }, [notify]);
-
-  useEffect(() => {
-    if (!path) return;
-    try {
-      localStorage.setItem(LAST_PROJECT_PATH_KEY, path);
-    } catch (error) {
-      notify(`保存上次工程路径失败：${toMessage(error)}`, 'error');
-    }
-  }, [notify, path]);
 }
 
 /** An unnamed project's unsaved edits come first; otherwise the last project file reopens, with its own recovery offer. */
@@ -33,9 +21,10 @@ async function openStartupDocument(notify: (message: string, tone?: 'info' | 'er
   } catch (error) {
     notify(`检查未保存的未命名工程失败：${toMessage(error)}`, 'error');
   }
+  // The main process records the last project itself; it only reopens a path it recorded or approved.
   let lastPath: string | null;
   try {
-    lastPath = localStorage.getItem(LAST_PROJECT_PATH_KEY);
+    lastPath = await linkDesktopViewModel.lastProjectPath();
     if (lastPath && isProjectReopenSuspended(lastPath)) {
       notify(`上次工程显示异常，已暂停自动打开。工程文件保留在原位置，可通过“打开工程”重新选择：${lastPath}`, 'error');
       return;

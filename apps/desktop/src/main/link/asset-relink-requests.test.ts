@@ -9,7 +9,9 @@ function requests(openProjectPath: string | null = open) {
     findMissingAssetFiles: vi.fn(() => Promise.resolve([file.relativePath])),
     relinkAssetFiles: vi.fn(() => Promise.resolve([{ relativePath: file.relativePath, status: 'restored' as const }]))
   };
-  return { projects, requests: new AssetRelinkRequests({ projects, openProjectPath: () => openProjectPath }) };
+  // Stands in for ProjectAccess.assetFiles: only the shown project is accepted.
+  const access = { assetFiles: vi.fn((projectPath: string) => projectPath === openProjectPath ? Promise.resolve([]) : Promise.reject(new Error(`只能访问当前打开的工程：${projectPath}`))) };
+  return { projects, access, requests: new AssetRelinkRequests({ projects, access }) };
 }
 
 describe('AssetRelinkRequests', () => {

@@ -169,6 +169,7 @@ const tbLink: LinkDesktopBridgeApi = {
   createProject: (name) => invoke('link:create-project', name),
   pickProjectDocument: () => invoke('link:pick-open-project'),
   openProjectDocument: (path) => invoke('link:open-project', path),
+  lastProjectPath: async () => z.string().min(1).nullable().parse(await invoke('link:last-project')),
   saveProjectDocument: (path, content, options) => invoke('link:save-project', path, content, options ?? {}),
   confirmProjectLocation: async (purpose) => z.boolean().parse(await invoke('link:confirm-project-location', purpose)),
   confirmRevertToSaved: async (payload) => z.boolean().parse(await invoke('link:confirm-revert-to-saved', payload)),

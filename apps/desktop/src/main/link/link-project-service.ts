@@ -415,15 +415,33 @@ function resolveInsideFolder(projectDirectory: string, relativePath: string, lab
 }
 
 function assertProjectAssetPath(relativePath: string): void {
-  if (!isProjectAssetPath(relativePath)) throw new Error(`只能检查和找回 assets/reference-audio 或 assets/reference-media 中的音视频和图片文件：${relativePath}`);
+  if (!isProjectAssetPath(relativePath)) throw new Error(`只能使用 assets/reference-audio 或 assets/reference-media 中的音视频和图片文件：${relativePath}`);
+}
+
+/** The one check for files the window names inside a project: asset-folder files with an imported
+ * extension, inside the project folder as written and after following links. One refusal refuses all. */
+export async function resolveProjectAssetFiles(projectPath: string, relativePaths: readonly string[]): Promise<string[]> {
+  const paths = relativePaths.map(relativePath => {
+    assertProjectAssetPath(relativePath);
+    return resolveProjectAsset(projectPath, relativePath, '工程素材');
+  });
+  const folder = await realpath(dirname(resolve(projectPath)));
+  for (const [index, path] of paths.entries()) {
+    if (!isInsideFolder(folder, await realpathOfNearestExisting(path))) throw new Error(`工程素材 ${relativePaths[index]} 经符号链接或目录联接指向工程文件夹之外，已拒绝`);
+  }
+  return paths;
 }
 
 /** Follows symbolic links and junctions. A path that does not exist yet is
  * judged by its nearest existing parent, the folder it would be created in. */
 async function assertRealPathInside(folder: string, path: string, refusal: string): Promise<void> {
   const [realFolder, realPath] = await Promise.all([realpath(folder), realpathOfNearestExisting(path)]);
-  const inside = relative(realFolder, realPath);
-  if (inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) throw new Error(refusal);
+  if (!isInsideFolder(realFolder, realPath)) throw new Error(refusal);
+}
+
+function isInsideFolder(folder: string, path: string): boolean {
+  const inside = relative(folder, path);
+  return inside !== '..' && !inside.startsWith(`..${sep}`) && !isAbsolute(inside);
 }
 
 async function realpathOfNearestExisting(path: string): Promise<string> {

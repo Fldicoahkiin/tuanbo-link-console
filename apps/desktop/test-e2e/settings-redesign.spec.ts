@@ -62,10 +62,7 @@ test('设置 17 页双主题三尺寸、展开状态与缩放视觉矩阵', asyn
     const file = info.outputPath('settings.tblink');
     const content = JSON.stringify({ ...createEmptyLinkProject('设置界面验收'), playbackSource: 'internal' });
     await writeFile(file, content);
-    await app.evaluate(({ ipcMain }, document) => {
-      ipcMain.removeHandler('link:pick-open-project');
-      ipcMain.handle('link:pick-open-project', () => document);
-    }, { version: 1, path: file, content, upgraded: false });
+    await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await select(page, 'source');
