@@ -761,7 +761,13 @@ function registerIpc(
   });
   const ma2Connections = new Ma2Connections(() => runtimeActive);
   const loopMidiService = new LoopMidiService();
-  const ma2NetworkSetup = new Ma2NetworkSetup(join(app.getPath('userData'), 'ma2-network-addresses.json'));
+  // Changing a Windows adapter needs the operator's answer to the main process's own dialog.
+  const ma2NetworkSetup = new Ma2NetworkSetup(join(app.getPath('userData'), 'ma2-network-addresses.json'), async change => {
+    const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '修改网卡地址', noLink: true, buttons: ['确认修改', '取消'], defaultId: 1, cancelId: 1,
+      message: change.action === 'add' ? `为网卡「${change.adapterName}」增加地址 ${change.address}/${change.prefix}？` : `从网卡「${change.adapterName}」移除本软件添加的地址 ${change.address}/${change.prefix}？`,
+      detail: `用于连接控台 ${change.host}。网卡：${change.adapterDescription}。Windows 可能还会请求管理员确认。` });
+    return response === 0;
+  });
   const ma2Network = new Ma2NetworkManager(app.getPath('userData'), profileStore, () => runtimeActive || nativePlaybackActive(), ma2PluginLua, host => ma2NetworkSetup.connectionAddress(host), async (host, peers) => {
     if (!isLocalMa2Address(host)) return;
     const profile = await profileStore.loadProfile();
