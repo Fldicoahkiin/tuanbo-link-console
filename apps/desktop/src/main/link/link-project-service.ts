@@ -359,13 +359,16 @@ export class LinkProjectService {
       if (await hashFile(source) !== sha256) { result.push({ relativePath, status: 'mismatch' }); continue; }
       // Checked before mkdir, so a linked assets folder does not get folders created through it either.
       await assertRealPathInside(projectDirectory, dirname(destination), `找回素材已拒绝：工程文件夹中 ${relativePath} 所在的文件夹经符号链接或目录联接指向工程文件夹之外`);
+      // P1 follow preflight blocks on a missing waveform, so it moves with its audio.
+      const waveform = join(sourceFolder, 'cache', 'waveforms', `${sha256}.json`); const waveformDestination = waveformCachePath(projectPath, sha256);
+      const bringWaveform = await pathExists(waveform) && !await pathExists(waveformDestination);
+      if (bringWaveform) {
+        await assertRealPathInside(sourceFolder, waveform, `找回波形缓存已拒绝：所选文件夹中的 cache/waveforms/${sha256}.json 经符号链接或目录联接指向该文件夹之外`);
+        await assertRealPathInside(projectDirectory, dirname(waveformDestination), '找回波形缓存已拒绝：工程文件夹中的 cache/waveforms 经符号链接或目录联接指向工程文件夹之外');
+      }
       await mkdir(dirname(destination), { recursive: true });
       await copyIntoProject(source, destination, dirname(destination), '找回素材', sha256);
-      // P1 follow preflight blocks on a missing waveform, so it moves with its audio.
-      const waveform = join(sourceFolder, 'cache', 'waveforms', `${sha256}.json`);
-      if (await pathExists(waveform) && !await pathExists(waveformCachePath(projectPath, sha256))) {
-        await writeFileAtomically(waveformCachePath(projectPath, sha256), await readFile(waveform));
-      }
+      if (bringWaveform) await writeFileAtomically(waveformDestination, await readFile(waveform));
       result.push({ relativePath, status: 'restored' });
     }
     return result;

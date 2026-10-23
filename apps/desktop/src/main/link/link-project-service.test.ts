@@ -285,6 +285,34 @@ describe('LinkProjectService', () => {
     expect(await readdir(moved)).toEqual([]);
   });
 
+  it('找回波形缓存不读取所选文件夹里经符号链接或目录联接指向别处的文件', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio();
+    const elsewhere = await createTestDirectory(); const moved = await createTestDirectory();
+    const linkedWaveform = join(elsewhere, 'waveforms', `${audio.file.sha256}.json`);
+    await mkdir(join(elsewhere, 'waveforms')); cleanupDirectories.push(join(elsewhere, 'waveforms')); cleanupFiles.push(linkedWaveform);
+    await writeFile(linkedWaveform, '[0]\n');
+    await linkFolder(elsewhere, join(audio.folder, 'cache'));
+    cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio'), join(moved, 'cache'), join(moved, 'cache', 'waveforms'));
+    cleanupFiles.push(join(moved, audio.file.relativePath), join(moved, 'cache', 'waveforms', `${audio.file.sha256}.json`));
+    await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file])).rejects.toThrow('符号链接');
+    expect(await readdir(moved)).toEqual([]);
+  });
+
+  it('找回波形缓存不写入工程文件夹里经符号链接或目录联接指向别处的位置', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio();
+    const waveform = join(audio.folder, 'cache', 'waveforms', `${audio.file.sha256}.json`);
+    await mkdir(join(audio.folder, 'cache', 'waveforms'), { recursive: true });
+    cleanupDirectories.push(join(audio.folder, 'cache'), join(audio.folder, 'cache', 'waveforms')); cleanupFiles.push(waveform);
+    await writeFile(waveform, '[0]\n');
+    const moved = await createTestDirectory(); const outside = await createTestDirectory();
+    await linkFolder(outside, join(moved, 'cache'));
+    cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio'), join(outside, 'waveforms'));
+    cleanupFiles.push(join(moved, audio.file.relativePath), join(outside, 'waveforms', `${audio.file.sha256}.json`));
+    await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file])).rejects.toThrow('符号链接');
+    expect(await readdir(outside)).toEqual([]);
+    expect(await readdir(moved)).toEqual(['cache']);
+  });
+
   it('找回素材只接受 assets 素材子目录里的音视频和图片文件，有一个不符合就整批拒绝', async () => {
     const service = new LinkProjectService(); const audio = await originalAudio(); const moved = await createTestDirectory();
     cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio')); cleanupFiles.push(join(moved, audio.file.relativePath));
