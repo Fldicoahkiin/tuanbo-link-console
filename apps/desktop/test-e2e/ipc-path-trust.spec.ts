@@ -95,6 +95,16 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
     expect.soft(devices).toEqual({ ma2DataDirectory: expect.stringContaining('本机 onPC 数据目录必须通过“选择”或“一键识别”设置') });
     expect.soft(await readdir(join(onpc, 'temp'))).toEqual([]);
 
+    const logs = {
+      oversize: await attempt(page, () => window.tbLink.recordLog({ level: 'info', category: 'system', message: 'x'.repeat(1_000_000) }).then(() => 'recorded'), values),
+      flood: await page.evaluate(async () => {
+        const results = await Promise.allSettled(Array.from({ length: 1000 }, (_, index) => window.tbLink.recordLog({ level: 'info', category: 'system', message: `刷屏 ${index}` })));
+        const refused = results.filter(result => result.status === 'rejected');
+        return { refused: refused.length > 0, reason: refused[0]?.status === 'rejected' ? String(refused[0].reason) : '' };
+      })
+    };
+    expect.soft(logs).toEqual({ oversize: expect.stringContaining('8192'), flood: { refused: true, reason: expect.stringContaining('窗口日志写入过于频繁') } });
+
     // The same bridge saves the shown project.
     const renamed = JSON.stringify({ ...JSON.parse(content), name: '已保存到展示工程' });
     expect(await page.evaluate(({ shown, renamed }) => window.tbLink.saveProjectDocument(shown, renamed), { shown, renamed })).toBe(shown);

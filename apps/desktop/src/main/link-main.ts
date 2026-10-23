@@ -133,6 +133,7 @@ import { ExternalProcessManager, WindowsProcessTools, type ExternalApplicationId
 import { LinkProjectService } from './link/link-project-service';
 import { AssetRelinkRequests } from './link/asset-relink-requests';
 import { ProjectAccess } from './link/project-access';
+import { WindowLogRate } from './link/window-log-rate';
 import { ChosenPaths, requireChosenPrograms } from './link/chosen-paths';
 import { MediaMetadataProbe } from './link/media-metadata-probe';
 import { MediaPreviewService } from './link/media-preview-service';
@@ -2018,7 +2019,9 @@ function registerIpc(
       ? processManager.refresh(id, processConfiguration(profile, id))
       : Promise.resolve(processManager.getSnapshot(id))));
   });
-  handle('link:log-record', (_event, entryValue: unknown) => logger.record(parseLogRecord(entryValue)));
+  // Refused entries reach the log through the IPC failure entry, once per 30 seconds with a repeat count.
+  const windowLogRate = new WindowLogRate();
+  handle('link:log-record', (_event, entryValue: unknown) => { windowLogRate.take(); return logger.record(parseLogRecord(entryValue)); });
   handle('link:log-query', (_event, filterValue: unknown) => logger.query(parseLogFilter(filterValue)));
   handle('link:log-open-folder', async () => {
     const directory = join(app.getPath('userData'), 'link-logs');

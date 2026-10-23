@@ -49,6 +49,15 @@ describe('联动台 IPC Zod 契约', () => {
     expect(linkObsSourcePreviewPayloadSchema.parse({ sourceName: 'Camera' })).toEqual({ sourceName: 'Camera' });
   });
 
+  it('窗口日志单条有长度上限：消息 8192 字、ID 256 字、详情序列化后 256 KB', () => {
+    const entry = { level: 'error' as const, category: 'system' as const, message: 'x'.repeat(8192), device: 'd'.repeat(256), details: { stack: '\n'.repeat(32768), componentStack: '\n'.repeat(32768) } };
+    expect(linkLogRecordSchema.parse(entry)).toMatchObject({ device: entry.device });
+    expect(() => linkLogRecordSchema.parse({ ...entry, message: 'x'.repeat(8193) })).toThrow();
+    expect(() => linkLogRecordSchema.parse({ ...entry, device: 'd'.repeat(257) })).toThrow();
+    expect(() => linkLogRecordSchema.parse({ ...entry, projectId: 'p'.repeat(257) })).toThrow();
+    expect(() => linkLogRecordSchema.parse({ ...entry, details: { stack: 's'.repeat(262_144) } })).toThrow('日志详情超过 256 KB');
+  });
+
   it('拒绝越界 ID、空消息和无效波形数据', () => {
     expect(() => linkExternalApplicationIdSchema.parse('program')).toThrow();
     expect(() => linkExternalApplicationIdSchema.parse('liveCompanion')).toThrow();

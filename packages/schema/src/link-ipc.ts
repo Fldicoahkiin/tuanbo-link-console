@@ -172,18 +172,20 @@ export const linkIntegrationProfileSavePayloadSchema = z.object({
 
 export const linkLogResultSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'skipped']);
 
+/** A log entry the window writes, bounded above what the window itself sends (it clips messages to 8192 and stacks to 32768). */
 export const linkLogRecordSchema = z.object({
   level: z.enum(['info', 'warning', 'error']),
   category: z.enum(['state', 'action', 'device', 'preflight', 'operator', 'system']),
-  message: z.string().min(1),
-  projectId: z.string().min(1).optional(),
-  itemId: z.string().min(1).optional(),
-  cueId: z.string().min(1).optional(),
-  actionId: z.string().min(1).optional(),
-  executionId: z.string().min(1).optional(),
-  device: z.string().min(1).optional(),
+  message: z.string().min(1).max(8192),
+  projectId: z.string().min(1).max(256).optional(),
+  itemId: z.string().min(1).max(256).optional(),
+  cueId: z.string().min(1).max(256).optional(),
+  actionId: z.string().min(1).max(256).optional(),
+  executionId: z.string().min(1).max(256).optional(),
+  device: z.string().min(1).max(256).optional(),
   result: linkLogResultSchema.optional(),
-  details: z.record(z.string(), z.unknown()).optional()
+  // The error boundary sends two stacks of up to 32768 characters each; escaping can grow them several times.
+  details: z.record(z.string(), z.unknown()).refine(details => JSON.stringify(details).length <= 262_144, '日志详情超过 256 KB').optional()
 });
 
 export const linkLogFilterSchema = z.object({
