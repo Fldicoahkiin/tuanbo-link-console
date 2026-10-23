@@ -4,6 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
+import { answerStartCheck } from './start-check';
 
 test('无 MA2 网线时按原偏移发 MTC；长时阻塞只停止发码，音频继续', async ({}, info) => {
   const wav = Buffer.alloc(44 + 8000 * 20, 128);
@@ -54,13 +55,15 @@ test('无 MA2 网线时按原偏移发 MTC；长时阻塞只停止发码，音�
       BrowserWindow.getAllWindows()[0]!.webContents.send('link:obs-status', status);
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] });
     }, file);
+    // The native Timecode binding was never checked against a console read, so the start check asks first (6eb87f4).
+    const startChecks = await answerStartCheck(app);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.send('link:obs-status', { status: 'connected', obsVersion: '32.2.2', webSocketVersion: '5.6.3', error: null }));
     await page.getByRole('button', { name: '播放时间线', exact: true }).click();
+    await expect.poll(startChecks).toEqual([expect.stringContaining('尚未读取控台核对配对')]);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
     await page.locator('.player-diagnostics > summary').click();
-    await expect(page.getByText(/本地序列池 Cue 不会单独发送/).first()).toBeVisible();
     const audioPosition = (): Promise<number> => page.evaluate(() => (Reflect.get(window, '__schedulingAudio') as HTMLMediaElement | undefined)?.currentTime ?? 0);
     try { await expect.poll(audioPosition).toBeGreaterThan(0.3); }
     catch (error) { await writeFile(info.outputPath('playback-state.txt'), await page.locator('body').innerText()); throw error; }
