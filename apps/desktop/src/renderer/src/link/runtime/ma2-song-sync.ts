@@ -77,7 +77,7 @@ function canContinue(entry: SongSync): boolean {
   return document.documentId === entry.documentId && session?.sessionId === entry.sessionId
     && session.state !== 'paused' && useMa2RealtimePreference.getState().enabled
     && readMa2Method() === 'network'
-    && lighting?.outputMode === 'network' && lighting.consoleSong?.assignment !== 'unassigned';
+    && lighting !== undefined && lighting.consoleSong?.assignment !== 'unassigned';
 }
 
 /** Serialize console reconciliation; local editing and saving remain independent. */
@@ -99,7 +99,6 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           update(entry, { state: 'verified', checking: false, message: `序列 ${item.lighting.consoleSong.sequence} 已保留，执行器已解除分配` });
           continue;
         }
-        if (item.lighting.outputMode !== 'network') throw new Error('歌曲序列播放需要网络直控，请先切换灯光输出');
         if (item.lighting.ma2Bindings?.length) throw new Error('本曲已有控台时间码绑定；请在未绑定的新曲创建歌曲序列，避免改变现有控台编排');
         const points = ma2SongPoints(item.lighting);
         if (!points.length && !item.lighting.consoleSong) {

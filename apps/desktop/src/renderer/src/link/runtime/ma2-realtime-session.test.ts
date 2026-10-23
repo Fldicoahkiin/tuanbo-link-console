@@ -52,6 +52,17 @@ it('默认开启后整曲进入歌曲序列同步，不再调用隐式 Timecode 
   expect(metadata).toHaveBeenCalledExactlyOnceWith({ dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, targets: [] });
   expect(pendingSongSummary(useDocumentStore.getState().project)).toHaveLength(2);
 });
+it('灯光输出方式不再决定能否同步：默认的时间码跟随和 MIDI 直控的歌同样进入同步并写到控台', async () => {
+  const value = project();
+  value.rundown[0]!.lighting!.outputMode = 'timecode'; value.rundown[1]!.lighting!.outputMode = 'direct';
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  await prepareMa2RealtimeSession();
+  expect(Object.keys(useMa2SongSyncStore.getState().songs)).toEqual(['first', 'second']);
+  expect(pendingSongSummary(useDocumentStore.getState().project)).toHaveLength(2);
+  await tickMa2SongSync(false);
+  expect(sync.mock.calls.map(call => (call[0] as Ma2SongSyncRequest).itemId)).toEqual(['first', 'second']);
+});
 it('同一工程已有歌曲绑定仍自动接纳新歌，原绑定页不受默认页影响', async () => {
   const value = project();
   const binding: Ma2SongBinding = { endpoint: '192.0.2.1:30000', show: 'Show', sequence: 9000, name: 'first', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }] };
