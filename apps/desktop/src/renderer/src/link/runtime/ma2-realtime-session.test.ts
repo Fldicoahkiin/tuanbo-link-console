@@ -138,7 +138,7 @@ it('没有起始码的歌在首次同步前按控台节目分配起点，作为�
   value.rundown[0]!.referenceAudio = { assetId: 'audio', relativePath: 'a.wav', sha256: 'a'.repeat(64), durationMs: 120_000 };
   useDocumentStore.getState().setProject(value, 'song.tblink');
   // 控台节目从 600 s 起长 200 s：新歌从 810 s 开始。
-  const ranges = vi.fn().mockResolvedValue({ show: 'Show', entries: [{ target: 1, offset: '18000', length: '6000', slot: 'TC Slot 2', frame: '30 FPS', last: '5940' }] });
+  const ranges = vi.fn().mockResolvedValue({ show: 'Show', entries: [{ target: 1, name: 'A', offset: '18000', length: '6000', slot: 'TC Slot 2', frame: '30 FPS', last: '5940' }] });
   vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync, checkMa2Song: check, renameMa2Object: rename, ma2TimecodeRanges: ranges } });
   sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
   await prepareMa2RealtimeSession(); stopMa2SongSync('second');

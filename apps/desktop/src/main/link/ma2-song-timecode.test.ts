@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
-import { MA2_SONG_TIMECODE_SLOT, ma2SongTimecodeXml } from './ma2-song-timecode';
+import { MA2_SONG_TIMECODE_SLOT } from '@tb/core/link';
+import { ma2SongTimecodeXml } from './ma2-song-timecode';
 import { inspectMa2TimecodeXml, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 
 const existing = readFileSync(new URL('./fixtures/ma2-timecode-onpc-3.7-100.xml', import.meta.url), 'utf8');

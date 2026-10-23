@@ -1,12 +1,10 @@
 import { createHash } from 'node:crypto';
 import { ma2ObjectDirectorySchema } from '@tb/schema';
+import { MA2_SONG_TIMECODE_SLOT } from '@tb/core/link';
 import { appendMa2Tracks } from './ma2-track-write';
 import { createMa2TimecodeXml } from './ma2-create';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { extendMa2TimecodeLength, inspectMa2ExecutorXml, inspectMa2TimecodeXml, prepareMa2TimecodeEvents, resetMa2TimecodeShow, sameMa2XmlObjects } from './ma2-timecode-xml';
-
-/** MIDI timecode reaches TC Slot 2 by default on grandMA2; the program's own shows listen there. */
-export const MA2_SONG_TIMECODE_SLOT = 'TC Slot 2';
 
 /** 30 FPS frames, the resolution of a grandMA2 Timecode show. */
 const frames = (ms: number): number => Math.round(ms * 30 / 1000);

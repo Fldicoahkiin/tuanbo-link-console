@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { createEmptyLinkProject } from '@tb/schema';
-import { allocateSongMtcStart, nextMtcStartMs } from './mtc-start';
+import { allocateSongMtcStart, MA2_SONG_TIMECODE_SLOT, nextMtcStartMs } from './mtc-start';
 
 it('没有占用时从 60 秒开始；否则取最晚结束时间加 10 秒后的第一个整秒', () => {
   expect(nextMtcStartMs([], 30_000)).toBe(60_000);
@@ -21,7 +21,7 @@ function project() {
     ...index ? { playback: { volume: 100, endAction: 'stop' as const, startMs: 0, endMs: 0, mtcOffsetMs: 300_000, shortcut: '' } } : {} }));
   return value;
 }
-const show = (target: number, offset: number, length: string, last: string, frame = '30 FPS') => ({ target, offset: String(offset), length, slot: 'TC Slot 2', frame, last });
+const show = (target: number, offset: number | string, length: string, last: string, { frame = '30 FPS', slot = MA2_SONG_TIMECODE_SLOT, name = `节目${target}` } = {}) => ({ target, name, offset: String(offset), length, slot, frame, last });
 
 it('新歌排在控台节目和本工程已有歌曲之后；读不到长度时按最后事件加余量保守估计', () => {
   // 旧歌 300–420 s；控台节目 A：从 600 s 起长 6000 帧（200 s）到 800 s。
@@ -32,8 +32,20 @@ it('新歌排在控台节目和本工程已有歌曲之后；读不到长度时�
   expect(allocateSongMtcStart(project(), '新歌', { show: 'Show', entries: [show(3, 0, '17', '45')] })).toBe(430_000);
 });
 
-it('控台上有时间范围无法确定的节目时报错并列出编号；这首歌自己的旧起点不算占用', () => {
-  expect(() => allocateSongMtcStart(project(), '新歌', { show: 'Show', entries: [show(4, 0, '100', '', '25 FPS')] })).toThrow('Timecode 4（25 FPS）');
+it('25 FPS 节目同样按 1/30 秒换算：控台对任何帧率都这样存 offset、长度和事件时间', () => {
+  // 600 s 起长 200 s，与 30 FPS 的同样数值占同一段。
+  expect(allocateSongMtcStart(project(), '新歌', { show: 'Show', entries: [show(1, 18_000, '6000', '5940', { frame: '25 FPS' })] })).toBe(810_000);
+});
+
+it('其他 TC Slot 上的节目和没有事件的节目不占范围；Intern、Link Selected 等按本 Slot 计', () => {
+  expect(allocateSongMtcStart(project(), '新歌', { show: 'Show', entries: [show(1, 18_000, '6000', '5940', { slot: 'TC Slot 1' }), show(2, 27_000, '6000', '')] })).toBe(430_000);
+  expect(allocateSongMtcStart(project(), '新歌', { show: 'Show', entries: [show(3, 18_000, '6000', '5940', { slot: 'Link Selected' })] })).toBe(810_000);
+});
+
+it('本 Slot 上范围读不清的节目报错，列出编号和名称并说明处理办法；别的 Slot 上的不管；这首歌自己的旧起点不算占用', () => {
+  expect(() => allocateSongMtcStart(project(), '新歌', { show: 'Show', entries: [show(4, 'x', '100', '30', { name: '开场灯光' })] }))
+    .toThrow('控台 TC Slot 2 上这些时间码节目的时间范围读不清，未分配起点：Timecode 4「开场灯光」。请在控台上给它设长度、删除它，或把它换到别的 TC Slot，然后重新同步');
+  expect(allocateSongMtcStart(project(), '新歌', { show: 'Show', entries: [show(4, 'x', '100', '30', { slot: 'TC Slot 1' })] })).toBe(430_000);
   const moved = project(); moved.rundown[0]!.playback = { volume: 100, endAction: 'stop', startMs: 0, endMs: 0, mtcOffsetMs: 3_000_000, shortcut: '' };
   expect(allocateSongMtcStart(moved, '新歌', { show: 'Show', entries: [] })).toBe(430_000);
 });

@@ -310,7 +310,7 @@ local function process(data)
             local time = tonumber(value)
             if time and (not last or time > last) then last = time end
           end
-          entries[#entries + 1] = '{"target":' .. number .. ',"offset":' .. quote(attribute('offset') or '0') .. ',"length":' .. quote(attribute('lenght') or '')
+          entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(attribute('name') or '') .. ',"offset":' .. quote(attribute('offset') or '0') .. ',"length":' .. quote(attribute('lenght') or '')
             .. ',"slot":' .. quote(attribute('slot') or '') .. ',"frame":' .. quote(attribute('frame_format') or '') .. ',"last":' .. quote(last and tostring(last) or '') .. '}'
           assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
         end
