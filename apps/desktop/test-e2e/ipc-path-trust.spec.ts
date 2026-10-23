@@ -77,11 +77,15 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
 
     const sources = {
       importUnchosen: await attempt(page, v => window.tbLink.importReferenceAudio({ projectPath: v.shown, sourcePath: v.outsideAudio, durationMs: 1000 }), values),
-      plantProgram: await attempt(page, v => window.tbLink.saveIntegrationProfile({ profile: { ...v.profile, obs: { ...v.profile.obs, executablePath: v.plantedProgram } } }), values)
+      plantProgram: await attempt(page, v => window.tbLink.saveIntegrationProfile({ profile: { ...v.profile, obs: { ...v.profile.obs, executablePath: v.plantedProgram } } }), values),
+      plantFolder: await attempt(page, v => window.tbLink.saveIntegrationProfile({ profile: { ...v.profile, obs: { ...v.profile.obs, workingDirectory: v.onpc } } }), values),
+      startStreaming: await attempt(page, v => window.tbLink.saveIntegrationProfile({ profile: { ...v.profile, obs: { ...v.profile.obs, arguments: ['--startstreaming'] } } }), values)
     };
     expect.soft(sources).toEqual({
       importUnchosen: expect.stringContaining('未经本软件的文件选择或拖放确认'),
-      plantProgram: expect.stringContaining('程序位置未经本软件的选择对话框或一键识别确认')
+      plantProgram: expect.stringContaining('程序位置未经本软件的选择对话框或一键识别确认'),
+      plantFolder: expect.stringContaining('启动文件夹未经本软件的选择对话框确认'),
+      startStreaming: expect.stringContaining('OBS 启动参数不在允许范围内')
     });
     expect.soft(await exists(join(dirname(shown), 'assets'))).toBe(false);
 

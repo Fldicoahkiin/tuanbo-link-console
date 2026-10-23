@@ -534,6 +534,7 @@ function registerIpc(
   // dialog, and programs a dialog or the detection found. Kept apart so a dropped file is no program.
   const chosenFiles = new ChosenPaths('文件未经本软件的文件选择或拖放确认');
   const chosenPrograms = new ChosenPaths('程序位置未经本软件的选择对话框或一键识别确认');
+  const chosenFolders = new ChosenPaths('启动文件夹未经本软件的选择对话框确认');
   // The preload reports the path of each real File the operator dropped or picked; a window cannot
   // send this message itself, and a File it makes up has no path.
   ipcMain.removeAllListeners('link:file-chosen');
@@ -1258,6 +1259,12 @@ function registerIpc(
     if (path) chosenPrograms.choose(path);
     return path;
   });
+  handle('link:pick-working-directory', async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, { title: '选择启动文件夹', properties: ['openDirectory'] });
+    const path = result.canceled ? null : result.filePaths[0] ?? null;
+    if (path) chosenFolders.choose(path);
+    return path;
+  });
   handle('link:create-project', (_event, nameValue: unknown) => createEmptyLinkProject(linkProjectNameSchema.parse(nameValue)));
   handle('link:pick-open-project', async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
@@ -1626,7 +1633,7 @@ function registerIpc(
     }
     const payload = result.data;
     const profile = payload.profile;
-    requireChosenPrograms(profile, await profileStore.loadProfile(), chosenPrograms);
+    requireChosenPrograms(profile, await profileStore.loadProfile(), chosenPrograms, chosenFolders);
     if (payload.obsPassword !== undefined) knownSecrets.add(payload.obsPassword);
     try {
       if (payload.obsPassword !== undefined) await profileStore.saveCredential(profile.obs.credentialId, payload.obsPassword);

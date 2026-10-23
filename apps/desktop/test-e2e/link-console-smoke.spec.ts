@@ -863,7 +863,12 @@ test('设备地址草稿不会被独立 MIDI 设置覆盖，保存后两项均�
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '程序维护', exact: true }).click();
   await page.locator('.device-program-card.obs .device-process-settings > summary').click();
   await page.locator('.device-program-card.obs .device-advanced > summary').click();
-  await page.locator('.device-program-card.obs').getByLabel('启动文件夹', { exact: true }).fill('C:/unsaved-maintenance');
+  await application.evaluate(({ dialog }) => {
+    const original = dialog.showOpenDialog.bind(dialog);
+    dialog.showOpenDialog = () => { dialog.showOpenDialog = original; return Promise.resolve({ canceled: false, filePaths: ['C:/unsaved-maintenance'] }); };
+  });
+  await page.getByRole('button', { name: '选择 OBS Studio 启动文件夹', exact: true }).click();
+  await expect(page.locator('.device-program-card.obs').getByLabel('启动文件夹', { exact: true })).toHaveValue('C:/unsaved-maintenance');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '音频与 MIDI', exact: true }).click();
   await page.getByText('远程控制与灯光动作端口', { exact: true }).click();

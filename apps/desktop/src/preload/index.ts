@@ -170,6 +170,7 @@ const tbLink: LinkDesktopBridgeApi = {
   detectLocalIntegrations: () => invoke('link:detect-local-integrations'),
   loopMidi: (action) => invoke('link:loop-midi', action),
   pickExecutable: () => invoke('link:pick-executable'),
+  pickWorkingDirectory: async () => z.string().min(1).nullable().parse(await invoke('link:pick-working-directory')),
   createProject: (name) => invoke('link:create-project', name),
   pickProjectDocument: () => invoke('link:pick-open-project'),
   openProjectDocument: (path) => invoke('link:open-project', path),

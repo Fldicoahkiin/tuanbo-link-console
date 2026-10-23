@@ -309,12 +309,17 @@ function DeviceProcessSettings({ title, process, busy, settings, acceptedVersion
   onStop: () => void;
   maintenanceActions?: React.ReactNode;
 }) {
+  // The main process accepts only the program's own folder or one picked in its dialog.
+  const pickFolder = async (): Promise<void> => {
+    const folder = await linkDesktopViewModel.pickWorkingDirectory();
+    if (folder) onSettingsChange({ ...settings, workingDirectory: folder });
+  };
   return <div className="device-process-fields">
     <label className="settings-row"><span>程序位置</span><div className="device-path-control"><input aria-label={`${title} 可执行文件`} value={settings.executablePath} readOnly /><button disabled={busy} onClick={onPick} aria-label={`选择 ${title} 可执行文件`}><FolderOpen />浏览</button></div></label>
     <p className="settings-note">选择已安装的 {title} 程序（.exe），然后保存启动设置。正常启动时无需修改下方技术参数。</p>
     <div className="device-panel-actions">{maintenanceActions}<Button className="secondary-button" disabled={busy} onClick={onStart}><Power />启动或连接 {title}</Button><Button className="secondary-button" disabled={busy || !process.owned} onClick={onStop}><Square />关闭 {title}</Button></div>
     <details className="device-advanced"><summary>技术参数（排查启动问题时使用）</summary><div className="device-process-fields">
-    <Field label="启动文件夹"><input disabled={busy} value={settings.workingDirectory} onChange={(event) => onSettingsChange({ ...settings, workingDirectory: event.currentTarget.value })} /></Field>
+    <Field label="启动文件夹"><div className="device-path-control"><input value={settings.workingDirectory} readOnly /><button disabled={busy} onClick={() => void pickFolder()} aria-label={`选择 ${title} 启动文件夹`}><FolderOpen />浏览</button></div></Field>
     <Field label="已测试的程序版本（手动记录）"><input disabled={busy} value={acceptedVersion} onChange={(event) => onAcceptedVersionChange(event.currentTarget.value)} /></Field>
     <Field label="启动参数"><textarea aria-label={`${title} 启动参数`} placeholder="每行一个参数，无需参数时留空" disabled={busy} value={settings.arguments.join('\n')} onChange={(event) => onSettingsChange({ ...settings, arguments: event.currentTarget.value.split(/\r?\n/).filter((argument) => argument !== '') })} /></Field>
     <Field label="最多等待启动（秒）"><input disabled={busy} type="number" min="1" max="120" step="0.001" value={settings.startupTimeoutMs / 1000} onChange={(event) => onSettingsChange({ ...settings, startupTimeoutMs: Math.round(Number(event.currentTarget.value) * 1000) })} /></Field>

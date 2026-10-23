@@ -291,6 +291,7 @@ export type LinkDesktopApi = {
   detectLocalIntegrations(): Promise<LinkLocalIntegrationDetection>;
   loopMidi(action: 'detect' | 'start' | 'download'): Promise<import('@tb/schema').LoopMidiStatus>;
   pickExecutable(): Promise<string | null>;
+  pickWorkingDirectory(): Promise<string | null>;
   createProject(name: string): Promise<LinkProject>;
   pickOpenProject(): Promise<LinkProjectFile | null>;
   openProject(path: string): Promise<LinkProjectFile>;
