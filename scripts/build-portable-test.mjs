@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { portableTestPackage, testPackageVersion } from './release-config.mjs';
+import { verifyMusicRelease } from '../tools/music-analysis/release-pin.mjs';
 
 if (process.platform !== 'win32') throw new Error('测试安装包必须在 Windows 构建');
 if (!process.argv[2]) throw new Error('请指定一个尚不存在的独立构建目录');
@@ -35,6 +36,8 @@ function run(script, args = []) {
 for (const script of ['tools/obs/native-preview/build.mjs', 'tools/ibt/build.mjs', 'tools/midi-probe/build.mjs', 'tools/playback-engine/build.mjs']) run(join(root, script));
 const musicRuntime = join(destination, 'music-analysis');
 run(join(root, 'tools/music-analysis/package-runtime.mjs'), [musicRuntime]);
+// Fail before the long packaging step when the build machine's runtime is not the pinned one.
+await verifyMusicRelease(musicRuntime);
 const appOut = join(destination, 'app-out');
 run(join(dirname(requireDesktop.resolve('electron-vite/package.json')), 'bin/electron-vite.js'), ['build', '--outDir', appOut]);
 const desktopPackage = JSON.parse(await readFile(join(desktop, 'package.json'), 'utf8'));
