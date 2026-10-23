@@ -55,6 +55,7 @@ export class ConsoleService {
     if (!value) throw new ServiceError(404, 'ORDER_NOT_FOUND', '订单不存在');
     return rowSchema.parse(value);
   }
+  clock(): number { return this.now(); }
   private statusWindow(): [string, string] { return [new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString()]; }
   /** 授权 DTO：生命周期状态替代绑定、撤销两个布尔值。 */
   private licenseRow(row: ConsoleRow): ConsoleRow {

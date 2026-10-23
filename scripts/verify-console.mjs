@@ -20,7 +20,7 @@ const shots = new URL('../apps/licensing-server/dist/console-review/', import.me
 function totp(secret) {
   let bits = 0; let value = 0; const bytes = [];
   for (const char of secret) { value = (value << 5) | 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'.indexOf(char); bits += 5; if (bits >= 8) { bytes.push((value >>> (bits - 8)) & 255); bits -= 8; } }
-  const counter = Buffer.alloc(8); counter.writeBigUInt64BE(BigInt(Math.floor(fixture.now / 30000)));
+  const counter = Buffer.alloc(8); counter.writeBigUInt64BE(BigInt(Math.floor(fixture.now() / 30000)));
   const mac = createHmac('sha1', Buffer.from(bytes)).update(counter).digest(); const offset = mac.at(-1) & 15;
   return ((mac.readUInt32BE(offset) & 0x7fffffff) % 1000000).toString().padStart(6, '0');
 }
@@ -48,12 +48,21 @@ try {
     const invitation = role === 'owner' ? { token: fixture.invitation } : fixture.invite(role);
     const secret = role === 'owner' ? fixture.secret : fixture.enrollment(invitation.token).secret;
     await page.getByLabel('一次性开通凭据').fill(invitation.token); await page.getByRole('button', { name: '准备绑定验证器' }).click();
-    await page.getByLabel('设置密码').fill('browser-isolated-password'); await page.getByLabel('验证器验证码', { exact: true }).fill(totp(secret)); await page.getByRole('button', { name: '完成开通', exact: true }).click();
+    // 验证码输满 6 位且密码已填时自动提交开通。
+    await page.getByLabel('设置密码').fill('browser-isolated-password'); await page.getByLabel('验证器验证码', { exact: true }).fill(totp(secret));
     await page.getByRole('heading', { name: '保存恢复码' }).waitFor();
     const recovery = (await page.locator('pre.secret').innerText()).split('\n')[0];
     await page.getByRole('button', { name: '已保存，返回登录' }).click();
-    await page.getByLabel('用户名', { exact: true }).fill(`fixture-${role}`); await page.getByLabel('密码', { exact: true }).fill('browser-isolated-password'); await page.getByLabel('验证器验证码或恢复码').fill(recovery);
-    await page.getByRole('button', { name: '登录', exact: true }).click(); await page.getByRole('heading', { name: '工作台', exact: true }).waitFor();
+    await page.getByLabel('用户名', { exact: true }).fill(`fixture-${role}`); await page.getByLabel('密码', { exact: true }).fill('browser-isolated-password');
+    if (role === 'operations') {
+      // 下一枚验证码输满 6 位即自动登录，不点按钮。
+      fixture.advance(30000); await page.getByLabel('验证器验证码', { exact: true }).fill(totp(secret));
+    } else {
+      // 恢复码是次要入口：点「改用恢复码」才换成长输入框。
+      await page.getByRole('button', { name: '改用恢复码' }).click(); await page.getByLabel('恢复码', { exact: true }).fill(recovery);
+      await page.getByRole('button', { name: '登录', exact: true }).click();
+    }
+    await page.getByRole('heading', { name: '工作台', exact: true }).waitFor();
     return { page, context };
   }
   const { page, context } = await pageFor('owner');

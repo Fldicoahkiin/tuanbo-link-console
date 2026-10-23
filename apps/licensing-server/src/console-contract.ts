@@ -10,7 +10,8 @@ const text = z.string().trim().min(1).max(160);
 const date = z.string().datetime();
 export const userSchema = z.object({ id, username: text, role: roleSchema, enabled: z.boolean(), enrolled: z.boolean() });
 export type ConsoleUser = z.infer<typeof userSchema>;
-export const sessionSchema = z.object({ user: userSchema, csrf: z.string(), verifiedAt: z.number() });
+// now 为服务器当前时间，前端据此校正二次验证倒计时，不依赖运营电脑的时钟。
+export const sessionSchema = z.object({ user: userSchema, csrf: z.string(), verifiedAt: z.number(), now: z.number() });
 export const loginSchema = z.object({ username: text, password: z.string().min(1).max(256), code: z.string().min(6).max(100) }).strict();
 export const enrollmentSchema = z.object({ token: z.string().min(32).max(128), password: z.string().min(12).max(256), code: z.string().regex(/^\d{6}$/) }).strict();
 export const actionSchema = z.discriminatedUnion('action', [
