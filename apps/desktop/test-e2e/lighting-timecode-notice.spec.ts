@@ -24,7 +24,8 @@ test('时间码关联待核对：开播前询问，无灯光播放时只显示�
     const startChecks = await answerStartCheck(app);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    for (const mode of ['timecode', 'direct', 'timecode', 'network', 'timecode']) await page.getByRole('combobox', { name: '灯光输出方式' }).selectOption(mode);
+    // The output mode selector is gone (1d7d5bd); the notice follows the song's lighting state alone.
+    await expect(page.getByRole('combobox', { name: '灯光输出方式' })).toHaveCount(0);
     await page.getByLabel('灯光输出提示', { exact: true }).click();
     const menu = page.locator('.lighting-output-notice .timeline-icon-menu-content');
     await expect(menu.getByText('需处理', { exact: true })).toBeVisible();
