@@ -35,6 +35,15 @@ export class ObsMediaPreload {
     const previous = this.media.get(sourceName);
     this.media.set(sourceName, { path, current: null, pending: null, following: null, touched: previous?.touched ?? new Set(), retained: previous?.retained ?? new Set() });
   }
+  /** After OBS reconnects, standby decoders this session already used are prepared
+   * again (hidden and muted), so the rebuild starts from the primary decoder and
+   * stop can still clean them up. */
+  async restoreStandby(assertCurrent: () => void): Promise<void> {
+    for (const [primary, media] of this.media) {
+      if (!media.touched.has(`${primary}·预备`)) continue;
+      await this.scenes.prepareStandby(primary); assertCurrent();
+    }
+  }
   resolveSource(logicalName: string): string { return this.media.get(logicalName)?.current?.sourceName ?? logicalName; }
 
   async prime(event: ManagedMediaEvent, assertCurrent: () => void): Promise<void> {

@@ -191,7 +191,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       await prepareStructure(); assertCurrent(); await measure('机位结构');
       prepared = true;
     },
-    restoreScenes: assertCurrent => outputs.preloadResources(assertCurrent, 'reconnect'),
+    restoreScenes: async assertCurrent => { await outputs.preloadResources(assertCurrent, 'reconnect'); await preload.restoreStandby(assertCurrent); },
     prepareOutputs: async assertCurrent => {
       if (!prepared) await outputs.preloadResources(assertCurrent, 'playback');
       assertCurrent();
