@@ -258,6 +258,28 @@ it('带起始码同步时在序列之后写本曲时间码节目；改时间后�
   await expect(service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: second.binding, timecodeStartMs: 480000, points: later.map(point => ({ ...point, atMs: point.atMs + 100 })) }))
     .rejects.toThrow(/Timecode 9000 在上次同步后被改过，未覆盖/);
 }, 20000);
+it('新建本曲节目后写入失败：编号已记进同步记录，重试读回同一编号重写，不另建；导入了一半的节目不覆盖也不另建', async () => {
+  for (const imported of [false, true]) {
+    const { song, sequences } = boundSong();
+    const fake = songConsole(sequences);
+    const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups);
+    const plain = await service.syncSong(fake.connection, fake.bridge, song);
+    // The project never received a Timecode record: every attempt sends the binding without one.
+    const timed = (): Ma2SongSyncRequest => ({ ...song, requestId: randomUUID(), binding: plain.binding, timecodeStartMs: 480000,
+      points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: plain.binding.points[index]!.cue, delayMs: 0 }] })) });
+    const exchange: Ma2OnpcBridge['exchange'] = async (...args) => {
+      if (args[0] !== 'APPLY') return await fake.bridge.exchange(...args);
+      if (imported) fake.timecodes.set(args[1], args[3]!.replace('name="GeQu', 'name="回读不一致 GeQu'));
+      throw new Error('MA2 响应超时；操作未确认，不会自动重试');
+    };
+    const failing = { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response };
+    await expect(service.syncSong(fake.connection, failing, timed())).rejects.toThrow('MA2 响应超时');
+    expect([...fake.timecodes.keys()]).toEqual([9000]);
+    if (imported) await expect(service.syncSong(fake.connection, fake.bridge, timed())).rejects.toThrow(/Timecode 9000 在上次同步后被改过，未覆盖/);
+    else expect((await service.syncSong(fake.connection, fake.bridge, timed())).binding.timecode).toMatchObject({ number: 9000, offset: 14400 });
+    expect([...fake.timecodes.keys()]).toEqual([9000]);
+  }
+}, 30000);
 it('Copy 路径不再二次读取来源：来源在读取后被改，回读校验报出是哪个来源，结果待核对，写前备份保留且不进轮转', async () => {
   const { song, sourceNumber, sequences } = boundSong();
   const fake = songConsole(sequences);
