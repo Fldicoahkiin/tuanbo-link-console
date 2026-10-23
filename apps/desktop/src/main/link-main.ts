@@ -16,6 +16,7 @@ import { createLicenseMachineCodeReader } from './link/license-machine';
 import { localTestAccessEnabled, localTestLicenseStatus } from './link/local-test-license';
 import { internalDistribution, internalDistributionStatus } from './link/internal-distribution';
 import licensePublicKeys from './link/license-public-keys.json';
+import releasePublicKeys from './link/release-public-keys.json';
 import licenseConfig from './link/license-config.json';
 import { LicenseAccess, needsProductLicense } from './link/license-access';
 import { licenseRequestSchema } from '@tb/schema';
@@ -299,7 +300,9 @@ async function bootstrap(): Promise<void> {
     buildVersion,
     app.isPackaged,
     (status) => sendToRenderer('link:update-status', status),
-    { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus() },
+    { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus(), releaseKeys: releasePublicKeys,
+      log: (level, message) => { void logger.record({ level, category: 'system', device: '软件更新', message, result: 'failed' })
+        .catch((error: unknown) => console.error('更新校验日志写入失败', error)); } },
     undefined,
     internalDistribution ? '' : undefined
   );

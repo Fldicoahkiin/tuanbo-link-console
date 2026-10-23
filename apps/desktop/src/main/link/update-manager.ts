@@ -2,6 +2,7 @@ import electronUpdater, { type ProgressInfo, type UpdateInfo } from 'electron-up
 import type { LinkUpdateStatus } from '@tb/core/link';
 import type { LicenseStatus } from '@tb/schema';
 import { dirname } from 'node:path';
+import { fileSha512, verifySignedRelease, type SignedRelease } from './release-signature';
 
 import desktopPackage from '../../../package.json';
 
@@ -18,8 +19,8 @@ export type UpdateClientHandlers = {
 
 export type UpdateClient = {
   check: () => Promise<void>;
-  /** Rejects once `signal` aborts. */
-  download: (signal: AbortSignal) => Promise<void>;
+  /** Resolves with the downloaded installer's path; rejects once `signal` aborts. */
+  download: (signal: AbortSignal) => Promise<string>;
   install: () => void;
   dispose: () => void;
 };
@@ -32,13 +33,21 @@ export type UpdateRules = {
   playbackActive: () => boolean;
   /** Read again before each download and install: the license can change while the app runs. */
   license: () => Promise<LicenseStatus>;
+  /** Public keys of the release signature by kid; more than one lets the key rotate. */
+  releaseKeys: Readonly<Record<string, string>>;
+  /** Rejections of a signature or a downloaded installer are written to the run log. */
+  log: (level: 'warning' | 'error', message: string) => void;
 };
+
+/** The version the feed offers: its latest.yml, and the release-key signature over it once checked. */
+type Offer = { info: UpdateInfo; signed: SignedRelease | null; signatureIssue: string | null; installer: string | null };
 
 export class LinkUpdateManager {
   private client: UpdateClient | null = null;
   private busy = false;
   private backgroundCheck = false;
   private activeDownload: AbortController | null = null;
+  private offer: Offer | null = null;
   private status: LinkUpdateStatus;
 
   constructor(
@@ -66,20 +75,25 @@ export class LinkUpdateManager {
     }
     this.busy = true;
     this.backgroundCheck = mode === 'background';
+    this.offer = null;
     this.client?.dispose();
     try {
       this.client = this.createClient(this.feedUrl, {
         checking: () => this.update({ phase: 'checking', message: '正在检查软件更新…' }),
-        available: (info) => this.update({
-          phase: 'available',
-          availableVersion: info.version,
-          releaseDate: info.releaseDate ?? null,
-          installBlockedReason: null,
-          progressPercent: null,
-          transferredBytes: null,
-          totalBytes: null,
-          message: `发现新版本 ${info.version}`
-        }),
+        available: (info) => {
+          this.offer = { info, signed: null, signatureIssue: null, installer: null };
+          this.update({
+            phase: 'available',
+            availableVersion: info.version,
+            // Shown once the release signature vouches for it.
+            releaseDate: null,
+            installBlockedReason: null,
+            progressPercent: null,
+            transferredBytes: null,
+            totalBytes: null,
+            message: `发现新版本 ${info.version}`
+          });
+        },
         notAvailable: (info) => this.update({
           phase: 'upToDate',
           availableVersion: info.version,
@@ -102,7 +116,6 @@ export class LinkUpdateManager {
         downloaded: (info) => this.update({
           phase: 'downloaded',
           availableVersion: info.version,
-          releaseDate: info.releaseDate ?? null,
           progressPercent: 100,
           message: `版本 ${info.version} 已下载，确认后重启安装`
         }),
@@ -120,7 +133,10 @@ export class LinkUpdateManager {
         message: '正在检查软件更新…'
       });
       await this.client.check();
-      if (this.status.phase === 'available') await this.checkEntitlement();
+      if (this.status.phase === 'available') {
+        this.verifyOffer();
+        await this.checkEntitlement();
+      }
     } catch (error) {
       if (this.backgroundCheck) this.update({ phase: 'idle', message: `启动时未能检查更新（${normalizeUpdateError(error)}），可以在软件更新中重试` });
       else this.update({ phase: 'error', message: normalizeUpdateError(error) });
@@ -154,7 +170,10 @@ export class LinkUpdateManager {
       message: '准备下载更新…'
     });
     try {
-      await this.client.download(download.signal);
+      const installer = await this.client.download(download.signal);
+      const mismatch = await this.installerMismatch(installer);
+      if (mismatch) this.rejectInstaller(mismatch);
+      else if (this.offer) this.offer.installer = installer;
     } catch (error) {
       if (download.signal.aborted) {
         this.update({ phase: 'available', progressPercent: null, transferredBytes: null, totalBytes: null,
@@ -169,21 +188,58 @@ export class LinkUpdateManager {
 
   /** Confirms a downloaded update may be installed; run before the quit flow starts. */
   async prepareInstall(): Promise<void> {
-    if (this.busy || !this.client || this.status.phase !== 'downloaded') throw new Error('更新尚未下载完成');
+    const installer = this.offer?.installer;
+    if (this.busy || !this.client || this.status.phase !== 'downloaded' || !installer) throw new Error('更新尚未下载完成');
+    // The cached installer is checked again: it could have changed on disk since the download.
+    const mismatch = await this.installerMismatch(installer);
+    if (mismatch) {
+      this.rejectInstaller(mismatch);
+      throw new Error(this.status.message);
+    }
     const blocked = await this.checkEntitlement();
     if (blocked) throw new Error(blocked);
   }
 
   /** Starts the installer; throws when it cannot start, and the app must then stay open. */
   install(): void {
-    if (this.busy || !this.client || this.status.phase !== 'downloaded') {
+    if (this.busy || !this.client || this.status.phase !== 'downloaded' || !this.offer?.installer) {
       throw new Error('更新尚未下载完成');
     }
     this.client.install();
   }
 
+  private verifyOffer(): void {
+    const offer = this.offer;
+    if (!offer) return;
+    try {
+      offer.signed = verifySignedRelease(offer.info, this.rules.releaseKeys);
+      this.update({ releaseDate: offer.signed.releaseDate });
+    } catch (error) {
+      offer.signatureIssue = error instanceof Error ? error.message : String(error);
+      this.rules.log('error', `更新 ${offer.info.version} 的发布签名校验失败：${offer.signatureIssue}`);
+    }
+  }
+
+  /** Why the downloaded installer is not the signed one, or null. */
+  private async installerMismatch(installer: string): Promise<string | null> {
+    const signed = this.offer?.signed;
+    if (!signed) return '没有通过校验的发布签名';
+    const actual = await fileSha512(installer);
+    if (actual.sha512 !== signed.sha512 || actual.size !== signed.size) return `安装包摘要或大小与发布签名不一致（${installer}）`;
+    return null;
+  }
+
+  private rejectInstaller(reason: string): void {
+    if (this.offer) this.offer.installer = null;
+    this.rules.log('error', `拒绝安装更新 ${this.status.availableVersion ?? ''}：${reason}`);
+    this.update({ phase: 'error', message: `下载的更新与发布签名不一致，已拒绝安装；请联系发行方。${reason}` });
+  }
+
   private async checkEntitlement(): Promise<string | null> {
-    const blocked = updateEntitlementIssue(await this.rules.license(), this.status.availableVersion, this.status.releaseDate);
+    const offer = this.offer;
+    const blocked = offer?.signatureIssue
+      ? `更新签名校验失败（${offer.signatureIssue}），不能下载和安装；请联系发行方`
+      : updateEntitlementIssue(await this.rules.license(), this.status.availableVersion, offer?.signed?.releaseDate ?? null);
     if (blocked !== this.status.installBlockedReason) this.update({ installBlockedReason: blocked });
     return blocked;
   }
@@ -233,7 +289,9 @@ function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandl
     download: async (signal) => {
       const cancellation = new CancellationToken();
       signal.addEventListener('abort', () => cancellation.cancel(), { once: true });
-      await updater.downloadUpdate(cancellation);
+      const installer = (await updater.downloadUpdate(cancellation)).find(path => path.toLowerCase().endsWith('.exe'));
+      if (!installer) throw new Error('更新下载没有返回安装包');
+      return installer;
     },
     install: () => {
       // quitAndInstall reports a failure to start the installer only through a synchronous
@@ -275,8 +333,8 @@ function initialStatus(currentVersion: string, packaged: boolean, feedUrl: strin
   };
 }
 
-/** Why this machine may not install the release, or null. The release date comes from latest.yml,
- * whose digest the release manifest records; the license is the signed claim on this machine. */
+/** Why this machine may not install the release, or null. The release date is the one the release key signed;
+ * the license is the signed claim on this machine. */
 function updateEntitlementIssue(license: LicenseStatus, version: string | null, releaseDate: string | null): string | null {
   if (license.state !== 'active' || !license.claims) return `本机授权当前不可用（${license.message}），可以查看新版本，恢复授权后再安装`;
   const released = releaseDate === null ? Number.NaN : Date.parse(releaseDate);
