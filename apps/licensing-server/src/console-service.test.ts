@@ -45,7 +45,7 @@ it('知道密码也不能跨来源穷举验证码，锁定期间同样返回无�
   s.advance(900001);
   expect((await s.consoleService.auth.login('owner', 'a-secure-test-password', s.code(s.first.id), 'after')).session.user.role).toBe('owner');
 });
-it('只签发一份时结果直接带回激活码和授权编号，多份时只返回订单', async () => {
+it('只签发一份时结果直接带回激活码和授权编号，多份时只返回订单；工单详情带业务订单号', async () => {
   const s = await setup();
   const single = await s.execute({ ...grant, quantity: 1 });
   const licenseId = String(s.consoleService.detail('orders', single.id!, s.login.session).related[0]!.id);
@@ -55,7 +55,7 @@ it('只签发一份时结果直接带回激活码和授权编号，多份时只�
   const sale = await s.execute({ action: 'create-order', reference: 'single-sale', customer: '客户', customerType: 'company', quantity: 1, amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', reason: '' });
   const paid = await s.execute({ action: 'fulfill', id: sale.id!, amountFen: 80000, paymentReference: 'single-bank', paymentMethod: '对公转账', reason: '' });
   expect(paid.secret).toMatch(/^TBA-/); expect(paid.licenseId).toBe(s.consoleService.detail('orders', sale.id!, s.login.session).related[0]!.id);
-});
+  const ticket = await s.execute({ action: 'create-ticket', id: sale.id!, licenseId: null, category: 'other', note: '问题', reason: '' });
   expect(s.consoleService.detail('tickets', ticket.id!, s.login.session).item.orderReference).toBe('single-sale');
   // 格式不对的到期调整记录只标在该节点上，详情照常打开。
   s.db.prepare("INSERT INTO audit VALUES (?, ?, 'license.expiry-adjusted', ?, 'not-json')").run(randomUUID(), new Date(s.now()).toISOString(), licenseId);
@@ -228,7 +228,7 @@ it('授权生命周期状态由服务端统一计算：列表、页签计数、�
   const timeline = (licenseId: string, role: 'owner' | 'viewer' = 'owner') => s.consoleService.detail('licenses', licenseId, { ...s.login.session, user: { ...s.login.session.user, role } }).timeline!.map(node => [node.event, node.detail, node.operator]);
   expect(timeline(ids[0]!)).toEqual([['签发（内测）', null, 'owner'], ['首次激活', '机器码 AAAAAAAA…', '客户端']]);
   expect(timeline(ids[2]!)).toEqual([['签发（内测）', null, 'owner'], ['撤销', '撤销', 'owner']]);
-  expect(timeline(ids[3]!)).toEqual([['签发（内测）', null, 'owner'], ['调整到期', '2026-11-06 08:00 → 2026-10-07 08:00', 'owner'], ['已过期', null, null]]);
+  expect(timeline(ids[3]!)).toEqual([['签发（内测）', null, 'owner'], ['调整到期', '2026-11-06 08:00 → 2026-10-07 08:00', 'owner'], ['已过期', '按到期时间推算，不是操作记录', null]]);
   expect(timeline(ids[2]!, 'viewer')).toEqual([['签发（内测）', null, null], ['撤销', '撤销', null]]);
 });
 it('原因分档：选填操作留空可执行且审计照记操作人、操作、对象和时间；必填操作留空被拒', async () => {

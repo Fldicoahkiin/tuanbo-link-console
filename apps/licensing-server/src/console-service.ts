@@ -33,6 +33,8 @@ const licenseRows = `SELECT l.id,l.rowid AS position,l.machine AS machine,json_e
   CASE WHEN l.revoked=1 THEN 'revoked' WHEN ${licenseUseUntil}<=? THEN 'expired' WHEN ${licenseUseUntil}<=? THEN 'expiring' WHEN l.machine IS NOT NULL THEN 'active' ELSE 'unbound' END AS status
   FROM licenses l JOIN orders o ON o.id=l.order_id LEFT JOIN console_order_meta m ON m.order_id=o.id`;
 const licenseStatuses = ['active', 'unbound', 'expiring', 'expired', 'revoked'] as const;
+/** 解析失败返回 undefined，由调用方标注「记录无法解析」。 */
+function readJson(text: string): unknown { try { return JSON.parse(text) as unknown; } catch { return undefined; } }
 const beijingMinute = (iso: string) => new Date(Date.parse(iso) + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
 const beijingDayStart = (day: string) => new Date(`${day}T00:00:00+08:00`).toISOString();
 const beijingDayEnd = (day: string) => new Date(Date.parse(`${day}T00:00:00+08:00`) + 86400000).toISOString();
@@ -131,7 +133,7 @@ export class ConsoleService {
       item = found; orderId = z.string().parse(item.orderId);
       related = this.db.prepare('SELECT order_id AS id,use_until AS useUntil,updates_until AS updatesUntil FROM license_renewals WHERE license_id=? ORDER BY rowid DESC').all(id).map(row => rowSchema.parse(row));
     } else if (resource === 'tickets') {
-      const row = this.db.prepare('SELECT t.id,t.order_id,t.license_id,t.category,t.note,t.state,t.conclusion,t.created,t.updated,COALESCE(u.username,t.actor) AS operator FROM console_tickets t LEFT JOIN console_users u ON u.id=t.actor WHERE t.id=?').get(id);
+      const row = this.db.prepare('SELECT t.id,o.reference AS orderReference,t.order_id,t.license_id,t.category,t.note,t.state,t.conclusion,t.created,t.updated,COALESCE(u.username,t.actor) AS operator FROM console_tickets t JOIN orders o ON o.id=t.order_id LEFT JOIN console_users u ON u.id=t.actor WHERE t.id=?').get(id);
       if (!row) throw new ServiceError(404, 'NOT_FOUND', '工单不存在');
       item = rowSchema.parse(row); orderId = z.string().parse(item.order_id); related = [this.order(orderId)];
     } else throw new ServiceError(404, 'NOT_FOUND', '详情不存在');
@@ -160,12 +162,16 @@ export class ConsoleService {
         case 'license.special-grant': case 'order.state-changed': return { at: event.at, event: `签发（${sources[String(license.source)] ?? '销售'}）`, detail: null, operator: operator(event.at, ['fulfill', 'grant', 'retry-delivery']) ?? (showOperator ? '系统自动发码' : null) };
         case 'license.activated': activations++; return { at: event.at, event: activations === 1 ? '首次激活' : '重新激活', detail: index === lastActivation && machine ? `机器码 ${machine}…` : null, operator: showOperator ? '客户端' : null };
         case 'license.migrated': return { at: event.at, event: '换机', detail: '旧码失效，换发新码', operator: operator(event.at, ['migrate']) };
-        case 'license.expiry-adjusted': { const change = z.object({ before: z.string().nullable(), after: z.string() }).parse(JSON.parse(event.detail)); return { at: event.at, event: '调整到期', detail: `${change.before ? beijingMinute(change.before) : '永久'} → ${beijingMinute(change.after)}`, operator: operator(event.at, ['set-expiry']) }; }
+        case 'license.expiry-adjusted': {
+          // 一条格式不对的旧记录只标注本节点，不让整个授权详情打不开。
+          const change = z.object({ before: z.string().datetime().nullable(), after: z.string().datetime() }).safeParse(readJson(event.detail));
+          return { at: event.at, event: '调整到期', detail: change.success ? `${change.data.before ? beijingMinute(change.data.before) : '永久'} → ${beijingMinute(change.data.after)}` : '记录无法解析', operator: operator(event.at, ['set-expiry']) };
+        }
         case 'license.renewed': return { at: event.at, event: '续费', detail: null, operator: showOperator ? '客户续费' : null };
         default: return { at: event.at, event: '撤销', detail: event.detail, operator: operator(event.at, ['revoke', 'refund-review', 'alipay-refund']) };
       }
     });
-    if (license.status === 'expired' && typeof license.useUntil === 'string') nodes.push({ at: license.useUntil, event: '已过期', detail: null, operator: null });
+    if (license.status === 'expired' && typeof license.useUntil === 'string') nodes.push({ at: license.useUntil, event: '已过期', detail: '按到期时间推算，不是操作记录', operator: null, inferred: true });
     return nodes;
   }
   overview(session: ConsoleSession) {

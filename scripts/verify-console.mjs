@@ -114,6 +114,8 @@ try {
   // 生命周期页签写进网址：切到「未激活」后刷新仍是同一视图；整行点进详情有时间线，刷新后仍在详情，后退回到列表。
   await page.getByRole('tab', { name: /^未激活/ }).click(); await page.getByRole('row', { name: /浏览器验收客户/ }).waitFor();
   assert.match(page.url(), /#\/licenses\?state=unbound$/);
+  // 剩余天数按服务器时间（夹具时钟 10 月 6 日）计算，与状态色块同一个时钟。
+  await page.getByRole('row', { name: /浏览器验收客户/ }).getByText('还有 31 天').waitFor();
   await page.reload(); await page.getByRole('row', { name: /浏览器验收客户/ }).waitFor();
   assert.equal(await page.getByRole('tab', { name: /^未激活/ }).getAttribute('aria-selected'), 'true');
   await page.getByRole('row', { name: /浏览器验收客户/ }).click(); await page.getByRole('heading', { name: '生命周期' }).waitFor();
