@@ -16,7 +16,6 @@ export function LightingTrackInspector(props: LightingTimelineProps & { track: L
     <div className="lighting-track-fields">
       {track.kind === 'ma2' ? <CueStampSettings document={document} track={track} changeTrack={change} notify={(message) => props.onError?.(message)} /> : null}
       <label>播放方式<select aria-label="灯光播放方式" value={props.preview ? 'linked' : 'music'} onChange={(input) => props.onPreviewChange?.(input.target.value === 'linked')}><option value="music">仅播放音乐</option><option value="linked">播放音乐并控制灯光</option></select></label>
-      <label>控制方式<select aria-label="控制方式" value={document.outputMode} onChange={(input) => props.onChange({ ...document, outputMode: input.currentTarget.value === 'network' ? 'network' : input.currentTarget.value === 'direct' ? 'direct' : 'timecode' }, '修改灯光输出方式')}><option value="timecode">发送时间码，由 MA2 播放</option><option value="direct">MIDI · 执行器触发</option><option value="network">网络 · 序列池播放</option></select></label>
       {track.kind === 'ma2' ? <label>执行器<span className="lighting-binding-value">{bindings.join('；') || '未绑定'}</span></label> : null}
     </div>
     <div className="property-footer"><button onClick={() => props.onOpenTools?.('sync')}>节目同步 / 绑定执行器</button></div>

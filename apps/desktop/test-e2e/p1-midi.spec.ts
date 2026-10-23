@@ -136,8 +136,7 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
       await sync.screenshot({ path: info.outputPath(`p1-sync-${width}.png`) });
     }
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
-    await page.getByLabel('灯光输出方式').selectOption('direct');
-    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.outputMode)).toBe('direct');
+    await expect(page.getByLabel('灯光输出方式')).toHaveCount(0);
 
     await page.reload();
     await expect(page.getByLabel('当前工程')).toContainText('纯 MIDI 验收');

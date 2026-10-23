@@ -146,7 +146,6 @@ test('序列池素材无需执行器，编辑与重开保留编号，点击 Cue 
     await expect(page.getByRole('columnheader', { name: '执行器（可选）' })).toHaveCount(0);
     await page.getByLabel('Cue 名称', { exact: true }).fill('序列池灯光');
     await expect(page.locator('.waveform-cue-point')).toHaveCount(1);
-    await page.getByLabel('灯光输出方式').selectOption('network');
     await page.locator('.waveform-cue-point').click();
     await expect.poll(() => calls.length).toBeGreaterThan(0);
     expect(ma2AuditionRequestSchema.parse(calls.at(-1)).action).toEqual({ target: 'sequence', sequence: 168, cue: '1.250', action: 'goto' });

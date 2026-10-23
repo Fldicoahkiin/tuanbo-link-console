@@ -355,7 +355,7 @@ test('节目轨道可明确关联 MA2、取消和撤销，并保存待同步绑�
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]!.lighting!.tracks[0]!.cueStamp).toEqual({ mode: 'fixed', cue: '1.250', sequence: 9901, executor: '99.219' });
 });
 
-test('MA2 读取预览加入节目、撤销和保存基线完整，未支持事件禁止部分导入', async ({}, testInfo) => {
+test('MA2 读取预览加入节目、撤销和保存基线完整，列出未支持事件', async ({}, testInfo) => {
   const selectCueSeven = async (): Promise<void> => {
     const direct = page.getByRole('button', { name: '灯光点 Cue 7.5', exact: true });
     if (await direct.isVisible()) { await direct.click(); return; }
@@ -380,7 +380,7 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，未支持事�
   await closeLightingTools(); await navigation.getByRole('button', { name: '编辑器', exact: true }).click();
   await page.locator('.lighting-clip').first().dblclick({ position: { x: 64, y: 30 } });
   await page.locator('.lighting-track-name').click();
-  await page.getByLabel('控制方式', { exact: true }).selectOption('direct');
+  await expect(page.getByLabel('控制方式', { exact: true })).toHaveCount(0);
   const xml = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-timecode-fractional-3.3.xml'), 'utf8');
   const seq = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-sequence-fractional-3.3.xml'), 'utf8');
   const sequenceObject = seq.match(/<Sequ\s[\s\S]*?<\/Sequ>/)?.[0];
@@ -400,8 +400,6 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，未支持事�
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
   const region = page.getByRole('region', { name: 'MA2 灯光读取预览' });
   await expect(region.getByRole('cell', { name: '7.500', exact: true })).toBeVisible();
-  await region.getByRole('button', { name: '加入当前节目', exact: true }).click();
-  await expect(page.getByText('含原生保留事件的时间线需要时间码输出；请先核对当前歌曲的直接输出编排', { exact: true })).toBeVisible();
   await expect(region.getByText(/推杆事件尚未转换/)).toBeVisible();
   await application.evaluate(({ ipcMain }, result) => { ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => result); }, preview);
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();

@@ -14,7 +14,7 @@ for (const scenario of ['connected', 'disconnected', 'empty'] as const) test(`�
   wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   await writeFile(info.outputPath('song.wav'), wav);
   const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: 'effect-canvas', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 6000, timeLock: 'time', muted: false, events: empty ? [{ id: 'empty', at: 400, kind: 'empty-cue', label: '' }] : [400, 2200, 4200].map((at, i) => ({ id: `cue-${i}`, at, kind: 'ma2', action: 'goto', sequence: 168, cue: `${i + 1}.000`, executor: '', label: `灯光 ${i + 1}` })) }] });
-  const project = parseLinkProject({ ...createEmptyLinkProject('播放驱动灯光验收'), schemaVersion: 2, playbackSource: 'p1', rundown: [{ id: 'song', title: '灯光播放回归', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'song.wav', durationMs: 6000, sha256: createHash('sha256').update(wav).digest('hex') }, lighting: { ...createLightingDocument(), outputMode: connected || empty ? 'timecode' : 'network', tracks: [track] } }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('播放驱动灯光验收'), schemaVersion: 2, playbackSource: 'p1', rundown: [{ id: 'song', title: '灯光播放回归', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'song.wav', durationMs: 6000, sha256: createHash('sha256').update(wav).digest('hex') }, lighting: { ...createLightingDocument(), outputMode: empty ? 'timecode' : 'network', tracks: [track] } }] });
   const file = info.outputPath('playback.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const calls: { cue: string; action: string }[] = [];
@@ -49,28 +49,18 @@ for (const scenario of ['connected', 'disconnected', 'empty'] as const) test(`�
       return;
     }
     if (connected) {
-      await expect(page.getByRole('combobox', { name: '灯光输出方式' })).toHaveValue('timecode');
+      await expect(page.getByRole('combobox', { name: '灯光输出方式' })).toHaveCount(0);
       for (const width of [1440, 1060]) {
         await page.setViewportSize({ width, height: 900 });
-        for (const mode of ['direct', 'timecode']) {
-          await page.getByRole('combobox', { name: '灯光输出方式' }).selectOption(mode);
-          const bounds = await page.locator('.lighting-output-route').boundingBox();
-          const toolbar = await page.locator('.timeline-transport').boundingBox();
-          expect(bounds!.y).toBeGreaterThanOrEqual(toolbar!.y);
-          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(toolbar!.y + toolbar!.height);
-          expect(bounds!.height).toBeLessThan(40);
-        }
+        const bounds = await page.locator('.lighting-output-route').boundingBox();
+        const toolbar = await page.locator('.timeline-transport').boundingBox();
+        expect(bounds!.y).toBeGreaterThanOrEqual(toolbar!.y);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(toolbar!.y + toolbar!.height);
+        expect(bounds!.height).toBeLessThan(40);
       }
-      await page.getByLabel('灯光输出提示', { exact: true }).click();
-      await expect(page.getByText('本地 Cue 不发送', { exact: true })).toBeVisible();
-      const action = (await page.getByRole('button', { name: '使用网络直控', exact: true }).boundingBox())!;
-      expect(action.width).toBeGreaterThan(150);
       await page.screenshot({ path: info.outputPath('output-route-compact.png') });
       expect(calls).toEqual([]);
-      await page.getByRole('button', { name: '使用网络直控', exact: true }).click();
-      await expect(page.getByText('本地 Cue 不发送', { exact: true })).toHaveCount(0);
     }
-    await expect(page.getByRole('combobox', { name: '灯光输出方式' })).toHaveValue('network');
     await expect(page.locator('.wavesurfer-surface[data-ready=true]').first()).toBeVisible({ timeout: 15000 });
     await page.getByRole('button', { name: '播放时间线', exact: true }).click();
     if (!connected) {
