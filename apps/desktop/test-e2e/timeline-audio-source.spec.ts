@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
@@ -10,13 +10,14 @@ test('时间线更换工程后音源缺失，不沿用上一首音频或空跑',
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
   wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28);
   wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('song.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await writeFile(info.outputPath('assets/reference-audio/song.wav'), wav);
   const files: string[] = [];
   for (const missing of [false, true]) {
     const file = info.outputPath(missing ? 'missing.tblink' : 'valid.tblink');
     const project = parseLinkProject({ ...createEmptyLinkProject(missing ? '音源缺失' : '有效音源'), schemaVersion: 2, playbackSource: 'p1', rundown: [{
       id: 'song', title: missing ? '音源缺失' : '有效音源', cues: [], lighting: createLightingDocument(),
-      referenceAudio: { assetId: 'audio', relativePath: missing ? 'missing.wav' : 'song.wav', durationMs: 4000, sha256: createHash('sha256').update(wav).digest('hex') }
+      referenceAudio: { assetId: 'audio', relativePath: missing ? 'assets/reference-audio/missing.wav' : 'assets/reference-audio/song.wav', durationMs: 4000, sha256: createHash('sha256').update(wav).digest('hex') }
     }] });
     await writeFile(file, JSON.stringify(project)); files.push(file);
   }
@@ -36,6 +37,10 @@ test('时间线更换工程后音源缺失，不沿用上一首音频或空跑',
     await page.getByLabel('工程菜单', { exact: true }).click();
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', files[1]!);
+    const missingAssets = page.getByRole('dialog', { name: '找回缺失素材' });
+    await expect(missingAssets.getByRole('list', { name: '缺失的素材' }).getByRole('listitem')).toHaveText(['歌曲音频 · 音源缺失']);
+    await missingAssets.getByRole('button', { name: '稍后处理', exact: true }).click();
+    await expect(missingAssets).toHaveCount(0);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.getByRole('button', { name: '修改节目名称：音源缺失', exact: true })).toBeVisible();
     await expect(page.getByRole('alert')).toContainText('当前音频无法读取或解码');

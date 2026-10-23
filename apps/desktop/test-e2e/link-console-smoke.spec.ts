@@ -917,7 +917,7 @@ test('顶部工程名与紧凑素材侧栏支持大量素材搜索和滚动', as
   const project = createEmptyLinkProject('大型演出联动工程');
   project.mediaAssets = Array.from({ length: 600 }, (_, index) => ({
     id: `library-${index}`, name: `演出素材 ${String(index).padStart(4, '0')}`,
-    kind: 'audio', folderId: null, relativePath: `assets/audio-${index}.wav`,
+    kind: 'audio', folderId: null, relativePath: `assets/reference-media/audio-${index}.wav`,
     sha256: 'a'.repeat(64), byteLength: 100, durationMs: 1000
   }));
   project.rundown.push({ id: 'library-program', title: '素材验收节目', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [] });
@@ -927,6 +927,11 @@ test('顶部工程名与紧凑素材侧栏支持大量素材搜索和滚动', as
   await application.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, projectPath);
   await page.getByRole('button', { name: '打开工程', exact: true }).click();
   await expect(page.getByLabel('当前工程', { exact: true })).toHaveText(project.name);
+  // The fixture's media files are not on disk, so opening it first lists them as missing.
+  const missingAssets = page.getByRole('dialog', { name: '找回缺失素材' });
+  await expect(missingAssets.getByRole('heading', { name: '找不到 600 个素材' })).toBeVisible();
+  await missingAssets.getByRole('button', { name: '稍后处理', exact: true }).click();
+  await expect(missingAssets).toHaveCount(0);
   await expect(page.locator('.app-sidebar')).not.toContainText(project.name);
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
   const library = page.locator('.sidebar-editor .resource-library');

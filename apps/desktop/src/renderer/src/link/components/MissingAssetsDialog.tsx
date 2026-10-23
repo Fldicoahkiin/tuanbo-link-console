@@ -6,6 +6,7 @@ import type { LinkProject } from '@tb/schema';
 import { Button } from './Button';
 import { ModalSurface } from './ModalSurface';
 import { useDocumentStore } from '../stores/document-store';
+import { reportDocumentState } from '../project-document';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
 type Outcome = 'not-found' | 'mismatch';
@@ -122,6 +123,8 @@ export function showRestoredFiles(documentId: number, projectPath: string): bool
 }
 
 async function findMissingFiles(projectPath: string, project: LinkProject): Promise<ProjectAssetFile[]> {
+  // The main process only checks the project it knows is open; on open this runs before LinkApp reports it.
+  await reportDocumentState();
   const files = projectAssetFiles(project);
   const missing = new Set<string>();
   for (let offset = 0; offset < files.length; offset += 512) {

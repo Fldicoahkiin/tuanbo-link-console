@@ -114,6 +114,12 @@ export async function restoreUnnamedProject(): Promise<string | null> {
   return restored.name;
 }
 
+/** Tells the main process which document is open now. Requests it checks against
+ * the open project send this first: the window's own report runs after child effects. */
+export function reportDocumentState(): Promise<void> {
+  return linkDesktopViewModel.setDocumentState(stateReport(useDocumentStore.getState()));
+}
+
 function stateReport(state: DocumentStoreState): LinkDocumentState {
   return { version: 1, dirty: state.dirty, consoleSynced: state.consoleSynced, name: state.project?.name ?? null,
     projectPath: state.path, projectId: state.project?.projectId ?? null };
