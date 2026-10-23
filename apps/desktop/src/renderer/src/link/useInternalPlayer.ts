@@ -62,7 +62,6 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     const keyboard = (event: KeyboardEvent): void => {
       if (event.metaKey || event.repeat || event.defaultPrevented || (event.target instanceof HTMLElement && (event.target.closest('input,textarea,select,button,[contenteditable="true"],[role="slider"],.reference-timeline')))) return;
       const key = [...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), event.code].join('+');
-      if (key === 'Ctrl+KeyM') { event.preventDefault(); controller.toggleMtc(); return; }
       const item = project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key);
       if (item) { event.preventDefault(); void controller.play(item.id); }
       else if (!event.ctrlKey && !event.altKey && event.code === 'Space') { event.preventDefault(); void controller.toggle(); }
