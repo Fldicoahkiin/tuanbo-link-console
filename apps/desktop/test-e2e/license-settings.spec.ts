@@ -31,7 +31,7 @@ for (const credential of ['missing', 'tampered'] as const) {
           open: () => window.tbLink.openProjectDocument('C:\\must-not-open.tblink'),
           runtime: () => window.tbLink.setRuntimeActive(true),
           integrations: () => window.tbLink.detectLocalIntegrations(),
-          update: () => window.tbLink.checkForUpdates()
+          download: () => window.tbLink.downloadUpdate()
         };
         const results: Record<string, string> = {};
         for (const [name, operation] of Object.entries(operations)) {
@@ -41,6 +41,8 @@ for (const credential of ['missing', 'tampered'] as const) {
         return results;
       });
       for (const [name, message] of Object.entries(attempts)) expect(message, name).toContain('需要有效授权');
+      // Any machine may look for new versions; downloading and installing stay licensed.
+      expect(await page.evaluate(() => window.tbLink.checkForUpdates().then(() => '已检查', (error: Error) => error.message))).not.toContain('需要有效授权');
       await expect(panel.getByRole('button', { name: '导入授权文件' })).toBeDisabled();
       await panel.getByLabel('激活码', { exact: true }).fill('invalid-code');
       await panel.getByRole('button', { name: '激活本机', exact: true }).click();
