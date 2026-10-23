@@ -6,9 +6,11 @@ import { beijingTime, display, labels } from './forms';
 const chipFields = new Set(['state', 'paymentStatus', 'status']);
 // 详情页不显示未发生的事项（无退款、无工单、无错误、未绑定），编号放最后。
 const optionalFields = new Set(['deliveryError', 'openTickets', 'refundedFen', 'channelRefundFen', 'reviewedRefundFen', 'paymentReference', 'receivedAt', 'machineCode', 'leaseUntil', 'lastIssuedAt', 'license_id', 'conclusion']);
+// 原订单编号与「业务订单号」重复，详情页不再单列。
+const hiddenFields = new Set(['orderId']);
 export function detailRow(row: ConsoleRow): ConsoleRow {
   const { id, ...rest } = row;
-  return { ...Object.fromEntries(Object.entries(rest).filter(([key, value]) => !optionalFields.has(key) || value !== null && value !== 0 && value !== '')), ...(id === undefined ? {} : { id }) };
+  return { ...Object.fromEntries(Object.entries(rest).filter(([key, value]) => !hiddenFields.has(key) && (!optionalFields.has(key) || value !== null && value !== 0 && value !== ''))), ...(id === undefined ? {} : { id }) };
 }
 /** 到期时间按剩余天数显示，悬停看北京时间。 */
 function remaining(value: string): string {
