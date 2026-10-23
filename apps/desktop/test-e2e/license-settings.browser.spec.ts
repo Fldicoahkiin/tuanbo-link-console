@@ -39,7 +39,8 @@ test.beforeEach(async ({ page }) => {
       getUpdateStatus: () => Promise.resolve({ phase: 'available', currentVersion: '0.5.0', availableVersion: '0.5.1', releaseDate: '2026-11-02T00:00:00.000Z',
         progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, message: '发现新版本 0.5.1',
         installBlockedReason: '本机授权当前不可用（本机尚未激活），可以查看新版本，恢复授权后再安装' }),
-      onUpdateStatus: () => () => undefined
+      onUpdateStatus: () => () => undefined,
+      getAppInfo: () => Promise.resolve({ name: '团播联动台', version: '0.5.0', channel: 'release', gitSha: '0123456789abcdef0123456789abcdef01234567', appId: 'com.tuanbo.control' })
     } });
   });
   await page.addScriptTag({ content: script });

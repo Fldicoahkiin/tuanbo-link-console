@@ -12,9 +12,17 @@ import type {
   SceneItemTransform
 } from '@tb/schema';
 
+/** release: the official installer; test: the activation-free test package; internal: the signed internal build. */
+export type LinkReleaseChannel = 'release' | 'test' | 'internal' | 'development';
+
 export type LinkAppInfo = {
-  name: '团播联动台';
+  /** Product name of this build, e.g. 团播联动台功能测试版 for the test package. */
+  name: string;
   version: string;
+  channel: LinkReleaseChannel;
+  /** Commit the build came from (`-dirty` when it had uncommitted changes); null for a development build without Git. */
+  gitSha: string | null;
+  appId: string;
   platform: string;
   architecture: string;
   electronVersion: string;

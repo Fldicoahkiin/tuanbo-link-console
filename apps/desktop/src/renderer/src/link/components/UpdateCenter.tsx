@@ -1,8 +1,10 @@
 import { Button } from './Button';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { LinkUpdateStatus } from '@tb/core/link';
+import type { LinkAppInfo, LinkReleaseChannel, LinkUpdateStatus } from '@tb/core/link';
 import { CheckCircle2, CloudDownload, Download, LoaderCircle, RefreshCw, X } from 'lucide-react';
+
+const CHANNEL_LABEL: Record<LinkReleaseChannel, string> = { release: '正式版', test: '测试版', internal: '内测版', development: '开发版' };
 
 type UpdateCenterProps = {
   inline?: boolean;
@@ -13,6 +15,8 @@ type UpdateCenterProps = {
 export function UpdateCenter({ notify, inline = false, runtimeActive = false }: UpdateCenterProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<LinkUpdateStatus | null>(null);
+  const [build, setBuild] = useState<LinkAppInfo | null>(null);
+  const [buildFailure, setBuildFailure] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState('');
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -27,6 +31,9 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
       .catch((error: unknown) => {
         if (!cancelled) { setFailure(errorMessage(error)); notify(errorMessage(error), 'error'); }
       });
+    void window.tbLink.getAppInfo()
+      .then((info) => { if (!cancelled) setBuild(info); })
+      .catch((error: unknown) => { if (!cancelled) setBuildFailure(`版本信息读取失败：${errorMessage(error)}`); });
     const unsubscribe = window.tbLink.onUpdateStatus((next) => {
       if (!cancelled) setStatus(next);
     });
@@ -95,6 +102,10 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
           </div>
         </div>
 
+        {build ? <p className="update-build-identity" title={`${build.name} ${build.version} · 提交 ${build.gitSha ?? '未知'} · ${build.appId}`}>
+          {build.name} · {CHANNEL_LABEL[build.channel]} · 提交 {build.gitSha ? shortRevision(build.gitSha) : '未知'} · {build.appId}
+        </p> : buildFailure ? <p className="device-error" role="alert">{buildFailure}</p> : null}
+
         {phase === 'downloading' ? <div className="update-progress" role="progressbar" aria-label="更新下载进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={status?.progressPercent ?? 0}>
           <div><span style={{ width: `${status?.progressPercent ?? 0}%` }} /></div>
           <small>{formatProgress(status)}</small>
@@ -148,6 +159,11 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
       </section>
     </dialog>, document.body) : null}
   </>;
+}
+
+/** 12 characters identify a commit in this repository; a dirty marker stays visible. */
+function shortRevision(revision: string): string {
+  return revision.endsWith('-dirty') ? `${revision.slice(0, 12)}-dirty` : revision.slice(0, 12);
 }
 
 function formatProgress(status: LinkUpdateStatus | null): string {

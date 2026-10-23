@@ -153,6 +153,7 @@ import { LoopMidiService } from './link/loop-midi-service';
 import { loopMidiActionSchema, loopMidiStatusSchema } from '@tb/schema';
 import { LinkUpdateManager } from './link/update-manager';
 import { rendererSource } from './link/renderer-source';
+import { buildGitSha, releaseAppId, releaseChannel, releaseChannelLabel } from './link/build-identity';
 import desktopPackage from '../../package.json';
 import ffmpegPath from 'ffmpeg-static';
 import { NativeAudioCache } from './link/native-audio-cache';
@@ -246,6 +247,16 @@ async function closeNativePlayer(): Promise<void> {
 function nativePlaybackActive(): boolean {
   return Boolean(nativePlayer?.status && ['preparing', 'playing', 'paused'].includes(nativePlayer.status.status));
 }
+/** Which build this is: shown in the update panel and written to logs and diagnostic packages. */
+function buildIdentity(): Pick<LinkAppInfo, 'name' | 'version' | 'channel' | 'gitSha' | 'appId'> {
+  const distribution = internalDistribution?.channel ?? null;
+  return { name: app.getName(), version: desktopPackage.version, channel: releaseChannel(app.isPackaged, distribution),
+    gitSha: buildGitSha, appId: releaseAppId(distribution, desktopPackage.build.appId) };
+}
+function buildIdentityLine(): string {
+  const identity = buildIdentity();
+  return `${identity.name} ${identity.version} · ${releaseChannelLabel[identity.channel]} · 提交 ${identity.gitSha ?? '未知'} · ${identity.appId}`;
+}
 const midiHealth = new WindowsMidiHealth(() => probeWindowsMidi(midiProbeExecutable(app.isPackaged ? process.resourcesPath : undefined)));
 
 const projectService = new LinkProjectService();
@@ -276,8 +287,8 @@ async function bootstrap(): Promise<void> {
   const integrationDetector = new WindowsIntegrationDetector();
   const logger = new LinkRunLogger(join(app.getPath('userData'), 'link-logs'), () => [...knownSecrets]);
   ipcLogger = logger;
-  await logger.record({ level: 'info', category: 'system', message: `团播联动台 ${desktopPackage.version} 已启动`,
-    details: { appVersion: desktopPackage.version, packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
+  await logger.record({ level: 'info', category: 'system', message: `${buildIdentityLine()} 已启动`,
+    details: { appVersion: desktopPackage.version, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
     .catch((error: unknown) => dialog.showErrorBox('运行日志无法写入', error instanceof Error ? error.message : String(error)));
   app.on('child-process-gone', (_event, details) => {
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
@@ -1060,8 +1071,7 @@ function registerIpc(
   handle('link:app-info', async (): Promise<LinkAppInfo> => {
     const disk = await statfs(app.getPath('userData'));
     return {
-      name: '团播联动台',
-      version: desktopPackage.version,
+      ...buildIdentity(),
       platform: process.platform,
       architecture: process.arch,
       electronVersion: process.versions.electron,
@@ -1857,22 +1867,22 @@ function registerIpc(
   });
   handle('link:log-export', async () => {
     const result = await dialog.showSaveDialog(mainWindow!, { title: '导出运行日志',
-      defaultPath: `团播联动台-日志-${new Date().toISOString().replaceAll(':', '-')}.txt`,
+      defaultPath: `${app.getName()}-日志-${new Date().toISOString().replaceAll(':', '-')}.txt`,
       filters: [{ name: '文本日志', extensions: ['txt'] }] });
     if (result.canceled || !result.filePath) return null;
-    await logger.exportText(result.filePath);
+    await logger.exportText(result.filePath, buildIdentityLine());
     return result.filePath;
   });
   handle('link:diagnostic-export', async (_event, contextValue: unknown) => {
     const context = linkDiagnosticContextSchema.parse(contextValue);
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: '导出脱敏诊断包',
-      defaultPath: `团播联动台-诊断-${new Date().toISOString().replaceAll(':', '-')}.tbdiag.gz`,
+      defaultPath: `${app.getName()}-诊断-${new Date().toISOString().replaceAll(':', '-')}.tbdiag.gz`,
       filters: [{ name: '团播联动台诊断包', extensions: ['tbdiag.gz'] }]
     });
     if (result.canceled || !result.filePath) return null;
     await logger.exportDiagnosticPackage(result.filePath, { ...context, environment: {
-      appVersion: desktopPackage.version, packaged: app.isPackaged, platform: process.platform, arch: process.arch,
+      appVersion: desktopPackage.version, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch,
       osRelease: release(), cpu: cpus()[0]?.model ?? '未知', logicalProcessors: cpus().length,
       totalMemoryBytes: totalmem(), freeMemoryBytes: freemem(), versions: process.versions,
       gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),

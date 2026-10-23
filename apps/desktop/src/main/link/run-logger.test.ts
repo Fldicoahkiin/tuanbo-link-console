@@ -99,16 +99,17 @@ describe('LinkRunLogger', () => {
     cleanupFiles.push(join(directory, `${logger.sessionId}.jsonl`));
     const textPath = join(directory, 'all.txt'); cleanupFiles.push(textPath);
     const writes = Array.from({ length: 20 }, (_, index) => logger.record({ level: 'info', category: 'system', message: `记录 ${index} private-secret` }));
-    await logger.exportText(textPath); await Promise.all(writes);
+    await logger.exportText(textPath, '团播联动台 0.5.0 · 正式 · 提交 abc · com.tuanbo.control'); await Promise.all(writes);
     const last = await logger.query({ limit: 5 });
     expect(last).toHaveLength(5);
     expect(last.at(-1)?.message).toContain('记录 19');
     const contents = await readFile(textPath, 'utf8');
     expect(contents).toContain('记录 0'); expect(contents).toContain('记录 19');
+    expect(contents).toContain('导出版本：团播联动台 0.5.0 · 正式 · 提交 abc · com.tuanbo.control');
     expect(contents).not.toContain('private-secret');
-    await expect(logger.exportText(join(directory, 'missing', 'all.txt'))).resolves.toBeUndefined();
+    await expect(logger.exportText(join(directory, 'missing', 'all.txt'), '团播联动台 0.5.0 · 正式 · 提交 abc · com.tuanbo.control')).resolves.toBeUndefined();
     cleanupFiles.push(join(directory, 'missing', 'all.txt')); cleanupDirectories.push(join(directory, 'missing'));
-    await expect(logger.exportText(join(directory, 'wrong.json'))).rejects.toThrow('.txt');
+    await expect(logger.exportText(join(directory, 'wrong.json'), '团播联动台 0.5.0 · 正式 · 提交 abc · com.tuanbo.control')).rejects.toThrow('.txt');
   });
 });
 
