@@ -30,7 +30,10 @@ export class ObsMediaPreload {
     this.preparationSpacingFrames = Math.ceil(0.5 * playbackFramesPerSecond(project.timebase.frameRate));
   }
   register(projectId: string, asset: { id: string; name: string }, path: string, sourceName = materialSceneNames(projectId, asset).sourceName): void {
-    this.media.set(sourceName, { path, current: null, pending: null, following: null, touched: new Set(), retained: new Set() });
+    // Registering again after OBS reconnects starts the decoder slots over; inputs
+    // this session already used are still cleaned up when it stops.
+    const previous = this.media.get(sourceName);
+    this.media.set(sourceName, { path, current: null, pending: null, following: null, touched: previous?.touched ?? new Set(), retained: previous?.retained ?? new Set() });
   }
   resolveSource(logicalName: string): string { return this.media.get(logicalName)?.current?.sourceName ?? logicalName; }
 

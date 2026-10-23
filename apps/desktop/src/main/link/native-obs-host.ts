@@ -57,8 +57,8 @@ export class NativeObsHost {
     if (!entry || entry.state.state !== 'running') return;
     const current = (): void => { if (this.entry !== entry || entry.state.state !== 'running') throw new Error('画面会话已改变，未重建'); };
     try {
-      await entry.restoreScenes?.(current); current();
-      this.fault(`OBS 已重新连接：画面按当前位置重建，发送 ${await entry.session.rebuild()} 项`);
+      const sent = await entry.session.rebuild(() => entry.restoreScenes?.(current) ?? Promise.resolve());
+      this.fault(`OBS 已重新连接：画面按当前位置重建，发送 ${sent} 项`);
     } catch (error) {
       if (this.entry === entry) this.fault(`OBS 重新连接后画面重建失败：${error instanceof Error ? error.message : String(error)}`);
     }

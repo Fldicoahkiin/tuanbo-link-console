@@ -54,6 +54,8 @@ function timelineEntries(work: { cues: RuntimeUpdate['dueCues']; media: ManagedM
  * prepare resources and bind this session to a specific native audio generation. */
 export class ObsProgramSession {
   private preloadWork: Promise<void> | null = null;
+  /** Set while rebuild prepares the owned scenes again; no new decoder preparation starts. */
+  private restoring = false;
   /** Clip starts that failed this session; a late-ready decoder may start each once. */
   private readonly failedStarts = new Set<string>();
   /** Drift is checked every 5 s, never within 1 s of a media start, resume or seek. */
@@ -181,21 +183,34 @@ export class ObsProgramSession {
   }
 
   /** Recovery rule B after OBS reconnects: what OBS shows is unknown and owned
-   * decoders are forgotten, so the picture is rebuilt at the latest position.
-   * Resolves with the number of outputs sent. */
-  rebuild(): Promise<number> {
+   * decoders are forgotten. After in-flight decoder preparation settles, `restore`
+   * prepares the owned scenes again; the picture is then rebuilt at the latest
+   * position like a start from the middle: camera and shown sources first, clips
+   * on air located at the music, then played together. Resolves with the number
+   * of outputs sent; a failure rejects and leaves the channel running. */
+  rebuild(restore: () => Promise<void>): Promise<number> {
     if (!this.prepared || this.closed || this.failure || this.runtime.getState() !== 'running') return Promise.resolve(0);
     const generation = this.generation;
     const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
-    let sent = 0;
-    this.enqueue(async () => {
-      const frame = this.frame;
-      this.managed.adoptSeek([], frame); this.settleMedia(frame);
-      const entries = timelineEntries(this.managed.sceneTimeline!.restore(frame, this.runtime.shownSourcesAt(frame)));
-      sent = entries.length;
-      await this.send(entries, current, () => true);
+    this.restoring = true;
+    const operation = this.tail.then(async () => {
+      try {
+        await this.preloadWork; await restore();
+        if (!current()) return 0;
+        this.failedStarts.clear(); this.preloadFrame = -Infinity;
+        const frame = this.frame, work = this.managed.sceneTimeline!.restore(frame, this.runtime.shownSourcesAt(frame));
+        const targets = work.media.filter(event => event.phase === 'start').map(event => this.managed.alignEvent(event, frame));
+        this.managed.adoptSeek(targets, frame); this.settleMedia(frame);
+        await this.send(timelineEntries({ cues: work.cues, media: [] }), current, () => true);
+        for (const event of targets) if (current()) await this.dependencies.guardOutput(current, () => this.dependencies.seekMedia(event));
+        const actions = this.managed.transportActions('start');
+        if (actions.length && current()) this.dependencies.cueReport(await this.runner.run({ id: 'transport-start', name: '同步画面播放状态', notes: '', enabled: true,
+          timecode: frameNumberToTimecode(frame, this.project.timebase.frameRate), actions }, 'live', current));
+        return work.cues.length + targets.length;
+      } finally { this.restoring = false; }
     });
-    return this.tail.then(() => sent);
+    this.tail = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 
   private async send(entries: TimelineEntry[], current: () => boolean, onTime: (frame: number) => boolean): Promise<void> {
@@ -283,7 +298,7 @@ export class ObsProgramSession {
 
   private preload(frame: number): void {
     const prepare = this.dependencies.prepareUpcoming;
-    if (!prepare || this.preloadWork || frame - this.preloadFrame < playbackFramesPerSecond(this.project.timebase.frameRate) / 10) return;
+    if (!prepare || this.restoring || this.preloadWork || frame - this.preloadFrame < playbackFramesPerSecond(this.project.timebase.frameRate) / 10) return;
     this.preloadFrame = frame;
     const allowed = (): boolean => !this.closed && !this.failure;
     this.preloadWork = this.dependencies.guardOutput(allowed, () => prepare(frame, () => {
