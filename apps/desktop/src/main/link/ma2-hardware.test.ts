@@ -422,7 +422,7 @@ it.runIf(process.env.TBLINK_MA2_TIMECODE_PROBE === '1' && Boolean(process.env.TB
     const current = await bridge.request('CREATE', target, '', createMa2TimecodeXml(target, 'TcProbe', timecodes.version));
     results.created = canonical(current);
     const desired = ma2SongTimecodeXml(current, target, { name: 'TcProbe', startMs: 480000, executor: `${page}.101`, executorName, sequence,
-      cues: report.cues.slice(0, 2).map((cue, index) => ({ atMs: index * 1000, cueIndex: cue.index, name: cue.name ?? '' })) });
+      cues: report.cues.slice(0, 2).map((cue, index) => ({ atMs: index * 1000, cueIndex: cue.index, number: cue.number, name: cue.name })) });
     const wanted = canonical(desired); results.desired = wanted;
     try { await bridge.exchange('APPLY', target, current, desired); results.apply = 'verified'; }
     catch (error) { results.apply = error instanceof Error ? error.message : String(error); }
