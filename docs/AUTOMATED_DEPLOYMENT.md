@@ -91,10 +91,10 @@ SSH 有效配置必须包含 `authenticationmethods publickey`、`passwordauthen
 
 1. 发布提交只改根目录和 `apps/desktop` 两个 `package.json` 的版本号，推 master 后，在 Actions 手动运行 Release Windows（填完整提交号），或推 `vX.Y.Z` 标签。
 2. 托管机做版本检查（必须高于所有已有标签和线上 `latest.yml`）、类型检查、全量单测和 lint。
-3. 国内构建机（self-hosted runner，标签 `release-builder`）打包。美颜产物按仓库里的 `tools/obs/beauty/release-pin.json` 从 `D:\tblink-release-assets\beauty\<指纹前 12 位>\` 复制，afterPack 核对指纹，不符就失败。打包后用发布私钥给 `latest.yml` 加签名，写 `release-manifest.json`，再通过受限身份 `tblink-release` 上传。
+3. 国内构建机（self-hosted runner，标签 `release-builder`）打包。美颜产物按仓库里的 `tools/obs/beauty/release-pin.json` 从 `D:\tblink-release-assets\beauty\<指纹前 12 位>\` 复制，afterPack 核对指纹，不符就失败。打包后用发布私钥给 `latest.yml` 加签名：私钥存在 GitHub Actions secret `TBLINK_RELEASE_SIGNING_KEY`，只在签名这一步注入环境变量，不写磁盘。然后写 `release-manifest.json`，通过受限身份 `tblink-release` 上传。
 4. 服务器 `receive-update.py` 以 tblink-release 身份运行，不用 sudo。它只把这一份包写进 `/var/lib/tblink-release/staging/<版本>-<提交前 12 位>/`，不能覆盖已有目录，最多保留 5 份，也碰不到更新源。
-5. 管理员在运营后台「软件更新」里看到待发布版本，经二次验证、填写原因后点「发布更新」。后台只往 `/var/lib/tblink-licensing/update-release/update-requests/` 写一份请求。
-6. root 的 `tblink-update-publish.path` 触发 `publish-update.py --process-requests`，重新核对 manifest、各文件 sha256、`latest.yml` 的版本和 sha512、Ed25519 发布签名，确认请求里的 manifest 摘要与 staging 一致，版本高于当前更新源，全部通过才按「安装包先、`latest.yml` 最后」上线，并保存上一版 `latest.yml` 和回执。结果写回给后台显示。
+5. 管理员在运营后台「软件更新」里看到待发布版本，经二次验证、填写原因后点「发布更新」。后台只往 `/var/lib/tblink-licensing/update-release/update-requests/` 写一份请求，内容只有：请求编号、动作（发布 / 回滚 / 丢弃）、staging 名称（发布和丢弃）或回滚目标版本、确认时看到的 manifest sha256（发布）、操作人、原因、请求时间。
+6. root 的 `tblink-update-publish.path` 在请求目录或 staging 变化时触发 `publish-update.py --process-requests`；`tblink-update-publish.timer` 每 2 分钟兜底一次，接住运行期间到达的请求。脚本路径和参数都写死。它对请求目录只读：用 `O_NOFOLLOW` 打开，只接受属主为 `tblink-license`、16 KB 以内的普通文件，字段必须正好是上面几项且格式正确；已有结果的请求视为重复，直接忽略；同一时间只处理一个请求（文件锁）。然后重新核对 manifest、各文件 sha256、`latest.yml` 的版本和 sha512、Ed25519 发布签名，确认请求里的 manifest 摘要与 staging 一致，版本高于当前更新源，全部通过才按「安装包先、`latest.yml` 最后」上线，保存上一版 `latest.yml` 和回执。结果写到 `update-results/` 给后台显示，同时追加审计 `/var/lib/tblink-licensing/backups/update-audit.jsonl`（请求时间、处理时间、操作人、动作、版本、结果、失败原因）。后台读到结果后删除自己的请求文件。
 7. 「回滚到上一版」同样走后台请求，把更新源改回发布当前版本之前的 `latest.yml`，前提是那一版的安装包仍在、摘要一致、签名（如有）有效。已经装上新版本的电脑不会自动降级。
 8. 发布后运行 `node scripts/write-website-release.mjs` 生成官网下载信息并提交，官网随授权服务自动部署。
 
@@ -104,7 +104,8 @@ SSH 有效配置必须包含 `authenticationmethods publickey`、`passwordauthen
 - 包只能来自构建机：上传身份只能写 staging，服务器发布前要求有 Ed25519 发布签名，而私钥只在构建机上。
 - 后台被攻破时，攻击者只能在已经签名、已经进入 staging 的版本之间选择发布或回滚，塞不进伪造的包；客户端安装前还会用内置公钥再验一次签名和安装包摘要。
 - 服务器被攻破时，可以替换 `latest.yml` 或安装包，但拿不到发布私钥，客户端会拒绝安装。它能做的是停止提供更新，或回到旧的已签名版本。
-- 授权服务进程设置了 `NoNewPrivileges=true`，不能 sudo。所以后台和 root 发布脚本之间只靠请求文件：请求必须是 16 KB 以内的普通文件，处理前先移出监视目录，失败不会自动重试。
+- 授权服务进程设置了 `NoNewPrivileges=true`，不能 sudo。所以后台和 root 发布脚本之间只靠请求文件，规则见上面第 6 条；失败的请求不会自动重试。
+- 发布私钥：日常密钥 `release-2026-10-a` 只在 GitHub secret 里，备用密钥 `release-2026-10-b` 离线保存在 U 盘，构建机上不留副本（迁移步骤见[构建机准备](RELEASE_BUILDER_SETUP.md)）。
 - 本地 `pnpm verify:release` 打出的候选包没有发布签名，只用于安装验收，服务器会拒绝发布。
 
 <a id="服务器安装命令待用户确认后执行"></a>
@@ -116,7 +117,7 @@ SSH 有效配置必须包含 `authenticationmethods publickey`、`passwordauthen
 
 ```bash
 out="$(mktemp -d)"
-for f in publish-update.py receive-update.py tblink-update-publish.path tblink-update-publish.service tblink-release.sshd.conf; do
+for f in publish-update.py receive-update.py tblink-update-publish.path tblink-update-publish.service tblink-update-publish.timer tblink-release.sshd.conf; do
   git show <提交>:apps/licensing-server/deploy/$f > "$out/$f"
 done
 git show <提交>:apps/desktop/src/main/link/release-public-keys.json > "$out/release-public-keys.json"
@@ -143,9 +144,8 @@ sudo install -o root -g root -m 0644 publish-update.py /opt/tblink-licensing/pub
 sudo install -o root -g root -m 0644 release-public-keys.json /opt/tblink-licensing/release-public-keys.json
 sudo install -d -o tblink-license -g tblink-license -m 0750 /var/lib/tblink-licensing/update-release /var/lib/tblink-licensing/update-release/update-requests
 sudo install -d -o root -g tblink-license -m 0750 /var/lib/tblink-licensing/update-release/update-results
-sudo install -d -o root -g root -m 0700 /var/lib/tblink-licensing/update-release/processed
-sudo install -o root -g root -m 0644 tblink-update-publish.path tblink-update-publish.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now tblink-update-publish.path
+sudo install -o root -g root -m 0644 tblink-update-publish.path tblink-update-publish.service tblink-update-publish.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now tblink-update-publish.path tblink-update-publish.timer
 sudo systemctl start tblink-update-publish.service   # 生成第一份 update-status.json
 
 # 后台开启「软件更新」：服务配置加一行后重启授权服务（约 1 秒中断）
