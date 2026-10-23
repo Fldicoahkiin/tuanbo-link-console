@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertNewerRelease, compareStableVersions, testPackageVersion, embeddedDistributionChannel, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, websiteRelease } from './release-config.mjs';
+import { assertNewerRelease, compareStableVersions, signUpdateMetadata, testPackageVersion, verifyUpdateSignature, embeddedDistributionChannel, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, websiteRelease } from './release-config.mjs';
 
 const publish = { provider: 'generic', url: 'https://updates.tuanbo-link.jinhefilm.com/windows/x64/' };
 
@@ -118,4 +118,19 @@ test('测试包版本是下一个次版本的预发布，带提交数和提交�
   assert.equal(testPackageVersion({ packageVersion: '0.5.0', tags: ['v0.5.0'], commitCount: 2460, sha: 'abcdef1', dirty: true }), '0.6.0-test.2460+gabcdef1.dirty');
   assert.equal(testPackageVersion({ packageVersion: '0.4.57', tags: ['v0.5.2'], commitCount: 1, sha: 'abcdef1', dirty: false }), '0.6.0-test.1+gabcdef1');
   assert.throws(() => testPackageVersion({ packageVersion: '0.4.57', tags: [], commitCount: 0, sha: 'abcdef1', dirty: false }), /提交数/);
+});
+
+test('发布签名写进 latest.yml，只能由客户端内置的密钥签发，并绑定这个安装包', () => {
+  const key = generateKeyPairSync('ed25519');
+  const publicKeys = { 'release-2026-10-a': key.publicKey.export({ type: 'spki', format: 'pem' }) };
+  const input = { installerName, installerBytes, publicKeys };
+  const signed = signUpdateMetadata(latest(), { ...input, privateKey: key.privateKey, kid: 'release-2026-10-a' });
+  assert.equal(verifyUpdateSignature(signed, input), 'release-2026-10-a');
+  assert.equal(verifyUpdateSignature(latest(), input), null);
+  assert.throws(() => signUpdateMetadata(signed, { ...input, privateKey: key.privateKey, kid: 'release-2026-10-a' }), /已经带有/);
+  assert.throws(() => signUpdateMetadata(latest(), { ...input, privateKey: key.privateKey, kid: 'release-2026-10-z' }), /没有内置密钥/);
+  const other = generateKeyPairSync('ed25519');
+  assert.throws(() => signUpdateMetadata(latest(), { ...input, privateKey: other.privateKey, kid: 'release-2026-10-a' }), /不匹配/);
+  assert.throws(() => verifyUpdateSignature(signed, { ...input, installerBytes: Buffer.from('forged') }), /sha512|files/);
+  assert.throws(() => verifyUpdateSignature(signed.replace(/signature: (\S)/, (_m, c) => `signature: ${c === 'A' ? 'B' : 'A'}`), input), /签名无效/);
 });

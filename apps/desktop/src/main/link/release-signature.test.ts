@@ -60,6 +60,22 @@ describe('verifySignedRelease', () => {
   });
 });
 
+type SignUpdateMetadata = (text: string, options: { installerName: string; installerBytes: Buffer; privateKey: ReturnType<typeof generateKeyPairSync>['privateKey']; kid: string; publicKeys: Record<string, string> }) => string;
+
+describe('release signing scripts and the client agree', () => {
+  it('accepts the latest.yml that scripts/sign-release.mjs writes', async () => {
+    const scripts = new URL('../../../../../scripts/release-config.mjs', import.meta.url).href;
+    const { signUpdateMetadata } = await import(/* @vite-ignore */ scripts) as { signUpdateMetadata: SignUpdateMetadata };
+    // electron-updater parses latest.yml with js-yaml, which ships without type declarations.
+    const yaml = 'js-yaml';
+    const { load } = await import(/* @vite-ignore */ yaml) as { load: (text: string) => unknown };
+    const key = keyPair();
+    const latest = `version: 0.5.0\nfiles:\n  - url: ${file}\n    sha512: ${sha512}\n    size: ${installer.length}\npath: ${file}\nsha512: ${sha512}\nreleaseDate: '2026-11-02T03:04:05.678Z'\n`;
+    const signed = signUpdateMetadata(latest, { installerName: file, installerBytes: installer, privateKey: key.privateKey, kid: 'release-2026-10-a', publicKeys: { 'release-2026-10-a': key.publicKey } });
+    expect(verifySignedRelease(load(signed), { 'release-2026-10-a': key.publicKey })).toEqual({ version: '0.5.0', releaseDate: '2026-11-02T03:04:05.678Z', file, size: installer.length, sha512 });
+  });
+});
+
 describe('fileSha512', () => {
   it('hashes a file the way latest.yml states it', async () => {
     const path = join(await mkdtemp(join(tmpdir(), 'tblink-sha512-')), file);

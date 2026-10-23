@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, relative } from 'node:path';
-import { validateReleaseVersion, validateUpdateMetadata } from './release-config.mjs';
+import { validateReleaseVersion, validateUpdateMetadata, verifyUpdateSignature } from './release-config.mjs';
 
 const root = process.cwd();
 const desktopPackage = readJson(join(root, 'apps/desktop/package.json'));
@@ -35,6 +35,8 @@ const unpacked = artifacts.find((artifact) => artifact.path.endsWith('/win-unpac
 const installerVersionInfo = installer ? readWindowsVersionInfo(join(root, installer.path)) : undefined;
 // Clients compare this releaseDate with the license's updatesUntil; publish-update.py binds latest.yml to this manifest by sha256.
 const updateMetadata = readUpdateMetadata();
+// Unsigned candidates are for install acceptance only; the server's publish step refuses releaseSignature null.
+const releaseSignature = readReleaseSignature();
 const appVersionInfo = unpacked ? readWindowsVersionInfo(join(root, unpacked.path)) : undefined;
 const checks = [
   { name: 'windows-nsis-installer', ok: Boolean(installer), detail: installer?.path ?? 'missing' },
@@ -50,6 +52,7 @@ const checks = [
     ok: installer?.authenticode === unpacked?.authenticode && ['NotSigned', 'Valid'].includes(installer?.authenticode),
     detail: `installer=${installer?.authenticode ?? 'missing'}, app=${unpacked?.authenticode ?? 'missing'}`
   },
+  { name: 'release-signature-valid-or-absent', ok: !('error' in releaseSignature), detail: 'error' in releaseSignature ? releaseSignature.error : releaseSignature.kid ?? 'unsigned: install acceptance only' },
   { name: 'update-metadata-matches-installer', ok: 'releaseDate' in updateMetadata, detail: 'releaseDate' in updateMetadata ? `version=${updateMetadata.version}, releaseDate=${updateMetadata.releaseDate}` : updateMetadata.error },
   {
     name: 'windows-installer-version-info',
@@ -81,6 +84,7 @@ const manifest = {
     electron: String(desktopPackage.build.electronVersion)
   },
   update: 'releaseDate' in updateMetadata ? { releaseDate: updateMetadata.releaseDate, sha512: updateMetadata.sha512 } : null,
+  releaseSignature: 'kid' in releaseSignature && releaseSignature.kid ? { kid: releaseSignature.kid } : null,
   signing: {
     authenticode: installer?.authenticode ?? 'missing',
     smartScreenNoticeRequired: installer?.authenticode !== 'Valid'
@@ -105,6 +109,17 @@ function readUpdateMetadata() {
   if (!installer || !existsSync(feed)) return { error: 'missing installer or latest.yml' };
   try {
     return validateUpdateMetadata(readFileSync(feed, 'utf8'), { version: desktopPackage.version, installerName: expectedInstallerName, installerBytes: readFileSync(join(root, installer.path)) });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function readReleaseSignature() {
+  const feed = join(distDirectory, 'latest.yml');
+  if (!installer || !existsSync(feed)) return { error: 'missing installer or latest.yml' };
+  try {
+    const publicKeys = readJson(join(root, 'apps/desktop/src/main/link/release-public-keys.json'));
+    return { kid: verifyUpdateSignature(readFileSync(feed, 'utf8'), { installerName: expectedInstallerName, installerBytes: readFileSync(join(root, installer.path)), publicKeys }) };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }

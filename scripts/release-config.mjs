@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey, sign, verify } from 'node:crypto';
 import { closeSync, openSync, readSync } from 'node:fs';
 import { load } from 'js-yaml';
 
@@ -128,4 +128,36 @@ export function websiteRelease(text, feedUrl) {
   if (typeof releaseDate !== 'string' || !Number.isFinite(Date.parse(releaseDate))) throw new Error('latest.yml 缺少 releaseDate');
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(Date.parse(releaseDate));
   return { version, date, url: new URL(path, feedUrl).href, source: new URL('latest.yml', feedUrl).href, size: metadata.files?.[0]?.size };
+}
+
+/** The payload the release key signs; the desktop client (release-signature.ts) checks the same fields. */
+function releasePayload({ version, releaseDate, file, size, sha512 }) {
+  return Buffer.from(JSON.stringify({ schemaVersion: 1, product: 'tuanbo-link-console', channel: 'release', version, releaseDate, file, size, sha512 }));
+}
+
+/** Appends the release signature to latest.yml; refuses a key the client does not embed. */
+export function signUpdateMetadata(text, { installerName, installerBytes, privateKey, kid, publicKeys }) {
+  const metadata = load(text);
+  if (metadata?.tblinkRelease !== undefined) throw new Error('latest.yml 已经带有发布签名');
+  if (!publicKeys[kid]) throw new Error(`客户端没有内置密钥 ${kid} 的公钥，签名后无法校验`);
+  const { version, releaseDate, sha512 } = validateUpdateMetadata(text, { version: metadata.version, installerName, installerBytes });
+  const payload = releasePayload({ version, releaseDate, file: installerName, size: installerBytes.length, sha512 });
+  const signature = sign(null, payload, privateKey);
+  if (!verify(null, payload, createPublicKey(publicKeys[kid]), signature)) throw new Error(`私钥与内置公钥 ${kid} 不匹配`);
+  return `${text.endsWith('\n') ? text : `${text}\n`}tblinkRelease:\n  kid: ${kid}\n  payload: ${payload.toString('base64url')}\n  signature: ${signature.toString('base64url')}\n`;
+}
+
+/** The kid of a valid release signature in latest.yml for this installer, or null when unsigned. */
+export function verifyUpdateSignature(text, { installerName, installerBytes, publicKeys }) {
+  const metadata = load(text);
+  const envelope = metadata?.tblinkRelease;
+  if (envelope === undefined) return null;
+  const { kid, payload, signature } = envelope ?? {};
+  if (typeof kid !== 'string' || typeof payload !== 'string' || typeof signature !== 'string') throw new Error('发布签名格式无效');
+  if (!publicKeys[kid]) throw new Error(`发布签名使用了客户端没有内置的密钥 ${kid}`);
+  const bytes = Buffer.from(payload, 'base64url');
+  if (!verify(null, bytes, createPublicKey(publicKeys[kid]), Buffer.from(signature, 'base64url'))) throw new Error('发布签名无效');
+  const { version, releaseDate, sha512 } = validateUpdateMetadata(text, { version: metadata.version, installerName, installerBytes });
+  if (!bytes.equals(releasePayload({ version, releaseDate, file: installerName, size: installerBytes.length, sha512 }))) throw new Error('发布签名的内容与安装包不一致');
+  return kid;
 }
