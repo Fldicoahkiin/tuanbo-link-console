@@ -1,4 +1,4 @@
-# 服务器安装：更新发布与 root 备份加固（2026-10-23，待用户确认）
+# 服务器安装：更新发布与 root 备份加固（2026-10-23，已安装）
 
 这份说明一次装完两件事：
 
@@ -221,6 +221,7 @@ ssh -n -i D:\tblink-release-signing\upload\tblink-release-ed25519 -o IdentitiesO
 - 预期：标准输出为空，没有 `uid=` 这类 shell 输出；标准错误是 `{"error": "empty file"}`；退出码 1。服务器上 `sudo ls -A /var/lib/tblink-release/staging` 仍为空。
 - 时序：[构建机准备第 3 步](RELEASE_BUILDER_SETUP.md#3-给-runner-账号开权限)会把上传私钥的属主改成 tblink-runner、只给它读权限，之后 WYZB 再用这把钥匙会被 OpenSSH 的权限检查拒绝。所以探测要在那一步之前做。如果那一步已经做完，就以第一次 Release Windows 的上传步骤作为探测（日志里应有 `staged` 结果），并在服务器上确认 staging 出现对应条目。
 - 失败回退：如果输出了 shell 内容，立即按第 5 步的回退让账号不能登录，再排查。
+- 注意：在非交互的 PowerShell（例如从另一台机器经 SSH 执行）里，`ssh -n` 收到结果后客户端可能不退出。这时用空文件作为标准输入，见下面[安装结果](#安装结果)里实际用的写法。
 
 <a id="9-记录"></a>
 ## 9. 记录
@@ -234,3 +235,58 @@ ssh -n -i D:\tblink-release-signing\upload\tblink-release-ed25519 -o IdentitiesO
 - 探测结果。
 
 旧的备份仍在 `/var/lib/tblink-licensing/backups/`，不移动也不删除。之后新的备份都在 `/var/backups/tblink/`。
+
+<a id="安装结果"></a>
+## 安装结果（2026-10-23）
+
+用户确认原话：「确认执行服务器安装」（经主会话转达）。执行时间：北京时间 21:50–22:10，`$stamp=20261023T135042Z`。
+
+- **安装来源**：按 `695e3be` 导出，12 个文件逐个与提交里的 blob 比对一致。第 3 步推上 master 的是 `cc681a6`，工具字节与 `695e3be` 相同；两者之间只多了两处文档修正（zsh 写法、通配符展开）。
+- **SHA256SUMS**（第 0 步）：
+
+```text
+34ede7bce7e06143006813abda34f317fd05c6a3a43716c2d7ad2e75ff920ffb  activate-release.py
+6ff2ae7067b3d8a1b97c79745853952a075942d0cb33fec1f9083d4f24ac4afe  authorized_keys
+608a64e76244021a6c5b82d8c6839849063ce52a4282cd80eaa6d3fe16600d4f  backup-console.py
+9d935d2acf1b0577413641c84e389e67746377c490cc6d7f860436595eae7412  payment-exceptions.py
+08724d3b3debe2b24660fcf6d0b7534793ca95bfaca1628abba7494536185286  publish-update.py
+0c013a5ac1437b6e11fcf8ca7fe92ac7c1e224292c58c1bb5e9207e053b4f8bf  publish-website.py
+6e6752355b46716552b49120c01449aa38a5db6aaa1fe93951ed7079f63a5a6f  receive-update.py
+1a1a70a2f08a3ba8a68a25200be56b843a3e68f94bb1361cf63ad4c3f8e7f4bc  release-public-keys.json
+d04c8ebbae3e4726b8b93c2b79226736398515cdfccac4db57208feacc9c5b2c  tblink-release.sshd.conf
+ab3404bc286897420ef03d95717fc50d6422b2ca0325668f9445f1e77a6ccacf  tblink-update-publish.path
+afeb68fe713f9dc5e6e43378e7b1e4d54bd3f7c1f3f740c5bd44dc26cc22e435  tblink-update-publish.service
+b4e64e50350c6018c05994dea1ad19b6fe3b14aadd73d4c075519f1e083312bc  tblink-update-publish.timer
+```
+
+| 步骤 | 结果 |
+| --- | --- |
+| 1 只读检查 | 12 个文件 `OK`；`service.env`、`admin-token.txt` 为 tblink-license 600 普通文件；tblink-licensing、nginx、补交付 timer 均在运行；没有进行中的部署；现装四个工具的摘要与当时的 master（3707a34）一致 |
+| 2 备份 | `/var/backups/tblink` 及 `update-receipts`、`console`、`install-20261023T135042Z` 均为 root 0700；四个旧工具（activate-release `3b00154a…`、publish-website `faf22c29…`、backup-console `ea5a1802…`、payment-exceptions `da0b149b…`）和 `service.env`（`ecc71824…`）已备份 |
+| 3 CI 部署工具 | 持部署锁安装，摘要与上表一致（root 644 / root 755）；推送 `cc681a6` 后 [CI 39964944249](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/39964944249) 成功，部署步骤成功；`last-success.json` 的 revision 为 `cc681a6`；新备份落在 `/var/backups/tblink/20261023T135716Z` 和 `20261023T135717Z-website`，旧目录最新一项仍是 `20261023T080656Z-website`；维护页已关闭，公网 `/health` 正常，官网 200 |
+| 4 运维工具 | 摘要一致；`/etc/tblink-backup` 为 root 755；`payment-exceptions.py --after 0` 输出 `token-ok`；21:58:05 安装后，补交付服务 21:58:44 那次运行成功 |
+| 5 上传身份 | `tblink-release:x:982:977::/var/lib/tblink-release:/bin/sh`；`sshd -T` 显示 ForceCommand 为接收器、AuthorizedKeysFile 为 `/etc/tblink-release/authorized_keys`、PermitTTY no、DisableForwarding yes；管理员能重新登录 |
+| 6 发布助手 | `update-status.json` 为 root:tblink-license 640，内容为 feed 0.4.29、`signed: false`，rollback 的 issue 为「没有可以回滚到的上一版」，staged 为空；path 和 timer 都在运行；服务 Result=success |
+| 7 后台配置 | `service.env` 确认是普通文件后追加两行；重启后服务在运行，`/health` 正常；服务账号能读状态、能写请求目录、不能写结果目录；未登录访问 `/console-api/updates` 返回 401 |
+| 8 探测 | 退出码 1，标准输出为空，标准错误为 `{"error": "empty file"}`，staging 为空，无残留会话 |
+
+第 8 步实际使用的写法（在 WYZB 的 PowerShell 里，用空文件作为标准输入，30 秒超时）：
+
+```powershell
+$d = Join-Path $env:TEMP tblink-probe; New-Item -ItemType Directory -Force $d | Out-Null
+$in = Join-Path $d empty.txt; New-Item -ItemType File -Force -Path $in | Out-Null
+$p = Start-Process -FilePath (Get-Command ssh).Source -ArgumentList "-i","D:\tblink-release-signing\upload\tblink-release-ed25519","-o","IdentitiesOnly=yes","-o","BatchMode=yes","-o","ConnectTimeout=20","-o","UserKnownHostsFile=D:\tblink-release-signing\upload\known_hosts","tblink-release@123.206.229.200","id" `
+  -RedirectStandardInput $in -RedirectStandardOutput (Join-Path $d out.txt) -RedirectStandardError (Join-Path $d err.txt) -NoNewWindow -PassThru
+if ($p.WaitForExit(30000)) { "exit=" + $p.ExitCode } else { Stop-Process -Id $p.Id; "TIMEOUT" }
+Get-Content -Raw (Join-Path $d out.txt); Get-Content -Raw (Join-Path $d err.txt)
+```
+
+第一次用 `ssh -n` 时，结果已经输出，但客户端一直不退出，结束这个客户端进程后，服务器上的会话随之关闭。
+
+**尚未验证：**
+- 后台「软件更新」页面需要管理员登录才能看到，由用户确认。
+- 真实的上传、staging、后台发布和回滚流程，要等构建机 runner 和 GitHub secret 就位后的第一次 Release Windows。
+- 回滚和伪造回执只在单元测试里验证过。
+- 加密备份仍未启用。
+
+服务器上的安装文件留在 `~/tblink-install-20261023`，备份在 `/var/backups/tblink/install-20261023T135042Z`。
