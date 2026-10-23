@@ -67,3 +67,20 @@ it('同步前查询复查缓存：控台未变且指纹等于本地基线时给�
   expect(await watch.unchangedBaseline(connection, position, xml)).toBeNull();
   expect(await watch.unchangedBaseline(connection, position, xml)).toBeNull();
 });
+it('同步后接管写后回读作复查基线：下一次复查只比对两条命令；文件名不合法拒绝，播放中不接管', async () => {
+  const { connection, lines } = console();
+  const bridge: Pick<Ma2OnpcBridge, 'request'> = { request: vi.fn<Ma2OnpcBridge['request']>(() => Promise.reject(new Error('不应整读'))) };
+  const song = { ...request, executor: '9890.101' };
+  const exportFile = `tblink_library_${'e'.repeat(32)}`;
+  const watch = new Ma2SongWatch(() => false);
+  expect(await watch.adopt(connection, song, exportFile)).toBe(true);
+  expect(lines.join('\n')).toMatch(/os\.rename\(p\.\.'tblink_library_e{32}\.xml',p\.\.'tblink_watch_[a-f0-9]{16}\.xml'\)/);
+  expect(lines.join('\n')).toContain("Export Executor 9890.101 tblink_watch_");
+  const before = lines.length;
+  expect(await watch.changed(connection, bridge, song)).toBe(false);
+  expect(lines.length - before).toBe(2);
+  await expect(watch.adopt(connection, song, "x');os.remove('y")).rejects.toThrow('文件名无效');
+  const playing = console();
+  expect(await new Ma2SongWatch(() => true).adopt(playing.connection, song, exportFile)).toBe(false);
+  expect(playing.lines).toHaveLength(0);
+});

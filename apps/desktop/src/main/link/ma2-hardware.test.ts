@@ -183,34 +183,35 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     const tuned = first.binding.points[0]!.cue;
     const marker = `TBLINK_FADE_${randomBytes(16).toString('hex')}:`;
     expect(await raw.command(`Lua "gma.cmd('Assign Sequence ${sequence} Cue ${tuned} /fade=7');gma.echo('${marker}ok')"`, text => ma2ResponseLine(text, marker))).toBe('ok');
+    // Each sync hands its verified post-write export to the song check, as the network manager does.
+    const watch = new Ma2SongWatch(() => false);
+    const checkOf = (result: typeof first) => ({ network, expectedSource, sequence, executor: result.binding.executor!, revision: result.remoteRevision! });
+    const adoptReadback = (exportFile: string, result: typeof first): Promise<boolean> => watch.adopt(connection, checkOf(result), exportFile);
     const second = await step('changeOneCue', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: first.binding,
-      points: first.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 2 ? ref(0) : [{ sequence, cue: point.cue, delayMs: 0 }] })) }));
+      points: first.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 2 ? ref(0) : [{ sequence, cue: point.cue, delayMs: 0 }] })) }, undefined, undefined, { adoptReadback }));
     const fadeOf = (xml: string): string | undefined => {
       const [whole, fraction = ''] = tuned.split('.');
       const cue = xml.split('<Cue index=').find(part => part.includes(`<Number number="${Number(whole)}" sub_number="${Number(fraction.padEnd(3, '0'))}"`));
       return /<CuePart\b[^>]*\bbasic_fade="([^"]*)"/.exec(cue ?? '')?.[1];
     };
     expect(fadeOf(await bridge.request('SEQUENCE', sequence))).toBe('7');
-    // A full check leaves a console baseline; the next syncs plan from the saved baseline instead of reading the Sequence.
-    const watch = new Ma2SongWatch(() => false);
-    const checkOf = (result: typeof second) => ({ network, expectedSource, sequence, executor: result.binding.executor!, revision: result.remoteRevision! });
+    // The adopted readback makes the first check after a sync a console-side compare, not a full read.
     const self = (point: { cue: string }) => [{ sequence, cue: point.cue, delayMs: 0 }];
-    const recheck = async (result: typeof second, label: string): Promise<string> => {
-      await step(label, async () => { if (await watch.changed(connection, bridge, checkOf(result))) expect(await watch.changed(connection, bridge, checkOf(result))).toBe(false); });
+    const recheck = async (result: typeof first, label: string): Promise<string> => {
+      expect(await step(label, () => watch.changed(connection, bridge, checkOf(result)))).toBe(false);
       const baseline = await watch.unchangedBaseline(connection, { network, expectedSource, sequence, executor: result.binding.executor! }, result.binding.baselineXml);
       expect(baseline).toMatch(/^tblink_watch_[a-f0-9]{16}$/);
       return baseline!;
     };
-    await step('firstCheck', () => watch.changed(connection, bridge, checkOf(second)));
+    const warmBaseline = await recheck(second, 'firstCheck');
     const unchanged = await step('cachedCheck', () => watch.changed(connection, bridge, checkOf(second)));
-    const warmBaseline = await recheck(second, 'baselineCheck');
     const warm = await step('changeOneCueWarm', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: second.binding,
-      points: second.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 1 ? ref(0) : self(point) })) }, undefined, undefined, warmBaseline));
+      points: second.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 1 ? ref(0) : self(point) })) }, undefined, undefined, { consoleBaseline: warmBaseline, adoptReadback }));
     expect(warm.changed).toBe(true);
     // Combining two sources into that Cue keeps the console's fade instead of the first source's.
     const combineBaseline = await recheck(warm, 'checkAfterWarm');
     const combined = await step('combineExistingWarm', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), binding: warm.binding,
-      points: warm.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 0 ? [...ref(0), ...ref(1)] : self(point) })) }, undefined, undefined, combineBaseline));
+      points: warm.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 0 ? [...ref(0), ...ref(1)] : self(point) })) }, undefined, undefined, { consoleBaseline: combineBaseline, adoptReadback }));
     expect(combined.changed).toBe(true);
     expect(fadeOf(await bridge.request('SEQUENCE', sequence))).toBe('7');
     await mkdir(resolve('artifacts/ma2-hardware-diagnostics'), { recursive: true });

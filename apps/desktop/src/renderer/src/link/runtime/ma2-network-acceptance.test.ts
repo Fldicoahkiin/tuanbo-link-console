@@ -13,7 +13,7 @@ import { Ma2ApplyService } from '../../../../main/link/ma2-apply-service';
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
 import { Ma2AutoSync } from './ma2-auto-sync';
 import { useDocumentStore } from '../stores/document-store';
-import { ma2PendingChanges } from './ma2-pending-changes';
+import { ma2PendingChanges } from '@tb/core/link';
 
 it.skipIf(!process.env.MA2_NETWORK_ACCEPTANCE_PROJECT)('真实网络：大序列精简快照、自动关联、移动、撤销、重做、删除、保存恢复', async () => {
   const source = parseLinkProject(JSON.parse(await readFile(process.env.MA2_NETWORK_ACCEPTANCE_PROJECT!, 'utf8')));

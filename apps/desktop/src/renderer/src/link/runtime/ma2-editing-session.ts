@@ -1,7 +1,7 @@
 import { ma2CatalogSchema, type Ma2CatalogRequest } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { importCachedMa2, scanMa2, useMa2ReadStore } from '../stores/ma2-read-store';
-import { ma2PendingChanges } from './ma2-pending-changes';
+import { ma2PendingChanges } from '@tb/core/link';
 import { useMa2AutoSyncStore } from './use-ma2-auto-sync';
 import { scanMa2Materials } from '../stores/ma2-material-read-store';
 

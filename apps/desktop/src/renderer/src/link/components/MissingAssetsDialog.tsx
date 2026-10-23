@@ -73,12 +73,8 @@ export function MissingAssetsDialog({ request, locked, notify }: {
       const remaining = Object.keys(next).length;
       if (!restored) return;
       notify(remaining ? `已找回 ${restored} 个素材，仍有 ${remaining} 个缺失` : `已找回 ${restored} 个素材`);
-      // The project document is unchanged; setting it again lets every view see the
-      // restored files. Unsaved edits stay unsaved: nothing is written to the project file.
-      const current = useDocumentStore.getState();
-      if (current.documentId !== documentId || current.path !== projectPath || !current.project) return;
       reloadedAfterRelink.current = true;
-      current.setProject(current.project, projectPath, { restored: current.dirty, upgraded: current.upgradeBackupPending });
+      if (!showRestoredFiles(documentId, projectPath)) reloadedAfterRelink.current = false;
     } catch (failure) {
       setError(toMessage(failure));
     } finally {
@@ -111,6 +107,18 @@ export function MissingAssetsDialog({ request, locked, notify }: {
       </div>
     </form>
   </ModalSurface>, document.body);
+}
+
+/** The project document is unchanged; setting it again lets every view see the
+ * restored files. Unsaved edits stay unsaved: nothing is written to the project
+ * file. False when another document is open by now. */
+export function showRestoredFiles(documentId: number, projectPath: string): boolean {
+  const current = useDocumentStore.getState();
+  if (current.documentId !== documentId || current.path !== projectPath || !current.project) return false;
+  current.setProject(current.project, projectPath, { restored: current.dirty, upgraded: current.upgradeBackupPending });
+  // Unsaved edits already written to the MA2 console stay marked, so a later discard still warns.
+  if (current.consoleSynced) useDocumentStore.getState().markConsoleSynced(useDocumentStore.getState().documentId);
+  return true;
 }
 
 async function findMissingFiles(projectPath: string, project: LinkProject): Promise<ProjectAssetFile[]> {

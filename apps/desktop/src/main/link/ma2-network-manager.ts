@@ -146,7 +146,18 @@ export class Ma2NetworkManager {
     // A cached song check that still matches the console saves reading the whole Sequence again.
     const binding = request.binding;
     const baseline = binding && this.songWatch ? await this.songWatch.unchangedBaseline(connection, { network: request.network, expectedSource: request.expectedSource, sequence: binding.sequence, ...binding.executor ? { executor: binding.executor } : {} }, binding.baselineXml) : null;
-    return this.layouts().syncSong(connection, bridge, request, report, signal, baseline);
+    // The verified post-write export becomes the next check's baseline, so that check is not a full read either.
+    const adoptReadback = async (exportFile: string, result: import('@tb/schema').Ma2SongSyncResult): Promise<boolean> => {
+      if (!result.remoteRevision) return false;
+      this.songWatch ??= new Ma2SongWatch(this.isPlaying);
+      try {
+        return await this.songWatch.adopt(connection, { network: request.network, expectedSource: request.expectedSource, sequence: result.binding.sequence, ...result.binding.executor ? { executor: result.binding.executor } : {}, revision: result.remoteRevision }, exportFile);
+      } catch (cause) {
+        this.notice?.('warning', `歌曲复查基线未能接上本次回读：${cause instanceof Error ? cause.message : String(cause)}；下次复查会重新读取整条序列`);
+        return false;
+      }
+    };
+    return this.layouts().syncSong(connection, bridge, request, report, signal, { consoleBaseline: baseline, adoptReadback });
   }
   async newCue(request: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult> {
     const {bridge}=this.get(request.network); const connection=this.connection;
