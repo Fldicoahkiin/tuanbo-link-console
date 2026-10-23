@@ -69,9 +69,9 @@ jobs:
         shell: pwsh
         run: |
           if ($env:GITHUB_EVENT_NAME -eq 'push') {
-            node scripts/verify-release-version.mjs "$env:GITHUB_REF_NAME"
+            node scripts/verify-release-version.mjs --release "$env:GITHUB_REF_NAME"
           } else {
-            node scripts/verify-release-version.mjs
+            node scripts/verify-release-version.mjs --release
           }
 
       - name: Verify and build Windows release

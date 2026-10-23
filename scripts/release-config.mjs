@@ -21,6 +21,33 @@ export function validateReleaseVersion(rootPackage, desktopPackage, tag) {
   return version;
 }
 
+const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+/** Orders two X.Y.Z versions: negative when a is older. */
+export function compareStableVersions(a, b) {
+  const [left, right] = [a, b].map(value => {
+    const match = stableVersion.exec(value);
+    if (!match) throw new Error(`不是 X.Y.Z 正式版本号：${value}`);
+    return match.slice(1).map(Number);
+  });
+  return left.map((part, index) => part - right[index]).find(difference => difference !== 0) ?? 0;
+}
+
+/** A release version is used once: newer than every other release tag and than the published feed.
+ * Its own tag may already exist only on the commit being built. */
+export function assertNewerRelease(version, { tags, head, feedVersion }) {
+  for (const tag of tags) {
+    const tagged = /^v(.+)$/.exec(tag.name)?.[1];
+    if (!tagged || !stableVersion.test(tagged)) continue;
+    if (tagged === version) {
+      if (tag.commit !== head) throw new Error(`版本 ${version} 的标签 ${tag.name} 指向另一个提交，正式版本号不能重复使用`);
+    } else if (compareStableVersions(tagged, version) >= 0) {
+      throw new Error(`版本 ${version} 不高于已有标签 ${tag.name}`);
+    }
+  }
+  if (compareStableVersions(feedVersion, version) >= 0) throw new Error(`版本 ${version} 不高于更新源上的 ${feedVersion}`);
+}
+
 export function validatePackagedUpdateConfig(text, expected) {
   const config = load(text);
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('app-update.yml 必须为对象');

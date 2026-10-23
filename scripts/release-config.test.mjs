@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { embeddedDistributionChannel, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, websiteRelease } from './release-config.mjs';
+import { assertNewerRelease, compareStableVersions, embeddedDistributionChannel, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, websiteRelease } from './release-config.mjs';
 
 const publish = { provider: 'generic', url: 'https://updates.tuanbo-link.jinhefilm.com/windows/x64/' };
 
@@ -93,4 +93,22 @@ test('官网下载信息由已发布的 latest.yml 生成，日期按北京时�
   assert.throws(() => websiteRelease(published.replaceAll('0.4.29', '0.5.0-test.3'), publish.url), /正式版本/);
   assert.throws(() => websiteRelease(published.replace('path: Tuanbo-Link-Console-0.4.29-x64.exe', 'path: Tuanbo-Link-Test-NoActivation-0.4.29-x64.exe'), publish.url), /正式安装包/);
   assert.throws(() => websiteRelease(published.replace(/releaseDate.*\n/, ''), publish.url), /releaseDate/);
+});
+
+test('正式版本号按数字比较', () => {
+  assert.ok(compareStableVersions('0.5.0', '0.4.57') > 0);
+  assert.ok(compareStableVersions('0.4.10', '0.4.9') > 0);
+  assert.equal(compareStableVersions('1.0.0', '1.0.0'), 0);
+  assert.throws(() => compareStableVersions('0.5.0-test.1', '0.4.0'), /X\.Y\.Z/);
+});
+
+test('正式版本必须高于其他标签和线上更新源，自己的标签只能在本次提交上', () => {
+  const tags = [{ name: 'v0.4.28', commit: 'a' }, { name: 'v0.4.29', commit: 'b' }, { name: 'desktop-0.4.27-20260925', commit: 'c' }];
+  assert.doesNotThrow(() => assertNewerRelease('0.5.0', { tags, head: 'h', feedVersion: '0.4.29' }));
+  assert.doesNotThrow(() => assertNewerRelease('0.5.0', { tags: [...tags, { name: 'v0.5.0', commit: 'h' }], head: 'h', feedVersion: '0.4.29' }));
+  assert.throws(() => assertNewerRelease('0.5.0', { tags: [...tags, { name: 'v0.5.0', commit: 'x' }], head: 'h', feedVersion: '0.4.29' }), /另一个提交/);
+  assert.throws(() => assertNewerRelease('0.4.29', { tags, head: 'h', feedVersion: '0.4.28' }), /另一个提交/);
+  assert.throws(() => assertNewerRelease('0.4.20', { tags, head: 'h', feedVersion: '0.4.19' }), /不高于已有标签 v0\.4\.28/);
+  assert.throws(() => assertNewerRelease('0.4.30', { tags, head: 'h', feedVersion: '0.4.30' }), /不高于更新源/);
+  assert.throws(() => assertNewerRelease('0.4.30', { tags: [...tags, { name: 'v0.5.0', commit: 'z' }], head: 'h', feedVersion: '0.4.29' }), /v0\.5\.0/);
 });
