@@ -42,6 +42,10 @@ test('只挪动 .tblink 后打开：列出缺失素材，选择原工程文件�
   const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
   const files = [...saved.rundown.flatMap(item => item.referenceAudio ? [item.referenceAudio.relativePath] : []), ...saved.mediaAssets.map(asset => asset.relativePath)];
   expect(files).toHaveLength(3);
+  const songSha = saved.rundown.find(item => item.title === 'music.wav')!.referenceAudio!.sha256;
+  const waveform = (root: string): string => join(root, 'cache', 'waveforms', `${songSha}.json`);
+  await mkdir(join(original, 'cache', 'waveforms'), { recursive: true });
+  await writeFile(waveform(original), '[0,0.5,-0.5]\n');
   await copyFile(path, movedPath);
   app = await launch();
   try {
@@ -65,6 +69,7 @@ test('只挪动 .tblink 后打开：列出缺失素材，选择原工程文件�
     await expect(dialog).toHaveCount(0);
     await expect(page.getByText('已找回 3 个素材', { exact: true })).toBeVisible();
     for (const relativePath of files) expect(await readFile(join(moved, relativePath))).toEqual(await readFile(join(original, relativePath)));
+    expect(await readFile(waveform(moved), 'utf8')).toBe('[0,0.5,-0.5]\n');
     expect(parseLinkProject(JSON.parse(await readFile(movedPath, 'utf8')))).toEqual(saved);
 
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();

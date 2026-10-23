@@ -316,7 +316,8 @@ export class LinkProjectService {
   /** Brings back files missing from the project folder from the same relative
    * path under sourceDirectory, for example the folder the .tblink was moved
    * out of. Only a file with the recorded SHA-256 is copied; nothing else is
-   * searched for. The project document itself does not change. */
+   * searched for. A restored file's waveform cache comes along when the
+   * source folder has one. The project document itself does not change. */
   async relinkAssetFiles(projectPath: string, sourceDirectory: string, files: readonly { relativePath: string; sha256: string }[]): Promise<LinkProjectAssetRelinkResult> {
     assertProjectExtension(projectPath);
     if (!isAbsolute(sourceDirectory)) throw new Error('原工程文件夹必须是完整路径');
@@ -329,6 +330,11 @@ export class LinkProjectService {
       if (await hashFile(source) !== file.sha256) { result.push({ relativePath: file.relativePath, status: 'mismatch' }); continue; }
       await mkdir(dirname(destination), { recursive: true });
       await copyIntoProject(source, destination, dirname(destination), '找回素材', file.sha256);
+      // P1 follow preflight blocks on a missing waveform, so it moves with its audio.
+      const waveform = join(resolve(sourceDirectory), 'cache', 'waveforms', `${file.sha256}.json`);
+      if (await pathExists(waveform) && !await pathExists(waveformCachePath(projectPath, file.sha256))) {
+        await writeFileAtomically(waveformCachePath(projectPath, file.sha256), await readFile(waveform));
+      }
       result.push({ relativePath: file.relativePath, status: 'restored' });
     }
     return result;
