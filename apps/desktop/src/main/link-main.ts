@@ -268,7 +268,6 @@ const projectDocuments = new ProjectDocumentService();
 const p1ProjectService = new P1ProjectService(projectService);
 const mediaMetadataProbe = new MediaMetadataProbe();
 const mediaPreviewService = new MediaPreviewService(projectService);
-const assetTokens = new Map<string, string>();
 const knownSecrets = new Set<string>();
 
 async function bootstrap(): Promise<void> {
@@ -308,7 +307,6 @@ async function bootstrap(): Promise<void> {
     undefined,
     internalDistribution ? '' : undefined
   );
-  registerAssetProtocol();
   registerIpc(profileStore, obs, processManager, logger, integrationDetector, updateManager);
   void midiHealth.check().then((result) => logger.record({
     level: result === 'ready' ? 'info' : 'error', category: 'device', device: 'MIDI',
@@ -529,6 +527,7 @@ function registerIpc(
   updateManager: LinkUpdateManager
 ): void {
   const projectAccess = new ProjectAccess(join(app.getPath('userData'), 'link-integrations', 'last-project.json'));
+  registerAssetProtocol(projectAccess);
   const assetRelinkRequests = new AssetRelinkRequests({ projects: projectService, access: projectAccess });
   // Absolute paths the window may hand back: files the operator dropped, picked or chose in a
   // dialog, and programs a dialog or the detection found. Kept apart so a dropped file is no program.
@@ -1428,7 +1427,7 @@ function registerIpc(
     const payload = linkReferenceAudioResolvePayloadSchema.parse(payloadValue);
     await projectAccess.assetFiles(payload.projectPath, [payload.relativePath]);
     const path = projectService.resolveReferenceAudio(payload.projectPath, payload.relativePath);
-    return createAssetUrl(path);
+    return projectAccess.assetUrl(payload.projectPath, path);
   });
   handle('link:import-media-asset', async (_event, payloadValue: unknown) => {
     const payload = linkMediaAssetImportPayloadSchema.parse(payloadValue);
@@ -1448,7 +1447,7 @@ function registerIpc(
   handle('link:resolve-media-asset-url', async (_event, payloadValue: unknown) => {
     const payload = linkMediaAssetResolvePayloadSchema.parse(payloadValue);
     await projectAccess.assetFiles(payload.projectPath, [payload.relativePath]);
-    return createAssetUrl(projectService.resolveMediaAsset(payload.projectPath, payload.relativePath));
+    return projectAccess.assetUrl(payload.projectPath, projectService.resolveMediaAsset(payload.projectPath, payload.relativePath));
   });
   handle('link:ensure-media-preview-url', async (_event, payloadValue: unknown) => {
     const payload = linkMediaPreviewPayloadSchema.parse(payloadValue);
@@ -1456,19 +1455,19 @@ function registerIpc(
     const path = payload.kind === 'video'
       ? await mediaPreviewService.ensureVideoPreview(payload.projectPath, payload.relativePath, payload.sha256)
       : projectService.resolveMediaAsset(payload.projectPath, payload.relativePath);
-    return createAssetUrl(path);
+    return projectAccess.assetUrl(payload.projectPath, path);
   });
   handle('link:ensure-media-thumbnail-url', async (_event, payloadValue: unknown) => {
     const payload = linkMediaPreviewPayloadSchema.strict().parse(payloadValue);
     if (payload.kind === 'audio') throw new Error('音频素材使用类型图标');
     await projectAccess.assetFiles(payload.projectPath, [payload.relativePath]);
-    return createAssetUrl(await mediaPreviewService.ensureThumbnail(payload.projectPath, payload.relativePath, payload.sha256));
+    return projectAccess.assetUrl(payload.projectPath, await mediaPreviewService.ensureThumbnail(payload.projectPath, payload.relativePath, payload.sha256));
   });
   handle('link:ensure-media-audio-url', async (_event, payloadValue: unknown) => {
     const payload = linkMediaPreviewPayloadSchema.parse(payloadValue);
     if (payload.kind === 'image') throw new Error('图片素材不包含音轨');
     await projectAccess.assetFiles(payload.projectPath, [payload.relativePath]);
-    return createAssetUrl(await mediaPreviewService.ensureAudioPreview(payload.projectPath, payload.relativePath, payload.sha256));
+    return projectAccess.assetUrl(payload.projectPath, await mediaPreviewService.ensureAudioPreview(payload.projectPath, payload.relativePath, payload.sha256));
   });
   const waveformService = new WaveformService(projectService);
   const audioEditService = new AudioEditService(projectService, ibtExecutable(app.isPackaged ? process.resourcesPath : undefined));
@@ -1523,7 +1522,7 @@ function registerIpc(
   handle('link:generate-waveform', (_event, payloadValue: unknown) => {
     const payload = linkWaveformGeneratePayloadSchema.parse(payloadValue);
     projectAccess.requireShown(payload.projectPath);
-    const sourcePath = assetTokens.get(new URL(payload.url).pathname.slice(1));
+    const sourcePath = projectAccess.assetPath(new URL(payload.url).pathname.slice(1));
     if (!sourcePath) throw new Error('波形素材链接已失效，请重新打开节目');
     return waveformService.ensure(payload.projectPath, sourcePath, payload.sha256, payload.durationMs);
   });
@@ -2055,13 +2054,14 @@ function registerIpc(
   });
 }
 
-function registerAssetProtocol(): void {
+/** Links stop resolving once their project is closed or replaced (ProjectAccess.assetPath). */
+function registerAssetProtocol(access: Pick<ProjectAccess, 'assetPath'>): void {
   protocol.handle('tblink-asset', async (request) => {
     try { await authorizeOutput(); }
     catch (error) { return new Response(error instanceof Error ? error.message : '授权校验失败', { status: 403 }); }
     const url = new URL(request.url);
     const token = url.pathname.slice(1);
-    const path = assetTokens.get(token);
+    const path = access.assetPath(token);
     if (!path) return new Response('Asset token not found', { status: 404 });
     return assetResponse(path, request, mimeType(path));
   });
@@ -2267,12 +2267,6 @@ function sendToRenderer(channel: string, payload: unknown): void {
 function safeFileName(value: string): string {
   const sanitized = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim();
   return sanitized || '未命名工程';
-}
-
-function createAssetUrl(path: string): string {
-  const token = crypto.randomUUID();
-  assetTokens.set(token, path);
-  return `tblink-asset://local/${token}`;
 }
 
 function mimeType(path: string): string {

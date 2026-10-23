@@ -102,9 +102,20 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
   } finally { await closeDiscarding(app); }
 
   // The main process recorded the shown project and reopens it on the next start.
+  const song = join(dirname(shown), 'assets', 'reference-audio', 'song.wav');
+  await mkdir(dirname(song), { recursive: true }); await writeFile(song, 'RIFF shown song');
   app = await launch(info.outputPath('profile'));
   try {
     const page = await app.firstWindow();
     await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', shown);
+
+    // A link to the shown project's file stops working once another project replaces it.
+    const load = (url: string): Promise<string> => page.evaluate(link => fetch(link).then(response => response.ok ? response.text() : `HTTP ${response.status}`), url);
+    const songUrl = await page.evaluate(path => window.tbLink.resolveReferenceAudioUrl({ projectPath: path, relativePath: 'assets/reference-audio/song.wav' }), shown);
+    expect(await load(songUrl)).toBe('RIFF shown song');
+    await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, never);
+    await page.getByRole('button', { name: '打开工程', exact: true }).click();
+    await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', never);
+    expect.soft(await load(songUrl)).toBe('HTTP 404');
   } finally { await closeDiscarding(app); }
 });

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 import { z } from 'zod';
@@ -19,6 +20,8 @@ export class ProjectAccess {
   /** Opened or saved by the main process for the window, until the window reports showing it. */
   private opening: string | null = null;
   private recorded: string | null = null;
+  /** tblink-asset:// tokens, each for one file of the project it was issued for. */
+  private readonly assetLinks = new Map<string, { projectPath: string; path: string }>();
 
   constructor(private readonly lastProjectFile: string) {}
 
@@ -32,6 +35,7 @@ export class ProjectAccess {
   opened(path: string): void {
     this.approve(path);
     this.opening = path;
+    this.forgetClosedAssetLinks();
   }
 
   requireApproved(path: string): void {
@@ -43,14 +47,37 @@ export class ProjectAccess {
     if (projectPath !== null) this.requireApproved(projectPath);
     this.shown = projectPath;
     if (projectPath !== null && this.opening !== null && pathKey(projectPath) === pathKey(this.opening)) this.opening = null;
+    this.forgetClosedAssetLinks();
     if (projectPath === null || projectPath === this.recorded) return;
     await writeFileAtomically(this.lastProjectFile, `${JSON.stringify({ version: 1, projectPath })}\n`);
     this.recorded = projectPath;
   }
 
   requireShown(projectPath: string): void {
+    if (!this.isOpen(projectPath)) throw new Error(`只能访问当前打开的工程：${projectPath}`);
+  }
+
+  /** A tblink-asset:// link for a file of the shown project; it stops working once that project is closed or replaced. */
+  assetUrl(projectPath: string, path: string): string {
+    this.requireShown(projectPath);
+    const token = randomUUID();
+    this.assetLinks.set(token, { projectPath, path });
+    return `tblink-asset://local/${token}`;
+  }
+
+  /** The file behind a link token, or null when the token is unknown or its project is no longer open. */
+  assetPath(token: string): string | null {
+    const link = this.assetLinks.get(token);
+    return link && this.isOpen(link.projectPath) ? link.path : null;
+  }
+
+  private isOpen(projectPath: string): boolean {
     const key = pathKey(projectPath);
-    if (![this.shown, this.opening].some(path => path !== null && pathKey(path) === key)) throw new Error(`只能访问当前打开的工程：${projectPath}`);
+    return [this.shown, this.opening].some(path => path !== null && pathKey(path) === key);
+  }
+
+  private forgetClosedAssetLinks(): void {
+    for (const [token, link] of this.assetLinks) if (!this.isOpen(link.projectPath)) this.assetLinks.delete(token);
   }
 
   /** The last project shown, from the main process's own record; reading it approves it for reopening. */
