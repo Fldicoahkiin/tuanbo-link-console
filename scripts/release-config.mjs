@@ -78,3 +78,16 @@ export function readAsarFile(archivePath, name) {
     closeSync(descriptor);
   }
 }
+
+/** The download page's release record, derived from the published latest.yml. The date is the Beijing-time
+ * date of releaseDate, the same instant clients compare with updatesUntil. */
+export function websiteRelease(text, feedUrl) {
+  const metadata = load(text);
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('latest.yml 必须为对象');
+  const { version, path, releaseDate } = metadata;
+  if (typeof version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error('官网只展示 X.Y.Z 正式版本');
+  if (path !== `Tuanbo-Link-Console-${version}-x64.exe`) throw new Error(`latest.yml 的安装包名不是正式安装包：${String(path)}`);
+  if (typeof releaseDate !== 'string' || !Number.isFinite(Date.parse(releaseDate))) throw new Error('latest.yml 缺少 releaseDate');
+  const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(Date.parse(releaseDate));
+  return { version, date, url: new URL(path, feedUrl).href, source: new URL('latest.yml', feedUrl).href, size: metadata.files?.[0]?.size };
+}

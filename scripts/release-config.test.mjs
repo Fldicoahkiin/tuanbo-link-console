@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { embeddedDistributionChannel, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata } from './release-config.mjs';
+import { embeddedDistributionChannel, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, websiteRelease } from './release-config.mjs';
 
 const publish = { provider: 'generic', url: 'https://updates.tuanbo-link.jinhefilm.com/windows/x64/' };
 
@@ -81,4 +81,16 @@ test('从 asar 读取单个文件', () => {
   writeFileSync(archive, Buffer.concat([size, header, other, content]));
   assert.deepEqual(JSON.parse(readAsarFile(archive, 'package.json').toString('utf8')), { name: 'tuanbo-link-functional-test', productName: '团播联动台功能测试版' });
   assert.throws(() => readAsarFile(archive, 'missing.json'), /没有/);
+});
+
+test('官网下载信息由已发布的 latest.yml 生成，日期按北京时间', () => {
+  const published = `version: 0.4.29\nfiles:\n  - url: Tuanbo-Link-Console-0.4.29-x64.exe\n    sha512: BJJm\n    size: 130125531\npath: Tuanbo-Link-Console-0.4.29-x64.exe\nsha512: BJJm\nreleaseDate: '2026-09-28T18:15:14.517Z'\n`;
+  assert.deepEqual(websiteRelease(published, publish.url), {
+    version: '0.4.29', date: '2026-09-29', size: 130125531,
+    url: 'https://updates.tuanbo-link.jinhefilm.com/windows/x64/Tuanbo-Link-Console-0.4.29-x64.exe',
+    source: 'https://updates.tuanbo-link.jinhefilm.com/windows/x64/latest.yml'
+  });
+  assert.throws(() => websiteRelease(published.replaceAll('0.4.29', '0.5.0-test.3'), publish.url), /正式版本/);
+  assert.throws(() => websiteRelease(published.replace('path: Tuanbo-Link-Console-0.4.29-x64.exe', 'path: Tuanbo-Link-Test-NoActivation-0.4.29-x64.exe'), publish.url), /正式安装包/);
+  assert.throws(() => websiteRelease(published.replace(/releaseDate.*\n/, ''), publish.url), /releaseDate/);
 });
