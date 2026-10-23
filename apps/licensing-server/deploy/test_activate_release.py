@@ -95,8 +95,14 @@ class ActivationTest(unittest.TestCase):
         for path in [directory / "var", directory / "var/backups"]:
             path.chmod(0o755)
         backups.chmod(0o700)
-        if unsafe_backups:
+        if unsafe_backups == "writable":
             (directory / "var/backups").chmod(0o777)
+        elif unsafe_backups == "link":
+            # As the licensing account can do inside a directory it owns: the backup directory becomes a link.
+            elsewhere = directory / "elsewhere"
+            elsewhere.mkdir()
+            backups.rmdir()
+            backups.symlink_to(elsewhere)
         bundle = targets["/opt/tblink-licensing/dist/index.js"]
         nginx = targets["/etc/nginx/sites-available/tblink-licensing.conf"]
         environment = targets["/etc/tblink-licensing/service.env"]
@@ -234,7 +240,10 @@ class ActivationTest(unittest.TestCase):
         self.exercise(True, payment_table=False)
 
     def test_refuses_to_start_when_the_backup_directory_is_not_root_only(self):
-        self.exercise(True, unsafe_backups=True)
+        self.exercise(True, unsafe_backups="writable")
+
+    def test_refuses_to_start_when_the_backup_directory_is_a_link(self):
+        self.exercise(True, unsafe_backups="link")
 
     def test_does_not_restore_a_backup_changed_after_the_start_check(self):
         self.exercise(False, tamper_backup=True)
