@@ -58,7 +58,8 @@ type ExportPlan = {
 };
 
 export class P1ProjectService {
-  constructor(private readonly projects: LinkProjectService) {}
+  /** `resolveReal`: replaced in tests to stand in for a mapped network drive. */
+  constructor(private readonly projects: LinkProjectService, private readonly resolveReal: (path: string) => Promise<string> = path => realpath(path)) {}
 
   async importProject(p1ProjectPath: string, linkProjectPath: string, options: { signal?: AbortSignal; onProgress?: (progress: Omit<LinkP1ProjectImportProgress, 'id'>) => void } = {}): Promise<LinkP1ProjectImportResult> {
     const parsed = await this.parseProject(p1ProjectPath);
@@ -82,21 +83,22 @@ export class P1ProjectService {
         // The .hia is the operator's, its song paths are not: check the text and every link on the way before touching the file.
         const refusal = songPathRefusal(media.element.getAttribute('resourceFilePath') ?? '', media.resourcePath, dirname(parsed.sourcePath))
           ?? await songLinkRefusal(media.resourcePath);
-        try { if (refusal) throw new Error(refusal); await access(readablePath, constants.R_OK); }
+        try { if (refusal) throw new Error(refusal.reason); await access(readablePath, constants.R_OK); }
         catch {
           relocatedFiles ??= indexCopiedP1Media(dirname(parsed.sourcePath), options.signal);
           const matches = (await relocatedFiles).get(basename(media.resourcePath).toLocaleLowerCase()) ?? [];
-          if (matches.length !== 1) throw new Error(matches.length ? `复制的歌曲目录中存在多个同名文件，无法确认“${media.title}”` : refusal ? `${refusal}；P1 工程文件夹中也没有同名文件` : `未找到“${media.title}”的歌曲文件；请把 P1 工程和歌曲文件夹一起复制到本机`);
+          if (matches.length !== 1) throw new Error(matches.length ? `复制的歌曲目录中存在多个同名文件，无法确认“${media.title}”` : refusal ? explain(refusal, '，.hia 所在文件夹里也没有同名文件') : `未找到“${media.title}”的歌曲文件；请把 P1 工程和歌曲文件夹一起复制到本机`);
           readablePath = matches[0]!;
           const relocatedRefusal = await songLinkRefusal(readablePath);
-          if (relocatedRefusal) throw new Error(relocatedRefusal);
+          if (relocatedRefusal) throw new Error(explain(relocatedRefusal));
         }
-        const realSong = await realpath(readablePath);
-        const realRefusal = songPathRefusal('', realSong, await realpath(dirname(parsed.sourcePath)));
-        if (realRefusal) throw new Error(`“${media.title}”的实际文件：${realRefusal}`);
-        const fileStat = await stat(realSong);
-        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${realSong}`);
-        const audio = await importP1Audio(this.projects, linkProjectPath, media, realSong);
+        // The place was checked above, as text and link by link, so the file is read through that path. Its real
+        // path only has to be a song file: a mapped network drive resolves to the share behind it (\\server\share\…).
+        const realSong = await this.resolveReal(readablePath);
+        if (!SONG_EXTENSIONS.has(extname(realSong).toLowerCase())) throw new Error(`“${media.title}”的实际文件不是可导入的音视频文件（${realSong}）。请在 P1 中指定音频或视频文件后重新导入。`);
+        const fileStat = await stat(readablePath);
+        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${readablePath}`);
+        const audio = await importP1Audio(this.projects, linkProjectPath, media, readablePath);
         items.push({
           title: media.title,
           ...audio,
@@ -340,14 +342,21 @@ function reindexExportMedia(playlists: XmlElement[], sourcePath: string, emitted
 
 const SONG_EXTENSIONS: ReadonlySet<string> = new Set([...REFERENCE_AUDIO_EXTENSIONS, ...REFERENCE_AUDIO_CONTAINER_EXTENSIONS]);
 
+/** Why a song path is refused, and what the operator can do about it. */
+type SongRefusal = { reason: string; action: string };
+const copyOrMap = '请把歌曲复制到本机（放进 .hia 所在文件夹即可自动找到），或把该共享映射为盘符并在 P1 中改用盘符路径，然后重新导入';
+const explain = (refusal: SongRefusal, note = ''): string => `${refusal.reason}${note}。${refusal.action}。`;
+
 /** Why a song path from a .hia is refused, or null: the attribute text (`raw`) names no network share or
- * device path, and the path is an audio or video file on a local disk or inside the .hia's folder. */
-function songPathRefusal(raw: string, path: string, hiaFolder: string): string | null {
-  if (/^[\\/]{2}/.test(raw) || /[\u0000-\u001f]/.test(raw)) return `歌曲路径指向网络共享或设备路径，不会访问：${raw}`;
-  if (!SONG_EXTENSIONS.has(extname(path).toLowerCase())) return `歌曲路径不是可导入的音视频文件：${path}`;
+ * device path, and the path is an audio or video file on a local or mapped drive or inside the .hia's folder. */
+function songPathRefusal(raw: string, path: string, hiaFolder: string): SongRefusal | null {
+  if (/^[\\/]{2}[?.][\\/]/.test(raw) || /[\u0000-\u001f]/.test(raw)) return { reason: `歌曲路径是 Windows 设备路径或含控制字符（${raw}），不会访问`, action: '请在 P1 中改用普通的盘符路径后重新导入' };
+  // Opening \\host\share sends the Windows login to that host; a .hia from elsewhere must not choose it.
+  if (/^[\\/]{2}/.test(raw)) return { reason: `这首歌在网络路径上（${raw}），为避免泄露 Windows 登录凭据不会直接访问`, action: copyOrMap };
+  if (!SONG_EXTENSIONS.has(extname(path).toLowerCase())) return { reason: `歌曲路径不是可导入的音视频文件（${path}）`, action: '请在 P1 中指定音频或视频文件后重新导入' };
   const inFolder = relative(hiaFolder, path);
   const local = process.platform === 'win32' ? /^[a-z]:\\/i.test(path) : path.startsWith('/') && !path.startsWith('//');
-  if (!local && (inFolder === '' || inFolder.startsWith('..') || isAbsolute(inFolder))) return `歌曲文件不在本机磁盘或 P1 工程文件夹内：${path}`;
+  if (!local && (inFolder === '' || inFolder.startsWith('..') || isAbsolute(inFolder))) return { reason: `歌曲文件不在本机磁盘或 .hia 所在文件夹内（${path}）`, action: copyOrMap };
   return null;
 }
 
@@ -355,7 +364,7 @@ function songPathRefusal(raw: string, path: string, hiaFolder: string): string |
  * drive-letter path or a plain relative path; anything else (network share, device or namespace path) is refused.
  * The walk then restarts on the target. A missing part before any link ends the walk (null), and reading the file
  * reports it; a missing part behind a link is refused, since the target is this code's reading of the link. */
-async function songLinkRefusal(path: string): Promise<string | null> {
+async function songLinkRefusal(path: string): Promise<SongRefusal | null> {
   let pending = path;
   for (let hops = 0; hops < 32; hops++) {
     const { root } = parse(pending);
@@ -367,18 +376,18 @@ async function songLinkRefusal(path: string): Promise<string | null> {
       try { link = (await lstat(current)).isSymbolicLink(); }
       catch (error) {
         if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-        return hops === 0 ? null : `歌曲路径经过的链接指向不存在的位置，不会访问：${current}`;
+        return hops === 0 ? null : { reason: `歌曲路径经过的链接指向不存在的位置（${current}），不会访问`, action: '请检查该链接，或在 P1 中改用实际路径后重新导入' };
       }
       if (!link) continue;
       const written = await readlink(current);
-      if (!plainLinkTarget(written)) return `歌曲路径经过指向网络共享或设备路径的链接，不会访问：${current} → ${written}`;
+      if (!plainLinkTarget(written)) return { reason: `歌曲路径经过的链接指向网络共享或设备路径（${current} → ${written}），不会访问`, action: '请把歌曲复制到本机，或在 P1 中改用盘符路径后重新导入' };
       target = join(resolve(dirname(current), written), ...parts.slice(index + 1));
       break;
     }
     if (target === null) return null;
     pending = target;
   }
-  return `歌曲路径的链接层数过多：${path}`;
+  return { reason: `歌曲路径的链接层数过多（${path}）`, action: '请在 P1 中改用实际路径后重新导入' };
 }
 
 function plainLinkTarget(written: string): boolean {

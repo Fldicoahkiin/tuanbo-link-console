@@ -1,4 +1,4 @@
-import { mkdir, readFile, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEmptyLinkProject } from '@tb/schema';
@@ -75,7 +75,21 @@ describe('P1ProjectService', () => {
     const imported = await new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath);
     trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
     expect(imported.items.map(item => item.title)).toEqual(['第二首.wav']);
-    expect(imported.skippedItems?.[0]?.reason).toContain('网络共享或设备路径');
+    const reason = imported.skippedItems?.[0]?.reason ?? '';
+    expect(reason).toContain('在网络路径上（//attacker/share/remote.wav）');
+    expect(reason).toContain('.hia 所在文件夹里也没有同名文件');
+    expect(reason).toContain('请把歌曲复制到本机');
+    expect(reason).toContain('映射为盘符');
+  });
+
+  it('映射盘符上的歌照常导入：真实路径解析成它背后的网络共享也放行', async () => {
+    const fixture = await createFixture();
+    // Windows resolves a file on a mapped drive (Z:\...) to the share behind it (\\nas\share\...).
+    const mapped = (path: string) => path === fixture.audioPaths[0] ? Promise.resolve('\\\\nas\\share\\first.wav') : realpath(path);
+    const imported = await new P1ProjectService(new LinkProjectService(), mapped).importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.skippedItems).toEqual([]);
+    expect(imported.items.map(item => item.title)).toEqual(['第一首.wav', '第二首.wav']);
   });
 
   it('.hia 里的歌曲经链接指向非音视频文件时跳过，不读取链接目标', async (context) => {
