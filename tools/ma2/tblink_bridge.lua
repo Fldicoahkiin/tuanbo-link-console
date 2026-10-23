@@ -282,6 +282,42 @@ local function process(data)
       assert(obj.amount(pool) == count, 'Timecode directory changed during read')
       return '{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"generation":' .. quote(generation) .. ',"version":' .. quote(assert(gma.show.getvar('VERSION'))) .. ',"entries":[' .. table.concat(entries, ',') .. ']}'
     end
+    -- Where every Timecode show sits in time: offset, length, slot, frame format and the last event,
+    -- read from an export made and removed on the console, so no event data crosses the network.
+    if op == 'TCRANGES' then
+      assert(body == '', 'Range request must be empty')
+      local obj = gma.show.getobj
+      local pool = assert(obj.handle('Timecode'), 'Object pool unavailable')
+      local count = assert(obj.amount(pool), 'Timecode enumeration unavailable')
+      assert(count >= 0 and count <= 100000, 'Timecode directory exceeds limit')
+      local function quote(value)
+        return '"' .. tostring(value):gsub('[%z\1-\31\\"]', function(char) return string.format('\\u%04x', string.byte(char)) end) .. '"'
+      end
+      local entries = {}
+      for index = 0, count - 1 do
+        local child = obj.child(pool, index)
+        if child then
+          local number = tonumber(obj.number(child))
+          assert(number and number >= 1 and number <= 99999 and number == math.floor(number), 'Invalid Timecode directory number')
+          local name = 'tblink_tcrange_' .. id
+          gma.cmd('Export Timecode ' .. number .. ' "' .. name .. '" /o')
+          local xml = assert(read(root .. '/importexport/' .. name .. '.xml'), 'Timecode export unavailable')
+          discard(name)
+          local tag = xml:match('<Timecode%s[^>]*>') or ''
+          local function attribute(key) return tag:match('%s' .. key .. '="([^"]*)"') end
+          local last = nil
+          for value in xml:gmatch('<Event%s[^>]-time="([%d%.]+)"') do
+            local time = tonumber(value)
+            if time and (not last or time > last) then last = time end
+          end
+          entries[#entries + 1] = '{"target":' .. number .. ',"name":' .. quote(attribute('name') or '') .. ',"offset":' .. quote(attribute('offset') or '0') .. ',"length":' .. quote(attribute('lenght') or '')
+            .. ',"slot":' .. quote(attribute('slot') or '') .. ',"frame":' .. quote(attribute('frame_format') or '') .. ',"last":' .. quote(last and tostring(last) or '') .. '}'
+          assert(#entries <= 10000, 'Occupied Timecode directory exceeds limit')
+        end
+      end
+      assert(obj.amount(pool) == count, 'Timecode directory changed during read')
+      return '{"show":' .. quote(assert(gma.show.getvar('SHOWFILE'), 'Show identity unavailable')) .. ',"entries":[' .. table.concat(entries, ',') .. ']}'
+    end
     if op == 'SEQUENCE' then
       assert(body == '' or body == 'keep', 'Sequence request must be empty or keep')
       assert(gma.show.getobj.handle('Sequence ' .. tc), 'Sequence missing')
@@ -431,7 +467,7 @@ _G.TBLINK_NET = function(token, action, id, a, b, c)
         base = snapshot_cache.xml
         a = 'SYNC'
       end
-      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL' or a == 'DISCARD', 'Invalid operation')
+      assert(a == 'PING' or a == 'PAGES' or a == 'PAGE' or a == 'LIST' or a == 'LISTSEQ' or a == 'SEQUENCE' or a == 'SEQCUES' or a == 'READ' or a == 'SNAPSHOT' or a == 'SCOPE' or a == 'APPLY' or a == 'SYNC' or a == 'CREATE' or a == 'EXECUTOR' or a == 'ASSIGNSEQ' or a == 'LABEL' or a == 'DISCARD' or a == 'TCRANGES', 'Invalid operation')
       assert(type(b) == 'number' and b >= 1 and b <= 99999 and b == math.floor(b), 'Invalid target')
       assert(type(c) == 'number' and c >= 0 and c <= 33554432 and c == math.floor(c), 'Invalid payload size')
       assert(not network or gma.gettime() > network.expires, 'Another network request is pending')

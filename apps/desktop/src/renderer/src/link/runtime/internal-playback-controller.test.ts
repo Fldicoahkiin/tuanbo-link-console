@@ -629,6 +629,15 @@ describe('内部正式音乐主控', () => {
     f.audio.onended?.(); await vi.advanceTimersByTimeAsync(0);
     expect(f.state().status).toBe('stopped'); expect(f.audio.play).toHaveBeenCalledTimes(2); f.controller.dispose();
   });
+  it('全局顺序连播时，首次同步分配了起始码的歌没有自己的播完动作，播完接着播下一首', async () => {
+    const f = fixture();
+    // What the first console sync writes into a song without an MTC start.
+    f.project.rundown[0]!.playback = { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: 810_000, shortcut: '' };
+    f.controller.setEndAction('next'); await f.controller.play('song-0');
+    expect(f.state().endAction).toBe('next');
+    f.audio.currentTime = 10; f.audio.onended?.(); await vi.advanceTimersByTimeAsync(0);
+    expect(f.state()).toMatchObject({ itemId: 'song-1', endAction: 'next' }); f.controller.dispose();
+  });
   it('默认播完暂停在结尾，不自动播放下一首', async () => {
     const f = fixture(); await f.controller.play('song-0');
     expect(f.state().endAction).toBe('pause');

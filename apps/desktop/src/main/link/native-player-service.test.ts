@@ -30,6 +30,16 @@ windowsTest('系统 MIDI 故障时明确只播音频，真实 WASAPI 可播放�
   } finally { await player.close(); }
 }, 10000);
 
+windowsTest('MIDI 清单读取失败时仍准备音频，明确报告本首时间码未参与', async () => {
+  const { options, request, failures } = await fixture();
+  const player = new NativePlayerService({ ...options, checkDeviceHealth: () => Promise.reject(new Error('MIDI 服务故障')) });
+  try {
+    const prepared = await player.prepare({ ...request, midiPortName: '团播联动台 P1 MTC' });
+    expect(prepared).toMatchObject({ status: 'ready', mtcPortName: null, mtcError: 'MIDI 设备不可用：MIDI 服务故障' });
+    expect(failures).toEqual(['MIDI 设备不可用，本首时间码未参与：MIDI 服务故障']);
+  } finally { await player.close(); }
+}, 10000);
+
 windowsTest('真实 WASAPI 播放期间预填充下一首，曲尾接管不再解码且保留下一首原始时间码', async () => {
   const { options, request, failures } = await fixture(), measured = vi.fn();
   const prepare = vi.fn(options.cache.prepare.bind(options.cache));

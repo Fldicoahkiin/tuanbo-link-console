@@ -5,7 +5,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { useMa2SongSyncStore, startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, resolveMa2SongConflict } from './ma2-song-sync';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
-import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary } from './ma2-realtime-session';
+import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary, songsWithoutConsoleShow, writeMissingConsoleShows } from './ma2-realtime-session';
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from './ma2-legacy-names';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
@@ -51,6 +51,17 @@ it('默认开启后整曲进入歌曲序列同步，不再调用隐式 Timecode 
   expect(catalog).not.toHaveBeenCalled();
   expect(metadata).toHaveBeenCalledExactlyOnceWith({ dataDirectory: '', network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, targets: [] });
   expect(pendingSongSummary(useDocumentStore.getState().project)).toHaveLength(2);
+});
+it('灯光输出方式不再决定能否同步：默认的时间码跟随和 MIDI 直控的歌同样进入同步并写到控台', async () => {
+  const value = project();
+  value.rundown[0]!.lighting!.outputMode = 'timecode'; value.rundown[1]!.lighting!.outputMode = 'direct';
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  await prepareMa2RealtimeSession();
+  expect(Object.keys(useMa2SongSyncStore.getState().songs)).toEqual(['first', 'second']);
+  expect(pendingSongSummary(useDocumentStore.getState().project)).toHaveLength(2);
+  await tickMa2SongSync(false);
+  expect(sync.mock.calls.map(call => (call[0] as Ma2SongSyncRequest).itemId)).toEqual(['first', 'second']);
 });
 it('同一工程已有歌曲绑定仍自动接纳新歌，原绑定页不受默认页影响', async () => {
   const value = project();
@@ -121,6 +132,38 @@ it('同步失败退避重试时同一份本地内容只存档一次，编辑后�
   vi.advanceTimersByTime(30001); await tickMa2SongSync(false);
   expect(sync).toHaveBeenCalledTimes(4);
   expect(archive).toHaveBeenCalledTimes(2);
+});
+it('没有起始码的歌在首次同步前按控台节目分配起点，作为可撤销修改写进歌曲，并带着起点同步', async () => {
+  const value = project();
+  value.rundown[0]!.referenceAudio = { assetId: 'audio', relativePath: 'a.wav', sha256: 'a'.repeat(64), durationMs: 120_000 };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  // 控台节目从 600 s 起长 200 s：新歌从 810 s 开始。
+  const ranges = vi.fn().mockResolvedValue({ show: 'Show', entries: [{ target: 1, name: 'A', offset: '18000', length: '6000', slot: 'TC Slot 2', frame: '30 FPS', last: '5940' }] });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync, checkMa2Song: check, renameMa2Object: rename, ma2TimecodeRanges: ranges } });
+  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  await tickMa2SongSync(false);
+  expect(ranges).toHaveBeenCalledExactlyOnceWith({ host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' });
+  // Only the start: no end action of its own, so the song keeps following the player's 播放方式.
+  expect(useDocumentStore.getState().project!.rundown[0]!.playback).toEqual({ volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: 810_000, shortcut: '' });
+  expect(sync.mock.calls[0]![0]).toMatchObject({ timecodeStartMs: 810_000, timecodeLengthMs: 120_000 });
+  useDocumentStore.getState().undo();
+  expect(useDocumentStore.getState().project!.rundown[0]!.playback).toBeUndefined();
+});
+it('已同步过但还没有时间码节目的歌：列为「要同步到控台才能演出」，点击后重新完整同步并带上起始码', async () => {
+  const value = project();
+  value.rundown[0]!.playback = { volume: 100, endAction: 'pause', startMs: 0, endMs: 0, mtcOffsetMs: 480_000, shortcut: '' };
+  value.rundown[0]!.lighting!.consoleSong = { endpoint: '192.0.2.1:30000', show: 'Show', sequence: 9000, name: 'first', executor: '1000.101', layout: null, baselineXml: '<baseline/>', points: [] };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  expect(songsWithoutConsoleShow(useDocumentStore.getState().project)).toEqual([{ itemId: 'first', title: 'first' }]);
+  // Already checked in this session: a periodic check alone would not rewrite it.
+  useMa2SongSyncStore.setState({ songs: { first: { sessionId: 'old', itemId: 'first', documentId: useDocumentStore.getState().documentId, name: 'first', settings: ma2SongSyncSettings(value, 'first'), state: 'verified', message: '',
+    acknowledged: JSON.stringify([ma2SongPoints(value.rundown[0]!.lighting!), 'first', 480_000]), remoteRevision: 'a'.repeat(64) } } });
+  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  writeMissingConsoleShows(); stopMa2SongSync('second');
+  await tickMa2SongSync(false);
+  expect(check).not.toHaveBeenCalled();
+  expect((sync.mock.calls[0]![0] as Ma2SongSyncRequest).timecodeStartMs).toBe(480_000);
 });
 it('有本地修改的歌先同步，已确认歌曲的周期复查排在后面', async () => {
   const value = project();

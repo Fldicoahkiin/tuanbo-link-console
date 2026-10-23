@@ -35,7 +35,8 @@ export class NativeMidiHost {
   async prepare(project: LinkProject, identity: Identity): Promise<void> {
     this.admit(identity);
     const stopped = this.stop(), epoch = this.epoch;
-    await stopped;
+    // The old driver has exited or was reported as kept; its failure does not decide this song.
+    try { await stopped; } catch (error) { this.dependencies.error(`上一首 MIDI 会话关闭失败：${toError(error).message}`); }
     if (epoch !== this.epoch) throw new Error('后台 MIDI 准备已被更新操作取消');
     const audio = this.admit(identity);
     const failed = (error: Error) => {
@@ -102,11 +103,12 @@ export class NativeMidiHost {
   stop(): Promise<void> {
     this.epoch++;
     const entry = this.entry; this.entry = null;
-    if (entry) {
-      this.dependencies.changed({ ...entry.state, state: entry.state.state === 'failed' ? 'failed' : 'stopped' });
-      this.stopped = entry.session.close();
-    }
-    return this.stopped;
+    if (!entry) return this.stopped;
+    this.dependencies.changed({ ...entry.state, state: entry.state.state === 'failed' ? 'failed' : 'stopped' });
+    const closing = entry.session.close();
+    // Only the caller of this stop receives a close failure; later stops and preparations wait for the close without it.
+    this.stopped = closing.then(() => undefined, () => undefined);
+    return closing;
   }
 
   private admit(identity: Identity): NativePlayerStatus {

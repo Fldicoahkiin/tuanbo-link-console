@@ -77,11 +77,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     expect(virtual.count).toBeGreaterThan(0);
     expect(virtual.count).toBeLessThanOrEqual((virtual.rows + 4) * virtual.columns + 1);
     expect(virtual.count).toBeLessThan(virtual.total);
-    await expect(page.getByLabel('灯光输出方式', { exact: true })).toBeVisible();
-    await expect(page.getByLabel('灯光输出方式', { exact: true })).toHaveValue('timecode');
-    await page.getByLabel('灯光输出方式', { exact: true }).selectOption('network');
-    await expect(page.getByLabel('灯光输出方式', { exact: true })).toHaveValue('network');
-    await page.getByLabel('灯光输出方式', { exact: true }).selectOption('timecode');
+    await expect(page.getByLabel('灯光输出方式', { exact: true })).toHaveCount(0);
     await preview.getByRole('textbox', { name: '搜索序列或 Cue' }).fill('dance-1000');
     await expect(pool).toHaveAttribute('data-total-cues', '1');
     await preview.getByRole('textbox', { name: '搜索序列或 Cue' }).fill('');
@@ -116,7 +112,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     expect(calls.map(call => call.action)).toEqual([{ target: 'sequence', sequence: 1, action: 'goto', cue: '1.000' }, { target: 'sequence', sequence: 2, action: 'goto', cue: '3.000' },{target:'sequence',sequence:1,action:'off'},{target:'sequence',sequence:2,action:'off'}]);
     await page.screenshot({ path: info.outputPath('multi-step-submenu.png') });
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 800));
-    const routeBox = await page.getByLabel('灯光输出方式', { exact: true }).boundingBox();
+    const routeBox = await page.locator('.lighting-output-route').boundingBox();
     expect(routeBox).not.toBeNull();
     expect(routeBox!.x + routeBox!.width).toBeLessThan(1280);
     await page.screenshot({ path: info.outputPath('compact-window.png') });

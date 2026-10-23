@@ -37,6 +37,11 @@ export const ma2CatalogSchema = z.object({ directory: ma2ObjectDirectorySchema, 
   metrics: z.object({ queueMs: z.number().nonnegative().optional(), elapsedMs: z.number().nonnegative(), requests: z.number().int().nonnegative(), bytes: z.number().int().nonnegative(), wireCommands: z.number().int().nonnegative().optional(), receivedBytes: z.number().int().nonnegative().optional(), sentBytes: z.number().int().nonnegative().optional(), phases: z.record(z.string(), z.number().nonnegative()) }).strict().optional()
 }).strict();
 export type Ma2Catalog = z.infer<typeof ma2CatalogSchema>;
+/** Where each console Timecode show sits in time, as the console's own export says (values as written there). */
+export const ma2TimecodeRangesSchema = z.object({ show: z.string().min(1).max(4096), entries: z.array(z.object({
+  target: z.number().int().min(1).max(99999), name: z.string().max(1024), offset: z.string().max(32), length: z.string().max(32), slot: z.string().max(64), frame: z.string().max(64), last: z.string().max(32)
+}).strict()).max(10000) }).strict();
+export type Ma2TimecodeRanges = z.infer<typeof ma2TimecodeRangesSchema>;
 export const ma2ReadProgressSchema = ma2ReadProgressBaseSchema.safeExtend({
   checkpoint: z.object({ directory: ma2ObjectDirectorySchema, readAt: z.string().datetime(), entry: ma2CatalogEntrySchema.optional() }).strict().optional()
 });

@@ -255,6 +255,16 @@ describe('原生正式播放器的操作与会话', () => {
       expect(f.api.controlNativePlayback.mock.calls.some(([request]) => request.kind === 'play')).toBe(false);
     } finally { release?.(); await resumed; await f.player.dispose(); }
   });
+  it('全局顺序连播时，首次同步分配了起始码的歌没有自己的播完动作，播完接着播下一首', async () => {
+    const f = fixture();
+    // What the first console sync writes into a song without an MTC start.
+    f.project.rundown[0]!.playback = { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: 810_000, shortcut: '' };
+    f.player.setEndAction('next'); await f.player.play('song-0');
+    expect(f.state().endAction).toBe('next');
+    f.emit({ status: 'ended', positionMs: 10000 });
+    await vi.waitFor(() => expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing' }));
+    await f.player.stop();
+  });
   it('下一首快照保留独立原始偏移，曲尾不会先停止并丢弃预填充', async () => {
     const f = fixture(); f.project.rundown[0]!.playback!.endAction = 'next';
     await f.player.play('song-0');
@@ -449,5 +459,21 @@ for (const mode of ['network', 'direct', 'timecode'] as const) it(`原生播放�
   expect(f.lighting.prepare).not.toHaveBeenCalled();
   expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBeNull();
   expect(f.project.ma2ReadState?.pairings?.['2']?.status).toBe('stale');
+  await f.player.stop();
+});
+
+it('时间码输出失败只记录一次；另一条输出异常盖住提示后，后续状态不再重复记录', async () => {
+  const f = fixture();
+  await f.player.play('song-0');
+  const failed = '时间码未参与：Windows MIDI 输出失败（TEST）：错误码 6，请检查接口和驱动后手动重新播放；音频继续播放。';
+  f.emit({ mtcError: 'Windows MIDI 输出失败（TEST）：错误码 6，请检查接口和驱动后手动重新播放' });
+  f.player.reportFault('MIDI Cue 未参与：MIDI 驱动服务异常退出：3；音频继续播放。');
+  for (let tick = 0; tick < 5; tick++) f.emit({ positionMs: 1000 + tick * 50 });
+  expect(f.deps.notice.mock.calls.filter(([message]) => message === failed)).toHaveLength(1);
+  expect(f.state().mtcConnectionFailed).toBe(true);
+  await f.player.stop();
+  await f.player.play('song-0');
+  f.emit({ mtcError: 'Windows MIDI 输出失败（TEST）：错误码 6，请检查接口和驱动后手动重新播放' });
+  expect(f.deps.notice.mock.calls.filter(([message]) => message === failed)).toHaveLength(2);
   await f.player.stop();
 });

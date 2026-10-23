@@ -99,7 +99,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     const project = useDocumentStore.getState().project;
     if (!project) return false;
     for (const item of project.rundown) {
-      if (!item.lighting || item.lighting.outputMode !== 'network' || item.lighting.ma2Bindings?.length || item.lighting.consoleSong?.assignment === 'unassigned') continue;
+      if (!item.lighting || item.lighting.ma2Bindings?.length || item.lighting.consoleSong?.assignment === 'unassigned') continue;
       const existing = useMa2SongSyncStore.getState().songs[item.id];
       if (existing && (existing.state !== 'paused' || existing.requestId)) continue;
       const events = item.lighting.tracks.flatMap(track => track.clips.flatMap(clip => clip.events));
@@ -156,10 +156,28 @@ export function pauseMa2RealtimeSession(): void {
   for (const song of Object.values(useMa2SongSyncStore.getState().songs)) stopMa2SongSync(song.itemId);
 }
 
+/** Songs synced as a console Sequence on an executor that have no Timecode show of their own yet: they cannot play from MTC. */
+export function songsWithoutConsoleShow(project: ReturnType<typeof useDocumentStore.getState>['project']): Array<{ itemId: string; title: string }> {
+  return project?.rundown.flatMap(item => item.lighting?.consoleSong?.executor && !item.lighting.consoleSong.timecode ? [{ itemId: item.id, title: item.title }] : []) ?? [];
+}
+
+/** Syncs those songs again in full, which writes their Timecode shows. */
+export function writeMissingConsoleShows(): void {
+  setMa2RealtimeEnabled(true);
+  const project = useDocumentStore.getState().project;
+  if (!project) return;
+  for (const song of songsWithoutConsoleShow(project)) {
+    if (useMa2SongSyncStore.getState().songs[song.itemId]?.requestId) continue;
+    const item = project.rundown.find(value => value.id === song.itemId)!;
+    startMa2SongSync(item.id, item.lighting?.consoleSong?.name ?? item.title, ma2SongSyncSettings(project, item.id));
+  }
+  void prepareMa2RealtimeSession();
+}
+
 export function pendingSongSummary(project: ReturnType<typeof useDocumentStore.getState>['project']): Array<{ itemId: string; title: string; count: number; page: number }> {
   if (!project) return [];
   return project.rundown.flatMap(item => {
-    if (!item.lighting || item.lighting.consoleSong || item.lighting.ma2Bindings?.length || item.lighting.outputMode !== 'network') return [];
+    if (!item.lighting || item.lighting.consoleSong || item.lighting.ma2Bindings?.length) return [];
     const count = new Set(item.lighting.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.kind === 'ma2' || event.kind === 'empty-cue').map(event => event.effectGroupId ?? event.id)))).size;
     return count ? [{ itemId: item.id, title: item.title, count, page: ma2SongSyncSettings(project, item.id).executorPage ?? 1000 }] : [];
   });

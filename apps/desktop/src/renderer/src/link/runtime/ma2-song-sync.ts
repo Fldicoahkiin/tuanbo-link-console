@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, projectLightingLibrary, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
+import { allocateSongMtcStart, applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, programTimeOrigin, projectLightingLibrary, setItemPlaybackCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
 import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding, Ma2SongConflict, Ma2SongConflictResolution } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { requireSavedProjectPath } from '../project-document';
@@ -77,7 +77,7 @@ function canContinue(entry: SongSync): boolean {
   return document.documentId === entry.documentId && session?.sessionId === entry.sessionId
     && session.state !== 'paused' && useMa2RealtimePreference.getState().enabled
     && readMa2Method() === 'network'
-    && lighting?.outputMode === 'network' && lighting.consoleSong?.assignment !== 'unassigned';
+    && lighting !== undefined && lighting.consoleSong?.assignment !== 'unassigned';
 }
 
 /** Serialize console reconciliation; local editing and saving remain independent. */
@@ -99,7 +99,6 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           update(entry, { state: 'verified', checking: false, message: `序列 ${item.lighting.consoleSong.sequence} 已保留，执行器已解除分配` });
           continue;
         }
-        if (item.lighting.outputMode !== 'network') throw new Error('歌曲序列播放需要网络直控，请先切换灯光输出');
         if (item.lighting.ma2Bindings?.length) throw new Error('本曲已有控台时间码绑定；请在未绑定的新曲创建歌曲序列，避免改变现有控台编排');
         const points = ma2SongPoints(item.lighting);
         if (!points.length && !item.lighting.consoleSong) {
@@ -108,7 +107,9 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         }
         const materials = before.project.ma2MaterialLibrary;
         if (!materials?.library || materials.library.sourceUnverified) throw new Error('请先读取并核对控台素材');
-        const signature = JSON.stringify([points, item.lighting.consoleSong?.name ?? entry.name]);
+        // The song's MTC start places its own Timecode show; changing it rewrites the show.
+        let start = item.playback || item.p1Media ? Math.round(programTimeOrigin(item)) : undefined;
+        const signature = JSON.stringify([points, item.lighting.consoleSong?.name ?? entry.name, ...start === undefined ? [] : [start]]);
         const networkStatus = await window.tbLink.getMa2NetworkStatus();
         if (!canContinue(entry)) continue;
         if (networkStatus.state !== 'connected' || !networkStatus.settings) {
@@ -124,6 +125,15 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const endpoint = `${host}:${port}`;
         if (endpoint !== materials.source) throw new Error('素材来源与当前控台不一致');
         const { show, generation, version } = materials.library.directory;
+        // A song without an MTC start gets one before its first show is written: after every show on
+        // the console and every other song, written into the song as an undoable edit.
+        if (start === undefined && item.referenceAudio && (!item.lighting.consoleSong || item.lighting.consoleSong.executor)) {
+          const ranges = await window.tbLink.ma2TimecodeRanges(network);
+          const current = useDocumentStore.getState();
+          if (!canContinue(entry) || current.documentId !== entry.documentId || !current.project) continue;
+          start = allocateSongMtcStart(current.project, item.id, ranges);
+          current.execute(setItemPlaybackCommand(item.id, { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: start, shortcut: '' }));
+        }
         if (checkOnly && entry.remoteRevision && item.lighting.consoleSong) {
           const binding = item.lighting.consoleSong;
           const changed = await window.tbLink.checkMa2Song({ network, expectedSource: { show, generation, version }, sequence: binding.sequence, ...(binding.executor ? { executor: binding.executor } : {}), revision: entry.remoteRevision });
@@ -149,7 +159,8 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const synced = await window.tbLink.syncMa2Song({ network, expectedSource: { show, generation, version }, projectId: before.project.projectId, itemId: item.id,
           requestId, progressId: requestId, settings, name: requestedName, points,
           ...(item.lighting.consoleSong ? { binding: item.lighting.consoleSong } : {}), ...(entry.confirmedDeletions ? { confirmedDeletions: entry.confirmedDeletions } : {}),
-          ...(entry.conflictResolutions?.length ? { conflictResolutions: entry.conflictResolutions } : {}), ...(entry.rewriteLegacyNames ? { rewriteLegacyNames: true } : {}) },
+          ...(entry.conflictResolutions?.length ? { conflictResolutions: entry.conflictResolutions } : {}), ...(entry.rewriteLegacyNames ? { rewriteLegacyNames: true } : {}),
+          ...(start === undefined ? {} : { timecodeStartMs: start, ...(item.referenceAudio ? { timecodeLengthMs: Math.ceil(item.referenceAudio.durationMs) } : {}) }) },
           progress => update(entry, { progress }));
         update(entry, { requestId: null, progress: null });
         if (useDocumentStore.getState().documentId === entry.documentId) useDocumentStore.getState().markConsoleSynced(entry.documentId);
@@ -192,7 +203,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const remoteRevision = result.remoteRevision ?? Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
         const conflicts = result.conflicts ?? [];
         update(entry, { state: conflicts.length ? 'blocked' : 'verified', checking: false, waitingForConnection: false, nextCheckAt: Date.now() + 1000, remoteRevision, consecutiveFailures: 0,
-          conflicts, conflictResolutions: [], rewriteLegacyNames: false, acknowledged: JSON.stringify([ma2SongPoints(confirmed), result.binding.name]),
+          conflicts, conflictResolutions: [], rewriteLegacyNames: false, acknowledged: JSON.stringify([ma2SongPoints(confirmed), result.binding.name, ...start === undefined ? [] : [start]]),
           message: confirmedMessage(result.binding, conflicts.length), confirmedDeletions: [] });
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);

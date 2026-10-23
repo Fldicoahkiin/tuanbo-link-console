@@ -41,10 +41,11 @@ it('已确认配对的歌有本地修改尚未写到控台：编灯中，并给�
   lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '歌曲甲', readAt: '2026-10-22T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [track(0)], mappings: [], playback: 'editable', timeOriginMs: 480000 }];
   confirmed.rundown[0]!.lighting = lighting;
   expect(songLightingStatus(confirmed, '歌曲甲')).toEqual({ state: 'editing', pending: 1 });
-  lighting.tracks = [track(0)];
-  expect(songLightingStatus(confirmed, '歌曲甲')).toEqual({ state: 'ready', timecode: 2, startMs: 480000, frameRate: '30' });
-  lighting.ma2Bindings[0]!.timeOriginMs = 0;
-  expect(songLightingStatus(confirmed, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('起点不一致')] });
+  // Every edit is a new project snapshot, as commands produce.
+  const written = structuredClone(confirmed); written.rundown[0]!.lighting!.tracks = [track(0)];
+  expect(songLightingStatus(written, '歌曲甲')).toEqual({ state: 'ready', timecode: 2, startMs: 480000, frameRate: '30' });
+  const moved = structuredClone(written); moved.rundown[0]!.lighting!.ma2Bindings![0]!.timeOriginMs = 0;
+  expect(songLightingStatus(moved, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('起点不一致')] });
 });
 
 function ownShowSong(times: number[], start = 480000) {

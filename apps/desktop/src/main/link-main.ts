@@ -1,7 +1,7 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
-import { ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
+import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
 import { materialSceneTargets, projectFileReferences } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
@@ -999,6 +999,10 @@ function registerIpc(
     finally { task.finish(); }
   });
   handle('link:ma2-song-check', async (_event, value: unknown) => ma2Network.checkSong(ma2SongCheckRequestSchema.parse(value)));
+  handle('link:ma2-timecode-ranges', async (_event, value: unknown) => {
+    try { return await ma2Network.timecodeRanges(ma2NetworkTargetSchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `读取控台时间码节目范围失败：${String(error)}`, result: 'failed' }); throw error; }
+  });
   handle('link:ma2-song-sync', async (event, value: unknown) => {
     const request = ma2SongSyncRequestSchema.parse(value);
     const task = beginMa2Read(event, request.progressId);
