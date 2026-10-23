@@ -145,6 +145,7 @@ import { ObsWebSocketAdapter } from './link/obs-websocket-adapter';
 import { ObsEditorPreview, findLocalObsPid } from './link/obs-editor-preview';
 import { P1ProjectService } from './link/p1-project-service';
 import { LinkRunLogger, redactValue, type LinkLogEntry, type LinkLogFilter } from './link/run-logger';
+import { mainProcessErrorReporter, reportMainProcessErrors } from './link/main-process-errors';
 import { SecureProfileStore } from './link/secure-profile-store';
 import { WindowsIntegrationDetector } from './link/windows-integration-detector';
 import { LoopMidiService } from './link/loop-midi-service';
@@ -250,6 +251,9 @@ const assetTokens = new Map<string, string>();
 const knownSecrets = new Set<string>();
 
 async function bootstrap(): Promise<void> {
+  reportMainProcessErrors(mainProcessErrorReporter(
+    (message, details) => ipcLogger ? ipcLogger.record({ level: 'error', category: 'system', message, details, result: 'failed' }) : Promise.resolve(console.error(message, details)),
+    message => sendToRenderer('link:main-process-error', message)));
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
   app.on('second-instance', () => {
     if (!mainWindow) restoreMainWindow?.();

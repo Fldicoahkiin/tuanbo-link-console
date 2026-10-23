@@ -347,12 +347,14 @@ function useDesktopIntegrationEvents(notify: (message: string, tone?: 'info' | '
         }
       }).catch(reportLogFailure);
     });
+    const unsubscribeMainErrors = linkDesktopViewModel.onMainProcessError(message => notify(message, 'error'));
     void loadDesktopIntegrationState(() => cancelled, notify);
     return () => {
       cancelled = true;
       unsubscribeInventory();
       unsubscribeObs();
       unsubscribeProcess();
+      unsubscribeMainErrors();
     };
   }, [notify]);
   return midiMonitor;
