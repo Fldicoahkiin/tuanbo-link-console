@@ -8,9 +8,10 @@
 <a id="安装来源"></a>
 ## 安装来源
 
-- 代码提交：`2bc415d`（更新回执）、`7eadb47`（CI 部署工具）、`c9a7e7e`（运维工具），以及之前已在 master 上的 `63afacd`（发布助手和上传接收器）。
-- 第 0 步导出时，用包含本说明的那个提交号（下文记作 `<提交>`）。工具文件在这几个提交里已经定稿。
-- 这几个提交在用户确认之前不推 master，原因见[第 3 步](#3-安装两个-ci-部署工具然后推-master)。如果推送前 master 已经前进，需要先 rebase：提交号会变，但工具文件的字节不变，第 3 步会核对这一点。
+- 涉及的提交（按标题）：
+  - 已在 master 上：「fix(release)!: keep what the root update publisher writes or trusts in root-owned directories」（发布助手和上传接收器）。
+  - 安装前不推 master：「fix(release): keep update receipts and the update audit in root's backups」「fix(deploy): write deployment backups only below root-owned directories」「fix(ops): read the backup recipient and the admin token without trusting the licensing account's directories」和本说明所在的文档提交。原因见[第 3 步](#3-安装两个-ci-部署工具然后推-master)。
+- 第 0 步导出时，用本说明所在的那个提交（下文记作 `<提交>`）。安装前 master 如果前进了，先把这几个提交 rebase 上去：提交号会变，工具文件的字节不变，第 3 步会核对这一点。实际使用的提交号记在[第 9 步](#9-记录)。
 
 <a id="影响"></a>
 ## 对线上的影响
@@ -107,7 +108,7 @@ git -C <仓库> push origin <提交>:master
   - `sudo ls /var/backups/tblink` 多出这次部署的 `<时间>` 和 `<时间>-website` 两个目录；`sudo ls -t /var/lib/tblink-licensing/backups | head -3` 没有比 `$stamp` 更新的条目。
   - `curl -fsS https://api.tuanbo-link.jinhefilm.com/health` 返回 `{"status":"ok"}`，官网首页能打开。
 - 失败回退：
-  - 激活失败时，`activate-release.py` 会自己把上一版代码、环境和 Nginx 装回去。如果它报「Backup … differs from the files checked at activation start」，说明备份被改过：线上停在维护页，不要重试，把这条报错带回来人工处理。
+  - 激活失败时，`activate-release.py` 会自己把上一版代码、环境和 Nginx 装回去。如果它报「Backup … differs from the files checked at activation start」，说明备份被改过：线上停在维护页，补交付定时器 `tblink-delivery-recovery.timer` 也保持停止。不要重试，把这条报错带回来人工处理；处理完要手工 `sudo systemctl start tblink-delivery-recovery.timer`。
   - 恢复旧工具：
     ```bash
     sudo flock -n /var/lib/tblink-deploy/deployment.lock sh -c "install -o root -g root -m 0644 /var/backups/tblink/install-$stamp/activate-release.py /opt/tblink-licensing/activate-release.py && install -o root -g root -m 0755 /var/backups/tblink/install-$stamp/publish-website.py /opt/tblink-licensing/publish-website.py"
@@ -140,7 +141,7 @@ sudo python3 /opt/tblink-licensing/payment-exceptions.py --after 0 > /dev/null &
 
 ```bash
 # 登录 shell 必须是 /bin/sh：sshd 通过它执行 ForceCommand，nologin 会直接退出。限制来自 Match 块和 authorized_keys 的 restrict。
-sudo useradd --system --home-dir /var/lib/tblink-release --no-create-home --shell /bin/sh tblink-release
+sudo useradd --system --user-group --home-dir /var/lib/tblink-release --no-create-home --shell /bin/sh tblink-release
 sudo install -d -o root -g root -m 0755 /var/lib/tblink-release
 sudo install -d -o tblink-release -g tblink-release -m 0750 /var/lib/tblink-release/staging
 sudo install -d -o root -g root -m 0755 /etc/tblink-release
