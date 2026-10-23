@@ -206,6 +206,9 @@ const unsavedChanges = new UnsavedChangesGuard({
 });
 /** Every quit (window close, app.quit, Windows session end) goes through here. */
 let requestQuit: () => void = () => { app.quit(); };
+/** The guard and quit flow behind requestQuit and the update install; `finish` ends the app once
+ * everything is closed. Resolves false when the operator kept the app open. */
+let runQuit: (reason: 'quit' | 'update', finish: () => void) => Promise<boolean> = () => Promise.resolve(false);
 let runtimeActive = false;
 let releaseRendererRuntime: () => Promise<void> = () => Promise.resolve();
 let automaticMusic: AutomaticMusicRuntime | null = null;
@@ -318,28 +321,31 @@ async function bootstrap(): Promise<void> {
     recordQuitStep('所有窗口已关闭');
     if (process.platform !== 'darwin' && (allowWindowClose || !quitFlowRunning)) app.quit();
   });
-  requestQuit = () => {
-    if (quitFlowRunning) { recordQuitStep('退出流程进行中，忽略重复请求'); return; }
+  runQuit = async (reason, finish) => {
+    if (quitFlowRunning) { recordQuitStep('退出流程进行中，忽略重复请求', { reason }); return false; }
     if (runtimeActive || nativePlaybackActive()) {
       showRuntimeActiveExitWarning();
-      return;
+      return false;
     }
     quitFlowRunning = true;
-    void (async () => {
-      const decision = await unsavedChanges.resolve('quit');
-      recordQuitStep('未保存修改已处理', { decision });
-      if (decision === 'cancelled') return;
+    try {
+      const decision = await unsavedChanges.resolve(reason);
+      recordQuitStep('未保存修改已处理', { decision, reason });
+      if (decision === 'cancelled') return false;
       discardOnQuit = decision === 'discarded';
       await obs.sources.discardPending();
-      await runQuitFlow(profileStore, processManager);
-    })().catch((error: unknown) => {
-      recordQuitStep('退出流程失败', { error: error instanceof Error ? error.message : String(error) });
-      dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error));
-    }).finally(() => {
+      return await runQuitFlow(profileStore, processManager, finish);
+    } finally {
       quitFlowRunning = false;
       // A cancelled quit keeps the edits, and their recovery copy, as they are.
       if (!allowWindowClose) discardOnQuit = false;
       if (allowWindowClose && BrowserWindow.getAllWindows().length === 0) app.quit();
+    }
+  };
+  requestQuit = () => {
+    void runQuit('quit', () => app.quit()).catch((error: unknown) => {
+      recordQuitStep('退出流程失败', { error: error instanceof Error ? error.message : String(error) });
+      dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error));
     });
   };
   app.on('before-quit', (event) => {
@@ -1063,25 +1069,24 @@ function registerIpc(
       type: 'question',
       title: '安装团播联动台更新',
       message: '联动台将退出并安装已下载的新版本。',
-      detail: 'OBS 与 P1 会保持运行。更新完成后联动台将重新启动。',
+      detail: '退出前和关闭软件一样，逐项确认未保存的工程、灯光试听和由本软件启动的外部程序。更新完成后联动台将重新启动。',
       buttons: ['取消', '退出并安装'],
       defaultId: 0,
       cancelId: 0,
       noLink: true
     });
     if (decision.response !== 1) return;
-    const unsaved = await unsavedChanges.resolve('update');
-    if (unsaved === 'cancelled') return;
-    if (runtimeActive || nativePlaybackActive()) throw new Error('播放状态已变化，请停止联动后重新安装');
-    if (unsaved === 'discarded') await discardOpenDocumentRecovery();
-    await closeNativePlayer();
-    allowWindowClose = true;
-    try {
-      updateManager.install();
-    } catch (error) {
-      allowWindowClose = false;
-      throw error;
-    }
+    // The same guard and quit flow as closing the window: unsaved changes, lighting audition,
+    // external programs and music analysis are settled before the installer starts.
+    await runQuit('update', () => {
+      recordQuitStep('启动更新安装程序');
+      try {
+        updateManager.install();
+      } catch (error) {
+        allowWindowClose = false;
+        throw error;
+      }
+    });
   });
   handle('link:set-document-state', (_event, stateValue: unknown) => {
     documentState = linkDocumentStateSchema.parse(stateValue);
@@ -1880,7 +1885,8 @@ function registerAssetProtocol(): void {
   });
 }
 
-async function runQuitFlow(profileStore: SecureProfileStore, processManager: ExternalProcessManager): Promise<void> {
+/** Resolves true once `finish` ran, false when the operator returned to the app. */
+async function runQuitFlow(profileStore: SecureProfileStore, processManager: ExternalProcessManager, finish: () => void): Promise<boolean> {
   recordQuitStep('退出前停止灯光试听');
   try { await stopAuditionForQuit?.(); }
   catch (error) {
@@ -1891,7 +1897,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
     const options = { type: 'warning' as const, title: '灯光试听未能停止', message: '退出前没有确认控台已关闭本次试听。',
       detail: `${reason}\n\n仍然退出时，控台上可能保留当前灯光状态，请到控台手动处理。`, buttons: ['返回软件', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true };
     const choice = mainWindow && !mainWindow.isDestroyed() ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
-    if (choice.response !== 1) { recordQuitStep('返回软件处理灯光试听'); return; }
+    if (choice.response !== 1) { recordQuitStep('返回软件处理灯光试听'); return false; }
     recordQuitStep('操作员选择仍然退出', { error: reason });
   }
   recordQuitStep('退出前关闭正式音频与画面');
@@ -1905,8 +1911,8 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
     if (discardOnQuit) await discardOpenDocumentRecovery();
     allowWindowClose = true;
     recordQuitStep('退出流程完成');
-    app.quit();
-    return;
+    finish();
+    return true;
   }
   const closeIds: ExternalApplicationId[] = [];
   for (const snapshot of owned) {
@@ -1921,7 +1927,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
       cancelId: 0,
       noLink: true
     });
-    if (decision.response === 0) return;
+    if (decision.response === 0) return false;
     if (decision.response === 2) closeIds.push(snapshot.id);
   }
   if (closeIds.length > 0) {
@@ -1952,7 +1958,8 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   if (discardOnQuit) await discardOpenDocumentRecovery();
   allowWindowClose = true;
   recordQuitStep('退出流程完成');
-  app.quit();
+  finish();
+  return true;
 }
 
 /** After 不保存: the open document's recovery copy is removed. A failure is logged and never blocks

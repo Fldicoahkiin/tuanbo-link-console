@@ -226,7 +226,19 @@ function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandl
       signal.addEventListener('abort', () => cancellation.cancel(), { once: true });
       await updater.downloadUpdate(cancellation);
     },
-    install: () => updater.quitAndInstall(false, true),
+    install: () => {
+      // quitAndInstall reports a failure to start the installer only through a synchronous
+      // 'error' event; it quits the app on its own once the installer started.
+      const started: { failure: Error | null } = { failure: null };
+      const capture = (error: Error): void => { started.failure = error; };
+      updater.once('error', capture);
+      try {
+        updater.quitAndInstall(false, true);
+      } finally {
+        updater.removeListener('error', capture);
+      }
+      if (started.failure) throw started.failure;
+    },
     dispose: () => {
       updater.removeListener('checking-for-update', handlers.checking);
       updater.removeListener('update-available', handlers.available);
