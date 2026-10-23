@@ -20,7 +20,7 @@ test('公司更新无需客户凭证，下载后由用户确认安装，关闭�
   await page.setContent('<main class="app-shell"><div id="root"></div><div id="notice" role="status"></div></main>');
   await page.addStyleTag({ content: styles });
   await page.evaluate(() => {
-    const status: LinkUpdateStatus = { phase: 'idle', currentVersion: '0.4.27', availableVersion: null, releaseDate: null, progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, message: '可以检查软件更新' };
+    const status: LinkUpdateStatus = { phase: 'idle', currentVersion: '0.4.27', availableVersion: null, releaseDate: null, progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, installBlockedReason: null, message: '可以检查软件更新' };
     Object.defineProperty(window, 'tbLink', { configurable: true, value: {
       getUpdateStatus: () => Promise.resolve(status), onUpdateStatus: () => () => undefined,
       checkForUpdates: () => Promise.resolve({ ...status, phase: 'available', availableVersion: '0.4.28', message: '发现新版本 0.4.28' }),
@@ -44,4 +44,21 @@ test('公司更新无需客户凭证，下载后由用户确认安装，关闭�
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '软件更新', exact: true })).toBeEnabled();
   expect(await page.locator('.app-shell').evaluate(element => element.hasAttribute('inert'))).toBe(false);
+});
+
+test('超出升级服务期限：显示新版本和原因，不提供下载', async ({ page }) => {
+  await page.setContent('<main class="app-shell"><div id="root"></div><div id="notice" role="status"></div></main>');
+  await page.addStyleTag({ content: styles });
+  await page.evaluate(() => {
+    const status: LinkUpdateStatus = { phase: 'available', currentVersion: '0.5.0', availableVersion: '0.5.1', releaseDate: '2026-11-02T00:00:00.000Z', progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true,
+      installBlockedReason: '新版本 0.5.1 发布于 2026-11-02，晚于本机授权的升级服务期限 2026-10-31；可以继续使用当前版本，续费延长升级服务后再安装', message: '发现新版本 0.5.1' };
+    Object.defineProperty(window, 'tbLink', { configurable: true, value: { getUpdateStatus: () => Promise.resolve(status), onUpdateStatus: () => () => undefined } });
+  });
+  await page.addScriptTag({ content: script });
+  await page.getByRole('button', { name: '软件更新', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('发现新版本 0.5.1', { exact: true })).toBeVisible();
+  await expect(dialog.getByText(/晚于本机授权的升级服务期限 2026-10-31/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '下载更新' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '检查更新' })).toHaveCount(0);
 });

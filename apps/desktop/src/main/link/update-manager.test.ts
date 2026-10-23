@@ -1,4 +1,5 @@
 import type { ProgressInfo, UpdateInfo } from 'electron-updater';
+import type { LicenseStatus } from '@tb/schema';
 import { describe, expect, it, vi } from 'vitest';
 import { LinkUpdateManager, type UpdateClient, type UpdateClientFactory, type UpdateClientHandlers, type UpdateRules } from './update-manager';
 
@@ -31,6 +32,7 @@ describe('LinkUpdateManager', () => {
       availableVersion: '0.2.1'
     });
     await expect(manager.download()).resolves.toMatchObject({ phase: 'downloaded', progressPercent: 100 });
+    await manager.prepareInstall();
     manager.install();
 
     expect(installed).toHaveBeenCalledOnce();
@@ -102,6 +104,7 @@ describe('LinkUpdateManager', () => {
     }));
     await manager.check();
     const downloading = manager.download();
+    await vi.waitFor(() => expect(signal).toBeDefined());
     progress();
     expect(signal?.aborted).toBe(false);
     playing = true;
@@ -110,6 +113,47 @@ describe('LinkUpdateManager', () => {
     expect(stopped).toMatchObject({ phase: 'available', progressPercent: null });
     expect(stopped.message).toContain('更新下载已停止');
     expect(signal?.aborted).toBe(true);
+  });
+
+  it('发布日期在升级服务期限内才可下载和安装', async () => {
+    const install = vi.fn();
+    let license = licensed('2026-08-28T00:00:00.000Z');
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => false, () => license), (_feedUrl, handlers) => fakeClient(handlers, install));
+    await expect(manager.check()).resolves.toMatchObject({ phase: 'available', installBlockedReason: null });
+    await manager.download();
+    license = licensed('2026-08-26T00:00:00.000Z');
+    await expect(manager.prepareInstall()).rejects.toThrow('晚于本机授权的升级服务期限 2026-08-26');
+    expect(manager.getStatus().installBlockedReason).toContain('续费');
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('超出升级服务期限：可以看到新版本，但不能下载，并说明原因', async () => {
+    const download = vi.fn();
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => false, () => licensed('2026-08-26T23:59:59.000Z')), (_feedUrl, handlers) => ({
+      check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
+      download, install: vi.fn(), dispose: vi.fn()
+    }));
+    const status = await manager.check();
+    expect(status).toMatchObject({ phase: 'available', availableVersion: '0.2.1' });
+    expect(status.installBlockedReason).toBe('新版本 0.2.1 发布于 2026-08-27，晚于本机授权的升级服务期限 2026-08-26；可以继续使用当前版本，续费延长升级服务后再安装');
+    await expect(manager.download()).rejects.toThrow('晚于本机授权的升级服务期限');
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('授权不可用时仍可检查更新，只是不能安装', async () => {
+    const expired: LicenseStatus = { ...licensed('2027-01-01T00:00:00.000Z'), state: 'expired', message: '使用期限已结束；工程文件保持不变' };
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => false, () => expired), (_feedUrl, handlers) => fakeClient(handlers, vi.fn()));
+    const status = await manager.check();
+    expect(status.phase).toBe('available');
+    expect(status.installBlockedReason).toBe('本机授权当前不可用（使用期限已结束；工程文件保持不变），可以查看新版本，恢复授权后再安装');
+  });
+
+  it('更新信息没有可解析的发布日期时不允许安装', async () => {
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), (_feedUrl, handlers) => ({
+      check: () => { handlers.available({ ...updateInfo('0.2.1'), releaseDate: 'unknown' }); return Promise.resolve(); },
+      download: vi.fn(), install: vi.fn(), dispose: vi.fn()
+    }));
+    await expect(manager.check()).resolves.toMatchObject({ installBlockedReason: '更新信息没有有效的发布日期，无法确认是否在升级服务期内，不能安装；请联系发行方' });
   });
 
   it('下载失败可重新检查，错误不会被假装成功', async () => {
@@ -125,8 +169,15 @@ describe('LinkUpdateManager', () => {
   });
 });
 
-function rules(playbackActive: () => boolean = () => false): UpdateRules {
-  return { playbackActive };
+function rules(playbackActive: () => boolean = () => false, license: () => LicenseStatus = () => licensed('2099-12-31T23:59:59.000Z')): UpdateRules {
+  return { playbackActive, license: () => Promise.resolve(license()) };
+}
+
+function licensed(updatesUntil: string): LicenseStatus {
+  const machineCode = `TB1-${'A'.repeat(64)}`;
+  return { machineCode, state: 'active', message: '本机授权有效', enforcement: 'required', onlineAvailable: true,
+    claims: { version: 1, product: 'tuanbo-link-console', licenseId: '9d53530a-6712-423e-985e-e69beb9ec1c6', customer: '测试客户', machineCode,
+      kind: 'subscription', issuedAt: '2026-01-01T00:00:00.000Z', useUntil: '2027-12-31T00:00:00.000Z', updatesUntil } };
 }
 
 function fakeClient(handlers: UpdateClientHandlers, installed: () => void): UpdateClient {

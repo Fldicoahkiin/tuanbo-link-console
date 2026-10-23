@@ -1,7 +1,7 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
-import { ma2SongCheckRequestSchema, ma2SongSyncRequestSchema } from '@tb/schema';
+import { ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
 import { materialSceneTargets } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
@@ -211,6 +211,7 @@ let releaseRendererRuntime: () => Promise<void> = () => Promise.resolve();
 let automaticMusic: AutomaticMusicRuntime | null = null;
 let authorizeOutput: () => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
 let authorizeProduct: (channel: string, value: unknown) => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
+let readLicenseStatus: () => Promise<LicenseStatus> = () => Promise.reject(new Error('授权服务尚未就绪'));
 let ipcLogger: LinkRunLogger | null = null;
 let allowWindowClose = false;
 let stopAuditionForQuit: (() => Promise<void>) | null = null;
@@ -284,7 +285,7 @@ async function bootstrap(): Promise<void> {
     desktopPackage.version,
     app.isPackaged,
     (status) => sendToRenderer('link:update-status', status),
-    { playbackActive: () => runtimeActive || nativePlaybackActive() },
+    { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus() },
     undefined,
     internalDistribution ? '' : undefined
   );
@@ -620,6 +621,7 @@ function registerIpc(
   };
   const getLicenseStatus = async () => internalDistribution ? internalDistributionStatus(internalDistribution, await readMachineCode()) : localTestAccess ? getLocalTestStatus() : (await getLicenseService()).status();
   handle('link:license-status', getLicenseStatus);
+  readLicenseStatus = getLicenseStatus;
   let licenseChanging = false;
   const licenseAccess = new LicenseAccess(getLicenseStatus);
   releaseRendererRuntime = async () => {
@@ -1056,6 +1058,7 @@ function registerIpc(
   handle('link:update-download', (): Promise<LinkUpdateStatus> => updateManager.download());
   handle('link:update-install', async () => {
     if (runtimeActive || nativePlaybackActive()) throw new Error('联动尚未停止；请先到集成中心停止联动并完成 OBS 清理，再安装更新');
+    await updateManager.prepareInstall();
     const decision = await dialog.showMessageBox(mainWindow!, {
       type: 'question',
       title: '安装团播联动台更新',

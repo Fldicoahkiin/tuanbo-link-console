@@ -42,6 +42,9 @@ it('仅授权入口和安全停止豁免，新接口默认需要付费', () => {
   expect(needsProductLicense('link:set-runtime-active', false)).toBe(false);
   expect(needsProductLicense('link:purchase-copy-code', undefined)).toBe(false);
   for (const channel of ['link:set-document-state', 'link:resolve-unsaved-changes', 'link:save-response']) expect(needsProductLicense(channel, undefined)).toBe(false);
+  // Any machine can see that a newer version exists; downloading and installing it stays licensed.
+  for (const channel of ['link:update-status', 'link:update-check']) expect(needsProductLicense(channel, undefined)).toBe(false);
+  for (const channel of ['link:update-download', 'link:update-install']) expect(needsProductLicense(channel, undefined)).toBe(true);
   expect(needsProductLicense('link:set-runtime-active', true)).toBe(true);
   expect(needsProductLicense('link:obs-execute', { id: 'stop', label: '停止', kind: 'obs.mediaAction', inputName: 'media', action: 'stop' })).toBe(false);
   expect(needsProductLicense('link:obs-execute', { id: 'start', label: '开始', kind: 'obs.mediaAction', inputName: 'media', action: 'start' })).toBe(true);

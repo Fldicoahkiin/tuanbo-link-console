@@ -35,7 +35,11 @@ test.beforeEach(async ({ page }) => {
         return Promise.resolve(current);
       },
       refreshOnlineLicense: () => { current = { ...current, state: 'renewal-required', message: '无法连接授权服务器，请检查网络后手动重试' }; return Promise.reject(new Error('无法连接授权服务器，现有授权保持不变')); },
-      exportLicenseRequest: () => Promise.resolve(true), importLicense: () => Promise.resolve(null)
+      exportLicenseRequest: () => Promise.resolve(true), importLicense: () => Promise.resolve(null),
+      getUpdateStatus: () => Promise.resolve({ phase: 'available', currentVersion: '0.5.0', availableVersion: '0.5.1', releaseDate: '2026-11-02T00:00:00.000Z',
+        progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, message: '发现新版本 0.5.1',
+        installBlockedReason: '本机授权当前不可用（本机尚未激活），可以查看新版本，恢复授权后再安装' }),
+      onUpdateStatus: () => () => undefined
     } });
   });
   await page.addScriptTag({ content: script });
@@ -72,7 +76,11 @@ test('未激活不挂载工作区，激活后经主进程校验才进入', async
   await expect(page.getByRole('link', { name: '购买授权', exact: true })).toHaveAttribute('href', 'https://tuanbo-link.jinhefilm.com/#purchase');
   await expect(page.getByRole('link', { name: '官网了解产品' })).toHaveAttribute('href', 'https://tuanbo-link.jinhefilm.com/');
   await expect(page.getByRole('button', { name: '运行日志' })).toHaveCount(0);
-  await page.screenshot({ path: info.outputPath('license-gate.png') });
+  const updates = page.getByRole('region', { name: '软件更新', exact: true });
+  await expect(updates.getByText('发现新版本 0.5.1', { exact: true })).toBeVisible();
+  await expect(updates.getByText('本机授权当前不可用（本机尚未激活），可以查看新版本，恢复授权后再安装', { exact: true })).toBeVisible();
+  await expect(updates.getByRole('button', { name: '下载更新' })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('license-gate.png'), fullPage: true });
   await page.getByLabel('激活码', { exact: true }).fill(`TBA-${'A'.repeat(32)}`);
   await page.getByRole('button', { name: '激活本机' }).click();
   await expect(page.getByTestId('workspace')).toBeVisible();

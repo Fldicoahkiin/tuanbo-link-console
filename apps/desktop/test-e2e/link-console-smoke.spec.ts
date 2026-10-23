@@ -2159,6 +2159,7 @@ test('取消重启安装后更新按钮会恢复可操作', async () => {
       transferredBytes: 1,
       totalBytes: 1,
       feedConfigured: true,
+      installBlockedReason: null,
       message: '版本 0.2.11 已下载，确认后重启安装'
     }));
     ipcMain.removeHandler('link:update-install');

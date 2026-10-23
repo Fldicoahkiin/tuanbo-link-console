@@ -53,6 +53,8 @@ export type LinkUpdateStatus = {
   transferredBytes: number | null;
   totalBytes: number | null;
   feedConfigured: boolean;
+  /** Why the available version cannot be downloaded or installed on this machine (license or upgrade term), or null. */
+  installBlockedReason: string | null;
   message: string;
 };
 
