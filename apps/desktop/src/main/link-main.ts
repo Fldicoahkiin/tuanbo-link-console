@@ -152,6 +152,7 @@ import { WindowsIntegrationDetector } from './link/windows-integration-detector'
 import { LoopMidiService } from './link/loop-midi-service';
 import { loopMidiActionSchema, loopMidiStatusSchema } from '@tb/schema';
 import { LinkUpdateManager } from './link/update-manager';
+import { rendererSource } from './link/renderer-source';
 import desktopPackage from '../../package.json';
 import ffmpegPath from 'ffmpeg-static';
 import { NativeAudioCache } from './link/native-audio-cache';
@@ -480,8 +481,8 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
     mainWindow = null;
   });
 
-  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
-  if (rendererUrl) void mainWindow.loadURL(rendererUrl);
+  const renderer = rendererSource(app.isPackaged, process.env.ELECTRON_RENDERER_URL);
+  if (renderer.kind === 'url') void mainWindow.loadURL(renderer.url);
   else void mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
 }
 
