@@ -129,7 +129,7 @@ describe('LinkUpdateManager', () => {
 
   it('超出升级服务期限：可以看到新版本，但不能下载，并说明原因', async () => {
     const download = vi.fn();
-    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => false, () => licensed('2026-08-26T23:59:59.000Z')), (_feedUrl, handlers) => ({
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => false, () => licensed('2026-08-26T00:00:00.000Z')), (_feedUrl, handlers) => ({
       check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
       download, install: vi.fn(), dispose: vi.fn()
     }));
@@ -138,6 +138,15 @@ describe('LinkUpdateManager', () => {
     expect(status.installBlockedReason).toBe('新版本 0.2.1 发布于 2026-08-27，晚于本机授权的升级服务期限 2026-08-26；可以继续使用当前版本，续费延长升级服务后再安装');
     await expect(manager.download()).rejects.toThrow('晚于本机授权的升级服务期限');
     expect(download).not.toHaveBeenCalled();
+  });
+
+  it('提示中的日期按北京时间显示，与官网下载页一致', async () => {
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => false, () => licensed('2026-08-26T00:00:00.000Z')), (_feedUrl, handlers) => ({
+      check: () => { handlers.available({ ...updateInfo('0.2.1'), releaseDate: '2026-08-26T18:00:00.000Z' }); return Promise.resolve(); },
+      download: vi.fn(), install: vi.fn(), dispose: vi.fn()
+    }));
+    const status = await manager.check();
+    expect(status.installBlockedReason).toContain('发布于 2026-08-27，晚于本机授权的升级服务期限 2026-08-26');
   });
 
   it('授权不可用时仍可检查更新，只是不能安装', async () => {

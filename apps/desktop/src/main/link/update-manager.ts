@@ -282,11 +282,12 @@ function updateEntitlementIssue(license: LicenseStatus, version: string | null, 
   const released = releaseDate === null ? Number.NaN : Date.parse(releaseDate);
   if (!Number.isFinite(released)) return '更新信息没有有效的发布日期，无法确认是否在升级服务期内，不能安装；请联系发行方';
   if (released <= Date.parse(license.claims.updatesUntil)) return null;
-  return `新版本 ${version ?? ''} 发布于 ${utcDate(released)}，晚于本机授权的升级服务期限 ${utcDate(Date.parse(license.claims.updatesUntil))}；可以继续使用当前版本，续费延长升级服务后再安装`;
+  return `新版本 ${version ?? ''} 发布于 ${chinaDate(released)}，晚于本机授权的升级服务期限 ${chinaDate(Date.parse(license.claims.updatesUntil))}；可以继续使用当前版本，续费延长升级服务后再安装`;
 }
 
-function utcDate(value: number): string {
-  return new Date(value).toISOString().slice(0, 10);
+/** The comparison uses exact instants; dates are shown in Beijing time, as on the download page. */
+function chinaDate(value: number): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
 }
 
 function clampPercent(value: number): number {
