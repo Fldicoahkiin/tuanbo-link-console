@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
+import { closeDiscarding } from './save-questions';
 
 test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继续、关闭时间码、切歌及播完暂停', async ({}, info) => {
   test.skip(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1', '需要真实 WASAPI；不占用正在长测的 MIDI 端口');
@@ -86,9 +87,6 @@ test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继�
       engineSha256: createHash('sha256').update(await readFile(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(process.cwd(), '../../tools/playback-engine/bin/tblink-playback.exe'))).digest('hex') });
   } finally {
     await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2));
-    await page.keyboard.press('Escape');
-    await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
-    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
-    await app.close();
+    await closeDiscarding(app);
   }
 });

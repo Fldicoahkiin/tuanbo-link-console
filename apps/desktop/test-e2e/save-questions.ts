@@ -26,13 +26,21 @@ export async function saveProject(page: Page): Promise<void> {
   await expect(page.locator('.toast.info:not([data-before-save])', { hasText: '工程已保存' }).first()).toBeVisible();
 }
 
-/** Test teardown: unsaved edits are dropped, so quitting does not stop at 工程尚未保存. */
+/**
+ * Test teardown: playback still running is stopped and unsaved edits are dropped, so quitting does not
+ * stop at 联动尚未停止 or 工程尚未保存. Without the stop the main process refuses to quit, the close waits
+ * for the 60-second test timeout, and the report shows that timeout instead of the first failed assertion.
+ */
 export async function closeDiscarding(application: ElectronApplication): Promise<void> {
   // A window whose renderer exited has nothing to report; the main process already stopped asking for it.
   await application.evaluate(({ BrowserWindow }) => Promise.all(BrowserWindow.getAllWindows()
     .filter(window => !window.isDestroyed() && !window.webContents.isCrashed())
-    .map(window => window.webContents.executeJavaScript(
-      'window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })'))));
+    .map(window => window.webContents.executeJavaScript(`(async () => {
+      const state = await window.tbLink.getNativePlaybackStatus();
+      if (state && ['preparing', 'playing', 'paused'].includes(state.status)) await window.tbLink.controlNativePlayback({ version: 1, sessionId: state.sessionId, generation: state.generation + 100, kind: 'stop' });
+      await window.tbLink.setRuntimeActive(false);
+      await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null });
+    })()`))));
   await application.close();
 }
 

@@ -6,6 +6,7 @@ import OBSWebSocket, { EventSubscription } from 'obs-websocket-js';
 import { z } from 'zod';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
+import { closeDiscarding } from './save-questions';
 
 test('正式原生按钮驱动隔离 OBS：精确音频采集、编排切场景、暂停和继续', async ({}, info) => {
   test.skip(!process.env.TBLINK_TEST_OBS_URL || !process.env.TBLINK_TEST_OBS_AUDIO, '由隔离 OBS 验收脚本启动，不连接用户 OBS');
@@ -72,9 +73,6 @@ test('正式原生按钮驱动隔离 OBS：精确音频采集、编排切场景�
   } finally {
     await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2));
     await page.screenshot({ path: info.outputPath('final.png') });
-    await page.getByRole('button', { name: '停止播放', exact: true }).click();
-    await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
-    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
-    await app.close(); await obs.disconnect();
+    await closeDiscarding(app); await obs.disconnect();
   }
 });

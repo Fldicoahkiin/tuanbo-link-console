@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 test('OBS 和 MIDI 均未连接时，有音频仍可开始播放', async ({}, info) => {
   const wav = Buffer.alloc(44 + 8000 * 40, 128);
@@ -62,8 +63,7 @@ test('OBS 和 MIDI 均未连接时，有音频仍可开始播放', async ({}, in
     await page.screenshot({ path: info.outputPath('playback-compact.png') });
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
   } finally {
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setRuntimeActive(false).then(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }))'));
-    await app.close();
+    await closeDiscarding(app);
   }
 });
 
@@ -116,7 +116,6 @@ test('真实损坏音频报错不挤压播放器，修复文件后可重新播�
     expect(errors).toEqual([]);
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
   } finally {
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setRuntimeActive(false).then(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }))'));
-    await app.close();
+    await closeDiscarding(app);
   }
 });

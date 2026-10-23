@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
+import { closeDiscarding } from './save-questions';
 
 test('无 MA2 网线时按原偏移发 MTC；长时阻塞只停止发码，音频继续', async ({}, info) => {
   const wav = Buffer.alloc(44 + 8000 * 20, 128);
@@ -86,7 +87,6 @@ test('无 MA2 网线时按原偏移发 MTC；长时阻塞只停止发码，音�
     await expect(page.getByText(/MIDI 时间码已停止.*音频继续播放/).first()).toBeVisible();
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
   } finally {
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setRuntimeActive(false).then(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }))'));
-    await app.close();
+    await closeDiscarding(app);
   }
 });
