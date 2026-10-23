@@ -41,7 +41,10 @@ export class NativeAudioCache {
     const measured = (phase: string): void => { const now = performance.now(); this.measured(phase, now - measuredAt); measuredAt = now; };
     try {
       await mkdir(this.directory, { recursive: true });
-      const initial = await stat(request.sourcePath);
+      // A source that cannot be read is fixed by repairing or replacing the audio; the window words it that way.
+      const initial = await stat(request.sourcePath).catch((error: unknown) => {
+        throw new Error(`音频解码或读取失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      });
       if (await digest(request.sourcePath, signal) !== request.sourceSha256) throw new Error('音频原文件与工程指纹不一致，请重新导入');
       measured('音源完整性校验');
       // Retain source coordinates even when decoding begins near a cold seek.

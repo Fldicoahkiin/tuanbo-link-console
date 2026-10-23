@@ -477,3 +477,12 @@ it('时间码输出失败只记录一次；另一条输出异常盖住提示后�
   expect(f.deps.notice.mock.calls.filter(([message]) => message === failed)).toHaveLength(2);
   await f.player.stop();
 });
+
+it('准备阶段音频读取失败时标明播放未开始，并给出处理音频的提示', async () => {
+  const f = fixture();
+  f.api.prepareNativePlayback.mockRejectedValueOnce(new Error('音频解码或读取失败：ENOENT: no such file or directory, stat \'C:/test/a-0.wav\''));
+  await f.player.play('song-0');
+  expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：准备失败' });
+  expect(f.state().error).toContain('修复或更换音频后重新播放');
+});
+

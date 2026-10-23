@@ -122,3 +122,10 @@ it('非零冷定位按源帧定位，PCM 从基址开始但输出位置不归零
     expect(pcm.readInt16LE(250 * 192)).toBe(-768);
   } finally { await lease.release(); }
 });
+
+it('音频原文件缺失时报告为音频读取失败，界面据此提示修复或更换音频', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'native-pcm-missing-'));
+  const cache = new NativeAudioCache(join(directory, 'cache'), ffmpeg ?? 'ffmpeg');
+  await expect(cache.prepare({ sourcePath: join(directory, 'missing.wav'), sourceSha256: 'a'.repeat(64), expectedDurationMs: 2000, sampleRate: 48000 },
+    new AbortController().signal)).rejects.toThrow(/^音频解码或读取失败：.*missing\.wav/);
+});
