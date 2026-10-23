@@ -329,7 +329,8 @@ export const rundownItemSchema = z.object({
   lighting: lightingDocumentSchema.optional(),
   playback: z.object({
     volume: z.number().min(0).max(100),
-    endAction: z.enum(['next', 'loop', 'stop', 'pause']),
+    // Absent: the song follows the player's own end action.
+    endAction: z.enum(['next', 'loop', 'stop', 'pause']).optional(),
     startMs: z.number().int().nonnegative(),
     endMs: z.number().int().nonnegative(),
     mtcOffsetMs: z.number().int().min(0).max(86_399_000),

@@ -132,7 +132,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           const current = useDocumentStore.getState();
           if (!canContinue(entry) || current.documentId !== entry.documentId || !current.project) continue;
           start = allocateSongMtcStart(current.project, item.id, ranges);
-          current.execute(setItemPlaybackCommand(item.id, { volume: 100, endAction: 'pause', startMs: 0, endMs: 0, mtcOffsetMs: start, shortcut: '' }));
+          current.execute(setItemPlaybackCommand(item.id, { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: start, shortcut: '' }));
         }
         if (checkOnly && entry.remoteRevision && item.lighting.consoleSong) {
           const binding = item.lighting.consoleSong;

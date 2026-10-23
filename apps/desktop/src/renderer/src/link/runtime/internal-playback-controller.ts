@@ -113,7 +113,7 @@ export class InternalPlaybackController {
         this.appendNotice(`画面与联动未启动：${toUserErrorMessage(error)}。本次继续播放音频。`);
       }
       if (!this.current(generation)) return;
-      this.update({ volume: item.playback?.volume ?? 100, ...(item.playback ? { endAction: item.playback.endAction } : {}) });
+      this.update({ volume: item.playback?.volume ?? 100, ...(item.playback?.endAction ? { endAction: item.playback.endAction } : {}) });
       this.audio.currentTime = positionMs / 1000; this.audio.volume = this.state.volume / 100;
       this.offsetMs = programTimeOrigin(item, this.project.obsOutputMode === 'scenes' ? 0 : (allocateMediaTimecodeRanges(this.project).find((range) => range.itemId === itemId)?.startSeconds ?? 0) * 1000);
       if (lightingTimeOrigin(item.lighting, this.offsetMs) !== this.offsetMs) {
