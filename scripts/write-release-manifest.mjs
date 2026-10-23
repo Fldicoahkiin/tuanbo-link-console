@@ -45,8 +45,9 @@ const checks = [
     detail: artifacts.filter((artifact) => artifact.path.endsWith('.exe')).map((artifact) => `${basename(artifact.path)}=${artifact.authenticode}`).join(', ')
   },
   {
-    name: 'unsigned-candidate-confirmed',
-    ok: installer?.authenticode === 'NotSigned' && unpacked?.authenticode === 'NotSigned',
+    // Code signing is optional (no certificate); a signature that is present must be valid on both files.
+    name: 'authenticode-signed-or-unsigned',
+    ok: installer?.authenticode === unpacked?.authenticode && ['NotSigned', 'Valid'].includes(installer?.authenticode),
     detail: `installer=${installer?.authenticode ?? 'missing'}, app=${unpacked?.authenticode ?? 'missing'}`
   },
   { name: 'update-metadata-matches-installer', ok: 'releaseDate' in updateMetadata, detail: 'releaseDate' in updateMetadata ? `version=${updateMetadata.version}, releaseDate=${updateMetadata.releaseDate}` : updateMetadata.error },
@@ -81,8 +82,8 @@ const manifest = {
   },
   update: 'releaseDate' in updateMetadata ? { releaseDate: updateMetadata.releaseDate, sha512: updateMetadata.sha512 } : null,
   signing: {
-    expected: 'unsigned-candidate',
-    smartScreenNoticeRequired: true
+    authenticode: installer?.authenticode ?? 'missing',
+    smartScreenNoticeRequired: installer?.authenticode !== 'Valid'
   },
   summary: {
     artifactCount: artifacts.length,
