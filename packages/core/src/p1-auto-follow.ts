@@ -1,20 +1,21 @@
 import type { LinkProject } from '@tb/schema';
 import { frameNumberToTimecode, nominalFramesPerSecond, type MtcSample } from './mtc-timecode';
+import { nextMtcStartMs } from './mtc-start';
 
 /** P1 emits its own offset MTC; no local clock generates playback position. */
 export function allocateP1TimecodeRanges(project: LinkProject): NonNullable<LinkProject['p1AutoFollow']> {
   if (project.timebase.frameRate === '29.97df') throw new Error('P1 自动选歌暂支持 24、25、30 fps；请使用实测的 30 fps');
-  let startSeconds = 60;
-  const ranges = project.rundown.filter((item) => item.referenceAudio).map((item) => {
+  // The same allocator as songs synced to the console: each song from the first whole minute at
+  // least ten seconds after the one before. Real P1 captures verified hours 1 and 15; hour 16 loses
+  // the high hour bit, so the whole layout stays below 15 hours.
+  const ranges: Array<{ itemId: string; startSeconds: number; durationMs: number }> = [];
+  for (const item of project.rundown.filter((value) => value.referenceAudio)) {
     const durationMs = item.referenceAudio?.durationMs;
     if (!durationMs) throw new Error(`节目缺少音频时长：${item.title}`);
-    const range = { itemId: item.id, startSeconds, durationMs };
-    startSeconds += Math.ceil(durationMs / 1000) + 10;
-    return range;
-  });
+    const startMs = nextMtcStartMs(ranges.map((range) => ({ startMs: range.startSeconds * 1000, endMs: range.startSeconds * 1000 + range.durationMs })), durationMs, 54_000_000);
+    ranges.push({ itemId: item.id, startSeconds: startMs / 1000, durationMs });
+  }
   if (!ranges.length) throw new Error('请先导入 P1 工程或为节目添加参考音频');
-  // Real P1 captures verified hours 1 and 15; hour 16 loses the high hour bit.
-  if (startSeconds >= 54_000) throw new Error('此版 P1 的自动选歌工程总时长（含歌曲间隔）必须小于 15 小时；请拆分工程');
   return { enabled: true, ranges };
 }
 
