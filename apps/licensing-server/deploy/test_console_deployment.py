@@ -2,12 +2,14 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tarfile
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 
 def load(name, filename):
@@ -94,6 +96,53 @@ class ConsoleDeploymentTest(unittest.TestCase):
     def test_offsite_must_be_mounted(self):
         with self.assertRaisesRegex(RuntimeError, 'mounted'):
             backup.backup({'ageRecipient': 'age1' + 'a' * 58, 'offsiteMount': '/not-a-real-mount', 'offsiteDirectory': '/not-a-real-mount/backups'})
+
+    def root_only_tree(self, root):
+        """The test's own account plays root: etc/tblink-backup/backup.json and var/backups/tblink below root."""
+        for directory in ['etc/tblink-backup', 'var/backups/tblink']:
+            (root / directory).mkdir(parents=True)
+        for directory in ['etc', 'etc/tblink-backup', 'var', 'var/backups', 'var/backups/tblink']:
+            (root / directory).chmod(0o755)
+        config = root / 'etc/tblink-backup/backup.json'
+        config.write_text(json.dumps({'ageRecipient': 'age1' + 'a' * 58}))
+        config.chmod(0o600)
+        return patch.multiple(backup, TRUSTED=root, ROOT_UID=os.getuid(), CONFIG=config, BACKUPS=root / 'var/backups/tblink', LOCAL=root / 'var/backups/tblink/console')
+
+    def test_backup_config_must_be_roots(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with self.root_only_tree(root):
+                self.assertEqual(backup.read_config()['ageRecipient'], 'age1' + 'a' * 58)
+                # A directory others can write to, and a link in place of the file, are both refused.
+                (root / 'etc/tblink-backup').chmod(0o775)
+                with self.assertRaisesRegex(RuntimeError, 'root-only'):
+                    backup.read_config()
+                (root / 'etc/tblink-backup').chmod(0o755)
+                forged = root / 'forged.json'
+                forged.write_text(json.dumps({'ageRecipient': 'age1' + 'b' * 58}))
+                (root / 'etc/tblink-backup/backup.json').unlink()
+                (root / 'etc/tblink-backup/backup.json').symlink_to(forged)
+                with self.assertRaisesRegex(RuntimeError, 'root-only'):
+                    backup.read_config()
+
+    def test_local_copies_stay_in_roots_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            elsewhere = root / 'elsewhere'
+            elsewhere.mkdir()
+            config = {'ageRecipient': 'age1' + 'a' * 58, 'offsiteMount': str(root / 'mnt'), 'offsiteDirectory': str(root / 'mnt/licensing')}
+            (root / 'mnt').mkdir()
+            with self.root_only_tree(root), patch.object(backup.os.path, 'ismount', return_value=True):
+                # The console directory replaced by a link to somewhere else: nothing is written there.
+                (root / 'var/backups/tblink/console').symlink_to(elsewhere)
+                with self.assertRaisesRegex(RuntimeError, 'root-only'):
+                    backup.backup(config)
+                (root / 'var/backups/tblink/console').unlink()
+                (root / 'var/backups/tblink').chmod(0o777)
+                with self.assertRaisesRegex(RuntimeError, 'root-only'):
+                    backup.backup(config)
+            self.assertEqual(list(elsewhere.iterdir()), [])
+            self.assertFalse((root / 'mnt/licensing').exists())
 
 
 if __name__ == '__main__':

@@ -2,8 +2,10 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import urllib.request
@@ -38,7 +40,8 @@ class PaymentExceptionCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             token = Path(folder) / 'token'; token.write_text('a' * 48)
             output = io.StringIO()
-            with patch.object(module.sys, 'argv', ['payment-exceptions.py', '--token-file', str(token), *args]), patch.object(module.urllib.request, 'build_opener', side_effect=build), contextlib.redirect_stdout(output):
+            with patch.object(module.sys, 'argv', ['payment-exceptions.py', '--token-file', str(token), *args]), patch.object(module.urllib.request, 'build_opener', side_effect=build), \
+                    patch.object(module.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=os.getuid())), contextlib.redirect_stdout(output):
                 self.assertEqual(module.main(), 0)
             self.assertEqual(len(observed), 1)
             request = observed[0]
@@ -52,10 +55,27 @@ class PaymentExceptionCliTest(unittest.TestCase):
             self.assertNotIn('a' * 48, output.getvalue())
 
     def test_retry_without_reason_stops_before_reading_credentials(self):
-        with patch.object(module.sys, 'argv', ['payment-exceptions.py', '--retry-order', '12345678-1234-4234-8234-123456789abc']), patch.object(Path, 'read_text') as read, contextlib.redirect_stderr(io.StringIO()):
+        with patch.object(module.sys, 'argv', ['payment-exceptions.py', '--retry-order', '12345678-1234-4234-8234-123456789abc']), patch.object(module, 'read_token') as read, contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 module.main()
             read.assert_not_called()
+
+    def test_token_is_never_read_through_a_link_or_from_another_owner(self):
+        with tempfile.TemporaryDirectory() as folder:
+            secret = Path(folder) / 'root-only-secret'
+            secret.write_text('s' * 48)
+            token = Path(folder) / 'admin-token.txt'
+            token.symlink_to(secret)
+            owner = SimpleNamespace(pw_uid=os.getuid())
+            with patch.object(module.pwd, 'getpwnam', return_value=owner):
+                with self.assertRaisesRegex(RuntimeError, 'without following links'):
+                    module.read_token(token)
+                token.unlink()
+                token.write_text('a' * 48)
+                self.assertEqual(module.read_token(token), 'a' * 48)
+            with patch.object(module.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=os.getuid() + 1)):
+                with self.assertRaisesRegex(RuntimeError, 'owned by tblink-license'):
+                    module.read_token(token)
 
 class RecoveryTest(unittest.TestCase):
     def setUp(self):

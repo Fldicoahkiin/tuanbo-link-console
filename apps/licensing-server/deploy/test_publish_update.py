@@ -54,8 +54,10 @@ class PublishUpdateTest(unittest.TestCase):
         self.feed = self.root / module.FEED
         self.feed.mkdir(parents=True)
         self.publisher = self.root / module.PUBLISHER
-        for name in ['results', 'receipts', 'work']:
+        for name in ['results', 'work']:
             (self.publisher / name).mkdir(parents=True)
+        self.receipts = self.root / module.RECEIPTS
+        self.receipts.mkdir(parents=True)
         (self.root / module.REQUESTS).mkdir(parents=True)
         (self.root / module.STAGING).mkdir(parents=True)
         keys = self.root / module.KEYS
@@ -145,7 +147,7 @@ class PublishUpdateTest(unittest.TestCase):
         self.assertFalse(staged.exists())
         self.assertEqual(self.status()['feed']['version'], '0.5.0')
         self.assertTrue(self.status()['feed']['signed'])
-        audit = [json.loads(line) for line in (self.publisher / 'update-audit.jsonl').read_text().splitlines()]
+        audit = [json.loads(line) for line in (self.root / module.AUDIT).read_text().splitlines()]
         self.assertEqual([(entry['action'], entry['version'], entry['ok']) for entry in audit], [('publish', None, False), ('publish', '0.5.0', True)])
         self.assertEqual(audit[1]['actor'], 'owner (9d53530a)')
         self.assertEqual(audit[1]['requestedAt'], '2026-10-23T08:00:00.000Z')
@@ -248,7 +250,7 @@ writeFileSync(`${directory}/latest.yml`, signUpdateMetadata(text, { installerNam
             with self.subTest(issue=issue):
                 for path in self.feed.iterdir():
                     path.unlink()
-                for path in (self.publisher / 'receipts').iterdir():
+                for path in self.receipts.iterdir():
                     shutil.rmtree(path)
                 self.place_in_feed(previous, '0.4.29')
                 self.publish(release(self.root / f'next-{uuid.uuid4().hex}', '0.5.0'), '0.5.0')
@@ -259,7 +261,7 @@ writeFileSync(`${directory}/latest.yml`, signUpdateMetadata(text, { installerNam
                 self.assertIn(b'version: 0.5.0', (self.feed / 'latest.yml').read_bytes())
 
     def test_refuses_to_run_unless_its_directories_are_roots(self):
-        for path, mode in [(self.publisher, 0o770), (self.feed, 0o757), (self.root / module.PUBLISHER / 'receipts', 0o775)]:
+        for path, mode in [(self.publisher, 0o770), (self.feed, 0o757), (self.receipts, 0o775), (self.root / module.BACKUPS, 0o777)]:
             with self.subTest(path=path):
                 path.chmod(mode)
                 with self.assertRaisesRegex(RuntimeError, '目录不安全'):
