@@ -146,7 +146,7 @@ it('没有起始码的歌在首次同步前按控台节目分配起点，作为�
   expect(ranges).toHaveBeenCalledExactlyOnceWith({ host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' });
   // Only the start: no end action of its own, so the song keeps following the player's 播放方式.
   expect(useDocumentStore.getState().project!.rundown[0]!.playback).toEqual({ volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: 810_000, shortcut: '' });
-  expect((sync.mock.calls[0]![0] as Ma2SongSyncRequest).timecodeStartMs).toBe(810_000);
+  expect(sync.mock.calls[0]![0]).toMatchObject({ timecodeStartMs: 810_000, timecodeLengthMs: 120_000 });
   useDocumentStore.getState().undo();
   expect(useDocumentStore.getState().project!.rundown[0]!.playback).toBeUndefined();
 });

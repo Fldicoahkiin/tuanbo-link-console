@@ -24,6 +24,11 @@ it('自有节目整份重建：起点为歌曲起始码，一条本曲执行器�
   expect(Number(timecode.attributes.lenght)).toBeGreaterThan(1837);
 });
 
+it('给出歌曲时长时节目长度覆盖整首歌，其他工程分配起点时看到整首都已占用；最后点位更晚时仍以点位为准', () => {
+  expect(inspectMa2TimecodeXml(ma2SongTimecodeXml(existing, 9907, { ...song, lengthMs: 240_000 })).timecodes[0]!.attributes.lenght).toBe('7200');
+  expect(inspectMa2TimecodeXml(ma2SongTimecodeXml(existing, 9907, { ...song, lengthMs: 30_000 })).timecodes[0]!.attributes.lenght).toBe('1838');
+});
+
 it('起点为 0 时不写 offset；空歌曲只留轨道不留事件', () => {
   const xml = ma2SongTimecodeXml(existing, 9907, { ...song, startMs: 0, cues: [] });
   const timecode = inspectMa2TimecodeXml(xml).timecodes[0]!;

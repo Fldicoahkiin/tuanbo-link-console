@@ -743,7 +743,8 @@ export function resetMa2TimecodeShow(xml: string, target: number, show: { name: 
 }
 
 /** 3.3.4 and onPC 3.7.0.5 exports use 30 Hz ticks for `lenght` (200 s = 6000). */
-export function extendMa2TimecodeLength(xml: string, target: number): string {
+/** `coverTicks`: a playback length the show keeps even beyond its last event. */
+export function extendMa2TimecodeLength(xml: string, target: number, coverTicks = 0): string {
   validateMa2TimecodeWrite(xml);
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
@@ -751,7 +752,7 @@ export function extendMa2TimecodeLength(xml: string, target: number): string {
   if (!['3.3.4', '3.7.0'].includes(report.version) || timecode.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('该 MA2 版本或时间基准的播放长度尚未验证');
   const length = timecode.attributes.lenght ?? '0';
   if (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))) throw new Error('MA2 播放长度无效，未写入控台');
-  let required = 0;
+  let required = coverTicks;
   for (const track of timecode.tracks) for (const subtrack of track.subtracks) for (const event of subtrack.events) {
     const raw = event.attributes.time ?? '0';
     if (!rawTimeSchema.safeParse(raw).success) throw new Error('控台事件时间无效');

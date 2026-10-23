@@ -160,7 +160,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           requestId, progressId: requestId, settings, name: requestedName, points,
           ...(item.lighting.consoleSong ? { binding: item.lighting.consoleSong } : {}), ...(entry.confirmedDeletions ? { confirmedDeletions: entry.confirmedDeletions } : {}),
           ...(entry.conflictResolutions?.length ? { conflictResolutions: entry.conflictResolutions } : {}), ...(entry.rewriteLegacyNames ? { rewriteLegacyNames: true } : {}),
-          ...(start === undefined ? {} : { timecodeStartMs: start }) },
+          ...(start === undefined ? {} : { timecodeStartMs: start, ...(item.referenceAudio ? { timecodeLengthMs: Math.ceil(item.referenceAudio.durationMs) } : {}) }) },
           progress => update(entry, { progress }));
         update(entry, { requestId: null, progress: null });
         if (useDocumentStore.getState().documentId === entry.documentId) useDocumentStore.getState().markConsoleSynced(entry.documentId);
