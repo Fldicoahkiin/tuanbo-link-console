@@ -26,16 +26,16 @@
 <a id="0-导出原始字节管理员电脑"></a>
 ## 0. 导出原始字节（管理员电脑）
 
-工具都按 git 原始字节安装。不要从 Windows 工作区复制文件，CRLF 会让摘要不一致。
+工具都按 git 原始字节安装。不要从 Windows 工作区复制文件，CRLF 会让摘要不一致。命令里写成 `${c}:` 而不是 `$c:`，因为 zsh 会把 `$c:a` 当成路径修饰符。
 
 ```bash
 c=<提交>
 out="$(mktemp -d)/tblink-install-20261023"; mkdir -p "$out"
 for f in activate-release.py publish-website.py backup-console.py payment-exceptions.py publish-update.py receive-update.py \
          tblink-update-publish.path tblink-update-publish.service tblink-update-publish.timer tblink-release.sshd.conf; do
-  git show "$c:apps/licensing-server/deploy/$f" > "$out/$f"
+  git show "${c}:apps/licensing-server/deploy/$f" > "$out/$f"
 done
-git show "$c:apps/desktop/src/main/link/release-public-keys.json" > "$out/release-public-keys.json"
+git show "${c}:apps/desktop/src/main/link/release-public-keys.json" > "$out/release-public-keys.json"
 # 构建机上传公钥（D:\tblink-release-signing\upload\tblink-release-ed25519.pub，只是公钥），行首加 restrict：
 printf 'restrict %s\n' "$(cat <拷到本机的 tblink-release-ed25519.pub>)" > "$out/authorized_keys"
 (cd "$out" && shasum -a 256 * | tee SHA256SUMS)
