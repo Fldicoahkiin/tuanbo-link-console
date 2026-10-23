@@ -117,6 +117,16 @@ try {
   await dialog.getByLabel('用户名').fill('backup-admin'); await dialog.getByRole('button', { name: '生成开通凭据' }).click(); await dialog.locator('pre.secret').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   await page.getByRole('row', { name: /backup-admin/ }).getByText('待开通').waitFor();
   await page.screenshot({ path: fileURLToPath(new URL('owner-desktop.png', shots)), fullPage: true });
+  // 软件更新：只有管理员可见；发布对话框带上所选候选的 manifest 摘要，结果以服务器发布脚本为准（此处不提交）。
+  await page.getByRole('button', { name: '软件更新', exact: true }).click();
+  await page.getByText('0.5.0-13f7e625898e', { exact: true }).waitFor();
+  assert.equal(await page.getByText('0.4.29', { exact: true }).count(), 1);
+  await page.getByRole('button', { name: '发布更新', exact: true }).click();
+  const publish = page.getByRole('dialog');
+  assert.equal(await publish.locator('input[name="manifestSha256"]').inputValue(), 'b'.repeat(64));
+  await publish.getByRole('button', { name: '发布到更新源' }).waitFor();
+  await page.screenshot({ path: fileURLToPath(new URL('owner-updates.png', shots)), fullPage: true });
+  await publish.getByRole('button', { name: '关闭操作窗口' }).click();
   await context.close();
   for (const role of ['operations', 'finance', 'viewer']) {
     const { page, context } = await pageFor(role, role === 'viewer' ? 390 : 1440);
@@ -125,6 +135,7 @@ try {
     assert.equal(await page.getByText('累计净收款').count(), role === 'finance' ? 1 : 0);
     assert.equal(await page.getByRole('heading', { name: '收款趋势' }).count(), role === 'finance' ? 1 : 0);
     assert.equal(await page.getByRole('button', { name: '人员管理', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: '软件更新', exact: true }).count(), 0);
     await page.getByRole('button', { name: '订单中心', exact: true }).click(); await page.getByRole('row', { name: /BROWSER-ORDER-1/ }).getByRole('button', { name: '查看详情' }).click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
     assert.equal(await page.getByRole('button', { name: '重发领取凭据', exact: true }).count(), role === 'operations' ? 1 : 0);
     assert.equal(await page.getByRole('button', { name: '登记已办理的退款', exact: true }).count(), role === 'finance' ? 1 : 0);

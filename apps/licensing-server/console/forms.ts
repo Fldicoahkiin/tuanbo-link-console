@@ -1,6 +1,6 @@
 import type { ConsoleAction } from '../src/console-contract';
-/** preset：预设选项加「其他」，选「其他」才出文本框；money：以元输入、按分提交。 */
-export type Field = { key: string; label: string; type?: 'number' | 'money' | 'datetime-local' | 'textarea' | 'select' | 'preset'; options?: readonly [string, string][]; optional?: boolean; maxLength?: number };
+/** preset：预设选项加「其他」，选「其他」才出文本框；money：以元输入、按分提交；hidden：带上所选行的值（如要确认的 manifest 摘要），不显示输入框。 */
+export type Field = { key: string; label: string; type?: 'number' | 'money' | 'datetime-local' | 'textarea' | 'select' | 'preset' | 'hidden'; options?: readonly [string, string][]; optional?: boolean; maxLength?: number };
 const presets = (texts: readonly string[]): [string, string][] => texts.map(text => [text, text]);
 const reason = (choices?: readonly string[], label = '原因'): Field => choices ? { key: 'reason', label, type: 'preset', options: presets(choices) } : { key: 'reason', label, type: 'textarea' };
 const note: Field = { key: 'reason', label: '备注（选填）', optional: true };
@@ -31,22 +31,28 @@ export const forms: Record<ConsoleAction['action'], { title: string; note?: stri
   refund: { title: '登记已办理的退款', note: '只记账，不会退款，也不会撤销授权。', submit: '登记退款', fields: [amount, { key: 'reference', label: '退款凭证编号' }, { key: 'handledAt', label: '实际办理时间（北京时间）', type: 'datetime-local' }, reason()] },
   'alipay-refund': { title: '支付宝原路退款', note: '全额退款会撤销本订单全部授权；结果未确认时按相同金额重提不会重复退款。', submit: '向支付宝退款', fields: [amount, { ...reason(['客户申请退款', '重复付款'], '退款原因（买家可见）'), maxLength: 256 }] },
   'refund-review': { title: '处理渠道退款', note: '续费订单只能保留授权，需先用「调整到期时间」回退续期。', submit: '提交处理结果', fields: [{ key: 'decision', label: '处理方式', type: 'select', options: [['revoke', '撤销本订单全部授权'], ['keep', '保留授权，仅结案']] }, reason(['客户申请退款', '协商保留授权'])] },
+  'publish-update': { title: '发布更新', note: '服务器会重新核对安装包、manifest 和发布签名，并确认版本高于当前更新源，全部通过才替换更新源；客户端安装前还会再验签。', submit: '发布到更新源',
+    fields: [{ key: 'manifestSha256', label: 'manifest 摘要', type: 'hidden' }, reason(['安装验收通过'])] },
+  'rollback-update': { title: '回滚到上一版', note: '更新源改回上一版的 latest.yml；已经装上新版本的电脑不会自动降级。', submit: '回滚更新源', fields: [reason(['新版本有问题'])] },
+  'discard-update': { title: '丢弃待发布版本', note: '从 staging 删除这份候选，不影响当前更新源。', submit: '丢弃此版本', fields: [reason(['验收未通过', '需要重新构建'])] },
   invoice: { title: '记录开票进度', note: '只记录进度，不开具发票。', submit: '保存开票记录', fields: [{ key: 'state', label: '办理状态', type: 'select', options: [['requested', '已申请'], ['processing', '办理中'], ['issued', '已开票'], ['rejected', '无法办理']] }, { key: 'buyer', label: '购买方抬头' }, { key: 'taxId', label: '税号（选填）', optional: true }, { key: 'reference', label: '发票编号（已开票必填）', optional: true }, reason()] }
 };
 /** 不可逆或使凭据失效的操作：按钮用红色。 */
-export const destructiveActions = new Set<ConsoleAction['action']>(['revoke', 'revoke-delivery-access', 'delivery-access', 'alipay-refund', 'refund-review', 'reset-user', 'close-order']);
+export const destructiveActions = new Set<ConsoleAction['action']>(['revoke', 'revoke-delivery-access', 'delivery-access', 'alipay-refund', 'refund-review', 'reset-user', 'close-order', 'rollback-update', 'discard-update']);
 // 审计中除表单操作外的动作名称；操作日志按动作筛选时与表单标题一起列出。
 const auditActions: Record<string, string> = { 'auth.login': '登录', 'auth.logout': '退出', 'auth.enrolled': '完成账号开通', 'auth.verify': '二次验证', 'orders.export': '导出订单', 'finance.export': '导出财务记录', 'manual-payment-method': '登记核款方式', 'license.expiry-adjusted': '到期调整明细' };
 export const actionNames: Record<string, string> = { ...Object.fromEntries(Object.entries(forms).map(([action, form]) => [action, form.title])), ...auditActions };
 export const labels: Record<string, string> = {
   offerName: '商品名称', offerRevision: '商品版本', unitAmountFen: '单份金额',
+  feedVersion: '当前发布版本', feedReleaseDate: '当前版本构建时间', feedSigned: '发布签名', rollbackVersion: '可回滚到', rollbackIssue: '不能回滚的原因',
+  generatedAt: '状态更新时间', version: '版本', releaseDate: '构建时间', gitSha: '提交', kid: '签名密钥', size: '安装包字节数', issue: '校验问题', manifestSha256: 'manifest 摘要',
   id: '编号', reference: '业务编号', customer: '客户', customerType: '客户类型', quantity: '份数', amountFen: '金额', useUntil: '到期', updatesUntil: '更新权益截止', state: '状态', channel: '来源', paymentStatus: '付款状态', paymentReference: '付款流水', receivedAt: '确认收款时间', deliveryError: '交付错误', created: '创建时间', openTickets: '待处理工单', refundedFen: '已登记退款', orderId: '原订单', order_id: '订单编号', source: '来源', kind: '授权类型', machineCode: '绑定机器码', status: '状态', bound: '已绑定', revoked: '已撤销', leaseUntil: '最后凭证到期', migrationAfter: '最早可换机时间', lastIssuedAt: '最后签发时间', username: '用户名', role: '角色', enabled: '已启用', enrolled: '已开通', at: '时间', actor: '操作人编号', operator: '操作人', action: '操作', target: '对象', targetLabel: '对象', reason: '原因', result: '结果', request_id: '请求编号', category: '类别', note: '问题描述', conclusion: '授权处理结论', license_id: '授权编号', updated: '更新时间', orderReference: '业务订单号', buyer: '发票抬头', taxId: '税号', pendingOrders: '待付款 / 核款', deliveryPending: '已收款待交付', refundReview: '渠道退款待处理', channelRefundFen: '渠道累计退款', reviewedRefundFen: '已处理退款', expiring: '七日内到期', manualFen: '人工确认收款', onlineFen: '线上确认收款', refundFen: '已退款', service: '服务', backup: '最近备份回执', recovery: '交付恢复任务回执', name: '检查项', checkedAt: '检查时间', detail: '说明'
 };
 const values: Record<string, string> = { active: '生效中', unbound: '未激活', expiring: '即将到期', revoked: '已撤销', enabled: '正常', disabled: '已停用', 'not-enrolled': '待开通', pending: '待付款', paid: '已收款待交付', fulfilled: '已交付', refunded: '已全额退款', expired: '已过期', confirmed: '已确认', 'not-applicable': '不涉及付款', manual: '线下核款', alipay: '支付宝', wechat: '微信', test: '内测', gift: '赠送', sale: '销售', subscription: '期限授权', perpetual: '永久授权', company: '企业', personal: '个人', open: '待处理', processing: '处理中', closed: '已关闭', requested: '已申请', issued: '已开票', rejected: '无法办理', refund: '退款', invoice: '开票记录', migration: '换机', recovery: '订单找回', other: '其他', success: '成功', denied: '拒绝', ...roleNames };
 /** 后台时间一律按北京时间输入和显示，与运营电脑的时区无关。 */
 export const beijingTime = (value: string | number) => new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 // 布尔字段逐个写明含义，不用笼统的是 / 否。
-const booleanWords: Record<string, readonly [string, string]> = { enabled: ['启用', '已停用'], enrolled: ['已开通', '待开通'] };
+const booleanWords: Record<string, readonly [string, string]> = { enabled: ['启用', '已停用'], enrolled: ['已开通', '待开通'], feedSigned: ['有', '没有'] };
 // Only enumerated fields are translated; names, usernames and notes are shown exactly as entered.
 const enumFields = new Set(['status', 'state', 'paymentStatus', 'channel', 'source', 'kind', 'customerType', 'role', 'result', 'category']);
 export function display(key: string, value: string | number | boolean | null): string {

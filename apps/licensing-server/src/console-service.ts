@@ -3,7 +3,7 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { z } from 'zod';
 import { ConsoleAuth, redactConsoleText, type ConsoleSession } from './console-auth';
 import { migrateConsole } from './console-database';
-import { commandSchema, detailSchema, pageSchema, permissions, resultSchema, rowSchema, sensitiveActions, type ConsoleAction, type ConsoleResult, type ConsoleRow, type PageQuery } from './console-contract';
+import { commandSchema, detailSchema, pageSchema, permissions, resultSchema, rowSchema, sensitiveActions, type ConsoleAction, type ConsoleResult, type ConsoleRow, type PageQuery, type UpdateOutcome, type UpdateRequest, type UpdateStatus } from './console-contract';
 import { ServiceError, type LicensingService } from './service';
 
 const orderProjection = `SELECT o.id,o.reference,json_extract(o.body,'$.customer') AS customer,
@@ -41,6 +41,8 @@ export type ConsoleChannels = {
   reconcile: (id: string) => Promise<unknown>;
   refund: (request: ReturnType<LicensingService['prepareAlipayRefund']>) => Promise<{ confirmed: boolean; refundedTotalFen: number }>;
   paymentLink: (id: string) => { url: string; expiresAt: string };
+  /** The update spool (update-releases.ts); absent when the server does not run tblink-update-publish.path. */
+  updates?: { status: () => Promise<UpdateStatus>; request: (request: UpdateRequest) => Promise<UpdateOutcome | null> };
 };
 export class ConsoleService {
   readonly auth: ConsoleAuth;
@@ -235,6 +237,20 @@ export class ConsoleService {
           throw error;
         }
       }
+      if (input.action === 'publish-update' || input.action === 'rollback-update' || input.action === 'discard-update') {
+        if (!channels.updates) throw new ServiceError(503, 'UPDATES_UNAVAILABLE', '本服务器未启用更新发布');
+        this.service.consoleTransaction(begin);
+        const request: UpdateRequest = input.action === 'publish-update' ? { id: operationId, action: 'publish', staged: input.id, manifestSha256: input.manifestSha256, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason }
+          : input.action === 'rollback-update' ? { id: operationId, action: 'rollback', version: input.id, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason }
+            : { id: operationId, action: 'discard', staged: input.id, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason };
+        const outcome = await channels.updates.request(request);
+        // The publisher re-validates everything; its refusal is the result, not a console failure.
+        if (outcome && !outcome.ok) {
+          this.db.prepare("UPDATE console_operations SET state='failed',result=? WHERE id=?").run(this.auth.seal(JSON.stringify({ id: input.id, message: outcome.message })), operationId);
+          throw new ServiceError(409, 'UPDATE_REJECTED', `服务器拒绝：${outcome.message}`);
+        }
+        return this.service.consoleTransaction(() => finish({ id: input.id, message: outcome?.message ?? '请求已提交，服务器尚未返回结果；请稍后刷新「软件更新」页查看当前发布版本' }));
+      }
       if (input.action === 'payment-link') return this.service.consoleTransaction(() => { begin(); const link = channels.paymentLink(input.id); return finish({ id: input.id, message: '付款链接已生成', paymentUrl: link.url, expiresAt: link.expiresAt }); });
       return this.service.consoleTransaction(() => { begin(); return finish(this.perform(safeInput, session, operationId)); });
     } catch (error) {
@@ -302,6 +318,7 @@ export class ConsoleService {
         return success(input.id, input.decision === 'revoke' ? `已撤销本订单 ${revoked.length} 份授权，渠道退款处理完成` : '已保留授权，渠道退款处理完成');
       }
       case 'reconcile': case 'alipay-refund': case 'payment-link': throw new ServiceError(500, 'INVALID_DISPATCH', '渠道操作必须通过渠道通道执行');
+      case 'publish-update': case 'rollback-update': case 'discard-update': throw new ServiceError(500, 'INVALID_DISPATCH', '更新发布必须通过发布请求执行');
     }
   }
   private recordAlipayRefund(request: ReturnType<LicensingService['prepareAlipayRefund']>, refundedTotalFen: number, actor: string): ConsoleResult {
@@ -310,6 +327,19 @@ export class ConsoleService {
     this.db.prepare('INSERT INTO console_refunds VALUES(?,?,?,?,?,?,?)').run(randomUUID(), request.orderId, request.amountFen, `alipay-refund:${request.refundId}`, new Date(this.now()).toISOString(), request.reason, actor);
     if (confirmed.full && !confirmed.renewal) return { id: request.orderId, message: `支付宝已全额退款，订单已标记退款并撤销 ${confirmed.revoked.length} 份授权` };
     return { id: request.orderId, message: confirmed.renewal ? '支付宝已退款。续费订单不自动撤销原授权，已进入异常队列，请调整原授权到期时间后处理' : '支付宝已部分退款，授权未变，已进入异常队列待处理' };
+  }
+  /** Owner only: the feed, the version a rollback returns to and the staged releases from the release builder. */
+  async updates(session: ConsoleSession, channels: ConsoleChannels) {
+    if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '需要管理员权限');
+    if (!channels.updates) throw new ServiceError(503, 'UPDATES_UNAVAILABLE', '本服务器未启用更新发布');
+    const status = await channels.updates.status();
+    return detailSchema.parse({
+      item: { feedVersion: status.feed?.version ?? null, feedReleaseDate: status.feed?.releaseDate ?? null, feedSigned: status.feed?.signed ?? null,
+        rollbackVersion: status.rollback.version, rollbackIssue: status.rollback.issue, generatedAt: status.generatedAt },
+      related: status.staged.map(entry => ({ id: entry.name, version: entry.version ?? null, releaseDate: entry.releaseDate ?? null, gitSha: entry.gitSha ?? null,
+        kid: entry.kid ?? null, size: entry.size ?? null, manifestSha256: entry.manifestSha256 ?? null, issue: entry.issue })),
+      history: []
+    });
   }
   exportCsv(resource: 'orders' | 'finance', query: PageQuery, session: ConsoleSession, requestId: string): string {
     this.financial(session); const rows: ConsoleRow[] = [];

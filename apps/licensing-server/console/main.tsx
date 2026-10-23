@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
-import { LayoutDashboard, ClipboardList, KeyRound, CircleAlert, MessagesSquare, Receipt, History, Users, ShieldCheck, LogOut, RefreshCw, ArrowLeft, ChevronLeft, ChevronRight, Download, Command, ArrowUpRight, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, ClipboardList, KeyRound, CircleAlert, MessagesSquare, Receipt, History, Users, ShieldCheck, LogOut, RefreshCw, ArrowLeft, ChevronLeft, ChevronRight, Download, Command, ArrowUpRight, ShieldAlert, CloudUpload } from 'lucide-react';
 import { z } from 'zod';
 import { detailSchema, pageSchema, permissions, sessionSchema, type ConsoleAction, type ConsoleRow } from '../src/console-contract';
 import { api, ApiError, errorMessage, messageSchema } from './api';
@@ -19,7 +19,7 @@ const navigation = [
   { key: 'overview', title: '工作台', icon: LayoutDashboard }, { key: 'orders', title: '订单中心', icon: ClipboardList },
   { key: 'licenses', title: '激活码与设备', icon: KeyRound }, { key: 'exceptions', title: '交付异常', icon: CircleAlert },
   { key: 'tickets', title: '售后工单', icon: MessagesSquare }, { key: 'finance', title: '财务记录', icon: Receipt },
-  { key: 'audit', title: '操作日志', icon: History }, { key: 'users', title: '人员管理', icon: Users }, { key: 'security', title: '安全设置', icon: ShieldCheck }
+  { key: 'audit', title: '操作日志', icon: History }, { key: 'users', title: '人员管理', icon: Users }, { key: 'updates', title: '软件更新', icon: CloudUpload }, { key: 'security', title: '安全设置', icon: ShieldCheck }
 ];
 const columns: Record<string, string[]> = { orders: ['reference', 'customer', 'channel', 'amountFen', 'paymentStatus', 'state', 'created'], exceptions: ['reference', 'customer', 'channel', 'amountFen', 'state', 'deliveryError', 'channelRefundFen', 'reviewedRefundFen'], licenses: ['customer', 'status', 'source', 'useUntil', 'machineCode'], tickets: ['orderReference', 'category', 'state', 'note', 'created'], finance: ['orderId', 'category', 'amountFen', 'reference', 'state', 'created'], audit: ['at', 'operator', 'action', 'targetLabel', 'result', 'reason'], users: ['username', 'role', 'status'] };
 const stateFilters: Record<string, { label: string; options: [string, string][] }> = {
@@ -48,6 +48,7 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
     const revision = ++sequence.current; setBusy(true); setError('');
     try {
       if (route === 'security') { const value = await api('session', sessionSchema); if (sequence.current === revision) applySession(value); }
+      else if (route === 'updates') { const value = await api('updates', detailSchema); if (sequence.current === revision) setDetail(value); }
       else if (selected && ['orders', 'licenses', 'tickets'].includes(resource)) { const value = await api(`${resource}/${String(selected.id)}`, detailSchema); if (sequence.current === revision) setDetail(value); }
       else if (route === 'overview') { const value = await api('overview', detailSchema); if (sequence.current === revision) setOverview(value); }
       else { const value = await api(`${route}?${query}`, pageSchema); if (sequence.current === revision) setData(value); }
@@ -84,8 +85,8 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
   // 表单里没有的筛选项（如授权页签的状态）沿用当前值。
   function search(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const value = new FormData(event.currentTarget); const field = (name: keyof Filter) => { const entry = value.get(name); return typeof entry === 'string' ? entry : value.has(name) ? '' : filter[name]; }; setFilters(previous => ({ ...previous, [route]: { q: field('q'), state: field('state'), channel: field('channel'), from: field('from'), to: field('to') } })); setPage(1); setRefresh(value => value + 1); }
   const title = navigation.find(item => item.key === route)?.title ?? '运营后台';
-  const visibleNav = navigation.filter(item => !['users', 'audit'].includes(item.key) || session.user.role === 'owner').filter(item => item.key !== 'finance' || ['owner', 'finance'].includes(session.user.role));
-  return <div className="app-shell"><aside className="sidebar"><a className="brand" href="#" onClick={event => { event.preventDefault(); navigate('overview'); }}><span className="brand-icon"><Command size={21} /></span><span>团播联动台<small>运营管理工作台</small></span></a><nav aria-label="后台导航">{[{ label: '业务空间', keys: ['overview', 'orders', 'licenses', 'exceptions', 'tickets', 'finance'] }, { label: '管理', keys: ['audit', 'users', 'security'] }].map(group => <div className="nav-group" key={group.label}><p className="nav-label">{group.label}</p>{visibleNav.filter(item => group.keys.includes(item.key)).map(item => <button key={item.key} aria-current={route === item.key ? 'page' : undefined} onClick={() => navigate(item.key)}><item.icon size={17} />{item.title}</button>)}</div>)}</nav><div className="account"><div className="avatar">{session.user.username.slice(0, 1).toUpperCase()}</div><span>{session.user.username}<small>{roleNames[session.user.role]}</small></span><button aria-label="退出登录" disabled={busy} onClick={() => { void logout(); }}><LogOut size={18} /></button></div></aside>
+  const visibleNav = navigation.filter(item => !['users', 'audit', 'updates'].includes(item.key) || session.user.role === 'owner').filter(item => item.key !== 'finance' || ['owner', 'finance'].includes(session.user.role));
+  return <div className="app-shell"><aside className="sidebar"><a className="brand" href="#" onClick={event => { event.preventDefault(); navigate('overview'); }}><span className="brand-icon"><Command size={21} /></span><span>团播联动台<small>运营管理工作台</small></span></a><nav aria-label="后台导航">{[{ label: '业务空间', keys: ['overview', 'orders', 'licenses', 'exceptions', 'tickets', 'finance'] }, { label: '管理', keys: ['audit', 'users', 'updates', 'security'] }].map(group => <div className="nav-group" key={group.label}><p className="nav-label">{group.label}</p>{visibleNav.filter(item => group.keys.includes(item.key)).map(item => <button key={item.key} aria-current={route === item.key ? 'page' : undefined} onClick={() => navigate(item.key)}><item.icon size={17} />{item.title}</button>)}</div>)}</nav><div className="account"><div className="avatar">{session.user.username.slice(0, 1).toUpperCase()}</div><span>{session.user.username}<small>{roleNames[session.user.role]}</small></span><button aria-label="退出登录" disabled={busy} onClick={() => { void logout(); }}><LogOut size={18} /></button></div></aside>
     <main className="workspace" aria-label={title}><h1 className="visually-hidden">{title}</h1><div className="workspace-tools"><StepUpBadge verifiedAt={session.verifiedAt} clockOffset={clockOffset} onVerify={() => setStepUpOpen(true)} /><button aria-label="刷新当前页面" title="刷新当前页面" disabled={busy} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={16} /><span>刷新</span></button></div>
       {error && <div role="alert" className="alert">{error}</div>}
       {busy && <p role="status" className="muted">正在读取…</p>}
@@ -104,7 +105,12 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
         <details className="maintenance"><summary><span><ShieldCheck size={16} />运行与维护</span><span>服务{String(overview.item.service ?? '状态未知')} · 查看记录</span></summary><Fields row={Object.fromEntries(['service', 'backup', 'recovery'].map(key => [key, overview.item[key] ?? null]))} />{overview.related.some(row => row.category !== 'cashflow') && <DataTable rows={overview.related.filter(row => row.category !== 'cashflow')} fields={['name', 'state', 'checkedAt', 'detail']} />}</details>
       </>}
       {route === 'security' && <section className="panel security"><h2>二次验证</h2><StepUpPrompt key={session.verifiedAt} csrf={session.csrf} title="立即验证" hint="每枚验证码只能用一次；验证后 5 分钟内的敏感操作无需再输。" onVerified={reloadSession} /><p>最近验证：{beijingTime(session.verifiedAt)}</p><p className="muted">修改密码或更换验证器：由另一名管理员执行“重置人员认证”后重新开通。</p></section>}
-      {!['overview', 'security'].includes(route) && <>
+      {route === 'updates' && detail && <>
+        <section className="panel"><h2>更新源</h2><Fields row={detail.item} /><div className="actions">{detail.item.rollbackVersion && !detail.item.rollbackIssue && actionButton('rollback-update', { id: detail.item.rollbackVersion })}</div></section>
+        <section className="panel"><h2>待发布版本</h2>{detail.related.length ? detail.related.map(row => <div key={String(row.id)}><Fields row={row} /><div className="actions">{!row.issue && actionButton('publish-update', row)}{actionButton('discard-update', row)}</div></div>)
+          : <p className="muted">没有待发布的版本。构建机打好并签名的正式包上传后会出现在这里。</p>}</section>
+      </>}
+      {!['overview', 'security', 'updates'].includes(route) && <>
         {selected ? <><button className="back" onClick={() => { setSelected(null); setDetail(null); }}><ArrowLeft size={16} />返回列表</button>
           {route === 'users' ? <section className="panel"><h2>人员详情</h2><Fields row={detailRow(selected)} /><div className="actions">{actionButton('update-user', selected)}{actionButton('reset-user', selected)}</div></section> : detail && <>
             <section className="panel"><h2>{resource === 'licenses' ? '授权详情' : resource === 'tickets' ? '工单详情' : '订单详情'}</h2><Fields row={detailRow(detail.item)} /><div className="actions">

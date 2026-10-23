@@ -22,6 +22,7 @@ function fieldError(field: Field, element: HTMLInputElement | HTMLSelectElement 
 function Input({ action, field, row, touched, onTouch, errors }: { action: ConsoleAction['action']; field: Field; row: ConsoleRow | null; touched: boolean; onTouch: () => void; errors: Record<string, string> }) {
   // 预设项可由入口预先选好（如「开通第二名管理员」预选「备用管理员」）。
   const [choice, setChoice] = useState(() => field.options?.some(([value]) => value === row?.[field.key]) ? String(row?.[field.key]) : '');
+  if (field.type === 'hidden') return <input type="hidden" name={field.key} value={String(row?.[field.key] ?? '')} />;
   const required = !field.optional; const error = touched ? errors[field.key] : '';
   const common = { name: field.key, required, onBlur: onTouch, 'aria-invalid': Boolean(error) || undefined };
   const defaultValue = action === 'set-expiry' && field.key === 'useUntil' && typeof row?.useUntil === 'string' ? new Date(Date.parse(row.useUntil) + 8 * 3600000).toISOString().slice(0, 16)

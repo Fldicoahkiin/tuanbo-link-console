@@ -2,7 +2,7 @@ import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { afterEach, expect, it } from 'vitest';
 import { LicensingService } from './service';
 import { totpCode, type ConsoleSession } from './console-auth';
-import { actionSchema, pageQuerySchema, permissions, type ConsoleAction } from './console-contract';
+import { actionSchema, pageQuerySchema, permissions, type ConsoleAction, type UpdateOutcome, type UpdateRequest, type UpdateStatus } from './console-contract';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
@@ -297,4 +297,37 @@ it('待办筛选、操作日志对象名称与动作筛选、财务合计与导�
   const csv = s.consoleService.exportCsv('finance', query({ state: 'refund' }), s.login.session, 'export');
   expect(csv.split('\r\n')).toHaveLength(3); expect(csv).toContain('"refund-old"');
   await expect(Promise.resolve().then(() => s.consoleService.exportCsv('finance', query({}), { ...s.login.session, user: { ...s.login.session.user, role: 'operations' } }, 'export'))).rejects.toThrow('财务');
+});
+it('发布更新只由管理员在二次验证后提交，后台只排队请求，结果以服务器发布脚本为准', async () => {
+  const s = await setup();
+  const requests: UpdateRequest[] = [];
+  let outcome: UpdateOutcome | null = { ok: true, message: '已发布 0.5.0' };
+  const status: UpdateStatus = { version: 1, generatedAt: '2026-10-23T08:00:00Z', feed: { version: '0.4.29', releaseDate: '2026-09-28T18:15:14.517Z', signed: false },
+    rollback: { version: null, issue: '没有可以回滚到的上一版' },
+    staged: [{ name: '0.5.0-13f7e625898e', issue: null, version: '0.5.0', gitSha: '13f7e625898e'.padEnd(40, '0'), manifestSha256: 'a'.repeat(64), releaseDate: '2026-10-23T06:34:50.642Z', kid: 'release-2026-10-a', size: 412835955 }] };
+  const channels = { reconcile: () => Promise.resolve({}), refund: () => Promise.reject(new Error('不涉及')), paymentLink: () => { throw new Error('不涉及'); },
+    updates: { status: () => Promise.resolve(status), request: (request: UpdateRequest) => { requests.push(request); return Promise.resolve(outcome); } } };
+  const publish: ConsoleAction = { action: 'publish-update', id: '0.5.0-13f7e625898e', manifestSha256: 'a'.repeat(64), reason: '0.5.0 安装验收通过' };
+  const operations = { ...s.login.session, user: { ...s.login.session.user, role: 'operations' as const } };
+  await expect(s.consoleService.updates(operations, channels)).rejects.toThrow('管理员');
+  await expect(s.consoleService.execute({ operationId: randomUUID(), input: publish }, operations, randomUUID(), channels)).rejects.toThrow('当前角色不能执行此操作');
+  const view = await s.consoleService.updates(s.login.session, channels);
+  expect(view.item).toMatchObject({ feedVersion: '0.4.29', rollbackVersion: null });
+  expect(view.related[0]).toMatchObject({ id: '0.5.0-13f7e625898e', manifestSha256: 'a'.repeat(64), issue: null });
+
+  s.advance(300001);
+  await expect(s.consoleService.execute({ operationId: randomUUID(), input: publish }, s.login.session, randomUUID(), channels)).rejects.toThrow('二次验证');
+  expect(requests).toEqual([]);
+  const verified = { ...s.login.session, verifiedAt: s.now() };
+  await expect(s.consoleService.execute({ operationId: randomUUID(), input: publish }, verified, randomUUID(), channels)).resolves.toMatchObject({ message: '已发布 0.5.0' });
+  expect(requests[0]).toMatchObject({ action: 'publish', staged: '0.5.0-13f7e625898e', manifestSha256: 'a'.repeat(64), reason: '0.5.0 安装验收通过' });
+  expect(requests[0]!.actor).toContain('owner');
+
+  outcome = { ok: false, message: 'Version 0.5.0 is not above the feed (0.5.0)' };
+  await expect(s.consoleService.execute({ operationId: randomUUID(), input: publish }, verified, randomUUID(), channels)).rejects.toThrow('服务器拒绝：Version 0.5.0 is not above the feed');
+  outcome = null;
+  const submitted = await s.consoleService.execute({ operationId: randomUUID(), input: { action: 'rollback-update', id: '0.4.29', reason: '回退' } }, verified, randomUUID(), channels);
+  expect(submitted.message).toContain('尚未返回结果');
+  expect(requests.at(-1)).toMatchObject({ action: 'rollback', version: '0.4.29' });
+  await expect(s.consoleService.updates(s.login.session, { reconcile: channels.reconcile, refund: channels.refund, paymentLink: channels.paymentLink })).rejects.toThrow('未启用');
 });
