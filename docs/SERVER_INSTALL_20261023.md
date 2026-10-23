@@ -77,7 +77,7 @@ sudo sh -c "cd /var/backups/tblink/install-$stamp && sha256sum * | tee SHA256SUM
 
 - 备份：现有四个工具和 `service.env`，放在 `/var/backups/tblink/install-$stamp/`。
 - 验证：
-  - `sudo stat -c '%U:%G %a %n' /var/backups/tblink /var/backups/tblink/*` 全部是 `root:root 700`。
+  - `sudo sh -c 'stat -c "%U:%G %a %n" /var/backups/tblink /var/backups/tblink/*'` 全部是 `root:root 700`。通配符要在 root 的 shell 里展开：普通用户进不了 0700 的目录。
   - 四个工具的摘要与第 1 步记下的一致。
 - 回退：线上没有任何改动。新建的目录留着即可。
 
