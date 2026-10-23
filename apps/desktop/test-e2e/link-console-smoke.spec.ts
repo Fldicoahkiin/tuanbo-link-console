@@ -2672,15 +2672,33 @@ test('MIDI 顶部状态在启动和插拔时更新，不依赖打开设置', asy
     window.addEventListener('test-midi-disconnect', () => { outputs.clear(); access.dispatchEvent(new Event('statechange')); });
     window.addEventListener('test-midi-reconnect', () => { outputs.set('startup-output', output); access.dispatchEvent(new Event('statechange')); });
   });
-  await page.reload();
-  await expect(page.getByRole('navigation', { name: '设置子菜单' })).toHaveCount(0);
-  await page.getByRole('button', { name: '详细', exact: true }).click();
-  const midi = page.getByRole('button', { name: /^P1 控制输出：/ });
-  await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：可用');
-  await page.evaluate(() => window.dispatchEvent(new Event('test-midi-disconnect')));
-  await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：未连接');
-  await page.evaluate(() => window.dispatchEvent(new Event('test-midi-reconnect')));
-  await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：可用');
+  // Native playback lists outputs through Windows; the test controls that list and announces each change
+  // through Web MIDI, as Windows does. The real handler is put back afterwards.
+  await application.evaluate(({ ipcMain }) => {
+    Reflect.set(globalThis, '__nativeDevicesHandler', (Reflect.get(ipcMain, '_invokeHandlers') as Map<string, unknown>).get('link:native-player-devices'));
+    Reflect.set(globalThis, '__nativeMidiOutputs', [{ id: 0, name: 'Startup Test Output' }]);
+    ipcMain.removeHandler('link:native-player-devices');
+    ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [], midiOutputs: Reflect.get(globalThis, '__nativeMidiOutputs') as { id: number; name: string }[] }));
+  });
+  const setNativeOutputs = (names: string[]) => application.evaluate((_electron, list) => { Reflect.set(globalThis, '__nativeMidiOutputs', list.map((name, id) => ({ id, name }))); }, names);
+  try {
+    await page.reload();
+    await expect(page.getByRole('navigation', { name: '设置子菜单' })).toHaveCount(0);
+    await page.getByRole('button', { name: '详细', exact: true }).click();
+    const midi = page.getByRole('button', { name: /^P1 控制输出：/ });
+    await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：可用');
+    await setNativeOutputs([]);
+    await page.evaluate(() => window.dispatchEvent(new Event('test-midi-disconnect')));
+    await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：未连接');
+    await setNativeOutputs(['Startup Test Output']);
+    await page.evaluate(() => window.dispatchEvent(new Event('test-midi-reconnect')));
+    await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：可用');
+  } finally {
+    await application.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('link:native-player-devices');
+      ipcMain.handle('link:native-player-devices', Reflect.get(globalThis, '__nativeDevicesHandler') as Parameters<typeof ipcMain.handle>[1]);
+    });
+  }
 });
 
 test('顶部连接状态跨页面显示，并跟随 OBS 连接变化', async () => {

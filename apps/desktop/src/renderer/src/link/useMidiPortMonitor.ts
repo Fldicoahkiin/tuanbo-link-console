@@ -4,13 +4,21 @@ import { useIntegrationStore } from './stores/integration-store';
 import { useConnectionCheckStore } from './stores/connection-check-store';
 import { toUserErrorMessage } from '@tb/core/link';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
+import { readNativeDevices } from './view-models/midi-device-inventory';
+import { chosenAudioEngine } from './view-models/internal-audio-engine';
 
 /** Observe ports for the entire application lifetime, independently of the settings page. */
 export function useMidiPortMonitor(notify: (message: string, tone?: 'info' | 'error') => void): LinkMidiAdapter {
   const [monitor] = useState(() => new LinkMidiAdapter(id => useIntegrationStore.getState().profile?.midiPortProfiles.find(port => port.id === id) ?? null, (error) => notify(error.message, 'error')));
   useEffect(() => {
     let cancelled = false;
-    const unsubscribe = monitor.subscribePorts((ports) => useIntegrationStore.getState().setMidiPorts(ports));
+    const unsubscribe = monitor.subscribePorts((ports) => {
+      useIntegrationStore.getState().setMidiPorts(ports);
+      // Windows reports a MIDI interface change here; native outputs are listed separately, so read them again (enumeration only).
+      if (chosenAudioEngine(useIntegrationStore.getState().profile?.internalPlayer) !== 'native') return;
+      void readNativeDevices().catch((error: unknown) => linkDesktopViewModel.recordLog({ level: 'warning', category: 'device', device: 'midi',
+        message: `Windows MIDI 设备重新读取失败：${toUserErrorMessage(error)}`, result: 'failed' }).catch(console.error));
+    });
     void monitor.initialize().then((ports) => {
       if (!cancelled) {
         useIntegrationStore.getState().setMidiPorts(ports);
