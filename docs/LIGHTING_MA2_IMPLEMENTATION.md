@@ -1102,6 +1102,8 @@ Electron 网络测试使用独立本地 TCP 模拟控台，穿过实际 preload�
 - 真实 MTC 中断（不是发生器 Off 命令）时节目和执行器怎样收尾；节目属性 When Stopping 默认是 Do Nothing，两者可能不同。
 - `Intern`、`Link Selected` 两种 Slot 的实际行为。
 
+通过 telnet 给 onPC 发命令时，命令行里不能出现「|」：MA2 不执行这条命令，也不回任何内容，只会表现为超时（包括写在 `Lua "…"` 里面的字符串）。
+
 待现场证据：
 
 - 现场控台上已有 Timecode 节目的帧率和 Slot，尤其是否有节目挂在 MIDI 时间码所在的 Slot 上。
