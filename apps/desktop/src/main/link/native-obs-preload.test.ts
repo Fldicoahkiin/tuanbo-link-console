@@ -12,7 +12,7 @@ function setup() {
   const outputs: NativeObsOutputs = {
     guardOutput: async (current, operation) => { if (!current()) throw new Error('已取消'); return operation(); },
     executor: { id: 'obs', supports: () => true, execute },
-    now: () => performance.now(), preloadResources: vi.fn((current: () => void) => { current(); return Promise.resolve(); }), prepareOutputs: vi.fn(() => Promise.resolve()),
+    now: () => performance.now(), preloadResources: vi.fn((current: () => void) => { current(); return Promise.resolve(); }), restoreScenes: vi.fn(() => Promise.resolve()), prepareOutputs: vi.fn(() => Promise.resolve()),
     releaseOutputs: vi.fn(() => Promise.resolve()), seekMedia: vi.fn(() => Promise.resolve()), executeManagedMediaEvent: vi.fn(() => Promise.resolve()),
     recordLog: entry => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: new Date().toISOString(), monotonicMs: 0 })
   };

@@ -42,6 +42,12 @@ function outputGate(current: () => boolean, onTime: () => boolean): OutputGate {
   };
 }
 type TimelineEntry = { frame: number; priority: number; cue: LinkCue } | { frame: number; priority: number; event: ManagedMediaEvent };
+function timelineEntries(work: { cues: RuntimeUpdate['dueCues']; media: ManagedMediaEvent[] }): TimelineEntry[] {
+  return [
+    ...work.cues.map(entry => ({ frame: entry.scheduledFrame, priority: 1, cue: entry.cue })),
+    ...work.media.map(event => ({ frame: event.frameNumber, priority: event.phase === 'stop' ? 0 : 2, event }))
+  ].sort((left, right) => left.frame - right.frame || left.priority - right.priority);
+}
 
 /** Owns an immutable program and consumes device-clock observations. No renderer,
  * wall-clock playhead, or UI lifetime participates in scheduling. The host must
@@ -165,37 +171,54 @@ export class ObsProgramSession {
       const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
       const onTime = (scheduledFrame: number): boolean => this.dependencies.now()
         <= observedAt + 100 - Math.max(0, sample.totalFrames - scheduledFrame) * 1000 / playbackFramesPerSecond(sample.frameRate);
-      const entries: TimelineEntry[] = [
-        ...work.cues.map(entry => ({ frame: entry.scheduledFrame, priority: 1, cue: entry.cue })),
-        ...work.media.map(event => ({ frame: event.frameNumber, priority: event.phase === 'stop' ? 0 : 2, event }))
-      ].sort((left, right) => left.frame - right.frame || left.priority - right.priority);
+      const entries = timelineEntries(work);
       if (this.queued >= 64) {
         const reason = 'OBS 响应积压超过 64 批画面动作，本批未发送；画面通道继续';
         this.fault(reason); void this.skip(entries, reason).catch(error => this.fault(`画面跳过记录失败：${String(error)}`)); return;
       }
-      this.enqueue(async () => {
-        for (let index = 0; index < entries.length; index++) {
-          const entry = entries[index]!;
-          // A covered decoder keeps running. The preceding composition already
-          // restored its visibility; there is no command left to send here.
-          // Do not turn a slow acknowledgement into a stale-command failure.
-          if ('event' in entry && entry.event.phase === 'start' && entry.event.deferSceneSwitch
-            && this.managed.isActiveMedia(entry.event)) continue;
-          if (!current()) return;
-          const group = this.group(entries, index); index += group.length - 1;
-          const gate = outputGate(current, () => onTime(entry.frame));
-          const label = 'cue' in entry ? entry.cue.name : entry.event.assetName;
-          if (!gate.allowed()) {
-            if (!current()) return;
-            const reason = `OBS 动作晚于 100ms 执行边界，未发送：${label}`;
-            this.fault(reason); await this.skip(group, reason); continue;
-          }
-          const results = await Promise.allSettled(group.map(member => this.output(member, gate)));
-          for (const result of results) if (result.status === 'rejected') this.fault(`画面动作异常：${label}：${String(result.reason)}`);
-          if (gate.lateBeforeSend() && current()) this.fault(`OBS 动作晚于 100ms 执行边界，未发送：${label}`);
-        }
-      });
+      this.enqueue(() => this.send(entries, current, onTime));
     } catch (error) { this.fail(error); }
+  }
+
+  /** Recovery rule B after OBS reconnects: what OBS shows is unknown and owned
+   * decoders are forgotten, so the picture is rebuilt at the latest position.
+   * Resolves with the number of outputs sent. */
+  rebuild(): Promise<number> {
+    if (!this.prepared || this.closed || this.failure || this.runtime.getState() !== 'running') return Promise.resolve(0);
+    const generation = this.generation;
+    const current = (): boolean => generation === this.generation && !this.closed && !this.failure;
+    let sent = 0;
+    this.enqueue(async () => {
+      const frame = this.frame;
+      this.managed.adoptSeek([], frame); this.settleMedia(frame);
+      const entries = timelineEntries(this.managed.sceneTimeline!.restore(frame, this.runtime.shownSourcesAt(frame)));
+      sent = entries.length;
+      await this.send(entries, current, () => true);
+    });
+    return this.tail.then(() => sent);
+  }
+
+  private async send(entries: TimelineEntry[], current: () => boolean, onTime: (frame: number) => boolean): Promise<void> {
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index]!;
+      // A covered decoder keeps running. The preceding composition already
+      // restored its visibility; there is no command left to send here.
+      // Do not turn a slow acknowledgement into a stale-command failure.
+      if ('event' in entry && entry.event.phase === 'start' && entry.event.deferSceneSwitch
+        && this.managed.isActiveMedia(entry.event)) continue;
+      if (!current()) return;
+      const group = this.group(entries, index); index += group.length - 1;
+      const gate = outputGate(current, () => onTime(entry.frame));
+      const label = 'cue' in entry ? entry.cue.name : entry.event.assetName;
+      if (!gate.allowed()) {
+        if (!current()) return;
+        const reason = `OBS 动作晚于 100ms 执行边界，未发送：${label}`;
+        this.fault(reason); await this.skip(group, reason); continue;
+      }
+      const results = await Promise.allSettled(group.map(member => this.output(member, gate)));
+      for (const result of results) if (result.status === 'rejected') this.fault(`画面动作异常：${label}：${String(result.reason)}`);
+      if (gate.lateBeforeSend() && current()) this.fault(`OBS 动作晚于 100ms 执行边界，未发送：${label}`);
+    }
   }
 
   /** Members that share one event boundary and are sent together. */

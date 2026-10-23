@@ -533,11 +533,28 @@ function registerIpc(
   handle('link:native-obs-prepare', (_event, value: unknown) => obsRequests.prepare(value), 'listener');
   handle('link:native-obs-stop', (_event, value: unknown) => obsRequests.stop(value));
   handle('link:native-obs-status', () => nativeObs?.status ?? null);
-  obs.subscribe(state => { if (state.status !== 'connected') {
+  // Recovery rule B when the operator reconnects OBS during a song: playing rebuilds
+  // the picture at the current position; paused prepares the song again in place.
+  const recoverNativeObs = async (): Promise<void> => {
+    const picture = nativeObs?.status?.state, program = nativeProgramHost?.controller, positionMs = nativePlayer?.status?.positionMs;
+    if (picture === 'running') { await nativeObs!.reconnected(); return; }
+    if (picture !== 'paused' || !program || positionMs === undefined) return;
+    await program.seek(positionMs);
+    const message = 'OBS 已重新连接：已在暂停位置重新准备画面';
+    program.reportFault(message);
+    await logger.record({ level: 'warning', category: 'device', device: '后台画面', message });
+  };
+  let obsConnected = obs.getSnapshot().status === 'connected';
+  obs.subscribe(state => {
+    const reconnected = state.status === 'connected' && !obsConnected;
+    obsConnected = state.status === 'connected';
+    if (reconnected) void recoverNativeObs().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面',
+      message: `OBS 重新连接后画面恢复失败：${String(error)}`, result: 'failed' }).catch((failure: unknown) => console.error('画面恢复日志写入失败', failure)); });
+    if (state.status === 'connected') return;
     nativeObs?.disconnect(state.error || 'OBS 已断开');
     void obsPreload.close().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message: `关闭节目预备失败：${String(error)}`, result: 'failed' })
       .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
-  } });
+  });
   const player = (): NativePlayerService => {
     if (nativePlayerShutdown) throw new Error('正式音频引擎正在关闭或关闭失败，请查看运行日志');
     if (!nativePlayer) {

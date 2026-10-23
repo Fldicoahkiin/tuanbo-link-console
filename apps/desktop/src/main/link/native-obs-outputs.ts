@@ -18,7 +18,9 @@ import { obsMediaCachePaths } from './obs-media-paths';
 export class ObsPreparationCancelled extends Error {}
 
 export type NativeObsOutputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault'> & {
-  preloadResources: (assertCurrent: () => void, phase?: 'idle' | 'playback' | 'background') => Promise<void>;
+  preloadResources: (assertCurrent: () => void, phase?: 'idle' | 'playback' | 'background' | 'reconnect') => Promise<void>;
+  /** OBS forgot this song's owned scenes after a reconnect: prepare them again, without warming any decoder. */
+  restoreScenes: (assertCurrent: () => void) => Promise<void>;
 };
 
 type Services = {
@@ -107,7 +109,8 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
               obsMediaCachePaths(path, asset.sha256), target, hardwareDecode);
             preload.register(project.projectId, asset, absolute, target.sourceName);
             assertCurrent();
-            const openingEvent = openingDecoders.get(target.sourceName);
+            // After a reconnect the picture is rebuilt at the current position, not the opening one.
+            const openingEvent = preparationPhase === 'reconnect' ? undefined : openingDecoders.get(target.sourceName);
             if (openingEvent) {
               phase = '解码预热'; timings.push({ phase, atMs: performance.now() - assetStarted });
               const primeSlot = nextPrimeSlot++ % primeTails.length;
@@ -188,6 +191,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       await prepareStructure(); assertCurrent(); await measure('机位结构');
       prepared = true;
     },
+    restoreScenes: assertCurrent => outputs.preloadResources(assertCurrent, 'reconnect'),
     prepareOutputs: async assertCurrent => {
       if (!prepared) await outputs.preloadResources(assertCurrent, 'playback');
       assertCurrent();

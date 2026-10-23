@@ -190,6 +190,26 @@ it('素材预备晚于播放边界：起播失败标红，预备完成后按当�
   expect(calls).toHaveLength(2); expect(test.session.error).toBeNull();
 });
 
+it('OBS 重新连接后按当前位置重建画面：断线时错过起播的素材按对齐位置起播一次，之后正常清理', async () => {
+  const project = videoFixture(); project.rundown[0]!.referenceMediaClips[0]!.startTimecode.seconds = 1;
+  const test = setup(project), calls = test.dependencies.executeManagedMediaEvent.mock.calls;
+  test.dependencies.executeManagedMediaEvent.mockRejectedValueOnce(new Error('OBS 未连接'));
+  await test.session.prepare(0); await test.advance(0, 1500);
+  expect(calls.map(call => call[0].event.phase)).toEqual(['start']);
+  expect(await test.session.rebuild()).toBeGreaterThan(0);
+  expect(calls.map(call => call[0].event.phase)).toEqual(['start', 'start']);
+  expect(calls[1]![0].event).toMatchObject({ clipId: 'clip', sourceOffsetMs: 500 });
+  await test.advance(1600, 2000); expect(calls).toHaveLength(2); expect(test.session.error).toBeNull();
+  await test.session.stop(); expect(calls.at(-1)?.[0].event.phase).toBe('stop');
+});
+
+it('暂停或尚未开始时不重建画面', async () => {
+  const test = setup(videoFixture()); await test.session.prepare(0);
+  expect(await test.session.rebuild()).toBe(0);
+  await test.advance(0, 500); await test.session.pause();
+  expect(await test.session.rebuild()).toBe(0); await test.session.stop();
+});
+
 it('长片段每 5 秒按当前位置检查一次漂移，校正时标红；起播、定位后 1 秒内不检查', async () => {
   const test = setup(videoFixture()), correct = vi.fn<(event: import('./managed-media-timeline').ManagedMediaEvent) => Promise<number | null>>(() => Promise.resolve(null));
   const drift = { ...test.dependencies, correctMediaDrift: correct };
