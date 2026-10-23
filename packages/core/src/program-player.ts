@@ -21,6 +21,8 @@ export type InternalPlayerDependencies = {
   preciseSeeking?: () => boolean;
   /** Why playback must not start now; checked before any output is prepared. */
   refusal?: () => string | null;
+  /** The start check failed for a song the operator started: true plays it without lighting, false cancels. */
+  confirmWithoutLighting?: (reason: string) => Promise<boolean>;
 };
 
 /** Read-only transport data. Editors may observe the output clock, but can

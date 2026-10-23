@@ -1,8 +1,8 @@
-import { emptyInternalPlayerState, nativeAudioAnalysis, toUserErrorMessage,
+import { emptyInternalPlayerState, lightingStartCheck, nativeAudioAnalysis, songLightingStatus, toUserErrorMessage,
   type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type PlaybackBoundary, type PlaybackClock } from '@tb/core/link';
 import type { LinkProject, NativePlayerStatus, NativeProgramAttachment, NativeProgramEvent, NativeProgramOperation } from '@tb/schema';
 
-type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | 'onNativeProgramEvent' | 'onNativePlaybackStatus'>;
+type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | 'onNativeProgramEvent' | 'onNativePlaybackStatus' | 'getNativePlaybackDevices'>;
 
 /** UI controller is a remote for the main-process program host. It never
  * schedules playback, sends lighting, or invents time while the UI is busy. */
@@ -23,7 +23,7 @@ export class RemoteNativeProgramPlayer {
     subscribeBoundary: listener => { this.boundaries.add(listener); return () => { this.boundaries.delete(listener); }; }
   };
 
-  constructor(project: LinkProject, projectPath: string, revision: number, private readonly dependencies: InternalPlayerDependencies,
+  constructor(private readonly project: LinkProject, projectPath: string, revision: number, private readonly dependencies: InternalPlayerDependencies,
     private readonly api: Api, private readonly observed: (event: NativeProgramEvent) => void) {
     const program = api.onNativeProgramEvent(event => {
       if (this.disposed || event.ownerId !== this.ownerId || event.sequence <= this.sequence) return;
@@ -42,14 +42,28 @@ export class RemoteNativeProgramPlayer {
       document: JSON.stringify(project), configuration: this.configuration() }).then(attachment => { this.attachment = attachment; });
     void this.ready.catch(error => this.failed(error));
   }
-  play(itemId: string, positionMs?: number, paused = false): Promise<void> {
-    return this.send({ kind: 'play', itemId, ...(positionMs === undefined ? {} : { positionMs }), paused });
+  /** A song the operator starts is checked first; a failed check asks whether to play it without lighting. */
+  async play(itemId: string, positionMs?: number, paused = false): Promise<void> {
+    let withoutLighting = false;
+    try {
+      const reason = await this.startCheck(itemId);
+      if (reason) {
+        if (!this.dependencies.confirmWithoutLighting) throw new Error(`${reason}；无法询问是否无灯光播放`);
+        if (!await this.dependencies.confirmWithoutLighting(reason)) return;
+        withoutLighting = true;
+      }
+    } catch (error) { this.failed(error); return; }
+    return this.send({ kind: 'play', itemId, ...(positionMs === undefined ? {} : { positionMs }), paused, ...(withoutLighting ? { withoutLighting } : {}) });
   }
   pause(): Promise<void> { return this.send({ kind: 'pause' }); }
   resume(): Promise<void> { return this.send({ kind: 'resume' }); }
   stop(): Promise<void> { return this.send({ kind: 'stop' }); }
   reset(): Promise<void> { return this.send({ kind: 'reset' }); }
-  toggle(): Promise<void> { return this.send({ kind: 'toggle' }); }
+  /** Starting from stop goes through the start check; pause and resume keep the song's route. */
+  toggle(): Promise<void> {
+    if (this.state.status !== 'playing' && this.state.status !== 'paused' && this.state.itemId) return this.play(this.state.itemId);
+    return this.send({ kind: 'toggle' });
+  }
   seek(positionMs: number): Promise<void> { return this.send({ kind: 'seek', positionMs }); }
   scrub(itemId: string, positionMs: number): Promise<void> { return this.send({ kind: 'scrub', itemId, positionMs }); }
   skip(direction: -1 | 1): Promise<void> { return this.send({ kind: 'skip', direction }); }
@@ -74,6 +88,15 @@ export class RemoteNativeProgramPlayer {
     this.disposed = true; this.unsubscribe(); this.boundaries.clear();
     // Close is sent immediately, including while open is waiting for authorization.
     await this.api.controlNativeProgram({ version: 1, ownerId: this.ownerId, operation: { kind: 'close' } });
+  }
+  private async startCheck(itemId: string): Promise<string | null> {
+    let ports: string[] | null = null;
+    // Only a ready song needs the present MIDI outputs.
+    if (songLightingStatus(this.project, itemId).state === 'ready') {
+      try { ports = (await this.api.getNativePlaybackDevices()).midiOutputs.map(output => output.name); }
+      catch (error) { return `这首歌可演出，但时间码输出端口无法确认：${toUserErrorMessage(error)}`; }
+    }
+    return lightingStartCheck(this.project, itemId, { portName: this.dependencies.configuration().mtcPortName, ports });
   }
   private configuration() { return { ...this.dependencies.configuration(), preciseSeeking: this.dependencies.preciseSeeking?.() ?? false }; }
   private async send(operation: NativeProgramOperation): Promise<void> {

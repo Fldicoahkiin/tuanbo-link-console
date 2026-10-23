@@ -79,6 +79,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     const dependencies: InternalPlayerDependencies = {
       // Refused before any output is prepared; the engine is never switched here.
       refusal: () => internalAudioEngine(useIntegrationStore.getState().profile, project).blocked,
+      confirmWithoutLighting: reason => desktop.confirmPlayWithoutLighting(reason),
       prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled, signal }) => {
         if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
         if (!path) throw new Error('请先保存工程，再播放正式音频');

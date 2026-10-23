@@ -171,6 +171,7 @@ const tbLink: LinkDesktopBridgeApi = {
   openProjectDocument: (path) => invoke('link:open-project', path),
   saveProjectDocument: (path, content, options) => invoke('link:save-project', path, content, options ?? {}),
   confirmProjectLocation: async (purpose) => z.boolean().parse(await invoke('link:confirm-project-location', purpose)),
+  confirmPlayWithoutLighting: async (reason) => z.boolean().parse(await invoke('link:confirm-play-without-lighting', reason)),
   confirmRevertToSaved: async (payload) => z.boolean().parse(await invoke('link:confirm-revert-to-saved', payload)),
   projectDocumentWorkerState: async () => z.object({ stalled: z.string().nullable() }).strict().parse(await invoke('link:project-document-worker')),
   restartProjectDocumentWorker: async (reason) => z.boolean().parse(await invoke('link:restart-project-document-worker', reason)),
