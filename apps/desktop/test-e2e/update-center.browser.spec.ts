@@ -63,6 +63,7 @@ test('超出升级服务期限：显示新版本和原因，不提供下载', as
   await expect(dialog.getByText('发现新版本 0.5.1', { exact: true })).toBeVisible();
   await expect(dialog.getByText(/晚于本机授权的升级服务期限 2026-10-31/)).toBeVisible();
   await expect(dialog.getByRole('button', { name: '下载更新' })).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: '检查更新' })).toHaveCount(0);
+  // After renewing, the operator checks again to recompute the term.
+  await expect(dialog.getByRole('button', { name: '检查更新' })).toBeEnabled();
   await expect(dialog.getByText('团播联动台功能测试版 · 测试版 · 提交 0123456789ab-dirty · com.tuanbo.control.functionaltest', { exact: true })).toBeVisible();
 });

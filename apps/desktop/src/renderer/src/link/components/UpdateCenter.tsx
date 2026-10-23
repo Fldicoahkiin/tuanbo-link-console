@@ -118,9 +118,9 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
         {runtimeActive ? <p className="settings-note">播放中不下载、不安装更新；停止播放后再操作。</p> : null}
         <div className="modal-actions update-actions">
           {!inline ? <Button className="secondary-button" onClick={() => setOpen(false)}>关闭</Button> : null}
-          {status?.feedConfigured && phase !== 'downloaded' && phase !== 'available' && phase !== 'disabled' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</Button> : null}
+          {status?.feedConfigured && phase !== 'downloaded' && phase !== 'disabled' && (phase !== 'available' || status.installBlockedReason) ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</Button> : null}
           {phase === 'available' && !status?.installBlockedReason ? <Button className="primary-button" disabled={working || runtimeActive} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</Button> : null}
-          {phase === 'downloaded' && !status?.installBlockedReason ? <Button className="primary-button" disabled={busy || runtimeActive} onClick={() => void install()}><CloudDownload />重启并安装</Button> : null}
+          {phase === 'downloaded' ? <Button className="primary-button" disabled={busy || runtimeActive} onClick={() => void install()}><CloudDownload />重启并安装</Button> : null}
         </div>
   </>;
   if (inline) return <div className="update-center">{content}{!status && failure ? <Button onClick={() => void run(() => window.tbLink.getUpdateStatus())}>重新读取更新状态</Button> : null}</div>;
