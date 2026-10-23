@@ -410,7 +410,7 @@ it.runIf(process.env.TBLINK_MA2_TIMECODE_PROBE === '1' && Boolean(process.env.TB
     const ranges = ma2TimecodeRangesSchema.parse(JSON.parse(await bridge.request('TCRANGES', 1)));
     expect(ranges.entries.map(entry => entry.target)).toEqual(timecodes.entries.map(entry => entry.target));
     results.ranges = { count: ranges.entries.length, sample: ranges.entries.slice(0, 5) };
-    for (const orphan of timecodes.entries.filter(entry => entry.name === 'LianDongTanZhenGeQu')) results[`removed-orphan-${orphan.target}`] = await lua(`gma.cmd('Delete Timecode ${orphan.target} /nc');R=gma.show.getobj.handle('Timecode ${orphan.target}')==nil`);
+    for (const orphan of timecodes.entries.filter(entry => entry.name === `LianDongTanZhenGeQu ${entry.target}`)) results[`removed-orphan-${orphan.target}`] = await lua(`gma.cmd('Delete Timecode ${orphan.target} /nc');R=gma.show.getobj.handle('Timecode ${orphan.target}')==nil`);
     const sequences = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
     const sequence = sequences.entries.find(entry => entry.target === 8999)?.target ?? sequences.entries[0]!.target;
     const report = inspectMa2SequenceXml(await bridge.request('SEQCUES', sequence, '1.000,2.000')).sequences[0]!;
