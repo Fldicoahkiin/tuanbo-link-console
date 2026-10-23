@@ -235,6 +235,10 @@ describe('LinkProjectService', () => {
     const replaced = { relativePath: 'assets/reference-media/replaced.mp4', sha256: sha256('expected') };
     const absent = { relativePath: 'assets/reference-media/absent.mp4', sha256: sha256('absent') };
     await writeFile(join(original, replaced.relativePath), 'other-bytes');
+    const waveformPath = (root: string): string => join(root, 'cache', 'waveforms', `${audio.sha256}.json`);
+    for (const root of [original, moved]) cleanupDirectories.push(join(root, 'cache'), join(root, 'cache', 'waveforms'));
+    cleanupFiles.push(waveformPath(original), waveformPath(moved));
+    await service.saveWaveformCache(originalProject, audio.sha256, [0, 0.5, -0.5]);
     for (const relativePath of [audio.relativePath, video.relativePath, replaced.relativePath]) cleanupFiles.push(join(original, relativePath));
     for (const relativePath of [audio.relativePath, video.relativePath]) cleanupFiles.push(join(moved, relativePath));
     const files = [audio, video, replaced, absent].map(({ relativePath, sha256 }) => ({ relativePath, sha256 }));
@@ -249,6 +253,8 @@ describe('LinkProjectService', () => {
     await expect(readFile(join(moved, audio.relativePath), 'utf8')).resolves.toBe('song-audio');
     await expect(readFile(join(moved, video.relativePath), 'utf8')).resolves.toBe('opening-video');
     expect(await readdir(join(moved, 'assets', 'reference-media'))).toEqual([video.relativePath.split('/').at(-1)]);
+    expect(await service.loadWaveformCache(movedProject, audio.sha256)).toEqual([0, 0.5, -0.5]);
+    expect(await readdir(join(moved, 'cache', 'waveforms'))).toEqual([`${audio.sha256}.json`]);
     expect(await service.findMissingAssetFiles(movedProject, files)).toEqual([replaced.relativePath, absent.relativePath]);
     expect((await service.relinkAssetFiles(movedProject, original, files.slice(0, 1)))[0]?.status).toBe('present');
   });

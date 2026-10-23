@@ -4,7 +4,7 @@ import { pauseMa2RealtimeSession, pendingSongSummary, retryMa2RealtimeSession } 
 import { useMemo, useState } from 'react';
 import { Check, CircleAlert, FolderArchive, FolderOpen, Save, Undo2, Redo2 } from 'lucide-react';
 import type { ProjectArchiveResult } from '@tb/schema';
-import { ma2PendingChanges } from '../runtime/ma2-pending-changes';
+import { ma2PendingChanges } from '@tb/core/link';
 import { enableMa2NameSync, useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
 import { archiveMa2Project } from '../runtime/ma2-project-archive';
 import { useDocumentStore } from '../stores/document-store';
