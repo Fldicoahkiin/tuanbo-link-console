@@ -1,7 +1,7 @@
 import { applyMa2AutoBindingsCommand, ma2AutoBindEvents, applyMa2ReadbackCommand, matchMa2Readback, programTimeOrigin, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
 import { ma2AutoBindResultSchema, type Ma2AutoBindRequest, type Ma2AutoBindResult } from '@tb/schema';
 import { ma2ApplyResultSchema, ma2CatalogSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2Catalog, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
-import { ma2PendingChanges } from './ma2-pending-changes';
+import { ma2PendingChanges } from '@tb/core/link';
 import { pendingMa2Renames, confirmMa2RenameCommand, ma2RenameKey, toConsoleLabel } from '@tb/core/link';
 import { ma2RenameResultSchema, type Ma2RenameRequest, type Ma2RenameResult } from '@tb/schema';
 

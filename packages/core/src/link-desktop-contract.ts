@@ -400,6 +400,8 @@ export type LinkDesktopApi = {
   onObsInventoryChanged(listener: () => void): () => void;
   onProcessStatus(listener: (snapshot: LinkProcessSnapshot) => void): () => void;
   onUpdateStatus(listener: (status: LinkUpdateStatus) => void): () => void;
+  /** An uncaught main-process error, already logged; the app keeps running. */
+  onMainProcessError(listener: (message: string) => void): () => void;
 };
 
 export type LinkFileBridge = {
