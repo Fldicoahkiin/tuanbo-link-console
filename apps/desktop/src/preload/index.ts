@@ -92,6 +92,9 @@ const tbLink: LinkDesktopBridgeApi = {
   copyPurchaseCode: (localId, licenseId) => invoke('link:purchase-copy-code', localId, licenseId),
   requireOutputLicense: () => invoke('link:license-require-output'),
   exportMa2Plugin: () => invoke('link:ma2-export-plugin'),
+  getMa2DataDirectory: async () => z.string().min(1).nullable().parse(await invoke('link:ma2-data-directory')),
+  pickMa2DataDirectory: async () => z.string().min(1).nullable().parse(await invoke('link:pick-ma2-data-directory')),
+  detectMa2DataDirectory: async () => z.string().min(1).parse(await invoke('link:detect-ma2-data-directory')),
   exportObsPreviewScript: () => invoke('link:obs-preview-script'),
   getObsPreviewStatus: () => invoke('link:obs-preview-status'),
   discoverMa2: () => invoke('link:ma2-discover'),
@@ -167,9 +170,11 @@ const tbLink: LinkDesktopBridgeApi = {
   detectLocalIntegrations: () => invoke('link:detect-local-integrations'),
   loopMidi: (action) => invoke('link:loop-midi', action),
   pickExecutable: () => invoke('link:pick-executable'),
+  pickWorkingDirectory: async () => z.string().min(1).nullable().parse(await invoke('link:pick-working-directory')),
   createProject: (name) => invoke('link:create-project', name),
   pickProjectDocument: () => invoke('link:pick-open-project'),
   openProjectDocument: (path) => invoke('link:open-project', path),
+  lastProjectPath: async () => z.string().min(1).nullable().parse(await invoke('link:last-project')),
   saveProjectDocument: (path, content, options) => invoke('link:save-project', path, content, options ?? {}),
   confirmProjectLocation: async (purpose) => z.boolean().parse(await invoke('link:confirm-project-location', purpose)),
   confirmPlayWithoutLighting: async (reason) => z.boolean().parse(await invoke('link:confirm-play-without-lighting', reason)),
@@ -311,7 +316,12 @@ const tbLink: LinkDesktopBridgeApi = {
 };
 
 const tbFile: LinkFileBridge = {
-  getPathForFile: (file) => webUtils.getPathForFile(file)
+  // A path exists only for a File the operator dropped or picked; the main process accepts it back.
+  getPathForFile: (file) => {
+    const path = webUtils.getPathForFile(file);
+    if (path) ipcRenderer.send('link:file-chosen', path);
+    return path;
+  }
 };
 
 contextBridge.exposeInMainWorld('tbLink', tbLink);

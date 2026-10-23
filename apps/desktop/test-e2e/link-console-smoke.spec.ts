@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createServer, type Server, type Socket } from 'node:net';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -45,6 +45,15 @@ async function openMa2ManualSettings(): Promise<void> {
   const panel = page.locator('.ma2-network-settings > .ma2-advanced-settings');
   if (await panel.getAttribute('open') === null) await panel.locator(':scope > summary').click();
   await page.getByLabel('MA2 控台 IP', { exact: true }).scrollIntoViewIfNeeded();
+}
+/** The onPC data directory only comes from the main process's folder dialog: answer that dialog once. */
+async function chooseMa2DataDirectory(directory: string): Promise<void> {
+  await application.evaluate(({ dialog }, path) => {
+    const original = dialog.showOpenDialog.bind(dialog);
+    dialog.showOpenDialog = () => { dialog.showOpenDialog = original; return Promise.resolve({ canceled: false, filePaths: [path] }); };
+  }, directory);
+  await page.getByRole('button', { name: '选择本机 onPC 数据目录', exact: true }).click();
+  await expect(page.getByLabel('MA2 onPC 数据目录')).toHaveValue(directory);
 }
 async function openLightingTools(name: '节目同步' | '节拍与循环' | '导入与导出'): Promise<void> {
   await closeLightingTools();
@@ -247,7 +256,7 @@ test('新建 MA2 Timecode 关联当前节目并保存，失败不产生虚假绑
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByLabel('MA2 onPC 数据目录').fill('C:\\MA2-Test');
+  await chooseMa2DataDirectory('C:\\MA2-Test');
   await openLightingTools('节目同步');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9903');
   const preview = convertMa2Snapshot(createMa2TimecodeXml(9903, '节目 1', '3.3.4.3'), 9903);
@@ -316,7 +325,7 @@ test('节目轨道可明确关联 MA2、取消和撤销，并保存待同步绑�
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByLabel('MA2 onPC 数据目录').fill('C:\\MA2-Test');
+  await chooseMa2DataDirectory('C:\\MA2-Test');
   await openLightingTools('节目同步');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902');
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
@@ -394,7 +403,7 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，列出未支�
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByLabel('MA2 onPC 数据目录').fill('C:\\MA2-Test');
+  await chooseMa2DataDirectory('C:\\MA2-Test');
   await openLightingTools('节目同步');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902');
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
@@ -541,7 +550,7 @@ test('MA2 重复 Cue 可逐点确认对应，重新读取清除旧选择', async
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByLabel('MA2 onPC 数据目录').fill('C:\\MA2-Test');
+  await chooseMa2DataDirectory('C:\\MA2-Test');
   await openLightingTools('节目同步');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902');
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
@@ -854,7 +863,12 @@ test('设备地址草稿不会被独立 MIDI 设置覆盖，保存后两项均�
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '程序维护', exact: true }).click();
   await page.locator('.device-program-card.obs .device-process-settings > summary').click();
   await page.locator('.device-program-card.obs .device-advanced > summary').click();
-  await page.locator('.device-program-card.obs').getByLabel('启动文件夹', { exact: true }).fill('C:/unsaved-maintenance');
+  await application.evaluate(({ dialog }) => {
+    const original = dialog.showOpenDialog.bind(dialog);
+    dialog.showOpenDialog = () => { dialog.showOpenDialog = original; return Promise.resolve({ canceled: false, filePaths: ['C:/unsaved-maintenance'] }); };
+  });
+  await page.getByRole('button', { name: '选择 OBS Studio 启动文件夹', exact: true }).click();
+  await expect(page.locator('.device-program-card.obs').getByLabel('启动文件夹', { exact: true })).toHaveValue('C:/unsaved-maintenance');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '音频与 MIDI', exact: true }).click();
   await page.getByText('远程控制与灯光动作端口', { exact: true }).click();
@@ -1399,7 +1413,7 @@ test('播放预检阻断直接展示节目、原因和处理办法，紧凑窗�
   const projectPath = testInfo.outputPath('notice.tblink');
   await createAudioFixture(audioPath);
   const project = parseLinkProject({ ...createEmptyLinkProject('播放诊断'), playbackSource: 'internal', obsOutputMode: 'scenes', rundown: [{
-    id: 'song', title: '387..MP4', referenceAudio: { assetId: 'audio', relativePath: 'missing.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 4000 },
+    id: 'song', title: '387..MP4', referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/missing.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 4000 },
     cues: [{ id: 'cue', name: '显示画面', durationMs: 1000, timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, actions: [{ id: 'source', label: '显示来源 · 显示器采集', kind: 'obs.setSceneItemEnabled', sceneName: '测试场景', sourceName: '显示器采集', enabled: true }] }]
   }] });
   await writeFile(projectPath, JSON.stringify(project));
@@ -1418,6 +1432,8 @@ test('播放预检阻断直接展示节目、原因和处理办法，紧凑窗�
     BrowserWindow.getAllWindows()[0]!.webContents.send('link:obs-status', status);
   }, projectPath);
   await page.getByRole('button', { name: '打开工程', exact: true }).click();
+  // The song audio is deliberately missing, so opening the project first lists it as missing.
+  await page.getByRole('dialog', { name: '找回缺失素材' }).getByRole('button', { name: '稍后处理', exact: true }).click();
   await page.locator('.player-buttons').getByRole('button', { name: '播放', exact: true }).click();
   await expect(page.locator('.player-transport')).toHaveClass(/status-error/);
   const diagnostics = page.locator('.player-diagnostics');
@@ -1444,13 +1460,14 @@ test('播放预检阻断直接展示节目、原因和处理办法，紧凑窗�
 });
 
 test('编辑器共用正式播放器，打点和菜单切换不中断，暂停定位重新激活 OBS', async ({}, testInfo) => {
-  const audioPath = testInfo.outputPath('transport.wav');
+  const audioPath = testInfo.outputPath('assets/reference-audio/transport.wav');
   const projectPath = testInfo.outputPath('transport.tblink');
+  await mkdir(dirname(audioPath), { recursive: true });
   await createAudioFixture(audioPath, 440, 30);
   const lighting = createLightingDocument();
   lighting.tracks = [{ id: 'light', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 30000, timeLock: 'time', muted: false, events: [] }] }];
   const project = parseLinkProject({ ...createEmptyLinkProject('共用播放验收'), schemaVersion: 2, playbackSource: 'internal', obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '共用歌曲', lighting,
-    referenceAudio: { assetId: 'audio', relativePath: 'transport.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 30000 },
+    referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/transport.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 30000 },
     cues: [{ id: 'scene', name: '正式画面', timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, actions: [{ id: 'action', kind: 'obs.setProgramScene', label: '切换正式画面', sceneName: '测试场景' }] }] }] });
   await writeFile(projectPath, JSON.stringify(project));
   const profile = createDefaultIntegrationProfile();
@@ -1538,7 +1555,6 @@ test.beforeEach(async ({}, testInfo) => {
   await answerSaveQuestions(application);
   await page.evaluate(() => {
     localStorage.removeItem('tblink.cue-workspace-layout.v1');
-    localStorage.removeItem('tblink.last-project-path.v1');
   });
   await page.reload();
 });
@@ -1772,11 +1788,12 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
 
 test('保存旧快照不会清除后来修改的退出保护', async ({}, testInfo) => {
   await expect(page.locator('.project-welcome')).toBeVisible();
-  await page.evaluate(async (destination) => {
+  await application.evaluate(({ dialog }, destination) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: destination }); }, testInfo.outputPath('snapshot.tblink'));
+  await page.evaluate(async () => {
     const project = await window.tbLink.createProject('旧快照');
     await window.tbLink.setDocumentState({ version: 1, dirty: true, consoleSynced: false, name: '旧快照', projectPath: null, projectId: project.projectId });
-    await window.tbLink.saveProjectDocument(destination, JSON.stringify(project));
-  }, testInfo.outputPath('snapshot.tblink'));
+    await window.tbLink.saveProjectDocument(null, JSON.stringify(project));
+  });
   const result = await application.evaluate(async ({ BrowserWindow, dialog }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (!window) throw new Error('主窗口不存在');
@@ -1998,14 +2015,11 @@ test('损坏的工作区布局会明确告警而不是静默清零', async () =>
 });
 
 test('工程恢复存储不可用时明确告警且界面保持可用', async ({}, testInfo) => {
-  await page.addInitScript(() => {
-    Storage.prototype.getItem = function getItem(key: string): string | null {
-      if (key === 'tblink.last-project-path.v1') throw new Error('模拟恢复存储不可用');
-      return null;
-    };
-  });
+  // The main process keeps the last project record in its own data folder.
+  const record = join(testInfo.outputPath('user-data'), 'link-integrations', 'last-project.json');
+  await mkdir(dirname(record), { recursive: true }); await writeFile(record, '模拟恢复存储损坏');
   await page.reload();
-  await expect(page.locator('.toast.error')).toContainText('读取上次工程路径失败：模拟恢复存储不可用');
+  await expect(page.locator('.toast.error')).toContainText('读取上次工程路径失败：上次工程记录损坏');
   await expect(page.getByRole('button', { name: '新建工程', exact: true })).toBeEnabled();
 
   await beginNewProject();
@@ -2865,8 +2879,9 @@ test('独立素材场景同步、场景长度拖动与低功率切换', async ({
 });
 
 test('音乐自然结束补齐最后轮询间隔的 Cue，手动跳到结尾只释放音符', async ({}, testInfo) => {
-  const audioPath = testInfo.outputPath('tail.wav');
+  const audioPath = testInfo.outputPath('assets/reference-audio/tail.wav');
   const projectPath = testInfo.outputPath('tail.tblink');
+  await mkdir(dirname(audioPath), { recursive: true });
   await createAudioFixture(audioPath);
   const lighting = createLightingDocument(); lighting.outputMode = 'direct';
   lighting.tracks = [{ id: 'lighting', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: 'lighting-output', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 4200, muted: false, timeLock: 'time', events: [
@@ -2876,7 +2891,7 @@ test('音乐自然结束补齐最后轮询间隔的 Cue，手动跳到结尾只�
   ] }] }];
   const project = createEmptyLinkProject('结束边界'); project.schemaVersion = 2;
   project.rundown.push({ id: 'song', title: '结尾验收', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting,
-    referenceAudio: { assetId: 'audio', relativePath: 'tail.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 4000 } });
+    referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/tail.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 4000 } });
   await writeFile(projectPath, JSON.stringify(project));
   const profile = createDefaultIntegrationProfile();
   profile.midiPortProfiles.find((port) => port.id === 'lighting-output')!.portName = 'Tail Test';
@@ -3095,7 +3110,7 @@ test('MA2 预览与冲突显示主推杆百分比，合并结果不误报关闭�
   await devices.click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByLabel('MA2 onPC 数据目录').fill('C:\\MA2-Test');
+  await chooseMa2DataDirectory('C:\\MA2-Test');
   await openLightingTools('节目同步');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902');
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
@@ -3451,7 +3466,7 @@ test('无灯光轨道的节目可以从节目同步导入并撤销', async ({}, 
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   const menu = page.getByRole('navigation', { name: '设置子菜单' });
   await menu.getByRole('button', { name: '设备连接', exact: true }).click(); await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
-  await menu.getByRole('button', { name: '设备连接', exact: true }).click(); await page.getByLabel('MA2 onPC 数据目录').fill('C:/MA2-Test');
+  await menu.getByRole('button', { name: '设备连接', exact: true }).click(); await chooseMa2DataDirectory('C:/MA2-Test');
   await openLightingTools('节目同步');
   await expect(page.getByRole('dialog', { name: '节目同步' })).toContainText('未编排节目');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902'); await page.getByRole('button', { name: '读取灯光编排', exact: true }).click(); await page.getByRole('button', { name: '加入当前节目', exact: true }).click();

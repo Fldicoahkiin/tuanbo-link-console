@@ -1,7 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { copyFile, readFile, writeFile, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import ffmpeg from 'ffmpeg-static';
@@ -14,12 +14,13 @@ test('真实 OBS 透明叠加播放与编辑器预览连续响应', async ({}, i
   test.skip(!process.env.TBLINK_OVERLAY_OBS_EXE || !process.env.TBLINK_OVERLAY_OBS_URL || !process.env.TBLINK_OVERLAY_VIDEO, '需专用隔离 OBS 和透明素材，不使用现场 OBS');
   test.setTimeout(90_000);
   if (!ffmpeg) throw new Error('缺少音频测试工具');
-  const audio = info.outputPath('silence.wav'), video = info.outputPath('cards.mov');
+  const audio = info.outputPath('assets', 'reference-audio', 'silence.wav'), video = info.outputPath('assets', 'reference-media', 'cards.mov');
+  await mkdir(dirname(audio), { recursive: true }); await mkdir(dirname(video), { recursive: true });
   await copyFile(process.env.TBLINK_OVERLAY_VIDEO!, video);
   await promisify(execFile)(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '6', audio], { windowsHide: true });
   const hash = async (path: string) => createHash('sha256').update(await readFile(path)).digest('hex');
-  const project = parseLinkProject({ ...createEmptyLinkProject('透明叠加播放验收'), playbackSource: 'internal', mediaAssets: [{ id: 'cards', name: '透明扑克牌', kind: 'video', relativePath: 'cards.mov', width: 1080, height: 1920, durationMs: 2200, sha256: await hash(video), byteLength: (await stat(video)).size }], rundown: [{
-    id: 'song', title: '叠加与预览测试', referenceAudio: { assetId: 'audio', relativePath: 'silence.wav', durationMs: 6000, sha256: await hash(audio) },
+  const project = parseLinkProject({ ...createEmptyLinkProject('透明叠加播放验收'), playbackSource: 'internal', mediaAssets: [{ id: 'cards', name: '透明扑克牌', kind: 'video', relativePath: 'assets/reference-media/cards.mov', width: 1080, height: 1920, durationMs: 2200, sha256: await hash(video), byteLength: (await stat(video)).size }], rundown: [{
+    id: 'song', title: '叠加与预览测试', referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/silence.wav', durationMs: 6000, sha256: await hash(audio) },
     visualLayers: [{ id: 'top', name: '透明特效', visible: true, locked: false }, { id: 'bottom', name: '机位', visible: true, locked: false }],
     referenceMediaClips: [{ id: 'clip', assetId: 'cards', label: '扑克牌', layerId: 'top', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 2200, embeddedAudioEnabled: false }],
     cues: [{ id: 'camera', name: '底层机位', layerId: 'bottom', timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 6000, actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: 'Bridge' }] }]
@@ -128,15 +129,16 @@ test('第二段透明视频进入与退出时底层视频连续前进', async ({
   test.skip(!process.env.TBLINK_OVERLAY_OBS_EXE || !process.env.TBLINK_OVERLAY_OBS_URL || !process.env.TBLINK_OVERLAY_VIDEO, '需隔离 OBS 与透明素材');
   test.setTimeout(90_000);
   if (!ffmpeg) throw new Error('缺少测试媒体生成工具');
-  const audio = info.outputPath('silence.wav'), cards = info.outputPath('cards.mov'), base = info.outputPath('base.mp4');
+  const audio = info.outputPath('assets', 'reference-audio', 'silence.wav'), cards = info.outputPath('assets', 'reference-media', 'cards.mov'), base = info.outputPath('assets', 'reference-media', 'base.mp4');
+  await mkdir(dirname(audio), { recursive: true }); await mkdir(dirname(cards), { recursive: true });
   await copyFile(process.env.TBLINK_OVERLAY_VIDEO!, cards);
   await promisify(execFile)(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '12', audio], { windowsHide: true });
   await promisify(execFile)(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=360x640:rate=30', '-t', '12', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', base], { windowsHide: true });
   const hash = async (path: string) => createHash('sha256').update(await readFile(path)).digest('hex');
   const project = parseLinkProject({ ...createEmptyLinkProject('双层连续播放'), playbackSource: 'internal', obsOutputMode: 'scenes', mediaAssets: [
-    { id: 'cards', name: '透明牌', kind: 'video', relativePath: 'cards.mov', width: 1080, height: 1920, durationMs: 2200, sha256: await hash(cards), byteLength: (await stat(cards)).size },
-    { id: 'base', name: '运动背景', kind: 'video', relativePath: 'base.mp4', width: 360, height: 640, durationMs: 12000, sha256: await hash(base), byteLength: (await stat(base)).size }
-  ], rundown: [{ id: 'song', title: '连续底层', referenceAudio: { assetId: 'audio', relativePath: 'silence.wav', durationMs: 12000, sha256: await hash(audio) },
+    { id: 'cards', name: '透明牌', kind: 'video', relativePath: 'assets/reference-media/cards.mov', width: 1080, height: 1920, durationMs: 2200, sha256: await hash(cards), byteLength: (await stat(cards)).size },
+    { id: 'base', name: '运动背景', kind: 'video', relativePath: 'assets/reference-media/base.mp4', width: 360, height: 640, durationMs: 12000, sha256: await hash(base), byteLength: (await stat(base)).size }
+  ], rundown: [{ id: 'song', title: '连续底层', referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/silence.wav', durationMs: 12000, sha256: await hash(audio) },
     visualLayers: [{ id: 'top', name: '特效', visible: true, locked: false }, { id: 'bottom', name: '视频', visible: true, locked: false }],
     referenceMediaClips: [
       ...[0, 4].map(seconds => ({ id: `cards-${seconds}`, assetId: 'cards', label: '透明牌', layerId: 'top', startTimecode: { hours: 0, minutes: 0, seconds, frames: 0 }, durationMs: 2200, embeddedAudioEnabled: false })),

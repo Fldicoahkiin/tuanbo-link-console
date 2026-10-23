@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createEmptyLinkProject, parseLinkProject, createLightingDocument, lightingTrackSchema } from '@tb/schema';
@@ -11,10 +11,11 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
   wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
   wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('song.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await writeFile(info.outputPath('assets/reference-audio/song.wav'), wav);
   const lighting = createLightingDocument();
   lighting.tracks = [lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 10000, timeLock: 'time', muted: false, events: [{ id: 'a', kind: 'ma2', action: 'goto', cue: '1', sequence: 1, executor: '2.101', label: 'A', at: 2000 }, { id: 'b', kind: 'ma2', action: 'goto', cue: '2', sequence: 1, executor: '2.101', label: 'B', at: 4000 }] }] })];
-  const project = parseLinkProject({ ...createEmptyLinkProject('MIDI Cue 验收'), schemaVersion: 2, playbackSource: 'internal', rundown: [{ id: 'song', title: '歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'song.wav', durationMs: 10000, sha256: createHash('sha256').update(wav).digest('hex') }, lighting }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('MIDI Cue 验收'), schemaVersion: 2, playbackSource: 'internal', rundown: [{ id: 'song', title: '歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/song.wav', durationMs: 10000, sha256: createHash('sha256').update(wav).digest('hex') }, lighting }] });
   const path = info.outputPath('show.tblink'); await writeFile(path, JSON.stringify(project));
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const app = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), 'out/main/index.cjs')]] });

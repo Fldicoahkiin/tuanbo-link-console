@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { dirname, join, relative } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
+import { ffmpegDeadline } from './ffmpeg-deadline';
 import { analyzeIbtAudio } from './ibt-beat-service';
 import { audioTracksSchema, referenceAudioSchema, referenceAudioSourceSchema, type AudioBeatAnalysis, type AudioSegment, type AudioTrack, type ReferenceAudio } from '@tb/schema';
 import { hashFile, type LinkProjectService } from './link-project-service';
@@ -221,7 +222,8 @@ function ffmpeg(args: string[], onData?: (data: Buffer) => void): Promise<void> 
   if (!ffmpegPath) throw new Error('FFmpeg 运行时未安装');
   const executable = ffmpegPath.includes('app.asar') ? ffmpegPath.replace('app.asar', 'app.asar.unpacked') : ffmpegPath;
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-n', ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(executable, ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-n', ...args], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    ffmpegDeadline(child, '处理音频', 15 * 60_000, reject);
     let errorOutput = '';
     let failure: Error | null = null;
     child.stdout.on('data', (data: Buffer) => { try { onData?.(data); } catch (error) { failure = error instanceof Error ? error : new Error(String(error)); } });

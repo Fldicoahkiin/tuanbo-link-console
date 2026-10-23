@@ -346,11 +346,12 @@ test('播放中按 Ctrl+S 写入工程文件，播放不中断', async ({}, info
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
   wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(192000, 28);
   wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('tone.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await writeFile(info.outputPath('assets/reference-audio/tone.wav'), wav);
   const sha256 = createHash('sha256').update(wav).digest('hex');
   // No visual layers: the file opens upgraded in memory, so it is unsaved before playback starts.
   const project = parseLinkProject({ ...createEmptyLinkProject('播放中保存'), playbackSource: 'internal', obsOutputMode: 'scenes',
-    rundown: [{ id: 'song', title: '静音音频', referenceAudio: { assetId: 'audio', relativePath: 'tone.wav', sha256, durationMs: 10000 },
+    rundown: [{ id: 'song', title: '静音音频', referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/tone.wav', sha256, durationMs: 10000 },
       playback: { startMs: 0, endMs: 10000, mtcOffsetMs: 0, volume: 0, endAction: 'pause', shortcut: '' } }] });
   const path = info.outputPath('playing.tblink'); const original = JSON.stringify(project);
   await writeFile(path, original);
@@ -360,6 +361,10 @@ test('播放中按 Ctrl+S 写入工程文件，播放不中断', async ({}, info
   try {
     await page.evaluate(value => window.tbLink.saveIntegrationProfile({ profile: value }), profile); await page.reload();
     await page.waitForFunction(() => Boolean(window.tbLink));
+    await page.getByRole('button', { name: '打开工程', exact: true }).waitFor();
+    await app.evaluate(({ dialog }, file) => { Reflect.set(dialog, 'showOpenDialog', () => Promise.resolve({ canceled: false, filePaths: [file] })); }, path);
+    await page.evaluate(() => window.tbLink.pickProjectDocument());
+    await page.evaluate(path => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: path, projectId: null }), path);
     await page.evaluate(({ path, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: path, sha256, peaks: Array.from({ length: 1200 }, () => 0) }), { path, sha256 });
     await openFile(app, page, path);
     await expect(unsaved(page)).toBeVisible();

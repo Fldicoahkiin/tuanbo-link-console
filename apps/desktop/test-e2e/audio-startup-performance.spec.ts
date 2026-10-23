@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Session } from 'node:inspector';
 import { createEmptyLinkProject } from '@tb/schema';
@@ -16,10 +16,11 @@ for (const seconds of [35, 21605]) test(`正式音频启动性能诊断 ${second
   wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   const sha256 = createHash('sha256').update(wav).digest('hex');
-  await writeFile(info.outputPath('audio.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await writeFile(info.outputPath('assets/reference-audio/audio.wav'), wav);
   const project = createEmptyLinkProject('真实播放器启动诊断'); project.playbackSource = 'internal';
   project.rundown.push({ id: 'song', title: '启动诊断', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [],
-    referenceAudio: { assetId: 'audio', relativePath: 'audio.wav', durationMs: seconds * 1000, sha256 } });
+    referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/audio.wav', durationMs: seconds * 1000, sha256 } });
   const file = info.outputPath('project.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   const page = await app.firstWindow();
@@ -43,8 +44,11 @@ for (const seconds of [35, 21605]) test(`正式音频启动性能诊断 ${second
         }
       });
     });
-    await page.evaluate(({ file, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: file, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { file, sha256 });
+    await page.getByRole('button', { name: '打开工程', exact: true }).waitFor();
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, file);
+    await page.evaluate(() => window.tbLink.pickProjectDocument());
+    await page.evaluate(path => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: path, projectId: null }), file);
+    await page.evaluate(({ file, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: file, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { file, sha256 });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await expect(page.locator('.player-transport .primary-button')).toBeEnabled();
     await app.evaluate(async () => {

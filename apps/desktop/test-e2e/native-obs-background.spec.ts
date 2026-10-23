@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import OBSWebSocket, { EventSubscription } from 'obs-websocket-js';
 import { z } from 'zod';
@@ -12,16 +12,17 @@ import { closeDiscarding } from './save-questions';
 test('后台画面服务在渲染器阻塞时按实际音频时钟切换隔离 OBS', async ({}, info) => {
   test.skip(!process.env.TBLINK_TEST_OBS_URL || !process.env.TBLINK_TEST_OBS_AUDIO, '需要专用隔离 OBS；不使用用户现场场景');
   const wav = await readFile(process.env.TBLINK_TEST_OBS_AUDIO!);
-  await copyFile(process.env.TBLINK_TEST_OBS_AUDIO!, info.outputPath('tone.wav'));
+  await mkdir(info.outputPath('assets', 'reference-audio'), { recursive: true });
+  await copyFile(process.env.TBLINK_TEST_OBS_AUDIO!, info.outputPath('assets', 'reference-audio', 'tone.wav'));
   const sha256 = createHash('sha256').update(wav).digest('hex');
   const project = parseLinkProject({ ...createEmptyLinkProject('后台画面验收'), playbackSource: 'internal', obsOutputMode: 'scenes',
-    rundown: [{ id: 'song', title: '后台节目', referenceAudio: { assetId: 'audio', relativePath: 'tone.wav', sha256, durationMs: 20000 },
+    rundown: [{ id: 'song', title: '后台节目', referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/tone.wav', sha256, durationMs: 20000 },
       cues: [0, 3, 7].map((seconds, index) => ({ id: `cue-${index}`, name: `机位 ${index}`, timecode: { hours: 0, minutes: 0, seconds, frames: 0 },
         actions: [{ id: `scene-${index}`, label: '切换原生机位', kind: 'obs.setProgramScene', sceneName: index === 1 ? 'Audio B' : 'Audio' }] })) }] });
   const file = info.outputPath('project.tblink'); await writeFile(file, JSON.stringify(project));
   const profile = createDefaultIntegrationProfile(); profile.obs.autoConnectOnLaunch = false; profile.obs.webSocketUrl = process.env.TBLINK_TEST_OBS_URL!;
   const audio: NativePlayerPrepare = { version: 1, sessionId: randomUUID(), generation: 1, projectPath: file, audioDeviceId: 'default', midiPortName: null,
-    snapshot: { version: 1, projectId: project.projectId, itemId: 'song', revision: 1, audio: { relativePath: 'tone.wav', sha256, durationMs: 20000 },
+    snapshot: { version: 1, projectId: project.projectId, itemId: 'song', revision: 1, audio: { relativePath: 'assets/reference-audio/tone.wav', sha256, durationMs: 20000 },
       startMs: 500, positionMs: 500, endMs: 18000, offsetMs: 480000, frameRate: 30, sampleRate: 48000, volume: 1 } };
   const visual: NativeObsPrepare = { version: 1, sessionId: audio.sessionId, generation: 1, projectPath: file,
     preciseSeeking: false, snapshot: createObsProgramSnapshot(project, 'song', 1) };
@@ -37,6 +38,11 @@ test('后台画面服务在渲染器阻塞时按实际音频时钟切换隔离 O
     scope: '真实 Electron 类型化后台接口、WASAPI、隔离 OBS；本测试不走正式播放按钮，不代表视频高负载、MIDI、实体 MA2 或六小时验收' };
   try {
     await page.waitForFunction(() => Boolean(window.tbLink));
+    // Direct IPC names this project: the main process approves it through the open dialog and the window reports it shown.
+    await page.getByRole('button', { name: '打开工程', exact: true }).waitFor();
+    await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
+    await page.evaluate(() => window.tbLink.pickProjectDocument());
+    await page.evaluate(path => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: path, projectId: null }), file);
     await page.evaluate(({ profile, password }) => window.tbLink.saveIntegrationProfile({ profile, obsPassword: password }), { profile, password: process.env.TBLINK_TEST_OBS_PASSWORD! });
     await page.evaluate(() => window.tbLink.connectObs());
     await page.evaluate(audio => window.tbLink.prepareNativePlayback(audio), audio);

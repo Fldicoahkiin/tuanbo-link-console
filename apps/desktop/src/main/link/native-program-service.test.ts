@@ -99,3 +99,13 @@ it('接管的节目工程与界面不同时标记为过期；停止的节目在�
   await service.open(request());
   expect(await service.release()).toBeNull(); expect(stopped.close).toHaveBeenCalledTimes(1);
 });
+
+it('窗口打开节目时工程检查拒绝则不创建宿主，之后可重新打开', async () => {
+  const create = vi.fn(host), service = new NativeProgramService(create, vi.fn(), () => Promise.resolve());
+  await expect(service.open(request(), () => Promise.reject(new Error('只能访问当前打开的工程')))).rejects.toThrow('当前打开的工程');
+  expect(create).not.toHaveBeenCalled();
+  const checkProject = vi.fn(() => Promise.resolve()), input = request();
+  await service.open(input, checkProject);
+  expect(checkProject).toHaveBeenCalledWith(input.projectPath, expect.objectContaining({ name: '后台宿主测试' }));
+  expect(create).toHaveBeenCalledOnce();
+});

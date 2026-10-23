@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rmdir, symlink, truncate, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { createEmptyLinkProject, createLightingUserLibrary, serializeLinkProject } from '@tb/schema';
@@ -313,12 +313,38 @@ describe('LinkProjectService', () => {
     expect(await readdir(moved)).toEqual(['cache']);
   });
 
+  it('找回时拒绝格式无效或超过 16 MB 的波形缓存，工程文件夹不变', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio();
+    const waveform = join(audio.folder, 'cache', 'waveforms', `${audio.file.sha256}.json`);
+    await mkdir(join(audio.folder, 'cache', 'waveforms'), { recursive: true });
+    cleanupDirectories.push(join(audio.folder, 'cache'), join(audio.folder, 'cache', 'waveforms')); cleanupFiles.push(waveform);
+    const moved = await createTestDirectory();
+    cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio'), join(moved, 'cache'), join(moved, 'cache', 'waveforms'));
+    cleanupFiles.push(join(moved, audio.file.relativePath), join(moved, 'cache', 'waveforms', `${audio.file.sha256}.json`));
+    for (const content of ['{"peaks":[0]}', '[0, 2]', '[]', 'not json']) {
+      await writeFile(waveform, content);
+      await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file])).rejects.toThrow('波形缓存');
+    }
+    await writeFile(waveform, '[0]'); await truncate(waveform, 16 * 1024 * 1024 + 1);
+    await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file])).rejects.toThrow('16 MB');
+    expect(await readdir(moved)).toEqual([]);
+  });
+
+  it('保存波形缓存不写入工程文件夹里经符号链接或目录联接指向别处的位置，也不接受过长的波形', async () => {
+    const service = new LinkProjectService(); const project = await createTestDirectory(); const outside = await createTestDirectory();
+    await linkFolder(outside, join(project, 'cache'));
+    cleanupDirectories.push(join(outside, 'waveforms')); cleanupFiles.push(join(outside, 'waveforms', `${sha256('a')}.json`));
+    await expect(service.saveWaveformCache(join(project, 'show.tblink'), sha256('a'), [0, 0.5])).rejects.toThrow('符号链接');
+    expect(await readdir(outside)).toEqual([]);
+    await expect(service.saveWaveformCache(join(await createTestDirectory(), 'show.tblink'), sha256('a'), Array.from({ length: 500_001 }, () => 0))).rejects.toThrow('500000');
+  });
+
   it('找回素材只接受 assets 素材子目录里的音视频和图片文件，有一个不符合就整批拒绝', async () => {
     const service = new LinkProjectService(); const audio = await originalAudio(); const moved = await createTestDirectory();
     cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio')); cleanupFiles.push(join(moved, audio.file.relativePath));
     for (const relativePath of ['song.wav', 'assets/song.wav', 'assets/cache/song.wav', 'assets/reference-audio/nested/song.wav',
       'assets/reference-audio/song.exe', 'assets/reference-audio/song.mp4', 'assets/reference-media/notes.txt', 'cache/waveforms/song.json', 'assets\\reference-audio\\song.wav']) {
-      await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file, { relativePath, sha256: sha256('song') }])).rejects.toThrow('只能检查和找回');
+      await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file, { relativePath, sha256: sha256('song') }])).rejects.toThrow('只能使用');
     }
     expect(await readdir(moved)).toEqual([]);
     expect(await service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file, { relativePath: 'assets/reference-media/clip.MOV', sha256: sha256('clip') }]))
@@ -330,7 +356,7 @@ describe('LinkProjectService', () => {
     await writeFile(secret, 'secret');
     const service = new LinkProjectService();
     for (const relativePath of ['secret.txt', 'assets/reference-audio/../../secret.txt', 'assets/reference-media/secret.txt']) {
-      await expect(service.findMissingAssetFiles(join(directory, 'show.tblink'), [{ relativePath }])).rejects.toThrow('只能检查和找回');
+      await expect(service.findMissingAssetFiles(join(directory, 'show.tblink'), [{ relativePath }])).rejects.toThrow('只能使用');
     }
   });
 

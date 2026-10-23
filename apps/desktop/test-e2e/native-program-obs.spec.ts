@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { copyFile, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import OBSWebSocket, { EventSubscription } from 'obs-websocket-js';
 import { z } from 'zod';
@@ -10,10 +10,11 @@ import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-m
 test('正式原生按钮驱动隔离 OBS：精确音频采集、编排切场景、暂停和继续', async ({}, info) => {
   test.skip(!process.env.TBLINK_TEST_OBS_URL || !process.env.TBLINK_TEST_OBS_AUDIO, '由隔离 OBS 验收脚本启动，不连接用户 OBS');
   const wav = await readFile(process.env.TBLINK_TEST_OBS_AUDIO!);
-  await copyFile(process.env.TBLINK_TEST_OBS_AUDIO!, info.outputPath('tone.wav'));
+  await mkdir(info.outputPath('assets', 'reference-audio'), { recursive: true });
+  await copyFile(process.env.TBLINK_TEST_OBS_AUDIO!, info.outputPath('assets', 'reference-audio', 'tone.wav'));
   const sha256 = createHash('sha256').update(wav).digest('hex');
   const project = parseLinkProject({ ...createEmptyLinkProject('正式原生 OBS 验收'), playbackSource: 'internal', obsOutputMode: 'scenes',
-    rundown: [{ id: 'song', title: '原生节目', referenceAudio: { assetId: 'audio', relativePath: 'tone.wav', sha256, durationMs: 20000 },
+    rundown: [{ id: 'song', title: '原生节目', referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/tone.wav', sha256, durationMs: 20000 },
       playback: { startMs: 500, endMs: 18000, mtcOffsetMs: 480000, volume: 100, endAction: 'pause', shortcut: '' },
       cues: [0, 3].map((second, index) => ({ id: `cue-${index}`, name: `场景 ${index}`, timecode: { hours: 0, minutes: 0, seconds: second, frames: 0 },
         actions: [{ id: `action-${index}`, kind: 'obs.setProgramScene', label: '原生声音跨机位', sceneName: index ? 'Audio B' : 'Audio' }] })) }] });
@@ -35,8 +36,12 @@ test('正式原生按钮驱动隔离 OBS：精确音频采集、编排切场景�
     await page.evaluate(({ profile, password }) => window.tbLink.saveIntegrationProfile({ profile, obsPassword: password }), { profile, password: process.env.TBLINK_TEST_OBS_PASSWORD! });
     await page.reload(); await page.waitForFunction(() => Boolean(window.tbLink));
     await page.evaluate(() => window.tbLink.connectObs());
-    await page.evaluate(({ file, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: file, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { file, sha256 });
+    // The waveform cache names this project before the window opens it: the main process approves it through the open dialog and the window reports it shown.
+    await page.getByRole('button', { name: '打开工程', exact: true }).waitFor();
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, file);
+    await page.evaluate(() => window.tbLink.pickProjectDocument());
+    await page.evaluate(file => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: file, projectId: null }), file);
+    await page.evaluate(({ file, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: file, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { file, sha256 });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.locator('.player-transport .primary-button').click();
     await expect(page.locator('.player-transport.status-playing')).toBeVisible();

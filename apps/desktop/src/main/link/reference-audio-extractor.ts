@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { open } from 'node:fs/promises';
 import ffmpegPath from 'ffmpeg-static';
+import { ffmpegDeadline } from './ffmpeg-deadline';
 
 export type AudioTrim = { startMs: number; durationMs: number; tailToleranceMs?: number };
 export type ReferenceAudioExtractor = (sourcePath: string, destinationPath: string, trim?: AudioTrim) => Promise<void>;
@@ -13,7 +14,8 @@ export const extractReferenceAudioTrack: ReferenceAudioExtractor = async (source
       ...(trim ? ['-af', `atrim=start=${trim.startMs / 1000}:duration=${trim.durationMs / 1000},asetpts=PTS-STARTPTS`] : []),
       '-map', '0:a:0', '-vn', '-ac', '2', '-ar', '48000', '-c:a', 'pcm_s16le',
       destinationPath
-    ], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    ], { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+    ffmpegDeadline(process, '提取音轨', 15 * 60_000, reject);
     let errorOutput = '';
     process.stderr.setEncoding('utf8');
     process.stderr.on('data', (chunk: string) => {

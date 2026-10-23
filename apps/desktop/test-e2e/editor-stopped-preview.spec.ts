@@ -1,7 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { readFile, writeFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import ffmpeg from 'ffmpeg-static';
@@ -15,10 +15,10 @@ test('停止时拖动黄线显示实际 OBS 视频帧，机位切回后定位正
   test.skip(!process.env.TBLINK_OVERLAY_OBS_EXE || !process.env.TBLINK_OVERLAY_OBS_URL, '需要独立测试 OBS，禁止使用现场 OBS');
   test.setTimeout(90000);
   if (!ffmpeg) throw new Error('缺少测试媒体生成工具');
-  const video = info.outputPath('video.mp4');
+  const video = info.outputPath('assets', 'reference-media', 'video.mp4'); await mkdir(dirname(video), { recursive: true });
   await promisify(execFile)(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=360x640:rate=30', '-t', '10', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', video], { windowsHide: true });
   const project = parseLinkProject({ ...createEmptyLinkProject('停止拖动验收'), playbackSource: 'internal', obsOutputMode: 'scenes',
-    mediaAssets: [{ id: 'video', name: '运动画面', kind: 'video', relativePath: 'video.mp4', width: 360, height: 640, durationMs: 10000,
+    mediaAssets: [{ id: 'video', name: '运动画面', kind: 'video', relativePath: 'assets/reference-media/video.mp4', width: 360, height: 640, durationMs: 10000,
       sha256: createHash('sha256').update(await readFile(video)).digest('hex'), byteLength: (await stat(video)).size }],
     rundown: [{ id: 'song', title: '无音频拖动验收', visualLayers: [{ id: 'camera-layer', name: '机位' }, { id: 'video-layer', name: '视频' }],
       referenceMediaClips: [{ id: 'clip', assetId: 'video', layerId: 'video-layer', label: '运动画面', startTimecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, durationMs: 10000 }],

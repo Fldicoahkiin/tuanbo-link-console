@@ -1,4 +1,4 @@
-import { writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
@@ -9,11 +9,11 @@ for (const dense of [false, true]) test(`底部时间线：${dense ? '密集' : 
   const wav = Buffer.alloc(44 + 48000 * 51 * 2);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(96000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   for (let i = 0; i < 48000 * 51; i++) { const t = i / 48000; wav.writeInt16LE(Math.round(Math.sin(t * Math.PI * 180) * Math.exp(-(t % .48) * 13) * (.4 + .3 * Math.sin(t * .15) ** 2) * 28000), 44 + i * 2); }
-  await writeFile(info.outputPath('reference.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/reference.wav'), wav);
   const lighting = createLightingDocument();
   if (dense) { lighting.version = 2; lighting.music = { ...createLightingMusic(), ruler: 'beats' }; }
   lighting.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [{ id: 'clip', name: '灯光编排', start: 0, duration: 51000, timeLock: 'time', muted: false, events: Array.from({ length: 10 }, (_, i) => ({ id: `cue-${i}`, kind: 'ma2', at: 1300 + i * (dense ? 5 : 4800), sequence: 101, executor: '', cue: `${i + 1}.000`, action: 'goto', label: `灯光 ${i + 1}` })) }] }];
-  const project = parseLinkProject({ ...createEmptyLinkProject('时间线布局验收'), schemaVersion: 2, rundown: [{ id: 'song', title: '团播音乐 · 时间线样例', enabled: true, notes: '合成测试音频，不是识别精度样本', cues: [], visualLayers: [], referenceMediaClips: [], lighting, referenceAudio: { assetId: 'audio', relativePath: 'reference.wav', durationMs: 51000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('时间线布局验收'), schemaVersion: 2, rundown: [{ id: 'song', title: '团播音乐 · 时间线样例', enabled: true, notes: '合成测试音频，不是识别精度样本', cues: [], visualLayers: [], referenceMediaClips: [], lighting, referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/reference.wav', durationMs: 51000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
   const file = info.outputPath('timeline.tblink');
   await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });

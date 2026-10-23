@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { copyFile, readFile, writeFile, appendFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { OBSWebSocket, EventSubscription } from 'obs-websocket-js';
@@ -30,8 +30,8 @@ test('高负载正式按钮与真实 OBS 连续节目', async ({}, info) => {
       + (frame % 48000 < 960 ? 512 * Math.sin(frame * 1000 * 2 * Math.PI / 48000) : 0));
     probe.writeInt16LE(value, 44 + frame * 4); probe.writeInt16LE(value, 46 + frame * 4);
   }
-  const probeName = `${basename(file, '.tblink')}.wav`, probeSha256 = createHash('sha256').update(probe).digest('hex');
-  await writeFile(join(dirname(file), probeName), probe);
+  const probeName = `assets/reference-audio/${basename(file, '.tblink')}.wav`, probeSha256 = createHash('sha256').update(probe).digest('hex');
+  await mkdir(join(dirname(file), 'assets', 'reference-audio'), { recursive: true }); await writeFile(join(dirname(file), probeName), probe);
   for (const item of project.rundown) {
     if (!item.referenceAudio || item.referenceAudio.durationMs !== 108000) throw new Error('持续电平验收要求每节目108秒的合成音源');
     item.referenceAudio = { ...item.referenceAudio, relativePath: probeName, sha256: probeSha256 };

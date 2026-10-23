@@ -147,3 +147,9 @@ it('播放代数不污染选择预备代数，重新选歌先清理下一首', a
   expect(t.outputs.releaseOutputs).toHaveBeenCalledTimes(1); expect(t.authorize).toHaveBeenCalledTimes(1);
   expect(t.create).toHaveBeenCalledTimes(2);
 });
+
+it('窗口的预备请求在文件检查拒绝时不创建画面资源', async () => {
+  const t = setup();
+  await expect(t.pool.preload(t.request, () => Promise.reject(new Error('只能访问当前打开的工程')))).rejects.toThrow('当前打开的工程');
+  expect(t.create).not.toHaveBeenCalled();
+});

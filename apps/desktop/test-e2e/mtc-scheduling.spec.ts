@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
@@ -12,11 +12,12 @@ test('无 MA2 网线时按原偏移发 MTC；长时阻塞只停止发码，音�
   wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
   wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('clock.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await writeFile(info.outputPath('assets/reference-audio/clock.wav'), wav);
   const lighting = createLightingDocument(); lighting.outputMode = 'timecode';
   lighting.ma2Bindings = [{ id: 'native-timecode', timecode: 2, name: '离线控台时间线', readAt: '2026-09-28T00:00:00.000Z', sourceXml: '<MA/>', mappings: [], baselineTracks: [], timeOriginMs: 480000, playback: 'native-timecode' }];
   lighting.tracks = [lightingTrackSchema.parse({ id: 'pool', name: '本地序列池 Cue', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'pool-clip', name: '本地 Cue', start: 0, duration: 20000, timeLock: 'time', muted: false, events: [{ id: 'pool-cue', kind: 'ma2', action: 'goto', sequence: 36, cue: '1.100', executor: '', label: 'Cue 1.1', at: 1000 }] }] })];
-  const project = parseLinkProject({ ...createEmptyLinkProject('时间码调度'), schemaVersion: 2, playbackSource: 'internal', obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '时间码调度', cues: [{ id: 'scene', name: '画面', timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, actions: [{ id: 'action', kind: 'obs.setProgramScene', label: '画面', sceneName: '测试场景' }] }], referenceAudio: { assetId: 'audio', relativePath: 'clock.wav', durationMs: 20000, sha256: createHash('sha256').update(wav).digest('hex') }, playback: { volume: 100, endAction: 'stop', startMs: 0, endMs: 20000, mtcOffsetMs: 480000, shortcut: '' }, lighting }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('时间码调度'), schemaVersion: 2, playbackSource: 'internal', obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '时间码调度', cues: [{ id: 'scene', name: '画面', timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, actions: [{ id: 'action', kind: 'obs.setProgramScene', label: '画面', sceneName: '测试场景' }] }], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/clock.wav', durationMs: 20000, sha256: createHash('sha256').update(wav).digest('hex') }, playback: { volume: 100, endAction: 'stop', startMs: 0, endMs: 20000, mtcOffsetMs: 480000, shortcut: '' }, lighting }] });
   const file = info.outputPath('clock.tblink'); await writeFile(file, JSON.stringify(project));
   const executablePath = process.env.TBLINK_MA2_PACKAGED_EXE;
   const app = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...(executablePath ? [] : [join(process.cwd(), 'out/main/index.cjs')])] });

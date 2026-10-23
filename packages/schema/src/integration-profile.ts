@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { mtcFrameRateSchema } from './link-project';
 import { obsWebSocketUrlSchema } from './obs-address';
 
+/** Where OBS and P1 install by default; a new profile starts with these. */
+export const DEFAULT_PROGRAM_PATHS = { obs: 'C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe', p1: 'C:\\P1\\P1.exe' } as const;
+
 const executableProfileSchema = z.object({
   executablePath: z.string().min(1),
   arguments: z.array(z.string()).default([]),

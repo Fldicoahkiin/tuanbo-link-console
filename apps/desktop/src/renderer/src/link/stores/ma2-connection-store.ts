@@ -56,7 +56,7 @@ export async function connectLocalMa2(directory: string): Promise<void> {
   if (useLocalMa2Store.getState().status === 'connecting') throw new Error('本机 MA2 正在连接，请稍候');
   useLocalMa2Store.setState({ directory, status: 'connecting', error: null });
   try {
-    if (!directory.trim()) throw new Error('请在设备维护中填写本机 onPC 数据目录');
+    if (!directory.trim()) throw new Error('请在设备维护中选择或一键识别本机 onPC 数据目录');
     const mismatch = ma2LocalDirectoryMismatch(directory.trim(), useIntegrationStore.getState().processes.ma2);
     if (mismatch) throw new Error(mismatch);
     await window.tbLink.exchangeMa2({ dataDirectory: directory.trim(), target: 1, operation: 'PING', expected: '', desired: '' });

@@ -7,9 +7,12 @@ import ffmpegPath from 'ffmpeg-static';
 import { hashFile, LinkProjectService } from './link-project-service';
 import { VerifiedMediaFiles } from './verified-media-files';
 import { inspectObsSeekPixelFormat, obsSeekEncoding } from './obs-seek-encoding';
+import { ffmpegDeadline } from './ffmpeg-deadline';
 
 /** 'background' work (the next song's caches while a song plays) yields the CPU to OBS and audio. */
 export type EncodePriority = 'normal' | 'background';
+/** What a run produces and how long it may take before it counts as stuck. */
+type FfmpegWork = { name: string; timeoutMs: number };
 
 export class MediaPreviewService {
   private readonly pending = new Map<string, Promise<string>>();
@@ -21,7 +24,7 @@ export class MediaPreviewService {
 
   constructor(
     private readonly projects: LinkProjectService,
-    private readonly executeFfmpeg: (executable: string, arguments_: string[], priority?: EncodePriority) => Promise<void> = runFfmpeg,
+    private readonly executeFfmpeg: (executable: string, arguments_: string[], work: FfmpegWork, priority?: EncodePriority) => Promise<void> = runFfmpeg,
     private readonly resolveExecutable: () => string = resolveFfmpegExecutable,
     private readonly inspectPixelFormat: (executable: string, source: string) => Promise<string> = inspectObsSeekPixelFormat
   ) {}
@@ -43,7 +46,7 @@ export class MediaPreviewService {
       await generateTemporaryOutput(temporary, destination, () => this.executeFfmpeg(this.resolveExecutable(), [
         '-hide_banner', '-loglevel', 'error', '-y', '-threads', '1', '-filter_threads', '1', '-i', source,
         '-map', '0:v:0', '-an', '-frames:v', '1', '-vf', 'scale=320:320:force_original_aspect_ratio=decrease', '-q:v', '3', '-threads', '1', temporary
-      ]));
+      ], { name: '生成素材缩略图', timeoutMs: 2 * 60_000 }));
       return destination;
     }).finally(() => this.pending.delete(key));
     this.pending.set(key, operation);
@@ -111,7 +114,7 @@ export class MediaPreviewService {
         '-hide_banner', '-loglevel', 'error', '-y', '-threads', '2', '-filter_threads', '1', '-i', source,
         '-map', '0:v:0', '-map', '0:a:0?', ...encoding,
         '-c:a', 'copy', '-avoid_negative_ts', 'disabled', temporaryPath
-      ], priority);
+      ], { name: '生成 OBS 定位缓存', timeoutMs: 120 * 60_000 }, priority);
       if (!await this.verified.verify(source, sha256)) throw new Error('原素材在生成定位缓存时发生变化');
     }));
     // Publish the checksum through the same identity-checked cache used during
@@ -146,7 +149,7 @@ export class MediaPreviewService {
         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', '-threads', '2',
         temporaryPath
-      ]);
+      ], { name: '生成编辑代理', timeoutMs: 60 * 60_000 });
     }));
     return destination;
   }
@@ -164,7 +167,7 @@ export class MediaPreviewService {
           '-hide_banner', '-loglevel', 'error', '-y', '-i', source,
           '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '24000', '-c:a', 'pcm_s16le',
           temporaryPath
-        ]);
+        ], { name: '生成音频预览', timeoutMs: 15 * 60_000 });
       });
     } catch (error) {
       if (error instanceof Error && error.message.includes('matches no streams')) {
@@ -199,9 +202,10 @@ function resolveFfmpegExecutable(): string {
   return ffmpegPath.includes('app.asar') ? ffmpegPath.replace('app.asar', 'app.asar.unpacked') : ffmpegPath;
 }
 
-function runFfmpeg(executable: string, arguments_: string[], priority: EncodePriority = 'normal'): Promise<void> {
+function runFfmpeg(executable: string, arguments_: string[], work: FfmpegWork, priority: EncodePriority = 'normal'): Promise<void> {
   return new Promise((resolvePromise, reject) => {
-    const process = spawn(executable, arguments_, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    const process = spawn(executable, arguments_, { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+    ffmpegDeadline(process, work.name, work.timeoutMs, reject);
     if (priority === 'background' && process.pid !== undefined) {
       try { setPriority(process.pid, osConstants.priority.PRIORITY_BELOW_NORMAL); }
       catch (error) { process.kill(); reject(new Error(`无法降低后台编码优先级，本次未生成缓存：${error instanceof Error ? error.message : String(error)}`, { cause: error })); return; }

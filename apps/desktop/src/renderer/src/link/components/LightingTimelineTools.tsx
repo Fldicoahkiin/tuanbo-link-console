@@ -28,7 +28,7 @@ function EditorMa2Sync(props: { disabled: boolean; notify: (message: string, ton
     let alive = true; let timer: ReturnType<typeof setTimeout> | undefined;
     const read = async (): Promise<void> => {
       try {
-        const directory = localStorage.getItem('tblink.ma2-onpc-data-directory.v1') ?? '';
+        const directory = (await window.tbLink.getMa2DataDirectory()) ?? '';
         const savedMethod = localStorage.getItem('tblink.ma2-connection-method.v1');
         const method = savedMethod === 'local' || !savedMethod && directory ? 'local' : 'network';
         const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());

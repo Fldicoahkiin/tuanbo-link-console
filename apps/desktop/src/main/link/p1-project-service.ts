@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, opendir, readFile, stat } from 'node:fs/promises';
-import { basename, dirname, extname, isAbsolute, join, parse, resolve } from 'node:path';
+import { access, lstat, opendir, readFile, readlink, realpath, stat } from 'node:fs/promises';
+import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import {
   DOMParser,
   XMLSerializer,
@@ -23,8 +23,8 @@ import type {
   LinkP1ProjectImportResult
 } from '@tb/core/link';
 import { writeFileAtomically } from './atomic-file';
-import { validateP1TimecodeRanges, parseP1TimeOrigin, programTimeOrigin } from '@tb/core/link';
-import { LinkProjectService } from './link-project-service';
+import { validateP1TimecodeRanges, parseP1TimeOrigin, programTimeOrigin, REFERENCE_AUDIO_EXTENSIONS } from '@tb/core/link';
+import { LinkProjectService, REFERENCE_AUDIO_CONTAINER_EXTENSIONS } from './link-project-service';
 
 type ParsedP1Media = {
   element: XmlElement;
@@ -79,16 +79,24 @@ export class P1ProjectService {
         const binding = readMediaBinding(media.element, media.resourcePath, media.occurrence, playlist.binding.id, playlist.binding.name, media.index);
         parseP1TimeOrigin(binding.midiStartTime);
         let readablePath = media.resourcePath;
-        try { await access(readablePath, constants.R_OK); }
+        // The .hia is the operator's, its song paths are not: check the text and every link on the way before touching the file.
+        const refusal = songPathRefusal(media.element.getAttribute('resourceFilePath') ?? '', media.resourcePath, dirname(parsed.sourcePath))
+          ?? await songLinkRefusal(media.resourcePath);
+        try { if (refusal) throw new Error(refusal); await access(readablePath, constants.R_OK); }
         catch {
           relocatedFiles ??= indexCopiedP1Media(dirname(parsed.sourcePath), options.signal);
           const matches = (await relocatedFiles).get(basename(media.resourcePath).toLocaleLowerCase()) ?? [];
-          if (matches.length !== 1) throw new Error(matches.length ? `复制的歌曲目录中存在多个同名文件，无法确认“${media.title}”` : `未找到“${media.title}”的歌曲文件；请把 P1 工程和歌曲文件夹一起复制到本机`);
+          if (matches.length !== 1) throw new Error(matches.length ? `复制的歌曲目录中存在多个同名文件，无法确认“${media.title}”` : refusal ? `${refusal}；P1 工程文件夹中也没有同名文件` : `未找到“${media.title}”的歌曲文件；请把 P1 工程和歌曲文件夹一起复制到本机`);
           readablePath = matches[0]!;
+          const relocatedRefusal = await songLinkRefusal(readablePath);
+          if (relocatedRefusal) throw new Error(relocatedRefusal);
         }
-        const fileStat = await stat(readablePath);
-        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${readablePath}`);
-        const audio = await importP1Audio(this.projects, linkProjectPath, media, readablePath);
+        const realSong = await realpath(readablePath);
+        const realRefusal = songPathRefusal('', realSong, await realpath(dirname(parsed.sourcePath)));
+        if (realRefusal) throw new Error(`“${media.title}”的实际文件：${realRefusal}`);
+        const fileStat = await stat(realSong);
+        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${realSong}`);
+        const audio = await importP1Audio(this.projects, linkProjectPath, media, realSong);
         items.push({
           title: media.title,
           ...audio,
@@ -328,6 +336,54 @@ function reindexExportMedia(playlists: XmlElement[], sourcePath: string, emitted
     const issue = preserved.get(element); if (issue) skipped.push({ ...issue, previousSourceKey: issue.sourceKey, sourceKey });
   }
   return skipped;
+}
+
+const SONG_EXTENSIONS: ReadonlySet<string> = new Set([...REFERENCE_AUDIO_EXTENSIONS, ...REFERENCE_AUDIO_CONTAINER_EXTENSIONS]);
+
+/** Why a song path from a .hia is refused, or null: the attribute text (`raw`) names no network share or
+ * device path, and the path is an audio or video file on a local disk or inside the .hia's folder. */
+function songPathRefusal(raw: string, path: string, hiaFolder: string): string | null {
+  if (/^[\\/]{2}/.test(raw) || /[\u0000-\u001f]/.test(raw)) return `歌曲路径指向网络共享或设备路径，不会访问：${raw}`;
+  if (!SONG_EXTENSIONS.has(extname(path).toLowerCase())) return `歌曲路径不是可导入的音视频文件：${path}`;
+  const inFolder = relative(hiaFolder, path);
+  const local = process.platform === 'win32' ? /^[a-z]:\\/i.test(path) : path.startsWith('/') && !path.startsWith('//');
+  if (!local && (inFolder === '' || inFolder.startsWith('..') || isAbsolute(inFolder))) return `歌曲文件不在本机磁盘或 P1 工程文件夹内：${path}`;
+  return null;
+}
+
+/** Walks a song path from its root without following any link it has not checked. A link's target must be a
+ * drive-letter path or a plain relative path; anything else (network share, device or namespace path) is refused.
+ * The walk then restarts on the target. A missing part before any link ends the walk (null), and reading the file
+ * reports it; a missing part behind a link is refused, since the target is this code's reading of the link. */
+async function songLinkRefusal(path: string): Promise<string | null> {
+  let pending = path;
+  for (let hops = 0; hops < 32; hops++) {
+    const { root } = parse(pending);
+    const parts = pending.slice(root.length).split(/[\\/]+/).filter(Boolean);
+    let current = root, target: string | null = null;
+    for (const [index, part] of parts.entries()) {
+      current = join(current, part);
+      let link: boolean;
+      try { link = (await lstat(current)).isSymbolicLink(); }
+      catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+        return hops === 0 ? null : `歌曲路径经过的链接指向不存在的位置，不会访问：${current}`;
+      }
+      if (!link) continue;
+      const written = await readlink(current);
+      if (!plainLinkTarget(written)) return `歌曲路径经过指向网络共享或设备路径的链接，不会访问：${current} → ${written}`;
+      target = join(resolve(dirname(current), written), ...parts.slice(index + 1));
+      break;
+    }
+    if (target === null) return null;
+    pending = target;
+  }
+  return `歌曲路径的链接层数过多：${path}`;
+}
+
+function plainLinkTarget(written: string): boolean {
+  if (process.platform === 'win32') return /^[a-z]:\\[^:?*"<>|]*$/i.test(written) || /^[^\\/:?*"<>|][^:?*"<>|]*$/.test(written);
+  return !written.startsWith('//');
 }
 
 function readMediaBinding(
