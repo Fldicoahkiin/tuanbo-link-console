@@ -35,6 +35,8 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
       ipcMain.removeHandler('link:obs-live-frame'); ipcMain.handle('link:obs-live-frame', () => ({ width: 1, height: 1, rgba: new Uint8Array(4), sequence: 1, timestampNs: '1' }));
       ipcMain.removeHandler('link:obs-live-close'); ipcMain.handle('link:obs-live-close', () => undefined);
       ipcMain.removeHandler('link:process-start'); ipcMain.handle('link:process-start', () => { throw new Error('隔离测试不启动外部程序'); });
+      // Native playback identifies outputs through Windows; this test's only output is the stand-in USB interface.
+      ipcMain.removeHandler('link:native-player-devices'); ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [], midiOutputs: [{ id: 0, name: 'USB MIDI' }] }));
     }, path);
     await page.evaluate(() => {
       const packets: number[][] = []; Reflect.set(window, '__cuePackets', packets);
