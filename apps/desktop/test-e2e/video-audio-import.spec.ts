@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { join } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { savedValue } from './save-questions';
 
 test('44 秒 MP4 加入节目，短原声音轨及非整毫秒落点保存重开', async ({}, info) => {
   if (!ffmpegPath) throw new Error('缺少 FFmpeg');
@@ -23,7 +24,7 @@ test('44 秒 MP4 加入节目，短原声音轨及非整毫秒落点保存重开
     await page.locator('.timeline-ruler').click({ position: { x: 103, y: 10 } });
     await page.getByRole('button', { name: '添加素材 long-video.mp4 到时间线', exact: true }).click();
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio?.timeline?.tracks?.length).toBe(1);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio?.timeline?.tracks?.length)).toBe(1);
     const saved = parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!;
     const track = saved.referenceAudio!.timeline!.tracks![0]!;
     expect(track.source.durationMs).toBeGreaterThan(43000); expect(track.source.durationMs).toBeLessThan(44000);
@@ -37,16 +38,16 @@ test('44 秒 MP4 加入节目，短原声音轨及非整毫秒落点保存重开
     await expect(page.getByLabel('音频片段位置', { exact: true })).toBeVisible();
     await page.getByLabel('音频片段位置', { exact: true }).fill('5');
     await page.getByLabel('音频片段位置', { exact: true }).press('Enter');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio?.timeline?.tracks?.[0]?.segments[0]?.startMs).toBe(5000);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio?.timeline?.tracks?.[0]?.segments[0]?.startMs)).toBe(5000);
     await page.locator('.audio-timeline-segment').click({ position: { x: 30, y: 35 } });
     await page.keyboard.press('Delete');
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(0);
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio).toBeUndefined();
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio)).toBeUndefined();
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 for (const dimensions of [{ width: 1920, height: 1080 }, { width: 3840, height: 2160 }]) {
@@ -74,7 +75,7 @@ test(`40 秒 ${dimensions.width} 视频打开后立即拖入与缓存复用：�
       await expect(page.locator('.audio-timeline-segment')).toHaveCount(0);
       warmMs.push(await timedVideoDrop(page));
     }
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio?.timeline?.tracks?.length).toBe(1);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio?.timeline?.tracks?.length)).toBe(1);
     const saved = parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!;
     expect(saved.referenceMediaClips).toHaveLength(1);
     expect(saved.referenceAudio!.durationMs).toBe(40000);
@@ -95,7 +96,7 @@ test(`40 秒 ${dimensions.width} 视频打开后立即拖入与缓存复用：�
     await writeFile(info.outputPath('drop-latency.json'), JSON.stringify(result, null, 2));
     await info.attach('拖入耗时', { body: JSON.stringify(result), contentType: 'application/json' });
     expect(result.warmP95Ms).toBeLessThanOrEqual(100);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 }
 
@@ -136,7 +137,7 @@ test('已有音乐时首次拖入 4K 视频：十个不同落点不复用混音�
         await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);
       }
     }
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio?.timeline?.tracks?.length).toBe(2);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]?.referenceAudio?.timeline?.tracks?.length)).toBe(2);
     await page.reload();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
@@ -146,7 +147,7 @@ test('已有音乐时首次拖入 4K 视频：十个不同落点不复用混音�
       scope: '40 秒已有音乐 + 40 秒 4K 视频，源音轨已准备；十个新落点首次混音，计时至音画片段出现，不代表 OBS 首帧' };
     await writeFile(info.outputPath('multitrack-drop-latency.json'), JSON.stringify(result, null, 2));
     await info.attach('已有音乐拖入耗时', { body: JSON.stringify(result), contentType: 'application/json' });
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 async function timedVideoDrop(page: Page, options = { audioCount: 1, offset: 0 }): Promise<number> {

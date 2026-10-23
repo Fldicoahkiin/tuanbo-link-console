@@ -3077,6 +3077,14 @@ html, body, #root { background: transparent; }
   background: var(--apple-blue);
   box-shadow: inset 0 1px rgba(255,255,255,.17), 0 4px 14px rgba(10,132,255,.17);
 }
+/* Blue only while there is something to save; the button stays available either way. */
+.document-actions .document-save-button[data-dirty='false'] {
+  color: var(--text-secondary);
+  background: transparent;
+  box-shadow: none;
+}
+.document-actions .project-recovery-error { display: inline-flex; align-items: center; color: var(--apple-red); }
+.document-actions .project-recovery-error svg { width: 14px; height: 14px; }
 
 /* A narrow dock needs a media browser, not a squeezed five-column table. */
 .resource-library { container-type: inline-size; }

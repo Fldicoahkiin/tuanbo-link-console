@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, ma2EffectLibrarySchema, parseLinkProject, type Ma2CatalogRequest } from '@tb/schema';
+import { savedValue } from './save-questions';
 
 const snapshot = join(process.cwd(), '../../artifacts/ma2-hardware-diagnostics/effect-library.json');
 
@@ -45,11 +46,11 @@ test('构造数据：素材读取关闭窗口后继续、保存并重启恢复�
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.getByRole('button', { name: '试听序列 36 灯光步 1.100', exact: true })).toBeVisible();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
-    await expect.poll(async () => (JSON.parse(await readFile(file, 'utf8')) as { ma2MaterialLibrary?: { library: { sequences: unknown[]; sourceUnverified?: boolean } } }).ma2MaterialLibrary?.library.sequences.length).toBe(2);
+    await expect.poll(() => savedValue(page, async () => (JSON.parse(await readFile(file, 'utf8')) as { ma2MaterialLibrary?: { library: { sequences: unknown[]; sourceUnverified?: boolean } } }).ma2MaterialLibrary?.library.sequences.length)).toBe(2);
     expect(await app.evaluate(() => process.env.TBLINK_MATERIAL_READS)).toBe('1');
     await expect.poll(() => app.evaluate(() => Number(process.env.TBLINK_MATERIAL_SOURCE_READS))).toBeGreaterThan(0);
     expect(await app.evaluate(() => process.env.TBLINK_MATERIAL_READS)).toBe('1');
-    await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close();
+    await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close();
     app = await launch(); page = await app.firstWindow();
     await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => { throw new Error('重开不能自动扫描'); }); });
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
@@ -57,7 +58,7 @@ test('构造数据：素材读取关闭窗口后继续、保存并重启恢复�
     await expect(page.getByRole('button', { name: '试听序列 36 灯光步 1.100', exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('material-restored.png') });
   } finally {
-    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     if (app.process().exitCode === null) await app.close();
   }
 });
@@ -107,11 +108,11 @@ test('现场 584 个 Cue 在原工作区内可查看、关闭恢复并一次入�
     await menu.getByRole('button', { name: '效果', exact: true }).click();
     await menu.getByRole('button', { name: '归入 效果 重击', exact: true }).click();
     await menu.getByRole('button', { name: '确定', exact: true }).click();
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).ma2MaterialLibrary?.userLibrary?.entries.length).toBe(584);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).ma2MaterialLibrary?.userLibrary?.entries.length)).toBe(584);
     await page.keyboard.press('Control+z');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).ma2MaterialLibrary?.userLibrary?.entries.length ?? 0).toBe(0);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).ma2MaterialLibrary?.userLibrary?.entries.length ?? 0)).toBe(0);
     await page.keyboard.press('Control+Shift+z');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).ma2MaterialLibrary?.userLibrary?.entries.length).toBe(584);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).ma2MaterialLibrary?.userLibrary?.entries.length)).toBe(584);
     expect(parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).ma2MaterialLibrary?.library).toEqual(library);
     await page.screenshot({ path: info.outputPath('classified-console-materials.png') });
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
@@ -126,7 +127,7 @@ test('现场 584 个 Cue 在原工作区内可查看、关闭恢复并一次入�
     expect(await pool.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: info.outputPath('material-restored-bottom.png') });
   } finally {
-    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     if (application.process().exitCode === null) await application.close();
   }
 });

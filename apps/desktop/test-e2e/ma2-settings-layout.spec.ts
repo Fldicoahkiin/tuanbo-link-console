@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { createEmptyLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 test('MA2 设置分组及大量搜索结果保持紧凑', async ({}, info) => {
   const file = info.outputPath('settings.tblink');
@@ -78,5 +79,5 @@ test('MA2 设置分组及大量搜索结果保持紧凑', async ({}, info) => {
     await expect(page.getByText('正在连接 10.39.12.3:30000，并验证登录…', { exact: true })).toBeVisible();
     await expect(page.locator('.ma2-network-settings [role="alert"]')).toContainText('30001（ECONNREFUSED）');
     await expect(page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ })).toBeEnabled();
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

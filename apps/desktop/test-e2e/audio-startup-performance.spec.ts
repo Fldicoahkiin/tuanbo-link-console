@@ -117,7 +117,7 @@ for (const seconds of [35, 21605]) test(`正式音频启动性能诊断 ${second
       await page.getByRole('button', { name: '停止播放', exact: true }).click();
       if (native) await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
     } finally {
-      await page.evaluate(async () => { clearInterval(Reflect.get(window, '__startupTimer') as number); await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+      await page.evaluate(async () => { clearInterval(Reflect.get(window, '__startupTimer') as number); await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
       await app.close();
     }
   }

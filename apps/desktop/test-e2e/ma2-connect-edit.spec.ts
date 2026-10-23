@@ -6,6 +6,7 @@ import { createEmptyLinkProject, ma2ApplyRequestSchema, parseLinkProject } from 
 import { readMa2Catalog } from '../src/main/link/ma2-catalog';
 import { convertMa2Timecode } from '../src/main/link/ma2-timecode-conversion';
 import { inspectMa2SequenceXml } from '../src/main/link/ma2-timecode-xml';
+import { savedValue } from './save-questions';
 
 test('软件流程：连接后自动配对，编辑后自动发送并应用已确认回读', async ({}, info) => {
   const xml = await readFile(join(process.cwd(), 'src/main/link/fixtures/ma2-timecode-fractional-3.3.xml'), 'utf8');
@@ -57,9 +58,9 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await page.mouse.up();
     await page.getByRole('button', { name: '同步状态详情', exact: true }).click();
     await expect(page.getByRole('region', { name: '同步状态详情' })).toContainText('回读确认');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!.ma2Bindings![0]!.baselineTracks[0]!.clips[0]!.events[0]!.at).toBe(700);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!.ma2Bindings![0]!.baselineTracks[0]!.clips[0]!.events[0]!.at)).toBe(700);
     const sent = await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST);
     expect(ma2ApplyRequestSchema.parse(JSON.parse(sent ?? 'null')).document.tracks[0]!.clips[0]!.events[0]!.at).toBeCloseTo(700, -1);
     await page.screenshot({ path: info.outputPath('编辑后已回读.png') });
-  } finally { await (await app.firstWindow()).evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await (await app.firstWindow()).evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

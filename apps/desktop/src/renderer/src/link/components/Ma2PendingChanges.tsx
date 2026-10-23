@@ -10,7 +10,8 @@ import { archiveMa2Project } from '../runtime/ma2-project-archive';
 import { useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { pendingMa2Renames, ma2RenameKey } from '@tb/core/link';
-import { useMa2LocalSaveStore } from '../runtime/ma2-local-save';
+import { useRecoveryCopyStore } from '../recovery-copy-writer';
+import { confirmReplaceDocument, saveDocument } from '../project-document';
 import { Ma2SongConflicts } from './Ma2SongConflicts';
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from '../runtime/ma2-legacy-names';
 
@@ -24,7 +25,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const legacy = useMemo(() => legacyMa2ConsoleNames(project), [project]);
   const automatic = useMa2AutoSyncStore();
   const active = useMa2RealtimePreference(state => state.enabled);
-  const localSaveError = useMa2LocalSaveStore(state => state.error);
+  const recoveryError = useRecoveryCopyStore(state => state.error);
   const songSync = useMa2SongSyncStore(state => state.songs);
   const songs = Object.values(songSync);
   const [busy, setBusy] = useState(false);
@@ -38,7 +39,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const working = automatic.status === 'writing' || automatic.status === 'reading' || songs.some(song => song.state === 'syncing' || song.requestId);
   const count = pending.length + unbound.length + renames.length + songs.filter(song => song.state === 'pending' && !unbound.some(item => item.itemId === song.itemId)).length;
   const blocked = automatic.status === 'blocked' || songs.some(song => song.state === 'blocked');
-  const status = localSaveError ? '本地保存需处理' : !active ? '已暂停同步' : blocked ? '有修改待核对' : working ? '同步中' : songs.some(song => song.waitingForConnection) ? '等待连接' : count ? `待同步 ${count}` : songs.length && songs.every(song => song.state === 'verified') ? '已回读确认' : automatic.status === 'verified' ? '已回读确认' : '同步已开启';
+  const status = recoveryError ? '恢复副本需处理' : !active ? '已暂停同步' : blocked ? '有修改待核对' : working ? '同步中' : songs.some(song => song.waitingForConnection) ? '等待连接' : count ? `待同步 ${count}` : songs.length && songs.every(song => song.state === 'verified') ? '已回读确认' : automatic.status === 'verified' ? '已回读确认' : '同步已开启';
   const run = async (action: () => Promise<void> | void): Promise<void> => {
     if (busy) return;
     setBusy(true);
@@ -54,9 +55,9 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const save = async (): Promise<void> => {
     const state = useDocumentStore.getState();
     if (!state.project) return;
-    const path = await linkDesktopViewModel.saveProject(state.path, state.project);
-    if (!path) return;
-    useDocumentStore.getState().markSaved(path, state.revision, state.documentId);
+    const outcome = await saveDocument();
+    if (outcome.status === 'failed') throw new Error(outcome.message);
+    if (outcome.status === 'canceled') return;
     const archived = await archiveMa2Project(state.documentId, state.project, 'manual');
     setNotice(`本地已保存并存档：${archived ?? ''}`); notify('本地已保存并创建存档');
   };
@@ -70,12 +71,15 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     const state = useDocumentStore.getState();
     if (!state.path || !state.project) throw new Error('请先保存工程');
     if (playing) throw new Error('播放中不能恢复存档，请停止后再恢复');
-    // Save first, so the "恢复前" copy the restore makes holds the latest edits.
-    const saved = await linkDesktopViewModel.saveProject(state.path, state.project);
-    if (!saved) throw new Error('当前工程保存未完成，未恢复存档');
-    await linkDesktopViewModel.projectArchives({ version: 1, action: 'restore', projectPath: saved, name });
-    const reopened = await linkDesktopViewModel.openProject(saved);
-    useDocumentStore.getState().setProject(reopened.project, reopened.path);
+    // 保存 puts the latest edits into the "恢复前" archive the restore makes; 不保存 drops them.
+    const replaced = await confirmReplaceDocument('restore-archive');
+    if (!replaced) return;
+    const projectPath = useDocumentStore.getState().path;
+    if (!projectPath) throw new Error('请先保存工程');
+    await linkDesktopViewModel.projectArchives({ version: 1, action: 'restore', projectPath, name });
+    const reopened = await linkDesktopViewModel.openProject(projectPath);
+    useDocumentStore.getState().setProject(reopened.project, reopened.path, { upgraded: reopened.upgraded });
+    await replaced();
     setConfirmRestore(null); setArchiveOpen(false); notify('已恢复存档；恢复前的工程另存为“恢复前”存档');
   };
   const reveal = async (name?: string): Promise<void> => {
@@ -95,7 +99,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     <button disabled={busy} onClick={() => archiveOpen ? setArchiveOpen(false) : void run(loadArchives)}><FolderArchive /><span>存档</span></button>
     {detailOpen ? <div className="ma2-sync-popover" role="region" aria-label="同步状态详情">
       <header><strong>{status}</strong><button onClick={() => setDetailOpen(false)}>关闭</button></header>
-      {localSaveError ? <p role="alert">{localSaveError}</p> : null}
+      {recoveryError ? <p role="alert">{recoveryError}</p> : null}
       {archivingOff ? <p>已关闭存档，写入前不再备份。</p> : null}
       <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{notice || (!active ? '已暂停，修改保留在本地。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : automatic.request || automatic.status === 'blocked' || !songs.length ? automatic.message : '名称与 Cue 内容双向核对，控台位置如下。')}</p>
       {blocked ? <button disabled={busy || working} onClick={() => { setNotice(''); retryMa2RealtimeSession(); }}>重新核对并同步</button> : null}

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { createEmptyLinkProject, parseLinkProject, type NativePlayerPrepare, type NativeObsPrepare } from '@tb/schema';
 import { createObsProgramSnapshot } from '@tb/core/link';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
+import { closeDiscarding } from './save-questions';
 
 test('后台画面服务在渲染器阻塞时按实际音频时钟切换隔离 OBS', async ({}, info) => {
   test.skip(!process.env.TBLINK_TEST_OBS_URL || !process.env.TBLINK_TEST_OBS_AUDIO, '需要专用隔离 OBS；不使用用户现场场景');
@@ -66,8 +67,8 @@ test('后台画面服务在渲染器阻塞时按实际音频时钟切换隔离 O
     await page.evaluate(async audio => {
       const state = await window.tbLink.getNativePlaybackStatus();
       if (state) await window.tbLink.controlNativePlayback({ version: 1, sessionId: audio.sessionId, generation: 100, kind: 'stop' });
-      await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false);
+      await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null });
     }, audio);
-    await app.close(); await obs.disconnect();
+    await closeDiscarding(app); await obs.disconnect();
   }
 });

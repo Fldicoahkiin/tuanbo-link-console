@@ -65,7 +65,7 @@ test('设置 17 页双主题三尺寸、展开状态与缩放视觉矩阵', asyn
     await app.evaluate(({ ipcMain }, document) => {
       ipcMain.removeHandler('link:pick-open-project');
       ipcMain.handle('link:pick-open-project', () => document);
-    }, { version: 1, path: file, content });
+    }, { version: 1, path: file, content, upgraded: false });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await select(page, 'source');
@@ -109,7 +109,7 @@ test('设置 17 页双主题三尺寸、展开状态与缩放视觉矩阵', asyn
     await page.screenshot({ path: info.outputPath('failure.png') });
     await writeFile(info.outputPath('failure.txt'), await page.locator('body').innerText());
     throw error;
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 test('设置草稿隔离、密码显隐、退出确认、分类记忆与快捷键撤销', async ({}, info) => {
@@ -164,7 +164,7 @@ test('设置草稿隔离、密码显隐、退出确认、分类记忆与快捷�
     await page.locator('.shortcut-binding input').first().focus();
     await page.keyboard.press('Tab');
     await expect(page.locator('.shortcut-binding button').first()).toBeFocused();
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 
@@ -203,7 +203,7 @@ test('OBS 保存成功与连接失败分开显示，失败后可修正并连接'
     await expect(page.locator('.device-console:visible .tone-error')).toHaveCount(0);
     await page.getByRole('button', { name: '断开 OBS', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'OBS 尚未连接', exact: true })).toBeVisible();
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 test('更新阶段直接呈现在设置页，下载信息与动作一致', async ({}, info) => {
@@ -222,7 +222,7 @@ test('更新阶段直接呈现在设置页，下载信息与动作一致', async
       if (phase === 'available') await expect(page.getByRole('button', { name: '下载更新' })).toBeVisible();
       await page.screenshot({ path: info.outputPath(`update-${phase}.png`) });
     }
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 test('MA2 三种连接方式、凭证隔离、手动保存与搜索取消', async ({}, info) => {
@@ -275,5 +275,5 @@ test('MA2 三种连接方式、凭证隔离、手动保存与搜索取消', asyn
     await expect(page.getByLabel('MA2 连接方式')).toBeEnabled();
     expect(await audit(page)).toMatchObject({ overflow: [], small: [], pageOverflow: false });
     await page.screenshot({ path: info.outputPath('ma2-network.png') });
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

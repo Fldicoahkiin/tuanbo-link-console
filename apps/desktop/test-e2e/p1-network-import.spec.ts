@@ -3,6 +3,7 @@ import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject, type Ma2Catalog, type Ma2EffectLibrary } from '@tb/schema';
 import { convertMa2Timecode } from '../src/main/link/ma2-timecode-conversion';
+import { saveProject, savedValue } from './save-questions';
 
 // Network IPC is simulated; P1 parsing, media import, commands, editor and persistence are real.
 for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguous']) test(`网络 P1 导入：${scenario}`, async ({}, info) => {
@@ -84,6 +85,7 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
     await section.getByRole('button', { name: '导入 P1 音乐并匹配控台 Cue', exact: true }).click();
     if (!pluginAvailable) {
       await expect(page.getByRole('region', { name: '通知' })).toContainText('请先运行控台插件');
+      await saveProject(page);
       const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
       expect(saved.rundown).toHaveLength(2);
       expect(saved.rundown.every(item => item.referenceAudio && !item.lighting?.ma2Bindings?.length)).toBe(true);
@@ -93,7 +95,7 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
     if (scenario === 'partial') {
       await expect(section.getByLabel('音乐与灯光导入结果')).toContainText('已关联 1 / 2 首歌曲');
       await expect(section.getByLabel('音乐与灯光导入结果')).toContainText('1 条读取异常');
-      await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.filter(item => item.lighting?.ma2Bindings?.length).length).toBe(1);
+      await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.filter(item => item.lighting?.ma2Bindings?.length).length)).toBe(1);
       await app.evaluate(({ dialog, ipcMain }, values) => {
         dialog.showOpenDialog = () => { throw new Error('读取现有歌曲灯光不得弹出 P1 文件选择'); };
         ipcMain.removeHandler('link:ma2-catalog');
@@ -105,7 +107,7 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
       await section.getByRole('button', { name: '只补读未完成项', exact: true }).click();
     } else if (scenario === 'ambiguous') {
       await expect(section.getByLabel('音乐与灯光导入结果')).toContainText('已关联 0 / 2 首歌曲');
-      await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).ma2ReadState?.pairs).toEqual({});
+      await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).ma2ReadState?.pairs)).toEqual({});
       const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
       expect(saved.rundown).toHaveLength(2);
       expect(saved.rundown.every(item => !item.lighting?.ma2Bindings?.length)).toBe(true);
@@ -113,7 +115,7 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
       return;
     }
     await expect(section.getByLabel('音乐与灯光导入结果')).toContainText('已关联 2 / 2 首歌曲');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.filter(item => item.lighting?.ma2Bindings?.length).length).toBe(2);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.filter(item => item.lighting?.ma2Bindings?.length).length)).toBe(2);
     const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
     expect(saved.playbackSource).toBe('internal');
     for (const item of saved.rundown) expect(item.lighting?.templates).toHaveLength(2);
@@ -131,5 +133,5 @@ for (const scenario of ['complete', 'unavailable', 'partial', 'offset', 'ambiguo
     await expect(page.locator('.cue-material-browser').getByRole('button', { name: /试听序列 \d+ 灯光步 1\.250$/ })).toBeVisible();
     await expect(page.locator('.cue-material-browser').getByRole('button', { name: /试听序列 \d+ 灯光步 7\.500$/ })).toBeVisible();
     await page.screenshot({ path: info.outputPath('imported-cues.png') });
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

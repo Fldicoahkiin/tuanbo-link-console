@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 test('播放头合并高频移动，松手保留最后位置且旧帧不能拉回', async ({}, info) => {
   const project = parseLinkProject({ ...createEmptyLinkProject('播放头响应验收'), rundown: [{ id: 'song', title: '测试节目', cues: [] }] });
@@ -46,5 +47,5 @@ test('播放头合并高频移动，松手保留最后位置且旧帧不能拉�
     expect(result.writes).toBeLessThanOrEqual(result.frames + 3);
     await writeFile(info.outputPath('pointer-metrics.json'), JSON.stringify(result, null, 2));
     await info.attach('pointer-metrics', { body: JSON.stringify(result), contentType: 'application/json' });
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

@@ -1,17 +1,19 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type Ma2Catalog } from '@tb/schema';
 import { useDocumentStore } from './document-store';
 import { importCachedMa2, useMa2ReadStore } from './ma2-read-store';
 
-const saveProject = vi.hoisted(() => vi.fn().mockResolvedValue('cached.tblink'));
-vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { saveProject } }));
+const saveProjectDocument = vi.hoisted(() => vi.fn());
+vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: {} }));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal('window', { tbLink: { saveProjectDocument } });
   useMa2ReadStore.setState({ busy: false });
 });
+afterEach(() => { vi.unstubAllGlobals(); });
 
-it('单条缓存配对失败保留具体原因，其余时间线仍关联并保存；一次撤销恢复整批', async () => {
+it('单条缓存配对失败保留具体原因，其余时间线仍关联并留待保存；一次撤销恢复整批', async () => {
   const project = createEmptyLinkProject('现场缓存');
   project.schemaVersion = 2;
   project.rundown = ['错误歌曲', '可用歌曲'].map(id => ({ id, title: id, enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], referenceAudio: { assetId: id, relativePath: `${id}.wav`, sha256: 'a'.repeat(64), durationMs: 10000 }, playback: { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: 0, endAction: 'stop' as const, shortcut: '' } }));
@@ -32,7 +34,9 @@ it('单条缓存配对失败保留具体原因，其余时间线仍关联并保�
   expect(current.ma2ReadState?.failures[0]?.target).toBe(1);
   expect(current.ma2ReadState?.failures[0]?.message).toContain('25 FPS');
   expect(current.ma2ReadState?.message).toContain('1 条已关联');
-  expect(saveProject).toHaveBeenCalledOnce();
+  // The association is an unsaved edit: the recovery copy and the operator's save keep it.
+  expect(saveProjectDocument).not.toHaveBeenCalled();
+  expect(useDocumentStore.getState().dirty).toBe(true);
   useDocumentStore.getState().undo();
   expect(useDocumentStore.getState().project?.rundown.every(item => !item.lighting)).toBe(true);
 });

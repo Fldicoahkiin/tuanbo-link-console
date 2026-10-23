@@ -3,6 +3,7 @@ import { rundownItemSchema } from '@tb/schema';
 import { assertDocumentSession, useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel, linkFileViewModel } from '../view-models/link-desktop-view-model';
 import { detectMediaKind, readMediaMetadata } from './media-utils';
+import { requireProjectLocation } from '../project-document';
 
 export async function importProgramFiles(files: File[], playlistId: string, notify: (message: string, tone?: 'info' | 'error') => void): Promise<void> {
   const document = useDocumentStore.getState();
@@ -12,12 +13,9 @@ export async function importProgramFiles(files: File[], playlistId: string, noti
     for (const file of files) {
       if (detectMediaKind(file) === 'image') throw new Error(`${file.name}：请拖入视频或音频`);
     }
-    let path = document.path;
-    if (!path) {
-      path = await linkDesktopViewModel.saveProject(null, document.project);
-      if (!path) return;
-      assertDocumentSession(document.documentId).markSaved(path, document.revision, document.documentId);
-    }
+    // Programs are copied next to the project file.
+    const path = await requireProjectLocation('导入节目');
+    if (!path) return;
     for (const file of files) {
       assertDocumentSession(document.documentId);
       const sourcePath = linkFileViewModel.getPathForFile(file);

@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
+import { saveProject } from './save-questions';
 
 test('波形 Cue 拖动可用 Escape 或失焦取消，正常拖动和撤销保持有效', async ({}, info) => {
   const wav = Buffer.alloc(44 + 8000 * 4, 128);
@@ -36,15 +37,18 @@ test('波形 Cue 拖动可用 Escape 或失焦取消，正常拖动和撤销保�
       if (action === 'escape') await page.keyboard.press('Escape');
       else await page.evaluate(() => window.dispatchEvent(new Event('blur')));
       await page.mouse.up(); await page.keyboard.press('Control+s');
+      await saveProject(page);
       await expect.poll(async () => (await saved()).tracks).toEqual(lighting.tracks);
       await expect(point).toHaveAttribute('title', /Cue 1 · .*01:00/);
     }
     await drag(); await page.mouse.up();
+    await saveProject(page);
     await expect.poll(async () => (await saved()).tracks[0]!.clips[0]!.events[0]!.at).toBeGreaterThan(1000);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await saveProject(page);
     await expect.poll(async () => (await saved()).tracks).toEqual(lighting.tracks);
     await page.reload(); await page.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(point).toBeVisible();
     expect((await saved()).tracks).toEqual(lighting.tracks);
-  } finally { if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

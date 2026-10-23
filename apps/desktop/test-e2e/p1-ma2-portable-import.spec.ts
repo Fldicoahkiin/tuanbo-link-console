@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, test, _electron as electron } from '@playwright/test';
 import { createLightingDocument, parseLinkProject, type Ma2Catalog, type Ma2TimecodePreview } from '@tb/schema';
+import { answerSaveQuestions, closeDiscarding, savedValue } from './save-questions';
 
 function wave(): Buffer {
   const samples = 8000 * 5;
@@ -40,6 +41,7 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const application = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), 'out/main/index.cjs')]] });
   const page = await application.firstWindow();
+  await answerSaveQuestions(application);
   if (process.env.TBLINK_MA2_TEST_HIDDEN) await application.evaluate(({ BrowserWindow }) => { for (const window of BrowserWindow.getAllWindows()) window.hide(); });
   try {
     await application.evaluate(({ ipcMain, dialog }, input) => {
@@ -74,13 +76,13 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     await section.getByRole('button', { name: '选择 .hia 文件', exact: true }).click();
     await expect(section.getByRole('button', { name: '读取控台灯光到现有歌曲' })).toBeEnabled({ timeout: 90000 });
     await expect(section.getByText('P1 歌曲和原始时间码已保存在工程，无需重新选择 .hia。', { exact: true })).toBeVisible();
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8'))).rundown.length).toBe(2);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8'))).rundown.length)).toBe(2);
     const musicOnly = parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8')));
     expect(musicOnly.rundown).toHaveLength(2);
     expect(musicOnly.rundown.every(item => !item.lighting?.ma2Bindings?.length)).toBe(true);
     await section.getByRole('button', { name: '读取控台灯光到现有歌曲' }).click();
     await expect(section.getByText('已关联 2 / 2 首歌曲', { exact: false })).toBeVisible({ timeout: 90000 });
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8'))).rundown.map(item => item.lighting?.ma2Bindings?.[0]?.timecode)).toEqual([101, 102]);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8'))).rundown.map(item => item.lighting?.ma2Bindings?.[0]?.timecode))).toEqual([101, 102]);
     const saved = parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8')));
     expect(saved.rundown.map(item => item.id)).toEqual(musicOnly.rundown.map(item => item.id));
     expect(saved.rundown.map(item => item.referenceAudio?.relativePath)).toEqual(musicOnly.rundown.map(item => item.referenceAudio?.relativePath));
@@ -107,7 +109,7 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     await section.getByRole('button', { name: '更新控台读取' }).click();
     await expect(section.getByText('0 条已关联 · 0 条原生保留 · 0 条需处理', { exact: true })).toBeVisible({ timeout: 90000 });
     await expect(section.getByText('已关联 2 / 2 首歌曲', { exact: false })).toBeVisible({ timeout: 90000 });
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8'))).rundown.map(item => item.lighting?.ma2Bindings?.length)).toEqual([1, 1]);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8'))).rundown.map(item => item.lighting?.ma2Bindings?.length))).toEqual([1, 1]);
     const reopened = parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8')));
     expect(reopened.rundown.map(item => item.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length)).toEqual([1, 1]);
   } catch (error) {
@@ -115,8 +117,8 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     throw error;
   } finally {
     if (!page.isClosed()) {
-      await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+      await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     }
-    if (application.process().exitCode === null) await application.close();
+    if (application.process().exitCode === null) await closeDiscarding(application);
   }
 });

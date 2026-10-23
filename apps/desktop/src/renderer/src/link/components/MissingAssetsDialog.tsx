@@ -73,19 +73,12 @@ export function MissingAssetsDialog({ request, locked, notify }: {
       const remaining = Object.keys(next).length;
       if (!restored) return;
       notify(remaining ? `已找回 ${restored} 个素材，仍有 ${remaining} 个缺失` : `已找回 ${restored} 个素材`);
-      // The project document is unchanged; reopening it lets every view see the
-      // restored files. Unsaved edits are saved first so the reload keeps them.
+      // The project document is unchanged; setting it again lets every view see the
+      // restored files. Unsaved edits stay unsaved: nothing is written to the project file.
       const current = useDocumentStore.getState();
-      if (current.documentId !== documentId || current.path !== projectPath) return;
-      if (current.dirty && current.project) {
-        const saved = await linkDesktopViewModel.saveProject(projectPath, current.project);
-        if (saved !== projectPath) throw new Error('素材已找回，但当前修改未能保存，工程未重新载入；请保存后重新打开工程');
-        current.markSaved(saved, current.revision, current.documentId);
-      }
-      const reopened = await linkDesktopViewModel.openProject(projectPath);
-      if (useDocumentStore.getState().documentId !== documentId) return;
+      if (current.documentId !== documentId || current.path !== projectPath || !current.project) return;
       reloadedAfterRelink.current = true;
-      useDocumentStore.getState().setProject(reopened.project, reopened.path);
+      current.setProject(current.project, projectPath, { restored: current.dirty, upgraded: current.upgradeBackupPending });
     } catch (failure) {
       setError(toMessage(failure));
     } finally {

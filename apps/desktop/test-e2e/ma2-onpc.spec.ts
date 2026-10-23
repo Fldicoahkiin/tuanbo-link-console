@@ -92,7 +92,7 @@ test('真实 onPC 经界面导入、修改、同步、冲突选择与保存重�
       await writeFile(info.outputPath('restored.xml'), restored);
       expect(inspectMa2TimecodeXml(restored).timecodes).toEqual(baseline.timecodes);
     } finally {
-      await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+      await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
       await application.close();
     }
   }

@@ -1,6 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
+import { closeDiscarding } from './save-questions';
 
 test('全新配置与空 PATH：桌面程序能通过真实 IPC 检测本机集成和虚拟 MIDI', async ({}, info) => {
   // Windows 环境变量名称不区分大小写，不能留下另一份 Path。
@@ -30,6 +31,6 @@ test('全新配置与空 PATH：桌面程序能通过真实 IPC 检测本机集�
     await page.screenshot({ path: info.outputPath('failure-ui.png') });
     throw error;
   } finally {
-    await app.close();
+    await closeDiscarding(app);
   }
 });

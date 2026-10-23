@@ -9,8 +9,6 @@ import { useDocumentStore } from '../stores/document-store';
 import { reportCoordinatorError } from './runtime-action-log';
 import { archiveMa2Project } from './ma2-project-archive';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
-import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
-import { savePendingMa2Edits } from './ma2-local-save';
 
 export { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 
@@ -19,7 +17,7 @@ export async function enableMa2NameSync(documentId: number): Promise<void> {
   const current = (): ReturnType<typeof useDocumentStore.getState> => {
     const state = useDocumentStore.getState();
     if (state.documentId !== documentId) throw new Error('工程已切换，名称同步已取消');
-    if (!state.project || !state.path) throw new Error('新名称已保存在本地，请先保存工程后再同步');
+    if (!state.project || !state.path) throw new Error('新名称已改在工程里，请先保存工程后再同步');
     return state;
   };
   current();
@@ -30,21 +28,13 @@ export async function enableMa2NameSync(documentId: number): Promise<void> {
   const catalog = await window.tbLink.readMa2Catalog({ ...connection, targets: [] });
   const materials = current().project?.ma2MaterialLibrary;
   const endpoint = connection.network ? `${connection.network.host}:${connection.network.port}` : '本机 onPC';
-  if (!materials?.library || materials.source !== endpoint || materials.library.directory.show !== catalog.directory.show || materials.library.directory.generation !== catalog.directory.generation || materials.library.directory.version !== catalog.directory.version) throw new Error('新名称已保存在本地；控台或 Show 会话已变化，请重新读取后再同步');
+  if (!materials?.library || materials.source !== endpoint || materials.library.directory.show !== catalog.directory.show || materials.library.directory.generation !== catalog.directory.generation || materials.library.directory.version !== catalog.directory.version) throw new Error('新名称已改在工程里；控台或 Show 会话已变化，请重新读取后再同步');
   const latest = useMa2AutoSyncStore.getState();
   if (latest.request && latest.status !== 'blocked' && latest.status !== 'off') return;
   useMa2AutoSyncStore.setState({ request: { connection, catalog, scope: 'names' } });
 }
 
 export function useMa2AutoSync(playing: boolean, notify: (message: string, tone?: 'info' | 'error') => void): void {
-  useEffect(() => {
-    let changedAt = 0;
-    const unsubscribe = useDocumentStore.subscribe((state, previous) => {
-      if (state.project !== previous.project) changedAt = performance.now();
-    });
-    const timer = setInterval(() => { if (performance.now() - changedAt >= 750) void savePendingMa2Edits(); }, 500);
-    return () => { unsubscribe(); clearInterval(timer); };
-  }, []);
   useEffect(() => { useMa2AutoSyncStore.setState({ timelinePlaying: playing }); return () => { useMa2AutoSyncStore.setState({ timelinePlaying: false }); }; }, [playing]);
   const method = useMa2ModeStore((state) => state.method);
   const playingRef = useRef(playing); playingRef.current = playing;
@@ -83,17 +73,13 @@ export function useMa2AutoSync(playing: boolean, notify: (message: string, tone?
       compare: request => window.tbLink.compareMa2(request),
       apply: request => window.tbLink.applyMa2(request),
       archive: archiveMa2Project,
-      execute: async (documentId, command) => {
+      // The console readback joins the unsaved edits; the recovery copy and the operator's save keep it.
+      execute: (documentId, command) => {
         applyingReadback = true;
         try { useDocumentStore.getState().executeForDocument(documentId, command); }
         finally { applyingReadback = false; }
-        const saved = useDocumentStore.getState();
-        if (saved.documentId !== documentId || !saved.project || !saved.path) throw new Error('控台关联已确认，但工程保存位置已改变，请保存当前工程后继续');
-        try {
-          const path = await linkDesktopViewModel.saveProject(saved.path, saved.project);
-          if (!path) throw new Error('保存未完成');
-          saved.markSaved(path, saved.revision, documentId);
-        } catch (cause) { throw new Error(`控台关联已回读，但工程保存失败：${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
+        useDocumentStore.getState().markConsoleSynced(documentId);
+        return Promise.resolve();
       },
       changed: (status, message) => {
         const previous = useMa2AutoSyncStore.getState().status;

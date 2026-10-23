@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, createLightingUserLibrary, parseLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条分类'}：分类保存、直接编排、撤销与重开`, async ({}, info) => {
   const project = createEmptyLinkProject('分类编排验收'); project.schemaVersion = 2;
@@ -94,7 +95,7 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
     await page.screenshot({path:info.outputPath('classification-and-timeline.png')});
     await page.getByRole('button',{name:'撤销',exact:true}).click();await page.keyboard.press('Control+s');
     await expect.poll(async()=>(await readSaved()).rundown[0]?.lighting?.tracks.flatMap(track=>track.clips.flatMap(clip=>clip.events)).length).toBe(originalCues);
-    await application.close();application=await launch();page=await application.firstWindow();page.on('pageerror',error=>errors.push(error.message));
+    await closeDiscarding(application);application=await launch();page=await application.firstWindow();page.on('pageerror',error=>errors.push(error.message));
     await stubDialogAndAnalysis();
     await page.getByRole('button',{name:'打开工程',exact:true}).click();
     await page.getByRole('navigation',{name:'主要工作区'}).getByRole('button',{name:'灯光工作台',exact:true}).click();
@@ -132,7 +133,7 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
     }
     expect(errors).toEqual([]);
   } finally {
-    if(!page.isClosed()){await page.screenshot({path:info.outputPath('final.png')});await writeFile(info.outputPath('page.txt'),await page.locator('body').innerText());await page.evaluate(()=>window.tbLink.setDocumentDirty(false));}
+    if(!page.isClosed()){await page.screenshot({path:info.outputPath('final.png')});await writeFile(info.outputPath('page.txt'),await page.locator('body').innerText());await page.evaluate(()=>window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));}
     if(application.process().exitCode===null) await application.close();
   }
 });

@@ -3,7 +3,7 @@ import { confirmMa2PairingCommand, importMa2ProgramsCommand, reconcileMa2ReadSta
 import { ma2CatalogSchema, type Ma2CatalogRequest, type Ma2ReadProgress, type Ma2ReadState } from '@tb/schema';
 import { useDocumentStore } from './document-store';
 import { readMa2Programs } from '../view-models/read-ma2-programs';
-import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+import { requireProjectLocation } from '../project-document';
 
 export const useMa2ReadStore = create<{ busy: boolean; progress: Ma2ReadProgress | null; activeId: string | null; message: string; openWorkspace: boolean; browserOpen: boolean }>(() => ({ busy: false, progress: null, activeId: null, message: '', openWorkspace: false, browserOpen: false }));
 
@@ -13,34 +13,23 @@ export function updateMa2ReadState(patch: Partial<Ma2ReadState>): void {
   document.execute(saveMa2ReadStateCommand({ ...document.project.ma2ReadState, ...patch }));
 }
 
-async function persist(documentId: number): Promise<void> {
-  const current = useDocumentStore.getState();
-  if (current.documentId !== documentId || !current.project || !current.path) return;
-  const path = await linkDesktopViewModel.saveProject(current.path, current.project);
-  if (!path) throw new Error('控台缓存已加入工程，但保存未完成');
-  useDocumentStore.getState().markSaved(path, current.revision, documentId);
-}
-
 /** Component unmount is not a cancellation. The document owns results, this store owns the job. */
 export async function scanMa2(source: Ma2CatalogRequest, retry = false): Promise<void> {
   if (useMa2ReadStore.getState().busy) return;
-  useMa2ReadStore.setState({ busy: true, message: '正在保存工程并准备读取' });
+  useMa2ReadStore.setState({ busy: true, message: '正在准备读取' });
   try { await runScan(source, retry); }
   catch (error) { useMa2ReadStore.setState({ message: `读取未完成：${error instanceof Error ? error.message : String(error)}` }); throw error; }
   finally { useMa2ReadStore.setState({ busy: false, activeId: null, progress: null }); }
 }
 
 async function runScan(source: Ma2CatalogRequest, retry: boolean): Promise<void> {
-  let before = useDocumentStore.getState();
-  if (!before.project) throw new Error('请先创建或打开联动工程');
-  {
-    const savedPath = await linkDesktopViewModel.saveProject(before.path, before.project);
-    if (!savedPath) throw new Error('请先保存联动工程，再读取控台；本次尚未开始扫描');
-    if (useDocumentStore.getState().documentId !== before.documentId) throw new Error('保存期间工程已切换');
-    useDocumentStore.getState().markSaved(savedPath, before.revision, before.documentId);
-    before = useDocumentStore.getState();
-  }
-  if (!before.project || !before.path) throw new Error('工程保存未完成');
+  const opened = useDocumentStore.getState();
+  if (!opened.project) throw new Error('请先创建或打开联动工程');
+  // Read checkpoints are kept beside the project file; the edits themselves stay in memory.
+  if (!await requireProjectLocation('读取控台')) throw new Error('未选择工程保存位置，本次尚未开始读取');
+  const before = useDocumentStore.getState();
+  if (before.documentId !== opened.documentId) throw new Error('选择保存位置期间工程已切换');
+  if (!before.project || !before.path) throw new Error('工程尚无保存位置');
   const cached = before.project.ma2ReadState;
   const sourceName = source.network ? `${source.network.host}:${source.network.port}` : '本机 onPC';
   const targets = retry && cached ? cached.catalog.directory.entries.filter(entry => {
@@ -76,7 +65,6 @@ async function runScan(source: Ma2CatalogRequest, retry: boolean): Promise<void>
     const state = reconcileMa2ReadState(current.project, sourceName, catalog);
     const message = state.message;
     current.executeForDocument(before.documentId, saveMa2ReadStateCommand(state, progressId));
-    await persist(before.documentId);
     useMa2ReadStore.setState({ message });
   } catch (error) { useMa2ReadStore.setState({ message: `读取未完成：${error instanceof Error ? error.message : String(error)}` }); throw error; }
   finally { unsubscribe(); useMa2ReadStore.setState({ busy: false, activeId: null, progress: null }); }
@@ -109,5 +97,4 @@ export async function importCachedMa2(target?: number): Promise<void> {
     for (const selection of result.selections) next = confirmMa2PairingCommand(selection.preview.target, selection.itemId).execute(next);
     return next;
   } });
-  await persist(before.documentId);
 }

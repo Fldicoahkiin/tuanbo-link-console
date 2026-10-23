@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron, type Locator } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, createLightingUserLibrary, parseLinkProject } from '@tb/schema';
+import { saveProject } from './save-questions';
 
 test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存、撤销、重开', async ({}, info) => {
   const wav = Buffer.alloc(44 + 24000 * 10 * 2);
@@ -44,11 +45,13 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await navigation.getByRole('button', {name: '面光', exact: true}).click();
     await page.getByRole('button', {name: '添加 灯光素材 2 到当前 Cue', exact: true}).click();
     await expect(composer.locator('.cue-ingredient')).toHaveCount(2);
+    await saveProject(page);
     await expect.poll(async () => (await events()).length).toBe(2);
     await navigation.getByRole('button', {name: '控台素材', exact: true}).click();
     const source = page.getByRole('button', {name: '试听序列 3 灯光步 1.000', exact: true});
     await dragToComposer(source);
     await expect(composer.locator('.cue-ingredient')).toHaveCount(3);
+    await saveProject(page);
     await expect.poll(async () => (await events()).length).toBe(3);
     await composer.getByRole('button', {name: '移除素材 灯光素材 2', exact: true}).click();
     await page.getByRole('button', {name: '添加 灯光素材 2 到当前 Cue', exact: true}).click();
@@ -60,14 +63,17 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await expect(composer.getByLabel('素材 1 序列', {exact: true})).not.toBeVisible();
     await composer.getByLabel('Cue 名称', {exact: true}).fill('开场组合');
     await composer.getByRole('button', {name: '保存 Cue', exact: true}).click();
+    await saveProject(page);
     await expect.poll(async () => (await events()).length).toBe(3);
     await expect.poll(async () => (await events()).find(event => event.id === 'original')).toMatchObject({ at: 2000, label: '开场组合' });
     expect((await events()).map(event => event.effectGroupId)).toEqual(['original', 'original', 'original']);
     await expect(page.locator('.waveform-cue-point')).toHaveCount(1);
     await page.screenshot({path: info.outputPath('cue-composer.png')});
     await page.getByRole('button', {name: '撤销', exact: true}).click();
+    await saveProject(page);
     await expect.poll(async () => (await events()).find(event => event.id === 'original')).toMatchObject({ label: '开场' });
     await page.getByRole('button', {name: '重做', exact: true}).click();
+    await saveProject(page);
     await expect.poll(async () => (await events()).length).toBe(3);
     await page.locator('.waveform-cue-point').first().click();
     await page.setViewportSize({width: 1060, height: 720});
@@ -86,6 +92,7 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await page.getByRole('button', { name: '打点', exact: true }).click();
     await expect(composer.getByLabel('Cue 名称', { exact: true })).toHaveValue('');
     await expect(composer.locator('.cue-ingredient')).toHaveCount(0);
+    await saveProject(page);
     await expect.poll(async () => (await events()).length).toBe(4);
     const empty = (await events()).find(event => event.kind === 'empty-cue')!;
     await expect(page.locator('.waveform-cue-point').first()).toHaveText('1');
@@ -94,6 +101,7 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
     await navigation.getByRole('button', { name: '面光', exact: true }).click();
     await page.getByRole('button', { name: '添加 灯光素材 2 到当前 Cue', exact: true }).click();
+    await saveProject(page);
     await expect.poll(async () => (await events()).find(event => event.id === empty.id)).toMatchObject({ kind: 'ma2', sequence: 2, at: empty.at });
     await expect(page.locator('.waveform-cue-point').first()).toHaveText('1');
     // Switch away without pressing Save, then come back: it must retain material 2.
@@ -104,11 +112,13 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await expect(composer.locator('.cue-ingredient')).toHaveCount(1);
     await expect(composer.locator('.cue-ingredient-title strong')).toHaveText('灯光素材 2');
     await composer.getByRole('button', { name: '移除素材 灯光素材 2', exact: true }).click();
+    await saveProject(page);
     await expect.poll(async () => (await events()).find(event => event.id === empty.id)?.kind).toBe('empty-cue');
     await page.locator('.waveform-cue-point').last().click();
     await page.locator('.waveform-cue-point').first().click();
     await expect(composer.locator('.cue-ingredient')).toHaveCount(0);
     await page.getByRole('button', { name: '添加 灯光素材 3 到当前 Cue', exact: true }).click();
+    await saveProject(page);
     await expect.poll(async () => (await events()).find(event => event.id === empty.id)).toMatchObject({ kind: 'ma2', sequence: 3, at: empty.at });
     await page.reload(); await page.getByRole('button', {name: '灯光工作台', exact: true}).click();
     await page.locator('.waveform-cue-point').first().click();
@@ -120,11 +130,12 @@ test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存�
     await page.getByRole('button', { name: '重做', exact: true }).click();
     await page.locator('.waveform-cue-point').first().click();
     await expect(composer.locator('.cue-ingredient')).toHaveCount(0);
+    await saveProject(page);
     await expect.poll(async () => (await events()).find(event => event.id === empty.id)?.kind).toBe('empty-cue');
     await page.reload(); await page.getByRole('button', {name: '灯光工作台', exact: true}).click();
     await page.locator('.waveform-cue-point').first().click();
     await expect(composer.locator('.cue-ingredient')).toHaveCount(0);
     await page.screenshot({path: info.outputPath('empty-cue-reopened.png')});
     expect(errors).toEqual([]);
-  } catch (error) { await page.screenshot({ path: info.outputPath('failure.png') }); await writeFile(info.outputPath('failure.txt'), await page.locator('body').innerText()); throw error; } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } catch (error) { await page.screenshot({ path: info.outputPath('failure.png') }); await writeFile(info.outputPath('failure.txt'), await page.locator('body').innerText()); throw error; } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

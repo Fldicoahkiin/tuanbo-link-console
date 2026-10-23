@@ -10,7 +10,7 @@ import { convertMa2LegacyNames, legacyMa2ConsoleNames } from './ma2-legacy-names
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
 const { recordLog } = vi.hoisted(() => ({ recordLog: vi.fn(() => Promise.resolve()) }));
-vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { recordLog, saveProject: vi.fn(() => Promise.resolve('song.tblink')) } }));
+vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { recordLog } }));
 const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
 vi.mock('./ma2-project-archive', () => ({ archiveMa2Project: archive }));
 const source = { show: 'Show', generation: 'session', version: '3.7.0.5' };

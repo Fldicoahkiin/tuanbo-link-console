@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type Ma2AuditionRequest, type Ma2AuditionState, type Ma2CatalogRequest, type Ma2RenameRequest } from '@tb/schema';
 import { toConsoleLabel } from '@tb/core/link';
+import { answerSaveQuestions, savedValue } from './save-questions';
 
 test('界面样本：单步分类点击出灯，多步进入原编号子菜单，移除冗余按钮', async ({}, info) => {
   const project = createEmptyLinkProject('灯光素材分类界面样本');
@@ -19,6 +20,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const application = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [process.env.TBLINK_MA2_TEST_MAIN ?? join(process.cwd(), 'out/main/index.cjs')]] });
   const page = await application.firstWindow();
+  await answerSaveQuestions(application);
   page.on('pageerror', error => console.error('界面运行错误', error.message));
   try {
     // The main process writes renamed Chinese labels as pinyin; this stand-in console reads them back the same way.
@@ -139,7 +141,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await menu.getByRole('textbox',{name:'Cue 名称',exact:true}).press('Enter');
     await expect(consoleStep.locator('strong')).toHaveText('前区暖白');
     const waitRename = async (name: string): Promise<void> => { await expect.poll(async () => (JSON.parse(await application.evaluate(() => process.env.TBLINK_RENAME_CALLS ?? '[]')) as Ma2RenameRequest[]).at(-1)?.change.name).toBe(name); await expect(page.getByRole('button', { name: '同步状态详情', exact: true })).toHaveAttribute('data-state', 'verified'); };
-    await expect.poll(async()=>parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries[0]?.name).toBe('前区暖白');
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries[0]?.name)).toBe('前区暖白');
     expect(JSON.parse(await application.evaluate(() => process.env.TBLINK_RENAME_CALLS ?? '[]')) as Ma2RenameRequest[]).toEqual([]);
     await expect(realtime).not.toBeChecked();
     await realtime.click();
@@ -170,7 +172,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await expect(realtime).not.toBeChecked();
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(classified.locator('.classification-cell>button').first()).toContainText('前区暖白');
-    await expect.poll(async()=>parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries[0]?.name).toBe('前区暖白');
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries[0]?.name)).toBe('前区暖白');
     expect((JSON.parse(await application.evaluate(() => process.env.TBLINK_RENAME_CALLS ?? '[]')) as Ma2RenameRequest[])).toHaveLength(renameCalls.length);
     await realtime.click();
     await expect(realtime).toBeChecked();
@@ -190,12 +192,12 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await expect(menu.getByRole('button',{name:'归入 面光 亮调 · 3人 · 前区',exact:true})).toHaveAttribute('aria-pressed','true');
     await menu.getByRole('button',{name:'轮廓',exact:true}).click();await menu.getByRole('button',{name:'后区',exact:true}).click();
     await menu.getByRole('button',{name:'归入 轮廓 7人 · 后区',exact:true}).click();await menu.getByRole('button',{name:'确定',exact:true}).click();
-    await expect.poll(async()=>parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries?.[0]?.categoryIds).toEqual(['front:bright:3:front','rim:7:back']);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries?.[0]?.categoryIds)).toEqual(['front:bright:3:front','rim:7:back']);
     await classified.locator('.classification-cell>button').first().click({button:'right'});
     await menu.getByRole('button',{name:'移除素材',exact:true}).click();
     await expect(classified.locator('.classification-cell')).toHaveCount(0);
     // Removing a category membership leaves the console catalog and other memberships intact.
-    await expect.poll(async()=>parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries?.[0]?.categoryIds).toEqual(['rim:7:back']);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries?.[0]?.categoryIds)).toEqual(['rim:7:back']);
     await navigation.getByRole('button',{name:/控台/}).click();
     await expect(pool).toHaveAttribute('data-total-cues','4500');
     await pool.getByRole('button',{name:'试听序列 1 灯光步 1.000',exact:true}).click();
@@ -203,12 +205,12 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     await pool.getByRole('button',{name:'试听序列 2 灯光步 1.000',exact:true}).click({button:'right'});
     await expect(menu).toContainText('已选 2 个 Cue');await menu.getByRole('button',{name:'设置分类',exact:true}).click();await menu.getByText('面光、轮廓和效果用途',{exact:true}).click();await menu.getByRole('button',{name:'效果',exact:true}).click();
     await menu.getByRole('button',{name:'归入 效果 重击',exact:true}).click();await menu.getByRole('button',{name:'确定',exact:true}).click();
-    await expect.poll(async()=>parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries?.filter((entry:{categoryIds:string[]})=>entry.categoryIds.includes('effect:music:0')).length).toBe(2);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.entries?.filter((entry:{categoryIds:string[]})=>entry.categoryIds.includes('effect:music:0')).length)).toBe(2);
     await pool.getByRole('button',{name:'试听序列 1 灯光步 1.000',exact:true}).click({button:'right'});
     await menu.getByRole('button',{name:'移除素材',exact:true}).click();
     await expect(pool).toHaveAttribute('data-total-cues','4499');
     await page.keyboard.press('Control+z');await expect(pool).toHaveAttribute('data-total-cues','4500');await page.keyboard.press('Control+y');await expect(pool).toHaveAttribute('data-total-cues','4499');
-    await expect.poll(async()=>parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.hiddenConsoleCues?.length).toBe(1);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(file,'utf8'))).ma2MaterialLibrary?.userLibrary?.hiddenConsoleCues?.length)).toBe(1);
     const saved=parseLinkProject(JSON.parse(await readFile(file,'utf8')));expect(saved.ma2MaterialLibrary?.library?.sequences).toHaveLength(1000);
     // Reopen the actual saved project through the normal project loader.
     await page.getByRole('navigation',{name:'主要工作区'}).getByRole('button',{name:'节目单',exact:true}).click();
@@ -257,7 +259,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
 
   } finally {
     if (!page.isClosed()) { await page.screenshot({ path: info.outputPath('final.png') }); await writeFile(info.outputPath('page.txt'), await page.locator('body').innerText()); }
-    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     if (application.process().exitCode === null) await application.close();
   }
 });

@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { createEmptyLinkProject, createLightingDocument } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 test('编辑灯光随网络连接显示已连接，断开后更新且不依赖一键检查', async ({}, info) => {
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
@@ -22,7 +23,7 @@ test('编辑灯光随网络连接显示已连接，断开后更新且不依赖�
     await app.evaluate(() => { process.env.TBLINK_TOPBAR_NETWORK_STATE = 'connected'; });
     await expect(overview.getByRole('button', { name: '编辑灯光：已连接，前往设置', exact: true })).toHaveClass(/state-ready/);
     await page.screenshot({ path: info.outputPath('editing-connected.png') });
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });
 
 test('顶部保留四项连接状态，详细切回完整连接列表且不切工作区', async ({}, info) => {
@@ -53,7 +54,7 @@ test('顶部保留四项连接状态，详细切回完整连接列表且不切�
     await details.click();
     await expect(details).toHaveAttribute('aria-pressed', 'false');
     await expect(overview).toBeVisible();
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });
 
 test('点击四项状态定位并短暂强调，重复点击重新滚动', async ({}, info) => {
@@ -96,5 +97,5 @@ test('点击四项状态定位并短暂强调，重复点击重新滚动', async
     await expect(page.locator('.settings-location-highlight')).toBeInViewport();
     await expect(page.locator('.settings-location-highlight')).toBeFocused();
     await expect(page.locator('.settings-location-highlight')).toHaveCount(0);
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

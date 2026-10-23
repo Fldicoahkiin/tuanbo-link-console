@@ -4,7 +4,7 @@ import { projectDocumentRequestSchema, projectDocumentResponseSchema, type Proje
 
 type Payload = ProjectDocumentRequest extends infer T ? T extends ProjectDocumentRequest ? Omit<T, 'version' | 'id'> : never : never;
 type Pending = { kind: Payload['kind']; resolve: (result: ProjectDocumentResponse) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
-const resultKinds = { open: 'opened', save: 'saved', inspect: 'inspected' } as const;
+const resultKinds = { open: 'opened', save: 'saved', copy: 'saved', inspect: 'inspected' } as const;
 
 export class ProjectDocumentService {
   private worker: Worker | null = null;
@@ -14,18 +14,42 @@ export class ProjectDocumentService {
   constructor(private readonly workerPath = join(__dirname, 'project-document-worker.cjs')) {}
 
   async read(path: string): Promise<string> {
+    return (await this.open(path)).content;
+  }
+  /** `upgraded`: the content differs from the file; it stays unchanged until the operator saves. */
+  async open(path: string): Promise<{ content: string; upgraded: boolean }> {
     const response = await this.request({ kind: 'open', path });
     if (response.kind !== 'opened') throw new Error('工程读取返回类型不正确');
-    return response.content;
+    return { content: response.content, upgraded: response.upgraded };
   }
   async inspect(content: string): Promise<string> {
     const response = await this.request({ kind: 'inspect', content });
     if (response.kind !== 'inspected') throw new Error('工程检查返回类型不正确');
     return response.name;
   }
-  async save(path: string, content: string): Promise<void> {
-    const response = await this.request({ kind: 'save', path, content });
+  async save(path: string, content: string, backupOriginal = false): Promise<void> {
+    const response = await this.request({ kind: 'save', path, content, backupOriginal });
     if (response.kind !== 'saved') throw new Error('工程保存返回类型不正确');
+  }
+  async writeCopy(path: string, content: string): Promise<void> {
+    const response = await this.request({ kind: 'copy', path, content });
+    if (response.kind !== 'saved') throw new Error('工程副本写入返回类型不正确');
+  }
+  /** Why new requests are refused (a timeout or a broken worker); null while the worker works. */
+  stalledReason(): string | null {
+    return this.failure?.message ?? null;
+  }
+  /**
+   * Only after the operator confirms: ends the stuck worker and lets the next request start a new
+   * one. An atomic save the old worker had begun is either complete or absent on disk; it is not
+   * repeated here, the operator saves again.
+   */
+  restart(): void {
+    if (!this.failure) throw new Error('工程处理线程运行正常，无需重启');
+    const stuck = this.worker;
+    this.worker = null; this.failure = null;
+    stuck?.removeAllListeners();
+    void stuck?.terminate();
   }
   private request(payload: Payload): Promise<ProjectDocumentResponse> {
     if (this.failure) return Promise.reject(this.failure);
@@ -48,7 +72,7 @@ export class ProjectDocumentService {
     }
     this.worker.ref();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒；未确认的保存可能已写入，请重开核对，不会自动重试')), 30000);
+      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒；未确认的保存可能已写入，不会自动重试。可在提示中重启工程处理后再保存')), 30000);
       this.pending.set(request.id, { kind: payload.kind, resolve, reject, timer });
       try { this.worker!.postMessage(request); }
       catch (error) { this.fail(error); }
@@ -60,7 +84,7 @@ export class ProjectDocumentService {
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(this.failure); }
     this.pending.clear();
     // Do not terminate an in-flight atomic save on a timeout. Its result remains
-    // unconfirmed and this service refuses new work until the app is restarted.
+    // unconfirmed and this service refuses new work until the operator restarts it.
     this.worker?.removeAllListeners('message'); this.worker?.unref();
   }
 }

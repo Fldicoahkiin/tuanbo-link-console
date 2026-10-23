@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
+import { saveProject, closeDiscarding } from './save-questions';
 
 for (const native of [false, true]) test(`无 MIDI 设备时切换灯光模式、保存并重启，原生绑定=${native}`, async ({}, info) => {
   test.setTimeout(120_000);
@@ -28,8 +29,9 @@ for (const native of [false, true]) test(`无 MIDI 设备时切换灯光模式�
       await current.page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
       await current.page.getByRole('combobox', { name: '灯光输出方式' }).selectOption(mode);
       await expect(current.page.getByRole('combobox', { name: '灯光输出方式' })).toHaveValue(mode);
+      await saveProject(current.page);
       await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.outputMode).toBe(mode);
-      await current.app.close();
+      await closeDiscarding(current.app);
       current = await launch();
       await current.page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
       await expect(current.page.getByRole('combobox', { name: '灯光输出方式' })).toHaveValue(mode);
@@ -41,7 +43,7 @@ for (const native of [false, true]) test(`无 MIDI 设备时切换灯光模式�
     expect(errors).toEqual([]);
     await current.page.screenshot({ path: info.outputPath('mode-restored.png') });
     await current.page.evaluate(file => localStorage.setItem('tblink.failed-render-project-path.v1', file), path);
-    await current.app.close();
+    await closeDiscarding(current.app);
     current = await launch();
     await expect(current.page.getByText('上次工程显示异常', { exact: false })).toBeVisible();
     await expect(current.page.getByRole('button', { name: '打开工程', exact: true })).toBeVisible();
@@ -50,5 +52,5 @@ for (const native of [false, true]) test(`无 MIDI 设备时切换灯光模式�
     await current.page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(current.page.getByRole('combobox', { name: '灯光输出方式' })).toHaveValue('network');
     expect(await current.page.evaluate(() => localStorage.getItem('tblink.failed-render-project-path.v1'))).toBeNull();
-  } finally { await current.app.close(); }
+  } finally { await closeDiscarding(current.app); }
 });

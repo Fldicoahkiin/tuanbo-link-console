@@ -58,7 +58,7 @@ describe('document store command history', () => {
     const cue = { id: 'cue', name: '打点', timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, enabled: true, notes: '', actions: [] };
     project.rundown.push({ id: 'song', title: '节目', enabled: true, notes: '', referenceMediaClips: [], cues: [cue], visualLayers: [{ id: 'timeline-layer-cue', name: '用户图层', visible: true, locked: false }] });
     const store = useDocumentStore.getState();
-    store.setProject(project, null);
+    store.setProject(project, 'C:\\shows\\layers.tblink');
     const prepared = useDocumentStore.getState().project!.rundown[0]!;
     expect(prepared.cues[0]!.layerId).toBeDefined();
     expect(prepared.cues[0]!.layerId).not.toBe('timeline-layer-cue');
@@ -143,19 +143,115 @@ describe('document store command history', () => {
   it('旧修订保存完成时不会把更新中的工程错误标记为已保存', () => {
     const store = useDocumentStore.getState();
     store.execute(renameProjectCommand('第一名称'));
-    const savingRevision = useDocumentStore.getState().revision;
+    const { stateId: savingState, documentId } = useDocumentStore.getState();
     store.execute(renameProjectCommand('第二名称'));
-    useDocumentStore.getState().markSaved('C:\\shows\\test.tblink', savingRevision);
+    useDocumentStore.getState().markSaved('C:\\shows\\test.tblink', savingState, documentId);
 
     expect(useDocumentStore.getState()).toMatchObject({ path: 'C:\\shows\\test.tblink', dirty: true });
-    useDocumentStore.getState().markSaved(undefined, useDocumentStore.getState().revision);
+    useDocumentStore.getState().markSaved('C:\\shows\\test.tblink', useDocumentStore.getState().stateId, documentId);
     expect(useDocumentStore.getState().dirty).toBe(false);
+  });
+
+  it('撤销或重做回到保存时的状态会清除改动标记，离开后重新标记', () => {
+    const store = useDocumentStore.getState();
+    store.execute(renameProjectCommand('第一名称'));
+    const { stateId, documentId } = useDocumentStore.getState();
+    store.markSaved('C:\\shows\\saved.tblink', stateId, documentId);
+    expect(useDocumentStore.getState().dirty).toBe(false);
+
+    store.execute(renameProjectCommand('第二名称'));
+    expect(useDocumentStore.getState().dirty).toBe(true);
+    store.undo();
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: false, project: { name: '第一名称' } });
+    store.undo();
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: true, project: { name: '初始工程' } });
+    store.redo();
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: false, project: { name: '第一名称' } });
+    store.redo();
+    expect(useDocumentStore.getState().dirty).toBe(true);
+  });
+
+  it('保存点被新的编辑分支丢弃后，撤销不会误报已保存', () => {
+    const store = useDocumentStore.getState();
+    store.execute(renameProjectCommand('保存的名称'));
+    const { stateId, documentId } = useDocumentStore.getState();
+    store.markSaved('C:\\shows\\saved.tblink', stateId, documentId);
+    store.undo();
+    store.execute(renameProjectCommand('另一分支'));
+    store.undo();
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: true, project: { name: '初始工程' } });
+  });
+
+  it('合并为一步的连续编辑不会沿用保存点', () => {
+    const store = useDocumentStore.getState();
+    store.execute({ ...renameProjectCommand('拖动 1'), historyGroup: 'drag' });
+    const { stateId, documentId } = useDocumentStore.getState();
+    store.markSaved('C:\\shows\\saved.tblink', stateId, documentId);
+    store.execute({ ...renameProjectCommand('拖动 2'), historyGroup: 'drag' });
+    expect(useDocumentStore.getState().past).toHaveLength(1);
+    expect(useDocumentStore.getState().dirty).toBe(true);
+  });
+
+  it('控台回读改写历史后，任何撤销位置都不再等同磁盘内容', () => {
+    const store = useDocumentStore.getState();
+    store.execute(renameProjectCommand('已保存'));
+    const { stateId, documentId } = useDocumentStore.getState();
+    store.markSaved('C:\\shows\\saved.tblink', stateId, documentId);
+    const rename = renameProjectCommand('回读名称');
+    store.execute({ ...rename, historyRebaseKey: 'readback', rebaseHistory: project => ({ ...project, notes: '控台回读' }) });
+    expect(useDocumentStore.getState().dirty).toBe(true);
+    store.undo();
+    expect(useDocumentStore.getState().dirty).toBe(true);
+  });
+
+  it('新建工程不算改动；打开时升级、恢复的未保存内容一开始就有改动', () => {
+    const store = useDocumentStore.getState();
+    store.setProject(createEmptyLinkProject('新建'), null);
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: false, upgradeBackupPending: false });
+
+    const current = createEmptyLinkProject('当前格式'); current.obsOutputMode = 'scenes';
+    store.setProject(current, 'C:\\shows\\current.tblink');
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: false, upgradeBackupPending: false });
+
+    store.setProject(current, 'C:\\shows\\upgraded.tblink', { upgraded: true });
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: true, upgradeBackupPending: true });
+
+    store.setProject(current, 'C:\\shows\\restored.tblink', { restored: true });
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: true, upgradeBackupPending: false });
+    store.setProject(current, null, { restored: true });
+    expect(useDocumentStore.getState().dirty).toBe(true);
+  });
+
+  it('保存会清除升级备份和已同步到控台的标记；切换工程也会清除', () => {
+    const store = useDocumentStore.getState();
+    const legacy = createEmptyLinkProject('旧工程');
+    store.setProject(legacy, 'C:\\shows\\legacy.tblink');
+    const { stateId, documentId } = useDocumentStore.getState();
+    expect(useDocumentStore.getState().upgradeBackupPending).toBe(true);
+    store.markConsoleSynced(documentId);
+    expect(useDocumentStore.getState().consoleSynced).toBe(true);
+    store.markSaved('C:\\shows\\legacy.tblink', stateId, documentId);
+    expect(useDocumentStore.getState()).toMatchObject({ dirty: false, upgradeBackupPending: false, consoleSynced: false });
+
+    store.markConsoleSynced(documentId);
+    store.setProject(createEmptyLinkProject('其他'), null);
+    expect(useDocumentStore.getState().consoleSynced).toBe(false);
+    expect(() => useDocumentStore.getState().markConsoleSynced(documentId)).toThrow('当前工程已切换');
+  });
+
+  it('每个打开的文档有自己的恢复副本会话，保存不更换', () => {
+    const first = useDocumentStore.getState().sessionId;
+    const { stateId, documentId } = useDocumentStore.getState();
+    useDocumentStore.getState().markSaved('C:\\shows\\a.tblink', stateId, documentId);
+    expect(useDocumentStore.getState().sessionId).toBe(first);
+    useDocumentStore.getState().setProject(createEmptyLinkProject('另一个'), null);
+    expect(useDocumentStore.getState().sessionId).not.toBe(first);
   });
 
   it('每次打开文档生成新会话标识，编辑和保存路径变化不更换标识', () => {
     const initialDocumentId = useDocumentStore.getState().documentId;
     useDocumentStore.getState().execute(renameProjectCommand('编辑后'));
-    useDocumentStore.getState().markSaved('C:\\shows\\copy.tblink');
+    useDocumentStore.getState().markSaved('C:\\shows\\copy.tblink', useDocumentStore.getState().stateId, initialDocumentId);
     expect(useDocumentStore.getState().documentId).toBe(initialDocumentId);
 
     const copiedProject = useDocumentStore.getState().project;
@@ -169,7 +265,7 @@ describe('document store command history', () => {
     const nextProject = createEmptyLinkProject('后来打开的工程');
     useDocumentStore.getState().setProject(nextProject, 'C:\\shows\\new.tblink');
 
-    useDocumentStore.getState().markSaved('C:\\shows\\old.tblink', 0, oldDocumentId);
+    useDocumentStore.getState().markSaved('C:\\shows\\old.tblink', useDocumentStore.getState().stateId, oldDocumentId);
     expect(useDocumentStore.getState()).toMatchObject({
       project: { name: '后来打开的工程' },
       path: 'C:\\shows\\new.tblink'

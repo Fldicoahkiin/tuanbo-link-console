@@ -1,7 +1,6 @@
 import { confirmMa2RenameCommand, consoleLabelText, legacyMa2Renames, toConsoleLabel } from '@tb/core/link';
 import { ma2RenameResultSchema, type LinkProject, type Ma2RenameRecord } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
-import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { archiveMa2Project } from './ma2-project-archive';
 import { ma2SongSyncSettings, startMa2SongSync, useMa2SongSyncStore } from './ma2-song-sync';
 import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
@@ -64,10 +63,7 @@ export async function convertMa2LegacyNames(documentId: number): Promise<number>
     const result = ma2RenameResultSchema.parse(await window.tbLink.renameMa2Object({ dataDirectory: '', network: { host, port, monitorPort, username }, generation: library.directory.generation, change }));
     if (result.name !== toConsoleLabel(change.name) || result.sequence !== change.sequence || result.kind !== change.kind || Number(result.cue) !== Number(change.cue)) throw new Error('名称回读与目标不一致，未确认转换');
     useDocumentStore.getState().executeForDocument(documentId, confirmMa2RenameCommand(change));
+    useDocumentStore.getState().markConsoleSynced(documentId);
   }
-  const saved = useDocumentStore.getState();
-  const path = await linkDesktopViewModel.saveProject(saved.path, current());
-  if (!path) throw new Error('控台名称已改为拼音，工程保存未完成');
-  saved.markSaved(path, saved.revision, documentId);
   return legacy.count;
 }

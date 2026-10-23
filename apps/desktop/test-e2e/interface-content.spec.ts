@@ -94,5 +94,5 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
     await writeFile(info.outputPath('failure-ui.txt'), await page.locator('body').innerText());
     await page.screenshot({ path: info.outputPath('failure-ui.png') });
     throw error;
-  } finally { const page = await app.firstWindow(); if (!page.isClosed()) await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); }); await app.close(); }
+  } finally { const page = await app.firstWindow(); if (!page.isClosed()) await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); }); await app.close(); }
 });

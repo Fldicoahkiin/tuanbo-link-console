@@ -6,7 +6,7 @@ import { applyMa2CueDeletionCommand, type ConsoleCueReference } from '@tb/core/l
 import { useDocumentStore } from '../stores/document-store';
 import { ma2MaterialConnection, useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { useMa2AttributeStore } from '../stores/ma2-attribute-store';
-import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+import { saveDocument } from '../project-document';
 import '../lighting-attributes.css';
 
 export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReference[]; onClose: () => void }): JSX.Element {
@@ -26,14 +26,16 @@ export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReferenc
     catch(cause) { const text = cause instanceof Error ? cause.message : String(cause); setError(text); useMa2AttributeStore.setState({ message: text }); }
     finally { setBusy(false); useMa2AttributeStore.setState({ busy: false, activeId: null, progress: null }); }
   };
+  // Must land on disk first: the main process checks Cue usage and the console source
+  // against the saved project file, both when listing and again before deleting.
   const save = async (): Promise<{ path: string; documentId: number; projectId: string }> => {
     const current = useDocumentStore.getState();
     if (!current.project) throw new Error('请先打开工程');
-    const path = await linkDesktopViewModel.saveProject(current.path,current.project);
-    if (!path) throw new Error('请先保存工程');
+    const outcome = await saveDocument();
+    if (outcome.status === 'failed') throw new Error(outcome.message);
+    if (outcome.status === 'canceled') throw new Error('删除空 Cue 前需要先保存工程；本次未执行');
     if (useDocumentStore.getState().documentId !== current.documentId) throw new Error('工程已切换');
-    current.markSaved(path,current.revision,current.documentId);
-    return { path, documentId: current.documentId, projectId: current.project.projectId };
+    return { path: outcome.path, documentId: current.documentId, projectId: current.project.projectId };
   };
   const prepare = (): void => { void run(async () => {
     setPlan(null); setRequest(null);
@@ -58,7 +60,7 @@ export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReferenc
     if (useDocumentStore.getState().documentId !== request.documentId) throw new Error('控台操作已完成，但工程已切换；请回到原工程读取控台');
     if (value.deleted.length || value.error) {
       useDocumentStore.getState().executeForDocument(request.documentId,applyMa2CueDeletionCommand(`${base.network.host}:${base.network.port}`,value));
-      await save();
+      useDocumentStore.getState().markConsoleSynced(request.documentId);
     }
     setError(value.error ?? '');
     useMa2AttributeStore.setState({message:`已回读确认删除 ${value.deleted.length} 个空 Cue${value.error ? `；${value.error}` : ''}`});

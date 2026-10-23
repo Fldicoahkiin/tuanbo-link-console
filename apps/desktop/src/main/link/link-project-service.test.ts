@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
-import { createEmptyLinkProject, createLightingUserLibrary } from '@tb/schema';
+import { createEmptyLinkProject, createLightingUserLibrary, serializeLinkProject } from '@tb/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LinkProjectService } from './link-project-service';
 
@@ -32,6 +32,38 @@ describe('LinkProjectService', () => {
     const service=new LinkProjectService();await service.save(path,next);
     expect(JSON.parse(await readFile(backup,'utf8'))).toEqual(original);
     await service.save(path,{...next,name:'新名字'});expect(JSON.parse(await readFile(backup,'utf8'))).toEqual(original);
+  });
+  it('打开时报告内容是否与文件不同：本程序保存的文件不算升级，缺少新字段的旧文件算升级且不写回', async () => {
+    const directory=await createTestDirectory();const current=join(directory,'current.tblink');const legacy=join(directory,'legacy.tblink');cleanupFiles.push(current,legacy);
+    const project=createEmptyLinkProject('当前格式');await writeFile(current,serializeLinkProject(project));
+    const service=new LinkProjectService();
+    expect(await service.openDocument(current)).toEqual({project,upgraded:false});
+    const old:Record<string,unknown>={...project,name:'旧格式'};delete old['mediaFolders'];const oldText=JSON.stringify(old);await writeFile(legacy,oldText);
+    const opened=await service.openDocument(legacy);
+    expect(opened.upgraded).toBe(true);expect(opened.project.mediaFolders).toEqual([]);
+    expect(await readFile(legacy,'utf8')).toBe(oldText);
+  });
+  it('升级后第一次保存先在原位置保留原文件 .bak；普通保存不留备份', async () => {
+    const directory=await createTestDirectory();const path=join(directory,'upgrade.tblink');cleanupFiles.push(path);
+    const original=JSON.stringify({...createEmptyLinkProject('原文件'),mediaFolders:undefined});await writeFile(path,original);
+    const service=new LinkProjectService();
+    await service.save(path,createEmptyLinkProject('保存一'));
+    expect((await readdir(directory)).filter(name=>name.endsWith('.bak'))).toEqual([]);
+    await writeFile(path,original);
+    await service.save(path,createEmptyLinkProject('升级保存'),true);
+    const backups=(await readdir(directory)).filter(name=>name.startsWith('upgrade.tblink.')&&name.endsWith('.before-upgrade.bak'));cleanupFiles.push(...backups.map(name=>join(directory,name)));
+    expect(backups).toHaveLength(1);
+    expect(await readFile(join(directory,backups[0]!),'utf8')).toBe(original);
+    expect(JSON.parse(await readFile(path,'utf8'))).toMatchObject({name:'升级保存'});
+  });
+  it('副本写入不创建升级备份，也不改动同目录的工程文件', async () => {
+    const directory=await createTestDirectory();const copy=join(directory,'copy.tblink');cleanupFiles.push(copy);
+    const project={...createEmptyLinkProject('副本'),schemaVersion:2 as const,ma2MaterialLibrary:{version:2 as const,source:'local',userLibrary:createLightingUserLibrary()}};
+    await writeFile(copy,JSON.stringify(createEmptyLinkProject('旧副本')));
+    await new LinkProjectService().writeCopy(copy,project);
+    expect(JSON.parse(await readFile(copy,'utf8'))).toMatchObject({name:'副本'});
+    await expect(readFile(`${copy}.before-lighting-library.bak`,'utf8')).rejects.toThrow();
+    await expect(new LinkProjectService().writeCopy(join(directory,'copy.json'),project)).rejects.toThrow('.tblink');
   });
   it('拒绝复用被篡改的同名素材，避免把损坏文件当作原画质素材', async () => {
     const directory = await createTestDirectory();

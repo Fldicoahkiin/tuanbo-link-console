@@ -33,10 +33,12 @@ test('只挪动 .tblink 后打开：列出缺失素材，选择原工程文件�
       const transfer = new DataTransfer(); for (const file of input.files!) transfer.items.add(file);
       document.querySelector('.p1-media-grid')!.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
     });
+    await expect(page.locator('.p1-media-card')).toHaveCount(3);
+    await page.keyboard.press('Control+S'); await expect(page.locator('.project-save-status')).toBeHidden();
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).mediaAssets.length).toBe(1);
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.filter(item => item.referenceAudio).length).toBe(2);
     await expect(page.getByRole('dialog', { name: '找回缺失素材' })).toHaveCount(0);
-    await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
   } finally { await app.close(); }
 
   const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
@@ -81,7 +83,7 @@ test('只挪动 .tblink 后打开：列出缺失素材，选择原工程文件�
     await expect(dialog).toHaveCount(0);
   } finally {
     const page = await app.firstWindow();
-    await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     await app.close();
   }
 });

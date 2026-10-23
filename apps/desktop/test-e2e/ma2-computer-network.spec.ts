@@ -1,5 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { join } from 'node:path';
+import { closeDiscarding } from './save-questions';
 
 for (const cancelled of [false, true]) test(`自动连接配置电脑地址、${cancelled ? '取消授权阻断' : '连接和恢复'}`, async ({}, info) => {
   const executablePath = process.env.TBLINK_MA2_PACKAGED_EXE;
@@ -46,5 +47,5 @@ for (const cancelled of [false, true]) test(`自动连接配置电脑地址、${
       await page.getByRole('button', { name: '恢复原配置', exact: true }).click();
       await expect(page.getByRole('button', { name: '恢复原配置', exact: true })).toHaveCount(0);
     }
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

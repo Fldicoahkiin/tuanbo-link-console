@@ -56,7 +56,7 @@ test('统一控件连续输入、组合输入、弹窗提交与焦点恢复', as
     await page.screenshot({ path: info.outputPath('focused-settings-input.png') });
     expect(errors).toEqual([]);
   } finally {
-    await (await app.firstWindow()).evaluate(() => window.tbLink.setDocumentDirty(false));
+    await (await app.firstWindow()).evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     await app.close();
   }
 });

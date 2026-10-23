@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { z } from 'zod';
+import { closeDiscarding } from './save-questions';
 
 const packageSchema = z.object({ context: z.object({ environment: z.object({ appVersion: z.string(), osRelease: z.string(), cpu: z.string() }), problem: z.string() }),
   logs: z.array(z.object({ message: z.string() })) });
@@ -68,7 +69,7 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
     expect(await page.evaluate(async () => (await window.tbLink.loadIntegrationProfile())?.obs.shutdownTimeoutMs)).toBe(4000);
   } finally {
     const page = await application.firstWindow();
-    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    if (!page.isClosed()) await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     await application.close();
   }
 });
@@ -90,7 +91,7 @@ test('激活页不显示日志入口，界面错误仍持久化并可由诊断�
       expect(await page.evaluate(() => window.tbLink.exportDiagnosticPackage({}))).toBe(destination);
       expect(gunzipSync(await readFile(destination)).toString('utf8')).toContain('诊断验收：界面错误');
       await expect(page.evaluate(() => window.tbLink.requireOutputLicense())).rejects.toThrow('有效授权');
-    } finally { await application.close(); }
+    } finally { await closeDiscarding(application); }
   }
 });
 
@@ -112,5 +113,5 @@ test('IPC 失败：界面给出带路径的原因，运行日志保留通道、�
     expect(String(failures[0]!.details?.technicalError)).toContain('ENOENT');
     expect(String(failures[0]!.details?.technicalError)).toContain(missing);
     expect(typeof failures[0]!.details?.elapsedMs).toBe('number');
-  } finally { await application.close(); }
+  } finally { await closeDiscarding(application); }
 });

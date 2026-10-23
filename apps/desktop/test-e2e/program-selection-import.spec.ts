@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { join } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
+import { savedValue } from './save-questions';
 
 test('节目框选批量删除、撤销以及外部音视频拖入', async ({}, info) => {
   if (!ffmpegPath) throw new Error('缺少 FFmpeg');
@@ -55,7 +56,7 @@ test('节目框选批量删除、撤销以及外部音视频拖入', async ({}, 
       document.querySelector('.p1-media-grid')!.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
     });
     await expect(cards).toHaveCount(6);
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.length).toBe(6);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.length)).toBe(6);
     const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
     expect(saved.rundown.find(item => item.title === 'music.wav')?.referenceAudio).toBeTruthy();
     const importedVideo = saved.rundown.find(item => item.title === 'video.mp4')!;
@@ -68,7 +69,7 @@ test('节目框选批量删除、撤销以及外部音视频拖入', async ({}, 
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
     const stop = page.getByRole('button', { name: '停止播放', exact: true });
     if (await stop.isEnabled()) await stop.click();
-    await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
     await app.close();
   }
 });

@@ -15,7 +15,20 @@ export const linkExternalApplicationIdSchema = z.enum(['obs', 'p1', 'ma2', 'ma3d
 export const linkProjectNameSchema = z.string().trim().min(1, '工程名称不能为空');
 export const linkFilePathSchema = z.string().min(1, '文件路径不能为空');
 export const linkOptionalFilePathSchema = linkFilePathSchema.nullable();
-export const linkDocumentDirtySchema = z.boolean();
+/** What the main process needs to protect the open document on quit: reported by the window on every change. */
+export const linkDocumentStateSchema = z.object({ version: z.literal(1), dirty: z.boolean(), consoleSynced: z.boolean(),
+  name: z.string().max(512).nullable(), projectPath: z.string().min(1).max(4096).nullable(), projectId: z.string().min(1).max(200).nullable() }).strict();
+export type LinkDocumentState = z.infer<typeof linkDocumentStateSchema>;
+/** Actions in the window that replace the open document ask the same 保存 / 不保存 / 取消 question as quitting. */
+export const linkUnsavedChangesReasonSchema = z.enum(['open', 'new', 'restore-archive']);
+export const linkUnsavedChangesDecisionSchema = z.enum(['clean', 'saved', 'discarded', 'cancelled']);
+export const linkSaveRequestSchema = z.object({ version: z.literal(1), id: z.number().int().positive() }).strict();
+export const linkSaveResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('saved') }).strict(),
+  z.object({ status: z.literal('canceled') }).strict(),
+  z.object({ status: z.literal('failed'), message: z.string().min(1).max(8192) }).strict()
+]);
+export const linkSaveResponseSchema = linkSaveRequestSchema.extend({ result: linkSaveResultSchema }).strict();
 export const linkRuntimeActiveSchema = z.boolean();
 export const linkInternalAudioCaptureSchema = z.object({ enabled: z.boolean(), sceneNames: z.array(z.string().min(1)).max(1000).optional() });
 export const linkWindowControlActionSchema = z.enum(['minimize', 'toggleMaximize', 'close']);

@@ -2,8 +2,8 @@ import { create } from 'zustand';
 import { applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, projectLightingLibrary, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
 import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding, Ma2SongConflict, Ma2SongConflictResolution } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
+import { requireSavedProjectPath } from '../project-document';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-layout-store';
-import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { locateMa2Executor, ma2ExecutorLocationLabel, loadMa2ExecutorPage } from '../stores/ma2-executor-page-store';
 import { archiveMa2Project } from './ma2-project-archive';
 import { reportCoordinatorError } from './runtime-action-log';
@@ -131,9 +131,8 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           if (!changed) { update(entry, { checking: false, state: entry.conflicts?.length ? 'blocked' : 'verified', waitingForConnection: false, nextCheckAt: Date.now() + 1000, message: confirmedMessage(binding, entry.conflicts?.length ?? 0) }); continue; }
           update(entry, { state: 'syncing', message: `控台有变化，核对本曲 ${points.length} 个 Cue…` });
         }
-        const path = before.path ?? await linkDesktopViewModel.saveProject(null, before.project);
-        if (!path) throw new Error('请先保存工程');
-        if (!before.path) before.markSaved(path, before.revision, entry.documentId);
+        // A background tick never opens a dialog: the pre-sync archive needs the project's location.
+        requireSavedProjectPath('同步控台');
         if (!canContinue(entry)) continue;
         const scope = currentMa2LayoutScope();
         const settings = ma2SongSyncSettings(before.project, entry.itemId);
@@ -153,6 +152,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           ...(entry.conflictResolutions?.length ? { conflictResolutions: entry.conflictResolutions } : {}), ...(entry.rewriteLegacyNames ? { rewriteLegacyNames: true } : {}) },
           progress => update(entry, { progress }));
         update(entry, { requestId: null, progress: null });
+        if (useDocumentStore.getState().documentId === entry.documentId) useDocumentStore.getState().markConsoleSynced(entry.documentId);
         // The console holds the pinyin of a Chinese song name; keep the local name unless it was changed there.
         const result = synced.binding.name === consoleLabelText(requestedName) ? { ...synced, binding: { ...synced.binding, name: requestedName } } : synced;
         // A completed command belongs to the captured song session. The durable
@@ -180,10 +180,6 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
             const library = projectLightingLibrary(updated);
             return setLightingLibraryCommand({ ...library, consoleWorkspace: { ...entry.settings, ...library.consoleWorkspace, nextSequence: Math.min(99999, Math.max(library.consoleWorkspace?.nextSequence ?? 1, result.binding.sequence + 1)) } }).execute(updated);
           }, undo: before => before });
-          const saved = useDocumentStore.getState(); if (!saved.project) throw new Error('工程已关闭');
-          const savedPath = await linkDesktopViewModel.saveProject(path, saved.project);
-          if (!savedPath) throw new Error('控台已同步，工程保存未完成');
-          saved.markSaved(savedPath, saved.revision, entry.documentId);
         }
         if (!canContinue(entry)) continue;
         if (result.layout) acceptCreatedMa2Layout(scope, result.layout, !item.lighting.consoleSong);

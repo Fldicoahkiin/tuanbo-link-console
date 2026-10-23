@@ -140,7 +140,7 @@ test('高负载正式按钮与真实 OBS 连续节目', async ({}, info) => {
     await page.screenshot({ path: info.outputPath('final.png') });
     await page.keyboard.press('Escape');
     await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
-    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+    await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
     await app.close(); await obs.disconnect();
   }
 });

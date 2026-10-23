@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowDown, ArrowUp, Check, Copy,
-  FileAudio, FilePlus2, FileSearch, FolderOpen,
+  Download, FileAudio, FilePlus2, FileSearch, FolderOpen, History, SaveAll,
   Search, List, LayoutGrid, Plus, X,
   SlidersHorizontal,
   Trash2,
@@ -37,7 +37,7 @@ import { useRuntimeStore } from '../stores/runtime-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { linkDesktopViewModel, linkFileViewModel } from '../view-models/link-desktop-view-model';
-import { DocumentActions, type DocumentActionProps } from './DocumentActions';
+import { DocumentActions, downloadUnsavedProject, type DocumentActionProps, type DocumentFileCommands } from './DocumentActions';
 
 import { ProjectWelcome } from './ProjectWelcome';
 import { ProgramPlaylistPane } from './ProgramPlaylistPane';
@@ -57,11 +57,13 @@ type Props = {
   notify: (message: string, tone?: 'info' | 'error') => void;
   onOpenCueEditor: () => void;
   documentActions: DocumentActionProps;
+  fileCommands: DocumentFileCommands;
 };
 
-export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, onImportSongs, player, editingLocked, coordinator, notify, onOpenCueEditor, documentActions }: Props): JSX.Element {
+export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, onImportSongs, player, editingLocked, coordinator, notify, onOpenCueEditor, documentActions, fileCommands }: Props): JSX.Element {
   const project = useDocumentStore((state) => state.project);
   const projectPath = useDocumentStore((state) => state.path);
+  const dirty = useDocumentStore((state) => state.dirty);
   const documentId = useDocumentStore((state) => state.documentId);
   const execute = useDocumentStore((state) => state.execute);
   const revision = useDocumentStore((state) => state.revision);
@@ -158,11 +160,12 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
     <div className="p1-project-workspace">
       <MissingAssetsDialog request={missingAssetsRequest} locked={locked} notify={notify} />
       {toolbarHost ? createPortal(<header className="p1-project-ribbon" title={projectPath ?? undefined}>
-        <details className="project-file-menu"><summary aria-label="工程菜单" title="工程 · 打开或新建"><FolderOpen /></summary><div className="project-file-menu-items"><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onOpen(); }}><FolderOpen />打开工程</button><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onCreate(); }}><FilePlus2 />新建独立工程</button><button disabled={locked || !projectPath} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); setMissingAssetsRequest((request) => request + 1); }}><FileSearch />找回缺失素材</button></div></details>
+        <details className="project-file-menu"><summary aria-label="工程菜单" title="工程 · 打开或新建"><FolderOpen /></summary><div className="project-file-menu-items"><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onOpen(); }}><FolderOpen />打开工程</button><button disabled={locked} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onCreate(); }}><FilePlus2 />新建独立工程</button><button disabled={fileCommands.replaceDisabled} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); fileCommands.onSaveAs(); }}><SaveAll />另存为…</button><button disabled={fileCommands.replaceDisabled || !projectPath || !dirty} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); fileCommands.onRevert(); }}><History />恢复到上次保存</button><button disabled={!dirty} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); downloadUnsavedProject(); }}><Download />备份未保存工程</button><button disabled={locked || !projectPath} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); setMissingAssetsRequest((request) => request + 1); }}><FileSearch />找回缺失素材</button></div></details>
         <strong className="topbar-project-title" aria-label="当前工程">{project.name}</strong>
         <div className="toolbar-drag-space" />
-        <fieldset className="p1-project-actions" disabled={locked}>
-          <DocumentActions {...documentActions} />
+        {/* Saving stays available while playing; undo and redo wait like other edits here. */}
+        <fieldset className="p1-project-actions">
+          <DocumentActions {...documentActions} historyDisabled={Boolean(documentActions.historyDisabled) || locked} />
         </fieldset>
       </header>, toolbarHost) : null}
 

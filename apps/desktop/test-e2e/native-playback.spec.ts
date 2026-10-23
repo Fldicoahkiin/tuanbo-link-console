@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { NativePlayerPrepare, NativePlayerStatus } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 test('真实 Electron IPC：独立音频时钟承受界面阻塞，界面崩溃后停止自有引擎', async ({}, info) => {
   test.skip(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1', '需要本机 WASAPI；不占 MIDI 长测端口');
@@ -65,6 +66,6 @@ test('真实 Electron IPC：独立音频时钟承受界面阻塞，界面崩溃�
   } finally {
     await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2));
     if (!crashed) await page.evaluate(request => window.tbLink.controlNativePlayback({ version: 1, sessionId: request.sessionId, generation: 100, kind: 'stop' }), request);
-    await app.close();
+    await closeDiscarding(app);
   }
 });

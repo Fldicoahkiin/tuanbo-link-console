@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
+import { saveProject, savedValue } from './save-questions';
 
 for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '编辑器' ? '编辑器：音频移动、裁剪、分割、删除、撤销和恢复' : '灯光工作台：波形只定位和打点，没有音频编辑或白框', async ({}, info) => {
   test.setTimeout(120_000);
@@ -40,6 +41,7 @@ for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '�
       await clip.click({ button: 'right' });
       await expect(page.getByRole('menu', { name: '音频片段菜单' })).toHaveCount(0);
       await expect(page.getByRole('dialog', { name: '编辑音频片段' })).toHaveCount(0);
+      await saveProject(page);
       await expect.poll(async () => (await load()).rundown[0]!.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length).toBe(1);
       await expect(page.locator('.waveform-cue-point[aria-pressed="true"]')).toHaveCount(1);
       await clip.click({ position: { x: 80, y: 80 } });
@@ -66,35 +68,35 @@ for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '�
       await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + delta, y, { steps: 8 }); await page.mouse.up();
     };
     await drag('.audio-timeline-segment', 30);
-    await expect.poll(async () => (await segments())?.[0]?.startMs ?? 0).toBeGreaterThan(0);
+    await expect.poll(() => savedValue(page, async () => (await segments())?.[0]?.startMs ?? 0)).toBeGreaterThan(0);
     const moved = (await segments())![0]!; expect(moved.sourceOffsetMs).toBe(0); expect(moved.durationMs).toBe(8000);
     await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeEnabled();
     await drag('.audio-trim-handle.start', 20);
-    await expect.poll(async () => (await segments())?.[0]?.sourceOffsetMs ?? 0).toBeGreaterThan(0);
+    await expect.poll(() => savedValue(page, async () => (await segments())?.[0]?.sourceOffsetMs ?? 0)).toBeGreaterThan(0);
     const trimmed = (await segments())![0]!;
     expect(trimmed.startMs - moved.startMs).toBe(trimmed.sourceOffsetMs);
     expect(trimmed.durationMs + trimmed.sourceOffsetMs).toBe(8000);
     await drag('.audio-trim-handle.end', -20);
-    await expect.poll(async () => (await segments())?.[0]?.durationMs ?? 8000).toBeLessThan(trimmed.durationMs);
+    await expect.poll(() => savedValue(page, async () => (await segments())?.[0]?.durationMs ?? 8000)).toBeLessThan(trimmed.durationMs);
     await clip.click({ button: 'right' });
     await page.getByRole('menuitem', { name: '编辑片段', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '编辑音频片段', exact: true });
     await dialog.getByLabel('位置（秒）').fill('1'); await dialog.getByLabel('素材入点（秒）').fill('1'); await dialog.getByLabel('时长（秒）').fill('5');
     await dialog.getByRole('button', { name: '应用', exact: true }).click();
-    await expect.poll(async () => (await segments())?.[0]).toMatchObject({ startMs: 1000, sourceOffsetMs: 1000, durationMs: 5000 });
+    await expect.poll(() => savedValue(page, async () => (await segments())?.[0])).toMatchObject({ startMs: 1000, sourceOffsetMs: 1000, durationMs: 5000 });
     const beforeCancel = await segments(); const box = (await clip.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
     await page.mouse.move(box.x + box.width / 2 + 25, box.y + box.height / 2); await page.keyboard.press('Escape'); await page.mouse.up();
     expect(await segments()).toEqual(beforeCancel);
     await clip.click(); await clip.click({ button: 'right' });
     await page.getByRole('menuitem', { name: /在播放头分割/ }).click();
-    await expect.poll(async () => (await segments())?.length).toBe(2);
+    await expect.poll(() => savedValue(page, async () => (await segments())?.length)).toBe(2);
     await page.locator('.audio-timeline-segment').last().click(); await page.keyboard.press('Delete');
-    await expect.poll(async () => (await segments())?.length).toBe(1);
+    await expect.poll(() => savedValue(page, async () => (await segments())?.length)).toBe(1);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
-    await expect.poll(async () => (await segments())?.length).toBe(2);
+    await expect.poll(() => savedValue(page, async () => (await segments())?.length)).toBe(2);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
-    await expect.poll(async () => (await segments())?.length).toBe(1);
+    await expect.poll(() => savedValue(page, async () => (await segments())?.length)).toBe(1);
     expect((await load()).rundown[0]!.lighting).toEqual(project.rundown[0]!.lighting);
     expect(createHash('sha256').update(await readFile(info.outputPath('song.wav'))).digest('hex')).toBe(sha256);
     await page.screenshot({ path: info.outputPath('audio-edit.png') });
@@ -102,9 +104,10 @@ for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '�
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);
     expect((await segments())?.[0]).toMatchObject({ startMs: 1000, sourceOffsetMs: 1000, durationMs: 5000 });
     await page.locator('.audio-timeline-segment').click(); await page.keyboard.press('Delete');
+    await saveProject(page);
     await expect.poll(async () => (await load()).rundown[0]!.referenceAudio).toBeUndefined();
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);
     expect(errors).toEqual([]);
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

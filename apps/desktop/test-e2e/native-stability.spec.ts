@@ -198,7 +198,7 @@ test('高负载工程正式原生音频连续节目与界面交互', async ({}, 
     }
     await captureDiagnostics();
     await writeFile(info.outputPath('result.json'), JSON.stringify({ passed, failure, scope, engineSha256, seconds, elapsedMs: started ? performance.now() - started : 0, visited: [...visited], measurements, errors }, null, 2));
-    await page.evaluate(async () => { const state = await window.tbLink.getNativePlaybackStatus(); if (state) await window.tbLink.controlNativePlayback({ version: 1, sessionId: state.sessionId, generation: state.generation + 100, kind: 'stop' }); await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+    await page.evaluate(async () => { const state = await window.tbLink.getNativePlaybackStatus(); if (state) await window.tbLink.controlNativePlayback({ version: 1, sessionId: state.sessionId, generation: state.generation + 100, kind: 'stop' }); await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
     await app.close();
   }
 });

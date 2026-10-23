@@ -4,6 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
+import { closeDiscarding } from './save-questions';
 
 for (const crash of [false, true]) test(`正式节目后台接续：界面繁忙跨越曲尾${crash ? '后界面崩溃停止自有输出并可退出' : '仍继续下一首'}`, async ({}, info) => {
   test.skip(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1', '真实WASAPI边界测试；不启用MIDI或用户OBS');
@@ -61,8 +62,8 @@ for (const crash of [false, true]) test(`正式节目后台接续：界面繁忙
       await page.keyboard.press('Escape');
       await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
       await expect(page.locator('.player-transport.status-stopped')).toBeVisible();
-      await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentDirty(false); });
+      await page.evaluate(async () => { await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
     }
-    await app.close();
+    await closeDiscarding(app);
   }
 });

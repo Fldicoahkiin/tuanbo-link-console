@@ -5,6 +5,7 @@ import { gunzipSync } from 'node:zlib';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { Ma2OnpcBridge } from '../src/main/link/ma2-onpc-bridge';
 import { sameMa2XmlObjects } from '../src/main/link/ma2-timecode-xml';
+import { savedValue } from './save-questions';
 
 test('真实 P1 文件与音频一键匹配真实 onPC 时间线，保留无法配对的提示', async ({}, info) => {
   const directory = process.env.MA2_ONPC_DATA_DIRECTORY;
@@ -35,13 +36,13 @@ test('真实 P1 文件与音频一键匹配真实 onPC 时间线，保留无法�
     await section.getByText('导入或更新 P1 音乐（可选）', { exact: true }).click();
     await section.getByRole('button', { name: '导入 P1 音乐并匹配控台 Cue', exact: true }).click();
     await expect(section.getByText(/灯光读取完成，1 条灯光已导入/)).toBeVisible({ timeout: 120000 });
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.timecode).toBe(9902);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(destination, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.timecode)).toBe(9902);
     const saved = parseLinkProject(JSON.parse(await readFile(destination, 'utf8')));
     expect(saved.rundown).toHaveLength(1);
     expect(await readFile(join(info.outputDir, saved.rundown[0]!.referenceAudio!.relativePath))).toEqual(wav);
     expect(saved.rundown[0]!.p1Media?.midiStartTime).toBe('0');
     await page.screenshot({ path: info.outputPath('one-click.png') });
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await application.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await application.close(); }
 });
 
 test('真实 onPC 设置扫描、小数 Cue、歌曲配对、批量导入与保存', async ({}, info) => {
@@ -78,7 +79,7 @@ test('真实 onPC 设置扫描、小数 Cue、歌曲配对、批量导入与保�
     await page.screenshot({ path: info.outputPath('pairing.png') });
     await section.getByRole('button', { name: '导入已配对灯光', exact: true }).click();
     await expect(section.getByText(/已导入 1 条灯光时间线/)).toBeVisible({ timeout: 120000 });
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.timecode).toBe(9902);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.timecode)).toBe(9902);
     const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
     expect(saved.rundown[0]?.lighting?.tracks[0]?.clips[0]?.events.map(event => event.kind === 'ma2' ? event.cue : '')).toEqual(['1.250', '7.500']);
     await page.screenshot({ path: info.outputPath('imported.png') });
@@ -96,12 +97,12 @@ test('真实 onPC 设置扫描、小数 Cue、歌曲配对、批量导入与保�
     await page.locator('.lighting-timeline-point').last().click();
     await page.getByLabel('灯光点歌曲时间').fill('1.2');
     await page.getByLabel('灯光点歌曲时间').press('Tab');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.baselineTracks[0]?.clips[0]?.events[1]?.at, { timeout: 120000 }).toBe(1200);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.ma2Bindings?.[0]?.baselineTracks[0]?.clips[0]?.events[1]?.at), { timeout: 120000 }).toBe(1200);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await section.getByRole('button', { name: '关闭自动双向同步', exact: true }).click();
     await page.screenshot({ path: info.outputPath('automatic-after-editor.png') });
   } finally {
-    await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await application.close();
+    await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await application.close();
     const current = await bridge.request('READ', 9902);
     if (!sameMa2XmlObjects(current, original)) await bridge.exchange('APPLY', 9902, current, original);
     expect(sameMa2XmlObjects(await bridge.request('READ', 9902), original)).toBe(true);

@@ -5,6 +5,7 @@ import { AudioLines, ChevronDown, Download, FileAudio2, FolderOpen, Upload } fro
 import { allocateP1TimecodeRanges, configureP1AutoFollowCommand, applyP1ProjectExportCommand, synchronizeP1ProjectCommand, setPlaybackSourceCommand } from '@tb/core/link';
 import { assertDocumentSession, useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
+import { requireProjectLocation } from '../project-document';
 import type { LinkP1ProjectImportProgress } from '@tb/schema';
 
 type Props = {
@@ -53,8 +54,10 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
         '当前工程已有节目。读取 P1 后会把 P1 音频排在节目单前部，并保留现有 Cue 与手工节目，是否继续？'
       )) return;
       const targetDocumentId = document.documentId;
-      const projectPath = document.path ?? await saveUnsavedDocument(targetDocumentId);
+      // P1 audio is copied next to the project file.
+      const projectPath = await requireProjectLocation('导入 P1 工程');
       if (!projectPath) return;
+      assertDocumentSession(targetDocumentId);
       const progressId = crypto.randomUUID();
       activeImport.current = progressId;
       cancelledImport.current = false;
@@ -64,7 +67,6 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
       setProgress(null);
       const command = synchronizeP1ProjectCommand(imported);
       useDocumentStore.getState().executeForDocument(targetDocumentId, purpose !== 'follow' ? { ...command, label: '导入 P1 音频并使用内部主控播放', execute: value => setPlaybackSourceCommand('internal').execute(command.execute(value)) } : command);
-      await persistCurrentDocument(projectPath, targetDocumentId);
       setP1ProjectPath(imported.sourcePath);
       setSummary({
         path: imported.sourcePath,
@@ -73,7 +75,7 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
         updatedAt: new Date().toLocaleString('zh-CN')
       });
       notify(`已导入 ${imported.items.length} 首音频，另保留 ${imported.skippedItems?.length ?? 0} 首待修复节目；原始时间码已保留。${purpose === 'audio' ? '使用本软件内部主控播放，无需启动 P1。' : ''}`);
-      if (lighting && afterImport) { await afterImport(); await persistCurrentDocument(projectPath, targetDocumentId); }
+      if (lighting && afterImport) await afterImport();
     } catch (error) {
       notify(cancelledImport.current ? '已取消 P1 导入，当前工程未应用本次读取结果' : error instanceof Error ? error.message : String(error), 'error');
     } finally {
@@ -122,7 +124,6 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
       });
       useDocumentStore.getState().executeForDocument(targetDocumentId, applyP1ProjectExportCommand(exported));
       if (config) useDocumentStore.getState().executeForDocument(targetDocumentId, configureP1AutoFollowCommand(config));
-      await persistCurrentDocument(document.path, targetDocumentId);
       setP1ProjectPath(exported.outputPath);
       setSummary({
         path: exported.outputPath,
@@ -179,19 +180,3 @@ async function ensureLinkDocument(sourcePath: string): Promise<void> {
   useDocumentStore.getState().setProject(project, null);
 }
 
-async function saveUnsavedDocument(documentId: number): Promise<string | null> {
-  const document = assertDocumentSession(documentId);
-  if (!document.project) throw new Error('联动工程状态丢失');
-  const savedPath = await linkDesktopViewModel.saveProject(null, document.project);
-  if (!savedPath) return null;
-  assertDocumentSession(documentId).markSaved(savedPath, document.revision, documentId);
-  return savedPath;
-}
-
-async function persistCurrentDocument(path: string, documentId: number): Promise<void> {
-  const document = assertDocumentSession(documentId);
-  if (!document.project) throw new Error('P1 同步后联动工程状态丢失');
-  const savedPath = await linkDesktopViewModel.saveProject(path, document.project);
-  if (!savedPath) throw new Error('P1 同步完成，但联动工程保存被取消');
-  assertDocumentSession(documentId).markSaved(savedPath, document.revision, documentId);
-}

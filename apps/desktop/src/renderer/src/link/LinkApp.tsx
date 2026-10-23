@@ -33,6 +33,8 @@ import { useIntegrationStore } from './stores/integration-store';
 import { useRuntimeStore } from './stores/runtime-store';
 import { linkDesktopViewModel } from './view-models/link-desktop-view-model';
 import { useProjectPersistence } from './useProjectPersistence';
+import { useRecoveryCopyWriter } from './recovery-copy-writer';
+import { confirmReplaceDocument, showOpenedProject, useDocumentCommands, useDocumentStateReport } from './project-document';
 import { useP1AutoFollow } from './useP1AutoFollow';
 import { useInternalPlayer } from './useInternalPlayer';
 import { useMa2AutoSync, useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
@@ -72,7 +74,6 @@ export function LinkApp(): JSX.Element {
   const project = useDocumentStore((state) => state.project);
   const projectPath = useDocumentStore((state) => state.path);
   const documentId = useDocumentStore((state) => state.documentId);
-  const dirty = useDocumentStore((state) => state.dirty);
   const documentError = useDocumentStore((state) => state.error);
   const canUndo = useDocumentStore(selectCanUndo);
   const canRedo = useDocumentStore(selectCanRedo);
@@ -100,9 +101,9 @@ export function LinkApp(): JSX.Element {
 
   const midiMonitor = useDesktopIntegrationEvents(notify); useEffect(() => { try { useDisplayPreferences.getState().load(); } catch (error) { notify(`显示设置读取失败：${String(error)}`, 'error'); } }, [notify]);
   useMa2AutoSync(editingLocked || internalPlayer.state.status === 'playing', notify);
-  useProjectPersistence(notify); useMediaAudioPreparation(playbackLocked, notify);
+  useProjectPersistence(notify); useRecoveryCopyWriter(); useMediaAudioPreparation(playbackLocked, notify);
 
-  useDocumentDirty(dirty, notify);
+  useDocumentStateReport(notify);
 
   useRuntimeCloseProtection(internalPlayer.state.status === 'preparing' ? 'preflight' : runtimeState, notify);
 
@@ -135,9 +136,11 @@ export function LinkApp(): JSX.Element {
   const createProject = async (): Promise<void> => {
     setNewProjectError(null);
     try {
-      if (!await saveBeforeNewProject()) return;
+      const replaced = await confirmReplaceDocument('new');
+      if (!replaced) return;
       const next = await linkDesktopViewModel.createProject(newProjectName);
       useDocumentStore.getState().setProject(next, null);
+      await replaced();
       setNewProjectOpen(false); setPage('project');
     } catch (error) {
       setNewProjectError(`无法创建工程：${error instanceof Error ? error.message : String(error)}。请检查保存位置后重试。`);
@@ -146,36 +149,25 @@ export function LinkApp(): JSX.Element {
   };
 
   const beginCreateProject = (): void => {
-    if (dirty && !window.confirm('新建独立工程会切换到空节目单，当前工程将先保存。是否继续？')) return;
     setNewProjectError(null);
     setNewProjectOpen(true);
   };
 
   const openProject = async (): Promise<void> => {
-    if (dirty && !window.confirm('当前工程有未保存修改，确认打开其他工程？')) return;
     try {
       const result = await linkDesktopViewModel.pickOpenProject();
       if (!result) return;
-      useDocumentStore.getState().setProject(result.project, result.path);
-      notify(`已打开：${result.project.name}`);
+      const replaced = await confirmReplaceDocument('open');
+      if (!replaced) return;
+      const detail = await showOpenedProject(result);
+      await replaced();
+      notify(`已打开：${result.project.name}${detail ? `；${detail}` : ''}`);
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     }
   };
 
-  const saveProject = async (): Promise<void> => {
-    const current = useDocumentStore.getState();
-    if (!current.project) return;
-    const savingRevision = current.revision; const savingDocumentId = current.documentId;
-    try {
-      const path = await linkDesktopViewModel.saveProject(current.path, current.project);
-      if (!path || useDocumentStore.getState().documentId !== savingDocumentId) return;
-      useDocumentStore.getState().markSaved(path, savingRevision, savingDocumentId);
-      notify('工程已保存');
-    } catch (error) {
-      notify(error instanceof Error ? error.message : String(error), 'error');
-    }
-  };
+  const { save: saveProject, saveAs: saveProjectAs, revert: revertProject } = useDocumentCommands(notify);
 
 
   const controlWindow = (action: 'minimize' | 'toggleMaximize' | 'close'): void => {
@@ -200,15 +192,17 @@ export function LinkApp(): JSX.Element {
     useMa2ReadStore.setState({ openWorkspace: false });
     leaveSettings(() => setPage('lighting'));
   }, [openLighting, leaveSettings]);
-  useDocumentShortcuts(playbackLocked, saveProject);
+  useDocumentShortcuts(playbackLocked, saveProject, saveProjectAs);
   const documentActions = {
     canUndo: canUndo && (!playbackLocked || lightingUndo), canRedo: canRedo && (!playbackLocked || lightingRedo),
     historyDisabled: false,
-    disabled: editingLocked || !project,
+    // Saving keeps the path, so it stays available while playing; Save As and revert do not.
+    disabled: !project,
     onUndo: () => useDocumentStore.getState().undo(),
     onRedo: () => useDocumentStore.getState().redo(), onSave: () => void saveProject()
   };
-  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace actionsHost={lightingActionsHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
+  const fileCommands = { replaceDisabled: playbackLocked || !project, onSaveAs: () => void saveProjectAs(), onRevert: () => void revertProject() };
+  const pageContent = <><div className="workspace-page" hidden={page !== 'project' || connectionsOpen}><ProjectWorkspace toolbarHost={page === 'project' && !connectionsOpen ? toolbarHost : null} playlistHost={playlistHost} onCreate={beginCreateProject} onOpen={() => void openProject()} onImportSongs={() => { setSettingsCategory('songs'); setSettingsLocation({ category: 'songs' }); openSettings(); }} player={internalPlayer} editingLocked={editingLocked} coordinator={coordinator} notify={notify} onOpenCueEditor={() => setPage('cues')} documentActions={documentActions} fileCommands={fileCommands} /></div>{(page === 'cues' || page === 'lighting') && !connectionsOpen ? <CueWorkspace actionsHost={lightingActionsHost} key={page} workspace={page === 'lighting' ? 'lighting' : 'visual'} player={internalPlayer} sidebarHost={editorSidebarHost} toolbarHost={toolbarHost} coordinator={coordinator} notify={notify} documentActions={documentActions} /> : null}</>;
 
   return <RendererErrorBoundary>
     <div className="app-shell" data-workspace={connectionsOpen ? 'settings' : page}>
@@ -239,12 +233,6 @@ function useConnectionsEscape(open: boolean, onClose: () => void): void {
     window.addEventListener('keydown', close);
     return () => window.removeEventListener('keydown', close);
   }, [open, onClose]);
-}
-
-function useDocumentDirty(dirty: boolean, notify: (message: string, tone?: 'info' | 'error') => void): void {
-  useEffect(() => {
-    void linkDesktopViewModel.setDocumentDirty(dirty).catch((error: unknown) => notify(error instanceof Error ? error.message : String(error), 'error'));
-  }, [dirty, notify]);
 }
 
 function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange, playlistHostRef, page, internal, editingLocked, settingsOpen, onPageChange, onSettings }: {
@@ -409,19 +397,6 @@ function useDocumentErrorNotification(
     notify(documentError, 'error');
     useDocumentStore.getState().clearError();
   }, [documentError, notify]);
-}
-
-async function saveBeforeNewProject(): Promise<boolean> {
-  const current = useDocumentStore.getState();
-  if (!current.project || !current.dirty) return true;
-  const savedPath = await linkDesktopViewModel.saveProject(current.path, current.project);
-  if (!savedPath) return false;
-  const latest = useDocumentStore.getState();
-  if (latest.documentId !== current.documentId || latest.revision !== current.revision) {
-    throw new Error('保存期间工程发生变化，请再次创建。');
-  }
-  latest.markSaved(savedPath, current.revision, current.documentId);
-  return true;
 }
 
 function useNewProjectDialog() {

@@ -25,7 +25,7 @@ it('单次写盘失败不会确认保存，之后显式请求仍可处理且不�
   await failed;
   expect(workers.post).toHaveBeenCalledTimes(1);
   const read = service.read(path);
-  response({ version: 1, id: 2, kind: 'opened', content: '{"name":"原工程"}' });
+  response({ version: 1, id: 2, kind: 'opened', content: '{"name":"原工程"}', upgraded: false });
   await expect(read).resolves.toContain('原工程');
   expect(workers.unref).toHaveBeenCalledTimes(2);
 });
@@ -49,7 +49,7 @@ it.each(['exit', 'error', 'wrong-result', 'unknown-id', 'invalid-dto', 'send-err
   const worker = workers.instances[0]!;
   if (failure === 'exit') worker.emit('exit', 1);
   else if (failure === 'error') worker.emit('error', new Error('线程崩溃'));
-  else if (failure === 'wrong-result') response({ version: 1, id: 1, kind: 'opened', content: '{}' });
+  else if (failure === 'wrong-result') response({ version: 1, id: 1, kind: 'opened', content: '{}', upgraded: false });
   else if (failure === 'unknown-id') response({ version: 1, id: 999, kind: 'saved' });
   else if (failure === 'invalid-dto') response({ version: 99, id: 1, kind: 'saved' });
   else {
@@ -71,4 +71,28 @@ it('队列有界，超量请求不发送且不会取消已经在途的保存', a
   for (let id = 1; id <= 64; id++) response({ version: 1, id, kind: 'saved' });
   await Promise.all(pending);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it('超时后暂停新请求并说明原因；操作员确认重启后终止卡住的线程，新线程可继续保存，旧线程迟到结果被忽略', async () => {
+  const service = new ProjectDocumentService();
+  const stuck = expect(service.save(path, '{}')).rejects.toThrow('超过 30 秒');
+  await vi.advanceTimersByTimeAsync(30000);
+  await stuck;
+  expect(service.stalledReason()).toContain('超过 30 秒');
+  await expect(service.save(path, '{}')).rejects.toThrow('超过 30 秒');
+  const old = workers.instances[0]!;
+  service.restart();
+  expect(workers.terminate).toHaveBeenCalledOnce();
+  expect(service.stalledReason()).toBeNull();
+  const saving = service.save(path, '{}');
+  expect(workers.instances).toHaveLength(2);
+  old.emit('message', { version: 1, id: 1, kind: 'saved' });
+  workers.instances[1]!.emit('message', { version: 1, id: 2, kind: 'saved' });
+  await expect(saving).resolves.toBeUndefined();
+});
+
+it('没有卡住时不需要也不允许重启', () => {
+  const service = new ProjectDocumentService();
+  expect(service.stalledReason()).toBeNull();
+  expect(() => service.restart()).toThrow('工程处理线程运行正常');
 });

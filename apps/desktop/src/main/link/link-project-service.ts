@@ -41,7 +41,7 @@ export type ImportedReferenceAudio = {
 
 export class LinkProjectService {
   private readonly fileAccess = new Map<string, Promise<void>>();
-  private readonly pendingSaves = new ProjectWriteQueue((path, project) => this.withProjectFile(path, () => this.writeSavedProject(path, project)));
+  private readonly pendingSaves = new ProjectWriteQueue((path, project, backupOriginal) => this.withProjectFile(path, () => this.writeSavedProject(path, project, backupOriginal)));
   private readonly verifiedMedia = new VerifiedMediaFiles(hashFile);
   private readonly referenceAudioCache = new ReferenceAudioCache(hashFile);
 
@@ -51,6 +51,12 @@ export class LinkProjectService {
   ) {}
 
   async open(projectPath: string): Promise<LinkProject> {
+    return (await this.openDocument(projectPath)).project;
+  }
+
+  /** `upgraded`: the opened content differs from the file (format defaults, dropped fields or merged
+   * read checkpoints). The file itself is left as it is until the operator saves. */
+  async openDocument(projectPath: string): Promise<{ project: LinkProject; upgraded: boolean }> {
     assertProjectExtension(projectPath);
     return this.withProjectFile(projectPath, () => this.readProject(projectPath));
   }
@@ -66,7 +72,7 @@ export class LinkProjectService {
     return result;
   }
 
-  private async readProject(projectPath: string): Promise<LinkProject> {
+  private async readProject(projectPath: string): Promise<{ project: LinkProject; upgraded: boolean }> {
     const content = await readFile(projectPath, 'utf8');
     let value: unknown;
     try {
@@ -74,16 +80,31 @@ export class LinkProjectService {
     } catch (error) {
       throw new Error(`工程文件不是有效 JSON：${projectPath}`, { cause: error });
     }
-    return recoverMa2Material(projectPath, await recoverMa2Read(projectPath, parseLinkProject(value)));
+    const parsed = parseLinkProject(value);
+    const project = await recoverMa2Material(projectPath, await recoverMa2Read(projectPath, parsed));
+    return { project, upgraded: project !== parsed || JSON.stringify(value) !== JSON.stringify(parsed) };
   }
 
-  async save(projectPath: string, project: LinkProject): Promise<void> {
+  /** `backupOriginal`: the first save after an in-memory upgrade keeps the file as it was. */
+  async save(projectPath: string, project: LinkProject, backupOriginal = false): Promise<void> {
     assertProjectExtension(projectPath);
-    return this.pendingSaves.enqueue(projectPath, project);
+    return this.pendingSaves.enqueue(projectPath, project, backupOriginal);
   }
 
-  private async writeSavedProject(absolutePath: string, project: LinkProject): Promise<void> {
+  /** A copy outside any project file, e.g. a recovery copy: atomic, without upgrade backups. */
+  async writeCopy(copyPath: string, project: LinkProject): Promise<void> {
+    assertProjectExtension(copyPath);
+    return this.withProjectFile(copyPath, () => this.writeProject(copyPath, serializeLinkProject(project)));
+  }
+
+  private async writeSavedProject(absolutePath: string, project: LinkProject, backupOriginal: boolean): Promise<void> {
     const content = serializeLinkProject(project);
+    if (backupOriginal) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      try { await copyFile(absolutePath, `${absolutePath}.${stamp}.before-upgrade.bak`, constants.COPYFILE_EXCL); }
+      // A file removed since it was opened has no original left to keep.
+      catch (error) { if (!isErrorWithCode(error, 'ENOENT')) throw error; }
+    }
       if (project.rundown.some(item => item.lighting?.musicAnalysis)) {
         try {
           const original = await readFile(absolutePath, 'utf8');

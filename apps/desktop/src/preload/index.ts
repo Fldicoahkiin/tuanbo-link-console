@@ -6,6 +6,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { z } from 'zod';
 import { ma2AutoBindRequestSchema, ma2AutoBindResultSchema } from '@tb/schema';
 import { ma2RenameRequestSchema, ma2RenameResultSchema } from '@tb/schema';
+import { linkDocumentStateSchema, linkSaveRequestSchema, linkUnsavedChangesDecisionSchema } from '@tb/schema';
 import { ma2LayoutReadRequestSchema, ma2LayoutSnapshotSchema, ma2NewCueRequestSchema, ma2NewCueResultSchema } from '@tb/schema';
 import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema, ma2CueDeletePlanSchema, ma2CueDeleteResultSchema } from '@tb/schema';
 import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema } from '@tb/schema';
@@ -13,7 +14,7 @@ import { ma2AuditionRequestSchema,ma2AuditionControlSchema,ma2AuditionStateSchem
 import { musicAnalysisRequestSchema, musicAnalysisProgressSchema, musicAnalysisControlSchema, musicAnalysisResultSchema } from '@tb/schema';
 import { automaticMusicRequestSchema, automaticMusicControlSchema, automaticMusicJobSchema, automaticMusicStatusSchema } from '@tb/schema';
 import { musicMonitorRequestSchema, musicMonitorStatusSchema } from '@tb/schema';
-import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsActionSchema, projectArchiveSettingsStatusSchema } from '@tb/schema';
+import { projectArchiveRequestSchema, projectArchiveResultSchema, projectArchiveSettingsActionSchema, projectArchiveSettingsStatusSchema, recoveryCopyContentSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema } from '@tb/schema';
 import { linkProjectAssetFilesPayloadSchema, linkProjectAssetRelinkPayloadSchema, linkProjectAssetRelinkResultSchema } from '@tb/schema';
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
@@ -148,7 +149,18 @@ const tbLink: LinkDesktopBridgeApi = {
   checkForUpdates: () => invoke('link:update-check'),
   downloadUpdate: () => invoke('link:update-download'),
   installUpdate: () => invoke('link:update-install'),
-  setDocumentDirty: (dirty) => invoke('link:set-document-dirty', dirty),
+  setDocumentState: (state) => invoke('link:set-document-state', linkDocumentStateSchema.parse(state)),
+  resolveUnsavedChanges: async (reason) => linkUnsavedChangesDecisionSchema.parse(await invoke('link:resolve-unsaved-changes', reason)),
+  onSaveRequest: (handler) => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => {
+      const { id } = linkSaveRequestSchema.parse(value);
+      void handler().catch((error: unknown) => ({ status: 'failed' as const, message: `工程保存失败：${toUserErrorMessage(error)}` }))
+        .then(result => invoke('link:save-response', { version: 1, id, result }))
+        .catch((error: unknown) => console.error('保存结果未能送回主进程', error));
+    };
+    ipcRenderer.on('link:save-request', receive);
+    return () => { ipcRenderer.removeListener('link:save-request', receive); };
+  },
   setRuntimeActive: (active) => invoke('link:set-runtime-active', active),
   controlWindow: (action) => invoke('link:window-control', action),
   detectLocalIntegrations: () => invoke('link:detect-local-integrations'),
@@ -157,7 +169,14 @@ const tbLink: LinkDesktopBridgeApi = {
   createProject: (name) => invoke('link:create-project', name),
   pickProjectDocument: () => invoke('link:pick-open-project'),
   openProjectDocument: (path) => invoke('link:open-project', path),
-  saveProjectDocument: (path, content) => invoke('link:save-project', path, content),
+  saveProjectDocument: (path, content, options) => invoke('link:save-project', path, content, options ?? {}),
+  confirmProjectLocation: async (purpose) => z.boolean().parse(await invoke('link:confirm-project-location', purpose)),
+  confirmRevertToSaved: async (payload) => z.boolean().parse(await invoke('link:confirm-revert-to-saved', payload)),
+  projectDocumentWorkerState: async () => z.object({ stalled: z.string().nullable() }).strict().parse(await invoke('link:project-document-worker')),
+  restartProjectDocumentWorker: async (reason) => z.boolean().parse(await invoke('link:restart-project-document-worker', reason)),
+  writeRecoveryCopy: (payload) => invoke('link:write-recovery-copy', recoveryCopyWriteSchema.parse(payload)),
+  resolveRecoveryCopyDocument: async (payload) => recoveryCopyContentSchema.nullable().parse(await invoke('link:resolve-recovery-copy', recoveryCopyQuerySchema.parse(payload))),
+  discardRecoveryCopy: async (payload) => z.boolean().parse(await invoke('link:discard-recovery-copy', recoveryCopyDiscardSchema.parse(payload))),
   importReferenceAudio: (payload) => invoke('link:import-reference-audio', payload),
   resolveReferenceAudioUrl: (payload) => invoke('link:resolve-reference-audio-url', payload),
   importMediaAsset: (payload) => invoke('link:import-media-asset', payload),

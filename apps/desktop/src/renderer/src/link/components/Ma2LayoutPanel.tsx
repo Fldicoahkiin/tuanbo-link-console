@@ -6,7 +6,6 @@ import { mergeMa2AttributesCommand, projectLightingLibrary, setLightingLibraryCo
 import { useDocumentStore } from '../stores/document-store';
 import { ma2MaterialConnection } from '../stores/ma2-material-read-store';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope, readMa2LayoutPage } from '../stores/ma2-layout-store';
-import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { CONSOLE_CUE_DRAG, consoleCueDragSchema } from './lighting-material-drag';
 import { ma2ConsoleSequenceName, ma2ConsoleCuePoolName, ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
 import { CuePoolGrid } from './CuePoolGrid';
@@ -55,10 +54,6 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
       if(mode==='combine' && ingredients.some(value=>value.delayMs!==0))throw new Error('静态合成 Cue 不包含时间延迟；带延迟的组合请保留在本地编排');
       current.execute(setLightingLibraryCommand({...projectLightingLibrary(current.project),consoleWorkspace:parsed},'设置控台专用 Layout'));
       const before=useDocumentStore.getState();if(!before.project)throw new Error('工程已关闭');
-      const path=await linkDesktopViewModel.saveProject(before.path,before.project);
-      if(!path)throw new Error('请先保存工程');
-      if(useDocumentStore.getState().documentId!==before.documentId)throw new Error('工程已切换');
-      before.markSaved(path,before.revision,before.documentId);
       const result=await window.tbLink.createMa2Cue({network:context.network,expectedSource:context.expectedSource,projectId:before.project.projectId,requestId:crypto.randomUUID(),settings:parsed,name,content:mode==='combine'?{kind:'combine',cues:ingredients.map(value=>({sequence:value.sequence,cue:value.cue}))}:{kind:'programmer',use}});
       const after=useDocumentStore.getState();
       if(after.documentId!==before.documentId||!after.project)throw new Error('控台已创建，但工程已切换，请重新读取控台');
@@ -66,10 +61,7 @@ export function Ma2LayoutPanel({ itemId, document, ingredients, onIngredients, o
       const updated=useDocumentStore.getState();if(!updated.project)throw new Error('工程已关闭');
       const nextSettings={...parsed,nextSequence:Math.min(99999,result.sequence+1)};
       updated.executeForDocument(before.documentId,setLightingLibraryCommand({...projectLightingLibrary(updated.project),consoleWorkspace:nextSettings},'记录新建 Cue 位置'));
-      const latest=useDocumentStore.getState();if(!latest.project)throw new Error('工程已关闭');
-      const savedPath=await linkDesktopViewModel.saveProject(path,latest.project);
-      if(!savedPath)throw new Error('控台已创建，工程保存未完成');
-      latest.markSaved(savedPath,latest.revision,before.documentId);
+      updated.markConsoleSynced(before.documentId);
       acceptCreatedMa2Layout(layoutScope,result.layout);
       setLayout(result.layout);setSettingsDraft({});setMessage(`“${name}”已创建：序列 ${result.sequence} · Cue 1 · Layout ${result.layout.layout}，回读已确认`);setName('');onIngredients([]);setCreating(false);
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause));setMessage('');}

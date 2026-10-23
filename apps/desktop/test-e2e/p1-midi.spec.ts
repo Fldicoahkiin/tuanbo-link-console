@@ -3,6 +3,7 @@ import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createEmptyLinkProject, parseLinkProject, createLightingDocument, lightingTrackSchema } from '@tb/schema';
+import { answerSaveQuestions, saveProject, savedValue } from './save-questions';
 
 test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', async ({}, info) => {
   const wav = Buffer.alloc(44 + 8000 * 10, 128);
@@ -18,6 +19,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const app = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), 'out/main/index.cjs')]] });
   const page = await app.firstWindow();
+  await answerSaveQuestions(app);
   try {
     await app.evaluate(({ ipcMain, dialog }, file) => {
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] });
@@ -66,7 +68,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     await page.getByRole('button', { name: '音频 Cue 2', exact: true }).click();
     await expect.poll(async () => (await packets()).length).toBe(2);
     await expect(page.getByText('已发送 1 条 Cue 指令（MIDI 无回执）', { exact: true })).toBeVisible();
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
 test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 导出', async ({}, info) => {
@@ -84,6 +86,7 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const app = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), 'out/main/index.cjs')]] });
   const page = await app.firstWindow();
+  await answerSaveQuestions(app);
   const pick = async (file: string): Promise<void> => { await app.evaluate(({ dialog }, value) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [value] }); }, file); };
   const settings = async (): Promise<void> => {
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
@@ -118,8 +121,8 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     await panel.getByRole('button', { name: '选择 .hia 文件', exact: true }).click();
     await expect(panel.getByText('已建立映射', { exact: true })).toBeVisible();
     await expect(panel.getByText('已恢复的歌曲：请核对裁剪范围', { exact: true })).toBeVisible();
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).playbackSource).toBe('internal');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.playback?.mtcOffsetMs).toBe(120000);
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).playbackSource)).toBe('internal');
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.playback?.mtcOffsetMs)).toBe(120000);
     const summaries = await panel.locator('.p1-sync-summary, .p1-sync-issues').evaluateAll(elements => elements.map(element => { const box = element.getBoundingClientRect(); return { top: box.top, bottom: box.bottom }; }));
     for (let i = 0; i < summaries.length; i++) for (let j = i + 1; j < summaries.length; j++) expect(Math.min(summaries[i]!.bottom, summaries[j]!.bottom) - Math.max(summaries[i]!.top, summaries[j]!.top)).toBeLessThanOrEqual(0);
     await panel.locator('.p1-sync-issues').last().scrollIntoViewIfNeeded();
@@ -134,7 +137,7 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     }
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await page.getByLabel('灯光输出方式').selectOption('direct');
-    await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.outputMode).toBe('direct');
+    await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.lighting?.outputMode)).toBe('direct');
 
     await page.reload();
     await expect(page.getByLabel('当前工程')).toContainText('纯 MIDI 验收');
@@ -143,6 +146,7 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     page.on('dialog', dialog => void dialog.accept());
     await panel.getByRole('button', { name: '同步回 P1 工程', exact: true }).click();
     await expect(panel.locator('.p1-sync-summary').first()).toBeVisible();
+    await saveProject(page);
     const saved = parseLinkProject(JSON.parse(await readFile(path, 'utf8')));
     expect(saved.rundown[0]?.referenceAudio?.durationMs).toBe(1250);
     expect(saved.rundown[0]?.p1Media?.midiStartTime).toBe('120');
@@ -156,5 +160,5 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     expect(exported).toContain('.hia');
     expect(await readFile(exported.trim(), 'utf8')).toContain('audio_caption_="异常歌曲"');
     expect(await readFile(exported.trim(), 'utf8')).toContain('audio_caption_="待补歌曲"');
-  } finally { await page.evaluate(() => window.tbLink.setDocumentDirty(false)); await app.close(); }
+  } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });

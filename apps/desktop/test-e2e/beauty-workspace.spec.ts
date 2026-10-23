@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { createEmptyLinkProject } from '@tb/schema';
+import { closeDiscarding } from './save-questions';
 
 test.skip(true, '2026-10-13：正式版暂不提供美颜工作台，保留用例供功能恢复时验收');
 
@@ -77,7 +78,7 @@ test('美颜工作台：离线参数、撤销、预设、持久化和窄窗口',
     await panel.getByLabel('导入美颜预设文件').setInputFiles({ name: 'invalid.json', mimeType: 'application/json', buffer: Buffer.from('{"version":100}') });
     await expect(panel.getByRole('alert')).toContainText('导入失败');
     await expect(panel.getByLabel('肩宽数值')).toHaveValue('0');
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });
 
 test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, info) => {
@@ -329,5 +330,5 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await page.getByRole('slider', { name: '瘦腰', exact: true }).fill('53');
     await app.evaluate(({ ipcMain }) => { ipcMain.emit('beauty-test-release'); });
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toBe('{"requests":2,"maximum":1,"waist":53,"pending":false}');
-  } finally { await app.close(); }
+  } finally { await closeDiscarding(app); }
 });

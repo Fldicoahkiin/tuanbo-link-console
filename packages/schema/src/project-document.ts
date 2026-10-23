@@ -1,7 +1,26 @@
 import { z } from 'zod';
 
 export const projectDocumentTextSchema = z.string().min(1).max(256 * 1024 * 1024);
-export const projectDocumentEnvelopeSchema = z.object({ version: z.literal(1), path: z.string().min(1).max(4096), content: projectDocumentTextSchema }).strict();
+/** Save options: `defaultPath` suggests a folder when the save dialog opens; `backupOriginal` keeps
+ * the file as it was before the first save after an in-memory upgrade. */
+export const projectSaveOptionsSchema = z.object({ defaultPath: z.string().min(1).max(4096).optional(), backupOriginal: z.boolean().optional() }).strict();
+/** `upgraded`: the opened content differs from the file, which stays unchanged until saved. */
+export const projectDocumentEnvelopeSchema = z.object({ version: z.literal(1), path: z.string().min(1).max(4096), content: projectDocumentTextSchema, upgraded: z.boolean() }).strict();
+
+/** A document's recovery copy belongs to its project file, or to an unnamed project by id. */
+const recoveryOwner = { projectPath: z.string().min(1).max(4096).nullable(), projectId: z.string().min(1).max(200) };
+/** Unsaved edits written beside the program's data, never over the project file. */
+export const recoveryCopyWriteSchema = z.object({ version: z.literal(1), ...recoveryOwner, name: z.string().max(512),
+  sessionId: z.uuid(), revision: z.number().int().nonnegative(), content: projectDocumentTextSchema }).strict();
+/** With `keep`, a copy that session wrote after that revision stays: it holds edits made after the save. */
+export const recoveryCopyDiscardSchema = z.object({ version: z.literal(1), ...recoveryOwner,
+  keep: z.object({ sessionId: z.uuid(), revision: z.number().int().nonnegative() }).strict().optional() }).strict();
+/** Startup asks with `projectPath: null` for the newest unnamed project; opening a file names it and its project. */
+export const recoveryCopyQuerySchema = z.object({ version: z.literal(1), projectPath: z.string().min(1).max(4096).nullable(), projectId: z.string().min(1).max(200).optional() }).strict();
+export const recoveryCopyContentSchema = z.object({ version: z.literal(1), content: projectDocumentTextSchema }).strict();
+export type RecoveryCopyWrite = z.infer<typeof recoveryCopyWriteSchema>;
+export type RecoveryCopyDiscard = z.infer<typeof recoveryCopyDiscardSchema>;
+export type RecoveryCopyQuery = z.infer<typeof recoveryCopyQuerySchema>;
 
 const archiveBase = z.object({ version: z.literal(1), projectPath: z.string().min(1).max(4096) });
 export const projectArchiveRequestSchema = z.discriminatedUnion('action', [

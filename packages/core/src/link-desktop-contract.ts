@@ -24,10 +24,13 @@ export type LinkAppInfo = {
 
 /** Keep large project graphs out of Electron's synchronous contextBridge copy.
  * The renderer facade decodes/validates these documents in its worker. */
-export type LinkDesktopBridgeApi = Omit<LinkDesktopApi, 'pickOpenProject' | 'openProject' | 'saveProject'> & {
-  pickProjectDocument(): Promise<{ version: 1; path: string; content: string } | null>;
-  openProjectDocument(path: string): Promise<{ version: 1; path: string; content: string }>;
-  saveProjectDocument(path: string | null, content: string): Promise<string | null>;
+export type LinkDesktopBridgeApi = Omit<LinkDesktopApi, 'pickOpenProject' | 'openProject' | 'resolveRecoveryCopy'> & {
+  pickProjectDocument(): Promise<{ version: 1; path: string; content: string; upgraded: boolean } | null>;
+  openProjectDocument(path: string): Promise<{ version: 1; path: string; content: string; upgraded: boolean }>;
+  /** `defaultPath` suggests a location when the save dialog opens (path null); `backupOriginal` keeps the
+   * file as it was before the first save after an in-memory upgrade. */
+  saveProjectDocument(path: string | null, content: string, options?: { defaultPath?: string; backupOriginal?: boolean }): Promise<string | null>;
+  resolveRecoveryCopyDocument(payload: import('@tb/schema').RecoveryCopyQuery): Promise<{ version: 1; content: string } | null>;
 };
 
 export type LinkUpdatePhase =
@@ -56,6 +59,8 @@ export type LinkUpdateStatus = {
 export type LinkProjectFile = {
   path: string;
   project: LinkProject;
+  /** The project differs from the file (format upgrade or merged read checkpoints); the file is unchanged. */
+  upgraded: boolean;
 };
 
 export type LinkProjectAssetInspection = {
@@ -258,7 +263,12 @@ export type LinkDesktopApi = {
   checkForUpdates(): Promise<LinkUpdateStatus>;
   downloadUpdate(): Promise<LinkUpdateStatus>;
   installUpdate(): Promise<void>;
-  setDocumentDirty(dirty: boolean): Promise<void>;
+  /** The main process asks before quitting with what the window last reported here. */
+  setDocumentState(state: import('@tb/schema').LinkDocumentState): Promise<void>;
+  /** 保存 / 不保存 / 取消 before the open document is replaced; the same question as quitting. */
+  resolveUnsavedChanges(reason: 'open' | 'new' | 'restore-archive'): Promise<'clean' | 'saved' | 'discarded' | 'cancelled'>;
+  /** The main process asks the window to save (quit, reload, update); the handler's result is sent back. */
+  onSaveRequest(handler: () => Promise<{ status: 'saved' } | { status: 'canceled' } | { status: 'failed'; message: string }>): () => void;
   setRuntimeActive(active: boolean): Promise<void>;
   controlWindow(action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void>;
   detectLocalIntegrations(): Promise<LinkLocalIntegrationDetection>;
@@ -267,7 +277,20 @@ export type LinkDesktopApi = {
   createProject(name: string): Promise<LinkProject>;
   pickOpenProject(): Promise<LinkProjectFile | null>;
   openProject(path: string): Promise<LinkProjectFile>;
-  saveProject(path: string | null, project: LinkProject): Promise<string | null>;
+  /** Unsaved edits go to a recovery copy in the program's data folder, never over the project file. */
+  writeRecoveryCopy(payload: import('@tb/schema').RecoveryCopyWrite): Promise<void>;
+  /** An unnamed project asks once before an action that needs a location: 选择保存位置 / 取消. */
+  confirmProjectLocation(purpose: string): Promise<boolean>;
+  /** Why the main-process document worker refuses work (a timeout or a broken worker); null while it works. */
+  projectDocumentWorkerState(): Promise<{ stalled: string | null }>;
+  /** Asks the operator, then restarts a stuck document worker; true when confirmed. */
+  restartProjectDocumentWorker(reason: string): Promise<boolean>;
+  /** 恢复到上次保存 drops every unsaved edit; asked before it happens. */
+  confirmRevertToSaved(payload: { name: string; consoleSynced: boolean }): Promise<boolean>;
+  /** Asks whether to restore a recovery copy newer than the project file (or, at startup, of an unnamed project). */
+  resolveRecoveryCopy(payload: import('@tb/schema').RecoveryCopyQuery): Promise<LinkProject | null>;
+  /** Removes a recovery copy; with `keep`, a copy that session wrote after that revision stays. */
+  discardRecoveryCopy(payload: import('@tb/schema').RecoveryCopyDiscard): Promise<boolean>;
   importReferenceAudio(payload: { projectPath: string; sourcePath: string; durationMs: number }): Promise<ReferenceAudio>;
   resolveReferenceAudioUrl(payload: { projectPath: string; relativePath: string }): Promise<string>;
   importMediaAsset(payload: {

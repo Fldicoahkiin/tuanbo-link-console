@@ -3,6 +3,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingUserLibrary, parseLinkProject, ma2AuditionRequestSchema } from '@tb/schema';
+import { saveProject, closeDiscarding } from './save-questions';
 
 for (const playbackSource of ['p1', 'internal'] as const) {
 test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, async ({}, info) => {
@@ -67,6 +68,7 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
     const events = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting?.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)) ?? [];
     await source.dragTo(page.locator('.waveform-lane'), { targetPosition: { x: 230, y: 80 } });
     await expect(page.getByRole('button', { name: '音频 Cue 1', exact: true })).toBeVisible();
+    await saveProject(page);
     await expect.poll(async () => (await events()).length).toBe(1);
     expect((await events())[0]).toMatchObject({ kind: 'ma2', sequence: 168, cue: '1.250', executor: '' });
     await page.getByRole('button', { name: '撤销', exact: true }).click();
@@ -76,6 +78,7 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
     await page.getByLabel('时间（秒）', { exact: true }).fill('2.5');
     await page.getByRole('button', { name: '保存卡点', exact: true }).click();
     await expect(page.getByRole('button', { name: '音频 Cue 1', exact: true })).toBeVisible();
+    await saveProject(page);
     await expect.poll(async () => (await events())[0]).toMatchObject({ cue: '1.250', at: 2500 });
     await expect(page.locator('.lighting-lane:visible')).toHaveCount(0);
     await source.dragTo(page.locator('.waveform-lane'), { targetPosition: { x: 430, y: 80 } });
@@ -85,6 +88,7 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
     await expect(page.locator('.waveform-cue-point')).toHaveCount(1);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
+    await saveProject(page);
     await expect.poll(async () => (await events()).length).toBe(2);
     const savedEvents = await events();
     const savedTempos = parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!.tempos;
@@ -171,7 +175,7 @@ async function closeWorkbench(app: Awaited<ReturnType<typeof electron.launch>>):
   if (!page.isClosed()) {
     const stop = page.getByRole('button', { name: '停止时间线', exact: true });
     if (await stop.isVisible()) await stop.click();
-    await page.evaluate(() => window.tbLink.setDocumentDirty(false));
+    await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
   }
-  await app.close();
+  await closeDiscarding(app);
 }

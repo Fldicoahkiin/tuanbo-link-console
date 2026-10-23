@@ -32,11 +32,6 @@ export function SongImportSettings({ disabled, notify, children }: Props): JSX.E
       const current = assertDocumentSession(document.documentId);
       if ((current.project?.rundown.length ?? 0) > before) {
         current.executeForDocument(document.documentId, setPlaybackSourceCommand('internal'));
-        const updated = assertDocumentSession(document.documentId);
-        if (updated.path && updated.project) {
-          const saved = await linkDesktopViewModel.saveProject(updated.path, updated.project);
-          if (saved) assertDocumentSession(document.documentId).markSaved(saved, updated.revision, document.documentId);
-        }
       }
     } catch (error) { const message = error instanceof Error ? error.message : String(error); setResult(message); notify(message, 'error'); }
     finally { pending.current = false; setBusy(false); }

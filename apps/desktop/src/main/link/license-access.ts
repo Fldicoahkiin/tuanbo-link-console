@@ -13,8 +13,13 @@ const publicCalls = new Set([
   'link:purchase-copy-code',
   'link:app-info', 'link:process-stop', 'link:obs-disconnect', 'link:ma2-network-disconnect',
   'link:obs-source-cancel', 'link:obs-live-close', 'link:ma2-read-cancel',
-  'link:ma2-discovery-cancel', 'link:p1-import-cancel', 'link:set-document-dirty'
+  'link:ma2-discovery-cancel', 'link:p1-import-cancel',
+  // Protecting unsaved work never waits for a license: the save itself follows the save rule.
+  'link:set-document-state', 'link:resolve-unsaved-changes', 'link:save-response'
 ]);
+
+const workspaceSaveCalls = new Set(['link:save-project', 'link:write-recovery-copy', 'link:discard-recovery-copy',
+  'link:project-document-worker', 'link:restart-project-document-worker']);
 
 export function needsProductLicense(channel: string, value: unknown): boolean {
   if (publicCalls.has(channel)) return false;
@@ -41,8 +46,8 @@ export class LicenseAccess {
   private workspaceGranted = false;
   constructor(private readonly status: () => Promise<LicenseStatus>) {}
   async authorize(channel: string, value: unknown): Promise<void> {
-    // Saving work admitted under a paid license must remain possible after expiry.
-    if (channel === 'link:save-project' && this.workspaceGranted) return;
+    // Saving work admitted under a paid license, and its recovery copy, must remain possible after expiry.
+    if (workspaceSaveCalls.has(channel) && this.workspaceGranted) return;
     if (needsProductLicense(channel, value)) await this.requireOutput();
   }
   async requireOutput(): Promise<void> {

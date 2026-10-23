@@ -150,7 +150,7 @@ test('高负载工程真实打开、检索与切页，素材只挂载视口范�
     const p95Ms = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? 0;
     await writeFile(info.outputPath('responsiveness.json'), JSON.stringify({ ...responsiveness, p95Ms,
       maximumGapMs: Math.max(0, ...responsiveness.gaps.map(value => value.elapsedMs)), synthetic: true, physicalOutputAcceptance: false }, null, 2));
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setDocumentDirty(false)'));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.executeJavaScript('window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })'));
     await app.close();
     expect.soft(p95Ms, '真实输入到绘制的 P95 超过 100ms').toBeLessThanOrEqual(100);
     expect.soft(Math.max(0, ...responsiveness.gaps.map(value => value.elapsedMs)), '界面线程存在超过 100ms 的阻塞').toBeLessThanOrEqual(100);
