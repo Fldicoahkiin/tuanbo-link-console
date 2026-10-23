@@ -1,7 +1,7 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
-import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema } from '@tb/schema';
+import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
 import { materialSceneTargets } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
@@ -129,6 +129,7 @@ import type {
 } from '@tb/core/link';
 import { ExternalProcessManager, WindowsProcessTools, type ExternalApplicationId } from './link/external-process-manager';
 import { LinkProjectService } from './link/link-project-service';
+import { AssetRelinkRequests } from './link/asset-relink-requests';
 import { MediaMetadataProbe } from './link/media-metadata-probe';
 import { MediaPreviewService } from './link/media-preview-service';
 import { obsMediaCachePaths } from './link/obs-media-paths';
@@ -151,6 +152,8 @@ import { WindowsIntegrationDetector } from './link/windows-integration-detector'
 import { LoopMidiService } from './link/loop-midi-service';
 import { loopMidiActionSchema, loopMidiStatusSchema } from '@tb/schema';
 import { LinkUpdateManager } from './link/update-manager';
+import { rendererSource } from './link/renderer-source';
+import { buildGitSha, releaseAppId, releaseChannel, releaseChannelLabel } from './link/build-identity';
 import desktopPackage from '../../package.json';
 import ffmpegPath from 'ffmpeg-static';
 import { NativeAudioCache } from './link/native-audio-cache';
@@ -204,11 +207,15 @@ const unsavedChanges = new UnsavedChangesGuard({
 });
 /** Every quit (window close, app.quit, Windows session end) goes through here. */
 let requestQuit: () => void = () => { app.quit(); };
+/** The guard and quit flow behind requestQuit and the update install; `finish` ends the app once
+ * everything is closed. Resolves false when the operator kept the app open. */
+let runQuit: (reason: 'quit' | 'update', finish: () => void) => Promise<boolean> = () => Promise.resolve(false);
 let runtimeActive = false;
 let releaseRendererRuntime: () => Promise<void> = () => Promise.resolve();
 let automaticMusic: AutomaticMusicRuntime | null = null;
 let authorizeOutput: () => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
 let authorizeProduct: (channel: string, value: unknown) => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
+let readLicenseStatus: () => Promise<LicenseStatus> = () => Promise.reject(new Error('授权服务尚未就绪'));
 let ipcLogger: LinkRunLogger | null = null;
 let allowWindowClose = false;
 let stopAuditionForQuit: (() => Promise<void>) | null = null;
@@ -240,9 +247,20 @@ async function closeNativePlayer(): Promise<void> {
 function nativePlaybackActive(): boolean {
   return Boolean(nativePlayer?.status && ['preparing', 'playing', 'paused'].includes(nativePlayer.status.status));
 }
+/** Which build this is: shown in the update panel and written to logs and diagnostic packages. */
+function buildIdentity(): Pick<LinkAppInfo, 'name' | 'version' | 'channel' | 'gitSha' | 'appId'> {
+  const distribution = internalDistribution?.channel ?? null;
+  return { name: app.getName(), version: desktopPackage.version, channel: releaseChannel(app.isPackaged, distribution),
+    gitSha: buildGitSha, appId: releaseAppId(distribution, desktopPackage.build.appId) };
+}
+function buildIdentityLine(): string {
+  const identity = buildIdentity();
+  return `${identity.name} ${identity.version} · ${releaseChannelLabel[identity.channel]} · 提交 ${identity.gitSha ?? '未知'} · ${identity.appId}`;
+}
 const midiHealth = new WindowsMidiHealth(() => probeWindowsMidi(midiProbeExecutable(app.isPackaged ? process.resourcesPath : undefined)));
 
 const projectService = new LinkProjectService();
+const assetRelinkRequests = new AssetRelinkRequests({ projects: projectService, openProjectPath: () => documentState.projectPath });
 const projectDocuments = new ProjectDocumentService();
 const p1ProjectService = new P1ProjectService(projectService);
 const mediaMetadataProbe = new MediaMetadataProbe();
@@ -269,8 +287,8 @@ async function bootstrap(): Promise<void> {
   const integrationDetector = new WindowsIntegrationDetector();
   const logger = new LinkRunLogger(join(app.getPath('userData'), 'link-logs'), () => [...knownSecrets]);
   ipcLogger = logger;
-  await logger.record({ level: 'info', category: 'system', message: `团播联动台 ${desktopPackage.version} 已启动`,
-    details: { appVersion: desktopPackage.version, packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
+  await logger.record({ level: 'info', category: 'system', message: `${buildIdentityLine()} 已启动`,
+    details: { appVersion: desktopPackage.version, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
     .catch((error: unknown) => dialog.showErrorBox('运行日志无法写入', error instanceof Error ? error.message : String(error)));
   app.on('child-process-gone', (_event, details) => {
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
@@ -281,6 +299,7 @@ async function bootstrap(): Promise<void> {
     desktopPackage.version,
     app.isPackaged,
     (status) => sendToRenderer('link:update-status', status),
+    { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus() },
     undefined,
     internalDistribution ? '' : undefined
   );
@@ -296,6 +315,16 @@ async function bootstrap(): Promise<void> {
     if (result !== 'ready') throw new Error(midiHealthMessage(result));
   });
   createMainWindow(obs, logger);
+  // One check after startup settles; it only reports a new version, the operator downloads it.
+  setTimeout(() => {
+    if (quitFlowRunning || allowWindowClose) return;
+    void updateManager.check('background').then(status => {
+      if (status.phase === 'disabled' || status.phase === 'notConfigured') return;
+      return logger.record({ level: status.phase === 'idle' ? 'warning' : 'info', category: 'system', device: '软件更新',
+        message: status.installBlockedReason ? `${status.message}；${status.installBlockedReason}` : status.message,
+        details: { currentVersion: status.currentVersion, availableVersion: status.availableVersion, releaseDate: status.releaseDate } });
+    }).catch((error: unknown) => console.error('启动更新检查日志写入失败', error));
+  }, 10_000);
   restoreMainWindow = () => {
     if (mainWindow || quitFlowRunning) return;
     allowWindowClose = false;
@@ -313,28 +342,31 @@ async function bootstrap(): Promise<void> {
     recordQuitStep('所有窗口已关闭');
     if (process.platform !== 'darwin' && (allowWindowClose || !quitFlowRunning)) app.quit();
   });
-  requestQuit = () => {
-    if (quitFlowRunning) { recordQuitStep('退出流程进行中，忽略重复请求'); return; }
+  runQuit = async (reason, finish) => {
+    if (quitFlowRunning) { recordQuitStep('退出流程进行中，忽略重复请求', { reason }); return false; }
     if (runtimeActive || nativePlaybackActive()) {
       showRuntimeActiveExitWarning();
-      return;
+      return false;
     }
     quitFlowRunning = true;
-    void (async () => {
-      const decision = await unsavedChanges.resolve('quit');
-      recordQuitStep('未保存修改已处理', { decision });
-      if (decision === 'cancelled') return;
+    try {
+      const decision = await unsavedChanges.resolve(reason);
+      recordQuitStep('未保存修改已处理', { decision, reason });
+      if (decision === 'cancelled') return false;
       discardOnQuit = decision === 'discarded';
       await obs.sources.discardPending();
-      await runQuitFlow(profileStore, processManager);
-    })().catch((error: unknown) => {
-      recordQuitStep('退出流程失败', { error: error instanceof Error ? error.message : String(error) });
-      dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error));
-    }).finally(() => {
+      return await runQuitFlow(profileStore, processManager, finish);
+    } finally {
       quitFlowRunning = false;
       // A cancelled quit keeps the edits, and their recovery copy, as they are.
       if (!allowWindowClose) discardOnQuit = false;
       if (allowWindowClose && BrowserWindow.getAllWindows().length === 0) app.quit();
+    }
+  };
+  requestQuit = () => {
+    void runQuit('quit', () => app.quit()).catch((error: unknown) => {
+      recordQuitStep('退出流程失败', { error: error instanceof Error ? error.message : String(error) });
+      dialog.showErrorBox('退出流程失败', error instanceof Error ? error.message : String(error));
     });
   };
   app.on('before-quit', (event) => {
@@ -379,19 +411,38 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
     return { action: 'deny' };
   });
   mainWindow.webContents.on('will-navigate', event => event.preventDefault());
+  const window = mainWindow;
+  let rendererReloadedAt = 0;
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     // Nothing can be saved from a window that exited: the recovery copy holds the
     // edits and is offered when the project opens again, so quitting does not ask.
     rendererSaves.failAll('界面进程已退出，无法保存；未保存的修改保留在恢复副本中，下次打开工程时可以恢复');
     if (documentState.dirty) recordQuitStep('界面进程退出，未保存的修改以恢复副本为准');
     documentState = { ...documentState, dirty: false, consoleSynced: false };
-    void closeNativePlayer().then(() => releaseRendererRuntime()).catch((error: unknown) => {
+    // A program that is playing runs in main and keeps its audio, timecode, OBS and
+    // lighting outputs; the reloaded window takes it over. Anything else stops.
+    void (nativeProgram?.release() ?? Promise.resolve(null)).then(async kept => {
+      if (kept) {
+        await logger.record({ level: 'warning', category: 'state', device: '正式播放器', ...(kept.itemId ? { itemId: kept.itemId } : {}),
+          message: `界面进程退出，节目继续在后台播放（${Math.floor(kept.positionMs / 1000)} 秒）；界面重新加载后接管` });
+        return;
+      }
+      await closeNativePlayer(); await releaseRendererRuntime();
+    }).catch((error: unknown) => {
       void logger.record({ level: 'error', category: 'device', device: '正式音频', message: `界面退出后停止音频失败：${String(error)}`, result: 'failed' })
         .catch((loggingError: unknown) => console.error('记录音频停止失败', loggingError));
     });
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
       message: `Electron 界面进程退出：${details.reason}，退出码 ${details.exitCode}；故障转储目录：${app.getPath('crashDumps')}`,
       result: 'failed' }).catch((error: unknown) => console.error('记录 Electron 界面崩溃失败', error));
+    if (quitFlowRunning || details.reason === 'clean-exit' || window.isDestroyed()) return;
+    // Reload once automatically. Another exit within a minute waits for the
+    // operator, so a page that keeps failing cannot reload in a loop.
+    if (Date.now() - rendererReloadedAt > 60_000) { rendererReloadedAt = Date.now(); window.webContents.reload(); return; }
+    void dialog.showMessageBox(window, { type: 'error', title: '界面进程再次退出', noLink: true, defaultId: 0, cancelId: 1,
+      message: '界面进程在自动重新加载后一分钟内再次退出，已暂停自动重新加载。', buttons: ['重新加载界面', '暂不加载'] })
+      .then(({ response }) => { if (response === 0 && !window.isDestroyed()) { rendererReloadedAt = Date.now(); window.webContents.reload(); } })
+      .catch((error: unknown) => console.error('界面重新加载询问失败', error));
   });
   mainWindow.on('unresponsive', () => {
     rendererSaves.failAll('界面无响应，保存未完成；未保存的修改保留在恢复副本中');
@@ -459,8 +510,8 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
     mainWindow = null;
   });
 
-  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
-  if (rendererUrl) void mainWindow.loadURL(rendererUrl);
+  const renderer = rendererSource(app.isPackaged, process.env.ELECTRON_RENDERER_URL);
+  if (renderer.kind === 'url') void mainWindow.loadURL(renderer.url);
   else void mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
 }
 
@@ -597,6 +648,7 @@ function registerIpc(
   };
   const getLicenseStatus = async () => internalDistribution ? internalDistributionStatus(internalDistribution, await readMachineCode()) : localTestAccess ? getLocalTestStatus() : (await getLicenseService()).status();
   handle('link:license-status', getLicenseStatus);
+  readLicenseStatus = getLicenseStatus;
   let licenseChanging = false;
   const licenseAccess = new LicenseAccess(getLicenseStatus);
   releaseRendererRuntime = async () => {
@@ -799,7 +851,12 @@ function registerIpc(
   }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput());
   // Session registration captures cancellation synchronously; output adapters
   // validate and authorize every actual audio, OBS, MIDI and lighting request.
-  handle('link:native-program-open', (_event, value: unknown) => nativeProgram!.open(value), 'listener');
+  handle('link:native-program-open', async (_event, value: unknown) => {
+    const attachment = await nativeProgram!.open(value);
+    if (attachment !== 'opened') await logger.record({ level: 'warning', category: 'state', device: '正式播放器',
+      message: `重新加载的界面已接管后台播放的节目${attachment === 'outdated' ? '；界面工程与播放中的版本不同，停止后按界面工程重新准备' : ''}` });
+    return attachment;
+  }, 'listener');
   handle('link:native-program-control', (_event, value: unknown) => nativeProgram!.control(value), 'listener');
   handle('link:ma2-export-plugin', async () => {
     const selected = await dialog.showOpenDialog({ title: '选择 MA2 插件导出位置', properties: ['openDirectory', 'createDirectory'] });
@@ -1018,8 +1075,7 @@ function registerIpc(
   handle('link:app-info', async (): Promise<LinkAppInfo> => {
     const disk = await statfs(app.getPath('userData'));
     return {
-      name: '团播联动台',
-      version: desktopPackage.version,
+      ...buildIdentity(),
       platform: process.platform,
       architecture: process.arch,
       electronVersion: process.versions.electron,
@@ -1032,29 +1088,29 @@ function registerIpc(
   handle('link:update-download', (): Promise<LinkUpdateStatus> => updateManager.download());
   handle('link:update-install', async () => {
     if (runtimeActive || nativePlaybackActive()) throw new Error('联动尚未停止；请先到集成中心停止联动并完成 OBS 清理，再安装更新');
+    await updateManager.prepareInstall();
     const decision = await dialog.showMessageBox(mainWindow!, {
       type: 'question',
       title: '安装团播联动台更新',
       message: '联动台将退出并安装已下载的新版本。',
-      detail: 'OBS 与 P1 会保持运行。更新完成后联动台将重新启动。',
+      detail: '退出前和关闭软件一样，逐项确认未保存的工程、灯光试听和由本软件启动的外部程序。更新完成后联动台将重新启动。',
       buttons: ['取消', '退出并安装'],
       defaultId: 0,
       cancelId: 0,
       noLink: true
     });
     if (decision.response !== 1) return;
-    const unsaved = await unsavedChanges.resolve('update');
-    if (unsaved === 'cancelled') return;
-    if (runtimeActive || nativePlaybackActive()) throw new Error('播放状态已变化，请停止联动后重新安装');
-    if (unsaved === 'discarded') await discardOpenDocumentRecovery();
-    await closeNativePlayer();
-    allowWindowClose = true;
-    try {
-      updateManager.install();
-    } catch (error) {
-      allowWindowClose = false;
-      throw error;
-    }
+    // The same guard and quit flow as closing the window: unsaved changes, lighting audition,
+    // external programs and music analysis are settled before the installer starts.
+    await runQuit('update', () => {
+      recordQuitStep('启动更新安装程序');
+      try {
+        updateManager.install();
+      } catch (error) {
+        allowWindowClose = false;
+        throw error;
+      }
+    });
   });
   handle('link:set-document-state', (_event, stateValue: unknown) => {
     documentState = linkDocumentStateSchema.parse(stateValue);
@@ -1345,10 +1401,7 @@ function registerIpc(
     const payload = linkMediaInspectionPayloadSchema.parse(value);
     return projectService.inspectMediaAssets(payload.projectPath, payload.assets);
   });
-  handle('link:find-missing-asset-files', (_event, value: unknown) => {
-    const payload = linkProjectAssetFilesPayloadSchema.parse(value);
-    return projectService.findMissingAssetFiles(payload.projectPath, payload.files);
-  });
+  handle('link:find-missing-asset-files', (_event, value: unknown) => assetRelinkRequests.findMissing(linkProjectAssetFilesPayloadSchema.parse(value)));
   handle('link:pick-asset-source-directory', async (_event, pathValue: unknown) => {
     const projectPath = linkFilePathSchema.parse(pathValue);
     const result = await dialog.showOpenDialog(mainWindow!, {
@@ -1356,12 +1409,13 @@ function registerIpc(
       defaultPath: dirname(projectPath),
       properties: ['openDirectory']
     });
-    return result.canceled ? null : result.filePaths[0] ?? null;
+    const directory = result.canceled ? null : result.filePaths[0] ?? null;
+    assetRelinkRequests.pickedSourceDirectory(directory);
+    return directory;
   });
   handle('link:relink-asset-files', (_event, value: unknown) => {
     if (runtimeActive) throw new Error('请停止播放后找回素材');
-    const payload = linkProjectAssetRelinkPayloadSchema.parse(value);
-    return projectService.relinkAssetFiles(payload.projectPath, payload.sourceDirectory, payload.files);
+    return assetRelinkRequests.relink(linkProjectAssetRelinkPayloadSchema.parse(value));
   });
   handle('link:p1-detect-current-project', async () => {
     const detection = await integrationDetector.detect();
@@ -1817,22 +1871,22 @@ function registerIpc(
   });
   handle('link:log-export', async () => {
     const result = await dialog.showSaveDialog(mainWindow!, { title: '导出运行日志',
-      defaultPath: `团播联动台-日志-${new Date().toISOString().replaceAll(':', '-')}.txt`,
+      defaultPath: `${app.getName()}-日志-${new Date().toISOString().replaceAll(':', '-')}.txt`,
       filters: [{ name: '文本日志', extensions: ['txt'] }] });
     if (result.canceled || !result.filePath) return null;
-    await logger.exportText(result.filePath);
+    await logger.exportText(result.filePath, buildIdentityLine());
     return result.filePath;
   });
   handle('link:diagnostic-export', async (_event, contextValue: unknown) => {
     const context = linkDiagnosticContextSchema.parse(contextValue);
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: '导出脱敏诊断包',
-      defaultPath: `团播联动台-诊断-${new Date().toISOString().replaceAll(':', '-')}.tbdiag.gz`,
+      defaultPath: `${app.getName()}-诊断-${new Date().toISOString().replaceAll(':', '-')}.tbdiag.gz`,
       filters: [{ name: '团播联动台诊断包', extensions: ['tbdiag.gz'] }]
     });
     if (result.canceled || !result.filePath) return null;
     await logger.exportDiagnosticPackage(result.filePath, { ...context, environment: {
-      appVersion: desktopPackage.version, packaged: app.isPackaged, platform: process.platform, arch: process.arch,
+      appVersion: desktopPackage.version, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch,
       osRelease: release(), cpu: cpus()[0]?.model ?? '未知', logicalProcessors: cpus().length,
       totalMemoryBytes: totalmem(), freeMemoryBytes: freemem(), versions: process.versions,
       gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),
@@ -1855,7 +1909,8 @@ function registerAssetProtocol(): void {
   });
 }
 
-async function runQuitFlow(profileStore: SecureProfileStore, processManager: ExternalProcessManager): Promise<void> {
+/** Resolves true once `finish` ran, false when the operator returned to the app. */
+async function runQuitFlow(profileStore: SecureProfileStore, processManager: ExternalProcessManager, finish: () => void): Promise<boolean> {
   recordQuitStep('退出前停止灯光试听');
   try { await stopAuditionForQuit?.(); }
   catch (error) {
@@ -1866,7 +1921,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
     const options = { type: 'warning' as const, title: '灯光试听未能停止', message: '退出前没有确认控台已关闭本次试听。',
       detail: `${reason}\n\n仍然退出时，控台上可能保留当前灯光状态，请到控台手动处理。`, buttons: ['返回软件', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true };
     const choice = mainWindow && !mainWindow.isDestroyed() ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
-    if (choice.response !== 1) { recordQuitStep('返回软件处理灯光试听'); return; }
+    if (choice.response !== 1) { recordQuitStep('返回软件处理灯光试听'); return false; }
     recordQuitStep('操作员选择仍然退出', { error: reason });
   }
   recordQuitStep('退出前关闭正式音频与画面');
@@ -1880,8 +1935,8 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
     if (discardOnQuit) await discardOpenDocumentRecovery();
     allowWindowClose = true;
     recordQuitStep('退出流程完成');
-    app.quit();
-    return;
+    finish();
+    return true;
   }
   const closeIds: ExternalApplicationId[] = [];
   for (const snapshot of owned) {
@@ -1896,7 +1951,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
       cancelId: 0,
       noLink: true
     });
-    if (decision.response === 0) return;
+    if (decision.response === 0) return false;
     if (decision.response === 2) closeIds.push(snapshot.id);
   }
   if (closeIds.length > 0) {
@@ -1927,7 +1982,8 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   if (discardOnQuit) await discardOpenDocumentRecovery();
   allowWindowClose = true;
   recordQuitStep('退出流程完成');
-  app.quit();
+  finish();
+  return true;
 }
 
 /** After 不保存: the open document's recovery copy is removed. A failure is logged and never blocks

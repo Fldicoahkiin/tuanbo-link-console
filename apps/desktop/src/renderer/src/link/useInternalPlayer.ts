@@ -24,6 +24,11 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   const [controller, setController] = useState<ProgramPlayerControls | null>(null);
   const [view] = useState(() => new PlayerViewStore());
   const state = useSyncExternalStore(view.subscribeControl, view.readControl);
+  const [generation, setGeneration] = useState(0);
+  useEffect(() => {
+    // A program taken over after a window reload may play an older document; once it stops, open the shown one.
+    if (controller instanceof RemoteNativeProgramPlayer && controller.outdated && !['preparing', 'playing', 'paused'].includes(state.status)) setGeneration(value => value + 1);
+  }, [controller, state.status]);
   const profile = useIntegrationStore((value) => value.profile);
   const obsStatus = useIntegrationStore(value => value.obs.status);
   const notifySelection = useCallback((message: string) => controller?.reportUnavailable(message), [controller]);
@@ -165,7 +170,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       if (player instanceof RemoteNativeProgramPlayer) void player.dispose().catch(error => dependencies.notice?.(`关闭播放器失败：${toUserErrorMessage(error)}`, null));
       else player.dispose();
     };
-  }, [coordinator, project, path, ready, audioConfiguration, view]);
+  }, [coordinator, project, path, ready, audioConfiguration, view, generation]);
   const engine = internalAudioEngineLabel({ ...engineChoice, engine: audioConfiguration.engine });
   return useMemo(() => ({ controller, state, view, engine }), [controller, state, view, engine]);
 }

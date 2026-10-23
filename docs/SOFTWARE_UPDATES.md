@@ -6,18 +6,48 @@
 
 2026-09-28 初始状态（历史）：源码改为公司 HTTPS 更新源，DNS、源站 TLS 和静态更新路由已完成并验证；尚未发布新安装包。旧版本历史验收记录留在文末，不代表本次域名和保护配置已验收。
 
+<a id="当前链路"></a>
 ## 当前链路
 
-- 更新源：`https://updates.tuanbo-link.jinhefilm.com/windows/x64/`，`electron-updater 6.8.9` 的 generic provider。
-- 唯一配置来源：`apps/desktop/package.json` 的 `build.publish.url`；主进程直接引用相同配置，打包生成的 `app-update.yml` 应与其一致。
-- 客户不填写 GitHub Token，不需要公司网站账号；旧更新 Token 的 IPC、schema 和输入 UI 已移除，客户端不再读取它。已有本地加密凭证不会被静默删除，也不会迁移到公司服务。
-- 用户打开更新中心后检查→下载→确认重启安装；没有启动自动检查、自动下载、退出即安装、失败自动重试或自动降级。
-- 固定完整 NSIS 包下载，保留 SHA-512 校验；差分下载关闭，blockmap 仍可随构建归档。新源协议仅允许 HTTPS、无用户名/密码、无 query/fragment，且必须为目录地址。
-- 检查与下载互斥，已经下载的版本保留等待安装。运行中或工程未保存时拒绝安装；系统确认框返回后再次检查，防止确认期间状态变化。安装失败恢复关闭保护。
-- 安装沿用原目录和当前用户范围，只退出团播联动台，不关闭 OBS/P1。开发模式不执行更新。
+2026-10-23 起的客户端行为（尚未随正式版发布；已发布的 0.4.29 仍是旧行为）：
+
+- 更新源：`https://updates.tuanbo-link.jinhefilm.com/windows/x64/`，`electron-updater 6.8.9` 的 generic provider。唯一配置来源是 `apps/desktop/package.json` 的 `build.publish.url`；主进程直接引用它，打包生成的 `app-update.yml` 由 `verify-desktop-artifacts.mjs --dist` 核对一致。
+- 客户不填写 GitHub Token，不需要公司网站账号；旧更新 Token 的 IPC、schema 和输入 UI 已移除。已有本地加密凭证不会被静默删除，也不会迁移到公司服务。
+- 检查：安装版启动约 10 秒后在后台检查一次，只写日志并在工作区提示一次新版本，不下载。后台检查失败（现场断网常见）记为警告，面板显示「启动时未能检查更新…可以在软件更新中重试」，不显示为更新错误。手动检查在「设置 › 外观与更新 › 软件更新」。检查和读取更新状态不需要授权：未激活、授权到期或启动联网校验失败的电脑在激活页也能看到新版本。
+- 升级服务期限：发现新版本后，用 `latest.yml` 的 `releaseDate` 和本机签名授权里的 `updatesUntil` 比较。发布日期晚于期限、授权不可用、或 `latest.yml` 没有有效发布日期时，面板显示新版本和原因，不提供下载和安装；下载前、安装前各再核对一次授权。日期按北京时间显示，比较用精确时刻。
+- 下载：手动点击，固定完整 NSIS 包，SHA-512 校验，差分下载关闭。下载和安装仍需要有效授权。播放中不能开始下载；下载中开始播放会立即停止下载并回到「可下载」，停止播放后可以重新下载。检查与下载互斥，已下载的版本保留等待安装。
+- 安装：播放中拒绝。确认后走与关闭软件相同的退出流程：未保存工程「保存 / 不保存 / 取消」→ 停止灯光试听 → 关闭正式音频与画面 → 逐项确认由本软件启动的外部程序 → 关闭音乐分析 → 启动安装程序。任一步选择返回即取消安装，已下载的更新保留。安装程序启动失败时软件保持打开，面板显示错误。安装沿用原目录和当前用户范围，更新后自动重启。
+- 开发模式不执行更新；免激活测试包没有更新源，见[测试包](#测试包)。
 - 网络层采用锁定版本 `builder-util-runtime` 的 60 秒 socket 空闲超时。完整包传输可超过 60 秒，不是整次下载的总时限；慢链路需实测。授权请求另有独立的 10 秒时限。
 
-当前 feed 是公开静态资源，下载本身不发授权，使用软件仍要求付费许可。`updatesUntil` 对新版使用资格尚未接入；服务器短效下载链接、版本资格目录和安装后资格验证都属于后续工作，不能说已实现按升级期收费。
+当前 feed 是公开静态资源，下载本身不发授权，安装包未做代码签名。升级服务期限由客户端按签名授权执行，属于产品策略，不是防破解措施：任何人都能从官网直接下载安装包。服务器短效下载链接和版本资格目录仍属后续工作。
+
+<a id="构建身份"></a>
+### 构建身份
+
+每个构建记录产品名、版本、渠道（正式 / 测试 / 内测 / 开发）、Git 提交号（有未提交改动时带 `-dirty`）和 appId。正式构建取不到提交号会直接失败。这些信息显示在「软件更新」面板，写入每次启动的日志、导出日志的开头和诊断包。打包版只从 app.asar 加载界面，忽略 `ELECTRON_RENDERER_URL`；从开发机热更新测试电脑界面的做法只对修复前装好的包有效。
+
+<a id="测试包"></a>
+### 测试包
+
+免激活测试包由 `scripts/build-portable-test.mjs` 在 Windows 上构建，身份与正式包分开（定义在 `scripts/release-config.mjs`）：
+
+| 项目 | 正式包 | 测试包 |
+| --- | --- | --- |
+| appId | `com.tuanbo.control` | `com.tuanbo.control.functionaltest` |
+| 包名（决定默认安装目录） | `@tb/desktop` → `%LOCALAPPDATA%\Programs\@tbdesktop` | `tuanbo-link-functional-test` → `%LOCALAPPDATA%\Programs\tuanbo-link-functional-test` |
+| productName（决定 userData） | 团播联动台 → `%APPDATA%\团播联动台` | 团播联动台功能测试版 → `%APPDATA%\团播联动台功能测试版` |
+| 安装包 | `Tuanbo-Link-Console-X.Y.Z-x64.exe` | `Tuanbo-Link-Test-NoActivation-X.Y.Z-x64.exe` |
+| 更新源 | 公司 feed | 无（不生成 `app-update.yml` 和 `latest.yml`） |
+
+构建脚本最后运行 `verify-desktop-artifacts.mjs --test-dist <目录>`，核对上述身份、内嵌的测试分发，以及没有任何能进入正式 feed 的文件；不通过即报错。正式包的 `--dist` 校验反过来要求主进程不含测试或内测分发、包名和 productName 为正式值。
+
+此前的测试包与正式包同用 `@tbdesktop` 目录和 `%APPDATA%\团播联动台`：不带 `/D` 安装会覆盖正式版的 app.asar。新测试包不再读取旧目录里的配置，测试电脑升级到新测试包后需要重新配置，或把旧配置复制到新的 userData 目录。
+
+<a id="官网下载信息"></a>
+### 官网下载信息
+
+`apps/licensing-server/web/release.json`（下载页的版本、日期和链接）不再手改。发布到更新源之后运行 `node scripts/write-website-release.mjs`：它读取线上 `latest.yml`，核对安装包地址返回的大小，按北京时间写入日期；提交后由官网自动部署上线。
 
 ## 同服务器静态出口
 

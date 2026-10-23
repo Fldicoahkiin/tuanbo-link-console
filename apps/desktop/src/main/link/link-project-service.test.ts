@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { createEmptyLinkProject, createLightingUserLibrary, serializeLinkProject } from '@tb/schema';
@@ -8,9 +8,12 @@ import { LinkProjectService } from './link-project-service';
 
 const cleanupFiles: string[] = [];
 const cleanupDirectories: string[] = [];
+const cleanupLinks: string[] = [];
 
 afterEach(async () => {
   for (const filePath of cleanupFiles.splice(0).reverse()) await unlink(filePath).catch(ignoreMissing);
+  // Windows removes a directory junction with rmdir; POSIX removes a symbolic link with unlink.
+  for (const link of cleanupLinks.splice(0).reverse()) await (process.platform === 'win32' ? rmdir(link) : unlink(link)).catch(ignoreMissing);
   for (const directory of cleanupDirectories.splice(0).reverse()) await rmdir(directory).catch(ignoreMissing);
 });
 
@@ -232,6 +235,10 @@ describe('LinkProjectService', () => {
     const replaced = { relativePath: 'assets/reference-media/replaced.mp4', sha256: sha256('expected') };
     const absent = { relativePath: 'assets/reference-media/absent.mp4', sha256: sha256('absent') };
     await writeFile(join(original, replaced.relativePath), 'other-bytes');
+    const waveformPath = (root: string): string => join(root, 'cache', 'waveforms', `${audio.sha256}.json`);
+    for (const root of [original, moved]) cleanupDirectories.push(join(root, 'cache'), join(root, 'cache', 'waveforms'));
+    cleanupFiles.push(waveformPath(original), waveformPath(moved));
+    await service.saveWaveformCache(originalProject, audio.sha256, [0, 0.5, -0.5]);
     for (const relativePath of [audio.relativePath, video.relativePath, replaced.relativePath]) cleanupFiles.push(join(original, relativePath));
     for (const relativePath of [audio.relativePath, video.relativePath]) cleanupFiles.push(join(moved, relativePath));
     const files = [audio, video, replaced, absent].map(({ relativePath, sha256 }) => ({ relativePath, sha256 }));
@@ -246,6 +253,8 @@ describe('LinkProjectService', () => {
     await expect(readFile(join(moved, audio.relativePath), 'utf8')).resolves.toBe('song-audio');
     await expect(readFile(join(moved, video.relativePath), 'utf8')).resolves.toBe('opening-video');
     expect(await readdir(join(moved, 'assets', 'reference-media'))).toEqual([video.relativePath.split('/').at(-1)]);
+    expect(await service.loadWaveformCache(movedProject, audio.sha256)).toEqual([0, 0.5, -0.5]);
+    expect(await readdir(join(moved, 'cache', 'waveforms'))).toEqual([`${audio.sha256}.json`]);
     expect(await service.findMissingAssetFiles(movedProject, files)).toEqual([replaced.relativePath, absent.relativePath]);
     expect((await service.relinkAssetFiles(movedProject, original, files.slice(0, 1)))[0]?.status).toBe('present');
   });
@@ -256,6 +265,78 @@ describe('LinkProjectService', () => {
     await expect(service.relinkAssetFiles(join(directory, 'show.tblink'), directory, [file])).rejects.toThrow('必须位于工程目录内');
     await expect(service.findMissingAssetFiles(join(directory, 'show.tblink'), [file])).rejects.toThrow('必须位于工程目录内');
     await expect(service.relinkAssetFiles(join(directory, 'show.tblink'), 'relative-folder', [{ relativePath: 'a.wav', sha256: sha256('a') }])).rejects.toThrow('完整路径');
+  });
+
+  it('找回素材不写入工程文件夹里经符号链接或目录联接指向别处的位置', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio();
+    const moved = await createTestDirectory(); const outside = await createTestDirectory();
+    await linkFolder(outside, join(moved, 'assets'));
+    cleanupDirectories.push(join(outside, 'reference-audio')); cleanupFiles.push(join(outside, 'reference-audio', parse(audio.file.relativePath).base));
+    await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file])).rejects.toThrow('符号链接');
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it('找回素材不读取所选文件夹里经符号链接或目录联接指向别处的文件', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio();
+    const picked = await createTestDirectory(); const moved = await createTestDirectory();
+    await linkFolder(join(audio.folder, 'assets'), join(picked, 'assets'));
+    cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio')); cleanupFiles.push(join(moved, audio.file.relativePath));
+    await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), picked, [audio.file])).rejects.toThrow('符号链接');
+    expect(await readdir(moved)).toEqual([]);
+  });
+
+  it('找回波形缓存不读取所选文件夹里经符号链接或目录联接指向别处的文件', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio();
+    const elsewhere = await createTestDirectory(); const moved = await createTestDirectory();
+    const linkedWaveform = join(elsewhere, 'waveforms', `${audio.file.sha256}.json`);
+    await mkdir(join(elsewhere, 'waveforms')); cleanupDirectories.push(join(elsewhere, 'waveforms')); cleanupFiles.push(linkedWaveform);
+    await writeFile(linkedWaveform, '[0]\n');
+    await linkFolder(elsewhere, join(audio.folder, 'cache'));
+    cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio'), join(moved, 'cache'), join(moved, 'cache', 'waveforms'));
+    cleanupFiles.push(join(moved, audio.file.relativePath), join(moved, 'cache', 'waveforms', `${audio.file.sha256}.json`));
+    await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file])).rejects.toThrow('符号链接');
+    expect(await readdir(moved)).toEqual([]);
+  });
+
+  it('找回波形缓存不写入工程文件夹里经符号链接或目录联接指向别处的位置', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio();
+    const waveform = join(audio.folder, 'cache', 'waveforms', `${audio.file.sha256}.json`);
+    await mkdir(join(audio.folder, 'cache', 'waveforms'), { recursive: true });
+    cleanupDirectories.push(join(audio.folder, 'cache'), join(audio.folder, 'cache', 'waveforms')); cleanupFiles.push(waveform);
+    await writeFile(waveform, '[0]\n');
+    const moved = await createTestDirectory(); const outside = await createTestDirectory();
+    await linkFolder(outside, join(moved, 'cache'));
+    cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio'), join(outside, 'waveforms'));
+    cleanupFiles.push(join(moved, audio.file.relativePath), join(outside, 'waveforms', `${audio.file.sha256}.json`));
+    await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file])).rejects.toThrow('符号链接');
+    expect(await readdir(outside)).toEqual([]);
+    expect(await readdir(moved)).toEqual(['cache']);
+  });
+
+  it('找回素材只接受 assets 素材子目录里的音视频和图片文件，有一个不符合就整批拒绝', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio(); const moved = await createTestDirectory();
+    cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio')); cleanupFiles.push(join(moved, audio.file.relativePath));
+    for (const relativePath of ['song.wav', 'assets/song.wav', 'assets/cache/song.wav', 'assets/reference-audio/nested/song.wav',
+      'assets/reference-audio/song.exe', 'assets/reference-audio/song.mp4', 'assets/reference-media/notes.txt', 'cache/waveforms/song.json', 'assets\\reference-audio\\song.wav']) {
+      await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file, { relativePath, sha256: sha256('song') }])).rejects.toThrow('只能检查和找回');
+    }
+    expect(await readdir(moved)).toEqual([]);
+    expect(await service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file, { relativePath: 'assets/reference-media/clip.MOV', sha256: sha256('clip') }]))
+      .toEqual([{ relativePath: audio.file.relativePath, status: 'restored' }, { relativePath: 'assets/reference-media/clip.MOV', status: 'not-found' }]);
+  });
+
+  it('检查缺失素材不能探测工程文件夹里素材子目录以外的文件', async () => {
+    const directory = await createTestDirectory(); const secret = join(directory, 'secret.txt'); cleanupFiles.push(secret);
+    await writeFile(secret, 'secret');
+    const service = new LinkProjectService();
+    for (const relativePath of ['secret.txt', 'assets/reference-audio/../../secret.txt', 'assets/reference-media/secret.txt']) {
+      await expect(service.findMissingAssetFiles(join(directory, 'show.tblink'), [{ relativePath }])).rejects.toThrow('只能检查和找回');
+    }
+  });
+
+  it('检查缺失素材只接受 .tblink 工程路径', async () => {
+    const directory = await createTestDirectory();
+    await expect(new LinkProjectService().findMissingAssetFiles(join(directory, 'show.json'), [{ relativePath: 'assets/reference-audio/a.wav' }])).rejects.toThrow('.tblink');
   });
 
   it.runIf(process.platform === 'win32')('拒绝把跨盘绝对路径解析为工程内素材', async () => {
@@ -274,6 +355,22 @@ async function createTestDirectory(): Promise<string> {
   await mkdir(directory);
   cleanupDirectories.push(directory);
   return directory;
+}
+
+/** An original project folder holding one song file, as the software imported it. */
+async function originalAudio(): Promise<{ folder: string; file: { relativePath: string; sha256: string } }> {
+  const folder = await createTestDirectory(); const digest = sha256('song-audio');
+  const file = { relativePath: `assets/reference-audio/${digest}.wav`, sha256: digest };
+  await mkdir(join(folder, 'assets', 'reference-audio'), { recursive: true });
+  cleanupDirectories.push(join(folder, 'assets'), join(folder, 'assets', 'reference-audio')); cleanupFiles.push(join(folder, file.relativePath));
+  await writeFile(join(folder, file.relativePath), 'song-audio');
+  return { folder, file };
+}
+
+/** A directory junction on Windows (no administrator rights needed), a symbolic link elsewhere. */
+async function linkFolder(target: string, path: string): Promise<void> {
+  await symlink(target, path, 'junction');
+  cleanupLinks.push(path);
 }
 
 function sha256(text: string): string {

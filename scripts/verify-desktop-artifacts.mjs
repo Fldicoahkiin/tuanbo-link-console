@@ -1,12 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
-import { validatePackagedUpdateConfig, validateReleaseVersion } from './release-config.mjs';
+import { join, relative, resolve } from 'node:path';
+import { embeddedDistributionChannel, portableTestPackage, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion } from './release-config.mjs';
 
 const requireDist = process.argv.includes('--dist');
 const root = process.cwd();
 const desktopPackage = JSON.parse(readFileSync(join(root, 'apps/desktop/package.json'), 'utf8'));
 validateReleaseVersion(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')), desktopPackage);
+const testDistribution = process.argv.indexOf('--test-dist');
+if (testDistribution !== -1) {
+  if (!process.argv[testDistribution + 1]) fail('用法：node scripts/verify-desktop-artifacts.mjs --test-dist <测试包构建目录>');
+  report(verifyTestDistribution(resolve(process.argv[testDistribution + 1])), '免激活测试包产物校验通过');
+}
 const requiredBuildFiles = [
   'apps/desktop/out/main/index.cjs',
   'apps/desktop/out/preload/index.cjs',
@@ -53,6 +58,8 @@ if (requireDist) {
   const packagedAppBytes = existsSync(packagedApp) ? readFileSync(packagedApp) : undefined;
   const testAccessMarkers = ['TBLINK_LOCAL_TEST_ACCESS', '.local-test-access', '本机开发测试通道']
     .filter((marker) => !packagedAppBytes || packagedAppBytes.includes(Buffer.from(marker)));
+  const packagedIdentity = packagedAppBytes ? JSON.parse(readAsarFile(packagedApp, 'package.json').toString('utf8')) : undefined;
+  const packagedDistribution = packagedAppBytes ? embeddedDistributionChannel(readAsarFile(packagedApp, 'out/main/index.cjs')) : 'missing app.asar';
   const installerVersionInfo = installer ? readWindowsVersionInfo(installer) : undefined;
   const appVersionInfo = unpackedExecutable ? readWindowsVersionInfo(unpackedExecutable) : undefined;
   checks.push(
@@ -62,6 +69,10 @@ if (requireDist) {
       return existsSync(packaged) && readFileSync(packaged).equals(readFileSync(join(root, 'tools/ibt/bin', file)));
     }), detail: 'IBT engine, corresponding source, license and build instructions match this build' },
     { name: 'bundled-obs-native-bridge', ok: bridgeMatches, detail: bridgeMatches ? 'packaged DLL matches this build; no runtime compiler required' : 'missing or mismatched OBS bridge DLL' },
+    { name: 'release-excludes-test-distribution', ok: packagedDistribution === null, detail: packagedDistribution === null ? 'main bundle has no activation-free or internal distribution' : `main bundle carries ${packagedDistribution}` },
+    // NSIS installs per user into a folder named after the package name; Electron keeps userData under productName.
+    { name: 'release-package-identity', ok: packagedIdentity?.name === desktopPackage.name && packagedIdentity?.productName === desktopPackage.productName,
+      detail: `name=${packagedIdentity?.name}, productName=${packagedIdentity?.productName}` },
     { name: 'release-excludes-local-test-access', ok: testAccessMarkers.length === 0, detail: packagedAppBytes ? (testAccessMarkers.length === 0 ? 'app.asar has no development activation bypass' : `app.asar contains ${testAccessMarkers.join(', ')}`) : 'missing app.asar' },
     { name: 'windows-nsis-installer', ok: Boolean(installer), detail: installer ? relative(root, installer) : 'missing' },
     { name: 'windows-unpacked-executable', ok: Boolean(unpackedExecutable), detail: unpackedExecutable ? relative(root, unpackedExecutable) : 'missing' },
@@ -88,10 +99,44 @@ if (requireDist) {
   );
 }
 
-for (const check of checks) console.log(`${check.ok ? 'ok' : 'fail'}  ${check.name}  ${check.detail}`);
-const failed = checks.filter((check) => !check.ok);
-if (failed.length > 0) fail(`桌面产物校验失败：\n${failed.map((check) => `- ${check.name}: ${check.detail}`).join('\n')}`);
-console.log(requireDist ? 'Windows 桌面构建与发布产物校验通过' : '桌面构建产物校验通过');
+report(checks, requireDist ? 'Windows 桌面构建与发布产物校验通过' : '桌面构建产物校验通过');
+
+function report(results, success) {
+  for (const check of results) console.log(`${check.ok ? 'ok' : 'fail'}  ${check.name}  ${check.detail}`);
+  const failed = results.filter((check) => !check.ok);
+  if (failed.length > 0) fail(`桌面产物校验失败：\n${failed.map((check) => `- ${check.name}: ${check.detail}`).join('\n')}`);
+  console.log(success);
+  process.exit(0);
+}
+
+/** The test package must stay apart from the official app and can never reach the official update feed. */
+function verifyTestDistribution(directory) {
+  if (process.platform !== 'win32') fail('--test-dist 校验必须在 Windows 原生环境运行');
+  if (!existsSync(directory)) fail(`缺少测试包构建目录：${directory}`);
+  const entries = readdirSync(directory);
+  const installerName = `${portableTestPackage.artifactPrefix}${desktopPackage.version}-x64.exe`;
+  const installer = join(directory, installerName);
+  const executable = join(directory, 'win-unpacked', `${portableTestPackage.productName}.exe`);
+  const packagedApp = join(directory, 'win-unpacked/resources/app.asar');
+  // The configuration build-portable-test.mjs passed to electron-builder; the installer itself is compressed.
+  const builderConfig = join(directory, 'builder.json');
+  const identity = existsSync(packagedApp) ? JSON.parse(readAsarFile(packagedApp, 'package.json').toString('utf8')) : undefined;
+  const distribution = existsSync(packagedApp) ? embeddedDistributionChannel(readAsarFile(packagedApp, 'out/main/index.cjs')) : null;
+  const executableInfo = existsSync(executable) ? readWindowsVersionInfo(executable) : undefined;
+  const config = existsSync(builderConfig) ? JSON.parse(readFileSync(builderConfig, 'utf8')) : undefined;
+  return [
+    { name: 'test-installer', ok: existsSync(installer), detail: installerName },
+    { name: 'test-executable-version-info', ok: executableInfo?.ProductName === portableTestPackage.productName && executableInfo?.FileVersion === desktopPackage.version, detail: formatVersionInfo(executableInfo) },
+    { name: 'test-package-identity', ok: identity?.name === portableTestPackage.name && identity?.productName === portableTestPackage.productName,
+      detail: `name=${identity?.name}, productName=${identity?.productName}; install folder and userData follow these` },
+    { name: 'test-builder-config', ok: config?.appId === portableTestPackage.appId && config?.publish === null && config?.extraMetadata?.name === portableTestPackage.name,
+      detail: config ? `appId=${config.appId}, publish=${JSON.stringify(config.publish)}, name=${config.extraMetadata?.name}` : 'missing builder.json' },
+    { name: 'test-embeds-portable-distribution', ok: distribution === 'portable-test', detail: `main bundle distribution=${distribution}` },
+    { name: 'test-has-no-update-config', ok: !existsSync(join(directory, 'win-unpacked/resources/app-update.yml')), detail: 'no app-update.yml: the package never reads a feed' },
+    { name: 'test-has-no-official-feed-files', ok: !entries.includes('latest.yml') && !entries.some((name) => name.startsWith('Tuanbo-Link-Console-')),
+      detail: 'no latest.yml and no Tuanbo-Link-Console-* installer that publish-update.py would accept' }
+  ];
+}
 
 function listFiles(directory) {
   const files = [];

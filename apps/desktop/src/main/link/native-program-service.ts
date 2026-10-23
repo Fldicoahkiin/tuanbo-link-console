@@ -1,30 +1,42 @@
 import { emptyInternalPlayerState, type InternalPlayerState, type NativeProgramPlayer, type PlaybackBoundary } from '@tb/core/link';
 import { nativeProgramOpenSchema, nativeProgramControlSchema, nativeProgramEventSchema, parseLinkProject,
-  type LinkProject, type NativeProgramOpen, type NativeProgramConfiguration, type NativeProgramEvent } from '@tb/schema';
+  type LinkProject, type NativeProgramAttachment, type NativeProgramOpen, type NativeProgramConfiguration, type NativeProgramEvent } from '@tb/schema';
 
 type Host = { controller: Pick<NativeProgramPlayer, keyof NativeProgramPlayer>; close(): Promise<void> };
-type Entry = { request: NativeProgramOpen; host: Host | null; configuration: NativeProgramConfiguration;
-  state: InternalPlayerState; sequence: number; currentCueId: string | null; cancelled: boolean; cancellation: AbortController; ready: Promise<void> };
+type Entry = { request: NativeProgramOpen; projectId: string; document: string; host: Host | null; configuration: NativeProgramConfiguration;
+  state: InternalPlayerState; sequence: number; currentCueId: string | null; cancelled: boolean; orphaned: boolean;
+  cancellation: AbortController; ready: Promise<void> };
 type Factory = (project: LinkProject, request: NativeProgramOpen, callbacks: {
   configuration(): NativeProgramConfiguration; changed(state: InternalPlayerState): void; cueChanged(id: string | null): void;
 }) => Host;
 
 /** Owns the single formal program session. Old UI disposal cannot stop a new
- * program; replacement waits for acknowledged cleanup, never starts a second output. */
+ * program; replacement waits for acknowledged cleanup, never starts a second output.
+ * A program keeps running when its window's renderer exits, until a reloaded window
+ * of the same project takes it over. */
 export class NativeProgramService {
   private current: Entry | null = null;
   private cleanup: Promise<void> = Promise.resolve();
   constructor(private readonly create: Factory, private readonly publish: (event: NativeProgramEvent) => void,
     private readonly authorize: () => Promise<void>) {}
 
-  async open(value: unknown): Promise<void> {
+  async open(value: unknown): Promise<NativeProgramAttachment> {
     const request = nativeProgramOpenSchema.parse(value);
     const project = parseLinkProject(JSON.parse(request.document));
     if (project.playbackSource !== 'internal') throw new Error('后台节目只接受内部主控工程');
     if (this.current?.request.ownerId === request.ownerId) throw new Error('节目控制会话编号重复');
-    const previous = this.current;
-    const entry: Entry = { request, host: null, configuration: request.configuration, state: { ...emptyInternalPlayerState },
-      sequence: 0, currentCueId: null, cancelled: false, cancellation: new AbortController(), ready: Promise.resolve() };
+    const previous = this.current, document = JSON.stringify(project);
+    if (previous?.orphaned && active(previous.state)) {
+      if (previous.request.projectPath !== request.projectPath || previous.projectId !== project.projectId) {
+        throw new Error(`界面重新加载前的节目仍在播放：${previous.request.projectPath}。请打开该工程接管或停止播放`);
+      }
+      previous.orphaned = false; previous.request = request; previous.configuration = request.configuration;
+      this.emit(previous);
+      return previous.document === document ? 'adopted' : 'outdated';
+    }
+    const entry: Entry = { request, projectId: project.projectId, document, host: null, configuration: request.configuration,
+      state: { ...emptyInternalPlayerState }, sequence: 0, currentCueId: null, cancelled: false, orphaned: false,
+      cancellation: new AbortController(), ready: Promise.resolve() };
     if (previous) { previous.cancelled = true; previous.cancellation.abort(); this.enqueueClose(previous); }
     this.current = entry;
     entry.ready = this.cleanup.then(async () => {
@@ -39,6 +51,16 @@ export class NativeProgramService {
       this.emit(entry);
     });
     await entry.ready;
+    return 'opened';
+  }
+
+  /** The owning window's renderer exited. A program that is preparing, playing or
+   * paused keeps its outputs running and is returned; anything else is closed. */
+  async release(): Promise<InternalPlayerState | null> {
+    const entry = this.current;
+    if (entry && active(entry.state)) { entry.orphaned = true; return entry.state; }
+    await this.close();
+    return null;
   }
 
   async control(value: unknown): Promise<void> {
@@ -99,10 +121,14 @@ export class NativeProgramService {
     } finally { if (cancel) signal.removeEventListener('abort', cancel); }
   }
   private emit(entry: Entry, boundary?: PlaybackBoundary): void {
-    if (entry.cancelled || this.current !== entry) return;
+    if (entry.cancelled || entry.orphaned || this.current !== entry) return;
     const clock = entry.host?.controller.clock.read() ?? { positionMs: entry.state.positionMs, durationMs: entry.state.durationMs,
       ready: false, playing: false, seeking: entry.state.status === 'preparing' };
     this.publish(nativeProgramEventSchema.parse({ version: 1, ownerId: entry.request.ownerId, sequence: ++entry.sequence,
       state: entry.state, clock, currentCueId: entry.currentCueId, ...(boundary ? { boundary } : {}) }));
   }
+}
+
+function active(state: InternalPlayerState): boolean {
+  return state.status === 'preparing' || state.status === 'playing' || state.status === 'paused';
 }

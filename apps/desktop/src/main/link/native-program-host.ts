@@ -34,7 +34,8 @@ export class NativeProgramHost {
   constructor(project: LinkProject, path: string, revision: number, private readonly dependencies: Dependencies) {
     const error = (message: string) => this.controller.reportUnavailable(message);
     this.midi = new NativeMidiHost({ audio: () => dependencies.audio(), profile: () => dependencies.configuration().lightingProfile ?? null,
-      executable: dependencies.executable, authorize: () => dependencies.authorize(), changed: state => dependencies.midiChanged(state), error });
+      executable: dependencies.executable, authorize: () => dependencies.authorize(), changed: state => dependencies.midiChanged(state), error,
+      fault: (message, itemId) => { dependencies.notice(message, itemId); this.controller.reportFault(message); } });
     this.lighting = new NativeLightingOutput({ executable: dependencies.executable, network: dependencies.network,
       authorize: () => dependencies.authorize(), error });
     this.controller = new NativeProgramPlayer(project, path, revision, {

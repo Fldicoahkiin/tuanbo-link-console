@@ -1,5 +1,6 @@
 import electronUpdater, { type ProgressInfo, type UpdateInfo } from 'electron-updater';
 import type { LinkUpdateStatus } from '@tb/core/link';
+import type { LicenseStatus } from '@tb/schema';
 import { dirname } from 'node:path';
 
 import desktopPackage from '../../../package.json';
@@ -17,22 +18,34 @@ export type UpdateClientHandlers = {
 
 export type UpdateClient = {
   check: () => Promise<void>;
-  download: () => Promise<void>;
+  /** Rejects once `signal` aborts. */
+  download: (signal: AbortSignal) => Promise<void>;
   install: () => void;
   dispose: () => void;
 };
 
 export type UpdateClientFactory = (feedUrl: string, handlers: UpdateClientHandlers) => UpdateClient;
 
+/** Conditions owned by the rest of the app that decide what the updater may do. */
+export type UpdateRules = {
+  /** Playback owns the network and disk: no update download runs while it is active. */
+  playbackActive: () => boolean;
+  /** Read again before each download and install: the license can change while the app runs. */
+  license: () => Promise<LicenseStatus>;
+};
+
 export class LinkUpdateManager {
   private client: UpdateClient | null = null;
   private busy = false;
+  private backgroundCheck = false;
+  private activeDownload: AbortController | null = null;
   private status: LinkUpdateStatus;
 
   constructor(
     currentVersion: string,
     private readonly packaged: boolean,
     private readonly emit: (status: LinkUpdateStatus) => void,
+    private readonly rules: UpdateRules,
     private readonly createClient: UpdateClientFactory = createElectronUpdateClient,
     private readonly feedUrl: string = UPDATE_FEED
   ) {
@@ -43,10 +56,16 @@ export class LinkUpdateManager {
     return { ...this.status };
   }
 
-  async check(): Promise<LinkUpdateStatus> {
+  /** `background` is the one check after startup: it never downloads, and a failure (often an offline
+   * venue) leaves the panel ready for a manual retry instead of showing an update error. */
+  async check(mode: 'manual' | 'background' = 'manual'): Promise<LinkUpdateStatus> {
     if (!this.packaged || !this.status.feedConfigured) return this.getStatus();
-    if (this.busy || this.status.phase === 'downloaded') throw new Error('请先完成当前更新操作');
+    if (this.busy || this.status.phase === 'downloaded') {
+      if (mode === 'background') return this.getStatus();
+      throw new Error('请先完成当前更新操作');
+    }
     this.busy = true;
+    this.backgroundCheck = mode === 'background';
     this.client?.dispose();
     try {
       this.client = this.createClient(this.feedUrl, {
@@ -55,6 +74,7 @@ export class LinkUpdateManager {
           phase: 'available',
           availableVersion: info.version,
           releaseDate: info.releaseDate ?? null,
+          installBlockedReason: null,
           progressPercent: null,
           transferredBytes: null,
           totalBytes: null,
@@ -69,13 +89,16 @@ export class LinkUpdateManager {
           totalBytes: null,
           message: '当前已经是最新版本'
         }),
-        progress: (info) => this.update({
-          phase: 'downloading',
-          progressPercent: clampPercent(info.percent),
-          transferredBytes: info.transferred,
-          totalBytes: info.total,
-          message: `正在下载 ${clampPercent(info.percent).toFixed(1)}%`
-        }),
+        progress: (info) => {
+          if (this.activeDownload && this.rules.playbackActive()) { this.activeDownload.abort(); return; }
+          this.update({
+            phase: 'downloading',
+            progressPercent: clampPercent(info.percent),
+            transferredBytes: info.transferred,
+            totalBytes: info.total,
+            message: `正在下载 ${clampPercent(info.percent).toFixed(1)}%`
+          });
+        },
         downloaded: (info) => this.update({
           phase: 'downloaded',
           availableVersion: info.version,
@@ -83,22 +106,26 @@ export class LinkUpdateManager {
           progressPercent: 100,
           message: `版本 ${info.version} 已下载，确认后重启安装`
         }),
-        error: (error) => this.update({ phase: 'error', message: normalizeUpdateError(error) })
+        error: (error) => { if (!this.backgroundCheck) this.update({ phase: 'error', message: normalizeUpdateError(error) }); }
       });
       this.update({
         phase: 'checking',
         feedConfigured: true,
         availableVersion: null,
         releaseDate: null,
+        installBlockedReason: null,
         progressPercent: null,
         transferredBytes: null,
         totalBytes: null,
         message: '正在检查软件更新…'
       });
       await this.client.check();
+      if (this.status.phase === 'available') await this.checkEntitlement();
     } catch (error) {
-      this.update({ phase: 'error', message: normalizeUpdateError(error) });
+      if (this.backgroundCheck) this.update({ phase: 'idle', message: `启动时未能检查更新（${normalizeUpdateError(error)}），可以在软件更新中重试` });
+      else this.update({ phase: 'error', message: normalizeUpdateError(error) });
     } finally {
+      this.backgroundCheck = false;
       this.busy = false;
     }
     return this.getStatus();
@@ -108,7 +135,17 @@ export class LinkUpdateManager {
     if (this.busy || !this.client || this.status.phase !== 'available') {
       throw new Error('当前没有可下载的更新');
     }
+    if (this.rules.playbackActive()) throw new Error('播放中不下载更新，停止播放后再下载');
     this.busy = true;
+    try {
+      const blocked = await this.checkEntitlement();
+      if (blocked) throw new Error(blocked);
+    } catch (error) {
+      this.busy = false;
+      throw error;
+    }
+    const download = new AbortController();
+    this.activeDownload = download;
     this.update({
       phase: 'downloading',
       progressPercent: 0,
@@ -117,20 +154,38 @@ export class LinkUpdateManager {
       message: '准备下载更新…'
     });
     try {
-      await this.client.download();
+      await this.client.download(download.signal);
     } catch (error) {
-      this.update({ phase: 'error', message: normalizeUpdateError(error) });
+      if (download.signal.aborted) {
+        this.update({ phase: 'available', progressPercent: null, transferredBytes: null, totalBytes: null,
+          message: '播放已开始，更新下载已停止；停止播放后可重新下载' });
+      } else this.update({ phase: 'error', message: normalizeUpdateError(error) });
     } finally {
+      this.activeDownload = null;
       this.busy = false;
     }
     return this.getStatus();
   }
 
+  /** Confirms a downloaded update may be installed; run before the quit flow starts. */
+  async prepareInstall(): Promise<void> {
+    if (this.busy || !this.client || this.status.phase !== 'downloaded') throw new Error('更新尚未下载完成');
+    const blocked = await this.checkEntitlement();
+    if (blocked) throw new Error(blocked);
+  }
+
+  /** Starts the installer; throws when it cannot start, and the app must then stay open. */
   install(): void {
     if (this.busy || !this.client || this.status.phase !== 'downloaded') {
       throw new Error('更新尚未下载完成');
     }
     this.client.install();
+  }
+
+  private async checkEntitlement(): Promise<string | null> {
+    const blocked = updateEntitlementIssue(await this.rules.license(), this.status.availableVersion, this.status.releaseDate);
+    if (blocked !== this.status.installBlockedReason) this.update({ installBlockedReason: blocked });
+    return blocked;
   }
 
   private update(update: Partial<LinkUpdateStatus>): LinkUpdateStatus {
@@ -146,7 +201,7 @@ export class LinkUpdateManager {
 }
 
 function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandlers): UpdateClient {
-  const { NsisUpdater } = electronUpdater;
+  const { NsisUpdater, CancellationToken } = electronUpdater;
   const updater = new NsisUpdater({
     provider: 'generic',
     url: feedUrl
@@ -175,10 +230,24 @@ function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandl
     check: async () => {
       await updater.checkForUpdates();
     },
-    download: async () => {
-      await updater.downloadUpdate();
+    download: async (signal) => {
+      const cancellation = new CancellationToken();
+      signal.addEventListener('abort', () => cancellation.cancel(), { once: true });
+      await updater.downloadUpdate(cancellation);
     },
-    install: () => updater.quitAndInstall(false, true),
+    install: () => {
+      // quitAndInstall reports a failure to start the installer only through a synchronous
+      // 'error' event; it quits the app on its own once the installer started.
+      const started: { failure: Error | null } = { failure: null };
+      const capture = (error: Error): void => { started.failure = error; };
+      updater.once('error', capture);
+      try {
+        updater.quitAndInstall(false, true);
+      } finally {
+        updater.removeListener('error', capture);
+      }
+      if (started.failure) throw started.failure;
+    },
     dispose: () => {
       updater.removeListener('checking-for-update', handlers.checking);
       updater.removeListener('update-available', handlers.available);
@@ -201,8 +270,24 @@ function initialStatus(currentVersion: string, packaged: boolean, feedUrl: strin
     transferredBytes: null,
     totalBytes: null,
     feedConfigured,
+    installBlockedReason: null,
     message: packaged ? (feedConfigured ? '可以检查软件更新' : '发行方尚未配置有效的 HTTPS 更新地址') : '开发模式不执行安装更新，请使用 Windows 安装版验证'
   };
+}
+
+/** Why this machine may not install the release, or null. The release date comes from latest.yml,
+ * whose digest the release manifest records; the license is the signed claim on this machine. */
+function updateEntitlementIssue(license: LicenseStatus, version: string | null, releaseDate: string | null): string | null {
+  if (license.state !== 'active' || !license.claims) return `本机授权当前不可用（${license.message}），可以查看新版本，恢复授权后再安装`;
+  const released = releaseDate === null ? Number.NaN : Date.parse(releaseDate);
+  if (!Number.isFinite(released)) return '更新信息没有有效的发布日期，无法确认是否在升级服务期内，不能安装；请联系发行方';
+  if (released <= Date.parse(license.claims.updatesUntil)) return null;
+  return `新版本 ${version ?? ''} 发布于 ${chinaDate(released)}，晚于本机授权的升级服务期限 ${chinaDate(Date.parse(license.claims.updatesUntil))}；可以继续使用当前版本，续费延长升级服务后再安装`;
+}
+
+/** The comparison uses exact instants; dates are shown in Beijing time, as on the download page. */
+function chinaDate(value: number): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
 }
 
 function clampPercent(value: number): number {

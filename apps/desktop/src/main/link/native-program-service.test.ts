@@ -67,3 +67,35 @@ it('只发布当前会话的有序状态和边界；无效 DTO 不进入控制�
   await expect(service.control({ ...command(b, { kind: 'seek', positionMs: 100 }), extra: true })).rejects.toThrow();
   expect(output.controller.seek).not.toHaveBeenCalled();
 });
+
+it('界面进程退出时播放中的节目不停；重新加载的同工程界面接管同一输出', async () => {
+  const output = host(), events: NativeProgramEvent[] = [];
+  const create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>(() => output);
+  const service = new NativeProgramService(create, event => events.push(event), () => Promise.resolve()), a = request();
+  expect(await service.open(a)).toBe('opened'); const callbacks = create.mock.calls[0]![2];
+  callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing', positionMs: 5000 });
+  expect(await service.release()).toMatchObject({ itemId: 'song', status: 'playing' }); expect(output.close).not.toHaveBeenCalled();
+  const published = events.length; callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing', positionMs: 6000 });
+  expect(events).toHaveLength(published);
+  const other = request();
+  await expect(service.open(other)).rejects.toThrow('请打开该工程接管或停止播放'); expect(output.close).not.toHaveBeenCalled();
+  const reloaded = { ...a, ownerId: randomUUID(), revision: 0 };
+  expect(await service.open(reloaded)).toBe('adopted'); expect(create).toHaveBeenCalledTimes(1);
+  expect(events.at(-1)).toMatchObject({ ownerId: reloaded.ownerId, state: { positionMs: 6000, status: 'playing' } });
+  await expect(service.control(command(a, { kind: 'stop' }))).rejects.toThrow('已关闭');
+  await service.control(command(reloaded, { kind: 'pause' })); expect(output.controller.pause).toHaveBeenCalledTimes(1);
+});
+
+it('接管的节目工程与界面不同时标记为过期；停止的节目在界面退出时关闭', async () => {
+  const playing = host(), stopped = host(), create = vi.fn<ConstructorParameters<typeof NativeProgramService>[0]>()
+    .mockReturnValueOnce(playing).mockReturnValueOnce(stopped);
+  const service = new NativeProgramService(create, vi.fn(), () => Promise.resolve()), a = request();
+  await service.open(a); create.mock.calls[0]![2].changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'paused' });
+  await service.release();
+  const edited = { ...JSON.parse(a.document) as Record<string, unknown>, name: '恢复副本中的修改' };
+  const reloaded = { ...a, ownerId: randomUUID(), document: JSON.stringify(edited) };
+  expect(await service.open(reloaded)).toBe('outdated');
+  await service.control(command(reloaded, { kind: 'close' })); expect(playing.close).toHaveBeenCalledTimes(1);
+  await service.open(request());
+  expect(await service.release()).toBeNull(); expect(stopped.close).toHaveBeenCalledTimes(1);
+});

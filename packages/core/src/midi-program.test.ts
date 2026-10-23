@@ -8,13 +8,14 @@ function fixture(cues: { frame: number; actions: LinkAction[] }[]) {
   const project = parseLinkProject({ ...createEmptyLinkProject('后台 MIDI'), playbackSource: 'internal', rundown: [{ id: 'song', title: '歌曲',
     cues: cues.map((cue, index) => ({ id: `cue-${index}`, name: `Cue ${index}`, timecode: frameNumberToTimecode(cue.frame, '30'), actions: cue.actions })) }] });
   let now = 1000;
-  const sent: number[][] = [], errors: Error[] = [];
+  const sent: number[][] = [], errors: Error[] = [], missed: string[] = [];
   const send = vi.fn<(port: string, bytes: readonly number[], deadline: number) => Promise<void>>((_port, bytes) => { sent.push([...bytes]); return Promise.resolve(); });
   const prepare = vi.fn<(ports: readonly string[], signal: AbortSignal) => Promise<void>>(() => Promise.resolve());
   const close = vi.fn(() => Promise.resolve()), reported = vi.fn();
-  const session = new MidiProgramSession(project, 'song', { prepare, send, close, now: () => now, sent: reported, failed: error => errors.push(error) });
+  const session = new MidiProgramSession(project, 'song', { prepare, send, close, now: () => now, sent: reported,
+    missed: message => missed.push(message), failed: error => errors.push(error) });
   const clock = async (position: number) => { now = 1000 + position; session.clock(position, now); await session.settled(); };
-  return { session, send, sent, errors, prepare, close, reported, clock, time: (value: number) => { now = value; } };
+  return { session, send, sent, errors, missed, prepare, close, reported, clock, time: (value: number) => { now = value; } };
 }
 
 it('依音频位置释放脉冲，中间的其他 Cue 不被 Note 持续时长阻塞，也不发送 OBS 动作', async () => {
@@ -51,17 +52,30 @@ it('停止立即取消未发队列，旧确认和未来释放不能污染下一�
   expect(f.send).toHaveBeenCalledOnce(); expect(f.reported).not.toHaveBeenCalled(); expect(f.session.pendingCount).toBe(0);
 });
 
-it('过期或倒退时钟会关闭通道，不在恢复后的播放头补发', async () => {
-  const f = fixture([{ frame: 0, actions: [note('a')] }]); await f.session.prepare(0);
-  f.time(1101); f.session.clock(0, 1000); await f.session.settled(); await f.session.close();
-  expect(f.errors[0]?.message).toContain('过期'); expect(f.send).not.toHaveBeenCalled();
+it('过期时钟错过的动作记录且不补发，通道继续发送之后的动作；倒退时钟关闭通道', async () => {
+  const f = fixture([{ frame: 0, actions: [note('a')] }, { frame: 9, actions: [note('b')] }]); await f.session.prepare(0);
+  f.time(1101); f.session.clock(0, 1000); await f.session.settled();
+  expect(f.send).not.toHaveBeenCalled(); expect(f.missed).toEqual(['播放位置更新中断，错过 1 个 MIDI 动作，未补发']);
+  await f.clock(300); expect(f.sent).toEqual([[0x90, 60, 100]]); expect(f.errors).toEqual([]); await f.session.close();
   const backwards = fixture([{ frame: 0, actions: [note('a')] }]); await backwards.session.prepare(100);
   await backwards.clock(99); expect(backwards.errors[0]?.message).toContain('倒退'); await backwards.session.close();
 });
 
-it('设备时钟虽新但跨过动作截止边界，也不能补发历史 Cue', async () => {
-  const f = fixture([{ frame: 0, actions: [note('a')] }]); await f.session.prepare(0);
-  await f.clock(101); expect(f.send).not.toHaveBeenCalled(); expect(f.errors[0]?.message).toContain('100ms'); await f.session.close();
+it('设备时钟虽新但跨过动作截止边界，也不能补发历史 Cue；已发音符的释放迟到仍发送', async () => {
+  const f = fixture([{ frame: 0, actions: [note('a', 50)] }, { frame: 3, actions: [note('b')] }]); await f.session.prepare(0);
+  await f.clock(0); expect(f.sent).toEqual([[0x90, 60, 100]]);
+  await f.clock(400);
+  expect(f.sent).toEqual([[0x90, 60, 100], [0x80, 60, 0]]); expect(f.send.mock.calls[1]?.[2]).toBe(1500);
+  expect(f.missed).toEqual(['播放位置更新中断，错过 1 个 MIDI 动作，未补发']); expect(f.errors).toEqual([]); await f.session.close();
+});
+
+it('排队等待超过执行边界的动作不发送并记录，之后的动作照常', async () => {
+  const f = fixture([{ frame: 0, actions: [note('a', 500), { id: 'cc', label: 'CC 7', kind: 'midi.controlChange', portProfileId: 'out', channel: 2, controller: 7, value: 64 }] },
+    { frame: 9, actions: [{ id: 'pc', label: 'PC', kind: 'midi.programChange', portProfileId: 'out', channel: 1, program: 3 }] }]);
+  f.send.mockImplementationOnce((_port, bytes) => { f.sent.push([...bytes]); f.time(1200); return Promise.resolve(); });
+  await f.session.prepare(0); await f.clock(0);
+  expect(f.sent).toEqual([[0x90, 60, 100]]); expect(f.missed).toEqual(['MIDI 动作发送晚于 100ms 执行边界，未补发：CC 7']);
+  await f.clock(300); expect(f.sent.at(-1)).toEqual([0xc0, 3]); expect(f.errors).toEqual([]); await f.session.close();
 });
 
 it('输出失败清除本轮队列，不将后续动作报告成功、不自动重试', async () => {

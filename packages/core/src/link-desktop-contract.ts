@@ -12,9 +12,17 @@ import type {
   SceneItemTransform
 } from '@tb/schema';
 
+/** release: the official installer; test: the activation-free test package; internal: the signed internal build. */
+export type LinkReleaseChannel = 'release' | 'test' | 'internal' | 'development';
+
 export type LinkAppInfo = {
-  name: '团播联动台';
+  /** Product name of this build, e.g. 团播联动台功能测试版 for the test package. */
+  name: string;
   version: string;
+  channel: LinkReleaseChannel;
+  /** Commit the build came from (`-dirty` when it had uncommitted changes); null for a development build without Git. */
+  gitSha: string | null;
+  appId: string;
   platform: string;
   architecture: string;
   electronVersion: string;
@@ -53,6 +61,8 @@ export type LinkUpdateStatus = {
   transferredBytes: number | null;
   totalBytes: number | null;
   feedConfigured: boolean;
+  /** Why the available version cannot be downloaded or installed on this machine (license or upgrade term), or null. */
+  installBlockedReason: string | null;
   message: string;
 };
 
@@ -178,7 +188,7 @@ export type LinkLogEntryDto = {
 };
 
 export type LinkDesktopApi = {
-  openNativeProgram(request: import('@tb/schema').NativeProgramOpen): Promise<void>;
+  openNativeProgram(request: import('@tb/schema').NativeProgramOpen): Promise<import('@tb/schema').NativeProgramAttachment>;
   controlNativeProgram(request: import('@tb/schema').NativeProgramControl): Promise<void>;
   onNativeProgramEvent(listener: (event: import('@tb/schema').NativeProgramEvent) => void): () => void;
   projectArchives(request: import('@tb/schema').ProjectArchiveRequest): Promise<import('@tb/schema').ProjectArchiveResult>;
