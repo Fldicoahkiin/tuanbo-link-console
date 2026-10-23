@@ -1,4 +1,4 @@
-import { mkdir, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEmptyLinkProject } from '@tb/schema';
@@ -66,6 +66,31 @@ describe('P1ProjectService', () => {
     expect(imported.items.map(item => item.title)).toEqual(['第二首.wav']);
     expect(imported.skippedItems).toHaveLength(1);
     expect(imported.skippedItems?.[0]?.reason).toContain('多个同名文件');
+  });
+
+  it('.hia 里指向网络共享或设备路径的歌曲不直接访问；工程文件夹里没有同名文件就跳过', async () => {
+    const fixture = await createFixture();
+    const source = await readFile(fixture.p1Path, 'utf8');
+    await writeFile(fixture.p1Path, source.replaceAll(fixture.audioPaths[0].replaceAll('\\', '/'), '//attacker/share/remote.wav'));
+    const imported = await new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.items.map(item => item.title)).toEqual(['第二首.wav']);
+    expect(imported.skippedItems?.[0]?.reason).toContain('网络共享或设备路径');
+  });
+
+  it('.hia 里的歌曲经链接指向非音视频文件时跳过，不读取链接目标', async (context) => {
+    const fixture = await createFixture();
+    const secret = join(fixture.directory, 'secret.txt'), link = join(fixture.directory, 'linked.wav');
+    await writeFile(secret, 'not a song'); cleanupFiles.push(secret);
+    try { await symlink(secret, link); }
+    catch (error) { if (process.platform === 'win32' && error instanceof Error && 'code' in error && error.code === 'EPERM') context.skip(); throw error; }
+    cleanupFiles.push(link);
+    const source = await readFile(fixture.p1Path, 'utf8');
+    await writeFile(fixture.p1Path, source.replaceAll(fixture.audioPaths[0].replaceAll('\\', '/'), link.replaceAll('\\', '/')));
+    const imported = await new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.items.map(item => item.title)).toEqual(['第二首.wav']);
+    expect(imported.skippedItems?.[0]?.reason).toContain('不是可导入的音视频文件');
   });
 
   it('歌曲导入取消后停止处理，工程文件保持原状', async () => {

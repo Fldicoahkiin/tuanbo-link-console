@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, opendir, readFile, stat } from 'node:fs/promises';
-import { basename, dirname, extname, isAbsolute, join, parse, resolve } from 'node:path';
+import { access, opendir, readFile, realpath, stat } from 'node:fs/promises';
+import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import {
   DOMParser,
   XMLSerializer,
@@ -23,8 +23,8 @@ import type {
   LinkP1ProjectImportResult
 } from '@tb/core/link';
 import { writeFileAtomically } from './atomic-file';
-import { validateP1TimecodeRanges, parseP1TimeOrigin, programTimeOrigin } from '@tb/core/link';
-import { LinkProjectService } from './link-project-service';
+import { validateP1TimecodeRanges, parseP1TimeOrigin, programTimeOrigin, REFERENCE_AUDIO_EXTENSIONS } from '@tb/core/link';
+import { LinkProjectService, REFERENCE_AUDIO_CONTAINER_EXTENSIONS } from './link-project-service';
 
 type ParsedP1Media = {
   element: XmlElement;
@@ -79,13 +79,18 @@ export class P1ProjectService {
         const binding = readMediaBinding(media.element, media.resourcePath, media.occurrence, playlist.binding.id, playlist.binding.name, media.index);
         parseP1TimeOrigin(binding.midiStartTime);
         let readablePath = media.resourcePath;
-        try { await access(readablePath, constants.R_OK); }
+        // The .hia is the operator's, its song paths are not: check the text before touching the path.
+        const refusal = songPathRefusal(media.element.getAttribute('resourceFilePath') ?? '', media.resourcePath, dirname(parsed.sourcePath));
+        try { if (refusal) throw new Error(refusal); await access(readablePath, constants.R_OK); }
         catch {
           relocatedFiles ??= indexCopiedP1Media(dirname(parsed.sourcePath), options.signal);
           const matches = (await relocatedFiles).get(basename(media.resourcePath).toLocaleLowerCase()) ?? [];
-          if (matches.length !== 1) throw new Error(matches.length ? `复制的歌曲目录中存在多个同名文件，无法确认“${media.title}”` : `未找到“${media.title}”的歌曲文件；请把 P1 工程和歌曲文件夹一起复制到本机`);
+          if (matches.length !== 1) throw new Error(matches.length ? `复制的歌曲目录中存在多个同名文件，无法确认“${media.title}”` : refusal ? `${refusal}；P1 工程文件夹中也没有同名文件` : `未找到“${media.title}”的歌曲文件；请把 P1 工程和歌曲文件夹一起复制到本机`);
           readablePath = matches[0]!;
         }
+        const realSong = await realpath(readablePath);
+        const realRefusal = songPathRefusal('', realSong, await realpath(dirname(parsed.sourcePath)));
+        if (realRefusal) throw new Error(`“${media.title}”的实际文件：${realRefusal}`);
         const fileStat = await stat(readablePath);
         if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${readablePath}`);
         const audio = await importP1Audio(this.projects, linkProjectPath, media, readablePath);
@@ -328,6 +333,19 @@ function reindexExportMedia(playlists: XmlElement[], sourcePath: string, emitted
     const issue = preserved.get(element); if (issue) skipped.push({ ...issue, previousSourceKey: issue.sourceKey, sourceKey });
   }
   return skipped;
+}
+
+const SONG_EXTENSIONS: ReadonlySet<string> = new Set([...REFERENCE_AUDIO_EXTENSIONS, ...REFERENCE_AUDIO_CONTAINER_EXTENSIONS]);
+
+/** Why a song path from a .hia is refused, or null: the attribute text (`raw`) names no network share or
+ * device path, and the path is an audio or video file on a local disk or inside the .hia's folder. */
+function songPathRefusal(raw: string, path: string, hiaFolder: string): string | null {
+  if (/^[\\/]{2}/.test(raw) || /[\u0000-\u001f]/.test(raw)) return `歌曲路径指向网络共享或设备路径，不会访问：${raw}`;
+  if (!SONG_EXTENSIONS.has(extname(path).toLowerCase())) return `歌曲路径不是可导入的音视频文件：${path}`;
+  const inFolder = relative(hiaFolder, path);
+  const local = process.platform === 'win32' ? /^[a-z]:\\/i.test(path) : path.startsWith('/') && !path.startsWith('//');
+  if (!local && (inFolder === '' || inFolder.startsWith('..') || isAbsolute(inFolder))) return `歌曲文件不在本机磁盘或 P1 工程文件夹内：${path}`;
+  return null;
 }
 
 function readMediaBinding(

@@ -24,7 +24,7 @@ import {
   type ReferenceAudioExtractor
 } from './reference-audio-extractor';
 
-const REFERENCE_AUDIO_CONTAINER_EXTENSIONS = new Set(['.avi', '.m4v', '.mkv', '.mov', '.mp4', '.webm']);
+export const REFERENCE_AUDIO_CONTAINER_EXTENSIONS: ReadonlySet<string> = new Set(['.avi', '.m4v', '.mkv', '.mov', '.mp4', '.webm']);
 /** The waveform worker's output limit, and room for that many peaks as JSON. */
 const MAX_WAVEFORM_PEAKS = 500_000;
 const MAX_WAVEFORM_CACHE_BYTES = 16 * 1024 * 1024;
