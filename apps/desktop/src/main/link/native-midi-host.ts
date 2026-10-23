@@ -13,6 +13,8 @@ type Dependencies = {
   authorize(): Promise<void>;
   changed(state: NativeMidiChannelState): void;
   error(message: string): void;
+  /** Actions of this song that were skipped; the channel keeps running. */
+  fault(message: string, itemId: string): void;
   now?: () => number;
   ports?: (failed: (error: Error) => void) => Ports;
 };
@@ -47,6 +49,7 @@ export class NativeMidiHost {
       prepare: (ids, signal) => ports.prepare(ids, signal), send: (id, bytes, deadline) => ports.send(id, bytes, deadline),
       close: () => ports.close(), now: this.now,
       sent: cueId => { if (this.entry?.session === session) this.patch({ currentCueId: cueId }); },
+      missed: message => { if (this.entry?.session === session) this.dependencies.fault(message, identity.itemId); },
       failed: error => {
         this.dependencies.error(error.message);
         if (this.entry?.session === session) this.patch({ state: 'failed', reason: error.message });
