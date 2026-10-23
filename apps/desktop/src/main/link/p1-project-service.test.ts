@@ -93,6 +93,20 @@ describe('P1ProjectService', () => {
     expect(imported.skippedItems?.[0]?.reason).toContain('不是可导入的音视频文件');
   });
 
+  it('.hia 文件夹里的链接指向网络共享时不跟随，先读链接目标再拒绝', async (context) => {
+    const fixture = await createFixture();
+    const link = join(fixture.directory, 'shared');
+    try { await symlink('//attacker/share', link, 'dir'); }
+    catch (error) { if (process.platform === 'win32' && error instanceof Error && 'code' in error && error.code === 'EPERM') context.skip(); throw error; }
+    cleanupFiles.push(link);
+    const source = await readFile(fixture.p1Path, 'utf8');
+    await writeFile(fixture.p1Path, source.replaceAll(fixture.audioPaths[0].replaceAll('\\', '/'), `${link.replaceAll('\\', '/')}/remote.wav`));
+    const imported = await new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.items.map(item => item.title)).toEqual(['第二首.wav']);
+    expect(imported.skippedItems?.[0]?.reason).toContain('网络共享或设备路径');
+  });
+
   it('歌曲导入取消后停止处理，工程文件保持原状', async () => {
     const fixture = await createFixture();
     const original = JSON.stringify(createEmptyLinkProject('未开始导入'));
