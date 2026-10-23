@@ -15,14 +15,16 @@ export const serviceConfigSchema = z.object({
   WECHAT_PUBLIC_KEY_FILE: z.string().min(1).optional(), WECHAT_PUBLIC_KEY_ID: z.string().regex(/^PUB_KEY_ID_\d{10,64}$/).optional(),
   WECHAT_API_V3_KEY_FILE: z.string().min(1).optional(), WECHAT_CHECKOUT_ENABLED: z.enum(['true', 'false']).default('false'),
   LICENSE_CATALOG_FILE: z.string().min(1).optional(),
-  // The update spool shared with the root tblink-update-publish.path; unset leaves update publishing off.
-  UPDATE_RELEASE_DIRECTORY: z.string().min(1).optional(),
+  // Update publishing: this account's request directory, and the root publisher's directory it only reads
+  // (results and status). Both unset leaves update publishing off.
+  UPDATE_REQUEST_DIRECTORY: z.string().min(1).optional(), UPDATE_PUBLISHER_DIRECTORY: z.string().min(1).optional(),
   // 未设置时沿用生产网关和现有公网回调域名；沙箱联调须显式设为 sandbox。
   PAYMENT_ENVIRONMENT: paymentEnvironmentSchema.default('production'),
   PAYMENT_NOTIFY_ORIGIN: z.string().url().default('https://api.tuanbo-link.jinhefilm.com'),
   LICENSE_PROXY_MODE: z.enum(['none', 'loopback']).default('none'),
   LICENSE_HOST: z.string().default('127.0.0.1'), LICENSE_PORT: z.coerce.number().int().min(1).max(65535).default(8787)
 }).refine(value => Boolean(value.CONSOLE_ORIGIN) === Boolean(value.CONSOLE_KEY_FILE), '管理域名和认证密钥必须同时配置')
+  .refine(value => Boolean(value.UPDATE_REQUEST_DIRECTORY) === Boolean(value.UPDATE_PUBLISHER_DIRECTORY), '更新请求目录和发布助手目录必须同时配置')
   .refine(value => !value.CONSOLE_ORIGIN || new URL(value.CONSOLE_ORIGIN).protocol === 'https:' && new URL(value.CONSOLE_ORIGIN).origin === value.CONSOLE_ORIGIN, '管理地址必须为独立 HTTPS origin')
   .refine(value => new URL(value.PAYMENT_NOTIFY_ORIGIN).protocol === 'https:' && new URL(value.PAYMENT_NOTIFY_ORIGIN).origin === value.PAYMENT_NOTIFY_ORIGIN, '支付回调地址必须为 HTTPS origin，不含路径')
   .refine(value => value.PAYMENT_ENVIRONMENT === 'production' || value.WECHAT_APP_ID === undefined, '微信支付 APIv3 没有沙箱环境，沙箱联调时不能配置微信参数')

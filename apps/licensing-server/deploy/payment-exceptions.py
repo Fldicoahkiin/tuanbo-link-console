@@ -7,13 +7,36 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import sqlite3
+import stat
 import sys
 import time
 import urllib.error
 import urllib.request
 import uuid
+
+
+# The token file belongs to the licensing account, which owns its directory and could put a link there. An
+# operator running this with sudo must never read, and send on, another root-only file through such a link.
+TOKEN_OWNER = 'tblink-license'
+
+
+def read_token(path):
+    """The admin token, opened without following a link: a small regular file owned by the licensing account."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as error:
+        raise RuntimeError(f'Cannot open admin token file without following links: {error.strerror}') from None
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != pwd.getpwnam(TOKEN_OWNER).pw_uid or info.st_size > 4096:
+            raise RuntimeError(f'Admin token file must be a regular file owned by {TOKEN_OWNER}')
+        token = stream.read().decode().strip()
+    if len(token) < 32 or '\n' in token or '\r' in token:
+        raise RuntimeError('Invalid admin token file')
+    return token
 
 
 class AdminApiError(Exception):
@@ -219,10 +242,7 @@ def main():
         parser.error('--retry-order requires a reason of 1 to 500 characters')
     if args.reason and not args.retry_order:
         parser.error('--reason requires --retry-order')
-    token = args.token_file.read_text().strip()
-    if len(token) < 32 or '\n' in token or '\r' in token:
-        raise RuntimeError('Invalid admin token file')
-    request = api_client(token)
+    request = api_client(read_token(args.token_file))
     try:
         if args.recover_batch:
             result = recover_batch(request, args.state_file, time.time())

@@ -13,6 +13,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-# The request directory stays read-only for this service; results, status, the lock and receipts are written elsewhere.
-ReadOnlyPaths=/var/lib/tblink-licensing/update-release/update-requests
-ReadWritePaths=/srv/tblink-updates/windows/x64 /var/lib/tblink-licensing/update-release /var/lib/tblink-licensing/backups /var/lib/tblink-release/staging
+# Writes only the feed, root's own /var/lib/tblink-update-publish (results, status, lock, work copies), root's
+# backups (receipts, audit) and the staging entries it publishes or discards. The console's request directory
+# stays read-only. Each path is its own mount here: files move between them by copying, never by rename (EXDEV).
+ReadOnlyPaths=/var/lib/tblink-licensing/update-requests
+ReadWritePaths=/srv/tblink-updates/windows/x64 /var/lib/tblink-update-publish /var/backups/tblink /var/lib/tblink-release/staging

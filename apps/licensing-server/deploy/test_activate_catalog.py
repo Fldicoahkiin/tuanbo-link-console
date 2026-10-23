@@ -28,12 +28,17 @@ class CatalogActivationTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 module.sales_environment(raw)
 
-    def exercise(self, success):
+    def exercise(self, success, unsafe_backups=False):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             config = root / 'etc/tblink-licensing'
             config.mkdir(parents=True)
-            (root / 'var/lib/tblink-licensing/backups').mkdir(parents=True)
+            backups = root / module.BACKUPS
+            backups.mkdir(parents=True)
+            for path in [root / 'var', root / 'var/backups', backups]:
+                path.chmod(0o755)
+            if unsafe_backups:
+                (root / 'var/backups').chmod(0o777)
             environment = config / 'service.env'
             environment.write_bytes(ENV)
             os.chmod(environment, 0o600)
@@ -44,7 +49,16 @@ class CatalogActivationTest(unittest.TestCase):
             opened = {**CLOSED, 'available': True, 'offers': catalog['offers']}
             answers = [CLOSED, opened] if success else [CLOSED, {**opened, 'offers': []}, CLOSED]
             user = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
-            with patch.object(module.pwd, 'getpwnam', return_value=user), patch.object(module, 'restart') as restart, patch.object(module, 'read_catalog', side_effect=answers):
+            with patch.object(module.pwd, 'getpwnam', return_value=user), patch.object(module, 'restart') as restart, \
+                    patch.object(module, 'read_catalog', side_effect=answers), patch.object(module, 'ROOT_UID', os.getuid()):
+                if unsafe_backups:
+                    with self.assertRaisesRegex(RuntimeError, 'root-only'):
+                        module.activate(source, module.digest(source.read_bytes()), module.digest(ENV), root)
+                    restart.assert_not_called()
+                    self.assertEqual(environment.read_bytes(), ENV)
+                    self.assertFalse((config / 'catalog.json').exists())
+                    self.assertEqual(list(backups.iterdir()), [])
+                    return
                 if success:
                     result = module.activate(source, module.digest(source.read_bytes()), module.digest(ENV), root)
                     self.assertTrue(result['salesEnabled'])
@@ -57,7 +71,7 @@ class CatalogActivationTest(unittest.TestCase):
                     self.assertEqual(environment.read_bytes(), ENV)
                     self.assertFalse((config / 'catalog.json').exists())
                     self.assertEqual(restart.call_count, 2)
-            backup = next((root / 'var/lib/tblink-licensing/backups').iterdir())
+            backup = next(backups.iterdir())
             self.assertEqual((backup / 'previous-environment').read_bytes(), ENV)
             self.assertEqual(backup.stat().st_mode & 0o777, 0o700)
 
@@ -66,6 +80,9 @@ class CatalogActivationTest(unittest.TestCase):
 
     def test_failed_health_check_restores_closed_sales(self):
         self.exercise(False)
+
+    def test_refuses_to_start_when_the_backup_directory_is_not_root_only(self):
+        self.exercise(True, unsafe_backups=True)
 
     def test_wrong_catalog_digest_stops_before_reading_production(self):
         with patch.object(module, 'read_catalog') as health:

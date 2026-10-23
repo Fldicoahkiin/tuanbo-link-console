@@ -17,6 +17,12 @@ import urllib.error
 import urllib.request
 import uuid
 
+# Root's backups. Never inside a service account's directory: the licensing account owns
+# /var/lib/tblink-licensing and could swap anything there between backup and restore.
+BACKUPS = Path("/var/backups/tblink")
+TRUSTED = Path("/")
+ROOT_UID = 0
+
 
 def run(*args):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=30)
@@ -39,6 +45,22 @@ def database_snapshot(path):
             rows = db.execute(f"SELECT * FROM {quoted} ORDER BY rowid").fetchall()
             result[name] = {"count": len(rows), "digest": hashlib.sha256(repr(rows).encode()).hexdigest()}
         return result
+
+
+def backup_directory(name):
+    """A new directory for this run's backup; every directory from / down is root's and writable by no one else."""
+    current = TRUSTED
+    for part in ("", *BACKUPS.relative_to(TRUSTED).parts):
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            raise RuntimeError(f"Backup directory missing: {current}") from None
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != ROOT_UID or info.st_mode & 0o022:
+            raise RuntimeError(f"Backup directory must be root-only: {current}")
+    backup = BACKUPS / name
+    backup.mkdir(mode=0o700)
+    return backup
 
 
 def atomic_copy(source, target, mode, owner=None):
@@ -174,8 +196,7 @@ def main():
     if digest(artifact) != expected_archive or digest(bundle) != expected_old or digest(nginx) != expected_nginx or digest(environment) != expected_environment:
         raise RuntimeError("Artifact or production state changed; inspect before retrying")
     os.umask(0o077)
-    backup = Path("/var/lib/tblink-licensing/backups") / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    backup.mkdir(mode=0o700, parents=True, exist_ok=False)
+    backup = backup_directory(time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
     with tarfile.open(artifact) as tar:
         if sorted(tar.getnames()) != ["dist/index.js", "nginx.next.conf", "nginx.previous.conf", "revision.txt"]:
             raise RuntimeError("Unexpected release members")
@@ -205,6 +226,10 @@ def main():
     shutil.copyfile(bundle, backup / "previous.js")
     shutil.copyfile(nginx, backup / "previous-nginx.conf")
     shutil.copyfile(environment, backup / "previous-environment")
+    # What a rollback restores must be exactly what was checked at the start.
+    previous_files = {"previous.js": expected_old, "previous-nginx.conf": expected_nginx, "previous-environment": expected_environment}
+    if any(digest(backup / name) != value for name, value in previous_files.items()):
+        raise RuntimeError("Production files changed after the release check")
     services = ["jinhe-storyboard.service", "wuyou-dispatch.service", "nginx.service"]
     for name in services:
         run("systemctl", "is-active", name)
@@ -254,6 +279,8 @@ def main():
         activated = True
     finally:
         if not activated:
+            if any(digest(backup / name) != value for name, value in previous_files.items()):
+                raise RuntimeError(f"Backup in {backup} differs from the files checked at activation start; restore by hand")
             # Only additive migrations are supported; never discard committed database writes.
             run("systemctl", "stop", "tblink-licensing.service")
             atomic_copy(backup / "previous.js", bundle, 0o644)
