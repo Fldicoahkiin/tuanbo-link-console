@@ -61,7 +61,7 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
   }
   const can = (action: ConsoleAction['action']) => permissions[action].includes(session.user.role);
   const open = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => setDialog({ action, row });
-  const actionButton = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => can(action) ? <button className={destructiveActions[action] ? 'danger-button' : ['set-expiry', 'create-order', 'grant', 'create-user'].includes(action) ? 'primary' : undefined} key={action} onClick={() => open(action, row)}>{forms[action].title}</button> : null;
+  const actionButton = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => can(action) ? <button className={destructiveActions.has(action) ? 'danger-button' : ['set-expiry', 'create-order', 'grant', 'create-user'].includes(action) ? 'primary' : undefined} key={action} onClick={() => open(action, row)}>{forms[action].title}</button> : null;
   async function logout() { setBusy(true); try { await api('logout', messageSchema, {}, session.csrf); signedOut(); } catch (error) { setError(errorMessage(error)); } finally { setBusy(false); } }
   function search(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const value = new FormData(event.currentTarget); const field = (name: string) => { const entry = value.get(name); return typeof entry === 'string' ? entry : ''; }; setFilters(previous => ({ ...previous, [route]: { q: field('q'), state: field('state'), channel: field('channel'), from: field('from'), to: field('to') } })); setPage(1); setRefresh(value => value + 1); }
   const title = navigation.find(item => item.key === route)?.title ?? '运营后台';
@@ -106,7 +106,7 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
       </>}
     </main>
     {stepUpOpen && <StepUpDialog csrf={session.csrf} close={() => setStepUpOpen(false)} onVerified={() => { setStepUpOpen(false); reloadSession(); }} />}
-    {dialog && <ActionDialog key={`${dialog.action}:${String(dialog.row?.id ?? '')}`} action={dialog.action} row={dialog.row} csrf={session.csrf} close={() => setDialog(null)} changed={() => setRefresh(value => value + 1)} />}
+    {dialog && <ActionDialog key={`${dialog.action}:${String(dialog.row?.id ?? '')}`} action={dialog.action} row={dialog.row} csrf={session.csrf} verifiedAt={session.verifiedAt} clockOffset={clockOffset} syncSession={reloadSession} close={() => setDialog(null)} changed={() => setRefresh(value => value + 1)} />}
   </div>;
 }
 function App() {

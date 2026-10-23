@@ -92,6 +92,12 @@ button.task-row { display: flex; width: 100%; text-align: left; padding: 17px 0;
 
 .payment-link img { display: block; margin: 4px auto 16px; }.payment-link .actions { justify-content: center; }
 @media(max-width:700px) { td.row-open { width: auto; justify-content: flex-end; padding-top: 0; } }
+.dialog-subject { margin: 4px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }.dialog-note { margin: -4px 0 18px; color: #515867; font-size: 13px; }
+.money-input { position: relative; display: block; margin-top: 7px; }.money-input input { margin-top: 0; padding-right: 36px; }.money-input>span { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); font-weight: 400; }
+label.has-error input, label.has-error select, label.has-error textarea { border-color: #d98a96; }label .field-error { display: block; margin: 6px 0 0; font-weight: 400; }
+label select + input { margin-top: 8px; }
+.action-dialog .danger-confirm { margin-top: 12px; width: 100%; }.step-up > .text-button { margin-top: 0; padding-top: 0; }
+.dialog-result .secret { margin-top: 4px; }.dialog-result .primary { margin-top: 16px; }
 .otp-field { display: grid; gap: 8px; margin-bottom: 14px; }.otp-field label { margin-bottom: 0; }.otp-field .text-button { justify-self: start; margin-top: 0; padding: 4px 0; min-height: 0; font-size: 12px; }
 input.otp { width: 12ch; font-size: 22px; letter-spacing: .45em; text-align: center; font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding-left: .45em; }
 .shake { animation: shake .32s ease-in-out; border-color: #bb3041; }
