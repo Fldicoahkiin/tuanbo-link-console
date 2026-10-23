@@ -11,11 +11,12 @@ function fixture() {
     mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: 1, analysis: null };
   const identity = { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId };
   const ports = { prepare: vi.fn<() => Promise<void>>(() => Promise.resolve()), send: vi.fn<() => Promise<void>>(() => Promise.resolve()), close: vi.fn<() => Promise<void>>(() => Promise.resolve()) };
-  const states: NativeMidiChannelState[] = [], errors: string[] = [];
+  const states: NativeMidiChannelState[] = [], errors: string[] = [], faults: [string, string][] = [];
   const host = new NativeMidiHost({ audio: () => audio, profile: () => null, executable: 'unused', now: () => 1000,
-    authorize: () => Promise.resolve(), ports: () => ports, changed: state => states.push(state), error: message => errors.push(message) });
+    authorize: () => Promise.resolve(), ports: () => ports, changed: state => states.push(state), error: message => errors.push(message),
+    fault: (message, itemId) => faults.push([message, itemId]) });
   const observe = (patch: Partial<NativePlayerStatus>, qpc: string | null = '10000000') => { audio = { ...audio, ...patch }; host.observe(audio, qpc); };
-  return { project, host, identity, ports, states, errors, observe, audio: () => audio };
+  return { project, host, identity, ports, states, errors, faults, observe, audio: () => audio };
 }
 
 it('仅实际设备时钟开始通用 MIDI，音频原始偏移不重复加到歌曲 Cue', async () => {
@@ -59,4 +60,12 @@ it('新音频会话替换及停止使旧 MIDI 队列失效，不依赖界面转�
   const f = fixture(); await f.host.prepare(f.project, f.identity);
   f.observe({ sessionId: 'new', status: 'preparing' }); await f.host.stop();
   expect(f.ports.close).toHaveBeenCalledOnce(); expect(f.ports.send).not.toHaveBeenCalled();
+});
+
+it('主进程卡顿后迟到的设备位置：错过的动作标红记录，通道继续运行', async () => {
+  const f = fixture(); await f.host.prepare(f.project, f.identity);
+  f.observe({ status: 'playing', generation: 2, positionMs: 20 }, '8000000');
+  expect(f.faults).toEqual([['播放位置更新中断，错过 1 个 MIDI 动作，未补发', 'song']]);
+  expect(f.ports.send).not.toHaveBeenCalled(); expect(f.errors).toEqual([]); expect(f.host.status?.state).toBe('running');
+  await f.host.stop();
 });
