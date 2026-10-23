@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
-import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
-import { closeDiscarding } from './save-questions';
+import { musicStructureSegments } from '@tb/core/link';
+import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type MusicStructure } from '@tb/schema';
+import { closeDiscarding, savedValue } from './save-questions';
 
 async function openProject(app: ElectronApplication, file: string, first: boolean) {
   const page = await app.firstWindow();
@@ -11,10 +12,18 @@ async function openProject(app: ElectronApplication, file: string, first: boolea
   if (!first) { await page.getByRole('button', { name: '节目单', exact: true }).click(); await page.getByLabel('工程菜单', { exact: true }).click(); }
   await page.getByRole('button', { name: '打开工程', exact: true }).click();
   await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
+  // The workbench timeline appears once the project has loaded; a Ctrl+S before that has no document to save.
+  await expect(page.getByRole('button', { name: '音乐分析', exact: true })).toBeVisible();
   return page;
 }
 
-for (const device of ['cuda', 'cpu'] as const) test(`自动识别 ${device}：静音自动保存、清除、重新分析`, async ({}, info) => {
+/** The BPM heading shows the segment under the playhead, estimated from that segment's beats; the playhead is at 0 here. */
+function headingAtStart(analysis: MusicStructure): string {
+  const segment = musicStructureSegments(analysis)[0]!;
+  return segment.bpm === null ? '无可测 BPM' : `约 ${segment.bpm}${segment.endBpm === null ? '' : ` → ${segment.endBpm}`} BPM`;
+}
+
+for (const device of ['cuda', 'cpu'] as const) test(`自动识别 ${device}：静音识别并保存、清除、重新分析`, async ({}, info) => {
   const wav = Buffer.alloc(44 + 48000 * 3 * 2);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(96000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   await writeFile(info.outputPath('静音.wav'), wav);
@@ -25,8 +34,9 @@ for (const device of ['cuda', 'cpu'] as const) test(`自动识别 ${device}：�
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   try {
     const page = await openProject(app, file, true);
-    // No Analyze/Apply/Save click: import-to-workspace starts analysis and persists its result.
-    await expect.poll(async () => (await saved()).musicAnalysis?.state, { timeout: 45000 }).toBe('ready');
+    const savedAnalysis = () => savedValue(page, async () => (await saved()).musicAnalysis);
+    // No Analyze/Apply click: opening the workbench starts analysis; its result is a document edit written by the next save.
+    await expect.poll(async () => (await savedAnalysis())?.state, { timeout: 45000 }).toBe('ready');
     expect((await saved()).musicAnalysis).toMatchObject({ bpm: null, beats: [], segments: [] });
     await page.getByRole('button', { name: '音乐分析', exact: true }).click();
     const panel = page.locator('.music-analysis-panel');
@@ -37,7 +47,7 @@ for (const device of ['cuda', 'cpu'] as const) test(`自动识别 ${device}：�
     await expect.poll(async () => (await page.evaluate(() => window.tbLink.getAutomaticMusicStatus())).jobs.at(-1)?.state, { timeout: 30000 }).toBe('completed');
     expect((await page.evaluate(() => window.tbLink.getAutomaticMusicStatus())).jobs.at(-1)?.device).toBe(device);
     await panel.getByRole('button', { name: '清除标记', exact: true }).click();
-    await expect.poll(async () => (await saved()).musicAnalysis?.state).toBe('cleared');
+    await expect.poll(async () => (await savedAnalysis())?.state).toBe('cleared');
     await openProject(app, file, false);
     expect((await page.evaluate(() => window.tbLink.getAutomaticMusicStatus())).jobs).toHaveLength(2);
     expect((await saved()).tracks).toEqual(lighting.tracks);
@@ -59,9 +69,10 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
   let app = await launch(); const errors: string[] = [];
   try {
     let page = await openProject(app, file, true); page.on('pageerror', error => errors.push(error.message));
+    const savedAnalysis = () => savedValue(page, async () => (await saved()).musicAnalysis);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole('button', { name: '适合节目时长', exact: true }).click();
-    await expect.poll(async () => (await saved()).musicAnalysis?.state, { timeout: 90000 }).toBe('ready');
+    await expect.poll(async () => (await savedAnalysis())?.state, { timeout: 90000 }).toBe('ready');
     const original = (await saved()).musicAnalysis!;
     expect(original.bpm).toBeGreaterThan(60); expect(original.bpm).toBeLessThan(240);
     expect(original.beats.length).toBeGreaterThan(30); expect(original.segments.length).toBeGreaterThanOrEqual(2);
@@ -73,24 +84,24 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
     expect(backup.rundown[0]?.lighting).toEqual(lighting);
     await page.getByRole('button', { name: '音乐分析', exact: true }).click();
     let panel = page.locator('.music-analysis-panel');
-    await expect(panel.locator('.music-bpm')).toHaveText(`${original.bpm} BPM`);
+    await expect(panel.locator('.music-bpm')).toHaveText(headingAtStart(original));
     await expect(panel.getByLabel('节拍分段间隔')).toHaveCount(0);
     await expect(panel.getByRole('button', { name: /应用选中|保存标记/ })).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('automatic-structure.png') });
     await page.locator('.music-tempo-segment').first().click();
     await panel.getByLabel('段落名称').fill('核对段落');
     await panel.getByRole('button', { name: '保存修改', exact: true }).click();
-    await expect.poll(async () => (await saved()).musicAnalysis?.segments[0]?.name).toBe('核对段落');
+    await expect.poll(async () => (await savedAnalysis())?.segments[0]?.name).toBe('核对段落');
     await page.locator('.music-detected-beat').nth(4).click({ button: 'right' });
     await page.getByRole('button', { name: '删除拍点', exact: true }).click();
-    await expect.poll(async () => (await saved()).musicAnalysis?.beats.length).toBe(original.beats.length - 1);
+    await expect.poll(async () => (await savedAnalysis())?.beats.length).toBe(original.beats.length - 1);
     await page.locator('.music-tempo-segment').last().click({ button: 'right' });
     await page.locator('.music-beat-context').getByRole('button', { name: '删除此段', exact: true }).click();
-    await expect.poll(async () => (await saved()).musicAnalysis?.segments.length).toBe(original.segments.length - 1);
+    await expect.poll(async () => (await savedAnalysis())?.segments.length).toBe(original.segments.length - 1);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
-    await expect.poll(async () => (await saved()).musicAnalysis?.segments.length).toBe(original.segments.length);
+    await expect.poll(async () => (await savedAnalysis())?.segments.length).toBe(original.segments.length);
     await panel.getByRole('button', { name: '重新分析', exact: true }).click();
-    await expect.poll(async () => (await saved()).musicAnalysis?.taskId, { timeout: 60000 }).not.toBe(original.taskId);
+    await expect.poll(async () => (await savedAnalysis())?.taskId, { timeout: 60000 }).not.toBe(original.taskId);
     expect((await saved()).musicAnalysis?.segments[0]?.name).toBe('核对段落');
     expect((await saved()).musicAnalysis?.beats.length).toBe(original.beats.length - 1);
     await page.setViewportSize({ width: 1060, height: 720 });
@@ -101,21 +112,22 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
     // evidence on reopening, without rerunning models or rewriting user edits.
     const oldProject = parseLinkProject(JSON.parse(await readFile(file, 'utf8')));
     const oldAnalysis = oldProject.rundown[0]!.lighting!.musicAnalysis!;
+    const reopenedHeading = headingAtStart(oldAnalysis);
     oldAnalysis.segments.forEach(segment => { segment.bpm = null; segment.endBpm = null; });
     await writeFile(file, JSON.stringify(oldProject));
     app = await launch(); page = await openProject(app, file, true);
-    await expect(page.locator('.music-analysis-button .music-bpm')).toHaveText(`${original.bpm} BPM`);
+    await expect(page.locator('.music-analysis-button .music-bpm')).toHaveText(reopenedHeading);
     expect((await page.evaluate(() => window.tbLink.getAutomaticMusicStatus())).jobs).toHaveLength(0);
     await page.getByRole('button', { name: '音乐分析', exact: true }).click(); panel = page.locator('.music-analysis-panel');
     await expect(panel.getByText('速度待核对', { exact: true })).toHaveCount(0);
     await expect(panel.locator('.music-recognized-sections strong')).toHaveCount(oldAnalysis.segments.length);
     await panel.getByRole('button', { name: '清除标记', exact: true }).click();
-    await expect.poll(async () => (await saved()).musicAnalysis?.state).toBe('cleared');
+    await expect.poll(async () => (await savedAnalysis())?.state).toBe('cleared');
     await expect(page.locator('.music-tempo-segment')).toHaveCount(0);
     await expect(page.locator('.music-detected-beat')).toHaveCount(0);
-    await expect(panel.locator('.music-bpm')).toHaveText(`${original.bpm} BPM`);
+    await expect(panel.locator('.music-bpm')).toHaveText('标记已清除');
     await page.getByRole('button', { name: '撤销', exact: true }).click();
-    await expect.poll(async () => (await saved()).musicAnalysis?.state).toBe('ready');
+    await expect.poll(async () => (await savedAnalysis())?.state).toBe('ready');
     await writeFile(info.outputPath('report.json'), JSON.stringify({ bpm: original.bpm, beatsPerBar: original.beatsPerBar, beats: original.beats.length, segments: original.segments, errors }, null, 2));
     expect(errors).toEqual([]);
   } finally { await closeDiscarding(app); }
