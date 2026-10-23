@@ -21,9 +21,18 @@ export function ma2UnboundTracks(project: LinkProject | null): Array<{ itemId: s
   }) ?? [];
 }
 
-/** Derived from the persisted baseline, so undo, redo and reopening need no second queue. */
-export function ma2PendingChanges(project: LinkProject | null): Ma2PendingChange[] {
-  return project?.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).flatMap((binding): Ma2PendingChange[] => {
+const computed = new WeakMap<LinkProject, readonly Ma2PendingChange[]>();
+
+/**
+ * Derived from the persisted baseline, so undo, redo and reopening need no second queue. Kept per
+ * project snapshot: commands produce a new project, so one snapshot always gives the same answer
+ * and asking once per song costs one pass over the project.
+ */
+export function ma2PendingChanges(project: LinkProject | null): readonly Ma2PendingChange[] {
+  if (!project) return [];
+  const known = computed.get(project);
+  if (known) return known;
+  const result = project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).flatMap((binding): Ma2PendingChange[] => {
     if (!item.lighting) return [];
     const entry = { itemId: item.id, title: item.title, bindingId: binding.id, target: binding.timecode };
     if (binding.nativeEvents?.length || binding.playback === 'native-timecode') {
@@ -41,5 +50,7 @@ export function ma2PendingChanges(project: LinkProject | null): Ma2PendingChange
       });
       return changes.length ? [{ ...entry, changes, error: null }] : [];
     } catch (error) { return [{ ...entry, changes: [], error: error instanceof Error ? error.message : String(error) }]; }
-  })) ?? [];
+  }));
+  computed.set(project, result);
+  return result;
 }
