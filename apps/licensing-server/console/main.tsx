@@ -7,7 +7,8 @@ import { api, ApiError, errorMessage, messageSchema } from './api';
 import { RevenueTrend } from './revenue-trend';
 import { AuthView } from './auth-view';
 import { ActionDialog } from './action-dialog';
-import { actionNames, beijingTime, destructiveActions, display, forms, labels, roleNames } from './forms';
+import { actionNames, beijingTime, destructiveActions, display, forms, roleNames } from './forms';
+import { DataTable, Fields, detailRow } from './table';
 
 type Session = z.infer<typeof sessionSchema>;
 type Page = z.infer<typeof pageSchema>;
@@ -18,26 +19,16 @@ const navigation = [
   { key: 'tickets', title: '售后工单', icon: MessagesSquare }, { key: 'finance', title: '财务记录', icon: Receipt },
   { key: 'audit', title: '操作日志', icon: History }, { key: 'users', title: '人员管理', icon: Users }, { key: 'security', title: '安全设置', icon: ShieldCheck }
 ];
-const columns: Record<string, string[]> = { orders: ['reference', 'customer', 'channel', 'amountFen', 'paymentStatus', 'state', 'created'], exceptions: ['reference', 'customer', 'channel', 'amountFen', 'state', 'deliveryError', 'channelRefundFen', 'reviewedRefundFen'], licenses: ['customer', 'id', 'source', 'bound', 'revoked', 'useUntil'], tickets: ['orderReference', 'category', 'state', 'note', 'created'], finance: ['orderId', 'category', 'amountFen', 'reference', 'state', 'created'], audit: ['at', 'operator', 'action', 'targetLabel', 'result', 'reason'], users: ['username', 'role', 'enabled', 'enrolled'] };
+const columns: Record<string, string[]> = { orders: ['reference', 'customer', 'channel', 'amountFen', 'paymentStatus', 'state', 'created'], exceptions: ['reference', 'customer', 'channel', 'amountFen', 'state', 'deliveryError', 'channelRefundFen', 'reviewedRefundFen'], licenses: ['customer', 'status', 'source', 'useUntil', 'machineCode'], tickets: ['orderReference', 'category', 'state', 'note', 'created'], finance: ['orderId', 'category', 'amountFen', 'reference', 'state', 'created'], audit: ['at', 'operator', 'action', 'targetLabel', 'result', 'reason'], users: ['username', 'role', 'status'] };
 const stateFilters: Record<string, { label: string; options: [string, string][] }> = {
   orders: { label: '状态', options: [['pending', '待付款'], ['paid', '已收款待交付'], ['fulfilled', '已交付'], ['refunded', '已全额退款'], ['closed', '已关闭'], ['expired', '已过期']] },
-  licenses: { label: '状态', options: [['bound', '已绑定'], ['unbound', '未绑定'], ['revoked', '已撤销'], ['expiring', '七日内到期']] },
+  licenses: { label: '状态', options: [['active', '生效中'], ['unbound', '未激活'], ['expiring', '即将到期'], ['expired', '已过期'], ['revoked', '已撤销']] },
   tickets: { label: '状态', options: [['active', '未关闭'], ['open', '待处理'], ['processing', '处理中'], ['closed', '已关闭']] },
   finance: { label: '类别', options: [['refund', '退款'], ['invoice', '开票']] },
   audit: { label: '操作', options: Object.entries(actionNames) }
 };
 type Filter = { q: string; state: string; channel: string; from: string; to: string };
 const emptyFilter: Filter = { q: '', state: '', channel: '', from: '', to: '' };
-// 详情页不显示未发生的事项（无退款、无工单、无错误、未绑定），编号放最后。
-const optionalFields = new Set(['deliveryError', 'openTickets', 'refundedFen', 'channelRefundFen', 'reviewedRefundFen', 'paymentReference', 'receivedAt', 'machineCode', 'leaseUntil', 'lastIssuedAt', 'license_id', 'conclusion']);
-function detailRow(row: ConsoleRow): ConsoleRow {
-  const { id, ...rest } = row;
-  return { ...Object.fromEntries(Object.entries(rest).filter(([key, value]) => !optionalFields.has(key) || value !== null && value !== 0 && value !== '')), ...(id === undefined ? {} : { id }) };
-}
-function DataTable({ rows, fields, select, canSelect }: { rows: ConsoleRow[]; fields: string[]; select?: (row: ConsoleRow) => void; canSelect?: (row: ConsoleRow) => boolean }) {
-  return <div className="table-wrap"><table><thead><tr>{fields.map(key => <th key={key}>{labels[key] ?? key}</th>)}{select && <th>操作</th>}</tr></thead><tbody>{rows.map((row, index) => <tr key={String(row.id ?? index)}>{fields.map(key => <td key={key} data-label={labels[key] ?? key}><span className={['state', 'paymentStatus', 'revoked', 'bound'].includes(key) ? `status-badge status-${String(row[key])}` : undefined}>{display(key, row[key] ?? null)}</span></td>)}{select && <td data-label="操作">{(canSelect?.(row) ?? true) && <button onClick={() => select(row)}>查看详情</button>}</td>}</tr>)}</tbody></table></div>;
-}
-function Fields({ row }: { row: ConsoleRow }) { return <dl className="details">{Object.entries(row).map(([key, value]) => <div key={key}><dt>{labels[key] ?? key}</dt><dd>{display(key, value)}</dd></div>)}</dl>; }
 function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () => void }) {
   const [session, setSession] = useState(initial); const [route, setRoute] = useState('overview');
   const [filters, setFilters] = useState<Record<string, Filter>>({});
@@ -60,7 +51,8 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
   }, [route, selected, resource, query, signedOut]);
   useEffect(() => { const tracker = sequence; void load(); return () => { tracker.current++; }; }, [load, refresh]);
   function navigate(key: string, preset?: Partial<Filter>) {
-    setRoute(key); setSelected(null); setDetail(null); setData(null); setOverview(null); setError(''); setPage(1);
+    // 同页再次点击也要重新加载：清空数据后靠 refresh 触发 load。
+    setRoute(key); setSelected(null); setDetail(null); setData(null); setOverview(null); setError(''); setPage(1); setRefresh(value => value + 1);
     if (preset) setFilters(previous => ({ ...previous, [key]: { ...emptyFilter, ...preset } }));
   }
   const can = (action: ConsoleAction['action']) => permissions[action].includes(session.user.role);
@@ -96,13 +88,13 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
       {route === 'security' && <section className="panel security"><h2>二次验证</h2><p className="muted">敏感操作需在 5 分钟内完成过验证。每枚验证码只能用一次。</p><form onSubmit={event => { void verify(event); }}><label>验证器验证码或恢复码<input name="code" required autoComplete="one-time-code" /></label><button className="primary" disabled={busy}>验证</button></form><p>最近验证：{beijingTime(session.verifiedAt)}</p><p className="muted">修改密码或更换验证器：由另一名管理员执行“重置人员认证”后重新开通。</p></section>}
       {!['overview', 'security'].includes(route) && <>
         {selected ? <><button className="back" onClick={() => { setSelected(null); setDetail(null); }}><ArrowLeft size={16} />返回列表</button>
-          {route === 'users' ? <section className="panel"><Fields row={detailRow(selected)} /><div className="actions">{actionButton('update-user', selected)}{actionButton('reset-user', selected)}</div></section> : detail && <>
+          {route === 'users' ? <section className="panel"><h2>人员详情</h2><Fields row={detailRow(selected)} /><div className="actions">{actionButton('update-user', selected)}{actionButton('reset-user', selected)}</div></section> : detail && <>
             <section className="panel"><h2>{resource === 'licenses' ? '授权详情' : resource === 'tickets' ? '工单详情' : '订单详情'}</h2><Fields row={detailRow(detail.item)} /><div className="actions">
               {resource === 'orders' && <>{detail.item.state === 'pending' && detail.item.channel === 'manual' && actionButton('fulfill', detail.item)}{detail.item.state === 'pending' && detail.item.paymentStatus === 'pending' && ['manual', 'alipay'].includes(String(detail.item.channel)) && actionButton('payment-link', detail.item)}{detail.item.state === 'pending' && detail.item.paymentStatus === 'pending' && detail.item.channel === 'manual' && actionButton('close-order', detail.item)}{['alipay', 'wechat'].includes(String(detail.item.channel)) && actionButton('reconcile', detail.item)}{detail.item.paymentStatus === 'confirmed' && ['pending', 'paid'].includes(String(detail.item.state)) && actionButton('retry-delivery', detail.item)}{actionButton('delivery-access', detail.item)}{actionButton('revoke-delivery-access', detail.item)}{actionButton('create-ticket', detail.item)}{detail.item.paymentStatus === 'confirmed' && actionButton('refund', detail.item)}{detail.item.channel === 'alipay' && detail.item.paymentStatus === 'confirmed' && detail.item.state !== 'refunded' && actionButton('alipay-refund', detail.item)}{Number(detail.item.channelRefundFen) > Number(detail.item.reviewedRefundFen) && actionButton('refund-review', detail.item)}{actionButton('invoice', detail.item)}</>}
-              {resource === 'licenses' && <>{actionButton('reveal', detail.item)}{!detail.item.revoked && actionButton('set-expiry', detail.item)}{!detail.item.revoked && actionButton('revoke', detail.item)}{detail.item.revoked && actionButton('migrate', detail.item)}</>}
+              {resource === 'licenses' && <>{actionButton('reveal', detail.item)}{detail.item.status !== 'revoked' && actionButton('set-expiry', detail.item)}{detail.item.status !== 'revoked' && actionButton('revoke', detail.item)}{detail.item.status === 'revoked' && actionButton('migrate', detail.item)}</>}
               {resource === 'tickets' && detail.item.state !== 'closed' && actionButton('update-ticket', detail.item)}
             </div></section>
-            {detail.related.length > 0 && <section className="panel"><h2>{resource === 'orders' ? '关联授权' : resource === 'licenses' ? '续费记录' : '关联订单'}</h2><DataTable rows={detail.related} fields={resource === 'orders' ? ['id', 'customer', 'bound', 'revoked', 'useUntil'] : resource === 'licenses' ? ['id', 'useUntil', 'updatesUntil'] : ['reference', 'customer', 'state']} select={row => { setRoute(resource === 'orders' ? 'licenses' : 'orders'); setSelected(row); setDetail(null); }} /></section>}
+            {detail.related.length > 0 && <section className="panel"><h2>{resource === 'orders' ? '关联授权' : resource === 'licenses' ? '续费记录' : '关联订单'}</h2><DataTable rows={detail.related} fields={resource === 'orders' ? ['customer', 'status', 'useUntil', 'machineCode'] : resource === 'licenses' ? ['id', 'useUntil', 'updatesUntil'] : ['reference', 'customer', 'state']} select={row => { setRoute(resource === 'orders' ? 'licenses' : 'orders'); setSelected(row); setDetail(null); }} /></section>}
             {detail.history.length > 0 && <section className="panel"><h2>操作记录</h2><DataTable rows={detail.history} fields={['at', 'operator', 'action', 'reason', 'result']} /></section>}
           </>}
         </> : <><div className="actions">{route === 'orders' && actionButton('create-order')}{route === 'licenses' && actionButton('grant')}{route === 'users' && actionButton('create-user')}{['orders', 'finance'].includes(route) && ['owner', 'finance'].includes(session.user.role) && <a className="button" href={`/console-api/export${route === 'finance' ? '/finance' : ''}?${query}`} download><Download size={16} />导出筛选结果</a>}</div>
