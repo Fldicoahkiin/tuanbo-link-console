@@ -20,6 +20,7 @@ export function songLightingStatus(project: LinkProject, itemId: string): SongLi
   if (!item) throw new Error(`节目单中没有 ${itemId}`);
   const own = item.lighting?.consoleSong;
   if (item.lighting && own?.timecode) return ownShowStatus(item, item.lighting, own, own.timecode);
+  if (own && !own.executor) return { state: 'attention', reasons: ['本曲控台序列只放在 Layout 页面上，没有执行器位置，不能建时间码节目'] };
   const pairings = Object.entries(project.ma2ReadState?.pairings ?? {}).filter(([, pairing]) => pairing.itemId === itemId);
   const bindings = item.lighting?.ma2Bindings ?? [];
   if (!pairings.length && !bindings.length) return { state: 'unmatched' };
