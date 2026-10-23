@@ -6,7 +6,7 @@ import { convertMa2Snapshot, convertMa2Timecode } from '../../../../main/link/ma
 import { compareMa2LightingReadback } from '../../../../main/link/ma2-comparison';
 import { Ma2ApplyService } from '../../../../main/link/ma2-apply-service';
 import { Ma2AutoSync, type Ma2AutoSyncDependencies } from './ma2-auto-sync';
-import { ma2PendingChanges, ma2UnboundTracks } from './ma2-pending-changes';
+import { ma2PendingChanges, ma2UnboundTracks } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { lightingEditHandler } from '../components/lighting-edit-handler';
 

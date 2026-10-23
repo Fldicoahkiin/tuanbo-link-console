@@ -1,4 +1,5 @@
-import { ma2AutoBindEvents, snapshotMa2LightingBinding } from '@tb/core/link';
+import { ma2AutoBindEvents } from './ma2-auto-bind';
+import { snapshotMa2LightingBinding } from './ma2-lighting-snapshot';
 import type { LinkProject, Ma2SyncObject } from '@tb/schema';
 
 export type Ma2PendingChange = {
