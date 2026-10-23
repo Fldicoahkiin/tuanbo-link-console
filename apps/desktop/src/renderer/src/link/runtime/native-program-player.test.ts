@@ -175,6 +175,19 @@ it('选择节目提前预备画面且不出声；重复选择不重做，播放�
   await f.player.dispose();
 });
 
+it('同一首歌开始播放后，被拒绝的预选画面预备不提示失败；播放前被拒绝仍提示', async () => {
+  const f = fixture(); f.project.obsOutputMode = 'scenes';
+  let refuse: (error: Error) => void = () => undefined;
+  f.api.preloadNativeObs.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
+  f.player.preloadSelected('song-0'); await f.player.play('song-0');
+  refuse(new Error('播放或画面会话活动时不能预备另一个节目')); await Promise.resolve(); await Promise.resolve();
+  expect(f.state().notice ?? '').not.toContain('节目画面预备未完成');
+  await f.player.stop();
+  f.api.preloadNativeObs.mockRejectedValueOnce(new Error('素材不可读')); f.player.preloadSelected('song-1');
+  await vi.waitFor(() => expect(f.state().notice).toContain('节目画面预备未完成：素材不可读'));
+  await f.player.dispose();
+});
+
 it('播放另一首时后台丢弃预选节目的画面预备，这是正常切换，不提示“节目画面预备未完成”', async () => {
   const f = fixture(); f.project.obsOutputMode = 'scenes';
   let cancel: (error: Error) => void = () => { throw new Error('预备未开始'); };

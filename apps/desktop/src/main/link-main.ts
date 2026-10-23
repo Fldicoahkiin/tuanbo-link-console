@@ -498,7 +498,7 @@ function registerIpc(
   const obsPreload = new NativeObsPreloadPool({
     authorize: async request => {
       await authorizeProduct('link:native-obs-prepare', request);
-      if (nativePlaybackActive() || nativeObs?.status && !['stopped', 'failed'].includes(nativeObs.status.state)) throw new Error('播放或画面会话活动时不能预备另一个节目');
+      if (nativePlaybackActive() || nativeObs?.busy) throw new Error('播放或画面会话活动时不能预备另一个节目');
       await nativeObs?.stop();
       if (nativePlaybackActive()) throw new Error('音频已开始准备，不能另行启动节目预备');
     },

@@ -24,6 +24,7 @@ export class NativeObsHost {
   private stopped: Promise<void> = Promise.resolve();
   private displayed: NativeObsStatus | null = null;
   private displayedAt = -Infinity;
+  private preparing = 0;
   constructor(private readonly dependencies: Dependencies) {}
   get status(): NativeObsStatus | null { return this.entry?.state ?? null; }
 
@@ -86,6 +87,14 @@ export class NativeObsHost {
     }
     this.assertAdmission(request);
     this.requested = request;
+    this.preparing++;
+    try { return await this.prepareSession(request); } finally { this.preparing--; }
+  }
+
+  /** A program picture is being prepared or is on air; a preselection must not stop it. */
+  get busy(): boolean { return this.preparing > 0 || Boolean(this.entry && !['stopped', 'failed'].includes(this.entry.state.state)); }
+
+  private async prepareSession(request: NativeObsPrepare): Promise<NativeObsStatus> {
     const epoch = ++this.epoch;
     const previous = this.entry;
     if (previous) {

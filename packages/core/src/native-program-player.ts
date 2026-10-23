@@ -74,7 +74,8 @@ export class NativeProgramPlayer {
       const selection = { request, itemId }; this.selectedPreload = selection;
       void this.api.preloadNativeObs({ ...request, projectPath: this.projectPath, positionMs: prepared.snapshot.positionMs,
         preciseSeeking: this.dependencies.preciseSeeking?.() ?? false, snapshot: createObsProgramSnapshot(this.project, itemId, this.revision) })
-        .catch(error => { if (!this.disposed && this.selectedPreload === selection) this.reportUnavailable(`节目画面预备未完成：${toUserErrorMessage(error)}`); });
+        // Once the song is being played it prepares its own picture; a preselection refused meanwhile is not a failure.
+        .catch(error => { if (!this.disposed && this.selectedPreload === selection && !['preparing', 'playing', 'paused'].includes(this.state.status)) this.reportUnavailable(`节目画面预备未完成：${toUserErrorMessage(error)}`); });
     } catch (error) { this.reportUnavailable(`节目画面无法预备：${toUserErrorMessage(error)}`); }
   }
   private async cancelPreload(): Promise<void> {

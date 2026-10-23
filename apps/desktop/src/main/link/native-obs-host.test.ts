@@ -249,3 +249,12 @@ it('新准备等待上一轮清理时也可取消，不能因尚未创建新 Ent
   release(); await preparing; await stopping;
   expect(test.host.status?.state).toBe('stopped'); expect(test.execute).not.toHaveBeenCalled();
 });
+
+it('正式画面准备一开始就算忙，选中歌曲的预备不能停掉它；停止后空闲', async () => {
+  const test = setup();
+  expect(test.host.busy).toBe(false);
+  const preparing = test.host.prepare(test.request);
+  expect(test.host.busy).toBe(true);
+  await preparing; expect(test.host.busy).toBe(true);
+  await test.host.stop(); expect(test.host.busy).toBe(false);
+});
