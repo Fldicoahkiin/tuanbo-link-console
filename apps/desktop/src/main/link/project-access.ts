@@ -16,7 +16,7 @@ const lastProjectRecordSchema = z.object({ version: z.literal(1), projectPath: z
 export class ProjectAccess {
   private readonly approved = new Set<string>();
   private shown: string | null = null;
-  /** Opened or saved by the main process for the window, until the window next reports what it shows. */
+  /** Opened or saved by the main process for the window, until the window reports showing it. */
   private opening: string | null = null;
   private recorded: string | null = null;
 
@@ -28,7 +28,7 @@ export class ProjectAccess {
 
   /** The main process just opened or saved this project for the window, which is about to show it.
    * Requests for it are accepted from now on, so the views need not wait for the window's report;
-   * the project still on screen until then stays accepted too. */
+   * the project still on screen stays accepted too, and a report still on its way does not undo this. */
   opened(path: string): void {
     this.approve(path);
     this.opening = path;
@@ -42,7 +42,7 @@ export class ProjectAccess {
   async show(projectPath: string | null): Promise<void> {
     if (projectPath !== null) this.requireApproved(projectPath);
     this.shown = projectPath;
-    this.opening = null;
+    if (projectPath !== null && this.opening !== null && pathKey(projectPath) === pathKey(this.opening)) this.opening = null;
     if (projectPath === null || projectPath === this.recorded) return;
     await writeFileAtomically(this.lastProjectFile, `${JSON.stringify({ version: 1, projectPath })}\n`);
     this.recorded = projectPath;

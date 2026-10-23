@@ -46,6 +46,16 @@ describe('ProjectAccess', () => {
     expect(() => access.requireShown(other)).toThrow('当前打开的工程');
   });
 
+  it('正在打开的工程在窗口确认前一直可用，窗口迟到的旧上报不会把它清掉', async () => {
+    const access = new ProjectAccess(await recordPath());
+    const opening = join(await folder(), 'show.tblink');
+    access.opened(opening);
+    await access.show(null);
+    access.requireShown(opening);
+    await access.show(opening); await access.show(null);
+    expect(() => access.requireShown(opening)).toThrow('当前打开的工程');
+  });
+
   it('主进程记录上次显示的工程；读回时批准它，记录损坏明确报错', async () => {
     const record = await recordPath();
     const opened = join(await folder(), 'show.tblink');
