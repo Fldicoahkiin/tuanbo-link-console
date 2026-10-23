@@ -180,7 +180,7 @@ it('渠道退款通知进入异常队列且不自动撤销授权，人工登记�
   expect(s.consoleService.overview(s.login.session).item.refundReview).toBe(1);
   const detail = s.consoleService.detail('orders', order.id, s.login.session);
   expect(detail.item).toMatchObject({ state: 'refunded', channelRefundFen: 80000, reviewedRefundFen: 0, refundedFen: 0 });
-  expect(detail.related.map(row => row.revoked)).toEqual([false]);
+  expect(detail.related.map(row => row.status)).toEqual(['unbound']);
   await s.execute({ action: 'refund', id: order.id, amountFen: 80000, reference: 'manual-refund-1', handledAt: new Date(s.now()).toISOString(), reason: '财务登记' });
   expect(exceptions()).toEqual([order.id]);
   // 渠道通知与人工登记的是同一笔，只扣一次；财务记录只剩登记行。
@@ -188,8 +188,26 @@ it('渠道退款通知进入异常队列且不自动撤销授权，人工登记�
   expect(s.consoleService.list('finance', pageQuerySchema.parse({}), s.login.session).items.map(row => row.state)).toEqual(['人工登记退款']);
   await s.execute({ action: 'refund-review', id: order.id, decision: 'keep', reason: '客户申请退款，核对后保留授权至期满' });
   expect(exceptions()).toEqual([]);
-  expect(s.consoleService.detail('orders', order.id, s.login.session).related.map(row => row.revoked)).toEqual([false]);
+  expect(s.consoleService.detail('orders', order.id, s.login.session).related.map(row => row.status)).toEqual(['unbound']);
   expect(s.consoleService.overview(s.login.session).item.refundReview).toBe(0);
+});
+it('授权生命周期状态由服务端统一计算：列表、页签计数、详情与工作台一致；人员状态合并为一项', async () => {
+  const s = await setup(); const order = await s.execute({ ...grant, quantity: 4 });
+  const ids = s.consoleService.detail('orders', order.id!, s.login.session).related.map(row => String(row.id));
+  s.service.activate({ product: 'tuanbo-link-console', code: s.service.consoleReveal(ids[0]!), machineCode: `TB1-${'A'.repeat(64)}` });
+  await s.execute({ action: 'set-expiry', id: ids[1]!, useUntil: '2026-10-08T00:00:00Z', reason: '即将到期' });
+  await s.execute({ action: 'revoke', id: ids[2]!, reason: '撤销' });
+  await s.execute({ action: 'set-expiry', id: ids[3]!, useUntil: '2026-10-07T00:00:00Z', reason: '稍后过期' });
+  s.advance(86400000 + 1);
+  const query = (state: string) => pageQuerySchema.parse({ state });
+  const all = s.consoleService.list('licenses', query(''), s.login.session);
+  expect(all.summary).toEqual({ active: 1, unbound: 0, expiring: 1, expired: 1, revoked: 1, all: 4 });
+  expect(Object.fromEntries(all.items.map(row => [row.id, row.status]))).toEqual({ [ids[0]!]: 'active', [ids[1]!]: 'expiring', [ids[2]!]: 'revoked', [ids[3]!]: 'expired' });
+  expect(all.items.every(row => !('revoked' in row) && !('bound' in row))).toBe(true);
+  expect(s.consoleService.list('licenses', query('expired'), s.login.session).items.map(row => row.id)).toEqual([ids[3]]);
+  expect(s.consoleService.detail('licenses', ids[2]!, s.login.session).item).toMatchObject({ status: 'revoked', orderReference: expect.stringMatching(/^GRANT-/) as unknown });
+  expect(s.consoleService.overview(s.login.session).item.expiring).toBe(1);
+  expect(s.consoleService.list('users', query(''), s.login.session).items.map(row => row.status)).toEqual(['enabled']);
 });
 it('创建线下订单与确认线下收款不落在同一个非管理员角色', () => {
   for (const role of ['operations', 'finance', 'viewer'] as const) expect(permissions['create-order'].includes(role) && permissions.fulfill.includes(role)).toBe(false);

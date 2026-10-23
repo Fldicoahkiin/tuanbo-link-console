@@ -27,6 +27,12 @@ const unledgeredRefunds = `SELECT x.id AS orderId,x.channelRefundFen-x.refundedF
   FROM (${orderProjection}) x WHERE x.channelRefundFen>x.refundedFen`;
 // 授权当前截止：单码调整优先，其次最近续费，最后原订单。
 const licenseUseUntil = "COALESCE((SELECT use_until FROM license_term_overrides WHERE license_id=l.id),(SELECT MAX(use_until) FROM license_renewals WHERE license_id=l.id),json_extract(o.body,'$.useUntil'))";
+// 授权生命周期状态的唯一定义，列表筛选、页签计数、详情和工作台共用。互斥优先级：已撤销 > 已过期 > 七日内到期 > 生效中（已绑定）> 未激活。
+// 两个参数依次为当前时间和七日后，见 statusWindow()。
+const licenseRows = `SELECT l.id,l.rowid AS position,l.machine AS machine,json_extract(o.body,'$.customer') AS customer,o.reference AS orderReference,COALESCE(m.source,'sale') AS source,
+  CASE WHEN l.revoked=1 THEN 'revoked' WHEN ${licenseUseUntil}<=? THEN 'expired' WHEN ${licenseUseUntil}<=? THEN 'expiring' WHEN l.machine IS NOT NULL THEN 'active' ELSE 'unbound' END AS status
+  FROM licenses l JOIN orders o ON o.id=l.order_id LEFT JOIN console_order_meta m ON m.order_id=o.id`;
+const licenseStatuses = ['active', 'unbound', 'expiring', 'expired', 'revoked'] as const;
 const beijingDayStart = (day: string) => new Date(`${day}T00:00:00+08:00`).toISOString();
 const beijingDayEnd = (day: string) => new Date(Date.parse(`${day}T00:00:00+08:00`) + 86400000).toISOString();
 /** 由 HTTP 层注入的渠道调用；控制台只编排，不直接持有支付宝凭据。 */
@@ -49,6 +55,16 @@ export class ConsoleService {
     if (!value) throw new ServiceError(404, 'ORDER_NOT_FOUND', '订单不存在');
     return rowSchema.parse(value);
   }
+  private statusWindow(): [string, string] { return [new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString()]; }
+  /** 授权 DTO：生命周期状态替代绑定、撤销两个布尔值。 */
+  private licenseRow(row: ConsoleRow): ConsoleRow {
+    const license = this.service.consoleLicense(z.string().parse(row.id));
+    return { id: license.id, customer: license.customer, status: row.status ?? null, source: row.source ?? null, orderReference: row.orderReference ?? null, orderId: license.orderId, kind: license.kind,
+      useUntil: license.useUntil, updatesUntil: license.updatesUntil, machineCode: license.machineCode, leaseUntil: license.leaseUntil, migrationAfter: license.migrationAfter, lastIssuedAt: license.lastIssuedAt };
+  }
+  private licenses(where: string, params: SQLInputValue[]): ConsoleRow[] {
+    return this.db.prepare(`SELECT id,source,orderReference,status FROM (${licenseRows}) WHERE ${where} ORDER BY position DESC`).all(...this.statusWindow(), ...params).map(row => this.licenseRow(rowSchema.parse(row)));
+  }
   private financialRole(session: ConsoleSession): boolean { return session.user.role === 'owner' || session.user.role === 'finance'; }
   private financial(session: ConsoleSession): void { if (!this.financialRole(session)) throw new ServiceError(403, 'FORBIDDEN', '需要财务或管理员权限'); }
   list(resource: string, query: PageQuery, session: ConsoleSession) {
@@ -60,8 +76,13 @@ export class ConsoleService {
         [term, term, term, query.state, query.state, query.channel, query.channel, query.from, query.from ? beijingDayStart(query.from) : '', query.to, query.to ? beijingDayEnd(query.to) : ''], query);
     }
     if (resource === 'licenses') {
-      const selected = this.page(`SELECT l.id,m.source AS source FROM licenses l JOIN orders o ON o.id=l.order_id LEFT JOIN console_order_meta m ON m.order_id=o.id WHERE (l.id LIKE ? ESCAPE '\\' OR json_extract(o.body,'$.customer') LIKE ? ESCAPE '\\' OR l.machine LIKE ? ESCAPE '\\') AND (?='' OR (?='revoked' AND l.revoked=1) OR (?='bound' AND l.machine IS NOT NULL AND l.revoked=0) OR (?='unbound' AND l.machine IS NULL AND l.revoked=0) OR (?='expiring' AND l.revoked=0 AND ${licenseUseUntil}>? AND ${licenseUseUntil}<=?)) ORDER BY l.rowid DESC`, [term, term, term, query.state, query.state, query.state, query.state, query.state, new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString()], query);
-      return pageSchema.parse({ ...selected, items: selected.items.map(row => ({ ...this.service.consoleLicense(z.string().parse(row.id)), source: row.source ?? 'sale' })) });
+      const search = "(id LIKE ? ESCAPE '\\' OR customer LIKE ? ESCAPE '\\' OR machine LIKE ? ESCAPE '\\')";
+      // 页签计数带搜索词、不带状态筛选。
+      const counts = this.db.prepare(`SELECT status,COUNT(*) AS n FROM (${licenseRows}) WHERE ${search} GROUP BY status`).all(...this.statusWindow(), term, term, term);
+      const summary: ConsoleRow = Object.fromEntries(licenseStatuses.map(status => [status, Number(counts.find(row => row.status === status)?.n ?? 0)]));
+      summary.all = licenseStatuses.reduce((total, status) => total + Number(summary[status]), 0);
+      const selected = this.page(`SELECT id,source,orderReference,status FROM (${licenseRows}) WHERE ${search} AND (?='' OR status=?) ORDER BY position DESC`, [...this.statusWindow(), term, term, term, query.state, query.state], query);
+      return pageSchema.parse({ ...selected, items: selected.items.map(row => this.licenseRow(row)), summary });
     }
     if (resource === 'tickets') return this.page(`SELECT t.*,o.reference AS orderReference FROM console_tickets t JOIN orders o ON o.id=t.order_id WHERE (t.id LIKE ? ESCAPE '\\' OR o.reference LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\') AND (?='' OR t.state=? OR ?='active' AND t.state!='closed') ORDER BY t.created DESC,t.id`, [term, term, term, query.state, query.state, query.state], query);
     if (resource === 'finance') {
@@ -84,7 +105,7 @@ export class ConsoleService {
     }
     if (resource === 'users') {
       if (session.user.role !== 'owner') throw new ServiceError(403, 'FORBIDDEN', '只有管理员可以管理人员');
-      return pageSchema.parse({ items: this.auth.users(), page: 1, hasMore: false });
+      return pageSchema.parse({ items: this.auth.users().map(user => ({ ...user, status: !user.enrolled ? 'not-enrolled' : user.enabled ? 'enabled' : 'disabled' })), page: 1, hasMore: false });
     }
     throw new ServiceError(404, 'NOT_FOUND', '页面不存在');
   }
@@ -94,9 +115,11 @@ export class ConsoleService {
       item = this.order(id); orderId = id;
       const offer = this.db.prepare("SELECT json_extract(offer_body,'$.name') AS offerName,json_extract(offer_body,'$.revision') AS offerRevision,json_extract(offer_body,'$.unitAmountFen') AS unitAmountFen FROM purchase_requests WHERE order_id=?").get(id);
       if (offer) item = { ...item, ...rowSchema.parse(offer) };
-      related = this.db.prepare('SELECT id FROM licenses WHERE order_id=? OR id IN (SELECT license_id FROM license_renewals WHERE order_id=?)').all(id, id).map(row => rowSchema.parse(this.service.consoleLicense(z.string().parse(row.id))));
+      related = this.licenses('id IN (SELECT id FROM licenses WHERE order_id=? OR id IN (SELECT license_id FROM license_renewals WHERE order_id=?))', [id, id]);
     } else if (resource === 'licenses') {
-      item = rowSchema.parse(this.service.consoleLicense(id)); orderId = z.string().parse(item.orderId);
+      const found = this.licenses('id=?', [id])[0];
+      if (!found) throw new ServiceError(404, 'LICENSE_NOT_FOUND', '授权不存在');
+      item = found; orderId = z.string().parse(item.orderId);
       related = this.db.prepare('SELECT order_id AS id,use_until AS useUntil,updates_until AS updatesUntil FROM license_renewals WHERE license_id=? ORDER BY rowid DESC').all(id).map(row => rowSchema.parse(row));
     } else if (resource === 'tickets') {
       const row = this.db.prepare('SELECT t.id,t.order_id,t.license_id,t.category,t.note,t.state,t.conclusion,t.created,t.updated,COALESCE(u.username,t.actor) AS operator FROM console_tickets t LEFT JOIN console_users u ON u.id=t.actor WHERE t.id=?').get(id);
@@ -110,7 +133,7 @@ export class ConsoleService {
   overview(session: ConsoleSession) {
     const counts = this.db.prepare(`SELECT SUM(CASE WHEN paymentStatus='pending' AND state='pending' THEN 1 ELSE 0 END) AS pendingOrders,SUM(CASE WHEN paymentStatus='confirmed' AND state IN ('pending','paid') THEN 1 ELSE 0 END) AS deliveryPending,SUM(CASE WHEN channelRefundFen>reviewedRefundFen THEN 1 ELSE 0 END) AS refundReview FROM (${orderProjection})`).get();
     const tickets = this.db.prepare("SELECT COUNT(*) AS openTickets FROM console_tickets WHERE state!='closed'").get();
-    const expiring = this.db.prepare(`SELECT COUNT(*) AS expiring FROM licenses l JOIN orders o ON o.id=l.order_id WHERE l.revoked=0 AND ${licenseUseUntil}>? AND ${licenseUseUntil}<=?`).get(new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString());
+    const expiring = this.db.prepare(`SELECT COUNT(*) AS expiring FROM (${licenseRows}) WHERE status='expiring'`).get(...this.statusWindow());
     const health = this.db.prepare('SELECT name,state,checked_at AS checkedAt,detail FROM console_health ORDER BY name').all().map(row => rowSchema.parse(row));
     const customers = this.db.prepare("SELECT COUNT(*) AS customerCount FROM (SELECT DISTINCT json_extract(body,'$.customer') COLLATE NOCASE,json_extract(body,'$.customerType') FROM orders WHERE state='fulfilled')").get();
     const bindings = this.db.prepare('SELECT COUNT(*) AS boundLicenseCount FROM licenses WHERE machine IS NOT NULL AND revoked=0').get();
