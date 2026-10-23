@@ -1,5 +1,6 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { spawn } from 'node:child_process';
+import { ffmpegDeadline } from './ffmpeg-deadline';
 import { WaveformAccumulator, waveformBucketCount } from './waveform-accumulator';
 import { waveformWorkerRequestSchema, waveformWorkerResultSchema } from './waveform-worker-contract';
 
@@ -11,7 +12,8 @@ async function decode(): Promise<number[]> {
   return new Promise((resolve, reject) => {
     const child = spawn(request.executable, ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-filter_threads', '1', '-i', request.sourcePath,
       '-map', '0:a:0', '-vn', '-af', 'pan=mono|c0=c0', '-ar', '48000', '-f', 'f32le', 'pipe:1'],
-    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    ffmpegDeadline(child, '生成波形', 10 * 60_000, reject);
     let errorOutput = '', failure: Error | null = null;
     child.stdout.on('data', (chunk: Buffer) => accumulator.push(chunk));
     child.stdout.on('error', error => { failure = error; });
