@@ -24,6 +24,8 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] });
       process.env.TBLINK_SONG_SYNC_CALLS = '0';
       ipcMain.removeHandler('link:ma2-song-check'); ipcMain.handle('link:ma2-song-check', () => Boolean(process.env.TBLINK_SONG_REMOTE_NAME));
+      // A song without an MTC start reads the console's Timecode shows before its first sync; this console has none.
+      ipcMain.removeHandler('link:ma2-timecode-ranges'); ipcMain.handle('link:ma2-timecode-ranges', () => ({ show: source.show, entries: [] }));
       ipcMain.removeHandler('link:ma2-network-status'); ipcMain.handle('link:ma2-network-status', () => ({ state: process.env.TBLINK_SONG_OFFLINE ? 'disconnected' : 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test', autoConnect: false }, version: '3.7.0.5', passwordSaved: false, error: null }));
       ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => {
         if (process.env.TBLINK_SONG_OFFLINE) throw new Error('验收：控台已断开');
