@@ -19,13 +19,14 @@ const frames = (ms: number): number => Math.round(ms * 30 / 1000);
  */
 export function ma2SongTimecodeXml(currentXml: string, target: number, song: {
   name: string; startMs: number; executor: string; executorName: string; sequence: number;
-  cues: ReadonlyArray<{ atMs: number; cueIndex: number; name: string }>;
+  cues: ReadonlyArray<{ atMs: number; cueIndex: number; number: string; name: string | null }>;
 }): string {
   const empty = resetMa2TimecodeShow(currentXml, target, { name: song.name, offset: frames(song.startMs), slot: MA2_SONG_TIMECODE_SLOT });
   const track = appendMa2Tracks(empty, target, [{ executor: song.executor, executorName: song.executorName, muted: false }]);
   const subtrackPath = `${track.paths[0]!}/SubTrack:0`;
   const events = prepareMa2TimecodeEvents(track.xml, inspectMa2TimecodeXml(track.xml).sha256, target, song.cues.map(cue => ({
-    kind: 'add' as const, subtrackPath, rawTime: String(frames(cue.atMs)), cue: { sequence: song.sequence, cueIndex: cue.cueIndex, name: cue.name }
+    // The console stores a Cue reference as "<label> <number>" (onPC 3.7 probe), as Timecode event writes do.
+    kind: 'add' as const, subtrackPath, rawTime: String(frames(cue.atMs)), cue: { sequence: song.sequence, cueIndex: cue.cueIndex, name: cue.name === null ? `Cue ${Number(cue.number)}` : `${cue.name} ${Number(cue.number)}` }
   })));
   return extendMa2TimecodeLength(events.xml, target);
 }
@@ -41,7 +42,7 @@ const revision = (xml: string): string => createHash('sha256').update(xml.replac
  */
 export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, song: {
   previous: Ma2SongTimecode | undefined; sequence: number; executor: string; startMs: number; name: string; version: string;
-  cues: ReadonlyArray<{ atMs: number; cueIndex: number; name: string }>;
+  cues: ReadonlyArray<{ atMs: number; cueIndex: number; number: string; name: string | null }>;
 }): Promise<{ timecode: Ma2SongTimecode; backup: string | null }> {
   const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
   const taken = (target: number): boolean => directory.entries.some(entry => entry.target === target);

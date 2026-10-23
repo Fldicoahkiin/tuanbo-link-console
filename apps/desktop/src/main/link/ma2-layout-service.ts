@@ -469,7 +469,7 @@ export class Ma2LayoutService {
         cues: result.binding.points.map(point => {
           const cue = report.cues.find(value => Number(value.number) === Number(point.cue));
           if (!cue) throw new Error(`本曲时间码节目未写入：序列 ${target} 回读中没有 Cue ${point.cue}`);
-          return { atMs: times.get(point.id)!, cueIndex: cue.index, name: cue.name ?? '' };
+          return { atMs: times.get(point.id)!, cueIndex: cue.index, number: cue.number, name: cue.name };
         }) });
       const timed = ma2SongSyncResultSchema.parse({ ...result, binding: { ...result.binding, timecode: written.timecode, points: result.binding.points.map(point => ({ ...point, atMs: times.get(point.id)! })) } });
       await writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding: timed.binding, conflicts: timed.conflicts ?? [] }]));
