@@ -156,6 +156,24 @@ export function pauseMa2RealtimeSession(): void {
   for (const song of Object.values(useMa2SongSyncStore.getState().songs)) stopMa2SongSync(song.itemId);
 }
 
+/** Songs synced as a console Sequence on an executor that have no Timecode show of their own yet: they cannot play from MTC. */
+export function songsWithoutConsoleShow(project: ReturnType<typeof useDocumentStore.getState>['project']): Array<{ itemId: string; title: string }> {
+  return project?.rundown.flatMap(item => item.lighting?.consoleSong?.executor && !item.lighting.consoleSong.timecode ? [{ itemId: item.id, title: item.title }] : []) ?? [];
+}
+
+/** Syncs those songs again in full, which writes their Timecode shows. */
+export function writeMissingConsoleShows(): void {
+  setMa2RealtimeEnabled(true);
+  const project = useDocumentStore.getState().project;
+  if (!project) return;
+  for (const song of songsWithoutConsoleShow(project)) {
+    if (useMa2SongSyncStore.getState().songs[song.itemId]?.requestId) continue;
+    const item = project.rundown.find(value => value.id === song.itemId)!;
+    startMa2SongSync(item.id, item.lighting?.consoleSong?.name ?? item.title, ma2SongSyncSettings(project, item.id));
+  }
+  void prepareMa2RealtimeSession();
+}
+
 export function pendingSongSummary(project: ReturnType<typeof useDocumentStore.getState>['project']): Array<{ itemId: string; title: string; count: number; page: number }> {
   if (!project) return [];
   return project.rundown.flatMap(item => {
