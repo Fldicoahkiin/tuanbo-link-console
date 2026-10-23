@@ -1,4 +1,4 @@
-import { mkdir, readFile, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, realpath, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEmptyLinkProject } from '@tb/schema';
@@ -75,7 +75,33 @@ describe('P1ProjectService', () => {
     const imported = await new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath);
     trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
     expect(imported.items.map(item => item.title)).toEqual(['第二首.wav']);
-    expect(imported.skippedItems?.[0]?.reason).toContain('网络共享或设备路径');
+    const reason = imported.skippedItems?.[0]?.reason ?? '';
+    expect(reason).toContain('在网络路径上（//attacker/share/remote.wav）');
+    expect(reason).toContain('.hia 所在文件夹里也没有同名文件');
+    expect(reason).toContain('请把歌曲复制到本机');
+    expect(reason).toContain('映射为盘符');
+  });
+
+  it.runIf(process.platform === 'win32')('映射盘符上的歌照常导入：真实路径落在该盘符背后的网络共享内就放行', async (context) => {
+    const fixture = await createFixture();
+    // A mapped drive resolves to the share behind it; this computer's own administrative share stands in for one.
+    const drive = fixture.audioPaths[0].slice(0, 3), share = `\\\\localhost\\${drive[0]}$\\`;
+    try { await access(join(share, 'Windows')); } catch { context.skip(); }
+    const mapped = (path: string) => path.toLowerCase() === drive.toLowerCase() ? Promise.resolve(share)
+      : path === fixture.audioPaths[0] ? Promise.resolve(share + path.slice(3)) : realpath(path);
+    const imported = await new P1ProjectService(new LinkProjectService(), mapped).importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.skippedItems).toEqual([]);
+    expect(imported.items.map(item => item.title)).toEqual(['第一首.wav', '第二首.wav']);
+  });
+
+  it('真实路径落在网络共享上、但不是被检查路径的盘符背后的共享时拒绝', async () => {
+    const fixture = await createFixture();
+    const elsewhere = (path: string) => path === fixture.audioPaths[0] ? Promise.resolve('\\\\nas\\share\\first.wav') : realpath(path);
+    const imported = await new P1ProjectService(new LinkProjectService(), elsewhere).importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.items.map(item => item.title)).toEqual(['第二首.wav']);
+    expect(imported.skippedItems?.[0]?.reason).toContain('不在本机磁盘或 .hia 所在文件夹内');
   });
 
   it('.hia 里的歌曲经链接指向非音视频文件时跳过，不读取链接目标', async (context) => {
