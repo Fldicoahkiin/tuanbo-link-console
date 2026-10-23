@@ -103,7 +103,7 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
         return { refused: refused.length > 0, reason: refused[0]?.status === 'rejected' ? String(refused[0].reason) : '' };
       })
     };
-    expect.soft(logs).toEqual({ oversize: expect.stringContaining('8192'), flood: { refused: true, reason: expect.stringContaining('窗口日志写入过于频繁') } });
+    expect.soft(logs).toEqual({ oversize: expect.stringContaining('操作未能完成'), flood: { refused: true, reason: expect.stringContaining('窗口日志写入过于频繁') } });
 
     // The same bridge saves the shown project.
     const renamed = JSON.stringify({ ...JSON.parse(content), name: '已保存到展示工程' });
@@ -124,6 +124,7 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
     const songUrl = await page.evaluate(path => window.tbLink.resolveReferenceAudioUrl({ projectPath: path, relativePath: 'assets/reference-audio/song.wav' }), shown);
     expect(await load(songUrl)).toBe('RIFF shown song');
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, never);
+    await page.getByLabel('工程菜单', { exact: true }).click();
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', never);
     expect.soft(await load(songUrl)).toBe('HTTP 404');
