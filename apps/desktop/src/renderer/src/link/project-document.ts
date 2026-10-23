@@ -120,6 +120,22 @@ export function reportDocumentState(): Promise<void> {
   return linkDesktopViewModel.setDocumentState(stateReport(useDocumentStore.getState()));
 }
 
+/** Reports the open document as soon as the store changes, synchronously, so the report reaches the
+ * main process before any request a view's effect sends about the newly shown project. */
+export function reportDocumentStateChanges(notify: (message: string, tone?: 'info' | 'error') => void): () => void {
+  let last: LinkDocumentState | null = null;
+  const report = (state: DocumentStoreState): void => {
+    const next = stateReport(state);
+    if (last && last.dirty === next.dirty && last.consoleSynced === next.consoleSynced && last.name === next.name
+      && last.projectPath === next.projectPath && last.projectId === next.projectId) return;
+    last = next;
+    void linkDesktopViewModel.setDocumentState(next)
+      .catch((error: unknown) => notify(`同步工程保存状态失败：${error instanceof Error ? error.message : String(error)}`, 'error'));
+  };
+  report(useDocumentStore.getState());
+  return useDocumentStore.subscribe(report);
+}
+
 function stateReport(state: DocumentStoreState): LinkDocumentState {
   return { version: 1, dirty: state.dirty, consoleSynced: state.consoleSynced, name: state.project?.name ?? null,
     projectPath: state.path, projectId: state.project?.projectId ?? null };
@@ -130,15 +146,7 @@ function stateReport(state: DocumentStoreState): LinkDocumentState {
  * save requests (quit, reload, update) with the same save as Ctrl+S.
  */
 export function useDocumentStateReport(notify: (message: string, tone?: 'info' | 'error') => void): void {
-  const dirty = useDocumentStore(state => state.dirty);
-  const consoleSynced = useDocumentStore(state => state.consoleSynced);
-  const name = useDocumentStore(state => state.project?.name ?? null);
-  const path = useDocumentStore(state => state.path);
-  const projectId = useDocumentStore(state => state.project?.projectId ?? null);
-  useEffect(() => {
-    void linkDesktopViewModel.setDocumentState({ version: 1, dirty, consoleSynced, name, projectPath: path, projectId })
-      .catch((error: unknown) => notify(`同步工程保存状态失败：${error instanceof Error ? error.message : String(error)}`, 'error'));
-  }, [consoleSynced, dirty, name, notify, path, projectId]);
+  useEffect(() => reportDocumentStateChanges(notify), [notify]);
   useEffect(() => linkDesktopViewModel.onSaveRequest(async () => {
     const outcome = await saveDocumentWithRecovery();
     return outcome.status === 'saved' ? { status: 'saved' as const } : outcome;
