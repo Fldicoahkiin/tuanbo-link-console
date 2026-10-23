@@ -323,6 +323,8 @@
 .license-card-icon svg { width: 19px; height: 19px; }
 .license-card-welcome p { margin: 14px 0 0; color: var(--text-tertiary); font-size: 11px; }
 .license-activation-card > .license-settings { display: block; margin: 0; padding: 0; border: 0; background: transparent; }
+.license-gate-update { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-emphasis); }
+.license-gate-update .update-center { width: auto; max-height: none; }
 .license-status-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .license-activation-card .license-status-heading h3 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.03em; color: var(--text-emphasis); }
 .license-state { flex-shrink: 0; padding: 3px 8px; border: 1px solid var(--border-default); border-radius: 5px; background: var(--surface-raised); color: var(--text-secondary); font-size: 11px; }

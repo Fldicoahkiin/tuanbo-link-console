@@ -17,7 +17,7 @@ async function installSettingsDevices(app: ElectronApplication): Promise<void> {
       'link:license-require-output': () => undefined,
       'link:load-profile': () => saved,
       'link:security-availability': () => true,
-      'link:update-status': () => ({ phase: 'upToDate', currentVersion: '0.4.46', availableVersion: null, releaseDate: null, progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, message: '当前已是最新版本' }),
+      'link:update-status': () => ({ phase: 'upToDate', currentVersion: '0.4.46', availableVersion: null, releaseDate: null, progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, installBlockedReason: null, message: '当前已是最新版本' }),
       'link:native-player-devices': () => ({ protocol: 4, audio: [], midiOutputs: [] }),
       'link:loop-midi': () => ({ state: 'missing', executablePath: null, pid: null, startTime: null }),
       'link:obs-snapshot': () => ({ status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null }),
@@ -211,7 +211,7 @@ test('更新阶段直接呈现在设置页，下载信息与动作一致', async
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await select(page, 'updates');
     for (const phase of ['disabled', 'notConfigured', 'idle', 'checking', 'upToDate', 'available', 'downloading', 'downloaded', 'error'] as const) {
-      const status: LinkUpdateStatus = { phase, currentVersion: '0.4.46', availableVersion: '0.4.47', releaseDate: null, progressPercent: 45, transferredBytes: 4500000, totalBytes: 10000000, feedConfigured: phase !== 'notConfigured', message: `验收更新状态：${phase}` };
+      const status: LinkUpdateStatus = { phase, currentVersion: '0.4.46', availableVersion: '0.4.47', releaseDate: null, progressPercent: 45, transferredBytes: 4500000, totalBytes: 10000000, feedConfigured: phase !== 'notConfigured', installBlockedReason: null, message: `验收更新状态：${phase}` };
       await app.evaluate(({ BrowserWindow }, value) => { BrowserWindow.getAllWindows()[0]!.webContents.send('link:update-status', value); }, status);
       await expect(page.getByText(status.message, { exact: true })).toBeVisible();
       if (phase === 'downloading') await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '45');

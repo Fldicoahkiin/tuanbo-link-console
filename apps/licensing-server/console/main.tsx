@@ -7,7 +7,9 @@ import { api, ApiError, errorMessage, messageSchema } from './api';
 import { RevenueTrend } from './revenue-trend';
 import { AuthView } from './auth-view';
 import { ActionDialog } from './action-dialog';
-import { actionNames, beijingTime, destructiveActions, display, forms, labels, roleNames } from './forms';
+import { actionNames, beijingTime, destructiveActions, display, forms, roleNames } from './forms';
+import { DataTable, Fields, detailRow } from './table';
+import { StepUpBadge, StepUpDialog, StepUpPrompt } from './step-up';
 
 type Session = z.infer<typeof sessionSchema>;
 type Page = z.infer<typeof pageSchema>;
@@ -18,28 +20,21 @@ const navigation = [
   { key: 'tickets', title: '售后工单', icon: MessagesSquare }, { key: 'finance', title: '财务记录', icon: Receipt },
   { key: 'audit', title: '操作日志', icon: History }, { key: 'users', title: '人员管理', icon: Users }, { key: 'security', title: '安全设置', icon: ShieldCheck }
 ];
-const columns: Record<string, string[]> = { orders: ['reference', 'customer', 'channel', 'amountFen', 'paymentStatus', 'state', 'created'], exceptions: ['reference', 'customer', 'channel', 'amountFen', 'state', 'deliveryError', 'channelRefundFen', 'reviewedRefundFen'], licenses: ['customer', 'id', 'source', 'bound', 'revoked', 'useUntil'], tickets: ['orderReference', 'category', 'state', 'note', 'created'], finance: ['orderId', 'category', 'amountFen', 'reference', 'state', 'created'], audit: ['at', 'operator', 'action', 'targetLabel', 'result', 'reason'], users: ['username', 'role', 'enabled', 'enrolled'] };
+const columns: Record<string, string[]> = { orders: ['reference', 'customer', 'channel', 'amountFen', 'paymentStatus', 'state', 'created'], exceptions: ['reference', 'customer', 'channel', 'amountFen', 'state', 'deliveryError', 'channelRefundFen', 'reviewedRefundFen'], licenses: ['customer', 'status', 'source', 'useUntil', 'machineCode'], tickets: ['orderReference', 'category', 'state', 'note', 'created'], finance: ['orderId', 'category', 'amountFen', 'reference', 'state', 'created'], audit: ['at', 'operator', 'action', 'targetLabel', 'result', 'reason'], users: ['username', 'role', 'status'] };
 const stateFilters: Record<string, { label: string; options: [string, string][] }> = {
   orders: { label: '状态', options: [['pending', '待付款'], ['paid', '已收款待交付'], ['fulfilled', '已交付'], ['refunded', '已全额退款'], ['closed', '已关闭'], ['expired', '已过期']] },
-  licenses: { label: '状态', options: [['bound', '已绑定'], ['unbound', '未绑定'], ['revoked', '已撤销'], ['expiring', '七日内到期']] },
+  licenses: { label: '状态', options: [['active', '生效中'], ['unbound', '未激活'], ['expiring', '即将到期'], ['expired', '已过期'], ['revoked', '已撤销']] },
   tickets: { label: '状态', options: [['active', '未关闭'], ['open', '待处理'], ['processing', '处理中'], ['closed', '已关闭']] },
   finance: { label: '类别', options: [['refund', '退款'], ['invoice', '开票']] },
   audit: { label: '操作', options: Object.entries(actionNames) }
 };
 type Filter = { q: string; state: string; channel: string; from: string; to: string };
 const emptyFilter: Filter = { q: '', state: '', channel: '', from: '', to: '' };
-// 详情页不显示未发生的事项（无退款、无工单、无错误、未绑定），编号放最后。
-const optionalFields = new Set(['deliveryError', 'openTickets', 'refundedFen', 'channelRefundFen', 'reviewedRefundFen', 'paymentReference', 'receivedAt', 'machineCode', 'leaseUntil', 'lastIssuedAt', 'license_id', 'conclusion']);
-function detailRow(row: ConsoleRow): ConsoleRow {
-  const { id, ...rest } = row;
-  return { ...Object.fromEntries(Object.entries(rest).filter(([key, value]) => !optionalFields.has(key) || value !== null && value !== 0 && value !== '')), ...(id === undefined ? {} : { id }) };
-}
-function DataTable({ rows, fields, select, canSelect }: { rows: ConsoleRow[]; fields: string[]; select?: (row: ConsoleRow) => void; canSelect?: (row: ConsoleRow) => boolean }) {
-  return <div className="table-wrap"><table><thead><tr>{fields.map(key => <th key={key}>{labels[key] ?? key}</th>)}{select && <th>操作</th>}</tr></thead><tbody>{rows.map((row, index) => <tr key={String(row.id ?? index)}>{fields.map(key => <td key={key} data-label={labels[key] ?? key}><span className={['state', 'paymentStatus', 'revoked', 'bound'].includes(key) ? `status-badge status-${String(row[key])}` : undefined}>{display(key, row[key] ?? null)}</span></td>)}{select && <td data-label="操作">{(canSelect?.(row) ?? true) && <button onClick={() => select(row)}>查看详情</button>}</td>}</tr>)}</tbody></table></div>;
-}
-function Fields({ row }: { row: ConsoleRow }) { return <dl className="details">{Object.entries(row).map(([key, value]) => <div key={key}><dt>{labels[key] ?? key}</dt><dd>{display(key, value)}</dd></div>)}</dl>; }
 function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () => void }) {
   const [session, setSession] = useState(initial); const [route, setRoute] = useState('overview');
+  const [clockOffset, setClockOffset] = useState(() => initial.now - Date.now()); const [stepUpOpen, setStepUpOpen] = useState(false);
+  const applySession = useCallback((value: Session) => { setSession(value); setClockOffset(value.now - Date.now()); }, []);
+  const reloadSession = () => { api('session', sessionSchema).then(applySession, (cause: unknown) => setError(errorMessage(cause))); };
   const [filters, setFilters] = useState<Record<string, Filter>>({});
   const filter = filters[route] ?? emptyFilter;
   const [page, setPage] = useState(1); const [data, setData] = useState<Page | null>(null); const [detail, setDetail] = useState<Detail | null>(null); const [selected, setSelected] = useState<ConsoleRow | null>(null);
@@ -51,32 +46,28 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
   const load = useCallback(async () => {
     const revision = ++sequence.current; setBusy(true); setError('');
     try {
-      if (route === 'security') { const value = await api('session', sessionSchema); if (sequence.current === revision) setSession(value); }
+      if (route === 'security') { const value = await api('session', sessionSchema); if (sequence.current === revision) applySession(value); }
       else if (selected && ['orders', 'licenses', 'tickets'].includes(resource)) { const value = await api(`${resource}/${String(selected.id)}`, detailSchema); if (sequence.current === revision) setDetail(value); }
       else if (route === 'overview') { const value = await api('overview', detailSchema); if (sequence.current === revision) setOverview(value); }
       else { const value = await api(`${route}?${query}`, pageSchema); if (sequence.current === revision) setData(value); }
     } catch (error) { if (sequence.current === revision) { setError(errorMessage(error)); if (error instanceof ApiError && error.code === 'SESSION_EXPIRED') signedOut(); } }
     finally { if (sequence.current === revision) setBusy(false); }
-  }, [route, selected, resource, query, signedOut]);
+  }, [route, selected, resource, query, signedOut, applySession]);
   useEffect(() => { const tracker = sequence; void load(); return () => { tracker.current++; }; }, [load, refresh]);
   function navigate(key: string, preset?: Partial<Filter>) {
-    setRoute(key); setSelected(null); setDetail(null); setData(null); setOverview(null); setError(''); setPage(1);
+    // 同页再次点击也要重新加载：清空数据后靠 refresh 触发 load。
+    setRoute(key); setSelected(null); setDetail(null); setData(null); setOverview(null); setError(''); setPage(1); setRefresh(value => value + 1);
     if (preset) setFilters(previous => ({ ...previous, [key]: { ...emptyFilter, ...preset } }));
   }
   const can = (action: ConsoleAction['action']) => permissions[action].includes(session.user.role);
   const open = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => setDialog({ action, row });
-  const actionButton = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => can(action) ? <button className={destructiveActions[action] ? 'danger-button' : ['set-expiry', 'create-order', 'grant', 'create-user'].includes(action) ? 'primary' : undefined} key={action} onClick={() => open(action, row)}>{forms[action].title}</button> : null;
+  const actionButton = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => can(action) ? <button className={destructiveActions.has(action) ? 'danger-button' : ['set-expiry', 'create-order', 'grant', 'create-user'].includes(action) ? 'primary' : undefined} key={action} onClick={() => open(action, row)}>{forms[action].title}</button> : null;
   async function logout() { setBusy(true); try { await api('logout', messageSchema, {}, session.csrf); signedOut(); } catch (error) { setError(errorMessage(error)); } finally { setBusy(false); } }
-  async function verify(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); const form = event.currentTarget; setBusy(true); setError('');
-    try { const data = new FormData(form); const result = await api('verify', messageSchema, { code: data.get('code') }, session.csrf); form.reset(); setSession(await api('session', sessionSchema)); setError(result.message); }
-    catch (error) { setError(errorMessage(error)); } finally { setBusy(false); }
-  }
   function search(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const value = new FormData(event.currentTarget); const field = (name: string) => { const entry = value.get(name); return typeof entry === 'string' ? entry : ''; }; setFilters(previous => ({ ...previous, [route]: { q: field('q'), state: field('state'), channel: field('channel'), from: field('from'), to: field('to') } })); setPage(1); setRefresh(value => value + 1); }
   const title = navigation.find(item => item.key === route)?.title ?? '运营后台';
   const visibleNav = navigation.filter(item => !['users', 'audit'].includes(item.key) || session.user.role === 'owner').filter(item => item.key !== 'finance' || ['owner', 'finance'].includes(session.user.role));
   return <div className="app-shell"><aside className="sidebar"><a className="brand" href="#" onClick={event => { event.preventDefault(); navigate('overview'); }}><span className="brand-icon"><Command size={21} /></span><span>团播联动台<small>运营管理工作台</small></span></a><nav aria-label="后台导航">{[{ label: '业务空间', keys: ['overview', 'orders', 'licenses', 'exceptions', 'tickets', 'finance'] }, { label: '管理', keys: ['audit', 'users', 'security'] }].map(group => <div className="nav-group" key={group.label}><p className="nav-label">{group.label}</p>{visibleNav.filter(item => group.keys.includes(item.key)).map(item => <button key={item.key} aria-current={route === item.key ? 'page' : undefined} onClick={() => navigate(item.key)}><item.icon size={17} />{item.title}</button>)}</div>)}</nav><div className="account"><div className="avatar">{session.user.username.slice(0, 1).toUpperCase()}</div><span>{session.user.username}<small>{roleNames[session.user.role]}</small></span><button aria-label="退出登录" disabled={busy} onClick={() => { void logout(); }}><LogOut size={18} /></button></div></aside>
-    <main className="workspace" aria-label={title}><h1 className="visually-hidden">{title}</h1><div className="workspace-tools"><button aria-label="刷新当前页面" title="刷新当前页面" disabled={busy} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={16} /><span>刷新</span></button></div>
+    <main className="workspace" aria-label={title}><h1 className="visually-hidden">{title}</h1><div className="workspace-tools"><StepUpBadge verifiedAt={session.verifiedAt} clockOffset={clockOffset} onVerify={() => setStepUpOpen(true)} /><button aria-label="刷新当前页面" title="刷新当前页面" disabled={busy} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={16} /><span>刷新</span></button></div>
       {error && <div role="alert" className="alert">{error}</div>}
       {busy && <p role="status" className="muted">正在读取…</p>}
       {route === 'overview' && overview && <>
@@ -93,16 +84,16 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
         <section className="desk-shortcuts"><h2>开始处理</h2>{can('create-order') && <button onClick={() => open('create-order')}>创建线下订单<ArrowUpRight size={15} /></button>}{can('grant') && <button onClick={() => open('grant')}>签发内测 / 赠送授权<ArrowUpRight size={15} /></button>}<button onClick={() => navigate('licenses')}>管理激活码与期限<ArrowUpRight size={15} /></button></section></div>
         <details className="maintenance"><summary><span><ShieldCheck size={16} />运行与维护</span><span>服务{String(overview.item.service ?? '状态未知')} · 查看记录</span></summary><Fields row={Object.fromEntries(['service', 'backup', 'recovery'].map(key => [key, overview.item[key] ?? null]))} />{overview.related.some(row => row.category !== 'cashflow') && <DataTable rows={overview.related.filter(row => row.category !== 'cashflow')} fields={['name', 'state', 'checkedAt', 'detail']} />}</details>
       </>}
-      {route === 'security' && <section className="panel security"><h2>二次验证</h2><p className="muted">敏感操作需在 5 分钟内完成过验证。每枚验证码只能用一次。</p><form onSubmit={event => { void verify(event); }}><label>验证器验证码或恢复码<input name="code" required autoComplete="one-time-code" /></label><button className="primary" disabled={busy}>验证</button></form><p>最近验证：{beijingTime(session.verifiedAt)}</p><p className="muted">修改密码或更换验证器：由另一名管理员执行“重置人员认证”后重新开通。</p></section>}
+      {route === 'security' && <section className="panel security"><h2>二次验证</h2><StepUpPrompt key={session.verifiedAt} csrf={session.csrf} title="立即验证" hint="每枚验证码只能用一次；验证后 5 分钟内的敏感操作无需再输。" onVerified={reloadSession} /><p>最近验证：{beijingTime(session.verifiedAt)}</p><p className="muted">修改密码或更换验证器：由另一名管理员执行“重置人员认证”后重新开通。</p></section>}
       {!['overview', 'security'].includes(route) && <>
         {selected ? <><button className="back" onClick={() => { setSelected(null); setDetail(null); }}><ArrowLeft size={16} />返回列表</button>
-          {route === 'users' ? <section className="panel"><Fields row={detailRow(selected)} /><div className="actions">{actionButton('update-user', selected)}{actionButton('reset-user', selected)}</div></section> : detail && <>
+          {route === 'users' ? <section className="panel"><h2>人员详情</h2><Fields row={detailRow(selected)} /><div className="actions">{actionButton('update-user', selected)}{actionButton('reset-user', selected)}</div></section> : detail && <>
             <section className="panel"><h2>{resource === 'licenses' ? '授权详情' : resource === 'tickets' ? '工单详情' : '订单详情'}</h2><Fields row={detailRow(detail.item)} /><div className="actions">
               {resource === 'orders' && <>{detail.item.state === 'pending' && detail.item.channel === 'manual' && actionButton('fulfill', detail.item)}{detail.item.state === 'pending' && detail.item.paymentStatus === 'pending' && ['manual', 'alipay'].includes(String(detail.item.channel)) && actionButton('payment-link', detail.item)}{detail.item.state === 'pending' && detail.item.paymentStatus === 'pending' && detail.item.channel === 'manual' && actionButton('close-order', detail.item)}{['alipay', 'wechat'].includes(String(detail.item.channel)) && actionButton('reconcile', detail.item)}{detail.item.paymentStatus === 'confirmed' && ['pending', 'paid'].includes(String(detail.item.state)) && actionButton('retry-delivery', detail.item)}{actionButton('delivery-access', detail.item)}{actionButton('revoke-delivery-access', detail.item)}{actionButton('create-ticket', detail.item)}{detail.item.paymentStatus === 'confirmed' && actionButton('refund', detail.item)}{detail.item.channel === 'alipay' && detail.item.paymentStatus === 'confirmed' && detail.item.state !== 'refunded' && actionButton('alipay-refund', detail.item)}{Number(detail.item.channelRefundFen) > Number(detail.item.reviewedRefundFen) && actionButton('refund-review', detail.item)}{actionButton('invoice', detail.item)}</>}
-              {resource === 'licenses' && <>{actionButton('reveal', detail.item)}{!detail.item.revoked && actionButton('set-expiry', detail.item)}{!detail.item.revoked && actionButton('revoke', detail.item)}{detail.item.revoked && actionButton('migrate', detail.item)}</>}
+              {resource === 'licenses' && <>{actionButton('reveal', detail.item)}{detail.item.status !== 'revoked' && actionButton('set-expiry', detail.item)}{detail.item.status !== 'revoked' && actionButton('revoke', detail.item)}{detail.item.status === 'revoked' && actionButton('migrate', detail.item)}</>}
               {resource === 'tickets' && detail.item.state !== 'closed' && actionButton('update-ticket', detail.item)}
             </div></section>
-            {detail.related.length > 0 && <section className="panel"><h2>{resource === 'orders' ? '关联授权' : resource === 'licenses' ? '续费记录' : '关联订单'}</h2><DataTable rows={detail.related} fields={resource === 'orders' ? ['id', 'customer', 'bound', 'revoked', 'useUntil'] : resource === 'licenses' ? ['id', 'useUntil', 'updatesUntil'] : ['reference', 'customer', 'state']} select={row => { setRoute(resource === 'orders' ? 'licenses' : 'orders'); setSelected(row); setDetail(null); }} /></section>}
+            {detail.related.length > 0 && <section className="panel"><h2>{resource === 'orders' ? '关联授权' : resource === 'licenses' ? '续费记录' : '关联订单'}</h2><DataTable rows={detail.related} fields={resource === 'orders' ? ['customer', 'status', 'useUntil', 'machineCode'] : resource === 'licenses' ? ['id', 'useUntil', 'updatesUntil'] : ['reference', 'customer', 'state']} select={row => { setRoute(resource === 'orders' ? 'licenses' : 'orders'); setSelected(row); setDetail(null); }} /></section>}
             {detail.history.length > 0 && <section className="panel"><h2>操作记录</h2><DataTable rows={detail.history} fields={['at', 'operator', 'action', 'reason', 'result']} /></section>}
           </>}
         </> : <><div className="actions">{route === 'orders' && actionButton('create-order')}{route === 'licenses' && actionButton('grant')}{route === 'users' && actionButton('create-user')}{['orders', 'finance'].includes(route) && ['owner', 'finance'].includes(session.user.role) && <a className="button" href={`/console-api/export${route === 'finance' ? '/finance' : ''}?${query}`} download><Download size={16} />导出筛选结果</a>}</div>
@@ -114,7 +105,8 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
         </>}
       </>}
     </main>
-    {dialog && <ActionDialog key={`${dialog.action}:${String(dialog.row?.id ?? '')}`} action={dialog.action} row={dialog.row} csrf={session.csrf} close={() => setDialog(null)} changed={() => setRefresh(value => value + 1)} />}
+    {stepUpOpen && <StepUpDialog csrf={session.csrf} close={() => setStepUpOpen(false)} onVerified={() => { setStepUpOpen(false); reloadSession(); }} />}
+    {dialog && <ActionDialog key={`${dialog.action}:${String(dialog.row?.id ?? '')}`} action={dialog.action} row={dialog.row} csrf={session.csrf} verifiedAt={session.verifiedAt} clockOffset={clockOffset} syncSession={reloadSession} close={() => setDialog(null)} changed={() => setRefresh(value => value + 1)} />}
   </div>;
 }
 function App() {

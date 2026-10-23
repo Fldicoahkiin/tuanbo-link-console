@@ -17,6 +17,7 @@ import { renameMa2Object } from './ma2-rename-service';
 import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor';
 import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recovery';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
+import { writeMa2SongTimecode } from './ma2-song-timecode';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
@@ -436,12 +437,17 @@ export class Ma2LayoutService {
         }
       }
       if (plan.deletions.some(number => actualHashes.has(number))) throw new Error('歌曲 Cue 删除回读未通过');
+      // The show record the project holds, or the one recorded here when the project never received it.
+      const previousTimecode = request.binding?.timecode ?? owners.find(owner => owner.key === key && owner.projectId === request.projectId && owner.itemId === request.itemId)?.binding?.timecode;
       const executor = executorPage ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, request.binding?.executor, this.isPlaying, recoveringCreation) : undefined;
       const afterLayout = executorPage ? null : changed ? await this.snapshot(connection, layoutRequest) : beforeLayout;
       if (!executorPage && !afterLayout?.value.items.some(item => item.sequence === target)) throw new Error('Layout 未回读到本曲序列');
       const verifiedDirectory = await this.directory(bridge, layoutRequest); const readAt = new Date().toISOString();
       progress('verification', 1, 1, `${executor ? `执行器 ${executor}` : `Layout ${layoutRequest.layout}`} · 序列 ${target} 已确认`);
-      const result = ma2SongSyncResultSchema.parse({ binding: { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(executor ? { executor } : {}), sequence: target, name: plan.conflicts.some(conflict => conflict.field === 'sequence-name') ? request.name : report.name, baselineXml: canonical(ma2SongSyncBaseline(request, verifiedXml, plan.conflicts)), points: plan.points },
+      const result = ma2SongSyncResultSchema.parse({ binding: { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(executor ? { executor } : {}), sequence: target, name: plan.conflicts.some(conflict => conflict.field === 'sequence-name') ? request.name : report.name, baselineXml: canonical(ma2SongSyncBaseline(request, verifiedXml, plan.conflicts)),
+          // The Timecode show record and the times it fires stay until the show is written again below.
+          points: plan.points.map(point => { const atMs = request.binding?.points.find(value => value.id === point.id)?.atMs; return atMs === undefined ? point : { ...point, atMs }; }),
+          ...previousTimecode ? { timecode: previousTimecode } : {} },
         library: { directory: verifiedDirectory, readAt, sequences: [{ sequence: target, name: report.name, cues: report.cues }], errors: [], fixtureDetails: 'included', fixtureUsage: inspectMa2CueFixtures(verifiedXml), cueAttributes: inspectMa2CueAttributes(verifiedXml, readAt, true) },
         layout: afterLayout?.value ?? null, removed: plan.removed, backupFile, changed, conflicts: plan.conflicts,
         remoteRevision: createHash('sha256').update(canonical(verifiedXml)).digest('hex') });
@@ -456,7 +462,22 @@ export class Ma2LayoutService {
       const adopted = readbackFile && adoptReadback ? await adoptReadback(readbackFile, result) : false;
       const backups = [...remoteExport ? [remoteExport] : [], ...labelBackups, ...readbackFile && !adopted ? [readbackFile] : []];
       if (backups.length) await this.backups.record(rawBridge, { console: endpoint, object: `Sequence ${target}`, files: backups });
-      return result;
+      if (request.timecodeStartMs === undefined || !executor) return result;
+      // The Sequence is confirmed and recorded, so a failure from here on concerns only the show.
+      wrote = false;
+      progress('verification', 1, 1, `写入本曲时间码节目 · 序列 ${target}`);
+      const times = new Map(request.points.map(point => [point.id, point.atMs]));
+      const journal = (binding: Ma2SongSyncResult['binding']): Promise<void> => writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding, conflicts: result.conflicts ?? [] }]));
+      const written = await writeMa2SongTimecode(bridge, { previous: previousTimecode, sequence: target, executor, startMs: request.timecodeStartMs, name: report.name ?? toConsoleLabel(request.name), version: directory.version,
+        cues: result.binding.points.map(point => {
+          const cue = report.cues.find(value => Number(value.number) === Number(point.cue));
+          if (!cue) throw new Error(`本曲时间码节目未写入：序列 ${target} 回读中没有 Cue ${point.cue}`);
+          return { atMs: times.get(point.id)!, cueIndex: cue.index, number: cue.number, name: cue.name };
+        }), created: timecode => journal({ ...result.binding, timecode }) });
+      const timed = ma2SongSyncResultSchema.parse({ ...result, binding: { ...result.binding, timecode: written.timecode, points: result.binding.points.map(point => ({ ...point, atMs: times.get(point.id)! })) } });
+      await journal(timed.binding);
+      if (written.backup) await this.backups.record(rawBridge, { console: endpoint, object: `Timecode ${written.timecode.number}`, files: [written.backup] });
+      return timed;
     } catch (cause) { throw new Error(`${wrote ? `序列 ${target} 的写入结果待核对，原位置与备份 ${backupFile || '新建对象记录'} 已保留。` : ''}${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
     finally { clearTimeout(timer!); this.busy = false; }
   }

@@ -46,3 +46,30 @@ it('已确认配对的歌有本地修改尚未写到控台：编灯中，并给�
   lighting.ma2Bindings[0]!.timeOriginMs = 0;
   expect(songLightingStatus(confirmed, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('起点不一致')] });
 });
+
+function ownShowSong(times: number[], start = 480000) {
+  const { project } = fixture();
+  const lighting = createLightingDocument();
+  lighting.tracks = [{ ...track(0), clips: [{ ...track(0).clips[0]!, events: times.map((at, index) => ({ id: `p${index}`, kind: 'ma2' as const, at, sequence: 9000, executor: '1000.101', cue: `${index + 1}.000`, action: 'goto' as const, label: `段落 ${index + 1}` })) }] }];
+  lighting.consoleSong = { endpoint: '192.0.2.1:30000', show: '现场 Show', layout: null, executor: '1000.101', sequence: 9000, name: 'GeQu', baselineXml: '<MA/>',
+    points: [0, 1000].map((atMs, index) => ({ id: `p${index}`, cue: `${index + 1}.000`, atMs })), timecode: { number: 9000, offset: 14400, slot: 'TC Slot 2', revision: 'a'.repeat(64) } };
+  project.rundown[1]!.lighting = lighting; project.rundown[1]!.playback!.mtcOffsetMs = start;
+  return project;
+}
+
+it('自有时间码节目：点位和起始码都与上次写入一致即可演出；挪动时间、改起始码算编灯中；只有序列没有节目仍是未匹配', () => {
+  expect(songLightingStatus(ownShowSong([0, 1000]), '歌曲乙')).toEqual({ state: 'ready', timecode: 9000, startMs: 480000, frameRate: '30' });
+  expect(songLightingStatus(ownShowSong([0, 1010]), '歌曲乙')).toEqual({ state: 'ready', timecode: 9000, startMs: 480000, frameRate: '30' });
+  expect(songLightingStatus(ownShowSong([0, 1500]), '歌曲乙')).toEqual({ state: 'editing', pending: 1 });
+  expect(songLightingStatus(ownShowSong([0, 1000, 2000]), '歌曲乙')).toEqual({ state: 'editing', pending: 1 });
+  expect(songLightingStatus(ownShowSong([0, 1000], 490000), '歌曲乙')).toEqual({ state: 'editing', pending: 1 });
+  const unwritten = ownShowSong([0, 1000]); delete unwritten.rundown[1]!.lighting!.consoleSong!.timecode;
+  expect(songLightingStatus(unwritten, '歌曲乙')).toEqual({ state: 'unmatched' });
+});
+
+it('只放在 Layout 页面上、没有执行器位置的本曲序列建不了时间码节目：需处理并说明', () => {
+  const project = ownShowSong([0, 1000]);
+  const song = project.rundown[1]!.lighting!.consoleSong!;
+  project.rundown[1]!.lighting!.consoleSong = { ...song, layout: 999, executor: undefined, timecode: undefined };
+  expect(songLightingStatus(project, '歌曲乙')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('没有执行器位置')] });
+});
