@@ -98,7 +98,7 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
           <div className="update-summary-icon">{icon}</div>
           <div>
             <strong>{status?.message ?? '正在读取更新状态…'}</strong>
-            <span>当前版本 {status?.currentVersion ?? '—'}{status?.availableVersion && status.availableVersion !== status.currentVersion ? ` · 可用版本 ${status.availableVersion}` : ''}</span>
+            <span>当前版本 {status?.currentVersion ?? '—'}{status?.availableVersion && (phase === 'available' || phase === 'downloading' || phase === 'downloaded') ? ` · 可用版本 ${status.availableVersion}` : ''}</span>
           </div>
         </div>
 

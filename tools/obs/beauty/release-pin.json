@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sources": {
+    "plugin": "348c4822b75b58bacf02fe67421c38d6ecbf6a2e81bbf7b6473544efcd72f72e",
+    "runtime": "90b42695643cb4444e8b3e5d35ba54d9092bfb3c2216932670040ad7bff62419"
+  },
+  "outputs": {
+    "files": 2109,
+    "bytes": 892667540,
+    "sha256": "2dfd72cfcae93a46018829e994d9292e004efa81867c83583ad043275aac6912"
+  },
+  "provenance": {
+    "source": "Codex 工作区 C:\\Users\\WYZB\\Documents\\ChatGPT\\团播切片\\artifacts\\beauty-prototype 的美颜构建（运行时 2026-10-06 14:40 构建），2026-10-23 只读复制到构建机 DESKTOP-2C8JIC2 的 C:\\dev\\tblink-release\\artifacts\\beauty-prototype。",
+    "generation": "插件：tools/obs/beauty/build.mjs（Zig 0.14.1，OBS 32.0.4 SDK）。运行时：tools/obs/beauty/build-runtime.mjs（PyInstaller 6.16.0，手工准备的 Python 环境 artifacts/beauty-prototype/python）。rtmdet-ins-tiny/raw-heads.onnx 与 selfie_skin_probability.onnx 由独立的 Torch/MMDetection 环境导出，见 derived-models.json。",
+    "sourceCheck": "固定时逐文件核对：Codex 工作区记录的美颜源码与本仓库只差换行符（多数文件 CRLF 与 LF 不同，body.py 有一行 CRLF 混排），统一换行后完全一致；源码指纹因此按统一换行计算。",
+    "reproducible": false,
+    "openIssue": "这套 Python 环境和两个派生模型目前没有人能重新生成。美颜源码一旦改动，只能在保留原环境的机器上重建，再运行 node tools/obs/beauty/pin-release.mjs 更新本文件。"
+  }
+}

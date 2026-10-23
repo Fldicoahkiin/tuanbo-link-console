@@ -49,6 +49,7 @@ for (const credential of ['missing', 'tampered', 'restart']) {
     assert.equal(result.build.name, portableTestPackage.productName);
     assert.equal(result.build.appId, portableTestPackage.appId);
     assert.match(result.build.gitSha ?? '', /^[0-9a-f]{40}(-dirty)?$/);
+    assert.match(result.build.version, /^\d+\.\d+\.0-test\.\d+\+g[0-9a-f]{7}(\.dirty)?$/);
     assert.equal(result.logsReadable, true);
     if (credential === 'tampered') assert.equal(await readFile(fakeLicense, 'utf8'), 'invalid-test-credential');
     await page.screenshot({ path: join(directory, `${credential}-workspace.png`) });

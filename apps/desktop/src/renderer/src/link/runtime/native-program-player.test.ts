@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, linkCueSchema, parseLinkProject, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
-import { NativeProgramPlayer } from '@tb/core/link';
+import { NativeProgramPlayer, type ProgramLightingOutput } from '@tb/core/link';
 import { emptyInternalPlayerState } from './internal-playback-controller';
 import { nativeProgramSnapshot } from '@tb/core/link';
 import type { NativeObsPreload } from '@tb/schema';
@@ -48,7 +48,7 @@ function fixture() {
     stop: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.resolve('unused')),
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: 'TEST', audioSampleRate: 48000 as const }),
     changed: (next: typeof state) => { state = next; }, notice: vi.fn() };
-  const lighting = { prepare: vi.fn(() => Promise.resolve()), tick: vi.fn(), finish: vi.fn(), stop: vi.fn() };
+  const lighting = { prepare: vi.fn<ProgramLightingOutput['prepare']>(() => Promise.resolve()), tick: vi.fn(), finish: vi.fn(), stop: vi.fn() };
   const player = new NativeProgramPlayer(project, 'C:/test/project.tblink', 7, deps, api, lighting);
   return { player, project, deps, api, lighting, emit, state: () => state };
 }
@@ -98,6 +98,36 @@ it('时间码短暂中断和 P1 一样按整帧继续，不标红；音频与时
   await f.player.dispose();
 });
 
+it('开播前检查：没有操作员选择时检查不过的歌无灯光播放并标红；同曲定位沿用路由；选择无灯光只提示；没有灯光工作的歌照发时间码', async () => {
+  const f = fixture(), lighting = createLightingDocument();
+  lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '音频 0', readAt: '2026-10-22T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [], mappings: [], playback: 'editable', timeOriginMs: 480000 }];
+  f.project.rundown[0]!.lighting = lighting;
+  await f.player.play('song-0');
+  expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBeNull(); expect(f.lighting.prepare).not.toHaveBeenCalled();
+  expect(f.state()).toMatchObject({ status: 'playing', mtcPositionMs: null }); expect(f.state().fault).toMatch(/^这首歌的灯光需要处理：.*；本首无灯光播放$/);
+  await f.player.seek(3000);
+  expect(f.api.prepareNativePlayback.mock.calls[1]?.[0].midiPortName).toBeNull(); expect(f.state().fault).toBeNull();
+  await f.player.stop(); await f.player.play('song-0', undefined, false, true);
+  expect(f.api.prepareNativePlayback.mock.calls[2]?.[0].midiPortName).toBeNull();
+  expect(f.state().fault).toBeNull(); expect(f.state().notice).toMatch(/^本首无灯光播放：这首歌的灯光需要处理/);
+  await f.player.play('song-1');
+  expect(f.api.prepareNativePlayback.mock.calls[3]?.[0].midiPortName).toBe('TEST'); expect(f.state().fault).toBeNull(); expect(f.state().notice).not.toContain('无灯光');
+  await f.player.dispose();
+});
+
+it('播放只发时间码：网络或直接输出的歌照发时间码，本地时间线不交给灯光输出，停止时释放本曲执行器', async () => {
+  const f = fixture(), release = vi.fn(() => Promise.resolve()), lighting = { ...createLightingDocument(), outputMode: 'network' as const };
+  lighting.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {},
+    clips: [{ id: 'clip', name: '编排', start: 0, duration: 5000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', at: 1000, sequence: 1, executor: '1.101', cue: '1', action: 'goto', label: '开场', runMode: 'independent' }] }] }];
+  f.project.rundown[0]!.lighting = lighting; Object.assign(f.lighting, { release });
+  await f.player.play('song-0');
+  expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBe('TEST');
+  expect(f.lighting.prepare.mock.calls[0]?.[0]).toMatchObject({ outputMode: 'timecode', tracks: [] });
+  expect(f.state().fault).toBeNull();
+  await f.player.stop(); expect(release).toHaveBeenCalledOnce();
+  await f.player.dispose();
+});
+
 it('有画面的歌等待画面准备完成（例如首次生成定位缓存）再开始，不因一秒窗口放弃画面', async () => {
   vi.useFakeTimers();
   try {
@@ -142,6 +172,19 @@ it('选择节目提前预备画面且不出声；重复选择不重做，播放�
   await f.player.play('song-0'); f.player.preloadSelected('song-1');
   expect(f.api.preloadNativeObs).toHaveBeenCalledTimes(1);
   await f.player.stop(); expect(f.api.cancelNativeObsPreload).toHaveBeenCalledTimes(1);
+  await f.player.dispose();
+});
+
+it('同一首歌开始播放后，被拒绝的预选画面预备不提示失败；播放前被拒绝仍提示', async () => {
+  const f = fixture(); f.project.obsOutputMode = 'scenes';
+  let refuse: (error: Error) => void = () => undefined;
+  f.api.preloadNativeObs.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
+  f.player.preloadSelected('song-0'); await f.player.play('song-0');
+  refuse(new Error('播放或画面会话活动时不能预备另一个节目')); await Promise.resolve(); await Promise.resolve();
+  expect(f.state().notice ?? '').not.toContain('节目画面预备未完成');
+  await f.player.stop();
+  f.api.preloadNativeObs.mockRejectedValueOnce(new Error('素材不可读')); f.player.preloadSelected('song-1');
+  await vi.waitFor(() => expect(f.state().notice).toContain('节目画面预备未完成：素材不可读'));
   await f.player.dispose();
 });
 
@@ -393,19 +436,17 @@ it('不支持的 MTC 帧率明确隔离该通道，保留已知直接灯光和�
   expect(f.project.rundown[0]!.playback!.mtcOffsetMs).toBe(480000);
 });
 
-for (const mode of ['network', 'direct', 'timecode'] as const) it(`原生播放：待核对的时间码配对与 ${mode} 输出隔离`, async () => {
+for (const mode of ['network', 'direct', 'timecode'] as const) it(`原生播放：时间码配对待核对的 ${mode} 输出歌曲开播前检查不过，无灯光播放并标红`, async () => {
   const f = fixture();
   f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: mode };
   f.project.ma2ReadState = { source: 'console', catalog: { directory: { show: 'test', generation: 'session', version: '3.7.0.5', entries: [] }, readAt: '2026-10-08T00:00:00.000Z', entries: [] },
     pairs: {}, pairings: { '2': { itemId: 'song-0', status: 'stale', evidence: '', reason: '时间依据已变化' } }, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };
   const result = nativeProgramSnapshot(f.project, 'song-0', 7, 500, 48000);
-  expect(result).toMatchObject({ allowMtc: false, allowLighting: mode !== 'timecode' });
-  if (mode !== 'timecode') expect(result.notice).toBeNull();
-  else expect(result.notice).toContain('本次不发送时间码');
+  expect(result).toMatchObject({ allowMtc: false, allowLighting: false });
+  expect(result.notice).toContain('本次不发送时间码');
   await f.player.play('song-0');
-  expect(f.state().status).toBe('playing');
-  expect(f.lighting.prepare).toHaveBeenCalledTimes(mode !== 'timecode' ? 1 : 0);
-  expect(f.state().notice).not.toContain('按开关设置输出');
+  expect(f.state().status).toBe('playing'); expect(f.state().fault).toMatch(/时间依据已变化.*；本首无灯光播放$/);
+  expect(f.lighting.prepare).not.toHaveBeenCalled();
   expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBeNull();
   expect(f.project.ma2ReadState?.pairings?.['2']?.status).toBe('stale');
   await f.player.stop();

@@ -2,7 +2,7 @@ import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { afterEach, expect, it } from 'vitest';
 import { LicensingService } from './service';
 import { totpCode, type ConsoleSession } from './console-auth';
-import { pageQuerySchema, permissions, type ConsoleAction } from './console-contract';
+import { actionSchema, pageQuerySchema, permissions, type ConsoleAction, type UpdateOutcome, type UpdateRequest, type UpdateStatus } from './console-contract';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
@@ -44,6 +44,22 @@ it('知道密码也不能跨来源穷举验证码，锁定期间同样返回无�
   await expect(s.consoleService.auth.login('owner', 'a-secure-test-password', s.code(s.first.id), 'locked')).rejects.toThrow('无效');
   s.advance(900001);
   expect((await s.consoleService.auth.login('owner', 'a-secure-test-password', s.code(s.first.id), 'after')).session.user.role).toBe('owner');
+});
+it('只签发一份时结果直接带回激活码和授权编号，多份时只返回订单；工单详情带业务订单号', async () => {
+  const s = await setup();
+  const single = await s.execute({ ...grant, quantity: 1 });
+  const licenseId = String(s.consoleService.detail('orders', single.id!, s.login.session).related[0]!.id);
+  expect(single).toMatchObject({ message: '特殊授权已签发', licenseId, secret: s.service.consoleReveal(licenseId) });
+  const multiple = await s.execute(grant);
+  expect(multiple.secret).toBeUndefined(); expect(multiple.licenseId).toBeUndefined();
+  const sale = await s.execute({ action: 'create-order', reference: 'single-sale', customer: '客户', customerType: 'company', quantity: 1, amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', reason: '' });
+  const paid = await s.execute({ action: 'fulfill', id: sale.id!, amountFen: 80000, paymentReference: 'single-bank', paymentMethod: '对公转账', reason: '' });
+  expect(paid.secret).toMatch(/^TBA-/); expect(paid.licenseId).toBe(s.consoleService.detail('orders', sale.id!, s.login.session).related[0]!.id);
+  const ticket = await s.execute({ action: 'create-ticket', id: sale.id!, licenseId: null, category: 'other', note: '问题', reason: '' });
+  expect(s.consoleService.detail('tickets', ticket.id!, s.login.session).item.orderReference).toBe('single-sale');
+  // 格式不对的到期调整记录只标在该节点上，详情照常打开。
+  s.db.prepare("INSERT INTO audit VALUES (?, ?, 'license.expiry-adjusted', ?, 'not-json')").run(randomUUID(), new Date(s.now()).toISOString(), licenseId);
+  expect(s.consoleService.detail('licenses', licenseId, s.login.session).timeline!.map(node => [node.event, node.detail])).toContainEqual(['调整到期', '记录无法解析']);
 });
 it('特殊授权一码一机，不写入收款，重复提交不重复发码', async () => {
   const s = await setup(); const operationId = randomUUID(); const result = await s.execute(grant, s.login.session, operationId);
@@ -208,6 +224,31 @@ it('授权生命周期状态由服务端统一计算：列表、页签计数、�
   expect(s.consoleService.detail('licenses', ids[2]!, s.login.session).item).toMatchObject({ status: 'revoked', orderReference: expect.stringMatching(/^GRANT-/) as unknown });
   expect(s.consoleService.overview(s.login.session).item.expiring).toBe(1);
   expect(s.consoleService.list('users', query(''), s.login.session).items.map(row => row.status)).toEqual(['enabled']);
+  // 生命周期时间线：事件来自业务审计，操作人来自后台审计；只读角色看不到操作人。
+  const timeline = (licenseId: string, role: 'owner' | 'viewer' = 'owner') => s.consoleService.detail('licenses', licenseId, { ...s.login.session, user: { ...s.login.session.user, role } }).timeline!.map(node => [node.event, node.detail, node.operator]);
+  expect(timeline(ids[0]!)).toEqual([['签发（内测）', null, 'owner'], ['首次激活', '机器码 AAAAAAAA…', '客户端']]);
+  expect(timeline(ids[2]!)).toEqual([['签发（内测）', null, 'owner'], ['撤销', '撤销', 'owner']]);
+  expect(timeline(ids[3]!)).toEqual([['签发（内测）', null, 'owner'], ['调整到期', '2026-11-06 08:00 → 2026-10-07 08:00', 'owner'], ['已过期', '按到期时间推算，不是操作记录', null]]);
+  expect(timeline(ids[2]!, 'viewer')).toEqual([['签发（内测）', null, null], ['撤销', '撤销', null]]);
+});
+it('原因分档：选填操作留空可执行且审计照记操作人、操作、对象和时间；必填操作留空被拒', async () => {
+  const id = randomUUID();
+  for (const action of ['reconcile', 'payment-link', 'retry-delivery', 'delivery-access'] as const) expect(actionSchema.safeParse({ action, id, reason: '' }).success).toBe(true);
+  for (const action of ['revoke', 'migrate', 'reveal', 'revoke-delivery-access', 'close-order', 'reset-user'] as const) expect(actionSchema.safeParse({ action, id, reason: ' ' }).success).toBe(false);
+  expect(actionSchema.safeParse({ action: 'refund-review', id, decision: 'revoke', reason: '' }).success).toBe(false);
+  // 核款、退款登记、开票和处理工单的来由已由流水号、凭证或发票编号、处理结论说明，原因选填。
+  expect(actionSchema.safeParse({ action: 'update-ticket', id, state: 'processing', conclusion: '', reason: '' }).success).toBe(true);
+  expect(actionSchema.safeParse({ action: 'fulfill', id, amountFen: 1, paymentReference: 'bank', paymentMethod: '转账', reason: '' }).success).toBe(true);
+  expect(actionSchema.safeParse({ action: 'refund', id, amountFen: 1, reference: 'r', handledAt: '2026-10-06T00:00:00Z', reason: '' }).success).toBe(true);
+  expect(actionSchema.safeParse({ action: 'invoice', id, state: 'requested', buyer: '抬头', taxId: '', reference: '', reason: '' }).success).toBe(true);
+  const s = await setup();
+  const order = await s.execute({ action: 'create-order', reference: 'no-note', customer: '客户', customerType: 'company', quantity: 1, amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', reason: '' });
+  await s.execute({ action: 'fulfill', id: order.id!, amountFen: 80000, paymentReference: 'no-note-bank', paymentMethod: '转账', reason: '到账' });
+  expect((await s.execute({ action: 'delivery-access', id: order.id!, reason: '' })).secret).toMatch(/^TBD-/);
+  for (const action of ['create-order', 'delivery-access']) {
+    expect(s.db.prepare('SELECT actor,action,target,reason,result FROM console_audit WHERE action=?').get(action)).toEqual({ actor: s.first.id, action, target: order.id, reason: '', result: 'success' });
+  }
+  expect(s.db.prepare("SELECT detail FROM audit WHERE action='order.delivery-access-issued'").get()).toEqual({ detail: '后台重发领取凭据' });
 });
 it('创建线下订单与确认线下收款不落在同一个非管理员角色', () => {
   for (const role of ['operations', 'finance', 'viewer'] as const) expect(permissions['create-order'].includes(role) && permissions.fulfill.includes(role)).toBe(false);
@@ -276,4 +317,37 @@ it('待办筛选、操作日志对象名称与动作筛选、财务合计与导�
   const csv = s.consoleService.exportCsv('finance', query({ state: 'refund' }), s.login.session, 'export');
   expect(csv.split('\r\n')).toHaveLength(3); expect(csv).toContain('"refund-old"');
   await expect(Promise.resolve().then(() => s.consoleService.exportCsv('finance', query({}), { ...s.login.session, user: { ...s.login.session.user, role: 'operations' } }, 'export'))).rejects.toThrow('财务');
+});
+it('发布更新只由管理员在二次验证后提交，后台只排队请求，结果以服务器发布脚本为准', async () => {
+  const s = await setup();
+  const requests: UpdateRequest[] = [];
+  let outcome: UpdateOutcome | null = { ok: true, message: '已发布 0.5.0' };
+  const status: UpdateStatus = { version: 1, generatedAt: '2026-10-23T08:00:00Z', feed: { version: '0.4.29', releaseDate: '2026-09-28T18:15:14.517Z', signed: false },
+    rollback: { version: null, issue: '没有可以回滚到的上一版' },
+    staged: [{ name: '0.5.0-13f7e625898e', issue: null, version: '0.5.0', gitSha: '13f7e625898e'.padEnd(40, '0'), manifestSha256: 'a'.repeat(64), releaseDate: '2026-10-23T06:34:50.642Z', kid: 'release-2026-10-a', size: 412835955 }] };
+  const channels = { reconcile: () => Promise.resolve({}), refund: () => Promise.reject(new Error('不涉及')), paymentLink: () => { throw new Error('不涉及'); },
+    updates: { status: () => Promise.resolve(status), request: (request: UpdateRequest) => { requests.push(request); return Promise.resolve(outcome); } } };
+  const publish: ConsoleAction = { action: 'publish-update', id: '0.5.0-13f7e625898e', manifestSha256: 'a'.repeat(64), reason: '0.5.0 安装验收通过' };
+  const operations = { ...s.login.session, user: { ...s.login.session.user, role: 'operations' as const } };
+  await expect(s.consoleService.updates(operations, channels)).rejects.toThrow('管理员');
+  await expect(s.consoleService.execute({ operationId: randomUUID(), input: publish }, operations, randomUUID(), channels)).rejects.toThrow('当前角色不能执行此操作');
+  const view = await s.consoleService.updates(s.login.session, channels);
+  expect(view.item).toMatchObject({ feedVersion: '0.4.29', rollbackVersion: null });
+  expect(view.related[0]).toMatchObject({ id: '0.5.0-13f7e625898e', manifestSha256: 'a'.repeat(64), issue: null });
+
+  s.advance(300001);
+  await expect(s.consoleService.execute({ operationId: randomUUID(), input: publish }, s.login.session, randomUUID(), channels)).rejects.toThrow('二次验证');
+  expect(requests).toEqual([]);
+  const verified = { ...s.login.session, verifiedAt: s.now() };
+  await expect(s.consoleService.execute({ operationId: randomUUID(), input: publish }, verified, randomUUID(), channels)).resolves.toMatchObject({ message: '已发布 0.5.0' });
+  expect(requests[0]).toMatchObject({ action: 'publish', staged: '0.5.0-13f7e625898e', manifestSha256: 'a'.repeat(64), reason: '0.5.0 安装验收通过' });
+  expect(requests[0]!.actor).toContain('owner');
+
+  outcome = { ok: false, message: 'Version 0.5.0 is not above the feed (0.5.0)' };
+  await expect(s.consoleService.execute({ operationId: randomUUID(), input: publish }, verified, randomUUID(), channels)).rejects.toThrow('服务器拒绝：Version 0.5.0 is not above the feed');
+  outcome = null;
+  const submitted = await s.consoleService.execute({ operationId: randomUUID(), input: { action: 'rollback-update', id: '0.4.29', reason: '回退' } }, verified, randomUUID(), channels);
+  expect(submitted.message).toContain('尚未返回结果');
+  expect(requests.at(-1)).toMatchObject({ action: 'rollback', version: '0.4.29' });
+  await expect(s.consoleService.updates(s.login.session, { reconcile: channels.reconcile, refund: channels.refund, paymentLink: channels.paymentLink })).rejects.toThrow('未启用');
 });

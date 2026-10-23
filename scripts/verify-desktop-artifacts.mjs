@@ -114,21 +114,25 @@ function verifyTestDistribution(directory) {
   if (process.platform !== 'win32') fail('--test-dist 校验必须在 Windows 原生环境运行');
   if (!existsSync(directory)) fail(`缺少测试包构建目录：${directory}`);
   const entries = readdirSync(directory);
-  const installerName = `${portableTestPackage.artifactPrefix}${desktopPackage.version}-x64.exe`;
+  // The configuration build-portable-test.mjs passed to electron-builder; the installer itself is compressed.
+  const builderConfig = join(directory, 'builder.json');
+  const config = existsSync(builderConfig) ? JSON.parse(readFileSync(builderConfig, 'utf8')) : undefined;
+  const version = config?.extraMetadata?.version;
+  const prerelease = /^(\d+)\.(\d+)\.(\d+)-test\.(\d+)\+g[0-9a-f]{7,40}(\.dirty)?$/.exec(version ?? '');
+  const windowsVersion = prerelease && prerelease[4] === config.buildNumber ? prerelease.slice(1, 5).join('.') : undefined;
+  const installerName = `${portableTestPackage.artifactPrefix}${version}-x64.exe`;
   const installer = join(directory, installerName);
   const executable = join(directory, 'win-unpacked', `${portableTestPackage.productName}.exe`);
   const packagedApp = join(directory, 'win-unpacked/resources/app.asar');
-  // The configuration build-portable-test.mjs passed to electron-builder; the installer itself is compressed.
-  const builderConfig = join(directory, 'builder.json');
   const identity = existsSync(packagedApp) ? JSON.parse(readAsarFile(packagedApp, 'package.json').toString('utf8')) : undefined;
   const distribution = existsSync(packagedApp) ? embeddedDistributionChannel(readAsarFile(packagedApp, 'out/main/index.cjs')) : null;
   const executableInfo = existsSync(executable) ? readWindowsVersionInfo(executable) : undefined;
-  const config = existsSync(builderConfig) ? JSON.parse(readFileSync(builderConfig, 'utf8')) : undefined;
   return [
+    { name: 'test-prerelease-version', ok: windowsVersion !== undefined, detail: `version=${version}, buildNumber=${config?.buildNumber}` },
     { name: 'test-installer', ok: existsSync(installer), detail: installerName },
-    { name: 'test-executable-version-info', ok: executableInfo?.ProductName === portableTestPackage.productName && executableInfo?.FileVersion === desktopPackage.version, detail: formatVersionInfo(executableInfo) },
-    { name: 'test-package-identity', ok: identity?.name === portableTestPackage.name && identity?.productName === portableTestPackage.productName,
-      detail: `name=${identity?.name}, productName=${identity?.productName}; install folder and userData follow these` },
+    { name: 'test-executable-version-info', ok: executableInfo?.ProductName === portableTestPackage.productName && executableInfo?.FileVersion === windowsVersion, detail: formatVersionInfo(executableInfo) },
+    { name: 'test-package-identity', ok: identity?.name === portableTestPackage.name && identity?.productName === portableTestPackage.productName && identity?.version === version,
+      detail: `name=${identity?.name}, productName=${identity?.productName}, version=${identity?.version}; install folder and userData follow name and productName` },
     { name: 'test-builder-config', ok: config?.appId === portableTestPackage.appId && config?.publish === null && config?.extraMetadata?.name === portableTestPackage.name,
       detail: config ? `appId=${config.appId}, publish=${JSON.stringify(config.publish)}, name=${config.extraMetadata?.name}` : 'missing builder.json' },
     { name: 'test-embeds-portable-distribution', ok: distribution === 'portable-test', detail: `main bundle distribution=${distribution}` },

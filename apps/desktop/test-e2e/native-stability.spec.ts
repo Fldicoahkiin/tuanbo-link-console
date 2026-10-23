@@ -67,7 +67,6 @@ test('高负载工程正式原生音频连续节目与界面交互', async ({}, 
     await expect(page.locator('.player-transport .primary-button')).toBeEnabled();
     // Explicitly disable this instance's MTC before preparation. The independent
     // prototype loopback owns its test port and must never receive a second sender.
-    await page.keyboard.press('Control+KeyM');
     await page.locator('.player-transport .primary-button').click();
     await expect(page.locator('.player-transport.status-playing')).toBeVisible();
     if (traceUi) await app.evaluate(async ({ BrowserWindow }, profileCpu) => {

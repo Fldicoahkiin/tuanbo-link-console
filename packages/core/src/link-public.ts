@@ -63,6 +63,7 @@ export * from './ma2-console-label';
 export * from './ma2-pending-changes';
 export * from './song-lighting-status';
 export * from './mtc-start';
+export * from './lighting-start-check';
 export * from './lighting-music';
 export * from './music-analysis';
 export { automaticMusicCandidates, applyAutomaticMusicCandidates, removeAutomaticMusicAnnotations } from './automatic-music-candidates';

@@ -61,7 +61,12 @@ export class NativeObsPreloadPool {
     const entry: Entry = { origin: 'selection', request, cancelled: false, outputs: null, task: Promise.resolve(), assertOwner: null }; this.entry = entry;
     const current = (): void => { if (entry.cancelled) throw new ObsPreparationCancelled('节目预备已取消'); entry.assertOwner?.(); };
     entry.task = (async () => {
-      await previous; current(); await this.dependencies.authorize(request); current();
+      await previous; current();
+      // A formal session that takes this preparation meanwhile was admitted on its own; the
+      // selection's admission (nothing else preparing or on air) no longer applies to it.
+      try { await this.dependencies.authorize(request); }
+      catch (error) { if (!entry.assertOwner) throw error; }
+      current();
       entry.outputs = this.dependencies.create(request, request.positionMs);
       await entry.outputs.guardOutput(() => { current(); return true; }, () => entry.outputs!.preloadResources(current)); current();
     })();
@@ -73,7 +78,14 @@ export class NativeObsPreloadPool {
     if (entry && !entry.cancelled && entry.request.sessionId === request.sessionId && resourceKey(entry.request, entry.request.positionMs) === resourceKey(request, positionMs)) {
       this.entry = null; entry.assertOwner = assertOwner;
       try { await entry.task; return entry.outputs!; }
-      catch (error) { await entry.outputs?.releaseOutputs(); throw error; }
+      catch (error) {
+        await entry.outputs?.releaseOutputs();
+        // A failed selection preload (for example refused because this very song started
+        // preparing) is not reused: the song prepares its picture below and reports its own failure.
+        if (entry.origin !== 'selection') throw error;
+      }
+      assertOwner();
+      return this.dependencies.create(request, positionMs);
     }
     await this.discard(); assertOwner();
     return this.dependencies.create(request, positionMs);

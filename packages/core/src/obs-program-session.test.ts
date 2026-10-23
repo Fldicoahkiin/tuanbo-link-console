@@ -19,7 +19,7 @@ function setup(project = fixture(), execute?: (action: LinkAction) => Promise<vo
     guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
     prepareOutputs: vi.fn(() => Promise.resolve()), releaseOutputs: vi.fn(() => Promise.resolve()),
     prepareUpcoming: vi.fn<NonNullable<import('./obs-program-session').ObsProgramSessionDependencies['prepareUpcoming']>>(() => Promise.resolve(null)),
-    seekMedia: vi.fn(() => Promise.resolve()), mediaReport: vi.fn(), cueReport: (report: CueExecutionReport) => reports.push(report),
+    seekMedia: vi.fn<import('./obs-program-session').ObsProgramSessionDependencies['seekMedia']>(() => Promise.resolve()), mediaReport: vi.fn(), cueReport: (report: CueExecutionReport) => reports.push(report),
     state: (state: RuntimeUpdate) => states.push(state),
     executor: { id: 'obs-test', supports: (action: LinkAction) => action.kind.startsWith('obs.'),
       execute: async (action: LinkAction) => { actions.push(action); await execute?.(action); } } };
@@ -188,6 +188,31 @@ it('素材预备晚于播放边界：起播失败标红，预备完成后按当�
   expect(test.faults).toContain(`素材预备晚于播放边界，已按当前位置起播：视频（晚 ${lateMs}ms）`);
   test.dependencies.prepareUpcoming.mockResolvedValueOnce(overdue); await test.advance(1700, 2400); await test.session.settled();
   expect(calls).toHaveLength(2); expect(test.session.error).toBeNull();
+});
+
+it('OBS 重新连接后先重新准备场景，再按当前位置重建：素材定位到对齐位置后统一播放，不走预热起播', async () => {
+  const project = videoFixture(); project.rundown[0]!.referenceMediaClips[0]!.startTimecode.seconds = 1;
+  const test = setup(project), calls = test.dependencies.executeManagedMediaEvent.mock.calls, order: string[] = [];
+  test.dependencies.executeManagedMediaEvent.mockRejectedValueOnce(new Error('OBS 未连接'));
+  await test.session.prepare(0); await test.advance(0, 1500);
+  expect(calls.map(call => call[0].event.phase)).toEqual(['start']);
+  test.dependencies.seekMedia.mockImplementation(event => { order.push(`seek ${event.sourceOffsetMs}`); return Promise.resolve(); });
+  expect(await test.session.rebuild(() => { order.push('restore'); return Promise.resolve(); })).toBe(1);
+  expect(order).toEqual(['restore', 'seek 500']);
+  expect(test.actions.at(-1)).toMatchObject({ kind: 'obs.mediaAction', action: 'start' });
+  await test.advance(1600, 2000); expect(calls).toHaveLength(1); expect(test.session.error).toBeNull();
+  await test.session.stop(); expect(calls.at(-1)?.[0].event.phase).toBe('stop');
+});
+
+it('重建失败交给调用方报告，画面通道继续；暂停或尚未开始时不重建', async () => {
+  const test = setup(videoFixture()); await test.session.prepare(0);
+  const restore = vi.fn(() => Promise.resolve());
+  expect(await test.session.rebuild(restore)).toBe(0); expect(restore).not.toHaveBeenCalled();
+  await test.advance(0, 500);
+  await expect(test.session.rebuild(() => Promise.reject(new Error('素材文件不可读')))).rejects.toThrow('素材文件不可读');
+  expect(test.session.error).toBeNull(); await test.advance(600, 800);
+  await test.session.pause();
+  expect(await test.session.rebuild(restore)).toBe(0); expect(restore).not.toHaveBeenCalled(); await test.session.stop();
 });
 
 it('长片段每 5 秒按当前位置检查一次漂移，校正时标红；起播、定位后 1 秒内不检查', async () => {

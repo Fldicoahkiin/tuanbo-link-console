@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sourceFingerprint, recordBuild, verifyBeautyDistribution } from './distribution.mjs';
+import { sourceFingerprint, recordBuild, releasePin, verifyBeautyDistribution, verifyBeautyRelease } from './distribution.mjs';
 
 async function fixture() {
   const original = dirname(fileURLToPath(import.meta.url));
@@ -102,4 +102,32 @@ test('新实例模型或GPU皮肤概率模型损坏均拒绝分发', async () =>
   }
   await writeFile(join(packaged, 'RTMDET_NOTICE.txt'), 'incorrect attribution');
   await assert.rejects(verifyBeautyDistribution(source, work, packaged), /许可不一致/);
+});
+
+test('源码指纹与换行无关：CRLF、LF 和混排的同一内容指纹相同', async () => {
+  const { source } = await fixture();
+  const lf = await sourceFingerprint(source, 'plugin');
+  const text = (await readFile(join(source, 'beauty.c'), 'utf8')).replaceAll('\r\n', '\n');
+  await writeFile(join(source, 'beauty.c'), text.replaceAll('\n', '\r\n'));
+  assert.deepEqual(await sourceFingerprint(source, 'plugin'), lf);
+  // One CRLF line in an LF file: the Codex workspace's body.py looked like this.
+  await writeFile(join(source, 'beauty.c'), text.replace('\n', '\r\n'));
+  assert.deepEqual(await sourceFingerprint(source, 'plugin'), lf);
+  await writeFile(join(source, 'beauty.c'), `${text}// changed\n`);
+  assert.notDeepEqual(await sourceFingerprint(source, 'plugin'), lf);
+});
+
+test('发布打包按仓库里的 release-pin.json 校验源码、构建产物和安装包副本', async () => {
+  const { source, work, packaged } = await fixture();
+  await writeFile(join(source, 'release-pin.json'), JSON.stringify({ version: 1, ...await releasePin(source, work), provenance: {} }));
+  assert.deepEqual(await verifyBeautyRelease(source, work, packaged), { files: 10, verified: true });
+  const worker = await readFile(join(source, 'worker.py'));
+  await writeFile(join(source, 'worker.py'), 'modified');
+  await assert.rejects(verifyBeautyRelease(source, work, packaged), /runtime 源码与 release-pin\.json 不一致/);
+  await writeFile(join(source, 'worker.py'), worker);
+  await writeFile(join(work, 'runtime/tblink-beauty-worker/_internal/dependency.dll'), 'replaced');
+  await assert.rejects(verifyBeautyRelease(source, work, packaged), /构建产物与 release-pin\.json 不一致/);
+  await writeFile(join(work, 'runtime/tblink-beauty-worker/_internal/dependency.dll'), 'runtime/tblink-beauty-worker/_internal/dependency.dll');
+  await writeFile(join(packaged, 'runtime/tblink-beauty-worker/_internal/extra.dll'), 'unexpected');
+  await assert.rejects(verifyBeautyRelease(source, work, packaged), /安装包美颜文件与 release-pin\.json 不一致/);
 });

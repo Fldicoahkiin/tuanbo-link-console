@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { createObsProgramSnapshot, type LinkDesktopApi } from '@tb/core/link';
-import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
+import { createEmptyLinkProject, parseLinkProject, type LinkAction, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
 import { NativeObsHost } from './native-obs-host';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,17 +15,18 @@ function setup(prepareNextFiles = vi.fn<(request: NativeObsPrepare, assertCurren
     positionMs: 0, offsetMs: 480000, sampleRate: 48000, enginePid: 1, engineTitle: '测试', mtcPortName: null, mtcSent: 0,
     audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: 1, analysis: null };
   let now = 0;
-  const execute = vi.fn(() => Promise.resolve()), releaseOutputs = vi.fn(() => Promise.resolve()), failures: string[] = [], states: NativeObsStatus[] = [];
+  const execute = vi.fn<(action: LinkAction) => Promise<void>>(() => Promise.resolve()), releaseOutputs = vi.fn(() => Promise.resolve()), failures: string[] = [], states: NativeObsStatus[] = [];
+  const restoreScenes = vi.fn<(assertCurrent: () => void) => Promise<void>>(() => Promise.resolve());
   const request: NativeObsPrepare = { version: 1, sessionId: audio.sessionId, generation: 1, preciseSeeking: false, projectPath: 'C:/shows/test.tblink', snapshot: createObsProgramSnapshot(project, 'song', 4) };
   const host = new NativeObsHost({ audio: () => audio, changed: state => states.push(state), error: message => failures.push(message),
     prepareNextFiles,
     outputs: () => ({ executor: { id: 'test', supports: () => true, execute },
       guardOutput: <T>(_canSend: () => boolean, operation: () => Promise<T>) => operation(),
-      prepareOutputs: () => Promise.resolve(), releaseOutputs,
+      prepareOutputs: () => Promise.resolve(), releaseOutputs, restoreScenes,
       now: () => now, seekMedia: () => Promise.resolve(), executeManagedMediaEvent: () => Promise.resolve(),
       recordLog: (entry: Parameters<LinkDesktopApi['recordLog']>[0]) => Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: now }) }) });
   const observe = (patch: Partial<NativePlayerStatus>, time: number, ageMs = 0) => { now = time; audio = { ...audio, ...patch }; host.observe(audio, ((process.hrtime.bigint() - BigInt(ageMs) * 1000000n) / 100n).toString()); };
-  return { host, request, execute, releaseOutputs, failures, states, observe, prepareNextFiles, time: (value: number) => { now = value; }, audio: () => audio, change: (patch: Partial<NativePlayerStatus>) => { audio = { ...audio, ...patch }; } };
+  return { host, request, execute, releaseOutputs, restoreScenes, failures, states, observe, prepareNextFiles, time: (value: number) => { now = value; }, audio: () => audio, change: (patch: Partial<NativePlayerStatus>) => { audio = { ...audio, ...patch }; } };
 }
 
 it('下一节目文件仅在当前音频开始后准备一次，停止后在途结果失效', async () => {
@@ -197,6 +198,22 @@ it('旧准备的停止不得取消新节目；播放中断线标红但画面通�
   expect(test.execute).toHaveBeenCalledTimes(2);
 });
 
+it('播放中重新连接 OBS：重新准备本曲场景后按当前位置重建画面并标红；准备未开始时不动作', async () => {
+  const test = setup(); await test.host.prepare(test.request);
+  await test.host.reconnected(); expect(test.restoreScenes).not.toHaveBeenCalled();
+  test.observe({ status: 'playing', generation: 2, positionMs: 0 }, 0);
+  for (let time = 50; time <= 1500; time += 50) { test.observe({ positionMs: time }, time); await new Promise(resolve => setTimeout(resolve, 0)); }
+  test.host.disconnect('OBS 网络断开'); const sent = test.execute.mock.calls.length;
+  await test.host.reconnected();
+  expect(test.restoreScenes).toHaveBeenCalledOnce(); expect(test.execute).toHaveBeenCalledTimes(sent + 1);
+  expect(test.execute.mock.calls.at(-1)?.[0]).toMatchObject({ kind: 'obs.setProgramScene', sceneName: '机位1' });
+  expect(test.host.status).toMatchObject({ state: 'running', fault: 'OBS 已重新连接：画面按当前位置重建，发送 1 项' });
+  test.restoreScenes.mockRejectedValueOnce(new Error('素材文件不可读'));
+  await test.host.reconnected();
+  expect(test.host.status).toMatchObject({ state: 'running', fault: 'OBS 重新连接后画面重建失败：素材文件不可读' });
+  expect(test.failures.at(-1)).toBe('OBS 重新连接后画面重建失败：素材文件不可读');
+});
+
 it('准备阶段断线仍取消本轮画面，不带着未就绪的画面开播', async () => {
   const test = setup();
   let release: () => void = () => { throw new Error('未开始'); };
@@ -231,4 +248,13 @@ it('新准备等待上一轮清理时也可取消，不能因尚未创建新 Ent
   const stopping = test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 2 });
   release(); await preparing; await stopping;
   expect(test.host.status?.state).toBe('stopped'); expect(test.execute).not.toHaveBeenCalled();
+});
+
+it('正式画面准备一开始就算忙，选中歌曲的预备不能停掉它；停止后空闲', async () => {
+  const test = setup();
+  expect(test.host.busy).toBe(false);
+  const preparing = test.host.prepare(test.request);
+  expect(test.host.busy).toBe(true);
+  await preparing; expect(test.host.busy).toBe(true);
+  await test.host.stop(); expect(test.host.busy).toBe(false);
 });

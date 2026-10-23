@@ -65,7 +65,6 @@ test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继�
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
     await page.getByRole('button', { name: '播放时间线', exact: true }).click();
     await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('playing');
-    await page.keyboard.press('Control+KeyM');
     await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))!.positionMs).toBeGreaterThan(paused!.positionMs + 100);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
     await page.getByRole('button', { name: '下一首', exact: true }).click();

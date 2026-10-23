@@ -1,7 +1,21 @@
 import type { ProgressInfo, UpdateInfo } from 'electron-updater';
 import type { LicenseStatus } from '@tb/schema';
-import { describe, expect, it, vi } from 'vitest';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { LinkUpdateManager, type UpdateClient, type UpdateClientFactory, type UpdateClientHandlers, type UpdateRules } from './update-manager';
+
+const releaseKey = generateKeyPairSync('ed25519');
+const releaseKeys = { 'release-test-a': releaseKey.publicKey.export({ type: 'spki', format: 'pem' }).toString() };
+const installerBytes = Buffer.from('signed installer');
+const installerName = 'Tuanbo-Link-Console-0.2.1-x64.exe';
+let installer = '';
+beforeAll(async () => {
+  installer = join(await mkdtemp(join(tmpdir(), 'tblink-update-')), installerName);
+  await writeFile(installer, installerBytes);
+});
 
 describe('LinkUpdateManager', () => {
   it('开发模式明确禁用安装更新', async () => {
@@ -42,7 +56,7 @@ describe('LinkUpdateManager', () => {
   it('固定公司更新源且服务尚未发布时明确失败', async () => {
     const factory = vi.fn<UpdateClientFactory>(() => ({
       check: () => Promise.reject(new Error('404 Not found')),
-      download: () => Promise.resolve(), install: vi.fn(), dispose: vi.fn()
+      download: () => Promise.resolve(installer), install: vi.fn(), dispose: vi.fn()
     }));
     const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), factory);
     await expect(manager.check()).resolves.toMatchObject({ phase: 'error', message: '更新服务尚未发布可用的正式版本' });
@@ -56,7 +70,7 @@ describe('LinkUpdateManager', () => {
     let completeDownload = (): void => { throw new Error('download not started'); };
     const factory = vi.fn<UpdateClientFactory>((_feedUrl, handlers) => ({
       check: () => new Promise<void>(resolve => { completeCheck = () => { handlers.available(updateInfo('0.2.1')); resolve(); }; }),
-      download: () => new Promise<void>(resolve => { completeDownload = () => { handlers.downloaded(updateInfo('0.2.1')); resolve(); }; }),
+      download: () => new Promise<string>(resolve => { completeDownload = () => { handlers.downloaded(updateInfo('0.2.1')); resolve(installer); }; }),
       install: vi.fn(), dispose: vi.fn()
     }));
     const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), factory);
@@ -77,7 +91,7 @@ describe('LinkUpdateManager', () => {
     const download = vi.fn();
     const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => playing), (_feedUrl, handlers) => ({
       check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
-      download: () => { download(); handlers.downloaded(updateInfo('0.2.1')); return Promise.resolve(); },
+      download: () => { download(); handlers.downloaded(updateInfo('0.2.1')); return Promise.resolve(installer); },
       install: vi.fn(), dispose: vi.fn()
     }));
     await manager.check();
@@ -95,7 +109,7 @@ describe('LinkUpdateManager', () => {
     let progress = (): void => { throw new Error('download not started'); };
     const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => playing), (_feedUrl, handlers) => ({
       check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
-      download: (abort) => new Promise<void>((_resolve, reject) => {
+      download: (abort) => new Promise<string>((_resolve, reject) => {
         signal = abort;
         progress = () => handlers.progress(progressInfo(30));
         abort.addEventListener('abort', () => reject(new Error('cancelled')));
@@ -142,7 +156,7 @@ describe('LinkUpdateManager', () => {
 
   it('提示中的日期按北京时间显示，与官网下载页一致', async () => {
     const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => false, () => licensed('2026-08-26T00:00:00.000Z')), (_feedUrl, handlers) => ({
-      check: () => { handlers.available({ ...updateInfo('0.2.1'), releaseDate: '2026-08-26T18:00:00.000Z' }); return Promise.resolve(); },
+      check: () => { handlers.available(updateInfo('0.2.1', '2026-08-26T18:00:00.000Z')); return Promise.resolve(); },
       download: vi.fn(), install: vi.fn(), dispose: vi.fn()
     }));
     const status = await manager.check();
@@ -157,12 +171,53 @@ describe('LinkUpdateManager', () => {
     expect(status.installBlockedReason).toBe('本机授权当前不可用（使用期限已结束；工程文件保持不变），可以查看新版本，恢复授权后再安装');
   });
 
-  it('更新信息没有可解析的发布日期时不允许安装', async () => {
-    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), (_feedUrl, handlers) => ({
-      check: () => { handlers.available({ ...updateInfo('0.2.1'), releaseDate: 'unknown' }); return Promise.resolve(); },
-      download: vi.fn(), install: vi.fn(), dispose: vi.fn()
+  it('没有发布签名或 latest.yml 被改成别的安装包：可以看到版本，不能下载，写日志', async () => {
+    const log = vi.fn();
+    const unsigned: UpdateInfo = { version: '0.2.1', path: installerName, sha512: 'x', releaseDate: '2026-08-27T00:00:00.000Z', files: [{ url: installerName, sha512: 'x' }] };
+    const forgedSha512 = createHash('sha512').update('forged installer').digest('base64');
+    const forged = { ...updateInfo('0.2.1'), sha512: forgedSha512, files: [{ url: installerName, sha512: forgedSha512, size: installerBytes.length }] };
+    for (const [info, reason] of [[unsigned, '没有发布签名'], [forged, '摘要或大小与更新信息不一致']] as const) {
+      const download = vi.fn();
+      const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), { ...rules(), log }, (_feedUrl, handlers) => ({
+        check: () => { handlers.available(info); return Promise.resolve(); },
+        download, install: vi.fn(), dispose: vi.fn()
+      }));
+      const status = await manager.check();
+      expect(status).toMatchObject({ phase: 'available', availableVersion: '0.2.1', releaseDate: null });
+      expect(status.installBlockedReason).toContain(`更新签名校验失败（`);
+      expect(status.installBlockedReason).toContain(reason);
+      await expect(manager.download()).rejects.toThrow('更新签名校验失败');
+      expect(download).not.toHaveBeenCalled();
+      expect(log).toHaveBeenLastCalledWith('error', expect.stringContaining(reason));
+    }
+  });
+
+  it('下载到的安装包与签名不符时拒绝安装；下载后被改动的安装包在安装前被发现', async () => {
+    const log = vi.fn();
+    const other = join(installer, '..', 'other.exe');
+    await writeFile(other, 'another installer');
+    let delivered = other;
+    const install = vi.fn();
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), { ...rules(), log }, (_feedUrl, handlers) => ({
+      check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
+      download: () => { handlers.downloaded(updateInfo('0.2.1')); return Promise.resolve(delivered); },
+      install, dispose: vi.fn()
     }));
-    await expect(manager.check()).resolves.toMatchObject({ installBlockedReason: '更新信息没有有效的发布日期，无法确认是否在升级服务期内，不能安装；请联系发行方' });
+    await manager.check();
+    const rejected = await manager.download();
+    expect(rejected.phase).toBe('error');
+    expect(rejected.message).toContain('下载的更新与发布签名不一致，已拒绝安装');
+    expect(log).toHaveBeenLastCalledWith('error', expect.stringContaining('拒绝安装更新 0.2.1'));
+    await expect(manager.prepareInstall()).rejects.toThrow('更新尚未下载完成');
+
+    delivered = installer;
+    await manager.check();
+    await expect(manager.download()).resolves.toMatchObject({ phase: 'downloaded' });
+    await writeFile(installer, 'changed after the download');
+    await expect(manager.prepareInstall()).rejects.toThrow('下载的更新与发布签名不一致');
+    expect(() => manager.install()).toThrow('更新尚未下载完成');
+    expect(install).not.toHaveBeenCalled();
+    await writeFile(installer, installerBytes);
   });
 
   it('启动后台检查只检查不下载；失败回到可手动重试，不显示为更新错误', async () => {
@@ -202,7 +257,7 @@ describe('LinkUpdateManager', () => {
 });
 
 function rules(playbackActive: () => boolean = () => false, license: () => LicenseStatus = () => licensed('2099-12-31T23:59:59.000Z')): UpdateRules {
-  return { playbackActive, license: () => Promise.resolve(license()) };
+  return { playbackActive, license: () => Promise.resolve(license()), releaseKeys, log: vi.fn() };
 }
 
 function licensed(updatesUntil: string): LicenseStatus {
@@ -222,21 +277,24 @@ function fakeClient(handlers: UpdateClientHandlers, installed: () => void): Upda
     download: () => {
       handlers.progress(progressInfo(52));
       handlers.downloaded(updateInfo('0.2.1'));
-      return Promise.resolve();
+      return Promise.resolve(installer);
     },
     install: installed,
     dispose: vi.fn()
   };
 }
 
-function updateInfo(version: string): UpdateInfo {
-  return {
-    version,
-    files: [{ url: 'Tuanbo-Link-Console.exe', sha512: 'sha512' }],
-    path: 'Tuanbo-Link-Console.exe',
-    sha512: 'sha512',
-    releaseDate: '2026-08-27T00:00:00.000Z'
+/** latest.yml as scripts/sign-release.mjs leaves it: electron-builder's fields plus the release signature. */
+function updateInfo(version: string, releaseDate = '2026-08-27T00:00:00.000Z'): UpdateInfo {
+  const sha512 = createHash('sha512').update(installerBytes).digest('base64');
+  const payload = Buffer.from(JSON.stringify({ schemaVersion: 1, product: 'tuanbo-link-console', channel: 'release', version, releaseDate,
+    file: installerName, size: installerBytes.length, sha512 }));
+  const info: UpdateInfo & { tblinkRelease: unknown } = {
+    version, path: installerName, sha512, releaseDate,
+    files: [{ url: installerName, sha512, size: installerBytes.length }],
+    tblinkRelease: { kid: 'release-test-a', payload: payload.toString('base64url'), signature: sign(null, payload, releaseKey.privateKey).toString('base64url') }
   };
+  return info;
 }
 
 function progressInfo(percent: number): ProgressInfo {

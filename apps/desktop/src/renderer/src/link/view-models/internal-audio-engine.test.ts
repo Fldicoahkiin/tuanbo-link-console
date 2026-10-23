@@ -25,12 +25,11 @@ it('未单独设置引擎的档案默认用原生引擎；输出时间码时明�
   expect(internalAudioEngineLabel(native)).toBe('Windows 原生音频（输出 MIDI 时间码）');
 });
 
-it('不输出时间码的工程（纯音频加画面、网络或 MIDI 直控灯光）继续可用浏览器引擎', () => {
-  for (const mode of [undefined, 'direct', 'network'] as const) {
-    expect(projectOutputsMtc(project(mode))).toBe(false);
-    const choice = internalAudioEngine(profile('browser', false), project(mode));
-    expect(choice).toEqual({ engine: 'browser', outputsMtc: false, blocked: null });
-    expect(internalAudioEngineLabel(choice)).toBe('浏览器音频');
-  }
+it('没有灯光的工程（纯音频加画面）继续可用浏览器引擎；有灯光的歌不论保存的输出方式都发时间码', () => {
+  expect(projectOutputsMtc(project())).toBe(false);
+  const choice = internalAudioEngine(profile('browser', false), project());
+  expect(choice).toEqual({ engine: 'browser', outputsMtc: false, blocked: null });
+  expect(internalAudioEngineLabel(choice)).toBe('浏览器音频');
+  for (const mode of ['timecode', 'direct', 'network'] as const) expect(projectOutputsMtc(project(mode))).toBe(true);
   expect(projectOutputsMtc({ ...project('timecode'), playbackSource: 'p1' })).toBe(false);
 });

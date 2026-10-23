@@ -16,6 +16,7 @@ import { createLicenseMachineCodeReader } from './link/license-machine';
 import { localTestAccessEnabled, localTestLicenseStatus } from './link/local-test-license';
 import { internalDistribution, internalDistributionStatus } from './link/internal-distribution';
 import licensePublicKeys from './link/license-public-keys.json';
+import releasePublicKeys from './link/release-public-keys.json';
 import licenseConfig from './link/license-config.json';
 import { LicenseAccess, needsProductLicense } from './link/license-access';
 import { licenseRequestSchema } from '@tb/schema';
@@ -153,7 +154,7 @@ import { LoopMidiService } from './link/loop-midi-service';
 import { loopMidiActionSchema, loopMidiStatusSchema } from '@tb/schema';
 import { LinkUpdateManager } from './link/update-manager';
 import { rendererSource } from './link/renderer-source';
-import { buildGitSha, releaseAppId, releaseChannel, releaseChannelLabel } from './link/build-identity';
+import { buildGitSha, buildVersion, releaseAppId, releaseChannel, releaseChannelLabel } from './link/build-identity';
 import desktopPackage from '../../package.json';
 import ffmpegPath from 'ffmpeg-static';
 import { NativeAudioCache } from './link/native-audio-cache';
@@ -250,7 +251,7 @@ function nativePlaybackActive(): boolean {
 /** Which build this is: shown in the update panel and written to logs and diagnostic packages. */
 function buildIdentity(): Pick<LinkAppInfo, 'name' | 'version' | 'channel' | 'gitSha' | 'appId'> {
   const distribution = internalDistribution?.channel ?? null;
-  return { name: app.getName(), version: desktopPackage.version, channel: releaseChannel(app.isPackaged, distribution),
+  return { name: app.getName(), version: buildVersion, channel: releaseChannel(app.isPackaged, distribution),
     gitSha: buildGitSha, appId: releaseAppId(distribution, desktopPackage.build.appId) };
 }
 function buildIdentityLine(): string {
@@ -288,7 +289,7 @@ async function bootstrap(): Promise<void> {
   const logger = new LinkRunLogger(join(app.getPath('userData'), 'link-logs'), () => [...knownSecrets]);
   ipcLogger = logger;
   await logger.record({ level: 'info', category: 'system', message: `${buildIdentityLine()} 已启动`,
-    details: { appVersion: desktopPackage.version, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
+    details: { appVersion: buildVersion, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
     .catch((error: unknown) => dialog.showErrorBox('运行日志无法写入', error instanceof Error ? error.message : String(error)));
   app.on('child-process-gone', (_event, details) => {
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
@@ -296,10 +297,12 @@ async function bootstrap(): Promise<void> {
       result: 'failed' }).catch((error: unknown) => console.error('记录 Electron 子进程崩溃失败', error));
   });
   const updateManager = new LinkUpdateManager(
-    desktopPackage.version,
+    buildVersion,
     app.isPackaged,
     (status) => sendToRenderer('link:update-status', status),
-    { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus() },
+    { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus(), releaseKeys: releasePublicKeys,
+      log: (level, message) => { void logger.record({ level, category: 'system', device: '软件更新', message, result: 'failed' })
+        .catch((error: unknown) => console.error('更新校验日志写入失败', error)); } },
     undefined,
     internalDistribution ? '' : undefined
   );
@@ -528,7 +531,7 @@ function registerIpc(
   const obsPreload = new NativeObsPreloadPool({
     authorize: async request => {
       await authorizeProduct('link:native-obs-prepare', request);
-      if (nativePlaybackActive() || nativeObs?.status && !['stopped', 'failed'].includes(nativeObs.status.state)) throw new Error('播放或画面会话活动时不能预备另一个节目');
+      if (nativePlaybackActive() || nativeObs?.busy) throw new Error('播放或画面会话活动时不能预备另一个节目');
       await nativeObs?.stop();
       if (nativePlaybackActive()) throw new Error('音频已开始准备，不能另行启动节目预备');
     },
@@ -565,11 +568,28 @@ function registerIpc(
   handle('link:native-obs-prepare', (_event, value: unknown) => obsRequests.prepare(value), 'listener');
   handle('link:native-obs-stop', (_event, value: unknown) => obsRequests.stop(value));
   handle('link:native-obs-status', () => nativeObs?.status ?? null);
-  obs.subscribe(state => { if (state.status !== 'connected') {
+  // Recovery rule B when the operator reconnects OBS during a song: playing rebuilds
+  // the picture at the current position; paused prepares the song again in place.
+  const recoverNativeObs = async (): Promise<void> => {
+    const picture = nativeObs?.status?.state, program = nativeProgramHost?.controller, positionMs = nativePlayer?.status?.positionMs;
+    if (picture === 'running') { await nativeObs!.reconnected(); return; }
+    if (picture !== 'paused' || !program || positionMs === undefined) return;
+    await program.seek(positionMs);
+    const message = 'OBS 已重新连接：已在暂停位置重新准备画面';
+    program.reportFault(message);
+    await logger.record({ level: 'warning', category: 'device', device: '后台画面', message });
+  };
+  let obsConnected = obs.getSnapshot().status === 'connected';
+  obs.subscribe(state => {
+    const reconnected = state.status === 'connected' && !obsConnected;
+    obsConnected = state.status === 'connected';
+    if (reconnected) void recoverNativeObs().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面',
+      message: `OBS 重新连接后画面恢复失败：${String(error)}`, result: 'failed' }).catch((failure: unknown) => console.error('画面恢复日志写入失败', failure)); });
+    if (state.status === 'connected') return;
     nativeObs?.disconnect(state.error || 'OBS 已断开');
     void obsPreload.close().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message: `关闭节目预备失败：${String(error)}`, result: 'failed' })
       .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
-  } });
+  });
   const player = (): NativePlayerService => {
     if (nativePlayerShutdown) throw new Error('正式音频引擎正在关闭或关闭失败，请查看运行日志');
     if (!nativePlayer) {
@@ -1226,6 +1246,14 @@ function registerIpc(
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'question', title: '选择工程保存位置', noLink: true,
       message: `${purpose}需要先保存工程。`, detail: '素材和读取检查点会放在工程文件旁边。选择位置保存后继续；取消则不执行。',
       buttons: ['选择保存位置', '取消'], defaultId: 0, cancelId: 1 });
+    return response === 0;
+  });
+  handle('link:confirm-play-without-lighting', async (_event, reasonValue: unknown) => {
+    const reason = z.string().min(1).max(4000).parse(reasonValue);
+    const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '开播前检查', noLink: true,
+      message: '这首歌的灯光还不能演出。', detail: reason, buttons: ['无灯光播放', '取消'], defaultId: 0, cancelId: 1 });
+    await logger.record({ level: 'warning', category: 'operator', device: '正式播放器',
+      message: `开播前检查：${reason}；${response === 0 ? '操作员选择无灯光播放' : '操作员取消播放'}` });
     return response === 0;
   });
   handle('link:project-document-worker', () => ({ stalled: projectDocuments.stalledReason() }));
@@ -1886,7 +1914,7 @@ function registerIpc(
     });
     if (result.canceled || !result.filePath) return null;
     await logger.exportDiagnosticPackage(result.filePath, { ...context, environment: {
-      appVersion: desktopPackage.version, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch,
+      appVersion: buildVersion, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch,
       osRelease: release(), cpu: cpus()[0]?.model ?? '未知', logicalProcessors: cpus().length,
       totalMemoryBytes: totalmem(), freeMemoryBytes: freemem(), versions: process.versions,
       gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),

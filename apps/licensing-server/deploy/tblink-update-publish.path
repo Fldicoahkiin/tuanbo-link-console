@@ -1,0 +1,13 @@
+[Unit]
+Description=Run console-confirmed Windows update requests and refresh the staged release list
+
+[Path]
+# A request from the console: written by the licensing service account and renamed into place. The publisher
+# only reads this directory, so it is watched for changes rather than for existing files.
+PathChanged=/var/lib/tblink-licensing/update-release/update-requests
+# A new staged release from the release builder (receive-update.py renames it into place).
+PathChanged=/var/lib/tblink-release/staging
+Unit=tblink-update-publish.service
+
+[Install]
+WantedBy=paths.target

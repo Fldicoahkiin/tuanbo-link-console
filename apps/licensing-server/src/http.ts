@@ -100,7 +100,8 @@ export function createLicensingServer(service: LicensingService, adminToken: str
             if (!checkout) throw new ServiceError(503, 'PAYMENTS_UNAVAILABLE', '支付宝付款入口尚未启用');
             const payment = service.prepareAlipayPayment(id, checkout.appId, checkout.sellerId);
             return { url: checkout.createUrl(payment), expiresAt: payment.expiresAt };
-          }
+          },
+          ...(consoleOptions.updates ? { updates: consoleOptions.updates } : {})
         });
       }
       if (request.method === 'GET' && request.url === '/health') return { status: 'ok' };

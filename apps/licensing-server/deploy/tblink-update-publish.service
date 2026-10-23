@@ -1,0 +1,18 @@
+[Unit]
+Description=Publish or roll back the Windows update feed on a console request
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/tblink-licensing/publish-update.py --process-requests
+TimeoutStartSec=900
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+# The request directory stays read-only for this service; results, status, the lock and receipts are written elsewhere.
+ReadOnlyPaths=/var/lib/tblink-licensing/update-release/update-requests
+ReadWritePaths=/srv/tblink-updates/windows/x64 /var/lib/tblink-licensing/update-release /var/lib/tblink-licensing/backups /var/lib/tblink-release/staging

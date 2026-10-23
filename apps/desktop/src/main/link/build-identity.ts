@@ -1,8 +1,13 @@
 import type { LinkReleaseChannel } from '@tb/core/link';
+import desktopPackage from '../../../package.json';
 
 /** Commit the main bundle was built from, with `-dirty` for uncommitted changes; null when the build had no Git. */
 declare const __TBLINK_GIT_SHA__: string | null;
 export const buildGitSha: string | null = typeof __TBLINK_GIT_SHA__ === 'undefined' ? null : __TBLINK_GIT_SHA__;
+
+/** package.json's version, or the test package's prerelease version (X.Y.Z-test.N+g<sha>). Unit tests run unbuilt. */
+declare const __TBLINK_BUILD_VERSION__: string;
+export const buildVersion: string = typeof __TBLINK_BUILD_VERSION__ === 'undefined' ? desktopPackage.version : __TBLINK_BUILD_VERSION__;
 
 export const releaseChannelLabel: Record<LinkReleaseChannel, string> = { release: '正式', test: '测试', internal: '内测', development: '开发' };
 

@@ -245,6 +245,17 @@ export class LightingScheduler {
 }
 
 export type LightingNetworkAction = { atMs: number; action: Ma2PlaybackAction; releaseOnlyIfStarted?: boolean; releasePrevious?: boolean };
+const playbackDocuments = new WeakMap<LightingDocument, LightingDocument>();
+/** Decided 2026-10-23: a playing song only sends MIDI timecode and the console's
+ * Timecode show runs its lighting, whatever output mode the document stores. The
+ * local timeline is not sent; only the song's executors are released at stop.
+ * The same document always maps to the same object, so state carried across a
+ * pause stays attached to it. */
+export function playbackLighting(document: LightingDocument): LightingDocument {
+  let playback = playbackDocuments.get(document);
+  if (!playback) { playback = { ...document, outputMode: 'timecode', tracks: [] }; playbackDocuments.set(document, playback); }
+  return playback;
+}
 /** Timecode carries the song clock; local pool events are not an additional MA2 command channel. */
 export function lightingTimecodePlaybackNotice(document: LightingDocument): string | null {
   if (document.outputMode !== 'timecode') return null;
