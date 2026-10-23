@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { portableTestPackage } from './release-config.mjs';
 
 if (process.platform !== 'win32') throw new Error('测试安装包必须在 Windows 构建');
 if (!process.argv[2]) throw new Error('请指定一个尚不存在的独立构建目录');
@@ -29,15 +30,16 @@ run(join(root, 'tools/music-analysis/package-runtime.mjs'), [musicRuntime]);
 const appOut = join(destination, 'app-out');
 run(join(dirname(requireDesktop.resolve('electron-vite/package.json')), 'bin/electron-vite.js'), ['build', '--outDir', appOut]);
 const desktopPackage = JSON.parse(await readFile(join(desktop, 'package.json'), 'utf8'));
-const name = '团播联动台功能测试版';
+const name = portableTestPackage.productName;
 const config = {
   ...desktopPackage.build,
-  appId: 'com.tuanbo.control.functionaltest', productName: name,
+  appId: portableTestPackage.appId, productName: name,
+  extraMetadata: { name: portableTestPackage.name, productName: name },
   directories: { ...desktopPackage.build.directories, output: destination },
   files: [{ from: appOut, to: 'out', filter: ['**/*', '!**/*.map'] }, 'build/icon.ico', 'package.json'],
   extraResources: [...desktopPackage.build.extraResources, { from: musicRuntime, to: 'music-analysis' }],
   publish: null,
-  win: { ...desktopPackage.build.win, artifactName: 'Tuanbo-Link-Test-NoActivation-${version}-${arch}.exe' },
+  win: { ...desktopPackage.build.win, artifactName: portableTestPackage.artifactPrefix + '${version}-${arch}.exe' },
   nsis: { ...desktopPackage.build.nsis, shortcutName: name, uninstallDisplayName: name, runAfterFinish: false }
 };
 const configPath = join(destination, 'builder.json');

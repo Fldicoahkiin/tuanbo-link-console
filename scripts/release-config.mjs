@@ -1,5 +1,14 @@
 import { load } from 'js-yaml';
 
+/** The activation-free test package installs, stores data and registers apart from the official app:
+ * NSIS derives the per-user install folder from the package name, Electron derives userData from productName. */
+export const portableTestPackage = {
+  appId: 'com.tuanbo.control.functionaltest',
+  name: 'tuanbo-link-functional-test',
+  productName: '团播联动台功能测试版',
+  artifactPrefix: 'Tuanbo-Link-Test-NoActivation-'
+};
+
 export function validateReleaseVersion(rootPackage, desktopPackage, tag) {
   const version = desktopPackage.version;
   if (typeof version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
