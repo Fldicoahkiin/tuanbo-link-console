@@ -118,17 +118,19 @@ function verifyTestDistribution(directory) {
   const installer = join(directory, installerName);
   const executable = join(directory, 'win-unpacked', `${portableTestPackage.productName}.exe`);
   const packagedApp = join(directory, 'win-unpacked/resources/app.asar');
-  const effectiveConfig = join(directory, 'builder-effective-config.yaml');
+  // The configuration build-portable-test.mjs passed to electron-builder; the installer itself is compressed.
+  const builderConfig = join(directory, 'builder.json');
   const identity = existsSync(packagedApp) ? JSON.parse(readAsarFile(packagedApp, 'package.json').toString('utf8')) : undefined;
   const distribution = existsSync(packagedApp) ? embeddedDistributionChannel(readAsarFile(packagedApp, 'out/main/index.cjs')) : null;
   const executableInfo = existsSync(executable) ? readWindowsVersionInfo(executable) : undefined;
-  const configText = existsSync(effectiveConfig) ? readFileSync(effectiveConfig, 'utf8') : '';
+  const config = existsSync(builderConfig) ? JSON.parse(readFileSync(builderConfig, 'utf8')) : undefined;
   return [
     { name: 'test-installer', ok: existsSync(installer), detail: installerName },
     { name: 'test-executable-version-info', ok: executableInfo?.ProductName === portableTestPackage.productName && executableInfo?.FileVersion === desktopPackage.version, detail: formatVersionInfo(executableInfo) },
     { name: 'test-package-identity', ok: identity?.name === portableTestPackage.name && identity?.productName === portableTestPackage.productName,
       detail: `name=${identity?.name}, productName=${identity?.productName}; install folder and userData follow these` },
-    { name: 'test-app-id', ok: new RegExp(`^appId: ${portableTestPackage.appId.replaceAll('.', '\\.')}$`, 'm').test(configText), detail: existsSync(effectiveConfig) ? 'builder-effective-config.yaml' : 'missing builder-effective-config.yaml' },
+    { name: 'test-builder-config', ok: config?.appId === portableTestPackage.appId && config?.publish === null && config?.extraMetadata?.name === portableTestPackage.name,
+      detail: config ? `appId=${config.appId}, publish=${JSON.stringify(config.publish)}, name=${config.extraMetadata?.name}` : 'missing builder.json' },
     { name: 'test-embeds-portable-distribution', ok: distribution === 'portable-test', detail: `main bundle distribution=${distribution}` },
     { name: 'test-has-no-update-config', ok: !existsSync(join(directory, 'win-unpacked/resources/app-update.yml')), detail: 'no app-update.yml: the package never reads a feed' },
     { name: 'test-has-no-official-feed-files', ok: !entries.includes('latest.yml') && !entries.some((name) => name.startsWith('Tuanbo-Link-Console-')),
