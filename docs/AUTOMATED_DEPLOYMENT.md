@@ -94,7 +94,7 @@ SSH 有效配置必须包含 `authenticationmethods publickey`、`passwordauthen
 3. 国内构建机（self-hosted runner，标签 `release-builder`）打包。美颜产物按仓库里的 `tools/obs/beauty/release-pin.json` 从 `D:\tblink-release-assets\beauty\<指纹前 12 位>\` 复制，afterPack 核对指纹，不符就失败。打包后用发布私钥给 `latest.yml` 加签名：私钥存在 GitHub Actions secret `TBLINK_RELEASE_SIGNING_KEY`，只在签名这一步注入环境变量，不写磁盘。然后写 `release-manifest.json`，通过受限身份 `tblink-release` 上传。
 4. 服务器 `receive-update.py` 以 tblink-release 身份运行，不用 sudo。它只把这一份包写进 `/var/lib/tblink-release/staging/<版本>-<提交前 12 位>/`，不能覆盖已有目录，最多保留 5 份，也碰不到更新源。
 5. 管理员在运营后台「软件更新」里看到待发布版本，经二次验证、填写原因后点「发布更新」。后台只往自己的 `/var/lib/tblink-licensing/update-requests/` 写一份请求，内容只有：请求编号、动作（发布 / 回滚 / 丢弃）、staging 名称（发布和丢弃）或回滚目标版本、确认时看到的 manifest sha256（发布）、操作人、原因、请求时间。
-6. root 的 `tblink-update-publish.path` 在请求目录或 staging 变化时触发 `publish-update.py --process-requests`；`tblink-update-publish.timer` 每 2 分钟兜底一次，接住运行期间到达的请求。脚本路径和参数都写死，每次运行先核对[自己写入和信任的目录](#root-写入和信任判断的路径)整条链都归 root，不符就报错退出。请求目录只读：用 `O_DIRECTORY|O_NOFOLLOW` 打开并核对属主 tblink-license，请求文件用 `O_NOFOLLOW|O_NONBLOCK` 打开，只接受属主为 tblink-license、16 KB 以内的普通文件，字段必须正好是上面几项且格式正确；已有结果的请求视为重复，直接忽略；同一时间只处理一个请求（文件锁）。发布时先把 staging 里的四个文件不跟随链接地复制进 root 的工作目录，之后所有判断都只看这份副本：manifest、各文件 sha256、`latest.yml` 的版本和 sha512、Ed25519 发布签名、请求里的 manifest 摘要、版本高于当前更新源。全部通过才按「安装包先、`latest.yml` 最后」上线，回执（含上一版 `latest.yml`）存进 root 的 `/var/lib/tblink-update-publish/receipts/`。结果写到 `/var/lib/tblink-update-publish/results/`（tblink-license 组只读）给后台显示，同时追加审计 `/var/lib/tblink-update-publish/update-audit.jsonl`（请求时间、处理时间、操作人、动作、版本、结果、失败原因）。后台读到结果后删除自己的请求文件；结果文件留在 root 目录，同一个请求编号再出现也不会重做。
+6. root 的 `tblink-update-publish.path` 在请求目录或 staging 变化时触发 `publish-update.py --process-requests`；`tblink-update-publish.timer` 每 2 分钟兜底一次，接住运行期间到达的请求。脚本路径和参数都写死，每次运行先核对[自己写入和信任的目录](#root-写入和信任判断的路径)整条链都归 root，不符就报错退出。请求目录只读：用 `O_DIRECTORY|O_NOFOLLOW` 打开并核对属主 tblink-license，请求文件用 `O_NOFOLLOW|O_NONBLOCK` 打开，只接受属主为 tblink-license、16 KB 以内的普通文件，字段必须正好是上面几项且格式正确；已有结果的请求视为重复，直接忽略；同一时间只处理一个请求（文件锁）。发布时先把 staging 里的四个文件不跟随链接地复制进 root 的工作目录，之后所有判断都只看这份副本：manifest、各文件 sha256、`latest.yml` 的版本和 sha512、Ed25519 发布签名、请求里的 manifest 摘要、版本高于当前更新源。全部通过才按「安装包先、`latest.yml` 最后」上线，回执（含上一版 `latest.yml`）存进 root 的 `/var/backups/tblink/update-receipts/`。结果写到 `/var/lib/tblink-update-publish/results/`（tblink-license 组只读）给后台显示，同时追加审计 `/var/backups/tblink/update-audit.jsonl`（请求时间、处理时间、操作人、动作、版本、结果、失败原因）。后台读到结果后删除自己的请求文件；结果文件留在 root 目录，同一个请求编号再出现也不会重做。
 7. 「回滚到上一版」同样走后台请求，把更新源改回发布当前版本之前的 `latest.yml`。上一版只从 root 的回执目录读取，而且必须有有效的发布签名、安装包仍在、摘要一致，否则拒绝。已经装上新版本的电脑不会自动降级。
 8. 发布后运行 `node scripts/write-website-release.mjs` 生成官网下载信息并提交，官网随授权服务自动部署。
 
@@ -108,7 +108,7 @@ SSH 有效配置必须包含 `authenticationmethods publickey`、`passwordauthen
 - 授权服务进程设置了 `NoNewPrivileges=true`，不能 sudo。所以后台和 root 发布脚本之间只靠请求文件，规则见上面第 6 条；失败的请求不会自动重试。
 - 发布私钥：日常密钥 `release-2026-10-a` 只在 GitHub secret 里，备用密钥 `release-2026-10-b` 离线保存在 U 盘，构建机上不留副本（迁移步骤见[构建机准备](RELEASE_BUILDER_SETUP.md)）。
 - 本地 `pnpm verify:release` 打出的候选包没有发布签名，只用于安装验收，服务器会拒绝发布。
-- 0.4.29 及更早的 `latest.yml` 没有发布签名，后台不能回滚到它们。回滚只能让还没升级的电脑不再收到新版本，而这些旧客户端本身不验签名，允许未签名的回滚目标就等于让伪造的回执生效。真要退回 0.4.29，由管理员通过 SSH 从 `/var/lib/tblink-update-publish/receipts/` 里取出 `previous-latest.yml` 手工替换。
+- 0.4.29 及更早的 `latest.yml` 没有发布签名，后台不能回滚到它们。回滚只能让还没升级的电脑不再收到新版本，而这些旧客户端本身不验签名，允许未签名的回滚目标就等于让伪造的回执生效。真要退回 0.4.29，由管理员通过 SSH 从 `/var/backups/tblink/update-receipts/` 里取出 `previous-latest.yml` 手工替换。
 
 <a id="root-写入和信任判断的路径"></a>
 ### root 写入和信任判断的路径
@@ -119,88 +119,40 @@ SSH 有效配置必须包含 `authenticationmethods publickey`、`passwordauthen
 | --- | --- | --- | --- |
 | `/srv/tblink-updates/windows/x64/` | 写安装包、blockmap、`latest.yml`（同目录临时名后 rename）；回滚时读安装包算 sha512、读 `latest.yml` | `/`、`srv`、`tblink-updates`、`windows`、`x64` 都是 root:root 0755 | 核对 |
 | `/opt/tblink-licensing/release-public-keys.json` | 读公钥验签 | `/`、`opt`、`tblink-licensing` root:root 0755；文件 root:root 0644 | 核对目录链，另核对文件是 root 所有、组和其他人不可写的普通文件 |
-| `/var/lib/tblink-update-publish/` | 写 `update-status.json`、`status-source.json`、`publish.lock`、`update-audit.jsonl` | `/`、`var`、`lib` root:root 0755；本目录 root:tblink-license 0750 | 核对 |
+| `/var/lib/tblink-update-publish/` | 写 `update-status.json`、`status-source.json`、`publish.lock` | `/`、`var`、`lib` root:root 0755；本目录 root:tblink-license 0750 | 核对 |
 | `/var/lib/tblink-update-publish/results/` | 写每个请求的结果（root:tblink-license 0640） | 同上，本目录 root:tblink-license 0750 | 核对 |
-| `/var/lib/tblink-update-publish/receipts/` | 写回执；回滚时读 `receipt.json` 和 `previous-latest.yml` | 同上，本目录 root:root 0700 | 核对 |
+| `/var/backups/tblink/update-receipts/` | 写回执；回滚时读 `receipt.json` 和 `previous-latest.yml` | `/`、`var`、`backups` root:root 0755；`tblink`、`update-receipts` root:root 0700 | 核对 |
+| `/var/backups/tblink/update-audit.jsonl` | 追加审计 | 同上 | 核对 |
 | `/var/lib/tblink-update-publish/work/` | 复制候选包、在副本上校验、从副本安装，结束即删；每次运行先清掉上次中断的残留 | 同上，本目录 root:root 0700 | 核对 |
 | `/var/lib/tblink-release/staging/<名称>/` | 只读复制四个文件；发布或丢弃成功后删除该条目 | `/`、`var`、`lib`、`tblink-release` root:root 0755；`staging` tblink-release 0750 | 父目录链核对；`staging` 和条目用 `O_DIRECTORY\|O_NOFOLLOW` 打开并核对属主 tblink-release；文件用 `O_NOFOLLOW\|O_NONBLOCK` 打开、必须是普通文件且不超过上限；删除用 `rmtree(dir_fd=…)`，不跟随链接 |
 | `/var/lib/tblink-licensing/update-requests/` | 只读请求 | `tblink-licensing` 和 `update-requests` 归 tblink-license，可被它替换 | 见第 6 条；请求内容只用来选 staging 名称或回滚版本，都按格式校验后才使用 |
 
 staging 归 tblink-release，做不到「属主 root」。对应的做法是：root 读来做信任判断的字节，全部来自它刚复制进 `work/` 的副本，不再回头读 staging。
 
-服务单元在 `ProtectSystem=strict` 下只把更新目录、`/var/lib/tblink-update-publish` 和 staging 设为可写，每个都是单独的挂载点。脚本里的每个 `rename` 都在同一目录内（临时名 → 正式名）；跨目录一律复制，不会遇到 `EXDEV`。
+服务单元在 `ProtectSystem=strict` 下只把更新目录、`/var/lib/tblink-update-publish`、`/var/backups/tblink` 和 staging 设为可写，每个都是单独的挂载点。脚本里的每个 `rename` 都在同一目录内（临时名 → 正式名）；跨目录一律复制，不会遇到 `EXDEV`。
 
 timer 每 2 分钟运行一次，为了不每次都复制、哈希所有 staging 安装包，`status-source.json` 记下 staging 里每个文件的 inode、大小和 ctime 以及更新源 `latest.yml` 的同样信息；都没变、本轮也没处理请求时，沿用上一份状态。状态只供显示，发布时总是重新复制、重新校验。
 
+<a id="部署和运维工具的-root-路径"></a>
+### 部署和运维工具的 root 路径
+
+2026-10-23 起，部署和运维工具的 root 备份统一放在 `/var/backups/tblink`（root:root 0700，`/`、`var`、`backups` 都是 root:root 0755）。每个工具在写备份前从 `/` 逐级核对这条链，不符就在动任何东西之前退出。
+
+| 工具 | 以 root 写入或做信任判断的位置 | 做法 |
+| --- | --- | --- |
+| `activate-release.py`（CI 部署） | `/var/backups/tblink/<时间>/`：解包的候选版本、`nginx` 预检配置、`previous.js`、`previous-nginx.conf`、`previous-environment`、数据库副本 | 备份目录核对后才创建；三份 `previous-*` 复制后立即与激活开始时核对过的摘要比对，回滚装回之前再比对一次，不一致就停在维护状态、不装回，等人工处理 |
+| `publish-website.py`（CI 部署） | `/var/backups/tblink/<时间>-website/`：校验后复制进公开目录的静态文件、`nginx` 预检配置 | 备份目录核对后才创建 |
+| `activate-catalog.py`（手工，一次性开售） | `/var/backups/tblink/<时间>-open-sales-…/` | 同上 |
+| `backup-console.py`（root 定时任务，尚未启用） | 配置 `/etc/tblink-backup/backup.json`；本机加密副本 `/var/backups/tblink/console/` | 配置文件和两条目录链都必须归 root、其他人不可写，否则拒绝运行 |
+| `payment-exceptions.py`（管理员 sudo 巡检） | 读 `/etc/tblink-licensing/admin-token.txt` | `O_NOFOLLOW` 打开，必须是属主 tblink-license 的普通文件；不跟随服务账号放的链接去读 root 的文件 |
+
+旧的备份仍在 `/var/lib/tblink-licensing/backups/`（root 0700，2026-10-23 时有 76 项），不移动也不删除，文档里引用的历史备份路径继续有效。之后新的备份都不再写进这个目录。
+
+`tblink-licensing.service` 用 `StateDirectory=tblink-licensing`。systemd 发现状态目录顶层的属主和配置不符时，会把整棵目录树递归 chown 给服务账号。root 的备份移出之后，这条行为不再影响任何 root 文件。以后不要在 `/var/lib/tblink-licensing` 或 `/etc/tblink-licensing` 里放 root 需要信任的文件：服务账号拥有这两个目录，可以重命名或替换其中任何一项。
+
 <a id="服务器安装命令待用户确认后执行"></a>
-### 服务器安装命令（待用户确认后执行）
+### 服务器安装（待用户确认后执行）
 
-前提：包含这些文件的提交已在 master 上，授权服务已由 CI 部署到同一提交。所有工具按 git 原始字节安装（不要从 Windows 工作区复制，CRLF 会让摘要不一致），`<提交>` 换成那次提交号。以下命令在管理员 SSH 会话里执行。
+更新发布和 root 备份加固合成一份安装说明，按步骤写明备份、验证和回退：[服务器安装 2026-10-23](SERVER_INSTALL_20261023.md)。上传身份的探测也在那里。
 
-在管理员电脑的仓库里导出原始字节，传到服务器：
-
-```bash
-out="$(mktemp -d)"
-for f in publish-update.py receive-update.py tblink-update-publish.path tblink-update-publish.service tblink-update-publish.timer tblink-release.sshd.conf; do
-  git show <提交>:apps/licensing-server/deploy/$f > "$out/$f"
-done
-git show <提交>:apps/desktop/src/main/link/release-public-keys.json > "$out/release-public-keys.json"
-cp <构建机上传公钥文件> "$out/authorized_keys"   # 内容：restrict ssh-ed25519 AAAA... tblink-release-upload
-shasum -a 256 "$out"/*
-scp -F ~/.config/tblink-remote/ssh_config -r "$out" tblink-server:tblink-release-install
-```
-
-然后在服务器上（`cd ~/tblink-release-install`，先用 `sha256sum *` 核对与上面一致）：
-
-```bash
-# 上传身份：只能写 staging。登录 shell 必须是 /bin/sh：sshd 通过它执行 ForceCommand，nologin 会直接退出。
-# 限制来自 sshd 的 Match 块和 authorized_keys 行首的 restrict，与 tblink-deploy 相同。
-sudo useradd --system --home-dir /var/lib/tblink-release --no-create-home --shell /bin/sh tblink-release
-sudo install -d -o root -g root -m 0755 /var/lib/tblink-release
-sudo install -d -o tblink-release -g tblink-release -m 0750 /var/lib/tblink-release/staging
-sudo install -d -o root -g root -m 0755 /etc/tblink-release
-sudo install -o root -g root -m 0644 authorized_keys /etc/tblink-release/authorized_keys
-sudo install -o root -g root -m 0644 receive-update.py /usr/local/libexec/tblink-receive-update.py
-sudo install -o root -g root -m 0644 tblink-release.sshd.conf /etc/ssh/sshd_config.d/71-tblink-release.conf
-sudo sshd -t && sudo systemctl reload ssh
-
-# 发布脚本、公钥、root 自己的目录和后台的请求目录
-sudo install -o root -g root -m 0644 publish-update.py /opt/tblink-licensing/publish-update.py
-sudo install -o root -g root -m 0644 release-public-keys.json /opt/tblink-licensing/release-public-keys.json
-sudo install -d -o root -g tblink-license -m 0750 /var/lib/tblink-update-publish /var/lib/tblink-update-publish/results
-sudo install -d -o root -g root -m 0700 /var/lib/tblink-update-publish/receipts /var/lib/tblink-update-publish/work
-sudo install -d -o tblink-license -g tblink-license -m 0700 /var/lib/tblink-licensing/update-requests
-sudo install -o root -g root -m 0644 tblink-update-publish.path tblink-update-publish.service tblink-update-publish.timer /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now tblink-update-publish.path tblink-update-publish.timer
-sudo systemctl start tblink-update-publish.service
-sudo ls -l /var/lib/tblink-update-publish   # 应有 update-status.json，root tblink-license -rw-r-----
-
-# 后台开启「软件更新」：服务配置加两行后重启授权服务（约 1 秒中断）
-# /etc/tblink-licensing 归服务账号：先确认 service.env 是普通文件（输出以 regular file 开头），不是 symbolic link，再追加。
-sudo stat -c '%F %U:%G %a' /etc/tblink-licensing/service.env
-printf '%s\n' 'UPDATE_REQUEST_DIRECTORY=/var/lib/tblink-licensing/update-requests' 'UPDATE_PUBLISHER_DIRECTORY=/var/lib/tblink-update-publish' \
-  | sudo tee -a /etc/tblink-licensing/service.env
-sudo systemctl restart tblink-licensing
-```
-
-<a id="安装后的探测"></a>
-### 安装后的探测
-
-上传身份要和 tblink-deploy 一样探测：任意命令都只能跑到接收器。用构建机上的上传私钥执行（`-n` 让 stdin 立即结束，否则接收器会一直等上传）：
-
-```powershell
-ssh -n -i D:\tblink-release-signing\upload\tblink-release-ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=D:\tblink-release-signing\upload\known_hosts tblink-release@123.206.229.200 id
-```
-
-预期：标准输出为空，没有 `uid=` 这类 shell 输出；标准错误是 `{"error": "empty file"}`；退出码 1；服务器上 `sudo ls -A /var/lib/tblink-release/staging` 仍为空。
-
-时序：[构建机准备第 3 步](RELEASE_BUILDER_SETUP.md#3-给-runner-账号开权限)会把上传私钥的属主改成 tblink-runner、只给它读权限，之后 WYZB 再用这把钥匙会被 OpenSSH 的权限检查拒绝。所以探测要在第 3 步之前做；如果第 3 步已经做完，就以第一次 Release Windows 的上传步骤作为探测（日志里应有 `staged` 结果），并在服务器上确认 staging 出现对应条目。
-
-再在服务器上确认发布助手按预期运行：
-
-```bash
-systemctl status tblink-update-publish.path tblink-update-publish.timer --no-pager
-sudo journalctl -u tblink-update-publish.service -n 20 --no-pager   # 不应有「目录不安全」或「目录缺失」
-```
-
-`publish-update.py` 和 `receive-update.py` 不在 CI 部署工具清单里，改动后不会让自动部署被拒，但要按上面的方式手工重装，并在本节记录安装的提交号和摘要。
+CI 部署会把服务器上已安装的 `activate-release.py`、`publish-website.py`、`publish-console.py`、`receive-release.py` 与本次 CI 清单里的摘要比对，不一致就拒绝部署（`/etc/tblink-deploy/policy.json` 只记录两份 Nginx 配置的摘要，不记录工具）。所以改这四个工具时，要先按 git 原始字节装到服务器，再把提交推上 master。`publish-update.py`、`receive-update.py`、`backup-console.py`、`payment-exceptions.py` 不在这份清单里，改动不会让自动部署被拒，但同样要手工重装。每次安装都在安装说明里记录提交号和摘要。
