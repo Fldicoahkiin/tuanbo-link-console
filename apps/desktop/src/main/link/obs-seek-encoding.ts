@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { ffmpegDeadline } from './ffmpeg-deadline';
 
 // Intra lossless HEVC makes common 8-bit 4:2:0 media eligible for OBS hardware
 // decoding without tying cache generation to a particular GPU. Other formats
@@ -31,7 +32,8 @@ export function inspectObsSeekPixelFormat(executable: string, source: string): P
   return new Promise((resolve, reject) => {
     const child = spawn(executable, ['-hide_banner', '-loglevel', 'info', '-threads', '2', '-filter_threads', '1',
       '-i', source, '-map', '0:v:0', '-vf', 'showinfo', '-frames:v', '1', '-an', '-sn', '-dn', '-f', 'null', '-'],
-    { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+    ffmpegDeadline(child, '读取素材像素格式', 60_000, reject);
     let output = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => { output = (output + chunk).slice(-16000); });

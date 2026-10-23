@@ -21,10 +21,13 @@ type Dependencies = {
   snapshot: () => Promise<z.infer<typeof snapshotSchema>>;
   change: typeof changeNetworkAddress;
 };
+/** One change to a Windows adapter, as the operator is asked to confirm it. */
+export type NetworkAddressChange = { action: 'add' | 'remove'; adapterName: string; adapterDescription: string; address: string; prefix: number; host: string };
 export class Ma2NetworkSetup {
   private plans = new Map<string, Ma2NetworkSetupPlan>();
   private busy = false;
-  constructor(private readonly path: string, private readonly dependencies: Dependencies = {
+  /** `confirm`: the main process's own question to the operator; a window cannot answer it. */
+  constructor(private readonly path: string, private readonly confirm: (change: NetworkAddressChange) => Promise<boolean>, private readonly dependencies: Dependencies = {
     snapshot: async () => snapshotSchema.parse(JSON.parse(await executePowerShell(networkAdapterScript, 15000))), change: changeNetworkAddress
   }) {}
   private async records(): Promise<z.infer<typeof recordsSchema>> {
@@ -72,6 +75,9 @@ export class Ma2NetworkSetup {
       const adapter = current.adapters.find(adapter => adapter.id === plan.adapter.id);
       if (JSON.stringify(adapter) !== JSON.stringify(plan.adapter)) throw new Error('网卡状态已变化，请重新检查后配置');
       if (!plan.needsChange) { await this.select(plan); this.plans.delete(id); return this.state(); }
+      if (!await this.confirm({ action: 'add', adapterName: plan.adapter.name, adapterDescription: plan.adapter.description, address: plan.address, prefix: plan.prefix, host: plan.host })) {
+        throw new Error('已取消修改网卡地址，网卡未改动');
+      }
       const records = (await this.records()).filter(record => record.bootId === current.bootId);
       await this.save([...records, { bootId: current.bootId, plan }]);
       try { await this.dependencies.change(plan, false); }
@@ -89,6 +95,9 @@ export class Ma2NetworkSetup {
       if (record.bootId === current.bootId) {
         const adapter = current.adapters.find(adapter => adapter.id === record.plan.adapter.id);
         if (!adapter) throw new Error('原网卡不存在，请接回原网卡后恢复');
+        if (!await this.confirm({ action: 'remove', adapterName: adapter.name, adapterDescription: adapter.description, address: record.plan.address, prefix: record.plan.prefix, host: record.plan.host })) {
+          throw new Error('已取消移除网卡地址，网卡未改动');
+        }
         await this.dependencies.change({ ...record.plan, adapter }, true);
       }
       this.plans.clear();

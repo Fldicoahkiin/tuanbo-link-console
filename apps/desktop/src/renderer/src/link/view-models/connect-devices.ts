@@ -98,7 +98,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
     if (method === 'midi') { skip('ma2', '未启用网络连接，当前使用 MIDI'); skip('bridge', 'MIDI 模式无需工程通信'); return; }
     if (method === 'local') {
       skip('ma2', '当前使用本机 onPC');
-      await run('bridge', 'MA2 工程通信', () => connectLocalMa2(localStorage.getItem('tblink.ma2-onpc-data-directory.v1') ?? ''), '本机控台通信已响应'); return;
+      await run('bridge', 'MA2 工程通信', async () => connectLocalMa2((await desktop.getMa2DataDirectory()) ?? ''), '本机控台通信已响应'); return;
     }
     await run('ma2', 'MA2 网络', async () => {
       const status = ma2NetworkStatusSchema.parse(await connectDiscoveredMa2());

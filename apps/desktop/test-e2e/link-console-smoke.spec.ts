@@ -46,6 +46,15 @@ async function openMa2ManualSettings(): Promise<void> {
   if (await panel.getAttribute('open') === null) await panel.locator(':scope > summary').click();
   await page.getByLabel('MA2 控台 IP', { exact: true }).scrollIntoViewIfNeeded();
 }
+/** The onPC data directory only comes from the main process's folder dialog: answer that dialog once. */
+async function chooseMa2DataDirectory(directory: string): Promise<void> {
+  await application.evaluate(({ dialog }, path) => {
+    const original = dialog.showOpenDialog.bind(dialog);
+    dialog.showOpenDialog = () => { dialog.showOpenDialog = original; return Promise.resolve({ canceled: false, filePaths: [path] }); };
+  }, directory);
+  await page.getByRole('button', { name: '选择本机 onPC 数据目录', exact: true }).click();
+  await expect(page.getByLabel('MA2 onPC 数据目录')).toHaveValue(directory);
+}
 async function openLightingTools(name: '节目同步' | '节拍与循环' | '导入与导出'): Promise<void> {
   await closeLightingTools();
   await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
@@ -247,7 +256,7 @@ test('新建 MA2 Timecode 关联当前节目并保存，失败不产生虚假绑
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByLabel('MA2 onPC 数据目录').fill('C:\\MA2-Test');
+  await chooseMa2DataDirectory('C:\\MA2-Test');
   await openLightingTools('节目同步');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9903');
   const preview = convertMa2Snapshot(createMa2TimecodeXml(9903, '节目 1', '3.3.4.3'), 9903);
@@ -316,7 +325,7 @@ test('节目轨道可明确关联 MA2、取消和撤销，并保存待同步绑�
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByLabel('MA2 onPC 数据目录').fill('C:\\MA2-Test');
+  await chooseMa2DataDirectory('C:\\MA2-Test');
   await openLightingTools('节目同步');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902');
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
@@ -394,7 +403,7 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，列出未支�
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByLabel('MA2 onPC 数据目录').fill('C:\\MA2-Test');
+  await chooseMa2DataDirectory('C:\\MA2-Test');
   await openLightingTools('节目同步');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902');
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
@@ -541,7 +550,7 @@ test('MA2 重复 Cue 可逐点确认对应，重新读取清除旧选择', async
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByLabel('MA2 onPC 数据目录').fill('C:\\MA2-Test');
+  await chooseMa2DataDirectory('C:\\MA2-Test');
   await openLightingTools('节目同步');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902');
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
@@ -854,7 +863,12 @@ test('设备地址草稿不会被独立 MIDI 设置覆盖，保存后两项均�
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '程序维护', exact: true }).click();
   await page.locator('.device-program-card.obs .device-process-settings > summary').click();
   await page.locator('.device-program-card.obs .device-advanced > summary').click();
-  await page.locator('.device-program-card.obs').getByLabel('启动文件夹', { exact: true }).fill('C:/unsaved-maintenance');
+  await application.evaluate(({ dialog }) => {
+    const original = dialog.showOpenDialog.bind(dialog);
+    dialog.showOpenDialog = () => { dialog.showOpenDialog = original; return Promise.resolve({ canceled: false, filePaths: ['C:/unsaved-maintenance'] }); };
+  });
+  await page.getByRole('button', { name: '选择 OBS Studio 启动文件夹', exact: true }).click();
+  await expect(page.locator('.device-program-card.obs').getByLabel('启动文件夹', { exact: true })).toHaveValue('C:/unsaved-maintenance');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '音频与 MIDI', exact: true }).click();
   await page.getByText('远程控制与灯光动作端口', { exact: true }).click();
@@ -3096,7 +3110,7 @@ test('MA2 预览与冲突显示主推杆百分比，合并结果不误报关闭�
   await devices.click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
-  await page.getByLabel('MA2 onPC 数据目录').fill('C:\\MA2-Test');
+  await chooseMa2DataDirectory('C:\\MA2-Test');
   await openLightingTools('节目同步');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902');
   await page.getByRole('button', { name: '读取灯光编排', exact: true }).click();
@@ -3452,7 +3466,7 @@ test('无灯光轨道的节目可以从节目同步导入并撤销', async ({}, 
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   const menu = page.getByRole('navigation', { name: '设置子菜单' });
   await menu.getByRole('button', { name: '设备连接', exact: true }).click(); await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('local');
-  await menu.getByRole('button', { name: '设备连接', exact: true }).click(); await page.getByLabel('MA2 onPC 数据目录').fill('C:/MA2-Test');
+  await menu.getByRole('button', { name: '设备连接', exact: true }).click(); await chooseMa2DataDirectory('C:/MA2-Test');
   await openLightingTools('节目同步');
   await expect(page.getByRole('dialog', { name: '节目同步' })).toContainText('未编排节目');
   await page.getByLabel('读取 MA2 Timecode 编号').fill('9902'); await page.getByRole('button', { name: '读取灯光编排', exact: true }).click(); await page.getByRole('button', { name: '加入当前节目', exact: true }).click();

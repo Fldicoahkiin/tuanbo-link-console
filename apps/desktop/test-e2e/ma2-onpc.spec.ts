@@ -32,12 +32,14 @@ test('真实 onPC 经界面导入、修改、同步、冲突选择与保存重�
   try {
     await application.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, destination);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    // Configure the isolated profile; all MA2 IPC handlers and adapters remain real.
-    await page.evaluate((path) => {
-      localStorage.setItem('tblink.ma2-connection-method.v1', 'local');
-      localStorage.setItem('tblink.ma2-onpc-data-directory.v1', path);
-    }, directory);
-    await page.reload();
+    // Configure the isolated profile through the settings page; all MA2 IPC handlers and adapters remain real.
+    await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
+    await page.getByLabel('MA2 连接方式').selectOption('local');
+    await application.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [folder] }); }, directory);
+    await page.getByRole('button', { name: '选择本机 onPC 数据目录', exact: true }).click();
+    await expect(page.getByLabel('MA2 onPC 数据目录')).toHaveValue(directory);
     await openSync(page);
     const read = async (): Promise<void> => {
       await page.getByLabel('读取 MA2 Timecode 编号').fill('9902');

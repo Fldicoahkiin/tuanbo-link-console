@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
+import { watchOutputGrowth } from './ffmpeg-deadline';
 
 export type DecodeResult = { ok: true } | { ok: false; error: Error };
 type Options = { executable: string; source: string; output: string; rate: number; baseMs: number; maximumBytes: number };
@@ -11,6 +12,7 @@ export class NativeAudioDecode {
   readonly finished: Promise<DecodeResult>;
   private result: DecodeResult | null = null;
   private cancelled = false;
+  private stalled: Error | null = null;
   private readonly child;
 
   constructor(private readonly options: Options) {
@@ -18,6 +20,13 @@ export class NativeAudioDecode {
       '-readrate', '8', '-readrate_initial_burst', '5', '-ss', String(options.baseMs / 1000), '-i', options.source,
       '-map', '0:a:0', '-vn', '-ac', '2', '-ar', String(options.rate), '-f', 's16le', '-fs', String(options.maximumBytes + 4), options.output],
     { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    // A decoder whose file stops growing is stuck (for example a source on a drive that stopped
+    // answering): its readers fail at once, and it is asked to quit like a cancel, not ended.
+    const stopWatching = watchOutputGrowth(options.output, { intervalMs: 2_000, stallMs: 30_000 }, error => {
+      if (this.result || this.cancelled) return;
+      this.stalled = new Error('音频解码超过 30 秒没有进展，已请求 FFmpeg 停止', { cause: error });
+      if (this.child.stdin.writable) this.child.stdin.write('q\n');
+    });
     this.finished = new Promise<DecodeResult>(resolve => {
       let diagnostic = '', failure: Error | null = null;
       this.child.stderr.setEncoding('utf8'); this.child.stderr.on('data', (data: string) => { diagnostic = (diagnostic + data).slice(-4096); });
@@ -25,7 +34,8 @@ export class NativeAudioDecode {
       this.child.on('error', error => { failure = error; });
       this.child.stdin.on('error', error => { failure = error; });
       this.child.once('close', code => {
-        this.result = failure ? { ok: false, error: failure } : code === 0 && !this.cancelled ? { ok: true }
+        stopWatching();
+        this.result = failure ? { ok: false, error: failure } : this.stalled ? { ok: false, error: this.stalled } : code === 0 && !this.cancelled ? { ok: true }
           : { ok: false, error: new Error(this.cancelled ? '音频解码已取消' : `音频解码失败（${code}）：${diagnostic}`) };
         resolve(this.result);
       });
@@ -36,6 +46,7 @@ export class NativeAudioDecode {
     for (;;) {
       signal.throwIfAborted();
       if (this.cancelled) throw new Error('音频解码已取消');
+      if (this.stalled) throw this.stalled;
       if (this.result && !this.result.ok) throw this.result.error;
       let size = 0;
       try { size = (await stat(this.options.output)).size; }

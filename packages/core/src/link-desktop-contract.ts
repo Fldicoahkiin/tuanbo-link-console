@@ -220,6 +220,10 @@ export type LinkDesktopApi = {
   copyPurchaseCode(localId: string, licenseId: string): Promise<void>;
   requireOutputLicense(): Promise<void>;
   exportMa2Plugin: () => Promise<string | null>;
+  /** The local onPC data directory the main process recorded; only the folder dialog or detection set it. */
+  getMa2DataDirectory(): Promise<string | null>;
+  pickMa2DataDirectory(): Promise<string | null>;
+  detectMa2DataDirectory(): Promise<string>;
   exportObsPreviewScript: () => Promise<string>;
   getObsPreviewStatus: () => Promise<{ ready: boolean; message: string }>;
   discoverMa2(): Promise<import('@tb/schema').Ma2Discovery>;
@@ -287,6 +291,7 @@ export type LinkDesktopApi = {
   detectLocalIntegrations(): Promise<LinkLocalIntegrationDetection>;
   loopMidi(action: 'detect' | 'start' | 'download'): Promise<import('@tb/schema').LoopMidiStatus>;
   pickExecutable(): Promise<string | null>;
+  pickWorkingDirectory(): Promise<string | null>;
   createProject(name: string): Promise<LinkProject>;
   pickOpenProject(): Promise<LinkProjectFile | null>;
   openProject(path: string): Promise<LinkProjectFile>;

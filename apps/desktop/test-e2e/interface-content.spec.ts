@@ -39,11 +39,9 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
     const mtcDialog = page.getByRole('dialog', { name: 'MTC 时间码状态' });
     await expect(mtcDialog).toBeVisible();
     await expect(mtcDialog.locator('.mtc-output-status')).toBeVisible();
-    const toggle = mtcDialog.getByRole('button', { name: /^MTC / });
-    await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-    await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    // A song that plays with lighting always sends timecode: the panel reports it and offers no switch.
+    await expect(mtcDialog.locator('.mtc-output-status')).toContainText('fps');
+    await expect(mtcDialog.getByRole('button', { name: /^MTC / })).toHaveCount(0);
     await mtcDialog.getByRole('button', { name: '音频与 MIDI 设置', exact: true }).click();
     await expect(page.getByLabel('音频与 MIDI 设备面板', { exact: true })).toBeVisible();
     await nav.getByRole('button', { name: '节目单', exact: true }).click();

@@ -56,6 +56,27 @@ describe('ProjectAccess', () => {
     expect(() => access.requireShown(opening)).toThrow('当前打开的工程');
   });
 
+  it('素材链接只在其工程打开期间有效：切换后旧工程的链接作废，关闭工程后全部作废', async () => {
+    const access = new ProjectAccess(await recordPath());
+    const first = join(await folder(), 'first.tblink'), second = join(await folder(), 'second.tblink');
+    const token = (url: string): string => new URL(url).pathname.slice(1);
+    access.opened(first); await access.show(first);
+    const firstAudio = token(access.assetUrl(first, '/first/assets/reference-audio/a.wav'));
+    expect(access.assetPath(firstAudio)).toBe('/first/assets/reference-audio/a.wav');
+    expect(access.assetPath('unknown')).toBeNull();
+    access.opened(second);
+    const secondAudio = token(access.assetUrl(second, '/second/assets/reference-audio/b.wav'));
+    expect(access.assetPath(firstAudio)).toBe('/first/assets/reference-audio/a.wav');
+    await access.show(second);
+    expect(access.assetPath(firstAudio)).toBeNull();
+    expect(access.assetPath(secondAudio)).toBe('/second/assets/reference-audio/b.wav');
+    await access.show(null);
+    expect(access.assetPath(secondAudio)).toBeNull();
+    await access.show(second);
+    expect(access.assetPath(secondAudio)).toBeNull();
+    expect(() => access.assetUrl(first, '/first/assets/reference-audio/a.wav')).toThrow('当前打开的工程');
+  });
+
   it('主进程记录上次显示的工程；读回时批准它，记录损坏明确报错', async () => {
     const record = await recordPath();
     const opened = join(await folder(), 'show.tblink');

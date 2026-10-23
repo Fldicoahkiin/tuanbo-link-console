@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
+import { ffmpegDeadline } from './ffmpeg-deadline';
 import type { LinkMediaKind } from '@tb/schema';
 
 export type ProbedMediaMetadata = {
@@ -54,7 +55,8 @@ function resolveFfmpegExecutable(): string {
 
 function runProbe(executable: string, arguments_: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, arguments_, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn(executable, arguments_, { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+    ffmpegDeadline(child, '读取媒体信息', 60_000, reject);
     let output = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => { output = `${output}${chunk}`.slice(-32_000); });
