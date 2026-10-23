@@ -304,6 +304,16 @@ async function bootstrap(): Promise<void> {
     if (result !== 'ready') throw new Error(midiHealthMessage(result));
   });
   createMainWindow(obs, logger);
+  // One check after startup settles; it only reports a new version, the operator downloads it.
+  setTimeout(() => {
+    if (quitFlowRunning || allowWindowClose) return;
+    void updateManager.check('background').then(status => {
+      if (status.phase === 'disabled' || status.phase === 'notConfigured') return;
+      return logger.record({ level: status.phase === 'idle' ? 'warning' : 'info', category: 'system', device: '软件更新',
+        message: status.installBlockedReason ? `${status.message}；${status.installBlockedReason}` : status.message,
+        details: { currentVersion: status.currentVersion, availableVersion: status.availableVersion, releaseDate: status.releaseDate } });
+    }).catch((error: unknown) => console.error('启动更新检查日志写入失败', error));
+  }, 10_000);
   restoreMainWindow = () => {
     if (mainWindow || quitFlowRunning) return;
     allowWindowClose = false;

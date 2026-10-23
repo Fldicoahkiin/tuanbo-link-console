@@ -156,6 +156,29 @@ describe('LinkUpdateManager', () => {
     await expect(manager.check()).resolves.toMatchObject({ installBlockedReason: '更新信息没有有效的发布日期，无法确认是否在升级服务期内，不能安装；请联系发行方' });
   });
 
+  it('启动后台检查只检查不下载；失败回到可手动重试，不显示为更新错误', async () => {
+    const phases: string[] = [];
+    const download = vi.fn();
+    let online = false;
+    const manager = new LinkUpdateManager('0.2.0', true, (status) => phases.push(status.phase), rules(), (_feedUrl, handlers) => ({
+      check: () => {
+        if (online) { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); }
+        const error = new Error('net::ERR_INTERNET_DISCONNECTED');
+        handlers.error(error);
+        return Promise.reject(error);
+      },
+      download, install: vi.fn(), dispose: vi.fn()
+    }));
+    const offline = await manager.check('background');
+    expect(offline.phase).toBe('idle');
+    expect(offline.message).toBe('启动时未能检查更新（更新失败：net::ERR_INTERNET_DISCONNECTED），可以在软件更新中重试');
+    expect(phases).not.toContain('error');
+    online = true;
+    await expect(manager.check('background')).resolves.toMatchObject({ phase: 'available', availableVersion: '0.2.1' });
+    expect(download).not.toHaveBeenCalled();
+    await expect(manager.check('background')).resolves.toMatchObject({ phase: 'available' });
+  });
+
   it('下载失败可重新检查，错误不会被假装成功', async () => {
     const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), (_feedUrl, handlers) => ({
       check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },

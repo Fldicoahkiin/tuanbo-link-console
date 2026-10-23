@@ -37,6 +37,7 @@ export type UpdateRules = {
 export class LinkUpdateManager {
   private client: UpdateClient | null = null;
   private busy = false;
+  private backgroundCheck = false;
   private activeDownload: AbortController | null = null;
   private status: LinkUpdateStatus;
 
@@ -55,10 +56,16 @@ export class LinkUpdateManager {
     return { ...this.status };
   }
 
-  async check(): Promise<LinkUpdateStatus> {
+  /** `background` is the one check after startup: it never downloads, and a failure (often an offline
+   * venue) leaves the panel ready for a manual retry instead of showing an update error. */
+  async check(mode: 'manual' | 'background' = 'manual'): Promise<LinkUpdateStatus> {
     if (!this.packaged || !this.status.feedConfigured) return this.getStatus();
-    if (this.busy || this.status.phase === 'downloaded') throw new Error('请先完成当前更新操作');
+    if (this.busy || this.status.phase === 'downloaded') {
+      if (mode === 'background') return this.getStatus();
+      throw new Error('请先完成当前更新操作');
+    }
     this.busy = true;
+    this.backgroundCheck = mode === 'background';
     this.client?.dispose();
     try {
       this.client = this.createClient(this.feedUrl, {
@@ -99,7 +106,7 @@ export class LinkUpdateManager {
           progressPercent: 100,
           message: `版本 ${info.version} 已下载，确认后重启安装`
         }),
-        error: (error) => this.update({ phase: 'error', message: normalizeUpdateError(error) })
+        error: (error) => { if (!this.backgroundCheck) this.update({ phase: 'error', message: normalizeUpdateError(error) }); }
       });
       this.update({
         phase: 'checking',
@@ -115,8 +122,10 @@ export class LinkUpdateManager {
       await this.client.check();
       if (this.status.phase === 'available') await this.checkEntitlement();
     } catch (error) {
-      this.update({ phase: 'error', message: normalizeUpdateError(error) });
+      if (this.backgroundCheck) this.update({ phase: 'idle', message: `启动时未能检查更新（${normalizeUpdateError(error)}），可以在软件更新中重试` });
+      else this.update({ phase: 'error', message: normalizeUpdateError(error) });
     } finally {
+      this.backgroundCheck = false;
       this.busy = false;
     }
     return this.getStatus();

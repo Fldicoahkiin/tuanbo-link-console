@@ -108,6 +108,7 @@ export function LinkApp(): JSX.Element {
   useRuntimeCloseProtection(internalPlayer.state.status === 'preparing' ? 'preflight' : runtimeState, notify);
 
   useDocumentErrorNotification(documentError, notify);
+  useUpdateAvailableNotice(notify);
 
   useEffect(() => {
     if (editingLocked && project?.playbackSource !== 'internal' && page === 'cues') setPage('project');
@@ -388,6 +389,18 @@ async function loadDesktopIntegrationState(
   } finally {
     if (!isCancelled()) useIntegrationStore.getState().setInitialized(true);
   }
+}
+
+/** The main process checks once after startup; each new version is announced once per session. */
+function useUpdateAvailableNotice(notify: (message: string, tone?: 'info' | 'error', key?: string) => void): void {
+  useEffect(() => {
+    const announced = new Set<string>();
+    return window.tbLink.onUpdateStatus(status => {
+      if (status.phase !== 'available' || !status.availableVersion || announced.has(status.availableVersion)) return;
+      announced.add(status.availableVersion);
+      notify(`发现新版本 ${status.availableVersion}，可在 设置 › 外观与更新 › 软件更新 中查看`, 'info', 'update-available');
+    });
+  }, [notify]);
 }
 
 function useDocumentErrorNotification(
