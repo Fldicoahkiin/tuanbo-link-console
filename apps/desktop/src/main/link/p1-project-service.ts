@@ -92,13 +92,12 @@ export class P1ProjectService {
           const relocatedRefusal = await songLinkRefusal(readablePath);
           if (relocatedRefusal) throw new Error(explain(relocatedRefusal));
         }
-        // The place was checked above, as text and link by link, so the file is read through that path. Its real
-        // path only has to be a song file: a mapped network drive resolves to the share behind it (\\server\share\…).
         const realSong = await this.resolveReal(readablePath);
-        if (!SONG_EXTENSIONS.has(extname(realSong).toLowerCase())) throw new Error(`“${media.title}”的实际文件不是可导入的音视频文件（${realSong}）。请在 P1 中指定音频或视频文件后重新导入。`);
-        const fileStat = await stat(readablePath);
-        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${readablePath}`);
-        const audio = await importP1Audio(this.projects, linkProjectPath, media, readablePath);
+        const realRefusal = await this.realSongRefusal(readablePath, realSong, dirname(parsed.sourcePath));
+        if (realRefusal) throw new Error(`“${media.title}”的实际文件：${explain(realRefusal)}`);
+        const fileStat = await stat(realSong);
+        if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${realSong}`);
+        const audio = await importP1Audio(this.projects, linkProjectPath, media, realSong);
         items.push({
           title: media.title,
           ...audio,
@@ -122,6 +121,18 @@ export class P1ProjectService {
       playlists: parsed.playlists.map((playlist) => playlist.binding),
       items
     };
+  }
+
+  /** The real path the song is read from: a song file on a local disk or inside the .hia's folder, or on the mapped
+   * network drive that the checked path names (Z:\ resolves to the \\server\share behind it). Anything else is refused. */
+  private async realSongRefusal(checked: string, real: string, hiaFolder: string): Promise<SongRefusal | null> {
+    const refusal = songPathRefusal('', real, await this.resolveReal(hiaFolder));
+    if (refusal === null || !SONG_EXTENSIONS.has(extname(real).toLowerCase())) return refusal;
+    const drive = /^[a-z]:[\\/]/i.exec(checked)?.[0];
+    if (!drive) return refusal;
+    const share = await this.resolveReal(drive);
+    const inside = relative(share, real);
+    return /^[\\/]{2}[^\\/?.]/.test(share) && inside !== '' && !inside.startsWith('..') && !isAbsolute(inside) ? null : refusal;
   }
 
   async previewExport(
