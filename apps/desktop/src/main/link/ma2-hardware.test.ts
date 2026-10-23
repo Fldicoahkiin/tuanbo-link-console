@@ -15,6 +15,8 @@ import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { createMa2Timecode } from './ma2-create';
 import { inspectMa2SequenceXml, inspectMa2TimecodeXml, sameMa2XmlObjects } from './ma2-timecode-xml';
 import { readMa2NativeLibrary } from './ma2-native-library';
+import { ma2SongTimecodeXml } from './ma2-song-timecode';
+import { createMa2TimecodeXml } from './ma2-create';
 
 it.runIf(Boolean(process.env.TBLINK_MA2_HARDWARE_LIBRARY))('实体控台素材结构只读诊断', async () => {
   const connection = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });
@@ -384,6 +386,57 @@ it.runIf(process.env.TBLINK_MA2_BACKUP_ROTATION === '1' && Boolean(process.env.T
       const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), () => false);
       await bridge.request('DISCARD', 1, created.join(','));
       expect((await Promise.all(created.map(exists))).every(value => value === 'false')).toBe(true);
+    }
+    raw.disconnect();
+  }
+}, 300000);
+
+// Writes one scratch Timecode show (and a scratch executor page), compares what the console keeps with
+// what was written, and removes both; also removes a song probe show an earlier failed run left behind.
+it.runIf(process.env.TBLINK_MA2_TIMECODE_PROBE === '1' && Boolean(process.env.TBLINK_MA2_HARDWARE_HOST))('onPC 本曲时间码节目写入后控台保留的内容', async () => {
+  const raw = new Ma2Telnet({ host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001 });
+  const results: Record<string, unknown> = {};
+  let made: { timecode?: number; page?: number } = {};
+  const lua = async (code: string): Promise<string> => {
+    const marker = `TBLINK_TCPROBE_${randomBytes(16).toString('hex')}:`;
+    return await raw.command(`Lua "${code};gma.echo('${marker}'..tostring(R))"`, text => ma2ResponseLine(text, marker));
+  };
+  const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
+  try {
+    await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
+    await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
+    const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), () => false);
+    const timecodes = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
+    for (const orphan of timecodes.entries.filter(entry => entry.name === 'LianDongTanZhenGeQu')) results[`removed-orphan-${orphan.target}`] = await lua(`gma.cmd('Delete Timecode ${orphan.target} /nc');R=gma.show.getobj.handle('Timecode ${orphan.target}')==nil`);
+    const sequences = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
+    const sequence = sequences.entries.find(entry => entry.target === 8999)?.target ?? sequences.entries[0]!.target;
+    const report = inspectMa2SequenceXml(await bridge.request('SEQCUES', sequence, '1.000,2.000')).sequences[0]!;
+    let page = 9890; const pages = await listMa2ExecutorPages(bridge, { network: { host: process.env.TBLINK_MA2_HARDWARE_HOST!, port: 30000, monitorPort: 30001, username: 'administrator' }, expectedSource: { show: timecodes.show, generation: timecodes.generation, version: timecodes.version } });
+    while (pages.pages.some(value => value.page === page)) page += 1;
+    made = { page };
+    results.assign = await lua(`gma.cmd('Store Page ${page} /nc');gma.cmd('Assign Sequence ${sequence} At Executor ${page}.101 /nc');R=not (gma.show.getobj.handle('Executor ${page}.101')==nil)`);
+    const executorName = /tblink_executor_name="([^"]*)"/.exec(await bridge.request('EXECUTOR', page, '101'))?.[1] ?? '';
+    let target = 9950; const live = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
+    while (live.entries.some(entry => entry.target === target)) target += 1;
+    made = { ...made, timecode: target };
+    const current = await bridge.request('CREATE', target, '', createMa2TimecodeXml(target, 'TcProbe', timecodes.version));
+    results.created = canonical(current);
+    const desired = ma2SongTimecodeXml(current, target, { name: 'TcProbe', startMs: 480000, executor: `${page}.101`, executorName, sequence,
+      cues: report.cues.slice(0, 2).map((cue, index) => ({ atMs: index * 1000, cueIndex: cue.index, name: cue.name ?? '' })) });
+    const wanted = canonical(desired); results.desired = wanted;
+    try { await bridge.exchange('APPLY', target, current, desired); results.apply = 'verified'; }
+    catch (error) { results.apply = error instanceof Error ? error.message : String(error); }
+    const after = canonical(await bridge.request('READ', target));
+    results.after = after;
+    let k = 0; while (k < after.length && after[k] === wanted[k]) k += 1;
+    results.firstDifference = { at: k, desired: wanted.slice(Math.max(0, k - 120), k + 200), after: after.slice(Math.max(0, k - 120), k + 200) };
+    await mkdir(resolve('artifacts/ma2-hardware-diagnostics'), { recursive: true });
+    await writeFile(resolve('artifacts/ma2-hardware-diagnostics/timecode-probe.json'), JSON.stringify({ at: new Date().toISOString(), version: timecodes.version, sequence, page, target, executorName, results }, null, 2));
+  } finally {
+    console.info(JSON.stringify({ made, apply: results.apply, firstDifference: results.firstDifference }));
+    if (raw.state === 'connected') {
+      if (made.timecode) await lua(`gma.cmd('Delete Timecode ${made.timecode} /nc');R='ok'`);
+      if (made.page) await lua(`gma.cmd('Delete Page ${made.page} /nc');R='ok'`);
     }
     raw.disconnect();
   }
