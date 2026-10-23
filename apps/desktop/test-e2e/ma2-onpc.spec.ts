@@ -38,7 +38,7 @@ test('真实 onPC 经界面导入、修改、同步、冲突选择与保存重�
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式').selectOption('local');
     await application.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [folder] }); }, directory);
-    await page.getByRole('button', { name: '选择 MA2 onPC 数据目录', exact: true }).click();
+    await page.getByRole('button', { name: '选择本机 onPC 数据目录', exact: true }).click();
     await expect(page.getByLabel('MA2 onPC 数据目录')).toHaveValue(directory);
     await openSync(page);
     const read = async (): Promise<void> => {

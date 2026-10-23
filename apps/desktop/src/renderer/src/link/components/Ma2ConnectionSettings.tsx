@@ -66,7 +66,7 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
       <label className="settings-row"><span>本机数据目录</span><div className="device-path-control">
         <input aria-label="MA2 onPC 数据目录" readOnly value={directory} placeholder="一键识别或选择 onPC 数据目录" />
         <button disabled={disabled || busy} onClick={() => void chooseDirectory('detect')}><ScanSearch />一键识别</button>
-        <button disabled={disabled || busy} onClick={() => void chooseDirectory('pick')} aria-label="选择 MA2 onPC 数据目录"><FolderOpen />浏览</button>
+        <button disabled={disabled || busy} onClick={() => void chooseDirectory('pick')} aria-label="选择本机 onPC 数据目录"><FolderOpen />浏览</button>
       </div></label>
       <p className="settings-note settings-field-help">此方式通过文件插件通信。数据目录必须与当前运行的 onPC 版本一致，并在 onPC 中运行联动插件。也可切换到网络直连，填写 127.0.0.1。</p>
       {local.error ? <p className="device-error" role="alert">{local.error}</p> : null}

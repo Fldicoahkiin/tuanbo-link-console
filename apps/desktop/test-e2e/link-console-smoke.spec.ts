@@ -52,7 +52,7 @@ async function chooseMa2DataDirectory(directory: string): Promise<void> {
     const original = dialog.showOpenDialog.bind(dialog);
     dialog.showOpenDialog = () => { dialog.showOpenDialog = original; return Promise.resolve({ canceled: false, filePaths: [path] }); };
   }, directory);
-  await page.getByRole('button', { name: '选择 MA2 onPC 数据目录', exact: true }).click();
+  await page.getByRole('button', { name: '选择本机 onPC 数据目录', exact: true }).click();
   await expect(page.getByLabel('MA2 onPC 数据目录')).toHaveValue(directory);
 }
 async function openLightingTools(name: '节目同步' | '节拍与循环' | '导入与导出'): Promise<void> {

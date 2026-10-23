@@ -32,7 +32,7 @@ test('真实 P1 文件与音频一键匹配真实 onPC 时间线，保留无法�
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式').selectOption('local');
     await application.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [folder] }); }, directory);
-    await page.getByRole('button', { name: '选择 MA2 onPC 数据目录', exact: true }).click();
+    await page.getByRole('button', { name: '选择本机 onPC 数据目录', exact: true }).click();
     await expect(page.getByLabel('MA2 onPC 数据目录')).toHaveValue(directory);
     await application.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, p1);
     const section = page.getByLabel('MA2 现场节目导入');
@@ -69,7 +69,7 @@ test('真实 onPC 设置扫描、小数 Cue、歌曲配对、批量导入与保�
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式').selectOption('local');
     await application.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [folder] }); }, directory);
-    await page.getByRole('button', { name: '选择 MA2 onPC 数据目录', exact: true }).click();
+    await page.getByRole('button', { name: '选择本机 onPC 数据目录', exact: true }).click();
     await expect(page.getByLabel('MA2 onPC 数据目录')).toHaveValue(directory);
     await page.getByText('歌曲导入与同步', { exact: true }).click();
     const section = page.getByLabel('MA2 现场节目导入');
