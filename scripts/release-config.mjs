@@ -48,6 +48,17 @@ export function assertNewerRelease(version, { tags, head, feedVersion }) {
   if (compareStableVersions(feedVersion, version) >= 0) throw new Error(`版本 ${version} 不高于更新源上的 ${feedVersion}`);
 }
 
+/** Test packages are prereleases of the next minor version after the newest of package.json and the release
+ * tags, numbered by commit count: they never equal an official version, and official clients
+ * (allowPrerelease false) never take them. */
+export function testPackageVersion({ packageVersion, tags, commitCount, sha, dirty }) {
+  const released = tags.map(tag => /^v(.+)$/.exec(tag)?.[1]).filter(version => version !== undefined && stableVersion.test(version));
+  const newest = [packageVersion, ...released].sort(compareStableVersions).at(-1);
+  const [major, minor] = newest.split('.').map(Number);
+  if (!Number.isInteger(commitCount) || commitCount <= 0 || !/^[0-9a-f]{7,40}$/.test(sha)) throw new Error('测试包版本需要提交数和提交号');
+  return `${major}.${minor + 1}.0-test.${commitCount}+g${sha}${dirty ? '.dirty' : ''}`;
+}
+
 export function validatePackagedUpdateConfig(text, expected) {
   const config = load(text);
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('app-update.yml 必须为对象');

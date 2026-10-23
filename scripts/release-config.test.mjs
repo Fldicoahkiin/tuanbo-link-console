@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertNewerRelease, compareStableVersions, embeddedDistributionChannel, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, websiteRelease } from './release-config.mjs';
+import { assertNewerRelease, compareStableVersions, testPackageVersion, embeddedDistributionChannel, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, websiteRelease } from './release-config.mjs';
 
 const publish = { provider: 'generic', url: 'https://updates.tuanbo-link.jinhefilm.com/windows/x64/' };
 
@@ -111,4 +111,11 @@ test('正式版本必须高于其他标签和线上更新源，自己的标签�
   assert.throws(() => assertNewerRelease('0.4.20', { tags, head: 'h', feedVersion: '0.4.19' }), /不高于已有标签 v0\.4\.28/);
   assert.throws(() => assertNewerRelease('0.4.30', { tags, head: 'h', feedVersion: '0.4.30' }), /不高于更新源/);
   assert.throws(() => assertNewerRelease('0.4.30', { tags: [...tags, { name: 'v0.5.0', commit: 'z' }], head: 'h', feedVersion: '0.4.29' }), /v0\.5\.0/);
+});
+
+test('测试包版本是下一个次版本的预发布，带提交数和提交号', () => {
+  assert.equal(testPackageVersion({ packageVersion: '0.4.57', tags: ['v0.4.28', 'v0.4.29', 'desktop-0.4.27-20260925'], commitCount: 2450, sha: '454cda6', dirty: false }), '0.5.0-test.2450+g454cda6');
+  assert.equal(testPackageVersion({ packageVersion: '0.5.0', tags: ['v0.5.0'], commitCount: 2460, sha: 'abcdef1', dirty: true }), '0.6.0-test.2460+gabcdef1.dirty');
+  assert.equal(testPackageVersion({ packageVersion: '0.4.57', tags: ['v0.5.2'], commitCount: 1, sha: 'abcdef1', dirty: false }), '0.6.0-test.1+gabcdef1');
+  assert.throws(() => testPackageVersion({ packageVersion: '0.4.57', tags: [], commitCount: 0, sha: 'abcdef1', dirty: false }), /提交数/);
 });

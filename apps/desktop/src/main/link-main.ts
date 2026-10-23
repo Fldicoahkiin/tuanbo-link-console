@@ -153,7 +153,7 @@ import { LoopMidiService } from './link/loop-midi-service';
 import { loopMidiActionSchema, loopMidiStatusSchema } from '@tb/schema';
 import { LinkUpdateManager } from './link/update-manager';
 import { rendererSource } from './link/renderer-source';
-import { buildGitSha, releaseAppId, releaseChannel, releaseChannelLabel } from './link/build-identity';
+import { buildGitSha, buildVersion, releaseAppId, releaseChannel, releaseChannelLabel } from './link/build-identity';
 import desktopPackage from '../../package.json';
 import ffmpegPath from 'ffmpeg-static';
 import { NativeAudioCache } from './link/native-audio-cache';
@@ -250,7 +250,7 @@ function nativePlaybackActive(): boolean {
 /** Which build this is: shown in the update panel and written to logs and diagnostic packages. */
 function buildIdentity(): Pick<LinkAppInfo, 'name' | 'version' | 'channel' | 'gitSha' | 'appId'> {
   const distribution = internalDistribution?.channel ?? null;
-  return { name: app.getName(), version: desktopPackage.version, channel: releaseChannel(app.isPackaged, distribution),
+  return { name: app.getName(), version: buildVersion, channel: releaseChannel(app.isPackaged, distribution),
     gitSha: buildGitSha, appId: releaseAppId(distribution, desktopPackage.build.appId) };
 }
 function buildIdentityLine(): string {
@@ -288,7 +288,7 @@ async function bootstrap(): Promise<void> {
   const logger = new LinkRunLogger(join(app.getPath('userData'), 'link-logs'), () => [...knownSecrets]);
   ipcLogger = logger;
   await logger.record({ level: 'info', category: 'system', message: `${buildIdentityLine()} 已启动`,
-    details: { appVersion: desktopPackage.version, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
+    details: { appVersion: buildVersion, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
     .catch((error: unknown) => dialog.showErrorBox('运行日志无法写入', error instanceof Error ? error.message : String(error)));
   app.on('child-process-gone', (_event, details) => {
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
@@ -296,7 +296,7 @@ async function bootstrap(): Promise<void> {
       result: 'failed' }).catch((error: unknown) => console.error('记录 Electron 子进程崩溃失败', error));
   });
   const updateManager = new LinkUpdateManager(
-    desktopPackage.version,
+    buildVersion,
     app.isPackaged,
     (status) => sendToRenderer('link:update-status', status),
     { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus() },
@@ -1882,7 +1882,7 @@ function registerIpc(
     });
     if (result.canceled || !result.filePath) return null;
     await logger.exportDiagnosticPackage(result.filePath, { ...context, environment: {
-      appVersion: desktopPackage.version, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch,
+      appVersion: buildVersion, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch,
       osRelease: release(), cpu: cpus()[0]?.model ?? '未知', logicalProcessors: cpus().length,
       totalMemoryBytes: totalmem(), freeMemoryBytes: freemem(), versions: process.versions,
       gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),

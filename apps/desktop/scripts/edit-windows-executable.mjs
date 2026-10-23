@@ -14,10 +14,13 @@ export default async function editWindowsExecutable(context) {
   )
   const version = context.packager.appInfo.version
   const productName = context.packager.appInfo.productName
+  // Windows versions are four numbers: a test prerelease (X.Y.Z-test.N) becomes X.Y.Z.<buildNumber>.
+  const stable = /^\d+\.\d+\.\d+$/.test(version)
+  const windowsVersion = context.packager.appInfo.getVersionInWeirdWindowsForm()
 
   const options = {
-    'file-version': version,
-    'product-version': `${version}.0`,
+    'file-version': stable ? version : windowsVersion,
+    'product-version': stable ? `${version}.0` : windowsVersion,
     'version-string': {
       CompanyName: productName,
       FileDescription: productName,
