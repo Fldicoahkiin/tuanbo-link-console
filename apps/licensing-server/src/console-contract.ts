@@ -49,7 +49,8 @@ export const cellSchema = z.union([z.string(), z.number(), z.boolean(), z.null()
 export const rowSchema = z.record(z.string(), cellSchema);
 export type ConsoleRow = z.infer<typeof rowSchema>;
 export const pageSchema = z.object({ items: z.array(rowSchema), page: z.number().int(), hasMore: z.boolean(), summary: rowSchema.optional() });
-export const detailSchema = z.object({ item: rowSchema, related: z.array(rowSchema), history: z.array(rowSchema) });
+// timeline 仅授权详情返回：签发、激活、换机、调整到期、续费、撤销或过期，按时间排列。
+export const detailSchema = z.object({ item: rowSchema, related: z.array(rowSchema), history: z.array(rowSchema), timeline: z.array(rowSchema).optional() });
 export const resultSchema = z.object({ id: z.string().optional(), message: z.string(), secret: z.string().optional(), paymentUrl: z.string().url().optional(), expiresAt: z.string().optional() }).strict();
 export type ConsoleResult = z.infer<typeof resultSchema>;
 export const permissions: Record<ConsoleAction['action'], readonly ConsoleRole[]> = {

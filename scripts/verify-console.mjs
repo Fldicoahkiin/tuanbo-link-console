@@ -102,7 +102,15 @@ try {
   assert.equal(await page.getByRole('button', { name: '关闭订单', exact: true }).count(), 0);
   // 待办数字跳转带上对应筛选。
   await page.getByRole('button', { name: '工作台', exact: true }).click(); await page.getByRole('button', { name: /七日内到期/ }).click();
-  assert.equal(await page.getByLabel('状态').inputValue(), 'expiring');
+  assert.equal(await page.getByRole('tab', { name: /^即将到期/ }).getAttribute('aria-selected'), 'true');
+  // 生命周期页签写进网址：切到「未激活」后刷新仍是同一视图；整行点进详情有时间线，刷新后仍在详情，后退回到列表。
+  await page.getByRole('tab', { name: /^未激活/ }).click(); await page.getByRole('row', { name: /浏览器验收客户/ }).waitFor();
+  assert.match(page.url(), /#\/licenses\?state=unbound$/);
+  await page.reload(); await page.getByRole('row', { name: /浏览器验收客户/ }).waitFor();
+  assert.equal(await page.getByRole('tab', { name: /^未激活/ }).getAttribute('aria-selected'), 'true');
+  await page.getByRole('row', { name: /浏览器验收客户/ }).click(); await page.getByRole('heading', { name: '生命周期' }).waitFor();
+  await page.reload(); await page.getByRole('heading', { name: '授权详情' }).waitFor(); await page.getByText('签发（销售）').waitFor();
+  await page.goBack(); await page.getByRole('tab', { name: /^未激活/, selected: true }).waitFor();
   await page.screenshot({ path: fileURLToPath(new URL('owner-desktop.png', shots)), fullPage: true });
   await context.close();
   for (const role of ['operations', 'finance', 'viewer']) {

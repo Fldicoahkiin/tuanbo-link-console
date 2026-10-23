@@ -208,6 +208,12 @@ it('授权生命周期状态由服务端统一计算：列表、页签计数、�
   expect(s.consoleService.detail('licenses', ids[2]!, s.login.session).item).toMatchObject({ status: 'revoked', orderReference: expect.stringMatching(/^GRANT-/) as unknown });
   expect(s.consoleService.overview(s.login.session).item.expiring).toBe(1);
   expect(s.consoleService.list('users', query(''), s.login.session).items.map(row => row.status)).toEqual(['enabled']);
+  // 生命周期时间线：事件来自业务审计，操作人来自后台审计；只读角色看不到操作人。
+  const timeline = (licenseId: string, role: 'owner' | 'viewer' = 'owner') => s.consoleService.detail('licenses', licenseId, { ...s.login.session, user: { ...s.login.session.user, role } }).timeline!.map(node => [node.event, node.detail, node.operator]);
+  expect(timeline(ids[0]!)).toEqual([['签发（内测）', null, 'owner'], ['首次激活', '机器码 AAAAAAAA…', '客户端']]);
+  expect(timeline(ids[2]!)).toEqual([['签发（内测）', null, 'owner'], ['撤销', '撤销', 'owner']]);
+  expect(timeline(ids[3]!)).toEqual([['签发（内测）', null, 'owner'], ['调整到期', '2026-11-06 08:00 → 2026-10-07 08:00', 'owner'], ['已过期', null, null]]);
+  expect(timeline(ids[2]!, 'viewer')).toEqual([['签发（内测）', null, null], ['撤销', '撤销', null]]);
 });
 it('原因分档：选填操作留空可执行且审计照记操作人、操作、对象和时间；必填操作留空被拒', async () => {
   const id = randomUUID();

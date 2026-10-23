@@ -33,6 +33,7 @@ const licenseRows = `SELECT l.id,l.rowid AS position,l.machine AS machine,json_e
   CASE WHEN l.revoked=1 THEN 'revoked' WHEN ${licenseUseUntil}<=? THEN 'expired' WHEN ${licenseUseUntil}<=? THEN 'expiring' WHEN l.machine IS NOT NULL THEN 'active' ELSE 'unbound' END AS status
   FROM licenses l JOIN orders o ON o.id=l.order_id LEFT JOIN console_order_meta m ON m.order_id=o.id`;
 const licenseStatuses = ['active', 'unbound', 'expiring', 'expired', 'revoked'] as const;
+const beijingMinute = (iso: string) => new Date(Date.parse(iso) + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
 const beijingDayStart = (day: string) => new Date(`${day}T00:00:00+08:00`).toISOString();
 const beijingDayEnd = (day: string) => new Date(Date.parse(`${day}T00:00:00+08:00`) + 86400000).toISOString();
 /** 由 HTTP 层注入的渠道调用；控制台只编排，不直接持有支付宝凭据。 */
@@ -129,7 +130,36 @@ export class ConsoleService {
     } else throw new ServiceError(404, 'NOT_FOUND', '详情不存在');
     const allowedHistory = session.user.role === 'owner' || session.user.role === 'operations' && Boolean(this.db.prepare("SELECT id FROM console_audit WHERE actor=? AND result='success' AND target IN (?,?) LIMIT 1").get(session.user.id, id, orderId));
     const history = allowedHistory ? this.db.prepare('SELECT a.at,a.action,a.reason,a.result,COALESCE(u.username,a.actor) AS operator FROM console_audit a LEFT JOIN console_users u ON u.id=a.actor WHERE target IN (?,?) ORDER BY a.at DESC LIMIT 100').all(id, orderId).map(row => rowSchema.parse(row)) : [];
-    return detailSchema.parse({ item, related, history });
+    return detailSchema.parse({ item, related, history, ...(resource === 'licenses' ? { timeline: this.timeline(item, orderId, allowedHistory) } : {}) });
+  }
+  /** 授权生命周期：业务审计是事件来源（含客户端激活和退款自动撤销），后台审计只用来补操作人。 */
+  private timeline(license: ConsoleRow, orderId: string, showOperator: boolean): ConsoleRow[] {
+    const id = z.string().parse(license.id);
+    const events = this.db.prepare(`SELECT at,action,detail FROM audit WHERE target=? AND action IN ('license.activated','license.migrated','license.expiry-adjusted','license.renewed','license.revoked')
+      OR target=? AND (action='license.special-grant' OR action='order.state-changed' AND detail LIKE '%->fulfilled:%') ORDER BY at,rowid`).all(id, orderId).map(row => z.object({ at: z.string(), action: z.string(), detail: z.string() }).parse(row));
+    // 后台操作与业务审计在同一事务前后写入，按同一对象、前后 5 秒内的最近一条匹配操作人。
+    const operator = (at: string, actions: readonly string[]): string | null => {
+      if (!showOperator || !actions.length) return null;
+      const row = this.db.prepare(`SELECT COALESCE(u.username,c.actor) AS name FROM console_audit c LEFT JOIN console_users u ON u.id=c.actor WHERE c.result='success' AND c.target IN (?,?) AND c.action IN (${actions.map(() => '?').join(',')})
+        AND ABS(julianday(c.at)-julianday(?))*86400<=5 ORDER BY ABS(julianday(c.at)-julianday(?)) LIMIT 1`).get(id, orderId, ...actions, at, at);
+      return row ? z.string().parse(row.name) : null;
+    };
+    const sources: Record<string, string> = { sale: '销售', test: '内测', gift: '赠送' };
+    const machine = typeof license.machineCode === 'string' ? license.machineCode.replace(/^TB1-/, '').slice(0, 8) : null;
+    const lastActivation = events.map(event => event.action).lastIndexOf('license.activated');
+    let activations = 0;
+    const nodes: ConsoleRow[] = events.map((event, index) => {
+      switch (event.action) {
+        case 'license.special-grant': case 'order.state-changed': return { at: event.at, event: `签发（${sources[String(license.source)] ?? '销售'}）`, detail: null, operator: operator(event.at, ['fulfill', 'grant', 'retry-delivery']) ?? (showOperator ? '系统自动发码' : null) };
+        case 'license.activated': activations++; return { at: event.at, event: activations === 1 ? '首次激活' : '重新激活', detail: index === lastActivation && machine ? `机器码 ${machine}…` : null, operator: showOperator ? '客户端' : null };
+        case 'license.migrated': return { at: event.at, event: '换机', detail: '旧码失效，换发新码', operator: operator(event.at, ['migrate']) };
+        case 'license.expiry-adjusted': { const change = z.object({ before: z.string().nullable(), after: z.string() }).parse(JSON.parse(event.detail)); return { at: event.at, event: '调整到期', detail: `${change.before ? beijingMinute(change.before) : '永久'} → ${beijingMinute(change.after)}`, operator: operator(event.at, ['set-expiry']) }; }
+        case 'license.renewed': return { at: event.at, event: '续费', detail: null, operator: showOperator ? '客户续费' : null };
+        default: return { at: event.at, event: '撤销', detail: event.detail, operator: operator(event.at, ['revoke', 'refund-review', 'alipay-refund']) };
+      }
+    });
+    if (license.status === 'expired' && typeof license.useUntil === 'string') nodes.push({ at: license.useUntil, event: '已过期', detail: null, operator: null });
+    return nodes;
   }
   overview(session: ConsoleSession) {
     const counts = this.db.prepare(`SELECT SUM(CASE WHEN paymentStatus='pending' AND state='pending' THEN 1 ELSE 0 END) AS pendingOrders,SUM(CASE WHEN paymentStatus='confirmed' AND state IN ('pending','paid') THEN 1 ELSE 0 END) AS deliveryPending,SUM(CASE WHEN channelRefundFen>reviewedRefundFen THEN 1 ELSE 0 END) AS refundReview FROM (${orderProjection})`).get();
