@@ -279,6 +279,32 @@ describe('LinkProjectService', () => {
     expect(await readdir(moved)).toEqual([]);
   });
 
+  it('找回素材只接受 assets 素材子目录里的音视频和图片文件，有一个不符合就整批拒绝', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio(); const moved = await createTestDirectory();
+    cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio')); cleanupFiles.push(join(moved, audio.file.relativePath));
+    for (const relativePath of ['song.wav', 'assets/song.wav', 'assets/cache/song.wav', 'assets/reference-audio/nested/song.wav',
+      'assets/reference-audio/song.exe', 'assets/reference-audio/song.mp4', 'assets/reference-media/notes.txt', 'cache/waveforms/song.json', 'assets\\reference-audio\\song.wav']) {
+      await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file, { relativePath, sha256: sha256('song') }])).rejects.toThrow('只能检查和找回');
+    }
+    expect(await readdir(moved)).toEqual([]);
+    expect(await service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file, { relativePath: 'assets/reference-media/clip.MOV', sha256: sha256('clip') }]))
+      .toEqual([{ relativePath: audio.file.relativePath, status: 'restored' }, { relativePath: 'assets/reference-media/clip.MOV', status: 'not-found' }]);
+  });
+
+  it('检查缺失素材不能探测工程文件夹里素材子目录以外的文件', async () => {
+    const directory = await createTestDirectory(); const secret = join(directory, 'secret.txt'); cleanupFiles.push(secret);
+    await writeFile(secret, 'secret');
+    const service = new LinkProjectService();
+    for (const relativePath of ['secret.txt', 'assets/reference-audio/../../secret.txt', 'assets/reference-media/secret.txt']) {
+      await expect(service.findMissingAssetFiles(join(directory, 'show.tblink'), [{ relativePath }])).rejects.toThrow('只能检查和找回');
+    }
+  });
+
+  it('检查缺失素材只接受 .tblink 工程路径', async () => {
+    const directory = await createTestDirectory();
+    await expect(new LinkProjectService().findMissingAssetFiles(join(directory, 'show.json'), [{ relativePath: 'assets/reference-audio/a.wav' }])).rejects.toThrow('.tblink');
+  });
+
   it.runIf(process.platform === 'win32')('拒绝把跨盘绝对路径解析为工程内素材', async () => {
     const directory = await createTestDirectory();
     const projectPath = join(directory, 'show.tblink');

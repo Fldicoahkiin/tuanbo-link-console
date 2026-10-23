@@ -11,7 +11,7 @@ import {
   type LinkProject,
   type LinkProjectAssetRelinkResult
 } from '@tb/schema';
-import type { LinkProjectAssetInspection } from '@tb/core/link';
+import { isProjectAssetPath, MEDIA_EXTENSIONS, REFERENCE_AUDIO_EXTENSIONS, type LinkProjectAssetInspection } from '@tb/core/link';
 import { writeFileAtomically } from './atomic-file';
 import { recoverMa2Read } from './ma2-read-recovery';
 import { recoverMa2Material } from './ma2-material-recovery';
@@ -24,13 +24,7 @@ import {
   type ReferenceAudioExtractor
 } from './reference-audio-extractor';
 
-const REFERENCE_AUDIO_EXTENSIONS = new Set(['.aac', '.flac', '.m4a', '.mp3', '.ogg', '.wav']);
 const REFERENCE_AUDIO_CONTAINER_EXTENSIONS = new Set(['.avi', '.m4v', '.mkv', '.mov', '.mp4', '.webm']);
-const MEDIA_EXTENSIONS: Record<LinkMediaKind, ReadonlySet<string>> = {
-  audio: REFERENCE_AUDIO_EXTENSIONS,
-  video: new Set(['.avi', '.m4v', '.mkv', '.mov', '.mp4', '.webm']),
-  image: new Set(['.bmp', '.gif', '.jpeg', '.jpg', '.png', '.webp'])
-};
 
 export type ImportedReferenceAudio = {
   assetId: string;
@@ -325,11 +319,18 @@ export class LinkProjectService {
     });
   }
 
-  /** Relative paths of the given files that are absent from the project folder. */
+  /** Relative paths of the given asset files that are absent from the project
+   * folder. Only asset-folder files are checked, so this cannot probe others. */
   async findMissingAssetFiles(projectPath: string, files: readonly { relativePath: string }[]): Promise<string[]> {
+    assertProjectExtension(projectPath);
+    const paths = files.map(file => {
+      const path = resolveProjectAsset(projectPath, file.relativePath, '工程素材');
+      assertProjectAssetPath(file.relativePath);
+      return { relativePath: file.relativePath, path };
+    });
     const missing: string[] = [];
-    for (const file of files) {
-      if (!await pathExists(resolveProjectAsset(projectPath, file.relativePath, '工程素材'))) missing.push(file.relativePath);
+    for (const { relativePath, path } of paths) {
+      if (!await pathExists(path)) missing.push(relativePath);
     }
     return missing;
   }
@@ -337,17 +338,21 @@ export class LinkProjectService {
   /** Brings back files missing from the project folder from the same relative
    * path under sourceDirectory, for example the folder the .tblink was moved
    * out of. Only a file with the recorded SHA-256 is copied; nothing else is
-   * searched for. The project document itself does not change. Symbolic links
-   * and junctions may not lead out of either folder. */
+   * searched for. The project document itself does not change. Only files the
+   * software imports are restored, and symbolic links or junctions may not lead
+   * out of either folder; one refused file refuses the whole request. */
   async relinkAssetFiles(projectPath: string, sourceDirectory: string, files: readonly { relativePath: string; sha256: string }[]): Promise<LinkProjectAssetRelinkResult> {
     assertProjectExtension(projectPath);
     if (!isAbsolute(sourceDirectory)) throw new Error('原工程文件夹必须是完整路径');
     const projectDirectory = dirname(resolve(projectPath)); const sourceFolder = resolve(sourceDirectory);
+    const targets = files.map(file => {
+      const destination = resolveProjectAsset(projectPath, file.relativePath, '工程素材');
+      assertProjectAssetPath(file.relativePath);
+      return { ...file, destination, source: resolveInsideFolder(sourceFolder, file.relativePath, '工程素材') };
+    });
     const result: LinkProjectAssetRelinkResult = [];
-    for (const { relativePath, sha256 } of files) {
-      const destination = resolveProjectAsset(projectPath, relativePath, '工程素材');
+    for (const { relativePath, sha256, destination, source } of targets) {
       if (await pathExists(destination)) { result.push({ relativePath, status: 'present' }); continue; }
-      const source = resolveInsideFolder(sourceFolder, relativePath, '工程素材');
       if (!await pathExists(source)) { result.push({ relativePath, status: 'not-found' }); continue; }
       await assertRealPathInside(sourceFolder, source, `找回素材已拒绝：所选文件夹中的 ${relativePath} 经符号链接或目录联接指向该文件夹之外`);
       if (await hashFile(source) !== sha256) { result.push({ relativePath, status: 'mismatch' }); continue; }
@@ -407,6 +412,10 @@ function resolveInsideFolder(projectDirectory: string, relativePath: string, lab
     throw new Error(`${label}路径必须位于工程目录内`);
   }
   return resolved;
+}
+
+function assertProjectAssetPath(relativePath: string): void {
+  if (!isProjectAssetPath(relativePath)) throw new Error(`只能检查和找回 assets/reference-audio 或 assets/reference-media 中的音视频和图片文件：${relativePath}`);
 }
 
 /** Follows symbolic links and junctions. A path that does not exist yet is

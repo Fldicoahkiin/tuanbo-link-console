@@ -129,6 +129,7 @@ import type {
 } from '@tb/core/link';
 import { ExternalProcessManager, WindowsProcessTools, type ExternalApplicationId } from './link/external-process-manager';
 import { LinkProjectService } from './link/link-project-service';
+import { AssetRelinkRequests } from './link/asset-relink-requests';
 import { MediaMetadataProbe } from './link/media-metadata-probe';
 import { MediaPreviewService } from './link/media-preview-service';
 import { obsMediaCachePaths } from './link/obs-media-paths';
@@ -242,6 +243,7 @@ function nativePlaybackActive(): boolean {
 const midiHealth = new WindowsMidiHealth(() => probeWindowsMidi(midiProbeExecutable(app.isPackaged ? process.resourcesPath : undefined)));
 
 const projectService = new LinkProjectService();
+const assetRelinkRequests = new AssetRelinkRequests({ projects: projectService, openProjectPath: () => documentState.projectPath });
 const projectDocuments = new ProjectDocumentService();
 const p1ProjectService = new P1ProjectService(projectService);
 const mediaMetadataProbe = new MediaMetadataProbe();
@@ -1337,10 +1339,7 @@ function registerIpc(
     const payload = linkMediaInspectionPayloadSchema.parse(value);
     return projectService.inspectMediaAssets(payload.projectPath, payload.assets);
   });
-  handle('link:find-missing-asset-files', (_event, value: unknown) => {
-    const payload = linkProjectAssetFilesPayloadSchema.parse(value);
-    return projectService.findMissingAssetFiles(payload.projectPath, payload.files);
-  });
+  handle('link:find-missing-asset-files', (_event, value: unknown) => assetRelinkRequests.findMissing(linkProjectAssetFilesPayloadSchema.parse(value)));
   handle('link:pick-asset-source-directory', async (_event, pathValue: unknown) => {
     const projectPath = linkFilePathSchema.parse(pathValue);
     const result = await dialog.showOpenDialog(mainWindow!, {
@@ -1348,12 +1347,13 @@ function registerIpc(
       defaultPath: dirname(projectPath),
       properties: ['openDirectory']
     });
-    return result.canceled ? null : result.filePaths[0] ?? null;
+    const directory = result.canceled ? null : result.filePaths[0] ?? null;
+    assetRelinkRequests.pickedSourceDirectory(directory);
+    return directory;
   });
   handle('link:relink-asset-files', (_event, value: unknown) => {
     if (runtimeActive) throw new Error('请停止播放后找回素材');
-    const payload = linkProjectAssetRelinkPayloadSchema.parse(value);
-    return projectService.relinkAssetFiles(payload.projectPath, payload.sourceDirectory, payload.files);
+    return assetRelinkRequests.relink(linkProjectAssetRelinkPayloadSchema.parse(value));
   });
   handle('link:p1-detect-current-project', async () => {
     const detection = await integrationDetector.detect();

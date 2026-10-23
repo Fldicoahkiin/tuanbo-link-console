@@ -26,4 +26,13 @@ describe('工程素材文件', () => {
       { relativePath: 'assets/reference-media/video.mp4', sha256: 'd'.repeat(64), label: '视频素材 · 开场.mp4' }
     ]);
   });
+
+  it('只列软件放在 assets 素材子目录里的音视频和图片文件', () => {
+    const asset = (id: string, relativePath: string) => ({ id, name: id, kind: 'audio' as const, relativePath, sha256: 'e'.repeat(64), byteLength: 10, durationMs: 1000 });
+    const project = parseLinkProject({ ...createEmptyLinkProject('手写工程'), mediaAssets: [
+      asset('root', 'song.wav'), asset('loose', 'assets/song.wav'), asset('nested', 'assets/reference-media/old/song.wav'),
+      asset('text', 'assets/reference-media/notes.txt'), asset('upper', 'assets/reference-media/song.WAV')
+    ], rundown: [{ id: 'song', title: '歌', cues: [], referenceAudio: { ...source, relativePath: 'assets/reference-audio/clip.mp4' } }] });
+    expect(projectAssetFiles(project).map(file => file.relativePath)).toEqual(['assets/reference-media/song.WAV']);
+  });
 });
