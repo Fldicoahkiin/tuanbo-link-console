@@ -1,8 +1,10 @@
 import { Button } from './Button';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { LinkUpdateStatus } from '@tb/core/link';
+import type { LinkAppInfo, LinkReleaseChannel, LinkUpdateStatus } from '@tb/core/link';
 import { CheckCircle2, CloudDownload, Download, LoaderCircle, RefreshCw, X } from 'lucide-react';
+
+const CHANNEL_LABEL: Record<LinkReleaseChannel, string> = { release: '正式版', test: '测试版', internal: '内测版', development: '开发版' };
 
 type UpdateCenterProps = {
   inline?: boolean;
@@ -13,6 +15,8 @@ type UpdateCenterProps = {
 export function UpdateCenter({ notify, inline = false, runtimeActive = false }: UpdateCenterProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<LinkUpdateStatus | null>(null);
+  const [build, setBuild] = useState<LinkAppInfo | null>(null);
+  const [buildFailure, setBuildFailure] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState('');
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -27,6 +31,9 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
       .catch((error: unknown) => {
         if (!cancelled) { setFailure(errorMessage(error)); notify(errorMessage(error), 'error'); }
       });
+    void window.tbLink.getAppInfo()
+      .then((info) => { if (!cancelled) setBuild(info); })
+      .catch((error: unknown) => { if (!cancelled) setBuildFailure(`版本信息读取失败：${errorMessage(error)}`); });
     const unsubscribe = window.tbLink.onUpdateStatus((next) => {
       if (!cancelled) setStatus(next);
     });
@@ -91,9 +98,13 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
           <div className="update-summary-icon">{icon}</div>
           <div>
             <strong>{status?.message ?? '正在读取更新状态…'}</strong>
-            <span>当前版本 {status?.currentVersion ?? '—'}{status?.availableVersion && status.availableVersion !== status.currentVersion ? ` · 可用版本 ${status.availableVersion}` : ''}</span>
+            <span>当前版本 {status?.currentVersion ?? '—'}{status?.availableVersion && (phase === 'available' || phase === 'downloading' || phase === 'downloaded') ? ` · 可用版本 ${status.availableVersion}` : ''}</span>
           </div>
         </div>
+
+        {build ? <p className="update-build-identity" title={`${build.name} ${build.version} · 提交 ${build.gitSha ?? '未知'} · ${build.appId}`}>
+          {build.name} · {CHANNEL_LABEL[build.channel]} · 提交 {build.gitSha ? shortRevision(build.gitSha) : '未知'} · {build.appId}
+        </p> : buildFailure ? <p className="device-error" role="alert">{buildFailure}</p> : null}
 
         {phase === 'downloading' ? <div className="update-progress" role="progressbar" aria-label="更新下载进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={status?.progressPercent ?? 0}>
           <div><span style={{ width: `${status?.progressPercent ?? 0}%` }} /></div>
@@ -102,12 +113,13 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
 
         <p className="update-dev-note">{phase === 'disabled' ? '开发模式不会执行下载或安装，请使用 Windows 安装版验证更新。' : '更新由发行方提供。下载后需确认重启安装，请先停止联动并保存工程。'}</p>
 
+        {status?.installBlockedReason && (phase === 'available' || phase === 'downloaded') ? <p className="settings-note" role="status">{status.installBlockedReason}</p> : null}
         {failure ? <p className="device-error" role="alert">{failure} 请检查网络后重新操作。</p> : null}
-        {runtimeActive ? <p className="settings-note">停止联动并保存工程后，才能重启安装。</p> : null}
+        {runtimeActive ? <p className="settings-note">播放中不下载、不安装更新；停止播放后再操作。</p> : null}
         <div className="modal-actions update-actions">
           {!inline ? <Button className="secondary-button" onClick={() => setOpen(false)}>关闭</Button> : null}
-          {status?.feedConfigured && phase !== 'downloaded' && phase !== 'available' && phase !== 'disabled' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</Button> : null}
-          {phase === 'available' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</Button> : null}
+          {status?.feedConfigured && phase !== 'downloaded' && phase !== 'disabled' && (phase !== 'available' || status.installBlockedReason) ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</Button> : null}
+          {phase === 'available' && !status?.installBlockedReason ? <Button className="primary-button" disabled={working || runtimeActive} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</Button> : null}
           {phase === 'downloaded' ? <Button className="primary-button" disabled={busy || runtimeActive} onClick={() => void install()}><CloudDownload />重启并安装</Button> : null}
         </div>
   </>;
@@ -147,6 +159,11 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
       </section>
     </dialog>, document.body) : null}
   </>;
+}
+
+/** 12 characters identify a commit in this repository; a dirty marker stays visible. */
+function shortRevision(revision: string): string {
+  return revision.endsWith('-dirty') ? `${revision.slice(0, 12)}-dirty` : revision.slice(0, 12);
 }
 
 function formatProgress(status: LinkUpdateStatus | null): string {

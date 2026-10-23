@@ -2,9 +2,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import { enrollmentSchema, loginSchema, pageQuerySchema, sessionSchema } from './console-contract';
 import type { ConsoleChannels, ConsoleService } from './console-service';
+import type { UpdateReleases } from './update-releases';
 import { ServiceError } from './service';
 
-export type ConsoleHttp = { service: ConsoleService; origin: string };
+export type ConsoleHttp = { service: ConsoleService; origin: string; updates?: UpdateReleases };
 const cookieName = '__Host-tblink-console';
 export async function dispatchConsole(options: ConsoleHttp, request: IncomingMessage, response: ServerResponse, requestId: string, address: string, readBody: () => Promise<unknown>, channels: ConsoleChannels): Promise<unknown> {
   const origin = new URL(options.origin);
@@ -21,7 +22,7 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
       const input = loginSchema.parse(body); auth.limit(`account:${input.username.toLowerCase()}:${address}`);
       const result = await auth.login(input.username, input.password, input.code, requestId);
       response.setHeader('Set-Cookie', `${cookieName}=${result.token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=28800`);
-      return sessionSchema.parse(result.session);
+      return sessionSchema.parse({ ...result.session, now: options.service.clock() });
     }
     if (path === '/console-api/enrollment-info') return auth.enrollmentInfo(z.object({ token: z.string().min(32).max(128) }).strict().parse(body).token);
     const input = enrollmentSchema.parse(body); return auth.enroll(input.token, input.password, input.code, requestId);
@@ -29,7 +30,7 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
   const token = (request.headers.cookie ?? '').split(';').map(value => value.trim()).find(value => value.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1) ?? '';
   const session = auth.session(token);
   if (request.method === 'POST' && request.headers['x-csrf-token'] !== session.csrf) throw new ServiceError(403, 'CSRF_REJECTED', '页面已失效，请重新加载');
-  if (request.method === 'GET' && path === '/console-api/session') return sessionSchema.parse(session);
+  if (request.method === 'GET' && path === '/console-api/session') return sessionSchema.parse({ ...session, now: options.service.clock() });
   if (request.method === 'POST' && path === '/console-api/logout') {
     auth.logout(session, requestId); response.setHeader('Set-Cookie', `${cookieName}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`); return { message: '已退出' };
   }
@@ -42,6 +43,7 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
     return options.service.execute(body, auth.session(token), requestId, channels);
   }
   if (request.method === 'GET' && path === '/console-api/overview') return options.service.overview(session);
+  if (request.method === 'GET' && path === '/console-api/updates') return options.service.updates(session, channels);
   const exported = /^\/console-api\/export(?:\/(finance))?$/.exec(path);
   if (request.method === 'GET' && exported) {
     const resource = exported[1] === 'finance' ? 'finance' : 'orders';

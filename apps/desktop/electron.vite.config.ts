@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 
@@ -7,11 +8,16 @@ export default defineConfig(({ mode }) => {
   const release = mode === 'release';
   // A leftover test-channel variable must not turn an official build into an activation-free package.
   if (release && process.env.TBLINK_INTERNAL_DISTRIBUTION_FILE) throw new Error('正式构建不能携带 TBLINK_INTERNAL_DISTRIBUTION_FILE');
+  // The official version is package.json's; only the test package build numbers itself as a prerelease.
+  if (release && process.env.TBLINK_BUILD_VERSION) throw new Error('正式构建不能携带 TBLINK_BUILD_VERSION');
+  const version = process.env.TBLINK_BUILD_VERSION ?? (JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as { version: string }).version;
   return {
     main: {
       define: {
         __TBLINK_INTERNAL_DISTRIBUTION__: process.env.TBLINK_INTERNAL_DISTRIBUTION_FILE ? readFileSync(resolve(process.env.TBLINK_INTERNAL_DISTRIBUTION_FILE), 'utf8') : 'null',
-        __TBLINK_LOCAL_TEST_ACCESS__: JSON.stringify(!release)
+        __TBLINK_LOCAL_TEST_ACCESS__: JSON.stringify(!release),
+        __TBLINK_GIT_SHA__: JSON.stringify(gitRevision(release)),
+        __TBLINK_BUILD_VERSION__: JSON.stringify(version)
       },
       build: {
         sourcemap: false,
@@ -72,3 +78,16 @@ export default defineConfig(({ mode }) => {
     }
   };
 });
+
+/** The commit shown in logs, diagnostics and the update panel. A release build without Git is refused. */
+function gitRevision(release: boolean): string | null {
+  try {
+    const git = (args: string[]): string => execFileSync('git', args, { cwd: __dirname, encoding: 'utf8', timeout: 15_000, windowsHide: true }).trim();
+    const sha = git(['rev-parse', 'HEAD']);
+    return git(['status', '--porcelain']) ? `${sha}-dirty` : sha;
+  } catch (error) {
+    if (release) throw new Error(`正式构建需要读取 Git 提交号：${error instanceof Error ? error.message : String(error)}`);
+    console.warn(`未能读取 Git 提交号，本次开发构建不记录提交号：${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}

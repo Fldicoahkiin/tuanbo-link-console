@@ -11,7 +11,7 @@ const publicCalls = new Set([
   'link:license-export-request', 'link:license-import', 'link:window-control', 'link:window-visible',
   'link:purchase-catalog', 'link:purchase-list', 'link:purchase-create', 'link:purchase-refresh', 'link:purchase-open-payment',
   'link:purchase-copy-code',
-  'link:app-info', 'link:process-stop', 'link:obs-disconnect', 'link:ma2-network-disconnect',
+  'link:app-info', 'link:update-status', 'link:update-check', 'link:process-stop', 'link:obs-disconnect', 'link:ma2-network-disconnect',
   'link:obs-source-cancel', 'link:obs-live-close', 'link:ma2-read-cancel',
   'link:ma2-discovery-cancel', 'link:p1-import-cancel',
   // Protecting unsaved work never waits for a license: the save itself follows the save rule.

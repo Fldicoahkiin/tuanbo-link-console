@@ -219,6 +219,7 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .update-summary strong, .update-summary span { display: block; }
 .update-summary strong { color: var(--text-primary); font-size: var(--text-caption); }
 .update-summary span { margin-top: 3px; color: var(--label-secondary); font-size: var(--text-caption); }
+.update-build-identity { margin: 8px 0 0; color: var(--label-secondary); font-size: var(--text-caption); overflow-wrap: anywhere; }
 .update-summary.phase-error .update-summary-icon { color: var(--apple-red); background: rgba(255, 69, 58, .14); }
 .update-summary.phase-downloaded .update-summary-icon, .update-summary.phase-upToDate .update-summary-icon { color: var(--apple-green); background: rgba(48, 209, 88, .14); }
 .update-credential { display: grid; gap: 12px; margin-top: 12px; padding: 14px; border-radius: 12px; background: var(--surface); }

@@ -1,5 +1,6 @@
 import type { LinkProject, MtcFrameRate } from '@tb/schema';
 import { ma2PendingChanges } from './ma2-pending-changes';
+import { ma2SongPoints } from './ma2-song-sequence';
 import { lightingTimeOrigin, programTimeOrigin } from './ma2-time-origin';
 
 export type SongLightingStatus =
@@ -17,6 +18,9 @@ export type SongLightingStatus =
 export function songLightingStatus(project: LinkProject, itemId: string): SongLightingStatus {
   const item = project.rundown.find(value => value.id === itemId);
   if (!item) throw new Error(`节目单中没有 ${itemId}`);
+  const own = item.lighting?.consoleSong;
+  if (item.lighting && own?.timecode) return ownShowStatus(item, item.lighting, own, own.timecode);
+  if (own && !own.executor) return { state: 'attention', reasons: ['本曲控台序列只放在 Layout 页面上，没有执行器位置，不能建时间码节目'] };
   const pairings = Object.entries(project.ma2ReadState?.pairings ?? {}).filter(([, pairing]) => pairing.itemId === itemId);
   const bindings = item.lighting?.ma2Bindings ?? [];
   if (!pairings.length && !bindings.length) return { state: 'unmatched' };
@@ -44,4 +48,29 @@ export function songLightingStatus(project: LinkProject, itemId: string): SongLi
   if (count) return { state: 'editing', pending: count };
   if (confirmed.length === 1 && startMs !== null) return { state: 'ready', timecode: Number(confirmed[0]![0]), startMs, frameRate: '30' };
   return { state: 'unmatched' };
+}
+
+type Item = LinkProject['rundown'][number];
+type Lighting = NonNullable<Item['lighting']>;
+type ConsoleSong = NonNullable<Lighting['consoleSong']>;
+const frames = (ms: number): number => Math.round(ms * 30 / 1000);
+
+/**
+ * A song with the program's own Timecode show: ready while every point still fires its own Cue of
+ * the song's Sequence at the frame last written and the song start is unchanged; any difference is
+ * an edit the next sync writes.
+ */
+function ownShowStatus(item: Item, lighting: Lighting, song: ConsoleSong, timecode: NonNullable<ConsoleSong['timecode']>): SongLightingStatus {
+  let startMs: number; let points: ReturnType<typeof ma2SongPoints>;
+  try { startMs = programTimeOrigin(item); points = ma2SongPoints(lighting); }
+  catch (error) { return { state: 'attention', reasons: [error instanceof Error ? error.message : String(error)] }; }
+  const written = new Map(song.points.map(point => [point.id, point]));
+  let pending = frames(startMs) === timecode.offset ? 0 : 1;
+  for (const point of points) {
+    const stored = written.get(point.id);
+    const own = stored && point.cues.length === 1 && point.cues[0]!.sequence === song.sequence && Number(point.cues[0]!.cue) === Number(stored.cue);
+    if (!stored || !own || stored.atMs === undefined || frames(stored.atMs) !== frames(point.atMs)) pending += 1;
+  }
+  pending += song.points.filter(point => !points.some(local => local.id === point.id)).length;
+  return pending ? { state: 'editing', pending } : { state: 'ready', timecode: timecode.number, startMs, frameRate: '30' };
 }

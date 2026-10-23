@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPackagedDesktop } from '../tools/obs/beauty/verify-packaged-desktop.mjs';
+import { portableTestPackage } from './release-config.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const requireDesktop = createRequire(join(root, 'apps/desktop/package.json'));
@@ -33,7 +34,8 @@ for (const credential of ['missing', 'tampered', 'restart']) {
       const devices = await api.getNativePlaybackDevices();
       const update = await api.checkForUpdates();
       const logs = await api.queryLogs();
-      return { state: license.state, message: license.message, kind: license.claims?.kind,
+      const build = await api.getAppInfo();
+      return { state: license.state, message: license.message, kind: license.claims?.kind, build,
         machineBoundToCurrentHost: license.claims?.machineCode === license.machineCode,
         projectCreated: Boolean(project), devices, updateFeedConfigured: update.feedConfigured,
         logsReadable: Array.isArray(logs) };
@@ -43,6 +45,11 @@ for (const credential of ['missing', 'tampered', 'restart']) {
     assert.equal(result.machineBoundToCurrentHost, true);
     assert.equal(result.projectCreated, true);
     assert.equal(result.updateFeedConfigured, false);
+    assert.equal(result.build.channel, 'test');
+    assert.equal(result.build.name, portableTestPackage.productName);
+    assert.equal(result.build.appId, portableTestPackage.appId);
+    assert.match(result.build.gitSha ?? '', /^[0-9a-f]{40}(-dirty)?$/);
+    assert.match(result.build.version, /^\d+\.\d+\.0-test\.\d+\+g[0-9a-f]{7}(\.dirty)?$/);
     assert.equal(result.logsReadable, true);
     if (credential === 'tampered') assert.equal(await readFile(fakeLicense, 'utf8'), 'invalid-test-credential');
     await page.screenshot({ path: join(directory, `${credential}-workspace.png`) });

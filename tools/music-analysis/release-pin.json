@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "outputs": {
+    "files": 23916,
+    "bytes": 2095196236,
+    "sha256": "8432b1f0ea628edf0e584fcb6f21b1a60367df75fb90b76c6763791a1b64fec0"
+  },
+  "provenance": {
+    "source": "构建机 DESKTOP-2C8JIC2 的 C:\\dev\\tblink-release\\output\\music-analysis（cpu-env、models，以及 downloads 里的许可证文件）；D:\\tblink-music-analysis 有同一份 cpu-env 和 models。2026-10-23 由 package-runtime.mjs 组装并固定。",
+    "generation": "tools/music-analysis/package-runtime.mjs：Python 3.11.9 + torch 2.7.1+cpu 的离线环境，模型由 models/manifest.json 核对。指纹只覆盖 runtime、models、licenses 三个目录；从本仓库复制进去的 worker.py 等由 git 管理。",
+    "reproducible": false,
+    "openIssue": "cpu-env 是离线准备好的环境，仓库里没有可重放的生成步骤；换构建机时只能复制这份目录，复制后用 node tools/music-analysis/release-pin.mjs <输出目录> 核对。"
+  }
+}

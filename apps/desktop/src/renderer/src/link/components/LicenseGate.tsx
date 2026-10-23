@@ -1,13 +1,16 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { ArrowUpRight, AudioLines, Clapperboard, KeyRound, Maximize2, Minus, PanelsTopLeft, X } from 'lucide-react';
 import { Button } from './Button';
 import { LicenseSettings } from './LicenseSettings';
+import { UpdateCenter } from './UpdateCenter';
 import timelinePreview from '../../assets/activation-timeline.webp';
 
 /** Do not mount device adapters or restore a project before main-process authorization. */
 export function LicenseGate({ children }: { children: ReactNode }): JSX.Element {
   const [state, setState] = useState<'checking' | 'locked' | 'authorized'>('checking');
   const [error, setError] = useState('');
+  // The update panel shows its own status and failures in place.
+  const updateNotice = useCallback(() => undefined, []);
   const controlWindow = async (action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void> => {
     try { await window.tbLink.controlWindow(action); }
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
@@ -56,6 +59,7 @@ export function LicenseGate({ children }: { children: ReactNode }): JSX.Element 
               setState('authorized');
             }} />
             {error ? <p className="license-startup-message" role="alert">{error}</p> : null}
+            <section className="license-gate-update" aria-label="软件更新"><UpdateCenter inline notify={updateNotice} /></section>
           </>}
         </div>
       </div>

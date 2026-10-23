@@ -6,18 +6,49 @@
 
 2026-09-28 初始状态（历史）：源码改为公司 HTTPS 更新源，DNS、源站 TLS 和静态更新路由已完成并验证；尚未发布新安装包。旧版本历史验收记录留在文末，不代表本次域名和保护配置已验收。
 
+<a id="当前链路"></a>
 ## 当前链路
 
-- 更新源：`https://updates.tuanbo-link.jinhefilm.com/windows/x64/`，`electron-updater 6.8.9` 的 generic provider。
-- 唯一配置来源：`apps/desktop/package.json` 的 `build.publish.url`；主进程直接引用相同配置，打包生成的 `app-update.yml` 应与其一致。
-- 客户不填写 GitHub Token，不需要公司网站账号；旧更新 Token 的 IPC、schema 和输入 UI 已移除，客户端不再读取它。已有本地加密凭证不会被静默删除，也不会迁移到公司服务。
-- 用户打开更新中心后检查→下载→确认重启安装；没有启动自动检查、自动下载、退出即安装、失败自动重试或自动降级。
-- 固定完整 NSIS 包下载，保留 SHA-512 校验；差分下载关闭，blockmap 仍可随构建归档。新源协议仅允许 HTTPS、无用户名/密码、无 query/fragment，且必须为目录地址。
-- 检查与下载互斥，已经下载的版本保留等待安装。运行中或工程未保存时拒绝安装；系统确认框返回后再次检查，防止确认期间状态变化。安装失败恢复关闭保护。
-- 安装沿用原目录和当前用户范围，只退出团播联动台，不关闭 OBS/P1。开发模式不执行更新。
+2026-10-23 起的客户端行为（尚未随正式版发布；已发布的 0.4.29 仍是旧行为）：
+
+- 更新源：`https://updates.tuanbo-link.jinhefilm.com/windows/x64/`，`electron-updater 6.8.9` 的 generic provider。唯一配置来源是 `apps/desktop/package.json` 的 `build.publish.url`；主进程直接引用它，打包生成的 `app-update.yml` 由 `verify-desktop-artifacts.mjs --dist` 核对一致。
+- 客户不填写 GitHub Token，不需要公司网站账号；旧更新 Token 的 IPC、schema 和输入 UI 已移除。已有本地加密凭证不会被静默删除，也不会迁移到公司服务。
+- 检查：安装版启动约 10 秒后在后台检查一次，只写日志并在工作区提示一次新版本，不下载。后台检查失败（现场断网常见）记为警告，面板显示「启动时未能检查更新…可以在软件更新中重试」，不显示为更新错误。手动检查在「设置 › 外观与更新 › 软件更新」。检查和读取更新状态不需要授权：未激活、授权到期或启动联网校验失败的电脑在激活页也能看到新版本。
+- 发布签名：发现新版本后先用内置公钥验证 `latest.yml` 里的发布签名（见[发布签名](#发布签名)），并核对签名内容与 `latest.yml` 的版本、安装包名、大小、sha512 一致。签名缺失或不符时显示新版本和原因、写运行日志，不提供下载和安装。下载完成后和安装前各重新计算一次安装包的 sha512 与签名比对，不符即拒绝安装。
+- 升级服务期限：用签名里的发布日期和本机签名授权里的 `updatesUntil` 比较。发布日期晚于期限或授权不可用时，面板显示新版本和原因，不提供下载和安装；下载前、安装前各再核对一次授权。日期按北京时间显示，比较用精确时刻。
+- 下载：手动点击，固定完整 NSIS 包，SHA-512 校验，差分下载关闭。下载和安装仍需要有效授权。播放中不能开始下载；下载中开始播放会立即停止下载并回到「可下载」，停止播放后可以重新下载。检查与下载互斥，已下载的版本保留等待安装。
+- 安装：播放中拒绝。确认后走与关闭软件相同的退出流程：未保存工程「保存 / 不保存 / 取消」→ 停止灯光试听 → 关闭正式音频与画面 → 逐项确认由本软件启动的外部程序 → 关闭音乐分析 → 启动安装程序。任一步选择返回即取消安装，已下载的更新保留。安装程序启动失败时软件保持打开，面板显示错误。安装沿用原目录和当前用户范围，更新后自动重启。
+- 开发模式不执行更新；免激活测试包没有更新源，见[测试包](#测试包)。
 - 网络层采用锁定版本 `builder-util-runtime` 的 60 秒 socket 空闲超时。完整包传输可超过 60 秒，不是整次下载的总时限；慢链路需实测。授权请求另有独立的 10 秒时限。
 
-当前 feed 是公开静态资源，下载本身不发授权，使用软件仍要求付费许可。`updatesUntil` 对新版使用资格尚未接入；服务器短效下载链接、版本资格目录和安装后资格验证都属于后续工作，不能说已实现按升级期收费。
+当前 feed 是公开静态资源，下载本身不发授权，安装包未做代码签名。升级服务期限由客户端按签名授权执行，属于产品策略，不是防破解措施：任何人都能从官网直接下载安装包。服务器短效下载链接和版本资格目录仍属后续工作。
+
+<a id="构建身份"></a>
+### 构建身份
+
+每个构建记录产品名、版本、渠道（正式 / 测试 / 内测 / 开发）、Git 提交号（有未提交改动时带 `-dirty`）和 appId。正式构建取不到提交号会直接失败。这些信息显示在「软件更新」面板，写入每次启动的日志、导出日志的开头和诊断包。打包版只从 app.asar 加载界面，忽略 `ELECTRON_RENDERER_URL`；从开发机热更新测试电脑界面的做法只对修复前装好的包有效。
+
+<a id="测试包"></a>
+### 测试包
+
+免激活测试包由 `scripts/build-portable-test.mjs` 在 Windows 上构建，身份与正式包分开（定义在 `scripts/release-config.mjs`）：
+
+| 项目 | 正式包 | 测试包 |
+| --- | --- | --- |
+| appId | `com.tuanbo.control` | `com.tuanbo.control.functionaltest` |
+| 包名（决定默认安装目录） | `@tb/desktop` → `%LOCALAPPDATA%\Programs\@tbdesktop` | `tuanbo-link-functional-test` → `%LOCALAPPDATA%\Programs\tuanbo-link-functional-test` |
+| productName（决定 userData） | 团播联动台 → `%APPDATA%\团播联动台` | 团播联动台功能测试版 → `%APPDATA%\团播联动台功能测试版` |
+| 安装包 | `Tuanbo-Link-Console-X.Y.Z-x64.exe` | `Tuanbo-Link-Test-NoActivation-X.Y.Z-x64.exe` |
+| 更新源 | 公司 feed | 无（不生成 `app-update.yml` 和 `latest.yml`） |
+
+构建脚本最后运行 `verify-desktop-artifacts.mjs --test-dist <目录>`，核对上述身份、内嵌的测试分发，以及没有任何能进入正式 feed 的文件；不通过即报错。正式包的 `--dist` 校验反过来要求主进程不含测试或内测分发、包名和 productName 为正式值。
+
+此前的测试包与正式包同用 `@tbdesktop` 目录和 `%APPDATA%\团播联动台`：不带 `/D` 安装会覆盖正式版的 app.asar。新测试包不再读取旧目录里的配置，测试电脑升级到新测试包后需要重新配置，或把旧配置复制到新的 userData 目录。
+
+<a id="官网下载信息"></a>
+### 官网下载信息
+
+`apps/licensing-server/web/release.json`（下载页的版本、日期和链接）不再手改。发布到更新源之后运行 `node scripts/write-website-release.mjs`：它读取线上 `latest.yml`，核对安装包地址返回的大小，按北京时间写入日期；提交后由官网自动部署上线。
 
 ## 同服务器静态出口
 
@@ -30,27 +61,41 @@
   Tuanbo-Link-Console-X.Y.Z-x64.exe.blockmap
 ```
 
-`latest.yml` 由 electron-builder 生成，包含版本、安装包相对文件名、大小和 SHA-512。不要手填摘要，不要把内部绝对路径写进去。正式稳定版本用数字 `X.Y.Z`；当前反向代理白名单不服务 prerelease、其他架构或任意文件。
+`latest.yml` 由 electron-builder 生成，包含版本、安装包相对文件名、大小和 SHA-512；构建机再追加 `tblinkRelease` 发布签名。不要手改，改动会让签名或 manifest 摘要失效。正式稳定版本用数字 `X.Y.Z`；当前反向代理白名单不服务 prerelease、其他架构或任意文件。
 
 清单 `Cache-Control: no-store`；带版本的安装包不可变、长期缓存。不开目录浏览，未匹配路径 404。服务器、CF 记录和探测命令见 [COMMERCIAL_DEPLOYMENT.md](COMMERCIAL_DEPLOYMENT.md)。
 
 Git、版本标识、构建位置与服务部署关系见 [完整链路核查](RELEASE_CHAIN.md)。
 
-## 发布流程与上线门槛
+<a id="发布流程"></a>
+## 发布流程
 
-2026-09-29 用户明确授权“创建正式发行、开放收款，后续会真实找人测试”。本次 `0.4.29` 按此授权先创建正式 Release 并部署已通过构建和摘要检查的产物，真实安装／激活／更新验收后补；这取代下文“签名和实机验收前不公开”的本次流程限制。现阶段没有代码签名证书，manifest 必须继续如实记录 `NotSigned`，发行说明明确未签名及实测待完成，不关闭摘要校验、不伪造签名状态。未来签名接入仍按下述要求实施。仅有发布授权或构建排队不代表本次发行已经完成，实际结果以部署记录为准。
+2026-10-23 起（替代此前的手工流程和「签名后才能公开」的门槛，用户已决定不办代码签名证书）：
 
-1. 在 Windows 原生环境完成仓库 `pnpm verify:release` 及设备回归。同步根包和桌面包版本，使用递增且未发布过的版本号。0.4.29 的实际版本、标签与发布结果见文首发行记录。
-2. **当前脚本仍检查 `unsigned-candidate-confirmed`，`win.signAndEditExecutable` 为 false，不能把该检查通过视为正式商用签名通过。** 取得代码签名证书后，需接入构建签名、真实证书的发布者校验，并调整 manifest 的正式发行检查。必须同时验收应用 EXE 和 NSIS 安装器。未完成前不把候选文件放到公开正式 feed。
-3. 检查成品的 `app-update.yml` 与公司地址一致；确认目标安装器版本、大小、SHA-512 和 Authenticode 发布者。当前依赖在没有配置 `publisherName` 时会跳过 Windows 更新签名验证，因此仅改 HTTPS 地址尚未完成可信更新链路。不能猜公司中文名就是证书发布者。
-4. 在隔离测试源用两套版本验收更新、损坏下载拒绝、错误发布者拒绝、网络中断、运行/未保存拒绝、取消安装、原目录与卸载信息保持。测试主进程与 preload 必须完整重启，不能仅刷新 renderer。
-5. 经发布授权后，把签名且验收通过的版本化安装包和 blockmap 上传到服务器临时目录，校验完成后移入同一文件系统下的公开目录。保留旧版本文件。
-6. 将对应清单上传为临时文件，再以同目录原子 rename 最后替换 `latest.yml`。不要先上传清单，否则客户会读到尚不存在或尚未传完的包。清单路径和版本文件内容发布后不可分别随意修改。
-7. 由公网客户路径检查清单缓存头、文件大小、Range 和摘要，再用 Windows 客户端完成全链路；保存脱敏验收记录。失败时停止发布下一版，不能自动切到未知镜像。
+<a id="版本号"></a>
+### 版本号
 
-现有 `.github/workflows/release-windows.yml` 在 `v*` 标签推送后构建并上传 GitHub 草稿 Release 资产；新增手动入口要求指定完整提交，只保留候选 artifact，尚未推送运行。两条路径都**不会同步腾讯云出口**。`build.publish` 改为 generic 不会让 `softprops/action-gh-release` 自动上传服务器。待签名、SSH 发布身份与服务器目录验收完成后，再增加受控 CI 发布阶段，按“产物先、清单后”自动同步；生产密钥通过 CI 秘密存储提供，不在 YAML 写口令。本轮未 push，因此没有触发该流水线。
+- 正式版本号只在发布提交里改：根目录和 `apps/desktop` 两个 `package.json` 同时改，提交信息 `chore(release): X.Y.Z`。平时的功能提交不改版本号。
+- 发布构建（`pnpm verify:release` 和 Release Windows 工作流）要求版本高于所有已有 `vX.Y.Z` 标签和线上 `latest.yml`；它自己的标签只能指向本次构建的提交。日常 `pnpm verify` 只检查两处版本一致。
+- 免激活测试包的版本是下一个次版本的预发布，例如 0.5.0 之后打的测试包是 `0.6.0-test.379+g509d3e2`（提交数和提交号）。它不会与正式版本重号，正式客户端也不会把它当更新。
 
-官方参考：[electron-builder 自动更新](https://www.electron.build/v26/docs/features/auto-update/)、[发布配置](https://www.electron.build/v26/docs/publish/)、[Windows 代码签名](https://www.electron.build/docs/features/code-signing/code-signing-win/)。实现行为以本仓库锁定的 electron-updater 6.8.9 / electron-builder 26.15.3 为准，不把更新版文档中新增的清单签名能力当作当前依赖已有能力。
+<a id="发布签名"></a>
+### 发布签名
+
+- 安装包不做 Authenticode 签名，manifest 如实记录签名状态；Windows 第一次安装可能提示「无法识别的应用」，官网下载页写了处理方法。
+- 我们自己的 Ed25519 发布签名写在 `latest.yml` 的 `tblinkRelease` 字段，内容是版本、渠道、发布日期、安装包文件名、大小和 sha512。客户端内置 `release-2026-10-a`（日常）和 `release-2026-10-b`（离线备用）两把公钥，按 kid 选用。客户端在安装前验签，并核对下载文件；服务器发布前也会验签。
+- 本地 `pnpm verify:release` 没有私钥时不签名，manifest 写 `releaseSignature: null`，这样的包只用于安装验收，服务器拒绝发布。
+
+<a id="步骤"></a>
+### 步骤
+
+1. 推发布提交到 master，在 Actions 运行 Release Windows（填完整提交号），或推 `vX.Y.Z` 标签。
+2. 托管机检查通过后，构建机打包、签名、上传到服务器 staging（[构建机准备](RELEASE_BUILDER_SETUP.md)）。
+3. 运营后台「软件更新」里确认发布；服务器重新校验后上线。需要撤回时用「回滚到上一版」。完整链路和信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布staging-与后台确认)。
+4. 运行 `node scripts/write-website-release.mjs` 更新官网下载信息并提交，见[官网下载信息](#官网下载信息)。
+5. 用正式安装包做一次从上一版的覆盖升级和软件内更新，记录结果。
+
+旧的手工发布（`publish-update.py <目录> <manifest sha256> <提交> <版本>`）仍可用，但同样要求发布签名和更高的版本号。
 
 ## 旧安装迁移与故障
 

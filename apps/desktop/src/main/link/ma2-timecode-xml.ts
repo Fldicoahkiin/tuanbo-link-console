@@ -718,6 +718,28 @@ export function prepareMa2TimecodeEvents(xml: string, expectedSha256: string, ta
   return { xml: result, originalPaths, addedPaths };
 }
 
+/**
+ * A Timecode show this program owns, emptied for a rebuild: every Track removed, name, start (30 FPS
+ * frames) and slot set. Only for shows recorded as the program's own; user shows are merged instead.
+ */
+export function resetMa2TimecodeShow(xml: string, target: number, show: { name: string; offset: number; slot: string }): string {
+  validateMa2TimecodeWrite(xml);
+  const report = inspectMa2TimecodeXml(xml);
+  if (report.timecodes.length !== 1 || report.timecodes[0]?.index !== target - 1) throw new Error('自有 Timecode 与写入目标不一致');
+  if (!['3.3.4', '3.7.0'].includes(report.version) || report.timecodes[0].attributes.frame_format !== '30 FPS') throw new Error('该 MA2 版本或时间格式尚未验证');
+  if (!Number.isSafeInteger(show.offset) || show.offset < 0 || show.offset >= 2592000) throw new Error('歌曲起始时间超出 24 小时');
+  const { document, root } = parse(xml);
+  const timecode = indexedChildren(root, 'Timecode')[0]!;
+  for (const track of children(timecode, 'Track')) timecode.removeChild(track);
+  timecode.setAttribute('name', show.name);
+  timecode.setAttribute('slot', show.slot);
+  if (show.offset) timecode.setAttribute('offset', String(show.offset)); else timecode.removeAttribute('offset');
+  timecode.removeAttribute('lenght');
+  const result = new XMLSerializer().serializeToString(document);
+  validateMa2TimecodeWrite(result);
+  return result;
+}
+
 /** 3.3.4 and onPC 3.7.0.5 exports use 30 Hz ticks for `lenght` (200 s = 6000). */
 export function extendMa2TimecodeLength(xml: string, target: number): string {
   validateMa2TimecodeWrite(xml);

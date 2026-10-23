@@ -124,11 +124,12 @@ export class LinkRunLogger {
     return filter.limit ? entries.slice(-filter.limit) : entries;
   }
 
-  async exportText(destinationPath: string): Promise<void> {
+  /** `build` names the exporting build (product, version, channel, commit, appId) above the entries. */
+  async exportText(destinationPath: string, build: string): Promise<void> {
     if (!destinationPath.toLowerCase().endsWith('.txt')) throw new Error('运行日志必须使用 .txt 扩展名');
     const entries = await this.query();
     const text = entries.map(entry => `${entry.timestamp} [${entry.level}] [${entry.category}] [${entry.device ?? '—'}] ${entry.message}\n${JSON.stringify(entry)}`).join('\n\n');
-    await writeFileAtomically(destinationPath, `团播联动台运行日志（包含历史会话）\n${text}\n`);
+    await writeFileAtomically(destinationPath, `团播联动台运行日志（包含历史会话）\n导出版本：${build}\n${text}\n`);
   }
 
   async exportDiagnosticPackage(

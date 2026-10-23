@@ -1,5 +1,10 @@
 name: Release Windows
 
+# Checks run on a GitHub-hosted runner. The installer is built, signed with the release key and uploaded to
+# the server's staging area on the domestic self-hosted builder (labels release-builder): the beauty and
+# music-analysis assets are not in git, and hosted runners lack the disk and the bandwidth to China.
+# Nothing here publishes; the owner confirms the staged release in the console.
+
 on:
   push:
     tags:
@@ -10,11 +15,6 @@ on:
         description: '要检出的完整 Git SHA；必须与产物清单一致'
         required: true
         type: string
-      archive_to_draft:
-        description: '直接归档到版本标签的草稿 Release，不占用 Actions artifact 配额；不发布正式版'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -24,13 +24,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release-windows:
+  verify:
     runs-on: windows-latest
     timeout-minutes: 45
-    permissions:
-      contents: write
-    outputs:
-      candidate-name: windows-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -47,9 +43,7 @@ jobs:
         run: |
           if ($env:EXPECTED_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Expected a full lowercase Git SHA' }
           $actual = (git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_SHA) {
-            throw 'Checkout differs from the requested candidate commit'
-          }
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_SHA) { throw 'Checkout differs from the requested candidate commit' }
 
       - name: Use pnpm 10.33.0
         uses: pnpm/action-setup@v6
@@ -65,71 +59,114 @@ jobs:
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate release version and tag
+      - name: Release version is new
         shell: pwsh
         run: |
-          if ($env:GITHUB_EVENT_NAME -eq 'push') {
-            node scripts/verify-release-version.mjs "$env:GITHUB_REF_NAME"
-          } else {
-            node scripts/verify-release-version.mjs
+          if ($env:GITHUB_EVENT_NAME -eq 'push') { node scripts/verify-release-version.mjs --release "$env:GITHUB_REF_NAME" }
+          else { node scripts/verify-release-version.mjs --release }
+          if ($LASTEXITCODE -ne 0) { throw 'Release version check failed' }
+
+      - name: Typecheck, test and lint
+        run: |
+          pnpm typecheck
+          pnpm test
+          pnpm lint
+
+  build:
+    needs: verify
+    runs-on: [self-hosted, windows, release-builder]
+    timeout-minutes: 150
+    env:
+      TBLINK_ASSETS: D:\tblink-release-assets
+      TBLINK_RELEASE_SIGNING_KEY_FILE: D:\tblink-release-signing\release-2026-10-a.pem
+      TBLINK_RELEASE_SIGNING_KID: release-2026-10-a
+      TBLINK_RELEASE_UPLOAD_KEY: D:\tblink-release-signing\upload\tblink-release-ed25519
+      TBLINK_RELEASE_KNOWN_HOSTS: D:\tblink-release-signing\upload\known_hosts
+    steps:
+      - name: Wait until no GUI test holds the shared machine
+        shell: pwsh
+        run: |
+          # The builder is also the GUI test machine; sessions take C:\dev\claude-tools\locks\*.lock.
+          $locks = 'C:\dev\claude-tools\locks'
+          $deadline = (Get-Date).AddMinutes(60)
+          while (Get-ChildItem -LiteralPath $locks -Filter *.lock) {
+            if ((Get-Date) -gt $deadline) { throw "GUI 锁 60 分钟未释放：$((Get-ChildItem -LiteralPath $locks -Filter *.lock).Name -join ', ')" }
+            Start-Sleep -Seconds 30
           }
+          Set-Content -LiteralPath (Join-Path $locks 'release-builder.lock') -Value "Release Windows run $env:GITHUB_RUN_ID"
 
-      - name: Verify and build Windows release
-        run: pnpm verify:release
-
-      - name: Archive verified Windows candidate
-        if: ${{ !inputs.archive_to_draft }}
-        uses: actions/upload-artifact@v7
+      - name: Checkout
+        uses: actions/checkout@v7
         with:
-          name: windows-candidate-${{ inputs.expected_sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 0
-          path: |
-            apps/desktop/dist/Tuanbo-Link-Console-*.exe
-            apps/desktop/dist/Tuanbo-Link-Console-*.exe.blockmap
-            apps/desktop/dist/latest.yml
-            apps/desktop/dist/release-manifest.json
+          persist-credentials: false
+          ref: ${{ inputs.expected_sha || github.sha }}
+          fetch-tags: true
 
-      - name: Archive candidate directly to draft release
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.archive_to_draft }}
+      - name: Verify requested candidate commit
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          EXPECTED_SHA: ${{ inputs.expected_sha || github.sha }}
         run: |
-          $manifest = Get-Content apps/desktop/dist/release-manifest.json -Raw | ConvertFrom-Json
-          $tag = "v$($manifest.version)"
-          $tagSha = (gh api "repos/$env:GH_REPO/commits/$tag" --jq .sha).Trim()
-          if ($LASTEXITCODE -ne 0 -or $tagSha -cne $manifest.gitSha) { throw 'Release tag differs from manifest' }
-          $installer = "apps/desktop/dist/Tuanbo-Link-Console-$($manifest.version)-x64.exe"
-          $notes = "Verified Windows candidate. Source: $($manifest.gitSha). Build: https://github.com/$env:GH_REPO/actions/runs/$env:GITHUB_RUN_ID. Not a published release."
-          gh release create $tag --verify-tag --draft --title "团播联动台 $($manifest.version)" --notes $notes $installer "${installer}.blockmap" apps/desktop/dist/latest.yml apps/desktop/dist/release-manifest.json
-          if ($LASTEXITCODE -ne 0) { throw 'Draft release archive failed; inspect existing assets before retrying' }
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_SHA) { throw 'Checkout differs from the requested candidate commit' }
 
-  draft-release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: release-windows
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - name: Download this run's verified candidate
-        uses: actions/download-artifact@v5
+      # The runner's service account has no per-user Node; these install the pinned versions in its tool cache.
+      # No GitHub cache: uploading it from China is slower than the local pnpm store.
+      - name: Use pnpm 10.33.0
+        uses: pnpm/action-setup@v6
         with:
-          name: ${{ needs.release-windows.outputs.candidate-name }}
-          path: apps/desktop/dist
+          version: 10.33.0
 
-      - name: Upload draft candidate assets
-        uses: softprops/action-gh-release@v3
+      - name: Use Node.js 25.8.2
+        uses: actions/setup-node@v7
         with:
-          draft: true
-          make_latest: 'false'
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: |
-            apps/desktop/dist/Tuanbo-Link-Console-*.exe
-            apps/desktop/dist/Tuanbo-Link-Console-*.exe.blockmap
-            apps/desktop/dist/latest.yml
+          node-version: 25.8.2
+
+      - name: Use the pinned beauty build
+        shell: pwsh
+        run: |
+          # release-pin.json names the exact files; afterPack fails the build if the directory differs.
+          $pin = Get-Content -Raw tools/obs/beauty/release-pin.json | ConvertFrom-Json
+          $source = Join-Path $env:TBLINK_ASSETS ("beauty\" + $pin.outputs.sha256.Substring(0, 12))
+          if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "构建机缺少固定版本的美颜产物：$source" }
+          # A copy, not a junction: the next checkout's clean must never reach the read-only asset directory.
+          robocopy $source artifacts\beauty-prototype /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { throw "复制美颜产物失败：robocopy $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Package, check, sign and record the release
+        shell: pwsh
+        run: |
+          pnpm dist
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+          node scripts/verify-desktop-artifacts.mjs --dist
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact checks failed' }
+          node scripts/sign-release.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Release signing failed' }
+          node scripts/write-release-manifest.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Release manifest failed' }
+          $manifest = Get-Content -Raw apps/desktop/dist/release-manifest.json | ConvertFrom-Json
+          if (-not $manifest.releaseSignature) { throw 'A release build must be signed' }
+
+      - name: Upload to the server's staging area
+        run: node scripts/upload-release.mjs
+
+      - name: Keep the release manifest with this run
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-manifest-${{ inputs.expected_sha || github.sha }}-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
             apps/desktop/dist/release-manifest.json
+            apps/desktop/dist/latest.yml
+
+      - name: Release the shared machine
+        if: always()
+        shell: pwsh
+        run: |
+          $lock = 'C:\dev\claude-tools\locks\release-builder.lock'
+          if (Test-Path -LiteralPath $lock) { Remove-Item -LiteralPath $lock }

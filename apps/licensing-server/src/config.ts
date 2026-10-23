@@ -15,6 +15,8 @@ export const serviceConfigSchema = z.object({
   WECHAT_PUBLIC_KEY_FILE: z.string().min(1).optional(), WECHAT_PUBLIC_KEY_ID: z.string().regex(/^PUB_KEY_ID_\d{10,64}$/).optional(),
   WECHAT_API_V3_KEY_FILE: z.string().min(1).optional(), WECHAT_CHECKOUT_ENABLED: z.enum(['true', 'false']).default('false'),
   LICENSE_CATALOG_FILE: z.string().min(1).optional(),
+  // The update spool shared with the root tblink-update-publish.path; unset leaves update publishing off.
+  UPDATE_RELEASE_DIRECTORY: z.string().min(1).optional(),
   // 未设置时沿用生产网关和现有公网回调域名；沙箱联调须显式设为 sandbox。
   PAYMENT_ENVIRONMENT: paymentEnvironmentSchema.default('production'),
   PAYMENT_NOTIFY_ORIGIN: z.string().url().default('https://api.tuanbo-link.jinhefilm.com'),
