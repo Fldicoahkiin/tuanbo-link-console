@@ -1,5 +1,5 @@
 import { createObsProgramSnapshot, itemNeedsObs } from './obs-program-snapshot';
-import { lightingTimecodePlaybackNotice } from './lighting-playback';
+import { playbackLighting } from './lighting-playback';
 import { playlistItems, programPlaylists } from './program-playlists';
 import { toUserErrorMessage } from './link-user-error';
 import type { LinkDesktopApi } from './link-desktop-contract';
@@ -111,8 +111,7 @@ export class NativeProgramPlayer {
       this.allowMtc = prepared.allowMtc && this.lit;
       this.allowLighting = prepared.allowLighting && this.lit;
       if (prepared.notice && this.lit) this.reportUnavailable(prepared.notice);
-      const direct = item.lighting?.outputMode === 'network' || item.lighting?.outputMode === 'direct';
-      const sendMtc = this.allowMtc && !direct && this.state.mtcEnabled;
+      const sendMtc = this.allowMtc && this.state.mtcEnabled;
       const midiPortName = sendMtc ? config.mtcPortName : null;
       const snapshot = { ...prepared.snapshot, volume: config.fadeInMs && !paused ? 0 : prepared.snapshot.volume };
       const loop = item.lighting?.loop;
@@ -139,12 +138,10 @@ export class NativeProgramPlayer {
       if (this.mtcSuppressed && result.mtcPortName) await this.command({ kind: 'stop-mtc' });
       if (!this.current(token)) return;
       const prepareLighting = async (): Promise<void> => { if (item.lighting && this.allowLighting) {
-        try { await optionalOutputReady(this.lighting.prepare(item.lighting, config.lightingProfile ?? null, snapshot.positionMs), () => this.lighting.stop(), '灯光动作'); this.lightingPrepared = this.current(token); }
+        try { await optionalOutputReady(this.lighting.prepare(playbackLighting(item.lighting), config.lightingProfile ?? null, snapshot.positionMs), () => this.lighting.stop(), '灯光动作'); this.lightingPrepared = this.current(token); }
         catch (error) { this.lighting.stop(); if (this.current(token)) this.startFault(`灯光动作未参与：${toUserErrorMessage(error)}`); }
       } };
       if (!this.current(token)) return;
-      const notice = item.lighting && this.allowLighting && sendMtc && midiPortName && !this.state.mtcConnectionFailed ? lightingTimecodePlaybackNotice(item.lighting) : null;
-      if (notice) this.reportUnavailable(notice);
       await Promise.all([prepareLighting(), this.prepareRuntime(itemId, snapshot.positionMs, reuseSession, token), this.prepareObs(itemId, token)]);
       if (!this.current(token)) return;
       if (paused) { await this.command({ kind: 'pause' }); if (this.runtimePrepared) await this.optionalRuntime(() => this.dependencies.pause(), 'MIDI Cue 暂停失败'); this.update({ status: 'paused' }); return; }
@@ -175,7 +172,7 @@ export class NativeProgramPlayer {
       if (!this.current(token)) return;
       const item = this.project.rundown.find(entry => entry.id === this.state.itemId);
       const prepareLighting = async (): Promise<void> => { if (item?.lighting && this.allowLighting) {
-        try { await optionalOutputReady(this.lighting.prepare(item.lighting, this.dependencies.configuration().lightingProfile ?? null, position), () => this.lighting.stop(), '灯光动作'); this.lightingPrepared = this.current(token); }
+        try { await optionalOutputReady(this.lighting.prepare(playbackLighting(item.lighting), this.dependencies.configuration().lightingProfile ?? null, position), () => this.lighting.stop(), '灯光动作'); this.lightingPrepared = this.current(token); }
         catch (error) { this.reportUnavailable(`灯光动作未恢复：${toUserErrorMessage(error)}`); }
       } };
       // Pause cancels unsent MIDI and releases owned notes. Prepare the future

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, linkCueSchema, parseLinkProject, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
-import { NativeProgramPlayer } from '@tb/core/link';
+import { NativeProgramPlayer, type ProgramLightingOutput } from '@tb/core/link';
 import { emptyInternalPlayerState } from './internal-playback-controller';
 import { nativeProgramSnapshot } from '@tb/core/link';
 import type { NativeObsPreload } from '@tb/schema';
@@ -48,7 +48,7 @@ function fixture() {
     stop: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.resolve('unused')),
     configuration: () => ({ outputDeviceId: 'default', mtcPortName: 'TEST', audioSampleRate: 48000 as const }),
     changed: (next: typeof state) => { state = next; }, notice: vi.fn() };
-  const lighting = { prepare: vi.fn(() => Promise.resolve()), tick: vi.fn(), finish: vi.fn(), stop: vi.fn() };
+  const lighting = { prepare: vi.fn<ProgramLightingOutput['prepare']>(() => Promise.resolve()), tick: vi.fn(), finish: vi.fn(), stop: vi.fn() };
   const player = new NativeProgramPlayer(project, 'C:/test/project.tblink', 7, deps, api, lighting);
   return { player, project, deps, api, lighting, emit, state: () => state };
 }
@@ -112,6 +112,19 @@ it('开播前检查：没有操作员选择时检查不过的歌无灯光播放�
   expect(f.state().fault).toBeNull(); expect(f.state().notice).toMatch(/^本首无灯光播放：这首歌的灯光需要处理/);
   await f.player.play('song-1');
   expect(f.api.prepareNativePlayback.mock.calls[3]?.[0].midiPortName).toBe('TEST'); expect(f.state().fault).toBeNull(); expect(f.state().notice).not.toContain('无灯光');
+  await f.player.dispose();
+});
+
+it('播放只发时间码：网络或直接输出的歌照发时间码，本地时间线不交给灯光输出，停止时释放本曲执行器', async () => {
+  const f = fixture(), release = vi.fn(() => Promise.resolve()), lighting = { ...createLightingDocument(), outputMode: 'network' as const };
+  lighting.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {},
+    clips: [{ id: 'clip', name: '编排', start: 0, duration: 5000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', at: 1000, sequence: 1, executor: '1.101', cue: '1', action: 'goto', label: '开场', runMode: 'independent' }] }] }];
+  f.project.rundown[0]!.lighting = lighting; Object.assign(f.lighting, { release });
+  await f.player.play('song-0');
+  expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBe('TEST');
+  expect(f.lighting.prepare.mock.calls[0]?.[0]).toMatchObject({ outputMode: 'timecode', tracks: [] });
+  expect(f.state().fault).toBeNull();
+  await f.player.stop(); expect(release).toHaveBeenCalledOnce();
   await f.player.dispose();
 });
 
@@ -416,9 +429,8 @@ for (const mode of ['network', 'direct', 'timecode'] as const) it(`原生播放�
   f.project.ma2ReadState = { source: 'console', catalog: { directory: { show: 'test', generation: 'session', version: '3.7.0.5', entries: [] }, readAt: '2026-10-08T00:00:00.000Z', entries: [] },
     pairs: {}, pairings: { '2': { itemId: 'song-0', status: 'stale', evidence: '', reason: '时间依据已变化' } }, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };
   const result = nativeProgramSnapshot(f.project, 'song-0', 7, 500, 48000);
-  expect(result).toMatchObject({ allowMtc: false, allowLighting: mode !== 'timecode' });
-  if (mode !== 'timecode') expect(result.notice).toBeNull();
-  else expect(result.notice).toContain('本次不发送时间码');
+  expect(result).toMatchObject({ allowMtc: false, allowLighting: false });
+  expect(result.notice).toContain('本次不发送时间码');
   await f.player.play('song-0');
   expect(f.state().status).toBe('playing'); expect(f.state().fault).toMatch(/时间依据已变化.*；本首无灯光播放$/);
   expect(f.lighting.prepare).not.toHaveBeenCalled();

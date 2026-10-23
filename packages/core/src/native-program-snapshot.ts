@@ -18,9 +18,9 @@ export function nativeProgramSnapshot(project: LinkProject, itemId: string, revi
   const endMs = item.playback?.endMs || audio.durationMs;
   if (offsetMs + endMs >= 86400000) notice = '歌曲时间码范围超过一天，本次时间码未参与。';
   const stale = Object.values(project.ma2ReadState?.pairings ?? {}).some(pair => pair.itemId === itemId && pair.status === 'stale');
-  const direct = item.lighting?.outputMode === 'network' || item.lighting?.outputMode === 'direct';
-  const allowLighting = !stale || direct;
-  if (stale && !direct) notice = '当前歌曲与控台时间线尚未核对，本次不发送时间码。请打开控台时间线核对关联；音频继续播放。';
+  // Playback only sends timecode (2026-10-23); the stored output mode does not open another route.
+  const allowLighting = !stale;
+  if (stale) notice = '当前歌曲与控台时间线尚未核对，本次不发送时间码。请打开控台时间线核对关联；音频继续播放。';
   const rate = project.timebase.frameRate;
   if (rate === '29.97df') notice = [notice, '原生引擎的 29.97df 时间码尚未验收，本次时间码未参与。'].filter(Boolean).join('；');
   // Audio-only preparation does not invent a replacement song timecode. The
