@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { validatePackagedUpdateConfig, validateReleaseVersion } from './release-config.mjs';
+import { createHash } from 'node:crypto';
+import { validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata } from './release-config.mjs';
 
 const publish = { provider: 'generic', url: 'https://updates.tuanbo-link.jinhefilm.com/windows/x64/' };
 
@@ -32,4 +33,23 @@ test('根包、桌面包和 v 标签必须对应同一稳定版本', () => {
   for (const version of ['0.4.27-beta.1', '01.4.27', '0.4']) {
     assert.throws(() => validateReleaseVersion({ version }, { version }), /稳定版本/);
   }
+});
+
+const installerName = 'Tuanbo-Link-Console-0.5.0-x64.exe';
+const installerBytes = Buffer.from('installer bytes');
+const installerSha512 = createHash('sha512').update(installerBytes).digest('base64');
+const latest = (overrides = {}) => {
+  const values = { version: '0.5.0', url: installerName, sha512: installerSha512, size: installerBytes.length, path: installerName, releaseDate: "'2026-11-02T03:04:05.678Z'", ...overrides };
+  return `version: ${values.version}\nfiles:\n  - url: ${values.url}\n    sha512: ${values.sha512}\n    size: ${values.size}\npath: ${values.path}\nsha512: ${values.sha512}\n${values.releaseDate === null ? '' : `releaseDate: ${values.releaseDate}\n`}`;
+};
+
+test('latest.yml 必须对应同一安装包，并带可解析的发布日期', () => {
+  const expected = { version: '0.5.0', installerName, installerBytes };
+  assert.deepEqual(validateUpdateMetadata(latest(), expected), { version: '0.5.0', releaseDate: '2026-11-02T03:04:05.678Z', sha512: installerSha512 });
+  assert.throws(() => validateUpdateMetadata(latest({ version: '0.4.29' }), expected), /版本/);
+  assert.throws(() => validateUpdateMetadata(latest({ sha512: 'AAAA' }), expected), /sha512/);
+  assert.throws(() => validateUpdateMetadata(latest({ size: 1 }), expected), /files/);
+  assert.throws(() => validateUpdateMetadata(latest({ url: 'other.exe' }), expected), /files/);
+  assert.throws(() => validateUpdateMetadata(latest({ releaseDate: null }), expected), /releaseDate/);
+  assert.throws(() => validateUpdateMetadata(latest({ releaseDate: "'yesterday'" }), expected), /releaseDate/);
 });

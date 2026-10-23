@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { load } from 'js-yaml';
 
 /** The activation-free test package installs, stores data and registers apart from the official app:
@@ -30,4 +31,23 @@ export function validatePackagedUpdateConfig(text, expected) {
     throw new Error('更新源必须为无凭据的 HTTPS 目录地址');
   }
   if (/token:|github_pat_|ghp_|authorization:/i.test(text)) throw new Error('app-update.yml 不得包含访问凭据');
+}
+
+/** latest.yml must describe exactly the installer beside it. Its releaseDate is what clients compare with the
+ * license's updatesUntil, so it must be a real ISO timestamp; the release manifest records it. */
+export function validateUpdateMetadata(text, { version, installerName, installerBytes }) {
+  const metadata = load(text);
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('latest.yml 必须为对象');
+  if (metadata.version !== version) throw new Error(`latest.yml 的版本 ${String(metadata.version)} 与安装包版本 ${version} 不一致`);
+  const sha512 = createHash('sha512').update(installerBytes).digest('base64');
+  if (metadata.path !== installerName || metadata.sha512 !== sha512) throw new Error('latest.yml 的 path 或 sha512 与安装包不一致');
+  const files = metadata.files;
+  if (!Array.isArray(files) || files.length !== 1 || files[0].url !== installerName || files[0].sha512 !== sha512 || files[0].size !== installerBytes.length) {
+    throw new Error('latest.yml 的 files 与安装包不一致');
+  }
+  const releaseDate = metadata.releaseDate;
+  if (typeof releaseDate !== 'string' || !Number.isFinite(Date.parse(releaseDate)) || new Date(releaseDate).toISOString() !== releaseDate) {
+    throw new Error('latest.yml 缺少 ISO 格式的 releaseDate');
+  }
+  return { version, releaseDate, sha512 };
 }

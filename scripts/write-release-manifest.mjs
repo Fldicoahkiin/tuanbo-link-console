@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, relative } from 'node:path';
-import { validateReleaseVersion } from './release-config.mjs';
+import { validateReleaseVersion, validateUpdateMetadata } from './release-config.mjs';
 
 const root = process.cwd();
 const desktopPackage = readJson(join(root, 'apps/desktop/package.json'));
@@ -33,6 +33,8 @@ const artifacts = artifactPaths.map((file) => {
 const installer = artifacts.find((artifact) => basename(artifact.path) === expectedInstallerName);
 const unpacked = artifacts.find((artifact) => artifact.path.endsWith('/win-unpacked/团播联动台.exe'));
 const installerVersionInfo = installer ? readWindowsVersionInfo(join(root, installer.path)) : undefined;
+// Clients compare this releaseDate with the license's updatesUntil; publish-update.py binds latest.yml to this manifest by sha256.
+const updateMetadata = readUpdateMetadata();
 const appVersionInfo = unpacked ? readWindowsVersionInfo(join(root, unpacked.path)) : undefined;
 const checks = [
   { name: 'windows-nsis-installer', ok: Boolean(installer), detail: installer?.path ?? 'missing' },
@@ -47,6 +49,7 @@ const checks = [
     ok: installer?.authenticode === 'NotSigned' && unpacked?.authenticode === 'NotSigned',
     detail: `installer=${installer?.authenticode ?? 'missing'}, app=${unpacked?.authenticode ?? 'missing'}`
   },
+  { name: 'update-metadata-matches-installer', ok: 'releaseDate' in updateMetadata, detail: 'releaseDate' in updateMetadata ? `version=${updateMetadata.version}, releaseDate=${updateMetadata.releaseDate}` : updateMetadata.error },
   {
     name: 'windows-installer-version-info',
     ok: installerVersionInfo?.ProductName === desktopPackage.productName
@@ -76,6 +79,7 @@ const manifest = {
     pnpm: String(rootPackage.packageManager).replace('pnpm@', ''),
     electron: String(desktopPackage.build.electronVersion)
   },
+  update: 'releaseDate' in updateMetadata ? { releaseDate: updateMetadata.releaseDate, sha512: updateMetadata.sha512 } : null,
   signing: {
     expected: 'unsigned-candidate',
     smartScreenNoticeRequired: true
@@ -94,6 +98,16 @@ writeFileSync(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
 console.log(`release manifest written: ${relative(root, outputPath)}`);
 for (const check of checks) console.log(`${check.ok ? 'ok' : 'fail'}  ${check.name}  ${check.detail}`);
 if (failed.length > 0) fail(`发布清单校验失败：\n${failed.map((check) => `- ${check.name}: ${check.detail}`).join('\n')}`);
+
+function readUpdateMetadata() {
+  const feed = join(distDirectory, 'latest.yml');
+  if (!installer || !existsSync(feed)) return { error: 'missing installer or latest.yml' };
+  try {
+    return validateUpdateMetadata(readFileSync(feed, 'utf8'), { version: desktopPackage.version, installerName: expectedInstallerName, installerBytes: readFileSync(join(root, installer.path)) });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 function readAuthenticodeStatus(file) {
   const encoded = Buffer.from(file, 'utf16le').toString('base64');
