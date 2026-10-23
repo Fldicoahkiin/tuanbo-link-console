@@ -111,6 +111,11 @@ try {
   await page.getByRole('row', { name: /浏览器验收客户/ }).click(); await page.getByRole('heading', { name: '生命周期' }).waitFor();
   await page.reload(); await page.getByRole('heading', { name: '授权详情' }).waitFor(); await page.getByText('签发（销售）').waitFor();
   await page.goBack(); await page.getByRole('tab', { name: /^未激活/, selected: true }).waitFor();
+  // 只有 1 名可用管理员时，人员页提示开通第二名，入口预选角色和原因，只需填用户名。
+  await page.getByRole('button', { name: '人员管理', exact: true }).click(); await page.getByRole('button', { name: '开通第二名管理员' }).click();
+  assert.equal(await dialog.getByLabel('角色').inputValue(), 'owner'); assert.equal(await dialog.locator('select[name=reason]').inputValue(), '备用管理员');
+  await dialog.getByLabel('用户名').fill('backup-admin'); await dialog.getByRole('button', { name: '生成开通凭据' }).click(); await dialog.locator('pre.secret').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('row', { name: /backup-admin/ }).getByText('待开通').waitFor();
   await page.screenshot({ path: fileURLToPath(new URL('owner-desktop.png', shots)), fullPage: true });
   await context.close();
   for (const role of ['operations', 'finance', 'viewer']) {

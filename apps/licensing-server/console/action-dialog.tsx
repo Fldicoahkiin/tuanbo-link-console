@@ -11,7 +11,7 @@ const other = '__other';
 /** 对话框副标题：客户名 · 业务编号；人员显示用户名。 */
 function subject(row: ConsoleRow): string {
   const parts = [row.customer, row.reference ?? row.orderReference].filter((part): part is string => typeof part === 'string' && part !== '');
-  return parts.length ? parts.join(' · ') : String(row.username ?? row.id);
+  return parts.length ? parts.join(' · ') : typeof (row.username ?? row.id) === 'string' ? String(row.username ?? row.id) : '';
 }
 function fieldError(field: Field, element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): string {
   if (element.validity.valueMissing) return `请填写${field.label.replace(/（.*）$/, '')}`;
@@ -20,7 +20,8 @@ function fieldError(field: Field, element: HTMLInputElement | HTMLSelectElement 
   return '';
 }
 function Input({ action, field, row, touched, onTouch, errors }: { action: ConsoleAction['action']; field: Field; row: ConsoleRow | null; touched: boolean; onTouch: () => void; errors: Record<string, string> }) {
-  const [choice, setChoice] = useState('');
+  // 预设项可由入口预先选好（如「开通第二名管理员」预选「备用管理员」）。
+  const [choice, setChoice] = useState(() => field.options?.some(([value]) => value === row?.[field.key]) ? String(row?.[field.key]) : '');
   const required = !field.optional; const error = touched ? errors[field.key] : '';
   const common = { name: field.key, required, onBlur: onTouch, 'aria-invalid': Boolean(error) || undefined };
   const defaultValue = action === 'set-expiry' && field.key === 'useUntil' && typeof row?.useUntil === 'string' ? new Date(Date.parse(row.useUntil) + 8 * 3600000).toISOString().slice(0, 16)
@@ -91,7 +92,7 @@ export function ActionDialog({ action, row, csrf, verifiedAt, clockOffset, syncS
   }
   const locked = busy || Boolean(unknown) || Boolean(awaiting);
   return <dialog ref={dialog} className="action-dialog" aria-label={spec.title} onCancel={event => { if (busy) event.preventDefault(); else close(); }}>
-    <header><div><h2>{spec.title}</h2>{row && <p className="dialog-subject">{subject(row)}</p>}</div><button aria-label="关闭操作窗口" disabled={busy} onClick={close}><X size={18} /></button></header>
+    <header><div><h2>{spec.title}</h2>{row && subject(row) && <p className="dialog-subject">{subject(row)}</p>}</div><button aria-label="关闭操作窗口" disabled={busy} onClick={close}><X size={18} /></button></header>
     {!result && spec.note && <p className="dialog-note">{spec.note}</p>}
     {awaiting && <StepUpPrompt csrf={csrf} onVerified={() => { syncSession(); void send(awaiting); }} onCancel={() => setAwaiting(null)} />}
     {error && <p className="alert" role="alert">{error}</p>}
