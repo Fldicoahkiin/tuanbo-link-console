@@ -32,6 +32,20 @@ describe('ProjectAccess', () => {
     access.requireApproved(elsewhere);
   });
 
+  it('主进程打开或保存工程时就接受它的请求，不等窗口上报；上报前屏幕上的工程仍可用，上报后只认上报的工程', async () => {
+    const access = new ProjectAccess(await recordPath());
+    const opened = join(await folder(), 'show.tblink'), other = join(await folder(), 'other.tblink');
+    access.opened(opened);
+    access.requireShown(opened); access.requireApproved(opened);
+    await access.show(opened);
+    access.opened(other);
+    access.requireShown(opened); access.requireShown(other);
+    await access.show(other);
+    expect(() => access.requireShown(opened)).toThrow('当前打开的工程');
+    await access.show(null);
+    expect(() => access.requireShown(other)).toThrow('当前打开的工程');
+  });
+
   it('主进程记录上次显示的工程；读回时批准它，记录损坏明确报错', async () => {
     const record = await recordPath();
     const opened = join(await folder(), 'show.tblink');

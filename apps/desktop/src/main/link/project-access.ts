@@ -16,12 +16,22 @@ const lastProjectRecordSchema = z.object({ version: z.literal(1), projectPath: z
 export class ProjectAccess {
   private readonly approved = new Set<string>();
   private shown: string | null = null;
+  /** Opened or saved by the main process for the window, until the window next reports what it shows. */
+  private opening: string | null = null;
   private recorded: string | null = null;
 
   constructor(private readonly lastProjectFile: string) {}
 
   approve(path: string): void {
     this.approved.add(pathKey(path));
+  }
+
+  /** The main process just opened or saved this project for the window, which is about to show it.
+   * Requests for it are accepted from now on, so the views need not wait for the window's report;
+   * the project still on screen until then stays accepted too. */
+  opened(path: string): void {
+    this.approve(path);
+    this.opening = path;
   }
 
   requireApproved(path: string): void {
@@ -32,13 +42,15 @@ export class ProjectAccess {
   async show(projectPath: string | null): Promise<void> {
     if (projectPath !== null) this.requireApproved(projectPath);
     this.shown = projectPath;
+    this.opening = null;
     if (projectPath === null || projectPath === this.recorded) return;
     await writeFileAtomically(this.lastProjectFile, `${JSON.stringify({ version: 1, projectPath })}\n`);
     this.recorded = projectPath;
   }
 
   requireShown(projectPath: string): void {
-    if (this.shown === null || pathKey(this.shown) !== pathKey(projectPath)) throw new Error(`只能访问当前打开的工程：${projectPath}`);
+    const key = pathKey(projectPath);
+    if (![this.shown, this.opening].some(path => path !== null && pathKey(path) === key)) throw new Error(`只能访问当前打开的工程：${projectPath}`);
   }
 
   /** The last project shown, from the main process's own record; reading it approves it for reopening. */

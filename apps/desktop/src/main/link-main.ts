@@ -1235,14 +1235,16 @@ function registerIpc(
     const path = result.filePaths[0];
     if (result.canceled || !path) return null;
     const document = await projectDocuments.open(path);
-    projectAccess.approve(path);
+    projectAccess.opened(path);
     return { version: 1, path, ...document };
   });
   // Reopening only: the last project, the shown one (恢复到上次保存, archive restore) or another approved path.
   handle('link:open-project', async (_event, pathValue: unknown) => {
     const path = linkFilePathSchema.parse(pathValue);
     projectAccess.requireApproved(path);
-    return { version: 1, path, ...await projectDocuments.open(path) };
+    const document = await projectDocuments.open(path);
+    projectAccess.opened(path);
+    return { version: 1, path, ...document };
   });
   handle('link:last-project', () => projectAccess.lastProject());
   handle('link:save-project', async (_event, pathValue: unknown, projectValue: unknown, optionsValue: unknown) => {
@@ -1267,6 +1269,8 @@ function registerIpc(
       await logger.record({ level:'error', category:'system', message:'工程保存失败，未确认落盘', result:'failed', details:{ path:destination, error:error instanceof Error ? error.message : String(error) } });
       throw error;
     }
+    // A save to the dialog's answer is the project the window shows from now on.
+    projectAccess.opened(destination);
     return destination;
   });
   const copies = new RecoveryCopies(join(app.getPath('userData'), 'link-recovery'), projectDocuments);
