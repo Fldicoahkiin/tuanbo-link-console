@@ -13,7 +13,7 @@ import { ensureMa2NetworkBridge } from './ma2-bridge-installer';
 import { Ma2NetworkWire } from './ma2-network-wire';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { createMa2Timecode } from './ma2-create';
-import { sameMa2XmlObjects } from './ma2-timecode-xml';
+import { inspectMa2SequenceXml, inspectMa2TimecodeXml, sameMa2XmlObjects } from './ma2-timecode-xml';
 import { readMa2NativeLibrary } from './ma2-native-library';
 
 it.runIf(Boolean(process.env.TBLINK_MA2_HARDWARE_LIBRARY))('实体控台素材结构只读诊断', async () => {
@@ -148,7 +148,7 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     measured[name] = { ms: Math.round(performance.now() - started), commands: traffic.commands - before.commands, bytes: traffic.bytes - before.bytes };
     return value;
   };
-  let created: { sequence: number; page: number } | null = null;
+  let created: { sequence: number; page: number; timecode?: number } | null = null;
   const operations: Array<{ label: string; ms: number; commands: number; received: number }> = [];
   try {
     await raw.connect(process.env.TBLINK_MA2_HARDWARE_USER ?? 'administrator', process.env.TBLINK_MA2_HARDWARE_PASSWORD ?? 'admin');
@@ -177,8 +177,9 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     const points = [{ id: 'p1', name: '探针开场', atMs: 0, cues: ref(0) }, { id: 'p2', name: '探针副歌', atMs: 1000, cues: ref(1) }, { id: 'p3', name: '探针尾声', atMs: 2000, cues: [] }];
     const workspace = await mkdtemp(join(tmpdir(), 'tblink-song-probe-'));
     const service = new Ma2LayoutService(resolve(workspace, 'layouts.json'), () => false, new Ma2ConsoleBackups(resolve(workspace, 'backups.json'), () => false, message => Promise.reject(new Error(message))));
-    const base = { network, expectedSource, projectId: randomUUID(), itemId: 'probe', settings: { layout: 999, name: 'TBLINK', nextSequence: sequence, columns: 8, executorPage: page }, name: '联动探针歌曲' };
+    const base = { network, expectedSource, projectId: randomUUID(), itemId: 'probe', settings: { layout: 999, name: 'TBLINK', nextSequence: sequence, columns: 8, executorPage: page }, name: '联动探针歌曲', timecodeStartMs: 480000 };
     const first = await step('create', () => service.syncSong(connection, bridge, { ...base, requestId: randomUUID(), points }));
+    created = { sequence, page, ...first.binding.timecode ? { timecode: first.binding.timecode.number } : {} };
     // The operator tunes the first Cue's fade on the console; the next sync adopts it into the baseline.
     const tuned = first.binding.points[0]!.cue;
     const marker = `TBLINK_FADE_${randomBytes(16).toString('hex')}:`;
@@ -214,6 +215,16 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
       points: warm.binding.points.map((point, index) => ({ ...points[index]!, cues: index === 0 ? [...ref(0), ...ref(1)] : self(point) })) }, undefined, undefined, { consoleBaseline: combineBaseline, adoptReadback }));
     expect(combined.changed).toBe(true);
     expect(fadeOf(await bridge.request('SEQUENCE', sequence))).toBe('7');
+    // The song's own Timecode show, read back from the console: start, slot, executor track and one Goto per point.
+    const own = combined.binding.timecode!;
+    expect(own).toMatchObject({ offset: 14400, slot: 'TC Slot 2' });
+    const shown = inspectMa2TimecodeXml(await bridge.request('READ', own.number)).timecodes[0]!;
+    const steps = inspectMa2SequenceXml(await bridge.request('SEQUENCE', sequence)).sequences[0]!.cues;
+    expect(shown.attributes).toMatchObject({ offset: '14400', slot: 'TC Slot 2', frame_format: '30 FPS' });
+    expect(shown.tracks.map(track => track.executorAddress.join('.'))).toEqual([`30.1.${combined.binding.executor}`]);
+    expect(shown.tracks[0]!.subtracks[0]!.events.map(event => [event.attributes.time ?? '0', event.cueAddress.join('/')]))
+      .toEqual(combined.binding.points.map(point => [String(Math.round(point.atMs! * 30 / 1000)), `1/${sequence}/${steps.find(cue => Number(cue.number) === Number(point.cue))!.index}`]));
+    console.info(JSON.stringify({ timecode: own, events: shown.tracks[0]!.subtracks[0]!.events.length }));
     await mkdir(resolve('artifacts/ma2-hardware-diagnostics'), { recursive: true });
     await writeFile(resolve('artifacts/ma2-hardware-diagnostics/song-transfer.json'), JSON.stringify({ at: new Date().toISOString(), show: directory.show, version: directory.version, source: source.sequence, sequence, page, backupFile: second.backupFile, measured }, null, 2));
     console.info(JSON.stringify({ sequence, page, backupFile: second.backupFile, measured }));
@@ -225,7 +236,7 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     console.info(JSON.stringify({ operations, measured, slowest }));
     if (created && raw.state === 'connected') {
       const marker = `TBLINK_CLEAN_${randomBytes(16).toString('hex')}:`;
-      const removed = await raw.command(`Lua "gma.cmd('Delete Sequence ${created.sequence} /nc');gma.cmd('Delete Page ${created.page} /nc');gma.echo('${marker}'..tostring(gma.show.getobj.handle('Sequence ${created.sequence}')==nil and gma.show.getobj.handle('Page ${created.page}')==nil))"`, text => ma2ResponseLine(text, marker));
+      const removed = await raw.command(`Lua "gma.cmd('Delete Sequence ${created.sequence} /nc');gma.cmd('Delete Page ${created.page} /nc');${created.timecode ? `gma.cmd('Delete Timecode ${created.timecode} /nc');` : ''}gma.echo('${marker}'..tostring(gma.show.getobj.handle('Sequence ${created.sequence}')==nil and gma.show.getobj.handle('Page ${created.page}')==nil))"`, text => ma2ResponseLine(text, marker));
       expect(removed).toBe('true');
     }
     raw.disconnect();
