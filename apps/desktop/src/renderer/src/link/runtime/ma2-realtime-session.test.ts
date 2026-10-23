@@ -122,6 +122,22 @@ it('同步失败退避重试时同一份本地内容只存档一次，编辑后�
   expect(sync).toHaveBeenCalledTimes(4);
   expect(archive).toHaveBeenCalledTimes(2);
 });
+it('没有起始码的歌在首次同步前按控台节目分配起点，作为可撤销修改写进歌曲，并带着起点同步', async () => {
+  const value = project();
+  value.rundown[0]!.referenceAudio = { assetId: 'audio', relativePath: 'a.wav', sha256: 'a'.repeat(64), durationMs: 120_000 };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  // 控台节目从 600 s 起长 200 s：新歌从 810 s 开始。
+  const ranges = vi.fn().mockResolvedValue({ show: 'Show', entries: [{ target: 1, offset: '18000', length: '6000', slot: 'TC Slot 2', frame: '30 FPS', last: '5940' }] });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync, checkMa2Song: check, renameMa2Object: rename, ma2TimecodeRanges: ranges } });
+  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  await tickMa2SongSync(false);
+  expect(ranges).toHaveBeenCalledExactlyOnceWith({ host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' });
+  expect(useDocumentStore.getState().project!.rundown[0]!.playback?.mtcOffsetMs).toBe(810_000);
+  expect((sync.mock.calls[0]![0] as Ma2SongSyncRequest).timecodeStartMs).toBe(810_000);
+  useDocumentStore.getState().undo();
+  expect(useDocumentStore.getState().project!.rundown[0]!.playback).toBeUndefined();
+});
 it('有本地修改的歌先同步，已确认歌曲的周期复查排在后面', async () => {
   const value = project();
   value.rundown[0]!.lighting!.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9000, name: 'first', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }] };

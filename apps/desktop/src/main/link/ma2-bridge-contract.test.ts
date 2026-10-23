@@ -97,3 +97,12 @@ it('清理旧备份只接受本软件的写前备份文件名，回执只能是�
   wire.response = `tblink_label_${'c'.repeat(32)}`;
   await expect(bridge.request('DISCARD', 1, backup)).rejects.toThrow('回执与请求不一致');
 });
+it('读取时间码节目范围：只接受空请求，回执按 schema 校验', async () => {
+  const bridge = new Ma2OnpcBridge(process.cwd(), () => false);
+  wire.response = JSON.stringify({ show: 'Show', entries: [{ target: 9906, offset: '0', length: '6000', slot: 'TC Slot 1', frame: '30 FPS', last: '5940' }] });
+  await expect(bridge.request('TCRANGES', 1)).resolves.toBe(wire.response);
+  await expect(bridge.request('TCRANGES', 2)).rejects.toThrow('请求格式无效');
+  await expect(bridge.request('TCRANGES', 1, 'x')).rejects.toThrow('请求格式无效');
+  wire.response = JSON.stringify({ show: 'Show', entries: [{ target: 0 }] });
+  await expect(bridge.request('TCRANGES', 1)).rejects.toThrow();
+});
