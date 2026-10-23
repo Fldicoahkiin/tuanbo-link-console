@@ -1,7 +1,9 @@
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { z } from 'zod';
+import { isProjectAssetPath } from '@tb/core/link';
 import { writeFileAtomically } from './atomic-file';
+import type { ChosenPaths } from './chosen-paths';
 import { resolveProjectAssetFiles } from './link-project-service';
 
 const lastProjectRecordSchema = z.object({ version: z.literal(1), projectPath: z.string().min(1).max(4096) }).strict();
@@ -63,6 +65,15 @@ export class ProjectAccess {
   async assetFiles(projectPath: string, relativePaths: readonly string[]): Promise<string[]> {
     this.requireShown(projectPath);
     return resolveProjectAssetFiles(projectPath, relativePaths);
+  }
+
+  /** An import into the shown project reads a file the operator chose, or one of its own assets again. */
+  async requireImportSource(projectPath: string, sourcePath: string, chosen: Pick<ChosenPaths, 'has'>): Promise<void> {
+    this.requireShown(projectPath);
+    if (chosen.has(sourcePath)) return;
+    const asset = relative(dirname(resolve(projectPath)), resolve(sourcePath)).replaceAll('\\', '/');
+    if (!isProjectAssetPath(asset)) throw new Error(`导入文件未经本软件的文件选择或拖放确认，已拒绝：${sourcePath}`);
+    await resolveProjectAssetFiles(projectPath, [asset]);
   }
 }
 

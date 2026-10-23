@@ -131,6 +131,7 @@ import { ExternalProcessManager, WindowsProcessTools, type ExternalApplicationId
 import { LinkProjectService } from './link/link-project-service';
 import { AssetRelinkRequests } from './link/asset-relink-requests';
 import { ProjectAccess } from './link/project-access';
+import { ChosenPaths, requireChosenPrograms } from './link/chosen-paths';
 import { MediaMetadataProbe } from './link/media-metadata-probe';
 import { MediaPreviewService } from './link/media-preview-service';
 import { obsMediaCachePaths } from './link/obs-media-paths';
@@ -495,6 +496,18 @@ function registerIpc(
 ): void {
   const projectAccess = new ProjectAccess(join(app.getPath('userData'), 'link-integrations', 'last-project.json'));
   const assetRelinkRequests = new AssetRelinkRequests({ projects: projectService, access: projectAccess });
+  // Absolute paths the window may hand back: files the operator dropped, picked or chose in a
+  // dialog, and programs a dialog or the detection found. Kept apart so a dropped file is no program.
+  const chosenFiles = new ChosenPaths('文件未经本软件的文件选择或拖放确认');
+  const chosenPrograms = new ChosenPaths('程序位置未经本软件的选择对话框或一键识别确认');
+  // The preload reports the path of each real File the operator dropped or picked; a window cannot
+  // send this message itself, and a File it makes up has no path.
+  ipcMain.removeAllListeners('link:file-chosen');
+  ipcMain.on('link:file-chosen', (event, pathValue: unknown) => {
+    const path = z.string().min(1).max(32_768).safeParse(pathValue);
+    if (mainWindow && event.sender === mainWindow.webContents && event.senderFrame === mainWindow.webContents.mainFrame && path.success) { chosenFiles.choose(path.data); return; }
+    void logger.record({ level: 'warning', category: 'system', message: '拒绝来源不明的文件选择记录' }).catch((error: unknown) => console.error('文件选择记录日志未能保存', error));
+  });
   /** Recovery copies are named by a project the main process approved, or by none (unnamed). */
   const requireApprovedOrUnnamed = (projectPath: string | null): void => { if (projectPath !== null) projectAccess.requireApproved(projectPath); };
   /** A window's playback request names the song or media files of the project it shows. */
@@ -1128,6 +1141,7 @@ function registerIpc(
     await Promise.all((['obs', 'p1', 'ma2', 'ma3d'] as const).map(async (id) => {
       const application = detection.applications[id];
       if (!application?.executablePath || !application.workingDirectory) return;
+      chosenPrograms.choose(application.executablePath);
       await processManager.refresh(id, {
         executablePath: application.executablePath,
         workingDirectory: application.workingDirectory,
@@ -1157,7 +1171,9 @@ function registerIpc(
       properties: ['openFile'],
       filters: [{ name: 'Windows 程序', extensions: ['exe'] }]
     });
-    return result.canceled ? null : result.filePaths[0] ?? null;
+    const path = result.canceled ? null : result.filePaths[0] ?? null;
+    if (path) chosenPrograms.choose(path);
+    return path;
   });
   handle('link:create-project', (_event, nameValue: unknown) => createEmptyLinkProject(linkProjectNameSchema.parse(nameValue)));
   handle('link:pick-open-project', async () => {
@@ -1303,7 +1319,7 @@ function registerIpc(
   });
   handle('link:import-reference-audio', async (_event, payloadValue: unknown) => {
     const payload = linkReferenceAudioImportPayloadSchema.parse(payloadValue);
-    projectAccess.requireShown(payload.projectPath);
+    await projectAccess.requireImportSource(payload.projectPath, payload.sourcePath, chosenFiles);
     return projectService.importReferenceAudio(payload.projectPath, payload.sourcePath, payload.durationMs);
   });
   handle('link:resolve-reference-audio-url', async (_event, payloadValue: unknown) => {
@@ -1314,7 +1330,7 @@ function registerIpc(
   });
   handle('link:import-media-asset', async (_event, payloadValue: unknown) => {
     const payload = linkMediaAssetImportPayloadSchema.parse(payloadValue);
-    projectAccess.requireShown(payload.projectPath);
+    await projectAccess.requireImportSource(payload.projectPath, payload.sourcePath, chosenFiles);
     const requiresProbe = (payload.kind !== 'image' && payload.durationMs === undefined)
       || (payload.kind !== 'audio' && (payload.width === undefined || payload.height === undefined));
     const probed = requiresProbe ? await mediaMetadataProbe.inspect(payload.sourcePath, payload.kind) : {};
@@ -1454,6 +1470,7 @@ function registerIpc(
     const candidate = title.replaceAll('/', '\\');
     const fileStat = await stat(candidate);
     if (!fileStat.isFile()) throw new Error(`P1 当前工程文件不存在：${candidate}`);
+    chosenFiles.choose(candidate);
     return candidate;
   });
   handle('link:p1-pick-project', async () => {
@@ -1462,7 +1479,9 @@ function registerIpc(
       properties: ['openFile'],
       filters: [{ name: 'Hirender P1 音频工程', extensions: ['hia'] }]
     });
-    return result.canceled ? null : result.filePaths[0] ?? null;
+    const path = result.canceled ? null : result.filePaths[0] ?? null;
+    if (path) chosenFiles.choose(path);
+    return path;
   });
   const p1Imports = new Map<string, { senderId: number; controller: AbortController }>();
   handle('link:p1-import-cancel', (event, value: unknown) => {
@@ -1472,7 +1491,7 @@ function registerIpc(
   });
   handle('link:p1-import-project', async (event, payloadValue: unknown) => {
     const payload = linkP1ProjectImportPayloadSchema.parse(payloadValue);
-    projectAccess.requireShown(payload.linkProjectPath);
+    projectAccess.requireShown(payload.linkProjectPath); chosenFiles.require(payload.p1ProjectPath);
     const id = payload.progressId;
     if (id && p1Imports.has(id)) throw new Error('P1 导入任务编号重复');
     const controller = new AbortController();
@@ -1488,12 +1507,12 @@ function registerIpc(
   });
   handle('link:p1-preview-export', (_event, payloadValue: unknown) => {
     const payload = linkP1ProjectExportPreviewPayloadSchema.parse(payloadValue);
-    projectAccess.requireShown(payload.linkProjectPath);
+    projectAccess.requireShown(payload.linkProjectPath); chosenFiles.require(payload.p1ProjectPath);
     return p1ProjectService.previewExport(payload.p1ProjectPath, payload.linkProjectPath, payload.project);
   });
   handle('link:p1-export-project', (_event, payloadValue: unknown) => {
     const payload = linkP1ProjectExportPayloadSchema.parse(payloadValue);
-    projectAccess.requireShown(payload.linkProjectPath);
+    projectAccess.requireShown(payload.linkProjectPath); chosenFiles.require(payload.p1ProjectPath);
     return p1ProjectService.exportProject(
       payload.p1ProjectPath,
       payload.linkProjectPath,
@@ -1512,6 +1531,7 @@ function registerIpc(
     }
     const payload = result.data;
     const profile = payload.profile;
+    requireChosenPrograms(profile, await profileStore.loadProfile(), chosenPrograms);
     if (payload.obsPassword !== undefined) knownSecrets.add(payload.obsPassword);
     try {
       if (payload.obsPassword !== undefined) await profileStore.saveCredential(profile.obs.credentialId, payload.obsPassword);
@@ -1612,6 +1632,7 @@ function registerIpc(
   handle('link:obs-source-apply', async (_event, value: unknown) => {
     const payload = obsSourceApplySchema.parse(value);
     if (payload.projectAsset) await projectAccess.assetFiles(payload.projectAsset.projectPath, [payload.projectAsset.relativePath]);
+    else if (payload.settings.path) chosenFiles.require(payload.settings.path);
     const settings = payload.projectAsset ? { ...payload.settings, path: projectService.resolveMediaAsset(payload.projectAsset.projectPath, payload.projectAsset.relativePath) } : payload.settings;
     return obs.sources.apply(payload.inputName, settings);
   });

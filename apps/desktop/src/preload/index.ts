@@ -310,7 +310,12 @@ const tbLink: LinkDesktopBridgeApi = {
 };
 
 const tbFile: LinkFileBridge = {
-  getPathForFile: (file) => webUtils.getPathForFile(file)
+  // A path exists only for a File the operator dropped or picked; the main process accepts it back.
+  getPathForFile: (file) => {
+    const path = webUtils.getPathForFile(file);
+    if (path) ipcRenderer.send('link:file-chosen', path);
+    return path;
+  }
 };
 
 contextBridge.exposeInMainWorld('tbLink', tbLink);

@@ -2,6 +2,7 @@ import { mkdir, readFile, rmdir, symlink, unlink, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ChosenPaths } from './chosen-paths';
 import { ProjectAccess } from './project-access';
 
 const cleanupFiles: string[] = [];
@@ -69,6 +70,22 @@ async function recordPath(): Promise<string> {
   cleanupFiles.push(path);
   return path;
 }
+
+describe('ProjectAccess.requireImportSource', () => {
+  it('导入只读取操作员选择的文件，或当前工程自己的素材', async () => {
+    const project = await folder(); const outside = await folder(); const projectPath = join(project, 'show.tblink');
+    const access = new ProjectAccess(await recordPath());
+    access.approve(projectPath); await access.show(projectPath);
+    const chosen = new ChosenPaths('文件未经本软件的文件选择或拖放确认');
+    const dropped = join(outside, 'dropped.wav'); chosen.choose(dropped);
+    await access.requireImportSource(projectPath, dropped, chosen);
+    await access.requireImportSource(projectPath, join(project, 'assets', 'reference-media', 'clip.mp4'), chosen);
+    for (const source of [join(outside, 'other.wav'), join(project, 'secret.wav'), join(project, 'assets', 'reference-media', 'notes.txt')]) {
+      await expect(access.requireImportSource(projectPath, source, chosen)).rejects.toThrow('文件未经本软件的文件选择或拖放确认');
+    }
+    await expect(access.requireImportSource(join(outside, 'show.tblink'), dropped, chosen)).rejects.toThrow('当前打开的工程');
+  });
+});
 
 async function folder(): Promise<string> {
   const directory = join(tmpdir(), `tblink-access-${crypto.randomUUID()}`);
