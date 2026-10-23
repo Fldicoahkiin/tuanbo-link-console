@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
@@ -36,15 +36,15 @@ test('真实媒体时钟与 Windows MIDI 回环持续测量', async ({}, info) =
     wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
     wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
     wav.write('data', 36); wav.writeUInt32LE(samples, 40);
-    const audioPath = info.outputPath('clock.wav'); await writeFile(audioPath, wav);
+    await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+    const audioPath = info.outputPath('assets/reference-audio/clock.wav'); await writeFile(audioPath, wav);
     const lighting = createLightingDocument();
     lighting.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#abcdef', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '测量', start: 0, duration: audioSeconds * 1000, timeLock: 'time', muted: false, events: [] }] }];
     const project = createEmptyLinkProject('MTC 独立持续测量'); project.schemaVersion = 2; if (internal) project.playbackSource = 'internal';
     project.rundown.push({ id: 'song', title: '真实媒体时钟', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting,
       playback: { volume: 100, startMs: 0, endMs: audioSeconds * 1000, mtcOffsetMs: offsetMs, endAction: 'stop', shortcut: '' },
-      referenceAudio: { assetId: 'audio', relativePath: 'clock.wav', durationMs: audioSeconds * 1000, sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex') } });
+      referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/clock.wav', durationMs: audioSeconds * 1000, sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex') } });
     const projectPath = info.outputPath('clock.tblink'); await writeFile(projectPath, JSON.stringify(project));
-    if (waveformCached) await page.evaluate(({ projectPath, sha256 }) => window.tbLink.saveWaveformCache({ projectPath, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { projectPath, sha256: project.rundown[0]!.referenceAudio!.sha256 });
     const profile = createDefaultIntegrationProfile();
     profile.midiPortProfiles.push({ id: 'soak-mtc', direction: 'output', portName: outputName });
     profile.internalPlayer = { mtcOutputPortProfileId: 'soak-mtc', audioOutputDeviceId: 'default' };
@@ -83,6 +83,13 @@ test('真实媒体时钟与 Windows MIDI 回环持续测量', async ({}, info) =
       await contents.debugger.sendCommand('Performance.enable');
     });
     await application.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, projectPath);
+    // The cache is written for the project the window shows; showing it before the reload would reopen it as the last project.
+    if (waveformCached) {
+      await page.getByRole('button', { name: '打开工程', exact: true }).waitFor();
+      await page.evaluate(() => window.tbLink.pickProjectDocument());
+      await page.evaluate(path => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: path, projectId: null }), projectPath);
+      await page.evaluate(({ projectPath, sha256 }) => window.tbLink.saveWaveformCache({ projectPath, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { projectPath, sha256: project.rundown[0]!.referenceAudio!.sha256 });
+    }
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     if (!internal) {
       await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();

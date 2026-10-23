@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
@@ -9,11 +9,11 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
   test.setTimeout(120000);
   const wav = Buffer.alloc(44 + 24000 * 10 * 2);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('reference.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/reference.wav'), wav);
   const lighting = createLightingDocument(); lighting.outputMode = 'network';
   lighting.tracks = [{ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [{ id: 'clip', name: '整曲', start: 0, duration: 10000, timeLock: 'time', muted: false, events: Array.from({ length: 40 }, (_, i) => ({ id: `point-${i}`, kind: 'empty-cue', label: `第 ${i + 1} 段`, at: i * 200 + 100, runMode: 'independent' })) }] }];
   const source = { show: '歌曲同步验收', generation: 'fixture', version: '3.7.0.5' };
-  const project = parseLinkProject({ ...createEmptyLinkProject('歌曲同步验收'), schemaVersion: 2, ma2MaterialLibrary: { version: 1, source: '192.0.2.1:30000', library: { directory: { ...source, entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] } }, rundown: [{ id: 'song', title: '新歌', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting, referenceAudio: { assetId: 'audio', relativePath: 'reference.wav', durationMs: 10000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('歌曲同步验收'), schemaVersion: 2, ma2MaterialLibrary: { version: 1, source: '192.0.2.1:30000', library: { directory: { ...source, entries: [] }, readAt: new Date().toISOString(), sequences: [], fixtureUsage: [], errors: [] } }, rundown: [{ id: 'song', title: '新歌', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting, referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/reference.wav', durationMs: 10000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
   const file = info.outputPath('song.tblink'); await writeFile(file, JSON.stringify(project));
   const savedProject = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8')));
   const saved = async () => (await savedProject()).rundown[0]!.lighting!;

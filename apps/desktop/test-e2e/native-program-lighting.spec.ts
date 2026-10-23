@@ -1,7 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createServer, type Server, type Socket } from 'node:net';
 import { createHash } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
@@ -33,14 +33,14 @@ for (const failSecond of [false, true]) test(`正式原生灯光后台调度：$
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
   wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(192000, 28);
   wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('silence.wav'), wav);
+  await mkdir(info.outputPath('assets', 'reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets', 'reference-audio', 'silence.wav'), wav);
   const points = [600, 1600, 2800, 5500, 8500];
   const track = lightingTrackSchema.parse({ id: 'track', name: '后台灯光', kind: 'ma2', color: '#68c9ed', group: 'effect-canvas',
     muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '后台灯光', start: 0,
     duration: 10000, timeLock: 'time', muted: false, events: points.map((at, index) => ({ id: `cue-${index}`, at, kind: 'ma2', action: 'goto',
       sequence: 168, cue: `${index + 1}.000`, executor: '', label: `灯光 ${index + 1}` })) }] });
   const project = parseLinkProject({ ...createEmptyLinkProject('原生后台灯光验收'), schemaVersion: 2, playbackSource: 'internal', obsOutputMode: 'scenes',
-    rundown: [{ id: 'song', title: '后台灯光', referenceAudio: { assetId: 'audio', relativePath: 'silence.wav', durationMs: 10000,
+    rundown: [{ id: 'song', title: '后台灯光', referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/silence.wav', durationMs: 10000,
       sha256: createHash('sha256').update(wav).digest('hex') }, lighting: { ...createLightingDocument(), outputMode: 'network', tracks: [track] } }] });
   const file = info.outputPath('project.tblink'); await writeFile(file, JSON.stringify(project));
   const profile = createDefaultIntegrationProfile(); profile.obs.autoConnectOnLaunch = false;

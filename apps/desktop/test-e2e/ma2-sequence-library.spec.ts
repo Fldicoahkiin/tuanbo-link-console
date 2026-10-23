@@ -1,4 +1,4 @@
-import { writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { test, expect, _electron as electron } from '@playwright/test';
@@ -13,8 +13,8 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
   lighting.ma2Library = { show: '界面布局样本（非现场读取）', readAt: '2026-09-26T00:00:00.000Z', sequences: Array.from({ length: 1000 }, (_, index) => ({ sequence: index + 1, name: index % 2 ? `原名称 dance-${index + 1}` : `单步灯光 ${index + 1}`, cues: Array.from({ length: index % 2 ? 8 : 1 }, (_, step) => ({ index: step, number: `${step + 1}.000`, name: step===0 ? '控台原名－前区面光暖白完整名称' : `原步骤 ${step + 1}` })) })) };
   const directory = { show: lighting.ma2Library.show, generation: 'test', version: '3.7.0.5', entries: lighting.ma2Library.sequences.map(sequence => ({ target: sequence.sequence, name: sequence.name ?? '' })) };
   project.ma2MaterialLibrary={version:1,source:'192.0.2.1:30000',library:{directory,readAt:lighting.ma2Library.readAt,sequences:lighting.ma2Library.sequences,fixtureUsage:[],errors:[]}};
-  const audio=Buffer.alloc(44+48000*10*2);audio.write('RIFF');audio.writeUInt32LE(audio.length-8,4);audio.write('WAVEfmt ',8);audio.writeUInt32LE(16,16);audio.writeUInt16LE(1,20);audio.writeUInt16LE(1,22);audio.writeUInt32LE(48000,24);audio.writeUInt32LE(96000,28);audio.writeUInt16LE(2,32);audio.writeUInt16LE(16,34);audio.write('data',36);audio.writeUInt32LE(audio.length-44,40);await writeFile(info.outputPath('audio.wav'),audio);
-  project.rundown = [{ id: 'sample', title: '界面样本节目', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], lighting,referenceAudio:{assetId:'test-audio',relativePath:'audio.wav',durationMs:10000,sha256:createHash('sha256').update(audio).digest('hex')} }];
+  const audio=Buffer.alloc(44+48000*10*2);audio.write('RIFF');audio.writeUInt32LE(audio.length-8,4);audio.write('WAVEfmt ',8);audio.writeUInt32LE(16,16);audio.writeUInt16LE(1,20);audio.writeUInt16LE(1,22);audio.writeUInt32LE(48000,24);audio.writeUInt32LE(96000,28);audio.writeUInt16LE(2,32);audio.writeUInt16LE(16,34);audio.write('data',36);audio.writeUInt32LE(audio.length-44,40);await mkdir(info.outputPath('assets/reference-audio'),{recursive:true});await writeFile(info.outputPath('assets/reference-audio/audio.wav'),audio);
+  project.rundown = [{ id: 'sample', title: '界面样本节目', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], lighting,referenceAudio:{assetId:'test-audio',relativePath:'assets/reference-audio/audio.wav',durationMs:10000,sha256:createHash('sha256').update(audio).digest('hex')} }];
   const file = info.outputPath('library.tblink');
   await writeFile(file, JSON.stringify(parseLinkProject(project)));
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;

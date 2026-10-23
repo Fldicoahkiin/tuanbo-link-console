@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
@@ -20,8 +20,8 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
   wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
   wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('song.wav'), wav);
-  const project = parseLinkProject({ ...createEmptyLinkProject('安全暂存桌面验收'), schemaVersion: 2, playbackSource: 'p1', ma2MaterialLibrary: { version: 1, source: '192.0.2.1:30000', library }, rundown: [{ id: 'song', title: '暂存歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'song.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 60000 } }] });
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/song.wav'), wav);
+  const project = parseLinkProject({ ...createEmptyLinkProject('安全暂存桌面验收'), schemaVersion: 2, playbackSource: 'p1', ma2MaterialLibrary: { version: 1, source: '192.0.2.1:30000', library }, rundown: [{ id: 'song', title: '暂存歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/song.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 60000 } }] });
   const file = info.outputPath('staged.tblink');
   await writeFile(file, JSON.stringify(importMa2TimecodeCommand('song', convertMa2Timecode(xml, [sequence], 9902)).execute(project)));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });

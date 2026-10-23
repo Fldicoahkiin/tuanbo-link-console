@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, ma2PlaybackRequestSchema, parseLinkProject } from '@tb/schema';
@@ -12,9 +12,9 @@ for (const scenario of ['connected', 'disconnected', 'empty'] as const) test(`�
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
   wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(96000, 28);
   wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('song.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/song.wav'), wav);
   const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: 'effect-canvas', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 6000, timeLock: 'time', muted: false, events: empty ? [{ id: 'empty', at: 400, kind: 'empty-cue', label: '' }] : [400, 2200, 4200].map((at, i) => ({ id: `cue-${i}`, at, kind: 'ma2', action: 'goto', sequence: 168, cue: `${i + 1}.000`, executor: '', label: `灯光 ${i + 1}` })) }] });
-  const project = parseLinkProject({ ...createEmptyLinkProject('播放驱动灯光验收'), schemaVersion: 2, playbackSource: 'p1', rundown: [{ id: 'song', title: '灯光播放回归', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'song.wav', durationMs: 6000, sha256: createHash('sha256').update(wav).digest('hex') }, lighting: { ...createLightingDocument(), outputMode: connected || empty ? 'timecode' : 'network', tracks: [track] } }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('播放驱动灯光验收'), schemaVersion: 2, playbackSource: 'p1', rundown: [{ id: 'song', title: '灯光播放回归', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/song.wav', durationMs: 6000, sha256: createHash('sha256').update(wav).digest('hex') }, lighting: { ...createLightingDocument(), outputMode: connected || empty ? 'timecode' : 'network', tracks: [track] } }] });
   const file = info.outputPath('playback.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const calls: { cue: string; action: string }[] = [];

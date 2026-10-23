@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingUserLibrary, parseLinkProject, ma2AuditionRequestSchema } from '@tb/schema';
@@ -14,8 +14,8 @@ test(`灯光工作台 ${playbackSource} 效果绑定、拖放打点与保存`, a
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   for (let i = 0; i < 48000 * 12; i++) wav.writeInt16LE(Math.round(Math.sin(i / 48000 * 440 * Math.PI * 2) * 16000 * Math.exp(-(i % 24000) / 5000)), 44 + i * 2);
   const sha256 = createHash('sha256').update(wav).digest('hex');
-  await writeFile(info.outputPath('dance.wav'), wav);
-  const project = parseLinkProject({ ...createEmptyLinkProject('灯光工作台验收'), schemaVersion: 2, playbackSource, ma2MaterialLibrary: { version: 2, source: 'test', userLibrary: createLightingUserLibrary(), library: { directory: { show: '测试控台', generation: 'test', version: '3.9.60.74', entries: [] }, readAt: new Date().toISOString(), sequences: [{ sequence: 168, name: '开场', cues: [{ index: 0, number: '1.250', name: '蓝色扫光' }] }], fixtureUsage: [], errors: [] } }, rundown: [{ id: 'dance', title: '力量舞蹈片段', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'dance.wav', sha256, durationMs: 12000 } }] });
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/dance.wav'), wav);
+  const project = parseLinkProject({ ...createEmptyLinkProject('灯光工作台验收'), schemaVersion: 2, playbackSource, ma2MaterialLibrary: { version: 2, source: 'test', userLibrary: createLightingUserLibrary(), library: { directory: { show: '测试控台', generation: 'test', version: '3.9.60.74', entries: [] }, readAt: new Date().toISOString(), sequences: [{ sequence: 168, name: '开场', cues: [{ index: 0, number: '1.250', name: '蓝色扫光' }] }], fixtureUsage: [], errors: [] } }, rundown: [{ id: 'dance', title: '力量舞蹈片段', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/dance.wav', sha256, durationMs: 12000 } }] });
   const file = info.outputPath('lighting.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   try {
@@ -120,11 +120,11 @@ test('序列池素材无需执行器，编辑与重开保留编号，点击 Cue 
   wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
   wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(96000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('pool.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/pool.wav'), wav);
   const file = info.outputPath('pool.tblink');
   await writeFile(file, JSON.stringify(parseLinkProject({ ...createEmptyLinkProject('序列池编辑'), schemaVersion: 2, playbackSource: 'internal',
     ma2MaterialLibrary: { version: 2, source: 'test', userLibrary: createLightingUserLibrary(), library: { directory: { show: '测试控台', generation: 'test', version: '3.9.60.74', entries: [] }, readAt: new Date().toISOString(), sequences: [{ sequence: 168, name: '序列池开场', cues: [{ index: 0, number: '1.250', name: '序列池灯光' }] }], fixtureUsage: [], errors: [] } },
-    rundown: [{ id: 'pool-song', title: '序列池节目', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'pool.wav', durationMs: 4000, sha256: createHash('sha256').update(wav).digest('hex') } }] })));
+    rundown: [{ id: 'pool-song', title: '序列池节目', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/pool.wav', durationMs: 4000, sha256: createHash('sha256').update(wav).digest('hex') } }] })));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   try {
     const page = await app.firstWindow(); const calls: unknown[] = [];

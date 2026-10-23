@@ -1401,7 +1401,7 @@ test('播放预检阻断直接展示节目、原因和处理办法，紧凑窗�
   const projectPath = testInfo.outputPath('notice.tblink');
   await createAudioFixture(audioPath);
   const project = parseLinkProject({ ...createEmptyLinkProject('播放诊断'), playbackSource: 'internal', obsOutputMode: 'scenes', rundown: [{
-    id: 'song', title: '387..MP4', referenceAudio: { assetId: 'audio', relativePath: 'missing.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 4000 },
+    id: 'song', title: '387..MP4', referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/missing.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 4000 },
     cues: [{ id: 'cue', name: '显示画面', durationMs: 1000, timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, actions: [{ id: 'source', label: '显示来源 · 显示器采集', kind: 'obs.setSceneItemEnabled', sceneName: '测试场景', sourceName: '显示器采集', enabled: true }] }]
   }] });
   await writeFile(projectPath, JSON.stringify(project));
@@ -1420,6 +1420,8 @@ test('播放预检阻断直接展示节目、原因和处理办法，紧凑窗�
     BrowserWindow.getAllWindows()[0]!.webContents.send('link:obs-status', status);
   }, projectPath);
   await page.getByRole('button', { name: '打开工程', exact: true }).click();
+  // The song audio is deliberately missing, so opening the project first lists it as missing.
+  await page.getByRole('dialog', { name: '找回缺失素材' }).getByRole('button', { name: '稍后处理', exact: true }).click();
   await page.locator('.player-buttons').getByRole('button', { name: '播放', exact: true }).click();
   await expect(page.locator('.player-transport')).toHaveClass(/status-error/);
   const diagnostics = page.locator('.player-diagnostics');
@@ -1446,13 +1448,14 @@ test('播放预检阻断直接展示节目、原因和处理办法，紧凑窗�
 });
 
 test('编辑器共用正式播放器，打点和菜单切换不中断，暂停定位重新激活 OBS', async ({}, testInfo) => {
-  const audioPath = testInfo.outputPath('transport.wav');
+  const audioPath = testInfo.outputPath('assets/reference-audio/transport.wav');
   const projectPath = testInfo.outputPath('transport.tblink');
+  await mkdir(dirname(audioPath), { recursive: true });
   await createAudioFixture(audioPath, 440, 30);
   const lighting = createLightingDocument();
   lighting.tracks = [{ id: 'light', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 30000, timeLock: 'time', muted: false, events: [] }] }];
   const project = parseLinkProject({ ...createEmptyLinkProject('共用播放验收'), schemaVersion: 2, playbackSource: 'internal', obsOutputMode: 'scenes', rundown: [{ id: 'song', title: '共用歌曲', lighting,
-    referenceAudio: { assetId: 'audio', relativePath: 'transport.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 30000 },
+    referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/transport.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 30000 },
     cues: [{ id: 'scene', name: '正式画面', timecode: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, actions: [{ id: 'action', kind: 'obs.setProgramScene', label: '切换正式画面', sceneName: '测试场景' }] }] }] });
   await writeFile(projectPath, JSON.stringify(project));
   const profile = createDefaultIntegrationProfile();
@@ -2863,8 +2866,9 @@ test('独立素材场景同步、场景长度拖动与低功率切换', async ({
 });
 
 test('音乐自然结束补齐最后轮询间隔的 Cue，手动跳到结尾只释放音符', async ({}, testInfo) => {
-  const audioPath = testInfo.outputPath('tail.wav');
+  const audioPath = testInfo.outputPath('assets/reference-audio/tail.wav');
   const projectPath = testInfo.outputPath('tail.tblink');
+  await mkdir(dirname(audioPath), { recursive: true });
   await createAudioFixture(audioPath);
   const lighting = createLightingDocument(); lighting.outputMode = 'direct';
   lighting.tracks = [{ id: 'lighting', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: 'lighting-output', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 4200, muted: false, timeLock: 'time', events: [
@@ -2874,7 +2878,7 @@ test('音乐自然结束补齐最后轮询间隔的 Cue，手动跳到结尾只�
   ] }] }];
   const project = createEmptyLinkProject('结束边界'); project.schemaVersion = 2;
   project.rundown.push({ id: 'song', title: '结尾验收', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting,
-    referenceAudio: { assetId: 'audio', relativePath: 'tail.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 4000 } });
+    referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/tail.wav', sha256: createHash('sha256').update(await readFile(audioPath)).digest('hex'), durationMs: 4000 } });
   await writeFile(projectPath, JSON.stringify(project));
   const profile = createDefaultIntegrationProfile();
   profile.midiPortProfiles.find((port) => port.id === 'lighting-output')!.portName = 'Tail Test';

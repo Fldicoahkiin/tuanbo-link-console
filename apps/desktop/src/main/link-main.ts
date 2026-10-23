@@ -1,8 +1,8 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
-import { projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema } from '@tb/schema';
+import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
 import { ma2SongCheckRequestSchema, ma2SongSyncRequestSchema } from '@tb/schema';
-import { materialSceneTargets } from '@tb/core/link';
+import { materialSceneTargets, projectFileReferences } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -497,6 +497,11 @@ function registerIpc(
   const assetRelinkRequests = new AssetRelinkRequests({ projects: projectService, access: projectAccess });
   /** Recovery copies are named by a project the main process approved, or by none (unnamed). */
   const requireApprovedOrUnnamed = (projectPath: string | null): void => { if (projectPath !== null) projectAccess.requireApproved(projectPath); };
+  /** A window's playback request names the song or media files of the project it shows. */
+  const checkObsFiles = async (request: NativeObsPrepare): Promise<void> => {
+    await projectAccess.assetFiles(request.projectPath, [request.snapshot, request.nextFiles?.snapshot].flatMap(snapshot => snapshot
+      ? [...snapshot.assets.map(asset => asset.relativePath), ...snapshot.item.referenceAudio ? [snapshot.item.referenceAudio.relativePath] : []] : []));
+  };
   const nativeSeek = new ObsNativeSeek();
   const programObsListeners = new Set<(status: import('@tb/schema').NativeObsStatus) => void>();
   const obsPreload = new NativeObsPreloadPool({
@@ -534,9 +539,9 @@ function registerIpc(
       .catch((error: unknown) => console.error('后台画面日志写入失败', error)); }
   });
   const obsRequests = new NativeObsRequests(nativeObs, value => authorizeProduct('link:native-obs-prepare', value));
-  handle('link:native-obs-preload', (_event, value: unknown) => obsPreload.preload(value), 'listener');
+  handle('link:native-obs-preload', (_event, value: unknown) => obsPreload.preload(value, checkObsFiles), 'listener');
   handle('link:native-obs-preload-cancel', (_event, value: import('@tb/schema').NativeObsStop) => obsPreload.cancel(value));
-  handle('link:native-obs-prepare', (_event, value: unknown) => obsRequests.prepare(value), 'listener');
+  handle('link:native-obs-prepare', (_event, value: unknown) => obsRequests.prepare(value, checkObsFiles), 'listener');
   handle('link:native-obs-stop', (_event, value: unknown) => obsRequests.stop(value));
   handle('link:native-obs-status', () => nativeObs?.status ?? null);
   obs.subscribe(state => { if (state.status !== 'connected') {
@@ -601,7 +606,9 @@ function registerIpc(
   });
   handle('link:native-player-status', () => nativePlayer?.status ?? null);
   const playbackRequests = new NativePlaybackRequests(player, (channel, value) => authorizeProduct(channel, value));
-  handle('link:native-player-prepare', (_event, value: unknown) => playbackRequests.prepare(value), 'listener');
+  handle('link:native-player-prepare', (_event, value: unknown) => playbackRequests.prepare(value, async request => {
+    await projectAccess.assetFiles(request.projectPath, [request.snapshot, request.nextSnapshot].flatMap(snapshot => snapshot ? [snapshot.audio.relativePath] : []));
+  }), 'listener');
   handle('link:native-player-control', (_event, value: unknown) => playbackRequests.control(value), 'listener');
   const enforcement = z.literal('required').parse(licenseConfig.enforcement);
   const localTestAccess = __TBLINK_LOCAL_TEST_ACCESS__ && localTestAccessEnabled(app.isPackaged,
@@ -825,7 +832,9 @@ function registerIpc(
   // Session registration captures cancellation synchronously; output adapters
   // validate and authorize every actual audio, OBS, MIDI and lighting request.
   handle('link:native-program-open', async (_event, value: unknown) => {
-    const attachment = await nativeProgram!.open(value);
+    const attachment = await nativeProgram!.open(value, async (projectPath, project) => {
+      await projectAccess.assetFiles(projectPath, projectFileReferences(project).map(file => file.relativePath));
+    });
     if (attachment !== 'opened') await logger.record({ level: 'warning', category: 'state', device: '正式播放器',
       message: `重新加载的界面已接管后台播放的节目${attachment === 'outdated' ? '；界面工程与播放中的版本不同，停止后按界面工程重新准备' : ''}` });
     return attachment;
@@ -867,6 +876,7 @@ function registerIpc(
   });
   handle('link:ma2-catalog', async (event, value: unknown) => {
     const request = ma2CatalogRequestSchema.parse(value);
+    if (request.projectPath) projectAccess.requireShown(request.projectPath);
     if (runtimeActive) throw new Error('请停止播放后扫描控台');
     const task = beginMa2Read(event, request.progressId);
     try {
@@ -886,6 +896,7 @@ function registerIpc(
   });
   handle('link:ma2-effect-library', async (event, value: unknown) => {
     const request = ma2CatalogRequestSchema.parse(value);
+    if (request.projectPath) projectAccess.requireShown(request.projectPath);
     const task = beginMa2Read(event, request.progressId);
     try {
       await ma2NetworkReady;
@@ -908,14 +919,14 @@ function registerIpc(
   });
   handle('link:ma2-cue-delete-prepare', async (event,value:unknown) => {
     if (ma2Reads.size) throw new Error('请等待当前控台读取结束');
-    const request = ma2CueDeletePrepareSchema.parse(value); const task = beginMa2Read(event,request.progressId);
+    const request = ma2CueDeletePrepareSchema.parse(value); projectAccess.requireShown(request.projectPath); const task = beginMa2Read(event,request.progressId);
     try { return await ma2Network.prepareCueDeletion(request,task.report); }
     catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`空 Cue 删除清单核对失败：${String(error)}`,result:'failed'}); throw error; }
     finally { task.finish(); }
   });
   handle('link:ma2-cue-delete-commit', async (event,value:unknown) => {
     if (ma2Reads.size) throw new Error('请等待当前控台读取结束');
-    const request = ma2CueDeleteCommitSchema.parse(value); const task = beginMa2Read(event,request.progressId);
+    const request = ma2CueDeleteCommitSchema.parse(value); projectAccess.requireShown(request.projectPath); const task = beginMa2Read(event,request.progressId);
     try {
       const result = await ma2Network.commitCueDeletion(request,task.report);
       await logger.record({level:result.error?'error':'info',category:'device',device:'MA2',message:`空 Cue 删除已确认 ${result.deleted.length} 项；备份 ${result.backups.join('；')}；${result.error??'回读通过'}`,result:result.error?'failed':'succeeded'});
@@ -1265,10 +1276,13 @@ function registerIpc(
   });
   const archiveSettings = new ProjectArchiveSettingsStore(join(app.getPath('userData'), 'link-integrations', 'archive-settings.json'), join(app.getPath('documents'), '团播联动台', '存档'));
   // A failed trim leaves the extra archive in place and is logged; it never blocks the sync that archived.
-  handle('link:project-archives', (_event, payload: unknown) => projectArchives(payload, projectDocuments, archiveSettings, path => shell.showItemInFolder(path), async path => {
-    try { await shell.trashItem(path); return true; }
-    catch (error) { await logger.record({ level: 'warning', category: 'system', message: '自动存档超出保留数量，移到回收站未完成', details: { path, error: error instanceof Error ? error.message : String(error) } }); return false; }
-  }));
+  handle('link:project-archives', (_event, payload: unknown) => {
+    projectAccess.requireShown(projectArchiveRequestSchema.parse(payload).projectPath);
+    return projectArchives(payload, projectDocuments, archiveSettings, path => shell.showItemInFolder(path), async path => {
+      try { await shell.trashItem(path); return true; }
+      catch (error) { await logger.record({ level: 'warning', category: 'system', message: '自动存档超出保留数量，移到回收站未完成', details: { path, error: error instanceof Error ? error.message : String(error) } }); return false; }
+    });
+  });
   handle('link:project-archive-settings', async (_event, payload: unknown) => {
     const request = projectArchiveSettingsActionSchema.parse(payload);
     const settings = await archiveSettings.read();
@@ -1289,15 +1303,18 @@ function registerIpc(
   });
   handle('link:import-reference-audio', async (_event, payloadValue: unknown) => {
     const payload = linkReferenceAudioImportPayloadSchema.parse(payloadValue);
+    projectAccess.requireShown(payload.projectPath);
     return projectService.importReferenceAudio(payload.projectPath, payload.sourcePath, payload.durationMs);
   });
-  handle('link:resolve-reference-audio-url', (_event, payloadValue: unknown) => {
+  handle('link:resolve-reference-audio-url', async (_event, payloadValue: unknown) => {
     const payload = linkReferenceAudioResolvePayloadSchema.parse(payloadValue);
+    await projectAccess.assetFiles(payload.projectPath, [payload.relativePath]);
     const path = projectService.resolveReferenceAudio(payload.projectPath, payload.relativePath);
     return createAssetUrl(path);
   });
   handle('link:import-media-asset', async (_event, payloadValue: unknown) => {
     const payload = linkMediaAssetImportPayloadSchema.parse(payloadValue);
+    projectAccess.requireShown(payload.projectPath);
     const requiresProbe = (payload.kind !== 'image' && payload.durationMs === undefined)
       || (payload.kind !== 'audio' && (payload.width === undefined || payload.height === undefined));
     const probed = requiresProbe ? await mediaMetadataProbe.inspect(payload.sourcePath, payload.kind) : {};
@@ -1310,12 +1327,14 @@ function registerIpc(
     });
     return asset;
   });
-  handle('link:resolve-media-asset-url', (_event, payloadValue: unknown) => {
+  handle('link:resolve-media-asset-url', async (_event, payloadValue: unknown) => {
     const payload = linkMediaAssetResolvePayloadSchema.parse(payloadValue);
+    await projectAccess.assetFiles(payload.projectPath, [payload.relativePath]);
     return createAssetUrl(projectService.resolveMediaAsset(payload.projectPath, payload.relativePath));
   });
   handle('link:ensure-media-preview-url', async (_event, payloadValue: unknown) => {
     const payload = linkMediaPreviewPayloadSchema.parse(payloadValue);
+    await projectAccess.assetFiles(payload.projectPath, [payload.relativePath]);
     const path = payload.kind === 'video'
       ? await mediaPreviewService.ensureVideoPreview(payload.projectPath, payload.relativePath, payload.sha256)
       : projectService.resolveMediaAsset(payload.projectPath, payload.relativePath);
@@ -1324,11 +1343,13 @@ function registerIpc(
   handle('link:ensure-media-thumbnail-url', async (_event, payloadValue: unknown) => {
     const payload = linkMediaPreviewPayloadSchema.strict().parse(payloadValue);
     if (payload.kind === 'audio') throw new Error('音频素材使用类型图标');
+    await projectAccess.assetFiles(payload.projectPath, [payload.relativePath]);
     return createAssetUrl(await mediaPreviewService.ensureThumbnail(payload.projectPath, payload.relativePath, payload.sha256));
   });
   handle('link:ensure-media-audio-url', async (_event, payloadValue: unknown) => {
     const payload = linkMediaPreviewPayloadSchema.parse(payloadValue);
     if (payload.kind === 'image') throw new Error('图片素材不包含音轨');
+    await projectAccess.assetFiles(payload.projectPath, [payload.relativePath]);
     return createAssetUrl(await mediaPreviewService.ensureAudioPreview(payload.projectPath, payload.relativePath, payload.sha256));
   });
   const waveformService = new WaveformService(projectService);
@@ -1345,8 +1366,10 @@ function registerIpc(
     if (job.state === 'failed') void logger.record({ level: 'error', category: 'device', device: '音乐识别', message: job.message, result: 'failed' }).catch((error: unknown) => console.error('音乐识别日志保存失败', error));
   });
   handle('link:automatic-music-status', () => automaticMusic!.status());
-  handle('link:automatic-music-start', (_event, value: unknown) => {
-    return automaticMusic!.start(automaticMusicRequestSchema.parse(value));
+  handle('link:automatic-music-start', async (_event, value: unknown) => {
+    const request = automaticMusicRequestSchema.parse(value);
+    await projectAccess.assetFiles(request.projectPath, [request.source.relativePath]);
+    return automaticMusic!.start(request);
   });
   handle('link:automatic-music-control', (_event, value: unknown) => {
     const request = automaticMusicControlSchema.parse(value);
@@ -1355,43 +1378,55 @@ function registerIpc(
   });
   app.once('before-quit', () => musicAnalysis.close());
   musicMonitor = new MusicMonitorService(app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe') : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe'), projectService, obs, error => { void logger.record({ level: 'error', category: 'device', device: '编排监听', message: error.message, result: 'failed' }).catch((failure: unknown) => console.error('监听日志保存失败', failure)); }, status => sendToRenderer('link:music-monitor-status', status));
-  handle('link:start-music-monitor', (_event, value: unknown) => musicMonitor!.start(musicMonitorRequestSchema.parse(value)));
+  handle('link:start-music-monitor', async (_event, value: unknown) => {
+    const request = musicMonitorRequestSchema.parse(value);
+    await projectAccess.assetFiles(request.projectPath, [request.source.relativePath]);
+    return musicMonitor!.start(request);
+  });
   handle('link:stop-music-monitor', () => musicMonitor!.stop());
-  handle('link:analyze-music', (_event, value: unknown) => {
+  handle('link:analyze-music', async (_event, value: unknown) => {
     if (runtimeActive) throw new Error('请停止正式播放后分析音乐');
     const request = musicAnalysisRequestSchema.parse(value);
+    await projectAccess.assetFiles(request.projectPath, [request.source.relativePath]);
     return musicAnalysis.analyze(request.taskId, request.projectPath, request.source);
   });
   handle('link:cancel-music-analysis', (_event, value: unknown) => { musicAnalysis.cancel(musicAnalysisControlSchema.parse(value).taskId); });
-  handle('link:analyze-audio-beats', (_event, value: unknown) => {
+  handle('link:analyze-audio-beats', async (_event, value: unknown) => {
     const payload = audioAnalysisRequestSchema.parse(value);
+    await projectAccess.assetFiles(payload.projectPath, [payload.source.relativePath]);
     return audioEditService.analyze(payload.projectPath, payload.source);
   });
-  handle('link:render-audio-segments', (_event, value: unknown) => {
+  handle('link:render-audio-segments', async (_event, value: unknown) => {
     const payload = audioRenderRequestSchema.parse(value);
     if (runtimeActive) throw new Error('请停止播放后编辑音频');
+    await projectAccess.assetFiles(payload.projectPath, [payload.source, ...(payload.tracks ?? []).map(track => track.source)].map(source => source.relativePath));
     return payload.tracks ? audioEditService.mix(payload.projectPath, payload.tracks) : audioEditService.render(payload.projectPath, payload.source, payload.segments);
   });
   handle('link:generate-waveform', (_event, payloadValue: unknown) => {
     const payload = linkWaveformGeneratePayloadSchema.parse(payloadValue);
+    projectAccess.requireShown(payload.projectPath);
     const sourcePath = assetTokens.get(new URL(payload.url).pathname.slice(1));
     if (!sourcePath) throw new Error('波形素材链接已失效，请重新打开节目');
     return waveformService.ensure(payload.projectPath, sourcePath, payload.sha256, payload.durationMs);
   });
   handle('link:load-waveform-cache', (_event, payloadValue: unknown) => {
     const payload = linkWaveformCachePayloadSchema.parse(payloadValue);
+    projectAccess.requireShown(payload.projectPath);
     return projectService.loadWaveformCache(payload.projectPath, payload.sha256);
   });
   handle('link:save-waveform-cache', (_event, payloadValue: unknown) => {
     const payload = linkWaveformCacheSavePayloadSchema.parse(payloadValue);
+    projectAccess.requireShown(payload.projectPath);
     return projectService.saveWaveformCache(payload.projectPath, payload.sha256, payload.peaks);
   });
-  handle('link:inspect-project-assets', (_event, pathValue: unknown, projectValue: unknown) => {
-    const path = linkFilePathSchema.parse(pathValue);
-    return projectService.inspectAssets(path, parseLinkProject(projectValue));
+  handle('link:inspect-project-assets', async (_event, pathValue: unknown, projectValue: unknown) => {
+    const path = linkFilePathSchema.parse(pathValue); const project = parseLinkProject(projectValue);
+    await projectAccess.assetFiles(path, projectFileReferences(project).map(file => file.relativePath));
+    return projectService.inspectAssets(path, project);
   });
-  handle('link:inspect-media-assets', (_event, value: unknown) => {
+  handle('link:inspect-media-assets', async (_event, value: unknown) => {
     const payload = linkMediaInspectionPayloadSchema.parse(value);
+    await projectAccess.assetFiles(payload.projectPath, payload.assets.map(asset => asset.relativePath));
     return projectService.inspectMediaAssets(payload.projectPath, payload.assets);
   });
   handle('link:find-missing-asset-files', (_event, value: unknown) => assetRelinkRequests.findMissing(linkProjectAssetFilesPayloadSchema.parse(value)));
@@ -1437,6 +1472,7 @@ function registerIpc(
   });
   handle('link:p1-import-project', async (event, payloadValue: unknown) => {
     const payload = linkP1ProjectImportPayloadSchema.parse(payloadValue);
+    projectAccess.requireShown(payload.linkProjectPath);
     const id = payload.progressId;
     if (id && p1Imports.has(id)) throw new Error('P1 导入任务编号重复');
     const controller = new AbortController();
@@ -1452,10 +1488,12 @@ function registerIpc(
   });
   handle('link:p1-preview-export', (_event, payloadValue: unknown) => {
     const payload = linkP1ProjectExportPreviewPayloadSchema.parse(payloadValue);
+    projectAccess.requireShown(payload.linkProjectPath);
     return p1ProjectService.previewExport(payload.p1ProjectPath, payload.linkProjectPath, payload.project);
   });
   handle('link:p1-export-project', (_event, payloadValue: unknown) => {
     const payload = linkP1ProjectExportPayloadSchema.parse(payloadValue);
+    projectAccess.requireShown(payload.linkProjectPath);
     return p1ProjectService.exportProject(
       payload.p1ProjectPath,
       payload.linkProjectPath,
@@ -1548,6 +1586,7 @@ function registerIpc(
     const path = linkFilePathSchema.parse(pathValue); const project = parseLinkProject(projectValue);
     const preciseSeeking = z.boolean().parse(preciseSeekingValue);
     if (obs.getSnapshot().status !== 'connected') throw new Error('请先连接 OBS，再同步素材独立场景');
+    await projectAccess.assetFiles(path, projectFileReferences(project).map(file => file.relativePath));
     await projectService.inspectAssets(path, project);
     const targets = materialSceneTargets(project);
     for (const [index, target] of targets.entries()) {
@@ -1570,8 +1609,9 @@ function registerIpc(
   handle('link:obs-source-create', (_event, value: unknown) => obs.sources.create(obsSourceCreateSchema.parse(value)));
   handle('link:obs-source-options', (_event, value: unknown) => obs.sources.options(obsSourceNameSchema.parse(value)));
   handle('link:obs-source-cancel', (_event, value: unknown) => obs.sources.cancel(obsSourceNameSchema.parse(value)));
-  handle('link:obs-source-apply', (_event, value: unknown) => {
+  handle('link:obs-source-apply', async (_event, value: unknown) => {
     const payload = obsSourceApplySchema.parse(value);
+    if (payload.projectAsset) await projectAccess.assetFiles(payload.projectAsset.projectPath, [payload.projectAsset.relativePath]);
     const settings = payload.projectAsset ? { ...payload.settings, path: projectService.resolveMediaAsset(payload.projectAsset.projectPath, payload.projectAsset.relativePath) } : payload.settings;
     return obs.sources.apply(payload.inputName, settings);
   });
@@ -1629,6 +1669,7 @@ function registerIpc(
   handle('link:obs-seek-managed-media', async (_event, value: unknown) => {
     if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 未连接');
     const payload = linkManagedMediaExecutionPayloadSchema.parse(value);
+    await projectAccess.assetFiles(payload.projectPath, [payload.event.relativePath]);
     const absolutePath = projectService.resolveMediaAsset(payload.projectPath, payload.event.relativePath);
     const address = (await requireProfile(profileStore)).obs.webSocketUrl;
     try {
@@ -1813,6 +1854,7 @@ function registerIpc(
   });
   handle('link:obs-execute-managed-media', async (_event, payloadValue: unknown) => {
     const payload = linkManagedMediaExecutionPayloadSchema.parse(payloadValue);
+    await projectAccess.assetFiles(payload.projectPath, [payload.event.relativePath]);
     const absolutePath = projectService.resolveMediaAsset(payload.projectPath, payload.event.relativePath);
     const file = await stat(absolutePath);
     if (!file.isFile()) throw new Error(`正式媒体文件不存在：${absolutePath}`);

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFile, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
@@ -17,9 +17,10 @@ async function openProject(app: ElectronApplication, file: string, first: boolea
 for (const device of ['cuda', 'cpu'] as const) test(`自动识别 ${device}：静音自动保存、清除、重新分析`, async ({}, info) => {
   const wav = Buffer.alloc(44 + 48000 * 3 * 2);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(96000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('静音.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await writeFile(info.outputPath('assets/reference-audio/静音.wav'), wav);
   const lighting = createLightingDocument();
-  const project = parseLinkProject({ ...createEmptyLinkProject('静音自动分析'), schemaVersion: 2, rundown: [{ id: 'song', title: '静音', lighting, referenceAudio: { assetId: 'audio', relativePath: '静音.wav', durationMs: 3000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('静音自动分析'), schemaVersion: 2, rundown: [{ id: 'song', title: '静音', lighting, referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/静音.wav', durationMs: 3000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
   const file = info.outputPath('silence.tblink'); await writeFile(file, JSON.stringify(project));
   const saved = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!;
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
@@ -48,11 +49,12 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
   test.setTimeout(180000);
   const audio = process.env['TBLINK_ANALYSIS_ACCEPTANCE_AUDIO'], durationMs = Number(process.env['TBLINK_ANALYSIS_ACCEPTANCE_DURATION_MS']);
   test.skip(!audio || !Number.isFinite(durationMs) || durationMs <= 0, '指定真实测试音乐');
-  await copyFile(audio!, info.outputPath('真实音乐.wav'));
-  const bytes = await readFile(info.outputPath('真实音乐.wav')), hash = createHash('sha256').update(bytes).digest('hex');
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await copyFile(audio!, info.outputPath('assets/reference-audio/真实音乐.wav'));
+  const bytes = await readFile(info.outputPath('assets/reference-audio/真实音乐.wav')), hash = createHash('sha256').update(bytes).digest('hex');
   const lighting = createLightingDocument(); lighting.version = 2;
   lighting.markers = Array.from({ length: 65 }, (_, index) => ({ id: `analysis:${hash}:beat:${index}`, name: `节拍 ${index + 1}`, startMs: index * durationMs / 65, endMs: null, kind: 'custom', color: '#68c9ed', notes: '旧版已应用结果' }));
-  const project = parseLinkProject({ ...createEmptyLinkProject('自动音乐结构验收'), schemaVersion: 2, rundown: [{ id: 'song', title: '387 · 真实短歌', lighting, referenceAudio: { assetId: 'audio', relativePath: '真实音乐.wav', durationMs, sha256: hash } }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('自动音乐结构验收'), schemaVersion: 2, rundown: [{ id: 'song', title: '387 · 真实短歌', lighting, referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/真实音乐.wav', durationMs, sha256: hash } }] });
   const file = info.outputPath('actual.tblink'); await writeFile(file, JSON.stringify(project));
   const saved = async () => parseLinkProject(JSON.parse(await readFile(file, 'utf8'))).rundown[0]!.lighting!;
   const launch = () => electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });

@@ -54,14 +54,15 @@ export class NativeObsPreloadPool {
     return true;
   }
 
-  preload(value: unknown): Promise<void> {
+  /** `checkFiles`: the window's request names its media files; the program's own requests pass none. */
+  preload(value: unknown, checkFiles?: (request: NativeObsPreload) => Promise<void>): Promise<void> {
     const request = nativeObsPreloadSchema.parse(value);
     if (this.entry?.origin === 'selection' && this.entry.request.sessionId === request.sessionId && request.generation <= this.entry.request.generation) return Promise.reject(new Error('节目预备请求已过期'));
     const previous = this.discard();
     const entry: Entry = { origin: 'selection', request, cancelled: false, outputs: null, task: Promise.resolve(), assertOwner: null }; this.entry = entry;
     const current = (): void => { if (entry.cancelled) throw new ObsPreparationCancelled('节目预备已取消'); entry.assertOwner?.(); };
     entry.task = (async () => {
-      await previous; current(); await this.dependencies.authorize(request); current();
+      await previous; current(); await this.dependencies.authorize(request); await checkFiles?.(request); current();
       entry.outputs = this.dependencies.create(request, request.positionMs);
       await entry.outputs.guardOutput(() => { current(); return true; }, () => entry.outputs!.preloadResources(current)); current();
     })();

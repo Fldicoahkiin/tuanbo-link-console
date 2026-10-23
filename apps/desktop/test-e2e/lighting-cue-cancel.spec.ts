@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
@@ -11,12 +11,12 @@ test('波形 Cue 拖动可用 Escape 或失焦取消，正常拖动和撤销保�
   wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
   wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('audio.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/audio.wav'), wav);
   const lighting = createLightingDocument();
   lighting.tracks = [lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: 'effect-canvas', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 4000, timeLock: 'time', muted: false,
     events: [{ id: 'point', kind: 'ma2', action: 'goto', at: 1000, cue: '1.000', sequence: 1, executor: '1.101', label: '第一步' }] }] })];
   const project = parseLinkProject({ ...createEmptyLinkProject('取消卡点移动'), schemaVersion: 2, rundown: [{ id: 'song', title: '歌曲', cues: [], lighting,
-    referenceAudio: { assetId: 'audio', relativePath: 'audio.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 4000 } }] });
+    referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/audio.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 4000 } }] });
   const file = info.outputPath('cue.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const page = await app.firstWindow();

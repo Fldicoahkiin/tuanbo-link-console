@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
@@ -12,9 +12,9 @@ test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继�
   wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(192000, 28);
   wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   for (let frame = 0; frame < 48000 * 20; frame++) { const tone = Math.round(128 * Math.sin(frame * 2 * Math.PI * 1500 / 48000)); wav.writeInt16LE(tone, 44 + frame * 4); wav.writeInt16LE(tone, 46 + frame * 4); }
-  const sha256 = createHash('sha256').update(wav).digest('hex'); await writeFile(info.outputPath('tone.wav'), wav);
+  const sha256 = createHash('sha256').update(wav).digest('hex'); await mkdir(info.outputPath('assets', 'reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets', 'reference-audio', 'tone.wav'), wav);
   const project = parseLinkProject({ ...createEmptyLinkProject('原生正式按钮验收'), playbackSource: 'internal', obsOutputMode: 'scenes',
-    rundown: [0, 1].map(index => ({ id: `song-${index}`, title: `正式音频 ${index + 1}`, referenceAudio: { assetId: `audio-${index}`, relativePath: 'tone.wav', sha256, durationMs: 20000 },
+    rundown: [0, 1].map(index => ({ id: `song-${index}`, title: `正式音频 ${index + 1}`, referenceAudio: { assetId: `audio-${index}`, relativePath: 'assets/reference-audio/tone.wav', sha256, durationMs: 20000 },
       playback: { startMs: index ? 0 : 500, endMs: index ? 1500 : 18000, mtcOffsetMs: 480000 + index * 20000, volume: 50, endAction: 'pause', shortcut: '' } })) });
   const file = info.outputPath('project.tblink'); await writeFile(file, JSON.stringify(project));
   const profile = createDefaultIntegrationProfile(); profile.obs.autoConnectOnLaunch = false;
@@ -26,8 +26,12 @@ test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继�
     await page.waitForFunction(() => Boolean(window.tbLink));
     await page.evaluate(profile => window.tbLink.saveIntegrationProfile({ profile }), profile); await page.reload();
     await page.waitForFunction(() => Boolean(window.tbLink));
-    await page.evaluate(({ file, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: file, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { file, sha256 });
+    // The waveform cache names this project before the window opens it: the main process approves it through the open dialog and the window reports it shown.
+    await page.getByRole('button', { name: '打开工程', exact: true }).waitFor();
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, file);
+    await page.evaluate(() => window.tbLink.pickProjectDocument());
+    await page.evaluate(file => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: file, projectId: null }), file);
+    await page.evaluate(({ file, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: file, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { file, sha256 });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.evaluate(() => { const Original = AudioContext; Reflect.set(window, '__audioContexts', 0); Reflect.set(window, 'AudioContext', class extends Original { constructor(options?: AudioContextOptions) { super(options); Reflect.set(window, '__audioContexts', (Reflect.get(window, '__audioContexts') as number) + 1); } }); });
     await page.locator('.player-transport .primary-button').click();
