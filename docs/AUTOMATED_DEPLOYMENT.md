@@ -176,9 +176,9 @@ sudo systemctl start tblink-update-publish.service
 sudo ls -l /var/lib/tblink-update-publish   # 应有 update-status.json，root tblink-license -rw-r-----
 
 # 后台开启「软件更新」：服务配置加两行后重启授权服务（约 1 秒中断）
-# /etc/tblink-licensing 归服务账号，先确认 service.env 是普通文件而不是链接，再追加。
-sudo test -f /etc/tblink-licensing/service.env && ! sudo test -L /etc/tblink-licensing/service.env \
-  && printf '%s\n' 'UPDATE_REQUEST_DIRECTORY=/var/lib/tblink-licensing/update-requests' 'UPDATE_PUBLISHER_DIRECTORY=/var/lib/tblink-update-publish' \
+# /etc/tblink-licensing 归服务账号：先确认 service.env 是普通文件（输出以 regular file 开头），不是 symbolic link，再追加。
+sudo stat -c '%F %U:%G %a' /etc/tblink-licensing/service.env
+printf '%s\n' 'UPDATE_REQUEST_DIRECTORY=/var/lib/tblink-licensing/update-requests' 'UPDATE_PUBLISHER_DIRECTORY=/var/lib/tblink-update-publish' \
   | sudo tee -a /etc/tblink-licensing/service.env
 sudo systemctl restart tblink-licensing
 ```
