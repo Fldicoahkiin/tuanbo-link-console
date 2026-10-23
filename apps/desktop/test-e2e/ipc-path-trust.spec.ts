@@ -3,7 +3,7 @@ import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
-import { closeDiscarding } from './save-questions';
+import { answerSaveQuestions, closeDiscarding } from './save-questions';
 
 const launch = (profile: string): Promise<ElectronApplication> =>
   electron.launch({ args: [`--user-data-dir=${profile}`, join(process.cwd(), 'out/main/index.cjs')] });
@@ -117,6 +117,8 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
   app = await launch(info.outputPath('profile'));
   try {
     const page = await app.firstWindow();
+    // The reopened project counts as edited; switching asks to save it first.
+    await answerSaveQuestions(app);
     await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', shown);
 
     // A link to the shown project's file stops working once another project replaces it.
