@@ -26,7 +26,10 @@ test('时间码关联待核对：开播前询问，无灯光播放时只显示�
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     for (const mode of ['timecode', 'direct', 'timecode', 'network', 'timecode']) await page.getByRole('combobox', { name: '灯光输出方式' }).selectOption(mode);
     await page.getByLabel('灯光输出提示', { exact: true }).click();
-    await expect(page.getByText('时间码关联待核对', { exact: true })).toBeVisible();
+    const menu = page.locator('.lighting-output-notice .timeline-icon-menu-content');
+    await expect(menu.getByText('需处理', { exact: true })).toBeVisible();
+    await expect(menu.getByText(/控台 Timecode 2：音频已替换/)).toBeVisible();
+    await expect(page.locator('.lighting-output-route .song-lighting-state')).toHaveText('需处理');
     await page.keyboard.press('Escape');
     for (let attempt = 0; attempt < 2; attempt++) {
       await page.getByRole('button', { name: '播放时间线', exact: true }).click();
