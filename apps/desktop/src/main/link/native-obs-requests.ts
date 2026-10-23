@@ -9,7 +9,8 @@ export class NativeObsRequests {
   private current: Pending | null = null;
   constructor(private readonly service: Service, private readonly authorize: (value: NativeObsPrepare) => Promise<void>) {}
 
-  async prepare(value: unknown): Promise<NativeObsStatus> {
+  /** `checkFiles`: the window's request names its media files; the program's own requests pass none. */
+  async prepare(value: unknown, checkFiles?: (request: NativeObsPrepare) => Promise<void>): Promise<NativeObsStatus> {
     const request = nativeObsPrepareSchema.parse(value);
     if (this.current?.request.sessionId === request.sessionId && request.generation <= this.current.request.generation) {
       throw new Error('后台画面准备请求已过期');
@@ -17,6 +18,7 @@ export class NativeObsRequests {
     const pending: Pending = { request, cancelled: false, dispatched: false };
     this.current = pending;
     await this.authorize(request);
+    await checkFiles?.(request);
     if (this.current !== pending || pending.cancelled) throw new Error('后台画面准备在等待许可时已取消');
     pending.dispatched = true;
     return this.service.prepare(request);

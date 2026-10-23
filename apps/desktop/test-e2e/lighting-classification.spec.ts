@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
@@ -11,12 +11,12 @@ for(const scaled of [false,true]) test(`${scaled ? '规定高负载' : '千条�
   userLibrary.entries = Array.from({ length: 1000 }, (_, index) => ({ id:`library-${index}`, name:`前区灯光 ${index}`, originalName:`原Cue ${index}`, revision:1, kind:'single' as const, categoryIds:['front:bright:3:front'],favorite:false,source:{endpoint:'test-console',show:'测试目录',verified:true},track:{id:`track-${index}`,name:'灯光',kind:'ma2' as const,color:'#abcdef',group:'',muted:false,solo:false,locked:false,channel:1,controller:7,portProfileId:'',noteNames:{},clips:[],cueStamp:{mode:'fixed' as const,sequence:index+1,cue:'1.100',executor:''}} }));
   project.ma2MaterialLibrary = {version:2,source:'test-console',userLibrary,library:{directory:{show:'测试目录',version:'3.7.0.5',generation:'fixture',entries:[]},readAt:new Date().toISOString(),fixtureUsage:[],errors:[],sequences:userLibrary.entries.map((entry,index)=>({sequence:index+1,name:entry.originalName,cues:[{index:0,number:'1.100',name:entry.originalName}]}))}};
   const wav = Buffer.alloc(44+48000*30*2); wav.write('RIFF');wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(48000,24);wav.writeUInt32LE(96000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(wav.length-44,40);
-  await writeFile(info.outputPath('reference.wav'),wav);
-  project.rundown = [{id:'song',title:'分类编排测试歌曲',enabled:true,notes:'',cues:[],visualLayers:[],referenceMediaClips:[],lighting,referenceAudio:{assetId:'audio',relativePath:'reference.wav',durationMs:30000,sha256:createHash('sha256').update(wav).digest('hex')}}];
+  await mkdir(info.outputPath('assets','reference-audio'),{recursive:true});await writeFile(info.outputPath('assets','reference-audio','reference.wav'),wav);
+  project.rundown = [{id:'song',title:'分类编排测试歌曲',enabled:true,notes:'',cues:[],visualLayers:[],referenceMediaClips:[],lighting,referenceAudio:{assetId:'audio',relativePath:'assets/reference-audio/reference.wav',durationMs:30000,sha256:createHash('sha256').update(wav).digest('hex')}}];
   const originalCues=scaled ? 250 : 0;
   if(scaled){
-    const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ3sAAAAASUVORK5CYII=','base64');await writeFile(info.outputPath('asset.png'),image);
-    project.mediaAssets=Array.from({length:2000},(_,index)=>({id:`asset-${index}`,name:`素材 ${index}`,kind:'image',folderId:null,relativePath:'asset.png',sha256:createHash('sha256').update(image).digest('hex'),byteLength:image.length,width:1,height:1}));
+    const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ3sAAAAASUVORK5CYII=','base64');await mkdir(info.outputPath('assets','reference-media'),{recursive:true});await writeFile(info.outputPath('assets','reference-media','asset.png'),image);
+    project.mediaAssets=Array.from({length:2000},(_,index)=>({id:`asset-${index}`,name:`素材 ${index}`,kind:'image',folderId:null,relativePath:'assets/reference-media/asset.png',sha256:createHash('sha256').update(image).digest('hex'),byteLength:image.length,width:1,height:1}));
     const first=project.rundown[0]!;
     project.rundown=Array.from({length:200},(_,song)=>{const document=createLightingDocument();document.tracks=[{...userLibrary.entries[0]!.track,id:`track-${song}`,clips:[{id:`clip-${song}`,name:'原编排',start:0,duration:30000,timeLock:'time',muted:false,events:Array.from({length:250},(_,cue)=>({id:`cue-${song}-${cue}`,kind:'ma2',at:cue*100,sequence:1,executor:'',cue:String(cue+1),action:'goto',label:`原 Cue ${cue}`}))}]}];return {...first,id:song ? `song-${song}`:'song',title:`节目 ${song}`,lighting:document};});
   }

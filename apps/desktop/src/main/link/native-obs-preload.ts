@@ -54,7 +54,8 @@ export class NativeObsPreloadPool {
     return true;
   }
 
-  preload(value: unknown): Promise<void> {
+  /** `checkFiles`: the window's request names its media files; the program's own requests pass none. */
+  preload(value: unknown, checkFiles?: (request: NativeObsPreload) => Promise<void>): Promise<void> {
     const request = nativeObsPreloadSchema.parse(value);
     if (this.entry?.origin === 'selection' && this.entry.request.sessionId === request.sessionId && request.generation <= this.entry.request.generation) return Promise.reject(new Error('节目预备请求已过期'));
     const previous = this.discard();
@@ -66,6 +67,8 @@ export class NativeObsPreloadPool {
       // selection's admission (nothing else preparing or on air) no longer applies to it.
       try { await this.dependencies.authorize(request); }
       catch (error) { if (!entry.assertOwner) throw error; }
+      // The window's files are checked either way: the outputs load exactly these.
+      await checkFiles?.(request);
       current();
       entry.outputs = this.dependencies.create(request, request.positionMs);
       await entry.outputs.guardOutput(() => { current(); return true; }, () => entry.outputs!.preloadResources(current)); current();

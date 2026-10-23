@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
@@ -12,10 +12,10 @@ for (const crash of [false, true]) test(`正式节目后台接续：界面繁忙
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
   wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22); wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(192000, 28);
   wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  const sha256 = createHash('sha256').update(wav).digest('hex'); await writeFile(info.outputPath('silence.wav'), wav);
+  const sha256 = createHash('sha256').update(wav).digest('hex'); await mkdir(info.outputPath('assets', 'reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets', 'reference-audio', 'silence.wav'), wav);
   const project = parseLinkProject({ ...createEmptyLinkProject('曲尾后台接续验收'), playbackSource: 'internal', obsOutputMode: 'scenes',
     rundown: [0, 1].map(index => ({ id: `song-${index}`, title: `接续节目 ${index + 1}`,
-      referenceAudio: { assetId: `audio-${index}`, relativePath: 'silence.wav', sha256, durationMs: 30000 },
+      referenceAudio: { assetId: `audio-${index}`, relativePath: 'assets/reference-audio/silence.wav', sha256, durationMs: 30000 },
       playback: { startMs: index ? 500 : 0, endMs: index ? 29500 : 1200, mtcOffsetMs: index ? 600000 : 480000,
         volume: 0, endAction: index ? 'pause' : 'next', shortcut: '' } })) });
   const file = info.outputPath('project.tblink'); await writeFile(file, JSON.stringify(project));

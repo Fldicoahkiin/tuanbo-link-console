@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
@@ -11,8 +11,8 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
   wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(96000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   for (let sample = 0; sample < 48000 * 12; sample++) wav.writeInt16LE(Math.round(Math.sin(sample / 48000 * 220 * Math.PI * 2) * 14000 * Math.exp(-(sample % 24000) / 6000)), 44 + sample * 2);
-  await writeFile(info.outputPath('reference.wav'), wav);
-  const referenceAudio = { assetId: 'reference', relativePath: 'reference.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 12000 };
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/reference.wav'), wav);
+  const referenceAudio = { assetId: 'reference', relativePath: 'assets/reference-audio/reference.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 12000 };
   const templates = ['开场 · 蓝色光束', '主舞 · 暖白追光', '副歌 · 全场频闪', '收尾 · 缓慢渐暗', '城市夜色 · 移动光束', '返场 · 全场亮起'].map((name, index) => ({
     id: `effect-${index}`, name, categories: ['光束'], track: lightingTrackSchema.parse({ id: `template-${index}`, name, kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [], cueStamp: { mode: 'fixed', sequence: 1, cue: String(index + 1), executor: '1.101' } })
   }));

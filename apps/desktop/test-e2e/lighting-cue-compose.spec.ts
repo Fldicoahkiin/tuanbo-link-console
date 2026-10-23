@@ -1,4 +1,4 @@
-import { writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron, type Locator } from '@playwright/test';
@@ -8,12 +8,12 @@ import { saveProject } from './save-questions';
 test('当前 Cue：分类加号与控台拖入合并同一个时间点，保存、撤销、重开', async ({}, info) => {
   const wav = Buffer.alloc(44 + 24000 * 10 * 2);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await writeFile(info.outputPath('reference.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets/reference-audio/reference.wav'), wav);
   const lighting = createLightingDocument(); lighting.outputMode = 'network';
   const library = createLightingUserLibrary();
   library.entries = [1,2,3].map(sequence => ({ id: `material-${sequence}`, name: `灯光素材 ${sequence}`, originalName: `灯光素材 ${sequence}`, revision: 1, kind: 'single', categoryIds: ['front:bright:3:front'], favorite: false, source: { endpoint: 'test', show: 'test', verified: true }, track: { id: `track-${sequence}`, name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [], cueStamp: { mode: 'fixed', sequence, cue: '1.000', executor: '' } } }));
   lighting.tracks = [{ ...library.entries[0]!.track, clips: [{ id: 'clip', name: '原编排', start: 0, duration: 10000, timeLock: 'time', muted: false, events: [{ id: 'original', kind: 'ma2', at: 2000, sequence: 1, executor: '', cue: '1.000', action: 'goto', label: '开场' }] }] }];
-  const project = parseLinkProject({ ...createEmptyLinkProject('组合编辑验收'), schemaVersion: 2, ma2MaterialLibrary: { version: 2, source: 'test', userLibrary: library, library: { directory: { show: 'test', version: '3.7.0.5', generation: 'test', entries: [] }, readAt: new Date().toISOString(), fixtureUsage: [], errors: [], sequences: [1,2,3].map(sequence => ({ sequence, name: `序列 ${sequence}`, cues: [{ index: 0, number: '1.000', name: `灯光素材 ${sequence}` }] })) } }, rundown: [{ id: 'song', title: '组合编辑验收', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting, referenceAudio: { assetId: 'audio', relativePath: 'reference.wav', durationMs: 10000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('组合编辑验收'), schemaVersion: 2, ma2MaterialLibrary: { version: 2, source: 'test', userLibrary: library, library: { directory: { show: 'test', version: '3.7.0.5', generation: 'test', entries: [] }, readAt: new Date().toISOString(), fixtureUsage: [], errors: [], sequences: [1,2,3].map(sequence => ({ sequence, name: `序列 ${sequence}`, cues: [{ index: 0, number: '1.000', name: `灯光素材 ${sequence}` }] })) } }, rundown: [{ id: 'song', title: '组合编辑验收', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting, referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/reference.wav', durationMs: 10000, sha256: createHash('sha256').update(wav).digest('hex') } }] });
   const file = info.outputPath('composition.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const page = await app.firstWindow(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

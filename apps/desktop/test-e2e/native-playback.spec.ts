@@ -1,8 +1,8 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createHash, randomUUID } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { NativePlayerPrepare, NativePlayerStatus } from '@tb/schema';
+import { createEmptyLinkProject, type NativePlayerPrepare, type NativePlayerStatus } from '@tb/schema';
 import { closeDiscarding } from './save-questions';
 
 test('真实 Electron IPC：独立音频时钟承受界面阻塞，界面崩溃后停止自有引擎', async ({}, info) => {
@@ -16,10 +16,11 @@ test('真实 Electron IPC：独立音频时钟承受界面阻塞，界面崩溃�
     wav.writeInt16LE(Math.round(sample * 512), 44 + frame * 4);
     wav.writeInt16LE(Math.round(sample * 256), 46 + frame * 4);
   }
-  await writeFile(info.outputPath('audio.wav'), wav);
-  const request: NativePlayerPrepare = { version: 1, sessionId: randomUUID(), generation: 1, projectPath: info.outputPath('project.tblink'),
+  await mkdir(info.outputPath('assets', 'reference-audio'), { recursive: true }); await writeFile(info.outputPath('assets', 'reference-audio', 'audio.wav'), wav);
+  const file = info.outputPath('project.tblink'); await writeFile(file, JSON.stringify(createEmptyLinkProject('原生音频时钟验收')));
+  const request: NativePlayerPrepare = { version: 1, sessionId: randomUUID(), generation: 1, projectPath: file,
     snapshot: { version: 1, projectId: 'native-test', itemId: 'song', revision: 1,
-      audio: { relativePath: 'audio.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 20000 },
+      audio: { relativePath: 'assets/reference-audio/audio.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 20000 },
       startMs: 1000, positionMs: 1500, endMs: 18000, offsetMs: 480000, frameRate: 30, sampleRate: 48000, volume: 0 },
     audioDeviceId: 'default', midiPortName: null };
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
@@ -28,6 +29,11 @@ test('真实 Electron IPC：独立音频时钟承受界面阻塞，界面崩溃�
   let enginePid: number | null = null, crashed = false;
   try {
     await page.waitForFunction(() => Boolean(window.tbLink));
+    // Direct IPC names this project: the main process approves it through the open dialog and the window reports it shown.
+    await page.getByRole('button', { name: '打开工程', exact: true }).waitFor();
+    await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
+    await page.evaluate(() => window.tbLink.pickProjectDocument());
+    await page.evaluate(path => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: path, projectId: null }), file);
     const prepared = await page.evaluate(async request => {
       const events: NativePlayerStatus[] = [];
       Reflect.set(window, '__nativeEvents', events);

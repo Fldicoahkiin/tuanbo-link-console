@@ -1,18 +1,18 @@
 import { test, expect, _electron as electron, type Page } from '@playwright/test';
-import { readFile, writeFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { savedValue } from './save-questions';
 
 test('44 秒 MP4 加入节目，短原声音轨及非整毫秒落点保存重开', async ({}, info) => {
   if (!ffmpegPath) throw new Error('缺少 FFmpeg');
-  const video = info.outputPath('long-video.mp4');
+  const video = info.outputPath('assets', 'reference-media', 'long-video.mp4'); await mkdir(dirname(video), { recursive: true });
   await promisify(execFile)(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=s=64x64:r=30:d=44.733', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=43.3', '-c:v', 'mpeg4', '-c:a', 'aac', video], { windowsHide: true });
-  const project = parseLinkProject({ ...createEmptyLinkProject('长视频验收'), playbackSource: 'internal', mediaAssets: [{ id: 'video', name: 'long-video.mp4', relativePath: 'long-video.mp4', kind: 'video', durationMs: 44734, width: 64, height: 64, byteLength: (await stat(video)).size, sha256: createHash('sha256').update(await readFile(video)).digest('hex') }], rundown: [{ id: 'song', title: '长视频节目', cues: [] }] });
+  const project = parseLinkProject({ ...createEmptyLinkProject('长视频验收'), playbackSource: 'internal', mediaAssets: [{ id: 'video', name: 'long-video.mp4', relativePath: 'assets/reference-media/long-video.mp4', kind: 'video', durationMs: 44734, width: 64, height: 64, byteLength: (await stat(video)).size, sha256: createHash('sha256').update(await readFile(video)).digest('hex') }], rundown: [{ id: 'song', title: '长视频节目', cues: [] }] });
   const file = info.outputPath('show.tblink'); await writeFile(file, JSON.stringify(project));
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const app = await electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), 'out/main/index.cjs')]] });
@@ -53,11 +53,11 @@ test('44 秒 MP4 加入节目，短原声音轨及非整毫秒落点保存重开
 for (const dimensions of [{ width: 1920, height: 1080 }, { width: 3840, height: 2160 }]) {
 test(`40 秒 ${dimensions.width} 视频打开后立即拖入与缓存复用：真实音画片段出现耗时、撤销及保存恢复`, async ({}, info) => {
   if (!ffmpegPath) throw new Error('缺少 FFmpeg');
-  const video = info.outputPath('forty-seconds.mp4');
+  const video = info.outputPath('assets', 'reference-media', 'forty-seconds.mp4'); await mkdir(dirname(video), { recursive: true });
   await promisify(execFile)(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc2=s=${dimensions.width}x${dimensions.height}:r=30:d=40`,
     '-f', 'lavfi', '-i', 'sine=frequency=440:duration=40', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', video], { windowsHide: true });
   const project = parseLinkProject({ ...createEmptyLinkProject('拖入速度验收'), playbackSource: 'internal',
-    mediaAssets: [{ id: 'video', name: 'forty-seconds.mp4', relativePath: 'forty-seconds.mp4', kind: 'video', durationMs: 40000, ...dimensions,
+    mediaAssets: [{ id: 'video', name: 'forty-seconds.mp4', relativePath: 'assets/reference-media/forty-seconds.mp4', kind: 'video', durationMs: 40000, ...dimensions,
       byteLength: (await stat(video)).size, sha256: createHash('sha256').update(await readFile(video)).digest('hex') }],
     rundown: [{ id: 'song', title: '40 秒节目', cues: [] }] });
   const file = info.outputPath('show.tblink'); await writeFile(file, JSON.stringify(project));
@@ -102,15 +102,16 @@ test(`40 秒 ${dimensions.width} 视频打开后立即拖入与缓存复用：�
 
 test('已有音乐时首次拖入 4K 视频：十个不同落点不复用混音结果', async ({}, info) => {
   if (!ffmpegPath) throw new Error('缺少 FFmpeg');
-  const video = info.outputPath('video.mp4'); const music = info.outputPath('music.wav');
+  const video = info.outputPath('assets', 'reference-media', 'video.mp4'); const music = info.outputPath('assets', 'reference-audio', 'music.wav');
+  await mkdir(dirname(video), { recursive: true }); await mkdir(dirname(music), { recursive: true });
   await promisify(execFile)(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=3840x2160:r=30:d=40',
     '-f', 'lavfi', '-i', 'sine=frequency=440:duration=40', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', video], { windowsHide: true });
   await promisify(execFile)(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=40',
     '-ac', '2', '-ar', '48000', '-c:a', 'pcm_s16le', music], { windowsHide: true });
   const project = parseLinkProject({ ...createEmptyLinkProject('多轨拖入验收'), playbackSource: 'internal',
-    mediaAssets: [{ id: 'video', name: 'video.mp4', relativePath: 'video.mp4', kind: 'video', durationMs: 40000, width: 3840, height: 2160,
+    mediaAssets: [{ id: 'video', name: 'video.mp4', relativePath: 'assets/reference-media/video.mp4', kind: 'video', durationMs: 40000, width: 3840, height: 2160,
       byteLength: (await stat(video)).size, sha256: createHash('sha256').update(await readFile(video)).digest('hex') }],
-    rundown: [{ id: 'song', title: '已有音乐', cues: [], referenceAudio: { assetId: 'music', relativePath: 'music.wav', durationMs: 40000,
+    rundown: [{ id: 'song', title: '已有音乐', cues: [], referenceAudio: { assetId: 'music', relativePath: 'assets/reference-audio/music.wav', durationMs: 40000,
       sha256: createHash('sha256').update(await readFile(music)).digest('hex') } }] });
   const file = info.outputPath('show.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });

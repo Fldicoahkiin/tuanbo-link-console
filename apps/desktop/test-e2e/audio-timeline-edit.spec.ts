@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
@@ -13,11 +13,12 @@ for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '�
   wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   for (let i = 0; i < 24000 * 8; i++) wav.writeInt16LE(Math.round(Math.sin(i * .05) * 10000), 44 + i * 2);
   const sha256 = createHash('sha256').update(wav).digest('hex');
-  await writeFile(info.outputPath('song.wav'), wav);
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await writeFile(info.outputPath('assets/reference-audio/song.wav'), wav);
   const lighting = createLightingDocument();
   const project = parseLinkProject({ ...createEmptyLinkProject('音频编辑验收'), schemaVersion: 2,
     rundown: [{ id: 'song', title: '音频编辑验收', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting,
-      referenceAudio: { assetId: 'audio', relativePath: 'song.wav', durationMs: 8000, sha256 } }] });
+      referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/song.wav', durationMs: 8000, sha256 } }] });
   const file = info.outputPath('audio.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')], env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '1' } });
   const page = await app.firstWindow(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -98,7 +99,7 @@ for (const workspace of ['编辑器', '灯光工作台']) test(workspace === '�
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect.poll(() => savedValue(page, async () => (await segments())?.length)).toBe(1);
     expect((await load()).rundown[0]!.lighting).toEqual(project.rundown[0]!.lighting);
-    expect(createHash('sha256').update(await readFile(info.outputPath('song.wav'))).digest('hex')).toBe(sha256);
+    expect(createHash('sha256').update(await readFile(info.outputPath('assets/reference-audio/song.wav'))).digest('hex')).toBe(sha256);
     await page.screenshot({ path: info.outputPath('audio-edit.png') });
     await page.reload(); await page.getByRole('button', { name: workspace, exact: true }).click();
     await expect(page.locator('.audio-timeline-segment')).toHaveCount(1);

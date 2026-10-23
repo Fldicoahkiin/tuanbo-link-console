@@ -13,13 +13,19 @@ test('真实工程 Worker 与文本桥拒绝损坏及未来格式，失败不覆
   const page = await app.firstWindow();
   try {
     await page.waitForFunction(() => Boolean(window.tbLink));
-    const opened = await page.evaluate(path => window.tbLink.openProjectDocument(path), path);
-    expect(parseLinkProject(JSON.parse(opened.content)).name).toBe('工程读写边界');
+    // Files reach the bridge as the open dialog's answer, the only way a window may name a project.
+    const pick = async (file: string) => {
+      await app.evaluate(({ dialog }, target) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [target] }); }, file);
+      return page.evaluate(() => window.tbLink.pickProjectDocument());
+    };
+    const opened = await pick(path);
+    expect(parseLinkProject(JSON.parse(opened!.content)).name).toBe('工程读写边界');
     for (const invalid of [corrupt, future]) {
       const before = await readFile(invalid, 'utf8');
-      await expect(page.evaluate(path => window.tbLink.openProjectDocument(path), invalid)).rejects.toThrow();
+      await expect(pick(invalid)).rejects.toThrow();
       expect(await readFile(invalid, 'utf8')).toBe(before);
     }
+    await page.evaluate(path => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: '工程读写边界', projectPath: path, projectId: null }), path);
     await expect(page.evaluate(({ path, content }) => window.tbLink.saveProjectDocument(path, content), { path, content: futureContent })).rejects.toThrow();
     expect(await readFile(path, 'utf8')).toBe(valid);
     const reopened = await page.evaluate(path => window.tbLink.openProjectDocument(path), path);

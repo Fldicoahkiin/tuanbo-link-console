@@ -30,3 +30,11 @@ it('重复准备拒绝，异步许可不能使先前歌曲盖过后来的歌曲'
   await expect(test.api.prepare(newer)).rejects.toThrow('已过期'); test.release(); await first; await second;
   expect(test.prepare).toHaveBeenCalledExactlyOnceWith(newer);
 });
+
+it('窗口的准备请求在文件检查拒绝时不派发', async () => {
+  const test = setup(); test.release();
+  await expect(test.api.prepare(test.request, () => Promise.reject(new Error('只能访问当前打开的工程')))).rejects.toThrow('当前打开的工程');
+  expect(test.prepare).not.toHaveBeenCalled();
+  await test.api.prepare({ ...test.request, generation: 2 }, () => Promise.resolve());
+  expect(test.prepare).toHaveBeenCalledTimes(1);
+});

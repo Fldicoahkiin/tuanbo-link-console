@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
@@ -16,8 +16,9 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
   const rate = 8000; const wav = Buffer.alloc(44 + rate * 2 * 40);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   for (let i = 0; i < rate * 40; i++) wav.writeInt16LE(Math.round(Math.sin(i * Math.PI / 10) * (2000 + 10000 * Math.sin(i / rate * Math.PI) ** 2)), 44 + i * 2);
-  await writeFile(info.outputPath('song.wav'), wav);
-  project.rundown = [{ id: 'song', title: '中文歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], referenceAudio: { assetId: 'audio', relativePath: 'song.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 40000 }, playback: { volume: 100, endAction: 'stop', startMs: 1500, endMs: 39000, mtcOffsetMs: 480000, shortcut: '' } }];
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await writeFile(info.outputPath('assets/reference-audio/song.wav'), wav);
+  project.rundown = [{ id: 'song', title: '中文歌曲', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/song.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 40000 }, playback: { volume: 100, endAction: 'stop', startMs: 1500, endMs: 39000, mtcOffsetMs: 480000, shortcut: '' } }];
   const file = info.outputPath('cached.tblink'); await writeFile(file, JSON.stringify(project));
   const executable = process.env.TBLINK_MA2_PACKAGED_EXE;
   const launch = () => electron.launch({ ...(executable ? { executablePath: executable } : {}), args: [`--user-data-dir=${info.outputPath('profile')}`, ...executable ? [] : [join(process.cwd(), 'out/main/index.cjs')]] });

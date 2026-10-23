@@ -40,8 +40,9 @@ for (const name of ['4k.mp4', '1080.mp4', 'overlay.png', 'audio.wav']) {
 const time = frame => frameNumberToTimecode(frame, '30');
 const reports = [];
 for (const variant of ['mixed', 'four-4k']) {
-  const output = join(directory, variant); await mkdir(join(output, 'media'), { recursive: true });
-  await link(join(masters, 'audio.wav'), join(output, 'audio.wav'));
+  // The software only reads project files from its own asset folders.
+  const output = join(directory, variant); await mkdir(join(output, 'assets', 'reference-media'), { recursive: true }); await mkdir(join(output, 'assets', 'reference-audio'), { recursive: true });
+  await link(join(masters, 'audio.wav'), join(output, 'assets', 'reference-audio', 'audio.wav'));
   // Keep each video's NTFS link group below the per-file link limit. PNGs are
   // small independent copies; neither profile borrows a file from the other.
   for (const master of ['4k.mp4', '1080.mp4']) await copyFile(join(masters, master), join(output, master));
@@ -52,7 +53,7 @@ for (const variant of ['mixed', 'four-4k']) {
     for (let index = 0; index < 10; index++) {
       const video = index < 4, high = variant === 'four-4k' || index < 2;
       const master = video ? `${high ? '4k' : '1080'}.mp4` : 'overlay.png';
-      const relativePath = `media/${prefix}-asset-${index}.${video ? 'mp4' : 'png'}`;
+      const relativePath = `assets/reference-media/${prefix}-asset-${index}.${video ? 'mp4' : 'png'}`;
       if (video) await link(join(output, master), join(output, relativePath));
       else await copyFile(join(masters, master), join(output, relativePath));
       assets.push({ id: `${prefix}-asset-${index}`, name: `合成素材 ${program * 10 + index + 1}`, kind: video ? 'video' : 'image', relativePath,
@@ -69,7 +70,7 @@ for (const variant of ['mixed', 'four-4k']) {
       channel: 1, portProfileId: 'stability-loopback-only', controller: 7, noteNames: {}, clips: [{ id: `${prefix}-lighting-clip`, name: '合成测试', start: 0, duration: 108000, timeLock: 'time', muted: false,
         events: Array.from({ length: 125 }, (_, cue) => ({ id: `${prefix}-light-${cue}`, kind: 'note', at: cue * 850, duration: 80, note: cue % 64 + 32, velocity: 1 })) }] }];
     rundown.push({ id: prefix, title: `合成验收节目 ${program + 1}`, notes: '合成负载，不是现场 MA2 导出；灯光只配专用测试回环。', visualLayers, referenceMediaClips: clips, lighting,
-      referenceAudio: { assetId: `${prefix}-audio`, relativePath: 'audio.wav', sha256: details.get('audio.wav').sha256, durationMs: 108000 },
+      referenceAudio: { assetId: `${prefix}-audio`, relativePath: 'assets/reference-audio/audio.wav', sha256: details.get('audio.wav').sha256, durationMs: 108000 },
       playback: { volume: 100, startMs: 0, endMs: 108000, mtcOffsetMs: 480000 + program * 120000, shortcut: '', endAction: program === 199 ? 'pause' : 'next' },
       cues: Array.from({ length: 125 }, (_, cue) => ({ id: `${prefix}-camera-${cue}`, name: `合成机位 ${cue % 16 + 1}`, timecode: time(12 + cue * 25), durationMs: 200,
         layerId: visualLayers[4].id, actions: [{ id: `${prefix}-action-${cue}`, label: '切换合成场景', kind: 'obs.setProgramScene', sceneName: `TBLINK 验收机位 ${cue % 16 + 1}` }] })) });

@@ -20,7 +20,8 @@ export class NativeProgramService {
   constructor(private readonly create: Factory, private readonly publish: (event: NativeProgramEvent) => void,
     private readonly authorize: () => Promise<void>) {}
 
-  async open(value: unknown): Promise<NativeProgramAttachment> {
+  /** `checkProject`: the window names the project the program reads; checked before a host is created. */
+  async open(value: unknown, checkProject?: (projectPath: string, project: LinkProject) => Promise<void>): Promise<NativeProgramAttachment> {
     const request = nativeProgramOpenSchema.parse(value);
     const project = parseLinkProject(JSON.parse(request.document));
     if (project.playbackSource !== 'internal') throw new Error('后台节目只接受内部主控工程');
@@ -41,6 +42,7 @@ export class NativeProgramService {
     this.current = entry;
     entry.ready = this.cleanup.then(async () => {
       await this.authorized(entry.cancellation.signal);
+      await checkProject?.(request.projectPath, project);
       if (this.current !== entry || entry.cancelled) return;
       entry.host = this.create(project, request, {
         configuration: () => entry.configuration,

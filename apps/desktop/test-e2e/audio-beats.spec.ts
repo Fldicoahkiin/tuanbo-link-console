@@ -8,11 +8,12 @@ import { saveProject } from './save-questions';
 test('真实音频检测三级节拍、保存标记、灯光放置与拖动吸附', async ({}, testInfo) => {
   const directory = testInfo.outputPath('project'); await mkdir(directory, { recursive: true });
   const audio = drumAudio(); const sha256 = createHash('sha256').update(audio).digest('hex');
-  await writeFile(join(directory, 'drums.wav'), audio);
+  await mkdir(join(directory, 'assets', 'reference-audio'), { recursive: true });
+  await writeFile(join(directory, 'assets', 'reference-audio', 'drums.wav'), audio);
   const project = createEmptyLinkProject('节拍辅助灯光验收'); project.schemaVersion = 2;
   const lighting = createLightingDocument();
   lighting.tracks.push({ id: 'track', name: '灯光', kind: 'ma2', color: '#aa88ff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光编排', start: 0, duration: 6000, timeLock: 'time', muted: false, events: [] }] });
-  project.rundown.push({ id: 'song', title: '鼓点测试', enabled: true, notes: '', referenceAudio: { assetId: 'audio', relativePath: 'drums.wav', sha256, durationMs: 6000 }, cues: [], referenceMediaClips: [], visualLayers: [], lighting });
+  project.rundown.push({ id: 'song', title: '鼓点测试', enabled: true, notes: '', referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/drums.wav', sha256, durationMs: 6000 }, cues: [], referenceMediaClips: [], visualLayers: [], lighting });
   const path = join(directory, 'beat.tblink'); await writeFile(path, JSON.stringify(project));
   const application = await electron.launch({ args: [`--user-data-dir=${testInfo.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
   const page = await application.firstWindow();

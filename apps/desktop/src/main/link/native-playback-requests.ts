@@ -12,13 +12,15 @@ export class NativePlaybackRequests {
   constructor(private readonly service: () => Service,
     private readonly authorize: (channel: string, value: unknown) => Promise<void>) {}
 
-  async prepare(value: unknown): Promise<NativePlayerStatus> {
+  /** `checkFiles`: the window's request names its song files; the program's own requests pass none. */
+  async prepare(value: unknown, checkFiles?: (request: NativePlayerPrepare) => Promise<void>): Promise<NativePlayerStatus> {
     const request = nativePlayerPrepareSchema.parse(value);
     if (this.session?.request.sessionId === request.sessionId && request.generation <= this.session.generation) throw new Error('播放准备请求已过期');
     this.session?.authorization.abort();
     const session: Session = { request, generation: request.generation, transport: 0, dispatched: false, cancelled: false, authorization: new AbortController() };
     this.session = session;
     await this.authorized(session, 'link:native-player-prepare', request);
+    await checkFiles?.(request);
     this.requireCurrent(session, 0);
     session.dispatched = true;
     return this.service().prepare(request);

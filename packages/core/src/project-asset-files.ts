@@ -26,13 +26,12 @@ export function isProjectAssetPath(relativePath: string): boolean {
   return dot > 0 && extensions.has(name.slice(dot).toLowerCase());
 }
 
-/** Every asset file a project references, once per relative path: song audio, the
- * sources behind an edited song, and imported media. Paths outside the asset
- * folders (hand-written projects) are left out. */
-export function projectAssetFiles(project: LinkProject): ProjectAssetFile[] {
+/** Every file a project references, once per relative path, whatever the path:
+ * song audio, the sources behind an edited song, and imported media. */
+export function projectFileReferences(project: LinkProject): ProjectAssetFile[] {
   const files = new Map<string, ProjectAssetFile>();
   const add = (file: { relativePath: string; sha256: string }, label: string): void => {
-    if (isProjectAssetPath(file.relativePath) && !files.has(file.relativePath)) files.set(file.relativePath, { relativePath: file.relativePath, sha256: file.sha256, label });
+    if (!files.has(file.relativePath)) files.set(file.relativePath, { relativePath: file.relativePath, sha256: file.sha256, label });
   };
   for (const item of project.rundown) {
     const audio = item.referenceAudio;
@@ -44,6 +43,11 @@ export function projectAssetFiles(project: LinkProject): ProjectAssetFile[] {
   }
   for (const asset of project.mediaAssets) add(asset, `${MEDIA_KIND_LABELS[asset.kind]} · ${asset.name}`);
   return [...files.values()];
+}
+
+/** The referenced files kept in the asset folders; paths of hand-written projects are left out. */
+export function projectAssetFiles(project: LinkProject): ProjectAssetFile[] {
+  return projectFileReferences(project).filter(file => isProjectAssetPath(file.relativePath));
 }
 
 const MEDIA_KIND_LABELS: Record<LinkMediaKind, string> = { audio: '音频素材', video: '视频素材', image: '图片素材' };

@@ -170,6 +170,7 @@ const tbLink: LinkDesktopBridgeApi = {
   createProject: (name) => invoke('link:create-project', name),
   pickProjectDocument: () => invoke('link:pick-open-project'),
   openProjectDocument: (path) => invoke('link:open-project', path),
+  lastProjectPath: async () => z.string().min(1).nullable().parse(await invoke('link:last-project')),
   saveProjectDocument: (path, content, options) => invoke('link:save-project', path, content, options ?? {}),
   confirmProjectLocation: async (purpose) => z.boolean().parse(await invoke('link:confirm-project-location', purpose)),
   confirmPlayWithoutLighting: async (reason) => z.boolean().parse(await invoke('link:confirm-play-without-lighting', reason)),
@@ -311,7 +312,12 @@ const tbLink: LinkDesktopBridgeApi = {
 };
 
 const tbFile: LinkFileBridge = {
-  getPathForFile: (file) => webUtils.getPathForFile(file)
+  // A path exists only for a File the operator dropped or picked; the main process accepts it back.
+  getPathForFile: (file) => {
+    const path = webUtils.getPathForFile(file);
+    if (path) ipcRenderer.send('link:file-chosen', path);
+    return path;
+  }
 };
 
 contextBridge.exposeInMainWorld('tbLink', tbLink);

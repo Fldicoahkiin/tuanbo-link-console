@@ -58,3 +58,14 @@ it('授权失败绝不进入服务，已准备后的迟到播放被暂停取消'
   expect(paused.status).toBe('paused'); pending.release(); await cancelled;
   expect(engine.control).toHaveBeenCalledTimes(1);
 });
+
+it('窗口的准备请求在文件检查拒绝时不派发；检查期间被停止也不派发', async () => {
+  const engine = service(), gateway = new NativePlaybackRequests(() => engine, () => Promise.resolve());
+  await expect(gateway.prepare(request(), () => Promise.reject(new Error('只能访问当前打开的工程')))).rejects.toThrow('当前打开的工程');
+  expect(engine.prepare).not.toHaveBeenCalled();
+  const checking = deferred(), input = request();
+  const starting = gateway.prepare(input, () => checking.promise), cancelled = expect(starting).rejects.toThrow('取消');
+  await gateway.control({ version: 1, sessionId: input.sessionId, generation: 2, kind: 'stop' });
+  checking.release(); await cancelled;
+  expect(engine.prepare).not.toHaveBeenCalled();
+});

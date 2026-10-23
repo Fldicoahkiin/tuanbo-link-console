@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renameProjectCommand } from '@tb/core/link';
 import { createEmptyLinkProject } from '@tb/schema';
 import { useDocumentStore } from './stores/document-store';
-import { requireProjectLocation, requireSavedProjectPath, revertToSaved, saveDocument, saveDocumentWithRecovery } from './project-document';
+import { reportDocumentStateChanges, requireProjectLocation, requireSavedProjectPath, revertToSaved, saveDocument, saveDocumentWithRecovery } from './project-document';
 
-const bridge = vi.hoisted(() => ({ saveProjectDocument: vi.fn(), confirmProjectLocation: vi.fn(), recordLog: vi.fn(), encode: vi.fn(), confirmRevertToSaved: vi.fn(), openProject: vi.fn(), discardRecoveryCopy: vi.fn(),
+const bridge = vi.hoisted(() => ({ setDocumentState: vi.fn(), saveProjectDocument: vi.fn(), confirmProjectLocation: vi.fn(), recordLog: vi.fn(), encode: vi.fn(), confirmRevertToSaved: vi.fn(), openProject: vi.fn(), discardRecoveryCopy: vi.fn(),
   workerState: vi.fn(), restartWorker: vi.fn(), codecFailure: vi.fn(), codecRestart: vi.fn() }));
-vi.mock('./view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { confirmProjectLocation: bridge.confirmProjectLocation, recordLog: bridge.recordLog,
+vi.mock('./view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { setDocumentState: bridge.setDocumentState, confirmProjectLocation: bridge.confirmProjectLocation, recordLog: bridge.recordLog,
   confirmRevertToSaved: bridge.confirmRevertToSaved, openProject: bridge.openProject, discardRecoveryCopy: bridge.discardRecoveryCopy,
   projectDocumentWorkerState: bridge.workerState, restartProjectDocumentWorker: bridge.restartWorker } }));
 vi.mock('./stores/project-codec', () => ({ projectCodec: { encode: bridge.encode, failureReason: bridge.codecFailure, restart: bridge.codecRestart }, isWorkerValidatedProject: () => false }));
@@ -199,5 +199,23 @@ describe('saveDocumentWithRecovery', () => {
     bridge.saveProjectDocument.mockResolvedValue('C:\\shows\\保存.tblink');
     expect((await saveDocumentWithRecovery()).status).toBe('saved');
     expect(bridge.codecRestart).toHaveBeenCalledOnce();
+  });
+});
+
+describe('reportDocumentStateChanges', () => {
+  it('文档一变化就同步上报给主进程，早于任何界面效果发出的请求；内容不变不重复上报', () => {
+    bridge.setDocumentState.mockResolvedValue(undefined);
+    const notify = vi.fn(), stop = reportDocumentStateChanges(notify);
+    expect(bridge.setDocumentState).toHaveBeenLastCalledWith(expect.objectContaining({ projectPath: 'C:\\shows\\保存.tblink', dirty: false }));
+    open('C:\\shows\\另一个.tblink');
+    expect(bridge.setDocumentState).toHaveBeenLastCalledWith(expect.objectContaining({ projectPath: 'C:\\shows\\另一个.tblink', name: '保存测试' }));
+    const calls = bridge.setDocumentState.mock.calls.length;
+    useDocumentStore.setState({});
+    expect(bridge.setDocumentState).toHaveBeenCalledTimes(calls);
+    useDocumentStore.getState().execute(renameProjectCommand('改名'));
+    expect(bridge.setDocumentState).toHaveBeenLastCalledWith(expect.objectContaining({ name: '改名', dirty: true }));
+    stop(); open(null);
+    expect(bridge.setDocumentState).toHaveBeenCalledTimes(calls + 1);
+    expect(notify).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import type { IntegrationProfile } from '@tb/schema';
+import { DEFAULT_PROGRAM_PATHS, type IntegrationProfile } from '@tb/schema';
 
 /** Keep uncommitted device edits when another settings panel saves its fields. */
 export function mergeIntegrationDraft(base: IntegrationProfile, draft: IntegrationProfile, saved: IntegrationProfile): IntegrationProfile {
@@ -35,8 +35,8 @@ export function createDefaultIntegrationProfile(): IntegrationProfile {
     profileId: 'windows-stage',
     name: 'Windows 现场机器',
     updatedAt: new Date().toISOString(),
-    obs: { ...executable('C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe'), autoConnectOnLaunch: true, webSocketUrl: 'ws://127.0.0.1:4455', credentialId: 'obs-main' },
-    p1: { ...executable('C:\\P1\\P1.exe'), mtcInputPortProfileId: 'p1-mtc', controlOutputPortProfileId: 'p1-output', expectedFrameRate: '30', obsAudioInputName: '' },
+    obs: { ...executable(DEFAULT_PROGRAM_PATHS.obs), autoConnectOnLaunch: true, webSocketUrl: 'ws://127.0.0.1:4455', credentialId: 'obs-main' },
+    p1: { ...executable(DEFAULT_PROGRAM_PATHS.p1), mtcInputPortProfileId: 'p1-mtc', controlOutputPortProfileId: 'p1-output', expectedFrameRate: '30', obsAudioInputName: '' },
     midiPortProfiles: [
       { id: 'p1-mtc', direction: 'input', portName: '' },
       { id: 'p1-output', direction: 'output', portName: '' },

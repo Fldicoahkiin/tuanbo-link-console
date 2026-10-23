@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
 import { createHash } from 'node:crypto';
@@ -85,8 +85,9 @@ test('五百音频片段仅为视口内片段创建波形', async ({}, info) => 
   wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
   wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
   wav.write('data', 36); wav.writeUInt32LE(16000, 40);
-  await writeFile(info.outputPath('source.wav'), wav);
-  const source = { assetId: 'audio', relativePath: 'source.wav', durationMs: 2000, sha256: createHash('sha256').update(wav).digest('hex') };
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await writeFile(info.outputPath('assets/reference-audio/source.wav'), wav);
+  const source = { assetId: 'audio', relativePath: 'assets/reference-audio/source.wav', durationMs: 2000, sha256: createHash('sha256').update(wav).digest('hex') };
   const segments = Array.from({ length: 500 }, (_, i) => ({ id: `clip-${i}`, startMs: i * 2000, durationMs: 2000, sourceOffsetMs: 0 }));
   const project = parseLinkProject({ ...createEmptyLinkProject('波形视口验收'), rundown: [{ id: 'song', title: '片段测试', cues: [],
     referenceAudio: { ...source, durationMs: 1000000, timeline: { source, segments } } }] });

@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createEmptyLinkProject, parseLinkProject } from '@tb/schema';
@@ -12,8 +12,9 @@ test('灯光打点按钮、M 与快捷键修改', async ({}, info) => {
   wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(96000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
   wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
   for (let sample = 0; sample < 48000 * 3; sample++) wav.writeInt16LE(Math.round(Math.sin(sample * 0.06) * (5000 + 14000 * Math.exp(-(sample % 18000) / 6000))), 44 + sample * 2);
-  await writeFile(info.outputPath('audio.wav'), wav);
-  const project = parseLinkProject({ ...createEmptyLinkProject('快捷键测试'), playbackSource: 'p1', rundown: [{ id: 'song', title: '歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'audio.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 3000 } }] });
+  await mkdir(info.outputPath('assets/reference-audio'), { recursive: true });
+  await writeFile(info.outputPath('assets/reference-audio/audio.wav'), wav);
+  const project = parseLinkProject({ ...createEmptyLinkProject('快捷键测试'), playbackSource: 'p1', rundown: [{ id: 'song', title: '歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/reference-audio/audio.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 3000 } }] });
   const file = info.outputPath('show.tblink'); await writeFile(file, JSON.stringify(project));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
   try {
