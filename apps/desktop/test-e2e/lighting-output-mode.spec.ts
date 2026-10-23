@@ -37,6 +37,8 @@ for (const native of [false, true]) test(`无 MIDI 设备时打开三种已存�
         current = await launch();
       }
       await current.page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
+      // The song's lighting state shows once the project has opened; saving before that saves nothing.
+      await expect(current.page.locator('.lighting-output-route')).toBeVisible();
       await expect(current.page.getByRole('combobox', { name: '灯光输出方式' })).toHaveCount(0);
       await expect(current.page.getByText('界面暂时无法显示', { exact: true })).toHaveCount(0);
       await saveProject(current.page);
