@@ -9,11 +9,16 @@ from pathlib import Path
 import pwd
 import re
 import shlex
+import stat as file_mode
 import subprocess
 import time
 import urllib.error
 import urllib.request
 import uuid
+
+# Root's backups, below root: never inside a service account's directory, whose owner could swap them.
+BACKUPS = 'var/backups/tblink'
+ROOT_UID = 0
 
 
 def digest(data):
@@ -63,6 +68,22 @@ def atomic_write(path, data, owner, mode):
     os.replace(staged, path)
 
 
+def backup_directory(root, name):
+    """A new directory for this run's backup; every directory from root down is root's and writable by no one else."""
+    current = root
+    for part in ('', *Path(BACKUPS).parts):
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            raise RuntimeError(f'Backup directory missing: {current}') from None
+        if not file_mode.S_ISDIR(info.st_mode) or info.st_uid != ROOT_UID or info.st_mode & 0o022:
+            raise RuntimeError(f'Backup directory must be root-only: {current}')
+    backup = current / name
+    backup.mkdir(mode=0o700)
+    return backup
+
+
 def restart():
     subprocess.run(['systemctl', 'restart', 'tblink-licensing'], check=True, capture_output=True, timeout=30)
 
@@ -105,8 +126,7 @@ def activate(source, source_sha, environment_sha, root=Path('/')):
     owner = (stat.st_uid, stat.st_gid)
     mode = stat.st_mode & 0o777
     service_user = pwd.getpwnam('tblink-license')
-    backup = root / 'var/lib/tblink-licensing/backups' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-open-sales-' + uuid.uuid4().hex[:8])
-    backup.mkdir(mode=0o700)
+    backup = backup_directory(root, datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-open-sales-' + uuid.uuid4().hex[:8])
     atomic_write(backup / 'previous-environment', original, owner, 0o600)
     atomic_write(backup / 'reviewed-catalog.json', data, owner, 0o600)
     installed = False

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -17,7 +18,11 @@ HOST = 'tuanbo-link.jinhefilm.com'
 NGINX = Path('/etc/nginx/sites-available/tblink-licensing.conf')
 ROOT = Path('/srv/tblink-purchase')
 RELEASES = Path('/srv/tblink-purchase-releases')
-BACKUPS = Path('/var/lib/tblink-licensing/backups')
+# Root's backups. Never inside a service account's directory: the licensing account owns /var/lib/tblink-licensing
+# and could swap the validated files there before they are copied into the public release.
+BACKUPS = Path('/var/backups/tblink')
+TRUSTED = Path('/')
+ROOT_UID = 0
 PROTECTED = [Path('/opt/tblink-licensing/dist/index.js'), Path('/etc/tblink-licensing/service.env')]
 STATIC_FILES = {'index.html', 'purchase.js', 'purchase.css', 'assets/studio.webp', 'assets/display.woff2', 'assets/FONT-LICENSE.txt'}
 STATIC_FILES |= {'site.js', 'site.css', 'download/index.html', 'guide/index.html', 'purchase/index.html', 'terms/index.html', 'refund/index.html', 'privacy/index.html', 'media.json', 'release.json', 'robots.txt', 'sitemap.xml', 'website-manifest.json', 'assets/20261010-programs.webp', 'assets/20261010-timeline.webp', 'assets/20261010-cameras.webp', 'assets/20261010-lighting.webp', 'assets/20261010-connections.webp', 'assets/20261010-rehearsal.webp', 'media/20261010-programs.mp4', 'media/20261010-timeline.mp4', 'media/20261010-cameras.mp4', 'media/20261010-lighting.mp4', 'media/20261010-overview.mp4', 'media/20261010-overview.vtt'}
@@ -30,6 +35,22 @@ def digest(path):
 
 def run(*args):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=30)
+
+
+def backup_directory(name):
+    """A new directory for this run's backup; every directory from / down is root's and writable by no one else."""
+    current = TRUSTED
+    for part in ('', *BACKUPS.relative_to(TRUSTED).parts):
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            raise RuntimeError(f'Backup directory missing: {current}') from None
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != ROOT_UID or info.st_mode & 0o022:
+            raise RuntimeError(f'Backup directory must be root-only: {current}')
+    backup = BACKUPS / name
+    backup.mkdir(mode=0o700)
+    return backup
 
 
 def site_sections(config):
@@ -156,8 +177,7 @@ def main():
     for unit in services:
         if run('systemctl', 'is-active', unit).stdout.strip() != 'active':
             raise RuntimeError('Expected healthy existing services')
-    backup = BACKUPS / (time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-website')
-    backup.mkdir(mode=0o700)
+    backup = backup_directory(time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-website')
     with tarfile.open(artifact) as archive:
         members = archive.getmembers()
         if {item.name for item in members} != FILES or len(members) != len(FILES):
