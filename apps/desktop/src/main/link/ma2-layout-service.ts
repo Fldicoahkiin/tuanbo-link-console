@@ -156,8 +156,13 @@ export class Ma2LayoutService {
     finally { this.busy = false; }
   }
 
-  /** `consoleBaseline` names a console export the song check confirmed equals the binding's baseline. */
-  async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal, consoleBaseline: string | null = null): Promise<Ma2SongSyncResult> {
+  /**
+   * `consoleBaseline` names a console export the song check confirmed equals the binding's baseline.
+   * `adoptReadback` may take over the verified post-write export as the next check's baseline; it
+   * answers whether it consumed the file, otherwise the file joins this Sequence's backup rotation.
+   */
+  async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal,
+    { consoleBaseline = null, adoptReadback }: { consoleBaseline?: string | null; adoptReadback?: (exportFile: string, result: Ma2SongSyncResult) => Promise<boolean> } = {}): Promise<Ma2SongSyncResult> {
     const request = ma2SongSyncRequestSchema.parse(input);
     // The plan converts the song and Cue names it writes; the Layout name is only ever written.
     request.settings.name = toConsoleLabel(request.settings.name);
@@ -403,7 +408,12 @@ export class Ma2LayoutService {
         }
       }
       progress('verification', 0, 1, `回读序列 ${target}，确认名称、内容和位置`);
-      const verifiedXml = changed ? await bridge.request('SEQUENCE', target) : remoteXml;
+      // Kept on the console: a failed check leaves it beside the write-before export as evidence.
+      const readback = changed ? await bridge.exchange('SEQUENCE', target, 'keep') : null;
+      const readbackFile = readback ? `tblink_library_${readback.requestId}` : null;
+      // Without a write the console still holds the Sequence as read before it.
+      const verifiedXml = readback ? readback.response : remoteXml;
+      if (verifiedXml === null) throw new Error('歌曲序列回读缺失');
       const report = inspectMa2SequenceXml(verifiedXml).sequences[0]!;
       if (report.number !== target || report.name !== plan.name) throw new Error('歌曲序列名称回读未通过');
       const actualHashes = ma2SequenceCueFingerprints(verifiedXml);
@@ -441,8 +451,10 @@ export class Ma2LayoutService {
       if (changed || JSON.stringify(previousOwner?.binding) !== JSON.stringify(result.binding) || JSON.stringify(previousOwner?.conflicts ?? []) !== JSON.stringify(result.conflicts ?? [])) {
         await writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding: result.binding, conflicts: result.conflicts ?? [] }]));
       }
-      // The write-before export and any name backups join this Sequence's rotation once the sync is confirmed.
-      const backups = [...remoteExport ? [remoteExport] : [], ...labelBackups];
+      // The write-before export and any name backups join this Sequence's rotation once the sync is
+      // confirmed; so does the post-write export unless the song check took it over as its baseline.
+      const adopted = readbackFile && adoptReadback ? await adoptReadback(readbackFile, result) : false;
+      const backups = [...remoteExport ? [remoteExport] : [], ...labelBackups, ...readbackFile && !adopted ? [readbackFile] : []];
       if (backups.length) await this.backups.record(rawBridge, { console: endpoint, object: `Sequence ${target}`, files: backups });
       return result;
     } catch (cause) { throw new Error(`${wrote ? `序列 ${target} 的写入结果待核对，原位置与备份 ${backupFile || '新建对象记录'} 已保留。` : ''}${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
