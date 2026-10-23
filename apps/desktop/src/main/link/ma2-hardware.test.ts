@@ -222,7 +222,7 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     expect(own).toMatchObject({ offset: 14400, slot: 'TC Slot 2' });
     const shown = inspectMa2TimecodeXml(await bridge.request('READ', own.number)).timecodes[0]!;
     const steps = inspectMa2SequenceXml(await bridge.request('SEQUENCE', sequence)).sequences[0]!.cues;
-    expect(shown.attributes).toMatchObject({ offset: '14400', slot: 'TC Slot 2', frame_format: '30 FPS' });
+    expect(shown.attributes).toMatchObject({ offset: '14400', slot: 'TC Slot 2', frame_format: '30 FPS', m_autostart: 'true' });
     expect(shown.tracks.map(track => track.executorAddress.join('.'))).toEqual([`30.1.${combined.binding.executor}`]);
     expect(shown.tracks[0]!.subtracks[0]!.events.map(event => [event.attributes.time ?? '0', event.cueAddress.join('/')]))
       .toEqual(combined.binding.points.map(point => [String(Math.round(point.atMs! * 30 / 1000)), `1/${sequence}/${steps.find(cue => Number(cue.number) === Number(point.cue))!.index}`]));

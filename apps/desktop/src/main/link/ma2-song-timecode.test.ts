@@ -13,7 +13,7 @@ it('自有节目整份重建：起点为歌曲起始码，一条本曲执行器�
   validateMa2TimecodeWrite(xml);
   const timecode = inspectMa2TimecodeXml(xml).timecodes[0]!;
   expect(timecode.index).toBe(9906);
-  expect(timecode.attributes).toMatchObject({ name: 'LianDongGeQu', offset: '14400', slot: MA2_SONG_TIMECODE_SLOT, frame_format: '30 FPS' });
+  expect(timecode.attributes).toMatchObject({ name: 'LianDongGeQu', offset: '14400', slot: MA2_SONG_TIMECODE_SLOT, frame_format: '30 FPS', m_autostart: 'true' });
   expect(timecode.tracks).toHaveLength(1);
   expect(timecode.tracks[0]!.executorAddress).toEqual(['30', '1', '1000', '101']);
   const events = timecode.tracks[0]!.subtracks[0]!.events;

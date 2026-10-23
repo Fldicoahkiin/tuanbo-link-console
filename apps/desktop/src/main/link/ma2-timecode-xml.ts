@@ -733,6 +733,8 @@ export function resetMa2TimecodeShow(xml: string, target: number, show: { name: 
   for (const track of children(timecode, 'Track')) timecode.removeChild(track);
   timecode.setAttribute('name', show.name);
   timecode.setAttribute('slot', show.slot);
+  // MA2 starts a show from incoming timecode only with autostart; a show nobody started never fires (onPC 3.7.0.5).
+  timecode.setAttribute('m_autostart', 'true');
   if (show.offset) timecode.setAttribute('offset', String(show.offset)); else timecode.removeAttribute('offset');
   timecode.removeAttribute('lenght');
   const result = new XMLSerializer().serializeToString(document);
