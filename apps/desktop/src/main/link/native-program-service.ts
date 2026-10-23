@@ -78,7 +78,7 @@ export class NativeProgramService {
     const player = entry.host.controller, operation = request.operation;
     // Do not serialize transport here: stop must invalidate an in-flight play.
     switch (operation.kind) {
-      case 'play': return player.play(operation.itemId, operation.positionMs, operation.paused);
+      case 'play': return player.play(operation.itemId, operation.positionMs, operation.paused, operation.withoutLighting);
       case 'pause': return player.pause();
       case 'resume': return player.resume();
       case 'stop': return player.stop();

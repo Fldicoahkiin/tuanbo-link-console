@@ -1,10 +1,9 @@
 import type { IntegrationProfile, LinkProject } from '@tb/schema';
 
-/** A song of this project sends MIDI timecode from the internal player: console
- * timecode lighting or a P1 media show. Network and direct lighting do not. */
+/** A song of this project sends MIDI timecode from the internal player: any song
+ * with lighting or a P1 media show (playback only sends timecode, 2026-10-23). */
 export function projectOutputsMtc(project: LinkProject | null): boolean {
-  return project?.playbackSource === 'internal' && project.rundown.some(item => item.enabled && item.lighting?.outputMode !== 'network'
-    && item.lighting?.outputMode !== 'direct' && (Boolean(item.p1Media) || item.lighting?.outputMode === 'timecode'));
+  return project?.playbackSource === 'internal' && project.rundown.some(item => item.enabled && (Boolean(item.p1Media) || Boolean(item.lighting)));
 }
 
 export type InternalAudioEngine = { engine: 'browser' | 'native'; outputsMtc: boolean; blocked: string | null };

@@ -2,9 +2,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import { enrollmentSchema, loginSchema, pageQuerySchema, sessionSchema } from './console-contract';
 import type { ConsoleChannels, ConsoleService } from './console-service';
+import type { UpdateReleases } from './update-releases';
 import { ServiceError } from './service';
 
-export type ConsoleHttp = { service: ConsoleService; origin: string };
+export type ConsoleHttp = { service: ConsoleService; origin: string; updates?: UpdateReleases };
 const cookieName = '__Host-tblink-console';
 export async function dispatchConsole(options: ConsoleHttp, request: IncomingMessage, response: ServerResponse, requestId: string, address: string, readBody: () => Promise<unknown>, channels: ConsoleChannels): Promise<unknown> {
   const origin = new URL(options.origin);
@@ -42,6 +43,7 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
     return options.service.execute(body, auth.session(token), requestId, channels);
   }
   if (request.method === 'GET' && path === '/console-api/overview') return options.service.overview(session);
+  if (request.method === 'GET' && path === '/console-api/updates') return options.service.updates(session, channels);
   const exported = /^\/console-api\/export(?:\/(finance))?$/.exec(path);
   if (request.method === 'GET' && exported) {
     const resource = exported[1] === 'finance' ? 'finance' : 'orders';

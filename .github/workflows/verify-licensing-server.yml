@@ -75,10 +75,15 @@ jobs:
           node scripts/verify-purchase-website.mjs
           node scripts/verify-product-website.mjs
           node scripts/verify-console.mjs
+      - name: Python packages the server's update publisher uses
+        # The same versions as the production server's system Python (publish-update.py verifies Ed25519 and parses latest.yml).
+        run: |
+          python3 -m venv "$RUNNER_TEMP/deploy-python"
+          "$RUNNER_TEMP/deploy-python/bin/pip" install --disable-pip-version-check cryptography==46.0.5 PyYAML==6.0.3
       - name: Verify deployment, rollback and delivery recovery
         env:
           PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 -W error::ResourceWarning -m unittest discover -s apps/licensing-server/deploy -p 'test_*.py'
+        run: '"$RUNNER_TEMP/deploy-python/bin/python" -W error::ResourceWarning -m unittest discover -s apps/licensing-server/deploy -p ''test_*.py'''
       - name: Record verification scope
         run: |
           printf 'Verified source: %s\n\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

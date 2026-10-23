@@ -254,6 +254,11 @@ it('控台当前 show 与工程灯光依据不一致时工程通信不通过，�
     channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 5000, timeLock: 'time', muted: false,
       events: [{ id: 'cue', at: 1000, kind: 'ma2', sequence: 7, cue: '6.000', executor: '', label: '副歌', action: 'goto' }] }] });
   const config = options(); config.draft.ma3d = maProgram('D:\\MA\\MA3D.exe');
+  // Every lighting song now sends timecode, so the timecode output port is part of the check.
+  config.draft.internalPlayer = { audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: 'internal-mtc-output' };
+  config.draft.midiPortProfiles.push({ id: 'internal-mtc-output', direction: 'output', portName: '时间码口' });
+  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 0, name: '时间码口' }] };
+  useIntegrationStore.getState().setNativeDevices(native, null); api.getNativePlaybackDevices.mockResolvedValue(native);
   config.project = parseLinkProject({ ...createEmptyLinkProject('灯光工程'), schemaVersion: 2, playbackSource: 'internal', rundown: [{ id: 'song', title: '第一首',
     lighting: { ...createLightingDocument(), outputMode: 'network', tracks: [track], ma2Library: { show: '2hao', readAt: '2026-10-13T00:00:00.000Z', sequences: [] } } }] });
   api.getMa2CurrentShow.mockResolvedValueOnce('tblink_ui100_20261007');

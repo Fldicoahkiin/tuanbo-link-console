@@ -1,10 +1,15 @@
 import { ObsProgramSession, projectFromObsSnapshot, type ObsProgramSessionDependencies } from '@tb/core/link';
 import { nativeObsPrepareSchema, nativeObsStopSchema, nativeObsStatusSchema, type NativeObsPrepare, type NativeObsStop, type NativeObsStatus, type NativePlayerStatus, type NativePlayerControl } from '@tb/schema';
 
-type Entry = { request: NativeObsPrepare; session: ObsProgramSession; state: NativeObsStatus; awaitingPause: boolean; ended: boolean; filesStarted: boolean; now: () => number };
+type Outputs = Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault'> & {
+  /** Prepares this song's owned scenes again after OBS reconnects; starts no decoder. */
+  restoreScenes?: (assertCurrent: () => void) => Promise<void>;
+};
+type Entry = { request: NativeObsPrepare; session: ObsProgramSession; state: NativeObsStatus; awaitingPause: boolean; ended: boolean; filesStarted: boolean;
+  now: () => number; restoreScenes: Outputs['restoreScenes'] };
 type Dependencies = {
   audio: () => NativePlayerStatus | null;
-  outputs: (request: NativeObsPrepare, positionMs: number, assertCurrent: () => void) => Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault'> | Promise<Omit<ObsProgramSessionDependencies, 'state' | 'cueReport' | 'mediaReport' | 'fault'>>;
+  outputs: (request: NativeObsPrepare, positionMs: number, assertCurrent: () => void) => Outputs | Promise<Outputs>;
   changed: (status: NativeObsStatus) => void;
   error: (message: string) => void;
   prepareNextFiles?: (request: NativeObsPrepare, assertCurrent: () => void) => Promise<void>;
@@ -19,6 +24,7 @@ export class NativeObsHost {
   private stopped: Promise<void> = Promise.resolve();
   private displayed: NativeObsStatus | null = null;
   private displayedAt = -Infinity;
+  private preparing = 0;
   constructor(private readonly dependencies: Dependencies) {}
   get status(): NativeObsStatus | null { return this.entry?.state ?? null; }
 
@@ -44,6 +50,21 @@ export class NativeObsHost {
     this.entry.session.abort(reason);
   }
 
+  /** Recovery rule B after the operator reconnects OBS while this song plays: OBS
+   * forgot the owned scenes, so they are prepared again and the picture is rebuilt
+   * at the current position while audio continues. Reported in red either way. */
+  async reconnected(): Promise<void> {
+    const entry = this.entry;
+    if (!entry || entry.state.state !== 'running') return;
+    const current = (): void => { if (this.entry !== entry || entry.state.state !== 'running') throw new Error('画面会话已改变，未重建'); };
+    try {
+      const sent = await entry.session.rebuild(() => entry.restoreScenes?.(current) ?? Promise.resolve());
+      this.fault(`OBS 已重新连接：画面按当前位置重建，发送 ${sent} 项`);
+    } catch (error) {
+      if (this.entry === entry) this.fault(`OBS 重新连接后画面重建失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   /** Called after audio request validation, before it waits behind in-flight
    * native work. Queue cancellation cannot wait for the eventual acknowledgement. */
   interrupt(request: NativePlayerControl): void {
@@ -66,6 +87,14 @@ export class NativeObsHost {
     }
     this.assertAdmission(request);
     this.requested = request;
+    this.preparing++;
+    try { return await this.prepareSession(request); } finally { this.preparing--; }
+  }
+
+  /** A program picture is being prepared or is on air; a preselection must not stop it. */
+  get busy(): boolean { return this.preparing > 0 || Boolean(this.entry && !['stopped', 'failed'].includes(this.entry.state.state)); }
+
+  private async prepareSession(request: NativeObsPrepare): Promise<NativeObsStatus> {
     const epoch = ++this.epoch;
     const previous = this.entry;
     if (previous) {
@@ -98,7 +127,8 @@ export class NativeObsHost {
       },
       fault: message => { if (this.entry?.request === request) this.fault(message); }
     });
-    const entry = { request, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now }; this.entry = entry; this.publish();
+    const entry = { request, session, state, awaitingPause: false, ended: false, filesStarted: false, now: outputs.now, restoreScenes: outputs.restoreScenes };
+    this.entry = entry; this.publish();
     try {
       await session.prepare(audio.positionMs);
       if (epoch !== this.epoch || this.entry !== entry) throw new Error('后台画面准备已取消');

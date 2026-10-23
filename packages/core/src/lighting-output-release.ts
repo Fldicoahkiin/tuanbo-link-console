@@ -5,8 +5,12 @@ import type { LinkDesktopApi } from './link-desktop-contract';
 export function lightingReleaseActions(document: LightingDocument): Ma2PlaybackAction[] {
   if (document.outputMode === 'direct') return [];
   const actions: Ma2PlaybackAction[] = [];
-  if (document.outputMode === 'timecode') for (const binding of document.ma2Bindings ?? []) {
-    for (const mapping of [...binding.mappings, ...binding.trackMappings ?? []]) actions.push({ target: 'executor', executor: mapping.executor, action: 'off' });
+  if (document.outputMode === 'timecode') {
+    for (const binding of document.ma2Bindings ?? []) {
+      for (const mapping of [...binding.mappings, ...binding.trackMappings ?? []]) actions.push({ target: 'executor', executor: mapping.executor, action: 'off' });
+    }
+    // The song's own console sequence keeps its last Cue on after the timecode stops.
+    if (document.consoleSong?.executor) actions.push({ target: 'executor', executor: document.consoleSong.executor, action: 'off' });
   }
   else for (const track of document.tracks) for (const clip of track.clips) for (const event of clip.events) {
     if (track.muted || document.tracks.some(value => value.solo && !value.muted) && !track.solo || clip.muted || event.kind !== 'ma2') continue;

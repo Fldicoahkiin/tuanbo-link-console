@@ -167,3 +167,18 @@ it('一个输入停止失败仍清理另一输入，错误返回上层', async (
   await expect(t.preload.close()).rejects.toThrow('主来源失去响应');
   expect(t.scenes.execute.mock.calls.filter(([event]) => event.phase === 'stop')).toHaveLength(2);
 });
+
+it('OBS 重连后重新登记：解码槽重来但已用过的输入仍在停止时清理；用过的预备解码器重新准备', async () => {
+  const t = setup(), [first, second] = t.events;
+  await t.preload.prime(first!, current); await t.preload.execute(first!, t.path);
+  await t.preload.upcoming(60, current); await t.preload.execute(second!, t.path);
+  const standby = `${first!.sourceName}·预备`;
+  expect(t.preload.resolveSource(first!.sourceName)).toBe(standby);
+  t.preload.register(t.project.projectId, t.project.mediaAssets[0]!, t.path);
+  expect(t.preload.resolveSource(first!.sourceName)).toBe(first!.sourceName);
+  t.scenes.prepareStandby.mockClear();
+  await t.preload.restoreStandby(current);
+  expect(t.scenes.prepareStandby).toHaveBeenCalledExactlyOnceWith(first!.sourceName);
+  await t.preload.close();
+  expect(t.scenes.execute.mock.calls.filter(([event]) => event.phase === 'stop').map(([event]) => event.sourceName).sort()).toEqual([first!.sourceName, standby].sort());
+});

@@ -79,7 +79,6 @@ test('高负载正式按钮与真实 OBS 连续节目', async ({}, info) => {
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await expect(page.locator('[data-total-programs]')).toHaveAttribute('data-total-programs', '200');
-    await page.keyboard.press('Control+KeyM'); // Dedicated loopback is owned by the concurrent native soak.
     // This case measures prepared multi-channel playback. Opening a cold show
     // and immediately pressing Play is a separate audio-only admission case;
     // do not extend the production one-second participation deadline.

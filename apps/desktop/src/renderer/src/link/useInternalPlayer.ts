@@ -62,7 +62,6 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     const keyboard = (event: KeyboardEvent): void => {
       if (event.metaKey || event.repeat || event.defaultPrevented || (event.target instanceof HTMLElement && (event.target.closest('input,textarea,select,button,[contenteditable="true"],[role="slider"],.reference-timeline')))) return;
       const key = [...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), event.code].join('+');
-      if (key === 'Ctrl+KeyM') { event.preventDefault(); controller.toggleMtc(); return; }
       const item = project.rundown.find((entry) => entry.enabled && entry.playback?.shortcut === key);
       if (item) { event.preventDefault(); void controller.play(item.id); }
       else if (!event.ctrlKey && !event.altKey && event.code === 'Space') { event.preventDefault(); void controller.toggle(); }
@@ -79,6 +78,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     const dependencies: InternalPlayerDependencies = {
       // Refused before any output is prepared; the engine is never switched here.
       refusal: () => internalAudioEngine(useIntegrationStore.getState().profile, project).blocked,
+      confirmWithoutLighting: reason => desktop.confirmPlayWithoutLighting(reason),
       prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled, signal }) => {
         if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
         if (!path) throw new Error('请先保存工程，再播放正式音频');

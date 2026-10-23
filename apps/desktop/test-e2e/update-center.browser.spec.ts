@@ -67,3 +67,17 @@ test('超出升级服务期限：显示新版本和原因，不提供下载', as
   await expect(dialog.getByRole('button', { name: '检查更新' })).toBeEnabled();
   await expect(dialog.getByText('团播联动台功能测试版 · 测试版 · 提交 0123456789ab-dirty · com.tuanbo.control.functionaltest', { exact: true })).toBeVisible();
 });
+
+test('当前版本比更新源新时不显示「可用版本」', async ({ page }) => {
+  await page.setContent('<main class="app-shell"><div id="root"></div><div id="notice" role="status"></div></main>');
+  await page.addStyleTag({ content: styles });
+  await page.evaluate(() => {
+    const status: LinkUpdateStatus = { phase: 'upToDate', currentVersion: '0.5.0', availableVersion: '0.4.29', releaseDate: null, progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true,
+      installBlockedReason: null, message: '当前已经是最新版本' };
+    Object.defineProperty(window, 'tbLink', { configurable: true, value: { getUpdateStatus: () => Promise.resolve(status), onUpdateStatus: () => () => undefined,
+      getAppInfo: () => Promise.resolve({ name: '团播联动台', version: '0.5.0', channel: 'release', gitSha: '0123456789abcdef0123456789abcdef01234567', appId: 'com.tuanbo.control' }) } });
+  });
+  await page.addScriptTag({ content: script });
+  await page.getByRole('button', { name: '软件更新', exact: true }).click();
+  await expect(page.getByRole('dialog').getByText('当前版本 0.5.0', { exact: true })).toBeVisible();
+});

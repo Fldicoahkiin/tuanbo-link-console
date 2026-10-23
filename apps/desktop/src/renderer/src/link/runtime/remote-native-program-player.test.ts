@@ -1,19 +1,22 @@
 import { expect, it, vi } from 'vitest';
 import { emptyInternalPlayerState, type InternalPlayerDependencies, type LinkDesktopApi } from '@tb/core/link';
-import { createEmptyLinkProject, type NativeProgramAttachment, type NativeProgramEvent } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type LinkProject, type NativeProgramAttachment, type NativeProgramEvent } from '@tb/schema';
 import { RemoteNativeProgramPlayer } from './remote-native-program-player';
 
-function fixture(wait?: Promise<NativeProgramAttachment>) {
+const song = parseLinkProject({ ...createEmptyLinkProject('远程控制'), playbackSource: 'internal', rundown: [{ id: 'song', title: '歌曲' }] });
+function fixture(wait?: Promise<NativeProgramAttachment>, project: LinkProject = song) {
   const api = {
     openNativeProgram: vi.fn<LinkDesktopApi['openNativeProgram']>(() => wait ?? Promise.resolve('opened')),
     controlNativeProgram: vi.fn<LinkDesktopApi['controlNativeProgram']>(() => Promise.resolve()),
     onNativeProgramEvent: vi.fn<LinkDesktopApi['onNativeProgramEvent']>(() => vi.fn()),
-    onNativePlaybackStatus: vi.fn<LinkDesktopApi['onNativePlaybackStatus']>(() => vi.fn())
+    onNativePlaybackStatus: vi.fn<LinkDesktopApi['onNativePlaybackStatus']>(() => vi.fn()),
+    getNativePlaybackDevices: vi.fn<LinkDesktopApi['getNativePlaybackDevices']>(() => Promise.resolve({ protocol: 4, audio: [], midiOutputs: [] }))
   };
   const dependencies = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.reject(new Error('不能在界面播放原声'))),
-    configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: vi.fn<InternalPlayerDependencies['changed']>(), notice: vi.fn() };
-  const observed = vi.fn(), player = new RemoteNativeProgramPlayer(createEmptyLinkProject('远程控制'), 'C:/test/show.tblink', 1, dependencies, api, observed);
+    configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: vi.fn<InternalPlayerDependencies['changed']>(), notice: vi.fn(),
+    confirmWithoutLighting: vi.fn<NonNullable<InternalPlayerDependencies['confirmWithoutLighting']>>(() => Promise.resolve(true)) };
+  const observed = vi.fn(), player = new RemoteNativeProgramPlayer(project, 'C:/test/show.tblink', 1, dependencies, api, observed);
   const ownerId = api.openNativeProgram.mock.calls[0]![0].ownerId;
   const emit = (patch: Partial<NativeProgramEvent> = {}) => api.onNativeProgramEvent.mock.calls[0]![0]({ version: 1, ownerId, sequence: 1,
     state: { ...emptyInternalPlayerState, status: 'playing', itemId: 'song', positionMs: 1234 },
@@ -59,4 +62,19 @@ it('接管到与界面不同版本的节目时标记为过期，其余打开不�
   const outdated = fixture(Promise.resolve('outdated')), adopted = fixture(Promise.resolve('adopted'));
   await outdated.player.play('song'); await adopted.player.play('song');
   expect(outdated.player.outdated).toBe(true); expect(adopted.player.outdated).toBe(false); expect(fixture().player.outdated).toBe(false);
+});
+
+it('没有灯光工作的歌直接播放，不询问也不查询端口；灯光需要处理的歌先问，取消就不播放，选择后无灯光播放', async () => {
+  const plain = fixture(); await plain.player.play('song');
+  expect(plain.dependencies.confirmWithoutLighting).not.toHaveBeenCalled(); expect(plain.api.getNativePlaybackDevices).not.toHaveBeenCalled();
+  expect(plain.api.controlNativeProgram.mock.calls[0]?.[0].operation).toEqual({ kind: 'play', itemId: 'song', paused: false });
+  const lit = structuredClone(song), lighting = createLightingDocument();
+  lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '歌曲', readAt: '2026-10-22T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [], mappings: [], playback: 'editable', timeOriginMs: 0 }];
+  lit.rundown[0]!.lighting = lighting;
+  const asked = fixture(undefined, lit); asked.dependencies.confirmWithoutLighting.mockResolvedValueOnce(false);
+  await asked.player.play('song');
+  expect(asked.dependencies.confirmWithoutLighting.mock.calls[0]?.[0]).toMatch(/^这首歌的灯光需要处理：控台 Timecode 2/);
+  expect(asked.api.controlNativeProgram).not.toHaveBeenCalled();
+  await asked.player.play('song');
+  expect(asked.api.controlNativeProgram.mock.calls[0]?.[0].operation).toEqual({ kind: 'play', itemId: 'song', paused: false, withoutLighting: true });
 });

@@ -6,9 +6,9 @@ import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../src/renderer/src/link/view-models/local-integration-profile';
 
-for (const failSecond of [false, true]) test(`正式原生灯光后台调度：${failSecond ? '控台拒绝时停止灯光并显示错误' : '界面阻塞、暂停和恢复不漏发或重发'}`, async ({}, info) => {
+test('播放只发时间码：网络直控编排的歌在播放、界面阻塞、暂停继续和停止中都不逐个发 Cue，音频照常', async ({}, info) => {
   test.skip(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1', '真实 WASAPI + 隔离 TCP 协议端；不控制实体控台');
-  const sockets = new Set<Socket>(), calls: { cue: string; receivedAt: number }[] = [];
+  const sockets = new Set<Socket>(), calls: string[] = [];
   const own = (socket: Socket) => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); };
   const monitor = createServer(own);
   const command = createServer(socket => {
@@ -21,8 +21,9 @@ for (const failSecond of [false, true]) test(`正式原生灯光后台调度：$
         const auth = /TBLINK_AUTH_[a-f0-9]{32}/.exec(line)?.[0], boot = /TBLINK_BOOT_[a-f0-9]{32}/.exec(line)?.[0];
         if (auth) { socket.write(`\r\n${auth}:3.9.60.74\r\n`); continue; }
         if (boot) { socket.write(`\r\n${boot}:ready\r\n`); continue; }
-        const play = /TBLINK_PLAY_[a-f0-9]{32}/.exec(line)?.[0], cue = /gma.cmd\('Goto Cue ([\d.]+) Sequence 168'\)/.exec(line)?.[1];
-        if (play && cue) { calls.push({ cue, receivedAt: Date.now() }); socket.write(`\r\n${play}:${failSecond && cue === '2.000' ? 'MISSING' : 'SENT'}\r\n`); }
+        // Any playback command reaching the console counts; with timecode only there must be none.
+        const play = /TBLINK_PLAY_[a-f0-9]{32}/.exec(line)?.[0];
+        if (play) { calls.push(line); socket.write(`\r\n${play}:SENT\r\n`); }
       }
     });
   });
@@ -46,7 +47,7 @@ for (const failSecond of [false, true]) test(`正式原生灯光后台调度：$
   const profile = createDefaultIntegrationProfile(); profile.obs.autoConnectOnLaunch = false;
   profile.internalPlayer = { audioEngine: 'native', nativeAudioOutputDeviceId: 'default', audioOutputDeviceId: 'default', mtcOutputPortProfileId: null, audioSampleRate: 48000 };
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
-  const page = await app.firstWindow(), evidence: Record<string, unknown> = { passed: false, scope: '真实 WASAPI / 主进程 / TCP；协议回执模拟，不代表实体灯具' };
+  const page = await app.firstWindow(), evidence: Record<string, unknown> = { passed: false, scope: '真实 WASAPI / 主进程 / TCP；只验证播放不再经网络发 Cue，不代表实体控台' };
   try {
     await page.waitForFunction(() => Boolean(window.tbLink));
     await page.evaluate(profile => window.tbLink.saveIntegrationProfile({ profile }), profile); await page.reload();
@@ -60,30 +61,18 @@ for (const failSecond of [false, true]) test(`正式原生灯光后台调度：$
     await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
     const before = await page.evaluate(async () => ({ state: await window.tbLink.getNativePlaybackStatus(), at: Date.now() }));
     expect(before.state!.positionMs).toBeLessThan(500);
-    const after = await page.evaluate(() => { const started = performance.now(); while (performance.now() - started < 3500) { /* renderer fault */ } return Date.now(); });
-    if (failSecond) {
-      expect(calls.map(call => call.cue)).toEqual(['1.000', '2.000']);
-      await expect(page.getByRole('region', { name: '通知', exact: true }).getByText(/灯光动作已停止.*控台没有找到 Sequence 168 Cue 2\.000/)).toBeVisible();
-      expect((await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('playing');
-      await page.getByRole('button', { name: '停止时间线', exact: true }).click();
-      await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
-      Object.assign(evidence, { passed: true, before, after, calls });
-      return;
-    }
-    expect(calls.map(call => call.cue)).toEqual(['1.000', '2.000', '3.000']);
-    expect(calls.every(call => call.receivedAt < after)).toBe(true);
-    const errorsMs = calls.map((call, index) => call.receivedAt - before.at + before.state!.positionMs - points[index]!);
-    expect(errorsMs.every(value => Math.abs(value) < 150)).toBe(true);
+    await page.evaluate(() => { const started = performance.now(); while (performance.now() - started < 3500) { /* renderer fault */ } });
+    const during = await page.evaluate(() => window.tbLink.getNativePlaybackStatus());
+    expect(during).toMatchObject({ status: 'playing', underruns: 0, audioError: null }); expect(during!.positionMs).toBeGreaterThan(3000);
     await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
     await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('paused');
-    await page.waitForTimeout(2000); expect(calls).toHaveLength(3);
     await page.getByRole('button', { name: '播放时间线', exact: true }).click();
-    await expect.poll(() => calls.map(call => call.cue), { timeout: 4000 }).toEqual(['1.000', '2.000', '3.000', '4.000']);
+    await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.positionMs ?? 0, { timeout: 4000 }).toBeGreaterThan(5600);
     await page.getByRole('button', { name: '停止时间线', exact: true }).click();
     await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');
-    await page.waitForTimeout(1000); expect(calls).toHaveLength(4);
+    await page.waitForTimeout(1000); expect(calls).toEqual([]);
     await page.screenshot({ path: info.outputPath('native-lighting-stopped.png') });
-    Object.assign(evidence, { passed: true, before, after, calls, errorsMs });
+    Object.assign(evidence, { passed: true, before, during, calls });
   } finally {
     await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2));
     await page.keyboard.press('Escape');

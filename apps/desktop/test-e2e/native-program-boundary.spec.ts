@@ -34,7 +34,6 @@ for (const crash of [false, true]) test(`正式节目后台接续：界面繁忙
     await page.evaluate(profile => window.tbLink.saveIntegrationProfile({ profile }), profile); await page.reload();
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await page.keyboard.press('Control+KeyM');
     await page.locator('.player-transport .primary-button').click();
     await expect(page.locator('.player-transport.status-playing')).toBeVisible();
     const before = await page.evaluate(() => window.tbLink.getNativePlaybackStatus()); evidence.before = before;

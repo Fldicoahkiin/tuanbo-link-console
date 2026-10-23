@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { createLightingDocument, lightingTrackSchema, type Ma2NetworkStatus } from '@tb/schema';
 import { LightingOutputRelease, lightingReleaseActions } from './lighting-output-release';
-import { compileLightingReleasePackets } from './lighting-playback';
+import { compileLightingReleasePackets, playbackLighting } from './lighting-playback';
 
 function fixture() {
   const document = createLightingDocument(); document.outputMode = 'network';
@@ -36,4 +36,12 @@ it('MIDI 直控使用原端口和设备号生成去重的执行器 Off，无网�
   expect(packets[0]?.bytes).toEqual([0xf0, 0x7f, 12, 0x02, 0x01, 0x0b, ...Array.from('0.000\0' + '101.51', value => value.charCodeAt(0)), 0xf7]);
   f.document.tracks[0]!.muted = true;
   expect(compileLightingReleasePackets(f.document, 12)).toEqual([]);
+});
+it('播放只发时间码时，停止关闭时间码绑定的执行器和本曲控台序列的执行器', async () => {
+  const f = fixture(), source = { ...f.document, consoleSong: { endpoint: 'console', show: '现场', layout: null, executor: '1.105', sequence: 36,
+    name: '歌曲', baselineXml: '<MA/>', points: [] } }, playback = playbackLighting(source);
+  expect(playbackLighting(source)).toBe(playback); expect(playback).toMatchObject({ outputMode: 'timecode', tracks: [] });
+  expect(lightingReleaseActions(playback)).toEqual([{ target: 'executor', executor: '1.105', action: 'off' }]);
+  await f.release.prepare(playback); await f.release.release();
+  expect(f.api.playMa2Cue).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: { target: 'executor', executor: '1.105', action: 'off' } }));
 });

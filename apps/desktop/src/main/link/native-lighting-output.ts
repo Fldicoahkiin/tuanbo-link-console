@@ -1,4 +1,4 @@
-import { compileLightingPackets, LightingNetworkOutput, LightingScheduler, type LightingOnAir, type LightingPacket,
+import { compileLightingPackets, LightingNetworkOutput, LightingOutputRelease, LightingScheduler, type LightingOnAir, type LightingPacket,
   type LinkDesktopApi, type ProgramLightingOutput } from '@tb/core/link';
 import type { IntegrationProfile, LightingDocument } from '@tb/schema';
 import { NativeMidiPorts } from './native-midi-ports';
@@ -17,6 +17,8 @@ type Dependencies = {
  * packets. A partial imported timeline can never become a substitute output. */
 export class NativeLightingOutput implements ProgramLightingOutput {
   private readonly network: LightingNetworkOutput;
+  /** Executors of the song, switched off over the network when the operator stops it. */
+  private readonly offs: LightingOutputRelease;
   private readonly now: () => number;
   private scheduler: LightingScheduler | null = null;
   private ports: Ports | null = null;
@@ -38,6 +40,7 @@ export class NativeLightingOutput implements ProgramLightingOutput {
   constructor(private readonly dependencies: Dependencies) {
     this.now = dependencies.now ?? (() => Number(process.hrtime.bigint()) / 1e6);
     this.network = new LightingNetworkOutput(dependencies.network, error => dependencies.error(`灯光网络取消失败：${error.message}`));
+    this.offs = new LightingOutputRelease(dependencies.network);
   }
 
   async prepare(document: LightingDocument, profile: IntegrationProfile | null, positionMs: number): Promise<void> {
@@ -57,6 +60,8 @@ export class NativeLightingOutput implements ProgramLightingOutput {
       await ports.prepare([...new Set(packets.map(packet => packet.portProfileId))], aborted.signal);
       if (generation !== this.generation) throw new Error('灯光准备已取消');
       const restored = await this.network.prepare(document, positionMs, true);
+      if (generation !== this.generation) throw new Error('灯光准备已取消');
+      await this.offs.prepare(document);
       if (generation !== this.generation) throw new Error('灯光准备已取消');
       this.scheduler = new LightingScheduler(packets, packet => this.send(packet), this.carried?.document === document ? this.carried.onAir : undefined);
       this.document = document; this.carried = null; this.local = packets.length > 0 || document.outputMode === 'network';
@@ -96,8 +101,9 @@ export class NativeLightingOutput implements ProgramLightingOutput {
     const fault = this.network.takeFault() ?? this.fault; this.fault = null; return fault;
   }
 
-  /** The player stopped the song: nothing of it is assumed on air for the next play. */
-  release(): Promise<void> { this.carried = null; this.document = null; this.network.forget(); return Promise.resolve(); }
+  /** The player stopped the song: its executors are switched off and nothing of it
+   * is assumed on air for the next play. */
+  release(): Promise<void> { this.carried = null; this.document = null; this.network.forget(); return this.offs.release(); }
 
   stop(): void {
     if (this.scheduler && this.document) this.carried = { document: this.document, onAir: this.scheduler.onAir() };

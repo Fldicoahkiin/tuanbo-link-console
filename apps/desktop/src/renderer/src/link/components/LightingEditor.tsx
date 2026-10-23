@@ -180,14 +180,14 @@ function LightingSettings(props: { section: SettingsSection; document: LightingD
       <button disabled={track.locked} onClick={() => props.onChange({ ...document, tracks: document.tracks.filter((entry) => entry.id !== track.id) }, '删除灯光轨道')}>删除轨道</button>
     </div></> : section === 'arrangement' ? <div className="lighting-settings"><LightingArrangementSettings document={document} onChange={props.onChange} /></div> : section === 'files' ? <><p className="lighting-muted">支持 MIDI、REAPER（.rpp）和灯光工程文件，导入前可预览。</p><div className="lighting-tools"><LightingFileActions document={document} onChange={props.onChange} notify={props.notify} /></div></> : <>
       <div className="lighting-settings">
-        <label>控制方式<select aria-label="控制方式" value={document.outputMode} onChange={(event) => props.onChange({ ...document, outputMode: event.target.value as LightingDocument['outputMode'] }, '修改灯光输出方式')}><option value="timecode">发送时间码，由 MA2 播放</option><option value="direct">MIDI · 执行器触发</option><option value="network">网络 · 序列池播放</option></select></label>
+        <label>控制方式<select aria-label="控制方式" title="只影响编灯时的同步与试听；演出播放始终发送时间码" value={document.outputMode} onChange={(event) => props.onChange({ ...document, outputMode: event.target.value as LightingDocument['outputMode'] }, '修改灯光输出方式')}><option value="timecode">发送时间码，由 MA2 播放</option><option value="direct">MIDI · 执行器触发</option><option value="network">网络 · 序列池播放</option></select></label>
         {document.outputMode === 'direct' ? <label>事件输出端口<select aria-label="事件输出端口" value={track.portProfileId} disabled={track.locked} onChange={(event) => props.changeTrack({ ...track, portProfileId: event.target.value }, '配置灯光输出')}><option value="">使用默认灯光输出</option>{ports?.filter((port) => port.direction === 'output').map((port) => <option key={port.id} value={port.id}>{port.portName || '未连接端口'}</option>)}</select></label> : null}
       </div><div className="lighting-settings">
 
         <label>事件类型<select aria-label="灯光编辑内容" value={track.kind} disabled={track.locked || track.clips.some((clip) => clip.events.length > 0)} onChange={(event) => props.changeTrack({ ...track, kind: event.target.value as LightingTrack['kind'] }, '修改灯光编辑类型')}><option value="ma2">灯光切换（MA2 Cue）</option><option value="midi">音符与 MIDI 消息</option><option value="automation">推杆变化（MIDI CC）</option></select></label>
         <label>MIDI 通道<PropertyNumberInput label="MIDI 通道" min={1} max={16} value={track.channel} disabled={track.locked} onCommit={(channel) => props.changeTrack({ ...track, channel }, '修改 MIDI 通道')} /></label>
         {track.kind === 'automation' ? <label>推杆控制器（CC）<PropertyNumberInput label="推杆控制器（CC）" min={0} max={127} value={track.controller} disabled={track.locked} onCommit={(controller) => props.changeTrack({ ...track, controller }, '修改 CC 控制器')} /></label> : null}
-      </div><p className="lighting-muted">{document.outputMode === 'timecode' ? '先在“节目同步”写入 MA2，播放时发送时间码。' : '播放时直接发送当前轨道的动作。'}端口在“设备连接”设置。</p>{track.clips.some((clip) => clip.events.length > 0) ? <p className="lighting-muted">已有编排的轨道保留原类型。需要编辑其他内容时，请添加一条空轨道。</p> : null}
+      </div><p className="lighting-muted">先在“节目同步”写入 MA2；播放时发送时间码，由控台跑灯。端口在“设备连接”设置。</p>{track.clips.some((clip) => clip.events.length > 0) ? <p className="lighting-muted">已有编排的轨道保留原类型。需要编辑其他内容时，请添加一条空轨道。</p> : null}
     </>}
   </div></div>;
 }
