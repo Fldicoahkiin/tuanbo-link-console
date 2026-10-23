@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants, createReadStream } from 'node:fs';
-import { access, copyFile, mkdir, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   linkMediaAssetSchema,
@@ -337,20 +337,25 @@ export class LinkProjectService {
   /** Brings back files missing from the project folder from the same relative
    * path under sourceDirectory, for example the folder the .tblink was moved
    * out of. Only a file with the recorded SHA-256 is copied; nothing else is
-   * searched for. The project document itself does not change. */
+   * searched for. The project document itself does not change. Symbolic links
+   * and junctions may not lead out of either folder. */
   async relinkAssetFiles(projectPath: string, sourceDirectory: string, files: readonly { relativePath: string; sha256: string }[]): Promise<LinkProjectAssetRelinkResult> {
     assertProjectExtension(projectPath);
     if (!isAbsolute(sourceDirectory)) throw new Error('原工程文件夹必须是完整路径');
+    const projectDirectory = dirname(resolve(projectPath)); const sourceFolder = resolve(sourceDirectory);
     const result: LinkProjectAssetRelinkResult = [];
-    for (const file of files) {
-      const destination = resolveProjectAsset(projectPath, file.relativePath, '工程素材');
-      if (await pathExists(destination)) { result.push({ relativePath: file.relativePath, status: 'present' }); continue; }
-      const source = resolveInsideFolder(resolve(sourceDirectory), file.relativePath, '工程素材');
-      if (!await pathExists(source)) { result.push({ relativePath: file.relativePath, status: 'not-found' }); continue; }
-      if (await hashFile(source) !== file.sha256) { result.push({ relativePath: file.relativePath, status: 'mismatch' }); continue; }
+    for (const { relativePath, sha256 } of files) {
+      const destination = resolveProjectAsset(projectPath, relativePath, '工程素材');
+      if (await pathExists(destination)) { result.push({ relativePath, status: 'present' }); continue; }
+      const source = resolveInsideFolder(sourceFolder, relativePath, '工程素材');
+      if (!await pathExists(source)) { result.push({ relativePath, status: 'not-found' }); continue; }
+      await assertRealPathInside(sourceFolder, source, `找回素材已拒绝：所选文件夹中的 ${relativePath} 经符号链接或目录联接指向该文件夹之外`);
+      if (await hashFile(source) !== sha256) { result.push({ relativePath, status: 'mismatch' }); continue; }
+      // Checked before mkdir, so a linked assets folder does not get folders created through it either.
+      await assertRealPathInside(projectDirectory, dirname(destination), `找回素材已拒绝：工程文件夹中 ${relativePath} 所在的文件夹经符号链接或目录联接指向工程文件夹之外`);
       await mkdir(dirname(destination), { recursive: true });
-      await copyIntoProject(source, destination, dirname(destination), '找回素材', file.sha256);
-      result.push({ relativePath: file.relativePath, status: 'restored' });
+      await copyIntoProject(source, destination, dirname(destination), '找回素材', sha256);
+      result.push({ relativePath, status: 'restored' });
     }
     return result;
   }
@@ -402,6 +407,23 @@ function resolveInsideFolder(projectDirectory: string, relativePath: string, lab
     throw new Error(`${label}路径必须位于工程目录内`);
   }
   return resolved;
+}
+
+/** Follows symbolic links and junctions. A path that does not exist yet is
+ * judged by its nearest existing parent, the folder it would be created in. */
+async function assertRealPathInside(folder: string, path: string, refusal: string): Promise<void> {
+  const [realFolder, realPath] = await Promise.all([realpath(folder), realpathOfNearestExisting(path)]);
+  const inside = relative(realFolder, realPath);
+  if (inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) throw new Error(refusal);
+}
+
+async function realpathOfNearestExisting(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (!isErrorWithCode(error, 'ENOENT') || dirname(path) === path) throw error;
+    return realpathOfNearestExisting(dirname(path));
+  }
 }
 
 export async function hashFile(filePath: string): Promise<string> {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { createEmptyLinkProject, createLightingUserLibrary, serializeLinkProject } from '@tb/schema';
@@ -8,9 +8,12 @@ import { LinkProjectService } from './link-project-service';
 
 const cleanupFiles: string[] = [];
 const cleanupDirectories: string[] = [];
+const cleanupLinks: string[] = [];
 
 afterEach(async () => {
   for (const filePath of cleanupFiles.splice(0).reverse()) await unlink(filePath).catch(ignoreMissing);
+  // Windows removes a directory junction with rmdir; POSIX removes a symbolic link with unlink.
+  for (const link of cleanupLinks.splice(0).reverse()) await (process.platform === 'win32' ? rmdir(link) : unlink(link)).catch(ignoreMissing);
   for (const directory of cleanupDirectories.splice(0).reverse()) await rmdir(directory).catch(ignoreMissing);
 });
 
@@ -258,6 +261,24 @@ describe('LinkProjectService', () => {
     await expect(service.relinkAssetFiles(join(directory, 'show.tblink'), 'relative-folder', [{ relativePath: 'a.wav', sha256: sha256('a') }])).rejects.toThrow('完整路径');
   });
 
+  it('找回素材不写入工程文件夹里经符号链接或目录联接指向别处的位置', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio();
+    const moved = await createTestDirectory(); const outside = await createTestDirectory();
+    await linkFolder(outside, join(moved, 'assets'));
+    cleanupDirectories.push(join(outside, 'reference-audio')); cleanupFiles.push(join(outside, 'reference-audio', parse(audio.file.relativePath).base));
+    await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), audio.folder, [audio.file])).rejects.toThrow('符号链接');
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it('找回素材不读取所选文件夹里经符号链接或目录联接指向别处的文件', async () => {
+    const service = new LinkProjectService(); const audio = await originalAudio();
+    const picked = await createTestDirectory(); const moved = await createTestDirectory();
+    await linkFolder(join(audio.folder, 'assets'), join(picked, 'assets'));
+    cleanupDirectories.push(join(moved, 'assets'), join(moved, 'assets', 'reference-audio')); cleanupFiles.push(join(moved, audio.file.relativePath));
+    await expect(service.relinkAssetFiles(join(moved, 'show.tblink'), picked, [audio.file])).rejects.toThrow('符号链接');
+    expect(await readdir(moved)).toEqual([]);
+  });
+
   it.runIf(process.platform === 'win32')('拒绝把跨盘绝对路径解析为工程内素材', async () => {
     const directory = await createTestDirectory();
     const projectPath = join(directory, 'show.tblink');
@@ -274,6 +295,22 @@ async function createTestDirectory(): Promise<string> {
   await mkdir(directory);
   cleanupDirectories.push(directory);
   return directory;
+}
+
+/** An original project folder holding one song file, as the software imported it. */
+async function originalAudio(): Promise<{ folder: string; file: { relativePath: string; sha256: string } }> {
+  const folder = await createTestDirectory(); const digest = sha256('song-audio');
+  const file = { relativePath: `assets/reference-audio/${digest}.wav`, sha256: digest };
+  await mkdir(join(folder, 'assets', 'reference-audio'), { recursive: true });
+  cleanupDirectories.push(join(folder, 'assets'), join(folder, 'assets', 'reference-audio')); cleanupFiles.push(join(folder, file.relativePath));
+  await writeFile(join(folder, file.relativePath), 'song-audio');
+  return { folder, file };
+}
+
+/** A directory junction on Windows (no administrator rights needed), a symbolic link elsewhere. */
+async function linkFolder(target: string, path: string): Promise<void> {
+  await symlink(target, path, 'junction');
+  cleanupLinks.push(path);
 }
 
 function sha256(text: string): string {
