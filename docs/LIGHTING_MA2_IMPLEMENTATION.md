@@ -1093,9 +1093,12 @@ Electron 网络测试使用独立本地 TCP 模拟控台，穿过实际 preload�
 
 起点分配规则（新歌没有起始码时）：排在所有会被我们时间码启动的控台节目和本工程其他歌曲之后，最晚结束时间加 10 秒后的第一个整秒，60 秒起，与 P1 原来的排法一致。挂在其他 `TC Slot N` 上的节目、没有事件的节目不占范围；`Intern`、`Link Selected` 等其他 Slot 值没有逐个实测，按 TC Slot 2 计。只有 TC Slot 2 上数值读不清的节目才会阻止分配，报错会列出编号和名称，并提示在控台上给它设长度、删除它或换到别的 Slot。
 
+真实 MIDI（onPC 的 MIDI 输入改为 loopMIDI 端口 `TBLINK SOAK MTC`，30 FPS 四分之一帧）：时间码进入 TC Slot 2，Slot 2 上的自动启动节目在自己的范围里准时触发，Slot 1 上的自动启动节目不响应；两个范围完全相同的自动启动节目只跑其中一个。官方文档说明 MIDI 时间码默认进入 TC Slot 2，可在 Setup → Network → MA Network Configuration 的 MIDI TC 列修改。
+
 未验证：
 
-- 真实 MIDI 时间码进入 TC Slot 2：本机 onPC 3.7 的 MIDI 输入（注册表 `MidiInDeviceName`）指向已经不存在的 `TBLINK SOAK Waveform B`，本轮没有改 onPC 设置。官方文档说明 MIDI 时间码默认进入 TC Slot 2，可在 Setup → Network → MA Network Configuration 的 MIDI TC 列修改。
+- 时间码从 10 秒开始发时，第 1 秒时范围早已结束（0–2 秒）的两个节目都停在 Cue 2，直到 10 秒起的节目启动才把它们关掉。原因未查明：时间码中途开始或跳变（例如播完接下一首）时，控台可能先短暂跑起不在范围内的节目。
+
 - 真实 MTC 中断（不是发生器 Off 命令）时节目和执行器怎样收尾；节目属性 When Stopping 默认是 Do Nothing，两者可能不同。
 - `Intern`、`Link Selected` 两种 Slot 的实际行为。
 
