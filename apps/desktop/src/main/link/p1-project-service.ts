@@ -351,9 +351,10 @@ function songPathRefusal(raw: string, path: string, hiaFolder: string): string |
   return null;
 }
 
-/** Walks a song path from its root without following any link it has not checked: each link's target is read
- * and refused when it names a network share or device path, else the walk restarts on the target.
- * A missing part ends the walk (null); reading the file then reports it. */
+/** Walks a song path from its root without following any link it has not checked. A link's target must be a
+ * drive-letter path or a plain relative path; anything else (network share, device or namespace path) is refused.
+ * The walk then restarts on the target. A missing part before any link ends the walk (null), and reading the file
+ * reports it; a missing part behind a link is refused, since the target is this code's reading of the link. */
 async function songLinkRefusal(path: string): Promise<string | null> {
   let pending = path;
   for (let hops = 0; hops < 32; hops++) {
@@ -364,10 +365,13 @@ async function songLinkRefusal(path: string): Promise<string | null> {
       current = join(current, part);
       let link: boolean;
       try { link = (await lstat(current)).isSymbolicLink(); }
-      catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null; throw error; }
+      catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+        return hops === 0 ? null : `歌曲路径经过的链接指向不存在的位置，不会访问：${current}`;
+      }
       if (!link) continue;
       const written = await readlink(current);
-      if (/^[\\/]{2}/.test(written)) return `歌曲路径经过指向网络共享或设备路径的链接，不会访问：${current} → ${written}`;
+      if (!plainLinkTarget(written)) return `歌曲路径经过指向网络共享或设备路径的链接，不会访问：${current} → ${written}`;
       target = join(resolve(dirname(current), written), ...parts.slice(index + 1));
       break;
     }
@@ -375,6 +379,11 @@ async function songLinkRefusal(path: string): Promise<string | null> {
     pending = target;
   }
   return `歌曲路径的链接层数过多：${path}`;
+}
+
+function plainLinkTarget(written: string): boolean {
+  if (process.platform === 'win32') return /^[a-z]:\\[^:?*"<>|]*$/i.test(written) || /^[^\\/:?*"<>|][^:?*"<>|]*$/.test(written);
+  return !written.startsWith('//');
 }
 
 function readMediaBinding(

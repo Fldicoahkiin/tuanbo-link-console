@@ -107,6 +107,19 @@ describe('P1ProjectService', () => {
     expect(imported.skippedItems?.[0]?.reason).toContain('网络共享或设备路径');
   });
 
+  it('链接后的位置不存在时按拒绝处理，不当作普通缺失文件', async (context) => {
+    const fixture = await createFixture();
+    const link = join(fixture.directory, 'moved');
+    try { await symlink(join(fixture.directory, 'never-created'), link, 'dir'); }
+    catch (error) { if (process.platform === 'win32' && error instanceof Error && 'code' in error && error.code === 'EPERM') context.skip(); throw error; }
+    cleanupFiles.push(link);
+    const source = await readFile(fixture.p1Path, 'utf8');
+    await writeFile(fixture.p1Path, source.replaceAll(fixture.audioPaths[0].replaceAll('\\', '/'), `${link.replaceAll('\\', '/')}/remote.wav`));
+    const imported = await new P1ProjectService(new LinkProjectService()).importProject(fixture.p1Path, fixture.linkPath);
+    trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
+    expect(imported.skippedItems?.[0]?.reason).toContain('链接指向不存在的位置');
+  });
+
   it('歌曲导入取消后停止处理，工程文件保持原状', async () => {
     const fixture = await createFixture();
     const original = JSON.stringify(createEmptyLinkProject('未开始导入'));
