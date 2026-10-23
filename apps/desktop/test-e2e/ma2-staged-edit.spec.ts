@@ -23,7 +23,10 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
   await writeFile(info.outputPath('song.wav'), wav);
   const project = parseLinkProject({ ...createEmptyLinkProject('安全暂存桌面验收'), schemaVersion: 2, playbackSource: 'p1', ma2MaterialLibrary: { version: 1, source: '192.0.2.1:30000', library }, rundown: [{ id: 'song', title: '暂存歌曲', cues: [], referenceAudio: { assetId: 'audio', relativePath: 'song.wav', sha256: createHash('sha256').update(wav).digest('hex'), durationMs: 60000 } }] });
   const file = info.outputPath('staged.tblink');
-  await writeFile(file, JSON.stringify(importMa2TimecodeCommand('song', convertMa2Timecode(xml, [sequence], 9902)).execute(project)));
+  const imported = importMa2TimecodeCommand('song', convertMa2Timecode(xml, [sequence], 9902)).execute(project);
+  // The workbench preview still follows the stored mode; there is no selector to switch it any more.
+  imported.rundown[0]!.lighting!.outputMode = 'network';
+  await writeFile(file, JSON.stringify(imported));
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
   try {
     const page = await app.firstWindow(); const errors: string[] = [];
