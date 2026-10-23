@@ -61,7 +61,12 @@ export class NativeObsPreloadPool {
     const entry: Entry = { origin: 'selection', request, cancelled: false, outputs: null, task: Promise.resolve(), assertOwner: null }; this.entry = entry;
     const current = (): void => { if (entry.cancelled) throw new ObsPreparationCancelled('节目预备已取消'); entry.assertOwner?.(); };
     entry.task = (async () => {
-      await previous; current(); await this.dependencies.authorize(request); current();
+      await previous; current();
+      // A formal session that takes this preparation meanwhile was admitted on its own; the
+      // selection's admission (nothing else preparing or on air) no longer applies to it.
+      try { await this.dependencies.authorize(request); }
+      catch (error) { if (!entry.assertOwner) throw error; }
+      current();
       entry.outputs = this.dependencies.create(request, request.positionMs);
       await entry.outputs.guardOutput(() => { current(); return true; }, () => entry.outputs!.preloadResources(current)); current();
     })();

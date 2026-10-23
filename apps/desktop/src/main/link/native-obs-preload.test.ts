@@ -39,6 +39,19 @@ it.each(['修订', '起点', '所有者'] as const)('%s 改变后先释放旧资
   expect(vi.mocked(t.outputs.releaseOutputs).mock.invocationCallOrder[0]).toBeLessThan(t.create.mock.invocationCallOrder[1]!);
 });
 
+it('选择预备在许可中被正式播放接管：许可因正式准备在途被拒绝也不影响接管；未被接管时照常报错', async () => {
+  const t = setup();
+  let refuse: (error: Error) => void = () => undefined;
+  t.authorize.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
+  const preloading = t.pool.preload(t.request);
+  await Promise.resolve();
+  const taking = t.pool.take({ ...t.request, generation: 3 }, 500, () => undefined);
+  refuse(new Error('播放或画面会话活动时不能预备另一个节目'));
+  expect(await taking).toBe(t.outputs); await preloading;
+  t.authorize.mockRejectedValueOnce(new Error('播放或画面会话活动时不能预备另一个节目'));
+  await expect(t.pool.preload({ ...t.request, generation: 5 })).rejects.toThrow('不能预备另一个节目');
+});
+
 it('许可等待中取消不创建素材；新一代可以明确重新准备', async () => {
   const t = setup(); let permit: () => void = () => { throw new Error('未设置许可'); };
   t.authorize.mockImplementationOnce(() => new Promise<void>(resolve => { permit = resolve; }));
