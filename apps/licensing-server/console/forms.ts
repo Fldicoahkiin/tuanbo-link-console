@@ -11,7 +11,7 @@ export const roleNames = Object.fromEntries(roles);
 /** 每个对话框：标题、一行后果说明、一个写明动作的主按钮。 */
 export const forms: Record<ConsoleAction['action'], { title: string; note?: string; submit: string; fields: Field[] }> = {
   'create-order': { title: '创建线下订单', note: '收到转账后再确认收款发码。', submit: '创建订单', fields: [{ key: 'reference', label: '业务订单编号' }, ...customer, amount, note] },
-  fulfill: { title: '确认线下收款', note: '提交后立即发码。', submit: '确认收款并发码', fields: [amount, { key: 'paymentReference', label: '收款流水号' }, { key: 'paymentMethod', label: '付款方式', type: 'preset', options: presets(['对公转账', '微信转账', '支付宝转账']) }, reason()] },
+  fulfill: { title: '确认线下收款', note: '提交后立即发码，只签一份时直接显示激活码。', submit: '确认收款并发码', fields: [amount, { key: 'paymentReference', label: '收款流水号' }, { key: 'paymentMethod', label: '付款方式', type: 'preset', options: presets(['对公转账', '微信转账', '支付宝转账']) }, note] },
   reconcile: { title: '向支付渠道查单', note: '已过付款期限仍未付款的支付宝订单会被关闭。', submit: '查单', fields: [note] },
   'payment-link': { title: '生成支付宝付款链接', note: '15 分钟内有效；生成后这张订单只能经支付宝收款。', submit: '生成链接', fields: [note] },
   'close-order': { title: '关闭订单', note: '关闭后不能再核款发码。', submit: '关闭此订单', fields: [reason(['客户放弃购买', '重复下单', '信息填错'])] },
@@ -27,15 +27,15 @@ export const forms: Record<ConsoleAction['action'], { title: string; note?: stri
   'update-user': { title: '修改人员权限', note: '保存后该人员需重新登录。', submit: '保存权限', fields: [{ key: 'role', label: '角色', type: 'select', options: roles }, { key: 'enabled', label: '账号状态', type: 'select', options: [['true', '启用'], ['false', '停用']] }, reason(['岗位调整', '人员离职'])] },
   'reset-user': { title: '重置人员认证', note: '原密码和验证器立即失效，需重新开通。', submit: '重置此人员认证', fields: [reason(['忘记密码', '验证器丢失', '人员变动'])] },
   'create-ticket': { title: '创建售后工单', submit: '创建工单', fields: [{ key: 'category', label: '问题类别', type: 'select', options: [['migration', '换机'], ['refund', '退款'], ['invoice', '开票'], ['recovery', '订单找回'], ['other', '其他']] }, { key: 'note', label: '问题描述', type: 'textarea' }, { key: 'licenseId', label: '授权编号（选填）', optional: true }, note] },
-  'update-ticket': { title: '处理工单', note: '关闭时须写明授权处理结论。', submit: '保存处理结果', fields: [{ key: 'state', label: '处理状态', type: 'select', options: [['processing', '处理中'], ['closed', '关闭'], ['open', '待处理']] }, { key: 'conclusion', label: '授权处理结论', type: 'textarea', optional: true }, reason()] },
-  refund: { title: '登记已办理的退款', note: '只记账，不会退款，也不会撤销授权。', submit: '登记退款', fields: [amount, { key: 'reference', label: '退款凭证编号' }, { key: 'handledAt', label: '实际办理时间（北京时间）', type: 'datetime-local' }, reason()] },
+  'update-ticket': { title: '处理工单', note: '关闭时须写明授权处理结论。', submit: '保存处理结果', fields: [{ key: 'state', label: '处理状态', type: 'select', options: [['processing', '处理中'], ['closed', '关闭'], ['open', '待处理']] }, { key: 'conclusion', label: '授权处理结论', type: 'textarea', optional: true }, note] },
+  refund: { title: '登记已办理的退款', note: '只记账，不会退款，也不会撤销授权。', submit: '登记退款', fields: [amount, { key: 'reference', label: '退款凭证编号' }, { key: 'handledAt', label: '实际办理时间（北京时间）', type: 'datetime-local' }, note] },
   'alipay-refund': { title: '支付宝原路退款', note: '全额退款会撤销本订单全部授权；结果未确认时按相同金额重提不会重复退款。', submit: '向支付宝退款', fields: [amount, { ...reason(['客户申请退款', '重复付款'], '退款原因（买家可见）'), maxLength: 256 }] },
   'refund-review': { title: '处理渠道退款', note: '续费订单只能保留授权，需先用「调整到期时间」回退续期。', submit: '提交处理结果', fields: [{ key: 'decision', label: '处理方式', type: 'select', options: [['revoke', '撤销本订单全部授权'], ['keep', '保留授权，仅结案']] }, reason(['客户申请退款', '协商保留授权'])] },
   'publish-update': { title: '发布更新', note: '服务器会重新核对安装包、manifest 和发布签名，并确认版本高于当前更新源，全部通过才替换更新源；客户端安装前还会再验签。', submit: '发布到更新源',
     fields: [{ key: 'manifestSha256', label: 'manifest 摘要', type: 'hidden' }, reason(['安装验收通过'])] },
   'rollback-update': { title: '回滚到上一版', note: '更新源改回上一版的 latest.yml；已经装上新版本的电脑不会自动降级。', submit: '回滚更新源', fields: [reason(['新版本有问题'])] },
   'discard-update': { title: '丢弃待发布版本', note: '从 staging 删除这份候选，不影响当前更新源。', submit: '丢弃此版本', fields: [reason(['验收未通过', '需要重新构建'])] },
-  invoice: { title: '记录开票进度', note: '只记录进度，不开具发票。', submit: '保存开票记录', fields: [{ key: 'state', label: '办理状态', type: 'select', options: [['requested', '已申请'], ['processing', '办理中'], ['issued', '已开票'], ['rejected', '无法办理']] }, { key: 'buyer', label: '购买方抬头' }, { key: 'taxId', label: '税号（选填）', optional: true }, { key: 'reference', label: '发票编号（已开票必填）', optional: true }, reason()] }
+  invoice: { title: '记录开票进度', note: '只记录进度，不开具发票。', submit: '保存开票记录', fields: [{ key: 'state', label: '办理状态', type: 'select', options: [['requested', '已申请'], ['processing', '办理中'], ['issued', '已开票'], ['rejected', '无法办理']] }, { key: 'buyer', label: '购买方抬头' }, { key: 'taxId', label: '税号（选填）', optional: true }, { key: 'reference', label: '发票编号（已开票必填）', optional: true }, note] }
 };
 /** 不可逆或使凭据失效的操作：按钮用红色。 */
 export const destructiveActions = new Set<ConsoleAction['action']>(['revoke', 'revoke-delivery-access', 'delivery-access', 'alipay-refund', 'refund-review', 'reset-user', 'close-order', 'rollback-update', 'discard-update']);

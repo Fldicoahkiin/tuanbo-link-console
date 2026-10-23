@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { UpdateReleases } from './update-releases';
 import { LicensingService } from './service';
 import { createLicensingServer } from './http';
+import { AlipayCheckout, AlipayNotifications } from './alipay';
 
 export async function startConsoleFixture() {
   // 时钟可推进，用于验收二次验证过期和新一枚验证码。
@@ -22,12 +23,18 @@ export async function startConsoleFixture() {
     feed: { version: '0.4.29', releaseDate: '2026-09-28T18:15:14.517Z', signed: false }, rollback: { version: null, issue: '没有可以回滚到的上一版' },
     staged: [{ name: '0.5.0-13f7e625898e', issue: null, version: '0.5.0', gitSha: '13f7e625898e96076e1d02ef353ca90a78cebc', manifestSha256: 'b'.repeat(64),
       releaseDate: '2026-10-23T06:34:50.642Z', kid: 'release-2026-10-a', size: 412835955 }] }));
-  const server = createLicensingServer(service, randomBytes(32).toString('hex'), undefined, undefined, undefined, false, undefined, false,
+  // 支付宝沙箱身份和本地生成的密钥：付款链接只在本地签名，不连支付宝；到账由 payAlipay 模拟一条验签后的通知。
+  const identity = { appId: '2026000000000001', sellerId: '2088000000000001' };
+  const merchant = generateKeyPairSync('rsa', { modulusLength: 2048 }); const provider = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const alipay = new AlipayNotifications(identity.appId, identity.sellerId, provider.publicKey.export({ type: 'spki', format: 'pem' }).toString());
+  const checkout = new AlipayCheckout(identity.appId, identity.sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'sandbox', 'https://api.tuanbo-link.jinhefilm.com', now);
+  const server = createLicensingServer(service, randomBytes(32).toString('hex'), alipay, checkout, undefined, false, undefined, false,
     { service: consoleService, origin: 'https://admin.tuanbo-link.jinhefilm.com', updates: new UpdateReleases(spool) });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未监听');
   return { port: address.port, invitation: first.token, secret: info.secret, now, advance: (ms: number) => { time += ms; },
     invite: (role: 'operations' | 'finance' | 'viewer') => consoleService.auth.createUser(`fixture-${role}`, role),
     enrollment: (token: string) => consoleService.auth.enrollmentInfo(token),
+    payAlipay: (orderId: string) => service.alipayNotification({ orderId, ...identity, status: 'TRADE_SUCCESS', amountFen: service.describeOrder(orderId).amountFen, refundFen: 0, paymentReference: `alipay:${orderId.replaceAll('-', '')}` }),
     close: () => new Promise<void>((resolve, reject) => server.close(error => { service.close(); if (error) reject(error); else resolve(); })) };
 }

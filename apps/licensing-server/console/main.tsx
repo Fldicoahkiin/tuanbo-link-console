@@ -2,7 +2,7 @@ import { StrictMode, useCallback, useEffect, useMemo, useRef, useState, type For
 import { createRoot } from 'react-dom/client';
 import { LayoutDashboard, ClipboardList, KeyRound, CircleAlert, MessagesSquare, Receipt, History, Users, ShieldCheck, LogOut, RefreshCw, ArrowLeft, ChevronLeft, ChevronRight, Download, Command, ArrowUpRight, ShieldAlert, CloudUpload } from 'lucide-react';
 import { z } from 'zod';
-import { detailSchema, pageSchema, permissions, sessionSchema, type ConsoleAction, type ConsoleRow } from '../src/console-contract';
+import { detailSchema, pageSchema, permissions, sessionSchema, type ConsoleAction, type ConsoleResult, type ConsoleRow } from '../src/console-contract';
 import { api, ApiError, errorMessage, messageSchema } from './api';
 import { RevenueTrend } from './revenue-trend';
 import { AuthView } from './auth-view';
@@ -78,6 +78,12 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
     setRoute(key); setSelected(null); setDetail(null); setData(null); setOverview(null); setError(''); setPage(1); setRefresh(value => value + 1);
     if (preset) setFilters(previous => ({ ...previous, [key]: { ...emptyFilter, ...preset } }));
   }
+  // 只签发一份时直接打开这张授权；签发多份特殊授权时打开订单看全部授权。其余操作只刷新当前页。
+  const afterAction = useCallback((result?: ConsoleResult, action?: ConsoleAction['action']) => {
+    if (result?.licenseId) { setRoute('licenses'); setSelected({ id: result.licenseId }); setDetail(null); }
+    else if (action === 'grant' && result?.id) { setRoute('orders'); setSelected({ id: result.id }); setDetail(null); }
+    setRefresh(value => value + 1);
+  }, []);
   const can = (action: ConsoleAction['action']) => permissions[action].includes(session.user.role);
   const open = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => setDialog({ action, row });
   const actionButton = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => can(action) ? <button className={destructiveActions.has(action) ? 'danger-button' : ['set-expiry', 'create-order', 'grant', 'create-user'].includes(action) ? 'primary' : undefined} key={action} onClick={() => open(action, row)}>{forms[action].title}</button> : null;
@@ -134,7 +140,7 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
       </>}
     </main>
     {stepUpOpen && <StepUpDialog csrf={session.csrf} close={() => setStepUpOpen(false)} onVerified={() => { setStepUpOpen(false); reloadSession(); }} />}
-    {dialog && <ActionDialog key={`${dialog.action}:${String(dialog.row?.id ?? '')}`} action={dialog.action} row={dialog.row} csrf={session.csrf} verifiedAt={session.verifiedAt} clockOffset={clockOffset} syncSession={reloadSession} close={() => setDialog(null)} changed={() => setRefresh(value => value + 1)} />}
+    {dialog && <ActionDialog key={`${dialog.action}:${String(dialog.row?.id ?? '')}`} action={dialog.action} row={dialog.row} csrf={session.csrf} verifiedAt={session.verifiedAt} clockOffset={clockOffset} syncSession={reloadSession} close={() => setDialog(null)} changed={afterAction} />}
   </div>;
 }
 function App() {

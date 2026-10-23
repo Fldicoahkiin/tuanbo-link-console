@@ -59,6 +59,11 @@ export class ConsoleService {
     return rowSchema.parse(value);
   }
   clock(): number { return this.now(); }
+  /** 只签发一份时直接带回激活码和授权编号，省去再去「查看完整激活码」；多份时只返回订单。 */
+  private issued(orderId: string, message: string): ConsoleResult {
+    const licenses = this.service.describeOrder(orderId).licenses;
+    return licenses.length === 1 ? { id: orderId, message, licenseId: licenses[0]!.id, secret: licenses[0]!.code } : { id: orderId, message };
+  }
   private statusWindow(): [string, string] { return [new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString()]; }
   /** 授权 DTO：生命周期状态替代绑定、撤销两个布尔值。 */
   private licenseRow(row: ConsoleRow): ConsoleRow {
@@ -266,7 +271,7 @@ export class ConsoleService {
         this.db.prepare('INSERT OR IGNORE INTO console_order_meta VALUES(?,?,?,?,?)').run(order.id, at, 'manual', input.reason, actor);
         return success(order.id, '线下订单已创建，待核款');
       }
-      case 'fulfill': this.service.fulfill(input.id, { amountFen: input.amountFen, paymentReference: input.paymentReference }); this.auth.audit(actor, 'manual-payment-method', input.id, input.paymentMethod, 'success', operationId); return success(input.id, '核款与发码已完成');
+      case 'fulfill': this.service.fulfill(input.id, { amountFen: input.amountFen, paymentReference: input.paymentReference }); this.auth.audit(actor, 'manual-payment-method', input.id, input.paymentMethod, 'success', operationId); return this.issued(input.id, '核款与发码已完成');
       // 服务层与本机管理接口仍要求非空原因；后台备注留空时传固定标签。
       case 'retry-delivery': this.service.retryDelivery(input.id, { reason: input.reason || '后台补交付' }); return success(input.id, '补交付已完成');
       case 'close-order': this.service.closeUnlinkedOrder(input.id); return success(input.id, '订单已关闭');
@@ -279,7 +284,7 @@ export class ConsoleService {
       case 'grant': {
         const result = this.service.createGrant({ customer: input.customer, customerType: input.customerType, quantity: input.quantity, useUntil: input.useUntil }, `GRANT-${operationId}`);
         this.db.prepare('INSERT INTO console_order_meta VALUES(?,?,?,?,?)').run(result.id, at, input.purpose, input.reason, actor);
-        return success(result.id, '特殊授权已签发');
+        return this.issued(result.id, '特殊授权已签发');
       }
       case 'create-user': { const result = this.auth.createUser(input.username, input.role); return { id: result.id, message: '开通凭据 24 小时内有效', secret: result.token }; }
       case 'update-user': this.auth.updateUser(input.id, input.role, input.enabled); return success(input.id, '已更新，该人员需重新登录');

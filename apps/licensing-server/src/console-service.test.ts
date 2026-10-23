@@ -45,6 +45,22 @@ it('知道密码也不能跨来源穷举验证码，锁定期间同样返回无�
   s.advance(900001);
   expect((await s.consoleService.auth.login('owner', 'a-secure-test-password', s.code(s.first.id), 'after')).session.user.role).toBe('owner');
 });
+it('只签发一份时结果直接带回激活码和授权编号，多份时只返回订单', async () => {
+  const s = await setup();
+  const single = await s.execute({ ...grant, quantity: 1 });
+  const licenseId = String(s.consoleService.detail('orders', single.id!, s.login.session).related[0]!.id);
+  expect(single).toMatchObject({ message: '特殊授权已签发', licenseId, secret: s.service.consoleReveal(licenseId) });
+  const multiple = await s.execute(grant);
+  expect(multiple.secret).toBeUndefined(); expect(multiple.licenseId).toBeUndefined();
+  const sale = await s.execute({ action: 'create-order', reference: 'single-sale', customer: '客户', customerType: 'company', quantity: 1, amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', reason: '' });
+  const paid = await s.execute({ action: 'fulfill', id: sale.id!, amountFen: 80000, paymentReference: 'single-bank', paymentMethod: '对公转账', reason: '' });
+  expect(paid.secret).toMatch(/^TBA-/); expect(paid.licenseId).toBe(s.consoleService.detail('orders', sale.id!, s.login.session).related[0]!.id);
+});
+  expect(s.consoleService.detail('tickets', ticket.id!, s.login.session).item.orderReference).toBe('single-sale');
+  // 格式不对的到期调整记录只标在该节点上，详情照常打开。
+  s.db.prepare("INSERT INTO audit VALUES (?, ?, 'license.expiry-adjusted', ?, 'not-json')").run(randomUUID(), new Date(s.now()).toISOString(), licenseId);
+  expect(s.consoleService.detail('licenses', licenseId, s.login.session).timeline!.map(node => [node.event, node.detail])).toContainEqual(['调整到期', '记录无法解析']);
+});
 it('特殊授权一码一机，不写入收款，重复提交不重复发码', async () => {
   const s = await setup(); const operationId = randomUUID(); const result = await s.execute(grant, s.login.session, operationId);
   await s.execute(grant, s.login.session, operationId);
@@ -220,7 +236,11 @@ it('原因分档：选填操作留空可执行且审计照记操作人、操作�
   for (const action of ['reconcile', 'payment-link', 'retry-delivery', 'delivery-access'] as const) expect(actionSchema.safeParse({ action, id, reason: '' }).success).toBe(true);
   for (const action of ['revoke', 'migrate', 'reveal', 'revoke-delivery-access', 'close-order', 'reset-user'] as const) expect(actionSchema.safeParse({ action, id, reason: ' ' }).success).toBe(false);
   expect(actionSchema.safeParse({ action: 'refund-review', id, decision: 'revoke', reason: '' }).success).toBe(false);
-  expect(actionSchema.safeParse({ action: 'update-ticket', id, state: 'processing', conclusion: '', reason: '' }).success).toBe(false);
+  // 核款、退款登记、开票和处理工单的来由已由流水号、凭证或发票编号、处理结论说明，原因选填。
+  expect(actionSchema.safeParse({ action: 'update-ticket', id, state: 'processing', conclusion: '', reason: '' }).success).toBe(true);
+  expect(actionSchema.safeParse({ action: 'fulfill', id, amountFen: 1, paymentReference: 'bank', paymentMethod: '转账', reason: '' }).success).toBe(true);
+  expect(actionSchema.safeParse({ action: 'refund', id, amountFen: 1, reference: 'r', handledAt: '2026-10-06T00:00:00Z', reason: '' }).success).toBe(true);
+  expect(actionSchema.safeParse({ action: 'invoice', id, state: 'requested', buyer: '抬头', taxId: '', reference: '', reason: '' }).success).toBe(true);
   const s = await setup();
   const order = await s.execute({ action: 'create-order', reference: 'no-note', customer: '客户', customerType: 'company', quantity: 1, amountFen: 80000, useUntil: '2026-11-06T00:00:00Z', reason: '' });
   await s.execute({ action: 'fulfill', id: order.id!, amountFen: 80000, paymentReference: 'no-note-bank', paymentMethod: '转账', reason: '到账' });
