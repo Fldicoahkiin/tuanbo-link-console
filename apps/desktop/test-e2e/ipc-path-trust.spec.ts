@@ -8,7 +8,7 @@ import { closeDiscarding } from './save-questions';
 const launch = (profile: string): Promise<ElectronApplication> =>
   electron.launch({ args: [`--user-data-dir=${profile}`, join(process.cwd(), 'out/main/index.cjs')] });
 
-type Values = { shown: string; never: string; planted: string; outsideAudio: string; plantedProgram: string; content: string; profile: ReturnType<typeof createDefaultIntegrationProfile> };
+type Values = { shown: string; never: string; planted: string; outsideAudio: string; plantedProgram: string; onpc: string; content: string; profile: ReturnType<typeof createDefaultIntegrationProfile> };
 
 /** One request through the real preload bridge, inside the window: its error text, or UNEXPECTED_SUCCESS. */
 async function attempt(page: Page, request: (values: Values) => Promise<unknown>, values: Values): Promise<string> {
@@ -22,6 +22,9 @@ const exists = (path: string): Promise<boolean> => access(path).then(() => true,
 test('窗口不能自行指定路径：工程、工程内文件、导入来源和程序位置只认主进程确认过的', async ({}, info) => {
   const shown = info.outputPath('shown/展示工程.tblink'), never = info.outputPath('never/从未打开.tblink'), planted = info.outputPath('planted/写入目标.tblink');
   const outsideAudio = info.outputPath('outside/未选择的音频.wav'), plantedProgram = info.outputPath('outside/伪造程序.exe');
+  // Shaped like an onPC data directory: the plugin exchange writes its requests into temp.
+  const onpc = info.outputPath('outside/gma2_V_3.3.4');
+  for (const part of ['temp', 'plugins', 'importexport']) await mkdir(join(onpc, part), { recursive: true });
   const content = JSON.stringify(createEmptyLinkProject('路径信任验收'));
   for (const file of [shown, never, planted, outsideAudio]) await mkdir(dirname(file), { recursive: true });
   await writeFile(shown, content); await writeFile(never, content);
@@ -29,7 +32,7 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
   await mkdir(join(dirname(never), 'assets', 'reference-media'), { recursive: true });
   await writeFile(join(dirname(never), 'assets', 'reference-media', 'secret.png'), 'never folder secret');
   await writeFile(outsideAudio, 'RIFF not chosen by the operator'); await writeFile(plantedProgram, 'MZ');
-  const values: Values = { shown, never, planted, outsideAudio, plantedProgram, content, profile: createDefaultIntegrationProfile() };
+  const values: Values = { shown, never, planted, outsideAudio, plantedProgram, onpc, content, profile: createDefaultIntegrationProfile() };
 
   let app = await launch(info.outputPath('profile'));
   try {
@@ -81,6 +84,12 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
       plantProgram: expect.stringContaining('程序位置未经本软件的选择对话框或一键识别确认')
     });
     expect.soft(await exists(join(dirname(shown), 'assets'))).toBe(false);
+
+    const devices = {
+      ma2DataDirectory: await attempt(page, v => window.tbLink.exchangeMa2({ dataDirectory: v.onpc, target: 1, operation: 'PING', expected: '', desired: '' }), values)
+    };
+    expect.soft(devices).toEqual({ ma2DataDirectory: expect.stringContaining('本机 onPC 数据目录必须通过“选择”或“一键识别”设置') });
+    expect.soft(await readdir(join(onpc, 'temp'))).toEqual([]);
 
     // The same bridge saves the shown project.
     const renamed = JSON.stringify({ ...JSON.parse(content), name: '已保存到展示工程' });

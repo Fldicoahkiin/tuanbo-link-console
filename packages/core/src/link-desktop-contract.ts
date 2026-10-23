@@ -220,6 +220,10 @@ export type LinkDesktopApi = {
   copyPurchaseCode(localId: string, licenseId: string): Promise<void>;
   requireOutputLicense(): Promise<void>;
   exportMa2Plugin: () => Promise<string | null>;
+  /** The local onPC data directory the main process recorded; only the folder dialog or detection set it. */
+  getMa2DataDirectory(): Promise<string | null>;
+  pickMa2DataDirectory(): Promise<string | null>;
+  detectMa2DataDirectory(): Promise<string>;
   exportObsPreviewScript: () => Promise<string>;
   getObsPreviewStatus: () => Promise<{ ready: boolean; message: string }>;
   discoverMa2(): Promise<import('@tb/schema').Ma2Discovery>;

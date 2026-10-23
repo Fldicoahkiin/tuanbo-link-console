@@ -50,6 +50,7 @@ import { ma2CueDeletePrepareSchema, ma2CueDeleteCommitSchema } from '@tb/schema'
 import { ma2ExecutorReadRequestSchema } from '@tb/schema';
 import { readMa2Executor } from './link/ma2-executor-read';
 import { Ma2Connections } from './link/ma2-connections';
+import { Ma2DataDirectory, detectMa2DataDirectory } from './link/ma2-data-directory';
 import { Ma2DiscoveryService } from './link/ma2-discovery';
 import { Ma2NetworkSetup } from './link/ma2-network-setup';
 import { ma2NetworkSetupRequestSchema } from '@tb/schema';
@@ -759,7 +760,29 @@ function registerIpc(
       return status;
     } finally { licenseChanging = false; }
   });
-  const ma2Connections = new Ma2Connections(() => runtimeActive);
+  // The local onPC data directory comes only from the folder dialog or the detection below.
+  const ma2DataDirectory = new Ma2DataDirectory(join(app.getPath('userData'), 'link-integrations', 'ma2-data-directory.json'));
+  const ma2Connections = new Ma2Connections(() => runtimeActive, directory => ma2DataDirectory.require(directory));
+  const recordMa2DataDirectory = async (directory: string, how: string): Promise<string> => {
+    await ma2DataDirectory.choose(directory);
+    await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: `已${how}本机 onPC 数据目录：${directory}`, result: 'succeeded' });
+    return directory;
+  };
+  handle('link:ma2-data-directory', () => ma2DataDirectory.current());
+  handle('link:pick-ma2-data-directory', async () => {
+    const selected = await dialog.showOpenDialog(mainWindow!, { title: '选择 MA2 onPC 数据目录', properties: ['openDirectory'] });
+    const directory = selected.filePaths[0];
+    if (selected.canceled || !directory) return null;
+    return recordMa2DataDirectory(directory, '选择');
+  });
+  handle('link:detect-ma2-data-directory', async () => {
+    const programData = process.env.ProgramData;
+    if (!programData) throw new Error('无法读取 ProgramData 位置，请点“选择”手动指定 onPC 数据目录');
+    const onpc = (await integrationDetector.detect()).applications.ma2;
+    // gma2onpc.exe carries no file version; the installer names its folder "grandMA2 onPC 3.3.4.3".
+    const version = onpc?.version ?? (onpc?.executablePath ? /grandma2 onpc (\d+\.\d+\.\d+(?:\.\d+)?)[\\/]/i.exec(onpc.executablePath)?.[1] ?? null : null);
+    return recordMa2DataDirectory(await detectMa2DataDirectory(join(programData, 'MA Lighting Technologies', 'grandma'), version), '识别');
+  });
   const loopMidiService = new LoopMidiService();
   // Changing a Windows adapter needs the operator's answer to the main process's own dialog.
   const ma2NetworkSetup = new Ma2NetworkSetup(join(app.getPath('userData'), 'ma2-network-addresses.json'), async change => {
