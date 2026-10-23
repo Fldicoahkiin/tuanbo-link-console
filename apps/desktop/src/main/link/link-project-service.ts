@@ -25,6 +25,9 @@ import {
 } from './reference-audio-extractor';
 
 const REFERENCE_AUDIO_CONTAINER_EXTENSIONS = new Set(['.avi', '.m4v', '.mkv', '.mov', '.mp4', '.webm']);
+/** The waveform worker's output limit, and room for that many peaks as JSON. */
+const MAX_WAVEFORM_PEAKS = 500_000;
+const MAX_WAVEFORM_CACHE_BYTES = 16 * 1024 * 1024;
 
 export type ImportedReferenceAudio = {
   assetId: string;
@@ -132,35 +135,22 @@ export class LinkProjectService {
 
   async loadWaveformCache(projectPath: string, sha256: string): Promise<number[] | null> {
     assertSha256(sha256);
-    const path = waveformCachePath(projectPath, sha256);
-    let content: string;
     try {
-      content = await readFile(path, 'utf8');
+      return await readWaveformCacheFile(waveformCachePath(projectPath, sha256));
     } catch (error) {
       if (isErrorWithCode(error, 'ENOENT')) return null;
       throw error;
     }
-    let value: unknown;
-    try {
-      value = JSON.parse(content);
-    } catch (error) {
-      throw new Error(`波形缓存损坏：${path}`, { cause: error });
-    }
-    if (!Array.isArray(value) || !value.every((peak) => typeof peak === 'number' && Number.isFinite(peak) && peak >= -1 && peak <= 1)) {
-      throw new Error(`波形缓存结构无效：${path}`);
-    }
-    return value.map((peak) => {
-      if (typeof peak !== 'number') throw new Error(`波形缓存结构无效：${path}`);
-      return peak;
-    });
   }
 
   async saveWaveformCache(projectPath: string, sha256: string, peaks: number[]): Promise<void> {
     assertSha256(sha256);
-    if (peaks.length === 0 || !peaks.every((peak) => Number.isFinite(peak) && peak >= -1 && peak <= 1)) {
-      throw new Error('波形峰值必须是 -1 到 1 之间的有限数值');
+    if (peaks.length === 0 || peaks.length > MAX_WAVEFORM_PEAKS || !peaks.every((peak) => Number.isFinite(peak) && peak >= -1 && peak <= 1)) {
+      throw new Error(`波形峰值必须是 1 到 ${MAX_WAVEFORM_PEAKS} 个 -1 到 1 之间的有限数值`);
     }
-    await writeFileAtomically(waveformCachePath(projectPath, sha256), `${JSON.stringify(peaks)}\n`);
+    const path = waveformCachePath(projectPath, sha256);
+    await assertRealPathInside(dirname(resolve(projectPath)), dirname(path), '保存波形缓存已拒绝：工程文件夹中的 cache/waveforms 经符号链接或目录联接指向工程文件夹之外');
+    await writeFileAtomically(path, `${JSON.stringify(peaks)}\n`);
   }
 
   async inspectAssets(projectPath: string, project: LinkProject): Promise<LinkProjectAssetInspection> {
@@ -361,14 +351,15 @@ export class LinkProjectService {
       await assertRealPathInside(projectDirectory, dirname(destination), `找回素材已拒绝：工程文件夹中 ${relativePath} 所在的文件夹经符号链接或目录联接指向工程文件夹之外`);
       // P1 follow preflight blocks on a missing waveform, so it moves with its audio.
       const waveform = join(sourceFolder, 'cache', 'waveforms', `${sha256}.json`); const waveformDestination = waveformCachePath(projectPath, sha256);
-      const bringWaveform = await pathExists(waveform) && !await pathExists(waveformDestination);
-      if (bringWaveform) {
+      let peaks: number[] | null = null;
+      if (await pathExists(waveform) && !await pathExists(waveformDestination)) {
         await assertRealPathInside(sourceFolder, waveform, `找回波形缓存已拒绝：所选文件夹中的 cache/waveforms/${sha256}.json 经符号链接或目录联接指向该文件夹之外`);
         await assertRealPathInside(projectDirectory, dirname(waveformDestination), '找回波形缓存已拒绝：工程文件夹中的 cache/waveforms 经符号链接或目录联接指向工程文件夹之外');
+        peaks = await readWaveformCacheFile(waveform);
       }
       await mkdir(dirname(destination), { recursive: true });
       await copyIntoProject(source, destination, dirname(destination), '找回素材', sha256);
-      if (bringWaveform) await writeFileAtomically(waveformDestination, await readFile(waveform));
+      if (peaks) await writeFileAtomically(waveformDestination, `${JSON.stringify(peaks)}\n`);
       result.push({ relativePath, status: 'restored' });
     }
     return result;
@@ -470,6 +461,22 @@ function assertProjectExtension(projectPath: string): void {
   if (extname(projectPath).toLowerCase() !== '.tblink') {
     throw new Error('工程文件必须使用 .tblink 扩展名');
   }
+}
+
+/** Same shape as saveWaveformCache writes; a file from elsewhere is checked before it is read whole. */
+async function readWaveformCacheFile(path: string): Promise<number[]> {
+  if ((await stat(path)).size > MAX_WAVEFORM_CACHE_BYTES) throw new Error(`波形缓存超过 16 MB：${path}`);
+  let value: unknown;
+  try {
+    value = JSON.parse(await readFile(path, 'utf8'));
+  } catch (error) {
+    throw new Error(`波形缓存损坏：${path}`, { cause: error });
+  }
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_WAVEFORM_PEAKS) throw new Error(`波形缓存结构无效：${path}`);
+  return value.map((peak: unknown) => {
+    if (typeof peak !== 'number' || !Number.isFinite(peak) || peak < -1 || peak > 1) throw new Error(`波形缓存结构无效：${path}`);
+    return peak;
+  });
 }
 
 function waveformCachePath(projectPath: string, sha256: string): string {

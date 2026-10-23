@@ -157,7 +157,7 @@ export const linkWaveformCachePayloadSchema = z.object({
 });
 
 export const linkWaveformCacheSavePayloadSchema = linkWaveformCachePayloadSchema.extend({
-  peaks: z.array(z.number().finite().min(-1).max(1)).min(1)
+  peaks: z.array(z.number().finite().min(-1).max(1)).min(1).max(500_000)
 });
 
 export const linkWaveformGeneratePayloadSchema = linkWaveformCachePayloadSchema.extend({
