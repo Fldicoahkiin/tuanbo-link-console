@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { updateStatusSchema, type UpdateOutcome, type UpdateRequest, type UpdateStatus } from './console-contract';
@@ -20,8 +20,10 @@ export class UpdateReleases {
     }
   }
 
-  /** Resolves with the outcome, or null when the publisher has not answered within the wait. */
+  /** Resolves with the outcome, or null when the publisher has not answered within the wait. The request
+   * directory is this account's: the root publisher only reads it, so answered requests are removed here. */
   async request(request: UpdateRequest): Promise<UpdateOutcome | null> {
+    await this.removeAnswered();
     const pending = join(this.directory, 'update-requests', `.${request.id}.tmp`);
     // Written under a name the path unit ignores, then renamed: the publisher never sees half a request.
     await writeFile(pending, JSON.stringify(request), { flag: 'wx', mode: 0o640 });
@@ -31,11 +33,19 @@ export class UpdateReleases {
       await new Promise(resolve => setTimeout(resolve, this.pollMs));
       try {
         const outcome = outcomeSchema.parse(JSON.parse(await readFile(result, 'utf8')));
+        await unlink(join(this.directory, 'update-requests', `${request.id}.json`));
         return { ok: outcome.ok, message: outcome.message };
       } catch (error) {
         if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
       }
     }
     return null;
+  }
+
+  private async removeAnswered(): Promise<void> {
+    const answered = new Set(await readdir(join(this.directory, 'update-results')));
+    for (const name of await readdir(join(this.directory, 'update-requests'))) {
+      if (answered.has(name)) await unlink(join(this.directory, 'update-requests', name));
+    }
   }
 }

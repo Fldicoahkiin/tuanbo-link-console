@@ -251,9 +251,9 @@ export class ConsoleService {
       if (input.action === 'publish-update' || input.action === 'rollback-update' || input.action === 'discard-update') {
         if (!channels.updates) throw new ServiceError(503, 'UPDATES_UNAVAILABLE', '本服务器未启用更新发布');
         this.service.consoleTransaction(begin);
-        const request: UpdateRequest = input.action === 'publish-update' ? { id: operationId, action: 'publish', staged: input.id, manifestSha256: input.manifestSha256, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason }
-          : input.action === 'rollback-update' ? { id: operationId, action: 'rollback', version: input.id, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason }
-            : { id: operationId, action: 'discard', staged: input.id, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason };
+        const common = { id: operationId, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason, requestedAt: new Date(this.now()).toISOString() };
+        const request: UpdateRequest = input.action === 'publish-update' ? { ...common, action: 'publish', staged: input.id, manifestSha256: input.manifestSha256 }
+          : input.action === 'rollback-update' ? { ...common, action: 'rollback', version: input.id } : { ...common, action: 'discard', staged: input.id };
         const outcome = await channels.updates.request(request);
         // The publisher re-validates everything; its refusal is the result, not a console failure.
         if (outcome && !outcome.ok) {

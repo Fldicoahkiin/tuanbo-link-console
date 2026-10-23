@@ -1,0 +1,10 @@
+[Unit]
+Description=Pick up any update request that arrived while the publisher was running
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+Unit=tblink-update-publish.service
+
+[Install]
+WantedBy=timers.target

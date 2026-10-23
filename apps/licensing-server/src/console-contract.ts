@@ -81,5 +81,5 @@ export const updateStatusSchema = z.object({
     manifestSha256: z.string().optional(), releaseDate: z.string().optional(), kid: z.string().optional(), size: z.number().optional() }))
 });
 export type UpdateStatus = z.infer<typeof updateStatusSchema>;
-export type UpdateRequest = { id: string; action: 'publish' | 'rollback' | 'discard'; staged?: string; version?: string; manifestSha256?: string; actor: string; reason: string };
+export type UpdateRequest = { id: string; action: 'publish' | 'rollback' | 'discard'; staged?: string; version?: string; manifestSha256?: string; actor: string; reason: string; requestedAt: string };
 export type UpdateOutcome = { ok: boolean; message: string };
