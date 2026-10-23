@@ -66,3 +66,10 @@ it('自有时间码节目：点位和起始码都与上次写入一致即可演�
   const unwritten = ownShowSong([0, 1000]); delete unwritten.rundown[1]!.lighting!.consoleSong!.timecode;
   expect(songLightingStatus(unwritten, '歌曲乙')).toEqual({ state: 'unmatched' });
 });
+
+it('只放在 Layout 页面上、没有执行器位置的本曲序列建不了时间码节目：需处理并说明', () => {
+  const project = ownShowSong([0, 1000]);
+  const song = project.rundown[1]!.lighting!.consoleSong!;
+  project.rundown[1]!.lighting!.consoleSong = { ...song, layout: 999, executor: undefined, timecode: undefined };
+  expect(songLightingStatus(project, '歌曲乙')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('没有执行器位置')] });
+});
