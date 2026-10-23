@@ -25,6 +25,10 @@ export const nativeProgramOpenSchema = z.object({
   document: z.string().min(1).max(128 * 1024 * 1024), configuration: nativeProgramConfigurationSchema
 }).strict();
 export type NativeProgramOpen = z.infer<typeof nativeProgramOpenSchema>;
+/** How a window's open request attached: a new program, or the program that kept
+ * playing after the previous window's renderer exited. `outdated` means that
+ * program plays a different document than the reloaded window shows. */
+export type NativeProgramAttachment = 'opened' | 'adopted' | 'outdated';
 const operation = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('play'), itemId: z.string(), positionMs: time.optional(), paused: z.boolean().optional() }).strict(),
   z.object({ kind: z.enum(['pause', 'resume', 'stop', 'reset', 'toggle', 'toggleMtc', 'close']) }).strict(),

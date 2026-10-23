@@ -1,11 +1,11 @@
 import { expect, it, vi } from 'vitest';
 import { emptyInternalPlayerState, type InternalPlayerDependencies, type LinkDesktopApi } from '@tb/core/link';
-import { createEmptyLinkProject, type NativeProgramEvent } from '@tb/schema';
+import { createEmptyLinkProject, type NativeProgramAttachment, type NativeProgramEvent } from '@tb/schema';
 import { RemoteNativeProgramPlayer } from './remote-native-program-player';
 
-function fixture(wait?: Promise<void>) {
+function fixture(wait?: Promise<NativeProgramAttachment>) {
   const api = {
-    openNativeProgram: vi.fn<LinkDesktopApi['openNativeProgram']>(() => wait ?? Promise.resolve()),
+    openNativeProgram: vi.fn<LinkDesktopApi['openNativeProgram']>(() => wait ?? Promise.resolve('opened')),
     controlNativeProgram: vi.fn<LinkDesktopApi['controlNativeProgram']>(() => Promise.resolve()),
     onNativeProgramEvent: vi.fn<LinkDesktopApi['onNativeProgramEvent']>(() => vi.fn()),
     onNativePlaybackStatus: vi.fn<LinkDesktopApi['onNativePlaybackStatus']>(() => vi.fn())
@@ -42,7 +42,7 @@ it('播放和停止发送给后台，不触发界面计时、MIDI 或第二音�
 });
 
 it('尚在打开时销毁立即发送关闭，不等待许可，也不发送迟到播放', async () => {
-  let release!: () => void; const wait = new Promise<void>(resolve => { release = resolve; }), f = fixture(wait);
+  let release!: () => void; const wait = new Promise<NativeProgramAttachment>(resolve => { release = () => resolve('opened'); }), f = fixture(wait);
   const play = f.player.play('song'); await f.player.dispose();
   expect(f.api.controlNativeProgram.mock.calls.map(call => call[0].operation.kind)).toEqual(['close']);
   release(); await play; expect(f.api.controlNativeProgram).toHaveBeenCalledOnce();
@@ -53,4 +53,10 @@ it('后台控制拒绝明确显示并记录，不静默切回浏览器', async (
   await f.player.play('song');
   expect(f.dependencies.changed).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'error', error: '输出关闭未完成' }));
   expect(f.dependencies.notice).toHaveBeenCalledWith('输出关闭未完成', null); expect(f.dependencies.resolveAudio).not.toHaveBeenCalled();
+});
+
+it('接管到与界面不同版本的节目时标记为过期，其余打开不标记', async () => {
+  const outdated = fixture(Promise.resolve('outdated')), adopted = fixture(Promise.resolve('adopted'));
+  await outdated.player.play('song'); await adopted.player.play('song');
+  expect(outdated.player.outdated).toBe(true); expect(adopted.player.outdated).toBe(false); expect(fixture().player.outdated).toBe(false);
 });
