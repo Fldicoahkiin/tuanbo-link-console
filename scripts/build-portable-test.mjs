@@ -45,4 +45,7 @@ const config = {
 const configPath = join(destination, 'builder.json');
 await writeFile(configPath, JSON.stringify(config, null, 2));
 run(join(dirname(requireDesktop.resolve('electron-builder/package.json')), 'cli.js'), ['--config', configPath, '--publish', 'never']);
-console.log(`免激活测试安装包已生成：${destination}`);
+const verification = spawnSync(process.execPath, [join(root, 'scripts/verify-desktop-artifacts.mjs'), '--test-dist', destination], { cwd: root, env, stdio: 'inherit', windowsHide: true });
+if (verification.error) throw verification.error;
+if (verification.status !== 0) throw new Error(`测试安装包校验失败，退出码 ${verification.status}；不要分发 ${destination}`);
+console.log(`免激活测试安装包已生成并通过校验：${destination}`);

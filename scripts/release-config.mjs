@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { closeSync, openSync, readSync } from 'node:fs';
 import { load } from 'js-yaml';
 
 /** The activation-free test package installs, stores data and registers apart from the official app:
@@ -50,4 +51,30 @@ export function validateUpdateMetadata(text, { version, installerName, installer
     throw new Error('latest.yml 缺少 ISO 格式的 releaseDate');
   }
   return { version, releaseDate, sha512 };
+}
+
+/** A build-time test or internal distribution compiled into the main bundle (the define in electron.vite.config.ts).
+ * The schema literals in internal-distribution.ts do not match: they read `channel: z.literal(...)`. */
+export function embeddedDistributionChannel(bytes) {
+  const match = /["']?channel["']?\s*:\s*["'](portable-test|internal)["']/.exec(bytes.toString('latin1'));
+  return match ? match[1] : null;
+}
+
+/** Reads one file from an asar archive (Chromium pickle header, then JSON index, then file data). */
+export function readAsarFile(archivePath, name) {
+  const descriptor = openSync(archivePath, 'r');
+  try {
+    const prefix = Buffer.alloc(16);
+    if (readSync(descriptor, prefix, 0, 16, 0) !== 16) throw new Error('asar 文件头不完整');
+    const headerSize = prefix.readUInt32LE(4);
+    const json = Buffer.alloc(prefix.readUInt32LE(12));
+    readSync(descriptor, json, 0, json.length, 16);
+    const entry = name.split('/').reduce((directory, segment) => directory?.files?.[segment], JSON.parse(json.toString('utf8')));
+    if (!entry || typeof entry.size !== 'number' || typeof entry.offset !== 'string' || entry.unpacked) throw new Error(`asar 中没有 ${name}`);
+    const data = Buffer.alloc(entry.size);
+    if (readSync(descriptor, data, 0, entry.size, 8 + headerSize + Number(entry.offset)) !== entry.size) throw new Error(`asar 中的 ${name} 不完整`);
+    return data;
+  } finally {
+    closeSync(descriptor);
+  }
 }

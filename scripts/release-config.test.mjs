@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata } from './release-config.mjs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { embeddedDistributionChannel, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata } from './release-config.mjs';
 
 const publish = { provider: 'generic', url: 'https://updates.tuanbo-link.jinhefilm.com/windows/x64/' };
 
@@ -52,4 +55,30 @@ test('latest.yml 必须对应同一安装包，并带可解析的发布日期', 
   assert.throws(() => validateUpdateMetadata(latest({ url: 'other.exe' }), expected), /files/);
   assert.throws(() => validateUpdateMetadata(latest({ releaseDate: null }), expected), /releaseDate/);
   assert.throws(() => validateUpdateMetadata(latest({ releaseDate: "'yesterday'" }), expected), /releaseDate/);
+});
+
+test('识别编译进主进程的测试或内测分发，不把 schema 字面量当作分发', () => {
+  assert.equal(embeddedDistributionChannel(Buffer.from('const internalDistribution = distributionSchema.parse({ channel: "portable-test", version: 1 });')), 'portable-test');
+  assert.equal(embeddedDistributionChannel(Buffer.from('parse({"channel":"internal","publicKeys":{},"token":"x"})')), 'internal');
+  assert.equal(embeddedDistributionChannel(Buffer.from('z.object({ channel: z.literal("portable-test"), version: z.literal(1) }); const d = null === null ? null : x;')), null);
+});
+
+test('从 asar 读取单个文件', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'tblink-asar-'));
+  const content = Buffer.from(JSON.stringify({ name: 'tuanbo-link-functional-test', productName: '团播联动台功能测试版' }));
+  const other = Buffer.from('main bundle');
+  const index = Buffer.from(JSON.stringify({ files: { 'package.json': { size: content.length, offset: String(other.length) }, out: { files: {} }, 'main.js': { size: other.length, offset: '0' } } }));
+  const padded = Buffer.alloc(Math.ceil(index.length / 4) * 4);
+  index.copy(padded);
+  const header = Buffer.alloc(8 + padded.length);
+  header.writeUInt32LE(4 + padded.length, 0);
+  header.writeUInt32LE(index.length, 4);
+  padded.copy(header, 8);
+  const size = Buffer.alloc(8);
+  size.writeUInt32LE(4, 0);
+  size.writeUInt32LE(header.length, 4);
+  const archive = join(directory, 'app.asar');
+  writeFileSync(archive, Buffer.concat([size, header, other, content]));
+  assert.deepEqual(JSON.parse(readAsarFile(archive, 'package.json').toString('utf8')), { name: 'tuanbo-link-functional-test', productName: '团播联动台功能测试版' });
+  assert.throws(() => readAsarFile(archive, 'missing.json'), /没有/);
 });
