@@ -34,10 +34,11 @@ export class LightingCueAudition {
     const members = template.members ?? [{ sequence: stamp.sequence, cue: stamp.cue, name: template.name }];
     const events = members.map((member, index) => ({ id: `audition-${index}`, effectGroupId: 'audition-0', kind: 'ma2' as const, action: 'goto' as const, executor: '', sequence: member.sequence, cue: member.cue, label: member.name, at: 0 }));
     if (!events.length) { this.cancel(); throw new Error('素材中没有 Cue'); }
-    return this.play({ ...document, ma2Bindings: [], outputMode: 'network', tracks: [{ ...template.track, clips: [{ id: 'audition', name: template.name, start: 0, duration: 1, timeLock: 'time', muted: false, events }] }] }, 'audition-0', profile);
+    return this.play({ ...document, ma2Bindings: [], tracks: [{ ...template.track, clips: [{ id: 'audition', name: template.name, start: 0, duration: 1, timeLock: 'time', muted: false, events }] }] }, 'audition-0', profile, true);
   }
 
-  async play(document: LightingDocument, eventId: string, profile: IntegrationProfile | null): Promise<number> {
+  /** `network`: the MA2 connection this computer uses is the network, so executor Cues go there too instead of MIDI. */
+  async play(document: LightingDocument, eventId: string, profile: IntegrationProfile | null, network: boolean): Promise<number> {
     this.cancel(); const generation = this.generation;
     const selected = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === eventId);
     if (!selected || selected.kind !== 'ma2') return 0;
@@ -52,7 +53,7 @@ export class LightingCueAudition {
       ...track, muted: false, solo: false,
       clips: track.clips.map(clip => ({ ...clip, muted: false, start: 0, timeLock: 'time', events: clip.events.filter(event => event.kind === 'ma2' && (event.id === group || event.effectGroupId === group)).map(event => ({ ...event, ...(native ? { executor: '' } : {}), at: 0, preparation: undefined })) }))
     })) };
-    const networkPlayback = native || document.outputMode === 'network' || preview.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind === 'ma2' && !event.executor)));
+    const networkPlayback = native || network || preview.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind === 'ma2' && !event.executor)));
     if (networkPlayback) {
       const audition=await window.tbLink.controlMa2Audition({version:1,action:selected.runMode === 'independent' ? 'stop' : 'status'});
       if(audition.phase==='stopping')throw new Error('正在停止试听，请完成后再点击 Cue');

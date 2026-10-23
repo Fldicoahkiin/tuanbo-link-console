@@ -41,6 +41,8 @@
 <a id="3-给-runner-账号开权限"></a>
 ## 3. 给 runner 账号开权限（用户，管理员 PowerShell）
 
+服务器安装已于 2026-10-23 完成，上传身份的探测也已做完（见[服务器安装记录](SERVER_INSTALL_20261023.md#安装结果)），现在可以执行这一步。
+
 在开始菜单搜索 PowerShell，右键「以管理员身份运行」，逐行执行：
 
 ```powershell
@@ -56,28 +58,92 @@ icacls C:\dev\claude-tools\locks /grant "tblink-runner:(OI)(CI)M"
 runner 只能读资产和上传身份，不能读发布签名私钥（它来自 GitHub secret）。上传私钥的所有者改成 tblink-runner，因为 Windows 的 OpenSSH 只接受只属于当前账户的私钥。最后一行让 runner 能建和删自己的锁文件。
 
 <a id="4-注册-self-hosted-runner"></a>
-## 4. 注册 self-hosted runner（仓库所有者 JinHe9527）
+## 4. 注册 self-hosted runner（仓库所有者 JinHe9527，开发机上的管理员 PowerShell）
 
-1. 用 JinHe9527 登录 GitHub，打开仓库 `JinHe9527/tuanbo-link-console` → Settings → Actions → Runners → New self-hosted runner，系统选 Windows、架构 x64。页面会列出下载命令和一个一次性 token。
-2. 在开发机上用管理员 PowerShell，建目录 `D:\actions-runner`，进入该目录，按页面上「Download」部分执行下载和解压命令。
-3. 配置命令用下面这一行，`<token>` 换成页面上的 token，`<密码>` 换成第 2 步的密码：
+注册 runner 和设置 secret 都需要仓库 admin 权限，只有 JinHe9527 有（Fldicoahkiin 只有 push 权限）。第 4、5 步在开发机的同一个管理员 PowerShell 窗口里依次完成，最后退出登录。开发机已经装了 gh，默认账号是 JinHe9527，但之前的 token 已失效。
+
+1. 重新登录 gh：
 
    ```powershell
-   .\config.cmd --url https://github.com/JinHe9527/tuanbo-link-console --token <token> --name DESKTOP-2C8JIC2-release --labels release-builder --runasservice --windowslogonaccount .\tblink-runner --windowslogonpassword <密码>
+   gh auth login --hostname github.com --git-protocol https --web
    ```
 
-   提示 runner group 和 work folder 时直接回车用默认值。
-4. 回到网页的 Runners 列表，应看到 `DESKTOP-2C8JIC2-release` 显示 Idle，标签含 `release-builder`。
-5. Settings → Actions → General：确认 fork 的 pull request 不会运行工作流（私有仓库默认如此）。这个 runner 只服务本仓库。
+   屏幕上会显示一次性验证码，按回车打开浏览器，用 JinHe9527 登录 GitHub 并输入这个验证码。验证码只在浏览器里输入，不要发到聊天里。如果问「Authenticate Git with your GitHub credentials?」，回答 `n`。
+
+   预期最后两行是 `✓ Authentication complete.` 和 `✓ Logged in as JinHe9527`。再执行 `gh auth status`，应看到 `Logged in to github.com account JinHe9527`，并且这个账号的 `Active account: true`。如果活动账号不是 JinHe9527，执行 `gh auth switch -h github.com -u JinHe9527`。
+
+2. 下载并校验 runner：
+
+   ```powershell
+   New-Item -ItemType Directory -Force D:\actions-runner | Out-Null; Set-Location D:\actions-runner
+   $asset = (gh api repos/actions/runner/releases/latest | ConvertFrom-Json).assets | Where-Object name -Match '^actions-runner-win-x64-[0-9.]+\.zip$'
+   $asset.name
+   Invoke-WebRequest $asset.browser_download_url -OutFile $asset.name
+   ("sha256:" + (Get-FileHash $asset.name -Algorithm SHA256).Hash.ToLower()) -eq $asset.digest
+   Expand-Archive $asset.name -DestinationPath .
+   ```
+
+   预期：`$asset.name` 输出形如 `actions-runner-win-x64-2.xxx.x.zip`，只有一行；摘要比较那一行输出 `True`。输出 `False` 就停下，不要解压。这里的命令在 Windows PowerShell 5.1 和 PowerShell 7 里都能用。
+
+3. 给 runner 配代理。开发机直连 GitHub 不通，平时经本机代理 `127.0.0.1:7890` 访问，但这个代理只配在 WYZB 的用户设置里。runner 以 tblink-runner 的服务身份运行，读不到这些设置，要写进 runner 目录下的 `.env` 文件：
+
+   ```powershell
+   Set-Content -Encoding ascii D:\actions-runner\.env "https_proxy=http://127.0.0.1:7890`nhttp_proxy=http://127.0.0.1:7890`nno_proxy=localhost,127.0.0.1"
+   Get-Content D:\actions-runner\.env
+   ```
+
+   预期显示三行：`https_proxy=…`、`http_proxy=…`、`no_proxy=localhost,127.0.0.1`。代理程序要一直开着，runner 才能保持在线、执行任务；以后代理端口变了，就改这个文件并重启 runner 服务。上传到服务器走 SSH，不经过这个代理。
+
+4. 取一次性注册 token 并配置 runner。token 只存在 PowerShell 变量里，不显示在屏幕上；tblink-runner 的密码通过提示框输入，不写进命令历史：
+
+   ```powershell
+   $cred = Get-Credential -UserName '.\tblink-runner' -Message '输入第 2 步给 tblink-runner 设的密码'
+   $token = gh api -X POST repos/JinHe9527/tuanbo-link-console/actions/runners/registration-token --jq .token
+   if ($LASTEXITCODE -ne 0 -or -not $token) { throw '取注册 token 失败，先检查 gh auth status' }
+   .\config.cmd --unattended --url https://github.com/JinHe9527/tuanbo-link-console --token $token --name DESKTOP-2C8JIC2-release --labels release-builder --runasservice --windowslogonaccount .\tblink-runner --windowslogonpassword $cred.GetNetworkCredential().Password
+   Remove-Variable token, cred
+   ```
+
+   预期 `config.cmd` 的输出依次包含 `Connected to GitHub`、`Runner successfully added`、`Runner connection is good`、`Settings Saved`，最后几行是 `Service actions.runner.JinHe9527-tuanbo-link-console.DESKTOP-2C8JIC2-release` 安装成功并已启动。`throw` 那一行报错，说明登录或权限有问题，不要继续。
+
+5. 核对 runner 已在线：
+
+   ```powershell
+   (gh api repos/JinHe9527/tuanbo-link-console/actions/runners | ConvertFrom-Json).runners | ForEach-Object { '{0} {1} {2}' -f $_.name, $_.status, ($_.labels.name -join ',') }
+   Get-Service 'actions.runner.*' | Format-Table Name, Status, StartType
+   ```
+
+   预期第一条输出 `DESKTOP-2C8JIC2-release online self-hosted,Windows,X64,release-builder`；第二条显示这个服务 `Running`。如果是 `offline`，先确认代理程序在运行、`.env` 内容正确，再执行 `Restart-Service 'actions.runner.*'`。
+
+6. 在浏览器里打开仓库 Settings → Actions → General，确认「Run workflows from fork pull requests」没有勾选（私有仓库默认不勾选）。这个 runner 只服务本仓库。
 
 <a id="5-日常密钥放进-github-secret"></a>
-## 5. 日常密钥放进 GitHub secret（仓库所有者，在开发机上操作）
+## 5. 日常密钥放进 GitHub secret（同一个窗口，接着第 4 步）
 
-1. 先关掉剪贴板历史：开始 → 设置 → 系统 → 剪贴板，把「剪贴板历史记录」和「跨设备共享」（有的 Windows 版本叫「在你的设备之间同步」）都关闭。开着的话，复制的私钥会留在 Win+V 的历史里，甚至同步到微软账号。
-2. 在开发机上用记事本打开 `D:\tblink-release-signing\release-2026-10-a.pem`，Ctrl+A 全选、Ctrl+C 复制，然后关闭记事本，不要保存其他位置。
-3. 在开发机的浏览器里，用 JinHe9527 打开仓库 → Settings → Secrets and variables → Actions → New repository secret。
-4. Name 填 `TBLINK_RELEASE_SIGNING_KEY`，Secret 里粘贴刚才复制的全部内容（包括 `-----BEGIN PRIVATE KEY-----` 和 `-----END PRIVATE KEY-----` 两行），点 Add secret。
-5. 随便复制一段别的文字，覆盖剪贴板里的私钥。如果之前开过剪贴板历史，按 Win+V，找到私钥那一条，点它右侧的「…」→ 删除。
+1. 从文件按原始字节读入 secret。不经过剪贴板，也不经过 PowerShell 管道，因为管道可能改动编码：
+
+   ```powershell
+   cmd /c "gh secret set TBLINK_RELEASE_SIGNING_KEY --repo JinHe9527/tuanbo-link-console < D:\tblink-release-signing\release-2026-10-a.pem"
+   ```
+
+   预期输出 `✓ Set Actions secret TBLINK_RELEASE_SIGNING_KEY for JinHe9527/tuanbo-link-console`。这条命令不会显示私钥内容。
+
+2. 核对 secret 已存在：
+
+   ```powershell
+   gh secret list --repo JinHe9527/tuanbo-link-console
+   ```
+
+   预期有一行 `TBLINK_RELEASE_SIGNING_KEY`，更新时间是刚才。secret 的值无法读回，是否正确由第 6 步的首次 CI 签名来验证。
+
+3. 退出 gh 登录。这台机器上很多进程以 WYZB 身份运行，不能长期留着仓库所有者的 token：
+
+   ```powershell
+   gh auth logout -h github.com -u JinHe9527
+   gh auth status
+   ```
+
+   预期第一条输出 `✓ Logged out of github.com account JinHe9527`；第二条不再列出 JinHe9527（没有其他账号时显示 `You are not logged into any GitHub hosts`）。
 
 工作流只在「Sign latest.yml with the release key」这一步把它放进环境变量，不会写到磁盘，日志里也会被遮掉。
 

@@ -255,6 +255,16 @@ describe('原生正式播放器的操作与会话', () => {
       expect(f.api.controlNativePlayback.mock.calls.some(([request]) => request.kind === 'play')).toBe(false);
     } finally { release?.(); await resumed; await f.player.dispose(); }
   });
+  it('全局顺序连播时，首次同步分配了起始码的歌没有自己的播完动作，播完接着播下一首', async () => {
+    const f = fixture();
+    // What the first console sync writes into a song without an MTC start.
+    f.project.rundown[0]!.playback = { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: 810_000, shortcut: '' };
+    f.player.setEndAction('next'); await f.player.play('song-0');
+    expect(f.state().endAction).toBe('next');
+    f.emit({ status: 'ended', positionMs: 10000 });
+    await vi.waitFor(() => expect(f.state()).toMatchObject({ itemId: 'song-1', status: 'playing' }));
+    await f.player.stop();
+  });
   it('下一首快照保留独立原始偏移，曲尾不会先停止并丢弃预填充', async () => {
     const f = fixture(); f.project.rundown[0]!.playback!.endAction = 'next';
     await f.player.play('song-0');

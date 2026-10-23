@@ -3,7 +3,7 @@ import { playMa2Cue } from './ma2-pool-playback';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { ma2NetworkSettingsSchema, ma2NetworkSaveSchema, ma2NetworkCatalogSchema, type Ma2Capabilities, type Ma2NetworkSettings, type Ma2NetworkSave, type Ma2NetworkStatus, type Ma2NetworkTarget, type Ma2ReadProgressUpdate } from '@tb/schema';
+import { ma2NetworkSettingsSchema, ma2NetworkSaveSchema, ma2NetworkCatalogSchema, ma2TimecodeRangesSchema, type Ma2Capabilities, type Ma2NetworkSettings, type Ma2NetworkSave, type Ma2NetworkStatus, type Ma2NetworkTarget, type Ma2ReadProgressUpdate } from '@tb/schema';
 import { SecureProfileStore } from './secure-profile-store';
 import { writeFileAtomically } from './atomic-file';
 import { Ma2Telnet, ma2ResponseLine, type Ma2ConnectedPeer } from './ma2-telnet';
@@ -72,6 +72,10 @@ export class Ma2NetworkManager {
   private readonly path: string;
   private layoutService: Ma2LayoutService | null = null;
   private songWatch: Ma2SongWatch | null = null;
+  /** Read-only: where every console Timecode show sits in time, for placing a song that has no start yet. */
+  async timecodeRanges(network: Ma2NetworkTarget): Promise<import('@tb/schema').Ma2TimecodeRanges> {
+    return ma2TimecodeRangesSchema.parse(JSON.parse(await this.get(network).bridge.request('TCRANGES', 1)));
+  }
   async checkSong(request: import('@tb/schema').Ma2SongCheckRequest): Promise<boolean> {
     const { bridge } = this.get(request.network);
     if (!this.connection) throw new Error('请先连接控台');

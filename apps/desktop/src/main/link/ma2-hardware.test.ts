@@ -2,7 +2,7 @@ import { readFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { ma2ObjectDirectorySchema } from '@tb/schema';
+import { ma2ObjectDirectorySchema, ma2TimecodeRangesSchema } from '@tb/schema';
 import { Ma2LayoutService } from './ma2-layout-service';
 import { Ma2ConsoleBackups } from './ma2-console-backups';
 import { Ma2SongWatch } from './ma2-song-watch';
@@ -222,7 +222,7 @@ it.runIf(process.env.TBLINK_MA2_SONG_WRITE === '1' && Boolean(process.env.TBLINK
     expect(own).toMatchObject({ offset: 14400, slot: 'TC Slot 2' });
     const shown = inspectMa2TimecodeXml(await bridge.request('READ', own.number)).timecodes[0]!;
     const steps = inspectMa2SequenceXml(await bridge.request('SEQUENCE', sequence)).sequences[0]!.cues;
-    expect(shown.attributes).toMatchObject({ offset: '14400', slot: 'TC Slot 2', frame_format: '30 FPS' });
+    expect(shown.attributes).toMatchObject({ offset: '14400', slot: 'TC Slot 2', frame_format: '30 FPS', m_autostart: 'true' });
     expect(shown.tracks.map(track => track.executorAddress.join('.'))).toEqual([`30.1.${combined.binding.executor}`]);
     expect(shown.tracks[0]!.subtracks[0]!.events.map(event => [event.attributes.time ?? '0', event.cueAddress.join('/')]))
       .toEqual(combined.binding.points.map(point => [String(Math.round(point.atMs! * 30 / 1000)), `1/${sequence}/${steps.find(cue => Number(cue.number) === Number(point.cue))!.index}`]));
@@ -407,7 +407,10 @@ it.runIf(process.env.TBLINK_MA2_TIMECODE_PROBE === '1' && Boolean(process.env.TB
     await ensureMa2NetworkBridge(raw, await readFile(resolve('tools/ma2/tblink_bridge.lua'), 'utf8'));
     const bridge = new Ma2OnpcBridge(new Ma2NetworkWire(raw), () => false);
     const timecodes = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1)));
-    for (const orphan of timecodes.entries.filter(entry => entry.name === 'LianDongTanZhenGeQu')) results[`removed-orphan-${orphan.target}`] = await lua(`gma.cmd('Delete Timecode ${orphan.target} /nc');R=gma.show.getobj.handle('Timecode ${orphan.target}')==nil`);
+    const ranges = ma2TimecodeRangesSchema.parse(JSON.parse(await bridge.request('TCRANGES', 1)));
+    expect(ranges.entries.map(entry => entry.target)).toEqual(timecodes.entries.map(entry => entry.target));
+    results.ranges = { count: ranges.entries.length, sample: ranges.entries.slice(0, 5) };
+    for (const orphan of timecodes.entries.filter(entry => entry.name === `LianDongTanZhenGeQu ${entry.target}`)) results[`removed-orphan-${orphan.target}`] = await lua(`gma.cmd('Delete Timecode ${orphan.target} /nc');R=gma.show.getobj.handle('Timecode ${orphan.target}')==nil`);
     const sequences = ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
     const sequence = sequences.entries.find(entry => entry.target === 8999)?.target ?? sequences.entries[0]!.target;
     const report = inspectMa2SequenceXml(await bridge.request('SEQCUES', sequence, '1.000,2.000')).sequences[0]!;

@@ -1,12 +1,10 @@
 import { createHash } from 'node:crypto';
 import { ma2ObjectDirectorySchema } from '@tb/schema';
+import { MA2_SONG_TIMECODE_SLOT } from '@tb/core/link';
 import { appendMa2Tracks } from './ma2-track-write';
 import { createMa2TimecodeXml } from './ma2-create';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { extendMa2TimecodeLength, inspectMa2ExecutorXml, inspectMa2TimecodeXml, prepareMa2TimecodeEvents, resetMa2TimecodeShow, sameMa2XmlObjects } from './ma2-timecode-xml';
-
-/** MIDI timecode reaches TC Slot 2 by default on grandMA2; the program's own shows listen there. */
-export const MA2_SONG_TIMECODE_SLOT = 'TC Slot 2';
 
 /** 30 FPS frames, the resolution of a grandMA2 Timecode show. */
 const frames = (ms: number): number => Math.round(ms * 30 / 1000);
@@ -18,7 +16,7 @@ const frames = (ms: number): number => Math.round(ms * 30 / 1000);
  * Sequence as the console holds it after the write, since Import and Copy renumber them.
  */
 export function ma2SongTimecodeXml(currentXml: string, target: number, song: {
-  name: string; startMs: number; executor: string; executorName: string; sequence: number;
+  name: string; startMs: number; executor: string; executorName: string; sequence: number; lengthMs?: number;
   cues: ReadonlyArray<{ atMs: number; cueIndex: number; number: string; name: string | null }>;
 }): string {
   const empty = resetMa2TimecodeShow(currentXml, target, { name: song.name, offset: frames(song.startMs), slot: MA2_SONG_TIMECODE_SLOT });
@@ -28,7 +26,7 @@ export function ma2SongTimecodeXml(currentXml: string, target: number, song: {
     // The console stores a Cue reference as "<label> <number>" (onPC 3.7 probe), as Timecode event writes do.
     kind: 'add' as const, subtrackPath, rawTime: String(frames(cue.atMs)), cue: { sequence: song.sequence, cueIndex: cue.cueIndex, name: cue.name === null ? `Cue ${Number(cue.number)}` : `${cue.name} ${Number(cue.number)}` }
   })));
-  return extendMa2TimecodeLength(events.xml, target);
+  return extendMa2TimecodeLength(events.xml, target, song.lengthMs === undefined ? 0 : Math.ceil(song.lengthMs * 30 / 1000));
 }
 
 export type Ma2SongTimecode = { number: number; offset: number; slot: string; revision: string };
@@ -43,7 +41,7 @@ const revision = (xml: string): string => createHash('sha256').update(xml.replac
  * APPLY keeps a console backup before it imports.
  */
 export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, song: {
-  previous: Ma2SongTimecode | undefined; sequence: number; executor: string; startMs: number; name: string; version: string;
+  previous: Ma2SongTimecode | undefined; sequence: number; executor: string; startMs: number; lengthMs: number | undefined; name: string; version: string;
   cues: ReadonlyArray<{ atMs: number; cueIndex: number; number: string; name: string | null }>;
   created: (timecode: Ma2SongTimecode) => Promise<void>;
 }): Promise<{ timecode: Ma2SongTimecode; backup: string | null }> {
@@ -64,7 +62,7 @@ export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request'
   const [page, slot] = song.executor.split('.');
   const executorName = inspectMa2ExecutorXml(await bridge.request('EXECUTOR', Number(page), slot)).executorName;
   if (!executorName) throw new Error(`执行器 ${song.executor} 的名称未能读取，未写入时间码节目`);
-  const desired = ma2SongTimecodeXml(current, number, { name: song.name, startMs: song.startMs, executor: song.executor, executorName, sequence: song.sequence, cues: song.cues });
+  const desired = ma2SongTimecodeXml(current, number, { name: song.name, startMs: song.startMs, executor: song.executor, executorName, sequence: song.sequence, cues: song.cues, ...song.lengthMs === undefined ? {} : { lengthMs: song.lengthMs } });
   if (sameMa2XmlObjects(desired, current)) return { timecode: timecode(number, current), backup: null };
   const written = await bridge.exchange('APPLY', number, current, desired);
   return { timecode: timecode(number, written.response), backup: `tblink_backup_${written.requestId}` };

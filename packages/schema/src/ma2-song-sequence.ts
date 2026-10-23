@@ -28,7 +28,9 @@ export const ma2SongSyncRequestSchema = z.object({ network: ma2NetworkTargetSche
   /** Explicit operator request: rewrite names the app once wrote in Chinese as their pinyin. */
   rewriteLegacyNames: z.boolean().optional(),
   /** The song's MTC start; with it the sync also writes the song's own Timecode show. */
-  timecodeStartMs: z.number().int().min(0).max(86399999).optional()
+  timecodeStartMs: z.number().int().min(0).max(86399999).optional(),
+  /** The song's length: the show runs, and reads as taken, for the whole song rather than up to its last point. */
+  timecodeLengthMs: z.number().int().positive().max(86400000).optional()
 }).strict().superRefine((value, ctx) => {
   if (!value.points.length && !value.binding) ctx.addIssue({ code: 'custom', message: '新歌曲需先添加 Cue；已绑定歌曲可以核对后清空' });
   if (new Set(value.points.map(point => point.id)).size !== value.points.length) ctx.addIssue({ code: 'custom', message: '歌曲 Cue 身份重复' });

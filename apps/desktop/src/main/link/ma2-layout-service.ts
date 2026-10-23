@@ -468,7 +468,7 @@ export class Ma2LayoutService {
       progress('verification', 1, 1, `写入本曲时间码节目 · 序列 ${target}`);
       const times = new Map(request.points.map(point => [point.id, point.atMs]));
       const journal = (binding: Ma2SongSyncResult['binding']): Promise<void> => writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding, conflicts: result.conflicts ?? [] }]));
-      const written = await writeMa2SongTimecode(bridge, { previous: previousTimecode, sequence: target, executor, startMs: request.timecodeStartMs, name: report.name ?? toConsoleLabel(request.name), version: directory.version,
+      const written = await writeMa2SongTimecode(bridge, { previous: previousTimecode, sequence: target, executor, startMs: request.timecodeStartMs, lengthMs: request.timecodeLengthMs, name: report.name ?? toConsoleLabel(request.name), version: directory.version,
         cues: result.binding.points.map(point => {
           const cue = report.cues.find(value => Number(value.number) === Number(point.cue));
           if (!cue) throw new Error(`本曲时间码节目未写入：序列 ${target} 回读中没有 Cue ${point.cue}`);

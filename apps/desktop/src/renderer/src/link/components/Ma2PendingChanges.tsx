@@ -1,6 +1,6 @@
 import { useMa2SongSyncStore } from '../runtime/ma2-song-sync';
 import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
-import { pauseMa2RealtimeSession, pendingSongSummary, retryMa2RealtimeSession } from '../runtime/ma2-realtime-session';
+import { pauseMa2RealtimeSession, pendingSongSummary, retryMa2RealtimeSession, songsWithoutConsoleShow, writeMissingConsoleShows } from '../runtime/ma2-realtime-session';
 import { useMemo, useState } from 'react';
 import { Check, CircleAlert, FolderArchive, FolderOpen, Save, Undo2, Redo2 } from 'lucide-react';
 import type { ProjectArchiveResult } from '@tb/schema';
@@ -21,6 +21,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const canRedo = useDocumentStore(state => state.future.length > 0);
   const pending = useMemo(() => ma2PendingChanges(project), [project]);
   const unbound = useMemo(() => pendingSongSummary(project), [project]);
+  const showless = useMemo(() => songsWithoutConsoleShow(project), [project]);
   const renames = useMemo(() => pendingMa2Renames(project), [project]);
   const legacy = useMemo(() => legacyMa2ConsoleNames(project), [project]);
   const automatic = useMa2AutoSyncStore();
@@ -37,7 +38,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   if (!project) return null;
   const working = automatic.status === 'writing' || automatic.status === 'reading' || songs.some(song => song.state === 'syncing' || song.requestId);
-  const count = pending.length + unbound.length + renames.length + songs.filter(song => song.state === 'pending' && !unbound.some(item => item.itemId === song.itemId)).length;
+  const count = pending.length + unbound.length + renames.length + showless.length + songs.filter(song => song.state === 'pending' && !unbound.some(item => item.itemId === song.itemId)).length;
   const blocked = automatic.status === 'blocked' || songs.some(song => song.state === 'blocked');
   const status = recoveryError ? '恢复副本需处理' : !active ? '已暂停同步' : blocked ? '有修改待核对' : working ? '同步中' : songs.some(song => song.waitingForConnection) ? '等待连接' : count ? `待同步 ${count}` : songs.length && songs.every(song => song.state === 'verified') ? '已回读确认' : automatic.status === 'verified' ? '已回读确认' : '同步已开启';
   const run = async (action: () => Promise<void> | void): Promise<void> => {
@@ -110,6 +111,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
       {legacy.count ? <p>控台上有 {legacy.count} 个以前写入的中文名称，控台只能显示英文和数字。<button disabled={busy || working} onClick={() => void run(async () => { const count = await convertMa2LegacyNames(useDocumentStore.getState().documentId); setNotice(`已提交 ${count} 个名称改为拼音，歌曲名称在下一次同步时写入`); })}>改为拼音</button></p> : null}
       {pending.map(item => <p key={`${item.itemId}:${item.bindingId}`}>{item.title} · Timecode {item.target}：{item.error ?? `${item.changes.length} 处修改`}</p>)}
       {unbound.map(item => <p key={item.itemId}>{item.title} · {item.count} 个 Cue → 按钮第 {item.page} 页的空格。</p>)}
+      {showless.length ? <p>有 {showless.length} 首歌要同步到控台才能演出：{showless.map(item => item.title).join('、')}。同步会为每首歌在控台上建立自己的时间码节目。<button disabled={busy || working} onClick={() => { setNotice(''); writeMissingConsoleShows(); }}>同步到控台</button></p> : null}
     </div> : null}
     {archiveOpen ? <div className="ma2-sync-popover" role="region" aria-label="灯光工程存档">
       <header><strong>工程存档 · {archives.length}</strong><button onClick={() => setArchiveOpen(false)}>关闭</button></header>

@@ -260,6 +260,7 @@ export type LinkDesktopApi = {
   commitMa2CueDeletion(payload: import('@tb/schema').Ma2CueDeleteCommit, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2CueDeleteResult>;
   syncMa2Song(payload: import('@tb/schema').Ma2SongSyncRequest, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2SongSyncResult>;
   checkMa2Song(payload: import('@tb/schema').Ma2SongCheckRequest): Promise<boolean>;
+  ma2TimecodeRanges(network: import('@tb/schema').Ma2NetworkTarget): Promise<import('@tb/schema').Ma2TimecodeRanges>;
   createMa2Cue(payload: import('@tb/schema').Ma2NewCueRequest): Promise<import('@tb/schema').Ma2NewCueResult>;
   cancelMa2Read(id: string): Promise<void>;
   createMa2(payload: import('@tb/schema').Ma2CreateRequest): Promise<import('@tb/schema').Ma2TimecodePreview>;

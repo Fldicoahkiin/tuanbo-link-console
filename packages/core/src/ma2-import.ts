@@ -14,7 +14,7 @@ export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePrevi
     const originMs = programTimeOrigin(item, input.timeOriginMs ?? 0);
     if (input.timing?.absoluteEventTimesMs.some(time => time < originMs - 1e-6 || item.referenceAudio && time >= originMs + item.referenceAudio.durationMs)) throw new Error('原生事件超出歌曲原始时间范围，请核对配对；未丢弃事件或改写起点');
     const preview = withMa2TimeOrigin(input, originMs);
-    if (originMs > 0) item.playback ??= { volume: item.p1Media?.volume ?? 100, endAction: 'stop', startMs: 0, endMs: 0, mtcOffsetMs: originMs, shortcut: item.p1Media?.shortcut ?? '' };
+    if (originMs > 0) item.playback ??= { volume: item.p1Media?.volume ?? 100, startMs: 0, endMs: 0, mtcOffsetMs: originMs, shortcut: item.p1Media?.shortcut ?? '' };
     const current = item.lighting ?? structuredClone(initial ?? createLightingDocument());
     if (input.unconverted.length && current.outputMode !== 'timecode' && current.tracks.length) throw new Error('含原生保留事件的时间线需要时间码输出；请先核对当前歌曲的直接输出编排');
     if (current.ma2Bindings?.some((binding) => binding.timecode === preview.target)) throw new Error('该节目已关联此 Timecode，请勿重复导入');

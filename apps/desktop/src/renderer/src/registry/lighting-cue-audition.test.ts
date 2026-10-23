@@ -27,7 +27,7 @@ it('多步序列发送 Go 和 Off 原命令，不根据缓存列表猜测下一 
 
 it('原生混合时间线只试听指定序列 Cue，原文和完整播放限制保持不变', async () => {
   const f = networkFixture(); const before = structuredClone(f.document);
-  expect(await f.audition.play(f.document, 'b', f.profile)).toBe(1);
+  expect(await f.audition.play(f.document, 'b', f.profile, false)).toBe(1);
   expect(f.play).toHaveBeenCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 1, cue: '2', action: 'goto' } }));
   expect(f.play).toHaveBeenCalledTimes(1); expect(f.send).not.toHaveBeenCalled();
   expect(f.document).toEqual(before);
@@ -45,7 +45,7 @@ it('未放进时间线的素材点击也调用原序列 Cue，不插入事件或
 
 it('Cue 网络调用失败直接返回原因，不自动重发或改走 MIDI', async () => {
   const f = networkFixture(); f.play.mockRejectedValue(new Error('控台没有找到 Sequence 1 Cue 2'));
-  await expect(f.audition.play(f.document, 'b', f.profile)).rejects.toThrow('控台没有找到');
+  await expect(f.audition.play(f.document, 'b', f.profile, false)).rejects.toThrow('控台没有找到');
   expect(f.play).toHaveBeenCalledTimes(1); expect(f.request).not.toHaveBeenCalled();
 });
 
@@ -53,10 +53,10 @@ it('选中单独运行先结束受管试听，失败时不发送新 Cue', async 
   const f = networkFixture();
   const event = f.document.tracks[0]!.clips[0]!.events[1]!;
   if (event.kind !== 'ma2') throw new Error('fixture'); event.runMode = 'independent';
-  await f.audition.play(f.document, 'b', f.profile);
+  await f.audition.play(f.document, 'b', f.profile, false);
   expect(window.tbLink.controlMa2Audition).toHaveBeenCalledWith({ version: 1, action: 'stop' });
   vi.mocked(window.tbLink.controlMa2Audition).mockResolvedValue({ version: 1, revision: 1, generation: 1, phase: 'failed', targets: [] });
-  await expect(f.audition.play(f.document, 'b', f.profile)).rejects.toThrow('上一组试听');
+  await expect(f.audition.play(f.document, 'b', f.profile, false)).rejects.toThrow('上一组试听');
   expect(f.play).toHaveBeenCalledTimes(1);
 });
 function fixture() {
@@ -70,22 +70,28 @@ function fixture() {
 }
 it('选中 Cue 即发送该 Cue，不启动音乐、不发送其他点、不要求网络或直控模式', async () => {
   const f = fixture();
-  expect(await f.audition.play(f.document, 'b', f.profile)).toBe(1);
+  expect(await f.audition.play(f.document, 'b', f.profile, false)).toBe(1);
   expect(f.send).toHaveBeenCalledWith([0xf0, 0x7f, 127, 2, 1, 1, ...Array.from('2.000\0' + '101.2', char => char.charCodeAt(0)), 0xf7]);
   expect(f.send).toHaveBeenCalledTimes(1); expect(f.document.outputMode).toBe('timecode');
+});
+it('本机用网络连接 MA2 时，带执行器的 Cue 也走网络试听，不看歌曲的灯光输出方式', async () => {
+  const f = networkFixture(); f.document.ma2Bindings = [];
+  expect(f.document.outputMode).toBe('timecode');
+  expect(await f.audition.play(f.document, 'b', f.profile, true)).toBe(1);
+  expect(f.play).toHaveBeenCalledOnce(); expect(f.request).not.toHaveBeenCalled();
 });
 it('快速改选时迟到的前一条 Cue 不得发送', async () => {
   const f = fixture(); let finish = (): void => { throw new Error('未开始'); };
   f.open.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
-  const first = f.audition.play(f.document, 'a', f.profile);
+  const first = f.audition.play(f.document, 'a', f.profile, false);
   await vi.waitFor(() => expect(f.open).toHaveBeenCalledOnce());
-  await f.audition.play(f.document, 'b', f.profile); finish();
+  await f.audition.play(f.document, 'b', f.profile, false); finish();
   expect(await first).toBe(0); expect(f.send).toHaveBeenCalledTimes(1);
 });
 it('关闭选中即播放后，正在申请权限的 Cue 不得补发', async () => {
   const f = fixture(); let finish = (): void => { throw new Error('未开始'); };
   f.request.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(f.access); }));
-  const pending = f.audition.play(f.document, 'a', f.profile);
+  const pending = f.audition.play(f.document, 'a', f.profile, false);
   await vi.waitFor(() => expect(f.request).toHaveBeenCalledOnce());
   f.audition.cancel(); finish();
   expect(await pending).toBe(0); expect(f.send).not.toHaveBeenCalled();
@@ -94,7 +100,7 @@ it('权限挂起明确超时，不会在超时后补发', async () => {
   vi.useFakeTimers(); const f = fixture();
   let finish = (): void => { throw new Error('未开始'); };
   f.request.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(f.access); }));
-  const rejected = expect(f.audition.play(f.document, 'a', f.profile)).rejects.toThrow('MIDI 访问超时');
+  const rejected = expect(f.audition.play(f.document, 'a', f.profile, false)).rejects.toThrow('MIDI 访问超时');
   await vi.advanceTimersByTimeAsync(5000); await rejected; finish(); await Promise.resolve();
   expect(f.send).not.toHaveBeenCalled();
 });

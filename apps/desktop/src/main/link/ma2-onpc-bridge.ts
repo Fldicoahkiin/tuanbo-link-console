@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { ma2ExecutorPageDirectorySchema } from '@tb/schema';
 import { inspectMa2ExecutorPageXml } from './ma2-timecode-xml';
-import { ma2ObjectDirectorySchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema } from '@tb/schema';
+import { ma2ObjectDirectorySchema, ma2SequenceAssignmentSchema, ma2RenameResultSchema, ma2LabelSchema, ma2TimecodeRangesSchema } from '@tb/schema';
 import { readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
-export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'SEQCUES' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR' | 'ASSIGNSEQ' | 'LABEL' | 'DISCARD';
+export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'SEQCUES' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR' | 'ASSIGNSEQ' | 'LABEL' | 'DISCARD' | 'TCRANGES';
 export type Ma2Wire = {
   /** progress fires after every acknowledged line of a long transfer. */
   exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: () => void): Promise<string>;
@@ -54,6 +54,7 @@ export class Ma2OnpcBridge {
     if (assigning && this.isPlaying()) throw new Error('播放期间不能创建 MA2 关联');
     if (operation === 'SEQUENCE' && (!['', 'keep'].includes(expected) || desired)) throw new Error('序列读取请求格式无效');
     if (operation === 'SEQCUES' && (!/^\d+\.\d{3}(?:,\d+\.\d{3})*$/.test(expected) || expected.length > 65536 || desired)) throw new Error('序列 Cue 读取范围无效');
+    if (operation === 'TCRANGES' && (target !== 1 || expected || desired)) throw new Error('时间码范围读取请求格式无效');
     if (operation === 'DISCARD' && (!/^tblink_(?:backup|label|library)_[a-f0-9]{32}(?:,tblink_(?:backup|label|library)_[a-f0-9]{32})*$/.test(expected) || expected.length > 4096 || desired)) throw new Error('控台备份清理列表无效');
     if (operation === 'EXECUTOR' && (!/^[1-9]\d*$/.test(expected) || Number(expected) > 99999 || desired !== '')) throw new Error('执行器编号无效');
     const requestedSequences = operation === 'SCOPE' ? expected.split(',').map(Number) : [];
@@ -85,6 +86,7 @@ export class Ma2OnpcBridge {
           if (report.sequences.length !== 1 || report.sequences[0]?.number !== target) throw new Error('Sequence 回读对象不一致');
         }
         else if (operation === 'EXECUTOR') inspectMa2ExecutorXml(result);
+        else if (operation === 'TCRANGES') ma2TimecodeRangesSchema.parse(JSON.parse(result));
         else if (operation === 'DISCARD') { if (result.split(',').some(name => name && !expected.split(',').includes(name))) throw new Error('控台备份清理回执与请求不一致'); }
         else if (operation !== 'PING') {
           if (operation === 'SNAPSHOT' || operation === 'SCOPE') validateMa2TimecodeSnapshot(result, requestedSequences);
