@@ -15,8 +15,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import shutil
+import stat
 import uuid
 
 import yaml
@@ -30,7 +32,9 @@ BACKUPS = 'var/lib/tblink-licensing/backups'
 KEYS = 'opt/tblink-licensing/release-public-keys.json'
 VERSION = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)')
 STAGED_NAME = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[a-f0-9]{12}')
-REQUEST_ID = re.compile(r'[a-f0-9-]{36}')
+REQUEST_ID = re.compile(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}')
+# The licensing service account writes requests from the console; nothing else may.
+REQUEST_OWNER = 'tblink-license'
 
 
 def digest(path, algorithm='sha256'):
@@ -295,46 +299,88 @@ def refresh_status(root):
         'staged': staged})
 
 
+REQUEST_FIELDS = {
+    'publish': {'id', 'action', 'staged', 'manifestSha256', 'actor', 'reason', 'requestedAt'},
+    'rollback': {'id', 'action', 'version', 'actor', 'reason', 'requestedAt'},
+    'discard': {'id', 'action', 'staged', 'actor', 'reason', 'requestedAt'},
+}
+MAX_REQUEST = 16384
+
+
+def text_field(value, limit):
+    return isinstance(value, str) and 0 < len(value) <= limit and not any(ord(char) < 32 for char in value)
+
+
+def read_request(path, request_id, owner_uid):
+    """A request written by the console's service account. Opened without following links and without
+    blocking on a FIFO; only a small regular file owned by that account, with exactly the expected fields."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raise RuntimeError('请求文件无效') from None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid or info.st_size > MAX_REQUEST:
+            raise RuntimeError('请求文件无效')
+        data = os.read(descriptor, MAX_REQUEST + 1)
+    finally:
+        os.close(descriptor)
+    try:
+        request = json.loads(data)
+    except ValueError:
+        raise RuntimeError('请求内容无效') from None
+    if not isinstance(request, dict) or request.get('action') not in REQUEST_FIELDS or set(request) != REQUEST_FIELDS[request['action']]:
+        raise RuntimeError('请求内容无效')
+    if request['id'] != request_id or not text_field(request['actor'], 200) or not text_field(request['reason'], 500) \
+            or not isinstance(request['requestedAt'], str) or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z', request['requestedAt']) \
+            or 'staged' in request and not (isinstance(request['staged'], str) and STAGED_NAME.fullmatch(request['staged'])) \
+            or 'manifestSha256' in request and not (isinstance(request['manifestSha256'], str) and re.fullmatch(r'[a-f0-9]{64}', request['manifestSha256'])) \
+            or 'version' in request and not (isinstance(request['version'], str) and VERSION.fullmatch(request['version'])):
+        raise RuntimeError('请求内容无效')
+    return request
+
+
 def handle(request, root):
-    action = request.get('action')
-    actor = {'actor': request.get('actor'), 'reason': request.get('reason'), 'id': request.get('id')}
-    if action == 'publish':
-        result = publish_staged(request.get('staged'), request.get('manifestSha256'), root, actor)
-        return f'已发布 {result["version"]}'
-    if action == 'rollback':
-        result = rollback(request.get('version'), root, actor)
-        return f'更新源已回到 {result["version"]}'
-    if action == 'discard':
-        discard(request.get('staged'), root)
-        return f'已丢弃待发布版本 {request.get("staged")}'
-    if action == 'refresh':
-        return '已刷新'
-    raise RuntimeError('未知的请求类型')
+    actor = {'actor': request['actor'], 'reason': request['reason'], 'id': request['id'], 'requestedAt': request['requestedAt']}
+    if request['action'] == 'publish':
+        result = publish_staged(request['staged'], request['manifestSha256'], root, actor)
+        return result['version'], f'已发布 {result["version"]}'
+    if request['action'] == 'rollback':
+        result = rollback(request['version'], root, actor)
+        return result['version'], f'更新源已回到 {result["version"]}'
+    discard(request['staged'], root)
+    return request['staged'].split('-')[0], f'已丢弃待发布版本 {request["staged"]}'
 
 
-def process_requests(root=Path('/')):
+def process_requests(root=Path('/'), owner_uid=None):
+    """Runs each request once, oldest first. The request directory belongs to the console's service account;
+    this script only reads it. A request with a result already is a duplicate and is left alone."""
+    if owner_uid is None:
+        owner_uid = pwd.getpwnam(REQUEST_OWNER).pw_uid
     spool = root / SPOOL
     with (spool / 'publish.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        for path in sorted((spool / 'update-requests').glob('*.json')):
-            request_id = path.stem
-            # Moved out of the watched directory first: a failing request must not re-trigger the path unit.
-            processed = spool / 'processed' / path.name
-            os.replace(path, processed)
-            try:
-                if not REQUEST_ID.fullmatch(request_id):
-                    raise RuntimeError('请求编号无效')
-                # Written by the console's unprivileged user: only a small regular file is read as root.
-                if processed.is_symlink() or not processed.is_file() or processed.stat().st_size > 16384:
-                    raise RuntimeError('请求文件无效')
-                request = json.loads(processed.read_text())
-                if not isinstance(request, dict) or request.get('id') != request_id:
-                    raise RuntimeError('请求内容无效')
-                result = {'id': request_id, 'ok': True, 'message': handle(request, root), 'at': now()}
-            except Exception as error:  # Reported to the console; the request is never retried automatically.
-                result = {'id': request_id, 'ok': False, 'message': str(error), 'at': now()}
-            if REQUEST_ID.fullmatch(request_id):
+        while True:
+            pending = [path for path in sorted((spool / 'update-requests').glob('*.json'), key=lambda item: item.name)
+                       if REQUEST_ID.fullmatch(path.stem) and not (spool / 'update-results' / path.name).exists()]
+            if not pending:
+                break
+            for path in pending:
+                request_id = path.stem
+                request = None
+                try:
+                    request = read_request(path, request_id, owner_uid)
+                    version, message = handle(request, root)
+                    result = {'id': request_id, 'ok': True, 'message': message, 'at': now()}
+                except Exception as error:  # Reported to the console and the audit log; never retried automatically.
+                    version = None
+                    result = {'id': request_id, 'ok': False, 'message': str(error), 'at': now()}
                 write_json(spool / 'update-results' / (request_id + '.json'), result)
+                with (root / BACKUPS / 'update-audit.jsonl').open('a') as audit:
+                    audit.write(json.dumps({'id': request_id, 'requestedAt': None if request is None else request['requestedAt'],
+                                            'processedAt': result['at'], 'actor': None if request is None else request['actor'],
+                                            'action': None if request is None else request['action'], 'version': version,
+                                            'ok': result['ok'], 'message': result['message']}, ensure_ascii=False) + '\n')
         refresh_status(root)
 
 

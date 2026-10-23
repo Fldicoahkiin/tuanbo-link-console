@@ -33,6 +33,8 @@ const licenseRows = `SELECT l.id,l.rowid AS position,l.machine AS machine,json_e
   CASE WHEN l.revoked=1 THEN 'revoked' WHEN ${licenseUseUntil}<=? THEN 'expired' WHEN ${licenseUseUntil}<=? THEN 'expiring' WHEN l.machine IS NOT NULL THEN 'active' ELSE 'unbound' END AS status
   FROM licenses l JOIN orders o ON o.id=l.order_id LEFT JOIN console_order_meta m ON m.order_id=o.id`;
 const licenseStatuses = ['active', 'unbound', 'expiring', 'expired', 'revoked'] as const;
+/** 解析失败返回 undefined，由调用方标注「记录无法解析」。 */
+function readJson(text: string): unknown { try { return JSON.parse(text) as unknown; } catch { return undefined; } }
 const beijingMinute = (iso: string) => new Date(Date.parse(iso) + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
 const beijingDayStart = (day: string) => new Date(`${day}T00:00:00+08:00`).toISOString();
 const beijingDayEnd = (day: string) => new Date(Date.parse(`${day}T00:00:00+08:00`) + 86400000).toISOString();
@@ -59,6 +61,11 @@ export class ConsoleService {
     return rowSchema.parse(value);
   }
   clock(): number { return this.now(); }
+  /** 只签发一份时直接带回激活码和授权编号，省去再去「查看完整激活码」；多份时只返回订单。 */
+  private issued(orderId: string, message: string): ConsoleResult {
+    const licenses = this.service.describeOrder(orderId).licenses;
+    return licenses.length === 1 ? { id: orderId, message, licenseId: licenses[0]!.id, secret: licenses[0]!.code } : { id: orderId, message };
+  }
   private statusWindow(): [string, string] { return [new Date(this.now()).toISOString(), new Date(this.now() + 7 * 86400000).toISOString()]; }
   /** 授权 DTO：生命周期状态替代绑定、撤销两个布尔值。 */
   private licenseRow(row: ConsoleRow): ConsoleRow {
@@ -126,7 +133,7 @@ export class ConsoleService {
       item = found; orderId = z.string().parse(item.orderId);
       related = this.db.prepare('SELECT order_id AS id,use_until AS useUntil,updates_until AS updatesUntil FROM license_renewals WHERE license_id=? ORDER BY rowid DESC').all(id).map(row => rowSchema.parse(row));
     } else if (resource === 'tickets') {
-      const row = this.db.prepare('SELECT t.id,t.order_id,t.license_id,t.category,t.note,t.state,t.conclusion,t.created,t.updated,COALESCE(u.username,t.actor) AS operator FROM console_tickets t LEFT JOIN console_users u ON u.id=t.actor WHERE t.id=?').get(id);
+      const row = this.db.prepare('SELECT t.id,o.reference AS orderReference,t.order_id,t.license_id,t.category,t.note,t.state,t.conclusion,t.created,t.updated,COALESCE(u.username,t.actor) AS operator FROM console_tickets t JOIN orders o ON o.id=t.order_id LEFT JOIN console_users u ON u.id=t.actor WHERE t.id=?').get(id);
       if (!row) throw new ServiceError(404, 'NOT_FOUND', '工单不存在');
       item = rowSchema.parse(row); orderId = z.string().parse(item.order_id); related = [this.order(orderId)];
     } else throw new ServiceError(404, 'NOT_FOUND', '详情不存在');
@@ -155,12 +162,16 @@ export class ConsoleService {
         case 'license.special-grant': case 'order.state-changed': return { at: event.at, event: `签发（${sources[String(license.source)] ?? '销售'}）`, detail: null, operator: operator(event.at, ['fulfill', 'grant', 'retry-delivery']) ?? (showOperator ? '系统自动发码' : null) };
         case 'license.activated': activations++; return { at: event.at, event: activations === 1 ? '首次激活' : '重新激活', detail: index === lastActivation && machine ? `机器码 ${machine}…` : null, operator: showOperator ? '客户端' : null };
         case 'license.migrated': return { at: event.at, event: '换机', detail: '旧码失效，换发新码', operator: operator(event.at, ['migrate']) };
-        case 'license.expiry-adjusted': { const change = z.object({ before: z.string().nullable(), after: z.string() }).parse(JSON.parse(event.detail)); return { at: event.at, event: '调整到期', detail: `${change.before ? beijingMinute(change.before) : '永久'} → ${beijingMinute(change.after)}`, operator: operator(event.at, ['set-expiry']) }; }
+        case 'license.expiry-adjusted': {
+          // 一条格式不对的旧记录只标注本节点，不让整个授权详情打不开。
+          const change = z.object({ before: z.string().datetime().nullable(), after: z.string().datetime() }).safeParse(readJson(event.detail));
+          return { at: event.at, event: '调整到期', detail: change.success ? `${change.data.before ? beijingMinute(change.data.before) : '永久'} → ${beijingMinute(change.data.after)}` : '记录无法解析', operator: operator(event.at, ['set-expiry']) };
+        }
         case 'license.renewed': return { at: event.at, event: '续费', detail: null, operator: showOperator ? '客户续费' : null };
         default: return { at: event.at, event: '撤销', detail: event.detail, operator: operator(event.at, ['revoke', 'refund-review', 'alipay-refund']) };
       }
     });
-    if (license.status === 'expired' && typeof license.useUntil === 'string') nodes.push({ at: license.useUntil, event: '已过期', detail: null, operator: null });
+    if (license.status === 'expired' && typeof license.useUntil === 'string') nodes.push({ at: license.useUntil, event: '已过期', detail: '按到期时间推算，不是操作记录', operator: null, inferred: true });
     return nodes;
   }
   overview(session: ConsoleSession) {
@@ -240,9 +251,9 @@ export class ConsoleService {
       if (input.action === 'publish-update' || input.action === 'rollback-update' || input.action === 'discard-update') {
         if (!channels.updates) throw new ServiceError(503, 'UPDATES_UNAVAILABLE', '本服务器未启用更新发布');
         this.service.consoleTransaction(begin);
-        const request: UpdateRequest = input.action === 'publish-update' ? { id: operationId, action: 'publish', staged: input.id, manifestSha256: input.manifestSha256, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason }
-          : input.action === 'rollback-update' ? { id: operationId, action: 'rollback', version: input.id, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason }
-            : { id: operationId, action: 'discard', staged: input.id, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason };
+        const common = { id: operationId, actor: `${session.user.username} (${session.user.id})`, reason: safeInput.reason, requestedAt: new Date(this.now()).toISOString() };
+        const request: UpdateRequest = input.action === 'publish-update' ? { ...common, action: 'publish', staged: input.id, manifestSha256: input.manifestSha256 }
+          : input.action === 'rollback-update' ? { ...common, action: 'rollback', version: input.id } : { ...common, action: 'discard', staged: input.id };
         const outcome = await channels.updates.request(request);
         // The publisher re-validates everything; its refusal is the result, not a console failure.
         if (outcome && !outcome.ok) {
@@ -266,7 +277,7 @@ export class ConsoleService {
         this.db.prepare('INSERT OR IGNORE INTO console_order_meta VALUES(?,?,?,?,?)').run(order.id, at, 'manual', input.reason, actor);
         return success(order.id, '线下订单已创建，待核款');
       }
-      case 'fulfill': this.service.fulfill(input.id, { amountFen: input.amountFen, paymentReference: input.paymentReference }); this.auth.audit(actor, 'manual-payment-method', input.id, input.paymentMethod, 'success', operationId); return success(input.id, '核款与发码已完成');
+      case 'fulfill': this.service.fulfill(input.id, { amountFen: input.amountFen, paymentReference: input.paymentReference }); this.auth.audit(actor, 'manual-payment-method', input.id, input.paymentMethod, 'success', operationId); return this.issued(input.id, '核款与发码已完成');
       // 服务层与本机管理接口仍要求非空原因；后台备注留空时传固定标签。
       case 'retry-delivery': this.service.retryDelivery(input.id, { reason: input.reason || '后台补交付' }); return success(input.id, '补交付已完成');
       case 'close-order': this.service.closeUnlinkedOrder(input.id); return success(input.id, '订单已关闭');
@@ -279,7 +290,7 @@ export class ConsoleService {
       case 'grant': {
         const result = this.service.createGrant({ customer: input.customer, customerType: input.customerType, quantity: input.quantity, useUntil: input.useUntil }, `GRANT-${operationId}`);
         this.db.prepare('INSERT INTO console_order_meta VALUES(?,?,?,?,?)').run(result.id, at, input.purpose, input.reason, actor);
-        return success(result.id, '特殊授权已签发');
+        return this.issued(result.id, '特殊授权已签发');
       }
       case 'create-user': { const result = this.auth.createUser(input.username, input.role); return { id: result.id, message: '开通凭据 24 小时内有效', secret: result.token }; }
       case 'update-user': this.auth.updateUser(input.id, input.role, input.enabled); return success(input.id, '已更新，该人员需重新登录');

@@ -50,7 +50,7 @@ class PublishUpdateTest(unittest.TestCase):
         self.feed = self.root / module.FEED
         self.feed.mkdir(parents=True)
         (self.root / module.BACKUPS).mkdir(parents=True)
-        for name in ['update-requests', 'processed', 'update-results']:
+        for name in ['update-requests', 'update-results']:
             (self.root / module.SPOOL / name).mkdir(parents=True)
         (self.root / module.STAGING).mkdir(parents=True)
         keys = self.root / module.KEYS
@@ -65,8 +65,9 @@ class PublishUpdateTest(unittest.TestCase):
 
     def request(self, **values):
         request_id = str(uuid.uuid4())
-        (self.root / module.SPOOL / 'update-requests' / f'{request_id}.json').write_text(json.dumps({'id': request_id, 'actor': 'owner', 'reason': '发布', **values}))
-        module.process_requests(self.root)
+        (self.root / module.SPOOL / 'update-requests' / f'{request_id}.json').write_text(
+            json.dumps({'id': request_id, 'actor': 'owner (9d53530a)', 'reason': '发布', 'requestedAt': '2026-10-23T08:00:00.000Z', **values}))
+        module.process_requests(self.root, os.getuid())
         return json.loads((self.root / module.SPOOL / 'update-results' / f'{request_id}.json').read_text())
 
     def status(self):
@@ -119,7 +120,7 @@ class PublishUpdateTest(unittest.TestCase):
     def test_console_request_publishes_a_staged_release_and_refuses_a_swapped_one(self):
         staged = release(self.root / module.STAGING / '0.5.0-aaaaaaaaaaaa', '0.5.0')
         manifest_sha = module.digest(staged / 'release-manifest.json').hexdigest()
-        module.process_requests(self.root)
+        module.process_requests(self.root, os.getuid())
         self.assertEqual(self.status()['staged'][0]['manifestSha256'], manifest_sha)
         result = self.request(action='publish', staged='0.5.0-aaaaaaaaaaaa', manifestSha256='0' * 64)
         self.assertEqual((result['ok'], result['message']), (False, '待发布版本的 manifest 与确认时不一致'))
@@ -129,7 +130,10 @@ class PublishUpdateTest(unittest.TestCase):
         self.assertFalse(staged.exists())
         self.assertEqual(self.status()['feed']['version'], '0.5.0')
         self.assertTrue(self.status()['feed']['signed'])
-        self.assertEqual(list((self.root / module.SPOOL / 'update-requests').iterdir()), [])
+        audit = [json.loads(line) for line in (self.root / module.BACKUPS / 'update-audit.jsonl').read_text().splitlines()]
+        self.assertEqual([(entry['action'], entry['version'], entry['ok']) for entry in audit], [('publish', None, False), ('publish', '0.5.0', True)])
+        self.assertEqual(audit[1]['actor'], 'owner (9d53530a)')
+        self.assertEqual(audit[1]['requestedAt'], '2026-10-23T08:00:00.000Z')
 
     def test_rollback_returns_to_the_previous_feed_once(self):
         self.publish(release(self.root / 'one', '0.5.0'), '0.5.0')
@@ -173,17 +177,31 @@ writeFileSync(`${directory}/latest.yml`, signUpdateMetadata(text, { installerNam
 
     def test_discard_and_malformed_requests(self):
         staged = release(self.root / module.STAGING / '0.5.0-bbbbbbbbbbbb', '0.5.0')
-        self.assertEqual(self.request(action='discard', staged='../../etc')['message'], '待发布版本名称无效')
+        self.assertEqual(self.request(action='discard', staged='../../etc')['message'], '请求内容无效')
         self.assertEqual(self.request(action='discard', staged='0.5.0-bbbbbbbbbbbb')['ok'], True)
         self.assertFalse(staged.exists())
-        request_id = str(uuid.uuid4())
+        requests = self.root / module.SPOOL / 'update-requests'
+        results = self.root / module.SPOOL / 'update-results'
+        # A link to another file is not followed.
+        linked = str(uuid.uuid4())
         target = self.root / 'secret.json'
-        target.write_text('{"id": "%s", "action": "refresh"}' % request_id)
-        os.symlink(target, self.root / module.SPOOL / 'update-requests' / f'{request_id}.json')
-        module.process_requests(self.root)
-        result = json.loads((self.root / module.SPOOL / 'update-results' / f'{request_id}.json').read_text())
-        self.assertEqual((result['ok'], result['message']), (False, '请求文件无效'))
-        self.assertEqual(list((self.root / module.SPOOL / 'update-requests').iterdir()), [])
+        target.write_text(json.dumps({'id': linked, 'action': 'discard', 'staged': '0.5.0-bbbbbbbbbbbb', 'actor': 'x', 'reason': 'y', 'requestedAt': '2026-10-23T08:00:00.000Z'}))
+        os.symlink(target, requests / f'{linked}.json')
+        # A field the schema does not allow, and a file owned by another account.
+        extra = str(uuid.uuid4())
+        (requests / f'{extra}.json').write_text(json.dumps({'id': extra, 'action': 'rollback', 'version': '0.5.0', 'actor': 'x', 'reason': 'y', 'requestedAt': '2026-10-23T08:00:00.000Z', 'path': '/etc'}))
+        module.process_requests(self.root, os.getuid())
+        self.assertEqual(json.loads((results / f'{linked}.json').read_text())['message'], '请求文件无效')
+        self.assertEqual(json.loads((results / f'{extra}.json').read_text())['message'], '请求内容无效')
+        foreign = str(uuid.uuid4())
+        (requests / f'{foreign}.json').write_text(json.dumps({'id': foreign, 'action': 'rollback', 'version': '0.5.0', 'actor': 'x', 'reason': 'y', 'requestedAt': '2026-10-23T08:00:00.000Z'}))
+        module.process_requests(self.root, os.getuid() + 1)
+        self.assertEqual(json.loads((results / f'{foreign}.json').read_text())['message'], '请求文件无效')
+        # The script never changes the console's request directory; a request with a result is not run again.
+        self.assertTrue({f'{name}.json' for name in [linked, extra, foreign]} <= {path.name for path in requests.iterdir()})
+        before = (results / f'{extra}.json').read_bytes()
+        module.process_requests(self.root, os.getuid())
+        self.assertEqual((results / f'{extra}.json').read_bytes(), before)
 
 
 if __name__ == '__main__':

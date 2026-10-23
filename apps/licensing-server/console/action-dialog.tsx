@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { X, Copy, ExternalLink } from 'lucide-react';
 import QRCode from 'qrcode';
-import { actionSchema, resultSchema, sensitiveActions, type ConsoleAction, type ConsoleResult, type ConsoleRow } from '../src/console-contract';
+import { actionSchema, detailSchema, resultSchema, sensitiveActions, type ConsoleAction, type ConsoleResult, type ConsoleRow } from '../src/console-contract';
 import { api, errorMessage, ApiError } from './api';
 import { beijingTime, destructiveActions, forms, type Field } from './forms';
 import { StepUpPrompt, stepUpRemaining } from './step-up';
@@ -39,7 +39,7 @@ function Input({ action, field, row, touched, onTouch, errors }: { action: Conso
 
 /** syncSession：验证通过或服务端判定验证已过期时重新读取会话，让页头倒计时与服务端一致。 */
 export function ActionDialog({ action, row, csrf, verifiedAt, clockOffset, syncSession, close, changed }: {
-  action: ConsoleAction['action']; row: ConsoleRow | null; csrf: string; verifiedAt: number; clockOffset: number; syncSession: () => void; close: () => void; changed: () => void;
+  action: ConsoleAction['action']; row: ConsoleRow | null; csrf: string; verifiedAt: number; clockOffset: number; syncSession: () => void; close: () => void; changed: (result?: ConsoleResult, action?: ConsoleAction['action']) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null); const formRef = useRef<HTMLFormElement>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [result, setResult] = useState<ConsoleResult | null>(null);
@@ -53,6 +53,13 @@ export function ActionDialog({ action, row, csrf, verifiedAt, clockOffset, syncS
   useEffect(() => { if (!result?.secret) return; const timer = window.setTimeout(() => setResult(value => value ? { ...(value.id ? { id: value.id } : {}), message: '激活码已隐藏。' } : null), 60000); return () => window.clearTimeout(timer); }, [result?.secret]);
   const [qr, setQr] = useState('');
   useEffect(() => { if (result?.paymentUrl) QRCode.toDataURL(result.paymentUrl, { width: 200, margin: 1 }).then(setQr, () => setError('二维码生成失败，请复制链接发给客户。')); }, [result?.paymentUrl]);
+  // 付款链接弹窗打开期间每 5 秒读一次本地订单状态（不调支付宝），到账即提示。
+  const [paid, setPaid] = useState(false);
+  useEffect(() => {
+    const order = result?.paymentUrl ? result.id : undefined; if (!order || paid) return;
+    const timer = window.setInterval(() => { api(`orders/${order}`, detailSchema).then(detail => { if (detail.item.paymentStatus === 'confirmed') { setPaid(true); changed(); } }, (cause: unknown) => setError(errorMessage(cause))); }, 5000);
+    return () => window.clearInterval(timer);
+  }, [result, paid, changed]);
   const copy = (text: string) => { void navigator.clipboard.writeText(text).then(() => setError('已复制。'), () => setError('浏览器拒绝复制，请手动选择复制。')); };
   function validate() {
     const form = formRef.current; if (!form) return;
@@ -62,7 +69,7 @@ export function ActionDialog({ action, row, csrf, verifiedAt, clockOffset, syncS
   useEffect(validate, [spec.fields]);
   async function send(command: Command) {
     setBusy(true); setError(''); setAwaiting(null);
-    try { setResult(await api('commands', resultSchema, command, csrf)); setUnknown(null); changed(); }
+    try { const value = await api('commands', resultSchema, command, csrf); setResult(value); setUnknown(null); changed(value, action); }
     catch (cause) {
       if (cause instanceof ApiError && cause.code === 'STEP_UP_REQUIRED') { setAwaiting(command); syncSession(); return; }
       setError(errorMessage(cause));
@@ -99,7 +106,8 @@ export function ActionDialog({ action, row, csrf, verifiedAt, clockOffset, syncS
     {error && <p className="alert" role="alert">{error}</p>}
     {result ? <div role="status" className="dialog-result"><p>{result.message}</p>
       {result.expiresAt && <p className="muted">有效期至 {beijingTime(result.expiresAt)}</p>}
-      {result.paymentUrl && <div className="payment-link">{qr && <img src={qr} width={200} height={200} alt="支付宝付款二维码" />}<div className="actions"><button onClick={() => copy(result.paymentUrl!)}><Copy size={16} />复制链接</button><a className="button" href={result.paymentUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} />打开付款页</a></div></div>}
+      {result.paymentUrl && paid && <p className="paid-notice" role="status">已付款，已发码。</p>}
+      {result.paymentUrl && !paid && <div className="payment-link">{qr && <img src={qr} width={200} height={200} alt="支付宝付款二维码" />}<div className="actions"><button onClick={() => copy(result.paymentUrl!)}><Copy size={16} />复制链接</button><a className="button" href={result.paymentUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} />打开付款页</a></div></div>}
       {result.secret && <><pre className="secret">{result.secret}</pre><button onClick={() => copy(result.secret!)}><Copy size={16} />复制</button><p className="muted">60 秒后自动隐藏。</p></>}
       <button className="primary" onClick={close}>完成</button></div>
       : <form ref={formRef} onSubmit={submit} onInput={validate} onChange={validate} noValidate>

@@ -2,13 +2,13 @@ import { StrictMode, useCallback, useEffect, useMemo, useRef, useState, type For
 import { createRoot } from 'react-dom/client';
 import { LayoutDashboard, ClipboardList, KeyRound, CircleAlert, MessagesSquare, Receipt, History, Users, ShieldCheck, LogOut, RefreshCw, ArrowLeft, ChevronLeft, ChevronRight, Download, Command, ArrowUpRight, ShieldAlert, CloudUpload } from 'lucide-react';
 import { z } from 'zod';
-import { detailSchema, pageSchema, permissions, sessionSchema, type ConsoleAction, type ConsoleRow } from '../src/console-contract';
+import { detailSchema, pageSchema, permissions, sessionSchema, type ConsoleAction, type ConsoleResult, type ConsoleRow } from '../src/console-contract';
 import { api, ApiError, errorMessage, messageSchema } from './api';
 import { RevenueTrend } from './revenue-trend';
 import { AuthView } from './auth-view';
 import { ActionDialog } from './action-dialog';
 import { actionNames, beijingTime, destructiveActions, display, forms, roleNames } from './forms';
-import { DataTable, Fields, detailRow } from './table';
+import { DataTable, Fields, ServerClock, detailRow } from './table';
 import { StepUpBadge, StepUpDialog, StepUpPrompt } from './step-up';
 import { defaultFilter, detailRoutes, emptyFilter, readLocation, writeLocation, type Filter } from './location';
 
@@ -78,6 +78,12 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
     setRoute(key); setSelected(null); setDetail(null); setData(null); setOverview(null); setError(''); setPage(1); setRefresh(value => value + 1);
     if (preset) setFilters(previous => ({ ...previous, [key]: { ...emptyFilter, ...preset } }));
   }
+  // 只签发一份时直接打开这张授权；签发多份特殊授权时打开订单看全部授权。其余操作只刷新当前页。
+  const afterAction = useCallback((result?: ConsoleResult, action?: ConsoleAction['action']) => {
+    if (result?.licenseId) { setRoute('licenses'); setSelected({ id: result.licenseId }); setDetail(null); }
+    else if (action === 'grant' && result?.id) { setRoute('orders'); setSelected({ id: result.id }); setDetail(null); }
+    setRefresh(value => value + 1);
+  }, []);
   const can = (action: ConsoleAction['action']) => permissions[action].includes(session.user.role);
   const open = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => setDialog({ action, row });
   const actionButton = (action: ConsoleAction['action'], row: ConsoleRow | null = null) => can(action) ? <button className={destructiveActions.has(action) ? 'danger-button' : ['set-expiry', 'create-order', 'grant', 'create-user'].includes(action) ? 'primary' : undefined} key={action} onClick={() => open(action, row)}>{forms[action].title}</button> : null;
@@ -87,7 +93,7 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
   const title = navigation.find(item => item.key === route)?.title ?? '运营后台';
   const visibleNav = navigation.filter(item => !['users', 'audit', 'updates'].includes(item.key) || session.user.role === 'owner').filter(item => item.key !== 'finance' || ['owner', 'finance'].includes(session.user.role));
   return <div className="app-shell"><aside className="sidebar"><a className="brand" href="#" onClick={event => { event.preventDefault(); navigate('overview'); }}><span className="brand-icon"><Command size={21} /></span><span>团播联动台<small>运营管理工作台</small></span></a><nav aria-label="后台导航">{[{ label: '业务空间', keys: ['overview', 'orders', 'licenses', 'exceptions', 'tickets', 'finance'] }, { label: '管理', keys: ['audit', 'users', 'updates', 'security'] }].map(group => <div className="nav-group" key={group.label}><p className="nav-label">{group.label}</p>{visibleNav.filter(item => group.keys.includes(item.key)).map(item => <button key={item.key} aria-current={route === item.key ? 'page' : undefined} onClick={() => navigate(item.key)}><item.icon size={17} />{item.title}</button>)}</div>)}</nav><div className="account"><div className="avatar">{session.user.username.slice(0, 1).toUpperCase()}</div><span>{session.user.username}<small>{roleNames[session.user.role]}</small></span><button aria-label="退出登录" disabled={busy} onClick={() => { void logout(); }}><LogOut size={18} /></button></div></aside>
-    <main className="workspace" aria-label={title}><h1 className="visually-hidden">{title}</h1><div className="workspace-tools"><StepUpBadge verifiedAt={session.verifiedAt} clockOffset={clockOffset} onVerify={() => setStepUpOpen(true)} /><button aria-label="刷新当前页面" title="刷新当前页面" disabled={busy} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={16} /><span>刷新</span></button></div>
+    <ServerClock.Provider value={clockOffset}><main className="workspace" aria-label={title}><h1 className="visually-hidden">{title}</h1><div className="workspace-tools"><StepUpBadge verifiedAt={session.verifiedAt} clockOffset={clockOffset} onVerify={() => setStepUpOpen(true)} /><button aria-label="刷新当前页面" title="刷新当前页面" disabled={busy} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={16} /><span>刷新</span></button></div>
       {error && <div role="alert" className="alert">{error}</div>}
       {busy && <p role="status" className="muted">正在读取…</p>}
       {route === 'overview' && overview && <>
@@ -118,7 +124,7 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
               {resource === 'licenses' && <>{actionButton('reveal', detail.item)}{detail.item.status !== 'revoked' && actionButton('set-expiry', detail.item)}{detail.item.status !== 'revoked' && actionButton('revoke', detail.item)}{detail.item.status === 'revoked' && actionButton('migrate', detail.item)}</>}
               {resource === 'tickets' && detail.item.state !== 'closed' && actionButton('update-ticket', detail.item)}
             </div></section>
-            {detail.timeline && detail.timeline.length > 0 && <section className="panel"><h2>生命周期</h2><ol className="timeline">{detail.timeline.map((node, index) => <li key={index}><time>{beijingTime(String(node.at))}</time><strong>{String(node.event)}</strong>{node.detail !== null && node.detail !== undefined && <span>{String(node.detail)}</span>}{node.operator !== null && node.operator !== undefined && <small>{String(node.operator)}</small>}</li>)}</ol></section>}
+            {detail.timeline && detail.timeline.length > 0 && <section className="panel"><h2>生命周期</h2><ol className="timeline">{detail.timeline.map((node, index) => <li key={index} className={node.inferred ? 'inferred' : undefined}><time>{beijingTime(String(node.at))}</time><strong>{String(node.event)}</strong>{node.detail !== null && node.detail !== undefined && <span>{String(node.detail)}</span>}{node.operator !== null && node.operator !== undefined && <small>{String(node.operator)}</small>}</li>)}</ol></section>}
             {detail.related.length > 0 && <section className="panel"><h2>{resource === 'orders' ? '关联授权' : resource === 'licenses' ? '续费记录' : '关联订单'}</h2><DataTable rows={detail.related} fields={resource === 'orders' ? ['customer', 'status', 'useUntil', 'machineCode'] : resource === 'licenses' ? ['id', 'useUntil', 'updatesUntil'] : ['reference', 'customer', 'state']} select={row => { setRoute(resource === 'orders' ? 'licenses' : 'orders'); setSelected(row); setDetail(null); }} /></section>}
             {detail.history.length > 0 && <section className="panel"><h2>操作记录</h2><DataTable rows={detail.history} fields={['at', 'operator', 'action', 'reason', 'result']} /></section>}
           </>}
@@ -132,9 +138,9 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
           {data && route !== 'users' && <div className="pagination"><button aria-label="上一页" disabled={page === 1 || busy} onClick={() => setPage(value => value - 1)}><ChevronLeft size={16} />上一页</button><span>第 {page} 页</span><button disabled={!data.hasMore || busy} onClick={() => setPage(value => value + 1)}>下一页<ChevronRight size={16} /></button></div>}
         </>}
       </>}
-    </main>
+    </main></ServerClock.Provider>
     {stepUpOpen && <StepUpDialog csrf={session.csrf} close={() => setStepUpOpen(false)} onVerified={() => { setStepUpOpen(false); reloadSession(); }} />}
-    {dialog && <ActionDialog key={`${dialog.action}:${String(dialog.row?.id ?? '')}`} action={dialog.action} row={dialog.row} csrf={session.csrf} verifiedAt={session.verifiedAt} clockOffset={clockOffset} syncSession={reloadSession} close={() => setDialog(null)} changed={() => setRefresh(value => value + 1)} />}
+    {dialog && <ActionDialog key={`${dialog.action}:${String(dialog.row?.id ?? '')}`} action={dialog.action} row={dialog.row} csrf={session.csrf} verifiedAt={session.verifiedAt} clockOffset={clockOffset} syncSession={reloadSession} close={() => setDialog(null)} changed={afterAction} />}
   </div>;
 }
 function App() {
