@@ -379,19 +379,38 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
     return { action: 'deny' };
   });
   mainWindow.webContents.on('will-navigate', event => event.preventDefault());
+  const window = mainWindow;
+  let rendererReloadedAt = 0;
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     // Nothing can be saved from a window that exited: the recovery copy holds the
     // edits and is offered when the project opens again, so quitting does not ask.
     rendererSaves.failAll('界面进程已退出，无法保存；未保存的修改保留在恢复副本中，下次打开工程时可以恢复');
     if (documentState.dirty) recordQuitStep('界面进程退出，未保存的修改以恢复副本为准');
     documentState = { ...documentState, dirty: false, consoleSynced: false };
-    void closeNativePlayer().then(() => releaseRendererRuntime()).catch((error: unknown) => {
+    // A program that is playing runs in main and keeps its audio, timecode, OBS and
+    // lighting outputs; the reloaded window takes it over. Anything else stops.
+    void (nativeProgram?.release() ?? Promise.resolve(null)).then(async kept => {
+      if (kept) {
+        await logger.record({ level: 'warning', category: 'state', device: '正式播放器', ...(kept.itemId ? { itemId: kept.itemId } : {}),
+          message: `界面进程退出，节目继续在后台播放（${Math.floor(kept.positionMs / 1000)} 秒）；界面重新加载后接管` });
+        return;
+      }
+      await closeNativePlayer(); await releaseRendererRuntime();
+    }).catch((error: unknown) => {
       void logger.record({ level: 'error', category: 'device', device: '正式音频', message: `界面退出后停止音频失败：${String(error)}`, result: 'failed' })
         .catch((loggingError: unknown) => console.error('记录音频停止失败', loggingError));
     });
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
       message: `Electron 界面进程退出：${details.reason}，退出码 ${details.exitCode}；故障转储目录：${app.getPath('crashDumps')}`,
       result: 'failed' }).catch((error: unknown) => console.error('记录 Electron 界面崩溃失败', error));
+    if (quitFlowRunning || details.reason === 'clean-exit' || window.isDestroyed()) return;
+    // Reload once automatically. Another exit within a minute waits for the
+    // operator, so a page that keeps failing cannot reload in a loop.
+    if (Date.now() - rendererReloadedAt > 60_000) { rendererReloadedAt = Date.now(); window.webContents.reload(); return; }
+    void dialog.showMessageBox(window, { type: 'error', title: '界面进程再次退出', noLink: true, defaultId: 0, cancelId: 1,
+      message: '界面进程在自动重新加载后一分钟内再次退出，已暂停自动重新加载。', buttons: ['重新加载界面', '暂不加载'] })
+      .then(({ response }) => { if (response === 0 && !window.isDestroyed()) { rendererReloadedAt = Date.now(); window.webContents.reload(); } })
+      .catch((error: unknown) => console.error('界面重新加载询问失败', error));
   });
   mainWindow.on('unresponsive', () => {
     rendererSaves.failAll('界面无响应，保存未完成；未保存的修改保留在恢复副本中');
@@ -799,7 +818,12 @@ function registerIpc(
   }, event => sendToRenderer('link:native-program-event', event), () => authorizeOutput());
   // Session registration captures cancellation synchronously; output adapters
   // validate and authorize every actual audio, OBS, MIDI and lighting request.
-  handle('link:native-program-open', (_event, value: unknown) => nativeProgram!.open(value), 'listener');
+  handle('link:native-program-open', async (_event, value: unknown) => {
+    const attachment = await nativeProgram!.open(value);
+    if (attachment !== 'opened') await logger.record({ level: 'warning', category: 'state', device: '正式播放器',
+      message: `重新加载的界面已接管后台播放的节目${attachment === 'outdated' ? '；界面工程与播放中的版本不同，停止后按界面工程重新准备' : ''}` });
+    return attachment;
+  }, 'listener');
   handle('link:native-program-control', (_event, value: unknown) => nativeProgram!.control(value), 'listener');
   handle('link:ma2-export-plugin', async () => {
     const selected = await dialog.showOpenDialog({ title: '选择 MA2 插件导出位置', properties: ['openDirectory', 'createDirectory'] });

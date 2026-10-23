@@ -1,6 +1,6 @@
 import { emptyInternalPlayerState, nativeAudioAnalysis, toUserErrorMessage,
   type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type PlaybackBoundary, type PlaybackClock } from '@tb/core/link';
-import type { LinkProject, NativePlayerStatus, NativeProgramEvent, NativeProgramOperation } from '@tb/schema';
+import type { LinkProject, NativePlayerStatus, NativeProgramAttachment, NativeProgramEvent, NativeProgramOperation } from '@tb/schema';
 
 type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | 'onNativeProgramEvent' | 'onNativePlaybackStatus'>;
 
@@ -16,6 +16,7 @@ export class RemoteNativeProgramPlayer {
   private native: NativePlayerStatus | null = null;
   private sequence = -1;
   private disposed = false;
+  private attachment: NativeProgramAttachment | null = null;
   private readonly analysis = nativeAudioAnalysis(() => this.native?.itemId === this.state.itemId ? this.native : null);
   readonly clock: PlaybackClock = {
     read: () => this.clockState,
@@ -38,7 +39,7 @@ export class RemoteNativeProgramPlayer {
     const audio = api.onNativePlaybackStatus(status => { if (!this.disposed) this.native = status; });
     this.unsubscribe = () => { program(); audio(); };
     this.ready = api.openNativeProgram({ version: 1, ownerId: this.ownerId, projectPath, revision,
-      document: JSON.stringify(project), configuration: this.configuration() });
+      document: JSON.stringify(project), configuration: this.configuration() }).then(attachment => { this.attachment = attachment; });
     void this.ready.catch(error => this.failed(error));
   }
   play(itemId: string, positionMs?: number, paused = false): Promise<void> {
@@ -64,6 +65,9 @@ export class RemoteNativeProgramPlayer {
   receiveMidi(bytes: Uint8Array): void { void this.send({ kind: 'midi', bytes: [...bytes] }); }
   fade(out: boolean): void { void this.send({ kind: 'fade', out }); }
   preloadSelected(itemId: string): void { void this.send({ kind: 'preload', itemId }); }
+  /** Taken over after a window reload, the running program plays a different
+   * document than this window shows; the window opens its own once it stops. */
+  get outdated(): boolean { return this.attachment === 'outdated'; }
   getAudioAnalysis() { return this.state.status === 'playing' ? this.analysis : null; }
   async dispose(): Promise<void> {
     if (this.disposed) return;
