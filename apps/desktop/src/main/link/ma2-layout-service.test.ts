@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { Ma2LayoutService } from './ma2-layout-service';
-import type { Ma2NewCueRequest, Ma2SongSyncRequest } from '@tb/schema';
+import type { Ma2NewCueRequest, Ma2SongSyncRequest, Ma2SongSyncResult } from '@tb/schema';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
@@ -187,7 +187,8 @@ it('已绑定歌曲换一个 Cue 的内容：在控台内 Copy，不上传歌曲
   expect([...fake.files.keys()].some(name => name.endsWith('_before'))).toBe(false);
   expect(result.backupFile).toMatch(/^tblink_library_[a-f0-9]{32}\.xml$/);
   expect(fake.files.has(result.backupFile.replace(/\.xml$/, ''))).toBe(true);
-  expect(noBackups.record).toHaveBeenLastCalledWith(fake.bridge, { console: '192.0.2.1:30000', object: 'Sequence 9000', files: [result.backupFile.replace(/\.xml$/, '')] });
+  // Without a song check to take it over, the post-write export joins the rotation too.
+  expect(noBackups.record).toHaveBeenLastCalledWith(fake.bridge, { console: '192.0.2.1:30000', object: 'Sequence 9000', files: [result.backupFile.replace(/\.xml$/, ''), expect.stringMatching(/^tblink_library_[a-f0-9]{32}$/)] });
   expect(fake.lines.every(line => Buffer.byteLength(line) <= 900)).toBe(true);
   expect(fake.lines.length).toBeLessThanOrEqual(20); expect(fake.writers.size).toBe(0);
   expect([...fake.files.keys()].some(name => name.startsWith('tblink_song_'))).toBe(false);
@@ -203,13 +204,25 @@ it('复查确认控台仍等于本地基线时，写前不再整读本曲序列�
   const baseline = 'tblink_watch_0123456789abcdef';
   fake.files.set(baseline, Buffer.from(sequences.get(9000)!));
   noBackups.record.mockClear();
-  const result = await new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song, undefined, undefined, baseline);
+  const result = await new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song, undefined, undefined, { consoleBaseline: baseline });
   expect(result.changed).toBe(true);
   expect(fake.ops.filter(op => op === 'SEQUENCE 9000')).toHaveLength(1);
   expect(result.backupFile).toMatch(/^tblink_library_[a-f0-9]{32}\.xml$/);
   expect(fake.files.get(result.backupFile.replace(/\.xml$/, ''))?.toString('utf8')).toBe(fake.files.get(baseline)?.toString('utf8'));
-  expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ object: 'Sequence 9000', files: [result.backupFile.replace(/\.xml$/, '')] }));
-  await expect(new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID() }, undefined, undefined, "x');os.remove('a")).rejects.toThrow('基线文件名无效');
+  expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ object: 'Sequence 9000', files: [result.backupFile.replace(/\.xml$/, ''), expect.stringMatching(/^tblink_library_[a-f0-9]{32}$/)] }));
+  await expect(new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID() }, undefined, undefined, { consoleBaseline: "x');os.remove('a" })).rejects.toThrow('基线文件名无效');
+});
+it('写后回读交给复查接管时不进备份轮转；接管方拿到这次回读的控台文件和带指纹的结果', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  noBackups.record.mockClear();
+  const adoptReadback = vi.fn<(exportFile: string, result: Ma2SongSyncResult) => Promise<boolean>>(() => Promise.resolve(true));
+  const result = await new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song, undefined, undefined, { adoptReadback });
+  const [exportFile, handed] = adoptReadback.mock.calls[0]!;
+  expect(exportFile).toMatch(/^tblink_library_[a-f0-9]{32}$/);
+  expect(fake.files.get(exportFile)?.toString('utf8')).toBe(sequences.get(9000));
+  expect(handed.remoteRevision).toBe(result.remoteRevision);
+  expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ files: [result.backupFile.replace(/\.xml$/, '')] }));
 });
 it('Copy 路径不再二次读取来源：来源在读取后被改，回读校验报出是哪个来源，结果待核对，写前备份保留且不进轮转', async () => {
   const { song, sourceNumber, sequences } = boundSong();

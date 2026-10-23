@@ -63,7 +63,9 @@ export class NativePlaybackClient {
       this.clearClockWatch();
       this.child = null; this.ready = null; this.lastClock = null;
       const error = new Error(`播放引擎已退出：${code ?? signal ?? '未知原因'}`);
-      if (code !== 0) this.exitError = error;
+      // An exit nobody asked for is reported once, below; closing the dead client
+      // afterwards must not fail again, or the next song could never start.
+      if (code !== 0 && this.closing) this.exitError = error;
       for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
       this.pending.clear();
       if (!this.closing && !this.terminalError) this.fail(error);

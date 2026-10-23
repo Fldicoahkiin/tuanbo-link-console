@@ -127,6 +127,25 @@ windowsTest('后台正式音频服务：原始偏移和裁剪不叠加，缺少 
   } finally { await player.close(); }
 }, 20000);
 
+windowsTest('播放引擎进程意外退出后报告一次；下一首重新启动引擎并正常播放', async () => {
+  const { options, request, failures } = await fixture();
+  const player = new NativePlayerService(options);
+  const envelope = { version: 1 as const, sessionId: request.sessionId };
+  try {
+    const first = await player.prepare(request);
+    await player.control({ ...envelope, generation: 2, kind: 'play' });
+    await expect.poll(() => player.status?.positionMs).toBeGreaterThan(1000);
+    process.kill(first.enginePid!);
+    await expect.poll(() => player.status?.status).toBe('error');
+    expect(failures.filter(message => message.includes('播放引擎已退出'))).toHaveLength(1);
+    const next = await player.prepare({ ...request, generation: 3 });
+    expect(next).toMatchObject({ status: 'ready', audioError: null }); expect(next.enginePid).not.toBe(first.enginePid);
+    await player.control({ ...envelope, generation: 4, kind: 'play' });
+    await expect.poll(() => player.status?.positionMs).toBeGreaterThan(1050);
+    expect(player.status).toMatchObject({ status: 'playing', audioError: null });
+  } finally { await player.close(); }
+}, 20000);
+
 windowsTest('准备中切歌与取消：完成的旧解码不污染新节目；排队的播放被停止取消', async () => {
   const { options, request, failures, states } = await fixture();
   let release: (() => void) | undefined;

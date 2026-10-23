@@ -21,9 +21,7 @@ export class Ma2SongWatch {
     stopped(); this.busy = true;
     const key = this.key(request);
     const cached = this.snapshots.get(key);
-    // One baseline file per song position: the next start overwrites it instead of leaving another copy.
-    const position = JSON.stringify([request.network.host, request.network.port, request.expectedSource.show, request.sequence, request.executor]);
-    const file = cached?.file ?? `tblink_watch_${createHash('sha256').update(position).digest('hex').slice(0, 16)}`;
+    const file = cached?.file ?? this.file(request);
     try {
       if (cached) {
         if (await this.same(connection, request, file, stopped)) return cached.revision !== request.revision;
@@ -40,8 +38,7 @@ export class Ma2SongWatch {
       // to obtain a fresh sequence before planning any changes.
       if (!await this.same(connection, request, file, stopped)) return true;
       const revision = createHash('sha256').update(canonical(xml)).digest('hex');
-      if (this.snapshots.size >= 16) this.snapshots.delete(this.snapshots.keys().next().value!);
-      this.snapshots.set(key, { file, revision });
+      this.remember(key, { file, revision });
       return revision !== request.revision;
     } catch (cause) { this.snapshots.delete(key); throw cause; }
     finally { this.busy = false; }
@@ -65,6 +62,39 @@ export class Ma2SongWatch {
     finally { this.busy = false; }
   }
 
+  /**
+   * Takes over a Sequence export a sync has just verified at `revision` as this song's check baseline,
+   * so the next check is a console-side compare instead of a full read. True once the export was
+   * moved (it is consumed even if the console changed meanwhile); false when it was left untouched.
+   */
+  async adopt(connection: Pick<Ma2Telnet, 'command'>, input: Ma2SongCheckRequest, exportFile: string): Promise<boolean> {
+    const request = ma2SongCheckRequestSchema.parse(input);
+    if (!/^tblink_library_[a-f0-9]{32}$/.test(exportFile)) throw new Error('歌曲回读导出文件名无效');
+    if (this.busy || this.isPlaying()) return false;
+    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停歌曲回读'); };
+    this.busy = true;
+    const key = this.key(request);
+    const file = this.snapshots.get(key)?.file ?? this.file(request);
+    try {
+      const exportExecutor = request.executor ? `assert(gma.show.getobj.handle('Executor ${request.executor}'),'Song position missing');gma.cmd('Export Executor ${request.executor} ${file}_exec /o');` : '';
+      await runMa2GuardedLua(connection, `${this.guard(request)}local p=gma.show.getvar('PATH')..'/importexport/';os.remove(p..'${file}.xml');assert(os.rename(p..'${exportFile}.xml',p..'${file}.xml'));${exportExecutor}return 'adopted'`, stopped);
+      if (await this.same(connection, request, file, stopped)) this.remember(key, { file, revision: request.revision });
+      else this.snapshots.delete(key);
+      return true;
+    } catch (cause) { this.snapshots.delete(key); throw cause; }
+    finally { this.busy = false; }
+  }
+
+  private file(request: Ma2SongCheckRequest): string {
+    // One baseline file per song position: the next start overwrites it instead of leaving another copy.
+    const position = JSON.stringify([request.network.host, request.network.port, request.expectedSource.show, request.sequence, request.executor]);
+    return `tblink_watch_${createHash('sha256').update(position).digest('hex').slice(0, 16)}`;
+  }
+  private remember(key: string, snapshot: Snapshot): void {
+    this.snapshots.delete(key);
+    if (this.snapshots.size >= 16) this.snapshots.delete(this.snapshots.keys().next().value!);
+    this.snapshots.set(key, snapshot);
+  }
   private key(request: Ma2SongCheckRequest): string { return JSON.stringify([request.network, request.expectedSource, request.sequence, request.executor]); }
   private guard(request: Ma2SongCheckRequest): string {
     return `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(request.expectedSource.generation)} and gma.show.getvar('VERSION')==${ma2LuaString(request.expectedSource.version)},'Show or session changed');`;

@@ -293,6 +293,14 @@ const tbLink: LinkDesktopBridgeApi = {
     ipcRenderer.on('link:process-status', wrapped);
     return () => ipcRenderer.removeListener('link:process-status', wrapped);
   },
+  onMainProcessError: (listener) => {
+    const notify = (_event: Electron.IpcRendererEvent, message: unknown): void => {
+      if (typeof message !== 'string') throw new Error('主进程错误消息无效');
+      listener(message);
+    };
+    ipcRenderer.on('link:main-process-error', notify);
+    return () => { ipcRenderer.removeListener('link:main-process-error', notify); };
+  },
   onUpdateStatus: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, status: LinkUpdateStatus) => listener(status);
     ipcRenderer.on('link:update-status', wrapped);
