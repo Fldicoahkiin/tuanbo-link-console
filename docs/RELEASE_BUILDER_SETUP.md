@@ -73,10 +73,11 @@ runner 只能读资产和上传身份，不能读发布签名私钥（它来自 
 <a id="5-日常密钥放进-github-secret"></a>
 ## 5. 日常密钥放进 GitHub secret（仓库所有者，在开发机上操作）
 
-1. 在开发机上用记事本打开 `D:\tblink-release-signing\release-2026-10-a.pem`，Ctrl+A 全选、Ctrl+C 复制，然后关闭记事本，不要保存其他位置。
-2. 在开发机的浏览器里，用 JinHe9527 打开仓库 → Settings → Secrets and variables → Actions → New repository secret。
-3. Name 填 `TBLINK_RELEASE_SIGNING_KEY`，Secret 里粘贴刚才复制的全部内容（包括 `-----BEGIN PRIVATE KEY-----` 和 `-----END PRIVATE KEY-----` 两行），点 Add secret。
-4. 随便复制一段别的文字，覆盖剪贴板里的私钥。
+1. 先关掉剪贴板历史：开始 → 设置 → 系统 → 剪贴板，把「剪贴板历史记录」和「跨设备共享」（有的 Windows 版本叫「在你的设备之间同步」）都关闭。开着的话，复制的私钥会留在 Win+V 的历史里，甚至同步到微软账号。
+2. 在开发机上用记事本打开 `D:\tblink-release-signing\release-2026-10-a.pem`，Ctrl+A 全选、Ctrl+C 复制，然后关闭记事本，不要保存其他位置。
+3. 在开发机的浏览器里，用 JinHe9527 打开仓库 → Settings → Secrets and variables → Actions → New repository secret。
+4. Name 填 `TBLINK_RELEASE_SIGNING_KEY`，Secret 里粘贴刚才复制的全部内容（包括 `-----BEGIN PRIVATE KEY-----` 和 `-----END PRIVATE KEY-----` 两行），点 Add secret。
+5. 随便复制一段别的文字，覆盖剪贴板里的私钥。如果之前开过剪贴板历史，按 Win+V，找到私钥那一条，点它右侧的「…」→ 删除。
 
 工作流只在「Sign latest.yml with the release key」这一步把它放进环境变量，不会写到磁盘，日志里也会被遮掉。
 

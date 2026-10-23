@@ -81,14 +81,28 @@ class EnvironmentTest(unittest.TestCase):
 
 
 class ActivationTest(unittest.TestCase):
-    def exercise(self, catalog_ok, final_nginx_ok=True, renewal_table=True, payment_table=True, sales_open=False, timer_active=True):
+    def exercise(self, catalog_ok, final_nginx_ok=True, renewal_table=True, payment_table=True, sales_open=False, timer_active=True,
+                 tamper_backup=False, unsafe_backups=False):
         directory = Path(tempfile.mkdtemp(prefix="tblink-deploy-test-"))
         targets = {"/opt/tblink-licensing/dist/index.js": directory / "index.js",
                    "/opt/tblink-licensing/RELEASE": directory / "RELEASE",
                    "/etc/nginx/sites-available/tblink-licensing.conf": directory / "nginx.conf",
                    "/etc/tblink-licensing/service.env": directory / "service.env",
-                   "/var/lib/tblink-licensing/license.db": directory / "license.db",
-                   "/var/lib/tblink-licensing/backups": directory / "backups"}
+                   "/var/lib/tblink-licensing/license.db": directory / "license.db"}
+        # The test's own account plays root; the backup tree is its, from the temporary directory down.
+        backups = directory / "var/backups/tblink"
+        backups.mkdir(parents=True)
+        for path in [directory / "var", directory / "var/backups"]:
+            path.chmod(0o755)
+        backups.chmod(0o700)
+        if unsafe_backups == "writable":
+            (directory / "var/backups").chmod(0o777)
+        elif unsafe_backups == "link":
+            # As the licensing account can do inside a directory it owns: the backup directory becomes a link.
+            elsewhere = directory / "elsewhere"
+            elsewhere.mkdir()
+            backups.rmdir()
+            backups.symlink_to(elsewhere)
         bundle = targets["/opt/tblink-licensing/dist/index.js"]
         nginx = targets["/etc/nginx/sites-available/tblink-licensing.conf"]
         environment = targets["/etc/tblink-licensing/service.env"]
@@ -140,21 +154,40 @@ class ActivationTest(unittest.TestCase):
                 catalog["offers"] = [{"unitAmountFen": 80000, "useDays": 30}]
             if bundle.read_text() == "new code" and not catalog_ok:
                 catalog["offers"] = [{"unitAmountFen": 1, "useDays": 365}]
+                if tamper_backup:
+                    next(backups.iterdir()).joinpath("previous-nginx.conf").write_text("# tampered\n" + previous)
             return catalog
 
         original_mask = os.umask(0o077)
         try:
             with patch.object(release, "Path", side_effect=lambda value: targets.get(str(value), Path(value))), \
+                 patch.object(release, "BACKUPS", backups), patch.object(release, "TRUSTED", directory), patch.object(release, "ROOT_UID", os.getuid()), \
                  patch.object(release.os, "geteuid", return_value=0), patch.object(release, "run", side_effect=command), \
                  patch.object(release, "health", return_value=True), patch.object(release, "read_catalog", side_effect=check_catalog), \
                  patch.object(release.sys, "argv", arguments), patch("builtins.print"):
-                if catalog_ok and final_nginx_ok and renewal_table and payment_table:
+                if unsafe_backups or tamper_backup:
+                    with self.assertRaisesRegex(RuntimeError, "root-only" if unsafe_backups else "differs from the files checked"):
+                        release.main()
+                elif catalog_ok and final_nginx_ok and renewal_table and payment_table:
                     release.main()
                 else:
                     with self.assertRaises(RuntimeError):
                         release.main()
         finally:
             os.umask(original_mask)
+        if unsafe_backups:
+            # Nothing was touched: no command ran and the backup tree stayed empty.
+            self.assertEqual(calls, [])
+            self.assertEqual((bundle.read_text(), nginx.read_text(), environment.read_text()), ("old code", previous, original_env))
+            self.assertEqual(list(backups.iterdir()), [])
+            return
+        if tamper_backup:
+            # The tampered proxy is never installed; production stays in maintenance for the operator.
+            self.assertNotIn("# tampered", nginx.read_text())
+            self.assertIn("return 503;", nginx.read_text())
+            # Only the stop before the migration ran; the rollback stopped before touching anything.
+            self.assertEqual(calls.count(("systemctl", "stop", "tblink-licensing.service")), 1)
+            return
         after = release.database_snapshot(database)
         self.assertTrue(all(after[name] == value for name, value in before.items()))
         self.assertIn("purchase_requests", after)
@@ -165,7 +198,7 @@ class ActivationTest(unittest.TestCase):
             self.assertEqual(bundle.read_text(), "new code")
             self.assertEqual(nginx.read_text(), template)
             self.assertEqual(environment.read_text(), original_env + "LICENSE_PROXY_MODE=loopback\n")
-            manifest = json.loads(next((directory / "backups").glob("*/manifest.json")).read_text())
+            manifest = json.loads(next(backups.glob("*/manifest.json")).read_text())
             self.assertTrue(manifest["backupRestoreVerified"])
             self.assertEqual(manifest["catalogClosed"], not sales_open)
             self.assertTrue(manifest["catalogPreserved"])
@@ -205,6 +238,15 @@ class ActivationTest(unittest.TestCase):
 
     def test_restore_when_payment_receipt_migration_is_missing(self):
         self.exercise(True, payment_table=False)
+
+    def test_refuses_to_start_when_the_backup_directory_is_not_root_only(self):
+        self.exercise(True, unsafe_backups="writable")
+
+    def test_refuses_to_start_when_the_backup_directory_is_a_link(self):
+        self.exercise(True, unsafe_backups="link")
+
+    def test_does_not_restore_a_backup_changed_after_the_start_check(self):
+        self.exercise(False, tamper_backup=True)
 
 
 if __name__ == "__main__":

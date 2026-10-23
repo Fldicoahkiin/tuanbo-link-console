@@ -16,10 +16,10 @@ export async function startConsoleFixture() {
   // Enrollment uses the real TOTP route; the fixture returns only a one-time invitation.
   const first = consoleService.auth.bootstrap('fixture-owner');
   const info = consoleService.auth.enrollmentInfo(first.token);
-  // A spool with one staged release, as tblink-update-publish.path would report it.
+  // One staged release, as tblink-update-publish.path would report it.
   const spool = mkdtempSync(join(tmpdir(), 'tblink-console-updates-'));
-  for (const name of ['update-requests', 'update-results']) mkdirSync(join(spool, name));
-  writeFileSync(join(spool, 'update-status.json'), JSON.stringify({ version: 1, generatedAt: '2026-10-06T08:00:00Z',
+  for (const name of ['update-requests', 'publisher/results']) mkdirSync(join(spool, name), { recursive: true });
+  writeFileSync(join(spool, 'publisher', 'update-status.json'), JSON.stringify({ version: 1, generatedAt: '2026-10-06T08:00:00Z',
     feed: { version: '0.4.29', releaseDate: '2026-09-28T18:15:14.517Z', signed: false }, rollback: { version: null, issue: '没有可以回滚到的上一版' },
     staged: [{ name: '0.5.0-13f7e625898e', issue: null, version: '0.5.0', gitSha: '13f7e625898e96076e1d02ef353ca90a78cebc', manifestSha256: 'b'.repeat(64),
       releaseDate: '2026-10-23T06:34:50.642Z', kid: 'release-2026-10-a', size: 412835955 }] }));
@@ -29,7 +29,7 @@ export async function startConsoleFixture() {
   const alipay = new AlipayNotifications(identity.appId, identity.sellerId, provider.publicKey.export({ type: 'spki', format: 'pem' }).toString());
   const checkout = new AlipayCheckout(identity.appId, identity.sellerId, merchant.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), 'sandbox', 'https://api.tuanbo-link.jinhefilm.com', now);
   const server = createLicensingServer(service, randomBytes(32).toString('hex'), alipay, checkout, undefined, false, undefined, false,
-    { service: consoleService, origin: 'https://admin.tuanbo-link.jinhefilm.com', updates: new UpdateReleases(spool) });
+    { service: consoleService, origin: 'https://admin.tuanbo-link.jinhefilm.com', updates: new UpdateReleases(join(spool, 'update-requests'), join(spool, 'publisher')) });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未监听');
   return { port: address.port, invitation: first.token, secret: info.secret, now, advance: (ms: number) => { time += ms; },

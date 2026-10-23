@@ -112,11 +112,12 @@ CI 安装 Playwright Chromium 后运行同一个浏览器脚本，不设置浏�
 
 域名、身份、密钥、接收器政策、异地存储均属于实际部署输入，不能以示例值声称配置完成。
 
+<a id="加密备份回滚与维护"></a>
 ## 加密备份、回滚与维护
 
 新增 `backup-console.py` 使用 SQLite backup API 包含 WAL 中已提交内容；将数据库及服务密钥打包，用 **age 公钥加密** 后才写入持久备份和异地卷。解密私钥只保留在离线恢复端。生产主机需安装 age。
 
-服务器 `/etc/tblink-licensing/backup.json` 的配置格式：
+服务器 `/etc/tblink-backup/backup.json`（root 所有、0600，目录 `/etc/tblink-backup` root 0755）的配置格式。2026-10-23 起配置和本机加密副本（`/var/backups/tblink/console/`）都放在 root 所有的目录：服务账号拥有 `/etc/tblink-licensing` 和 `/var/lib/tblink-licensing`，放在那里就能换掉 age 收件人或把副本指向别处。脚本每次运行都核对这两条目录链，不符就拒绝。
 
 ```json
 {
