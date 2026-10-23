@@ -1,7 +1,3 @@
-.lighting-output-control { display: inline-flex; align-items: center; gap: 5px; margin-left: 6px; padding: 3px 6px; border: 1px solid var(--accent); border-radius: var(--radius-control); color: var(--text-primary); background: var(--surface-raised); white-space: nowrap; font-size: 12px; }
-.lighting-output-control > svg { color: var(--accent); flex-shrink: 0; }
-.timeline-transport .lighting-output-control select { width: auto; min-height: 26px; padding: 2px 4px; border: 0; background: transparent; color: var(--text-primary); font-size: 12px; }
-.timeline-transport .lighting-output-control select:disabled { opacity: 1; }
 .timeline-transport .lighting-output-route { margin: 0; display: inline-flex; align-items: center; flex: 0 0 auto; gap: 6px; white-space: nowrap; }
 .timeline-transport .lighting-output-notice { margin: 0; display: inline-flex; color: var(--warning, #e6b85b); font-size: 12px; }
 .lighting-output-notice .timeline-icon-menu > summary { color: inherit; }
