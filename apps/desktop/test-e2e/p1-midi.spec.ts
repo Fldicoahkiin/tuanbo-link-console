@@ -54,7 +54,8 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     await expect(page.getByRole('dialog', { name: '设备连接检查结果', exact: true })).toHaveCount(0);
     const connectionResult = page.getByLabel('全部连接状态', { exact: true });
     await page.getByRole('button', { name: '详细', exact: true }).click();
-    await expect(connectionResult.getByRole('button', { name: '灯光 Cue 输出：已连接', exact: true })).toBeVisible();
+    // Native outputs open when playback starts; until then Windows has identified the port.
+    await expect(connectionResult.getByRole('button', { name: '灯光 Cue 输出：可用', exact: true })).toBeVisible();
     await connectionResult.getByRole('button', { name: 'OBS 控制：已连接', exact: true }).click();
     await page.getByRole('region', { name: '连接详情' }).getByRole('button', { name: '前往设置', exact: true }).click();
     await expect(page.getByRole('navigation', { name: '设置子子菜单' })).toBeVisible();
