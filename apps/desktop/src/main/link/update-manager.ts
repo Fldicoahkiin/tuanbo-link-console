@@ -271,8 +271,11 @@ function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandl
   updater.allowPrerelease = false;
   updater.allowDowngrade = false;
   updater.disableWebInstaller = true;
-  // 保留完整安装包更新路径；差分下载需另行完成 Windows 验收后启用。
-  updater.disableDifferentialDownload = true;
+  // Differential download: the installer copies itself to the updater cache on every install, and the feed
+  // keeps every version's blockmap, so only changed blocks are fetched (about 2 MB when the beauty and music
+  // assets are unchanged). A result whose sha512 differs from latest.yml falls back to the full installer;
+  // either way the file must then match the release signature before it is installed.
+  updater.disableDifferentialDownload = false;
   updater.logger = null;
 
   updater.on('checking-for-update', handlers.checking);
