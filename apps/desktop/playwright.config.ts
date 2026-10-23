@@ -19,7 +19,9 @@ export default defineConfig({
   retries: 0,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
-    trace: 'retain-on-failure',
+    // DOM snapshots wait for every pending response when the context closes; a page still streaming its audio
+    // then held the close until the 60-second timeout and hid the failed assertion. Actions and screenshots stay.
+    trace: { mode: 'retain-on-failure', snapshots: false },
     video: 'retain-on-failure'
   }
 });
