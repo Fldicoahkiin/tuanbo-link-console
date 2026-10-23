@@ -461,3 +461,19 @@ for (const mode of ['network', 'direct', 'timecode'] as const) it(`原生播放�
   expect(f.project.ma2ReadState?.pairings?.['2']?.status).toBe('stale');
   await f.player.stop();
 });
+
+it('时间码输出失败只记录一次；另一条输出异常盖住提示后，后续状态不再重复记录', async () => {
+  const f = fixture();
+  await f.player.play('song-0');
+  const failed = '时间码未参与：Windows MIDI 输出失败（TEST）：错误码 6，请检查接口和驱动后手动重新播放；音频继续播放。';
+  f.emit({ mtcError: 'Windows MIDI 输出失败（TEST）：错误码 6，请检查接口和驱动后手动重新播放' });
+  f.player.reportFault('MIDI Cue 未参与：MIDI 驱动服务异常退出：3；音频继续播放。');
+  for (let tick = 0; tick < 5; tick++) f.emit({ positionMs: 1000 + tick * 50 });
+  expect(f.deps.notice.mock.calls.filter(([message]) => message === failed)).toHaveLength(1);
+  expect(f.state().mtcConnectionFailed).toBe(true);
+  await f.player.stop();
+  await f.player.play('song-0');
+  f.emit({ mtcError: 'Windows MIDI 输出失败（TEST）：错误码 6，请检查接口和驱动后手动重新播放' });
+  expect(f.deps.notice.mock.calls.filter(([message]) => message === failed)).toHaveLength(2);
+  await f.player.stop();
+});

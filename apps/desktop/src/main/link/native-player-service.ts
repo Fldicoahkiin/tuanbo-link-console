@@ -1,5 +1,5 @@
 import { nativePlayerControlSchema, nativePlayerPrepareSchema, nativePlayerStatusSchema,
-  type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativePlaybackEvent, type NativeDeviceQueryRequest } from '@tb/schema';
+  type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativePlaybackEvent, type NativeDeviceQueryRequest, type NativePlaybackDevices } from '@tb/schema';
 import { NativeAudioCache, type NativeAudioLease } from './native-audio-cache';
 import { NativePlaybackClient } from './native-playback-client';
 import { NativeDeviceQuery } from './native-device-query';
@@ -89,7 +89,18 @@ export class NativePlayerService {
       const scope = request.midiPortName || request.autoDetectMtc ? 'all' : 'audio';
       await (scope === 'audio' ? this.audioDeviceQuery : this.deviceQuery).reopenForPreparation();
       this.requireEpoch(epoch);
-      const devices = await this.devices(scope);
+      let devices: NativePlaybackDevices, midiUnavailable: string | null = null;
+      try { devices = await this.devices(scope); }
+      catch (error) {
+        // MIDI is optional: when Windows cannot check or list MIDI, this song plays without
+        // timecode (reported below); the audio device list is read on its own.
+        if (scope !== 'all') throw error;
+        this.requireEpoch(epoch);
+        midiUnavailable = error instanceof Error ? error.message : String(error);
+        this.options.error(`MIDI 设备不可用，本首时间码未参与：${midiUnavailable}`);
+        await this.audioDeviceQuery.reopenForPreparation(); this.requireEpoch(epoch);
+        devices = { ...await this.devices('audio'), midiOutputs: [] };
+      }
       measured('设备检查与旧播放清理');
       this.requireEpoch(epoch);
       if (request.audioDeviceId !== 'default' && !devices.audio.some(device => device.id === request.audioDeviceId)) throw new Error('选择的正式音频输出已断开；不会自动切换线路');
@@ -97,7 +108,8 @@ export class NativePlayerService {
       const midi = request.midiPortName ? devices.midiOutputs.filter(device => device.name === request.midiPortName)
         : request.autoDetectMtc ? devices.midiOutputs.filter(device => !/Microsoft GS Wavetable Synth/i.test(device.name)) : [];
       const midiDevice = midi.length === 1 ? midi[0]!.id : null;
-      if ((request.midiPortName || request.autoDetectMtc) && midiDevice === null) this.patch({ mtcError: midi.length > 1 ? '多个 MIDI 输出无法唯一识别，请选定控台端口' : '选择的 MIDI 时间码输出未连接' });
+      if ((request.midiPortName || request.autoDetectMtc) && midiDevice === null) this.patch({ mtcError: midiUnavailable ? `MIDI 设备不可用：${midiUnavailable}`
+        : midi.length > 1 ? '多个 MIDI 输出无法唯一识别，请选定控台端口' : '选择的 MIDI 时间码输出未连接' });
       const warmed = await this.preload.take(request.projectPath, request.snapshot);
       if (epoch !== this.epoch) { await warmed?.release(); throw new Error('音频准备已取消'); }
       const lease = warmed ?? await this.options.cache.prepare({ sourcePath: this.options.resolveAudio(request.projectPath, request.snapshot.audio.relativePath),

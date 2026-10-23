@@ -69,3 +69,18 @@ it('主进程卡顿后迟到的设备位置：错过的动作标红记录，通�
   expect(f.ports.send).not.toHaveBeenCalled(); expect(f.errors).toEqual([]); expect(f.host.status?.state).toBe('running');
   await f.host.stop();
 });
+
+it('MIDI 口断开使上一首关闭失败：只报告一次，后面的歌照常准备 MIDI', async () => {
+  const f = fixture(); await f.host.prepare(f.project, f.identity);
+  f.ports.close.mockRejectedValueOnce(new Error('MIDI 驱动服务异常退出：3'));
+  await expect(f.host.stop()).rejects.toThrow('异常退出：3');
+  await expect(f.host.stop()).resolves.toBeUndefined();
+  f.observe({ generation: 2 }); await f.host.prepare(f.project, { ...f.identity, generation: 2 });
+  expect(f.host.status?.state).toBe('ready'); expect(f.ports.prepare).toHaveBeenCalledTimes(2);
+  // Switching songs while the old channel is open: its close failure is reported, the new song still prepares.
+  f.ports.close.mockRejectedValueOnce(new Error('MIDI 驱动服务异常退出：3'));
+  f.observe({ generation: 3 }); await f.host.prepare(f.project, { ...f.identity, generation: 3 });
+  expect(f.host.status?.state).toBe('ready'); expect(f.ports.prepare).toHaveBeenCalledTimes(3);
+  expect(f.errors).toEqual(['上一首 MIDI 会话关闭失败：MIDI 驱动服务异常退出：3']);
+  await f.host.stop();
+});

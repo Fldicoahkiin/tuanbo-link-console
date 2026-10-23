@@ -3,10 +3,11 @@ import { randomUUID } from 'node:crypto';
 import type { NativePlaybackCommand, NativePlaybackEvent, NativePlaybackDevices, NativePlayerPrepare } from '@tb/schema';
 import { NativePlayerService } from './native-player-service';
 
-const native = vi.hoisted(() => ({ devices: vi.fn<() => Promise<NativePlaybackDevices>>(), commands: vi.fn<(command: NativePlaybackCommand) => void>(),
+const native = vi.hoisted(() => ({ devices: vi.fn<(scope: 'all' | 'audio') => Promise<NativePlaybackDevices>>(), commands: vi.fn<(command: NativePlaybackCommand) => void>(),
   emit: null as ((patch: Partial<Extract<NativePlaybackEvent, { kind: 'clock' }>>) => void) | null }));
 vi.mock('./native-device-query', () => ({ NativeDeviceQuery: class {
-  read = native.devices;
+  constructor(_executable: string, private readonly scope: 'all' | 'audio' = 'all') {}
+  read() { return native.devices(this.scope); }
   reopenForPreparation() { return Promise.resolve(); }
   close() { return Promise.resolve(); }
 } }));
@@ -58,18 +59,17 @@ function fixture() {
   return { service, request, error, devices, checkDeviceHealth };
 }
 
-it('系统设备检测失败不启动设备查询；明确恢复后才允许重新准备', async () => {
+it('系统 MIDI 检测失败不启动完整设备查询；配了时间码端口也只播音频并明确报告，恢复后重新准备才发时间码', async () => {
   const f = fixture();
   f.checkDeviceHealth.mockRejectedValue(new Error('Windows MIDI 端口枚举未响应'));
   try {
     await expect(f.service.devices()).rejects.toThrow('端口枚举未响应');
-    await expect(f.service.prepare(f.request)).rejects.toThrow('端口枚举未响应');
-    expect(native.devices).not.toHaveBeenCalled();
-    expect(native.commands).not.toHaveBeenCalled();
-    expect(f.service.status).toMatchObject({ status: 'error', enginePid: null });
+    await expect(f.service.prepare(f.request)).resolves.toMatchObject({ status: 'ready', mtcPortName: null, mtcError: 'MIDI 设备不可用：Windows MIDI 端口枚举未响应' });
+    expect(native.devices.mock.calls).toEqual([['audio']]);
+    expect(f.error).toHaveBeenCalledWith('MIDI 设备不可用，本首时间码未参与：Windows MIDI 端口枚举未响应');
     f.checkDeviceHealth.mockResolvedValue(undefined);
-    await expect(f.service.prepare({ ...f.request, generation: 2 })).resolves.toMatchObject({ status: 'ready' });
-    expect(native.devices).toHaveBeenCalledOnce();
+    await expect(f.service.prepare({ ...f.request, generation: 2 })).resolves.toMatchObject({ status: 'ready', mtcPortName: 'test-mtc', mtcError: null });
+    expect(native.devices.mock.calls).toEqual([['audio'], ['all']]);
   } finally { await f.service.close(); }
 });
 
