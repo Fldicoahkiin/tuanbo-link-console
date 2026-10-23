@@ -17,22 +17,31 @@ export type UpdateClientHandlers = {
 
 export type UpdateClient = {
   check: () => Promise<void>;
-  download: () => Promise<void>;
+  /** Rejects once `signal` aborts. */
+  download: (signal: AbortSignal) => Promise<void>;
   install: () => void;
   dispose: () => void;
 };
 
 export type UpdateClientFactory = (feedUrl: string, handlers: UpdateClientHandlers) => UpdateClient;
 
+/** Conditions owned by the rest of the app that decide what the updater may do. */
+export type UpdateRules = {
+  /** Playback owns the network and disk: no update download runs while it is active. */
+  playbackActive: () => boolean;
+};
+
 export class LinkUpdateManager {
   private client: UpdateClient | null = null;
   private busy = false;
+  private activeDownload: AbortController | null = null;
   private status: LinkUpdateStatus;
 
   constructor(
     currentVersion: string,
     private readonly packaged: boolean,
     private readonly emit: (status: LinkUpdateStatus) => void,
+    private readonly rules: UpdateRules,
     private readonly createClient: UpdateClientFactory = createElectronUpdateClient,
     private readonly feedUrl: string = UPDATE_FEED
   ) {
@@ -69,13 +78,16 @@ export class LinkUpdateManager {
           totalBytes: null,
           message: '当前已经是最新版本'
         }),
-        progress: (info) => this.update({
-          phase: 'downloading',
-          progressPercent: clampPercent(info.percent),
-          transferredBytes: info.transferred,
-          totalBytes: info.total,
-          message: `正在下载 ${clampPercent(info.percent).toFixed(1)}%`
-        }),
+        progress: (info) => {
+          if (this.activeDownload && this.rules.playbackActive()) { this.activeDownload.abort(); return; }
+          this.update({
+            phase: 'downloading',
+            progressPercent: clampPercent(info.percent),
+            transferredBytes: info.transferred,
+            totalBytes: info.total,
+            message: `正在下载 ${clampPercent(info.percent).toFixed(1)}%`
+          });
+        },
         downloaded: (info) => this.update({
           phase: 'downloaded',
           availableVersion: info.version,
@@ -108,7 +120,10 @@ export class LinkUpdateManager {
     if (this.busy || !this.client || this.status.phase !== 'available') {
       throw new Error('当前没有可下载的更新');
     }
+    if (this.rules.playbackActive()) throw new Error('播放中不下载更新，停止播放后再下载');
     this.busy = true;
+    const download = new AbortController();
+    this.activeDownload = download;
     this.update({
       phase: 'downloading',
       progressPercent: 0,
@@ -117,10 +132,14 @@ export class LinkUpdateManager {
       message: '准备下载更新…'
     });
     try {
-      await this.client.download();
+      await this.client.download(download.signal);
     } catch (error) {
-      this.update({ phase: 'error', message: normalizeUpdateError(error) });
+      if (download.signal.aborted) {
+        this.update({ phase: 'available', progressPercent: null, transferredBytes: null, totalBytes: null,
+          message: '播放已开始，更新下载已停止；停止播放后可重新下载' });
+      } else this.update({ phase: 'error', message: normalizeUpdateError(error) });
     } finally {
+      this.activeDownload = null;
       this.busy = false;
     }
     return this.getStatus();
@@ -146,7 +165,7 @@ export class LinkUpdateManager {
 }
 
 function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandlers): UpdateClient {
-  const { NsisUpdater } = electronUpdater;
+  const { NsisUpdater, CancellationToken } = electronUpdater;
   const updater = new NsisUpdater({
     provider: 'generic',
     url: feedUrl
@@ -175,8 +194,10 @@ function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandl
     check: async () => {
       await updater.checkForUpdates();
     },
-    download: async () => {
-      await updater.downloadUpdate();
+    download: async (signal) => {
+      const cancellation = new CancellationToken();
+      signal.addEventListener('abort', () => cancellation.cancel(), { once: true });
+      await updater.downloadUpdate(cancellation);
     },
     install: () => updater.quitAndInstall(false, true),
     dispose: () => {

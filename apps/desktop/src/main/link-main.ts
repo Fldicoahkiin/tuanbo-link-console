@@ -284,6 +284,7 @@ async function bootstrap(): Promise<void> {
     desktopPackage.version,
     app.isPackaged,
     (status) => sendToRenderer('link:update-status', status),
+    { playbackActive: () => runtimeActive || nativePlaybackActive() },
     undefined,
     internalDistribution ? '' : undefined
   );

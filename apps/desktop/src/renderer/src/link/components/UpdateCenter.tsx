@@ -103,11 +103,11 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
         <p className="update-dev-note">{phase === 'disabled' ? '开发模式不会执行下载或安装，请使用 Windows 安装版验证更新。' : '更新由发行方提供。下载后需确认重启安装，请先停止联动并保存工程。'}</p>
 
         {failure ? <p className="device-error" role="alert">{failure} 请检查网络后重新操作。</p> : null}
-        {runtimeActive ? <p className="settings-note">停止联动并保存工程后，才能重启安装。</p> : null}
+        {runtimeActive ? <p className="settings-note">播放中不下载、不安装更新；停止播放后再操作。</p> : null}
         <div className="modal-actions update-actions">
           {!inline ? <Button className="secondary-button" onClick={() => setOpen(false)}>关闭</Button> : null}
           {status?.feedConfigured && phase !== 'downloaded' && phase !== 'available' && phase !== 'disabled' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.checkForUpdates())}><RefreshCw />检查更新</Button> : null}
-          {phase === 'available' ? <Button className="primary-button" disabled={working} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</Button> : null}
+          {phase === 'available' ? <Button className="primary-button" disabled={working || runtimeActive} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</Button> : null}
           {phase === 'downloaded' ? <Button className="primary-button" disabled={busy || runtimeActive} onClick={() => void install()}><CloudDownload />重启并安装</Button> : null}
         </div>
   </>;

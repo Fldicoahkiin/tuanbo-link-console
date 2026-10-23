@@ -1,12 +1,12 @@
 import type { ProgressInfo, UpdateInfo } from 'electron-updater';
 import { describe, expect, it, vi } from 'vitest';
-import { LinkUpdateManager, type UpdateClient, type UpdateClientFactory, type UpdateClientHandlers } from './update-manager';
+import { LinkUpdateManager, type UpdateClient, type UpdateClientFactory, type UpdateClientHandlers, type UpdateRules } from './update-manager';
 
 describe('LinkUpdateManager', () => {
   it('开发模式明确禁用安装更新', async () => {
     const emit = vi.fn();
     const factory = vi.fn<UpdateClientFactory>();
-    const manager = new LinkUpdateManager('0.2.0', false, emit, factory);
+    const manager = new LinkUpdateManager('0.2.0', false, emit, rules(), factory);
 
     expect(manager.getStatus()).toMatchObject({ phase: 'disabled', currentVersion: '0.2.0' });
     await expect(manager.check()).resolves.toMatchObject({ phase: 'disabled' });
@@ -15,7 +15,7 @@ describe('LinkUpdateManager', () => {
 
   it.each(['', 'http://updates.example.com/', 'https://user:secret@updates.example.com/', 'https://updates.example.com/?token=secret', 'https://updates.example.com/#fragment'])('无效更新地址不发起网络检查：%s', async (feedUrl) => {
     const factory = vi.fn<UpdateClientFactory>();
-    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), factory, feedUrl);
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), factory, feedUrl);
     await expect(manager.check()).resolves.toMatchObject({ phase: 'notConfigured', feedConfigured: false });
     expect(factory).not.toHaveBeenCalled();
   });
@@ -24,7 +24,7 @@ describe('LinkUpdateManager', () => {
     const installed = vi.fn();
     const statuses: string[] = [];
     const factory: UpdateClientFactory = (_feedUrl, handlers) => fakeClient(handlers, installed);
-    const manager = new LinkUpdateManager('0.2.0', true, (status) => statuses.push(status.phase), factory);
+    const manager = new LinkUpdateManager('0.2.0', true, (status) => statuses.push(status.phase), rules(), factory);
 
     await expect(manager.check()).resolves.toMatchObject({
       phase: 'available',
@@ -42,7 +42,7 @@ describe('LinkUpdateManager', () => {
       check: () => Promise.reject(new Error('404 Not found')),
       download: () => Promise.resolve(), install: vi.fn(), dispose: vi.fn()
     }));
-    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), factory);
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), factory);
     await expect(manager.check()).resolves.toMatchObject({ phase: 'error', message: '更新服务尚未发布可用的正式版本' });
     expect(factory).toHaveBeenCalledWith('https://updates.tuanbo-link.jinhefilm.com/windows/x64/', expect.any(Object));
     expect(() => manager.install()).toThrow('更新尚未下载完成');
@@ -57,7 +57,7 @@ describe('LinkUpdateManager', () => {
       download: () => new Promise<void>(resolve => { completeDownload = () => { handlers.downloaded(updateInfo('0.2.1')); resolve(); }; }),
       install: vi.fn(), dispose: vi.fn()
     }));
-    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), factory);
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), factory);
     const checking = manager.check();
     await expect(manager.check()).rejects.toThrow('请先完成当前更新操作');
     completeCheck(); await checking;
@@ -70,8 +70,50 @@ describe('LinkUpdateManager', () => {
     expect(manager.getStatus().phase).toBe('downloaded');
   });
 
+  it('播放中拒绝开始下载', async () => {
+    let playing = true;
+    const download = vi.fn();
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => playing), (_feedUrl, handlers) => ({
+      check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
+      download: () => { download(); handlers.downloaded(updateInfo('0.2.1')); return Promise.resolve(); },
+      install: vi.fn(), dispose: vi.fn()
+    }));
+    await manager.check();
+    await expect(manager.download()).rejects.toThrow('播放中不下载更新');
+    expect(download).not.toHaveBeenCalled();
+    expect(manager.getStatus().phase).toBe('available');
+    playing = false;
+    await expect(manager.download()).resolves.toMatchObject({ phase: 'downloaded' });
+    expect(download).toHaveBeenCalledOnce();
+  });
+
+  it('下载过程中开始播放即停止下载，可在停止后重新下载', async () => {
+    let playing = false;
+    let signal: AbortSignal | undefined;
+    let progress = (): void => { throw new Error('download not started'); };
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => playing), (_feedUrl, handlers) => ({
+      check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
+      download: (abort) => new Promise<void>((_resolve, reject) => {
+        signal = abort;
+        progress = () => handlers.progress(progressInfo(30));
+        abort.addEventListener('abort', () => reject(new Error('cancelled')));
+      }),
+      install: vi.fn(), dispose: vi.fn()
+    }));
+    await manager.check();
+    const downloading = manager.download();
+    progress();
+    expect(signal?.aborted).toBe(false);
+    playing = true;
+    progress();
+    const stopped = await downloading;
+    expect(stopped).toMatchObject({ phase: 'available', progressPercent: null });
+    expect(stopped.message).toContain('更新下载已停止');
+    expect(signal?.aborted).toBe(true);
+  });
+
   it('下载失败可重新检查，错误不会被假装成功', async () => {
-    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), (_feedUrl, handlers) => ({
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), (_feedUrl, handlers) => ({
       check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
       download: () => Promise.reject(new Error('checksum mismatch')),
       install: vi.fn(), dispose: vi.fn()
@@ -82,6 +124,10 @@ describe('LinkUpdateManager', () => {
     await expect(manager.check()).resolves.toMatchObject({ phase: 'available' });
   });
 });
+
+function rules(playbackActive: () => boolean = () => false): UpdateRules {
+  return { playbackActive };
+}
 
 function fakeClient(handlers: UpdateClientHandlers, installed: () => void): UpdateClient {
   return {
