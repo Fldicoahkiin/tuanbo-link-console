@@ -93,10 +93,10 @@ it('上一首的取消回执迟到失败不能污染新歌曲，错误仍保留�
 
 it('选中池 Cue 直接试听，连接未建立时显示错误而不请求 MIDI', async () => {
   const f = setup(); const audition = new LightingCueAudition();
-  expect(await audition.play(f.document, 'cue-0', null)).toBe(1);
+  expect(await audition.play(f.document, 'cue-0', null, false)).toBe(1);
   expect(f.api.playMa2Audition).toHaveBeenCalledWith(expect.objectContaining({ version: 1, generation: 0, action: { target: 'sequence', sequence: 168, cue: '1.250', action: 'goto' } }));
   f.status.state = 'disconnected';
-  await expect(audition.play(f.document, 'cue-1', null)).rejects.toThrow('先连接 MA2 网络');
+  await expect(audition.play(f.document, 'cue-1', null, false)).rejects.toThrow('先连接 MA2 网络');
   expect(f.api.playMa2Audition).toHaveBeenCalledOnce(); expect(f.api.playMa2Cue).not.toHaveBeenCalled(); expect(f.midi).not.toHaveBeenCalled();
 });
 
@@ -112,7 +112,7 @@ it('网络埋步按播放位置触发，停播取消，直接预览只发送正�
   expect(f.api.playMa2Cue).toHaveBeenCalledTimes(2);
   expect(f.api.playMa2Cue).toHaveBeenLastCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 168, cue: '2', action: 'goto' } }));
   f.output.stop(); f.api.playMa2Cue.mockClear();
-  expect(await new LightingCueAudition().play(f.document, 'prepared', null)).toBe(1);
+  expect(await new LightingCueAudition().play(f.document, 'prepared', null, false)).toBe(1);
   expect(f.api.playMa2Cue).not.toHaveBeenCalled();
   expect(f.api.playMa2Audition).toHaveBeenCalledOnce();
   expect(f.api.playMa2Audition).toHaveBeenLastCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 168, cue: '2', action: 'goto' } }));
