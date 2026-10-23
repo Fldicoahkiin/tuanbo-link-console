@@ -8,7 +8,8 @@ The console never writes the feed. It queues a request; this script, started as 
 tblink-update-publish.path, re-validates everything and writes the result back.
 
 Paths. Everything this script writes, or reads to decide what to trust, lies under directories that only root
-can change, checked from / on every run: the feed, this script's own directory and the release public keys.
+can change, checked from / on every run: the feed, this script's own directory, root's backups (receipts and
+the audit log) and the release public keys.
 The two directories other accounts own are only read, through descriptors opened without following links and
 checked for their owner: the console's request directory and the release builder's staging area. A staged
 release is copied into root's work directory first; every check and the install read that copy only.
@@ -38,6 +39,10 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 FEED = 'srv/tblink-updates/windows/x64'
 KEYS = 'opt/tblink-licensing/release-public-keys.json'
 PUBLISHER = 'var/lib/tblink-update-publish'
+# Root's backups, shared with the deployment tools; never inside a service account's directory.
+BACKUPS = 'var/backups/tblink'
+RECEIPTS = BACKUPS + '/update-receipts'
+AUDIT = BACKUPS + '/update-audit.jsonl'
 # Owned by other accounts; read through checked descriptors only.
 REQUESTS = 'var/lib/tblink-licensing/update-requests'
 STAGING = 'var/lib/tblink-release/staging'
@@ -75,7 +80,7 @@ def require_root_directory(root, relative, accounts):
 
 
 def check_layout(root, accounts):
-    for relative in (FEED, PUBLISHER, PUBLISHER + '/results', PUBLISHER + '/receipts', PUBLISHER + '/work',
+    for relative in (FEED, PUBLISHER, PUBLISHER + '/results', PUBLISHER + '/work', BACKUPS, RECEIPTS,
                      str(Path(STAGING).parent), str(Path(KEYS).parent)):
         require_root_directory(root, relative, accounts)
     keys = os.lstat(root / KEYS)
@@ -235,7 +240,7 @@ def validate_release(source, root):
 
 def receipt_directory(root, kind, version):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
-    receipt = root / PUBLISHER / 'receipts' / f'{stamp}-{kind}-{version}'
+    receipt = root / RECEIPTS / f'{stamp}-{kind}-{version}'
     receipt.mkdir(mode=0o700)
     return receipt
 
@@ -330,7 +335,7 @@ def publish_staged(staging_fd, name, manifest_sha, root, accounts, request):
 
 def publish_receipt(root, version):
     """The receipt of the publish that put this version on the feed; versioned files are published once."""
-    for path in (root / PUBLISHER / 'receipts').glob(f'*-update-{version}'):
+    for path in (root / RECEIPTS).glob(f'*-update-{version}'):
         receipt = path / 'receipt.json'
         if receipt.is_file() and json.loads(receipt.read_text()).get('version') == version:
             return path
@@ -547,7 +552,7 @@ def process_requests(root=Path('/'), accounts=None):
                         version = None
                         result = {'id': request_id, 'ok': False, 'message': str(error), 'at': now()}
                     write_json(publisher / 'results' / (request_id + '.json'), result, accounts)
-                    with (publisher / 'update-audit.jsonl').open('a') as audit:
+                    with (root / AUDIT).open('a') as audit:
                         audit.write(json.dumps({'id': request_id, 'requestedAt': None if request is None else request['requestedAt'],
                                                 'processedAt': result['at'], 'actor': None if request is None else request['actor'],
                                                 'action': None if request is None else request['action'], 'version': version,

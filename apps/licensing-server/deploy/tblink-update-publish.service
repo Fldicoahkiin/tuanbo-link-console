@@ -13,8 +13,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-# Writes only the feed, root's own /var/lib/tblink-update-publish (results, status, receipts, audit, lock, work
-# copies) and the staging entries it publishes or discards. The console's request directory stays read-only.
-# Each path is its own mount here: files move between them by copying, never by rename (EXDEV).
+# Writes only the feed, root's own /var/lib/tblink-update-publish (results, status, lock, work copies), root's
+# backups (receipts, audit) and the staging entries it publishes or discards. The console's request directory
+# stays read-only. Each path is its own mount here: files move between them by copying, never by rename (EXDEV).
 ReadOnlyPaths=/var/lib/tblink-licensing/update-requests
-ReadWritePaths=/srv/tblink-updates/windows/x64 /var/lib/tblink-update-publish /var/lib/tblink-release/staging
+ReadWritePaths=/srv/tblink-updates/windows/x64 /var/lib/tblink-update-publish /var/backups/tblink /var/lib/tblink-release/staging
