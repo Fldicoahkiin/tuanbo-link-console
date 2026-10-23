@@ -99,7 +99,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     const project = useDocumentStore.getState().project;
     if (!project) return false;
     for (const item of project.rundown) {
-      if (!item.lighting || item.lighting.ma2Bindings?.length || item.lighting.consoleSong?.assignment === 'unassigned') continue;
+      if (!item.lighting || item.lighting.outputMode !== 'network' || item.lighting.ma2Bindings?.length || item.lighting.consoleSong?.assignment === 'unassigned') continue;
       const existing = useMa2SongSyncStore.getState().songs[item.id];
       if (existing && (existing.state !== 'paused' || existing.requestId)) continue;
       const events = item.lighting.tracks.flatMap(track => track.clips.flatMap(clip => clip.events));
@@ -177,7 +177,7 @@ export function writeMissingConsoleShows(): void {
 export function pendingSongSummary(project: ReturnType<typeof useDocumentStore.getState>['project']): Array<{ itemId: string; title: string; count: number; page: number }> {
   if (!project) return [];
   return project.rundown.flatMap(item => {
-    if (!item.lighting || item.lighting.consoleSong || item.lighting.ma2Bindings?.length) return [];
+    if (!item.lighting || item.lighting.consoleSong || item.lighting.ma2Bindings?.length || item.lighting.outputMode !== 'network') return [];
     const count = new Set(item.lighting.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.kind === 'ma2' || event.kind === 'empty-cue').map(event => event.effectGroupId ?? event.id)))).size;
     return count ? [{ itemId: item.id, title: item.title, count, page: ma2SongSyncSettings(project, item.id).executorPage ?? 1000 }] : [];
   });
