@@ -114,7 +114,7 @@ function ConsoleApp({ initial, signedOut }: { initial: Session; signedOut: () =>
       {route === 'updates' && detail && <>
         <section className="panel"><h2>更新源</h2><Fields row={detail.item} /><div className="actions">{detail.item.rollbackVersion && !detail.item.rollbackIssue && actionButton('rollback-update', { id: detail.item.rollbackVersion })}</div></section>
         <section className="panel"><h2>待发布版本</h2>{detail.related.length ? detail.related.map(row => <div key={String(row.id)}><Fields row={row} /><div className="actions">{!row.issue && actionButton('publish-update', row)}{actionButton('discard-update', row)}</div></div>)
-          : <p className="muted">没有待发布的版本。构建机打好并签名的正式包上传后会出现在这里。</p>}</section>
+          : <p className="muted">没有待发布的版本。构建机上传的正式包校验通过后会自动发布；没能自动发布的会留在这里。</p>}</section>
       </>}
       {!['overview', 'security', 'updates'].includes(route) && <>
         {selected ? <><button className="back" onClick={() => { setSelected(null); setDetail(null); }}><ArrowLeft size={16} />返回列表</button>

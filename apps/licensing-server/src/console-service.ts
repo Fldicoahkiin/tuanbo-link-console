@@ -346,7 +346,8 @@ export class ConsoleService {
     const status = await channels.updates.status();
     return detailSchema.parse({
       item: { feedVersion: status.feed?.version ?? null, feedReleaseDate: status.feed?.releaseDate ?? null, feedSigned: status.feed?.signed ?? null,
-        rollbackVersion: status.rollback.version, rollbackIssue: status.rollback.issue, generatedAt: status.generatedAt },
+        rollbackVersion: status.rollback.version, rollbackIssue: status.rollback.issue, autoPublish: status.autoPublish?.message ?? null,
+        autoPublishAt: status.autoPublish?.at ?? null, generatedAt: status.generatedAt },
       related: status.staged.map(entry => ({ id: entry.name, version: entry.version ?? null, releaseDate: entry.releaseDate ?? null, gitSha: entry.gitSha ?? null,
         kid: entry.kid ?? null, size: entry.size ?? null, manifestSha256: entry.manifestSha256 ?? null, issue: entry.issue })),
       history: []

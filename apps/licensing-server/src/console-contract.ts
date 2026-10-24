@@ -78,7 +78,9 @@ export const updateStatusSchema = z.object({
   feed: z.object({ version: z.string(), releaseDate: z.string(), signed: z.boolean() }).nullable(),
   rollback: z.object({ version: z.string().nullable(), issue: z.string().nullable() }),
   staged: z.array(z.object({ name: z.string(), issue: z.string().nullable(), version: z.string().optional(), gitSha: z.string().optional(),
-    manifestSha256: z.string().optional(), releaseDate: z.string().optional(), kid: z.string().optional(), size: z.number().optional() }))
+    manifestSha256: z.string().optional(), releaseDate: z.string().optional(), kid: z.string().optional(), size: z.number().optional() })),
+  // The last automatic publish of a staged release; absent before the publisher that writes it is installed.
+  autoPublish: z.object({ name: z.string(), ok: z.boolean(), message: z.string(), at: z.string() }).nullable().optional()
 });
 export type UpdateStatus = z.infer<typeof updateStatusSchema>;
 export type UpdateRequest = { id: string; action: 'publish' | 'rollback' | 'discard'; staged?: string; version?: string; manifestSha256?: string; actor: string; reason: string; requestedAt: string };

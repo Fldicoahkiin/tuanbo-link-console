@@ -324,7 +324,8 @@ it('发布更新只由管理员在二次验证后提交，后台只排队请求�
   let outcome: UpdateOutcome | null = { ok: true, message: '已发布 0.5.0' };
   const status: UpdateStatus = { version: 1, generatedAt: '2026-10-23T08:00:00Z', feed: { version: '0.4.29', releaseDate: '2026-09-28T18:15:14.517Z', signed: false },
     rollback: { version: null, issue: '没有可以回滚到的上一版' },
-    staged: [{ name: '0.5.0-13f7e625898e', issue: null, version: '0.5.0', gitSha: '13f7e625898e'.padEnd(40, '0'), manifestSha256: 'a'.repeat(64), releaseDate: '2026-10-23T06:34:50.642Z', kid: 'release-2026-10-a', size: 412835955 }] };
+    staged: [{ name: '0.5.0-13f7e625898e', issue: null, version: '0.5.0', gitSha: '13f7e625898e'.padEnd(40, '0'), manifestSha256: 'a'.repeat(64), releaseDate: '2026-10-23T06:34:50.642Z', kid: 'release-2026-10-a', size: 412835955 }],
+    autoPublish: { name: '0.5.0-13f7e625898e', ok: false, message: '0.5.0-13f7e625898e 没有自动发布：磁盘已满', at: '2026-10-23T08:01:00Z' } };
   const channels = { reconcile: () => Promise.resolve({}), refund: () => Promise.reject(new Error('不涉及')), paymentLink: () => { throw new Error('不涉及'); },
     updates: { status: () => Promise.resolve(status), request: (request: UpdateRequest) => { requests.push(request); return Promise.resolve(outcome); } } };
   const publish: ConsoleAction = { action: 'publish-update', id: '0.5.0-13f7e625898e', manifestSha256: 'a'.repeat(64), reason: '0.5.0 安装验收通过' };
@@ -332,7 +333,7 @@ it('发布更新只由管理员在二次验证后提交，后台只排队请求�
   await expect(s.consoleService.updates(operations, channels)).rejects.toThrow('管理员');
   await expect(s.consoleService.execute({ operationId: randomUUID(), input: publish }, operations, randomUUID(), channels)).rejects.toThrow('当前角色不能执行此操作');
   const view = await s.consoleService.updates(s.login.session, channels);
-  expect(view.item).toMatchObject({ feedVersion: '0.4.29', rollbackVersion: null });
+  expect(view.item).toMatchObject({ feedVersion: '0.4.29', rollbackVersion: null, autoPublish: '0.5.0-13f7e625898e 没有自动发布：磁盘已满', autoPublishAt: '2026-10-23T08:01:00Z' });
   expect(view.related[0]).toMatchObject({ id: '0.5.0-13f7e625898e', manifestSha256: 'a'.repeat(64), issue: null });
 
   s.advance(300001);
