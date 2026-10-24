@@ -7,9 +7,9 @@ afterEach(() => { vi.useRealTimers(); });
 function fixture() {
   let outputs: { id: number; name: string }[] = [];
   const list = vi.fn(() => Promise.resolve(outputs)), reopen = vi.fn<(device: number, name: string) => Promise<void>>(() => Promise.resolve());
-  const recovered = vi.fn(), log = vi.fn();
-  const recovery = new MtcPortRecovery({ list, reopen, recovered, log });
-  return { recovery, list, reopen, recovered, log, set: (next: { id: number; name: string }[]) => { outputs = next; } };
+  const recovered = vi.fn(), log = vi.fn(), active = vi.fn(() => true);
+  const recovery = new MtcPortRecovery({ list, reopen, active, recovered, log });
+  return { recovery, list, reopen, active, recovered, log, set: (next: { id: number; name: string }[]) => { outputs = next; } };
 }
 
 it('端口消失后每秒检查一次；同名端口重新出现即按序号重新打开，并报告中断时长', async () => {
@@ -57,4 +57,16 @@ it('取消后不再检查；取消时在途的检查结果不会打开端口', a
   f.recovery.lost('MTC'); f.recovery.lost('Other');
   await vi.advanceTimersByTimeAsync(0);
   expect(f.recovery.watching).toBe('Other');
+});
+
+it('暂停中只等待，不枚举也不打开；继续播放后下一次检查照常恢复', async () => {
+  const f = fixture();
+  f.active.mockReturnValue(false);
+  f.set([{ id: 2, name: 'MTC' }]);
+  f.recovery.lost('MTC');
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(f.list).not.toHaveBeenCalled(); expect(f.reopen).not.toHaveBeenCalled(); expect(f.log).not.toHaveBeenCalled();
+  f.active.mockReturnValue(true);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(f.reopen).toHaveBeenCalledExactlyOnceWith(2, 'MTC'); expect(f.recovered).toHaveBeenCalledOnce();
 });

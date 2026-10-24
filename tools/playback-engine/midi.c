@@ -2,10 +2,21 @@
 #include <avrt.h>
 #include <string.h>
 
+/* Cancels a requested or running reopen. A running one owns the handle and header until WinMM
+ * returns (about 3 s while Windows is still creating a port): wait for it, at most 4 s.
+ * Caller holds midi_lock; it is held again on return. */
+static MMRESULT midi_cancel_reopen(void) {
+  engine.reopen_requested = FALSE; engine.reopen_ticket++;
+  for (int waited = 0; engine.reopen_running && waited < 400; waited++) {
+    LeaveCriticalSection(&engine.midi_lock); Sleep(10); EnterCriticalSection(&engine.midi_lock);
+  }
+  return engine.reopen_running ? (MMRESULT)ERROR_BUSY : MMSYSERR_NOERROR;
+}
 MMRESULT midi_release(void) {
   EnterCriticalSection(&engine.midi_lock);
-  MMRESULT result = MMSYSERR_NOERROR;
-  if (engine.midi) {
+  MMRESULT result = midi_cancel_reopen();
+  if (result != MMSYSERR_NOERROR) engine.midi_error = (int32_t)result;
+  else if (engine.midi) {
     result = midiOutReset(engine.midi);
     if (result == MMSYSERR_NOERROR && (engine.midi_header.dwFlags & MHDR_PREPARED)) result = midiOutUnprepareHeader(engine.midi, &engine.midi_header, sizeof(MIDIHDR));
     if (result == MMSYSERR_NOERROR) result = midiOutClose(engine.midi);
@@ -38,28 +49,57 @@ MMRESULT midi_prepare(UINT device, UINT fps) {
   engine.midi_error = device != 0xffffffffu && engine.midi_worker_error ? engine.midi_worker_error : (int32_t)result;
   LeaveCriticalSection(&engine.midi_lock); return result;
 }
-/* The same timecode port is back (authorised 2026-10-24): open it again, keeping the song's counters.
- * The opened handle must carry the expected name, so an index that moved never sends elsewhere. On
- * success the worker relocates with a Full Frame at the current audio position; nothing missed is sent. */
-MMRESULT midi_reopen(UINT device, const wchar_t *name) {
-  MMRESULT released = midi_release();
-  if (released != MMSYSERR_NOERROR) return released;
+/* The same timecode port is back (authorised 2026-10-24). Only records the request; the MIDI worker
+ * opens it. The outcome reaches the host through telemetry (midiReopens, midiReopenResult). */
+HRESULT midi_request_reopen(UINT device, const wchar_t *name) {
   EnterCriticalSection(&engine.midi_lock);
-  MMRESULT result = engine.midi_worker_error ? MMSYSERR_ERROR : device >= midiOutGetNumDevs() ? MMSYSERR_BADDEVICEID
-    : midiOutOpen(&engine.midi, device, 0, 0, CALLBACK_NULL);
+  HRESULT result = engine.midi_worker_error ? E_FAIL : engine.reopen_requested || engine.reopen_running ? HRESULT_FROM_WIN32(ERROR_BUSY) : S_OK;
+  if (result == S_OK) {
+    engine.reopen_device = device; memcpy(engine.reopen_name, name, (wcslen(name) + 1) * sizeof(wchar_t));
+    engine.reopen_requested = TRUE; engine.reopen_ticket++;
+  }
+  LeaveCriticalSection(&engine.midi_lock); return result;
+}
+/* Runs on the MIDI worker: entered with midi_lock held, returns with it released. The old handle is
+ * dead (its port was unplugged) and is forgotten whatever its teardown returns. The opened handle must
+ * carry the expected name, so an index that moved never sends elsewhere. The song's counters are kept;
+ * the worker then relocates with a Full Frame at the current audio position and nothing missed is sent. */
+static void midi_reopen_run(void) {
+  UINT device = engine.reopen_device; UINT32 ticket = engine.reopen_ticket; wchar_t name[32];
+  memcpy(name, engine.reopen_name, sizeof(name));
+  HMIDIOUT old = engine.midi, opened = NULL; engine.midi = NULL;
+  engine.reopen_requested = FALSE; engine.reopen_running = TRUE;
+  LeaveCriticalSection(&engine.midi_lock);
+  if (old) {
+    (void)midiOutReset(old);
+    if (engine.midi_header.dwFlags & MHDR_PREPARED) (void)midiOutUnprepareHeader(old, &engine.midi_header, sizeof(MIDIHDR));
+    (void)midiOutClose(old);
+  }
+  MMRESULT result = device >= midiOutGetNumDevs() ? MMSYSERR_BADDEVICEID : midiOutOpen(&opened, device, 0, 0, CALLBACK_NULL);
   if (result == MMSYSERR_NOERROR) {
     MIDIOUTCAPSW actual;
-    result = midiOutGetDevCapsW((UINT_PTR)engine.midi, &actual, sizeof(actual));
+    result = midiOutGetDevCapsW((UINT_PTR)opened, &actual, sizeof(actual));
     if (result == MMSYSERR_NOERROR && wcscmp(name, actual.szPname) != 0) result = MMSYSERR_BADDEVICEID;
     if (result == MMSYSERR_NOERROR) {
       memset(&engine.midi_header, 0, sizeof(MIDIHDR));
       engine.midi_header.lpData = (LPSTR)engine.full_frame; engine.midi_header.dwBufferLength = 10;
-      result = midiOutPrepareHeader(engine.midi, &engine.midi_header, sizeof(MIDIHDR));
+      result = midiOutPrepareHeader(opened, &engine.midi_header, sizeof(MIDIHDR));
     }
-    if (result != MMSYSERR_NOERROR) { (void)midiOutClose(engine.midi); engine.midi = NULL; }
+    if (result != MMSYSERR_NOERROR) { (void)midiOutClose(opened); opened = NULL; }
   }
-  engine.midi_error = engine.midi_worker_error ? engine.midi_worker_error : (int32_t)result;
-  LeaveCriticalSection(&engine.midi_lock); return result;
+  EnterCriticalSection(&engine.midi_lock);
+  BOOL current = ticket == engine.reopen_ticket;
+  // A failed reopen leaves the previous error in place: the port is still unusable.
+  if (current && opened) { engine.midi = opened; engine.midi_error = 0; opened = NULL; }
+  if (opened) {
+    // Cancelled by a newer preparation meanwhile: release this handle before giving up the header.
+    LeaveCriticalSection(&engine.midi_lock);
+    (void)midiOutUnprepareHeader(opened, &engine.midi_header, sizeof(MIDIHDR)); (void)midiOutClose(opened);
+    EnterCriticalSection(&engine.midi_lock);
+  }
+  engine.midi_reopen_result = current ? (int32_t)result : (int32_t)ERROR_CANCELLED; engine.midi_reopens++;
+  engine.reopen_running = FALSE;
+  LeaveCriticalSection(&engine.midi_lock);
 }
 static void parts(UINT64 frame, UINT fps, unsigned char *out) {
   out[3] = (unsigned char)(frame % fps); frame /= fps;
@@ -97,6 +137,7 @@ DWORD WINAPI midi_worker(void *unused) {
     EnterCriticalSection(&engine.midi_lock);
     QueryPerformanceCounter(&acquired);
     if (engine.midi_suspended) { LeaveCriticalSection(&engine.midi_lock); continue; }
+    if (engine.reopen_requested) { midi_reopen_run(); running = FALSE; continue; }
     EnterCriticalSection(&engine.lock);
     QueryPerformanceCounter(&audio_acquired);
     UINT32 state = engine.state, current_generation = engine.generation, current_epoch = engine.epoch;

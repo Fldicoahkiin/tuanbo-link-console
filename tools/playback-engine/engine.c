@@ -56,6 +56,8 @@ DWORD WINAPI telemetry_worker(void *unused) {
   double previous[ANALYSIS_BINS] = {0}, peaks[2] = {0}; unsigned char bins[ANALYSIS_BINS] = {0};
   int16_t samples[ANALYSIS_FRAMES * 2]; UINT32 monitor_epoch = 0;
   ULONGLONG last_analysis = 0;
+  UINT32 sent = 0, interruptions = 0, reopens = 0; int32_t midi_error = 0, interruption = 0, reopen_result = 0;
+  double late = 0, wake_gap = 0, midi_lock_wait = 0, audio_lock_wait = 0, midi_send = 0;
   // Formal output consumes device observations at 100 Hz. UI/spectrum updates
   // stay at 20 Hz; a 50 ms telemetry period consumed half the output deadline.
   while (WaitForSingleObject(engine.quit, 10) != WAIT_OBJECT_0) {
@@ -76,14 +78,17 @@ DWORD WINAPI telemetry_worker(void *unused) {
       if (state != PLAYING) memset(samples, 0, sizeof(samples));
       playback_analyze(samples, previous, bins, peaks); last_analysis = now;
     }
-    EnterCriticalSection(&engine.midi_lock);
-    UINT32 sent = engine.midi_sent, interruptions = engine.midi_interruptions; int32_t midi_error = engine.midi_error, interruption = engine.midi_interruption; double late = engine.max_late;
-    double wake_gap = engine.midi_wake_gap_ms, midi_lock_wait = engine.midi_lock_wait_ms,
-      audio_lock_wait = engine.midi_audio_lock_wait_ms, midi_send = engine.midi_send_ms;
-    LeaveCriticalSection(&engine.midi_lock);
+    // A WinMM send can block for a second while Windows is still creating a port, and the MIDI worker
+    // holds midi_lock while it sends. Position telemetry never waits for it: busy means the last values.
+    if (TryEnterCriticalSection(&engine.midi_lock)) {
+      sent = engine.midi_sent; interruptions = engine.midi_interruptions; midi_error = engine.midi_error; interruption = engine.midi_interruption; late = engine.max_late;
+      reopens = engine.midi_reopens; reopen_result = engine.midi_reopen_result;
+      wake_gap = engine.midi_wake_gap_ms; midi_lock_wait = engine.midi_lock_wait_ms; audio_lock_wait = engine.midi_audio_lock_wait_ms; midi_send = engine.midi_send_ms;
+      LeaveCriticalSection(&engine.midi_lock);
+    }
     TelemetryMessage message;
-    int size = snprintf(message.bytes, TELEMETRY_BYTES, "{\"protocol\":4,\"kind\":\"clock\",\"generation\":%u,\"state\":\"%s\",\"positionMs\":%.6f,\"qpc100ns\":\"%llu\",\"clockFrequency\":%llu,\"sampleRate\":%u,\"underruns\":%u,\"midiSent\":%u,\"midiError\":%d,\"midiInterruptions\":%u,\"midiInterruption\":%d,\"audioError\":%d,\"maxMidiLatenessMs\":%.6f,\"bufferedFrames\":%llu,\"gain\":%.8f,\"analysis\":{\"fftSize\":2048,\"peaks\":[%.8f,%.8f],\"spectrum\":[",
-      generation, states[state], position, (unsigned long long)qpc, (unsigned long long)frequency, rate, underruns, sent, midi_error, interruptions, interruption, audio_error, late, (unsigned long long)buffered, gain, peaks[0], peaks[1]);
+    int size = snprintf(message.bytes, TELEMETRY_BYTES, "{\"protocol\":4,\"kind\":\"clock\",\"generation\":%u,\"state\":\"%s\",\"positionMs\":%.6f,\"qpc100ns\":\"%llu\",\"clockFrequency\":%llu,\"sampleRate\":%u,\"underruns\":%u,\"midiSent\":%u,\"midiError\":%d,\"midiInterruptions\":%u,\"midiInterruption\":%d,\"midiReopens\":%u,\"midiReopenResult\":%d,\"audioError\":%d,\"maxMidiLatenessMs\":%.6f,\"bufferedFrames\":%llu,\"gain\":%.8f,\"analysis\":{\"fftSize\":2048,\"peaks\":[%.8f,%.8f],\"spectrum\":[",
+      generation, states[state], position, (unsigned long long)qpc, (unsigned long long)frequency, rate, underruns, sent, midi_error, interruptions, interruption, reopens, reopen_result, audio_error, late, (unsigned long long)buffered, gain, peaks[0], peaks[1]);
     BOOL valid = size > 0 && size < (int)TELEMETRY_BYTES;
     for (unsigned i = 0; valid && i < ANALYSIS_BINS; i++) {
       int written = snprintf(message.bytes + size, TELEMETRY_BYTES - (size_t)size, "%s%u", i ? "," : "", bins[i]);
@@ -179,7 +184,7 @@ static DWORD WINAPI commands(void *unused) {
       if (isfinite(volume) && volume >= 0 && volume <= 1) { audio_volume(volume, duration); result = S_OK; }
     } else if (op == 7) result = S_OK;
     else if (op == 8) { midi_release(); result = S_OK; }
-    else if (op == 9) { device_wide[device_count] = 0; MMRESULT reopened = midi_reopen(device, device_wide); result = reopened == MMSYSERR_NOERROR ? S_OK : MAKE_HRESULT(1, FACILITY_WIN32, reopened); }
+    else if (op == 9) { device_wide[device_count] = 0; result = midi_request_reopen(device, device_wide); }
     // Volume and a timecode reopen are optional: their failure never stops the audio.
     if (FAILED(result) && op != 6 && op != 9) {
       EnterCriticalSection(&engine.lock);

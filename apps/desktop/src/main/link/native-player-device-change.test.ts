@@ -6,7 +6,9 @@ import type { MtcRecoveryReport } from './mtc-port-recovery';
 import { WindowsMidiHealth, midiHealthMessage, type MidiHealth } from './windows-midi-health';
 
 const native = vi.hoisted(() => ({ devices: vi.fn<(scope: 'all' | 'audio') => Promise<NativePlaybackDevices>>(), commands: vi.fn<(command: NativePlaybackCommand) => void>(),
-  emit: null as ((patch: Partial<Extract<NativePlaybackEvent, { kind: 'clock' }>>) => void) | null }));
+  emit: null as ((patch: Partial<Extract<NativePlaybackEvent, { kind: 'clock' }>>) => void) | null,
+  /** What the engine's MIDI thread reports after a reopen request: the open result, then any send error. */
+  reopenResults: [] as { result: number; sendError?: number }[] }));
 vi.mock('./native-device-query', () => ({ NativeDeviceQuery: class {
   // Like the real query process: a failed read is kept until the query is reopened.
   private failure: Error | null = null;
@@ -23,7 +25,7 @@ vi.mock('./native-playback-client', () => ({
     readonly identity = { pid: 123, title: 'test', windowClass: 'Static' as const };
     private clock: Extract<NativePlaybackEvent, { kind: 'clock' }> = {
       protocol: 4, kind: 'clock', generation: 0, state: 'empty', positionMs: 0, qpc100ns: '1',
-      clockFrequency: 48000, sampleRate: 48000, underruns: 0, midiSent: 0, midiError: 0, midiInterruptions: 0, midiInterruption: 0, audioError: 0,
+      clockFrequency: 48000, sampleRate: 48000, underruns: 0, midiSent: 0, midiError: 0, midiInterruptions: 0, midiInterruption: 0, midiReopens: 0, midiReopenResult: 0, audioError: 0,
       maxMidiLatenessMs: 0, bufferedFrames: 1000, gain: 1,
       analysis: { fftSize: 2048, peaks: [0, 0], spectrum: Array.from({ length: 1024 }, () => 0) }
     };
@@ -40,12 +42,20 @@ vi.mock('./native-playback-client', () => ({
       else if (command.kind === 'pause') this.clock.state = 'paused';
       else if (command.kind === 'stop') this.clock.state = 'stopped';
       this.changed(this.clock);
+      if (command.kind === 'reopen-mtc') {
+        // Like the engine: acknowledged at once, opened on the MIDI thread, reported in telemetry.
+        const { result, sendError } = native.reopenResults.shift() ?? { result: 0 };
+        setTimeout(() => {
+          native.emit!({ midiReopens: this.clock.midiReopens + 1, midiReopenResult: result, midiError: result ? this.clock.midiError : 0 });
+          for (let tick = 1; tick <= 3 && !result; tick++) native.emit!(sendError ? { midiError: sendError } : { midiSent: this.clock.midiSent + 4 });
+        }, 5);
+      }
       return Promise.resolve();
     }
     readClock() { return Promise.resolve(this.clock); }
   }
 }));
-afterEach(() => { native.devices.mockReset(); native.commands.mockReset(); });
+afterEach(() => { native.devices.mockReset(); native.commands.mockReset(); native.reopenResults = []; });
 
 function fixture() {
   const devices: NativePlaybackDevices = { protocol: 4, audio: [{ id: 'default', name: 'test', isDefault: true }],
@@ -104,7 +114,7 @@ it('明确关闭 MIDI 的音频播放不进入系统 MIDI 枚举，仍可定位�
   } finally { await f.service.close(); }
 });
 
-it('定位时 MIDI 端口消失只退出时间码通道，音频仍可定位和继续；同一端口回来后自动重新打开', async () => {
+it('定位时 MIDI 端口消失只退出时间码通道，音频仍可定位和继续；同一端口回来后，继续播放时自动重新打开', async () => {
   const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId };
   try {
     await f.service.prepare(f.request);
@@ -118,9 +128,13 @@ it('定位时 MIDI 端口消失只退出时间码通道，音频仍可定位和�
     const prepared = native.commands.mock.calls.flatMap(([command]) => command.kind === 'prepare' ? [command] : []);
     expect(prepared.at(-1)?.midiDevice).toBeNull();
     f.devices.midiOutputs = [{ id: 2, name: 'test-mtc' }];
-    await vi.waitFor(() => expect(native.commands.mock.calls.map(([command]) => command)).toContainEqual(expect.objectContaining({ kind: 'reopen-mtc', midiDevice: 2, midiPortName: 'test-mtc' })), { timeout: 3000 });
-    expect(f.service.status).toMatchObject({ mtcPortName: 'test-mtc', mtcError: null }); expect(f.service.status?.mtcRecovered?.portName).toBe('test-mtc');
+    // Paused: the watch only waits; a reopened port is confirmed by the timecode it then sends.
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    expect(native.commands.mock.calls.filter(([command]) => command.kind === 'reopen-mtc')).toEqual([]);
     await f.service.control({ ...envelope, generation: 4, kind: 'play' });
+    await vi.waitFor(() => expect(f.service.status?.mtcRecovered?.portName).toBe('test-mtc'), { timeout: 3000 });
+    expect(native.commands.mock.calls.map(([command]) => command)).toContainEqual(expect.objectContaining({ kind: 'reopen-mtc', midiDevice: 2, midiPortName: 'test-mtc' }));
+    expect(f.service.status).toMatchObject({ mtcPortName: 'test-mtc', mtcError: null });
     await f.service.control({ ...envelope, generation: 5, kind: 'seek', positionMs: 3000 });
     expect(native.commands.mock.calls.flatMap(([command]) => command.kind === 'prepare' ? [command] : []).at(-1)?.midiDevice).toBe(2);
     expect(f.service.status).toMatchObject({ status: 'paused', mtcPortName: 'test-mtc', mtcError: null, audioError: null });
@@ -147,10 +161,28 @@ it('播放中时间码接口断开：同一接口回来后重新打开并从当�
     expect(native.commands.mock.calls.filter(([command]) => command.kind === 'prepare').length).toBe(preparedBefore);
     expect(service.status).toMatchObject({ status: 'playing', mtcPortName: 'test-mtc', mtcError: null });
     expect(recovered.mock.calls[0]?.[0].portName).toBe('test-mtc'); expect(recovered.mock.calls[0]?.[0].durationMs).toBeGreaterThanOrEqual(0);
-    native.emit!({ midiSent: 41, midiError: 6, qpc100ns: '5' });
-    native.emit!({ midiSent: 45, midiError: 0, qpc100ns: '6' });
-    expect(service.status).toMatchObject({ mtcError: null, mtcSent: 45 });
+    expect(service.status?.mtcSent).toBeGreaterThan(41);
     expect(f.error).toHaveBeenCalledOnce();
+  } finally { await service.close(); }
+});
+
+it('刚出现的端口第一次打开后发送失败：不算恢复、不另报错误，下一秒重新打开并确认发送后才恢复', async () => {
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: MtcRecoveryReport) => void>();
+  const service = new NativePlayerService({ ...f.options, recovered });
+  try {
+    await service.prepare(f.request);
+    await service.control({ ...envelope, generation: 2, kind: 'play' });
+    f.devices.midiOutputs = [];
+    native.emit!({ midiSent: 41, midiError: 6, qpc100ns: '3' });
+    expect(f.error).toHaveBeenCalledOnce();
+    // Seen on the dev PC: a port Windows is still creating opens, then its first message fails (error 1).
+    native.reopenResults = [{ result: 0, sendError: 1 }, { result: 0 }];
+    f.devices.midiOutputs = [{ id: 5, name: 'test-mtc' }];
+    await vi.waitFor(() => expect(recovered).toHaveBeenCalledOnce(), { timeout: 4000 });
+    expect(native.commands.mock.calls.filter(([command]) => command.kind === 'reopen-mtc')).toHaveLength(2);
+    const messages = f.error.mock.calls.map(([message]) => String(message));
+    expect(messages).toHaveLength(2); expect(messages[0]).toContain('接口已断开（错误码 6）'); expect(messages[1]).toContain('端口已打开但发送失败（错误码 1）');
+    expect(service.status).toMatchObject({ status: 'playing', mtcPortName: 'test-mtc', mtcError: null });
   } finally { await service.close(); }
 });
 

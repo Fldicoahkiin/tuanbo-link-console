@@ -40,7 +40,9 @@ export const nativePlaybackEventSchema = z.discriminatedUnion('kind', [
     sampleRate: z.number().int().nonnegative(), underruns: z.number().int().nonnegative(),
     midiSent: z.number().int().nonnegative(), midiError: z.number().int(),
     // Stale clock (-2) or late worker (-1): nothing sent late, then a Full Frame relocates.
-    midiInterruptions: z.number().int().nonnegative(), midiInterruption: z.number().int(), audioError: z.number().int(),
+    midiInterruptions: z.number().int().nonnegative(), midiInterruption: z.number().int(),
+    // Timecode port reopens the engine has completed, and the result of the last one (0: opened).
+    midiReopens: z.number().int().nonnegative(), midiReopenResult: z.number().int(), audioError: z.number().int(),
     maxMidiLatenessMs: z.number().finite().nonnegative(), bufferedFrames: z.number().int().nonnegative(),
     midiTiming: z.object({ wakeGapMs: z.number().finite().nonnegative(), midiLockWaitMs: z.number().finite().nonnegative(),
       audioLockWaitMs: z.number().finite().nonnegative(), sendMs: z.number().finite().nonnegative() }).strict().optional(),

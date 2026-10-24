@@ -5,6 +5,8 @@ type Dependencies = {
   list(): Promise<readonly Output[]>;
   /** Opens the port at this index again; the opened handle must carry this name. */
   reopen(device: number, name: string): Promise<void>;
+  /** Only while the song plays: a reopened port is confirmed by the timecode it then sends. */
+  active(): boolean;
   recovered(report: MtcRecoveryReport): void;
   /** A change worth a log line: a non-unique name or a failed reopen, once per distinct message. */
   log(message: string): void;
@@ -15,7 +17,8 @@ type Watch = { portName: string; since: number; message: string | null; timer: R
 /**
  * Waits for the configured timecode port to come back after it was lost, then opens it again
  * (authorised 2026-10-24). Only the same port name, and only when exactly one output carries it;
- * never another port. One check right away, then one per second, never two at once.
+ * never another port. One check right away, then one per second, never two at once; while the
+ * song is paused it only waits.
  */
 export class MtcPortRecovery {
   private watch: Watch | null = null;
@@ -40,6 +43,7 @@ export class MtcPortRecovery {
   private async check(watch: Watch): Promise<void> {
     watch.timer = null;
     try {
+      if (!this.dependencies.active()) { this.next(watch); return; }
       const matches = (await this.dependencies.list()).filter(output => output.name === watch.portName);
       if (this.watch !== watch) return;
       if (matches.length === 1) {
@@ -56,6 +60,9 @@ export class MtcPortRecovery {
       if (this.watch !== watch) return;
       this.note(watch, `时间码端口恢复未成功（${watch.portName}）：${error instanceof Error ? error.message : String(error)}；继续每秒检查`);
     }
+    this.next(watch);
+  }
+  private next(watch: Watch): void {
     if (this.watch === watch) watch.timer = setTimeout(() => { void this.check(watch); }, this.dependencies.intervalMs ?? 1000);
   }
 

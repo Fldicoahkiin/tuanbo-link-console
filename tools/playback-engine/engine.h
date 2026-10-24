@@ -38,6 +38,12 @@ typedef struct {
   UINT32 fps, midi_generation, midi_sent, midi_epoch, midi_interruptions;
   int32_t midi_error, midi_worker_error, midi_interruption;
   BOOL midi_suspended;
+  /* Timecode port reopen (op 9): the command thread records it, the MIDI worker carries it out without
+   * holding midi_lock, because opening a port Windows is still creating blocks for seconds. While
+   * reopen_running, only the worker touches midi and midi_header. */
+  UINT reopen_device; wchar_t reopen_name[32];
+  BOOL reopen_requested, reopen_running;
+  UINT32 reopen_ticket, midi_reopens; int32_t midi_reopen_result;
   double max_late;
   double midi_wake_gap_ms, midi_lock_wait_ms, midi_audio_lock_wait_ms, midi_send_ms;
 } Engine;
@@ -58,6 +64,6 @@ DWORD WINAPI telemetry_worker(void *unused);
 DWORD WINAPI midi_worker(void *unused);
 MMRESULT midi_prepare(UINT device, UINT fps);
 MMRESULT midi_release(void);
-MMRESULT midi_reopen(UINT device, const wchar_t *name);
+HRESULT midi_request_reopen(UINT device, const wchar_t *name);
 void acknowledge(UINT32 request, UINT32 generation, int32_t code);
 #endif
