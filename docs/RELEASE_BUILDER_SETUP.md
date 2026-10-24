@@ -25,6 +25,7 @@ powershell -ExecutionPolicy Bypass -File D:\tblink-builder-setup\setup-release-b
 | `D:\tblink-release-signing\release-2026-10-a.pem` | 发布签名私钥（日常） | 放进 GitHub secret；CI 用 secret 签名成功后删除本机副本（第 6 步） |
 | `D:\tblink-release-signing\release-2026-10-b.pem` | 发布签名私钥（备用） | 拷到 U 盘离线保存后删除本机副本（第 1 步） |
 | `D:\tblink-release-signing\upload\` | 上传到服务器的 SSH 私钥和 known_hosts | 留在构建机，只给 runner 账号读 |
+| `C:\Program Files\Git\usr\bin\ssh.exe` | Git for Windows 自带的 OpenSSH（2026-10-24 是 10.3p1），上传用它 | Windows 自带的 `ssh.exe`（9.5p2）发送大量标准输入时，约 100 KB 后就停住，所以工作流用 `TBLINK_RELEASE_SSH` 指定 Git 的这个。卸载或换路径要同步改工作流 |
 
 过渡期两把私钥都在 `D:\tblink-release-signing\`，目录只允许 WYZB 和 SYSTEM 访问。WYZB 是管理员，文件权限挡不住管理员，也挡不住这台机器上以 WYZB 运行的程序，所以要尽快完成第 1、5、6 步。
 

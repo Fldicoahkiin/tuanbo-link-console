@@ -65,8 +65,10 @@ jobs:
       kept: ${{ steps.keep.outputs.kept }}
     env:
       TBLINK_ASSETS: D:\tblink-release-assets
-      TBLINK_RELEASE_UPLOAD_KEY: D:\tblink-release-signing\upload\tblink-release-ed25519
-      TBLINK_RELEASE_KNOWN_HOSTS: D:\tblink-release-signing\upload\known_hosts
+      TBLINK_RELEASE_UPLOAD_KEY: D:/tblink-release-signing/upload/tblink-release-ed25519
+      TBLINK_RELEASE_KNOWN_HOSTS: D:/tblink-release-signing/upload/known_hosts
+      # Windows' own ssh.exe stops sending a large stdin after about 100 KB; Git for Windows' sends it through.
+      TBLINK_RELEASE_SSH: C:\Program Files\Git\usr\bin\ssh.exe
     steps:
       - name: Wait until no GUI test holds the shared machine
         shell: pwsh
