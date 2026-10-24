@@ -20,6 +20,15 @@ if (!manifest.releaseSignature) throw new Error('未签名的候选包只能用�
 const installer = `Tuanbo-Link-Console-${manifest.version}-x64.exe`;
 const files = ['release-manifest.json', 'latest.yml', installer, `${installer}.blockmap`];
 
+// A re-run after the server published this build uploads nothing: the server would stage it and never publish it again.
+const feedUrl = new URL(JSON.parse(readFileSync(join(process.cwd(), 'apps/desktop/package.json'), 'utf8')).build.publish.url);
+const live = await fetch(new URL('latest.yml', feedUrl), { cache: 'no-store', signal: AbortSignal.timeout(20_000) });
+if (!live.ok) throw new Error(`读取线上更新源失败：HTTP ${live.status}`);
+if (Buffer.from(await live.arrayBuffer()).equals(readFileSync(join(dist, 'latest.yml')))) {
+  console.log(`更新源已经在提供这次构建的 ${manifest.version}，不再上传`);
+  process.exit(0);
+}
+
 // The archive is written to disk first and handed to ssh as its stdin file, the way the 0.5.0 upload went through.
 const archive = join(dist, 'upload.tar');
 const tar = spawnSync('tar', ['-cf', archive, '-C', dist, ...files], { encoding: 'utf8', windowsHide: true, timeout: 10 * 60 * 1000 });

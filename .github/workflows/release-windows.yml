@@ -1,12 +1,14 @@
 name: Release Windows
 
-# A pushed vX.Y.Z tag is the release: nothing after it needs a person. Checks run on a GitHub-hosted runner. The
-# installer is built, signed with the release key and uploaded to the server's staging area on the domestic
-# self-hosted builder (labels release-builder): the beauty and music-analysis assets are not in git, and hosted
-# runners lack the disk and the bandwidth to China. The server publishes a staged release on its own once it passes
-# every check; the release job then waits for the feed to serve it and publishes the GitHub release. That job reads
-# the build's files from a folder on the builder named by the build job, so it can be re-run on its own: re-running
-# the build would upload a version the server no longer publishes.
+# A pushed vX.Y.Z tag is the release: nothing after it needs a person.
+#   verify    GitHub-hosted: version, typecheck, tests, lint.
+#   build     GitHub-hosted: fetches the pinned beauty and music-analysis assets from their own releases, packages,
+#             signs latest.yml with the release key (secret) and puts the four files into a draft release on the tag.
+#             No Actions artifacts: a private repository has only 500 MB of artifact storage.
+#   transfer  The builder in the office (self-hosted, label release-builder), the only machine with the server's
+#             upload key: downloads the draft, uploads it to the server's staging area, waits until the server has
+#             published it on its own, then publishes the draft marked Latest. When the builder is off the job waits
+#             in the queue; after the queue gives up, re-run only this job (Re-run failed jobs).
 
 on:
   push:
@@ -59,47 +61,18 @@ jobs:
 
   build:
     needs: verify
-    runs-on: [self-hosted, windows, release-builder]
-    timeout-minutes: 150
-    outputs:
-      kept: ${{ steps.keep.outputs.kept }}
-    env:
-      TBLINK_ASSETS: D:\tblink-release-assets
-      TBLINK_RELEASE_UPLOAD_KEY: D:/tblink-release-signing/upload/tblink-release-ed25519
-      TBLINK_RELEASE_KNOWN_HOSTS: D:/tblink-release-signing/upload/known_hosts
-      # Windows' own ssh.exe stops sending a large stdin after about 100 KB; Git for Windows' sends it through.
-      TBLINK_RELEASE_SSH: C:\Program Files\Git\usr\bin\ssh.exe
+    runs-on: windows-latest
+    timeout-minutes: 120
+    # Creates and fills the draft release.
+    permissions:
+      contents: write
     steps:
-      - name: Wait until no GUI test holds the shared machine
-        shell: pwsh
-        run: |
-          # The builder is also the GUI test machine; sessions take C:\dev\claude-tools\locks\*.lock.
-          $locks = 'C:\dev\claude-tools\locks'
-          New-Item -ItemType Directory -Force -Path $locks | Out-Null
-          $deadline = (Get-Date).AddMinutes(60)
-          while (Get-ChildItem -LiteralPath $locks -Filter *.lock) {
-            if ((Get-Date) -gt $deadline) { throw "GUI 锁 60 分钟未释放：$((Get-ChildItem -LiteralPath $locks -Filter *.lock).Name -join ', ')" }
-            Start-Sleep -Seconds 30
-          }
-          Set-Content -LiteralPath (Join-Path $locks 'release-builder.lock') -Value "Release Windows run $env:GITHUB_RUN_ID"
-
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
           fetch-tags: true
 
-      - name: Verify the tagged commit
-        shell: pwsh
-        env:
-          EXPECTED_SHA: ${{ github.sha }}
-        run: |
-          $actual = (git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_SHA) { throw 'Checkout differs from the requested candidate commit' }
-
-      # The runner's service account has no per-user Node; these install the pinned versions in its tool cache.
-      # No GitHub cache: uploading it from China is slower than the local pnpm store.
       - name: Use pnpm 10.33.0
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6 (v6.0.10)
         with:
@@ -109,32 +82,27 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 (v7.1.0)
         with:
           node-version: 25.8.2
-
-      - name: Use the pinned beauty build
-        shell: pwsh
-        run: |
-          # release-pin.json names the exact files; afterPack fails the build if the directory differs.
-          $pin = Get-Content -Raw tools/obs/beauty/release-pin.json | ConvertFrom-Json
-          $source = Join-Path $env:TBLINK_ASSETS ("beauty\" + $pin.outputs.sha256.Substring(0, 12))
-          if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "构建机缺少固定版本的美颜产物：$source" }
-          # A copy, not a junction: the next checkout's clean must never reach the read-only asset directory.
-          robocopy $source artifacts\beauty-prototype /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
-          if ($LASTEXITCODE -ge 8) { throw "复制美颜产物失败：robocopy $LASTEXITCODE" }
-          $global:LASTEXITCODE = 0
-
-      - name: Use the pinned music-analysis runtime
-        shell: pwsh
-        run: |
-          # release-pin.json fixes the runtime, models and licenses; afterPack fails the build if they differ.
-          $pin = Get-Content -Raw tools/music-analysis/release-pin.json | ConvertFrom-Json
-          $source = Join-Path $env:TBLINK_ASSETS ("music-analysis\" + $pin.outputs.sha256.Substring(0, 12))
-          if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "构建机缺少固定版本的音乐分析运行时：$source" }
-          robocopy $source artifacts\music-analysis /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
-          if ($LASTEXITCODE -ge 8) { throw "复制音乐分析运行时失败：robocopy $LASTEXITCODE" }
-          $global:LASTEXITCODE = 0
+          cache: pnpm
 
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Release version is still new
+        # Checked again here: a re-run of this job alone must not rebuild a version the feed already serves.
+        shell: pwsh
+        run: |
+          node scripts/verify-release-version.mjs --release "$env:GITHUB_REF_NAME"
+          if ($LASTEXITCODE -ne 0) { throw 'Release version check failed' }
+
+      - name: Fetch the pinned beauty build and music-analysis runtime
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/build-assets.mjs fetch beauty
+          if ($LASTEXITCODE -ne 0) { throw 'Beauty assets failed' }
+          node scripts/build-assets.mjs fetch music-analysis
+          if ($LASTEXITCODE -ne 0) { throw 'Music-analysis assets failed' }
 
       - name: Package and check
         shell: pwsh
@@ -159,73 +127,52 @@ jobs:
           $manifest = Get-Content -Raw apps/desktop/dist/release-manifest.json | ConvertFrom-Json
           if (-not $manifest.releaseSignature) { throw 'A release build must be signed' }
 
-      - name: Keep the release files for the release job
-        id: keep
+      - name: Put the release into a draft GitHub release
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          # Outside the checkout, which the next job cleans; one folder per run attempt, so a full re-run never
-          # replaces the files of a build the server already published.
-          $kept = Join-Path (Split-Path $env:GITHUB_WORKSPACE) "tblink-releases\$($env:GITHUB_REF_NAME)-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
-          $installer = "Tuanbo-Link-Console-$($env:GITHUB_REF_NAME.Substring(1))-x64.exe"
-          robocopy apps\desktop\dist $kept release-manifest.json latest.yml $installer "$installer.blockmap" /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
-          if ($LASTEXITCODE -ge 8) { throw "保存发布文件失败：robocopy $LASTEXITCODE" }
-          $global:LASTEXITCODE = 0
-          "kept=$kept" >> $env:GITHUB_OUTPUT
+          node scripts/draft-github-release.mjs ($env:GITHUB_REF_NAME.Substring(1)) apps/desktop/dist
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release failed' }
 
-      - name: Upload to the server's staging area
-        run: node scripts/upload-release.mjs
-
-      - name: Keep the release manifest with this run
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 (v7.0.2)
-        with:
-          name: release-manifest-${{ github.sha }}-${{ github.run_id }}
-          if-no-files-found: error
-          retention-days: 90
-          path: |
-            apps/desktop/dist/release-manifest.json
-            apps/desktop/dist/latest.yml
-
-      - name: Release the shared machine
-        if: always()
-        shell: pwsh
-        run: |
-          $lock = 'C:\dev\claude-tools\locks\release-builder.lock'
-          if (Test-Path -LiteralPath $lock) { Remove-Item -LiteralPath $lock }
-
-  release:
+  transfer:
     needs: build
     runs-on: [self-hosted, windows, release-builder]
-    timeout-minutes: 90
-    # Creates the GitHub release on the tag once the server has published the build.
+    timeout-minutes: 120
+    # Reads the draft and publishes it.
     permissions:
       contents: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      TBLINK_RELEASE_UPLOAD_KEY: D:/tblink-release-signing/upload/tblink-release-ed25519
+      TBLINK_RELEASE_KNOWN_HOSTS: D:/tblink-release-signing/upload/known_hosts
+      # Windows' own ssh.exe stops sending a large stdin after about 100 KB; Git for Windows' sends it through.
+      TBLINK_RELEASE_SSH: C:\Program Files\Git\usr\bin\ssh.exe
+      NODE_USE_ENV_PROXY: '1'
+      # The server and the feed are in China and are reached directly; GitHub goes through the builder's proxy (runner .env).
+      NO_PROXY: localhost,127.0.0.1,.jinhefilm.com
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
         with:
           persist-credentials: false
 
-      - name: Use pnpm 10.33.0
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6 (v6.0.10)
-        with:
-          version: 10.33.0
-
       - name: Use Node.js 25.8.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 (v7.1.0)
         with:
           node-version: 25.8.2
 
-      - name: Install exact dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Download the draft release
+        shell: pwsh
+        run: |
+          node scripts/fetch-draft-release.mjs ($env:GITHUB_REF_NAME.Substring(1)) $env:GITHUB_SHA apps/desktop/dist
+          if ($LASTEXITCODE -ne 0) { throw 'Draft download failed' }
+
+      - name: Upload to the server's staging area
+        run: node scripts/upload-release.mjs
 
       - name: Wait for the server to publish, then publish the GitHub release
         shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          KEPT: ${{ needs.build.outputs.kept }}
-          NODE_USE_ENV_PROXY: '1'
-          # The feed is in China and is read directly; GitHub goes through the builder's proxy (runner .env).
-          NO_PROXY: localhost,127.0.0.1,.jinhefilm.com
         run: |
-          node scripts/publish-github-release.mjs ($env:GITHUB_REF_NAME.Substring(1)) $env:KEPT
+          node scripts/publish-github-release.mjs ($env:GITHUB_REF_NAME.Substring(1)) apps/desktop/dist
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release failed' }
