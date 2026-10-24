@@ -25,7 +25,7 @@ powershell -ExecutionPolicy Bypass -File D:\tblink-builder-setup\setup-relay.ps1
 1. 检查：以 WYZB 运行，Node.js、Git for Windows 的 `ssh.exe`、gh、上传身份文件和本机代理 `127.0.0.1:7890` 都在。
 2. gh 没登录 Fldicoahkiin 时，走浏览器登录。**这是唯一要你动手的地方**：浏览器里用 Fldicoahkiin 登录，输入屏幕上的验证码；问「Authenticate Git with your GitHub credentials?」回答 n。
 3. 把 `D:\tblink-release-signing\release-2026-10-a.pem` 从文件直接读进 GitHub secret `TBLINK_RELEASE_SIGNING_KEY`，供云端签名。私钥不经过屏幕和命令行参数。
-4. 把搬运脚本复制到 `D:\tblink-relay\`，安装计划任务 `tblink-relay`：以 WYZB 运行，登录后、联网后各跑一次，之后每 10 分钟一次；上一次还没跑完就跳过这次。窗口隐藏，日志写到 `D:\tblink-relay\logs\relay-<日期>.log`，保留 14 天。
+4. 把搬运脚本复制到 `D:\tblink-relay\`（目录权限只留 WYZB、SYSTEM 和管理员，别的账号改不了计划任务要运行的脚本），安装计划任务 `tblink-relay`：以 WYZB 运行，登录后、联网后各跑一次，之后每 10 分钟一次；上一次还没跑完就跳过这次。窗口隐藏，日志写到 `D:\tblink-relay\logs\relay-<日期>.log`，保留 14 天。
 5. 立刻同步一次，最后打印一行结论，例如「搬运就绪：gh 已登录 Fldicoahkiin、签名 secret 已设置、计划任务已安装、本次同步：没有等待搬运的草稿 release」。
 
 计划任务用 WYZB 的 gh 登录，所以只在 WYZB 登录着的时候运行。开机后 WYZB 登录，任务就会跑一次。

@@ -61,6 +61,9 @@ Done 'TBLINK_RELEASE_SIGNING_KEY 已设置'
 
 Step '安装搬运计划任务'
 New-Item -ItemType Directory -Force -Path "$relay\logs" | Out-Null
+# 计划任务以 WYZB 运行这里的脚本：D 盘根目录默认允许所有登录用户改动，所以去掉继承，只留 WYZB、SYSTEM 和管理员。
+& icacls $relay /inheritance:r /grant:r "${account}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T | Out-Null
+if ($LASTEXITCODE -ne 0) { Stop-Here "设置 $relay 的权限失败" }
 foreach ($file in 'relay-release.mjs', 'github-releases.mjs') { Copy-Item -LiteralPath (Join-Path $here $file) -Destination $relay -Force }
 $ghDirectory = Split-Path $gh
 Set-Content -LiteralPath "$relay\run-relay.cmd" -Encoding ascii -Value @(
