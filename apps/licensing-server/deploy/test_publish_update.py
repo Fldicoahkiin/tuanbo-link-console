@@ -163,12 +163,42 @@ class PublishUpdateTest(unittest.TestCase):
         self.assertEqual(self.status()['rollback'], {'version': '0.5.0', 'issue': None})
         self.assertEqual(self.request(action='rollback', version='0.4.9')['message'], '回滚目标与确认时不一致')
         result = self.request(action='rollback', version='0.5.0')
-        self.assertEqual((result['ok'], result['message']), (True, '更新源已回到 0.5.0'))
+        self.assertEqual((result['ok'], result['message']), (True, '更新源已回到 0.5.0，已移出更新源：0.5.1'))
         self.assertIn(b'version: 0.5.0', (self.feed / 'latest.yml').read_bytes())
+        # The withdrawn version leaves the feed; it is kept in the rollback's receipt.
+        self.assertEqual(self.feed_versions(), ['0.5.0'])
+        self.assertEqual(self.archived('rollback', '0.5.0'), ['Tuanbo-Link-Console-0.5.1-x64.exe', 'Tuanbo-Link-Console-0.5.1-x64.exe.blockmap'])
         # 0.5.0 was the first publish here: nothing earlier to return to.
         self.assertEqual(self.status()['rollback'], {'version': None, 'issue': '没有可以回滚到的上一版'})
         again = self.request(action='rollback', version='0.5.0')
         self.assertEqual((again['ok'], again['message']), (False, '没有可以回滚到的上一版'))
+
+    def feed_versions(self):
+        return sorted({path.name.split('-')[3] for path in self.feed.iterdir() if path.name.startswith('Tuanbo-Link-Console-')})
+
+    def archived(self, kind, version):
+        receipts = [path for path in self.receipts.iterdir() if path.name.endswith(f'-{kind}-{version}')]
+        self.assertEqual(len(receipts), 1)
+        return sorted(path.name for path in (receipts[0] / 'archived').iterdir()) if (receipts[0] / 'archived').exists() else []
+
+    def test_feed_keeps_the_latest_version_and_the_one_it_replaced(self):
+        oldest = release(self.root / 'oldest', '0.4.29', signed=False)
+        self.place_in_feed(oldest, '0.4.29')
+        (self.feed / 'Tuanbo-Link-Console-0.4.29-x64.exe.blockmap').write_bytes(b'old blockmap')
+        self.publish(release(self.root / 'one', '0.5.0'), '0.5.0')
+        # The replaced version stays: one-step rollback needs its installer, differential updates from it its blockmap.
+        self.assertEqual(self.feed_versions(), ['0.4.29', '0.5.0'])
+        self.assertEqual(self.archived('update', '0.5.0'), [])
+        staged = release(self.root / module.STAGING / '0.5.1-aaaaaaaaaaaa', '0.5.1')
+        result = self.request(action='publish', staged='0.5.1-aaaaaaaaaaaa', manifestSha256=module.digest(staged / 'release-manifest.json').hexdigest())
+        self.assertEqual((result['ok'], result['message']), (True, '已发布 0.5.1，已移出更新源：0.4.29'))
+        self.assertEqual(self.feed_versions(), ['0.5.0', '0.5.1'])
+        # Moved, not deleted: the bytes are in the publish receipt, out of public reach.
+        archived = sorted(path for path in self.receipts.glob('*-update-0.5.1/archived/*'))
+        self.assertEqual([path.name for path in archived], ['Tuanbo-Link-Console-0.4.29-x64.exe', 'Tuanbo-Link-Console-0.4.29-x64.exe.blockmap'])
+        self.assertEqual(archived[0].read_bytes(), (oldest / 'Tuanbo-Link-Console-0.4.29-x64.exe').read_bytes())
+        self.assertEqual(archived[1].read_bytes(), b'old blockmap')
+        self.assertEqual(self.status()['rollback'], {'version': '0.5.0', 'issue': None})
 
     def test_accepts_the_signature_the_build_script_writes(self):
         # scripts/sign-release.mjs signs in Node; the payload bytes must match what this script rebuilds.
