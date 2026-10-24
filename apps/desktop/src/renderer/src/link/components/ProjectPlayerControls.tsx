@@ -41,7 +41,8 @@ export function ProjectPlayerTransport({ controller, state, engine, selectedItem
     : !active && !target ? '当前节目及播放列表没有可播放音频' : null;
   useEffect(() => {
     if (!projectId) return;
-    void linkDesktopViewModel.recordLog({ level: unavailable ? 'warning' : 'info', category: 'state', message: unavailable ? `播放按钮不可用：${unavailable}` : '播放按钮已就绪',
+    // Preparing is part of every song start, not a problem to look at.
+    void linkDesktopViewModel.recordLog({ level: unavailable && state.status !== 'preparing' ? 'warning' : 'info', category: 'state', message: unavailable ? `播放按钮不可用：${unavailable}` : '播放按钮已就绪',
       projectId, details: { controllerReady, status: state.status, playlistId: state.playlistId, selectedItemId: selectedId, targetItemId: targetId } }).catch(console.error);
   }, [unavailable, controllerReady, state.status, state.playlistId, selectedId, targetId, projectId]);
   const next = state.endAction === 'loop' ? selected : state.endAction === 'next' ? items[items.findIndex((item) => item.id === state.itemId) + 1] : undefined;
