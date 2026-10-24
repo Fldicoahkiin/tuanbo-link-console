@@ -910,6 +910,12 @@ function registerIpc(
       midiOutputs: async () => (await player().devices('all', true)).midiOutputs,
       preciseSeeking: () => callbacks.configuration().preciseSeeking, changed: state => callbacks.changed(state),
       midiChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); },
+      midiRecovered: (report, itemId) => {
+        void logger.record({ level: 'warning', category: 'device', device: '动作 MIDI', projectId: project.projectId, itemId,
+          message: `动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从下一个动作起照常发送，中断期间跳过 ${report.skippedActions} 个动作，未补发`,
+          details: { portName: report.portName, interruptedAt: report.interruptedAt, recoveredAt: report.recoveredAt, durationMs: report.durationMs, skippedActions: report.skippedActions } })
+          .catch((error: unknown) => console.error('动作 MIDI 恢复日志未能保存', error));
+      },
       obsChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); }, notice,
       api: {
         prepareNativePlayback: value => playbackRequests.prepare(value), controlNativePlayback: value => playbackRequests.control(value),

@@ -1,6 +1,6 @@
 import { NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi } from '@tb/core/link';
 import type { LinkProject, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
-import { NativeMidiHost, type NativeMidiChannelState } from './native-midi-host';
+import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import { NativeLightingOutput } from './native-lighting-output';
 
 type AudioApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePlayback' | 'getNativePlaybackDevices'
@@ -17,6 +17,8 @@ type Dependencies = {
   preciseSeeking(): boolean;
   changed(state: InternalPlayerState): void;
   midiChanged(state: NativeMidiChannelState): void;
+  /** The action MIDI port came back: logged with the outage's start, end and skipped actions. */
+  midiRecovered(report: ActionMidiRecovery, itemId: string): void;
   obsChanged?(state: import('@tb/schema').NativeObsStatus): void;
   notice(message: string, itemId: string | null): void;
 };
@@ -38,7 +40,10 @@ export class NativeProgramHost {
     this.midi = new NativeMidiHost({ audio: () => dependencies.audio(), profile: () => dependencies.configuration().lightingProfile ?? null,
       executable: dependencies.executable, authorize: () => dependencies.authorize(), changed: state => dependencies.midiChanged(state), error,
       fault: (message, itemId) => { dependencies.notice(message, itemId); this.controller.reportFault(message); },
-      outputs: () => dependencies.midiOutputs(), recovered: (message, itemId) => { dependencies.notice(message, itemId); this.controller.reportUnavailable(message); } });
+      outputs: () => dependencies.midiOutputs(), recovered: (report, itemId) => {
+        dependencies.midiRecovered(report, itemId); this.controller.clearFault(report.fault);
+        this.controller.reportUnavailable(`动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）`);
+      } });
     this.lighting = new NativeLightingOutput({ executable: dependencies.executable, network: dependencies.network,
       authorize: () => dependencies.authorize(), error });
     this.controller = new NativeProgramPlayer(project, path, revision, {

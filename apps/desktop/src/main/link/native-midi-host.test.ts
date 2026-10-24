@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
-import { NativeMidiHost, type NativeMidiChannelState } from './native-midi-host';
+import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import { MidiOutputFailure } from './native-midi-output';
 import { frameNumberToTimecode } from '@tb/core/link';
 
@@ -13,13 +13,13 @@ function fixture(cueFrames: readonly number[] = [0]) {
     mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: 1, analysis: null };
   const identity = { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId };
   const ports = { prepare: vi.fn<() => Promise<void>>(() => Promise.resolve()), send: vi.fn<() => Promise<void>>(() => Promise.resolve()), close: vi.fn<() => Promise<void>>(() => Promise.resolve()) };
-  const states: NativeMidiChannelState[] = [], errors: string[] = [], faults: [string, string][] = [], recovered: [string, string][] = [];
+  const states: NativeMidiChannelState[] = [], errors: string[] = [], faults: [string, string][] = [], recovered: [ActionMidiRecovery, string][] = [];
   // The failure callback of the latest port session: what a driver helper reports when its port goes away.
   let failed: (error: Error) => void = () => undefined;
   const outputs = vi.fn<() => Promise<{ id: number; name: string }[]>>(() => Promise.resolve([{ id: 3, name: 'TBLINK CUE' }]));
   const host = new NativeMidiHost({ audio: () => audio, profile: () => null, executable: 'unused', now: () => 1000,
     authorize: () => Promise.resolve(), ports: report => { failed = report; return ports; }, changed: state => states.push(state), error: message => errors.push(message),
-    fault: (message, itemId) => faults.push([message, itemId]), outputs, recovered: (message, itemId) => recovered.push([message, itemId]) });
+    fault: (message, itemId) => faults.push([message, itemId]), outputs, recovered: (report, itemId) => recovered.push([report, itemId]) });
   const observe = (patch: Partial<NativePlayerStatus>, qpc: string | null = '10000000') => { audio = { ...audio, ...patch }; host.observe(audio, qpc); };
   const unplug = (code = 6) => failed(new MidiOutputFailure(`MIDI 输出失败：接口已断开（错误码 ${code}）`, code, 'TBLINK CUE'));
   return { project, host, identity, ports, states, errors, faults, recovered, outputs, observe, unplug, audio: () => audio };
@@ -97,17 +97,19 @@ it('播放中动作 MIDI 接口断开：同一接口回来后从当前位置起�
   await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
   f.outputs.mockResolvedValue([]);
   f.unplug();
-  expect(f.errors).toEqual(['MIDI 输出失败：接口已断开（错误码 6）']); expect(f.host.status?.state).toBe('failed');
+  expect(f.faults).toEqual([['MIDI 输出失败：接口已断开（错误码 6）', 'song']]); expect(f.errors).toEqual([]); expect(f.host.status?.state).toBe('failed');
   // The action at 2 s falls into the outage; the port is back at 2.5 s.
   f.observe({ positionMs: 2010 }); f.observe({ positionMs: 2500 });
   f.outputs.mockResolvedValue([{ id: 4, name: 'TBLINK CUE' }]);
   await vi.waitFor(() => expect(f.recovered).toHaveLength(1), { timeout: 3000 });
-  expect(f.recovered[0]?.[0]).toMatch(/^动作 MIDI 中断 \d+\.\d 秒后已恢复（TBLINK CUE）/); expect(f.recovered[0]?.[1]).toBe('song');
+  // The action at 2 s fell into the outage: one skipped, not sent later.
+  expect(f.recovered[0]?.[0]).toMatchObject({ portName: 'TBLINK CUE', skippedActions: 1, fault: 'MIDI 输出失败：接口已断开（错误码 6）' });
+  expect(f.recovered[0]?.[0].durationMs).toBeGreaterThanOrEqual(0); expect(f.recovered[0]?.[1]).toBe('song');
   expect(f.ports.prepare).toHaveBeenCalledTimes(2); expect(f.host.status?.state).toBe('ready');
   f.observe({ positionMs: 4010 });
   await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
   expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 1090);
-  expect(f.faults).toEqual([]); expect(f.errors).toHaveLength(1);
+  expect(f.faults).toHaveLength(1); expect(f.errors).toEqual([]);
   await f.host.stop();
 });
 
@@ -120,11 +122,12 @@ it('重新打开后首个动作发送失败：继续等待同一接口并再次�
   // Seen on the dev PC: a port Windows is still creating opens, then its first message fails (error 1).
   f.ports.send.mockImplementationOnce(() => { f.unplug(1); return Promise.reject(new Error('MIDI 输出失败：Windows 错误 1')); });
   f.observe({ positionMs: 2010 }); await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
-  expect(f.errors[1]).toContain('动作 MIDI 端口重新打开后首个动作未发出（TBLINK CUE，错误码 1）');
+  expect(f.faults[1]?.[0]).toContain('动作 MIDI 端口重新打开后首个动作未发出（TBLINK CUE，错误码 1）');
   f.observe({ positionMs: 2500 });
   await vi.waitFor(() => expect(f.recovered).toHaveLength(2), { timeout: 3000 });
   f.observe({ positionMs: 4010 }); await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(3));
-  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 1090); expect(f.errors).toHaveLength(2);
+  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 1090); expect(f.faults).toHaveLength(2); expect(f.errors).toEqual([]);
+  expect(f.recovered[1]?.[0].fault).toContain('首个动作未发出');
   await f.host.stop();
 });
 

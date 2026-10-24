@@ -2,9 +2,11 @@ import { MidiProgramSession } from '@tb/core/link';
 import type { IntegrationProfile, LinkProject, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
 import { NativeMidiPorts } from './native-midi-ports';
 import { MidiOutputFailure } from './native-midi-output';
-import { MidiPortRecovery } from './midi-port-recovery';
+import { MidiPortRecovery, type PortRecoveryReport } from './midi-port-recovery';
 
 type Identity = Pick<NativePlayerStatus, 'sessionId' | 'generation' | 'itemId'>;
+/** The action MIDI port came back: the outage, how many actions it skipped, and the red message it showed. */
+export type ActionMidiRecovery = PortRecoveryReport & { skippedActions: number; fault: string };
 export type NativeMidiChannelState = Identity & { state: 'preparing' | 'ready' | 'running' | 'stopped' | 'failed'; reason: string | null;
   currentCueId: string | null };
 type Ports = Pick<NativeMidiPorts, 'prepare' | 'send' | 'close'>;
@@ -20,12 +22,14 @@ type Dependencies = {
   /** Windows MIDI outputs as listed now; a failed listing is checked again on the next call. */
   outputs(): Promise<readonly { id: number; name: string }[]>;
   /** The lost port is back and this song's later actions go out again. */
-  recovered(message: string, itemId: string): void;
+  recovered(report: ActionMidiRecovery, itemId: string): void;
   now?: () => number;
   ports?: (failed: (error: Error) => void) => Ports;
 };
-/** `resumed`: opened after its port came back; `sent`: an action of it went out. */
-type Entry = { identity: Identity; session: MidiProgramSession; state: NativeMidiChannelState; resumed: boolean; sent: boolean };
+/** `resumed`: opened after its port came back, skipping `skipped` actions; `sent`: an action of it went out. */
+type Entry = { identity: Identity; session: MidiProgramSession; state: NativeMidiChannelState; resumed: boolean; skipped: number; sent: boolean };
+/** The playing song whose port was lost: its failed session (where the outage began) and the red message shown. */
+type Lost = { project: LinkProject; identity: Identity; session: MidiProgramSession; fault: string };
 
 /** Program-owned generic MIDI. Receives only NativePlayerService observations,
  * never renderer positions or an independent playback timer. */
@@ -35,15 +39,15 @@ export class NativeMidiHost {
   private stopped: Promise<void> = Promise.resolve();
   private readonly now: () => number;
   /** The playing song whose port was lost; its actions continue once the same port is back (authorised 2026-10-24). */
-  private lost: { project: LinkProject; identity: Identity } | null = null;
+  private lost: Lost | null = null;
   private readonly recovery: MidiPortRecovery;
   constructor(private readonly dependencies: Dependencies) {
     this.now = dependencies.now ?? (() => Number(process.hrtime.bigint()) / 1e6);
     this.recovery = new MidiPortRecovery({ subject: '动作 MIDI 端口', list: () => dependencies.outputs(), reopen: () => this.resume(),
       active: () => this.resumable() !== null,
       recovered: report => {
-        const itemId = this.lost?.identity.itemId; this.lost = null;
-        if (itemId) dependencies.recovered(`动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从下一个动作起照常发送，中断期间的动作未补发`, itemId);
+        const lost = this.lost; this.lost = null;
+        if (lost) dependencies.recovered({ ...report, skippedActions: this.entry?.skipped ?? 0, fault: lost.fault }, lost.identity.itemId);
       }, log: message => dependencies.error(message) });
   }
   get status(): NativeMidiChannelState | null { return this.entry?.state ?? null; }
@@ -55,18 +59,20 @@ export class NativeMidiHost {
     try { await stopped; } catch (error) { this.dependencies.error(`上一首 MIDI 会话关闭失败：${toError(error).message}`); }
     if (epoch !== this.epoch) throw new Error('后台 MIDI 准备已被更新操作取消');
     const audio = this.admit(identity);
-    await this.open(project, identity, audio.positionMs, epoch, false);
+    await this.open(project, identity, audio.positionMs, epoch, null);
   }
 
-  private async open(project: LinkProject, identity: Identity, positionMs: number, epoch: number, resumed: boolean): Promise<void> {
+  /** `outage`: the failed session this one resumes after its port came back. */
+  private async open(project: LinkProject, identity: Identity, positionMs: number, epoch: number, outage: MidiProgramSession | null): Promise<void> {
     let entry: Entry | null = null;
     const failed = (error: Error) => {
       if (!entry || this.entry !== entry) { this.dependencies.error(`旧 MIDI 会话：${error.message}`); return; }
       // The port is gone, or a port just opened again failed before its first action (Windows was
       // still creating it): wait for the same port again. Either way the rest of this attempt is off.
       if (error instanceof MidiOutputFailure && (error.portGone || entry.resumed && !entry.sent)) {
-        this.dependencies.error(entry.resumed && !entry.sent ? `动作 MIDI 端口重新打开后首个动作未发出（${error.portName}，错误码 ${error.code}）；等待该接口可用后继续，未发出的动作不补发` : error.message);
-        this.lost = { project, identity }; this.recovery.lost(error.portName);
+        const fault = entry.resumed && !entry.sent ? `动作 MIDI 端口重新打开后首个动作未发出（${error.portName}，错误码 ${error.code}）；等待该接口可用后继续，未发出的动作不补发` : error.message;
+        this.dependencies.fault(fault, identity.itemId);
+        this.lost = { project, identity, session: entry.session, fault }; this.recovery.lost(error.portName);
       }
       entry.session.abort(error.message);
     };
@@ -85,14 +91,14 @@ export class NativeMidiHost {
       }
     });
     const state: NativeMidiChannelState = { ...identity, state: 'preparing', reason: null, currentCueId: null };
-    const opened: Entry = { identity, session, state, resumed, sent: false }; entry = opened; this.entry = opened; this.dependencies.changed(state);
+    const opened: Entry = { identity, session, state, resumed: outage !== null, skipped: 0, sent: false }; entry = opened; this.entry = opened; this.dependencies.changed(state);
     try {
       await session.prepare(positionMs);
       if (epoch !== this.epoch || this.entry !== opened) throw new Error('后台 MIDI 准备已取消');
-      if (resumed) {
+      if (outage) {
         const audio = this.resumable();
         if (!audio) throw new Error('播放已暂停或停止，继续播放后再恢复');
-        session.resumeFrom(audio.positionMs);
+        opened.skipped = session.resumeFrom(audio.positionMs, outage.outageStartMs);
       } else this.admit(identity);
       if (session.error) throw session.error;
       this.patch({ state: 'ready' });
@@ -156,7 +162,7 @@ export class NativeMidiHost {
     // A failed session closes itself and reports its own close failure.
     if (previous) await Promise.allSettled([previous.session.close()]);
     if (epoch !== this.epoch) throw new Error('后台 MIDI 准备已被更新操作取消');
-    await this.open(lost.project, { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId }, audio.positionMs, epoch, true);
+    await this.open(lost.project, { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId }, audio.positionMs, epoch, lost.session);
   }
   private admit(identity: Identity): NativePlayerStatus {
     const audio = this.dependencies.audio();
