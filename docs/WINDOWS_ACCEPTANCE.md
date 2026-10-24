@@ -230,6 +230,8 @@
 
 构建 `1401629`（master，含 9b3daa3）。开发机 DESKTOP-2C8JIC2，真实 OBS，原生播放引擎（WASAPI 默认输出，48 kHz）。时间码发到 loopMIDI 测试口 `TBLINK SOAK MTC`，同一口的输入端用 WinMM 接收并逐帧解码；onPC 不参与。工程是验收工程的副本，三首歌循环（1 灯光 + 机位 + 387 画面 / 2 透明叠加 + 显示来源 / 3 纯音频），曲尾接下一首，音量 10%。同一应用实例连续运行 288 分钟，累计播放 180 分钟：每段持 GUI 锁连播 30 分钟，段间停播、断开 OBS、最小化并释放锁 10 分钟（其他会话占锁时等待，共约 38 分钟）。
 
+复跑：[tools/longrun/run-longrun.ps1](../tools/longrun/run-longrun.ps1)（参数、工程副本和分段让锁的用法写在脚本开头注释），结束后用 `node tools/longrun/summary.mjs <输出目录>\run` 汇总。
+
 ### 时间段
 
 | 段 | 时间（分钟） | 播放次数 | 欠载 | 时间码中断 / 错误 | 时间码偏差 ms 平均（范围） | 主进程 MB | 界面进程 MB | 引擎句柄 | OBS MB |
