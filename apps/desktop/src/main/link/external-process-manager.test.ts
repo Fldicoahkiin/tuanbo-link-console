@@ -9,6 +9,26 @@ import {
 } from './external-process-manager';
 
 describe('ExternalProcessManager', () => {
+  it('同名程序以管理员身份运行、路径读不到时明确说明，不再启动第二个', async () => {
+    const tools = fakeTools([]);
+    tools.unverifiablePids = [20980];
+    const manager = new ExternalProcessManager(tools, idleObs());
+    await expect(manager.start('obs', { ...configuration(), executablePath: 'C:\\OBS\\bin\\64bit\\obs64.exe' })).rejects.toThrow('以管理员身份运行');
+    expect(tools.launchCount).toBe(0);
+    expect(manager.getSnapshot('obs')).toMatchObject({ status: 'error', pid: null, owned: false });
+    expect(manager.getSnapshot('obs').error).toContain('PID 20980');
+    expect(manager.getSnapshot('obs').error).toContain('obs64.exe');
+  });
+  it('程序被设为总是以管理员身份运行时，启动失败说明怎么取消，不提权', async () => {
+    const tools = fakeTools([]);
+    tools.launch = () => {
+      queueMicrotask(() => tools.child.emit('error', Object.assign(new Error('spawn C:\\OBS\\obs64.exe EACCES'), { code: 'EACCES' })));
+      return tools.child as unknown as ChildProcess;
+    };
+    const manager = new ExternalProcessManager(tools, idleObs());
+    await expect(manager.start('obs', configuration())).rejects.toThrow('以管理员身份运行此程序');
+    expect(manager.getSnapshot('obs').error).not.toContain('EACCES');
+  });
   it('残留 onPC 没有主窗口时明确报错，不误报打开成功或重复启动', async () => {
     const tools = fakeTools([{ ...processInfo(100), windowTitle: '' }]);
     const manager = new ExternalProcessManager(tools, idleObs());
@@ -192,6 +212,7 @@ type FakeTools = ExternalProcessTools & {
   closeAccepted: boolean;
   detectedBeforeLaunch: DetectedProcess[];
   launchCount: number;
+  unverifiablePids: number[];
 };
 
 function fakeTools(initial: DetectedProcess[]): FakeTools {
@@ -204,7 +225,9 @@ function fakeTools(initial: DetectedProcess[]): FakeTools {
     detectedBeforeLaunch: initial,
     closeAccepted: false,
     launchCount: 0,
+    unverifiablePids: [],
     findByExecutable: () => Promise.resolve(launched ? result.detectedAfterLaunch : result.detectedBeforeLaunch),
+    findUnverifiable: () => Promise.resolve(result.unverifiablePids),
     launch: () => {
       launched = true;
       result.launchCount += 1;

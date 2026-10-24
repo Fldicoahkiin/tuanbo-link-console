@@ -1860,6 +1860,8 @@ function registerIpc(
       const running = process.pid !== null;
       if (running && process.executablePath) profile = { ...profile, obs: { ...profile.obs, executablePath: process.executablePath, workingDirectory: dirname(process.executablePath) } };
       if (!profile.obs.executablePath) throw new Error('尚未找到本机 OBS，请先安装 OBS 或选择程序位置');
+      // Before touching its configuration or plugin: an OBS we cannot inspect must not get a second instance.
+      if (!running) await processManager.assertNoUnverifiableInstance('obs', profile.obs.executablePath);
       const commandLine = process.pid !== null && process.executablePath && process.startTime
         ? await readObsCommandLine({ pid: process.pid, executablePath: process.executablePath, startTime: process.startTime }) : '';
       let targetPid = process.pid;
@@ -1915,7 +1917,10 @@ function registerIpc(
     },
     process: async () => {
       const profile = await requireProfile(profileStore);
-      return processManager.refresh('obs', processConfiguration(profile, 'obs'));
+      const snapshot = await processManager.refresh('obs', processConfiguration(profile, 'obs'));
+      // Plugin maintenance treats "not found" as "not running"; an elevated OBS would still hold the DLL.
+      if (snapshot.pid === null && profile.obs.executablePath) await processManager.assertNoUnverifiableInstance('obs', profile.obs.executablePath);
+      return snapshot;
     },
     confirm: async (kind, reason) => {
       const decision = await dialog.showMessageBox(mainWindow!, {
@@ -2030,6 +2035,7 @@ function registerIpc(
     if (id === 'obs') {
       const current = await processManager.refresh(id, processConfiguration(profile, id));
       if (current.pid !== null) return current;
+      if (profile.obs.executablePath) await processManager.assertNoUnverifiableInstance('obs', profile.obs.executablePath);
       try { await bridgeSetup.prepare(); }
       catch (error) {
         await logger.record({ level: 'warning', category: 'device', device: 'obs', result: 'failed',

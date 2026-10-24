@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
+import { z } from 'zod';
 import { windowsPowerShellExecutable } from './windows-powershell';
 
 export type ExternalApplicationId = 'obs' | 'p1' | 'ma2' | 'ma3d';
@@ -38,6 +39,8 @@ export type ManagedProcessSnapshot = {
 
 export type ExternalProcessTools = {
   findByExecutable(executablePath: string): Promise<DetectedProcess[]>;
+  /** PIDs in this Windows session with the same file name whose path Windows hides from us, usually because they run as administrator. */
+  findUnverifiable(executablePath: string): Promise<number[]>;
   launch(configuration: ExternalProcessConfiguration): ChildProcess;
   requestClose(pid: number, identity?: Pick<ManagedProcessSnapshot, 'executablePath' | 'startTime'>): Promise<boolean>;
 };
@@ -98,6 +101,7 @@ export class ExternalProcessManager {
       this.setEntry(id, { ...current.snapshot, status: 'error', error: message }, current.child);
       throw new Error(message);
     }
+    await this.assertNoUnverifiableInstance(id, executablePath);
 
     this.setEntry(id, {
       ...emptySnapshot(id),
@@ -109,7 +113,7 @@ export class ExternalProcessManager {
     let child: ChildProcess | null = null;
     try {
       child = this.tools.launch({ ...configuration, executablePath });
-      await waitForSpawn(child, id);
+      await waitForSpawn(child, id, executablePath);
       if (child.pid === undefined) throw new Error(`${id} 启动后未返回 PID`);
       const pid = child.pid;
       this.attachExitListener(id, child, pid);
@@ -131,6 +135,17 @@ export class ExternalProcessManager {
       }, child);
       throw error;
     }
+  }
+
+  /** Call before launching or maintaining a program that was not found by path. An instance we cannot
+   * inspect can be neither verified nor safely duplicated, so stop with the reason instead. */
+  async assertNoUnverifiableInstance(id: ExternalApplicationId, executablePath: string): Promise<void> {
+    const path = resolve(executablePath);
+    const pids = await this.tools.findUnverifiable(path);
+    if (pids.length === 0) return;
+    const message = unverifiableInstanceMessage(id, path, pids);
+    this.setEntry(id, { ...emptySnapshot(id), executablePath: path, status: 'error', error: message }, null);
+    throw new Error(message);
   }
 
   async refresh(
@@ -291,6 +306,19 @@ export class WindowsProcessTools implements ExternalProcessTools {
     return parseDetectedProcesses(JSON.parse(output));
   }
 
+  async findUnverifiable(executablePath: string): Promise<number[]> {
+    const encodedPath = Buffer.from(resolve(executablePath), 'utf16le').toString('base64');
+    // A non-elevated caller sees elevated processes without ExecutablePath. Other sessions belong to other sign-ins.
+    const script = [
+      `$leaf=[IO.Path]::GetFileName([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodedPath}')))`,
+      '$session=[Diagnostics.Process]::GetCurrentProcess().SessionId',
+      '$ids=@(Get-CimInstance Win32_Process | Where-Object { -not $_.ExecutablePath -and $_.SessionId -eq $session -and [string]::Equals($_.Name,$leaf,[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { [int]$_.ProcessId })',
+      'ConvertTo-Json -Compress -InputObject $ids'
+    ].join(';');
+    const output = await runPowerShell(script, 10_000);
+    return pidListSchema.parse(JSON.parse(output));
+  }
+
   launch(configuration: ExternalProcessConfiguration): ChildProcess {
     const child = spawn(configuration.executablePath, configuration.arguments, {
       cwd: configuration.workingDirectory,
@@ -367,11 +395,26 @@ async function waitForExactProcess(
   throw new Error(`进程 ${pid} 在 ${timeoutMs}ms 内${requireWindow ? '未通过路径核验或主窗口尚未就绪' : '未通过路径核验'}`);
 }
 
-function waitForSpawn(child: ChildProcess, id: ExternalApplicationId): Promise<void> {
+function waitForSpawn(child: ChildProcess, id: ExternalApplicationId, executablePath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     child.once('spawn', resolve);
-    child.once('error', (error) => reject(new Error(`${id} 启动失败：${error.message}`, { cause: error })));
+    child.once('error', (error) => {
+      // Node reports Windows ERROR_ELEVATION_REQUIRED as EACCES; the program is set to always run as administrator.
+      const message = 'code' in error && error.code === 'EACCES'
+        ? `${applicationLabels[id]} 启动失败：Windows 要求以管理员身份启动它，联动台不会提权启动。请在 ${basename(executablePath)} 的“属性 → 兼容性”里取消“以管理员身份运行此程序”（“更改所有用户的设置”里也要取消），然后重新连接。`
+        : `${id} 启动失败：${error.message}`;
+      reject(new Error(message, { cause: error }));
+    });
   });
+}
+
+const applicationLabels: Record<ExternalApplicationId, string> = { obs: 'OBS', p1: 'P1', ma2: 'MA2 onPC', ma3d: 'MA 3D' };
+const pidListSchema = z.array(z.number().int().positive());
+
+function unverifiableInstanceMessage(id: ExternalApplicationId, executablePath: string, pids: readonly number[]): string {
+  const label = applicationLabels[id];
+  const hint = id === 'obs' ? 'OBS 虚拟摄像头不需要管理员身份，可以照常开启。' : '';
+  return `${label} 已在运行（PID ${pids.join('、')}），但 Windows 不允许联动台读取它的程序位置，通常是因为它以管理员身份运行。联动台无法核对这个进程，也不会再启动一个。请在 ${label} 里正常退出，再用普通方式打开 ${basename(executablePath)}；如果快捷方式或程序属性里勾选了“以管理员身份运行”，请先取消，然后重新连接。${hint}`;
 }
 
 async function waitForExit(

@@ -1,5 +1,6 @@
 import { createConnection, type Socket } from 'node:net';
 import { findLocalObsPid } from './obs-editor-preview';
+import { isPipeAccessDenied, obsPipeAccessDeniedMessage } from './obs-bridge-access';
 
 export type ObsLiveFrame = { width: number; height: number; sequence: number; timestampNs: string; rgba: Uint8Array };
 
@@ -40,7 +41,7 @@ export class ObsLivePreview {
       let offset = 0;
       let expected = 32;
       const cleanup = (): void => { clearTimeout(timer); socket.off('data', data); socket.off('error', failed); socket.off('close', closed); };
-      const failed = (error: Error): void => { cleanup(); reject(new Error('code' in error && error.code === 'ENOENT' ? 'OBS 内置预览组件尚未加载。请点击“检查并修复组件”；如果 OBS 使用安全模式或禁用了此插件，请先恢复正常加载。' : `OBS 原生预览不可用：${error.message}`)); };
+      const failed = (error: Error): void => { cleanup(); reject(new Error(previewFailure(error))); };
       const closed = (): void => failed(new Error('预览连接已关闭，请确认 OBS 原生预览插件已加载'));
       const timer = setTimeout(() => failed(new Error('等待 OBS 视频帧超时')), 2000);
       const data = (chunk: Buffer): void => {
@@ -65,6 +66,12 @@ export class ObsLivePreview {
       socket.on('data', data); socket.once('error', failed); socket.once('close', closed);
     });
   }
+}
+
+function previewFailure(error: Error): string {
+  if ('code' in error && error.code === 'ENOENT') return 'OBS 内置预览组件尚未加载。请点击“检查并修复组件”；如果 OBS 使用安全模式或禁用了此插件，请先恢复正常加载。';
+  if (isPipeAccessDenied(error)) return `OBS 原生预览不可用：${obsPipeAccessDeniedMessage}`;
+  return `OBS 原生预览不可用：${error.message}`;
 }
 
 export function parseObsFrameHeader(buffer: Buffer): { width: number; height: number; length: number } {
