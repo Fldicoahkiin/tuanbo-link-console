@@ -174,7 +174,6 @@ import { NativeObsPreloadPool } from './link/native-obs-preload';
 import { createNativeObsOutputs } from './link/native-obs-outputs';
 import { PreparationSteps } from './link/preparation-log';
 import { obsStatusLogEntry } from './link/obs-status-log';
-import { recycleBin } from './link/recycle-bin';
 import { prepareNextObsFiles } from './link/native-obs-files';
 
 /** False in `electron-vite build --mode release`; app.isPackaged only checks the executable name. */
@@ -271,8 +270,6 @@ const p1ProjectService = new P1ProjectService(projectService);
 const mediaMetadataProbe = new MediaMetadataProbe();
 const mediaPreviewService = new MediaPreviewService(projectService);
 const knownSecrets = new Set<string>();
-// Every move to the Recycle Bin goes through here: it refuses outside a desktop session, where Windows would delete for good.
-const moveToRecycleBin = recycleBin(path => shell.trashItem(path));
 
 async function bootstrap(): Promise<void> {
   reportMainProcessErrors(mainProcessErrorReporter(
@@ -297,7 +294,9 @@ async function bootstrap(): Promise<void> {
     details: { appVersion: buildVersion, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
     .catch((error: unknown) => dialog.showErrorBox('运行日志无法写入', error instanceof Error ? error.message : String(error)));
   // Earlier sessions' logs keep within 30 days and 200 MB, moved to the recycle bin like archives; this session's file stays.
-  void logger.pruneSessions(path => moveToRecycleBin(path)).then(async pruned => {
+  // shell.trashItem refuses an item the bin cannot take (a network path: rejected, file kept) and recycled local files from
+  // both a desktop and an SSH session on the dev PC (checked 2026-10-24), so a cleanup does not become a permanent delete.
+  void logger.pruneSessions(path => shell.trashItem(path)).then(async pruned => {
     if (pruned.length === 0) return;
     const bytes = pruned.reduce((sum, entry) => sum + entry.bytes, 0);
     await logger.record({ level: 'info', category: 'system', message: `已把 ${pruned.length} 个旧会话日志（${(bytes / 1024 / 1024).toFixed(1)} MB）移到回收站`,
@@ -1351,7 +1350,7 @@ function registerIpc(
   recoveryCopies = copies;
   // Copies are written and offered only after the startup cleanup, so it never removes one in use.
   // A failed cleanup is logged and retried at the next startup; it never blocks opening or editing.
-  const pruning = copies.prune(path => moveToRecycleBin(path)).then(async pruned => {
+  const pruning = copies.prune(path => shell.trashItem(path)).then(async pruned => {
     for (const entry of pruned) await logger.record({ level: 'info', category: 'system', message: entry.reason === 'orphan' ? `清除残留的恢复副本文件：${entry.file}`
       : `恢复副本${entry.reason === 'expired' ? '超过 30 天' : '超过 20 份'}，已移到回收站：${entry.manifest.name}`, details: entry.reason === 'orphan' ? {} : { projectPath: entry.manifest.projectPath, savedAt: entry.manifest.savedAt } });
   }).catch(async (error: unknown) => {
@@ -1422,7 +1421,7 @@ function registerIpc(
         await logger.record({ level: 'info', category: 'system', message: choice === 'restore' ? `恢复未保存的改动：${offer.name}` : `丢弃恢复副本（已移到回收站）：${offer.name}` });
         return choice;
       },
-      trash: path => moveToRecycleBin(path),
+      trash: path => shell.trashItem(path),
       log: message => { void logger.record({ level: 'info', category: 'system', message }).catch((error: unknown) => console.error('记录恢复副本失败', error)); }
     });
     return content === null ? null : { version: 1 as const, content };
@@ -1432,7 +1431,7 @@ function registerIpc(
   handle('link:project-archives', (_event, payload: unknown) => {
     projectAccess.requireShown(projectArchiveRequestSchema.parse(payload).projectPath);
     return projectArchives(payload, projectDocuments, archiveSettings, path => shell.showItemInFolder(path), async path => {
-      try { await moveToRecycleBin(path); return true; }
+      try { await shell.trashItem(path); return true; }
       catch (error) { await logger.record({ level: 'warning', category: 'system', message: '自动存档超出保留数量，移到回收站未完成', details: { path, error: error instanceof Error ? error.message : String(error) } }); return false; }
     });
   });
