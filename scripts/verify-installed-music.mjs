@@ -10,9 +10,10 @@ import { musicWorkerFiles, verifyMusicRelease } from '../tools/music-analysis/re
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const requireDesktop = createRequire(join(root, 'apps/desktop/package.json'));
 const { chromium, expect } = requireDesktop('@playwright/test');
-if (process.argv.length !== 6) throw new Error('参数：安装后的 EXE、真实音源、时长毫秒、新证据目录');
+if (process.argv.length !== 6 && process.argv.length !== 7) throw new Error('参数：安装后的 EXE、真实音源、时长毫秒、新证据目录[、已激活的用户数据目录]');
 const executable = resolve(process.argv[2]), audio = resolve(process.argv[3]);
 const durationMs = Number(process.argv[4]), directory = resolve(process.argv[5]);
+const userDataDirectory = process.argv[6] ? resolve(process.argv[6]) : undefined;
 assert.ok(Number.isFinite(durationMs) && durationMs > 0);
 await mkdir(directory);
 const resources = join(dirname(executable), 'resources/music-analysis');
@@ -23,7 +24,7 @@ await copyFile(audio, join(directory, '验收音乐.wav'));
 const sha256 = createHash('sha256').update(await readFile(join(directory, '验收音乐.wav'))).digest('hex');
 const source = { assetId: 'music', relativePath: '验收音乐.wav', sha256, durationMs };
 const projectPath = join(directory, '安装版音乐验收.tblink');
-const app = await launchPackagedDesktop({ executable, directory, chromium });
+const app = await launchPackagedDesktop({ executable, directory, chromium, userDataDirectory });
 const reports = [];
 try {
   const page = await app.firstWindow();
