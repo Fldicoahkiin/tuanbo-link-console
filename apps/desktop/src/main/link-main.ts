@@ -652,7 +652,10 @@ function registerIpc(
         },
         measured,
         error: message => { void logger.record({ level: 'error', category: 'device', device: '正式音频', message, result: 'failed' })
-          .catch((error: unknown) => console.error('正式音频日志写入失败', error)); }
+          .catch((error: unknown) => console.error('正式音频日志写入失败', error)); },
+        recovered: report => { void logger.record({ level: 'warning', category: 'device', device: '正式音频', ...(nativePlayer?.status ? { itemId: nativePlayer.status.itemId } : {}),
+          message: `时间码中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从当前播放位置继续发送，中断期间的时间码未补发`,
+          result: 'succeeded', details: report }).catch((error: unknown) => console.error('正式音频日志写入失败', error)); }
       });
     }
     return nativePlayer;

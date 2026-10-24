@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { NativePlaybackCommand, NativePlaybackEvent, NativePlaybackDevices, NativePlayerPrepare } from '@tb/schema';
 import { NativePlayerService } from './native-player-service';
+import type { MtcRecoveryReport } from './mtc-port-recovery';
 
 const native = vi.hoisted(() => ({ devices: vi.fn<(scope: 'all' | 'audio') => Promise<NativePlaybackDevices>>(), commands: vi.fn<(command: NativePlaybackCommand) => void>(),
   emit: null as ((patch: Partial<Extract<NativePlaybackEvent, { kind: 'clock' }>>) => void) | null }));
@@ -46,17 +47,18 @@ function fixture() {
   native.devices.mockImplementation(() => Promise.resolve(devices));
   const error = vi.fn();
   const checkDeviceHealth = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-  const service = new NativePlayerService({ executable: 'test', changed: vi.fn(), error,
+  const options = { executable: 'test', changed: vi.fn(), error,
     checkDeviceHealth,
     resolveAudio: () => 'test.wav', cache: { prepare: () => Promise.resolve({ path: 'test.pcm', sampleRate: 48000 as const,
       baseMs: 0, streaming: false, frames: 480000, durationMs: 10000,
-      completion: Promise.resolve({ ok: true as const }), release: () => Promise.resolve() }) } });
+      completion: Promise.resolve({ ok: true as const }), release: () => Promise.resolve() }) } };
+  const service = new NativePlayerService(options);
   const request: NativePlayerPrepare = { version: 1, sessionId: randomUUID(), generation: 1,
     projectPath: 'C:/test.tblink', audioDeviceId: 'default', midiPortName: 'test-mtc',
     snapshot: { version: 1, projectId: 'test', itemId: 'song', revision: 1,
       audio: { relativePath: 'test.wav', sha256: 'a'.repeat(64), durationMs: 10000 },
       startMs: 500, endMs: 9500, positionMs: 500, offsetMs: 480000, frameRate: 30, sampleRate: 48000, volume: 1 } };
-  return { service, request, error, devices, checkDeviceHealth };
+  return { service, options, request, error, devices, checkDeviceHealth };
 }
 
 it('系统 MIDI 检测失败不启动完整设备查询；配了时间码端口也只播音频并明确报告，恢复后重新准备才发时间码', async () => {
@@ -96,7 +98,7 @@ it('明确关闭 MIDI 的音频播放不进入系统 MIDI 枚举，仍可定位�
   } finally { await f.service.close(); }
 });
 
-it('定位时 MIDI 端口消失只退出时间码通道，音频仍可定位和继续；端口回来不自动恢复', async () => {
+it('定位时 MIDI 端口消失只退出时间码通道，音频仍可定位和继续；同一端口回来后自动重新打开', async () => {
   const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId };
   try {
     await f.service.prepare(f.request);
@@ -105,16 +107,45 @@ it('定位时 MIDI 端口消失只退出时间码通道，音频仍可定位和�
     await f.service.control({ ...envelope, generation: 3, kind: 'seek', positionMs: 2000 });
     expect(f.service.status).toMatchObject({ status: 'paused', positionMs: 2000, offsetMs: 480000,
       audioError: null, mtcPortName: null });
-    expect(f.service.status?.mtcError).toContain('目标已改变');
+    expect(f.service.status?.mtcError).toContain('接口已断开');
     expect(f.error).toHaveBeenCalledOnce();
     const prepared = native.commands.mock.calls.flatMap(([command]) => command.kind === 'prepare' ? [command] : []);
     expect(prepared.at(-1)?.midiDevice).toBeNull();
     f.devices.midiOutputs = [{ id: 2, name: 'test-mtc' }];
+    await vi.waitFor(() => expect(native.commands.mock.calls.map(([command]) => command)).toContainEqual(expect.objectContaining({ kind: 'reopen-mtc', midiDevice: 2, midiPortName: 'test-mtc' })), { timeout: 3000 });
+    expect(f.service.status).toMatchObject({ mtcPortName: 'test-mtc', mtcError: null }); expect(f.service.status?.mtcRecovered?.portName).toBe('test-mtc');
     await f.service.control({ ...envelope, generation: 4, kind: 'play' });
     await f.service.control({ ...envelope, generation: 5, kind: 'seek', positionMs: 3000 });
-    expect(f.service.status).toMatchObject({ status: 'paused', mtcPortName: null, audioError: null });
+    expect(native.commands.mock.calls.flatMap(([command]) => command.kind === 'prepare' ? [command] : []).at(-1)?.midiDevice).toBe(2);
+    expect(f.service.status).toMatchObject({ status: 'paused', mtcPortName: 'test-mtc', mtcError: null, audioError: null });
     expect(f.error).toHaveBeenCalledOnce();
   } finally { await f.service.close(); }
+});
+
+it('播放中时间码接口断开：同一接口回来后重新打开并从当前位置继续，不重新准备音频；旧遥测不再报断开', async () => {
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: MtcRecoveryReport) => void>();
+  const service = new NativePlayerService({ ...f.options, recovered });
+  try {
+    await service.prepare(f.request);
+    await service.control({ ...envelope, generation: 2, kind: 'play' });
+    native.emit!({ midiSent: 40, qpc100ns: '2' });
+    f.devices.midiOutputs = [];
+    native.emit!({ midiSent: 41, midiError: 6, qpc100ns: '3' });
+    native.emit!({ midiSent: 41, midiError: 6, qpc100ns: '4' });
+    expect(service.status?.mtcError).toContain('接口已断开（错误码 6）');
+    expect(f.error).toHaveBeenCalledOnce();
+    const preparedBefore = native.commands.mock.calls.filter(([command]) => command.kind === 'prepare').length;
+    f.devices.midiOutputs = [{ id: 5, name: 'test-mtc' }];
+    await vi.waitFor(() => expect(recovered).toHaveBeenCalledOnce(), { timeout: 3000 });
+    expect(native.commands.mock.calls.filter(([command]) => command.kind === 'reopen-mtc')).toEqual([[expect.objectContaining({ midiDevice: 5, midiPortName: 'test-mtc' })]]);
+    expect(native.commands.mock.calls.filter(([command]) => command.kind === 'prepare').length).toBe(preparedBefore);
+    expect(service.status).toMatchObject({ status: 'playing', mtcPortName: 'test-mtc', mtcError: null });
+    expect(recovered.mock.calls[0]?.[0].portName).toBe('test-mtc'); expect(recovered.mock.calls[0]?.[0].durationMs).toBeGreaterThanOrEqual(0);
+    native.emit!({ midiSent: 41, midiError: 6, qpc100ns: '5' });
+    native.emit!({ midiSent: 45, midiError: 0, qpc100ns: '6' });
+    expect(service.status).toMatchObject({ mtcError: null, mtcSent: 45 });
+    expect(f.error).toHaveBeenCalledOnce();
+  } finally { await service.close(); }
 });
 
 it('定位设备查询未返回时切歌，旧设备缺失结果不能清除新歌曲的 MIDI', async () => {

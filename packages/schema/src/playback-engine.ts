@@ -98,6 +98,9 @@ export const nativePlayerStatusSchema = z.object({ ...playerSession, itemId: z.s
   audioError: z.string().nullable(), mtcError: z.string().nullable(), underruns: z.number().int().nonnegative(),
   /** Timecode interruptions in this song, each followed by a Full Frame relocation. */
   mtcInterruptions: z.number().int().nonnegative(),
+  /** The latest time the timecode port was lost and opened again in this song. */
+  mtcRecovered: z.object({ portName: z.string().min(1).max(256), interruptedAt: z.string().datetime(), recoveredAt: z.string().datetime(),
+    durationMs: z.number().int().nonnegative() }).strict().nullable().optional(),
   gain: z.number().finite().min(0).max(1), analysis: playbackAnalysisSchema.nullable()
 }).strict();
 export type NativePlayerStatus = z.infer<typeof nativePlayerStatusSchema>;

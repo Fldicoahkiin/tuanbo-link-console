@@ -5,6 +5,7 @@ import { NativePlaybackClient } from './native-playback-client';
 import { NativeDeviceQuery } from './native-device-query';
 import { basename } from 'node:path';
 import { NativeAudioPreload } from './native-audio-preload';
+import { MtcPortRecovery, type MtcRecoveryReport } from './mtc-port-recovery';
 
 type Clock = Extract<NativePlaybackEvent, { kind: 'clock' }>;
 type Options = {
@@ -13,6 +14,8 @@ type Options = {
   resolveAudio: (projectPath: string, relativePath: string) => string;
   changed: (status: NativePlayerStatus, qpc100ns: string | null) => void;
   error: (message: string) => void;
+  /** The timecode port came back and timecode resumed. */
+  recovered?: (report: MtcRecoveryReport) => void;
   measured?: (phase: string, elapsedMs: number) => void;
   beforeControl?: (request: NativePlayerControl) => void;
 };
@@ -37,10 +40,18 @@ export class NativePlayerService {
   private readonly preload: NativeAudioPreload;
   private readonly deviceQuery: NativeDeviceQuery;
   private readonly audioDeviceQuery: NativeDeviceQuery;
+  private readonly mtcRecovery: MtcPortRecovery;
+  /** Timecode messages sent when the port was opened again; an older telemetry snapshot cannot report it lost. */
+  private mtcRecoveredSent: number | null = null;
   constructor(private readonly options: Options) {
     this.preload = new NativeAudioPreload(options);
     this.deviceQuery = new NativeDeviceQuery(options.executable);
     this.audioDeviceQuery = new NativeDeviceQuery(options.executable, 'audio');
+    this.mtcRecovery = new MtcPortRecovery({ list: async () => (await this.devices('all')).midiOutputs, reopen: (device, name) => this.reopenMtc(device, name),
+      recovered: report => {
+        this.mtcRecoveredSent = this.state?.mtcSent ?? 0;
+        this.patch({ mtcError: null, mtcPortName: report.portName, mtcRecovered: report }); this.options.recovered?.(report);
+      }, log: message => this.options.error(message) });
   }
 
   get status(): NativePlayerStatus | null { return this.state; }
@@ -68,6 +79,7 @@ export class NativePlayerService {
     if (request.sessionId === this.state?.sessionId && request.generation <= this.state.generation) return Promise.reject(new Error('播放准备属于旧会话代数'));
     const failedClient = this.state?.status === 'error' ? this.client : null;
     const epoch = ++this.epoch;
+    this.mtcRecovery.cancel(); this.mtcRecoveredSent = null;
     this.abort?.abort();
     const abort = new AbortController(); this.abort = abort;
     this.source = request;
@@ -75,7 +87,7 @@ export class NativePlayerService {
     this.state = { version: 1, sessionId: request.sessionId, generation: request.generation,
       itemId: request.snapshot.itemId, status: 'preparing', positionMs: request.snapshot.positionMs, offsetMs: request.snapshot.offsetMs,
       sampleRate: request.snapshot.sampleRate, enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0,
-      audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: request.snapshot.volume, analysis: null };
+      audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, mtcRecovered: null, gain: request.snapshot.volume, analysis: null };
     this.publish();
     const operation = this.pending.then(async () => {
       let measuredAt = performance.now();
@@ -109,7 +121,7 @@ export class NativePlayerService {
         : request.autoDetectMtc ? devices.midiOutputs.filter(device => !/Microsoft GS Wavetable Synth/i.test(device.name)) : [];
       const midiDevice = midi.length === 1 ? midi[0]!.id : null;
       if ((request.midiPortName || request.autoDetectMtc) && midiDevice === null) this.patch({ mtcError: midiUnavailable ? `MIDI 设备不可用：${midiUnavailable}`
-        : midi.length > 1 ? '多个 MIDI 输出无法唯一识别，请选定控台端口' : '选择的 MIDI 时间码输出未连接' });
+        : midi.length > 1 ? '多个 MIDI 输出无法唯一识别，请选定控台端口' : '选择的 MIDI 时间码输出未连接；接口出现后自动开始发送' });
       const warmed = await this.preload.take(request.projectPath, request.snapshot);
       if (epoch !== this.epoch) { await warmed?.release(); throw new Error('音频准备已取消'); }
       const lease = warmed ?? await this.options.cache.prepare({ sourcePath: this.options.resolveAudio(request.projectPath, request.snapshot.audio.relativePath),
@@ -138,6 +150,8 @@ export class NativePlayerService {
       this.patch({ status: 'ready', enginePid: this.client.identity!.pid, engineTitle: this.client.identity!.title,
         mtcPortName: midiDevice === null ? null : midi[0]!.name });
       this.receive(clock);
+      // The configured port is missing: it opens as soon as that same port appears (authorised 2026-10-24).
+      if (request.midiPortName && midiDevice === null) this.mtcRecovery.lost(request.midiPortName);
     });
     return this.finish(operation, epoch);
   }
@@ -147,6 +161,7 @@ export class NativePlayerService {
     const state = this.state;
     if (!state || request.sessionId !== state.sessionId || request.generation < state.generation) return Promise.reject(new Error('播放控制属于已失效会话'));
     if (this.closing) return Promise.reject(new Error('正式音频服务正在关闭'));
+    if (request.kind === 'stop' || request.kind === 'stop-mtc') this.mtcRecovery.cancel();
     if (request.kind === 'stop' && this.stopping?.epoch === this.epoch && this.stopping.sessionId === request.sessionId) {
       this.patch({ generation: request.generation }); return this.stopping.task;
     }
@@ -178,6 +193,7 @@ export class NativePlayerService {
             sampleRate: snapshot.sampleRate, positionMs: request.positionMs }, signal!);
           if (epoch !== this.epoch) { await lease.release(); throw new Error('音频定位已取消'); }
           this.attachLease(lease);
+          this.mtcRecoveredSent = null; // the engine counts timecode messages from zero again
           await this.client.command({ protocol: 4, requestId: ++this.requestId, generation: ++this.nativeGeneration, kind: 'prepare',
             pcmPath: lease.path, pcmBaseMs: lease.baseMs, streaming: lease.streaming, audioDeviceId: this.source!.audioDeviceId, sampleRate: snapshot.sampleRate, frameRate: snapshot.frameRate,
             midiDevice, startMs: request.positionMs, endMs: snapshot.endMs, offsetMs: snapshot.offsetMs, volume: this.volume });
@@ -204,7 +220,7 @@ export class NativePlayerService {
   }
 
   async close(): Promise<void> {
-    this.closing = true; ++this.epoch; this.abort?.abort();
+    this.closing = true; ++this.epoch; this.abort?.abort(); this.mtcRecovery.cancel();
     await this.pending;
     const client = this.client;
     try { await Promise.all([client?.close(), this.deviceQuery.close(), this.audioDeviceQuery.close()]); }
@@ -237,11 +253,25 @@ export class NativePlayerService {
     this.requireEpoch(epoch);
     const ports = devices.midiOutputs.filter(port => port.name === name);
     if (ports.length !== 1) {
-      const message = 'MIDI 时间码目标已改变；该通道停止，音频继续。请明确重新准备节目后恢复时间码';
+      const message = ports.length ? 'MIDI 时间码目标已改变；该通道停止，音频继续。请明确重新准备节目后恢复时间码'
+        : `MIDI 时间码接口已断开（${name}）；同一接口重新连接后自动恢复时间码，音频继续`;
       this.patch({ mtcPortName: null, mtcError: message }); this.options.error(message);
+      if (!ports.length) this.mtcRecovery.lost(name);
       return null;
     }
     return ports[0]!.id;
+  }
+  /** Queued like other commands; a newer transport boundary cancels it and the watch tries again. */
+  private reopenMtc(device: number, name: string): Promise<void> {
+    const epoch = this.epoch;
+    const operation = this.pending.then(async () => {
+      this.requireEpoch(epoch);
+      if (!this.client) throw new Error('正式音频引擎尚未准备');
+      await this.client.command({ protocol: 4, requestId: ++this.requestId, generation: this.nativeGeneration, kind: 'reopen-mtc', midiDevice: device, midiPortName: name });
+      this.requireEpoch(epoch);
+    });
+    this.pending = operation.then(() => undefined, () => undefined);
+    return operation;
   }
   private send(command: { kind: 'play' | 'pause' | 'stop' | 'stop-mtc' } | { kind: 'volume'; volume: number; durationMs?: number | undefined }): Promise<void> {
     if (!this.client) return Promise.reject(new Error('正式音频引擎尚未准备'));
@@ -263,9 +293,15 @@ export class NativePlayerService {
   private receive(clock: Clock): void {
     if (!this.state || clock.generation !== this.nativeGeneration || this.state.status === 'preparing' || this.state.status === 'error') return;
     const audioError = clock.audioError ? `Windows 音频输出失败：${clock.audioError}` : this.state.audioError;
-    const mtcError = clock.midiError ? `Windows MIDI 输出失败${this.state.mtcPortName ? `（${this.state.mtcPortName}）` : ''}：${clock.midiError === 4 ? '端口资源已被占用（错误码 4）；请完全退出 P1 等使用该接口的软件后手动重新播放' : `错误码 ${clock.midiError}，请检查接口和驱动后手动重新播放`}` : this.state.mtcError;
+    // A snapshot taken before the port was opened again still carries the old error.
+    const midiError = this.mtcRecoveredSent !== null && clock.midiSent <= this.mtcRecoveredSent ? 0 : clock.midiError;
+    // 5/6: the interface is gone; the same port is opened again once it is back. 4 (held by another program) is left to the operator.
+    const unplugged = midiError === 5 || midiError === 6;
+    const mtcError = midiError ? `Windows MIDI 输出失败${this.state.mtcPortName ? `（${this.state.mtcPortName}）` : ''}：${midiError === 4 ? '端口资源已被占用（错误码 4）；请完全退出 P1 等使用该接口的软件后手动重新播放'
+      : unplugged ? `接口已断开（错误码 ${midiError}）；同一接口重新连接后自动恢复时间码` : `错误码 ${midiError}，请检查接口和驱动后手动重新播放`}` : this.state.mtcError;
     if (audioError && audioError !== this.state.audioError) this.options.error(audioError);
     if (mtcError && mtcError !== this.state.mtcError) this.options.error(mtcError);
+    if (unplugged && this.state.mtcPortName) this.mtcRecovery.lost(this.state.mtcPortName);
     // The engine restarts its count on every prepare; keep the song's total here.
     const added = clock.midiInterruptions >= this.engineInterruptions ? clock.midiInterruptions - this.engineInterruptions : clock.midiInterruptions;
     this.engineInterruptions = clock.midiInterruptions;
@@ -276,7 +312,7 @@ export class NativePlayerService {
       audioError, mtcError, gain: clock.gain, analysis: clock.analysis }, clock.qpc100ns);
   }
   private fail(error: Error): void {
-    this.options.error(error.message); if (this.state) this.patch({ status: 'error', audioError: error.message });
+    this.mtcRecovery.cancel(); this.options.error(error.message); if (this.state) this.patch({ status: 'error', audioError: error.message });
   }
   private patch(patch: Partial<NativePlayerStatus>, qpc100ns: string | null = null): void { if (this.state) { this.state = { ...this.state, ...patch }; this.publish(qpc100ns); } }
   private publish(qpc100ns: string | null = null): void { if (this.state) this.options.changed(nativePlayerStatusSchema.parse(this.state), qpc100ns); }
