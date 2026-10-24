@@ -11,6 +11,7 @@ export function DiagnosticExports(): JSX.Element {
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [includeMa2, setIncludeMa2] = useState(false);
+  const [days, setDays] = useState<1 | 7 | 30>(7);
   const run = async (kind: 'package' | 'text' | 'folder'): Promise<void> => {
     if (busy) return;
     setBusy(true); setError(''); setMessage('');
@@ -18,7 +19,7 @@ export function DiagnosticExports(): JSX.Element {
       if (kind === 'folder') { await desktop.openLogsFolder(); setMessage('已打开本机日志文件夹。'); return; }
       const project = useDocumentStore.getState().project;
       const integration = useIntegrationStore.getState();
-      const path = kind === 'text' ? await desktop.exportLogs() : await desktop.exportDiagnosticPackage({
+      const path = kind === 'text' ? await desktop.exportLogs({ days }) : await desktop.exportDiagnosticPackage({
         problem: note.trim(),
         project: project ? { projectId: project.projectId, name: project.name, schemaVersion: project.schemaVersion,
           playbackSource: project.playbackSource, programs: project.rundown.length, assets: project.mediaAssets?.length ?? 0 } : null,
@@ -26,7 +27,7 @@ export function DiagnosticExports(): JSX.Element {
         profile: integration.profile ? { acceptedVersions: integration.profile.acceptedVersions,
           internalPlayer: integration.profile.internalPlayer, midiPortProfiles: integration.profile.midiPortProfiles } : null,
         ...(includeMa2 && project?.ma2ReadState ? { ma2ReadState: project.ma2ReadState } : {})
-      });
+      }, { days });
       setMessage(path ? `已导出：${path}` : '已取消导出。');
     } catch (failure) { setError(`操作失败：${failure instanceof Error ? failure.message : String(failure)}`); }
     finally { setBusy(false); }
@@ -39,6 +40,7 @@ export function DiagnosticExports(): JSX.Element {
     <label className="settings-field">问题描述（选填）<textarea rows={2} maxLength={2000} value={note} onChange={event => setNote(event.currentTarget.value)} placeholder="例如：22:10 点击播放后没有出灯，重开后仍能复现" /></label>
     <label><input type="checkbox" checked={includeMa2} onChange={event => setIncludeMa2(event.currentTarget.checked)} /> 包含当前工程已读取的 MA2 原始数据（排查 Cue、配对和转换问题）</label>
     </div></details>
+    <label className="settings-row"><span>导出范围</span><select aria-label="导出范围" value={days} disabled={busy} onChange={event => setDays(event.currentTarget.value === '1' ? 1 : event.currentTarget.value === '30' ? 30 : 7)}><option value="1">最近 1 天</option><option value="7">最近 7 天</option><option value="30">最近 30 天（全部保留的日志）</option></select></label>
     <div className="device-panel-actions">
       <Button className="primary-button" disabled={busy} onClick={() => void run('package')}><Download />{busy ? '正在处理…' : '导出诊断包'}</Button>
       <Button className="secondary-button" disabled={busy} onClick={() => void run('text')}><Download />导出日志</Button>

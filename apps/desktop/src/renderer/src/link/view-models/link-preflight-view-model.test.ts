@@ -8,8 +8,9 @@ import { useDocumentStore } from '../stores/document-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { useRuntimeStore } from '../stores/runtime-store';
 
+const mocks = vi.hoisted(() => ({ recordLog: vi.fn<(entry: { category: string; message: string; details?: Readonly<Record<string, unknown>> }) => Promise<void>>(() => Promise.resolve()) }));
 vi.mock('./link-desktop-view-model', () => ({ linkDesktopViewModel: {
-  recordLog: vi.fn(() => Promise.resolve()),
+  recordLog: mocks.recordLog,
   inspectProjectAssets: vi.fn(() => Promise.resolve({ referenceAudio: { song: { audioAvailable: true, waveformAvailable: true } }, media: {} })),
   getSecurityPreflight: vi.fn(() => Promise.resolve({ credentialDecryptable: true, logRedactionReady: true, error: null })),
   getExternalSnapshots: vi.fn(() => Promise.resolve([])),
@@ -62,4 +63,15 @@ it('其他节目的 MIDI Cue 不阻断当前无 MIDI 动作的节目', async () 
 it('P1 跟随仍必须检测 MIDI，不能套用内部播放的关闭选项', async () => {
   await expect(runDesktopPreflight(setup(), 'live', 'awaiting-external-start', false, { internalMtcOutputEnabled: false })).rejects.toThrow('系统 MIDI 枚举不可用');
   expect(midiRequest).toHaveBeenCalledOnce();
+});
+
+it('预检只记一条汇总（各项结果在详情里），另加阻断项和提示项，不再逐项记录通过的检查', async () => {
+  const recordLog = mocks.recordLog; recordLog.mockClear();
+  const report = await runDesktopPreflight(setup(), 'live', 'internal', false, { internalMtcOutputEnabled: false });
+  const preflight = recordLog.mock.calls.map(([entry]) => entry).filter(entry => entry.category === 'preflight');
+  const notPassed = report.checks.filter(check => check.status !== 'passed');
+  expect(preflight).toHaveLength(1 + notPassed.length);
+  expect(preflight[0]!.message).toMatch(new RegExp(`^开播前检查(通过|未通过)（.*共? ?${report.checks.length} 项`));
+  expect(preflight[0]!.details?.['checks']).toHaveLength(report.checks.length);
+  expect(preflight.some(entry => report.checks.some(check => check.status === 'passed' && entry.message === `${check.label}：${check.detail}`))).toBe(false);
 });

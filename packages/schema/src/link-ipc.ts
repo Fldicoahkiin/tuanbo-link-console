@@ -198,5 +198,8 @@ export const linkLogFilterSchema = z.object({
 });
 
 export const linkDiagnosticContextSchema = z.record(z.string(), z.unknown());
+/** How far back an exported log or diagnostic package reaches; kept logs span at most 30 days. */
+export const linkLogExportRangeSchema = z.object({ days: z.union([z.literal(1), z.literal(7), z.literal(30)]) }).strict();
+export type LinkLogExportRange = z.infer<typeof linkLogExportRangeSchema>;
 
 export type LinkExternalApplicationId = z.infer<typeof linkExternalApplicationIdSchema>;

@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import type { LinkAppInfo, LinkReleaseChannel, LinkUpdateStatus } from '@tb/core/link';
 import { CheckCircle2, CloudDownload, Download, LoaderCircle, RefreshCw, X } from 'lucide-react';
 
-const CHANNEL_LABEL: Record<LinkReleaseChannel, string> = { release: '正式版', test: '测试版', internal: '内测版', development: '开发版' };
+const CHANNEL_LABEL: Record<LinkReleaseChannel, string> = { release: '正式版', development: '开发版' };
 
 type UpdateCenterProps = {
   inline?: boolean;

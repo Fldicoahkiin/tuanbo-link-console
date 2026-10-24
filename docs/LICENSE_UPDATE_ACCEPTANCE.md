@@ -24,7 +24,7 @@ GitHub 手动工作流 `Verify Commercial Windows` 执行：
 
 2026-09-29 本地：29 项授权、存储与更新单元测试通过，10 项浏览器测试通过；修改后的 e2e TypeScript、ESLint、Actionlint 与 diff 检查通过。
 
-[Windows 运行 36467803229](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36467803229) 已通过两项真实主进程授权用例以及正式安装器生命周期检查：
+[Windows 运行 36467803229](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36467803229) 已通过两项真实主进程授权用例以及正式安装器生命周期检查：
 
 - 空白与损坏凭证均停在激活页；六类真实 IPC（输出授权、新建、打开、启动运行、集成探测、检查更新）均被拒绝，导出机器信息仍可用。
 - 已发布的 0.4.29 安装包经过清单来源与 SHA256 验证，当前用户安装、同版本覆盖、无凭证界面、正常关闭、卸载、安装目录／进程／注册表无残留均通过。
@@ -32,7 +32,7 @@ GitHub 手动工作流 `Verify Commercial Windows` 执行：
 
 验收脚本修复包括原生窗口标题中的进程 ID 断言，以及将更新探针注册为 ready 后回调、增加阶段与下载进度日志。Electron 在 ESM 入口加载完成后才报告应用代码加载完成，依据 [Electron 39.8.10 启动实现](https://github.com/electron/electron/blob/v39.8.10/lib/browser/init.ts) 和 [ESM 说明](https://www.electronjs.org/docs/latest/tutorial/esm)。这些修改不改变产品更新器或授权代码。
 
-修复后运行：[36469197729](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36469197729)，测试提交 `6af6679`，整条流水线 **success**：
+修复后运行：[36469197729](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36469197729)，测试提交 `6af6679`，整条流水线 **success**：
 
 | 检查 | 结果 |
 |---|---|
@@ -52,11 +52,11 @@ GitHub 手动工作流 `Verify Commercial Windows` 执行：
 
 已核对 0.4.27 仍指向旧私有 GitHub 更新仓库。首次进入公司 HTTPS 更新链路采用官网安装器覆盖迁移，具体操作见 [旧安装迁移](SOFTWARE_UPDATES.md#旧安装迁移与故障)。这不是应用内 `quitAndInstall` 的替代验收；两种路径分别记录。
 
-首次运行 [36657024347](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36657024347) 的两个正式安装包来源校验、0.4.27 → 0.4.29 版本检查、同版本覆盖、缺少／损坏凭证的正式安装版激活页检查均已走过；最终卸载残留断言失败，不能将整条流程记为通过。该次真实更新器 HTTPS 完整下载和损坏包拒绝步骤仍通过。
+首次运行 [36657024347](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36657024347) 的两个正式安装包来源校验、0.4.27 → 0.4.29 版本检查、同版本覆盖、缺少／损坏凭证的正式安装版激活页检查均已走过；最终卸载残留断言失败，不能将整条流程记为通过。该次真实更新器 HTTPS 完整下载和损坏包拒绝步骤仍通过。
 
 失败位置为卸载启动进程退出三秒后仍有一个卸载注册项。脚本此前等待的是 NSIS 启动进程，无法确认实际临时卸载进程及其退出码；[NSIS 官方说明](https://nsis.sourceforge.io/Docs/AppendixD.html) 明确区分两者。修复采用校验过 SHA256 的独立临时卸载器副本，并传入最后一个 `_?=<安装目录>` 参数，使 `WaitForExit` 等待真正的卸载进程。保留安装目录、进程和注册表零残留断言，不主动删除残留注册项，不强杀进程。
 
-修复后 [Windows 运行 36658206001](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36658206001) 在提交 `785ed9d` 上全部通过（8 分 48 秒）：
+修复后 [Windows 运行 36658206001](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36658206001) 在提交 `785ed9d` 上全部通过（8 分 48 秒）：
 
 | 检查 | 实际结果 |
 | --- | --- |

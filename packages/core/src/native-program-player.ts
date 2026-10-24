@@ -108,7 +108,8 @@ export class NativeProgramPlayer {
         // Without an operator choice (end of song, MIDI control, skip) a failed check plays without lighting in red.
         const check = lightingStartCheck(this.project, itemId, { portName: config.mtcPortName, ports: null });
         this.lit = !withoutLighting && check === null;
-        if (withoutLighting) this.reportUnavailable(`本首无灯光播放：${check ?? '操作员选择'}`);
+        // The operator's choice is in the run log already (开播前检查); show it without logging it twice.
+        if (withoutLighting) this.showNotice(`本首无灯光播放：${check ?? '操作员选择'}`);
         else if (check) this.startFault(`${check}；本首无灯光播放`);
       }
       this.allowMtc = prepared.allowMtc && this.lit;
@@ -208,7 +209,10 @@ export class NativeProgramPlayer {
   reportUnavailable(message: string): void {
     if (this.state.notice?.includes(message)) return;
     this.dependencies.notice?.(message, this.state.itemId);
-    this.update({ notice: [this.state.notice, message].filter(Boolean).join('；') });
+    this.showNotice(message);
+  }
+  private showNotice(message: string): void {
+    if (!this.state.notice?.includes(message)) this.update({ notice: [this.state.notice, message].filter(Boolean).join('；') });
   }
   seek(positionMs: number): Promise<void> { return this.state.itemId ? this.play(this.state.itemId, positionMs, this.state.status === 'paused') : Promise.resolve(); }
   scrub(itemId: string, positionMs: number): Promise<void> {

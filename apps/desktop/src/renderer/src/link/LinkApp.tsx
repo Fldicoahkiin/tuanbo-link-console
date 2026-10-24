@@ -310,23 +310,8 @@ function useDesktopIntegrationEvents(notify: (message: string, tone?: 'info' | '
       if (!cancelled) notify(`设备状态日志写入失败：${error instanceof Error ? error.message : String(error)}`, 'error');
     };
     const unsubscribeInventory = subscribeObsSceneSync(notify);
-    const unsubscribeObs = linkDesktopViewModel.onObsStatus((snapshot) => {
-      useIntegrationStore.getState().setObs(snapshot);
-      const project = useDocumentStore.getState().project;
-      void linkDesktopViewModel.recordLog({
-        level: snapshot.status === 'error' ? 'error' : snapshot.status === 'disconnected' ? 'warning' : 'info',
-        category: 'device',
-        message: `OBS WebSocket：${snapshot.status}`,
-        ...(project ? { projectId: project.projectId } : {}),
-        device: 'obs',
-        details: {
-          status: snapshot.status,
-          obsVersion: snapshot.obsVersion,
-          webSocketVersion: snapshot.webSocketVersion,
-          error: snapshot.error
-        }
-      }).catch(reportLogFailure);
-    });
+    // The main process logs OBS connection changes.
+    const unsubscribeObs = linkDesktopViewModel.onObsStatus((snapshot) => { useIntegrationStore.getState().setObs(snapshot); });
     const unsubscribeProcess = linkDesktopViewModel.onProcessStatus((snapshot) => {
       useIntegrationStore.getState().setProcess(snapshot);
       const project = useDocumentStore.getState().project;

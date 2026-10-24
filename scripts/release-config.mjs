@@ -2,15 +2,6 @@ import { createHash, createPublicKey, sign, verify } from 'node:crypto';
 import { closeSync, openSync, readSync } from 'node:fs';
 import { load } from 'js-yaml';
 
-/** The activation-free test package installs, stores data and registers apart from the official app:
- * NSIS derives the per-user install folder from the package name, Electron derives userData from productName. */
-export const portableTestPackage = {
-  appId: 'com.tuanbo.control.functionaltest',
-  name: 'tuanbo-link-functional-test',
-  productName: '团播联动台功能测试版',
-  artifactPrefix: 'Tuanbo-Link-Test-NoActivation-'
-};
-
 export function validateReleaseVersion(rootPackage, desktopPackage, tag) {
   const version = desktopPackage.version;
   if (typeof version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
@@ -48,17 +39,6 @@ export function assertNewerRelease(version, { tags, head, feedVersion }) {
   if (compareStableVersions(feedVersion, version) >= 0) throw new Error(`版本 ${version} 不高于更新源上的 ${feedVersion}`);
 }
 
-/** Test packages are prereleases of the next minor version after the newest of package.json and the release
- * tags, numbered by commit count: they never equal an official version, and official clients
- * (allowPrerelease false) never take them. */
-export function testPackageVersion({ packageVersion, tags, commitCount, sha, dirty }) {
-  const released = tags.map(tag => /^v(.+)$/.exec(tag)?.[1]).filter(version => version !== undefined && stableVersion.test(version));
-  const newest = [packageVersion, ...released].sort(compareStableVersions).at(-1);
-  const [major, minor] = newest.split('.').map(Number);
-  if (!Number.isInteger(commitCount) || commitCount <= 0 || !/^[0-9a-f]{7,40}$/.test(sha)) throw new Error('测试包版本需要提交数和提交号');
-  return `${major}.${minor + 1}.0-test.${commitCount}+g${sha}${dirty ? '.dirty' : ''}`;
-}
-
 export function validatePackagedUpdateConfig(text, expected) {
   const config = load(text);
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('app-update.yml 必须为对象');
@@ -91,11 +71,12 @@ export function validateUpdateMetadata(text, { version, installerName, installer
   return { version, releaseDate, sha512 };
 }
 
-/** A build-time test or internal distribution compiled into the main bundle (the define in electron.vite.config.ts).
- * The schema literals in internal-distribution.ts do not match: they read `channel: z.literal(...)`. */
-export function embeddedDistributionChannel(bytes) {
-  const match = /["']?channel["']?\s*:\s*["'](portable-test|internal)["']/.exec(bytes.toString('latin1'));
-  return match ? match[1] : null;
+/** Strings only the development activation bypass carries (local-test-license.ts and its use in link-main.ts).
+ * `electron-vite build --mode release` compiles that code out, so a bundle containing any of them is a development build. */
+const developmentAccessMarkers = ['TBLINK_LOCAL_TEST_ACCESS', '.local-test-access', '本机开发测试通道'];
+
+export function developmentAccessIn(bytes) {
+  return developmentAccessMarkers.filter(marker => bytes.includes(Buffer.from(marker)));
 }
 
 /** Reads one file from an asar archive (Chromium pickle header, then JSON index, then file data). */

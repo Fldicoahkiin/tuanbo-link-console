@@ -116,7 +116,7 @@ export class ManagedOutputRuntime {
     for (const event of events) {
       const executionId = crypto.randomUUID();
       const at = performance.now();
-      await this.recordMediaEvent(event, executionId, 'skipped', reason);
+      await this.recordMediaEvent(event, executionId, 'skipped', 0, reason);
       reports.push(mediaReport(executionId, event, 'skipped', at, performance.now(), reason));
     }
     return reports;
@@ -208,25 +208,24 @@ export class ManagedOutputRuntime {
     const startedAt = performance.now();
     if (event.phase === 'stop' && this.activeMediaByLayer.get(event.layerId)?.get(event.sourceName)?.clipId !== event.clipId) {
       const error = '对应片段未在本次运行中成功启动';
-      await this.recordMediaEvent(event, executionId, 'skipped', error);
+      await this.recordMediaEvent(event, executionId, 'skipped', 0, error);
       return mediaReport(executionId, event, 'skipped', startedAt, performance.now(), error);
     }
     if (!this.projectPath) {
       return this.finishFailedMedia(event, executionId, startedAt, '工程尚未保存，不能向 OBS 发布本地媒体', mode);
     }
-    await this.recordMediaEvent(event, executionId, 'running');
-    // Logging and preparation can yield to pause/stop. Recheck immediately before
-    // crossing the output boundary, not only before this async operation began.
+    // Preparation can yield to pause/stop. Recheck immediately before crossing the
+    // output boundary, not only before this async operation began.
     if (!canExecute()) {
       const reason = '运行已取消或超过执行边界，未发送素材动作';
-      await this.recordMediaEvent(event, executionId, 'skipped', reason);
+      await this.recordMediaEvent(event, executionId, 'skipped', performance.now() - startedAt, reason);
       return mediaReport(executionId, event, 'skipped', startedAt, performance.now(), reason);
     }
     try {
       await this.dependencies.executeManagedMediaEvent({ projectPath: this.projectPath, event });
       if (event.phase === 'start') this.addActiveMedia(event);
       else this.removeActiveMedia(event);
-      await this.recordMediaEvent(event, executionId, 'succeeded');
+      await this.recordMediaEvent(event, executionId, 'succeeded', performance.now() - startedAt);
       return mediaReport(executionId, event, 'succeeded', startedAt, performance.now());
     } catch (error) {
       if (event.phase === 'start') this.addActiveMedia(event);
@@ -241,22 +240,24 @@ export class ManagedOutputRuntime {
     error: string,
     mode: LinkRunMode
   ): Promise<ManagedMediaExecutionReport> {
-    await this.recordMediaEvent(event, executionId, 'failed', error);
+    await this.recordMediaEvent(event, executionId, 'failed', performance.now() - startedAt, error);
     const report = mediaReport(executionId, event, 'failed', startedAt, performance.now(), error);
     if (mode === 'rehearsal') throw new ManagedMediaExecutionError(report);
     return report;
   }
 
+  /** One result entry per media action, with how long it took and, when it failed or was skipped, why. */
   private async recordMediaEvent(
     event: ManagedMediaEvent,
     executionId: string,
-    result: 'running' | 'succeeded' | 'failed' | 'skipped',
+    result: 'succeeded' | 'failed' | 'skipped',
+    durationMs: number,
     error?: string
   ): Promise<void> {
     await this.dependencies.recordLog({
-      level: result === 'failed' ? 'error' : result === 'skipped' ? 'warning' : 'info',
+      level: result === 'failed' ? 'error' : 'info',
       category: 'action',
-      message: `${event.phase === 'start' ? '播放' : '停止'}素材 · ${event.assetName} · ${result}`,
+      message: `${event.phase === 'start' ? '播放' : '停止'}素材 · ${event.assetName} · ${result}${error ? `：${error}` : ''}`,
       projectId: this.project.projectId,
       itemId: event.itemId,
       cueId: event.id,
@@ -264,7 +265,7 @@ export class ManagedOutputRuntime {
       executionId,
       device: 'obs',
       result,
-      details: { clipId: event.clipId, layerId: event.layerId, frameNumber: event.frameNumber, sourceOffsetMs: event.sourceOffsetMs, sceneName: event.sceneName, ...(error ? { error } : {}) }
+      details: { clipId: event.clipId, layerId: event.layerId, frameNumber: event.frameNumber, sourceOffsetMs: event.sourceOffsetMs, sceneName: event.sceneName, durationMs: Math.round(durationMs), ...(error ? { error } : {}) }
     });
   }
 

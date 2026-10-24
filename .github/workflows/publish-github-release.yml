@@ -1,0 +1,72 @@
+name: Publish GitHub Release
+
+# After the owner publishes a staged release in the console, this copies exactly what the update feed serves to a
+# GitHub release marked Latest: the installer, its blockmap, the signed latest.yml and the build's
+# release-manifest.json. The files are taken from the feed and must match the release signature and the manifest
+# of the Release Windows run that built them. It runs on the domestic builder: the feed is in China (about 15
+# minutes for the installer) and the builder reaches GitHub through its proxy. The tag is created with
+# GITHUB_TOKEN, which does not trigger Release Windows, so nothing is rebuilt.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '已在后台发布、更新源已上线的版本号 X.Y.Z'
+        required: true
+        type: string
+      build_run_id:
+        description: '打出这个版本的 Release Windows 运行编号（运行页面地址里 runs/ 后面的数字）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: publish-github-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: [self-hosted, windows, release-builder]
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
+        with:
+          persist-credentials: false
+
+      - name: Use pnpm 10.33.0
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6 (v6.0.10)
+        with:
+          version: 10.33.0
+
+      - name: Use Node.js 25.8.2
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 (v7.1.0)
+        with:
+          node-version: 25.8.2
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download the build's release manifest
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7 (v7.0.0)
+        with:
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          pattern: release-manifest-*
+          merge-multiple: true
+          path: release-build
+
+      - name: Verify the update feed and publish the GitHub release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          NODE_USE_ENV_PROXY: '1'
+          # The feed is in China and is fetched directly; GitHub goes through the builder's proxy (runner .env).
+          NO_PROXY: localhost,127.0.0.1,.jinhefilm.com
+        run: |
+          node scripts/publish-github-release.mjs $env:RELEASE_VERSION release-build
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release failed' }

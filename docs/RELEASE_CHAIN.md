@@ -1,5 +1,33 @@
 # 源码、版本、部署与本地运行链路
 
+<a id="以后发版本的标准流程"></a>
+## 以后发版本的标准流程
+
+用户 2026-10-24 定下：每个正式包先发给用户测试，测试之后再继续优化、发下一个版本；官网只放最新的包。本文后面的章节是 2026-09 的旧链路，以本节和[软件更新文档](SOFTWARE_UPDATES.md#步骤)为准。
+
+1. （会话）发布提交只改根目录和 `apps/desktop` 两个 `package.json` 的版本号，提交信息 `chore(release): X.Y.Z`，推 master。
+2. （会话）等 master 上这个提交的 CI 全部通过，冻结它作为这个版本的来源。
+3. （会话）在 Actions 运行 Release Windows，填这个提交的完整号：构建机打包、签名、上传到服务器 staging。
+4. （**用户**）在运营后台「软件更新」里核对待发布版本，经二次验证、填写原因后点「发布更新」。
+5. （会话）运行 Publish GitHub Release，填版本号和第 3 步的运行编号：建 `vX.Y.Z` 标签和 Latest release，附件与更新源一致。
+6. （会话）运行 `node scripts/write-website-release.mjs` 并推送，官网下载页随自动部署换成新版。
+7. （**用户**）从官网下载安装、测试；有问题就在后台「回滚到上一版」。
+8. 测试通过后，进入下一轮。
+
+保留规则：
+- 官网下载页和 `release.json` 只放最新版。
+- 更新源只放最新版和它替换掉的上一版：上一版的安装包供一步回滚，上一版的 blockmap 供从它升级的电脑做差分。
+- 再往前的版本，发布成功时由服务器发布脚本移进 root 的备份目录，不删除，也不对外提供。
+- 回滚到上一版时，撤下的版本同样移出更新源；回滚后更新源只剩回到的那个版本。
+- GitHub Releases 保留所有版本。
+
+<a id="发版流程待办"></a>
+待办（2026-10-24 记录，暂不实现）：
+- **服务器磁盘**：总共 49 GB，当时剩 34 GB。每发一个版本，`/var/backups/tblink` 就多一份约 1 GB 的归档；staging 另外最多存 5 份，每份约 1 GB。照这样发二三十个版本后磁盘会紧张。
+- **只保留最近 3 份归档**：GitHub Releases 已保留全部版本，服务器上的归档只是冗余，所以发布脚本只保留最近 3 份归档，更早的移除。
+- **磁盘余量提示**：后台「软件更新」显示服务器剩余空间。剩余空间低于 5 GB 时，发布前就拒绝，并写明原因。
+
+
 2026-09-30 当前生产状态：Windows **0.4.29** 已正式发行，公司更新源已发布安装包、blockmap 与 `latest.yml`；官网已开放支付宝月付 **800 元／30 天／台**、年付 **8,000 元／365 天／台**。已核验未付款订单创建、同单恢复和未付款不发码，未进行实际扣款。Windows CI 已通过正式安装版无凭证拦截、覆盖安装与卸载验收，见[专项记录](LICENSE_UPDATE_ACCEPTANCE.md)；真实支付交付与续费、退款及两版本重启更新仍待真人测试；微信 Native 服务端及官网已部署、商户凭据未配置且收款关闭；自动开票尚未接入。实际构建、摘要与部署备份见 [发行记录](RELEASE_0.4.29.md)。下文带日期的旧关闭／未发行记录只表示当时状态。
 
 初始审查记录（2026-09-28，非当前状态）：当时基于工作区代码、Git 配置及服务器部署验收记录，不代表已发布新的 Windows 安装包。当时受限环境的 GitHub CLI 身份核查返回 HTTP 401，未取得远端最新分支、Actions 或 Release 状态；`origin/master` 只是本地跟踪引用，不能当作实时远端状态。
@@ -8,7 +36,7 @@
 
 | 位置 | 职责 | 不应承担的工作 |
 | --- | --- | --- |
-| GitHub `JinHe9527/tuanbo-link-console` | 源码、锁文件、构建脚本、版本标签、CI 与候选产物归档 | 保存生产许可私钥、数据库、支付密钥或客户工程 |
+| GitHub `Fldicoahkiin/tuanbo-link-console` | 源码、锁文件、构建脚本、版本标签、CI 与候选产物归档 | 保存生产许可私钥、数据库、支付密钥或客户工程 |
 | GitHub Actions Windows runner / 受控 Windows 构建机 | 构建 Windows DLL/EXE、Electron、NSIS；测试、签名和产物清单 | 连接真实直播现场并替代人工设备验收 |
 | 腾讯云 Ubuntu `jinhe-cloud` | HTTPS、更新文件出口、激活/订单服务及后续支付回调 | 运行客户桌面界面、播放时间线或代替 Windows 原生构建环境 |
 | 客户 Windows 电脑 | 工程、媒体、音频、时间线、Cue、MIDI、OBS/MA2 联动、本地许可校验 | 持有仓库访问令牌、服务管理员令牌或任何发行私钥 |
@@ -142,7 +170,7 @@ flowchart TB
 现已获得推送与发行授权，源码及工作流已推送。GitHub 要求支持 workflow_dispatch 的工作流存在于默认分支；未推送的本地 YAML 不能远程运行。实际调用模板：
 
 ```sh
-gh workflow run release-windows.yml --repo JinHe9527/tuanbo-link-console --ref <已核对分支> -f expected_sha=<完整提交SHA>
+gh workflow run release-windows.yml --repo Fldicoahkiin/tuanbo-link-console --ref <已核对分支> -f expected_sha=<完整提交SHA>
 ```
 
 触发后记录真实 run ID，分别核对工作流 headSha、实际产品 checkout SHA、结论及对应 manifest，不能仅凭触发命令成功声称 Windows 通过。核对来源与产物后，才安排受控 Windows 安装／激活／更新验收。官方依据：[手动运行工作流](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)、[工作流产物及跨作业传递](https://docs.github.com/en/actions/tutorials/store-and-share-data)。

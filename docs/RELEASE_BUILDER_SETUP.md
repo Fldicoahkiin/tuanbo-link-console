@@ -10,6 +10,7 @@
 | 位置 | 内容 | 之后的去向 |
 | --- | --- | --- |
 | `D:\tblink-release-assets\beauty\2dfd72cfcae9\` | 固定版本的美颜构建，与 `tools/obs/beauty/release-pin.json` 一致 | 留在构建机，runner 只读 |
+| `D:\tblink-release-assets\music-analysis\8432b1f0ea62\` | 固定版本的离线音乐分析运行时（runtime、models、licenses），与 `tools/music-analysis/release-pin.json` 一致 | 留在构建机，runner 只读 |
 | `D:\tblink-release-signing\release-2026-10-a.pem` | 发布签名私钥（日常） | 放进 GitHub secret；CI 用 secret 签名成功后删除本机副本（第 6 步） |
 | `D:\tblink-release-signing\release-2026-10-b.pem` | 发布签名私钥（备用） | 拷到 U 盘离线保存后删除本机副本（第 1 步） |
 | `D:\tblink-release-signing\upload\` | 上传到服务器的 SSH 私钥和 known_hosts | 留在构建机，只给 runner 账号读 |
@@ -58,9 +59,9 @@ icacls C:\dev\claude-tools\locks /grant "tblink-runner:(OI)(CI)M"
 runner 只能读资产和上传身份，不能读发布签名私钥（它来自 GitHub secret）。上传私钥的所有者改成 tblink-runner，因为 Windows 的 OpenSSH 只接受只属于当前账户的私钥。最后一行让 runner 能建和删自己的锁文件。
 
 <a id="4-注册-self-hosted-runner"></a>
-## 4. 注册 self-hosted runner（仓库所有者 JinHe9527，开发机上的管理员 PowerShell）
+## 4. 注册 self-hosted runner（仓库所有者 Fldicoahkiin，开发机上的管理员 PowerShell）
 
-注册 runner 和设置 secret 都需要仓库 admin 权限，只有 JinHe9527 有（Fldicoahkiin 只有 push 权限）。第 4、5 步在开发机的同一个管理员 PowerShell 窗口里依次完成，最后退出登录。开发机已经装了 gh，默认账号是 JinHe9527，但之前的 token 已失效。
+注册 runner 和设置 secret 都需要仓库 admin 权限。仓库从 JinHe9527 转移到 Fldicoahkiin 名下之后，由 Fldicoahkiin 来做（转移完成前这两步先不做）。第 4、5 步在开发机的同一个管理员 PowerShell 窗口里依次完成。开发机已经装了 gh，里面还留着 JinHe9527 已失效的登录，第 5 步最后清掉。
 
 1. 重新登录 gh：
 
@@ -68,9 +69,9 @@ runner 只能读资产和上传身份，不能读发布签名私钥（它来自 
    gh auth login --hostname github.com --git-protocol https --web
    ```
 
-   屏幕上会显示一次性验证码，按回车打开浏览器，用 JinHe9527 登录 GitHub 并输入这个验证码。验证码只在浏览器里输入，不要发到聊天里。如果问「Authenticate Git with your GitHub credentials?」，回答 `n`。
+   屏幕上会显示一次性验证码，按回车打开浏览器，用 Fldicoahkiin 登录 GitHub 并输入这个验证码。验证码只在浏览器里输入，不要发到聊天里。如果问「Authenticate Git with your GitHub credentials?」，回答 `n`。
 
-   预期最后两行是 `✓ Authentication complete.` 和 `✓ Logged in as JinHe9527`。再执行 `gh auth status`，应看到 `Logged in to github.com account JinHe9527`，并且这个账号的 `Active account: true`。如果活动账号不是 JinHe9527，执行 `gh auth switch -h github.com -u JinHe9527`。
+   预期最后两行是 `✓ Authentication complete.` 和 `✓ Logged in as Fldicoahkiin`。再执行 `gh auth status`，应看到 `Logged in to github.com account Fldicoahkiin`，并且这个账号的 `Active account: true`。如果活动账号不是 Fldicoahkiin，执行 `gh auth switch -h github.com -u Fldicoahkiin`。
 
 2. 下载并校验 runner：
 
@@ -98,18 +99,18 @@ runner 只能读资产和上传身份，不能读发布签名私钥（它来自 
 
    ```powershell
    $cred = Get-Credential -UserName '.\tblink-runner' -Message '输入第 2 步给 tblink-runner 设的密码'
-   $token = gh api -X POST repos/JinHe9527/tuanbo-link-console/actions/runners/registration-token --jq .token
+   $token = gh api -X POST repos/Fldicoahkiin/tuanbo-link-console/actions/runners/registration-token --jq .token
    if ($LASTEXITCODE -ne 0 -or -not $token) { throw '取注册 token 失败，先检查 gh auth status' }
-   .\config.cmd --unattended --url https://github.com/JinHe9527/tuanbo-link-console --token $token --name DESKTOP-2C8JIC2-release --labels release-builder --runasservice --windowslogonaccount .\tblink-runner --windowslogonpassword $cred.GetNetworkCredential().Password
+   .\config.cmd --unattended --url https://github.com/Fldicoahkiin/tuanbo-link-console --token $token --name DESKTOP-2C8JIC2-release --labels release-builder --runasservice --windowslogonaccount .\tblink-runner --windowslogonpassword $cred.GetNetworkCredential().Password
    Remove-Variable token, cred
    ```
 
-   预期 `config.cmd` 的输出依次包含 `Connected to GitHub`、`Runner successfully added`、`Runner connection is good`、`Settings Saved`，最后几行是 `Service actions.runner.JinHe9527-tuanbo-link-console.DESKTOP-2C8JIC2-release` 安装成功并已启动。`throw` 那一行报错，说明登录或权限有问题，不要继续。
+   预期 `config.cmd` 的输出依次包含 `Connected to GitHub`、`Runner successfully added`、`Runner connection is good`、`Settings Saved`，最后几行是 `Service actions.runner.Fldicoahkiin-tuanbo-link-console.DESKTOP-2C8JIC2-release` 安装成功并已启动。`throw` 那一行报错，说明登录或权限有问题，不要继续。
 
 5. 核对 runner 已在线：
 
    ```powershell
-   (gh api repos/JinHe9527/tuanbo-link-console/actions/runners | ConvertFrom-Json).runners | ForEach-Object { '{0} {1} {2}' -f $_.name, $_.status, ($_.labels.name -join ',') }
+   (gh api repos/Fldicoahkiin/tuanbo-link-console/actions/runners | ConvertFrom-Json).runners | ForEach-Object { '{0} {1} {2}' -f $_.name, $_.status, ($_.labels.name -join ',') }
    Get-Service 'actions.runner.*' | Format-Table Name, Status, StartType
    ```
 
@@ -123,27 +124,29 @@ runner 只能读资产和上传身份，不能读发布签名私钥（它来自 
 1. 从文件按原始字节读入 secret。不经过剪贴板，也不经过 PowerShell 管道，因为管道可能改动编码：
 
    ```powershell
-   cmd /c "gh secret set TBLINK_RELEASE_SIGNING_KEY --repo JinHe9527/tuanbo-link-console < D:\tblink-release-signing\release-2026-10-a.pem"
+   cmd /c "gh secret set TBLINK_RELEASE_SIGNING_KEY --repo Fldicoahkiin/tuanbo-link-console < D:\tblink-release-signing\release-2026-10-a.pem"
    ```
 
-   预期输出 `✓ Set Actions secret TBLINK_RELEASE_SIGNING_KEY for JinHe9527/tuanbo-link-console`。这条命令不会显示私钥内容。
+   预期输出 `✓ Set Actions secret TBLINK_RELEASE_SIGNING_KEY for Fldicoahkiin/tuanbo-link-console`。这条命令不会显示私钥内容。
 
 2. 核对 secret 已存在：
 
    ```powershell
-   gh secret list --repo JinHe9527/tuanbo-link-console
+   gh secret list --repo Fldicoahkiin/tuanbo-link-console
    ```
 
    预期有一行 `TBLINK_RELEASE_SIGNING_KEY`，更新时间是刚才。secret 的值无法读回，是否正确由第 6 步的首次 CI 签名来验证。
 
-3. 退出 gh 登录。这台机器上很多进程以 WYZB 身份运行，不能长期留着仓库所有者的 token：
+3. 清掉 JinHe9527 失效的旧登录，保留 Fldicoahkiin 的登录：
 
    ```powershell
    gh auth logout -h github.com -u JinHe9527
    gh auth status
    ```
 
-   预期第一条输出 `✓ Logged out of github.com account JinHe9527`；第二条不再列出 JinHe9527（没有其他账号时显示 `You are not logged into any GitHub hosts`）。
+   预期第一条输出 `✓ Logged out of github.com account JinHe9527`；`gh auth status` 只列出 Fldicoahkiin，且 `Active account: true`。
+
+   开发机上会一直保持 Fldicoahkiin 的 gh 登录（用户 2026-10-24 决定）。这台机器上以 WYZB 身份运行的程序都能使用这个账号的权限，包括仓库管理员权限。
 
 工作流只在「Sign latest.yml with the release key」这一步把它放进环境变量，不会写到磁盘，日志里也会被遮掉。
 

@@ -44,6 +44,16 @@ describe('ManagedOutputRuntime', () => {
     expect(dependencies.recordLog).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed' }));
   });
 
+  it('素材动作每次只记一条结果日志，带耗时；执行前不写「执行中」', async () => {
+    const dependencies = createDependencies();
+    const runtime = new ManagedOutputRuntime(createEmptyLinkProject('测试'), 'C:\\show\\test.tblink', dependencies);
+    await runtime.executeMedia(event(), 'live');
+    expect(dependencies.recordLog).toHaveBeenCalledTimes(1);
+    const [entry] = dependencies.recordLog.mock.calls[0]!;
+    expect(entry).toMatchObject({ level: 'info', result: 'succeeded' });
+    expect(typeof entry.details?.['durationMs']).toBe('number');
+  });
+
   it('成功启动后允许同一片段停止并生成独立执行记录', async () => {
     const dependencies = createDependencies();
     const runtime = new ManagedOutputRuntime(createEmptyLinkProject('测试'), 'C:\\show\\test.tblink', dependencies);

@@ -74,7 +74,7 @@ def read_archive(data):
     manifest = json.loads(files.pop('manifest.json'))
     if set(manifest) != {'revision', 'runId', 'attempt', 'repository', 'files', 'tools'}:
         raise RuntimeError('Unexpected deployment metadata')
-    if (manifest['repository'] != 'JinHe9527/tuanbo-link-console'
+    if (manifest['repository'] != 'Fldicoahkiin/tuanbo-link-console'
             or not isinstance(manifest['revision'], str) or not re.fullmatch('[a-f0-9]{40}', manifest['revision'])
             or type(manifest['runId']) is not int or manifest['runId'] <= 0
             or type(manifest['attempt']) is not int or manifest['attempt'] <= 0):

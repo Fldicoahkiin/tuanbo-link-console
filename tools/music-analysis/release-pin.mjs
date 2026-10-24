@@ -1,6 +1,6 @@
-// The offline music-analysis runtime in the test package: Python, its packages, the models and their licenses
+// The offline music-analysis runtime in the official package: Python, its packages, the models and their licenses
 // come from a prepared build machine (output/music-analysis), not from git. Its file tree is pinned in
-// release-pin.json; files copied from this repository (worker.py and friends) are checked by git instead.
+// release-pin.json; files copied from this repository (musicWorkerFiles) are checked by git instead.
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
@@ -9,6 +9,10 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pinned = ['runtime', 'models', 'licenses'];
+/** The worker modules and notices from tools/music-analysis that sit beside the pinned runtime; the package.json
+ * extraResources filter lists the same names. */
+export const musicWorkerFiles = ['worker.py', 'analyze.py', 'phrase_structure.py', 'assets.py', 'contracts.py', 'consensus.py', 'evaluate.py',
+  'semantic_evaluation.py', 'pyproject.toml', 'uv.lock', 'DISTRIBUTION_NOTICE.md'];
 
 async function files(root, prefix) {
   const result = [];

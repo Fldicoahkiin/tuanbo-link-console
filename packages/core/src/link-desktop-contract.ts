@@ -12,11 +12,11 @@ import type {
   SceneItemTransform
 } from '@tb/schema';
 
-/** release: the official installer; test: the activation-free test package; internal: the signed internal build. */
-export type LinkReleaseChannel = 'release' | 'test' | 'internal' | 'development';
+/** release: the official installer, the only packaged build; development: the unpackaged app. */
+export type LinkReleaseChannel = 'release' | 'development';
 
 export type LinkAppInfo = {
-  /** Product name of this build, e.g. 团播联动台功能测试版 for the test package. */
+  /** Product name of this build. */
   name: string;
   version: string;
   channel: LinkReleaseChannel;
@@ -413,8 +413,9 @@ export type LinkDesktopApi = {
     result?: LinkLogEntryDto['result'];
     limit?: number;
   }): Promise<LinkLogEntryDto[]>;
-  exportDiagnosticPackage(context: Readonly<Record<string, unknown>>): Promise<string | null>;
-  exportLogs(): Promise<string | null>;
+  /** `range`: how many days back the logs reach; 7 when omitted. */
+  exportDiagnosticPackage(context: Readonly<Record<string, unknown>>, range?: import('@tb/schema').LinkLogExportRange): Promise<string | null>;
+  exportLogs(range?: import('@tb/schema').LinkLogExportRange): Promise<string | null>;
   openLogsFolder(): Promise<void>;
   onObsStatus(listener: (snapshot: LinkObsSnapshot) => void): () => void;
   onObsInventoryChanged(listener: () => void): () => void;

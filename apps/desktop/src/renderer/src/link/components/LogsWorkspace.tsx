@@ -51,7 +51,7 @@ export function LogsWorkspace({ notify, settings = false }: Props): JSX.Element 
   useEffect(() => { void refresh(); }, [refresh]);
 
   return <div className={`page-stack ${settings ? 'settings-log-page' : 'diagnostics-log-page'}`}>
-    <header className={settings ? 'settings-log-heading' : 'page-heading'}><div>{!settings ? <h2>运行日志</h2> : null}<p>最多读取最近 500 条记录；导出包含所有保留会话，不受筛选限制。</p></div><div className="heading-actions"><Button className="secondary-button" loading={loading} onClick={() => void refresh()}><RefreshCw />刷新</Button></div></header>
+    <header className={settings ? 'settings-log-heading' : 'page-heading'}><div>{!settings ? <h2>运行日志</h2> : null}<p>显示最近 500 条，最多查找最近 20 次启动的记录。导出按所选时间范围（默认最近 7 天），不受筛选限制；本机日志保留 30 天、最多 200 MB。</p></div><div className="heading-actions"><Button className="secondary-button" loading={loading} onClick={() => void refresh()}><RefreshCw />刷新</Button></div></header>
     <DiagnosticExports />
     <section className="log-filters panel">
       <LogFilter label="会话" value={sessionId} values={unique(catalog.map((entry) => entry.sessionId))} onChange={setSessionId} format={(value) => value.slice(0, 8)} />

@@ -36,15 +36,8 @@ export function ProjectPlayerTransport({ controller, state, engine, selectedItem
   const active = state.status === 'playing' || state.status === 'paused';
   const selected = active ? project?.rundown.find(item => item.id === state.itemId) : selectedItem ?? items.find(item => item.id === state.itemId);
   const target = selected?.enabled && selected.referenceAudio ? selected : items[0];
-  const controllerReady = controller !== null, projectId = project?.projectId, selectedId = selectedItem?.id ?? null, targetId = target?.id ?? null;
   const unavailable = !controller ? '播放器尚未就绪' : state.status === 'preparing' ? '正在准备音频，可点击停止取消'
     : !active && !target ? '当前节目及播放列表没有可播放音频' : null;
-  useEffect(() => {
-    if (!projectId) return;
-    // Preparing is part of every song start, not a problem to look at.
-    void linkDesktopViewModel.recordLog({ level: unavailable && state.status !== 'preparing' ? 'warning' : 'info', category: 'state', message: unavailable ? `播放按钮不可用：${unavailable}` : '播放按钮已就绪',
-      projectId, details: { controllerReady, status: state.status, playlistId: state.playlistId, selectedItemId: selectedId, targetItemId: targetId } }).catch(console.error);
-  }, [unavailable, controllerReady, state.status, state.playlistId, selectedId, targetId, projectId]);
   const next = state.endAction === 'loop' ? selected : state.endAction === 'next' ? items[items.findIndex((item) => item.id === state.itemId) + 1] : undefined;
   return (
       <section className={`player-transport panel status-${state.status}`} aria-label="节目播放控制">

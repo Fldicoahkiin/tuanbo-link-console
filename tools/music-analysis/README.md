@@ -2,9 +2,11 @@
 
 当前是可复核的本机推理与评估链路，**不是已经通过曲库精度验收的引擎**。2026-10-08 更新后，桌面工作台自动分析并通过 LinkCommand 保存节拍与分段，保留纠错、清除和撤销。Python 分析器本身不写 `.tblink`，不创建灯光 Cue、不调用 MA2、MIDI、OBS；自动应用和人工纠错都不会把模型的 `not-validated` 状态改成通过精度验收。
 
-## 含模型的免激活测试安装包
+## 打包运行时
 
-`node scripts/build-portable-test.mjs <新的输出目录>` 会调用 `package-runtime.mjs`，将预先准备好的 `output/music-analysis/cpu-env`、Python 3.11.9 和全部本地模型复制成自包含运行时，并以 `python311._pth` 隔离系统 Python 与用户包。模型文件和运行时随同 NSIS 安装，用户不需要额外安装或在线下载。测试版明确提供 CPU 模式，正式发布脚本不因此自动加入测试模型包。
+`node tools/music-analysis/package-runtime.mjs <新的输出目录>` 将预先准备好的 `output/music-analysis/cpu-env`、Python 3.11.9 和全部本地模型复制成自包含运行时，并以 `python311._pth` 隔离系统 Python 与用户包。运行时只提供 CPU 模式。
+
+2026-10-24 起，正式安装包内置这个运行时和模型（用户当天决定），装在安装目录的 `resources\music-analysis`，自动音乐分析开箱即用。固定的 `runtime`、`models`、`licenses` 三个目录来自构建机的 `D:\tblink-release-assets\music-analysis\<指纹前 12 位>\`，打包前复制到 `artifacts/music-analysis`；`worker.py` 等模块取自本次提交（清单见 `release-pin.mjs` 的 `musicWorkerFiles`）。afterPack 要求运行时必须存在：指纹与 `release-pin.json` 不符或模块与仓库不同，构建直接失败。
 
 打包时校验依赖版本、模型摘要和所有 Python 导入路径，生成逐文件 SHA-256 清单。安装后用 `node scripts/verify-installed-music.mjs <安装后的EXE> <真实WAV> <时长毫秒> <新的证据目录>` 校验安装文件，并通过真实 Electron IPC 执行首轮模型推理与缓存复测；没有替换分析 IPC 或使用开发环境 Python。
 

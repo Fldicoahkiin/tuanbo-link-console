@@ -4,26 +4,26 @@
 
 服务器接收器和专用 `tblink-deploy` 身份已安装，实际 SSH 探测确认公钥认证可用、任意 shell 命令不执行、非法包在部署前被拒绝。现有团播支付配置与业务数据未修改。初始化记录位于 `/var/lib/tblink-licensing/backups/ci-bootstrap-20260930T023247Z/receipt.json`。
 
-GitHub 仓库为 `JinHe9527/tuanbo-link-console`，生产分支为 `master`。2026-09-30 用户明确授权向 GitHub 保存长期生产部署私钥并启用持续自动部署；两个 Actions Secrets 已写入，`TBLINK_AUTO_DEPLOY=true` 已启用。专用私钥没有进入 Git 文件，没有打印到聊天或日志。启用配置与实际部署验收分别记录如下。
+GitHub 仓库为 `Fldicoahkiin/tuanbo-link-console`（2026-10-24 从 `Fldicoahkiin/tuanbo-link-console` 转移过来，下文转移前的运行链接由 GitHub 自动重定向；转移后服务器的重装步骤见[仓库转移安装说明](SERVER_INSTALL_REPO_TRANSFER_20261024.md)），生产分支为 `master`。2026-09-30 用户明确授权向 GitHub 保存长期生产部署私钥并启用持续自动部署；两个 Actions Secrets 已写入，`TBLINK_AUTO_DEPLOY=true` 已启用。专用私钥没有进入 Git 文件，没有打印到聊天或日志。启用配置与实际部署验收分别记录如下。
 
 这条链路发布授权服务和官网，不自动发布 Windows Release、不改变商品价格、不启用微信、不创建支付订单或授权。Windows 安装包及 `latest.yml` 的发布仍走已有独立流程。
 
-实现提交 `3d27779a0998fd3788add2d33d4eed2a0f51210e` 的 [CI 36661008165](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36661008165) 已全部通过：类型检查、支付／授权测试、服务与官网构建、浏览器检查、Python 回归。新增接收器 7 项回归与既有套件合计 62 项在本地通过；CI 同一套件通过。`Confirm production branch is still current` 与 `Deploy verified licensing service and website` 均为 `skipped`，这次不是自动部署成功证明。
+实现提交 `3d27779a0998fd3788add2d33d4eed2a0f51210e` 的 [CI 36661008165](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36661008165) 已全部通过：类型检查、支付／授权测试、服务与官网构建、浏览器检查、Python 回归。新增接收器 7 项回归与既有套件合计 62 项在本地通过；CI 同一套件通过。`Confirm production branch is still current` 与 `Deploy verified licensing service and website` 均为 `skipped`，这次不是自动部署成功证明。
 
 启用前的独立服务器复核：生产来源仍为 `fb6e286c4a9c700b9693d566389598ace3ad446d`；API bundle、Nginx 和支付环境摘要保持此前部署值；数据库检查 `ok`，订单 1、收款 0、授权 0。SSH、团播、恢复定时器、Nginx、金河分镜和无忧排班均 active。当时自动发布任务目录为空、尚无 `last-success.json`；该初始化记录不代表后续启用结果。
 
 ## 首次启用与修复记录
 
-- [36667188691](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36667188691)：验证与构建通过，SSH 解析 Secret 中的私钥时报 `error in libcrypto`，未登录服务器。用同一密钥本地复现缺少末尾换行失败、补齐后成功；`3c32a8b` 修正文件末尾换行，回归使用临时生成的无权限测试密钥让实际 `ssh-keygen` 验证解析。
-- [36667746831](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36667746831)：SSH 认证成功，接收阶段的 60 秒 alarm 超时，未创建部署任务。`d52dcc6` 将上传限时设为 300 秒，分块计数并在超时中报告已接收字节数；16 MiB 总量及固定文件约束不变。
-- [36668497809](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36668497809)：1,228,800 字节实际上传用时 55.4 秒，随后服务发布成功、官网探针失败。独立读取确认新静态目录因继承 umask 077 成为 0700，Nginx 无法读取；官网自动恢复旧链接，服务 bundle、支付环境和代理摘要未改变，未记作完整发布成功。
+- [36667188691](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36667188691)：验证与构建通过，SSH 解析 Secret 中的私钥时报 `error in libcrypto`，未登录服务器。用同一密钥本地复现缺少末尾换行失败、补齐后成功；`3c32a8b` 修正文件末尾换行，回归使用临时生成的无权限测试密钥让实际 `ssh-keygen` 验证解析。
+- [36667746831](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36667746831)：SSH 认证成功，接收阶段的 60 秒 alarm 超时，未创建部署任务。`d52dcc6` 将上传限时设为 300 秒，分块计数并在超时中报告已接收字节数；16 MiB 总量及固定文件约束不变。
+- [36668497809](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36668497809)：1,228,800 字节实际上传用时 55.4 秒，随后服务发布成功、官网探针失败。独立读取确认新静态目录因继承 umask 077 成为 0700，Nginx 无法读取；官网自动恢复旧链接，服务 bundle、支付环境和代理摘要未改变，未记作完整发布成功。
 - `7083aa8`：只给公开静态目录显式设置 0755，公开文件保持 0644；私有备份仍为 0700。探针增加 HTTP 失败识别。已在原实现上复现两种旧站状态的权限断言失败，修复后部署套件 64 项通过。
 
 受限接收器修复备份 `/var/lib/tblink-licensing/backups/ci-receiver-20260930T042014Z`，现文件 SHA256 `c26353c444155c7ab8f426f6cda52ea39103dbeafa1e73fc2974e554d9a0d118`；官网发布工具修复备份 `/var/lib/tblink-licensing/backups/ci-publisher-20260930T042946Z`，现文件 SHA256 `3c930130c2cdbcb93c433de2c4e55be0fc6ce9c4bd1c3704b067d36c162eb693`。工具经独立管理员通道校验和安装，CI 上传包不能自行更新它们。
 
 ## 首次自动发布验收成功
 
-[运行 36669107756](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36669107756) 由 master 推送自动触发，提交 `7083aa85ccb9f4bde9fbde9d0f1fea6934dc2055`，整体 success，耗时 3 分 3 秒。类型检查、支付／授权回归、构建、官网浏览器检查、部署回归及实际发布步骤均通过。
+[运行 36669107756](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36669107756) 由 master 推送自动触发，提交 `7083aa85ccb9f4bde9fbde9d0f1fea6934dc2055`，整体 success，耗时 3 分 3 秒。类型检查、支付／授权回归、构建、官网浏览器检查、部署回归及实际发布步骤均通过。
 
 随后通过独立管理员 SSH 通道读取服务器，核对：
 
@@ -91,12 +91,12 @@ SSH 有效配置必须包含 `authenticationmethods publickey`、`passwordauthen
 
 1. 发布提交只改根目录和 `apps/desktop` 两个 `package.json` 的版本号，推 master 后，在 Actions 手动运行 Release Windows（填完整提交号），或推 `vX.Y.Z` 标签。
 2. 托管机做版本检查（必须高于所有已有标签和线上 `latest.yml`）、类型检查、全量单测和 lint。
-3. 国内构建机（self-hosted runner，标签 `release-builder`）打包。美颜产物按仓库里的 `tools/obs/beauty/release-pin.json` 从 `D:\tblink-release-assets\beauty\<指纹前 12 位>\` 复制，afterPack 核对指纹，不符就失败。打包后用发布私钥给 `latest.yml` 加签名：私钥存在 GitHub Actions secret `TBLINK_RELEASE_SIGNING_KEY`，只在签名这一步注入环境变量，不写磁盘。然后写 `release-manifest.json`，通过受限身份 `tblink-release` 上传。
+3. 国内构建机（self-hosted runner，标签 `release-builder`）打包。美颜产物和离线音乐分析运行时分别按仓库里的 `tools/obs/beauty/release-pin.json`、`tools/music-analysis/release-pin.json`，从 `D:\tblink-release-assets\beauty\<指纹前 12 位>\`、`D:\tblink-release-assets\music-analysis\<指纹前 12 位>\` 复制，afterPack 核对指纹，不符就失败。打包后用发布私钥给 `latest.yml` 加签名：私钥存在 GitHub Actions secret `TBLINK_RELEASE_SIGNING_KEY`，只在签名这一步注入环境变量，不写磁盘。然后写 `release-manifest.json`，通过受限身份 `tblink-release` 上传。
 4. 服务器 `receive-update.py` 以 tblink-release 身份运行，不用 sudo。它只把这一份包写进 `/var/lib/tblink-release/staging/<版本>-<提交前 12 位>/`，不能覆盖已有目录，最多保留 5 份，也碰不到更新源。
 5. 管理员在运营后台「软件更新」里看到待发布版本，经二次验证、填写原因后点「发布更新」。后台只往自己的 `/var/lib/tblink-licensing/update-requests/` 写一份请求，内容只有：请求编号、动作（发布 / 回滚 / 丢弃）、staging 名称（发布和丢弃）或回滚目标版本、确认时看到的 manifest sha256（发布）、操作人、原因、请求时间。
-6. root 的 `tblink-update-publish.path` 在请求目录或 staging 变化时触发 `publish-update.py --process-requests`；`tblink-update-publish.timer` 每 2 分钟兜底一次，接住运行期间到达的请求。脚本路径和参数都写死，每次运行先核对[自己写入和信任的目录](#root-写入和信任判断的路径)整条链都归 root，不符就报错退出。请求目录只读：用 `O_DIRECTORY|O_NOFOLLOW` 打开并核对属主 tblink-license，请求文件用 `O_NOFOLLOW|O_NONBLOCK` 打开，只接受属主为 tblink-license、16 KB 以内的普通文件，字段必须正好是上面几项且格式正确；已有结果的请求视为重复，直接忽略；同一时间只处理一个请求（文件锁）。发布时先把 staging 里的四个文件不跟随链接地复制进 root 的工作目录，之后所有判断都只看这份副本：manifest、各文件 sha256、`latest.yml` 的版本和 sha512、Ed25519 发布签名、请求里的 manifest 摘要、版本高于当前更新源。全部通过才按「安装包先、`latest.yml` 最后」上线，回执（含上一版 `latest.yml`）存进 root 的 `/var/backups/tblink/update-receipts/`。结果写到 `/var/lib/tblink-update-publish/results/`（tblink-license 组只读）给后台显示，同时追加审计 `/var/backups/tblink/update-audit.jsonl`（请求时间、处理时间、操作人、动作、版本、结果、失败原因）。后台读到结果后删除自己的请求文件；结果文件留在 root 目录，同一个请求编号再出现也不会重做。
-7. 「回滚到上一版」同样走后台请求，把更新源改回发布当前版本之前的 `latest.yml`。上一版只从 root 的回执目录读取，而且必须有有效的发布签名、安装包仍在、摘要一致，否则拒绝。已经装上新版本的电脑不会自动降级。
-8. 发布后运行 `node scripts/write-website-release.mjs` 生成官网下载信息并提交，官网随授权服务自动部署。
+6. root 的 `tblink-update-publish.path` 在请求目录或 staging 变化时触发 `publish-update.py --process-requests`；`tblink-update-publish.timer` 每 2 分钟兜底一次，接住运行期间到达的请求。脚本路径和参数都写死，每次运行先核对[自己写入和信任的目录](#root-写入和信任判断的路径)整条链都归 root，不符就报错退出。请求目录只读：用 `O_DIRECTORY|O_NOFOLLOW` 打开并核对属主 tblink-license，请求文件用 `O_NOFOLLOW|O_NONBLOCK` 打开，只接受属主为 tblink-license、16 KB 以内的普通文件，字段必须正好是上面几项且格式正确；已有结果的请求视为重复，直接忽略；同一时间只处理一个请求（文件锁）。发布时先把 staging 里的四个文件不跟随链接地复制进 root 的工作目录，之后所有判断都只看这份副本：manifest、各文件 sha256、`latest.yml` 的版本和 sha512、Ed25519 发布签名、请求里的 manifest 摘要、版本高于当前更新源。全部通过才按「安装包先、`latest.yml` 最后」上线，回执（含上一版 `latest.yml`）存进 root 的 `/var/backups/tblink/update-receipts/`。上线后，更新源只保留这个版本和它替换掉的上一版：更早版本的安装包和 blockmap 复制进这次回执的 `archived/`，核对摘要后才从更新源移除（2026-10-24 起，用户要求官网只放最新的包）。结果写到 `/var/lib/tblink-update-publish/results/`（tblink-license 组只读）给后台显示，同时追加审计 `/var/backups/tblink/update-audit.jsonl`（请求时间、处理时间、操作人、动作、版本、结果、失败原因）。后台读到结果后删除自己的请求文件；结果文件留在 root 目录，同一个请求编号再出现也不会重做。
+7. 「回滚到上一版」同样走后台请求，把更新源改回发布当前版本之前的 `latest.yml`。上一版只从 root 的回执目录读取，而且必须有有效的发布签名、安装包仍在、摘要一致，否则拒绝。回滚后，撤下的版本同样移进这次回滚回执的 `archived/`，更新源只剩回到的那个版本，所以只能回滚一步。已经装上新版本的电脑不会自动降级。
+8. 发布后运行 `node scripts/write-website-release.mjs` 生成官网下载信息并提交，官网随授权服务自动部署；再运行 Publish GitHub Release，把更新源上的同一组文件建成 GitHub Release 并标为 Latest（见[发布步骤](SOFTWARE_UPDATES.md#步骤)）。
 
 <a id="信任边界"></a>
 ### 信任边界
@@ -121,7 +121,7 @@ SSH 有效配置必须包含 `authenticationmethods publickey`、`passwordauthen
 | `/opt/tblink-licensing/release-public-keys.json` | 读公钥验签 | `/`、`opt`、`tblink-licensing` root:root 0755；文件 root:root 0644 | 核对目录链，另核对文件是 root 所有、组和其他人不可写的普通文件 |
 | `/var/lib/tblink-update-publish/` | 写 `update-status.json`、`status-source.json`、`publish.lock` | `/`、`var`、`lib` root:root 0755；本目录 root:tblink-license 0750 | 核对 |
 | `/var/lib/tblink-update-publish/results/` | 写每个请求的结果（root:tblink-license 0640） | 同上，本目录 root:tblink-license 0750 | 核对 |
-| `/var/backups/tblink/update-receipts/` | 写回执；回滚时读 `receipt.json` 和 `previous-latest.yml` | `/`、`var`、`backups` root:root 0755；`tblink`、`update-receipts` root:root 0700 | 核对 |
+| `/var/backups/tblink/update-receipts/` | 写回执，以及移出更新源的旧版本（`archived/`）；回滚时读 `receipt.json` 和 `previous-latest.yml` | `/`、`var`、`backups` root:root 0755；`tblink`、`update-receipts` root:root 0700 | 核对 |
 | `/var/backups/tblink/update-audit.jsonl` | 追加审计 | 同上 | 核对 |
 | `/var/lib/tblink-update-publish/work/` | 复制候选包、在副本上校验、从副本安装，结束即删；每次运行先清掉上次中断的残留 | 同上，本目录 root:root 0700 | 核对 |
 | `/var/lib/tblink-release/staging/<名称>/` | 只读复制四个文件；发布或丢弃成功后删除该条目 | `/`、`var`、`lib`、`tblink-release` root:root 0755；`staging` tblink-release 0750 | 父目录链核对；`staging` 和条目用 `O_DIRECTORY\|O_NOFOLLOW` 打开并核对属主 tblink-release；文件用 `O_NOFOLLOW\|O_NONBLOCK` 打开、必须是普通文件且不超过上限；删除用 `rmtree(dir_fd=…)`，不跟随链接 |

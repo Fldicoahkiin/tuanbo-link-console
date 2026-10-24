@@ -1,4 +1,4 @@
-import type { ActionExecutionEvent } from '@tb/core/link';
+import { actionResultLog, type ActionExecutionEvent } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
@@ -14,22 +14,22 @@ export function reportCoordinatorError(message: string, onLogFailure: (message: 
   });
 }
 
+/** Only an action's result is logged, with how long it took and, when it failed or was skipped, why. */
 export async function recordRuntimeAction(
   projectId: string,
   item: RundownItem | undefined,
   event: ActionExecutionEvent
 ): Promise<void> {
+  const entry = actionResultLog(event);
+  if (!entry) return;
   await linkDesktopViewModel.recordLog({
-    level: event.status === 'failed' ? 'error' : event.status === 'skipped' ? 'warning' : 'info',
+    ...entry,
     category: 'action',
-    message: `${event.label} · ${event.status}`,
     projectId,
     ...(item ? { itemId: item.id } : {}),
     cueId: event.cueId,
     actionId: event.actionId,
     executionId: event.executionId,
-    device: event.kind.startsWith('obs.') ? 'obs' : 'midi',
-    result: event.status,
-    ...(event.error ? { details: { error: event.error, at: event.at } } : { details: { at: event.at } })
+    device: event.kind.startsWith('obs.') ? 'obs' : 'midi'
   });
 }

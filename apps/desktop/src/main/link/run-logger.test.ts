@@ -1,4 +1,4 @@
-import { mkdir, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rmdir, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzip } from 'node:zlib';
@@ -22,7 +22,9 @@ describe('LinkRunLogger', () => {
     const file = join(directory, 'large.jsonl'); cleanupFiles.push(file);
     const entry = { id: 'entry', sessionId: 'session', timestamp: '2026-09-17T00:00:00.000Z', monotonicMs: 0, level: 'info', category: 'state', message: '大场次日志', itemId: 'other' };
     await writeFile(file, `${JSON.stringify(entry)}\n`.repeat(150000) + JSON.stringify({ ...entry, itemId: 'selected', message: '最后一条' }));
-    expect(await logger.query()).toHaveLength(150001);
+    // Without a limit the newest 500 are read; a filter still searches the whole session.
+    expect(await logger.query()).toHaveLength(500);
+    expect(await logger.query({ limit: 5000 })).toHaveLength(5000);
     const selected = await logger.query({ itemId: 'selected' });
     expect(selected.map(value => value.message)).toEqual(['最后一条']);
     selected[0]!.message = '调用方修改';
@@ -33,7 +35,7 @@ describe('LinkRunLogger', () => {
     const directory = await createTestDirectory();
     const logger = new LinkRunLogger(directory);
     const file = join(directory, 'broken.jsonl'); cleanupFiles.push(file);
-    const entry = { id: 'entry', sessionId: 'session', timestamp: '2026-09-17T00:00:00.000Z', monotonicMs: 0, level: 'info', category: 'state', message: '中文'.repeat(40000) };
+    const entry = { id: 'entry', sessionId: 'session', timestamp: new Date().toISOString(), monotonicMs: 0, level: 'info', category: 'state', message: '中文'.repeat(40000) };
     await writeFile(file, `${JSON.stringify(entry)}\r\n\r\ninvalid`);
     const entries = await logger.query();
     expect(entries).toHaveLength(2);
@@ -86,6 +88,19 @@ describe('LinkRunLogger', () => {
     expect((await second.query({ sessionId: first.sessionId })).map((entry) => entry.message)).toEqual(['first']);
   });
 
+  it('导出时才得知的密钥也从已写入的日志里去掉', async () => {
+    const directory = await createTestDirectory();
+    const secrets: string[] = [];
+    const logger = new LinkRunLogger(directory, () => secrets);
+    cleanupFiles.push(join(directory, `${logger.sessionId}.jsonl`));
+    await logger.record({ level: 'info', category: 'device', message: '连接 late-secret', details: { url: 'ws://late-secret@host' } });
+    secrets.push('late-secret');
+    const packagePath = join(directory, 'late.tbdiag.gz'), textPath = join(directory, 'late.txt'); cleanupFiles.push(packagePath, textPath);
+    await logger.exportDiagnosticPackage(packagePath, {}); await logger.exportText(textPath, '团播联动台');
+    expect((await gunzipAsync(await readFile(packagePath))).toString('utf8')).not.toContain('late-secret');
+    expect(await readFile(textPath, 'utf8')).not.toContain('late-secret');
+  });
+
   it('按敏感键名和已知密钥值递归脱敏', () => {
     expect(redactValue({ token: 'abc', nested: ['secret-value'] }, ['secret-value'])).toEqual({
       token: '[REDACTED]',
@@ -110,6 +125,74 @@ describe('LinkRunLogger', () => {
     await expect(logger.exportText(join(directory, 'missing', 'all.txt'), '团播联动台 0.5.0 · 正式 · 提交 abc · com.tuanbo.control')).resolves.toBeUndefined();
     cleanupFiles.push(join(directory, 'missing', 'all.txt')); cleanupDirectories.push(join(directory, 'missing'));
     await expect(logger.exportText(join(directory, 'wrong.json'), '团播联动台 0.5.0 · 正式 · 提交 abc · com.tuanbo.control')).rejects.toThrow('.txt');
+  });
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/** A finished session's log: `lines` entries stamped `ageDays` ago, last written then. */
+async function pastSession(directory: string, name: string, ageDays: number, lines: string[]): Promise<string> {
+  const file = join(directory, `${name}.jsonl`); cleanupFiles.push(file);
+  await writeFile(file, `${lines.join('\n')}\n`);
+  const at = new Date(Date.now() - ageDays * DAY);
+  await utimes(file, at, at);
+  return file;
+}
+const line = (sessionId: string, message: string, ageDays: number, extra: Record<string, unknown> = {}): string => JSON.stringify({
+  id: crypto.randomUUID(), sessionId, timestamp: new Date(Date.now() - ageDays * DAY).toISOString(), monotonicMs: 0, level: 'info', category: 'system', message, ...extra });
+
+describe('LinkRunLogger 有界读取', () => {
+  it('日志页查询从最新的会话往前读，凑够条数就停，不读更早的会话', async () => {
+    const directory = await createTestDirectory();
+    await pastSession(directory, 'oldest', 5, ['损坏行，读到就会被报告']);
+    await pastSession(directory, 'older', 3, Array.from({ length: 50 }, (_, index) => line('older', `较早 ${index}`, 3)));
+    await pastSession(directory, 'newer', 1, Array.from({ length: 50 }, (_, index) => line('newer', `较新 ${index}`, 1)));
+    const logger = new LinkRunLogger(directory);
+    const entries = await logger.query({ limit: 60 });
+    expect(entries).toHaveLength(60);
+    expect(entries.at(-1)?.message).toBe('较新 49');
+    expect(entries[0]?.message).toBe('较早 40');
+    expect(entries.some(entry => entry.message.includes('损坏'))).toBe(false);
+  });
+
+  it('筛选条件很少命中时最多查找最近 20 个会话', async () => {
+    const directory = await createTestDirectory();
+    await pastSession(directory, 'beyond', 30, ['损坏行，超出查找范围']);
+    for (let index = 0; index < 20; index++) await pastSession(directory, `session-${index}`, 20 - index * 0.5, [line(`session-${index}`, `会话 ${index}`, 20 - index * 0.5)]);
+    const logger = new LinkRunLogger(directory);
+    expect(await logger.query({ cueId: 'none' })).toEqual([]);
+    expect((await logger.query({ limit: 100 })).map(entry => entry.message)).toEqual(Array.from({ length: 20 }, (_, index) => `会话 ${index}`));
+  });
+
+  it('按会话查询只读该会话的文件，名字不能指向日志目录以外', async () => {
+    const directory = await createTestDirectory();
+    await pastSession(directory, 'wanted', 2, [line('wanted', '目标会话', 2)]);
+    await pastSession(directory, 'other', 1, ['损坏行，不该被读']);
+    const logger = new LinkRunLogger(directory);
+    expect((await logger.query({ sessionId: 'wanted' })).map(entry => entry.message)).toEqual(['目标会话']);
+    expect(await logger.query({ sessionId: '../wanted' })).toEqual([]);
+  });
+
+  it('导出只含所选天数内的日志，更早的会话文件不读；默认最近 7 天', async () => {
+    const directory = await createTestDirectory();
+    await pastSession(directory, 'ancient', 10, ['损坏行，十天前的会话不该被读']);
+    await pastSession(directory, 'mixed', 1, [line('mixed', '八天前', 8), line('mixed', '两天前', 2), line('mixed', '一天前', 1)]);
+    const logger = new LinkRunLogger(directory);
+    await logger.record({ level: 'info', category: 'system', message: '本次会话' });
+    cleanupFiles.push(join(directory, `${logger.sessionId}.jsonl`));
+    const week = join(directory, 'week.txt'); cleanupFiles.push(week);
+    await logger.exportText(week, '团播联动台 0.5.0');
+    const text = await readFile(week, 'utf8');
+    expect(text).toContain('最近 7 天');
+    expect(text.indexOf('两天前')).toBeLessThan(text.indexOf('一天前'));
+    expect(text.indexOf('一天前')).toBeLessThan(text.indexOf('本次会话'));
+    expect(text).not.toContain('八天前'); expect(text).not.toContain('损坏');
+    const day = join(directory, 'day.tbdiag.gz'); cleanupFiles.push(day);
+    await logger.exportDiagnosticPackage(day, { note: '现场' }, { days: 1 });
+    const unpacked = JSON.parse((await gunzipAsync(await readFile(day))).toString('utf8')) as { range: { days: number }; context: { note: string }; logs: { message: string }[] };
+    expect(unpacked.range).toEqual({ days: 1 });
+    expect(unpacked.context.note).toBe('现场');
+    expect(unpacked.logs.map(entry => entry.message)).toEqual(['本次会话']);
   });
 });
 

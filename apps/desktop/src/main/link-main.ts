@@ -2,7 +2,7 @@ import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
-import { materialSceneTargets, projectFileReferences } from '@tb/core/link';
+import { firstTimeWarning, materialSceneTargets, projectFileReferences } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -14,7 +14,6 @@ import { isProductWebsiteUrl } from './link/product-website';
 import { writeFileAtomically } from './link/atomic-file';
 import { createLicenseMachineCodeReader } from './link/license-machine';
 import { localTestAccessEnabled, localTestLicenseStatus } from './link/local-test-license';
-import { internalDistribution, internalDistributionStatus } from './link/internal-distribution';
 import licensePublicKeys from './link/license-public-keys.json';
 import releasePublicKeys from './link/release-public-keys.json';
 import licenseConfig from './link/license-config.json';
@@ -88,6 +87,7 @@ import {
 import {
   createEmptyLinkProject,
   linkDiagnosticContextSchema,
+  linkLogExportRangeSchema,
   linkDocumentStateSchema,
   linkSaveResponseSchema,
   linkUnsavedChangesReasonSchema,
@@ -158,7 +158,7 @@ import { LoopMidiService } from './link/loop-midi-service';
 import { loopMidiActionSchema, loopMidiStatusSchema } from '@tb/schema';
 import { LinkUpdateManager } from './link/update-manager';
 import { rendererSource } from './link/renderer-source';
-import { buildGitSha, buildVersion, releaseAppId, releaseChannel, releaseChannelLabel } from './link/build-identity';
+import { buildGitSha, buildVersion, releaseChannel, releaseChannelLabel } from './link/build-identity';
 import desktopPackage from '../../package.json';
 import ffmpegPath from 'ffmpeg-static';
 import { NativeAudioCache } from './link/native-audio-cache';
@@ -172,6 +172,8 @@ import { NativeObsHost } from './link/native-obs-host';
 import { NativeObsRequests } from './link/native-obs-requests';
 import { NativeObsPreloadPool } from './link/native-obs-preload';
 import { createNativeObsOutputs } from './link/native-obs-outputs';
+import { PreparationSteps } from './link/preparation-log';
+import { obsStatusLogEntry } from './link/obs-status-log';
 import { prepareNextObsFiles } from './link/native-obs-files';
 
 /** False in `electron-vite build --mode release`; app.isPackaged only checks the executable name. */
@@ -186,7 +188,6 @@ protocol.registerSchemesAsPrivileged([{
 // software path avoids competing for the same Windows GPU command queue while
 // OBS starts a high-resolution media source during playback.
 if (process.platform === 'win32') app.disableHardwareAcceleration();
-if (internalDistribution) app.setName(internalDistribution.channel === 'portable-test' ? '团播联动台功能测试版' : '团播联动台内测');
 crashReporter.start({ uploadToServer: false });
 
 let mainWindow: BrowserWindow | null = null;
@@ -208,7 +209,7 @@ const unsavedChanges = new UnsavedChangesGuard({
     return response === 0 ? 'save' : response === 1 ? 'discard' : 'cancel';
   },
   save: () => rendererSaves.request(),
-  log: message => { void ipcLogger?.record({ level: 'warning', category: 'system', message }).catch((error: unknown) => console.error('记录未保存修改处理失败', error)); }
+  log: (level, message) => { void ipcLogger?.record({ level, category: 'system', message }).catch((error: unknown) => console.error('记录未保存修改处理失败', error)); }
 });
 /** Every quit (window close, app.quit, Windows session end) goes through here. */
 let requestQuit: () => void = () => { app.quit(); };
@@ -254,9 +255,8 @@ function nativePlaybackActive(): boolean {
 }
 /** Which build this is: shown in the update panel and written to logs and diagnostic packages. */
 function buildIdentity(): Pick<LinkAppInfo, 'name' | 'version' | 'channel' | 'gitSha' | 'appId'> {
-  const distribution = internalDistribution?.channel ?? null;
-  return { name: app.getName(), version: buildVersion, channel: releaseChannel(app.isPackaged, distribution),
-    gitSha: buildGitSha, appId: releaseAppId(distribution, desktopPackage.build.appId) };
+  return { name: app.getName(), version: buildVersion, channel: releaseChannel(app.isPackaged),
+    gitSha: buildGitSha, appId: desktopPackage.build.appId };
 }
 function buildIdentityLine(): string {
   const identity = buildIdentity();
@@ -293,6 +293,18 @@ async function bootstrap(): Promise<void> {
   await logger.record({ level: 'info', category: 'system', message: `${buildIdentityLine()} 已启动`,
     details: { appVersion: buildVersion, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
     .catch((error: unknown) => dialog.showErrorBox('运行日志无法写入', error instanceof Error ? error.message : String(error)));
+  // Earlier sessions' logs keep within 30 days and 200 MB, moved to the recycle bin like archives; this session's file stays.
+  // shell.trashItem refuses an item the bin cannot take (a network path: rejected, file kept) and recycled local files from
+  // both a desktop and an SSH session on the dev PC (checked 2026-10-24), so a cleanup does not become a permanent delete.
+  void logger.pruneSessions(path => shell.trashItem(path)).then(async pruned => {
+    if (pruned.length === 0) return;
+    const bytes = pruned.reduce((sum, entry) => sum + entry.bytes, 0);
+    await logger.record({ level: 'info', category: 'system', message: `已把 ${pruned.length} 个旧会话日志（${(bytes / 1024 / 1024).toFixed(1)} MB）移到回收站`,
+      details: { expired: pruned.filter(entry => entry.reason === 'expired').length, overSize: pruned.filter(entry => entry.reason === 'over-size').length, bytes,
+        files: pruned.slice(0, 300).map(entry => basename(entry.file)) } });
+  }).catch(async (error: unknown) => {
+    await logger.record({ level: 'warning', category: 'system', message: '旧会话日志清理未完成，下次启动再试', details: { error: error instanceof Error ? error.message : String(error) } });
+  }).catch((error: unknown) => console.error('日志清理结果未能写入', error));
   app.on('child-process-gone', (_event, details) => {
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
       message: `Electron ${details.type} 进程退出：${details.reason}，退出码 ${details.exitCode}`,
@@ -304,9 +316,7 @@ async function bootstrap(): Promise<void> {
     (status) => sendToRenderer('link:update-status', status),
     { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus(), releaseKeys: releasePublicKeys,
       log: (level, message) => { void logger.record({ level, category: 'system', device: '软件更新', message, result: 'failed' })
-        .catch((error: unknown) => console.error('更新校验日志写入失败', error)); } },
-    undefined,
-    internalDistribution ? '' : undefined
+        .catch((error: unknown) => console.error('更新校验日志写入失败', error)); } }
   );
   registerIpc(profileStore, obs, processManager, logger, integrationDetector, updateManager);
   void midiHealth.check().then((result) => logger.record({
@@ -335,7 +345,14 @@ async function bootstrap(): Promise<void> {
     createMainWindow(obs, logger);
   };
 
-  obs.subscribe((snapshot) => sendToRenderer('link:obs-status', snapshot));
+  // OBS connection changes are logged here, whether or not a window is open.
+  let obsStatus = obs.getSnapshot().status;
+  obs.subscribe((snapshot) => {
+    sendToRenderer('link:obs-status', snapshot);
+    const entry = obsStatusLogEntry(obsStatus, snapshot);
+    obsStatus = snapshot.status;
+    if (entry) void logger.record({ ...entry, category: 'device', device: 'obs' }).catch((error: unknown) => console.error('OBS 连接状态日志未能保存', error));
+  });
   obs.subscribeInventoryChanges(() => sendToRenderer('link:obs-inventory-changed', null));
   processManager.subscribe((snapshot) => sendToRenderer('link:process-status', snapshot));
 
@@ -552,6 +569,8 @@ function registerIpc(
   };
   const nativeSeek = new ObsNativeSeek();
   const programObsListeners = new Set<(status: import('@tb/schema').NativeObsStatus) => void>();
+  // Advisories and repeated warnings already recorded in this run, so each is a warning only once (firstTimeWarning).
+  const seenNotices = new Set<string>();
   const obsPreload = new NativeObsPreloadPool({
     authorize: async request => {
       await authorizeProduct('link:native-obs-prepare', request);
@@ -560,7 +579,7 @@ function registerIpc(
       if (nativePlaybackActive()) throw new Error('音频已开始准备，不能另行启动节目预备');
     },
     create: (request, positionMs) => createNativeObsOutputs(request, { obs, projects: projectService, media: mediaPreviewService,
-      profiles: profileStore, seek: nativeSeek, logger,
+      profiles: profileStore, seek: nativeSeek, logger, seenNotices,
       logFailure: error => {
         if (nativeObs?.status?.sessionId === request.sessionId) nativeObs.disconnect(error.message);
         else console.error('已结束画面会话的运行日志未能落盘', error);
@@ -618,9 +637,13 @@ function registerIpc(
     if (nativePlayerShutdown) throw new Error('正式音频引擎正在关闭或关闭失败，请查看运行日志');
     if (!nativePlayer) {
       if (!ffmpegPath) throw new Error('FFmpeg 音频解码组件未安装');
-      let lastClockBoundary = '';
-      const measured = (phase: string, elapsedMs: number): void => { void logger.record({ level: 'info', category: 'system', device: '正式音频', message: `正式音频准备：${phase}`, details: { elapsedMs } })
-        .catch((error: unknown) => console.error('正式音频计时日志写入失败', error)); };
+      let lastClockBoundary = '', lastReadyBoundary = '';
+      // Each preparation's steps go into one 正式音频准备完成 entry; only a slow step is recorded as it happens.
+      const audioSteps = new PreparationSteps((step, ms) => {
+        void logger.record({ level: 'info', category: 'system', device: '正式音频', message: `正式音频准备较慢：${step} 用时 ${(ms / 1000).toFixed(1)} 秒`, details: { ms: Math.round(ms) } })
+          .catch((error: unknown) => console.error('正式音频计时日志写入失败', error));
+      });
+      const measured = (phase: string, elapsedMs: number): void => audioSteps.add(phase, elapsedMs);
       nativePlayer = new NativePlayerService({
         checkDeviceHealth: async (recheck) => {
           const result = await midiHealth.check(recheck);
@@ -632,6 +655,14 @@ function registerIpc(
         resolveAudio: (projectPath, relativePath) => projectService.resolveReferenceAudio(projectPath, relativePath),
         changed: (status, qpc100ns) => {
           nativeObs?.observe(status, qpc100ns); nativeProgramHost?.observe(status, qpc100ns); nativePlayerUi.publish(status);
+          const readyBoundary = `${status.sessionId}:${status.generation}`;
+          if (status.status === 'ready' && readyBoundary !== lastReadyBoundary) {
+            lastReadyBoundary = readyBoundary;
+            const steps = audioSteps.take();
+            void logger.record({ level: 'info', category: 'system', device: '正式音频', itemId: status.itemId, message: '正式音频准备完成',
+              details: { playbackSessionId: status.sessionId, generation: status.generation, totalMs: steps.reduce((sum, step) => sum + step.ms, 0), steps } })
+              .catch((error: unknown) => console.error('正式音频准备日志写入失败', error));
+          }
           if (qpc100ns && qpc100ns !== '0' && (status.status === 'playing' || status.status === 'ended')) {
             const boundary = `${status.sessionId}:${status.generation}:${status.status}`;
             if (boundary !== lastClockBoundary) {
@@ -651,7 +682,8 @@ function registerIpc(
               .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
         },
         measured,
-        error: message => { void logger.record({ level: 'error', category: 'device', device: '正式音频', message, result: 'failed' })
+        // A failed preparation keeps the steps it got through.
+        error: message => { const steps = audioSteps.take(); void logger.record({ level: 'error', category: 'device', device: '正式音频', message, result: 'failed', ...(steps.length ? { details: { steps } } : {}) })
           .catch((error: unknown) => console.error('正式音频日志写入失败', error)); },
         recovered: report => { void logger.record({ level: 'warning', category: 'device', device: '正式音频', ...(nativePlayer?.status ? { itemId: nativePlayer.status.itemId } : {}),
           message: `时间码中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从当前播放位置继续发送，中断期间的时间码未补发`,
@@ -695,7 +727,7 @@ function registerIpc(
     });
     return licenseService;
   };
-  const getLicenseStatus = async () => internalDistribution ? internalDistributionStatus(internalDistribution, await readMachineCode()) : localTestAccess ? getLocalTestStatus() : (await getLicenseService()).status();
+  const getLicenseStatus = async () => localTestAccess ? getLocalTestStatus() : (await getLicenseService()).status();
   handle('link:license-status', getLicenseStatus);
   readLicenseStatus = getLicenseStatus;
   let licenseChanging = false;
@@ -899,8 +931,9 @@ function registerIpc(
   handle('link:ma2-network-status', async () => { await ma2NetworkReady; return ma2Network.status(); });
   handle('link:ma2-current-show', async () => { await ma2NetworkReady; return ma2Network.currentShow(); });
   nativeProgram = new NativeProgramService((project, request, callbacks) => {
+    // A channel that cannot join (OBS, timecode) repeats song after song until fixed: a warning the first time, then info.
     const notice = (message: string, itemId: string | null): void => {
-      void logger.record({ level: 'warning', category: 'state', device: '正式播放器', projectId: project.projectId,
+      void logger.record({ level: firstTimeWarning(seenNotices, message), category: 'state', device: '正式播放器', projectId: project.projectId,
         ...(itemId ? { itemId } : {}), message }).catch((error: unknown) => console.error('后台节目提示日志未能保存', error));
     };
     const host = new NativeProgramHost(project, request.projectPath, request.revision, {
@@ -1350,7 +1383,8 @@ function registerIpc(
     const reason = z.string().min(1).max(4000).parse(reasonValue);
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '开播前检查', noLink: true,
       message: '这首歌的灯光还不能演出。', detail: reason, buttons: ['无灯光播放', '取消'], defaultId: 0, cancelId: 1 });
-    await logger.record({ level: 'warning', category: 'operator', device: '正式播放器',
+    // The song's lighting needs someone's attention: a warning the first time, info when it repeats song after song.
+    await logger.record({ level: firstTimeWarning(seenNotices, reason), category: 'operator', device: '正式播放器',
       message: `开播前检查：${reason}；${response === 0 ? '操作员选择无灯光播放' : '操作员取消播放'}` });
     return response === 0;
   });
@@ -1681,11 +1715,7 @@ function registerIpc(
     try {
       const password = await profileStore.loadObsPassword(profile.obs.credentialId);
       knownSecrets.add(password);
-      await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'running',
-        message: '正在连接 OBS WebSocket', details: { address: profile.obs.webSocketUrl, passwordProvided: password.length > 0 } });
       connected = await obs.connect(profile.obs.webSocketUrl, password, profile.obs.startupTimeoutMs);
-      await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'succeeded',
-        message: 'OBS WebSocket 已连接', details: { address: profile.obs.webSocketUrl, obsVersion: connected.obsVersion } });
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed',
         message: `OBS 连接失败：${error instanceof Error ? error.message : String(error)}`, details: { address: profile.obs.webSocketUrl } });
@@ -2039,16 +2069,18 @@ function registerIpc(
     const error = await shell.openPath(directory);
     if (error) throw new Error(`无法打开日志文件夹：${error}`);
   });
-  handle('link:log-export', async () => {
+  handle('link:log-export', async (_event, rangeValue: unknown) => {
+    const range = linkLogExportRangeSchema.parse(rangeValue ?? { days: 7 });
     const result = await dialog.showSaveDialog(mainWindow!, { title: '导出运行日志',
       defaultPath: `${app.getName()}-日志-${new Date().toISOString().replaceAll(':', '-')}.txt`,
       filters: [{ name: '文本日志', extensions: ['txt'] }] });
     if (result.canceled || !result.filePath) return null;
-    await logger.exportText(result.filePath, buildIdentityLine());
+    await logger.exportText(result.filePath, buildIdentityLine(), range);
     return result.filePath;
   });
-  handle('link:diagnostic-export', async (_event, contextValue: unknown) => {
+  handle('link:diagnostic-export', async (_event, contextValue: unknown, rangeValue: unknown) => {
     const context = linkDiagnosticContextSchema.parse(contextValue);
+    const range = linkLogExportRangeSchema.parse(rangeValue ?? { days: 7 });
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: '导出脱敏诊断包',
       defaultPath: `${app.getName()}-诊断-${new Date().toISOString().replaceAll(':', '-')}.tbdiag.gz`,
@@ -2062,7 +2094,7 @@ function registerIpc(
       gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),
       obs: obs.getSnapshot(), ma2: ma2Network.status(), runtimeActive, collectedAt: new Date().toISOString(),
       crashDumpContentsIncluded: false
-    } });
+    } }, range);
     return result.filePath;
   });
 }

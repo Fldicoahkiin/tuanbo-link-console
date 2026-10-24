@@ -1,23 +1,17 @@
 import { resolve } from 'node:path';
-import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
+  // Only `--mode release` compiles out the development activation bypass; packaging refuses any other build
+  // (scripts/require-release-build.mjs).
   const release = mode === 'release';
-  // A leftover test-channel variable must not turn an official build into an activation-free package.
-  if (release && process.env.TBLINK_INTERNAL_DISTRIBUTION_FILE) throw new Error('正式构建不能携带 TBLINK_INTERNAL_DISTRIBUTION_FILE');
-  // The official version is package.json's; only the test package build numbers itself as a prerelease.
-  if (release && process.env.TBLINK_BUILD_VERSION) throw new Error('正式构建不能携带 TBLINK_BUILD_VERSION');
-  const version = process.env.TBLINK_BUILD_VERSION ?? (JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as { version: string }).version;
   return {
     main: {
       define: {
-        __TBLINK_INTERNAL_DISTRIBUTION__: process.env.TBLINK_INTERNAL_DISTRIBUTION_FILE ? readFileSync(resolve(process.env.TBLINK_INTERNAL_DISTRIBUTION_FILE), 'utf8') : 'null',
         __TBLINK_LOCAL_TEST_ACCESS__: JSON.stringify(!release),
-        __TBLINK_GIT_SHA__: JSON.stringify(gitRevision(release)),
-        __TBLINK_BUILD_VERSION__: JSON.stringify(version)
+        __TBLINK_GIT_SHA__: JSON.stringify(gitRevision(release))
       },
       build: {
         sourcemap: false,

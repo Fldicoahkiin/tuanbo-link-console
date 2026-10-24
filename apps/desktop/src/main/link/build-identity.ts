@@ -5,20 +5,11 @@ import desktopPackage from '../../../package.json';
 declare const __TBLINK_GIT_SHA__: string | null;
 export const buildGitSha: string | null = typeof __TBLINK_GIT_SHA__ === 'undefined' ? null : __TBLINK_GIT_SHA__;
 
-/** package.json's version, or the test package's prerelease version (X.Y.Z-test.N+g<sha>). Unit tests run unbuilt. */
-declare const __TBLINK_BUILD_VERSION__: string;
-export const buildVersion: string = typeof __TBLINK_BUILD_VERSION__ === 'undefined' ? desktopPackage.version : __TBLINK_BUILD_VERSION__;
+export const buildVersion: string = desktopPackage.version;
 
-export const releaseChannelLabel: Record<LinkReleaseChannel, string> = { release: '正式', test: '测试', internal: '内测', development: '开发' };
+export const releaseChannelLabel: Record<LinkReleaseChannel, string> = { release: '正式', development: '开发' };
 
-/** The channel follows the build-time distribution; an unpackaged app is development whatever it carries. */
-export function releaseChannel(packaged: boolean, distribution: 'portable-test' | 'internal' | null): LinkReleaseChannel {
-  if (!packaged) return 'development';
-  return distribution === 'portable-test' ? 'test' : distribution === 'internal' ? 'internal' : 'release';
-}
-
-/** The packager's appId is not readable at runtime; the test and internal builders set these (scripts/release-config.mjs,
- * electron-builder.internal.cjs), the official one is package.json build.appId. */
-export function releaseAppId(distribution: 'portable-test' | 'internal' | null, officialAppId: string): string {
-  return distribution === 'portable-test' ? 'com.tuanbo.control.functionaltest' : distribution === 'internal' ? 'com.tuanbo.control.internal' : officialAppId;
+/** Every packaged build is the official release (packaging refuses development builds); an unpackaged app is development. */
+export function releaseChannel(packaged: boolean): LinkReleaseChannel {
+  return packaged ? 'release' : 'development';
 }

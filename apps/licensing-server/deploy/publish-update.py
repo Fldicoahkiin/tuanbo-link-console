@@ -49,6 +49,7 @@ STAGING = 'var/lib/tblink-release/staging'
 VERSION = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)')
 STAGED_NAME = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[a-f0-9]{12}')
 REQUEST_ID = re.compile(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}')
+VERSIONED = re.compile(r'Tuanbo-Link-Console-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-x64\.exe(\.blockmap)?')
 MAX_MANIFEST = 1024 * 1024
 MAX_FILE = 2 * 1024 ** 3
 
@@ -245,6 +246,31 @@ def receipt_directory(root, kind, version):
     return receipt
 
 
+def archive_feed(root, keep, receipt):
+    """The feed serves only the versions in keep: every other installer and blockmap moves into the receipt's
+    archived folder, out of public reach. The feed and root's backups are separate mounts in the service unit, so
+    each file is copied, checked and only then removed from the feed."""
+    archived = []
+    for path in sorted((root / FEED).iterdir()):
+        match = VERSIONED.fullmatch(path.name)
+        if not match or match.group(1) in keep:
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError('更新目录里的文件不安全：' + path.name)
+        target = receipt / 'archived' / path.name
+        target.parent.mkdir(mode=0o700, exist_ok=True)
+        shutil.copyfile(path, target)
+        if digest(target).hexdigest() != digest(path).hexdigest():
+            raise RuntimeError('移出更新源时复制校验失败：' + path.name)
+        path.unlink()
+        archived.append(path.name)
+    return archived
+
+
+def archived_versions(names):
+    return sorted({VERSIONED.fullmatch(name).group(1) for name in names}, key=version_key)
+
+
 def install(source, release, root, request=None):
     destination = root / FEED
     names = release['names']
@@ -271,9 +297,16 @@ def install(source, release, root, request=None):
     # latest.yml is last in names: clients never see a feed whose installer is not in place.
     for pending, target in staged:
         os.replace(pending, target)
+    # Keep this version and the one it replaced: a one-step rollback needs the previous installer, and clients
+    # updating from it download its blockmap for the differential update.
+    keep = {release['version']} | ({feed_metadata(previous.decode())['version']} if previous is not None else set())
+    try:
+        archived = archive_feed(root, keep, receipt)
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError(f'已发布 {release["version"]}，但移出旧版本失败：{error}') from None
     result = {'kind': 'publish', 'version': release['version'], 'gitSha': release['gitSha'], 'backup': str(receipt),
               'previousFeed': previous is not None, 'artifacts': release['records'], 'signing': release['signing'],
-              'releaseSignature': release['kid'], 'request': request}
+              'releaseSignature': release['kid'], 'archived': archived, 'request': request}
     (receipt / 'receipt.json').write_text(json.dumps(result, indent=2) + '\n')
     return result
 
@@ -384,7 +417,12 @@ def rollback(version, root, request):
         outgoing.flush()
         os.fsync(outgoing.fileno())
     os.replace(pending, feed)
-    result = {'kind': 'rollback', 'version': version, 'backup': str(receipt), 'request': request}
+    # The withdrawn version leaves the feed with anything else but the version now served.
+    try:
+        archived = archive_feed(root, {version}, receipt)
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError(f'更新源已回到 {version}，但移出撤下的版本失败：{error}') from None
+    result = {'kind': 'rollback', 'version': version, 'backup': str(receipt), 'archived': archived, 'request': request}
     (receipt / 'receipt.json').write_text(json.dumps(result, indent=2) + '\n')
     return result
 
@@ -513,12 +551,14 @@ def handle(request, root, accounts):
     actor = {'actor': request['actor'], 'reason': request['reason'], 'id': request['id'], 'requestedAt': request['requestedAt']}
     if request['action'] == 'rollback':
         result = rollback(request['version'], root, actor)
-        return result['version'], f'更新源已回到 {result["version"]}'
+        moved = archived_versions(result['archived'])
+        return result['version'], f'更新源已回到 {result["version"]}' + (f'，已移出更新源：{"、".join(moved)}' if moved else '')
     staging_fd = open_owned_directory(root / STAGING, accounts.builder)
     try:
         if request['action'] == 'publish':
             result = publish_staged(staging_fd, request['staged'], request['manifestSha256'], root, accounts, actor)
-            return result['version'], f'已发布 {result["version"]}'
+            moved = archived_versions(result['archived'])
+            return result['version'], f'已发布 {result["version"]}' + (f'，已移出更新源：{"、".join(moved)}' if moved else '')
         discard(staging_fd, request['staged'], accounts)
         return request['staged'].split('-')[0], f'已丢弃待发布版本 {request["staged"]}'
     finally:

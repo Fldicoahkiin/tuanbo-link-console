@@ -2,7 +2,7 @@
 
 2026-09-30 当前生产状态：Windows **0.4.29** 已正式发行，公司更新源已发布安装包、blockmap 与 `latest.yml`；官网已开放支付宝月付 **800 元／30 天／台**、年付 **8,000 元／365 天／台**。已核验未付款订单创建、同单恢复和未付款不发码，未进行实际扣款。Windows CI 已通过正式安装版无凭证拦截、覆盖安装与卸载验收，见[专项记录](LICENSE_UPDATE_ACCEPTANCE.md)；真实支付交付与续费、退款及两版本重启更新仍待真人测试；微信 Native 服务端及官网已部署、商户凭据未配置且收款关闭；自动开票尚未接入。实际构建、摘要与部署备份见 [发行记录](RELEASE_0.4.29.md)。下文带日期的旧关闭／未发行记录只表示当时状态。
 
-2026-09-29 专项验收：[Windows 运行 36469197729](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36469197729) 全部通过。真实 NSIS 更新器确认当前版无更新、模拟旧版本号完整下载公司 HTTPS 源的 130,125,531 字节安装包并验证 SHA512／清单 SHA256、拒绝本机夹具中的篡改包；未执行两版本重启安装。正式安装版的无凭证拦截、覆盖安装和卸载亦通过，详细边界见[专项记录](LICENSE_UPDATE_ACCEPTANCE.md)。
+2026-09-29 专项验收：[Windows 运行 36469197729](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36469197729) 全部通过。真实 NSIS 更新器确认当前版无更新、模拟旧版本号完整下载公司 HTTPS 源的 130,125,531 字节安装包并验证 SHA512／清单 SHA256、拒绝本机夹具中的篡改包；未执行两版本重启安装。正式安装版的无凭证拦截、覆盖安装和卸载亦通过，详细边界见[专项记录](LICENSE_UPDATE_ACCEPTANCE.md)。
 
 2026-09-28 初始状态（历史）：源码改为公司 HTTPS 更新源，DNS、源站 TLS 和静态更新路由已完成并验证；尚未发布新安装包。旧版本历史验收记录留在文末，不代表本次域名和保护配置已验收。
 
@@ -18,7 +18,7 @@
 - 升级服务期限：用签名里的发布日期和本机签名授权里的 `updatesUntil` 比较。发布日期晚于期限或授权不可用时，面板显示新版本和原因，不提供下载和安装；下载前、安装前各再核对一次授权。日期按北京时间显示，比较用精确时刻。
 - 下载：手动点击，差分下载（2026-10-23 起）。安装器每次安装都会把自己复制到 `%LOCALAPPDATA%\@tbdesktop-updater\installer.exe`，更新时按新旧版本的 blockmap 只下载变化的块，再用本机缓存拼出完整安装包；拼出的文件 SHA-512 与 `latest.yml` 不符时自动改为下载完整安装包。最终文件仍要通过 SHA-512 和发布签名校验才会安装。下载和安装仍需要有效授权。播放中不能开始下载；下载中开始播放会立即停止下载并回到「可下载」，停止播放后可以重新下载。检查与下载互斥，已下载的版本保留等待安装。
 - 安装：播放中拒绝。确认后走与关闭软件相同的退出流程：未保存工程「保存 / 不保存 / 取消」→ 停止灯光试听 → 关闭正式音频与画面 → 逐项确认由本软件启动的外部程序 → 关闭音乐分析 → 启动安装程序。任一步选择返回即取消安装，已下载的更新保留。安装程序启动失败时软件保持打开，面板显示错误。安装沿用原目录和当前用户范围，更新后自动重启。
-- 开发模式不执行更新；免激活测试包没有更新源，见[测试包](#测试包)。
+- 开发模式不执行更新。
 - 网络层采用锁定版本 `builder-util-runtime` 的 60 秒 socket 空闲超时。完整包传输可超过 60 秒，不是整次下载的总时限；慢链路需实测。授权请求另有独立的 10 秒时限。
 
 当前 feed 是公开静态资源，下载本身不发授权，安装包未做代码签名。升级服务期限由客户端按签名授权执行，属于产品策略，不是防破解措施：任何人都能从官网直接下载安装包。服务器短效下载链接和版本资格目录仍属后续工作。
@@ -26,24 +26,18 @@
 <a id="构建身份"></a>
 ### 构建身份
 
-每个构建记录产品名、版本、渠道（正式 / 测试 / 内测 / 开发）、Git 提交号（有未提交改动时带 `-dirty`）和 appId。正式构建取不到提交号会直接失败。这些信息显示在「软件更新」面板，写入每次启动的日志、导出日志的开头和诊断包。打包版只从 app.asar 加载界面，忽略 `ELECTRON_RENDERER_URL`；从开发机热更新测试电脑界面的做法只对修复前装好的包有效。
+每个构建记录产品名、版本、渠道（正式 / 开发）、Git 提交号（有未提交改动时带 `-dirty`）和 appId。正式构建取不到提交号会直接失败。这些信息显示在「软件更新」面板，写入每次启动的日志、导出日志的开头和诊断包。打包版只从 app.asar 加载界面，忽略 `ELECTRON_RENDERER_URL`；从开发机热更新测试电脑界面的做法只对修复前装好的包有效。
 
-<a id="测试包"></a>
-### 测试包
+<a id="只发正式包"></a>
+### 只发正式包
 
-免激活测试包由 `scripts/build-portable-test.mjs` 在 Windows 上构建，身份与正式包分开（定义在 `scripts/release-config.mjs`）：
+2026-10-24 起只有正式安装包这一种，测试一律用后台签发的激活码。免激活测试包（`portable-test`，任何机器永久免激活）和内测包（`internal`，构建时嵌入内测许可）连同它们的构建、校验脚本都已删除。
 
-| 项目 | 正式包 | 测试包 |
-| --- | --- | --- |
-| appId | `com.tuanbo.control` | `com.tuanbo.control.functionaltest` |
-| 包名（决定默认安装目录） | `@tb/desktop` → `%LOCALAPPDATA%\Programs\@tbdesktop` | `tuanbo-link-functional-test` → `%LOCALAPPDATA%\Programs\tuanbo-link-functional-test` |
-| productName（决定 userData） | 团播联动台 → `%APPDATA%\团播联动台` | 团播联动台功能测试版 → `%APPDATA%\团播联动台功能测试版` |
-| 安装包 | `Tuanbo-Link-Console-X.Y.Z-x64.exe` | `Tuanbo-Link-Test-NoActivation-X.Y.Z-x64.exe` |
-| 更新源 | 公司 feed | 无（不生成 `app-update.yml` 和 `latest.yml`） |
-
-构建脚本最后运行 `verify-desktop-artifacts.mjs --test-dist <目录>`，核对上述身份、内嵌的测试分发，以及没有任何能进入正式 feed 的文件；不通过即报错。正式包的 `--dist` 校验反过来要求主进程不含测试或内测分发、包名和 productName 为正式值。
-
-此前的测试包与正式包同用 `@tbdesktop` 目录和 `%APPDATA%\团播联动台`：不带 `/D` 安装会覆盖正式版的 app.asar。新测试包不再读取旧目录里的配置，测试电脑升级到新测试包后需要重新配置，或把旧配置复制到新的 userData 目录。
+- 打包只接受 `electron-vite build --mode release` 的产物：electron-builder 的 `beforePack` 钩子（`apps/desktop/scripts/require-release-build.mjs`）检查待打包的 `out/main/index.cjs`，含有开发期本机测试入口（`TBLINK_LOCAL_TEST_ACCESS`、`.local-test-access`、「本机开发测试通道」）就拒绝打包。`pnpm dist` 和 `pnpm dist:dir` 会先做 release 构建；先跑 `pnpm build`（开发构建）再直接调用 electron-builder 会被拒绝。
+- 正式包的 `--dist` 校验再检查一次 app.asar 不含这些入口，包名和 productName 为正式值。
+- 没打包的开发和 e2e 运行保留本机测试入口（`TBLINK_LOCAL_TEST_ACCESS=1` 或 `.local-test-access`）。打包版即使设了环境变量、放了标记文件，也必须激活：`node scripts/verify-packaged-activation.mjs <win-unpacked\团播联动台.exe> <输出目录>` 会同时设置这两样，并断言应用停在激活页、授权不是有效状态、设备输出被拒绝。
+- 以前装过测试包的电脑：测试包装在 `%LOCALAPPDATA%\Programs\tuanbo-link-functional-test`，数据在 `%APPDATA%\团播联动台功能测试版`。更早的测试包与正式包同用 `@tbdesktop` 目录和 `%APPDATA%\团播联动台`。这些电脑改装正式包并用激活码激活。
+- 离线音乐分析的运行时和模型从 0.5.0 起随正式包发布（用户 2026-10-24 决定），afterPack 按指纹核对，见 [音乐分析工具](../tools/music-analysis/README.md)。
 
 <a id="官网下载信息"></a>
 ### 官网下载信息
@@ -78,7 +72,13 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 | 两个真实候选包（中间若干代码提交，美颜和音乐分析不变） | 412,791,934 字节 | 5,498,432 字节（下载计划计算，1.33%） | — |
 | 本机缓存的旧安装包损坏 | 412,792,105 字节 | 差分结果 SHA-512 不符后改为完整下载，共 414 MB | 最终 SHA-512 一致 |
 
-按服务器 4 Mbps 计算，完整安装包约 14 分钟，差分约 5～15 秒。要保持这个效果：
+2026-10-24 起正式包内置离线音乐分析运行时（固定部分 23,916 个文件、约 2.1 GB）。同日实测（构建机，blockmap 下载计划计算）：
+
+| 场景 | 安装包大小 | 实际下载 |
+| --- | --- | --- |
+| 内置音乐运行时的正式包，只改一处启动日志字符串的两个版本 | 987,642,297 / 987,642,352 字节 | 1,838,001 字节（0.19%，47,105 块里 88 块不同）；音乐运行时和模型没有重新下载 |
+
+更新源实测下载约 470 KB/s：完整安装包（约 988 MB，0.4.29 升级到 0.5.0 时就是这一种）约 35 分钟；运行时不变的差分更新约几秒到十几秒。要保持这个效果：
 
 - 美颜和音乐分析产物不变时，它们在安装包里的字节不变。这由 electron-builder 的差分友好打包保证（非固实 7z、1 MB 字典，按内容切块的 blockmap），加上仓库里的发布指纹固定产物本身。不要改 NSIS 压缩方式或 `differentialPackage`；升级 electron-builder 后第一次更新可能接近全量。
 - 更新源必须保留每个已发布版本的 `.blockmap`：客户端按当前版本号去取旧 blockmap。`publish-update.py` 不删除已发布文件。
@@ -94,7 +94,6 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 
 - 正式版本号只在发布提交里改：根目录和 `apps/desktop` 两个 `package.json` 同时改，提交信息 `chore(release): X.Y.Z`。平时的功能提交不改版本号。
 - 发布构建（`pnpm verify:release` 和 Release Windows 工作流）要求版本高于所有已有 `vX.Y.Z` 标签和线上 `latest.yml`；它自己的标签只能指向本次构建的提交。日常 `pnpm verify` 只检查两处版本一致。
-- 免激活测试包的版本是下一个次版本的预发布，例如 0.5.0 之后打的测试包是 `0.6.0-test.379+g509d3e2`（提交数和提交号）。它不会与正式版本重号，正式客户端也不会把它当更新。
 
 <a id="发布签名"></a>
 ### 发布签名
@@ -108,9 +107,10 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 
 1. 推发布提交到 master，在 Actions 运行 Release Windows（填完整提交号），或推 `vX.Y.Z` 标签。
 2. 托管机检查通过后，构建机打包、签名、上传到服务器 staging（[构建机准备](RELEASE_BUILDER_SETUP.md)）。
-3. 运营后台「软件更新」里确认发布；服务器重新校验后上线。需要撤回时用「回滚到上一版」。完整链路和信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布staging-与后台确认)。
+3. 运营后台「软件更新」里确认发布；服务器重新校验后上线，更新源只留新版和上一版，更早的移进服务器备份。需要撤回时用「回滚到上一版」，撤下的版本也移出更新源。完整链路和信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布staging-与后台确认)。
 4. 运行 `node scripts/write-website-release.mjs` 更新官网下载信息并提交，见[官网下载信息](#官网下载信息)。
-5. 用正式安装包做一次从上一版的覆盖升级和软件内更新，记录结果。
+5. 在 Actions 运行 Publish GitHub Release，填版本号和第 1 步那次 Release Windows 的运行编号。它在构建机上从更新源下载安装包、blockmap 和 `latest.yml`，核对发布签名，并与那次构建的 `release-manifest.json` 逐项比对，全部一致才建 `vX.Y.Z` 标签（指向构建提交）和 GitHub Release 并标为 Latest，附件就是更新源上的这几个文件加构建清单。说明取自 `release-notes/X.Y.Z.md`，没有这个文件就拒绝发布，末尾固定加上「需要用激活码激活」。用 GITHUB_TOKEN 建的标签不会触发 Release Windows。这一步只能证明更新源的现状，读不到服务器上的发布回执。
+6. 用正式安装包做一次从上一版的覆盖升级和软件内更新，记录结果。
 
 旧的手工发布（`publish-update.py <目录> <manifest sha256> <提交> <版本>`）仍可用，但同样要求发布签名和更高的版本号。
 

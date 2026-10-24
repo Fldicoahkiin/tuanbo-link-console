@@ -65,6 +65,21 @@ it('原生时钟驱动节目顺序，不需要界面回调；重复设备位置�
   expect(test.session.error).toBeNull(); expect(test.session.pendingCount).toBe(0);
 });
 
+it('每个画面动作只记一条结果日志，带耗时；排队和执行中不写日志', async () => {
+  const test = setup(); await test.session.prepare(0);
+  await test.advance(0, 3000); await test.session.settled();
+  const actionLogs = test.dependencies.recordLog.mock.calls.map(([entry]) => entry).filter(entry => entry.category === 'action');
+  expect(actionLogs.map(entry => entry.message)).toEqual(['切机位 · succeeded', '切机位 · succeeded', '切机位 · succeeded', '切机位 · succeeded']);
+  expect(actionLogs.every(entry => typeof entry.details?.['durationMs'] === 'number')).toBe(true);
+});
+
+it('画面动作失败时日志写明原因，记为错误', async () => {
+  const test = setup(undefined, action => action.kind === 'obs.setProgramScene' && action.sceneName === '场景 1' ? Promise.reject(new Error('OBS 无响应')) : Promise.resolve());
+  await test.session.prepare(0); await test.advance(0, 1000); await test.session.settled();
+  const failed = test.dependencies.recordLog.mock.calls.map(([entry]) => entry).filter(entry => entry.result === 'failed');
+  expect(failed).toEqual([expect.objectContaining({ level: 'error', message: '切机位 · failed：OBS 无响应' })]);
+});
+
 it('管道中积压的位置不能按收到时刻重新获得执行窗口；直播标红后由下一新鲜位置继续', async () => {
   const test = setup(); await test.session.prepare(0);
   test.time(200); test.session.clock(0, 0); await test.session.settled();
@@ -298,15 +313,17 @@ it('同帧自有叠加确认在途不挡住媒体启动，停止仍等待所有�
   expect(test.dependencies.executeManagedMediaEvent.mock.calls.filter(call => call[0].event.phase === 'stop')).toHaveLength(2);
 });
 
-it('素材动作日志等待期间过期，不在日志返回后补发媒体启动', async () => {
+it('素材启动前不写日志：日志写入再慢也不推迟媒体启动，结果日志在执行之后', async () => {
   const test = setup(videoFixture());
+  const order: string[] = [];
+  test.dependencies.executeManagedMediaEvent.mockImplementation(() => { order.push('execute'); return Promise.resolve(); });
   test.dependencies.recordLog.mockImplementation(entry => {
-    if (entry.result === 'running') test.time(101);
+    if (entry.category === 'action') { order.push(`log ${String(entry.result)}`); test.time(101); }
     return Promise.resolve({ ...entry, id: 'log', sessionId: 'test', timestamp: '2026-10-06T00:00:00Z', monotonicMs: 101 });
   });
   await test.session.prepare(0); test.session.clock(0); await test.session.settled();
-  expect(test.dependencies.executeManagedMediaEvent).not.toHaveBeenCalled();
-  expect(test.faults.join()).toContain('100ms'); expect(test.session.error).toBeNull();
+  expect(order).toEqual(['execute', 'log succeeded']);
+  expect(test.faults).toEqual([]); expect(test.session.error).toBeNull();
 });
 
 it('暂停和继续只改变活动视频播放状态，不重建片段或从头重播', async () => {

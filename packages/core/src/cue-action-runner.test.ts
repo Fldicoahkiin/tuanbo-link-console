@@ -80,6 +80,10 @@ describe('CueActionRunner', () => {
       'second:queued', 'second:running', 'second:failed',
       'third:skipped'
     ]);
+    // Only a result carries how long the action took.
+    expect(events.map(event => event.durationMs === undefined ? `${event.status}:-` : `${event.status}:ms`)).toEqual([
+      'queued:-', 'running:-', 'succeeded:ms', 'queued:-', 'running:-', 'failed:ms', 'skipped:ms'
+    ]);
   });
 
   it('OBS 请求默认超时形成明确失败且不自动重试', async () => {
