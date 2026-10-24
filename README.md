@@ -181,29 +181,29 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 <a id="发布与部署链路"></a>
 ## 发布与部署链路
 
-两条链路互不相干：Windows 安装包走[Windows 发版](#windows-发版)，授权服务、官网和运营后台走[服务部署](#服务部署)。密钥和凭据的位置见[密钥和凭据](#密钥和凭据)，出问题时按[排查表](#排查表)找。详细规则：[发版标准流程](docs/RELEASE_CHAIN.md#以后发版本的标准流程)、[软件更新](docs/SOFTWARE_UPDATES.md#步骤)、[自动发布与信任边界](docs/AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)、[发版中转机准备](docs/RELEASE_BUILDER_SETUP.md)。
+两条链路互不相干：Windows 安装包走[Windows 发版](#windows-发版)，授权服务、官网和运营后台走[服务部署](#服务部署)。密钥和凭据的位置见[密钥和凭据](#密钥和凭据)，出问题时按[排查表](#排查表)找。详细规则：[发版标准流程](docs/RELEASE_CHAIN.md#以后发版本的标准流程)、[软件更新](docs/SOFTWARE_UPDATES.md#步骤)、[自动发布与信任边界](docs/AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)、[发版搬运准备](docs/RELEASE_BUILDER_SETUP.md)。
 
 <a id="windows-发版"></a>
 ### Windows 发版
 
-改版本号、推 `vX.Y.Z` 标签之后全部自动。安装包在 GitHub 云端构建；上传私钥只在工位电脑上，所以由工位电脑上的 runner 把它搬到服务器。
+改版本号、推 `vX.Y.Z` 标签之后全部自动。安装包在 GitHub 云端构建；服务器的上传私钥不进 GitHub，所以由搬运脚本把它送到服务器：工位电脑的计划任务定时跑，Mac 也能手动跑，二选一。
 
 ```mermaid
 flowchart TD
   tag["推 vX.Y.Z 标签"] --> verify["verify 作业（GitHub 云端 windows-latest）<br/>版本高于已有标签和更新源 · 类型检查 · 单测 · lint"]
   verify --> build["build 作业（GitHub 云端 windows-latest）<br/>下载美颜和音乐分析固定资产（build-assets-* release）<br/>打包 · afterPack 按 release-pin.json 核对 · 用 secret 签 latest.yml"]
   build --> draft[("草稿 GitHub Release<br/>安装包 · blockmap · latest.yml · release-manifest.json")]
-  draft --> transfer["transfer 作业（工位电脑 self-hosted runner，标签 release-builder）<br/>下载草稿 · 按 manifest 核对 · 用 Git 自带 ssh 以 tblink-release 身份上传"]
-  transfer --> staging[("服务器 /var/lib/tblink-release/staging")]
+  draft --> relay["搬运 scripts/relay-release.mjs，二选一，重复运行安全<br/>工位电脑计划任务（每 10 分钟，登录和联网时）或 Mac 手动 pnpm release:relay<br/>先查服务器 status · 下载草稿 · 按 manifest 和标签提交核对 · 以 tblink-release 身份上传"]
+  relay --> staging[("服务器 /var/lib/tblink-release/staging<br/>同一时间只接受一份上传")]
   staging -->|"tblink-update-publish.path 触发"| publisher["publish-update.py（root）<br/>重新校验签名 · manifest · sha256 · 版本 · 没发布过"]
   publisher --> feed[("更新源 updates.tuanbo-link.jinhefilm.com/windows/x64<br/>只留新版和上一版")]
   feed --> client["已安装的软件：检查更新 · 验签 · 差分下载 · 安装"]
-  feed -->|"transfer 轮询 latest.yml 到逐字节一致"| latest["草稿转为正式 Release，标为 Latest"]
+  feed -->|"搬运脚本看到 latest.yml 与草稿逐字节一致"| latest["草稿转为正式 Release，标为 Latest"]
   feed -->|"上线后运行 write-website-release.mjs 并推送"| website["官网下载页 /release.json"]
 ```
 
-- 工位电脑关机时，transfer 作业在队列里等它开机。排队超时（GitHub 最多等 24 小时）后，在 Actions 里只重跑这个作业（Re-run failed jobs）。它会重新下载草稿；更新源已经是这个版本时不再上传，直接把草稿转为正式。
-- build 作业失败可以连同 transfer 一起重跑：草稿里同名的文件会被替换。版本已经上线时，build 作业拒绝重建。
+- 搬运脚本每次运行先查状态：更新源已经是这个版本就把草稿转为正式；服务器 staging 里已有这个版本或另一份上传正在进行就等；否则才下载、核对、上传。哪一步失败都只记日志，下次运行接着做。工位电脑关机时什么都不用做，它上线后计划任务自动接着同步，或者在 Mac 上跑一次 `pnpm release:relay`。
+- build 作业失败可以在 Actions 里重跑：草稿里同名的文件会被替换。版本已经上线时，build 作业拒绝重建。
 - 发布出了问题，在运营后台「软件更新」里「回滚到上一版」。回滚过的版本不会再被自动发布。
 
 <a id="服务部署"></a>
@@ -237,6 +237,9 @@ flowchart LR
   subgraph office["工位电脑"]
     upload["D:\tblink-release-signing\upload<br/>tblink-release 上传私钥 · known_hosts"]
   end
+  subgraph mac["Mac"]
+    macupload["~/.config/tblink-remote/tblink_release_upload<br/>Mac 自己的上传私钥"]
+  end
   usb["U 盘（离线）<br/>备用发布私钥 release-2026-10-b"]
   subgraph server["服务器"]
     relkeys["/etc/tblink-release/authorized_keys"]
@@ -244,7 +247,8 @@ flowchart LR
     pub["/opt/tblink-licensing/release-public-keys.json"]
   end
   sign -->|"build 作业签名"| pub
-  upload -->|"transfer 作业上传"| relkeys
+  upload -->|"计划任务搬运"| relkeys
+  macupload -->|"pnpm release:relay"| relkeys
   deploy -->|"服务部署"| depkeys
 ```
 
@@ -253,10 +257,10 @@ flowchart LR
 | 发布私钥 `release-2026-10-a`（日常） | GitHub secret `TBLINK_RELEASE_SIGNING_KEY`；过渡期工位电脑 `D:\tblink-release-signing\` 还有一份，第一次云端签名成功后删除 | 只在 build 作业的签名这一步注入环境变量，不写磁盘 |
 | 发布私钥 `release-2026-10-b`（备用） | U 盘离线保存，电脑上不留 | 换钥时人工使用 |
 | 发布公钥 | 客户端 `apps/desktop/src/main/link/release-public-keys.json`；服务器 `/opt/tblink-licensing/release-public-keys.json` | 客户端安装前验签；服务器发布前验签 |
-| 上传私钥（tblink-release 身份） | 工位电脑 `D:\tblink-release-signing\upload\`，只给 tblink-runner 账号读 | transfer 作业；服务器端只允许写 staging（`receive-update.py`） |
+| 上传私钥（tblink-release 身份） | 工位电脑 `D:\tblink-release-signing\upload\`；Mac `~/.config/tblink-remote/tblink_release_upload`。各一把，都不进仓库和 GitHub | 搬运脚本；服务器端只允许查 `status` 和写 staging（`receive-update.py`） |
 | 部署私钥（tblink-deploy 身份） | GitHub secret `TBLINK_DEPLOY_SSH_KEY` | Verify Licensing Server 的部署步骤；服务器端只运行接收器 |
-| `GITHUB_TOKEN` | 每次运行自动生成 | build 作业建草稿；transfer 作业读草稿、转为正式 |
-| 工位电脑上的 gh 登录 | Fldicoahkiin | 注册 runner、设置 secret、上传固定资产 |
+| `GITHUB_TOKEN` | 每次运行自动生成 | build 作业下载固定资产、建草稿 |
+| gh 登录（Fldicoahkiin） | 工位电脑的 WYZB 账号；Mac | 搬运脚本读草稿、转为正式；设置签名 secret；上传固定资产 |
 | 授权签发私钥、数据密钥、后台令牌 | 只在服务器上，见[激活码服务器](docs/LICENSE_SERVER.md) | 授权服务进程 |
 
 <a id="排查表"></a>
@@ -268,11 +272,11 @@ flowchart LR
 | verify 作业失败 | Actions 日志的「Release version is new」或「Typecheck, test and lint」；版本必须高于已有标签和线上 `latest.yml` |
 | build 作业失败 | Actions 日志。「没有 build-assets-…」说明固定资产还没上传，见[发版中转机准备](docs/RELEASE_BUILDER_SETUP.md)；afterPack 报指纹不一致，就核对 `release-pin.json` 与资产 release；签名一步失败，就检查 secret `TBLINK_RELEASE_SIGNING_KEY` |
 | 草稿里缺文件或有多个草稿 | 仓库 Releases 页面，草稿只对有写权限的人可见 |
-| transfer 作业一直排队 | 工位电脑是否开机；`Get-Service actions.runner.*`；runner 日志 `D:\actions-runner\_diag\`；仓库 Settings → Actions → Runners |
-| 上传失败 | transfer 作业日志；服务器 `sudo journalctl _COMM=sshd-session --since -1h \| grep tblink-release`；`sudo ls -la /var/lib/tblink-release/staging`；`systemctl status tblink-mss-clamp` |
+| 草稿一直没送到服务器 | 搬运日志：工位电脑 `D:\tblink-relay\logs\relay-<日期>.log`，Mac 直接看 `pnpm release:relay` 的输出；工位电脑的计划任务 `Get-ScheduledTaskInfo tblink-relay`（上次运行时间和结果）；没人开机就在 Mac 上跑一次 |
+| 上传失败 | 搬运日志；服务器 `sudo journalctl _COMM=sshd-session --since -1h \| grep tblink-release`；`sudo ls -la /var/lib/tblink-release/staging`；`systemctl status tblink-mss-clamp` |
 | 上传了但没上线 | `sudo cat /var/lib/tblink-update-publish/auto-publish.json`、`update-status.json`；`sudo journalctl -u tblink-update-publish.service -n 50`；`sudo tail /var/backups/tblink/update-audit.jsonl`；后台「软件更新」的「最近一次自动发布」 |
 | 更新源内容不对 | `curl https://updates.tuanbo-link.jinhefilm.com/windows/x64/latest.yml`；服务器 `ls -l /srv/tblink-updates/windows/x64/`；回执在 `/var/backups/tblink/update-receipts/` |
-| GitHub Release 还是草稿 | transfer 作业最后一步的日志：30 分钟内更新源没换成这个版本就失败，看「上传了但没上线」一行，处理后只重跑 transfer |
+| GitHub Release 还是草稿 | 搬运日志：更新源换成这个版本之前不会转正式，看「上传了但没上线」一行；服务器发布后，下一次搬运就会转正式 |
 | 客户端检查不到或装不上 | 软件里「软件更新」面板的提示和运行日志；签名不符时拒绝安装 |
 | 授权服务、官网或后台没更新 | Verify Licensing Server 的日志；服务器 `sudo cat /var/lib/tblink-deploy/last-success.json`、`/var/lib/tblink-deploy/jobs/*/`；`systemctl list-units 'tblink-deploy-*'`；`sudo journalctl -u tblink-licensing -n 50`；`curl https://api.tuanbo-link.jinhefilm.com/health` |
 

@@ -92,18 +92,18 @@ SSH 有效配置必须包含 `authenticationmethods publickey`、`passwordauthen
 1. 发布提交只改根目录和 `apps/desktop` 两个 `package.json` 的版本号，推 master，CI 通过后推 `vX.Y.Z` 标签。Release Windows 只由标签触发。
 2. GitHub 云端 Windows（windows-latest）做版本检查（必须高于所有已有标签和线上 `latest.yml`）、类型检查、全量单测和 lint。
 3. GitHub 云端 Windows 打包。美颜产物和离线音乐分析运行时不在 git 里，各放在一个 `build-assets-<种类>-<指纹前 12 位>` release 里（压缩后分卷，每卷小于 2 GiB，附 `build-assets.json` 列出各卷的 sha256）；`scripts/build-assets.mjs fetch` 逐卷核对后直接解进 `artifacts/`，afterPack 再按 `tools/obs/beauty/release-pin.json`、`tools/music-analysis/release-pin.json` 核对每个文件，不符就失败。打包后用发布私钥给 `latest.yml` 加签名：私钥存在 GitHub Actions secret `TBLINK_RELEASE_SIGNING_KEY`，只在签名这一步注入环境变量，不写磁盘。然后写 `release-manifest.json`，把安装包、blockmap、`latest.yml` 和清单放进这个标签的草稿 GitHub Release（`scripts/draft-github-release.mjs`；私有仓库的 Actions 产物存储只有 500 MB）。
-   接着，工位电脑上的 self-hosted runner（标签 `release-builder`）跑 transfer 作业：下载草稿，按清单逐个核对，再通过受限身份 `tblink-release` 上传（用 Git for Windows 的 ssh，Windows 自带的 ssh.exe 发送大量输入会停住）。上传私钥只在工位电脑上，不进 GitHub。工位电脑关机时这个作业排队等待，排队超时后只重跑它。
-4. 服务器 `receive-update.py` 以 tblink-release 身份运行，不用 sudo。它只把这一份包写进 `/var/lib/tblink-release/staging/<版本>-<提交前 12 位>/`，不能覆盖已有目录，最多保留 5 份，也碰不到更新源。
-5. staging 里出现新的一份包后，root 发布脚本自动发布（见第 6 条）：只考虑 staging 里版本最高、高于当前更新源、而且以前没有发布回执的那一份；目录名里的版本必须与 manifest 一致。每份上传按 staging 名称和文件指纹（inode、大小、变更时间）只尝试一次，结果写进 root 的 `/var/lib/tblink-update-publish/auto-publish.json` 和审计日志（操作人 `release-builder（自动发布）`、动作 `auto-publish`），后台「软件更新」显示「最近一次自动发布」。失败的不重试，构建机重新上传才算新的一份。
+   接着，搬运脚本 `scripts/relay-release.mjs` 把草稿送到服务器：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次，Mac 可以手动跑（`pnpm release:relay`），二选一，重复运行安全。它先用 `ssh tblink-release@… status` 查 staging 里已有的版本和是否有上传正在进行，避免重复上传；否则下载草稿、按清单和标签提交逐个核对，再通过受限身份 `tblink-release` 上传（工位电脑用 Git for Windows 的 ssh，Windows 自带的 ssh.exe 发送大量输入会停住）。上传私钥只在工位电脑和 Mac 上，各一把，不进 GitHub。见[发版搬运准备](RELEASE_BUILDER_SETUP.md)。
+4. 服务器 `receive-update.py` 以 tblink-release 身份运行，不用 sudo。它只把这一份包写进 `/var/lib/tblink-release/staging/<版本>-<提交前 12 位>/`，不能覆盖已有目录，最多保留 5 份，也碰不到更新源。同一时间只接受一份上传，第二份在发送前就被拒绝；`status` 命令只读返回 staging 里已有的版本和是否正在上传，其他命令一律拒绝。
+5. staging 里出现新的一份包后，root 发布脚本自动发布（见第 6 条）：只考虑 staging 里版本最高、高于当前更新源、而且以前没有发布回执的那一份；目录名里的版本必须与 manifest 一致。每份上传按 staging 名称和文件指纹（inode、大小、变更时间）只尝试一次，结果写进 root 的 `/var/lib/tblink-update-publish/auto-publish.json` 和审计日志（操作人 `release-builder（自动发布）`、动作 `auto-publish`），后台「软件更新」显示「最近一次自动发布」。失败的不重试，重新上传才算新的一份。
    后台仍可发起回滚、丢弃和手动发布：经二次验证、填写原因后，后台只往自己的 `/var/lib/tblink-licensing/update-requests/` 写一份请求，内容只有：请求编号、动作（发布 / 回滚 / 丢弃）、staging 名称（发布和丢弃）或回滚目标版本、确认时看到的 manifest sha256（发布）、操作人、原因、请求时间。手动发布用来放回一个被回滚过、自动发布不再接手的版本。
 6. root 的 `tblink-update-publish.path` 在请求目录或 staging 变化时触发 `publish-update.py --process-requests`；`tblink-update-publish.timer` 每 2 分钟兜底一次，接住运行期间到达的请求。每次运行先处理后台请求，再看 staging 有没有可以自动发布的新包。脚本路径和参数都写死，每次运行先核对[自己写入和信任的目录](#root-写入和信任判断的路径)整条链都归 root，不符就报错退出。请求目录只读：用 `O_DIRECTORY|O_NOFOLLOW` 打开并核对属主 tblink-license，请求文件用 `O_NOFOLLOW|O_NONBLOCK` 打开，只接受属主为 tblink-license、16 KB 以内的普通文件，字段必须正好是上面几项且格式正确；已有结果的请求视为重复，直接忽略；同一时间只处理一个请求（文件锁）。发布时先把 staging 里的四个文件不跟随链接地复制进 root 的工作目录，之后所有判断都只看这份副本：manifest、各文件 sha256、`latest.yml` 的版本和 sha512、Ed25519 发布签名、请求里的 manifest 摘要（后台手动发布时）、版本高于当前更新源。全部通过才按「安装包先、`latest.yml` 最后」上线，回执（含上一版 `latest.yml`）存进 root 的 `/var/backups/tblink/update-receipts/`。上线后，更新源只保留这个版本和它替换掉的上一版：更早版本的安装包和 blockmap 复制进这次回执的 `archived/`，核对摘要后才从更新源移除（2026-10-24 起，用户要求官网只放最新的包）。结果写到 `/var/lib/tblink-update-publish/results/`（tblink-license 组只读）给后台显示，同时追加审计 `/var/backups/tblink/update-audit.jsonl`（请求时间、处理时间、操作人、动作、版本、结果、失败原因）。后台读到结果后删除自己的请求文件；结果文件留在 root 目录，同一个请求编号再出现也不会重做。
 7. 「回滚到上一版」同样走后台请求，把更新源改回发布当前版本之前的 `latest.yml`。上一版只从 root 的回执目录读取，而且必须有有效的发布签名、安装包仍在、摘要一致，否则拒绝。回滚后，撤下的版本同样移进这次回滚回执的 `archived/`，更新源只剩回到的那个版本，所以只能回滚一步。已经装上新版本的电脑不会自动降级。
-8. 上传之后，transfer 作业等更新源换成这次构建的 `latest.yml`（逐字节相同，最多 30 分钟），再把草稿转为正式 Release 并标为 Latest。官网下载信息暂时仍在上线后运行 `node scripts/write-website-release.mjs` 并提交（见[发布步骤](SOFTWARE_UPDATES.md#步骤)）。
+8. 上传之后，搬运脚本等更新源换成草稿里的 `latest.yml`（逐字节相同），再把草稿转为正式 Release 并标为 Latest；同一次运行等不到，就由下一次运行完成。官网下载信息暂时仍在上线后运行 `node scripts/write-website-release.mjs` 并提交（见[发布步骤](SOFTWARE_UPDATES.md#步骤)）。
 
 <a id="信任边界"></a>
 ### 信任边界
 
-- 包只能来自 Release Windows：上传身份只在工位电脑上，只能写 staging；服务器发布前要求有 Ed25519 发布签名，日常私钥只在 GitHub secret 里，由云端 build 作业在签名这一步使用。
+- 包只能来自 Release Windows：上传身份只在工位电脑和 Mac 上（各一把），只能写 staging；服务器发布前要求有 Ed25519 发布签名，日常私钥只在 GitHub secret 里，由云端 build 作业在签名这一步使用。
 - 去掉后台确认之后，同时拿到发布私钥和上传身份的人可以直接让一个新版本上线；以前还要过后台二次验证这一关。用户 2026-10-24 接受这一点，换来打 tag 即上线。客户端照旧只装有有效发布签名的包。
 - 后台被攻破时，攻击者只能在已经签名、已经进入 staging 的版本之间选择发布，或回滚到回执里记录的、有签名的上一版，塞不进伪造的包；客户端安装前还会用内置公钥再验一次签名和安装包摘要。
 - 授权服务账号 tblink-license 拥有 `/var/lib/tblink-licensing`，可以重命名或替换其中任何一项，包括 root 所有的子目录。所以 root 发布脚本在那里只读请求，不写任何东西；它写入或用来做信任判断的路径全部在 root 所有的目录链上，见[下表](#root-写入和信任判断的路径)。

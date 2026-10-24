@@ -1,175 +1,74 @@
-# 发版中转机准备（工位电脑）
+# 发版搬运准备（工位电脑和 Mac）
 
-正式安装包在 GitHub 云端打包、签名，放进草稿 GitHub Release。工位电脑 DESKTOP-2C8JIC2 上的 self-hosted runner（标签 `release-builder`）只做一件事：把草稿搬到服务器 staging，等服务器发布后把草稿转为正式（用户 2026-10-24 决定，不用 Cloudflare 中转）。上传私钥只在这台电脑上。链路图和排查表见 [README](../README.md#发布与部署链路)，信任边界见 [自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。工位电脑关机时，搬运作业在 GitHub 上排队等它开机；排队超时后在 Actions 里只重跑这个作业。
+安装包在 GitHub 云端打包、签名，放进这个标签的草稿 GitHub Release。服务器的上传私钥不进 GitHub，所以由 `scripts/relay-release.mjs` 把草稿搬到服务器 staging，等服务器发布后把草稿转为正式并标为 Latest。用户 2026-10-24 决定：不用 self-hosted runner，也不用 Cloudflare；工位电脑上线后自动同步，Mac 也能手动完成同一过程。
 
-下面的步骤由用户和仓库所有者完成。**私钥、token 和密码都只在本机窗口或 GitHub 网页里输入，不要贴到聊天里，也不要发给任何人。**
+搬运脚本每次运行都先查状态，再做下一步，所以随时可以再跑：
+- 更新源已经是这个版本：把草稿转为正式，结束；
+- 服务器 staging 里已经有这个版本，或另一台机器正在上传：等，不重复上传；
+- 都不是：下载草稿，按构建清单和标签提交核对，上传，再等最多 10 分钟，服务器发布了就顺手把草稿转为正式。
 
-<a id="一键脚本"></a>
-## 一键脚本
+哪一步失败都只记日志，下次运行接着做；工位电脑和 Mac 同时跑也不会出错，服务器同一时间只接受一份上传。链路图和排查表见 [README](../README.md#发布与部署链路)，信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。搬运需要服务器上的状态查询，安装见 [SERVER_INSTALL_RELAY_20261024.md](SERVER_INSTALL_RELAY_20261024.md)。
 
-[`scripts/setup-release-builder.ps1`](../scripts/setup-release-builder.ps1) 按下面第 1–5 步的顺序一次做完，重复运行会跳过已完成的步骤。它不依赖构建机上的代码检出（备份密钥的核对逻辑和两把公钥都内置在脚本里），构建机上放了一份在 `D:\tblink-builder-setup\`。先插好 U 盘、打开 Clash，再用「以管理员身份运行」打开 PowerShell：
+**私钥、token 和密码都只在本机窗口或 GitHub 网页里输入，不要贴到聊天里，也不要发给任何人。**
+
+<a id="工位电脑"></a>
+## 工位电脑：一条命令
+
+在工位电脑上用「以管理员身份运行」打开 PowerShell，运行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File D:\tblink-builder-setup\setup-release-builder.ps1
+powershell -ExecutionPolicy Bypass -File D:\tblink-builder-setup\setup-relay.ps1
 ```
 
-只在三处停下等你：输入 U 盘盘符、给 tblink-runner 设密码、在浏览器里用 Fldicoahkiin 登录 GitHub。显示红色「停下：…」就照提示处理后重新运行。跑完后还要手动删掉电脑上的 `release-2026-10-b.pem`（Shift+Delete）。下面各节是脚本做的每一步，也可以照着手动做。
+[`scripts/setup-relay.ps1`](../scripts/setup-relay.ps1) 和它要复制的 `relay-release.mjs`、`github-releases.mjs` 放在 `D:\tblink-builder-setup\`，由会话同步。脚本做这些事，重复运行安全：
+
+1. 检查：以 WYZB 运行，Node.js、Git for Windows 的 `ssh.exe`、gh、上传身份文件和本机代理 `127.0.0.1:7890` 都在。
+2. gh 没登录 Fldicoahkiin 时，走浏览器登录。**这是唯一要你动手的地方**：浏览器里用 Fldicoahkiin 登录，输入屏幕上的验证码；问「Authenticate Git with your GitHub credentials?」回答 n。
+3. 把 `D:\tblink-release-signing\release-2026-10-a.pem` 从文件直接读进 GitHub secret `TBLINK_RELEASE_SIGNING_KEY`，供云端签名。私钥不经过屏幕和命令行参数。
+4. 把搬运脚本复制到 `D:\tblink-relay\`，安装计划任务 `tblink-relay`：以 WYZB 运行，登录后、联网后各跑一次，之后每 10 分钟一次；上一次还没跑完就跳过这次。窗口隐藏，日志写到 `D:\tblink-relay\logs\relay-<日期>.log`，保留 14 天。
+5. 立刻同步一次，最后打印一行结论，例如「搬运就绪：gh 已登录 Fldicoahkiin、签名 secret 已设置、计划任务已安装、本次同步：没有等待搬运的草稿 release」。
+
+计划任务用 WYZB 的 gh 登录，所以只在 WYZB 登录着的时候运行。开机后 WYZB 登录，任务就会跑一次。
+
+<a id="mac"></a>
+## Mac：手动跑一次
+
+在仓库检出里运行：
+
+```bash
+pnpm release:relay
+```
+
+它用 Mac 上已经登录的 gh 和本机代理访问 GitHub。上传用 Mac 自己的密钥 `~/.config/tblink-remote/tblink_release_upload`（2026-10-24 生成，不进仓库），经 Tailscale 连服务器 `100.111.120.96`，主机密钥用现有的 `~/.config/tblink-remote/known_hosts`。这把公钥要先加到服务器，见[安装说明](SERVER_INSTALL_RELAY_20261024.md)。一次运行会做完整个过程：下载、上传、等服务器发布、把草稿转为正式。
+
+路径都可以用环境变量改：`TBLINK_RELEASE_UPLOAD_KEY`、`TBLINK_RELEASE_KNOWN_HOSTS`、`TBLINK_RELEASE_HOST`、`TBLINK_RELEASE_SSH`、`TBLINK_RELAY_CACHE`。
 
 <a id="现状"></a>
-## 现状
+## 密钥和资产在工位电脑上的位置
 
-| 位置 | 内容 | 之后的去向 |
+| 位置 | 内容 | 去向 |
 | --- | --- | --- |
-| `D:\tblink-release-assets\beauty\2dfd72cfcae9\` | 固定版本的美颜构建，与 `tools/obs/beauty/release-pin.json` 一致 | 打包上传到 `build-assets-beauty-2dfd72cfcae9` release 一次（见[固定资产](#固定资产)），之后 runner 不读 |
-| `D:\tblink-release-assets\music-analysis\8432b1f0ea62\` | 固定版本的离线音乐分析运行时（runtime、models、licenses），与 `tools/music-analysis/release-pin.json` 一致 | 打包上传到 `build-assets-music-analysis-8432b1f0ea62` release 一次，之后 runner 不读 |
-| `D:\tblink-release-signing\release-2026-10-a.pem` | 发布签名私钥（日常） | 放进 GitHub secret；CI 用 secret 签名成功后删除本机副本（第 6 步） |
-| `D:\tblink-release-signing\release-2026-10-b.pem` | 发布签名私钥（备用） | 拷到 U 盘离线保存后删除本机副本（第 1 步） |
-| `D:\tblink-release-signing\upload\` | 上传到服务器的 SSH 私钥和 known_hosts | 留在构建机，只给 runner 账号读 |
-| `C:\Program Files\Git\usr\bin\ssh.exe` | Git for Windows 自带的 OpenSSH（2026-10-24 是 10.3p1），上传用它 | Windows 自带的 `ssh.exe`（9.5p2）发送大量标准输入时，约 100 KB 后就停住，所以工作流用 `TBLINK_RELEASE_SSH` 指定 Git 的这个。卸载或换路径要同步改工作流 |
+| `D:\tblink-release-signing\release-2026-10-a.pem` | 发布签名私钥（日常） | 读进 GitHub secret；第一次云端签名成功后删除本机副本（见[下文](#删除本机日常密钥)） |
+| `D:\tblink-release-signing\release-2026-10-b.pem` | 发布签名私钥（备用） | 暂时留在这里（2026-10-24 没有 U 盘，用户决定先不另外备份）；有 U 盘后拷过去离线保存，再删本机副本 |
+| `D:\tblink-release-signing\upload\` | 上传到服务器的 SSH 私钥和 known_hosts | 留在工位电脑，计划任务以 WYZB 读取 |
+| `D:\tblink-release-assets\` | 固定版本的美颜构建和音乐分析运行时 | 上传到 `build-assets-*` release 一次（见[固定资产](#固定资产)），之后不再需要 |
+| `C:\Program Files\Git\usr\bin\ssh.exe` | Git for Windows 自带的 OpenSSH，上传用它 | Windows 自带的 `ssh.exe`（9.5p2）发送大量标准输入时，约 100 KB 后就停住 |
 
-过渡期两把私钥都在 `D:\tblink-release-signing\`，目录只允许 WYZB 和 SYSTEM 访问。WYZB 是管理员，文件权限挡不住管理员，也挡不住这台机器上以 WYZB 运行的程序，所以要尽快完成第 1、5、6 步。
+两把签名私钥在 `D:\tblink-release-signing\`，目录只允许 WYZB、SYSTEM 和管理员访问。文件权限挡不住以 WYZB 运行的程序，所以第一次云端签名成功后尽快删掉日常密钥 a 的本机副本。
 
-<a id="1-备用密钥离线保存"></a>
-## 1. 备用密钥离线保存（用户）
+<a id="删除本机日常密钥"></a>
+## 第一次云端签名成功后删除本机日常密钥（用户）
 
-1. 插入一个专用 U 盘，打开 `D:\tblink-release-signing\`，把 `release-2026-10-b.pem` 复制到 U 盘根目录。
-2. 确认 U 盘里的备份能读出来，且确实是客户端内置的那把：打开 PowerShell（不需要管理员），执行下面两行，`E:` 换成 U 盘的盘符：
-
-   ```powershell
-   cd C:\dev\tblink-release
-   node scripts\check-release-key.mjs E:\release-2026-10-b.pem
-   ```
-
-   看到「备份可用：这把私钥对应客户端内置的 release-2026-10-b，签名和验签都正常。」才算成功。这个脚本不会显示私钥内容。
-3. 成功后删除电脑上的 `D:\tblink-release-signing\release-2026-10-b.pem`，并清空回收站里的这个文件。
-4. 拔下 U 盘，放到安全的地方。日常密钥丢失或泄露时要用它签发一个新版本，在新版本里换上下一对密钥。
-
-<a id="2-新建-runner-服务账号"></a>
-## 2. 新建 runner 服务账号（用户，管理员）
-
-1. 开始 → 设置 → 账户 → 其他用户 → 添加账户。
-2. 选「我没有这个人的登录信息」→「添加一个没有 Microsoft 账户的用户」。
-3. 用户名填 `tblink-runner`，设置一个密码，自己保存。账户类型保持「标准用户」。
-
-<a id="3-给-runner-账号开权限"></a>
-## 3. 给 runner 账号开权限（用户，管理员 PowerShell）
-
-服务器安装已于 2026-10-23 完成，上传身份的探测也已做完（见[服务器安装记录](SERVER_INSTALL_20261023.md#安装结果)），现在可以执行这一步。
-
-在开始菜单搜索 PowerShell，右键「以管理员身份运行」，逐行执行：
-
-```powershell
-icacls D:\tblink-release-signing /grant "tblink-runner:RX"
-icacls D:\tblink-release-signing\upload /grant "tblink-runner:RX"
-icacls D:\tblink-release-signing\upload\known_hosts /grant "tblink-runner:R"
-icacls D:\tblink-release-signing\upload\tblink-release-ed25519 /setowner tblink-runner
-icacls D:\tblink-release-signing\upload\tblink-release-ed25519 /inheritance:r /grant:r "tblink-runner:R" "SYSTEM:F" "Administrators:F"
-```
-
-runner 只能读上传身份，不能读发布签名私钥（它来自 GitHub secret）。上传私钥的所有者改成 tblink-runner，这样 ssh 才会接受它（私钥文件只能属于当前账户）。
-
-<a id="4-注册-self-hosted-runner"></a>
-## 4. 注册 self-hosted runner（仓库所有者 Fldicoahkiin，开发机上的管理员 PowerShell）
-
-注册 runner 和设置 secret 都需要仓库 admin 权限。仓库从 JinHe9527 转移到 Fldicoahkiin 名下之后，由 Fldicoahkiin 来做（转移完成前这两步先不做）。第 4、5 步在开发机的同一个管理员 PowerShell 窗口里依次完成。开发机已经装了 gh，里面还留着 JinHe9527 已失效的登录，第 5 步最后清掉。
-
-1. 重新登录 gh：
-
-   ```powershell
-   gh auth login --hostname github.com --git-protocol https --web
-   ```
-
-   屏幕上会显示一次性验证码，按回车打开浏览器，用 Fldicoahkiin 登录 GitHub 并输入这个验证码。验证码只在浏览器里输入，不要发到聊天里。如果问「Authenticate Git with your GitHub credentials?」，回答 `n`。
-
-   预期最后两行是 `✓ Authentication complete.` 和 `✓ Logged in as Fldicoahkiin`。再执行 `gh auth status`，应看到 `Logged in to github.com account Fldicoahkiin`，并且这个账号的 `Active account: true`。如果活动账号不是 Fldicoahkiin，执行 `gh auth switch -h github.com -u Fldicoahkiin`。
-
-2. 下载并校验 runner：
-
-   ```powershell
-   New-Item -ItemType Directory -Force D:\actions-runner | Out-Null; Set-Location D:\actions-runner
-   $asset = (gh api repos/actions/runner/releases/latest | ConvertFrom-Json).assets | Where-Object name -Match '^actions-runner-win-x64-[0-9.]+\.zip$'
-   $asset.name
-   Invoke-WebRequest $asset.browser_download_url -OutFile $asset.name
-   ("sha256:" + (Get-FileHash $asset.name -Algorithm SHA256).Hash.ToLower()) -eq $asset.digest
-   Expand-Archive $asset.name -DestinationPath .
-   ```
-
-   预期：`$asset.name` 输出形如 `actions-runner-win-x64-2.xxx.x.zip`，只有一行；摘要比较那一行输出 `True`。输出 `False` 就停下，不要解压。这里的命令在 Windows PowerShell 5.1 和 PowerShell 7 里都能用。
-
-3. 给 runner 配代理。开发机直连 GitHub 不通，平时经本机代理 `127.0.0.1:7890` 访问，但这个代理只配在 WYZB 的用户设置里。runner 以 tblink-runner 的服务身份运行，读不到这些设置，要写进 runner 目录下的 `.env` 文件：
-
-   ```powershell
-   Set-Content -Encoding ascii D:\actions-runner\.env "https_proxy=http://127.0.0.1:7890`nhttp_proxy=http://127.0.0.1:7890`nno_proxy=localhost,127.0.0.1"
-   Get-Content D:\actions-runner\.env
-   ```
-
-   预期显示三行：`https_proxy=…`、`http_proxy=…`、`no_proxy=localhost,127.0.0.1`。代理程序要一直开着，runner 才能保持在线、执行任务；以后代理端口变了，就改这个文件并重启 runner 服务。上传到服务器走 SSH，不经过这个代理。
-
-4. 取一次性注册 token 并配置 runner。token 只存在 PowerShell 变量里，不显示在屏幕上；tblink-runner 的密码通过提示框输入，不写进命令历史：
-
-   ```powershell
-   $cred = Get-Credential -UserName '.\tblink-runner' -Message '输入第 2 步给 tblink-runner 设的密码'
-   $token = gh api -X POST repos/Fldicoahkiin/tuanbo-link-console/actions/runners/registration-token --jq .token
-   if ($LASTEXITCODE -ne 0 -or -not $token) { throw '取注册 token 失败，先检查 gh auth status' }
-   .\config.cmd --unattended --url https://github.com/Fldicoahkiin/tuanbo-link-console --token $token --name DESKTOP-2C8JIC2-release --labels release-builder --runasservice --windowslogonaccount .\tblink-runner --windowslogonpassword $cred.GetNetworkCredential().Password
-   Remove-Variable token, cred
-   ```
-
-   预期 `config.cmd` 的输出依次包含 `Connected to GitHub`、`Runner successfully added`、`Runner connection is good`、`Settings Saved`，最后几行是 `Service actions.runner.Fldicoahkiin-tuanbo-link-console.DESKTOP-2C8JIC2-release` 安装成功并已启动。`throw` 那一行报错，说明登录或权限有问题，不要继续。
-
-5. 核对 runner 已在线：
-
-   ```powershell
-   (gh api repos/Fldicoahkiin/tuanbo-link-console/actions/runners | ConvertFrom-Json).runners | ForEach-Object { '{0} {1} {2}' -f $_.name, $_.status, ($_.labels.name -join ',') }
-   Get-Service 'actions.runner.*' | Format-Table Name, Status, StartType
-   ```
-
-   预期第一条输出 `DESKTOP-2C8JIC2-release online self-hosted,Windows,X64,release-builder`；第二条显示这个服务 `Running`。如果是 `offline`，先确认代理程序在运行、`.env` 内容正确，再执行 `Restart-Service 'actions.runner.*'`。
-
-6. 在浏览器里打开仓库 Settings → Actions → General，确认「Run workflows from fork pull requests」没有勾选（私有仓库默认不勾选）。这个 runner 只服务本仓库。
-
-<a id="5-日常密钥放进-github-secret"></a>
-## 5. 日常密钥放进 GitHub secret（同一个窗口，接着第 4 步）
-
-1. 从文件按原始字节读入 secret。不经过剪贴板，也不经过 PowerShell 管道，因为管道可能改动编码：
-
-   ```powershell
-   cmd /c "gh secret set TBLINK_RELEASE_SIGNING_KEY --repo Fldicoahkiin/tuanbo-link-console < D:\tblink-release-signing\release-2026-10-a.pem"
-   ```
-
-   预期输出 `✓ Set Actions secret TBLINK_RELEASE_SIGNING_KEY for Fldicoahkiin/tuanbo-link-console`。这条命令不会显示私钥内容。
-
-2. 核对 secret 已存在：
-
-   ```powershell
-   gh secret list --repo Fldicoahkiin/tuanbo-link-console
-   ```
-
-   预期有一行 `TBLINK_RELEASE_SIGNING_KEY`，更新时间是刚才。secret 的值无法读回，是否正确由第 6 步的首次 CI 签名来验证。
-
-3. 清掉 JinHe9527 失效的旧登录，保留 Fldicoahkiin 的登录：
-
-   ```powershell
-   gh auth logout -h github.com -u JinHe9527
-   gh auth status
-   ```
-
-   预期第一条输出 `✓ Logged out of github.com account JinHe9527`；`gh auth status` 只列出 Fldicoahkiin，且 `Active account: true`。
-
-   开发机上会一直保持 Fldicoahkiin 的 gh 登录（用户 2026-10-24 决定）。这台机器上以 WYZB 身份运行的程序都能使用这个账号的权限，包括仓库管理员权限。
-
-工作流只在「Sign latest.yml with the release key」这一步把它放进环境变量，不会写到磁盘，日志里也会被遮掉。
-
-<a id="6-首次构建后删除本机日常密钥"></a>
-## 6. 首次构建后删除本机日常密钥（用户）
-
-完成后告诉主会话。Release Windows 只由 `vX.Y.Z` 标签触发：下一次推标签时，云端 build 作业用 secret 签名，工位电脑上传，服务器自动发布，Release 转为正式。这次运行成功就说明 secret 签名可用。
-
-会话通知「CI 签名验证成功」后，删除电脑上的 `D:\tblink-release-signing\release-2026-10-a.pem`，并清空回收站里的这个文件。之后这台电脑上不再有发布签名私钥。
+第一次推标签、云端 build 作业用 secret 签名成功（草稿 release 里有带签名的 `latest.yml`）后，会话会通知你。之后删除 `D:\tblink-release-signing\release-2026-10-a.pem`，并清空回收站里的这个文件。再运行 `setup-relay.ps1` 时，它看到 secret 已设置、本机没有私钥，就跳过这一步。
 
 <a id="固定资产"></a>
 ## 固定资产（一次，会话做）
 
 美颜构建和离线音乐分析运行时不在 git 里。云端 build 作业从两个专门的 GitHub release 下载它们：`build-assets-beauty-<指纹前 12 位>` 和 `build-assets-music-analysis-<指纹前 12 位>`，指纹来自仓库里的 `release-pin.json`。每个 release 里是一份压缩后分卷的 tar（每卷小于 GitHub 单个附件 2 GiB 的上限）和一份列出各卷 sha256 的 `build-assets.json`。下载时逐卷核对，afterPack 再按 `release-pin.json` 核对每个文件。
 
-第 4 步登录 gh 之后，会话在工位电脑上把 `D:\tblink-release-assets\` 下的两份资产上传一次（`scripts/build-assets.mjs` 的 `pack` 和 `publish`，用 `gh auth token` 作为 `GITHUB_TOKEN`，经本机代理上传）。资产重新构建、`release-pin.json` 的指纹变了，就要再上传一份新指纹的 release；旧的留着，旧标签的构建仍然可以重跑。
+gh 登录之后，会话在工位电脑上把 `D:\tblink-release-assets\` 下的两份资产上传一次（`scripts/build-assets.mjs` 的 `pack` 和 `publish`，用 `gh auth token` 作为 `GITHUB_TOKEN`，经本机代理上传）。资产重新构建、`release-pin.json` 的指纹变了，就要再上传一份新指纹的 release；旧的留着，旧标签的构建仍然可以重跑。
+
+<a id="3-给-runner-账号开权限"></a>
+## 已取消的 runner 方案
+
+2026-10-24 之前的方案是在工位电脑上注册 self-hosted runner（tblink-runner 账号，上传私钥改归它所有）。这个方案已取消，没有执行：上传私钥仍归 WYZB，`D:\actions-runner\` 没有注册，GitHub 上也没有 runner。

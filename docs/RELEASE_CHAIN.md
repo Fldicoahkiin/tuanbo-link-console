@@ -9,10 +9,10 @@
 2. 这个提交的 CI 通过后，在它上面打 `vX.Y.Z` 标签并推送。
 3. 之后全部自动（2026-10-24 用户定下：在 GitHub 云端打包，工位电脑只负责把包搬到服务器；不用 Cloudflare）：
    - Release Windows 的 verify 和 build 作业在 GitHub 云端 Windows 上跑：检查版本、类型、单测、lint；下载美颜和音乐分析的固定资产，打包、签名，把四个文件放进这个标签的草稿 GitHub Release。
-   - transfer 作业在工位电脑的 runner 上跑：下载草稿、按构建清单核对，上传到服务器 staging。
+   - 搬运：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次 `scripts/relay-release.mjs`，Mac 也可以手动 `pnpm release:relay`，二选一，重复运行安全。它下载草稿、按构建清单核对，上传到服务器 staging；服务器上已有或正在上传就不重复传。
    - 服务器：发布脚本重新做全部校验（签名、manifest、sha256、版本高于更新源、这个版本没发布过），通过就上线。
-   - transfer 作业等更新源换成这个版本，把草稿转为正式 Release，标为 Latest。
-   - 工位电脑关机时，transfer 作业排队等它开机；排队超时后在 Actions 里只重跑这个作业。
+   - 搬运脚本看到更新源换成这个版本后，把草稿转为正式 Release，标为 Latest。
+   - 工位电脑关机时什么都不用做：它上线后计划任务自动接着同步，或者在 Mac 上跑一次。
 4. 用户从官网下载安装、测试。有问题就在后台「回滚到上一版」，或者修好后发下一个版本。
 
 后台「软件更新」保留，用来看状态、看最近一次自动发布的结果和紧急回滚。没能自动发布的版本留在待发布列表里，原因写在「最近一次自动发布」。
@@ -38,7 +38,7 @@
 - 签名：用 release-2026-10-a 签 `latest.yml`，写 `release-manifest.json`（0 项失败）。安装包 sha256 `8266abaf6ad45d2bfad995823f0d478457d3ec0acdcc0bbcbb2fea3091e80087`，987,697,473 字节。产物另存在构建机 `D:\tblink-release-scratch\release-0.5.0\`。
 - 上传：以 tblink-release 身份上传 staging 时卡住。构建机到服务器的路径 MTU 约 1492，1500 字节的包被丢弃且没有 ICMP 提示，满尺寸 TCP 段发不出去；下载方向不受影响。构建机上的 Release Windows 也会遇到同样的问题，要先在构建机上把网卡 MTU 调低（或在路由器上钳制 MSS）。
 - 由主会话在服务器上用 `publish-update.py` 的手动模式发布。
-- v0.5.0 的 GitHub Release 由会话在上线后补建：在构建机上用最新 master 的 `scripts/publish-github-release.mjs 0.5.0 D:\tblink-release-scratch\release-0.5.0`。先确认 `gh api user --jq .login` 是 Fldicoahkiin，再设 `GITHUB_REPOSITORY=Fldicoahkiin/tuanbo-link-console`，`GITHUB_TOKEN` 取 `gh auth token`。脚本用这个 token 建 `v0.5.0` 标签，会触发一次 Release Windows：它的检查作业会以「不高于线上更新源」失败，不会构建。这次失败是预期的。
+- v0.5.0 的 GitHub Release 由会话在 Mac 上补建：从更新源下载安装包、blockmap 和 `latest.yml`，与构建清单逐项核对（大小和 sha256 一致），再用 gh 建 `v0.5.0` 标签（指向 37a4334）和正式 release 并标为 Latest：https://github.com/Fldicoahkiin/tuanbo-link-console/releases/tag/v0.5.0 。建标签触发的那次 Release Windows（按 37a4334 里的旧工作流）在版本检查失败，这是预期的。
 
 2026-09-30 当前生产状态：Windows **0.4.29** 已正式发行，公司更新源已发布安装包、blockmap 与 `latest.yml`；官网已开放支付宝月付 **800 元／30 天／台**、年付 **8,000 元／365 天／台**。已核验未付款订单创建、同单恢复和未付款不发码，未进行实际扣款。Windows CI 已通过正式安装版无凭证拦截、覆盖安装与卸载验收，见[专项记录](LICENSE_UPDATE_ACCEPTANCE.md)；真实支付交付与续费、退款及两版本重启更新仍待真人测试；微信 Native 服务端及官网已部署、商户凭据未配置且收款关闭；自动开票尚未接入。实际构建、摘要与部署备份见 [发行记录](RELEASE_0.4.29.md)。下文带日期的旧关闭／未发行记录只表示当时状态。
 
