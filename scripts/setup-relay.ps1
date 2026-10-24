@@ -103,7 +103,7 @@ Register-ScheduledTask -TaskName $taskName -Xml $xml -Force | Out-Null
 Done "计划任务 $taskName：登录和联网后各跑一次，之后每 10 分钟一次；日志在 $relay\logs"
 
 Step '立刻同步一次'
-$output = (& "$relay\run-relay.cmd" 2>&1 | Out-String)
+$output = (Invoke-Quiet { & "$relay\run-relay.cmd" 2>&1 } | Out-String)
 Write-Host $output.Trim()
 $result = ($output -split "`r?`n" | Where-Object { $_ -match '本次同步' } | Select-Object -Last 1) -replace '^\S+\s+', ''
 if (-not $result) { $result = '没有输出，看 ' + "$relay\logs" }
