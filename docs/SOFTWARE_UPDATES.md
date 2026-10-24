@@ -105,12 +105,11 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 <a id="步骤"></a>
 ### 步骤
 
-1. 推发布提交到 master，在 Actions 运行 Release Windows（填完整提交号），或推 `vX.Y.Z` 标签。
-2. 托管机检查通过后，构建机打包、签名、上传到服务器 staging（[构建机准备](RELEASE_BUILDER_SETUP.md)）。
-3. 运营后台「软件更新」里确认发布；服务器重新校验后上线，更新源只留新版和上一版，更早的移进服务器备份。需要撤回时用「回滚到上一版」，撤下的版本也移出更新源。完整链路和信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布staging-与后台确认)。
-4. 运行 `node scripts/write-website-release.mjs` 更新官网下载信息并提交，见[官网下载信息](#官网下载信息)。
-5. 在 Actions 运行 Publish GitHub Release，填版本号和第 1 步那次 Release Windows 的运行编号。它在构建机上从更新源下载安装包、blockmap 和 `latest.yml`，核对发布签名，并与那次构建的 `release-manifest.json` 逐项比对，全部一致才建 `vX.Y.Z` 标签（指向构建提交）和 GitHub Release 并标为 Latest，附件就是更新源上的这几个文件加构建清单。说明取自 `release-notes/X.Y.Z.md`，没有这个文件就拒绝发布，末尾固定加上「需要用激活码激活」。用 GITHUB_TOKEN 建的标签不会触发 Release Windows。这一步只能证明更新源的现状，读不到服务器上的发布回执。
-6. 用正式安装包做一次从上一版的覆盖升级和软件内更新，记录结果。
+1. 推发布提交到 master；CI 通过后在这个提交上打 `vX.Y.Z` 标签并推送。标签就是发布：之后没有人工步骤。
+2. Release Windows：托管机检查通过后，构建机打包、签名、上传到服务器 staging（[构建机准备](RELEASE_BUILDER_SETUP.md)）。
+3. 服务器自动发布：staging 里出现新的一份包，root 发布脚本就复制、重新校验，通过就上线。条件是签名有效、manifest 和 sha256 一致、版本高于更新源，并且这个版本以前没上过更新源。更新源只留新版和上一版，更早的移进服务器备份。每份上传只自动尝试一次；没能发布的留在后台「软件更新」的待发布列表，原因写在「最近一次自动发布」。需要撤回时用「回滚到上一版」，撤下的版本也移出更新源，之后重跑工作流也不会再把它自动发上去。完整链路和信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。
+4. 同一个工作流等更新源换成这个版本（最多 30 分钟），核对发布签名、`latest.yml` 和构建清单，再用构建机上的同一组文件（安装包、blockmap、`latest.yml`、`release-manifest.json`）在这个标签上建 GitHub Release 并标为 Latest。说明取自 `release-notes/X.Y.Z.md`，没有这个文件就只写固定的激活说明。
+5. 运行 `node scripts/write-website-release.mjs` 更新官网下载信息并提交，见[官网下载信息](#官网下载信息)。官网改成直接跟着更新源变化之后，这一步去掉。
 
 旧的手工发布（`publish-update.py <目录> <manifest sha256> <提交> <版本>`）仍可用，但同样要求发布签名和更高的版本号。
 

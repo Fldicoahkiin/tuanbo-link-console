@@ -3,16 +3,19 @@
 <a id="以后发版本的标准流程"></a>
 ## 以后发版本的标准流程
 
-用户 2026-10-24 定下：每个正式包先发给用户测试，测试之后再继续优化、发下一个版本；官网只放最新的包。本文后面的章节是 2026-09 的旧链路，以本节和[软件更新文档](SOFTWARE_UPDATES.md#步骤)为准。
+用户 2026-10-24 定下：打 tag 即上线，中间没有人工步骤；不做额外的自动化验收，用户自己安装测试；官网只放最新的包。本文后面的章节是 2026-09 的旧链路，以本节和[软件更新文档](SOFTWARE_UPDATES.md#步骤)为准。
 
-1. （会话）发布提交只改根目录和 `apps/desktop` 两个 `package.json` 的版本号，提交信息 `chore(release): X.Y.Z`，推 master。
-2. （会话）等 master 上这个提交的 CI 全部通过，冻结它作为这个版本的来源。
-3. （会话）在 Actions 运行 Release Windows，填这个提交的完整号：构建机打包、签名、上传到服务器 staging。
-4. （**用户**）在运营后台「软件更新」里核对待发布版本，经二次验证、填写原因后点「发布更新」。
-5. （会话）运行 Publish GitHub Release，填版本号和第 3 步的运行编号：建 `vX.Y.Z` 标签和 Latest release，附件与更新源一致。
-6. （会话）运行 `node scripts/write-website-release.mjs` 并推送，官网下载页随自动部署换成新版。
-7. （**用户**）从官网下载安装、测试；有问题就在后台「回滚到上一版」。
-8. 测试通过后，进入下一轮。
+1. 发布提交只改根目录和 `apps/desktop` 两个 `package.json` 的版本号，提交信息 `chore(release): X.Y.Z`，推 master。
+2. 这个提交的 CI 通过后，在它上面打 `vX.Y.Z` 标签并推送。
+3. 之后全部自动：
+   - Release Windows：托管机检查版本、类型、单测、lint；构建机打包、签名、上传到服务器 staging。
+   - 服务器：发布脚本重新做全部校验（签名、manifest、sha256、版本高于更新源、这个版本没发布过），通过就上线。
+   - 工作流：等更新源换成这个版本，再用构建机上的同一组文件建 GitHub Release，标为 Latest。
+4. 用户从官网下载安装、测试。有问题就在后台「回滚到上一版」，或者修好后发下一个版本。
+
+后台「软件更新」保留，用来看状态、看最近一次自动发布的结果和紧急回滚。没能自动发布的版本留在待发布列表里，原因写在「最近一次自动发布」。
+
+官网下载信息暂时还要在上线后运行 `node scripts/write-website-release.mjs` 并推送；改成直接跟着更新源变化之后，这一步去掉。
 
 保留规则：
 - 官网下载页和 `release.json` 只放最新版。
@@ -27,6 +30,12 @@
 - **只保留最近 3 份归档**：GitHub Releases 已保留全部版本，服务器上的归档只是冗余，所以发布脚本只保留最近 3 份归档，更早的移除。
 - **磁盘余量提示**：后台「软件更新」显示服务器剩余空间。剩余空间低于 5 GB 时，发布前就拒绝，并写明原因。
 
+0.5.0 的例外（2026-10-24）：构建机上的 Actions runner 还没注册，0.5.0 由会话在构建机上按 Release Windows 的步骤手动完成：
+- 来源：CI 全部通过的 master 提交 `37a4334864cf6f0c219c8c37523e90ed6341998d`，干净检出在 `C:\dev\tblink-release`。
+- 检查和打包：版本检查、`pnpm verify`；复制固定版本的美颜和音乐分析产物后 `pnpm dist`，再 `node scripts/verify-desktop-artifacts.mjs --dist`。
+- 签名：用 release-2026-10-a 签 `latest.yml`，写 `release-manifest.json`（0 项失败）。安装包 sha256 `8266abaf6ad45d2bfad995823f0d478457d3ec0acdcc0bbcbb2fea3091e80087`，987,697,473 字节。产物另存在构建机 `D:\tblink-release-scratch\release-0.5.0\`。
+- 上传：以 tblink-release 身份上传 staging 时卡住。构建机到服务器的路径 MTU 约 1492，1500 字节的包被丢弃且没有 ICMP 提示，满尺寸 TCP 段发不出去；下载方向不受影响。构建机上的 Release Windows 也会遇到同样的问题，要先在构建机上把网卡 MTU 调低（或在路由器上钳制 MSS）。
+- 由主会话在服务器上用 `publish-update.py` 的手动模式发布；v0.5.0 的 GitHub Release 在上线后用 `scripts/publish-github-release.mjs` 补建。
 
 2026-09-30 当前生产状态：Windows **0.4.29** 已正式发行，公司更新源已发布安装包、blockmap 与 `latest.yml`；官网已开放支付宝月付 **800 元／30 天／台**、年付 **8,000 元／365 天／台**。已核验未付款订单创建、同单恢复和未付款不发码，未进行实际扣款。Windows CI 已通过正式安装版无凭证拦截、覆盖安装与卸载验收，见[专项记录](LICENSE_UPDATE_ACCEPTANCE.md)；真实支付交付与续费、退款及两版本重启更新仍待真人测试；微信 Native 服务端及官网已部署、商户凭据未配置且收款关闭；自动开票尚未接入。实际构建、摘要与部署备份见 [发行记录](RELEASE_0.4.29.md)。下文带日期的旧关闭／未发行记录只表示当时状态。
 

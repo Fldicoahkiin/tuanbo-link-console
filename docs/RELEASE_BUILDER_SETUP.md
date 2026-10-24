@@ -1,6 +1,6 @@
 # 构建机准备（Windows 正式包）
 
-正式安装包只在国内构建机上打包、签名并上传到服务器 staging。发布链路和信任边界见 [自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布staging-与后台确认)。目前构建机就是开发机 DESKTOP-2C8JIC2，它同时用于 GUI 测试：runner 会等 `C:\dev\claude-tools\locks\` 下没有锁时才开始打包。长期应换一台专门的构建机。
+正式安装包只在国内构建机上打包、签名并上传到服务器 staging。发布链路和信任边界见 [自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。目前构建机就是开发机 DESKTOP-2C8JIC2，它同时用于 GUI 测试：runner 会等 `C:\dev\claude-tools\locks\` 下没有锁时才开始打包。长期应换一台专门的构建机。
 
 下面的步骤由用户和仓库所有者完成。**私钥、token 和密码都只在本机窗口或 GitHub 网页里输入，不要贴到聊天里，也不要发给任何人。**
 
@@ -153,6 +153,6 @@ runner 只能读资产和上传身份，不能读发布签名私钥（它来自 
 <a id="6-首次构建后删除本机日常密钥"></a>
 ## 6. 首次构建后删除本机日常密钥（用户）
 
-完成后告诉主会话。会话会在 Actions 手动运行一次 Release Windows，确认：构建机打出的包内容与本地验收的候选包一致（比较 `win-unpacked\resources\app.asar` 和资源目录，不比较安装包本身，因为 NSIS 会写入时间戳）；`latest.yml` 已用 secret 正确签名；包已进入服务器 staging。
+完成后告诉主会话。Release Windows 只由 `vX.Y.Z` 标签触发：下一次推标签时，构建机用 secret 签名、上传，服务器自动发布，工作流建好 GitHub Release，这次运行成功就说明 secret 签名可用。
 
 会话通知「CI 签名验证成功」后，删除电脑上的 `D:\tblink-release-signing\release-2026-10-a.pem`，并清空回收站里的这个文件。之后这台电脑上不再有发布签名私钥。

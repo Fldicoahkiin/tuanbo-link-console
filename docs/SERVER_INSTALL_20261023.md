@@ -2,7 +2,7 @@
 
 这份说明一次装完两件事：
 
-- Windows 更新发布：上传身份 tblink-release、发布助手 `publish-update.py` 和后台「软件更新」。设计见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布staging-与后台确认)。
+- Windows 更新发布：上传身份 tblink-release、发布助手 `publish-update.py` 和后台「软件更新」。设计见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。
 - root 备份加固：部署和运维工具的 root 备份移到 `/var/backups/tblink`；回滚前核对摘要；备份配置和巡检令牌不再信任服务账号的目录。路径清单见[部署和运维工具的 root 路径](AUTOMATED_DEPLOYMENT.md#部署和运维工具的-root-路径)和[发布助手的 root 路径](AUTOMATED_DEPLOYMENT.md#root-写入和信任判断的路径)。
 
 <a id="安装来源"></a>
