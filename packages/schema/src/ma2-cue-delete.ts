@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ma2NetworkTargetSchema } from './ma2-bridge';
 import { ma2EffectLibrarySchema } from './ma2-effect-library';
-export const ma2DeleteCueRefSchema = z.object({ sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0) }).strict();
+export const ma2DeleteCueRefSchema = z.object({ sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/, 'Cue 编号须为 1–9999，最多 3 位小数').refine(value => Number(value) > 0, 'Cue 编号须大于 0') }).strict();
 const context = { network: ma2NetworkTargetSchema, expectedSource: z.object({ show: z.string().min(1), generation: z.string().min(1), version: z.string().min(1) }).strict(), projectId: z.string().uuid(), projectPath: z.string().min(1) };
 export const ma2CueDeletePrepareSchema = z.object({ ...context, refs: z.array(ma2DeleteCueRefSchema).min(1).max(200), progressId: z.string().uuid().optional() }).strict();
 export const ma2CueDeleteCommitSchema = z.object({ ...context, token: z.string().uuid(), progressId: z.string().uuid().optional() }).strict();

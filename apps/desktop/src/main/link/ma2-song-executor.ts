@@ -4,27 +4,34 @@ import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { listMa2ExecutorPages, readMa2ExecutorPage } from './ma2-executor-page';
 import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 
-export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean, reserved = false): Promise<{ address: string; slot: number; pageExists: boolean; assigned: boolean }> {
+/**
+ * Where the song's Sequence sits on its executor page. A bound song keeps its slot while that slot
+ * holds the song or is empty; a Sequence the operator moved on the same page is followed there; a
+ * slot now taken by other content leaves it untouched and the song moves to the next free slot.
+ */
+export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean): Promise<{ address: string; slot: number; pageExists: boolean; assigned: boolean }> {
   const stopped = (): void => { if (isPlaying()) throw new Error('播放已经开始，未修改执行器位置'); };
   stopped();
   const request = { network: source.network, expectedSource: source.expectedSource };
   const directory = await listMa2ExecutorPages(bridge, request);
   const snapshot = directory.pages.some(value => value.page === page) ? await readMa2ExecutorPage(bridge, { ...request, page }) : null;
+  const items = snapshot?.items ?? [];
+  const covers = (slot: number): boolean => items.some(item => slot >= item.slot && slot < item.slot + item.width);
+  const current = items.find(item => item.sequence === sequence);
   if (existing) {
     const [oldPage, oldSlot] = existing.split('.').map(Number);
-    if (reserved && oldPage === page && !snapshot?.items.some(item => oldSlot! >= item.slot && oldSlot! < item.slot + item.width)) return { address: existing, slot: oldSlot!, pageExists: snapshot !== null, assigned: false };
-    if (oldPage !== page || !snapshot?.items.some(item => item.slot === oldSlot && item.sequence === sequence)) throw new Error(`本曲原位置 ${existing} 已改变，请核对控台；不会覆盖其他灯光`);
-    return { address: existing, slot: oldSlot!, pageExists: true, assigned: true };
+    if (oldPage === page && items.some(item => item.slot === oldSlot && item.sequence === sequence)) return { address: existing, slot: oldSlot!, pageExists: true, assigned: true };
+    if (current) return { address: `${page}.${current.slot}`, slot: current.slot, pageExists: true, assigned: true };
+    if (oldPage === page && !covers(oldSlot!)) return { address: existing, slot: oldSlot!, pageExists: snapshot !== null, assigned: false };
   }
-  const occupied = new Set(snapshot?.items.flatMap(item => Array.from({ length: item.width }, (_, i) => item.slot + i)));
-  let slot = 101; while (slot <= 190 && occupied.has(slot)) slot++;
+  let slot = 101; while (slot <= 190 && covers(slot)) slot++;
   if (slot > 190) throw new Error(`按钮第 ${page} 页已经放满，请选择另一页；原有内容未覆盖`);
   const address = `${page}.${slot}`;
   return { address, slot, pageExists: snapshot !== null, assigned: false };
 }
 
-export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean, reserved = false): Promise<string> {
-  const { address, slot, pageExists, assigned } = await planMa2SongExecutor(bridge, source, sequence, page, existing, isPlaying, reserved);
+export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean): Promise<string> {
+  const { address, slot, pageExists, assigned } = await planMa2SongExecutor(bridge, source, sequence, page, existing, isPlaying);
   if (assigned) return address;
   const stopped = (): void => { if (isPlaying()) throw new Error('播放已经开始，未修改执行器位置'); };
   const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(source.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(source.expectedSource.generation)},'Show or session changed');`;

@@ -28,10 +28,22 @@ export function toUserErrorMessage(error: unknown): string {
   return `操作未能完成：${leadingReason(text)}`;
 }
 
-/** Schema failures arrive as a JSON issue list whose first line is just "["; show the first issue. */
+/**
+ * Schema failures arrive as a JSON issue list whose first line is just "["; show the first issue and
+ * the field it names, so a bare "Invalid input" still says which value was refused. The list is
+ * indented by two, so the first issue's own keys sit four spaces in, ahead of any nested union errors.
+ */
 function leadingReason(text: string): string {
   const first = text.split('\n')[0]?.trim() ?? '';
-  const issue = /^[[{]$/.test(first) ? /"message"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text)?.[1] : undefined;
-  const decoded: unknown = issue ? JSON.parse(issue) : undefined;
-  return (typeof decoded === 'string' ? decoded : first).slice(0, 300) || '未返回错误内容';
+  const issues = /^[[{]$/.test(first);
+  const string = '"(?:[^"\\\\]|\\\\.)*"';
+  const message = issues ? (new RegExp(`\\n {4}"message"\\s*:\\s*(${string})`).exec(text) ?? new RegExp(`"message"\\s*:\\s*(${string})`).exec(text))?.[1] : undefined;
+  const decoded: unknown = message ? JSON.parse(message) : undefined;
+  if (typeof decoded !== 'string') return first.slice(0, 300) || '未返回错误内容';
+  // Only a list of JSON strings and integers matches, so parsing it cannot fail.
+  const item = `(?:${string}|\\d+)`;
+  const listed = new RegExp(`\\n {4}"path"\\s*:\\s*\\[\\s*(${item}(?:\\s*,\\s*${item})*)?\\s*\\]`).exec(text);
+  const path: unknown = listed ? JSON.parse(`[${listed[1] ?? ''}]`) : [];
+  const field = Array.isArray(path) ? path.map(String).join('.') : '';
+  return `${decoded}${field ? `（字段 ${field}）` : ''}`.slice(0, 300);
 }

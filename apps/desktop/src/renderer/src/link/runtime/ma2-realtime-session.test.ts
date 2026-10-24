@@ -3,9 +3,9 @@ import { createEmptyLinkProject, createLightingDocument, type Ma2SongBinding, ty
 import { legacyMa2Renames, ma2SongPoints, pendingMa2Renames, renameConsoleCueCommand, setLightingCommand } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
-import { useMa2SongSyncStore, startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, resolveMa2SongConflict } from './ma2-song-sync';
+import { useMa2SongSyncStore, startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings } from './ma2-song-sync';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
-import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary, songsWithoutConsoleShow, writeMissingConsoleShows } from './ma2-realtime-session';
+import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, refreshMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary, songsWithoutConsoleShow, writeMissingConsoleShows } from './ma2-realtime-session';
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from './ma2-legacy-names';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
@@ -72,49 +72,62 @@ it('同一工程已有歌曲绑定仍自动接纳新歌，原绑定页不受默�
   expect(useMa2SongSyncStore.getState().songs.first?.settings.executorPage).toBe(1234);
   expect(useMa2SongSyncStore.getState().songs.second?.settings.executorPage).toBe(1000);
 });
-it('已绑定歌曲清空仍进入原位置核对；确认前保留清单，选择后回读 0 步', async () => {
+function boundFirst(patch: Partial<Ma2SongBinding> = {}) {
   const value = project();
   const lighting = value.rundown[0]!.lighting!;
-  lighting.tracks[0]!.clips[0]!.events = [];
-  lighting.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9000, name: 'first', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }] };
+  lighting.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9000, name: 'first', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }], ...patch };
+  return value;
+}
+const answer = (request: Ma2SongSyncRequest): Promise<Ma2SongSyncResult> => Promise.resolve({ binding: { ...request.binding!, points: request.points.map((point, index) => ({ id: point.id, cue: `${index + 1}.000` })) }, layout: null, backupFile: '', changed: true,
+  library: { directory: { ...source, entries: [{ target: 9000, name: 'first' }] }, readAt: new Date().toISOString(), sequences: [{ sequence: 9000, name: 'first', cues: request.points.map((_, index) => ({ index: index + 1, number: `${index + 1}.000`, name: '开场' })) }], fixtureUsage: [], errors: [] } });
+it('已绑定歌曲清空时直接同步删除，回读 0 步，不再等核对清单', async () => {
+  const value = boundFirst();
+  value.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events = [];
   useDocumentStore.getState().setProject(value, 'song.tblink');
-  sync.mockImplementation((request: Ma2SongSyncRequest): Promise<Ma2SongSyncResult> => {
-    const cleared = request.conflictResolutions?.[0]?.choice === 'local';
-    return Promise.resolve({ binding: { ...request.binding!, points: cleared ? [] : request.binding!.points }, layout: null, removed: [], backupFile: '', changed: Boolean(cleared),
-      conflicts: cleared ? [] : [{ key: 'point-first:cue-deletion', field: 'cue-deletion', pointId: 'point-first', cue: '1.000', baseline: '开场', local: '软件已移除', console: '开场', token: '0'.repeat(64) }],
-      library: { directory: { ...source, entries: [{ target: 9000, name: 'first' }] }, readAt: new Date().toISOString(), sequences: [{ sequence: 9000, name: 'first', cues: cleared ? [] : [{ index: 1, number: '1.000', name: '开场' }] }], fixtureUsage: [], errors: [] } });
-  });
+  sync.mockImplementation(answer);
   await prepareMa2RealtimeSession(); stopMa2SongSync('second');
   await tickMa2SongSync(false);
+  expect(sync).toHaveBeenCalledTimes(1);
   expect(sync.mock.calls[0]?.[0]).toMatchObject({ points: [], binding: { sequence: 9000, executor: '1234.101' } });
-  expect(useMa2SongSyncStore.getState().songs.first).toMatchObject({ state: 'blocked', conflicts: [{ field: 'cue-deletion' }] });
-  expect(useDocumentStore.getState().project?.rundown[0]?.lighting?.consoleSong?.points).toHaveLength(1);
-  resolveMa2SongConflict('first', 'point-first:cue-deletion', 'local');
-  await tickMa2SongSync(false);
+  expect(sync.mock.calls[0]?.[0]).not.toHaveProperty('confirmedDeletions');
   expect(useDocumentStore.getState().project?.rundown[0]?.lighting?.consoleSong).toMatchObject({ sequence: 9000, executor: '1234.101', points: [] });
   expect(useMa2SongSyncStore.getState().songs.first?.state).toBe('verified');
 });
-it('有冲突的歌曲每秒复查时保持待核对和原提示，不进入同步中、不重复存档', async () => {
+it('执行器被解除分配的歌曲照常完整同步，由同步把序列放回按钮页', async () => {
+  useDocumentStore.getState().setProject(boundFirst({ assignment: 'unassigned' }), 'song.tblink');
+  sync.mockImplementation(answer);
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  expect(useMa2SongSyncStore.getState().songs.first).toBeDefined();
+  await tickMa2SongSync(false);
+  expect(sync).toHaveBeenCalledTimes(1); expect(check).not.toHaveBeenCalled();
+  expect(useMa2SongSyncStore.getState().songs.first?.state).toBe('verified');
+});
+it('同一同步连续失败 3 次后停下并写明原因，不再每隔几秒重试；编辑或点刷新同步后再试', async () => {
   vi.useFakeTimers();
-  const value = project();
-  const lighting = value.rundown[0]!.lighting!;
-  lighting.tracks[0]!.clips[0]!.events = [];
-  lighting.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, sequence: 9000, name: 'first', executor: '1234.101', layout: null, baselineXml: '<baseline/>', points: [{ id: 'point-first', cue: '1.000' }] };
-  useDocumentStore.getState().setProject(value, 'song.tblink');
-  sync.mockImplementation((request: Ma2SongSyncRequest): Promise<Ma2SongSyncResult> => Promise.resolve({ binding: request.binding!, layout: null, removed: [], backupFile: '', changed: false,
-    conflicts: [{ key: 'point-first:cue-deletion', field: 'cue-deletion', pointId: 'point-first', cue: '1.000', baseline: '开场', local: '软件已移除', console: '开场', token: '0'.repeat(64) }],
-    library: { directory: { ...source, entries: [{ target: 9000, name: 'first' }] }, readAt: new Date().toISOString(), sequences: [{ sequence: 9000, name: 'first', cues: [{ index: 1, number: '1.000', name: '开场' }] }], fixtureUsage: [], errors: [] } }));
+  sync.mockRejectedValue(new Error('控台操作未完成：Sequence occupied'));
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  for (let attempt = 0; attempt < 6; attempt++) { await tickMa2SongSync(false); vi.advanceTimersByTime(30001); }
+  expect(sync).toHaveBeenCalledTimes(3);
+  expect(useMa2SongSyncStore.getState().songs.first?.state).toBe('blocked');
+  expect(useMa2SongSyncStore.getState().songs.first?.message).toContain('Sequence occupied');
+  expect(useMa2SongSyncStore.getState().songs.first?.message).toContain('刷新同步');
+  refreshMa2RealtimeSession('first');
+  await tickMa2SongSync(false);
+  expect(sync).toHaveBeenCalledTimes(4);
+  // Without an itemId every song is read again, a paused one included.
+  refreshMa2RealtimeSession();
+  expect(useMa2SongSyncStore.getState().songs.second?.state).toBe('pending');
+});
+it('刷新同步让已确认的歌重新完整核对控台，而不是只做复查', async () => {
+  useDocumentStore.getState().setProject(boundFirst(), 'song.tblink');
+  sync.mockImplementation(answer);
   await prepareMa2RealtimeSession(); stopMa2SongSync('second');
   await tickMa2SongSync(false);
-  const blocked = useMa2SongSyncStore.getState().songs.first!;
-  expect(blocked).toMatchObject({ state: 'blocked' });
-  const during: string[] = [];
-  check.mockImplementation(() => { during.push(useMa2SongSyncStore.getState().songs.first!.state); return Promise.resolve(false); });
-  vi.advanceTimersByTime(1001);
+  expect(useMa2SongSyncStore.getState().songs.first?.state).toBe('verified');
+  refreshMa2RealtimeSession('first');
   await tickMa2SongSync(false);
-  expect(check).toHaveBeenCalledTimes(1); expect(during).toEqual(['blocked']);
-  expect(useMa2SongSyncStore.getState().songs.first).toMatchObject({ state: 'blocked', message: blocked.message });
-  expect(sync).toHaveBeenCalledTimes(1); expect(archive).toHaveBeenCalledTimes(1);
+  expect(sync).toHaveBeenCalledTimes(2); expect(check).not.toHaveBeenCalled();
+  expect(archive).toHaveBeenCalledTimes(1);
 });
 it('同步失败退避重试时同一份本地内容只存档一次，编辑后才存新档', async () => {
   vi.useFakeTimers();

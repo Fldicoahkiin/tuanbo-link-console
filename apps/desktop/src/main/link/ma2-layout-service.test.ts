@@ -87,7 +87,8 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     }
     if (copy) return 'copied';
     if (script.includes("return 'labelled'")) return 'labelled';
-    match = /gma\.cmd\('Import (\w+)\.xml At Sequence (\d+) \/o \/nc'\)/.exec(script);
+    // A full clear imports the emptied snapshot first; the last Import is what the Sequence ends up holding.
+    match = [...script.matchAll(/gma\.cmd\('Import (\w+)\.xml At Sequence (\d+) \/o \/nc'\)/g)].at(-1) ?? null;
     if (!match && /read\('\w+'\)==read\('\w+_check'\)/.test(script)) {
       const [, before, target] = /read\('(\w+)'\)==read\('\w+_check'\)/.exec(script)!.concat(/Export Sequence (\d+) /.exec(script)![1]!);
       if (canonical(files.get(before!)!.toString('utf8')) !== canonical(sequences.get(Number(target))!)) return 'ERR:Sequence changed during write';
@@ -99,7 +100,6 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
       const target = Number(match[2]);
       const check = /read\('(\w+)'\)==read\('\w+_check'\)/.exec(script);
       if (check && canonical(files.get(check[1]!)!.toString('utf8')) !== canonical(sequences.get(target)!)) return 'ERR:Sequence changed during write';
-      if (script.includes('Delete Sequence')) throw new Error('测试未覆盖删除');
       sequences.set(target, files.get(match[1]!)!.toString('utf8')); return 'written';
     }
     throw new Error(`假控台未识别的脚本：${script.slice(0, 120)} … ${script.slice(-260)}`);
@@ -234,7 +234,7 @@ it('写后回读交给复查接管时不进备份轮转；接管方拿到这次�
   expect(handed.remoteRevision).toBe(result.remoteRevision);
   expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ files: [result.backupFile.replace(/\.xml$/, '')] }));
 });
-it('带起始码同步时在序列之后写本曲时间码节目；改时间后按指纹重写；控台上被改过则不覆盖；不带起始码不碰时间码', async () => {
+it('带起始码同步时在序列之后写本曲时间码节目；改时间后重写；控台上被改过时按时间线重写并留备份；不带起始码不碰时间码', async () => {
   const { song, sequences } = boundSong();
   const fake = songConsole(sequences);
   const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups);
@@ -255,10 +255,14 @@ it('带起始码同步时在序列之后写本曲时间码节目；改时间后�
   expect(second.binding.timecode!.number).toBe(9000); expect(second.binding.timecode!.revision).not.toBe(first.binding.timecode!.revision);
   expect(inspectMa2TimecodeXml(fake.timecodes.get(9000)!).timecodes[0]!.tracks[0]!.subtracks[0]!.events[1]!.attributes.time).toBe('45');
   fake.timecodes.set(9000, fake.timecodes.get(9000)!.replace('name="GeQu', 'name="控台改过 GeQu'));
-  await expect(service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: second.binding, timecodeStartMs: 480000, points: later.map(point => ({ ...point, atMs: point.atMs + 100 })) }))
-    .rejects.toThrow(/Timecode 9000 在上次同步后被改过，未覆盖/);
+  noBackups.record.mockClear();
+  const third = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: second.binding, timecodeStartMs: 480000, points: later.map(point => ({ ...point, atMs: point.atMs + 100 })) });
+  expect(third.binding.timecode!.number).toBe(9000);
+  expect(fake.timecodes.get(9000)).not.toContain('控台改过');
+  expect(inspectMa2TimecodeXml(fake.timecodes.get(9000)!).timecodes[0]!.tracks[0]!.subtracks[0]!.events[1]!.attributes.time).toBe('48');
+  expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ object: 'Timecode 9000' }));
 }, 20000);
-it('新建本曲节目后写入失败：编号已记进同步记录，重试读回同一编号重写，不另建；导入了一半的节目不覆盖也不另建', async () => {
+it('新建本曲节目后写入失败：编号已记进同步记录，重试读回同一编号重写，不另建；导入了一半的节目也在同一编号重写', async () => {
   for (const imported of [false, true]) {
     const { song, sequences } = boundSong();
     const fake = songConsole(sequences);
@@ -275,8 +279,8 @@ it('新建本曲节目后写入失败：编号已记进同步记录，重试读�
     const failing = { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response };
     await expect(service.syncSong(fake.connection, failing, timed())).rejects.toThrow('MA2 响应超时');
     expect([...fake.timecodes.keys()]).toEqual([9000]);
-    if (imported) await expect(service.syncSong(fake.connection, fake.bridge, timed())).rejects.toThrow(/Timecode 9000 在上次同步后被改过，未覆盖/);
-    else expect((await service.syncSong(fake.connection, fake.bridge, timed())).binding.timecode).toMatchObject({ number: 9000, offset: 14400 });
+    expect((await service.syncSong(fake.connection, fake.bridge, timed())).binding.timecode).toMatchObject({ number: 9000, offset: 14400 });
+    expect(fake.timecodes.get(9000)).not.toContain('回读不一致');
     expect([...fake.timecodes.keys()]).toEqual([9000]);
   }
 }, 30000);
@@ -334,6 +338,29 @@ it('已绑定歌曲新增一个点位：Copy 直接建出新 Cue 编号；清空
   expect(fake.lines.some(line => line.includes('Copy Sequence'))).toBe(false);
   expect(inspectMa2CueData(sequences.get(9000)!, inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues[1]!.index).size).toBe(0);
 }, 20000);
+it('控台上整条本曲序列被删掉：不再整读，按上次确认的内容和时间线重建同一序列', async () => {
+  const { song, sourceNumber, sequences } = boundSong();
+  sequences.delete(9000);
+  const fake = songConsole(sequences);
+  const result = await new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song);
+  expect(fake.ops).not.toContain('SEQUENCE 9000 keep');
+  expect(fake.ops.filter(op => op === 'SEQUENCE 9000')).toHaveLength(1);
+  const rebuilt = inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!;
+  expect(rebuilt.cues.map(cue => cue.number)).toEqual(song.binding!.points.map(point => point.cue));
+  expect(inspectMa2CueData(sequences.get(9000)!, rebuilt.cues[0]!.index)).toEqual(inspectMa2CueData(sequences.get(sourceNumber)!, 1));
+  expect(result.binding).toMatchObject({ sequence: 9000, executor: '1000.101' });
+}, 20000);
+it('时间线全删后重新加同样多的 Cue：控台删掉旧 Cue 并在原编号写新内容，数量不叠加', async () => {
+  // 2026-10-24 现场：30 个 Cue 删除后重加，控台上变成 65 个。
+  const { song, sourceNumber, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const again = song.points.map((point, index) => ({ ...point, id: `again-${index}`, name: `新加 ${index + 1}`, cues: [{ sequence: sourceNumber, cue: '1.000', delayMs: 0 }] }));
+  const result = await new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, { ...song, points: again });
+  const written = inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!;
+  expect(written.cues).toHaveLength(8);
+  expect(written.cues.map(cue => cue.name)).toEqual(again.map((_, index) => `XinJia ${index + 1}`));
+  expect(result.binding.points.map(point => point.cue)).toEqual(song.binding!.points.map(point => point.cue));
+}, 20000);
 it('已绑定歌曲新增 Cue 的 Copy 已执行但回包丢失：再次同步从中断记录续上，不重复新建', async () => {
   const { song, sourceNumber, sequences } = boundSong();
   const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups);
@@ -361,7 +388,7 @@ it('控台上已有的中文名默认不改写：只换一个 Cue 的内容时�
   expect(written.cues.map(cue => cue.name)).toEqual(Array.from({ length: 8 }, (_, index) => `段落 ${index + 1}`));
   const again = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: result.binding,
     points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: result.binding.points[index]!.cue, delayMs: 0 }] })) });
-  expect(again.changed).toBe(false); expect(again.conflicts).toEqual([]);
+  expect(again.changed).toBe(false);
 });
 it('只改名字时写入拼音；新歌和新 Cue 直接写拼音', async () => {
   const { song, sequences } = boundSong();
@@ -381,5 +408,5 @@ it('显式要求时把控台上软件写过的中文名改为拼音，用回读�
   expect(written.cues.map(cue => cue.name)).toEqual(Array.from({ length: 8 }, (_, index) => `DuanLuo ${index + 1}`));
   const again = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: first.binding,
     points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: first.binding.points[index]!.cue, delayMs: 0 }] })) });
-  expect(again.changed).toBe(false); expect(again.conflicts).toEqual([]);
+  expect(again.changed).toBe(false);
 });

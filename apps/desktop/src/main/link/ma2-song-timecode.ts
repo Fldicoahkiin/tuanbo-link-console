@@ -33,12 +33,12 @@ export type Ma2SongTimecode = { number: number; offset: number; slot: string; re
 const revision = (xml: string): string => createHash('sha256').update(xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim()).digest('hex');
 
 /**
- * Writes the song's own Timecode show after its Sequence was verified. A show recorded earlier is
- * rebuilt only while the console still holds it exactly as last written, so edits made on the
- * console are never overwritten; a missing one is created again, a new one takes the first free
- * number from the song's Sequence number up. `created` records a new show before it is filled, so
- * a failed fill is retried on that number instead of leaving it behind and creating another.
- * APPLY keeps a console backup before it imports.
+ * Writes the song's own Timecode show after its Sequence was verified. The show belongs to the
+ * song and the timeline decides its times: a show edited on the console, or left half imported, is
+ * rebuilt from the timeline, and APPLY keeps the console's version as a backup before it imports;
+ * a missing one is created again, a new one takes the first free number from the song's Sequence
+ * number up. `created` records a new show before it is filled, so a failed fill is retried on that
+ * number instead of leaving it behind and creating another.
  */
 export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request' | 'exchange'>, song: {
   previous: Ma2SongTimecode | undefined; sequence: number; executor: string; startMs: number; lengthMs: number | undefined; name: string; version: string;
@@ -50,10 +50,8 @@ export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request'
   let number = song.previous?.number;
   let current: string;
   const timecode = (target: number, xml: string): Ma2SongTimecode => ({ number: target, offset: frames(song.startMs), slot: MA2_SONG_TIMECODE_SLOT, revision: revision(xml) });
-  if (number !== undefined && taken(number)) {
-    current = await bridge.request('READ', number);
-    if (revision(current) !== song.previous!.revision) throw new Error(`控台上的本曲时间码节目 Timecode ${number} 在上次同步后被改过，未覆盖；请在控台核对后重新同步`);
-  } else {
+  if (number !== undefined && taken(number)) current = await bridge.request('READ', number);
+  else {
     if (number === undefined) { number = song.sequence; while (taken(number) && number < 99999) number += 1; }
     if (taken(number)) throw new Error('从本曲序列号往后没有空的 Timecode 编号');
     current = await bridge.request('CREATE', number, '', createMa2TimecodeXml(number, song.name, song.version));

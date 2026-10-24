@@ -27,7 +27,7 @@ it('移动更新确切地址、保留同序列其他执行器，并能重基历�
   expect(command.rebaseHistory?.(before).rundown[0]!.lighting?.consoleSong?.executor).toBe('1001.1');
   expect(before.rundown[0]!.lighting?.consoleSong?.executor).toBe('1000.101');
 });
-it('删分配保留序列及时间线内容，记录解除状态防止后台重新创建', () => {
+it('删分配保留序列及时间线内容并记录解除状态，下次同步据此把序列放回按钮页', () => {
   const project = sample();
   const after = applyMa2ExecutorChangeCommand('192.0.2.1:30000', 'Show', 9000, '1000.101', null).execute(project);
   expect(after.rundown[0]!.lighting?.consoleSong).toMatchObject({ sequence: 9000, executor: '1000.101', assignment: 'unassigned' });
@@ -41,6 +41,15 @@ it('另一控台或 Show 的位置更新不能改当前工程', () => {
 it('删除清单明确识别无法转成序列引用的执行器专用动作', () => {
   const project = sample();
   project.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events.push({ id: 'f', kind: 'ma2-fader', at: 250, executor: '1000.101', fader: 'Master', level: 1, label: '亮度' });
+  project.rundown[0]!.lighting!.consoleSong!.executor = '1000.103';
   expect(ma2ExecutorDeletionUses(project, '1000.101')).toEqual(['歌曲：含执行器专用动作，请先重新指定这些动作的目标']);
   expect(ma2ExecutorDeletionUses(project, '1000.102')).toEqual([]);
+});
+it('本曲控台序列自己的执行器不能在页面里删除，只能移动；已解除分配或别的控台不拦', () => {
+  const project = sample();
+  expect(ma2ExecutorDeletionUses(project, '1000.101')).toEqual(['歌曲：这是本曲控台序列 9000 的执行器，时间码靠它演出本曲；要换位置请移动，不要删除']);
+  project.rundown[0]!.lighting!.consoleSong!.assignment = 'unassigned';
+  expect(ma2ExecutorDeletionUses(project, '1000.101')).toEqual([]);
+  project.rundown[0]!.lighting!.consoleSong = { ...project.rundown[0]!.lighting!.consoleSong!, assignment: 'assigned', endpoint: 'other:30000' };
+  expect(ma2ExecutorDeletionUses(project, '1000.101')).toEqual([]);
 });

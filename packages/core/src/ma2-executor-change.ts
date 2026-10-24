@@ -60,7 +60,11 @@ export function ma2ExecutorDeletionUses(project: LinkProject, address: string): 
   const uses = project.rundown.flatMap(item => {
     const light = item.lighting;
     if (!light || !matchesSource(light, material?.source, show)) return [];
+    // The song's own executor is where its Timecode show fires the song; the song sync would put it straight back.
+    const song = light.consoleSong;
+    const ownExecutor = song?.executor === address && song.assignment !== 'unassigned' && song.endpoint === material?.source && song.show === show;
     return [
+      ...(ownExecutor ? [`${item.title}：这是本曲控台序列 ${song.sequence} 的执行器，时间码靠它演出本曲；要换位置请移动，不要删除`] : []),
       ...(light.tracks.some(needsExecutor) ? [`${item.title}：${message}`] : []),
       ...light.templates.filter(template => (!template.sourceShow || template.sourceShow === show) && needsExecutor(template.track)).map(template => `${item.title} · 素材「${template.name}」：${message}`)
     ];

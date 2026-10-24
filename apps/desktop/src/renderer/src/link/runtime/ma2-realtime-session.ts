@@ -99,7 +99,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     const project = useDocumentStore.getState().project;
     if (!project) return false;
     for (const item of project.rundown) {
-      if (!item.lighting || item.lighting.ma2Bindings?.length || item.lighting.consoleSong?.assignment === 'unassigned') continue;
+      if (!item.lighting || item.lighting.ma2Bindings?.length) continue;
       const existing = useMa2SongSyncStore.getState().songs[item.id];
       if (existing && (existing.state !== 'paused' || existing.requestId)) continue;
       const events = item.lighting.tracks.flatMap(track => track.clips.flatMap(clip => clip.events));
@@ -145,7 +145,27 @@ export function retryMa2RealtimeSession(): void {
     if (song.requestId) continue;
     const project = useDocumentStore.getState().project;
     const item = project?.rundown.find(value => value.id === song.itemId);
-    if (project && item) startMa2SongSync(item.id, item.lighting?.consoleSong?.name ?? song.name, ma2SongSyncSettings(project, item.id), song.confirmedDeletions);
+    if (project && item) startMa2SongSync(item.id, item.lighting?.consoleSong?.name ?? song.name, ma2SongSyncSettings(project, item.id));
+  }
+  void prepareMa2RealtimeSession();
+}
+
+/**
+ * 刷新同步: each song (or the one given) reads its console Sequence in full right away and is written
+ * wherever the console differs from the timeline, including Cues or a Sequence deleted on the console.
+ * A song whose write is running keeps it; its result is read back as usual.
+ */
+export function refreshMa2RealtimeSession(itemId?: string): void {
+  setMa2RealtimeEnabled(true);
+  useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '正在重新核对控台' });
+  const project = useDocumentStore.getState().project;
+  for (const song of Object.values(useMa2SongSyncStore.getState().songs)) {
+    if (song.requestId || itemId !== undefined && song.itemId !== itemId) continue;
+    const item = project?.rundown.find(value => value.id === song.itemId);
+    if (!project || !item) continue;
+    if (song.state === 'paused') { startMa2SongSync(item.id, item.lighting?.consoleSong?.name ?? song.name, ma2SongSyncSettings(project, item.id)); continue; }
+    // Dropping the confirmed revision turns the next pass into a full read; the acknowledged content stays, so no extra archive is taken.
+    useMa2SongSyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, state: 'pending', nextCheckAt: 0, consecutiveFailures: 0, remoteRevision: undefined, blockedRevision: undefined, message: '正在重新核对控台' } } }));
   }
   void prepareMa2RealtimeSession();
 }

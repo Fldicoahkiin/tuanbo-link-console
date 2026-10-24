@@ -20,11 +20,11 @@ it('中断后回读已完成步骤，只续写未完成步骤，沿用原序列�
   expect(recovered.points.slice(1)).toEqual(points.slice(1));
   expect(recoverMa2SongCreation(binding, skeleton, desired, points).points.every(point => point.cues[0]?.sequence === 9000)).toBe(true);
 });
-it('中断后控台另删 Cue 时交给三方合并核对，额外 Cue 原样保留', () => {
+it('中断后控台另删 Cue 时按时间线重建，额外 Cue 原样保留', () => {
   const changed = editMa2SongSequence(skeleton, '歌曲', [], ['1.000']);
   const recovered = recoverMa2SongCreation(binding, skeleton, changed, points);
   const request = { network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, expectedSource: { show: 'test', generation: 'g', version: '3.7.0.5' }, projectId: randomUUID(), itemId: 'song', requestId: randomUUID(), settings: { layout: 1000, name: '歌曲', nextSequence: 9000, columns: 8 }, name: '歌曲', ...recovered };
-  expect(planMa2SongSync(request, changed).removed).toEqual(['p0']);
+  expect(planMa2SongSync(request, changed).restored).toEqual(['1.000']);
   const extra = editMa2SongSequence(skeleton, '歌曲', [{ cue: '100.000', name: '控台新编', sources: [{ xml: source, cue: '1.000' }] }], []);
   expect(inspectMa2SequenceXml(recoverMa2SongCreation(binding, skeleton, extra, points).binding.baselineXml).sequences[0]?.cues.at(-1)).toMatchObject({ number: '100.000', name: '控台新编' });
 });
@@ -78,10 +78,9 @@ it('写入后丢回包再撤销替换，self 引用恢复写前内容，不能�
   expect(recovered.restores).toEqual([{ cue: '1.000', xml: desired }]);
   const request = { network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, expectedSource: { show: 'test', generation: 'g', version: '3.7.0.5' }, projectId: randomUUID(), itemId: 'song', requestId: randomUUID(), settings: { layout: 1000, name: '歌曲', nextSequence: 9000, columns: 8 }, name: '歌曲', binding: recovered.binding, points: recovered.points };
   const plan = planMa2SongSync(request, intended, recovered.restores.map(value => value.cue));
-  expect(plan.conflicts).toEqual([]);
   expect(plan.changes[0]).toMatchObject({ cue: '1.000', refs: undone[0]!.cues, restore: true });
 });
-it('已核对冲突在另一步写入中断后仍保留，不能把控台现值当成软件已确认值', () => {
+it('旧版本中断记录里保留的冲突项在恢复时仍按写前基线处理', () => {
   const remote = editMa2SongSequence(skeleton, '歌曲', [{ cue: '1.000', name: '控台改名', sources: [] }], []);
   const pending = structuredClone(points); pending[0]!.name = '软件改名';
   const recovered = recoverMa2SongCreation(binding, remote, remote, pending, pending, {}, ['1.000'], ['1.000']);

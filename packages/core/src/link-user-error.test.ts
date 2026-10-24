@@ -46,5 +46,12 @@ it('文件不存在时指出具体路径或程序', () => {
 it('工程结构校验错误显示第一条问题，而不是 JSON 的第一行“[”', () => {
   // 2026-10-19 现场：打开工程失败只显示“操作未能完成：[”。
   const raw = "Error invoking remote method 'link:open-project': Error: [\n  {\n    \"code\": \"custom\",\n    \"message\": \"OBS 显示 Cue“显示来源”尚未分配视觉图层\",\n    \"path\": [\"rundown\", 1]\n  }\n]";
-  expect(toUserErrorMessage(new Error(raw))).toBe('操作未能完成：OBS 显示 Cue“显示来源”尚未分配视觉图层');
+  expect(toUserErrorMessage(new Error(raw))).toBe('操作未能完成：OBS 显示 Cue“显示来源”尚未分配视觉图层（字段 rundown.1）');
+});
+it('只有“Invalid input”的校验错误同时写出被拒绝的字段，联合类型取外层字段', () => {
+  // 2026-10-24 现场：灯光同步只显示“Invalid input”，看不出是哪一项。
+  const refine = "Error invoking remote method 'link:ma2-sync-song': Error: [\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"binding\",\n      \"executor\"\n    ],\n    \"message\": \"Invalid input\"\n  }\n]";
+  expect(toUserErrorMessage(new Error(refine))).toBe('操作未能完成：Invalid input（字段 binding.executor）');
+  const union = "Error: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string\"\n        }\n      ]\n    ],\n    \"path\": [\n      \"points\",\n      3\n    ],\n    \"message\": \"Invalid input\"\n  }\n]";
+  expect(toUserErrorMessage(new Error(union))).toBe('操作未能完成：Invalid input（字段 points.3）');
 });

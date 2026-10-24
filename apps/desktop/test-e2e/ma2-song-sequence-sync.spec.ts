@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { test, expect, _electron as electron } from '@playwright/test';
-import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type Ma2SongConflict, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type Ma2SongSyncRequest, type Ma2SongSyncResult } from '@tb/schema';
 import { saveProject, savedValue } from './save-questions';
 
 for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${targetPage} 页，默认页保存恢复、双向同步保留新默认值与原位置`, async ({}, info) => {
@@ -40,37 +40,12 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
         process.env.TBLINK_SONG_SYNC_CALLS = String(Number(process.env.TBLINK_SONG_SYNC_CALLS) + 1);
         process.env.TBLINK_SONG_LAST_REQUEST = JSON.stringify(request);
         const target = request.binding?.sequence ?? request.settings.nextSequence;
-        if (process.env.TBLINK_SONG_CLEAR_NATIVE && !request.points.length && request.binding) {
-          const native = JSON.parse(process.env.TBLINK_SONG_CLEAR_NATIVE) as Array<{ index: number; number: string; name: string }>;
-          const approved = new Set(request.confirmedDeletions ?? []);
-          const cues = native.filter(cue => !approved.has(cue.number));
-          if (approved.size) {
-            process.env.TBLINK_SONG_CLEAR_NATIVE = JSON.stringify(cues);
-            process.env.TBLINK_SONG_CLEAR_CONFIRMED = JSON.stringify(request.confirmedDeletions);
-          }
-          const points = request.binding.points.filter(point => cues.some(cue => cue.number === point.cue));
-          return { binding: { ...request.binding, points, baselineXml: approved.size ? `<Fixture>${JSON.stringify(cues)}</Fixture>` : request.binding.baselineXml },
-            library: { directory: { ...source, entries: [{ target, name: request.name }] }, readAt: new Date().toISOString(), sequences: [{ sequence: target, name: request.name, cues }], fixtureUsage: [], errors: [] },
-            layout: null, changed: approved.size > 0, removed: [], backupFile: '',
-            conflicts: points.map(point => ({ key: `${point.id}:cue-deletion`, field: 'cue-deletion', pointId: point.id, cue: point.cue,
-              baseline: native.find(cue => cue.number === point.cue)?.name ?? '', local: '软件已移除', console: native.find(cue => cue.number === point.cue)?.name ?? '', token: 'd'.repeat(64) })) };
-        }
-        const consoleConflict = process.env.TBLINK_SONG_CONFLICT_NAME;
-        const decision = request.conflictResolutions?.find(value => value.key === 'point-0:cue-name' && value.token === 'c'.repeat(64));
-        if (decision) {
-          process.env.TBLINK_SONG_CONFLICT_DECISION = JSON.stringify(decision);
-          process.env.TBLINK_SONG_CONFLICT_RESOLVED = decision.choice;
-        }
-        const conflict = consoleConflict && !process.env.TBLINK_SONG_CONFLICT_RESOLVED && request.points[0]?.name === '软件冲突开场';
-        const conflicts: Ma2SongConflict[] = conflict ? [{ key: 'point-0:cue-name', field: 'cue-name', pointId: 'point-0', cue: '1.000',
-          baseline: '断线期间继续修改', local: request.points[0]!.name, console: consoleConflict, token: 'c'.repeat(64) }] : [];
         const cues = request.points.map((point, i) => ({ index: i + 1, number: `${i + 1}.000`,
-          name: i === 0 && consoleConflict && (conflict || process.env.TBLINK_SONG_CONFLICT_RESOLVED === 'console') ? consoleConflict
-            : i === 1 && process.env.TBLINK_SONG_REMOTE_NAME ? process.env.TBLINK_SONG_REMOTE_NAME : point.name }));
+          name: i === 1 && process.env.TBLINK_SONG_REMOTE_NAME ? process.env.TBLINK_SONG_REMOTE_NAME : point.name }));
         return { binding: { endpoint: '192.0.2.1:30000', show: source.show, layout: null, executor: `${request.settings.executorPage}.101`, sequence: target, name: request.name, points: request.points.map((point, i) => ({ id: point.id, cue: cues[i]!.number })),
-          baselineXml: conflict && request.binding ? request.binding.baselineXml : `<Fixture>${JSON.stringify(cues)}</Fixture>` },
+          baselineXml: `<Fixture>${JSON.stringify(cues)}</Fixture>` },
           library: { directory: { ...source, entries: [{ target, name: request.name }] }, readAt: new Date().toISOString(), sequences: [{ sequence: target, name: request.name, cues }], fixtureUsage: [], errors: [] },
-          layout: null, changed: !request.binding, removed: [], backupFile: '', conflicts };
+          layout: null, changed: !request.binding || !request.points.length, backupFile: '' };
       });
     }, { file, source, targetPage });
     await page.evaluate(() => {
@@ -155,71 +130,26 @@ for (const targetPage of [1000, 1234]) test(`整曲 40 Cue 创建到按钮 ${tar
     await saveProject(page);
     expect((await saved()).consoleSong?.executor).toBe(`${targetPage}.101`);
     if (targetPage === 1234) {
-      await saveProject(page);
-      const existing = (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events));
-      await app.evaluate(() => { process.env.TBLINK_SONG_CONFLICT_NAME = '控台同时改开场'; });
-      await composer.getByLabel('Cue 名称', { exact: true }).fill('软件冲突开场');
-      await composer.getByLabel('Cue 名称', { exact: true }).press('Tab');
-      await expect(page.getByRole('button', { name: '同步状态详情', exact: true })).toContainText('有修改待核对');
-      await page.getByRole('button', { name: '同步状态详情', exact: true }).click();
-      const details = page.getByRole('region', { name: '同步状态详情', exact: true });
-      const conflict = details.getByLabel('两边修改核对');
-      await expect(conflict).toContainText('软件冲突开场');
-      await expect(conflict).toContainText('控台同时改开场');
-      await expect(conflict.getByRole('button', { name: '采用软件', exact: true })).toBeEnabled();
-      await expect(conflict.getByRole('button', { name: '采用控台', exact: true })).toBeEnabled();
-      await expect(page.getByRole('button', { name: '保存', exact: true }).first()).toBeEnabled();
-      await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeEnabled();
-      await details.getByRole('button', { name: '关闭', exact: true }).click();
-      // The conflict is local to this field. Editing another Cue remains usable.
-      await page.locator('.waveform-cue-point').nth(2).click();
-      await expect(composer.getByLabel('Cue 名称', { exact: true })).toBeEnabled();
-      await composer.getByLabel('Cue 名称', { exact: true }).fill('冲突期间第三步仍可编辑');
-      await composer.getByLabel('Cue 名称', { exact: true }).press('Tab');
-      await expect.poll(async () => (JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_LAST_REQUEST ?? '{}')) as Ma2SongSyncRequest).points?.[2]?.name).toBe('冲突期间第三步仍可编辑');
-      await page.getByRole('button', { name: '同步状态详情', exact: true }).click();
-      await page.screenshot({ path: info.outputPath('song-conflict-review.png') });
-      await conflict.getByRole('button', { name: '采用控台', exact: true }).click();
-      await expect.poll(async () => JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_CONFLICT_DECISION ?? '{}')) as unknown).toEqual({ key: 'point-0:cue-name', token: 'c'.repeat(64), choice: 'console' });
-      await expect.poll(() => savedValue(page, async () => (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === 'point-0'))).toMatchObject({ label: '控台同时改开场' });
-      await expect(conflict).toHaveCount(0);
-      await saveProject(page);
-      const events = (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events));
-      expect(events).toHaveLength(40);
-      expect(events.find(event => event.id === 'point-2')).toMatchObject({ label: '冲突期间第三步仍可编辑' });
-      expect(events.filter(event => event.id !== 'point-0' && event.id !== 'point-2')).toEqual(existing.filter(event => event.id !== 'point-0' && event.id !== 'point-2'));
-      await saveProject(page);
-      expect((await saved()).consoleSong).toMatchObject({ sequence: 9000, executor: '1234.101', points: expect.arrayContaining(existing.map(event => ({ id: event.id, cue: `${Number(event.id.split('-')[1]) + 1}.000` }))) });
-      await details.getByRole('button', { name: '关闭', exact: true }).click();
+      // Deleting every step on the timeline deletes the console Cues in the same sync: no review list, no waiting.
       await page.getByRole('switch', { name: '实时同步', exact: true }).click();
       await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'false');
-      await saveProject(page);
-      const native = (await savedProject()).ma2MaterialLibrary!.library!.sequences.find(sequence => sequence.sequence === 9000)!.cues;
-      await app.evaluate((_context, cues) => { process.env.TBLINK_SONG_CLEAR_NATIVE = JSON.stringify(cues); }, native);
       for (let index = 0; index < 40; index++) {
         await page.locator('.waveform-cue-point').first().click();
         await page.locator('.waveform-cue-point').first().press('Delete');
       }
       await expect.poll(() => savedValue(page, async () => (await saved()).tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).length)).toBe(0);
       await page.getByRole('switch', { name: '实时同步', exact: true }).click();
-      await expect(page.getByRole('button', { name: '同步状态详情', exact: true })).toContainText('有修改待核对');
-      await pool.getByRole('button', { name: '新建 Cue', exact: true }).click();
-      await expect(song.getByLabel('两边修改核对')).toHaveCount(0);
-      await song.getByRole('button', { name: '核对控台删除清单 · 40 项', exact: true }).click();
-      const checklist = song.locator('.ma2-song-delete-review');
-      await expect(checklist.locator('li')).toHaveCount(40);
-      await expect(checklist).toContainText('Sequence 9000 · Cue 1');
-      await expect(checklist).toContainText('Sequence 9000 · Cue 40');
-      expect(await app.evaluate(() => process.env.TBLINK_SONG_CLEAR_CONFIRMED ?? '')).toBe('');
-      await saveProject(page);
-      expect((await saved()).consoleSong?.points).toHaveLength(40);
-      await page.screenshot({ path: info.outputPath('song-clear-review.png') });
-      await checklist.getByRole('button', { name: '确认清单并同步删除', exact: true }).click();
       await expect.poll(() => savedValue(page, async () => (await saved()).consoleSong?.points.length)).toBe(0);
-      expect(JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_CLEAR_CONFIRMED ?? '[]')) as string[]).toEqual(Array.from({ length: 40 }, (_, index) => `${index + 1}.000`));
+      const cleared = JSON.parse(await app.evaluate(() => process.env.TBLINK_SONG_LAST_REQUEST ?? '{}')) as Ma2SongSyncRequest;
+      expect(cleared.points).toEqual([]); expect(cleared).not.toHaveProperty('confirmedDeletions');
       await saveProject(page);
       expect((await saved()).consoleSong).toMatchObject({ sequence: 9000, executor: '1234.101', points: [] });
       expect((await savedProject()).ma2MaterialLibrary?.library?.sequences.find(sequence => sequence.sequence === 9000)?.cues).toEqual([]);
+      // 刷新同步 reads the console again at once.
+      const calls = Number(await app.evaluate(() => process.env.TBLINK_SONG_SYNC_CALLS));
+      await page.getByRole('button', { name: '刷新同步', exact: true }).click();
+      await expect.poll(async () => Number(await app.evaluate(() => process.env.TBLINK_SONG_SYNC_CALLS))).toBeGreaterThan(calls);
+      await page.screenshot({ path: info.outputPath('song-cleared.png') });
     }
     await page.getByRole('switch', { name: '实时同步', exact: true }).click();
     await expect(page.getByRole('switch', { name: '实时同步', exact: true })).toHaveAttribute('aria-checked', 'false');

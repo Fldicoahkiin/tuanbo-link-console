@@ -52,7 +52,7 @@ export const lightingTrackSchema = z.object({
   cueStamp: z.discriminatedUnion('mode', [
     z.object({ mode: z.literal('sequence') }).strict(),
     z.object({ mode: z.literal('marker') }).strict(),
-    z.object({ mode: z.literal('fixed'), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine((value) => Number(value) > 0), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]) }).strict()
+    z.object({ mode: z.literal('fixed'), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/, 'Cue 编号须为 1–9999，最多 3 位小数').refine((value) => Number(value) > 0, 'Cue 编号须大于 0'), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]) }).strict()
   ]).optional(),
   clips: z.array(lightingClipSchema)
 }).strict();
@@ -69,7 +69,7 @@ export const lightingMa2TrackMappingSchema = z.object({
 }).strict();
 export const lightingMa2CueCatalogSchema = z.array(z.object({
   sequence: z.number().int().min(1).max(99999), name: z.string().nullable(),
-  cues: z.array(z.object({ index: z.number().int().nonnegative(), number: z.string().regex(/^\d{1,4}\.\d{3}$/).refine((value) => Number(value) > 0), name: z.string().nullable() }).strict())
+  cues: z.array(z.object({ index: z.number().int().nonnegative(), number: z.string().regex(/^\d{1,4}\.\d{3}$/, 'Cue 编号须为 1–9999，带 3 位小数').refine((value) => Number(value) > 0, 'Cue 编号须大于 0'), name: z.string().nullable() }).strict())
 }).strict()).superRefine((catalog, ctx) => {
   if (new Set(catalog.map((entry) => entry.sequence)).size !== catalog.length) ctx.addIssue({ code: 'custom', message: 'MA2 Cue 列表的序列重复' });
   for (const entry of catalog) if (new Set(entry.cues.map((cue) => cue.index)).size !== entry.cues.length || new Set(entry.cues.map((cue) => Number(cue.number))).size !== entry.cues.length) ctx.addIssue({ code: 'custom', message: 'MA2 Cue 列表的编号或索引重复' });

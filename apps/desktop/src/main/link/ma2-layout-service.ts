@@ -1,7 +1,7 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpdateRequestSchema, type Ma2LayoutDirectoryRequest, type Ma2LayoutDirectory, type Ma2LayoutUpdateRequest } from '@tb/schema';
 import { moveMa2LayoutObjects } from './ma2-timecode-xml';
-import { ma2SongBindingSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema, ma2SongPointSchema, ma2SongConflictSchema, type Ma2SongSyncRequest, type Ma2SongSyncResult, type Ma2ReadProgressUpdate } from '@tb/schema';
-import { ma2SongSyncBaseline, planMa2SongSync } from './ma2-song-plan';
+import { ma2SongBindingSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema, ma2SongPointSchema, type Ma2SongSyncRequest, type Ma2SongSyncResult, type Ma2ReadProgressUpdate } from '@tb/schema';
+import { planMa2SongSync, type Ma2SongPlan } from './ma2-song-plan';
 import { editMa2SongSequence, ma2SequenceCueFingerprints, inspectMa2CueAttributes, inspectMa2CueFixtures, inspectMa2SequenceCueData } from './ma2-timecode-xml';
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -22,6 +22,7 @@ import { writeMa2SongTimecode } from './ma2-song-timecode';
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
 type SongBridge = Pick<Ma2OnpcBridge, 'request' | 'exchange'>;
+type Ma2SongPlanChange = Ma2SongPlan['changes'][number];
 const ownersSchema = z.array(z.object({ key: z.string(), projectId: z.string(), name: z.string() }).strict());
 const hex = (text: string): string => Buffer.from(text).toString('hex');
 const decode = (text: string): string => `unhex('${hex(text)}')`;
@@ -194,13 +195,14 @@ export class Ma2LayoutService {
     let layoutRequest = { network: request.network, expectedSource: request.expectedSource, layout: request.binding?.layout ?? request.settings.layout };
     let executorPage = request.binding?.executor ? Number(request.binding.executor.split('.')[0]) : request.binding?.layout ? undefined : request.settings.executorPage;
     let backupFile = '';
-    let recoveringCreation = false;
     try {
       progress('connecting', 0, 1, '核对控台、歌曲绑定与目标位置');
       const directory = await this.directory(bridge, layoutRequest);
       const ownership = `${this.ownershipFile}.songs.json`;
       const schema = z.array(z.object({ key: z.string(), projectId: z.string(), itemId: z.string(), inputHash: z.string().optional(), binding: ma2SongBindingSchema.optional(),
-        originalPoints: z.array(ma2SongPointSchema).optional(), conflicts: z.array(ma2SongConflictSchema).optional(),
+        originalPoints: z.array(ma2SongPointSchema).optional(),
+        // Written by versions that held two-sided edits for review; read only to replace the record.
+        conflicts: z.array(z.unknown()).optional(),
         draft: z.object({ binding: ma2SongBindingSchema, skeletonXml: z.string(), stages: z.record(z.string(), z.array(z.string())).optional(),
           heldCues: z.array(z.string()).optional(), heldNames: z.array(z.string()).optional(), heldSequenceName: z.boolean().optional(), reserved: z.boolean().optional()
         }).strict().optional()
@@ -219,7 +221,6 @@ export class Ma2LayoutService {
         request.points = recovered.points;
         request.binding = previousBinding ? { ...recovered.binding, ...previousBinding, baselineXml: recovered.binding.baselineXml, points: recovered.binding.points } : recovered.binding;
         target = request.binding.sequence;
-        recoveringCreation = draft.reserved ?? !previousBinding;
         layoutRequest = { ...layoutRequest, layout: request.binding.layout ?? request.settings.layout };
         executorPage = request.binding.executor ? Number(request.binding.executor.split('.')[0]) : undefined;
       };
@@ -238,7 +239,6 @@ export class Ma2LayoutService {
             request.points = request.points.map(point => {
               const saved = savedBinding.points.find(value => value.id === point.id);
               if (!saved) return point;
-              if (existing.conflicts?.some(conflict => conflict.pointId === point.id && (conflict.field === 'cue-content' || conflict.field === 'cue-removed'))) return point;
               const original = existing.originalPoints?.find(value => value.id === point.id);
               if (original && JSON.stringify(original.cues) !== JSON.stringify(point.cues)) return point;
               return { ...point, cues: [{ sequence: target, cue: saved.cue, delayMs: 0 }] };
@@ -249,7 +249,8 @@ export class Ma2LayoutService {
         }
       } else {
         const pending = owners.find(owner => owner.key === `${endpoint}/${directory.show}/${request.binding!.sequence}` && owner.projectId === request.projectId && owner.itemId === request.itemId && owner.draft);
-        if (pending) await recoverDraft(pending);
+        // An interrupted write whose Sequence is gone from the console left nothing to recover there.
+        if (pending && directory.entries.some(entry => entry.target === request.binding!.sequence)) await recoverDraft(pending);
       }
       if (!request.binding) {
         const occupied = new Set(directory.entries.map(entry => entry.target));
@@ -261,13 +262,16 @@ export class Ma2LayoutService {
       const key = `${endpoint}/${directory.show}/${target}`;
       if (request.binding && owners.some(value => value.key === key && (value.projectId !== request.projectId || value.itemId !== request.itemId))) throw new Error('此位置已关联本机另一歌曲，请核对歌曲绑定');
       // Confirm the destination before importing or renaming any song content.
-      const destination = executorPage ? await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor, this.isPlaying, recoveringCreation) : null;
+      const destination = executorPage ? await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor, this.isPlaying) : null;
       // With 'keep', SEQUENCE leaves its native export as importexport/tblink_library_<request id>.xml
       // on the console; the write guard and the backup use that file instead of uploading the XML again.
       // When the song check confirmed the console still equals the saved baseline, that check's export
       // is copied on the console instead, and the Sequence is not read over Telnet at all.
+      // A bound Sequence deleted on the console is created again from the last confirmed snapshot.
+      const sequenceMissing = request.binding !== undefined && !directory.entries.some(entry => entry.target === target);
       let remote: { response: string; requestId: string } | null = null;
-      if (request.binding && consoleBaseline) {
+      if (sequenceMissing) progress('connecting', 1, 1, `控台上没有序列 ${target}，按上次确认的内容重建`);
+      else if (request.binding && consoleBaseline) {
         if (!/^tblink_watch_[a-f0-9]{16}$/.test(consoleBaseline)) throw new Error('歌曲复查基线文件名无效');
         const requestId = randomBytes(16).toString('hex');
         await this.call(connection, `${this.guard(layoutRequest)}local p=gma.show.getvar('PATH')..'/importexport/';local f=assert(io.open(p..'${consoleBaseline}.xml','rb'));local s=f:read('*a');f:close();local o=assert(io.open(p..'tblink_library_${requestId}.xml','wb'));o:write(s);o:close();return 'copied'`);
@@ -280,6 +284,8 @@ export class Ma2LayoutService {
       // A new installation/computer has no local ownership cache; validate that binding
       // instead of permanently rejecting every saved song.
       const plan = planMa2SongSync(request, remoteXml, [...restoredSources.keys()]);
+      // Content kept only in the local snapshot: Cues restored, or taken from this song's own Sequence while the console lacks it.
+      const fromSnapshot = (change: Ma2SongPlanChange, ref: { sequence: number }): boolean => ref.sequence === target && (change.restore === true || remoteXml === null);
       const beforeLayout = executorPage ? null : await this.snapshot(connection, layoutRequest);
       const needsLayoutItem = !executorPage && !beforeLayout?.value.items.some(item => item.sequence === target);
       const layoutOwners = await this.readOwners();
@@ -291,7 +297,7 @@ export class Ma2LayoutService {
       // Read only the Cues the song copies from each source Sequence; the full export stays on the console.
       const wanted = new Map<number, Set<string>>();
       for (const change of plan.changes) for (const ref of change.refs ?? []) {
-        if (ref.sequence === target && remoteXml) continue;
+        if (ref.sequence === target) continue;
         const [whole, fraction = ''] = ref.cue.split('.');
         wanted.set(ref.sequence, (wanted.get(ref.sequence) ?? new Set<string>()).add(`${Number(whole)}.${fraction.padEnd(3, '0')}`));
       }
@@ -300,7 +306,8 @@ export class Ma2LayoutService {
       for (const change of plan.changes) {
         const content: Array<{ xml: string; cue: string }> | undefined = change.refs === undefined ? undefined : [];
         for (const ref of change.refs ?? []) {
-          if (change.restore && request.binding && ref.sequence === target) {
+          if (fromSnapshot(change, ref)) {
+            if (!request.binding) throw new Error(`Cue 引用了控台上还没有的序列 ${target}，请改用其他序列的 Cue`);
             content!.push({ xml: restoredSources.get(ref.cue) ?? request.binding.baselineXml, cue: ref.cue }); continue;
           }
           let xml = sources.get(String(ref.sequence));
@@ -316,16 +323,13 @@ export class Ma2LayoutService {
       const existingName = remoteXml ? inspectMa2SequenceXml(remoteXml).sequences[0]?.name : null;
       const changed = !remoteXml || changes.length > 0 || plan.deletions.length > 0 || existingName !== plan.name || needsLayoutItem;
       const file = `tblink_song_${request.requestId.replaceAll('-', '')}`;
-      const desired = changed ? editMa2SongSequence(remoteXml ?? emptyMa2SequenceXml(target, directory.version), plan.name, changes, plan.deletions) : remoteXml;
+      const desired = changed || remoteXml === null ? editMa2SongSequence(remoteXml ?? emptyMa2SequenceXml(target, directory.version), plan.name, changes, plan.deletions) : remoteXml;
       const namesOnly = remoteXml && !needsLayoutItem && !plan.deletions.length && changes.every(change => change.sources === undefined);
       const checkpoint = async (skeletonXml: string, stages?: Record<string, string[]>): Promise<void> => {
         const binding = { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(destination ? { executor: destination.address } : {}),
-          sequence: target, name: request.name, baselineXml: ma2SongSyncBaseline(request, desired, plan.conflicts), points: plan.points };
+          sequence: target, name: request.name, baselineXml: desired, points: plan.points };
         await writeFileAtomically(ownership, JSON.stringify([...owners.filter(value => value.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints,
-          draft: { binding, skeletonXml, reserved: destination?.assigned === false, ...(stages ? { stages } : {}),
-            heldCues: plan.conflicts.flatMap(conflict => conflict.cue && (conflict.field === 'cue-content' || conflict.field === 'cue-removed' || conflict.field === 'cue-deletion') ? [conflict.cue] : []),
-            heldNames: plan.conflicts.flatMap(conflict => conflict.cue && (conflict.field === 'cue-name' || conflict.field === 'cue-removed' || conflict.field === 'cue-deletion') ? [conflict.cue] : []),
-            heldSequenceName: plan.conflicts.some(conflict => conflict.field === 'sequence-name') }
+          draft: { binding, skeletonXml, ...(stages ? { stages } : {}) }
         }]));
       };
       let copiedOnConsole = false;
@@ -347,7 +351,7 @@ export class Ma2LayoutService {
         // A resumed create may now contain added, removed or cleared steps.
         // Replace its verified native snapshot atomically in that case, retaining
         // all untouched console Cue data instead of pretending Copy creates empties.
-        const nativeCopy = !remoteXml && Boolean(executorPage);
+        const nativeCopy = !remoteXml && Boolean(executorPage) && plan.changes.every(change => (change.refs ?? []).every(ref => !fromSnapshot(change, ref)));
         const clearing = remoteXml && plan.deletions.length > 0 && inspectMa2SequenceXml(remoteXml).sequences[0]!.cues.every(cue => plan.deletions.includes(cue.number));
         // A bound song copies changed Cues into its console Sequence the same way; Copy creates a missing
         // Cue number. Content kept only in the local baseline, Cues taken from this same Sequence, an
@@ -387,7 +391,8 @@ export class Ma2LayoutService {
           // after the song's own Sequence was created there, so the scratch Sequence goes next to it.
           let scratch = target + 1; while (directory.entries.some(entry => entry.target === scratch)) scratch += 1;
           for (const [changeIndex, change] of plan.changes.entries()) {
-            const keep = remoteExport !== null && (change.refs?.length ?? 0) > 1 && consoleCues.has(Number(change.cue));
+            // A number taken over from a deleted point was deleted above and starts fresh.
+            const keep = remoteExport !== null && (change.refs?.length ?? 0) > 1 && consoleCues.has(Number(change.cue)) && !plan.deletions.some(cue => Number(cue) === Number(change.cue));
             if (keep) await this.call(connection, `${this.guard(layoutRequest)}${keepCueAttributes(remoteExport, target, change.cue, scratch, `${file}_attrs`)}return 'kept'`);
             for (const [index, ref] of (change.refs ?? []).entries()) {
               await this.call(connection, `${this.guard(layoutRequest)}assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /${index || keep ? 'merge' : 'o'} /nc');gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'copied'`);
@@ -436,26 +441,26 @@ export class Ma2LayoutService {
             : `Cue ${change.cue} 内容回读未通过`);
         }
       }
-      if (plan.deletions.some(number => actualHashes.has(number))) throw new Error('歌曲 Cue 删除回读未通过');
+      if (plan.deletions.some(number => actualHashes.has(number) && !changedNumbers.has(Number(number)))) throw new Error('歌曲 Cue 删除回读未通过');
       // The show record the project holds, or the one recorded here when the project never received it.
       const previousTimecode = request.binding?.timecode ?? owners.find(owner => owner.key === key && owner.projectId === request.projectId && owner.itemId === request.itemId)?.binding?.timecode;
-      const executor = executorPage ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, request.binding?.executor, this.isPlaying, recoveringCreation) : undefined;
+      const executor = executorPage ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, request.binding?.executor, this.isPlaying) : undefined;
       const afterLayout = executorPage ? null : changed ? await this.snapshot(connection, layoutRequest) : beforeLayout;
       if (!executorPage && !afterLayout?.value.items.some(item => item.sequence === target)) throw new Error('Layout 未回读到本曲序列');
       const verifiedDirectory = await this.directory(bridge, layoutRequest); const readAt = new Date().toISOString();
       progress('verification', 1, 1, `${executor ? `执行器 ${executor}` : `Layout ${layoutRequest.layout}`} · 序列 ${target} 已确认`);
-      const result = ma2SongSyncResultSchema.parse({ binding: { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(executor ? { executor } : {}), sequence: target, name: plan.conflicts.some(conflict => conflict.field === 'sequence-name') ? request.name : report.name, baselineXml: canonical(ma2SongSyncBaseline(request, verifiedXml, plan.conflicts)),
+      const result = ma2SongSyncResultSchema.parse({ binding: { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(executor ? { executor } : {}), sequence: target, name: report.name, baselineXml: canonical(verifiedXml),
           // The Timecode show record and the times it fires stay until the show is written again below.
           points: plan.points.map(point => { const atMs = request.binding?.points.find(value => value.id === point.id)?.atMs; return atMs === undefined ? point : { ...point, atMs }; }),
           ...previousTimecode ? { timecode: previousTimecode } : {} },
         library: { directory: verifiedDirectory, readAt, sequences: [{ sequence: target, name: report.name, cues: report.cues }], errors: [], fixtureDetails: 'included', fixtureUsage: inspectMa2CueFixtures(verifiedXml), cueAttributes: inspectMa2CueAttributes(verifiedXml, readAt, true) },
-        layout: afterLayout?.value ?? null, removed: plan.removed, backupFile, changed, conflicts: plan.conflicts,
+        layout: afterLayout?.value ?? null, backupFile, changed,
         remoteRevision: createHash('sha256').update(canonical(verifiedXml)).digest('hex') });
       // Persist the verified binding before returning. If the renderer closes or
       // saving the project fails, the next explicit check recovers this position.
       const previousOwner = owners.find(owner => owner.key === key);
-      if (changed || JSON.stringify(previousOwner?.binding) !== JSON.stringify(result.binding) || JSON.stringify(previousOwner?.conflicts ?? []) !== JSON.stringify(result.conflicts ?? [])) {
-        await writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding: result.binding, conflicts: result.conflicts ?? [] }]));
+      if (changed || JSON.stringify(previousOwner?.binding) !== JSON.stringify(result.binding) || previousOwner?.conflicts !== undefined) {
+        await writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding: result.binding }]));
       }
       // The write-before export and any name backups join this Sequence's rotation once the sync is
       // confirmed; so does the post-write export unless the song check took it over as its baseline.
@@ -467,7 +472,7 @@ export class Ma2LayoutService {
       wrote = false;
       progress('verification', 1, 1, `写入本曲时间码节目 · 序列 ${target}`);
       const times = new Map(request.points.map(point => [point.id, point.atMs]));
-      const journal = (binding: Ma2SongSyncResult['binding']): Promise<void> => writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding, conflicts: result.conflicts ?? [] }]));
+      const journal = (binding: Ma2SongSyncResult['binding']): Promise<void> => writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding }]));
       const written = await writeMa2SongTimecode(bridge, { previous: previousTimecode, sequence: target, executor, startMs: request.timecodeStartMs, lengthMs: request.timecodeLengthMs, name: report.name ?? toConsoleLabel(request.name), version: directory.version,
         cues: result.binding.points.map(point => {
           const cue = report.cues.find(value => Number(value.number) === Number(point.cue));

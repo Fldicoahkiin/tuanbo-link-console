@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { allocateSongMtcStart, applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, programTimeOrigin, projectLightingLibrary, setItemPlaybackCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
-import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding, Ma2SongConflict, Ma2SongConflictResolution } from '@tb/schema';
+import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { requireSavedProjectPath } from '../project-document';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-layout-store';
@@ -11,7 +11,9 @@ import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 
-type SongSync = { sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings; state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string; requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; acknowledged?: string; remoteRevision?: string; confirmedDeletions?: string[]; blockedRevision?: number; nextCheckAt?: number; waitingForConnection?: boolean; conflicts?: Ma2SongConflict[]; conflictResolutions?: Ma2SongConflictResolution[]; consecutiveFailures?: number; archivedSignature?: string; rewriteLegacyNames?: boolean };
+/** 'blocked': the same sync failed MAX_ATTEMPTS times in a row; it waits for an edit or 刷新同步. */
+type SongSync = { sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings; state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string; requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; acknowledged?: string; remoteRevision?: string | undefined; blockedRevision?: number | undefined; nextCheckAt?: number; waitingForConnection?: boolean; consecutiveFailures?: number; archivedSignature?: string; rewriteLegacyNames?: boolean };
+const MAX_ATTEMPTS = 3;
 export const useMa2SongSyncStore = create<{ songs: Record<string, SongSync> }>(() => ({ songs: {} }));
 let running = false;
 export function markPendingMa2Songs(): void {
@@ -27,18 +29,10 @@ export function markPendingMa2Songs(): void {
     }
   }
 }
-export function startMa2SongSync(itemId: string, name: string, settings: Ma2LayoutSettings, confirmedDeletions?: string[]): void {
+/** A new session reads the console in full on its first pass: nothing is taken as already confirmed. */
+export function startMa2SongSync(itemId: string, name: string, settings: Ma2LayoutSettings): void {
   const documentId = useDocumentStore.getState().documentId;
-  useMa2SongSyncStore.setState(state => ({ songs: { ...state.songs, [itemId]: { sessionId: crypto.randomUUID(), itemId, documentId, name, settings, state: 'pending', message: '等待同步到控台', ...(confirmedDeletions ? { confirmedDeletions } : {}) } } }));
-}
-/** Resolve only the exact comparison currently displayed; stale decisions are re-read. */
-export function resolveMa2SongConflict(itemId: string, key: string, choice: 'local' | 'console'): void {
-  const entry = useMa2SongSyncStore.getState().songs[itemId];
-  const conflict = entry?.conflicts?.find(value => value.key === key);
-  if (!entry || !conflict || entry.documentId !== useDocumentStore.getState().documentId) return;
-  update(entry, { state: 'pending', blockedRevision: -1, nextCheckAt: 0,
-    conflictResolutions: [...(entry.conflictResolutions ?? []).filter(value => value.key !== key), { key, token: conflict.token, choice }],
-    message: '正在核对所选内容，确认后同步' });
+  useMa2SongSyncStore.setState(state => ({ songs: { ...state.songs, [itemId]: { sessionId: crypto.randomUUID(), itemId, documentId, name, settings, state: 'pending', message: '等待同步到控台' } } }));
 }
 /** One destination policy for the header, automatic startup and the song panel. */
 export function ma2SongSyncSettings(project: NonNullable<ReturnType<typeof useDocumentStore.getState>['project']>, itemId: string): Ma2LayoutSettings {
@@ -66,9 +60,9 @@ function update(entry: SongSync, patch: Partial<SongSync>): void {
     return { songs: { ...state.songs, [entry.itemId]: { ...current, ...patch, ...(current.state === 'paused' ? { state: 'paused' as const } : {}) } } };
   });
 }
-function confirmedMessage(binding: Ma2SongBinding, conflicts: number): string {
+function confirmedMessage(binding: Ma2SongBinding): string {
   const location = binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`;
-  return `${location} · 序列 ${binding.sequence} · ${conflicts ? `${conflicts} 项需要选择保留内容，其余已回读` : `${binding.points.length} 步已回读`}`;
+  return `${location} · 序列 ${binding.sequence} · ${binding.points.length} 步已回读`;
 }
 function canContinue(entry: SongSync): boolean {
   const document = useDocumentStore.getState();
@@ -77,7 +71,7 @@ function canContinue(entry: SongSync): boolean {
   return document.documentId === entry.documentId && session?.sessionId === entry.sessionId
     && session.state !== 'paused' && useMa2RealtimePreference.getState().enabled
     && readMa2Method() === 'network'
-    && lighting !== undefined && lighting.consoleSong?.assignment !== 'unassigned';
+    && lighting !== undefined;
 }
 
 /** Serialize console reconciliation; local editing and saving remain independent. */
@@ -90,15 +84,12 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
     for (const entry of Object.values(useMa2SongSyncStore.getState().songs).sort((a, b) => order[a.state] - order[b.state])) {
       if (entry.documentId !== useDocumentStore.getState().documentId) { stopMa2SongSync(entry.itemId); continue; }
       if (entry.state === 'paused') continue;
+      if (entry.state === 'blocked' && entry.blockedRevision === useDocumentStore.getState().revision) continue;
       if (entry.nextCheckAt && Date.now() < entry.nextCheckAt && (!entry.consecutiveFailures || entry.blockedRevision === useDocumentStore.getState().revision)) continue;
       if (playing) { update(entry, { state: 'pending', message: '播放中，修改将在停止后同步' }); continue; }
       try {
         const before = useDocumentStore.getState(); const item = before.project?.rundown.find(value => value.id === entry.itemId);
         if (!before.project || !item?.lighting) throw new Error('本曲已不存在');
-        if (item.lighting.consoleSong?.assignment === 'unassigned') {
-          update(entry, { state: 'verified', checking: false, message: `序列 ${item.lighting.consoleSong.sequence} 已保留，执行器已解除分配` });
-          continue;
-        }
         if (item.lighting.ma2Bindings?.length) throw new Error('本曲已有控台时间码绑定；请在未绑定的新曲创建歌曲序列，避免改变现有控台编排');
         const points = ma2SongPoints(item.lighting);
         if (!points.length && !item.lighting.consoleSong) {
@@ -116,10 +107,10 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           update(entry, { state: 'pending', checking: false, waitingForConnection: true, nextCheckAt: Date.now() + 1000, message: '等待控台连接；可以继续编辑，连接恢复后核对并续传' });
           continue;
         }
-        const checkOnly = entry.acknowledged === signature && Boolean(entry.remoteRevision) && Boolean(item.lighting.consoleSong) && !entry.conflictResolutions?.length && !entry.rewriteLegacyNames;
-        // A periodic re-check of a confirmed or conflicted song keeps its state and
-        // message, so the review buttons stay usable between checks.
-        update(entry, checkOnly && (entry.state === 'verified' || entry.state === 'blocked') ? { checking: true } : { checking: true, state: 'syncing', message: `核对本曲 ${points.length} 个 Cue…` });
+        // An unassigned executor is assigned again by the full sync, so it is never only checked.
+        const checkOnly = entry.acknowledged === signature && Boolean(entry.remoteRevision) && Boolean(item.lighting.consoleSong) && item.lighting.consoleSong?.assignment !== 'unassigned' && !entry.rewriteLegacyNames;
+        // A periodic re-check of a confirmed song keeps its state and message.
+        update(entry, checkOnly && entry.state === 'verified' ? { checking: true } : { checking: true, state: 'syncing', message: `核对本曲 ${points.length} 个 Cue…` });
         const { host, port, monitorPort, username } = networkStatus.settings;
         const network = { host, port, monitorPort, username };
         const endpoint = `${host}:${port}`;
@@ -138,7 +129,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           const binding = item.lighting.consoleSong;
           const changed = await window.tbLink.checkMa2Song({ network, expectedSource: { show, generation, version }, sequence: binding.sequence, ...(binding.executor ? { executor: binding.executor } : {}), revision: entry.remoteRevision });
           if (!canContinue(entry)) continue;
-          if (!changed) { update(entry, { checking: false, state: entry.conflicts?.length ? 'blocked' : 'verified', waitingForConnection: false, nextCheckAt: Date.now() + 1000, message: confirmedMessage(binding, entry.conflicts?.length ?? 0) }); continue; }
+          if (!changed) { update(entry, { checking: false, state: 'verified', waitingForConnection: false, nextCheckAt: Date.now() + 1000, message: confirmedMessage(binding) }); continue; }
           update(entry, { state: 'syncing', message: `控台有变化，核对本曲 ${points.length} 个 Cue…` });
         }
         // A background tick never opens a dialog: the pre-sync archive needs the project's location.
@@ -158,8 +149,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const requestedName = item.lighting.consoleSong?.name ?? entry.name;
         const synced = await window.tbLink.syncMa2Song({ network, expectedSource: { show, generation, version }, projectId: before.project.projectId, itemId: item.id,
           requestId, progressId: requestId, settings, name: requestedName, points,
-          ...(item.lighting.consoleSong ? { binding: item.lighting.consoleSong } : {}), ...(entry.confirmedDeletions ? { confirmedDeletions: entry.confirmedDeletions } : {}),
-          ...(entry.conflictResolutions?.length ? { conflictResolutions: entry.conflictResolutions } : {}), ...(entry.rewriteLegacyNames ? { rewriteLegacyNames: true } : {}),
+          ...(item.lighting.consoleSong ? { binding: item.lighting.consoleSong } : {}), ...(entry.rewriteLegacyNames ? { rewriteLegacyNames: true } : {}),
           ...(start === undefined ? {} : { timecodeStartMs: start, ...(item.referenceAudio ? { timecodeLengthMs: Math.ceil(item.referenceAudio.durationMs) } : {}) }) },
           progress => update(entry, { progress }));
         update(entry, { requestId: null, progress: null });
@@ -201,10 +191,9 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const confirmed = applyMa2SongReadback(item.lighting, points, result);
         const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(result.binding.baselineXml));
         const remoteRevision = result.remoteRevision ?? Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
-        const conflicts = result.conflicts ?? [];
-        update(entry, { state: conflicts.length ? 'blocked' : 'verified', checking: false, waitingForConnection: false, nextCheckAt: Date.now() + 1000, remoteRevision, consecutiveFailures: 0,
-          conflicts, conflictResolutions: [], rewriteLegacyNames: false, acknowledged: JSON.stringify([ma2SongPoints(confirmed), result.binding.name, ...start === undefined ? [] : [start]]),
-          message: confirmedMessage(result.binding, conflicts.length), confirmedDeletions: [] });
+        update(entry, { state: 'verified', checking: false, waitingForConnection: false, nextCheckAt: Date.now() + 1000, remoteRevision, consecutiveFailures: 0,
+          rewriteLegacyNames: false, acknowledged: JSON.stringify([ma2SongPoints(confirmed), result.binding.name, ...start === undefined ? [] : [start]]),
+          message: confirmedMessage(result.binding) });
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
         // A transport loss is a wait state. After reconnect, the service reads
@@ -214,11 +203,17 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         catch (statusError) { reportCoordinatorError(`读取连接状态：${String(statusError)}`, reason => update(entry, { message: reason })); }
         const playback = useMa2AutoSyncStore.getState();
         const playingNow = playback.timelinePlaying || playback.previewPlaying;
-        const consecutiveFailures = (entry.consecutiveFailures ?? 0) + 1;
-        update(entry, { state: 'pending', blockedRevision: useDocumentStore.getState().revision, consecutiveFailures,
-          nextCheckAt: Date.now() + (disconnected || playingNow ? 1000 : Math.min(30000, 1000 * 2 ** Math.min(consecutiveFailures - 1, 5))),
+        const waiting = disconnected || playingNow;
+        // Waiting for the console or for playback to stop is not a failed attempt.
+        const consecutiveFailures = waiting ? entry.consecutiveFailures ?? 0 : (entry.consecutiveFailures ?? 0) + 1;
+        const exhausted = consecutiveFailures >= MAX_ATTEMPTS;
+        update(entry, { state: exhausted ? 'blocked' : 'pending', blockedRevision: useDocumentStore.getState().revision, consecutiveFailures,
+          nextCheckAt: Date.now() + (waiting ? 1000 : 1000 * consecutiveFailures),
           waitingForConnection: disconnected, checking: false, requestId: null, progress: null,
-          message: playingNow ? '播放中保留当前修改；停止后核对原位置并继续同步' : disconnected ? `等待连接恢复后核对并续传；${message}` : `修改已保留，稍后重新核对原位置；${message}` });
+          message: playingNow ? '播放中保留当前修改；停止后核对原位置并继续同步'
+            : disconnected ? `等待连接恢复后核对并续传；${message}`
+            : exhausted ? `同步连续 ${consecutiveFailures} 次失败，已停止自动重试：${message}。修改保留在本地，处理后点「刷新同步」`
+            : `第 ${consecutiveFailures} 次同步失败，${consecutiveFailures} 秒后再试：${message}` });
         reportCoordinatorError(message, reason => { update(entry, { message: reason }); });
       }
     }

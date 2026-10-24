@@ -84,3 +84,18 @@ it('同步后接管写后回读作复查基线：下一次复查只比对两条�
   expect(await new Ma2SongWatch(() => true).adopt(playing.connection, song, exportFile)).toBe(false);
   expect(playing.lines).toHaveLength(0);
 });
+it('控台删掉本曲序列或执行器改放别的序列时报告“有变化”，交给完整同步重建，不再报错卡住', async () => {
+  const lines: string[] = [];
+  const missing: Pick<Ma2Telnet, 'command'> = { command: vi.fn<Ma2Telnet['command']>((line, match) => {
+    lines.push(line);
+    const prefix = `${/TBLINK_CUE_[a-f0-9]{24}/.exec(line)?.[0]}:`;
+    return Promise.resolve(match(`${prefix}${line.includes("READY')") ? 'READY' : 'OK:missing'}\r\n`)!);
+  }) };
+  const bridge: Pick<Ma2OnpcBridge, 'request'> = { request: vi.fn<Ma2OnpcBridge['request']>(() => Promise.reject(new Error('不应读取'))) };
+  expect(await new Ma2SongWatch(() => false).changed(missing, bridge, request)).toBe(true);
+  expect(bridge.request).not.toHaveBeenCalled();
+  const { connection } = console();
+  const moved: Pick<Ma2OnpcBridge, 'request'> = { request: vi.fn<Ma2OnpcBridge['request']>(operation => Promise.resolve(operation === 'EXECUTOR'
+    ? '<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" major_vers="3" minor_vers="7" stream_vers="0"><Exec offset_from_first="0"><Assignment name="别的"><No>25</No><No>1</No><No>9001</No></Assignment></Exec></MA>' : '<MA><Sequ index="8999"/></MA>')) };
+  expect(await new Ma2SongWatch(() => false).changed(connection, moved, { ...request, executor: '9890.101' })).toBe(true);
+});

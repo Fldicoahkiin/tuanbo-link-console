@@ -23,18 +23,13 @@ export function applyMa2SongReadback(document: LightingDocument, observed: Ma2So
   const unchanged = new Set(observed.filter(point => JSON.stringify(point) === JSON.stringify(current.get(point.id))).map(point => point.id));
   const mapping = new Map(result.binding.points.map(point => [point.id, point.cue]));
   const cues = result.library.sequences.find(value => value.sequence === result.binding.sequence)?.cues ?? [];
-  const removed = new Set(result.removed);
-  const nameConflicts = new Set(result.conflicts?.filter(value => value.field === 'cue-name' || value.field === 'cue-removed').map(value => value.pointId));
-  const contentConflicts = new Set(result.conflicts?.filter(value => value.field === 'cue-content' || value.field === 'cue-removed').map(value => value.pointId));
   return lightingDocumentSchema.parse({ ...document, version: 2, consoleSong: result.binding, tracks: document.tracks.map(track => ({ ...track, clips: track.clips.map(clip => ({ ...clip, events: clip.events.flatMap((event): LightingEvent[] => {
     const id = event.effectGroupId ?? event.id;
     if (!unchanged.has(id)) return [event];
-    if (removed.has(id)) return [];
     const cue = mapping.get(id); if (!cue || event.kind !== 'ma2' && event.kind !== 'empty-cue') return [event];
     // The console holds pinyin for a Chinese label; only a name changed on the console replaces it.
     const consoleName = cues.find(value => Number(value.number) === Number(cue))?.name;
-    const label = nameConflicts.has(id) || !consoleName || consoleName === consoleLabelText(event.label) ? event.label : consoleName;
-    if (contentConflicts.has(id)) return [{ ...event, ...(event.id === id ? { label } : {}) }];
+    const label = !consoleName || consoleName === consoleLabelText(event.label) ? event.label : consoleName;
     if (event.id !== id) return [];
     return [{ id, kind: 'ma2', at: event.at, action: 'goto', executor: result.binding.executor ?? '', sequence: result.binding.sequence, cue,
       label,

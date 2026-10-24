@@ -128,7 +128,7 @@ export const linkP1ProjectImportProgressSchema = z.object({
   total: z.number().int().nonnegative(),
   song: z.string(),
   state: z.enum(['starting', 'imported', 'skipped'])
-}).strict().refine(value => value.completed <= value.total);
+}).strict().refine(value => value.completed <= value.total, '导入进度超过总数');
 export type LinkP1ProjectImportProgress = z.infer<typeof linkP1ProjectImportProgressSchema>;
 
 export const linkP1ProjectExportPreviewPayloadSchema = z.object({

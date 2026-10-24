@@ -27,12 +27,13 @@ export class Ma2SongWatch {
         if (await this.same(connection, request, file, stopped)) return cached.revision !== request.revision;
         this.snapshots.delete(key); return true;
       }
-      await this.capture(connection, request, file, '', stopped);
+      // A Sequence or executor removed or reassigned on the console is a change: the full sync puts the song back.
+      if (!await this.capture(connection, request, file, '', stopped)) return true;
       const xml = await bridge.request('SEQUENCE', request.sequence);
       if (request.executor) {
         const [page, slot] = request.executor.split('.');
         const executor = inspectMa2ExecutorXml(await bridge.request('EXECUTOR', Number(page), slot));
-        if (executor.sequence !== request.sequence) throw new Error(`本曲原位置 ${request.executor} 已改为其他序列，请核对`);
+        if (executor.sequence !== request.sequence) return true;
       }
       // This is a read-only race, not an unsuccessful write. Tell the coordinator
       // to obtain a fresh sequence before planning any changes.
@@ -99,12 +100,15 @@ export class Ma2SongWatch {
   private guard(request: Ma2SongCheckRequest): string {
     return `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(request.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(request.expectedSource.generation)} and gma.show.getvar('VERSION')==${ma2LuaString(request.expectedSource.version)},'Show or session changed');`;
   }
-  private async capture(connection: Pick<Ma2Telnet, 'command'>, request: Ma2SongCheckRequest, file: string, suffix: string, stopped: () => void): Promise<void> {
-    const exportObject = (object: string, name: string): string => `assert(gma.show.getobj.handle('${object}'),'Song position missing');gma.cmd('Export ${object} ${name} /o');`;
-    await runMa2GuardedLua(connection, `${this.guard(request)}${exportObject(`Sequence ${request.sequence}`, `${file}${suffix}`)}${request.executor ? exportObject(`Executor ${request.executor}`, `${file}${suffix}_exec`) : ''}return 'captured'`, stopped);
+  /** False, exporting nothing, when the song's Sequence or executor is no longer on the console. */
+  private async capture(connection: Pick<Ma2Telnet, 'command'>, request: Ma2SongCheckRequest, file: string, suffix: string, stopped: () => void): Promise<boolean> {
+    const objects = [[`Sequence ${request.sequence}`, `${file}${suffix}`], ...request.executor ? [[`Executor ${request.executor}`, `${file}${suffix}_exec`]] : []];
+    const present = objects.map(([object]) => `gma.show.getobj.handle('${object}')`).join(' and ');
+    const exports = objects.map(([object, name]) => `gma.cmd('Export ${object} ${name} /o');`).join('');
+    return await runMa2GuardedLua(connection, `${this.guard(request)}if not (${present}) then return 'missing' end;${exports}return 'captured'`, stopped) !== 'missing';
   }
   private async same(connection: Pick<Ma2Telnet, 'command'>, request: Ma2SongCheckRequest, file: string, stopped: () => void): Promise<boolean> {
-    await this.capture(connection, request, file, '_check', stopped);
+    if (!await this.capture(connection, request, file, '_check', stopped)) return false;
     // No $, ^ or |: the native command line consumes them and forces the multi-line chunked path.
     // r(name, 1) also removes the file once read: the baseline export stays for the next check.
     const read = "local function r(n,x)local p=gma.show.getvar('PATH')..'/importexport/'..n..'.xml';local f=assert(io.open(p,'rb'));local s=f:read('*a');f:close();if x then os.remove(p)end;return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><')end;";

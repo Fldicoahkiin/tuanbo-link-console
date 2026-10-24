@@ -80,7 +80,7 @@ export type Ma2ApplyResult = z.infer<typeof ma2ApplyResultSchema>;
 
 /** Sequence Pool references use their sequence number, never a fabricated executor. */
 export const ma2PlaybackActionSchema = z.discriminatedUnion('target', [
-  z.object({ target: z.literal('sequence'), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).refine(value => Number(value) > 0).optional(), action: z.enum(['goto', 'go', 'off']) }).strict(),
+  z.object({ target: z.literal('sequence'), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/, 'Cue 编号须为 1–9999，最多 3 位小数').refine(value => Number(value) > 0, 'Cue 编号须大于 0').optional(), action: z.enum(['goto', 'go', 'off']) }).strict(),
   z.object({ target: z.literal('executor'), executor: z.string().regex(/^[1-9]\d*\.[1-9]\d*$/), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/).optional(), action: z.enum(['goto', 'go', 'off']) }).strict()
 ]).superRefine((value, ctx) => { if (value.action === 'goto' && !value.cue) ctx.addIssue({ code: 'custom', message: '播放指定 Cue 需要 Cue 编号' }); });
 export type Ma2PlaybackAction = z.infer<typeof ma2PlaybackActionSchema>;

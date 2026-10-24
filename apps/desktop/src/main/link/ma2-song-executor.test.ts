@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import type { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import type { Ma2Telnet } from './ma2-telnet';
-import { assignMa2SongExecutor } from './ma2-song-executor';
+import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor';
 import { readFile } from 'node:fs/promises';
 
 const source = { network: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' }, expectedSource: { show: 'test-show', generation: 'test-session', version: '3.7.0.5' } };
@@ -27,7 +27,12 @@ it('keeps an existing song at its exact address without reassigning it', async (
   const f = fixture(true);
   expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9907, 1000, '1000.101', () => false)).toBe('1000.101');
   expect(f.connection.command).not.toHaveBeenCalled();
-  await expect(assignMa2SongExecutor(f.connection, f.bridge, source, 9908, 1000, '1000.101', () => false)).rejects.toThrow('已改变');
+});
+it('原位置被别的序列占用时换到下一个空格，不覆盖；原位置空着时放回原位；本曲在同页挪过位置时跟到新位置', async () => {
+  const f = fixture(true);
+  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.101', () => false)).toEqual({ address: '1000.102', slot: 102, pageExists: true, assigned: false });
+  expect(await planMa2SongExecutor(f.bridge, source, 9908, 1000, '1000.150', () => false)).toEqual({ address: '1000.150', slot: 150, pageExists: true, assigned: false });
+  expect(await planMa2SongExecutor(f.bridge, source, 9001, 1000, '1000.150', () => false)).toEqual({ address: '1000.201', slot: 201, pageExists: true, assigned: true });
   expect(f.connection.command).not.toHaveBeenCalled();
 });
 it('does not allocate anything after playback starts', async () => {
