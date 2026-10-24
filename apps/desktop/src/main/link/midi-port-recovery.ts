@@ -1,13 +1,15 @@
-export type MtcRecoveryReport = { portName: string; interruptedAt: string; recoveredAt: string; durationMs: number };
+export type PortRecoveryReport = { portName: string; interruptedAt: string; recoveredAt: string; durationMs: number };
 type Output = { id: number; name: string };
 type Dependencies = {
+  /** Which output this watch serves, for its log lines: 时间码端口 or 动作 MIDI 端口. */
+  subject: string;
   /** Windows MIDI outputs as listed now (enumeration only). */
   list(): Promise<readonly Output[]>;
-  /** Opens the port at this index again; the opened handle must carry this name. */
+  /** Opens the port at this index (or by this name) again; the opened handle must carry this name. */
   reopen(device: number, name: string): Promise<void>;
-  /** Only while the song plays: a reopened port is confirmed by the timecode it then sends. */
+  /** Only while the song plays: a reopened port is confirmed by what it then sends. */
   active(): boolean;
-  recovered(report: MtcRecoveryReport): void;
+  recovered(report: PortRecoveryReport): void;
   /** A change worth a log line: a non-unique name or a failed reopen, once per distinct message. */
   log(message: string): void;
   intervalMs?: number;
@@ -15,12 +17,12 @@ type Dependencies = {
 type Watch = { portName: string; since: number; message: string | null; timer: ReturnType<typeof setTimeout> | null };
 
 /**
- * Waits for the configured timecode port to come back after it was lost, then opens it again
- * (authorised 2026-10-24). Only the same port name, and only when exactly one output carries it;
+ * Waits for a configured MIDI output (timecode or action MIDI) to come back after it was lost, then
+ * opens it again (authorised 2026-10-24). Only the same port name, and only when exactly one output carries it;
  * never another port. One check right away, then one per second, never two at once; while the
  * song is paused it only waits.
  */
-export class MtcPortRecovery {
+export class MidiPortRecovery {
   private watch: Watch | null = null;
   constructor(private readonly dependencies: Dependencies) {}
 
@@ -55,10 +57,10 @@ export class MtcPortRecovery {
           recoveredAt: new Date(recoveredAt).toISOString(), durationMs: recoveredAt - watch.since });
         return;
       }
-      if (matches.length > 1) this.note(watch, `时间码端口名称不唯一（${matches.length} 个「${watch.portName}」）：等只剩一个时再恢复，不会改用其他端口`);
+      if (matches.length > 1) this.note(watch, `${this.dependencies.subject}名称不唯一（${matches.length} 个「${watch.portName}」）：等只剩一个时再恢复，不会改用其他端口`);
     } catch (error) {
       if (this.watch !== watch) return;
-      this.note(watch, `时间码端口恢复未成功（${watch.portName}）：${error instanceof Error ? error.message : String(error)}；继续每秒检查`);
+      this.note(watch, `${this.dependencies.subject}恢复未成功（${watch.portName}）：${error instanceof Error ? error.message : String(error)}；继续每秒检查`);
     }
     this.next(watch);
   }

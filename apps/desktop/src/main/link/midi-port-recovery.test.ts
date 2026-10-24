@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { MtcPortRecovery } from './mtc-port-recovery';
+import { MidiPortRecovery } from './midi-port-recovery';
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-24T08:00:00.000Z')); });
 afterEach(() => { vi.useRealTimers(); });
@@ -8,7 +8,7 @@ function fixture() {
   let outputs: { id: number; name: string }[] = [];
   const list = vi.fn(() => Promise.resolve(outputs)), reopen = vi.fn<(device: number, name: string) => Promise<void>>(() => Promise.resolve());
   const recovered = vi.fn(), log = vi.fn(), active = vi.fn(() => true);
-  const recovery = new MtcPortRecovery({ list, reopen, active, recovered, log });
+  const recovery = new MidiPortRecovery({ subject: '时间码端口', list, reopen, active, recovered, log });
   return { recovery, list, reopen, active, recovered, log, set: (next: { id: number; name: string }[]) => { outputs = next; } };
 }
 

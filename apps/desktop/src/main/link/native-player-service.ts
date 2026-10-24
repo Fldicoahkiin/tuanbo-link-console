@@ -5,7 +5,7 @@ import { NativePlaybackClient } from './native-playback-client';
 import { NativeDeviceQuery } from './native-device-query';
 import { basename } from 'node:path';
 import { NativeAudioPreload } from './native-audio-preload';
-import { MtcPortRecovery, type MtcRecoveryReport } from './mtc-port-recovery';
+import { MidiPortRecovery, type PortRecoveryReport } from './midi-port-recovery';
 
 type Clock = Extract<NativePlaybackEvent, { kind: 'clock' }>;
 type Options = {
@@ -16,7 +16,7 @@ type Options = {
   changed: (status: NativePlayerStatus, qpc100ns: string | null) => void;
   error: (message: string) => void;
   /** The timecode port came back and timecode resumed. */
-  recovered?: (report: MtcRecoveryReport) => void;
+  recovered?: (report: PortRecoveryReport) => void;
   measured?: (phase: string, elapsedMs: number) => void;
   beforeControl?: (request: NativePlayerControl) => void;
 };
@@ -41,7 +41,7 @@ export class NativePlayerService {
   private readonly preload: NativeAudioPreload;
   private readonly deviceQuery: NativeDeviceQuery;
   private readonly audioDeviceQuery: NativeDeviceQuery;
-  private readonly mtcRecovery: MtcPortRecovery;
+  private readonly mtcRecovery: MidiPortRecovery;
   /** The engine's count of completed timecode port reopens, from its latest telemetry. */
   private engineReopens = 0;
   /** A timecode port reopen waiting for telemetry to confirm it. */
@@ -52,7 +52,7 @@ export class NativePlayerService {
     this.audioDeviceQuery = new NativeDeviceQuery(options.executable, 'audio');
     // Windows MIDI often stalls or fails for a moment while a port is removed or added, so a health
     // check or device query that failed meanwhile is repeated on each tick instead of being kept.
-    this.mtcRecovery = new MtcPortRecovery({ list: async () => (await this.devices('all', true)).midiOutputs, reopen: (device, name) => this.reopenMtc(device, name),
+    this.mtcRecovery = new MidiPortRecovery({ subject: '时间码端口', list: async () => (await this.devices('all', true)).midiOutputs, reopen: (device, name) => this.reopenMtc(device, name),
       active: () => this.state?.status === 'playing',
       recovered: report => {
         this.patch({ mtcError: null, mtcPortName: report.portName, mtcRecovered: report }); this.options.recovered?.(report);

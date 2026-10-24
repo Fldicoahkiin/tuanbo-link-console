@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { NativePlaybackCommand, NativePlaybackEvent, NativePlaybackDevices, NativePlayerPrepare } from '@tb/schema';
 import { NativePlayerService } from './native-player-service';
-import type { MtcRecoveryReport } from './mtc-port-recovery';
+import type { PortRecoveryReport } from './midi-port-recovery';
 import { WindowsMidiHealth, midiHealthMessage, type MidiHealth } from './windows-midi-health';
 
 const native = vi.hoisted(() => ({ devices: vi.fn<(scope: 'all' | 'audio') => Promise<NativePlaybackDevices>>(), commands: vi.fn<(command: NativePlaybackCommand) => void>(),
@@ -143,7 +143,7 @@ it('定位时 MIDI 端口消失只退出时间码通道，音频仍可定位和�
 });
 
 it('播放中时间码接口断开：同一接口回来后重新打开并从当前位置继续，不重新准备音频；旧遥测不再报断开', async () => {
-  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: MtcRecoveryReport) => void>();
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: PortRecoveryReport) => void>();
   const service = new NativePlayerService({ ...f.options, recovered });
   try {
     await service.prepare(f.request);
@@ -167,7 +167,7 @@ it('播放中时间码接口断开：同一接口回来后重新打开并从当�
 });
 
 it('刚出现的端口第一次打开后发送失败：不算恢复、不另报错误，下一秒重新打开并确认发送后才恢复', async () => {
-  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: MtcRecoveryReport) => void>();
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: PortRecoveryReport) => void>();
   const service = new NativePlayerService({ ...f.options, recovered });
   try {
     await service.prepare(f.request);
@@ -187,7 +187,7 @@ it('刚出现的端口第一次打开后发送失败：不算恢复、不另报�
 });
 
 it('接口断开时系统 MIDI 检测超时一次：等待期间重新检测，同一接口回来后照常打开', async () => {
-  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: MtcRecoveryReport) => void>();
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: PortRecoveryReport) => void>();
   // Windows stalls while the port is removed: that one probe times out, later ones pass again.
   const probe = vi.fn<() => Promise<MidiHealth>>().mockResolvedValue('ready'), health = new WindowsMidiHealth(probe);
   const service = new NativePlayerService({ ...f.options, recovered, checkDeviceHealth: async recheck => {
@@ -209,7 +209,7 @@ it('接口断开时系统 MIDI 检测超时一次：等待期间重新检测，�
 });
 
 it('接口断开时设备查询失败一次：等待期间重新打开查询，同一接口回来后照常打开', async () => {
-  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: MtcRecoveryReport) => void>();
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: PortRecoveryReport) => void>();
   const service = new NativePlayerService({ ...f.options, recovered });
   try {
     await service.prepare(f.request);
