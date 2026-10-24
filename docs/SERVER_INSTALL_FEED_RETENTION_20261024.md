@@ -87,3 +87,13 @@ sudo ls /srv/tblink-updates/windows/x64/
 在本文末尾补一节「安装结果」，记下实际安装的提交号、`$stamp`、新旧两个版本的摘要，以及第 3 步的输出。
 
 第一次真正移出旧版本，会发生在发布 0.5.1 的时候。届时后台显示的结果里会写「已移出更新源：0.4.29」，再核对回执的 `archived/` 里有 0.4.29 的安装包和 blockmap。
+
+<a id="安装结果"></a>
+## 安装结果
+
+2026-10-24 由主会话执行（用户在主会话里直接确认「确认安装发布脚本」）。
+
+- 安装的字节：`publish-update.py` 来自提交 b905381（与当时 master 上的字节一致），sha256 `2f82f81035ccd5007338e94d243bb36910a3c16256c2a37f8afbe7902ce053ee`。
+- `$stamp`：`20261024T121733Z`；旧版备份 `/var/backups/tblink/install-20261024T121733Z/publish-update.py`，sha256 `08724d3b3debe2b24660fcf6d0b7534793ca95bfaca1628abba7494536185286`，与 2026-10-23 安装记录一致。
+- 第 1 步：`publish-update.py: OK`，`def archive_feed` 计数 1；staging 为空；path 和 timer 都是 active；发布锁空闲。
+- 第 3 步：`Result=success`、`ExecMainStatus=0`，日志无报错；状态文件仍是更新源 0.4.29（未签名）、没有可回滚的上一版、staging 为空；更新目录前后都是 0.4.29 的安装包、blockmap 和 latest.yml，没有变化。
