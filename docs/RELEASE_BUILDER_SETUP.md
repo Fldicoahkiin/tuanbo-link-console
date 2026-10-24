@@ -1,6 +1,6 @@
-# 构建机准备（Windows 正式包）
+# 发版中转机准备（工位电脑）
 
-正式安装包只在国内构建机上打包、签名并上传到服务器 staging。发布链路和信任边界见 [自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。目前构建机就是开发机 DESKTOP-2C8JIC2，它同时用于 GUI 测试：runner 会等 `C:\dev\claude-tools\locks\` 下没有锁时才开始打包。长期应换一台专门的构建机。
+正式安装包在 GitHub 云端打包、签名，放进草稿 GitHub Release。工位电脑 DESKTOP-2C8JIC2 上的 self-hosted runner（标签 `release-builder`）只做一件事：把草稿搬到服务器 staging，等服务器发布后把草稿转为正式（用户 2026-10-24 决定，不用 Cloudflare 中转）。上传私钥只在这台电脑上。链路图和排查表见 [README](../README.md#发布与部署链路)，信任边界见 [自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。工位电脑关机时，搬运作业在 GitHub 上排队等它开机；排队超时后在 Actions 里只重跑这个作业。
 
 下面的步骤由用户和仓库所有者完成。**私钥、token 和密码都只在本机窗口或 GitHub 网页里输入，不要贴到聊天里，也不要发给任何人。**
 
@@ -20,8 +20,8 @@ powershell -ExecutionPolicy Bypass -File D:\tblink-builder-setup\setup-release-b
 
 | 位置 | 内容 | 之后的去向 |
 | --- | --- | --- |
-| `D:\tblink-release-assets\beauty\2dfd72cfcae9\` | 固定版本的美颜构建，与 `tools/obs/beauty/release-pin.json` 一致 | 留在构建机，runner 只读 |
-| `D:\tblink-release-assets\music-analysis\8432b1f0ea62\` | 固定版本的离线音乐分析运行时（runtime、models、licenses），与 `tools/music-analysis/release-pin.json` 一致 | 留在构建机，runner 只读 |
+| `D:\tblink-release-assets\beauty\2dfd72cfcae9\` | 固定版本的美颜构建，与 `tools/obs/beauty/release-pin.json` 一致 | 打包上传到 `build-assets-beauty-2dfd72cfcae9` release 一次（见[固定资产](#固定资产)），之后 runner 不读 |
+| `D:\tblink-release-assets\music-analysis\8432b1f0ea62\` | 固定版本的离线音乐分析运行时（runtime、models、licenses），与 `tools/music-analysis/release-pin.json` 一致 | 打包上传到 `build-assets-music-analysis-8432b1f0ea62` release 一次，之后 runner 不读 |
 | `D:\tblink-release-signing\release-2026-10-a.pem` | 发布签名私钥（日常） | 放进 GitHub secret；CI 用 secret 签名成功后删除本机副本（第 6 步） |
 | `D:\tblink-release-signing\release-2026-10-b.pem` | 发布签名私钥（备用） | 拷到 U 盘离线保存后删除本机副本（第 1 步） |
 | `D:\tblink-release-signing\upload\` | 上传到服务器的 SSH 私钥和 known_hosts | 留在构建机，只给 runner 账号读 |
@@ -59,17 +59,14 @@ powershell -ExecutionPolicy Bypass -File D:\tblink-builder-setup\setup-release-b
 在开始菜单搜索 PowerShell，右键「以管理员身份运行」，逐行执行：
 
 ```powershell
-icacls D:\tblink-release-assets /grant "tblink-runner:(OI)(CI)RX"
 icacls D:\tblink-release-signing /grant "tblink-runner:RX"
 icacls D:\tblink-release-signing\upload /grant "tblink-runner:RX"
 icacls D:\tblink-release-signing\upload\known_hosts /grant "tblink-runner:R"
 icacls D:\tblink-release-signing\upload\tblink-release-ed25519 /setowner tblink-runner
 icacls D:\tblink-release-signing\upload\tblink-release-ed25519 /inheritance:r /grant:r "tblink-runner:R" "SYSTEM:F" "Administrators:F"
-New-Item -ItemType Directory -Force C:\dev\claude-tools\locks
-icacls C:\dev\claude-tools\locks /grant "tblink-runner:(OI)(CI)M"
 ```
 
-runner 只能读资产和上传身份，不能读发布签名私钥（它来自 GitHub secret）。上传私钥的所有者改成 tblink-runner，因为 Windows 的 OpenSSH 只接受只属于当前账户的私钥。最后两行建好锁目录（2026-10-24 时它不存在），让 runner 能在里面建和删自己的锁文件。
+runner 只能读上传身份，不能读发布签名私钥（它来自 GitHub secret）。上传私钥的所有者改成 tblink-runner，这样 ssh 才会接受它（私钥文件只能属于当前账户）。
 
 <a id="4-注册-self-hosted-runner"></a>
 ## 4. 注册 self-hosted runner（仓库所有者 Fldicoahkiin，开发机上的管理员 PowerShell）
@@ -166,6 +163,13 @@ runner 只能读资产和上传身份，不能读发布签名私钥（它来自 
 <a id="6-首次构建后删除本机日常密钥"></a>
 ## 6. 首次构建后删除本机日常密钥（用户）
 
-完成后告诉主会话。Release Windows 只由 `vX.Y.Z` 标签触发：下一次推标签时，构建机用 secret 签名、上传，服务器自动发布，工作流建好 GitHub Release，这次运行成功就说明 secret 签名可用。
+完成后告诉主会话。Release Windows 只由 `vX.Y.Z` 标签触发：下一次推标签时，云端 build 作业用 secret 签名，工位电脑上传，服务器自动发布，Release 转为正式。这次运行成功就说明 secret 签名可用。
 
 会话通知「CI 签名验证成功」后，删除电脑上的 `D:\tblink-release-signing\release-2026-10-a.pem`，并清空回收站里的这个文件。之后这台电脑上不再有发布签名私钥。
+
+<a id="固定资产"></a>
+## 固定资产（一次，会话做）
+
+美颜构建和离线音乐分析运行时不在 git 里。云端 build 作业从两个专门的 GitHub release 下载它们：`build-assets-beauty-<指纹前 12 位>` 和 `build-assets-music-analysis-<指纹前 12 位>`，指纹来自仓库里的 `release-pin.json`。每个 release 里是一份压缩后分卷的 tar（每卷小于 GitHub 单个附件 2 GiB 的上限）和一份列出各卷 sha256 的 `build-assets.json`。下载时逐卷核对，afterPack 再按 `release-pin.json` 核对每个文件。
+
+第 4 步登录 gh 之后，会话在工位电脑上把 `D:\tblink-release-assets\` 下的两份资产上传一次（`scripts/build-assets.mjs` 的 `pack` 和 `publish`，用 `gh auth token` 作为 `GITHUB_TOKEN`，经本机代理上传）。资产重新构建、`release-pin.json` 的指纹变了，就要再上传一份新指纹的 release；旧的留着，旧标签的构建仍然可以重跑。

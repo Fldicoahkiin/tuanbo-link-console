@@ -1,5 +1,6 @@
 ﻿#Requires -RunAsAdministrator
-# 团播联动台构建机准备：按 docs/RELEASE_BUILDER_SETUP.md 第 1–5 步执行，重复运行会跳过已完成的步骤。
+# 团播联动台发版中转机（工位电脑）准备：按 docs/RELEASE_BUILDER_SETUP.md 第 1–5 步执行，重复运行会跳过已完成的步骤。
+# 安装包在 GitHub 云端构建；这台电脑上的 runner 只负责把草稿 release 上传到服务器，再把 release 转为正式。
 # 只在需要你的地方停下：插 U 盘、设密码、浏览器登录。私钥、密码和 token 都不会显示在屏幕上。
 $ErrorActionPreference = 'Stop'
 $repo = 'Fldicoahkiin/tuanbo-link-console'
@@ -14,6 +15,8 @@ function Stop-Here([string]$text) { Write-Host "   停下：$text" -ForegroundCo
 $node = "$env:ProgramFiles\nodejs\node.exe"
 if (-not (Test-Path -LiteralPath $node)) { $node = (Get-Command node).Source }
 $gh = (Get-Command gh).Source
+# 上传用 Git for Windows 的 ssh：Windows 自带的 ssh.exe 发送大量输入会停住。
+if (-not (Test-Path -LiteralPath "$env:ProgramFiles\Git\usr\bin\ssh.exe")) { Stop-Here '没有找到 Git for Windows 的 ssh.exe（C:\Program Files\Git\usr\bin\ssh.exe），先安装 Git for Windows' }
 if (-not (Get-NetTCPConnection -LocalPort 7890 -State Listen -ErrorAction SilentlyContinue)) { Stop-Here '本机代理 127.0.0.1:7890 没有运行，先打开 Clash 再运行本脚本' }
 if (-not $env:HTTPS_PROXY) { $env:HTTPS_PROXY = 'http://127.0.0.1:7890'; $env:HTTP_PROXY = 'http://127.0.0.1:7890' }
 
@@ -61,22 +64,19 @@ if (Get-LocalUser -Name 'tblink-runner' -ErrorAction SilentlyContinue) {
   Done '已创建，并加入标准用户组'
 }
 
-Step '第 3 步：给 tblink-runner 开读取权限'
-New-Item -ItemType Directory -Force -Path 'C:\dev\claude-tools\locks' | Out-Null
+Step '第 3 步：给 tblink-runner 开读取上传私钥的权限'
 $grants = @(
-  @('D:\tblink-release-assets', '/grant', 'tblink-runner:(OI)(CI)RX'),
   @($signing, '/grant', 'tblink-runner:RX'),
   @("$signing\upload", '/grant', 'tblink-runner:RX'),
   @("$signing\upload\known_hosts", '/grant', 'tblink-runner:R'),
   @("$signing\upload\tblink-release-ed25519", '/setowner', 'tblink-runner'),
-  @("$signing\upload\tblink-release-ed25519", '/inheritance:r', '/grant:r', 'tblink-runner:R', '*S-1-5-18:F', '*S-1-5-32-544:F'),
-  @('C:\dev\claude-tools\locks', '/grant', 'tblink-runner:(OI)(CI)M')
+  @("$signing\upload\tblink-release-ed25519", '/inheritance:r', '/grant:r', 'tblink-runner:R', '*S-1-5-18:F', '*S-1-5-32-544:F')
 )
 foreach ($grant in $grants) {
   & icacls @grant | Out-Null
   if ($LASTEXITCODE -ne 0) { Stop-Here ("icacls 失败：" + ($grant -join ' ')) }
 }
-Done '7 项权限已设置'
+Done '5 项权限已设置'
 
 Step '第 4 步：登录 GitHub（Fldicoahkiin）并注册 runner'
 $status = (Invoke-Quiet { & $gh auth status 2>&1 } | Out-String)
