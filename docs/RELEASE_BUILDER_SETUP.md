@@ -4,6 +4,17 @@
 
 下面的步骤由用户和仓库所有者完成。**私钥、token 和密码都只在本机窗口或 GitHub 网页里输入，不要贴到聊天里，也不要发给任何人。**
 
+<a id="一键脚本"></a>
+## 一键脚本
+
+[`scripts/setup-release-builder.ps1`](../scripts/setup-release-builder.ps1) 按下面第 1–5 步的顺序一次做完，重复运行会跳过已完成的步骤。它不依赖构建机上的代码检出（备份密钥的核对逻辑和两把公钥都内置在脚本里），构建机上放了一份在 `D:\tblink-builder-setup\`。先插好 U 盘、打开 Clash，再用「以管理员身份运行」打开 PowerShell：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\tblink-builder-setup\setup-release-builder.ps1
+```
+
+只在三处停下等你：输入 U 盘盘符、给 tblink-runner 设密码、在浏览器里用 Fldicoahkiin 登录 GitHub。显示红色「停下：…」就照提示处理后重新运行。跑完后还要手动删掉电脑上的 `release-2026-10-b.pem`（Shift+Delete）。下面各节是脚本做的每一步，也可以照着手动做。
+
 <a id="现状"></a>
 ## 现状
 
