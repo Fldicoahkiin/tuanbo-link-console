@@ -126,7 +126,7 @@ async function fetchAssets(kind) {
   console.log(`${kind} 已解到 ${ASSETS[kind].target}，afterPack 会再按 release-pin.json 核对每个文件`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [command, kind, ...rest] = process.argv.slice(2);
   if (command === 'pack' && rest.length === 2) await pack(kind, resolve(rest[0]), resolve(rest[1]));
   else if (command === 'publish' && rest.length === 1) await publish(kind, resolve(rest[0]));

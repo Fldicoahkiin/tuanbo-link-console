@@ -204,7 +204,7 @@ async function relay() {
   return '草稿都低于更新源的版本，没有要搬运的';
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   if (args.length === 2 && args[0] === '--log') openLog(args[1]);
   else if (args.length !== 0) throw new Error('用法：node --use-env-proxy scripts/relay-release.mjs [--log <日志目录>]');
