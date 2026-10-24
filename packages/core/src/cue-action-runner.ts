@@ -39,8 +39,20 @@ export type ActionExecutionEvent = {
   kind: LinkAction['kind'];
   status: ActionExecutionStatus;
   at: number;
+  /** Results only (succeeded, failed, skipped): how long the action took. */
+  durationMs?: number;
   error?: string;
 };
+
+/**
+ * The run-log entry for an action event, or null: only a result is recorded, with how long the action took
+ * and, when it failed or was skipped, why. Every external action has a time limit, so a result always follows.
+ */
+export function actionResultLog(event: ActionExecutionEvent): { level: 'info' | 'error'; message: string; result: 'succeeded' | 'failed' | 'skipped'; details: Record<string, unknown> } | null {
+  if (event.status === 'queued' || event.status === 'running') return null;
+  return { level: event.status === 'failed' ? 'error' : 'info', message: `${event.label} · ${event.status}${event.error ? `：${event.error}` : ''}`, result: event.status,
+    details: { kind: event.kind, at: event.at, durationMs: event.durationMs ?? 0, ...(event.error ? { error: event.error } : {}) } };
+}
 
 type RunnerOptions = {
   stopOnFailure?: boolean;
@@ -76,7 +88,7 @@ export class CueActionRunner {
         const at = this.now();
         const skipped = createResult(executionId, cue.id, action, 'skipped', at, at, mode === 'rehearsal' ? '排练模式已被前序失败动作阻断' : '当前输出通道已被前序失败动作阻断');
         results.push(skipped);
-        await this.emit(action, skipped.status, executionId, cue.id, at, skipped.error);
+        await this.emit(action, skipped.status, executionId, cue.id, at, skipped.error, 0);
         continue;
       }
       const result = await this.executeAction(executionId, cue.id, action, canExecute);
@@ -106,7 +118,7 @@ export class CueActionRunner {
       const at = this.now();
       const result = createResult(executionId, cue.id, action, 'skipped', at, at, error);
       results.push(result);
-      await this.emit(action, result.status, executionId, cue.id, at, error);
+      await this.emit(action, result.status, executionId, cue.id, at, error, 0);
     }
     return { executionId, cueId: cue.id, mode, startedAt, finishedAt: this.now(), results };
   }
@@ -119,14 +131,14 @@ export class CueActionRunner {
     if (!canExecute()) {
       const finishedAt = this.now();
       const result = createResult(executionId, cueId, action, 'skipped', startedAt, finishedAt, '运行已暂停、中断或停止，未发送该动作');
-      await this.emit(action, result.status, executionId, cueId, finishedAt, result.error);
+      await this.emit(action, result.status, executionId, cueId, finishedAt, result.error, result.durationMs);
       return result;
     }
     const executor = this.executors.find((candidate) => candidate.supports(action));
     if (!executor) {
       const finishedAt = this.now();
       const result = createResult(executionId, cueId, action, 'failed', startedAt, finishedAt, `没有执行器支持 ${action.kind}`);
-      await this.emit(action, result.status, executionId, cueId, finishedAt, result.error);
+      await this.emit(action, result.status, executionId, cueId, finishedAt, result.error, result.durationMs);
       return result;
     }
 
@@ -141,7 +153,7 @@ export class CueActionRunner {
       const message = error instanceof Error ? error.message : String(error);
       result = createResult(executionId, cueId, action, 'failed', startedAt, finishedAt, message);
     }
-    await this.emit(action, result.status, executionId, cueId, result.finishedAt, result.error);
+    await this.emit(action, result.status, executionId, cueId, result.finishedAt, result.error, result.durationMs);
     return result;
   }
 
@@ -151,7 +163,8 @@ export class CueActionRunner {
     executionId: string,
     cueId: string,
     at: number,
-    error?: string
+    error?: string,
+    durationMs?: number
   ): Promise<void> {
     if (!this.onStatus) return;
     await this.onStatus({
@@ -162,6 +175,7 @@ export class CueActionRunner {
       kind: action.kind,
       status,
       at,
+      ...(durationMs !== undefined ? { durationMs } : {}),
       ...(error ? { error } : {})
     });
   }

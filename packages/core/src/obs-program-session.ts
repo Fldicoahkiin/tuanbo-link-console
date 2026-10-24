@@ -1,5 +1,5 @@
 import type { LinkCue, LinkProject } from '@tb/schema';
-import { CueActionRunner, type CueExecutionReport, type LinkActionExecutor } from './cue-action-runner';
+import { actionResultLog, CueActionRunner, type CueExecutionReport, type LinkActionExecutor } from './cue-action-runner';
 import { CueRuntime, type RuntimeUpdate } from './cue-runtime';
 import { frameNumberToTimecode, millisecondsToFrameNumber, playbackFramesPerSecond, type MtcSample } from './mtc-timecode';
 import { ManagedOutputRuntime, type ManagedMediaExecutionReport, type ManagedOutputRuntimeDependencies } from './managed-output-runtime';
@@ -89,10 +89,11 @@ export class ObsProgramSession {
     this.managed = new ManagedOutputRuntime(project, projectPath, dependencies);
     // Live mode: a failed action is reported in red and later actions still run.
     this.runner = new CueActionRunner([dependencies.executor], { now: dependencies.now,
-      onStatus: event => dependencies.recordLog({ level: event.status === 'failed' ? 'error' : event.status === 'skipped' ? 'warning' : 'info',
-        category: 'action', message: `${event.label} · ${event.status}`, projectId: project.projectId, itemId,
-        cueId: event.cueId, actionId: event.actionId, executionId: event.executionId, device: 'obs', result: event.status,
-        details: { kind: event.kind, at: event.at, ...(event.error ? { error: event.error } : {}) } }).then(() => undefined)
+      onStatus: event => {
+        const entry = actionResultLog(event);
+        return entry ? dependencies.recordLog({ ...entry, category: 'action', projectId: project.projectId, itemId,
+          cueId: event.cueId, actionId: event.actionId, executionId: event.executionId, device: 'obs' }).then(() => undefined) : Promise.resolve();
+      }
     });
     this.requireUpdate(this.runtime.selectItem(itemId));
     this.managed.selectItem(itemId);
