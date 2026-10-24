@@ -37,13 +37,16 @@ export async function uploadAsset(release, name, bytes) {
 }
 
 /** Streams a release asset into `sink` (a file path or a writable stream) and returns its sha256 and size. The API
- * redirects to the storage host; fetch drops the Authorization header on that cross-origin redirect. */
+ * answers with a redirect to a signed storage URL, which is followed without the token. */
 export async function downloadAsset(asset, sink) {
   if (!process.env.GITHUB_TOKEN) throw new Error('需要 GITHUB_TOKEN');
-  const response = await fetch(`https://api.github.com/repos/${REPOSITORY}/releases/assets/${asset.id}`, {
-    signal: AbortSignal.timeout(60 * 60_000),
+  const signal = AbortSignal.timeout(60 * 60_000);
+  const api = await fetch(`https://api.github.com/repos/${REPOSITORY}/releases/assets/${asset.id}`, {
+    signal, redirect: 'manual',
     headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/octet-stream', 'x-github-api-version': '2022-11-28' }
   });
+  const location = api.status >= 300 && api.status < 400 ? api.headers.get('location') : null;
+  const response = location ? await fetch(location, { signal }) : api;
   if (!response.ok) throw new Error(`下载 ${asset.name} 失败：HTTP ${response.status}`);
   const hash = createHash('sha256');
   let size = 0;
