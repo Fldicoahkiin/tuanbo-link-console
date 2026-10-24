@@ -36,7 +36,8 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
       ipcMain.removeHandler('link:obs-live-close'); ipcMain.handle('link:obs-live-close', () => undefined);
       ipcMain.removeHandler('link:process-start'); ipcMain.handle('link:process-start', () => { throw new Error('隔离测试不启动外部程序'); });
       // Native playback identifies outputs through Windows; this test's only output is the stand-in USB interface.
-      ipcMain.removeHandler('link:native-player-devices'); ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [], midiOutputs: [{ id: 0, name: 'USB MIDI' }] }));
+      // One-click connect checks the audio output first, so the list carries the Windows default device.
+      ipcMain.removeHandler('link:native-player-devices'); ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [{ id: 'default', name: 'Windows 默认输出', isDefault: true }], midiOutputs: [{ id: 0, name: 'USB MIDI' }] }));
     }, path);
     await page.evaluate(() => {
       const packets: number[][] = []; Reflect.set(window, '__cuePackets', packets);
