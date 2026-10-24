@@ -102,3 +102,13 @@ sudo tail -n 3 /var/backups/tblink/update-audit.jsonl
 - 新旧两个版本的摘要；
 - 第 1 步看到的 staging 内容；
 - 第 3 步的输出。
+
+<a id="安装结果"></a>
+## 安装结果
+
+2026-10-24 由主会话执行（用户在主会话里直接确认「确认服务器改动」）。
+
+- 安装的字节：`publish-update.py` 来自提交 987ae61（与当时 master 一致），sha256 `3ccb805f2d9a6e34ab1177f470f8b27b0eee228dd465e059bfbdc98c817bc7f6`。
+- `$stamp`：`20261024T141728Z`；旧版备份 `/var/backups/tblink/install-20261024T141728Z/publish-update.py`，sha256 `2f82f81035ccd5007338e94d243bb36910a3c16256c2a37f8afbe7902ce053ee`，与更新源保留规则的安装记录一致。
+- 第 1 步：`publish-update.py: OK`，`def auto_publish` 计数 1；staging 为空；path 和 timer 都是 active。
+- 第 3 步：`Result=success`、`ExecMainStatus=0`；状态文件：更新源 0.4.29（未签名）、staging 为空、`autoPublish` 为空；更新目录没有变化。

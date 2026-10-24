@@ -1,0 +1,15 @@
+# Clamp the TCP MSS on SSH connections. The release builder's path to this server drops packets above about
+# 1492 bytes without an ICMP reply, so uploads stalled after the first segments; a smaller MSS keeps every
+# segment under that. Only lowers an advertised MSS above 1360; other ports and smaller values are left alone.
+table inet tblink_mss
+delete table inet tblink_mss
+table inet tblink_mss {
+	chain output {
+		type filter hook output priority mangle; policy accept;
+		tcp sport 22 tcp flags & (syn | ack) == (syn | ack) tcp option maxseg size > 1360 tcp option maxseg size set 1360
+	}
+	chain prerouting {
+		type filter hook prerouting priority mangle; policy accept;
+		tcp dport 22 tcp flags & (syn | ack) == syn tcp option maxseg size > 1360 tcp option maxseg size set 1360
+	}
+}

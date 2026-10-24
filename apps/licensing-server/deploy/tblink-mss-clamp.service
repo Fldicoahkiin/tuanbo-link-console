@@ -1,0 +1,13 @@
+[Unit]
+Description=Clamp the TCP MSS on SSH connections so uploads cross paths with a smaller MTU
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/tblink-mss/clamp.nft
+ExecStop=/usr/sbin/nft delete table inet tblink_mss
+
+[Install]
+WantedBy=multi-user.target
