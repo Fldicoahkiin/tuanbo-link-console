@@ -1,0 +1,16 @@
+flowchart TD
+  start(["一次运行<br/>工位电脑：登录 / 联网 / 每 10 分钟 · Mac：手动"]) --> drafts{"GitHub 上有四个文件齐全的草稿 vX.Y.Z？"}
+  drafts -->|"没有"| idle["记「没有等待搬运的草稿 release」，结束"]
+  drafts -->|"有，从最高版本看起"| cmp{"和更新源 latest.yml 的版本比"}
+  cmp -->|"低于更新源"| low["记日志，草稿留着不动，看下一个草稿"]
+  low --> cmp
+  cmp -->|"等于"| same{"更新源的 latest.yml 与草稿里的逐字节一致？"}
+  same -->|"一致"| pub["草稿转为正式并标为 Latest，结束"]
+  same -->|"不一致"| manual["报错：需要人工核对"]
+  cmp -->|"高于"| status{"ssh tblink-release status<br/>（只读查询）"}
+  status -->|"staging 已有这一版"| wait1["等服务器发布，结束"]
+  status -->|"另一台机器正在上传"| wait2["下次再传，结束"]
+  status -->|"都没有"| up["下载草稿（缓存里已核对过的文件直接复用）<br/>核对 manifest、标签提交、大小和 sha256<br/>打成 tar 上传，核对服务器收到的 manifest 摘要"]
+  up --> poll{"10 分钟内更新源换成了草稿里的 latest.yml？<br/>每 20 秒看一次"}
+  poll -->|"是"| pub
+  poll -->|"否"| wait3["记日志，下次运行再转正式"]

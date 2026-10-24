@@ -1,0 +1,180 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1464.4449166666664 1779.5" width="1464.4449166666664" height="1779.5" style="--bg:#0d1117;--fg:#e6edf3;--line:#3d444d;--accent:#4493f8;--muted:#9198a1;background:var(--bg)">
+<style>
+    text { font-family: Inter, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="dev" data-label="开发者">
+  <rect x="429.32099999999986" y="40" width="421.4789999999999" height="198.70000000000002" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="429.32099999999986" y="40" width="421.4789999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="441.32099999999986" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">开发者</text>
+</g>
+<g class="subgraph" data-id="cloud" data-label="GitHub 云端 · Release Windows（windows-latest）">
+  <rect x="40" y="298.70000000000005" width="816.7279999999996" height="396.1" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="298.70000000000005" width="816.7279999999996" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="312.70000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">GitHub 云端 · Release Windows（windows-latest）</text>
+</g>
+<g class="subgraph" data-id="relayer" data-label="搬运 · scripts/relay-release.mjs（二选一，重复运行安全）">
+  <rect x="51.81774999999993" y="754.8000000000001" width="616.6579999999999" height="317.40000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="51.81774999999993" y="754.8000000000001" width="616.6579999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="63.81774999999993" y="768.8000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">搬运 · scripts/relay-release.mjs（二选一，重复运行安全）</text>
+</g>
+<g class="subgraph" data-id="server" data-label="服务器">
+  <rect x="131.3284166666666" y="1132.2" width="827.1019999999997" height="365.2" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="131.3284166666666" y="1132.2" width="827.1019999999997" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="143.3284166666666" y="1146.2" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">服务器</text>
+</g>
+<g class="subgraph" data-id="after" data-label="上线之后">
+  <rect x="121.32491666666652" y="1625.7" width="1303.12" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="121.32491666666652" y="1625.7" width="1303.12" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="133.32491666666652" y="1639.7" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">上线之后</text>
+</g>
+<polyline class="edge" data-from="tag" data-to="verify" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="640.0604999999998,222.70000000000002 640.0604999999998,350.42500000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="draft" data-to="relay" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="629.8717499999998,678.8 629.8717499999998,880.825 465.51674999999983,880.825 465.51674999999983,900.6000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="relay" data-to="staging" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="527.8364166666665,954.4000000000001 527.8364166666665,1176.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="feed" data-to="client" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="234.6946666666666,1479.5875 234.6946666666666,1607.7 235.37779166666652,1607.7 235.37779166666652,1607.7 1214.0759166666662,1607.7 1214.0759166666662,1669.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="feed" data-to="latest" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="latest.yml 与草稿逐字节一致" points="322.06091666666657,1479.5875 322.06091666666646,1669.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="feed" data-to="website" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="409.4271666666666,1479.5875 409.4271666666666,1595.7 586.3395416666665,1595.7 586.3395416666665,1595.7 763.2519166666664,1595.7 763.2519166666664,1669.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="bump" data-to="tag" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="640.0604999999998,137.8 640.0604999999998,185.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="verify" data-to="build" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="640.0604999999997,404.2250000000001 640.0604999999997,455.26250000000005 436.87849999999986,455.26250000000005 436.87849999999986,475.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="assets" data-to="build" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="233.69649999999993,435.12500000000006 233.69649999999993,455.26250000000005 436.87849999999986,455.26250000000005 436.87849999999986,475.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="build" data-to="draft" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="526.1211666666665,563 526.1211666666665,575 629.8717499999998,575 629.8717499999998,611" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="build" data-to="cloudlog" data-style="dotted" data-arrow-start="false" data-arrow-end="false" points="347.6358333333332,563 347.6358333333332,575 243.88524999999987,575 243.88524999999987,611" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" />
+<polyline class="edge" data-from="office" data-to="relay" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="465.5167499999999,861.05 465.5167499999999,880.825 465.51674999999983,880.825 465.51674999999983,900.6000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="mac" data-to="relay" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.4897499999999,844.15 175.4897499999999,880.825 465.51674999999983,880.825 465.51674999999983,900.6000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="relay" data-to="relaylog" data-style="dotted" data-arrow-start="false" data-arrow-end="false" points="403.1970833333332,954.4000000000001 403.1970833333332,966.4000000000001 301.2374166666666,966.4000000000001 301.2374166666666,1002.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" />
+<polyline class="edge" data-from="staging" data-to="publisher" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="527.8364166666665,1244 527.8364166666665,1292" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="publisher" data-to="feed" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="444.39824999999985,1362.7 444.39824999999985,1374.7 322.06091666666657,1374.7 322.06091666666657,1411.7875" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="publisher" data-to="serverlog" data-style="dotted" data-arrow-start="false" data-arrow-end="false" points="611.2745833333332,1362.7 611.2745833333332,1374.7 733.6119166666665,1374.7 733.6119166666665,1411.7875" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" />
+<g class="edge-label" data-from="feed" data-to="latest" data-label="latest.yml 与草稿逐字节一致">
+  <rect x="243.06091666666657" y="1546.4" width="157.24" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="321.6809166666666" y="1561.5500000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">latest.yml 与草稿逐字节一致</text>
+</g>
+<g class="node" data-id="bump" data-label="只改根目录和 apps/desktop 两个 package.json 的版本号
+chore(release): X.Y.Z 推 master，等 CI 全绿" data-shape="rectangle">
+  <rect x="445.32099999999986" y="84" width="389.4789999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="640.0604999999998" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="640.0604999999998" dy="-3.9000000000000012">只改根目录和 apps/desktop 两个 package.json 的版本号</tspan><tspan x="640.0604999999998" dy="16.900000000000002">chore(release): X.Y.Z 推 master，等 CI 全绿</tspan></text>
+</g>
+<g class="node" data-id="tag" data-label="在这个提交上推 vX.Y.Z 标签" data-shape="rectangle">
+  <rect x="530.1654999999998" y="185.8" width="219.78999999999994" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="640.0604999999998" y="204.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">在这个提交上推 vX.Y.Z 标签</text>
+</g>
+<g class="node" data-id="verify" data-label="verify 作业
+版本高于已有标签和线上 latest.yml · 类型检查 · 单测 · lint" data-shape="rectangle">
+  <rect x="439.3929999999998" y="350.42500000000007" width="401.3349999999998" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="640.0604999999997" y="377.32500000000005" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="640.0604999999997" dy="-3.9000000000000012">verify 作业</tspan><tspan x="640.0604999999997" dy="16.900000000000002">版本高于已有标签和线上 latest.yml · 类型检查 · 单测 · lint</tspan></text>
+</g>
+<g class="node" data-id="assets" data-label="固定资产 release
+build-assets-beauty-… · build-assets-music-analysis-…
+分卷 tar + build-assets.json（各卷 sha256）" data-shape="cylinder">
+  <rect x="56" y="357.42500000000007" width="355.39299999999986" height="70.7" fill="var(--_node-fill)" stroke="none" />
+  <line x1="56" y1="357.42500000000007" x2="56" y2="428.12500000000006" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <line x1="411.39299999999986" y1="357.42500000000007" x2="411.39299999999986" y2="428.12500000000006" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <ellipse cx="233.69649999999993" cy="428.12500000000006" rx="177.69649999999993" ry="7" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <ellipse cx="233.69649999999993" cy="357.42500000000007" rx="177.69649999999993" ry="7" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="233.69649999999993" y="392.7750000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="233.69649999999993" dy="-12.350000000000001">固定资产 release</tspan><tspan x="233.69649999999993" dy="16.900000000000002">build-assets-beauty-… · build-assets-music-analysis-…</tspan><tspan x="233.69649999999993" dy="16.900000000000002">分卷 tar + build-assets.json（各卷 sha256）</tspan></text>
+</g>
+<g class="node" data-id="build" data-label="build 作业
+再查一次版本 · 下载固定资产逐卷核对 · 打包
+afterPack 按 release-pin.json 逐文件核对
+用 secret TBLINK_RELEASE_SIGNING_KEY 签 latest.yml · 写 release-manifest.json" data-shape="rectangle">
+  <rect x="169.15050000000002" y="475.40000000000003" width="535.4559999999997" height="87.60000000000001" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="436.87849999999986" y="519.2" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="436.87849999999986" dy="-20.8">build 作业</tspan><tspan x="436.87849999999986" dy="16.900000000000002">再查一次版本 · 下载固定资产逐卷核对 · 打包</tspan><tspan x="436.87849999999986" dy="16.900000000000002">afterPack 按 release-pin.json 逐文件核对</tspan><tspan x="436.87849999999986" dy="16.900000000000002">用 secret TBLINK_RELEASE_SIGNING_KEY 签 latest.yml · 写 release-manifest.json</tspan></text>
+</g>
+<g class="node" data-id="draft" data-label="草稿 GitHub Release vX.Y.Z
+安装包 · blockmap · latest.yml · release-manifest.json" data-shape="cylinder">
+  <rect x="451.43424999999985" y="618" width="356.8749999999999" height="53.80000000000001" fill="var(--_node-fill)" stroke="none" />
+  <line x1="451.43424999999985" y1="618" x2="451.43424999999985" y2="671.8" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <line x1="808.3092499999998" y1="618" x2="808.3092499999998" y2="671.8" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <ellipse cx="629.8717499999998" cy="671.8" rx="178.43749999999994" ry="7" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <ellipse cx="629.8717499999998" cy="618" rx="178.43749999999994" ry="7" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="629.8717499999998" y="644.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="629.8717499999998" dy="-3.9000000000000012">草稿 GitHub Release vX.Y.Z</tspan><tspan x="629.8717499999998" dy="16.900000000000002">安装包 · blockmap · latest.yml · release-manifest.json</tspan></text>
+</g>
+<g class="node" data-id="cloudlog" data-label="日志 · Actions › Release Windows › 这次运行的日志" data-shape="rectangle">
+  <rect x="64.3362499999999" y="611" width="359.09799999999996" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="243.88524999999987" y="629.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">日志 · Actions › Release Windows › 这次运行的日志</text>
+</g>
+<g class="node" data-id="office" data-label="工位电脑计划任务 tblink-relay
+登录后、联网后各跑一次，之后每 10 分钟" data-shape="rectangle">
+  <rect x="311.16174999999987" y="807.25" width="308.71" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="465.5167499999999" y="834.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="465.5167499999999" dy="-3.9000000000000012">工位电脑计划任务 tblink-relay</tspan><tspan x="465.5167499999999" dy="16.900000000000002">登录后、联网后各跑一次，之后每 10 分钟</tspan></text>
+</g>
+<g class="node" data-id="mac" data-label="Mac 手动 pnpm release:relay" data-shape="rectangle">
+  <rect x="67.81774999999993" y="807.25" width="215.34399999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="175.4897499999999" y="825.7" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Mac 手动 pnpm release:relay</text>
+</g>
+<g class="node" data-id="relay" data-label="查状态 → 下载草稿 → 按 manifest 和标签提交核对
+→ 以 tblink-release 身份上传（逐步判断见下一张图）" data-shape="rectangle">
+  <rect x="278.5577499999998" y="900.6000000000001" width="373.918" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="465.51674999999983" y="927.5000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="465.51674999999983" dy="-3.9000000000000012">查状态 → 下载草稿 → 按 manifest 和标签提交核对</tspan><tspan x="465.51674999999983" dy="16.900000000000002">→ 以 tblink-release 身份上传（逐步判断见下一张图）</tspan></text>
+</g>
+<g class="node" data-id="relaylog" data-label="日志 · 工位电脑 D:\tblink-relay\logs\relay-日期.log（保留 14 天）
+Mac 看终端输出" data-shape="rectangle">
+  <rect x="84.63841666666669" y="1002.4000000000001" width="433.1979999999998" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="301.2374166666666" y="1029.3000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="301.2374166666666" dy="-3.9000000000000012">日志 · 工位电脑 D:\tblink-relay\logs\relay-日期.log（保留 14 天）</tspan><tspan x="301.2374166666666" dy="16.900000000000002">Mac 看终端输出</tspan></text>
+</g>
+<g class="node" data-id="staging" data-label="staging /var/lib/tblink-release/staging
+receive-update.py · 同一时间只收一份 · 最多 5 份" data-shape="cylinder">
+  <rect x="353.8449166666666" y="1183.2" width="347.9829999999999" height="53.80000000000001" fill="var(--_node-fill)" stroke="none" />
+  <line x1="353.8449166666666" y1="1183.2" x2="353.8449166666666" y2="1237" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <line x1="701.8279166666665" y1="1183.2" x2="701.8279166666665" y2="1237" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <ellipse cx="527.8364166666665" cy="1237" rx="173.99149999999995" ry="7" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <ellipse cx="527.8364166666665" cy="1183.2" rx="173.99149999999995" ry="7" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="527.8364166666665" y="1210.1000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="527.8364166666665" dy="-3.9000000000000012">staging /var/lib/tblink-release/staging</tspan><tspan x="527.8364166666665" dy="16.900000000000002">receive-update.py · 同一时间只收一份 · 最多 5 份</tspan></text>
+</g>
+<g class="node" data-id="publisher" data-label="publish-update.py（root）
+staging 变化时由 path 单元触发，timer 每 2 分钟兜底
+复制进 work/ 后重验签名 · manifest · sha256 · 版本高于更新源 · 没发布过" data-shape="rectangle">
+  <rect x="277.5219166666666" y="1292" width="500.6289999999999" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="527.8364166666665" y="1327.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="527.8364166666665" dy="-12.350000000000001">publish-update.py（root）</tspan><tspan x="527.8364166666665" dy="16.900000000000002">staging 变化时由 path 单元触发，timer 每 2 分钟兜底</tspan><tspan x="527.8364166666665" dy="16.900000000000002">复制进 work/ 后重验签名 · manifest · sha256 · 版本高于更新源 · 没发布过</tspan></text>
+</g>
+<g class="node" data-id="feed" data-label="更新源 /srv/tblink-updates/windows/x64
+安装包先上、latest.yml 最后；只留新版和上一版" data-shape="cylinder">
+  <rect x="147.3284166666666" y="1418.7875" width="349.465" height="53.80000000000001" fill="var(--_node-fill)" stroke="none" />
+  <line x1="147.3284166666666" y1="1418.7875" x2="147.3284166666666" y2="1472.5874999999999" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <line x1="496.7934166666666" y1="1418.7875" x2="496.7934166666666" y2="1472.5874999999999" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <ellipse cx="322.06091666666657" cy="1472.5874999999999" rx="174.7325" ry="7" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <ellipse cx="322.06091666666657" cy="1418.7875" rx="174.7325" ry="7" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="322.06091666666657" y="1445.6875" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="322.06091666666657" dy="-3.9000000000000012">更新源 /srv/tblink-updates/windows/x64</tspan><tspan x="322.06091666666657" dy="16.900000000000002">安装包先上、latest.yml 最后；只留新版和上一版</tspan></text>
+</g>
+<g class="node" data-id="serverlog" data-label="日志 · auto-publish.json · update-status.json · update-audit.jsonl
+journalctl -u tblink-update-publish
+后台「软件更新」的「最近一次自动发布」" data-shape="rectangle">
+  <rect x="524.7934166666666" y="1411.7875" width="417.63699999999983" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="733.6119166666665" y="1447.1374999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="733.6119166666665" dy="-12.350000000000001">日志 · auto-publish.json · update-status.json · update-audit.jsonl</tspan><tspan x="733.6119166666665" dy="16.900000000000002">journalctl -u tblink-update-publish</tspan><tspan x="733.6119166666665" dy="16.900000000000002">后台「软件更新」的「最近一次自动发布」</tspan></text>
+</g>
+<g class="node" data-id="latest" data-label="草稿转为正式 Release，标为 Latest（搬运脚本做）" data-shape="rectangle">
+  <rect x="137.32491666666652" y="1669.7" width="369.4719999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="322.06091666666646" y="1688.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">草稿转为正式 Release，标为 Latest（搬运脚本做）</text>
+</g>
+<g class="node" data-id="website" data-label="官网下载页 · release.json
+暂时手动：write-website-release.mjs 后推 master，随服务部署上线" data-shape="rectangle">
+  <rect x="534.7969166666664" y="1669.7" width="456.9099999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="763.2519166666664" y="1696.6000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="763.2519166666664" dy="-3.9000000000000012">官网下载页 · release.json</tspan><tspan x="763.2519166666664" dy="16.900000000000002">暂时手动：write-website-release.mjs 后推 master，随服务部署上线</tspan></text>
+</g>
+<g class="node" data-id="client" data-label="已安装的软件：检查更新 · 验签 · 差分下载 · 确认安装" data-shape="rectangle">
+  <rect x="1019.7069166666663" y="1669.7" width="388.73799999999994" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1214.0759166666662" y="1688.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">已安装的软件：检查更新 · 验签 · 差分下载 · 确认安装</text>
+</g>
+</svg>

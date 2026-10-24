@@ -186,23 +186,24 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 <a id="windows-发版"></a>
 ### Windows 发版
 
-改版本号、推 `vX.Y.Z` 标签之后全部自动。安装包在 GitHub 云端构建；服务器的上传私钥不进 GitHub，所以由搬运脚本把它送到服务器：工位电脑的计划任务定时跑，Mac 也能手动跑，二选一。
+改版本号、推 `vX.Y.Z` 标签之后全部自动，不用 Cloudflare。安装包在 GitHub 云端构建、签名；服务器的上传私钥不进 GitHub，所以由搬运脚本把草稿送到服务器：工位电脑的计划任务定时跑，Mac 也能手动跑，二选一。下图每一段里标「日志」的方框，是这一段出问题时看的地方。图的源码在 [docs/diagrams](docs/diagrams/)，改图见那里的说明。
 
-```mermaid
-flowchart TD
-  tag["推 vX.Y.Z 标签"] --> verify["verify 作业（GitHub 云端 windows-latest）<br/>版本高于已有标签和更新源 · 类型检查 · 单测 · lint"]
-  verify --> build["build 作业（GitHub 云端 windows-latest）<br/>下载美颜和音乐分析固定资产（build-assets-* release）<br/>打包 · afterPack 按 release-pin.json 核对 · 用 secret 签 latest.yml"]
-  build --> draft[("草稿 GitHub Release<br/>安装包 · blockmap · latest.yml · release-manifest.json")]
-  draft --> relay["搬运 scripts/relay-release.mjs，二选一，重复运行安全<br/>工位电脑计划任务（每 10 分钟，登录和联网时）或 Mac 手动 pnpm release:relay<br/>先查服务器 status · 下载草稿 · 按 manifest 和标签提交核对 · 以 tblink-release 身份上传"]
-  relay --> staging[("服务器 /var/lib/tblink-release/staging<br/>同一时间只接受一份上传")]
-  staging -->|"tblink-update-publish.path 触发"| publisher["publish-update.py（root）<br/>重新校验签名 · manifest · sha256 · 版本 · 没发布过"]
-  publisher --> feed[("更新源 updates.tuanbo-link.jinhefilm.com/windows/x64<br/>只留新版和上一版")]
-  feed --> client["已安装的软件：检查更新 · 验签 · 差分下载 · 安装"]
-  feed -->|"搬运脚本看到 latest.yml 与草稿逐字节一致"| latest["草稿转为正式 Release，标为 Latest"]
-  feed -->|"上线后运行 write-website-release.mjs 并推送"| website["官网下载页 /release.json"]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/windows-release-dark.svg">
+  <img alt="Windows 发版总览" src="docs/diagrams/windows-release-light.svg">
+</picture>
 
-- 搬运脚本每次运行先查状态：更新源已经是这个版本就把草稿转为正式；服务器 staging 里已有这个版本或另一份上传正在进行就等；否则才下载、核对、上传。哪一步失败都只记日志，下次运行接着做。工位电脑关机时什么都不用做，它上线后计划任务自动接着同步，或者在 Mac 上跑一次 `pnpm release:relay`。
+#### 搬运脚本每次运行怎么判断
+
+脚本不记任何本地状态，每次都重新看 GitHub 草稿、更新源和服务器 staging，再做下一步。所以工位电脑关机、断网都没关系：草稿一直留在 GitHub 上，工位电脑开机登录后 1 分钟、或者重新联网后 1 分钟会自动跑一次，之后每 10 分钟一次；等不及就在 Mac 上跑一次 `pnpm release:relay`。两台机器同时跑也安全，服务器同一时间只接受一份上传。上一次还没跑完时，计划任务跳过这一次。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/relay-run-dark.svg">
+  <img alt="搬运脚本每次运行的判断" src="docs/diagrams/relay-run-light.svg">
+</picture>
+
+任何一步出错（网络、gh 登录、ssh、核对不符）都只记一行「本次同步失败（下次运行接着做）」和原因，退出码 1，下一次运行从头再判断。服务器那边，每份上传只尝试自动发布一次，失败不重试，原因写进「最近一次自动发布」；要重来就修好后发下一个版本，或者在后台手动发布。
+
 - build 作业失败可以在 Actions 里重跑：草稿里同名的文件会被替换。版本已经上线时，build 作业拒绝重建。
 - 发布出了问题，在运营后台「软件更新」里「回滚到上一版」。回滚过的版本不会再被自动发布。
 
@@ -211,51 +212,25 @@ flowchart TD
 
 授权服务、官网和运营后台随 master 推送自动部署，不经过工位电脑。
 
-```mermaid
-flowchart TD
-  push["推 master（改动授权服务、官网或后台）"] --> ci["Verify Licensing Server（GitHub Actions）<br/>类型检查 · 支付和授权测试 · 构建 · 浏览器检查 · 部署工具回归"]
-  ci -->|"deploy-from-ci.py 第一次连接：只发清单"| receiver["receive-release.py（tblink-deploy 身份，ForceCommand）<br/>核对已装的四个部署工具和 Nginx 摘要 · 返回缺少的产物"]
-  receiver -->|"第二次连接：只上传变化的产物"| job["root 任务目录 · systemd 临时服务"]
-  job --> activate["activate-release.py：维护模式 · 数据库备份和恢复校验 · 切换服务"]
-  job --> site["publish-website.py：原子切换官网 · 逐文件核对"]
-  job --> console["publish-console.py：后台静态文件"]
-  activate -->|"任何一步失败"| rollback["装回旧代码、旧环境和旧代理"]
-  site -->|"失败"| rollback
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/service-deploy-dark.svg">
+  <img alt="服务部署" src="docs/diagrams/service-deploy-light.svg">
+</picture>
 
 部署工具或 Nginx 有改动时，要先按对应的 `docs/SERVER_INSTALL_*.md` 装到服务器，再推 master，否则部署会以摘要不一致被拒绝。安装记录：[2026-10-23 首次安装](docs/SERVER_INSTALL_20261023.md)、[仓库转移](docs/SERVER_INSTALL_REPO_TRANSFER_20261024.md)、[更新源保留规则](docs/SERVER_INSTALL_FEED_RETENTION_20261024.md)、[自动发布](docs/SERVER_INSTALL_AUTO_PUBLISH_20261024.md)、[SSH MSS 钳制](docs/SERVER_INSTALL_SSH_MSS_20261024.md)。
 
 <a id="密钥和凭据"></a>
 ### 密钥和凭据
 
-```mermaid
-flowchart LR
-  subgraph gh["GitHub 仓库 secrets 和变量"]
-    sign["TBLINK_RELEASE_SIGNING_KEY<br/>发布私钥 release-2026-10-a"]
-    deploy["TBLINK_DEPLOY_SSH_KEY · TBLINK_DEPLOY_KNOWN_HOSTS<br/>变量 TBLINK_AUTO_DEPLOY=true"]
-  end
-  subgraph office["工位电脑"]
-    upload["D:\tblink-release-signing\upload<br/>tblink-release 上传私钥 · known_hosts"]
-  end
-  subgraph mac["Mac"]
-    macupload["~/.config/tblink-remote/tblink_release_upload<br/>Mac 自己的上传私钥"]
-  end
-  usb["U 盘（离线）<br/>备用发布私钥 release-2026-10-b"]
-  subgraph server["服务器"]
-    relkeys["/etc/tblink-release/authorized_keys"]
-    depkeys["/etc/tblink-deploy/authorized_keys"]
-    pub["/opt/tblink-licensing/release-public-keys.json"]
-  end
-  sign -->|"build 作业签名"| pub
-  upload -->|"计划任务搬运"| relkeys
-  macupload -->|"pnpm release:relay"| relkeys
-  deploy -->|"服务部署"| depkeys
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/credentials-dark.svg">
+  <img alt="密钥和凭据位置" src="docs/diagrams/credentials-light.svg">
+</picture>
 
 | 凭据 | 放在哪里 | 谁能用 |
 | --- | --- | --- |
 | 发布私钥 `release-2026-10-a`（日常） | GitHub secret `TBLINK_RELEASE_SIGNING_KEY`；过渡期工位电脑 `D:\tblink-release-signing\` 还有一份，第一次云端签名成功后删除 | 只在 build 作业的签名这一步注入环境变量，不写磁盘 |
-| 发布私钥 `release-2026-10-b`（备用） | U 盘离线保存，电脑上不留 | 换钥时人工使用 |
+| 发布私钥 `release-2026-10-b`（备用） | 暂时在工位电脑 `D:\tblink-release-signing\`（2026-10-24 没有 U 盘）；有 U 盘后拷过去离线保存，再删本机副本 | 换钥时人工使用 |
 | 发布公钥 | 客户端 `apps/desktop/src/main/link/release-public-keys.json`；服务器 `/opt/tblink-licensing/release-public-keys.json` | 客户端安装前验签；服务器发布前验签 |
 | 上传私钥（tblink-release 身份） | 工位电脑 `D:\tblink-release-signing\upload\`；Mac `~/.config/tblink-remote/tblink_release_upload`。各一把，都不进仓库和 GitHub | 搬运脚本；服务器端只允许查 `status` 和写 staging（`receive-update.py`） |
 | 部署私钥（tblink-deploy 身份） | GitHub secret `TBLINK_DEPLOY_SSH_KEY` | Verify Licensing Server 的部署步骤；服务器端只运行接收器 |
@@ -272,6 +247,7 @@ flowchart LR
 | verify 作业失败 | Actions 日志的「Release version is new」或「Typecheck, test and lint」；版本必须高于已有标签和线上 `latest.yml` |
 | build 作业失败 | Actions 日志。「没有 build-assets-…」说明固定资产还没上传，见[发版中转机准备](docs/RELEASE_BUILDER_SETUP.md)；afterPack 报指纹不一致，就核对 `release-pin.json` 与资产 release；签名一步失败，就检查 secret `TBLINK_RELEASE_SIGNING_KEY` |
 | 草稿里缺文件或有多个草稿 | 仓库 Releases 页面，草稿只对有写权限的人可见 |
+| 工位电脑关机或断网 | 不用处理：草稿留在 GitHub，工位电脑登录或联网后 1 分钟自动跑；急的话在 Mac 上跑 `pnpm release:relay` |
 | 草稿一直没送到服务器 | 搬运日志：工位电脑 `D:\tblink-relay\logs\relay-<日期>.log`，Mac 直接看 `pnpm release:relay` 的输出；工位电脑的计划任务 `Get-ScheduledTaskInfo tblink-relay`（上次运行时间和结果）；没人开机就在 Mac 上跑一次 |
 | 上传失败 | 搬运日志；服务器 `sudo journalctl _COMM=sshd-session --since -1h \| grep tblink-release`；`sudo ls -la /var/lib/tblink-release/staging`；`systemctl status tblink-mss-clamp` |
 | 上传了但没上线 | `sudo cat /var/lib/tblink-update-publish/auto-publish.json`、`update-status.json`；`sudo journalctl -u tblink-update-publish.service -n 50`；`sudo tail /var/backups/tblink/update-audit.jsonl`；后台「软件更新」的「最近一次自动发布」 |

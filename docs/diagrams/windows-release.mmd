@@ -1,0 +1,42 @@
+flowchart TD
+  subgraph dev["开发者"]
+    bump["只改根目录和 apps/desktop 两个 package.json 的版本号<br/>chore(release): X.Y.Z 推 master，等 CI 全绿"]
+    tag["在这个提交上推 vX.Y.Z 标签"]
+  end
+  subgraph cloud["GitHub 云端 · Release Windows（windows-latest）"]
+    verify["verify 作业<br/>版本高于已有标签和线上 latest.yml · 类型检查 · 单测 · lint"]
+    assets[("固定资产 release<br/>build-assets-beauty-… · build-assets-music-analysis-…<br/>分卷 tar + build-assets.json（各卷 sha256）")]
+    build["build 作业<br/>再查一次版本 · 下载固定资产逐卷核对 · 打包<br/>afterPack 按 release-pin.json 逐文件核对<br/>用 secret TBLINK_RELEASE_SIGNING_KEY 签 latest.yml · 写 release-manifest.json"]
+    draft[("草稿 GitHub Release vX.Y.Z<br/>安装包 · blockmap · latest.yml · release-manifest.json")]
+    cloudlog["日志 · Actions › Release Windows › 这次运行的日志"]
+  end
+  subgraph relayer["搬运 · scripts/relay-release.mjs（二选一，重复运行安全）"]
+    office["工位电脑计划任务 tblink-relay<br/>登录后、联网后各跑一次，之后每 10 分钟"]
+    mac["Mac 手动 pnpm release:relay"]
+    relay["查状态 → 下载草稿 → 按 manifest 和标签提交核对<br/>→ 以 tblink-release 身份上传（逐步判断见下一张图）"]
+    relaylog["日志 · 工位电脑 D:\tblink-relay\logs\relay-日期.log（保留 14 天）<br/>Mac 看终端输出"]
+  end
+  subgraph server["服务器"]
+    staging[("staging /var/lib/tblink-release/staging<br/>receive-update.py · 同一时间只收一份 · 最多 5 份")]
+    publisher["publish-update.py（root）<br/>staging 变化时由 path 单元触发，timer 每 2 分钟兜底<br/>复制进 work/ 后重验签名 · manifest · sha256 · 版本高于更新源 · 没发布过"]
+    feed[("更新源 /srv/tblink-updates/windows/x64<br/>安装包先上、latest.yml 最后；只留新版和上一版")]
+    serverlog["日志 · auto-publish.json · update-status.json · update-audit.jsonl<br/>journalctl -u tblink-update-publish<br/>后台「软件更新」的「最近一次自动发布」"]
+  end
+  subgraph after["上线之后"]
+    latest["草稿转为正式 Release，标为 Latest（搬运脚本做）"]
+    website["官网下载页 · release.json<br/>暂时手动：write-website-release.mjs 后推 master，随服务部署上线"]
+    client["已安装的软件：检查更新 · 验签 · 差分下载 · 确认安装"]
+  end
+  bump --> tag --> verify --> build
+  assets --> build
+  build --> draft
+  draft --> relay
+  office --> relay
+  mac --> relay
+  relay --> staging --> publisher --> feed
+  feed --> client
+  feed -->|"latest.yml 与草稿逐字节一致"| latest
+  feed --> website
+  build -.- cloudlog
+  relay -.- relaylog
+  publisher -.- serverlog

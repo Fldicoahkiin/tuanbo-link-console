@@ -1,0 +1,9 @@
+flowchart TD
+  push["推 master（改动授权服务、官网或后台）"] --> ci["Verify Licensing Server（GitHub Actions）<br/>类型检查 · 支付和授权测试 · 构建 · 浏览器检查 · 部署工具回归"]
+  ci -->|"deploy-from-ci.py 第一次连接：只发清单"| receiver["receive-release.py（tblink-deploy 身份，ForceCommand）<br/>核对已装的四个部署工具和 Nginx 摘要 · 返回缺少的产物"]
+  receiver -->|"第二次连接：只上传变化的产物"| job["root 任务目录 · systemd 临时服务"]
+  job --> activate["activate-release.py：维护模式 · 数据库备份和恢复校验 · 切换服务"]
+  job --> site["publish-website.py：原子切换官网 · 逐文件核对"]
+  job --> console["publish-console.py：后台静态文件"]
+  activate -->|"任何一步失败"| rollback["装回旧代码、旧环境和旧代理"]
+  site -->|"失败"| rollback

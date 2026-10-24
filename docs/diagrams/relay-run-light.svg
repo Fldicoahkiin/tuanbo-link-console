@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1253.4315833333333 1874.2549999999997" width="1253.4315833333333" height="1874.2549999999997" style="--bg:#ffffff;--fg:#1f2328;--line:#d1d9e0;--accent:#0969da;--muted:#59636e;background:var(--bg)">
+<style>
+    text { font-family: Inter, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="start" data-to="drafts" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="250.67116666666664,93.80000000000001 250.67116666666664,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="drafts" data-to="idle" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="没有" points="196.20749999999998,414.1183333333333 196.20749999999998,1072.9069999999995" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="drafts" data-to="cmp" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="有，从最高版本看起" points="305.1348333333333,414.1183333333333 305.1348333333333,504.58199999999994 373.0634166666666,504.58199999999994 373.0634166666666,572.882 498.14166666666654,572.882 498.14166666666654,645.459" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="cmp" data-to="low" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="低于更新源" points="558.7186666666665,584.882 558.7186666666665,572.882 561.7369166666666,572.882 561.7369166666666,504.58199999999994 543.0437499999999,504.58199999999994 543.0437499999999,468.5819999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="low" data-to="cmp" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="641.0070833333333,468.5819999999999 641.0070833333333,572.882 637.9888333333332,572.882 637.9888333333332,572.882 619.2956666666665,572.882 619.2956666666665,645.459" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="cmp" data-to="same" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="等于" points="518.3339999999998,786.8053333333332 518.3339999999998,1145.8069999999996 314.7330833333333,1145.8069999999996 314.7330833333333,1223.4299999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="same" data-to="pub" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="一致" points="257.05841666666663,1511.803333333333 257.05841666666663,1717.0549999999996 248.6955833333334,1717.0549999999996 248.6955833333334,1761.3549999999996 538.0563333333332,1761.3549999999996 538.0563333333332,1785.3549999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="same" data-to="manual" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="不一致" points="372.40774999999996,1511.803333333333 372.40774999999996,1608.1549999999995 380.7705833333333,1608.1549999999995 380.7705833333333,1688.4549999999995" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="cmp" data-to="status" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="高于" points="599.1033333333332,786.8053333333332 599.1033333333332,839.1899999999999 832.5938333333334,839.1899999999999 832.5938333333334,919.49" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="status" data-to="wait1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="staging 已有这一版" points="780.3530833333333,1076.21225 780.3530833333333,1596.1549999999995 584.1005833333332,1596.1549999999995 584.1005833333332,1688.4549999999995" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="status" data-to="wait2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="另一台机器正在上传" points="832.5938333333334,1128.453 832.5938333333334,1608.1549999999995 772.6105833333332,1608.1549999999995 772.6105833333332,1688.4549999999995" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="status" data-to="up" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="都没有" points="884.8345833333333,1076.2122499999998 884.8345833333333,1140.4529999999997 1042.630583333333,1140.4529999999997 1042.630583333333,1223.4299999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="up" data-to="poll" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1042.630583333333,1294.1299999999997 1042.630583333333,1339.453" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="poll" data-to="pub" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="是" points="985.6969166666665,1624.1213333333328 985.6969166666665,1717.0549999999996 930.5059166666666,1717.0549999999996 930.5059166666666,1761.3549999999996 624.4106666666667,1761.3549999999996 624.4106666666667,1785.3549999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="poll" data-to="wait3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="否" points="1099.56425,1624.121333333333 1099.56425,1785.3549999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="drafts" data-to="idle" data-label="没有">
+  <rect x="175.20749999999998" y="999.6069999999996" width="41.41" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="195.91249999999997" y="1014.7569999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">没有</text>
+</g>
+<g class="edge-label" data-from="drafts" data-to="cmp" data-label="有，从最高版本看起">
+  <rect x="310.5634166666666" y="511.5819999999999" width="124.57000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="372.84841666666665" y="526.7319999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">有，从最高版本看起</text>
+</g>
+<g class="edge-label" data-from="cmp" data-to="low" data-label="低于更新源">
+  <rect x="522.7369166666666" y="511.5819999999999" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="561.2619166666666" y="526.7319999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">低于更新源</text>
+</g>
+<g class="edge-label" data-from="cmp" data-to="same" data-label="等于">
+  <rect x="293.7330833333333" y="1152.8069999999996" width="41.41" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="314.4380833333333" y="1167.9569999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">等于</text>
+</g>
+<g class="edge-label" data-from="same" data-to="pub" data-label="一致">
+  <rect x="227.6955833333334" y="1724.0549999999996" width="41.41" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="248.40058333333337" y="1739.2049999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">一致</text>
+</g>
+<g class="edge-label" data-from="same" data-to="manual" data-label="不一致">
+  <rect x="353.7705833333333" y="1615.1549999999995" width="53.29" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="380.4155833333333" y="1630.3049999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">不一致</text>
+</g>
+<g class="edge-label" data-from="cmp" data-to="status" data-label="高于">
+  <rect x="811.5938333333334" y="846.1899999999999" width="41.41" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="832.2988333333334" y="861.3399999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">高于</text>
+</g>
+<g class="edge-label" data-from="status" data-to="wait1" data-label="staging 已有这一版">
+  <rect x="527.1005833333332" y="1615.1549999999995" width="113.28400000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="583.7425833333333" y="1630.3049999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">staging 已有这一版</text>
+</g>
+<g class="edge-label" data-from="status" data-to="wait2" data-label="另一台机器正在上传">
+  <rect x="710.1105833333332" y="1615.1549999999995" width="124.57000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="772.3955833333332" y="1630.3049999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">另一台机器正在上传</text>
+</g>
+<g class="edge-label" data-from="status" data-to="up" data-label="都没有">
+  <rect x="1015.6305833333333" y="1147.4529999999997" width="53.29" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1042.2755833333333" y="1162.6029999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">都没有</text>
+</g>
+<g class="edge-label" data-from="poll" data-to="pub" data-label="是">
+  <rect x="915.5059166666666" y="1724.0549999999996" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="930.2709166666666" y="1739.2049999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">是</text>
+</g>
+<g class="edge-label" data-from="poll" data-to="wait3" data-label="否">
+  <rect x="1084.56425" y="1724.0549999999996" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1099.32925" y="1739.2049999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">否</text>
+</g>
+<g class="node" data-id="start" data-label="一次运行
+工位电脑：登录 / 联网 / 每 10 分钟 · Mac：手动" data-shape="stadium">
+  <rect x="84.08966666666663" y="40" width="333.163" height="53.800000000000004" rx="26.900000000000002" ry="26.900000000000002" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="250.67116666666664" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="250.67116666666664" dy="-3.9000000000000012">一次运行</tspan><tspan x="250.67116666666664" dy="16.900000000000002">工位电脑：登录 / 联网 / 每 10 分钟 · Mac：手动</tspan></text>
+</g>
+<g class="node" data-id="drafts" data-label="GitHub 上有四个文件齐全的草稿 vX.Y.Z？" data-shape="diamond">
+  <polygon points="250.67116666666664,141.8 414.0621666666666,305.191 250.67116666666664,468.58199999999994 87.28016666666667,305.191" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="250.67116666666664" y="305.191" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">GitHub 上有四个文件齐全的草稿 vX.Y.Z？</text>
+</g>
+<g class="node" data-id="idle" data-label="记「没有等待搬运的草稿 release」，结束" data-shape="rectangle">
+  <rect x="40" y="1072.9069999999995" width="312.41499999999996" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="196.20749999999998" y="1091.3569999999995" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">记「没有等待搬运的草稿 release」，结束</text>
+</g>
+<g class="node" data-id="cmp" data-label="和更新源 latest.yml 的版本比" data-shape="diamond">
+  <polygon points="558.7186666666665,584.882 679.8726666666665,706.036 558.7186666666665,827.1899999999999 437.56466666666654,706.036" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="558.7186666666665" y="706.036" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">和更新源 latest.yml 的版本比</text>
+</g>
+<g class="node" data-id="low" data-label="记日志，草稿留着不动，看下一个草稿" data-shape="rectangle">
+  <rect x="445.0804166666666" y="431.6819999999999" width="293.89" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="592.0254166666666" y="450.1319999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">记日志，草稿留着不动，看下一个草稿</text>
+</g>
+<g class="node" data-id="same" data-label="更新源的 latest.yml 与草稿里的逐字节一致？" data-shape="diamond">
+  <polygon points="314.7330833333333,1223.4299999999998 487.7570833333333,1396.4539999999997 314.7330833333333,1569.4779999999996 141.7090833333333,1396.4539999999997" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="314.7330833333333" y="1396.4539999999997" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">更新源的 latest.yml 与草稿里的逐字节一致？</text>
+</g>
+<g class="node" data-id="pub" data-label="草稿转为正式并标为 Latest，结束" data-shape="rectangle">
+  <rect x="451.70199999999994" y="1785.3549999999996" width="259.063" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="581.2334999999999" y="1803.8049999999996" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">草稿转为正式并标为 Latest，结束</text>
+</g>
+<g class="node" data-id="manual" data-label="报错：需要人工核对" data-shape="rectangle">
+  <rect x="293.10558333333336" y="1688.4549999999995" width="175.32999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="380.7705833333333" y="1706.9049999999995" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">报错：需要人工核对</text>
+</g>
+<g class="node" data-id="status" data-label="ssh tblink-release status
+（只读查询）" data-shape="diamond">
+  <polygon points="832.5938333333332,919.4899999999999 937.0753333333332,1023.9714999999999 832.5938333333332,1128.453 728.1123333333333,1023.9714999999999" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="832.5938333333332" y="1023.9714999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="832.5938333333332" dy="-3.9000000000000012">ssh tblink-release status</tspan><tspan x="832.5938333333332" dy="16.900000000000002">（只读查询）</tspan></text>
+</g>
+<g class="node" data-id="wait1" data-label="等服务器发布，结束" data-shape="rectangle">
+  <rect x="496.4355833333333" y="1688.4549999999995" width="175.32999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="584.1005833333332" y="1706.9049999999995" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">等服务器发布，结束</text>
+</g>
+<g class="node" data-id="wait2" data-label="下次再传，结束" data-shape="rectangle">
+  <rect x="699.7655833333332" y="1688.4549999999995" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="772.6105833333332" y="1706.9049999999995" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">下次再传，结束</text>
+</g>
+<g class="node" data-id="up" data-label="下载草稿（缓存里已核对过的文件直接复用）
+核对 manifest、标签提交、大小和 sha256
+打成 tar 上传，核对服务器收到的 manifest 摘要" data-shape="rectangle">
+  <rect x="873.4555833333333" y="1223.4299999999996" width="338.34999999999997" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1042.6305833333333" y="1258.7799999999995" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1042.6305833333333" dy="-12.350000000000001">下载草稿（缓存里已核对过的文件直接复用）</tspan><tspan x="1042.6305833333333" dy="16.900000000000002">核对 manifest、标签提交、大小和 sha256</tspan><tspan x="1042.6305833333333" dy="16.900000000000002">打成 tar 上传，核对服务器收到的 manifest 摘要</tspan></text>
+</g>
+<g class="node" data-id="poll" data-label="10 分钟内更新源换成了草稿里的 latest.yml？
+每 20 秒看一次" data-shape="diamond">
+  <polygon points="1042.6305833333333,1339.4529999999997 1213.4315833333333,1510.2539999999997 1042.6305833333333,1681.0549999999996 871.8295833333334,1510.2539999999997" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1042.6305833333333" y="1510.2539999999997" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1042.6305833333333" dy="-3.9000000000000012">10 分钟内更新源换成了草稿里的 latest.yml？</tspan><tspan x="1042.6305833333333" dy="16.900000000000002">每 20 秒看一次</tspan></text>
+</g>
+<g class="node" data-id="wait3" data-label="记日志，下次运行再转正式" data-shape="rectangle">
+  <rect x="989.6692499999999" y="1785.3549999999996" width="219.78999999999996" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1099.56425" y="1803.8049999999996" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">记日志，下次运行再转正式</text>
+</g>
+</svg>
