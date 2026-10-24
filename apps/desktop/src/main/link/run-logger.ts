@@ -2,11 +2,8 @@ import { appendFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { basename, dirname, join } from 'node:path';
-import { gzip } from 'node:zlib';
-import { promisify } from 'node:util';
-import { writeFileAtomically } from './atomic-file';
+import { writeChunksAtomically } from './atomic-file';
 
-const gzipAsync = promisify(gzip);
 const SENSITIVE_KEY = /password|credential|authorization|token|secret/i;
 
 export type LinkLogLevel = 'info' | 'warning' | 'error';
@@ -38,6 +35,11 @@ export type LinkLogFilter = {
   result?: LinkLogEntry['result'];
   limit?: number;
 };
+
+export type LogExportRange = { days: 1 | 7 | 30 };
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** What one log query may read: the newest 500 entries, from at most the newest 20 sessions or 64 MB of files. */
+export const LOG_QUERY_SCOPE = { entries: 500, sessions: 20, bytes: 64 * 1024 * 1024 } as const;
 
 export type PrunedSessionLog = { file: string; bytes: number; reason: 'expired' | 'over-size' };
 /** Session logs older than 30 days go, and the rest keep within 200 MB; the stricter of the two wins. */
@@ -153,71 +155,61 @@ export class LinkRunLogger {
     return files.sort((left, right) => right.mtimeMs - left.mtimeMs);
   }
 
+  /**
+   * The newest `limit` matching entries (500 by default). Sessions are read newest first, each kept only as
+   * the tail still needed, and reading stops once enough are found or after the newest 20 sessions / 64 MB,
+   * so a long history never loads into the main process.
+   */
   async query(filter: LinkLogFilter = {}): Promise<LinkLogEntry[]> {
     await this.pending;
-    const entries = await this.readAllDiskEntries(filter);
-    for (const entry of this.failedBuffered) {
-      if (filter.sessionId && entry.sessionId !== filter.sessionId || filter.itemId && entry.itemId !== filter.itemId
-        || filter.cueId && entry.cueId !== filter.cueId || filter.device && entry.device !== filter.device
-        || filter.result && entry.result !== filter.result) continue;
-      entries.push(structuredClone(entry));
+    const limit = filter.limit ?? LOG_QUERY_SCOPE.entries;
+    const files = (await this.sessionFiles()).filter(file => !filter.sessionId || basename(file.path) === `${filter.sessionId}.jsonl`);
+    const found: LinkLogEntry[][] = [];
+    let count = 0, sessions = 0, bytes = 0;
+    for (const file of files) {
+      if (count >= limit || sessions >= LOG_QUERY_SCOPE.sessions || bytes >= LOG_QUERY_SCOPE.bytes) break;
+      sessions++; bytes += file.bytes;
+      const tail = new Tail<LinkLogEntry>(limit - count);
+      for await (const entry of this.readDiskEntries(file.path)) if (matches(entry, filter)) tail.push(entry);
+      const kept = tail.items();
+      found.push(kept); count += kept.length;
     }
+    const entries = found.reverse().flat();
+    for (const entry of this.failedBuffered) if (matches(entry, filter)) entries.push(structuredClone(entry));
     entries.sort(chronological);
-    return filter.limit ? entries.slice(-filter.limit) : entries;
+    return entries.slice(-limit);
   }
 
   /** `build` names the exporting build (product, version, channel, commit, appId) above the entries. */
-  async exportText(destinationPath: string, build: string): Promise<void> {
+  async exportText(destinationPath: string, build: string, range: LogExportRange = { days: 7 }): Promise<void> {
     if (!destinationPath.toLowerCase().endsWith('.txt')) throw new Error('运行日志必须使用 .txt 扩展名');
-    const entries = await this.query();
-    const text = entries.map(entry => `${entry.timestamp} [${entry.level}] [${entry.category}] [${entry.device ?? '—'}] ${entry.message}\n${JSON.stringify(entry)}`).join('\n\n');
-    await writeFileAtomically(destinationPath, `团播联动台运行日志（包含历史会话）\n导出版本：${build}\n${text}\n`);
+    const entries = this.entriesSince(Date.now() - range.days * DAY_MS);
+    await writeChunksAtomically(destinationPath, (async function* () {
+      yield `团播联动台运行日志（最近 ${range.days} 天）\n导出版本：${build}\n`;
+      for await (const entry of entries) yield `${entry.timestamp} [${entry.level}] [${entry.category}] [${entry.device ?? '—'}] ${entry.message}\n${JSON.stringify(entry)}\n\n`;
+    })());
   }
 
-  async exportDiagnosticPackage(
-    destinationPath: string,
-    context: Readonly<Record<string, unknown>>
-  ): Promise<void> {
+  async exportDiagnosticPackage(destinationPath: string, context: Readonly<Record<string, unknown>>, range: LogExportRange = { days: 7 }): Promise<void> {
     if (!destinationPath.toLowerCase().endsWith('.tbdiag.gz')) throw new Error('诊断包必须使用 .tbdiag.gz 扩展名');
-    const diskEntries = await this.query();
-    const payload = redactValue({
-      schemaVersion: 1,
-      exportedAt: new Date().toISOString(),
-      sessionId: this.sessionId,
-      context,
-      logs: diskEntries
-    }, this.secretValues());
-    await writeFileAtomically(destinationPath, await gzipAsync(Buffer.from(JSON.stringify(payload, null, 2), 'utf8')));
+    const head = { schemaVersion: 1, exportedAt: new Date().toISOString(), sessionId: this.sessionId, range, context: redactValue(context, this.secretValues()) };
+    const entries = this.entriesSince(Date.now() - range.days * DAY_MS);
+    await writeChunksAtomically(destinationPath, (async function* () {
+      yield `${JSON.stringify(head).slice(0, -1)},"logs":[`;
+      let first = true;
+      for await (const entry of entries) { yield `${first ? '' : ','}\n${JSON.stringify(entry)}`; first = false; }
+      yield '\n]}\n';
+    })(), { gzip: true });
   }
 
-  private async readAllDiskEntries(filter: LinkLogFilter = {}): Promise<LinkLogEntry[]> {
-    let fileNames: string[];
-    try {
-      fileNames = (await readdir(this.logsDirectory, { withFileTypes: true }))
-        .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
-        .map((entry) => entry.name)
-        .sort();
-    } catch (error) {
-      if (isErrorWithCode(error, 'ENOENT')) return [];
-      throw error;
+  /** Every entry written at or after `from`, oldest first, one session file at a time. */
+  private async *entriesSince(from: number): AsyncGenerator<LinkLogEntry> {
+    await this.pending;
+    const since = new Date(from).toISOString();
+    for (const file of (await this.sessionFiles()).filter(file => file.mtimeMs >= from).reverse()) {
+      for await (const entry of this.readDiskEntries(file.path)) if (entry.timestamp >= since) yield entry;
     }
-    const entries: LinkLogEntry[] = [];
-    for (const fileName of fileNames) {
-      for await (const entry of this.readDiskEntries(join(this.logsDirectory, fileName))) {
-        if (filter.sessionId && entry.sessionId !== filter.sessionId) continue;
-        if (filter.itemId && entry.itemId !== filter.itemId) continue;
-        if (filter.cueId && entry.cueId !== filter.cueId) continue;
-        if (filter.device && entry.device !== filter.device) continue;
-        if (filter.result && entry.result !== filter.result) continue;
-        entries.push(entry);
-        if (filter.limit && entries.length >= filter.limit * 2) {
-          entries.sort((a, b) => chronological(b, a));
-          entries.length = filter.limit;
-        }
-      }
-    }
-    entries.sort(chronological);
-    return filter.limit ? entries.slice(-filter.limit) : entries;
+    for (const entry of this.failedBuffered) if (entry.timestamp >= since) yield structuredClone(entry);
   }
 
   private async *readDiskEntries(filePath: string): AsyncGenerator<LinkLogEntry> {
@@ -247,6 +239,28 @@ export class LinkRunLogger {
       lines.close();
       stream.destroy();
     }
+  }
+}
+
+function matches(entry: LinkLogEntry, filter: LinkLogFilter): boolean {
+  return !(filter.sessionId && entry.sessionId !== filter.sessionId || filter.itemId && entry.itemId !== filter.itemId
+    || filter.cueId && entry.cueId !== filter.cueId || filter.device && entry.device !== filter.device
+    || filter.result && entry.result !== filter.result);
+}
+
+/** The last `capacity` items pushed, oldest first. */
+class Tail<T> {
+  private readonly buffer: T[] = [];
+  private next = 0;
+  constructor(private readonly capacity: number) {}
+  push(item: T): void {
+    if (this.capacity <= 0) return;
+    if (this.buffer.length < this.capacity) this.buffer.push(item);
+    else this.buffer[this.next] = item;
+    this.next = (this.next + 1) % this.capacity;
+  }
+  items(): T[] {
+    return this.buffer.length < this.capacity ? [...this.buffer] : [...this.buffer.slice(this.next), ...this.buffer.slice(0, this.next)];
   }
 }
 

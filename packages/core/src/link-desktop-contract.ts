@@ -413,8 +413,9 @@ export type LinkDesktopApi = {
     result?: LinkLogEntryDto['result'];
     limit?: number;
   }): Promise<LinkLogEntryDto[]>;
-  exportDiagnosticPackage(context: Readonly<Record<string, unknown>>): Promise<string | null>;
-  exportLogs(): Promise<string | null>;
+  /** `range`: how many days back the logs reach; 7 when omitted. */
+  exportDiagnosticPackage(context: Readonly<Record<string, unknown>>, range?: import('@tb/schema').LinkLogExportRange): Promise<string | null>;
+  exportLogs(range?: import('@tb/schema').LinkLogExportRange): Promise<string | null>;
   openLogsFolder(): Promise<void>;
   onObsStatus(listener: (snapshot: LinkObsSnapshot) => void): () => void;
   onObsInventoryChanged(listener: () => void): () => void;

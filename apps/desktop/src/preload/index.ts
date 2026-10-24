@@ -282,8 +282,8 @@ const tbLink: LinkDesktopBridgeApi = {
   getExternalSnapshots: () => invoke('link:process-snapshots'),
   recordLog: (entry) => invoke('link:log-record', entry),
   queryLogs: (filter) => invoke('link:log-query', filter),
-  exportDiagnosticPackage: (context) => invoke('link:diagnostic-export', context),
-  exportLogs: () => invoke('link:log-export'),
+  exportDiagnosticPackage: (context, range) => invoke('link:diagnostic-export', context, range),
+  exportLogs: (range) => invoke('link:log-export', range),
   openLogsFolder: () => invoke('link:log-open-folder'),
   onObsStatus: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, snapshot: LinkObsSnapshot) => listener(snapshot);

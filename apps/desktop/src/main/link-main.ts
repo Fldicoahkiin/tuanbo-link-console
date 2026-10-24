@@ -88,6 +88,7 @@ import {
 import {
   createEmptyLinkProject,
   linkDiagnosticContextSchema,
+  linkLogExportRangeSchema,
   linkDocumentStateSchema,
   linkSaveResponseSchema,
   linkUnsavedChangesReasonSchema,
@@ -2039,16 +2040,18 @@ function registerIpc(
     const error = await shell.openPath(directory);
     if (error) throw new Error(`无法打开日志文件夹：${error}`);
   });
-  handle('link:log-export', async () => {
+  handle('link:log-export', async (_event, rangeValue: unknown) => {
+    const range = linkLogExportRangeSchema.parse(rangeValue ?? { days: 7 });
     const result = await dialog.showSaveDialog(mainWindow!, { title: '导出运行日志',
       defaultPath: `${app.getName()}-日志-${new Date().toISOString().replaceAll(':', '-')}.txt`,
       filters: [{ name: '文本日志', extensions: ['txt'] }] });
     if (result.canceled || !result.filePath) return null;
-    await logger.exportText(result.filePath, buildIdentityLine());
+    await logger.exportText(result.filePath, buildIdentityLine(), range);
     return result.filePath;
   });
-  handle('link:diagnostic-export', async (_event, contextValue: unknown) => {
+  handle('link:diagnostic-export', async (_event, contextValue: unknown, rangeValue: unknown) => {
     const context = linkDiagnosticContextSchema.parse(contextValue);
+    const range = linkLogExportRangeSchema.parse(rangeValue ?? { days: 7 });
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: '导出脱敏诊断包',
       defaultPath: `${app.getName()}-诊断-${new Date().toISOString().replaceAll(':', '-')}.tbdiag.gz`,
@@ -2062,7 +2065,7 @@ function registerIpc(
       gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),
       obs: obs.getSnapshot(), ma2: ma2Network.status(), runtimeActive, collectedAt: new Date().toISOString(),
       crashDumpContentsIncluded: false
-    } });
+    } }, range);
     return result.filePath;
   });
 }
