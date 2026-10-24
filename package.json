@@ -1,7 +1,7 @@
 {
   "name": "tuanbo-yijianchufa",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.5.1",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "pnpm --filter @tb/desktop dev",
