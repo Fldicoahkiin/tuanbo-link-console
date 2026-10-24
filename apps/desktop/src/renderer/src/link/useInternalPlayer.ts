@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import { PlayerViewStore } from './stores/player-view-store';
 import { PlaybackMidiInput } from '../registry/playback-midi-input';
 import { InternalPlaybackController, emptyInternalPlayerState, type InternalPlayerDependencies } from './runtime/internal-playback-controller';
-import { toUserErrorMessage } from '@tb/core/link';
+import { firstTimeWarning, toUserErrorMessage } from '@tb/core/link';
 import { RemoteNativeProgramPlayer } from './runtime/remote-native-program-player';
 import type { ProgramPlayerControls } from './runtime/program-player-controls';
 import { recoverInternalObs } from './runtime/internal-obs-recovery';
@@ -18,6 +18,9 @@ import { useRuntimeStore } from './stores/runtime-store';
 import { useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
 import { useDisplayPreferences } from './stores/display-preferences-store';
 import { useSelectedProgram } from './useSelectedProgram';
+
+/** Player notices already logged as warnings in this window. */
+const notedNotices = new Set<string>();
 
 export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, ready: boolean, project: LinkProject | null) {
   const path = useDocumentStore((state) => state.path);
@@ -111,8 +114,9 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
         return { lightingProfile: profile, outputDeviceId: audioConfiguration.deviceId, audioSampleRate: audioConfiguration.sampleRate, mtcPortName: port?.portName ?? null,
           preload: profile?.internalPlayer?.preload ?? true, fadeInMs: profile?.internalPlayer?.fadeInMs ?? 0, fadeOutMs: profile?.internalPlayer?.fadeOutMs ?? 500 };
       }, changed: view.publish,
+      // A channel that cannot join repeats song after song until fixed: a warning the first time, then info.
       notice: (message, itemId) => {
-        void desktop.recordLog({ level: 'warning', category: 'state', message, projectId: project.projectId,
+        void desktop.recordLog({ level: firstTimeWarning(notedNotices, message), category: 'state', message, projectId: project.projectId,
           ...(itemId ? { itemId } : {}), device: '正式播放器' })
           .catch((error: unknown) => console.error('正式播放通道提示未能保存到日志', error));
       },

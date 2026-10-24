@@ -19,7 +19,8 @@ export class UnsavedChangesGuard {
     state(): UnsavedDocumentState;
     ask(prompt: UnsavedChangesPrompt): Promise<'save' | 'discard' | 'cancel'>;
     save(): Promise<RendererSaveResult>;
-    log(message: string): void;
+    /** info: the operator chose to discard; error: saving failed and the question stays open. */
+    log(level: 'info' | 'error', message: string): void;
   }) {}
 
   async resolve(reason: UnsavedChangesReason): Promise<UnsavedChangesDecision> {
@@ -38,13 +39,13 @@ export class UnsavedChangesGuard {
       const choice = await this.deps.ask({ ...state, reason, failure });
       if (choice === 'cancel') return 'cancelled';
       if (choice === 'discard') {
-        this.deps.log(`未保存的修改：操作员选择不保存（${reasonLabel[reason]}）`);
+        this.deps.log('info', `未保存的修改：操作员选择不保存（${reasonLabel[reason]}）`);
         return 'discarded';
       }
       const result = await this.deps.save();
       if (result.status === 'saved') return 'saved';
       failure = result.status === 'failed' ? result.message : null;
-      if (failure) this.deps.log(`未保存的修改：保存失败，仍在询问（${reasonLabel[reason]}）：${failure}`);
+      if (failure) this.deps.log('error', `未保存的修改：保存失败，仍在询问（${reasonLabel[reason]}）：${failure}`);
     }
   }
 }

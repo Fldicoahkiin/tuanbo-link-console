@@ -10,7 +10,7 @@ function guard(state: UnsavedDocumentState, answers: Answer[], saves: SaveResult
     state: () => state,
     ask: prompt => { prompts.push(prompt); return Promise.resolve(answers.shift() ?? 'cancel'); },
     save: () => { saveCalls++; return Promise.resolve(saves.shift() ?? { status: 'saved' }); },
-    log: message => { logs.push(message); }
+    log: (level, message) => { logs.push(`${level} ${message}`); }
   });
   return { instance, prompts, logs, saveCalls: () => saveCalls };
 }
@@ -32,7 +32,8 @@ describe('UnsavedChangesGuard', () => {
   it('不保存：继续并报告已放弃', async () => {
     const { instance, logs } = guard(dirty, ['discard']);
     expect(await instance.resolve('quit')).toBe('discarded');
-    expect(logs).toEqual([expect.stringContaining('不保存')]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/^info 未保存的修改：操作员选择不保存/);
   });
 
   it('保存成功后继续', async () => {
@@ -45,7 +46,7 @@ describe('UnsavedChangesGuard', () => {
     const { instance, prompts, logs } = guard(dirty, ['save', 'cancel'], [{ status: 'failed', message: '工程保存失败：磁盘已满' }]);
     expect(await instance.resolve('quit')).toBe('cancelled');
     expect(prompts.map(prompt => prompt.failure)).toEqual([null, '工程保存失败：磁盘已满']);
-    expect(logs).toContainEqual(expect.stringContaining('磁盘已满'));
+    expect(logs.filter(entry => entry.includes('磁盘已满'))).toEqual([expect.stringMatching(/^error 未保存的修改：保存失败/)]);
   });
 
   it('保存失败后仍可选择不保存', async () => {

@@ -1,4 +1,4 @@
-import { collectCueMidiOutputProfileIds, expectedMa2Shows, runLinkPreflight, type PreflightMode, type PreflightReport } from '@tb/core/link';
+import { collectCueMidiOutputProfileIds, expectedMa2Shows, preflightLogEntries, runLinkPreflight, type PreflightMode, type PreflightReport } from '@tb/core/link';
 import { ma2NetworkStatusSchema } from '@tb/schema';
 import type { LinkRuntimeCoordinator } from '../runtime/link-runtime-coordinator';
 import { useDocumentStore } from '../stores/document-store';
@@ -7,6 +7,9 @@ import { useRuntimeStore } from '../stores/runtime-store';
 import { linkDesktopViewModel } from './link-desktop-view-model';
 import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { requireOutputLicense } from '../../registry/license-output';
+
+/** Preflight advisories already logged in this window's run (preflightLogEntries). */
+const notedAdvisories = new Set<string>();
 
 export async function runDesktopPreflight(
   coordinator: LinkRuntimeCoordinator,
@@ -95,16 +98,11 @@ export async function runDesktopPreflight(
     logRedactionReady: security.logRedactionReady,
     ...(ma2Show !== undefined ? { ma2Show } : {})
   });
-  for (const check of report.checks) {
+  // One summary with every result in its details; blocking checks every time, advisories once per run.
+  for (const entry of preflightLogEntries(report.checks, notedAdvisories, document.project.projectId)) {
     assertCurrent();
-    await linkDesktopViewModel.recordLog({
-      level: check.status === 'blocking' ? 'error' : check.status === 'warning' ? 'warning' : 'info',
-      category: 'preflight',
-      message: `${check.label}：${check.detail}`,
-      projectId: document.project.projectId,
-      ...(currentRuntime.currentItemId ? { itemId: currentRuntime.currentItemId } : {}),
-      result: check.status === 'blocking' ? 'failed' : 'succeeded'
-    });
+    await linkDesktopViewModel.recordLog({ ...entry, category: 'preflight', projectId: document.project.projectId,
+      ...(currentRuntime.currentItemId ? { itemId: currentRuntime.currentItemId } : {}) });
   }
   if (report.passed) {
     assertCurrent();

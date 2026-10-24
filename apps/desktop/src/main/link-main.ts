@@ -2,7 +2,7 @@ import { ma2LayoutDirectoryRequestSchema, ma2LayoutUpdateRequestSchema } from '@
 import { projectArchiveRequestSchema, projectArchiveSettingsActionSchema, recoveryCopyDiscardSchema, recoveryCopyQuerySchema, recoveryCopyWriteSchema, type NativeObsPrepare } from '@tb/schema';
 import { ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorInputSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, type LicenseStatus } from '@tb/schema';
-import { materialSceneTargets, projectFileReferences } from '@tb/core/link';
+import { firstTimeWarning, materialSceneTargets, projectFileReferences } from '@tb/core/link';
 import { ibtExecutable } from './link/ibt-beat-service';
 import { Ma2AuditionService } from './link/ma2-audition-service';
 import { assertMa2ConnectionOwner, isLocalMa2Address, waitForMa2Listener } from './link/ma2-connection-owner';
@@ -172,7 +172,7 @@ import { NativeObsHost } from './link/native-obs-host';
 import { NativeObsRequests } from './link/native-obs-requests';
 import { NativeObsPreloadPool } from './link/native-obs-preload';
 import { createNativeObsOutputs } from './link/native-obs-outputs';
-import { firstTimeWarning, PreparationSteps } from './link/preparation-log';
+import { PreparationSteps } from './link/preparation-log';
 import { obsStatusLogEntry } from './link/obs-status-log';
 import { prepareNextObsFiles } from './link/native-obs-files';
 
@@ -209,7 +209,7 @@ const unsavedChanges = new UnsavedChangesGuard({
     return response === 0 ? 'save' : response === 1 ? 'discard' : 'cancel';
   },
   save: () => rendererSaves.request(),
-  log: message => { void ipcLogger?.record({ level: 'warning', category: 'system', message }).catch((error: unknown) => console.error('记录未保存修改处理失败', error)); }
+  log: (level, message) => { void ipcLogger?.record({ level, category: 'system', message }).catch((error: unknown) => console.error('记录未保存修改处理失败', error)); }
 });
 /** Every quit (window close, app.quit, Windows session end) goes through here. */
 let requestQuit: () => void = () => { app.quit(); };
@@ -567,8 +567,8 @@ function registerIpc(
   };
   const nativeSeek = new ObsNativeSeek();
   const programObsListeners = new Set<(status: import('@tb/schema').NativeObsStatus) => void>();
-  // Preflight advisories already recorded in this run, so each is noted once (preparation-log.ts).
-  const seenPreflightNotices = new Set<string>();
+  // Advisories and repeated warnings already recorded in this run, so each is a warning only once (firstTimeWarning).
+  const seenNotices = new Set<string>();
   const obsPreload = new NativeObsPreloadPool({
     authorize: async request => {
       await authorizeProduct('link:native-obs-prepare', request);
@@ -577,7 +577,7 @@ function registerIpc(
       if (nativePlaybackActive()) throw new Error('音频已开始准备，不能另行启动节目预备');
     },
     create: (request, positionMs) => createNativeObsOutputs(request, { obs, projects: projectService, media: mediaPreviewService,
-      profiles: profileStore, seek: nativeSeek, logger, seenPreflightNotices,
+      profiles: profileStore, seek: nativeSeek, logger, seenNotices,
       logFailure: error => {
         if (nativeObs?.status?.sessionId === request.sessionId) nativeObs.disconnect(error.message);
         else console.error('已结束画面会话的运行日志未能落盘', error);
@@ -926,8 +926,9 @@ function registerIpc(
   handle('link:ma2-network-status', async () => { await ma2NetworkReady; return ma2Network.status(); });
   handle('link:ma2-current-show', async () => { await ma2NetworkReady; return ma2Network.currentShow(); });
   nativeProgram = new NativeProgramService((project, request, callbacks) => {
+    // A channel that cannot join (OBS, timecode) repeats song after song until fixed: a warning the first time, then info.
     const notice = (message: string, itemId: string | null): void => {
-      void logger.record({ level: 'warning', category: 'state', device: '正式播放器', projectId: project.projectId,
+      void logger.record({ level: firstTimeWarning(seenNotices, message), category: 'state', device: '正式播放器', projectId: project.projectId,
         ...(itemId ? { itemId } : {}), message }).catch((error: unknown) => console.error('后台节目提示日志未能保存', error));
     };
     const host = new NativeProgramHost(project, request.projectPath, request.revision, {
@@ -1366,13 +1367,12 @@ function registerIpc(
       buttons: ['选择保存位置', '取消'], defaultId: 0, cancelId: 1 });
     return response === 0;
   });
-  const startCheckReasons = new Set<string>();
   handle('link:confirm-play-without-lighting', async (_event, reasonValue: unknown) => {
     const reason = z.string().min(1).max(4000).parse(reasonValue);
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '开播前检查', noLink: true,
       message: '这首歌的灯光还不能演出。', detail: reason, buttons: ['无灯光播放', '取消'], defaultId: 0, cancelId: 1 });
     // The song's lighting needs someone's attention: a warning the first time, info when it repeats song after song.
-    await logger.record({ level: firstTimeWarning(startCheckReasons, reason), category: 'operator', device: '正式播放器',
+    await logger.record({ level: firstTimeWarning(seenNotices, reason), category: 'operator', device: '正式播放器',
       message: `开播前检查：${reason}；${response === 0 ? '操作员选择无灯光播放' : '操作员取消播放'}` });
     return response === 0;
   });

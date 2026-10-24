@@ -1,4 +1,4 @@
-import { materialSceneTargets, type CueRuntime, type CueActionRunner, type MtcSample, type RuntimeUpdate, type ManagedMediaEvent, type PreflightReport } from '@tb/core/link';
+import { firstTimeWarning, materialSceneTargets, type CueRuntime, type CueActionRunner, type MtcSample, type RuntimeUpdate, type ManagedMediaEvent, type PreflightReport } from '@tb/core/link';
 import type { LinkProject, RundownItem, IntegrationProfile } from '@tb/schema';
 import type { P1LightingOutput } from './p1-lighting-output';
 import { PreflightBlockedError } from './preflight-blocked-error';
@@ -6,6 +6,9 @@ import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-vie
 import { internalSample, internalSeekState } from './internal-timeline';
 import { seekInternalRuntime } from './internal-runtime-seek';
 import type { ManagedOutputRuntime } from '@tb/core/link';
+
+/** OBS music capture failures already logged as warnings in this window. */
+const notedCaptureFailures = new Set<string>();
 
 export async function prepareRuntimeArm(project: LinkProject, item: RundownItem | undefined, context: {
   profile: IntegrationProfile | null; autoFollow: boolean; lighting: P1LightingOutput; runtime: CueRuntime; assertCurrent(): void;
@@ -40,7 +43,8 @@ export async function prepareInternalRuntime(project: LinkProject, itemId: strin
   catch (error) {
     context.assertCurrent();
     const message = `OBS 音乐采集未就绪：${error instanceof Error ? error.message : String(error)}。本机音频与画面动作继续，OBS 是否收到音乐请检查混音器。`;
-    await desktop.recordLog({ level: 'warning', category: 'device', device: 'OBS 音乐采集',
+    // Repeats song after song until fixed: a warning the first time, then info.
+    await desktop.recordLog({ level: firstTimeWarning(notedCaptureFailures, message), category: 'device', device: 'OBS 音乐采集',
       projectId: project.projectId, itemId, message, result: 'failed' });
     context.assertCurrent(); context.notice(message);
   }

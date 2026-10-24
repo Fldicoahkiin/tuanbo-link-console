@@ -1,6 +1,6 @@
 import { dirname } from 'node:path';
 import { stat, statfs } from 'node:fs/promises';
-import { millisecondsToFrameNumber, preciseSeekAssetIds, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type ObsProgramSessionDependencies } from '@tb/core/link';
+import { firstTimeWarning, millisecondsToFrameNumber, preciseSeekAssetIds, preflightLogEntries, projectFromObsSnapshot, runLinkPreflight, SceneOutputTimeline, type ObsProgramSessionDependencies } from '@tb/core/link';
 import type { NativeObsPrepare } from '@tb/schema';
 import type { ObsWebSocketAdapter } from './obs-websocket-adapter';
 import type { LinkProjectService } from './link-project-service';
@@ -13,7 +13,7 @@ import { redactValue } from './run-logger';
 import { ObsMediaPreload } from './obs-media-preload';
 import { obsMediaDecodeTargets } from './obs-media-decode';
 import { obsMediaCachePaths } from './obs-media-paths';
-import { PreparationSteps, preflightLogEntries, SLOW_PREPARATION_STEP_MS } from './preparation-log';
+import { PreparationSteps, SLOW_PREPARATION_STEP_MS } from './preparation-log';
 
 /** A picture preparation superseded by another song or a stop; not a failed output. */
 export class ObsPreparationCancelled extends Error {}
@@ -29,8 +29,8 @@ type Services = {
   profiles: SecureProfileStore; seek: ObsNativeSeek; logger: LinkRunLogger;
   audioIdentity: () => NativePlayerService['audioCaptureIdentity'];
   logFailure: (error: Error) => void;
-  /** Preflight advisories already recorded in this run of the software (preflightLogEntries). */
-  seenPreflightNotices: Set<string>;
+  /** Advisories and repeated warnings already recorded in this run of the software (preflightLogEntries, firstTimeWarning). */
+  seenNotices: Set<string>;
 };
 
 /** Per-program adapters. Original documents are neither rewritten nor reread;
@@ -177,7 +177,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         availableDiskBytes: disk.bavail * disk.bsize, minimumDiskBytes: 1_073_741_824,
         credentialsDecryptable: true, logRedactionReady: !password || !redacted.includes(password)
       });
-      for (const entry of preflightLogEntries(report.checks, services.seenPreflightNotices, project.projectId)) {
+      for (const entry of preflightLogEntries(report.checks, services.seenNotices, project.projectId)) {
         await logger.record({ ...entry, category: 'preflight', device: '后台画面', projectId: project.projectId, itemId: request.snapshot.item.id });
         assertCurrent();
       }
@@ -221,7 +221,8 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       catch (error) {
         assertCurrent();
         captureNotice = `OBS 音乐采集未就绪：${error instanceof Error ? error.message : String(error)}。本机音频与画面动作继续，OBS 是否收到音乐请检查混音器。`;
-        await logger.record({ level: 'warning', category: 'device', device: 'OBS 音乐采集',
+        // Repeats song after song until fixed: a warning the first time, then info.
+        await logger.record({ level: firstTimeWarning(services.seenNotices, captureNotice), category: 'device', device: 'OBS 音乐采集',
           projectId: project.projectId, itemId: request.snapshot.item.id, message: captureNotice, result: 'failed' });
       }
       assertCurrent();
