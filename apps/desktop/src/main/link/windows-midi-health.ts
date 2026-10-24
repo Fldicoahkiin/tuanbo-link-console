@@ -17,7 +17,8 @@ export function midiProbeExecutable(resourcesPath?: string): string {
   return resourcesPath ? join(resourcesPath, 'midi', 'tblink-midi-probe.exe') : resolve(__dirname, '../../../../tools/midi-probe/bin/tblink-midi-probe.exe');
 }
 
-/** Share one probe, retain failures until the operator explicitly checks again. */
+/** Share one probe, retain failures until the operator explicitly checks again
+ * (or the timecode port recovery does, while it waits for a lost port). */
 export class WindowsMidiHealth {
   private pending: Promise<MidiHealth> | null = null;
   private result: MidiHealth | null = null;

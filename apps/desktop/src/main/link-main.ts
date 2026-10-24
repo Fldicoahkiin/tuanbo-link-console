@@ -622,8 +622,8 @@ function registerIpc(
       const measured = (phase: string, elapsedMs: number): void => { void logger.record({ level: 'info', category: 'system', device: '正式音频', message: `正式音频准备：${phase}`, details: { elapsedMs } })
         .catch((error: unknown) => console.error('正式音频计时日志写入失败', error)); };
       nativePlayer = new NativePlayerService({
-        checkDeviceHealth: async () => {
-          const result = await midiHealth.check();
+        checkDeviceHealth: async (recheck) => {
+          const result = await midiHealth.check(recheck);
           if (result !== 'ready') throw new Error(midiHealthMessage(result));
         },
         executable: app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')

@@ -10,7 +10,8 @@ import { MtcPortRecovery, type MtcRecoveryReport } from './mtc-port-recovery';
 type Clock = Extract<NativePlaybackEvent, { kind: 'clock' }>;
 type Options = {
   executable: string; cache: Pick<NativeAudioCache, 'prepare'>;
-  checkDeviceHealth: () => Promise<void>;
+  /** Rejects while Windows MIDI is unhealthy; a failed check is repeated only with `recheck`. */
+  checkDeviceHealth: (recheck: boolean) => Promise<void>;
   resolveAudio: (projectPath: string, relativePath: string) => string;
   changed: (status: NativePlayerStatus, qpc100ns: string | null) => void;
   error: (message: string) => void;
@@ -47,7 +48,9 @@ export class NativePlayerService {
     this.preload = new NativeAudioPreload(options);
     this.deviceQuery = new NativeDeviceQuery(options.executable);
     this.audioDeviceQuery = new NativeDeviceQuery(options.executable, 'audio');
-    this.mtcRecovery = new MtcPortRecovery({ list: async () => (await this.devices('all')).midiOutputs, reopen: (device, name) => this.reopenMtc(device, name),
+    // Windows MIDI often stalls for a moment while a port is removed or added, so a check that
+    // failed meanwhile is repeated on each tick instead of being kept until the operator rechecks.
+    this.mtcRecovery = new MtcPortRecovery({ list: async () => (await this.devices('all', true)).midiOutputs, reopen: (device, name) => this.reopenMtc(device, name),
       recovered: report => {
         this.mtcRecoveredSent = this.state?.mtcSent ?? 0;
         this.patch({ mtcError: null, mtcPortName: report.portName, mtcRecovered: report }); this.options.recovered?.(report);
@@ -63,11 +66,11 @@ export class NativePlayerService {
     }
     return { executable: basename(this.options.executable), title: identity.title, windowClass: identity.windowClass, audioDeviceId: this.source.audioDeviceId };
   }
-  async devices(scope: NativeDeviceQueryRequest['scope'] = 'all') {
+  async devices(scope: NativeDeviceQueryRequest['scope'] = 'all', recheck = false) {
     if (this.closing) throw new Error('正式音频服务正在关闭');
     // The native inventory enumerates WinMM as well as WASAPI. Do not start a
     // helper that cannot consume its shutdown request when WinMM is unhealthy.
-    if (scope === 'all') await this.options.checkDeviceHealth();
+    if (scope === 'all') await this.options.checkDeviceHealth(recheck);
     if (this.closing) throw new Error('正式音频服务正在关闭');
     return (scope === 'audio' ? this.audioDeviceQuery : this.deviceQuery).read();
   }

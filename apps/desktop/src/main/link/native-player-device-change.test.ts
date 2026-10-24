@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { NativePlaybackCommand, NativePlaybackEvent, NativePlaybackDevices, NativePlayerPrepare } from '@tb/schema';
 import { NativePlayerService } from './native-player-service';
 import type { MtcRecoveryReport } from './mtc-port-recovery';
+import { WindowsMidiHealth, midiHealthMessage, type MidiHealth } from './windows-midi-health';
 
 const native = vi.hoisted(() => ({ devices: vi.fn<(scope: 'all' | 'audio') => Promise<NativePlaybackDevices>>(), commands: vi.fn<(command: NativePlaybackCommand) => void>(),
   emit: null as ((patch: Partial<Extract<NativePlaybackEvent, { kind: 'clock' }>>) => void) | null }));
@@ -145,6 +146,28 @@ it('播放中时间码接口断开：同一接口回来后重新打开并从当�
     native.emit!({ midiSent: 45, midiError: 0, qpc100ns: '6' });
     expect(service.status).toMatchObject({ mtcError: null, mtcSent: 45 });
     expect(f.error).toHaveBeenCalledOnce();
+  } finally { await service.close(); }
+});
+
+it('接口断开时系统 MIDI 检测超时一次：等待期间重新检测，同一接口回来后照常打开', async () => {
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: MtcRecoveryReport) => void>();
+  // Windows stalls while the port is removed: that one probe times out, later ones pass again.
+  const probe = vi.fn<() => Promise<MidiHealth>>().mockResolvedValue('ready'), health = new WindowsMidiHealth(probe);
+  const service = new NativePlayerService({ ...f.options, recovered, checkDeviceHealth: async recheck => {
+    const result = await health.check(recheck);
+    if (result !== 'ready') throw new Error(midiHealthMessage(result));
+  } });
+  try {
+    await service.prepare(f.request);
+    await service.control({ ...envelope, generation: 2, kind: 'play' });
+    f.devices.midiOutputs = [];
+    probe.mockResolvedValueOnce('timeout');
+    native.emit!({ midiSent: 41, midiError: 6, qpc100ns: '3' });
+    await vi.waitFor(() => expect(f.error).toHaveBeenCalledWith(expect.stringContaining('端口枚举未响应')), { timeout: 3000 });
+    f.devices.midiOutputs = [{ id: 5, name: 'test-mtc' }];
+    await vi.waitFor(() => expect(recovered).toHaveBeenCalledOnce(), { timeout: 3000 });
+    expect(native.commands.mock.calls.filter(([command]) => command.kind === 'reopen-mtc')).toEqual([[expect.objectContaining({ midiDevice: 5, midiPortName: 'test-mtc' })]]);
+    expect(service.status).toMatchObject({ status: 'playing', mtcPortName: 'test-mtc', mtcError: null });
   } finally { await service.close(); }
 });
 
