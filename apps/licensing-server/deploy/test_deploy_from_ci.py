@@ -1,11 +1,13 @@
 import importlib.util
 import io
+import os
 from pathlib import Path
 import stat
 import subprocess
 import tarfile
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('deploy_from_ci', Path(__file__).with_name('deploy-from-ci.py'))
 module = importlib.util.module_from_spec(spec)
@@ -57,6 +59,20 @@ class DeltaUploadTest(unittest.TestCase):
         for reply in [{'status': 'plan', 'upload': ['../escape']}, {'status': 'success'}, {'status': 'plan', 'upload': 'all'}]:
             with self.subTest(reply=reply), self.assertRaisesRegex(RuntimeError, 'invalid upload plan'):
                 self.deliver(reply)
+
+
+
+class SourceTest(unittest.TestCase):
+    def test_only_the_production_repository_and_branch_deploy(self):
+        # The repository moved from JinHe9527 to Fldicoahkiin; the old name, forks and other branches never deploy.
+        for repository, ref in [('JinHe9527/tuanbo-link-console', 'refs/heads/master'), ('someone/tuanbo-link-console', 'refs/heads/master'),
+                                ('Fldicoahkiin/tuanbo-link-console', 'refs/heads/feature')]:
+            with self.subTest(repository=repository, ref=ref), \
+                    patch.dict(os.environ, {'GITHUB_SHA': 'a' * 40, 'GITHUB_REPOSITORY': repository, 'GITHUB_REF': ref}), \
+                    patch.object(module.subprocess, 'run') as run:
+                with self.assertRaisesRegex(RuntimeError, 'Only the production repository and branch may deploy'):
+                    module.main()
+                run.assert_not_called()
 
 
 if __name__ == '__main__':

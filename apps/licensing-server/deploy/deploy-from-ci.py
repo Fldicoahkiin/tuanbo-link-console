@@ -50,7 +50,7 @@ def write_ssh_file(path, value):
 
 def main():
     revision = os.environ['GITHUB_SHA']
-    if (os.environ['GITHUB_REPOSITORY'] != 'JinHe9527/tuanbo-link-console'
+    if (os.environ['GITHUB_REPOSITORY'] != 'Fldicoahkiin/tuanbo-link-console'
             or os.environ['GITHUB_REF'] != 'refs/heads/master' or not re.fullmatch('[a-f0-9]{40}', revision)):
         raise RuntimeError('Only the production repository and branch may deploy')
     head = subprocess.run(['git', 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True, timeout=10).stdout.strip()

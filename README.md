@@ -110,7 +110,7 @@ OBS 原生预览组件随安装资源提供。通过 **设置 → 设备连接 �
 使用 Windows 原生 PowerShell；当前发行流水线验证环境为 Node.js 25.8.2、pnpm 10.33.0，Electron 版本锁定为 39.8.10。原生组件首次构建还需要 Git、Python（含 pip）及网络连接，工具依赖由构建脚本获取，详见 [IBT 构建说明](tools/ibt/README.md)。
 
 ```powershell
-git clone https://github.com/JinHe9527/tuanbo-link-console.git
+git clone https://github.com/Fldicoahkiin/tuanbo-link-console.git
 cd tuanbo-link-console
 corepack enable
 corepack prepare pnpm@10.33.0 --activate
