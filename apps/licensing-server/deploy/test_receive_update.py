@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import tempfile
@@ -64,6 +65,24 @@ class ReceiveUpdateTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Too many staged releases'):
             module.receive(upload(), self.staging)
 
+    def test_status_lists_staged_entries_and_a_running_upload(self):
+        module.receive(upload(), self.staging)
+        (self.staging / '.incoming-0123').mkdir()
+        self.assertEqual(module.status(self.staging), {'staged': ['0.5.0-cccccccccccc'], 'uploading': False})
+        held = module.upload_lock(self.staging)
+        try:
+            self.assertEqual(module.status(self.staging)['uploading'], True)
+            # A second upload, from another machine, is refused before it sends anything.
+            self.assertIsNone(module.upload_lock(self.staging))
+        finally:
+            os.close(held)
+        self.assertEqual(module.status(self.staging)['uploading'], False)
+
+    def test_the_lock_file_never_counts_as_a_staged_release(self):
+        os.close(module.upload_lock(self.staging))
+        for index in range(module.MAX_STAGED - 1):
+            (self.staging / f'0.4.{index}-{"d" * 12}').mkdir()
+        self.assertEqual(module.receive(upload(), self.staging)['staged'], '0.5.0-cccccccccccc')
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Restricted SSH receiver for Windows release candidates from the release builder.
+"""Restricted SSH receiver for Windows releases, used by the release relay (scripts/relay-release.mjs).
 
-Runs as tblink-release through ForceCommand, without sudo. It reads one uncompressed tar on stdin
-(release-manifest.json, latest.yml, the installer and its blockmap), checks the files against the
-manifest and writes them to a new staging entry. It never touches the feed: publishing is a separate,
-console-confirmed step in publish-update.py, which validates the entry again, signature included.
+Runs as tblink-release through ForceCommand, without sudo. Without a command it reads one uncompressed tar on
+stdin (release-manifest.json, latest.yml, the installer and its blockmap), checks the files against the manifest
+and writes them to a new staging entry. With the command `status` it only reports the staged entries and whether
+an upload is running, so a relay never sends a release the server already has. One upload at a time: a second one
+is refused at once. It never touches the feed: publish-update.py validates the entry again, signature included.
 """
+import fcntl
 import hashlib
 import json
 import os
@@ -18,10 +20,32 @@ import tarfile
 import uuid
 
 STAGING = Path('/var/lib/tblink-release/staging')
+STAGED_NAME = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[a-f0-9]{12}')
+LOCK = '.upload.lock'
 MAX_UPLOAD = 2 * 1024 ** 3
 MAX_STAGED = 5
 # Uploads come from the domestic build machine; a stalled connection must not hold the slot for good.
 UPLOAD_SECONDS = 3600
+
+
+def upload_lock(staging):
+    """The upload slot, held for as long as the returned descriptor is open, or None while another upload holds it.
+    Opened read-only, so taking it does not count as a change to the staging directory."""
+    descriptor = os.open(staging / LOCK, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o640)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(descriptor)
+        return None
+    return descriptor
+
+
+def status(staging=STAGING):
+    """What a relay checks before uploading: the complete staged entries and whether an upload is running."""
+    lock = upload_lock(staging)
+    if lock is not None:
+        os.close(lock)
+    return {'staged': sorted(path.name for path in staging.iterdir() if STAGED_NAME.fullmatch(path.name)), 'uploading': lock is None}
 
 
 def receive(stream, staging=STAGING):
@@ -100,7 +124,16 @@ if __name__ == '__main__':
     signal.signal(signal.SIGALRM, timeout)
     signal.alarm(UPLOAD_SECONDS)
     try:
+        command = os.environ.get('SSH_ORIGINAL_COMMAND', '')
+        if command == 'status':
+            print(json.dumps(status()))
+            sys.exit(0)
+        if command:
+            raise RuntimeError('Unknown command')
+        lock = upload_lock(STAGING)
+        if lock is None:
+            raise RuntimeError('Another upload is in progress')
         print(json.dumps(receive(sys.stdin.buffer)))
-    except Exception as error:  # The CI step reads this line; nothing is staged.
+    except Exception as error:  # The relay reads this line; nothing is staged.
         print(json.dumps({'error': str(error)}), file=sys.stderr)
         sys.exit(1)

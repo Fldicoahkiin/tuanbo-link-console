@@ -1,14 +1,12 @@
 name: Release Windows
 
 # A pushed vX.Y.Z tag is the release: nothing after it needs a person.
-#   verify    GitHub-hosted: version, typecheck, tests, lint.
-#   build     GitHub-hosted: fetches the pinned beauty and music-analysis assets from their own releases, packages,
-#             signs latest.yml with the release key (secret) and puts the four files into a draft release on the tag.
-#             No Actions artifacts: a private repository has only 500 MB of artifact storage.
-#   transfer  The builder in the office (self-hosted, label release-builder), the only machine with the server's
-#             upload key: downloads the draft, uploads it to the server's staging area, waits until the server has
-#             published it on its own, then publishes the draft marked Latest. When the builder is off the job waits
-#             in the queue; after the queue gives up, re-run only this job (Re-run failed jobs).
+#   verify  GitHub-hosted: version, typecheck, tests, lint.
+#   build   GitHub-hosted: fetches the pinned beauty and music-analysis assets from their own releases, packages,
+#           signs latest.yml with the release key (secret) and puts the four files into a draft release on the tag.
+#           No Actions artifacts: a private repository has only 500 MB of artifact storage.
+# The server's upload key never goes to GitHub. scripts/relay-release.mjs carries the draft to the server and publishes
+# it once the feed serves it: the office PC runs it every 10 minutes, and a Mac can run it by hand (pnpm release:relay).
 
 on:
   push:
@@ -135,44 +133,3 @@ jobs:
           node scripts/draft-github-release.mjs ($env:GITHUB_REF_NAME.Substring(1)) apps/desktop/dist
           if ($LASTEXITCODE -ne 0) { throw 'Draft release failed' }
 
-  transfer:
-    needs: build
-    runs-on: [self-hosted, windows, release-builder]
-    timeout-minutes: 120
-    # Reads the draft and publishes it.
-    permissions:
-      contents: write
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
-      TBLINK_RELEASE_UPLOAD_KEY: D:/tblink-release-signing/upload/tblink-release-ed25519
-      TBLINK_RELEASE_KNOWN_HOSTS: D:/tblink-release-signing/upload/known_hosts
-      # Windows' own ssh.exe stops sending a large stdin after about 100 KB; Git for Windows' sends it through.
-      TBLINK_RELEASE_SSH: C:\Program Files\Git\usr\bin\ssh.exe
-      NODE_USE_ENV_PROXY: '1'
-      # The server and the feed are in China and are reached directly; GitHub goes through the builder's proxy (runner .env).
-      NO_PROXY: localhost,127.0.0.1,.jinhefilm.com
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
-        with:
-          persist-credentials: false
-
-      - name: Use Node.js 25.8.2
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 (v7.1.0)
-        with:
-          node-version: 25.8.2
-
-      - name: Download the draft release
-        shell: pwsh
-        run: |
-          node scripts/fetch-draft-release.mjs ($env:GITHUB_REF_NAME.Substring(1)) $env:GITHUB_SHA apps/desktop/dist
-          if ($LASTEXITCODE -ne 0) { throw 'Draft download failed' }
-
-      - name: Upload to the server's staging area
-        run: node scripts/upload-release.mjs
-
-      - name: Wait for the server to publish, then publish the GitHub release
-        shell: pwsh
-        run: |
-          node scripts/publish-github-release.mjs ($env:GITHUB_REF_NAME.Substring(1)) apps/desktop/dist
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub release failed' }
