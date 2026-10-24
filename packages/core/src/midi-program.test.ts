@@ -89,9 +89,18 @@ it('接口恢复后从当前位置开始：准备期间经过的动作属于中�
   const pc = (id: string, program: number): LinkAction => ({ id, label: id, kind: 'midi.programChange', portProfileId: 'out', channel: 1, program });
   const f = fixture([{ frame: 45, actions: [pc('during', 1)] }, { frame: 90, actions: [pc('after', 2)] }]);
   await f.session.prepare(1000);
-  f.session.resumeFrom(2500);
+  expect(f.session.resumeFrom(2500, 1200)).toBe(1);
   await f.clock(2510); expect(f.sent).toEqual([]); expect(f.missed).toEqual([]);
   await f.clock(3000); expect(f.sent).toEqual([[0xc0, 2]]);
-  expect(() => f.session.resumeFrom(4000)).toThrow('恢复位置无效'); expect(f.errors).toEqual([]);
+  expect(() => f.session.resumeFrom(4000, 0)).toThrow('恢复位置无效'); expect(f.errors).toEqual([]);
   await f.session.close();
+});
+
+it('发送失败的会话记下中断起点：第一条没发出的动作，其后排队的动作不算起点', async () => {
+  const pc = (id: string, program: number): LinkAction => ({ id, label: id, kind: 'midi.programChange', portProfileId: 'out', channel: 1, program });
+  const f = fixture([{ frame: 30, actions: [pc('lost', 1)] }, { frame: 31, actions: [pc('queued', 2)] }]);
+  await f.session.prepare(0); await f.clock(500); expect(f.session.outageStartMs).toBe(500);
+  f.send.mockRejectedValueOnce(new Error('MIDI 输出失败：接口已断开（错误码 6）'));
+  f.time(1050); f.session.clock(1050, 1050); await f.session.settled(); await f.session.close();
+  expect(f.session.error?.message).toContain('错误码 6'); expect(f.session.outageStartMs).toBe(1000); expect(f.sent).toEqual([]);
 });

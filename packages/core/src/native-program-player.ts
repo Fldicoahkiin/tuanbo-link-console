@@ -201,6 +201,8 @@ export class NativeProgramPlayer {
   runtimeUnavailable(message: string): void { this.runtimePrepared = false; this.reportUnavailable(message); }
   /** A live output failure: shown in red; audio and the remaining actions continue. */
   reportFault(message: string): void { if (['preparing', 'playing', 'paused'].includes(this.state.status) && this.state.fault !== message) this.update({ fault: message }); }
+  /** The output behind this red message is back: clear it if it is still the one shown. */
+  clearFault(message: string): void { if (this.state.fault === message) this.update({ fault: null }); }
   /** An output that could not join or left this song: logged and shown in red, audio continues. */
   private startFault(message: string): void { this.dependencies.notice?.(message, this.state.itemId); this.reportFault(message); }
   reportUnavailable(message: string): void {

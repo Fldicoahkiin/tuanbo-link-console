@@ -62,6 +62,8 @@ export class MidiProgramSession {
   private queued = 0;
   private failure: Error | null = null;
   private closing: Promise<void> | null = null;
+  /** Audio position of the first action not sent because the session failed. */
+  private unsentFromMs: number | null = null;
 
   constructor(project: LinkProject, itemId: string, private readonly dependencies: MidiProgramDependencies) {
     const item = project.rundown.find(entry => entry.id === itemId);
@@ -86,6 +88,8 @@ export class MidiProgramSession {
   }
 
   get error(): Error | null { return this.failure; }
+  /** Where a failed session's outage began: its first unsent action, or its last position when none was due. */
+  get outageStartMs(): number { return this.unsentFromMs ?? this.position; }
   get pendingCount(): number { return this.queued; }
   settled(): Promise<void> { return this.tail; }
   abort(reason: string): void { this.fail(new Error(reason)); }
@@ -103,11 +107,13 @@ export class MidiProgramSession {
     } catch (error) { const failure = toError(error); if (!this.cancellation.signal.aborted) this.fail(failure); throw failure; }
   }
 
-  /** A session opened after its port came back (authorised 2026-10-24): actions up to this audio
-   * position fell into the outage and are left out, not reported as missed. Only before the first clock. */
-  resumeFrom(positionMs: number): void {
+  /** A session opened after its port came back (authorised 2026-10-24): actions from the outage start up
+   * to this audio position are left out, not reported as missed. Only before the first clock; returns
+   * how many actions the outage skipped. */
+  resumeFrom(positionMs: number, outageStartMs: number): number {
     if (this.state !== 'ready' || !Number.isFinite(positionMs) || positionMs < this.position) throw new Error('MIDI 会话恢复位置无效');
     this.position = positionMs; this.cursor = lowerBound(this.events, positionMs, true);
+    return this.events.filter(event => !event.release && event.atMs >= outageStartMs && event.atMs <= positionMs).length;
   }
 
   clock(positionMs: number, observedAtMs: number): void {
@@ -126,7 +132,7 @@ export class MidiProgramSession {
         if (this.queued >= 32) throw new Error('MIDI 节目动作积压，已停止该通道');
         this.queued++;
         this.tail = this.tail.then(async () => {
-          if (epoch !== this.epoch || this.failure) return;
+          if (epoch !== this.epoch || this.failure) { if (this.failure && !event.release) this.unsentFromMs ??= event.atMs; return; }
           const key = noteKey(event.action), owned = key ? this.notes.get(key) : undefined;
           if (event.release) {
             if (!owned?.delete(event.token)) return;
@@ -141,7 +147,7 @@ export class MidiProgramSession {
             const notes = this.notes.get(key) ?? new Set<number>(); notes.add(event.token); this.notes.set(key, notes);
           } else if (key) this.notes.delete(key);
           this.dependencies.sent(event.cueId, event.action.id, event.release);
-        }).catch(error => { if (epoch === this.epoch) this.fail(toError(error)); })
+        }).catch(error => { if (!event.release) this.unsentFromMs ??= event.atMs; if (epoch === this.epoch) this.fail(toError(error)); })
           .finally(() => { this.queued--; });
       }
       if (missed) this.dependencies.missed(`播放位置更新中断，错过 ${missed} 个 MIDI 动作，未补发`);
