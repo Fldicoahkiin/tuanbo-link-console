@@ -132,6 +132,17 @@ jobs:
           if ($LASTEXITCODE -ge 8) { throw "复制美颜产物失败：robocopy $LASTEXITCODE" }
           $global:LASTEXITCODE = 0
 
+      - name: Use the pinned music-analysis runtime
+        shell: pwsh
+        run: |
+          # release-pin.json fixes the runtime, models and licenses; afterPack fails the build if they differ.
+          $pin = Get-Content -Raw tools/music-analysis/release-pin.json | ConvertFrom-Json
+          $source = Join-Path $env:TBLINK_ASSETS ("music-analysis\" + $pin.outputs.sha256.Substring(0, 12))
+          if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "构建机缺少固定版本的音乐分析运行时：$source" }
+          robocopy $source artifacts\music-analysis /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { throw "复制音乐分析运行时失败：robocopy $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0
+
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
 

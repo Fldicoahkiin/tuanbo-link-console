@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPackagedDesktop } from '../tools/obs/beauty/verify-packaged-desktop.mjs';
+import { musicWorkerFiles, verifyMusicRelease } from '../tools/music-analysis/release-pin.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const requireDesktop = createRequire(join(root, 'apps/desktop/package.json'));
@@ -16,13 +16,9 @@ const durationMs = Number(process.argv[4]), directory = resolve(process.argv[5])
 assert.ok(Number.isFinite(durationMs) && durationMs > 0);
 await mkdir(directory);
 const resources = join(dirname(executable), 'resources/music-analysis');
-const manifest = JSON.parse(await readFile(join(resources, 'runtime-manifest.json'), 'utf8'));
-for (const file of manifest.files) {
-  const hash = createHash('sha256'); let bytes = 0;
-  for await (const chunk of createReadStream(join(resources, file.path))) { hash.update(chunk); bytes += chunk.length; }
-  assert.equal(hash.digest('hex'), file.sha256, file.path);
-  assert.equal(bytes, file.bytes, file.path);
-}
+// The installed runtime is the pinned one and its worker modules are this checkout's.
+const runtimeTree = await verifyMusicRelease(resources);
+for (const name of musicWorkerFiles) assert.ok((await readFile(join(resources, name))).equals(await readFile(join(root, 'tools/music-analysis', name))), name);
 await copyFile(audio, join(directory, '验收音乐.wav'));
 const sha256 = createHash('sha256').update(await readFile(join(directory, '验收音乐.wav'))).digest('hex');
 const source = { assetId: 'music', relativePath: '验收音乐.wav', sha256, durationMs };
@@ -55,5 +51,5 @@ try {
   }
   await page.screenshot({ path: join(directory, 'installed-workspace.png') });
 } finally { await app.close(); }
-await writeFile(join(directory, 'acceptance.json'), JSON.stringify({ executable, checkedAt: new Date().toISOString(), verifiedFiles: manifest.files.length, source, reports }, null, 2));
+await writeFile(join(directory, 'acceptance.json'), JSON.stringify({ executable, checkedAt: new Date().toISOString(), runtimeTree, verifiedModules: musicWorkerFiles.length, source, reports }, null, 2));
 console.log('安装版真实 IPC → 随包 Python → 全部本地模型 → 结果及缓存检查通过');

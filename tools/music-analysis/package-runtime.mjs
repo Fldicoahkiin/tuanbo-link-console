@@ -1,4 +1,4 @@
-// Assemble an isolated Windows CPU runtime for the explicitly requested test channel.
+// Assemble the isolated Windows CPU runtime that the official package ships (pinned in release-pin.json).
 // Preparation is offline: all packages and weights must already exist locally.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -6,6 +6,7 @@ import { createReadStream } from 'node:fs';
 import { cp, mkdir, readdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { musicWorkerFiles } from './release-pin.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 if (process.platform !== 'win32' || !process.argv[2]) throw new Error('需要 Windows 和新的模型包输出目录');
@@ -34,11 +35,8 @@ await cp(join(environment, 'Lib/site-packages'), join(runtime, 'Lib/site-package
 // _pth ignores machine Python, registry entries, PYTHONPATH and user site packages.
 // The parent contains our worker modules; site processes package DLL loader hooks.
 await writeFile(join(runtime, 'python311._pth'), '.\nLib\nDLLs\nLib/site-packages\n..\nimport site\n');
-for (const name of ['worker.py', 'analyze.py', 'phrase_structure.py', 'assets.py', 'contracts.py', 'consensus.py', 'evaluate.py', 'semantic_evaluation.py', 'pyproject.toml', 'uv.lock']) {
-  await cp(join(root, 'tools/music-analysis', name), join(destination, name));
-}
+for (const name of musicWorkerFiles) await cp(join(root, 'tools/music-analysis', name), join(destination, name));
 await cp(join(root, 'output/music-analysis/models'), join(destination, 'models'), { recursive: true });
-await cp(join(root, 'tools/music-analysis/DISTRIBUTION_NOTICE.md'), join(destination, 'DISTRIBUTION_NOTICE.md'));
 const notices = join(destination, 'licenses');
 await mkdir(notices);
 for (const name of ['all-in-one-infer-8414233b743d6ccec46e36ab4cfeddb4605ff3bf', 'demucs-infer-ffe0080ef96336a34e3f0ee8ba22ceaa0623a36c', 'madmom-infer-a9ed04ec942dd6ec5309df7ce7f3783d1bb42575']) {
@@ -60,5 +58,5 @@ async function inventory(directory, relative = '') {
   }
 }
 await inventory(destination);
-await writeFile(join(destination, 'runtime-manifest.json'), JSON.stringify({ version: 1, channel: 'portable-test', device: 'cpu', python: base.version.join('.'), torch: verification.torch, modelDigest: verification.modelDigest, files }, null, 2));
+await writeFile(join(destination, 'runtime-manifest.json'), JSON.stringify({ version: 1, channel: 'release', device: 'cpu', python: base.version.join('.'), torch: verification.torch, modelDigest: verification.modelDigest, files }, null, 2));
 console.log(`离线音乐运行时准备完成：${files.length} 文件，${files.reduce((sum, file) => sum + file.bytes, 0)} 字节`);
