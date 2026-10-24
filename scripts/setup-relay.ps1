@@ -4,6 +4,8 @@
 # 安装包在 GitHub 云端构建，放进草稿 release；这台电脑上的计划任务每 10 分钟（以及登录、联网时）运行
 # relay-release.mjs，把草稿送到服务器，服务器发布后把 release 转为正式。只有 gh 没登录时要你在浏览器里登录。
 $ErrorActionPreference = 'Stop'
+# node 的输出是 UTF-8；Windows PowerShell 5.1 默认按 GBK 解码，中文会乱，最后一行的「本次同步」也认不出。
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $repo = 'Fldicoahkiin/tuanbo-link-console'
 $here = $PSScriptRoot
 $relay = 'D:\tblink-relay'
