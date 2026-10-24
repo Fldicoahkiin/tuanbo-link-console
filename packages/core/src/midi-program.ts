@@ -103,6 +103,13 @@ export class MidiProgramSession {
     } catch (error) { const failure = toError(error); if (!this.cancellation.signal.aborted) this.fail(failure); throw failure; }
   }
 
+  /** A session opened after its port came back (authorised 2026-10-24): actions up to this audio
+   * position fell into the outage and are left out, not reported as missed. Only before the first clock. */
+  resumeFrom(positionMs: number): void {
+    if (this.state !== 'ready' || !Number.isFinite(positionMs) || positionMs < this.position) throw new Error('MIDI 会话恢复位置无效');
+    this.position = positionMs; this.cursor = lowerBound(this.events, positionMs, true);
+  }
+
   clock(positionMs: number, observedAtMs: number): void {
     if (this.state !== 'ready' && this.state !== 'running') return;
     try {

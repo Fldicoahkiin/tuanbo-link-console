@@ -84,3 +84,14 @@ it('输出失败清除本轮队列，不将后续动作报告成功、不自动�
   expect(f.send).toHaveBeenCalledOnce(); expect(f.reported).not.toHaveBeenCalled(); expect(f.errors[0]?.message).toBe('驱动断开');
   expect(f.prepare).toHaveBeenCalledOnce(); expect(f.close).toHaveBeenCalledOnce();
 });
+
+it('接口恢复后从当前位置开始：准备期间经过的动作属于中断，既不发送也不记为错过', async () => {
+  const pc = (id: string, program: number): LinkAction => ({ id, label: id, kind: 'midi.programChange', portProfileId: 'out', channel: 1, program });
+  const f = fixture([{ frame: 45, actions: [pc('during', 1)] }, { frame: 90, actions: [pc('after', 2)] }]);
+  await f.session.prepare(1000);
+  f.session.resumeFrom(2500);
+  await f.clock(2510); expect(f.sent).toEqual([]); expect(f.missed).toEqual([]);
+  await f.clock(3000); expect(f.sent).toEqual([[0xc0, 2]]);
+  expect(() => f.session.resumeFrom(4000)).toThrow('恢复位置无效'); expect(f.errors).toEqual([]);
+  await f.session.close();
+});
