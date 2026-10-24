@@ -35,7 +35,7 @@ windowsTest('正式后台宿主使用真实 WASAPI 换歌、暂停恢复；空�
     checkDeviceHealth: async () => { expect(await probeWindowsMidi(resolve('tools/midi-probe/bin/tblink-midi-probe.exe'))).toBe('ready'); },
     changed: (status, qpc) => host?.observe(status, qpc), beforeControl: request => host?.interrupt(request), error: message => errors.push(message) });
   host = new NativeProgramHost(project, join(directory, 'project.tblink'), 1, {
-    executable, audio: () => service.status, authorize: () => Promise.resolve(), preciseSeeking: () => false,
+    executable, audio: () => service.status, midiOutputs: async () => (await service.devices('all', true)).midiOutputs, authorize: () => Promise.resolve(), preciseSeeking: () => false,
     configuration: () => ({ outputDeviceId: 'default', audioSampleRate: 48000, mtcPortName: null, preload: false }),
     changed: value => { state = value; }, midiChanged: () => undefined, notice: message => notices.push(message),
     api: { prepareNativePlayback: request => service.prepare(request), controlNativePlayback: request => service.control(request),
@@ -80,7 +80,7 @@ windowsTest('44.1kHz 真实引擎曲尾不在整采样上时，灯光按引擎�
     checkDeviceHealth: () => Promise.resolve(),
     changed: (status, qpc) => host?.observe(status, qpc), beforeControl: request => host?.interrupt(request), error: message => errors.push(message) });
   host = new NativeProgramHost(project, join(directory, 'project.tblink'), 1, {
-    executable, audio: () => service.status, authorize: () => Promise.resolve(), preciseSeeking: () => false,
+    executable, audio: () => service.status, midiOutputs: async () => (await service.devices('all', true)).midiOutputs, authorize: () => Promise.resolve(), preciseSeeking: () => false,
     configuration: () => ({ outputDeviceId: 'default', audioSampleRate: 44100, mtcPortName: null, preload: false }),
     changed: value => { state = value; }, midiChanged: () => undefined, notice: message => notices.push(message),
     api: { prepareNativePlayback: request => service.prepare(request), controlNativePlayback: request => service.control(request),

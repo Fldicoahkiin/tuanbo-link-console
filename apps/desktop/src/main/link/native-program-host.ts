@@ -10,6 +10,8 @@ type Dependencies = {
   api: AudioApi;
   network: Pick<LinkDesktopApi, 'getMa2NetworkStatus' | 'cancelMa2Playback' | 'playMa2Cue'>;
   audio(): NativePlayerStatus | null;
+  /** Windows MIDI outputs as listed now, checked again when the last listing failed: waits for a lost action MIDI port. */
+  midiOutputs(): Promise<readonly { id: number; name: string }[]>;
   authorize(): Promise<void>;
   configuration: InternalPlayerDependencies['configuration'];
   preciseSeeking(): boolean;
@@ -35,7 +37,8 @@ export class NativeProgramHost {
     const error = (message: string) => this.controller.reportUnavailable(message);
     this.midi = new NativeMidiHost({ audio: () => dependencies.audio(), profile: () => dependencies.configuration().lightingProfile ?? null,
       executable: dependencies.executable, authorize: () => dependencies.authorize(), changed: state => dependencies.midiChanged(state), error,
-      fault: (message, itemId) => { dependencies.notice(message, itemId); this.controller.reportFault(message); } });
+      fault: (message, itemId) => { dependencies.notice(message, itemId); this.controller.reportFault(message); },
+      outputs: () => dependencies.midiOutputs(), recovered: (message, itemId) => { dependencies.notice(message, itemId); this.controller.reportUnavailable(message); } });
     this.lighting = new NativeLightingOutput({ executable: dependencies.executable, network: dependencies.network,
       authorize: () => dependencies.authorize(), error });
     this.controller = new NativeProgramPlayer(project, path, revision, {

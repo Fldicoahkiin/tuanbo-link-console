@@ -907,6 +907,7 @@ function registerIpc(
       executable: app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
         : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe'),
       audio: () => nativePlayer?.status ?? null, authorize: () => authorizeOutput(), configuration: () => callbacks.configuration(),
+      midiOutputs: async () => (await player().devices('all', true)).midiOutputs,
       preciseSeeking: () => callbacks.configuration().preciseSeeking, changed: state => callbacks.changed(state),
       midiChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); },
       obsChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); }, notice,

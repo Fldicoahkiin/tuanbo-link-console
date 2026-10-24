@@ -1,22 +1,28 @@
 import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type NativeMidiChannelState } from './native-midi-host';
+import { MidiOutputFailure } from './native-midi-output';
 import { frameNumberToTimecode } from '@tb/core/link';
 
-function fixture() {
+function fixture(cueFrames: readonly number[] = [0]) {
   const project = parseLinkProject({ ...createEmptyLinkProject('后台 MIDI 宿主'), playbackSource: 'internal', rundown: [{ id: 'song', title: '节目',
-    cues: [{ id: 'cue', name: '动作', timecode: frameNumberToTimecode(0, '30'), actions: [{ id: 'pc', label: 'PC', kind: 'midi.programChange', portProfileId: 'out', channel: 1, program: 1 }] }] }] });
+    cues: cueFrames.map((frame, index) => ({ id: `cue-${index}`, name: `动作 ${index + 1}`, timecode: frameNumberToTimecode(frame, '30'),
+      actions: [{ id: `pc-${index}`, label: `PC ${index + 1}`, kind: 'midi.programChange' as const, portProfileId: 'out', channel: 1, program: index + 1 }] })) }] });
   let audio: NativePlayerStatus = { version: 1, sessionId: '4d081ed2-7f76-44c8-9c45-b0e06e860870', generation: 1, itemId: 'song',
     status: 'ready', positionMs: 0, offsetMs: 480000, sampleRate: 48000, enginePid: 1, engineTitle: '验收',
     mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: 1, analysis: null };
   const identity = { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId };
   const ports = { prepare: vi.fn<() => Promise<void>>(() => Promise.resolve()), send: vi.fn<() => Promise<void>>(() => Promise.resolve()), close: vi.fn<() => Promise<void>>(() => Promise.resolve()) };
-  const states: NativeMidiChannelState[] = [], errors: string[] = [], faults: [string, string][] = [];
+  const states: NativeMidiChannelState[] = [], errors: string[] = [], faults: [string, string][] = [], recovered: [string, string][] = [];
+  // The failure callback of the latest port session: what a driver helper reports when its port goes away.
+  let failed: (error: Error) => void = () => undefined;
+  const outputs = vi.fn<() => Promise<{ id: number; name: string }[]>>(() => Promise.resolve([{ id: 3, name: 'TBLINK CUE' }]));
   const host = new NativeMidiHost({ audio: () => audio, profile: () => null, executable: 'unused', now: () => 1000,
-    authorize: () => Promise.resolve(), ports: () => ports, changed: state => states.push(state), error: message => errors.push(message),
-    fault: (message, itemId) => faults.push([message, itemId]) });
+    authorize: () => Promise.resolve(), ports: report => { failed = report; return ports; }, changed: state => states.push(state), error: message => errors.push(message),
+    fault: (message, itemId) => faults.push([message, itemId]), outputs, recovered: (message, itemId) => recovered.push([message, itemId]) });
   const observe = (patch: Partial<NativePlayerStatus>, qpc: string | null = '10000000') => { audio = { ...audio, ...patch }; host.observe(audio, qpc); };
-  return { project, host, identity, ports, states, errors, faults, observe, audio: () => audio };
+  const unplug = (code = 6) => failed(new MidiOutputFailure(`MIDI 输出失败：接口已断开（错误码 ${code}）`, code, 'TBLINK CUE'));
+  return { project, host, identity, ports, states, errors, faults, recovered, outputs, observe, unplug, audio: () => audio };
 }
 
 it('仅实际设备时钟开始通用 MIDI，音频原始偏移不重复加到歌曲 Cue', async () => {
@@ -82,5 +88,54 @@ it('MIDI 口断开使上一首关闭失败：只报告一次，后面的歌照�
   f.observe({ generation: 3 }); await f.host.prepare(f.project, { ...f.identity, generation: 3 });
   expect(f.host.status?.state).toBe('ready'); expect(f.ports.prepare).toHaveBeenCalledTimes(3);
   expect(f.errors).toEqual(['上一首 MIDI 会话关闭失败：MIDI 驱动服务异常退出：3']);
+  await f.host.stop();
+});
+
+it('播放中动作 MIDI 接口断开：同一接口回来后从当前位置起照常发送，中断期间的动作不补发', async () => {
+  const f = fixture([0, 60, 120]); await f.host.prepare(f.project, f.identity);
+  f.observe({ status: 'playing', generation: 2, positionMs: 20 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
+  f.outputs.mockResolvedValue([]);
+  f.unplug();
+  expect(f.errors).toEqual(['MIDI 输出失败：接口已断开（错误码 6）']); expect(f.host.status?.state).toBe('failed');
+  // The action at 2 s falls into the outage; the port is back at 2.5 s.
+  f.observe({ positionMs: 2010 }); f.observe({ positionMs: 2500 });
+  f.outputs.mockResolvedValue([{ id: 4, name: 'TBLINK CUE' }]);
+  await vi.waitFor(() => expect(f.recovered).toHaveLength(1), { timeout: 3000 });
+  expect(f.recovered[0]?.[0]).toMatch(/^动作 MIDI 中断 \d+\.\d 秒后已恢复（TBLINK CUE）/); expect(f.recovered[0]?.[1]).toBe('song');
+  expect(f.ports.prepare).toHaveBeenCalledTimes(2); expect(f.host.status?.state).toBe('ready');
+  f.observe({ positionMs: 4010 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
+  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 1090);
+  expect(f.faults).toEqual([]); expect(f.errors).toHaveLength(1);
+  await f.host.stop();
+});
+
+it('重新打开后首个动作发送失败：继续等待同一接口并再次打开，不当作永久故障', async () => {
+  const f = fixture([0, 60, 120]); await f.host.prepare(f.project, f.identity);
+  f.observe({ status: 'playing', generation: 2, positionMs: 20 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
+  f.unplug(); f.observe({ positionMs: 1500 });
+  await vi.waitFor(() => expect(f.recovered).toHaveLength(1), { timeout: 3000 });
+  // Seen on the dev PC: a port Windows is still creating opens, then its first message fails (error 1).
+  f.ports.send.mockImplementationOnce(() => { f.unplug(1); return Promise.reject(new Error('MIDI 输出失败：Windows 错误 1')); });
+  f.observe({ positionMs: 2010 }); await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
+  expect(f.errors[1]).toContain('动作 MIDI 端口重新打开后首个动作未发出（TBLINK CUE，错误码 1）');
+  f.observe({ positionMs: 2500 });
+  await vi.waitFor(() => expect(f.recovered).toHaveLength(2), { timeout: 3000 });
+  f.observe({ positionMs: 4010 }); await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(3));
+  expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 1090); expect(f.errors).toHaveLength(2);
+  await f.host.stop();
+});
+
+it('接口断开后暂停或停止：不再等待该接口，也不打开端口', async () => {
+  const f = fixture(); await f.host.prepare(f.project, f.identity);
+  f.observe({ status: 'playing', generation: 2, positionMs: 20 });
+  await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledOnce());
+  f.unplug();
+  f.host.interrupt({ version: 1, sessionId: f.identity.sessionId, generation: 3, kind: 'pause' });
+  f.observe({ status: 'paused', generation: 3 });
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  expect(f.ports.prepare).toHaveBeenCalledOnce(); expect(f.recovered).toEqual([]);
   await f.host.stop();
 });

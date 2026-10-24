@@ -7,6 +7,12 @@ type Pending = { id: number; bytes: Buffer; deadline: bigint; resolve: (accepted
   reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 
 export type NativeMidiReceipt = { acceptedAt100ns: bigint };
+/** A Windows error from the driver helper, with the port it concerns. */
+export class MidiOutputFailure extends Error {
+  constructor(message: string, readonly code: number, readonly portName: string) { super(message); }
+  /** 5/6: the interface is gone; -2: no output carries the name (yet). */
+  get portGone(): boolean { return this.code === 5 || this.code === 6 || this.code === -2; }
+}
 
 /** One port, one owned driver process, one command in flight. Queued commands
  * stay in this process so cancellation never leaves a pipe full of old Cue. */
@@ -21,6 +27,7 @@ export class NativeMidiOutput {
   private exited: Promise<void> | null = null;
   private exitError: Error | null = null;
   private closeTask: Promise<void> | null = null;
+  private portName = '';
 
   constructor(private readonly executable: string, private readonly reportFailure: (error: Error) => void) {}
 
@@ -28,7 +35,7 @@ export class NativeMidiOutput {
     if (this.state !== 'new') throw new Error('MIDI 输出已打开、失败或关闭；必须明确准备新会话');
     const payload = Buffer.from(portName, 'utf8');
     if (!portName || portName.includes('\0') || portName.length > 256 || payload.length > 1024) throw new Error('MIDI 输出端口名称无效');
-    this.state = 'opening';
+    this.state = 'opening'; this.portName = portName;
     try {
       this.start();
       await this.enqueue(1, payload, 0n, 2000);
@@ -109,7 +116,7 @@ export class NativeMidiOutput {
         const response = responseSchema.parse(JSON.parse(this.buffer)); this.buffer = '';
         const pending = this.active;
         if (!pending || pending.id !== response.requestId) throw new Error('MIDI 响应不属于当前请求，停止输出');
-        if (response.code !== 0) throw new Error(nativeError(response.code));
+        if (response.code !== 0) throw new MidiOutputFailure(nativeError(response.code), response.code, this.portName);
         const accepted = BigInt(response.acceptedAt100ns);
         if (accepted === 0n || accepted > now100ns() + 10_000n) throw new Error('MIDI 驱动确认时间无效');
         if (pending.deadline && accepted >= pending.deadline) throw new Error('MIDI 驱动确认超过截止时间；动作可能已执行，停止该通道');
@@ -146,8 +153,11 @@ export class NativeMidiOutput {
 function now100ns(): bigint { return process.hrtime.bigint() / 100n; }
 function toError(error: unknown): Error { return error instanceof Error ? error : new Error(String(error)); }
 function nativeError(code: number): string {
-  const reasons: Record<number, string> = { 4: '端口资源被占用（错误码 4），请退出使用该接口的软件', [-1]: '指令或状态无效', [-2]: '指定输出端口不存在', [-3]: '输出端口名称不唯一',
+  const reasons: Record<number, string> = { 4: '端口资源被占用（错误码 4），请退出使用该接口的软件', [-1]: '指令或状态无效', [-3]: '输出端口名称不唯一',
     [-4]: 'Windows 驱动等待失败', [-5]: '打开的端口身份发生变化', [-6]: '前一条 SysEx 未及时完成', [-7]: '动作已过期，未发送' };
+  // The same port is opened again once it is back (authorised 2026-10-24); other failures are left to the operator.
+  if (code === 5 || code === 6) return `MIDI 输出失败：接口已断开（错误码 ${code}）；同一接口重新连接后自动恢复，中断期间的动作不补发`;
+  if (code === -2) return 'MIDI 输出失败：指定输出端口不存在；该接口出现后自动开始发送';
   return `MIDI 输出失败：${reasons[code] ?? `Windows 错误 ${code}`}；已停止该通道，不自动重试`;
 }
 function validateMessage(message: readonly number[]): void {
