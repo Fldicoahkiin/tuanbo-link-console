@@ -2,7 +2,8 @@
 // release, the builder downloads it, and the builder publishes it once the update feed serves it. The pinned build
 // assets live in releases of their own. Needs GITHUB_TOKEN.
 import { createHash } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
@@ -31,9 +32,19 @@ export async function findRelease(tag) {
   return releaseOf(await github(`/repos/${REPOSITORY}/releases?per_page=100`), tag);
 }
 
-export async function uploadAsset(release, name, bytes) {
-  await github(`/repos/${REPOSITORY}/releases/${release.id}/assets?name=${encodeURIComponent(name)}`,
-    { method: 'POST', base: 'https://uploads.github.com', body: bytes, type: 'application/octet-stream', timeout: 60 * 60_000 });
+/** Uploads a file as a release asset, streamed in 1 MiB pieces with its length declared: Windows refuses to write a
+ * whole installer to a socket at once (ENOBUFS), and GitHub needs Content-Length. */
+export async function uploadAsset(release, name, path, base = 'https://uploads.github.com') {
+  if (!process.env.GITHUB_TOKEN) throw new Error('需要 GITHUB_TOKEN');
+  const { size } = await stat(path);
+  const response = await fetch(`${base}/repos/${REPOSITORY}/releases/${release.id}/assets?name=${encodeURIComponent(name)}`, {
+    method: 'POST', duplex: 'half', signal: AbortSignal.timeout(60 * 60_000),
+    headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28',
+      'content-type': 'application/octet-stream', 'content-length': String(size) },
+    body: Readable.toWeb(createReadStream(path, { highWaterMark: 1024 * 1024 }))
+  });
+  if (!response.ok) throw new Error(`上传 ${name} 失败：HTTP ${response.status} ${await response.text()}`);
+  return size;
 }
 
 /** Streams a release asset into `sink` (a file path or a writable stream) and returns its sha256 and size. The API
