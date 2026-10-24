@@ -173,6 +173,7 @@ import { NativeObsRequests } from './link/native-obs-requests';
 import { NativeObsPreloadPool } from './link/native-obs-preload';
 import { createNativeObsOutputs } from './link/native-obs-outputs';
 import { firstTimeWarning, PreparationSteps } from './link/preparation-log';
+import { obsStatusLogEntry } from './link/obs-status-log';
 import { prepareNextObsFiles } from './link/native-obs-files';
 
 /** False in `electron-vite build --mode release`; app.isPackaged only checks the executable name. */
@@ -342,7 +343,14 @@ async function bootstrap(): Promise<void> {
     createMainWindow(obs, logger);
   };
 
-  obs.subscribe((snapshot) => sendToRenderer('link:obs-status', snapshot));
+  // OBS connection changes are logged here, whether or not a window is open.
+  let obsStatus = obs.getSnapshot().status;
+  obs.subscribe((snapshot) => {
+    sendToRenderer('link:obs-status', snapshot);
+    const entry = obsStatusLogEntry(obsStatus, snapshot);
+    obsStatus = snapshot.status;
+    if (entry) void logger.record({ ...entry, category: 'device', device: 'obs' }).catch((error: unknown) => console.error('OBS 连接状态日志未能保存', error));
+  });
   obs.subscribeInventoryChanges(() => sendToRenderer('link:obs-inventory-changed', null));
   processManager.subscribe((snapshot) => sendToRenderer('link:process-status', snapshot));
 
@@ -1695,11 +1703,7 @@ function registerIpc(
     try {
       const password = await profileStore.loadObsPassword(profile.obs.credentialId);
       knownSecrets.add(password);
-      await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'running',
-        message: '正在连接 OBS WebSocket', details: { address: profile.obs.webSocketUrl, passwordProvided: password.length > 0 } });
       connected = await obs.connect(profile.obs.webSocketUrl, password, profile.obs.startupTimeoutMs);
-      await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'succeeded',
-        message: 'OBS WebSocket 已连接', details: { address: profile.obs.webSocketUrl, obsVersion: connected.obsVersion } });
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed',
         message: `OBS 连接失败：${error instanceof Error ? error.message : String(error)}`, details: { address: profile.obs.webSocketUrl } });
