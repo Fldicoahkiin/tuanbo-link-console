@@ -293,6 +293,16 @@ async function bootstrap(): Promise<void> {
   await logger.record({ level: 'info', category: 'system', message: `${buildIdentityLine()} 已启动`,
     details: { appVersion: buildVersion, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch, windows: release(), versions: process.versions } })
     .catch((error: unknown) => dialog.showErrorBox('运行日志无法写入', error instanceof Error ? error.message : String(error)));
+  // Earlier sessions' logs keep within 30 days and 200 MB, moved to the recycle bin like archives; this session's file stays.
+  void logger.pruneSessions(path => shell.trashItem(path)).then(async pruned => {
+    if (pruned.length === 0) return;
+    const bytes = pruned.reduce((sum, entry) => sum + entry.bytes, 0);
+    await logger.record({ level: 'info', category: 'system', message: `已把 ${pruned.length} 个旧会话日志（${(bytes / 1024 / 1024).toFixed(1)} MB）移到回收站`,
+      details: { expired: pruned.filter(entry => entry.reason === 'expired').length, overSize: pruned.filter(entry => entry.reason === 'over-size').length, bytes,
+        files: pruned.slice(0, 300).map(entry => basename(entry.file)) } });
+  }).catch(async (error: unknown) => {
+    await logger.record({ level: 'warning', category: 'system', message: '旧会话日志清理未完成，下次启动再试', details: { error: error instanceof Error ? error.message : String(error) } });
+  }).catch((error: unknown) => console.error('日志清理结果未能写入', error));
   app.on('child-process-gone', (_event, details) => {
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
       message: `Electron ${details.type} 进程退出：${details.reason}，退出码 ${details.exitCode}`,

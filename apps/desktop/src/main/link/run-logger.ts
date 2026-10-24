@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readdir } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { basename, dirname, join } from 'node:path';
@@ -38,6 +38,10 @@ export type LinkLogFilter = {
   result?: LinkLogEntry['result'];
   limit?: number;
 };
+
+export type PrunedSessionLog = { file: string; bytes: number; reason: 'expired' | 'over-size' };
+/** Session logs older than 30 days go, and the rest keep within 200 MB; the stricter of the two wins. */
+export const LOG_RETENTION = { maxAgeMs: 30 * 24 * 60 * 60 * 1000, maxBytes: 200 * 1024 * 1024 } as const;
 
 export class LinkRunLogger {
   readonly sessionId = crypto.randomUUID();
@@ -109,6 +113,44 @@ export class LinkRunLogger {
     // Each caller receives its write error; the queue permits a later explicit write.
     this.pending = write.then(() => undefined, () => undefined);
     return write;
+  }
+
+  /**
+   * Moves earlier sessions' logs out through `trash` (the system recycle bin), oldest first: every session
+   * last written more than `maxAgeMs` ago, then more until all logs fit in `maxBytes`. This session's own
+   * file always stays. Sessions never overlap (single instance), so the last write orders them.
+   */
+  async pruneSessions(trash: (path: string) => Promise<void>, limits: { maxAgeMs: number; maxBytes: number } = LOG_RETENTION, now = Date.now()): Promise<PrunedSessionLog[]> {
+    const sessions = await this.sessionFiles();
+    let total = sessions.reduce((sum, file) => sum + file.bytes, 0);
+    const pruned: PrunedSessionLog[] = [];
+    for (const file of [...sessions].reverse()) {
+      if (file.path === this.filePath) continue;
+      const reason = now - file.mtimeMs > limits.maxAgeMs ? 'expired' : total > limits.maxBytes ? 'over-size' : null;
+      if (!reason) continue;
+      await trash(file.path);
+      total -= file.bytes;
+      pruned.push({ file: file.path, bytes: file.bytes, reason });
+    }
+    return pruned;
+  }
+
+  /** Session log files, newest first by last write. */
+  private async sessionFiles(): Promise<{ path: string; bytes: number; mtimeMs: number }[]> {
+    let names: string[];
+    try {
+      names = (await readdir(this.logsDirectory, { withFileTypes: true })).filter(entry => entry.isFile() && entry.name.endsWith('.jsonl')).map(entry => entry.name);
+    } catch (error) {
+      if (isErrorWithCode(error, 'ENOENT')) return [];
+      throw error;
+    }
+    const files = [];
+    for (const name of names) {
+      const path = join(this.logsDirectory, name);
+      try { const info = await stat(path); files.push({ path, bytes: info.size, mtimeMs: info.mtimeMs }); }
+      catch (error) { if (!isErrorWithCode(error, 'ENOENT')) throw error; }
+    }
+    return files.sort((left, right) => right.mtimeMs - left.mtimeMs);
   }
 
   async query(filter: LinkLogFilter = {}): Promise<LinkLogEntry[]> {
