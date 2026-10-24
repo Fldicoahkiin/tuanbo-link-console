@@ -24,6 +24,9 @@ export const nativePlaybackCommandSchema = z.discriminatedUnion('kind', [
   z.object({ ...envelope, kind: z.literal('seek'), positionMs: timeMs }).strict(),
   z.object({ ...envelope, kind: z.literal('stop') }).strict(),
   z.object({ ...envelope, kind: z.literal('stop-mtc') }).strict(),
+  // The configured timecode port is back: open it again by index; the opened handle must carry this name.
+  z.object({ ...envelope, kind: z.literal('reopen-mtc'), midiDevice: z.number().int().min(0).max(65535),
+    midiPortName: z.string().min(1).max(31).refine(value => !value.includes('\0')) }).strict(),
   z.object({ ...envelope, kind: z.literal('volume'), volume: z.number().finite().min(0).max(1), durationMs: fadeDuration.optional() }).strict(),
   z.object({ ...envelope, kind: z.literal('close') }).strict()
 ]);

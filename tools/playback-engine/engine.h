@@ -58,5 +58,6 @@ DWORD WINAPI telemetry_worker(void *unused);
 DWORD WINAPI midi_worker(void *unused);
 MMRESULT midi_prepare(UINT device, UINT fps);
 MMRESULT midi_release(void);
+MMRESULT midi_reopen(UINT device, const wchar_t *name);
 void acknowledge(UINT32 request, UINT32 generation, int32_t code);
 #endif

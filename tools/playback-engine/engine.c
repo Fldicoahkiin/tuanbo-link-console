@@ -115,7 +115,7 @@ static DWORD WINAPI commands(void *unused) {
     UINT32 length = read_u32(header + 4), request = read_u32(header + 8), generation = read_u32(header + 12);
     UINT32 op = read_u32(header + 16), bytes = read_u32(header + 72);
     UINT32 device_bytes = read_u32(header + 76);
-    if (read_u32(header) != 0x34504254 || bytes > PATH_BYTES || device_bytes > DEVICE_BYTES || length != 96 + bytes + device_bytes || !request || !generation || op < 1 || op > 8 || (op != 1 && (bytes || device_bytes))) break;
+    if (read_u32(header) != 0x34504254 || bytes > PATH_BYTES || device_bytes > DEVICE_BYTES || length != 96 + bytes + device_bytes || !request || !generation || op < 1 || op > 9 || (op != 1 && bytes) || (op != 1 && op != 9 && device_bytes)) break;
     if (bytes && fread(path, 1, bytes, stdin) != bytes) break;
     path[bytes] = 0;
     if (device_bytes && fread(device_id, 1, device_bytes, stdin) != device_bytes) break;
@@ -134,6 +134,11 @@ static DWORD WINAPI commands(void *unused) {
         (rate == 44100 || rate == 48000) && (fps == 24 || fps == 25 || fps == 30) &&
         isfinite(start) && isfinite(end) && isfinite(offset) && isfinite(volume) && start >= 0 && end > start &&
         offset >= 0 && end + offset < 86400000 && volume >= 0 && volume <= 1;
+    }
+    if (op == 9) {
+      // Reopen the timecode port: the device index and the name the opened handle must carry.
+      device_count = device_bytes ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (LPCCH)device_id, (int)device_bytes, device_wide, 1023) : 0;
+      valid = valid && device_count > 0 && device_count < 32 && !memchr(device_id, 0, device_bytes) && device <= 65535;
     }
     if (op == 4) valid = valid && isfinite(start) && start >= 0 && start < 86400000;
     if (op == 6) valid = valid && isfinite(volume) && volume >= 0 && volume <= 1;
@@ -174,7 +179,9 @@ static DWORD WINAPI commands(void *unused) {
       if (isfinite(volume) && volume >= 0 && volume <= 1) { audio_volume(volume, duration); result = S_OK; }
     } else if (op == 7) result = S_OK;
     else if (op == 8) { midi_release(); result = S_OK; }
-    if (FAILED(result) && op != 6) {
+    else if (op == 9) { device_wide[device_count] = 0; MMRESULT reopened = midi_reopen(device, device_wide); result = reopened == MMSYSERR_NOERROR ? S_OK : MAKE_HRESULT(1, FACILITY_WIN32, reopened); }
+    // Volume and a timecode reopen are optional: their failure never stops the audio.
+    if (FAILED(result) && op != 6 && op != 9) {
       EnterCriticalSection(&engine.lock);
       if (engine.client) IAudioClient_Stop(engine.client);
       engine.state = FAILED; engine.audio_error = (int32_t)result; engine.clock_qpc = 0;

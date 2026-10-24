@@ -54,3 +54,11 @@ it('MIDI 调度分阶段诊断保留实测数据，拒绝负数与额外字段',
     expect(() => new NativePlaybackEventDecoder().push(`${JSON.stringify({ ...clock, midiTiming: { ...midiTiming, ...patch } })}\n`)).toThrow();
   }
 });
+it('重新打开时间码端口：设备序号和端口名称分别写入，名称不超过 Windows 端口名长度', () => {
+  const command = { protocol: 4, requestId: 9, generation: 4, kind: 'reopen-mtc', midiDevice: 6, midiPortName: '团播联动台 P1 MTC' } as const;
+  const bytes = encodeNativePlaybackCommand(command);
+  expect(bytes.readUInt32LE(16)).toBe(9); expect(bytes.readUInt32LE(24)).toBe(6);
+  expect(bytes.readUInt32LE(72)).toBe(0); expect(bytes.readUInt32LE(76)).toBe(Buffer.byteLength(command.midiPortName));
+  expect(bytes.subarray(96).toString('utf8')).toBe(command.midiPortName); expect(bytes.readUInt32LE(4)).toBe(bytes.length);
+  for (const patch of [{ midiPortName: '' }, { midiPortName: 'a'.repeat(32) }, { midiDevice: 65536 }]) expect(nativePlaybackCommandSchema.safeParse({ ...command, ...patch }).success).toBe(false);
+});

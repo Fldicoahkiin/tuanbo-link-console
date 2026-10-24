@@ -9,9 +9,9 @@ MMRESULT midi_release(void) {
     result = midiOutReset(engine.midi);
     if (result == MMSYSERR_NOERROR && (engine.midi_header.dwFlags & MHDR_PREPARED)) result = midiOutUnprepareHeader(engine.midi, &engine.midi_header, sizeof(MIDIHDR));
     if (result == MMSYSERR_NOERROR) result = midiOutClose(engine.midi);
-    /* An unplugged port (MMSYSERR_NODRIVER) can be neither reset nor closed and its
-     * handle is dead. Forget it, so the port opens again by name once it is back. */
-    if (result == MMSYSERR_NODRIVER) { (void)midiOutClose(engine.midi); result = MMSYSERR_NOERROR; }
+    /* An unplugged port (MMSYSERR_NODRIVER, or an already invalid handle) can be neither
+     * reset nor closed and its handle is dead. Forget it, so the port opens again once it is back. */
+    if (result == MMSYSERR_NODRIVER || result == MMSYSERR_INVALHANDLE) { (void)midiOutClose(engine.midi); result = MMSYSERR_NOERROR; }
     if (result == MMSYSERR_NOERROR) engine.midi = NULL;
     else engine.midi_error = (int32_t)result;
   }
@@ -36,6 +36,29 @@ MMRESULT midi_prepare(UINT device, UINT fps) {
     }
   }
   engine.midi_error = device != 0xffffffffu && engine.midi_worker_error ? engine.midi_worker_error : (int32_t)result;
+  LeaveCriticalSection(&engine.midi_lock); return result;
+}
+/* The same timecode port is back (authorised 2026-10-24): open it again, keeping the song's counters.
+ * The opened handle must carry the expected name, so an index that moved never sends elsewhere. On
+ * success the worker relocates with a Full Frame at the current audio position; nothing missed is sent. */
+MMRESULT midi_reopen(UINT device, const wchar_t *name) {
+  MMRESULT released = midi_release();
+  if (released != MMSYSERR_NOERROR) return released;
+  EnterCriticalSection(&engine.midi_lock);
+  MMRESULT result = engine.midi_worker_error ? MMSYSERR_ERROR : device >= midiOutGetNumDevs() ? MMSYSERR_BADDEVICEID
+    : midiOutOpen(&engine.midi, device, 0, 0, CALLBACK_NULL);
+  if (result == MMSYSERR_NOERROR) {
+    MIDIOUTCAPSW actual;
+    result = midiOutGetDevCapsW((UINT_PTR)engine.midi, &actual, sizeof(actual));
+    if (result == MMSYSERR_NOERROR && wcscmp(name, actual.szPname) != 0) result = MMSYSERR_BADDEVICEID;
+    if (result == MMSYSERR_NOERROR) {
+      memset(&engine.midi_header, 0, sizeof(MIDIHDR));
+      engine.midi_header.lpData = (LPSTR)engine.full_frame; engine.midi_header.dwBufferLength = 10;
+      result = midiOutPrepareHeader(engine.midi, &engine.midi_header, sizeof(MIDIHDR));
+    }
+    if (result != MMSYSERR_NOERROR) { (void)midiOutClose(engine.midi); engine.midi = NULL; }
+  }
+  engine.midi_error = engine.midi_worker_error ? engine.midi_worker_error : (int32_t)result;
   LeaveCriticalSection(&engine.midi_lock); return result;
 }
 static void parts(UINT64 frame, UINT fps, unsigned char *out) {

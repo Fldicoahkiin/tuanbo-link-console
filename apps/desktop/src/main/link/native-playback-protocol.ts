@@ -1,12 +1,13 @@
 import { nativePlaybackCommandSchema, nativePlaybackEventSchema, type NativePlaybackCommand, type NativePlaybackEvent } from '@tb/schema';
 import { toNamespacedPath } from 'node:path';
 
-const operations: Record<NativePlaybackCommand['kind'], number> = { prepare: 1, play: 2, pause: 3, seek: 4, stop: 5, volume: 6, close: 7, 'stop-mtc': 8 };
+const operations: Record<NativePlaybackCommand['kind'], number> = { prepare: 1, play: 2, pause: 3, seek: 4, stop: 5, volume: 6, close: 7, 'stop-mtc': 8, 'reopen-mtc': 9 };
 /** Fixed little-endian header. The helper validates the same header before using it. */
 export function encodeNativePlaybackCommand(input: NativePlaybackCommand): Buffer {
   const command = nativePlaybackCommandSchema.parse(input);
   const path = command.kind === 'prepare' ? Buffer.from(toNamespacedPath(command.pcmPath), 'utf8') : Buffer.alloc(0);
-  const device = command.kind === 'prepare' ? Buffer.from(command.audioDeviceId ?? 'default', 'utf8') : Buffer.alloc(0);
+  const device = command.kind === 'prepare' ? Buffer.from(command.audioDeviceId ?? 'default', 'utf8')
+    : command.kind === 'reopen-mtc' ? Buffer.from(command.midiPortName, 'utf8') : Buffer.alloc(0);
   if (path.length > 8192) throw new Error('音频缓存路径过长');
   if (device.length > 2048) throw new Error('音频设备标识过长');
   const bytes = Buffer.alloc(96 + path.length + device.length);
@@ -22,6 +23,7 @@ export function encodeNativePlaybackCommand(input: NativePlaybackCommand): Buffe
     bytes.writeUInt32LE(device.length, 76); device.copy(bytes, 96 + path.length);
     bytes.writeDoubleLE(command.pcmBaseMs ?? 0, 80); bytes.writeUInt32LE(command.streaming ? 1 : 0, 88);
   }
+  if (command.kind === 'reopen-mtc') { bytes.writeUInt32LE(command.midiDevice, 24); bytes.writeUInt32LE(device.length, 76); device.copy(bytes, 96); }
   if (command.kind === 'seek') bytes.writeDoubleLE(command.positionMs, 32);
   if (command.kind === 'volume') { bytes.writeDoubleLE(command.volume, 56); bytes.writeDoubleLE(command.durationMs ?? 0, 64); }
   return bytes;
