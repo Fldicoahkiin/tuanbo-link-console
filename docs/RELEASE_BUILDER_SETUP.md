@@ -10,6 +10,7 @@
 | 位置 | 内容 | 之后的去向 |
 | --- | --- | --- |
 | `D:\tblink-release-assets\beauty\2dfd72cfcae9\` | 固定版本的美颜构建，与 `tools/obs/beauty/release-pin.json` 一致 | 留在构建机，runner 只读 |
+| `D:\tblink-release-assets\music-analysis\8432b1f0ea62\` | 固定版本的离线音乐分析运行时（runtime、models、licenses），与 `tools/music-analysis/release-pin.json` 一致 | 留在构建机，runner 只读 |
 | `D:\tblink-release-signing\release-2026-10-a.pem` | 发布签名私钥（日常） | 放进 GitHub secret；CI 用 secret 签名成功后删除本机副本（第 6 步） |
 | `D:\tblink-release-signing\release-2026-10-b.pem` | 发布签名私钥（备用） | 拷到 U 盘离线保存后删除本机副本（第 1 步） |
 | `D:\tblink-release-signing\upload\` | 上传到服务器的 SSH 私钥和 known_hosts | 留在构建机，只给 runner 账号读 |
