@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
         with:
           persist-credentials: false
           ref: ${{ inputs.expected_sha || github.sha }}
@@ -46,12 +46,12 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_SHA) { throw 'Checkout differs from the requested candidate commit' }
 
       - name: Use pnpm 10.33.0
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6 (v6.0.10)
         with:
           version: 10.33.0
 
       - name: Use Node.js 25.8.2
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 (v7.1.0)
         with:
           node-version: 25.8.2
           cache: pnpm
@@ -94,7 +94,7 @@ jobs:
           Set-Content -LiteralPath (Join-Path $locks 'release-builder.lock') -Value "Release Windows run $env:GITHUB_RUN_ID"
 
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
         with:
           persist-credentials: false
           ref: ${{ inputs.expected_sha || github.sha }}
@@ -111,12 +111,12 @@ jobs:
       # The runner's service account has no per-user Node; these install the pinned versions in its tool cache.
       # No GitHub cache: uploading it from China is slower than the local pnpm store.
       - name: Use pnpm 10.33.0
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6 (v6.0.10)
         with:
           version: 10.33.0
 
       - name: Use Node.js 25.8.2
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 (v7.1.0)
         with:
           node-version: 25.8.2
 
@@ -162,7 +162,7 @@ jobs:
         run: node scripts/upload-release.mjs
 
       - name: Keep the release manifest with this run
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 (v7.0.2)
         with:
           name: release-manifest-${{ inputs.expected_sha || github.sha }}-${{ github.run_id }}
           if-no-files-found: error
