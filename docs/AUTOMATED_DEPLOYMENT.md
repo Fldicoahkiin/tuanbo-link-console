@@ -96,7 +96,7 @@ SSH 有效配置必须包含 `authenticationmethods publickey`、`passwordauthen
 5. 管理员在运营后台「软件更新」里看到待发布版本，经二次验证、填写原因后点「发布更新」。后台只往自己的 `/var/lib/tblink-licensing/update-requests/` 写一份请求，内容只有：请求编号、动作（发布 / 回滚 / 丢弃）、staging 名称（发布和丢弃）或回滚目标版本、确认时看到的 manifest sha256（发布）、操作人、原因、请求时间。
 6. root 的 `tblink-update-publish.path` 在请求目录或 staging 变化时触发 `publish-update.py --process-requests`；`tblink-update-publish.timer` 每 2 分钟兜底一次，接住运行期间到达的请求。脚本路径和参数都写死，每次运行先核对[自己写入和信任的目录](#root-写入和信任判断的路径)整条链都归 root，不符就报错退出。请求目录只读：用 `O_DIRECTORY|O_NOFOLLOW` 打开并核对属主 tblink-license，请求文件用 `O_NOFOLLOW|O_NONBLOCK` 打开，只接受属主为 tblink-license、16 KB 以内的普通文件，字段必须正好是上面几项且格式正确；已有结果的请求视为重复，直接忽略；同一时间只处理一个请求（文件锁）。发布时先把 staging 里的四个文件不跟随链接地复制进 root 的工作目录，之后所有判断都只看这份副本：manifest、各文件 sha256、`latest.yml` 的版本和 sha512、Ed25519 发布签名、请求里的 manifest 摘要、版本高于当前更新源。全部通过才按「安装包先、`latest.yml` 最后」上线，回执（含上一版 `latest.yml`）存进 root 的 `/var/backups/tblink/update-receipts/`。结果写到 `/var/lib/tblink-update-publish/results/`（tblink-license 组只读）给后台显示，同时追加审计 `/var/backups/tblink/update-audit.jsonl`（请求时间、处理时间、操作人、动作、版本、结果、失败原因）。后台读到结果后删除自己的请求文件；结果文件留在 root 目录，同一个请求编号再出现也不会重做。
 7. 「回滚到上一版」同样走后台请求，把更新源改回发布当前版本之前的 `latest.yml`。上一版只从 root 的回执目录读取，而且必须有有效的发布签名、安装包仍在、摘要一致，否则拒绝。已经装上新版本的电脑不会自动降级。
-8. 发布后运行 `node scripts/write-website-release.mjs` 生成官网下载信息并提交，官网随授权服务自动部署。
+8. 发布后运行 `node scripts/write-website-release.mjs` 生成官网下载信息并提交，官网随授权服务自动部署；再运行 Publish GitHub Release，把更新源上的同一组文件建成 GitHub Release 并标为 Latest（见[发布步骤](SOFTWARE_UPDATES.md#步骤)）。
 
 <a id="信任边界"></a>
 ### 信任边界

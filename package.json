@@ -10,7 +10,7 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint . --ignore-pattern eslint.config.mjs",
     "test": "pnpm test:release && node tools/ibt/build.mjs && vitest run",
-    "test:release": "node --test scripts/release-config.test.mjs apps/desktop/scripts/start-built.test.mjs apps/desktop/scripts/require-release-build.test.mjs tools/obs/beauty/distribution.test.mjs",
+    "test:release": "node --test scripts/release-config.test.mjs apps/desktop/scripts/start-built.test.mjs apps/desktop/scripts/require-release-build.test.mjs scripts/publish-github-release.test.mjs tools/obs/beauty/distribution.test.mjs",
     "release:check": "node scripts/verify-release-version.mjs --release",
     "dist:dir": "pnpm --filter @tb/desktop dist:dir",
     "dist": "pnpm --filter @tb/desktop dist",
