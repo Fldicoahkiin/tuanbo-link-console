@@ -1,4 +1,4 @@
-# 服务器安装：仓库转移后重装 receive-release.py（待用户确认）
+# 服务器安装：仓库转移后重装 receive-release.py（已安装）
 
 仓库从 `JinHe9527/tuanbo-link-console` 转移到 `Fldicoahkiin/tuanbo-link-console` 后，自动部署有三处认仓库名：工作流的部署条件、CI 端的 `deploy-from-ci.py`、服务器上的 `receive-release.py`。改动在提交「fix(deploy): deploy from Fldicoahkiin/tuanbo-link-console after the repository transfer」里。
 
@@ -99,3 +99,18 @@ git push origin <提交>:master
 - 第 1 步核对到的 secret 和变量；
 - 新旧两个版本的摘要；
 - 那次 CI 运行的链接和部署结果。
+
+<a id="安装结果"></a>
+## 安装结果（2026-10-24）
+
+用户确认原话：「确认重装部署工具」（经主会话转达）。`$stamp=20261024T094314Z`。
+
+| 步骤 | 结果 |
+| --- | --- |
+| 1 仓库设置 | `gh api user` 为 Fldicoahkiin；`Fldicoahkiin/tuanbo-link-console` 的权限为 ADMIN；secret 有 `TBLINK_DEPLOY_KNOWN_HOSTS`、`TBLINK_DEPLOY_SSH_KEY`；变量 `TBLINK_AUTO_DEPLOY=true` |
+| 2 导出和只读检查 | 按 `c19244e` 导出，与提交里的 blob 一致，sha256 为 `ee809753da945d596be70bf62be81e521a0f1a64aa6f958e8d524c6003740759`；服务器上 `sha256sum -c` 通过，文件里有一处 `Fldicoahkiin/tuanbo-link-console`；现装版本为 `3ced4d1c31ef07b975e9ddd4362bd07cdf9fbe4c80fc6f6fe5268df0e34ed78a`，与转移前的 master 一致。上一次推送（7f5d587）的 CI 跑完、部署步骤被跳过之后才继续 |
+| 3 备份、安装、推送 | 旧版备份在 `/var/backups/tblink/install-20261024T094314Z/`；持部署锁安装后为 root 644，摘要与第 2 步一致；推送前 master 没有前进，推送 `c19244e` |
+| 验证 | [CI 40083075123](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/40083075123) 成功，「Deploy verified licensing service and website」这一步实际执行（不是跳过）。CI 于 17:45:55 以 tblink-deploy 登录，新的接收器核对仓库名和工具摘要后返回部署计划；生产环境已与本次构建的每个产物一致，所以没有上传、没有激活，`last-success.json` 仍是 `cc681a6`（运行 39964944249）。公网 `/health` 正常，官网 200 |
+
+这次没有真正的激活。下一次改动授权服务、官网或后台产物的推送（例如发布 0.5.0 后更新官网下载信息）会走完整部署，届时核对 `last-success.json` 和最新任务的 `request.json` 里 repository 为 `Fldicoahkiin/tuanbo-link-console`。
+
