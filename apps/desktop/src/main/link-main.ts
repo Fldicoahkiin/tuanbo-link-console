@@ -14,7 +14,6 @@ import { isProductWebsiteUrl } from './link/product-website';
 import { writeFileAtomically } from './link/atomic-file';
 import { createLicenseMachineCodeReader } from './link/license-machine';
 import { localTestAccessEnabled, localTestLicenseStatus } from './link/local-test-license';
-import { internalDistribution, internalDistributionStatus } from './link/internal-distribution';
 import licensePublicKeys from './link/license-public-keys.json';
 import releasePublicKeys from './link/release-public-keys.json';
 import licenseConfig from './link/license-config.json';
@@ -158,7 +157,7 @@ import { LoopMidiService } from './link/loop-midi-service';
 import { loopMidiActionSchema, loopMidiStatusSchema } from '@tb/schema';
 import { LinkUpdateManager } from './link/update-manager';
 import { rendererSource } from './link/renderer-source';
-import { buildGitSha, buildVersion, releaseAppId, releaseChannel, releaseChannelLabel } from './link/build-identity';
+import { buildGitSha, buildVersion, releaseChannel, releaseChannelLabel } from './link/build-identity';
 import desktopPackage from '../../package.json';
 import ffmpegPath from 'ffmpeg-static';
 import { NativeAudioCache } from './link/native-audio-cache';
@@ -186,7 +185,6 @@ protocol.registerSchemesAsPrivileged([{
 // software path avoids competing for the same Windows GPU command queue while
 // OBS starts a high-resolution media source during playback.
 if (process.platform === 'win32') app.disableHardwareAcceleration();
-if (internalDistribution) app.setName(internalDistribution.channel === 'portable-test' ? '团播联动台功能测试版' : '团播联动台内测');
 crashReporter.start({ uploadToServer: false });
 
 let mainWindow: BrowserWindow | null = null;
@@ -254,9 +252,8 @@ function nativePlaybackActive(): boolean {
 }
 /** Which build this is: shown in the update panel and written to logs and diagnostic packages. */
 function buildIdentity(): Pick<LinkAppInfo, 'name' | 'version' | 'channel' | 'gitSha' | 'appId'> {
-  const distribution = internalDistribution?.channel ?? null;
-  return { name: app.getName(), version: buildVersion, channel: releaseChannel(app.isPackaged, distribution),
-    gitSha: buildGitSha, appId: releaseAppId(distribution, desktopPackage.build.appId) };
+  return { name: app.getName(), version: buildVersion, channel: releaseChannel(app.isPackaged),
+    gitSha: buildGitSha, appId: desktopPackage.build.appId };
 }
 function buildIdentityLine(): string {
   const identity = buildIdentity();
@@ -304,9 +301,7 @@ async function bootstrap(): Promise<void> {
     (status) => sendToRenderer('link:update-status', status),
     { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus(), releaseKeys: releasePublicKeys,
       log: (level, message) => { void logger.record({ level, category: 'system', device: '软件更新', message, result: 'failed' })
-        .catch((error: unknown) => console.error('更新校验日志写入失败', error)); } },
-    undefined,
-    internalDistribution ? '' : undefined
+        .catch((error: unknown) => console.error('更新校验日志写入失败', error)); } }
   );
   registerIpc(profileStore, obs, processManager, logger, integrationDetector, updateManager);
   void midiHealth.check().then((result) => logger.record({
@@ -692,7 +687,7 @@ function registerIpc(
     });
     return licenseService;
   };
-  const getLicenseStatus = async () => internalDistribution ? internalDistributionStatus(internalDistribution, await readMachineCode()) : localTestAccess ? getLocalTestStatus() : (await getLicenseService()).status();
+  const getLicenseStatus = async () => localTestAccess ? getLocalTestStatus() : (await getLicenseService()).status();
   handle('link:license-status', getLicenseStatus);
   readLicenseStatus = getLicenseStatus;
   let licenseChanging = false;

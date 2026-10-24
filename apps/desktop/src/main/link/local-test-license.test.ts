@@ -10,6 +10,8 @@ it('本机测试通道仅在明确开启的未打包开发运行中生效', () =
   expect(localTestAccessEnabled(false, undefined, true)).toBe(true);
   expect(localTestAccessEnabled(false, '0', true)).toBe(false);
   expect(localTestAccessEnabled(true, undefined, true)).toBe(false);
+  // A packaged app needs activation even with both the variable and the marker file.
+  expect(localTestAccessEnabled(true, '1', true)).toBe(false);
 });
 
 it('本机测试状态允许工作区与播放授权，并保留机器绑定', async () => {

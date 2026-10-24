@@ -55,7 +55,7 @@ test('超出升级服务期限：显示新版本和原因，不提供下载', as
     const status: LinkUpdateStatus = { phase: 'available', currentVersion: '0.5.0', availableVersion: '0.5.1', releaseDate: '2026-11-02T00:00:00.000Z', progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true,
       installBlockedReason: '新版本 0.5.1 发布于 2026-11-02，晚于本机授权的升级服务期限 2026-10-31；可以继续使用当前版本，续费延长升级服务后再安装', message: '发现新版本 0.5.1' };
     Object.defineProperty(window, 'tbLink', { configurable: true, value: { getUpdateStatus: () => Promise.resolve(status), onUpdateStatus: () => () => undefined,
-      getAppInfo: () => Promise.resolve({ name: '团播联动台功能测试版', version: '0.5.0', channel: 'test', gitSha: '0123456789abcdef0123456789abcdef01234567-dirty', appId: 'com.tuanbo.control.functionaltest' }) } });
+      getAppInfo: () => Promise.resolve({ name: '团播联动台', version: '0.5.0', channel: 'development', gitSha: '0123456789abcdef0123456789abcdef01234567-dirty', appId: 'com.tuanbo.control' }) } });
   });
   await page.addScriptTag({ content: script });
   await page.getByRole('button', { name: '软件更新', exact: true }).click();
@@ -65,7 +65,7 @@ test('超出升级服务期限：显示新版本和原因，不提供下载', as
   await expect(dialog.getByRole('button', { name: '下载更新' })).toHaveCount(0);
   // After renewing, the operator checks again to recompute the term.
   await expect(dialog.getByRole('button', { name: '检查更新' })).toBeEnabled();
-  await expect(dialog.getByText('团播联动台功能测试版 · 测试版 · 提交 0123456789ab-dirty · com.tuanbo.control.functionaltest', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('团播联动台 · 开发版 · 提交 0123456789ab-dirty · com.tuanbo.control', { exact: true })).toBeVisible();
 });
 
 test('当前版本比更新源新时不显示「可用版本」', async ({ page }) => {

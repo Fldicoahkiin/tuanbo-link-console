@@ -4,7 +4,7 @@ import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertNewerRelease, compareStableVersions, signUpdateMetadata, testPackageVersion, verifyUpdateSignature, embeddedDistributionChannel, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, websiteRelease } from './release-config.mjs';
+import { assertNewerRelease, compareStableVersions, signUpdateMetadata, verifyUpdateSignature, developmentAccessIn, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, websiteRelease } from './release-config.mjs';
 
 const publish = { provider: 'generic', url: 'https://updates.tuanbo-link.jinhefilm.com/windows/x64/' };
 
@@ -57,15 +57,15 @@ test('latest.yml 必须对应同一安装包，并带可解析的发布日期', 
   assert.throws(() => validateUpdateMetadata(latest({ releaseDate: "'yesterday'" }), expected), /releaseDate/);
 });
 
-test('识别编译进主进程的测试或内测分发，不把 schema 字面量当作分发', () => {
-  assert.equal(embeddedDistributionChannel(Buffer.from('const internalDistribution = distributionSchema.parse({ channel: "portable-test", version: 1 });')), 'portable-test');
-  assert.equal(embeddedDistributionChannel(Buffer.from('parse({"channel":"internal","publicKeys":{},"token":"x"})')), 'internal');
-  assert.equal(embeddedDistributionChannel(Buffer.from('z.object({ channel: z.literal("portable-test"), version: z.literal(1) }); const d = null === null ? null : x;')), null);
+test('识别开发构建才有的本机测试入口', () => {
+  assert.deepEqual(developmentAccessIn(Buffer.from("process.env.TBLINK_LOCAL_TEST_ACCESS, existsSync(join(app.getAppPath(), '.local-test-access'))")), ['TBLINK_LOCAL_TEST_ACCESS', '.local-test-access']);
+  assert.deepEqual(developmentAccessIn(Buffer.from('message: "本机开发测试通道已启用"')), ['本机开发测试通道']);
+  assert.deepEqual(developmentAccessIn(Buffer.from('const status = (await getLicenseService()).status();')), []);
 });
 
 test('从 asar 读取单个文件', () => {
   const directory = mkdtempSync(join(tmpdir(), 'tblink-asar-'));
-  const content = Buffer.from(JSON.stringify({ name: 'tuanbo-link-functional-test', productName: '团播联动台功能测试版' }));
+  const content = Buffer.from(JSON.stringify({ name: '@tb/desktop', productName: '团播联动台' }));
   const other = Buffer.from('main bundle');
   const index = Buffer.from(JSON.stringify({ files: { 'package.json': { size: content.length, offset: String(other.length) }, out: { files: {} }, 'main.js': { size: other.length, offset: '0' } } }));
   const padded = Buffer.alloc(Math.ceil(index.length / 4) * 4);
@@ -79,7 +79,7 @@ test('从 asar 读取单个文件', () => {
   size.writeUInt32LE(header.length, 4);
   const archive = join(directory, 'app.asar');
   writeFileSync(archive, Buffer.concat([size, header, other, content]));
-  assert.deepEqual(JSON.parse(readAsarFile(archive, 'package.json').toString('utf8')), { name: 'tuanbo-link-functional-test', productName: '团播联动台功能测试版' });
+  assert.deepEqual(JSON.parse(readAsarFile(archive, 'package.json').toString('utf8')), { name: '@tb/desktop', productName: '团播联动台' });
   assert.throws(() => readAsarFile(archive, 'missing.json'), /没有/);
 });
 
@@ -111,13 +111,6 @@ test('正式版本必须高于其他标签和线上更新源，自己的标签�
   assert.throws(() => assertNewerRelease('0.4.20', { tags, head: 'h', feedVersion: '0.4.19' }), /不高于已有标签 v0\.4\.28/);
   assert.throws(() => assertNewerRelease('0.4.30', { tags, head: 'h', feedVersion: '0.4.30' }), /不高于更新源/);
   assert.throws(() => assertNewerRelease('0.4.30', { tags: [...tags, { name: 'v0.5.0', commit: 'z' }], head: 'h', feedVersion: '0.4.29' }), /v0\.5\.0/);
-});
-
-test('测试包版本是下一个次版本的预发布，带提交数和提交号', () => {
-  assert.equal(testPackageVersion({ packageVersion: '0.4.57', tags: ['v0.4.28', 'v0.4.29', 'desktop-0.4.27-20260925'], commitCount: 2450, sha: '454cda6', dirty: false }), '0.5.0-test.2450+g454cda6');
-  assert.equal(testPackageVersion({ packageVersion: '0.5.0', tags: ['v0.5.0'], commitCount: 2460, sha: 'abcdef1', dirty: true }), '0.6.0-test.2460+gabcdef1.dirty');
-  assert.equal(testPackageVersion({ packageVersion: '0.4.57', tags: ['v0.5.2'], commitCount: 1, sha: 'abcdef1', dirty: false }), '0.6.0-test.1+gabcdef1');
-  assert.throws(() => testPackageVersion({ packageVersion: '0.4.57', tags: [], commitCount: 0, sha: 'abcdef1', dirty: false }), /提交数/);
 });
 
 test('发布签名写进 latest.yml，只能由客户端内置的密钥签发，并绑定这个安装包', () => {
