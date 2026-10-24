@@ -263,7 +263,7 @@ b4e64e50350c6018c05994dea1ad19b6fe3b14aadd73d4c075519f1e083312bc  tblink-update-
 | --- | --- |
 | 1 只读检查 | 12 个文件 `OK`；`service.env`、`admin-token.txt` 为 tblink-license 600 普通文件；tblink-licensing、nginx、补交付 timer 均在运行；没有进行中的部署；现装四个工具的摘要与当时的 master（3707a34）一致 |
 | 2 备份 | `/var/backups/tblink` 及 `update-receipts`、`console`、`install-20261023T135042Z` 均为 root 0700；四个旧工具（activate-release `3b00154a…`、publish-website `faf22c29…`、backup-console `ea5a1802…`、payment-exceptions `da0b149b…`）和 `service.env`（`ecc71824…`）已备份 |
-| 3 CI 部署工具 | 持部署锁安装，摘要与上表一致（root 644 / root 755）；推送 `cc681a6` 后 [CI 39964944249](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/39964944249) 成功，部署步骤成功；`last-success.json` 的 revision 为 `cc681a6`；新备份落在 `/var/backups/tblink/20261023T135716Z` 和 `20261023T135717Z-website`，旧目录最新一项仍是 `20261023T080656Z-website`；维护页已关闭，公网 `/health` 正常，官网 200 |
+| 3 CI 部署工具 | 持部署锁安装，摘要与上表一致（root 644 / root 755）；推送 `cc681a6` 后 [CI 39964944249](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/39964944249) 成功，部署步骤成功；`last-success.json` 的 revision 为 `cc681a6`；新备份落在 `/var/backups/tblink/20261023T135716Z` 和 `20261023T135717Z-website`，旧目录最新一项仍是 `20261023T080656Z-website`；维护页已关闭，公网 `/health` 正常，官网 200 |
 | 4 运维工具 | 摘要一致；`/etc/tblink-backup` 为 root 755；`payment-exceptions.py --after 0` 输出 `token-ok`；21:58:05 安装后，补交付服务 21:58:44 那次运行成功 |
 | 5 上传身份 | `tblink-release:x:982:977::/var/lib/tblink-release:/bin/sh`；`sshd -T` 显示 ForceCommand 为接收器、AuthorizedKeysFile 为 `/etc/tblink-release/authorized_keys`、PermitTTY no、DisableForwarding yes；管理员能重新登录 |
 | 6 发布助手 | `update-status.json` 为 root:tblink-license 640，内容为 feed 0.4.29、`signed: false`，rollback 的 issue 为「没有可以回滚到的上一版」，staged 为空；path 和 timer 都在运行；服务 Result=success |

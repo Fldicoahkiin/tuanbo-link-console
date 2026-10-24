@@ -4,26 +4,26 @@
 
 服务器接收器和专用 `tblink-deploy` 身份已安装，实际 SSH 探测确认公钥认证可用、任意 shell 命令不执行、非法包在部署前被拒绝。现有团播支付配置与业务数据未修改。初始化记录位于 `/var/lib/tblink-licensing/backups/ci-bootstrap-20260930T023247Z/receipt.json`。
 
-GitHub 仓库为 `Fldicoahkiin/tuanbo-link-console`（2026-10-24 从 `JinHe9527/tuanbo-link-console` 转移过来，下文转移前的运行链接由 GitHub 自动重定向；转移后服务器的重装步骤见[仓库转移安装说明](SERVER_INSTALL_REPO_TRANSFER_20261024.md)），生产分支为 `master`。2026-09-30 用户明确授权向 GitHub 保存长期生产部署私钥并启用持续自动部署；两个 Actions Secrets 已写入，`TBLINK_AUTO_DEPLOY=true` 已启用。专用私钥没有进入 Git 文件，没有打印到聊天或日志。启用配置与实际部署验收分别记录如下。
+GitHub 仓库为 `Fldicoahkiin/tuanbo-link-console`（2026-10-24 从 `Fldicoahkiin/tuanbo-link-console` 转移过来，下文转移前的运行链接由 GitHub 自动重定向；转移后服务器的重装步骤见[仓库转移安装说明](SERVER_INSTALL_REPO_TRANSFER_20261024.md)），生产分支为 `master`。2026-09-30 用户明确授权向 GitHub 保存长期生产部署私钥并启用持续自动部署；两个 Actions Secrets 已写入，`TBLINK_AUTO_DEPLOY=true` 已启用。专用私钥没有进入 Git 文件，没有打印到聊天或日志。启用配置与实际部署验收分别记录如下。
 
 这条链路发布授权服务和官网，不自动发布 Windows Release、不改变商品价格、不启用微信、不创建支付订单或授权。Windows 安装包及 `latest.yml` 的发布仍走已有独立流程。
 
-实现提交 `3d27779a0998fd3788add2d33d4eed2a0f51210e` 的 [CI 36661008165](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36661008165) 已全部通过：类型检查、支付／授权测试、服务与官网构建、浏览器检查、Python 回归。新增接收器 7 项回归与既有套件合计 62 项在本地通过；CI 同一套件通过。`Confirm production branch is still current` 与 `Deploy verified licensing service and website` 均为 `skipped`，这次不是自动部署成功证明。
+实现提交 `3d27779a0998fd3788add2d33d4eed2a0f51210e` 的 [CI 36661008165](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36661008165) 已全部通过：类型检查、支付／授权测试、服务与官网构建、浏览器检查、Python 回归。新增接收器 7 项回归与既有套件合计 62 项在本地通过；CI 同一套件通过。`Confirm production branch is still current` 与 `Deploy verified licensing service and website` 均为 `skipped`，这次不是自动部署成功证明。
 
 启用前的独立服务器复核：生产来源仍为 `fb6e286c4a9c700b9693d566389598ace3ad446d`；API bundle、Nginx 和支付环境摘要保持此前部署值；数据库检查 `ok`，订单 1、收款 0、授权 0。SSH、团播、恢复定时器、Nginx、金河分镜和无忧排班均 active。当时自动发布任务目录为空、尚无 `last-success.json`；该初始化记录不代表后续启用结果。
 
 ## 首次启用与修复记录
 
-- [36667188691](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36667188691)：验证与构建通过，SSH 解析 Secret 中的私钥时报 `error in libcrypto`，未登录服务器。用同一密钥本地复现缺少末尾换行失败、补齐后成功；`3c32a8b` 修正文件末尾换行，回归使用临时生成的无权限测试密钥让实际 `ssh-keygen` 验证解析。
-- [36667746831](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36667746831)：SSH 认证成功，接收阶段的 60 秒 alarm 超时，未创建部署任务。`d52dcc6` 将上传限时设为 300 秒，分块计数并在超时中报告已接收字节数；16 MiB 总量及固定文件约束不变。
-- [36668497809](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36668497809)：1,228,800 字节实际上传用时 55.4 秒，随后服务发布成功、官网探针失败。独立读取确认新静态目录因继承 umask 077 成为 0700，Nginx 无法读取；官网自动恢复旧链接，服务 bundle、支付环境和代理摘要未改变，未记作完整发布成功。
+- [36667188691](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36667188691)：验证与构建通过，SSH 解析 Secret 中的私钥时报 `error in libcrypto`，未登录服务器。用同一密钥本地复现缺少末尾换行失败、补齐后成功；`3c32a8b` 修正文件末尾换行，回归使用临时生成的无权限测试密钥让实际 `ssh-keygen` 验证解析。
+- [36667746831](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36667746831)：SSH 认证成功，接收阶段的 60 秒 alarm 超时，未创建部署任务。`d52dcc6` 将上传限时设为 300 秒，分块计数并在超时中报告已接收字节数；16 MiB 总量及固定文件约束不变。
+- [36668497809](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36668497809)：1,228,800 字节实际上传用时 55.4 秒，随后服务发布成功、官网探针失败。独立读取确认新静态目录因继承 umask 077 成为 0700，Nginx 无法读取；官网自动恢复旧链接，服务 bundle、支付环境和代理摘要未改变，未记作完整发布成功。
 - `7083aa8`：只给公开静态目录显式设置 0755，公开文件保持 0644；私有备份仍为 0700。探针增加 HTTP 失败识别。已在原实现上复现两种旧站状态的权限断言失败，修复后部署套件 64 项通过。
 
 受限接收器修复备份 `/var/lib/tblink-licensing/backups/ci-receiver-20260930T042014Z`，现文件 SHA256 `c26353c444155c7ab8f426f6cda52ea39103dbeafa1e73fc2974e554d9a0d118`；官网发布工具修复备份 `/var/lib/tblink-licensing/backups/ci-publisher-20260930T042946Z`，现文件 SHA256 `3c930130c2cdbcb93c433de2c4e55be0fc6ce9c4bd1c3704b067d36c162eb693`。工具经独立管理员通道校验和安装，CI 上传包不能自行更新它们。
 
 ## 首次自动发布验收成功
 
-[运行 36669107756](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36669107756) 由 master 推送自动触发，提交 `7083aa85ccb9f4bde9fbde9d0f1fea6934dc2055`，整体 success，耗时 3 分 3 秒。类型检查、支付／授权回归、构建、官网浏览器检查、部署回归及实际发布步骤均通过。
+[运行 36669107756](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36669107756) 由 master 推送自动触发，提交 `7083aa85ccb9f4bde9fbde9d0f1fea6934dc2055`，整体 success，耗时 3 分 3 秒。类型检查、支付／授权回归、构建、官网浏览器检查、部署回归及实际发布步骤均通过。
 
 随后通过独立管理员 SSH 通道读取服务器，核对：
 

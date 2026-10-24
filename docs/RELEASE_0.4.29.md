@@ -6,12 +6,12 @@
 
 - 发行标签：`v0.4.29`；产品提交 `3dcf91cafc56dcebf368160da2961648c330fdbe`。已完成正式发行与开售，实际证据见文末。
 - 前一标签 `v0.4.28` 对应 `dc12f1b61d398b0408c7a6dbba1cc6bfa800130e`，保留失败记录，没有移动或重新使用该标签。
-- [0.4.28 构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36453607620) 完成原生编译后，在 Node.js 25.8.2 的测试模块导入时因 `localStorage.getItem is not a function` 失败；148 个测试文件、1,036 项测试通过，1 个测试文件未能导入，40 项测试跳过。没有生成或发布安装包。
+- [0.4.28 构建](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36453607620) 完成原生编译后，在 Node.js 25.8.2 的测试模块导入时因 `localStorage.getItem is not a function` 失败；148 个测试文件、1,036 项测试通过，1 个测试文件未能导入，40 项测试跳过。没有生成或发布安装包。
 - 在相同 Node.js 25.8.2 本地复现该错误。修复是让 MA2 模式测试在模块导入前建立模拟存储，避免依赖 Node 的 Web Storage；客户端行为不变。随后三项测试、定向 ESLint 和测试 TypeScript 配置检查通过。
 - 前一标签推送未观察到自动 run，因此使用显式标签和完整提交手动触发。新构建同样核对实际 SHA，不把标签存在视为构建完成。
-- [0.4.29 第一轮构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36457266164) 已通过完整 `pnpm verify:release`，包括 149 个测试文件、1,039 项测试通过（2 个文件、40 项测试跳过），Windows 打包及 manifest 校验；归档阶段因 GitHub Actions artifact 存储配额已满失败，未取得可下载产物，未发布正式版。
+- [0.4.29 第一轮构建](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36457266164) 已通过完整 `pnpm verify:release`，包括 149 个测试文件、1,039 项测试通过（2 个文件、40 项测试跳过），Windows 打包及 manifest 校验；归档阶段因 GitHub Actions artifact 存储配额已满失败，未取得可下载产物，未发布正式版。
 - 工作流增加显式 `archive_to_draft` 选项：仍检出指定完整源码 SHA、验证版本标签与 manifest 一致，但直接从 Windows runner 上传四个分发文件到草稿 Release，不经过 Actions artifact 存储。该选项默认关闭，不自动公开或覆盖旧发行资产；GitHub 临时令牌仅由工作流使用。
-- [归档修复后的构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36461288338) 使用工作流提交 `6c5a5dfff8525cf9f8ee50d977cd9f8b8e1a506a`，实际产品源码仍固定为 `3dcf91cafc56dcebf368160da2961648c330fdbe` / `v0.4.29`。GitHub run 的 headSha 此时标识工作流来源，产品来源必须从实际 checkout 和 manifest 核对。通过后下载草稿资产再核验，最后才转为正式发行。
+- [归档修复后的构建](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36461288338) 使用工作流提交 `6c5a5dfff8525cf9f8ee50d977cd9f8b8e1a506a`，实际产品源码仍固定为 `3dcf91cafc56dcebf368160da2961648c330fdbe` / `v0.4.29`。GitHub run 的 headSha 此时标识工作流来源，产品来源必须从实际 checkout 和 manifest 核对。通过后下载草稿资产再核验，最后才转为正式发行。
 - 之前的 `3965dd0` 候选构建因其版本仍为已发行的 0.4.27 而主动取消，不是校验通过或失败。
 
 ## 发布与收款操作
@@ -34,8 +34,8 @@
 
 ## 2026-09-29 实际发布与开售结果
 
-- 产品来源：`3dcf91cafc56dcebf368160da2961648c330fdbe`，标签 `v0.4.29`；[正式 Release](https://github.com/JinHe9527/tuanbo-link-console/releases/tag/v0.4.29)。私有仓库无需公开，客户从公司更新域名下载安装包。
-- [Windows 构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36461288338) 完成校验与直接草稿归档；下载后逐项验证 manifest、三个分发文件 SHA-256、清单版本／大小／SHA-512，再发布正式 Release。
+- 产品来源：`3dcf91cafc56dcebf368160da2961648c330fdbe`，标签 `v0.4.29`；[正式 Release](https://github.com/Fldicoahkiin/tuanbo-link-console/releases/tag/v0.4.29)。私有仓库无需公开，客户从公司更新域名下载安装包。
+- [Windows 构建](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36461288338) 完成校验与直接草稿归档；下载后逐项验证 manifest、三个分发文件 SHA-256、清单版本／大小／SHA-512，再发布正式 Release。
 - Manifest SHA-256：`ad37f80fde39ee760a2671214d799d58ec227ce768989983e6c57b2adb5811a9`。安装器保持未签名，未伪造 Authenticode 状态。
 - 更新发布备份：`/var/lib/tblink-licensing/backups/20260928T181937Z-e217bc22-update-0.4.29`；公网清单与 blockmap 摘要一致，安装包 HEAD 大小一致、Range 返回 206 且片段一致。
 - 官网来源 `3dcf91cafc56dcebf368160da2961648c330fdbe`，增加 Windows 0.4.29 下载入口；商品与金额从生产目录读取。
@@ -48,4 +48,4 @@
 
 ## 2026-09-29 授权与更新专项补验
 
-[Windows 验收 36469197729](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36469197729) 整体成功：无凭证／损坏凭证的真实 IPC 拦截、正式 0.4.29 安装与覆盖安装、正常关闭和零残留卸载，以及真实更新器从公司 HTTPS 源完整下载并核对 SHA512／SHA256、拒绝损坏包均通过。测试没有修改发行产物、付款或签发授权。真实付费激活和两版本自动更新重启仍未验收；完整证据和失败脚本修复记录见[授权与更新验收](LICENSE_UPDATE_ACCEPTANCE.md)。
+[Windows 验收 36469197729](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36469197729) 整体成功：无凭证／损坏凭证的真实 IPC 拦截、正式 0.4.29 安装与覆盖安装、正常关闭和零残留卸载，以及真实更新器从公司 HTTPS 源完整下载并核对 SHA512／SHA256、拒绝损坏包均通过。测试没有修改发行产物、付款或签发授权。真实付费激活和两版本自动更新重启仍未验收；完整证据和失败脚本修复记录见[授权与更新验收](LICENSE_UPDATE_ACCEPTANCE.md)。
