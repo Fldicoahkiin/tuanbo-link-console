@@ -1,5 +1,6 @@
 import { createObsProgramSnapshot, itemNeedsObs } from './obs-program-snapshot';
 import { playbackLighting } from './lighting-playback';
+import { idleTimecodeOutput, timecodeOutputChange, type TimecodeOutputMemory } from './native-timecode-output';
 import { playlistItems, programPlaylists } from './program-playlists';
 import { toUserErrorMessage } from './link-user-error';
 import type { LinkDesktopApi } from './link-desktop-contract';
@@ -43,8 +44,7 @@ export class NativeProgramPlayer {
   private ingestPending = false;
   private pendingPosition: number | null = null;
   private lastPosition = -1;
-  // The timecode error already reported for this song; another fault may replace the shown one.
-  private mtcErrorReported: string | null = null;
+  private timecodeOutput: TimecodeOutputMemory = idleTimecodeOutput;
   private readonly boundaries = new Set<(event: PlaybackBoundary) => void>();
   private readonly unsubscribe: () => void;
   private readonly analysis = nativeAudioAnalysis(() => this.native);
@@ -93,7 +93,7 @@ export class NativeProgramPlayer {
     this.mtcSuppressed = !this.state.mtcEnabled;
     const reuseSession = itemId === this.state.itemId && ['playing', 'paused'].includes(this.state.status);
     if (this.state.itemId !== itemId && this.state.status === 'playing') this.markPlayed();
-    this.cancelScheduled(); this.runtimePrepared = false; this.mtcErrorReported = null; this.boundary('seek');
+    this.cancelScheduled(); this.runtimePrepared = false; this.timecodeOutput = idleTimecodeOutput; this.boundary('seek');
     this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, fault: null, mtcConnectionFailed: false });
     return this.enqueue(token, async () => {
       if (!this.projectPath) throw new Error('请先保存工程，再播放正式音频');
@@ -263,7 +263,10 @@ export class NativeProgramPlayer {
     if (this.disposed || status.sessionId !== this.sessionId || status.generation !== this.nativeGeneration) return;
     // Like P1, an interrupted timecode resumes with a full frame; the service logs it, nothing turns red.
     this.native = status;
-    if (status.mtcError && status.mtcError !== this.mtcErrorReported) { this.mtcErrorReported = status.mtcError; this.startFault(`时间码未参与：${status.mtcError}；音频继续播放。`); }
+    const timecode = timecodeOutputChange(this.timecodeOutput, status, this.state.fault); this.timecodeOutput = timecode.memory;
+    if (timecode.fault) this.startFault(timecode.fault);
+    if (timecode.clearFault) this.update({ fault: null });
+    if (timecode.notice) this.reportUnavailable(timecode.notice);
     this.update({ mtcConnectionFailed: Boolean(status.mtcError), mtcPortName: status.mtcError ? null : status.mtcPortName,
       mtcSentPositionMs: status.mtcPortName && !status.mtcError && status.mtcSent ? status.offsetMs + status.positionMs : null });
     if (status.audioError || status.status === 'error') { if (this.state.status !== 'error') this.fail(new Error(status.audioError ?? '原生音频服务失效')); return; }

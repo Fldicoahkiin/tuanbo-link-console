@@ -497,3 +497,19 @@ it('没有画面动作的歌，OBS 未连接只提示画面未参与，不标成
   await f.player.dispose();
 });
 
+it('时间码接口断开后标红；同一接口回来后红色换成一次「时间码中断 X.X 秒后已恢复」提示，之后再断开仍标红', async () => {
+  const f = fixture();
+  await f.player.play('song-0');
+  const lost = 'Windows MIDI 输出失败（TEST）：接口已断开（错误码 6）；同一接口重新连接后自动恢复时间码';
+  f.emit({ mtcError: lost }); f.emit({ mtcError: lost });
+  expect(f.state()).toMatchObject({ status: 'playing', fault: `时间码未参与：${lost}；音频继续播放。`, mtcConnectionFailed: true });
+  const recovered = { portName: 'TEST', interruptedAt: '2026-10-24T08:00:00.000Z', recoveredAt: '2026-10-24T08:00:02.400Z', durationMs: 2400 };
+  f.emit({ mtcError: null, mtcPortName: 'TEST', mtcRecovered: recovered }); f.emit({ positionMs: 3000 });
+  expect(f.state()).toMatchObject({ status: 'playing', fault: null, mtcConnectionFailed: false, mtcPortName: 'TEST' });
+  expect(f.state().notice).toContain('时间码中断 2.4 秒后已恢复（TEST）');
+  expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('已恢复'))).toHaveLength(1);
+  f.emit({ mtcError: lost });
+  expect(f.state().fault).toBe(`时间码未参与：${lost}；音频继续播放。`);
+  await f.player.stop();
+});
+
