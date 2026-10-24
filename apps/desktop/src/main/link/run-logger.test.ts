@@ -88,6 +88,19 @@ describe('LinkRunLogger', () => {
     expect((await second.query({ sessionId: first.sessionId })).map((entry) => entry.message)).toEqual(['first']);
   });
 
+  it('导出时才得知的密钥也从已写入的日志里去掉', async () => {
+    const directory = await createTestDirectory();
+    const secrets: string[] = [];
+    const logger = new LinkRunLogger(directory, () => secrets);
+    cleanupFiles.push(join(directory, `${logger.sessionId}.jsonl`));
+    await logger.record({ level: 'info', category: 'device', message: '连接 late-secret', details: { url: 'ws://late-secret@host' } });
+    secrets.push('late-secret');
+    const packagePath = join(directory, 'late.tbdiag.gz'), textPath = join(directory, 'late.txt'); cleanupFiles.push(packagePath, textPath);
+    await logger.exportDiagnosticPackage(packagePath, {}); await logger.exportText(textPath, '团播联动台');
+    expect((await gunzipAsync(await readFile(packagePath))).toString('utf8')).not.toContain('late-secret');
+    expect(await readFile(textPath, 'utf8')).not.toContain('late-secret');
+  });
+
   it('按敏感键名和已知密钥值递归脱敏', () => {
     expect(redactValue({ token: 'abc', nested: ['secret-value'] }, ['secret-value'])).toEqual({
       token: '[REDACTED]',

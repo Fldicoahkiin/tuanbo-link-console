@@ -209,7 +209,13 @@ export class LinkRunLogger {
     for (const file of (await this.sessionFiles()).filter(file => file.mtimeMs >= from).reverse()) {
       for await (const entry of this.readDiskEntries(file.path)) if (entry.timestamp >= since) yield entry;
     }
-    for (const entry of this.failedBuffered) if (entry.timestamp >= since) yield structuredClone(entry);
+    // Disk entries are redacted as they are read; these were redacted when written, so again with today's secrets.
+    for (const entry of this.failedBuffered) {
+      if (entry.timestamp < since) continue;
+      const redacted = redactValue(entry, this.secretValues());
+      if (!isLinkLogEntry(redacted)) throw new Error('日志条目在脱敏后结构无效');
+      yield redacted;
+    }
   }
 
   private async *readDiskEntries(filePath: string): AsyncGenerator<LinkLogEntry> {
