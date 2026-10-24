@@ -48,8 +48,8 @@ export class NativePlayerService {
     this.preload = new NativeAudioPreload(options);
     this.deviceQuery = new NativeDeviceQuery(options.executable);
     this.audioDeviceQuery = new NativeDeviceQuery(options.executable, 'audio');
-    // Windows MIDI often stalls for a moment while a port is removed or added, so a check that
-    // failed meanwhile is repeated on each tick instead of being kept until the operator rechecks.
+    // Windows MIDI often stalls or fails for a moment while a port is removed or added, so a health
+    // check or device query that failed meanwhile is repeated on each tick instead of being kept.
     this.mtcRecovery = new MtcPortRecovery({ list: async () => (await this.devices('all', true)).midiOutputs, reopen: (device, name) => this.reopenMtc(device, name),
       recovered: report => {
         this.mtcRecoveredSent = this.state?.mtcSent ?? 0;
@@ -72,7 +72,9 @@ export class NativePlayerService {
     // helper that cannot consume its shutdown request when WinMM is unhealthy.
     if (scope === 'all') await this.options.checkDeviceHealth(recheck);
     if (this.closing) throw new Error('正式音频服务正在关闭');
-    return (scope === 'audio' ? this.audioDeviceQuery : this.deviceQuery).read();
+    const query = scope === 'audio' ? this.audioDeviceQuery : this.deviceQuery;
+    if (recheck) await query.reopenForPreparation();
+    return query.read();
   }
 
   prepare(input: NativePlayerPrepare): Promise<NativePlayerStatus> {

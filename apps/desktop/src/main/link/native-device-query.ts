@@ -21,7 +21,7 @@ export class NativeDeviceQuery {
   async reopenForPreparation(): Promise<void> {
     if (this.closing) throw new Error('设备查询服务正在关闭');
     if (!this.failure) return;
-    // Only a new explicit playback preparation may recover a failed query.
+    // Only a new explicit playback preparation, or the wait for a lost timecode port, may recover a failed query.
     // Wait for the old owned process; a stuck helper must not be duplicated.
     await this.waitForExit(false);
     if (this.closing) throw new Error('设备查询服务正在关闭');

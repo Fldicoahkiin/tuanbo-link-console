@@ -8,9 +8,14 @@ import { WindowsMidiHealth, midiHealthMessage, type MidiHealth } from './windows
 const native = vi.hoisted(() => ({ devices: vi.fn<(scope: 'all' | 'audio') => Promise<NativePlaybackDevices>>(), commands: vi.fn<(command: NativePlaybackCommand) => void>(),
   emit: null as ((patch: Partial<Extract<NativePlaybackEvent, { kind: 'clock' }>>) => void) | null }));
 vi.mock('./native-device-query', () => ({ NativeDeviceQuery: class {
+  // Like the real query process: a failed read is kept until the query is reopened.
+  private failure: Error | null = null;
   constructor(_executable: string, private readonly scope: 'all' | 'audio' = 'all') {}
-  read() { return native.devices(this.scope); }
-  reopenForPreparation() { return Promise.resolve(); }
+  read() {
+    if (this.failure) return Promise.reject(this.failure);
+    return native.devices(this.scope).catch((error: unknown) => { this.failure = error instanceof Error ? error : new Error(String(error)); throw this.failure; });
+  }
+  reopenForPreparation() { this.failure = null; return Promise.resolve(); }
   close() { return Promise.resolve(); }
 } }));
 vi.mock('./native-playback-client', () => ({
@@ -167,6 +172,22 @@ it('接口断开时系统 MIDI 检测超时一次：等待期间重新检测，�
     f.devices.midiOutputs = [{ id: 5, name: 'test-mtc' }];
     await vi.waitFor(() => expect(recovered).toHaveBeenCalledOnce(), { timeout: 3000 });
     expect(native.commands.mock.calls.filter(([command]) => command.kind === 'reopen-mtc')).toEqual([[expect.objectContaining({ midiDevice: 5, midiPortName: 'test-mtc' })]]);
+    expect(service.status).toMatchObject({ status: 'playing', mtcPortName: 'test-mtc', mtcError: null });
+  } finally { await service.close(); }
+});
+
+it('接口断开时设备查询失败一次：等待期间重新打开查询，同一接口回来后照常打开', async () => {
+  const f = fixture(), envelope = { version: 1 as const, sessionId: f.request.sessionId }, recovered = vi.fn<(report: MtcRecoveryReport) => void>();
+  const service = new NativePlayerService({ ...f.options, recovered });
+  try {
+    await service.prepare(f.request);
+    await service.control({ ...envelope, generation: 2, kind: 'play' });
+    f.devices.midiOutputs = [];
+    native.devices.mockRejectedValueOnce(new Error('设备查询失败：Device enumeration failed: -2147467259'));
+    native.emit!({ midiSent: 41, midiError: 6, qpc100ns: '3' });
+    await vi.waitFor(() => expect(f.error).toHaveBeenCalledWith(expect.stringContaining('Device enumeration failed')), { timeout: 3000 });
+    f.devices.midiOutputs = [{ id: 5, name: 'test-mtc' }];
+    await vi.waitFor(() => expect(recovered).toHaveBeenCalledOnce(), { timeout: 3000 });
     expect(service.status).toMatchObject({ status: 'playing', mtcPortName: 'test-mtc', mtcError: null });
   } finally { await service.close(); }
 });
