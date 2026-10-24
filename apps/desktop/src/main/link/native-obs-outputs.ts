@@ -13,6 +13,7 @@ import { redactValue } from './run-logger';
 import { ObsMediaPreload } from './obs-media-preload';
 import { obsMediaDecodeTargets } from './obs-media-decode';
 import { obsMediaCachePaths } from './obs-media-paths';
+import { PreparationSteps, preflightLogEntries, SLOW_PREPARATION_STEP_MS } from './preparation-log';
 
 /** A picture preparation superseded by another song or a stop; not a failed output. */
 export class ObsPreparationCancelled extends Error {}
@@ -28,6 +29,8 @@ type Services = {
   profiles: SecureProfileStore; seek: ObsNativeSeek; logger: LinkRunLogger;
   audioIdentity: () => NativePlayerService['audioCaptureIdentity'];
   logFailure: (error: Error) => void;
+  /** Preflight advisories already recorded in this run of the software (preflightLogEntries). */
+  seenPreflightNotices: Set<string>;
 };
 
 /** Per-program adapters. Original documents are neither rewritten nor reread;
@@ -59,11 +62,17 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       ? { ...entry, details: { ...entry.details, obsRequests: obs.getRequestDiagnostics() } } : entry, services.logFailure),
     preloadResources: async (assertCurrent, preparationPhase = 'idle') => {
       const started = performance.now(); let previous = started;
-      const measure = async (stage: string): Promise<void> => {
+      // One 画面准备完成 entry carries every stage and asset; only a slow one is recorded as it happens.
+      const reportSlow = (step: string, ms: number): void => {
+        void logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: project.projectId, itemId: request.snapshot.item.id,
+          message: `画面准备较慢：${step} 用时 ${(ms / 1000).toFixed(1)} 秒`, result: 'succeeded', details: { phase: preparationPhase, ms: Math.round(ms) } })
+          .catch((error: unknown) => console.error('画面准备计时日志未能保存', error));
+      };
+      const steps = new PreparationSteps(reportSlow);
+      const preparedAssets: Record<string, unknown>[] = [];
+      const measure = (stage: string): void => {
         const now = performance.now();
-        await logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: project.projectId,
-          itemId: request.snapshot.item.id, message: `画面准备 · ${stage}`, result: 'succeeded',
-          details: { stageMs: now - previous, elapsedMs: now - started } });
+        steps.add(stage, now - previous);
         previous = now;
       };
       assertCurrent();
@@ -128,9 +137,9 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
               await priming;
               assertCurrent();
             }
-            await logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: project.projectId,
-              itemId: request.snapshot.item.id, message: `素材准备完成：${asset.name}`, result: 'succeeded',
-              details: { assetId: asset.id, hardwareDecode, elapsedMs: performance.now() - assetStarted, timings } });
+            const assetMs = performance.now() - assetStarted;
+            preparedAssets.push({ assetId: asset.id, name: asset.name, hardwareDecode, ms: Math.round(assetMs), timings });
+            if (assetMs >= SLOW_PREPARATION_STEP_MS) reportSlow(`素材 ${asset.name}`, assetMs);
           } catch (error) {
             if (!(error instanceof ObsPreparationCancelled)) await logger.record({ level: 'error', category: 'preflight', device: '后台画面', projectId: project.projectId,
               itemId: request.snapshot.item.id, message: `素材准备未完成：${asset.name}`, result: 'failed',
@@ -141,10 +150,10 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         }));
         const failure = results.find(result => result.status === 'rejected');
         if (failure?.status === 'rejected') throw failure.reason;
-        assertCurrent(); await measure(`校验、准备及预热素材 ${offset + 1}–${Math.min(offset + batchSize, materialTargets.length)}`);
+        assertCurrent(); measure(`校验、准备及预热素材 ${offset + 1}–${Math.min(offset + batchSize, materialTargets.length)}`);
       }
       const assets = await projects.inspectAssets(path, project); assertCurrent();
-      await measure('预检文件状态');
+      measure('预检文件状态');
       const actions = project.rundown.flatMap(item => item.cues.filter(cue => cue.enabled).flatMap(cue => cue.actions));
       // Name indexes remain complete, but prior songs' thousands of source
       // details must not be reread on each playback boundary. A screenshot can
@@ -155,7 +164,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         inputs: new Set(actions.flatMap(action => 'inputName' in action ? [action.inputName]
           : 'sourceName' in action ? [action.sourceName] : []))
       }); assertCurrent();
-      await measure('读取目录');
+      measure('读取目录');
       const password = await profiles.loadCredential(profile.obs.credentialId); assertCurrent();
       const redacted = JSON.stringify(redactValue({ password }, password ? [password] : []));
       const disk = await statfs(dirname(path)); assertCurrent();
@@ -168,14 +177,12 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         availableDiskBytes: disk.bavail * disk.bsize, minimumDiskBytes: 1_073_741_824,
         credentialsDecryptable: true, logRedactionReady: !password || !redacted.includes(password)
       });
-      for (const check of report.checks) {
-        await logger.record({ level: check.status === 'blocking' ? 'error' : check.status === 'warning' ? 'warning' : 'info',
-          category: 'preflight', device: '后台画面', projectId: project.projectId, itemId: request.snapshot.item.id,
-          message: `${check.label}：${check.detail}`, result: check.status === 'blocking' ? 'failed' : 'succeeded' });
+      for (const entry of preflightLogEntries(report.checks, services.seenPreflightNotices, project.projectId)) {
+        await logger.record({ ...entry, category: 'preflight', device: '后台画面', projectId: project.projectId, itemId: request.snapshot.item.id });
         assertCurrent();
       }
       if (!report.passed) throw new Error(report.checks.filter(check => check.status === 'blocking').map(check => check.detail).join('；'));
-      await measure('预检');
+      measure('预检');
       const upcoming = [...new Set([
         ...request.snapshot.item.cues.filter(cue => cue.enabled).flatMap(cue => cue.actions.flatMap(action =>
           action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])),
@@ -188,7 +195,10 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
           assertCurrent();
         }
       };
-      await prepareStructure(); assertCurrent(); await measure('机位结构');
+      await prepareStructure(); assertCurrent(); measure('机位结构');
+      await logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: project.projectId, itemId: request.snapshot.item.id,
+        message: '画面准备完成', result: 'succeeded',
+        details: { phase: preparationPhase, totalMs: Math.round(performance.now() - started), steps: steps.take(), assets: preparedAssets } });
       prepared = true;
     },
     restoreScenes: async assertCurrent => { await outputs.preloadResources(assertCurrent, 'reconnect'); await preload.restoreStandby(assertCurrent); },

@@ -173,6 +173,7 @@ import { NativeObsHost } from './link/native-obs-host';
 import { NativeObsRequests } from './link/native-obs-requests';
 import { NativeObsPreloadPool } from './link/native-obs-preload';
 import { createNativeObsOutputs } from './link/native-obs-outputs';
+import { firstTimeWarning, PreparationSteps } from './link/preparation-log';
 import { prepareNextObsFiles } from './link/native-obs-files';
 
 /** False in `electron-vite build --mode release`; app.isPackaged only checks the executable name. */
@@ -563,6 +564,8 @@ function registerIpc(
   };
   const nativeSeek = new ObsNativeSeek();
   const programObsListeners = new Set<(status: import('@tb/schema').NativeObsStatus) => void>();
+  // Preflight advisories already recorded in this run, so each is noted once (preparation-log.ts).
+  const seenPreflightNotices = new Set<string>();
   const obsPreload = new NativeObsPreloadPool({
     authorize: async request => {
       await authorizeProduct('link:native-obs-prepare', request);
@@ -571,7 +574,7 @@ function registerIpc(
       if (nativePlaybackActive()) throw new Error('音频已开始准备，不能另行启动节目预备');
     },
     create: (request, positionMs) => createNativeObsOutputs(request, { obs, projects: projectService, media: mediaPreviewService,
-      profiles: profileStore, seek: nativeSeek, logger,
+      profiles: profileStore, seek: nativeSeek, logger, seenPreflightNotices,
       logFailure: error => {
         if (nativeObs?.status?.sessionId === request.sessionId) nativeObs.disconnect(error.message);
         else console.error('已结束画面会话的运行日志未能落盘', error);
@@ -629,9 +632,13 @@ function registerIpc(
     if (nativePlayerShutdown) throw new Error('正式音频引擎正在关闭或关闭失败，请查看运行日志');
     if (!nativePlayer) {
       if (!ffmpegPath) throw new Error('FFmpeg 音频解码组件未安装');
-      let lastClockBoundary = '';
-      const measured = (phase: string, elapsedMs: number): void => { void logger.record({ level: 'info', category: 'system', device: '正式音频', message: `正式音频准备：${phase}`, details: { elapsedMs } })
-        .catch((error: unknown) => console.error('正式音频计时日志写入失败', error)); };
+      let lastClockBoundary = '', lastReadyBoundary = '';
+      // Each preparation's steps go into one 正式音频准备完成 entry; only a slow step is recorded as it happens.
+      const audioSteps = new PreparationSteps((step, ms) => {
+        void logger.record({ level: 'info', category: 'system', device: '正式音频', message: `正式音频准备较慢：${step} 用时 ${(ms / 1000).toFixed(1)} 秒`, details: { ms: Math.round(ms) } })
+          .catch((error: unknown) => console.error('正式音频计时日志写入失败', error));
+      });
+      const measured = (phase: string, elapsedMs: number): void => audioSteps.add(phase, elapsedMs);
       nativePlayer = new NativePlayerService({
         checkDeviceHealth: async () => {
           const result = await midiHealth.check();
@@ -643,6 +650,14 @@ function registerIpc(
         resolveAudio: (projectPath, relativePath) => projectService.resolveReferenceAudio(projectPath, relativePath),
         changed: (status, qpc100ns) => {
           nativeObs?.observe(status, qpc100ns); nativeProgramHost?.observe(status, qpc100ns); nativePlayerUi.publish(status);
+          const readyBoundary = `${status.sessionId}:${status.generation}`;
+          if (status.status === 'ready' && readyBoundary !== lastReadyBoundary) {
+            lastReadyBoundary = readyBoundary;
+            const steps = audioSteps.take();
+            void logger.record({ level: 'info', category: 'system', device: '正式音频', itemId: status.itemId, message: '正式音频准备完成',
+              details: { playbackSessionId: status.sessionId, generation: status.generation, totalMs: steps.reduce((sum, step) => sum + step.ms, 0), steps } })
+              .catch((error: unknown) => console.error('正式音频准备日志写入失败', error));
+          }
           if (qpc100ns && qpc100ns !== '0' && (status.status === 'playing' || status.status === 'ended')) {
             const boundary = `${status.sessionId}:${status.generation}:${status.status}`;
             if (boundary !== lastClockBoundary) {
@@ -662,7 +677,8 @@ function registerIpc(
               .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
         },
         measured,
-        error: message => { void logger.record({ level: 'error', category: 'device', device: '正式音频', message, result: 'failed' })
+        // A failed preparation keeps the steps it got through.
+        error: message => { const steps = audioSteps.take(); void logger.record({ level: 'error', category: 'device', device: '正式音频', message, result: 'failed', ...(steps.length ? { details: { steps } } : {}) })
           .catch((error: unknown) => console.error('正式音频日志写入失败', error)); }
       });
     }
@@ -1347,11 +1363,13 @@ function registerIpc(
       buttons: ['选择保存位置', '取消'], defaultId: 0, cancelId: 1 });
     return response === 0;
   });
+  const startCheckReasons = new Set<string>();
   handle('link:confirm-play-without-lighting', async (_event, reasonValue: unknown) => {
     const reason = z.string().min(1).max(4000).parse(reasonValue);
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '开播前检查', noLink: true,
       message: '这首歌的灯光还不能演出。', detail: reason, buttons: ['无灯光播放', '取消'], defaultId: 0, cancelId: 1 });
-    await logger.record({ level: 'warning', category: 'operator', device: '正式播放器',
+    // The song's lighting needs someone's attention: a warning the first time, info when it repeats song after song.
+    await logger.record({ level: firstTimeWarning(startCheckReasons, reason), category: 'operator', device: '正式播放器',
       message: `开播前检查：${reason}；${response === 0 ? '操作员选择无灯光播放' : '操作员取消播放'}` });
     return response === 0;
   });

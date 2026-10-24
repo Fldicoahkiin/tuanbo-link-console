@@ -110,6 +110,8 @@ it('开播前检查：没有操作员选择时检查不过的歌无灯光播放�
   await f.player.stop(); await f.player.play('song-0', undefined, false, true);
   expect(f.api.prepareNativePlayback.mock.calls[2]?.[0].midiPortName).toBeNull();
   expect(f.state().fault).toBeNull(); expect(f.state().notice).toMatch(/^本首无灯光播放：这首歌的灯光需要处理/);
+  // The operator's choice is already logged by the start check; the notice is shown without a second log entry.
+  expect(f.deps.notice.mock.calls.filter(([message]) => String(message).startsWith('本首无灯光播放'))).toEqual([]);
   await f.player.play('song-1');
   expect(f.api.prepareNativePlayback.mock.calls[3]?.[0].midiPortName).toBe('TEST'); expect(f.state().fault).toBeNull(); expect(f.state().notice).not.toContain('无灯光');
   await f.player.dispose();
