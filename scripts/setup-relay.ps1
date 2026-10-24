@@ -52,9 +52,9 @@ Done 'gh 已登录 Fldicoahkiin'
 Step '云端签名用的 secret'
 $keyA = Join-Path $signing 'release-2026-10-a.pem'
 if (Test-Path -LiteralPath $keyA) {
-  # 私钥从文件直接进 gh，不经过屏幕和命令行参数。
-  cmd /c "`"$gh`" secret set TBLINK_RELEASE_SIGNING_KEY --repo $repo < `"$keyA`""
-  if ($LASTEXITCODE -ne 0) { Stop-Here 'secret 没有设置成功' }
+  # 私钥文件直接作为 gh 的标准输入，不经过屏幕、命令行参数和 PowerShell 管道。
+  $secret = Start-Process -FilePath $gh -ArgumentList "secret set TBLINK_RELEASE_SIGNING_KEY --repo $repo" -RedirectStandardInput $keyA -NoNewWindow -Wait -PassThru
+  if ($secret.ExitCode -ne 0) { Stop-Here 'secret 没有设置成功' }
 }
 if ((& $gh secret list --repo $repo | Out-String) -notmatch 'TBLINK_RELEASE_SIGNING_KEY') { Stop-Here "secret 列表里没有 TBLINK_RELEASE_SIGNING_KEY，而 $keyA 也不在" }
 Done 'TBLINK_RELEASE_SIGNING_KEY 已设置'
@@ -103,7 +103,7 @@ Register-ScheduledTask -TaskName $taskName -Xml $xml -Force | Out-Null
 Done "计划任务 $taskName：登录和联网后各跑一次，之后每 10 分钟一次；日志在 $relay\logs"
 
 Step '立刻同步一次'
-$output = (& cmd /c "`"$relay\run-relay.cmd`"" 2>&1 | Out-String)
+$output = (& "$relay\run-relay.cmd" 2>&1 | Out-String)
 Write-Host $output.Trim()
 $result = ($output -split "`r?`n" | Where-Object { $_ -match '本次同步' } | Select-Object -Last 1) -replace '^\S+\s+', ''
 if (-not $result) { $result = '没有输出，看 ' + "$relay\logs" }
