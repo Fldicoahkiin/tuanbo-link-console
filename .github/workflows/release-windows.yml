@@ -4,7 +4,9 @@ name: Release Windows
 # installer is built, signed with the release key and uploaded to the server's staging area on the domestic
 # self-hosted builder (labels release-builder): the beauty and music-analysis assets are not in git, and hosted
 # runners lack the disk and the bandwidth to China. The server publishes a staged release on its own once it passes
-# every check; this workflow then waits for the feed to serve it and publishes the GitHub release.
+# every check; the release job then waits for the feed to serve it and publishes the GitHub release. That job reads
+# the build's files from a folder on the builder named by the build job, so it can be re-run on its own: re-running
+# the build would upload a version the server no longer publishes.
 
 on:
   push:
@@ -59,9 +61,8 @@ jobs:
     needs: verify
     runs-on: [self-hosted, windows, release-builder]
     timeout-minutes: 150
-    # Creates the GitHub release on the tag once the server has published the build.
-    permissions:
-      contents: write
+    outputs:
+      kept: ${{ steps.keep.outputs.kept }}
     env:
       TBLINK_ASSETS: D:\tblink-release-assets
       TBLINK_RELEASE_UPLOAD_KEY: D:\tblink-release-signing\upload\tblink-release-ed25519
@@ -72,6 +73,7 @@ jobs:
         run: |
           # The builder is also the GUI test machine; sessions take C:\dev\claude-tools\locks\*.lock.
           $locks = 'C:\dev\claude-tools\locks'
+          New-Item -ItemType Directory -Force -Path $locks | Out-Null
           $deadline = (Get-Date).AddMinutes(60)
           while (Get-ChildItem -LiteralPath $locks -Filter *.lock) {
             if ((Get-Date) -gt $deadline) { throw "GUI 锁 60 分钟未释放：$((Get-ChildItem -LiteralPath $locks -Filter *.lock).Name -join ', ')" }
@@ -155,19 +157,21 @@ jobs:
           $manifest = Get-Content -Raw apps/desktop/dist/release-manifest.json | ConvertFrom-Json
           if (-not $manifest.releaseSignature) { throw 'A release build must be signed' }
 
+      - name: Keep the release files for the release job
+        id: keep
+        shell: pwsh
+        run: |
+          # Outside the checkout, which the next job cleans; one folder per run attempt, so a full re-run never
+          # replaces the files of a build the server already published.
+          $kept = Join-Path (Split-Path $env:GITHUB_WORKSPACE) "tblink-releases\$($env:GITHUB_REF_NAME)-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          $installer = "Tuanbo-Link-Console-$($env:GITHUB_REF_NAME.Substring(1))-x64.exe"
+          robocopy apps\desktop\dist $kept release-manifest.json latest.yml $installer "$installer.blockmap" /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { throw "保存发布文件失败：robocopy $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0
+          "kept=$kept" >> $env:GITHUB_OUTPUT
+
       - name: Upload to the server's staging area
         run: node scripts/upload-release.mjs
-
-      - name: Wait for the server to publish, then publish the GitHub release
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          NODE_USE_ENV_PROXY: '1'
-          # The feed is in China and is read directly; GitHub goes through the builder's proxy (runner .env).
-          NO_PROXY: localhost,127.0.0.1,.jinhefilm.com
-        run: |
-          node scripts/publish-github-release.mjs ($env:GITHUB_REF_NAME.Substring(1)) apps/desktop/dist
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub release failed' }
 
       - name: Keep the release manifest with this run
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 (v7.0.2)
@@ -185,3 +189,41 @@ jobs:
         run: |
           $lock = 'C:\dev\claude-tools\locks\release-builder.lock'
           if (Test-Path -LiteralPath $lock) { Remove-Item -LiteralPath $lock }
+
+  release:
+    needs: build
+    runs-on: [self-hosted, windows, release-builder]
+    timeout-minutes: 90
+    # Creates the GitHub release on the tag once the server has published the build.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
+        with:
+          persist-credentials: false
+
+      - name: Use pnpm 10.33.0
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6 (v6.0.10)
+        with:
+          version: 10.33.0
+
+      - name: Use Node.js 25.8.2
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 (v7.1.0)
+        with:
+          node-version: 25.8.2
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Wait for the server to publish, then publish the GitHub release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KEPT: ${{ needs.build.outputs.kept }}
+          NODE_USE_ENV_PROXY: '1'
+          # The feed is in China and is read directly; GitHub goes through the builder's proxy (runner .env).
+          NO_PROXY: localhost,127.0.0.1,.jinhefilm.com
+        run: |
+          node scripts/publish-github-release.mjs ($env:GITHUB_REF_NAME.Substring(1)) $env:KEPT
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release failed' }

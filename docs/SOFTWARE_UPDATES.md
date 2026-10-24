@@ -108,7 +108,9 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 1. 推发布提交到 master；CI 通过后在这个提交上打 `vX.Y.Z` 标签并推送。标签就是发布：之后没有人工步骤。
 2. Release Windows：托管机检查通过后，构建机打包、签名、上传到服务器 staging（[构建机准备](RELEASE_BUILDER_SETUP.md)）。
 3. 服务器自动发布：staging 里出现新的一份包，root 发布脚本就复制、重新校验，通过就上线。条件是签名有效、manifest 和 sha256 一致、版本高于更新源，并且这个版本以前没上过更新源。更新源只留新版和上一版，更早的移进服务器备份。每份上传只自动尝试一次；没能发布的留在后台「软件更新」的待发布列表，原因写在「最近一次自动发布」。需要撤回时用「回滚到上一版」，撤下的版本也移出更新源，之后重跑工作流也不会再把它自动发上去。完整链路和信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。
-4. 同一个工作流等更新源换成这个版本（最多 30 分钟），核对发布签名、`latest.yml` 和构建清单，再用构建机上的同一组文件（安装包、blockmap、`latest.yml`、`release-manifest.json`）在这个标签上建 GitHub Release 并标为 Latest。说明取自 `release-notes/X.Y.Z.md`，没有这个文件就只写固定的激活说明。
+4. 同一个工作流的 release 作业等更新源换成这个版本（最多 30 分钟），核对发布签名、`latest.yml` 和构建清单，再在这个标签上建 GitHub Release 并标为 Latest。附件是构建作业留在构建机上的同一组文件：安装包、blockmap、`latest.yml`、`release-manifest.json`，放在 runner 工作目录的 `tblink-releases\<标签>-<运行编号>-<尝试次数>\`，每次约 1 GB，不自动清理。说明取自 `release-notes/X.Y.Z.md`，没有这个文件就只写固定的激活说明。
+   - 这一步失败时（代理、GitHub 出错，或服务器没能自动发布、在后台手动发布之后），在 Actions 里只重跑失败的作业（Re-run failed jobs）。
+   - 不要重跑全部作业：重新构建会上传一份服务器不再发布的同版本包，release 作业等不到它，只会超时。
 5. 运行 `node scripts/write-website-release.mjs` 更新官网下载信息并提交，见[官网下载信息](#官网下载信息)。官网改成直接跟着更新源变化之后，这一步去掉。
 
 旧的手工发布（`publish-update.py <目录> <manifest sha256> <提交> <版本>`）仍可用，但同样要求发布签名和更高的版本号。

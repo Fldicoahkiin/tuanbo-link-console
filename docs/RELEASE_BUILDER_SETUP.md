@@ -53,10 +53,11 @@ icacls D:\tblink-release-signing\upload /grant "tblink-runner:RX"
 icacls D:\tblink-release-signing\upload\known_hosts /grant "tblink-runner:R"
 icacls D:\tblink-release-signing\upload\tblink-release-ed25519 /setowner tblink-runner
 icacls D:\tblink-release-signing\upload\tblink-release-ed25519 /inheritance:r /grant:r "tblink-runner:R" "SYSTEM:F" "Administrators:F"
+New-Item -ItemType Directory -Force C:\dev\claude-tools\locks
 icacls C:\dev\claude-tools\locks /grant "tblink-runner:(OI)(CI)M"
 ```
 
-runner 只能读资产和上传身份，不能读发布签名私钥（它来自 GitHub secret）。上传私钥的所有者改成 tblink-runner，因为 Windows 的 OpenSSH 只接受只属于当前账户的私钥。最后一行让 runner 能建和删自己的锁文件。
+runner 只能读资产和上传身份，不能读发布签名私钥（它来自 GitHub secret）。上传私钥的所有者改成 tblink-runner，因为 Windows 的 OpenSSH 只接受只属于当前账户的私钥。最后两行建好锁目录（2026-10-24 时它不存在），让 runner 能在里面建和删自己的锁文件。
 
 <a id="4-注册-self-hosted-runner"></a>
 ## 4. 注册 self-hosted runner（仓库所有者 Fldicoahkiin，开发机上的管理员 PowerShell）
