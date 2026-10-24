@@ -108,3 +108,14 @@ pnpm release:relay
 - 接收脚本新旧两个版本的摘要；
 - `authorized_keys` 新旧两个版本的行数；
 - 第 3 步三条命令的输出。
+
+<a id="安装结果"></a>
+## 安装结果
+
+2026-10-24 由主会话执行（用户在主会话里直接回复「确认」）。
+
+- 安装的字节：`receive-update.py` 来自提交 bc7045f（与当时 master 一致），sha256 `c78f6df74e96bb46420c4039afd86e676fa91352eaa16c2f0ffd0f6981f6a70b`；`mac-relay.pub` sha256 `03af5f97c289479fb66959865c066debc87095840e19fc28eb437b4877aec372`，指纹 `SHA256:OpOekSFOu5IoguKSbM+C2JdheLaalupn6C3AlV0dFyk`。
+- `$stamp`：`20261024T162432Z`；旧接收脚本（`6e6752355b46716552b49120c01449aa38a5db6aaa1fe93951ed7079f63a5a6f`）和旧 `authorized_keys`（1 行）备份在 `/var/backups/tblink/install-20261024T162432Z/`。
+- 第 1 步：两个文件 `OK`，`def status` 计数 1；`authorized_keys` root 0644、1 行；staging 为空。
+- 第 2 步：新接收脚本 root 0644、摘要一致；`authorized_keys` root 0644、2 行，都以 `restrict ssh-ed25519` 开头，第二行以 `(Mac)` 结尾。
+- 第 3 步：`status` 输出 `{"staged": [], "uploading": false}`，退出码 0；`whoami` 输出 `{"error": "Unknown command"}`，退出码 1；`pnpm release:relay` 最后一行「本次同步：没有等待搬运的草稿 release」；服务器 sshd 日志里有 Mac 密钥指纹 `SHA256:OpOekSFO…` 的两次登录。
