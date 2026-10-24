@@ -10,6 +10,7 @@
 | 位置 | 内容 | 之后的去向 |
 | --- | --- | --- |
 | `D:\tblink-release-assets\beauty\2dfd72cfcae9\` | 固定版本的美颜构建，与 `tools/obs/beauty/release-pin.json` 一致 | 留在构建机，runner 只读 |
+| `D:\tblink-release-assets\music-analysis\8432b1f0ea62\` | 固定版本的离线音乐分析运行时（runtime、models、licenses），与 `tools/music-analysis/release-pin.json` 一致 | 留在构建机，runner 只读 |
 | `D:\tblink-release-signing\release-2026-10-a.pem` | 发布签名私钥（日常） | 放进 GitHub secret；CI 用 secret 签名成功后删除本机副本（第 6 步） |
 | `D:\tblink-release-signing\release-2026-10-b.pem` | 发布签名私钥（备用） | 拷到 U 盘离线保存后删除本机副本（第 1 步） |
 | `D:\tblink-release-signing\upload\` | 上传到服务器的 SSH 私钥和 known_hosts | 留在构建机，只给 runner 账号读 |
@@ -60,7 +61,7 @@ runner 只能读资产和上传身份，不能读发布签名私钥（它来自 
 <a id="4-注册-self-hosted-runner"></a>
 ## 4. 注册 self-hosted runner（仓库所有者 Fldicoahkiin，开发机上的管理员 PowerShell）
 
-注册 runner 和设置 secret 都需要仓库 admin 权限。仓库从 JinHe9527 转移到 Fldicoahkiin 名下之后，由 Fldicoahkiin 来做（转移完成前这两步先不做）。第 4、5 步在开发机的同一个管理员 PowerShell 窗口里依次完成，最后退出登录。开发机已经装了 gh，里面还留着 JinHe9527 已失效的登录，第 5 步最后一并退出。
+注册 runner 和设置 secret 都需要仓库 admin 权限。仓库从 JinHe9527 转移到 Fldicoahkiin 名下之后，由 Fldicoahkiin 来做（转移完成前这两步先不做）。第 4、5 步在开发机的同一个管理员 PowerShell 窗口里依次完成。开发机已经装了 gh，里面还留着 JinHe9527 已失效的登录，第 5 步最后清掉。
 
 1. 重新登录 gh：
 
@@ -136,15 +137,16 @@ runner 只能读资产和上传身份，不能读发布签名私钥（它来自 
 
    预期有一行 `TBLINK_RELEASE_SIGNING_KEY`，更新时间是刚才。secret 的值无法读回，是否正确由第 6 步的首次 CI 签名来验证。
 
-3. 退出 gh 登录。这台机器上很多进程以 WYZB 身份运行，不能长期留着仓库所有者的 token：
+3. 清掉 JinHe9527 失效的旧登录，保留 Fldicoahkiin 的登录：
 
    ```powershell
-   gh auth logout -h github.com -u Fldicoahkiin
    gh auth logout -h github.com -u JinHe9527
    gh auth status
    ```
 
-   预期前两条分别输出 `✓ Logged out of github.com account Fldicoahkiin` 和 `✓ Logged out of github.com account JinHe9527`（后者是早已失效的旧登录）；`gh auth status` 显示 `You are not logged into any GitHub hosts`。
+   预期第一条输出 `✓ Logged out of github.com account JinHe9527`；`gh auth status` 只列出 Fldicoahkiin，且 `Active account: true`。
+
+   开发机上会一直保持 Fldicoahkiin 的 gh 登录（用户 2026-10-24 决定）。这台机器上以 WYZB 身份运行的程序都能使用这个账号的权限，包括仓库管理员权限。
 
 工作流只在「Sign latest.yml with the release key」这一步把它放进环境变量，不会写到磁盘，日志里也会被遮掉。
 

@@ -18,7 +18,7 @@ spec.loader.exec_module(module)
 
 def payload(change=None, extra=None, link=None):
     files = {name: ('content:' + name).encode() for name in module.ARTIFACTS}
-    manifest = {'revision': 'a' * 40, 'repository': 'JinHe9527/tuanbo-link-console',
+    manifest = {'revision': 'a' * 40, 'repository': 'Fldicoahkiin/tuanbo-link-console',
                 'runId': 500, 'attempt': 1,
                 'files': {name: hashlib.sha256(value).hexdigest() for name, value in files.items()},
                 'tools': {name: 'b' * 64 for name in module.TOOLS}}
@@ -185,6 +185,8 @@ class ReceiverTest(unittest.TestCase):
     def test_digest_and_source_validation(self):
         changes = [lambda m, f: f.update({'dist/index.js': b'tampered'}),
                    lambda m, f: m.update(repository='other/repository'),
+                   # The repository's name before it moved to Fldicoahkiin.
+                   lambda m, f: m.update(repository='JinHe9527/tuanbo-link-console'),
                    lambda m, f: m.update(revision='../../other'),
                    lambda m, f: m.update(runId=True),
                    lambda m, f: m.update(attempt=0),

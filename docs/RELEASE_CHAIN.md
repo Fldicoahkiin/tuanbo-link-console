@@ -8,7 +8,7 @@
 
 | 位置 | 职责 | 不应承担的工作 |
 | --- | --- | --- |
-| GitHub `JinHe9527/tuanbo-link-console` | 源码、锁文件、构建脚本、版本标签、CI 与候选产物归档 | 保存生产许可私钥、数据库、支付密钥或客户工程 |
+| GitHub `Fldicoahkiin/tuanbo-link-console` | 源码、锁文件、构建脚本、版本标签、CI 与候选产物归档 | 保存生产许可私钥、数据库、支付密钥或客户工程 |
 | GitHub Actions Windows runner / 受控 Windows 构建机 | 构建 Windows DLL/EXE、Electron、NSIS；测试、签名和产物清单 | 连接真实直播现场并替代人工设备验收 |
 | 腾讯云 Ubuntu `jinhe-cloud` | HTTPS、更新文件出口、激活/订单服务及后续支付回调 | 运行客户桌面界面、播放时间线或代替 Windows 原生构建环境 |
 | 客户 Windows 电脑 | 工程、媒体、音频、时间线、Cue、MIDI、OBS/MA2 联动、本地许可校验 | 持有仓库访问令牌、服务管理员令牌或任何发行私钥 |
@@ -142,7 +142,7 @@ flowchart TB
 现已获得推送与发行授权，源码及工作流已推送。GitHub 要求支持 workflow_dispatch 的工作流存在于默认分支；未推送的本地 YAML 不能远程运行。实际调用模板：
 
 ```sh
-gh workflow run release-windows.yml --repo JinHe9527/tuanbo-link-console --ref <已核对分支> -f expected_sha=<完整提交SHA>
+gh workflow run release-windows.yml --repo Fldicoahkiin/tuanbo-link-console --ref <已核对分支> -f expected_sha=<完整提交SHA>
 ```
 
 触发后记录真实 run ID，分别核对工作流 headSha、实际产品 checkout SHA、结论及对应 manifest，不能仅凭触发命令成功声称 Windows 通过。核对来源与产物后，才安排受控 Windows 安装／激活／更新验收。官方依据：[手动运行工作流](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)、[工作流产物及跨作业传递](https://docs.github.com/en/actions/tutorials/store-and-share-data)。

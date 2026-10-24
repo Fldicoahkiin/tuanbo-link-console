@@ -6,7 +6,7 @@
 
 `node tools/music-analysis/package-runtime.mjs <新的输出目录>` 将预先准备好的 `output/music-analysis/cpu-env`、Python 3.11.9 和全部本地模型复制成自包含运行时，并以 `python311._pth` 隔离系统 Python 与用户包。运行时只提供 CPU 模式。
 
-2026-10-24 起只发正式安装包，免激活测试包已删除。正式安装包目前**不含**这个运行时和模型（随包发布会使安装包从约 413 MB 增加到约 990 MB），是否随正式包发布另行决定。打包时如果带了运行时，afterPack 会按 `release-pin.json` 核对它。
+2026-10-24 起，正式安装包内置这个运行时和模型（用户当天决定），装在安装目录的 `resources\music-analysis`，自动音乐分析开箱即用。固定的 `runtime`、`models`、`licenses` 三个目录来自构建机的 `D:\tblink-release-assets\music-analysis\<指纹前 12 位>\`，打包前复制到 `artifacts/music-analysis`；`worker.py` 等模块取自本次提交（清单见 `release-pin.mjs` 的 `musicWorkerFiles`）。afterPack 要求运行时必须存在：指纹与 `release-pin.json` 不符或模块与仓库不同，构建直接失败。
 
 打包时校验依赖版本、模型摘要和所有 Python 导入路径，生成逐文件 SHA-256 清单。安装后用 `node scripts/verify-installed-music.mjs <安装后的EXE> <真实WAV> <时长毫秒> <新的证据目录>` 校验安装文件，并通过真实 Electron IPC 执行首轮模型推理与缓存复测；没有替换分析 IPC 或使用开发环境 Python。
 

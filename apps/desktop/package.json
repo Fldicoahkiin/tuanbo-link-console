@@ -155,6 +155,32 @@
       {
         "from": "../../tools/midi-probe/bin/tblink-midi-probe.exe",
         "to": "midi/tblink-midi-probe.exe"
+      },
+      {
+        "from": "../../artifacts/music-analysis",
+        "to": "music-analysis",
+        "filter": [
+          "runtime/**",
+          "models/**",
+          "licenses/**"
+        ]
+      },
+      {
+        "from": "../../tools/music-analysis",
+        "to": "music-analysis",
+        "filter": [
+          "worker.py",
+          "analyze.py",
+          "phrase_structure.py",
+          "assets.py",
+          "contracts.py",
+          "consensus.py",
+          "evaluate.py",
+          "semantic_evaluation.py",
+          "pyproject.toml",
+          "uv.lock",
+          "DISTRIBUTION_NOTICE.md"
+        ]
       }
     ]
   },

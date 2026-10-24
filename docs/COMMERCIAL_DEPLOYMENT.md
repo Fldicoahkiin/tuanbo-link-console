@@ -233,8 +233,8 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 
 ## 2026-09-29 实际发布与开售结果
 
-- 产品来源：`3dcf91cafc56dcebf368160da2961648c330fdbe`，标签 `v0.4.29`；[正式 Release](https://github.com/JinHe9527/tuanbo-link-console/releases/tag/v0.4.29)。私有仓库无需公开，客户从公司更新域名下载安装包。
-- [Windows 构建](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36461288338) 完成校验与直接草稿归档；下载后逐项验证 manifest、三个分发文件 SHA-256、清单版本／大小／SHA-512，再发布正式 Release。
+- 产品来源：`3dcf91cafc56dcebf368160da2961648c330fdbe`，标签 `v0.4.29`；[正式 Release](https://github.com/Fldicoahkiin/tuanbo-link-console/releases/tag/v0.4.29)。私有仓库无需公开，客户从公司更新域名下载安装包。
+- [Windows 构建](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36461288338) 完成校验与直接草稿归档；下载后逐项验证 manifest、三个分发文件 SHA-256、清单版本／大小／SHA-512，再发布正式 Release。
 - Manifest SHA-256：`ad37f80fde39ee760a2671214d799d58ec227ce768989983e6c57b2adb5811a9`。安装器保持未签名，未伪造 Authenticode 状态。
 - 更新发布备份：`/var/lib/tblink-licensing/backups/20260928T181937Z-e217bc22-update-0.4.29`；公网清单与 blockmap 摘要一致，安装包 HEAD 大小一致、Range 返回 206 且片段一致。
 - 官网来源 `3dcf91cafc56dcebf368160da2961648c330fdbe`，增加 Windows 0.4.29 下载入口；商品与金额从生产目录读取。
@@ -268,7 +268,7 @@ python3 activate-release.py RELEASE.tar ARCHIVE_SHA256 CURRENT_BUNDLE_SHA256 CUR
 
 ## 2026-09-30 微信 Native 预接入版本部署结果
 
-- 官网和授权服务已部署来源 `fb6e286c4a9c700b9693d566389598ace3ad446d`；[对应 CI](https://github.com/JinHe9527/tuanbo-link-console/actions/runs/36655226874) 通过 119 项授权／支付／购买客户端测试、55 项 Python 部署／回退／恢复测试，以及隔离浏览器桌面和移动明暗布局、二维码、渠道锁定、已付／关闭／失败／到期状态检查。首次 CI 因 Linux 不存在 `/private/tmp` 导致截图失败，改用系统临时目录后完整重跑通过。
+- 官网和授权服务已部署来源 `fb6e286c4a9c700b9693d566389598ace3ad446d`；[对应 CI](https://github.com/Fldicoahkiin/tuanbo-link-console/actions/runs/36655226874) 通过 119 项授权／支付／购买客户端测试、55 项 Python 部署／回退／恢复测试，以及隔离浏览器桌面和移动明暗布局、二维码、渠道锁定、已付／关闭／失败／到期状态检查。首次 CI 因 Linux 不存在 `/private/tmp` 导致截图失败，改用系统临时目录后完整重跑通过。
 - API bundle SHA-256：`6ed9e10534b903846ce614e2900c3886119cf06e9c417e44e444336ead57d076`；Nginx SHA-256：`d915e520116f95a09d620efe8cc268c127225970bcafb6f94c9b073b1d1a8b86`。支付环境文件摘要保持 `11a2c78ad6cd9ea54cfe1ed4c3bc47d047dcbc30f9cc146449435bf08f3437a5`，支付宝开售和既有价格保持不变，没有配置微信商户凭据。
 - API 备份 `/var/lib/tblink-licensing/backups/20260930T013430Z`；运维脚本备份 `/var/lib/tblink-licensing/backups/wechat-tools-20260930T013430Z`；官网备份 `/var/lib/tblink-licensing/backups/20260930T013431Z-website`。数据库备份恢复校验、既有表内容比较通过；同步安装支持微信收款来源的交付恢复及台账导出脚本。
 - 官网目录 `/srv/tblink-purchase-releases/fb6e286c4a9c700b9693d566389598ace3ad446d-7d942d72`；公网 HTML SHA-256 `88cd70a3e7889a5ba6736b25bf9e4affb2bc2c35c91320eddd8a4bec32188ce3`，与发布包一致。官网包含支付渠道选择和本地二维码容器；生产微信目录关闭时不显示可付款表单。

@@ -4,8 +4,9 @@ import { dirname, join } from 'node:path';
 
 // Keep the release fuses unchanged. CDP observes the actual packaged renderer;
 // no Node inspector, app.asar edits, or substituted beauty IPC handlers.
-export async function launchPackagedDesktop({ executable, directory, chromium }) {
-  const child = spawn(executable, [`--user-data-dir=${join(directory, 'desktop-profile')}`, '--remote-debugging-port=0', '--enable-logging=stderr'],
+// userDataDirectory: an existing, already activated profile; by default a fresh one inside directory.
+export async function launchPackagedDesktop({ executable, directory, chromium, userDataDirectory = join(directory, 'desktop-profile') }) {
+  const child = spawn(executable, [`--user-data-dir=${userDataDirectory}`, '--remote-debugging-port=0', '--enable-logging=stderr'],
     { cwd: dirname(executable), env: { ...process.env, ProgramData: join(directory, 'desktop-system-data') }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '', endpoint, startup;
   const exit = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve({ code, signal })); });
