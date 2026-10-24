@@ -65,22 +65,30 @@ async function pack(kind, directory, out) {
   console.log(`${kind}：${parts.length} 个分卷，共 ${parts.reduce((sum, part) => sum + part.size, 0)} 字节，标签 ${assetTag(kind, pin)}`);
 }
 
+/** Creates the release, or picks up one an earlier run left half uploaded: parts already uploaded whole are kept, a
+ * part left broken is replaced, and build-assets.json goes last, so a fetch never sees a release without all parts. */
 async function publish(kind, out) {
   const pin = await pinOf(kind);
   const tag = assetTag(kind, pin);
-  const descriptor = JSON.parse(await readFile(join(out, 'build-assets.json'), 'utf8'));
-  const parts = checkDescriptor(descriptor, kind, pin);
-  if (await github(`/repos/${REPOSITORY}/releases/tags/${tag}`, { allow404: true })) throw new Error(`${tag} 已经存在，不覆盖`);
-  const release = await github(`/repos/${REPOSITORY}/releases`, { method: 'POST', body: {
+  const descriptorBytes = await readFile(join(out, 'build-assets.json'));
+  const parts = checkDescriptor(JSON.parse(descriptorBytes), kind, pin);
+  const release = await github(`/repos/${REPOSITORY}/releases/tags/${tag}`, { allow404: true }) ?? await github(`/repos/${REPOSITORY}/releases`, { method: 'POST', body: {
     tag_name: tag, target_commitish: 'master', name: tag, prerelease: true, make_latest: 'false',
     body: `构建用的固定资产（${kind}），指纹 ${pin}，与 ${ASSETS[kind].pin} 一致。只给 Release Windows 下载，不是软件版本。` } });
+  if (release.assets.some(asset => asset.name === 'build-assets.json')) throw new Error(`${tag} 已经完整发布，不覆盖`);
   for (const part of parts) {
+    const existing = release.assets.find(asset => asset.name === part.name);
+    if (existing?.state === 'uploaded' && existing.size === part.size) {
+      console.log(`${part.name} 已上传，跳过`);
+      continue;
+    }
+    if (existing) await github(`/repos/${REPOSITORY}/releases/assets/${existing.id}`, { method: 'DELETE' });
     const bytes = await readFile(join(out, part.name));
     if (createHash('sha256').update(bytes).digest('hex') !== part.sha256) throw new Error(`${part.name} 与 build-assets.json 不一致`);
     await uploadAsset(release, part.name, bytes);
     console.log(`已上传 ${part.name}（${bytes.length} 字节）`);
   }
-  await uploadAsset(release, 'build-assets.json', await readFile(join(out, 'build-assets.json')));
+  await uploadAsset(release, 'build-assets.json', descriptorBytes);
   console.log(`已发布 ${tag}：${release.html_url}`);
 }
 
