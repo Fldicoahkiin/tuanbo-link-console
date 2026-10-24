@@ -2,13 +2,13 @@
 
 面向 Windows 团播现场的节目编排与设备联动软件。在一个工作区内管理节目、播放音乐、编排画面与灯光，并联动 OBS Studio、MIDI、P1 和 grandMA2。
 
-**当前发行：0.4.29 · Windows x64**
+**当前发行：0.5.0 · Windows x64**
 
-本仓库包含桌面端源码、设备桥接工具、自动化测试和实施文档。0.4.29 已开放下载与支付宝购买；Windows CI 已验证正式安装版的未激活拦截、覆盖安装、正常关闭和卸载，以及真实更新器的公网完整下载和损坏包拒绝。真实付款激活、两版本重启更新与现场设备验收仍待完成，见[授权与更新验收](docs/LICENSE_UPDATE_ACCEPTANCE.md)。
+本仓库包含桌面端源码、设备桥接工具、自动化测试和实施文档。0.5.0 于 2026-10-24 发布，官网开放下载与支付宝购买。0.4.29 时 Windows CI 已验证正式安装版的未激活拦截、覆盖安装、正常关闭和卸载，以及真实更新器的公网完整下载和损坏包拒绝。真实付款激活、两版本重启更新与现场设备验收仍待完成，见[授权与更新验收](docs/LICENSE_UPDATE_ACCEPTANCE.md)。
 
-[产品官网与购买](https://tuanbo-link.jinhefilm.com/) · [下载 Windows 0.4.29](https://updates.tuanbo-link.jinhefilm.com/windows/x64/Tuanbo-Link-Console-0.4.29-x64.exe) · [发行记录](docs/RELEASE_0.4.29.md)
+[产品官网与购买](https://tuanbo-link.jinhefilm.com/) · [下载 Windows 0.5.0](https://updates.tuanbo-link.jinhefilm.com/windows/x64/Tuanbo-Link-Console-0.5.0-x64.exe) · [发布与部署链路](#发布与部署链路) · [0.4.29 发行记录](docs/RELEASE_0.4.29.md)
 
-0.4.27 仍使用旧 GitHub 更新源。首次迁移请保存工程、退出软件，再用上述 0.4.29 安装器覆盖原目录；新版使用公司更新源，无需填写 GitHub Token。具体步骤见[旧安装迁移](docs/SOFTWARE_UPDATES.md#旧安装迁移与故障)。
+0.4.27 仍使用旧 GitHub 更新源。首次迁移请保存工程、退出软件，再用官网安装器覆盖原目录；新版使用公司更新源，无需填写 GitHub Token。具体步骤见[旧安装迁移](docs/SOFTWARE_UPDATES.md#旧安装迁移与故障)。
 
 安装包目前未做 Authenticode 签名，Windows 可能显示未知发布者或 SmartScreen 提示。
 
@@ -178,6 +178,104 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 
 本仓库提交不会自动更新已安装的客户端。正式交付应完成现场验收、版本发布和安装流程验证。
 
+<a id="发布与部署链路"></a>
+## 发布与部署链路
+
+两条链路互不相干：Windows 安装包走[Windows 发版](#windows-发版)，授权服务、官网和运营后台走[服务部署](#服务部署)。密钥和凭据的位置见[密钥和凭据](#密钥和凭据)，出问题时按[排查表](#排查表)找。详细规则：[发版标准流程](docs/RELEASE_CHAIN.md#以后发版本的标准流程)、[软件更新](docs/SOFTWARE_UPDATES.md#步骤)、[自动发布与信任边界](docs/AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)、[发版中转机准备](docs/RELEASE_BUILDER_SETUP.md)。
+
+<a id="windows-发版"></a>
+### Windows 发版
+
+改版本号、推 `vX.Y.Z` 标签之后全部自动。安装包在 GitHub 云端构建；上传私钥只在工位电脑上，所以由工位电脑上的 runner 把它搬到服务器。
+
+```mermaid
+flowchart TD
+  tag["推 vX.Y.Z 标签"] --> verify["verify 作业（GitHub 云端 windows-latest）<br/>版本高于已有标签和更新源 · 类型检查 · 单测 · lint"]
+  verify --> build["build 作业（GitHub 云端 windows-latest）<br/>下载美颜和音乐分析固定资产（build-assets-* release）<br/>打包 · afterPack 按 release-pin.json 核对 · 用 secret 签 latest.yml"]
+  build --> draft[("草稿 GitHub Release<br/>安装包 · blockmap · latest.yml · release-manifest.json")]
+  draft --> transfer["transfer 作业（工位电脑 self-hosted runner，标签 release-builder）<br/>下载草稿 · 按 manifest 核对 · 用 Git 自带 ssh 以 tblink-release 身份上传"]
+  transfer --> staging[("服务器 /var/lib/tblink-release/staging")]
+  staging -->|"tblink-update-publish.path 触发"| publisher["publish-update.py（root）<br/>重新校验签名 · manifest · sha256 · 版本 · 没发布过"]
+  publisher --> feed[("更新源 updates.tuanbo-link.jinhefilm.com/windows/x64<br/>只留新版和上一版")]
+  feed --> client["已安装的软件：检查更新 · 验签 · 差分下载 · 安装"]
+  feed -->|"transfer 轮询 latest.yml 到逐字节一致"| latest["草稿转为正式 Release，标为 Latest"]
+  feed -->|"上线后运行 write-website-release.mjs 并推送"| website["官网下载页 /release.json"]
+```
+
+- 工位电脑关机时，transfer 作业在队列里等它开机。排队超时（GitHub 最多等 24 小时）后，在 Actions 里只重跑这个作业（Re-run failed jobs）。它会重新下载草稿；更新源已经是这个版本时不再上传，直接把草稿转为正式。
+- build 作业失败可以连同 transfer 一起重跑：草稿里同名的文件会被替换。版本已经上线时，build 作业拒绝重建。
+- 发布出了问题，在运营后台「软件更新」里「回滚到上一版」。回滚过的版本不会再被自动发布。
+
+<a id="服务部署"></a>
+### 服务部署
+
+授权服务、官网和运营后台随 master 推送自动部署，不经过工位电脑。
+
+```mermaid
+flowchart TD
+  push["推 master（改动授权服务、官网或后台）"] --> ci["Verify Licensing Server（GitHub Actions）<br/>类型检查 · 支付和授权测试 · 构建 · 浏览器检查 · 部署工具回归"]
+  ci -->|"deploy-from-ci.py 第一次连接：只发清单"| receiver["receive-release.py（tblink-deploy 身份，ForceCommand）<br/>核对已装的四个部署工具和 Nginx 摘要 · 返回缺少的产物"]
+  receiver -->|"第二次连接：只上传变化的产物"| job["root 任务目录 · systemd 临时服务"]
+  job --> activate["activate-release.py：维护模式 · 数据库备份和恢复校验 · 切换服务"]
+  job --> site["publish-website.py：原子切换官网 · 逐文件核对"]
+  job --> console["publish-console.py：后台静态文件"]
+  activate -->|"任何一步失败"| rollback["装回旧代码、旧环境和旧代理"]
+  site -->|"失败"| rollback
+```
+
+部署工具或 Nginx 有改动时，要先按对应的 `docs/SERVER_INSTALL_*.md` 装到服务器，再推 master，否则部署会以摘要不一致被拒绝。安装记录：[2026-10-23 首次安装](docs/SERVER_INSTALL_20261023.md)、[仓库转移](docs/SERVER_INSTALL_REPO_TRANSFER_20261024.md)、[更新源保留规则](docs/SERVER_INSTALL_FEED_RETENTION_20261024.md)、[自动发布](docs/SERVER_INSTALL_AUTO_PUBLISH_20261024.md)、[SSH MSS 钳制](docs/SERVER_INSTALL_SSH_MSS_20261024.md)。
+
+<a id="密钥和凭据"></a>
+### 密钥和凭据
+
+```mermaid
+flowchart LR
+  subgraph gh["GitHub 仓库 secrets 和变量"]
+    sign["TBLINK_RELEASE_SIGNING_KEY<br/>发布私钥 release-2026-10-a"]
+    deploy["TBLINK_DEPLOY_SSH_KEY · TBLINK_DEPLOY_KNOWN_HOSTS<br/>变量 TBLINK_AUTO_DEPLOY=true"]
+  end
+  subgraph office["工位电脑"]
+    upload["D:\tblink-release-signing\upload<br/>tblink-release 上传私钥 · known_hosts"]
+  end
+  usb["U 盘（离线）<br/>备用发布私钥 release-2026-10-b"]
+  subgraph server["服务器"]
+    relkeys["/etc/tblink-release/authorized_keys"]
+    depkeys["/etc/tblink-deploy/authorized_keys"]
+    pub["/opt/tblink-licensing/release-public-keys.json"]
+  end
+  sign -->|"build 作业签名"| pub
+  upload -->|"transfer 作业上传"| relkeys
+  deploy -->|"服务部署"| depkeys
+```
+
+| 凭据 | 放在哪里 | 谁能用 |
+| --- | --- | --- |
+| 发布私钥 `release-2026-10-a`（日常） | GitHub secret `TBLINK_RELEASE_SIGNING_KEY`；过渡期工位电脑 `D:\tblink-release-signing\` 还有一份，第一次云端签名成功后删除 | 只在 build 作业的签名这一步注入环境变量，不写磁盘 |
+| 发布私钥 `release-2026-10-b`（备用） | U 盘离线保存，电脑上不留 | 换钥时人工使用 |
+| 发布公钥 | 客户端 `apps/desktop/src/main/link/release-public-keys.json`；服务器 `/opt/tblink-licensing/release-public-keys.json` | 客户端安装前验签；服务器发布前验签 |
+| 上传私钥（tblink-release 身份） | 工位电脑 `D:\tblink-release-signing\upload\`，只给 tblink-runner 账号读 | transfer 作业；服务器端只允许写 staging（`receive-update.py`） |
+| 部署私钥（tblink-deploy 身份） | GitHub secret `TBLINK_DEPLOY_SSH_KEY` | Verify Licensing Server 的部署步骤；服务器端只运行接收器 |
+| `GITHUB_TOKEN` | 每次运行自动生成 | build 作业建草稿；transfer 作业读草稿、转为正式 |
+| 工位电脑上的 gh 登录 | Fldicoahkiin | 注册 runner、设置 secret、上传固定资产 |
+| 授权签发私钥、数据密钥、后台令牌 | 只在服务器上，见[激活码服务器](docs/LICENSE_SERVER.md) | 授权服务进程 |
+
+<a id="排查表"></a>
+### 排查表
+
+| 现象 | 去哪里看 |
+| --- | --- |
+| 推了标签，没有 Release Windows 运行 | 标签必须是 `v` 开头；Actions 页面的 Release Windows |
+| verify 作业失败 | Actions 日志的「Release version is new」或「Typecheck, test and lint」；版本必须高于已有标签和线上 `latest.yml` |
+| build 作业失败 | Actions 日志。「没有 build-assets-…」说明固定资产还没上传，见[发版中转机准备](docs/RELEASE_BUILDER_SETUP.md)；afterPack 报指纹不一致，就核对 `release-pin.json` 与资产 release；签名一步失败，就检查 secret `TBLINK_RELEASE_SIGNING_KEY` |
+| 草稿里缺文件或有多个草稿 | 仓库 Releases 页面，草稿只对有写权限的人可见 |
+| transfer 作业一直排队 | 工位电脑是否开机；`Get-Service actions.runner.*`；runner 日志 `D:\actions-runner\_diag\`；仓库 Settings → Actions → Runners |
+| 上传失败 | transfer 作业日志；服务器 `sudo journalctl _COMM=sshd-session --since -1h \| grep tblink-release`；`sudo ls -la /var/lib/tblink-release/staging`；`systemctl status tblink-mss-clamp` |
+| 上传了但没上线 | `sudo cat /var/lib/tblink-update-publish/auto-publish.json`、`update-status.json`；`sudo journalctl -u tblink-update-publish.service -n 50`；`sudo tail /var/backups/tblink/update-audit.jsonl`；后台「软件更新」的「最近一次自动发布」 |
+| 更新源内容不对 | `curl https://updates.tuanbo-link.jinhefilm.com/windows/x64/latest.yml`；服务器 `ls -l /srv/tblink-updates/windows/x64/`；回执在 `/var/backups/tblink/update-receipts/` |
+| GitHub Release 还是草稿 | transfer 作业最后一步的日志：30 分钟内更新源没换成这个版本就失败，看「上传了但没上线」一行，处理后只重跑 transfer |
+| 客户端检查不到或装不上 | 软件里「软件更新」面板的提示和运行日志；签名不符时拒绝安装 |
+| 授权服务、官网或后台没更新 | Verify Licensing Server 的日志；服务器 `sudo cat /var/lib/tblink-deploy/last-success.json`、`/var/lib/tblink-deploy/jobs/*/`；`systemctl list-units 'tblink-deploy-*'`；`sudo journalctl -u tblink-licensing -n 50`；`curl https://api.tuanbo-link.jinhefilm.com/health` |
+
 ## 文档索引
 
 | 主题 | 文档 |
@@ -189,7 +287,7 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 | 界面设计 | [设计映射与验证记录](docs/JINHE_UI_ALIGNMENT.md) |
 | 实机验收 | [Windows 验收清单](docs/WINDOWS_ACCEPTANCE.md) |
 | 更新维护 | [软件更新说明](docs/SOFTWARE_UPDATES.md) |
-| Git 与版本链路 | [源码、构建、部署与本地运行](docs/RELEASE_CHAIN.md) |
+| Git 与版本链路 | [源码、构建、部署与本地运行](docs/RELEASE_CHAIN.md) · [发版中转机准备](docs/RELEASE_BUILDER_SETUP.md) · [服务自动部署](docs/AUTOMATED_DEPLOYMENT.md) |
 | 商业接口 | [授权与支付接口契约](docs/COMMERCIAL_API.md) |
 | 域名部署 | [Cloudflare 与同服务器部署](docs/COMMERCIAL_DEPLOYMENT.md) |
 | 软件保护 | [凭证、加密与后续防破解](docs/SECURITY.md) |

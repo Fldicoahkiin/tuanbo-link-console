@@ -55,7 +55,7 @@
   Tuanbo-Link-Console-X.Y.Z-x64.exe.blockmap
 ```
 
-`latest.yml` 由 electron-builder 生成，包含版本、安装包相对文件名、大小和 SHA-512；构建机再追加 `tblinkRelease` 发布签名。不要手改，改动会让签名或 manifest 摘要失效。正式稳定版本用数字 `X.Y.Z`；当前反向代理白名单不服务 prerelease、其他架构或任意文件。
+`latest.yml` 由 electron-builder 生成，包含版本、安装包相对文件名、大小和 SHA-512；云端构建再追加 `tblinkRelease` 发布签名。不要手改，改动会让签名或 manifest 摘要失效。正式稳定版本用数字 `X.Y.Z`；当前反向代理白名单不服务 prerelease、其他架构或任意文件。
 
 清单 `Cache-Control: no-store`；带版本的安装包不可变、长期缓存。不开目录浏览，未匹配路径 404。服务器、CF 记录和探测命令见 [COMMERCIAL_DEPLOYMENT.md](COMMERCIAL_DEPLOYMENT.md)。
 
@@ -106,11 +106,11 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 ### 步骤
 
 1. 推发布提交到 master；CI 通过后在这个提交上打 `vX.Y.Z` 标签并推送。标签就是发布：之后没有人工步骤。
-2. Release Windows：托管机检查通过后，构建机打包、签名、上传到服务器 staging（[构建机准备](RELEASE_BUILDER_SETUP.md)）。
+2. Release Windows：verify 和 build 作业在 GitHub 云端 Windows 上检查、打包、签名，把安装包、blockmap、`latest.yml`、`release-manifest.json` 放进这个标签的草稿 GitHub Release（私有仓库的 Actions 产物存储只有 500 MB，所以不用 artifact）。transfer 作业在工位电脑的 runner 上下载草稿、按构建清单核对，再上传到服务器 staging（[发版中转机准备](RELEASE_BUILDER_SETUP.md)）。美颜和音乐分析的固定资产各放在一个 `build-assets-*` release 里，见[固定资产](RELEASE_BUILDER_SETUP.md#固定资产)。
 3. 服务器自动发布：staging 里出现新的一份包，root 发布脚本就复制、重新校验，通过就上线。条件是签名有效、manifest 和 sha256 一致、版本高于更新源，并且这个版本以前没上过更新源。更新源只留新版和上一版，更早的移进服务器备份。每份上传只自动尝试一次；没能发布的留在后台「软件更新」的待发布列表，原因写在「最近一次自动发布」。需要撤回时用「回滚到上一版」，撤下的版本也移出更新源，之后重跑工作流也不会再把它自动发上去。完整链路和信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。
-4. 同一个工作流的 release 作业等更新源换成这个版本（最多 30 分钟），核对发布签名、`latest.yml` 和构建清单，再在这个标签上建 GitHub Release 并标为 Latest。附件是构建作业留在构建机上的同一组文件：安装包、blockmap、`latest.yml`、`release-manifest.json`，放在 runner 工作目录的 `tblink-releases\<标签>-<运行编号>-<尝试次数>\`，每次约 1 GB，不自动清理。说明取自 `release-notes/X.Y.Z.md`，没有这个文件就只写固定的激活说明。
-   - 这一步失败时（代理、GitHub 出错，或服务器没能自动发布、在后台手动发布之后），在 Actions 里只重跑失败的作业（Re-run failed jobs）。
-   - 不要重跑全部作业：重新构建会上传一份服务器不再发布的同版本包，release 作业等不到它，只会超时。
+4. transfer 作业等更新源换成这个版本（`latest.yml` 逐字节相同，最多 30 分钟），把草稿转为正式 Release 并标为 Latest。说明在建草稿时取自 `release-notes/X.Y.Z.md`，没有这个文件就只写固定的激活说明。
+   - transfer 失败（工位电脑关机后排队超时、代理或 GitHub 出错、服务器没能自动发布而在后台手动发布之后），在 Actions 里只重跑失败的作业（Re-run failed jobs）。它重新下载草稿；更新源已经是这个版本时不再上传，直接把草稿转为正式。
+   - build 失败可以连同 transfer 一起重跑：草稿里同名的文件会被替换。版本已经上线时，build 拒绝重建。
 5. 运行 `node scripts/write-website-release.mjs` 更新官网下载信息并提交，见[官网下载信息](#官网下载信息)。官网改成直接跟着更新源变化之后，这一步去掉。
 
 旧的手工发布（`publish-update.py <目录> <manifest sha256> <提交> <版本>`）仍可用，但同样要求发布签名和更高的版本号。

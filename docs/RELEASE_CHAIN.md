@@ -7,10 +7,12 @@
 
 1. 发布提交只改根目录和 `apps/desktop` 两个 `package.json` 的版本号，提交信息 `chore(release): X.Y.Z`，推 master。
 2. 这个提交的 CI 通过后，在它上面打 `vX.Y.Z` 标签并推送。
-3. 之后全部自动：
-   - Release Windows：托管机检查版本、类型、单测、lint；构建机打包、签名、上传到服务器 staging。
+3. 之后全部自动（2026-10-24 用户定下：在 GitHub 云端打包，工位电脑只负责把包搬到服务器；不用 Cloudflare）：
+   - Release Windows 的 verify 和 build 作业在 GitHub 云端 Windows 上跑：检查版本、类型、单测、lint；下载美颜和音乐分析的固定资产，打包、签名，把四个文件放进这个标签的草稿 GitHub Release。
+   - transfer 作业在工位电脑的 runner 上跑：下载草稿、按构建清单核对，上传到服务器 staging。
    - 服务器：发布脚本重新做全部校验（签名、manifest、sha256、版本高于更新源、这个版本没发布过），通过就上线。
-   - 工作流：等更新源换成这个版本，再用构建机上的同一组文件建 GitHub Release，标为 Latest。
+   - transfer 作业等更新源换成这个版本，把草稿转为正式 Release，标为 Latest。
+   - 工位电脑关机时，transfer 作业排队等它开机；排队超时后在 Actions 里只重跑这个作业。
 4. 用户从官网下载安装、测试。有问题就在后台「回滚到上一版」，或者修好后发下一个版本。
 
 后台「软件更新」保留，用来看状态、看最近一次自动发布的结果和紧急回滚。没能自动发布的版本留在待发布列表里，原因写在「最近一次自动发布」。
