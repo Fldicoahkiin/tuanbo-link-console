@@ -12,11 +12,11 @@ import type {
   SceneItemTransform
 } from '@tb/schema';
 
-/** release: the official installer; test: the activation-free test package; internal: the signed internal build. */
-export type LinkReleaseChannel = 'release' | 'test' | 'internal' | 'development';
+/** release: the official installer, the only packaged build; development: the unpackaged app. */
+export type LinkReleaseChannel = 'release' | 'development';
 
 export type LinkAppInfo = {
-  /** Product name of this build, e.g. 团播联动台功能测试版 for the test package. */
+  /** Product name of this build. */
   name: string;
   version: string;
   channel: LinkReleaseChannel;

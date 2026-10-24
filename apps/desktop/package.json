@@ -19,6 +19,7 @@
   },
   "build": {
     "productName": "团播联动台",
+    "beforePack": "./scripts/require-release-build.mjs",
     "afterPack": "./scripts/edit-windows-executable.mjs",
     "appId": "com.tuanbo.control",
     "electronFuses": {
