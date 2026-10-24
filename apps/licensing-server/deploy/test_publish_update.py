@@ -134,27 +134,68 @@ class PublishUpdateTest(unittest.TestCase):
             self.publish(source, '0.5.0')
         self.assertEqual(list(self.feed.iterdir()), [])
 
-    def test_console_request_publishes_a_staged_release_and_refuses_a_swapped_one(self):
+    def audit(self):
+        return [json.loads(line) for line in (self.root / module.AUDIT).read_text().splitlines()]
+
+    def test_a_staged_release_goes_live_on_its_own_and_a_failed_upload_is_tried_once(self):
         staged = release(self.root / module.STAGING / '0.5.0-aaaaaaaaaaaa', '0.5.0')
-        manifest_sha = module.digest(staged / 'release-manifest.json').hexdigest()
         self.process()
-        self.assertEqual(self.status()['staged'][0]['manifestSha256'], manifest_sha)
-        result = self.request(action='publish', staged='0.5.0-aaaaaaaaaaaa', manifestSha256='0' * 64)
-        self.assertEqual((result['ok'], result['message']), (False, '待发布版本的 manifest 与确认时不一致'))
-        self.assertFalse((self.feed / 'latest.yml').exists())
-        result = self.request(action='publish', staged='0.5.0-aaaaaaaaaaaa', manifestSha256=manifest_sha)
-        self.assertEqual((result['ok'], result['message']), (True, '已发布 0.5.0'))
         self.assertFalse(staged.exists())
         self.assertEqual(self.status()['feed']['version'], '0.5.0')
         self.assertTrue(self.status()['feed']['signed'])
-        audit = [json.loads(line) for line in (self.root / module.AUDIT).read_text().splitlines()]
-        self.assertEqual([(entry['action'], entry['version'], entry['ok']) for entry in audit], [('publish', None, False), ('publish', '0.5.0', True)])
-        self.assertEqual(audit[1]['actor'], 'owner (9d53530a)')
-        self.assertEqual(audit[1]['requestedAt'], '2026-10-23T08:00:00.000Z')
-        # The console reads results and status through its group; nobody else can.
-        for path in [self.publisher / 'update-status.json', *(self.publisher / 'results').iterdir()]:
-            self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(self.status()['staged'], [])
+        self.assertEqual({key: self.status()['autoPublish'][key] for key in ('name', 'ok', 'message')},
+                         {'name': '0.5.0-aaaaaaaaaaaa', 'ok': True, 'message': '已自动发布 0.5.0'})
+        self.assertEqual([(entry['action'], entry['version'], entry['ok'], entry['actor']) for entry in self.audit()],
+                         [('auto-publish', '0.5.0', True, module.AUTO_ACTOR)])
+        # The console reads the status through its group; nobody else can.
+        self.assertEqual((self.publisher / 'update-status.json').stat().st_mode & 0o777, 0o640)
         self.assertEqual(list((self.publisher / 'work').iterdir()), [])
+
+        broken = release(self.root / module.STAGING / '0.5.1-bbbbbbbbbbbb', '0.5.1')
+        (broken / 'Tuanbo-Link-Console-0.5.1-x64.exe').write_bytes(b'corrupted')
+        self.process()
+        self.assertEqual(self.status()['feed']['version'], '0.5.0')
+        self.assertEqual(self.status()['autoPublish']['message'], '0.5.1-bbbbbbbbbbbb 没有自动发布：产物与 manifest 不一致：Tuanbo-Link-Console-0.5.1-x64.exe')
+        self.assertFalse(self.status()['autoPublish']['ok'])
+        # The same upload is not tried again on every run.
+        self.process()
+        self.assertEqual(len(self.audit()), 2)
+        # A new upload of that version is.
+        shutil.rmtree(broken)
+        release(broken, '0.5.1')
+        self.process()
+        self.assertEqual(self.status()['feed']['version'], '0.5.1')
+        self.assertEqual([(entry['version'], entry['ok']) for entry in self.audit()], [('0.5.0', True), (None, False), ('0.5.1', True)])
+
+    def test_only_the_owner_puts_back_a_version_that_was_rolled_back(self):
+        self.publish(release(self.root / 'one', '0.5.0'), '0.5.0')
+        self.publish(release(self.root / 'two', '0.5.1'), '0.5.1')
+        self.assertTrue(self.request(action='rollback', version='0.5.0')['ok'])
+        # The release workflow run again: the withdrawn version is staged once more, and a lower one too.
+        staged = release(self.root / module.STAGING / '0.5.1-aaaaaaaaaaaa', '0.5.1')
+        release(self.root / module.STAGING / '0.4.9-aaaaaaaaaaaa', '0.4.9')
+        self.process()
+        self.assertEqual(self.status()['feed']['version'], '0.5.0')
+        self.assertIsNone(self.status()['autoPublish'])
+        self.assertEqual([(entry['name'], entry['issue']) for entry in self.status()['staged']], [
+            ('0.4.9-aaaaaaaaaaaa', '版本 0.4.9 不高于当前更新源（0.5.0）'), ('0.5.1-aaaaaaaaaaaa', None)])
+        manifest_sha = module.digest(staged / 'release-manifest.json').hexdigest()
+        result = self.request(action='publish', staged='0.5.1-aaaaaaaaaaaa', manifestSha256='0' * 64)
+        self.assertEqual((result['ok'], result['message']), (False, '待发布版本的 manifest 与确认时不一致'))
+        result = self.request(action='publish', staged='0.5.1-aaaaaaaaaaaa', manifestSha256=manifest_sha)
+        self.assertEqual((result['ok'], result['message']), (True, '已发布 0.5.1'))
+        self.assertFalse(staged.exists())
+        self.assertEqual(self.status()['feed']['version'], '0.5.1')
+        audit = self.audit()
+        self.assertEqual(audit[-1]['actor'], 'owner (9d53530a)')
+        self.assertEqual(audit[-1]['requestedAt'], '2026-10-23T08:00:00.000Z')
+
+    def test_a_staged_directory_named_for_another_version_is_not_published(self):
+        release(self.root / module.STAGING / '0.6.0-aaaaaaaaaaaa', '0.5.0')
+        self.process()
+        self.assertFalse((self.feed / 'latest.yml').exists())
+        self.assertEqual(self.status()['autoPublish']['message'], '0.6.0-aaaaaaaaaaaa 没有自动发布：待发布目录名与版本不符')
 
     def test_rollback_returns_to_the_previous_feed_once(self):
         self.publish(release(self.root / 'one', '0.5.0'), '0.5.0')
@@ -227,7 +268,8 @@ writeFileSync(`${directory}/latest.yml`, signUpdateMetadata(text, { installerNam
         self.assertEqual(module.verify_signature(metadata, 'Tuanbo-Link-Console-0.5.0-x64.exe', len(data), base64.b64encode(hashlib.sha512(data).digest()).decode(), self.root), 'release-test-a')
 
     def test_discard_and_malformed_requests(self):
-        staged = release(self.root / module.STAGING / '0.5.0-bbbbbbbbbbbb', '0.5.0')
+        # Unsigned, so it does not go live on its own and stays staged until discarded.
+        staged = release(self.root / module.STAGING / '0.5.0-bbbbbbbbbbbb', '0.5.0', signed=False)
         self.assertEqual(self.request(action='discard', staged='../../etc')['message'], '请求内容无效')
         self.assertEqual(self.request(action='discard', staged='0.5.0-bbbbbbbbbbbb')['ok'], True)
         self.assertFalse(staged.exists())
@@ -339,11 +381,15 @@ writeFileSync(`${directory}/latest.yml`, signUpdateMetadata(text, { installerNam
         first = status.stat().st_ino
         self.process()
         self.assertEqual(status.stat().st_ino, first)
+        self.publish(release(self.root / 'one', '0.5.0'), '0.5.0')
+        # Staged again after it went live: not above the feed, so it stays staged and is only listed.
         release(self.root / module.STAGING / '0.5.0-eeeeeeeeeeee', '0.5.0')
         self.process()
         self.assertNotEqual(status.stat().st_ino, first)
-        self.assertEqual(self.status()['staged'][0]['version'], '0.5.0')
+        self.assertEqual(self.status()['staged'][0]['issue'], '版本 0.5.0 不高于当前更新源（0.5.0）')
         second = status.stat().st_ino
+        self.process()
+        self.assertEqual(status.stat().st_ino, second)
         # A staged file rewritten in place changes its change time, so the entry is checked again.
         (self.root / module.STAGING / '0.5.0-eeeeeeeeeeee' / 'latest.yml').write_text('version: 0.5.0\n')
         self.process()

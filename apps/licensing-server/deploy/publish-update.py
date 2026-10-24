@@ -3,8 +3,10 @@
 
 Usage (root):
   publish-update.py <directory> <manifest_sha256> <git_sha> <version>   publish a reviewed directory by hand
-  publish-update.py --process-requests                                    run the console's queued requests
-The console never writes the feed. It queues a request; this script, started as root by
+  publish-update.py --process-requests                                    run the console's queued requests, then
+                                                                          publish a newly staged release
+A release the builder stages goes live on its own once it passes every check (tag = release). The console never
+writes the feed: it queues a rollback, a discard or a manual publish; this script, started as root by
 tblink-update-publish.path, re-validates everything and writes the result back.
 
 Paths. Everything this script writes, or reads to decide what to trust, lies under directories that only root
@@ -349,12 +351,19 @@ def open_staged(staging_fd, name, accounts):
 
 
 def publish_staged(staging_fd, name, manifest_sha, root, accounts, request):
+    """manifest_sha is the manifest the console confirmed, or None when the release goes live on its own."""
     entry = open_staged(staging_fd, name, accounts)
     try:
         with candidate(root, entry) as work:
             release = validate_release(work, root)
+            if manifest_sha is None:
+                if release['version'] != name.split('-')[0]:
+                    raise RuntimeError('待发布目录名与版本不符')
+                # A version that was on the feed before (a rollback withdrew it) only goes back by the owner's hand.
+                if publish_receipt(root, release['version']) is not None:
+                    raise RuntimeError(f'{release["version"]} 发布过，不再自动发布')
             # The console confirmed this exact manifest; a replaced staging entry is refused.
-            if release['manifestSha256'] != manifest_sha:
+            elif release['manifestSha256'] != manifest_sha:
                 raise RuntimeError('待发布版本的 manifest 与确认时不一致')
             result = install(work, release, root, request)
     finally:
@@ -498,11 +507,13 @@ def refresh_status(root, accounts, force=True):
         os.close(staging_fd)
     current = current_feed(root)
     previous, issue = rollback_target(root)
+    auto = json.loads((root / AUTO_PUBLISH).read_text()) if (root / AUTO_PUBLISH).exists() else None
     write_json(publisher / 'update-status.json', {
         'version': 1, 'generatedAt': now(),
         'feed': None if current is None else {'version': current['version'], 'releaseDate': current['releaseDate'], 'signed': 'tblinkRelease' in current},
         'rollback': {'version': None if previous is None else previous['version'], 'issue': issue},
-        'staged': staged}, accounts)
+        'staged': staged,
+        'autoPublish': None if auto is None else {key: auto[key] for key in ('name', 'ok', 'message', 'at')}}, accounts)
     write_json(cache, source)
 
 
@@ -565,10 +576,48 @@ def handle(request, root, accounts):
         os.close(staging_fd)
 
 
+AUTO_PUBLISH = PUBLISHER + '/auto-publish.json'
+AUTO_ACTOR = 'release-builder（自动发布）'
+
+
+def auto_publish(root, accounts):
+    """Puts the highest staged version above the feed on the feed, once per upload: the attempt is recorded with
+    the staged files' fingerprint, so a failure is not tried again until the builder uploads anew. Lower versions
+    and versions that were on the feed before stay staged for the owner. Returns whether it tried."""
+    record_path = root / AUTO_PUBLISH
+    last = json.loads(record_path.read_text()) if record_path.exists() else None
+    current = current_feed(root)
+    staging_fd = open_owned_directory(root / STAGING, accounts.builder)
+    try:
+        candidates = [(name, files) for name, files in status_source(root, staging_fd, accounts)['staged']
+                      if (current is None or version_key(name.split('-')[0]) > version_key(current['version']))
+                      and publish_receipt(root, name.split('-')[0]) is None]
+        if not candidates:
+            return False
+        name, fingerprint = max(candidates, key=lambda item: version_key(item[0].split('-')[0]))
+        if last is not None and [last['name'], last['fingerprint']] == [name, fingerprint]:
+            return False
+        try:
+            result = publish_staged(staging_fd, name, None, root, accounts, {'actor': AUTO_ACTOR, 'staged': name})
+            moved = archived_versions(result['archived'])
+            version, ok = result['version'], True
+            message = f'已自动发布 {version}' + (f'，已移出更新源：{"、".join(moved)}' if moved else '')
+        except Exception as error:  # Recorded and shown in the console; tried again only for a new upload.
+            version, ok, message = None, False, f'{name} 没有自动发布：{error}'
+    finally:
+        os.close(staging_fd)
+    at = now()
+    write_json(record_path, {'name': name, 'fingerprint': fingerprint, 'ok': ok, 'message': message, 'at': at})
+    with (root / AUDIT).open('a') as audit:
+        audit.write(json.dumps({'id': name, 'requestedAt': None, 'processedAt': at, 'actor': AUTO_ACTOR, 'action': 'auto-publish',
+                                'version': version, 'ok': ok, 'message': message}, ensure_ascii=False) + '\n')
+    return True
+
+
 def process_requests(root=Path('/'), accounts=None):
-    """Runs each request once, oldest first. The request directory belongs to the console's service account;
-    this script only reads it, and the console removes a request once it has read the result. A request
-    with a result already is a duplicate and is left alone."""
+    """Runs each request once, oldest first, then publishes a newly staged release. The request directory belongs
+    to the console's service account; this script only reads it, and the console removes a request once it has
+    read the result. A request with a result already is a duplicate and is left alone."""
     accounts = accounts or system_accounts()
     check_layout(root, accounts)
     publisher = root / PUBLISHER
@@ -599,7 +648,8 @@ def process_requests(root=Path('/'), accounts=None):
                                                 'ok': result['ok'], 'message': result['message']}, ensure_ascii=False) + '\n')
         finally:
             os.close(requests_fd)
-        refresh_status(root, accounts, force=handled)
+        attempted = auto_publish(root, accounts)
+        refresh_status(root, accounts, force=handled or attempted)
 
 
 if __name__ == '__main__':
