@@ -1,5 +1,5 @@
 import { emptyInternalPlayerState, lightingStartCheck, nativeAudioAnalysis, songLightingStatus, toUserErrorMessage,
-  type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type PlaybackBoundary, type PlaybackClock } from '@tb/core/link';
+  type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type PlaybackBoundary, type PlaybackClock, type SongLightingStatus } from '@tb/core/link';
 import type { LinkProject, NativePlayerStatus, NativeProgramAttachment, NativeProgramEvent, NativeProgramOperation } from '@tb/schema';
 
 type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | 'onNativeProgramEvent' | 'onNativePlaybackStatus' | 'getNativePlaybackDevices'>;
@@ -42,14 +42,22 @@ export class RemoteNativeProgramPlayer {
       document: JSON.stringify(project), configuration: this.configuration() }).then(attachment => { this.attachment = attachment; });
     void this.ready.catch(error => this.failed(error));
   }
-  /** A song the operator starts is checked first; a failed check asks whether to play it without lighting. */
+  /** A song the operator starts is checked first; a failed check asks whether to play it without lighting.
+   * The answer is asked once per song and kind of problem: later starts reuse it, and the engine still
+   * shows that the song plays without lighting. A song that checks out asks again the next time it fails. */
   async play(itemId: string, positionMs?: number, paused = false): Promise<void> {
     let withoutLighting = false;
     try {
-      const reason = await this.startCheck(itemId);
-      if (reason) {
-        if (!this.dependencies.confirmWithoutLighting) throw new Error(`${reason}；无法询问是否无灯光播放`);
-        if (!await this.dependencies.confirmWithoutLighting(reason)) return;
+      const check = await this.startCheck(itemId);
+      const choices = this.dependencies.withoutLightingChoices, key = `${this.project.projectId}\n${itemId}`;
+      if (!check) choices?.delete(key);
+      else if (choices?.get(key) === check.topic) {
+        withoutLighting = true;
+        this.dependencies.notice?.(`开播前检查：沿用操作员选择无灯光播放；${check.reason}`, itemId);
+      } else {
+        if (!this.dependencies.confirmWithoutLighting) throw new Error(`${check.reason}；无法询问是否无灯光播放`);
+        if (!await this.dependencies.confirmWithoutLighting(check.reason)) return;
+        choices?.set(key, check.topic);
         withoutLighting = true;
       }
     } catch (error) { this.failed(error); return; }
@@ -89,14 +97,16 @@ export class RemoteNativeProgramPlayer {
     // Close is sent immediately, including while open is waiting for authorization.
     await this.api.controlNativeProgram({ version: 1, ownerId: this.ownerId, operation: { kind: 'close' } });
   }
-  private async startCheck(itemId: string): Promise<string | null> {
+  private async startCheck(itemId: string): Promise<{ topic: SongLightingStatus['state']; reason: string } | null> {
+    const topic = songLightingStatus(this.project, itemId).state;
     let ports: string[] | null = null;
     // Only a ready song needs the present MIDI outputs.
-    if (songLightingStatus(this.project, itemId).state === 'ready') {
+    if (topic === 'ready') {
       try { ports = (await this.api.getNativePlaybackDevices()).midiOutputs.map(output => output.name); }
-      catch (error) { return `这首歌可演出，但时间码输出端口无法确认：${toUserErrorMessage(error)}`; }
+      catch (error) { return { topic, reason: `这首歌可演出，但时间码输出端口无法确认：${toUserErrorMessage(error)}` }; }
     }
-    return lightingStartCheck(this.project, itemId, { portName: this.dependencies.configuration().mtcPortName, ports });
+    const reason = lightingStartCheck(this.project, itemId, { portName: this.dependencies.configuration().mtcPortName, ports });
+    return reason ? { topic, reason } : null;
   }
   private configuration() { return { ...this.dependencies.configuration(), preciseSeeking: this.dependencies.preciseSeeking?.() ?? false }; }
   private async send(operation: NativeProgramOperation): Promise<void> {

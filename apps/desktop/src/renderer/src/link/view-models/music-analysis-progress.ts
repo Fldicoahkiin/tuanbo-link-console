@@ -14,3 +14,14 @@ export function musicAnalysisProgress(job: AutomaticMusicJob | null, submitting:
   return { completed, total: 7, detail: submitting ? '正在提交识别任务' : job?.message ?? '准备分析',
     active: submitting || Boolean(job && ['queued', 'checking', 'running', 'pausing', 'cancelling'].includes(job.state)) };
 }
+
+/** Finished jobs leave the sidebar and are announced once in a pop-up (decided 2026-10-24); paused jobs stay listed. */
+export function musicAnalysisOutcome(job: AutomaticMusicJob, title: string | null): { message: string; tone: 'info' | 'error' } | null {
+  const subject = title ? `「${title}」音乐分析` : '音乐分析';
+  switch (job.state) {
+    case 'completed': return { message: job.message === '音乐分析完成' ? `${subject}完成` : `${subject}完成：${job.message}`, tone: 'info' };
+    case 'failed': return { message: `${subject}失败：${job.message}`, tone: 'error' };
+    case 'cancelled': return { message: `${subject}${job.message}`, tone: 'info' };
+    case 'queued': case 'checking': case 'running': case 'pausing': case 'paused': case 'cancelling': return null;
+  }
+}

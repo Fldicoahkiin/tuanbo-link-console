@@ -21,9 +21,9 @@ export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReferenc
   const run = async (action: () => Promise<void>): Promise<void> => {
     if (useMa2AttributeStore.getState().busy || useMa2MaterialReadStore.getState().busy) { setError('请等待当前控台读取结束'); return; }
     setBusy(true); setError('');
-    useMa2AttributeStore.setState({ busy: true, activeId: null, progress: null, message: '正在核对空 Cue 删除操作' });
+    useMa2AttributeStore.setState({ busy: true, activeId: null, progress: null, failed: false, message: '正在核对空 Cue 删除操作' });
     try { await action(); }
-    catch(cause) { const text = cause instanceof Error ? cause.message : String(cause); setError(text); useMa2AttributeStore.setState({ message: text }); }
+    catch(cause) { const text = cause instanceof Error ? cause.message : String(cause); setError(text); useMa2AttributeStore.setState({ message: text, failed: true }); }
     finally { setBusy(false); useMa2AttributeStore.setState({ busy: false, activeId: null, progress: null }); }
   };
   // Must land on disk first: the main process checks Cue usage and the console source
@@ -63,7 +63,7 @@ export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReferenc
       useDocumentStore.getState().markConsoleSynced(request.documentId);
     }
     setError(value.error ?? '');
-    useMa2AttributeStore.setState({message:`已回读确认删除 ${value.deleted.length} 个空 Cue${value.error ? `；${value.error}` : ''}`});
+    useMa2AttributeStore.setState({message:`已回读确认删除 ${value.deleted.length} 个空 Cue${value.error ? `；${value.error}` : ''}`, failed: Boolean(value.error)});
   }); };
   return createPortal(<dialog ref={dialog} className="lighting-attribute-dialog" aria-label="删除控台空 Cue" onCancel={event=>{if(busy)event.preventDefault();else onClose();}}>
     <header><strong>删除控台空 Cue</strong><button aria-label="关闭删除清单" onClick={onClose} disabled={busy}><X/></button></header>

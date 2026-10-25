@@ -1,4 +1,5 @@
 import type { IntegrationProfile, NativeObsStatus, LightingDocument } from '@tb/schema';
+import type { SongLightingStatus } from './song-lighting-status';
 
 export type InternalPlayerState = import('@tb/schema').ProgramPlayerState;
 export const emptyInternalPlayerState: InternalPlayerState = {
@@ -23,6 +24,11 @@ export type InternalPlayerDependencies = {
   refusal?: () => string | null;
   /** The start check failed for a song the operator started: true plays it without lighting, false cancels. */
   confirmWithoutLighting?: (reason: string) => Promise<boolean>;
+  /**
+   * The operator's "play without lighting" answers by project and song, with the kind of problem
+   * answered (decided 2026-10-24: ask once). Owned by the window so a rebuilt player keeps them.
+   */
+  withoutLightingChoices?: Map<string, SongLightingStatus['state']>;
 };
 
 /** Read-only transport data. Editors may observe the output clock, but can
