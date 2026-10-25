@@ -3,7 +3,7 @@
 // for PROCESS_QUERY_LIMITED_INFORMATION and changes nothing in the target process.
 // Usage: tblink-process-identity.exe <pid> [<pid> ...]
 // Output: one UTF-8 JSON array; per pid either
-//   {"pid":1,"path":"C:\\...","creationTime":"<FILETIME>","commandLine":"..."|null}
+//   {"pid":1,"path":"C:\\...","creationTime":"<FILETIME>","commandLine":"..."|null,"handleCount":<n>|null}
 //   {"pid":1,"error":<Win32 error>}
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -103,7 +103,11 @@ static void describe(output *out, DWORD pid, query_process_fn query, wchar_t *pa
         }
     }
     if (!written) append_text(out, "null");
-    append_text(out, "}");
+    /* Windows 8.1+ answers this for query-limited handles too; the console logs it to follow resource growth. */
+    DWORD handles = 0;
+    if (GetProcessHandleCount(process, &handles)) {
+        snprintf(head, sizeof(head), ",\"handleCount\":%lu}", (unsigned long)handles); append_text(out, head);
+    } else append_text(out, ",\"handleCount\":null}");
     CloseHandle(process);
 }
 

@@ -31,7 +31,8 @@ const [self, absent, ...extra] = JSON.parse(probe.stdout);
 // Windows reports the image's final path, so a Node reached through a symlink or junction is compared by its real path too.
 const ownPaths = [process.execPath, realpathSync.native(process.execPath)].map(path => path.toLowerCase());
 if (extra.length !== 0 || self?.pid !== process.pid || typeof self.path !== 'string' || !ownPaths.includes(self.path.toLowerCase())
-  || !/^\d+$/.test(self.creationTime) || typeof self.commandLine !== 'string' || !self.commandLine.includes('build.mjs')) {
+  || !/^\d+$/.test(self.creationTime) || typeof self.commandLine !== 'string' || !self.commandLine.includes('build.mjs')
+  || !Number.isInteger(self.handleCount) || self.handleCount <= 0) {
   throw new Error(`进程识别组件没有正确识别当前进程：${probe.stdout}`);
 }
 if (absent?.pid !== absentPid || !Number.isInteger(absent.error) || 'path' in absent) throw new Error(`进程识别组件没有拒绝不存在的进程：${probe.stdout}`);

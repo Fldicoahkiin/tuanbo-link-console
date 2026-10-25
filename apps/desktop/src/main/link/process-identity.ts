@@ -17,7 +17,8 @@ export function processIdentityExecutable(resourcesPath?: string): string {
 
 const pidSchema = z.number().int().positive();
 const identitySchema = z.union([
-  z.object({ pid: pidSchema, path: z.string().min(1), creationTime: z.string().regex(/^\d{1,20}$/), commandLine: z.string().nullable() }).strict(),
+  z.object({ pid: pidSchema, path: z.string().min(1), creationTime: z.string().regex(/^\d{1,20}$/), commandLine: z.string().nullable(),
+    handleCount: z.number().int().nonnegative().nullable() }).strict(),
   z.object({ pid: pidSchema, error: z.number().int().nonnegative() }).strict()
 ]);
 export type ProcessIdentity = z.infer<typeof identitySchema>;

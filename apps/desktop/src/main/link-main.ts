@@ -130,7 +130,8 @@ import type {
   LinkUpdateStatus
 } from '@tb/core/link';
 import { ExternalProcessManager, WindowsProcessTools, type ExternalApplicationId } from './link/external-process-manager';
-import { processIdentityExecutable } from './link/process-identity';
+import { processIdentityExecutable, readProcessIdentities } from './link/process-identity';
+import { ResourceMonitor } from './link/resource-monitor';
 import { LinkProjectService } from './link/link-project-service';
 import { AssetRelinkRequests } from './link/asset-relink-requests';
 import { ProjectAccess } from './link/project-access';
@@ -322,6 +323,14 @@ async function bootstrap(): Promise<void> {
         .catch((error: unknown) => console.error('更新校验日志写入失败', error)); } }
   );
   registerIpc(profileStore, obs, processManager, logger, integrationDetector, updateManager);
+  // Every 10 minutes the log gets each process's memory, CPU and handle count, so a long show can be followed afterwards.
+  new ResourceMonitor({
+    metrics: () => app.getAppMetrics(),
+    extra: () => { const pid = nativePlayer?.status?.enginePid; return pid ? [{ pid, label: '播放引擎' }] : []; },
+    handles: async pids => process.platform !== 'win32' ? new Map()
+      : new Map((await readProcessIdentities(identityHelper, pids.slice(0, 64))).map(identity => [identity.pid, 'error' in identity ? null : identity.handleCount])),
+    record: entry => logger.record(entry)
+  }).start();
   void midiHealth.check().then((result) => logger.record({
     level: result === 'ready' ? 'info' : 'error', category: 'device', device: 'MIDI',
     message: midiHealthMessage(result), details: { result }
