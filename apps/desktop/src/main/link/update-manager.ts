@@ -35,8 +35,8 @@ export type UpdateRules = {
   license: () => Promise<LicenseStatus>;
   /** Public keys of the release signature by kid; more than one lets the key rotate. */
   releaseKeys: Readonly<Record<string, string>>;
-  /** Rejections of a signature or a downloaded installer are written to the run log. */
-  log: (level: 'warning' | 'error', message: string) => void;
+  /** Each manual check, download and install, and every rejected signature or installer, goes to the run log. */
+  log: (level: 'info' | 'warning' | 'error', message: string) => void;
 };
 
 /** The version the feed offers: its latest.yml, and the release-key signature over it once checked. */
@@ -144,7 +144,16 @@ export class LinkUpdateManager {
       this.backgroundCheck = false;
       this.busy = false;
     }
+    // The startup check is logged by its caller.
+    if (mode === 'manual') this.logCheck();
     return this.getStatus();
+  }
+
+  private logCheck(): void {
+    const status = this.status;
+    if (status.phase === 'available') this.rules.log('info', `检查更新：发现新版本 ${status.availableVersion ?? ''}${status.installBlockedReason ? `；${status.installBlockedReason}` : ''}`);
+    else if (status.phase === 'upToDate') this.rules.log('info', `检查更新：${status.currentVersion} 已是最新版本`);
+    else if (status.phase === 'error') this.rules.log('warning', `检查更新失败：${status.message}`);
   }
 
   async download(): Promise<LinkUpdateStatus> {
@@ -162,6 +171,8 @@ export class LinkUpdateManager {
     }
     const download = new AbortController();
     this.activeDownload = download;
+    const version = this.status.availableVersion ?? '';
+    this.rules.log('info', `开始下载更新 ${version}`);
     this.update({
       phase: 'downloading',
       progressPercent: 0,
@@ -173,12 +184,19 @@ export class LinkUpdateManager {
       const installer = await this.client.download(download.signal);
       const mismatch = await this.installerMismatch(installer);
       if (mismatch) this.rejectInstaller(mismatch);
-      else if (this.offer) this.offer.installer = installer;
+      else {
+        if (this.offer) this.offer.installer = installer;
+        this.rules.log('info', `更新 ${version} 已下载，安装包与发布签名一致`);
+      }
     } catch (error) {
       if (download.signal.aborted) {
         this.update({ phase: 'available', progressPercent: null, transferredBytes: null, totalBytes: null,
           message: '播放已开始，更新下载已停止；停止播放后可重新下载' });
-      } else this.update({ phase: 'error', message: normalizeUpdateError(error) });
+        this.rules.log('info', `播放已开始，更新 ${version} 的下载已停止`);
+      } else {
+        this.update({ phase: 'error', message: normalizeUpdateError(error) });
+        this.rules.log('error', `下载更新 ${version} 失败：${this.status.message}`);
+      }
     } finally {
       this.activeDownload = null;
       this.busy = false;
@@ -205,6 +223,7 @@ export class LinkUpdateManager {
     if (this.busy || !this.client || this.status.phase !== 'downloaded' || !this.offer?.installer) {
       throw new Error('更新尚未下载完成');
     }
+    this.rules.log('info', `启动更新 ${this.status.availableVersion ?? ''} 的安装程序`);
     this.client.install();
   }
 

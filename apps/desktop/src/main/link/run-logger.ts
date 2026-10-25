@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { basename, dirname, join } from 'node:path';
 import { writeChunksAtomically } from './atomic-file';
+import { LogRepeats } from './log-repeats';
 
 const SENSITIVE_KEY = /password|credential|authorization|token|secret/i;
 
@@ -26,6 +27,8 @@ export type LinkLogEntry = {
   result?: 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped';
   details?: Readonly<Record<string, unknown>>;
 };
+
+export type LinkLogInput = Omit<LinkLogEntry, 'id' | 'sessionId' | 'timestamp' | 'monotonicMs'>;
 
 export type LinkLogFilter = {
   sessionId?: string;
@@ -53,18 +56,47 @@ export class LinkRunLogger {
   private bufferedBytes = 0;
   private bufferedFailure: Error | null = null;
   private readonly failedBuffered: LinkLogEntry[] = [];
+  private readonly repeats = new LogRepeats<LinkLogInput>();
+  private repeatTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly logsDirectory: string,
-    private readonly secretValues: () => readonly string[] = () => []
+    private readonly secretValues: () => readonly string[] = () => [],
+    private readonly clock: () => number = Date.now
   ) {
     this.filePath = join(logsDirectory, `${this.sessionId}.jsonl`);
   }
 
-  async record(entry: Omit<LinkLogEntry, 'id' | 'sessionId' | 'timestamp' | 'monotonicMs'>): Promise<LinkLogEntry> {
+  /** Writes the entry, unless it repeats one already written three times this window (see LogRepeats): it is
+   * then counted into a summary entry and the returned entry is not on disk. */
+  async record(entry: LinkLogInput): Promise<LinkLogEntry> {
+    const now = this.clock();
+    await this.writeSummaries(this.repeats.settle(now));
     const sanitized = this.createEntry(entry);
+    if (this.repeats.admit(entry, now) === 'merge') { this.scheduleSummaries(); return sanitized; }
     await this.persist(sanitized);
     return sanitized;
+  }
+
+  /** Writes every summary still owed now, so a query, an export or quitting sees the merged counts. */
+  async settleRepeats(): Promise<void> {
+    await this.writeSummaries(this.repeats.settle(this.clock(), true));
+  }
+
+  private async writeSummaries(summaries: readonly LinkLogInput[]): Promise<void> {
+    for (const summary of summaries) await this.persist(this.createEntry(summary));
+  }
+
+  private scheduleSummaries(): void {
+    if (this.repeatTimer) return;
+    const due = this.repeats.nextDue();
+    if (due === null) return;
+    this.repeatTimer = setTimeout(() => {
+      this.repeatTimer = null;
+      void this.writeSummaries(this.repeats.settle(this.clock())).then(() => this.scheduleSummaries(),
+        (error: unknown) => console.error('合并的重复日志未能写入', error));
+    }, Math.max(0, due - this.clock()) + 50);
+    this.repeatTimer.unref?.();
   }
 
   /** Admission only, never a durable-write acknowledgement. Formal output must
@@ -91,6 +123,7 @@ export class LinkRunLogger {
   }
 
   async flush(): Promise<void> {
+    await this.settleRepeats();
     await this.pending;
     if (this.bufferedFailure) throw this.bufferedFailure;
   }
@@ -161,6 +194,7 @@ export class LinkRunLogger {
    * so a long history never loads into the main process.
    */
   async query(filter: LinkLogFilter = {}): Promise<LinkLogEntry[]> {
+    await this.settleRepeats();
     await this.pending;
     const limit = filter.limit ?? LOG_QUERY_SCOPE.entries;
     const files = (await this.sessionFiles()).filter(file => !filter.sessionId || basename(file.path) === `${filter.sessionId}.jsonl`);
@@ -204,6 +238,7 @@ export class LinkRunLogger {
 
   /** Every entry written at or after `from`, oldest first, one session file at a time. */
   private async *entriesSince(from: number): AsyncGenerator<LinkLogEntry> {
+    await this.settleRepeats();
     await this.pending;
     const since = new Date(from).toISOString();
     for (const file of (await this.sessionFiles()).filter(file => file.mtimeMs >= from).reverse()) {

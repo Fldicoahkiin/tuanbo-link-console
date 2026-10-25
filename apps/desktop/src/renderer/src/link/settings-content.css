@@ -325,6 +325,13 @@
 .license-activation-card > .license-settings { display: block; margin: 0; padding: 0; border: 0; background: transparent; }
 .license-gate-update { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-emphasis); }
 .license-gate-update .update-center { width: auto; max-height: none; }
+.license-gate-help { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-emphasis); }
+.license-gate-help > div { display: grid; gap: 4px; min-width: 0; }
+.license-gate-help strong { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.license-gate-help span { color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
+.license-gate-help .ui-button { flex-shrink: 0; min-height: 36px; padding: 0 12px; border-radius: 6px; font-size: 12px; }
+.license-gate-help .ui-button:hover { background: var(--surface-hover); }
+.license-gate-help svg { width: 15px; height: 15px; }
 .license-status-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .license-activation-card .license-status-heading h3 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.03em; color: var(--text-emphasis); }
 .license-state { flex-shrink: 0; padding: 3px 8px; border: 1px solid var(--border-default); border-radius: 5px; background: var(--surface-raised); color: var(--text-secondary); font-size: 11px; }
@@ -368,8 +375,9 @@
 .license-checking h2 { margin-top: 20px; font-size: 18px; }
 .license-checking p { font-size: 12px; color: var(--text-secondary); }
 .license-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 22px; border-top: 1px solid var(--border-subtle); background: var(--surface); color: var(--text-tertiary); font-size: 11px; }
-.license-footer a { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; color: var(--text-secondary); }
-.license-footer a:hover { color: var(--text-emphasis); }
+.license-footer-links { display: flex; align-items: center; gap: 20px; }
+.license-footer :is(a, button) { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0; border: 0; background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.license-footer :is(a, button):hover { color: var(--text-emphasis); }
 .license-footer svg { width: 12px; height: 12px; }
 .license-gate :is(button, input, select, summary, a):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
 @media (max-width: 850px) {

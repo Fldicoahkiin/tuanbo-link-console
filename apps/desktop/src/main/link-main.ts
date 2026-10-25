@@ -19,6 +19,10 @@ import releasePublicKeys from './link/release-public-keys.json';
 import licenseConfig from './link/license-config.json';
 import { LicenseAccess, needsProductLicense } from './link/license-access';
 import { licenseRequestSchema } from '@tb/schema';
+import { licenseLogDetails, licenseStateLabel } from './link/license-log';
+import { FeedbackService, feedbackContext, feedbackRange, type FeedbackIdentity } from './link/feedback-service';
+import { feedbackEnvironment, recentCrashDumps } from './link/diagnostic-environment';
+import { feedbackCategoryLabels, linkFeedbackDraftSchema, type LinkFeedbackResult } from '@tb/schema';
 import { installObsLiveBridge } from './link/obs-live-install';
 import { existsSync } from 'node:fs';
 import { elevateObsPluginInstall } from './link/obs-plugin-elevation';
@@ -319,7 +323,7 @@ async function bootstrap(): Promise<void> {
     app.isPackaged,
     (status) => sendToRenderer('link:update-status', status),
     { playbackActive: () => runtimeActive || nativePlaybackActive(), license: () => readLicenseStatus(), releaseKeys: releasePublicKeys,
-      log: (level, message) => { void logger.record({ level, category: 'system', device: '软件更新', message, result: 'failed' })
+      log: (level, message) => { void logger.record({ level, category: 'system', device: '软件更新', message, result: level === 'info' ? 'succeeded' : 'failed' })
         .catch((error: unknown) => console.error('更新校验日志写入失败', error)); } }
   );
   registerIpc(profileStore, obs, processManager, logger, integrationDetector, updateManager);
@@ -734,7 +738,9 @@ function registerIpc(
         serverUrl: licenseConfig.serverUrl, enforcement, credentials: profileStore
       });
       const status = await service.status();
-      await logger.record({ level: status.state === 'active' ? 'info' : 'error', category: 'system', message: `启动授权校验：${status.state}`, result: status.state === 'active' ? 'succeeded' : 'failed' });
+      await logger.record({ level: status.state === 'active' ? 'info' : 'error', category: 'system', device: '授权',
+        message: `启动授权校验：${licenseStateLabel[status.state]}，${status.message}`, result: status.state === 'active' ? 'succeeded' : 'failed',
+        details: licenseLogDetails(status) });
       return service;
     });
     return licenseService;
@@ -764,13 +770,15 @@ function registerIpc(
   const changeOnlineLicense = async (code?: string) => {
     if (runtimeActive || licenseChanging) throw new Error('请停止播放，并等待上一项授权操作完成');
     licenseChanging = true;
+    const action = code === undefined ? '联网验证授权' : '输入激活码激活';
     try {
       const service = await getLicenseService();
       const result = code === undefined ? await service.refreshOnline() : await service.activateCode(code);
-      await logger.record({ level: 'info', category: 'system', message: '在线授权已验证并保存', result: 'succeeded' });
+      await logger.record({ level: 'info', category: 'system', device: '授权', message: `${action}成功：${result.message}`, result: 'succeeded', details: licenseLogDetails(result) });
       return result;
     } catch (error) {
-      await logger.record({ level: 'error', category: 'system', message: '在线授权验证失败，请查看授权设置中的错误提示', result: 'failed' });
+      // The reason names the cause (network, rejection, clock); it never contains the activation code.
+      await logger.record({ level: 'error', category: 'system', device: '授权', message: `${action}失败：${error instanceof Error ? error.message : String(error)}`, result: 'failed' });
       throw error;
     } finally { licenseChanging = false; }
   };
@@ -804,7 +812,7 @@ function registerIpc(
       const token = await readFile(file, 'utf8');
       if (runtimeActive) throw new Error('播放已开始，请停止后再导入授权');
       const status = await (await getLicenseService()).activate(token);
-      await logger.record({ level: 'info', category: 'system', message: '已导入本机授权', result: 'succeeded' });
+      await logger.record({ level: 'info', category: 'system', device: '授权', message: '已导入本机授权', result: 'succeeded', details: licenseLogDetails(status) });
       return status;
     } finally { licenseChanging = false; }
   });
@@ -2098,24 +2106,73 @@ function registerIpc(
     await logger.exportText(result.filePath, buildIdentityLine(), range);
     return result.filePath;
   });
+  /** What the main process knows about this machine and run, added to every diagnostic package. */
+  const diagnosticEnvironment = async (): Promise<Record<string, unknown>> => {
+    const license = await getLicenseStatus().then(status => ({ ...licenseLogDetails(status), message: status.message }),
+      (error: unknown) => ({ error: `授权状态读取失败：${error instanceof Error ? error.message : String(error)}` }));
+    const crashDumps = await recentCrashDumps(app.getPath('crashDumps')).catch((error: unknown) => `崩溃转储目录读取失败：${error instanceof Error ? error.message : String(error)}`);
+    return {
+      appVersion: buildVersion, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch,
+      osRelease: release(), cpu: cpus()[0]?.model ?? '未知', logicalProcessors: cpus().length,
+      totalMemoryBytes: totalmem(), freeMemoryBytes: freemem(), uptimeSeconds: Math.round(process.uptime()), versions: process.versions,
+      gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),
+      obs: obs.getSnapshot(), ma2: ma2Network.status(), runtimeActive, player: nativePlayer?.status ?? null,
+      license, update: updateManager.getStatus(), logSessionId: logger.sessionId,
+      crashDumps, crashDumpContentsIncluded: false, collectedAt: new Date().toISOString()
+    };
+  };
+  const feedbackSummary = () => {
+    const obsSnapshot = obs.getSnapshot(), ma2Status = ma2Network.status();
+    return feedbackEnvironment({ windowsRelease: release(), arch: process.arch, cpu: cpus()[0]?.model ?? '未知', totalMemoryBytes: totalmem(),
+      obs: { status: obsSnapshot.status, obsVersion: obsSnapshot.obsVersion }, ma2: { state: ma2Status.state, version: ma2Status.version },
+      runtimeActive, playerStatus: nativePlayer?.status?.status ?? null });
+  };
+  const writeDiagnostic = async (path: string, context: Readonly<Record<string, unknown>>, days: 1 | 7 | 30): Promise<void> => {
+    await logger.exportDiagnosticPackage(path, { ...context, environment: await diagnosticEnvironment() }, { days });
+  };
+  const saveDiagnosticDialog = async (title: string): Promise<string | null> => {
+    const result = await dialog.showSaveDialog(mainWindow!, { title,
+      defaultPath: `${app.getName()}-诊断-${new Date().toISOString().replaceAll(':', '-')}.tbdiag.gz`,
+      filters: [{ name: '团播联动台诊断包', extensions: ['tbdiag.gz'] }] });
+    return result.canceled || !result.filePath ? null : result.filePath;
+  };
   handle('link:diagnostic-export', async (_event, contextValue: unknown, rangeValue: unknown) => {
     const context = linkDiagnosticContextSchema.parse(contextValue);
     const range = linkLogExportRangeSchema.parse(rangeValue ?? { days: 7 });
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      title: '导出脱敏诊断包',
-      defaultPath: `${app.getName()}-诊断-${new Date().toISOString().replaceAll(':', '-')}.tbdiag.gz`,
-      filters: [{ name: '团播联动台诊断包', extensions: ['tbdiag.gz'] }]
-    });
-    if (result.canceled || !result.filePath) return null;
-    await logger.exportDiagnosticPackage(result.filePath, { ...context, environment: {
-      appVersion: buildVersion, ...buildIdentity(), packaged: app.isPackaged, platform: process.platform, arch: process.arch,
-      osRelease: release(), cpu: cpus()[0]?.model ?? '未知', logicalProcessors: cpus().length,
-      totalMemoryBytes: totalmem(), freeMemoryBytes: freemem(), versions: process.versions,
-      gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),
-      obs: obs.getSnapshot(), ma2: ma2Network.status(), runtimeActive, collectedAt: new Date().toISOString(),
-      crashDumpContentsIncluded: false
-    } }, range);
-    return result.filePath;
+    const path = await saveDiagnosticDialog('导出脱敏诊断包');
+    if (!path) return null;
+    await writeDiagnostic(path, context, range.days);
+    await logger.record({ level: 'info', category: 'operator', device: '诊断', message: `已导出诊断包（最近 ${range.days} 天）：${path}`, result: 'succeeded' });
+    return path;
+  });
+  // A report goes out even when the license cannot be read: that machine is the one most likely to need help.
+  const feedbackIdentity = async (): Promise<FeedbackIdentity> => {
+    try {
+      if (localTestAccess) return { machineCode: (await getLocalTestStatus()).machineCode, license: null, licensed: false, licenseSummary: '本地测试模式（不校验授权）', version: buildVersion };
+      const service = await getLicenseService(), status = await service.status();
+      return { machineCode: status.machineCode, license: await service.signedLicense(), licensed: status.state === 'active',
+        licenseSummary: `${licenseStateLabel[status.state]}${status.state === 'active' ? '' : `：${status.message}`}`, version: buildVersion };
+    } catch (error) {
+      return { machineCode: null, license: null, licensed: false, licenseSummary: `读取本机授权失败：${error instanceof Error ? error.message : String(error)}`, version: buildVersion };
+    }
+  };
+  const feedback = new FeedbackService({
+    serverUrl: licenseConfig.serverUrl,
+    identity: feedbackIdentity,
+    environment: feedbackSummary, writeDiagnostic, temporaryDirectory: app.getPath('temp'),
+    log: entry => logger.record(entry)
+  });
+  handle('link:feedback-submit', (_event, draftValue: unknown) => feedback.submit(linkFeedbackDraftSchema.parse(draftValue)));
+  handle('link:feedback-save', async (_event, draftValue: unknown): Promise<LinkFeedbackResult> => {
+    const draft = linkFeedbackDraftSchema.parse(draftValue);
+    const path = await saveDiagnosticDialog('把问题反馈另存为诊断包');
+    if (!path) return { outcome: 'cancelled' };
+    const identity = await feedbackIdentity();
+    await writeDiagnostic(path, feedbackContext(draft, { ...feedbackSummary(), license: identity.licenseSummary.slice(0, 160) }), feedbackRange(draft.occurredAt, Date.now()));
+    await logger.record({ level: 'info', category: 'operator', device: '问题反馈', result: 'succeeded',
+      message: `问题反馈已另存为文件（${feedbackCategoryLabels[draft.category]}，发生于 ${new Date(draft.occurredAt).toLocaleString('zh-CN', { hour12: false })}）：${path}`,
+      details: { category: draft.category, occurredAt: draft.occurredAt, description: draft.description, path } });
+    return { outcome: 'saved', path };
   });
 }
 
@@ -2157,6 +2214,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
     await automaticMusic?.close();
     if (discardOnQuit) await discardOpenDocumentRecovery();
     allowWindowClose = true;
+    settleRepeatedLogs();
     recordQuitStep('退出流程完成');
     finish();
     return true;
@@ -2204,6 +2262,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   await automaticMusic?.close();
   if (discardOnQuit) await discardOpenDocumentRecovery();
   allowWindowClose = true;
+  settleRepeatedLogs();
   recordQuitStep('退出流程完成');
   finish();
   return true;
@@ -2235,6 +2294,11 @@ function recoveryPrompt(offer: RecoveryOffer): Electron.MessageBoxOptions {
 }
 
 /** Each quit stage with the flags that gate it, so a hang names its stage. */
+/** Repeats merged into a summary still owed are written before the app goes. */
+function settleRepeatedLogs(): void {
+  void ipcLogger?.settleRepeats().catch((error: unknown) => console.error('合并的重复日志未能写入', error));
+}
+
 function recordQuitStep(step: string, details: Record<string, unknown> = {}): void {
   void ipcLogger?.record({ level: 'info', category: 'system', device: '退出流程', message: step,
     details: { runtimeActive, nativePlayback: nativePlaybackActive(), documentDirty: documentState.dirty, allowWindowClose, quitFlowRunning,

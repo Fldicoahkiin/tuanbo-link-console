@@ -39,3 +39,4 @@ export { musicStructureSchema, musicStructureSegmentSchema, type MusicStructure,
 
 export * from './ma2-song-sequence';
 export * from './ma2-song-binding';
+export * from './feedback';

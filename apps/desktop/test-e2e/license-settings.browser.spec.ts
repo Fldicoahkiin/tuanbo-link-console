@@ -40,7 +40,13 @@ test.beforeEach(async ({ page }) => {
         progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, message: '发现新版本 0.5.1',
         installBlockedReason: '本机授权当前不可用（本机尚未激活），可以查看新版本，恢复授权后再安装' }),
       onUpdateStatus: () => () => undefined,
-      getAppInfo: () => Promise.resolve({ name: '团播联动台', version: '0.5.0', channel: 'release', gitSha: '0123456789abcdef0123456789abcdef01234567', appId: 'com.tuanbo.control' })
+      getAppInfo: () => Promise.resolve({ name: '团播联动台', version: '0.5.0', channel: 'release', gitSha: '0123456789abcdef0123456789abcdef01234567', appId: 'com.tuanbo.control' }),
+      submitFeedback: (draft: { category: string; description: string }) => {
+        Object.assign(window, { sentFeedback: draft });
+        return Promise.resolve({ outcome: 'submitted', number: 'FB-20261025-7K3Q', attachment: 'uploaded', attachmentIssue: null });
+      },
+      saveFeedback: () => Promise.resolve({ outcome: 'cancelled' }),
+      openLogsFolder: () => Promise.resolve()
     } });
   });
   await page.addScriptTag({ content: script });
@@ -88,6 +94,25 @@ test('未激活不挂载工作区，激活后经主进程校验才进入', async
   await expect(page.getByRole('heading', { name: '激活你的工作区' })).toHaveCount(0);
 });
 
+
+test('未激活也能提交问题反馈：默认归到激活与更新，返回反馈编号', async ({ page }, info) => {
+  await page.evaluate('window.renderGate()');
+  await page.getByRole('region', { name: '遇到问题', exact: true }).getByRole('button', { name: '问题反馈', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '问题反馈', exact: true });
+  await expect(dialog.getByLabel('问题类型', { exact: true })).toHaveValue('license');
+  await expect(dialog.getByRole('button', { name: '查看运行日志' })).toHaveCount(0);
+  await dialog.getByRole('button', { name: '提交反馈', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('请至少写 5 个字');
+  await dialog.getByLabel('现象说明', { exact: true }).fill('粘贴激活码后一直提示读取失败');
+  await dialog.getByRole('button', { name: '提交反馈', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText('反馈编号 FB-20261025-7K3Q');
+  expect(await page.evaluate('window.sentFeedback')).toMatchObject({ category: 'license', description: '粘贴激活码后一直提示读取失败', includeDiagnostics: true });
+  await page.screenshot({ path: info.outputPath('license-gate-feedback.png') });
+  await dialog.getByRole('button', { name: '关闭问题反馈', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.getByRole('contentinfo').getByRole('button', { name: '提交问题反馈', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '问题反馈', exact: true })).toBeVisible();
+});
 
 test('启动校验完成前不挂载工作区，网络失败后可手动验证进入', async ({ page }) => {
   await page.evaluate(() => {

@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { Download, FolderOpen } from 'lucide-react';
 import { Button } from './Button';
-import { useDocumentStore } from '../stores/document-store';
-import { useIntegrationStore } from '../stores/integration-store';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
+import { diagnosticContext } from '../view-models/diagnostic-context';
 
 export function DiagnosticExports(): JSX.Element {
   const [busy, setBusy] = useState(false);
@@ -17,17 +16,7 @@ export function DiagnosticExports(): JSX.Element {
     setBusy(true); setError(''); setMessage('');
     try {
       if (kind === 'folder') { await desktop.openLogsFolder(); setMessage('已打开本机日志文件夹。'); return; }
-      const project = useDocumentStore.getState().project;
-      const integration = useIntegrationStore.getState();
-      const path = kind === 'text' ? await desktop.exportLogs({ days }) : await desktop.exportDiagnosticPackage({
-        problem: note.trim(),
-        project: project ? { projectId: project.projectId, name: project.name, schemaVersion: project.schemaVersion,
-          playbackSource: project.playbackSource, programs: project.rundown.length, assets: project.mediaAssets?.length ?? 0 } : null,
-        connections: { obs: integration.obs, midiPorts: integration.midiPorts },
-        profile: integration.profile ? { acceptedVersions: integration.profile.acceptedVersions,
-          internalPlayer: integration.profile.internalPlayer, midiPortProfiles: integration.profile.midiPortProfiles } : null,
-        ...(includeMa2 && project?.ma2ReadState ? { ma2ReadState: project.ma2ReadState } : {})
-      }, { days });
+      const path = kind === 'text' ? await desktop.exportLogs({ days }) : await desktop.exportDiagnosticPackage({ problem: note.trim(), ...diagnosticContext(includeMa2) }, { days });
       setMessage(path ? `已导出：${path}` : '已取消导出。');
     } catch (failure) { setError(`操作失败：${failure instanceof Error ? failure.message : String(failure)}`); }
     finally { setBusy(false); }
@@ -46,7 +35,7 @@ export function DiagnosticExports(): JSX.Element {
       <Button className="secondary-button" disabled={busy} onClick={() => void run('text')}><Download />导出日志</Button>
       <Button className="secondary-button" disabled={busy} onClick={() => void run('folder')}><FolderOpen />打开日志文件夹</Button>
     </div>
-    <p className="settings-note">发回排查用“导出诊断包”；自己查看用“导出日志”。</p>
+    <p className="settings-note">发回排查用“导出诊断包”，或到「问题反馈」直接提交；自己查看用“导出日志”。</p>
     {message ? <p className="settings-note diagnostic-export-result" role="status">{message}</p> : null}
     {error ? <p className="inline-error" role="alert">{error}</p> : null}
   </section>;

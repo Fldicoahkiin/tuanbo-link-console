@@ -1,7 +1,7 @@
 import { Button } from './Button';
 import { ArchiveSettings } from './ArchiveSettings';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
-import { useRef, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { LinkObsInventory } from '@tb/core/link';
 import { useIntegrationStore } from '../stores/integration-store';
@@ -10,7 +10,6 @@ import { ProjectMusicConnections } from './ProjectPlayerControls';
 import { LightingMidiSettings } from './LightingMidiSettings';
 import { LoopMidiSettings } from './LoopMidiSettings';
 import { IntegrationFooter } from './IntegrationOverview';
-import { LogsWorkspace } from './LogsWorkspace';
 import { SongImportSettings } from './SongImportSettings';
 import { SettingsPageHeader, SettingsFeedback, SettingsDisclosure } from './SettingsControls';
 
@@ -29,8 +28,6 @@ type Props = {
 export function DeviceConnectionsPage(props: Props): JSX.Element {
   const method = useMa2ModeStore((state) => state.method);
   const selected = props.selected;
-  const logsVisited = useRef(false);
-  if (selected === 'logs') logsVisited.current = true;
   const [maintenanceHost, setMaintenanceHost] = useState<HTMLDivElement | null>(null);
   const [refreshingMidi, setRefreshingMidi] = useState(false);
   const disabled = props.busy || props.runtimeActive;
@@ -49,12 +46,11 @@ export function DeviceConnectionsPage(props: Props): JSX.Element {
   };
   return <section className="device-console" data-device-category={selected} aria-label="设备连接工作区">
     <SettingsPageHeader title={current.name} description={current.detail} scope={settingsScope(selected)} />
-    {props.runtimeActive && selected !== 'logs' ? <SettingsFeedback tone="warning">演出运行中，连接参数已锁定。停止播放后可修改。</SettingsFeedback> : null}
+    {props.runtimeActive ? <SettingsFeedback tone="warning">演出运行中，连接参数已锁定。停止播放后可修改。</SettingsFeedback> : null}
     {!props.securityAvailable && (selected === 'obs' || selected === 'maintenance') ? <SettingsFeedback tone="warning">Windows 安全存储不可用，OBS 凭证保存与连接暂不可用。其他设置仍可查看和修改。</SettingsFeedback> : null}
     <div className="device-console-layout">
 
       <div className="device-detail">
-        <div data-settings-section="logs" hidden={selected !== 'logs'} className="device-panel" role="region" aria-label="运行日志设置">{logsVisited.current ? <LogsWorkspace notify={props.notify} settings /> : null}</div>
         <div data-settings-section="archives" hidden={selected !== 'archives'} className="device-panel" role="region" aria-label="工程存档设置">{selected === 'archives' ? <ArchiveSettings disabled={disabled} /> : null}</div>
         <div data-settings-section="songs" hidden={selected !== 'songs'} className="device-panel"><SongImportSettings disabled={disabled} notify={props.notify}>{props.songTools}</SongImportSettings></div>
         <div data-settings-section="obs" hidden={selected !== 'obs'} className="device-panel" aria-label="OBS 设备面板">{props.children}</div>
@@ -68,7 +64,7 @@ export function DeviceConnectionsPage(props: Props): JSX.Element {
           {props.internal ? <ProjectMusicConnections disabled={disabled} notify={props.notify} onBusy={props.onBusy}><LightingMidiSettings disabled={disabled} notify={props.notify} onBusy={props.onBusy} /></ProjectMusicConnections> : <LightingMidiSettings follow disabled={disabled} notify={props.notify} onBusy={props.onBusy} />}
         </div>
         <div data-settings-section="virtual" hidden={selected !== 'virtual'} className="device-panel" aria-label="虚拟 MIDI 设备面板"><LoopMidiSettings disabled={disabled} notify={props.notify} onBusy={props.onBusy} onRefreshMidi={props.onRefreshMidi} /></div>
-        <div data-settings-section="maintenance" hidden={selected !== 'maintenance'} className="device-panel" role="region" aria-label="程序维护设备面板"><p className="device-panel-description">预览没有画面或软件无法启动 OBS / P1 时，在这里处理。查看错误和导出反馈文件，请到左侧“运行日志”。</p>{props.maintenance}<div className="device-panel-actions"><Button className="primary-button" disabled={disabled || !props.securityAvailable} onClick={props.onSave}>保存启动设置</Button><Button className="secondary-button" disabled={disabled} onClick={props.onRefresh}><RefreshCw />重新检测程序与设备</Button></div><IntegrationFooter midiPorts={props.midiPorts} inventory={props.inventory} /></div>
+        <div data-settings-section="maintenance" hidden={selected !== 'maintenance'} className="device-panel" role="region" aria-label="程序维护设备面板"><p className="device-panel-description">预览没有画面或软件无法启动 OBS / P1 时，在这里处理。查看错误、导出诊断包或提交问题反馈，请到「帮助与反馈」。</p>{props.maintenance}<div className="device-panel-actions"><Button className="primary-button" disabled={disabled || !props.securityAvailable} onClick={props.onSave}>保存启动设置</Button><Button className="secondary-button" disabled={disabled} onClick={props.onRefresh}><RefreshCw />重新检测程序与设备</Button></div><IntegrationFooter midiPorts={props.midiPorts} inventory={props.inventory} /></div>
       </div>
     </div>
   </section>;

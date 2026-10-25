@@ -321,6 +321,7 @@
 .app-sidebar .settings-submenus > button { position: relative; grid-template-columns: 18px minmax(0, 1fr); min-height: 40px; padding: 7px 10px; border-radius: 7px; color: var(--text-primary); }
 .app-sidebar .settings-submenus > button strong { font-size: var(--text-control); font-weight: 500; color: inherit; }
 .app-sidebar .settings-submenus > button > svg { width: 15px; height: 15px; color: inherit; }
+.app-sidebar .settings-submenus > button > .update-dot { position: absolute; inset-inline-end: 12px; top: calc(50% - 3.5px); }
 .app-sidebar .settings-submenus > button.active { color: var(--text-primary); background: rgb(var(--theme-ink-rgb) / .09); box-shadow: none; }
 .app-sidebar .settings-submenus > button.active strong { font-weight: 650; }
 .app-sidebar .settings-submenus > button.active::before { display: block; content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 3px; background: var(--accent); }

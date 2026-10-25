@@ -21,7 +21,8 @@ import {
 } from 'lucide-react';
 import type { SettingsCategory, SettingsLocation } from './components/settings-navigation';
 import { useSettingsLocation } from './useSettingsLocation';
-import { SettingsNavigation, SettingsSectionNavigation } from './components/SettingsNavigation';
+import { SettingsNavigation, SettingsSectionNavigation, UpdateDot } from './components/SettingsNavigation';
+import { usePendingUpdate } from './view-models/update-availability';
 import { CueWorkspace } from './components/CueWorkspace';
 import { IntegrationWorkspace } from './components/IntegrationWorkspace';
 import { useAppearanceTheme } from './components/AppearanceControl';
@@ -253,13 +254,14 @@ function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange,
   onSettings: () => void;
   notify: (message: string, tone?: 'info' | 'error') => void;
 }): JSX.Element {
+  const pendingUpdate = usePendingUpdate();
   return <aside className="app-sidebar">
     <nav className="main-nav workspace-navigation" aria-label="主要工作区">{NAVIGATION.map((item) => {
       const Icon = item.icon;
       const disabled = editingLocked && !internal && item.id === 'cues';
       const active = !settingsOpen && page === item.id;
       return <button key={item.id} title={`${item.label} · ${disabled ? '已锁定' : item.caption}`} disabled={disabled} aria-current={active ? 'page' : undefined} className={active ? 'active' : ''} onClick={() => onPageChange(item.id)}><Icon aria-hidden="true" /><span><strong>{item.label}</strong></span></button>;
-    })}<button className={settingsOpen ? 'active' : ''} aria-current={settingsOpen ? 'page' : undefined} onClick={onSettings}><Settings aria-hidden="true" /><span><strong>设置</strong></span></button></nav>
+    })}<button className={settingsOpen ? 'active' : ''} aria-current={settingsOpen ? 'page' : undefined} onClick={onSettings}><Settings aria-hidden="true" /><span><strong>设置</strong></span>{pendingUpdate ? <UpdateDot version={pendingUpdate} /> : null}</button></nav>
     <div className="sidebar-context">
       <div className="sidebar-playlists" hidden={settingsOpen || page !== 'project'} ref={playlistHostRef} />
       <div className="sidebar-editor" hidden={settingsOpen || page === 'project'} ref={editorHostRef} />

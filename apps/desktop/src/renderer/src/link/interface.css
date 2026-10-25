@@ -20,6 +20,7 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .app-sidebar .main-nav > button.active > svg { color: inherit; }
 .app-sidebar .main-nav button > svg { stroke-width: 1.5; }
 .app-sidebar .main-nav button.active > svg { stroke-width: 2; }
+.update-dot { flex: 0 0 7px; width: 7px; height: 7px; margin-inline-start: auto; border-radius: 50%; background: var(--accent); }
 .content-scroll { padding: 16px; overscroll-behavior: contain; }
 .topbar-status .toolbar-project-name { font-size: var(--text-control); }
 .toolbar-connections .toolbar-mtc-button { -webkit-app-region: no-drag; cursor: pointer; border: 0; padding: 1px 4px; border-radius: 4px; background: transparent; font-family: inherit; line-height: inherit; }

@@ -417,6 +417,10 @@ export type LinkDesktopApi = {
   exportDiagnosticPackage(context: Readonly<Record<string, unknown>>, range?: import('@tb/schema').LinkLogExportRange): Promise<string | null>;
   exportLogs(range?: import('@tb/schema').LinkLogExportRange): Promise<string | null>;
   openLogsFolder(): Promise<void>;
+  /** Sends a problem report, with its diagnostic package when asked; rejects with what to do next. */
+  submitFeedback(draft: import('@tb/schema').LinkFeedbackDraft): Promise<Extract<import('@tb/schema').LinkFeedbackResult, { outcome: 'submitted' }>>;
+  /** Saves the report and its diagnostic package to a file the operator chooses. */
+  saveFeedback(draft: import('@tb/schema').LinkFeedbackDraft): Promise<Exclude<import('@tb/schema').LinkFeedbackResult, { outcome: 'submitted' }>>;
   onObsStatus(listener: (snapshot: LinkObsSnapshot) => void): () => void;
   onObsInventoryChanged(listener: () => void): () => void;
   onProcessStatus(listener: (snapshot: LinkProcessSnapshot) => void): () => void;

@@ -101,6 +101,26 @@ describe('LinkRunLogger', () => {
     expect(await readFile(textPath, 'utf8')).not.toContain('late-secret');
   });
 
+  it('重复记录只落盘前三条，查询前写出合并记录，合并记录同样脱敏', async () => {
+    const directory = await createTestDirectory();
+    let now = Date.parse('2026-10-25T12:00:00.000Z');
+    const logger = new LinkRunLogger(directory, () => ['console-secret'], () => now);
+    cleanupFiles.push(join(directory, `${logger.sessionId}.jsonl`));
+    for (let index = 0; index < 12; index++) {
+      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: '控台 console-secret 无响应', result: 'failed', details: { attempt: index } });
+      now += 1000;
+    }
+    await logger.record({ level: 'info', category: 'system', message: '其他记录' });
+    const disk = (await readFile(join(directory, `${logger.sessionId}.jsonl`), 'utf8')).trim().split('\n');
+    expect(disk).toHaveLength(4);
+    const entries = await logger.query();
+    expect(entries.map(entry => entry.message)).toEqual(['控台 [REDACTED] 无响应', '控台 [REDACTED] 无响应', '控台 [REDACTED] 无响应', '其他记录',
+      '控台 [REDACTED] 无响应（在 8 秒内又重复 9 次，已合并为本条）']);
+    expect(entries.at(-1)?.details).toMatchObject({ repeat: { merged: 9 }, lastDetails: { attempt: 11 } });
+    await logger.flush();
+    expect(await logger.query()).toHaveLength(5);
+  });
+
   it('按敏感键名和已知密钥值递归脱敏', () => {
     expect(redactValue({ token: 'abc', nested: ['secret-value'] }, ['secret-value'])).toEqual({
       token: '[REDACTED]',

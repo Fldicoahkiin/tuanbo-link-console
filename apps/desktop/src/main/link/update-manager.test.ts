@@ -188,7 +188,7 @@ describe('LinkUpdateManager', () => {
       expect(status.installBlockedReason).toContain(reason);
       await expect(manager.download()).rejects.toThrow('更新签名校验失败');
       expect(download).not.toHaveBeenCalled();
-      expect(log).toHaveBeenLastCalledWith('error', expect.stringContaining(reason));
+      expect(log).toHaveBeenCalledWith('error', expect.stringContaining(reason));
     }
   });
 
@@ -208,6 +208,7 @@ describe('LinkUpdateManager', () => {
     expect(rejected.phase).toBe('error');
     expect(rejected.message).toContain('下载的更新与发布签名不一致，已拒绝安装');
     expect(log).toHaveBeenLastCalledWith('error', expect.stringContaining('拒绝安装更新 0.2.1'));
+    expect(log).toHaveBeenCalledWith('info', '开始下载更新 0.2.1');
     await expect(manager.prepareInstall()).rejects.toThrow('更新尚未下载完成');
 
     delivered = installer;
@@ -243,14 +244,17 @@ describe('LinkUpdateManager', () => {
     await expect(manager.check('background')).resolves.toMatchObject({ phase: 'available' });
   });
 
-  it('下载失败可重新检查，错误不会被假装成功', async () => {
-    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), (_feedUrl, handlers) => ({
+  it('下载失败可重新检查，错误不会被假装成功；检查和下载结果都写日志', async () => {
+    const log = vi.fn();
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), { ...rules(), log }, (_feedUrl, handlers) => ({
       check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
       download: () => Promise.reject(new Error('checksum mismatch')),
       install: vi.fn(), dispose: vi.fn()
     }));
     await manager.check();
     await expect(manager.download()).resolves.toMatchObject({ phase: 'error', message: '更新失败：checksum mismatch' });
+    expect(log).toHaveBeenCalledWith('info', '检查更新：发现新版本 0.2.1');
+    expect(log).toHaveBeenLastCalledWith('error', '下载更新 0.2.1 失败：更新失败：checksum mismatch');
     expect(() => manager.install()).toThrow('更新尚未下载完成');
     await expect(manager.check()).resolves.toMatchObject({ phase: 'available' });
   });

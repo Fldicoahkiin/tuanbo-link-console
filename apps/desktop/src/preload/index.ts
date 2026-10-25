@@ -285,6 +285,8 @@ const tbLink: LinkDesktopBridgeApi = {
   exportDiagnosticPackage: (context, range) => invoke('link:diagnostic-export', context, range),
   exportLogs: (range) => invoke('link:log-export', range),
   openLogsFolder: () => invoke('link:log-open-folder'),
+  submitFeedback: (draft) => invoke('link:feedback-submit', draft),
+  saveFeedback: (draft) => invoke('link:feedback-save', draft),
   onObsStatus: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, snapshot: LinkObsSnapshot) => listener(snapshot);
     ipcRenderer.on('link:obs-status', wrapped);

@@ -6,7 +6,7 @@ const publicCalls = new Set([
   'link:native-obs-status', 'link:native-obs-stop', 'link:native-obs-preload-cancel',
   'link:native-player-status',
   'link:beauty-stop', 'link:beauty-status',
-  'link:log-record', 'link:log-query', 'link:log-export', 'link:log-open-folder', 'link:diagnostic-export',
+  'link:log-record', 'link:log-query', 'link:log-export', 'link:log-open-folder', 'link:diagnostic-export', 'link:feedback-submit', 'link:feedback-save',
   'link:license-status', 'link:license-activate-code', 'link:license-refresh-online',
   'link:license-export-request', 'link:license-import', 'link:window-control', 'link:window-visible',
   'link:purchase-catalog', 'link:purchase-list', 'link:purchase-create', 'link:purchase-refresh', 'link:purchase-open-payment',

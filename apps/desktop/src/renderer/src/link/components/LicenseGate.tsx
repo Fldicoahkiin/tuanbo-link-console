@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { ArrowUpRight, AudioLines, Clapperboard, KeyRound, Maximize2, Minus, PanelsTopLeft, X } from 'lucide-react';
+import { ArrowUpRight, AudioLines, Clapperboard, KeyRound, Maximize2, MessageSquareWarning, Minus, PanelsTopLeft, X } from 'lucide-react';
 import { Button } from './Button';
+import { FeedbackForm } from './FeedbackSettings';
+import { ModalSurface } from './ModalSurface';
 import { LicenseSettings } from './LicenseSettings';
 import { UpdateCenter } from './UpdateCenter';
 import timelinePreview from '../../assets/activation-timeline.webp';
+
+/** Before activation no project is open; the main process adds the machine, license and logs. */
+const gateContext = (): Record<string, unknown> => ({ project: null, page: '激活页' });
 
 /** Do not mount device adapters or restore a project before main-process authorization. */
 export function LicenseGate({ children }: { children: ReactNode }): JSX.Element {
   const [state, setState] = useState<'checking' | 'locked' | 'authorized'>('checking');
   const [error, setError] = useState('');
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   // The update panel shows its own status and failures in place.
   const updateNotice = useCallback(() => undefined, []);
   const controlWindow = async (action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void> => {
@@ -59,11 +65,22 @@ export function LicenseGate({ children }: { children: ReactNode }): JSX.Element 
               setState('authorized');
             }} />
             {error ? <p className="license-startup-message" role="alert">{error}</p> : null}
+            <section className="license-gate-help" aria-label="遇到问题">
+              <div><strong>激活或更新遇到问题？</strong><span>写下看到的现象，连同诊断信息发给售后。没有网络时可以另存为文件。</span></div>
+              <Button className="secondary-button" onClick={() => setFeedbackOpen(true)}><MessageSquareWarning />问题反馈</Button>
+            </section>
             <section className="license-gate-update" aria-label="软件更新"><UpdateCenter inline notify={updateNotice} /></section>
           </>}
         </div>
       </div>
     </main>
-    <footer className="license-footer"><span>团播联动台 / TUANBO LINK CONSOLE</span><a href="https://tuanbo-link.jinhefilm.com/#contact" target="_blank" rel="noreferrer">购买咨询与售后<ArrowUpRight aria-hidden="true" /></a></footer>
+    {feedbackOpen ? <ModalSurface label="问题反馈" className="device-console feedback-dialog" onClose={() => setFeedbackOpen(false)}>
+      <header className="feedback-dialog-header"><h2>问题反馈</h2><Button aria-label="关闭问题反馈" title="关闭" onClick={() => setFeedbackOpen(false)}><X /></Button></header>
+      <FeedbackForm compact initialCategory="license" context={gateContext} ma2Available={false} />
+    </ModalSurface> : null}
+    <footer className="license-footer"><span>团播联动台 / TUANBO LINK CONSOLE</span><div className="license-footer-links">
+      <button type="button" onClick={() => setFeedbackOpen(true)}><MessageSquareWarning aria-hidden="true" />提交问题反馈</button>
+      <a href="https://tuanbo-link.jinhefilm.com/#contact" target="_blank" rel="noreferrer">购买咨询与售后<ArrowUpRight aria-hidden="true" /></a>
+    </div></footer>
   </div>;
 }

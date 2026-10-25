@@ -101,6 +101,17 @@ export class LicenseService {
       return this.result(null, 'invalid', `授权读取或校验失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
+  /** The signed license saved on this machine, as issued, or null when there is none. Sent with feedback so the
+   * server can tell which license it came from; it is the server's own signature, not a secret. */
+  async signedLicense(): Promise<string | null> {
+    try {
+      if ((await stat(this.path)).size > 16384) return null;
+      return (await readFile(this.path, 'utf8')).trim();
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+      throw error;
+    }
+  }
   async activate(token: string): Promise<LicenseStatus> {
     if (this.online) throw new Error('当前版本每次启动需联网验证，请使用激活码；不支持导入离线授权绕过验证');
     const normalized = token.trim();

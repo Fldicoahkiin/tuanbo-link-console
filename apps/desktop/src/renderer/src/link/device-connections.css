@@ -88,7 +88,7 @@
 }
 
 .device-console { width: 100%; max-width: 1024px; margin: 0; padding: 32px 32px 48px; container-type: inline-size; }
-.device-console[data-device-category='logs'], .device-console[data-settings-section='license'] { max-width: none; }
+.device-console:is([data-settings-section='logs'], [data-settings-section='license']) { max-width: none; }
 .device-console *, .device-console *::before, .device-console *::after { box-sizing: border-box; }
 .device-console [hidden], .settings-session [hidden] { display: none; }
 .device-console .device-detail, .device-console .device-panel { min-width: 0; padding: 0; background: transparent; border: 0; }
@@ -234,6 +234,20 @@
 .device-console .update-summary { margin-top: 24px; }
 .device-console .update-actions { justify-content: flex-start; }
 .settings-confirm { width: 440px; padding: 24px; background: var(--surface); backdrop-filter: none; }
+/* Problem report: a settings page, and the same form in a dialog on the activation page. */
+.device-console .feedback-time { display: flex; flex-wrap: wrap; gap: 8px; }
+.device-console .feedback-time select { --settings-input-max: 160px; width: auto; min-width: 140px; }
+.device-console .feedback-time input { --settings-input-max: 220px; width: auto; }
+.device-console .feedback-outcome { display: block; user-select: text; }
+.device-console .feedback-copy { margin-top: 10px; }
+.modal-surface.feedback-dialog { width: min(640px, calc(100vw - 32px)); max-width: calc(100vw - 32px); margin: auto; padding: 24px 28px 28px; background: var(--surface); backdrop-filter: none; }
+.feedback-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 16px; }
+.device-console .feedback-dialog-header h2 { margin: 0; font-size: 18px; }
+.device-console .feedback-dialog-header .ui-button { border-color: transparent; background: transparent; padding: 8px; }
+.feedback-dialog .settings-group { margin-bottom: 20px; }
+.feedback-dialog :is(.settings-field-row) { grid-template-columns: 96px minmax(0, 1fr); }
+.feedback-dialog :is(.settings-field-control, .settings-field-wide .settings-field-control, .settings-switch-row) { max-width: none; }
+.feedback-dialog textarea { max-width: none; }
 .settings-confirm h2 { margin: 0 0 12px; font-size: 18px; }
 .settings-confirm .settings-actions { justify-content: flex-end; margin-bottom: 0; }
 @media (hover: hover) {

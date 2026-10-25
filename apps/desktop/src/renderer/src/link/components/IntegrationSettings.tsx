@@ -14,6 +14,9 @@ import { useDocumentStore } from '../stores/document-store';
 import { SettingsPageHeader, SettingsFeedback } from './SettingsControls';
 import { Button } from './Button';
 import { DeviceConnectionsPage } from './DeviceConnectionsPage';
+import { FeedbackForm } from './FeedbackSettings';
+import { LogsWorkspace } from './LogsWorkspace';
+import { diagnosticContext } from '../view-models/diagnostic-context';
 
 type Notify = (message: string, tone?: 'info' | 'error') => void;
 
@@ -64,6 +67,7 @@ export function IntegrationSettingsDialog({ category, busy, runtimeActive, secur
 }): JSX.Element {
   useSettingsEscape(nestedDialogOpen, onClose);
   const internal = useDocumentStore((state) => !state.project || state.project.playbackSource === 'internal');
+  const hasMa2 = useDocumentStore((state) => Boolean(state.project?.ma2ReadState));
   const deviceCategory = isDeviceSettingsCategory(category);
   const visited = useRef(new Set<SettingsCategory>());
   visited.current.add(category);
@@ -89,6 +93,8 @@ export function IntegrationSettingsDialog({ category, busy, runtimeActive, secur
         {current.id === 'updates' ? <UpdateCenter notify={notify} inline runtimeActive={runtimeActive} /> : null}
         {current.id === 'license' ? <LicenseSettings runtimeActive={runtimeActive} /> : null}
         {current.id === 'seeking' || current.id === 'timecode' || current.id === 'workflow' ? <ProjectSettings section={current.id} disabled={runtimeActive || busy} notify={notify} onNavigate={onNavigate} onCreate={onCreate} onOpen={onOpen} /> : null}
+        {current.id === 'feedback' ? <FeedbackForm context={diagnosticContext} ma2Available={hasMa2} onOpenLogs={() => onNavigate('logs')} /> : null}
+        {current.id === 'logs' ? <LogsWorkspace notify={notify} settings /> : null}
       </div>
     </section>)}
   </div>;

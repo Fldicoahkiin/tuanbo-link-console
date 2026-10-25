@@ -48,7 +48,7 @@ async function audit(page: Page): Promise<unknown> {
   });
 }
 
-test('设置 17 页双主题三尺寸、展开状态与缩放视觉矩阵', async ({}, info) => {
+test('设置全部页面双主题三尺寸、展开状态与缩放视觉矩阵', async ({}, info) => {
   test.setTimeout(240_000);
   const app = await electron.launch({ args: [`--user-data-dir=${info.outputPath('profile')}`, join(process.cwd(), 'out/main/index.cjs')] });
   const page = await app.firstWindow();
@@ -84,7 +84,7 @@ test('设置 17 页双主题三尺寸、展开状态与缩放视觉矩阵', asyn
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1180, 720));
     for (const zoom of [1.25, 1.5, 2]) {
       await app.evaluate(({ BrowserWindow }, factor) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(factor), zoom);
-      for (const id of ['obs', 'audio', 'ma2', 'license', 'shortcuts', 'logs'] as const) {
+      for (const id of ['obs', 'audio', 'ma2', 'license', 'shortcuts', 'logs', 'feedback'] as const) {
         await select(page, id);
         expect(await audit(page), `zoom ${zoom}/${id}`).toMatchObject({ overflow: [], small: [], pageOverflow: false });
         await page.screenshot({ path: info.outputPath(`zoom-${zoom}-${id}.png`) });

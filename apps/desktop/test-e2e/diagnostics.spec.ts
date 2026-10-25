@@ -74,7 +74,7 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
   }
 });
 
-test('激活页不显示日志入口，界面错误仍持久化并可由诊断接口导出', async ({}, info) => {
+test('激活页不显示日志列表但有问题反馈入口，界面错误仍持久化并可由诊断接口导出', async ({}, info) => {
   const profile = info.outputPath('profile');
   for (const round of [0, 1]) {
     const application = await electron.launch({ env: { ...process.env, TBLINK_LOCAL_TEST_ACCESS: '0' },
@@ -84,6 +84,7 @@ test('激活页不显示日志入口，界面错误仍持久化并可由诊断�
       await page.getByRole('heading', { name: '激活你的工作区', exact: true }).waitFor();
       if (!round) await page.evaluate(() => window.dispatchEvent(new ErrorEvent('error', { message: '诊断验收：界面错误', error: new Error('诊断验收：界面错误') })));
       await expect(page.getByRole('button', { name: '运行日志', exact: true })).toHaveCount(0);
+      await expect(page.getByRole('region', { name: '遇到问题', exact: true }).getByRole('button', { name: '问题反馈', exact: true })).toBeVisible();
       await expect.poll(() => page.evaluate(async () => (await window.tbLink.queryLogs({ limit: 100 })).some(log => log.message === '界面异常：诊断验收：界面错误'))).toBe(true);
       await expect(page.locator('dialog[open]')).toHaveCount(0);
       const destination = info.outputPath(`未激活-${round}.tbdiag.gz`);
