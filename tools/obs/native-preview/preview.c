@@ -60,11 +60,31 @@ static bool connect_client(HANDLE pipe) {
     }
     CloseHandle(op.hEvent); return done && !stopping;
 }
+/* OBS started as administrator owns its objects through the Administrators group, so
+ * OWNER RIGHTS alone refuses a normal-privilege console of the same Windows user.
+ * Admit that user's SID as well; other users and remote clients stay refused. */
+static bool pipe_security(PSECURITY_DESCRIPTOR *descriptor) {
+    HANDLE token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+    bool built = false;
+    DWORD size = 0;
+    GetTokenInformation(token, TokenUser, NULL, 0, &size);
+    TOKEN_USER *user = size ? malloc(size) : NULL;
+    wchar_t *sid = NULL;
+    if (user && GetTokenInformation(token, TokenUser, user, size, &size) && ConvertSidToStringSidW(user->User.Sid, &sid)) {
+        wchar_t sddl[256];
+        int written = swprintf(sddl, 256, L"D:P(A;;GA;;;OW)(A;;GA;;;%ls)(A;;GA;;;SY)", sid);
+        built = written > 0 && written < 256 && ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, descriptor, NULL);
+    }
+    if (sid) LocalFree(sid);
+    free(user); CloseHandle(token);
+    return built;
+}
 static DWORD WINAPI serve(void *unused) {
     (void)unused;
     wchar_t name[128]; swprintf(name, 128, L"\\\\.\\pipe\\tblink-obs-preview-%lu", GetCurrentProcessId());
     PSECURITY_DESCRIPTOR descriptor = NULL;
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)(A;;GA;;;SY)", SDDL_REVISION_1, &descriptor, NULL)) return 1;
+    if (!pipe_security(&descriptor)) return 1;
     SECURITY_ATTRIBUTES security = {sizeof(security), descriptor, FALSE};
     while (!stopping) {
         HANDLE pipe = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 65536, 64, 0, &security);

@@ -75,7 +75,7 @@ static DWORD WINAPI serve_seek(void *unused) {
     (void)unused;
     wchar_t name[128]; swprintf(name, 128, L"\\\\.\\pipe\\tblink-obs-seek-%lu", GetCurrentProcessId());
     PSECURITY_DESCRIPTOR descriptor = NULL;
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)(A;;GA;;;SY)", SDDL_REVISION_1, &descriptor, NULL)) return 1;
+    if (!pipe_security(&descriptor)) return 1;
     SECURITY_ATTRIBUTES security = {sizeof(security), descriptor, FALSE};
     while (!stopping) {
         HANDLE pipe = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, SEEK_WORKERS, 64, 2048, 0, &security);

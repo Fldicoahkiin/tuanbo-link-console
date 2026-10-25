@@ -78,6 +78,7 @@ apps/desktop/.local-test-access
 # IBT built runtime (reproduced from pinned public source)
 tools/ibt/bin/
 tools/midi-probe/bin/
+tools/process-identity/bin/
 tools/playback-engine/bin/
 
 apps/desktop/dist-internal/

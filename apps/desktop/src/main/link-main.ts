@@ -130,6 +130,7 @@ import type {
   LinkUpdateStatus
 } from '@tb/core/link';
 import { ExternalProcessManager, WindowsProcessTools, type ExternalApplicationId } from './link/external-process-manager';
+import { processIdentityExecutable } from './link/process-identity';
 import { LinkProjectService } from './link/link-project-service';
 import { AssetRelinkRequests } from './link/asset-relink-requests';
 import { ProjectAccess } from './link/project-access';
@@ -262,6 +263,8 @@ function buildIdentityLine(): string {
   const identity = buildIdentity();
   return `${identity.name} ${identity.version} · ${releaseChannelLabel[identity.channel]} · 提交 ${identity.gitSha ?? '未知'} · ${identity.appId}`;
 }
+// Identifies programs Windows hides from a normal-privilege console, such as OBS run as administrator.
+const identityHelper = processIdentityExecutable(app.isPackaged ? process.resourcesPath : undefined);
 const midiHealth = new WindowsMidiHealth(() => probeWindowsMidi(midiProbeExecutable(app.isPackaged ? process.resourcesPath : undefined)));
 
 const projectService = new LinkProjectService();
@@ -286,7 +289,7 @@ async function bootstrap(): Promise<void> {
   const profileStore = new SecureProfileStore(app.getPath('userData'), safeStorage);
   const obs = new ObsWebSocketAdapter(join(app.getPath('documents'), '团播联动台', 'screenshots'), undefined, undefined,
     new ObsEditorPreview(join(app.getPath('documents'), '团播联动台', 'OBS预览')));
-  const processManager = new ExternalProcessManager(new WindowsProcessTools(), obs);
+  const processManager = new ExternalProcessManager(new WindowsProcessTools(identityHelper), obs);
   const integrationDetector = new WindowsIntegrationDetector();
   const logger = new LinkRunLogger(join(app.getPath('userData'), 'link-logs'), () => [...knownSecrets]);
   ipcLogger = logger;
@@ -1862,8 +1865,10 @@ function registerIpc(
       if (!profile.obs.executablePath) throw new Error('尚未找到本机 OBS，请先安装 OBS 或选择程序位置');
       // Before touching its configuration or plugin: an OBS we cannot inspect must not get a second instance.
       if (!running) await processManager.assertNoUnverifiableInstance('obs', profile.obs.executablePath);
-      const commandLine = process.pid !== null && process.executablePath && process.startTime
-        ? await readObsCommandLine({ pid: process.pid, executablePath: process.executablePath, startTime: process.startTime }) : '';
+      const access = processManager.inspectionAccess('obs');
+      if (process.pid !== null && process.executablePath && process.startTime && access === null) throw new Error('OBS 进程身份尚未核验，请重新点一键连接');
+      const commandLine = process.pid !== null && process.executablePath && process.startTime && access !== null
+        ? await readObsCommandLine({ pid: process.pid, executablePath: process.executablePath, startTime: process.startTime, access }, identityHelper) : '';
       let targetPid = process.pid;
       const local = await prepareLocalObsConnection({ obs: profile.obs, roamingDirectory: app.getPath('appData'), running, commandLine });
       knownSecrets.add(local.password);
@@ -1926,7 +1931,7 @@ function registerIpc(
       const decision = await dialog.showMessageBox(mainWindow!, {
         type: 'question', title: '维护 OBS 内置组件',
         message: kind === 'restart' ? '需要正常重启 OBS 以加载组件' : '请先在 OBS 内正常退出，再继续',
-        detail: `${reason}\n\n${kind === 'restart' ? '请先保存 OBS 场景。确认后联动台会检查推流与录像状态，正常关闭本次启动的 OBS，部署组件并重新连接。' : '当前 OBS 不是本次由联动台启动，软件不会关闭它。请保存场景并正常退出 OBS；点击继续后，软件将完成部署、启动和连接。'}`,
+        detail: `${reason}\n\n${kind === 'restart' ? '请先保存 OBS 场景。确认后联动台会检查推流与录像状态，正常关闭本次启动的 OBS，部署组件并重新连接。' : '当前 OBS 不是本次由联动台启动，软件不会关闭它。请保存场景并正常退出 OBS；点击继续后，软件将完成部署、启动和连接。'}${kind === 'external' && processManager.inspectionAccess('obs') === 'limited' ? '\n\n这个 OBS 正以管理员身份运行。联动台不会提权启动程序，修复后会用普通方式打开 OBS；需要管理员身份时，可以之后自己重新打开 OBS 再点“一键连接”，新组件在两种方式下都能用。' : ''}`,
         buttons: [kind === 'restart' ? '保存好了，重启并修复' : '已退出，继续', '取消'], defaultId: 1, cancelId: 1
       });
       return decision.response === 0;
