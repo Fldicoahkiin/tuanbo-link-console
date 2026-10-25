@@ -1,4 +1,6 @@
 import { Button } from './Button';
+import { ReleaseNotes } from './ReleaseNotes';
+import { bundledReleaseNotes } from '../release-notes';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { LinkAppInfo, LinkReleaseChannel, LinkUpdateStatus } from '@tb/core/link';
@@ -122,6 +124,7 @@ export function UpdateCenter({ notify, inline = false, runtimeActive = false }: 
           {phase === 'available' && !status?.installBlockedReason ? <Button className="primary-button" disabled={working || runtimeActive} onClick={() => void run(() => window.tbLink.downloadUpdate())}><Download />下载更新</Button> : null}
           {phase === 'downloaded' ? <Button className="primary-button" disabled={busy || runtimeActive} onClick={() => void install()}><CloudDownload />重启并安装</Button> : null}
         </div>
+        <ReleaseNotes notes={bundledReleaseNotes} currentVersion={status?.currentVersion ?? null} availableVersion={phase === 'available' || phase === 'downloading' || phase === 'downloaded' ? status?.availableVersion ?? null : null} />
   </>;
   if (inline) return <div className="update-center">{content}{!status && failure ? <Button onClick={() => void run(() => window.tbLink.getUpdateStatus())}>重新读取更新状态</Button> : null}</div>;
 

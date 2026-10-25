@@ -1,7 +1,9 @@
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
+import { notesUpTo, readReleaseNotes } from '../../scripts/release-notes.mjs';
 
 export default defineConfig(({ mode }) => {
   // Only `--mode release` compiles out the development activation bypass; packaging refuses any other build
@@ -62,6 +64,10 @@ export default defineConfig(({ mode }) => {
     },
     renderer: {
       plugins: [react()],
+      define: {
+        // The update panel's 更新日志: this version's release notes and every earlier one (scripts/release-notes.mjs).
+        __TBLINK_RELEASE_NOTES__: JSON.stringify(notesUpTo(readReleaseNotes(resolve(__dirname, '../../release-notes')), desktopVersion()))
+      },
       resolve: {
         alias: {
           '@tb/core/link': resolve(__dirname, '../../packages/core/src/link-public.ts'),
@@ -72,6 +78,13 @@ export default defineConfig(({ mode }) => {
     }
   };
 });
+
+function desktopVersion(): string {
+  const manifest: unknown = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8'));
+  const version = typeof manifest === 'object' && manifest !== null && 'version' in manifest ? manifest.version : null;
+  if (typeof version !== 'string') throw new Error('apps/desktop/package.json 没有版本号');
+  return version;
+}
 
 /** The commit shown in logs, diagnostics and the update panel. A release build without Git is refused. */
 function gitRevision(release: boolean): string | null {

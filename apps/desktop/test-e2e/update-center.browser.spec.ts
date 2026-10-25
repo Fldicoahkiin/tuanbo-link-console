@@ -3,13 +3,20 @@ import { build } from 'esbuild';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { LinkUpdateStatus } from '@tb/core/link';
+import type { ReleaseNote } from '../../../scripts/release-notes.mjs';
+
+const releaseNotes: ReleaseNote[] = [
+  { version: '0.4.27', blocks: [{ kind: 'list', items: [[{ text: '同步', strong: true }, { text: '：以时间线为准。', strong: false }]] }] },
+  { version: '0.4.26', blocks: [{ kind: 'paragraph', content: [{ text: '上一版的说明。', strong: false }] }] }
+];
 
 let script = '';
 let styles = '';
 test.beforeAll(async () => {
   const result = await build({
     stdin: { contents: `import React from 'react'; import { createRoot } from 'react-dom/client'; import { UpdateCenter } from './src/renderer/src/link/components/UpdateCenter'; createRoot(document.getElementById('root')).render(React.createElement(UpdateCenter, { notify: message => { document.getElementById('notice').textContent = message; } }));`, resolveDir: process.cwd(), loader: 'jsx' },
-    bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic'
+    bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic',
+    define: { __TBLINK_RELEASE_NOTES__: JSON.stringify(releaseNotes) }
   });
   script = result.outputFiles[0]!.text;
   styles = (await Promise.all(['link.css', 'appearance.css', 'interface.css'].map(file => readFile(resolve('src/renderer/src/link', file), 'utf8')))).join('\n');
@@ -34,8 +41,15 @@ test('公司更新无需客户凭证，下载后由用户确认安装，关闭�
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.locator('input')).toHaveCount(0);
   await expect(page.getByText('团播联动台 · 正式版 · 提交 0123456789ab · com.tuanbo.control', { exact: true })).toBeVisible();
+  const notes = page.getByRole('region', { name: '更新日志' });
+  await expect(notes.locator('details').first()).toHaveAttribute('open', '');
+  await expect(notes.getByText('v0.4.27当前版本', { exact: true })).toBeVisible();
+  await expect(notes.getByText('：以时间线为准。')).toBeVisible();
+  await expect(notes.getByText('上一版的说明。')).toBeHidden();
+  await expect(notes.getByRole('link')).toHaveCount(0);
   await page.getByRole('button', { name: '检查更新', exact: true }).click();
   await expect(page.getByText('发现新版本 0.4.28', { exact: true })).toBeVisible();
+  await expect(notes.getByRole('link', { name: '在官网查看 0.4.28 的更新内容' })).toHaveAttribute('href', 'https://tuanbo-link.jinhefilm.com/download/#changelog');
   await page.getByRole('button', { name: '下载更新', exact: true }).click();
   await expect(page.getByRole('button', { name: '重启并安装', exact: true })).toBeEnabled();
   await page.screenshot({ path: info.outputPath('company-update.png') });
