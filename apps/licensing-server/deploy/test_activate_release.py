@@ -40,6 +40,18 @@ class ProxyUpgradeTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 release.next_proxy_config(previous, previous, candidate)
 
+    def test_feedback_routes_are_optional_but_come_as_a_pair_with_their_limits(self):
+        without = re.sub(r"    # In-app problem reports\..*?\n    location / \{ return 404; \}", "    location / { return 404; }", template, flags=re.S)
+        self.assertNotIn("/v1/feedback", release.api_sections(without)[1])
+        self.assertEqual(release.next_proxy_config(without, without, without), without)
+        self.assertEqual(release.next_proxy_config(without, without, template), template)
+        upload = re.search(r'    location ~ "\^/v1/feedback/.*?\n    }\n', template, re.S).group(0)
+        for candidate, message in [(template.replace(upload, ""), "Unexpected public routes"),
+                                   (template.replace("limit_except PUT", "limit_except POST"), "restrict its method"),
+                                   (template.replace("        limit_req zone=tblink_feedback burst=3 nodelay;\n", "", 1), "rate limit")]:
+            with self.assertRaisesRegex(RuntimeError, message):
+                release.next_proxy_config(previous, previous, candidate)
+
     def test_reject_duplicate_and_missing_api(self):
         api = release.api_sections(template)[1]
         for candidate in [template + api, template.replace("server_name api.tuanbo-link.jinhefilm.com;", "server_name other.example.com;")]:

@@ -54,11 +54,20 @@
 
 ## 服务器端
 
-服务器的反馈接口、限流、存储和运营后台查看单独实现，安装说明（备份、验证、回退）随服务器改动一起提交，装到生产服务器前需要用户确认。装好之前，桌面端提交会得到“反馈服务尚未开通”，用“另存为文件”。
+代码：`apps/licensing-server/src/feedback.ts`（接收、限流、存储、整理）、`console-service.ts` / `console-http.ts`（运营后台「问题反馈」页和诊断包下载）、`deploy/nginx.conf`（两个路由和限流区）、`deploy/activate-release.py`（部署时认可这两个路由）、`deploy/feedback-proxy.py`（给线上 Nginx 加路由的辅助脚本）。
+
+- 环境变量 `FEEDBACK_DIRECTORY` 指定诊断包目录；没设时接口回答 `404 FEEDBACK_DISABLED`，桌面端提示“反馈服务尚未开通”，用“另存为文件”。
+- 反馈存在授权数据库的新表 `feedback`（只加表）；诊断包存成 `<反馈 id>.tbdiag.gz` 文件。来源只存网络地址的加密摘要。
+- 限制：同一网络每小时 6 条、每天 20 条；同一台电脑每天 10 条；全站每天 500 条；授权有效的电脑诊断包 8 MB、其他 2 MB；诊断包合计 2 GB，磁盘至少留 1 GB；诊断包保存 180 天、记录 2 年。同一条反馈 24 小时内重复提交返回原编号。
+- 运营后台：管理员和运营可见「问题反馈」，工作台有“待处理问题反馈”；详情显示现象、联系方式、版本、机器码、授权和环境摘要，能下载诊断包（记审计），关闭时必须写处理结论，关闭后可重新打开。
+- 官网隐私政策同步说明了反馈收集的内容、用途和保存期限。
+
+装到生产服务器前需要用户确认，步骤（备份、验证、回退）见 [问题反馈接口安装说明](SERVER_INSTALL_FEEDBACK_20261025.md)。
 
 ## 验证
 
+- 服务器：`feedback.test.ts`（上传校验、授权大小、各级限流、重复提交、存储上限、到期整理、桌面端经真实接口提交并上传、后台按角色查看下载和结案）；`scripts/verify-console.mjs` 浏览器验收「问题反馈」页；部署脚本 `test_activate_release.py`、`test_feedback_proxy.py`。
 - 单元测试：`log-repeats.test.ts`、`run-logger.test.ts`（重复记录只落盘前三条并写汇总）、`update-manager.test.ts`、`license-log.test.ts`、`feedback-service.test.ts`（提交、上传、超限、读不出授权、限流、网络失败）、`diagnostic-environment.test.ts`、`feedback-form.test.ts`、`update-availability.test.ts`。
 - 浏览器界面测试：`license-settings.browser.spec.ts` 新增“未激活也能提交问题反馈”。
 - Electron e2e：`diagnostics.spec.ts`、`settings-redesign.spec.ts` 已按新位置更新，需在 Windows 上运行。
-- 未在真实 Windows 现场验证；在线提交要等服务器接口装好后再实测。
+- 未在真实 Windows 现场验证；在线提交要等服务器接口装好后再实测（安装说明第 6 步）。
