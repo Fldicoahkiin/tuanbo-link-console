@@ -106,6 +106,10 @@ describe('FeedbackService', () => {
     const missing = await setup(() => new Response('', { status: 404 }));
     await expect(missing.service.submit(draft)).rejects.toThrow('反馈服务尚未开通；也可以点「另存为文件」');
     expect(missing.logs.at(-1)).toMatchObject({ level: 'error', result: 'failed' });
+    const disabled = await setup(() => json({ code: 'FEEDBACK_DISABLED', message: '反馈服务尚未开通' }, 404));
+    await expect(disabled.service.submit(draft)).rejects.toThrow('反馈服务尚未开通；也可以点「另存为文件」');
+    const refused = await setup(() => json({ code: 'INVALID_REQUEST', message: '请求字段或期限无效' }, 400));
+    await expect(refused.service.submit(draft)).rejects.toThrow('请求字段或期限无效；也可以点「另存为文件」');
     const limited = await setup(() => json({ code: 'RATE_LIMITED', message: '提交过于频繁' }, 429));
     await expect(limited.service.submit(draft)).rejects.toThrow('提交过于频繁，请稍后再试');
     const offline = await setup(() => { throw new TypeError('fetch failed'); });

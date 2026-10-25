@@ -154,10 +154,11 @@ export class FeedbackService {
       catch (error) { if (error instanceof SyntaxError) throw new Error('反馈服务器返回的内容无法识别'); throw error; }
     }
     const body = parseError(text);
-    if (response.status === 404 && !body) throw new Error(`反馈服务尚未开通；${SAVE_HINT}`);
+    // A proxy's own 404 page, or the server's answer while feedback is switched off there.
+    if (response.status === 404 && (!body || body.code === 'NOT_FOUND' || body.code === 'FEEDBACK_DISABLED')) throw new Error(`反馈服务尚未开通；${SAVE_HINT}`);
     if (response.status === 429) throw new Error(`${body?.message ?? '提交太频繁'}，请稍后再试；${SAVE_HINT}`);
     if (response.status >= 500) throw new Error(`反馈服务器暂时不可用（${response.status}），请稍后重试；${SAVE_HINT}`);
-    throw new Error(body?.message ?? `反馈服务器拒绝了这条反馈（${response.status}）；${SAVE_HINT}`);
+    throw new Error(`${body?.message ?? `反馈服务器拒绝了这条反馈（${response.status}）`}；${SAVE_HINT}`);
   }
 }
 
