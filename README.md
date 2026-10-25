@@ -2,11 +2,11 @@
 
 面向 Windows 团播现场的节目编排与设备联动软件。在一个工作区内管理节目、播放音乐、编排画面与灯光，并联动 OBS Studio、MIDI、P1 和 grandMA2。
 
-**当前发行：0.5.0 · Windows x64**
+**Windows x64 · 最新版本和下载见[官网下载页](https://tuanbo-link.jinhefilm.com/download/)，每个版本改了什么见 [CHANGELOG.md](CHANGELOG.md)。**
 
-本仓库包含桌面端源码、设备桥接工具、自动化测试和实施文档。0.5.0 于 2026-10-24 发布，官网开放下载与支付宝购买。0.4.29 时 Windows CI 已验证正式安装版的未激活拦截、覆盖安装、正常关闭和卸载，以及真实更新器的公网完整下载和损坏包拒绝。真实付款激活、两版本重启更新与现场设备验收仍待完成，见[授权与更新验收](docs/LICENSE_UPDATE_ACCEPTANCE.md)。
+本仓库包含桌面端源码、设备桥接工具、自动化测试和实施文档。官网开放下载与支付宝购买。0.4.29 时 Windows CI 已验证正式安装版的未激活拦截、覆盖安装、正常关闭和卸载，以及真实更新器的公网完整下载和损坏包拒绝。真实付款激活、两版本重启更新与现场设备验收仍待完成，见[授权与更新验收](docs/LICENSE_UPDATE_ACCEPTANCE.md)。
 
-[产品官网与购买](https://tuanbo-link.jinhefilm.com/) · [下载 Windows 0.5.0](https://updates.tuanbo-link.jinhefilm.com/windows/x64/Tuanbo-Link-Console-0.5.0-x64.exe) · [发布与部署链路](#发布与部署链路) · [0.4.29 发行记录](docs/RELEASE_0.4.29.md)
+[产品官网与购买](https://tuanbo-link.jinhefilm.com/) · [下载 Windows 版](https://tuanbo-link.jinhefilm.com/download/) · [更新日志](CHANGELOG.md) · [发布与部署链路](#发布与部署链路) · [0.4.29 发行记录](docs/RELEASE_0.4.29.md)
 
 0.4.27 仍使用旧 GitHub 更新源。首次迁移请保存工程、退出软件，再用官网安装器覆盖原目录；新版使用公司更新源，无需填写 GitHub Token。具体步骤见[旧安装迁移](docs/SOFTWARE_UPDATES.md#旧安装迁移与故障)。
 
@@ -188,7 +188,7 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
 <a id="windows-发版"></a>
 ### Windows 发版
 
-改版本号、推 `vX.Y.Z` 标签之后全部自动，不用 Cloudflare。安装包在 GitHub 云端构建、签名；服务器的上传私钥不进 GitHub，所以由搬运脚本把草稿送到服务器：工位电脑的计划任务定时跑，Mac 也能手动跑，二选一。下图每一段里标「日志」的方框，是这一段出问题时看的地方。图的源码在 [docs/diagrams](docs/diagrams/)，改图见那里的说明。
+写好 `release-notes/X.Y.Z.md`（[写法](release-notes/README.md)）、改版本号并运行 `pnpm changelog`、推 `vX.Y.Z` 标签之后全部自动，不用 Cloudflare。安装包在 GitHub 云端构建、签名；服务器的上传私钥不进 GitHub，所以由搬运脚本把草稿送到服务器：工位电脑的计划任务定时跑，Mac 也能手动跑，二选一。下图每一段里标「日志」的方框，是这一段出问题时看的地方。图的源码在 [docs/diagrams](docs/diagrams/)，改图见那里的说明。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/windows-release-dark.svg">

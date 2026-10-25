@@ -9,6 +9,10 @@ on:
       - 'scripts/verify-product-website.mjs'
       - 'scripts/serve-product-website.mjs'
       - 'scripts/verify-console.mjs'
+      - 'scripts/release-notes.mjs'
+      - 'scripts/release-notes.test.mjs'
+      - 'release-notes/**'
+      - 'CHANGELOG.md'
       - 'packages/core/**'
       - 'packages/schema/**'
       - 'package.json'
@@ -25,6 +29,10 @@ on:
       - 'scripts/verify-product-website.mjs'
       - 'scripts/serve-product-website.mjs'
       - 'scripts/verify-console.mjs'
+      - 'scripts/release-notes.mjs'
+      - 'scripts/release-notes.test.mjs'
+      - 'release-notes/**'
+      - 'CHANGELOG.md'
       - 'packages/core/**'
       - 'packages/schema/**'
       - 'package.json'
@@ -64,6 +72,9 @@ jobs:
         run: pnpm --filter @tb/licensing-server typecheck
       - name: Verify authorization, payments and purchase client
         run: pnpm exec vitest run apps/licensing-server apps/desktop/src/main/link/purchase-service.test.ts --maxWorkers=2
+      - name: Release notes parse and CHANGELOG.md matches them
+        # The website download page and the desktop update panel render release-notes/; CHANGELOG.md is generated from it.
+        run: node --test scripts/release-notes.test.mjs
       - name: Build server and website from this commit
         run: |
           pnpm --filter @tb/licensing-server build

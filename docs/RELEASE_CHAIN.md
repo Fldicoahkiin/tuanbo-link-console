@@ -5,7 +5,7 @@
 
 用户 2026-10-24 定下：打 tag 即上线，中间没有人工步骤；不做额外的自动化验收，用户自己安装测试；官网只放最新的包。本文后面的章节是 2026-09 的旧链路，以本节和[软件更新文档](SOFTWARE_UPDATES.md#步骤)为准。
 
-1. 发布提交只改根目录和 `apps/desktop` 两个 `package.json` 的版本号，提交信息 `chore(release): X.Y.Z`，推 master。
+1. 确认 `release-notes/X.Y.Z.md` 写全了（GitHub Release、仓库 CHANGELOG、官网和软件里的更新日志都从它生成，见 [release-notes/README.md](../release-notes/README.md)）。发布提交改根目录和 `apps/desktop` 两个 `package.json` 的版本号，运行 `pnpm changelog`，提交信息 `chore(release): X.Y.Z`，推 master。
 2. 这个提交的 CI 通过后，在它上面打 `vX.Y.Z` 标签并推送。
 3. 之后全部自动（2026-10-24 用户定下：在 GitHub 云端打包，工位电脑只负责把包搬到服务器；不用 Cloudflare）：
    - Release Windows 的 verify 和 build 作业在 GitHub 云端 Windows 上跑：检查版本、类型、单测、lint；下载美颜和音乐分析的固定资产，打包、签名，把四个文件放进这个标签的草稿 GitHub Release。

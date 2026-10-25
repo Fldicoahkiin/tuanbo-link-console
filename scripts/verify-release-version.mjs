@@ -2,8 +2,9 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { load } from 'js-yaml';
 import { assertNewerRelease, validateReleaseVersion } from './release-config.mjs';
+import { readReleaseNotes } from './release-notes.mjs';
 
-// Default: root and desktop package agree on an X.Y.Z version (every verify run).
+// Default: root and desktop package agree on an X.Y.Z version that has release-notes/X.Y.Z.md (every verify run).
 // --release: also newer than every other release tag and than the live feed (release builds only;
 // package.json keeps the last released version between release commits).
 const args = process.argv.slice(2);
@@ -13,6 +14,9 @@ if (args.length > (release ? 2 : 1)) throw new Error('用法：node scripts/veri
 const rootPackage = JSON.parse(readFileSync('package.json', 'utf8'));
 const desktopPackage = JSON.parse(readFileSync('apps/desktop/package.json', 'utf8'));
 const version = validateReleaseVersion(rootPackage, desktopPackage, tag);
+if (!readReleaseNotes('release-notes').some(note => note.version === version)) {
+  throw new Error(`缺少 release-notes/${version}.md：GitHub Release、官网和软件里的更新日志都从它生成，见 release-notes/README.md`);
+}
 if (release) {
   const git = (gitArgs) => execFileSync('git', gitArgs, { encoding: 'utf8', timeout: 15_000, windowsHide: true }).trim();
   const tags = git(['for-each-ref', 'refs/tags/v*', '--format=%(refname:short) %(objectname) %(*objectname)'])
