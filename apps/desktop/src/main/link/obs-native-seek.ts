@@ -1,5 +1,6 @@
 import { createConnection } from 'node:net';
 import { findLocalObsPid } from './obs-editor-preview';
+import { isPipeAccessDenied, obsPipeAccessDeniedMessage } from './obs-bridge-access';
 
 export class ObsNativeSeek {
   private location: { address: string; pid: number } | null = null;
@@ -34,7 +35,7 @@ export class ObsNativeSeek {
       const response = Buffer.alloc(4); let offset = 0;
       const finish = (error?: Error): void => { clearTimeout(timer); socket.destroy(); if (error) reject(error); else resolve(); };
       const timer = setTimeout(() => finish(new Error('OBS 原生定位超时')), 2000);
-      socket.on('error', (error) => finish(new Error(`OBS 原生定位不可用，请确认已加载新版插件：${error.message}`)));
+      socket.on('error', (error) => finish(new Error(isPipeAccessDenied(error) ? `OBS 原生定位不可用：${obsPipeAccessDeniedMessage}` : `OBS 原生定位不可用，请确认已加载新版插件：${error.message}`)));
       socket.once('connect', () => { if (epoch !== this.epoch) finish(new Error('OBS 原生请求已取消，尚未发送')); else socket.write(packet); });
       socket.on('data', (chunk: Buffer) => {
         if (epoch !== this.epoch) { finish(new Error('OBS 原生请求期间连接改变，请核对目标状态')); return; }

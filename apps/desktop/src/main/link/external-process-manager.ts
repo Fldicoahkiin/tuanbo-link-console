@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
+import { z } from 'zod';
+import type { ProcessAccess } from './process-identity';
 import { windowsPowerShellExecutable } from './windows-powershell';
 
 export type ExternalApplicationId = 'obs' | 'p1' | 'ma2' | 'ma3d';
@@ -21,6 +23,7 @@ export type DetectedProcess = {
   startTime: string;
   windowTitle: string;
   fileVersion: string;
+  access: ProcessAccess;
 };
 
 export type ManagedProcessSnapshot = {
@@ -38,6 +41,8 @@ export type ManagedProcessSnapshot = {
 
 export type ExternalProcessTools = {
   findByExecutable(executablePath: string): Promise<DetectedProcess[]>;
+  /** PIDs in this Windows session with the same file name that cannot be identified at all, so neither verified nor safely duplicated. */
+  findUnverifiable(executablePath: string): Promise<number[]>;
   launch(configuration: ExternalProcessConfiguration): ChildProcess;
   requestClose(pid: number, identity?: Pick<ManagedProcessSnapshot, 'executablePath' | 'startTime'>): Promise<boolean>;
 };
@@ -54,6 +59,7 @@ export class ExternalProcessManager {
     child: ChildProcess | null;
   }>();
   private readonly listeners = new Set<ProcessListener>();
+  private readonly access = new Map<ExternalApplicationId, { pid: number; startTime: string; access: ProcessAccess }>();
 
   constructor(
     private readonly tools: ExternalProcessTools,
@@ -77,6 +83,14 @@ export class ExternalProcessManager {
     return { ...this.getEntry(id).snapshot };
   }
 
+  /** How the current process was identified, or null when none is tracked. 'limited' is usually a program
+   * running as administrator: some details, such as its command line, need the bundled reader. */
+  inspectionAccess(id: ExternalApplicationId): ProcessAccess | null {
+    const { snapshot } = this.getEntry(id);
+    const known = this.access.get(id);
+    return known && snapshot.pid === known.pid && snapshot.startTime === known.startTime ? known.access : null;
+  }
+
   async start(id: ExternalApplicationId, configuration: ExternalProcessConfiguration): Promise<ManagedProcessSnapshot> {
     const current = this.getEntry(id);
     const executablePath = resolve(configuration.executablePath);
@@ -85,7 +99,7 @@ export class ExternalProcessManager {
     if (existingProcess) {
       const process = existingProcess;
       const stillOwned = current.snapshot.owned && current.snapshot.pid === process.pid && current.snapshot.startTime === process.startTime;
-      this.setEntry(id, processSnapshot(id, process, stillOwned, 'running'), stillOwned ? current.child : null);
+      this.adopt(id, process, stillOwned, stillOwned ? current.child : null);
       if ((id === 'ma2' || id === 'ma3d') && !process.windowTitle) {
         const message = `${id === 'ma2' ? 'MA2 onPC' : 'MA 3D'} 进程已存在但主窗口未就绪，请处理该程序的残留进程或启动提示后再连接；未重复启动`;
         this.setEntry(id, { ...this.getSnapshot(id), status: 'error', error: message }, stillOwned ? current.child : null);
@@ -98,6 +112,7 @@ export class ExternalProcessManager {
       this.setEntry(id, { ...current.snapshot, status: 'error', error: message }, current.child);
       throw new Error(message);
     }
+    await this.assertNoUnverifiableInstance(id, executablePath);
 
     this.setEntry(id, {
       ...emptySnapshot(id),
@@ -109,7 +124,7 @@ export class ExternalProcessManager {
     let child: ChildProcess | null = null;
     try {
       child = this.tools.launch({ ...configuration, executablePath });
-      await waitForSpawn(child, id);
+      await waitForSpawn(child, id, executablePath);
       if (child.pid === undefined) throw new Error(`${id} 启动后未返回 PID`);
       const pid = child.pid;
       this.attachExitListener(id, child, pid);
@@ -120,7 +135,7 @@ export class ExternalProcessManager {
       }, child);
 
       const process = await waitForExactProcess(this.tools, executablePath, pid, configuration.startupTimeoutMs, id === 'ma2' || id === 'ma3d');
-      this.setEntry(id, processSnapshot(id, process, true, 'running'), child);
+      this.adopt(id, process, true, child);
       return this.getSnapshot(id);
     } catch (error) {
       const current = this.getSnapshot(id);
@@ -131,6 +146,17 @@ export class ExternalProcessManager {
       }, child);
       throw error;
     }
+  }
+
+  /** Call before launching or maintaining a program that was not found by path. An instance we cannot
+   * inspect can be neither verified nor safely duplicated, so stop with the reason instead. */
+  async assertNoUnverifiableInstance(id: ExternalApplicationId, executablePath: string): Promise<void> {
+    const path = resolve(executablePath);
+    const pids = await this.tools.findUnverifiable(path);
+    if (pids.length === 0) return;
+    const message = unverifiableInstanceMessage(id, pids);
+    this.setEntry(id, { ...emptySnapshot(id), executablePath: path, status: 'error', error: message }, null);
+    throw new Error(message);
   }
 
   async refresh(
@@ -163,7 +189,7 @@ export class ExternalProcessManager {
       return this.getSnapshot(id);
     }
     const stillOwned = current.snapshot.owned && current.snapshot.pid === match.pid && current.snapshot.startTime === match.startTime;
-    this.setEntry(id, processSnapshot(id, match, stillOwned, 'running'), stillOwned ? current.child : null);
+    this.adopt(id, match, stillOwned, stillOwned ? current.child : null);
     return this.getSnapshot(id);
   }
 
@@ -243,6 +269,11 @@ export class ExternalProcessManager {
     return entry;
   }
 
+  private adopt(id: ExternalApplicationId, process: DetectedProcess, owned: boolean, child: ChildProcess | null): void {
+    this.access.set(id, { pid: process.pid, startTime: process.startTime, access: process.access });
+    this.setEntry(id, processSnapshot(id, process, owned, 'running'), child);
+  }
+
   private setEntry(id: ExternalApplicationId, snapshot: ManagedProcessSnapshot, child: ChildProcess | null): void {
     this.entries.set(id, { snapshot, child });
     const copy = { ...snapshot };
@@ -278,17 +309,33 @@ function selectDetectedProcess(
 }
 
 export class WindowsProcessTools implements ExternalProcessTools {
+  /** identityHelper is the bundled reader for processes Windows hides from this console, usually ones
+   * running as administrator. Without it such processes are only reported by findUnverifiable. */
+  constructor(private readonly identityHelper: string | null = null) {}
+
   async findByExecutable(executablePath: string): Promise<DetectedProcess[]> {
-    const encodedPath = Buffer.from(resolve(executablePath), 'utf16le').toString('base64');
     const script = [
-      `$target=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodedPath}'))`,
-      '$target=[IO.Path]::GetFullPath($target)',
-      "$items=@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).Equals($target,[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { try { $p=Get-Process -Id $_.ProcessId -ErrorAction Stop } catch { if($_.FullyQualifiedErrorId -like 'NoProcessFoundForGivenId,*'){ return }; throw }; $info=(Get-Item -LiteralPath $_.ExecutablePath -ErrorAction Stop).VersionInfo; $version=if($info.FileVersion){$info.FileVersion}elseif($info.ProductVersion){$info.ProductVersion}else{''}; if(-not $version){$directory=[IO.Path]::GetDirectoryName($_.ExecutablePath).TrimEnd('\\'); $uninstallEntries=@(Get-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue); $match=$uninstallEntries | Where-Object { $_.InstallLocation -and [IO.Path]::GetFullPath($_.InstallLocation).TrimEnd('\\').Equals($directory,[StringComparison]::OrdinalIgnoreCase) -and $_.DisplayVersion } | Select-Object -First 1; if($match){$version=[string]$match.DisplayVersion}}; [PSCustomObject]@{ pid=[int]$_.ProcessId; processName=$_.Name; executablePath=$_.ExecutablePath; startTime=$p.StartTime.ToUniversalTime().ToString('o'); windowTitle=[string]$p.MainWindowTitle; fileVersion=[string]$version } })",
+      processCandidatesScript(executablePath, this.identityHelper),
+      "function Get-TbVersion([string]$path) { $info=(Get-Item -LiteralPath $path -ErrorAction Stop).VersionInfo; $version=if($info.FileVersion){$info.FileVersion}elseif($info.ProductVersion){$info.ProductVersion}else{''}; if(-not $version){$directory=[IO.Path]::GetDirectoryName($path).TrimEnd('\\'); $uninstallEntries=@(Get-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue); $match=$uninstallEntries | Where-Object { $_.InstallLocation -and [IO.Path]::GetFullPath($_.InstallLocation).TrimEnd('\\').Equals($directory,[StringComparison]::OrdinalIgnoreCase) -and $_.DisplayVersion } | Select-Object -First 1; if($match){$version=[string]$match.DisplayVersion}}; [string]$version }",
+      "$items=@($all | Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).Equals($target,[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { try { $p=Get-Process -Id $_.ProcessId -ErrorAction Stop } catch { if($_.FullyQualifiedErrorId -like 'NoProcessFoundForGivenId,*'){ return }; throw }; [PSCustomObject]@{ pid=[int]$_.ProcessId; processName=$_.Name; executablePath=$_.ExecutablePath; startTime=$p.StartTime.ToUniversalTime().ToString('o'); windowTitle=[string]$p.MainWindowTitle; fileVersion=(Get-TbVersion $_.ExecutablePath); access='full' } })",
+      // The reader gives a hidden process's real path and creation time; Windows still shares its main window title.
+      "if($helper -and $hidden.Count -gt 0){ foreach($identity in @(Read-TbIdentity)){ if(-not $identity.path -or -not [IO.Path]::GetFullPath($identity.path).Equals($target,[StringComparison]::OrdinalIgnoreCase)){ continue }; try { $p=Get-Process -Id ([int]$identity.pid) -ErrorAction Stop } catch { if($_.FullyQualifiedErrorId -like 'NoProcessFoundForGivenId,*'){ continue }; throw }; $items+=[PSCustomObject]@{ pid=[int]$identity.pid; processName=[IO.Path]::GetFileName($identity.path); executablePath=[string]$identity.path; startTime=[DateTime]::FromFileTimeUtc([long]$identity.creationTime).ToString('o'); windowTitle=[string]$p.MainWindowTitle; fileVersion=(Get-TbVersion $identity.path); access='limited' } } }",
       '$items | ConvertTo-Json -Compress'
     ].join(';');
     const output = await runPowerShell(script, 10_000);
     if (output.trim() === '') return [];
     return parseDetectedProcesses(JSON.parse(output));
+  }
+
+  async findUnverifiable(executablePath: string): Promise<number[]> {
+    const script = [
+      processCandidatesScript(executablePath, this.identityHelper),
+      // With the reader only the candidates it cannot open stay unverifiable, for example one started under another Windows account.
+      '$ids=@(if($helper -and $hidden.Count -gt 0){ foreach($identity in @(Read-TbIdentity)){ if(-not $identity.path){ [int]$identity.pid } } } else { foreach($process in $hidden){ [int]$process.ProcessId } })',
+      'ConvertTo-Json -Compress -InputObject $ids'
+    ].join(';');
+    const output = await runPowerShell(script, 10_000);
+    return pidListSchema.parse(JSON.parse(output));
   }
 
   launch(configuration: ExternalProcessConfiguration): ChildProcess {
@@ -313,6 +360,23 @@ export class WindowsProcessTools implements ExternalProcessTools {
     const script = `$p=Get-Process -Id ${pid} -ErrorAction Stop; $expected=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${path}')); $started=[DateTime]::Parse([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${started}'))).ToUniversalTime(); if(-not $p.MainModule.FileName.Equals($expected,[StringComparison]::OrdinalIgnoreCase) -or $p.StartTime.ToUniversalTime() -ne $started){throw '进程身份已变化，拒绝关闭'}; $p.CloseMainWindow()`;
     return (await runPowerShell(script, 10_000)).trim().toLowerCase() === 'true';
   }
+}
+
+const utf16Base64 = (value: string): string => Buffer.from(value, 'utf16le').toString('base64');
+
+/** Shared PowerShell prelude: the target path, every process, the same-name processes in this Windows
+ * session whose path is hidden from us ($hidden), and Read-TbIdentity, which asks the bundled reader about them. */
+function processCandidatesScript(executablePath: string, helper: string | null): string {
+  return [
+    `$target=[IO.Path]::GetFullPath([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${utf16Base64(resolve(executablePath))}')))`,
+    helper ? `$helper=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${utf16Base64(helper)}'))` : '$helper=$null',
+    '$leaf=[IO.Path]::GetFileName($target)',
+    '$session=[Diagnostics.Process]::GetCurrentProcess().SessionId',
+    '$all=@(Get-CimInstance Win32_Process)',
+    // A non-elevated caller sees elevated processes without ExecutablePath. Other sessions belong to other sign-ins.
+    '$hidden=@($all | Where-Object { -not $_.ExecutablePath -and $_.SessionId -eq $session -and [string]::Equals($_.Name,$leaf,[StringComparison]::OrdinalIgnoreCase) })',
+    "function Read-TbIdentity { if(-not (Test-Path -LiteralPath $helper -PathType Leaf)){ throw '缺少进程识别组件，请重新安装联动台' }; $raw=(& $helper @($hidden | ForEach-Object { [string][int]$_.ProcessId }) | Out-String); if($LASTEXITCODE -ne 0){ throw \"进程识别组件运行失败（$LASTEXITCODE）\" }; foreach($identity in (ConvertFrom-Json -InputObject $raw)){ $identity } }"
+  ].join(';');
 }
 
 function emptySnapshot(id: ExternalApplicationId): ManagedProcessSnapshot {
@@ -367,11 +431,26 @@ async function waitForExactProcess(
   throw new Error(`进程 ${pid} 在 ${timeoutMs}ms 内${requireWindow ? '未通过路径核验或主窗口尚未就绪' : '未通过路径核验'}`);
 }
 
-function waitForSpawn(child: ChildProcess, id: ExternalApplicationId): Promise<void> {
+function waitForSpawn(child: ChildProcess, id: ExternalApplicationId, executablePath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     child.once('spawn', resolve);
-    child.once('error', (error) => reject(new Error(`${id} 启动失败：${error.message}`, { cause: error })));
+    child.once('error', (error) => {
+      // Node reports Windows ERROR_ELEVATION_REQUIRED as EACCES; the program is set to always run as administrator.
+      const label = applicationLabels[id];
+      const message = 'code' in error && error.code === 'EACCES'
+        ? `${label} 启动失败：${basename(executablePath)} 被设置为总是以管理员身份运行，联动台不会提权启动程序。请自己打开 ${label}（以管理员身份也可以），然后回到联动台重新连接，联动台会识别并连接已运行的 ${label}。`
+        : `${id} 启动失败：${error.message}`;
+      reject(new Error(message, { cause: error }));
+    });
   });
+}
+
+const applicationLabels: Record<ExternalApplicationId, string> = { obs: 'OBS', p1: 'P1', ma2: 'MA2 onPC', ma3d: 'MA 3D' };
+const pidListSchema = z.array(z.number().int().positive());
+
+function unverifiableInstanceMessage(id: ExternalApplicationId, pids: readonly number[]): string {
+  const label = applicationLabels[id];
+  return `${label} 已在运行（PID ${pids.join('、')}），但 Windows 不允许联动台核对这个进程，常见原因是它用另一个 Windows 账户打开（例如“以其他用户身份运行”，或以管理员身份运行时输入了另一个账户的密码）。联动台不会再启动一个 ${label}。请在 ${label} 里正常退出，再用当前 Windows 账户打开（以管理员身份也可以），然后重新连接。`;
 }
 
 async function waitForExit(
@@ -442,20 +521,18 @@ async function runPowerShell(script: string, timeoutMs: number): Promise<string>
   });
 }
 
-function parseDetectedProcesses(value: unknown): DetectedProcess[] {
-  const values = Array.isArray(value) ? value : [value];
-  return values.map((candidate) => {
-    if (!isDetectedProcess(candidate)) throw new Error('Windows 进程检测返回了无效数据');
-    return candidate;
-  });
-}
+const detectedProcessSchema = z.object({
+  pid: z.number().int().positive(),
+  processName: z.string().min(1),
+  executablePath: z.string(),
+  startTime: z.string(),
+  windowTitle: z.string(),
+  fileVersion: z.string(),
+  access: z.enum(['full', 'limited'])
+});
 
-function isDetectedProcess(value: unknown): value is DetectedProcess {
-  if (typeof value !== 'object' || value === null) return false;
-  return 'pid' in value && typeof value.pid === 'number' && Number.isInteger(value.pid) && value.pid > 0
-    && 'processName' in value && typeof value.processName === 'string' && value.processName.length > 0
-    && 'executablePath' in value && typeof value.executablePath === 'string'
-    && 'startTime' in value && typeof value.startTime === 'string'
-    && 'windowTitle' in value && typeof value.windowTitle === 'string'
-    && 'fileVersion' in value && typeof value.fileVersion === 'string';
+function parseDetectedProcesses(value: unknown): DetectedProcess[] {
+  const parsed = z.array(detectedProcessSchema).safeParse(Array.isArray(value) ? value : [value]);
+  if (!parsed.success) throw new Error('Windows 进程检测返回了无效数据', { cause: parsed.error });
+  return parsed.data;
 }

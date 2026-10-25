@@ -12,6 +12,7 @@ const requiredBuildFiles = [
   'apps/desktop/out/preload/index.cjs',
   'apps/desktop/out/renderer/index.html',
   'tools/midi-probe/bin/tblink-midi-probe.exe',
+  'tools/process-identity/bin/tblink-process-identity.exe',
   'tools/ibt/bin/ibt.exe',
   'tools/ibt/bin/COPYING',
   'tools/ibt/bin/marsyas-source.zip',
@@ -57,6 +58,7 @@ if (requireDist) {
   const appVersionInfo = unpackedExecutable ? readWindowsVersionInfo(unpackedExecutable) : undefined;
   checks.push(
     { name: 'bundled-midi-driver-probe', ok: existsSync(join(distDirectory, 'win-unpacked/resources/midi/tblink-midi-probe.exe')) && readFileSync(join(distDirectory, 'win-unpacked/resources/midi/tblink-midi-probe.exe')).equals(readFileSync(join(root, 'tools/midi-probe/bin/tblink-midi-probe.exe'))), detail: 'isolated MIDI driver probe matches this build' },
+    { name: 'bundled-process-identity', ok: existsSync(join(distDirectory, 'win-unpacked/resources/process-identity/tblink-process-identity.exe')) && readFileSync(join(distDirectory, 'win-unpacked/resources/process-identity/tblink-process-identity.exe')).equals(readFileSync(join(root, 'tools/process-identity/bin/tblink-process-identity.exe'))), detail: 'process identity reader for administrator programs matches this build' },
     { name: 'bundled-ibt-engine-and-source', ok: ['ibt.exe', 'COPYING', 'marsyas-source.zip', 'build.mjs', 'README.md', 'build.json'].every(file => {
       const packaged = join(distDirectory, 'win-unpacked/resources/ibt', file);
       return existsSync(packaged) && readFileSync(packaged).equals(readFileSync(join(root, 'tools/ibt/bin', file)));

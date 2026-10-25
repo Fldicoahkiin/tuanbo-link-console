@@ -1,6 +1,7 @@
 import { createConnection, type Socket } from 'node:net';
 import { uptime } from 'node:os';
 import type { BeautyTarget, BeautyComparisonFrame } from '@tb/schema';
+import { beautyPipeAccessDeniedMessage, isPipeAccessDenied } from './obs-bridge-access';
 
 export function parseBeautyComparisonHeader(buffer: Buffer): { width: number; height: number; length: number; sequence: number; timestampMs: number } {
   if (buffer.length < 32 || buffer.readUInt32LE(0) !== 0x31434254) throw new Error('美颜对比帧协议不匹配');
@@ -58,7 +59,7 @@ export class BeautyComparison {
     return new Promise((resolve, reject) => {
       let buffer = Buffer.alloc(32), offset = 0, expected = 32;
       const cleanup = (): void => { clearTimeout(timer); socket.off('data', data); socket.off('error', fail); socket.off('close', closed); };
-      const fail = (error: Error): void => { cleanup(); reject(error); };
+      const fail = (error: Error): void => { cleanup(); reject(isPipeAccessDenied(error) ? new Error(`美颜对比不可用：${beautyPipeAccessDeniedMessage}`, { cause: error }) : error); };
       const closed = (): void => fail(new Error('美颜对比通道已关闭，请确认来源可见且滤镜启用'));
       const data = (chunk: Buffer): void => {
         try {

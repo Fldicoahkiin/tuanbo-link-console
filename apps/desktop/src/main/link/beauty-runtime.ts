@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { type BeautyRuntimeState } from '@tb/schema';
 import type { ObsBeauty } from './obs-beauty';
 import { installBeautyPlugin } from './beauty-plugin-install';
+import { beautyPipeAccessDeniedMessage } from './obs-bridge-access';
 
 const packetSchema = z.union([
   z.object({ started: z.literal(true) }).strict(),
@@ -133,7 +134,9 @@ export class BeautyRuntime {
         child.once('exit', code => {
           clearTimeout(startup);
           if (this.stopping) this.publish(initial());
-          else if (!failed) this.publish({ ...this.state, phase: 'error', faces: 0, message: `美颜引擎已退出（${code}）：${stderr.slice(-1500)}` });
+          // The worker opens OBS's beauty channel with Windows APIs; error 5 there is ERROR_ACCESS_DENIED.
+          else if (!failed) this.publish({ ...this.state, phase: 'error', faces: 0, message: stderr.includes('[WinError 5]')
+            ? `美颜引擎已退出（${code}）：${beautyPipeAccessDeniedMessage}` : `美颜引擎已退出（${code}）：${stderr.slice(-1500)}` });
           this.child = null; resolve();
         });
       });

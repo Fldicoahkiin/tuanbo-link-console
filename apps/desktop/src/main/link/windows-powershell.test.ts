@@ -49,6 +49,13 @@ describe.skipIf(process.platform !== 'win32')('Windows 原生无 PATH 回归', (
     expect(processes.some((entry) => entry.pid === process.pid)).toBe(true);
   }, 15_000);
 
+  it('只把读不到程序位置的同名进程当作无法核对；当前进程可读，不在结果里', async () => {
+    clearSearchPath();
+    const pids = await new WindowsProcessTools().findUnverifiable(process.execPath);
+    expect(Array.isArray(pids)).toBe(true);
+    expect(pids).not.toContain(process.pid);
+  }, 15_000);
+
   it('PATH 为空仍能返回实际 loopMIDI 检测结果', async () => {
     clearSearchPath();
     const result = await new LoopMidiService().detect();

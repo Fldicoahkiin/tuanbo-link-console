@@ -6,21 +6,36 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { IntegrationProfile } from '@tb/schema';
 import { writeFileAtomically } from './atomic-file';
+import { fileTimeOf, readProcessIdentities, type ProcessAccess } from './process-identity';
 import { windowsPowerShellExecutable } from './windows-powershell';
 
 const settingsSchema = z.object({ server_enabled: z.boolean().default(false), server_port: z.number().int().min(1).max(65535).default(4455),
   auth_required: z.boolean().default(true), server_password: z.string().max(4096).default('') }).passthrough();
-export type LocalObsIdentity = { pid: number; executablePath: string; startTime: string };
+export type LocalObsIdentity = { pid: number; executablePath: string; startTime: string; access: ProcessAccess };
 
 /** Read only the exact selected OBS process, never a password from another instance. */
-export async function readObsCommandLine(identity: LocalObsIdentity): Promise<string> {
+export async function readObsCommandLine(identity: LocalObsIdentity, identityHelper: string): Promise<string> {
   if (!Number.isSafeInteger(identity.pid) || identity.pid <= 0) throw new Error('OBS 进程标识无效');
+  if (identity.access === 'limited') return readLimitedObsCommandLine(identity, identityHelper);
   const encodedPath = Buffer.from(identity.executablePath, 'utf16le').toString('base64');
   const encodedStart = Buffer.from(identity.startTime, 'utf16le').toString('base64');
   const script = `$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $p=Get-Process -Id ${identity.pid}; $path=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodedPath}')); $start=[DateTime]::Parse([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodedStart}'))).ToUniversalTime(); if(-not $p.MainModule.FileName.Equals($path,[StringComparison]::OrdinalIgnoreCase) -or $p.StartTime.ToUniversalTime() -ne $start){throw 'OBS process identity changed'}; $item=Get-CimInstance Win32_Process -Filter 'ProcessId = ${identity.pid}'; [string]$item.CommandLine | ConvertTo-Json -Compress`;
   const executable = await windowsPowerShellExecutable();
   const { stdout } = await promisify(execFile)(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, timeout: 5000, maxBuffer: 32768 });
   return z.string().parse(JSON.parse(stdout.replace(/^\uFEFF/, '')));
+}
+
+/** OBS running as administrator: Windows hides its command line from WMI, so ask the bundled reader,
+ * which still verifies the same path and creation time before the line is used. */
+async function readLimitedObsCommandLine(identity: LocalObsIdentity, identityHelper: string): Promise<string> {
+  const [found] = await readProcessIdentities(identityHelper, [identity.pid]);
+  if (!found || 'error' in found) {
+    throw new Error(`无法读取以管理员身份运行的 OBS（PID ${identity.pid}）的启动参数${found && 'error' in found ? `（Windows 错误 ${found.error}）` : ''}。请确认 OBS 仍在运行并由当前 Windows 账户打开，或改用下方手动连接。`);
+  }
+  if (resolve(found.path).toLowerCase() !== resolve(identity.executablePath).toLowerCase()
+    || BigInt(found.creationTime) !== fileTimeOf(identity.startTime)) throw new Error('OBS 进程已变化（可能刚刚重新打开），请重新点一键连接');
+  if (found.commandLine === null) throw new Error('Windows 没有提供以管理员身份运行的 OBS 的启动参数（需要 Windows 10 或更新版本）。请改用下方手动连接，或用普通方式打开 OBS 后再点一键连接。');
+  return found.commandLine;
 }
 
 export async function prepareLocalObsConnection(options: {

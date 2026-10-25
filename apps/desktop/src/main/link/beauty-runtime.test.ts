@@ -119,6 +119,16 @@ it('异常进程退出保留诊断，断开连接则协作关闭并回到空闲'
   expect(next.runtime.status().phase).toBe('idle');
 });
 
+it('美颜通道被 Windows 拒绝访问时说明是管理员身份的 OBS，不显示整段 Python 报错', async () => {
+  const { runtime, child } = setup();
+  await runtime.start('机位');
+  child.stderr.write('Traceback (most recent call last):\n  File "transport.py", line 41\nPermissionError: [WinError 5] 拒绝访问。');
+  child.emit('exit', 1);
+  expect(runtime.status()).toMatchObject({ phase: 'error' });
+  expect(runtime.status().message).toContain('以管理员身份运行');
+  expect(runtime.status().message).not.toContain('Traceback');
+});
+
 it('身体独立接收状态显示美体人数，过期或错误身体结果不得显示生效', async () => {
   const { runtime, child } = setup();
   await runtime.start('机位');

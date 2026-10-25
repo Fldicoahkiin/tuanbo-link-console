@@ -9,6 +9,48 @@ import {
 } from './external-process-manager';
 
 describe('ExternalProcessManager', () => {
+  it('以管理员身份运行的 OBS 由识别组件认出后直接连接，不取得所有权也不再启动一个', async () => {
+    const tools = fakeTools([{ ...processInfo(20980), access: 'limited' }]);
+    const manager = new ExternalProcessManager(tools, idleObs());
+    expect(await manager.start('obs', configuration())).toMatchObject({ pid: 20980, owned: false, status: 'running' });
+    expect(manager.inspectionAccess('obs')).toBe('limited');
+    expect(tools.launchCount).toBe(0);
+    await expect(manager.stop('obs', 100)).rejects.toThrow('不是本次由联动台启动');
+    expect(tools.closedPids).toEqual([]);
+  });
+  it('识别方式跟着当前进程走：OBS 换成普通方式重开后是完整识别，退出后不再报告', async () => {
+    const tools = fakeTools([{ ...processInfo(20980), access: 'limited' }]);
+    const manager = new ExternalProcessManager(tools, idleObs());
+    await manager.refresh('obs', configuration());
+    expect(manager.inspectionAccess('obs')).toBe('limited');
+    tools.detectedBeforeLaunch = [{ ...processInfo(30000), startTime: '2026-10-25T08:00:00.0000000Z' }];
+    await manager.refresh('obs', configuration());
+    expect(manager.inspectionAccess('obs')).toBe('full');
+    tools.detectedBeforeLaunch = [];
+    await manager.refresh('obs', configuration());
+    expect(manager.getSnapshot('obs').pid).toBeNull();
+    expect(manager.inspectionAccess('obs')).toBeNull();
+  });
+  it('同名程序连识别组件也核对不了时明确说明，不再启动第二个', async () => {
+    const tools = fakeTools([]);
+    tools.unverifiablePids = [20980];
+    const manager = new ExternalProcessManager(tools, idleObs());
+    await expect(manager.start('obs', { ...configuration(), executablePath: 'C:\\OBS\\bin\\64bit\\obs64.exe' })).rejects.toThrow('另一个 Windows 账户');
+    expect(tools.launchCount).toBe(0);
+    expect(manager.getSnapshot('obs')).toMatchObject({ status: 'error', pid: null, owned: false });
+    expect(manager.getSnapshot('obs').error).toContain('PID 20980');
+  });
+  it('程序被设为总是以管理员身份运行时，启动失败说明请用户自己打开再连接，不提权', async () => {
+    const tools = fakeTools([]);
+    tools.launch = () => {
+      queueMicrotask(() => tools.child.emit('error', Object.assign(new Error('spawn C:\\OBS\\obs64.exe EACCES'), { code: 'EACCES' })));
+      return tools.child as unknown as ChildProcess;
+    };
+    const manager = new ExternalProcessManager(tools, idleObs());
+    await expect(manager.start('obs', configuration())).rejects.toThrow('联动台不会提权启动程序');
+    expect(manager.getSnapshot('obs').error).toContain('请自己打开 OBS');
+    expect(manager.getSnapshot('obs').error).not.toContain('EACCES');
+  });
   it('残留 onPC 没有主窗口时明确报错，不误报打开成功或重复启动', async () => {
     const tools = fakeTools([{ ...processInfo(100), windowTitle: '' }]);
     const manager = new ExternalProcessManager(tools, idleObs());
@@ -192,6 +234,7 @@ type FakeTools = ExternalProcessTools & {
   closeAccepted: boolean;
   detectedBeforeLaunch: DetectedProcess[];
   launchCount: number;
+  unverifiablePids: number[];
 };
 
 function fakeTools(initial: DetectedProcess[]): FakeTools {
@@ -204,7 +247,9 @@ function fakeTools(initial: DetectedProcess[]): FakeTools {
     detectedBeforeLaunch: initial,
     closeAccepted: false,
     launchCount: 0,
+    unverifiablePids: [],
     findByExecutable: () => Promise.resolve(launched ? result.detectedAfterLaunch : result.detectedBeforeLaunch),
+    findUnverifiable: () => Promise.resolve(result.unverifiablePids),
     launch: () => {
       launched = true;
       result.launchCount += 1;
@@ -236,7 +281,8 @@ function processInfo(pid: number): DetectedProcess {
     executablePath: 'C:\\Apps\\P1.exe',
     startTime: '2026-08-26T00:00:00.000Z',
     windowTitle: 'P1',
-    fileVersion: '1.0.0'
+    fileVersion: '1.0.0',
+    access: 'full'
   };
 }
 

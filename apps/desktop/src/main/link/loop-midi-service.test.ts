@@ -8,9 +8,10 @@ const running: LoopMidiStatus = { ...installed, state: 'running', pid: 123, star
 function setup(status: LoopMidiStatus) {
   const child = new ChildProcess();
   Object.defineProperty(child, 'pid', { value: 123 });
-  const process = { pid: 123, executablePath: installed.executablePath!, startTime: running.startTime!, processName: 'loopMIDI.exe', windowTitle: '', fileVersion: '1' };
+  const process = { pid: 123, executablePath: installed.executablePath!, startTime: running.startTime!, processName: 'loopMIDI.exe', windowTitle: '', fileVersion: '1', access: 'full' as const };
   const tools = {
     findByExecutable: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([process]),
+    findUnverifiable: vi.fn().mockResolvedValue([]),
     launch: vi.fn(() => { queueMicrotask(() => child.emit('spawn')); return child; }),
     requestClose: vi.fn().mockResolvedValue(false)
   };
