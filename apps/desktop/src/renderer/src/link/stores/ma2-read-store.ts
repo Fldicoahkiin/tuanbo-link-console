@@ -106,6 +106,8 @@ export async function importCachedMa2(target?: number, itemId?: string): Promise
   const handled = new Set(pairs.map(([number]) => Number(number)));
   const cacheCommand = saveMa2ReadStateCommand({ ...state, failures: [...state.failures.filter(failure => !handled.has(failure.target)), ...result.failures], message });
   const importCommand = result.selections.length ? importMa2ProgramsCommand(result.selections) : null;
+  // The pairings were checked against this project, including the start the chosen song takes.
+  if (useDocumentStore.getState().project !== project) throw new Error('工程已变化，请重新关联');
   before.executeForDocument(before.documentId, { ...cacheCommand, label: itemId ? '关联控台时间线并放到歌曲时间线' : '关联缓存中的控台时间线', execute: value => {
     let next = startCommand && importCommand ? startCommand.execute(value) : value;
     next = cacheCommand.execute(importCommand ? importCommand.execute(next) : next);

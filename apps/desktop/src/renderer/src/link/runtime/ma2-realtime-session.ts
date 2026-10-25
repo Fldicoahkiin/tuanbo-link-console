@@ -99,7 +99,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     if (!current()) return false;
     const unallocated = useDocumentStore.getState().project;
     if (!unallocated) return false;
-    if (songsNeedingMtcStart(unallocated).length && !await allocateMtcStarts(connection.network, state.documentId, context, current)) return false;
+    if (songsNeedingMtcStart(unallocated).length && !await allocateMtcStarts(connection.network, state.documentId, sourceKey, current)) return false;
     const project = useDocumentStore.getState().project;
     if (!project) return false;
     for (const item of project.rundown) {
@@ -144,8 +144,8 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
 /**
  * Songs being lit get their MTC start as soon as the console is reachable, before their first Cue, so
  * each song shows the timecode its console show will run on. A failure is shown on those songs and
- * logged, and does not hold up the other songs; it is tried again after an edit, on another console
- * session or after 30 s. Returns false when the session changed or playback started meanwhile.
+ * logged, and does not hold up the other songs; it is tried again on another console session or
+ * after 30 s, not on every edit. Returns false when the session changed or playback started meanwhile.
  */
 async function allocateMtcStarts(network: Parameters<typeof window.tbLink.ma2TimecodeRanges>[0], documentId: number, context: string, current: () => boolean): Promise<boolean> {
   const allocation = useMtcStartAllocationStore.getState();

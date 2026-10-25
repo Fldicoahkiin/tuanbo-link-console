@@ -165,8 +165,11 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
           const ranges = await window.tbLink.ma2TimecodeRanges(network);
           const current = useDocumentStore.getState();
           if (!canContinue(entry) || current.documentId !== entry.documentId || !current.project) continue;
-          start = allocateSongMtcStart(current.project, item.id, ranges);
-          current.execute(setAllocatedMtcStartsCommand(new Map([[item.id, start]])));
+          current.execute(setAllocatedMtcStartsCommand(new Map([[item.id, allocateSongMtcStart(current.project, item.id, ranges)]])));
+          // The start the song holds now: one given meanwhile by the session check is kept, not replaced.
+          const allocated = useDocumentStore.getState().project?.rundown.find(value => value.id === item.id);
+          start = allocated ? songStart(allocated) : undefined;
+          if (start === undefined) throw new Error('本曲 MTC 起点分配后未写入歌曲，未同步');
         }
         if (checkOnly && entry.remoteRevision && item.lighting.consoleSong) {
           const binding = item.lighting.consoleSong;

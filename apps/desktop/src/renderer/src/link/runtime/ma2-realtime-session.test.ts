@@ -282,7 +282,7 @@ it('没有起始码的歌连上控台就按控台节目分配起点，撤销也�
   useDocumentStore.getState().undo();
   expect(useDocumentStore.getState().project!.rundown[0]!.playback?.mtcOffsetMs).toBe(810_000);
 });
-it('还没加 Cue 的歌连上控台就分配 MTC 起点；没编灯、已配对的歌不动；分配失败显示原因、不挡其他歌，30 秒后或改动后再试', async () => {
+it('还没加 Cue 的歌连上控台就分配 MTC 起点；没编灯、已配对的歌不动；分配失败显示原因、不挡其他歌，30 秒后再试', async () => {
   vi.useFakeTimers();
   const value = project();
   const audio = { assetId: 'audio', relativePath: 'a.wav', sha256: 'a'.repeat(64), durationMs: 120_000 };
@@ -306,6 +306,20 @@ it('还没加 Cue 的歌连上控台就分配 MTC 起点；没编灯、已配对
   expect(useMtcStartAllocationStore.getState().error).toBeNull();
   await prepareMa2RealtimeSession();
   expect(ranges).toHaveBeenCalledTimes(2);
+});
+it('连上控台时分配没成功的歌，首次同步前再分配一次，并按歌曲里实际写入的起点同步', async () => {
+  const value = project();
+  value.rundown[0]!.referenceAudio = { assetId: 'audio', relativePath: 'a.wav', sha256: 'a'.repeat(64), durationMs: 120_000 };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  const ranges = vi.fn().mockRejectedValueOnce(new Error('MA2 响应超时')).mockResolvedValue({ show: 'Show', entries: [] });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync, checkMa2Song: check, renameMa2Object: rename, ma2TimecodeRanges: ranges } });
+  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  await prepareMa2RealtimeSession(); stopMa2SongSync('second');
+  expect(useDocumentStore.getState().project!.rundown[0]!.playback).toBeUndefined();
+  await tickMa2SongSync(false);
+  expect(ranges).toHaveBeenCalledTimes(2);
+  expect(useDocumentStore.getState().project!.rundown[0]!.playback?.mtcOffsetMs).toBe(60_000);
+  expect(sync.mock.calls[0]![0]).toMatchObject({ timecodeStartMs: 60_000 });
 });
 it('已同步过但还没有时间码节目的歌：列为「要同步到控台才能演出」，点击后重新完整同步并带上起始码', async () => {
   const value = project();
