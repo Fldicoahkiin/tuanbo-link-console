@@ -1,4 +1,4 @@
-# 服务器安装：旧版归档只留 3 份，磁盘余量不足时拒绝发布（待用户确认）
+# 服务器安装：旧版归档只留 3 份，磁盘余量不足时拒绝发布
 
 每发一版，`publish-update.py` 都会把移出更新源的旧安装包和 blockmap 复制进那次回执的 `archived/`（`/var/backups/tblink/update-receipts/`），之前从不清理。每份约 1 GB，服务器磁盘不大，发几版就可能写满，自动发布也会跟着失败。提交「feat(release): keep three update archives and refuse to publish on a nearly full disk」改了两处：
 
@@ -41,7 +41,7 @@ sudo sh -c 'ls -d /var/backups/tblink/update-receipts/*/archived; du -sh /var/ba
 - 验证：
   - `publish-update.py: OK`；grep 输出 `2`。
   - 现装版本的摘要是 `3ccb805f2d9a6e34ab1177f470f8b27b0eee228dd465e059bfbdc98c817bc7f6`（[自动发布安装记录](SERVER_INSTALL_AUTO_PUBLISH_20261024.md#安装结果)）。不一致就停下，先查清楚是谁改的。
-  - staging 为空（没有等待发布的版本）。
+  - staging 里没有 `X.Y.Z-<hex>` 形式的待发布目录，也没有 `.incoming-*`。隐藏文件 `.upload.lock` 是 `receive-update.py` 的上传锁，一直留着，不代表有待发布版本；`ls` 不显示它。
   - 两个单元都是 `active`。
   - 记下 `df` 的余量和带 `archived` 的回执数量，第 4 步要写进记录。余量已经低于 5 GB 的话，装完之后下一次发布会被拒绝，先清理再发版。
 - 回退：只读，不需要回退。
@@ -90,3 +90,15 @@ sudo sh -c 'ls -d /var/backups/tblink/update-receipts/*/archived'
 在本文末尾补一节「安装结果」，记下实际安装的提交号、`$stamp`、新旧两个版本的摘要、第 1 步的磁盘余量和归档数量，以及第 3 步的输出。
 
 第一次真正清理，会发生在带 `archived` 的回执超过 3 份之后的那次发布。届时新回执的 `receipt.json` 里 `prunedArchives` 会列出被清理的回执名，核对那些回执只剩 `receipt.json` 等小文件、`archived/` 已不存在。
+
+<a id="安装结果"></a>
+## 安装结果
+
+2026-10-25 由用户 Mac 上的会话执行（用户在线程里要求「旧脚本你自己处理一下，换成新的」，并另行授权在 tblink-server 上执行第 1–3 步）。
+
+- 安装的字节：`publish-update.py` 来自提交 709e465，sha256 `e694b246e6a7f9e2f37b6900ab080e8b4d9e8f63ff6bf45be299d60c75e16446`，与 `SHA256SUMS` 一致。
+- `$stamp`：`20261025T122542Z`；旧版备份 `/var/backups/tblink/install-20261025T122542Z/publish-update.py`，sha256 `3ccb805f2d9a6e34ab1177f470f8b27b0eee228dd465e059bfbdc98c817bc7f6`，与自动发布安装记录一致。
+- 第 1 步：`publish-update.py: OK`，grep 计数 2；path 和 timer 都是 active；staging 只有 `.upload.lock`，`update-status.json` 的 staged 为 `[]`。更新源、回执和工作目录都在 `/dev/vda3`：容量 49G，已用 15G，可用 32G（32%）。带 `archived` 的回执只有 `20261024T201049Z-9f825353-update-0.5.2`，`update-receipts` 合计 125M。
+- 第 3 步：`Result=success`、`ExecMainStatus=0`，日志无 Python 报错；状态文件与安装前相同（更新源 0.5.2 已签名、可回滚到 0.5.0、staged 为空、最近一次自动发布 0.5.2 成功）；更新目录仍是 0.5.0 和 0.5.2 的安装包、blockmap 和 `latest.yml`；带 `archived` 的回执仍只有 1 份。
+- 与步骤的差异：Mac 上的权限审核不放行 heredoc 形式的命令，第 1–3 步拆成多次 SSH 连接执行，第 2 步的五条命令在同一次连接里完成。结果不受影响。
+- 服务器家目录 `~/tblink-install-archive-prune/` 留着待装副本，没有清理。

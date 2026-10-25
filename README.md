@@ -219,7 +219,7 @@ OBS、外部程序路径、MIDI 端口等机器相关设置保存在本机集成
   <img alt="服务部署" src="docs/diagrams/service-deploy-light.svg">
 </picture>
 
-部署工具或 Nginx 有改动时，要先按对应的 `docs/SERVER_INSTALL_*.md` 装到服务器，再推 master，否则部署会以摘要不一致被拒绝。安装记录：[2026-10-23 首次安装](docs/SERVER_INSTALL_20261023.md)、[仓库转移](docs/SERVER_INSTALL_REPO_TRANSFER_20261024.md)、[更新源保留规则](docs/SERVER_INSTALL_FEED_RETENTION_20261024.md)、[自动发布](docs/SERVER_INSTALL_AUTO_PUBLISH_20261024.md)、[SSH MSS 钳制](docs/SERVER_INSTALL_SSH_MSS_20261024.md)、[归档只留 3 份和磁盘余量检查（待装）](docs/SERVER_INSTALL_ARCHIVE_PRUNE_20261024.md)。
+部署工具或 Nginx 有改动时，要先按对应的 `docs/SERVER_INSTALL_*.md` 装到服务器，再推 master，否则部署会以摘要不一致被拒绝。安装记录：[2026-10-23 首次安装](docs/SERVER_INSTALL_20261023.md)、[仓库转移](docs/SERVER_INSTALL_REPO_TRANSFER_20261024.md)、[更新源保留规则](docs/SERVER_INSTALL_FEED_RETENTION_20261024.md)、[自动发布](docs/SERVER_INSTALL_AUTO_PUBLISH_20261024.md)、[SSH MSS 钳制](docs/SERVER_INSTALL_SSH_MSS_20261024.md)、[归档只留 3 份和磁盘余量检查](docs/SERVER_INSTALL_ARCHIVE_PRUNE_20261024.md)。
 
 <a id="密钥和凭据"></a>
 ### 密钥和凭据
