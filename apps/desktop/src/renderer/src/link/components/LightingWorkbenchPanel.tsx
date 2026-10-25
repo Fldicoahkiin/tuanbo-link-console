@@ -7,6 +7,7 @@ import type { AudioEditor } from './useAudioEditor';
 import type { LightingTool } from './LightingTimelineTools';
 import { AudioInspector } from './AudioInspector';
 import { PropertyNumberInput } from './PropertyNumberInput';
+import { SongMtcStart } from './SongMtcStart';
 
 type Props = {
   item: RundownItem | null;
@@ -28,9 +29,9 @@ export function LightingProgramList({ currentItemId, disabled, notify }: {
   return <section className="lighting-programs" aria-label="灯光节目列表">
     <header><Lightbulb /><strong>节目列表</strong></header>
     <p>选择要编灯的舞蹈</p>
-    {project?.rundown.map((item, index) => <button key={item.id} title={item.title} disabled={disabled} aria-pressed={currentItemId === item.id} onClick={() => select(item.id)}>
-      <span>{String(index + 1).padStart(2, '0')}</span><div><strong>{item.title}</strong><small>{item.referenceAudio ? `${(item.referenceAudio.durationMs / 1000).toFixed(1)} 秒 · ${item.lighting?.tracks.length ?? 0} 条灯光轨道` : '尚未添加音频'}</small></div>
-    </button>)}
+    {project ? project.rundown.map((item, index) => <button key={item.id} title={item.title} disabled={disabled} aria-pressed={currentItemId === item.id} onClick={() => select(item.id)}>
+      <span>{String(index + 1).padStart(2, '0')}</span><div><strong>{item.title}</strong><SongMtcStart project={project} item={item} /><small>{item.referenceAudio ? `${(item.referenceAudio.durationMs / 1000).toFixed(1)} 秒 · ${item.lighting?.tracks.length ?? 0} 条灯光轨道` : '尚未添加音频'}</small></div>
+    </button>) : null}
   </section>;
 }
 

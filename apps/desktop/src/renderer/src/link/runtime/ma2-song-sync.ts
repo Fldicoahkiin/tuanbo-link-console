@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { allocateSongMtcStart, applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, programTimeOrigin, projectLightingLibrary, setItemPlaybackCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
+import { allocateSongMtcStart, applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, programTimeOrigin, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
 import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { requireSavedProjectPath } from '../project-document';
@@ -160,13 +160,13 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         if (endpoint !== materials.source) throw new Error('素材来源与当前控台不一致');
         const { show, generation, version } = materials.library.directory;
         // A song without an MTC start gets one before its first show is written: after every show on
-        // the console and every other song, written into the song as an undoable edit.
+        // the console and every other song, kept through undo like a console read-back.
         if (start === undefined && item.referenceAudio && (!item.lighting.consoleSong || item.lighting.consoleSong.executor)) {
           const ranges = await window.tbLink.ma2TimecodeRanges(network);
           const current = useDocumentStore.getState();
           if (!canContinue(entry) || current.documentId !== entry.documentId || !current.project) continue;
           start = allocateSongMtcStart(current.project, item.id, ranges);
-          current.execute(setItemPlaybackCommand(item.id, { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: start, shortcut: '' }));
+          current.execute(setAllocatedMtcStartsCommand(new Map([[item.id, start]])));
         }
         if (checkOnly && entry.remoteRevision && item.lighting.consoleSong) {
           const binding = item.lighting.consoleSong;

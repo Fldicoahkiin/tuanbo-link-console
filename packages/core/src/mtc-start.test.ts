@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
-import { createEmptyLinkProject } from '@tb/schema';
-import { allocateSongMtcStart, MA2_SONG_TIMECODE_SLOT, nextMtcStartMs } from './mtc-start';
+import { createEmptyLinkProject, createLightingDocument } from '@tb/schema';
+import { allocateMissingMtcStarts, allocateSongMtcStart, MA2_SONG_TIMECODE_SLOT, nextMtcStartMs, readSongMtcStart, setAllocatedMtcStartsCommand, songMtcOverlaps, songsNeedingMtcStart } from './mtc-start';
 
 it('没有占用时从 60 秒开始；否则取最晚结束时间加 10 秒后的第一个整秒', () => {
   expect(nextMtcStartMs([], 30_000)).toBe(60_000);
@@ -48,4 +48,42 @@ it('本 Slot 上范围读不清的节目报错，列出编号和名称并说明�
   expect(allocateSongMtcStart(project(), '新歌', { show: 'Show', entries: [show(4, 'x', '100', '30', { slot: 'TC Slot 1' })] })).toBe(430_000);
   const moved = project(); moved.rundown[0]!.playback = { volume: 100, endAction: 'stop', startMs: 0, endMs: 0, mtcOffsetMs: 3_000_000, shortcut: '' };
   expect(allocateSongMtcStart(moved, '新歌', { show: 'Show', entries: [] })).toBe(430_000);
+});
+
+it('读出每首歌的 MTC 起点：没设为未分配；两首歌的 MTC 范围重叠时互相列出', () => {
+  const value = project();
+  expect(readSongMtcStart(value.rundown[0]!)).toEqual({ state: 'unset' });
+  expect(readSongMtcStart(value.rundown[1]!)).toEqual({ state: 'set', startMs: 300_000 });
+  const p1Media = { sourceKey: 'a'.repeat(64), playlistId: 'list', sourceFileName: 'a.wav', playEndAction: 'stop' as const, volume: 100, muted: false, shortcut: '', midiStartTime: '1:2' };
+  const invalid = readSongMtcStart({ p1Media });
+  expect(invalid.state === 'invalid' && invalid.reason).toContain('1:2');
+  expect(songMtcOverlaps(value).size).toBe(0);
+  value.rundown[0]!.playback = { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: 360_000, shortcut: '' };
+  expect(Object.fromEntries(songMtcOverlaps(value))).toEqual({ 新歌: ['旧歌'], 旧歌: ['新歌'] });
+  // Back to back is not an overlap: 旧歌 ends at 420 s.
+  value.rundown[0]!.playback.mtcOffsetMs = 420_000;
+  expect(songMtcOverlaps(value).size).toBe(0);
+});
+
+it('连上控台给正在编灯、还没有 MTC 起点的歌依次分配，一次撤销；没编灯、已配对或已有起点的歌不动', () => {
+  const value = project(); value.schemaVersion = 2;
+  const song = (id: string) => ({ ...structuredClone(value.rundown[0]!), id, title: id });
+  value.rundown.push(song('第三首'), song('没编灯'), song('已配对'));
+  for (const item of value.rundown) if (item.id !== '没编灯') item.lighting = createLightingDocument();
+  value.ma2ReadState = { source: 'console', catalog: { directory: { show: 'Show', generation: 'g', version: '3.7.0.5', entries: [] }, readAt: new Date().toISOString(), entries: [] }, pairs: { 7: '已配对' }, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
+  expect(songsNeedingMtcStart(value)).toEqual(['新歌', '第三首']);
+  // 控台节目 600–800 s；旧歌 300–420 s。
+  const starts = allocateMissingMtcStarts(value, { show: 'Show', entries: [show(1, 18_000, '6000', '5940')] });
+  expect(Object.fromEntries(starts)).toEqual({ 新歌: 810_000, 第三首: 940_000 });
+  const command = setAllocatedMtcStartsCommand(starts);
+  const next = command.execute(value);
+  expect(next.rundown.map(item => item.playback?.mtcOffsetMs)).toEqual([810_000, 300_000, 940_000, undefined, undefined]);
+  expect(songsNeedingMtcStart(next)).toEqual([]);
+  // Kept through undo: an earlier state of the project gets the same starts; a start set meanwhile is not replaced.
+  expect(command.rebaseHistory).toBeDefined();
+  const earlier = structuredClone(value); earlier.rundown[2]!.playback = { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: 5_000_000, shortcut: '' };
+  expect(command.rebaseHistory!(earlier).rundown.map(item => item.playback?.mtcOffsetMs)).toEqual([810_000, 300_000, 5_000_000, undefined, undefined]);
+  expect(command.execute(next)).toBe(next);
+  expect(() => setAllocatedMtcStartsCommand(new Map())).toThrow('没有需要');
+  expect(() => allocateMissingMtcStarts(value, { show: 'Show', entries: [show(2, 'x', '', '10')] })).toThrow('读不清');
 });

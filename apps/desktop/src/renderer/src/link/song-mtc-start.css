@@ -1,0 +1,8 @@
+/* A song's MTC start on the lighting program list, beside the lighting transport and on its console Sequence. */
+.song-mtc-start { display: inline-flex; align-items: center; align-self: flex-start; gap: 4px; padding: 1px 7px; border-radius: var(--r-pill); font-size: var(--text-caption); font-weight: 600; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+span.song-mtc-start svg { width: 12px; height: 12px; flex-shrink: 0; }
+.song-mtc-start[data-state=unset] { font-weight: 400; color: var(--text-secondary); background: var(--surface-raised); }
+.song-mtc-start[data-state=warning] { color: var(--warning-text); background: var(--warning-soft); }
+.song-mtc-start[data-state=invalid] { color: var(--danger); background: var(--danger-soft); }
+.song-mtc-detail { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.song-mtc-detail small { color: var(--text-secondary); }

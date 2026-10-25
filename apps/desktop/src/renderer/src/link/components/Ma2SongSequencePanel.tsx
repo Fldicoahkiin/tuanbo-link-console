@@ -6,9 +6,11 @@ import { startMa2SongSync, useMa2SongSyncStore } from '../runtime/ma2-song-sync'
 import { pauseMa2RealtimeSession, retryMa2RealtimeSession } from '../runtime/ma2-realtime-session';
 import { locateMa2Executor, ma2ExecutorLocationLabel } from '../stores/ma2-executor-page-store';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
+import { SongMtcStart } from './SongMtcStart';
 
 export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; settings: Ma2LayoutSettings }): JSX.Element {
-  const item = useDocumentStore(state => state.project?.rundown.find(value => value.id === itemId));
+  const project = useDocumentStore(state => state.project);
+  const item = project?.rundown.find(value => value.id === itemId);
   const status = useMa2SongSyncStore(state => state.songs[itemId]);
   const binding = item?.lighting?.consoleSong;
   const [name, setName] = useState(binding?.name ?? item?.title ?? '歌曲序列');
@@ -44,6 +46,7 @@ export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; set
   };
   return <section className="ma2-song-panel" aria-label="本曲控台序列">
     <strong>本曲控台序列</strong>
+    {project && item ? <SongMtcStart project={project} item={item} detail /> : null}
     <p>{binding ? `${binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`} · 序列 ${binding.sequence} · ${binding.points.length} 步` : `整首歌合为一条多步序列，放进按钮第 ${executorPage} 页的空格。可以在控台继续编灯。`}</p>
     {binding?.assignment === 'unassigned' ? <p>执行器已解除分配；下次同步会把序列 {binding.sequence} 重新放回按钮第 {binding.executor?.split('.')[0]} 页。</p> : binding?.executor ? <button onClick={() => { const [page, slot] = binding.executor!.split('.').map(Number); locateMa2Executor(page!, slot!); }}>定位本曲控台位置</button> : null}
     <form className="ma2-song-default-page" noValidate onSubmit={event => { event.preventDefault(); saveDefaultPage(); }}>

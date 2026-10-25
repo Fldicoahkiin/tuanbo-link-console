@@ -1,4 +1,5 @@
-import type { LinkProject, Ma2TimecodeRanges } from '@tb/schema';
+import { parseLinkProject, type LinkProject, type Ma2TimecodeRanges } from '@tb/schema';
+import type { LinkCommand } from './link-command';
 import { programTimeOrigin } from './ma2-time-origin';
 
 /** Time a song's MTC must stay clear of the one before it, so a late stop never runs into the next show. */
@@ -51,4 +52,77 @@ export function allocateSongMtcStart(project: LinkProject, itemId: string, conso
     occupied.push({ startMs: start, endMs: start + other.referenceAudio.durationMs });
   }
   return nextMtcStartMs(occupied, item.referenceAudio.durationMs);
+}
+
+export type SongMtcStartReading = { state: 'set'; startMs: number } | { state: 'unset' } | { state: 'invalid'; reason: string };
+/** The song's MTC start once it has one (its own playback start or the P1 start), or why it cannot be read. */
+export function readSongMtcStart(item: Pick<LinkProject['rundown'][number], 'playback' | 'p1Media' | 'lighting'>): SongMtcStartReading {
+  if (!item.playback && !item.p1Media) return { state: 'unset' };
+  try { return { state: 'set', startMs: Math.round(programTimeOrigin(item)) }; }
+  catch (error) { return { state: 'invalid', reason: error instanceof Error ? error.message : String(error) }; }
+}
+
+/**
+ * Songs whose MTC ranges overlap another song's: on the same timecode both songs' console shows
+ * would fire. Each song lists the titles it overlaps. Songs without audio or a readable start are
+ * not compared; their start reading says why.
+ */
+export function songMtcOverlaps(project: LinkProject): Map<string, string[]> {
+  const ranges = project.rundown.flatMap(item => {
+    const reading = readSongMtcStart(item);
+    return item.referenceAudio && reading.state === 'set' ? [{ item, start: reading.startMs, end: reading.startMs + item.referenceAudio.durationMs }] : [];
+  });
+  const overlaps = new Map<string, string[]>();
+  for (const range of ranges) {
+    const others = ranges.filter(other => other.item.id !== range.item.id && other.start < range.end && range.start < other.end).map(other => other.item.title);
+    if (others.length) overlaps.set(range.item.id, others);
+  }
+  return overlaps;
+}
+
+/**
+ * Songs being lit in this software that still have no MTC start: they have audio and lighting, are
+ * not tied to a console Timecode show read from the console (bound or in a pairing), and can get a
+ * show of their own. Songs without lighting keep sending what they sent before, so a console show
+ * made for them by hand keeps running on the same timecode.
+ */
+export function songsNeedingMtcStart(project: LinkProject): string[] {
+  const state = project.ma2ReadState;
+  const paired = new Set([...Object.values(state?.pairs ?? {}), ...Object.values(state?.pairings ?? {}).map(pairing => pairing.itemId)]);
+  return project.rundown.filter(item => item.referenceAudio && item.lighting && !item.playback && !item.p1Media && !paired.has(item.id)
+    && !item.lighting.ma2Bindings?.length && (!item.lighting.consoleSong || item.lighting.consoleSong.executor)).map(item => item.id);
+}
+
+/** MTC starts for those songs in rundown order, each after the one before, as `setAllocatedMtcStartsCommand` takes them. */
+export function allocateMissingMtcStarts(project: LinkProject, console: Ma2TimecodeRanges): Map<string, number> {
+  const starts = new Map<string, number>();
+  const next = structuredClone(project);
+  for (const id of songsNeedingMtcStart(project)) {
+    const mtcOffsetMs = allocateSongMtcStart(next, id, console);
+    const item = next.rundown.find(value => value.id === id);
+    if (!item) throw new Error(`节目单中没有 ${id}`);
+    item.playback = allocatedPlayback(mtcOffsetMs);
+    starts.set(id, mtcOffsetMs);
+  }
+  return starts;
+}
+
+const allocatedPlayback = (mtcOffsetMs: number): NonNullable<LinkProject['rundown'][number]['playback']> => ({ volume: 100, startMs: 0, endMs: 0, mtcOffsetMs, shortcut: '' });
+
+/**
+ * Writes allocated MTC starts into songs that still have none. Like a console read-back it is kept
+ * through undo and redo: undoing an edit never takes a song's start away, which would only allocate
+ * it again and push the edit off the redo list. The start stays editable in the song's properties.
+ */
+export function setAllocatedMtcStartsCommand(starts: ReadonlyMap<string, number>): LinkCommand {
+  if (!starts.size) throw new Error('没有需要分配 MTC 起点的歌曲');
+  const apply = (project: LinkProject): LinkProject => {
+    const missing = [...starts].filter(([id]) => project.rundown.some(item => item.id === id && !item.playback && !item.p1Media));
+    if (!missing.length) return project;
+    const next = structuredClone(project);
+    for (const [id, mtcOffsetMs] of missing) for (const item of next.rundown) if (item.id === id) item.playback = allocatedPlayback(mtcOffsetMs);
+    next.updatedAt = new Date().toISOString();
+    return parseLinkProject(next);
+  };
+  return { id: crypto.randomUUID(), label: '分配歌曲 MTC 起点', historyRebaseKey: `mtc-start:${crypto.randomUUID()}`, rebaseHistory: apply, execute: apply, undo: before => before };
 }

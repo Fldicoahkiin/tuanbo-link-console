@@ -18,3 +18,4 @@
 .ma2-browser-events table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
 .ma2-browser-events th, .ma2-browser-events td { padding: 7px 9px; text-align: left; border-bottom: 1px solid var(--separator); }
 .ma2-native-note { padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--surface-raised); }
+.ma2-browser-mtc { font-variant-numeric: tabular-nums; color: var(--accent); }

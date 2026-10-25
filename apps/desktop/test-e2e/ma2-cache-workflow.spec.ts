@@ -121,7 +121,7 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await expect(page.getByRole('region', { name: '控台时间线与歌曲配对' })).toBeVisible();
     await page.getByLabel('时间线状态筛选').selectOption('native');
     await expect(page.locator('.ma2-browser-events tbody tr')).toHaveCount(24);
-    await expect(page.locator('.ma2-browser-body article')).toContainText('原始偏移 14400');
+    await expect(page.locator('.ma2-browser-body article')).toContainText('节目起点 MTC 00:08:00:00');
     await page.screenshot({ path: info.outputPath('cached-details.png') });
     await nav.getByRole('button', { name: '节目单', exact: true }).click();
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();

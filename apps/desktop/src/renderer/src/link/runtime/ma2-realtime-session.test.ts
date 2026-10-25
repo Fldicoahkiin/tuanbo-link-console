@@ -5,6 +5,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { useMa2SongSyncStore, startMa2SongSync, stopMa2SongSync, tickMa2SongSync, ma2SongSyncSettings, markPendingMa2Songs } from './ma2-song-sync';
 import { useProgramSelectionStore } from '../stores/program-selection-store';
+import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
 import { useMa2RealtimePreference } from './ma2-realtime-preference';
 import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, refreshMa2RealtimeSession, retryMa2RealtimeSession, pendingSongSummary, songsWithoutConsoleShow, writeMissingConsoleShows } from './ma2-realtime-session';
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from './ma2-legacy-names';
@@ -40,6 +41,7 @@ beforeEach(() => {
   useMa2SongSyncStore.setState({ songs: {} });
   useMa2AutoSyncStore.setState({ request: null, status: 'off', message: '', timelinePlaying: false, previewPlaying: false });
   useMa2RealtimePreference.setState({ enabled: true });
+  useMtcStartAllocationStore.setState({ error: null, context: '', retryAt: 0 });
   useDocumentStore.getState().setProject(project(), 'song.tblink');
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
@@ -262,7 +264,7 @@ it('同步失败退避重试时同一份本地内容只存档一次，编辑后�
   expect(sync).toHaveBeenCalledTimes(4);
   expect(archive).toHaveBeenCalledTimes(2);
 });
-it('没有起始码的歌在首次同步前按控台节目分配起点，作为可撤销修改写进歌曲，并带着起点同步', async () => {
+it('没有起始码的歌连上控台就按控台节目分配起点，撤销也保留（否则撤销后会马上再分配，把要撤的修改挤掉），并带着起点同步', async () => {
   const value = project();
   value.rundown[0]!.referenceAudio = { assetId: 'audio', relativePath: 'a.wav', sha256: 'a'.repeat(64), durationMs: 120_000 };
   useDocumentStore.getState().setProject(value, 'song.tblink');
@@ -276,8 +278,34 @@ it('没有起始码的歌在首次同步前按控台节目分配起点，作为�
   // Only the start: no end action of its own, so the song keeps following the player's 播放方式.
   expect(useDocumentStore.getState().project!.rundown[0]!.playback).toEqual({ volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: 810_000, shortcut: '' });
   expect(sync.mock.calls[0]![0]).toMatchObject({ timecodeStartMs: 810_000, timecodeLengthMs: 120_000 });
+  expect(useDocumentStore.getState().past).toHaveLength(0);
   useDocumentStore.getState().undo();
-  expect(useDocumentStore.getState().project!.rundown[0]!.playback).toBeUndefined();
+  expect(useDocumentStore.getState().project!.rundown[0]!.playback?.mtcOffsetMs).toBe(810_000);
+});
+it('还没加 Cue 的歌连上控台就分配 MTC 起点；没编灯、已配对的歌不动；分配失败显示原因、不挡其他歌，30 秒后或改动后再试', async () => {
+  vi.useFakeTimers();
+  const value = project();
+  const audio = { assetId: 'audio', relativePath: 'a.wav', sha256: 'a'.repeat(64), durationMs: 120_000 };
+  value.rundown[0]!.referenceAudio = audio; value.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events = [];
+  value.rundown.push({ id: 'plain', title: 'plain', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], referenceAudio: audio });
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  const ranges = vi.fn().mockRejectedValueOnce(new Error('MA2 响应超时')).mockResolvedValue({ show: 'Show', entries: [] });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync, checkMa2Song: check, renameMa2Object: rename, ma2TimecodeRanges: ranges } });
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  // The other song still enrolled; the failure is logged once and waits.
+  expect(Object.keys(useMa2SongSyncStore.getState().songs)).toEqual(['second']);
+  expect(useMtcStartAllocationStore.getState().error).toBe('MA2 响应超时');
+  expect(recordLog).toHaveBeenCalledWith(expect.objectContaining({ message: '分配 MTC 起点失败：MA2 响应超时' }));
+  await prepareMa2RealtimeSession();
+  expect(ranges).toHaveBeenCalledOnce();
+  vi.advanceTimersByTime(30_001);
+  await prepareMa2RealtimeSession();
+  expect(ranges).toHaveBeenCalledTimes(2);
+  const songs = useDocumentStore.getState().project!.rundown;
+  expect(songs.map(item => item.playback?.mtcOffsetMs)).toEqual([60_000, undefined, undefined]);
+  expect(useMtcStartAllocationStore.getState().error).toBeNull();
+  await prepareMa2RealtimeSession();
+  expect(ranges).toHaveBeenCalledTimes(2);
 });
 it('已同步过但还没有时间码节目的歌：列为「要同步到控台才能演出」，点击后重新完整同步并带上起始码', async () => {
   const value = project();

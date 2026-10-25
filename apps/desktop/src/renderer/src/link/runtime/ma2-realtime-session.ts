@@ -1,4 +1,4 @@
-import { pendingMa2Renames, saveMa2MaterialLibraryCommand } from '@tb/core/link';
+import { allocateMissingMtcStarts, pendingMa2Renames, saveMa2MaterialLibraryCommand, setAllocatedMtcStartsCommand, songsNeedingMtcStart } from '@tb/core/link';
 import { ma2EffectLibrarySchema } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { readMa2Method } from '../stores/ma2-mode-store';
@@ -6,6 +6,7 @@ import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { ma2SongSyncSettings, startMa2SongSync, stopMa2SongSync, useMa2SongSyncStore } from './ma2-song-sync';
 import { setMa2RealtimeEnabled, useMa2RealtimePreference } from './ma2-realtime-preference';
 import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
+import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
 import { reportCoordinatorError } from './runtime-action-log';
 
 let preparing = false;
@@ -96,6 +97,9 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       nextSourceCheck = Date.now() + 5000;
     }
     if (!current()) return false;
+    const unallocated = useDocumentStore.getState().project;
+    if (!unallocated) return false;
+    if (songsNeedingMtcStart(unallocated).length && !await allocateMtcStarts(connection.network, state.documentId, context, current)) return false;
     const project = useDocumentStore.getState().project;
     if (!project) return false;
     for (const item of project.rundown) {
@@ -135,6 +139,31 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     }
     return false;
   } finally { preparing = false; }
+}
+
+/**
+ * Songs being lit get their MTC start as soon as the console is reachable, before their first Cue, so
+ * each song shows the timecode its console show will run on. A failure is shown on those songs and
+ * logged, and does not hold up the other songs; it is tried again after an edit, on another console
+ * session or after 30 s. Returns false when the session changed or playback started meanwhile.
+ */
+async function allocateMtcStarts(network: Parameters<typeof window.tbLink.ma2TimecodeRanges>[0], documentId: number, context: string, current: () => boolean): Promise<boolean> {
+  const allocation = useMtcStartAllocationStore.getState();
+  if (allocation.context === context && Date.now() < allocation.retryAt) return true;
+  try {
+    const ranges = await window.tbLink.ma2TimecodeRanges(network);
+    const playback = useMa2AutoSyncStore.getState();
+    if (!current() || playback.timelinePlaying || playback.previewPlaying) return false;
+    const latest = useDocumentStore.getState();
+    if (latest.project && songsNeedingMtcStart(latest.project).length) latest.executeForDocument(documentId, setAllocatedMtcStartsCommand(allocateMissingMtcStarts(latest.project, ranges)));
+    useMtcStartAllocationStore.setState({ error: null, context: '', retryAt: 0 });
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const repeated = allocation.context === context && allocation.error === message;
+    useMtcStartAllocationStore.setState({ error: message, context, retryAt: Date.now() + 30_000 });
+    if (!repeated) reportCoordinatorError(`分配 MTC 起点失败：${message}`, reason => { useMtcStartAllocationStore.setState({ error: reason }); });
+  }
+  return true;
 }
 
 export function retryMa2RealtimeSession(): void {
