@@ -47,7 +47,7 @@ export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; set
   return <section className="ma2-song-panel" aria-label="本曲控台序列">
     <strong>本曲控台序列</strong>
     {project && item ? <SongMtcStart project={project} item={item} detail /> : null}
-    <p>{binding ? `${binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`} · 序列 ${binding.sequence} · ${binding.points.length} 步` : `整首歌合为一条多步序列，放进按钮第 ${executorPage} 页的空格。可以在控台继续编灯。`}</p>
+    <p>{binding ? `${binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`} · 序列 ${binding.sequence} · ${binding.points.length} 步${binding.points.some(point => point.effectBpm !== undefined) ? ` · ${binding.points.filter(point => point.effectBpm !== undefined).length} 步设了效果速度` : ''}` : `整首歌合为一条多步序列，放进按钮第 ${executorPage} 页的空格。可以在控台继续编灯。`}</p>
     {binding?.assignment === 'unassigned' ? <p>执行器已解除分配；下次同步会把序列 {binding.sequence} 重新放回按钮第 {binding.executor?.split('.')[0]} 页。</p> : binding?.executor ? <button onClick={() => { const [page, slot] = binding.executor!.split('.').map(Number); locateMa2Executor(page!, slot!); }}>定位本曲控台位置</button> : null}
     <form className="ma2-song-default-page" noValidate onSubmit={event => { event.preventDefault(); saveDefaultPage(); }}>
       <label>默认创建页<input aria-label="默认创建按钮页" type="number" min={1} max={9999} step={1} value={pageDraft} onChange={event => { setPageDraft(event.target.value); setDefaultMessage(''); }}/></label>
