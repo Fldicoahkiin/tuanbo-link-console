@@ -29,7 +29,6 @@ for (const asset of release.assets ?? []) {
   if (names.includes(asset.name)) await github(`/repos/${REPOSITORY}/releases/assets/${asset.id}`, { method: 'DELETE' });
 }
 for (const name of names) {
-  const bytes = name === 'release-manifest.json' ? manifestBytes : await readFile(join(dist, name));
-  await uploadAsset(release, name, bytes);
-  console.log(`已上传到草稿 release ${tag}：${name}（${bytes.length} 字节）`);
+  const size = await uploadAsset(release, name, join(dist, name));
+  console.log(`已上传到草稿 release ${tag}：${name}（${size} 字节）`);
 }

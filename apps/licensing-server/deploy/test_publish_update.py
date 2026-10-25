@@ -241,6 +241,35 @@ class PublishUpdateTest(unittest.TestCase):
         self.assertEqual(archived[1].read_bytes(), b'old blockmap')
         self.assertEqual(self.status()['rollback'], {'version': '0.5.0', 'issue': None})
 
+    def test_only_the_newest_archives_keep_their_installers(self):
+        self.publish(release(self.root / 'base-a', '0.5.0'), '0.5.0')
+        self.publish(release(self.root / 'base-b', '0.5.1'), '0.5.1')
+        # Each later publish archives one version (0.5.2 archives 0.5.0); the fourth archive prunes the first.
+        for patch in range(2, 6):
+            result = self.publish(release(self.root / f'p{patch}', f'0.5.{patch}'), f'0.5.{patch}')
+        self.assertEqual(self.feed_versions(), ['0.5.4', '0.5.5'])
+        holders = sorted(path.parent.name.split('-update-')[1] for path in self.receipts.glob('*-update-*/archived'))
+        self.assertEqual(holders, ['0.5.3', '0.5.4', '0.5.5'])
+        self.assertEqual([name.split('-update-')[1] for name in result['prunedArchives']], ['0.5.2'])
+        self.assertEqual(json.loads(next(self.receipts.glob('*-update-0.5.4/receipt.json')).read_text())['prunedArchives'], [])
+        # The pruned receipt keeps its record, so 0.5.2 still counts as published once.
+        self.assertIsNotNone(module.publish_receipt(self.root, '0.5.2'))
+
+    def test_publishing_is_refused_when_the_disk_is_nearly_full(self):
+        self.publish(release(self.root / 'one', '0.5.0'), '0.5.0')
+        minimum = module.MIN_FREE_BYTES
+        module.MIN_FREE_BYTES = shutil.disk_usage(self.root).free + 1024 ** 3
+        try:
+            with self.assertRaisesRegex(RuntimeError, '磁盘余量不足'):
+                self.publish(release(self.root / 'two', '0.5.1'), '0.5.1')
+            release(self.root / module.STAGING / '0.5.1-aaaaaaaaaaaa', '0.5.1')
+            self.process()
+            self.assertIn('磁盘余量不足', self.status()['autoPublish']['message'])
+        finally:
+            module.MIN_FREE_BYTES = minimum
+        self.assertEqual(self.feed_versions(), ['0.5.0'])
+        self.assertEqual(list((self.publisher / 'work').iterdir()), [])
+
     def test_accepts_the_signature_the_build_script_writes(self):
         # scripts/sign-release.mjs signs in Node; the payload bytes must match what this script rebuilds.
         repository = Path(__file__).resolve().parents[3]

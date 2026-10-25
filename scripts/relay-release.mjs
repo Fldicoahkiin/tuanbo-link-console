@@ -41,12 +41,19 @@ export function compareVersions(left, right) {
 const installerOf = version => `Tuanbo-Link-Console-${version}-x64.exe`;
 const filesOf = version => ['release-manifest.json', 'latest.yml', installerOf(version), `${installerOf(version)}.blockmap`];
 
+const uploadedFiles = release => filesOf(release.tag_name.slice(1)).filter(name => release.assets.some(asset => asset.name === name && asset.state === 'uploaded')).length;
+const versionDrafts = releases => releases.filter(release => release.draft && stableVersion.test(release.tag_name));
+
 /** Complete drafts (all four files uploaded), highest version first. */
 export function pendingDrafts(releases) {
-  return releases
-    .filter(release => release.draft && stableVersion.test(release.tag_name))
-    .filter(release => filesOf(release.tag_name.slice(1)).every(name => release.assets.some(asset => asset.name === name && asset.state === 'uploaded')))
+  return versionDrafts(releases)
+    .filter(release => uploadedFiles(release) === 4)
     .sort((a, b) => compareVersions(b.tag_name.slice(1), a.tag_name.slice(1)));
+}
+
+/** Drafts whose files are not all there: a build still uploading, or one that failed, like v0.5.1. Never carried. */
+export function incompleteDrafts(releases) {
+  return versionDrafts(releases).filter(release => uploadedFiles(release) < 4).map(release => ({ tag: release.tag_name, files: uploadedFiles(release) }));
 }
 
 let logFile = null;
@@ -163,6 +170,7 @@ async function upload(version, directory, manifestBytes) {
 
 async function relay() {
   const releases = await github(`/repos/${REPOSITORY}/releases?per_page=100`);
+  for (const { tag, files } of incompleteDrafts(releases)) log(`${tag} 草稿的附件不全（${files}/4），跳过：云端构建还在上传，或者上传失败了`);
   const drafts = pendingDrafts(releases);
   if (drafts.length === 0) return '没有等待搬运的草稿 release';
   const feed = await readFeed();
@@ -176,7 +184,10 @@ async function relay() {
     const commit = await tagCommit(draft.tag_name);
     const directory = join(config.cache, `${draft.tag_name}-${commit.slice(0, 12)}`);
     if (order === 0) {
-      if (!(await draftFeed(draft, directory)).equals(feed.bytes)) throw new Error(`更新源上的 ${version} 不是 ${draft.tag_name} 草稿里的这次构建，需要人工核对`);
+      if (!(await draftFeed(draft, directory)).equals(feed.bytes)) {
+        log(`${draft.tag_name} 草稿与更新源上的 ${version} 不是同一次构建，跳过，需要人工核对`);
+        continue;
+      }
       return publishDraft(draft);
     }
     const server = serverStatus();
@@ -201,7 +212,7 @@ async function relay() {
     log(`服务器 10 分钟内还没发布 ${draft.tag_name}，下次运行再转正式`);
     return `${draft.tag_name} 已上传，等服务器发布`;
   }
-  return '草稿都低于更新源的版本，没有要搬运的';
+  return '没有要搬运的草稿（每份跳过的原因见上面的日志）';
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

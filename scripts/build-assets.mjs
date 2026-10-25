@@ -83,12 +83,12 @@ async function publish(kind, out) {
       continue;
     }
     if (existing) await github(`/repos/${REPOSITORY}/releases/assets/${existing.id}`, { method: 'DELETE' });
-    const bytes = await readFile(join(out, part.name));
-    if (createHash('sha256').update(bytes).digest('hex') !== part.sha256) throw new Error(`${part.name} 与 build-assets.json 不一致`);
-    await uploadAsset(release, part.name, bytes);
-    console.log(`已上传 ${part.name}（${bytes.length} 字节）`);
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(join(out, part.name))) hash.update(chunk);
+    if (hash.digest('hex') !== part.sha256) throw new Error(`${part.name} 与 build-assets.json 不一致`);
+    console.log(`已上传 ${part.name}（${await uploadAsset(release, part.name, join(out, part.name))} 字节）`);
   }
-  await uploadAsset(release, 'build-assets.json', descriptorBytes);
+  await uploadAsset(release, 'build-assets.json', join(out, 'build-assets.json'));
   console.log(`已发布 ${tag}：${release.html_url}`);
 }
 

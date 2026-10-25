@@ -17,7 +17,7 @@ import { CuePoolGrid } from './CuePoolGrid';
 import { Ma2CueCardLabel } from './Ma2CueCardLabel';
 import { CONSOLE_CUE_DRAG } from './lighting-material-drag';
 import { ma2ConsoleCueName, ma2ConsoleCuePoolName, ma2ConsoleSequenceName, ma2SequenceLibrary } from '../view-models/ma2-sequence-library';
-import { readMa2Attributes, useMa2AttributeStore } from '../stores/ma2-attribute-store';
+import { useMa2AttributeStore } from '../stores/ma2-attribute-store';
 import { ma2MaterialConnection, scanMa2Materials, useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 import { readMa2LayoutPage, useMa2LayoutPage } from '../stores/ma2-layout-store';
 import { Ma2LayoutView } from './Ma2LayoutView';
@@ -181,7 +181,7 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
     {classification.menu}
     {deleting ? <Ma2CueDeleteDialog refs={deleting} onClose={() => { setDeleting(null); classification.setPicked([]); }}/> : null}
 
-    {actionsHost ? createPortal(<div className="attribute-read-actions"><button className="ma2-refresh-directory" disabled={attributeReader.busy || materialReading || refreshing} onClick={() => void refreshMaterials()}>{materialReading || refreshing ? '正在刷新素材目录…' : '刷新素材目录'}</button><button disabled={attributeReader.busy || materialReading || refreshing || !material} onClick={()=>{void readMa2Attributes(classification.picked.length ? classification.picked.map(ref=>ref.sequence) : undefined,false).catch((cause:unknown)=>setError(cause instanceof Error?cause.message:String(cause)));}}>{attributeReader.busy?'正在检查空 Cue…':classification.picked.length?'检查所选空 Cue':'检查空 Cue'}</button>{attributeReader.activeId?<button onClick={()=>{void window.tbLink.cancelMa2Read(attributeReader.activeId!).catch((cause:unknown)=>setError(String(cause)));}}>取消读取</button>:null}<small role="status">{attributeReader.busy ? '' : attributeReader.message}</small></div>, actionsHost) : null}
+    {actionsHost ? createPortal(<div className="attribute-read-actions"><button className="ma2-refresh-directory" disabled={attributeReader.busy || materialReading || refreshing} onClick={() => void refreshMaterials()}>{materialReading || refreshing ? '正在刷新素材目录…' : '刷新素材目录'}</button>{attributeReader.activeId?<button onClick={()=>{void window.tbLink.cancelMa2Read(attributeReader.activeId!).catch((cause:unknown)=>setError(String(cause)));}}>取消读取</button>:null}</div>, actionsHost) : null}
     {error || classification.message ? (actionsHost ? createPortal(<p className="ma2-material-message" role={error ? 'alert' : 'status'}>{error || classification.message}</p>, actionsHost) : <p role={error ? 'alert' : 'status'}>{error || classification.message}</p>) : null}
   </section>;
 }

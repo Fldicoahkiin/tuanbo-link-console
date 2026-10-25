@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 
-const KEY = 'tblink.low-power';
+/**
+ * 2026-10-24: normal mode is the default. The choice is saved under this key as
+ * 'low' or 'normal'; a low-power choice saved by earlier versions is not carried
+ * over, so every machine starts in normal mode after the upgrade.
+ */
+const KEY = 'tblink.power-mode';
 export const useDisplayPreferences = create<{
   lowPower: boolean;
   preciseSeeking: boolean;
@@ -18,11 +23,10 @@ export const useDisplayPreferences = create<{
   loaded: false,
   load: () => {
     if (get().loaded) return;
-    const value = localStorage.getItem(KEY);
-    set({ lowPower: value === 'true', preciseSeeking: localStorage.getItem('tblink.precise-seeking') !== 'false', loaded: true });
+    set({ lowPower: localStorage.getItem(KEY) === 'low', preciseSeeking: localStorage.getItem('tblink.precise-seeking') !== 'false', loaded: true });
   },
   setLowPower: (lowPower) => {
-    localStorage.setItem(KEY, String(lowPower));
+    localStorage.setItem(KEY, lowPower ? 'low' : 'normal');
     set({ lowPower, loaded: true });
   }
 }));

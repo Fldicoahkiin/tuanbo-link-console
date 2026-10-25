@@ -4,7 +4,8 @@ import { ma2EffectLibrarySchema, type Ma2ReadProgress } from '@tb/schema';
 import { useDocumentStore } from './document-store';
 import { ma2MaterialConnection, useMa2MaterialReadStore } from './ma2-material-read-store';
 
-export const useMa2AttributeStore = create<{ busy: boolean; progress: Ma2ReadProgress | null; activeId: string | null; message: string }>(() => ({ busy: false, progress: null, activeId: null, message: '' }));
+/** `failed`: the last read or console operation ended with the error in `message`. */
+export const useMa2AttributeStore = create<{ busy: boolean; progress: Ma2ReadProgress | null; activeId: string | null; message: string; failed: boolean }>(() => ({ busy: false, progress: null, activeId: null, message: '', failed: false }));
 
 export async function readMa2Attributes(targets?: number[], autoClassify = false): Promise<void> {
   if (useMa2AttributeStore.getState().busy || useMa2MaterialReadStore.getState().busy) throw new Error('正在读取控台，请等待或取消当前读取');
@@ -13,7 +14,7 @@ export async function readMa2Attributes(targets?: number[], autoClassify = false
   const selected = [...new Set(targets ?? cache.library.sequences.map(sequence => sequence.sequence))];
   if (!selected.length) throw new Error('没有可读取属性的序列');
   const progressId = crypto.randomUUID();
-  useMa2AttributeStore.setState({ busy: true, activeId: progressId, message: '正在读取实际灯具属性', progress: { id: progressId, phase: 'connecting', completed: 0, total: selected.length + 2, detail: `准备读取 ${selected.length} 个序列的灯具属性` } });
+  useMa2AttributeStore.setState({ busy: true, activeId: progressId, failed: false, message: '正在读取实际灯具属性', progress: { id: progressId, phase: 'connecting', completed: 0, total: selected.length + 2, detail: `准备读取 ${selected.length} 个序列的灯具属性` } });
   let unsubscribe: (() => void) | undefined;
   try {
     const source = await ma2MaterialConnection();
@@ -35,6 +36,6 @@ export async function readMa2Attributes(targets?: number[], autoClassify = false
     const errors = after.project.ma2MaterialLibrary?.library?.errors.filter(value => selected.includes(value.sequence)) ?? [];
     const accepted = result.cueAttributes?.filter(value => !errors.some(error => error.sequence === value.sequence)).length ?? 0;
     useMa2AttributeStore.setState({ message: `${accepted} 个 Cue 属性完整${autoClassify ? '并已分类' : ''}${review ? `；${review} 个 Cue 读取不完整` : ''}${errors.length ? `；${errors.length} 个序列需补读，旧结果和分类已保留：${errors.map(entry => `${entry.sequence} ${entry.message}`).join('；')}` : ''}` });
-  } catch (error) { useMa2AttributeStore.setState({ message: error instanceof Error ? error.message : String(error) }); throw error; }
+  } catch (error) { useMa2AttributeStore.setState({ message: error instanceof Error ? error.message : String(error), failed: true }); throw error; }
   finally { unsubscribe?.(); useMa2AttributeStore.setState({ busy: false, activeId: null, progress: null }); }
 }

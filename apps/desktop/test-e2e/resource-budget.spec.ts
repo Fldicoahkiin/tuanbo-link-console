@@ -67,7 +67,7 @@ test('预览最小化释放帧连接，恢复重建，低功率停止拉帧并�
     expect((await counts()).frames).toBe(failed.frames);
     await page.getByRole('button', { name: '重新连接预览', exact: true }).click();
     await expect.poll(async () => (await counts()).frames).toBe(failed.frames + 1);
-    await page.evaluate(() => localStorage.setItem('tblink.low-power', 'true'));
+    await page.evaluate(() => localStorage.setItem('tblink.power-mode', 'low'));
     await page.reload();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
     await expect(page.locator('.reference-stage')).toHaveCount(0);

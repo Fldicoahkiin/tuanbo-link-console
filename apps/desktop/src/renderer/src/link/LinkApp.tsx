@@ -212,6 +212,7 @@ export function LinkApp(): JSX.Element {
       <AppSidebar editorHostRef={setEditorSidebarHost} playlistHostRef={setPlaylistHost} settingsCategory={settingsCategory} onSettingsCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }}
         page={page} internal={project?.playbackSource === 'internal'} editingLocked={editingLocked}
         obsState={obs.status} p1State={processes.p1.status} runtimeState={runtimeState} settingsOpen={connectionsOpen} onPageChange={(next) => { leaveSettings(() => startTransition(() => setPage(next))); }} onSettings={openSettings}
+        notify={notify}
       />
       <section className={`app-workspace${connectionsOpen ? ' settings-workspace' : ''}`}>
         {connectionsOpen ? <SettingsSectionNavigation selected={settingsCategory} onSelect={category => { setSettingsLocation(null); setSettingsCategory(category); }} /> : null}
@@ -236,7 +237,7 @@ function useConnectionsEscape(open: boolean, onClose: () => void): void {
   }, [open, onClose]);
 }
 
-function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange, playlistHostRef, page, internal, editingLocked, settingsOpen, onPageChange, onSettings }: {
+function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange, playlistHostRef, page, internal, editingLocked, settingsOpen, onPageChange, onSettings, notify }: {
   editorHostRef: (element: HTMLDivElement | null) => void;
   settingsCategory: SettingsCategory;
   onSettingsCategoryChange: (category: SettingsCategory) => void;
@@ -250,6 +251,7 @@ function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange,
   settingsOpen: boolean;
   onPageChange: (page: Page) => void;
   onSettings: () => void;
+  notify: (message: string, tone?: 'info' | 'error') => void;
 }): JSX.Element {
   return <aside className="app-sidebar">
     <nav className="main-nav workspace-navigation" aria-label="主要工作区">{NAVIGATION.map((item) => {
@@ -262,7 +264,7 @@ function AppSidebar({ editorHostRef, settingsCategory, onSettingsCategoryChange,
       <div className="sidebar-playlists" hidden={settingsOpen || page !== 'project'} ref={playlistHostRef} />
       <div className="sidebar-editor" hidden={settingsOpen || page === 'project'} ref={editorHostRef} />
       {settingsOpen ? <SettingsNavigation selected={settingsCategory} onSelect={onSettingsCategoryChange} /> : null}
-      <TaskSidebarProgress/>
+      <TaskSidebarProgress notify={notify}/>
     </div>
   </aside>;
 }
