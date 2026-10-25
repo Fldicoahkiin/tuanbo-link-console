@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createLightingDocument } from '@tb/schema';
+import { createLightingDocument, type LightingDocument } from '@tb/schema';
 import { ma2SongPoints, setLightingEffectSpeed } from '@tb/core/link';
 import { cueEventEntries } from './cue-event-view';
 import { saveCueIngredients } from './LightingCueComposer';
@@ -29,7 +29,7 @@ it('改点位素材和名称后效果速度保留，改成埋步的素材不带�
   expect(prepared.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).some(event => event.kind === 'ma2' && event.effectSpeed)).toBe(false);
 });
 it('换算超出控台范围时保留设置并显示原因，便于改档', () => {
-  const document = { ...point(), tempos: [{ beat: 0, bpm: 300, numerator: 4, denominator: 4 }] };
+  const document: LightingDocument = { ...point(), tempos: [{ beat: 0, bpm: 300, numerator: 4, denominator: 4 }] };
   const fast = setLightingEffectSpeed(document, 'point', { mode: 'song', beats: 0.25 });
   const view = effectSpeedView(fast, 'point');
   expect(view).toMatchObject({ speed: { mode: 'song', beats: 0.25 }, bpm: null });

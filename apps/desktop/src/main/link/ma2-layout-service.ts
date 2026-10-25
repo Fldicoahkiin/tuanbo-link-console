@@ -18,6 +18,7 @@ import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor'
 import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recovery';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
 import { writeMa2SongTimecode } from './ma2-song-timecode';
+import { setMa2CueEffectSpeeds } from './ma2-effect-speed';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
@@ -46,6 +47,22 @@ const keepCueAttributes = (exportName: string, target: number, cue: string, scra
     + `assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence occupied');gma.cmd('Import ${file}.xml At Sequence ${scratch} /nc');`
     + `local ok=gma.show.getobj.handle('Sequence ${scratch} Cue ${cue}')~=nil;if ok then gma.cmd('Copy Sequence ${scratch} Cue ${cue} At Sequence ${target} Cue ${cue} /o /nc') end;`
     + `gma.cmd('Delete Sequence ${scratch} /nc');os.remove(p..'${file}.xml');assert(ok,'Cue attributes import failed');assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence not removed');`;
+};
+
+/**
+ * Lua that puts one Cue from an uploaded one-Cue Sequence file over the song's Cue: the file is
+ * imported into a free scratch Sequence, its Cue copied with /o, and the scratch Sequence and the
+ * file are deleted again, as keepCueAttributes does with the write-before export.
+ */
+const copyCueFromFile = (file: string, target: number, cue: string, scratch: number): string =>
+  `local p=gma.show.getvar('PATH')..'/importexport/';assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence occupied');gma.cmd('Import ${file}.xml At Sequence ${scratch} /nc');`
+  + `local ok=gma.show.getobj.handle('Sequence ${scratch} Cue ${cue}')~=nil;if ok then gma.cmd('Copy Sequence ${scratch} Cue ${cue} At Sequence ${target} Cue ${cue} /o /nc') end;`
+  + `gma.cmd('Delete Sequence ${scratch} /nc');os.remove(p..'${file}.xml');assert(ok,'Cue import failed');assert(not gma.show.getobj.handle('Sequence ${scratch}'),'Scratch Sequence not removed');`;
+/** A Cue's lighting data, independent of row order, for comparing two exports of the same step. */
+const cueDataText = (xml: string, cue: string): string | null => {
+  const entry = inspectMa2SequenceXml(xml).sequences[0]!.cues.find(value => Number(value.number) === Number(cue));
+  const data = entry && inspectMa2SequenceCueData(xml, [entry.index]).get(entry.index);
+  return data ? JSON.stringify([...data].sort(([a], [b]) => a.localeCompare(b)).map(([key, layers]) => [key, Object.entries(layers).sort(([a], [b]) => a.localeCompare(b))])) : null;
 };
 
 /** New objects only; destination is checked again inside the same native command that writes it. */
@@ -290,8 +307,6 @@ export class Ma2LayoutService {
       // A new installation/computer has no local ownership cache; validate that binding
       // instead of permanently rejecting every saved song.
       const plan = planMa2SongSync(request, remoteXml, [...restoredSources.keys()]);
-      // Writing a step's effect speed needs the console's effect data verified first; until then nothing is written half way.
-      if (plan.changes.some(change => change.effectBpm !== undefined)) throw new Error('效果速度还不能写入控台：需要先用控台导出的效果数据核对写法；本曲未写入');
       // Content kept only in the local snapshot: Cues restored, or taken from this song's own Sequence while the console lacks it.
       const fromSnapshot = (change: Ma2SongPlanChange, ref: { sequence: number }): boolean => ref.sequence === target && (change.restore === true || remoteXml === null);
       const beforeLayout = executorPage ? null : await this.snapshot(connection, layoutRequest);
@@ -331,11 +346,18 @@ export class Ma2LayoutService {
       const existingName = remoteXml ? inspectMa2SequenceXml(remoteXml).sequences[0]?.name : null;
       const changed = !remoteXml || changes.length > 0 || plan.deletions.length > 0 || existingName !== plan.name || needsLayoutItem;
       const file = `tblink_song_${request.requestId.replaceAll('-', '')}`;
-      const desired = changed || remoteXml === null ? editMa2SongSequence(remoteXml ?? emptyMa2SequenceXml(target, directory.version), plan.name, changes, plan.deletions) : remoteXml;
-      const namesOnly = remoteXml && !needsLayoutItem && !plan.deletions.length && changes.every(change => change.sources === undefined);
+      const composed = changed || remoteXml === null ? editMa2SongSequence(remoteXml ?? emptyMa2SequenceXml(target, directory.version), plan.name, changes, plan.deletions) : remoteXml;
+      // Effect speeds are set in the composed snapshot, so the import, the per-step speed writes and
+      // the read-back check below all work from the same Sequence.
+      const speeds = new Map(plan.changes.flatMap(change => change.effectBpm === undefined ? [] : [[change.cue, change.effectBpm] as const]));
+      const desired = setMa2CueEffectSpeeds(composed, speeds);
+      const namesOnly = remoteXml && !needsLayoutItem && !plan.deletions.length && !speeds.size && changes.every(change => change.sources === undefined);
+      // Until the write is confirmed, a step getting a new speed is recorded without one, so a sync
+      // interrupted before the speed reached the console writes it again.
+      const draftPoints = plan.points.map(point => { if (!speeds.has(point.cue)) return point; const rest = { ...point }; delete rest.effectBpm; return rest; });
       const checkpoint = async (skeletonXml: string, stages?: Record<string, string[]>): Promise<void> => {
         const binding = { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(destination ? { executor: destination.address } : {}),
-          sequence: target, name: request.name, baselineXml: desired, points: plan.points };
+          sequence: target, name: request.name, baselineXml: desired, points: draftPoints };
         await writeFileAtomically(ownership, JSON.stringify([...owners.filter(value => value.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints,
           draft: { binding, skeletonXml, ...(stages ? { stages } : {}) }
         }]));
@@ -406,6 +428,16 @@ export class Ma2LayoutService {
               await this.call(connection, `${this.guard(layoutRequest)}assert(gma.show.getobj.handle('Sequence ${ref.sequence} Cue ${ref.cue}'),'Source Cue missing');gma.cmd('Copy Sequence ${ref.sequence} Cue ${ref.cue} At Sequence ${target} Cue ${change.cue} /${index || keep ? 'merge' : 'o'} /nc');gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'copied'`);
             }
             await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} Cue ${change.cue} "${change.name}"`)});return 'labelled'`);
+            if (speeds.has(change.cue)) {
+              // The step on the console must still be what was composed from the sources read before;
+              // the composed step with its speed then replaces it whole, so nothing is set on stale content.
+              const [whole, fraction = ''] = change.cue.split('.');
+              const current = await bridge.request('SEQCUES', target, `${Number(whole)}.${fraction.padEnd(3, '0')}`);
+              if (cueDataText(current, change.cue) !== cueDataText(composed, change.cue)) throw new Error(`Cue ${change.cue} 的灯光内容与读取时不一致，效果速度未写入：控台上的来源可能在同步期间被改过，请核对后重新同步`);
+              progress('previews', changeIndex, plan.changes.length, `设置 Sequence ${target} Cue ${change.cue} 的效果速度`);
+              await this.prepareXml(connection, layoutRequest, `${file}_speed`, editMa2SongSequence(emptyMa2SequenceXml(scratch, directory.version), plan.name, [{ cue: change.cue, name: change.name, sources: [{ xml: desired, cue: change.cue }] }], []));
+              await this.call(connection, `${this.guard(layoutRequest)}${copyCueFromFile(`${file}_speed`, target, change.cue, scratch)}return 'speed'`);
+            }
             progress('previews', changeIndex + 1, plan.changes.length, `已写入 Sequence ${target} Cue ${change.cue}`);
           }
         }

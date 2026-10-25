@@ -12,6 +12,24 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Where a console export keeps effect speeds is not verified yet, so the real function refuses any
+// speed. Tests that drive the write path swap in a stand-in: every row of a step takes its BPM as value.
+const effectSpeed = vi.hoisted(() => ({ stand: false, apply(xml: string, speeds: ReadonlyMap<string, number>): string {
+  let result = xml;
+  for (const [cue, bpm] of speeds) {
+    const [whole, fraction = ''] = cue.split('.');
+    const start = result.indexOf(`<Number number="${Number(whole)}" sub_number="${Number(fraction.padEnd(3, '0'))}"`);
+    if (start < 0) throw new Error(`stand-in: Cue ${cue} missing`);
+    const end = result.indexOf('</Cue>', start);
+    result = result.slice(0, start) + result.slice(start, end).replace(/<Value>[^<]*<\/Value>/g, `<Value>${bpm}</Value>`) + result.slice(end);
+  }
+  return result;
+} }));
+vi.mock('./ma2-effect-speed', async () => {
+  const actual = await vi.importActual<{ setMa2CueEffectSpeeds: (xml: string, speeds: ReadonlyMap<string, number>) => string }>('./ma2-effect-speed');
+  return { setMa2CueEffectSpeeds: (xml: string, speeds: ReadonlyMap<string, number>): string => effectSpeed.stand ? effectSpeed.apply(xml, speeds) : actual.setMa2CueEffectSpeeds(xml, speeds) };
+});
+
 const source={show:'test',generation:'one',version:'3.7.0.5'};
 const noBackups = { record: vi.fn<Ma2ConsoleBackups['record']>(() => Promise.resolve()) };
 function songRequest():Ma2SongSyncRequest{return {network:{host:'192.0.2.1',port:30000,monitorPort:30001,username:'test'},expectedSource:source,projectId:randomUUID(),itemId:'song',requestId:randomUUID(),settings:{layout:999,name:'歌曲',nextSequence:9000,columns:8,executorPage:1000},name:'歌曲',points:[]};}
@@ -72,6 +90,14 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     // Keeping a combined Cue's attributes: later /merge copies rebuild its data from the sources alone.
     const kept = /_attrs\.xml'[\s\S]*Copy Sequence \d+ Cue [\d.]+ At Sequence (\d+) Cue ([\d.]+) \/o \/nc/.exec(script);
     if (kept) { copies.set(`${kept[1]}/${Number(kept[2])}`, []); keeps.push(`${kept[1]}/${Number(kept[2])}`); return 'kept'; }
+    // A step put back from an uploaded one-Cue file: Import into the scratch Sequence, Copy /o, Delete.
+    const fromFile = /gma\.cmd\('Import (\w+)\.xml At Sequence (\d+) \/nc'\);[\s\S]*?gma\.cmd\('Copy Sequence \2 Cue ([\d.]+) At Sequence (\d+) Cue ([\d.]+) \/o \/nc'\)[\s\S]*Delete Sequence \2 \/nc/.exec(script);
+    if (fromFile) {
+      const [, file, , cue, to, at] = fromFile; const xml = files.get(file!)!.toString('utf8'); const target = song(Number(to));
+      copies.set(`${to}/${Number(at)}`, [{ xml, cue: cue! }]); files.delete(file!);
+      sequences.set(Number(to), editMa2SongSequence(sequences.get(Number(to))!, target.name ?? '', [{ cue: at!, name: target.cues.find(value => Number(value.number) === Number(at))?.name ?? '', sources: [{ xml, cue: cue! }] }], []));
+      return 'speed';
+    }
     const copy = /gma\.cmd\('Copy Sequence (\d+) Cue ([\d.]+) At Sequence (\d+) Cue ([\d.]+) \/(o|merge) \/nc'\)/.exec(script);
     if (copy) {
       const [, from, cue, to, at, mode] = copy; const key = `${to}/${Number(at)}`;
@@ -447,3 +473,74 @@ it('显式要求时把控台上软件写过的中文名改为拼音，用回读�
     points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: first.binding.points[index]!.cue, delayMs: 0 }] })) });
   expect(again.changed).toBe(false);
 });
+
+/** The values of a song step's rows, read from its export by Cue number. */
+function stepValues(xml: string, cue: number): string[] {
+  const entry = inspectMa2SequenceXml(xml).sequences[0]!.cues.find(value => Number(value.number) === cue)!;
+  // Each layer is kept as the serialized element; the value is its text.
+  return [...inspectMa2CueData(xml, entry.index).values()].map(layers => /"content":\["([^"]*)"\]/.exec(layers.Value ?? '')?.[1] ?? '');
+}
+it('效果速度：真实写法核实前，设了速度的同步在合成时就拒绝，控台上什么都不写', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences); const before = sequences.get(9000);
+  const request = { ...song, points: song.points.map((point, index) => index === 0 ? { ...point, effectBpm: 64 } : point) };
+  await expect(new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, request)).rejects.toThrow('效果速度还不能写入控台');
+  expect(sequences.get(9000)).toBe(before);
+  expect(fake.lines.some(line => line.includes('Copy Sequence') || line.includes('Import '))).toBe(false);
+});
+it('效果速度：换内容的步在控台内 Copy 后核对内容，再用带速度的这一步整步覆盖；只改速度的步也只重写那一步', async () => {
+  effectSpeed.stand = true;
+  try {
+    const { song, sourceNumber, sequences } = boundSong();
+    const fake = songConsole(sequences);
+    const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups);
+    const first = await service.syncSong(fake.connection, fake.bridge, { ...song, points: song.points.map((point, index) => index === 0 ? { ...point, effectBpm: 64 } : point) });
+    expect(stepValues(sequences.get(9000)!, 1).every(value => value === '64')).toBe(true);
+    expect(stepValues(sequences.get(sourceNumber)!, 1).some(value => value !== '64')).toBe(true);
+    expect(first.binding.points[0]).toEqual({ id: 'point-0', cue: '1.000', effectBpm: 64 });
+    expect(fake.ops).toContain('SEQCUES 9000');
+    expect([...fake.files.keys()].some(name => name.endsWith('_speed'))).toBe(false);
+    // Speed alone: the step is already this song's own; the rest of the Sequence stays as it is.
+    const untouched = stepValues(sequences.get(9000)!, 2);
+    const points = song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: first.binding.points[index]!.cue, delayMs: 0 }], ...(index === 0 ? { effectBpm: 120 } : {}) }));
+    const copies = fake.lines.length;
+    const second = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: first.binding, points });
+    expect(stepValues(sequences.get(9000)!, 1).every(value => value === '120')).toBe(true);
+    expect(stepValues(sequences.get(9000)!, 2)).toEqual(untouched);
+    expect(second.binding.points[0]).toEqual({ id: 'point-0', cue: '1.000', effectBpm: 120 });
+    expect(fake.lines.slice(copies).some(line => line.includes(`Copy Sequence ${sourceNumber}`))).toBe(false);
+    // Unchanged speed: nothing to write.
+    const third = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: second.binding, points });
+    expect(third.changed).toBe(false);
+  } finally { effectSpeed.stand = false; }
+}, 20000);
+it('效果速度：Copy 出来的步与读取时不一致就不设速度并报出；中断在设速度前，再次同步按中断记录补写速度', async () => {
+  effectSpeed.stand = true;
+  try {
+    const { song, sequences } = boundSong();
+    const request = { ...song, points: song.points.map((point, index) => index === 0 ? { ...point, effectBpm: 64 } : point) };
+    const changed = songConsole(sequences); const read = changed.bridge.request; let edited = false;
+    changed.bridge.request = async (...args: Parameters<Ma2OnpcBridge['exchange']>) => {
+      if (!edited && args[0] === 'SEQCUES' && args[1] === 9000) { edited = true; sequences.set(9000, sequences.get(9000)!.replace(/<Value>70<\/Value>/, '<Value>71</Value>')); }
+      return read(...args);
+    };
+    await expect(new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(changed.connection, changed.bridge, request)).rejects.toThrow('效果速度未写入');
+    expect(stepValues(sequences.get(9000)!, 1).includes('64')).toBe(false);
+
+    const fresh = boundSong();
+    const fake = songConsole(fresh.sequences); const forward = fake.bridge.request; let dropped = false;
+    fake.bridge.request = async (...args: Parameters<Ma2OnpcBridge['exchange']>) => {
+      if (!dropped && args[0] === 'SEQCUES' && args[1] === 9000) { dropped = true; throw new Error('连接中断'); }
+      return forward(...args);
+    };
+    const directory = await mkdtemp(join(tmpdir(), 'tblink-song-'));
+    const service = new Ma2LayoutService(join(directory, 'layouts.json'), () => false, noBackups);
+    const interrupted = { ...fresh.song, points: fresh.song.points.map((point, index) => index === 0 ? { ...point, effectBpm: 64 } : point) };
+    await expect(service.syncSong(fake.connection, fake.bridge, interrupted)).rejects.toThrow('连接中断');
+    const journal = JSON.parse(readFileSync(join(directory, 'layouts.json.songs.json'), 'utf8')) as Array<{ draft?: { binding: { points: Array<{ id: string; effectBpm?: number }> } } }>;
+    expect(journal.find(entry => entry.draft)?.draft?.binding.points.find(point => point.id === 'point-0')).not.toHaveProperty('effectBpm');
+    const resumed = await service.syncSong(fake.connection, fake.bridge, { ...interrupted, requestId: randomUUID() });
+    expect(stepValues(fresh.sequences.get(9000)!, 1).every(value => value === '64')).toBe(true);
+    expect(resumed.binding.points[0]).toEqual({ id: 'point-0', cue: '1.000', effectBpm: 64 });
+  } finally { effectSpeed.stand = false; }
+}, 20000);
