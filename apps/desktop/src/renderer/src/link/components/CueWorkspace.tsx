@@ -83,7 +83,8 @@ function useTimelineReferenceAudio(audio: LinkProject['rundown'][number]['refere
 export function CueWorkspace({ workspace = 'visual', actionsHost, player, sidebarHost, toolbarHost, coordinator, notify, documentActions }: Props): JSX.Element {
   const lightingWorkspace = workspace === 'lighting';
   const librarySplit = useLightingLibrarySplit();
-  const lowPower = useDisplayPreferences((state) => state.lowPower);
+  // Low power only unloads the video editor's preview; the lighting workbench keeps its full timeline layout.
+  const lowPower = useDisplayPreferences((state) => state.lowPower) && !lightingWorkspace;
   const project = useDocumentStore((state) => state.project);
   const projectPath = useDocumentStore((state) => state.path);
   const documentId = useDocumentStore((state) => state.documentId);
