@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { Ma2BridgeFailure, type Ma2Operation, type Ma2Wire } from './ma2-onpc-bridge';
+import { Ma2BridgeFailure, type Ma2Operation, type Ma2TransferProgress, type Ma2Wire } from './ma2-onpc-bridge';
 import { ma2ResponseLine, type Ma2Telnet } from './ma2-telnet';
 
 /** Chunked RPC over an authenticated command channel; uncertain writes are never replayed. */
@@ -26,7 +26,7 @@ export class Ma2NetworkWire implements Ma2Wire {
     }
     return result;
   }
-  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: () => void): Promise<string> {
+  async exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<string> {
     signal?.throwIfAborted();
     if (!/^[a-f0-9]{32}$/.test(id) || !Number.isInteger(target) || target < 1 || target > 99999) throw new Error('无效的 MA2 网络请求');
     let data = Buffer.from(body);
@@ -54,7 +54,7 @@ export class Ma2NetworkWire implements Ma2Wire {
       for (let offset = 0; offset < size; offset += 8192) {
         signal?.throwIfAborted();
         chunks.push(await this.readBatch(id, offset, size));
-        progress?.();
+        progress?.({ completed: Math.min(offset + 8192, size), total: size });
       }
       const response = Buffer.concat(chunks).toString('utf8');
       const match = /^([a-f0-9]{32})\n(OK|ERROR)\n(\d+)\n([\s\S]*)$/.exec(response);

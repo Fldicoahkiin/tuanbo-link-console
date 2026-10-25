@@ -9,7 +9,8 @@ import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
  * holds the song or is empty; a Sequence the operator moved on the same page is followed there; a
  * slot now taken by other content leaves it untouched and the song moves to the next free slot.
  */
-export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean): Promise<{ address: string; slot: number; pageExists: boolean; assigned: boolean }> {
+export type Ma2SongExecutorPlan = { address: string; slot: number; pageExists: boolean; assigned: boolean };
+export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean): Promise<Ma2SongExecutorPlan> {
   const stopped = (): void => { if (isPlaying()) throw new Error('播放已经开始，未修改执行器位置'); };
   stopped();
   const request = { network: source.network, expectedSource: source.expectedSource };
@@ -30,10 +31,16 @@ export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>
   return { address, slot, pageExists: snapshot !== null, assigned: false };
 }
 
-export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean): Promise<string> {
-  const { address, slot, pageExists, assigned } = await planMa2SongExecutor(bridge, source, sequence, page, existing, isPlaying);
+/**
+ * Puts the Sequence where `planMa2SongExecutor` read the page before the write, without reading the
+ * page again first: the assignment itself refuses a slot or page that changed since, and the page is
+ * read once afterwards to confirm it.
+ */
+export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, destination: Ma2SongExecutorPlan, isPlaying: () => boolean): Promise<string> {
+  const { address, slot, pageExists, assigned } = destination;
   if (assigned) return address;
   const stopped = (): void => { if (isPlaying()) throw new Error('播放已经开始，未修改执行器位置'); };
+  stopped();
   const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(source.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(source.expectedSource.generation)},'Show or session changed');`;
   const createPage = pageExists ? '' : `assert(not gma.show.getobj.handle('Page ${page}'),'Page appeared during creation');gma.cmd('Store Page ${page} /nc');assert(gma.show.getobj.handle('Page ${page}'),'Page creation failed');`;
   await runMa2GuardedLua(connection, `${guard}assert(gma.show.getobj.handle('Sequence ${sequence}'),'Song Sequence missing');${createPage}assert(not gma.show.getobj.handle('Executor ${address}'),'Executor became occupied');gma.cmd('Assign Sequence ${sequence} At Executor ${address} /nc');return 'assigned'`, stopped);

@@ -16,17 +16,21 @@ function fixture(exists: boolean) {
   const command = vi.fn<Ma2Telnet['command']>().mockImplementation(text => Promise.resolve(text.includes("READY'") ? 'READY' : 'OK:assigned'));
   return { bridge, connection: { command } };
 }
-it('creates a song executor at 1000.101 and verifies the assignment by reading that page', async () => {
+it('creates a song executor at 1000.101 where the plan read the page, and verifies the assignment by reading that page once', async () => {
   const f = fixture(false);
-  expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9907, 1000, undefined, () => false)).toBe('1000.101');
+  const destination = await planMa2SongExecutor(f.bridge, source, 9907, 1000, undefined, () => false);
+  expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9907, 1000, destination, () => false)).toBe('1000.101');
   const script = f.connection.command.mock.calls.map(([command]) => command.match(/\[#\w+\+1\]=unhex\('([a-f0-9]+)'\)/)?.[1]).filter((value): value is string => !!value).map(value => Buffer.from(value, 'hex').toString()).join('') || f.connection.command.mock.calls[0]?.[0];
   expect(script).toContain('Store Page 1000 /nc'); expect(script).toContain('Assign Sequence 9907 At Executor 1000.101');
   expect(f.bridge.request.mock.calls.map(call => call.slice(0, 2))).toEqual([['PAGES', 1], ['PAGE', 1000]]);
 });
-it('keeps an existing song at its exact address without reassigning it', async () => {
+it('keeps an existing song at its exact address without reassigning it or reading the page again', async () => {
   const f = fixture(true);
-  expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9907, 1000, '1000.101', () => false)).toBe('1000.101');
-  expect(f.connection.command).not.toHaveBeenCalled();
+  const destination = await planMa2SongExecutor(f.bridge, source, 9001, 1000, '1000.201', () => false);
+  expect(destination.assigned).toBe(true);
+  f.bridge.request.mockClear();
+  expect(await assignMa2SongExecutor(f.connection, f.bridge, source, 9001, 1000, destination, () => false)).toBe('1000.201');
+  expect(f.connection.command).not.toHaveBeenCalled(); expect(f.bridge.request).not.toHaveBeenCalled();
 });
 it('原位置被别的序列占用时换到下一个空格，不覆盖；原位置空着时放回原位；本曲在同页挪过位置时跟到新位置', async () => {
   const f = fixture(true);
@@ -37,6 +41,8 @@ it('原位置被别的序列占用时换到下一个空格，不覆盖；原位�
 });
 it('does not allocate anything after playback starts', async () => {
   const f = fixture(false);
-  await expect(assignMa2SongExecutor(f.connection, f.bridge, source, 9907, 1000, undefined, () => true)).rejects.toThrow('播放');
+  await expect(planMa2SongExecutor(f.bridge, source, 9907, 1000, undefined, () => true)).rejects.toThrow('播放');
+  expect(f.bridge.request).not.toHaveBeenCalled();
+  await expect(assignMa2SongExecutor(f.connection, f.bridge, source, 9907, 1000, { address: '1000.101', slot: 101, pageExists: false, assigned: false }, () => true)).rejects.toThrow('播放');
   expect(f.bridge.request).not.toHaveBeenCalled(); expect(f.connection.command).not.toHaveBeenCalled();
 });

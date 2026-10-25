@@ -135,7 +135,13 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     }
     const requestId = randomUUID().replaceAll('-', '');
     if (operation === 'LISTSEQ') return Promise.resolve({ requestId, response: JSON.stringify({ ...source, entries: [...sequences.keys()].map(number => ({ target: number, name: `S${number}` })) }) });
-    if (operation === 'SEQUENCE') { const xml = sequences.get(target)!; if (expected === 'keep') files.set(`tblink_library_${requestId}`, Buffer.from(xml)); return Promise.resolve({ requestId, response: xml }); }
+    if (operation === 'SEQUENCE') {
+      const xml = sequences.get(target)!; if (expected === 'keep') files.set(`tblink_library_${requestId}`, Buffer.from(xml));
+      // The wire reports each 8 KB batch of a response as it arrives.
+      const size = Buffer.byteLength(xml);
+      for (let completed = Math.min(8192, size); ; completed = Math.min(completed + 8192, size)) { progress?.({ completed, total: size }); if (completed === size) break; }
+      return Promise.resolve({ requestId, response: xml });
+    }
     if (operation === 'SEQCUES') {
       const xml = sequences.get(target)!; files.set(`tblink_library_${requestId}`, Buffer.from(xml));
       const wanted = new Set(expected!.split(',').map(Number));
@@ -191,8 +197,13 @@ it('已绑定歌曲换一个 Cue 的内容：在控台内 Copy，不上传歌曲
   const { song, sourceNumber, sequences } = boundSong();
   const fake = songConsole(sequences);
   const directory = await mkdtemp(join(tmpdir(), 'tblink-song-'));
-  const result = await new Ma2LayoutService(join(directory, 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song);
+  const reported: string[] = [];
+  const result = await new Ma2LayoutService(join(directory, 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song, value => reported.push(`${value.phase} ${value.completed}/${value.total} ${value.detail}`));
   console.info(JSON.stringify({ commands: fake.lines.length, bytes: fake.lines.reduce((total, line) => total + Buffer.byteLength(line), 0), ops: fake.ops }));
+  // Whole-Sequence reads say how much has arrived, before and after the write.
+  const size = Buffer.byteLength(sequences.get(9000)!);
+  expect(reported).toContain(`verification ${size}/${size} 回读序列 9000 · ${Math.ceil(size / 1024)}/${Math.ceil(size / 1024)} KB`);
+  expect(reported.some(line => line.startsWith('connecting ') && line.includes('读取控台序列 9000 · '))).toBe(true);
   expect(result.changed).toBe(true);
   expect([...fake.files.keys()].some(name => name.endsWith('_before'))).toBe(false);
   expect(result.backupFile).toMatch(/^tblink_library_[a-f0-9]{32}\.xml$/);
@@ -233,6 +244,32 @@ it('写后回读交给复查接管时不进备份轮转；接管方拿到这次�
   expect(fake.files.get(exportFile)?.toString('utf8')).toBe(sequences.get(9000));
   expect(handed.remoteRevision).toBe(result.remoteRevision);
   expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ files: [result.backupFile.replace(/\.xml$/, '')] }));
+});
+it('没有改动的同步：写前读到的控台导出直接交给复查当基线，不进备份轮转，执行器页和目录各只读一次', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups);
+  const written = await service.syncSong(fake.connection, fake.bridge, song);
+  fake.ops.length = 0; noBackups.record.mockClear();
+  const adoptReadback = vi.fn<(exportFile: string, result: Ma2SongSyncResult) => Promise<boolean>>(() => Promise.resolve(true));
+  const unchanged = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: written.binding,
+    points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: written.binding.points[index]!.cue, delayMs: 0 }] })) }, undefined, undefined, { adoptReadback });
+  expect(unchanged.changed).toBe(false);
+  expect(fake.ops).toEqual(['LISTSEQ 1', 'PAGES 1', 'PAGE 1000', 'SEQUENCE 9000']);
+  const [exportFile, handed] = adoptReadback.mock.calls[0]!;
+  expect(exportFile).toMatch(/^tblink_library_[a-f0-9]{32}$/);
+  expect(fake.files.get(exportFile)?.toString('utf8')).toBe(sequences.get(9000));
+  expect(handed.remoteRevision).toBe(unchanged.remoteRevision);
+  expect(noBackups.record).not.toHaveBeenCalled();
+  // A copy of the check's own baseline already is one: nothing is handed over and the copy joins the rotation.
+  adoptReadback.mockClear();
+  const baseline = 'tblink_watch_0123456789abcdef';
+  fake.files.set(baseline, Buffer.from(sequences.get(9000)!));
+  const copied = await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: unchanged.binding,
+    points: song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: unchanged.binding.points[index]!.cue, delayMs: 0 }] })) }, undefined, undefined, { consoleBaseline: baseline, adoptReadback });
+  expect(copied.changed).toBe(false);
+  expect(adoptReadback).not.toHaveBeenCalled();
+  expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ object: 'Sequence 9000', files: [expect.stringMatching(/^tblink_library_[a-f0-9]{32}$/)] }));
 });
 it('带起始码同步时在序列之后写本曲时间码节目；改时间后重写；控台上被改过时按时间线重写并留备份；不带起始码不碰时间码', async () => {
   const { song, sequences } = boundSong();

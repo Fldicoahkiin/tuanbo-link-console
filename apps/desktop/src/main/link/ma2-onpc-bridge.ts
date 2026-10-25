@@ -6,9 +6,10 @@ import { readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { inspectMa2SequenceXml, inspectMa2ExecutorXml, inspectMa2TimecodeXml, referencedMa2Sequences, sameMa2XmlObjects, validateMa2TimecodeSnapshot, validateMa2TimecodeWrite } from './ma2-timecode-xml';
 export type Ma2Operation = 'PING' | 'PAGES' | 'PAGE' | 'LIST' | 'LISTSEQ' | 'SEQUENCE' | 'SEQCUES' | 'READ' | 'SNAPSHOT' | 'SCOPE' | 'APPLY' | 'SYNC' | 'CREATE' | 'EXECUTOR' | 'ASSIGNSEQ' | 'LABEL' | 'DISCARD' | 'TCRANGES';
+/** Fires after every acknowledged line of a long transfer; response reads also say how many bytes have arrived. */
+export type Ma2TransferProgress = (download?: { completed: number; total: number }) => void;
 export type Ma2Wire = {
-  /** progress fires after every acknowledged line of a long transfer. */
-  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: () => void): Promise<string>;
+  exchange(id: string, operation: Ma2Operation, target: number, body: string, beforeSend: () => void, signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<string>;
 };
 export class Ma2BridgeFailure extends Error {
   constructor(message: string, readonly requestId: string, readonly sent: boolean, options: ErrorOptions, readonly backupFile: string | null = null) { super(message, options); }
@@ -22,10 +23,10 @@ export class Ma2OnpcBridge {
   constructor(private readonly dataDirectory: string | Ma2Wire, private readonly isPlaying: () => boolean) {
     if (typeof dataDirectory === 'string' && !isAbsolute(dataDirectory)) throw new Error('MA2 数据目录必须是绝对路径');
   }
-  async request(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: () => void): Promise<string> {
+  async request(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<string> {
     return (await this.exchange(operation, target, expected, desired, signal, progress)).response;
   }
-  async exchange(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: () => void): Promise<{ response: string; requestId: string }> {
+  async exchange(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<{ response: string; requestId: string }> {
     signal?.throwIfAborted();
     if (this.queuedExchanges >= 32) throw new Error('控台操作过多，请等待当前操作完成');
     const epoch = this.exchangeEpoch;
@@ -40,7 +41,7 @@ export class Ma2OnpcBridge {
     this.exchangeTail = result.then(() => undefined, () => undefined);
     return result;
   }
-  private async performExchange(operation: Ma2Operation, target: number, expected: string, desired: string, signal?: AbortSignal, progress?: () => void): Promise<{ response: string; requestId: string }> {
+  private async performExchange(operation: Ma2Operation, target: number, expected: string, desired: string, signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<{ response: string; requestId: string }> {
     signal?.throwIfAborted();
     if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号无效');
     const writing = operation === 'APPLY' || operation === 'SYNC' || operation === 'CREATE';

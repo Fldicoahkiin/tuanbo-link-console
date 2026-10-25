@@ -160,8 +160,9 @@ export class Ma2LayoutService {
 
   /**
    * `consoleBaseline` names a console export the song check confirmed equals the binding's baseline.
-   * `adoptReadback` may take over the verified post-write export as the next check's baseline; it
-   * answers whether it consumed the file, otherwise the file joins this Sequence's backup rotation.
+   * `adoptReadback` may take over the verified console export (the post-write readback, or the read
+   * before planning when nothing was written) as the next check's baseline; it answers whether it
+   * consumed the file, otherwise the file joins this Sequence's backup rotation.
    */
   async syncSong(rawConnection: Connection, rawBridge: SongBridge, input: Ma2SongSyncRequest, report?: (progress: Ma2ReadProgressUpdate) => void, externalSignal?: AbortSignal,
     { consoleBaseline = null, adoptReadback }: { consoleBaseline?: string | null; adoptReadback?: (exportFile: string, result: Ma2SongSyncResult) => Promise<boolean> } = {}): Promise<Ma2SongSyncResult> {
@@ -186,10 +187,14 @@ export class Ma2LayoutService {
     } };
     // Every acknowledged line of a long transfer counts as progress for the 90 s watchdog.
     const bridge: SongBridge = { request: (operation, target, expected, desired) => rawBridge.request(operation, target, expected, desired, signal, received).then(result => { received(); return result; }),
-      exchange: (operation, target, expected, desired) => rawBridge.exchange(operation, target, expected, desired, signal, received).then(result => { received(); return result; }) };
+      exchange: (operation, target, expected, desired, _signal, transfer) => rawBridge.exchange(operation, target, expected, desired, signal, download => { received(); transfer?.(download); }).then(result => { received(); return result; }) };
     const progress = (phase: Ma2ReadProgressUpdate['phase'], completed: number, total: number, detail: string): void => {
       signal.throwIfAborted(); received(); report?.({ phase, completed, total, detail });
     };
+    // A whole Sequence crosses Telnet 8 KB at a time; show how much of it has arrived.
+    const readSequence = (sequence: number, phase: Ma2ReadProgressUpdate['phase'], label: string) => bridge.exchange('SEQUENCE', sequence, 'keep', '', undefined, download => {
+      if (download) progress(phase, download.completed, download.total, `${label} · ${Math.ceil(download.completed / 1024)}/${Math.ceil(download.total / 1024)} KB`);
+    });
     const endpoint = `${request.network.host}:${request.network.port}`;
     let target = request.binding?.sequence ?? request.settings.nextSequence;
     let layoutRequest = { network: request.network, expectedSource: request.expectedSource, layout: request.binding?.layout ?? request.settings.layout };
@@ -270,13 +275,14 @@ export class Ma2LayoutService {
       // A bound Sequence deleted on the console is created again from the last confirmed snapshot.
       const sequenceMissing = request.binding !== undefined && !directory.entries.some(entry => entry.target === target);
       let remote: { response: string; requestId: string } | null = null;
+      let readOverTelnet = false;
       if (sequenceMissing) progress('connecting', 1, 1, `控台上没有序列 ${target}，按上次确认的内容重建`);
       else if (request.binding && consoleBaseline) {
         if (!/^tblink_watch_[a-f0-9]{16}$/.test(consoleBaseline)) throw new Error('歌曲复查基线文件名无效');
         const requestId = randomBytes(16).toString('hex');
         await this.call(connection, `${this.guard(layoutRequest)}local p=gma.show.getvar('PATH')..'/importexport/';local f=assert(io.open(p..'${consoleBaseline}.xml','rb'));local s=f:read('*a');f:close();local o=assert(io.open(p..'tblink_library_${requestId}.xml','wb'));o:write(s);o:close();return 'copied'`);
         remote = { response: request.binding.baselineXml, requestId };
-      } else if (request.binding) remote = await bridge.exchange('SEQUENCE', target, 'keep');
+      } else if (request.binding) { remote = await readSequence(target, 'connecting', `读取控台序列 ${target}`); readOverTelnet = true; }
       const remoteXml = remote?.response ?? null;
       const remoteExport = remote ? `tblink_library_${remote.requestId}` : null;
       const labelBackups: string[] = [];
@@ -415,7 +421,7 @@ export class Ma2LayoutService {
       }
       progress('verification', 0, 1, `回读序列 ${target}，确认名称、内容和位置`);
       // Kept on the console: a failed check leaves it beside the write-before export as evidence.
-      const readback = changed ? await bridge.exchange('SEQUENCE', target, 'keep') : null;
+      const readback = changed ? await readSequence(target, 'verification', `回读序列 ${target}`) : null;
       const readbackFile = readback ? `tblink_library_${readback.requestId}` : null;
       // Without a write the console still holds the Sequence as read before it.
       const verifiedXml = readback ? readback.response : remoteXml;
@@ -444,10 +450,11 @@ export class Ma2LayoutService {
       if (plan.deletions.some(number => actualHashes.has(number) && !changedNumbers.has(Number(number)))) throw new Error('歌曲 Cue 删除回读未通过');
       // The show record the project holds, or the one recorded here when the project never received it.
       const previousTimecode = request.binding?.timecode ?? owners.find(owner => owner.key === key && owner.projectId === request.projectId && owner.itemId === request.itemId)?.binding?.timecode;
-      const executor = executorPage ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, request.binding?.executor, this.isPlaying) : undefined;
+      const executor = executorPage && destination ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, destination, this.isPlaying) : undefined;
       const afterLayout = executorPage ? null : changed ? await this.snapshot(connection, layoutRequest) : beforeLayout;
       if (!executorPage && !afterLayout?.value.items.some(item => item.sequence === target)) throw new Error('Layout 未回读到本曲序列');
-      const verifiedDirectory = await this.directory(bridge, layoutRequest); const readAt = new Date().toISOString();
+      // Without a write the directory read at the start still lists this Sequence as it is.
+      const verifiedDirectory = changed ? await this.directory(bridge, layoutRequest) : directory; const readAt = new Date().toISOString();
       progress('verification', 1, 1, `${executor ? `执行器 ${executor}` : `Layout ${layoutRequest.layout}`} · 序列 ${target} 已确认`);
       const result = ma2SongSyncResultSchema.parse({ binding: { endpoint, show: directory.show, layout: executorPage ? null : layoutRequest.layout, ...(executor ? { executor } : {}), sequence: target, name: report.name, baselineXml: canonical(verifiedXml),
           // The Timecode show record and the times it fires stay until the show is written again below.
@@ -462,10 +469,14 @@ export class Ma2LayoutService {
       if (changed || JSON.stringify(previousOwner?.binding) !== JSON.stringify(result.binding) || previousOwner?.conflicts !== undefined) {
         await writeFileAtomically(ownership, JSON.stringify([...owners.filter(owner => owner.key !== key), { key, projectId: request.projectId, itemId: request.itemId, inputHash, originalPoints, binding: result.binding }]));
       }
+      // The song check takes over the post-write export as its baseline. When nothing was written, the
+      // export read before planning still is the console as verified, so the check takes that one and
+      // never reads the Sequence over Telnet a second time; a copy of the check's own baseline already is one.
+      const checkExport = readbackFile ?? (!changed && readOverTelnet ? remoteExport : null);
+      const adopted = checkExport && adoptReadback ? await adoptReadback(checkExport, result) : false;
       // The write-before export and any name backups join this Sequence's rotation once the sync is
-      // confirmed; so does the post-write export unless the song check took it over as its baseline.
-      const adopted = readbackFile && adoptReadback ? await adoptReadback(readbackFile, result) : false;
-      const backups = [...remoteExport ? [remoteExport] : [], ...labelBackups, ...readbackFile && !adopted ? [readbackFile] : []];
+      // confirmed; so does every export the song check did not take over.
+      const backups = [...remoteExport && !(adopted && checkExport === remoteExport) ? [remoteExport] : [], ...labelBackups, ...readbackFile && !adopted ? [readbackFile] : []];
       if (backups.length) await this.backups.record(rawBridge, { console: endpoint, object: `Sequence ${target}`, files: backups });
       if (request.timecodeStartMs === undefined || !executor) return result;
       // The Sequence is confirmed and recorded, so a failure from here on concerns only the show.
