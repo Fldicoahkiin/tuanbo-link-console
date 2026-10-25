@@ -42,7 +42,7 @@
 <a id="官网下载信息"></a>
 ### 官网下载信息
 
-`apps/licensing-server/web/release.json`（下载页的版本、日期和链接）不再手改。发布到更新源之后运行 `node scripts/write-website-release.mjs`：它读取线上 `latest.yml`，核对安装包地址返回的大小，按北京时间写入日期；提交后由官网自动部署上线。
+`apps/licensing-server/web/release.json`（下载页的版本、日期和链接）不再手改。发布到更新源之后运行 `node scripts/write-website-release.mjs`：它读取线上 `latest.yml`，核对安装包地址返回的大小，按北京时间写入日期；提交后由官网自动部署上线。下载页的「更新日志」显示不高于 `release.json` 版本的 `release-notes/X.Y.Z.md`，所以新版条目在这一步之后才出现在官网。
 
 ## 同服务器静态出口
 
@@ -92,7 +92,8 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 <a id="版本号"></a>
 ### 版本号
 
-- 正式版本号只在发布提交里改：根目录和 `apps/desktop` 两个 `package.json` 同时改，提交信息 `chore(release): X.Y.Z`。平时的功能提交不改版本号。
+- 正式版本号只在发布提交里改：根目录和 `apps/desktop` 两个 `package.json` 同时改，运行 `pnpm changelog`，提交信息 `chore(release): X.Y.Z`。平时的功能提交不改版本号。
+- 每个版本必须有 `release-notes/X.Y.Z.md`：GitHub Release 正文、仓库 `CHANGELOG.md`、官网下载页和软件「软件更新」里的更新日志都从它生成，缺了 `pnpm verify` 和发布构建都会报错。写法见 [release-notes/README.md](../release-notes/README.md)。
 - 发布构建（`pnpm verify:release` 和 Release Windows 工作流）要求版本高于所有已有 `vX.Y.Z` 标签和线上 `latest.yml`；它自己的标签只能指向本次构建的提交。日常 `pnpm verify` 只检查两处版本一致。
 
 <a id="发布签名"></a>
@@ -108,7 +109,7 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 1. 推发布提交到 master；CI 通过后在这个提交上打 `vX.Y.Z` 标签并推送。标签就是发布：之后没有人工步骤。
 2. Release Windows：verify 和 build 作业在 GitHub 云端 Windows 上检查、打包、签名，把安装包、blockmap、`latest.yml`、`release-manifest.json` 放进这个标签的草稿 GitHub Release（私有仓库的 Actions 产物存储只有 500 MB，所以不用 artifact）。搬运脚本 `scripts/relay-release.mjs` 下载草稿、按构建清单核对，再上传到服务器 staging：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次，Mac 上可以手动 `pnpm release:relay`，二选一，重复运行安全（[发版搬运准备](RELEASE_BUILDER_SETUP.md)）。美颜和音乐分析的固定资产各放在一个 `build-assets-*` release 里，见[固定资产](RELEASE_BUILDER_SETUP.md#固定资产)。
 3. 服务器自动发布：staging 里出现新的一份包，root 发布脚本就复制、重新校验，通过就上线。条件是签名有效、manifest 和 sha256 一致、版本高于更新源，并且这个版本以前没上过更新源。更新源只留新版和上一版，更早的移进服务器备份，备份只保留最近 3 份；磁盘余量低于 5 GB 时拒绝发布。每份上传只自动尝试一次；没能发布的留在后台「软件更新」的待发布列表，原因写在「最近一次自动发布」。需要撤回时用「回滚到上一版」，撤下的版本也移出更新源，之后重跑工作流也不会再把它自动发上去。完整链路和信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。
-4. 更新源换成这个版本（`latest.yml` 与草稿里的逐字节相同）后，搬运脚本把草稿转为正式 Release 并标为 Latest：上传后同一次运行最多等 10 分钟，没等到就由下一次运行完成。说明在建草稿时取自 `release-notes/X.Y.Z.md`，没有这个文件就只写固定的激活说明。
+4. 更新源换成这个版本（`latest.yml` 与草稿里的逐字节相同）后，搬运脚本把草稿转为正式 Release 并标为 Latest：上传后同一次运行最多等 10 分钟，没等到就由下一次运行完成。说明在建草稿时取自 `release-notes/X.Y.Z.md`，后面加固定的激活说明。
    - 搬运某一步失败（工位电脑关机、代理或 GitHub 出错、服务器没能自动发布）只记日志，下一次运行接着做；服务器上已经有这个版本或另一份上传正在进行时，不重复上传。
    - build 失败可以在 Actions 里重跑：草稿里同名的文件会被替换。版本已经上线时，build 拒绝重建。
 5. 运行 `node scripts/write-website-release.mjs` 更新官网下载信息并提交，见[官网下载信息](#官网下载信息)。官网改成直接跟着更新源变化之后，这一步去掉。

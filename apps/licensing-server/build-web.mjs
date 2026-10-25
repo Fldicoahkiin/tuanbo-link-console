@@ -3,16 +3,21 @@ import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { homepage, downloadPage, guidePage, layout, legalPage, LEGAL_PAGES } from './web/pages.mjs';
+import { notesUpTo, readReleaseNotes } from '../../scripts/release-notes.mjs';
 
 const root = new URL('./', import.meta.url), target = new URL('dist/web/', root);
 const email = process.env.TBLINK_CONTACT_EMAIL ?? 'info@jinhefilm.com';
 if (!/^[a-z0-9][a-z0-9._+-]*@jinhefilm\.com$/.test(email) || email.startsWith('admin@')) throw new Error('联系邮箱须为非 admin 的 jinhefilm.com 邮箱');
 const release = JSON.parse(await readFile(new URL('web/release.json', root), 'utf8'));
 if (!/^\d+\.\d+\.\d+$/.test(release.version) || release.url !== `https://updates.tuanbo-link.jinhefilm.com/windows/x64/Tuanbo-Link-Console-${release.version}-x64.exe` || !/^\d{4}-\d{2}-\d{2}$/.test(release.date)) throw new Error('正式发行元数据无效');
+// The download page lists the release notes of the released version and every earlier one; a later version's notes
+// may already be written and stay hidden until the release flow points release.json at it.
+const notes = notesUpTo(readReleaseNotes(fileURLToPath(new URL('../../release-notes/', root))), release.version);
+if (notes[0]?.version !== release.version) throw new Error(`缺少 release-notes/${release.version}.md，官网下载页没有这一版的更新日志`);
 await mkdir(target, { recursive: true });
 for (const [entry, name] of [['main.ts', 'purchase.js'], ['site.ts', 'site.js']]) await build({ entryPoints: [fileURLToPath(new URL(`web/${entry}`, root))], outfile: fileURLToPath(new URL(name, target)), bundle: true, platform: 'browser', target: 'es2022', format: 'esm', minify: true });
 const checkout = await readFile(new URL('web/checkout.html', root), 'utf8');
-const pages = { 'index.html': homepage(), 'download/index.html': downloadPage(release), 'guide/index.html': guidePage(), 'purchase/index.html': layout('购买授权', '/purchase/', `<div class="wrap page-intro"><p class="eyebrow">授权与订单</p><h1>购买团播联动台授权</h1><p class="lead">选择周期，保存凭据，付款后领取激活码。</p><p class="media-note">当前正式版本 ${release.version}。官网含开发预览，购买前请核对<a href="/download/">正式版本说明</a>。</p></div><div class="wrap checkout-page">${checkout}</div>`, true) };
+const pages = { 'index.html': homepage(), 'download/index.html': downloadPage(release, notes), 'guide/index.html': guidePage(), 'purchase/index.html': layout('购买授权', '/purchase/', `<div class="wrap page-intro"><p class="eyebrow">授权与订单</p><h1>购买团播联动台授权</h1><p class="lead">选择周期，保存凭据，付款后领取激活码。</p><p class="media-note">当前正式版本 ${release.version}。官网含开发预览，购买前请核对<a href="/download/">正式版本说明</a>。</p></div><div class="wrap checkout-page">${checkout}</div>`, true) };
 for (const slug of LEGAL_PAGES) pages[`${slug}/index.html`] = legalPage(slug);
 for (const [name, html] of Object.entries(pages)) {
   await mkdir(new URL('./', new URL(name, target)), { recursive: true });
