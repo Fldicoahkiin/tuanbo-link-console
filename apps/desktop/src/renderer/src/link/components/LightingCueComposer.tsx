@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { X, Check, Save, Layers } from 'lucide-react';
-import { LightingTempoMap, lightingEventTime, removeLightingEffects, placeEmptyLightingCue } from '@tb/core/link';
+import { LightingTempoMap, lightingEventTime, lightingPointEffectSpeed, removeLightingEffects, placeEmptyLightingCue } from '@tb/core/link';
 import { lightingDocumentSchema, lightingTrackSchema, type LightingDocument, type LightingEvent } from '@tb/schema';
 import { placeEffect } from './useLightingEffectStamp';
 import { LightingCuePreparation } from './LightingCuePreparation';
+import { LightingCueEffectSpeed } from './LightingCueEffectSpeed';
 import { CONSOLE_CUE_DRAG } from './lighting-material-drag';
 import { Ma2ConsoleName } from './Ma2ConsoleName';
 import { ma2ConsoleCuePoolName, ma2ConsoleSequenceName, ma2SequenceLibrary, type LibrarySequence } from '../view-models/ma2-sequence-library';
@@ -28,6 +29,8 @@ export function cueIngredients(document: LightingDocument, eventId?: string, lib
 }
 export function saveCueIngredients(document: LightingDocument, ingredients: CueIngredient[], name: string, ms: number, durationMs: number, eventId?: string): LightingDocument {
   const original = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === eventId || event.effectGroupId === eventId);
+  // The point keeps the effect speed set on it when its materials change.
+  const effectSpeed = eventId ? lightingPointEffectSpeed(document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).filter(event => event.id === eventId || event.effectGroupId === eventId), name) : undefined;
   const runMode = original?.kind === 'ma2' || original?.kind === 'empty-cue' && original.runMode ? original.runMode : document.outputMode === 'timecode' ? undefined : 'independent';
   if (!ingredients.length) return placeEmptyLightingCue(document, eventId ?? crypto.randomUUID(), ms, durationMs, name.trim());
   if (ingredients.some(entry => entry.executor && !/^[1-9]\d*\.[1-9]\d*$/.test(entry.executor))) throw new Error('执行器格式应为页号.编号；留空即可使用序列池');
@@ -53,7 +56,7 @@ export function saveCueIngredients(document: LightingDocument, ingredients: CueI
     const eventMs = result.tracks.flatMap(track=>track.clips.flatMap(clip=>clip.events.filter(value=>value.id===event.id).map(value=>lightingEventTime(clip,value,map))))[0] ?? ms;
     const source = ingredients.find(entry => entry.sequence === event.sequence && entry.executor === event.executor && entry.cue === event.cue && Math.abs(entry.delayMs - (eventMs-ms))<.001);
     const detached={...event};delete detached.librarySource;
-    return { ...detached, runMode, ...(event.id === id ? { label: name.trim() } : {}), ...(source?.preparation ? { preparation: source.preparation } : {}) };
+    return { ...detached, runMode, ...(event.id === id ? { label: name.trim() } : {}), ...(source?.preparation ? { preparation: source.preparation } : effectSpeed ? { effectSpeed } : {}) };
   }) })) })) });
 }
 
@@ -120,6 +123,7 @@ export function LightingCueComposer({ templateId, document, eventId, ms, duratio
       }}>{title}</button>)}</div>
       <small>{document.outputMode === 'timecode' ? '时间码跟随的工程由控台按时间线运行，不能选单独运行。' : stored.runMode === 'independent' ? '结束前面的灯光组合，再运行本 Cue。' : '保留前面的灯光组合，叠加运行本 Cue。'}{stored.kind === 'ma2' && stored.preparation ? ' 埋步开始时执行切换。' : ''}{stored.kind === 'empty-cue' ? ' 空点位暂不发指令；添加灯光或同步控台后生效。' : ''}</small>
     </div> : null}
+    {targetId && stored?.kind === 'ma2' && stored.action === 'goto' && !stored.preparation ? <LightingCueEffectSpeed document={document} eventId={targetId} disabled={disabled} onChange={onChange} /> : null}
     <div className="cue-composer-body"><div className="cue-content-heading"><span>包含素材</span><small>{ingredients.length}</small></div>
     <div className="cue-ingredients" aria-label="Cue 内容">{ingredients.map((entry, index) => <div className="cue-ingredient" key={`${entry.sequence}:${entry.executor}:${entry.cue}:${entry.delayMs}`}>
       <div className="cue-ingredient-title"><Layers /><strong title={entry.name}>{entry.name}</strong><button disabled={disabled} aria-label={`移除素材 ${entry.name}`} onClick={() => { onIngredients(ingredients.filter((_, i) => i !== index)); setSaved(false); }}><X /></button></div>

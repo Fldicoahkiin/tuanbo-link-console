@@ -2,6 +2,7 @@ import { ma2SongBindingSchema } from './ma2-song-binding';
 import { z } from 'zod';
 import { lightingMusicSchema, musicMarkerKinds } from './lighting-music';
 import { musicStructureSchema } from './music-structure';
+import { lightingEffectSpeedSchema } from './lighting-effect-speed';
 
 const id = z.string().min(1);
 const time = z.number().finite().nonnegative();
@@ -23,13 +24,14 @@ export const lightingEventSchema = z.discriminatedUnion('kind', [
   z.object({ ...eventBase, kind: z.literal('note'), note: dataByte, velocity: dataByte.min(1), releaseVelocity: dataByte.optional(), duration: time.positive() }).strict(),
   z.object({ ...eventBase, kind: z.literal('cc'), controller: dataByte, value: dataByte }).strict(),
   z.object({ ...eventBase, kind: z.literal('program'), program: dataByte }).strict(),
-  z.object({ ...eventBase, kind: z.literal('ma2'), runMode: z.enum(['independent', 'follow']).optional(), cue: z.string().regex(/^\d+(?:\.\d+)?$/).optional(), label: z.string(), action: z.enum(['go', 'goto', 'off']), executor: z.union([z.literal(''), z.string().regex(/^\d+\.\d+$/)]), sequence: z.number().int().positive().optional(), preparation: lightingPreparationSchema.optional() }).strict(),
+  z.object({ ...eventBase, kind: z.literal('ma2'), runMode: z.enum(['independent', 'follow']).optional(), cue: z.string().regex(/^\d+(?:\.\d+)?$/).optional(), label: z.string(), action: z.enum(['go', 'goto', 'off']), executor: z.union([z.literal(''), z.string().regex(/^\d+\.\d+$/)]), sequence: z.number().int().positive().optional(), preparation: lightingPreparationSchema.optional(), effectSpeed: lightingEffectSpeedSchema.optional() }).strict(),
   z.object({ ...eventBase, kind: z.literal('ma2-fader'), executor: z.string().regex(/^[1-9]\d*\.[1-9]\d*$/), fader: z.literal('Master'), level: z.number().finite().min(0).max(1), label: z.string() }).strict(),
   z.object({ ...eventBase, kind: z.literal('point'), value: z.number().finite().min(0).max(127), shape: z.enum(['hold', 'linear', 'smooth']), controlValues: z.tuple([z.number().finite().min(0).max(127), z.number().finite().min(0).max(127)]).optional() }).strict()
 ]).superRefine((event, ctx) => {
   if (event.kind === 'ma2' && event.preparation && (event.action !== 'goto' || Number(event.preparation.cue) === Number(event.cue))) ctx.addIssue({ code: 'custom', message: '埋步需要指定与正式 Cue 不同的准备 Cue' });
   if (event.kind === 'ma2' && !event.executor && event.action !== 'goto') ctx.addIssue({ code: 'custom', message: '序列池调用需要指定序列和 Cue；下一步或关闭需要执行器' });
   if (event.kind === 'ma2' && event.action === 'goto' && (event.cue === undefined || event.sequence === undefined)) ctx.addIssue({ code: 'custom', message: '调用指定 Cue 必须填写 Cue 编号和序列' });
+  if (event.kind === 'ma2' && event.effectSpeed && (event.action !== 'goto' || event.preparation)) ctx.addIssue({ code: 'custom', message: '效果速度只能设在调用指定 Cue 的点上，埋步点不能设' });
 });
 export const lightingClipSchema = z.object({
   id, name: z.string().min(1), start: time, duration: time.positive(),
@@ -105,7 +107,7 @@ export const lightingDocumentSchema = z.object({
     members: z.array(z.object({ name: z.string().min(1), sequence: z.number().int().min(1).max(99999), cue: z.string().regex(/^\d{1,4}(?:\.\d{1,3})?$/), executor: z.union([z.literal(''), z.string().regex(/^[1-9]\d*\.[1-9]\d*$/)]), delayMs: time }).strict()).min(2).max(32).optional()
   }).strict())
 }).strict().superRefine((document, ctx) => {
-  if (document.version === 1 && (document.musicAnalysis || document.music || document.markers.some(marker => marker.kind || marker.color || marker.notes) || document.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.librarySource || event.beatAnchor !== undefined))))) ctx.addIssue({ code: 'custom', message: '新版音乐结构和素材引用必须使用灯光格式 2' });
+  if (document.version === 1 && (document.musicAnalysis || document.music || document.markers.some(marker => marker.kind || marker.color || marker.notes) || document.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.librarySource || event.beatAnchor !== undefined || event.kind === 'ma2' && event.effectSpeed))))) ctx.addIssue({ code: 'custom', message: '新版音乐结构、素材引用和效果速度必须使用灯光格式 2' });
   if (document.tempos[0]?.beat !== 0) ctx.addIssue({ code: 'custom', message: '节拍图必须从第 0 拍开始', path: ['tempos'] });
   document.tempos.forEach((tempo, index) => {
     if (index && tempo.beat <= (document.tempos[index - 1]?.beat ?? 0)) ctx.addIssue({ code: 'custom', message: '变速点必须按节拍递增', path: ['tempos', index] });

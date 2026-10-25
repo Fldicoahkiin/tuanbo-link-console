@@ -215,7 +215,7 @@ export class Ma2LayoutService {
       let owners: z.infer<typeof schema>;
       try { owners = schema.parse(JSON.parse(await readFile(ownership, 'utf8'))); }
       catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') owners = []; else throw error; }
-      const inputHash = createHash('sha256').update(JSON.stringify([request.name, request.points.map(({ id, name, cues }) => ({ id, name, cues }))])).digest('hex');
+      const inputHash = createHash('sha256').update(JSON.stringify([request.name, request.points.map(({ id, name, cues, effectBpm }) => ({ id, name, cues, effectBpm }))])).digest('hex');
       const restoredSources = new Map<string, string>();
       const recoverDraft = async (existing: z.infer<typeof schema>[number]): Promise<void> => {
         const draft = existing.draft!;
@@ -290,6 +290,8 @@ export class Ma2LayoutService {
       // A new installation/computer has no local ownership cache; validate that binding
       // instead of permanently rejecting every saved song.
       const plan = planMa2SongSync(request, remoteXml, [...restoredSources.keys()]);
+      // Writing a step's effect speed needs the console's effect data verified first; until then nothing is written half way.
+      if (plan.changes.some(change => change.effectBpm !== undefined)) throw new Error('效果速度还不能写入控台：需要先用控台导出的效果数据核对写法；本曲未写入');
       // Content kept only in the local snapshot: Cues restored, or taken from this song's own Sequence while the console lacks it.
       const fromSnapshot = (change: Ma2SongPlanChange, ref: { sequence: number }): boolean => ref.sequence === target && (change.restore === true || remoteXml === null);
       const beforeLayout = executorPage ? null : await this.snapshot(connection, layoutRequest);

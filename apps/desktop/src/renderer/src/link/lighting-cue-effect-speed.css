@@ -1,0 +1,17 @@
+/* The effect speed of a Cue step, beside 埋步 in the Cue editor, and its mark on the timeline. */
+.cue-composer .cue-effect-speed { flex-shrink: 0; border-block-end: 1px solid var(--separator); }
+.cue-effect-speed summary { display: flex; align-items: center; gap: 6px; padding: 9px 4px; cursor: pointer; font-size: 14px; }
+.cue-effect-speed summary svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--text-secondary); }
+.cue-effect-speed summary small { margin-left: 6px; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.cue-effect-speed summary small[data-state=fixed], .cue-effect-speed summary small[data-state=song] { color: var(--accent); }
+.cue-effect-speed summary small[data-state=invalid] { color: var(--danger); }
+.cue-effect-speed-body { display: grid; gap: 8px; padding: 0 4px 10px; }
+.cue-effect-speed-mode { display: flex; gap: 4px; }
+.cue-effect-speed-mode button { flex: 1; min-height: 30px; font-size: 12px; }
+.cue-effect-speed-mode button[aria-pressed=true] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--surface)); }
+.cue-effect-speed-field { display: grid; gap: 5px; font-size: 12px; color: var(--text-secondary); }
+.cue-effect-speed-field input, .cue-effect-speed-field select { width: 100%; min-width: 0; min-height: 30px; padding: 5px 7px; border: 1px solid var(--control-border); border-radius: var(--radius-control); background: var(--surface-raised); }
+.cue-effect-speed-body output { font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.cue-effect-speed-body small { color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.cue-effect-speed-body [role=alert] { margin: 0; color: var(--danger); font-size: 12px; }
+.waveform-cue-point[data-effect-speed]::before { content: ''; position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }

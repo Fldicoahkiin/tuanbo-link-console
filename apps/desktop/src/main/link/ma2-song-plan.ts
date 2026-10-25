@@ -4,8 +4,9 @@ import { inspectMa2SequenceXml } from './ma2-timecode-xml';
 
 type Refs = Ma2SongSyncRequest['points'][number]['cues'];
 export type Ma2SongPlan = {
-  sequence: number; name: string; points: Array<{ id: string; cue: string }>;
-  changes: Array<{ cue: string; name: string; refs?: Refs; restore?: boolean }>;
+  sequence: number; name: string; points: Array<{ id: string; cue: string; effectBpm?: number }>;
+  /** `effectBpm`: after its content, the step's effects are set to this speed. */
+  changes: Array<{ cue: string; name: string; refs?: Refs; restore?: boolean; effectBpm?: number }>;
   deletions: string[];
   /** Cues the console no longer holds that this sync writes again. */
   restored: string[];
@@ -42,7 +43,10 @@ function cueBetween(low: number, high: number | undefined, taken: (value: number
  *   Sequence missing from the console is created again the same way;
  * - a Cue renamed or stored again on the console keeps that, unless the software changed the
  *   same point's name or material since the last sync;
- * - a Cue added on the console stays until a point takes it. A console Cue's time is never guessed.
+ * - a Cue added on the console stays until a point takes it. A console Cue's time is never guessed;
+ * - a point's effect speed is set on its step whenever the step's content is written, and on its
+ *   own when the software changed the speed since the last sync. Cleared, the step keeps the
+ *   speed it has; a step stored again on the console keeps its speed until the software changes it.
  */
 export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string | null, restoredCues: readonly string[] = []): Ma2SongPlan {
   const binding = request.binding;
@@ -61,7 +65,7 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
   const bound = new Set(binding?.points.map(point => milli(point.cue)));
   const selfCue = (point: Ma2SongSyncRequest['points'][number]): number | undefined => point.cues.length === 1 && point.cues[0]!.sequence === target ? milli(point.cues[0]!.cue) : undefined;
   // The confirmed point each timeline point continues: its own, or a deleted point whose Cue it still names.
-  const previous = new Map<string, { id: string; cue: string }>();
+  const previous = new Map<string, NonNullable<typeof binding>['points'][number]>();
   for (const point of request.points) {
     const old = binding?.points.find(value => value.id === point.id);
     if (old) previous.set(point.id, old);
@@ -98,24 +102,30 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
     if (value === null) throw new Error('歌曲序列 Cue 编号已超过 9999');
     numbers.set(point.id, value);
   }
-  const points = request.points.map(point => ({ id: point.id, cue: cueText(numbers.get(point.id)!) }));
+  const points = request.points.map(point => ({ id: point.id, cue: cueText(numbers.get(point.id)!), ...(point.effectBpm === undefined ? {} : { effectBpm: point.effectBpm }) }));
   for (const point of request.points) {
-    if (adopted.has(point.id)) continue;
     const number = cueText(numbers.get(point.id)!);
+    const speed = point.effectBpm === undefined ? {} : { effectBpm: point.effectBpm };
+    if (adopted.has(point.id)) {
+      // A console Cue taken as it is keeps its content; a speed set on it still applies.
+      if (point.effectBpm !== undefined) changes.push({ cue: number, name: remote?.cues.find(value => milli(value.number) === numbers.get(point.id))?.name || written(point.name) || `Cue ${Number(number)}`, ...speed });
+      continue;
+    }
     const fallback = `Cue ${Number(number)}`;
     const old = previous.get(point.id);
-    if (!old) { changes.push({ cue: number, name: written(point.name) || fallback, refs: point.cues }); continue; }
+    if (!old) { changes.push({ cue: number, name: written(point.name) || fallback, refs: point.cues, ...speed }); continue; }
     const baseCue = base?.cues.find(value => Number(value.number) === Number(old.cue));
     const remoteCue = remote?.cues.find(value => Number(value.number) === Number(old.cue));
     const restore = restoredCues.includes(old.cue);
     const contentChanged = restore || selfCue(point) !== milli(old.cue);
     const renamed = !sameName(point.name, baseCue?.name);
+    const speedChanged = point.effectBpm !== undefined && point.effectBpm !== old.effectBpm;
     if (!remoteCue) {
-      changes.push({ cue: number, name: written(point.name) || baseCue?.name || fallback, refs: point.cues, ...(!contentChanged || restore ? { restore: true } : {}) });
+      changes.push({ cue: number, name: written(point.name) || baseCue?.name || fallback, refs: point.cues, ...(!contentChanged || restore ? { restore: true } : {}), ...speed });
       restored.push(number);
       continue;
     }
-    if (contentChanged || renamed) changes.push({ cue: number, name: renamed ? written(point.name) || fallback : remoteCue.name || written(point.name) || fallback, ...(contentChanged ? { refs: point.cues, ...(restore ? { restore: true } : {}) } : {}) });
+    if (contentChanged || renamed || speedChanged) changes.push({ cue: number, name: renamed ? written(point.name) || fallback : remoteCue.name || written(point.name) || fallback, ...(contentChanged ? { refs: point.cues, ...(restore ? { restore: true } : {}) } : {}), ...(contentChanged || speedChanged ? speed : {}) });
   }
   // A freed number a new point took is deleted too: the write replaces that Cue instead of editing it.
   const deletions = [...freed].filter(value => onConsole.has(value)).sort((a, b) => a - b).map(cueText);

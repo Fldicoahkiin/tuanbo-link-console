@@ -39,6 +39,7 @@ export * from './lighting-recording';
 export * from './lighting-reaper';
 
 export * from './lighting-effect-group';
+export * from './lighting-effect-speed';
 export * from './lighting-beat-cues';
 export * from './link-user-error';
 export * from './obs-program-session';

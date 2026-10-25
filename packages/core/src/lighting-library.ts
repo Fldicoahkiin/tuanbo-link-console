@@ -1,6 +1,7 @@
 import { createLightingUserLibrary, lightingLibraryViewSchema, lightingUserLibrarySchema, parseLinkProject, validateLinkProjectRelations, type LightingDocument, type LightingEvent, type LightingLibraryEntry, type LightingUserLibrary, type LinkProject } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { LightingTempoMap, lightingEventTime } from './lighting-edit';
+import { lightingPointEffectSpeed } from './lighting-effect-speed';
 import { assertMusicCueConflicts } from './lighting-music';
 const completedLibraries = new WeakMap<LightingUserLibrary,LightingUserLibrary>();
 const beatCategories = createLightingUserLibrary().categories.filter(category=>category.view==='beat');
@@ -118,12 +119,14 @@ export function updateLibraryPlacementsCommand(entryId: string, revision: number
         const events = clip.events.filter(event => !removed.has(event.id));
         for (const [groupId, group] of groups) {
           if (group.trackId !== track.id || group.clipId !== clip.id) continue;
+          // The point keeps the effect speed set on it when its material updates.
+          const effectSpeed = lightingPointEffectSpeed(group.originals, group.originals[0] && 'label' in group.originals[0] ? group.originals[0].label : '');
           members.forEach((member, index) => {
             const at = group.at + member.delayMs;
             if (item.referenceAudio && at >= item.referenceAudio.durationMs) throw new Error(`“${item.title}”更新后超出歌曲范围`);
             const original = group.originals[index];
             const beatAnchor = original?.beatAnchor === undefined ? undefined : map.msToBeat(at - (lighting.music?.firstBeatMs ?? 0));
-            events.push({ id: [...group.ids][index] ?? crypto.randomUUID(), kind: 'ma2', runMode: group.originals.find(value => value.kind === 'ma2')?.runMode, action: 'goto', label: member.name, at: at - clip.start, sequence: member.sequence, cue: member.cue, executor: member.executor, librarySource: { id: entryId, revision }, ...(beatAnchor === undefined ? {} : {beatAnchor}), ...(members.length > 1 ? { effectGroupId: groupId } : {}) });
+            events.push({ id: [...group.ids][index] ?? crypto.randomUUID(), kind: 'ma2', runMode: group.originals.find(value => value.kind === 'ma2')?.runMode, action: 'goto', label: member.name, at: at - clip.start, sequence: member.sequence, cue: member.cue, executor: member.executor, librarySource: { id: entryId, revision }, ...(beatAnchor === undefined ? {} : {beatAnchor}), ...(effectSpeed ? { effectSpeed } : {}), ...(members.length > 1 ? { effectGroupId: groupId } : {}) });
           });
         }
         return { ...clip, events, duration: Math.max(clip.duration, ...events.map(event => event.at + (event.kind === 'note' ? event.duration : .001))) };

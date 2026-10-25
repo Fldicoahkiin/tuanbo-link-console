@@ -121,3 +121,36 @@ it('已绑定歌曲清空时删除全部 Cue，保留空序列；未绑定空曲
   expect(inspectMa2SequenceXml(empty).sequences[0]).toMatchObject({ number: 9000, name: '歌曲', cues: [] });
   expect(ma2SongSyncRequestSchema.safeParse({ ...input, binding: undefined }).success).toBe(false);
 });
+it('效果速度：新点写内容后设速度；只改速度只重写那一步；速度没变或清除时不写', () => {
+  const fresh = request(); fresh.points[0]!.effectBpm = 64;
+  const created = planMa2SongSync(fresh, null);
+  expect(created.changes[0]).toEqual({ cue: '1.000', name: 'DuanLuo 1', refs: fresh.points[0]!.cues, effectBpm: 64 });
+  expect(created.changes.slice(1).some(change => change.effectBpm !== undefined)).toBe(false);
+  expect(created.points[0]).toEqual({ id: fresh.points[0]!.id, cue: '1.000', effectBpm: 64 });
+  const { input, xml } = linked();
+  input.points[2]!.effectBpm = 140;
+  const speed = planMa2SongSync(input, xml);
+  expect(speed.changes).toEqual([{ cue: '3.000', name: 'DuanLuo 3', effectBpm: 140 }]);
+  expect(speed.points[2]).toMatchObject({ cue: '3.000', effectBpm: 140 });
+  input.binding = { ...input.binding!, points: speed.points };
+  expect(planMa2SongSync(input, xml).changes).toEqual([]);
+  delete input.points[2]!.effectBpm;
+  const cleared = planMa2SongSync(input, xml);
+  expect(cleared.changes).toEqual([]);
+  expect(cleared.points[2]).toEqual({ id: input.points[2]!.id, cue: '3.000' });
+});
+it('效果速度：换素材时按当前速度重设；控台删掉的步重建后也重设；控台新增后拖上时间线的 Cue 只设速度', () => {
+  const { input, xml } = linked();
+  input.points[0]!.effectBpm = 90;
+  input.binding = { ...input.binding!, points: input.binding!.points.map((point, index) => index === 0 ? { ...point, effectBpm: 90 } : point) };
+  input.points[0]!.cues = [{ sequence: 2, cue: '1.000', delayMs: 0 }];
+  expect(planMa2SongSync(input, xml).changes).toEqual([{ cue: '1.000', name: 'DuanLuo 1', refs: input.points[0]!.cues, effectBpm: 90 }]);
+  input.points[0]!.cues = [{ sequence: 9000, cue: '1.000', delayMs: 0 }];
+  const missing = planMa2SongSync(input, editMa2SongSequence(xml, '歌曲', [], ['1.000']));
+  expect(missing.changes).toEqual([{ cue: '1.000', name: 'DuanLuo 1', refs: input.points[0]!.cues, restore: true, effectBpm: 90 }]);
+  const added = editMa2SongSequence(xml, '歌曲', [{ cue: '41.000', name: 'KongTaiXinJian', sources: [] }], []);
+  input.points.push({ id: 'adopted', name: '控台新建', atMs: 41000, cues: [{ sequence: 9000, cue: '41', delayMs: 0 }], effectBpm: 30 });
+  const adopted = planMa2SongSync(input, added);
+  expect(adopted.changes).toEqual([{ cue: '41.000', name: 'KongTaiXinJian', effectBpm: 30 }]);
+  expect(adopted.points.at(-1)).toEqual({ id: 'adopted', cue: '41.000', effectBpm: 30 });
+});

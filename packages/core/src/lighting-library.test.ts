@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, createLightingUserLibrary, parseLinkProject, serializeLinkProject, type LightingLibraryEntry } from '@tb/schema';
 import { projectLightingLibrary, setLightingLibraryCommand, updateLibraryTemplates, libraryTemplates, updateLibraryPlacementsCommand, libraryReferenceIssue } from './lighting-library';
 import { saveMa2MaterialLibraryCommand } from './ma2-program-import';
+import { setLightingEffectSpeed } from './lighting-effect-speed';
 
 const entry: LightingLibraryEntry = { id: 'light', name: '三人前区', originalName: '原名', revision: 1, kind: 'single', categoryIds: ['front:bright:3:front'], favorite: false, source: { endpoint: 'console', show: 'show', verified: true }, track: { id: 'track', name: '原名', kind: 'ma2', color: '#abcdef', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {}, clips: [], cueStamp: { mode: 'fixed', sequence: 36, cue: '1.100', executor: '' } } };
 it('建立 24 个面光、12 个轮廓空容器；同一效果可同时归入两种视图', () => {
@@ -43,6 +44,9 @@ it('更换绑定只更新明确选中的歌曲，一次撤销还原；来源相�
   const command = updateLibraryPlacementsCommand(entry.id, 2, ['a']); const updated = command.execute(project);
   expect(updated.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]).toMatchObject({at:1500,sequence:42,cue:'3.250',librarySource:{revision:2}});
   expect(updated.rundown[1]).toEqual(project.rundown[1]);
+  // A point's effect speed stays with it when its material updates.
+  const timed = { ...project, rundown: project.rundown.map((item, index) => index ? item : { ...item, lighting: setLightingEffectSpeed(item.lighting!, 'event-a', { mode: 'fixed', bpm: 90 }) }) };
+  expect(updateLibraryPlacementsCommand(entry.id, 2, ['a']).execute(timed).rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]).toMatchObject({ cue: '3.250', effectSpeed: { mode: 'fixed', bpm: 90 } });
   expect(command.undo(project)).toEqual(project);
   expect(() => updateLibraryPlacementsCommand(entry.id,1,['a']).execute(project)).toThrow('重新生成');
   const baseline={a:project.rundown[0]!.lighting!};

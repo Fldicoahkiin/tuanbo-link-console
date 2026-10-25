@@ -6,6 +6,7 @@ export * from './loop-midi';
 export * from './obs-source';
 export * from './ma2-sync';
 export * from './lighting';
+export * from './lighting-effect-speed';
 export * from './ma2-bridge';
 export * from './ma2-audition';
 export * from './ma2-network-setup';
