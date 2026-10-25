@@ -54,6 +54,11 @@ REQUEST_ID = re.compile(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-
 VERSIONED = re.compile(r'Tuanbo-Link-Console-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-x64\.exe(\.blockmap)?')
 MAX_MANIFEST = 1024 * 1024
 MAX_FILE = 2 * 1024 ** 3
+# A publish needs room for its work copy, the new files on the feed and the archived old ones; below this much free
+# space on any of those disks it is refused before anything is copied.
+MIN_FREE_BYTES = 5 * 1024 ** 3
+# Receipts whose archived installers are kept; older receipts keep their records but lose the archived bytes.
+KEEP_ARCHIVES = 3
 
 
 class Accounts(NamedTuple):
@@ -269,6 +274,36 @@ def archive_feed(root, keep, receipt):
     return archived
 
 
+def prune_archives(root):
+    """Keeps the archived installers of the newest KEEP_ARCHIVES receipts that have any. An older receipt keeps
+    receipt.json and its latest.yml copies, so the publish history and the never-publish-twice check stay intact;
+    only its archived folder goes. Returns the receipt names whose archives were removed."""
+    holders = []
+    for receipt in (root / RECEIPTS).iterdir():
+        archived = receipt / 'archived'
+        if receipt.is_symlink() or not receipt.is_dir() or not os.path.lexists(archived):
+            continue
+        if archived.is_symlink() or not archived.is_dir():
+            raise RuntimeError('回执里的归档目录不安全：' + receipt.name)
+        # The name starts with the UTC second it was made; within one second the folder's write time decides.
+        holders.append((receipt.name[:16], archived.stat().st_mtime_ns, receipt))
+    holders.sort()
+    pruned = []
+    for _stamp, _written, receipt in holders[:-KEEP_ARCHIVES]:
+        shutil.rmtree(receipt / 'archived')
+        pruned.append(receipt.name)
+    return pruned
+
+
+def require_free_space(root):
+    """Refuses a publish while the disk holding the work copies, the feed or root's backups is nearly full."""
+    for relative in (PUBLISHER + '/work', FEED, RECEIPTS):
+        free = shutil.disk_usage(root / relative).free
+        if free < MIN_FREE_BYTES:
+            raise RuntimeError(f'磁盘余量不足：{relative} 所在磁盘只剩 {free / 1024 ** 3:.1f} GB，'
+                               f'低于 {MIN_FREE_BYTES / 1024 ** 3:.0f} GB，拒绝发布。清理后在后台手动发布')
+
+
 def archived_versions(names):
     return sorted({VERSIONED.fullmatch(name).group(1) for name in names}, key=version_key)
 
@@ -306,9 +341,13 @@ def install(source, release, root, request=None):
         archived = archive_feed(root, keep, receipt)
     except (OSError, RuntimeError) as error:
         raise RuntimeError(f'已发布 {release["version"]}，但移出旧版本失败：{error}') from None
+    try:
+        pruned = prune_archives(root)
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError(f'已发布 {release["version"]}，但清理旧归档失败：{error}') from None
     result = {'kind': 'publish', 'version': release['version'], 'gitSha': release['gitSha'], 'backup': str(receipt),
               'previousFeed': previous is not None, 'artifacts': release['records'], 'signing': release['signing'],
-              'releaseSignature': release['kid'], 'archived': archived, 'request': request}
+              'releaseSignature': release['kid'], 'archived': archived, 'prunedArchives': pruned, 'request': request}
     (receipt / 'receipt.json').write_text(json.dumps(result, indent=2) + '\n')
     return result
 
@@ -328,6 +367,7 @@ def publish(source, manifest_sha, git_sha, version, root=Path('/'), accounts=Non
     accounts = accounts or system_accounts()
     check_layout(root, accounts)
     with locked(root):
+        require_free_space(root)
         try:
             descriptor = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         except OSError:
@@ -352,6 +392,7 @@ def open_staged(staging_fd, name, accounts):
 
 def publish_staged(staging_fd, name, manifest_sha, root, accounts, request):
     """manifest_sha is the manifest the console confirmed, or None when the release goes live on its own."""
+    require_free_space(root)
     entry = open_staged(staging_fd, name, accounts)
     try:
         with candidate(root, entry) as work:
@@ -431,7 +472,12 @@ def rollback(version, root, request):
         archived = archive_feed(root, {version}, receipt)
     except (OSError, RuntimeError) as error:
         raise RuntimeError(f'更新源已回到 {version}，但移出撤下的版本失败：{error}') from None
-    result = {'kind': 'rollback', 'version': version, 'backup': str(receipt), 'archived': archived, 'request': request}
+    try:
+        pruned = prune_archives(root)
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError(f'更新源已回到 {version}，但清理旧归档失败：{error}') from None
+    result = {'kind': 'rollback', 'version': version, 'backup': str(receipt), 'archived': archived, 'prunedArchives': pruned,
+              'request': request}
     (receipt / 'receipt.json').write_text(json.dumps(result, indent=2) + '\n')
     return result
 
