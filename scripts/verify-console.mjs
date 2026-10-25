@@ -127,6 +127,22 @@ try {
   await dialog.getByLabel('用户名').fill('backup-admin'); await dialog.getByRole('button', { name: '生成开通凭据' }).click(); await dialog.locator('pre.secret').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   await page.getByRole('row', { name: /backup-admin/ }).getByText('待开通').waitFor();
   await page.screenshot({ path: fileURLToPath(new URL('owner-desktop.png', shots)), fullPage: true });
+  // 问题反馈：软件里提交的一条反馈出现在待办和列表里；详情能下载诊断包，结案必须写处理结论。
+  const report = await fixture.submitFeedback('播放第 3 首时灯光没有跟上，OBS 画面正常');
+  await page.getByRole('button', { name: '工作台', exact: true }).click(); await page.getByRole('button', { name: /待处理问题反馈/ }).click();
+  await page.getByRole('row', { name: new RegExp(report.number) }).click(); await page.getByRole('heading', { name: '反馈详情' }).waitFor();
+  await page.getByText('播放第 3 首时灯光没有跟上，OBS 画面正常').waitFor(); await page.getByText('微信 fixture').waitFor();
+  // 浏览器下载不经过测试路由，这里用同一会话请求链接地址，核对文件名、类型和大小。
+  const served = await page.evaluate(async href => { const response = await fetch(href); return { status: response.status, disposition: response.headers.get('content-disposition'), type: response.headers.get('content-type'), bytes: (await response.arrayBuffer()).byteLength }; },
+    await page.getByRole('link', { name: '下载诊断包' }).getAttribute('href'));
+  assert.deepEqual(served, { status: 200, disposition: `attachment; filename="${report.number}.tbdiag.gz"`, type: 'application/gzip', bytes: report.bytes });
+  await page.getByRole('button', { name: '处理问题反馈', exact: true }).click();
+  await dialog.getByLabel('处理状态').selectOption('closed'); await dialog.getByRole('button', { name: '保存处理结果' }).click();
+  await dialog.getByText('关闭前请写明处理结论').waitFor();
+  await dialog.getByLabel('处理结论').fill('MA2 时间线 MTC 起始码偏了 2 帧，已改正'); await dialog.getByRole('button', { name: '保存处理结果' }).click();
+  await dialog.getByText('反馈已更新').waitFor(); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByText('MA2 时间线 MTC 起始码偏了 2 帧，已改正').waitFor();
+  await page.screenshot({ path: fileURLToPath(new URL('owner-feedback.png', shots)), fullPage: true });
   // 软件更新：只有管理员可见；发布对话框带上所选候选的 manifest 摘要，结果以服务器发布脚本为准（此处不提交）。
   await page.getByRole('button', { name: '软件更新', exact: true }).click();
   await page.getByText('0.5.0-13f7e625898e', { exact: true }).waitFor();
@@ -146,6 +162,9 @@ try {
     assert.equal(await page.getByRole('heading', { name: '收款趋势' }).count(), role === 'finance' ? 1 : 0);
     assert.equal(await page.getByRole('button', { name: '人员管理', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: '软件更新', exact: true }).count(), 0);
+    // 反馈带联系方式和诊断包，只有运营能看到入口。
+    assert.equal(await page.getByRole('button', { name: '问题反馈', exact: true }).count(), role === 'operations' ? 1 : 0);
+    assert.equal(await page.getByRole('button', { name: /待处理问题反馈/ }).count(), role === 'operations' ? 1 : 0);
     await page.getByRole('button', { name: '订单中心', exact: true }).click(); await page.getByRole('row', { name: /BROWSER-ORDER-1/ }).getByRole('button', { name: '查看详情' }).click(); await page.getByRole('heading', { name: '订单详情' }).waitFor();
     assert.equal(await page.getByRole('button', { name: '重发领取凭据', exact: true }).count(), role === 'operations' ? 1 : 0);
     assert.equal(await page.getByRole('button', { name: '登记已办理的退款', exact: true }).count(), role === 'finance' ? 1 : 0);
@@ -180,5 +199,5 @@ try {
     await page.screenshot({ path: fileURLToPath(new URL(`${role}.png`, shots)), fullPage: true }); await context.close();
   }
   assert.deepEqual(errors, []);
-  console.log('Console browser acceptance passed: real isolated enrollment/login, manual delivery, protected reveal, operations ticket closure, finance refund/invoice records, four roles, mobile layout. No production payments or credentials used.');
+  console.log('Console browser acceptance passed: real isolated enrollment/login, manual delivery, protected reveal, operations ticket closure, problem report download and closure, finance refund/invoice records, four roles, mobile layout. No production payments or credentials used.');
 } finally { await browser.close(); await fixture.close(); }

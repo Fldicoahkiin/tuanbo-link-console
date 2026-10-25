@@ -1,11 +1,14 @@
+import { createReadStream } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
 import { enrollmentSchema, loginSchema, pageQuerySchema, sessionSchema } from './console-contract';
 import type { ConsoleChannels, ConsoleService } from './console-service';
 import type { UpdateReleases } from './update-releases';
+import type { FeedbackStore } from './feedback';
 import { ServiceError } from './service';
 
-export type ConsoleHttp = { service: ConsoleService; origin: string; updates?: UpdateReleases };
+export type ConsoleHttp = { service: ConsoleService; origin: string; updates?: UpdateReleases; feedback?: FeedbackStore };
 const cookieName = '__Host-tblink-console';
 export async function dispatchConsole(options: ConsoleHttp, request: IncomingMessage, response: ServerResponse, requestId: string, address: string, readBody: () => Promise<unknown>, channels: ConsoleChannels): Promise<unknown> {
   const origin = new URL(options.origin);
@@ -53,9 +56,22 @@ export async function dispatchConsole(options: ConsoleHttp, request: IncomingMes
   }
   const operation = /^\/console-api\/operations\/([a-f0-9-]{36})$/.exec(path);
   if (request.method === 'GET' && operation) return options.service.operation(z.string().uuid().parse(operation[1]), session);
-  const detail = /^\/console-api\/(orders|licenses|tickets)\/([a-f0-9-]{36})$/.exec(path);
+  const diagnostic = /^\/console-api\/feedback\/([a-f0-9-]{36})\/diagnostic$/.exec(path);
+  if (request.method === 'GET' && diagnostic) {
+    const id = z.string().uuid().parse(diagnostic[1]);
+    // Permission and the report first; the file only after that, and the download is audited once it is known to exist.
+    const report = options.service.feedbackAttachment(id, session);
+    const bytes = options.feedback ? await options.feedback.attachmentSize(id) : null;
+    if (!options.feedback || bytes === null) throw new ServiceError(404, 'ATTACHMENT_MISSING', '诊断包文件不在服务器上，请让客户用「另存为文件」重新发送');
+    options.service.auth.audit(session.user.id, 'feedback.diagnostic-downloaded', id, report.number, 'success', requestId);
+    response.setHeader('Content-Type', 'application/gzip'); response.setHeader('Content-Length', String(bytes));
+    response.setHeader('Content-Disposition', `attachment; filename="${report.number}.tbdiag.gz"`);
+    await pipeline(createReadStream(options.feedback.attachmentPath(id)), response);
+    return null;
+  }
+  const detail = /^\/console-api\/(orders|licenses|tickets|feedback)\/([a-f0-9-]{36})$/.exec(path);
   if (request.method === 'GET' && detail) return options.service.detail(detail[1]!, z.string().uuid().parse(detail[2]), session);
-  const list = /^\/console-api\/(orders|licenses|tickets|finance|audit|users|exceptions)$/.exec(path);
+  const list = /^\/console-api\/(orders|licenses|tickets|feedback|finance|audit|users|exceptions)$/.exec(path);
   if (request.method === 'GET' && list) return options.service.list(list[1]!, pageQuerySchema.parse(Object.fromEntries(url.searchParams)), session);
   throw new ServiceError(404, 'NOT_FOUND', '接口不存在');
 }

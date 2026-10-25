@@ -47,6 +47,8 @@ small { display: block; color: var(--muted); font-size: 11px; font-weight: 400; 
 .section-title>span { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
 .panel { padding: 26px 0; background: transparent; border: 0; border-top: 1px solid var(--border); border-radius: 0; margin-bottom: 22px; box-shadow: none; }
 .details { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 24px 28px; margin: 0; }
+/* 反馈的现象说明和处理结论可能有多行，占满一行并保留换行。 */
+.details>[data-field=description], .details>[data-field=resolution], .details>[data-field=attachmentIssue] { grid-column: 1 / -1; }.details>[data-field=description] dd, .details>[data-field=resolution] dd { white-space: pre-line; font-size: 14px; line-height: 1.6; }
 .details>div { min-width: 0; }.details dt { color: var(--muted); font-size: 11px; margin-bottom: 7px; }.details dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; font-size: 13px; }
 .actions { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 18px; }.actions:empty { display: none; }
 .panel .actions { margin: 26px 0 0; padding-top: 20px; border-top: 1px solid var(--border); }

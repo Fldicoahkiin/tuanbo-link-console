@@ -18,6 +18,8 @@ export const serviceConfigSchema = z.object({
   // Update publishing: this account's request directory, and the root publisher's directory it only reads
   // (results and status). Both unset leaves update publishing off.
   UPDATE_REQUEST_DIRECTORY: z.string().min(1).optional(), UPDATE_PUBLISHER_DIRECTORY: z.string().min(1).optional(),
+  // In-app problem reports: where their diagnostic packages are kept. Unset, POST /v1/feedback answers 404 FEEDBACK_DISABLED.
+  FEEDBACK_DIRECTORY: z.string().regex(/^\/[^\0]+$/, '反馈目录必须是绝对路径').optional(),
   // 未设置时沿用生产网关和现有公网回调域名；沙箱联调须显式设为 sandbox。
   PAYMENT_ENVIRONMENT: paymentEnvironmentSchema.default('production'),
   PAYMENT_NOTIFY_ORIGIN: z.string().url().default('https://api.tuanbo-link.jinhefilm.com'),
