@@ -50,6 +50,7 @@ docs/                          当前设计、实施和验收文档
 
 - TypeScript 使用严格模式，穷举 discriminated union，跨边界用 Zod 校验。
 - UI 图标使用 `lucide-react`，禁止 Emoji 图标。
+- 用户能看到的文案按 [docs/UI_COPY_GUIDE.md](./docs/UI_COPY_GUIDE.md) 写：先说发生了什么，再说怎么办，用日常说法。
 - 正式 UI 任务应加载 `frontend-design` skill；不可用时必须明确说明并遵循现有设计系统。
 - TypeScript 任务应加载项目要求的 TypeScript skill；不可用时必须明确说明，不得假装加载。
 - 不创建 `_v2`、`_new`、`_fixed`、`_enhanced`、`_refactored` 等后缀文件或符号。
