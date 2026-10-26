@@ -159,7 +159,6 @@ static DWORD WINAPI commands(void *unused) {
       UINT64 frame = (UINT64)llround(start * engine.rate / 1000.0);
       bad_state = !engine.client || frame < engine.start || frame >= engine.end;
     }
-    if (!stale && !bad_state) engine.generation = generation;
     LeaveCriticalSection(&engine.lock);
     if (!stale && !bad_state) engine.midi_suspended = TRUE;
     LeaveCriticalSection(&engine.midi_lock);
@@ -192,7 +191,13 @@ static DWORD WINAPI commands(void *unused) {
       engine.state = FAILED; engine.audio_error = (int32_t)result; engine.clock_qpc = 0;
       LeaveCriticalSection(&engine.lock);
     }
-    EnterCriticalSection(&engine.midi_lock); engine.midi_suspended = op == 7; LeaveCriticalSection(&engine.midi_lock);
+    // Telemetry carries the new generation only from here on, so a clock with it always shows
+    // this operation's outcome. Until now it kept the previous one: a song switch that read
+    // the stopped state of the song before it looked like a failed preparation.
+    EnterCriticalSection(&engine.midi_lock);
+    EnterCriticalSection(&engine.lock); engine.generation = generation; LeaveCriticalSection(&engine.lock);
+    engine.midi_suspended = op == 7;
+    LeaveCriticalSection(&engine.midi_lock);
     acknowledge(request, generation, (int32_t)result);
     if (op == 7) break;
   }
@@ -203,6 +208,7 @@ int main(int argc, char **argv) {
   if (argc == 2 && strcmp(argv[1], "--device-service") == 0) return serve_devices(true);
   if (argc == 2 && strcmp(argv[1], "--audio-device-service") == 0) return serve_devices(false);
   if (argc == 2 && strcmp(argv[1], "--midi-output") == 0) return serve_midi_output();
+  if (argc == 2 && strcmp(argv[1], "--midi-input") == 0) return serve_midi_input();
   if (argc != 1) return 2;
   _setmode(_fileno(stdin), _O_BINARY);
   InitializeCriticalSection(&engine.lock); InitializeCriticalSection(&engine.output_lock); InitializeCriticalSection(&engine.midi_lock);

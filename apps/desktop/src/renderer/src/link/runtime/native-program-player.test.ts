@@ -21,7 +21,7 @@ function fixture() {
       generation: request.generation, itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'ready', reason: null,
       currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: status?.positionMs ?? 0 })),
     onNativePlaybackStatus: (receive: (value: NativePlayerStatus) => void) => { listener = receive; return () => { listener = null; }; },
-    getNativePlaybackDevices: vi.fn(() => Promise.resolve({ protocol: 4 as const, audio: [], midiOutputs: [] })),
+    getNativePlaybackDevices: vi.fn(() => Promise.resolve({ protocol: 4 as const, audio: [], midiOutputs: [], midiInputs: [] })),
     prepareNativePlayback: vi.fn((request: NativePlayerPrepare): Promise<NativePlayerStatus> => {
       const s = request.snapshot;
       status = { version: 1, sessionId: request.sessionId, generation: request.generation, itemId: s.itemId,

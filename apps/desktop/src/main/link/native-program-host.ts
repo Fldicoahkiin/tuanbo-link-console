@@ -2,6 +2,7 @@ import { NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlay
 import type { LinkProject, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import { NativeLightingOutput } from './native-lighting-output';
+import type { MidiClaim, MidiClaimOwner } from './midi-port-broker';
 
 type AudioApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePlayback' | 'getNativePlaybackDevices'
   | 'prepareNativeObs' | 'stopNativeObs' | 'onNativeObsStatus' | 'preloadNativeObs' | 'cancelNativeObsPreload'>;
@@ -13,6 +14,8 @@ type Dependencies = {
   /** Windows MIDI outputs as listed now, checked again when the last listing failed: waits for a lost action MIDI port. */
   midiOutputs(): Promise<readonly { id: number; name: string }[]>;
   authorize(): Promise<void>;
+  /** Formal playback takes an output from the editor before opening it. */
+  claimMidiOutput?: (portName: string, owner: MidiClaimOwner) => Promise<MidiClaim>;
   configuration: InternalPlayerDependencies['configuration'];
   preciseSeeking(): boolean;
   changed(state: InternalPlayerState): void;
@@ -37,15 +40,17 @@ export class NativeProgramHost {
 
   constructor(project: LinkProject, path: string, revision: number, private readonly dependencies: Dependencies) {
     const error = (message: string) => this.controller.reportUnavailable(message);
+    const claim = dependencies.claimMidiOutput;
     this.midi = new NativeMidiHost({ audio: () => dependencies.audio(), profile: () => dependencies.configuration().lightingProfile ?? null,
       executable: dependencies.executable, authorize: () => dependencies.authorize(), changed: state => dependencies.midiChanged(state), error,
+      ...claim ? { claim: (name: string) => claim(name, '动作 MIDI') } : {},
       fault: (message, itemId) => { dependencies.notice(message, itemId); this.controller.reportFault(message); },
       outputs: () => dependencies.midiOutputs(), recovered: (report, itemId) => {
         dependencies.midiRecovered(report, itemId); this.controller.clearFault(report.fault);
         this.controller.reportUnavailable(`动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）`);
       } });
     this.lighting = new NativeLightingOutput({ executable: dependencies.executable, network: dependencies.network,
-      authorize: () => dependencies.authorize(), error });
+      authorize: () => dependencies.authorize(), error, ...claim ? { claim: (name: string) => claim(name, '灯光 MIDI') } : {} });
     this.controller = new NativeProgramPlayer(project, path, revision, {
       prepare: async (itemId, positionMs, { signal }) => {
         const audio = dependencies.audio();

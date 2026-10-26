@@ -36,7 +36,7 @@ it('只允许一条在途；后续消息留在可取消队列，保留二进制�
 it('停止取消所有未发送动作；迟到确认不复活队列、不假称在途未发送', async () => {
   const f = fixture(); await f.open();
   const pending = [f.output.send([0x90, 60, 100], f.now() + 1_000_000n), f.output.send([0x90, 61, 100], f.now() + 1_000_000n)]
-    .map(promise => expect(promise).rejects.toThrow('在途指令可能已发送'));
+    .map(promise => expect(promise).rejects.toThrow('正在发的消息可能已经发出'));
   f.read(); const closing = f.output.close(); expect(f.output.close()).toBe(closing);
   f.reply(2, 0, 1n); expect(f.child.stdin.read()).toBeNull(); expect(f.child.stdin.writableEnded).toBe(true);
   await Promise.all(pending); f.child.emit('close', 0); await closing;
@@ -45,19 +45,19 @@ it('停止取消所有未发送动作；迟到确认不复活队列、不假称�
 });
 
 it('准备超时立即停止参与，迟到的端口准备结果不能在歌曲中途启用', async () => {
-  const f = fixture(), pending = expect(f.output.open('明确端口')).rejects.toThrow('超过 2 秒');
+  const f = fixture(), pending = expect(f.output.open('明确端口')).rejects.toThrow('2 秒内没有准备好');
   await vi.advanceTimersByTimeAsync(2000); await pending; f.reply(1, 0, 1n);
-  await expect(f.output.send([0x90, 60, 100], f.now() + 1_000_000n)).rejects.toThrow('超过 2 秒');
+  await expect(f.output.send([0x90, 60, 100], f.now() + 1_000_000n)).rejects.toThrow('2 秒内没有准备好');
   expect(f.errors).toHaveLength(1); await f.close();
 });
 
 it('动作确认超时属于结果不明，不重发、不发送排队的旧 Cue', async () => {
   const f = fixture(); await f.open();
   const pending = [f.output.send([0x90, 60, 100], f.now() + 1_000_000n), f.output.send([0x80, 60, 0], f.now() + 1_000_000n)]
-    .map(promise => expect(promise).rejects.toThrow('在途结果不明'));
+    .map(promise => expect(promise).rejects.toThrow('无法确定是否已发出'));
   f.read(); await vi.advanceTimersByTimeAsync(100); await Promise.all(pending);
   f.reply(2, 0, 1n); expect(f.child.stdin.read()).toBeNull(); expect(f.errors).toHaveLength(1);
-  const closing = expect(f.output.close()).rejects.toThrow('保留进程');
+  const closing = expect(f.output.close()).rejects.toThrow('进程保留');
   await vi.advanceTimersByTimeAsync(5000); await closing;
 });
 
@@ -72,7 +72,7 @@ it('驱动确认时间、请求身份、消息格式均校验；不能伪造当�
 });
 
 it('Windows 原生拒绝发送时保留具体原因，错误退出不能当作正常关闭', async () => {
-  const f = fixture(), pending = expect(f.output.open('明确端口')).rejects.toThrow('指定输出端口不存在');
+  const f = fixture(), pending = expect(f.output.open('明确端口')).rejects.toThrow('找不到指定的输出端口');
   f.reply(1, -2, 0n); await pending;
   const closing = expect(f.output.close()).rejects.toThrow('异常退出'); f.child.emit('close', 3); await closing;
   await expect(f.output.open('明确端口')).rejects.toThrow('必须明确准备新会话');
@@ -81,6 +81,6 @@ it('Windows 原生拒绝发送时保留具体原因，错误退出不能当作�
 it('响应和队列均有容量限制', async () => {
   const f = fixture(); await f.open();
   const pending = Array.from({ length: 33 }, () => expect(f.output.send([0xc0, 1], f.now() + 1_000_000n)).rejects.toThrow('超过容量'));
-  await expect(f.output.send([0xc0, 2], f.now() + 1_000_000n)).rejects.toThrow('队列已满');
+  await expect(f.output.send([0xc0, 2], f.now() + 1_000_000n)).rejects.toThrow('排队已满');
   f.child.stdout.write('x'.repeat(4097)); await Promise.all(pending); await f.close();
 });

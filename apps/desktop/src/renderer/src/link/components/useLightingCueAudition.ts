@@ -10,6 +10,7 @@ export function useLightingCueAudition(document: LightingDocument, projectId: st
   const [enabled, setEnabled] = useState(true);
   const [status, setStatus] = useState('选中灯光 Cue 即发送到控台');
   useEffect(() => () => output.cancel(), [output, projectId, item?.id, enabled]);
+  useEffect(() => () => output.close(), [output]);
   const select = (eventId: string, template = false): void => {
     // Clicking a library Cue is an explicit audition, independent of timeline-selection preview.
     if (!projectId || !template && !enabled) return;

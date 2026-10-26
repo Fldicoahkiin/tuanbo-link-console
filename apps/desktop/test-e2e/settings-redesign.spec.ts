@@ -18,7 +18,7 @@ async function installSettingsDevices(app: ElectronApplication): Promise<void> {
       'link:load-profile': () => saved,
       'link:security-availability': () => true,
       'link:update-status': () => ({ phase: 'upToDate', currentVersion: '0.4.46', availableVersion: null, releaseDate: null, progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, installBlockedReason: null, message: '当前已是最新版本' }),
-      'link:native-player-devices': () => ({ protocol: 4, audio: [], midiOutputs: [] }),
+      'link:native-player-devices': () => ({ protocol: 4, audio: [], midiOutputs: [], midiInputs: [] }),
       'link:loop-midi': () => ({ state: 'missing', executablePath: null, pid: null, startTime: null }),
       'link:obs-snapshot': () => ({ status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null }),
       'link:ma2-network-status': () => ({ state: 'disconnected', settings: null, passwordSaved: false, profiles: [], version: null, error: null }),

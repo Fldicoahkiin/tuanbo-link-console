@@ -1,4 +1,4 @@
-import { requestMidiAccess } from '../../registry/midi-access';
+import { requestMidiAccess, type MidiMessage } from '../../registry/midi-access';
 import { useEffect, useRef, useState } from 'react';
 import type { PlaybackClock } from '../../registry/playback-clock';
 import { LightingRecorder, LightingTempoMap } from '@tb/core/link';
@@ -40,11 +40,15 @@ export function LightingRecordingControls(props: { audioAvailable?: boolean; cli
     if (!mapping) { props.notify('请先在“设置 → 设备连接”里选择“操作录制输入”端口', 'error'); return; }
     if (!props.audioAvailable || !props.clock.read().ready) { props.notify('请先准备好歌曲音频，再录制灯光', 'error'); return; }
     const token = ++generation.current; setConnecting(true);
+    /** Closes the input when recording did not start after it opened. */
+    let abandon = (): void => undefined;
     try {
-      const access = await requestMidiAccess({ sysex: true });
+      const access = await requestMidiAccess();
       const matching = [...access.inputs.values()].filter((port) => port.name === mapping.portName && port.state === 'connected');
       const input = matching[0]; if (matching.length !== 1 || !input) throw new Error('录制输入端口没有连接，或有多个同名端口');
-      await input.open(); if (token !== generation.current) return;
+      const closeInput = (): void => { void input.close().catch((error: unknown) => console.error(`MIDI 接口「${input.name}」关闭失败`, error)); };
+      abandon = closeInput;
+      await input.open(); if (token !== generation.current) { closeInput(); return; }
       const map = new LightingTempoMap(props.tempos);
       const audioEndMs = props.clock.read().durationMs;
       const end = audioEndMs > 0 ? (props.clip.timeLock === 'time' ? audioEndMs : map.msToBeat(audioEndMs)) - props.clip.start : props.clip.duration;
@@ -59,22 +63,30 @@ export function LightingRecordingControls(props: { audioAvailable?: boolean; cli
         if (boundary === 'seek') recorder.interrupt(lastPosition);
         else if (!clock.read().seeking) { lastPosition = readPosition(); recorder.interrupt(lastPosition); }
       });
-      const disconnected = (): void => { if (input.state !== 'connected') { stop(); latest.current.notify('灯光录制输入已断开，已保存收到的内容', 'error'); } };
+      const disconnected = (): void => {
+        if (session.current?.recorder !== recorder || input.state === 'connected' && input.connection === 'open') return;
+        stop(); latest.current.notify(`${input.closedReason ?? '灯光录制输入已断开'}，已保存收到的内容`, 'error');
+      };
       const timer = window.setInterval(() => {
         const output = clock.read();
         if (!output.ready || !output.playing || output.seeking) return;
         lastPosition = readPosition(); recorder.advance(lastPosition);
       }, 16);
-      const listener = (event: MIDIMessageEvent): void => {
+      const listener = (event: MidiMessage): void => {
         const output = clock.read();
-        try { if (event.data && output.ready && output.playing && !output.seeking) { lastPosition = readPosition(); recorder.receive([...event.data], lastPosition); } }
+        try { if (output.ready && output.playing && !output.seeking) { lastPosition = readPosition(); recorder.receive([...event.data], lastPosition); } }
         catch (error) { stop(); latest.current.notify(error instanceof Error ? error.message : String(error), 'error'); }
       };
-      const cleanup = (): void => { window.clearInterval(timer); input.removeEventListener('midimessage', listener); access.removeEventListener('statechange', disconnected); unsubscribe(); };
+      let unsubscribeState = (): void => undefined, unsubscribeMessages = (): void => undefined;
+      const cleanup = (): void => { window.clearInterval(timer); unsubscribeMessages(); unsubscribeState(); unsubscribe(); closeInput(); };
       session.current = { cleanup, position: () => clock.read().ready ? readPosition() : lastPosition, recorder, clip: recordingClip, map };
-      access.addEventListener('statechange', disconnected);
-      input.addEventListener('midimessage', listener); setRecording(true);
-    } catch (error) { if (token === generation.current) props.notify(error instanceof Error ? error.message : String(error), 'error'); }
+      unsubscribeState = access.onStateChange(disconnected);
+      unsubscribeMessages = input.onMessage(listener); setRecording(true);
+      abandon = () => undefined;
+    } catch (error) {
+      abandon();
+      if (token === generation.current) props.notify(error instanceof Error ? error.message : String(error), 'error');
+    }
     finally { if (token === generation.current) setConnecting(false); }
   };
   return <button className="timeline-record-button" disabled={!initialized || connecting || (!recording && props.track.locked)} aria-pressed={recording} title="记录播放时收到的 MIDI 操作，输入端口在设置里选择" onClick={() => { if (recording) stop(); else void start(); }}>{connecting ? '连接中…' : recording ? '结束录制' : '录制灯光'}</button>;

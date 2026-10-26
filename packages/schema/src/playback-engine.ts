@@ -53,7 +53,8 @@ export type NativePlaybackEvent = z.infer<typeof nativePlaybackEventSchema>;
 
 export const nativePlaybackDevicesSchema = z.object({ protocol: z.literal(4),
   audio: z.array(z.object({ id: audioDeviceIdSchema, name: z.string().min(1).max(2048), isDefault: z.boolean() }).strict()).max(256),
-  midiOutputs: z.array(z.object({ id: z.number().int().min(0).max(65535), name: z.string().min(1).max(256) }).strict()).max(65536)
+  midiOutputs: z.array(z.object({ id: z.number().int().min(0).max(65535), name: z.string().min(1).max(256) }).strict()).max(65536),
+  midiInputs: z.array(z.object({ id: z.number().int().min(0).max(65535), name: z.string().min(1).max(256) }).strict()).max(65536)
 }).strict();
 export type NativePlaybackDevices = z.infer<typeof nativePlaybackDevicesSchema>;
 export const nativeDeviceQueryRequestSchema = z.object({ version: z.literal(1), scope: z.enum(['all', 'audio']) }).strict();

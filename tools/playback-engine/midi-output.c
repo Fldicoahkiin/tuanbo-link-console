@@ -56,6 +56,8 @@ static BOOL valid_message(const unsigned char *bytes, UINT32 length) {
     for (UINT32 i = 1; i + 1 < length; i++) if (bytes[i] >= 128) return FALSE;
     return TRUE;
   }
+  // MTC quarter frame: timecode for the editor's lighting preview.
+  if (status == 0xf1) return length == 2 && bytes[1] < 128;
   if (type < 0x80 || type > 0xe0 || length != (type == 0xc0 || type == 0xd0 ? 2u : 3u)) return FALSE;
   for (UINT32 i = 1; i < length; i++) if (bytes[i] >= 128) return FALSE;
   return TRUE;

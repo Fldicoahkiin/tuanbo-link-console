@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
 import { answerStartCheck } from './start-check';
 import { closeDiscarding } from './save-questions';
+import { stubMidiPorts } from './midi-ports';
 
 test('OBS 和 MIDI 均未连接时，有音频仍可开始播放', async ({}, info) => {
   const wav = Buffer.alloc(44 + 8000 * 40, 128);
@@ -23,9 +24,7 @@ test('OBS 和 MIDI 均未连接时，有音频仍可开始播放', async ({}, in
   try {
     if (process.platform === 'win32') expect(await app.evaluate(({ app }) => app.isHardwareAccelerationEnabled())).toBe(false);
     const page = await app.firstWindow();
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.reject(new Error('未连接 MIDI 设备')) });
-    });
+    await stubMidiPorts(app);
     await page.reload();
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     // The console timeline is not yet confirmed for this song, so the start check asks; the operator plays without lighting.
@@ -86,9 +85,7 @@ test('真实损坏音频报错不挤压播放器，修复文件后可重新播�
   try {
     const page = await app.firstWindow();
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.reject(new Error('未连接 MIDI 设备')) });
-    });
+    await stubMidiPorts(app);
     await page.reload();
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();

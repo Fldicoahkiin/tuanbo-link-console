@@ -297,7 +297,7 @@ export class InternalPlaybackController {
       if (progress >= 1 && this.fadeTimer) { clearInterval(this.fadeTimer); this.fadeTimer = null; }
     }, 20);
   }
-  dispose(): void { this.disposed = true; ++this.generation; this.silence(); this.audio.onended = null; this.audio.onerror = null; this.audio.removeAttribute('src'); this.audio.load(); void this.output.dispose().catch((error: unknown) => this.update({ status: 'error', error: `关闭音频输出失败：${String(error)}` })); }
+  dispose(): void { this.disposed = true; ++this.generation; this.silence(); this.mtc.close(); this.lighting.close(); this.audio.onended = null; this.audio.onerror = null; this.audio.removeAttribute('src'); this.audio.load(); void this.output.dispose().catch((error: unknown) => this.update({ status: 'error', error: `关闭音频输出失败：${String(error)}` })); }
 
   private tick(): void {
     if (this.state.status !== 'playing' || this.finishingLighting) return;

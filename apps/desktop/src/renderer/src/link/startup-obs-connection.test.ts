@@ -26,7 +26,7 @@ const running = { ...stopped, status: 'running' as const, pid: 1234, owned: true
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(readNativeDevices).mockResolvedValue({ protocol: 4, audio: [], midiOutputs: [] });
+  vi.mocked(readNativeDevices).mockResolvedValue({ protocol: 4, audio: [], midiOutputs: [], midiInputs: [] });
   mockDesktop.getSecurityPreflight.mockResolvedValue({ credentialDecryptable: true, logRedactionReady: true, error: null });
   mockDesktop.startExternalApplication.mockResolvedValue(running);
   mockDesktop.connectObs.mockResolvedValue({ status: 'connected', obsVersion: '32.2.2', webSocketVersion: '5.6.3', error: null });

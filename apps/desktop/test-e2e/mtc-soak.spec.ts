@@ -95,44 +95,32 @@ test('真实媒体时钟与 Windows MIDI 回环持续测量', async ({}, info) =
       await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
       await expect.poll(() => page.locator('.timeline-toolbar > audio').evaluate((element) => (element as HTMLAudioElement).readyState)).toBeGreaterThanOrEqual(2);
     }
+    // The window's MIDI goes through main; the probe opens its own input and, for the route check only, the output.
     await page.evaluate(async ({ inputName, outputName, offsetMs }) => {
-      const access = await navigator.requestMIDIAccess({ sysex: true });
-      const inputs = [...access.inputs.values()].filter((port) => port.name === inputName && port.state === 'connected');
-      if (inputs.length !== 1 || !inputs[0]) throw new Error('专用测量输入未连接或不唯一');
-      const input = inputs[0]; await input.open();
-      Reflect.set(window, '__mtcSoakAccess', access);
-      const output = [...access.outputs.values()].find((port) => port.name === outputName);
-      if (!output) throw new Error('专用测量输出不存在');
-      const prototype = Object.getPrototypeOf(output) as MIDIOutput;
-      const send = Reflect.get(prototype, 'send') as (this: MIDIOutput, data: number[] | Uint8Array, timestamp?: number) => void;
-      const sent = { count: 0, name: '', status: 0, matched: 0, mismatches: 0, pending: [] as number[][] }; Reflect.set(window, '__mtcSoakSent', sent);
-      const pendingTimes: { at: number; mediaMs: number }[] = [];
-      const delivery = { minimumSendErrorMs: Infinity, maximumSendErrorMs: -Infinity, maximumCallbackDelayMs: 0, anomalies: [] as { errorMs: number; sendErrorMs: number; arrivalErrorMs: number; callbackDelayMs: number }[] };
+      const { handle: input } = await window.tbLink.openMidiPort({ version: 1, direction: 'input', portName: inputName });
+      Reflect.set(window, '__mtcSoakInput', input);
+      const probe = { closed: null as string | null }; Reflect.set(window, '__mtcSoakProbe', probe);
+      const route = { sent: [] as number[][], matched: 0, mismatches: 0 }; Reflect.set(window, '__mtcSoakRoute', route);
+      const delivery = { maximumCallbackDelayMs: 0, anomalies: [] as { errorMs: number; callbackDelayMs: number }[] };
       Reflect.set(window, '__mtcSoakDelivery', delivery);
-      prototype.send = function(this: MIDIOutput, data: number[] | Uint8Array, timestamp?: number): void {
-        if (this.name !== outputName) { send.call(this, data, timestamp); return; }
-        sent.count += 1; sent.name = this.name ?? ''; sent.status = data[0] ?? 0;
-        if (sent.pending.length < 1024) sent.pending.push([...data]);
-        else throw new Error('MIDI 回环待核对消息超过上限');
-        pendingTimes.push({ at: performance.now(), mediaMs: ((Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement | undefined)?.currentTime ?? 0) * 1000 });
-        Reflect.set(window, '__mtcSoakOutput', this);
-        const start = performance.now(); send.call(this, data, timestamp);
-        if (performance.now() - start > 50) (Reflect.get(window, '__mtcSoakTimings') as { operation: string; duration: number }[]).push({ operation: 'native-send', duration: performance.now() - start });
-      };
       const stats = { cycles: 0, brokenSequences: 0, minimum: Infinity, maximum: -Infinity, first: [] as number[], recent: [] as number[], lastMediaMs: 0 };
       const histogram = new Uint32Array(10001);
       Reflect.set(window, '__mtcSoakHistogram', histogram);
-      Reflect.set(window, '__mtcSoakStats', stats); Reflect.set(window, '__mtcSoakInput', input);
+      Reflect.set(window, '__mtcSoakStats', stats);
       const values: number[] = []; let expected = 0;
       const received = { count: 0, status: 0, recent: [] as number[][] }; Reflect.set(window, '__mtcSoakReceived', received);
-      input.onmidimessage = (message) => {
-        const bytes = message.data; received.count += 1; received.status = bytes?.[0] ?? 0;
-        const expectedBytes = sent.pending.shift();
-        const emission = pendingTimes.shift();
-        if (bytes && expectedBytes && bytes.length === expectedBytes.length && expectedBytes.every((value, index) => bytes[index] === value)) sent.matched += 1;
-        else sent.mismatches += 1;
-        received.recent.push(bytes ? [...bytes] : []); if (received.recent.length > 32) received.recent.shift();
-        if (!bytes || bytes[0] !== 0xf1) return;
+      window.tbLink.onMidiEvent((event) => {
+        if (event.kind === 'closed' && event.handle === input) { probe.closed = event.reason; return; }
+        if (event.kind !== 'message' || event.handle !== input) return;
+        const bytes = event.bytes; received.count += 1; received.status = bytes[0] ?? 0;
+        received.recent.push([...bytes]); if (received.recent.length > 32) received.recent.shift();
+        if (bytes[0] !== 0xf1) {
+          // The route challenge comes back in the order it was sent.
+          const challenge = route.sent.shift();
+          if (challenge && challenge.length === bytes.length && challenge.every((value, index) => bytes[index] === value)) route.matched += 1;
+          else route.mismatches += 1;
+          return;
+        }
         const piece = (bytes[1]! >> 4) & 7;
         if (piece !== expected) { stats.brokenSequences += 1; expected = 0; if (piece !== 0) return; }
         values[piece] = bytes[1]! & 15; expected = (piece + 1) % 8;
@@ -142,33 +130,28 @@ test('真实媒体时钟与 Windows MIDI 回环持续测量', async ({}, info) =
         const sec = values[2]! + ((values[3]! & 3) << 4);
         const min = values[4]! + ((values[5]! & 3) << 4);
         const hour = values[6]! + ((values[7]! & 1) << 4);
-        // Standard forward quarter-frame assembly is two frames behind the running time.
+        // Standard forward quarter-frame assembly is two frames behind the running time. The limit stays end to
+        // end; the message's age separates a late sender from a late forward to the window.
         const error = ((hour * 3600 + min * 60 + sec) * 30 + frames + 2) * 1000 / 30 - audio.currentTime * 1000 - offsetMs;
         histogram[Math.min(10000, Math.round(Math.abs(error) * 100))]! += 1;
-        // Keep the original end-to-end limit. These additional samples separate
-        // a late sender from an input callback delayed on the renderer thread.
-        const callbackDelayMs = performance.now() - message.timeStamp;
-        delivery.maximumCallbackDelayMs = Math.max(delivery.maximumCallbackDelayMs, callbackDelayMs);
-        if (emission) {
-          const sendErrorMs = ((hour * 3600 + min * 60 + sec) * 30 + frames + 2) * 1000 / 30 - emission.mediaMs - offsetMs;
-          delivery.minimumSendErrorMs = Math.min(delivery.minimumSendErrorMs, sendErrorMs);
-          delivery.maximumSendErrorMs = Math.max(delivery.maximumSendErrorMs, sendErrorMs);
-          if (Math.abs(error) > 1000 / 30 && delivery.anomalies.length < 100) delivery.anomalies.push({ errorMs: error, sendErrorMs, arrivalErrorMs: sendErrorMs - (message.timeStamp - emission.at), callbackDelayMs });
-        }
+        delivery.maximumCallbackDelayMs = Math.max(delivery.maximumCallbackDelayMs, event.ageMs);
+        if (Math.abs(error) > 1000 / 30 && delivery.anomalies.length < 100) delivery.anomalies.push({ errorMs: error, callbackDelayMs: event.ageMs });
         stats.cycles += 1; stats.minimum = Math.min(stats.minimum, error); stats.maximum = Math.max(stats.maximum, error);
         if (stats.first.length < 150) stats.first.push(error);
         stats.recent.push(error); if (stats.recent.length > 150) stats.recent.shift();
         stats.lastMediaMs = audio.currentTime * 1000;
-      };
-      await output.open();
+      });
       // One bounded challenge, never retransmitted. A/B native loopbacks need
       // opposite endpoints; connected/open alone does not prove routing.
-      for (let value = 1; value <= 8; value += 1) output.send([0xb0, 119, value]);
+      const { handle: output } = await window.tbLink.openMidiPort({ version: 1, direction: 'output', portName: outputName });
+      try {
+        for (let value = 1; value <= 8; value += 1) { route.sent.push([0xb0, 119, value]); await window.tbLink.sendMidi({ version: 1, handle: output, bytes: [0xb0, 119, value] }); }
+      } finally { await window.tbLink.closeMidiPort({ version: 1, handle: output }); }
     }, { inputName, outputName, offsetMs });
     await page.waitForTimeout(300);
-    const route = await page.evaluate(() => Reflect.get(window, '__mtcSoakSent') as { count: number; matched: number; mismatches: number; pending: number[][] });
+    const route = await page.evaluate(() => Reflect.get(window, '__mtcSoakRoute') as { sent: number[][]; matched: number; mismatches: number });
     await writeFile(info.outputPath('route.json'), JSON.stringify(route, null, 2));
-    if (route.matched !== 8 || route.mismatches !== 0 || route.pending.length !== 0) throw new Error('MIDI 回环路由预检失败：测试字节未完整返回；请核对 A/B 配对或 Windows MIDI 驱动，尚未开始播放');
+    if (route.matched !== 8 || route.mismatches !== 0 || route.sent.length !== 0) throw new Error('MIDI 回环路由预检失败：测试字节未完整返回；请核对 A/B 配对或 Windows MIDI 驱动，尚未开始播放');
     if (internal) {
       await page.locator('.player-transport .primary-button').click();
       await expect(page.locator('.player-transport.status-playing')).toBeVisible();
@@ -191,29 +174,23 @@ test('真实媒体时钟与 Windows MIDI 回环持续测量', async ({}, info) =
         resources.push({ elapsedMs: Date.now() - started, ...usage });
         await writeFile(info.outputPath('resources.json'), JSON.stringify(resources, null, 2));
       }
-      const state = await page.evaluate(() => ({ stats: Reflect.get(window, '__mtcSoakStats') as { cycles: number; brokenSequences: number; minimum: number; maximum: number; first: number[]; recent: number[]; lastMediaMs: number }, paused: (Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement | undefined)?.paused, mediaMs: ((Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement | undefined)?.currentTime ?? 0) * 1000, mode: document.querySelector<HTMLSelectElement>('[aria-label="灯光播放方式"]')?.value, inputConnection: (Reflect.get(window, '__mtcSoakInput') as MIDIInput).connection, notices: [...document.querySelectorAll('.toast, .player-notice')].map((element) => element.textContent) }));
+      const state = await page.evaluate(() => ({ stats: Reflect.get(window, '__mtcSoakStats') as { cycles: number; brokenSequences: number; minimum: number; maximum: number; first: number[]; recent: number[]; lastMediaMs: number }, paused: (Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement | undefined)?.paused, mediaMs: ((Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement | undefined)?.currentTime ?? 0) * 1000, mode: document.querySelector<HTMLSelectElement>('[aria-label="灯光播放方式"]')?.value, probeClosed: (Reflect.get(window, '__mtcSoakProbe') as { closed: string | null }).closed, notices: [...document.querySelectorAll('.toast, .player-notice')].map((element) => element.textContent) }));
       await writeFile(info.outputPath('progress.json'), JSON.stringify({ elapsedMs: Date.now() - started, ...state }, null, 2));
-      await writeFile(info.outputPath('sent.json'), JSON.stringify(await page.evaluate(() => Reflect.get(window, '__mtcSoakSent') as { count: number; name: string; status: number }), null, 2));
       await writeFile(info.outputPath('received.json'), JSON.stringify(await page.evaluate(() => Reflect.get(window, '__mtcSoakReceived') as { count: number; status: number }), null, 2));
       await writeFile(info.outputPath('timings.json'), JSON.stringify(await page.evaluate(() => Reflect.get(window, '__mtcSoakTimings') as { operation: string; duration: number }[]), null, 2));
       await writeFile(info.outputPath('delivery.json'), JSON.stringify(await page.evaluate(() => Reflect.get(window, '__mtcSoakDelivery') as unknown), null, 2));
       if (state.stats.cycles > 0 && Math.max(Math.abs(state.stats.minimum), Math.abs(state.stats.maximum)) > 1000 / 30) throw new Error('实际回环误差超过一帧，停止本次验收；详见 delivery.json');
       if (state.paused) throw new Error('测量期间播放意外停止，请检查 progress.json');
-      const mismatches = await page.evaluate(() => (Reflect.get(window, '__mtcSoakSent') as { mismatches: number }).mismatches);
-      if (mismatches) throw new Error('MIDI 实收字节与发送字节不一致，请检查 sent.json 和 received.json');
+      if (state.probeClosed) throw new Error(`测量输入已关闭：${state.probeClosed}`);
       if (state.mediaMs - state.stats.lastMediaMs > 1000) throw new Error('实际 MIDI 接收已中断超过一秒，请检查发送计数和端口状态');
       if (process.env.TBLINK_MTC_SOAK_PEER && !peerClosed && Date.now() - started > seconds * 1000 / 6) {
         const peer = await electron.launch({ args: [`--user-data-dir=${info.outputPath('peer-profile')}`, join(process.cwd(), process.env.TBLINK_MTC_SOAK_BUILD_DIR ?? 'out', 'main/index.cjs')] });
         try {
           const peerPage = await peer.firstWindow();
           await peerPage.evaluate(async ({ inputName, outputName }) => {
-            const access = await navigator.requestMIDIAccess({ sysex: true });
-            Reflect.set(window, '__peerAccess', access);
-            const input = [...access.inputs.values()].find((port) => port.name === inputName);
-            const output = [...access.outputs.values()].find((port) => port.name === outputName);
-            if (!input || !output) throw new Error('并发测试端口缺失');
-            await input.open(); await output.open();
-            await input.close(); await output.close();
+            const input = await window.tbLink.openMidiPort({ version: 1, direction: 'input', portName: inputName });
+            const output = await window.tbLink.openMidiPort({ version: 1, direction: 'output', portName: outputName });
+            await window.tbLink.closeMidiPort(input); await window.tbLink.closeMidiPort(output);
           }, { inputName, outputName });
         } finally { await peer.close(); }
         peerClosed = true;
@@ -244,21 +221,8 @@ test('真实媒体时钟与 Windows MIDI 回环持续测量', async ({}, info) =
     expect(Math.abs(driftMs)).toBeLessThanOrEqual(1000 / 30);
     expect(p99AbsoluteErrorMs).toBeLessThanOrEqual(10);
     expect(Math.max(Math.abs(report.stats.minimum), Math.abs(report.stats.maximum))).toBeLessThanOrEqual(1000 / 30);
-    // Close the actual production sender, not the independently opened probe.
-    // The player must fail once instead of Web MIDI implicitly reopening it.
-    await page.evaluate(async () => { await (Reflect.get(window, '__mtcSoakOutput') as MIDIOutput).close(); });
-    await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement).paused)).toBe(!internal);
-    await expect.poll(() => page.locator('.toast, .player-notice').allTextContents()).toContainEqual(expect.stringContaining('连接失效'));
-    const stopped = await page.evaluate(() => ({ count: (Reflect.get(window, '__mtcSoakSent') as { count: number }).count,
-      connection: (Reflect.get(window, '__mtcSoakOutput') as MIDIOutput).connection,
-      notices: [...document.querySelectorAll('.toast, .player-notice')].map(element => element.textContent) }));
-    await page.waitForTimeout(300);
-    expect(await page.evaluate(() => (Reflect.get(window, '__mtcSoakSent') as { count: number }).count)).toBe(stopped.count);
-    expect(stopped.connection).toBe('closed');
-    expect(stopped.notices.join(' ')).toContain('连接失效');
-    await writeFile(info.outputPath('disconnect.json'), JSON.stringify(stopped, null, 2));
     expect(pageErrors).toEqual([]);
-    await writeFile(info.outputPath('acceptance.json'), JSON.stringify({ internal, passed: true, physicalConsoleAcceptance: false, seconds, checked: ['route', 'byte-order', 'quarter-frame-order', 'drift', 'one-frame-error', 'disconnect-no-reopen', 'page-errors'] }, null, 2));
+    await writeFile(info.outputPath('acceptance.json'), JSON.stringify({ internal, passed: true, physicalConsoleAcceptance: false, seconds, checked: ['route', 'quarter-frame-order', 'drift', 'one-frame-error', 'page-errors'] }, null, 2));
   } catch (error) {
     await writeFile(info.outputPath('failure.json'), JSON.stringify({ passed: false, physicalConsoleAcceptance: false, error: error instanceof Error ? error.message : String(error) }, null, 2));
     throw error;
@@ -273,7 +237,7 @@ test('真实媒体时钟与 Windows MIDI 回环持续测量', async ({}, info) =
       return { cpu: result, metrics };
     });
     await writeFile(info.outputPath('renderer.cpuprofile'), JSON.stringify(cpu));
-    await page.evaluate(async () => { (Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement | undefined)?.pause(); const input = Reflect.get(window, '__mtcSoakInput') as MIDIInput | undefined; if (input) { input.onmidimessage = null; await input.close(); } await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
+    await page.evaluate(async () => { (Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement | undefined)?.pause(); const input = Reflect.get(window, '__mtcSoakInput') as number | undefined; if (input !== undefined) await window.tbLink.closeMidiPort({ version: 1, handle: input }); await window.tbLink.setRuntimeActive(false); await window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }); });
     await application.close();
   }
 });

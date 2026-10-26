@@ -2,12 +2,15 @@ import { compileLightingPackets, LightingNetworkOutput, LightingOutputRelease, L
   type LinkDesktopApi, type ProgramLightingOutput } from '@tb/core/link';
 import type { IntegrationProfile, LightingDocument } from '@tb/schema';
 import { NativeMidiPorts } from './native-midi-ports';
+import type { MidiClaim } from './midi-port-broker';
 
 type Ports = Pick<NativeMidiPorts, 'prepare' | 'send' | 'close'>;
 type Dependencies = {
   executable: string;
   network: Pick<LinkDesktopApi, 'getMa2NetworkStatus' | 'cancelMa2Playback' | 'playMa2Cue'>;
   authorize(): Promise<void>;
+  /** Takes an output from the editor before it opens for this lighting. */
+  claim?: (portName: string) => Promise<MidiClaim>;
   error(message: string): void;
   now?: () => number;
   ports?: (profile: IntegrationProfile | null, failed: (error: Error) => void) => Ports;
@@ -53,7 +56,8 @@ export class NativeLightingOutput implements ProgramLightingOutput {
     const aborted = new AbortController(); this.abort = aborted;
     const failed = (error: Error) => { if (generation === this.generation) this.fail(error); else this.dependencies.error(`上一首的灯光：${error.message}`); };
     const ports = this.dependencies.ports?.(profile, failed) ?? new NativeMidiPorts(profile, {
-      executable: this.dependencies.executable, authorize: () => this.dependencies.authorize(), failed
+      executable: this.dependencies.executable, authorize: () => this.dependencies.authorize(), failed,
+      ...this.dependencies.claim ? { claim: this.dependencies.claim } : {}
     });
     this.ports = ports;
     try {

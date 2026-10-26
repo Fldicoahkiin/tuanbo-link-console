@@ -1,4 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
+vi.mock('./midi-access', () => ({ requestMidiAccess: vi.fn(), refreshMidiAccess: vi.fn() }));
+import { requestMidiAccess, type MidiAccess } from './midi-access';
+/** The window's MIDI comes from main; these tests hand the code under test a fixed port list. */
+function stubMidi(request: () => Promise<unknown>): void { vi.mocked(requestMidiAccess).mockImplementation(() => request() as Promise<MidiAccess>); }
 vi.mock('./license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { createLightingDocument, lightingTrackSchema } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../link/view-models/local-integration-profile';
@@ -12,8 +16,8 @@ function setup() {
   const profile = createDefaultIntegrationProfile();
   profile.midiPortProfiles = [{ id: 'lighting-events-output', direction: 'output', portName: 'USB MIDI' }];
   profile.lighting = { ...profile.lighting, mscDeviceId: 5 };
-  const send = vi.fn(); const port = { name: 'USB MIDI', state: 'connected', open: () => Promise.resolve(), send };
-  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['usb', port]]) }) });
+  const send = vi.fn(); const port = { name: 'USB MIDI', state: 'connected', open: () => Promise.resolve(), send, close: () => Promise.resolve(), connection: 'open' };
+  stubMidi(() => Promise.resolve({ outputs: new Map([['usb', port]]) }));
   return { document, profile, send, output: new LightingMidiOutput() };
 }
 

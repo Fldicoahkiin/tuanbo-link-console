@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../../registry/midi-access', () => ({ requestMidiAccess: vi.fn(), refreshMidiAccess: vi.fn() }));
+import { requestMidiAccess, type MidiAccess } from '../../registry/midi-access';
+/** The window's MIDI comes from main; these tests hand the code under test a fixed port list. */
+function stubMidi(request: () => Promise<unknown>): void { vi.mocked(requestMidiAccess).mockImplementation(() => request() as Promise<MidiAccess>); }
 vi.mock('../../registry/license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject, lightingTrackSchema, linkCueSchema } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../view-models/local-integration-profile';
@@ -17,7 +21,7 @@ class FakeAudio extends EventTarget {
 function fixture(grouped = false, nativeSeek = false, mtcInstance?: MediaMtcOutput) {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
   const audio = new FakeAudio();
-  const mtc = { connect: vi.fn((portName: string | null) => Promise.resolve(portName)), tick: vi.fn(), stop: vi.fn(), takeSchedulingNotice: vi.fn(() => null) };
+  const mtc = { connect: vi.fn((portName: string | null) => Promise.resolve(portName)), tick: vi.fn(), stop: vi.fn(), close: vi.fn(), takeSchedulingNotice: vi.fn(() => null) };
   const deps = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()), stop: vi.fn(() => Promise.resolve()),
     started: vi.fn<(positionMs: number) => void>(), failed: vi.fn<(message: string, itemId: string | null) => void>(), notice: vi.fn<(message: string, itemId: string | null) => void>(),
     scrub: nativeSeek ? vi.fn(() => Promise.resolve()) : undefined,
@@ -74,9 +78,9 @@ it('异步准备期间保持已选音频线路，下一次明确播放才读取�
   f.controller.dispose();
 });
 it('MIDI 准备超出窗口后音频开始，迟到的端口结果不在歌中途补发', async () => {
-  let resolveAccess: ((access: MIDIAccess) => void) | undefined;
-  const access = new Promise<MIDIAccess>(resolve => { resolveAccess = resolve; });
-  vi.stubGlobal('navigator', { requestMIDIAccess: () => access });
+  let resolveAccess: ((access: MidiAccess) => void) | undefined;
+  const access = new Promise<MidiAccess>(resolve => { resolveAccess = resolve; });
+  stubMidi(() => access);
   const f = fixture(false, false, new MediaMtcOutput());
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] });
   const playing = f.controller.play('song-0');
@@ -85,7 +89,7 @@ it('MIDI 准备超出窗口后音频开始，迟到的端口结果不在歌中�
   expect(f.state().status).toBe('playing');
   expect(f.state().fault).toContain('准备超时（');
   const send = vi.fn(), open = vi.fn();
-  resolveAccess?.({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open, send }]]) } as unknown as MIDIAccess);
+  resolveAccess?.({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open, send, close: () => Promise.resolve() }]]) } as unknown as MidiAccess);
   await vi.advanceTimersByTimeAsync(8);
   expect(open).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
   expect(f.audio.play).toHaveBeenCalledOnce();
@@ -126,7 +130,7 @@ it('时间码模式遇到本地序列池 Cue 时照常播放音频并发原偏�
 });
 it('界面阻塞 200ms 后时间码不补发过期帧，和 P1 一样按音频位置整帧重新同步并继续，只记日志不标红', async () => {
   const send = vi.fn();
-  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
+  stubMidi(() => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send, close: () => Promise.resolve() }]]) }));
   const f = fixture(false, false, new MediaMtcOutput());
   await f.controller.play('song-0');
   f.audio.currentTime = 0.008; await vi.advanceTimersByTimeAsync(8);
@@ -210,7 +214,7 @@ it('OBS 准备和音频启动完成后才启用播放时钟，暂停继续重新
 });
 it('关闭 MTC 后不连接已保存的 MIDI 端口，系统 MIDI 故障不阻断无 MIDI 动作的音频', async () => {
   const request = vi.fn(() => Promise.reject(new Error('Windows MIDI 服务未响应')));
-  vi.stubGlobal('navigator', { requestMIDIAccess: request });
+  stubMidi(request);
   const f = fixture(false, false, new MediaMtcOutput());
   f.controller.toggleMtc();
   await f.controller.play('song-0');
@@ -222,7 +226,7 @@ it('关闭 MTC 后不连接已保存的 MIDI 端口，系统 MIDI 故障不阻�
 });
 it('时间码连接失败时明确提示并继续播放音频', async () => {
   const request = vi.fn(() => Promise.reject(new Error('MIDI 设备检测未通过')));
-  vi.stubGlobal('navigator', { requestMIDIAccess: request });
+  stubMidi(request);
   const f = fixture(false, false, new MediaMtcOutput());
   await f.controller.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', mtcEnabled: true, mtcConnectionFailed: true, mtcPortName: null });
@@ -238,7 +242,7 @@ it('时间码连接失败时明确提示并继续播放音频', async () => {
 });
 it('直接 MIDI 动作不可用也不阻断音频，并说明灯光未启动', async () => {
   const f = lightingFixture(5000);
-  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.reject(new Error('灯光 MIDI 设备未连接')) });
+  stubMidi(() => Promise.reject(new Error('灯光 MIDI 设备未连接')));
   f.controller.toggleMtc();
   await f.controller.play('song-0');
   expect(f.audio.play).toHaveBeenCalledOnce();
@@ -301,8 +305,8 @@ it('音频输出准备期间停止，迟到结果不得再申请 MIDI 或启动 
   f.controller.dispose();
 });
 it('权限挂起时停止能够释放串行队列，随后可显式播放下一首', async () => {
-  const request = vi.fn().mockReturnValueOnce(new Promise<never>(() => undefined)).mockResolvedValue({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send: () => undefined }]]) });
-  vi.stubGlobal('navigator', { requestMIDIAccess: request });
+  const request = vi.fn().mockReturnValueOnce(new Promise<never>(() => undefined)).mockResolvedValue({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send: () => undefined, close: () => Promise.resolve() }]]) });
+  stubMidi(request);
   const f = fixture(false, false, new MediaMtcOutput());
   const preparing = f.controller.play('song-0');
   await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
@@ -347,7 +351,7 @@ it('OBS 准备失败后音频仍可定位播放，后续定位不反复准备 OB
 });
 it('无 OBS 联动时拖动播放头同样暂停并重置 MTC，继续后从新位置发码', async () => {
   const send = vi.fn();
-  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
+  stubMidi(() => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send, close: () => Promise.resolve() }]]) }));
   const f = fixture(false, true, new MediaMtcOutput());
   f.project.rundown[0]!.playback = { volume: 100, endAction: 'stop', startMs: 0, endMs: 0, mtcOffsetMs: 480000, shortcut: '' };
   f.deps.prepare.mockRejectedValue(new Error('OBS 未连接'));
@@ -507,8 +511,8 @@ function lightingFixture(endMs = 10000) {
   profile.midiPortProfiles.push({ id: 'lighting-out', direction: 'output', portName: 'Lighting Test' });
   const sent: number[][] = [];
   const send = vi.fn((bytes: number[]) => { sent.push([...bytes]); });
-  const port = { name: 'Lighting Test', state: 'connected', open: () => Promise.resolve(), send };
-  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['out', port]]) }) });
+  const port = { name: 'Lighting Test', state: 'connected', open: () => Promise.resolve(), send, close: () => Promise.resolve(), connection: 'open' };
+  stubMidi(() => Promise.resolve({ outputs: new Map([['out', port]]) }));
   const config = f.deps.configuration();
   f.deps.configuration = () => ({ ...config, lightingProfile: profile });
   const document = createLightingDocument(); document.outputMode = 'direct';
@@ -595,7 +599,9 @@ describe('内部正式音乐主控', () => {
     expect(f.sent.map((bytes) => bytes[0])).toEqual([0x90, 0xf0, 0x80]);
     expect(f.state().status).toBe('paused');
     f.audio.onended?.(); await f.controller.stop();
-    expect(f.sent).toHaveLength(3); f.controller.dispose();
+    // Stopping only switches the song's executor off (MSC Off); the point on the end boundary is never sent.
+    expect(f.sent).toHaveLength(4); expect(f.sent[3]!.slice(0, 6)).toEqual([0xf0, 0x7f, 0x7f, 2, 1, 0x0b]);
+    expect(f.sent.some(bytes => (bytes[0]! & 0xf0) === 0xb0)).toBe(false); f.controller.dispose();
   });
   it('结尾输出失败时释放已发音符并保留音频结束状态', async () => {
     const f = lightingFixture(); await f.controller.play('song-0');
@@ -698,7 +704,7 @@ describe('内部正式音乐主控', () => {
 
 it('歌曲播放自动识别未配置的唯一 MIDI 输出，并公布实际发送时间码', async () => {
   const send = vi.fn();
-  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['usb', { name: 'USB MIDI', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
+  stubMidi(() => Promise.resolve({ outputs: new Map([['usb', { name: 'USB MIDI', state: 'connected', connection: 'open', open: () => Promise.resolve(), send, close: () => Promise.resolve() }]]) }));
   const f = fixture(false, false, new MediaMtcOutput());
   f.deps.configuration = () => ({ outputDeviceId: 'default', mtcPortName: null });
   f.project.rundown[0]!.lighting = { ...createLightingDocument(), ma2Bindings: [{ id: 'binding', timecode: 1, name: 'TC', readAt: new Date().toISOString(), sourceXml: '<MA/>', baselineTracks: [], mappings: [], timeOriginMs: 120000 }] };
@@ -712,13 +718,13 @@ it('歌曲播放自动识别未配置的唯一 MIDI 输出，并公布实际发�
   f.controller.dispose();
 });
 it('无 MIDI 输出时继续音频且不显示为时间码已发送', async () => {
-  vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map() }) });
+  stubMidi(() => Promise.resolve({ outputs: new Map() }));
   const f = fixture(false, false, new MediaMtcOutput());
   f.deps.configuration = () => ({ outputDeviceId: 'default', mtcPortName: null });
   f.project.rundown[0]!.lighting = { ...createLightingDocument(), ma2Bindings: [{ id: 'binding', timecode: 1, name: 'TC', readAt: new Date().toISOString(), sourceXml: '<MA/>', baselineTracks: [], mappings: [], timeOriginMs: 120000 }] };
   await f.controller.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', mtcPortName: null, mtcSentPositionMs: null });
-  expect(f.state().fault).toContain('没有找到灯光 MIDI 输出');
+  expect(f.state().fault).toContain('没有找到 MIDI 输出');
   expect(f.audio.play).toHaveBeenCalledOnce();
   f.controller.dispose();
 });

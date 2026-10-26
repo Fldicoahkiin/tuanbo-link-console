@@ -7,7 +7,7 @@
 | `apps/desktop/src/main` | Electron 主进程、OBS、进程生命周期、安全存储、文件适配器和最小 IPC |
 | `apps/desktop/src/preload` | 类型化桥接 API；修改后重启开发进程 |
 | `apps/desktop/src/renderer/src/link` | 工作区、属性界面、状态存储、播放与 Cue 协调器 |
-| `apps/desktop/src/renderer/src/registry` | 内部音频输出和 Web MIDI 等浏览器侧适配器 |
+| `apps/desktop/src/renderer/src/registry` | 内部音频输出和 MIDI（经主进程 `MidiPortBroker`，不用 Web MIDI）等界面侧适配器 |
 | `packages/schema` | 工程格式、本机集成档案和 Zod 契约 |
 | `packages/core` | Command、Cue、MTC、节拍跟踪和领域规则 |
 | `tools` | MA2 Lua 桥接、OBS 原生预览相关源码和辅助工具 |
