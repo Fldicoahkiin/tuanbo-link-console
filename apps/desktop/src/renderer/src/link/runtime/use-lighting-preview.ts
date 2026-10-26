@@ -15,7 +15,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
     const output = ownedOutput.current; ownedOutput.current = null;
     if (!output) return;
     output.stop();
-    await output.release();
+    try { await output.release(); } finally { output.close(); }
   };
   useEffect(() => () => {
     const output = ownedOutput.current; ownedOutput.current = null;
@@ -25,7 +25,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       const message = error instanceof Error ? error.message : String(error);
       latest.current.onError(message);
       reportCoordinatorError(message, failure => latest.current.onError(failure));
-    });
+    }).finally(() => output.close());
   }, []);
   useEffect(() => {
     endingOutput.current?.stop(); endingOutput.current = null;
@@ -33,7 +33,8 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
     if (!input.playing || !document?.tracks.length) { setReady(false); return; }
     const hasLightingContent = Boolean(document.ma2Bindings?.length) || document.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind !== 'empty-cue')));
     const output = new LightingMidiOutput(); const mtc = new MediaMtcOutput();
-    if (input.enabled) ownedOutput.current = output;
+    // A replaced preview is never released any more: its outputs are let go now.
+    if (input.enabled) { ownedOutput.current?.close(); ownedOutput.current = output; }
     let seekAudio: HTMLAudioElement | null = null;
     let canFinish = false;
     let looping = false;
@@ -56,14 +57,19 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
         try { finishing = output.finish(seekAudio.currentTime * 1000); } catch (error) { fail(error); }
       }
       seekAudio?.removeEventListener('playing', began); seekAudio?.removeEventListener('seeking', located); seekAudio?.removeEventListener('seeked', located); seekAudio = null;
-      mtc.stop();
+      mtc.close();
       if (finishing) {
         endingOutput.current = output;
         void finishing.catch(fail).finally(() => {
           try { output.stop(); } catch (error) { fail(error); }
           if (endingOutput.current === output) endingOutput.current = null;
+          if (ownedOutput.current !== output) output.close();
         });
-      } else { try { output.stop(); } catch (error) { fail(error); } }
+      } else {
+        try { output.stop(); } catch (error) { fail(error); }
+        // The owned preview keeps its outputs for the release when it is stopped.
+        if (ownedOutput.current !== output) output.close();
+      }
     };
     const start = async (): Promise<void> => {
       const originMs = lightingTimeOrigin(document);

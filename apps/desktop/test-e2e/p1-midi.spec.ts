@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createEmptyLinkProject, parseLinkProject, createLightingDocument, lightingTrackSchema } from '@tb/schema';
 import { answerSaveQuestions, saveProject, savedValue } from './save-questions';
+import { stubMidiPorts } from './midi-ports';
 
 test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', async ({}, info) => {
   const wav = Buffer.alloc(44 + 8000 * 10, 128);
@@ -37,14 +38,9 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
       ipcMain.removeHandler('link:process-start'); ipcMain.handle('link:process-start', () => { throw new Error('隔离测试不启动外部程序'); });
       // Native playback identifies outputs through Windows; this test's only output is the stand-in USB interface.
       // One-click connect checks the audio output first, so the list carries the Windows default device.
-      ipcMain.removeHandler('link:native-player-devices'); ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [{ id: 'default', name: 'Windows 默认输出', isDefault: true }], midiOutputs: [{ id: 0, name: 'USB MIDI' }] }));
+      ipcMain.removeHandler('link:native-player-devices'); ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [{ id: 'default', name: 'Windows 默认输出', isDefault: true }], midiOutputs: [{ id: 0, name: 'USB MIDI' }], midiInputs: [] }));
     }, path);
-    await page.evaluate(() => {
-      const packets: number[][] = []; Reflect.set(window, '__cuePackets', packets);
-      const port = Object.assign(new EventTarget(), { id: 'usb', name: 'USB MIDI', manufacturer: 'Test', type: 'output', state: 'connected', connection: 'closed', open() { this.connection = 'open'; return Promise.resolve(this); }, close() { this.connection = 'closed'; return Promise.resolve(this); }, send(bytes: number[]) { packets.push([...bytes]); }, clear() { packets.length = 0; } });
-      const access = Object.assign(new EventTarget(), { inputs: new Map(), outputs: new Map([['usb', port]]), sysexEnabled: true });
-      Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
-    });
+    const midi = await stubMidiPorts(app, { outputs: ['USB MIDI'] });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('button', { name: '顶部一键连接', exact: true }).click();
     await expect.poll(async () => {
@@ -60,7 +56,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     await connectionResult.getByRole('button', { name: 'OBS 控制：已连接', exact: true }).click();
     await page.getByRole('region', { name: '连接详情' }).getByRole('button', { name: '前往设置', exact: true }).click();
     await expect(page.getByRole('navigation', { name: '设置子子菜单' })).toBeVisible();
-    const packets = () => page.evaluate(() => Reflect.get(window, '__cuePackets') as number[][]);
+    const packets = () => midi.sent('USB MIDI');
     expect(await packets()).toEqual([]);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await page.getByRole('button', { name: '音频 Cue 1', exact: true }).click();

@@ -3,6 +3,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, lightingTrackSchema, parseLinkProject } from '@tb/schema';
 import { saveProject, closeDiscarding } from './save-questions';
+import { stubMidiPorts } from './midi-ports';
 
 // The output mode selector is gone (1d7d5bd); projects still store one of the three modes, written by older
 // versions or by MIDI and REAPER imports. Each must open, save and reopen intact on a computer without MIDI.
@@ -20,7 +21,8 @@ for (const native of [false, true]) test(`无 MIDI 设备时打开三种已存�
     const page = await app.firstWindow();
     page.on('pageerror', error => errors.push(error.message));
     await page.waitForLoadState('domcontentloaded');
-    await page.evaluate(() => { navigator.requestMIDIAccess = () => Promise.reject(new Error('测试电脑没有 MIDI 设备')); });
+    // The test computer has no MIDI.
+    await stubMidiPorts(app);
     return { app, page };
   };
   const stored = (mode: 'timecode' | 'direct' | 'network') => JSON.stringify({ ...project, rundown: [{ ...project.rundown[0]!, lighting: { ...lighting, outputMode: mode } }] });

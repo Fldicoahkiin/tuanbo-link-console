@@ -133,7 +133,7 @@ it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('真实输出采样的�
     await client.command({ protocol: 4, requestId: 3, generation: 2, kind: 'play' });
     await expect.poll(() => client.clock?.gain).toBeGreaterThan(0.15);
     await client.command({ protocol: 4, requestId: 4, generation: 3, kind: 'pause' });
-    const paused = await client.readClock(3);
+    const paused = await client.readClock(3, ['paused']);
     expect(paused.gain).toBeLessThan(0.9);
     await new Promise(resolve => setTimeout(resolve, 150));
     expect(client.clock?.gain).toBe(paused.gain);

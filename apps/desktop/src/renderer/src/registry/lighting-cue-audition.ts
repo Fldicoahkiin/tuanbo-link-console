@@ -1,13 +1,22 @@
-import { requestMidiAccess } from './midi-access';
+import { requestMidiAccess, type MidiAccess, type MidiOutput } from './midi-access';
 import { requireOutputLicense } from './license-output';
 import { compileLightingPackets, compileLightingNetworkActions } from '@tb/core/link';
 import { ma2NetworkStatusSchema, ma2PlaybackActionSchema, type Ma2PlaybackAction, type IntegrationProfile, type LightingDocument } from '@tb/schema';
 
 /** Explicit operator selection only; never called when restoring editor selection. */
 export class LightingCueAudition {
-  private readonly midiStarted = new Map<string, { output: MIDIOutput; bytes: number[] }>();
+  private readonly midiStarted = new Map<string, { output: MidiOutput; bytes: number[] }>();
   private generation = 0;
   private networkSession: string | null = null;
+  private access: MidiAccess | null = null;
+  /** Outputs opened for auditions; they stay open for the next click and close with `close()`. */
+  private readonly ports = new Set<MidiOutput>();
+  /** The editor closed: its MIDI outputs are let go, so P1 or playback can open them. */
+  close(): void {
+    this.cancel(); this.midiStarted.clear();
+    for (const port of this.ports) void port.close().catch((error: unknown) => console.error(`MIDI 接口「${port.name}」关闭失败`, error));
+    this.ports.clear();
+  }
   cancel(): void { this.generation += 1; const id = this.networkSession; this.networkSession = null; if (id) void window.tbLink.cancelMa2Playback(id).catch((error: unknown) => console.error('取消 Cue 试听失败', error)); }
 
   /** Go continues on the console, including native triggers; no local next-Cue guessing. */
@@ -77,27 +86,28 @@ export class LightingCueAudition {
     await requireOutputLicense();
     const packets = compileLightingPackets(preview, profile?.lighting?.mscDeviceId ?? 127);
     try {
-      const access = await deadline(requestMidiAccess({ sysex: true }), 'MIDI 访问超时');
+      const access = this.access ??= await deadline(requestMidiAccess(), '读取 MIDI 接口超时');
       if (generation !== this.generation) return 0;
-      const outputs = new Map<string, MIDIOutput>();
+      const outputs = new Map<string, MidiOutput>();
       for (const id of new Set(packets.map(packet => packet.portProfileId))) {
         const name = profile?.midiPortProfiles.find(port => port.id === id && port.direction === 'output')?.portName;
         const matches = [...access.outputs.values()].filter(port => port.name === name && port.state === 'connected');
         const port = matches[0];
         if (!port || matches.length !== 1) throw new Error(`Cue MIDI 输出不可用或不唯一：${name || '请先一键连接或配置灯光动作输出'}`);
+        this.ports.add(port);
         await deadline(port.open(), 'Cue MIDI 端口打开超时');
         if (generation !== this.generation) return 0;
         outputs.set(id, port);
       }
       if (selected.runMode === 'independent') for (const [key, previous] of this.midiStarted) {
-        if (previous.output.state !== 'connected') throw new Error('上一组 MIDI 输出已断开，无法确认关闭；本 Cue 尚未发送');
+        if (previous.output.state !== 'connected' || previous.output.connection !== 'open') throw new Error('上一组 MIDI 输出已断开，无法确认关闭；本 Cue 尚未发送');
         const separator = previous.bytes.indexOf(0, 6);
         previous.output.send([...previous.bytes.slice(0, 5), 0x0b, 48, 46, 48, 48, 48, 0, ...previous.bytes.slice(separator + 1)]);
         this.midiStarted.delete(key);
       }
       for (const packet of packets) {
         const output = outputs.get(packet.portProfileId);
-        if (!output || output.state !== 'connected') throw new Error('Cue 发送中断：MIDI 端口已断开，部分动作可能已发送');
+        if (!output || output.state !== 'connected' || output.connection !== 'open') throw new Error(output?.closedReason ?? 'Cue 发送中断：MIDI 端口已断开，部分动作可能已发送');
         output.send(packet.bytes);
         const separator = packet.bytes.indexOf(0, 6);
         if (packet.bytes[0] === 0xf0 && separator >= 6) {

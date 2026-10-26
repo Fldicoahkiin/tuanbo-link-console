@@ -3,6 +3,7 @@ import type { IntegrationProfile, LinkProject, NativePlayerControl, NativePlayer
 import { NativeMidiPorts } from './native-midi-ports';
 import { MidiOutputFailure } from './native-midi-output';
 import { MidiPortRecovery, type PortRecoveryReport } from './midi-port-recovery';
+import type { MidiClaim } from './midi-port-broker';
 
 type Identity = Pick<NativePlayerStatus, 'sessionId' | 'generation' | 'itemId'>;
 /** The action MIDI port came back: the outage, how many actions it skipped, and the red message it showed. */
@@ -15,6 +16,8 @@ type Dependencies = {
   profile(): IntegrationProfile | null;
   executable: string;
   authorize(): Promise<void>;
+  /** Takes an output from the editor before it opens for these actions. */
+  claim?: (portName: string) => Promise<MidiClaim>;
   changed(state: NativeMidiChannelState): void;
   error(message: string): void;
   /** Actions of this song that were skipped; the channel keeps running. */
@@ -77,7 +80,8 @@ export class NativeMidiHost {
       entry.session.abort(error.message);
     };
     const ports = this.dependencies.ports?.(failed) ?? new NativeMidiPorts(this.dependencies.profile(), {
-      executable: this.dependencies.executable, authorize: () => this.dependencies.authorize(), failed
+      executable: this.dependencies.executable, authorize: () => this.dependencies.authorize(), failed,
+      ...this.dependencies.claim ? { claim: this.dependencies.claim } : {}
     });
     const session = new MidiProgramSession(project, identity.itemId, {
       prepare: (ids, signal) => ports.prepare(ids, signal), send: (id, bytes, deadline) => ports.send(id, bytes, deadline),

@@ -27,7 +27,7 @@ apps/desktop/
   src/main/link/               OBS、进程、安全存储、工程和日志适配器
   src/preload/index.ts         tbLink / tbFile 类型化桥
   src/renderer/src/link/       工作区、store 与运行协调器
-  src/renderer/src/registry/   Web MIDI 适配器
+  src/renderer/src/registry/   MIDI（经主进程，不用 Web MIDI）与音频适配器
 packages/schema/               .tblink 与机器集成档案 Zod 契约
 packages/core/                 Command、MTC、Cue 状态机、预检与 IPC DTO
 docs/                          当前设计、实施和验收文档

@@ -10,7 +10,7 @@ const api = vi.hoisted(() => ({ recheckMidi: vi.fn<LinkDesktopApi['recheckMidi']
 vi.mock('./link-desktop-view-model', () => ({ linkDesktopViewModel: api }));
 const usb: MidiPortSnapshot = { id: 'usb', name: 'USB MIDI Interface', direction: 'output', manufacturer: '', state: 'connected', connection: 'closed' };
 const babyface: MidiPortSnapshot = { ...usb, id: 'babyface', name: 'Babyface Midi Port 1' };
-const native: NativePlaybackDevices = { protocol: 4, audio: [], midiOutputs: [{ id: 0, name: babyface.name }, { id: 1, name: usb.name }] };
+const native: NativePlaybackDevices = { protocol: 4, audio: [], midiOutputs: [{ id: 0, name: babyface.name }, { id: 1, name: usb.name }], midiInputs: [] };
 beforeEach(() => {
   vi.resetAllMocks();
   api.recheckMidi.mockResolvedValue();

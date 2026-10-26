@@ -68,7 +68,7 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
   };
   useAuditionSelectionReset(()=>{setSelectedCue(null);classification.setPicked([]);});
   const [busy, setBusy] = useState(false);
-  useEffect(() => () => output.cancel(), [output]);
+  useEffect(() => () => output.close(), [output]);
   const library = useMemo(() => ma2SequenceLibrary(project, document), [project, document]);
   const libraryById = useMemo(() => new Map(library.map(value => [value.sequence, value])), [library]);
   const index = useMemo(() => library.map(value => ({ value, text: `${value.sequence} ${value.name ?? ''} ${value.originalName ?? ''} ${value.cues.map(cue => `${cue.number} ${cue.name ?? ''} ${cue.originalName ?? ''}`).join(' ')}`.toLowerCase() })), [library]);

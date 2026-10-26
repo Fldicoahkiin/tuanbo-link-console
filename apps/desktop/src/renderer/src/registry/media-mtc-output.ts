@@ -1,10 +1,11 @@
-import { requestMidiAccess } from './midi-access';
+import { requestMidiAccess, type MidiAccess, type MidiOutput } from './midi-access';
 import { requireOutputLicense } from './license-output';
 import { encodeMediaTimecode, playbackFramesPerSecond } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
 
 export class MediaMtcOutput {
-  private output: MIDIOutput | null = null;
+  private access: MidiAccess | null = null;
+  private output: MidiOutput | null = null;
   private nextQuarterFrame = 0;
   private lastTickAt: number | null = null;
   private lastPositionMs: number | null = null;
@@ -21,37 +22,46 @@ export class MediaMtcOutput {
   }
 
   async connect(portName: string | null, autoDetect = false): Promise<string | null> {
-    this.stop(); this.output = null;
-    if (!portName && !autoDetect) return null;
+    this.stop();
+    const previous = this.output; this.output = null;
+    if (!portName && !autoDetect) { this.release(previous); return null; }
     const attempt = new AbortController();
     this.connectionAttempt = attempt;
     try {
       await requireOutputLicense();
       if (attempt.signal.aborted) throw new Error('MIDI 连接已取消');
-      const access = await waitForMidi(requestMidiAccess({ sysex: true }), attempt.signal, '申请 MIDI 权限');
+      const access = this.access ??= await waitForMidi(requestMidiAccess(), attempt.signal, '读取 MIDI 接口');
       const available = [...access.outputs.values()].filter(port => port.state === 'connected' && port.name && !/Microsoft GS Wavetable Synth/i.test(port.name));
       if (!portName) {
         if (available.length !== 1) throw new Error(available.length === 0
-          ? '未检测到灯光 MIDI 输出。请连接 USB-MIDI 接口并检查驱动，再点击播放。'
-          : `检测到多个 MIDI 输出：${available.map(port => port.name).join('、')}。无法判断哪个连接控台，请在设置 → 音频与 MIDI 选择灯光输出。`);
+          ? '没有找到 MIDI 输出。请接好 USB-MIDI 接口并检查驱动，再点播放。'
+          : `电脑上有 ${available.length} 个 MIDI 输出（${available.map(port => port.name).join('、')}），不知道哪个接着控台。请到 设置 → 音频与 MIDI 选好“时间码输出”。`);
         portName = available[0]!.name;
       }
       const ports = [...access.outputs.values()].filter((port) => port.name === portName && port.state === 'connected');
-      if (ports.length === 0) throw new Error(`当前播放引擎未检测到 MIDI 时间码输出：${portName}。请先退出 P1 等使用该接口的软件，再到设置 → 音频与 MIDI 刷新端口；实体 USB MIDI 请核对连接和驱动，虚拟端口请保持 loopMIDI 运行。仍不可见时保存工程并重开联动台。`);
-      if (ports.length > 1) throw new Error(`MIDI 时间码输出名称重复：${portName}（${ports.length} 个）。请为端口设置不同名称，再手动选择正确的输出。`);
+      if (ports.length === 0) throw new Error(`没有找到 MIDI 时间码输出「${portName}」。请检查 USB 线和驱动，再到 设置 → 音频与 MIDI 刷新；虚拟端口请保持 loopMIDI 运行。`);
+      if (ports.length > 1) throw new Error(`电脑上有 ${ports.length} 个叫「${portName}」的 MIDI 输出，分不清用哪个。请拔掉多余的一个，再重新播放。`);
       const port = ports[0];
       if (!port) throw new Error('MIDI 输出不存在');
-      try { await waitForMidi(port.open(), attempt.signal, `打开 MIDI 输出 ${portName}`); }
-      catch (error) {
-        if (attempt.signal.aborted) throw error;
-        throw new Error(`无法打开 MIDI 时间码输出 ${portName}：${error instanceof Error ? error.message : String(error)}。接口可能被 P1 或其他软件占用；请完全退出后刷新端口并手动重新播放。`);
-      }
+      // The earlier port is let go only now: the same port keeps its connection.
+      if (previous !== port) this.release(previous);
+      await waitForMidi(port.open(), attempt.signal, `打开 MIDI 输出「${portName}」`);
       if (attempt.signal.aborted) throw new Error('MIDI 连接已取消');
       this.output = port;
       return port.name;
+    } catch (error) {
+      this.release(previous);
+      throw error;
     } finally {
       if (this.connectionAttempt === attempt) this.connectionAttempt = null;
     }
+  }
+
+  /** Ends timecode and lets the port go, so P1 or formal playback can open it. */
+  close(): void {
+    this.stop();
+    const output = this.output; this.output = null;
+    this.release(output);
   }
 
   tick(positionMs: number, rate: MtcFrameRate, now = performance.now()): boolean {
@@ -59,10 +69,9 @@ export class MediaMtcOutput {
     let sent = false;
     if (!Number.isFinite(positionMs) || positionMs < 0 || positionMs >= 86400000) throw new Error('MIDI 时间码音频位置无效');
     if (!Number.isFinite(now) || now < 0) throw new Error('MIDI 时间码调度时钟无效');
-    if (this.output.state !== 'connected') throw new Error('灯光 MIDI 输出已断开，时间码输出已停止');
-    // send() implicitly reopens a closed Web MIDI port. A lost connection must
-    // instead fail this session and require an explicit operator action.
-    if (this.output.connection !== 'open') throw new Error('灯光 MIDI 输出连接已失效，时间码输出已停止；请检查端口后手动重新播放');
+    if (this.output.state !== 'connected') throw new Error(`MIDI 接口「${this.output.name}」断开了，时间码已停止。插好后重新播放。`);
+    // A port closed by itself (taken by formal playback, failed) is not reopened here: the operator plays again.
+    if (this.output.connection !== 'open') throw new Error(this.output.closedReason ?? `MIDI 接口「${this.output.name}」已关闭，时间码已停止。请检查接口后重新播放。`);
     if (this.rate !== rate) { this.reset(); this.rate = rate; }
     const elapsed = this.lastTickAt === null ? 0 : now - this.lastTickAt;
     const advanced = this.lastPositionMs === null ? 0 : positionMs - this.lastPositionMs;
@@ -97,8 +106,7 @@ export class MediaMtcOutput {
       }
       const message = this.messages[this.piece];
       if (!message) throw new Error('MIDI 时间码消息不完整');
-      // Send only messages already due: Electron has no MIDIOutput.clear(), so
-      // future timestamped messages cannot be cancelled reliably at pause/seek.
+      // Send only messages already due: a queued message cannot be taken back at pause/seek.
       this.output.send(message);
       sent = true;
       this.piece = (this.piece + 1) % 8; this.nextQuarterFrame += 1;
@@ -109,6 +117,9 @@ export class MediaMtcOutput {
   stop(): void {
     this.connectionAttempt?.abort(); this.connectionAttempt = null;
     this.reset(); this.schedulingNotice = null; this.interruptions = 0;
+  }
+  private release(port: MidiOutput | null): void {
+    if (port && port !== this.output) void port.close().catch((error: unknown) => console.error(`MIDI 接口「${port.name}」关闭失败`, error));
   }
   private reset(): void {
     this.nextQuarterFrame = 0; this.lastTickAt = null; this.lastPositionMs = null; this.rate = null; this.piece = 0; this.messages = []; this.locate = true;

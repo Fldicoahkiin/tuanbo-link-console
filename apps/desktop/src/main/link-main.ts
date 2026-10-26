@@ -170,6 +170,11 @@ import ffmpegPath from 'ffmpeg-static';
 import { NativeAudioCache } from './link/native-audio-cache';
 import { NativePlayerService } from './link/native-player-service';
 import { NativeMidiCheckService } from './link/native-midi-check';
+import { MidiPortBroker } from './link/midi-port-broker';
+import { NativeMidiOutput } from './link/native-midi-output';
+import { NativeMidiInput } from './link/native-midi-input';
+import { NativeDeviceQuery } from './link/native-device-query';
+import { midiPortHandleSchema, midiPortListRequestSchema, midiPortOpenSchema, midiPortSendSchema } from '@tb/schema';
 import { NativePlayerUiPublisher } from './link/native-player-ui-publisher';
 import { NativeProgramHost } from './link/native-program-host';
 import { NativeProgramService } from './link/native-program-service';
@@ -241,6 +246,8 @@ let nativeObs: NativeObsHost | null = null;
 let nativeObsPreload: NativeObsPreloadPool | null = null;
 let nativeProgram: NativeProgramService | null = null;
 let nativeProgramHost: NativeProgramHost | null = null;
+/** Every MIDI port the window uses is opened here, in main, and only while it is in use. */
+let midiPorts: MidiPortBroker | null = null;
 
 async function closeNativePlayer(): Promise<void> {
   await nativeProgram?.close();
@@ -450,7 +457,12 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
   mainWindow.webContents.on('will-navigate', event => event.preventDefault());
   const window = mainWindow;
   let rendererReloadedAt = 0;
+  // A new page holds none of the MIDI ports the previous one opened.
+  mainWindow.webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument) void midiPorts?.releaseWindow();
+  });
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    void midiPorts?.releaseWindow();
     // Nothing can be saved from a window that exited: the recovery copy holds the
     // edits and is offered when the project opens again, so quitting does not ask.
     rendererSaves.failAll('界面进程已退出，无法保存；未保存的修改保留在恢复副本中，下次打开工程时可以恢复');
@@ -522,18 +534,12 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
   mainWindow.webContents.session.setPermissionCheckHandler((_webContents, permission, _origin, details) => {
     // Chromium requires the audio-device visibility check to enumerate output
     // endpoints. Actual capture requests remain denied below.
-    // MIDI must pass the asynchronous, isolated driver probe below. Granting it
-    // here would let Chromium enter a stalled Windows MIDI service directly.
     return permission === 'media' && details.mediaType === 'audio';
   });
   mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
-    if (permission === 'midi' || permission === 'midiSysex') {
-      void authorizeOutput().then(() => midiHealth.check()).then((result) => callback(result === 'ready'), (error: unknown) => {
-        console.error('MIDI 检测组件失败', error);
-        callback(false);
-      });
-      return;
-    }
+    // Web MIDI stays denied: Chromium opens every MIDI port on the computer for as long as the page
+    // uses MIDI, so single-client USB interfaces refused the playback engine and P1 (0.5.2, error 7).
+    // The window's MIDI goes through main instead (link:midi-*), one port at a time.
     callback(permission === 'speaker-selection');
   });
   mainWindow.on('close', (event) => {
@@ -649,6 +655,34 @@ function registerIpc(
     void obsPreload.close().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message: `关闭节目预备失败：${String(error)}`, result: 'failed' })
       .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
   });
+  const engineExecutable = app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
+    : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe');
+  const midiPortQuery = new NativeDeviceQuery(engineExecutable);
+  const midiPortBroker = new MidiPortBroker({
+    authorize: () => authorizeOutput(),
+    list: async recheck => {
+      const result = await midiHealth.check(recheck);
+      if (result !== 'ready') throw new Error(midiHealthMessage(result));
+      if (recheck) await midiPortQuery.reopenForPreparation();
+      return midiPortQuery.read();
+    },
+    // The editor previews send a whole lighting state at once.
+    createOutput: failed => new NativeMidiOutput(engineExecutable, failed, 256),
+    createInput: (receive, failed, invalid) => new NativeMidiInput(engineExecutable, receive, failed, invalid),
+    emit: event => sendToRenderer('link:midi-event', event),
+    log: (level, message) => { void logger.record({ level, category: 'device', device: 'MIDI', message, result: level === 'info' ? 'succeeded' : 'failed' })
+      .catch((error: unknown) => console.error('MIDI 日志写入失败', error)); }
+  });
+  midiPorts = midiPortBroker;
+  handle('link:midi-ports', (_event, value: unknown) => midiPortBroker.listPorts(midiPortListRequestSchema.parse(value).recheck));
+  // Opening checks the license itself; sending and closing need a port it opened.
+  handle('link:midi-open', async (_event, value: unknown) => {
+    const request = midiPortOpenSchema.parse(value);
+    return { version: 1 as const, handle: await midiPortBroker.open(request.direction, request.portName) };
+  }, 'listener');
+  // Messages go out in the order they arrive: nothing is awaited before the broker queues one.
+  handle('link:midi-send', (_event, value: unknown) => { const request = midiPortSendSchema.parse(value); return midiPortBroker.send(request.handle, request.bytes); }, 'listener');
+  handle('link:midi-close', (_event, value: unknown) => midiPortBroker.close(midiPortHandleSchema.parse(value).handle), 'listener');
   const player = (): NativePlayerService => {
     if (nativePlayerShutdown) throw new Error('正式音频引擎正在关闭或关闭失败，请查看运行日志');
     if (!nativePlayer) {
@@ -665,8 +699,8 @@ function registerIpc(
           const result = await midiHealth.check(recheck);
           if (result !== 'ready') throw new Error(midiHealthMessage(result));
         },
-        executable: app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
-          : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe'),
+        executable: engineExecutable,
+        claimMidiOutput: name => midiPortBroker.claimFormal(name, '时间码'),
         cache: new NativeAudioCache(join(app.getPath('userData'), 'native-audio-streams'), ffmpegPath.replace('app.asar', 'app.asar.unpacked'), undefined, undefined, measured),
         resolveAudio: (projectPath, relativePath) => projectService.resolveReferenceAudio(projectPath, relativePath),
         changed: (status, qpc100ns) => {
@@ -709,8 +743,8 @@ function registerIpc(
     return nativePlayer;
   };
   handle('link:native-player-devices', (_event, value: unknown) => player().devices(nativeDeviceQueryRequestSchema.parse(value).scope));
-  const midiCheck = new NativeMidiCheckService(app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
-    : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe'), () => runtimeActive || nativePlaybackActive());
+  const midiCheck = new NativeMidiCheckService(engineExecutable, () => runtimeActive || nativePlaybackActive(), undefined,
+    name => midiPortBroker.claimFormal(name, '接口检查'));
   handle('link:native-midi-check', async (_event, value: import('@tb/schema').NativeMidiCheck) => {
     try {
       await midiCheck.check(value);
@@ -960,6 +994,7 @@ function registerIpc(
       executable: app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
         : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe'),
       audio: () => nativePlayer?.status ?? null, authorize: () => authorizeOutput(), configuration: () => callbacks.configuration(),
+      claimMidiOutput: (name, owner) => midiPortBroker.claimFormal(name, owner),
       midiOutputs: async () => (await player().devices('all', true)).midiOutputs,
       preciseSeeking: () => callbacks.configuration().preciseSeeking, changed: state => callbacks.changed(state),
       midiChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); },
@@ -2212,6 +2247,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   if (owned.length === 0) {
     recordQuitStep('退出前关闭音乐分析');
     await automaticMusic?.close();
+    await midiPorts?.dispose();
     if (discardOnQuit) await discardOpenDocumentRecovery();
     allowWindowClose = true;
     settleRepeatedLogs();
@@ -2260,6 +2296,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   }
   recordQuitStep('退出前关闭音乐分析');
   await automaticMusic?.close();
+  await midiPorts?.dispose();
   if (discardOnQuit) await discardOpenDocumentRecovery();
   allowWindowClose = true;
   settleRepeatedLogs();

@@ -19,6 +19,7 @@ import { linkProjectAssetFilesPayloadSchema, linkProjectAssetRelinkPayloadSchema
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
 import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema, nativeMidiCheckSchema } from '@tb/schema';
+import { midiPortEventSchema, midiPortHandleSchema, midiPortListRequestSchema, midiPortListSchema, midiPortOpenSchema, midiPortSendSchema } from '@tb/schema';
 import { nativeObsPrepareSchema, nativeObsPreloadSchema, nativeObsStopSchema, nativeObsStatusSchema, obsMediaPreparationSchema } from '@tb/schema';
 import type { LinkDesktopApi, LinkDesktopBridgeApi, LinkFileBridge, LinkObsSnapshot, LinkProcessSnapshot, LinkUpdateStatus } from '@tb/core/link';
 
@@ -79,6 +80,15 @@ const tbLink: LinkDesktopBridgeApi = {
     return () => ipcRenderer.removeListener('link:native-player-status', receive);
   },
   recheckMidi: () => invoke('link:midi-recheck'),
+  listMidiPorts: async request => midiPortListSchema.parse(await invoke('link:midi-ports', midiPortListRequestSchema.parse(request))),
+  openMidiPort: async request => midiPortHandleSchema.parse(await invoke('link:midi-open', midiPortOpenSchema.parse(request))),
+  sendMidi: request => invoke('link:midi-send', midiPortSendSchema.parse(request)),
+  closeMidiPort: request => invoke('link:midi-close', midiPortHandleSchema.parse(request)),
+  onMidiEvent: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(midiPortEventSchema.parse(value));
+    ipcRenderer.on('link:midi-event', receive);
+    return () => ipcRenderer.removeListener('link:midi-event', receive);
+  },
   getLicenseStatus: () => invoke('link:license-status'),
   exportLicenseRequest: () => invoke('link:license-export-request'),
   importLicense: () => invoke('link:license-import'),

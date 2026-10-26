@@ -131,7 +131,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   api.checkNativeMidiOutput.mockResolvedValue();
   // Profiles without an engine choice play with Windows native audio.
-  api.getNativePlaybackDevices.mockResolvedValue({ protocol: 4, audio: [{ id: 'native-default', name: '默认播放设备', isDefault: true }], midiOutputs: [] });
+  api.getNativePlaybackDevices.mockResolvedValue({ protocol: 4, audio: [{ id: 'native-default', name: '默认播放设备', isDefault: true }], midiOutputs: [], midiInputs: [] });
   useIntegrationStore.getState().setNativeDevices(null, null);
   useConnectionCheckStore.setState({ running: false, checks: {}, pending: [], completed: 0, total: 0 });
   useIntegrationStore.getState().setObs({ status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null });
@@ -164,7 +164,7 @@ it('原生 MTC 端口不被浏览器一键连接提前占用，浏览器漏枚�
   const config = options();
   config.draft.internalPlayer = { audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: 'internal-mtc-output' };
   config.draft.midiPortProfiles.push({ id: 'internal-mtc-output', direction: 'output', portName: 'USB MIDI Interface' });
-  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 1, name: 'USB MIDI Interface' }] };
+  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 1, name: 'USB MIDI Interface' }], midiInputs: [] };
   useIntegrationStore.getState().setNativeDevices(native, null);
   api.getNativePlaybackDevices.mockResolvedValue(native);
   await connectDevices(config);
@@ -180,7 +180,7 @@ it('USB 打开失败不重复检查、不换成 Babyface，保留用户选定接
   const config = options();
   config.draft.internalPlayer = { audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: 'internal-mtc-output' };
   config.draft.midiPortProfiles.push({ id: 'internal-mtc-output', direction: 'output', portName: 'USB MIDI Interface' });
-  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 0, name: 'Babyface Midi Port 1' }, { id: 1, name: 'USB MIDI Interface' }] };
+  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 0, name: 'Babyface Midi Port 1' }, { id: 1, name: 'USB MIDI Interface' }], midiInputs: [] };
   useIntegrationStore.getState().setNativeDevices(native, null);
   api.getNativePlaybackDevices.mockResolvedValue(native);
   api.checkNativeMidiOutput.mockRejectedValue(new Error('MIDI 接口 USB MIDI Interface：Windows 错误 4'));
@@ -203,7 +203,7 @@ it('原生引擎的灯光 Cue 使用独立 USB 端口时，也按 Windows 原生
   const config = options();
   config.draft.internalPlayer = { audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: 'internal-mtc-output' };
   config.draft.midiPortProfiles.push({ id: 'internal-mtc-output', direction: 'output', portName: '时间码口' }, { id: 'lighting-events-output', direction: 'output', portName: '声光 MIDI' });
-  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 0, name: '时间码口' }, { id: 1, name: '声光 MIDI' }] };
+  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 0, name: '时间码口' }, { id: 1, name: '声光 MIDI' }], midiInputs: [] };
   useIntegrationStore.getState().setNativeDevices(native, null);
   api.getNativePlaybackDevices.mockResolvedValue(native);
   // Web MIDI lists only the remote keyboard; the USB outputs are checked through the native path.
@@ -257,7 +257,7 @@ it('控台当前 show 与工程灯光依据不一致时工程通信不通过，�
   // Every lighting song now sends timecode, so the timecode output port is part of the check.
   config.draft.internalPlayer = { audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: 'internal-mtc-output' };
   config.draft.midiPortProfiles.push({ id: 'internal-mtc-output', direction: 'output', portName: '时间码口' });
-  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 0, name: '时间码口' }] };
+  const native = { protocol: 4 as const, audio: [{ id: 'audio', name: '测试输出', isDefault: true }], midiOutputs: [{ id: 0, name: '时间码口' }], midiInputs: [] };
   useIntegrationStore.getState().setNativeDevices(native, null); api.getNativePlaybackDevices.mockResolvedValue(native);
   config.project = parseLinkProject({ ...createEmptyLinkProject('灯光工程'), schemaVersion: 2, playbackSource: 'internal', rundown: [{ id: 'song', title: '第一首',
     lighting: { ...createLightingDocument(), outputMode: 'network', tracks: [track], ma2Library: { show: '2hao', readAt: '2026-10-13T00:00:00.000Z', sequences: [] } } }] });

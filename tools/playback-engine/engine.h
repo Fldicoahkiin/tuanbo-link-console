@@ -52,6 +52,7 @@ HRESULT audio_prepare(const wchar_t *path, UINT32 rate, double start_ms, double 
 int print_devices(void);
 int serve_devices(bool include_midi);
 int serve_midi_output(void);
+int serve_midi_input(void);
 HRESULT audio_play(void);
 HRESULT audio_pause(void);
 HRESULT audio_stop(void);

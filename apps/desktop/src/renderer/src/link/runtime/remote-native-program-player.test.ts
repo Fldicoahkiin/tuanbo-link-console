@@ -10,7 +10,7 @@ function fixture(wait?: Promise<NativeProgramAttachment>, project: LinkProject =
     controlNativeProgram: vi.fn<LinkDesktopApi['controlNativeProgram']>(() => Promise.resolve()),
     onNativeProgramEvent: vi.fn<LinkDesktopApi['onNativeProgramEvent']>(() => vi.fn()),
     onNativePlaybackStatus: vi.fn<LinkDesktopApi['onNativePlaybackStatus']>(() => vi.fn()),
-    getNativePlaybackDevices: vi.fn<LinkDesktopApi['getNativePlaybackDevices']>(() => Promise.resolve({ protocol: 4, audio: [], midiOutputs: [] }))
+    getNativePlaybackDevices: vi.fn<LinkDesktopApi['getNativePlaybackDevices']>(() => Promise.resolve({ protocol: 4, audio: [], midiOutputs: [], midiInputs: [] }))
   };
   const dependencies = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.reject(new Error('不能在界面播放原声'))),

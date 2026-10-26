@@ -3,6 +3,7 @@ import { nativePlaybackDevicesSchema, type NativePlaybackDevices, type NativePla
 import { encodeNativePlaybackCommand, NativePlaybackEventDecoder } from './native-playback-protocol';
 
 type Pending = { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; generation: number };
+export type NativeClockState = Extract<NativePlaybackEvent, { kind: 'clock' }>['state'];
 
 export function readNativePlaybackDevices(executable: string): Promise<NativePlaybackDevices> {
   return new Promise((resolve, reject) => {
@@ -91,11 +92,13 @@ export class NativePlaybackClient {
     });
   }
 
-  async readClock(generation: number): Promise<Extract<NativePlaybackEvent, { kind: 'clock' }>> {
+  /** The first device clock that shows `generation` in one of the states its operation ends in.
+   * A clock that still shows the state from before the operation is never taken as its result. */
+  async readClock(generation: number, settled: readonly NativeClockState[]): Promise<Extract<NativePlaybackEvent, { kind: 'clock' }>> {
     const deadline = Date.now() + 1000;
     while (this.child && !this.closing && Date.now() < deadline) {
       if (this.terminalError) throw this.terminalError;
-      if (this.lastClock?.generation === generation) return this.lastClock;
+      if (this.lastClock?.generation === generation && settled.includes(this.lastClock.state)) return this.lastClock;
       if (this.lastClock && this.lastClock.generation > generation) throw new Error('播放时钟已属于更新的操作');
       await new Promise(resolve => setTimeout(resolve, 10));
     }

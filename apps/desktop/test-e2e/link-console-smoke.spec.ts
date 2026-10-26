@@ -13,6 +13,7 @@ import ffmpegPath from 'ffmpeg-static';
 import { convertMa2Snapshot } from '../src/main/link/ma2-timecode-conversion';
 import { createMa2TimecodeXml } from '../src/main/link/ma2-create';
 import { answerSaveQuestions, saveProject, savedValue } from './save-questions';
+import { stubMidiPorts } from './midi-ports';
 
 const execFileAsync = promisify(execFile);
 const desktopEntry = join(process.cwd(), process.env.TBLINK_E2E_BUILD_DIR ?? 'out', 'main/index.cjs');
@@ -1473,12 +1474,7 @@ test('编辑器共用正式播放器，打点和菜单切换不中断，暂停�
   const profile = createDefaultIntegrationProfile();
   profile.midiPortProfiles.push({ id: 'lighting-record-input', direction: 'input', portName: 'Transport Input' });
   await page.evaluate((value) => window.tbLink.saveIntegrationProfile({ profile: value }), profile);
-  await page.addInitScript(() => {
-    const input = Object.assign(new EventTarget(), { id: 'record', name: 'Transport Input', type: 'input', state: 'connected', open: () => Promise.resolve() });
-    Reflect.set(window, '__transportInput', input);
-    const access = Object.assign(new EventTarget(), { inputs: new Map([['record', input]]), outputs: new Map() });
-    Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
-  });
+  const transportMidi = await stubMidiPorts(application, { inputs: ['Transport Input'] });
   await page.reload();
   await application.evaluate(({ ipcMain, BrowserWindow, dialog }, path) => {
     Reflect.set(globalThis, '__transportActions', []);
@@ -1513,10 +1509,7 @@ test('编辑器共用正式播放器，打点和菜单切换不中断，暂停�
   await expect.poll(() => application.evaluate(() => (Reflect.get(globalThis, '__transportActions') as unknown[]).length)).toBe(1);
   await page.getByRole('button', { name: '录制灯光', exact: true }).click();
   await expect(page.getByRole('button', { name: '结束录制', exact: true })).toBeVisible();
-  await page.evaluate(() => {
-    const event = new Event('midimessage'); Object.defineProperty(event, 'data', { value: new Uint8Array([0xb0, 7, 96]) });
-    (Reflect.get(window, '__transportInput') as EventTarget).dispatchEvent(event);
-  });
+  await transportMidi.deliver('Transport Input', [0xb0, 7, 96]);
   await page.getByRole('button', { name: '结束录制', exact: true }).click();
   await expect(page.locator('.lighting-clip')).toHaveCount(2);
   await page.locator('.lighting-track-name').click();
@@ -2664,21 +2657,14 @@ test('MIDI 顶部状态在启动和插拔时更新，不依赖打开设置', asy
     if (!profile) throw new Error('缺少测试配置');
     await window.tbLink.saveIntegrationProfile({ profile: { ...profile, midiPortProfiles: profile.midiPortProfiles.map((port) => ({ ...port, portName: port.id === profile.p1.controlOutputPortProfileId ? 'Startup Test Output' : '' })) } });
   });
-  await page.addInitScript(() => {
-    const output = { id: 'startup-output', name: 'Startup Test Output', manufacturer: 'Test', type: 'output', state: 'connected', connection: 'closed' };
-    const outputs = new Map([['startup-output', output]]);
-    const access = Object.assign(new EventTarget(), { inputs: new Map(), outputs, onstatechange: null as ((event: Event) => void) | null });
-    Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
-    window.addEventListener('test-midi-disconnect', () => { outputs.clear(); access.dispatchEvent(new Event('statechange')); });
-    window.addEventListener('test-midi-reconnect', () => { outputs.set('startup-output', output); access.dispatchEvent(new Event('statechange')); });
-  });
+  const startupMidi = await stubMidiPorts(application, { outputs: ['Startup Test Output'] });
   // Native playback lists outputs through Windows; the test controls that list and announces each change
-  // through Web MIDI, as Windows does. The real handler is put back afterwards.
+  // through the window's port list, as main's polling does. The real handlers are put back afterwards.
   await application.evaluate(({ ipcMain }) => {
     Reflect.set(globalThis, '__nativeDevicesHandler', (Reflect.get(ipcMain, '_invokeHandlers') as Map<string, unknown>).get('link:native-player-devices'));
     Reflect.set(globalThis, '__nativeMidiOutputs', [{ id: 0, name: 'Startup Test Output' }]);
     ipcMain.removeHandler('link:native-player-devices');
-    ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [], midiOutputs: Reflect.get(globalThis, '__nativeMidiOutputs') as { id: number; name: string }[] }));
+    ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [], midiOutputs: Reflect.get(globalThis, '__nativeMidiOutputs') as { id: number; name: string }[], midiInputs: [] }));
   });
   const setNativeOutputs = (names: string[]) => application.evaluate((_electron, list) => { Reflect.set(globalThis, '__nativeMidiOutputs', list.map((name, id) => ({ id, name }))); }, names);
   try {
@@ -2688,12 +2674,13 @@ test('MIDI 顶部状态在启动和插拔时更新，不依赖打开设置', asy
     const midi = page.getByRole('button', { name: /^P1 控制输出：/ });
     await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：可用');
     await setNativeOutputs([]);
-    await page.evaluate(() => window.dispatchEvent(new Event('test-midi-disconnect')));
+    await startupMidi.setPorts({});
     await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：未连接');
     await setNativeOutputs(['Startup Test Output']);
-    await page.evaluate(() => window.dispatchEvent(new Event('test-midi-reconnect')));
+    await startupMidi.setPorts({ outputs: ['Startup Test Output'] });
     await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：可用');
   } finally {
+    await startupMidi.restore();
     await application.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('link:native-player-devices');
       ipcMain.handle('link:native-player-devices', Reflect.get(globalThis, '__nativeDevicesHandler') as Parameters<typeof ipcMain.handle>[1]);
@@ -2918,16 +2905,12 @@ test('音乐自然结束补齐最后轮询间隔的 Cue，手动跳到结尾只�
   await application.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, projectPath);
   await page.getByRole('button', { name: '打开工程', exact: true }).click();
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
+  const tailMidi = await stubMidiPorts(application, { outputs: ['Tail Test'] });
   await page.evaluate(() => {
-    const packets: number[][] = [];
-    Reflect.set(window, '__tailPackets', packets);
     const audio = document.querySelector<HTMLAudioElement>('.timeline-toolbar > audio');
     const lifecycle: Array<{ event: string; time: number; ended: boolean; seeking: boolean }> = [];
     Reflect.set(window, '__tailLifecycle', lifecycle);
     for (const event of ['playing', 'pause', 'seeking', 'seeked', 'ended']) audio?.addEventListener(event, () => lifecycle.push({ event, time: audio.currentTime, ended: audio.ended, seeking: audio.seeking }));
-    const output = { name: 'Tail Test', state: 'connected', open: () => Promise.resolve(), send: (bytes: number[]) => packets.push([...bytes]) };
-    const access = Object.assign(new EventTarget(), { inputs: new Map(), outputs: new Map([['out', output]]) });
-    Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
     // Deterministically leave a final polling interval for the ended cleanup to flush.
     const interval = window.setInterval.bind(window);
     Object.defineProperty(window, 'setInterval', { configurable: true, value: (handler: TimerHandler, delay?: number, ...args: unknown[]): number => interval(delay === 5 && typeof handler === 'function' ? () => {
@@ -2941,16 +2924,16 @@ test('音乐自然结束补齐最后轮询间隔的 Cue，手动跳到结尾只�
   await page.getByRole('button', { name: '播放时间线', exact: true }).click();
   await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible({ timeout: 12000 });
-  await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__tailPackets') as number[][]).map((bytes) => bytes[0]))).toEqual([0x90, 0xf0, 0x80]).catch(async (error: unknown) => {
+  await expect.poll(async () => (await tailMidi.sent('Tail Test')).map((bytes) => bytes[0])).toEqual([0x90, 0xf0, 0x80]).catch(async (error: unknown) => {
     await writeFile(testInfo.outputPath('audio-lifecycle.json'), JSON.stringify(await page.evaluate((): unknown => Reflect.get(window, '__tailLifecycle')), null, 2));
     throw error;
   });
   await page.getByRole('button', { name: '回到时间线开头', exact: true }).click();
   await page.getByRole('button', { name: '播放时间线', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__tailPackets') as number[][]).length)).toBe(4);
+  await expect.poll(async () => (await tailMidi.sent('Tail Test')).length).toBe(4);
   await page.locator('.timeline-toolbar > audio').evaluate((audio) => { (audio as HTMLAudioElement).currentTime = 4; });
   await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__tailPackets') as number[][]).map((bytes) => bytes[0]))).toEqual([0x90, 0xf0, 0x80, 0x90, 0x80]);
+  await expect.poll(async () => (await tailMidi.sent('Tail Test')).map((bytes) => bytes[0])).toEqual([0x90, 0xf0, 0x80, 0x90, 0x80]);
 });
 
 test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo) => {
@@ -3003,13 +2986,7 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
   await page.reload();
   await expect.poll(() => page.evaluate(async () => (await window.tbLink.loadIntegrationProfile())?.midiPortProfiles.find((port) => port.id === 'lighting-record-input')?.portName)).toBe('Test Lighting Input');
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
-  await page.evaluate(() => {
-    const input = Object.assign(new EventTarget(), { name: 'Test Lighting Input', state: 'connected', open: () => Promise.resolve() });
-    const access = Object.assign(new EventTarget(), { inputs: new Map([['test', input]]), outputs: new Map() });
-    Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
-    Reflect.set(window, '__testLightingInput', input);
-    Reflect.set(window, '__testLightingAccess', access);
-  });
+  const recordMidi = await stubMidiPorts(application, { inputs: ['Test Lighting Input'] });
   await expect.poll(() => page.locator('.timeline-audio-engine').evaluate((audio) => (audio as HTMLAudioElement).readyState)).toBeGreaterThanOrEqual(2);
   await page.locator('.lighting-clip').first().dblclick({ position: { x: 20, y: 30 } });
   await page.getByLabel('执行器', { exact: true }).fill('1.5');
@@ -3022,45 +2999,28 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
   await expect(page.getByRole('button', { name: '结束录制', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '播放时间线', exact: true }).click();
   await expect.poll(() => page.locator('.timeline-audio-engine').evaluate((audio) => (audio as HTMLAudioElement).currentTime)).toBeGreaterThan(0.4);
-  const recordedMs = await page.evaluate(() => {
-    const input = Reflect.get(window, '__testLightingInput') as EventTarget;
-    const audio = document.querySelector<HTMLAudioElement>('.timeline-audio-engine');
-    if (!audio) throw new Error('播放音频不存在');
-    const message = new Event('midimessage');
-    Object.defineProperty(message, 'data', { value: new Uint8Array([0xb0, 7, 96]) });
-    const ms = audio.currentTime * 1000;
-    input.dispatchEvent(message);
-    const cueMessage = new Event('midimessage');
-    Object.defineProperty(cueMessage, 'data', { value: new Uint8Array([0xf0, 0x7f, 0x7f, 2, 1, 1, ...[...'37.200\0' + '5.1'].map((char) => char.charCodeAt(0)), 0xf7]) });
-    input.dispatchEvent(cueMessage);
-    const offMessage = new Event('midimessage');
-    Object.defineProperty(offMessage, 'data', { value: new Uint8Array([0xf0, 0x7f, 0x7f, 2, 1, 0x0b, ...[...'0.000\0' + '5.1'].map((char) => char.charCodeAt(0)), 0xf7]) });
-    input.dispatchEvent(offMessage);
-    const noteMessage = new Event('midimessage');
-    Object.defineProperty(noteMessage, 'data', { value: new Uint8Array([0x90, 60, 100]) });
-    input.dispatchEvent(noteMessage);
-    return ms;
-  });
+  const audioMs = () => page.locator('.timeline-audio-engine').evaluate((audio) => (audio as HTMLAudioElement).currentTime * 1000);
+  // Messages now cross from main to the window, so the recorded time lies between these two readings.
+  const recordedMs = await audioMs();
+  await recordMidi.deliver('Test Lighting Input', [0xb0, 7, 96]);
+  await recordMidi.deliver('Test Lighting Input', [0xf0, 0x7f, 0x7f, 2, 1, 1, ...[...'37.200\0' + '5.1'].map((char) => char.charCodeAt(0)), 0xf7]);
+  await recordMidi.deliver('Test Lighting Input', [0xf0, 0x7f, 0x7f, 2, 1, 0x0b, ...[...'0.000\0' + '5.1'].map((char) => char.charCodeAt(0)), 0xf7]);
+  await recordMidi.deliver('Test Lighting Input', [0x90, 60, 100]);
+  const deliveredMs = await audioMs();
   await expect.poll(() => page.locator('.timeline-audio-engine').evaluate((audio) => (audio as HTMLAudioElement).currentTime * 1000)).toBeGreaterThan(recordedMs + 150);
-  const releasedMs = await page.evaluate(() => {
-    const input = Reflect.get(window, '__testLightingInput') as EventTarget;
-    for (const bytes of [[0x80, 60, 72], [0x90, 62, 90]]) {
-      const message = new Event('midimessage');
-      Object.defineProperty(message, 'data', { value: new Uint8Array(bytes) }); input.dispatchEvent(message);
-    }
-    return (document.querySelector<HTMLAudioElement>('.timeline-audio-engine')?.currentTime ?? 0) * 1000;
-  });
+  await recordMidi.deliver('Test Lighting Input', [0x80, 60, 72]);
+  await recordMidi.deliver('Test Lighting Input', [0x90, 62, 90]);
+  const releasedMs = await audioMs();
   await expect.poll(() => page.locator('.timeline-audio-engine').evaluate((audio) => (audio as HTMLAudioElement).currentTime * 1000)).toBeGreaterThan(releasedMs + 50);
-  await page.evaluate(() => {
-    Reflect.set(Reflect.get(window, '__testLightingInput') as EventTarget, 'state', 'disconnected');
-    (Reflect.get(window, '__testLightingAccess') as EventTarget).dispatchEvent(new Event('statechange'));
-  });
+  await recordMidi.setPorts({});
   await expect(page.getByRole('button', { name: '录制灯光', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
   await expect.poll(() => savedValue(page, async () => {
     const project = JSON.parse(await readFile(linkPath, 'utf8')) as { rundown: Array<{ lighting?: { tracks: Array<{ clips: Array<{ events: Array<{ kind: string; at: number }> }> }> } }> };
     return project.rundown[0]?.lighting?.tracks[0]?.clips.flatMap((clip) => clip.events).find((event) => event.kind === 'cc')?.at;
-  })).toBeCloseTo(recordedMs, 0);
+  })).toBeGreaterThanOrEqual(recordedMs - 1);
+  const recordedCc = parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8'))).rundown[0]?.lighting?.tracks[0]?.clips.flatMap((clip) => clip.events).find((event) => event.kind === 'cc');
+  expect(recordedCc?.at).toBeLessThanOrEqual(deliveredMs + 100);
   await expect.poll(async () => {
     const project = JSON.parse(await readFile(linkPath, 'utf8')) as { rundown: Array<{ lighting?: { tracks: Array<{ clips: Array<{ events: Array<{ kind: string; cue?: string; executor?: string; sequence?: number; at: number }> }> }> } }> };
     return project.rundown[0]?.lighting?.tracks[0]?.clips.flatMap((clip) => clip.events).find((event) => event.kind === 'ma2' && event.cue === '37.200');

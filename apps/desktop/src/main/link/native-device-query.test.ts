@@ -13,7 +13,7 @@ function fixture(scope: 'all' | 'audio' = 'all') {
   processMock.spawn.mockReturnValue(child);
   const query = new NativeDeviceQuery('test-engine.exe', scope);
   const reply = (id: number, name: string) => JSON.stringify({ version: 1, requestId: id, ok: true,
-    devices: { protocol: 4, audio: [], midiOutputs: [{ id: 0, name }] } }) + '\n';
+    devices: { protocol: 4, audio: [], midiOutputs: [{ id: 0, name }], midiInputs: [] } }) + '\n';
   const close = async () => { const closing = query.close(); child.emit('close', 0); await closing; };
   return { child, query, reply, close };
 }
@@ -22,7 +22,7 @@ it.each(['all', 'audio'] as const)('明确的 %s 设备查询使用对应原生�
   const f = fixture(scope), pending = f.query.read();
   expect(processMock.spawn).toHaveBeenCalledWith('test-engine.exe',
     [scope === 'audio' ? '--audio-device-service' : '--device-service'], expect.objectContaining({ windowsHide: true }));
-  f.child.stdout.write(JSON.stringify({ version: 1, requestId: 1, ok: true, devices: { protocol: 4, audio: [], midiOutputs: [] } }) + '\n');
+  f.child.stdout.write(JSON.stringify({ version: 1, requestId: 1, ok: true, devices: { protocol: 4, audio: [], midiOutputs: [], midiInputs: [] } }) + '\n');
   await pending; await f.close();
 });
 
