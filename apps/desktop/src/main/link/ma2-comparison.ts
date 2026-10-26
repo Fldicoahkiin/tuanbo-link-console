@@ -11,8 +11,8 @@ export function compareMa2LightingReadback(documentInput: LightingDocument, bind
   binding.trackMappings ??= recoverMa2TrackMappings(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings);
   readback.trackMappings ??= recoverMa2TrackMappings(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings);
   if ((binding.timeOriginMs ?? 0) !== (readback.timeOriginMs ?? 0)) throw new Error('回读与节目时间码起点不一致');
-  const baseline = verifySnapshotSource(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings, binding.trackMappings, binding.timeOriginMs ?? 0);
-  const remote = verifySnapshotSource(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings, readback.trackMappings, readback.timeOriginMs ?? 0);
+  const baseline = verifySnapshotSource(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings, binding.trackMappings, binding.timeOriginMs ?? 0, binding.nativeEvents ?? []);
+  const remote = verifySnapshotSource(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings, readback.trackMappings, readback.timeOriginMs ?? 0, readback.unconverted);
   return previewMa2BoundSync(document, bindingId, readback, choices, {
     baselineVersion: baseline.version, remoteVersion: remote.version,
     baselineRevision: baseline.sha256, remoteRevision: remote.sha256,
@@ -20,7 +20,8 @@ export function compareMa2LightingReadback(documentInput: LightingDocument, bind
   });
 }
 
-function verifySnapshotSource(xml: string, target: number, tracks: LightingDocument['tracks'], mappings: Ma2TimecodePreview['mappings'], trackMappings: Ma2TimecodePreview['trackMappings'], originMs: number) {
+/** `consoleOnly`: actions the software does not convert; they stay in the XML and need no mapping. */
+function verifySnapshotSource(xml: string, target: number, tracks: LightingDocument['tracks'], mappings: Ma2TimecodePreview['mappings'], trackMappings: Ma2TimecodePreview['trackMappings'], originMs: number, consoleOnly: readonly { path: string }[]) {
   validateMa2TimecodeWrite(xml);
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
@@ -53,7 +54,8 @@ function verifySnapshotSource(xml: string, target: number, tracks: LightingDocum
       : address.length === 0 && original.event.cueName === null && mapping.sequence === null && mapping.cueIndex === null && mapping.action === action;
     if (!Number.isFinite(milliseconds) || Math.abs(clip.start + event.at - milliseconds) > 1e-6 || !validReference || mapping.executor !== event.executor || original.executor !== event.executor || original.event.attributes.pressed !== 'true' || event.action !== action) throw new Error('同步快照的时间或 Cue 引用与原始 XML 不一致');
   }
-  if (mapped.size !== source.size) throw new Error('同步快照未包含原始 XML 的全部事件');
+  const kept = new Set(consoleOnly.map((entry) => entry.path));
+  if ([...source.keys()].some((path) => !mapped.has(path) && !kept.has(path))) throw new Error('同步快照未包含原始 XML 的全部事件');
   if (trackMappings) {
     const paths = new Set<string>(); const ids = new Set<string>();
     for (const mapping of trackMappings) {

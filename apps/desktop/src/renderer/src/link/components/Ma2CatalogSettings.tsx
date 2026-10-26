@@ -68,7 +68,7 @@ export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy
         if (cached) useMa2AutoSyncStore.setState({ request: { catalog: cached.catalog, connection: await endpoint() } });
       })}>{automatic.request ? '关闭编辑后自动同步' : '启用编辑后自动同步'}</Button>
       <p role="status">{automatic.message}</p>
-      <p className="settings-note">原生保留时间线不能写回。其他时间线写回前仍须重新读取并比较控台。</p>
+      <p className="settings-note">软件不转换的控台动作写回时原样保留。写回前仍会重新读取并比较控台。</p>
     </details>
   </section>;
 }

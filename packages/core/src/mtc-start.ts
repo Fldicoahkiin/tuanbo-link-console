@@ -20,6 +20,11 @@ export function nextMtcStartMs(occupied: ReadonlyArray<{ startMs: number; endMs:
 
 /** The slot MIDI timecode reaches on grandMA2 by default; every song's own Timecode show listens there. */
 export const MA2_SONG_TIMECODE_SLOT = 'TC Slot 2';
+/**
+ * Starts a song sync error when the console changed the song's Sequence between the read and the
+ * write: nothing was written and the next pass reads again, so it is a wait, not a failed attempt.
+ */
+export const MA2_SONG_COLLISION = '控台同时在改';
 
 /** A show whose length the console does not give still runs past its last event; this much is kept clear after it. */
 const LAST_EVENT_MARGIN_TICKS = 30 * 30;

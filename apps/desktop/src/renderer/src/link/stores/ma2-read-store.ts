@@ -102,7 +102,7 @@ export async function importCachedMa2(target?: number, itemId?: string): Promise
     confirmMa2PairingCommand(number, pairedItem).execute(base);
     return Promise.resolve(entry.preview);
   }, () => { if (useDocumentStore.getState().project !== project || useDocumentStore.getState().documentId !== before.documentId) throw new Error('工程已变化，请重新应用缓存'); }, () => undefined);
-  const message = `${result.selections.length} 条已关联 · ${result.selections.filter(value => value.preview.unconverted.length).length} 条原生保留 · ${result.failures.length} 条需处理`;
+  const message = `${result.selections.length} 条已关联 · ${result.selections.filter(value => value.preview.unconverted.length).length} 条含控台专有动作 · ${result.failures.length} 条需处理`;
   const handled = new Set(pairs.map(([number]) => Number(number)));
   const cacheCommand = saveMa2ReadStateCommand({ ...state, failures: [...state.failures.filter(failure => !handled.has(failure.target)), ...result.failures], message });
   const importCommand = result.selections.length ? importMa2ProgramsCommand(result.selections) : null;

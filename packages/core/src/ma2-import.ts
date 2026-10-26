@@ -65,7 +65,6 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
   const binding = expected.ma2Bindings?.find((entry) => entry.id === bindingId);
   if (!binding || binding.timecode !== confirmed.target) throw new Error('MA2 回读与节目绑定不一致');
   if ((binding.timeOriginMs ?? 0) !== (confirmed.timeOriginMs ?? 0)) throw new Error('MA2 回读与歌曲时间码起点不一致');
-  if (confirmed.unconverted.length) throw new Error('回读存在未转换事件，不能更新同步基线');
   const map = new LightingTempoMap(expected.tempos);
   const boundIds = new Set([...binding.baselineTracks.map((track) => track.id), ...(binding.pendingTracks ?? []).map((track) => track.trackId)]);
   const nativeNames = new Map(binding.baselineTracks.flatMap((track) => track.clips.flatMap((clip) => clip.events.flatMap((event) => event.kind === 'ma2' || event.kind === 'ma2-fader' ? [[event.id, event.label] as const] : []))));
@@ -113,6 +112,7 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
   tracks.push(...ordered.slice(index));
   const lighting = lightingDocumentSchema.parse({ ...expected, tracks, ma2Bindings: expected.ma2Bindings?.map((entry) => entry.id === bindingId ? {
     ...entry, name: confirmed.name, readAt: confirmed.readAt, sourceXml: confirmed.sourceXml, pendingTracks: undefined,
+    nativeEvents: structuredClone(confirmed.unconverted), playback: confirmed.unconverted.length ? 'native-timecode' as const : 'editable' as const,
     baselineTracks: structuredClone(confirmed.document.tracks), mappings: structuredClone(confirmed.mappings), trackMappings: structuredClone(confirmed.trackMappings), cueCatalog: [...new Map([...(entry.cueCatalog ?? []), ...(confirmed.cueCatalog ?? [])].map((sequence) => [sequence.sequence, structuredClone(sequence)])).values()]
   } : entry) });
   const confirmedBinding = lighting.ma2Bindings!.find(entry => entry.id === bindingId)!;

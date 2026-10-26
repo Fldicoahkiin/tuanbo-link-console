@@ -18,6 +18,7 @@ import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor'
 import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recovery';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
 import { writeMa2SongTimecode } from './ma2-song-timecode';
+import { MA2_SONG_COLLISION } from '@tb/core/link';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
@@ -200,6 +201,8 @@ export class Ma2LayoutService {
     let layoutRequest = { network: request.network, expectedSource: request.expectedSource, layout: request.binding?.layout ?? request.settings.layout };
     let executorPage = request.binding?.executor ? Number(request.binding.executor.split('.')[0]) : request.binding?.layout ? undefined : request.settings.executorPage;
     let backupFile = '';
+    // Set only when the song's own write guard refused: the console changed the target meanwhile.
+    let collision: 'changed' | 'occupied' | null = null;
     try {
       progress('connecting', 0, 1, '核对控台、歌曲绑定与目标位置');
       const directory = await this.directory(bridge, layoutRequest);
@@ -259,8 +262,11 @@ export class Ma2LayoutService {
       }
       if (!request.binding) {
         const occupied = new Set(directory.entries.map(entry => entry.target));
-        while (occupied.has(target) && target < 99999) target++;
-        if (occupied.has(target)) throw new Error('起始序列之后没有空位置，请修改起始序列');
+        // A new song's Sequence and its own Timecode show share one number (2026-10-26), so either one
+        // finds the other: the first number from the start that is free in both pools.
+        const shows = request.timecodeStartMs === undefined ? new Set<number>() : new Set(ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1))).entries.map(entry => entry.target));
+        while ((occupied.has(target) || shows.has(target)) && target < 99999) target++;
+        if (occupied.has(target) || shows.has(target)) throw new Error('起始序列之后没有序列和时间码节目都空着的编号，请修改起始序列');
         request.settings.nextSequence = target;
       }
       if (request.binding && (request.binding.endpoint !== endpoint || request.binding.show !== directory.show || request.binding.layout !== null && request.settings.layout !== request.binding.layout)) throw new Error('本曲绑定的控台、Show 或页面发生变化，请先核对原位置');
@@ -387,7 +393,14 @@ export class Ma2LayoutService {
         this.attempted.add(request.requestId); wrote = true;
         const clear = replacingAll ? `gma.cmd('Import ${file}_clear.xml At Sequence ${target} /o /nc');` : '';
         const write = copyInPlace ? '' : `gma.cmd('Import ${file}.xml At Sequence ${target} /o /nc');assert(gma.show.getobj.handle('Sequence ${target}'),'Sequence creation failed');`;
-        await this.call(connection, `${this.guard(layoutRequest)}${verify}${remove}${clear}${write}${removeFiles(file, `${file}_check`, `${file}_clear`)}return 'written'`);
+        try { await this.call(connection, `${this.guard(layoutRequest)}${verify}${remove}${clear}${write}${removeFiles(file, `${file}_check`, `${file}_clear`)}return 'written'`); }
+        catch (error) {
+          // The guard stops before anything is written. Drop the draft just recorded so the next
+          // sync reads the console afresh instead of resuming, or adopting, a Sequence it never wrote.
+          collision = error instanceof Error ? /Sequence changed during write/.test(error.message) ? 'changed' : /(?<!Scratch )Sequence occupied/.test(error.message) ? 'occupied' : null : null;
+          if (collision) { wrote = false; await writeFileAtomically(ownership, JSON.stringify(owners)); }
+          throw error;
+        }
         if (copyInPlace && existingName !== plan.name) await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} "${plan.name}"`)});return 'labelled'`);
         if (nativeCopy || copyInPlace) {
           progress('previews', 0, plan.changes.length, `控台内部${nativeCopy ? '创建' : '写入'} ${plan.changes.length} 个 Cue`);
@@ -450,7 +463,7 @@ export class Ma2LayoutService {
       if (plan.deletions.some(number => actualHashes.has(number) && !changedNumbers.has(Number(number)))) throw new Error('歌曲 Cue 删除回读未通过');
       // The show record the project holds, or the one recorded here when the project never received it.
       const previousTimecode = request.binding?.timecode ?? owners.find(owner => owner.key === key && owner.projectId === request.projectId && owner.itemId === request.itemId)?.binding?.timecode;
-      const executor = executorPage && destination ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, destination, this.isPlaying) : undefined;
+      const executor = executorPage && destination ? await assignMa2SongExecutor(connection, bridge, request, target, destination, this.isPlaying) : undefined;
       const afterLayout = executorPage ? null : changed ? await this.snapshot(connection, layoutRequest) : beforeLayout;
       if (!executorPage && !afterLayout?.value.items.some(item => item.sequence === target)) throw new Error('Layout 未回读到本曲序列');
       // Without a write the directory read at the start still lists this Sequence as it is.
@@ -494,7 +507,13 @@ export class Ma2LayoutService {
       await journal(timed.binding);
       if (written.backup) await this.backups.record(rawBridge, { console: endpoint, object: `Timecode ${written.timecode.number}`, files: [written.backup] });
       return timed;
-    } catch (cause) { throw new Error(`${wrote ? `序列 ${target} 的写入结果待核对，原位置与备份 ${backupFile || '新建对象记录'} 已保留。` : ''}${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      // The guard runs before anything is written: the console changed the song's Sequence meanwhile.
+      if (collision === 'changed') throw new Error(`${MA2_SONG_COLLISION}：序列 ${target} 在控台上刚被改过，本次没有写入`, { cause });
+      if (collision === 'occupied') throw new Error(`${MA2_SONG_COLLISION}：序列 ${target} 在控台上刚被占用，本次没有写入，下次同步改用其他空编号`, { cause });
+      throw new Error(`${wrote ? `序列 ${target} 的写入结果待核对，原位置与备份 ${backupFile || '新建对象记录'} 已保留。` : ''}${message}`, { cause });
+    }
     finally { clearTimeout(timer!); this.busy = false; }
   }
 

@@ -687,7 +687,10 @@ export function prepareMa2TimecodeEvents(xml: string, expectedSha256: string, ta
       continue;
     }
     if (edit.faderLevel !== undefined) throw new Error('Cue 动作不能改写为推杆点');
-    if (!['Goto', 'Go', 'Off'].includes(node.getAttribute('command') ?? '') || node.getAttribute('pressed') !== 'true') throw new Error('此控台动作的修改尚未验证');
+    // Moving an event in time keeps everything else it holds, so any console action may move (2026-10-26):
+    // a button release follows its press, and a Cue with console-only parameters keeps them.
+    const timeOnly = !edit.cue && !edit.executorAction;
+    if (!timeOnly && (!['Goto', 'Go', 'Off'].includes(node.getAttribute('command') ?? '') || node.getAttribute('pressed') !== 'true')) throw new Error('此控台动作的修改尚未验证');
     if (edit.rawTime !== undefined) setTime(node, edit.rawTime);
     if (edit.cue) setCue(node, edit.cue);
     if (edit.executorAction) setExecutorAction(node, edit.executorAction);

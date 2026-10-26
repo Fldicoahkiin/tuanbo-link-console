@@ -8,6 +8,8 @@ import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
  * Where the song's Sequence sits on its executor page. A bound song keeps its slot while that slot
  * holds the song or is empty; a Sequence the operator moved on the same page is followed there; a
  * slot now taken by other content leaves it untouched and the song moves to the next free slot.
+ * Buttons 101–190 of a full page are never overwritten: the song goes to the next page (2026-10-26:
+ * page 1000 full continues on 1001), up to nine pages on.
  */
 export type Ma2SongExecutorPlan = { address: string; slot: number; pageExists: boolean; assigned: boolean };
 export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, existing: string | undefined, isPlaying: () => boolean): Promise<Ma2SongExecutorPlan> {
@@ -26,9 +28,14 @@ export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>
     if (oldPage === page && !covers(oldSlot!)) return { address: existing, slot: oldSlot!, pageExists: snapshot !== null, assigned: false };
   }
   let slot = 101; while (slot <= 190 && covers(slot)) slot++;
-  if (slot > 190) throw new Error(`按钮第 ${page} 页已经放满，请选择另一页；原有内容未覆盖`);
-  const address = `${page}.${slot}`;
-  return { address, slot, pageExists: snapshot !== null, assigned: false };
+  if (slot <= 190) return { address: `${page}.${slot}`, slot, pageExists: snapshot !== null, assigned: false };
+  for (let next = page + 1; next <= Math.min(page + 9, 9999); next++) {
+    const items = directory.pages.some(value => value.page === next) ? (await readMa2ExecutorPage(bridge, { ...request, page: next })).items : null;
+    stopped();
+    let free = 101; while (free <= 190 && items?.some(item => free >= item.slot && free < item.slot + item.width)) free++;
+    if (free <= 190) return { address: `${next}.${free}`, slot: free, pageExists: items !== null, assigned: false };
+  }
+  throw new Error(`按钮第 ${page}–${Math.min(page + 9, 9999)} 页的 101–190 都已放满，请选择另一页；原有内容未覆盖`);
 }
 
 /**
@@ -36,9 +43,11 @@ export async function planMa2SongExecutor(bridge: Pick<Ma2OnpcBridge, 'request'>
  * page again first: the assignment itself refuses a slot or page that changed since, and the page is
  * read once afterwards to confirm it.
  */
-export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, page: number, destination: Ma2SongExecutorPlan, isPlaying: () => boolean): Promise<string> {
+export async function assignMa2SongExecutor(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, source: Ma2LayoutDirectoryRequest, sequence: number, destination: Ma2SongExecutorPlan, isPlaying: () => boolean): Promise<string> {
   const { address, slot, pageExists, assigned } = destination;
   if (assigned) return address;
+  // The plan may have continued on a later page when the requested one was full.
+  const page = Number(address.split('.')[0]);
   const stopped = (): void => { if (isPlaying()) throw new Error('播放已经开始，未修改执行器位置'); };
   stopped();
   const guard = `assert(gma.show.getvar('SHOWFILE')==${ma2LuaString(source.expectedSource.show)} and TBLINK_BRIDGE_GENERATION==${ma2LuaString(source.expectedSource.generation)},'Show or session changed');`;

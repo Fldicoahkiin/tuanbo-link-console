@@ -152,12 +152,14 @@ it('换 Show 后停止，后续周期不继续读写', async () => {
   expect(test.dependencies.catalog).toHaveBeenCalledTimes(1); expect(test.dependencies.read).not.toHaveBeenCalled();
   expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('Show'));
 });
-it('双方冲突先阻断，不发送写入', async () => {
+it('同一项两边都改过时以软件为准写入，不停止自动同步（2026-10-26）', async () => {
   const test = setup(); test.edit();
   const remote = convertMa2Timecode(xml.replace('<Event index="0"', '<Event time="15" index="0"'), [sequence], 9902);
   test.dependencies.read = vi.fn(() => Promise.resolve(remote));
-  await test.runner.tick(); expect(test.dependencies.apply).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('冲突'));
+  await test.runner.tick();
+  const request = vi.mocked(test.dependencies.apply).mock.calls[0]?.[0];
+  expect(request?.conflicts.length).toBeGreaterThan(0); expect(request?.conflicts.every(([, side]) => side === 'local')).toBe(true);
+  expect(vi.mocked(test.dependencies.changed).mock.calls.some(([status, message]) => status === 'writing' && message.includes('以软件为准'))).toBe(true);
 });
 
 it.skipIf(!process.env.MA2_ONPC_AUTO_SYNC_ACCEPTANCE)('真实 onPC 自动写回及反向修改进入工程，最后恢复测试对象', async () => {

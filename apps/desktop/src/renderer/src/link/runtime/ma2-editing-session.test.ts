@@ -66,10 +66,11 @@ it('连接之前的本地修改保留，不能因连接动作自动覆盖控台'
   expect(await prepareMa2Editing(connection, useDocumentStore.getState().documentId)).toContain('连接前的本地修改');
   expect(useMa2AutoSyncStore.getState().request).toBeNull();
 });
-it('原生保留时间线可载入但不会冒充可安全写回', async () => {
+it('含软件不转换的控台动作的时间线照样可写回，动作原样保留（2026-10-26）', async () => {
   const project = structuredClone(useDocumentStore.getState().project!);
   project.rundown[0]!.lighting!.ma2Bindings![0]!.nativeEvents = [{ path: 'native', reason: '未验证动作' }];
   useDocumentStore.getState().setProject(project, 'test.tblink');
-  expect(await prepareMa2Editing(connection, useDocumentStore.getState().documentId)).toContain('尚无已验证可写回');
+  const summary = await prepareMa2Editing(connection, useDocumentStore.getState().documentId);
+  expect(summary).toContain('1 条含软件不转换的控台动作'); expect(summary).not.toContain('自动写回未启用');
   expect(importCachedMa2).toHaveBeenCalledOnce(); expect(useMa2AutoSyncStore.getState().request).toBeNull();
 });

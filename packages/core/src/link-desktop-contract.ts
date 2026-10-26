@@ -305,8 +305,6 @@ export type LinkDesktopApi = {
   writeRecoveryCopy(payload: import('@tb/schema').RecoveryCopyWrite): Promise<void>;
   /** An unnamed project asks once before an action that needs a location: 选择保存位置 / 取消. */
   confirmProjectLocation(purpose: string): Promise<boolean>;
-  /** Start check failed: true plays the song without lighting, false cancels. */
-  confirmPlayWithoutLighting(reason: string): Promise<boolean>;
   /** Why the main-process document worker refuses work (a timeout or a broken worker); null while it works. */
   projectDocumentWorkerState(): Promise<{ stalled: string | null }>;
   /** Asks the operator, then restarts a stuck document worker; true when confirmed. */

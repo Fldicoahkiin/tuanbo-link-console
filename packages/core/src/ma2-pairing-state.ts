@@ -5,9 +5,11 @@ import { programTimeOrigin } from './ma2-time-origin';
 import { importMa2TimecodeCommand } from './ma2-import';
 
 /**
- * What a confirmed pairing rests on: the console, the Show, the Timecode's timing and the song's start
- * and audio. The bridge session and console version are not part of it, so reading the same console
- * again, a restarted plugin or an upgrade keeps confirmations.
+ * What a confirmed pairing rests on: the console, the Show, the Timecode's frame format and start, and
+ * the song's start and audio. A pairing is made by the MTC start alone (2026-10-26), so the times of
+ * the Cues inside the timeline are not part of it: moving a Cue in the software or on the console and
+ * reading the console again keeps the confirmation. The bridge session and console version are not
+ * part of it either, so a restarted plugin or an upgrade keeps confirmations.
  */
 export function ma2PairingEvidence(project: LinkProject, source: string, catalog: Ma2Catalog, target: number, itemId: string): string {
   const item = project.rundown.find(value => value.id === itemId);
@@ -15,20 +17,20 @@ export function ma2PairingEvidence(project: LinkProject, source: string, catalog
   if (!item?.referenceAudio || !entry || entry.error || item.p1UnavailableSourceKey || item.p1Media?.importedFullSource || !item.p1Media && !item.playback) return '';
   try {
     return JSON.stringify({ source, show: catalog.directory.show,
-      frame: entry.frameFormat, offset: entry.offset, times: entry.events.map(event => event.time),
+      frame: entry.frameFormat, offset: entry.offset,
       origin: programTimeOrigin(item),
       audio: item.referenceAudio.sha256, duration: item.referenceAudio.durationMs, trim: item.p1Media?.sourceTrim,
       fullSource: item.p1Media?.importedFullSource });
   } catch { return ''; }
 }
 
-/** Evidence saved by earlier versions also carried the bridge session and console version; neither counts. */
+/** Evidence saved by earlier versions also carried the bridge session, the console version and the Cue times; none counts. */
 function sameMa2PairingEvidence(saved: string, current: string): boolean {
   if (saved === current) return current !== '';
   if (!saved || !current) return false;
   const timing = (text: string): string => {
     const value = JSON.parse(text) as Record<string, unknown>;
-    delete value.version; delete value.generation;
+    delete value.version; delete value.generation; delete value.times;
     return JSON.stringify(value);
   };
   return timing(saved) === timing(current);

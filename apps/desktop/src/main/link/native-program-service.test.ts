@@ -36,7 +36,7 @@ it('替换等待旧输出关闭；旧界面的迟到关闭不停止新输出', a
   await service.control(command(a, { kind: 'close' })); expect(next.close).not.toHaveBeenCalled();
   gate.release(); await replacing; expect(create).toHaveBeenCalledTimes(2);
   await expect(service.control(command(a, { kind: 'play', itemId: 'old' }))).rejects.toThrow('已关闭');
-  await service.control(command(b, { kind: 'play', itemId: 'next' })); expect(next.controller.play).toHaveBeenCalledWith('next', undefined, undefined, undefined);
+  await service.control(command(b, { kind: 'play', itemId: 'next' })); expect(next.controller.play).toHaveBeenCalledWith('next', undefined, undefined);
 });
 
 it('停止不排在未完成的播放准备之后', async () => {

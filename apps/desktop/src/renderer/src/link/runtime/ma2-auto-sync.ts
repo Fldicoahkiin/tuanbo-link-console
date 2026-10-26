@@ -149,7 +149,7 @@ export class Ma2AutoSync {
       pending = ma2PendingChanges(project);
       const invalid = pending.find(change => change.error);
       if (invalid) throw new Error(`Timecode ${invalid.target}：${invalid.error}`);
-      const targets = project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).filter(binding => !binding.nativeEvents?.length && binding.playback !== 'native-timecode' && (refreshRemote || pending.some(change => change.bindingId === binding.id && change.itemId === item.id))).map(binding => ({ itemId: item.id, bindingId: binding.id, target: binding.timecode })));
+      const targets = project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).filter(binding => (refreshRemote || pending.some(change => change.bindingId === binding.id && change.itemId === item.id))).map(binding => ({ itemId: item.id, bindingId: binding.id, target: binding.timecode })));
       if (new Set(targets.map(target => target.target)).size !== targets.length) throw new Error('同一控台时间线绑定了多个节目，不能自动同步');
       for (const target of targets) {
         if (!current()) return;
@@ -162,7 +162,9 @@ export class Ma2AutoSync {
         if (matchMa2Readback(binding, readback).ambiguous.length) throw new Error(`Timecode ${target.target} 的事件对应不明确，请在手动同步中确认`);
         const comparison = await this.dependencies.compare({ document: source, bindingId: binding.id, readback, choices: [] });
         if (!current()) return;
-        if (comparison.conflicts.length) throw new Error(`Timecode ${target.target} 有 ${comparison.conflicts.length} 处冲突，自动同步已停止，请手动选择保留内容`);
+        // The same item changed on both sides: the software's version is written (2026-10-26) and the
+        // console's version stays in the console-side backup the write makes; sync keeps running.
+        const conflicts = comparison.conflicts.map(conflict => [conflict.id, 'local'] as [string, 'local']);
         const same = (left: Ma2SyncPreview['base'], right: Ma2SyncPreview['base']): boolean => JSON.stringify(left.objects) === JSON.stringify(right.objects);
         if (same(comparison.base, comparison.local) && same(comparison.base, comparison.remote)) continue;
         if (this.dependencies.state().project?.rundown.find(item => item.id === target.itemId)?.lighting !== source) { this.dependencies.changed('waiting', '编辑尚未结束，等待下一次检查'); return; }
@@ -170,8 +172,8 @@ export class Ma2AutoSync {
         if (!current()) return;
         if (this.dependencies.state().project?.rundown.find(item => item.id === target.itemId)?.lighting !== source) { this.dependencies.changed('waiting', '存档期间本地修改已变化，等待下一次检查'); return; }
         this.writing = true;
-        this.dependencies.changed('writing', `正在同步 Timecode ${target.target} 并回读`);
-        const result = ma2ApplyResultSchema.parse(await this.dependencies.apply({ ...session.connection, document: source, bindingId: binding.id, readback, choices: [], conflicts: [], timeAlignment: 'nearest-frame' }));
+        this.dependencies.changed('writing', conflicts.length ? `Timecode ${target.target} 有 ${conflicts.length} 处两边都改过，以软件为准写入并回读` : `正在同步 Timecode ${target.target} 并回读`);
+        const result = ma2ApplyResultSchema.parse(await this.dependencies.apply({ ...session.connection, document: source, bindingId: binding.id, readback, choices: [], conflicts, timeAlignment: 'nearest-frame' }));
         if (result.status === 'incomplete') throw new Error(`${result.message}${result.mayHaveWritten ? '；控台可能已写入，请手动回读' : ''}${result.backupFile ? `；备份：${result.backupFile}` : ''}`);
         if (this.dependencies.state().documentId !== session.documentId) {
           this.session = null; this.dependencies.changed('blocked', '控台已完成同步，但会话或本地编辑已改变；本地变更已保留，请手动回读确认'); return;

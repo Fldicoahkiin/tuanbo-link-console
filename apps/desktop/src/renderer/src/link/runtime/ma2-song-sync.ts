@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { allocateSongMtcStart, applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, programTimeOrigin, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
+import { MA2_SONG_COLLISION, allocateSongMtcStart, applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, programTimeOrigin, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
 import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { requireSavedProjectPath } from '../project-document';
@@ -16,8 +16,10 @@ import { useProgramSelectionStore } from '../stores/program-selection-store';
  * 'blocked': the same sync failed MAX_ATTEMPTS times in a row; it waits for an edit or 刷新同步.
  * `checkedAt`: when a confirmed song was last compared with the console.
  */
-type SongSync = { sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings; state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string; requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; acknowledged?: string; remoteRevision?: string | undefined; blockedRevision?: number | undefined; nextCheckAt?: number; checkedAt?: number; waitingForConnection?: boolean; consecutiveFailures?: number; archivedSignature?: string; rewriteLegacyNames?: boolean };
+type SongSync = { sessionId: string; itemId: string; documentId: number; name: string; settings: Ma2LayoutSettings; state: 'pending' | 'syncing' | 'verified' | 'blocked' | 'paused'; message: string; requestId?: string | null; progress?: Ma2ReadProgress | null; checking?: boolean; acknowledged?: string; remoteRevision?: string | undefined; blockedRevision?: number | undefined; nextCheckAt?: number; checkedAt?: number; waitingForConnection?: boolean; consecutiveFailures?: number; consecutiveCollisions?: number; archivedSignature?: string; rewriteLegacyNames?: boolean };
 const MAX_ATTEMPTS = 3;
+/** Console edits that collide with a write in a row before they count as a failed attempt. */
+const MAX_COLLISIONS = 5;
 // Each comparison exports the song on the console. The song open in the editor is compared often,
 // so console edits show up quickly; the others rarely, so they never hold up the next edit for long.
 const FOCUSED_RECHECK_MS = 2000;
@@ -242,7 +244,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const confirmed = applyMa2SongReadback(item.lighting, points, result);
         const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(result.binding.baselineXml));
         const remoteRevision = result.remoteRevision ?? Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
-        update(entry, { state: 'verified', checking: false, waitingForConnection: false, checkedAt: Date.now(), nextCheckAt: Date.now() + BACKGROUND_RECHECK_MS, remoteRevision, consecutiveFailures: 0,
+        update(entry, { state: 'verified', checking: false, waitingForConnection: false, checkedAt: Date.now(), nextCheckAt: Date.now() + BACKGROUND_RECHECK_MS, remoteRevision, consecutiveFailures: 0, consecutiveCollisions: 0,
           rewriteLegacyNames: false, acknowledged: songSignature(ma2SongPoints(confirmed), result.binding.name, start),
           message: confirmedMessage(result.binding) });
         // An edit made while this song was being written waits for its own sync instead of the next check.
@@ -256,15 +258,21 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         catch (statusError) { reportCoordinatorError(`读取连接状态：${String(statusError)}`, reason => update(entry, { message: reason })); }
         const playback = useMa2AutoSyncStore.getState();
         const playingNow = playback.timelinePlaying || playback.previewPlaying;
-        const waiting = disconnected || playingNow;
+        // The console edited the song's Sequence while it was being written: nothing was written and the
+        // next pass reads it again. A few in a row are a wait; an operator who keeps editing for longer
+        // stops the retries like any failure, so the sync never keeps going round (2026-10-26).
+        const collisions = message.startsWith(MA2_SONG_COLLISION) ? (entry.consecutiveCollisions ?? 0) + 1 : 0;
+        const collided = collisions > 0 && collisions <= MAX_COLLISIONS;
+        const waiting = disconnected || playingNow || collided;
         // Waiting for the console or for playback to stop is not a failed attempt.
         const consecutiveFailures = waiting ? entry.consecutiveFailures ?? 0 : (entry.consecutiveFailures ?? 0) + 1;
         const exhausted = consecutiveFailures >= MAX_ATTEMPTS;
-        update(entry, { state: exhausted ? 'blocked' : 'pending', blockedRevision: useDocumentStore.getState().revision, consecutiveFailures,
-          nextCheckAt: Date.now() + (waiting ? 1000 : 1000 * consecutiveFailures),
+        update(entry, { state: exhausted ? 'blocked' : 'pending', blockedRevision: useDocumentStore.getState().revision, consecutiveFailures, consecutiveCollisions: collisions,
+          nextCheckAt: Date.now() + (collided ? FOCUSED_RECHECK_MS : waiting ? 1000 : 1000 * consecutiveFailures),
           waitingForConnection: disconnected, checking: false, requestId: null, progress: null,
           message: playingNow ? '播放中保留当前修改；停止后核对原位置并继续同步'
             : disconnected ? `等待连接恢复后核对并续传；${message}`
+            : collided ? '控台上刚改过本曲序列，本次没有写入；稍后重新读取控台再合并同步'
             : exhausted ? `同步连续 ${consecutiveFailures} 次失败，已停止自动重试：${message}。修改保留在本地，处理后点「刷新同步」`
             : `第 ${consecutiveFailures} 次同步失败，${consecutiveFailures} 秒后再试：${message}` });
         reportCoordinatorError(message, reason => { update(entry, { message: reason }); });

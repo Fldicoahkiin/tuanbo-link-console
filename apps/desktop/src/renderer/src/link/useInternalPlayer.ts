@@ -15,14 +15,11 @@ import { useIntegrationStore } from './stores/integration-store';
 import { linkDesktopViewModel as desktop } from './view-models/link-desktop-view-model';
 import { runDesktopPreflight } from './view-models/link-preflight-view-model';
 import { useRuntimeStore } from './stores/runtime-store';
-import { useMa2AutoSyncStore } from './runtime/use-ma2-auto-sync';
 import { useDisplayPreferences } from './stores/display-preferences-store';
 import { useSelectedProgram } from './useSelectedProgram';
 
 /** Player notices already logged as warnings in this window. */
 const notedNotices = new Set<string>();
-/** The operator's "play without lighting" answers in this window; the start check asks once per song. */
-const withoutLightingChoices: NonNullable<InternalPlayerDependencies['withoutLightingChoices']> = new Map();
 
 export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, ready: boolean, project: LinkProject | null) {
   const path = useDocumentStore((state) => state.path);
@@ -83,9 +80,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     const dependencies: InternalPlayerDependencies = {
       // Refused before any output is prepared; the engine is never switched here.
       refusal: () => internalAudioEngine(useIntegrationStore.getState().profile, project).blocked,
-      confirmWithoutLighting: reason => desktop.confirmPlayWithoutLighting(reason), withoutLightingChoices,
       prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled, signal }) => {
-        if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
         if (!path) throw new Error('请先保存工程，再播放正式音频');
         if (useIntegrationStore.getState().obs.status !== 'connected') {
           prepared = null;

@@ -36,9 +36,6 @@ export class NativeProgramPlayer {
   private finishing = false;
   private allowMtc = false;
   private mtcSuppressed = false;
-  private allowLighting = false;
-  /** Lighting route of the current song, decided before it starts and kept for its seeks and loops. */
-  private lit = true;
   private loopStart: number | null = null;
   private reflectGain = false;
   private ingestPending = false;
@@ -85,8 +82,8 @@ export class NativeProgramPlayer {
     if (selection) await this.api.cancelNativeObsPreload(selection.request);
   }
 
-  /** `withoutLighting`: the operator chose to play this song without lighting after the start check. */
-  play(itemId: string, positionMs?: number, paused = false, withoutLighting = false): Promise<void> {
+  /** Every song starts with its timecode (2026-10-26); the start check only shows a warning. */
+  play(itemId: string, positionMs?: number, paused = false): Promise<void> {
     const config = this.dependencies.configuration(), token = ++this.epoch;
     // The service discards another song's preselected picture for this play; that is not a failure.
     if (this.selectedPreload?.itemId !== itemId) this.selectedPreload = null;
@@ -105,16 +102,11 @@ export class NativeProgramPlayer {
       const prepared = nativeProgramSnapshot(this.project, itemId, this.revision, positionMs, config.audioSampleRate ?? 48000);
       const item = this.project.rundown.find(entry => entry.id === itemId)!;
       if (!reuseSession) {
-        // Without an operator choice (end of song, MIDI control, skip) a failed check plays without lighting in red.
         const check = lightingStartCheck(this.project, itemId, { portName: config.mtcPortName, ports: null });
-        this.lit = !withoutLighting && check === null;
-        // The operator's choice is in the run log already (开播前检查); show it without logging it twice.
-        if (withoutLighting) this.showNotice(`本首无灯光播放：${check ?? '操作员选择'}`);
-        else if (check) this.startFault(`${check}；本首无灯光播放`);
+        if (check) this.reportUnavailable(check);
       }
-      this.allowMtc = prepared.allowMtc && this.lit;
-      this.allowLighting = prepared.allowLighting && this.lit;
-      if (prepared.notice && this.lit) this.reportUnavailable(prepared.notice);
+      this.allowMtc = prepared.allowMtc;
+      if (prepared.notice) this.reportUnavailable(prepared.notice);
       const sendMtc = this.allowMtc && this.state.mtcEnabled;
       const midiPortName = sendMtc ? config.mtcPortName : null;
       const snapshot = { ...prepared.snapshot, volume: config.fadeInMs && !paused ? 0 : prepared.snapshot.volume };
@@ -141,7 +133,7 @@ export class NativeProgramPlayer {
       if (!this.current(token)) { await this.command({ kind: 'stop' }); return; }
       if (this.mtcSuppressed && result.mtcPortName) await this.command({ kind: 'stop-mtc' });
       if (!this.current(token)) return;
-      const prepareLighting = async (): Promise<void> => { if (item.lighting && this.allowLighting) {
+      const prepareLighting = async (): Promise<void> => { if (item.lighting) {
         try { await optionalOutputReady(this.lighting.prepare(playbackLighting(item.lighting), config.lightingProfile ?? null, snapshot.positionMs), () => this.lighting.stop(), '灯光动作'); this.lightingPrepared = this.current(token); }
         catch (error) { this.lighting.stop(); if (this.current(token)) this.startFault(`灯光动作未参与：${toUserErrorMessage(error)}`); }
       } };
@@ -175,7 +167,7 @@ export class NativeProgramPlayer {
       const position = this.native!.positionMs;
       if (!this.current(token)) return;
       const item = this.project.rundown.find(entry => entry.id === this.state.itemId);
-      const prepareLighting = async (): Promise<void> => { if (item?.lighting && this.allowLighting) {
+      const prepareLighting = async (): Promise<void> => { if (item?.lighting) {
         try { await optionalOutputReady(this.lighting.prepare(playbackLighting(item.lighting), this.dependencies.configuration().lightingProfile ?? null, position), () => this.lighting.stop(), '灯光动作'); this.lightingPrepared = this.current(token); }
         catch (error) { this.reportUnavailable(`灯光动作未恢复：${toUserErrorMessage(error)}`); }
       } };

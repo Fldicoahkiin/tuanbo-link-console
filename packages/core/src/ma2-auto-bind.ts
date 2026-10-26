@@ -13,7 +13,6 @@ export function ma2AutoBindEvents(document: LightingDocument): Array<Extract<Lig
   return document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.flatMap(event => {
     if (event.kind !== 'ma2' && event.kind !== 'ma2-fader') return [];
     const binding = bound.get(track.id);
-    if (binding?.binding.nativeEvents?.length || binding?.binding.playback === 'native-timecode') return [];
     return !binding || !event.executor || binding.executor !== event.executor ? [event] : [];
   })));
 }
@@ -32,7 +31,6 @@ export function normalizeMa2AutoBindings(input: LightingDocument, plan: Ma2AutoB
   const result: LightingTrack[] = [];
   for (const track of document.tracks) {
     const native = bound.get(track.id);
-    if (native?.binding.nativeEvents?.length || native?.binding.playback === 'native-timecode') { result.push(track); continue; }
     const binding = native?.binding ?? destination;
     const groups = new Map<string, LightingTrack>();
     if (native) groups.set(native.executor ?? '', { ...track, clips: track.clips.map(clip => ({ ...clip, events: [] })) });

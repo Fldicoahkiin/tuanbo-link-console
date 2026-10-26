@@ -6,7 +6,11 @@ import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { useIntegrationStore } from '../stores/integration-store';
 import { reportCoordinatorError } from './runtime-action-log';
 
-export function useLightingPreview(input: { enabled: boolean; document: LightingDocument | undefined; audioRef: RefObject<HTMLAudioElement>; playing: boolean; frameRate: MtcFrameRate; onError: (message: string) => void }): { ready: boolean; stop: () => Promise<void> } {
+/**
+ * `mtcOrigin` is the song's MTC start, the one the program sends (2026-10-26: P1-follow previews used to
+ * start from the console binding, 0 for a song made in the software). Without it the binding's start is used.
+ */
+export function useLightingPreview(input: { enabled: boolean; document: LightingDocument | undefined; mtcOrigin?: (() => number) | undefined; audioRef: RefObject<HTMLAudioElement>; playing: boolean; frameRate: MtcFrameRate; onError: (message: string) => void }): { ready: boolean; stop: () => Promise<void> } {
   const endingOutput = useRef<LightingMidiOutput | null>(null);
   const ownedOutput = useRef<LightingMidiOutput | null>(null);
   const [ready, setReady] = useState(false);
@@ -72,13 +76,14 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       }
     };
     const start = async (): Promise<void> => {
-      const originMs = lightingTimeOrigin(document);
+      const sendsMtc = input.enabled && hasLightingContent && document.outputMode === 'timecode';
+      const originMs = sendsMtc ? (latest.current.mtcOrigin ?? (() => lightingTimeOrigin(document)))() : 0;
       const profile = useIntegrationStore.getState().profile;
       const audio = input.audioRef.current;
       if (!audio || !audio.getAttribute('src')) { if (input.enabled) throw new Error('请先给节目添加音乐，再开启灯光试听'); return; }
       if (input.enabled) await output.prepare(document, profile, audio.currentTime * 1000);
       if (cancelled || (input.enabled && ownedOutput.current !== output)) { cleanup(); return; }
-      if (input.enabled && hasLightingContent && document.outputMode === 'timecode') {
+      if (sendsMtc) {
         const id = profile?.internalPlayer?.mtcOutputPortProfileId;
         const name = profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output')?.portName;
         if (!name) throw new Error('请在设备设置选择 MIDI 时间码输出');
@@ -98,7 +103,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
             else resume();
             return;
           }
-          if (input.enabled) output.tick(audio.currentTime * 1000); if (input.enabled && hasLightingContent && document.outputMode === 'timecode') mtc.tick(audio.currentTime * 1000 + originMs, latest.current.frameRate);
+          if (input.enabled) output.tick(audio.currentTime * 1000); if (sendsMtc) mtc.tick(audio.currentTime * 1000 + originMs, latest.current.frameRate);
         } catch (error) { cleanup(); fail(error); }
       }, 5);
     };

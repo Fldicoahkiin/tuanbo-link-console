@@ -52,11 +52,11 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   const bindings = project.rundown.flatMap(item => item.lighting?.ma2Bindings ?? []);
   const retained = bindings.filter(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode').length;
   const pairingNotice = state.failures.length ? `；${state.failures.length} 条未关联，请在“配对与查看 Cue”中查看对应时间线的原因` : '';
-  const summary = `${reuse ? '已恢复工程缓存（控台内容更新请点“更新控台读取”）' : '控台读取完成'}；${bindings.length} 条已关联，${retained} 条含原生保留动作${pairingNotice}${libraryNotice}`;
+  const summary = `${reuse ? '已恢复工程缓存（控台内容更新请点“更新控台读取”）' : '控台读取完成'}；${bindings.length} 条已关联，${retained} 条含软件不转换的控台动作（原样保留，其余 Cue 可改可回传）${pairingNotice}${libraryNotice}`;
   const reason = state.catalog.incomplete || state.catalog.sourceUnverified ? '读取尚未完整核对'
     : Object.values(state.pairings ?? {}).some(pair => pair.status === 'stale') ? '已有配对需要重新核对'
     : ma2PendingChanges(project).length ? '有连接前的本地修改，请先核对后提交'
-    : !bindings.some(binding => !binding.nativeEvents?.length && binding.playback !== 'native-timecode') ? '尚无已验证可写回的时间线' : null;
+    : !bindings.length ? '尚无已关联的时间线' : null;
   if (reason) {
     useMa2AutoSyncStore.setState({ status: 'off', message: `${reason}；已读 Cue 可查看，本地修改不会自动写回` });
     return `${summary}。${reason}，自动写回未启用`;

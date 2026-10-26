@@ -1,8 +1,8 @@
-import { emptyInternalPlayerState, lightingStartCheck, nativeAudioAnalysis, songLightingStatus, toUserErrorMessage,
-  type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type PlaybackBoundary, type PlaybackClock, type SongLightingStatus } from '@tb/core/link';
+import { emptyInternalPlayerState, nativeAudioAnalysis, toUserErrorMessage,
+  type InternalPlayerDependencies, type InternalPlayerState, type LinkDesktopApi, type PlaybackBoundary, type PlaybackClock } from '@tb/core/link';
 import type { LinkProject, NativePlayerStatus, NativeProgramAttachment, NativeProgramEvent, NativeProgramOperation } from '@tb/schema';
 
-type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | 'onNativeProgramEvent' | 'onNativePlaybackStatus' | 'getNativePlaybackDevices'>;
+type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | 'onNativeProgramEvent' | 'onNativePlaybackStatus'>;
 
 /** UI controller is a remote for the main-process program host. It never
  * schedules playback, sends lighting, or invents time while the UI is busy. */
@@ -42,32 +42,15 @@ export class RemoteNativeProgramPlayer {
       document: JSON.stringify(project), configuration: this.configuration() }).then(attachment => { this.attachment = attachment; });
     void this.ready.catch(error => this.failed(error));
   }
-  /** A song the operator starts is checked first; a failed check asks whether to play it without lighting.
-   * The answer is asked once per song and kind of problem: later starts reuse it, and the engine still
-   * shows that the song plays without lighting. A song that checks out asks again the next time it fails. */
-  async play(itemId: string, positionMs?: number, paused = false): Promise<void> {
-    let withoutLighting = false;
-    try {
-      const check = await this.startCheck(itemId);
-      const choices = this.dependencies.withoutLightingChoices, key = `${this.project.projectId}\n${itemId}`;
-      if (!check) choices?.delete(key);
-      else if (choices?.get(key) === check.topic) {
-        withoutLighting = true;
-        this.dependencies.notice?.(`开播前检查：沿用操作员选择无灯光播放；${check.reason}`, itemId);
-      } else {
-        if (!this.dependencies.confirmWithoutLighting) throw new Error(`${check.reason}；无法询问是否无灯光播放`);
-        if (!await this.dependencies.confirmWithoutLighting(check.reason)) return;
-        choices?.set(key, check.topic);
-        withoutLighting = true;
-      }
-    } catch (error) { this.failed(error); return; }
-    return this.send({ kind: 'play', itemId, ...(positionMs === undefined ? {} : { positionMs }), paused, ...(withoutLighting ? { withoutLighting } : {}) });
+  /** Every song plays when the operator starts it (2026-10-26); the engine shows the start check as a warning. */
+  play(itemId: string, positionMs?: number, paused = false): Promise<void> {
+    return this.send({ kind: 'play', itemId, ...(positionMs === undefined ? {} : { positionMs }), paused });
   }
   pause(): Promise<void> { return this.send({ kind: 'pause' }); }
   resume(): Promise<void> { return this.send({ kind: 'resume' }); }
   stop(): Promise<void> { return this.send({ kind: 'stop' }); }
   reset(): Promise<void> { return this.send({ kind: 'reset' }); }
-  /** Starting from stop goes through the start check; pause and resume keep the song's route. */
+  /** Starting from stop plays the song again; pause and resume keep the song's position. */
   toggle(): Promise<void> {
     if (this.state.status !== 'playing' && this.state.status !== 'paused' && this.state.itemId) return this.play(this.state.itemId);
     return this.send({ kind: 'toggle' });
@@ -96,17 +79,6 @@ export class RemoteNativeProgramPlayer {
     this.disposed = true; this.unsubscribe(); this.boundaries.clear();
     // Close is sent immediately, including while open is waiting for authorization.
     await this.api.controlNativeProgram({ version: 1, ownerId: this.ownerId, operation: { kind: 'close' } });
-  }
-  private async startCheck(itemId: string): Promise<{ topic: SongLightingStatus['state']; reason: string } | null> {
-    const topic = songLightingStatus(this.project, itemId).state;
-    let ports: string[] | null = null;
-    // Only a ready song needs the present MIDI outputs.
-    if (topic === 'ready') {
-      try { ports = (await this.api.getNativePlaybackDevices()).midiOutputs.map(output => output.name); }
-      catch (error) { return { topic, reason: `这首歌可演出，但时间码输出端口无法确认：${toUserErrorMessage(error)}` }; }
-    }
-    const reason = lightingStartCheck(this.project, itemId, { portName: this.dependencies.configuration().mtcPortName, ports });
-    return reason ? { topic, reason } : null;
   }
   private configuration() { return { ...this.dependencies.configuration(), preciseSeeking: this.dependencies.preciseSeeking?.() ?? false }; }
   private async send(operation: NativeProgramOperation): Promise<void> {

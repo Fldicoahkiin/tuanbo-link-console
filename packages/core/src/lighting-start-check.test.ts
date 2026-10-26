@@ -32,11 +32,11 @@ it('可演出的歌缺时间码端口或帧率不一致时给出原因', () => {
   expect(lightingStartCheck(project, '歌曲甲', port)).toBe('这首歌可演出，但帧率不一致：工程 25 FPS，控台节目 30 FPS');
 });
 
-it('控台节目没同步最新改动或灯光需要处理时给出原因', () => {
+it('控台节目没同步最新改动或灯光需要处理时只提示，时间码照常发送（2026-10-26）', () => {
   const project = fixture(), lighting = createLightingDocument(); lighting.tracks = [track(500)];
   lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '歌曲甲', readAt: '2026-10-22T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [track(0)], mappings: [], playback: 'editable', timeOriginMs: 480000 }];
   project.rundown[0]!.lighting = lighting;
-  expect(lightingStartCheck(project, '歌曲甲', port)).toBe('控台节目还没同步最新改动（1 项）：带灯光播放会跑控台上的旧版本。请先同步到控台，或无灯光播放。');
+  expect(lightingStartCheck(project, '歌曲甲', port)).toBe('控台上还是上一版：本曲还有 1 项改动没同步到控台，这次时间码触发的是控台现有的灯光；停止播放后会自动同步');
   lighting.ma2Bindings[0]!.timeOriginMs = 0;
-  expect(lightingStartCheck(project, '歌曲甲', port)).toMatch(/^这首歌的灯光需要处理：.*起点不一致/);
+  expect(lightingStartCheck(project, '歌曲甲', port)).toMatch(/^这首歌的灯光需要处理：.*起点不一致.*。时间码照常发送$/);
 });

@@ -38,6 +38,20 @@ it('切换控台必须重新核对；同一控台重新读取、插件重启或�
   expect(reconcileMa2ReadState(confirmed, 'console', reread).pairings?.[2]?.status).toBe('confirmed');
 });
 
+it('配对只看 MTC 起始码：Cue 时间在软件或控台改动后重新读取仍为已确认；旧依据里的 Cue 时间不再参与（2026-10-26）', () => {
+  const { project, catalog } = fixture();
+  project.ma2ReadState = reconcileMa2ReadState(project, 'console', catalog);
+  const confirmed = confirmMa2PairingCommand(2, '歌曲甲').execute(project);
+  const moved = structuredClone(catalog); moved.entries[0]!.events[1]!.time = '1200';
+  moved.entries[0]!.events.push({ path: '2', time: '1500', action: 'Goto', executor: '51.101', cue: null, name: null });
+  expect(reconcileMa2ReadState(confirmed, 'console', moved).pairings?.[2]?.status).toBe('confirmed');
+  const legacy = structuredClone(confirmed), pairing = legacy.ma2ReadState!.pairings![2]!;
+  pairing.evidence = JSON.stringify({ ...JSON.parse(pairing.evidence) as Record<string, unknown>, times: ['0', '955'] });
+  expect(reconcileMa2ReadState(legacy, 'console', moved).pairings?.[2]?.status).toBe('confirmed');
+  const restarted = structuredClone(moved); restarted.entries[0]!.offset = '14430';
+  expect(reconcileMa2ReadState(confirmed, 'console', restarted).pairings?.[2]?.status).toBe('stale');
+});
+
 it('旧版本保存的配对依据（含控台会话号和版本）在同一控台重新读取后仍为已确认', () => {
   const { project, catalog } = fixture();
   project.ma2ReadState = reconcileMa2ReadState(project, 'console', catalog);

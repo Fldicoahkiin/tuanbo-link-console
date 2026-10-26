@@ -68,7 +68,7 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   };
   const setPlaying = (next: boolean): void => {
     if (next && !external && !localAudioReady) { notify('当前音频尚未就绪，请检查文件是否存在并等待音频加载完成', 'error'); return; }
-    if (next && useMa2AutoSyncStore.getState().status === 'writing') { notify('MA2 正在同步并回读，请完成后播放', 'error'); return; }
+    // A console write in progress finishes on its own; playing never waits for it (2026-10-26) and later syncs wait for stop.
     if (seekQueue.current) { resumeAfterSeek.current = next; return; }
     if (!external) { useMa2AutoSyncStore.setState({ previewPlaying: next }); setLocalPlaying(next); return; }
     const controller = player.controller;

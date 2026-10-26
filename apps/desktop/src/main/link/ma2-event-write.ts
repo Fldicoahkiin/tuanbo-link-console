@@ -113,6 +113,10 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     subtracks.get(id)!.add(master); masterSubtracks.add(master); subtrackExecutors.set(master, executor);
   }
   const raw = new Map(report.timecodes.flatMap((tc) => tc.tracks.flatMap((track) => track.subtracks.flatMap((subtrack) => subtrack.events.map((event) => [event.path, { event, executor: track.executorAddress.slice(2).join('.') }] as const)))));
+  // Console actions the software does not convert stay in the XML untouched (2026-10-26); the ones shown
+  // on the timeline (a Cue with console-only parameters) may only move or be deleted.
+  const consoleOnly = new Set(readback.unconverted.map((entry) => entry.path));
+  const followers = ma2ReleaseFollowers(report);
   const sequences = sequenceXml.map((source) => inspectMa2SequenceXml(source, true));
   if (sequences.some((sequence) => sequence.version !== report.version)) throw new Error('关联序列的 MA2 版本与 Timecode 不一致');
   const edits: Ma2EventEdit[] = [];
@@ -170,11 +174,13 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
       const timeChanged = Number(original.event.attributes.time ?? 0) !== Number(rawTime);
       const cueChanged = cue ? original.event.cueAddress.join('.') !== `1.${cue.sequence}.${cue.cueIndex}` || original.event.attributes.command !== 'Goto' : false;
       const actionChanged = value.action !== 'goto' && original.event.attributes.command !== (value.action === 'go' ? 'Go' : 'Off');
+      if ((cueChanged || actionChanged) && consoleOnly.has(path)) throw new Error(`控台事件 ${path} 带有控台专有参数，软件里只能改时间或删除；换 Cue 或动作请在控台操作。未写入控台`);
       if (timeChanged || cueChanged || actionChanged) edits.push({ kind: 'update', path, ...(timeChanged ? { rawTime } : {}), ...(cueChanged ? { cue } : {}), ...(actionChanged && value.action !== 'goto' ? { executorAction: value.action } : {}) });
     } else {
       addedIds.set(edits.length, object.id); edits.push({ kind: 'add', subtrackPath, rawTime, ...(cue ? { cue } : {}), ...(value.action !== 'goto' ? { executorAction: value.action } : {}) });
     }
   }
+  edits.push(...ma2FollowerEdits(edits, followers, raw));
   const write = prepareMa2TimecodeEvents(newMasters.xml, inspectMa2TimecodeXml(newMasters.xml).sha256, readback.target, edits);
   const eventPaths = new Map<string, string>();
   for (const [id, path] of paths) { const next = write.originalPaths.get(path); if (next) eventPaths.set(id, next); }
@@ -186,6 +192,9 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     return { path, muted: entry.properties.muted === 'true' };
   });
   const deletedPaths = [...trackPaths].filter(([id]) => !desiredObjects.has(id)).map(([, path]) => path);
+  for (const path of deletedPaths) {
+    if ([...consoleOnly].some((entry) => entry === path || entry.startsWith(`${path}/`))) throw new Error('这条轨道上有软件不转换的控台动作，整条删除请在控台操作；未写入控台');
+  }
   const orderedTracks = desired.objects.filter((entry) => entry.kind === 'track').sort((a, b) => a.order - b.order);
   if (orderedTracks.some((track, index) => track.order !== index)) throw new Error('合并后的轨道顺序存在冲突，请重新比较');
   const order = orderedTracks.map((track) => { const path = trackPaths.get(track.id); if (!path) throw new Error('轨道排序缺少控台映射'); return path; });
@@ -209,8 +218,8 @@ export function confirmMa2MergedEvents(prepared: Ma2PreparedEventWrite, readback
   if (!sameMa2XmlObjects(prepared.desiredXml, readbackXml)) throw new Error('MA2 回读与本次写入不一致，不能更新同步基线');
   const root = prepared.desired.objects.find((object) => object.kind === 'timecode');
   if (!root) throw new Error('同步结果缺少 Timecode');
+  // Console-only actions are allowed: the readback equals the XML written, so they are kept as they were.
   const preview = convertMa2Timecode(readbackXml, sequenceXml, Number(root.properties.number), prepared.timeOriginMs);
-  if (preview.unconverted.length) throw new Error('MA2 回读存在未转换内容，不能更新同步基线');
   const byPath = new Map([...prepared.eventPaths].map(([id, path]) => [path, id]));
   if (byPath.size !== prepared.eventPaths.size || byPath.size !== preview.mappings.length) throw new Error('MA2 写回映射数量不一致');
   const desired = new Map(prepared.desired.objects.map((object) => [object.id, object]));
@@ -242,4 +251,50 @@ export function confirmMa2MergedEvents(prepared: Ma2PreparedEventWrite, readback
   }
   if (root.properties.name !== preview.name || trackIds.size !== prepared.desired.objects.filter((object) => object.kind === 'track').length) throw new Error('MA2 回读对象范围与合并结果不一致');
   return ma2TimecodePreviewSchema.parse(preview);
+}
+
+/**
+ * A button press recorded on the console is followed by its release (`pressed="false"`) on the same
+ * SubTrack. Each release belongs to the nearest earlier press of the same command and Cue; it is not
+ * shown in the software and moves or goes with its press.
+ */
+export function ma2ReleaseFollowers(report: Pick<ReturnType<typeof inspectMa2TimecodeXml>, 'timecodes'>): Map<string, string[]> {
+  const result = new Map<string, string[]>();
+  for (const tc of report.timecodes) for (const track of tc.tracks) for (const subtrack of track.subtracks) {
+    const last = new Map<string, string>();
+    const ordered = subtrack.events.map((event, position) => ({ event, position }))
+      .sort((a, b) => Number(a.event.attributes.time ?? 0) - Number(b.event.attributes.time ?? 0) || a.position - b.position);
+    for (const { event } of ordered) {
+      if (event.attributes.fader_level !== undefined) continue;
+      const key = `${event.attributes.command ?? ''}|${event.cueAddress.join('.')}`;
+      if (event.attributes.pressed === 'true') last.set(key, event.path);
+      else if (event.attributes.pressed === 'false') {
+        const press = last.get(key);
+        if (press) result.set(press, [...result.get(press) ?? [], event.path]);
+      }
+    }
+  }
+  return result;
+}
+
+/** A press that moves takes its releases along by the same amount; a press deleted takes them with it. */
+export function ma2FollowerEdits(edits: readonly Ma2EventEdit[], followers: ReadonlyMap<string, readonly string[]>, raw: ReadonlyMap<string, { event: { attributes: Record<string, string> } }>): Ma2EventEdit[] {
+  const touched = new Set(edits.flatMap((edit) => edit.kind === 'add' ? [] : [edit.path]));
+  const result: Ma2EventEdit[] = [];
+  for (const edit of edits) {
+    if (edit.kind === 'add') continue;
+    const paths = (followers.get(edit.path) ?? []).filter((path) => !touched.has(path));
+    if (edit.kind === 'delete') { for (const path of paths) { touched.add(path); result.push({ kind: 'delete', path }); } continue; }
+    if (edit.rawTime === undefined) continue;
+    const before = Number(raw.get(edit.path)?.event.attributes.time ?? 0);
+    const shift = Number(edit.rawTime) - before;
+    if (!Number.isFinite(shift) || shift === 0) continue;
+    for (const path of paths) {
+      const time = Number(raw.get(path)?.event.attributes.time ?? 0) + shift;
+      if (!Number.isFinite(time) || time < 0) throw new Error(`按键松开事件 ${path} 随按下移动后早于时间线起点；未写入控台`);
+      touched.add(path);
+      result.push({ kind: 'update', path, rawTime: String(Number(time.toFixed(6))) });
+    }
+  }
+  return result;
 }

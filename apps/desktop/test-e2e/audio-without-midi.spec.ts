@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEmptyLinkProject, createLightingDocument, parseLinkProject } from '@tb/schema';
-import { answerStartCheck } from './start-check';
+import { recordStartCheckDialogs } from './start-check';
 import { closeDiscarding } from './save-questions';
 import { stubMidiPorts } from './midi-ports';
 
@@ -27,20 +27,20 @@ test('OBS 和 MIDI 均未连接时，有音频仍可开始播放', async ({}, in
     await stubMidiPorts(app);
     await page.reload();
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
-    // The console timeline is not yet confirmed for this song, so the start check asks; the operator plays without lighting.
-    const startChecks = await answerStartCheck(app);
+    // The console timeline is not yet confirmed for this song: the song still plays, the check only warns.
+    const startChecks = await recordStartCheckDialogs(app);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     const waveform = page.locator('.unified-player .home-waveform-monitor');
     const before = await waveform.boundingBox();
     expect(before).not.toBeNull();
     await page.locator('.player-transport .primary-button').click();
     await expect(page.locator('.player-transport.status-playing')).toBeVisible();
-    expect(await startChecks()).toEqual([expect.stringContaining('这首歌的灯光需要处理')]);
+    expect(await startChecks()).toEqual([]);
     await expect(page.locator('.player-diagnostics')).toHaveAttribute('data-status', 'notice');
     await expect(page.locator('.player-notice')).not.toBeVisible();
     expect(await waveform.boundingBox()).toEqual(before);
     await page.locator('.player-diagnostics > summary').click();
-    await expect(page.getByText(/本首无灯光播放/).first()).toBeVisible();
+    await expect(page.getByText(/这首歌的灯光需要处理.*时间码照常发送/).first()).toBeVisible();
     await expect(page.getByText(/OBS 未连接.*音频继续播放/).first()).toBeVisible();
     expect(await waveform.boundingBox()).toEqual(before);
     await page.keyboard.press('Escape');

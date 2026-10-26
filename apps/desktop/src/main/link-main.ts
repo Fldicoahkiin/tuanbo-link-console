@@ -1434,15 +1434,6 @@ function registerIpc(
       buttons: ['选择保存位置', '取消'], defaultId: 0, cancelId: 1 });
     return response === 0;
   });
-  handle('link:confirm-play-without-lighting', async (_event, reasonValue: unknown) => {
-    const reason = z.string().min(1).max(4000).parse(reasonValue);
-    const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '开播前检查', noLink: true,
-      message: '这首歌的灯光还不能演出。', detail: reason, buttons: ['无灯光播放', '取消'], defaultId: 0, cancelId: 1 });
-    // The song's lighting needs someone's attention: a warning the first time, info when it repeats song after song.
-    await logger.record({ level: firstTimeWarning(seenNotices, reason), category: 'operator', device: '正式播放器',
-      message: `开播前检查：${reason}；${response === 0 ? '操作员选择无灯光播放' : '操作员取消播放'}` });
-    return response === 0;
-  });
   handle('link:project-document-worker', () => ({ stalled: projectDocuments.stalledReason() }));
   handle('link:restart-project-document-worker', async (_event, reasonValue: unknown) => {
     const reason = z.string().min(1).max(8192).parse(reasonValue);
