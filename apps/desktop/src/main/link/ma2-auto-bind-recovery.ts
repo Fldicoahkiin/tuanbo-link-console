@@ -3,7 +3,7 @@ import { lightingMa2BindingSchema, type LightingDocument, type LightingEvent, ty
 
 /** Restore only an exact, unique correspondence. Never infer that missing remote events may be deleted. */
 export function recoverMa2AutoBinding(document: LightingDocument, preview: Ma2TimecodePreview, id: string): Ma2AutoBindPlan {
-  const fail = (): never => { throw new Error(`Timecode ${preview.target} 的已有编排与本地不能唯一对应，请在歌曲导入中读取此时间线后核对；控台内容未覆盖`); };
+  const fail = (): never => { throw new Error(`Timecode ${preview.target} 上已有的编排和本地对不上，请在歌曲导入里读取这条时间线后确认；控台内容没有被覆盖`); };
   if (preview.unconverted.length) fail();
   const assignments: Ma2AutoBindPlan['assignments'] = [];
   const poolSequences = new Set(document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.flatMap(event => event.kind === 'ma2' && !event.executor && event.sequence ? [event.sequence] : []))));

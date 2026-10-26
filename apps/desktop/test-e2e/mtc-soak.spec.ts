@@ -248,14 +248,14 @@ test('真实媒体时钟与 Windows MIDI 回环持续测量', async ({}, info) =
     // The player must fail once instead of Web MIDI implicitly reopening it.
     await page.evaluate(async () => { await (Reflect.get(window, '__mtcSoakOutput') as MIDIOutput).close(); });
     await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__mtcSoakAudio') as HTMLAudioElement).paused)).toBe(!internal);
-    await expect.poll(() => page.locator('.toast, .player-notice').allTextContents()).toContainEqual(expect.stringContaining('连接已失效'));
+    await expect.poll(() => page.locator('.toast, .player-notice').allTextContents()).toContainEqual(expect.stringContaining('连接失效'));
     const stopped = await page.evaluate(() => ({ count: (Reflect.get(window, '__mtcSoakSent') as { count: number }).count,
       connection: (Reflect.get(window, '__mtcSoakOutput') as MIDIOutput).connection,
       notices: [...document.querySelectorAll('.toast, .player-notice')].map(element => element.textContent) }));
     await page.waitForTimeout(300);
     expect(await page.evaluate(() => (Reflect.get(window, '__mtcSoakSent') as { count: number }).count)).toBe(stopped.count);
     expect(stopped.connection).toBe('closed');
-    expect(stopped.notices.join(' ')).toContain('连接已失效');
+    expect(stopped.notices.join(' ')).toContain('连接失效');
     await writeFile(info.outputPath('disconnect.json'), JSON.stringify(stopped, null, 2));
     expect(pageErrors).toEqual([]);
     await writeFile(info.outputPath('acceptance.json'), JSON.stringify({ internal, passed: true, physicalConsoleAcceptance: false, seconds, checked: ['route', 'byte-order', 'quarter-frame-order', 'drift', 'one-frame-error', 'disconnect-no-reopen', 'page-errors'] }, null, 2));

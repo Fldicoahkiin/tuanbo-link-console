@@ -56,7 +56,7 @@ it('校验完成前主动断开，不恢复登录或发送命令', async () => {
   const ports = await peer(line => sent.push(line));
   const validate = vi.fn(() => { connection.disconnect(); return Promise.resolve(); });
   const connection = new Ma2Telnet({ host: '127.0.0.1', ...ports }, undefined, 300, validate);
-  await expect(connection.connect('operator', 'test-value')).rejects.toThrow('连接已改变');
+  await expect(connection.connect('operator', 'test-value')).rejects.toThrow('连接变了');
   expect(sent).toEqual([]);
 });
 it('命令与监视连接都绑定指定电脑地址', async () => {
@@ -81,7 +81,7 @@ it('实体控台关闭远程入口时明确提示首次开启，不发送登录�
   const states: Ma2TelnetState[] = [];
   const ports = await peer((line) => sent.push(line), '\nRemote commandline disabled\n\r');
   const connection = client(ports, states);
-  await expect(connection.connect('operator', 'test-value')).rejects.toThrow('控台尚未开启远程连接');
+  await expect(connection.connect('operator', 'test-value')).rejects.toThrow('控台还没开启远程连接');
   expect(sent).toEqual([]);
   expect(states).toEqual(['connecting', 'disconnected']);
 });
@@ -98,7 +98,7 @@ it('guest 横幅和回显的验证命令都不代表认证成功', async () => {
   const states: Ma2TelnetState[] = [];
   const port = await peer((line, socket) => socket.write(`${line}\r\nPlease login !\r\n [Channel]>`));
   const connection = client(port, states, 80);
-  await expect(connection.connect('operator', 'test-value')).rejects.toThrow('登录未确认');
+  await expect(connection.connect('operator', 'test-value')).rejects.toThrow('登录没有成功');
   expect(states).not.toContain('connected'); expect(connection.state).toBe('disconnected');
 });
 it('超时取消排队请求，不重发未确认命令', async () => {

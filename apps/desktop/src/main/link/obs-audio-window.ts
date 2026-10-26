@@ -16,8 +16,8 @@ export function selectObsAudioWindow(items: readonly { itemValue?: unknown; item
     return fields.length === 3 && decodeWindowField(fields[0] ?? '') === title
       && decodeWindowField(fields[2] ?? '').toLowerCase() === executable.toLowerCase();
   });
-  if (windows.length === 0) throw new Error(`OBS 未找到当前联动台音频窗口「${title}」。请保持主窗口打开，并确认 OBS 与联动台使用相同的运行权限，然后重新点击播放。`);
-  if (windows.length !== 1) throw new Error(`OBS 找到 ${windows.length} 个同名音频窗口「${title}」，无法安全选择。请关闭重复实例后重新点击播放。`);
+  if (windows.length === 0) throw new Error(`OBS 找不到联动台的音频窗口「${title}」。请保持联动台主窗口打开，确认 OBS 和联动台用相同的权限运行（都是或都不是管理员），然后重新播放。`);
+  if (windows.length !== 1) throw new Error(`OBS 找到 ${windows.length} 个同名的音频窗口「${title}」，无法确定用哪个。请关掉多开的联动台后重新播放。`);
   const value = windows[0]?.itemValue;
   if (typeof value !== 'string') throw new Error('OBS 音频窗口标识无效');
   return value;

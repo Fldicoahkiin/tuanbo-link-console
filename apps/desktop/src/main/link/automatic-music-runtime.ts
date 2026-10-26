@@ -16,16 +16,16 @@ export class AutomaticMusicRuntime {
   }
 
   async status(): Promise<AutomaticMusicStatus> {
-    let available = true; let reason = '离线引擎可运行；识别精度尚未完成曲库验收';
+    let available = true; let reason = '离线识别可以使用，识别准确度还在验证中';
     try { await Promise.all([this.options.python, this.options.worker, this.options.ffmpeg, join(this.options.bundle, 'manifest.json')].map(path => access(path))); }
-    catch (cause) { available = false; reason = `本机离线识别组件缺失，未联网下载：${cause instanceof Error ? cause.message : String(cause)}`.slice(0, 16_384); }
+    catch (cause) { available = false; reason = `缺少离线识别组件（不会联网下载）：${cause instanceof Error ? cause.message : String(cause)}`.slice(0, 16_384); }
     return automaticMusicStatusSchema.parse({ version: 1, available, device: this.options.device, devices: this.options.devices, reason, publication: 'not-validated', jobs: this.service.list() });
   }
 
   async start(request: AutomaticMusicRequest): Promise<AutomaticMusicJob> {
     const status = await this.status();
     if (!status.available) throw new Error(status.reason);
-    if (!status.devices.includes(request.device)) throw new Error('请求设备与已安装识别运行时不符，未切换设备');
+    if (!status.devices.includes(request.device)) throw new Error('选择的设备和已安装的识别组件不匹配，没有切换');
     return this.service.enqueue(request);
   }
 

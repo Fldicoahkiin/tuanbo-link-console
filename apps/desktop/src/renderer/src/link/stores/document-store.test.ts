@@ -198,7 +198,7 @@ describe('document store command history', () => {
     const { stateId, documentId } = useDocumentStore.getState();
     store.markSaved('C:\\shows\\saved.tblink', stateId, documentId);
     const rename = renameProjectCommand('回读名称');
-    store.execute({ ...rename, historyRebaseKey: 'readback', rebaseHistory: project => ({ ...project, notes: '控台回读' }) });
+    store.execute({ ...rename, historyRebaseKey: 'readback', rebaseHistory: project => ({ ...project, notes: '控台版本' }) });
     expect(useDocumentStore.getState().dirty).toBe(true);
     store.undo();
     expect(useDocumentStore.getState().dirty).toBe(true);
@@ -236,7 +236,7 @@ describe('document store command history', () => {
     store.markConsoleSynced(documentId);
     store.setProject(createEmptyLinkProject('其他'), null);
     expect(useDocumentStore.getState().consoleSynced).toBe(false);
-    expect(() => useDocumentStore.getState().markConsoleSynced(documentId)).toThrow('当前工程已切换');
+    expect(() => useDocumentStore.getState().markConsoleSynced(documentId)).toThrow('工程已切换');
   });
 
   it('每个打开的文档有自己的恢复副本会话，保存不更换', () => {
@@ -271,7 +271,7 @@ describe('document store command history', () => {
       path: 'C:\\shows\\new.tblink'
     });
     expect(() => useDocumentStore.getState().executeForDocument(oldDocumentId, renameProjectCommand('错误覆盖')))
-      .toThrow('当前工程已切换');
+      .toThrow('工程已切换');
     expect(useDocumentStore.getState().project?.name).toBe('后来打开的工程');
   });
 

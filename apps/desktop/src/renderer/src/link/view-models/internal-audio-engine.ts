@@ -23,9 +23,9 @@ export function internalAudioEngine(profile: IntegrationProfile | null, project:
   const engine = chosenAudioEngine(profile?.internalPlayer);
   const outputsMtc = Boolean(profile?.internalPlayer?.mtcOutputPortProfileId) || projectOutputsMtc(project);
   return { engine, outputsMtc, blocked: outputsMtc && engine !== 'native'
-    ? '已启用 MIDI 时间码输出：正式播放需使用 Windows 原生音频，时间码与音乐出自同一声卡时钟。请在“播放设置”点“改用 Windows 原生音频”后再播放。' : null };
+    ? '已开启 MIDI 时间码输出，需要用 Windows 原生音频播放，时间码才能和音乐保持同步。请在“播放设置”里点“改用 Windows 原生音频”后再播放。' : null };
 }
 
 export function internalAudioEngineLabel({ engine, outputsMtc }: InternalAudioEngine): string {
-  return engine === 'native' ? `Windows 原生音频${outputsMtc ? '（输出 MIDI 时间码）' : ''}` : '浏览器音频';
+  return engine === 'native' ? `Windows 原生音频${outputsMtc ? '（同时发送 MIDI 时间码）' : ''}` : '浏览器音频';
 }

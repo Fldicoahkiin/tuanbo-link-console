@@ -42,7 +42,7 @@ it('未保存工程或控台会话变化不会开启写回', async () => {
   expect(ma2MaterialConnection).not.toHaveBeenCalled();
   useDocumentStore.setState({ path: 'test.tblink' });
   readCatalog.mockResolvedValue({ ...catalog, directory: { ...catalog.directory, generation: 'other' } });
-  await expect(enableMa2NameSync(useDocumentStore.getState().documentId)).rejects.toThrow('会话已变化');
+  await expect(enableMa2NameSync(useDocumentStore.getState().documentId)).rejects.toThrow('控台或 Show 有变化');
   expect(useMa2AutoSyncStore.getState().request).toBeNull();
 });
 it('回读期间切换工程不启用旧工程的名称写回', async () => {

@@ -32,19 +32,19 @@ export class MediaMtcOutput {
       const available = [...access.outputs.values()].filter(port => port.state === 'connected' && port.name && !/Microsoft GS Wavetable Synth/i.test(port.name));
       if (!portName) {
         if (available.length !== 1) throw new Error(available.length === 0
-          ? '未检测到灯光 MIDI 输出。请连接 USB-MIDI 接口并检查驱动，再点击播放。'
-          : `检测到多个 MIDI 输出：${available.map(port => port.name).join('、')}。无法判断哪个连接控台，请在设置 → 音频与 MIDI 选择灯光输出。`);
+          ? '没有找到灯光 MIDI 输出。请接好 USB-MIDI 接口并检查驱动，然后再播放'
+          : `找到多个 MIDI 输出：${available.map(port => port.name).join('、')}。无法判断哪个连着控台，请在「设置 → 音频与 MIDI」里选择灯光输出。`);
         portName = available[0]!.name;
       }
       const ports = [...access.outputs.values()].filter((port) => port.name === portName && port.state === 'connected');
-      if (ports.length === 0) throw new Error(`当前播放引擎未检测到 MIDI 时间码输出：${portName}。请先退出 P1 等使用该接口的软件，再到设置 → 音频与 MIDI 刷新端口；实体 USB MIDI 请核对连接和驱动，虚拟端口请保持 loopMIDI 运行。仍不可见时保存工程并重开联动台。`);
-      if (ports.length > 1) throw new Error(`MIDI 时间码输出名称重复：${portName}（${ports.length} 个）。请为端口设置不同名称，再手动选择正确的输出。`);
+      if (ports.length === 0) throw new Error(`找不到 MIDI 时间码输出“${portName}”。请先退出 P1 等占用这个接口的软件，再到「设置 → 音频与 MIDI」刷新端口。USB MIDI 请检查连接和驱动；虚拟端口请保持 loopMIDI 运行。还是找不到的话，保存工程后重开联动台。`);
+      if (ports.length > 1) throw new Error(`MIDI 时间码输出“${portName}”有重名（${ports.length} 个）。请给端口改成不同的名称，再手动选择正确的输出。`);
       const port = ports[0];
       if (!port) throw new Error('MIDI 输出不存在');
       try { await waitForMidi(port.open(), attempt.signal, `打开 MIDI 输出 ${portName}`); }
       catch (error) {
         if (attempt.signal.aborted) throw error;
-        throw new Error(`无法打开 MIDI 时间码输出 ${portName}：${error instanceof Error ? error.message : String(error)}。接口可能被 P1 或其他软件占用；请完全退出后刷新端口并手动重新播放。`);
+        throw new Error(`无法打开 MIDI 时间码输出“${portName}”：${error instanceof Error ? error.message : String(error)}。接口可能被 P1 或其他软件占用，请完全退出这些软件，刷新端口后重新播放。`);
       }
       if (attempt.signal.aborted) throw new Error('MIDI 连接已取消');
       this.output = port;
@@ -62,11 +62,11 @@ export class MediaMtcOutput {
     if (this.output.state !== 'connected') throw new Error('灯光 MIDI 输出已断开，时间码输出已停止');
     // send() implicitly reopens a closed Web MIDI port. A lost connection must
     // instead fail this session and require an explicit operator action.
-    if (this.output.connection !== 'open') throw new Error('灯光 MIDI 输出连接已失效，时间码输出已停止；请检查端口后手动重新播放');
+    if (this.output.connection !== 'open') throw new Error('灯光 MIDI 输出连接失效，时间码已停止发送。请检查端口后重新播放');
     if (this.rate !== rate) { this.reset(); this.rate = rate; }
     const elapsed = this.lastTickAt === null ? 0 : now - this.lastTickAt;
     const advanced = this.lastPositionMs === null ? 0 : positionMs - this.lastPositionMs;
-    if (elapsed < 0) throw new Error('MIDI 时间码调度时钟回跳，时间码输出已停止');
+    if (elapsed < 0) throw new Error('MIDI 时间码的计时出现回跳，时间码已停止发送');
     this.lastTickAt = now;
     this.lastPositionMs = positionMs;
     const fps = playbackFramesPerSecond(rate);
@@ -75,12 +75,12 @@ export class MediaMtcOutput {
     // quarters into the console. The stream relocates with a Full Frame at
     // the actual audio position and continues; the interruption is reported.
     const interruption = advanced < 0 ? '音频位置回跳'
-      : elapsed > 500 ? `调度中断 ${Math.round(elapsed)}ms`
+      : elapsed > 500 ? `计时中断 ${Math.round(elapsed)} ms`
         : Math.abs(advanced - elapsed) > 100 ? '音频位置与播放时钟不一致'
-          : !this.locate && positionMs - this.nextQuarterFrame * frameMs / 4 > frameMs ? `调度滞后超过一帧（${Math.round(frameMs)}ms）` : null;
+          : !this.locate && positionMs - this.nextQuarterFrame * frameMs / 4 > frameMs ? `计时落后超过一帧（${Math.round(frameMs)} ms）` : null;
     if (interruption) {
       this.locate = true; this.piece = 0; this.messages = [];
-      this.schedulingNotice = `时间码中断 ${++this.interruptions} 次（${interruption}）：迟到部分未补发，已按音频位置整帧重新同步，控台会跳到当前位置`;
+      this.schedulingNotice = `时间码第 ${++this.interruptions} 次中断（${interruption}）：迟到的部分没有补发，已按音频位置重新对齐，控台会直接跳到当前位置`;
     }
     if (this.locate) {
       this.output.send(encodeMediaTimecode(positionMs, rate).fullFrame);
@@ -123,7 +123,7 @@ function waitForMidi<T>(operation: Promise<T>, signal: AbortSignal, label: strin
       settled = true; clearTimeout(timer); signal.removeEventListener('abort', cancel); complete();
     };
     const cancel = (): void => finish(() => reject(new Error('MIDI 连接已取消')));
-    const timer = setTimeout(() => finish(() => reject(new Error(`${label}超时（5 秒），请检查设备后手动重试`))), 5000);
+    const timer = setTimeout(() => finish(() => reject(new Error(`${label}超时（5 秒），请检查设备后重试`))), 5000);
     signal.addEventListener('abort', cancel, { once: true });
     operation.then(value => finish(() => resolve(value)), error => finish(() => reject(error instanceof Error ? error : new Error(String(error)))));
     if (signal.aborted) cancel();

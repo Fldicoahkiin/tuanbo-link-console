@@ -20,7 +20,7 @@ export function LightingFileActions(props: { document: LightingDocument; onChang
         for (const midi of all.filter((entry) => /\.midi?$/i.test(entry.name))) {
           if (midi.size > 32 * 1024 * 1024) throw new Error(`MIDI 文件超过 32 MB：${midi.name}`);
           const path = linkFileViewModel.getPathForFile(midi) || midi.webkitRelativePath || midi.name;
-          if (external.has(path)) throw new Error(`重复或无法区分的 MIDI 文件：${midi.name}`);
+          if (external.has(path)) throw new Error(`MIDI 文件重复或无法区分：${midi.name}`);
           external.set(path, new Uint8Array(await midi.arrayBuffer()));
         }
         setPreview(importLightingReaper(await file.text(), external, linkFileViewModel.getPathForFile(file)));

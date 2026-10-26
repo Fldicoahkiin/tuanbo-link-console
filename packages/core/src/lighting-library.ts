@@ -38,15 +38,15 @@ export function libraryTemplates(library: LightingUserLibrary): LightingDocument
 const templateCache = new WeakMap<LightingUserLibrary['entries'],LightingDocument['templates']>();
 export function libraryReferenceIssue(project: LinkProject, entry: LightingLibraryEntry): string | null {
   const pool = project.ma2MaterialLibrary;
-  if (!pool?.library || pool.library.sourceUnverified) return '控台目录尚未核对，请读取当前 Show';
-  if (!entry.source.verified || !entry.source.show || !entry.source.endpoint) return '旧素材来源待确认，请核对控台引用';
-  if (entry.source.show !== pool.library.directory.show || entry.source.endpoint !== pool.source) return '此素材来自另一份 Show 或控台，保留原绑定，请明确重新绑定';
+  if (!pool?.library || pool.library.sourceUnverified) return '还没读取控台，请读取当前 Show';
+  if (!entry.source.verified || !entry.source.show || !entry.source.endpoint) return '旧素材的来源需要确认，请检查控台引用';
+  if (entry.source.show !== pool.library.directory.show || entry.source.endpoint !== pool.source) return '这个素材来自另一个 Show 或控台，原绑定已保留，请手动重新绑定';
   const refs = entry.members ?? (entry.track.cueStamp?.mode === 'fixed' ? [entry.track.cueStamp] : []);
   for (const ref of refs) {
     const sequence = pool.library.sequences.find(value => value.sequence === ref.sequence);
-    if (!sequence || !sequence.cues.some(cue => cue.number === ref.cue)) return `序列 ${ref.sequence} / Cue ${ref.cue} 已缺失或未读完整`;
+    if (!sequence || !sequence.cues.some(cue => cue.number === ref.cue)) return `序列 ${ref.sequence} / Cue ${ref.cue} 不见了或没读全`;
   }
-  return refs.length ? null : '缺少明确的控台引用';
+  return refs.length ? null : '没有指定控台引用';
 }
 
 export function setLightingLibraryCommand(input: LightingUserLibrary, label = '修改灯光分类库'): LinkCommand {
@@ -108,7 +108,7 @@ export function updateLibraryPlacementsCommand(entryId: string, revision: number
       for (const track of lighting.tracks) for (const clip of track.clips) for (const event of clip.events) {
         if (event.librarySource?.id !== entryId || event.librarySource.revision >= revision) continue;
         if (track.locked) throw new Error(`“${item.title}”的轨道已锁定`);
-        if (clip.timeLock !== 'time') throw new Error(`“${item.title}”需先将素材片段转换为固定时间再更新`);
+        if (clip.timeLock !== 'time') throw new Error(`“${item.title}”需要先把素材片段转成固定时间，再更新`);
         const id = event.effectGroupId ?? event.id; const at = lightingEventTime(clip, event, map);
         const group = groups.get(id) ?? { at, ids: new Set<string>(), originals: [], trackId: track.id, clipId: clip.id };
         group.at = Math.min(group.at, at); group.ids.add(event.id); group.originals.push(event); groups.set(id, group);

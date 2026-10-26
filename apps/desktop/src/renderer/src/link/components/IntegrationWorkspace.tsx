@@ -122,7 +122,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
       for (const snapshot of snapshots) useIntegrationStore.getState().setProcess(snapshot);
       await readAndStoreMidiPorts(midiMonitor);
       if (obs.status === 'connected') useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory());
-      notify('外部程序、OBS 库存和 MIDI 端口状态已刷新。');
+      notify('已刷新外部程序、OBS 内容和 MIDI 端口状态。');
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     }
@@ -133,7 +133,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
       await persistPrograms();
       const snapshot = await linkDesktopViewModel.startExternalApplication(id);
       useIntegrationStore.getState().setProcess(snapshot);
-      notify(`${id} 已启动或连接；所有权状态已刷新。`);
+      notify(`${id} 已启动或已连接。`);
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     } finally {
@@ -160,12 +160,12 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
       }
       const report = await runDesktopPreflight(coordinator, 'live', 'awaiting-external-start');
       if (!report.passed) {
-        coordinator.stop(true, '预检未通过');
-        notify('设备已启动，但预检存在阻断项；联动没有进入待命。', 'error');
+        coordinator.stop(true, '开播前检查未通过');
+        notify('设备已启动，但开播前检查还有问题要处理，联动没有进入待命。', 'error');
         return;
       }
       await coordinator.armFromStart();
-      notify('已待命，正在等待 P1 的真实 MTC 时间码；收到信号后才会跟随时间线。若 P1 播放后仍显示“未发送”，请检查 P1 设置中的 MIDI 输出设备。');
+      notify('已待命，正在等 P1 发来 MTC 时间码，收到后才会跟随时间线。如果 P1 播放后仍显示“未发送”，请检查 P1 设置里的 MIDI 输出设备。');
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     } finally {
@@ -173,7 +173,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
     }
   };
   return (<div className="page-stack integration-workspace">
-      {quickConnectHost ? createPortal(<button aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '按顺序逐步连接已启用设备；任一步未通过即停止，后续步骤不执行'} disabled={busy || runtimeActive} onClick={localIntegration.connect}><ScanSearch />{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</button>, quickConnectHost) : null}
+      {quickConnectHost ? createPortal(<button aria-label="顶部一键连接" title={runtimeActive ? '请先停止播放，再连接全部设备' : '按顺序连接已启用的设备，某一步没通过就会停下，后面的步骤不再执行'} disabled={busy || runtimeActive} onClick={localIntegration.connect}><ScanSearch />{connectionProgress.running ? `连接中 ${connectionProgress.completed}/${connectionProgress.total}` : busy ? '处理中…' : '一键连接'}</button>, quickConnectHost) : null}
       {settingsOpen ? <IntegrationSettingsDialog
         key={revision} category={category} onNavigate={onCategoryChange} onCreate={onCreate} onOpen={onOpen} onBusy={setBusy} busy={busy} runtimeActive={runtimeActive} securityAvailable={securityAvailable} nestedDialogOpen={false}
         midiPorts={midiPorts} inventory={inventory} notify={notify}
@@ -194,9 +194,9 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
           {localIntegration.detection ? <DetectionReport detection={localIntegration.detection} issues={localIntegration.issues} /> : null}
         </div>
         <div className="integration-alerts">
-          {!securityAvailable ? <section className="security-banner blocked"><span className="banner-symbol"><ShieldCheck /></span><div><strong>Windows 安全存储不可用</strong><p>OBS 凭证保存与连接已禁用。</p></div></section> : null}
+          {!securityAvailable ? <section className="security-banner blocked"><span className="banner-symbol"><ShieldCheck /></span><div><strong>Windows 安全存储不可用</strong><p>暂时无法保存 OBS 密码，也无法连接 OBS。</p></div></section> : null}
           {autoFollowEnabled && runtimeState !== 'error' && mtcPortAvailable && !mtcReady
-            ? <section className="security-banner attention"><div><strong>等待 P1 播放或继续</strong><p>P1 暂停或停止时不发送时间码，时间线和视频保持当前位置。直接在 P1 继续、重播或切歌即可；无需重新选择节目。</p></div></section>
+            ? <section className="security-banner attention"><div><strong>等待 P1 播放或继续</strong><p>P1 暂停或停止时不会发送时间码，时间线和视频停在当前位置。直接在 P1 里继续、重播或切歌即可，不用重新选择节目。</p></div></section>
             : <P1MtcSetupNotice ready={mtcReady} portAvailable={mtcPortAvailable} />}
         </div>
       </div>
@@ -239,7 +239,7 @@ function ProgramSettingsCards({ draft, setDraft, busy, runtimeActive, securityAv
     </ProgramProfileCard>
     {!internal ? <ProgramProfileCard kind="p1" icon={AudioWaveform} title="P1" process={processes.p1} busy={busy || runtimeActive} settings={draft.p1} acceptedVersion={draft.acceptedVersions.p1} onAcceptedVersionChange={(value) => setDraft({ ...draft, acceptedVersions: { ...draft.acceptedVersions, p1: value } })} onSettingsChange={(settings) => setDraft({ ...draft, p1: { ...draft.p1, ...settings } })} onPick={() => void pickExecutable('p1')} onStart={() => void startProgram('p1')} onStop={() => void runAction(() => linkDesktopViewModel.stopExternalApplication('p1'), notify)}>
       <MidiPortField label="旧节目 MIDI 输出" direction="output" value={portName(draft, 'lighting-output')} ports={midiPorts} onChange={(value) => setDraft(updatePortProfile(draft, 'lighting-output', 'output', value))} />
-      <Field label="P1 正式音频进入 OBS"><select value={draft.p1.obsAudioInputName ?? ''} onChange={(event) => setDraft({ ...draft, p1: { ...draft.p1, obsAudioInputName: event.currentTarget.value } })}><option value="">请选择 OBS 音频输入</option>{inventory?.inputs.map((inputName) => <option key={inputName} value={inputName}>{inputName}</option>)}</select></Field>
+      <Field label="P1 声音所在的 OBS 音频输入"><select value={draft.p1.obsAudioInputName ?? ''} onChange={(event) => setDraft({ ...draft, p1: { ...draft.p1, obsAudioInputName: event.currentTarget.value } })}><option value="">请选择 OBS 音频输入</option>{inventory?.inputs.map((inputName) => <option key={inputName} value={inputName}>{inputName}</option>)}</select></Field>
       <Field label="预期 MTC 帧率"><select value={draft.p1.expectedFrameRate} onChange={(event) => setDraft({ ...draft, p1: { ...draft.p1, expectedFrameRate: event.currentTarget.value as IntegrationProfile['p1']['expectedFrameRate'] } })}>{['24', '25', '29.97df', '30'].map((rate) => <option key={rate}>{rate}</option>)}</select></Field>
     </ProgramProfileCard> : null}
   </fieldset>;
@@ -248,11 +248,11 @@ function ProgramSettingsCards({ draft, setDraft, busy, runtimeActive, securityAv
 function stopRuntime(coordinator: LinkRuntimeCoordinator | null, runtimeState: string, notify: Props['notify']): void {
   if (!coordinator || runtimeState === 'idle' || runtimeState === 'stopping') return;
   coordinator.stop();
-  notify('正在停止联动并清理受管 OBS 输出。');
+  notify('正在停止联动，并清理联动台在 OBS 里创建的输出。');
 }
 
 function P1MtcSetupNotice({ ready, portAvailable }: { ready: boolean; portAvailable: boolean }): JSX.Element {
-  return <section className={`security-banner ${ready ? 'ok' : 'attention'}`}><span className="banner-symbol">{ready ? <CheckCircle2 /> : <CircleAlert />}</span><div><strong>{ready ? 'MTC 已连接' : portAvailable ? 'MIDI 端口可用，但未收到持续 MTC' : 'P1 MTC 输入尚未接通'}</strong><p>{ready ? '已收到持续更新且帧率匹配的时间码。' : '没有真实时间码，OBS 不会跟随时间线。请确认 P1 显示“已发送”，且设置中的 MIDI 输出设备不为空；仅创建虚拟端口不能证明 P1 已发送。'}</p></div></section>;
+  return <section className={`security-banner ${ready ? 'ok' : 'attention'}`}><span className="banner-symbol">{ready ? <CheckCircle2 /> : <CircleAlert />}</span><div><strong>{ready ? 'MTC 已连接' : portAvailable ? 'MIDI 端口可用，但没有收到连续的 MTC' : '还没收到 P1 的 MTC'}</strong><p>{ready ? '时间码正常，帧率一致。' : '没有收到时间码，OBS 不会跟随时间线。请确认 P1 显示“已发送”，并且 P1 设置里选了 MIDI 输出设备；只建好虚拟端口还不够。'}</p></div></section>;
 }
 
 function useSettingsMtcClock(active: boolean): number {
@@ -289,7 +289,7 @@ function ProgramProfileCard({ kind, icon: Icon, title, process, busy, settings, 
   return <section className={`device-program-card ${kind}`}>
     <div className="device-program-heading">
       <div className={`device-program-icon ${kind}`}><Icon /></div>
-      <div className="device-program-identity"><span><h3>{title}</h3><StatusPill state={process.status} /></span><p>{process.owned ? '由联动台启动，可在这里关闭' : process.status === 'running' ? <><CheckCircle2 />已在其他位置打开，请在原程序中关闭</> : `尚未检测到 ${title}，可先打开该程序`}</p></div>
+      <div className="device-program-identity"><span><h3>{title}</h3><StatusPill state={process.status} /></span><p>{process.owned ? '由联动台启动，可在这里关闭' : process.status === 'running' ? <><CheckCircle2 />已在其他位置打开，请在原程序中关闭</> : `还没检测到 ${title}，可以先打开它`}</p></div>
     </div>
     {children ? <div className="program-maintenance-task"><h4>{kind === 'obs' ? '联动台预览没有画面' : 'P1 声音与时间码'}</h4><div className="form-grid">{children}</div></div> : null}
     <details className="device-process-settings"><summary><Wrench />无法自动启动 {title}？设置程序位置</summary><DeviceProcessSettings title={title} process={process} busy={busy} settings={settings} acceptedVersion={acceptedVersion} onAcceptedVersionChange={onAcceptedVersionChange} onSettingsChange={onSettingsChange} onPick={onPick} onStart={onStart} onStop={onStop} maintenanceActions={maintenanceActions} /></details>
@@ -316,7 +316,7 @@ function DeviceProcessSettings({ title, process, busy, settings, acceptedVersion
   };
   return <div className="device-process-fields">
     <label className="settings-row"><span>程序位置</span><div className="device-path-control"><input aria-label={`${title} 可执行文件`} value={settings.executablePath} readOnly /><button disabled={busy} onClick={onPick} aria-label={`选择 ${title} 可执行文件`}><FolderOpen />浏览</button></div></label>
-    <p className="settings-note">选择已安装的 {title} 程序（.exe），然后保存启动设置。正常启动时无需修改下方技术参数。</p>
+    <p className="settings-note">选择已安装的 {title} 程序（.exe），然后保存启动设置。一般不需要修改下面的技术参数。</p>
     <div className="device-panel-actions">{maintenanceActions}<Button className="secondary-button" disabled={busy} onClick={onStart}><Power />启动或连接 {title}</Button><Button className="secondary-button" disabled={busy || !process.owned} onClick={onStop}><Square />关闭 {title}</Button></div>
     <details className="device-advanced"><summary>技术参数（排查启动问题时使用）</summary><div className="device-process-fields">
     <Field label="启动文件夹"><div className="device-path-control"><input aria-label="启动文件夹" value={settings.workingDirectory} readOnly /><button disabled={busy} onClick={() => void pickFolder()} aria-label={`选择 ${title} 启动文件夹`}><FolderOpen />浏览</button></div></Field>

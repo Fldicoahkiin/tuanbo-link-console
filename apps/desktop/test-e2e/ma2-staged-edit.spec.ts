@@ -67,7 +67,7 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     await badge.click();
     const pending = page.getByRole('region', { name: '同步状态详情' });
     await expect(pending).toContainText('1 处修改');
-    await expect(pending).toContainText('播放中暂存本地');
+    await expect(pending).toContainText('播放时先暂存在本地');
     await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect(badge).not.toContainText('待同步');

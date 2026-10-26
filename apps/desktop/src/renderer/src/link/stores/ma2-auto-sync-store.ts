@@ -9,4 +9,4 @@ export const useMa2AutoSyncStore = create<{
   previewPlaying: boolean;
   timelinePlaying: boolean;
   commitRequest: number;
-}>(() => ({ request: null, status: 'off', message: '等待控台连接与工程', previewPlaying: false, timelinePlaying: false, commitRequest: 0 }));
+}>(() => ({ request: null, status: 'off', message: '等待连接控台并打开工程', previewPlaying: false, timelinePlaying: false, commitRequest: 0 }));

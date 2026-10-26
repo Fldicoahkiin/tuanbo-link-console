@@ -42,8 +42,8 @@ it('分段读取超过控台单行长度的中文名称，保留全部 100 个 C
 
 it('收到结束标记前等待，截断或缺失分段不能冒充完整目录', () => {
   expect(readNativeCueChunks('TBLINK_TEST:1:abc\n', 'TBLINK_TEST:')).toBeNull();
-  expect(() => readNativeCueChunks('TBLINK_TEST:1:abc\nTBLINK_TEST:END:4\n', 'TBLINK_TEST:')).toThrow('传输不完整');
-  expect(() => readNativeCueChunks('TBLINK_TEST:END:701\n', 'TBLINK_TEST:')).toThrow('传输不完整');
+  expect(() => readNativeCueChunks('TBLINK_TEST:1:abc\nTBLINK_TEST:END:4\n', 'TBLINK_TEST:')).toThrow('没有传完');
+  expect(() => readNativeCueChunks('TBLINK_TEST:END:701\n', 'TBLINK_TEST:')).toThrow('没有传完');
 });
 it('读取期间 Cue 改变时拒绝不一致列表', async () => {
   const result = await readMa2NativeLibrary(connection(['2;;1,1,61', '2;;1,2,61']), { request: vi.fn<Ma2OnpcBridge['request']>().mockResolvedValue(JSON.stringify(directory)) }, () => false);
@@ -101,7 +101,7 @@ it('最终复核时开始播放与目录真的变化分别报告，不把播放�
   let playing = false;
   const request = vi.fn<Ma2OnpcBridge['request']>().mockImplementation(() => Promise.resolve(JSON.stringify(directory)));
   request.mockImplementationOnce(() => Promise.resolve(JSON.stringify(directory))).mockImplementationOnce(() => { playing = true; return Promise.resolve(JSON.stringify(directory)); });
-  await expect(readMa2NativeLibrary(connection([row, row]), { request }, () => playing)).rejects.toThrow('播放已开始，素材核对已停止');
+  await expect(readMa2NativeLibrary(connection([row, row]), { request }, () => playing)).rejects.toThrow('已开始播放，素材检查已停止');
   const changed = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(JSON.stringify({ ...directory, entries: [...directory.entries, { target: 8, name: '新序列' }] }));
-  await expect(readMa2NativeLibrary(connection([row, row]), { request: changed }, () => false)).rejects.toThrow('控台工程或序列目录发生变化');
+  await expect(readMa2NativeLibrary(connection([row, row]), { request: changed }, () => false)).rejects.toThrow('控台的 Show 或序列有变化');
 });

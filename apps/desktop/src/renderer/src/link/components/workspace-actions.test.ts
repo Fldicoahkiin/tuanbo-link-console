@@ -72,14 +72,14 @@ describe('拖入 OBS 场景', () => {
     useDocumentStore.getState().setProject(createEmptyLinkProject('另一个工程'), 'C:/test/other.tblink');
     const before = useDocumentStore.getState().project;
     finish!(source);
-    await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining('工程已修改'), 'error'));
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining('工程被修改了'), 'error'));
     expect(useDocumentStore.getState().project).toEqual(before);
   });
   it('无音轨视频保留画面并明确提示，解码异常不能伪装成无音轨', async () => {
     const { actions, notify } = fixture();
     vi.spyOn(linkDesktopViewModel, 'importReferenceAudio').mockRejectedValueOnce(new Error('素材不包含音频轨道'));
     actions.addAssetClip('video', 0);
-    await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining('此素材没有音轨')));
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining('这个视频没有声音')));
     expect(useDocumentStore.getState().project!.rundown[0]!.referenceMediaClips).toHaveLength(1);
     expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio).toBeUndefined();
   });

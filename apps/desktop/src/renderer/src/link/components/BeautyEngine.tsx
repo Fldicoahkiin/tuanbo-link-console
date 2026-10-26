@@ -54,7 +54,7 @@ export function BeautyEngine({ source, connected, onReady, onStatus }: {
       <button className="primary-button" disabled={busy || !connected || !source || !!running} onClick={() => { void perform('start'); }}><Play size={15} />启动美颜</button>
       <button className="secondary-button" disabled={busy || !state || state.phase === 'idle'} onClick={() => { void perform('stop'); }}><Square size={14} />停止</button>
     </div>
-    <p role="status">{busy ? '正在处理…' : message || state?.message || '正在读取引擎状态…'}</p>
+    <p role="status">{busy ? '正在处理…' : message || state?.message || '正在读取美颜状态…'}</p>
     {state?.phase === 'error' || error ? <p className="beauty-output-error" role="alert">{error || state?.message}</p> : null}
     {pollFailed ? <button className="secondary-button" onClick={() => { setError(''); setPollFailed(false); setPollRevision(value => value + 1); }}>重新读取美颜状态</button> : null}
   </div>;

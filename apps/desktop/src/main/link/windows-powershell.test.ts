@@ -33,7 +33,7 @@ describe('Windows 系统 PowerShell 定位', () => {
 
   it('系统组件缺失时给出修复说明，不回退到 PATH 中的程序', async () => {
     vi.stubEnv('SystemRoot', resolve('artifacts', 'missing-windows-components'));
-    await expect(windowsPowerShellExecutable()).rejects.toThrow('Windows 系统命令组件缺失或不可访问');
+    await expect(windowsPowerShellExecutable()).rejects.toThrow('Windows 系统命令组件缺失或无法访问');
   });
 });
 

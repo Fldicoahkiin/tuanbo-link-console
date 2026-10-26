@@ -44,7 +44,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
   useEffect(() => {
     if (!(controller instanceof InternalPlaybackController)) return;
     return desktop.onObsMediaPreparation(progress => controller.reportPreparation(
-      `生成 OBS 定位缓存 ${progress.index + 1}/${progress.total} · ${progress.assetName}`));
+      `正在准备 OBS 画面 ${progress.index + 1}/${progress.total} · ${progress.assetName}`));
   }, [controller]);
   const engineChoice = internalAudioEngine(profile, project), requestedEngine = engineChoice.engine;
   const requestedDevice = (requestedEngine === 'native' ? profile?.internalPlayer?.nativeAudioOutputDeviceId : profile?.internalPlayer?.audioOutputDeviceId) ?? 'default';
@@ -85,11 +85,11 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       refusal: () => internalAudioEngine(useIntegrationStore.getState().profile, project).blocked,
       confirmWithoutLighting: reason => desktop.confirmPlayWithoutLighting(reason), withoutLightingChoices,
       prepare: async (itemId, positionMs, { reuseSession, mtcOutputEnabled, signal }) => {
-        if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步并回读，请完成后播放');
-        if (!path) throw new Error('请先保存工程，再播放正式音频');
+        if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('MA2 正在同步，请等同步完成后再播放');
+        if (!path) throw new Error('请先保存工程，再播放');
         if (useIntegrationStore.getState().obs.status !== 'connected') {
           prepared = null;
-          throw new Error('OBS 未连接；可用顶部“一键连接”恢复画面联动');
+          throw new Error('OBS 没有连接，可点顶部“一键连接”恢复画面联动');
         }
         await coordinator.prepareInternal(itemId, async (assertCurrent) => {
           if (reuseSession && prepared?.profile === useIntegrationStore.getState().profile && prepared.mtcOutputEnabled === mtcOutputEnabled) {
@@ -119,12 +119,12 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       // A channel that cannot join repeats song after song until fixed: a warning the first time, then info.
       notice: (message, itemId) => {
         void desktop.recordLog({ level: firstTimeWarning(notedNotices, message), category: 'state', message, projectId: project.projectId,
-          ...(itemId ? { itemId } : {}), device: '正式播放器' })
+          ...(itemId ? { itemId } : {}), device: '播放器' })
           .catch((error: unknown) => console.error('正式播放通道提示未能保存到日志', error));
       },
       failed: (message, itemId) => {
         void desktop.recordLog({ level: 'error', category: 'state', message, projectId: project.projectId,
-          ...(itemId ? { itemId } : {}), device: '正式播放器', result: 'failed' })
+          ...(itemId ? { itemId } : {}), device: '播放器', result: 'failed' })
           .catch((error: unknown) => console.error('正式播放失败未能保存到日志', error));
       },
       preciseSeeking: () => useDisplayPreferences.getState().preciseSeeking,
@@ -151,7 +151,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     const unsubscribeObs = useIntegrationStore.subscribe((next, previous) => {
       if (previous.obs.status === 'connected' && next.obs.status !== 'connected') prepared = null;
       if (player instanceof InternalPlaybackController && previous.obs.status === 'connected' && next.obs.status !== 'connected' && useRuntimeStore.getState().state !== 'idle') {
-        player.reportFault('OBS 连接中断：画面动作失败，重新连接后按当前位置重建画面');
+        player.reportFault('OBS 连接中断，画面动作没有执行。重新连接后会按当前位置恢复画面');
       }
       if (player instanceof InternalPlaybackController && previous.obs.status !== 'connected' && next.obs.status === 'connected' && path) {
         const control = view.readControl();
@@ -161,7 +161,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
     const unsubscribeFaults = useRuntimeStore.subscribe((next, previous) => {
       // A rebuild after a position gap carries a reason even when nothing was missed.
       if (next.state === 'running' && (next.missedCueIds.length > previous.missedCueIds.length || next.reason && next.reason !== previous.reason)) {
-        const message = next.reason ?? `错过 ${next.missedCueIds.length} 个联动 Cue，未补发`;
+        const message = next.reason ?? `错过了 ${next.missedCueIds.length} 个联动 Cue，没有补发`;
         dependencies.notice?.(message, next.currentItemId); player.reportFault(message);
       }
       const report = next.reports !== previous.reports ? next.reports.at(-1) : undefined;

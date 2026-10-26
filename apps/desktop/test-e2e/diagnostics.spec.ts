@@ -39,7 +39,7 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
     const data = packageSchema.parse(JSON.parse(unpacked));
     const desktopPackage = z.object({ version: z.string() }).parse(JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')));
     expect(data.context.environment.appVersion).toBe(desktopPackage.version);
-    expect(data.context.problem).toContain('另一台主机'); expect(data.context.environment.cpu).toBeTruthy();
+    expect(data.context.problem).toContain('另一台电脑'); expect(data.context.environment.cpu).toBeTruthy();
     expect(data.logs.some(log => log.message.includes('已启动'))).toBe(true);
     expect(unpacked).not.toContain('must-not-export');
     await application.evaluate(({ dialog }) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: true, filePath: '' }); });
@@ -108,7 +108,7 @@ test('IPC 失败：界面给出带路径的原因，运行日志保留通道、�
       return page.evaluate(() => window.tbLink.pickProjectDocument().then(() => 'opened', (error: Error) => error.message));
     };
     const message = await open(missing);
-    expect(message).toBe(`所需文件或程序不存在：${missing}。请重新选择有效路径后重试。`);
+    expect(message).toBe(`所需文件或程序不存在：${missing}。请重新选择正确的位置后再试。`);
     expect(await open(missing)).toBe(message);
     const entries = z.array(z.object({ device: z.string().optional(), message: z.string(), details: z.record(z.string(), z.unknown()).optional() }))
       .parse(await page.evaluate(() => window.tbLink.queryLogs({})));

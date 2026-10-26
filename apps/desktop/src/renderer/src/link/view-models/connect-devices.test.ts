@@ -67,7 +67,7 @@ it('系统 MIDI 未通过即停止：后续步骤全部标为未执行，不连�
   expect(state.checks.midi?.state).toBe('error');
   for (const id of ['profile', 'obs', 'obs-inventory', 'preview', 'audio', 'ma2-app', 'ma2', 'bridge', 'ma3d']) {
     expect(state.checks[id]?.state).toBe('blocked');
-    expect(state.checks[id]?.detail).toBe('未执行：系统 MIDI未通过，已停止后续步骤');
+    expect(state.checks[id]?.detail).toBe('没有执行，因为“系统 MIDI”没通过');
   }
   expect(api.saveIntegrationProfile).not.toHaveBeenCalled(); expect(api.connectObs).not.toHaveBeenCalled();
   expect(api.startExternalApplication).not.toHaveBeenCalled(); expect(api.connectMa2Network).not.toHaveBeenCalled();
@@ -81,8 +81,8 @@ it('单步超过截止时间记为失败并停止，说明操作可能仍在后�
   await vi.advanceTimersByTimeAsync(60_000); await running;
   const state = useConnectionCheckStore.getState();
   expect(state.checks.obs?.state).toBe('error');
-  expect(state.checks.obs?.detail).toContain('OBS 控制超过 60 秒未完成；该操作可能仍在后台进行');
-  expect(state.checks.preview?.detail).toBe('未执行：OBS 控制未通过，已停止后续步骤');
+  expect(state.checks.obs?.detail).toContain('OBS 控制超过 60 秒还没完成，可能仍在后台进行');
+  expect(state.checks.preview?.detail).toBe('没有执行，因为“OBS 控制”没通过');
   expect(api.checkNetwork).not.toHaveBeenCalled(); expect(state.running).toBe(false);
   vi.useRealTimers();
 });
@@ -90,7 +90,7 @@ it('单步超过截止时间记为失败并停止，说明操作可能仍在后�
 it('开始一键连接时，上一次的结果先重置为等待中，不冒充本次结果', () => {
   useConnectionCheckStore.getState().finish('ma3d', 'ready', '上次已运行');
   expect(useConnectionCheckStore.getState().begin(['ma3d'])).toBe(true);
-  expect(useConnectionCheckStore.getState().checks.ma3d).toMatchObject({ state: 'waiting', detail: '等待前序步骤完成' });
+  expect(useConnectionCheckStore.getState().checks.ma3d).toMatchObject({ state: 'waiting', detail: '等前面的步骤完成' });
   useConnectionCheckStore.getState().end();
 });
 
@@ -109,7 +109,7 @@ it('保留用户选定路径和关闭选项；识别到的未登记程序只报�
   expect(useIntegrationStore.getState().profile?.ma2?.executablePath).toBe('D:\\MA\\chosen.exe');
   expect(useIntegrationStore.getState().profile?.ma3d).toBeUndefined();
   expect(useConnectionCheckStore.getState().checks.ma3d).toMatchObject({ state: 'skipped',
-    detail: '已识别 D:\\MA\\MA3D.exe，未启用；在 MA2 设置中选择并启用后才会由一键连接启动' });
+    detail: '已找到 D:\\MA\\MA3D.exe，但没有启用；在 MA2 设置里选择并启用后，一键连接才会启动它' });
 });
 
 it('onPC 启动失败即停止：不登录控台、不启动 MA 3D，之前的 OBS 已完成', async () => {
@@ -124,7 +124,7 @@ it('onPC 启动失败即停止：不登录控台、不启动 MA 3D，之前的 O
   expect(api.connectMa2Network).not.toHaveBeenCalled();
   expect(api.connectObs).toHaveBeenCalled();
   expect(useConnectionCheckStore.getState().checks['ma2-app']?.detail).toContain('所选控台程序不存在');
-  expect(useConnectionCheckStore.getState().checks.ma3d).toMatchObject({ state: 'blocked', detail: '未执行：MA2 onPC未通过，已停止后续步骤' });
+  expect(useConnectionCheckStore.getState().checks.ma3d).toMatchObject({ state: 'blocked', detail: '没有执行，因为“MA2 onPC”没通过' });
   expect(api.startExternalApplication).not.toHaveBeenCalledWith('ma3d');
 });
 beforeEach(() => {
@@ -156,7 +156,7 @@ it('OBS 场景清单未通过即停止：控制已连接，但不再检查预览
   expect(useIntegrationStore.getState().obs.status).toBe('connected');
   expect(useConnectionCheckStore.getState().checks.obs?.state).toBe('ready');
   expect(useConnectionCheckStore.getState().checks['obs-inventory']?.state).toBe('error');
-  expect(useConnectionCheckStore.getState().checks.preview?.detail).toBe('未执行：OBS 场景清单未通过，已停止后续步骤');
+  expect(useConnectionCheckStore.getState().checks.preview?.detail).toBe('没有执行，因为“OBS 场景清单”没通过');
   expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).not.toHaveBeenCalled();
 });
 
@@ -169,7 +169,7 @@ it('原生 MTC 端口不被浏览器一键连接提前占用，浏览器漏枚�
   api.getNativePlaybackDevices.mockResolvedValue(native);
   await connectDevices(config);
   expect(useConnectionCheckStore.getState().checks['port:internal-mtc-output']?.state).toBe('ready');
-  expect(useConnectionCheckStore.getState().checks['port:internal-mtc-output']?.detail).toContain('打开检查通过');
+  expect(useConnectionCheckStore.getState().checks['port:internal-mtc-output']?.detail).toContain('Windows 接口检查通过');
   expect(api.checkNativeMidiOutput).toHaveBeenCalledExactlyOnceWith({ version: 1, portName: 'USB MIDI Interface' });
   expect(config.openMidiPorts).not.toHaveBeenCalledWith(['internal-mtc-output'], 'output');
   expect(config.openMidiPorts).not.toHaveBeenCalledWith(['lighting-events-output'], 'output');
@@ -246,7 +246,7 @@ it('OBS 连接失败即停止：预览不误报就绪，控台与 MIDI 接口均
   const config = options(); await connectDevices(config);
   expect(api.getObsLiveFrame).not.toHaveBeenCalled(); expect(api.checkNetwork).not.toHaveBeenCalled();
   expect(config.openMidiPorts).not.toHaveBeenCalled();
-  expect(useConnectionCheckStore.getState().checks.preview).toMatchObject({ state: 'blocked', detail: '未执行：OBS 控制未通过，已停止后续步骤' });
+  expect(useConnectionCheckStore.getState().checks.preview).toMatchObject({ state: 'blocked', detail: '没有执行，因为“OBS 控制”没通过' });
   expect(useConnectionCheckStore.getState().checks['port:custom-input']?.state).toBe('blocked');
 });
 it('控台当前 show 与工程灯光依据不一致时工程通信不通过，不再启动 MA 3D；一致时通过', async () => {
@@ -264,7 +264,7 @@ it('控台当前 show 与工程灯光依据不一致时工程通信不通过，�
   api.getMa2CurrentShow.mockResolvedValueOnce('tblink_ui100_20261007');
   await connectDevices(config);
   expect(useConnectionCheckStore.getState().checks.bridge?.state).toBe('error');
-  expect(useConnectionCheckStore.getState().checks.bridge?.detail).toContain('控台当前加载的 show 是“tblink_ui100_20261007”，灯光 Cue 依据“2hao”编写');
+  expect(useConnectionCheckStore.getState().checks.bridge?.detail).toContain('控台现在加载的 Show 是“tblink_ui100_20261007”，但灯光 Cue 是按“2hao”编的');
   expect(api.startExternalApplication).not.toHaveBeenCalledWith('ma3d');
   api.getMa2CurrentShow.mockResolvedValueOnce('2hao');
   await connectDevices(config);
@@ -275,7 +275,7 @@ it('程序识别未通过即停止，不再保存配置或连接设备', async (
   api.detectLocalIntegrations.mockRejectedValueOnce(new Error('系统命令组件暂不可用'));
   await connectDevices(options());
   expect(useConnectionCheckStore.getState().checks.discovery?.state).toBe('error');
-  expect(useConnectionCheckStore.getState().checks.obs?.detail).toBe('未执行：程序识别未通过，已停止后续步骤');
+  expect(useConnectionCheckStore.getState().checks.obs?.detail).toBe('没有执行，因为“程序识别”没通过');
   expect(api.saveIntegrationProfile).not.toHaveBeenCalled(); expect(api.connectObs).not.toHaveBeenCalled();
 });
 it('首次检查挂起时连续点击不重复启动连接', async () => {
@@ -293,14 +293,14 @@ it('P1 模式启动播放器并建立时间码监听，不发送播放命令', a
   await connectDevices(config);
   expect(Object.values(useConnectionCheckStore.getState().checks).filter(check => check.state === 'error')).toEqual([]);
   expect(api.startExternalApplication).toHaveBeenCalledWith('p1'); expect(config.listenToP1).toHaveBeenCalledOnce();
-  expect(useConnectionCheckStore.getState().checks.p1?.detail).toContain('等待真实播放信号');
+  expect(useConnectionCheckStore.getState().checks.p1?.detail).toContain('等待 P1 开始播放');
 });
 it('配置保存失败即停止：不连接旧目标，后续步骤均未执行', async () => {
   api.saveIntegrationProfile.mockRejectedValueOnce(new Error('配置无法保存'));
   await connectDevices(options());
   expect(api.connectObs).not.toHaveBeenCalled(); expect(api.checkNetwork).not.toHaveBeenCalled();
   expect(useConnectionCheckStore.getState().checks.profile?.state).toBe('error');
-  expect(useConnectionCheckStore.getState().checks.audio).toMatchObject({ state: 'blocked', detail: '未执行：连接配置未通过，已停止后续步骤' });
+  expect(useConnectionCheckStore.getState().checks.audio).toMatchObject({ state: 'blocked', detail: '没有执行，因为“连接配置”没通过' });
 });
 
 it('配置失败保留诊断原文并脱敏密码，不只记录通用提示', async () => {

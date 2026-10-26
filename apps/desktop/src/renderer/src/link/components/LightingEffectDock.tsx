@@ -66,7 +66,7 @@ export function LightingEffectDock({ itemId, onCreated, document, disabled, onCh
   const addIngredient = (id: string): void => {
     const entry = document.templates.find(value => value.id === id);
     const binding = entry?.track.cueStamp;
-    if (!entry || binding?.mode !== 'fixed') { setError('此素材没有可用的 Cue 引用'); return; }
+    if (!entry || binding?.mode !== 'fixed') { setError('这个素材没有关联可用的 Cue'); return; }
     if(layoutOpen){setNewCueIngredients(current=>[...current,...(entry.members?.map(value=>({...value}))??[{name:entry.name,sequence:binding.sequence,cue:binding.cue,executor:binding.executor,delayMs:0}])]);return;}
     append(entry.members?.map(value => ({ ...value })) ?? [{ name: entry.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: 0 }]);
   };

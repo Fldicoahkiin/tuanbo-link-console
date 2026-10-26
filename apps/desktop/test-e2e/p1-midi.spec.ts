@@ -72,7 +72,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     await page.getByLabel('选中 Cue 实时播放', { exact: true }).check();
     await page.getByRole('button', { name: '音频 Cue 2', exact: true }).click();
     await expect.poll(async () => (await packets()).length).toBe(2);
-    await expect(page.getByText('已发送 1 条 Cue 指令（MIDI 无回执）', { exact: true })).toBeVisible();
+    await expect(page.getByText('已发送 1 条 Cue 指令（MIDI 无法确认控台是否收到）', { exact: true })).toBeVisible();
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
@@ -124,8 +124,8 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     await panel.getByText('MIDI 连接说明', { exact: true }).click();
     await panel.getByLabel('导入 P1 工程').click();
     await panel.getByRole('button', { name: '选择 .hia 文件', exact: true }).click();
-    await expect(panel.getByText('已建立映射', { exact: true })).toBeVisible();
-    await expect(panel.getByText('已恢复的歌曲：请核对裁剪范围', { exact: true })).toBeVisible();
+    await expect(panel.getByText('已关联', { exact: true })).toBeVisible();
+    await expect(panel.getByText('已恢复的歌曲：请检查裁剪范围', { exact: true })).toBeVisible();
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).playbackSource)).toBe('internal');
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.playback?.mtcOffsetMs)).toBe(120000);
     const summaries = await panel.locator('.p1-sync-summary, .p1-sync-issues').evaluateAll(elements => elements.map(element => { const box = element.getBoundingClientRect(); return { top: box.top, bottom: box.bottom }; }));

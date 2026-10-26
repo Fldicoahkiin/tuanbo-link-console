@@ -67,7 +67,7 @@ it('目录复核失败不能确认；换 Show 不继承另一份读取异常', (
   const changed = structuredClone(catalog); changed.directory.show = '其他 Show';
   expect(reconcileMa2ReadState(project, 'console', changed).failures).toEqual([]);
   project.ma2ReadState.catalog.sourceUnverified = true;
-  expect(() => confirmMa2PairingCommand(2, '歌曲甲').execute(project)).toThrow('来源尚未核对');
+  expect(() => confirmMa2PairingCommand(2, '歌曲甲').execute(project)).toThrow('来源还没确认');
 });
 
 it('修改歌曲起点立即使确认失效，撤销同时恢复确认', () => {

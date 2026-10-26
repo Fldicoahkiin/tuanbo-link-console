@@ -141,7 +141,7 @@ describe('MA2 预览应用命令', () => {
     const document = before.rundown[0]!.lighting!;
     const command = applyMa2ReadbackCommand('item', document.ma2Bindings![0]!.id, document, preview());
     const changed = structuredClone(before); changed.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]!.at = 1700;
-    expect(() => command.execute(changed)).toThrow('未覆盖');
+    expect(() => command.execute(changed)).toThrow('没有被覆盖');
     expect(changed.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]!.at).toBe(1700);
     const renamed = structuredClone(before); renamed.rundown[0]!.title = '新节目名';
     expect(command.execute(renamed).rundown[0]!.title).toBe('新节目名');

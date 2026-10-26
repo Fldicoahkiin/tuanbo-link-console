@@ -62,13 +62,13 @@ describe('LinkRuntimeCoordinator', () => {
     const stateReasons = () => entries().filter(entry => entry.category === 'state').map(entry => entry.details?.['reason']);
     const operatorMessages = () => entries().filter(entry => entry.category === 'operator').map(entry => entry.message);
     try {
-      await coordinator.stopAndWait(false, '开始播放前结束上一会话');
-      expect(stateReasons()).toContain('开始播放前结束上一会话');
+      await coordinator.stopAndWait(false, '开始播放前停止上一首');
+      expect(stateReasons()).toContain('开始播放前停止上一首');
       expect(operatorMessages()).toEqual([]);
       mocks.recordLog.mockClear();
       await coordinator.stopAndWait();
       expect(stateReasons()).toContain('操作员请求停止');
-      expect(operatorMessages()).toEqual(['停止运行会话']);
+      expect(operatorMessages()).toEqual(['停止运行']);
     } finally { coordinator.dispose(); }
   });
   it('OBS 音乐窗口采集失败仍执行开场与后续场景，不要求拖动播放头', async () => {
@@ -90,7 +90,7 @@ describe('LinkRuntimeCoordinator', () => {
       expect(mocks.executeObsAction).toHaveBeenCalledTimes(2);
       expect(mocks.executeObsAction).toHaveBeenNthCalledWith(1, expect.objectContaining({ sceneName: 'Camera 0' }));
       expect(mocks.executeObsAction).toHaveBeenNthCalledWith(2, expect.objectContaining({ sceneName: 'Camera 1' }));
-      expect(notice).toHaveBeenCalledWith(expect.stringContaining('OBS 音乐采集未就绪'));
+      expect(notice).toHaveBeenCalledWith(expect.stringContaining('OBS 还没准备好接收音乐'));
     } finally { coordinator.dispose(); }
   });
   it('直播中 OBS 动作或素材失败只标红该动作，后续画面照常执行，运行不进入错误', async () => {

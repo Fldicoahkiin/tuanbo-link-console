@@ -6,10 +6,10 @@ export async function assertAudioOutputAvailable(route: IntegrationProfile['inte
   if (chosenAudioEngine(route) === 'native') {
     const devices = await desktop.getNativePlaybackDevices('audio');
     const id = route?.nativeAudioOutputDeviceId ?? 'default';
-    if (!devices.audio.some(device => id === 'default' ? device.isDefault : device.id === id)) throw new Error('所选 Windows 原生播放设备不可用，请重新选择输出线路');
+    if (!devices.audio.some(device => id === 'default' ? device.isDefault : device.id === id)) throw new Error('选择的 Windows 播放设备不可用，请重新选择输出设备');
   } else {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const id = route?.audioOutputDeviceId ?? 'default';
-    if (!devices.some(device => device.kind === 'audiooutput' && device.deviceId === id)) throw new Error('所选播放设备不可用，请重新选择输出线路');
+    if (!devices.some(device => device.kind === 'audiooutput' && device.deviceId === id)) throw new Error('选择的播放设备不可用，请重新选择输出设备');
   }
 }

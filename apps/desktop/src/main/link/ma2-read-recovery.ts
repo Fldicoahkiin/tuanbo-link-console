@@ -30,7 +30,7 @@ export async function recoverMa2Read(projectPath: string, project: LinkProject):
   const root = `${projectPath}.ma2-recovery`;
   let header: z.infer<typeof headerSchema>;
   try { header = headerSchema.parse(JSON.parse(await readFile(join(root, 'active.json'), 'utf8'))); }
-  catch (error) { if (missing(error)) return project; throw new Error('控台读取恢复记录损坏；原工程和检查点保留，请导出诊断', { cause: error }); }
+  catch (error) { if (missing(error)) return project; throw new Error('控台读取的恢复记录已损坏，原工程和读取进度都已保留，请导出诊断包发给售后', { cause: error }); }
   if (header.projectId !== project.projectId) return project;
   const saved = project.ma2ReadState;
   if (saved && saved.catalog.readAt > header.catalog.readAt) return project;
@@ -54,7 +54,7 @@ export async function recoverMa2Read(projectPath: string, project: LinkProject):
   const sameSource = saved?.source === header.source && saved.catalog.directory.show === header.catalog.directory.show && saved.catalog.directory.generation === header.catalog.directory.generation;
   if (sameSource && saved.catalog.sourceUnverified === header.catalog.sourceUnverified && entries.every(entry => saved.catalog.entries.some(old => old.target === entry.target && old.readAt === entry.readAt && old.sourceXml === entry.sourceXml && old.error === entry.error))) return project;
   const retained = sameSource ? saved.catalog.entries.filter(old => !entries.some(entry => entry.target === old.target) && header.catalog.directory.entries.some(entry => entry.target === old.target)) : [];
-  const catalog = ma2CatalogSchema.parse({ ...header.catalog, entries: [...retained, ...entries], incomplete: '已恢复中断前落盘的读取结果；请核对后补读未完成项' });
+  const catalog = ma2CatalogSchema.parse({ ...header.catalog, entries: [...retained, ...entries], incomplete: '已恢复中断前保存的读取结果；请检查后补读没读完的部分' });
   const state = reconcileMa2ReadState(project, header.source, catalog);
   return saveMa2ReadStateCommand(state).execute(project);
 }

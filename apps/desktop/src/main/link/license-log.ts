@@ -1,7 +1,7 @@
 import type { LicenseStatus } from '@tb/schema';
 
 export const licenseStateLabel: Record<LicenseStatus['state'], string> = {
-  unconfigured: '尚未启用', inactive: '未激活', active: '已激活', expired: '已到期', invalid: '校验失败', 'renewal-required': '需要联网验证'
+  unconfigured: '还没启用', inactive: '未激活', active: '已激活', expired: '已到期', invalid: '校验失败', 'renewal-required': '需要联网验证'
 };
 
 /**

@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { toUserErrorMessage } from './link-user-error';
 it('OBS 密码与配置错误直接说明原因，而非要求先导出诊断', () => {
-  expect(toUserErrorMessage(new Error('OBS WebSocket 连接失败：Authentication failed'))).toContain('OBS 要求认证或拒绝了密码');
+  expect(toUserErrorMessage(new Error('OBS WebSocket 连接失败：Authentication failed'))).toContain('OBS 需要密码，或者密码不对');
   expect(toUserErrorMessage(new Error('连接配置校验失败：profile.obs.webSocketUrl：Invalid URL'))).toContain('profile.obs.webSocketUrl');
 });
 it('OBS 来源缺失时不把包含中文场景名的英文异常直接展示', () => {
@@ -19,15 +19,15 @@ it('移除 Electron 包装和英文异常前缀，保留明确中文原因', () 
   expect(toUserErrorMessage(new Error("Error invoking remote method 'link:ma2-connect': Error: 控台远程登录未开启"))).toBe('控台远程登录未开启');
 });
 it('原始系统异常与未知英文错误转为可读中文', () => {
-  expect(toUserErrorMessage(new Error('connect ECONNREFUSED'))).toContain('无法连接');
+  expect(toUserErrorMessage(new Error('connect ECONNREFUSED'))).toContain('连不上目标设备');
   expect(toUserErrorMessage(new Error('Something unexpected happened'))).toContain('操作未能完成');
 });
 it('音频线路丢失时不泄露设备 ID 或英文底层异常', () => {
-  expect(toUserErrorMessage(new Error('AudioContext.setSinkId: failed: the device 12345 is not found'))).toBe('所选音频输出设备已断开。请在音频输出设置中选择当前设备或 Windows 默认设备。');
+  expect(toUserErrorMessage(new Error('AudioContext.setSinkId: failed: the device 12345 is not found'))).toBe('选择的音频输出设备已断开。请在音频输出设置里重新选择设备，或改用 Windows 默认设备。');
 });
 it('音频解码错误带底层错误码时仍说明音频问题，不退回笼统提示', () => {
   expect(toUserErrorMessage(new Error('音频解码或读取失败：DEMUXER_ERROR_COULD_NOT_OPEN: FFmpegDemuxer')))
-    .toBe('无法读取或解码音频。请检查音频文件是否损坏、格式是否支持；修复或更换音频后重新播放。');
+    .toBe('无法读取这个音频。请检查文件是否损坏、格式是否支持，换一个音频文件后重新播放。');
 });
 it('无法归类的异常显示原文第一行，重复翻译不叠加前缀', () => {
   // 2026-10-16 现场：播放准备失败的原文，第二行起是 FFmpeg 的英文输出。
@@ -38,9 +38,9 @@ it('无法归类的异常显示原文第一行，重复翻译不叠加前缀', (
 });
 it('文件不存在时指出具体路径或程序', () => {
   expect(toUserErrorMessage(new Error("ENOENT: no such file or directory, stat 'D:\\工程\\assets\\reference-audio\\a.wav'")))
-    .toBe('所需文件或程序不存在：D:\\工程\\assets\\reference-audio\\a.wav。请重新选择有效路径后重试。');
+    .toBe('所需文件或程序不存在：D:\\工程\\assets\\reference-audio\\a.wav。请重新选择正确的位置后再试。');
   const spawn = toUserErrorMessage(new Error('素材没有可解码的音轨：D:\\x.mp4：FFmpeg 启动失败：spawn C:\\Program Files\\ffmpeg.exe ENOENT'));
-  expect(spawn).toBe('所需文件或程序不存在：C:\\Program Files\\ffmpeg.exe。请重新选择有效路径后重试。');
+  expect(spawn).toBe('所需文件或程序不存在：C:\\Program Files\\ffmpeg.exe。请重新选择正确的位置后再试。');
   expect(toUserErrorMessage(new Error(spawn))).toBe(spawn);
 });
 it('工程结构校验错误显示第一条问题，而不是 JSON 的第一行“[”', () => {

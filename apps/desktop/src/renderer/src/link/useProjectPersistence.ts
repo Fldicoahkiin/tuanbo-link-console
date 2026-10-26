@@ -26,7 +26,7 @@ async function openStartupDocument(notify: (message: string, tone?: 'info' | 'er
   try {
     lastPath = await linkDesktopViewModel.lastProjectPath();
     if (lastPath && isProjectReopenSuspended(lastPath)) {
-      notify(`上次工程显示异常，已暂停自动打开。工程文件保留在原位置，可通过“打开工程”重新选择：${lastPath}`, 'error');
+      notify(`上次的工程打开后显示异常，这次没有自动打开。工程文件还在原位置，可通过“打开工程”重新选择：${lastPath}`, 'error');
       return;
     }
   } catch (error) {
@@ -40,7 +40,7 @@ async function openStartupDocument(notify: (message: string, tone?: 'info' | 'er
     const detail = await showOpenedProject(result);
     notify(`已恢复上次工程：${result.project.name}${detail ? `；${detail}` : ''}`);
   } catch (error) {
-    notify(`上次工程恢复失败：${toMessage(error)}`, 'error');
+    notify(`恢复上次的工程失败：${toMessage(error)}`, 'error');
   }
 }
 

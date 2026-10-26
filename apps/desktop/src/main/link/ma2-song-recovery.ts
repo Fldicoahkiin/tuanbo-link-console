@@ -34,7 +34,7 @@ export function recoverMa2SongCreation(
   const actualSequence = inspectMa2SequenceXml(remoteXml).sequences[0]!;
   const intendedSequence = inspectMa2SequenceXml(binding.baselineXml).sequences[0]!;
   const beforeSequence = inspectMa2SequenceXml(skeletonXml).sequences[0]!;
-  if (actualSequence.number !== binding.sequence) throw new Error(`中断记录属于序列 ${binding.sequence}，控台回读对象不一致`);
+  if (actualSequence.number !== binding.sequence) throw new Error(`中断记录属于序列 ${binding.sequence}，和控台读回的对象对不上`);
   const known = (cue: string): boolean => {
     if (heldCues.includes(cue)) return false;
     const value = remote.get(cue);

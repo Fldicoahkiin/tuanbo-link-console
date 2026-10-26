@@ -13,9 +13,9 @@ it('原生时间线切换模式与重新打开时允许检查端口，播放仍�
     document.outputMode = mode;
     expect(collectLightingOutputProfileIds(document)).toEqual(mode === 'timecode' ? [] : ['console']);
     if (mode === 'timecode') expect(compileLightingPackets(document)).toEqual([]);
-    else expect(() => compileLightingPackets(document)).toThrow('原生保留时间线');
-    if (mode === 'network') expect(() => compileLightingNetworkActions(document)).toThrow('原生保留时间线');
-    if (mode === 'direct') expect(() => compileLightingReleasePackets(document)).toThrow('原生保留时间线');
+    else expect(() => compileLightingPackets(document)).toThrow('保持控台原样的时间线');
+    if (mode === 'network') expect(() => compileLightingNetworkActions(document)).toThrow('保持控台原样的时间线');
+    if (mode === 'direct') expect(() => compileLightingReleasePackets(document)).toThrow('保持控台原样的时间线');
   }
 });
 it('端口检查与实际输出采用相同的独奏和静音规则，并识别默认灯光端口', () => {

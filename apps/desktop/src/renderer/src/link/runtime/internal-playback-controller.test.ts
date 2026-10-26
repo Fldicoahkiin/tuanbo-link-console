@@ -37,8 +37,8 @@ it('播放失败把标题与原因交给失败回调，运行日志不再只剩 
   const f = fixture();
   f.deps.resolveAudio.mockRejectedValueOnce(new Error("ENOENT: no such file or directory, open 'D:\\show\\0.wav'"));
   await f.controller.play('song-0');
-  expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：准备失败' });
-  expect(f.deps.failed).toHaveBeenCalledWith('播放未开始：准备失败：所需文件或程序不存在：D:\\show\\0.wav。请重新选择有效路径后重试。', 'song-0');
+  expect(f.state()).toMatchObject({ status: 'error', errorTitle: '没有开始播放：准备失败' });
+  expect(f.deps.failed).toHaveBeenCalledWith('没有开始播放：准备失败：所需文件或程序不存在：D:\\show\\0.wav。请重新选择正确的位置后再试。', 'song-0');
 });
 it('播放引擎不符时在准备任何输出之前拒绝：不读音频、不开时间码端口、不准备联动', async () => {
   const f = fixture(), refusal = '已启用 MIDI 时间码输出：正式播放需使用 Windows 原生音频';
@@ -47,7 +47,7 @@ it('播放引擎不符时在准备任何输出之前拒绝：不读音频、不�
   expect(f.state()).toMatchObject({ status: 'error', error: refusal });
   expect(f.deps.resolveAudio).not.toHaveBeenCalled(); expect(f.output.prepare).not.toHaveBeenCalled();
   expect(f.mtc.connect).not.toHaveBeenCalled(); expect(f.deps.prepare).not.toHaveBeenCalled();
-  expect(f.deps.failed).toHaveBeenCalledWith(`播放未开始：准备失败：${refusal}`, 'song-0');
+  expect(f.deps.failed).toHaveBeenCalledWith(`没有开始播放：准备失败：${refusal}`, 'song-0');
 });
 it('浏览器播放器读取旧工程保留的 P1 起点，无需重新输入且不叠加源裁剪', async () => {
   const f = fixture();
@@ -83,7 +83,7 @@ it('MIDI 准备超出窗口后音频开始，迟到的端口结果不在歌中�
   await vi.advanceTimersByTimeAsync(1001);
   await playing;
   expect(f.state().status).toBe('playing');
-  expect(f.state().fault).toContain('准备窗口内未就绪');
+  expect(f.state().fault).toContain('准备超时（');
   const send = vi.fn(), open = vi.fn();
   resolveAccess?.({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open, send }]]) } as unknown as MIDIAccess);
   await vi.advanceTimersByTimeAsync(8);
@@ -94,7 +94,7 @@ it('MIDI 准备超出窗口后音频开始，迟到的端口结果不在歌中�
 it('原生保留绑定按实际音频位置加480秒起点发MTC，本地裁剪不重复计入，暂停停止发码', async () => {
   const f = fixture();
   f.project.rundown[0]!.playback = { volume: 100, endAction: 'stop', startMs: 1500, endMs: 9000, mtcOffsetMs: 480000, shortcut: '' };
-  f.project.rundown[0]!.lighting = { ...createLightingDocument(), ma2Bindings: [{ id: 'native', timecode: 2, name: 'mei-nan', readAt: new Date().toISOString(), sourceXml: '<MA/>', mappings: [], baselineTracks: [], timeOriginMs: 480000, playback: 'native-timecode', nativeEvents: [{ path: 'learn', reason: '原生保留' }] }] };
+  f.project.rundown[0]!.lighting = { ...createLightingDocument(), ma2Bindings: [{ id: 'native', timecode: 2, name: 'mei-nan', readAt: new Date().toISOString(), sourceXml: '<MA/>', mappings: [], baselineTracks: [], timeOriginMs: 480000, playback: 'native-timecode', nativeEvents: [{ path: 'learn', reason: '控台原样' }] }] };
   await f.controller.play('song-0');
   expect(f.audio.currentTime).toBe(1.5); expect(f.state().mtcPositionMs).toBe(481500);
   f.audio.currentTime = 2; await vi.advanceTimersByTimeAsync(8);
@@ -111,13 +111,13 @@ it('时间码模式遇到本地序列池 Cue 时照常播放音频并发原偏�
   item.playback = { volume: 100, endAction: 'stop', startMs: 1000, endMs: 9000, mtcOffsetMs: 480000, shortcut: '' };
   const lighting = createLightingDocument(); lighting.outputMode = 'timecode';
   lighting.tracks = [lightingTrackSchema.parse({ id: 'pool', name: '控台序列池', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '本地 Cue', start: 0, duration: 9000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', action: 'goto', sequence: 36, cue: '1.100', executor: '', label: 'Cue 1.1', at: 1000 }] }] })];
-  lighting.ma2Bindings = [{ id: 'native', timecode: 2, name: 'mei-nan', readAt: new Date().toISOString(), sourceXml: '<MA/>', mappings: [], baselineTracks: [], timeOriginMs: 480000, playback: 'native-timecode', nativeEvents: [{ path: 'learn', reason: '原生保留' }] }];
+  lighting.ma2Bindings = [{ id: 'native', timecode: 2, name: 'mei-nan', readAt: new Date().toISOString(), sourceXml: '<MA/>', mappings: [], baselineTracks: [], timeOriginMs: 480000, playback: 'native-timecode', nativeEvents: [{ path: 'learn', reason: '控台原样' }] }];
   item.lighting = lighting;
   await f.controller.play(item.id);
   expect(f.audio.play).toHaveBeenCalledOnce();
   expect(networkStatus).not.toHaveBeenCalled();
   expect(f.state()).toMatchObject({ status: 'playing', error: null, mtcPositionMs: 481000 });
-  expect(f.state().notice).toContain('本地序列池 Cue 不会单独发送');
+  expect(f.state().notice).toContain('本地的序列池 Cue 不会单独发送');
   f.audio.currentTime = 2; await vi.advanceTimersByTimeAsync(8);
   expect(f.mtc.tick).toHaveBeenCalledWith(482000, '30', expect.any(Number));
   await f.controller.pause(); expect(f.state().status).toBe('paused');
@@ -134,7 +134,7 @@ it('界面阻塞 200ms 后时间码不补发过期帧，和 P1 一样按音频�
   const clock = vi.spyOn(performance, 'now').mockReturnValue(208);
   f.audio.currentTime = 0.208; await vi.advanceTimersByTimeAsync(8);
   expect(f.state()).toMatchObject({ status: 'playing', error: null, mtcConnectionFailed: false, fault: null });
-  expect(f.deps.notice).toHaveBeenCalledWith(expect.stringContaining('时间码中断 1 次'), 'song-0');
+  expect(f.deps.notice).toHaveBeenCalledWith(expect.stringContaining('时间码第 1 次中断'), 'song-0');
   const relocated = send.mock.calls.slice(beforeStall).map(([message]) => (message as number[])[0]);
   expect(relocated[0]).toBe(0xf0); expect(relocated.filter(type => type === 0xf1).length).toBeLessThanOrEqual(1);
   clock.mockReturnValue(300); f.audio.currentTime = 0.3;
@@ -183,8 +183,8 @@ it('直播中某条网络灯光 Cue 失败时播放栏标出输出异常，后�
 it('准备期间显示定位缓存进度，开始播放后清除，迟到的进度不再显示', async () => {
   const f = fixture();
   f.deps.prepare.mockImplementationOnce(() => {
-    f.controller.reportPreparation('生成 OBS 定位缓存 2/3 · 扑克牌特效.mov');
-    expect(f.state()).toMatchObject({ status: 'preparing', preparation: '生成 OBS 定位缓存 2/3 · 扑克牌特效.mov' });
+    f.controller.reportPreparation('正在准备 OBS 画面 2/3 · 扑克牌特效.mov');
+    expect(f.state()).toMatchObject({ status: 'preparing', preparation: '正在准备 OBS 画面 2/3 · 扑克牌特效.mov' });
     return Promise.resolve();
   });
   await f.controller.play('song-0');
@@ -226,7 +226,7 @@ it('时间码连接失败时明确提示并继续播放音频', async () => {
   const f = fixture(false, false, new MediaMtcOutput());
   await f.controller.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', mtcEnabled: true, mtcConnectionFailed: true, mtcPortName: null });
-  expect(f.state().fault).toContain('本次继续播放音频');
+  expect(f.state().fault).toContain('音频照常播放');
   expect(f.deps.prepare).toHaveBeenCalledWith('song-0', 0, { reuseSession: false, mtcOutputEnabled: false });
   expect(f.audio.play).toHaveBeenCalledOnce();
   await f.controller.stop();
@@ -243,7 +243,7 @@ it('直接 MIDI 动作不可用也不阻断音频，并说明灯光未启动', a
   await f.controller.play('song-0');
   expect(f.audio.play).toHaveBeenCalledOnce();
   expect(f.state()).toMatchObject({ status: 'playing', mtcConnectionFailed: false });
-  expect(f.state().fault).toContain('灯光动作未启动');
+  expect(f.state().fault).toContain('灯光动作没有启动');
   f.controller.dispose();
 });
 it('时间码与 Cue 跟随听到的声音：扣除 52ms 输出延迟，开播时不早于起点、不回跳', async () => {
@@ -263,10 +263,10 @@ it('时间码与 Cue 跟随听到的声音：扣除 52ms 输出延迟，开播�
 });
 it('旧音频设备消失时不开始播放并说明原因，不改用其他线路', async () => {
   const f = fixture();
-  f.output.prepare.mockRejectedValueOnce(new Error('选择的正式音频输出已断开；不会自动切换线路。请在音频输出设置中选择当前设备或 Windows 默认设备后重新播放'));
+  f.output.prepare.mockRejectedValueOnce(new Error('选择的音频输出设备已断开，不会自动换到其他设备。请在音频输出设置里重新选择设备（或 Windows 默认设备）后再播放'));
   await f.controller.play('song-0');
-  expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：准备失败' });
-  expect(f.state().error).toContain('不会自动切换线路');
+  expect(f.state()).toMatchObject({ status: 'error', errorTitle: '没有开始播放：准备失败' });
+  expect(f.state().error).toContain('不会自动换到其他设备');
   expect(f.audio.play).not.toHaveBeenCalled();
   f.controller.dispose();
 });
@@ -335,7 +335,7 @@ it('OBS 准备失败后音频仍可定位播放，后续定位不反复准备 OB
   f.deps.prepare.mockRejectedValueOnce(new Error('OBS 无法唯一识别联动台音频窗口'));
   await f.controller.scrub('song-0', 1000);
   expect(f.state().status).toBe('paused');
-  expect(f.state().notice).toContain('画面与联动未启动');
+  expect(f.state().notice).toContain('画面和联动没有启动');
   for (const position of [1100, 1200, 1300, 1400]) await f.controller.scrub('song-0', position);
   expect(f.deps.prepare).toHaveBeenCalledOnce();
   expect(f.audio.play).not.toHaveBeenCalled();
@@ -546,7 +546,7 @@ describe('内部正式音乐主控', () => {
       ]
     }));
     await f.controller.play('song-0');
-    expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：预检未通过' });
+    expect(f.state()).toMatchObject({ status: 'error', errorTitle: '没有开始播放：开播前检查没通过' });
     expect(f.state().error).toContain('显示来源与完整场景模式冲突');
     expect(f.audio.play).not.toHaveBeenCalled();
     expect(f.deps.ingest).not.toHaveBeenCalled();
@@ -560,13 +560,13 @@ describe('内部正式音乐主控', () => {
       actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
     f.deps.prepare.mockRejectedValueOnce(new Error('FFmpeg 生成编辑代理失败：argb is not supported'));
     await f.controller.play('song-0');
-    expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：准备失败' });
-    expect(f.state().error).toContain('画面与联动准备失败：');
+    expect(f.state()).toMatchObject({ status: 'error', errorTitle: '没有开始播放：准备失败' });
+    expect(f.state().error).toContain('画面和联动准备失败：');
     expect(f.audio.play).not.toHaveBeenCalled();
-    f.deps.prepare.mockRejectedValueOnce(new Error('OBS 未连接；可用顶部“一键连接”恢复画面联动'));
+    f.deps.prepare.mockRejectedValueOnce(new Error('OBS 没有连接，可点顶部“一键连接”恢复画面联动'));
     await f.controller.play('song-1');
     expect(f.state().status).toBe('playing');
-    expect(f.state().notice).toContain('画面与联动未启动：OBS 未连接');
+    expect(f.state().notice).toContain('画面和联动没有启动，音频照常播放。原因：OBS 没有连接');
     expect(f.audio.play).toHaveBeenCalledOnce();
     f.controller.dispose();
   });
@@ -673,7 +673,7 @@ describe('内部正式音乐主控', () => {
   it('音频停止推进超过 500ms，停止输出并显示错误', async () => {
     const f = fixture(); await f.controller.play('song-0');
     await vi.advanceTimersByTimeAsync(520);
-    expect(f.state().status).toBe('error'); expect(f.state().error).toContain('停止更新');
+    expect(f.state().status).toBe('error'); expect(f.state().error).toContain('进度卡住了');
     const count = f.mtc.tick.mock.calls.length; await vi.advanceTimersByTimeAsync(1000);
     expect(f.mtc.tick).toHaveBeenCalledTimes(count); f.controller.dispose();
   });
@@ -718,7 +718,7 @@ it('无 MIDI 输出时继续音频且不显示为时间码已发送', async () =
   f.project.rundown[0]!.lighting = { ...createLightingDocument(), ma2Bindings: [{ id: 'binding', timecode: 1, name: 'TC', readAt: new Date().toISOString(), sourceXml: '<MA/>', baselineTracks: [], mappings: [], timeOriginMs: 120000 }] };
   await f.controller.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', mtcPortName: null, mtcSentPositionMs: null });
-  expect(f.state().fault).toContain('未检测到灯光 MIDI 输出');
+  expect(f.state().fault).toContain('没有找到灯光 MIDI 输出');
   expect(f.audio.play).toHaveBeenCalledOnce();
   f.controller.dispose();
 });

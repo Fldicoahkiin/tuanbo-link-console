@@ -63,5 +63,5 @@ it('缺失文件明确失败，关闭精确定位时仍校验原文件但不生�
   const t = fixture(); t.request.preciseSeeking = false;
   await prepareNextObsFiles(t.request, t.services, () => undefined); expect(t.ensureObsSeekVideo).not.toHaveBeenCalled();
   t.inspectMediaAssets.mockResolvedValue({ a0: { fileAvailable: false } });
-  await expect(prepareNextObsFiles(t.request, t.services, () => undefined)).rejects.toThrow('文件不可读');
+  await expect(prepareNextObsFiles(t.request, t.services, () => undefined)).rejects.toThrow('文件读不了');
 });

@@ -10,10 +10,10 @@ export class Ma2ExecutorInputService {
   async input(connection: Pick<Ma2Telnet, 'command'>, input: Ma2ExecutorInput, current: () => void): Promise<void> {
     const request = ma2ExecutorInputSchema.parse(input);
     const code = request.expectedItem.buttons?.[request.button] ?? (request.button === 0 ? request.expectedItem.button : null);
-    if (code === null || code === undefined || !ma2ExecutorFunctions[code]) throw new Error('该执行器按键没有已读取的可用功能，请刷新此页');
+    if (code === null || code === undefined || !ma2ExecutorFunctions[code]) throw new Error('这个执行器按键没有读到可用的功能，请刷新这一页');
     const held = this.held.get(request.sessionId);
     if (!request.pressed && !held) return;
-    if (held && (held.connection !== connection || held.request.page !== request.page || held.request.slot !== request.slot || held.request.button !== request.button)) throw new Error('执行器按住会话已变化');
+    if (held && (held.connection !== connection || held.request.page !== request.page || held.request.slot !== request.slot || held.request.button !== request.button)) throw new Error('按住期间执行器或连接有变化，请松开后重新按');
     const key = held ?? { connection, request, released: false, leaseEndsAt: 0 };
     if (!request.pressed) {
       // Cancel queued press/renew operations immediately, before the higher
@@ -25,7 +25,7 @@ export class Ma2ExecutorInputService {
       if (!request.pressed) return;
       if (key.released) throw new Error('按键已松开，已取消排队的按下');
       current();
-      if (Date.now() > request.deadlineAt) throw new Error('按键操作已过期，未补发，请重新点击');
+      if (Date.now() > request.deadlineAt) throw new Error('按键操作已过期，没有补发，请重新点一次');
     };
     beforeSend();
     const token = randomBytes(16).toString('hex');
@@ -45,15 +45,15 @@ export class Ma2ExecutorInputService {
       : await runMa2GuardedLua({ command: (command, match, guard) => connection.command(command, match, guard, request.pressed ? 'playback' : 'stop') }, body, beforeSend);
     if (result.startsWith('ERR:')) {
       const message = result.slice(4);
-      throw new Error(`执行器按键未确认：${/^(?:[a-f0-9]{2})+$/.test(message) ? Buffer.from(message, 'hex').toString('utf8') : '控台返回错误格式无效'}`);
+      throw new Error(`执行器按键没有确认：${/^(?:[a-f0-9]{2})+$/.test(message) ? Buffer.from(message, 'hex').toString('utf8') : '控台返回的错误无法识别'}`);
     }
-    if (request.pressed ? !['SENT', 'HELD'].includes(result) : result !== 'RELEASED') throw new Error('执行器按键桥未就绪，请重新连接控台');
+    if (request.pressed ? !['SENT', 'HELD'].includes(result) : result !== 'RELEASED') throw new Error('执行器按键功能还没准备好，请重新连接控台');
     if (!request.pressed) this.held.delete(request.sessionId);
   }
   async release(): Promise<void> {
     const held = [...this.held.values()];
     const results = await Promise.allSettled(held.map(({ connection, request }) => this.input(connection, { ...request, pressed: false }, () => undefined)));
     const failed = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-    if (failed.length) throw new Error(`按键释放回读未确认，控台租约将在 2 秒内释放：${failed.map(result => String(result.reason)).join('；')}`);
+    if (failed.length) throw new Error(`按键松开后没有得到控台确认，控台会在 2 秒内自动松开：${failed.map(result => String(result.reason)).join('；')}`);
   }
 }

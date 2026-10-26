@@ -32,7 +32,7 @@ test('公司更新无需客户凭证，下载后由用户确认安装，关闭�
       getUpdateStatus: () => Promise.resolve(status), onUpdateStatus: () => () => undefined,
       getAppInfo: () => Promise.resolve({ name: '团播联动台', version: '0.4.27', channel: 'release', gitSha: '0123456789abcdef0123456789abcdef01234567', appId: 'com.tuanbo.control' }),
       checkForUpdates: () => Promise.resolve({ ...status, phase: 'available', availableVersion: '0.4.28', message: '发现新版本 0.4.28' }),
-      downloadUpdate: () => Promise.resolve({ ...status, phase: 'downloaded', availableVersion: '0.4.28', message: '版本 0.4.28 已下载，确认后重启安装' }),
+      downloadUpdate: () => Promise.resolve({ ...status, phase: 'downloaded', availableVersion: '0.4.28', message: '版本 0.4.28 已下载，确认后会重启并安装' }),
       installUpdate: () => Promise.reject(new Error('联动尚未停止，请停止联动后再安装更新'))
     } });
   });
@@ -54,7 +54,7 @@ test('公司更新无需客户凭证，下载后由用户确认安装，关闭�
   await expect(page.getByRole('button', { name: '重启并安装', exact: true })).toBeEnabled();
   await page.screenshot({ path: info.outputPath('company-update.png') });
   await page.getByRole('button', { name: '重启并安装', exact: true }).click();
-  await expect(page.locator('#notice')).toContainText('联动尚未停止');
+  await expect(page.locator('#notice')).toContainText('联动还没停止');
   await expect(page.getByRole('button', { name: '重启并安装', exact: true })).toBeEnabled();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -67,7 +67,7 @@ test('超出升级服务期限：显示新版本和原因，不提供下载', as
   await page.addStyleTag({ content: styles });
   await page.evaluate(() => {
     const status: LinkUpdateStatus = { phase: 'available', currentVersion: '0.5.0', availableVersion: '0.5.1', releaseDate: '2026-11-02T00:00:00.000Z', progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true,
-      installBlockedReason: '新版本 0.5.1 发布于 2026-11-02，晚于本机授权的升级服务期限 2026-10-31；可以继续使用当前版本，续费延长升级服务后再安装', message: '发现新版本 0.5.1' };
+      installBlockedReason: '新版本 0.5.1 发布于 2026-11-02，晚于本机授权的升级服务期限 2026-10-31。当前版本可以继续用，续费延长升级服务后再安装', message: '发现新版本 0.5.1' };
     Object.defineProperty(window, 'tbLink', { configurable: true, value: { getUpdateStatus: () => Promise.resolve(status), onUpdateStatus: () => () => undefined,
       getAppInfo: () => Promise.resolve({ name: '团播联动台', version: '0.5.0', channel: 'development', gitSha: '0123456789abcdef0123456789abcdef01234567-dirty', appId: 'com.tuanbo.control' }) } });
   });

@@ -7,7 +7,7 @@ export function allocateMediaTimecodeRanges(project: LinkProject): Array<{ itemI
     if (!item.referenceAudio) return [];
     const range = { itemId: item.id, startSeconds, durationMs: item.referenceAudio.durationMs };
     startSeconds += Math.ceil(range.durationMs / 1000) + 10;
-    if (startSeconds >= 86_400) throw new Error('内部主控节目单与间隔总时长必须小于 24 小时，请拆分工程');
+    if (startSeconds >= 86_400) throw new Error('节目单加上间隔的总时长必须小于 24 小时，请拆分工程');
     return [range];
   });
 }

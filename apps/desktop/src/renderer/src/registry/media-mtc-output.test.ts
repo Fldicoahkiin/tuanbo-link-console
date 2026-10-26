@@ -38,10 +38,10 @@ describe('Electron 原生 MIDI 时间码输出', () => {
     const ports = new Map([['other', { name: '其他端口', state: 'connected', open }]]);
     vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: ports }) });
     const output = new MediaMtcOutput();
-    await expect(output.connect('MA2')).rejects.toThrow('未检测到 MIDI 时间码输出：MA2');
+    await expect(output.connect('MA2')).rejects.toThrow('找不到 MIDI 时间码输出“MA2”');
     ports.set('one', { name: 'MA2', state: 'connected', open });
     ports.set('two', { name: 'MA2', state: 'connected', open });
-    await expect(output.connect('MA2')).rejects.toThrow('名称重复：MA2（2 个）');
+    await expect(output.connect('MA2')).rejects.toThrow('“MA2”有重名（2 个）');
     expect(open).not.toHaveBeenCalled();
   });
   it.each(['closed', 'pending'] as const)('端口仍 connected 但连接为 %s 时阻断发送，不允许 send 隐式重开', async (connection) => {
@@ -50,7 +50,7 @@ describe('Electron 原生 MIDI 时间码输出', () => {
     vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', port]]) }) });
     const output = new MediaMtcOutput(); await output.connect('MA2'); output.tick(0, '30', 0);
     send.mockClear(); port.connection = connection;
-    expect(() => output.tick(8, '30', 8)).toThrow('连接已失效');
+    expect(() => output.tick(8, '30', 8)).toThrow('连接失效');
     expect(send).not.toHaveBeenCalled();
   });
   it('媒体时钟回跳而未显式定位时按实际位置整帧重新同步并标出，不等待旧位置造成静默断流', async () => {
@@ -123,12 +123,12 @@ describe('Electron 原生 MIDI 时间码输出', () => {
     expect(output.tick(80, rate, 80)).toBe(true);
     // Full Frame first; on an exact frame boundary only that boundary's first quarter follows.
     expect(send.mock.calls.map(([message]) => (message as number[])[0])).toEqual(rate === '25' ? [0xf0, 0xf1] : [0xf0]);
-    expect(output.takeSchedulingNotice()).toContain('滞后超过一帧');
+    expect(output.takeSchedulingNotice()).toContain('计时落后超过一帧');
     expect(output.takeSchedulingNotice()).toBeNull();
     for (let now = 81; now <= 200; now += 1) output.tick(now, rate, now);
     expect(send.mock.calls.filter(([message]) => (message as number[])[0] === 0xf1).length).toBeGreaterThan(10);
   });
-  it.each([[600, 600, '调度中断'], [2000, 200, '不一致'], [0, 200, '不一致']])('长时间中断或音频跳变：位置 %s / 时钟 %s 重新整帧同步并报告', async (position, now, reason) => {
+  it.each([[600, 600, '计时中断'], [2000, 200, '不一致'], [0, 200, '不一致']])('长时间中断或音频跳变：位置 %s / 时钟 %s 重新整帧同步并报告', async (position, now, reason) => {
     const send = vi.fn();
     vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send }]]) }) });
     const output = new MediaMtcOutput(); await output.connect('MA2'); output.tick(0, '30', 0);
@@ -164,7 +164,7 @@ it('USB 输出被占用时显示端口和原始错误，提示退出 P1，未发
   const port = { name: 'USB MIDI Interface', state: 'connected', connection: 'closed', open: () => Promise.reject(new Error('Port is in use')), send };
   vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map([['usb', port]]) }) });
   const output = new MediaMtcOutput();
-  await expect(output.connect(port.name)).rejects.toThrow('USB MIDI Interface：Port is in use');
+  await expect(output.connect(port.name)).rejects.toThrow('“USB MIDI Interface”：Port is in use');
   expect(send).not.toHaveBeenCalled(); expect(output.tick(0, '30', 0)).toBe(false);
 });
 
@@ -183,7 +183,7 @@ it.each([0, 2])('自动识别有 %s 个输出时明确阻断，不随意选择',
   const open = vi.fn(() => Promise.resolve());
   vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve({ outputs: new Map(Array.from({ length: count }, (_, i) => [String(i), { name: `USB ${i}`, state: 'connected', open }])) }) });
   const output = new MediaMtcOutput();
-  await expect(output.connect(null, true)).rejects.toThrow(count ? '多个 MIDI 输出' : '未检测到灯光 MIDI 输出');
+  await expect(output.connect(null, true)).rejects.toThrow(count ? '多个 MIDI 输出' : '没有找到灯光 MIDI 输出');
   expect(open).not.toHaveBeenCalled();
   expect(output.tick(0, '30', 0)).toBe(false);
 });

@@ -44,14 +44,14 @@ it('旧页读取迟到失败不会覆盖已回读成功页面的状态', async (
 it('等待连接期间切换工程不能把旧选择的删除发送给新工程控台', async () => {
   const pending = deferred<typeof target>(); connection.mockReturnValueOnce(pending.promise);
   const writing = updateMa2ExecutorPageItem(4, snapshot().items[0]!, { kind: 'delete' });
-  const failure = expect(writing).rejects.toThrow('未修改执行器');
+  const failure = expect(writing).rejects.toThrow('执行器没有修改');
   context.scope = 'another'; prepareMa2ExecutorPages();
   pending.resolve(target); await failure;
   expect(update).not.toHaveBeenCalled();
 });
 it('全量扫描期间写回淘汰旧快照时，不能宣称所有位置完整', async () => {
   const pending = deferred<Ma2ExecutorPage>(); read.mockReturnValueOnce(pending.promise);
-  const scanning = scanMa2ExecutorLocations(); const failure = expect(scanning).rejects.toThrow('执行器已有修改');
+  const scanning = scanMa2ExecutorLocations(); const failure = expect(scanning).rejects.toThrow('执行器被修改了');
   await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
   await updateMa2ExecutorPageItem(4, snapshot().items[0]!, { kind: 'rename', name: '新名' });
   pending.resolve(snapshot()); await failure;
@@ -133,7 +133,7 @@ it.each(['document', 'show', 'endpoint', 'version', 'unverified'] as const)('原
   installTimeline();
   const pending = deferred<Ma2ExecutorUpdateResult>(); update.mockReturnValueOnce(pending.promise);
   const writing = updateMa2ExecutorPageItem(4, snapshot().items[0]!, { kind: 'move', page: 5, slot: 102 });
-  const failure = expect(writing).rejects.toThrow(/已写入并回读：4\.101 → 5\.102.*本地结果未应用.*返回原工程与控台.*备份：C:\/backup\.xml/);
+  const failure = expect(writing).rejects.toThrow(/并确认：4\.101 → 5\.102.*本地没有应用这次结果.*回到原来的工程和控台.*备份：C:\/backup\.xml/);
   await vi.waitFor(() => expect(update).toHaveBeenCalledOnce());
   if (change === 'document') {
     // Same console and identical contents still belong to a new document.

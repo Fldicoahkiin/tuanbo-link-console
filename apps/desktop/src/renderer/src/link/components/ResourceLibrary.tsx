@@ -250,6 +250,6 @@ async function synchronizeMaterials(path: string, project: NonNullable<ReturnTyp
   } catch (error) {
     const message = `素材场景同步失败：${String(error)}`; onError(message);
     try { await desktop.recordLog({ level: 'error', category: 'device', device: 'obs', result: 'failed', message }); }
-    catch (logError) { onError(`${message}；记录失败：${String(logError)}`); }
+    catch (logError) { onError(`${message}（日志也没有写成功：${String(logError)}）`); }
   }
 }

@@ -45,7 +45,7 @@ for (const scenario of ['connected', 'disconnected', 'empty'] as const) test(`�
       await expect.poll(() => page.locator('.timeline-audio-engine').evaluate(element => (element as HTMLAudioElement).currentTime)).toBeGreaterThan(1);
       await page.getByRole('button', { name: '停止时间线', exact: true }).click();
       expect(calls).toEqual([]);
-      await expect(page.getByText('请在设备设置选择 MIDI 时间码输出', { exact: false })).toHaveCount(0);
+      await expect(page.getByText('请先在设备设置里选择 MIDI 时间码输出', { exact: false })).toHaveCount(0);
       return;
     }
     if (connected) {

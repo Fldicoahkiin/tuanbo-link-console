@@ -101,14 +101,14 @@ export class ExternalProcessManager {
       const stillOwned = current.snapshot.owned && current.snapshot.pid === process.pid && current.snapshot.startTime === process.startTime;
       this.adopt(id, process, stillOwned, stillOwned ? current.child : null);
       if ((id === 'ma2' || id === 'ma3d') && !process.windowTitle) {
-        const message = `${id === 'ma2' ? 'MA2 onPC' : 'MA 3D'} 进程已存在但主窗口未就绪，请处理该程序的残留进程或启动提示后再连接；未重复启动`;
+        const message = `${id === 'ma2' ? 'MA2 onPC' : 'MA 3D'} 已经在运行，但主窗口还没出现。请先处理它的残留进程或启动提示，再重新连接（没有再启动一个）`;
         this.setEntry(id, { ...this.getSnapshot(id), status: 'error', error: message }, stillOwned ? current.child : null);
         throw new Error(message);
       }
       return this.getSnapshot(id);
     }
     if (hasLiveOwnedChild(current)) {
-      const message = `${id} 已由联动台启动（PID ${String(current.snapshot.pid)}），但当前无法通过路径核验；拒绝重复启动`;
+      const message = `${id} 已由联动台启动（PID ${String(current.snapshot.pid)}），但现在无法确认它的程序路径，没有再启动一个`;
       this.setEntry(id, { ...current.snapshot, status: 'error', error: message }, current.child);
       throw new Error(message);
     }
@@ -125,7 +125,7 @@ export class ExternalProcessManager {
     try {
       child = this.tools.launch({ ...configuration, executablePath });
       await waitForSpawn(child, id, executablePath);
-      if (child.pid === undefined) throw new Error(`${id} 启动后未返回 PID`);
+      if (child.pid === undefined) throw new Error(`${id} 启动后没有拿到进程号`);
       const pid = child.pid;
       this.attachExitListener(id, child, pid);
       this.setEntry(id, {
@@ -176,7 +176,7 @@ export class ExternalProcessManager {
           ...current.snapshot,
           executablePath,
           status: 'error',
-          error: '本次启动的进程暂时无法通过路径核验；已保留所有权，可请求正常关闭'
+          error: '暂时无法确认这次启动的程序路径，仍由联动台管理，可以请求正常关闭'
         }, current.child);
       } else {
         this.setEntry(id, {
@@ -196,13 +196,13 @@ export class ExternalProcessManager {
   async stop(id: ExternalApplicationId, timeoutMs: number): Promise<ManagedProcessSnapshot> {
     const entry = this.getEntry(id);
     if (!entry.snapshot.owned) {
-      throw new Error(`${id} 不是本次由联动台启动的进程，拒绝关闭`);
+      throw new Error(`${id} 不是这次由联动台启动的，联动台不会关闭它`);
     }
     if (entry.snapshot.pid === null) return this.getSnapshot(id);
     if (id === 'obs') {
       const activity = await this.obsActivity.readOutputStatus();
       if (activity.streaming || activity.recording) {
-        throw new Error('OBS 正在推流或录像，拒绝关闭');
+        throw new Error('OBS 正在推流或录像，联动台不会关闭它');
       }
     }
 
@@ -210,14 +210,14 @@ export class ExternalProcessManager {
     this.setEntry(id, { ...entry.snapshot, status: 'stopping', error: null }, entry.child);
     const accepted = await this.tools.requestClose(pid, entry.snapshot);
     if (!accepted) {
-      this.setEntry(id, { ...this.getSnapshot(id), status: 'running', error: '程序拒绝正常关闭请求' }, entry.child);
-      throw new Error(`${id} 没有接受正常关闭请求，进程保持运行`);
+      this.setEntry(id, { ...this.getSnapshot(id), status: 'running', error: '程序拒绝了关闭请求' }, entry.child);
+      throw new Error(`${id} 没有接受关闭请求，仍在运行`);
     }
 
     const exited = await waitForExit(entry.child, pid, entry.snapshot, timeoutMs);
     if (!exited) {
-      this.setEntry(id, { ...this.getSnapshot(id), status: 'running', error: '正常关闭超时，进程保持运行' }, entry.child);
-      throw new Error(`${id} 正常关闭超时，未强制结束进程`);
+      this.setEntry(id, { ...this.getSnapshot(id), status: 'running', error: '关闭超时，程序仍在运行' }, entry.child);
+      throw new Error(`${id} 关闭超时，联动台没有强制结束它`);
     }
     this.setEntry(id, emptySnapshot(id), null);
     return this.getSnapshot(id);
@@ -228,7 +228,7 @@ export class ExternalProcessManager {
       const entry = this.getEntry(id);
       if (!entry.snapshot.owned || entry.snapshot.pid === null) continue;
       const configuration = configurations[id];
-      if (!configuration) throw new Error(`${id} 启动配置缺失，进程保持运行`);
+      if (!configuration) throw new Error(`${id} 缺少启动设置，程序仍在运行`);
       await this.stopWithTimeout(id, configuration.shutdownTimeoutMs);
     }
   }
@@ -238,13 +238,13 @@ export class ExternalProcessManager {
     if (entry.snapshot.pid === null) return;
     if (id === 'obs') {
       const activity = await this.obsActivity.readOutputStatus();
-      if (activity.streaming || activity.recording) throw new Error('OBS 正在推流或录像，拒绝关闭');
+      if (activity.streaming || activity.recording) throw new Error('OBS 正在推流或录像，联动台不会关闭它');
     }
     this.setEntry(id, { ...entry.snapshot, status: 'stopping', error: null }, entry.child);
     const accepted = await this.tools.requestClose(entry.snapshot.pid, entry.snapshot);
-    if (!accepted) throw new Error(`${id} 没有接受正常关闭请求，进程保持运行`);
+    if (!accepted) throw new Error(`${id} 没有接受关闭请求，仍在运行`);
     const exited = await waitForExit(entry.child, entry.snapshot.pid, entry.snapshot, timeoutMs);
-    if (!exited) throw new Error(`${id} 正常关闭超时，未强制结束进程`);
+    if (!exited) throw new Error(`${id} 关闭超时，联动台没有强制结束它`);
     this.setEntry(id, emptySnapshot(id), null);
   }
 
@@ -305,7 +305,7 @@ function selectDetectedProcess(
   if (matches.length === 1) return matches[0] ?? null;
   const withMainWindow = matches.filter((candidate) => candidate.windowTitle.trim() !== '');
   if (withMainWindow.length === 1) return withMainWindow[0] ?? null;
-  throw new Error(`${id} 存在多个相同路径进程且无法由唯一主窗口确定${purpose}`);
+  throw new Error(`${id} 同时开了多个，无法确定哪一个是${purpose}`);
 }
 
 export class WindowsProcessTools implements ExternalProcessTools {
@@ -354,7 +354,7 @@ export class WindowsProcessTools implements ExternalProcessTools {
 
   async requestClose(pid: number, identity?: Pick<ManagedProcessSnapshot, 'executablePath' | 'startTime'>): Promise<boolean> {
     if (!Number.isInteger(pid) || pid <= 0) throw new Error(`非法 PID：${pid}`);
-    if (!identity?.executablePath || !identity.startTime) throw new Error('无法核验进程路径与启动时间，拒绝关闭');
+    if (!identity?.executablePath || !identity.startTime) throw new Error('无法确认程序的路径和启动时间，联动台不会关闭它');
     const path = Buffer.from(resolve(identity.executablePath), 'utf16le').toString('base64');
     const started = Buffer.from(identity.startTime, 'utf16le').toString('base64');
     const script = `$p=Get-Process -Id ${pid} -ErrorAction Stop; $expected=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${path}')); $started=[DateTime]::Parse([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${started}'))).ToUniversalTime(); if(-not $p.MainModule.FileName.Equals($expected,[StringComparison]::OrdinalIgnoreCase) -or $p.StartTime.ToUniversalTime() -ne $started){throw '进程身份已变化，拒绝关闭'}; $p.CloseMainWindow()`;
@@ -428,7 +428,7 @@ async function waitForExactProcess(
     if (match && (!requireWindow || match.windowTitle)) return match;
     await delay(250);
   }
-  throw new Error(`进程 ${pid} 在 ${timeoutMs}ms 内${requireWindow ? '未通过路径核验或主窗口尚未就绪' : '未通过路径核验'}`);
+  throw new Error(`进程 ${pid} 在 ${timeoutMs} ms 内${requireWindow ? '没有通过路径确认，或主窗口还没出现' : '没有通过路径确认'}`);
 }
 
 function waitForSpawn(child: ChildProcess, id: ExternalApplicationId, executablePath: string): Promise<void> {
@@ -450,7 +450,7 @@ const pidListSchema = z.array(z.number().int().positive());
 
 function unverifiableInstanceMessage(id: ExternalApplicationId, pids: readonly number[]): string {
   const label = applicationLabels[id];
-  return `${label} 已在运行（PID ${pids.join('、')}），但 Windows 不允许联动台核对这个进程，常见原因是它用另一个 Windows 账户打开（例如“以其他用户身份运行”，或以管理员身份运行时输入了另一个账户的密码）。联动台不会再启动一个 ${label}。请在 ${label} 里正常退出，再用当前 Windows 账户打开（以管理员身份也可以），然后重新连接。`;
+  return `${label} 已在运行（PID ${pids.join('、')}），但 Windows 不允许联动台检查这个进程，常见原因是它用另一个 Windows 账户打开（例如“以其他用户身份运行”，或以管理员身份运行时输入了另一个账户的密码）。联动台不会再启动一个 ${label}。请在 ${label} 里正常退出，再用当前 Windows 账户打开（以管理员身份也可以），然后重新连接。`;
 }
 
 async function waitForExit(
@@ -499,7 +499,7 @@ async function runPowerShell(script: string, timeoutMs: number): Promise<string>
       if (settled) return;
       settled = true;
       child.kill();
-      reject(new Error(`PowerShell 进程检测超过 ${timeoutMs}ms`));
+      reject(new Error(`PowerShell 检测进程超时（${timeoutMs} ms）`));
     }, timeoutMs);
     child.once('error', (error) => {
       if (settled) return;

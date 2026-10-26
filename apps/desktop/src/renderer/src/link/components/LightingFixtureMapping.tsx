@@ -5,9 +5,9 @@ export function parseFixtureRange(text: string): number[] {
   const values = new Set<number>();
   for (const part of text.trim().split(/[，,\s]+/).filter(Boolean)) {
     const match = /^(\d+)(?:-(\d+))?$/.exec(part);
-    if (!match) throw new Error('灯具编号格式为 101-120, 201');
+    if (!match) throw new Error('灯具编号格式示例：101-120, 201');
     const start = Number(match[1]); const end = Number(match[2] ?? match[1]);
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start > 9999) throw new Error('灯具编号范围无效或超过一万盏');
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start > 9999) throw new Error('灯具编号范围无效，或超过了一万盏');
     for (let value = start; value <= end; value++) values.add(value);
     if (values.size > 10000) throw new Error('单类灯具不能超过一万盏');
   }

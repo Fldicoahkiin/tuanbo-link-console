@@ -23,7 +23,7 @@ it('截图重建的24个混合事件保留全部原文，11个已知Cue进入歌
   expect(lighting.ma2Bindings![0]!.sourceXml).toBe(meiNanXml);
   expect(lighting.ma2Bindings![0]!.nativeEvents).toHaveLength(13);
   expect(compileLightingPackets(lighting)).toEqual([]);
-  expect(() => compileLightingPackets({ ...lighting, outputMode: 'direct' })).toThrow('原生保留');
+  expect(() => compileLightingPackets({ ...lighting, outputMode: 'direct' })).toThrow('控台原样');
   lighting.tracks[1]!.clips[0]!.events[0]!.at = 200;
   const bridge = { request: vi.fn(), exchange: vi.fn() };
   const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: '', document: lighting, bindingId: lighting.ma2Bindings![0]!.id, readback: preview, choices: [], conflicts: [] });

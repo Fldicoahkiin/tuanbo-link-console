@@ -65,16 +65,16 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
   try {
     project = parseLinkProject(context.project);
     if (context.mtcRequirement !== 'internal') validateP1TimecodeRanges(project);
-    checks.push(passed('project.schema', '工程结构', '工程结构和 ID 校验通过'));
+    checks.push(passed('project.schema', '工程结构', '工程文件结构正常'));
   } catch (error) {
     checks.push(blocking('project.schema', '工程结构', toErrorMessage(error)));
     return report(context, checks);
   }
   try {
     profile = parseIntegrationProfile(context.profile);
-    checks.push(passed('profile.schema', '集成档案', '本机集成档案校验通过'));
+    checks.push(passed('profile.schema', '本机设备设置', '本机设备设置正常'));
   } catch (error) {
-    checks.push(blocking('profile.schema', '集成档案', toErrorMessage(error)));
+    checks.push(blocking('profile.schema', '本机设备设置', toErrorMessage(error)));
     return report(context, checks);
   }
 
@@ -83,7 +83,7 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
     : project.rundown.find((item) => item.id === context.currentItemId) ?? null;
   checks.push(currentItem?.enabled
     ? passed('project.currentItem', '当前节目', currentItem.title)
-    : blocking('project.currentItem', '当前节目', currentItem ? '当前节目已停用' : '尚未选择有效的当前节目'));
+    : blocking('project.currentItem', '当前节目', currentItem ? '当前节目已停用' : '还没选择节目'));
 
   // Internal playback prepares one song at a time; unfinished neighbours must
   // not block it. P1/session preflight continues to inspect the whole rundown.
@@ -93,8 +93,8 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
     const expectedShows = expectedMa2Shows(project, item.id);
     if (context.ma2Show !== undefined && expectedShows.length) {
       const mismatch = ma2ShowMismatch(expectedShows, context.ma2Show);
-      checks.push(mismatch ? blocking(`ma2.show.${item.id}`, `MA2 控台 show：${item.title}`, mismatch)
-        : passed(`ma2.show.${item.id}`, `MA2 控台 show：${item.title}`, context.ma2Show));
+      checks.push(mismatch ? blocking(`ma2.show.${item.id}`, `MA2 控台 Show：${item.title}`, mismatch)
+        : passed(`ma2.show.${item.id}`, `MA2 控台 Show：${item.title}`, context.ma2Show));
     }
     if (project.obsOutputMode === 'scenes') {
       const incompatible = item.cues.filter((cue) => cue.enabled).flatMap((cue) => cue.actions).find((action) =>
@@ -102,33 +102,33 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
         // Show/hide source acts on the scene on program (operator decision 2026-10-19).
         && action.kind !== 'obs.setSceneItemEnabled');
       checks.push(incompatible
-        ? blocking(`obs.sceneMode.${item.id}`, `完整场景模式：${item.title}`, `动作“${incompatible.label}”与完整场景模式冲突。请在该节目的 Cue 编排中移除此动作或停用所在 Cue；需要切换画面时，改用“切换完整场景”动作。`)
-        : passed(`obs.sceneMode.${item.id}`, `完整场景模式：${item.title}`, '保留 OBS 场景的变换、裁剪和滤镜；本地视觉素材仅用于参考预览'));
+        ? blocking(`obs.sceneMode.${item.id}`, `完整场景模式：${item.title}`, `动作“${incompatible.label}”和完整场景模式冲突。请在这个节目的 Cue 编排里删掉这个动作，或停用它所在的 Cue；需要切换画面时，改用“切换完整场景”动作。`)
+        : passed(`obs.sceneMode.${item.id}`, `完整场景模式：${item.title}`, '沿用 OBS 场景里的位置、裁剪和滤镜；本地画面素材只用来预览'));
     }
     try {
       const timeline = compileManagedMediaTimeline(project, item.id);
-      checks.push(passed(`media.timeline.${item.id}`, `正式媒体时间线：${item.title}`, `${timeline.events.length / 2} 个 OBS 媒体片段`));
+      checks.push(passed(`media.timeline.${item.id}`, `媒体时间线：${item.title}`, `${timeline.events.length / 2} 个 OBS 媒体片段`));
     } catch (error) {
-      checks.push(blocking(`media.timeline.${item.id}`, `正式媒体时间线：${item.title}`, toErrorMessage(error)));
+      checks.push(blocking(`media.timeline.${item.id}`, `媒体时间线：${item.title}`, toErrorMessage(error)));
     }
   }
 
   for (const item of project.rundown) {
     if (!item.enabled) continue;
     if (!item.referenceAudio) {
-      checks.push(blocking(`asset.audio.${item.id}`, `参考音频：${item.title}`, '尚未导入参考音频'));
-      checks.push(blocking(`asset.waveform.${item.id}`, `波形缓存：${item.title}`, '缺少参考音频，无法生成波形缓存'));
+      checks.push(blocking(`asset.audio.${item.id}`, `参考音频：${item.title}`, '还没导入音频'));
+      checks.push(blocking(`asset.waveform.${item.id}`, `波形缓存：${item.title}`, '没有音频，无法生成波形'));
       continue;
     }
     const availability = context.referenceAssets[item.id];
     checks.push(availability?.audioAvailable
       ? passed(`asset.audio.${item.id}`, `参考音频：${item.title}`, '文件可读')
-      : blocking(`asset.audio.${item.id}`, `参考音频：${item.title}`, '参考音频缺失或不可读'));
+      : blocking(`asset.audio.${item.id}`, `参考音频：${item.title}`, '音频文件不见了或读不了'));
     checks.push(availability?.waveformAvailable
       ? passed(`asset.waveform.${item.id}`, `波形缓存：${item.title}`, '波形缓存可用')
       : context.mtcRequirement === 'internal'
-        ? warning(`asset.waveform.${item.id}`, `波形缓存：${item.title}`, '波形缓存缺失；不影响正式音频播放，可在编辑器重建')
-        : blocking(`asset.waveform.${item.id}`, `波形缓存：${item.title}`, '波形缓存缺失，进入现场前必须重建'));
+        ? warning(`asset.waveform.${item.id}`, `波形缓存：${item.title}`, '波形缓存不见了；不影响播放，可以在编辑器里重新生成')
+        : blocking(`asset.waveform.${item.id}`, `波形缓存：${item.title}`, '波形缓存不见了，上场前必须重新生成'));
     for (const clip of item.referenceMediaClips) {
       const asset = project.mediaAssets.find((candidate) => candidate.id === clip.assetId);
       if (!asset) continue;
@@ -136,29 +136,29 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
       const scaleY = clip.canvasTransform.scale * clip.canvasTransform.scaleY;
       if (asset.width && asset.height && (scaleX > 1 || scaleY > 1)) {
         checks.push(warning(`quality.upscale.${clip.id}`, `素材清晰度：${asset.name}`,
-          `原始 ${asset.width}×${asset.height}，放大到约 ${Math.round(asset.width * scaleX)}×${Math.round(asset.height * scaleY)}；原文件未转码，放大不能增加真实细节`));
+          `原图 ${asset.width}×${asset.height}，会放大到约 ${Math.round(asset.width * scaleX)}×${Math.round(asset.height * scaleY)}；放大不会让画面更清晰`));
       }
       checks.push(context.mediaAssets[asset.id]?.fileAvailable
         ? passed(`asset.media.${clip.id}`, `时间线素材：${asset.name}`, '文件可读')
-        : blocking(`asset.media.${clip.id}`, `时间线素材：${asset.name}`, '素材文件缺失或不可读'));
+        : blocking(`asset.media.${clip.id}`, `时间线素材：${asset.name}`, '素材文件不见了或读不了'));
     }
   }
 
   checks.push(context.credentialsDecryptable
-    ? passed('security.credentials', 'OBS 凭证', '凭证可由 Windows 安全存储解密')
-    : blocking('security.credentials', 'OBS 凭证', '凭证不可解密'));
+    ? passed('security.credentials', 'OBS 密码', '已保存的密码可以正常读取')
+    : blocking('security.credentials', 'OBS 密码', '已保存的密码无法读取，请重新输入'));
   checks.push(context.logRedactionReady
-    ? passed('security.redaction', '日志脱敏', '脱敏规则已启用并通过自检')
-    : blocking('security.redaction', '日志脱敏', '日志脱敏规则未通过自检'));
+    ? passed('security.redaction', '日志隐私处理', '日志会自动去掉隐私信息，自检通过')
+    : blocking('security.redaction', '日志隐私处理', '日志隐私处理自检没通过'));
   checks.push(context.obs.authenticated
-    ? passed('obs.authentication', 'OBS WebSocket', '已认证')
-    : blocking('obs.authentication', 'OBS WebSocket', '未连接或认证失败'));
+    ? passed('obs.authentication', 'OBS WebSocket', '已连接并登录')
+    : blocking('obs.authentication', 'OBS WebSocket', '没连上或登录失败'));
   checks.push(outputCanvasCheck(project, context.obs));
   const video = context.obs.videoSettings;
   if (video?.outputWidth !== undefined && video.outputHeight !== undefined) {
     checks.push(video.outputWidth === video.baseWidth && video.outputHeight === video.baseHeight
       ? passed('quality.outputScale', 'OBS 输出像素', `${video.outputWidth}×${video.outputHeight}，与画布一致`)
-      : warning('quality.outputScale', 'OBS 输出像素', `画布 ${video.baseWidth}×${video.baseHeight}，输出 ${video.outputWidth}×${video.outputHeight}；OBS 正在缩放，无法保证逐像素保真`));
+      : warning('quality.outputScale', 'OBS 输出像素', `画布 ${video.baseWidth}×${video.baseHeight}，输出 ${video.outputWidth}×${video.outputHeight}；OBS 会缩放画面，可能不够清晰`));
   }
 
   if (context.obs.authenticated) {
@@ -193,28 +193,28 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
     checks.push(portCheck(`midi.output.${profileId}`, `MIDI 输出：${profileId}`, portProfile, context.midi.ports));
   }
   if (context.mtcRequirement === 'internal') {
-    checks.push(passed('clock.internal', '内部音频主控', '使用实际音频播放位置；不依赖 P1 或外部时间码输入'));
+    checks.push(passed('clock.internal', '联动台播放', '按联动台的音频播放位置走，不需要 P1 或外部时间码'));
   } else if (context.mtcRequirement !== 'running') {
     if (context.mtcRequirement === 'start-on-go') checks.push(validateP1StartTrigger(currentItem, profile));
     checks.push(context.midi.mtcUpdating
-      ? passed('mtc.updating', 'MTC 启动前状态', '时间码已经在更新；启动前请确认 P1 未误播素材')
+      ? passed('mtc.updating', 'MTC 启动前状态', '时间码已经在走了；开始前请确认 P1 没有误播')
       : warning('mtc.updating', 'MTC 启动前状态', context.mtcRequirement === 'start-on-go'
-        ? 'P1 尚未播放；发送播放命令后 500ms 内必须收到时间码'
-        : '尚未收到时间码，仅允许等待 P1；收到真实信号后才会跟随，播放后仍无信号请检查 P1 的 MIDI 输出设备'));
+        ? 'P1 还没播放；发出播放命令后 500 ms 内要收到时间码'
+        : '还没收到时间码，只能等 P1 播放。收到信号后才会跟随；如果 P1 播放后还是没有信号，请检查 P1 的 MIDI 输出设备'));
     checks.push(context.midi.detectedFrameRate === null || context.midi.detectedFrameRate === profile.p1.expectedFrameRate
       ? context.midi.detectedFrameRate === null
-        ? warning('mtc.frameRate', 'MTC 帧率', `启动后验证 ${profile.p1.expectedFrameRate}`)
+        ? warning('mtc.frameRate', 'MTC 帧率', `开始后再确认 ${profile.p1.expectedFrameRate}`)
         : passed('mtc.frameRate', 'MTC 帧率', profile.p1.expectedFrameRate)
       : blocking('mtc.frameRate', 'MTC 帧率', `期望 ${profile.p1.expectedFrameRate}，检测到 ${context.midi.detectedFrameRate}`));
   } else {
     checks.push(context.midi.mtcUpdating
       ? passed('mtc.updating', 'MTC 更新', '时间码正在更新')
-      : blocking('mtc.updating', 'MTC 更新', '连续 500ms 未收到有效时间码'));
+      : blocking('mtc.updating', 'MTC 更新', '连续 500 ms 没收到有效时间码'));
     checks.push(!context.midi.mtcUpdating
-      ? blocking('mtc.stable', 'MTC 稳定性', '尚无持续时间码，无法判断稳定性')
+      ? blocking('mtc.stable', 'MTC 稳定性', '还没有持续的时间码，无法判断是否稳定')
       : context.midi.mtcStable
         ? passed('mtc.stable', 'MTC 稳定性', '时间码稳定')
-        : blocking('mtc.stable', 'MTC 稳定性', '时间码存在非预期跳变'));
+        : blocking('mtc.stable', 'MTC 稳定性', '时间码有意外跳变'));
     checks.push(context.midi.detectedFrameRate === profile.p1.expectedFrameRate
       ? passed('mtc.frameRate', 'MTC 帧率', profile.p1.expectedFrameRate)
       : blocking('mtc.frameRate', 'MTC 帧率', `期望 ${profile.p1.expectedFrameRate}，检测到 ${context.midi.detectedFrameRate ?? '未知'}`));
@@ -224,41 +224,41 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
     : blocking(
       'timebase.profileFrameRate',
       '工程与 P1 帧率',
-      `工程为 ${project.timebase.frameRate}，P1 档案为 ${profile.p1.expectedFrameRate}`
+      `工程是 ${project.timebase.frameRate}，P1 设置是 ${profile.p1.expectedFrameRate}`
     ));
 
   checks.push(context.availableDiskBytes >= context.minimumDiskBytes
     ? passed('system.disk', '可用磁盘空间', `${context.availableDiskBytes} bytes`)
-    : blocking('system.disk', '可用磁盘空间', `低于要求 ${context.minimumDiskBytes} bytes`));
+    : blocking('system.disk', '可用磁盘空间', `少于需要的 ${context.minimumDiskBytes} 字节`));
   return report(context, deduplicateChecks(checks));
 }
 
 function p1AudioCheck(profile: IntegrationProfile, obs: PreflightContext['obs']): PreflightCheck {
   const inputName = profile.p1.obsAudioInputName?.trim() ?? '';
-  if (!inputName) return blocking('obs.p1AudioInput', 'P1 正式音频进入 OBS', '尚未选择承载 P1 正式音乐的 OBS 音频输入');
-  if (!obs.inputs.includes(inputName)) return blocking('obs.p1AudioInput', 'P1 正式音频进入 OBS', `OBS 输入不存在：${inputName}`);
+  if (!inputName) return blocking('obs.p1AudioInput', 'P1 音乐进入 OBS', '还没选择 OBS 里接收 P1 音乐的音频输入');
+  if (!obs.inputs.includes(inputName)) return blocking('obs.p1AudioInput', 'P1 音乐进入 OBS', `OBS 输入不存在：${inputName}`);
   const state = obs.inputAudioStates[inputName];
   if (!state?.supported) {
-    return blocking('obs.p1AudioInput', 'P1 正式音频进入 OBS', state?.error ?? `无法读取 ${inputName} 的音频状态`);
+    return blocking('obs.p1AudioInput', 'P1 音乐进入 OBS', state?.error ?? `无法读取 ${inputName} 的音频状态`);
   }
   return state.muted
-    ? blocking('obs.p1AudioInput', 'P1 正式音频进入 OBS', `${inputName} 当前静音`)
-    : passed('obs.p1AudioInput', 'P1 正式音频进入 OBS', `${inputName} 存在且未静音`);
+    ? blocking('obs.p1AudioInput', 'P1 音乐进入 OBS', `${inputName} 当前静音`)
+    : passed('obs.p1AudioInput', 'P1 音乐进入 OBS', `${inputName} 存在且未静音`);
 }
 
 function outputCanvasCheck(project: LinkProject, obs: PreflightContext['obs']): PreflightCheck {
   const expected = project.outputCanvas;
   const actual = obs.videoSettings;
-  if (project.obsOutputMode === 'scenes' && actual) return passed('obs.outputCanvas', 'OBS 输出画布', `使用 OBS 已有场景画布 ${actual.baseWidth}×${actual.baseHeight}`);
+  if (project.obsOutputMode === 'scenes' && actual) return passed('obs.outputCanvas', 'OBS 输出画布', `使用 OBS 现有的画布 ${actual.baseWidth}×${actual.baseHeight}`);
   if (!actual) {
-    return blocking('obs.outputCanvas', 'OBS 输出画布', `无法读取 OBS 画布；工程要求 ${expected.width}×${expected.height}`);
+    return blocking('obs.outputCanvas', 'OBS 输出画布', `读不到 OBS 画布；工程需要 ${expected.width}×${expected.height}`);
   }
   return actual.baseWidth === expected.width && actual.baseHeight === expected.height
     ? passed('obs.outputCanvas', 'OBS 输出画布', `${expected.width}×${expected.height}`)
     : blocking(
       'obs.outputCanvas',
       'OBS 输出画布',
-      `工程要求 ${expected.width}×${expected.height}，OBS 当前为 ${actual.baseWidth}×${actual.baseHeight}`
+      `工程需要 ${expected.width}×${expected.height}，OBS 现在是 ${actual.baseWidth}×${actual.baseHeight}`
     );
 }
 
@@ -267,9 +267,9 @@ function validateP1StartTrigger(
   profile: IntegrationProfile
 ): PreflightCheck {
   const trigger = item?.p1StartTrigger;
-  if (!trigger) return blocking('p1.startTrigger', 'P1 播放触发', '当前节目尚未配置 P1 播放触发');
+  if (!trigger) return blocking('p1.startTrigger', 'P1 播放触发', '当前节目还没设置 P1 播放触发');
   if (trigger.portProfileId !== profile.p1.controlOutputPortProfileId) {
-    return blocking('p1.startTrigger', 'P1 播放触发', `端口档案必须为 ${profile.p1.controlOutputPortProfileId}`);
+    return blocking('p1.startTrigger', 'P1 播放触发', `端口设置必须是 ${profile.p1.controlOutputPortProfileId}`);
   }
   return passed('p1.startTrigger', 'P1 播放触发', `${trigger.label} · ${trigger.kind}`);
 }
@@ -285,7 +285,7 @@ function missingObsTarget(action: LinkAction, obs: PreflightContext['obs']): str
       if (action.sceneName === '团播联动台输出') {
         return obs.inputs.includes(action.sourceName) || obs.scenes.includes(action.sourceName)
           ? null
-          : `可加入受管输出的 OBS 来源不存在：${action.sourceName}`;
+          : `要加入联动台画面的 OBS 来源不存在：${action.sourceName}`;
       }
       if (!obs.scenes.includes(action.sceneName)) return `OBS 场景不存在：${action.sceneName}`;
       return obs.sceneItems[action.sceneName]?.includes(action.sourceName)
@@ -354,7 +354,7 @@ function portCheck(
   profile: IntegrationProfile['midiPortProfiles'][number] | undefined,
   ports: PreflightContext['midi']['ports']
 ): PreflightCheck {
-  if (!profile) return blocking(id, label, '端口档案不存在');
+  if (!profile) return blocking(id, label, '端口设置不存在');
   const matches = ports.filter((port) => port.direction === profile.direction && port.name === profile.portName && port.connected);
   if (matches.length === 1) return passed(id, label, profile.portName);
   return blocking(id, label, matches.length === 0 ? `端口不存在：${profile.portName}` : `端口名称不唯一：${profile.portName}`);

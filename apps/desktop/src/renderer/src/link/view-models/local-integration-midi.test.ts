@@ -6,9 +6,9 @@ import { applyDetectedP1MidiPorts, applyDetectedLightingMidiPorts, internalMidiC
 it('本机一键连接检查配置的输出，不将缺失、错误方向或同名重复报告为正常', () => {
   const configured = { ...profile('', 'MA2'), internalPlayer: { mtcOutputPortProfileId: 'p1-output', audioOutputDeviceId: 'default' } };
   expect(internalMidiConnectionIssues(configured, [port('output', 'MA2')])).toEqual([]);
-  expect(internalMidiConnectionIssues(configured, [port('input', 'MA2')])).toEqual([expect.stringContaining('未检测到')]);
-  expect(internalMidiConnectionIssues(configured, [port('output', 'MA2'), port('output', 'MA2')])).toEqual([expect.stringContaining('名称重复')]);
-  expect(internalMidiConnectionIssues({ ...configured, midiPortProfiles: [] }, [])).toEqual([expect.stringContaining('配置缺失')]);
+  expect(internalMidiConnectionIssues(configured, [port('input', 'MA2')])).toEqual([expect.stringContaining('找不到')]);
+  expect(internalMidiConnectionIssues(configured, [port('output', 'MA2'), port('output', 'MA2')])).toEqual([expect.stringContaining('有重名')]);
+  expect(internalMidiConnectionIssues({ ...configured, midiPortProfiles: [] }, [])).toEqual([expect.stringContaining('没有设置端口')]);
   expect(configured.midiPortProfiles[1]?.portName).toBe('MA2');
 });
 
@@ -48,8 +48,8 @@ describe('applyDetectedP1MidiPorts', () => {
       { id: 'p1-output', direction: 'output', portName: 'P1 Control' }
     ]);
     expect(result.issues).toEqual([
-      'P1：已配置的 MTC 输入端口当前不可用：P1 MTC',
-      'P1：已配置的控制输出端口当前不可用：P1 Control'
+      'P1：设置的 MTC 输入端口现在不可用：P1 MTC',
+      'P1：设置的控制输出端口现在不可用：P1 Control'
     ]);
   });
 
@@ -79,7 +79,7 @@ describe('applyDetectedP1MidiPorts', () => {
     const result = applyDetectedP1MidiPorts(profile('', ''), []);
 
     expect(result.issues).toEqual([
-      'P1：未检测到可用的 MTC 输入端口；请建立已验证的输入链路，P1 对软件环回仍显示“未发送”时需使用物理 USB-MIDI OUT→IN'
+      'P1：找不到可用的 MTC 输入端口。请先接好输入；如果用软件环回时 P1 仍显示“未发送”，需要用实体 USB-MIDI 的 OUT 接到 IN'
     ]);
   });
 });

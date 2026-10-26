@@ -13,7 +13,7 @@ export const licenseClaimsSchema = z.object({
   if ((value.kind === 'perpetual') !== (value.useUntil === null)) context.addIssue({ code: 'custom', message: '买断授权不设使用期限；订阅和试用必须有期限' });
   if (value.useUntil && Date.parse(value.useUntil) <= Date.parse(value.issuedAt)) context.addIssue({ code: 'custom', message: '使用期限必须晚于签发时间' });
   if (!value.online && Date.parse(value.updatesUntil) < Date.parse(value.issuedAt)) context.addIssue({ code: 'custom', message: '升级期限不能早于签发时间' });
-  if (value.online && (Date.parse(value.online.leaseUntil) <= Date.parse(value.issuedAt) || value.useUntil && Date.parse(value.online.leaseUntil) > Date.parse(value.useUntil))) context.addIssue({ code: 'custom', message: '离线凭证期限无效' });
+  if (value.online && (Date.parse(value.online.leaseUntil) <= Date.parse(value.issuedAt) || value.useUntil && Date.parse(value.online.leaseUntil) > Date.parse(value.useUntil))) context.addIssue({ code: 'custom', message: '离线授权的期限无效' });
 });
 export const licenseRequestSchema = z.object({ version: z.literal(1), product: z.literal('tuanbo-link-console'), machineCode: licenseMachineCodeSchema }).strict();
 export const licenseStatusSchema = z.object({

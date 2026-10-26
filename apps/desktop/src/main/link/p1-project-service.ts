@@ -151,13 +151,13 @@ export class P1ProjectService {
   ): Promise<LinkP1ProjectExportResult> {
     const plan = await this.createExportPlan(p1ProjectPath, linkProjectPath, project);
     if (plan.parsed.sourceSha256 !== expectedSourceSha256) {
-      throw new Error('P1 工程在写回确认后发生变化，已停止写入；请重新预览');
+      throw new Error('P1 工程在确认写回后又有变化，已停止写入，请重新预览');
     }
     const existingMedia = new Map(
       plan.parsed.playlists.flatMap((playlist) => playlist.media.map((media) => [media.sourceKey, media] as const))
     );
     const projectSync = project.p1Sync;
-    if (!projectSync) throw new Error('当前联动工程尚未从 P1 导入，不能写回');
+    if (!projectSync) throw new Error('当前工程不是从 P1 导入的，不能写回');
     const playlists = [...projectSync.playlists].sort((left, right) => left.sourceIndex - right.sourceIndex);
     const itemsByPlaylist = new Map(playlists.map((playlist) => [playlist.id, [] as RundownItem[]]));
     const defaultPlaylist = playlists[0];
@@ -187,7 +187,7 @@ export class P1ProjectService {
         if (item.p1Media && !existing) {
           throw new Error(`P1 工程缺少已绑定音频“${item.title}”，请重新导入后再写回`);
         }
-        if (!item.referenceAudio) throw new Error(`节目“${item.title}”没有参考音频，不能写入 P1`);
+        if (!item.referenceAudio) throw new Error(`节目“${item.title}”没有音频，不能写入 P1`);
         const resourcePath = existing?.resourcePath
           ?? this.projects.resolveReferenceAudio(linkProjectPath, item.referenceAudio.relativePath);
         const element = existing
@@ -252,9 +252,9 @@ export class P1ProjectService {
   ): Promise<ExportPlan> {
     validateP1TimecodeRanges(project);
     const parsed = await this.parseProject(p1ProjectPath);
-    if (!project.p1Sync) throw new Error('当前联动工程尚未从 P1 导入，不能写回');
+    if (!project.p1Sync) throw new Error('当前工程不是从 P1 导入的，不能写回');
     if (project.p1Sync.sourceSha256 !== parsed.sourceSha256) {
-      throw new Error('P1 工程在上次导入后已变化，已停止写回；请先重新读取 P1');
+      throw new Error('P1 工程在上次导入后有变化，已停止写回，请先重新读取 P1');
     }
     const protectedKeys = new Set(project.p1Sync.skippedItems?.map(item => item.sourceKey));
     const existingKeys = new Set(parsed.playlists.flatMap((playlist) => playlist.media.map((media) => media.sourceKey)));
@@ -263,7 +263,7 @@ export class P1ProjectService {
     let addedCount = 0;
     let updatedCount = 0;
     for (const item of exportItems) {
-      if (!item.referenceAudio) throw new Error(`P1 绑定节目“${item.title}”缺少参考音频`);
+      if (!item.referenceAudio) throw new Error(`P1 关联的节目“${item.title}”没有音频`);
       await access(this.projects.resolveReferenceAudio(linkProjectPath, item.referenceAudio.relativePath), constants.R_OK);
       if (!item.p1Media) {
         addedCount += 1;
@@ -435,7 +435,7 @@ async function importP1Audio(projects: LinkProjectService, projectPath: string, 
   const endText = media.element.getAttribute('cut_end');
   const start = Number(startText), end = Number(endText);
   const valid = startText?.trim() && endText?.trim() && Number.isFinite(start) && start >= 0 && Number.isFinite(end) && end > start && Math.round((end - start) * 1000) > 0;
-  if (!valid) return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), importNotes: `P1 裁剪时长无效（${startText ?? '缺失'}～${endText ?? '缺失'} 秒），已按完整原音频导入；原起始时间码保留，请核对灯光结束位置。` };
+  if (!valid) return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), importNotes: `P1 裁剪时长无效（${startText ?? '缺失'}～${endText ?? '缺失'} 秒），已按完整原音频导入；原起始时间码保留，请检查灯光的结束位置。` };
   const durationMs = Math.round((end - start) * 1000);
   try {
     const referenceAudio = await projects.importReferenceAudio(projectPath, readablePath, durationMs, start * 1000, true);
@@ -444,7 +444,7 @@ async function importP1Audio(projects: LinkProjectService, projectPath: string, 
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     if (!/裁剪区间超出可解码音频|声明时长超出可解码音频/.test(reason)) throw error;
-    return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), importNotes: `P1 裁剪范围 ${start}～${end} 秒超出实际音频，已按完整原音频导入；原起始时间码保留，请核对灯光结束位置。` };
+    return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), importNotes: `P1 裁剪范围 ${start}～${end} 秒超出实际音频，已按完整原音频导入；原起始时间码保留，请检查灯光的结束位置。` };
   }
 }
 

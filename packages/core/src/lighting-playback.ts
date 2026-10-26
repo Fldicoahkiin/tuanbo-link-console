@@ -11,7 +11,7 @@ export function collectLightingOutputProfileIds(document: LightingDocument): str
     .map(track => track.portProfileId || 'lighting-events-output'))];
 }
 function activeLightingTracks(document: LightingDocument): LightingTrack[] {
-  if (document.outputMode !== 'timecode' && document.ma2Bindings?.some(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode')) throw new Error('原生保留时间线只能由控台按时间码播放，不能用本地部分事件替代');
+  if (document.outputMode !== 'timecode' && document.ma2Bindings?.some(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode')) throw new Error('保持控台原样的时间线只能由控台按时间码播放，不能用本地的部分事件代替');
   return selectedLightingTracks(document);
 }
 /** Rendering connection requirements must not validate or execute a playback route. */
@@ -23,8 +23,8 @@ function selectedLightingTracks(document: LightingDocument): LightingTrack[] {
 export function compileLightingPackets(document: LightingDocument, ma2DeviceId = 127): LightingPacket[] {
   if (!Number.isInteger(ma2DeviceId) || ma2DeviceId < 0 || ma2DeviceId > 127) throw new Error('MA2 MSC 设备号应为 0–127');
   if (document.outputMode === 'timecode') {
-    if (document.tracks.some(track => !track.muted && track.clips.some(clip => !clip.muted && clip.events.some(event => event.kind === 'ma2' && event.preparation)))) throw new Error('埋步需要由软件发送准备 Cue，请选择网络直控或 MIDI 执行器触发');
-    if (hasIndependentLightingCues(document)) throw new Error('单独运行需要由联动台关闭前一组 Cue，请选择网络直控或 MIDI 执行器触发；控台时间码不会执行此设置');
+    if (document.tracks.some(track => !track.muted && track.clips.some(clip => !clip.muted && clip.events.some(event => event.kind === 'ma2' && event.preparation)))) throw new Error('埋步需要联动台发送准备 Cue，请选择“网络直控”或“MIDI 执行器触发”');
+    if (hasIndependentLightingCues(document)) throw new Error('单独运行需要联动台关掉前一组 Cue，请选择“网络直控”或“MIDI 执行器触发”；控台时间码不会执行这个设置');
     return [];
   }
   const map = new LightingTempoMap(document.tempos);
@@ -82,7 +82,7 @@ function appendEvent(packets: LightingPacket[], track: LightingTrack, clip: Ligh
   const atMs = lightingEventTime(clip, event, map); const channel = track.channel - 1;
   switch (event.kind) {
     case 'empty-cue': return;
-    case 'ma2-fader': throw new Error('MA2 原生推杆请同步到控台 Timecode 播放，不能通过 MIDI CC 代发');
+    case 'ma2-fader': throw new Error('MA2 控台原有的推杆请同步到控台 Timecode 播放，不能用 MIDI CC 代发');
     case 'raw': packets.push(packet(track, atMs, event.bytes)); return;
     case 'note': {
       const noteKey = `${track.portProfileId}:${channel}:${event.note}`;
@@ -96,7 +96,7 @@ function appendEvent(packets: LightingPacket[], track: LightingTrack, clip: Ligh
     case 'ma2': {
       // MA2 interprets MSC GO as Goto, not the console's next-cue action.
       if (event.action === 'go') throw new Error('MA2 MIDI 直控不支持“播放控台下一步”；请使用指定 Cue，或通过控台 Timecode 执行下一步');
-      if (!event.executor) throw new Error('序列池 Cue 不能通过执行器 MIDI 触发，请在播放设置选择网络直控');
+      if (!event.executor) throw new Error('序列池 Cue 不能用执行器 MIDI 触发，请在播放设置里选择“网络直控”');
       const [page, executor] = event.executor.split('.');
       if (!page || !executor || !/^[1-9]\d*$/.test(page) || !/^[1-9]\d*$/.test(executor)) throw new Error('MA2 执行器必须为有效的页.编号');
       const [whole, fraction = ''] = (event.cue ?? '').split('.');
@@ -262,7 +262,7 @@ export function lightingTimecodePlaybackNotice(document: LightingDocument): stri
   const solo = document.tracks.some(track => track.solo && !track.muted);
   const hasPoolCue = document.tracks.some(track => !track.muted && (!solo || track.solo)
     && track.clips.some(clip => !clip.muted && clip.events.some(event => event.kind === 'ma2' && !event.executor)));
-  return hasPoolCue ? '音乐照常播放，时间码按开关设置输出；本地序列池 Cue 不会单独发送。请确认该 Cue 已编排在控台原生时间线。' : null;
+  return hasPoolCue ? '音乐照常播放，时间码按开关设置输出；本地的序列池 Cue 不会单独发送。请确认这个 Cue 已经编排在控台的时间线里。' : null;
 }
 export function compileLightingNetworkActions(document: LightingDocument): LightingNetworkAction[] {
   if (document.outputMode !== 'network') return [];

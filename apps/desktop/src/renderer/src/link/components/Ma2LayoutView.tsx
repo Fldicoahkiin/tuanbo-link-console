@@ -66,7 +66,7 @@ export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, render
         <p>Layout {state.page}{state.snapshot?.name ? ` · ${state.snapshot.name}` : ''}</p>
         <button disabled={state.busy} onClick={() => { setOptionsOpen(false); navigate(state.page); }}><RefreshCw/>刷新控台页面</button>
         <button disabled={state.busy || !state.snapshot?.revision} onClick={() => { setLayoutName(state.snapshot?.name ?? ''); setRenaming(!renaming); }}>重命名页面</button>
-        <label className="ma2-page-live-option"><input type="checkbox" aria-label="实时回读控台页面" checked={live} onChange={event => setLive(event.target.checked)}/>实时回读</label>
+        <label className="ma2-page-live-option"><input type="checkbox" aria-label="实时同步控台页面" checked={live} onChange={event => setLive(event.target.checked)}/>实时同步</label>
         {view === 'native' ? <><button aria-pressed={editing} disabled={state.busy || !state.snapshot?.revision} onClick={() => setEditing(!editing)}>编辑位置</button><div className="ma2-layout-zoom"><button aria-label="缩小控台页面" disabled={zoom <= .25} onClick={() => setZoom(Math.max(.25, zoom / 1.5))}>−</button><button onClick={() => { setZoom(1); setFitKey(value => value + 1); }}>适应</button><button aria-label="放大控台页面" disabled={zoom >= 8} onClick={() => setZoom(Math.min(8, zoom * 1.5))}>＋</button></div></> : null}
       </Ma2MaterialMenu>
       {selected ? <button aria-label="返回页面" title="返回页面" onClick={onBack}><ArrowLeft/></button> : null}
@@ -76,7 +76,7 @@ export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, render
     {renaming ? <form className="ma2-layout-rename" onSubmit={event => { event.preventDefault(); void updateMa2LayoutPage({ positions: [], name: layoutName }).then(() => setRenaming(false)).catch((cause: unknown) => setInputError(String(cause))); }}><input aria-label="控台页面名称" required maxLength={512} value={layoutName} onChange={event => setLayoutName(event.target.value)}/><Ma2ConsoleName name={layoutName}/><button disabled={state.busy}>保存名称到控台</button><button type="button" onClick={() => setRenaming(false)}>取消</button></form> : null}
     {state.busy && !state.snapshot ? <div className="ma2-layout-empty" role="status">正在读取第 {state.page} 页…</div> : inputError || state.error ? <div className="ma2-layout-empty" role="alert">{inputError || state.error}</div> : selected ? children : state.snapshot ? <>
       {items.length ? view === 'native' ? <Ma2LayoutCanvas key={`${state.scope}:${state.page}:${fitKey}`} snapshot={state.snapshot} items={items} zoom={zoom} editing={editing && !state.busy} onMove={(id, x, y) => { void updateMa2LayoutPage({ positions: [{ id, x, y }] }).catch((cause: unknown) => setInputError(String(cause))); }}/> : <CuePoolGrid key={`${state.scope}:${state.page}`} keys={items.map(({ item }) => item.id)} label={`Layout ${state.page} 素材`} cellWidth={156} rowHeight={50} render={index => items[index]!.content}/> : <div className="ma2-layout-empty">{state.snapshot.items.length ? '本页没有符合筛选条件的 Cue' : '此页面没有 Cue 按钮'}</div>}
-      {state.snapshot.omittedFixtures > 0 ? <p className="ma2-layout-note">本页另有 {state.snapshot.omittedFixtures} 个灯具符号，当前仅显示池对象。</p> : null}
+      {state.snapshot.omittedFixtures > 0 ? <p className="ma2-layout-note">本页另有 {state.snapshot.omittedFixtures} 个灯具符号，这里只显示池对象。</p> : null}
     </> : <div className="ma2-layout-empty">输入页面编号，读取控台 Layout。</div>}
   </section>;
 }

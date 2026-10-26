@@ -36,7 +36,7 @@ export function ProjectPlaybackMonitor({ project, player, selectedItem, currentI
       {internal ? <ProjectPlayerTransport {...player} selectedItem={selectedItem} controller={player.controller} /> : <div className="p1-audio-monitor">
         <div className="p1-monitor-caption"><strong>{selectedItem?.title ?? '未选择'}</strong></div>
         {previewUrl ? <audio controls src={previewUrl} /> : <div className="p1-monitor-empty"><FileAudio /><span>未添加音频</span></div>}
-        <div className="player-mode-note"><span>P1 跟随</span><button onClick={() => execute(setPlaybackSourceCommand('internal'))}>切换为本软件播放</button></div>
+        <div className="player-mode-note"><span>P1 跟随</span><button onClick={() => execute(setPlaybackSourceCommand('internal'))}>改由联动台播放</button></div>
       </div>}
       <PlayerWaveformTimeline enabled={internal && !!player.controller && ['playing', 'paused'].includes(player.state.status)} onSeek={positionMs => void player.controller?.seek(positionMs)} source={projectPath && previewUrl && selectedItem?.referenceAudio ? { projectPath, url: previewUrl, sha256: selectedItem.referenceAudio.sha256, durationMs: selectedItem.referenceAudio.durationMs } : null} positionMs={selectedItem?.id === currentItemId ? currentMilliseconds : 0} />
     </section>

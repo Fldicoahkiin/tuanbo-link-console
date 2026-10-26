@@ -53,9 +53,9 @@ export class RemoteNativeProgramPlayer {
       if (!check) choices?.delete(key);
       else if (choices?.get(key) === check.topic) {
         withoutLighting = true;
-        this.dependencies.notice?.(`开播前检查：沿用操作员选择无灯光播放；${check.reason}`, itemId);
+        this.dependencies.notice?.(`开播前检查：按之前的选择，不带灯光播放；${check.reason}`, itemId);
       } else {
-        if (!this.dependencies.confirmWithoutLighting) throw new Error(`${check.reason}；无法询问是否无灯光播放`);
+        if (!this.dependencies.confirmWithoutLighting) throw new Error(`${check.reason}；无法询问是否不带灯光播放`);
         if (!await this.dependencies.confirmWithoutLighting(check.reason)) return;
         choices?.set(key, check.topic);
         withoutLighting = true;
@@ -103,7 +103,7 @@ export class RemoteNativeProgramPlayer {
     // Only a ready song needs the present MIDI outputs.
     if (topic === 'ready') {
       try { ports = (await this.api.getNativePlaybackDevices()).midiOutputs.map(output => output.name); }
-      catch (error) { return { topic, reason: `这首歌可演出，但时间码输出端口无法确认：${toUserErrorMessage(error)}` }; }
+      catch (error) { return { topic, reason: `这首歌可以播放，但无法确认时间码输出端口：${toUserErrorMessage(error)}` }; }
     }
     const reason = lightingStartCheck(this.project, itemId, { portName: this.dependencies.configuration().mtcPortName, ports });
     return reason ? { topic, reason } : null;
@@ -119,7 +119,7 @@ export class RemoteNativeProgramPlayer {
   private failed(error: unknown): void {
     if (this.disposed) return;
     const message = toUserErrorMessage(error);
-    this.state = { ...this.state, status: 'error', error: message, errorTitle: '后台节目控制失败' };
+    this.state = { ...this.state, status: 'error', error: message, errorTitle: '播放控制失败' };
     this.dependencies.changed(this.state); this.dependencies.notice?.(message, this.state.itemId);
   }
 }

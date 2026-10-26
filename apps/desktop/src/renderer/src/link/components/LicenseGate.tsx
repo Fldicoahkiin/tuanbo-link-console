@@ -59,7 +59,7 @@ export function LicenseGate({ children }: { children: ReactNode }): JSX.Element 
         </aside>
         <div className="license-activation-card">
           <div className="license-card-welcome"><div className="license-card-icon"><KeyRound aria-hidden="true" /></div><p>你的下一场演出，从这里开始</p></div>
-          {state === 'checking' ? <div className="license-checking" role="status"><KeyRound aria-hidden="true" /><h2>正在核对本机授权</h2><p>验证完成后进入工作区，请稍候…</p></div> : <>
+          {state === 'checking' ? <div className="license-checking" role="status"><KeyRound aria-hidden="true" /><h2>正在验证本机授权</h2><p>验证完成后进入工作区，请稍候…</p></div> : <>
             <LicenseSettings runtimeActive={false} onAuthorized={async () => {
               await window.tbLink.requireOutputLicense();
               setState('authorized');

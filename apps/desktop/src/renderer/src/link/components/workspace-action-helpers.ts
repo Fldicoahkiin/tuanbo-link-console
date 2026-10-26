@@ -31,7 +31,7 @@ export async function importWorkspaceMedia(input: {
       });
       assertDocumentSession(input.documentId);
       if (asset.kind === 'video') {
-        if (!asset.durationMs) throw new Error('视频缺少可用时长，无法准备原声');
+        if (!asset.durationMs) throw new Error('读不到视频时长，无法提取原声');
         const directory = input.projectPath.slice(0, Math.max(input.projectPath.lastIndexOf('/'), input.projectPath.lastIndexOf('\\')) + 1);
         try {
           await linkDesktopViewModel.importReferenceAudio({ projectPath: input.projectPath, sourcePath: directory + asset.relativePath, durationMs: asset.durationMs });
@@ -49,7 +49,7 @@ export async function importWorkspaceMedia(input: {
         const inventory = await linkDesktopViewModel.readObsInventory();
         assertDocumentSession(input.documentId);
         useIntegrationStore.getState().setInventory(inventory);
-      } else input.notify(`${asset.name} 已导入，停止播放并连接 OBS 后点击“同步素材场景”完成场景准备。`);
+      } else input.notify(`${asset.name} 已导入。停止播放并连接 OBS 后，点“同步素材场景”完成准备。`);
       input.onImported(asset.id, asset.name);
     } catch (error) {
       input.notify(`${file.name}：${toMessage(error)}`, 'error');
@@ -68,7 +68,7 @@ export function actionsFromObsResource(resource: ObsResource): LinkAction[] {
   const id = crypto.randomUUID();
   if (resource.kind === 'scene') return [{ id, label: `切换场景 · ${resource.name}`, kind: 'obs.setProgramScene', sceneName: resource.name }];
   if (resource.kind === 'sceneItem') {
-    if (!resource.sceneName || !resource.sourceName) throw new Error('OBS 场景来源缺少场景或来源名称');
+    if (!resource.sceneName || !resource.sourceName) throw new Error('OBS 场景来源缺少场景名或来源名');
     const showAction: LinkAction = { id, label: `显示来源 · ${resource.name}`, kind: 'obs.setSceneItemEnabled', sceneName: MANAGED_OBS_SCENE_NAME, sourceName: resource.sourceName, enabled: true };
     if (!resource.transform) return [showAction];
     const transform = {

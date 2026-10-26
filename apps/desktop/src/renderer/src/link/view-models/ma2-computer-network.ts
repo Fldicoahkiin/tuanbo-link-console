@@ -11,7 +11,7 @@ export async function prepareMa2ComputerNetwork(host: string, options: Partial<O
     observer.progress?.(`使用本机 onPC ${host}，无需修改网卡`); return;
   }
   const proposal = ma2NetworkSetupPlanSchema.parse(await window.tbLink.planMa2NetworkSetup({ host, prefix: options.prefix ?? 24, ...options }));
-  observer.plan?.(proposal); observer.progress?.(proposal.needsChange ? `${proposal.message} 请允许 Windows 管理员授权。` : proposal.message);
+  observer.plan?.(proposal); observer.progress?.(proposal.needsChange ? `${proposal.message} 请在 Windows 弹出的管理员授权里点“是”。` : proposal.message);
   try {
     // Also persist a reused address, so reconnect uses the same interface after app restart.
     const applied = ma2NetworkSetupStateSchema.parse(await window.tbLink.applyMa2NetworkSetup(proposal.id));

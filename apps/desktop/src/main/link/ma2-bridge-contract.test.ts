@@ -35,9 +35,9 @@ it('写入未确认时仅返回已读取且目标正确的备份，缺失或损�
   wire.backup = null;
   await expect(bridge.request('APPLY', 904, source, desired)).rejects.toMatchObject({ backupFile: null });
   wire.backup = source.replace('index="903"', 'index="904"');
-  await expect(bridge.request('APPLY', 904, source, desired)).rejects.toMatchObject({ backupFile: null, message: expect.stringContaining('备份核对失败') as unknown });
+  await expect(bridge.request('APPLY', 904, source, desired)).rejects.toMatchObject({ backupFile: null, message: expect.stringContaining('备份检查失败') as unknown });
   wire.backup = 'broken';
-  await expect(bridge.request('APPLY', 904, source, desired)).rejects.toMatchObject({ backupFile: null, message: expect.stringContaining('备份核对失败') as unknown });
+  await expect(bridge.request('APPLY', 904, source, desired)).rejects.toMatchObject({ backupFile: null, message: expect.stringContaining('备份检查失败') as unknown });
 });
 it('创建只发送空 Timecode，播放期间阻止，回读不同不算成功', async () => {
   const desired = createMa2TimecodeXml(9903, 'TBLINK_CREATE', '3.3.4.3');
@@ -48,18 +48,18 @@ it('创建只发送空 Timecode，播放期间阻止，回读不同不算成功'
   await expect(new Ma2OnpcBridge(process.cwd(), () => true).request('CREATE', 9903, '', desired)).rejects.toThrow('播放期间');
   await expect(bridge.request('CREATE', 904, '', source)).rejects.toThrow('必须为空');
   wire.response = desired.replace('TBLINK_CREATE', 'unexpected');
-  await expect(bridge.request('CREATE', 9903, '', desired)).rejects.toThrow('同步未完成');
+  await expect(bridge.request('CREATE', 9903, '', desired)).rejects.toThrow('同步没有完成');
 });
 
 it('回读必须属于请求的唯一 Timecode，响应正常不代表目标正确', async () => {
   const bridge = new Ma2OnpcBridge(process.cwd(), () => false);
   await expect(bridge.request('READ', 904)).resolves.toBe(source);
-  await expect(bridge.request('READ', 905)).rejects.toThrow('绑定 Timecode 不一致');
+  await expect(bridge.request('READ', 905)).rejects.toThrow('和绑定的 Timecode 对不上');
 });
 it('写入后的扩展数据丢失必须报告未完成同步', async () => {
   const desired = source.replace('</Timecode>', '<FutureData value="keep" /></Timecode>');
   const bridge = new Ma2OnpcBridge(process.cwd(), () => false);
-  await expect(bridge.request('APPLY', 904, source, desired)).rejects.toThrow('同步未完成');
+  await expect(bridge.request('APPLY', 904, source, desired)).rejects.toThrow('同步没有完成');
   wire.response = desired;
   await expect(bridge.request('APPLY', 904, source, desired)).resolves.toBe(desired);
 });

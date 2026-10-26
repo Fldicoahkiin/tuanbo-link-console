@@ -79,12 +79,12 @@ function fixture() {
 
 it('系统 MIDI 检测失败不启动完整设备查询；配了时间码端口也只播音频并明确报告，恢复后重新准备才发时间码', async () => {
   const f = fixture();
-  f.checkDeviceHealth.mockRejectedValue(new Error('Windows MIDI 端口枚举未响应'));
+  f.checkDeviceHealth.mockRejectedValue(new Error('Windows 读取 MIDI 端口没有响应'));
   try {
-    await expect(f.service.devices()).rejects.toThrow('端口枚举未响应');
-    await expect(f.service.prepare(f.request)).resolves.toMatchObject({ status: 'ready', mtcPortName: null, mtcError: 'MIDI 设备不可用：Windows MIDI 端口枚举未响应' });
+    await expect(f.service.devices()).rejects.toThrow('读取 MIDI 端口没有响应');
+    await expect(f.service.prepare(f.request)).resolves.toMatchObject({ status: 'ready', mtcPortName: null, mtcError: 'MIDI 设备不可用：Windows 读取 MIDI 端口没有响应' });
     expect(native.devices.mock.calls).toEqual([['audio']]);
-    expect(f.error).toHaveBeenCalledWith('MIDI 设备不可用，本首时间码未参与：Windows MIDI 端口枚举未响应');
+    expect(f.error).toHaveBeenCalledWith('MIDI 设备不可用，本首时间码未参与：Windows 读取 MIDI 端口没有响应');
     f.checkDeviceHealth.mockResolvedValue(undefined);
     await expect(f.service.prepare({ ...f.request, generation: 2 })).resolves.toMatchObject({ status: 'ready', mtcPortName: 'test-mtc', mtcError: null });
     expect(native.devices.mock.calls).toEqual([['audio'], ['all']]);
@@ -200,7 +200,7 @@ it('接口断开时系统 MIDI 检测超时一次：等待期间重新检测，�
     f.devices.midiOutputs = [];
     probe.mockResolvedValueOnce('timeout');
     native.emit!({ midiSent: 41, midiError: 6, qpc100ns: '3' });
-    await vi.waitFor(() => expect(f.error).toHaveBeenCalledWith(expect.stringContaining('端口枚举未响应')), { timeout: 3000 });
+    await vi.waitFor(() => expect(f.error).toHaveBeenCalledWith(expect.stringContaining('读取 MIDI 端口没有响应')), { timeout: 3000 });
     f.devices.midiOutputs = [{ id: 5, name: 'test-mtc' }];
     await vi.waitFor(() => expect(recovered).toHaveBeenCalledOnce(), { timeout: 3000 });
     expect(native.commands.mock.calls.filter(([command]) => command.kind === 'reopen-mtc')).toEqual([[expect.objectContaining({ midiDevice: 5, midiPortName: 'test-mtc' })]]);

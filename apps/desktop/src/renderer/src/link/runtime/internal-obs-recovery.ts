@@ -19,10 +19,10 @@ export async function recoverInternalObs(input: {
   if (!item || (input.status !== 'playing' && input.status !== 'paused')) return;
   const report = (message: string): void => { input.notice(message, item.id); input.player.reportFault(message); };
   try {
-    if (input.status === 'paused') { await input.player.seek(input.positionMs); report('OBS 已重新连接：已在暂停位置重新准备画面'); return; }
+    if (input.status === 'paused') { await input.player.seek(input.positionMs); report('OBS 已重新连接，画面已按暂停位置恢复'); return; }
     const assets = new Set(item.referenceMediaClips.map(clip => clip.assetId));
     const scoped = { ...input.project, rundown: [item], mediaAssets: input.project.mediaAssets.filter(asset => assets.has(asset.id)) };
     if (scoped.obsOutputMode === 'scenes' && scoped.mediaAssets.length) await desktop.prepareObsMediaScenes(input.path, scoped, useDisplayPreferences.getState().preciseSeeking);
-    report(`OBS 已重新连接：画面按当前位置重建，发送 ${await input.coordinator.rebuildPicture()} 项`);
-  } catch (error) { report(`OBS 重新连接后画面重建失败：${toUserErrorMessage(error)}`); }
+    report(`OBS 已重新连接，画面已按当前位置恢复（${await input.coordinator.rebuildPicture()} 项）`);
+  } catch (error) { report(`OBS 已重新连接，但画面恢复失败：${toUserErrorMessage(error)}`); }
 }

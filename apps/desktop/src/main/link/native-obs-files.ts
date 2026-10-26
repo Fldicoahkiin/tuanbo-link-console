@@ -13,7 +13,7 @@ export async function prepareNextObsFiles(request: NativeObsPrepare, services: {
   const next = request.nextFiles;
   if (!next) return;
   if (next.snapshot.projectId !== request.snapshot.projectId || next.snapshot.revision !== request.snapshot.revision) {
-    throw new Error('下一节目文件预备与当前工程修订不一致');
+    throw new Error('下一个节目的文件准备和当前工程版本对不上');
   }
   const precise = preciseSeekAssetIds(next.snapshot, next.positionMs);
   const targets = obsMediaDecodeTargets(projectFromObsSnapshot(next.snapshot));
@@ -23,7 +23,7 @@ export async function prepareNextObsFiles(request: NativeObsPrepare, services: {
       assertCurrent();
       const inspected = await services.projects.inspectMediaAssets(request.projectPath, [asset]);
       assertCurrent();
-      if (!inspected[asset.id]?.fileAvailable) throw new Error(`下一节目素材文件不可读：${asset.name}`);
+      if (!inspected[asset.id]?.fileAvailable) throw new Error(`下一个节目的素材文件读不了：${asset.name}`);
       if (request.preciseSeeking && asset.kind === 'video' && precise.has(asset.id)) {
         const modes = new Set(targets.filter(target => target.asset.id === asset.id)
           .map(target => target.hardwareDecode ? 'hardware' as const : 'software' as const));

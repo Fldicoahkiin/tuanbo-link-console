@@ -15,7 +15,7 @@ export class LightingCueAudition {
     this.cancel(); const generation = this.generation;
     const action = ma2PlaybackActionSchema.parse(input);
     const audition = await window.tbLink.controlMa2Audition({version:1,action:'status'});
-    if(audition.phase==='stopping')throw new Error('正在停止试听，请完成后再点击 Cue');
+    if(audition.phase==='stopping')throw new Error('正在停止试听，请稍后再点 Cue');
     const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
     if (generation !== this.generation) return false;
     if (status.state !== 'connected' || !status.settings) throw new Error('请先连接 MA2 网络');
@@ -30,7 +30,7 @@ export class LightingCueAudition {
   async playTemplate(document: LightingDocument, templateId: string, profile: IntegrationProfile | null): Promise<number> {
     const template = document.templates.find(entry => entry.id === templateId);
     const stamp = template?.track.cueStamp;
-    if (!template || stamp?.mode !== 'fixed') { this.cancel(); throw new Error('素材没有明确的序列和 Cue 引用，不能试听'); }
+    if (!template || stamp?.mode !== 'fixed') { this.cancel(); throw new Error('这个素材没有指定序列和 Cue，无法试听'); }
     const members = template.members ?? [{ sequence: stamp.sequence, cue: stamp.cue, name: template.name }];
     const events = members.map((member, index) => ({ id: `audition-${index}`, effectGroupId: 'audition-0', kind: 'ma2' as const, action: 'goto' as const, executor: '', sequence: member.sequence, cue: member.cue, label: member.name, at: 0 }));
     if (!events.length) { this.cancel(); throw new Error('素材中没有 Cue'); }
@@ -46,7 +46,7 @@ export class LightingCueAudition {
     const group = selected.effectGroupId ?? selected.id;
     const native = document.ma2Bindings?.some(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode');
     const selectedEvents = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.filter(event => event.id === group || event.effectGroupId === group)));
-    if (native && selectedEvents.some(event => event.kind !== 'ma2' || event.action !== 'goto' || !event.sequence || !event.cue)) throw new Error('原生时间线只能单独试听有明确序列和编号的 Cue');
+    if (native && selectedEvents.some(event => event.kind !== 'ma2' || event.action !== 'goto' || !event.sequence || !event.cue)) throw new Error('控台时间线只能试听指定了序列和编号的 Cue');
     // This isolated operator audition contains only the explicitly selected Cue(s).
     // The original document and its native playback/writeback guards remain unchanged.
     const preview: LightingDocument = { ...document, ma2Bindings: [], outputMode: 'direct', tracks: document.tracks.map(track => ({
@@ -56,12 +56,12 @@ export class LightingCueAudition {
     const networkPlayback = native || network || preview.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind === 'ma2' && !event.executor)));
     if (networkPlayback) {
       const audition=await window.tbLink.controlMa2Audition({version:1,action:selected.runMode === 'independent' ? 'stop' : 'status'});
-      if(audition.phase==='stopping')throw new Error('正在停止试听，请完成后再点击 Cue');
-      if (selected.runMode === 'independent' && audition.phase === 'failed') throw new Error('上一组试听未能停止，本 Cue 尚未发送');
+      if(audition.phase==='stopping')throw new Error('正在停止试听，请稍后再点 Cue');
+      if (selected.runMode === 'independent' && audition.phase === 'failed') throw new Error('上一组试听没能停止，这个 Cue 没有发送');
       await requireOutputLicense();
       const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
       if (generation !== this.generation) return 0;
-      if (status.state !== 'connected' || !status.settings) throw new Error('序列池 Cue 通过网络播放，请先连接 MA2 网络；无需绑定推杆或按键');
+      if (status.state !== 'connected' || !status.settings) throw new Error('序列池里的 Cue 通过网络播放，请先连接 MA2 网络（不需要绑定推杆或按键）');
       const { host, port, monitorPort, username } = status.settings;
       const actions = compileLightingNetworkActions({ ...preview, outputMode: 'network' });
       const sessionId = crypto.randomUUID(); this.networkSession = sessionId;
@@ -84,20 +84,20 @@ export class LightingCueAudition {
         const name = profile?.midiPortProfiles.find(port => port.id === id && port.direction === 'output')?.portName;
         const matches = [...access.outputs.values()].filter(port => port.name === name && port.state === 'connected');
         const port = matches[0];
-        if (!port || matches.length !== 1) throw new Error(`Cue MIDI 输出不可用或不唯一：${name || '请先一键连接或配置灯光动作输出'}`);
+        if (!port || matches.length !== 1) throw new Error(`Cue 的 MIDI 输出不可用，或有多个同名端口：${name || '请先一键连接或配置灯光动作输出'}`);
         await deadline(port.open(), 'Cue MIDI 端口打开超时');
         if (generation !== this.generation) return 0;
         outputs.set(id, port);
       }
       if (selected.runMode === 'independent') for (const [key, previous] of this.midiStarted) {
-        if (previous.output.state !== 'connected') throw new Error('上一组 MIDI 输出已断开，无法确认关闭；本 Cue 尚未发送');
+        if (previous.output.state !== 'connected') throw new Error('上一组的 MIDI 输出已断开，无法确认已关闭，这个 Cue 没有发送');
         const separator = previous.bytes.indexOf(0, 6);
         previous.output.send([...previous.bytes.slice(0, 5), 0x0b, 48, 46, 48, 48, 48, 0, ...previous.bytes.slice(separator + 1)]);
         this.midiStarted.delete(key);
       }
       for (const packet of packets) {
         const output = outputs.get(packet.portProfileId);
-        if (!output || output.state !== 'connected') throw new Error('Cue 发送中断：MIDI 端口已断开，部分动作可能已发送');
+        if (!output || output.state !== 'connected') throw new Error('Cue 发送中断：MIDI 端口断开了，部分动作可能已经发出');
         output.send(packet.bytes);
         const separator = packet.bytes.indexOf(0, 6);
         if (packet.bytes[0] === 0xf0 && separator >= 6) {

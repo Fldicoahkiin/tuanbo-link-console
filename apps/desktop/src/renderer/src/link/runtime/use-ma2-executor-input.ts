@@ -48,7 +48,7 @@ export function createMa2ExecutorInput(onError: (message: string) => void): Exec
     void (async () => {
       const connection = await ma2LayoutConnection();
       if (state.released || state.scope !== currentMa2LayoutScope()) { stop(state); return; }
-      if (Date.now() > deadlineAt) throw new Error('按键操作已过期，未补发，请重新点击');
+      if (Date.now() > deadlineAt) throw new Error('按键操作已过期，没有补发，请重新点一次');
       state.payload = { ...connection, page, slot: item.slot, expectedItem: item, button, pressed: true, sessionId: state.sessionId, deadlineAt };
       await window.tbLink.inputMa2Executor(state.payload);
       if (!momentary || state.released || state.scope !== currentMa2LayoutScope()) { stop(state); return; }

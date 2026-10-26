@@ -21,7 +21,7 @@ export const useShortcutStore = create<{ bindings: ShortcutBinding[]; loaded: bo
   load: () => {
     if (get().loaded) return;
     try { const saved = localStorage.getItem(storageKey); set({ bindings: saved === null ? defaultShortcuts : validateShortcuts(JSON.parse(saved)), loaded: true }); }
-    catch (error) { set({ bindings: [], loaded: true, error: `快捷键加载失败：${String(error)}。请在设置中恢复默认。` }); }
+    catch (error) { set({ bindings: [], loaded: true, error: `快捷键读取失败：${String(error)}。请在设置里恢复默认快捷键。` }); }
   },
   save: (bindings) => {
     const validated = validateShortcuts(bindings);

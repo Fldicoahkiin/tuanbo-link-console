@@ -18,12 +18,12 @@ function useStereoLevels(player: ProjectPlayer): { levels: number[]; error: stri
     let timer: ReturnType<typeof setInterval> | null = null;
     try {
       const analysis = player.controller.getAudioAnalysis();
-      if (!analysis) throw new Error('播放中的音频监测连接不可用');
+      if (!analysis) throw new Error('读不到正在播放的音频，电平暂时无法显示');
       setError(null);
       timer = setInterval(() => setLevels(analysis.readPeaks().map((peak) => {
         return Math.max(0, Math.min(1, (20 * Math.log10(Math.max(peak, 0.001)) + 60) / 60));
       })), 80);
-    } catch (error) { console.error('双声道电平监测失败', error); setError(`电平监测失败：${String(error)}`); }
+    } catch (error) { console.error('双声道电平监测失败', error); setError(`电平显示失败：${String(error)}`); }
     return () => {
       if (timer) clearInterval(timer);
     };
@@ -49,12 +49,12 @@ export function P1TimeMonitor({ player, title, positionMs, durationMs, frameRate
         </div>)}
       </div>
     </div>
-    <div className="monitor-mtc" data-sending={sending} title={internal ? '含时间码偏移；未发送时显示预备位置，不代表控台已收到' : '最近接收到的外部 MTC 时间码'}>
+    <div className="monitor-mtc" data-sending={sending} title={internal ? '已包含时间码偏移。没有发送时显示的是待发位置，不代表控台已经收到' : '最近接收到的外部 MTC 时间码'}>
       <span>MTC · {frameRate} fps</span>
       <strong className="monitor-mtc-clock" aria-label={`MTC 时间码 ${outputTimecode}`}>{outputTimecode}</strong>
       <span>{sending ? '发送中' : !internal ? outputTimecode === '—' ? '无信号' : '接收值' : player.state.status === 'paused' ? '已暂停' : '未发送'}</span>
       <span className="monitor-duration">总时长 {clockText(durationMs).slice(0, 8)}</span>
-      <span>{internal ? `${sampleRate / 1000} kHz` : '外部主控'}</span>
+      <span>{internal ? `${sampleRate / 1000} kHz` : '跟随 P1'}</span>
     </div>
     {error ? <small role="alert">{error}</small> : null}
   </section>;

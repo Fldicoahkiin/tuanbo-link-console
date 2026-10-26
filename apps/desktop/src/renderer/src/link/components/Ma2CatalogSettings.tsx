@@ -19,7 +19,7 @@ export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy
   useEffect(() => { onBusy(job.busy); return () => onBusy(false); }, [job.busy, onBusy]);
   const endpoint = async (): Promise<Ma2CatalogRequest> => {
     if (method === 'local') {
-      if (!directory.trim()) throw new Error('请先连接本机 onPC 数据目录');
+      if (!directory.trim()) throw new Error('请先选择本机 onPC 的数据目录');
       return { dataDirectory: directory.trim() };
     }
     const status = ma2NetworkStatusSchema.parse(await window.tbLink.getMa2NetworkStatus());
@@ -33,42 +33,42 @@ export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy
     notify(await prepareMa2Editing(await endpoint(), documentId, true, retry));
   };
   const exportSite = async (): Promise<void> => {
-    if (!cached) throw new Error('工程尚无控台读取数据。连接后读取一次，即可导出已完成的部分。');
+    if (!cached) throw new Error('这个工程还没有从控台读取过数据。连接控台读取一次后就能导出。');
     const path = await window.tbLink.exportDiagnosticPackage({ ma2Site: {
       catalog: cached.catalog, raw: cached.catalog.entries.flatMap(entry => entry.sourceXml ? [{ target: entry.target, xml: entry.sourceXml }] : []),
       songs: project?.rundown.map(item => ({ id: item.id, title: item.title, p1Media: item.p1Media, referenceAudio: item.referenceAudio, playback: item.playback })) ?? [],
       source: cached.source, pairs: cached.pairs, pairings: cached.pairings, failures: cached.failures,
       materialLibrary: project?.ma2MaterialLibrary, readInProgress: job.busy
     } });
-    if (path) notify(`现场核对包已导出：${path}`);
+    if (path) notify(`控台数据包已导出：${path}`);
   };
   return <section className="settings-section ma2-catalog-settings" aria-label="MA2 现场节目导入">
     <section className="ma2-settings-group">
       <h3>控台灯光</h3>
-      <p className="settings-note">{!project ? '打开工程后，可将控台 Cue 读取到歌曲。' : !connected ? '连接控台后，可读取节目 Cue。' : '读取结果保存在工程中，可到灯光工作台配对和编辑。'}</p>
+      <p className="settings-note">{!project ? '打开工程后，可以把控台 Cue 读到歌曲里。' : !connected ? '连接控台后，可读取节目 Cue。' : '读取结果保存在工程中，可到灯光工作台配对和编辑。'}</p>
       <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{automatic.message}</p>
       <div className="device-actions">
         <Button className={connected ? "primary-button" : "secondary-button"} disabled={disabled || job.busy || !project || !connected} onClick={() => guard(() => read())}>{cached ? '更新控台读取' : '读取控台灯光到现有歌曲'}</Button>
         {cached ? <><Button className="secondary-button" disabled={disabled || job.busy} onClick={() => guard(() => read(true))}>只补读未完成项</Button>
         <Button className="secondary-button" onClick={() => useMa2ReadStore.setState({ openWorkspace: true, browserOpen: true })}>配对与查看 Cue</Button></> : null}
-        <Button className="secondary-button" disabled={!cached} onClick={() => guard(exportSite)}>导出现场核对包</Button>
+        <Button className="secondary-button" disabled={!cached} onClick={() => guard(exportSite)}>导出控台数据包</Button>
       </div>
-      <p className="settings-note">核对包包含已读原始 XML、歌曲时间码、配对和读取记录；无需再次扫描。{!cached ? '读取一条后即可导出。' : job.busy ? '正在读取时可导出当前已完成部分。' : ''}</p>
-      {job.busy ? <><Ma2ReadProgress progress={job.progress} waiting="正在读取控台，切页后继续" /><Button className="secondary-button" onClick={() => guard(async () => { if (job.activeId) await window.tbLink.cancelMa2Read(job.activeId); })}>取消控台读取</Button></> : <p role="status">{cached?.message ?? job.message}</p>}
+      <p className="settings-note">数据包里有已读取的原始 XML、歌曲时间码、配对和读取记录，不需要再扫描一次。{!cached ? '读取一条后即可导出。' : job.busy ? '读取过程中可以导出已经完成的部分。' : ''}</p>
+      {job.busy ? <><Ma2ReadProgress progress={job.progress} waiting="正在读取控台，切换页面不会中断" /><Button className="secondary-button" onClick={() => guard(async () => { if (job.activeId) await window.tbLink.cancelMa2Read(job.activeId); })}>取消控台读取</Button></> : <p role="status">{cached?.message ?? job.message}</p>}
       {cached && project ? <><p className="settings-note">工程缓存 · {cached.source} · Show：{cached.catalog.directory.show} · {new Date(cached.catalog.readAt).toLocaleString()}（非实时状态）</p>
         {cached.catalog.incomplete ? <p role="alert">{cached.catalog.incomplete}</p> : null}
         <P1LightingImportReport project={project} catalog={cached.catalog} /></> : null}
       {!project?.p1Sync ? <SettingsDisclosure title="从 P1 工程导入歌曲" description="已有 P1 歌曲时，导入歌曲和原始时间码"><P1ProjectSyncPanel purpose="migration" disabled={disabled || job.busy} notify={notify} afterImport={() => read()} /></SettingsDisclosure> : <p className="settings-note">P1 歌曲和原始时间码已保存在工程，无需重新选择 .hia。</p>}
     </section>
     <details className="ma2-advanced-settings"><summary>诊断与手动同步</summary>
-      {cached?.catalog.metrics ? <p>本次读取 {(cached.catalog.metrics.elapsedMs / 1000).toFixed(1)} 秒 · {cached.catalog.metrics.requests} 次逻辑请求 · {(cached.catalog.metrics.bytes / 1024).toFixed(0)} KB 解码响应{cached.catalog.metrics.wireCommands !== undefined ? ` · ${cached.catalog.metrics.wireCommands} 条网络命令 · ${((cached.catalog.metrics.receivedBytes ?? 0) / 1024).toFixed(0)} KB 网络接收` : ''}。阶段耗时已保存到核对包。</p> : null}
+      {cached?.catalog.metrics ? <p>本次读取 {(cached.catalog.metrics.elapsedMs / 1000).toFixed(1)} 秒 · {cached.catalog.metrics.requests} 次请求 · {(cached.catalog.metrics.bytes / 1024).toFixed(0)} KB 数据{cached.catalog.metrics.wireCommands !== undefined ? ` · ${cached.catalog.metrics.wireCommands} 条网络命令 · ${((cached.catalog.metrics.receivedBytes ?? 0) / 1024).toFixed(0)} KB 网络接收` : ''}。各阶段耗时已保存到数据包。</p> : null}
       <Ma2ProgramSync method={method} directory={directory} network={automatic.request?.connection.network ?? null} disabled={disabled || job.busy} notify={notify} onBusy={onBusy} />
       <Button className="secondary-button" disabled={!automatic.request && (disabled || job.busy || !cached)} onClick={() => guard(async () => {
         if (automatic.request) { useMa2AutoSyncStore.setState({ request: null }); return; }
         if (cached) useMa2AutoSyncStore.setState({ request: { catalog: cached.catalog, connection: await endpoint() } });
       })}>{automatic.request ? '关闭编辑后自动同步' : '启用编辑后自动同步'}</Button>
       <p role="status">{automatic.message}</p>
-      <p className="settings-note">原生保留时间线不能写回。其他时间线写回前仍须重新读取并比较控台。</p>
+      <p className="settings-note">“控台原样”的时间线不能写回。其他时间线写回前，仍要先重新读取并和控台比对。</p>
     </details>
   </section>;
 }

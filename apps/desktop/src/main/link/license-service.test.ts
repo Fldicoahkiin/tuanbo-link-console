@@ -35,12 +35,12 @@ function issue(overrides: Partial<LicenseClaims> = {}): string {
 it('签名许可只接受指定主机，拒绝修改载荷、未知公钥和未来签发时间', () => {
   const token = issue();
   expect(verifyLicense(token, machine, publicKeys, now).customer).toBe('验收公司');
-  expect(() => verifyLicense(token, `TB1-${'B'.repeat(64)}`, publicKeys, now)).toThrow('另一台主机');
-  expect(() => verifyLicense(token, machine, {}, now)).toThrow('不受信任');
+  expect(() => verifyLicense(token, `TB1-${'B'.repeat(64)}`, publicKeys, now)).toThrow('另一台电脑');
+  expect(() => verifyLicense(token, machine, {}, now)).toThrow('不被认可');
   const parts = token.split('.');
   parts[1] = Buffer.from(JSON.stringify({ customer: '篡改' })).toString('base64url');
   expect(() => verifyLicense(parts.join('.'), machine, publicKeys, now)).toThrow('签名无效');
-  expect(() => verifyLicense(issue({ issuedAt: '2026-09-22T00:00:00Z' }), machine, publicKeys, now)).toThrow('本机时间');
+  expect(() => verifyLicense(issue({ issuedAt: '2026-09-22T00:00:00Z' }), machine, publicKeys, now)).toThrow('这台电脑的时间');
 });
 it('买断升级期结束不影响使用；订阅按截止时间到期', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'tblink-license-'));
@@ -64,8 +64,8 @@ it('错误或到期导入不覆盖现有许可，未配置签发时明确显示�
   const service = new LicenseService(directory, machine, publicKeys, () => now);
   const valid = issue();
   await service.activate(valid);
-  await expect(service.activate(issue({ machineCode: `TB1-${'B'.repeat(64)}` }))).rejects.toThrow('另一台主机');
-  await expect(service.activate(issue({ kind: 'subscription', issuedAt: '2026-09-01T00:00:00Z', useUntil: '2026-09-20T00:00:00Z' }))).rejects.toThrow('使用期限已结束');
+  await expect(service.activate(issue({ machineCode: `TB1-${'B'.repeat(64)}` }))).rejects.toThrow('另一台电脑');
+  await expect(service.activate(issue({ kind: 'subscription', issuedAt: '2026-09-01T00:00:00Z', useUntil: '2026-09-20T00:00:00Z' }))).rejects.toThrow('已到期');
   expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(valid);
   expect((await new LicenseService(directory, machine, {}).status()).state).toBe('unconfigured');
 });
@@ -88,12 +88,12 @@ it('在线激活验签后保存激活码，离线租约到期要求联网，网�
   expect(request).toHaveBeenCalledOnce();
   expect(credentials.get('license.activation.code')).toBe(`TBA-${'A'.repeat(32)}`);
   request.mockRejectedValueOnce(new Error('offline'));
-  await expect(service.refreshOnline()).rejects.toThrow('无法连接');
+  await expect(service.refreshOnline()).rejects.toThrow('连不上授权服务器');
   expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(token);
   time += 86400000;
   expect((await service.status()).state).toBe('renewal-required');
   time = now;
-  expect((await service.status()).message).toContain('回拨');
+  expect((await service.status()).message).toContain('被调回过');
 });
 
 it('拒绝明文传输、不可用安全存储、超大响应以及未签名响应，现有许可不被替换', async () => {
@@ -109,9 +109,9 @@ it('拒绝明文传输、不可用安全存储、超大响应以及未签名响�
   expect(request).not.toHaveBeenCalled();
   const service = new LicenseService(directory, machine, publicKeys, () => now, options);
   request.mockResolvedValueOnce(new Response('x'.repeat(21000)));
-  await expect(service.activateCode(code)).rejects.toThrow('大小限制');
+  await expect(service.activateCode(code)).rejects.toThrow('内容过大');
   request.mockResolvedValueOnce(new Response(JSON.stringify({ license: 'unsigned' })));
-  await expect(service.activateCode(code)).rejects.toThrow('格式无效');
+  await expect(service.activateCode(code)).rejects.toThrow('格式不对');
   expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(token);
 });
 
@@ -119,7 +119,7 @@ it('不接受有效签名的试用许可，不替换已有付费许可', async (
   const directory = await mkdtemp(join(tmpdir(), 'tblink-no-trial-'));
   const service = new LicenseService(directory, machine, publicKeys, () => now);
   const paid = issue(); await service.activate(paid);
-  await expect(service.activate(issue({ kind: 'trial', useUntil: '2026-09-30T00:00:00Z' }))).rejects.toThrow('不接受试用');
+  await expect(service.activate(issue({ kind: 'trial', useUntil: '2026-09-30T00:00:00Z' }))).rejects.toThrow('不支持试用');
   expect(await readFile(join(directory, 'licensing/license.jwt'), 'utf8')).toBe(paid);
 });
 
@@ -240,7 +240,7 @@ it('离线宽限只用于服务器不可达：租约到期、明确拒绝或手�
   const graced = make();
   expect((await graced.status()).state).toBe('active');
   request.mockResolvedValueOnce(new Response(null, { status: 409 }));
-  await expect(graced.refreshOnline()).rejects.toThrow('绑定其他机器');
+  await expect(graced.refreshOnline()).rejects.toThrow('绑定其他电脑');
   expect((await graced.status()).state).toBe('renewal-required');
   time = now + 2 * 86400000;
   request.mockRejectedValueOnce(new Error('offline'));
@@ -259,8 +259,8 @@ it('服务器拒绝时按错误码给出续费、换机或核对激活码的具�
   const token = issue({ online: { leaseUntil: new Date(now + 2 * 86400000).toISOString(), customerType: 'personal' } });
   request.mockResolvedValueOnce(new Response(JSON.stringify({ license: token })));
   await make().activateCode(`TBA-${'A'.repeat(32)}`);
-  const answers: [number, string, string][] = [[403, 'EXPIRED', '续费'], [403, 'REVOKED', '已被撤销'], [403, 'INVALID_CODE', '核对'],
-    [409, 'MACHINE_BOUND', '重装系统'], [403, 'constructor', '已到期或已撤销'], [409, 'UNKNOWN', '绑定其他机器']];
+  const answers: [number, string, string][] = [[403, 'EXPIRED', '续费'], [403, 'REVOKED', '已被撤销'], [403, 'INVALID_CODE', '检查后重新输入'],
+    [409, 'MACHINE_BOUND', '重装系统'], [403, 'constructor', '已到期或已被撤销'], [409, 'UNKNOWN', '绑定其他电脑']];
   for (const [status, code, guidance] of answers) {
     request.mockResolvedValueOnce(new Response(JSON.stringify({ code }), { status, headers: { 'Content-Type': 'application/json' } }));
     const result = await make().status();
@@ -281,10 +281,10 @@ it('已验证的会话中输错激活码或断网，不影响当前授权', asyn
   });
   await service.activateCode(`TBA-${'A'.repeat(32)}`);
   request.mockResolvedValueOnce(new Response(JSON.stringify({ code: 'INVALID_CODE' }), { status: 403 }));
-  await expect(service.activateCode(`TBA-${'B'.repeat(32)}`)).rejects.toThrow('核对');
+  await expect(service.activateCode(`TBA-${'B'.repeat(32)}`)).rejects.toThrow('检查后重新输入');
   expect((await service.status()).state).toBe('active');
   request.mockRejectedValueOnce(new Error('offline'));
-  await expect(service.refreshOnline()).rejects.toThrow('无法连接');
+  await expect(service.refreshOnline()).rejects.toThrow('连不上授权服务器');
   expect((await service.status()).state).toBe('active');
   expect(stored.get('license.activation.code')).toBe(`TBA-${'A'.repeat(32)}`);
 });

@@ -25,7 +25,7 @@ it('已就绪的同版本桥只检查一次，不重载或新增计时器', asyn
 });
 it('不覆盖没有应用所有权标记的其他插件', async () => {
   const client = connection(() => 'foreign');
-  await expect(ensureMa2NetworkBridge(client, 'return function() end')).rejects.toThrow('未覆盖该插件');
+  await expect(ensureMa2NetworkBridge(client, 'return function() end')).rejects.toThrow('联动台没有覆盖它');
   expect(client.commands).toHaveLength(1);
 });
 function upgradeClient(options: { busy?: boolean; corrupt?: boolean } = {}) {
@@ -54,14 +54,14 @@ it('升级已拥有的旧桥前占用只读事务，校验源码后暂停旧会�
 });
 it('已有事务未结束时不停止旧桥，不重放旧请求', async () => {
   const client = upgradeClient({ busy: true });
-  await expect(ensureMa2NetworkBridge(client, 'return function() end')).rejects.toThrow('本地编辑仍可继续');
+  await expect(ensureMa2NetworkBridge(client, 'return function() end')).rejects.toThrow('本地可以继续编辑');
   expect(vi.mocked(runMa2GuardedLua)).not.toHaveBeenCalled();
   expect(client.commands.filter(line => line.includes("'begin'"))).toHaveLength(1);
   expect(client.commands.some(line => line.includes('parts={}'))).toBe(false);
 });
 it('旧桥升级传输损坏时保留旧会话并释放自身的只读事务', async () => {
   const client = upgradeClient({ corrupt: true });
-  await expect(ensureMa2NetworkBridge(client, 'return function() end')).rejects.toThrow('传输不完整');
+  await expect(ensureMa2NetworkBridge(client, 'return function() end')).rejects.toThrow('没有传完');
   const scripts = vi.mocked(runMa2GuardedLua).mock.calls.map(call => call[1]);
   expect(scripts.every(script => !script.includes('b.factory=assert'))).toBe(true);
   expect(client.commands.filter(line => line.includes("'release'"))).toHaveLength(1);
@@ -91,7 +91,7 @@ it('逐片回读校验完整字节后才执行内置代码', async () => {
 });
 it('传输损坏立即停止，不执行也不自动重传', async () => {
   const client = connection((line) => line.includes("local r='missing'") ? 'missing' : line.includes('local h=') ? '00' : 'ready');
-  await expect(ensureMa2NetworkBridge(client, 'return function() end')).rejects.toThrow('传输不完整');
+  await expect(ensureMa2NetworkBridge(client, 'return function() end')).rejects.toThrow('没有传完');
   expect(client.commands.filter((line) => line.includes('local h='))).toHaveLength(1);
   expect(client.commands.some((line) => line.includes('local f=load'))).toBe(false);
 });

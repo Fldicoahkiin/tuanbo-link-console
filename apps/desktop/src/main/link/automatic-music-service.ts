@@ -9,10 +9,10 @@ type Job = { request: AutomaticMusicRequest; status: AutomaticMusicJob };
 type Configuration = { root: string; bundle: string; ffmpeg: string };
 const pending = new Set<AutomaticMusicJob['state']>(['queued', 'checking', 'running', 'pausing', 'paused', 'cancelling']);
 const stageNames: Record<Extract<AutomaticMusicWorkerEvent, { type: 'progress' }>['stage'], string> = {
-  'verify-assets': '校验离线模型', 'decode-48000-stereo': '解码实际播放音频',
+  'verify-assets': '检查离线模型', 'decode-48000-stereo': '解码实际播放音频',
   'beat-this-final0': '识别节拍 · 1/3', 'beat-this-final1': '识别节拍 · 2/3', 'beat-this-final2': '识别节拍 · 3/3',
   'audio-structure': '分析声音变化并分段',
-  'all-in-one-harmonix-all': '识别音乐结构', 'cached-research-only': '读取已校验缓存', 'completed-research-only': '整理分析诊断'
+  'all-in-one-harmonix-all': '识别音乐结构', 'cached-research-only': '读取缓存', 'completed-research-only': '整理分析结果'
 };
 
 /** Queue and file ownership; candidate publication never changes a project. */
@@ -57,14 +57,14 @@ export class AutomaticMusicService {
   async cancel(taskId: string): Promise<void> {
     const job = this.jobs.get(taskId); if (!job || !pending.has(job.status.state)) return;
     if (this.active === job) {
-      this.update(job, { state: 'cancelling', message: '正在取消，当前模型阶段结束后停止' });
+      this.update(job, { state: 'cancelling', message: '正在取消，当前这一步完成后停止' });
       await this.process.cancel(taskId);
     } else this.update(job, { state: 'cancelled', message: '已取消' });
   }
 
   resume(taskId: string): void {
     if (this.closed) throw new Error('音乐识别服务已关闭');
-    const job = this.jobs.get(taskId); if (!job || job.status.state !== 'paused') throw new Error('该音乐识别任务尚未暂停完成');
+    const job = this.jobs.get(taskId); if (!job || job.status.state !== 'paused') throw new Error('这个识别任务还没暂停好');
     this.update(job, { state: 'queued', stage: null, message: '等待重新开始分析' }); this.drain();
   }
 
@@ -85,7 +85,7 @@ export class AutomaticMusicService {
   }
 
   private async run(job: Job): Promise<void> {
-    this.update(job, { state: 'checking', message: '核对音源和运行环境' });
+    this.update(job, { state: 'checking', message: '检查音源和运行环境' });
     try {
       const { request } = job;
       const directory = join(this.configuration.root, request.taskId);
@@ -97,8 +97,8 @@ export class AutomaticMusicService {
         output: join(directory, crypto.randomUUID()), cancel_file: join(directory, `${crypto.randomUUID()}.cancel`) }, Math.min(3_600_000, Math.max(240_000, request.source.durationMs * 8 + 60_000)));
       if (this.interrupted(job)) return;
       const candidates = automaticMusicCandidates(result);
-      if (Math.abs(candidates.durationMs - request.source.durationMs) > 50) throw new Error('音源长度已改变，请重新导入当前音乐后分析');
-      this.update(job, { state: 'completed', candidates, message: candidates.items.length ? '音乐分析完成' : '未检测到节拍或段落，请检查音源是否为静音',
+      if (Math.abs(candidates.durationMs - request.source.durationMs) > 50) throw new Error('音源长度变了，请重新导入这首音乐后再分析');
+      this.update(job, { state: 'completed', candidates, message: candidates.items.length ? '音乐分析完成' : '没有识别到节拍或段落，请检查音源是不是静音',
         summary: { runId: result.run_id, durationMs: result.audio.sample_count / result.audio.sample_rate * 1000,
           elapsedSeconds: result.timings.total_seconds, cached: result.timings.cached, publication: 'not-validated', visibleResults: candidates.items.length } });
     } catch (error) {
@@ -110,8 +110,8 @@ export class AutomaticMusicService {
   }
 
   private interrupted(job: Job): boolean {
-    if (job.status.state === 'pausing') { this.update(job, { state: 'paused', message: '已暂停，恢复后重新开始；有效缓存会复用' }); return true; }
-    if (job.status.state === 'cancelling') { this.update(job, { state: 'cancelled', message: '已取消，未提交结果' }); return true; }
+    if (job.status.state === 'pausing') { this.update(job, { state: 'paused', message: '已暂停，继续时会重新开始，已完成的部分会复用' }); return true; }
+    if (job.status.state === 'cancelling') { this.update(job, { state: 'cancelled', message: '已取消，结果没有保存' }); return true; }
     return false;
   }
 }

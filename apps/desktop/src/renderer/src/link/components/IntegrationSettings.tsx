@@ -27,7 +27,7 @@ export function IntegrationDeviceOverview({ obsState, p1State, mtcReady }: {
 }): JSX.Element {
   return <section className="integration-device-overview" aria-label="设备状态">
     <OverviewDevice icon={MonitorUp} kind="obs" name="OBS Studio" state={obsState} note={obsState === 'connected' ? 'WebSocket 已连接' : '等待连接'} />
-    <OverviewDevice icon={AudioWaveform} kind="p1" name="P1" state={p1State} note={mtcReady ? 'MTC 已接收' : 'MTC 未接通'} />
+    <OverviewDevice icon={AudioWaveform} kind="p1" name="P1" state={p1State} note={mtcReady ? 'MTC 已接收' : '未收到 MTC'} />
   </section>;
 }
 

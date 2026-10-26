@@ -88,7 +88,7 @@ it('控台删掉的 Cue 和整条序列按上次确认的内容重建；延迟�
   const gone = planMa2SongSync(input, null);
   expect(gone.restored).toHaveLength(40); expect(gone.deletions).toEqual([]);
   expect(gone.changes.every(change => change.restore)).toBe(true);
-  input.points[0]!.cues[0]!.delayMs = 100; expect(() => planMa2SongSync(input, xml)).toThrow('包含延迟');
+  input.points[0]!.cues[0]!.delayMs = 100; expect(() => planMa2SongSync(input, xml)).toThrow('带有延迟');
   input.points[0]!.cues[0]!.delayMs = 0;
   const added = editMa2SongSequence(xml, '歌曲', [{cue:'41.000',name:'控台新建',sources:[]}],[]);
   expect(planMa2SongSync(input, added)).toMatchObject({ changes: [], deletions: [] });

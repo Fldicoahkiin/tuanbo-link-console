@@ -39,17 +39,17 @@ export class ObsEditorPreview {
     try {
       const session = this.session;
       const pid = await this.target;
-      if (pid === null) return { ready: false, message: '请连接本机 OBS；远程 OBS 暂不支持采集预览桥。' };
+      if (pid === null) return { ready: false, message: '请连接本机的 OBS，远程 OBS 暂不支持预览。' };
       const path = join(this.directory, `${pid}.status.json`);
       const [metadata, text] = await Promise.all([stat(path), readFile(path, 'utf8')]);
       const status = statusSchema.parse(JSON.parse(text));
       if (session !== this.session || Date.now() - metadata.mtimeMs > 3_000 || status.pid !== pid) {
-        return { ready: false, message: 'OBS 预览脚本未运行，请在 OBS“工具 → 脚本”中加载或重新加载。' };
+        return { ready: false, message: 'OBS 预览脚本没有运行，请在 OBS 的“工具 → 脚本”里加载或重新加载。' };
       }
-      return status.error ? { ready: false, message: `OBS 预览脚本错误：${status.error}` } : { ready: true, message: 'OBS 采集预览已就绪' };
+      return status.error ? { ready: false, message: `OBS 预览脚本错误：${status.error}` } : { ready: true, message: 'OBS 预览已就绪' };
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        return { ready: false, message: 'OBS 尚未加载预览脚本。导出文件后，还需在 OBS“工具 → 脚本”中添加一次。' };
+        return { ready: false, message: 'OBS 还没加载预览脚本。导出文件后，还要在 OBS 的“工具 → 脚本”里添加一次。' };
       }
       return { ready: false, message: `无法确认 OBS 预览状态：${error instanceof Error ? error.message : String(error)}` };
     }
@@ -61,7 +61,7 @@ export class ObsEditorPreview {
     if (pid === null || session !== this.session) return;
     const now = performance.now();
     for (const [key, lease] of this.leases) if (now - lease.touched > 2_000) this.leases.delete(key);
-    if (!this.leases.has(name) && this.leases.size >= 128) throw new Error('编辑预览最多同时保持 128 个采集来源');
+    if (!this.leases.has(name) && this.leases.size >= 128) throw new Error('编辑预览最多同时显示 128 个来源');
     this.leases.set(name, { name, nonce: randomUUID(), touched: now });
     const contents = JSON.stringify({ session, sources: [...this.leases.values()].map(({ name: sourceName, nonce }) => ({ name: sourceName, nonce })) });
     const write = this.pending.then(async () => {

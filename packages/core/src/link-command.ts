@@ -431,7 +431,7 @@ export function removeMediaAssetCommand(assetId: string, now?: TimestampProvider
     const index = project.mediaAssets.findIndex((asset) => asset.id === assetId);
     if (index < 0) throw new Error(`媒体素材不存在：${assetId}`);
     const referencedBy = project.rundown.find((item) => item.referenceMediaClips.some((clip) => clip.assetId === assetId));
-    if (referencedBy) throw new Error(`素材仍被节目“${referencedBy.title}”的参考时间线使用`);
+    if (referencedBy) throw new Error(`素材还在被节目“${referencedBy.title}”的时间线使用`);
     project.mediaAssets.splice(index, 1);
   }, now);
 }
@@ -516,7 +516,7 @@ export function routeVisualObsCuesToManagedSceneCommand(
   itemId: string,
   now?: TimestampProvider
 ): LinkCommand {
-  return createCommand('接入 OBS 受管输出', (project) => {
+  return createCommand('接入联动台的 OBS 画面', (project) => {
     const item = requireItem(project, itemId);
     for (const cue of item.cues) {
       if (!cue.layerId) continue;
@@ -772,15 +772,15 @@ export function moveActionCommand(
 }
 
 export function configureP1AutoFollowCommand(config: NonNullable<LinkProject['p1AutoFollow']>): LinkCommand {
-  return createCommand('配置 P1 点击播放自动联动', (project) => { project.p1AutoFollow = structuredClone(config); });
+  return createCommand('设置 P1 点歌自动联动', (project) => { project.p1AutoFollow = structuredClone(config); });
 }
 
 export function setPlaybackSourceCommand(source: 'p1' | 'internal'): LinkCommand {
-  return createCommand('切换播放主控', (project) => { project.playbackSource = source; if (source === 'internal' && project.p1AutoFollow) project.p1AutoFollow.enabled = false; });
+  return createCommand('切换播放方式', (project) => { project.playbackSource = source; if (source === 'internal' && project.p1AutoFollow) project.p1AutoFollow.enabled = false; });
 }
 
 export function setInternalVideoAudioCommand(enabled: boolean): LinkCommand {
-  return createCommand('设置内部主控视频原声', (project) => { project.internalVideoAudio = enabled; });
+  return createCommand('设置视频原声', (project) => { project.internalVideoAudio = enabled; });
 }
 
 function createCommand(

@@ -19,7 +19,7 @@ export function LightingRecordingControls(props: { audioAvailable?: boolean; cli
     const start = toMs(0);
     latest.current.onRecorded({ ...current.clip, id: crypto.randomUUID(), name: `${current.clip.name} · 录制`, timeLock: 'time', start, duration: toMs(current.clip.duration) - start, events: events.map((event) => event.kind === 'note' ? { ...event, at: toMs(event.at) - start, duration: toMs(event.at + event.duration) - toMs(event.at) } : { ...event, at: toMs(event.at) - start }) });
     const rawCount = events.filter((event) => event.kind === 'raw' && event.bytes[0] === 0xf0).length;
-    if (latest.current.track.kind === 'ma2' && rawCount) latest.current.notify(`${rawCount} 条反馈未匹配到已绑定执行器或尚不支持解码，已保留完整 MIDI 消息`, 'info');
+    if (latest.current.track.kind === 'ma2' && rawCount) latest.current.notify(`有 ${rawCount} 条反馈对不上已绑定的执行器或暂时无法解析，已原样保存这些 MIDI 消息`, 'info');
   };
   const position = (): number => session.current?.position() ?? 0;
   const stop = (): void => {
@@ -37,13 +37,13 @@ export function LightingRecordingControls(props: { audioAvailable?: boolean; cli
   }, [props.clock]);
   const start = async (): Promise<void> => {
     const mapping = ports?.find((port) => port.id === 'lighting-record-input' && port.direction === 'input');
-    if (!mapping) { props.notify('请在设置 → 设备连接中配置灯光录制反馈端口', 'error'); return; }
-    if (!props.audioAvailable || !props.clock.read().ready) { props.notify('请先准备歌曲音频，再录制灯光', 'error'); return; }
+    if (!mapping) { props.notify('请先在“设置 → 设备连接”里选择“操作录制输入”端口', 'error'); return; }
+    if (!props.audioAvailable || !props.clock.read().ready) { props.notify('请先准备好歌曲音频，再录制灯光', 'error'); return; }
     const token = ++generation.current; setConnecting(true);
     try {
       const access = await requestMidiAccess({ sysex: true });
       const matching = [...access.inputs.values()].filter((port) => port.name === mapping.portName && port.state === 'connected');
-      const input = matching[0]; if (matching.length !== 1 || !input) throw new Error('录制输入未连接或名称不唯一');
+      const input = matching[0]; if (matching.length !== 1 || !input) throw new Error('录制输入端口没有连接，或有多个同名端口');
       await input.open(); if (token !== generation.current) return;
       const map = new LightingTempoMap(props.tempos);
       const audioEndMs = props.clock.read().durationMs;
@@ -52,7 +52,7 @@ export function LightingRecordingControls(props: { audioAvailable?: boolean; cli
       const bindings = props.track.clips.flatMap((clip) => clip.events.flatMap((event) => event.kind === 'ma2' && event.sequence !== undefined ? [{ executor: event.executor, sequence: event.sequence }] : []));
       const recorder = new LightingRecorder(props.track.channel, recordingClip.duration, bindings);
       const clock = props.clock;
-      if (!clock.read().ready) throw new Error('录制音频已关闭');
+      if (!clock.read().ready) throw new Error('录制用的音频已关闭');
       const readPosition = (): number => (recordingClip.timeLock === 'time' ? clock.read().positionMs : map.msToBeat(clock.read().positionMs)) - recordingClip.start;
       let lastPosition = readPosition();
       const unsubscribe = clock.subscribeBoundary(boundary => {
@@ -77,7 +77,7 @@ export function LightingRecordingControls(props: { audioAvailable?: boolean; cli
     } catch (error) { if (token === generation.current) props.notify(error instanceof Error ? error.message : String(error), 'error'); }
     finally { if (token === generation.current) setConnecting(false); }
   };
-  return <button className="timeline-record-button" disabled={!initialized || connecting || (!recording && props.track.locked)} aria-pressed={recording} title="记录播放期间收到的 MIDI 操作，输入端口在设置中配置" onClick={() => { if (recording) stop(); else void start(); }}>{connecting ? '连接中…' : recording ? '结束录制' : '录制灯光'}</button>;
+  return <button className="timeline-record-button" disabled={!initialized || connecting || (!recording && props.track.locked)} aria-pressed={recording} title="记录播放时收到的 MIDI 操作，输入端口在设置里选择" onClick={() => { if (recording) stop(); else void start(); }}>{connecting ? '连接中…' : recording ? '结束录制' : '录制灯光'}</button>;
 }
 
 export function TimelineLightingRecording(props: { audioAvailable?: boolean; document: LightingDocument; clipId: string | null; clock: PlaybackClock; playheadMs: number; onChange: (document: LightingDocument, label: string) => void; onError: (message: string) => void }): JSX.Element | null {

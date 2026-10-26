@@ -51,8 +51,8 @@ it('过期帧错误锁定，不偷偷重连；明确关闭后才可重开', asyn
 it('拒绝重复帧，并发读取被阻止', async () => {
   await serve(socket => { socket.write(packet()); socket.on('data', () => socket.write(packet())); }, async client => {
     const first = client.next(target);
-    await expect(client.next(target)).rejects.toThrow('未完成'); await first;
-    await expect(client.next(target)).rejects.toThrow('顺序异常');
+    await expect(client.next(target)).rejects.toThrow('还没完成'); await first;
+    await expect(client.next(target)).rejects.toThrow('顺序错乱');
   });
 });
 

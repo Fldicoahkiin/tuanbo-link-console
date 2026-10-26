@@ -5,9 +5,9 @@ import { toConsoleLabel } from '@tb/core/link';
 export async function renameMa2Object(bridge: Pick<Ma2OnpcBridge, 'request'>, input: Ma2RenameRequest): Promise<Ma2RenameResult> {
   const request = ma2RenameRequestSchema.parse(input);
   const change = request.change;
-  if (change.name === '') throw new Error('原 Cue 没有名称。请在控台清除该名称后重新读取；本次撤销尚未同步，未发送清除指令');
+  if (change.name === '') throw new Error('原来的 Cue 没有名称。请在控台上清除这个名称后重新读取；这次撤销还没同步，没有发送清除指令');
   const endpoint = request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC';
-  if (endpoint !== change.endpoint) throw new Error('改名目标属于另一控台，未发送');
+  if (endpoint !== change.endpoint) throw new Error('要改名的对象属于另一个控台，没有发送');
   const hex = (value: string) => Buffer.from(value, 'utf8').toString('hex');
   const label = toConsoleLabel(change.name);
   const body = [change.kind, change.cue, ...[change.show, request.generation, change.confirmedName, label].map(hex)].join('\n');
@@ -19,6 +19,6 @@ export async function renameMa2Object(bridge: Pick<Ma2OnpcBridge, 'request'>, in
     throw error;
   }
   const result = ma2RenameResultSchema.parse(JSON.parse(response));
-  if (result.sequence !== change.sequence || result.kind !== change.kind || Number(result.cue) !== Number(change.cue) || result.show !== change.show || result.generation !== request.generation || result.name !== label) throw new Error('控台名称回读与修改不一致，未确认同步；请读取控台核对');
+  if (result.sequence !== change.sequence || result.kind !== change.kind || Number(result.cue) !== Number(change.cue) || result.show !== change.show || result.generation !== request.generation || result.name !== label) throw new Error('控台上的名称和修改的不一致，同步没有确认，请读取控台检查');
   return result;
 }

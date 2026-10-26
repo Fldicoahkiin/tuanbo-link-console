@@ -49,13 +49,13 @@ windowsTest('真实 WASAPI 播放期间预填充下一首，曲尾接管不再�
     await player.prepare({ ...request, snapshot: { ...request.snapshot, endMs: 1700 }, nextSnapshot: next });
     const pid = player.status!.enginePid;
     await player.control({ version: 1, sessionId: request.sessionId, generation: 2, kind: 'play' });
-    await expect.poll(() => measured.mock.calls.some(([phase]) => phase === '下一节目音频预填充')).toBe(true);
+    await expect.poll(() => measured.mock.calls.some(([phase]) => phase === '预先准备下一首音频')).toBe(true);
     expect(player.status).toMatchObject({ itemId: 'song-a', status: 'playing', offsetMs: 480000, underruns: 0 });
     await expect.poll(() => player.status?.status).toBe('ended');
     const count = prepare.mock.calls.length;
     await player.prepare({ ...request, generation: 3, snapshot: next });
     expect(prepare).toHaveBeenCalledTimes(count);
-    expect(measured.mock.calls.some(([phase]) => phase === '复用下一节目音频预填充')).toBe(true);
+    expect(measured.mock.calls.some(([phase]) => phase === '使用预先准备的下一首音频')).toBe(true);
     await player.control({ version: 1, sessionId: request.sessionId, generation: 4, kind: 'play' });
     await expect.poll(() => player.status?.positionMs).toBeGreaterThan(550);
     expect(player.status).toMatchObject({ itemId: 'song-b', status: 'playing', offsetMs: 960000, enginePid: pid, underruns: 0 });

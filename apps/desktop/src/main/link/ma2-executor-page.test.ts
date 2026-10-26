@@ -15,7 +15,7 @@ it('一次页面请求足以读取，来源变化不能使用旧页或旧名称'
   const bridge = { request: vi.fn().mockResolvedValue(xml) };
   expect((await readMa2ExecutorPage(bridge, request)).items).toHaveLength(2);
   expect(bridge.request).toHaveBeenCalledExactlyOnceWith('PAGE', 99);
-  await expect(readMa2ExecutorPage(bridge, { ...request, expectedSource: { ...request.expectedSource, generation: 'another' } })).rejects.toThrow('会话已变化');
+  await expect(readMa2ExecutorPage(bridge, { ...request, expectedSource: { ...request.expectedSource, generation: 'another' } })).rejects.toThrow('Show 或连接变了');
 });
 it('wide executors retain their leading slot and do not collapse following empty slots', () => {
   const extended = xml.replace(/(<Exec tblink_label="100步灯光测试"[\s\S]*?<\/Exec>)(\s*)<Exec xsi:nil="true" \/>/, '$1$2<Exec offset_from_first="1" />');

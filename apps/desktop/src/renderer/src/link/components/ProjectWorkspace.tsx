@@ -140,7 +140,7 @@ export function ProjectWorkspace({ toolbarHost, playlistHost, onCreate, onOpen, 
     if (!audioTargetId || !projectPath) return;
     try {
       await importReferenceForDocument(file, audioTargetId, projectPath, documentId);
-      notify('参考音频已按 SHA-256 导入工程。');
+      notify('参考音频已导入工程。');
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     } finally {

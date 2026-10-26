@@ -382,8 +382,8 @@ describe('MA2 原生推杆节目数据', () => {
     expect(saved.rundown[0]?.lighting?.tracks[0]?.clips[0]?.events).toEqual([master]);
     expect(command.undo(original)).toEqual(original);
     expect(compileLightingPackets(value)).toEqual([]);
-    expect(() => compileLightingPackets({ ...value, outputMode: 'direct' })).toThrow('原生推杆');
-    expect(() => exportLightingMidi(value)).toThrow('原生推杆');
+    expect(() => compileLightingPackets({ ...value, outputMode: 'direct' })).toThrow('控台原有的推杆');
+    expect(() => exportLightingMidi(value)).toThrow('控台原有的推杆');
   });
   it('复制和拆分不量化推杆值，也不改变目标', () => {
     const source = { ...clip, events: [master] };

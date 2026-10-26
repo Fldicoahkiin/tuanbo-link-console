@@ -7,9 +7,9 @@ export type MidiHealth = z.infer<typeof resultSchema>;
 export function midiHealthMessage(result: MidiHealth): string {
   switch (result) {
     case 'ready': return 'MIDI 系统检测通过';
-    case 'stopping': return 'Windows MIDI 服务正在停止，尚未释放 MIDI 连接。正常退出 MIDI 应用并恢复服务后点击“重新检测”；持续无法停止时需保存工作后重启 Windows。工程仍可编辑。';
-    case 'timeout': return 'Windows MIDI 端口枚举未响应。请恢复系统 MIDI 服务后点击“重新检测”。依赖 MIDI 的播放暂不可用，工程仍可编辑。';
-    case 'failed': return 'MIDI 检测组件运行失败。请查看诊断日志并修复检测组件，随后点击“重新检测”。工程仍可编辑。';
+    case 'stopping': return 'Windows MIDI 服务正在停止，MIDI 连接还没释放。请正常退出用到 MIDI 的软件，等服务恢复后点“重新检测”；如果一直停不下来，请保存工作后重启电脑。工程可以照常编辑。';
+    case 'timeout': return 'Windows 读取 MIDI 端口没有响应。请恢复系统 MIDI 服务后点“重新检测”。在这之前需要 MIDI 的播放用不了，工程可以照常编辑。';
+    case 'failed': return 'MIDI 检测组件运行失败。请重新安装联动台后点“重新检测”；仍然失败请导出诊断包发给售后。工程可以照常编辑。';
   }
 }
 

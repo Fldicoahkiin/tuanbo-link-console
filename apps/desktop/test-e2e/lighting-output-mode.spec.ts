@@ -57,7 +57,7 @@ for (const native of [false, true]) test(`无 MIDI 设备时打开三种已存�
     await current.page.evaluate(file => localStorage.setItem('tblink.failed-render-project-path.v1', file), path);
     await closeDiscarding(current.app);
     current = await launch();
-    await expect(current.page.getByText('上次工程显示异常', { exact: false })).toBeVisible();
+    await expect(current.page.getByText('上次的工程打开后显示异常', { exact: false })).toBeVisible();
     await expect(current.page.getByRole('button', { name: '打开工程', exact: true })).toBeVisible();
     await current.app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); }, path);
     await current.page.getByRole('button', { name: '打开工程', exact: true }).click();

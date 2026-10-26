@@ -68,5 +68,5 @@ it('授权后文件不匹配不能报告安装成功', async () => {
   const changed = dll(); changed[500] = 99;
   files.readFile.mockResolvedValueOnce(dll()).mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' })).mockResolvedValueOnce(changed);
   files.mkdir.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EACCES' }));
-  await expect(installObsLiveBridge('source.dll', vi.fn().mockResolvedValue(undefined))).rejects.toThrow('校验失败');
+  await expect(installObsLiveBridge('source.dll', vi.fn().mockResolvedValue(undefined))).rejects.toThrow('验证失败');
 });

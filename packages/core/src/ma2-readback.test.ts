@@ -44,8 +44,8 @@ describe('MA2 回读事件身份', () => {
   });
   it('错对象、未转换事件与不完整映射均不产生可用匹配结果', () => {
     const remote = read([{ id: 'a', time: 1000, cueIndex: 1 }]); const base = baseline(remote);
-    expect(() => matchMa2Readback(base, { ...remote, target: 10 })).toThrow('绑定不一致');
-    expect(() => matchMa2Readback(base, { ...remote, unconverted: [{ path: 'x', reason: '未支持' }] })).toThrow('未转换');
+    expect(() => matchMa2Readback(base, { ...remote, target: 10 })).toThrow('和节目绑定对不上');
+    expect(() => matchMa2Readback(base, { ...remote, unconverted: [{ path: 'x', reason: '未支持' }] })).toThrow('还不支持的事件');
     expect(() => matchMa2Readback(base, { ...remote, mappings: [] })).toThrow('未映射');
   });
 });

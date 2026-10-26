@@ -10,7 +10,7 @@ export function compareMa2LightingReadback(documentInput: LightingDocument, bind
   if (!binding) throw new Error('节目没有这个 MA2 对象绑定');
   binding.trackMappings ??= recoverMa2TrackMappings(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings);
   readback.trackMappings ??= recoverMa2TrackMappings(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings);
-  if ((binding.timeOriginMs ?? 0) !== (readback.timeOriginMs ?? 0)) throw new Error('回读与节目时间码起点不一致');
+  if ((binding.timeOriginMs ?? 0) !== (readback.timeOriginMs ?? 0)) throw new Error('从控台读回的时间码起点和这首歌对不上');
   const baseline = verifySnapshotSource(binding.sourceXml, binding.timecode, binding.baselineTracks, binding.mappings, binding.trackMappings, binding.timeOriginMs ?? 0);
   const remote = verifySnapshotSource(readback.sourceXml, readback.target, readback.document.tracks, readback.mappings, readback.trackMappings, readback.timeOriginMs ?? 0);
   return previewMa2BoundSync(document, bindingId, readback, choices, {
@@ -25,7 +25,7 @@ function verifySnapshotSource(xml: string, target: number, tracks: LightingDocum
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
   if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('同步 XML 与绑定的 Timecode 不一致');
-  if (timecode.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('同步 XML 的时间基准尚未验证');
+  if (timecode.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('同步 XML 的时间基准还没经过验证');
   const source = new Map(timecode.tracks.flatMap((track) => track.subtracks.flatMap((subtrack) => subtrack.events.map((event) => [event.path, { event, subtrack, executor: track.executorAddress.slice(2).join('.') }] as const))));
   const mapped = new Set<string>();
   for (const mapping of mappings) {

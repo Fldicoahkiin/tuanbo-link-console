@@ -50,18 +50,18 @@ export function reconcileMa2ReadState(project: LinkProject, source: string, cata
     const confirmed = old?.status === 'confirmed' && sameSource && sameMa2PairingEvidence(old.evidence, evidence);
     const retained = Boolean(bound || old?.status === 'confirmed' || old?.status === 'stale');
     pairings[key] = { itemId, evidence, status: confirmed ? 'confirmed' : retained ? 'stale' : 'suggested',
-      ...(retained && !confirmed ? { reason: '来源或时间依据需要重新核对；已有灯光与本地编辑保留' } : {}) };
+      ...(retained && !confirmed ? { reason: '来源或时间需要重新确认；已有灯光和本地编辑都保留' } : {}) };
   }
   for (const item of project.rundown) for (const binding of item.lighting?.ma2Bindings ?? []) {
     const key = String(binding.timecode);
-    if (!pairings[key]) pairings[key] = { itemId: item.id, evidence: '', status: 'stale', reason: '新目录中未取得此时间线，已有灯光保留；请核对控台来源' };
+    if (!pairings[key]) pairings[key] = { itemId: item.id, evidence: '', status: 'stale', reason: '新读取的控台里没有这条时间线，已有灯光保留；请检查控台来源' };
   }
   const sameSource = previous?.source === source && previous.catalog.directory.show === catalog.directory.show && previous.catalog.directory.generation === catalog.directory.generation;
   return { formatVersion: 2, source, catalog, pairings, ...(previous?.detachedBindings ? { detachedBindings: previous.detachedBindings } : {}),
     pairs: Object.fromEntries(Object.entries(pairings).filter(([, value]) => value.status !== 'stale').map(([key, value]) => [key, value.itemId])),
     failures: sameSource ? previous.failures : [], selectedTarget: previous?.selectedTarget ?? null,
     query: previous?.query ?? '', filter: previous?.filter ?? 'all',
-    message: `${catalog.entries.filter(entry => !entry.error).length} 条已读取 · ${catalog.entries.filter(entry => entry.error).length} 条读取异常${catalog.incomplete ? ' · 尚未完成' : ''}` };
+    message: `${catalog.entries.filter(entry => !entry.error).length} 条已读取 · ${catalog.entries.filter(entry => entry.error).length} 条读取出错${catalog.incomplete ? ' · 还没读完' : ''}` };
 }
 
 /** Preserve the complete native baseline and local edits outside the active playback document. */
@@ -107,7 +107,7 @@ export function refreshMa2BindingCommand(itemId: string, target: number, archive
     const lighting = project.rundown.find(item => item.id === itemId)?.lighting;
     const binding = lighting?.ma2Bindings?.find(value => value.timecode === target);
     if (!state || !entry?.preview || entry.error || !binding || !lighting) throw new Error('此时间线没有完整的已读内容');
-    if (state.catalog.sourceUnverified) throw new Error('读取来源发生变化，请重新核对后刷新');
+    if (state.catalog.sourceUnverified) throw new Error('读取来源有变化，请重新确认后刷新');
     const ids = new Set(binding.baselineTracks.map(track => track.id));
     const tracks = lighting.tracks.filter(track => ids.has(track.id));
     if (!archiveLocalEdits && (binding.pendingTracks?.length || JSON.stringify(tracks) !== JSON.stringify(binding.baselineTracks))) throw new Error('本地编排已有修改：请选择保留本地，或归档本地后采用控台版本');
@@ -126,7 +126,7 @@ export function withMa2PairingValidation(command: LinkCommand): LinkCommand {
     const invalid = Object.entries(state.pairings).filter(([target, value]) => value.status !== 'stale' && !sameMa2PairingEvidence(value.evidence, ma2PairingEvidence(next, state.source, state.catalog, Number(target), value.itemId)));
     if (!invalid.length) return next;
     const pairs = { ...state.pairs }, pairings = { ...state.pairings };
-    for (const [target, value] of invalid) { delete pairs[target]; pairings[target] = { ...value, status: 'stale', reason: '歌曲起点或音频范围已修改，请重新核对配对' }; }
+    for (const [target, value] of invalid) { delete pairs[target]; pairings[target] = { ...value, status: 'stale', reason: '歌曲起点或音频范围改过了，请重新确认关联' }; }
     return parseLinkProject({ ...next, ma2ReadState: { ...state, pairs, pairings } });
   } };
 }
@@ -134,28 +134,28 @@ export function withMa2PairingValidation(command: LinkCommand): LinkCommand {
 export function confirmMa2PairingCommand(target: number, itemId: string): LinkCommand {
   return { id: crypto.randomUUID(), label: '确认歌曲与控台时间线对应关系', execute(project) {
     const state = project.ma2ReadState;
-    if (!state) throw new Error('尚无控台缓存');
-    if (state.catalog.sourceUnverified) throw new Error('控台来源尚未核对，请先复核读取来源');
+    if (!state) throw new Error('还没有读过控台');
+    if (state.catalog.sourceUnverified) throw new Error('控台来源还没确认，请先确认读取来源');
     const song = project.rundown.find(item => item.id === itemId);
     const entry = state.catalog.entries.find(item => item.target === target);
     const origin = song && (song.p1Media || song.playback) ? programTimeOrigin(song) : undefined;
-    if (!entry) throw new Error(`尚未读取 Timecode ${target}，请先读取控台`);
-    if (entry.error) throw new Error(`Timecode ${target} 读取异常：${entry.error}`);
-    if (!song?.referenceAudio || origin === undefined) throw new Error(`歌曲“${song?.title ?? itemId}”缺少音频或原始时间码起点，请先完成歌曲导入`);
-    if (entry.frameFormat !== '30 FPS') throw new Error(`Timecode ${target} 的时间格式为 ${entry.frameFormat ?? '未知'}，当前配对仅支持 30 FPS；未修改控台帧率`);
+    if (!entry) throw new Error(`还没读取 Timecode ${target}，请先读取控台`);
+    if (entry.error) throw new Error(`Timecode ${target} 读取出错：${entry.error}`);
+    if (!song?.referenceAudio || origin === undefined) throw new Error(`歌曲“${song?.title ?? itemId}”没有音频或原始时间码起点，请先完成歌曲导入`);
+    if (entry.frameFormat !== '30 FPS') throw new Error(`Timecode ${target} 的时间格式是 ${entry.frameFormat ?? '未知'}，目前只支持 30 FPS（没有改动控台帧率）`);
     if (!/^\d+(?:\.\d+)?$/.test(entry.offset ?? '0') || !Number.isFinite(Number(entry.offset ?? 0))) throw new Error(`Timecode ${target} 的偏移时间格式无效：${entry.offset ?? '未知'}`);
-    if (!entry.events.length) throw new Error(`Timecode ${target} 没有事件，无需关联歌曲`);
+    if (!entry.events.length) throw new Error(`Timecode ${target} 里没有事件，不需要关联歌曲`);
     const invalid = entry.events.find(event => !/^\d+(?:\.\d+)?$/.test(event.time) || !Number.isFinite(Number(event.time)));
     if (invalid) throw new Error(`Timecode ${target} 的事件 ${invalid.path} 时间格式无效：${invalid.time}`);
     const outside = ma2EventOutsideSong(entry, origin, song.referenceAudio.durationMs);
     if (outside) {
       const seconds = (Number(outside.time) + Number(entry.offset ?? 0)) / 30;
-      throw new Error(`Timecode ${target} 的事件 ${outside.path} 位于 ${seconds.toFixed(3)} 秒，超出“${song.title}”的歌曲范围 ${(origin / 1000).toFixed(3)}～${((origin + song.referenceAudio.durationMs) / 1000).toFixed(3)} 秒；请核对歌曲原始时间码起点或选择对应歌曲`);
+      throw new Error(`Timecode ${target} 的事件 ${outside.path} 在 ${seconds.toFixed(3)} 秒，超出了“${song.title}”的歌曲范围（${(origin / 1000).toFixed(3)}～${((origin + song.referenceAudio.durationMs) / 1000).toFixed(3)} 秒）。请检查歌曲的原始时间码起点，或选择对应的歌曲`);
     }
     const binding = song.lighting?.ma2Bindings?.find(value => value.timecode === target);
-    if (binding && (binding.timeOriginMs ?? 0) !== origin) throw new Error('绑定中的歌曲起点已经变化，请先刷新并核对本地 Cue 位置');
+    if (binding && (binding.timeOriginMs ?? 0) !== origin) throw new Error('关联的歌曲起点变了，请先刷新并检查本地 Cue 的位置');
     const evidence = ma2PairingEvidence(project, state.source, state.catalog, target, itemId);
-    if (!evidence) throw new Error('歌曲起点或控台数据无效，无法确认配对');
+    if (!evidence) throw new Error('歌曲起点或控台数据无效，无法确认关联');
     return parseLinkProject({ ...project, schemaVersion: 2, updatedAt: new Date().toISOString(), ma2ReadState: { ...state, formatVersion: 2,
       pairs: { ...state.pairs, [target]: itemId }, pairings: { ...state.pairings, [target]: { itemId, status: 'confirmed', evidence } } } });
   }, undo: before => parseLinkProject(before) };

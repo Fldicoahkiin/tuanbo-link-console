@@ -16,7 +16,7 @@ export function MusicBeatPanel({ beats, analysis, source, projectPath, playheadM
   const data = beats.data;
   const current = musicSegmentAt(beats.points, playheadMs);
   const dirty = useDocumentStore(state => state.dirty);
-  const message = !source ? '先添加音乐' : !projectPath ? '先保存工程，随后自动分析' : beats.error || analysis.error || (beats.busy || analysis.job?.state === 'failed' || analysis.job?.state === 'cancelled' ? analysis.job?.message : !analysis.status?.available ? analysis.status?.reason : beats.blocked ? '后台识别继续运行，停止播放后写入分段结果。' : current?.bpm === null ? '该段没有足够的可测拍点，无法计算 BPM；可以检查拍点或重新分析。' : null);
+  const message = !source ? '先添加音乐' : !projectPath ? '先保存工程，保存后会自动分析' : beats.error || analysis.error || (beats.busy || analysis.job?.state === 'failed' || analysis.job?.state === 'cancelled' ? analysis.job?.message : !analysis.status?.available ? analysis.status?.reason : beats.blocked ? '识别在后台继续，停止播放后会写入分段结果。' : current?.bpm === null ? '这一段拍点太少，算不出 BPM，可以检查拍点或重新分析。' : null);
   return <section className="music-analysis-panel" aria-label="音乐节拍分段">
     <header><strong className="music-bpm" title={current?.name}>{musicAnalysisHeading(data, current, analysis.job, analysis.submitting, analysis.error)}</strong><strong>音乐分段</strong><span>{data?.beatsPerBar ? `每小节 ${data.beatsPerBar} 拍` : '小节拍数未确定'}</span><button type="button" aria-label="关闭节拍分段" onClick={onClose}><X size={16} /></button></header>
     <div className="music-beat-actions">
@@ -33,7 +33,7 @@ export function MusicBeatPanel({ beats, analysis, source, projectPath, playheadM
       <button type="submit" disabled={beats.blocked || beats.busy}>保存修改</button><button type="button" disabled={beats.blocked || beats.busy} onClick={() => beats.selected && beats.remove(beats.selected.id)}><Trash2 size={14} />删除此段</button>
     </form> : null}
     <details className="analysis-technical-details"><summary>分析信息</summary>
-      <p>按音乐变化划分段落，不判断主歌或副歌。BPM 根据该段拍点估算；变速显示起止速度，拍点不规则时显示本段中位数估算；没有足够拍点时显示无可测 BPM。</p>
+      <p>按音乐的变化划分段落，不区分主歌、副歌。BPM 按这一段的拍点估算：变速段显示起止速度，拍点不规则时显示中位数估算，拍点太少时显示“无可测 BPM”。</p>
       {analysis.status && analysis.status.devices.length > 1 ? <label>计算设备<select aria-label="音乐分析计算设备" value={analysis.device} disabled={beats.busy} onChange={event => { if (event.target.value === 'cpu' || event.target.value === 'cuda') analysis.setDevice(event.target.value); }}>{analysis.status.devices.map(device => <option key={device} value={device}>{device === 'cuda' ? 'GPU' : 'CPU'}</option>)}</select></label> : null}
       {analysis.job?.summary ? <p className="timeline-analysis-summary">{analysis.job.summary.elapsedSeconds.toFixed(1)} 秒{analysis.job.summary.cached ? ' · 缓存' : ''}</p> : null}
     </details>

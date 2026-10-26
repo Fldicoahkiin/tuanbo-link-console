@@ -10,5 +10,5 @@ export function ma2LocalDirectoryMismatch(directory: string, process: LinkProces
   if (!version || !data) return null;
   const expected = version.slice(1, 4).map(Number), actual = [Number(data[1]), Number(data[2]), Number(data[3] ?? 0)];
   if (expected.every((value, index) => value === actual[index])) return null;
-  return `正在运行 onPC ${expected.join('.')}，所选数据目录属于 ${actual.join('.')}。请选择当前版本的数据目录并运行联动插件，或改用网络直连并填写 127.0.0.1。`;
+  return `正在运行的是 onPC ${expected.join('.')}，但选的数据目录属于 ${actual.join('.')}。请选择当前版本的数据目录并运行联动插件，或改用网络直连，地址填 127.0.0.1。`;
 }

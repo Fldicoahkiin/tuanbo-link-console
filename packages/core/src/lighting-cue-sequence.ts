@@ -8,7 +8,7 @@ export function nextLightingMaster(document: LightingDocument, track: LightingTr
   if (bindings.length > 1) throw new Error('灯光轨道对应多个 MA2 绑定，请先检查设置');
   const binding = bindings[0];
   const boundExecutor = binding?.pendingTracks?.find((entry) => entry.trackId === track.id)?.executor ?? binding?.trackMappings?.find((entry) => entry.trackId === track.id)?.executor ?? binding?.mappings.find((entry) => entry.trackId === track.id)?.executor;
-  if (binding && !boundExecutor) throw new Error('灯光轨道缺少 MA2 执行器绑定，请先检查设置');
+  if (binding && !boundExecutor) throw new Error('灯光轨道还没绑定 MA2 执行器，请先检查设置');
   const map = new LightingTempoMap(document.tempos);
   const preceding = track.clips.flatMap((clip) => clip.events.flatMap((event) => (event.kind === 'ma2' || event.kind === 'ma2-fader') && lightingEventTime(clip, event, map) <= ms ? [{ event, ms: lightingEventTime(clip, event, map) }] : [])).sort((a, b) => a.ms - b.ms);
   const executor = boundExecutor ?? (track.cueStamp?.mode === 'fixed' ? track.cueStamp.executor : preceding.at(-1)?.event.executor) ?? '1.1';
@@ -23,7 +23,7 @@ export function createFixedLightingCueStamp(document: LightingDocument, track: L
   const first = track.clips.flatMap((clip) => clip.events.flatMap((event) => event.kind === 'ma2' && event.action === 'goto' ? [{ event, ms: lightingEventTime(clip, event, map) }] : []))
     .sort((a, b) => a.ms - b.ms)[0]?.event;
   const cue = first ?? nextLightingCue(document, { ...track, cueStamp: { mode: 'sequence' }, clips: [] }, 0);
-  if (cue.cue === undefined || cue.sequence === undefined) throw new Error('灯光 Cue 缺少序列或编号，请先检查属性');
+  if (cue.cue === undefined || cue.sequence === undefined) throw new Error('灯光 Cue 没有序列或编号，请先检查属性');
   const stamp = { mode: 'fixed' as const, cue: cue.cue, sequence: cue.sequence, executor: cue.executor };
   nextLightingCue(document, { ...track, cueStamp: stamp }, 0);
   return stamp;
@@ -37,9 +37,9 @@ export function nextLightingCue(document: LightingDocument, track: LightingTrack
   const binding = bindings[0];
   const pending = binding?.pendingTracks?.find((entry) => entry.trackId === track.id);
   const executor = pending?.executor ?? binding?.trackMappings?.find((entry) => entry.trackId === track.id)?.executor ?? binding?.mappings.find((entry) => entry.trackId === track.id)?.executor;
-  if (binding && !executor) throw new Error('灯光轨道缺少 MA2 执行器绑定，请先检查设置');
+  if (binding && !executor) throw new Error('灯光轨道还没绑定 MA2 执行器，请先检查设置');
   if (track.cueStamp?.mode === 'fixed') {
-    if (binding && track.cueStamp.executor !== executor) throw new Error(`固定 Cue 的执行器与轨道绑定不一致，请在灯光设置中改为 ${executor}`);
+    if (binding && track.cueStamp.executor !== executor) throw new Error(`固定 Cue 的执行器和轨道绑定的不一致，请在灯光设置里改成 ${executor}`);
     return { cue: track.cueStamp.cue, sequence: track.cueStamp.sequence, executor: track.cueStamp.executor, label: `Cue ${Number(track.cueStamp.cue)}` };
   }
   const map = new LightingTempoMap(document.tempos);
@@ -53,12 +53,12 @@ export function nextLightingCue(document: LightingDocument, track: LightingTrack
   const sequence = preceding?.sequence ?? pending?.sequence ?? (references.length === 1 ? references[0] : binding.cueCatalog?.length === 1 ? binding.cueCatalog[0]?.sequence : undefined);
   if (sequence === undefined) throw new Error('请先在灯光点属性中指定序列，再继续打点');
   const catalog = binding.cueCatalog?.find((entry) => entry.sequence === sequence);
-  if (!catalog) throw new Error(`尚未读取序列 ${sequence} 的 Cue 列表，请到设置中读取并同步 MA2`);
+  if (!catalog) throw new Error(`还没读取序列 ${sequence} 的 Cue 列表，请到设置里读取并同步 MA2`);
   const cues = [...catalog.cues].sort((a, b) => a.index - b.index);
   const previousIndex = preceding ? cues.findIndex((cue) => Number(cue.number) === Number(preceding.cue)) : -1;
   if (preceding && previousIndex < 0) throw new Error(`序列 ${sequence} 的 Cue 列表中没有 ${preceding.cue}，请重新读取 MA2`);
   const next = cues[previousIndex + 1];
   if (!next) throw new Error(`序列 ${sequence} 的 Cue 已全部打完`);
-  if (!executor) throw new Error('灯光轨道缺少 MA2 执行器绑定，请先检查设置');
+  if (!executor) throw new Error('灯光轨道还没绑定 MA2 执行器，请先检查设置');
   return { sequence, executor, cue: next.number, label: next.name ?? `Cue ${Number(next.number)}` };
 }

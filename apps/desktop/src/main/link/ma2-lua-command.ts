@@ -17,7 +17,7 @@ export async function runMa2GuardedLua(connection: Pick<Ma2Telnet, 'command'>, b
     if (await call(`${key}={};gma.echo('${prefix}READY')`) !== 'READY') throw new Error('控台操作准备失败');
     const bytes = Buffer.from(script);
     for (let offset = 0; offset < bytes.length; offset += 128) {
-      if (await call(`${decode}${key}[#${key}+1]=unhex('${bytes.subarray(offset, offset + 128).toString('hex')}');gma.echo('${prefix}READY')`) !== 'READY') throw new Error('控台操作传输未确认');
+      if (await call(`${decode}${key}[#${key}+1]=unhex('${bytes.subarray(offset, offset + 128).toString('hex')}');gma.echo('${prefix}READY')`) !== 'READY') throw new Error('控台没有确认收到操作');
     }
     command = `local s=table.concat(${key});${key}=nil;assert(load(s,'tblink_cue','t'))()`;
   }

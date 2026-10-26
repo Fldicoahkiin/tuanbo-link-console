@@ -17,7 +17,7 @@ export class MusicMonitorService {
   private sessionId: string | null = null;
   constructor(private readonly executable: string, private readonly projects: Pick<LinkProjectService,'resolveReferenceAudio'>, private readonly obs: Pick<ObsWebSocketAdapter,'assertMusicMonitorIsolation'|'subscribeMusicMonitorRouteChange'>, private readonly report: (error: Error) => void, private readonly changed: (status: MusicMonitorStatus) => void) {}
   async start(request: MusicMonitorRequest): Promise<MusicMonitorStatus> {
-    if (this.starting) throw new Error('监听正在准备，请等待或停止');
+    if (this.starting) throw new Error('监听正在准备，请稍等或停止');
     this.starting = true;
     try { return await this.prepare(request); } finally { this.starting = false; }
   }
@@ -26,9 +26,9 @@ export class MusicMonitorService {
     const generation = this.generation;
     const devices = await readNativePlaybackDevices(this.executable); const device = devices.audio.find(value => value.id === request.deviceId);
     if (generation !== this.generation) throw new Error('监听已取消');
-    if (!device) throw new Error('监听设备已断开，不自动切换设备');
+    if (!device) throw new Error('监听设备已断开，不会自动换到其他设备');
     this.sessionId = request.sessionId;
-    this.changed({ version: 1, sessionId: request.sessionId, state: 'preparing', message: '正在核对监听线路' });
+    this.changed({ version: 1, sessionId: request.sessionId, state: 'preparing', message: '正在检查监听设备' });
     const abort = new AbortController();
     const stopOnFailure = (error: Error): void => { if (generation !== this.generation) return; this.report(error); this.changed({ version: 1, sessionId: request.sessionId, state: 'error', message: error.message }); void this.stop(false).catch(this.report); };
     const client = new NativePlaybackClient(this.executable, event => { if (event.kind !== 'clock') return; if (event.audioError || event.state === 'error') stopOnFailure(new Error('监听音频输出失败，已停止')); else if (event.state === 'ended' && generation === this.generation) void this.stop().catch(this.report); }, stopOnFailure);
@@ -37,11 +37,11 @@ export class MusicMonitorService {
       await client.start();
       const identity = client.identity; if (!identity) throw new Error('监听进程身份未确认');
       await this.obs.assertMusicMonitorIsolation(device.id, device.isDefault, { executable: basename(this.executable), title: identity.title, windowClass: identity.windowClass, ownerExecutable: basename(process.execPath) });
-      state.unsubscribe = this.obs.subscribeMusicMonitorRouteChange(() => stopOnFailure(new Error('OBS 音频线路已变化，监听已停止，请重新核对后试听')));
+      state.unsubscribe = this.obs.subscribeMusicMonitorRouteChange(() => stopOnFailure(new Error('OBS 的音频设置变了，监听已停止，请检查后重新试听')));
       const directory = join(dirname(request.projectPath), 'cache', 'music-monitor'); await mkdir(directory, { recursive: true });
       let pcmPath: string; let pcmBaseMs: number; let streaming: boolean;
       if (request.mode === 'segment') {
-        if (!ffmpegPath) throw new Error('音频解码组件缺失');
+        if (!ffmpegPath) throw new Error('缺少音频解码组件，请重新安装联动台');
         const cache = new NativeAudioCache(directory, ffmpegPath.replace('app.asar', 'app.asar.unpacked'));
         state.lease = await cache.prepare({ sourcePath: this.projects.resolveReferenceAudio(request.projectPath, request.source.relativePath), sourceSha256: request.source.sha256, expectedDurationMs: request.source.durationMs, sampleRate: 48000, positionMs: request.startMs }, abort.signal);
         pcmPath = state.lease.path; pcmBaseMs = state.lease.baseMs; streaming = state.lease.streaming;
@@ -76,7 +76,7 @@ export class MusicMonitorService {
 async function writeMetronome(path: string, request: MusicMonitorRequest, signal: AbortSignal, ready: () => void): Promise<void> {
   const map = new LightingTempoMap(request.tempos); const length = request.endMs - request.startMs;
   const available = await statfs(dirname(path)); const bytes = Math.ceil(length * 192);
-  if (bytes > available.bavail * available.bsize * .8) throw new Error('监听临时文件所需空间不足；未占用系统临时目录');
+  if (bytes > available.bavail * available.bsize * .8) throw new Error('磁盘空间不够存放监听临时文件');
   const output = await open(path, 'wx'); const block = Buffer.alloc(48000 * 4);
   let beat = Math.ceil(map.msToBeat(Math.max(0, request.startMs - request.firstBeatMs)));
   let click = request.firstBeatMs + map.beatToMs(beat);

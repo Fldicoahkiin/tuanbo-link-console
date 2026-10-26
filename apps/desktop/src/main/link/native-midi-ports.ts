@@ -27,7 +27,7 @@ export class NativeMidiPorts {
       requireCurrent();
       const mappings = [...new Set(ids)].map(id => {
         const matches = this.profile?.midiPortProfiles.filter(entry => entry.id === id && entry.direction === 'output') ?? [];
-        if (matches.length !== 1 || !matches[0]?.portName) throw new Error(`MIDI 输出档案不存在或不唯一：${id}`);
+        if (matches.length !== 1 || !matches[0]?.portName) throw new Error(`MIDI 输出设置不存在或有重复：${id}`);
         return matches[0];
       });
       if (mappings.length) { await this.authorize(); requireCurrent(); }
@@ -61,7 +61,7 @@ export class NativeMidiPorts {
     if (!Number.isFinite(deadlineAtMs) || deadlineAtMs < 0) throw new Error('MIDI 动作截止时间无效');
     if (this.state !== 'ready' || this.failure) throw this.failure ?? new Error('MIDI 输出未准备或已取消');
     const output = this.byProfile.get(profileId);
-    if (!output) throw new Error(`本轮未准备 MIDI 输出：${profileId}`);
+    if (!output) throw new Error(`这一首没有准备 MIDI 输出：${profileId}`);
     await this.authorize();
     if (this.state !== 'ready' || this.failure) throw this.failure ?? new Error('MIDI 动作在许可检查期间已取消');
     await output.send(bytes, BigInt(Math.floor(deadlineAtMs * 10000)));

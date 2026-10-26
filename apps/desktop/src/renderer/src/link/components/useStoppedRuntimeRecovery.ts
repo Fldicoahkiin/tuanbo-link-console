@@ -31,6 +31,6 @@ export function useStoppedRuntimeRecovery(internal: boolean, player: ProjectPlay
       status: player.state.status, runtime, audioPaused: !player.controller.clock.read().playing });
     attempted.current = next.attempted;
     if (!next.release) return;
-    void coordinator.stopAndWait(false, '回收播放器已停止的联动会话').catch((error: unknown) => notify(`释放已停止的联动会话失败：${error instanceof Error ? error.message : String(error)}`, 'error'));
+    void coordinator.stopAndWait(false, '播放器已停止，结束联动').catch((error: unknown) => notify(`结束已停止的联动失败：${error instanceof Error ? error.message : String(error)}`, 'error'));
   }, [internal, player.controller, player.state.status, runtime, coordinator, notify]);
 }

@@ -56,8 +56,8 @@ export class NativeMidiHost {
     this.admit(identity);
     const stopped = this.stop(), epoch = this.epoch;
     // The old driver has exited or was reported as kept; its failure does not decide this song.
-    try { await stopped; } catch (error) { this.dependencies.error(`上一首 MIDI 会话关闭失败：${toError(error).message}`); }
-    if (epoch !== this.epoch) throw new Error('后台 MIDI 准备已被更新操作取消');
+    try { await stopped; } catch (error) { this.dependencies.error(`关闭上一首的 MIDI 失败：${toError(error).message}`); }
+    if (epoch !== this.epoch) throw new Error('MIDI 准备已被新的操作取消');
     const audio = this.admit(identity);
     await this.open(project, identity, audio.positionMs, epoch, null);
   }
@@ -66,11 +66,11 @@ export class NativeMidiHost {
   private async open(project: LinkProject, identity: Identity, positionMs: number, epoch: number, outage: MidiProgramSession | null): Promise<void> {
     let entry: Entry | null = null;
     const failed = (error: Error) => {
-      if (!entry || this.entry !== entry) { this.dependencies.error(`旧 MIDI 会话：${error.message}`); return; }
+      if (!entry || this.entry !== entry) { this.dependencies.error(`上一首的 MIDI：${error.message}`); return; }
       // The port is gone, or a port just opened again failed before its first action (Windows was
       // still creating it): wait for the same port again. Either way the rest of this attempt is off.
       if (error instanceof MidiOutputFailure && (error.portGone || entry.resumed && !entry.sent)) {
-        const fault = entry.resumed && !entry.sent ? `动作 MIDI 端口重新打开后首个动作未发出（${error.portName}，错误码 ${error.code}）；等待该接口可用后继续，未发出的动作不补发` : error.message;
+        const fault = entry.resumed && !entry.sent ? `动作 MIDI 端口重新打开后，第一个动作没有发出（${error.portName}，错误码 ${error.code}）。等这个接口可用后继续，没发出的动作不补发` : error.message;
         this.dependencies.fault(fault, identity.itemId);
         this.lost = { project, identity, session: entry.session, fault }; this.recovery.lost(error.portName);
       }
@@ -94,7 +94,7 @@ export class NativeMidiHost {
     const opened: Entry = { identity, session, state, resumed: outage !== null, skipped: 0, sent: false }; entry = opened; this.entry = opened; this.dependencies.changed(state);
     try {
       await session.prepare(positionMs);
-      if (epoch !== this.epoch || this.entry !== opened) throw new Error('后台 MIDI 准备已取消');
+      if (epoch !== this.epoch || this.entry !== opened) throw new Error('MIDI 准备已取消');
       if (outage) {
         const audio = this.resumable();
         if (!audio) throw new Error('播放已暂停或停止，继续播放后再恢复');
@@ -104,7 +104,7 @@ export class NativeMidiHost {
       this.patch({ state: 'ready' });
     } catch (error) {
       if (this.entry === opened) this.patch({ state: 'failed', reason: toError(error).message });
-      try { await session.close(); } catch (cleanup) { this.dependencies.error(`MIDI 准备取消后的关闭失败：${toError(cleanup).message}`); }
+      try { await session.close(); } catch (cleanup) { this.dependencies.error(`取消 MIDI 准备后关闭失败：${toError(cleanup).message}`); }
       throw error;
     }
   }
@@ -121,7 +121,7 @@ export class NativeMidiHost {
     if (audio.status === 'error' || audio.audioError || audio.status === 'stopped' || audio.status === 'preparing') { this.stopReported(); return; }
     if (entry.state.state === 'preparing') {
       if (!entry.resumed && (audio.generation !== entry.identity.generation || !['ready', 'paused'].includes(audio.status))) {
-        entry.session.abort('MIDI 准备完成前音频已改变；本轮未参与，不中途补发');
+        entry.session.abort('MIDI 还没准备好音频就变了，这一首不发 MIDI，也不会中途补发');
       }
       return;
     }
@@ -161,20 +161,20 @@ export class NativeMidiHost {
     const previous = this.entry, epoch = this.epoch; this.entry = null;
     // A failed session closes itself and reports its own close failure.
     if (previous) await Promise.allSettled([previous.session.close()]);
-    if (epoch !== this.epoch) throw new Error('后台 MIDI 准备已被更新操作取消');
+    if (epoch !== this.epoch) throw new Error('MIDI 准备已被新的操作取消');
     await this.open(lost.project, { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId }, audio.positionMs, epoch, lost.session);
   }
   private admit(identity: Identity): NativePlayerStatus {
     const audio = this.dependencies.audio();
     if (!audio || audio.sessionId !== identity.sessionId || audio.generation !== identity.generation || audio.itemId !== identity.itemId
-      || !['ready', 'paused'].includes(audio.status) || audio.audioError) throw new Error('MIDI 准备不属于当前待播放的音频会话');
+      || !['ready', 'paused'].includes(audio.status) || audio.audioError) throw new Error('MIDI 准备的不是当前要播放的这首歌，请重新播放');
     return audio;
   }
   private patch(patch: Partial<NativeMidiChannelState>): void {
     if (!this.entry) return;
     this.entry.state = { ...this.entry.state, ...patch }; this.dependencies.changed(this.entry.state);
   }
-  private stopReported(): void { void this.stop().catch(error => this.dependencies.error(`后台 MIDI 关闭失败：${toError(error).message}`)); }
+  private stopReported(): void { void this.stop().catch(error => this.dependencies.error(`关闭 MIDI 失败：${toError(error).message}`)); }
 }
 
 function toError(error: unknown): Error { return error instanceof Error ? error : new Error(String(error)); }

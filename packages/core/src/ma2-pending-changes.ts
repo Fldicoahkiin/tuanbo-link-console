@@ -38,7 +38,7 @@ export function ma2PendingChanges(project: LinkProject | null): readonly Ma2Pend
     if (binding.nativeEvents?.length || binding.playback === 'native-timecode') {
       const ids = new Set(binding.baselineTracks.map(track => track.id));
       const local = item.lighting.tracks.filter(track => ids.has(track.id));
-      return JSON.stringify(local) === JSON.stringify(binding.baselineTracks) && !binding.pendingTracks?.length ? [] : [{ ...entry, changes: [], error: '本地已修改；此时间线含原生保留事件，尚不支持写回，控台仍执行原编排' }];
+      return JSON.stringify(local) === JSON.stringify(binding.baselineTracks) && !binding.pendingTracks?.length ? [] : [{ ...entry, changes: [], error: '本地已修改，但这条时间线有保持控台原样的事件，暂不支持写回，控台仍按原来的编排执行' }];
     }
     try {
       const { base, local } = snapshotMa2LightingBinding(item.lighting, binding.id, { consoleVersion: 'pending', baselineRevision: 'baseline', localRevision: 'local' });

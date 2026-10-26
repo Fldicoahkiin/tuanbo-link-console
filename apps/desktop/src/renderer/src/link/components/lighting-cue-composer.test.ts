@@ -100,7 +100,7 @@ it('序列池组合可保存、重新读取及编辑，不强制添加执行器'
   expect(cueIngredients(reopened, 'pool-cue').map(entry => entry.executor)).toEqual(['', '']);
   const edited = saveCueIngredients(reopened, [{ ...pool[0]!, cue: '8.25' }], '改过的 Cue', 5000, 10000, 'pool-cue');
   expect(cueIngredients(edited, 'pool-cue')).toEqual([expect.objectContaining({ sequence: 1, cue: '8.25', executor: '' })]);
-  expect(() => saveCueIngredients(reopened, [pool[0]!, { ...pool[0]!, cue: '9' }], '冲突', 0, 10000)).toThrow('同一序列池');
+  expect(() => saveCueIngredients(reopened, [pool[0]!, { ...pool[0]!, cue: '9' }], '冲突', 0, 10000)).toThrow('同一个序列或执行器');
 });
 
 it('素材库为空时，已有 Cue 仍能读取、编辑，组合保持一个点位且不重复添加', () => {
@@ -121,7 +121,7 @@ it('组合在同一时刻生成同组事件，拒绝冲突执行器和音频范�
     expect.objectContaining({ id: 'group', effectGroupId: 'group', at: 1000 }),
     expect.objectContaining({ effectGroupId: 'group', at: 1000 })
   ]);
-  expect(() => saveCueIngredients(document, [ingredients[0]!, ingredients[0]!], '冲突', 0, 10000)).toThrow('同一执行器');
+  expect(() => saveCueIngredients(document, [ingredients[0]!, ingredients[0]!], '冲突', 0, 10000)).toThrow('同一个序列或执行器');
   expect(() => saveCueIngredients(document, ingredients, '结尾', 10000, 10000)).toThrow('音频范围');
 });
 

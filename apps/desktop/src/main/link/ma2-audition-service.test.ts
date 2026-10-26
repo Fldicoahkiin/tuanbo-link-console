@@ -31,14 +31,14 @@ it('结果不明保留；某个 Off 失败不阻断其他目标，重连不向�
   const f=fixture();await f.service.play(request(1));await f.service.play(request(2));
   const send=f.api.playCue;f.api.playCue=async(input,options)=>{if(input.action.action==='off'&&input.action.target==='sequence'&&input.action.sequence===1)throw new Error('断网');return send(input,options);};
   const result=await f.service.stop();expect(result.phase).toBe('failed');expect(result.targets).toHaveLength(1);expect(result.targets[0]?.error).toBe('断网');
-  const count=f.actions.length;Object.defineProperty(f.api,'connectionGeneration',{value:1});await f.service.stop();expect(f.actions).toHaveLength(count);expect(f.service.status().targets[0]?.error).toContain('连接已改变');
+  const count=f.actions.length;Object.defineProperty(f.api,'connectionGeneration',{value:1});await f.service.stop();expect(f.actions).toHaveLength(count);expect(f.service.status().targets[0]?.error).toContain('连接变了');
   const g=fixture();g.api.playCue=(_input,options)=>Promise.resolve().then(()=>{options?.beforeSend?.();throw new Error('超时结果不明');});
   await expect(g.service.play(request(3))).rejects.toThrow('超时');expect(g.service.status().targets[0]?.state).toBe('unknown');await g.service.stop();expect(g.service.status().targets[0]?.state).toBe('failed');
 });
 it('旧连接确认只清除指定失败记录，不发送命令、不清除当前连接的新试听',async()=>{
   const f=fixture();await f.service.play(request(1));
   const original=f.service.status().targets[0]!;
-  expect(()=>f.service.acknowledgeClosed(original.id)).toThrow('待核对');
+  expect(()=>f.service.acknowledgeClosed(original.id)).toThrow('不需要确认');
   Object.defineProperty(f.api,'connectionGeneration',{value:1});
   await f.service.stop();
   expect(f.service.status().targets[0]?.connectionChanged).toBe(true);
@@ -47,7 +47,7 @@ it('旧连接确认只清除指定失败记录，不发送命令、不清除当�
   const result=f.service.acknowledgeClosed(original.id);
   expect(f.actions).toHaveLength(count);expect(result.phase).toBe('active');
   expect(result.targets).toHaveLength(1);expect(result.targets[0]?.connectionChanged).toBe(false);
-  expect(()=>f.service.acknowledgeClosed(original.id)).toThrow('待核对');
+  expect(()=>f.service.acknowledgeClosed(original.id)).toThrow('不需要确认');
   await f.service.stop();expect(f.service.status().targets).toEqual([]);
 });
 it('切换连接先停止输出，直至切换结束拒绝新试听；停止失败保留记录并解除切换锁',async()=>{
@@ -58,7 +58,7 @@ it('切换连接先停止输出，直至切换结束拒绝新试听；停止失�
   release();await f.service.play(request(2,1));
   const send=f.api.playCue;
   f.api.playCue=()=>Promise.reject(new Error('网络已断开'));
-  await expect(f.service.beforeConnectionChange()).rejects.toThrow('停止试听未完成');
+  await expect(f.service.beforeConnectionChange()).rejects.toThrow('没能停止试听');
   expect(f.service.status().targets).toHaveLength(1);
   f.api.playCue=send;await f.service.play(request(3,2));
   expect(f.service.status().targets).toHaveLength(2);
@@ -72,7 +72,7 @@ it('Off 永不回包时按超时标记失败，停止状态一定结束，可再
     await vi.advanceTimersByTimeAsync(10000);
     const result=await stop;
     expect(result.phase).toBe('failed');expect(f.service.status().phase).toBe('failed');
-    expect(result.targets[0]?.error).toContain('未确认关闭');
+    expect(result.targets[0]?.error).toContain('还没确认关闭');
   }finally{vi.useRealTimers();}
 });
 it('状态发布失败不会把试听卡在停止中，也不会拦下关灯指令',async()=>{

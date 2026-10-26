@@ -13,9 +13,9 @@ export class Ma2AuditionService {
   private changed():void{this.revision++;this.publish(this.status());}
   /** Human acknowledgement only; never send an old target to a different connection. */
   acknowledgeClosed(targetId:string):Ma2AuditionState{
-    if(this.stopping)throw new Error('正在停止试听，请稍后核对');
+    if(this.stopping)throw new Error('正在停止试听，请稍后再看');
     const target=this.targets.get(targetId);
-    if(!target||target.epoch===this.network.connectionGeneration||target.state!=='failed'||target.pending)throw new Error('该记录不再是待核对的旧连接目标，请刷新后查看');
+    if(!target||target.epoch===this.network.connectionGeneration||target.state!=='failed'||target.pending)throw new Error('这条记录已经不需要确认了，请刷新后查看');
     this.targets.delete(targetId);
     this.phase=[...this.targets.values()].some(value=>value.state==='failed')?'failed':this.targets.size?'active':'idle';
     this.changed();return this.status();
@@ -25,7 +25,7 @@ export class Ma2AuditionService {
     this.connectionChanging=true;
     try{
       const result=await this.stop();
-      if(result.phase==='failed')throw new Error('切换连接前停止试听未完成，请在灯光工作台核对失败目标');
+      if(result.phase==='failed')throw new Error('切换连接前没能停止试听，请在灯光工作台查看没停下的目标');
       return()=>{this.connectionChanging=false;};
     }catch(error){this.connectionChanging=false;throw error;}
   }
@@ -62,7 +62,7 @@ export class Ma2AuditionService {
         // Queue every Off at once so they reach the wire back to back at stop priority.
         await Promise.all(targets.filter(value=>value.possiblySent).map(async target=>{
           try{
-            if(target.epoch!==this.network.connectionGeneration)throw new Error('控台连接已改变，原试听目标尚未确认关闭');
+            if(target.epoch!==this.network.connectionGeneration)throw new Error('控台连接变了，还没确认原来的试听已关闭');
             await this.sendOff(target);
             this.targets.delete(target.id);
           }catch(error){target.state='failed';target.error=error instanceof Error?error.message:String(error);}
@@ -74,8 +74,8 @@ export class Ma2AuditionService {
   }
   private async sendOff(target:Target):Promise<void>{
     let timer:ReturnType<typeof setTimeout>|undefined;
-    const timeout=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(`停止指令 ${offTimeoutMs/1000} 秒内未确认关闭，目标可能仍在输出；请再次停止或在控台核对`)),offTimeoutMs);});
-    try{await Promise.race([this.network.playCue({network:target.network,action:target.action,sessionId:randomUUID(),deadlineAt:Date.now()+7000},{priority:'stop',beforeSend:()=>{if(target.epoch!==this.network.connectionGeneration)throw new Error('控台连接已改变，停止未发送');}}),timeout]);}
+    const timeout=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(`停止指令发出 ${offTimeoutMs/1000} 秒后还没确认关闭，灯光可能还亮着。请再停一次，或到控台上确认`)),offTimeoutMs);});
+    try{await Promise.race([this.network.playCue({network:target.network,action:target.action,sessionId:randomUUID(),deadlineAt:Date.now()+7000},{priority:'stop',beforeSend:()=>{if(target.epoch!==this.network.connectionGeneration)throw new Error('控台连接变了，停止指令没有发送');}}),timeout]);}
     finally{clearTimeout(timer);}
   }
 }

@@ -93,7 +93,7 @@ export function ReferenceStage(props: Props): JSX.Element {
           canvasWidth={canvas.width} canvasHeight={canvas.height} onSnapGuides={setSnapGuides}
           onSelect={() => props.scenePreview && props.onSelectCue(props.scenePreview.cueId)}
           onContextMenu={(event) => event.preventDefault()}
-          onTransform={() => { throw new Error('完整 OBS 场景的画面请在 OBS 中调整'); }}
+          onTransform={() => { throw new Error('整个 OBS 场景的画面请在 OBS 里调整'); }}
         /> : null}
         {[...(props.timelineState?.layers ?? [])].reverse().map((layerState, reverseIndex) => {
           const layer = layerState.layer;
@@ -338,7 +338,7 @@ function MediaCanvasLayer(props: {
 }
 
 function StagePlaceholder(props: { itemTitle: string | null; selectedAsset: LinkMediaAsset | null }): JSX.Element {
-  return <div className="stage-placeholder"><div className="stage-safe-frame"><MonitorPlay /><strong>{props.itemTitle ?? '尚未选择节目'}</strong><span>{props.selectedAsset ? '把素材拖入参考素材轨道后，播放头经过片段即可显示' : '把本地素材或 OBS 采集画面拖到这里'}</span></div></div>;
+  return <div className="stage-placeholder"><div className="stage-safe-frame"><MonitorPlay /><strong>{props.itemTitle ?? '还没选择节目'}</strong><span>{props.selectedAsset ? '把素材拖到参考素材轨道上，播放头经过片段时就会显示' : '把本地素材或 OBS 采集画面拖到这里'}</span></div></div>;
 }
 
 type CanvasHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';

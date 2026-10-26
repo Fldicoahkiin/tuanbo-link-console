@@ -15,17 +15,17 @@ export function lightingStartCheck(project: LinkProject, itemId: string, mtc: { 
   const status = songLightingStatus(project, itemId);
   switch (status.state) {
     case 'unmatched': return null;
-    case 'editing': return `控台节目还没同步最新改动（${status.pending} 项）：带灯光播放会跑控台上的旧版本。请先同步到控台，或无灯光播放。`;
+    case 'editing': return `控台上的节目还没同步最新改动（${status.pending} 项），带灯光播放会用控台上的旧版本。请先同步到控台，或选择不带灯光播放。`;
     case 'attention': return `这首歌的灯光需要处理：${status.reasons.join('；')}`;
     case 'ready': {
       const problems: string[] = [];
       if (!mtc.portName) problems.push('没有选择时间码输出端口');
-      else if (mtc.ports && !mtc.ports.includes(mtc.portName)) problems.push(`时间码输出端口不在：${mtc.portName}`);
+      else if (mtc.ports && !mtc.ports.includes(mtc.portName)) problems.push(`找不到时间码输出端口：${mtc.portName}`);
       const prepared = nativeProgramSnapshot(project, itemId, 0, undefined, 48000);
-      if (!prepared.allowMtc) problems.push(prepared.notice ?? '本次不能发送时间码');
-      else if (prepared.snapshot.offsetMs !== status.startMs) problems.push(`起始码不一致：将发送 ${prepared.snapshot.offsetMs}ms，控台节目为 ${status.startMs}ms`);
-      if (project.timebase.frameRate !== status.frameRate) problems.push(`帧率不一致：工程 ${project.timebase.frameRate} FPS，控台节目 ${status.frameRate} FPS`);
-      return problems.length ? `这首歌可演出，但${problems.join('；')}` : null;
+      if (!prepared.allowMtc) problems.push(prepared.notice ?? '这次不能发送时间码');
+      else if (prepared.snapshot.offsetMs !== status.startMs) problems.push(`起始码不一致：将发送 ${prepared.snapshot.offsetMs} ms，控台上是 ${status.startMs} ms`);
+      if (project.timebase.frameRate !== status.frameRate) problems.push(`帧率不一致：工程是 ${project.timebase.frameRate} FPS，控台上是 ${status.frameRate} FPS`);
+      return problems.length ? `这首歌可以播放，但${problems.join('；')}` : null;
     }
   }
 }

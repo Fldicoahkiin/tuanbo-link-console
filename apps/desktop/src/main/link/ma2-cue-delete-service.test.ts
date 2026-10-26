@@ -55,5 +55,5 @@ it('stops on uncertain deletion and reports backups without replaying a command'
   vi.mocked(runMa2GuardedLua).mockRejectedValue(new Error('response timeout'));
   const context = { network:f.input.network, expectedSource:f.input.expectedSource, projectId:f.input.projectId, projectPath:f.input.projectPath };
   const result = await f.service.commit(f.connection,f.bridge,{...context,token:plan.token});
-  expect(result.error).toContain('可能已部分删除'); expect(result.backups).toHaveLength(2); expect(runMa2GuardedLua).toHaveBeenCalledTimes(1);
+  expect(result.error).toContain('可能已经删掉了一部分'); expect(result.backups).toHaveLength(2); expect(runMa2GuardedLua).toHaveBeenCalledTimes(1);
 });

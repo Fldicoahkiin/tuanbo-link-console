@@ -92,7 +92,7 @@ it('开播检查同一首歌同一类问题只问一次：重建播放器后沿�
   const rebuilt = fixture(undefined, lit, choices); await rebuilt.player.play('song');
   expect(rebuilt.dependencies.confirmWithoutLighting).not.toHaveBeenCalled();
   expect(rebuilt.api.controlNativeProgram.mock.calls[0]?.[0].operation).toEqual(withoutLighting);
-  expect(rebuilt.dependencies.notice).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^开播前检查：沿用操作员选择无灯光播放；这首歌的灯光需要处理/), 'song');
+  expect(rebuilt.dependencies.notice).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^开播前检查：按之前的选择，不带灯光播放；这首歌的灯光需要处理/), 'song');
   const declined = fixture(undefined, structuredClone(lit), new Map(choices)); declined.dependencies.confirmWithoutLighting.mockResolvedValueOnce(false);
   declined.dependencies.withoutLightingChoices.set(`${lit.projectId}\nsong`, 'editing'); await declined.player.play('song');
   expect(declined.dependencies.confirmWithoutLighting).toHaveBeenCalledOnce(); expect(declined.api.controlNativeProgram).not.toHaveBeenCalled();

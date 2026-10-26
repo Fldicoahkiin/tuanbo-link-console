@@ -153,7 +153,7 @@ describe('link project schema', () => {
     expect(() => parseLinkProject({
       ...project,
       rundown: [{ ...item, cues: [{ ...cue, layerId: undefined, durationMs: 1_000 }] }]
-    })).toThrow(/尚未分配视觉图层/);
+    })).toThrow(/还没分配视觉图层/);
     expect(() => parseLinkProject({
       ...project,
       rundown: [{
@@ -208,7 +208,7 @@ describe('link project schema', () => {
     expect(() => parseLinkProject({
       ...valid,
       rundown: [{ ...valid.rundown[0], visualLayers: [{ id: 'layer', name: '画面', visible: true, locked: false }] }]
-    })).toThrow(/尚未分配视觉图层/);
+    })).toThrow(/还没分配视觉图层/);
   });
 
   it('资源文件夹必须保持父级、素材引用和无环层级完整', () => {

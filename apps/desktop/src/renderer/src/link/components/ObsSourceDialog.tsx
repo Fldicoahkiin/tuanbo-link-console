@@ -22,7 +22,7 @@ export function ObsSourceDialog(props: Props): JSX.Element {
     try { await action(); } catch (failure) {
       const message = failure instanceof Error ? failure.message : String(failure); setError(message);
       try { await linkDesktopViewModel.recordLog({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: `添加 OBS 来源失败：${message}` }); }
-      catch (logError) { setError(`${message}；日志写入失败：${String(logError)}`); }
+      catch (logError) { setError(`${message}（日志也没有写成功：${String(logError)}）`); }
     }
     finally { setBusy(false); }
   };

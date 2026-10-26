@@ -49,7 +49,7 @@ it('旧会话、旧代数和无效准备不会关闭当前通道', async () => {
   f.host.observe({ ...f.audio(), sessionId: 'old', status: 'stopped' }, null);
   f.host.observe({ ...f.audio(), generation: 1, status: 'stopped' }, null);
   f.host.interrupt({ version: 1, sessionId: f.identity.sessionId, generation: 1, kind: 'stop' });
-  await expect(f.host.prepare(f.project, { ...f.identity, generation: 9 })).rejects.toThrow('不属于当前');
+  await expect(f.host.prepare(f.project, { ...f.identity, generation: 9 })).rejects.toThrow('不是当前要播放的这首歌');
   expect(f.host.status?.state).toBe('running'); expect(f.ports.close).not.toHaveBeenCalled(); await f.host.stop();
 });
 
@@ -59,7 +59,7 @@ it('准备未完成便播放时明确拒绝参与；晚到准备结果不会启�
   const prepared = expect(f.host.prepare(f.project, f.identity)).rejects.toThrow('取消');
   await vi.waitFor(() => expect(f.ports.prepare).toHaveBeenCalledOnce());
   f.observe({ status: 'playing', generation: 2 }); complete!(); await prepared;
-  expect(f.errors[0]).toContain('准备完成前音频已改变'); expect(f.ports.send).not.toHaveBeenCalled(); await f.host.stop();
+  expect(f.errors[0]).toContain('还没准备好音频就变了'); expect(f.ports.send).not.toHaveBeenCalled(); await f.host.stop();
 });
 
 it('新音频会话替换及停止使旧 MIDI 队列失效，不依赖界面转发', async () => {
@@ -71,7 +71,7 @@ it('新音频会话替换及停止使旧 MIDI 队列失效，不依赖界面转�
 it('主进程卡顿后迟到的设备位置：错过的动作标红记录，通道继续运行', async () => {
   const f = fixture(); await f.host.prepare(f.project, f.identity);
   f.observe({ status: 'playing', generation: 2, positionMs: 20 }, '8000000');
-  expect(f.faults).toEqual([['播放位置更新中断，错过 1 个 MIDI 动作，未补发', 'song']]);
+  expect(f.faults).toEqual([['播放位置更新中断，错过了 1 个 MIDI 动作，没有补发', 'song']]);
   expect(f.ports.send).not.toHaveBeenCalled(); expect(f.errors).toEqual([]); expect(f.host.status?.state).toBe('running');
   await f.host.stop();
 });
@@ -87,7 +87,7 @@ it('MIDI 口断开使上一首关闭失败：只报告一次，后面的歌照�
   f.ports.close.mockRejectedValueOnce(new Error('MIDI 驱动服务异常退出：3'));
   f.observe({ generation: 3 }); await f.host.prepare(f.project, { ...f.identity, generation: 3 });
   expect(f.host.status?.state).toBe('ready'); expect(f.ports.prepare).toHaveBeenCalledTimes(3);
-  expect(f.errors).toEqual(['上一首 MIDI 会话关闭失败：MIDI 驱动服务异常退出：3']);
+  expect(f.errors).toEqual(['关闭上一首的 MIDI 失败：MIDI 驱动服务异常退出：3']);
   await f.host.stop();
 });
 
@@ -122,12 +122,12 @@ it('重新打开后首个动作发送失败：继续等待同一接口并再次�
   // Seen on the dev PC: a port Windows is still creating opens, then its first message fails (error 1).
   f.ports.send.mockImplementationOnce(() => { f.unplug(1); return Promise.reject(new Error('MIDI 输出失败：Windows 错误 1')); });
   f.observe({ positionMs: 2010 }); await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(2));
-  expect(f.faults[1]?.[0]).toContain('动作 MIDI 端口重新打开后首个动作未发出（TBLINK CUE，错误码 1）');
+  expect(f.faults[1]?.[0]).toContain('动作 MIDI 端口重新打开后，第一个动作没有发出（TBLINK CUE，错误码 1）');
   f.observe({ positionMs: 2500 });
   await vi.waitFor(() => expect(f.recovered).toHaveLength(2), { timeout: 3000 });
   f.observe({ positionMs: 4010 }); await vi.waitFor(() => expect(f.ports.send).toHaveBeenCalledTimes(3));
   expect(f.ports.send).toHaveBeenLastCalledWith('out', [0xc0, 3], 1090); expect(f.faults).toHaveLength(2); expect(f.errors).toEqual([]);
-  expect(f.recovered[1]?.[0].fault).toContain('首个动作未发出');
+  expect(f.recovered[1]?.[0].fault).toContain('第一个动作没有发出');
   await f.host.stop();
 });
 

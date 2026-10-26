@@ -57,10 +57,10 @@ export class ObsMediaScenes {
       const primary = this.prepared.get(primaryName);
       if (!primary || primary.kind === 'image') throw new Error('预备解码目标不是已准备的音视频');
       const sourceName = `${primaryName}·预备`;
-      if (this.active.has(sourceName)) throw new Error('正在播放的解码器不能重新预备');
+      if (this.active.has(sourceName)) throw new Error('正在播放的素材不能重新准备');
       const settings = await this.request(() => this.client.call('GetInputSettings', { inputName: primaryName }), '读取预备素材配置');
       if (settings.inputKind !== 'ffmpeg_source' || typeof settings.inputSettings.local_file !== 'string'
-        || !includesObsMediaPath(primary.playbackPaths, settings.inputSettings.local_file)) throw new Error('预备素材配置与原来源不符');
+        || !includesObsMediaPath(primary.playbackPaths, settings.inputSettings.local_file)) throw new Error('准备的素材设置和原来源对不上');
       const playbackPath = settings.inputSettings.local_file, hardwareDecode = settings.inputSettings.hw_decode;
       if (typeof hardwareDecode !== 'boolean') throw new Error('预备素材解码配置无效');
       const items = await this.request(() => this.client.call('GetSceneItemList', { sceneName: primary.sceneName }), '读取预备素材场景');
@@ -68,10 +68,10 @@ export class ObsMediaScenes {
       let sceneItemId: number;
       if (found) {
         if (typeof found.sceneItemId !== 'number') throw new Error('预备素材场景项身份无效');
-        const existing = await this.request(() => this.client.call('GetInputSettings', { inputName: sourceName }), '核对预备素材配置');
+        const existing = await this.request(() => this.client.call('GetInputSettings', { inputName: sourceName }), '检查预备素材设置');
         const existingPath = existing.inputSettings.local_file;
         if (existing.inputKind !== settings.inputKind || typeof existingPath !== 'string'
-          || !includesObsMediaPath(primary.playbackPaths, existingPath) && !await verifyRelocatedObsMediaPath(existingPath, primary.path, primary.sha256, primary.playbackPaths)) throw new Error('预备素材名称已被其他来源占用');
+          || !includesObsMediaPath(primary.playbackPaths, existingPath) && !await verifyRelocatedObsMediaPath(existingPath, primary.path, primary.sha256, primary.playbackPaths)) throw new Error('准备用的素材名称已被其他来源占用');
         if (!sameObsMediaPath(existingPath, playbackPath) || existing.inputSettings.hw_decode !== hardwareDecode) {
           await this.request(() => this.client.call('SetInputSettings', { inputName: sourceName,
             inputSettings: { local_file: playbackPath, hw_decode: hardwareDecode,
@@ -102,7 +102,7 @@ export class ObsMediaScenes {
       const transform = await this.request(() => this.client.call('GetSceneItemTransform', { sceneName: source.sceneName, sceneItemId: source.sceneItemId }), '读取预备画面变换');
       await this.request(() => this.client.call('SetSceneItemTransform', { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemTransform: transform.sceneItemTransform }), '复制预备画面变换');
       const filters = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: from }), '读取预备画面滤镜')).filters);
-      const previous = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: to }), '核对预备画面滤镜')).filters);
+      const previous = filtersSchema.parse((await this.request(() => this.client.call('GetSourceFilterList', { sourceName: to }), '检查预备画面滤镜')).filters);
       for (const filter of previous) if (!filters.some(item => item.filterName === filter.filterName && item.filterKind === filter.filterKind)) {
         await this.request(() => this.client.call('RemoveSourceFilter', { sourceName: to, filterName: filter.filterName }), '移除过期预备滤镜');
       }
@@ -134,12 +134,12 @@ export class ObsMediaScenes {
       if (exists) {
         const items = await this.request(() => this.client.call('GetSceneItemList', { sceneName }), 'GetSceneItemList');
         const item = items.sceneItems.find((entry) => entry.sourceName === sourceName);
-        if (!item || typeof item.sceneItemId !== 'number') throw new Error(`素材场景名称被占用或来源已移除：${sceneName}`);
+        if (!item || typeof item.sceneItemId !== 'number') throw new Error(`素材场景的名称被占用，或来源已被删除：${sceneName}`);
         const settings = await this.request(() => this.client.call('GetInputSettings', { inputName: sourceName }), 'GetInputSettings');
         const existingPath = settings.inputSettings[asset.kind === 'image' ? 'file' : 'local_file'];
         if (settings.inputKind !== kind || typeof existingPath !== 'string'
           || !includesObsMediaPath(playbackPaths, existingPath) && !await verifyRelocatedObsMediaPath(existingPath, path, asset.sha256, cachePaths)) {
-          throw new Error(`素材来源与工程文件不一致，拒绝覆盖：${sourceName}。OBS 文件：${typeof existingPath === 'string' ? existingPath : '未配置有效文件'}；工程文件：${path}`);
+          throw new Error(`OBS 里的素材来源和工程文件对不上，没有覆盖：${sourceName}。OBS 里的文件：${typeof existingPath === 'string' ? existingPath : '没有设置有效文件'}；工程里的文件：${path}`);
         }
         this.prepared.set(sourceName, { path, sha256: asset.sha256, playbackPaths, sceneName, sceneItemId: item.sceneItemId, kind: asset.kind });
         if (!sameObsMediaPath(existingPath, playbackPath)) await this.request(() => this.client.call('SetInputSettings', {
@@ -154,7 +154,7 @@ export class ObsMediaScenes {
             inputName: sourceName,
             inputSettings: { restart_on_activate: false, close_when_inactive: false, looping: false, hw_decode: hardwareDecode },
             overlay: true
-          }), '关闭受管素材切场景时重播');
+          }), '关闭素材切场景时重播');
         }
         sceneItemId = item.sceneItemId;
       } else {
@@ -208,7 +208,7 @@ export class ObsMediaScenes {
         const frame = await this.request(() => this.client.call('GetSourceScreenshot', {
           sourceName: event.sourceName, imageFormat: 'png', imageWidth: 32, imageHeight: 32
         }), '预备素材画面纹理');
-        if (typeof frame.imageData !== 'string' || !frame.imageData.startsWith('data:image/png;base64,')) throw new Error('预备素材没有返回可用画面');
+        if (typeof frame.imageData !== 'string' || !frame.imageData.startsWith('data:image/png;base64,')) throw new Error('准备的素材没有返回可用画面');
       }
       this.primed.set(event.sourceName, 'ready');
     });
@@ -248,11 +248,11 @@ export class ObsMediaScenes {
     return this.run(async () => {
       const startedAt = performance.now();
       const target = this.prepared.get(event.sourceName);
-      if (!target || target.path !== path || target.sceneName !== event.sceneName) throw new Error(`素材场景尚未准备，请重新预检：${event.assetName}`);
+      if (!target || target.path !== path || target.sceneName !== event.sceneName) throw new Error(`素材场景还没准备好，请重新做开播前检查：${event.assetName}`);
       const requests: Parameters<OBSWebSocket['callBatch']>[0] = [];
       if (previousSource && previousSource !== event.sourceName) {
         const previous = this.prepared.get(previousSource);
-        if (event.phase !== 'start' || !previous || previous.sceneName !== target.sceneName || previous.path !== path) throw new Error('接续只能替换同一素材的受管解码器');
+        if (event.phase !== 'start' || !previous || previous.sceneName !== target.sceneName || previous.path !== path) throw new Error('接续只能替换同一素材的解码器');
         requests.push(
           { requestType: 'SetInputMute', requestData: { inputName: previousSource, inputMuted: true } },
           { requestType: 'SetSceneItemEnabled', requestData: { sceneName: previous.sceneName, sceneItemId: previous.sceneItemId, sceneItemEnabled: false } },
@@ -266,11 +266,11 @@ export class ObsMediaScenes {
         const continuing = wasActive && this.startedClips.get(event.sourceName) === event.clipId;
         this.active.add(event.sourceName);
         const primed = this.primed.get(event.sourceName) === 'ready'; primedStart = primed;
-        if (this.primed.has(event.sourceName) && !primed) throw new Error(`素材预热尚未完成：${event.assetName}`);
+        if (this.primed.has(event.sourceName) && !primed) throw new Error(`素材还没准备好：${event.assetName}`);
         this.primed.delete(event.sourceName);
         if (primed) {
           const status = await this.request(() => this.client.call('GetMediaInputStatus', { inputName: event.sourceName }), '检查预热素材');
-          if (status.mediaState !== 'OBS_MEDIA_STATE_PAUSED' || Math.abs(status.mediaCursor - event.sourceOffsetMs) > 100) throw new Error(`预热素材状态已变化：${event.assetName}`);
+          if (status.mediaState !== 'OBS_MEDIA_STATE_PAUSED' || Math.abs(status.mediaCursor - event.sourceOffsetMs) > 100) throw new Error(`准备的素材状态变了：${event.assetName}`);
         }
         if (event.assetKind !== 'image' && !primed && !wasActive) {
           await this.batch([
@@ -328,9 +328,9 @@ export class ObsMediaScenes {
         // machine, 2026-10-22). Seeked and primed starts were verified before
         // PLAY: the paused frame, and for a seek the moment the music reached it.
         // A decoder that OBS reset behind the music is still caught.
-        if (seekedStart && seekedStart.lateMs > 100) throw new Error(`素材起播落后音乐 ${Math.round(seekedStart.lateMs)} ms：${event.assetName} 定位解码耗时过长`);
+        if (seekedStart && seekedStart.lateMs > 100) throw new Error(`素材开始播放时比音乐晚了 ${Math.round(seekedStart.lateMs)} ms：${event.assetName} 定位解码太慢`);
         if (typeof status.mediaCursor !== 'number' || status.mediaCursor < expected - 100 || !seekedStart && !primedStart && status.mediaCursor > expected + 100) {
-          throw new Error(`切场景后素材位置不一致：${event.assetName}，按音乐应在 ${expected} ms，OBS 实际 ${status.mediaCursor ?? '未知'} ms`);
+          throw new Error(`切场景后素材位置对不上：${event.assetName}，按音乐应该在 ${expected} ms，OBS 实际在 ${status.mediaCursor ?? '未知'} ms`);
         }
       }
       if (event.phase === 'start') { this.active.add(event.sourceName); this.startedClips.set(event.sourceName, event.clipId); }
@@ -360,7 +360,7 @@ export class ObsMediaScenes {
 
   private async updateComposition(sceneName: string, layers: string[], upcoming: readonly string[] = [], output: Parameters<OBSWebSocket['callBatch']>[0] = []): Promise<void> {
       if (!sceneName.startsWith('团播联动台·叠加·') || layers.includes(sceneName)) throw new Error('叠加输出必须使用独立的联动台场景');
-      if (new Set(layers).size !== layers.length) throw new Error('同一素材或场景不能在同一时刻重复叠加，请使用独立素材');
+      if (new Set(layers).size !== layers.length) throw new Error('同一个素材或场景不能同时叠加两次，请用不同的素材');
       const signature = JSON.stringify(layers);
       if (this.compositions.get(sceneName) !== signature) {
         let items = this.compositionItems.get(sceneName);
@@ -417,7 +417,7 @@ export class ObsMediaScenes {
   async seek(event: ManagedMediaEvent, path: string, native: (name: string, position: number) => Promise<void>): Promise<void> {
     return this.run(async () => {
       const target = this.prepared.get(event.sourceName);
-      if (event.phase !== 'start' || !target || target.path !== path || target.sceneName !== event.sceneName) throw new Error('定位素材未准备或与工程不符');
+      if (event.phase !== 'start' || !target || target.path !== path || target.sceneName !== event.sceneName) throw new Error('要定位的素材还没准备好，或和工程对不上');
       await this.batch([
         ...(event.deferSceneSwitch ? [] : this.muteOtherSources(target.sceneName)),
         { requestType: 'SetSceneItemEnabled', requestData: { sceneName: target.sceneName, sceneItemId: target.sceneItemId, sceneItemEnabled: true } },
@@ -455,12 +455,12 @@ export class ObsMediaScenes {
       if (current.mediaState === 'OBS_MEDIA_STATE_ERROR') break;
       await new Promise<void>(resolve => setTimeout(resolve, 20));
     } while (performance.now() < deadline);
-    throw new Error(`素材“${event.assetName}”未能输出画面，播放已停止`);
+    throw new Error(`素材“${event.assetName}”没有画面输出，已停止播放`);
   }
 
   private async confirmSeek(event: ManagedMediaEvent, sceneItemId: number): Promise<void> {
     const deadline = performance.now() + 2000;
-    let observed = '尚无回读';
+    let observed = '还没有状态';
     do {
       const [status, frame] = await Promise.all([
         this.request(() => this.client.call('GetMediaInputStatus', { inputName: event.sourceName }), '确认素材定位位置'),
@@ -475,7 +475,7 @@ export class ObsMediaScenes {
       // The native response acknowledges a command, not the decoded frame. Only poll; never resend.
       await new Promise<void>(resolve => setTimeout(resolve, 20));
     } while (performance.now() < deadline);
-    throw new Error(`素材“${event.assetName}”未完成画面定位，目标 ${event.sourceOffsetMs}ms，最后回读：${observed}；播放已停止`);
+    throw new Error(`素材“${event.assetName}”没能定位到 ${event.sourceOffsetMs} ms，最后的状态：${observed}；已停止播放`);
   }
 
   private muteOtherSources(sceneName: string): Parameters<OBSWebSocket['callBatch']>[0] {
@@ -520,7 +520,7 @@ export class ObsMediaScenes {
     while (this.isEndTransition(state)) {
       await new Promise<void>(resolve => setTimeout(resolve, 4));
       state = await this.request(() => this.client.call('GetMediaInputStatus', { inputName }), '等待素材片尾解码状态确认');
-      if (performance.now() >= deadline) throw new Error(`素材解码状态未确认：${inputName}`);
+      if (performance.now() >= deadline) throw new Error(`没能确认素材的解码状态：${inputName}`);
     }
     return state;
   }
@@ -576,7 +576,7 @@ export class ObsMediaScenes {
         if (result.mediaState === 'OBS_MEDIA_STATE_PAUSED' && typeof actual === 'number' && actual >= target && actual <= target + 100) { cursor = actual; break; }
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
       } while (performance.now() < deadline);
-      if (cursor === null) throw new Error(`素材定位未完成：${inputName}，目标 ${target} ms，OBS 实际 ${actual ?? '未知'} ms`);
+      if (cursor === null) throw new Error(`素材没有定位到位：${inputName}，目标 ${target} ms，OBS 实际在 ${actual ?? '未知'} ms`);
     }
     const hold = cursor - aligned();
     if (hold > 0) await new Promise<void>((resolve) => setTimeout(resolve, hold));

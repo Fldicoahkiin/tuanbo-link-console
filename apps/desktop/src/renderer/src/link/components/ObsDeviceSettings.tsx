@@ -56,7 +56,7 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
         const result = await linkDesktopViewModel.connectObs();
         useIntegrationStore.getState().setObs(result);
         if (result.status === 'connected') useIntegrationStore.getState().setInventory(await linkDesktopViewModel.readObsInventory());
-        else setError('OBS 连接未完成，请检查地址、密码和 OBS 的 WebSocket 服务。');
+        else setError('没有连上 OBS，请检查地址、密码，以及 OBS 的 WebSocket 服务是否已打开。');
       }
       return true;
     } catch (failure) {
@@ -108,22 +108,22 @@ export function ObsDeviceSettings({ url, password, onUrl, onPassword, disabled, 
     <div className="settings-connection-block">
       <div className="settings-connection-summary">
         <div className={`settings-connection-symbol ${obs.status === 'connected' ? 'is-connected' : ''}`}>{obs.status === 'connected' ? <CheckCircle2 aria-hidden="true" /> : obs.status === 'error' ? <CircleAlert aria-hidden="true" /> : <Monitor aria-hidden="true" />}</div>
-        <div className="settings-connection-copy"><h2>{obs.status === 'connected' ? 'OBS 已连接' : operation === 'connecting' ? '正在连接 OBS' : 'OBS 尚未连接'}</h2><p>{obs.status === 'connected' ? '可以使用 OBS 画面与声音。' : 'OBS 装在这台电脑上，点击右侧按钮即可连接。'}</p>{obs.status === 'connected' ? <span className="settings-connection-address">{connectedAddress ?? '连接地址尚未读取'}</span> : null}</div>
+        <div className="settings-connection-copy"><h2>{obs.status === 'connected' ? 'OBS 已连接' : operation === 'connecting' ? '正在连接 OBS' : 'OBS 还没连接'}</h2><p>{obs.status === 'connected' ? '可以使用 OBS 画面与声音。' : 'OBS 装在这台电脑上的话，点右边的按钮就能连接。'}</p>{obs.status === 'connected' ? <span className="settings-connection-address">{connectedAddress ?? '还没读取连接地址'}</span> : null}</div>
         {obs.status === 'connected' ? <Button className="secondary-button" disabled={disabled || busy} onClick={() => void disconnect()}>{operation === 'disconnecting' ? '正在断开…' : '断开 OBS'}</Button> : <Button className={manualOpen ? 'secondary-button' : 'primary-button'} loading={operation === 'connecting'} disabled={disabled || busy} onClick={() => void automatic()}>{operation === 'connecting' ? '正在连接…' : '连接本机 OBS'}</Button>}
       </div>
       {saved ? <SettingsFeedback tone="success">连接配置已保存到本机。</SettingsFeedback> : null}
-      {error ? <SettingsFeedback tone="error">{error}<p>确认 OBS 已打开后重试；连接其他电脑时，请展开下方“手动连接”。</p></SettingsFeedback> : null}
+      {error ? <SettingsFeedback tone="error">{error}<p>请确认 OBS 已经打开，然后重试；要连接其他电脑上的 OBS，请展开下面的“手动连接”。</p></SettingsFeedback> : null}
     </div>
-    <div className="settings-preference-block"><SettingsSwitch label="打开联动台时，自动连接 OBS" aria-label="启动时自动连接 OBS" checked={profile?.obs.autoConnectOnLaunch !== false} disabled={disabled || busy} onChange={event => void saveAutoConnect(event.currentTarget.checked)} help="每次启动尝试连接一次；未成功时，可点击上方按钮重试。" /><div className="settings-save-feedback" role="status">{operation === 'preference' ? '正在保存…' : preferenceFeedback}</div></div>
+    <div className="settings-preference-block"><SettingsSwitch label="打开联动台时，自动连接 OBS" aria-label="启动时自动连接 OBS" checked={profile?.obs.autoConnectOnLaunch !== false} disabled={disabled || busy} onChange={event => void saveAutoConnect(event.currentTarget.checked)} help="每次启动时尝试连接一次；没连上的话，可以点上面的按钮重试。" /><div className="settings-save-feedback" role="status">{operation === 'preference' ? '正在保存…' : preferenceFeedback}</div></div>
     <SettingsDisclosure title="手动连接" description="连接另一台电脑，或自行填写地址和密码" open={manualOpen} onToggle={setManualOpen}>
       <SettingsField label="WebSocket 地址" help="本机可填 4455；连接另一台电脑时填写 IP 和端口，例如 192.168.1.10:4455。" error={addressError}>{field => <input {...field} ref={addressInput} aria-label="WebSocket 地址" placeholder="127.0.0.1:4455" value={url} disabled={disabled || busy} onChange={event => { onUrl(event.currentTarget.value); setSaved(false); setAddressError(''); }} />}</SettingsField>
-      <SettingsField label="WebSocket 密码" help="留空保留已保存的密码。密码仅保存在本机安全存储。">{field => <SettingsPassword {...field} aria-label="OBS 密码" placeholder="填写 OBS 服务器密码" value={password} disabled={disabled || busy} onChange={event => { onPassword(event.currentTarget.value); setSaved(false); }} />}</SettingsField>
+      <SettingsField label="WebSocket 密码" help="留空则沿用已保存的密码。密码只保存在这台电脑的安全存储里。">{field => <SettingsPassword {...field} aria-label="OBS 密码" placeholder="填写 OBS 服务器密码" value={password} disabled={disabled || busy} onChange={event => { onPassword(event.currentTarget.value); setSaved(false); }} />}</SettingsField>
       <SettingsActions><Button className="primary-button" loading={operation === 'connecting'} disabled={disabled || busy} onClick={() => void save(true)}>{operation === 'connecting' ? '正在连接 OBS…' : '保存并连接 OBS'}</Button>{dirty ? <Button className="secondary-button" disabled={disabled || busy} onClick={() => void save(false)}>{operation === 'saving' ? '正在保存…' : '仅保存 OBS'}</Button> : null}{dirty ? <span className="settings-note">有未保存修改</span> : null}</SettingsActions>
     </SettingsDisclosure>
     <SettingsDisclosure open={diagnosticsOpen} onToggle={setDiagnosticsOpen} description="连接成功但没有预览画面时，在这里检查和修复" title={sourceErrors.length ? `预览画面检查 · ${sourceErrors.length} 项待处理` : '预览画面检查'}>
       {sourceErrors.length ? <SettingsFeedback tone="warning"><strong>{sourceErrors.length} 个来源需要检查，其他场景可用</strong><ul>{sourceErrors.map(([name, reason]) => <li key={name}><strong>{name}</strong>：{reason}</li>)}</ul></SettingsFeedback> : null}
       <ObsPreviewSetup disabled={disabled || busy} notify={notify} beforeRepair={() => {
-        if (dirty) { setManualOpen(true); return Promise.reject(new Error('请先保存或恢复手动连接参数，再修复预览组件')); }
+        if (dirty) { setManualOpen(true); return Promise.reject(new Error('请先保存或撤销“手动连接”里的修改，再修复预览组件')); }
         return Promise.resolve();
       }} />
     </SettingsDisclosure>

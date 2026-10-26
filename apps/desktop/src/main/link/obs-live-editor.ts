@@ -26,7 +26,7 @@ export class ObsLiveEditor {
       if (scene.sceneName !== edit.sceneName) throw new Error('OBS 场景已切换，本次编辑已停止');
       const target = { sceneName: edit.sceneName, sceneItemId: edit.sceneItemId };
       const locked = await this.request(() => this.client.call('GetSceneItemLocked', target), '确认来源锁定状态');
-      if (locked.sceneItemLocked && (edit.transform || edit.enabled !== undefined)) throw new Error('OBS 来源已锁定');
+      if (locked.sceneItemLocked && (edit.transform || edit.enabled !== undefined)) throw new Error('这个 OBS 来源已锁定，请先在 OBS 里解锁');
       const transform: Record<string, number> = {};
       for (const [key, value] of Object.entries(edit.transform ?? {})) if (value !== undefined) transform[key] = value;
       if (edit.transform) await this.request(() => this.client.call('SetSceneItemTransform', { ...target, sceneItemTransform: transform }), '同步 OBS 来源变换');

@@ -48,7 +48,7 @@ export function ArchiveSettings({ disabled }: { disabled: boolean }): JSX.Elemen
     </SettingsGroup>
     <SettingsGroup title="存档位置" description="每个工程一个文件夹。恢复存档时会写回原工程位置，素材从原工程文件夹读取。">
       <p className="settings-note">{status.directory}</p>
-      <p className="settings-note">已占用 {readableSize(status.usageBytes)}，共 {status.fileCount} 个存档。只统计本软件创建的存档。</p>
+      <p className="settings-note">已占用 {readableSize(status.usageBytes)}，共 {status.fileCount} 个存档（只统计联动台创建的存档）。</p>
       <SettingsActions>
         <Button className="secondary-button" onClick={() => void run({ action: 'open-directory' })}><FolderOpen />打开文件夹</Button>
         <Button className="secondary-button" onClick={() => void run({ action: 'choose-directory' })}><FolderInput />更改位置</Button>

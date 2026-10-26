@@ -132,7 +132,7 @@ export function CueWorkspace({ workspace = 'visual', actionsHost, player, sideba
   const timelineIndex = useMemo(() => project && item ? new TimelineStateIndex(project, item) : null, [item, project]);
   const timelineState = useMemo(() => timelineIndex?.at(playheadMs) ?? null, [timelineIndex, playheadMs]);
   const scenePreviewOutput = useScenePreviewOutput(project, item?.id ?? null, playheadMs, obs.status === 'connected');
-  if (!project) return <div className="empty-panel full"><Clock3 /><h3>尚未打开工程</h3><p>新建或打开工程后即可添加素材与 OBS 目标。</p></div>;
+  if (!project) return <div className="empty-panel full"><Clock3 /><h3>还没打开工程</h3><p>新建或打开工程后，就可以添加素材和 OBS 场景、来源。</p></div>;
   const { importMedia, addAssetClip, addObsResource, moveClip, trimClip, trimCue, splitClip, duplicateClip, duplicateCue, transformClip, transformObs, moveCue, removeClip, removeCue, setClipEmbeddedAudioEnabled, refreshObs, testAction } = createWorkspaceActions({ project, projectPath, documentId, item, cue, playheadMs, coordinator, execute, notify, setSelectedCueId, setSelectedClipId, setSelectedAssetId, setSelectedObsResource });
 
   return <div className={`cue-studio${lightingWorkspace ? ' lighting-workbench' : ''}${lowPower ? ' low-power-workspace' : ''}`} data-inspector={true}>
@@ -217,7 +217,7 @@ export function CueWorkspace({ workspace = 'visual', actionsHost, player, sideba
           selectedClipId={selectedClipId} selectedCueId={selectedCueId}
           onPlayheadChange={setPlayheadMs}
           onPlayingChange={setPlaying}
-          onPlaybackError={(message) => notify(`参考播放失败：${message}`, 'error')}
+          onPlaybackError={(message) => notify(`试听失败：${message}`, 'error')}
           onSelectClip={(clipId) => { setLightingSelection(null); setSelectedClipId(clipId); setSelectedCueId(null); }}
           onSelectCue={(cueId) => {
             setLightingSelection(null);
@@ -238,7 +238,7 @@ export function CueWorkspace({ workspace = 'visual', actionsHost, player, sideba
           onDeleteLayer={(layerId) => { runCommand(removeVisualLayerCommand(item.id, layerId)); }}
           onDeleteClip={removeClip}
           onDeleteCue={removeCue}
-        /> : <div className="empty-panel studio-empty"><MonitorPlay /><h3>先选择当前节目</h3><p>随后可把本地素材或 OBS 目标拖入时间线。</p></div>}
+        /> : <div className="empty-panel studio-empty"><MonitorPlay /><h3>先选择当前节目</h3><p>然后把本地素材或 OBS 场景、来源拖到时间线上。</p></div>}
         {lightingWorkspace && item ? <LightingEffectDock itemId={item.id} onCreated={selectCreatedCue} onAuditionTemplate={audition.selectTemplate} auditionStatus={audition.enabled ? audition.status : '已关闭选中即播放'} sidebarHost={sidebarHost} key={item.id} pointDetails={pointDetails} cueSelectionVersion={cueSelectionVersion} onLibrary={() => { setAnalysisOpen(false); setLightingTool(null); setPointDetails(false); }} externalPanel={analysisOpen ? <div className="music-analysis-host" ref={setAnalysisHost} /> : lightingTool && lightingTool !== 'tempo' ? <LightingTimelineTools inline tool={lightingTool} document={lightingDocument} programName={item.title} disabled={playing || runtimeState !== 'idle'} notify={notify} onChange={changeLighting} onClose={() => setLightingTool(null)} /> : null} playbackSettings={<><label className="lighting-output-choice"><span><input type="checkbox" aria-label="选中 Cue 实时播放" checked={audition.enabled} onChange={event => audition.setEnabled(event.currentTarget.checked)} />时间线选中 Cue 试听</span><small role="status">{audition.enabled ? audition.status : '已关闭选中即播放'}</small></label></>} headerActions={<div className="lighting-header-actions"><button aria-current={lightingTool === 'files' ? 'page' : undefined} title="导入 / 导出" aria-label="导入 / 导出" onClick={() => openLightingTool('files')} disabled={playing || runtimeState !== 'idle'}><FolderInput /><span>导入与导出</span></button></div>} eventId={lightingSelection?.eventId} ms={playheadMs} durationMs={timelineReferenceAudio?.durationMs ?? 0} onNew={showCommonProperties} document={lightingDocument} disabled={false} onStamp={id => effectStamp.stamp(id, externalTransport && playing && clock?.read().ready ? clock.read().positionMs : playheadMs)} onChange={changeLighting} /> : null}
       </main>
 

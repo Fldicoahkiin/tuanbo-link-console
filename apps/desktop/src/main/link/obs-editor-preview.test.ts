@@ -14,7 +14,7 @@ describe('OBS 编辑预览心跳', () => {
     await preview.exportScript();
     const unloaded = await preview.getStatus();
     expect(unloaded.ready).toBe(false);
-    expect(unloaded.message).toContain('尚未加载');
+    expect(unloaded.message).toContain('还没加载');
     const statusPath = join(directory, '123.status.json');
     await writeFile(statusPath, JSON.stringify({ version: 1, pid: 123, error: '' }));
     expect((await preview.getStatus()).ready).toBe(true);
@@ -23,7 +23,7 @@ describe('OBS 编辑预览心跳', () => {
     await utimes(statusPath, new Date(0), new Date(0));
     const expired = await preview.getStatus();
     expect(expired.ready).toBe(false);
-    expect(expired.message).toContain('未运行');
+    expect(expired.message).toContain('没有运行');
     await writeFile(statusPath, JSON.stringify({ version: 1, pid: 456, error: '' }));
     expect((await preview.getStatus()).ready).toBe(false);
   });

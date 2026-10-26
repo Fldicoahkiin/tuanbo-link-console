@@ -33,7 +33,7 @@ async function readLimitedObsCommandLine(identity: LocalObsIdentity, identityHel
     throw new Error(`无法读取以管理员身份运行的 OBS（PID ${identity.pid}）的启动参数${found && 'error' in found ? `（Windows 错误 ${found.error}）` : ''}。请确认 OBS 仍在运行并由当前 Windows 账户打开，或改用下方手动连接。`);
   }
   if (resolve(found.path).toLowerCase() !== resolve(identity.executablePath).toLowerCase()
-    || BigInt(found.creationTime) !== fileTimeOf(identity.startTime)) throw new Error('OBS 进程已变化（可能刚刚重新打开），请重新点一键连接');
+    || BigInt(found.creationTime) !== fileTimeOf(identity.startTime)) throw new Error('OBS 好像刚重新打开过，请重新点“一键连接”');
   if (found.commandLine === null) throw new Error('Windows 没有提供以管理员身份运行的 OBS 的启动参数（需要 Windows 10 或更新版本）。请改用下方手动连接，或用普通方式打开 OBS 后再点一键连接。');
   return found.commandLine;
 }
@@ -45,18 +45,18 @@ export async function prepareLocalObsConnection(options: {
   const portable = /(?:^|\s)(?:--portable|-p)(?:\s|$)/.test(options.commandLine)
     || (!options.running && options.obs.arguments.some(argument => argument === '--portable' || argument === '-p'))
     || await exists(join(root, 'portable_mode')) || await exists(join(root, 'obs_portable_mode'));
-  if (/--websocket[_-]/.test(options.commandLine)) throw new Error('该 OBS 使用了命令行连接参数覆盖，请使用下方手动连接核对目标；软件不会猜测密码或修改正在运行的实例');
+  if (/--websocket[_-]/.test(options.commandLine)) throw new Error('这个 OBS 用命令行参数改了连接设置，请用下方的手动连接；联动台不会猜密码，也不会改动正在运行的 OBS');
   const directory = portable ? join(root, 'config/obs-studio') : join(options.roamingDirectory, 'obs-studio');
   const configurationPath = join(directory, 'plugin_config/obs-websocket/config.json');
   let original: string | null = null;
   try { original = await readFile(configurationPath, 'utf8'); }
   catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
-  if (original === null && options.running) throw new Error('当前 OBS 的连接配置尚未生成，请正常退出 OBS 后再点一键连接，软件会自动配置并启动');
+  if (original === null && options.running) throw new Error('当前 OBS 还没生成连接设置。请正常退出 OBS 后再点“一键连接”，联动台会自动设置并启动它');
   let settings: z.infer<typeof settingsSchema>;
   try { settings = settingsSchema.parse(original === null ? {} : JSON.parse(original.replace(/^\uFEFF/, ''))); }
-  catch (error) { throw new Error('OBS 连接配置损坏或格式不受支持；原文件未修改', { cause: error }); }
+  catch (error) { throw new Error('OBS 的连接设置文件损坏或格式不支持，原文件没有改动', { cause: error }); }
   const needsPreparation = !settings.server_enabled || (settings.auth_required && settings.server_password === '');
-  if (needsPreparation && options.running) throw new Error('当前 OBS 尚未启用连接服务，请正常退出 OBS 后再点一键连接，软件会自动启用；不会关闭正在运行的 OBS');
+  if (needsPreparation && options.running) throw new Error('当前 OBS 还没开启连接服务。请正常退出 OBS 后再点“一键连接”，联动台会自动开启（不会关闭正在运行的 OBS）');
   if (needsPreparation) {
     settings.server_enabled = true;
     if (settings.auth_required && !settings.server_password) settings.server_password = randomBytes(24).toString('hex');

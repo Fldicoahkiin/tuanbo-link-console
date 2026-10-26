@@ -72,5 +72,5 @@ it('时间线扫描只按真实对象完成数推进，目录复核后才到终�
   const request = vi.fn<Ma2OnpcBridge['request']>().mockResolvedValueOnce(JSON.stringify(directory)).mockResolvedValueOnce(tc).mockResolvedValueOnce(tc).mockResolvedValueOnce(JSON.stringify(directory));
   await readMa2Catalog({ request }, () => false, inspectMa2SequenceXml(snapshot), update => progress.push(update));
   expect(progress.map(value => [value.completed, value.total])).toEqual([[0, 2], [1, 2], [1, 2], [2, 2]]);
-  expect(progress.at(-1)?.detail).toBe('时间线目录已核对');
+  expect(progress.at(-1)?.detail).toBe('时间线目录检查完毕');
 });

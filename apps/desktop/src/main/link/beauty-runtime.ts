@@ -18,7 +18,7 @@ const packetSchema = z.union([
     bodies: z.number().int().min(0).max(6), body_accepted: z.number().int().nonnegative(), body_age_ms: z.number().nonnegative(), body_status: z.number().int().min(0).max(4) }).strict().refine(packet => packet.faces + packet.profiles <= 6, '面部总数超出限制')
 ]);
 const trackingMessage = (faces: number, profiles: number, bodies: number): string => `面部精修 ${faces} 人${profiles ? ` · 仅磨皮/美白 ${profiles} 人` : ''} · 美体 ${bodies} 人`;
-const initial = (): BeautyRuntimeState => ({ phase: 'idle', sourceName: null, filterName: null, faces: 0, message: '尚未启动美颜' });
+const initial = (): BeautyRuntimeState => ({ phase: 'idle', sourceName: null, filterName: null, faces: 0, message: '美颜还没启动' });
 
 export class BeautyRuntime {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -41,10 +41,10 @@ export class BeautyRuntime {
       const bodies = now <= this.accepted.bodyUntil ? this.accepted.bodies : 0;
       return faces || profiles || bodies
         ? { ...this.state, faces, message: trackingMessage(faces, profiles, bodies) }
-        : { ...this.state, phase: 'waiting', faces: 0, message: '已确认结果超过时效，正在等待新的 OBS 接收确认' };
+        : { ...this.state, phase: 'waiting', faces: 0, message: '上次的结果已过期，正在等待 OBS 确认新的结果' };
     }
     if ((this.state.phase === 'tracking' || this.state.phase === 'waiting') && Date.now() - this.updated > 1500) {
-      return { ...this.state, phase: 'waiting', faces: 0, message: '未收到新画面，请确认来源可见；过期美颜已失效' };
+      return { ...this.state, phase: 'waiting', faces: 0, message: '没有收到新画面，请确认来源可见；过期的美颜效果已停用' };
     }
     return this.state;
   }
@@ -76,7 +76,7 @@ export class BeautyRuntime {
       const instanceDirectory = join(this.root, 'rtmdet-ins-tiny');
       await access(executable); await access(model); await access(bodyModel); await access(proposalModel); await access(semanticModel);
       await access(join(instanceDirectory, 'raw-heads.onnx')); await mkdir(this.reports, { recursive: true });
-      this.publish({ phase: 'starting', sourceName, filterName: null, faces: 0, message: '正在准备来源与分析引擎' });
+      this.publish({ phase: 'starting', sourceName, filterName: null, faces: 0, message: '正在准备来源和美颜分析' });
       const target = await this.beauty.prepare(sourceName);
       const child = spawn(executable, ['--channel', target.channel, '--model', model, '--body-model', bodyModel, '--body-on-demand',
         '--proposal-model', proposalModel, '--proposal-backend', 'directml', '--semantic-model', semanticModel,
@@ -91,7 +91,7 @@ export class BeautyRuntime {
         this.publish({ ...this.state, phase: 'error', faces: 0, message });
         child.stdin.end();
       };
-      const startup = setTimeout(() => fail('分析引擎启动超时，请检查运行日志后手动启动'), 15000);
+      const startup = setTimeout(() => fail('美颜分析启动超时，请查看运行日志后手动启动'), 15000);
       child.stdin.on('error', error => { if (!this.stopping && !failed) fail(`分析引擎控制通道异常：${error.message}`); });
       child.stderr.on('data', (chunk: Buffer) => { stderr = (stderr + stderrDecoder.write(chunk)).slice(-8000); });
       child.stdout.on('data', (chunk: Buffer) => {
@@ -105,11 +105,11 @@ export class BeautyRuntime {
             const packet = packetSchema.parse(JSON.parse(line));
             if ('started' in packet) {
               if (started) throw new Error('重复的启动确认');
-              started = true; clearTimeout(startup); this.publish({ phase: 'waiting', sourceName, filterName: target.filterName, faces: 0, message: '引擎已启动，等待画面中的人像' });
+              started = true; clearTimeout(startup); this.publish({ phase: 'waiting', sourceName, filterName: target.filterName, faces: 0, message: '已启动，等待画面里出现人像' });
             }
-            else if (!started) throw new Error('尚未确认启动便收到分析结果');
+            else if (!started) throw new Error('还没确认启动就收到了分析结果');
             else if ('ready' in packet) { /* Detection alone is not proof that OBS accepted it. */ }
-            else if ('frames' in packet) { throw new Error('分析引擎在未请求停止时结束会话'); }
+            else if ('frames' in packet) { throw new Error('美颜分析意外停止了'); }
             else {
               const frameFresh = packet.sequence > 0 && packet.age_ms <= 1500;
               const faceAccepted = frameFresh && packet.face_status === 1 && packet.accepted > 0 && packet.sequence >= packet.accepted && packet.sequence - packet.accepted < 32 && packet.accepted_age_ms !== null && packet.accepted_age_ms <= 250;
@@ -121,8 +121,8 @@ export class BeautyRuntime {
               this.accepted = { faceUntil: faceAccepted && packet.accepted_age_ms !== null ? observed + 250 - packet.accepted_age_ms : 0,
                 bodyUntil: bodyReady && packet.body_accepted_age_ms !== null ? observed + 250 - packet.body_accepted_age_ms : 0,
                 faces, profiles, bodies: bodyReady ? packet.bodies : 0 };
-              const message = !frameFresh ? 'OBS 美颜分析画面已停更，请检查当前场景和美颜滤镜；过期结果不参与输出'
-                : active ? trackingMessage(faces, profiles, bodyReady ? packet.bodies : 0) : '等待清晰可见的人脸或身体；无有效结果的部位保持原画面';
+              const message = !frameFresh ? 'OBS 的美颜分析画面不再更新，请检查当前场景和美颜滤镜；过期的结果不会用到画面上'
+                : active ? trackingMessage(faces, profiles, bodyReady ? packet.bodies : 0) : '等待画面里出现清晰的人脸或身体；没识别到的部位保持原样';
               if (!frameFresh && this.state.message !== message) this.log(`${sourceName}：${message}（画面年龄 ${Math.round(packet.age_ms)}ms）`);
               this.publish({ phase: active ? 'tracking' : 'waiting', sourceName, filterName: target.filterName, faces, message });
             }
@@ -152,7 +152,7 @@ export class BeautyRuntime {
     this.busy = true; this.stopping = true; this.child.stdin.end();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([this.exit, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('美颜引擎未正常退出，保留进程；未强杀')), 8000); })]);
+      await Promise.race([this.exit, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('美颜引擎没有正常退出，进程保留，没有强制结束')), 8000); })]);
       this.publish(initial());
     } catch (error) { this.publish({ ...this.state, phase: 'error', message: String(error) }); throw error; }
     finally { clearTimeout(timer); this.busy = false; }

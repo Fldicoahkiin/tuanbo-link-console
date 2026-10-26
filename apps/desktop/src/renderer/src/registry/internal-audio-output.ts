@@ -34,15 +34,15 @@ export class InternalAudioOutput {
       this.analysis = { fftSize: spectrum.fftSize, frequencyBinCount: spectrum.frequencyBinCount, sampleRate: this.context.sampleRate,
         readSpectrum: values => spectrum.getByteFrequencyData(values), readPeaks: () => [peak(left), peak(right)] };
     }
-    if (this.context.sampleRate !== sampleRate) throw new Error(`音频引擎采样率不匹配：需要 ${sampleRate} Hz，实际 ${this.context.sampleRate} Hz，请停止后重新播放`);
+    if (this.context.sampleRate !== sampleRate) throw new Error(`音频采样率不匹配（需要 ${sampleRate} Hz，实际 ${this.context.sampleRate} Hz），请停止后重新播放`);
     const context = this.context as AudioContext & { setSinkId?: (id: string) => Promise<void> };
-    if (!context.setSinkId) throw new Error('当前音频引擎不支持选择输出线路');
+    if (!context.setSinkId) throw new Error('当前环境不支持选择音频输出设备');
     try { await context.setSinkId(deviceId === 'default' ? '' : deviceId); }
     catch (error) {
       // Like the native engine, never move the formal music to another line on its own.
       if (error instanceof Error && (error.name === 'NotFoundError' || /device .* is not found/i.test(error.message))) {
         throw new Error(deviceId === 'default' ? 'Windows 默认音频输出设备不可用，请检查系统声音设置'
-          : '选择的正式音频输出已断开；不会自动切换线路。请在音频输出设置中选择当前设备或 Windows 默认设备后重新播放');
+          : '选择的音频输出设备已断开，不会自动换到其他设备。请在音频输出设置里重新选择设备（或 Windows 默认设备）后再播放');
       }
       throw error;
     }

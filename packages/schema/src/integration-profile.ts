@@ -71,25 +71,25 @@ export const integrationProfileSchema = z.object({
   const ids = new Set<string>();
   for (const [index, port] of profile.midiPortProfiles.entries()) {
     if (ids.has(port.id)) {
-      ctx.addIssue({ code: 'custom', message: `MIDI 端口档案 ID 重复：${port.id}`, path: ['midiPortProfiles', index, 'id'] });
+      ctx.addIssue({ code: 'custom', message: `MIDI 端口设置 ID 重复：${port.id}`, path: ['midiPortProfiles', index, 'id'] });
     }
     ids.add(port.id);
   }
   const input = profile.midiPortProfiles.find((port) => port.id === profile.p1.mtcInputPortProfileId);
   if (input?.direction !== 'input') {
-    ctx.addIssue({ code: 'custom', message: 'P1 MTC 输入端口档案不存在或方向错误', path: ['p1', 'mtcInputPortProfileId'] });
+    ctx.addIssue({ code: 'custom', message: 'P1 MTC 输入端口设置不存在或方向不对', path: ['p1', 'mtcInputPortProfileId'] });
   }
   const output = profile.midiPortProfiles.find((port) => port.id === profile.p1.controlOutputPortProfileId);
   const internalOutputId = profile.internalPlayer?.mtcOutputPortProfileId;
   const controlInputId = profile.internalPlayer?.controlInputPortProfileId;
   if (controlInputId && profile.midiPortProfiles.find((port) => port.id === controlInputId)?.direction !== 'input') {
-    ctx.addIssue({ code: 'custom', message: '播放控制 MIDI 输入端口不存在或方向错误', path: ['internalPlayer', 'controlInputPortProfileId'] });
+    ctx.addIssue({ code: 'custom', message: '播放控制的 MIDI 输入端口不存在或方向不对', path: ['internalPlayer', 'controlInputPortProfileId'] });
   }
   if (internalOutputId && profile.midiPortProfiles.find((port) => port.id === internalOutputId)?.direction !== 'output') {
-    ctx.addIssue({ code: 'custom', message: '内部主控时间码输出端口档案不存在或方向错误', path: ['internalPlayer', 'mtcOutputPortProfileId'] });
+    ctx.addIssue({ code: 'custom', message: '时间码输出端口设置不存在或方向不对', path: ['internalPlayer', 'mtcOutputPortProfileId'] });
   }
   if (output?.direction !== 'output') {
-    ctx.addIssue({ code: 'custom', message: 'P1 控制输出端口档案不存在或方向错误', path: ['p1', 'controlOutputPortProfileId'] });
+    ctx.addIssue({ code: 'custom', message: 'P1 控制输出端口设置不存在或方向不对', path: ['p1', 'controlOutputPortProfileId'] });
   }
 });
 

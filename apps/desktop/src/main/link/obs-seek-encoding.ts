@@ -9,7 +9,7 @@ import { ffmpegDeadline } from './ffmpeg-deadline';
 // last picture, beyond the original asset duration; timeline bounds and audio
 // remain those of the original. Higher bit depths / alpha keep FFV1.
 export function obsSeekEncoding(pixelFormat: string, decode: 'hardware' | 'software' = 'hardware'): string[] {
-  if (!pixelFormat || /[^a-z0-9]/.test(pixelFormat)) throw new Error('无法识别素材像素格式，未生成定位缓存');
+  if (!pixelFormat || /[^a-z0-9]/.test(pixelFormat)) throw new Error('无法识别素材的像素格式，没有生成画面缓存');
   // Neither encoder accepts packed 8-bit RGB such as QuickTime Animation's
   // argb. Reorder to a layout holding identical samples: alpha goes to FFV1
   // bgra (gbrap conversion rounds alpha by one), opaque RGB to planar gbrp.

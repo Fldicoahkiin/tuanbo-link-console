@@ -11,6 +11,6 @@ export async function archiveMa2Project(documentId: number, project: LinkProject
   if (useDocumentStore.getState().documentId !== documentId) throw new Error('工程已切换，存档已取消');
   const result = await linkDesktopViewModel.projectArchives({ version: 1, action: 'create', projectPath: state.path, content, reason });
   if (result.disabled) return null;
-  if (!result.createdPath) throw new Error('存档未确认，尚未写入控台');
+  if (!result.createdPath) throw new Error('存档没有确认，还没写入控台');
   return result.createdPath;
 }

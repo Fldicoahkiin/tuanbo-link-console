@@ -12,11 +12,11 @@ export function LightingEffectCombination({ document, ids, onChange, onClose }: 
       if (!first || !name.trim()) throw new Error('请填写组合名称');
       const members = effects.flatMap(effect => {
         const binding = effect.track.cueStamp;
-        if (binding?.mode !== 'fixed') throw new Error('效果尚未绑定 Cue');
+        if (binding?.mode !== 'fixed') throw new Error('效果还没关联 Cue');
         return effect.members?.map(member => ({ ...member, delayMs: member.delayMs + (delays[effect.id] ?? 0) })) ?? [{ name: effect.name, sequence: binding.sequence, cue: binding.cue, executor: binding.executor, delayMs: delays[effect.id] ?? 0 }];
       });
       if (new Set(members.map(member => `${member.executor || `sequence:${member.sequence}`}/${member.delayMs}`)).size !== members.length) throw new Error('同一序列或执行器不能在同一时刻调用多个 Cue，请调整延迟');
-      if (!members.some(member => member.delayMs === 0)) throw new Error('至少一个效果应在 0 秒开始');
+      if (!members.some(member => member.delayMs === 0)) throw new Error('至少要有一个效果从 0 秒开始');
       onChange(lightingDocumentSchema.parse({ ...document, templates: [...document.templates, { id: crypto.randomUUID(), name: name.trim(), track: { ...first.track, id: crypto.randomUUID(), name: name.trim() }, categories: [...new Set(effects.flatMap(effect => effect.categories ?? []))], members }] }), '保存组合效果');
       onClose();
     } catch (cause) { setError(String(cause)); }

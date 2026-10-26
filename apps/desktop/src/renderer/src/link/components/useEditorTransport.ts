@@ -67,12 +67,12 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
     seekQueue.current.push(target);
   };
   const setPlaying = (next: boolean): void => {
-    if (next && !external && !localAudioReady) { notify('当前音频尚未就绪，请检查文件是否存在并等待音频加载完成', 'error'); return; }
-    if (next && useMa2AutoSyncStore.getState().status === 'writing') { notify('MA2 正在同步并回读，请完成后播放', 'error'); return; }
+    if (next && !external && !localAudioReady) { notify('音频还没准备好，请确认文件还在，并等它加载完成', 'error'); return; }
+    if (next && useMa2AutoSyncStore.getState().status === 'writing') { notify('MA2 正在同步，请等同步完成后再播放', 'error'); return; }
     if (seekQueue.current) { resumeAfterSeek.current = next; return; }
     if (!external) { useMa2AutoSyncStore.setState({ previewPlaying: next }); setLocalPlaying(next); return; }
     const controller = player.controller;
-    if (!controller || !itemId) { if (next) notify('播放器尚未就绪，请稍后再试', 'error'); return; }
+    if (!controller || !itemId) { if (next) notify('播放器还没准备好，请稍后再试', 'error'); return; }
     if (!next) { if (active && player.state.status === 'playing') void controller.pause().catch(report); return; }
     if (player.state.status === 'preparing') return;
     if (active && player.state.status === 'paused') void controller.resume().catch(report);
@@ -85,7 +85,7 @@ export function useEditorTransport(player: ProjectPlayer, itemId: string | null,
   const stop = (): void => { reset(); previewCoordinator?.cancelEditorPreview(); if (external) void player.controller?.stop().catch(report); };
   const stopForEdit = async (): Promise<void> => {
     if (!external || player.state.status !== 'paused') return;
-    if (seekQueue.current) throw new Error('正在定位，请完成后编辑音频');
+    if (seekQueue.current) throw new Error('正在定位，请等定位完成后再编辑音频');
     cursorRef.current = playheadMs; setCursor(playheadMs);
     await player.controller?.stop();
   };

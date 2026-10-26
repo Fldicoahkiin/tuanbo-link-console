@@ -49,7 +49,7 @@ export class NativeProgramHost {
     this.controller = new NativeProgramPlayer(project, path, revision, {
       prepare: async (itemId, positionMs, { signal }) => {
         const audio = dependencies.audio();
-        if (!audio || audio.itemId !== itemId || audio.positionMs !== positionMs) throw new Error('MIDI 准备起点与当前音频不一致');
+        if (!audio || audio.itemId !== itemId || audio.positionMs !== positionMs) throw new Error('MIDI 准备的起点和当前音频对不上');
         const cancelled = () => { void this.midi.stop().catch(cleanup => error(`取消 MIDI 准备失败：${String(cleanup)}`)); };
         if (signal?.aborted) throw new Error('MIDI 准备已取消');
         signal?.addEventListener('abort', cancelled, { once: true });
@@ -72,7 +72,7 @@ export class NativeProgramHost {
     }, {
       prepare: async (document, profile, positionMs) => {
         const audio = dependencies.audio();
-        if (!audio || !['ready', 'paused'].includes(audio.status) || audio.positionMs !== positionMs) throw new Error('灯光准备不属于当前待播放音频');
+        if (!audio || !['ready', 'paused'].includes(audio.status) || audio.positionMs !== positionMs) throw new Error('灯光准备的不是当前要播放的这首歌');
         const session = { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId, ready: false };
         this.lightingSession = session;
         await this.lighting.prepare(document, profile, positionMs);
@@ -95,7 +95,7 @@ export class NativeProgramHost {
       lighting.generation = status.generation;
       if (status.audioError || ['stopped', 'error', 'preparing'].includes(status.status)) this.stopLighting();
       else if (!lighting.ready && status.status === 'playing') {
-        this.controller.reportUnavailable('灯光准备未赶上音频开始；本轮不参与，不中途补发'); this.stopLighting();
+        this.controller.reportUnavailable('灯光没赶上音频开始，这一首不发灯光，也不会中途补发'); this.stopLighting();
       } else if (qpc100ns && qpc100ns !== '0' && lighting.ready) {
         this.lighting.observe(status.positionMs, Number(qpc100ns) / 10000);
         if (status.status === 'playing') {

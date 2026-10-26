@@ -97,7 +97,7 @@ describe('saveDocument', () => {
     await vi.waitFor(() => expect(bridge.saveProjectDocument).toHaveBeenCalled());
     open('C:\\shows\\其他.tblink'); useDocumentStore.getState().execute(renameProjectCommand('其他'));
     finish('C:\\shows\\保存.tblink');
-    expect(await saving).toEqual({ status: 'failed', message: '工程保存失败：保存期间已切换到其他工程，当前工程未保存' });
+    expect(await saving).toEqual({ status: 'failed', message: '工程保存失败：保存过程中切换了工程，这次没有保存' });
     expect(useDocumentStore.getState()).toMatchObject({ path: 'C:\\shows\\其他.tblink', dirty: true });
   });
 });
@@ -132,7 +132,7 @@ describe('requireProjectLocation', () => {
 
   it('后台任务不弹框：未命名工程直接报“工程未保存”', () => {
     open(null);
-    expect(() => requireSavedProjectPath('同步控台')).toThrow('工程未保存：请先保存工程，再同步控台');
+    expect(() => requireSavedProjectPath('同步控台')).toThrow('请先保存工程，再同步控台');
     open('C:\\shows\\a.tblink');
     expect(requireSavedProjectPath('同步控台')).toBe('C:\\shows\\a.tblink');
   });
@@ -163,7 +163,7 @@ describe('revertToSaved', () => {
 
   it('未命名工程没有可恢复的版本', async () => {
     open(null);
-    await expect(revertToSaved()).rejects.toThrow('没有可恢复的版本');
+    await expect(revertToSaved()).rejects.toThrow('没有可以恢复的版本');
   });
 });
 
@@ -189,12 +189,12 @@ describe('saveDocumentWithRecovery', () => {
   });
 
   it('界面端工程处理失效：确认后重启它再保存；拒绝则保留失败', async () => {
-    bridge.encode.mockRejectedValueOnce(new Error('工程处理超过 30 秒；原文件未改变'));
-    bridge.codecFailure.mockReturnValue('工程处理超过 30 秒；原文件未改变');
+    bridge.encode.mockRejectedValueOnce(new Error('工程处理超过 30 秒还没完成。原文件没有改动'));
+    bridge.codecFailure.mockReturnValue('工程处理超过 30 秒还没完成。原文件没有改动');
     bridge.restartWorker.mockResolvedValueOnce(false);
     expect((await saveDocumentWithRecovery()).status).toBe('failed');
     expect(bridge.codecRestart).not.toHaveBeenCalled();
-    bridge.encode.mockRejectedValueOnce(new Error('工程处理超过 30 秒；原文件未改变'));
+    bridge.encode.mockRejectedValueOnce(new Error('工程处理超过 30 秒还没完成。原文件没有改动'));
     bridge.restartWorker.mockResolvedValueOnce(true);
     bridge.saveProjectDocument.mockResolvedValue('C:\\shows\\保存.tblink');
     expect((await saveDocumentWithRecovery()).status).toBe('saved');

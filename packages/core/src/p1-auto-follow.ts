@@ -4,7 +4,7 @@ import { nextMtcStartMs } from './mtc-start';
 
 /** P1 emits its own offset MTC; no local clock generates playback position. */
 export function allocateP1TimecodeRanges(project: LinkProject): NonNullable<LinkProject['p1AutoFollow']> {
-  if (project.timebase.frameRate === '29.97df') throw new Error('P1 自动选歌暂支持 24、25、30 fps；请使用实测的 30 fps');
+  if (project.timebase.frameRate === '29.97df') throw new Error('P1 自动选歌目前只支持 24、25、30 fps，建议用实测过的 30 fps');
   // The same allocator as songs synced to the console: each song from the first whole minute at
   // least ten seconds after the one before. Real P1 captures verified hours 1 and 15; hour 16 loses
   // the high hour bit, so the whole layout stays below 15 hours.
@@ -28,16 +28,16 @@ export function validateP1TimecodeRanges(project: LinkProject): void {
   for (const range of [...config.ranges].sort((a, b) => a.startSeconds - b.startSeconds)) {
     const item = project.rundown.find((candidate) => candidate.id === range.itemId);
     if (!item?.referenceAudio || item.referenceAudio.durationMs !== range.durationMs || ids.has(range.itemId)) {
-      throw new Error('P1 自动映射已过期，请重新生成点击播放联动工程');
+      throw new Error('P1 自动联动的对应关系已过期，请重新生成点歌联动工程');
     }
     if (range.startSeconds < end || range.startSeconds + range.durationMs / 1000 + 1 >= 54_000) {
-      throw new Error('P1 自动映射区间重叠或超出已验证范围');
+      throw new Error('P1 自动联动的时间区间重叠或超出范围');
     }
     ids.add(range.itemId);
     end = range.startSeconds + range.durationMs / 1000 + 1;
   }
   if (project.rundown.some((item) => item.referenceAudio && !ids.has(item.id))) {
-    throw new Error('新增歌曲尚未同步到 P1，请重新生成点击播放联动工程');
+    throw new Error('新加的歌还没同步到 P1，请重新生成点歌联动工程');
   }
 }
 

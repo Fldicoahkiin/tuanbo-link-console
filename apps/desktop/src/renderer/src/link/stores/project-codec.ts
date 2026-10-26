@@ -28,12 +28,12 @@ class ProjectCodec {
   failureReason(): string | null { return this.failure?.message ?? null; }
   /** After the operator confirms: the failed worker is already gone; the next request starts a new one. */
   restart(): void {
-    if (!this.failure) throw new Error('工程处理线程运行正常，无需重启');
+    if (!this.failure) throw new Error('工程处理正常，不需要重启');
     this.failure = null;
   }
   private request(payload: { kind: 'decode'; content: string } | { kind: 'encode'; project: LinkProject }): Promise<ProjectCodecResponse> {
     if (this.failure) return Promise.reject(this.failure);
-    if (this.pending.size >= 4) return Promise.reject(new Error('工程处理队列已满；此次操作未入队，请待当前任务结束后重试'));
+    if (this.pending.size >= 4) return Promise.reject(new Error('工程处理任务太多，这次操作没有执行，请等当前任务完成后重试'));
     if (!this.worker) {
       this.worker = new Worker(new URL('./project-codec-worker.ts', import.meta.url), { type: 'module' });
       this.worker.onmessage = event => {
@@ -44,12 +44,12 @@ class ProjectCodec {
           if (result.kind === 'error') pending.reject(new Error(result.message)); else pending.resolve(result);
         } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); }
       };
-      this.worker.onerror = event => this.fail(new Error(`工程处理线程失效：${event.message}`));
-      this.worker.onmessageerror = () => this.fail(new Error('工程处理结果无法传输'));
+      this.worker.onerror = event => this.fail(new Error(`工程处理出错：${event.message}`));
+      this.worker.onmessageerror = () => this.fail(new Error('工程处理结果无法返回'));
     }
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒；原文件未改变，可在提示中重启工程处理后重试')), 30000);
+      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒还没完成。原文件没有改动，可以在提示里重启工程处理后重试')), 30000);
       this.pending.set(id, { resolve, reject, timer });
       try { this.worker!.postMessage({ version: 1, id, ...payload }); }
       catch (error) { this.pending.delete(id); clearTimeout(timer); reject(error instanceof Error ? error : new Error(String(error))); }

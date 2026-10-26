@@ -8,7 +8,7 @@ export function appendMa2MasterSubtracks(xml: string, target: number, trackPaths
   const timecode = report.timecodes[0];
   if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('推杆子轨道目标与 Timecode 不一致');
   if (!trackPaths.length) return { xml, paths: new Map() };
-  if (report.version !== '3.3.4') throw new Error('该 MA2 版本的 Master 子轨道尚未验证');
+  if (report.version !== '3.3.4') throw new Error('这个 MA2 版本的 Master 子轨道还没验证过');
   const available = new Map(timecode.tracks.map((track) => [`Timecode:${timecode.index}/Track:${track.index}`, track]));
   if (new Set(trackPaths).size !== trackPaths.length || trackPaths.some((path) => !available.has(path))) throw new Error('推杆子轨道的目标轨道不存在或重复');
   if (trackPaths.some((path) => available.get(path)!.subtracks.some((subtrack) => subtrack.attributes.fader_command === 'Master'))) throw new Error('目标轨道已有 Master 子轨道');
@@ -35,7 +35,7 @@ export function appendMa2Tracks(xml: string, target: number, additions: readonly
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
   if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('轨道新增目标与 Timecode 不一致');
-  if (!['3.3.4', '3.7.0'].includes(report.version)) throw new Error('该 MA2 轨道格式尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(report.version)) throw new Error('这个 MA2 轨道格式还没验证过');
   for (const track of additions) {
     if (!/^[1-9]\d{0,4}\.[1-9]\d{0,4}$/.test(track.executor)) throw new Error('新增轨道需要明确的执行器页码和编号');
     if (!track.executorName.trim() || track.executorName.length > 512 || /[\u0000-\u001f]/.test(track.executorName)) throw new Error('新增轨道的执行器名称无效');
@@ -75,7 +75,7 @@ export function removeMa2Tracks(xml: string, target: number, paths: readonly str
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
   if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('轨道删除目标与 Timecode 不一致');
-  if (!['3.3.4', '3.7.0'].includes(report.version)) throw new Error('该 MA2 轨道格式尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(report.version)) throw new Error('这个 MA2 轨道格式还没验证过');
   const prefix = `Timecode:${timecode.index}/Track:`;
   const available = new Set(timecode.tracks.map((track) => `${prefix}${track.index}`));
   if (new Set(paths).size !== paths.length || paths.some((path) => !available.has(path))) throw new Error('轨道删除路径不存在或重复');

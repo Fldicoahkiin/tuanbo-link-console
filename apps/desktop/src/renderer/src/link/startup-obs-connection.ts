@@ -20,19 +20,19 @@ export function initializeStartupDevices(
     const message = `${label}：${toUserErrorMessage(error)}`;
     void linkDesktopViewModel.recordLog({ level: 'warning', category: 'device', device, message }).catch(console.error);
   };
-  void prepareLoopMidi(profile).catch(error => warn('midi', '启动时虚拟 MIDI 未就绪', error));
+  void prepareLoopMidi(profile).catch(error => warn('midi', '启动时虚拟 MIDI 还没准备好', error));
   if (chosenAudioEngine(profile.internalPlayer) === 'native') {
     void readNativeDevices().catch(error => warn('midi', '启动时 Windows MIDI 设备读取失败', error));
   }
   void linkDesktopViewModel.refreshExternalApplication('p1')
     .then(snapshot => { if (!isCancelled()) useIntegrationStore.getState().setProcess(snapshot); })
-    .catch(error => warn('p1', 'P1 进程检测未完成', error));
+    .catch(error => warn('p1', '没能检测 P1 是否在运行', error));
   if (securityAvailable && profile.obs.autoConnectOnLaunch !== false) {
     void connectStartupObs(profile, securityAvailable, obsSnapshot, [], isCancelled);
   } else {
     void linkDesktopViewModel.refreshExternalApplication('obs')
       .then(snapshot => { if (!isCancelled()) useIntegrationStore.getState().setProcess(snapshot); })
-      .catch(error => warn('obs', 'OBS 进程检测未完成', error));
+      .catch(error => warn('obs', '没能检测 OBS 是否在运行', error));
   }
 }
 
@@ -53,7 +53,7 @@ export async function connectStartupObs(
         const saved = await linkDesktopViewModel.loadIntegrationProfile();
         if (saved && !isCancelled()) useIntegrationStore.getState().setProfile(saved);
       } catch (error) {
-        const message = `OBS 已连接，但连接配置刷新失败：${toUserErrorMessage(error)}`;
+        const message = `OBS 已连接，但刷新连接设置失败：${toUserErrorMessage(error)}`;
         if (!isCancelled()) useIntegrationStore.getState().setError(message);
         void linkDesktopViewModel.recordLog({ level: 'warning', category: 'device', device: 'obs', message }).catch(console.error);
       }
@@ -74,7 +74,7 @@ export async function connectStartupObs(
     await refreshConnectedObsInventory(isCancelled);
   } catch (error) {
     if (isCancelled()) return;
-    const message = `OBS 启动连接未完成：${toUserErrorMessage(error)}`;
+    const message = `启动时没能连上 OBS：${toUserErrorMessage(error)}`;
     useIntegrationStore.getState().setObs({ status: 'disconnected', obsVersion: null, webSocketVersion: null, error: message });
     void linkDesktopViewModel.recordLog({ level: 'warning', category: 'device', device: 'obs', message }).catch(console.error);
   }
@@ -85,7 +85,7 @@ async function refreshConnectedObsInventory(isCancelled: () => boolean): Promise
     const inventory = await linkDesktopViewModel.readObsInventory();
     if (!isCancelled()) useIntegrationStore.getState().setInventory(inventory);
   } catch (error) {
-    const message = `OBS 已连接，但场景清单读取失败：${toUserErrorMessage(error)}`;
+    const message = `OBS 已连接，但读取场景列表失败：${toUserErrorMessage(error)}`;
     if (!isCancelled()) useIntegrationStore.getState().setError(message);
     void linkDesktopViewModel.recordLog({ level: 'warning', category: 'device', device: 'obs', message }).catch(console.error);
   }

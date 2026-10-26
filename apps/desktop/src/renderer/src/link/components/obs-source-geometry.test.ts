@@ -61,13 +61,13 @@ describe('OBS 来源原始尺寸', () => {
     expect(obsPreviewRequestSize({ width: 1920, height: 1080 })).toEqual({ width: 960, height: 540 });
     expect(obsPreviewRequestSize({ width: 1080, height: 1920 })).toEqual({ width: 540, height: 960 });
     expect(obsPreviewRequestSize({ width: 1, height: 1 })).toEqual({ width: 8, height: 8 });
-    expect(() => obsPreviewRequestSize({ width: 0, height: 1080 })).toThrow('正有限数值');
+    expect(() => obsPreviewRequestSize({ width: 0, height: 1080 })).toThrow('来源尺寸无效');
   });
 
   it('全透明预览不是可见 OBS 画面', () => {
     expect(hasVisibleObsPreviewPixels(new Uint8ClampedArray([255, 255, 255, 0, 16, 32, 64, 0]))).toBe(false);
     expect(hasVisibleObsPreviewPixels(new Uint8ClampedArray([0, 0, 0, 0, 0, 0, 0, 1]))).toBe(true);
-    expect(() => hasVisibleObsPreviewPixels(new Uint8ClampedArray([0, 0, 0]))).toThrow('RGBA');
+    expect(() => hasVisibleObsPreviewPixels(new Uint8ClampedArray([0, 0, 0]))).toThrow('预览画面数据有误');
   });
 });
 

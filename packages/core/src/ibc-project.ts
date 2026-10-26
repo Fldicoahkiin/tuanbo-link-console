@@ -25,7 +25,7 @@ export function importIbcCommand(source: IbcProject, audio: ReferenceAudio[], fr
       const actions: LinkAction[] = [];
       if (cue.scene) actions.push({ id: crypto.randomUUID(), label: cue.scene, kind: 'obs.setProgramScene', sceneName: cue.scene });
       if (cue.midi_enabled) {
-        if (!midiPortProfileId) throw new Error('IBC 含 MIDI 动作，请先配置灯光 MIDI 输出');
+        if (!midiPortProfileId) throw new Error('IBC 工程里有 MIDI 动作，请先设置灯光 MIDI 输出');
         const number = cue.midi_note_cc || cueIndex + 1;
         const base = { id: crypto.randomUUID(), label: `IBC MIDI ${number}`, portProfileId: midiPortProfileId, channel: cue.midi_channel };
         if (cue.midi_type === 'note') {
@@ -57,6 +57,6 @@ function convertShortcut(value: string): string {
   if (!value) return '';
   const parts = value.split('+'); const key = parts.pop() ?? '';
   const code = /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : /^\d$/.test(key) ? `Digit${key}` : /^(F[1-9]|F1[0-2])$/.test(key) ? key : null;
-  if (!code || parts.some((part) => !['Ctrl', 'Alt', 'Shift'].includes(part))) throw new Error(`IBC 快捷键不支持：${value}；请在原工程清除后重新导入`);
+  if (!code || parts.some((part) => !['Ctrl', 'Alt', 'Shift'].includes(part))) throw new Error(`不支持 IBC 快捷键 ${value}，请在原工程里清除后重新导入`);
   return [...['Ctrl', 'Alt', 'Shift'].filter((part) => parts.includes(part)), code].join('+');
 }

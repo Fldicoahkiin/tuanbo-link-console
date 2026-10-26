@@ -27,7 +27,7 @@ describe('OBS 有界请求调度', () => {
     const busy = Array.from({ length: 4 }, () => scheduler.request(() => gate.promise, '占用通道'));
     let current = true;
     const pending = scheduler.guarded(() => current, () => scheduler.run('urgent', () => scheduler.request(sent, '节目动作')));
-    const rejected = expect(pending).rejects.toThrow('尚未发送');
+    const rejected = expect(pending).rejects.toThrow('没有发送');
     await Promise.resolve(); current = false; gate.resolve(); await Promise.all(busy); await rejected;
     expect(sent).not.toHaveBeenCalled();
     expect(scheduler.getStats()).toMatchObject({ requests: 4, queued: 0, active: 0 });
@@ -41,7 +41,7 @@ describe('OBS 有界请求调度', () => {
       await scheduler.request(sent, '第一步'); await gate.promise;
       await scheduler.guarded(() => true, () => scheduler.request(sent, '第二步'));
     });
-    const rejected = expect(pending).rejects.toThrow('尚未发送');
+    const rejected = expect(pending).rejects.toThrow('没有发送');
     await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(1)); current = false; gate.resolve(); await rejected;
     expect(sent).toHaveBeenCalledTimes(1);
   });
@@ -52,7 +52,7 @@ describe('OBS 有界请求调度', () => {
     const busy = Array.from({ length: 4 }, () => scheduler.request(() => gate.promise, '占用通道'));
     let current = true;
     const cancelled = scheduler.guarded(() => current, () => scheduler.request(sent, '迟到动作'), dispatched);
-    const rejected = expect(cancelled).rejects.toThrow('尚未发送');
+    const rejected = expect(cancelled).rejects.toThrow('没有发送');
     await Promise.resolve(); current = false; gate.resolve(); await Promise.all(busy); await rejected;
     expect(dispatched).not.toHaveBeenCalled();
     await scheduler.guarded(() => true, () => scheduler.guarded(() => true, async () => {
@@ -90,14 +90,14 @@ describe('OBS 有界请求调度', () => {
     await Promise.resolve(); expect(sent).toHaveBeenCalledTimes(4);
     await vi.advanceTimersByTimeAsync(2000);
     const results = await Promise.all(work);
-    expect(results.every(value => value instanceof Error && value.message.includes('执行结果不明'))).toBe(true);
+    expect(results.every(value => value instanceof Error && value.message.includes('不确定是否已执行'))).toBe(true);
     expect(timedOut).toHaveBeenCalledTimes(1);
     const timings = scheduler.getTimings();
     expect(timings).toHaveLength(7);
     expect(timings.every(timing => timing.failed)).toBe(true);
     expect(timings.filter(timing => timing.startedAt !== null)).toHaveLength(4);
     expect(timings.filter(timing => timing.startedAt === null)).toHaveLength(3);
-    await expect(scheduler.request(sent, '不能自动重发')).rejects.toThrow('执行结果不明');
+    await expect(scheduler.request(sent, '不能自动重发')).rejects.toThrow('不确定是否已执行');
     slow.resolve('迟到'); await Promise.resolve(); expect(sent).toHaveBeenCalledTimes(4);
     expect(scheduler.getTimings()).toEqual(timings);
     scheduler.connect(); expect(await scheduler.request(() => Promise.resolve('新会话'), '明确重连')).toBe('新会话');
@@ -138,7 +138,7 @@ describe('OBS 有界请求调度', () => {
     const scheduler = new ObsRequestScheduler(2000, () => undefined); scheduler.connect();
     const sent = vi.fn(() => new Promise<void>(() => undefined));
     const work = Array.from({ length: 132 }, () => scheduler.request(sent, '未派发').catch((error: unknown) => error));
-    await expect(scheduler.request(sent, '超容量')).rejects.toThrow('队列已满');
+    await expect(scheduler.request(sent, '超容量')).rejects.toThrow('排队已满');
     // The first four may have started by this await; the other 128 must not be sent.
     expect(sent.mock.calls.length).toBeLessThanOrEqual(4);
     scheduler.invalidate(new Error('取消')); await Promise.all(work);

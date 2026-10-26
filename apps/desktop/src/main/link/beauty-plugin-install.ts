@@ -41,14 +41,14 @@ async function recoverInstallation(parent: string, target: string): Promise<bool
     if (await hasCheckpoint(transaction, 'pending') && !await hasCheckpoint(transaction, 'settled')) pending.push(transaction);
   }
   if (!pending.length) return false;
-  if (pending.length !== 1) throw new Error(`存在多个未完成的美颜安装记录，请保留 ${history} 并查看日志`);
+  if (pending.length !== 1) throw new Error(`有多个没完成的美颜安装记录，请保留 ${history} 文件夹并查看日志`);
   const transaction = pending[0];
   if (!transaction) throw new Error('美颜安装恢复记录缺失');
   if (!await directoryExists(target)) {
     const backup = join(transaction, 'previous');
     if (await directoryExists(backup)) {
       try { await rename(backup, target); }
-      catch (error) { throw new Error(`无法恢复上次美颜安装，原组件保留在 ${backup}`, { cause: error }); }
+      catch (error) { throw new Error(`无法恢复上次的美颜安装，原来的组件保留在 ${backup}`, { cause: error }); }
     }
   }
   await checkpoint(transaction, 'settled');
@@ -59,10 +59,10 @@ async function recoverInstallation(parent: string, target: string): Promise<bool
 export async function installBeautyPlugin(root: string, programData: string): Promise<string> {
   const parent = join(programData, 'obs-studio');
   const target = join(parent, 'plugins/tblink-beauty');
-  if (await recoverInstallation(parent, target)) return '已处理上次中断的安装并保留现有组件；请重新点击安装以更新美颜';
+  if (await recoverInstallation(parent, target)) return '已处理上次中断的安装，现有组件保留。请重新点“安装”来更新美颜';
   for (const file of ['runtime/tblink-beauty-worker/tblink-beauty-worker.exe', 'face_landmarker.task', 'pose_landmarker_lite.task']) {
     try { await access(join(root, file)); }
-    catch (error) { throw new Error(`美颜安装资源缺失或无法读取：${file}`, { cause: error }); }
+    catch (error) { throw new Error(`美颜安装文件缺失或读不了：${file}`, { cause: error }); }
   }
   const files = await Promise.all([['plugin/beauty.effect', 'data/beauty.effect'], ['plugin/tblink-beauty.dll', 'bin/64bit/tblink-beauty.dll']].map(async ([source, target]) => {
     if (!source || !target) throw new Error('美颜组件清单无效');
@@ -89,23 +89,23 @@ export async function installBeautyPlugin(root: string, programData: string): Pr
     const path = join(staged, file.target);
     await mkdir(join(staged, file.target.startsWith('data/') ? 'data' : 'bin/64bit'), { recursive: true });
     await writeFile(path, file.bytes);
-    if (digest(await readFile(path)) !== digest(file.bytes)) throw new Error('美颜组件暂存校验失败，原组件未修改');
+    if (digest(await readFile(path)) !== digest(file.bytes)) throw new Error('美颜组件校验失败，原来的组件没有改动');
   }
   await mkdir(join(parent, 'plugins'), { recursive: true });
   await checkpoint(transaction, 'pending');
   if (exists) {
     try { await rename(target, backup); }
-    catch (error) { await checkpoint(transaction, 'settled'); throw new Error('美颜组件无法更新，原组件未修改；请正常退出 OBS 后再安装', { cause: error }); }
+    catch (error) { await checkpoint(transaction, 'settled'); throw new Error('美颜组件无法更新，原来的组件没有改动。请正常退出 OBS 后再安装', { cause: error }); }
   }
   try { await rename(staged, target); }
   catch (error) {
     if (exists) {
       try { await rename(backup, target); }
-      catch (restoreError) { throw new AggregateError([error, restoreError], `美颜安装及恢复失败；原组件保留在 ${backup}，请保留该目录并查看日志`); }
+      catch (restoreError) { throw new AggregateError([error, restoreError], `美颜安装失败，恢复也没成功。原来的组件保留在 ${backup}，请保留这个文件夹并查看日志`); }
     }
     await checkpoint(transaction, 'settled');
-    throw new Error('美颜安装失败，原组件已保留；请正常退出 OBS 后重新安装', { cause: error });
+    throw new Error('美颜安装失败，原来的组件已保留。请正常退出 OBS 后重新安装', { cause: error });
   }
   await checkpoint(transaction, 'settled');
-  return '美颜组件已安装，请正常重启 OBS 一次以加载组件，再点击启动美颜';
+  return '美颜组件已安装。请重启一次 OBS 来加载组件，再点“启动美颜”';
 }

@@ -12,17 +12,17 @@ export function nativeProgramSnapshot(project: LinkProject, itemId: string, revi
   try {
     offsetMs = programTimeOrigin(item);
     const origin = lightingTimeOrigin(item.lighting, offsetMs);
-    if ((item.playback || item.p1Media) && offsetMs !== origin) throw new Error('歌曲起点与 MA2 绑定时间码不一致');
+    if ((item.playback || item.p1Media) && offsetMs !== origin) throw new Error('歌曲起点和 MA2 绑定的时间码对不上');
     offsetMs = origin;
-  } catch (error) { notice = `${error instanceof Error ? error.message : String(error)}；本次时间码未参与，请核对原始偏移。`; }
+  } catch (error) { notice = `${error instanceof Error ? error.message : String(error)}；这次不发时间码，请检查原始偏移。`; }
   const endMs = item.playback?.endMs || audio.durationMs;
-  if (offsetMs + endMs >= 86400000) notice = '歌曲时间码范围超过一天，本次时间码未参与。';
+  if (offsetMs + endMs >= 86400000) notice = '歌曲的时间码范围超过一天，这次不发时间码。';
   const stale = Object.values(project.ma2ReadState?.pairings ?? {}).some(pair => pair.itemId === itemId && pair.status === 'stale');
   // Playback only sends timecode (2026-10-23); the stored output mode does not open another route.
   const allowLighting = !stale;
-  if (stale) notice = '当前歌曲与控台时间线尚未核对，本次不发送时间码。请打开控台时间线核对关联；音频继续播放。';
+  if (stale) notice = '这首歌还没和控台时间线确认关联，这次不发时间码，音频照常播放。请在控台时间线里确认关联。';
   const rate = project.timebase.frameRate;
-  if (rate === '29.97df') notice = [notice, '原生引擎的 29.97df 时间码尚未验收，本次时间码未参与。'].filter(Boolean).join('；');
+  if (rate === '29.97df') notice = [notice, 'Windows 原生播放的 29.97df 时间码还没验证过，这次不发时间码。'].filter(Boolean).join('；');
   // Audio-only preparation does not invent a replacement song timecode. The
   // native offset is unused when MIDI is disabled; authored data stays intact.
   const allowMtc = notice === null && !stale;

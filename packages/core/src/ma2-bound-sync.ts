@@ -8,7 +8,7 @@ export function previewMa2BoundSync(documentInput: LightingDocument, bindingId: 
   const readback = ma2TimecodePreviewSchema.parse(readbackInput);
   const binding = document.ma2Bindings?.find((entry) => entry.id === bindingId);
   if (!binding) throw new Error('节目没有这个 MA2 对象绑定');
-  if (binding.nativeEvents?.length || binding.playback === 'native-timecode' || readback.unconverted.length) throw new Error('原生保留时间线禁止写回，控台仍可按原有时间码播放');
+  if (binding.nativeEvents?.length || binding.playback === 'native-timecode' || readback.unconverted.length) throw new Error('保持控台原样的时间线不能写回，控台仍可按原来的时间码播放');
   const matched = resolveMa2Readback(binding, readback, choices);
   const identities = new Map(matched.matches.map((entry) => [entry.remoteEventId, entry.baselineEventId]));
   const trackIdentities = resolveMa2ReadbackTracks(binding, readback, matched);
@@ -19,7 +19,7 @@ export function previewMa2BoundSync(documentInput: LightingDocument, bindingId: 
     if (!trackId) throw new Error('控台轨道映射缺失');
     objects.push({ id: trackId, kind: 'track', parentId: bindingId, order, properties: { name: track.name, muted: String(track.muted) } });
     for (const clip of track.clips) for (const event of clip.events) {
-      if ((event.kind !== 'ma2' && event.kind !== 'ma2-fader') || clip.timeLock !== 'time') throw new Error('控台事件尚未转换为 MA2 绝对时间');
+      if ((event.kind !== 'ma2' && event.kind !== 'ma2-fader') || clip.timeLock !== 'time') throw new Error('控台事件还没转换成 MA2 绝对时间');
       objects.push({ id: identities.get(event.id) ?? `remote-event:${event.id}`, kind: 'event', parentId: trackId, order: 0,
         properties: ma2EventSnapshotProperties(event, clip.start + event.at, clip.muted, event.label) });
     }

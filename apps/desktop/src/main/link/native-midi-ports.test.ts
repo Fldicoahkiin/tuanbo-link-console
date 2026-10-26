@@ -17,7 +17,7 @@ it('只打开节目需要的精确目标，同名档案共享一次打开，不�
   const f = fixture(); await f.ports.prepare(['a', 'a', 'b'], new AbortController().signal);
   expect(f.output.open.mock.calls).toEqual([['专用端口']]); expect(f.create).toHaveBeenCalledOnce();
   await f.ports.send('b', [0xc0, 1], 1000.5); expect(f.output.send.mock.calls).toEqual([[[0xc0, 1], 10005000n]]);
-  await expect(f.ports.send('other', [0xc0, 1], 1000.5)).rejects.toThrow('本轮未准备');
+  await expect(f.ports.send('other', [0xc0, 1], 1000.5)).rejects.toThrow('这一首没有准备');
   await f.ports.close(); expect(f.output.close).toHaveBeenCalledOnce();
 });
 
@@ -48,6 +48,6 @@ it('发送前再次核对许可，取消许可等待不会发出已排队动作'
 it('没有 MIDI 动作不打开设备；无效档案不会误开其他输出', async () => {
   const empty = fixture(); await empty.ports.prepare([], new AbortController().signal); await empty.ports.close();
   expect(empty.authorize).not.toHaveBeenCalled(); expect(empty.create).not.toHaveBeenCalled();
-  const bad = fixture(); await expect(bad.ports.prepare(['missing'], new AbortController().signal)).rejects.toThrow('不存在或不唯一');
+  const bad = fixture(); await expect(bad.ports.prepare(['missing'], new AbortController().signal)).rejects.toThrow('不存在或有重复');
   await bad.ports.close(); expect(bad.create).not.toHaveBeenCalled();
 });
