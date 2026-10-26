@@ -52,7 +52,7 @@ it('按钮第 1000 页起连续 10 页都放满时，不导入也不改名任何
 
 /** In-memory console for syncSong: emulates only the script shapes that path sends. */
 function songConsole(sequences: Map<number, string>, slowRead?: { target: number; ms: number }) {
-  const files = new Map<string, Buffer>(); const lines: string[] = []; const ops: string[] = []; const slow = { done: false };
+  const files = new Map<string, Buffer>(); const lines: string[] = []; const ops: string[] = []; const slow = { started: false, done: false };
   const timecodes = new Map<number, string>();
   const pending = new Map<string, Buffer[]>(); const copies = new Map<string, Array<{ xml: string; cue: string }>>(); const keeps: string[] = [];
   const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
@@ -140,6 +140,7 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
   const exchange = vi.fn<Ma2OnpcBridge['exchange']>(async (operation, target, expected, _desired, _signal, progress) => {
     ops.push(`${operation} ${target}`);
     if (slowRead && operation === 'SEQUENCE' && target === slowRead.target && ops.filter(op => op === `SEQUENCE ${target}`).length === 1) {
+      slow.started = true;
       for (let elapsed = 0; elapsed < slowRead.ms; elapsed += 5000) { await new Promise(resolve => setTimeout(resolve, 5000)); progress?.(); }
       slow.done = true;
     }
@@ -196,8 +197,9 @@ it('一次大读取持续超过 90 秒但每批都有回包时不判为无进展
     const directory = await mkdtemp(join(tmpdir(), 'tblink-song-'));
     const sync = new Ma2LayoutService(join(directory, 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song);
     let settled = false; void sync.finally(() => { settled = true; }).catch(() => undefined);
-    // Fake time runs only during the slow read; the service also waits on real file I/O.
-    for (let step = 0; step < 200 && !settled && !fake.slow.done; step++) { await new Promise(resolve => setImmediate(resolve)); await vi.advanceTimersByTimeAsync(1000); }
+    // Fake time runs only during the slow read; before it starts the service waits on real file I/O,
+    // which takes more event-loop turns when the machine is busy.
+    for (let step = 0; step < 20000 && !settled && !fake.slow.done; step++) { await new Promise(resolve => setImmediate(resolve)); if (fake.slow.started) await vi.advanceTimersByTimeAsync(1000); }
     vi.useRealTimers();
     expect(fake.slow.done).toBe(true);
     await expect(sync).resolves.toMatchObject({ changed: true });

@@ -159,7 +159,7 @@ it('同一项两边都改过时以软件为准写入，不停止自动同步（2
   await test.runner.tick();
   const request = vi.mocked(test.dependencies.apply).mock.calls[0]?.[0];
   expect(request?.conflicts.length).toBeGreaterThan(0); expect(request?.conflicts.every(([, side]) => side === 'local')).toBe(true);
-  expect(vi.mocked(test.dependencies.changed).mock.calls.some(([status, message]) => status === 'writing' && message.includes('以软件为准'))).toBe(true);
+  expect(vi.mocked(test.dependencies.changed).mock.calls.some(([status, message]) => status === 'writing' && message.includes('以联动台为准'))).toBe(true);
 });
 
 it.skipIf(!process.env.MA2_ONPC_AUTO_SYNC_ACCEPTANCE)('真实 onPC 自动写回及反向修改进入工程，最后恢复测试对象', async () => {

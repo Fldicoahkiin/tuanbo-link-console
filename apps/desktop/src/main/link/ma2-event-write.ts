@@ -174,7 +174,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
       const timeChanged = Number(original.event.attributes.time ?? 0) !== Number(rawTime);
       const cueChanged = cue ? original.event.cueAddress.join('.') !== `1.${cue.sequence}.${cue.cueIndex}` || original.event.attributes.command !== 'Goto' : false;
       const actionChanged = value.action !== 'goto' && original.event.attributes.command !== (value.action === 'go' ? 'Go' : 'Off');
-      if ((cueChanged || actionChanged) && consoleOnly.has(path)) throw new Error(`控台事件 ${path} 带有控台专有参数，软件里只能改时间或删除；换 Cue 或动作请在控台操作。未写入控台`);
+      if ((cueChanged || actionChanged) && consoleOnly.has(path)) throw new Error(`没有写入控台：事件 ${path} 带有联动台不转换的控台参数，在联动台里只能改时间或删除。要换 Cue 或动作，请在控台上改。`);
       if (timeChanged || cueChanged || actionChanged) edits.push({ kind: 'update', path, ...(timeChanged ? { rawTime } : {}), ...(cueChanged ? { cue } : {}), ...(actionChanged && value.action !== 'goto' ? { executorAction: value.action } : {}) });
     } else {
       addedIds.set(edits.length, object.id); edits.push({ kind: 'add', subtrackPath, rawTime, ...(cue ? { cue } : {}), ...(value.action !== 'goto' ? { executorAction: value.action } : {}) });
@@ -193,7 +193,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
   });
   const deletedPaths = [...trackPaths].filter(([id]) => !desiredObjects.has(id)).map(([, path]) => path);
   for (const path of deletedPaths) {
-    if ([...consoleOnly].some((entry) => entry === path || entry.startsWith(`${path}/`))) throw new Error('这条轨道上有软件不转换的控台动作，整条删除请在控台操作；未写入控台');
+    if ([...consoleOnly].some((entry) => entry === path || entry.startsWith(`${path}/`))) throw new Error('没有写入控台：这条轨道上有联动台不转换的控台动作。要删掉整条轨道，请在控台上删。');
   }
   const orderedTracks = desired.objects.filter((entry) => entry.kind === 'track').sort((a, b) => a.order - b.order);
   if (orderedTracks.some((track, index) => track.order !== index)) throw new Error('合并后的轨道顺序有冲突，请重新比较');
@@ -291,7 +291,7 @@ export function ma2FollowerEdits(edits: readonly Ma2EventEdit[], followers: Read
     if (!Number.isFinite(shift) || shift === 0) continue;
     for (const path of paths) {
       const time = Number(raw.get(path)?.event.attributes.time ?? 0) + shift;
-      if (!Number.isFinite(time) || time < 0) throw new Error(`按键松开事件 ${path} 随按下移动后早于时间线起点；未写入控台`);
+      if (!Number.isFinite(time) || time < 0) throw new Error(`没有写入控台：按键松开事件 ${path} 跟着按下移动后，早于时间线起点。`);
       touched.add(path);
       result.push({ kind: 'update', path, rawTime: String(Number(time.toFixed(6))) });
     }

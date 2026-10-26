@@ -61,9 +61,9 @@ it('带控台专有参数的 Cue 在软件里可改时间（参数原样保留�
   const recued = structuredClone(lighting); const event = recued.tracks[1]!.clips[0]!.events[0]!;
   if (event.kind !== 'ma2') throw new Error('测试数据应为 Cue');
   event.cue = '2.000';
-  expect(() => prepareMa2MergedEvents(recued, bindingId, readback, new Map(), new Map(), [withSequence(xml)])).toThrow('控台专有参数');
+  expect(() => prepareMa2MergedEvents(recued, bindingId, readback, new Map(), new Map(), [withSequence(xml)])).toThrow('不转换的控台参数');
   const removed = structuredClone(lighting); removed.tracks.splice(2, 1);
-  expect(() => prepareMa2MergedEvents(removed, bindingId, readback, new Map(), new Map(), [withSequence(xml)])).toThrow('整条删除请在控台操作');
+  expect(() => prepareMa2MergedEvents(removed, bindingId, readback, new Map(), new Map(), [withSequence(xml)])).toThrow('要删掉整条轨道，请在控台上删');
 });
 it('不推断未验证帧率，原始目录与XML仍保留', async () => {
   const xml = meiNanXml.replace('30 FPS', '25 FPS');

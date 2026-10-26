@@ -7,6 +7,7 @@
 团播联动台是 Windows 原生 Electron 桌面软件，只负责节目单、参考波形、Cue 编排、P1 MTC 跟随、OBS WebSocket/MIDI 动作、受管 OBS 媒体编排、外部程序生命周期、预检和日志。
 
 - OBS 负责正式场景、来源、滤镜、转场、画面和音频。
+- 2026-10-26 用户定下灯光工作流 10 条（随时可以播放、只按 MTC 起始码配对、联动台和控台用同一条时间线双向同步、新歌放在 1000 页等），作为灯光、MA2 同步、播放和时间码功能的长期规范；和下文或其他文档冲突时以 [docs/LIGHTING_WORKFLOW.md](./docs/LIGHTING_WORKFLOW.md) 为准。
 - 2026-10-24 用户明确授权演出中 MIDI 线松脱再插回后时间码自动恢复（原话“要”），并同日扩展到动作 MIDI（原话“一起恢复”）：内部主控播放时，MTC 输出端口或动作 MIDI 输出端口断开后，同一端口重新出现即自动重新打开；时间码从当前播放位置恢复发送，动作 MIDI 从恢复后的下一个动作起照常发送。不补执行中断期间错过的任何动作，不切换到其他端口。此授权取代下文第 3 节第 4 条对该场景的“自动重试”禁令。
 - 2026-09-14 用户明确授权“允许，按实时双向同步重做”：允许新增随软件部署的 OBS 原生预览桥，并在联动台画布中编辑用户选中的 OBS 已有场景来源、双向同步编辑状态。此授权取代下文对于本功能的 libobs helper 和已有来源修改禁令；不授权删除未选中的来源或控制推流/录像。实施和验收见 `docs/OBS_REALTIME_CANVAS.md`。
 - 2026-09-13 用户确定只使用 OBS 场景：每个机位一个场景，切换沿用已有显隐、拉腿、裁剪与滤镜。设置不再提供软件编排/场景切换选项；每个素材使用独立自有 OBS 场景，机位片段结束恢复下层素材对应位置，不修改其他来源。低功率必须可开关，不能删除原有预览功能。详见 `docs/OBS_SCENE_WORKFLOW.md`，该授权取代下文旧受管场景限制。
@@ -86,4 +87,5 @@ docs/                          当前设计、实施和验收文档
 - [docs/DESIGN_BASELINE.md](./docs/DESIGN_BASELINE.md)：不可变设计与执行规则。
 - [docs/plan.md](./docs/plan.md)：阶段、完成状态和剩余现场前置条件。
 - [docs/link-console-reference-study.md](./docs/link-console-reference-study.md)：S3/IBC 差距矩阵与吸收结论。
+- [docs/LIGHTING_WORKFLOW.md](./docs/LIGHTING_WORKFLOW.md)：灯光工作流 10 条和在代码里的落点，灯光相关改动以此为准。
 - [docs/WINDOWS_ACCEPTANCE.md](./docs/WINDOWS_ACCEPTANCE.md)：Windows 发布和真实联调验收记录模板。
