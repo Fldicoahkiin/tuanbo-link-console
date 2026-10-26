@@ -35,4 +35,4 @@
 3. CI 通过后推 `vX.Y.Z` tag。没有这一版的文件时，`pnpm verify` 和 Release Windows 的第一步都会报错；`CHANGELOG.md` 没更新时，推 master 后的 CI 会报错。所以一定等 CI 通过再推 tag，免得 tag 白白作废。
 4. 新版上线后更新官网的 `release.json`（`node scripts/write-website-release.mjs`），官网下载页随之显示新版条目。
 
-0.5.1 打了 tag，但构建上传失败、从未发布，改动随 0.5.2 发布，所以没有 `0.5.1.md`。0.4.27 及更早的测试版本只在 GitHub Releases 里有说明。
+0.5.1 打了 tag，但构建上传失败、从未发布，改动随 0.5.2 发布，所以没有 `0.5.1.md`。0.5.3 同理：打包时被拒（正式包里带了本机开发测试通道），从未发布，改动随 0.5.4 发布，所以没有 `0.5.3.md`。0.4.27 及更早的测试版本只在 GitHub Releases 里有说明。
