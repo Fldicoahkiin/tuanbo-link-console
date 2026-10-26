@@ -25,7 +25,7 @@ export class BeautyComparison {
   close(): void { this.generation++; this.socket?.destroy(); this.socket = null; this.target = ''; this.failure = null; this.sequence = 0; }
 
   async next(target: BeautyTarget): Promise<BeautyComparisonFrame> {
-    if (this.pending) throw new Error('美颜对比已有未完成请求');
+    if (this.pending) throw new Error('上一次美颜对比还没完成');
     this.pending = true;
     let generation = this.generation;
     try {
@@ -45,7 +45,7 @@ export class BeautyComparison {
       const frame = await this.read(this.socket, acknowledge);
       if (generation !== this.generation) throw new Error('美颜对比请求已取消');
       const age = this.now() - frame.timestampMs;
-      if (age < -100 || age > 500 || frame.sequence <= this.sequence) throw new Error('美颜对比帧已过期或顺序异常，请重新打开对比');
+      if (age < -100 || age > 500 || frame.sequence <= this.sequence) throw new Error('美颜对比画面过期或顺序错乱，请重新打开对比');
       this.sequence = frame.sequence;
       return frame;
     } catch (reason) {
@@ -60,7 +60,7 @@ export class BeautyComparison {
       let buffer = Buffer.alloc(32), offset = 0, expected = 32;
       const cleanup = (): void => { clearTimeout(timer); socket.off('data', data); socket.off('error', fail); socket.off('close', closed); };
       const fail = (error: Error): void => { cleanup(); reject(isPipeAccessDenied(error) ? new Error(`美颜对比不可用：${beautyPipeAccessDeniedMessage}`, { cause: error }) : error); };
-      const closed = (): void => fail(new Error('美颜对比通道已关闭，请确认来源可见且滤镜启用'));
+      const closed = (): void => fail(new Error('美颜对比连接已关闭，请确认来源可见、滤镜已启用'));
       const data = (chunk: Buffer): void => {
         try {
           let cursor = 0;

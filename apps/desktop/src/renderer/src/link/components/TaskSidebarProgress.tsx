@@ -44,7 +44,7 @@ export function TaskSidebarProgress({ notify }: { notify: Notify }): JSX.Element
   return <div className="sidebar-task-progress" aria-label="后台任务进度">
     <div id="ma2-sidebar-read-actions"/>
     {Object.values(songs).filter(song => song.documentId === documentId && song.state === 'syncing').map(song => <div className="ma2-read-progress" role="status" key={song.itemId}>
-      <div><strong>同步歌曲 Cue</strong><span>{song.progress?.total ? `${Math.floor(song.progress.completed / song.progress.total * 100)}%` : '核对中'}</span></div>
+      <div><strong>同步歌曲 Cue</strong><span>{song.progress?.total ? `${Math.floor(song.progress.completed / song.progress.total * 100)}%` : '检查中'}</span></div>
       <progress aria-label="歌曲同步阶段进度" value={song.progress?.completed ?? 0} max={song.progress?.total || 1}/>
       <small>{song.progress?.detail ?? song.message}</small>
       <button onClick={pauseMa2RealtimeSession}>停止同步</button>

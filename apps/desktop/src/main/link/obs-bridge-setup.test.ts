@@ -50,7 +50,7 @@ it('外部 OBS 仍在运行时保留原进程，用户退出后才部署', async
   const { setup, tools } = fixture();
   tools.process.mockResolvedValue({ pid: 1, owned: false });
   tools.verify.mockRejectedValue(new Error('插件尚未加载'));
-  await expect(setup.repair()).rejects.toThrow('OBS 仍在运行');
+  await expect(setup.repair()).rejects.toThrow('OBS 还在运行');
   expect(tools.stop).not.toHaveBeenCalled();
   expect(tools.start).not.toHaveBeenCalled();
   tools.process.mockResolvedValueOnce({ pid: 1, owned: false }).mockResolvedValueOnce({ pid: null, owned: false });
@@ -66,8 +66,8 @@ it('取消维护和推流/录像保护均阻断后续写入和启动', async () 
   tools.confirm.mockResolvedValueOnce(false);
   await expect(setup.repair()).rejects.toThrow('取消');
   expect(tools.stop).not.toHaveBeenCalled();
-  tools.stop.mockRejectedValueOnce(new Error('OBS 正在推流或录像，拒绝关闭'));
-  await expect(setup.repair()).rejects.toThrow('拒绝关闭');
+  tools.stop.mockRejectedValueOnce(new Error('OBS 正在推流或录像，联动台不会关闭它'));
+  await expect(setup.repair()).rejects.toThrow('联动台不会关闭它');
   expect(tools.start).not.toHaveBeenCalled();
   expect(tools.install.mock.calls.every(([elevated]) => !elevated)).toBe(true);
 });
@@ -96,7 +96,7 @@ it('并发维护被拒绝，避免重复授权和重启', async () => {
   let finish: () => void = () => { throw new Error('not initialized'); };
   tools.install.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = () => resolve(false); }));
   const pending = setup.prepare();
-  await expect(setup.repair()).rejects.toThrow('维护正在进行');
+  await expect(setup.repair()).rejects.toThrow('正在修复 OBS 组件');
   finish();
   await pending;
 });

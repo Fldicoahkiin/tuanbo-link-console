@@ -46,22 +46,22 @@ export async function readMa2LayoutPage(page: number, refresh = false): Promise<
   const requestId = crypto.randomUUID();
   useMa2LayoutStore.setState({ scope, page, snapshot: refresh && previous.scope === scope && previous.page === page ? previous.snapshot : null, busy: true, error: '', requestId });
   try {
-    if (!pool?.library || pool.library.sourceUnverified) throw new Error('请先读取并核对控台素材');
+    if (!pool?.library || pool.library.sourceUnverified) throw new Error('请先读取控台素材');
     const connection = await ma2MaterialConnection();
-    if (!connection.network) throw new Error('控台页面需要 MA2 网络连接，请在设备设置连接控台 IP');
-    if (`${connection.network.host}:${connection.network.port}` !== pool.source) throw new Error('当前连接与素材来源不同，请重新读取控台');
-    if (currentMa2LayoutScope() !== scope) throw new Error('工程或素材来源已变化，请重新读取页面');
+    if (!connection.network) throw new Error('控台页面需要通过网络连接 MA2，请先在设备设置里连接控台 IP');
+    if (`${connection.network.host}:${connection.network.port}` !== pool.source) throw new Error('当前连接的控台和素材来源不是同一台，请重新读取控台');
+    if (currentMa2LayoutScope() !== scope) throw new Error('工程或素材来源变了，请重新读取页面');
     const { show, generation, version } = pool.library.directory;
     const snapshot = ma2LayoutSnapshotSchema.parse(await window.tbLink.readMa2Layout({ network: connection.network, expectedSource: { show, generation, version }, layout: page }));
     if (snapshot.layout !== page) throw new Error('控台返回的页面编号不一致');
     const targets = [...new Set(snapshot.items.flatMap(item => item.sequence ?? []))];
     if (targets.length) {
       const metadata = ma2EffectLibrarySchema.parse(await window.tbLink.readMa2EffectLibrary({ ...connection, targets, expectedSource: { show, generation, version } }));
-      if (currentMa2LayoutScope() !== scope) throw new Error('工程或素材来源已变化');
+      if (currentMa2LayoutScope() !== scope) throw new Error('工程或素材来源变了');
       const current = useDocumentStore.getState();
       if (JSON.stringify(metadata.sequences) !== JSON.stringify(current.project?.ma2MaterialLibrary?.library?.sequences.filter(sequence => targets.includes(sequence.sequence)))) current.executeForDocument(before.documentId, mergeMa2MetadataCommand(pool.source, metadata));
     }
-    if (currentMa2LayoutScope() !== scope || useMa2LayoutStore.getState().requestId !== requestId) throw new Error('工程或素材来源已变化，旧页面未显示');
+    if (currentMa2LayoutScope() !== scope || useMa2LayoutStore.getState().requestId !== requestId) throw new Error('工程或素材来源变了，旧页面不再显示');
     const content = (value: Ma2LayoutSnapshot | null): string => JSON.stringify(value ? { ...value, readAt: '' } : null);
     useMa2LayoutStore.setState({ snapshot: content(previous.snapshot) === content(snapshot) ? previous.snapshot : snapshot, busy: false, requestId: null });
     return snapshot;
@@ -72,7 +72,7 @@ export async function readMa2LayoutPage(page: number, refresh = false): Promise<
 }
 
 export function acceptCreatedMa2Layout(scope: string, snapshot: Ma2LayoutSnapshot, navigate = true): void {
-  if (scope !== currentMa2LayoutScope()) throw new Error('控台已创建，但工程或素材来源已变化，请重新读取页面');
+  if (scope !== currentMa2LayoutScope()) throw new Error('控台上已创建，但工程或素材来源变了，请重新读取页面');
   const current = useMa2LayoutStore.getState();
   if (!navigate && (current.scope !== scope || current.page !== snapshot.layout || current.busy)) return;
   useMa2LayoutStore.setState({ scope, page: snapshot.layout, snapshot, busy: false, error: '', requestId: null });
@@ -80,9 +80,9 @@ export function acceptCreatedMa2Layout(scope: string, snapshot: Ma2LayoutSnapsho
 
 export async function ma2LayoutConnection() {
   const pool = useDocumentStore.getState().project?.ma2MaterialLibrary;
-  if (!pool?.library || pool.library.sourceUnverified) throw new Error('请先读取并核对控台素材');
+  if (!pool?.library || pool.library.sourceUnverified) throw new Error('请先读取控台素材');
   const connection = await ma2MaterialConnection();
-  if (!connection.network || `${connection.network.host}:${connection.network.port}` !== pool.source) throw new Error('当前控台连接与素材来源不同');
+  if (!connection.network || `${connection.network.host}:${connection.network.port}` !== pool.source) throw new Error('当前连接的控台和素材来源不是同一台');
   const { show, generation, version } = pool.library.directory;
   return { network: connection.network, expectedSource: { show, generation, version } };
 }
@@ -92,7 +92,7 @@ export async function updateMa2LayoutPage(change: { positions: import('@tb/schem
   useMa2LayoutStore.setState({ busy: true, error: '' });
   try {
     const result = await window.tbLink.updateMa2Layout({ ...await ma2LayoutConnection(), layout: before.page, revision: before.snapshot.revision, ...change });
-    if (scope !== currentMa2LayoutScope()) throw new Error('控台已修改，但工程发生变化，请重新读取');
+    if (scope !== currentMa2LayoutScope()) throw new Error('控台上已修改，但工程变了，请重新读取');
     useMa2LayoutStore.setState({ snapshot: result, busy: false });
   } catch (cause) { useMa2LayoutStore.setState({ busy: false, error: cause instanceof Error ? cause.message : String(cause) }); throw cause; }
 }

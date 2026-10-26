@@ -103,7 +103,7 @@ describe('CueActionRunner', () => {
       kind: 'obs.setProgramScene',
       sceneName: 'Program'
     });
-    expect(result).toMatchObject({ status: 'failed', error: 'obs.setProgramScene 执行超过 1ms' });
+    expect(result).toMatchObject({ status: 'failed', error: 'obs.setProgramScene 执行超时（1 ms）' });
     expect(calls).toBe(1);
   });
 });

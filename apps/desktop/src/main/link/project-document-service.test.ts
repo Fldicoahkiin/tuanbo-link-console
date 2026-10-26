@@ -36,7 +36,7 @@ it('保存超时后结果保持不明，不杀正在写盘的线程，不接受�
   await vi.advanceTimersByTimeAsync(30000);
   expect((await pending).map(result => result.status)).toEqual(['rejected', 'rejected']);
   response({ version: 1, id: 1, kind: 'saved' });
-  await expect(service.save(path, '{}')).rejects.toThrow('可能已写入');
+  await expect(service.save(path, '{}')).rejects.toThrow('这次保存可能已经写入');
   expect(workers.terminate).not.toHaveBeenCalled();
   expect(workers.post).toHaveBeenCalledTimes(2);
   expect(workers.instances).toHaveLength(1);
@@ -66,7 +66,7 @@ it.each(['exit', 'error', 'wrong-result', 'unknown-id', 'invalid-dto', 'send-err
 it('队列有界，超量请求不发送且不会取消已经在途的保存', async () => {
   const service = new ProjectDocumentService();
   const pending = Array.from({ length: 64 }, () => service.save(path, '{}'));
-  await expect(service.save(path, '{}')).rejects.toThrow('未入队');
+  await expect(service.save(path, '{}')).rejects.toThrow('这次请求没有处理');
   expect(workers.post).toHaveBeenCalledTimes(64);
   for (let id = 1; id <= 64; id++) response({ version: 1, id, kind: 'saved' });
   await Promise.all(pending);
@@ -94,5 +94,5 @@ it('超时后暂停新请求并说明原因；操作员确认重启后终止卡�
 it('没有卡住时不需要也不允许重启', () => {
   const service = new ProjectDocumentService();
   expect(service.stalledReason()).toBeNull();
-  expect(() => service.restart()).toThrow('工程处理线程运行正常');
+  expect(() => service.restart()).toThrow('工程处理运行正常');
 });

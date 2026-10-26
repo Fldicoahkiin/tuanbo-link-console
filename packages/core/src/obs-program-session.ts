@@ -77,7 +77,7 @@ export class ObsProgramSession {
 
   constructor(private readonly project: LinkProject, projectPath: string, private readonly itemId: string,
     private readonly dependencies: ObsProgramSessionDependencies) {
-    if (project.playbackSource !== 'internal' || project.obsOutputMode !== 'scenes') throw new Error('后台画面会话需要内部主控场景工程');
+    if (project.playbackSource !== 'internal' || project.obsOutputMode !== 'scenes') throw new Error('后台画面只支持“联动台播放”的场景工程');
     const item = project.rundown.find(entry => entry.id === itemId);
     if (!item) throw new Error('后台画面节目不存在');
     // Other outputs belong to independent channels, never pretend that an OBS
@@ -147,8 +147,8 @@ export class ObsProgramSession {
     if (!this.prepared || this.closed || this.failure) return;
     try {
       const age = this.dependencies.now() - observedAt;
-      if (!Number.isFinite(age) || age < 0) throw new Error(`设备位置的时间依据无效（采样年龄 ${age}ms），画面通道停止`);
-      if (age > 100) { this.fault(`设备位置晚到 ${Math.round(age)}ms，超过 100ms 执行边界；本次位置不执行画面动作，不补发`); return; }
+      if (!Number.isFinite(age) || age < 0) throw new Error(`播放位置的时间无效（已过 ${age} ms），画面联动已停止`);
+      if (age > 100) { this.fault(`播放位置晚到了 ${Math.round(age)} ms（超过 100 ms），这个位置的画面动作不执行，也不补发`); return; }
       const sample = this.sample(positionMs, observedAt), previousFrame = this.frame;
       let update: RuntimeUpdate;
       if (this.runtime.getState() === 'paused') {
@@ -176,8 +176,8 @@ export class ObsProgramSession {
         <= observedAt + 100 - Math.max(0, sample.totalFrames - scheduledFrame) * 1000 / playbackFramesPerSecond(sample.frameRate);
       const entries = timelineEntries(work);
       if (this.queued >= 64) {
-        const reason = 'OBS 响应积压超过 64 批画面动作，本批未发送；画面通道继续';
-        this.fault(reason); void this.skip(entries, reason).catch(error => this.fault(`画面跳过记录失败：${String(error)}`)); return;
+        const reason = 'OBS 积压了超过 64 批画面动作，这一批没有发送；画面联动继续';
+        this.fault(reason); void this.skip(entries, reason).catch(error => this.fault(`记录跳过的画面动作失败：${String(error)}`)); return;
       }
       this.enqueue(() => this.send(entries, current, onTime));
     } catch (error) { this.fail(error); }
@@ -228,12 +228,12 @@ export class ObsProgramSession {
       const label = 'cue' in entry ? entry.cue.name : entry.event.assetName;
       if (!gate.allowed()) {
         if (!current()) return;
-        const reason = `OBS 动作晚于 100ms 执行边界，未发送：${label}`;
+        const reason = `OBS 动作晚了超过 100 ms，没有发送：${label}`;
         this.fault(reason); await this.skip(group, reason); continue;
       }
       const results = await Promise.allSettled(group.map(member => this.output(member, gate)));
-      for (const result of results) if (result.status === 'rejected') this.fault(`画面动作异常：${label}：${String(result.reason)}`);
-      if (gate.lateBeforeSend() && current()) this.fault(`OBS 动作晚于 100ms 执行边界，未发送：${label}`);
+      for (const result of results) if (result.status === 'rejected') this.fault(`画面动作出错：${label}：${String(result.reason)}`);
+      if (gate.lateBeforeSend() && current()) this.fault(`OBS 动作晚了超过 100 ms，没有发送：${label}`);
     }
   }
 
@@ -304,7 +304,7 @@ export class ObsProgramSession {
     const allowed = (): boolean => !this.closed && !this.failure;
     this.preloadWork = this.dependencies.guardOutput(allowed, () => prepare(frame, () => {
       if (!allowed()) throw new Error('后续素材准备已取消');
-    })).then(prepared => { if (prepared) this.startLate(prepared); }).catch(error => { if (!this.closed && !this.failure) this.fault(`后续素材预备失败：${error instanceof Error ? error.message : String(error)}；不重试，到点的素材可能无法播放`); })
+    })).then(prepared => { if (prepared) this.startLate(prepared); }).catch(error => { if (!this.closed && !this.failure) this.fault(`准备后面的素材失败：${error instanceof Error ? error.message : String(error)}；不会重试，到时候这个素材可能播不出来`); })
       .finally(() => { this.preloadWork = null; });
   }
 
@@ -322,7 +322,7 @@ export class ObsProgramSession {
         const current = (): boolean => generation === this.generation && !this.closed && !this.failure && this.runtime.getState() === 'running';
         if (event.assetKind === 'image' || !current()) continue;
         const drift = await this.dependencies.guardOutput(current, () => correct(this.managed.alignEvent(event, this.frame)));
-        if (drift !== null) this.fault(`素材与音乐偏差 ${drift}ms，已按当前位置校正：${event.assetName}`);
+        if (drift !== null) this.fault(`素材和音乐差了 ${drift} ms，已按当前位置校正：${event.assetName}`);
       }
     });
   }
@@ -340,7 +340,7 @@ export class ObsProgramSession {
       this.settleMedia(this.frame);
       const report = await this.dependencies.guardOutput(current, () => this.managed.executeMedia(this.managed.alignEvent(event, this.frame), 'live', current));
       this.dependencies.mediaReport(report);
-      if (report.status === 'succeeded') this.fault(`素材预备晚于播放边界，已按当前位置起播：${event.assetName}（晚 ${lateMs}ms）`);
+      if (report.status === 'succeeded') this.fault(`素材准备得晚了，已按当前位置开始播放：${event.assetName}（晚了 ${lateMs} ms）`);
     });
   }
 
@@ -379,18 +379,18 @@ export class ObsProgramSession {
       } catch (error) { errors.push(String(error)); }
     }
     try { await this.dependencies.releaseOutputs(); } catch (error) { errors.push(String(error)); }
-    if (errors.length) { const error = new Error(`后台画面清理未完成：${errors.join('；')}`); this.fail(error); throw error; }
+    if (errors.length) { const error = new Error(`画面没有清理干净：${errors.join('；')}`); this.fail(error); throw error; }
     this.dependencies.state(this.runtime.completeStop());
   }
 
   private enqueue(operation: () => Promise<void>): void {
     if (this.closed || this.failure) return;
-    if (this.queued >= 64) { this.fault('OBS 响应积压超过 64 批画面动作，本批未发送；画面通道继续'); return; }
+    if (this.queued >= 64) { this.fault('OBS 积压了超过 64 批画面动作，这一批没有发送；画面联动继续'); return; }
     const generation = this.generation; this.queued++;
     this.tail = this.tail.then(async () => {
       if (generation !== this.generation || this.closed || this.failure) return;
       await operation();
-    }).catch(error => this.fault(`画面动作异常：${error instanceof Error ? error.message : String(error)}`)).finally(() => { this.queued--; });
+    }).catch(error => this.fault(`画面动作出错：${error instanceof Error ? error.message : String(error)}`)).finally(() => { this.queued--; });
   }
   private async cue(cue: LinkCue, canExecute: () => boolean, dispatched?: () => void): Promise<CueExecutionReport> {
     const compiled = this.managed.compileVisualCue(cue);
@@ -410,11 +410,11 @@ export class ObsProgramSession {
         timecode: frameNumberToTimecode(Math.max(0, this.frame), this.project.timebase.frameRate), actions };
       if (!gate.allowed()) {
         if (!current()) return;
-        const reason = 'OBS 媒体恢复晚于 100ms 执行边界，未发送继续播放；活动素材保持暂停，不迟到启动';
+        const reason = 'OBS 媒体恢复晚了超过 100 ms，没有发送继续播放；素材保持暂停，不会延迟启动';
         this.fault(reason); this.dependencies.cueReport(await this.runner.skip(cue, 'live', reason)); return;
       }
       this.dependencies.cueReport(await this.dependencies.guardOutput(gate.allowed, () => this.runner.run(cue, 'live', gate.allowed), gate.dispatched));
-      if (gate.lateBeforeSend() && current()) this.fault('OBS 媒体恢复晚于 100ms 执行边界，未发送继续播放；活动素材保持暂停，不迟到启动');
+      if (gate.lateBeforeSend() && current()) this.fault('OBS 媒体恢复晚了超过 100 ms，没有发送继续播放；素材保持暂停，不会延迟启动');
     });
   }
   private sample(positionMs: number, observedAt = this.dependencies.now()): MtcSample {
@@ -423,11 +423,11 @@ export class ObsProgramSession {
     return { frameRate, totalFrames, timecode: frameNumberToTimecode(totalFrames, frameRate), direction: 'forward', receivedAtMs: observedAt };
   }
   private requireCurrent(generation: number): void {
-    if (generation !== this.generation || this.closed || this.failure) throw new Error('后台画面准备已取消');
+    if (generation !== this.generation || this.closed || this.failure) throw new Error('画面准备已取消');
   }
   private requireUpdate(update: RuntimeUpdate): void {
     this.dependencies.state(update);
-    if (update.state === 'error' || update.state === 'timecodeLost') throw new Error(update.reason ?? '后台画面时钟失效');
+    if (update.state === 'error' || update.state === 'timecodeLost') throw new Error(update.reason ?? '画面计时已失效');
   }
   private fault(message: string): void {
     if (this.closed || this.failure) return;

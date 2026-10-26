@@ -200,8 +200,8 @@ describe('MA2 3.7 历史导出文件探针', () => {
   it('未验证的版本可检查但不可修改', () => {
     const xml = source.replace('minor_vers="7"', 'minor_vers="9"');
     const report = inspectMa2TimecodeXml(xml);
-    expect(report.warnings).toContain('尚未验证的 MA2 XML 版本：3.9.0');
-    expect(() => patchMa2EventTimes(xml, report.sha256, [])).toThrow('禁止修改');
+    expect(report.warnings).toContain('还没验证过的 MA2 XML 版本：3.9.0');
+    expect(() => patchMa2EventTimes(xml, report.sha256, [])).toThrow('不能修改');
   });
   it('拒绝 DTD、错误命名空间、畸形 XML 和重复索引', () => {
     expect(() => inspectMa2TimecodeXml('<!DOCTYPE MA>' + source)).toThrow('DTD');
@@ -244,7 +244,7 @@ describe('本机 3.3.4 Master 推杆真实样例', () => {
     expect(() => prepareMa2TimecodeEvents(master, sha, 9902, [{ kind: 'add', subtrackPath: path, rawTime: '1', executorAction: 'go' }])).toThrow('推杆');
     expect(() => prepareMa2TimecodeEvents(master, sha, 9902, [{ kind: 'update', path: 'Timecode:9901/Track:0/SubTrack:0/Event:0', faderLevel: '0.5' }])).toThrow('推杆');
     const other = master.replace('fader_command="Master"', 'fader_command="Speed"');
-    expect(() => prepareMa2TimecodeEvents(other, inspectMa2TimecodeXml(other).sha256, 9902, [{ kind: 'update', path: `${path}/Event:0`, faderLevel: '0.5' }])).toThrow('尚未验证');
+    expect(() => prepareMa2TimecodeEvents(other, inspectMa2TimecodeXml(other).sha256, 9902, [{ kind: 'update', path: `${path}/Event:0`, faderLevel: '0.5' }])).toThrow('还没验证过');
   });
   it.skipIf(!process.env.MA2_ONPC_FADER_ACCEPTANCE)('本机 Master 点修改与新增经导入回读确认后还原测试对象', async () => {
     const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);

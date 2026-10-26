@@ -59,7 +59,7 @@ it('灯光输出方式不再决定能否同步：默认的时间码跟随和 MID
   const value = project();
   value.rundown[0]!.lighting!.outputMode = 'timecode'; value.rundown[1]!.lighting!.outputMode = 'direct';
   useDocumentStore.getState().setProject(value, 'song.tblink');
-  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  sync.mockRejectedValue(new Error('MA2 响应超时，操作没有确认，不会自动重试'));
   await prepareMa2RealtimeSession();
   expect(Object.keys(useMa2SongSyncStore.getState().songs)).toEqual(['first', 'second']);
   expect(pendingSongSummary(useDocumentStore.getState().project)).toHaveLength(2);
@@ -249,7 +249,7 @@ it('刷新同步让已确认的歌重新完整核对控台，而不是只做复�
 });
 it('同步失败退避重试时同一份本地内容只存档一次，编辑后才存新档', async () => {
   vi.useFakeTimers();
-  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  sync.mockRejectedValue(new Error('MA2 响应超时，操作没有确认，不会自动重试'));
   await prepareMa2RealtimeSession(); stopMa2SongSync('second');
   await tickMa2SongSync(false);
   vi.advanceTimersByTime(30001); await tickMa2SongSync(false);
@@ -271,7 +271,7 @@ it('没有起始码的歌连上控台就按控台节目分配起点，撤销也�
   // 控台节目从 600 s 起长 200 s：新歌从 810 s 开始。
   const ranges = vi.fn().mockResolvedValue({ show: 'Show', entries: [{ target: 1, name: 'A', offset: '18000', length: '6000', slot: 'TC Slot 2', frame: '30 FPS', last: '5940' }] });
   vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync, checkMa2Song: check, renameMa2Object: rename, ma2TimecodeRanges: ranges } });
-  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  sync.mockRejectedValue(new Error('MA2 响应超时，操作没有确认，不会自动重试'));
   await prepareMa2RealtimeSession(); stopMa2SongSync('second');
   await tickMa2SongSync(false);
   expect(ranges).toHaveBeenCalledExactlyOnceWith({ host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' });
@@ -313,7 +313,7 @@ it('连上控台时分配没成功的歌，首次同步前再分配一次，并�
   useDocumentStore.getState().setProject(value, 'song.tblink');
   const ranges = vi.fn().mockRejectedValueOnce(new Error('MA2 响应超时')).mockResolvedValue({ show: 'Show', entries: [] });
   vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: status, readMa2Catalog: catalog, readMa2EffectLibrary: metadata, cancelMa2Read: cancel, syncMa2Song: sync, checkMa2Song: check, renameMa2Object: rename, ma2TimecodeRanges: ranges } });
-  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  sync.mockRejectedValue(new Error('MA2 响应超时，操作没有确认，不会自动重试'));
   await prepareMa2RealtimeSession(); stopMa2SongSync('second');
   expect(useDocumentStore.getState().project!.rundown[0]!.playback).toBeUndefined();
   await tickMa2SongSync(false);
@@ -330,7 +330,7 @@ it('已同步过但还没有时间码节目的歌：列为「要同步到控台�
   // Already checked in this session: a periodic check alone would not rewrite it.
   useMa2SongSyncStore.setState({ songs: { first: { sessionId: 'old', itemId: 'first', documentId: useDocumentStore.getState().documentId, name: 'first', settings: ma2SongSyncSettings(value, 'first'), state: 'verified', message: '',
     acknowledged: JSON.stringify([ma2SongPoints(value.rundown[0]!.lighting!), 'first', 480_000]), remoteRevision: 'a'.repeat(64) } } });
-  sync.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  sync.mockRejectedValue(new Error('MA2 响应超时，操作没有确认，不会自动重试'));
   writeMissingConsoleShows(); stopMa2SongSync('second');
   await tickMa2SongSync(false);
   expect(check).not.toHaveBeenCalled();
@@ -443,7 +443,7 @@ it('来源不符保留修改，只检查连接状态；恢复原控台后自动�
   status.mockResolvedValue({ state: 'connected', settings: { host: '192.0.2.2', port: 30000 } });
   await prepareMa2RealtimeSession(); await prepareMa2RealtimeSession();
   expect(useMa2AutoSyncStore.getState().status).toBe('blocked');
-  expect(useMa2AutoSyncStore.getState().message).toContain('来源不同');
+  expect(useMa2AutoSyncStore.getState().message).toContain('不是同一来源');
   expect(status).toHaveBeenCalledTimes(2); expect(catalog).not.toHaveBeenCalled(); expect(useMa2SongSyncStore.getState().songs).toEqual({});
   status.mockResolvedValue({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' } });
   vi.advanceTimersByTime(1001);
@@ -452,13 +452,13 @@ it('来源不符保留修改，只检查连接状态；恢复原控台后自动�
 });
 it('会话检查偶发失败后，下一次核对成功即解除待核对，不需要手动按钮', async () => {
   vi.useFakeTimers();
-  metadata.mockRejectedValueOnce(new Error('控台工程或序列目录发生变化，请重新读取'));
+  metadata.mockRejectedValueOnce(new Error('控台的 Show 或序列有变化，请重新读取'));
   expect(await prepareMa2RealtimeSession()).toBe(false);
-  expect(useMa2AutoSyncStore.getState()).toMatchObject({ status: 'blocked', message: '控台工程或序列目录发生变化，请重新读取' });
+  expect(useMa2AutoSyncStore.getState()).toMatchObject({ status: 'blocked', message: '控台的 Show 或序列有变化，请重新读取' });
   vi.advanceTimersByTime(1001);
   expect(await prepareMa2RealtimeSession()).toBe(true);
   expect(useMa2AutoSyncStore.getState().status).not.toBe('blocked');
-  expect(useMa2AutoSyncStore.getState().message).not.toContain('序列目录发生变化');
+  expect(useMa2AutoSyncStore.getState().message).not.toContain('序列有变化');
 });
 it('目录核对通过但后续读取持续失败时保持待核对，不来回跳也不重复写日志', async () => {
   vi.useFakeTimers();
@@ -466,7 +466,7 @@ it('目录核对通过但后续读取持续失败时保持待核对，不来回�
   const preview = { name: 'TC', readAt: new Date().toISOString(), sourceXml: '<MA/>' };
   value.rundown[0]!.lighting!.ma2Bindings = [{ id: 'bound', timecode: 9901, ...preview, baselineTracks: [], mappings: [], trackMappings: [] }];
   useDocumentStore.getState().setProject(value, 'song.tblink');
-  catalog.mockRejectedValue(new Error('MA2 响应超时；操作未确认，不会自动重试'));
+  catalog.mockRejectedValue(new Error('MA2 响应超时，操作没有确认，不会自动重试'));
   const statuses: string[] = [];
   const unsubscribe = useMa2AutoSyncStore.subscribe(state => { if (statuses.at(-1) !== state.status) statuses.push(state.status); });
   try {
@@ -558,7 +558,7 @@ it('开始播放中断写入时保留待同步状态，不把歌曲永久锁住'
   });
   await tickMa2SongSync(false);
   expect(useMa2SongSyncStore.getState().songs.first).toMatchObject({ state: 'pending', requestId: null });
-  expect(useMa2SongSyncStore.getState().songs.first?.message).toContain('停止后核对');
+  expect(useMa2SongSyncStore.getState().songs.first?.message).toContain('停止后继续同步');
 });
 it('存档期间暂停也会取消尚未发出的同步，不会在暂停后偷偷写入', async () => {
   await prepareMa2RealtimeSession(); stopMa2SongSync('second');

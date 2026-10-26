@@ -12,13 +12,13 @@ export function VideoAudioSource(props: { itemId: string; asset: LinkMediaAsset;
   const selected = reference?.sourceMediaAssetId === props.asset.id;
   const bindVideoAudio = async (): Promise<void> => {
     const { path, documentId } = useDocumentStore.getState();
-    if (!path || !props.asset.durationMs) { props.notify('请先保存工程，并确认视频时长已读取', 'error'); return; }
+    if (!path || !props.asset.durationMs) { props.notify('请先保存工程，并等视频时长读取完成', 'error'); return; }
     setBusy(true);
     try {
       const directory = path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
       const audio = await linkDesktopViewModel.importReferenceAudio({ projectPath: path, sourcePath: directory + props.asset.relativePath, durationMs: props.asset.durationMs });
       useDocumentStore.getState().executeForDocument(documentId, setReferenceAudioCommand(props.itemId, { ...audio, sourceMediaAssetId: props.asset.id }));
-      props.notify('已使用视频完整原声作为歌曲音轨，节目时长已同步');
+      props.notify('已把视频的完整原声作为歌曲音轨，节目时长已更新');
     } catch (error) { props.notify(`提取视频原声失败：${error instanceof Error ? error.message : String(error)}`, 'error'); }
     finally { setBusy(false); }
   };

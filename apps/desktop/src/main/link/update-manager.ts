@@ -117,7 +117,7 @@ export class LinkUpdateManager {
           phase: 'downloaded',
           availableVersion: info.version,
           progressPercent: 100,
-          message: `版本 ${info.version} 已下载，确认后重启安装`
+          message: `版本 ${info.version} 已下载，确认后会重启并安装`
         }),
         error: (error) => { if (!this.backgroundCheck) this.update({ phase: 'error', message: normalizeUpdateError(error) }); }
       });
@@ -138,7 +138,7 @@ export class LinkUpdateManager {
         await this.checkEntitlement();
       }
     } catch (error) {
-      if (this.backgroundCheck) this.update({ phase: 'idle', message: `启动时未能检查更新（${normalizeUpdateError(error)}），可以在软件更新中重试` });
+      if (this.backgroundCheck) this.update({ phase: 'idle', message: `启动时没能检查更新（${normalizeUpdateError(error)}），可以在「软件更新」里重试` });
       else this.update({ phase: 'error', message: normalizeUpdateError(error) });
     } finally {
       this.backgroundCheck = false;
@@ -160,7 +160,7 @@ export class LinkUpdateManager {
     if (this.busy || !this.client || this.status.phase !== 'available') {
       throw new Error('当前没有可下载的更新');
     }
-    if (this.rules.playbackActive()) throw new Error('播放中不下载更新，停止播放后再下载');
+    if (this.rules.playbackActive()) throw new Error('播放中不下载更新，请停止播放后再下载');
     this.busy = true;
     try {
       const blocked = await this.checkEntitlement();
@@ -191,7 +191,7 @@ export class LinkUpdateManager {
     } catch (error) {
       if (download.signal.aborted) {
         this.update({ phase: 'available', progressPercent: null, transferredBytes: null, totalBytes: null,
-          message: '播放已开始，更新下载已停止；停止播放后可重新下载' });
+          message: '开始播放后更新下载已暂停，停止播放后可以重新下载' });
         this.rules.log('info', `播放已开始，更新 ${version} 的下载已停止`);
       } else {
         this.update({ phase: 'error', message: normalizeUpdateError(error) });
@@ -207,7 +207,7 @@ export class LinkUpdateManager {
   /** Confirms a downloaded update may be installed; run before the quit flow starts. */
   async prepareInstall(): Promise<void> {
     const installer = this.offer?.installer;
-    if (this.busy || !this.client || this.status.phase !== 'downloaded' || !installer) throw new Error('更新尚未下载完成');
+    if (this.busy || !this.client || this.status.phase !== 'downloaded' || !installer) throw new Error('更新还没下载完');
     // The cached installer is checked again: it could have changed on disk since the download.
     const mismatch = await this.installerMismatch(installer);
     if (mismatch) {
@@ -221,7 +221,7 @@ export class LinkUpdateManager {
   /** Starts the installer; throws when it cannot start, and the app must then stay open. */
   install(): void {
     if (this.busy || !this.client || this.status.phase !== 'downloaded' || !this.offer?.installer) {
-      throw new Error('更新尚未下载完成');
+      throw new Error('更新还没下载完');
     }
     this.rules.log('info', `启动更新 ${this.status.availableVersion ?? ''} 的安装程序`);
     this.client.install();
@@ -251,13 +251,13 @@ export class LinkUpdateManager {
   private rejectInstaller(reason: string): void {
     if (this.offer) this.offer.installer = null;
     this.rules.log('error', `拒绝安装更新 ${this.status.availableVersion ?? ''}：${reason}`);
-    this.update({ phase: 'error', message: `下载的更新与发布签名不一致，已拒绝安装；请联系发行方。${reason}` });
+    this.update({ phase: 'error', message: `下载的更新没通过签名校验，已拒绝安装，请联系售后。${reason}` });
   }
 
   private async checkEntitlement(): Promise<string | null> {
     const offer = this.offer;
     const blocked = offer?.signatureIssue
-      ? `更新签名校验失败（${offer.signatureIssue}），不能下载和安装；请联系发行方`
+      ? `更新签名校验失败（${offer.signatureIssue}），不能下载和安装，请联系售后`
       : updateEntitlementIssue(await this.rules.license(), this.status.availableVersion, offer?.signed?.releaseDate ?? null);
     if (blocked !== this.status.installBlockedReason) this.update({ installBlockedReason: blocked });
     return blocked;
@@ -352,7 +352,7 @@ function initialStatus(currentVersion: string, packaged: boolean, feedUrl: strin
     totalBytes: null,
     feedConfigured,
     installBlockedReason: null,
-    message: packaged ? (feedConfigured ? '可以检查软件更新' : '发行方尚未配置有效的 HTTPS 更新地址') : '开发模式不执行安装更新，请使用 Windows 安装版验证'
+    message: packaged ? (feedConfigured ? '可以检查软件更新' : '软件更新地址还没设置好，请联系售后') : '开发模式下不能安装更新，请用 Windows 安装版'
   };
 }
 
@@ -361,9 +361,9 @@ function initialStatus(currentVersion: string, packaged: boolean, feedUrl: strin
 function updateEntitlementIssue(license: LicenseStatus, version: string | null, releaseDate: string | null): string | null {
   if (license.state !== 'active' || !license.claims) return `本机授权当前不可用（${license.message}），可以查看新版本，恢复授权后再安装`;
   const released = releaseDate === null ? Number.NaN : Date.parse(releaseDate);
-  if (!Number.isFinite(released)) return '更新信息没有有效的发布日期，无法确认是否在升级服务期内，不能安装；请联系发行方';
+  if (!Number.isFinite(released)) return '更新信息缺少发布日期，无法确认是否在升级服务期内，暂不能安装，请联系售后';
   if (released <= Date.parse(license.claims.updatesUntil)) return null;
-  return `新版本 ${version ?? ''} 发布于 ${chinaDate(released)}，晚于本机授权的升级服务期限 ${chinaDate(Date.parse(license.claims.updatesUntil))}；可以继续使用当前版本，续费延长升级服务后再安装`;
+  return `新版本 ${version ?? ''} 发布于 ${chinaDate(released)}，晚于本机授权的升级服务期限 ${chinaDate(Date.parse(license.claims.updatesUntil))}。当前版本可以继续用，续费延长升级服务后再安装`;
 }
 
 /** The comparison uses exact instants; dates are shown in Beijing time, as on the download page. */
@@ -386,7 +386,7 @@ function validFeedUrl(value: string): boolean {
 
 function normalizeUpdateError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  if (/401|403/i.test(message)) return '更新服务拒绝访问，请联系发行方';
-  if (/404|not found|latest version/i.test(message)) return '更新服务尚未发布可用的正式版本';
+  if (/401|403/i.test(message)) return '更新服务拒绝访问，请联系售后';
+  if (/404|not found|latest version/i.test(message)) return '更新服务还没有可用的正式版本';
   return `更新失败：${message}`;
 }

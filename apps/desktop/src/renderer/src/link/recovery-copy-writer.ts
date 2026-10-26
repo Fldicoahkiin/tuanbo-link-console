@@ -103,7 +103,7 @@ export class RecoveryCopyWriter {
       useRecoveryCopyStore.setState({ error: null });
     } catch (cause) {
       this.failed = version;
-      const message = `恢复副本写入失败，未保存的修改目前只在内存中：${cause instanceof Error ? cause.message : String(cause)}`;
+      const message = `恢复副本写入失败：${cause instanceof Error ? cause.message : String(cause)}。未保存的修改目前只在内存里，请尽快保存工程。`;
       useRecoveryCopyStore.setState({ error: message });
       this.dependencies.report(message);
     } finally {
@@ -119,7 +119,7 @@ export class RecoveryCopyWriter {
       }
       this.lastWritten = '';
     } catch (cause) {
-      const message = `恢复副本清理失败，下次打开时可能再次提示恢复：${cause instanceof Error ? cause.message : String(cause)}`;
+      const message = `清理恢复副本失败：${cause instanceof Error ? cause.message : String(cause)}。下次打开时可能还会提示恢复。`;
       useRecoveryCopyStore.setState({ error: message });
       this.dependencies.report(message);
     }

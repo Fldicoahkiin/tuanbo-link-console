@@ -15,8 +15,8 @@ export function P1LightingImportReport({ project, catalog }: { project: LinkProj
   const stale = Object.values(project.ma2ReadState?.pairings ?? {}).filter(pair => pair.status === 'stale').length;
   return <div aria-label="音乐与灯光导入结果">
     <h4>{missing.length || report.unresolved.length || stale ? '音乐与灯光有待处理项' : '歌曲灯光已导入，可在编辑器切换歌曲查看'}</h4>
-    <p>已关联 {report.songs.length - missing.length} / {report.songs.length} 首歌曲。以下统计为本次读取后工程中已绑定的灯光事件，不代表控台播放验证。</p>
-    <p>{catalog.entries.filter(entry => entry.preview?.unconverted.length).length} 条含控台专有动作 · {report.unresolved.length} 条待配对 · {catalog.entries.filter(entry => entry.error).length} 条读取异常。详情在“配对与查看 Cue”中筛选。</p>
-    {stale ? <p role="alert">{stale} 条已有对应关系需要重新核对，保留本地 Cue；这些歌曲暂不输出灯光时间码，音频仍可播放。</p> : null}
+    <p>已关联 {report.songs.length - missing.length} / {report.songs.length} 首歌曲。下面统计的是本次读取后工程里已绑定的灯光事件，不代表已在控台上验证过播放。</p>
+    <p>{catalog.entries.filter(entry => entry.preview?.unconverted.length).length} 条含控台原样动作 · {report.unresolved.length} 条待配对 · {catalog.entries.filter(entry => entry.error).length} 条读取异常。详情可在“配对与查看 Cue”里筛选查看。</p>
+    {stale ? <p role="alert">{stale} 条已有的对应关系需要重新确认，本地 Cue 已保留；播放时时间码照常发送。</p> : null}
   </div>;
 }

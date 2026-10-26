@@ -16,16 +16,16 @@ function setup() {
 
 it('许可返回前停止，迟到准备不派发；旧的取消也不能影响新代数', async () => {
   const test = setup(), stop = { version: 1 as const, sessionId: test.request.sessionId, generation: 1 };
-  const pending = expect(test.api.prepare(test.request)).rejects.toThrow('已取消');
+  const pending = expect(test.api.prepare(test.request)).rejects.toThrow('排队时被取消');
   await test.api.stop(stop); test.release(); await pending;
   expect(test.prepare).not.toHaveBeenCalled(); expect(test.stopOwned).not.toHaveBeenCalled();
   await test.api.prepare({ ...test.request, generation: 2 });
-  await expect(test.api.stop(stop)).rejects.toThrow('旧准备'); expect(test.stopOwned).not.toHaveBeenCalled();
+  await expect(test.api.stop(stop)).rejects.toThrow('上一次准备'); expect(test.stopOwned).not.toHaveBeenCalled();
   await test.api.stop({ ...stop, generation: 2 }); expect(test.stopOwned).toHaveBeenCalledTimes(1);
 });
 
 it('重复准备拒绝，异步许可不能使先前歌曲盖过后来的歌曲', async () => {
-  const test = setup(); const first = expect(test.api.prepare(test.request)).rejects.toThrow('已取消');
+  const test = setup(); const first = expect(test.api.prepare(test.request)).rejects.toThrow('排队时被取消');
   const newer = { ...test.request, generation: 2 }; const second = test.api.prepare(newer);
   await expect(test.api.prepare(newer)).rejects.toThrow('已过期'); test.release(); await first; await second;
   expect(test.prepare).toHaveBeenCalledExactlyOnceWith(newer);

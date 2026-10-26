@@ -15,7 +15,7 @@ export class ObsRequestScheduler {
   private readonly queue: Job[] = [];
   private readonly active = new Set<Job>();
   private generation = 0;
-  private failure: Error | null = new Error('OBS 请求通道尚未连接');
+  private failure: Error | null = new Error('OBS 还没连接');
   private requestCount = 0;
   private maximumQueued = 0;
   private maximumActive = 0;
@@ -23,7 +23,7 @@ export class ObsRequestScheduler {
 
   constructor(private readonly timeoutMs: number, private readonly onTimeout: (error: Error) => void) {}
 
-  connect(): void { this.invalidate(new Error('OBS 连接会话已更换')); this.failure = null; }
+  connect(): void { this.invalidate(new Error('OBS 连接已更换')); this.failure = null; }
 
   invalidate(error: Error): void {
     this.generation++; this.failure = error;
@@ -60,8 +60,8 @@ export class ObsRequestScheduler {
     const context = { ...inherited, generation: inherited?.generation ?? this.generation, priority: inherited?.priority ?? 'control' };
     if (context.generation !== this.generation) return Promise.reject(new Error('OBS 旧连接的请求已取消'));
     if (this.failure) return Promise.reject(this.failure);
-    if (context.canSend && !context.canSend()) return Promise.reject(new Error(`OBS 动作已取消或超过执行边界；尚未发送：${label}`));
-    if (this.queue.length >= 128) return Promise.reject(new Error(`OBS 请求队列已满：${label}`));
+    if (context.canSend && !context.canSend()) return Promise.reject(new Error(`OBS 动作已取消或已过时，没有发送：${label}`));
+    if (this.queue.length >= 128) return Promise.reject(new Error(`OBS 请求排队已满：${label}`));
     return new Promise<T>((resolve, reject) => {
       const queuedAt = performance.now(); let startedAt: number | null = null;
       const finish = (error: unknown, result?: T): void => {
@@ -78,7 +78,7 @@ export class ObsRequestScheduler {
       };
       const job: Job = { ...context, started: false, settled: false, reject: error => finish(error),
         timer: setTimeout(() => {
-          const error = new Error(`OBS ${label} 请求超过 ${this.timeoutMs}ms${job.started ? '；执行结果不明，请核对后重新连接' : '；尚未发送'}`);
+          const error = new Error(`OBS ${label} 请求超时（${this.timeoutMs} ms）${job.started ? '；不确定是否已执行，请检查 OBS 后重新连接' : '；还没发送'}`);
           if (job.started) { this.invalidate(error); this.onTimeout(error); }
           else finish(error);
         }, this.timeoutMs),
@@ -88,7 +88,7 @@ export class ObsRequestScheduler {
           // Preserve the operation's original generation through its continuation.
           Promise.resolve().then(() => {
             if (job.settled || job.generation !== this.generation) throw new Error('OBS 请求在发送前已取消');
-            if (context.canSend && !context.canSend()) throw new Error(`OBS 动作已取消或超过执行边界；尚未发送：${label}`);
+            if (context.canSend && !context.canSend()) throw new Error(`OBS 动作已取消或已过时，没有发送：${label}`);
             job.started = true; startedAt = performance.now(); this.requestCount++; context.dispatched?.();
             return this.context.run(context, operation);
           }).then(value => finish(null, value), error => finish(error));

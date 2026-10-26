@@ -24,7 +24,7 @@ export class NativeAudioDecode {
     // answering): its readers fail at once, and it is asked to quit like a cancel, not ended.
     const stopWatching = watchOutputGrowth(options.output, { intervalMs: 2_000, stallMs: 30_000 }, error => {
       if (this.result || this.cancelled) return;
-      this.stalled = new Error('音频解码超过 30 秒没有进展，已请求 FFmpeg 停止', { cause: error });
+      this.stalled = new Error('音频解码 30 秒没有进展，已停止解码', { cause: error });
       if (this.child.stdin.writable) this.child.stdin.write('q\n');
     });
     this.finished = new Promise<DecodeResult>(resolve => {
@@ -52,7 +52,7 @@ export class NativeAudioDecode {
       try { size = (await stat(this.options.output)).size; }
       catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
       if (size >= bytes) return;
-      if (this.result) throw new Error('实际解码音频短于节目播放范围');
+      if (this.result) throw new Error('解码出的音频比节目的播放范围短');
       await delay(10, undefined, { signal });
     }
   }
@@ -63,7 +63,7 @@ export class NativeAudioDecode {
     const deadline = new AbortController();
     try {
       const finished = await Promise.race([this.finished.then(() => true), delay(5000, false, { signal: deadline.signal })]);
-      if (!finished) throw new Error('音频解码尚未退出；保留进程，不强杀，也不启动后续解码');
+      if (!finished) throw new Error('音频解码还没退出，进程保留，不会强制结束，也不会开始新的解码');
     } finally { deadline.abort(); }
   }
 

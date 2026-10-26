@@ -59,7 +59,7 @@ export async function writeMa2SongTimecode(bridge: Pick<Ma2OnpcBridge, 'request'
   }
   const [page, slot] = song.executor.split('.');
   const executorName = inspectMa2ExecutorXml(await bridge.request('EXECUTOR', Number(page), slot)).executorName;
-  if (!executorName) throw new Error(`执行器 ${song.executor} 的名称未能读取，未写入时间码节目`);
+  if (!executorName) throw new Error(`读不到执行器 ${song.executor} 的名称，没有写入时间码节目`);
   const desired = ma2SongTimecodeXml(current, number, { name: song.name, startMs: song.startMs, executor: song.executor, executorName, sequence: song.sequence, cues: song.cues, ...song.lengthMs === undefined ? {} : { lengthMs: song.lengthMs } });
   if (sameMa2XmlObjects(desired, current)) return { timecode: timecode(number, current), backup: null };
   const written = await bridge.exchange('APPLY', number, current, desired);

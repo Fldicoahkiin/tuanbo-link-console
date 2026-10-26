@@ -38,7 +38,7 @@ it('新节目先获许可时，旧准备和旧会话停止不能覆盖新节目'
   const starting = gateway.prepare(old), cancelled = expect(starting).rejects.toThrow('取消');
   expect((await gateway.prepare(next)).sessionId).toBe(next.sessionId);
   pending.release(); await cancelled;
-  await expect(gateway.control({ version: 1, sessionId: old.sessionId, generation: 9, kind: 'stop' })).rejects.toThrow('失效会话');
+  await expect(gateway.control({ version: 1, sessionId: old.sessionId, generation: 9, kind: 'stop' })).rejects.toThrow('请求已失效');
   expect(engine.prepare).toHaveBeenCalledExactlyOnceWith(next); expect(engine.control).not.toHaveBeenCalled();
 });
 

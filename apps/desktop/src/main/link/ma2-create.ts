@@ -7,7 +7,7 @@ import { toConsoleLabel } from '@tb/core/link';
 export function createMa2TimecodeXml(target: number, name: string, version: string): string {
   if (!Number.isInteger(target) || target < 1 || target > 99999) throw new Error('Timecode 编号应为 1–99999');
   if (!name.trim() || name.length > 512 || /[\u0000-\u001f]/.test(name)) throw new Error('Timecode 名称无效');
-  if (!/^3\.(?:3\.4|7\.0)(?:\.\d+)?$/.test(version)) throw new Error('该 MA2 版本尚未验证 Timecode 创建');
+  if (!/^3\.(?:3\.4|7\.0)(?:\.\d+)?$/.test(version)) throw new Error('这个 MA2 版本还没验证过 Timecode 创建');
   const namespace = 'http://schemas.malighting.de/grandma2/xml/MA';
   const document = new DOMImplementation().createDocument(namespace, 'MA', null);
   const root = document.documentElement;

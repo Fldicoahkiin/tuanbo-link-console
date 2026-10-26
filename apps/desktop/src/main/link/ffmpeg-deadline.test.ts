@@ -24,7 +24,7 @@ describe('ffmpegDeadline', () => {
   it('请求退出后仍不结束的进程在 5 秒后被结束', async () => {
     const child = stalled(false); child.stdin.end();
     const fail = vi.fn();
-    ffmpegDeadline(child, '生成编辑代理', 200, fail);
+    ffmpegDeadline(child, '生成编辑预览', 200, fail);
     const [, signal] = await once(child, 'close') as [number | null, NodeJS.Signals | null];
     expect(fail).toHaveBeenCalledOnce();
     expect(signal ?? 'exited').not.toBe('exited');

@@ -78,7 +78,7 @@ describe('OBS 来源添加闭环', () => {
     const { manager, calls, client } = setup(); const call = client.call.bind(client);
     client.call = (method, data) => method === 'GetInputSettings' ? Promise.resolve({ inputSettings: {} }) : call(method, data);
     const draft = await manager.create({ kind: 'text', name: '字幕', sceneName: '场景' });
-    await expect(manager.apply(draft.inputName, obsSourceSettingsSchema.parse({ text: '测试' }))).rejects.toThrow('未确认');
+    await expect(manager.apply(draft.inputName, obsSourceSettingsSchema.parse({ text: '测试' }))).rejects.toThrow('没有确认');
     expect(calls.some((entry) => entry.method === 'SetSceneItemEnabled')).toBe(false);
   });
 });

@@ -20,22 +20,22 @@ export function songLightingStatus(project: LinkProject, itemId: string): SongLi
   if (!item) throw new Error(`节目单中没有 ${itemId}`);
   const own = item.lighting?.consoleSong;
   if (item.lighting && own?.timecode) return ownShowStatus(item, item.lighting, own, own.timecode);
-  if (own && !own.executor) return { state: 'attention', reasons: ['本曲控台序列只放在 Layout 页面上，没有执行器位置，不能建时间码节目'] };
+  if (own && !own.executor) return { state: 'attention', reasons: ['这首歌的控台序列只放在 Layout 页面上，没有执行器位置，不能建时间码节目'] };
   const pairings = Object.entries(project.ma2ReadState?.pairings ?? {}).filter(([, pairing]) => pairing.itemId === itemId);
   const bindings = item.lighting?.ma2Bindings ?? [];
   if (!pairings.length && !bindings.length) return { state: 'unmatched' };
   const reasons: string[] = [];
   for (const [target, pairing] of pairings) {
-    if (pairing.status === 'stale') reasons.push(`控台 Timecode ${target}：${pairing.reason ?? '需要重新核对配对'}`);
-    if (pairing.status === 'suggested') reasons.push(`控台 Timecode ${target} 是自动匹配结果，尚未确认`);
+    if (pairing.status === 'stale') reasons.push(`控台 Timecode ${target}：${pairing.reason ?? '需要重新确认关联'}`);
+    if (pairing.status === 'suggested') reasons.push(`控台 Timecode ${target} 是自动匹配的，还没确认`);
   }
-  for (const binding of bindings) if (!pairings.some(([target]) => Number(target) === binding.timecode)) reasons.push(`控台 Timecode ${binding.timecode} 尚未读取控台核对配对`);
+  for (const binding of bindings) if (!pairings.some(([target]) => Number(target) === binding.timecode)) reasons.push(`控台 Timecode ${binding.timecode} 还没确认关联，请先读取控台`);
   const confirmed = pairings.filter(([, pairing]) => pairing.status === 'confirmed');
   if (confirmed.length > 1) reasons.push(`同一首歌对应多个控台 Timecode：${confirmed.map(([target]) => target).join('、')}`);
   let startMs: number | null = null;
   try {
     startMs = programTimeOrigin(item);
-    if (lightingTimeOrigin(item.lighting, startMs) !== startMs) reasons.push('歌曲起始时间与控台时间线的起点不一致');
+    if (lightingTimeOrigin(item.lighting, startMs) !== startMs) reasons.push('歌曲的开始时间和控台时间线的起点对不上');
   } catch (error) { reasons.push(error instanceof Error ? error.message : String(error)); }
   for (const [target] of confirmed) {
     const frame = project.ma2ReadState?.catalog.entries.find(entry => entry.target === Number(target))?.frameFormat;

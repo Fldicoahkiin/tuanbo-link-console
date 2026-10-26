@@ -43,11 +43,11 @@ test('时间线更换工程后音源缺失，不沿用上一首音频或空跑',
     await expect(missingAssets).toHaveCount(0);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.getByRole('button', { name: '修改节目名称：音源缺失', exact: true })).toBeVisible();
-    await expect(page.getByRole('alert')).toContainText('当前音频无法读取或解码');
+    await expect(page.getByRole('alert')).toContainText('当前音频读不出来');
     await expect(page.locator('.timeline-audio-engine')).not.toHaveAttribute('src', oldSource!);
     await expect.poll(() => page.locator('.timeline-audio-engine').evaluate(element => (element as HTMLAudioElement).error?.code)).toBe(4);
     await page.getByRole('button', { name: '播放时间线', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('当前音频无法读取或解码');
+    await expect(page.getByRole('alert')).toContainText('当前音频读不出来');
     await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toHaveCount(0);
     await page.waitForTimeout(250);
     await expect(page.locator('.timeline-transport code')).toHaveText('00:00');

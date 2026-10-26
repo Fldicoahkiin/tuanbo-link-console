@@ -96,7 +96,7 @@ export class LightingNetworkOutput {
     this.stop();
     const results = await Promise.allSettled([this.tail, ...this.cancellations]);
     const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
-    if (errors.length) throw new AggregateError(errors, '灯光网络取消未完成');
+    if (errors.length) throw new AggregateError(errors, '灯光网络取消没有完成');
   }
   private cancelSession(): void {
     const cancellation = ++this.cancellation;
@@ -133,7 +133,7 @@ export class LightingNetworkOutput {
     }
   }
   private enqueue(sessionId: string, operation: () => Promise<void>): void {
-    if (this.pending >= 32) { this.fault = '灯光网络指令积压超过 32 条，本条未发送；控台响应过慢，请减少同时调用的素材'; return; }
+    if (this.pending >= 32) { this.fault = '灯光网络指令积压超过 32 条，这条没有发送；控台响应太慢，请减少同时调用的素材'; return; }
     this.pending += 1;
     this.tail = this.tail.then(async () => {
       if (this.sessionId !== sessionId || this.failure) return;
@@ -149,7 +149,7 @@ export class LightingNetworkOutput {
       if (lateMs > 150 && this.sessionId === sessionId) this.fault = `灯光网络 Cue 晚 ${lateMs} ms 执行：${describeAction(action)}`;
       return true;
     } catch (error) {
-      if (this.sessionId === sessionId) this.fault = `灯光网络 Cue 未执行：${describeAction(action)} · ${error instanceof Error ? error.message : String(error)}`;
+      if (this.sessionId === sessionId) this.fault = `灯光网络 Cue 没有执行：${describeAction(action)} · ${error instanceof Error ? error.message : String(error)}`;
       return false;
     }
   }

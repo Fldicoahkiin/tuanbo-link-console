@@ -21,7 +21,7 @@ export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReferenc
   const run = async (action: () => Promise<void>): Promise<void> => {
     if (useMa2AttributeStore.getState().busy || useMa2MaterialReadStore.getState().busy) { setError('请等待当前控台读取结束'); return; }
     setBusy(true); setError('');
-    useMa2AttributeStore.setState({ busy: true, activeId: null, progress: null, failed: false, message: '正在核对空 Cue 删除操作' });
+    useMa2AttributeStore.setState({ busy: true, activeId: null, progress: null, failed: false, message: '正在检查要删除的空 Cue' });
     try { await action(); }
     catch(cause) { const text = cause instanceof Error ? cause.message : String(cause); setError(text); useMa2AttributeStore.setState({ message: text, failed: true }); }
     finally { setBusy(false); useMa2AttributeStore.setState({ busy: false, activeId: null, progress: null }); }
@@ -33,23 +33,23 @@ export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReferenc
     if (!current.project) throw new Error('请先打开工程');
     const outcome = await saveDocument();
     if (outcome.status === 'failed') throw new Error(outcome.message);
-    if (outcome.status === 'canceled') throw new Error('删除空 Cue 前需要先保存工程；本次未执行');
+    if (outcome.status === 'canceled') throw new Error('删除空 Cue 前要先保存工程，这次没有删除');
     if (useDocumentStore.getState().documentId !== current.documentId) throw new Error('工程已切换');
     return { path: outcome.path, documentId: current.documentId, projectId: current.project.projectId };
   };
   const prepare = (): void => { void run(async () => {
     setPlan(null); setRequest(null);
-    if (refs.length > 200) throw new Error('一次最多核对 200 个 Cue，请先多选需要清理的部分');
+    if (refs.length > 200) throw new Error('一次最多检查 200 个 Cue，请分批选择要清理的 Cue');
     const state = useDocumentStore.getState(); const cache = state.project?.ma2MaterialLibrary;
     if (!cache?.library || cache.library.sourceUnverified) throw new Error('请先读取控台素材和属性');
     const connection = await ma2MaterialConnection();
-    if (!connection.network || `${connection.network.host}:${connection.network.port}` !== cache.source) throw new Error('请连接素材来源的 MA2 网络控台');
+    if (!connection.network || `${connection.network.host}:${connection.network.port}` !== cache.source) throw new Error('请连接这些素材所在的 MA2 网络控台');
     const saved = await save(); const {show,generation,version} = cache.library.directory;
     const input: Ma2CueDeletePrepare = { network: connection.network, expectedSource: {show,generation,version}, projectId:saved.projectId, projectPath:saved.path, refs:refs.map(({sequence,cue})=>({sequence,cue})), progressId:crypto.randomUUID() };
     const value = await window.tbLink.prepareMa2CueDeletion(input,progress);
-    if (useDocumentStore.getState().documentId !== saved.documentId) throw new Error('工程已切换，请重新核对');
+    if (useDocumentStore.getState().documentId !== saved.documentId) throw new Error('工程已切换，请重新检查');
     setRequest({input,documentId:saved.documentId}); setPlan(value);
-    useMa2AttributeStore.setState({message:`空 Cue 清单已核对：${value.items.filter(item=>item.eligible).length} 项可删除，等待确认`});
+    useMa2AttributeStore.setState({message:`检查完成：${value.items.filter(item=>item.eligible).length} 个空 Cue 可以删除，等你确认`});
   }); };
   const commit = (): void => { if (!plan || !request) return; void run(async () => {
     if (useDocumentStore.getState().documentId !== request.documentId) throw new Error('工程已切换，未删除');
@@ -57,22 +57,22 @@ export function Ma2CueDeleteDialog({ refs, onClose }: { refs: ConsoleCueReferenc
     const base = { network:request.input.network, expectedSource:request.input.expectedSource, projectId:request.input.projectId, projectPath:request.input.projectPath };
     const value = await window.tbLink.commitMa2CueDeletion({...base,token:plan.token,progressId:crypto.randomUUID()},progress);
     setResult(value); setPlan(null);
-    if (useDocumentStore.getState().documentId !== request.documentId) throw new Error('控台操作已完成，但工程已切换；请回到原工程读取控台');
+    if (useDocumentStore.getState().documentId !== request.documentId) throw new Error('控台上已经删除完成，但工程已切换。请回到原来的工程重新读取控台');
     if (value.deleted.length || value.error) {
       useDocumentStore.getState().executeForDocument(request.documentId,applyMa2CueDeletionCommand(`${base.network.host}:${base.network.port}`,value));
       useDocumentStore.getState().markConsoleSynced(request.documentId);
     }
     setError(value.error ?? '');
-    useMa2AttributeStore.setState({message:`已回读确认删除 ${value.deleted.length} 个空 Cue${value.error ? `；${value.error}` : ''}`, failed: Boolean(value.error)});
+    useMa2AttributeStore.setState({message:`已删除 ${value.deleted.length} 个空 Cue（已在控台确认）${value.error ? `；${value.error}` : ''}`, failed: Boolean(value.error)});
   }); };
   return createPortal(<dialog ref={dialog} className="lighting-attribute-dialog" aria-label="删除控台空 Cue" onCancel={event=>{if(busy)event.preventDefault();else onClose();}}>
     <header><strong>删除控台空 Cue</strong><button aria-label="关闭删除清单" onClick={onClose} disabled={busy}><X/></button></header>
-    <p>这会删除 MA2 控台中的 Cue，并同步更新素材列表。先核对清单，确认后才会执行。</p>
-    {!plan && !result ? <><p>已选择 {refs.length} 个候选 Cue。将重新检查属性、Part、命令、继承可能性及时间线引用。</p><button disabled={busy} onClick={prepare}>{busy ? '正在核对，进度见左侧…' : '读取并生成删除清单'}</button></> : null}
-    {plan ? <><div className="attribute-cue-list"><table className="cue-delete-list"><thead><tr><th>名称</th><th>序列 / Cue</th><th>核对结果</th></tr></thead><tbody>{plan.items.map(item=><tr key={`${item.sequence}:${item.cue}`}><td>{item.name}</td><td>{item.sequence} / {Number(item.cue)}</td><td>{item.eligible?'可删除：':'不删除：'}{item.reason}</td></tr>)}</tbody></table></div>
-      <p>删除前备份完整序列。删除会改变后续 Go 的步序；控台宏、外部控制及仅用 Go 的调用仍需现场核对。软件撤销不会恢复控台删除。</p>
-      <footer className="cue-delete-actions"><button onClick={onClose} disabled={busy}>取消</button><button onClick={prepare} disabled={busy}>重新核对</button><button className="danger" disabled={busy || !plan.items.some(item=>item.eligible)} onClick={commit}><Trash2/>{busy?'正在备份和删除…':`确认删除控台 ${plan.items.filter(item=>item.eligible).length} 个空 Cue`}</button></footer></> : null}
-    {result ? <><p>已回读确认删除 {result.deleted.length} 个 Cue。</p><details><summary>查看序列备份</summary><ul>{result.backups.map(path=><li key={path}>{path}</li>)}</ul></details><button disabled={busy} onClick={onClose}>关闭</button></> : null}
+    <p>这会删除 MA2 控台上的 Cue，并同步更新素材列表。请先看清单，确认后才会执行。</p>
+    {!plan && !result ? <><p>已选择 {refs.length} 个候选 Cue。删除前会重新检查属性、Part、命令、是否可能被继承，以及时间线里有没有用到。</p><button disabled={busy} onClick={prepare}>{busy ? '正在检查，进度见左侧…' : '读取并生成删除清单'}</button></> : null}
+    {plan ? <><div className="attribute-cue-list"><table className="cue-delete-list"><thead><tr><th>名称</th><th>序列 / Cue</th><th>检查结果</th></tr></thead><tbody>{plan.items.map(item=><tr key={`${item.sequence}:${item.cue}`}><td>{item.name}</td><td>{item.sequence} / {Number(item.cue)}</td><td>{item.eligible?'可删除：':'不删除：'}{item.reason}</td></tr>)}</tbody></table></div>
+      <p>删除前会备份整个序列。删除后，后面 Cue 的 Go 步序会变；用到这些步序的控台宏、外部控制和只靠 Go 的调用，请到现场再确认。在联动台里撤销不能恢复控台上已删除的 Cue。</p>
+      <footer className="cue-delete-actions"><button onClick={onClose} disabled={busy}>取消</button><button onClick={prepare} disabled={busy}>重新检查</button><button className="danger" disabled={busy || !plan.items.some(item=>item.eligible)} onClick={commit}><Trash2/>{busy?'正在备份和删除…':`确认删除控台 ${plan.items.filter(item=>item.eligible).length} 个空 Cue`}</button></footer></> : null}
+    {result ? <><p>已在控台确认删除 {result.deleted.length} 个 Cue。</p><details><summary>查看序列备份</summary><ul>{result.backups.map(path=><li key={path}>{path}</li>)}</ul></details><button disabled={busy} onClick={onClose}>关闭</button></> : null}
     {error ? <p role="alert">{error}</p> : null}
   </dialog>,document.body);
 }

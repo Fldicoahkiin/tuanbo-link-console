@@ -10,7 +10,7 @@ export function internalSample(project: LinkProject, positionMs: number): MtcSam
 
 export function internalSeekState(project: LinkProject, itemId: string, positionMs: number) {
   const item = project.rundown.find((entry) => entry.id === itemId);
-  if (!item) throw new Error('定位节目不存在');
+  if (!item) throw new Error('要定位的节目不存在');
   if (project.obsOutputMode === 'scenes') return sceneOutputAt(project, itemId, millisecondsToFrameNumber(positionMs, project.timebase.frameRate));
   const state = resolveTimelineState(project, item, positionMs);
   const media = compileManagedMediaTimeline(project, itemId).events.filter((event) =>

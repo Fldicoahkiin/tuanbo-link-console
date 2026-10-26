@@ -65,7 +65,7 @@ it('有画面动作的歌，后台画面准备失败时不开始播放；纯音�
   f.api.prepareNativeObs.mockRejectedValueOnce(new Error('OBS 未连接'));
   await f.player.play('song-1');
   expect(f.state().status).toBe('playing');
-  expect(f.deps.notice).toHaveBeenCalledWith(expect.stringContaining('画面未参与：OBS 未连接'), 'song-1');
+  expect(f.deps.notice).toHaveBeenCalledWith(expect.stringContaining('画面没有联动，音频照常播放。原因：OBS 未连接'), 'song-1');
   await f.player.dispose();
 });
 
@@ -83,7 +83,7 @@ it('播放中画面通道的直播故障显示为输出异常，音频继续；�
   receive!({ ...running, fault: '画面动作失败：机位 · OBS 无响应' });
   expect(f.state()).toMatchObject({ status: 'playing', fault: '画面动作失败：机位 · OBS 无响应' });
   receive!({ ...running, state: 'failed', reason: '实际音频位置无效' });
-  expect(f.state()).toMatchObject({ status: 'playing', fault: '画面通道已停止：实际音频位置无效' });
+  expect(f.state()).toMatchObject({ status: 'playing', fault: '画面联动已停止：实际音频位置无效' });
   await player.play('song-1');
   expect(f.state().fault).toBeNull();
   await player.dispose();
@@ -180,11 +180,11 @@ it('同一首歌开始播放后，被拒绝的预选画面预备不提示失败�
   let refuse: (error: Error) => void = () => undefined;
   f.api.preloadNativeObs.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
   f.player.preloadSelected('song-0'); await f.player.play('song-0');
-  refuse(new Error('播放或画面会话活动时不能预备另一个节目')); await Promise.resolve(); await Promise.resolve();
-  expect(f.state().notice ?? '').not.toContain('节目画面预备未完成');
+  refuse(new Error('正在播放时不能准备另一个节目')); await Promise.resolve(); await Promise.resolve();
+  expect(f.state().notice ?? '').not.toContain('节目画面没有准备好');
   await f.player.stop();
   f.api.preloadNativeObs.mockRejectedValueOnce(new Error('素材不可读')); f.player.preloadSelected('song-1');
-  await vi.waitFor(() => expect(f.state().notice).toContain('节目画面预备未完成：素材不可读'));
+  await vi.waitFor(() => expect(f.state().notice).toContain('节目画面没有准备好：素材不可读'));
   await f.player.dispose();
 });
 
@@ -193,8 +193,8 @@ it('播放另一首时后台丢弃预选节目的画面预备，这是正常切�
   let cancel: (error: Error) => void = () => { throw new Error('预备未开始'); };
   f.api.preloadNativeObs.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { cancel = reject; }));
   f.player.preloadSelected('song-1');
-  await f.player.play('song-0'); cancel(new Error('节目预备已取消')); await Promise.resolve(); await Promise.resolve();
-  expect(f.state().notice ?? '').not.toContain('节目画面预备未完成');
+  await f.player.play('song-0'); cancel(new Error('节目准备已取消')); await Promise.resolve(); await Promise.resolve();
+  expect(f.state().notice ?? '').not.toContain('节目画面没有准备好');
   await f.player.dispose();
 });
 
@@ -353,7 +353,7 @@ describe('原生正式播放器的操作与会话', () => {
     f.api.controlNativePlayback.mockImplementation(command => {
       expect(command.kind).toBe('stop');
       const request = f.api.prepareNativePlayback.mock.calls[0]![0], snapshot = request.snapshot;
-      rejectPreparation!(new Error('播放请求在等待许可时已被取消'));
+      rejectPreparation!(new Error('播放请求在排队时被取消'));
       return Promise.resolve({ version: 1, sessionId: request.sessionId, generation: command.generation, itemId: snapshot.itemId,
         status: 'stopped', positionMs: snapshot.positionMs, offsetMs: snapshot.offsetMs, sampleRate: snapshot.sampleRate,
         enginePid: null, engineTitle: null, mtcPortName: null, mtcSent: 0, audioError: null, mtcError: null, underruns: 0, mtcInterruptions: 0, gain: snapshot.volume, analysis: null });
@@ -368,7 +368,7 @@ describe('原生正式播放器的操作与会话', () => {
     const f = fixture(); f.deps.prepare.mockRejectedValue(new Error('OBS 未连接'));
     await f.player.play('song-0');
     expect(f.api.prepareNativePlayback.mock.calls[0]![0].snapshot).toMatchObject({ offsetMs: 480000, startMs: 500, positionMs: 500, revision: 7, endMs: 9500 });
-    expect(f.state().status).toBe('playing'); expect(f.state().notice).toContain('OBS 未连接');
+    expect(f.state().status).toBe('playing'); expect(f.state().notice).toContain('原因：OBS 未连接');
     f.emit({ positionMs: 1300, mtcSent: 50 });
     expect(f.state()).toMatchObject({ positionMs: 1300, mtcPositionMs: 481300 });
     expect(f.player.clock.read()).toMatchObject({ positionMs: 1300, playing: true });
@@ -429,7 +429,7 @@ describe('原生正式播放器的操作与会话', () => {
     vi.useFakeTimers();
     try {
       const playing = f.player.play('song-0'); await vi.advanceTimersByTimeAsync(1001); await playing;
-      expect(f.state().status).toBe('playing'); expect(f.state().notice).toContain('准备窗口内未就绪');
+      expect(f.state().status).toBe('playing'); expect(f.state().notice).toContain('准备超时（');
       expect(f.deps.stop).toHaveBeenCalledTimes(2);
       release!(); await Promise.resolve(); f.emit({ positionMs: 2000 });
       expect(f.deps.ingest).not.toHaveBeenCalled(); expect(f.deps.started).not.toHaveBeenCalled();
@@ -464,7 +464,7 @@ for (const mode of ['network', 'direct', 'timecode'] as const) it(`原生播放�
 it('时间码输出失败只记录一次；另一条输出异常盖住提示后，后续状态不再重复记录', async () => {
   const f = fixture();
   await f.player.play('song-0');
-  const failed = '时间码未参与：Windows MIDI 输出失败（TEST）：错误码 6，请检查接口和驱动后手动重新播放；音频继续播放。';
+  const failed = '时间码没有发出，音频照常播放。原因：Windows MIDI 输出失败（TEST）：错误码 6，请检查接口和驱动后手动重新播放';
   f.emit({ mtcError: 'Windows MIDI 输出失败（TEST）：错误码 6，请检查接口和驱动后手动重新播放' });
   f.player.reportFault('MIDI Cue 未参与：MIDI 驱动服务异常退出：3；音频继续播放。');
   for (let tick = 0; tick < 5; tick++) f.emit({ positionMs: 1000 + tick * 50 });
@@ -481,18 +481,18 @@ it('准备阶段音频读取失败时标明播放未开始，并给出处理音�
   const f = fixture();
   f.api.prepareNativePlayback.mockRejectedValueOnce(new Error('音频解码或读取失败：ENOENT: no such file or directory, stat \'C:/test/a-0.wav\''));
   await f.player.play('song-0');
-  expect(f.state()).toMatchObject({ status: 'error', errorTitle: '播放未开始：准备失败' });
-  expect(f.state().error).toContain('修复或更换音频后重新播放');
+  expect(f.state()).toMatchObject({ status: 'error', errorTitle: '没有开始播放：准备失败' });
+  expect(f.state().error).toContain('换一个音频文件后重新播放');
 });
 
 it('没有画面动作的歌，OBS 未连接只提示画面未参与，不标成输出异常', async () => {
   const f = fixture(); f.project.obsOutputMode = 'scenes';
   f.api.prepareNativeObs.mockImplementation(request => Promise.resolve({ version: 1, sessionId: request.sessionId, generation: request.generation,
-    itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'failed', reason: 'OBS 未连接，画面通道本轮不参与',
+    itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'failed', reason: 'OBS 没有连接，这一首不联动画面',
     currentCueId: null, nextCueId: null, pendingCount: 0, positionMs: 0 }));
   await f.player.play('song-0');
   expect(f.state()).toMatchObject({ status: 'playing', fault: null });
-  expect(f.state().notice).toContain('OBS 未连接');
+  expect(f.state().notice).toContain('OBS 没有连接');
   await f.player.dispose();
 });
 
@@ -501,14 +501,14 @@ it('时间码接口断开后标红；同一接口回来后红色换成一次「�
   await f.player.play('song-0');
   const lost = 'Windows MIDI 输出失败（TEST）：接口已断开（错误码 6）；同一接口重新连接后自动恢复时间码';
   f.emit({ mtcError: lost }); f.emit({ mtcError: lost });
-  expect(f.state()).toMatchObject({ status: 'playing', fault: `时间码未参与：${lost}；音频继续播放。`, mtcConnectionFailed: true });
+  expect(f.state()).toMatchObject({ status: 'playing', fault: `时间码没有发出，音频照常播放。原因：${lost}`, mtcConnectionFailed: true });
   const recovered = { portName: 'TEST', interruptedAt: '2026-10-24T08:00:00.000Z', recoveredAt: '2026-10-24T08:00:02.400Z', durationMs: 2400 };
   f.emit({ mtcError: null, mtcPortName: 'TEST', mtcRecovered: recovered }); f.emit({ positionMs: 3000 });
   expect(f.state()).toMatchObject({ status: 'playing', fault: null, mtcConnectionFailed: false, mtcPortName: 'TEST' });
   expect(f.state().notice).toContain('时间码中断 2.4 秒后已恢复（TEST）');
   expect(f.deps.notice.mock.calls.filter(([message]) => String(message).includes('已恢复'))).toHaveLength(1);
   f.emit({ mtcError: lost });
-  expect(f.state().fault).toBe(`时间码未参与：${lost}；音频继续播放。`);
+  expect(f.state().fault).toBe(`时间码没有发出，音频照常播放。原因：${lost}`);
   await f.player.stop();
 });
 

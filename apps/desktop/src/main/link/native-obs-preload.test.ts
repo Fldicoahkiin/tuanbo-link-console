@@ -46,10 +46,10 @@ it('选择预备在许可中被正式播放接管：许可因正式准备在途�
   const preloading = t.pool.preload(t.request);
   await Promise.resolve();
   const taking = t.pool.take({ ...t.request, generation: 3 }, 500, () => undefined);
-  refuse(new Error('播放或画面会话活动时不能预备另一个节目'));
+  refuse(new Error('正在播放时不能准备另一个节目'));
   expect(await taking).toBe(t.outputs); await preloading;
-  t.authorize.mockRejectedValueOnce(new Error('播放或画面会话活动时不能预备另一个节目'));
-  await expect(t.pool.preload({ ...t.request, generation: 5 })).rejects.toThrow('不能预备另一个节目');
+  t.authorize.mockRejectedValueOnce(new Error('正在播放时不能准备另一个节目'));
+  await expect(t.pool.preload({ ...t.request, generation: 5 })).rejects.toThrow('不能准备另一个节目');
   // Refused before the song took it over: the song prepares its own picture instead of failing with the preselection.
   t.create.mockClear();
   expect(await t.pool.take({ ...t.request, generation: 6 }, 500, () => undefined)).toBe(t.outputs); expect(t.create).toHaveBeenCalledOnce();

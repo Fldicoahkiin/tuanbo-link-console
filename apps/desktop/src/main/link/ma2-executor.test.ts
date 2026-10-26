@@ -22,7 +22,7 @@ describe('MA2 执行器序列关系', () => {
     expect(inspectMa2ExecutorXml(xml)).toEqual({ version: '3.3.4', sequence: 9901, assignmentName: 'TBLINK_CUE_REFERENCE_ACCEPTANCE 9901' });
   });
   it('未分配、非序列和无效编号不能用于轨道关联', () => {
-    expect(() => inspectMa2ExecutorXml(xml.replace(/<Assignment\s[\s\S]*?<\/Assignment>/, ''))).toThrow('尚未分配');
+    expect(() => inspectMa2ExecutorXml(xml.replace(/<Assignment\s[\s\S]*?<\/Assignment>/, ''))).toThrow('还没分配');
     expect(() => inspectMa2ExecutorXml(xml.replace('<No>25</No>', '<No>13</No>'))).toThrow('不是已支持');
     expect(() => inspectMa2ExecutorXml(xml.replace('<No>9901</No>', '<No>0</No>'))).toThrow('编号无效');
     expect(() => inspectMa2ExecutorXml(xml.replace('<No>9901</No>', '<No>100000</No>'))).toThrow('编号无效');
@@ -34,6 +34,6 @@ describe('MA2 执行器序列关系', () => {
     expect(() => inspectMa2ExecutorXml(xml.replace('</MA>', `${executor}</MA>`))).toThrow('不唯一');
     expect(() => inspectMa2ExecutorXml(xml.replace('offset_from_first="0"', 'offset_from_first="1"'))).toThrow('单个');
     expect(() => inspectMa2ExecutorXml(xml.replace('</Exec>', `${assignment}</Exec>`))).toThrow('不唯一');
-    expect(() => inspectMa2ExecutorXml(xml.replace('minor_vers="3"', 'minor_vers="7"'))).toThrow('尚未验证');
+    expect(() => inspectMa2ExecutorXml(xml.replace('minor_vers="3"', 'minor_vers="7"'))).toThrow('还没验证过');
   });
 });

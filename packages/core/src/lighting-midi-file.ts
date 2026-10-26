@@ -61,7 +61,7 @@ export function importLightingMidi(bytes: Uint8Array): LightingImport {
           else {
             const opened = pending.get(key)?.shift();
             if (opened && beat > opened.at) add(channel, { id, kind: 'note', at: opened.at, duration: beat - opened.at, note: event.noteNumber, velocity: opened.velocity, ...(event.velocity > 0 ? { releaseVelocity: event.velocity } : {}) });
-            else warnings.add('文件含未配对或零长度的音符释放，未转换为音符');
+            else warnings.add('文件里有没配对或长度为零的音符，没有转换');
           }
           break;
         }
@@ -131,10 +131,10 @@ export function exportLightingMidi(document: LightingDocument): Uint8Array {
           else if ((status & 0xf0) === 0xe0) events.push({ tick, event: { deltaTime: 0, type: 'pitchBend', channel: status & 15, value: (a | b << 7) - 8192 } });
           else if ((status & 0xf0) === 0xd0) events.push({ tick, event: { deltaTime: 0, type: 'channelAftertouch', channel: status & 15, amount: a } });
           else if ((status & 0xf0) === 0xa0) events.push({ tick, event: { deltaTime: 0, type: 'noteAftertouch', channel: status & 15, noteNumber: a, amount: b } });
-          else throw new Error('存在尚不能导出的原始 MIDI 消息');
+          else throw new Error('有暂时不能导出的原始 MIDI 消息');
           break;
         }
-        case 'ma2-fader': throw new Error('MIDI 文件无法保存 MA2 原生推杆，请导出灯光工程');
+        case 'ma2-fader': throw new Error('MIDI 文件无法保存 MA2 控台原有的推杆，请导出灯光工程');
         case 'ma2': case 'point': break;
       }
     }

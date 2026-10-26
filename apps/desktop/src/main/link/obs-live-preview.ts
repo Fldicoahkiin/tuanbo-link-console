@@ -25,7 +25,7 @@ export class ObsLivePreview {
       if (!this.socket) {
         const pid = await this.locatePid(address);
         if (generation !== this.generation) throw new Error('预览请求已取消');
-        if (pid === null) throw new Error('原生实时预览需要连接本机 OBS');
+        if (pid === null) throw new Error('实时预览需要连接本机的 OBS');
         this.socket = createConnection(`\\\\.\\pipe\\tblink-obs-preview-${pid}`);
         this.socket.on('error', (error) => { this.failure = error; });
         this.address = address;
@@ -42,8 +42,8 @@ export class ObsLivePreview {
       let expected = 32;
       const cleanup = (): void => { clearTimeout(timer); socket.off('data', data); socket.off('error', failed); socket.off('close', closed); };
       const failed = (error: Error): void => { cleanup(); reject(new Error(previewFailure(error))); };
-      const closed = (): void => failed(new Error('预览连接已关闭，请确认 OBS 原生预览插件已加载'));
-      const timer = setTimeout(() => failed(new Error('等待 OBS 视频帧超时')), 2000);
+      const closed = (): void => failed(new Error('预览连接已关闭，请确认 OBS 预览组件已加载'));
+      const timer = setTimeout(() => failed(new Error('等待 OBS 画面超时')), 2000);
       const data = (chunk: Buffer): void => {
         try {
           let cursor = 0;
@@ -69,9 +69,9 @@ export class ObsLivePreview {
 }
 
 function previewFailure(error: Error): string {
-  if ('code' in error && error.code === 'ENOENT') return 'OBS 内置预览组件尚未加载。请点击“检查并修复组件”；如果 OBS 使用安全模式或禁用了此插件，请先恢复正常加载。';
-  if (isPipeAccessDenied(error)) return `OBS 原生预览不可用：${obsPipeAccessDeniedMessage}`;
-  return `OBS 原生预览不可用：${error.message}`;
+  if ('code' in error && error.code === 'ENOENT') return 'OBS 预览组件还没加载。请点“检查并修复组件”；如果 OBS 开着安全模式或禁用了这个插件，请先恢复正常。';
+  if (isPipeAccessDenied(error)) return `OBS 预览不可用：${obsPipeAccessDeniedMessage}`;
+  return `OBS 预览不可用：${error.message}`;
 }
 
 export function parseObsFrameHeader(buffer: Buffer): { width: number; height: number; length: number } {

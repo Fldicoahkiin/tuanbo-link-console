@@ -75,7 +75,7 @@ export class LinkProjectService {
     try {
       value = JSON.parse(content);
     } catch (error) {
-      throw new Error(`工程文件不是有效 JSON：${projectPath}`, { cause: error });
+      throw new Error(`工程文件格式不对，可能已损坏：${projectPath}`, { cause: error });
     }
     const parsed = parseLinkProject(value);
     const project = await recoverMa2Material(projectPath, await recoverMa2Read(projectPath, parsed));
@@ -175,7 +175,7 @@ export class LinkProjectService {
       await Promise.all(assets.slice(offset, offset + 4).map(async asset => {
         const path = this.resolveMediaAsset(projectPath, asset.relativePath);
         const exists = await pathExists(path);
-        if (exists && !await this.verifiedMedia.verify(path, asset.sha256)) throw new Error(`素材完整性校验失败：${asset.name}，请重新导入原文件`);
+        if (exists && !await this.verifiedMedia.verify(path, asset.sha256)) throw new Error(`素材文件校验失败：${asset.name}，请重新导入原文件`);
         result[asset.id] = { fileAvailable: exists };
       }));
     }
@@ -271,7 +271,7 @@ export class LinkProjectService {
         }
       }
       if (error instanceof Error && error.message.includes('matches no streams')) throw new Error('素材不包含音频轨道', { cause: error });
-      throw new Error(`素材没有可解码的音轨：${sourcePath}：${toMessage(error)}`, { cause: error });
+      throw new Error(`素材里没有能解码的音轨：${sourcePath}：${toMessage(error)}`, { cause: error });
     }
   }
 
@@ -382,13 +382,13 @@ async function copyIntoProject(
   expectedSha256: string
 ): Promise<void> {
   if (await pathExists(destination)) {
-    if (await hashFile(destination) !== expectedSha256) throw new Error(`${operation}失败：工程内已有素材与原文件校验不一致，请恢复原文件`);
+    if (await hashFile(destination) !== expectedSha256) throw new Error(`${operation}失败：工程里已有的素材和原文件不一致，请恢复原文件`);
     return;
   }
   const temporaryPath = join(assetsDirectory, `.${crypto.randomUUID()}.tmp`);
   await copyFile(sourcePath, temporaryPath, constants.COPYFILE_EXCL);
   try {
-    if (await hashFile(temporaryPath) !== expectedSha256) throw new Error('复制结果与原文件不一致，源文件可能正在变化');
+    if (await hashFile(temporaryPath) !== expectedSha256) throw new Error('复制出来的文件和原文件不一致，原文件可能正在被修改');
     await rename(temporaryPath, destination);
   } catch (error) {
     throw new Error(`${operation}失败；临时文件：${temporaryPath}`, { cause: error });

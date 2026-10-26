@@ -55,7 +55,7 @@ it('预填充完成不能把声明时长错误的音源冒充完整缓存', asyn
   const input = await source(directory, 144);
   const lease = await new NativeAudioCache(join(directory, 'cache'), ffmpeg).prepare({ ...input, expectedDurationMs: 4000 }, new AbortController().signal);
   const result = await lease.completion; expect(result.ok).toBe(false);
-  if (!result.ok) expect(result.error.message).toContain('长度与工程不符');
+  if (!result.ok) expect(result.error.message).toContain('长度和工程记录不一致');
   await lease.release(); expect(lease.path).toMatch(/\.partial$/);
 });
 
@@ -65,14 +65,14 @@ it('缓存容量不足不能淘汰播放租约；释放后只回收解码结果�
   const a = await source(directory, 100), b = await source(directory, 200);
   const cache = new NativeAudioCache(join(directory, 'cache'), ffmpeg, 1024 * 1024, 1);
   const first = await cache.prepare(a, new AbortController().signal);
-  await expect(cache.prepare(b, new AbortController().signal)).rejects.toThrow('不能淘汰活动资源');
+  await expect(cache.prepare(b, new AbortController().signal)).rejects.toThrow('已经占满缓存');
   expect(await first.completion).toEqual({ ok: true });
   expect((await stat(first.path)).size).toBe(384000); await first.release(); await first.release();
   const second = await cache.prepare(b, new AbortController().signal); await second.release();
   await expect(stat(first.path)).rejects.toMatchObject({ code: 'ENOENT' });
   expect((await stat(a.sourcePath)).size).toBe(384044);
   await expect(cache.prepare(a, AbortSignal.abort())).rejects.toBeDefined();
-  await expect(cache.prepare({ ...a, sourceSha256: '0'.repeat(64) }, new AbortController().signal)).rejects.toThrow('原文件与工程指纹不一致');
+  await expect(cache.prepare({ ...a, sourceSha256: '0'.repeat(64) }, new AbortController().signal)).rejects.toThrow('原文件和工程记录的不一致');
 });
 
 it('当前音源和下一音源独立预填充；取消下一首不会终止当前音源，同源租约不重复解码', async () => {
@@ -85,7 +85,7 @@ it('当前音源和下一音源独立预填充；取消下一首不会终止当�
   const shared = await cache.prepare(a, new AbortController().signal);
   expect(shared.path).toBe(current.path);
   try {
-    await expect(cache.prepare(c, new AbortController().signal)).rejects.toThrow('解码槽');
+    await expect(cache.prepare(c, new AbortController().signal)).rejects.toThrow('都在解码');
     await next.release();
     expect((await next.completion).ok).toBe(false);
     const replacement = await cache.prepare(c, new AbortController().signal);
@@ -104,7 +104,7 @@ it('下一音源预热按完整解码预算预留空间，不用增长文件的�
   const current = await cache.prepare(a, new AbortController().signal);
   try {
     expect((await stat(current.path)).size).toBeLessThan(30 * 192000);
-    await expect(cache.prepare(b, new AbortController().signal)).rejects.toThrow('不能淘汰活动资源');
+    await expect(cache.prepare(b, new AbortController().signal)).rejects.toThrow('已经占满缓存');
   } finally { await current.release(); }
 });
 

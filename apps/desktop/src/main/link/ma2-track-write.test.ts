@@ -17,7 +17,7 @@ it('Master 子轨道创建保留 Cue，并拒绝重复、错误目标和未验�
   expect(() => appendMa2MasterSubtracks(xml, 9902, [path, path])).toThrow('重复');
   expect(() => appendMa2MasterSubtracks(xml, 9902, ['missing'])).toThrow('不存在');
   expect(() => appendMa2MasterSubtracks(xml, 9901, [path])).toThrow('目标');
-  expect(() => appendMa2MasterSubtracks(xml.replace('minor_vers="3"', 'minor_vers="7"').replace('stream_vers="4"', 'stream_vers="0"'), 9902, [path])).toThrow('尚未验证');
+  expect(() => appendMa2MasterSubtracks(xml.replace('minor_vers="3"', 'minor_vers="7"').replace('stream_vers="4"', 'stream_vers="0"'), 9902, [path])).toThrow('还没验证过');
 });
 it('新增执行器轨道保留原始轨道和扩展节点，空 Timecode 也可创建', () => {
   const addition = { executor: '99.219', executorName: '灯光 & <主舞台>', muted: false };

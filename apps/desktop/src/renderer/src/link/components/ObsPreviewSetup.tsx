@@ -17,7 +17,7 @@ export function ObsPreviewSetup({ disabled, notify, beforeRepair }: {
     try {
       await beforeRepair();
       await linkDesktopViewModel.repairObsBridge();
-      useConnectionCheckStore.getState().finish('preview', 'ready', '组件已就绪，真实画面检查通过');
+      useConnectionCheckStore.getState().finish('preview', 'ready', '组件已就绪，画面检查通过');
       notify('OBS 内置组件检查完成。');
     }
     catch (error) {

@@ -32,7 +32,7 @@ it('一小时偏移导入为歌曲零点，编辑后写回保留原偏移并回�
   expect(confirmed.timeOriginMs).toBe(3600000);
 });
 it('跨歌曲的早期事件不静默删除', () => {
-  expect(() => convertMa2Timecode(xml, [sequence], 9902, 60000)).toThrow('起点之前');
+  expect(() => convertMa2Timecode(xml, [sequence], 9902, 60000)).toThrow('起点还早');
 });
 it.skipIf(!process.env.MA2_ONPC_ORIGIN_ACCEPTANCE)('真实 onPC 一小时偏移修改及回读，最后恢复原测试对象', async () => {
   const bridge = new Ma2OnpcBridge(process.env.MA2_ONPC_DATA_DIRECTORY ?? '', () => false);

@@ -347,7 +347,7 @@ describe('LinkProject Command', () => {
 
     expect(project.mediaAssets).toEqual([{ ...asset, folderId: null }]);
     expect(project.rundown[0]?.referenceMediaClips).toHaveLength(1);
-    expect(() => removeMediaAssetCommand(asset.id, timestamp).execute(project)).toThrow(/仍被节目/);
+    expect(() => removeMediaAssetCommand(asset.id, timestamp).execute(project)).toThrow(/还在被节目/);
     project = splitReferenceMediaClipCommand('a', 'clip', { hours: 0, minutes: 0, seconds: 3, frames: 0 }, 'clip-right', timestamp).execute(project);
     expect(project.rundown[0]?.referenceMediaClips).toMatchObject([
       { id: 'clip', sourceOffsetMs: 500, durationMs: 2_000 },

@@ -85,7 +85,7 @@ export class LinkMidiAdapter implements LinkActionExecutor {
 
   async refreshPorts(): Promise<MidiPortSnapshot[]> {
     if (this.mtcInput) throw new Error('MTC 输入正在使用，请停止联动后重新检测端口');
-    if (this.initialization) throw new Error('MIDI 端口正在检测，请等待本次检测完成');
+    if (this.initialization) throw new Error('正在检测 MIDI 端口，请等这次检测完成');
     this.generation++;
     const generation = this.generation;
     const access = await refreshMidiAccess();
@@ -142,7 +142,7 @@ export class LinkMidiAdapter implements LinkActionExecutor {
   ): Promise<void> {
     const profile = this.resolvePortProfile(profileId);
     if (!profile || profile.direction !== 'input' || profile.portName === '') {
-      throw new Error('尚未配置 P1 MTC 输入端口');
+      throw new Error('还没设置 P1 的 MTC 输入端口');
     }
     const deadline = performance.now() + timeoutMs;
     while (performance.now() < deadline) {
@@ -150,10 +150,10 @@ export class LinkMidiAdapter implements LinkActionExecutor {
       onPorts(ports);
       const matches = ports.filter((port) => port.direction === 'input' && port.name === profile.portName && port.state === 'connected');
       if (matches.length === 1) return;
-      if (matches.length > 1) throw new Error(`P1 MTC 输入端口名称不唯一：${profile.portName}`);
+      if (matches.length > 1) throw new Error(`有多个同名的 P1 MTC 输入端口：${profile.portName}`);
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 250));
     }
-    throw new Error(`P1 MTC 输入端口在 ${timeoutMs}ms 内未就绪：${profile.portName}`);
+    throw new Error(`P1 MTC 输入端口在 ${timeoutMs} ms 内没有准备好：${profile.portName}`);
   }
 
   dispose(): void {
@@ -272,7 +272,7 @@ export class LinkMidiAdapter implements LinkActionExecutor {
     if (matches.length !== 1) {
       throw new Error(matches.length === 0
         ? `MIDI 输入端口不存在：${profile.portName}`
-        : `MIDI 输入端口名称不唯一：${profile.portName}`);
+        : `有多个同名的 MIDI 输入端口：${profile.portName}`);
     }
     const input = matches[0];
     if (!input) throw new Error(`MIDI 输入端口不存在：${profile.portName}`);
@@ -299,7 +299,7 @@ export class LinkMidiAdapter implements LinkActionExecutor {
     if (matches.length !== 1) {
       throw new Error(matches.length === 0
         ? `MIDI 输出端口不存在：${profile.portName}`
-        : `MIDI 输出端口名称不唯一：${profile.portName}`);
+        : `有多个同名的 MIDI 输出端口：${profile.portName}`);
     }
     const output = matches[0];
     if (!output) throw new Error(`MIDI 输出端口不存在：${profile.portName}`);
@@ -308,9 +308,9 @@ export class LinkMidiAdapter implements LinkActionExecutor {
 
   private requireProfile(profileId: string, direction: MidiPortProfile['direction']): MidiPortProfile {
     const profile = this.resolvePortProfile(profileId);
-    if (!profile) throw new Error(`MIDI 端口档案不存在：${profileId}`);
-    if (profile.direction !== direction) throw new Error(`MIDI 端口档案方向错误：${profileId}`);
-    if (!this.access) throw new Error('MIDI 尚未初始化');
+    if (!profile) throw new Error(`找不到 MIDI 端口设置：${profileId}`);
+    if (profile.direction !== direction) throw new Error(`MIDI 端口设置的方向不对：${profileId}`);
+    if (!this.access) throw new Error('MIDI 还没初始化');
     return profile;
   }
 

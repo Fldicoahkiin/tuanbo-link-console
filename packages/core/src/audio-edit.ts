@@ -40,7 +40,7 @@ export function updateAudioSegment(audio: ReferenceAudio, id: string, patch: Par
     if (![segment.startMs, segment.sourceOffsetMs, segment.durationMs].every(Number.isSafeInteger) || segment.startMs < 0 || segment.sourceOffsetMs < 0 || segment.durationMs < 1) throw new Error('位置和素材入点不能小于 0，片段时长至少为 1 毫秒');
     if (segment.sourceOffsetMs + segment.durationMs > source.durationMs) throw new Error('裁剪结尾超过原素材长度，请缩短时长或提前素材入点');
     const previous = next[index - 1];
-    if (previous && previous.startMs + previous.durationMs > segment.startMs) throw new Error('与同轨音频片段重叠，请移到空白位置或另一条音轨');
+    if (previous && previous.startMs + previous.durationMs > segment.startMs) throw new Error('和同一音轨上的片段重叠了，请移到空白位置或另一条音轨');
   }
   const durationMs = Math.max(...next.map((segment) => segment.startMs + segment.durationMs));
   referenceAudioSchema.parse({ ...audio, durationMs, beats: undefined, timeline: { source: audio.timeline?.source ?? audio, segments: next } });

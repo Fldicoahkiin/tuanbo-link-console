@@ -65,7 +65,7 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
       try {
         await assertAudioOutputAvailable(audioRoute);
         if (!alive || useConnectionCheckStore.getState().running) return;
-        useConnectionCheckStore.getState().finish('audio', 'ready', '音频设备可用，播放时启用正式输出');
+        useConnectionCheckStore.getState().finish('audio', 'ready', '音频设备可用，播放时开始输出');
       } catch (error) { if (alive && !useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('audio', 'error', toUserErrorMessage(error)); }
     };
     const onAudioChange = (): void => { void inspectAudio(); };
@@ -76,21 +76,21 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
     let alive = true;
     void desktop.loopMidi('detect').then(value => {
       const status = loopMidiStatusSchema.parse(value);
-      if (alive && !useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('loop', status.state === 'running' ? 'ready' : profile?.loopMidi?.autoStart ? 'error' : 'skipped', status.state === 'running' ? 'loopMIDI 已运行，端口单独检查' : profile?.loopMidi?.autoStart ? '虚拟 MIDI 未启动，点击一键连接' : '未启用虚拟 MIDI 自动启动，实体 MIDI 不依赖此项');
+      if (alive && !useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('loop', status.state === 'running' ? 'ready' : profile?.loopMidi?.autoStart ? 'error' : 'skipped', status.state === 'running' ? 'loopMIDI 已运行，端口另外检查' : profile?.loopMidi?.autoStart ? '虚拟 MIDI 未启动，点“一键连接”启动' : '没有开启虚拟 MIDI 自动启动；用实体 MIDI 接口不受影响');
     }).catch(error => { if (alive && !useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('loop', 'error', toUserErrorMessage(error)); });
     return () => { alive = false; };
   }, [profile?.loopMidi?.autoStart]);
   const rows: Row[] = [
-    checked({ id: 'ma2-app', name: 'MA2 onPC 程序', value: ma2Program.status === 'running' ? '运行中' : '未运行', state: ma2Program.status === 'running' ? 'ready' : 'idle', detail: ma2Program.error ?? '一键连接会启动选定的本机 onPC；网络通信单独检查', category: 'ma2' }, checks['ma2-app']),
-    checked({ id: 'ma3d', name: 'MA 3D 预演', value: ma3dProgram.status === 'running' ? '运行中' : '未运行', state: ma3dProgram.status === 'running' ? 'ready' : 'idle', detail: ma3dProgram.error ?? '一键连接会启动选定的 MA 3D；请在 MA 3D 中加入对应控台会话', category: 'ma2' }, checks.ma3d),
+    checked({ id: 'ma2-app', name: 'MA2 onPC 程序', value: ma2Program.status === 'running' ? '运行中' : '未运行', state: ma2Program.status === 'running' ? 'ready' : 'idle', detail: ma2Program.error ?? '一键连接会启动选好的本机 onPC；网络通信另外检查', category: 'ma2' }, checks['ma2-app']),
+    checked({ id: 'ma3d', name: 'MA 3D 预演', value: ma3dProgram.status === 'running' ? '运行中' : '未运行', state: ma3dProgram.status === 'running' ? 'ready' : 'idle', detail: ma3dProgram.error ?? '一键连接会启动选好的 MA 3D；请在 MA 3D 里加入对应控台的 Session', category: 'ma2' }, checks.ma3d),
     { id: 'obs', name: 'OBS 控制', ...obsConnectionStatus(obs), category: 'obs' },
-    checked({ id: 'preview', name: 'OBS 预览', value: obs.status === 'connected' ? '未检查' : '待 OBS 连接', state: 'idle', detail: '一键连接会检查内置组件并接收真实预览画面', category: 'obs' }, obs.status === 'connected' ? checks.preview : undefined),
-    checked({ id: 'audio', name: '音频输出', value: '检测中', state: 'idle', detail: '检查选择的声音输出设备', category: 'audio' }, checks.audio),
+    checked({ id: 'preview', name: 'OBS 预览', value: obs.status === 'connected' ? '未检查' : '待 OBS 连接', state: 'idle', detail: '一键连接会检查内置组件，并接收 OBS 预览画面', category: 'obs' }, obs.status === 'connected' ? checks.preview : undefined),
+    checked({ id: 'audio', name: '音频输出', value: '检测中', state: 'idle', detail: '检查选好的声音输出设备', category: 'audio' }, checks.audio),
     checked({ id: 'midi', name: '系统 MIDI', value: '检测中', state: 'idle', detail: '检查系统 MIDI 服务与驱动', category: 'audio' }, checks.midi),
-    checked({ id: 'loop', name: '虚拟 MIDI', value: '未检查', state: 'idle', detail: '软件间 MIDI 通道；实体接口不依赖此项', category: 'virtual' }, checks.loop),
-    checked({ id: 'p1', name: 'P1 播放器', value: internal || !project ? '未启用' : p1.status === 'running' ? '运行中' : '未运行', state: internal || !project ? 'skipped' : p1.status === 'running' ? 'ready' : 'idle', detail: internal ? '当前使用本机播放，无需启动 P1' : p1.error ?? '跟随模式会启动 P1 并监听输入时间码', category: 'source' }, internal || !project ? undefined : checks.p1),
-    checked({ id: 'ma2', name: 'MA2 网络', value: method !== 'network' ? '未启用' : network?.state === 'connected' ? '已连接' : checks.ma2?.state === 'checking' ? '连接中' : '未连接', state: method !== 'network' ? 'skipped' : network?.state === 'connected' ? 'ready' : checks.ma2?.state === 'checking' ? 'checking' : networkError || network?.error || checks.ma2?.state === 'error' ? 'error' : 'idle', detail: method !== 'network' ? '当前使用 ' + (method === 'local' ? '本机 onPC' : 'MIDI') : networkError ?? network?.error ?? checks.ma2?.detail ?? '一键连接会连接已保存控台，未保存时识别局域网中的唯一控台', category: 'ma2' }, method === 'network' && checks.ma2?.state !== 'ready' ? checks.ma2 : undefined),
-    checked({ id: 'bridge', name: 'MA2 工程通信', value: method === 'midi' ? '未启用' : method === 'local' && local.status === 'ready' ? '已响应' : method === 'network' && network?.state !== 'connected' ? '待网络连接' : '未检查', state: method === 'midi' ? 'skipped' : method === 'local' && local.status === 'ready' ? 'ready' : 'idle', detail: method === 'midi' ? 'MIDI 模式不提供工程读写连接' : local.error ?? '单独验证控台读写通信，网络登录成功不代表此项已就绪', category: 'ma2' }, method === 'midi' || method === 'network' && network?.state !== 'connected' ? undefined : checks.bridge)
+    checked({ id: 'loop', name: '虚拟 MIDI', value: '未检查', state: 'idle', detail: '软件之间传 MIDI 用；实体 MIDI 接口不受影响', category: 'virtual' }, checks.loop),
+    checked({ id: 'p1', name: 'P1 播放器', value: internal || !project ? '未启用' : p1.status === 'running' ? '运行中' : '未运行', state: internal || !project ? 'skipped' : p1.status === 'running' ? 'ready' : 'idle', detail: internal ? '当前由联动台播放，不需要启动 P1' : p1.error ?? '跟随 P1 时会启动 P1，并接收它发来的时间码', category: 'source' }, internal || !project ? undefined : checks.p1),
+    checked({ id: 'ma2', name: 'MA2 网络', value: method !== 'network' ? '未启用' : network?.state === 'connected' ? '已连接' : checks.ma2?.state === 'checking' ? '连接中' : '未连接', state: method !== 'network' ? 'skipped' : network?.state === 'connected' ? 'ready' : checks.ma2?.state === 'checking' ? 'checking' : networkError || network?.error || checks.ma2?.state === 'error' ? 'error' : 'idle', detail: method !== 'network' ? '当前使用 ' + (method === 'local' ? '本机 onPC' : 'MIDI') : networkError ?? network?.error ?? checks.ma2?.detail ?? '一键连接会连接已保存的控台；没保存过时，会自动找局域网里唯一的一台控台', category: 'ma2' }, method === 'network' && checks.ma2?.state !== 'ready' ? checks.ma2 : undefined),
+    checked({ id: 'bridge', name: 'MA2 工程通信', value: method === 'midi' ? '未启用' : method === 'local' && local.status === 'ready' ? '已响应' : method === 'network' && network?.state !== 'connected' ? '待网络连接' : '未检查', state: method === 'midi' ? 'skipped' : method === 'local' && local.status === 'ready' ? 'ready' : 'idle', detail: method === 'midi' ? '仅 MIDI 时不读写控台工程' : local.error ?? '另外检查能否读写控台，网络登录成功不代表这一项已就绪', category: 'ma2' }, method === 'midi' || method === 'network' && network?.state !== 'connected' ? undefined : checks.bridge)
   ];
   for (const [id, name] of [['discovery', '程序识别'], ['profile', '连接配置'], ['obs-inventory', 'OBS 场景清单']] as const) {
     if (checks[id]?.state === 'error') rows.unshift(checked({ id, name, value: '待处理', state: 'error', detail: '', category: id === 'obs-inventory' ? 'obs' : 'maintenance' }, checks[id]));
@@ -110,12 +110,12 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   const row = (id: string): Row | undefined => rows.find(entry => entry.id === id);
   const lightingRow = row(`port:${profile?.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output'}`);
   const lightingStatus: Pick<Row, 'state' | 'value' | 'detail'> = player.state.status === 'playing' && player.state.mtcSending
-    ? { state: 'ready', value: '发送中', detail: '正在按音频位置输出灯光时间码' }
+    ? { state: 'ready', value: '发送中', detail: '正在按音频位置发送灯光时间码' }
     : player.state.mtcConnectionFailed && player.state.status === 'playing'
-      ? { state: 'error', value: '未连接', detail: '本次音频继续播放，灯光时间码未输出' }
-      : lightingRow ?? { state: 'skipped', value: '未启用', detail: '当前工程未配置灯光输出' };
+      ? { state: 'error', value: '未连接', detail: '音乐照常播放，但灯光时间码没有发出去' }
+      : lightingRow ?? { state: 'skipped', value: '未启用', detail: '当前工程没有设置灯光输出' };
   const audioStatus: Pick<Row, 'state' | 'value' | 'detail'> | undefined = internal && player.state.status === 'playing'
-    ? { state: 'ready', value: '播放中', detail: '本机音频正在播放' }
+    ? { state: 'ready', value: '播放中', detail: '联动台正在播放音乐' }
     : internal || !project ? row('audio') : row('p1');
   const overview: { name: string; status: Pick<Row, 'state' | 'value' | 'detail'> | undefined; category: SettingsCategory; focus?: SettingsFocus }[] = [
     { name: '音频', status: audioStatus, category: internal || !project ? 'audio' : 'source', ...(internal || !project ? { focus: 'audio-output' as const } : {}) },
@@ -126,7 +126,7 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   return <div className="toolbar-project-summary"><button type="button" className="topbar-details-trigger" aria-pressed={open} onClick={() => { setOpen(value => !value); setSelected(null); }}>详细</button>
     {statusHost ? createPortal(open ? <><div className="toolbar-connections" aria-label="全部连接状态">
       {rows.map(row => <button key={row.id} className={'toolbar-connection connection-chip state-' + row.state} aria-label={row.name + '：' + row.value} aria-pressed={selected === row.id} title={`${row.name}：${row.value}\n${row.detail}`} onClick={() => setSelected(selected === row.id ? null : row.id)}>{row.name}</button>)}
-      <ToolbarMtcStatus player={player} receiving={receiving} onSettings={() => onSettings('audio')} portStatus={checks.midi?.state === 'error' ? '不可用' : '详见上方各输入输出接口'} portDetail={targets.filter(target => target.required).map(target => target.name + '：' + (profile?.midiPortProfiles.find(port => port.id === target.id)?.portName ?? '未配置')).join('；')} />
+      <ToolbarMtcStatus player={player} receiving={receiving} onSettings={() => onSettings('audio')} portStatus={checks.midi?.state === 'error' ? '不可用' : '详见上面各个输入输出接口'} portDetail={targets.filter(target => target.required).map(target => target.name + '：' + (profile?.midiPortProfiles.find(port => port.id === target.id)?.portName ?? '未配置')).join('；')} />
     </div>{detail ? <div className="connection-inline-detail" role="region" aria-label="连接详情"><strong>{detail.name} · {detail.value}</strong><span>{detail.detail}</span><button onClick={() => { onSettings(detail.category); setSelected(null); setOpen(false); }}>前往设置</button><button aria-label="收起连接详情" onClick={() => setSelected(null)}>收起</button></div> : null}</> : <div className="topbar-connection-overview" role="group" aria-label="连接状态概览">{overview.map(entry => <button type="button" key={entry.name} aria-label={`${entry.name}：${entry.status?.value ?? '未检查'}，前往设置`} onClick={() => onSettings(entry.category, entry.focus)} className={`connection-overview-item state-${entry.status?.state ?? 'idle'}`} title={`${entry.name}：${entry.status?.value ?? '未检查'}\n${entry.status?.detail ?? ''}\n点击前往对应设置`}><span className="connection-overview-dot" aria-hidden="true" /><strong>{entry.name}</strong><small>{entry.status?.value ?? '未检查'}</small></button>)}</div>, statusHost) : null}
   </div>;
 }

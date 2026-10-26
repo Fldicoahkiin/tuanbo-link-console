@@ -29,7 +29,7 @@ export function useWorkspaceLayout(notify: (message: string, tone?: 'info' | 'er
   useEffect(() => () => dragCleanup.current?.(), []);
   const writeFailureReported = useRef(false);
   useEffect(() => {
-    if (initial.error) notify(`工作区布局恢复失败：${initial.error}；已使用默认布局`, 'error');
+    if (initial.error) notify(`工作区布局没有恢复成功：${initial.error}，已改用默认布局`, 'error');
   }, [initial.error, notify]);
   useEffect(() => {
     try {

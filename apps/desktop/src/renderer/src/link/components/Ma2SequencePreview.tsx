@@ -47,7 +47,7 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
   const pageNavigation = useMa2ExecutorPageStore(state => state.navigation);
   const [singleSequence,setSingleSequence]=useState<number|null>(null);
   const [route, setRoute] = useState<string | null>(initialExecutor ?? null);
-  const [preview, setPreview] = useState<Ma2PreviewState>({ selectedCue: null, command: 'idle', activity: { state: 'unsupported', reason: '尚未验证此控台版本的活动 Cue 回读接口' } });
+  const [preview, setPreview] = useState<Ma2PreviewState>({ selectedCue: null, command: 'idle', activity: { state: 'unsupported', reason: '还没验证过这个控台版本能否读取当前 Cue' } });
   const selectedCue = preview.selectedCue;
   const setSelectedCue = (selectedCue: string | null): void => setPreview(current => ({ ...current, selectedCue }));
   const [error, setError] = useState('');
@@ -82,10 +82,10 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
   const executor = route ?? (executors.length === 1 ? executors[0]! : executors.length > 1 ? '__choose' : '');
   const send = async (action: Ma2PlaybackAction['action'], number?: string, chosen = sequence): Promise<void> => {
     if (!chosen || busy) return;
-    if (material?.library.sourceUnverified && action !== 'off') { setError('素材来源尚未核对，请在读取素材中补读未完成项；已读步骤可继续查看'); return; }
+    if (material?.library.sourceUnverified && action !== 'off') { setError('控台素材还没读取完整，请在“读取控台素材”里补读未完成项；已读到的步骤可以继续查看'); return; }
     const routes = [...new Set(document.ma2Bindings?.flatMap(binding => binding.mappings.filter(mapping => mapping.sequence === chosen.sequence).map(mapping => mapping.executor)) ?? [])];
     const destination = chosen.sequence === sequence?.sequence ? executor : routes.length === 1 ? routes[0]! : '';
-    if (destination === '__choose' || routes.length > 1 && (chosen.sequence !== sequence?.sequence || route === null)) { setError('此序列有多个执行器，请先明确选择播放目标'); return; }
+    if (destination === '__choose' || routes.length > 1 && (chosen.sequence !== sequence?.sequence || route === null)) { setError('这个序列有多个执行器，请先选择用哪一个播放'); return; }
     setPreview(current => ({ ...current, command: 'sending' }));
     setBusy(true); setError('');
     try {
@@ -126,7 +126,7 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
   }}><option value="button">执行器</option><option value="layout">Layout 布局</option></select>;
   const openExecutorItem = (item: import('@tb/schema').Ma2ExecutorPage['items'][number], page: number): void => {
     if (!item.sequence) return;
-    if (!libraryById.has(item.sequence)) { setError('此格的序列步骤尚未回读，刷新本页后可编辑'); return; }
+    if (!libraryById.has(item.sequence)) { setError('这一格的序列步骤还没读取，刷新本页后可以编辑'); return; }
     setSelected(item.sequence); setSingleSequence(null); setSelectedCue(null); setRoute(`${page}.${item.slot}`); setQuery('');
   };
   const renderExecutorItem = (item: import('@tb/schema').Ma2ExecutorPage['items'][number], page: number, band: import('../stores/ma2-executor-page-store').Ma2ExecutorBand): ReactNode => {
@@ -176,7 +176,7 @@ export function Ma2SequencePreview({ document, initialSequence, initialExecutor,
         const name = ma2ConsoleSequenceName(value);
         return <button disabled={busy} aria-label={`${value.sequence} · ${name} · ${value.cues.length} 步`} title={`${value.sequence} · ${name} · ${value.cues.length} 步`} onContextMenu={event=>{const first=value.cues[0];if(first)classification.open(event,{sequence:value.sequence,cue:first.number,kind:value.cues.length===1?'single':'sequence'},name);}} onClick={() => { setSelected(value.sequence); setSelectedCue(null); setRoute(null); setQuery(''); if (!classification.showRemoved && attributeFilter.status !== 'empty' && value.complete && value.cues.length === 1) { setSelectedCue(value.cues[0]!.number); void send('goto', value.cues[0]!.number, value); } }}><strong>{name}</strong>{value.cues.length > 1 ? <small className="ma2-sequence-step-count">{attributeFilterActive ? `${value.cues.filter(cue => attributeMatches(value.sequence, cue.number)).length} 步符合 / 共 ${value.cues.length} 步` : `共 ${value.cues.length} 步`}</small> : null}</button>;
       }} />}
-      {!(category==='single' ? singles.length : visibleSequences.length) ? <span className="ma2-pool-empty">{library.length ? '无匹配素材' : '尚未读取素材'}</span> : null}
+      {!(category==='single' ? singles.length : visibleSequences.length) ? <span className="ma2-pool-empty">{library.length ? '无匹配素材' : '还没读取素材'}</span> : null}
     </> : null}
     {classification.menu}
     {deleting ? <Ma2CueDeleteDialog refs={deleting} onClose={() => { setDeleting(null); classification.setPicked([]); }}/> : null}

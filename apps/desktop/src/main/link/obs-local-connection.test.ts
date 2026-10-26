@@ -52,7 +52,7 @@ it('正在运行但未启用服务时不改写文件，不猜测连接', async (
 it('损坏配置和命令行覆盖明确报错并保留原文', async () => {
   const options = await fixture();
   await writeFile(options.configurationPath, 'broken');
-  await expect(prepareLocalObsConnection(options)).rejects.toThrow('原文件未修改');
+  await expect(prepareLocalObsConnection(options)).rejects.toThrow('原文件没有改动');
   await expect(prepareLocalObsConnection({ ...options, commandLine: 'obs64.exe --websocket_port 4567' })).rejects.toThrow('命令行');
   expect(await readFile(options.configurationPath, 'utf8')).toBe('broken');
 });

@@ -82,7 +82,7 @@ describe('内部音频输出线路', () => {
   });
   it('保存的设备已拔出时明确拒绝播放，不自动改用系统默认线路', async () => {
     const f = fixture(); f.sink.mockRejectedValueOnce(Object.assign(new Error('AudioContext.setSinkId: device is not found'), { name: 'NotFoundError' }));
-    await expect(f.output.prepare(f.audio, 'missing-device', 48000)).rejects.toThrow('选择的正式音频输出已断开；不会自动切换线路');
+    await expect(f.output.prepare(f.audio, 'missing-device', 48000)).rejects.toThrow('选择的音频输出设备已断开，不会自动换到其他设备');
     expect(f.sink.mock.calls.map(([id]) => id)).toEqual(['missing-device']);
     await f.output.dispose();
   });

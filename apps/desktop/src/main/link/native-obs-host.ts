@@ -31,7 +31,7 @@ export class NativeObsHost {
   stopOwned(input: NativeObsStop): Promise<void> {
     const request = nativeObsStopSchema.parse(input);
     if (!this.requested || this.requested.sessionId !== request.sessionId || this.requested.generation !== request.generation) {
-      return Promise.reject(new Error('后台画面停止请求属于旧准备会话，当前节目保持不变'));
+      return Promise.reject(new Error('这是上一次准备的停止请求，已忽略，当前节目不受影响'));
     }
     return this.stop();
   }
@@ -42,7 +42,7 @@ export class NativeObsHost {
     if (!this.entry || ['stopped', 'failed'].includes(this.entry.state.state)) return;
     if (this.entry.state.state !== 'preparing') {
       // Every connection-state update repeats the loss; record it once.
-      const message = `OBS 连接中断：${reason}；画面动作失败直到重新连接 OBS，之后从下一画面事件继续`;
+      const message = `OBS 连接中断：${reason}。重新连上 OBS 之前画面动作都不会执行，连上后从下一个画面动作继续`;
       if (this.entry.state.fault !== message) this.fault(message);
       return;
     }
@@ -56,12 +56,12 @@ export class NativeObsHost {
   async reconnected(): Promise<void> {
     const entry = this.entry;
     if (!entry || entry.state.state !== 'running') return;
-    const current = (): void => { if (this.entry !== entry || entry.state.state !== 'running') throw new Error('画面会话已改变，未重建'); };
+    const current = (): void => { if (this.entry !== entry || entry.state.state !== 'running') throw new Error('画面状态已变，没有恢复'); };
     try {
       const sent = await entry.session.rebuild(() => entry.restoreScenes?.(current) ?? Promise.resolve());
-      this.fault(`OBS 已重新连接：画面按当前位置重建，发送 ${sent} 项`);
+      this.fault(`OBS 已重新连接，画面已按当前位置恢复（${sent} 项）`);
     } catch (error) {
-      if (this.entry === entry) this.fault(`OBS 重新连接后画面重建失败：${error instanceof Error ? error.message : String(error)}`);
+      if (this.entry === entry) this.fault(`OBS 已重新连接，但画面恢复失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -83,7 +83,7 @@ export class NativeObsHost {
   async prepare(input: NativeObsPrepare): Promise<NativeObsStatus> {
     const request = nativeObsPrepareSchema.parse(input);
     if (request.nextFiles && (request.nextFiles.snapshot.projectId !== request.snapshot.projectId || request.nextFiles.snapshot.revision !== request.snapshot.revision)) {
-      throw new Error('下一节目文件预备与当前工程修订不一致');
+      throw new Error('下一个节目的文件准备和当前工程版本对不上');
     }
     this.assertAdmission(request);
     this.requested = request;
@@ -101,18 +101,18 @@ export class NativeObsHost {
       this.stopped = previous.session.stop();
       await this.stopped;
     }
-    if (epoch !== this.epoch) throw new Error('后台画面准备已被新操作取消');
+    if (epoch !== this.epoch) throw new Error('画面准备已被新的操作取消');
     const audio = this.assertAdmission(request), project = projectFromObsSnapshot(request.snapshot);
     const state: NativeObsStatus = { version: 1, sessionId: request.sessionId, generation: request.generation,
       itemId: request.snapshot.item.id, revision: request.snapshot.revision, state: 'preparing', reason: null,
       nextCueId: null, currentCueId: null, pendingCount: 0, positionMs: audio.positionMs };
-    const outputs = await this.dependencies.outputs(request, audio.positionMs, () => { if (epoch !== this.epoch) throw new Error('后台画面资源接管已取消'); });
-    if (epoch !== this.epoch) { await outputs.releaseOutputs(); throw new Error('后台画面资源接管已取消'); }
+    const outputs = await this.dependencies.outputs(request, audio.positionMs, () => { if (epoch !== this.epoch) throw new Error('画面资源交接已取消'); });
+    if (epoch !== this.epoch) { await outputs.releaseOutputs(); throw new Error('画面资源交接已取消'); }
     const session = new ObsProgramSession(project, request.projectPath, request.snapshot.item.id, {
       ...outputs,
       state: update => {
         if (this.entry?.request !== request) return;
-        if (update.state === 'error' || update.state === 'timecodeLost') this.fail(update.reason ?? '后台画面会话失效');
+        if (update.state === 'error' || update.state === 'timecodeLost') this.fail(update.reason ?? '画面准备已失效');
       },
       // Failed actions are already in the action log; show them without ending the channel.
       cueReport: report => {
@@ -131,14 +131,14 @@ export class NativeObsHost {
     this.entry = entry; this.publish();
     try {
       await session.prepare(audio.positionMs);
-      if (epoch !== this.epoch || this.entry !== entry) throw new Error('后台画面准备已取消');
+      if (epoch !== this.epoch || this.entry !== entry) throw new Error('画面准备已取消');
       this.assertAdmission(request);
       if (session.error) throw session.error;
       this.patch({ state: 'ready', nextCueId: session.nextCueId, notice: outputs.outputNotice?.() ?? null }); return entry.state;
     } catch (error) {
       if (this.entry === entry && epoch === this.epoch) this.fail(error instanceof Error ? error.message : String(error));
       try { await session.stop(); }
-      catch (cleanup) { this.dependencies.error(`后台画面准备取消后的清理失败：${String(cleanup)}`); }
+      catch (cleanup) { this.dependencies.error(`取消画面准备后清理失败：${String(cleanup)}`); }
       throw error;
     }
   }
@@ -163,7 +163,7 @@ export class NativeObsHost {
     }
     if (entry.state.state === 'preparing') {
       if (audio.generation !== entry.request.generation || !['ready', 'paused'].includes(audio.status)) {
-        const reason = '画面准备完成前音频已改变；本轮未参与，不会中途补发';
+        const reason = '画面还没准备好音频就变了，这一首不联动画面，也不会中途补上';
         void this.stop().catch(error => this.dependencies.error(String(error)));
         this.patch({ reason }); this.dependencies.error(reason);
       }
@@ -184,8 +184,8 @@ export class NativeObsHost {
       if (!entry.filesStarted && audio.status === 'playing' && entry.request.nextFiles && this.dependencies.prepareNextFiles) {
         entry.filesStarted = true;
         const current = (): boolean => this.entry === entry && !['failed', 'stopped'].includes(entry.state.state);
-        void this.dependencies.prepareNextFiles(entry.request, () => { if (!current()) throw new Error('下一节目文件预备已取消'); })
-          .catch(error => { if (current()) this.dependencies.error(`下一节目文件预备失败：${String(error)}`); });
+        void this.dependencies.prepareNextFiles(entry.request, () => { if (!current()) throw new Error('下一个节目的文件准备已取消'); })
+          .catch(error => { if (current()) this.dependencies.error(`准备下一个节目的文件失败：${String(error)}`); });
       }
     } else if (audio.status === 'paused' && entry.state.state !== 'paused') {
       this.patch({ state: 'paused', generation: audio.generation, positionMs: audio.positionMs });
@@ -206,7 +206,7 @@ export class NativeObsHost {
   private assertAdmission(request: NativeObsPrepare): NativePlayerStatus {
     const audio = this.dependencies.audio();
     if (!audio || audio.sessionId !== request.sessionId || audio.generation !== request.generation || audio.itemId !== request.snapshot.item.id
-      || !['ready', 'paused'].includes(audio.status) || audio.audioError) throw new Error('画面准备与当前音频会话不一致；本轮未参与，不会中途加入');
+      || !['ready', 'paused'].includes(audio.status) || audio.audioError) throw new Error('画面准备的不是当前这首歌，这一首不联动画面，也不会中途加入');
     return audio;
   }
   private patch(patch: Partial<NativeObsStatus>): void {

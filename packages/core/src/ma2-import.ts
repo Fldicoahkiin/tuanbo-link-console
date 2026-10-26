@@ -12,12 +12,12 @@ export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePrevi
     const item = next.rundown.find((entry) => entry.id === itemId);
     if (!item) throw new Error('接收 MA2 数据的节目不存在');
     const originMs = programTimeOrigin(item, input.timeOriginMs ?? 0);
-    if (input.timing?.absoluteEventTimesMs.some(time => time < originMs - 1e-6 || item.referenceAudio && time >= originMs + item.referenceAudio.durationMs)) throw new Error('原生事件超出歌曲原始时间范围，请核对配对；未丢弃事件或改写起点');
+    if (input.timing?.absoluteEventTimesMs.some(time => time < originMs - 1e-6 || item.referenceAudio && time >= originMs + item.referenceAudio.durationMs)) throw new Error('控台事件超出了歌曲的原始时间范围，请检查关联（没有丢弃事件，也没有改起点）');
     const preview = withMa2TimeOrigin(input, originMs);
     if (originMs > 0) item.playback ??= { volume: item.p1Media?.volume ?? 100, startMs: 0, endMs: 0, mtcOffsetMs: originMs, shortcut: item.p1Media?.shortcut ?? '' };
     const current = item.lighting ?? structuredClone(initial ?? createLightingDocument());
-    if (input.unconverted.length && current.outputMode !== 'timecode' && current.tracks.length) throw new Error('含原生保留事件的时间线需要时间码输出；请先核对当前歌曲的直接输出编排');
-    if (current.ma2Bindings?.some((binding) => binding.timecode === preview.target)) throw new Error('该节目已关联此 Timecode，请勿重复导入');
+    if (input.unconverted.length && current.outputMode !== 'timecode' && current.tracks.length) throw new Error('有保持控台原样事件的时间线需要输出时间码；请先检查这首歌的直接输出编排');
+    if (current.ma2Bindings?.some((binding) => binding.timecode === preview.target)) throw new Error('这个节目已经关联了这个 Timecode，不用重复导入');
     const tracks = structuredClone(preview.document.tracks);
     const templates = [...current.templates];
     for (const track of tracks) for (const clip of track.clips) for (const event of clip.events) {
@@ -47,7 +47,7 @@ export function bindMa2TrackCommand(itemId: string, bindingId: string, trackId: 
     if (!document || !binding || !track || track.kind !== 'ma2') throw new Error('请选择节目中的 MA2 灯光轨道和 Timecode 绑定');
     if (preview && (preview.target !== binding.timecode || preview.executor !== executor || preview.executorName !== executorName)) throw new Error('执行器读取结果与所选轨道绑定不一致');
     if (track.locked) throw new Error('请先解锁灯光轨道');
-    if (track.cueStamp?.mode === 'fixed' && track.cueStamp.executor !== executor) throw new Error('固定 Cue 的执行器与选定执行器不一致，请先修改灯光打点设置');
+    if (track.cueStamp?.mode === 'fixed' && track.cueStamp.executor !== executor) throw new Error('固定 Cue 的执行器和选定的执行器不一致，请先修改灯光打点设置');
     if (document.ma2Bindings?.some((entry) => entry.baselineTracks.some((value) => value.id === trackId) || entry.pendingTracks?.some((value) => value.trackId === trackId))) throw new Error('该灯光轨道已经关联 MA2');
     if (track.clips.some((clip) => clip.events.some((event) => (event.kind !== 'ma2' && event.kind !== 'ma2-fader') || event.executor !== executor))) throw new Error('轨道内的动作必须使用选定执行器');
     binding.pendingTracks = [...binding.pendingTracks ?? [], { trackId, executor, executorName, ...(preview ? { sequence: preview.cueCatalog[0]!.sequence } : {}) }];
@@ -63,8 +63,8 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
   const expected = lightingDocumentSchema.parse(expectedInput);
   const confirmed = ma2TimecodePreviewSchema.parse(confirmedInput);
   const binding = expected.ma2Bindings?.find((entry) => entry.id === bindingId);
-  if (!binding || binding.timecode !== confirmed.target) throw new Error('MA2 回读与节目绑定不一致');
-  if ((binding.timeOriginMs ?? 0) !== (confirmed.timeOriginMs ?? 0)) throw new Error('MA2 回读与歌曲时间码起点不一致');
+  if (!binding || binding.timecode !== confirmed.target) throw new Error('控台读回的内容和节目绑定对不上');
+  if ((binding.timeOriginMs ?? 0) !== (confirmed.timeOriginMs ?? 0)) throw new Error('控台读回的时间码起点和歌曲对不上');
   const map = new LightingTempoMap(expected.tempos);
   const boundIds = new Set([...binding.baselineTracks.map((track) => track.id), ...(binding.pendingTracks ?? []).map((track) => track.trackId)]);
   const nativeNames = new Map(binding.baselineTracks.flatMap((track) => track.clips.flatMap((clip) => clip.events.flatMap((event) => event.kind === 'ma2' || event.kind === 'ma2-fader' ? [[event.id, event.label] as const] : []))));
@@ -116,18 +116,18 @@ export function applyMa2ReadbackCommand(itemId: string, bindingId: string, expec
     baselineTracks: structuredClone(confirmed.document.tracks), mappings: structuredClone(confirmed.mappings), trackMappings: structuredClone(confirmed.trackMappings), cueCatalog: [...new Map([...(entry.cueCatalog ?? []), ...(confirmed.cueCatalog ?? [])].map((sequence) => [sequence.sequence, structuredClone(sequence)])).values()]
   } : entry) });
   const confirmedBinding = lighting.ma2Bindings!.find(entry => entry.id === bindingId)!;
-  return { id: crypto.randomUUID(), label: '应用 MA2 同步回读', historyRebaseKey: `ma2:${itemId}:${bindingId}`, rebaseHistory: project => ({
+  return { id: crypto.randomUUID(), label: '应用 MA2 同步结果', historyRebaseKey: `ma2:${itemId}:${bindingId}`, rebaseHistory: project => ({
     ...project, rundown: project.rundown.map(item => item.id !== itemId || !item.lighting ? item : {
       ...item, lighting: { ...item.lighting, ma2Bindings: item.lighting.ma2Bindings?.map(entry => entry.id === bindingId ? confirmedBinding : entry) }
     })
   }), execute(project) {
     const next = structuredClone(project);
     const item = next.rundown.find((entry) => entry.id === itemId);
-    if (!item?.lighting) throw new Error('同步期间节目已移除，未应用回读');
+    if (!item?.lighting) throw new Error('同步期间节目被删除了，读回的内容没有应用');
     const latest = lightingDocumentSchema.parse(item.lighting);
     if (JSON.stringify(latest) === JSON.stringify(expected)) item.lighting = structuredClone(lighting);
     else {
-      if (!preserveLaterEdits || JSON.stringify(latest.ma2Bindings) !== JSON.stringify(expected.ma2Bindings)) throw new Error('同步期间节目灯光绑定已修改，未覆盖本地内容，请重新读取比较');
+      if (!preserveLaterEdits || JSON.stringify(latest.ma2Bindings) !== JSON.stringify(expected.ma2Bindings)) throw new Error('同步期间节目的灯光绑定改过了，本地内容没有被覆盖，请重新读取后比较');
       // A confirmed local-only write acknowledges the captured revision. Later edits
       // remain pending against that baseline, including deletion and undo during I/O.
       const submitted = new Map(expected.tracks.map(track => [track.id, track]));

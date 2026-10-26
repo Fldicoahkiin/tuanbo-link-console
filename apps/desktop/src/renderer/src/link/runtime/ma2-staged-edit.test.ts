@@ -129,7 +129,7 @@ it('写前核对发现控台变动则拒绝写入并保留暂存', async () => {
   test.bridge.request.mockResolvedValue(snapshot(xml.replace('<Event index="0"', '<Event time="15" index="0"')));
   await test.runner.tick(); await test.runner.tick();
   expect(test.bridge.exchange).not.toHaveBeenCalled(); expect(pending()).toHaveLength(1);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('预览后已改变'));
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('预览之后控台的'));
 });
 
 it('回读失败或内容不一致不会清空暂存或重复写入', async () => {
@@ -138,7 +138,7 @@ it('回读失败或内容不一致不会清空暂存或重复写入', async () =
   await test.runner.tick(); await test.runner.tick();
   expect(test.bridge.exchange).toHaveBeenCalledOnce(); expect(test.dependencies.execute).not.toHaveBeenCalled();
   expect(pending()).toHaveLength(1); expect(position()).toBe(1000);
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('可能已写入'));
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('可能已经写入'));
 });
 
 it.each(['读取', '写入', '回读'] as const)('%s异常保留暂存，后续停止不自动重试', async stage => {
@@ -216,7 +216,7 @@ it('写入中切换工程不把旧回读应用到新工程', async () => {
   });
   await test.runner.tick();
   expect(test.dependencies.execute).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('请手动回读确认'));
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('请手动读取控台确认'));
 });
 
 it('保存重开仍可从基线恢复暂存；新增、删除均显示', () => {
@@ -278,7 +278,7 @@ it('写入中撤销不会被旧回读覆盖，下一笔写回撤销后的内容'
   await test.runner.tick(); expect(position()).toBe(original); expect(pending()).toHaveLength(1);
   await test.runner.tick(); expect(position()).toBe(original); expect(pending()).toEqual([]);
   expect(useDocumentStore.getState().future).toHaveLength(1);
-  await test.runner.tick(); expect(test.dependencies.changed).toHaveBeenLastCalledWith('verified', expect.stringContaining('回读确认'));
+  await test.runner.tick(); expect(test.dependencies.changed).toHaveBeenLastCalledWith('verified', expect.stringContaining('已同步到控台'));
 });
 it('存档失败阻止写入，并保留本地修改且不重试', async () => {
   const test = setup(); test.edit(1000); test.stop();

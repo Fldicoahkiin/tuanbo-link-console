@@ -17,7 +17,7 @@ const responseSchema = z.object({
 export function parseMa2LivePlayback(value: unknown, page: number, start: number): Ma2LiveSnapshot {
   const response = responseSchema.parse(value);
   if (response.accessDenied) throw new Error('控台用户没有推杆播放权限');
-  if (response.iPage !== page) throw new Error('控台返回了其他页面，未采用本次状态');
+  if (response.iPage !== page) throw new Error('控台返回了其他页面的数据，这次没有使用');
   const items = response.itemGroups.flatMap(group => group.items.flat()).map(item => ({
     slot: item.iExec + 1, width: item.combinedItems, name: item.tt.t ?? '', objectType: item.oType.t ?? '', objectNumber: item.oI.t ?? '',
     running: item.isRun !== 0, cue: item.cues.items?.[1]?.t?.trim() ?? '',
@@ -70,7 +70,7 @@ export class Ma2LivePlayback {
       try {
         const result = z.object({ session: z.number().int().optional(), status: z.string().optional(), responseType: z.string().optional(), result: z.boolean().optional(), accessDenied: z.boolean().optional() }).passthrough().parse(JSON.parse(String(event.data)));
         if (result.status === 'server ready') { this.send({ session: 0 }); return; }
-        if (result.session !== undefined) { this.session = result.session; if (this.session <= 0) throw new Error('控台实时推杆会话无效'); }
+        if (result.session !== undefined) { this.session = result.session; if (this.session <= 0) throw new Error('实时推杆连接无效，请重新连接'); }
         const waiter = this.waiter;
         if (!waiter) return;
         if (result.accessDenied) throw new Error('控台用户没有推杆播放权限');

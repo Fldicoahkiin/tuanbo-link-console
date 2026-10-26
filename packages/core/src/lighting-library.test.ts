@@ -48,7 +48,7 @@ it('更换绑定只更新明确选中的歌曲，一次撤销还原；来源相�
   const baseline={a:project.rundown[0]!.lighting!};
   expect(() => updateLibraryPlacementsCommand(entry.id,2,['a'],baseline).execute(updated)).toThrow('重新生成');
   const otherShow = saveMa2MaterialLibraryCommand('console', {directory:{show:'another',generation:'g',version:'3.7.0.5',entries:[]},readAt:new Date().toISOString(),sequences:[],fixtureUsage:[],errors:[]}).execute(project);
-  expect(libraryReferenceIssue(otherShow,entry)).toContain('另一份 Show');
+  expect(libraryReferenceIssue(otherShow,entry)).toContain('另一个 Show');
   expect(projectLightingLibrary(otherShow).entries[0]).toEqual(revised);
 });
 

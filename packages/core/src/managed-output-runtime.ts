@@ -207,17 +207,17 @@ export class ManagedOutputRuntime {
     const executionId = crypto.randomUUID();
     const startedAt = performance.now();
     if (event.phase === 'stop' && this.activeMediaByLayer.get(event.layerId)?.get(event.sourceName)?.clipId !== event.clipId) {
-      const error = '对应片段未在本次运行中成功启动';
+      const error = '对应的片段这次没有成功启动';
       await this.recordMediaEvent(event, executionId, 'skipped', 0, error);
       return mediaReport(executionId, event, 'skipped', startedAt, performance.now(), error);
     }
     if (!this.projectPath) {
-      return this.finishFailedMedia(event, executionId, startedAt, '工程尚未保存，不能向 OBS 发布本地媒体', mode);
+      return this.finishFailedMedia(event, executionId, startedAt, '工程还没保存，不能把本地媒体放进 OBS', mode);
     }
     // Preparation can yield to pause/stop. Recheck immediately before crossing the
     // output boundary, not only before this async operation began.
     if (!canExecute()) {
-      const reason = '运行已取消或超过执行边界，未发送素材动作';
+      const reason = '运行已取消或已过时，素材动作没有发送';
       await this.recordMediaEvent(event, executionId, 'skipped', performance.now() - startedAt, reason);
       return mediaReport(executionId, event, 'skipped', startedAt, performance.now(), reason);
     }

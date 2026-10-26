@@ -14,7 +14,7 @@ export function AudioSpectrum({ controller, state }: Pick<ProjectPlayer, 'contro
     let timer: ReturnType<typeof setInterval> | null = null;
     try {
       const analysis = controller.getAudioAnalysis();
-      if (!analysis) throw new Error('播放中的音频监测连接不可用');
+      if (!analysis) throw new Error('读不到正在播放的音频，频谱暂时无法显示');
       const values = new Uint8Array(analysis.frequencyBinCount);
       const sampleRate = analysis.sampleRate;
       setError(null);
@@ -35,7 +35,7 @@ export function AudioSpectrum({ controller, state }: Pick<ProjectPlayer, 'contro
           paint.fillRect(index * target.width / bars, target.height - height, target.width / bars - 4, height);
         }
       }, 50);
-    } catch (failure) { setError(`频谱监测失败：${String(failure)}`); }
+    } catch (failure) { setError(`频谱显示失败：${String(failure)}`); }
     return () => {
       if (timer) clearInterval(timer);
     };

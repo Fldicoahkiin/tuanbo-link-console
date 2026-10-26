@@ -21,7 +21,7 @@ export function previewMa2Sync(baseInput: unknown, localInput: unknown, remoteIn
   const remote = ma2SyncSnapshotSchema.parse(remoteInput);
   for (const snapshot of [local, remote]) {
     if (snapshot.bindingId !== base.bindingId) throw new Error('MA2 对象绑定已变化，请重新绑定');
-    if (snapshot.consoleVersion !== base.consoleVersion) throw new Error('MA2 软件版本已变化，需要重新验证格式');
+    if (snapshot.consoleVersion !== base.consoleVersion) throw new Error('MA2 软件版本变了，需要重新验证格式');
   }
   const indexes = [base, local, remote].map((snapshot) => new Map(snapshot.objects.map((object) => [object.id, object])));
   const [baseIndex, localIndex, remoteIndex] = indexes;

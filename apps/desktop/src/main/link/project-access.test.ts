@@ -19,7 +19,7 @@ describe('ProjectAccess', () => {
   it('窗口只能显示主进程批准过的工程，工程内请求只能指向当前显示的工程', async () => {
     const access = new ProjectAccess(await recordPath());
     const opened = join(await folder(), 'show.tblink'); const elsewhere = join(await folder(), 'other.tblink');
-    await expect(access.show(opened)).rejects.toThrow('未经本软件');
+    await expect(access.show(opened)).rejects.toThrow('不是通过联动台打开或保存的');
     expect(() => access.requireShown(opened)).toThrow('当前打开的工程');
     access.approve(opened); access.approve(elsewhere);
     await access.show(opened);
@@ -28,7 +28,7 @@ describe('ProjectAccess', () => {
     await access.show(null);
     expect(() => access.requireShown(opened)).toThrow('当前打开的工程');
     const never = join(await folder(), 'never.tblink');
-    expect(() => access.requireApproved(never)).toThrow('未经本软件');
+    expect(() => access.requireApproved(never)).toThrow('不是通过联动台打开或保存的');
     access.requireApproved(elsewhere);
   });
 
@@ -85,13 +85,13 @@ describe('ProjectAccess', () => {
     first.approve(opened); await first.show(opened);
     expect(JSON.parse(await readFile(record, 'utf8'))).toEqual({ version: 1, projectPath: opened });
     const next = new ProjectAccess(record);
-    expect(() => next.requireApproved(opened)).toThrow('未经本软件');
+    expect(() => next.requireApproved(opened)).toThrow('不是通过联动台打开或保存的');
     expect(await next.lastProject()).toBe(opened);
     next.requireApproved(opened);
     await writeFile(record, 'not json');
-    await expect(new ProjectAccess(record).lastProject()).rejects.toThrow('上次工程记录损坏');
+    await expect(new ProjectAccess(record).lastProject()).rejects.toThrow('上次打开的工程记录已损坏');
     await writeFile(record, JSON.stringify({ version: 1, projectPath: '' }));
-    await expect(new ProjectAccess(record).lastProject()).rejects.toThrow('上次工程记录损坏');
+    await expect(new ProjectAccess(record).lastProject()).rejects.toThrow('上次打开的工程记录已损坏');
   });
 
   it('工程内素材路径统一校验：当前工程、素材子目录与扩展名、工程目录内、真实路径不越界；一个不符合就整批拒绝', async () => {
@@ -121,12 +121,12 @@ describe('ProjectAccess.requireImportSource', () => {
     const project = await folder(); const outside = await folder(); const projectPath = join(project, 'show.tblink');
     const access = new ProjectAccess(await recordPath());
     access.approve(projectPath); await access.show(projectPath);
-    const chosen = new ChosenPaths('文件未经本软件的文件选择或拖放确认');
+    const chosen = new ChosenPaths('这个文件不是通过联动台选择或拖入的');
     const dropped = join(outside, 'dropped.wav'); chosen.choose(dropped);
     await access.requireImportSource(projectPath, dropped, chosen);
     await access.requireImportSource(projectPath, join(project, 'assets', 'reference-media', 'clip.mp4'), chosen);
     for (const source of [join(outside, 'other.wav'), join(project, 'secret.wav'), join(project, 'assets', 'reference-media', 'notes.txt')]) {
-      await expect(access.requireImportSource(projectPath, source, chosen)).rejects.toThrow('文件未经本软件的文件选择或拖放确认');
+      await expect(access.requireImportSource(projectPath, source, chosen)).rejects.toThrow('这个文件不是通过联动台选择或拖入的');
     }
     await expect(access.requireImportSource(join(outside, 'show.tblink'), dropped, chosen)).rejects.toThrow('当前打开的工程');
   });

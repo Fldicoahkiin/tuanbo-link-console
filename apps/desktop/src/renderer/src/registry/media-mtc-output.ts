@@ -35,11 +35,11 @@ export class MediaMtcOutput {
       if (!portName) {
         if (available.length !== 1) throw new Error(available.length === 0
           ? '没有找到 MIDI 输出。请接好 USB-MIDI 接口并检查驱动，再点播放。'
-          : `电脑上有 ${available.length} 个 MIDI 输出（${available.map(port => port.name).join('、')}），不知道哪个接着控台。请到 设置 → 音频与 MIDI 选好“时间码输出”。`);
+          : `电脑上有 ${available.length} 个 MIDI 输出（${available.map(port => port.name).join('、')}），不知道哪个接着控台。请到「设置 → 音频与 MIDI」选好“时间码输出”。`);
         portName = available[0]!.name;
       }
       const ports = [...access.outputs.values()].filter((port) => port.name === portName && port.state === 'connected');
-      if (ports.length === 0) throw new Error(`没有找到 MIDI 时间码输出「${portName}」。请检查 USB 线和驱动，再到 设置 → 音频与 MIDI 刷新；虚拟端口请保持 loopMIDI 运行。`);
+      if (ports.length === 0) throw new Error(`没有找到 MIDI 时间码输出「${portName}」。请检查 USB 线和驱动，再到「设置 → 音频与 MIDI」刷新；虚拟端口请保持 loopMIDI 运行。`);
       if (ports.length > 1) throw new Error(`电脑上有 ${ports.length} 个叫「${portName}」的 MIDI 输出，分不清用哪个。请拔掉多余的一个，再重新播放。`);
       const port = ports[0];
       if (!port) throw new Error('MIDI 输出不存在');
@@ -75,7 +75,7 @@ export class MediaMtcOutput {
     if (this.rate !== rate) { this.reset(); this.rate = rate; }
     const elapsed = this.lastTickAt === null ? 0 : now - this.lastTickAt;
     const advanced = this.lastPositionMs === null ? 0 : positionMs - this.lastPositionMs;
-    if (elapsed < 0) throw new Error('MIDI 时间码调度时钟回跳，时间码输出已停止');
+    if (elapsed < 0) throw new Error('MIDI 时间码的计时出现回跳，时间码已停止发送');
     this.lastTickAt = now;
     this.lastPositionMs = positionMs;
     const fps = playbackFramesPerSecond(rate);
@@ -84,12 +84,12 @@ export class MediaMtcOutput {
     // quarters into the console. The stream relocates with a Full Frame at
     // the actual audio position and continues; the interruption is reported.
     const interruption = advanced < 0 ? '音频位置回跳'
-      : elapsed > 500 ? `调度中断 ${Math.round(elapsed)}ms`
+      : elapsed > 500 ? `计时中断 ${Math.round(elapsed)} ms`
         : Math.abs(advanced - elapsed) > 100 ? '音频位置与播放时钟不一致'
-          : !this.locate && positionMs - this.nextQuarterFrame * frameMs / 4 > frameMs ? `调度滞后超过一帧（${Math.round(frameMs)}ms）` : null;
+          : !this.locate && positionMs - this.nextQuarterFrame * frameMs / 4 > frameMs ? `计时落后超过一帧（${Math.round(frameMs)} ms）` : null;
     if (interruption) {
       this.locate = true; this.piece = 0; this.messages = [];
-      this.schedulingNotice = `时间码中断 ${++this.interruptions} 次（${interruption}）：迟到部分未补发，已按音频位置整帧重新同步，控台会跳到当前位置`;
+      this.schedulingNotice = `时间码第 ${++this.interruptions} 次中断（${interruption}）：迟到的部分没有补发，已按音频位置重新对齐，控台会直接跳到当前位置`;
     }
     if (this.locate) {
       this.output.send(encodeMediaTimecode(positionMs, rate).fullFrame);
@@ -134,7 +134,7 @@ function waitForMidi<T>(operation: Promise<T>, signal: AbortSignal, label: strin
       settled = true; clearTimeout(timer); signal.removeEventListener('abort', cancel); complete();
     };
     const cancel = (): void => finish(() => reject(new Error('MIDI 连接已取消')));
-    const timer = setTimeout(() => finish(() => reject(new Error(`${label}超时（5 秒），请检查设备后手动重试`))), 5000);
+    const timer = setTimeout(() => finish(() => reject(new Error(`${label}超时（5 秒），请检查设备后重试`))), 5000);
     signal.addEventListener('abort', cancel, { once: true });
     operation.then(value => finish(() => resolve(value)), error => finish(() => reject(error instanceof Error ? error : new Error(String(error)))));
     if (signal.aborted) cancel();

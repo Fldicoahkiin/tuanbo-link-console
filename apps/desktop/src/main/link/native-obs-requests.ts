@@ -13,13 +13,13 @@ export class NativeObsRequests {
   async prepare(value: unknown, checkFiles?: (request: NativeObsPrepare) => Promise<void>): Promise<NativeObsStatus> {
     const request = nativeObsPrepareSchema.parse(value);
     if (this.current?.request.sessionId === request.sessionId && request.generation <= this.current.request.generation) {
-      throw new Error('后台画面准备请求已过期');
+      throw new Error('画面准备请求已过期');
     }
     const pending: Pending = { request, cancelled: false, dispatched: false };
     this.current = pending;
     await this.authorize(request);
     await checkFiles?.(request);
-    if (this.current !== pending || pending.cancelled) throw new Error('后台画面准备在等待许可时已取消');
+    if (this.current !== pending || pending.cancelled) throw new Error('画面准备在排队时被取消');
     pending.dispatched = true;
     return this.service.prepare(request);
   }
@@ -27,7 +27,7 @@ export class NativeObsRequests {
   async stop(value: unknown): Promise<void> {
     const request = nativeObsStopSchema.parse(value), pending = this.current;
     if (!pending || pending.request.sessionId !== request.sessionId || pending.request.generation !== request.generation) {
-      throw new Error('后台画面停止请求属于旧准备会话');
+      throw new Error('这是上一次准备的停止请求，已忽略');
     }
     pending.cancelled = true;
     if (pending.dispatched) await this.service.stopOwned(request);

@@ -19,7 +19,7 @@ const track = (at: number): LightingTrack => ({ id: 'track', name: '灯光', kin
 it('没有配对和绑定是未匹配；自动匹配未确认要处理；确认后可演出并给出控台节目、起始码和帧率', () => {
   const { project } = fixture();
   expect(songLightingStatus(project, '歌曲乙')).toEqual({ state: 'unmatched' });
-  expect(songLightingStatus(project, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('尚未确认')] });
+  expect(songLightingStatus(project, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('还没确认')] });
   const confirmed = confirmMa2PairingCommand(2, '歌曲甲').execute(project);
   expect(songLightingStatus(confirmed, '歌曲甲')).toEqual({ state: 'ready', timecode: 2, startMs: 480000, frameRate: '30' });
   expect(() => songLightingStatus(confirmed, '不存在')).toThrow('节目单中没有');
@@ -29,7 +29,7 @@ it('改了歌曲起点后配对失效，变为需处理并写明原因；控台�
   const { project } = fixture();
   const confirmed = confirmMa2PairingCommand(2, '歌曲甲').execute(project);
   const moved = withMa2PairingValidation({ id: 'move', label: '改起点', execute: value => { const next = structuredClone(value); next.rundown[0]!.playback!.mtcOffsetMs += 1000; return next; }, undo: before => before }).execute(confirmed);
-  expect(songLightingStatus(moved, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('歌曲起点或音频范围已修改')] });
+  expect(songLightingStatus(moved, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('歌曲起点或音频范围改过了')] });
   const other = structuredClone(confirmed); other.ma2ReadState!.catalog.entries[0]!.frameFormat = '25 FPS';
   expect(songLightingStatus(other, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('25 FPS')] });
 });
@@ -45,7 +45,7 @@ it('已确认配对的歌有本地修改尚未写到控台：编灯中，并给�
   const written = structuredClone(confirmed); written.rundown[0]!.lighting!.tracks = [track(0)];
   expect(songLightingStatus(written, '歌曲甲')).toEqual({ state: 'ready', timecode: 2, startMs: 480000, frameRate: '30' });
   const moved = structuredClone(written); moved.rundown[0]!.lighting!.ma2Bindings![0]!.timeOriginMs = 0;
-  expect(songLightingStatus(moved, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('起点不一致')] });
+  expect(songLightingStatus(moved, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('起点对不上')] });
 });
 
 function ownShowSong(times: number[], start = 480000) {

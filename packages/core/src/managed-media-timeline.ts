@@ -50,7 +50,7 @@ export function compileManagedMediaTimeline(project: LinkProject, itemId: string
     if (asset.kind === 'audio' && project.obsOutputMode !== 'scenes') return [];
     if (asset.kind === 'audio' && audioContainsMediaSource(item.referenceAudio, asset.id)) return [];
     const scene = project.obsOutputMode === 'scenes' ? sceneByLayer.get(`${asset.id}:${clip.layerId}`) ?? materialSceneNames(project.projectId, asset) : null;
-    if (!clip.layerId) throw new Error(`素材片段“${clip.label}”尚未分配视觉图层`);
+    if (!clip.layerId) throw new Error(`素材片段“${clip.label}”还没分配视觉图层`);
     const layerIndex = item.visualLayers.findIndex((layer) => layer.id === clip.layerId);
     if (layerIndex < 0) throw new Error(`素材片段“${clip.label}”引用不存在的视觉图层`);
     if (!item.visualLayers[layerIndex]?.visible) return [];
@@ -149,7 +149,7 @@ function assertLayerIntervalsDoNotOverlap(
   for (const clip of item.referenceMediaClips) {
     const asset = requireAsset(assets, clip.assetId);
     if (asset.kind === 'audio') continue;
-    if (!clip.layerId) throw new Error(`素材片段“${clip.label}”尚未分配视觉图层`);
+    if (!clip.layerId) throw new Error(`素材片段“${clip.label}”还没分配视觉图层`);
     const span = resolveTimelineClipSpan(clip, frameRate);
     const start = span.startFrame;
     const end = span.endFrame;

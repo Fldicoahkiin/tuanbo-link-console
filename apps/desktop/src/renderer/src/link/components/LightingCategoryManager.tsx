@@ -15,7 +15,7 @@ export function LightingCategoryManager({ items, onClose, onHidden }: { items: L
   };
   return createPortal(<dialog ref={dialog} className="lighting-attribute-dialog lighting-category-manager" aria-label="分类管理" onCancel={onClose}>
     <header><strong>分类管理</strong><button aria-label="关闭分类管理" onClick={onClose}><X/></button></header>
-    <p>勾选显示的分类；常用分类直接放在左侧，其余收进“更多分类”。使用箭头调整顺序，设置随工程保存。</p>
+    <p>勾选要显示的分类。常用分类放在左侧，其余收进“更多分类”。用箭头调整顺序，设置随工程保存。</p>
     <div className="lighting-category-manager-list">{items.map((item, index) => <div className="lighting-category-manager-row" key={item.id} data-id={item.id}>
       {item.kind === 'category' ? <input key={item.name} aria-label={`分类名称 ${item.name}`} defaultValue={item.name} maxLength={64} onBlur={event => {
         const name = event.currentTarget.value.trim(); if (name !== item.name) execute(editLightingCategoryCommand(item.categoryId, name));
@@ -33,6 +33,6 @@ export function LightingCategoryManager({ items, onClose, onHidden }: { items: L
       <input aria-label="新分类名称" placeholder="新分类名称" required maxLength={64} value={newName} onChange={event => setNewName(event.target.value)}/><button type="submit">新建分类</button>
     </form>
     {error ? <p role="alert">{error}</p> : null}
-    <footer>隐藏分类保留全部归类记录；删除分类也不会删除控台 Cue。</footer>
+    <footer>隐藏分类不会丢失归类记录；删除分类也不会删除控台上的 Cue。</footer>
   </dialog>, document.body);
 }

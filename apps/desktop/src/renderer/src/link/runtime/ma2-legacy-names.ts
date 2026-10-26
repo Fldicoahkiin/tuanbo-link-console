@@ -40,7 +40,7 @@ export async function convertMa2LegacyNames(documentId: number): Promise<number>
     return state.project;
   };
   const playback = useMa2AutoSyncStore.getState();
-  if (playback.timelinePlaying || playback.previewPlaying) throw new Error('播放中不改控台名称，请停止后再转换');
+  if (playback.timelinePlaying || playback.previewPlaying) throw new Error('播放中不能改控台名称，请停止后再转换');
   const project = current();
   const legacy = legacyMa2ConsoleNames(project);
   if (!legacy.count) return 0;
@@ -61,7 +61,7 @@ export async function convertMa2LegacyNames(documentId: number): Promise<number>
   await archiveMa2Project(documentId, current());
   for (const change of legacy.renames) {
     const result = ma2RenameResultSchema.parse(await window.tbLink.renameMa2Object({ dataDirectory: '', network: { host, port, monitorPort, username }, generation: library.directory.generation, change }));
-    if (result.name !== toConsoleLabel(change.name) || result.sequence !== change.sequence || result.kind !== change.kind || Number(result.cue) !== Number(change.cue)) throw new Error('名称回读与目标不一致，未确认转换');
+    if (result.name !== toConsoleLabel(change.name) || result.sequence !== change.sequence || result.kind !== change.kind || Number(result.cue) !== Number(change.cue)) throw new Error('控台上的名称和目标不一致，转换没有确认');
     useDocumentStore.getState().executeForDocument(documentId, confirmMa2RenameCommand(change));
     useDocumentStore.getState().markConsoleSynced(documentId);
   }

@@ -38,7 +38,7 @@ it('读取中切换工程，迟到结果不能污染新工程', async () => {
   await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
   useDocumentStore.getState().setProject(createEmptyLinkProject('另一工程'), 'other.tblink');
   release!(snapshot(999));
-  await expect(task).rejects.toThrow('工程或素材来源已变化');
+  await expect(task).rejects.toThrow('工程或素材来源变了');
   expect(useMa2LayoutStore.getState().snapshot).toBeNull();
 });
 
@@ -48,7 +48,7 @@ it('错误页码、错误来源和错误返回页均不显示可操作的旧按�
   await expect(readMa2LayoutPage(10000)).rejects.toThrow('页面编号');
   expect(connection).not.toHaveBeenCalled();
   connection.mockResolvedValueOnce({ network: { host: '192.0.2.2', port: 30000 } });
-  await expect(readMa2LayoutPage(999)).rejects.toThrow('来源不同');
+  await expect(readMa2LayoutPage(999)).rejects.toThrow('不是同一台');
   expect(read).not.toHaveBeenCalled();
   read.mockResolvedValue(snapshot(998));
   await expect(readMa2LayoutPage(999)).rejects.toThrow('编号不一致');
@@ -60,7 +60,7 @@ it('新建成功的回读显示到对应页面，拒绝旧工程的新建结果'
   acceptCreatedMa2Layout(scope, snapshot(999));
   expect(useMa2LayoutStore.getState().snapshot?.layout).toBe(999);
   useDocumentStore.getState().setProject(createEmptyLinkProject('另一工程'), 'other.tblink');
-  expect(() => acceptCreatedMa2Layout(scope, snapshot(999))).toThrow('工程或素材来源已变化');
+  expect(() => acceptCreatedMa2Layout(scope, snapshot(999))).toThrow('工程或素材来源变了');
 });
 
 it('后台歌曲回读不能抢走用户正在浏览的页面', () => {

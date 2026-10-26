@@ -31,7 +31,7 @@ export class P1AutoFollowController {
     if (!this.enabled || this.disposed) return;
     const located = locateP1Sample(this.project, raw);
     if (!located) {
-      this.freeze(new Error('收到未映射的 P1 时间码或帧率不匹配。请在 P1 打开本工程生成的联动 .hia，并从歌曲开头播放。'));
+      this.freeze(new Error('收到的 P1 时间码对不上任何歌曲，或帧率不一致。请在 P1 打开这个工程生成的联动 .hia，再从歌曲开头播放。'));
       return;
     }
     const newStart = !this.observed || located.itemId !== this.observed.itemId
@@ -60,7 +60,7 @@ export class P1AutoFollowController {
         this.pending = null;
         if (target.session !== this.activeSession) {
           if (target.sample.totalFrames > nominalFramesPerSecond(target.sample.frameRate) * 2) {
-            throw new Error('请从 P1 歌曲开头播放以建立自动联动；不能把中途时间码当成歌曲开始');
+            throw new Error('请在 P1 从歌曲开头播放，自动联动才能开始；从中途播放无法判断歌曲起点');
           }
           const isCurrent = (): boolean => this.enabled && !this.disposed && this.observed?.session === target.session;
           try { await this.dependencies.prepare(target.itemId, isCurrent); }
@@ -70,7 +70,7 @@ export class P1AutoFollowController {
           this.activeSession = target.session;
           const latest = this.pending ?? target;
           this.pending = null;
-          if (performance.now() - latest.sample.receivedAtMs > 500) throw new Error('准备期间 P1 已停止，请恢复监听后重新点击歌曲');
+          if (performance.now() - latest.sample.receivedAtMs > 500) throw new Error('准备过程中 P1 停止了，请恢复监听后重新点歌');
           this.deliver(latest);
         } else {
           this.deliver(target);

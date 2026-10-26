@@ -39,7 +39,7 @@ const LAST_EVENT_MARGIN_TICKS = 30 * 30;
  */
 export function allocateSongMtcStart(project: LinkProject, itemId: string, console: Ma2TimecodeRanges): number {
   const item = project.rundown.find(value => value.id === itemId);
-  if (!item?.referenceAudio) throw new Error('歌曲缺少参考音频时长，无法分配时间码起点');
+  if (!item?.referenceAudio) throw new Error('歌曲没有音频时长，无法分配时间码起点');
   const occupied: Array<{ startMs: number; endMs: number }> = [];
   const unclear: string[] = [];
   for (const show of console.entries) {

@@ -154,7 +154,7 @@ test('一层读取异常保留其它层与换页操作，恢复后继续回读',
     const fader = page.locator('[data-executor-band="fader"]');
     await expect(upper.getByRole('button', { name: '执行器 4.101 · xws', exact: true })).toBeVisible();
     await app.evaluate(() => { process.env.TBLINK_EXECUTOR_READ_FAILURE = '4'; });
-    await expect(upper.getByRole('button', { name: '待回读', exact: true })).toHaveAttribute('title', /此页暂未读回/);
+    await expect(upper.getByRole('button', { name: '等待控台确认', exact: true })).toHaveAttribute('title', /此页暂未读回/);
     await expect(fader.getByRole('button', { name: '执行器 100.1 · 面光_Long_Sequence_Name', exact: true })).toBeVisible();
     await page.getByLabel('上层按钮页码', { exact: true }).fill('5'); await page.getByLabel('上层按钮页码', { exact: true }).press('Enter');
     await expect(upper.getByRole('button', { name: '执行器 5.101 · 蓝色', exact: true })).toBeVisible();

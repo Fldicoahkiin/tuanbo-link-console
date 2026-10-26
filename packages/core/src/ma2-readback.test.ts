@@ -44,7 +44,7 @@ describe('MA2 回读事件身份', () => {
   });
   it('错对象与不完整映射不产生可用匹配结果；软件不转换的控台动作不参与匹配（2026-10-26）', () => {
     const remote = read([{ id: 'a', time: 1000, cueIndex: 1 }]); const base = baseline(remote);
-    expect(() => matchMa2Readback(base, { ...remote, target: 10 })).toThrow('绑定不一致');
+    expect(() => matchMa2Readback(base, { ...remote, target: 10 })).toThrow('和节目绑定对不上');
     expect(matchMa2Readback(base, { ...remote, unconverted: [{ path: 'x', reason: '未支持' }] }).matches).toHaveLength(1);
     expect(() => matchMa2Readback(base, { ...remote, mappings: [] })).toThrow('未映射');
   });

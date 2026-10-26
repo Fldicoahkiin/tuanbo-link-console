@@ -230,7 +230,7 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
     // A disconnected target is a reviewable failure, never an automatic Off on the new console.
     const callsBeforeReview=await application.evaluate(()=>process.env.TBLINK_LIBRARY_CALLS);
     await application.evaluate(({ipcMain,BrowserWindow})=>{
-      let state:Ma2AuditionState={version:1,revision:10000,generation:100,phase:'failed',targets:[{id:'previous-console-8999',network:{host:'192.0.2.1',port:30000,monitorPort:30001,username:'test'},action:{target:'sequence',sequence:8999,action:'off'},state:'failed',error:'控台连接已改变，原试听目标尚未确认关闭',connectionChanged:true}]};
+      let state:Ma2AuditionState={version:1,revision:10000,generation:100,phase:'failed',targets:[{id:'previous-console-8999',network:{host:'192.0.2.1',port:30000,monitorPort:30001,username:'test'},action:{target:'sequence',sequence:8999,action:'off'},state:'failed',error:'控台连接变了，还没确认原来的试听已关闭',connectionChanged:true}]};
       ipcMain.removeHandler('link:ma2-audition-control');
       ipcMain.handle('link:ma2-audition-control',(_event,input:{action:string;targetId?:string})=>{
         if(input.action==='acknowledge-closed'){

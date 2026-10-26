@@ -43,15 +43,15 @@ export function LightingMusicBatch({ lighting, playheadMs, durationMs, markerId,
         onPreview(moveMusicCues(document, changes, durationMs), changes, operation === 'marker' ? '选中 Cue 对齐音乐标记' : '整组移动 Cue'); return;
       }
       if (!chosen.length) throw new Error('请选择需要放置的 Cue');
-      if (sourceMode === 'library' && project) for (const source of chosen) { const entry=projectLightingLibrary(project).entries.find(value=>value.id===source.id); if(!entry)throw new Error('分类素材已失效');const issue=libraryReferenceIssue(project,entry);if(issue)throw new Error(issue); }
-      if (sourceMode === 'console' && project?.ma2MaterialLibrary?.library?.sourceUnverified) throw new Error('当前控台目录来源待核对');
+      if (sourceMode === 'library' && project) for (const source of chosen) { const entry=projectLightingLibrary(project).entries.find(value=>value.id===source.id); if(!entry)throw new Error('这个分类素材已经不存在了');const issue=libraryReferenceIssue(project,entry);if(issue)throw new Error(issue); }
+      if (sourceMode === 'console' && project?.ma2MaterialLibrary?.library?.sourceUnverified) throw new Error('控台素材的来源还没确认，暂时不能使用');
 
-      if (!Number.isFinite(interval) || interval <= 0 || !Number.isInteger(count) || count < 1) throw new Error('拍数间隔与数量必须有效');
+      if (!Number.isFinite(interval) || interval <= 0 || !Number.isInteger(count) || count < 1) throw new Error('请填写有效的拍数间隔和数量');
       if (start < 0 || start >= durationMs || untilEnd && (end <= start || end > durationMs)) throw new Error('请选择歌曲内的有效范围');
       const times: number[] = []; const beat = count === 1 && !untilEnd ? 0 : musicMsToBeat(document, start);
       const amount = untilEnd ? 50001 : count;
-      for (let i = 0; i < amount; i++) { const ms = i === 0 ? start : musicBeatToMs(document, beat + i * interval); if (untilEnd && ms >= end) break; if (times.length === 50000) throw new Error('本次批量操作超过 50000 项，请分段编排'); times.push(ms); }
-      if (chosen.length > 1 && !cycle && times.length > chosen.length) throw new Error('所选 Cue 数量不足；请减少数量或明确开启循环使用');
+      for (let i = 0; i < amount; i++) { const ms = i === 0 ? start : musicBeatToMs(document, beat + i * interval); if (untilEnd && ms >= end) break; if (times.length === 50000) throw new Error('一次最多批量处理 50000 项，请分段编排'); times.push(ms); }
+      if (chosen.length > 1 && !cycle && times.length > chosen.length) throw new Error('选中的 Cue 不够用。请减少数量，或打开“循环使用选中的 Cue”');
       const target = document.tracks.find(track => track.id === trackId); if (trackId !== 'new' && (!target || target.locked || target.kind !== 'ma2')) throw new Error('请选择未锁定的灯光轨道');
       const track: LightingTrack = target ?? { id: crypto.randomUUID(), name: '灯光', kind: 'ma2', color: '#ba8fff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [] };
       const events: LightingEvent[] = []; const changes: CuePositionChange[] = [];
@@ -59,9 +59,9 @@ export function LightingMusicBatch({ lighting, playheadMs, durationMs, markerId,
         const source = chosen[index % chosen.length]!; const groupId = source.events.length > 1 ? crypto.randomUUID() : undefined;
         source.events.forEach(event => {
           const id = crypto.randomUUID(); const at = ms + event.at;
-          if (at < 0 || at >= durationMs) throw new Error('Cue 超出歌曲范围，未添加');
+          if (at < 0 || at >= durationMs) throw new Error('Cue 超出了歌曲范围，没有添加');
           const targets = event.kind === 'ma2' ? [...new Set(document.ma2Bindings?.flatMap(binding=>binding.mappings.filter(mapping=>mapping.sequence===event.sequence).map(mapping=>mapping.executor)) ?? [])] : [];
-          if(sourceMode === 'console' && event.kind==='ma2' && targets.length>1 && routes[String(event.sequence)] === undefined) throw new Error(`序列 ${event.sequence} 有多个执行器，请明确选择目标`);
+          if(sourceMode === 'console' && event.kind==='ma2' && targets.length>1 && routes[String(event.sequence)] === undefined) throw new Error(`序列 ${event.sequence} 有多个执行器，请选择要用哪一个`);
           const added = { ...event, ...(sourceMode==='console' && event.kind==='ma2' ? {executor:routes[String(event.sequence)] ?? (targets.length===1 ? targets[0]! : '')} : {}), id, at, ...(groupId ? { effectGroupId: groupId } : {}) }; delete added.beatAnchor;
           events.push(added); changes.push({ id, name: source.name, fromMs: at, toMs: at });
         });

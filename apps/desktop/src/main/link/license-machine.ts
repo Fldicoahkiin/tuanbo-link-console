@@ -12,7 +12,7 @@ export function createLicenseMachineCodeReader(read: () => Promise<string> = rea
 
 /** Windows installation identifier: never send the raw MachineGuid to the issuer. */
 export async function readLicenseMachineCode(): Promise<string> {
-  if (process.platform !== 'win32') throw new Error('主机授权目前仅支持 Windows');
+  if (process.platform !== 'win32') throw new Error('本机授权目前只支持 Windows');
   const executable = await windowsSystemExecutable('registry');
   const { stdout } = await promisify(execFile)(executable, ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid', '/reg:64'], { windowsHide: true, timeout: 5000, maxBuffer: 8192 });
   const guid = /MachineGuid\s+REG_SZ\s+([a-f0-9-]{32,36})/i.exec(stdout)?.[1];

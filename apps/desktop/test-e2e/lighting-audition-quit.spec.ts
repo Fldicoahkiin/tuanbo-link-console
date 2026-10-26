@@ -56,7 +56,7 @@ test('退出时灯光试听未能停止：可返回软件处理，也可明确�
     });
     const titles = (): Promise<string[]> => app.evaluate(() => [...(Reflect.get(globalThis, '__quitDialogs') as string[])]);
     await app.evaluate(({ app: electronApp }) => { electronApp.quit(); });
-    await expect.poll(titles).toEqual(['灯光试听未能停止']);
+    await expect.poll(titles).toEqual(['灯光试听没能停止']);
     await page.waitForTimeout(500);
     expect(exited).toBe(false);
     await expect(page.getByRole('button', { name: '打开工程', exact: true })).toBeVisible();

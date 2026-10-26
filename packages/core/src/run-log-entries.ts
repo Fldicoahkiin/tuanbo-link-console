@@ -9,7 +9,7 @@ export type PreflightLogEntry = { level: 'info' | 'error'; message: string; resu
  */
 export function preflightLogEntries(checks: readonly PreflightCheck[], seen: Set<string>, projectId: string): PreflightLogEntry[] {
   const blocking = checks.filter(check => check.status === 'blocking'), advisories = checks.filter(check => check.status === 'warning');
-  const notes = [blocking.length ? `${blocking.length} 项阻断` : '', advisories.length ? `${advisories.length} 项提示` : ''].filter(Boolean);
+  const notes = [blocking.length ? `${blocking.length} 项未通过` : '', advisories.length ? `${advisories.length} 项提示` : ''].filter(Boolean);
   const summary: PreflightLogEntry = {
     level: blocking.length ? 'error' : 'info', result: blocking.length ? 'failed' : 'succeeded',
     message: blocking.length ? `开播前检查未通过（${notes.join('，')}，共 ${checks.length} 项）` : `开播前检查通过（${[`${checks.length} 项`, ...notes].join('，')}）`,

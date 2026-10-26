@@ -80,7 +80,7 @@ it('按执行器分配补读实际 Cue 列表并再次核对执行器', async ()
 });
 it('读取过程中换序列或序列缺失时不返回可关联的预览', async () => {
   const changed = { request: vi.fn().mockResolvedValueOnce(execXml).mockResolvedValueOnce(snapshot).mockResolvedValueOnce(execXml.replace('<No>9901</No>', '<No>9902</No>')) };
-  await expect(readMa2Executor(changed, input)).rejects.toThrow('分配或名称已改变');
+  await expect(readMa2Executor(changed, input)).rejects.toThrow('分配或名称变了');
   const missing = { request: vi.fn().mockResolvedValueOnce(execXml).mockResolvedValueOnce(tcXml) };
   await expect(readMa2Executor(missing, input)).rejects.toThrow('序列缺失');
   expect(missing.request).toHaveBeenCalledTimes(2);

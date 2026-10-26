@@ -86,7 +86,7 @@ export class CueActionRunner {
     for (const action of cue.actions) {
       if (blocked) {
         const at = this.now();
-        const skipped = createResult(executionId, cue.id, action, 'skipped', at, at, mode === 'rehearsal' ? '排练模式已被前序失败动作阻断' : '当前输出通道已被前序失败动作阻断');
+        const skipped = createResult(executionId, cue.id, action, 'skipped', at, at, mode === 'rehearsal' ? '排练时前面的动作失败了，后面的动作不再执行' : '这个输出前面的动作失败了，后面的动作不再执行');
         results.push(skipped);
         await this.emit(action, skipped.status, executionId, cue.id, at, skipped.error, 0);
         continue;
@@ -130,7 +130,7 @@ export class CueActionRunner {
     await this.emit(action, 'running', executionId, cueId, startedAt);
     if (!canExecute()) {
       const finishedAt = this.now();
-      const result = createResult(executionId, cueId, action, 'skipped', startedAt, finishedAt, '运行已暂停、中断或停止，未发送该动作');
+      const result = createResult(executionId, cueId, action, 'skipped', startedAt, finishedAt, '运行已暂停或停止，这个动作没有发送');
       await this.emit(action, result.status, executionId, cueId, finishedAt, result.error, result.durationMs);
       return result;
     }
@@ -206,7 +206,7 @@ function createResult(
 
 function withTimeout(promise: Promise<void>, timeoutMs: number, kind: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${kind} 执行超过 ${timeoutMs}ms`)), timeoutMs);
+    const timer = setTimeout(() => reject(new Error(`${kind} 执行超时（${timeoutMs} ms）`)), timeoutMs);
     promise.then(
       () => {
         clearTimeout(timer);

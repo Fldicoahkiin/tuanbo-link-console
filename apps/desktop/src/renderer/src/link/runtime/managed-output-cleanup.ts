@@ -34,7 +34,7 @@ export async function executeManagedOutputCleanup(
     }
   }
   if (errors.length > 0) {
-    throw new Error(`受管 OBS 输出清理不完整：${errors.map((error) => error.message).join('；')}`, {
+    throw new Error(`联动台在 OBS 里创建的画面没有清理干净：${errors.map((error) => error.message).join('；')}`, {
       cause: new AggregateError(errors)
     });
   }

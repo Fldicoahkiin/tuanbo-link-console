@@ -223,7 +223,7 @@ export function LinkApp(): JSX.Element {
         </main>
       </section>
 
-      {settingsExit ? <SettingsConfirm cancelLabel="继续编辑" title="离开设置？" confirmLabel="放弃未保存修改" onClose={() => setSettingsExit(null)} onConfirm={settingsExit}>连接或启动参数尚未保存。已保存的本机偏好和工程修改会保留。</SettingsConfirm> : null}
+      {settingsExit ? <SettingsConfirm cancelLabel="继续编辑" title="离开设置？" confirmLabel="放弃未保存修改" onClose={() => setSettingsExit(null)} onConfirm={settingsExit}>连接或启动设置还没保存，离开后这部分修改会丢失。其他已保存的设置和工程修改不受影响。</SettingsConfirm> : null}
       {newProjectOpen ? <ProjectDialog name={newProjectName} error={newProjectError} onNameChange={setNewProjectName} onClose={() => setNewProjectOpen(false)} onCreate={() => void createProject()} /> : null}
     </div>
   </RendererErrorBoundary>;
@@ -302,7 +302,7 @@ function useRuntimeCloseProtection(
 ): void {
   useEffect(() => {
     void linkDesktopViewModel.setRuntimeActive(runtimeState !== 'idle')
-      .catch((error: unknown) => notify(`同步运行关闭保护失败：${error instanceof Error ? error.message : String(error)}`, 'error'));
+      .catch((error: unknown) => notify(`更新防误关窗口设置失败：${error instanceof Error ? error.message : String(error)}`, 'error'));
   }, [notify, runtimeState]);
 }
 
@@ -387,7 +387,7 @@ function useUpdateAvailableNotice(notify: (message: string, tone?: 'info' | 'err
     return window.tbLink.onUpdateStatus(status => {
       if (status.phase !== 'available' || !status.availableVersion || announced.has(status.availableVersion)) return;
       announced.add(status.availableVersion);
-      notify(`发现新版本 ${status.availableVersion}，可在 设置 › 外观与更新 › 软件更新 中查看`, 'info', 'update-available');
+      notify(`有新版本 ${status.availableVersion}，可在「设置 › 外观与更新 › 软件更新」中查看`, 'info', 'update-available');
     });
   }, [notify]);
 }

@@ -36,7 +36,7 @@ windowsTest('MIDI 清单读取失败时仍准备音频，明确报告本首时�
   try {
     const prepared = await player.prepare({ ...request, midiPortName: '团播联动台 P1 MTC' });
     expect(prepared).toMatchObject({ status: 'ready', mtcPortName: null, mtcError: 'MIDI 设备不可用：MIDI 服务故障' });
-    expect(failures).toEqual(['MIDI 设备不可用，本首时间码未参与：MIDI 服务故障']);
+    expect(failures).toEqual(['MIDI 设备不可用，这一首不发时间码：MIDI 服务故障']);
   } finally { await player.close(); }
 }, 10000);
 
@@ -49,13 +49,13 @@ windowsTest('真实 WASAPI 播放期间预填充下一首，曲尾接管不再�
     await player.prepare({ ...request, snapshot: { ...request.snapshot, endMs: 1700 }, nextSnapshot: next });
     const pid = player.status!.enginePid;
     await player.control({ version: 1, sessionId: request.sessionId, generation: 2, kind: 'play' });
-    await expect.poll(() => measured.mock.calls.some(([phase]) => phase === '下一节目音频预填充')).toBe(true);
+    await expect.poll(() => measured.mock.calls.some(([phase]) => phase === '预先准备下一首音频')).toBe(true);
     expect(player.status).toMatchObject({ itemId: 'song-a', status: 'playing', offsetMs: 480000, underruns: 0 });
     await expect.poll(() => player.status?.status).toBe('ended');
     const count = prepare.mock.calls.length;
     await player.prepare({ ...request, generation: 3, snapshot: next });
     expect(prepare).toHaveBeenCalledTimes(count);
-    expect(measured.mock.calls.some(([phase]) => phase === '复用下一节目音频预填充')).toBe(true);
+    expect(measured.mock.calls.some(([phase]) => phase === '使用预先准备的下一首音频')).toBe(true);
     await player.control({ version: 1, sessionId: request.sessionId, generation: 4, kind: 'play' });
     await expect.poll(() => player.status?.positionMs).toBeGreaterThan(550);
     expect(player.status).toMatchObject({ itemId: 'song-b', status: 'playing', offsetMs: 960000, enginePid: pid, underruns: 0 });
@@ -75,7 +75,7 @@ windowsTest('已经开始播放后解码失败会停止音频；不会将失败�
     complete!({ ok: false, error: new Error('测试：后台解码中途失败') });
     await expect.poll(() => player.status?.status).toBe('error');
     expect(player.status?.audioError).toBe('测试：后台解码中途失败');
-    await expect(player.control({ version: 1, sessionId: request.sessionId, generation: 3, kind: 'play' })).rejects.toThrow('重新准备');
+    await expect(player.control({ version: 1, sessionId: request.sessionId, generation: 3, kind: 'play' })).rejects.toThrow('请重新播放这首歌');
     const frozen = player.status!.positionMs;
     await new Promise(resolve => setTimeout(resolve, 200));
     expect(player.status!.positionMs).toBe(frozen); expect(failures).toEqual(['测试：后台解码中途失败']);
@@ -110,7 +110,7 @@ windowsTest('后台正式音频服务：原始偏移和裁剪不叠加，缺少 
   try {
     const prepared = await player.prepare({ ...request, midiPortName: 'TBLINK MISSING TEST PORT' });
     expect(prepared).toMatchObject({ status: 'ready', positionMs: 900, offsetMs: 480000, mtcPortName: null });
-    expect(prepared.mtcError).toContain('未连接'); expect(prepared.enginePid).toBeGreaterThan(0);
+    expect(prepared.mtcError).toContain('没有连接'); expect(prepared.enginePid).toBeGreaterThan(0);
     expect(player.audioCaptureIdentity).toEqual({ executable: 'tblink-playback.exe', title: `TBLINK Audio ${prepared.enginePid}`, windowClass: 'Static', audioDeviceId: 'default' });
     await player.control({ ...envelope, generation: 2, kind: 'play' });
     await expect.poll(() => player.status?.positionMs).toBeGreaterThan(1050);
@@ -120,7 +120,7 @@ windowsTest('后台正式音频服务：原始偏移和裁剪不叠加，缺少 
     await new Promise(resolve => setTimeout(resolve, 120)); expect(player.status!.positionMs).toBe(position);
     await player.control({ ...envelope, generation: 4, kind: 'seek', positionMs: 600 });
     expect(player.status).toMatchObject({ status: 'paused', positionMs: 600, offsetMs: 480000 });
-    await expect(player.control({ ...envelope, generation: 3, kind: 'play' })).rejects.toThrow('失效会话');
+    await expect(player.control({ ...envelope, generation: 3, kind: 'play' })).rejects.toThrow('已过期');
     await expect(player.control({ ...envelope, generation: 5, kind: 'seek', positionMs: 499 })).rejects.toThrow('裁剪范围');
     await player.control({ ...envelope, generation: 5, kind: 'play' });
     await expect.poll(() => player.status?.positionMs).toBeGreaterThan(750);
@@ -129,10 +129,10 @@ windowsTest('后台正式音频服务：原始偏移和裁剪不叠加，缺少 
     await expect.poll(() => player.status?.positionMs).toBeGreaterThan(withoutMtc + 100);
     expect(player.status).toMatchObject({ status: 'playing', mtcPortName: null, audioError: null });
     await player.control({ ...envelope, generation: 7, kind: 'stop' });
-    await expect(player.control({ ...envelope, generation: 7, kind: 'play' })).rejects.toThrow('重新准备');
-    await expect(player.control({ ...envelope, generation: 7, kind: 'seek', positionMs: 700 })).rejects.toThrow('重新准备');
+    await expect(player.control({ ...envelope, generation: 7, kind: 'play' })).rejects.toThrow('请重新播放这首歌');
+    await expect(player.control({ ...envelope, generation: 7, kind: 'seek', positionMs: 700 })).rejects.toThrow('请重新播放这首歌');
     expect(player.status).toMatchObject({ status: 'stopped', audioError: null, underruns: 0 });
-    expect(() => player.audioCaptureIdentity).toThrow('无法确认 OBS 采集目标');
+    expect(() => player.audioCaptureIdentity).toThrow('无法确认 OBS 要采集哪个窗口');
     expect(failures).toEqual([]);
   } finally { await player.close(); }
 }, 20000);
@@ -174,7 +174,7 @@ windowsTest('准备中切歌与取消：完成的旧解码不污染新节目；�
     await firstRejected; await preparing;
     expect(player.status).toMatchObject({ itemId: 'song-b', offsetMs: 960000, status: 'ready' });
     expect(states.filter(state => state.itemId === 'song-a').every(state => state.status === 'preparing')).toBe(true);
-    await expect(player.control({ version: 1, sessionId: request.sessionId, generation: 100, kind: 'play' })).rejects.toThrow('失效会话');
+    await expect(player.control({ version: 1, sessionId: request.sessionId, generation: 100, kind: 'play' })).rejects.toThrow('已过期');
     const play = player.control({ version: 1, sessionId: next.sessionId, generation: 2, kind: 'play' });
     const cancelled = expect(play).rejects.toThrow('取消');
     await player.control({ version: 1, sessionId: next.sessionId, generation: 3, kind: 'stop' });
@@ -194,7 +194,7 @@ windowsTest('设备准备失败保持失败状态，只有明确重新准备才�
   try {
     await expect(player.prepare({ ...request, audioDeviceId: 'missing-endpoint' })).rejects.toThrow('已断开');
     expect(player.status?.status).toBe('error');
-    await expect(player.control({ version: 1, sessionId: request.sessionId, generation: 2, kind: 'play' })).rejects.toThrow('重新准备');
+    await expect(player.control({ version: 1, sessionId: request.sessionId, generation: 2, kind: 'play' })).rejects.toThrow('请重新播放这首歌');
     expect((await player.prepare({ ...request, generation: 3 })).status).toBe('ready');
     expect(failures).toHaveLength(1);
   } finally { await player.close(); }

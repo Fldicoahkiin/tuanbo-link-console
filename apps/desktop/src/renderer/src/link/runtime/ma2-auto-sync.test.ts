@@ -119,7 +119,7 @@ it('歌曲配对失效后禁止将本地拖动写回控台', async () => {
   project.ma2ReadState = { source: 'test', catalog: test.catalog, pairs: {}, pairings: { '9902': { itemId: 'song', status: 'stale', evidence: '', reason: '起点已变化' } }, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
   await test.runner.tick(); await test.runner.tick();
   expect(test.dependencies.catalog).not.toHaveBeenCalled(); expect(test.dependencies.apply).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('配对已失效'));
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('关联已失效'));
 });
 it('音源或长度变化的既有绑定起点未变时，仍先核对三方基线再同步', async () => {
   const test = setup(); test.edit();
@@ -133,7 +133,7 @@ it('音源或长度变化的既有绑定起点未变时，仍先核对三方基�
   project.rundown[0]!.playback.mtcOffsetMs = 3600000;
   test.runner.start({ dataDirectory: 'test' }, test.catalog); await test.runner.tick();
   expect(test.dependencies.read).not.toHaveBeenCalled(); expect(test.dependencies.apply).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('配对已失效'));
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('关联已失效'));
 });
 it('关闭自动同步不能提前释放已经发送的写入锁', async () => {
   const test = setup(); test.edit();

@@ -10,7 +10,7 @@ export function readNativePlaybackDevices(executable: string): Promise<NativePla
     const child = spawn(executable, ['--devices'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let data = '', errors = '', settled = false;
     const fail = (error: Error): void => { if (!settled) { settled = true; clearTimeout(timer); reject(error); } };
-    const timer = setTimeout(() => fail(new Error('Windows 音频/MIDI 设备枚举未返回，保留查询进程，不强杀或自动重试')), 5000);
+    const timer = setTimeout(() => fail(new Error('读取 Windows 音频和 MIDI 设备没有结果，查询进程保留，不会强制结束或自动重试')), 5000);
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdout.on('data', (part: string) => {
       if (settled) return;
@@ -73,19 +73,19 @@ export class NativePlaybackClient {
     });
     const deadline = Date.now() + 5000;
     while (!this.ready && this.child && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
-    if (!this.ready) { child.stdin.end(); throw new Error('播放引擎未完成启动握手'); }
+    if (!this.ready) { child.stdin.end(); throw new Error('播放引擎没有正常启动'); }
   }
 
   command(command: NativePlaybackCommand): Promise<void> {
     const bytes = encodeNativePlaybackCommand(command);
     const child = this.child;
     if (this.terminalError) return Promise.reject(this.terminalError);
-    if (!child || !this.ready || this.closing) return Promise.reject(new Error('播放引擎未就绪'));
-    if (this.pending.size >= 16 || this.pending.has(command.requestId)) return Promise.reject(new Error('播放请求重复或队列已满'));
+    if (!child || !this.ready || this.closing) return Promise.reject(new Error('播放引擎还没准备好'));
+    if (this.pending.size >= 16 || this.pending.has(command.requestId)) return Promise.reject(new Error('播放请求重复，或排队已满'));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(command.requestId);
-        const error = new Error('播放引擎未确认操作；结果不明，不能自动重发'); reject(error); this.fail(error);
+        const error = new Error('播放引擎没有确认这个操作，结果不明，不会自动重发'); reject(error); this.fail(error);
       }, command.kind === 'prepare' ? 10000 : 6000);
       this.pending.set(command.requestId, { resolve, reject, timer, generation: command.generation });
       child.stdin.write(bytes, error => { if (error) this.fail(error); });
@@ -102,7 +102,7 @@ export class NativePlaybackClient {
       if (this.lastClock && this.lastClock.generation > generation) throw new Error('播放时钟已属于更新的操作');
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    const error = new Error('播放操作缺少实际设备时钟确认，停止本次输出');
+    const error = new Error('没有收到声卡的确认，已停止这次输出');
     this.fail(error); throw error;
   }
 
@@ -113,7 +113,7 @@ export class NativePlaybackClient {
     const exited = this.exited;
     if (!exited) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    try { await Promise.race([exited, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('播放引擎未正常退出，保留进程并报告，不强杀')), 5000); })]); }
+    try { await Promise.race([exited, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('播放引擎没有正常退出，进程保留，没有强制结束')), 5000); })]); }
     finally { clearTimeout(timer); }
     if (this.exitError) throw this.exitError;
   }
@@ -136,7 +136,7 @@ export class NativePlaybackClient {
             this.clockCheck = setImmediate(() => {
               this.clockCheck = null;
               if (!this.closing && this.lastClock?.state === 'playing' && performance.now() - this.clockReceivedAt >= 1000) {
-                this.fail(new Error('正式播放设备状态超过 1 秒未更新，停止该会话；不会沿用旧位置或自动恢复'));
+                this.fail(new Error('播放设备超过 1 秒没有更新状态，已停止播放；不会沿用旧位置或自动恢复'));
               }
             });
           }, 250);
@@ -145,7 +145,7 @@ export class NativePlaybackClient {
           const entry = this.pending.get(event.requestId);
           if (!entry) continue;
           this.pending.delete(event.requestId); clearTimeout(entry.timer);
-          if (entry.generation !== event.generation) entry.reject(new Error('播放引擎确认的会话不一致'));
+          if (entry.generation !== event.generation) entry.reject(new Error('播放引擎确认的不是当前这次播放'));
           else if (!event.ok) entry.reject(new Error(`播放引擎操作失败：${event.code}`));
           else entry.resolve();
         }

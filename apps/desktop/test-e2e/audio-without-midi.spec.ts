@@ -41,7 +41,7 @@ test('OBS 和 MIDI 均未连接时，有音频仍可开始播放', async ({}, in
     expect(await waveform.boundingBox()).toEqual(before);
     await page.locator('.player-diagnostics > summary').click();
     await expect(page.getByText(/这首歌的灯光需要处理.*时间码照常发送/).first()).toBeVisible();
-    await expect(page.getByText(/OBS 未连接.*音频继续播放/).first()).toBeVisible();
+    await expect(page.getByText(/音频照常播放。原因：OBS 未连接/).first()).toBeVisible();
     expect(await waveform.boundingBox()).toEqual(before);
     await page.keyboard.press('Escape');
     await expect(page.locator('.player-notice')).not.toBeVisible();

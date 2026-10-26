@@ -212,7 +212,7 @@ it('已绑定歌曲换一个 Cue 的内容：在控台内 Copy，不上传歌曲
   console.info(JSON.stringify({ commands: fake.lines.length, bytes: fake.lines.reduce((total, line) => total + Buffer.byteLength(line), 0), ops: fake.ops }));
   // Whole-Sequence reads say how much has arrived, before and after the write.
   const size = Buffer.byteLength(sequences.get(9000)!);
-  expect(reported).toContain(`verification ${size}/${size} 回读序列 9000 · ${Math.ceil(size / 1024)}/${Math.ceil(size / 1024)} KB`);
+  expect(reported).toContain(`verification ${size}/${size} 读取序列 9000 · ${Math.ceil(size / 1024)}/${Math.ceil(size / 1024)} KB`);
   expect(reported.some(line => line.startsWith('connecting ') && line.includes('读取控台序列 9000 · '))).toBe(true);
   expect(result.changed).toBe(true);
   expect([...fake.files.keys()].some(name => name.endsWith('_before'))).toBe(false);
@@ -321,13 +321,13 @@ it('新建本曲节目后写入失败：编号已记进同步记录，重试读�
     const exchange: Ma2OnpcBridge['exchange'] = async (...args) => {
       if (args[0] !== 'APPLY') return await fake.bridge.exchange(...args);
       if (imported) fake.timecodes.set(args[1], args[3]!.replace('name="GeQu', 'name="回读不一致 GeQu'));
-      throw new Error('MA2 响应超时；操作未确认，不会自动重试');
+      throw new Error('MA2 响应超时，操作没有确认，不会自动重试');
     };
     const failing = { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response };
     await expect(service.syncSong(fake.connection, failing, timed())).rejects.toThrow('MA2 响应超时');
     expect([...fake.timecodes.keys()]).toEqual([9000]);
     expect((await service.syncSong(fake.connection, fake.bridge, timed())).binding.timecode).toMatchObject({ number: 9000, offset: 14400 });
-    expect(fake.timecodes.get(9000)).not.toContain('回读不一致');
+    expect(fake.timecodes.get(9000)).not.toContain('对不上');
     expect([...fake.timecodes.keys()]).toEqual([9000]);
   }
 }, 30000);
@@ -393,7 +393,7 @@ it('Copy 路径不再二次读取来源：来源在读取后被改，回读校�
   fake.bridge.request = async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await fake.bridge.exchange(...args)).response;
   noBackups.record.mockClear();
   const sync = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song);
-  await expect(sync).rejects.toThrow(/写入结果待核对[\s\S]*tblink_library_[a-f0-9]{32}\.xml 已保留[\s\S]*来源 序列 \d+ · Cue 1\.000[\s\S]*控台上的来源可能在同步期间被改过/);
+  await expect(sync).rejects.toThrow(/写入结果需要确认[\s\S]*tblink_library_[a-f0-9]{32}\.xml 已保留[\s\S]*来源 序列 \d+ · Cue 1\.000[\s\S]*控台上的来源可能在同步期间被改过/);
   expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(1);
   const backup = [...fake.files.keys()].find(name => name.startsWith('tblink_library_'));
   expect(backup).toBeDefined();

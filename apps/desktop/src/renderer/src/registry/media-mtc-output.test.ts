@@ -127,12 +127,12 @@ describe('Electron 原生 MIDI 时间码输出', () => {
     expect(output.tick(80, rate, 80)).toBe(true);
     // Full Frame first; on an exact frame boundary only that boundary's first quarter follows.
     expect(send.mock.calls.map(([message]) => (message as number[])[0])).toEqual(rate === '25' ? [0xf0, 0xf1] : [0xf0]);
-    expect(output.takeSchedulingNotice()).toContain('滞后超过一帧');
+    expect(output.takeSchedulingNotice()).toContain('计时落后超过一帧');
     expect(output.takeSchedulingNotice()).toBeNull();
     for (let now = 81; now <= 200; now += 1) output.tick(now, rate, now);
     expect(send.mock.calls.filter(([message]) => (message as number[])[0] === 0xf1).length).toBeGreaterThan(10);
   });
-  it.each([[600, 600, '调度中断'], [2000, 200, '不一致'], [0, 200, '不一致']])('长时间中断或音频跳变：位置 %s / 时钟 %s 重新整帧同步并报告', async (position, now, reason) => {
+  it.each([[600, 600, '计时中断'], [2000, 200, '不一致'], [0, 200, '不一致']])('长时间中断或音频跳变：位置 %s / 时钟 %s 重新整帧同步并报告', async (position, now, reason) => {
     const send = vi.fn();
     stubMidi(() => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send, close: () => Promise.resolve() }]]) }));
     const output = new MediaMtcOutput(); await output.connect('MA2'); output.tick(0, '30', 0);

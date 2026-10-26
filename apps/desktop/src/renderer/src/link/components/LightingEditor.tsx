@@ -89,7 +89,7 @@ export function LightingEditor(props: Props): JSX.Element {
           <button disabled={track.locked} onClick={() => { changeTrack({ ...track, clips: track.clips.filter((entry) => entry.id !== clip.id) }, '删除灯光片段'); props.onSelect(track.id, track.clips.find((entry) => entry.id !== clip.id)?.id ?? null); }}><Trash2 />删除片段</button></div>
         <h3>对齐节拍</h3><div className="lighting-tools"><select aria-label="灯光量化网格" value={grid} onChange={(event) => setGrid(Number(event.target.value))}><option value={1}>四分音符</option><option value={0.5}>八分音符</option><option value={0.25}>十六分音符</option><option value={1 / 3}>八分三连音</option><option value={0.125}>三十二分音符</option></select>
         <button disabled={track.locked} onClick={() => guard(() => changeClip(quantizeLightingClip(clip, map, grid), '量化灯光'))}>对齐整个片段</button></div>
-      </> : <p className="lighting-muted">当前轨道没有片段，请返回灯光编排创建。</p>}
+      </> : <p className="lighting-muted">这条轨道还没有片段，请回到“灯光编排”创建。</p>}
     </div> : <>
       <div className="lighting-workbar"><span>{clip?.name ?? '尚无片段'}</span><time>{clock(props.playheadMs)}</time><button onClick={() => props.onChange({ ...props.document, markers: [...props.document.markers, { id: crypto.randomUUID(), name: `标记 ${props.document.markers.length + 1}`, startMs: props.playheadMs, endMs: null }] }, '添加标记')}><Flag />添加标记</button></div>
       {clip ? <>
@@ -184,7 +184,7 @@ function LightingSettings(props: { section: SettingsSection; document: LightingD
         <label>事件类型<select aria-label="灯光编辑内容" value={track.kind} disabled={track.locked || track.clips.some((clip) => clip.events.length > 0)} onChange={(event) => props.changeTrack({ ...track, kind: event.target.value as LightingTrack['kind'] }, '修改灯光编辑类型')}><option value="ma2">灯光切换（MA2 Cue）</option><option value="midi">音符与 MIDI 消息</option><option value="automation">推杆变化（MIDI CC）</option></select></label>
         <label>MIDI 通道<PropertyNumberInput label="MIDI 通道" min={1} max={16} value={track.channel} disabled={track.locked} onCommit={(channel) => props.changeTrack({ ...track, channel }, '修改 MIDI 通道')} /></label>
         {track.kind === 'automation' ? <label>推杆控制器（CC）<PropertyNumberInput label="推杆控制器（CC）" min={0} max={127} value={track.controller} disabled={track.locked} onCommit={(controller) => props.changeTrack({ ...track, controller }, '修改 CC 控制器')} /></label> : null}
-      </div><p className="lighting-muted">先在“节目同步”写入 MA2；播放时发送时间码，由控台跑灯。端口在“设备连接”设置。</p>{track.clips.some((clip) => clip.events.length > 0) ? <p className="lighting-muted">已有编排的轨道保留原类型。需要编辑其他内容时，请添加一条空轨道。</p> : null}
+      </div><p className="lighting-muted">先在“节目同步”里写入 MA2，播放时联动台发送时间码，由控台跑灯。端口在“设备连接”里设置。</p>{track.clips.some((clip) => clip.events.length > 0) ? <p className="lighting-muted">已有编排的轨道不能改类型。要编辑其他内容，请新加一条空轨道。</p> : null}
     </>}
   </div></div>;
 }

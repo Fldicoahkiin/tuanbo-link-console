@@ -58,7 +58,7 @@ export class Ma2NetworkWire implements Ma2Wire {
       }
       const response = Buffer.concat(chunks).toString('utf8');
       const match = /^([a-f0-9]{32})\n(OK|ERROR)\n(\d+)\n([\s\S]*)$/.exec(response);
-      if (!match || match[1] !== id || Buffer.byteLength(match[4] ?? '') !== Number(match[3])) throw new Error('MA2 回读身份或长度不一致');
+      if (!match || match[1] !== id || Buffer.byteLength(match[4] ?? '') !== Number(match[3])) throw new Error('控台读回的数据对不上');
       releaseAttempted = true;
       if (await this.call('release', id) !== 'ACK') throw new Error('MA2 未确认传输结束');
       this.unreleased = null;
@@ -85,7 +85,7 @@ export class Ma2NetworkWire implements Ma2Wire {
         const result = ma2ResponseLine(text, `TBLINK_RPC_${token}${i.toString(16).padStart(4, '0')}:`);
         if (result === null) return null;
         const encoded = /^DATA:((?:[a-f0-9]{2})+)$/.exec(result)?.[1];
-        if (!encoded || encoded.length !== Math.min(256, size - offset - i * 256) * 2) throw new Error('MA2 批量回读片段缺失或无效');
+        if (!encoded || encoded.length !== Math.min(256, size - offset - i * 256) * 2) throw new Error('控台读回的数据缺失或无效');
         parts.push(encoded);
       }
       return parts.join('');

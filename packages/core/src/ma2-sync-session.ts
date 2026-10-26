@@ -33,7 +33,7 @@ export class Ma2SyncSession {
       stage = 'read';
       const current = ma2SyncSnapshotSchema.parse(await this.port.read(desired.bindingId));
       if (current.revision !== expectedRemote.revision || !sameMa2Content(current, expectedRemote)) {
-        throw new Error('控台数据在预览后发生变化，请重新读取差异');
+        throw new Error('预览之后控台数据有变化，请重新读取差异');
       }
       if (sameMa2Content(current, desired)) return { status: 'verified', baseline: current, backupId: null };
       this.requireStopped();
@@ -47,7 +47,7 @@ export class Ma2SyncSession {
       await this.port.apply(desired, current.revision);
       stage = 'verify';
       const verified = ma2SyncSnapshotSchema.parse(await this.port.read(desired.bindingId));
-      if (!sameMa2Content(desired, verified)) throw new Error('控台回读与目标数据不一致，同步未完成');
+      if (!sameMa2Content(desired, verified)) throw new Error('控台读回的内容和要写入的不一致，同步没有完成');
       return { status: 'verified', baseline: verified, backupId };
     } catch (error) {
       return { status: 'incomplete', stage, message: error instanceof Error ? error.message : String(error), backupId, mayHaveWritten };

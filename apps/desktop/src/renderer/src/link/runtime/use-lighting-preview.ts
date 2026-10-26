@@ -86,7 +86,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       if (sendsMtc) {
         const id = profile?.internalPlayer?.mtcOutputPortProfileId;
         const name = profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output')?.portName;
-        if (!name) throw new Error('请在设备设置选择 MIDI 时间码输出');
+        if (!name) throw new Error('请先在设备设置里选择 MIDI 时间码输出');
         await mtc.connect(name);
       }
       if (cancelled || (input.enabled && ownedOutput.current !== output)) { cleanup(); return; }

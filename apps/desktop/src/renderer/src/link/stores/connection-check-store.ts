@@ -21,11 +21,11 @@ export const useConnectionCheckStore = create<{
   begin: ids => {
     if (get().running) return false;
     // Steps run in sequence; earlier results must not stand in for this run.
-    const waiting = Object.fromEntries([...new Set(ids)].map(id => [id, { state: 'waiting' as const, detail: '等待前序步骤完成', checkedAt: Date.now() }]));
+    const waiting = Object.fromEntries([...new Set(ids)].map(id => [id, { state: 'waiting' as const, detail: '等前面的步骤完成', checkedAt: Date.now() }]));
     set(state => ({ running: true, checks: { ...state.checks, ...waiting }, pending: [...new Set(ids)], completed: 0, total: new Set(ids).size })); return true;
   },
   checking: id => set(state => ({
-    checks: { ...state.checks, [id]: { state: 'checking', detail: '正在连接与检查', checkedAt: Date.now() } },
+    checks: { ...state.checks, [id]: { state: 'checking', detail: '正在连接并检查', checkedAt: Date.now() } },
     ...(state.pending.includes(id) ? {} : { pending: [...state.pending, id], total: state.total + 1 })
   })),
   finish: (id, status, detail) => set(state => ({

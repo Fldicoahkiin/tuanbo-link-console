@@ -19,7 +19,7 @@ export function Ma2ExecutorKey({ item, page, index, primary = false, matched = t
   const press = (): void => { setHeld(true); input.press(item, page, index); };
   const release = (): void => { setHeld(false); input.release(item, page, index); };
   return <button className={primary ? 'ma2-executor-key' : undefined} data-search-match={matched} aria-label={label} aria-pressed={held} disabled={code === 0}
-    title={`${item.name} · ${page} 页 ${item.slot} 格 · ${fn?.name ?? '原生执行器按键'} · 右键编辑`}
+    title={`${item.name} · ${page} 页 ${item.slot} 格 · ${fn?.name ?? '控台执行器按键'} · 右键编辑`}
     onPointerDown={event => {
       if (event.button !== 0 || !fn?.momentary) return;
       event.currentTarget.setPointerCapture(event.pointerId); press();

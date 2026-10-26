@@ -23,7 +23,7 @@ export function saveDocument(mode: 'save' | 'save-as' = 'save'): Promise<SaveOut
 
 async function writeDocument(mode: 'save' | 'save-as'): Promise<SaveOutcome> {
   const state = useDocumentStore.getState();
-  if (!state.project) return { status: 'failed', message: '工程保存失败：尚未打开工程' };
+  if (!state.project) return { status: 'failed', message: '保存失败：还没有打开工程' };
   const { project, path, stateId, documentId, upgradeBackupPending } = state;
   let content: string;
   try { content = await projectCodec.encode(project); }
@@ -36,7 +36,7 @@ async function writeDocument(mode: 'save' | 'save-as'): Promise<SaveOutcome> {
   try { saved = await window.tbLink.saveProjectDocument(mode === 'save' ? path : null, content, options); }
   catch (error) { return failed(error, false); }
   if (saved === null) return { status: 'canceled' };
-  if (useDocumentStore.getState().documentId !== documentId) return failed(new Error('保存期间已切换到其他工程，当前工程未保存'), true);
+  if (useDocumentStore.getState().documentId !== documentId) return failed(new Error('保存过程中切换了工程，这次没有保存'), true);
   useDocumentStore.getState().markSaved(saved, stateId, documentId);
   return { status: 'saved', path: saved };
 }
@@ -81,18 +81,18 @@ export async function requireProjectLocation(purpose: string): Promise<string | 
 /** Background work never opens a dialog; an unnamed project is reported as unsaved. */
 export function requireSavedProjectPath(action: string): string {
   const path = useDocumentStore.getState().path;
-  if (!path) throw new Error(`工程未保存：请先保存工程，再${action}`);
+  if (!path) throw new Error(`请先保存工程，再${action}`);
   return path;
 }
 
 /** 恢复到上次保存: after confirmation, drops every unsaved edit, the undo history and the recovery copy, and reopens the file. */
 export async function revertToSaved(): Promise<'reverted' | 'cancelled'> {
   const state = useDocumentStore.getState();
-  if (!state.project || !state.path) throw new Error('工程尚未保存过，没有可恢复的版本');
+  if (!state.project || !state.path) throw new Error('工程还没保存过，没有可以恢复的版本');
   const { path, documentId } = state, projectId = state.project.projectId;
   if (!await linkDesktopViewModel.confirmRevertToSaved({ name: state.project.name, consoleSynced: state.consoleSynced })) return 'cancelled';
   const file = await linkDesktopViewModel.openProject(path);
-  if (useDocumentStore.getState().documentId !== documentId) throw new Error('工程已切换，未恢复到上次保存');
+  if (useDocumentStore.getState().documentId !== documentId) throw new Error('工程已经切换，这次没有恢复');
   useDocumentStore.getState().setProject(file.project, file.path, { upgraded: file.upgraded });
   await linkDesktopViewModel.discardRecoveryCopy({ version: 1, projectPath: path, projectId });
   return 'reverted';
@@ -103,7 +103,7 @@ export async function showOpenedProject(file: LinkProjectFile): Promise<string> 
   const restored = await linkDesktopViewModel.resolveRecoveryCopy({ version: 1, projectPath: file.path, projectId: file.project.projectId });
   useDocumentStore.getState().setProject(restored ?? file.project, file.path, { restored: restored !== null, upgraded: file.upgraded });
   const upgraded = useDocumentStore.getState().upgradeBackupPending;
-  return [restored ? '已恢复未保存的改动' : '', upgraded ? '工程已按当前版本格式载入，尚未写回；第一次保存时会在原位置保留原文件 .bak' : ''].filter(Boolean).join('；');
+  return [restored ? '已恢复未保存的改动' : '', upgraded ? '这个工程来自旧版本，已按新格式打开。第一次保存时会在原位置留一份 .bak 备份' : ''].filter(Boolean).join('；');
 }
 
 /** At startup, before reopening the last file: an unnamed project's unsaved edits, if the operator restores them. */

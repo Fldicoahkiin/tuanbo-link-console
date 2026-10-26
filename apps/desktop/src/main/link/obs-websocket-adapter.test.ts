@@ -17,9 +17,9 @@ describe('ObsWebSocketAdapter', () => {
     await adapter.setSourceEnabledInProgramScene('显示器采集', true);
     expect(client.calls).toEqual([['GetCurrentProgramScene', undefined], ['GetSceneItemList', { sceneName: '场景 2' }],
       ['SetSceneItemEnabled', { sceneName: '场景 2', sceneItemId: 7, sceneItemEnabled: true }]]);
-    await expect(adapter.setSourceEnabledInProgramScene('显示器采集 3', true)).rejects.toThrow('当前播出场景“场景 2”中没有来源“显示器采集 3”');
+    await expect(adapter.setSourceEnabledInProgramScene('显示器采集 3', true)).rejects.toThrow('当前直播场景“场景 2”里没有“显示器采集 3”来源');
     client.responses.set('GetSceneItemList', { sceneItems: [{ sourceName: '扑克牌特效.mov', sceneItemId: 3 }, { sourceName: '扑克牌特效.mov', sceneItemId: 4 }] });
-    await expect(adapter.setSourceEnabledInProgramScene('扑克牌特效.mov', true)).rejects.toThrow('有多个来源“扑克牌特效.mov”');
+    await expect(adapter.setSourceEnabledInProgramScene('扑克牌特效.mov', true)).rejects.toThrow('有多个“扑克牌特效.mov”来源');
   });
   it('显示来源后播出场景已切换，隐藏仍作用于当初显示它的场景，不在新播出场景里找', async () => {
     const client = fakeObsClient(); const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket);
@@ -32,7 +32,7 @@ describe('ObsWebSocketAdapter', () => {
     client.calls.length = 0;
     await adapter.setSourceEnabledInProgramScene('扑克牌特效.mov', false);
     expect(client.calls).toEqual([['SetSceneItemEnabled', { sceneName: '场景 2', sceneItemId: 3, sceneItemEnabled: false }]]);
-    await expect(adapter.setSourceEnabledInProgramScene('扑克牌特效.mov', false)).rejects.toThrow('中没有来源“扑克牌特效.mov”');
+    await expect(adapter.setSourceEnabledInProgramScene('扑克牌特效.mov', false)).rejects.toThrow('里没有“扑克牌特效.mov”来源');
   });
   it('监听拒绝被桌面音频或模糊进程采集，仅核对专用音频来源且不修改 OBS', async () => {
     const client = fakeObsClient(); const adapter = new ObsWebSocketAdapter(tmpdir(),client as unknown as OBSWebSocket);
@@ -43,11 +43,11 @@ describe('ObsWebSocketAdapter', () => {
     const identity={executable:'tblink-playback.exe',title:'Monitor-1',windowClass:'TBLINK',ownerExecutable:'electron.exe'};
     await expect(adapter.assertMusicMonitorIsolation('headphones',false,identity)).rejects.toThrow('被 OBS');
     client.responses.set('GetInputSettings',{inputKind:'wasapi_process_output_capture',inputSettings:{window:'Music:TBLINK:tblink-playback.exe',priority:1}});
-    await expect(adapter.assertMusicMonitorIsolation('headphones',false,identity)).rejects.toThrow('可能采集');
+    await expect(adapter.assertMusicMonitorIsolation('headphones',false,identity)).rejects.toThrow('可能会采集到');
     client.responses.set('GetInputSettings',{inputKind:'wasapi_process_output_capture',inputSettings:{window:'Music:TBLINK:tblink-playback.exe',priority:0}}); client.calls.length=0;
     await adapter.assertMusicMonitorIsolation('headphones',false,identity);
     expect(client.calls.map(([request])=>request)).toEqual(['GetInputList','GetSpecialInputs','GetInputSettings','GetInputMute']);
-    client.responses.set('GetInputSettings',{inputKind:'wasapi_process_output_capture',inputSettings:{window:'联动台:Chrome:electron.exe',priority:0}});await expect(adapter.assertMusicMonitorIsolation('headphones',false,identity)).rejects.toThrow('子进程');
+    client.responses.set('GetInputSettings',{inputKind:'wasapi_process_output_capture',inputSettings:{window:'联动台:Chrome:electron.exe',priority:0}});await expect(adapter.assertMusicMonitorIsolation('headphones',false,identity)).rejects.toThrow('会采集联动台的所有声音');
     let stopped=0;const unsubscribe=adapter.subscribeMusicMonitorRouteChange(()=>{stopped++;});client.emit('InputSettingsChanged',{});expect(stopped).toBe(1);unsubscribe();client.emit('InputSettingsChanged',{});expect(stopped).toBe(1);
   });
   it('旧场景回报不能吞掉下一次开场 Cue，连续两次明确动作均发送', async () => {
@@ -95,10 +95,10 @@ describe('ObsWebSocketAdapter', () => {
     const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket, 20);
     await adapter.connect('ws://127.0.0.1:4455', 'password');
     client.pendingRequests.add('SetCurrentProgramScene');
-    await expect(adapter.execute({ id: 'first', label: '切换', kind: 'obs.setProgramScene', sceneName: '近景' })).rejects.toThrow('执行结果不明');
+    await expect(adapter.execute({ id: 'first', label: '切换', kind: 'obs.setProgramScene', sceneName: '近景' })).rejects.toThrow('不确定是否已执行');
     expect(adapter.getSnapshot().status).toBe('error');
     const count = client.calls.length;
-    await expect(adapter.execute({ id: 'second', label: '不得自动重发', kind: 'obs.setProgramScene', sceneName: '全景' })).rejects.toThrow('尚未连接');
+    await expect(adapter.execute({ id: 'second', label: '不得自动重发', kind: 'obs.setProgramScene', sceneName: '全景' })).rejects.toThrow('还没连接');
     expect(client.calls).toHaveLength(count);
   });
 
@@ -199,7 +199,7 @@ describe('ObsWebSocketAdapter', () => {
     await adapter.setInternalAudioCapture(true, 'tblink-playback.exe', 'TBLINK Audio 123', 'default', undefined, 'Static');
     expect(client.calls.some(([method]) => method === 'CreateInput' || method === 'SetInputSettings')).toBe(false);
     client.responses.set('GetInputPropertiesListPropertyItems', { propertyItems: [{ itemValue: 'TBLINK Audio 123:Other:tblink-playback.exe' }] });
-    await expect(adapter.setInternalAudioCapture(true, 'tblink-playback.exe', 'TBLINK Audio 123', 'default', undefined, 'Static')).rejects.toThrow('身份不一致');
+    await expect(adapter.setInternalAudioCapture(true, 'tblink-playback.exe', 'TBLINK Audio 123', 'default', undefined, 'Static')).rejects.toThrow('和联动台的音频对不上');
   });
   it('正式音乐仅绑定本软件窗口并关闭 OBS 监听，停止时静音隐藏', async () => {
     const client = fakeObsClient();
@@ -311,7 +311,7 @@ describe('ObsWebSocketAdapter', () => {
     const inventory = await adapter.readInventory();
     expect(inventory.scenes).toEqual(['Program']);
     expect(inventory.sourceSizes).toEqual({});
-    expect(inventory.sourceSizeErrors?.['已拔出的显示器']).toContain('显示器绑定');
+    expect(inventory.sourceSizeErrors?.['已拔出的显示器']).toContain('没有返回能识别的显示器');
     expect(adapter.getSnapshot().status).toBe('connected');
     client.pendingRequests.add('GetInputSettings');
     await expect(adapter.readInventory()).rejects.toThrow('GetInputSettings');
@@ -329,7 +329,7 @@ describe('ObsWebSocketAdapter', () => {
     const client = fakeObsClient();
     client.connectPending = true;
     const adapter = new ObsWebSocketAdapter('C:\\Screenshots', client as unknown as OBSWebSocket);
-    await expect(adapter.connect('ws://127.0.0.1:4455', 'password', 1)).rejects.toThrow('超过 1ms');
+    await expect(adapter.connect('ws://127.0.0.1:4455', 'password', 1)).rejects.toThrow('连接超时（1 ms）');
     expect(adapter.getSnapshot().status).toBe('error');
 
     const connectedClient = fakeObsClient();
@@ -345,7 +345,7 @@ describe('ObsWebSocketAdapter', () => {
     const inventoryAdapter = new ObsWebSocketAdapter('C:\\Screenshots', inventoryClient as unknown as OBSWebSocket, 1);
     await inventoryAdapter.connect('ws://127.0.0.1:4455', 'password');
     inventoryClient.pendingRequests.add('GetSceneList');
-    await expect(inventoryAdapter.readInventory()).rejects.toThrow('OBS GetSceneList 请求超过 1ms');
+    await expect(inventoryAdapter.readInventory()).rejects.toThrow('OBS GetSceneList 请求超时（1 ms）');
 
     const actionClient = fakeObsClient();
     const actionAdapter = new ObsWebSocketAdapter('C:\\Screenshots', actionClient as unknown as OBSWebSocket, 1);
@@ -356,7 +356,7 @@ describe('ObsWebSocketAdapter', () => {
       label: '切场景',
       kind: 'obs.setProgramScene',
       sceneName: 'Program'
-    })).rejects.toThrow('OBS SetCurrentProgramScene 请求超过 1ms');
+    })).rejects.toThrow('OBS SetCurrentProgramScene 请求超时（1 ms）');
   });
 
   it('递归读取场景来源组中的摄像头', async () => {
@@ -392,7 +392,7 @@ describe('ObsWebSocketAdapter', () => {
     const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket);
     await adapter.connect('ws://127.0.0.1:4455', 'password');
 
-    await expect(adapter.activateManagedOutput()).rejects.toThrow('OBS 未切换到受管输出场景：当前为 原场景');
+    await expect(adapter.activateManagedOutput()).rejects.toThrow('OBS 没有切换到联动台的场景，当前是 原场景');
   });
 
   it('在受管 OBS 场景中播放视频内嵌音频并按图层结束', async () => {
@@ -458,7 +458,7 @@ describe('ObsWebSocketAdapter', () => {
     const stop = managedMediaEvent('stop');
 
     await expect(adapter.executeManagedMediaEvent(stop, 'C:\\Show\\clip.mp4'))
-      .rejects.toThrow('OBS 受管素材停止不完整：stop failed');
+      .rejects.toThrow('联动台在 OBS 里创建的素材没有全部停止：stop failed');
     expect(client.calls.slice(-2)).toEqual([
       ['GetSceneItemId', { sceneName: '团播联动台输出', sourceName: stop.sourceName }],
       ['SetSceneItemEnabled', { sceneName: '团播联动台输出', sceneItemId: 21, sceneItemEnabled: false }]
@@ -486,7 +486,7 @@ describe('ObsWebSocketAdapter', () => {
     const adapter = new ObsWebSocketAdapter(tmpdir(), client as unknown as OBSWebSocket);
     await adapter.connect('ws://127.0.0.1:4455', 'password');
     await expect(adapter.executeManagedMediaEvent(managedMediaEvent('start'), 'C:\\Show\\clip.mp4'))
-      .rejects.toThrow('OBS 受管来源名称冲突');
+      .rejects.toThrow('OBS 来源名称冲突');
     expect(client.calls.some(([request]) => request === 'SetInputSettings')).toBe(false);
   });
 });

@@ -26,6 +26,6 @@ export function analyzeMusicEnvelope(values: readonly number[], durationMs: numb
   }
   let bpm = estimateMusicBpm(onsets);
   if (bpm !== null) { while (bpm > 200) bpm /= 2; while (bpm < 60) bpm *= 2; bpm = Math.round(bpm * 100) / 100; }
-  if (candidates.length > 100000) throw new Error('检测候选过多，请分段分析；未截断或自动应用结果');
+  if (candidates.length > 100000) throw new Error('识别出的候选太多，请分段分析（结果没有截断，也没有自动应用）');
   return { bpm, candidates: candidates.filter(value => value.startMs < durationMs).sort((a, b) => a.startMs - b.startMs) };
 }

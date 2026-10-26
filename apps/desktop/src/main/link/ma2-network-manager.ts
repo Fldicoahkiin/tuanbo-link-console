@@ -85,7 +85,7 @@ export class Ma2NetworkManager {
   private liveService: Ma2LiveService | null = null;
   live(): Ma2LiveService { return this.liveService ??= new Ma2LiveService(`${this.path}.playback.json`, this.secrets, request => this.get(request.network).bridge); }
   private layouts(): Ma2LayoutService {
-    if (!this.consoleBackups) throw new Error('控台备份记录尚未就绪');
+    if (!this.consoleBackups) throw new Error('控台备份记录还没准备好');
     return this.layoutService ??= new Ma2LayoutService(`${this.path}.layouts.json`, this.isPlaying, this.consoleBackups);
   }
   private consoleBackups: Ma2ConsoleBackups | null = null;
@@ -95,12 +95,12 @@ export class Ma2NetworkManager {
     this.cueDeleteService = new Ma2CueDeleteService(`${this.path}.cue-backups`, load, this.isPlaying);
   }
   async prepareCueDeletion(request: import('@tb/schema').Ma2CueDeletePrepare, report?: (value: Ma2ReadProgressUpdate) => void): Promise<import('@tb/schema').Ma2CueDeletePlan> {
-    if (!this.cueDeleteService) throw new Error('控台删除服务尚未就绪');
+    if (!this.cueDeleteService) throw new Error('控台删除功能还没准备好');
     return this.cueDeleteService.prepare(this.get(request.network).bridge, request, report);
   }
   async commitCueDeletion(request: import('@tb/schema').Ma2CueDeleteCommit, report?: (value: Ma2ReadProgressUpdate) => void): Promise<import('@tb/schema').Ma2CueDeleteResult> {
     const { bridge } = this.get(request.network);
-    if (!this.cueDeleteService || !this.connection) throw new Error('控台删除服务尚未就绪');
+    if (!this.cueDeleteService || !this.connection) throw new Error('控台删除功能还没准备好');
     return this.cueDeleteService.commit(this.connection, bridge, request, report);
   }
   async listLayouts(request: import('@tb/schema').Ma2LayoutDirectoryRequest): Promise<import('@tb/schema').Ma2LayoutDirectory> {
@@ -117,8 +117,8 @@ export class Ma2NetworkManager {
     const connection = this.connection; const generation = this.generation;
     if (!connection) throw new Error('请先连接控台');
     await this.executorInput.input(connection, request, () => {
-      if (this.generation !== generation || connection.state !== 'connected') throw new Error('控台连接已变化，未发送按键');
-      if (request.pressed && this.executorMutationBusy) throw new Error('正在更新执行器位置，请待回读完成后按下');
+      if (this.generation !== generation || connection.state !== 'connected') throw new Error('控台连接变了，按键没有发送');
+      if (request.pressed && this.executorMutationBusy) throw new Error('正在更新执行器位置，请等控台确认后再按');
     });
   }
   async releaseExecutors(): Promise<void> { await this.executorInput.release(); }
@@ -126,11 +126,11 @@ export class Ma2NetworkManager {
     const { bridge } = this.get(request.network);
     const connection = this.connection;
     if (!connection) throw new Error('请先连接控台');
-    if (this.executorMutationBusy) throw new Error('正在回读上一项执行器修改，请稍候');
+    if (this.executorMutationBusy) throw new Error('正在确认上一个执行器修改，请稍候');
     this.executorMutationBusy = true;
     try {
       await this.executorInput.release();
-      if (this.connection !== connection || connection.state !== 'connected') throw new Error('控台连接已变化，未修改执行器');
+      if (this.connection !== connection || connection.state !== 'connected') throw new Error('控台连接变了，没有修改执行器');
       this.executorMutations ??= new Ma2ExecutorMutationService(`${this.path}.executor-backups`, this.isPlaying);
       return await this.executorMutations.update(connection, bridge, request);
     } finally { this.executorMutationBusy = false; }
@@ -157,7 +157,7 @@ export class Ma2NetworkManager {
       try {
         return await this.songWatch.adopt(connection, { network: request.network, expectedSource: request.expectedSource, sequence: result.binding.sequence, ...result.binding.executor ? { executor: result.binding.executor } : {}, revision: result.remoteRevision }, exportFile);
       } catch (cause) {
-        this.notice?.('warning', `歌曲复查基线未能接上本次回读：${cause instanceof Error ? cause.message : String(cause)}；下次复查会重新读取整条序列`);
+        this.notice?.('warning', `这次读取的内容没能接上上次复查的记录：${cause instanceof Error ? cause.message : String(cause)}；下次复查会重新读取整个序列`);
         return false;
       }
     };
@@ -188,8 +188,8 @@ export class Ma2NetworkManager {
     if (!settings || !connection || connection.state !== 'connected') throw new Error('序列池播放需要先在设备设置连接 MA2 网络');
     if (Object.entries(request.network).some(([key, value]) => Reflect.get(settings, key) !== value)) throw new Error('控台连接目标已改变，请重新选择 Cue');
     const current = (): void => {
-      if (generation !== this.generation || connection.state !== 'connected' || this.cancelledPlayback.has(request.sessionId)) throw new Error('灯光播放会话已结束，已取消待发送 Cue');
-      if (Date.now() > request.deadlineAt) throw new Error('灯光调用已过期，未补发；请重新定位后播放');
+      if (generation !== this.generation || connection.state !== 'connected' || this.cancelledPlayback.has(request.sessionId)) throw new Error('灯光播放已结束，排队的 Cue 已取消');
+      if (Date.now() > request.deadlineAt) throw new Error('灯光调用已过期，没有补发，请重新定位后播放');
     };
     current();
     await playMa2Cue(connection, request.action, ()=>{current();options?.beforeSend?.();},options?.priority);
@@ -256,7 +256,7 @@ export class Ma2NetworkManager {
       this.error = 'MA2 网络设置读取失败，请重新保存连接设置'; return;
     }
     try { this.passwordSaved = await this.secrets.hasCredential(this.credentialId(this.settings)); }
-    catch { this.error = 'MA2 安全凭证读取失败，请重新保存密码'; return; }
+    catch { this.error = '读取保存的 MA2 密码失败，请重新保存密码'; return; }
     if (this.settings.autoConnect) await this.connect();
   }
   status(): Ma2NetworkStatus { return { profiles: this.profiles, capabilities: this.capabilities, settings: this.settings, passwordSaved: this.passwordSaved, state: this.connection?.state === 'connected' && !this.services ? 'connecting' : this.connection?.state ?? 'disconnected', version: this.version, error: this.error }; }
@@ -285,7 +285,7 @@ export class Ma2NetworkManager {
   async connect(): Promise<Ma2NetworkStatus> {
     if (this.isPlaying()) throw new Error('播放期间不能更换控台连接');
     if (this.busy) throw new Error('MA2 正在连接');
-    if (!this.settings) throw new Error('请先保存控台 IP 与登录用户');
+    if (!this.settings) throw new Error('请先保存控台 IP 和登录用户');
     if(this.connection?.state==='connected'&&this.services)return this.status();
     const recovering = this.reconnectAllowed;
     this.disconnect(); this.reconnectAllowed = recovering; this.error = null; this.busy = true;
@@ -333,9 +333,9 @@ export class Ma2NetworkManager {
     const marker = `TBLINK_SHOW_${randomBytes(16).toString('hex')}`;
     const script = `local s=tostring(gma.show.getvar('SHOWFILE') or '');gma.echo('${marker}:H'..(s:gsub('.',function(b)return string.format('%02x',string.byte(b))end)))`;
     const reply = await connection.command(`Lua "${script}"`, text => ma2ResponseLine(text, `${marker}:`));
-    if (!/^H(?:[0-9a-f]{2})*$/.test(reply)) throw new Error('控台返回的当前 show 名称格式无效');
+    if (!/^H(?:[0-9a-f]{2})*$/.test(reply)) throw new Error('控台返回的 Show 名称无法识别');
     const show = Buffer.from(reply.slice(1), 'hex').toString('utf8');
-    if (!show) throw new Error('控台没有加载 show');
+    if (!show) throw new Error('控台没有加载 Show');
     return show;
   }
   async checkCapabilities(): Promise<Ma2NetworkStatus> {
@@ -349,11 +349,11 @@ export class Ma2NetworkManager {
       const script = "tostring(_VERSION)..':'..tostring(type(TBLINK_NET)=='function')..':'..tostring(type(gma.show.getobj)=='table' and type(gma.show.getobj.handle)=='function')..':'..tostring(type(io)=='table' and type(io.open)=='function')";
       const result = await connection.command(`Lua "gma.echo('${marker}:'..${script})"`, (text) => ma2ResponseLine(text, `${marker}:`));
       const parts = result.split(':');
-      if (parts.length !== 4 || !parts.slice(1).every((part) => part === 'true' || part === 'false')) throw new Error('控台能力响应格式不支持');
+      if (parts.length !== 4 || !parts.slice(1).every((part) => part === 'true' || part === 'false')) throw new Error('控台返回的功能信息无法识别');
       if (generation !== this.generation) return this.status();
       const plugin = parts[1] === 'true', objects = parts[2] === 'true', files = parts[3] === 'true';
       this.capabilities = { version: this.version, lua: parts[0]!, plugin, objects, files,
-        message: plugin && objects && files ? '基础接口可用；请读取目标 Timecode 检查 XML，写入后仍需回读确认。' : !plugin ? '未检测到网络桥插件，请导出并在控台运行插件后重新检测。' : '此版本缺少所需对象或文件接口，自动工程同步不可用。' };
+        message: plugin && objects && files ? '基本功能可用。请先读取目标 Timecode 检查内容，写入后联动台会再读回确认。' : !plugin ? '没有检测到控台插件，请导出插件并在控台上运行后重新检测。' : '这个控台版本缺少需要的功能，无法自动同步。' };
     } finally { this.busy = false; }
     return this.status();
   }

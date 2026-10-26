@@ -9,7 +9,7 @@ const input = { connected: true, source: '机位 A', filter: '美颜', confirmed
   busy: false, error: null, runtime, runtimeError: '' };
 
 it('只有同一来源参数回读一致且实时分析有效才显示送达', () => {
-  expect(beautyFeedback(input)).toEqual({ tone: 'ready', text: '参数已送达 · 面部 2 人 · 美体 1 人' });
+  expect(beautyFeedback(input)).toEqual({ tone: 'ready', text: '参数已发给 OBS · 面部 2 人 · 美体 1 人' });
   expect(beautyFeedback({ ...input, values: { ...input.values, slim: 20 } }).tone).toBe('pending');
   expect(beautyFeedback({ ...input, confirmed: { ...confirmed, uniform: false } }).tone).toBe('pending');
   expect(beautyFeedback({ ...input, runtime: { ...runtime, sourceName: '机位 B' } }).tone).toBe('pending');

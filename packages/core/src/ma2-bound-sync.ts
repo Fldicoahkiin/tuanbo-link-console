@@ -19,7 +19,7 @@ export function previewMa2BoundSync(documentInput: LightingDocument, bindingId: 
     if (!trackId) throw new Error('控台轨道映射缺失');
     objects.push({ id: trackId, kind: 'track', parentId: bindingId, order, properties: { name: track.name, muted: String(track.muted) } });
     for (const clip of track.clips) for (const event of clip.events) {
-      if ((event.kind !== 'ma2' && event.kind !== 'ma2-fader') || clip.timeLock !== 'time') throw new Error('控台事件尚未转换为 MA2 绝对时间');
+      if ((event.kind !== 'ma2' && event.kind !== 'ma2-fader') || clip.timeLock !== 'time') throw new Error('控台事件还没转换成 MA2 绝对时间');
       objects.push({ id: identities.get(event.id) ?? `remote-event:${event.id}`, kind: 'event', parentId: trackId, order: 0,
         properties: ma2EventSnapshotProperties(event, clip.start + event.at, clip.muted, event.label) });
     }

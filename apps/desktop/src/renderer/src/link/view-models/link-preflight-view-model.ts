@@ -21,9 +21,9 @@ export async function runDesktopPreflight(
 ): Promise<PreflightReport> {
   const document = useDocumentStore.getState();
   const integration = useIntegrationStore.getState();
-  if (!document.project) throw new Error('尚未加载工程，请打开已有工程');
-  if (!document.path) throw new Error('当前工程尚未保存，请先保存工程再播放');
-  if (!integration.profile) throw new Error(integration.error ?? '连接配置尚未加载，请在设置中检查 OBS 与 MIDI 连接配置');
+  if (!document.project) throw new Error('还没打开工程，请先打开一个工程');
+  if (!document.path) throw new Error('工程还没保存，请先保存再播放');
+  if (!integration.profile) throw new Error(integration.error ?? '连接设置还没读取，请在设置里检查 OBS 和 MIDI 连接');
   await requireOutputLicense();
   assertCurrent();
 

@@ -12,7 +12,7 @@ const executable = () => resolve(process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? 'tool
 windowsTest('真实辅助进程拒绝不存在的精确端口，退出可回收，不打开默认设备', async () => {
   const errors: string[] = [];
   const output = new NativeMidiOutput(executable(), error => errors.push(error.message));
-  await expect(output.open(`TBLINK-ABSENT-${randomUUID()}`)).rejects.toThrow('指定输出端口不存在');
+  await expect(output.open(`TBLINK-ABSENT-${randomUUID()}`)).rejects.toThrow('找不到指定的输出端口');
   await expect(output.close()).rejects.toThrow('异常退出：3');
   expect(errors).toHaveLength(1);
 }, 10000);

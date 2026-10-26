@@ -13,5 +13,5 @@ export function midiErrorMessage(code: number, portName: string): string {
 
 /** The same output is set for two uses of one playback; a single-client driver lets only one of them open it. */
 export function sharedPortMessage(portName: string, owner: string, others: readonly string[]): string {
-  return `MIDI 接口「${portName}」同时设成了${[...new Set([...others, owner])].join('、')}的输出，但它一次只能给一处用。请到 设置 → 音频与 MIDI 给它们选不同的接口。`;
+  return `MIDI 接口「${portName}」同时设成了${[...new Set([...others, owner])].join('、')}的输出，但它一次只能给一处用。请到「设置 → 音频与 MIDI」给它们选不同的接口。`;
 }

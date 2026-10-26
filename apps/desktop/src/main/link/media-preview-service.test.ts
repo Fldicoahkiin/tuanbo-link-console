@@ -105,9 +105,9 @@ describe('MediaPreviewService', () => {
     expect(calls[1]).toEqual(expect.arrayContaining(['-c:v', 'utvideo']));
     await expect(service.ensureObsSeekVideo(join(root, 'show.tblink'), 'assets/reference-media/source.mp4', digest, 'software')).resolves.toBe(software);
     await writeFile(first, 'corrupt-cache-longer');
-    await expect(request()).rejects.toThrow('定位缓存已损坏');
+    await expect(request()).rejects.toThrow('画面缓存已损坏');
     await writeFile(source, 'modified-original-longer');
-    await expect(request()).rejects.toThrow('原素材完整性校验失败');
+    await expect(request()).rejects.toThrow('原素材校验失败');
     expect(calls).toHaveLength(2);
   });
   it('同一摘要的并行素材不能绕过各自原文件校验', async () => {
@@ -130,7 +130,7 @@ describe('MediaPreviewService', () => {
     if (rejected?.status === 'rejected') {
       const reason: unknown = rejected.reason;
       expect(reason).toBeInstanceOf(Error);
-      if (reason instanceof Error) expect(reason.message).toBe('原素材完整性校验失败，请重新导入');
+      if (reason instanceof Error) expect(reason.message).toBe('原素材校验失败，请重新导入');
     }
   });
   it('FFmpeg 失败后删除已生成的临时代理文件', async () => {

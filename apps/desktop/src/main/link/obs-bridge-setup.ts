@@ -22,7 +22,7 @@ export class ObsBridgeSetup {
         const changed = await this.tools.install(false);
         if (changed) {
           const process = await this.tools.process();
-          if (process.pid !== null) await this.release(process, '组件已部署，需要重启 OBS 后才能加载。');
+          if (process.pid !== null) await this.release(process, '组件已安装，需要重启 OBS 才能加载。');
         }
       }
       catch (error) {
@@ -64,19 +64,19 @@ export class ObsBridgeSetup {
   }
 
   private async release(process: ProcessState, reason: string): Promise<void> {
-    if (!await this.tools.confirm(process.owned ? 'restart' : 'external', reason)) throw new Error('已取消 OBS 组件维护，现有进程保持不变');
+    if (!await this.tools.confirm(process.owned ? 'restart' : 'external', reason)) throw new Error('已取消修复 OBS 组件，正在运行的 OBS 没有变动');
     if (process.owned) {
       const current = await this.tools.process();
       if (!current.owned || current.pid !== process.pid) throw new Error('OBS 进程已变化，请重新检查组件');
       // The process adapter checks streaming/recording immediately before normal close.
       await this.tools.stop();
     } else if ((await this.tools.process()).pid !== null) {
-      throw new Error('OBS 仍在运行。请在 OBS 内正常退出，然后再次点击“检查并修复组件”；联动台不会强制关闭它。');
+      throw new Error('OBS 还在运行。请先正常退出 OBS，再点一次“检查并修复组件”（联动台不会强制关闭它）。');
     }
   }
 
   private exclusive(action: () => Promise<void>): Promise<void> {
-    if (this.operation) return Promise.reject(new Error('OBS 组件维护正在进行，请等待完成'));
+    if (this.operation) return Promise.reject(new Error('正在修复 OBS 组件，请稍等'));
     this.operation = action().finally(() => { this.operation = null; });
     return this.operation;
   }

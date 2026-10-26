@@ -27,7 +27,7 @@ export class AutomaticMusicProcess {
   }
 
   run(request: AutomaticMusicWorkerRequest, timeoutMs = this.timeoutMs): Promise<AutomaticMusicRun> {
-    if (this.active) return Promise.reject(new Error('已有音乐识别任务，请等待结束或取消'));
+    if (this.active) return Promise.reject(new Error('已有音乐识别在进行，请等它结束或取消'));
     if (![this.python, this.worker, request.audio, request.bundle, request.ffmpeg, request.output, request.cache, request.cancel_file].every(isAbsolute)) return Promise.reject(new Error('音乐识别路径必须由主进程解析为绝对路径'));
     const encoded = JSON.stringify(request);
     if (Buffer.byteLength(encoded) > 65_536) return Promise.reject(new Error('音乐识别请求过大'));
@@ -53,9 +53,9 @@ export class AutomaticMusicProcess {
           if (terminal) throw new Error('音乐识别进程在终态后继续返回数据');
           if (event.type === 'progress') { if (!job.cancelled) this.progress(event); }
           else terminal = event;
-        } catch (cause) { fail(new Error('音乐识别进程协议无效，未提交结果', { cause })); }
+        } catch (cause) { fail(new Error('音乐识别返回的数据无法识别，结果没有保存', { cause })); }
       };
-      const deadline = setTimeout(() => fail(new Error('音乐识别超时，已请求协作停止；未提交结果')), timeoutMs);
+      const deadline = setTimeout(() => fail(new Error('音乐识别超时，已停止，结果没有保存')), timeoutMs);
       child.stdout.on('data', (chunk: Buffer) => {
         if (failure) return;
         buffer += decoder.write(chunk);
@@ -71,10 +71,10 @@ export class AutomaticMusicProcess {
         if (this.active === job) this.active = null;
         buffer += decoder.end(); if (buffer.trim()) accept(buffer);
         if (failure) { reject(failure); return; }
-        if (job.cancelled || terminal?.type === 'cancelled') { reject(new Error('音乐识别已取消，未提交结果')); return; }
+        if (job.cancelled || terminal?.type === 'cancelled') { reject(new Error('音乐识别已取消，结果没有保存')); return; }
         if (terminal?.type === 'error') { reject(new Error(terminal.message)); return; }
-        if (code !== 0 || terminal?.type !== 'result') { reject(new Error(`音乐识别进程未完整完成（${String(code)}）：${stderr || '缺少结果'}`)); return; }
-        if (terminal.result.audio.source_sha256 !== request.source_sha256 || terminal.result.device !== request.device) { reject(new Error('音乐识别音源或设备身份不符，未提交结果')); return; }
+        if (code !== 0 || terminal?.type !== 'result') { reject(new Error(`音乐识别没有正常完成（${String(code)}）：${stderr || '缺少结果'}`)); return; }
+        if (terminal.result.audio.source_sha256 !== request.source_sha256 || terminal.result.device !== request.device) { reject(new Error('音源或设备和识别开始时不一致，结果没有保存')); return; }
         resolve(terminal.result);
       });
       child.stdin.end(encoded);

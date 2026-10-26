@@ -96,12 +96,12 @@ it('桌面与真实本地服务贯通商品、下单、外部付款入口、通�
   expect(delivered.delivery?.licenses).toHaveLength(2); expect(delivered.order?.payable).toBe(false);
   const license = delivered.delivery?.licenses[0]; if (!license?.code) throw new Error('未交付');
   expect(await client.code(receipt.localId, license.id)).toBe(license.code);
-  await expect(client.code(receipt.localId, '9c8bab6c-2e5f-40d4-8327-9b8658ee0a53')).rejects.toThrow('未找到可复制');
+  await expect(client.code(receipt.localId, '9c8bab6c-2e5f-40d4-8327-9b8658ee0a53')).rejects.toThrow('还没有可复制');
   expect((await desktop().refresh(receipt.localId)).delivery?.licenses).toEqual(delivered.delivery?.licenses);
   await expect(client.openPayment(receipt.localId)).rejects.toThrow('不能再次付款');
   service.revoke(license.id, { reason: '测试撤销' });
   await client.refresh(receipt.localId);
-  await expect(client.code(receipt.localId, license.id)).rejects.toThrow('未找到可复制');
+  await expect(client.code(receipt.localId, license.id)).rejects.toThrow('还没有可复制');
   expect(external).toHaveBeenCalledOnce();
 });
 
@@ -141,7 +141,7 @@ it('并发点击仅允许一次下单，显式价格拒绝后可重新选择商�
   expect(outcomes.filter(item => item.status === 'rejected')).toHaveLength(1);
   expect(await client.list()).toHaveLength(1);
   data.clear();
-  await expect(client.create({ ...request, quotedUnitAmountFen: 1 })).rejects.toThrow('商品价格或条款已变更');
+  await expect(client.create({ ...request, quotedUnitAmountFen: 1 })).rejects.toThrow('商品价格或条款有变化');
   expect((await client.list())[0]?.rejected).toBe(true);
   expect((await client.create(request)).order?.state).toBe('pending');
 });
@@ -164,10 +164,10 @@ it('已知订单领取返回另一订单或错误金额时拒绝保存；过期�
     const value = z.record(z.string(), z.unknown()).parse(await result.json());
     return Response.json({ ...value, amountFen: 1 });
   };
-  await expect(desktop(switched).refresh(receipt.localId)).rejects.toThrow('交付信息与原订单不一致');
+  await expect(desktop(switched).refresh(receipt.localId)).rejects.toThrow('交付信息和原订单对不上');
   expect((await client.list())[0]?.delivery).toBeNull();
   service.revokeDeliveryAccess(receipt.order.id, { reason: '测试撤销' });
-  await expect(client.refresh(receipt.localId)).rejects.toThrow('领取凭据已过期或撤销');
+  await expect(client.refresh(receipt.localId)).rejects.toThrow('领取凭证已过期或被撤销');
   expect(external).not.toHaveBeenCalled();
 });
 
@@ -179,7 +179,7 @@ it.each(['expiresAt', 'offer'] as const)('恢复原订单时拒绝改变已确�
     return Response.json(changed ? { ...value, ...(field === 'expiresAt' ? { expiresAt: '2026-09-28T01:00:00Z' } : { offer: { ...value.offer, updatesDays: 30 } }) } : value);
   };
   const client = desktop(mutated); const receipt = await client.create(request); changed = true;
-  await expect(client.openPayment(receipt.localId)).rejects.toThrow('与已保存请求不一致');
+  await expect(client.openPayment(receipt.localId)).rejects.toThrow('和保存的请求对不上');
   expect((await client.list())[0]?.order).toEqual(receipt.order);
   expect(external).not.toHaveBeenCalled();
 });
@@ -196,7 +196,7 @@ it('系统浏览器启动无响应时限时返回，保留同一订单且不自�
   external.mockImplementation(() => new Promise<void>(() => undefined));
   vi.useFakeTimers();
   try {
-    const failure = expect(client.openPayment(receipt.localId)).rejects.toThrow('未能确认系统浏览器已打开');
+    const failure = expect(client.openPayment(receipt.localId)).rejects.toThrow('没能确认浏览器已打开');
     await vi.advanceTimersByTimeAsync(10001); await failure;
     expect((await client.list())[0]?.order?.id).toBe(receipt.order?.id);
     expect(external).toHaveBeenCalledOnce();
@@ -206,9 +206,9 @@ it('系统浏览器启动无响应时限时返回，保留同一订单且不自�
 it('拒绝重定向配置、超大或非 JSON 响应，不把 5xx 拒绝误判成未建单', async () => {
   expect(() => new PurchaseService('http://invalid.example', storage, external)).toThrow('HTTPS');
   const tooLarge: typeof fetch = () => Promise.resolve(new Response('x'.repeat(65537)));
-  await expect(desktop(tooLarge).catalog()).rejects.toThrow('响应异常');
+  await expect(desktop(tooLarge).catalog()).rejects.toThrow('连不上购买服务或返回出错');
   const bad: typeof fetch = () => Promise.resolve(new Response('<html>closed</html>', { status: 404 }));
-  await expect(desktop(bad).catalog()).rejects.toThrow('尚未开放');
+  await expect(desktop(bad).catalog()).rejects.toThrow('购买服务还没开放');
   const unavailable: typeof fetch = () => Promise.resolve(Response.json({ code: 'OFFER_CHANGED' }, { status: 500 }));
   const client = desktop(unavailable);
   await expect(client.create(request)).rejects.toThrow();
@@ -243,14 +243,14 @@ it('本机续费贯通私密认证头、丢失响应恢复、验签交付；不�
   const delivered = await restored.refresh(receipt.localId);
   expect(delivered.delivery).toMatchObject({ renewalLicenseId: license.id, state: 'fulfilled',
     useUntil: new Date(now + 60 * 86400000).toISOString(), licenses: [{ id: license.id, code: null, revoked: false }] });
-  await expect(restored.code(receipt.localId, license.id)).rejects.toThrow('未找到可复制');
+  await expect(restored.code(receipt.localId, license.id)).rejects.toThrow('还没有可复制');
   expect(service.describeOrder(original.id).licenses[0]?.code).toBe(license.code);
 });
 
 it('缺失本机续费凭据时不保存购买、不发请求；服务端拒绝认证后可重新选择', async () => {
   const renewal = { ...request, offerId: 'test-month', quantity: 1, renewalLicenseId: '9c8bab6c-2e5f-40d4-8327-9b8658ee0a53' };
   const network = vi.fn(fetchLocal);
-  await expect(new PurchaseService(origin, storage, external, network).create(renewal)).rejects.toThrow('续费凭据不可用');
+  await expect(new PurchaseService(origin, storage, external, network).create(renewal)).rejects.toThrow('续费凭证不可用');
   expect(network).not.toHaveBeenCalled(); expect(data.size).toBe(0);
   const client = new PurchaseService(origin, storage, external, network, () => now, () => Promise.resolve({ product: 'tuanbo-link-console', code: `TBA-${'B'.repeat(32)}`, machineCode: `TB1-${'A'.repeat(64)}` }));
   await expect(client.create(renewal)).rejects.toThrow('续费授权无效');
@@ -281,7 +281,7 @@ it('付款期限过后服务端确认原单关闭，本机记录结束并允许�
   const client = desktop(); const first = await client.create(request);
   await expect(client.create(request)).rejects.toThrow('先恢复原订单');
   clock += 15 * 60000;
-  await expect(client.openPayment(first.localId)).rejects.toThrow('付款入口已关闭或过期');
+  await expect(client.openPayment(first.localId)).rejects.toThrow('付款页面已关闭或过期');
   await expect(client.create(request)).rejects.toThrow('先恢复原订单');
   queryStatus = 'TRADE_NOT_EXIST';
   const expired = await client.refresh(first.localId);

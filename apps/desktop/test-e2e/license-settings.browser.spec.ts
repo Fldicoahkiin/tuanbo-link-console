@@ -30,11 +30,11 @@ test.beforeEach(async ({ page }) => {
       getPurchaseCatalog: () => Promise.resolve({ available: false, currency: 'CNY', termStart: 'fulfillment', offers: [] }),
       requireOutputLicense: () => current.state === 'active' ? Promise.resolve() : Promise.reject(new Error('使用团播联动台需要有效授权')),
       activateLicenseCode: (code: string) => {
-        if (code !== `TBA-${'A'.repeat(32)}`) return Promise.reject(new Error('激活码已绑定其他机器，请联系发行方办理换机'));
+        if (code !== `TBA-${'A'.repeat(32)}`) return Promise.reject(new Error('激活码已绑定其他电脑，请联系售后办理换机'));
         current = { ...base, state: 'active', message: '本机授权有效', claims: { version: 1, product: 'tuanbo-link-console', licenseId: '9d53530a-6712-423e-985e-e69beb9ec1c6', customer: '验收公司', machineCode: base.machineCode, kind: 'perpetual', issuedAt: '2026-09-27T00:00:00Z', useUntil: null, updatesUntil: '2027-09-27T00:00:00Z', online: { customerType: 'company', leaseUntil: '2026-10-04T00:00:00Z' } } };
         return Promise.resolve(current);
       },
-      refreshOnlineLicense: () => { current = { ...current, state: 'renewal-required', message: '无法连接授权服务器，请检查网络后手动重试' }; return Promise.reject(new Error('无法连接授权服务器，现有授权保持不变')); },
+      refreshOnlineLicense: () => { current = { ...current, state: 'renewal-required', message: '连不上授权服务器，请检查网络后重试' }; return Promise.reject(new Error('连不上授权服务器，现有授权不受影响')); },
       exportLicenseRequest: () => Promise.resolve(true), importLicense: () => Promise.resolve(null),
       getUpdateStatus: () => Promise.resolve({ phase: 'available', currentVersion: '0.5.0', availableVersion: '0.5.1', releaseDate: '2026-11-02T00:00:00.000Z',
         progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, message: '发现新版本 0.5.1',
@@ -58,9 +58,9 @@ test('激活成功展示企业与凭证期限、清空密钥，网络失败显�
   await panel.getByRole('button', { name: '激活本机' }).click();
   await expect(panel.getByText('验收公司', { exact: true })).toBeVisible();
   await expect(panel.getByLabel('激活码', { exact: true })).toHaveValue('');
-  await expect(panel.getByText(/本次签名凭证有效至/)).toBeVisible();
+  await expect(panel.getByText(/本次验证有效至/)).toBeVisible();
   await panel.getByRole('button', { name: '联网验证授权' }).click();
-  await expect(panel.getByRole('alert')).toContainText('现有授权保持不变');
+  await expect(panel.getByRole('alert')).toContainText('现有授权不受影响');
   await expect(panel.getByText('需要联网验证', { exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('license-settings.png') });
 });
@@ -68,7 +68,7 @@ test('错误激活码明确反馈，运行中禁用激活、联网验证与导�
   const input = page.getByLabel('激活码', { exact: true });
   await input.fill(`TBA-${'B'.repeat(32)}`);
   await page.getByRole('button', { name: '激活本机' }).click();
-  await expect(page.getByRole('alert')).toContainText('已绑定其他机器');
+  await expect(page.getByRole('alert')).toContainText('已绑定其他电脑');
   await page.evaluate('window.renderLicense(true)');
   await expect(input).toBeDisabled();
   await page.getByText('本机信息与授权文件', { exact: true }).click();
@@ -120,7 +120,7 @@ test('启动校验完成前不挂载工作区，网络失败后可手动验证�
     let verified = false;
     Object.defineProperty(window, 'tbLink', { configurable: true, value: {
       ...bridge,
-      requireOutputLicense: () => verified ? Promise.resolve() : Promise.reject(new Error('无法连接授权服务器，请检查网络后手动重试')),
+      requireOutputLicense: () => verified ? Promise.resolve() : Promise.reject(new Error('连不上授权服务器，请检查网络后重试')),
       refreshOnlineLicense: async () => {
         const status = await bridge.activateLicenseCode(`TBA-${'A'.repeat(32)}`);
         verified = true;
@@ -130,7 +130,7 @@ test('启动校验完成前不挂载工作区，网络失败后可手动验证�
   });
   await page.evaluate('window.renderGate()');
   await expect(page.getByTestId('workspace')).toHaveCount(0);
-  await expect(page.getByText('无法连接授权服务器，请检查网络后手动重试', { exact: true })).toBeVisible();
+  await expect(page.getByText('连不上授权服务器，请检查网络后重试', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '联网验证授权' }).click();
   await expect(page.getByTestId('workspace')).toBeVisible();
 });
@@ -142,7 +142,7 @@ test('联网检查进行中只展示等待页', async ({ page }) => {
     }) });
   });
   await page.evaluate('window.renderGate()');
-  await expect(page.getByText('正在核对本机授权', { exact: true })).toBeVisible();
+  await expect(page.getByText('正在验证本机授权', { exact: true })).toBeVisible();
   await expect(page.getByTestId('workspace')).toHaveCount(0);
   await page.evaluate('window.finishStartup()');
   await expect(page.getByTestId('workspace')).toBeVisible();
@@ -221,7 +221,7 @@ async function configurePurchase(page: Page, mode: 'success' | 'lost' | 'failed-
       getPurchaseCatalog: () => Promise.resolve({ available: true, currency: 'CNY', termStart: 'fulfillment', offers: [offer] }),
       createPurchase: (request: import('@tb/schema').PurchaseRequest) => {
         creates += 1;
-        if (mode === 'failed-storage') return Promise.reject(new Error('Windows 安全存储不可用，不能保存凭证'));
+        if (mode === 'failed-storage') return Promise.reject(new Error('Windows 安全存储不可用，无法保存密码'));
         const record: import('@tb/schema').PurchaseReceipt = { localId: 'bbc5c1a4-64aa-4322-9cf3-38a19035d1e0',
           createdAt: '2026-09-28T00:00:00Z', request, rejected: false, delivery: null,
           order: mode === 'lost' ? null : { id: '4c809a80-1776-4999-9145-31d4b95cdc35', offer, state: 'pending', amountFen: request.quantity * 100, quantity: request.quantity, expiresAt: '2099-12-31T00:00:00Z', payable: true } };
@@ -249,7 +249,7 @@ async function configurePurchase(page: Page, mode: 'success' | 'lost' | 'failed-
 test('未配置购买时明确提示，保留手工激活入口且不展示测试商品', async ({ page }) => {
   await page.locator('.license-disclosure').filter({ has: page.getByText('购买授权与查询订单', { exact: true }) }).evaluate(element => { if (element instanceof HTMLDetailsElement) element.open = true; });
   await page.getByRole('button', { name: '查看可售授权' }).click();
-  await expect(page.getByText('购买尚未开放，请联系发行方。已有订单仍可查询。')).toBeVisible();
+  await expect(page.getByText('暂未开放购买，请联系售后。已有的订单仍然可以查询。')).toBeVisible();
   await expect(page.getByRole('button', { name: '创建购买订单' })).toHaveCount(0);
   await expect(page.getByLabel('激活码', { exact: true })).toBeEnabled();
 });
@@ -263,9 +263,9 @@ test('确认服务器价格后建单，显式打开付款页和领取，不自�
   await page.getByLabel('机器数量', { exact: true }).fill('2');
   await expect(page.getByText(/含税总价 ¥2.00/)).toBeVisible();
   await expect(page.getByRole('button', { name: '创建购买订单' })).toBeDisabled();
-  await page.getByRole('checkbox', { name: '我已核对价格、机器数量与授权期限' }).check();
+  await page.getByRole('checkbox', { name: '我已确认价格、电脑数量和授权期限' }).check();
   await page.getByRole('button', { name: '创建购买订单' }).click();
-  await expect(page.getByText('待付款或核对', { exact: true })).toBeVisible();
+  await expect(page.getByText('待付款或待确认', { exact: true })).toBeVisible();
   expect(await page.evaluate('window.purchaseCounts()')).toEqual({ opens: 0, creates: 1 });
   await page.getByRole('button', { name: '打开支付宝付款页' }).click();
   expect(await page.evaluate('window.purchaseCounts()')).toEqual({ opens: 1, creates: 1 });
@@ -289,7 +289,7 @@ test('响应丢失后展示恢复入口并阻止重复建单，恢复后领取�
   await page.locator('.license-disclosure').filter({ has: page.getByText('购买授权与查询订单', { exact: true }) }).evaluate(element => { if (element instanceof HTMLDetailsElement) element.open = true; });
   await page.getByRole('button', { name: '查看可售授权' }).click();
   await page.getByLabel('授权客户名称').fill('测试购买人');
-  await page.getByRole('checkbox', { name: '我已核对价格、机器数量与授权期限' }).check();
+  await page.getByRole('checkbox', { name: '我已确认价格、电脑数量和授权期限' }).check();
   await page.getByRole('button', { name: '创建购买订单' }).click();
   await expect(page.getByText('结果待确认，请恢复原订单', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '创建购买订单' })).toBeDisabled();
@@ -303,7 +303,7 @@ test('安全存储失败不出现虚构订单或付款入口', async ({ page }) 
   await page.locator('.license-disclosure').filter({ has: page.getByText('购买授权与查询订单', { exact: true }) }).evaluate(element => { if (element instanceof HTMLDetailsElement) element.open = true; });
   await page.getByRole('button', { name: '查看可售授权' }).click();
   await page.getByLabel('授权客户名称').fill('测试购买人');
-  await page.getByRole('checkbox', { name: '我已核对价格、机器数量与授权期限' }).check();
+  await page.getByRole('checkbox', { name: '我已确认价格、电脑数量和授权期限' }).check();
   await page.getByRole('button', { name: '创建购买订单' }).click();
   await expect(page.getByRole('alert')).toContainText('安全存储不可用');
   await expect(page.getByRole('button', { name: '打开支付宝付款页' })).toHaveCount(0);

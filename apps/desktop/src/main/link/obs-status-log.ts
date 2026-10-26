@@ -10,7 +10,7 @@ export function obsStatusLogEntry(previous: LinkObsSnapshot['status'], next: Lin
   if (next.status === 'connected') return previous === 'connected' ? null
     : { level: 'info', message: `OBS 已连接（OBS ${next.obsVersion ?? '版本未知'}）`, result: 'succeeded', details: { obsVersion: next.obsVersion, webSocketVersion: next.webSocketVersion } };
   if (previous !== 'connected') return null;
-  if (next.status === 'error') return { level: 'error', message: `OBS 连接错误：${next.error ?? '未知原因'}`, result: 'failed', details: { error: next.error } };
+  if (next.status === 'error') return { level: 'error', message: `OBS 连接出错：${next.error ?? '未知原因'}`, result: 'failed', details: { error: next.error } };
   if (next.status !== 'disconnected') return null;
   return next.error ? { level: 'warning', message: `OBS 连接已断开：${next.error}`, result: 'failed', details: { error: next.error } }
     : { level: 'info', message: 'OBS 已断开连接', result: 'succeeded' };

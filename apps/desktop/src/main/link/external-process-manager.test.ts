@@ -15,7 +15,7 @@ describe('ExternalProcessManager', () => {
     expect(await manager.start('obs', configuration())).toMatchObject({ pid: 20980, owned: false, status: 'running' });
     expect(manager.inspectionAccess('obs')).toBe('limited');
     expect(tools.launchCount).toBe(0);
-    await expect(manager.stop('obs', 100)).rejects.toThrow('不是本次由联动台启动');
+    await expect(manager.stop('obs', 100)).rejects.toThrow('不是这次由联动台启动');
     expect(tools.closedPids).toEqual([]);
   });
   it('识别方式跟着当前进程走：OBS 换成普通方式重开后是完整识别，退出后不再报告', async () => {
@@ -54,7 +54,7 @@ describe('ExternalProcessManager', () => {
   it('残留 onPC 没有主窗口时明确报错，不误报打开成功或重复启动', async () => {
     const tools = fakeTools([{ ...processInfo(100), windowTitle: '' }]);
     const manager = new ExternalProcessManager(tools, idleObs());
-    await expect(manager.start('ma2', configuration())).rejects.toThrow('主窗口未就绪');
+    await expect(manager.start('ma2', configuration())).rejects.toThrow('主窗口还没出现');
     expect(manager.getSnapshot('ma2')).toMatchObject({ status: 'error', pid: 100, owned: false });
     expect(tools.launchCount).toBe(0);
   });
@@ -62,7 +62,7 @@ describe('ExternalProcessManager', () => {
     const tools = fakeTools([]);
     tools.detectedAfterLaunch = [{ ...processInfo(321), windowTitle: '' }];
     const manager = new ExternalProcessManager(tools, idleObs());
-    await expect(manager.start('ma3d', { ...configuration(), startupTimeoutMs: 1 })).rejects.toThrow('主窗口尚未就绪');
+    await expect(manager.start('ma3d', { ...configuration(), startupTimeoutMs: 1 })).rejects.toThrow('主窗口还没出现');
     expect(manager.getSnapshot('ma3d')).toMatchObject({ status: 'error', pid: 321, owned: true });
     expect(tools.closedPids).toEqual([]);
   });
@@ -71,7 +71,7 @@ describe('ExternalProcessManager', () => {
     const manager = new ExternalProcessManager(tools, idleObs());
     expect(await manager.start(id, configuration())).toMatchObject({ id, pid: 100, owned: false, status: 'running' });
     expect(await manager.start(id, configuration())).toMatchObject({ id, pid: 100, owned: false });
-    await expect(manager.stop(id, 100)).rejects.toThrow('不是本次由联动台启动');
+    await expect(manager.stop(id, 100)).rejects.toThrow('不是这次由联动台启动');
     expect(tools.closedPids).toEqual([]);
   });
   it('相同 PID 被复用但启动时间改变时撤销所有权', async () => {
@@ -81,7 +81,7 @@ describe('ExternalProcessManager', () => {
     await manager.start('obs', configuration());
     tools.detectedAfterLaunch = [{ ...processInfo(321), startTime: '2026-09-15T00:00:00.000Z' }];
     expect(await manager.refresh('obs', configuration())).toMatchObject({ owned: false });
-    await expect(manager.stop('obs', 100)).rejects.toThrow('不是本次由联动台启动');
+    await expect(manager.stop('obs', 100)).rejects.toThrow('不是这次由联动台启动');
     expect(tools.closedPids).toEqual([]);
   });
   it('刷新时按集成档案精确识别既有程序且不取得所有权', async () => {
@@ -94,7 +94,7 @@ describe('ExternalProcessManager', () => {
       owned: false,
       executablePath: 'C:\\Apps\\P1.exe'
     });
-    await expect(manager.stop('p1', 10)).rejects.toThrow('不是本次由联动台启动');
+    await expect(manager.stop('p1', 10)).rejects.toThrow('不是这次由联动台启动');
   });
 
   it('只连接用户原本运行的程序且拒绝关闭', async () => {
@@ -104,7 +104,7 @@ describe('ExternalProcessManager', () => {
     const snapshot = await manager.start('p1', configuration());
 
     expect(snapshot.owned).toBe(false);
-    await expect(manager.stop('p1', 10)).rejects.toThrow('不是本次由联动台启动');
+    await expect(manager.stop('p1', 10)).rejects.toThrow('不是这次由联动台启动');
     expect(tools.closedPids).toEqual([]);
   });
 
@@ -126,7 +126,7 @@ describe('ExternalProcessManager', () => {
     const tools = fakeTools([processInfo(100), { ...processInfo(101), windowTitle: '另一个窗口' }]);
     const manager = new ExternalProcessManager(tools, idleObs());
 
-    await expect(manager.start('p1', configuration())).rejects.toThrow('无法由唯一主窗口确定连接目标');
+    await expect(manager.start('p1', configuration())).rejects.toThrow('无法确定哪一个是连接目标');
   });
 
   it('本次启动的程序使用精确 PID 正常关闭', async () => {
@@ -172,9 +172,9 @@ describe('ExternalProcessManager', () => {
     const manager = new ExternalProcessManager(tools, idleObs());
     const fastFailure = { ...configuration(), startupTimeoutMs: 1 };
 
-    await expect(manager.start('p1', fastFailure)).rejects.toThrow('未通过路径核验');
+    await expect(manager.start('p1', fastFailure)).rejects.toThrow('没有通过路径确认');
     expect(manager.getSnapshot('p1')).toMatchObject({ status: 'error', pid: 321, owned: true });
-    await expect(manager.start('p1', fastFailure)).rejects.toThrow('拒绝重复启动');
+    await expect(manager.start('p1', fastFailure)).rejects.toThrow('没有再启动一个');
     expect(tools.launchCount).toBe(1);
 
     tools.closeAccepted = true;
@@ -214,7 +214,7 @@ describe('ExternalProcessManager', () => {
     rejectedTools.detectedAfterLaunch = [processInfo(321)];
     const rejectedManager = new ExternalProcessManager(rejectedTools, idleObs());
     await rejectedManager.start('p1', configuration());
-    await expect(rejectedManager.stop('p1', 10)).rejects.toThrow('没有接受正常关闭请求');
+    await expect(rejectedManager.stop('p1', 10)).rejects.toThrow('没有接受关闭请求');
     expect(rejectedManager.getSnapshot('p1')).toMatchObject({ status: 'running', pid: 321, owned: true });
 
     const timeoutTools = fakeTools([]);
@@ -222,7 +222,7 @@ describe('ExternalProcessManager', () => {
     timeoutTools.closeAccepted = true;
     const timeoutManager = new ExternalProcessManager(timeoutTools, idleObs());
     await timeoutManager.start('p1', configuration());
-    await expect(timeoutManager.stop('p1', 1)).rejects.toThrow('正常关闭超时');
+    await expect(timeoutManager.stop('p1', 1)).rejects.toThrow('关闭超时');
     expect(timeoutManager.getSnapshot('p1')).toMatchObject({ status: 'running', pid: 321, owned: true });
   });
 });

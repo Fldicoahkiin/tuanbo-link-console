@@ -77,7 +77,7 @@ describe('UnsavedChangesGuard', () => {
 describe('unsavedChangesPrompt', () => {
   it('三个按钮：保存 / 不保存 / 取消，Esc 为取消；已同步到控台时说明不会撤回', () => {
     const options = unsavedChangesPrompt({ ...dirty, consoleSynced: true, reason: 'quit', failure: '工程保存失败：磁盘已满' });
-    expect(options).toMatchObject({ title: '工程尚未保存', buttons: ['保存', '不保存', '取消'], defaultId: 0, cancelId: 2 });
+    expect(options).toMatchObject({ title: '工程还没保存', buttons: ['保存', '不保存', '取消'], defaultId: 0, cancelId: 2 });
     expect(options.message).toContain('演出');
     expect(options.detail).toContain('已同步到控台的改动不会撤回');
     expect(options.detail).toContain('磁盘已满');

@@ -308,7 +308,7 @@ function createIntegrationActions(input: WorkspaceActionsInput) {
     if (!input.coordinator) return;
     try {
       await input.coordinator.testAction(action);
-      input.notify(`单步测试成功：${action.label}`);
+      input.notify(`测试成功：${action.label}`);
     } catch (error) {
       input.notify(toMessage(error), 'error');
     }
@@ -388,7 +388,7 @@ function requireCue(item: LinkProject['rundown'][number], cueId: string): LinkCu
 function applyObsTransform(input: WorkspaceActionsInput, target: LinkCue, transform: SceneItemTransform): void {
   if (!input.item) return;
   const sceneItem = target.actions.find((action) => action.kind === 'obs.setSceneItemEnabled');
-  if (!sceneItem) throw new Error('当前 OBS 片段不是可变换的场景来源');
+  if (!sceneItem) throw new Error('这个 OBS 片段不是可以调整位置和大小的场景来源');
   const matchesSource = (action: LinkAction): action is Extract<LinkAction, { kind: 'obs.setSceneItemTransform' }> => (
     action.kind === 'obs.setSceneItemTransform'
     && action.sceneName === sceneItem.sceneName

@@ -27,7 +27,7 @@ export class ReferenceAudioCache {
       this.pending.set(manifest, operation);
     }
     const audio = await operation;
-    if (!await this.files.verify(sourcePath, digest)) throw new Error('原素材在音轨准备期间发生变化，请重新导入');
+    if (!await this.files.verify(sourcePath, digest)) throw new Error('准备音轨时原素材发生了变化，请重新导入');
     return { ...audio, assetId: crypto.randomUUID() };
   }
 
@@ -41,10 +41,10 @@ export class ReferenceAudioCache {
     }
     if (content !== null) {
       const entry = entrySchema.parse(JSON.parse(content));
-      if (entry.sourceSha256 !== digest) throw new Error('原声音轨缓存身份不一致，请检查缓存');
+      if (entry.sourceSha256 !== digest) throw new Error('原声音轨缓存和素材对不上');
       if (entry.audio === null) throw new Error('素材不包含音频轨道');
       if (!await this.files.verify(join(directory, entry.audio.relativePath), entry.audio.sha256)) {
-        throw new Error('原声音轨文件已改变，请恢复原文件后重试');
+        throw new Error('原声音轨文件变了，请恢复原文件后再试');
       }
       return entry.audio;
     }
@@ -52,12 +52,12 @@ export class ReferenceAudioCache {
     try { audio = referenceAudioSourceSchema.parse(await extract()); }
     catch (error) {
       if (error instanceof Error && error.message === '素材不包含音频轨道') {
-        if (!await this.files.verify(sourcePath, digest)) throw new Error('原素材在音轨准备期间发生变化，请重新导入');
+        if (!await this.files.verify(sourcePath, digest)) throw new Error('准备音轨时原素材发生了变化，请重新导入');
         await writeFileAtomically(manifest, JSON.stringify(entrySchema.parse({ version: 1, sourceSha256: digest, audio: null })));
       }
       throw error;
     }
-    if (!await this.files.verify(sourcePath, digest)) throw new Error('原素材在音轨准备期间发生变化，请重新导入');
+    if (!await this.files.verify(sourcePath, digest)) throw new Error('准备音轨时原素材发生了变化，请重新导入');
     if (!await this.files.verify(join(directory, audio.relativePath), audio.sha256)) throw new Error('提取的原声音轨校验失败');
     await writeFileAtomically(manifest, JSON.stringify(entrySchema.parse({ version: 1, sourceSha256: digest, audio })));
     return audio;

@@ -17,10 +17,10 @@ export function nativeProgramSnapshot(project: LinkProject, itemId: string, revi
   const problems: string[] = [];
   let offsetMs = 0;
   try { offsetMs = programTimeOrigin(item); }
-  catch (error) { problems.push(`${error instanceof Error ? error.message : String(error)}；本次时间码未参与，请核对歌曲起始码。`); }
-  if (!problems.length && offsetMs + endMs >= 86400000) problems.push('歌曲时间码范围超过一天，本次时间码未参与。');
+  catch (error) { problems.push(`${error instanceof Error ? error.message : String(error)}；这次不发时间码，请检查歌曲起始码。`); }
+  if (!problems.length && offsetMs + endMs >= 86400000) problems.push('歌曲的时间码范围超过一天，这次不发时间码。');
   const rate = project.timebase.frameRate;
-  if (rate === '29.97df') problems.push('原生引擎的 29.97df 时间码尚未验收，本次时间码未参与。');
+  if (rate === '29.97df') problems.push('Windows 原生播放的 29.97df 时间码还没验证过，这次不发时间码。');
   // Audio-only preparation does not invent a replacement song timecode. The
   // native offset is unused when MIDI is disabled; authored data stays intact.
   const notice = problems.length ? problems.join('；') : null;

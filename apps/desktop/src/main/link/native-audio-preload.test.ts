@@ -22,7 +22,7 @@ async function fixture() {
 
 it('预填充不发设备指令，精确复用下一首音源；音量变化不重新解码，接管后由播放租约清理', async () => {
   const f = await fixture(); f.preload.start('p.tblink', f.snapshot); f.preload.start('p.tblink', f.snapshot);
-  await vi.waitFor(() => expect(f.measured).toHaveBeenCalledWith('下一节目音频预填充', expect.any(Number)));
+  await vi.waitFor(() => expect(f.measured).toHaveBeenCalledWith('预先准备下一首音频', expect.any(Number)));
   expect(f.prepare).toHaveBeenCalledOnce();
   expect(await f.preload.take('p.tblink', { ...f.snapshot, volume: 0 })).toBe(f.lease);
   await f.preload.cancel(); expect(f.release).not.toHaveBeenCalled();
@@ -42,7 +42,7 @@ it('音频原文件在预热后发生变化，释放缓存并明确阻止使用�
   const f = await fixture(); f.preload.start('p.tblink', f.snapshot);
   await vi.waitFor(() => expect(f.measured).toHaveBeenCalled());
   await writeFile(f.path, 'changed audio');
-  await expect(f.preload.take('p.tblink', f.snapshot)).rejects.toThrow('原文件发生变化');
+  await expect(f.preload.take('p.tblink', f.snapshot)).rejects.toThrow('原文件变了');
   expect(f.release).toHaveBeenCalledOnce();
 });
 

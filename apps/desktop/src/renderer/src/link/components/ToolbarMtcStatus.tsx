@@ -20,7 +20,7 @@ export function ToolbarMtcStatus({ player, receiving, portStatus, portDetail, on
     <button className={`toolbar-connection toolbar-mtc-button state-${active ? 'ready' : 'idle'}`} aria-label={`MTC 状态：${status}`} aria-haspopup="dialog" aria-expanded={open} title={`MTC ${status} · 接口${portStatus}；点击查看与设置`} onClick={() => setOpen(true)}>MTC 信号</button>
     {open ? <ModalSurface className="modal-card" label="MTC 时间码状态" onClose={() => setOpen(false)}>
       <h2>MTC 时间码</h2><p>接口：{portStatus}</p>{portDetail ? <p className="mtc-port-detail">{portDetail}</p> : null}
-      {internal && item && project ? <MtcOutputStatus player={player} item={item} frameRate={project.timebase.frameRate} /> : <><p>{internal ? '播放后显示时间码发送状态。' : receiving ? '正在接收外部时间码。' : '尚未接收到外部时间码。'}</p></>}
+      {internal && item && project ? <MtcOutputStatus player={player} item={item} frameRate={project.timebase.frameRate} /> : <><p>{internal ? '播放后显示时间码发送状态。' : receiving ? '正在接收外部时间码。' : '还没收到外部时间码。'}</p></>}
       <div className="modal-actions"><button className="secondary-button" onClick={() => setOpen(false)}>关闭</button><button className="primary-button" onClick={() => { setOpen(false); onSettings(); }}>音频与 MIDI 设置</button></div>
     </ModalSurface> : null}
   </>;

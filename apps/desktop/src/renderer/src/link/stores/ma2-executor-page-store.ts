@@ -64,7 +64,7 @@ async function readPage(page: number, background: boolean): Promise<Ma2ExecutorP
   if (!background) useMa2ExecutorPageStore.setState(state => ({ page, busy: true, error: '', requestId, selectedPages: state.kind === 'layout' ? state.selectedPages : { ...state.selectedPages, [state.kind]: page } }));
   try {
     const snapshot = ma2ExecutorPageSchema.parse(await window.tbLink.readMa2ExecutorPage({ ...await ma2LayoutConnection(), page }));
-    if (snapshot.page !== page || scope !== currentMa2LayoutScope()) throw new Error('页面来源已变化，本次结果未采用');
+    if (snapshot.page !== page || scope !== currentMa2LayoutScope()) throw new Error('页面已经变了，这次的结果没有采用');
     if (epoch !== mutationEpoch) return snapshot;
     mergePageMetadata(snapshot);
     useMa2ExecutorPageStore.setState(state => ({ pages: { ...state.pages, [page]: snapshot }, pageErrors: { ...state.pageErrors, [page]: '' }, ...(!background && state.requestId === requestId ? { busy: false, requestId: null } : {}) }));
@@ -91,7 +91,7 @@ function mergePageMetadata(snapshot: Ma2ExecutorPage): void {
 export async function updateMa2ExecutorPageItem(page: number, item: Ma2ExecutorPage['items'][number], action: Ma2ExecutorUpdateRequest['action']): Promise<void> {
   const scope = prepareMa2ExecutorPages();
   const before = useDocumentStore.getState();
-  if (useMa2ExecutorPageStore.getState().mutating) throw new Error('正在回读上一次位置修改');
+  if (useMa2ExecutorPageStore.getState().mutating) throw new Error('正在确认上一次的位置修改，请稍候');
   const address = `${page}.${item.slot}`;
   if (action.kind === 'move' && action.page === page && action.slot === item.slot) return;
   if (action.kind === 'delete' && before.project) {
@@ -102,7 +102,7 @@ export async function updateMa2ExecutorPageItem(page: number, item: Ma2ExecutorP
   useMa2ExecutorPageStore.setState({ mutating: true, error: '' });
   try {
     const connection = await ma2LayoutConnection();
-    if (scope !== currentMa2LayoutScope() || useDocumentStore.getState().documentId !== before.documentId) throw new Error('工程或控台已切换，未修改执行器');
+    if (scope !== currentMa2LayoutScope() || useDocumentStore.getState().documentId !== before.documentId) throw new Error('工程或控台已切换，执行器没有修改');
     if (action.kind === 'delete') {
       const project = useDocumentStore.getState().project;
       const uses = project ? ma2ExecutorDeletionUses(project, address) : [];
@@ -112,8 +112,8 @@ export async function updateMa2ExecutorPageItem(page: number, item: Ma2ExecutorP
     const currentScope = currentMa2LayoutScope();
     const refreshed = scope !== currentScope;
     if (useDocumentStore.getState().documentId !== before.documentId || refreshed && executorScopeIdentity(scope) !== executorScopeIdentity(currentScope)) {
-      const written = action.kind === 'move' ? `${address} → ${action.page}.${action.slot}` : action.kind === 'delete' ? `${address} 已解除分配` : `${address} 已重命名为“${action.name}”`;
-      throw new Error(`控台 ${connection.network.host}:${connection.network.port} / ${connection.expectedSource.show} 已写入并回读：${written}；工程或控台已切换，本地结果未应用。请返回原工程与控台，读取对应页面并核对时间线执行器引用；备份：${result.backupFile}`);
+      const written = action.kind === 'move' ? `${address} → ${action.page}.${action.slot}` : action.kind === 'delete' ? `${address} 已清空` : `${address} 已重命名为“${action.name}”`;
+      throw new Error(`已写入控台 ${connection.network.host}:${connection.network.port} / ${connection.expectedSource.show} 并确认：${written}。但工程或控台已经切换，本地没有应用这次结果。请回到原来的工程和控台，读取对应页面，检查时间线里引用的执行器。备份：${result.backupFile}`);
     }
     // A bridge restart does not undo a confirmed native write. Rebase the same
     // document, but never merge snapshots read under the previous generation.
@@ -126,7 +126,7 @@ export async function updateMa2ExecutorPageItem(page: number, item: Ma2ExecutorP
     if (action.kind === 'delete') {
       const project = useDocumentStore.getState().project;
       const uses = project ? ma2ExecutorDeletionUses(project, address) : [];
-      if (uses.length) throw new Error(`控台 ${address} 分配已删除；写入期间新增的执行器动作已保留，请重新指定目标：${uses.join('；')}`);
+      if (uses.length) throw new Error(`控台 ${address} 已清空；写入过程中新加的执行器动作已保留，请重新指定目标：${uses.join('；')}`);
     }
   } catch (cause) {
     if (scope === currentMa2LayoutScope()) useMa2ExecutorPageStore.setState({ error: cause instanceof Error ? cause.message : String(cause) });
@@ -145,12 +145,12 @@ export async function scanMa2ExecutorLocations(): Promise<void> {
     for (const [index, entry] of directory.pages.entries()) {
       if (scope !== currentMa2LayoutScope()) return;
       await loadMa2ExecutorPage(entry.page, true);
-      if (epoch !== mutationEpoch) throw new Error('读取位置期间执行器已有修改，请重新核对全部位置');
+      if (epoch !== mutationEpoch) throw new Error('读取位置时执行器被修改了，请重新读取全部位置');
       useMa2ExecutorPageStore.setState({ completed: index + 1 });
     }
     const verified = await loadMa2ExecutorDirectory();
-    if (epoch !== mutationEpoch) throw new Error('读取位置期间执行器已有修改，请重新核对全部位置');
-    if (JSON.stringify(verified.pages) !== JSON.stringify(directory.pages)) throw new Error('控台页面目录在读取期间改变，请刷新位置');
+    if (epoch !== mutationEpoch) throw new Error('读取位置时执行器被修改了，请重新读取全部位置');
+    if (JSON.stringify(verified.pages) !== JSON.stringify(directory.pages)) throw new Error('读取时控台页面有变化，请刷新位置');
     useMa2ExecutorPageStore.setState({ complete: true });
   } catch (cause) {
     if (scope === currentMa2LayoutScope()) useMa2ExecutorPageStore.setState({ error: cause instanceof Error ? cause.message : String(cause) });

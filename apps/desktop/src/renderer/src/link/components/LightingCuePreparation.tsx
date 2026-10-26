@@ -17,7 +17,7 @@ export function LightingCuePreparation({ document, ingredients, onChange, cueTim
   return <details className="cue-preparation">
     <summary><span>埋步</span><small>{enabled.length ? `提前 ${leadMs / 1000} 秒 · ${enabled.length} 个准备 Cue` : '未启用'}</small></summary>
     <div className="cue-preparation-body">
-      <p>准备 Cue 需在控台保存为灭灯状态。测试埋步请从准备时间之前播放。</p>
+      <p>准备 Cue 需要在控台上存成灭灯状态。测试埋步时，请从准备时间之前开始播放。</p>
       {ingredients.map((entry, index) => {
         const choices = new Map<string, string>();
         for (const binding of document.ma2Bindings ?? []) for (const cue of binding.cueCatalog?.find(value => value.sequence === entry.sequence)?.cues ?? []) choices.set(String(Number(cue.number)), cue.name ?? '');
@@ -41,7 +41,7 @@ function PreparationRow({ entry, index, id, choices, cueTime, disabled, onChange
   const [draft, setDraft] = useState(entry.preparation);
   useEffect(() => { setDraft(entry.preparation); }, [entry.preparation]);
   const issue = !draft ? '' : !/^\d{1,4}(?:\.\d{1,3})?$/.test(draft.cue) || Number(draft.cue) <= 0 || Number(draft.cue) === Number(entry.cue)
-    ? '填写与正式 Cue 不同的准备编号后生效。' : draft.leadMs > cueTime ? '准备时间早于节目开始，请缩短提前时间。' : '';
+    ? '填写一个和正式 Cue 不同的准备编号后生效。' : draft.leadMs > cueTime ? '准备时间早于节目开始，请缩短提前时间。' : '';
   const commit = (value: CueIngredient['preparation']): void => {
     setDraft(value);
     if (value && (!/^\d{1,4}(?:\.\d{1,3})?$/.test(value.cue) || Number(value.cue) <= 0 || Number(value.cue) === Number(entry.cue) || value.leadMs > cueTime)) return;

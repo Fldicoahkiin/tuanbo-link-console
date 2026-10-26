@@ -46,7 +46,7 @@ it('操作后 1 秒内没有出现结束状态：明确报告缺少设备确认�
   const f = fixture(); await f.start();
   f.clock(3, 'paused', 2000);
   const read = f.client.readClock(3, ['playing', 'ended', 'error']);
-  const settled = expect(read).rejects.toThrow('缺少实际设备时钟确认');
+  const settled = expect(read).rejects.toThrow('没有收到声卡的确认');
   await vi.advanceTimersByTimeAsync(1100);
   await settled;
   expect(f.failed).toHaveBeenCalledOnce();

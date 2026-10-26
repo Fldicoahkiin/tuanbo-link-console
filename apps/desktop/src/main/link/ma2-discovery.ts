@@ -52,7 +52,7 @@ export function discoveryTargets(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>
   for (const [name, entries] of Object.entries(interfaces)) for (const entry of entries ?? []) {
     if (entry.family !== 'IPv4' || entry.internal) continue;
     adapters.push(`${name}：${entry.address} / ${entry.netmask}`);
-    if (entry.address.startsWith('169.254.')) warnings.push(`${name} 使用自动分配地址 ${entry.address}，请核对是否与控台 IP 同网段。`);
+    if (entry.address.startsWith('169.254.')) warnings.push(`${name} 使用自动分配地址 ${entry.address}，请确认它和控台 IP 在同一网段。`);
     const ipv4 = (text: string): number => text.split('.').reduce((value, part) => value * 256 + Number(part), 0);
     const ip = ipv4(entry.address); const mask = ipv4(entry.netmask);
     const size = 0x100000000 - mask;

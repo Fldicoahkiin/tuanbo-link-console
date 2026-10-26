@@ -28,7 +28,7 @@ it('removes confirmed deletions even if the final directory refresh fails and bl
   const next=applyMa2CueDeletionCommand(source.endpoint,result).execute(project);
   expect(next.ma2MaterialLibrary?.library?.sourceUnverified).toBe(true);
   expect(next.ma2MaterialLibrary?.library?.sequences[0]?.cues.map(cue=>cue.number)).toEqual(['2.000']);
-  expect(next.ma2MaterialLibrary?.library?.errors[0]?.message).toContain('回读失败');
+  expect(next.ma2MaterialLibrary?.library?.errors[0]?.message).toContain('重新读取控台失败');
 });
 it('preserves unconfirmed objects but invalidates playback after an uncertain deletion',()=>{
   const {project}=fixture();

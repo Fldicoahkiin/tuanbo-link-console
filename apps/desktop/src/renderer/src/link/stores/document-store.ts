@@ -104,12 +104,12 @@ const documentState: StateCreator<DocumentStoreState> = (set, get) => {
       ? state
       : { path, savedStateId: stateId, dirty: state.stateId !== stateId, upgradeBackupPending: false, consoleSynced: false, error: null }),
     markConsoleSynced: (documentId) => {
-      if (get().documentId !== documentId) throw new Error('当前工程已切换，控台同步结果不属于当前工程');
+      if (get().documentId !== documentId) throw new Error('工程已切换，这次控台同步的结果属于之前的工程，没有应用');
       set({ consoleSynced: true });
     },
     execute: (command) => {
       const state = get();
-      if (!state.project) throw new Error('尚未打开工程');
+      if (!state.project) throw new Error('还没打开工程');
       try {
         const prepared = withMa2PairingValidation(withInitialVisualLayers(command));
         const next = shareProjectStructure(state.project, prepared.execute(state.project));
@@ -141,7 +141,7 @@ const documentState: StateCreator<DocumentStoreState> = (set, get) => {
     },
     executeForDocument: (documentId, command) => {
       const state = get();
-      if (state.documentId !== documentId) throw new Error('当前工程已切换，已取消上一工程尚未完成的修改');
+      if (state.documentId !== documentId) throw new Error('工程已切换，上一个工程还没完成的修改已取消');
       state.execute(command);
     },
     undo: () => {
@@ -202,6 +202,6 @@ export const selectCanRedo = (state: DocumentStoreState): boolean => state.futur
 
 export function assertDocumentSession(documentId: number): DocumentStoreState {
   const state = useDocumentStore.getState();
-  if (state.documentId !== documentId) throw new Error('当前工程已切换，已取消上一工程尚未完成的操作');
+  if (state.documentId !== documentId) throw new Error('工程已切换，上一个工程还没完成的操作已取消');
   return state;
 }

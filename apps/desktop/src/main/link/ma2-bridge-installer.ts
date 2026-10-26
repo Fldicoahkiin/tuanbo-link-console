@@ -13,7 +13,7 @@ export async function ensureMa2NetworkBridge(connection: Pick<Ma2Telnet, 'comman
   };
   const current = await call(`local r='missing';if type(TBLINK_NET)=='function' then if TBLINK_BRIDGE_SOURCE=='${digest}' and TBLINK_BRIDGE_READY==true then r='ready' elseif type(TBLINK_BRIDGE_SOURCE)=='string' and #TBLINK_BRIDGE_SOURCE==64 and TBLINK_BRIDGE_SOURCE:gsub('[a-f0-9]','')=='' then r='replace:'..TBLINK_BRIDGE_SOURCE else r='foreign' end end`);
   if (current === 'ready') return;
-  if (current === 'foreign') throw new Error('控台连接接口由未识别的插件占用，未覆盖该插件；请核对联动组件来源');
+  if (current === 'foreign') throw new Error('控台的连接接口被一个不认识的插件占用了，联动台没有覆盖它，请检查控台上的插件');
   const previousSource = /^replace:([a-f0-9]{64})$/.exec(current)?.[1];
   if (current !== 'missing' && !previousSource) throw new Error('控台连接组件状态无法识别');
   const id = randomBytes(16).toString('hex');
@@ -21,7 +21,7 @@ export async function ensureMa2NetworkBridge(connection: Pick<Ma2Telnet, 'comman
     const token = randomBytes(16).toString('hex');
     const prefix = `TBLINK_RPC_${token}:`;
     const value = await connection.command(`Lua "TBLINK_NET('${token}','${action}','${id}'${args})"`, text => ma2ResponseLine(text, prefix));
-    if (value.startsWith('ERR:')) throw new Error(`控台连接组件暂未空闲：${Buffer.from(value.slice(4), 'hex').toString('utf8')}；本地编辑仍可继续`);
+    if (value.startsWith('ERR:')) throw new Error(`控台连接组件正忙：${Buffer.from(value.slice(4), 'hex').toString('utf8')}；本地可以继续编辑`);
     return value;
   };
   let acquired = false; let installed = false; let prepared = false;
@@ -41,7 +41,7 @@ export async function ensureMa2NetworkBridge(connection: Pick<Ma2Telnet, 'comman
       const index = offset / 128 + 1;
       const encoded = chunk.toString('hex');
       const reply = await call(`local b=TBLINK_BOOTSTRAP;local r='invalid';if b and b.id=='${id}' and #b.parts==${index - 1} and b.size==${offset} then local h='${encoded}';local s=h:gsub('..',function(x)return string.char(tonumber(x,16))end);b.parts[${index}]=s;b.size=b.size+#s;b.expires=gma.gettime()+120;r=(s:gsub('.',function(x)return string.format('%02x',string.byte(x))end)) end`);
-      if (reply !== encoded) throw new Error('控台连接组件传输不完整，已停止连接');
+      if (reply !== encoded) throw new Error('控台连接组件没有传完，已停止连接');
       if (acquired && index % 32 === 0 && !(await rpc('read', ',0')).startsWith('DATA:')) throw new Error('控台连接组件升级占用已失效');
     }
     if (previousSource) {
@@ -54,7 +54,7 @@ export async function ensureMa2NetworkBridge(connection: Pick<Ma2Telnet, 'comman
     const ready = previousSource
       ? await runMa2GuardedLua(connection, `local b=assert(TBLINK_BOOTSTRAP);assert(b.id=='${id}' and TBLINK_NET==b.previous.net and TBLINK_BRIDGE_GENERATION=='upgrade_${id}','Bridge changed during upgrade');local ok,start=pcall(b.factory);local started=false;if ok and type(start)=='function' then started=pcall(start,'network') end;if started and TBLINK_BRIDGE_READY then TBLINK_BRIDGE_SOURCE='${digest}';TBLINK_BOOTSTRAP=nil;return 'ready' end;TBLINK_NET=b.previous.net;TBLINK_EXEC_INPUT=b.previous.input;TBLINK_EXEC_RELEASE_ALL=b.previous.release;TBLINK_BRIDGE_SOURCE=b.previous.source;TBLINK_BRIDGE_GENERATION=b.previous.generation;TBLINK_BRIDGE_READY=b.previous.ready;error('New bridge did not start; previous bridge retained')`, () => undefined)
       : await call(`local b=TBLINK_BOOTSTRAP;local r='invalid';if b and b.id=='${id}' and b.size==${bytes.length} and type(TBLINK_NET)~='function' then local f=load(table.concat(b.parts),'tblink_bridge','t');if f then local ok,start=pcall(f);if ok and type(start)=='function' then local started=pcall(start,'network');if started and TBLINK_BRIDGE_READY then TBLINK_BRIDGE_SOURCE='${digest}';TBLINK_BOOTSTRAP=nil;r='ready' end end end end`);
-    if (ready !== 'ready') throw new Error('控台无法启动内置连接组件，请导出诊断信息');
+    if (ready !== 'ready') throw new Error('控台无法启动联动台的连接组件，请导出诊断包发给售后');
     installed = true;
   } catch (error) {
     const failures: string[] = [];
@@ -67,6 +67,6 @@ export async function ensureMa2NetworkBridge(connection: Pick<Ma2Telnet, 'comman
       try { if (await rpc('release') !== 'ACK') throw new Error('旧组件占用未释放'); }
       catch (cleanup) { failures.push(String(cleanup)); }
     }
-    throw new Error(`${error instanceof Error ? error.message : String(error)}${failures.length ? `；组件恢复待核对：${failures.join('；')}` : ''}`, { cause: error });
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${failures.length ? `；组件恢复情况需要确认：${failures.join('；')}` : ''}`, { cause: error });
   }
 }

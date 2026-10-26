@@ -17,7 +17,7 @@ export function snapshotMa2LightingBinding(document: LightingDocument, bindingId
       // Imported track titles describe the referenced executor; local lane labels do not rename it.
       objects.push({ id: track.id, kind: 'track', parentId: root.id, order, properties: { name: local ? nativeTrackNames.get(track.id) ?? track.name : track.name, muted: String(track.muted) } });
       for (const clip of track.clips) for (const event of clip.events) {
-        if (event.kind !== 'ma2' && event.kind !== 'ma2-fader') throw new Error(`MA2 绑定轨道“${track.name}”包含尚未映射的 ${event.kind} 事件`);
+        if (event.kind !== 'ma2' && event.kind !== 'ma2-fader') throw new Error(`MA2 绑定轨道“${track.name}”里有还不支持的 ${event.kind} 事件`);
         objects.push({ id: event.id, kind: 'event', parentId: track.id, order: 0,
           properties: ma2EventSnapshotProperties(event, lightingEventTime(clip, event, map), clip.muted, local ? nativeNames.get(event.id) ?? '' : event.label) });
       }
@@ -33,9 +33,9 @@ export function snapshotMa2LightingBinding(document: LightingDocument, bindingId
 export function ma2EventSnapshotProperties(event: LightingEvent, time: number, muted: boolean, nativeName: string): Ma2SyncObject['properties'] {
   const common = { time: String(time), muted: String(muted) };
   if (event.kind === 'ma2-fader') return { ...common, executor: event.executor, action: 'master', fader: event.fader, level: String(event.level), name: '主推杆' };
-  if (event.kind !== 'ma2') throw new Error(`MA2 绑定轨道包含尚未映射的 ${event.kind} 事件`);
-  if (event.runMode === 'independent') throw new Error('单独运行请使用软件网络或 MIDI 直控播放；暂不支持写入控台 Timecode');
-  if (event.preparation) throw new Error('包含埋步的 Cue 请使用软件网络或 MIDI 直控播放；暂不支持写入控台 Timecode');
+  if (event.kind !== 'ma2') throw new Error(`MA2 绑定轨道里有还不支持的 ${event.kind} 事件`);
+  if (event.runMode === 'independent') throw new Error('单独运行请用联动台的网络或 MIDI 直控播放，暂不支持写入控台 Timecode');
+  if (event.preparation) throw new Error('带埋步的 Cue 请用联动台的网络或 MIDI 直控播放，暂不支持写入控台 Timecode');
   return { ...common, executor: event.executor, action: event.action,
     cue: event.action === 'goto' ? event.cue ?? '' : '', sequence: event.action === 'goto' ? String(event.sequence) : '',
     name: event.action === 'goto' ? nativeName : event.action === 'go' ? '下一步' : '关闭执行器' };

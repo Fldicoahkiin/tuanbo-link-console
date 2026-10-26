@@ -30,7 +30,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     verifiedSource = ''; nextSourceCheck = 0;
     for (const song of Object.values(useMa2SongSyncStore.getState().songs)) if (song.documentId !== state.documentId) stopMa2SongSync(song.itemId);
     useMa2SongSyncStore.setState(value => ({ songs: Object.fromEntries(Object.entries(value.songs).filter(([, song]) => song.documentId === state.documentId)) }));
-    useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '实时同步已开启，等待控台连接与工程' });
+    useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '实时同步已开启，等待连接控台和打开工程' });
   }
   if (!useMa2RealtimePreference.getState().enabled) {
     pauseMa2RealtimeSession();
@@ -49,16 +49,16 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     const status = await window.tbLink.getMa2NetworkStatus();
     if (status.state !== 'connected' || !status.settings) {
       blockedContext = ''; verifiedSource = ''; nextSourceCheck = 0;
-      if (useMa2AutoSyncStore.getState().request || useMa2AutoSyncStore.getState().status === 'blocked') useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '等待控台连接；本地编辑和保存仍可使用' });
+      if (useMa2AutoSyncStore.getState().request || useMa2AutoSyncStore.getState().status === 'blocked') useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '等待控台连接，可以继续编辑和保存' });
       useMa2SongSyncStore.setState(value => ({ songs: Object.fromEntries(Object.entries(value.songs).map(([key, song]) => [key,
         song.documentId === state.documentId && song.state !== 'paused'
-          ? { ...song, state: 'pending' as const, waitingForConnection: true, checking: false, nextCheckAt: Date.now() + 1000, message: '等待控台连接；可以继续编辑，连接恢复后核对并续传' }
+          ? { ...song, state: 'pending' as const, waitingForConnection: true, checking: false, nextCheckAt: Date.now() + 1000, message: '等待控台连接，可以继续编辑，连上后会接着同步' }
           : song])) }));
       return false;
     }
     const { host, port, monitorPort, username } = status.settings;
     context = JSON.stringify([state.documentId, state.revision, material.source, material.library.directory.show, material.library.directory.generation, material.library.directory.version, host, port]);
-    if (material.source !== `${host}:${port}`) throw new Error('当前控台与工程素材来源不同，请读取当前控台后再同步');
+    if (material.source !== `${host}:${port}`) throw new Error('当前控台和工程里的素材不是同一来源，请先读取当前控台再同步');
     if (!current()) return false;
     const connection = { dataDirectory: '', network: { host, port, monitorPort, username } };
     const sourceKey = JSON.stringify([state.documentId, material.source, material.library.directory.show, material.library.directory.generation, material.library.directory.version]);
@@ -73,8 +73,8 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       if (!cache?.library || cache.source !== material.source || cache.library.directory.show !== material.library.directory.show
         || cache.library.directory.generation !== material.library.directory.generation || cache.library.directory.version !== material.library.directory.version) return false;
       const directory = metadata.directory;
-      if (metadata.sourceUnverified || metadata.incomplete) throw new Error('控台目录尚未核对完成；本地修改保留，稍后重新读取');
-      if (directory.show !== cache.library.directory.show || directory.version !== cache.library.directory.version) throw new Error('控台 Show 或版本已变化，原工程修改已保留，请读取当前控台后核对');
+      if (metadata.sourceUnverified || metadata.incomplete) throw new Error('控台还没读完，本地修改已保留，请稍后重新读取');
+      if (directory.show !== cache.library.directory.show || directory.version !== cache.library.directory.version) throw new Error('控台的 Show 或版本变了，工程里的修改已保留，请读取当前控台后确认');
       if (directory.generation !== cache.library.directory.generation) {
         const exists = (sequence: number): boolean => directory.entries.some(entry => entry.target === sequence);
         // Keep cached fixture data explicitly at its original readAt. This
@@ -87,7 +87,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
           ...(cache.library.cueAttributes ? { cueAttributes: cache.library.cueAttributes.filter(entry => exists(entry.sequence)) } : {}),
           errors: cache.library.errors.filter(entry => exists(entry.sequence))
         }));
-        useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '控台会话已重新核对，正在续接原位置' });
+        useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '已重新连上控台，正在从原来的位置继续' });
         for (const song of Object.values(useMa2SongSyncStore.getState().songs)) {
           if (song.documentId !== state.documentId || song.requestId || song.state === 'paused') continue;
           useMa2SongSyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, nextCheckAt: 0, consecutiveFailures: 0 } } }));
@@ -116,13 +116,13 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       // The whole check succeeded: lift a block this session raised earlier, never Ma2AutoSync's own.
       if (sessionBlocked) {
         sessionBlocked = false; blockedContext = '';
-        if (automatic.status === 'blocked' && !automatic.request) useMa2AutoSyncStore.setState({ status: 'waiting', message: '控台已重新核对，继续同步' });
+        if (automatic.status === 'blocked' && !automatic.request) useMa2AutoSyncStore.setState({ status: 'waiting', message: '已重新连上控台，继续同步' });
       }
       return true;
     }
     const catalog = await window.tbLink.readMa2Catalog({ ...connection, targets: [] });
     const source = project.ma2MaterialLibrary!.library!.directory;
-    if (catalog.directory.show !== source.show || catalog.directory.generation !== source.generation || catalog.directory.version !== source.version) throw new Error('控台 Show 或会话已变化，请刷新素材后核对');
+    if (catalog.directory.show !== source.show || catalog.directory.generation !== source.generation || catalog.directory.version !== source.version) throw new Error('控台的 Show 或连接变了，请刷新素材后确认');
     if (!current()) return false;
     blockedContext = context; sessionBlocked = false;
     useMa2AutoSyncStore.setState({ request: { connection, catalog, scope: hasBindings ? 'bound' : 'names' } });
@@ -168,7 +168,7 @@ async function allocateMtcStarts(network: Parameters<typeof window.tbLink.ma2Tim
 
 export function retryMa2RealtimeSession(): void {
   setMa2RealtimeEnabled(true);
-  useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '正在重新核对控台' });
+  useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '正在重新检查控台' });
   for (const song of Object.values(useMa2SongSyncStore.getState().songs)) {
     if (song.state !== 'blocked' && song.state !== 'paused') continue;
     if (song.requestId) continue;
@@ -186,7 +186,7 @@ export function retryMa2RealtimeSession(): void {
  */
 export function refreshMa2RealtimeSession(itemId?: string): void {
   setMa2RealtimeEnabled(true);
-  useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '正在重新核对控台' });
+  useMa2AutoSyncStore.setState({ request: null, status: 'waiting', message: '正在重新检查控台' });
   const project = useDocumentStore.getState().project;
   for (const song of Object.values(useMa2SongSyncStore.getState().songs)) {
     if (song.requestId || itemId !== undefined && song.itemId !== itemId) continue;
@@ -194,7 +194,7 @@ export function refreshMa2RealtimeSession(itemId?: string): void {
     if (!project || !item) continue;
     if (song.state === 'paused') { startMa2SongSync(item.id, item.lighting?.consoleSong?.name ?? song.name, ma2SongSyncSettings(project, item.id)); continue; }
     // Dropping the confirmed revision turns the next pass into a full read; the acknowledged content stays, so no extra archive is taken.
-    useMa2SongSyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, state: 'pending', nextCheckAt: 0, consecutiveFailures: 0, remoteRevision: undefined, blockedRevision: undefined, message: '正在重新核对控台' } } }));
+    useMa2SongSyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, state: 'pending', nextCheckAt: 0, consecutiveFailures: 0, remoteRevision: undefined, blockedRevision: undefined, message: '正在重新检查控台' } } }));
   }
   void prepareMa2RealtimeSession();
 }

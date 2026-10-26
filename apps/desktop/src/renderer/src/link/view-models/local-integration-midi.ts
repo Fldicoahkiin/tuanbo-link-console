@@ -12,7 +12,7 @@ export function applyDetectedLightingMidiPorts(profile: IntegrationProfile, port
     const configured = portName(profile, id);
     const candidates = configured ? outputs.filter(port => port.name === configured) : preferred ? outputs.filter(port => port.name === preferred) : outputs;
     if (candidates.length !== 1) {
-      issues.push(`${label}：${configured ? `已配置端口 ${configured} 不可用或名称重复` : outputs.length ? `检测到多个输出（${outputs.map(port => port.name).join('、')}），请在音频与 MIDI 选择控台端口` : '未检测到可用 MIDI 输出，请检查 USB-MIDI 接口和驱动'}`);
+      issues.push(`${label}：${configured ? `设置的端口 ${configured} 不可用，或有重名端口` : outputs.length ? `找到多个输出端口（${outputs.map(port => port.name).join('、')}），请在“音频与 MIDI”里选择接控台的端口` : '找不到可用的 MIDI 输出，请检查 USB-MIDI 接口和驱动'}`);
       continue;
     }
     next = updatePortProfile(next, id, 'output', candidates[0]!.name);
@@ -29,9 +29,9 @@ export function internalMidiConnectionIssues(profile: IntegrationProfile, ports:
   ] as const) {
     if (!id) continue;
     const configured = profile.midiPortProfiles.find(port => port.id === id && port.direction === direction);
-    if (!configured?.portName) { issues.push(`${label}：端口配置缺失，请在音频与 MIDI 中重新选择`); continue; }
+    if (!configured?.portName) { issues.push(`${label}：没有设置端口，请在“音频与 MIDI”里重新选择`); continue; }
     const matches = ports.filter(port => port.direction === direction && port.name === configured.portName && port.state === 'connected');
-    if (matches.length !== 1) issues.push(`${label}：${configured.portName} ${matches.length === 0 ? '未检测到' : '名称重复'}，请在音频与 MIDI 中刷新并核对端口`);
+    if (matches.length !== 1) issues.push(`${label}：${configured.portName} ${matches.length === 0 ? '找不到' : '有重名'}，请在“音频与 MIDI”里刷新并检查端口`);
   }
   return issues;
 }
@@ -75,13 +75,13 @@ export function applyDetectedP1MidiPorts(
   const configuredInputName = portName(next, 'p1-mtc');
   const inputMatch = resolveConfiguredOrNamedP1Port(next, ports, 'p1-mtc', 'input');
   if (inputMatch) next = updatePortProfile(next, 'p1-mtc', 'input', inputMatch.name);
-  else if (configuredInputName !== '') issues.push(`P1：已配置的 MTC 输入端口当前不可用：${configuredInputName}`);
-  else issues.push('P1：未检测到可用的 MTC 输入端口；请建立已验证的输入链路，P1 对软件环回仍显示“未发送”时需使用物理 USB-MIDI OUT→IN');
+  else if (configuredInputName !== '') issues.push(`P1：设置的 MTC 输入端口现在不可用：${configuredInputName}`);
+  else issues.push('P1：找不到可用的 MTC 输入端口。请先接好输入；如果用软件环回时 P1 仍显示“未发送”，需要用实体 USB-MIDI 的 OUT 接到 IN');
 
   const configuredOutputName = portName(next, 'p1-output');
   const outputMatch = resolveConfiguredOrNamedP1Port(next, ports, 'p1-output', 'output');
   if (outputMatch) next = updatePortProfile(next, 'p1-output', 'output', outputMatch.name);
-  else if (configuredOutputName !== '') issues.push(`P1：已配置的控制输出端口当前不可用：${configuredOutputName}`);
+  else if (configuredOutputName !== '') issues.push(`P1：设置的控制输出端口现在不可用：${configuredOutputName}`);
 
   return { profile: next, issues };
 }

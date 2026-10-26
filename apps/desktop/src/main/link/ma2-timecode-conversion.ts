@@ -20,7 +20,7 @@ export function convertMa2Timecode(xml: string, sequenceXml: readonly string[], 
 /** Native object metadata carries the exact Cue index/number mapping without fixture values. */
 export function convertMa2TimecodeReferences(xml: string, sequences: readonly Ma2SequenceReport[], target: number, timeOriginMs = 0): Ma2TimecodeConversion {
   const report = inspectMa2TimecodeXml(xml);
-  if (!['3.3.4', '3.7.0'].includes(report.version)) throw new Error('该 MA2 Timecode XML 版本尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(report.version)) throw new Error('这个 MA2 Timecode XML 版本还没验证过');
   if (!Number.isSafeInteger(target) || target < 1) throw new Error('Timecode 编号无效');
   const timecode = report.timecodes.find((entry) => entry.index === target - 1);
   if (!timecode) throw new Error('XML 中没有绑定的 Timecode');
@@ -42,7 +42,7 @@ export function convertMa2TimecodeReferences(xml: string, sequences: readonly Ma
       try {
         if (!executor) throw new Error('执行器引用缺失或结构未验证');
         if (subtrack.attributes.fader_command !== undefined || event.attributes.fader_level !== undefined) {
-          if (report.version !== '3.3.4' || subtrack.attributes.fader_command !== 'Master') throw new Error('该原生推杆类型或版本尚未验证');
+          if (report.version !== '3.3.4' || subtrack.attributes.fader_command !== 'Master') throw new Error('该原生推杆类型或版本还没验证过');
           if (Object.keys(subtrack.attributes).some((name) => !['index', 'fader_command'].includes(name)) || Object.keys(event.attributes).some((name) => !['index', 'time', 'fader_level'].includes(name)) || event.cueAddress.length || event.cueName !== null) throw new Error('推杆点包含未验证参数，保留原始 XML');
           const rawLevel = event.attributes.fader_level;
           const rawTime = event.attributes.time ?? '0';
@@ -52,7 +52,7 @@ export function convertMa2TimecodeReferences(xml: string, sequences: readonly Ma
           result.mappings.push({ eventId: id, trackId, clipId, path: event.path, sequence: null, cueIndex: null, executor, action: 'master' });
           continue;
         }
-        if (!['Goto', 'Go', 'Off'].includes(event.attributes.command ?? '') || event.attributes.pressed !== 'true') throw new Error('该动作或按键释放事件尚未完成转换验证');
+        if (!['Goto', 'Go', 'Off'].includes(event.attributes.command ?? '') || event.attributes.pressed !== 'true') throw new Error('该动作或按键释放事件还没完成转换验证');
         if (Object.keys(event.attributes).some((name) => !['index', 'time', 'command', 'pressed', 'step'].includes(name))) throw new Error('事件含额外动作参数，保留原始 XML 等待转换');
         const rawTime = event.attributes.time ?? '0';
         if (!/^\d+(?:\.\d+)?$/.test(rawTime) || !Number.isFinite(Number(rawTime))) throw new Error('事件时间无效');
@@ -90,7 +90,7 @@ export function convertMa2TimecodeReferences(xml: string, sequences: readonly Ma
     clip.duration += offsetMs;
   }
   const nativeTimes = timecode.tracks.flatMap(track => track.subtracks.flatMap(subtrack => subtrack.events.map(event => event.attributes.time ?? '0')));
-  if (nativeTimes.some(time => !/^\d+(?:\.\d+)?$/.test(time) || !Number.isFinite(Number(time)))) throw new Error('原生事件时间无效，保留原文但不能确认歌曲位置');
+  if (nativeTimes.some(time => !/^\d+(?:\.\d+)?$/.test(time) || !Number.isFinite(Number(time)))) throw new Error('控台事件的时间无效，原样保留，但无法确认它在歌曲里的位置');
   result.timing = { frameFormat: '30 FPS', unit: 'frames-30', offsetNative: rawOffset, absoluteEventTimesMs: nativeTimes.map(time => (Number(time) + Number(rawOffset)) * 1000 / 30) };
   return withMa2TimeOrigin(ma2TimecodePreviewSchema.parse(result), timeOriginMs);
 }

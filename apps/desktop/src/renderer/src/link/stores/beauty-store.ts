@@ -24,7 +24,7 @@ export const useBeautyStore = create<State>((set, get) => ({
     try {
       const content = localStorage.getItem(STORAGE_KEY);
       set({ library: content ? beautyLibrarySchema.parse(JSON.parse(content)) : initial(), loaded: true, saved: Boolean(content) });
-    } catch (error) { set({ loaded: true, error: `读取美颜预设失败，原存储未覆盖：${String(error)}` }); }
+    } catch (error) { set({ loaded: true, error: `读取美颜预设失败，原有预设没有被覆盖：${String(error)}` }); }
   },
   begin: () => { if (!get().gesture) set({ gesture: get().library.values }); },
   end: () => {
@@ -70,7 +70,7 @@ export const useBeautyStore = create<State>((set, get) => ({
       if (content.length > 128_000) throw new Error('文件超过 128 KB');
       const library = beautyLibrarySchema.parse(JSON.parse(content));
       get().end(); set({ library, past: [], future: [], error: null, saved: false });
-    } catch (error) { set({ error: `导入失败，当前参数未改变：${String(error)}` }); }
+    } catch (error) { set({ error: `导入失败，当前参数没有变：${String(error)}` }); }
   },
   clearError: () => set({ error: null })
 }));

@@ -75,7 +75,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
     try {
       await updateMa2ExecutorPageItem(selection.page, selection.item, action);
       setEditing(null); setMenu(null);
-      setNotice(action.kind === 'move' ? `已回读：${selection.page}.${selection.item.slot} → ${action.page}.${action.slot}` : action.kind === 'delete' ? `已解除 ${selection.page}.${selection.item.slot} 的执行器分配，序列保留` : '名称已在控台回读确认');
+      setNotice(action.kind === 'move' ? `已移动：${selection.page}.${selection.item.slot} → ${action.page}.${action.slot}（已在控台确认）` : action.kind === 'delete' ? `已清空 ${selection.page}.${selection.item.slot} 的执行器，序列仍保留` : '名称已写入控台');
     } catch (cause) { report(cause); }
   };
   const edit = (kind: 'rename' | 'move' | 'delete'): void => {
@@ -88,7 +88,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
       {typeControl}
       <Ma2MaterialMenu label="页面选项" trigger={<MoreHorizontal/>} open={optionsOpen} onOpenChange={setOptionsOpen}>
         <button onClick={() => { setOptionsOpen(false); refresh(); }}><RefreshCw/>刷新控台页面</button>
-        <label className="ma2-page-live-option"><input aria-label="实时回读执行器页面" type="checkbox" checked={live} onChange={event => setLive(event.target.checked)}/>实时回读页面</label>
+        <label className="ma2-page-live-option"><input aria-label="实时同步执行器页面" type="checkbox" checked={live} onChange={event => setLive(event.target.checked)}/>实时同步页面</label>
       </Ma2MaterialMenu>
       {selected ? <button aria-label="返回页面" title="返回页面" onClick={onBack}><ArrowLeft/></button> : null}
       {onSettings ? <button aria-label="新建 Cue" title="新建 Cue" onClick={onSettings}><Plus/></button> : null}
@@ -111,7 +111,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
             </select> : <span className="ma2-executor-band-caption">({start}…{end})</span>}
             <span className="ma2-executor-band-name" title={snapshot?.name}>{snapshot?.name}</span>
             <button aria-label={`${band.input}目录`} title="选择页面" onClick={() => setPicker(picker === band.id ? null : band.id)}><List/></button>
-            {error ? <button className="ma2-executor-read-state" title={error} onClick={refresh}>待回读</button> : !snapshot ? <small role="status">读取中…</small> : null}
+            {error ? <button className="ma2-executor-read-state" title={error} onClick={refresh}>等待控台确认</button> : !snapshot ? <small role="status">读取中…</small> : null}
           </header>
           <div className="ma2-executor-grid" aria-label={`${band.input} ${page ?? ''}`} data-stale={Boolean(error)}>
             {Array.from({ length: end - start + 1 }, (_, index) => start + index).map(slot => {
@@ -171,9 +171,9 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
       <p>{editing.selection.page} 页 · {editing.selection.item.slot} 格 · {editing.selection.item.name}</p>
       {editing.kind === 'rename' ? <label>执行器名称<input aria-label="执行器名称" autoFocus maxLength={512} value={name} onChange={event => setName(event.target.value)}/><Ma2ConsoleName name={name}/></label> : editing.kind === 'move' ? <div className="ma2-executor-destination"><label>目标页码<input aria-label="目标页码" type="number" min={1} max={9999} value={targetPage} onChange={event => setTargetPage(event.target.value)}/></label><label>目标格子<input aria-label="目标格子" type="number" min={1} max={240} value={targetSlot} onChange={event => setTargetSlot(event.target.value)}/></label></div> : <p>删除这个格子的执行器分配，保留 Sequence {editing.selection.item.sequence ?? ''} 及其全部 Cue。</p>}
       {notice ? <p role="alert">{notice}</p> : null}
-      <footer><button type="button" onClick={() => setEditing(null)}>取消</button><button disabled={state.mutating || editing.kind === 'rename' && !name.trim()}>{state.mutating ? '正在回读…' : editing.kind === 'rename' ? '保存名称' : editing.kind === 'move' ? '确认移动' : '删除执行器'}</button></footer>
+      <footer><button type="button" onClick={() => setEditing(null)}>取消</button><button disabled={state.mutating || editing.kind === 'rename' && !name.trim()}>{state.mutating ? '正在确认…' : editing.kind === 'rename' ? '保存名称' : editing.kind === 'move' ? '确认移动' : '删除执行器'}</button></footer>
     </form></div>, window.document.body) : null}
-    {progressHost ? createPortal(<div className="ma2-page-index-progress"><button disabled={state.scanning} onClick={() => { setNotice(''); void scanMa2ExecutorLocations().catch(report); }}>{state.scanning ? `读取 Cue 位置 ${state.completed}/${state.total || '…'} 页` : '读取全部 Cue 位置'}</button>{state.scanning && state.total ? <progress aria-label="控台页面读取进度" max={state.total} value={state.completed}/> : null}{state.complete ? <small>全部 {state.completed} 页位置已读取</small> : null}{state.mutating ? <small role="status">写入后正在回读确认…</small> : notice ? <small role="status">{notice}</small> : null}</div>, progressHost) : null}
+    {progressHost ? createPortal(<div className="ma2-page-index-progress"><button disabled={state.scanning} onClick={() => { setNotice(''); void scanMa2ExecutorLocations().catch(report); }}>{state.scanning ? `读取 Cue 位置 ${state.completed}/${state.total || '…'} 页` : '读取全部 Cue 位置'}</button>{state.scanning && state.total ? <progress aria-label="控台页面读取进度" max={state.total} value={state.completed}/> : null}{state.complete ? <small>全部 {state.completed} 页位置已读取</small> : null}{state.mutating ? <small role="status">已写入，正在向控台确认…</small> : notice ? <small role="status">{notice}</small> : null}</div>, progressHost) : null}
   </section>;
 }
 

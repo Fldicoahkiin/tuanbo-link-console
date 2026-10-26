@@ -15,7 +15,7 @@ it('停止缺失目标仍发送精确 Off 并等待关联回执，不被存在�
   await expect(playMa2Cue({ command: () => Promise.reject(new Error('连接中断')) },
     { target: 'sequence', sequence: 19, action: 'off' }, guard, 'stop')).rejects.toThrow('连接中断');
   await expect(playMa2Cue({ command: () => Promise.resolve('UNKNOWN') },
-    { target: 'sequence', sequence: 19, action: 'off' }, guard, 'stop')).rejects.toThrow('未确认');
+    { target: 'sequence', sequence: 19, action: 'off' }, guard, 'stop')).rejects.toThrow('没有确认');
 });
 
 it('序列池直接调用序列和小数 Cue，不制造执行器地址', () => {
@@ -40,5 +40,5 @@ it('发送前验证会话，只接受关联回执，对象不存在明确失败'
   await playMa2Cue({ command }, action, beforeSend);
   expect(beforeSend).toHaveBeenCalledOnce();
   await expect(playMa2Cue({ command }, action, () => { throw new Error('已取消'); })).rejects.toThrow('已取消');
-  await expect(playMa2Cue({ command: () => Promise.resolve('MISSING') }, action, beforeSend)).rejects.toThrow('没有找到');
+  await expect(playMa2Cue({ command: () => Promise.resolve('MISSING') }, action, beforeSend)).rejects.toThrow('找不到');
 });

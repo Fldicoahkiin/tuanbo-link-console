@@ -15,7 +15,7 @@ export class ProjectWriteQueue {
   enqueue(path: string, project: LinkProject, backupOriginal = false): Promise<void> {
     const absolute = resolve(path), key = process.platform === 'win32' ? absolute.toLowerCase() : absolute;
     const active = this.queues.get(key);
-    if ((active?.waiters ?? 0) >= 256 || (!active && this.queues.size >= 64)) return Promise.reject(new Error('工程保存队列已满，当前修改尚未保存'));
+    if ((active?.waiters ?? 0) >= 256 || (!active && this.queues.size >= 64)) return Promise.reject(new Error('保存排队已满，当前修改还没保存'));
     return new Promise((resolve, reject) => {
       const waiter = { resolve, reject };
       if (active) {

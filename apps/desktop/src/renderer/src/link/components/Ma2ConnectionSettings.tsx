@@ -68,16 +68,16 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
         <button disabled={disabled || busy} onClick={() => void chooseDirectory('detect')}><ScanSearch />一键识别</button>
         <button disabled={disabled || busy} onClick={() => void chooseDirectory('pick')} aria-label="选择本机 onPC 数据目录"><FolderOpen />浏览</button>
       </div></label>
-      <p className="settings-note settings-field-help">此方式通过文件插件通信。数据目录必须与当前运行的 onPC 版本一致，并在 onPC 中运行联动插件。也可切换到网络直连，填写 127.0.0.1。</p>
+      <p className="settings-note settings-field-help">这种方式通过文件和插件通信：数据目录要和正在运行的 onPC 版本一致，并在 onPC 里运行联动插件。也可以改用网络直连，地址填 127.0.0.1。</p>
       {local.error ? <p className="device-error" role="alert">{local.error}</p> : null}
       <Button className="secondary-button" disabled={disabled || busy} onClick={() => void setMethod('network')}>改用本机网络直连</Button>
       <div className="device-actions"><Button className="primary-button" disabled={disabled || busy} onClick={() => void connectLocal()}>连接本机 onPC</Button></div>
     </> : null}
     {networkVisited.current ? <div hidden={method !== 'network'}><Ma2NetworkSettings onConnected={setNetworkConnected} onBusy={setNetworkBusy} disabled={disabled || method !== 'network'} notify={notify} maintenanceHost={method === 'network' ? maintenanceHost : null} onMaintenance={onMaintenance} /></div> : null}
-    {method === 'midi' ? <SettingsDisclosure title="MIDI 连接说明" description="控台接收设置与 P1 歌曲导入"><p className="settings-note">在“音频与 MIDI”选择灯光时间码输出，并在控台选择对应时间码输入。需要触发 Cue 时，选择“灯光动作输出”，并在控台启用 MSC MIDI 接收。</p><p className="settings-note">仅 MIDI 不需要 IP、登录账号或联动插件。端口可用只表示电脑端正常；是否收到时间码，请在控台确认。</p><P1ProjectSyncPanel purpose="audio" disabled={disabled || busy} notify={notify} /></SettingsDisclosure> : null}
+    {method === 'midi' ? <SettingsDisclosure title="MIDI 连接说明" description="控台接收设置与 P1 歌曲导入"><p className="settings-note">在“音频与 MIDI”里选择灯光时间码输出端口，并在控台上选择对应的时间码输入。需要触发 Cue 时，再选择“灯光动作输出”，并在控台上打开 MSC MIDI 接收。</p><p className="settings-note">仅用 MIDI 时不需要 IP、登录账号或联动插件。端口可用只说明电脑这边正常，控台有没有收到时间码，请在控台上确认。</p><P1ProjectSyncPanel purpose="audio" disabled={disabled || busy} notify={notify} /></SettingsDisclosure> : null}
     {method !== 'midi' ? <SettingsDisclosure title="歌曲导入与同步"><Ma2CatalogSettings connected={method === 'local' ? status === '插件已响应' : networkConnected} method={method} directory={directory} disabled={disabled || networkBusy} notify={notify} onBusy={setBusy} /></SettingsDisclosure> : null}
     <SettingsDisclosure title="本机程序与预演"><Ma2ProgramSettings disabled={disabled || busy} notify={notify} /></SettingsDisclosure>
-    {method === 'local' ? <SettingsDisclosure title="控台插件与安装说明"><div className="settings-row ma2-plugin-row"><span>控台插件</span><div><Button className="secondary-button" disabled={disabled || busy} onClick={() => void exportPlugin()}><Download />导出控台插件</Button><span className="settings-note">插件已内置，可离线导出到 U 盘；在控台导入 XML 与 Lua 后运行。仅 MIDI 时间码或 Cue 触发无需插件。</span></div></div></SettingsDisclosure> : null}
+    {method === 'local' ? <SettingsDisclosure title="控台插件与安装说明"><div className="settings-row ma2-plugin-row"><span>控台插件</span><div><Button className="secondary-button" disabled={disabled || busy} onClick={() => void exportPlugin()}><Download />导出控台插件</Button><span className="settings-note">插件已内置，可以离线导出到 U 盘，在控台导入 XML 和 Lua 后运行。只用 MIDI 时间码或 Cue 触发时不需要插件。</span></div></div></SettingsDisclosure> : null}
   </section>;
 }
 

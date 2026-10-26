@@ -81,9 +81,9 @@ describe('读取以管理员身份运行的 OBS 的启动参数', () => {
 
   it('同一 PID 换成了别的进程时拒绝读取，不会拿错 OBS 的密码', async () => {
     answer([{ pid: 20980, path: obsPath, creationTime: '134058123456789013', commandLine: '"obs64.exe"', handleCount: 412 }]);
-    await expect(readObsCommandLine(identity, helper)).rejects.toThrow('OBS 进程已变化');
+    await expect(readObsCommandLine(identity, helper)).rejects.toThrow('OBS 好像刚重新打开过');
     answer([{ pid: 20980, path: 'C:\\Other\\obs64.exe', creationTime: '134058123456789012', commandLine: '"obs64.exe"', handleCount: 412 }]);
-    await expect(readObsCommandLine(identity, helper)).rejects.toThrow('OBS 进程已变化');
+    await expect(readObsCommandLine(identity, helper)).rejects.toThrow('OBS 好像刚重新打开过');
   });
 
   it('Windows 不让读取时说明原因，界面原样显示', async () => {

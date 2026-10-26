@@ -82,8 +82,8 @@ describe('LinkProjectService', () => {
     await writeFile(destination, Buffer.from('replaced-preview'));
     await expect(service.inspectAssets(join(directory, 'show.tblink'), {
       ...createEmptyLinkProject('素材检查'), mediaAssets: [asset]
-    })).rejects.toThrow('完整性校验失败');
-    await expect(service.importMediaAsset(join(directory, 'show.tblink'), source, metadata)).rejects.toThrow('校验不一致');
+    })).rejects.toThrow('文件校验失败');
+    await expect(service.importMediaAsset(join(directory, 'show.tblink'), source, metadata)).rejects.toThrow('和原文件不一致');
     expect(await readFile(source, 'utf8')).toBe('original-video-bytes');
   });
   it('并发保存按调用顺序写入，旧保存不能覆盖新内容', async () => {
@@ -154,7 +154,7 @@ describe('LinkProjectService', () => {
     const projectPath = join(directory, 'broken.tblink');
     cleanupFiles.push(projectPath);
     await writeFile(projectPath, '{broken', 'utf8');
-    await expect(new LinkProjectService().open(projectPath)).rejects.toThrow('不是有效 JSON');
+    await expect(new LinkProjectService().open(projectPath)).rejects.toThrow('格式不对');
   });
 
   it('参考音频按 SHA-256 导入工程并去重', async () => {

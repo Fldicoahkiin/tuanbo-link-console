@@ -28,7 +28,7 @@ export class NativePlaybackRequests {
 
   async control(value: unknown): Promise<NativePlayerStatus> {
     const request = nativePlayerControlSchema.parse(value), session = this.session;
-    if (!session || request.sessionId !== session.request.sessionId || request.generation < session.generation) throw new Error('播放控制请求属于失效会话');
+    if (!session || request.sessionId !== session.request.sessionId || request.generation < session.generation) throw new Error('这个播放控制请求已失效');
     session.generation = request.generation;
     if (request.kind !== 'volume' && request.kind !== 'stop-mtc') {
       session.transport++; session.authorization.abort(); session.authorization = new AbortController();
@@ -36,14 +36,14 @@ export class NativePlaybackRequests {
     const transport = session.transport;
     if (request.kind === 'stop') session.cancelled = true;
     await this.authorized(session, 'link:native-player-control', request);
-    if (this.session !== session || transport !== session.transport) throw new Error('播放控制请求已被更新操作取消');
+    if (this.session !== session || transport !== session.transport) throw new Error('播放控制请求已被新的操作取消');
     if (!session.dispatched && request.kind === 'stop') return cancelledStatus(session, request.generation);
-    if (!session.dispatched || session.cancelled && request.kind !== 'stop') throw new Error('正式音频尚未准备或已取消，请重新准备节目');
+    if (!session.dispatched || session.cancelled && request.kind !== 'stop') throw new Error('音频还没准备好或已取消，请重新播放');
     return this.service().control(request);
   }
 
   private requireCurrent(session: Session, transport: number): void {
-    if (this.session !== session || session.transport !== transport || session.cancelled) throw new Error('播放准备请求已被停止或切歌取消');
+    if (this.session !== session || session.transport !== transport || session.cancelled) throw new Error('播放准备已被停止或切歌取消');
   }
 
   private async authorized(session: Session, channel: string, value: unknown): Promise<void> {
@@ -51,7 +51,7 @@ export class NativePlaybackRequests {
     let cancel: (() => void) | undefined;
     try {
       await Promise.race([this.authorize(channel, value), new Promise<never>((_resolve, reject) => {
-        cancel = () => reject(new Error('播放请求在等待许可时已被取消'));
+        cancel = () => reject(new Error('播放请求在排队时被取消'));
         if (signal.aborted) cancel(); else signal.addEventListener('abort', cancel, { once: true });
       })]);
     } finally { if (cancel) signal.removeEventListener('abort', cancel); }

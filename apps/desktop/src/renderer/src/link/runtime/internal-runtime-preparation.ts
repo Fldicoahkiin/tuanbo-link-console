@@ -42,7 +42,7 @@ export async function prepareInternalRuntime(project: LinkProject, itemId: strin
   try { await desktop.setInternalAudioCapture(true, scenes); }
   catch (error) {
     context.assertCurrent();
-    const message = `OBS 音乐采集未就绪：${error instanceof Error ? error.message : String(error)}。本机音频与画面动作继续，OBS 是否收到音乐请检查混音器。`;
+    const message = `OBS 还没准备好接收音乐：${error instanceof Error ? error.message : String(error)}。本机音频和画面动作照常进行，请在 OBS 混音器里确认是否收到音乐。`;
     // Repeats song after song until fixed: a warning the first time, then info.
     await desktop.recordLog({ level: firstTimeWarning(notedCaptureFailures, message), category: 'device', device: 'OBS 音乐采集',
       projectId: project.projectId, itemId, message, result: 'failed' });

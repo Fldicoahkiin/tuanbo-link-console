@@ -47,7 +47,7 @@ export function ClipInspector(props: {
       </div>
     </section> : null}
     {props.asset.kind === 'video' && internal ? <VideoAudioSource itemId={props.itemId} asset={props.asset} notify={props.notify} /> : null}
-    {props.asset.kind === 'video' ? <label className="inspector-toggle" title={master ? '原声已由歌曲音轨播放，避免重复收音' : videoSoundAvailable ? '由 OBS 媒体源混入正式音频' : '在设置中开启视频声音混入后可用'}><span>片段声音</span><input type="checkbox" disabled={!videoSoundAvailable} checked={videoSoundAvailable && props.clip.embeddedAudioEnabled !== false} onChange={(event) => props.onEmbeddedAudioEnabled(event.currentTarget.checked)} />{!videoSoundAvailable ? <small>{master ? '已用作歌曲音轨' : '未开启声音混入'}</small> : null}</label> : null}
+    {props.asset.kind === 'video' ? <label className="inspector-toggle" title={master ? '这段视频的声音已作为歌曲音轨播放，这里不再重复混入' : videoSoundAvailable ? '通过 OBS 媒体源混入直播声音' : '需要先在「播放习惯」里打开“视频素材原声”'}><span>片段声音</span><input type="checkbox" disabled={!videoSoundAvailable} checked={videoSoundAvailable && props.clip.embeddedAudioEnabled !== false} onChange={(event) => props.onEmbeddedAudioEnabled(event.currentTarget.checked)} />{!videoSoundAvailable ? <small>{master ? '已用作歌曲音轨' : '未开启视频原声'}</small> : null}</label> : null}
   </div>;
 }
 

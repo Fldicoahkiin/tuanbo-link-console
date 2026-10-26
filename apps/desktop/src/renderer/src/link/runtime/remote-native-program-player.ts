@@ -91,7 +91,7 @@ export class RemoteNativeProgramPlayer {
   private failed(error: unknown): void {
     if (this.disposed) return;
     const message = toUserErrorMessage(error);
-    this.state = { ...this.state, status: 'error', error: message, errorTitle: '后台节目控制失败' };
+    this.state = { ...this.state, status: 'error', error: message, errorTitle: '播放控制失败' };
     this.dependencies.changed(this.state); this.dependencies.notice?.(message, this.state.itemId);
   }
 }

@@ -138,19 +138,19 @@ it('预备未完成、失败、过期时均不能把下一片段显示为可播�
   t.native.prime.mockImplementation(() => new Promise<void>(resolve => { release = resolve; }));
   let valid = true;
   const preparing = t.preload.prime(event, () => { if (!valid) throw new Error('已取消'); });
-  await expect(t.preload.execute(event, t.path)).rejects.toThrow('未在播放边界前');
+  await expect(t.preload.execute(event, t.path)).rejects.toThrow('没能在切换前准备好');
   await expect(t.preload.prime(event, current)).rejects.toThrow('不能重复准备');
   valid = false; release(); await expect(preparing).rejects.toThrow('已取消');
   await t.preload.close();
   expect(t.native.prime).toHaveBeenCalledTimes(1);
   expect(t.scenes.execute.mock.calls.every(([event]) => event.phase === 'stop')).toBe(true);
-  await expect(t.preload.seek(event, t.path)).rejects.toThrow('会话已改变');
+  await expect(t.preload.seek(event, t.path)).rejects.toThrow('定位路径或状态已改变');
 });
 
 it('错过播放边界的片段在当前位置仍应播出时先预备一次并交回，之后不再重复预备', async () => {
   const t = setup(), [first, second] = t.events;
   await t.preload.prime(first!, current); await t.preload.execute(first!, t.path);
-  await expect(t.preload.execute(second!, t.path)).rejects.toThrow('未在播放边界前');
+  await expect(t.preload.execute(second!, t.path)).rejects.toThrow('没能在切换前准备好');
   expect(await t.preload.upcoming(390, current)).toMatchObject({ clipId: second!.clipId });
   await t.preload.execute({ ...second!, sourceOffsetMs: 1100 }, t.path);
   expect(t.native.prime).toHaveBeenCalledTimes(2);

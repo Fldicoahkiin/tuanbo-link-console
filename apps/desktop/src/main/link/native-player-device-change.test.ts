@@ -79,12 +79,12 @@ function fixture() {
 
 it('系统 MIDI 检测失败不启动完整设备查询；配了时间码端口也只播音频并明确报告，恢复后重新准备才发时间码', async () => {
   const f = fixture();
-  f.checkDeviceHealth.mockRejectedValue(new Error('Windows MIDI 端口枚举未响应'));
+  f.checkDeviceHealth.mockRejectedValue(new Error('Windows 读取 MIDI 端口没有响应'));
   try {
-    await expect(f.service.devices()).rejects.toThrow('端口枚举未响应');
-    await expect(f.service.prepare(f.request)).resolves.toMatchObject({ status: 'ready', mtcPortName: null, mtcError: 'MIDI 设备不可用：Windows MIDI 端口枚举未响应' });
+    await expect(f.service.devices()).rejects.toThrow('读取 MIDI 端口没有响应');
+    await expect(f.service.prepare(f.request)).resolves.toMatchObject({ status: 'ready', mtcPortName: null, mtcError: 'MIDI 设备不可用：Windows 读取 MIDI 端口没有响应' });
     expect(native.devices.mock.calls).toEqual([['audio']]);
-    expect(f.error).toHaveBeenCalledWith('MIDI 设备不可用，本首时间码未参与：Windows MIDI 端口枚举未响应');
+    expect(f.error).toHaveBeenCalledWith('MIDI 设备不可用，这一首不发时间码：Windows 读取 MIDI 端口没有响应');
     f.checkDeviceHealth.mockResolvedValue(undefined);
     await expect(f.service.prepare({ ...f.request, generation: 2 })).resolves.toMatchObject({ status: 'ready', mtcPortName: 'test-mtc', mtcError: null });
     expect(native.devices.mock.calls).toEqual([['audio'], ['all']]);
@@ -123,7 +123,7 @@ it('定位时 MIDI 端口消失只退出时间码通道，音频仍可定位和�
     await f.service.control({ ...envelope, generation: 3, kind: 'seek', positionMs: 2000 });
     expect(f.service.status).toMatchObject({ status: 'paused', positionMs: 2000, offsetMs: 480000,
       audioError: null, mtcPortName: null });
-    expect(f.service.status?.mtcError).toContain('接口已断开');
+    expect(f.service.status?.mtcError).toContain('断开了，音频照常播放');
     expect(f.error).toHaveBeenCalledOnce();
     const prepared = native.commands.mock.calls.flatMap(([command]) => command.kind === 'prepare' ? [command] : []);
     expect(prepared.at(-1)?.midiDevice).toBeNull();
@@ -200,7 +200,7 @@ it('接口断开时系统 MIDI 检测超时一次：等待期间重新检测，�
     f.devices.midiOutputs = [];
     probe.mockResolvedValueOnce('timeout');
     native.emit!({ midiSent: 41, midiError: 6, qpc100ns: '3' });
-    await vi.waitFor(() => expect(f.error).toHaveBeenCalledWith(expect.stringContaining('端口枚举未响应')), { timeout: 3000 });
+    await vi.waitFor(() => expect(f.error).toHaveBeenCalledWith(expect.stringContaining('读取 MIDI 端口没有响应')), { timeout: 3000 });
     f.devices.midiOutputs = [{ id: 5, name: 'test-mtc' }];
     await vi.waitFor(() => expect(recovered).toHaveBeenCalledOnce(), { timeout: 3000 });
     expect(native.commands.mock.calls.filter(([command]) => command.kind === 'reopen-mtc')).toEqual([[expect.objectContaining({ midiDevice: 5, midiPortName: 'test-mtc' })]]);
@@ -256,7 +256,7 @@ it('时间码短暂中断：每次记录一次并累计本首次数，不当作 
     native.emit!({ midiInterruptions: 1, midiInterruption: -2, qpc100ns: '5' });
     expect(f.service.status).toMatchObject({ mtcInterruptions: 2, mtcError: null });
     expect(f.error).toHaveBeenCalledTimes(2);
-    expect(f.error.mock.calls[1]?.[0]).toContain('音频时钟超过一帧未更新');
+    expect(f.error.mock.calls[1]?.[0]).toContain('音频时钟超过一帧没有更新');
   } finally { await f.service.close(); }
 });
 
@@ -305,7 +305,7 @@ it('时间码接口被占用时说清是谁：本软件另一处用了同一接�
   try {
     await service.prepare(shared.request);
     native.emit!({ midiError: 7, qpc100ns: '5' });
-    expect(service.status?.mtcError).toBe('MIDI 接口「test-mtc」同时设成了动作 MIDI、时间码的输出，但它一次只能给一处用。请到 设置 → 音频与 MIDI 给它们选不同的接口。');
+    expect(service.status?.mtcError).toBe('MIDI 接口「test-mtc」同时设成了动作 MIDI、时间码的输出，但它一次只能给一处用。请到「设置 → 音频与 MIDI」给它们选不同的接口。');
   } finally { await service.close(); }
   const other = fixture();
   const alone = new NativePlayerService({ ...other.options, claimMidiOutput: claiming().claimMidiOutput });

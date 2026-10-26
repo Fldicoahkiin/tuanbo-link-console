@@ -10,7 +10,7 @@ it('监视端口连到 MA 3D 时也拒绝，不能只验证命令端口', async 
   await expect(assertMa2ConnectionOwner(42, peers, () => Promise.resolve(server.map((entry, index) => ({ ...entry, pid: index ? 99 : 42 }))))).rejects.toThrow('30001');
 });
 it('连接已断开或客户端临时端口不匹配时拒绝', async () => {
-  await expect(assertMa2ConnectionOwner(42, peers, () => Promise.resolve(server.map(entry => ({ ...entry, remotePort: 1234 }))))).rejects.toThrow('未连接到选定');
+  await expect(assertMa2ConnectionOwner(42, peers, () => Promise.resolve(server.map(entry => ({ ...entry, remotePort: 1234 }))))).rejects.toThrow('没有连到选定');
 });
 it('识别本机网卡和 IPv4 映射地址，实体控台不执行本机 PID 校验', () => {
   expect(isLocalMa2Address('10.0.0.2', ['10.0.0.2'])).toBe(true);
@@ -26,5 +26,5 @@ it('onPC 窗口出现后等该进程开放远程端口再登录，只等待就�
 });
 it('只有 MA 3D 在监听或 onPC 始终未开放端口时有界失败，说明未发送登录', async () => {
   await expect(waitForMa2Listener(42, 30000, 0, () => Promise.resolve([99]), () => Promise.resolve()))
-    .rejects.toThrow('MA2 onPC（PID 42）在 0 秒内没有开放远程端口 30000，未发送登录');
+    .rejects.toThrow('MA2 onPC（PID 42）0 秒内没有打开远程端口 30000，还没发送登录');
 });

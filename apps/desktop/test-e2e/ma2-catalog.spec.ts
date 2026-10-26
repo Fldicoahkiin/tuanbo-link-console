@@ -90,8 +90,8 @@ test('真实 onPC 设置扫描、小数 Cue、歌曲配对、批量导入与保�
     await page.screenshot({ path: info.outputPath('imported.png') });
     const reportPath = info.outputPath('site.tbdiag.gz');
     await application.evaluate(({ dialog }, file) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: file }); }, reportPath);
-    await section.getByRole('button', { name: '导出现场核对包', exact: true }).click();
-    await expect(section.getByText(/现场核对包已导出/)).toBeVisible({ timeout: 120000 });
+    await section.getByRole('button', { name: '导出控台数据包', exact: true }).click();
+    await expect(section.getByText(/控台数据包已导出/)).toBeVisible({ timeout: 120000 });
     const reportText = gunzipSync(await readFile(reportPath)).toString('utf8');
     expect(reportText).toContain('TBLINK_FRACTIONAL_TIMECODE');
     expect(reportText).toContain('1.250');

@@ -24,7 +24,7 @@ export function musicBeatSegments(input: AutomaticMusicCandidates, interval: Mus
   const beats = [...new Set(candidates.items.filter(item => item.kind === 'beat' && item.startMs < candidates.durationMs).map(item => item.startMs))].sort((a, b) => a - b);
   if (interval === 'tempo') return musicTempoSegments(beats, candidates.durationMs).map((segment, index) => ({
     id: `${musicBeatPrefix(candidates.sourceSha256)}tempo:${index}`, name: `${segment.bpm} BPM`, startMs: segment.startMs, endMs: segment.endMs,
-    notes: '按持续 BPM 变化分段；根据检测拍点估算，可删除重做', color: '#eabb68', kind: 'custom' as const
+    notes: '按 BPM 变化分段（根据识别到的拍点估算，可以删掉重做）', color: '#eabb68', kind: 'custom' as const
   }));
   const positions = interval < 1 ? beats.flatMap((start, index) => beats[index + 1] === undefined ? [start] : Array.from({ length: 1 / interval }, (_, step) => start + (beats[index + 1]! - start) * step * interval)) : beats.filter((_, index) => index % interval === 0);
   return positions.map((startMs, index) => ({

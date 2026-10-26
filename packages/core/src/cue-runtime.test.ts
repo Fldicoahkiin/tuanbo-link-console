@@ -62,7 +62,7 @@ describe('CueRuntime', () => {
     expect(runtime.tick(1200).state).toBe('running');
     const gap = runtime.ingest(sample(45, 1500));
     expect(gap).toMatchObject({ state: 'running', dueCues: [], missedCueIds: ['cue-1'], rebuild: true });
-    expect(gap.reason).toBe('播放位置更新中断 1400ms：画面按当前位置重建，错过 1 个联动 Cue，未补发');
+    expect(gap.reason).toBe('播放位置更新中断了 1400 ms，画面已按当前位置恢复，错过了 1 个联动 Cue，没有补发');
     runtime.ingest(sample(46, 1534));
     expect(runtime.ingest(sample(60, 2000))).toMatchObject({ state: 'running', missedCueIds: ['cue-1'] });
     expect(runtime.getNextCueId(60)).toBeNull();
@@ -74,14 +74,14 @@ describe('CueRuntime', () => {
     const gap = new CueRuntime(value); gap.selectItem('item'); gap.beginPreflight('live'); gap.arm(0);
     gap.ingest(sample(0, 0)); gap.ingest(sample(27, 900));
     const stalled = gap.ingest(sample(48, 1_600));
-    expect(stalled).toMatchObject({ state: 'running', missedCueIds: [], rebuild: true, reason: '播放位置更新中断 700ms：画面按当前位置重建' });
+    expect(stalled).toMatchObject({ state: 'running', missedCueIds: [], rebuild: true, reason: '播放位置更新中断了 700 ms，画面已按当前位置恢复' });
     expect(stalled.dueCues.map(due => [due.cue.id, due.scheduledFrame])).toEqual([['show', 48]]);
     for (let frame = 51; frame <= 117; frame += 3) expect(gap.ingest(sample(frame, 1_600 + (frame - 48) * 1000 / 30)).dueCues).toEqual([]);
     const hidden = gap.ingest(sample(120, 1_600 + 72_000 / 30));
     expect(hidden.dueCues.map(due => [due.cue.id, due.scheduledFrame])).toEqual([['show:duration-end', 120]]);
     const brief = new CueRuntime(value); brief.selectItem('item'); brief.beginPreflight('live'); brief.arm(0);
     brief.ingest(sample(0, 0)); brief.ingest(sample(27, 900));
-    expect(brief.ingest(sample(130, 4_300))).toMatchObject({ dueCues: [], missedCueIds: ['show'], reason: '播放位置更新中断 3400ms：画面按当前位置重建，错过 1 个联动 Cue，未补发' });
+    expect(brief.ingest(sample(130, 4_300))).toMatchObject({ dueCues: [], missedCueIds: ['show'], reason: '播放位置更新中断了 3400 ms，画面已按当前位置恢复，错过了 1 个联动 Cue，没有补发' });
     const shown = new CueRuntime(value); shown.selectItem('item'); shown.beginPreflight('live'); shown.arm(0);
     for (let frame = 0; frame <= 30; frame += 3) shown.ingest(sample(frame, frame * 1000 / 30));
     expect(shown.ingest(sample(130, 4_333)).dueCues.map(due => [due.cue.id, due.scheduledFrame])).toEqual([['show:duration-end', 130]]);
@@ -217,7 +217,7 @@ describe('CueRuntime', () => {
     runtime.beginPreflight('live');
     runtime.arm(0, null, 'awaiting-external-start');
     expect(runtime.ingest(sample(61, 30_000))).toMatchObject({
-      state: 'timecodeLost', reason: 'MTC 首帧未从节目开头开始', dueCues: []
+      state: 'timecodeLost', reason: 'MTC 不是从节目开头开始的', dueCues: []
     });
   });
 
@@ -229,7 +229,7 @@ describe('CueRuntime', () => {
 
     expect(runtime.ingest(sample(61, 100))).toMatchObject({
       state: 'timecodeLost',
-      reason: 'MTC 首帧未从节目开头开始',
+      reason: 'MTC 不是从节目开头开始的',
       dueCues: []
     });
   });
@@ -321,21 +321,21 @@ describe('CueRuntime', () => {
   it('拒绝绕过 preflight 布防以及在运行中切换节目或重新预检', () => {
     const unprepared = new CueRuntime(project());
     unprepared.selectItem('item');
-    expect(unprepared.arm()).toMatchObject({ state: 'error', reason: '只有 preflight 状态可以布防，当前为 idle' });
+    expect(unprepared.arm()).toMatchObject({ state: 'error', reason: '只有开播前检查完成后才能待命，当前状态：idle' });
 
     const running = new CueRuntime(project());
     running.selectItem('item');
     running.beginPreflight('live');
     running.arm();
     running.ingest(sample(0, 0));
-    expect(running.selectItem('item')).toMatchObject({ state: 'running', reason: '运行状态 running 下不能切换节目' });
+    expect(running.selectItem('item')).toMatchObject({ state: 'running', reason: '当前状态（running）不能切换节目' });
     expect(running.getState()).toBe('running');
 
     const armed = new CueRuntime(project());
     armed.selectItem('item');
     armed.beginPreflight('rehearsal');
     armed.arm();
-    expect(armed.beginPreflight('live')).toMatchObject({ state: 'error', reason: '运行状态 armed 下不能重新预检' });
+    expect(armed.beginPreflight('live')).toMatchObject({ state: 'error', reason: '当前状态（armed）不能重新做开播前检查' });
   });
 
   it('P1 播放触发失败时从 armed 明确进入 error', () => {
@@ -355,8 +355,8 @@ describe('CueRuntime', () => {
 
     expect(runtime.failExecution('OBS 执行失败')).toMatchObject({ state: 'error', reason: 'OBS 执行失败' });
     expect(runtime.ingest(sample(30, 1_000))).toMatchObject({ state: 'error', dueCues: [] });
-    expect(runtime.beginPreflight('rehearsal')).toMatchObject({ state: 'error', reason: '运行状态 error 下不能重新预检' });
-    expect(runtime.selectItem('item')).toMatchObject({ state: 'error', reason: '运行状态 error 下不能切换节目' });
+    expect(runtime.beginPreflight('rehearsal')).toMatchObject({ state: 'error', reason: '当前状态（error）不能重新做开播前检查' });
+    expect(runtime.selectItem('item')).toMatchObject({ state: 'error', reason: '当前状态（error）不能切换节目' });
     expect(runtime.stop().state).toBe('stopping');
     expect(runtime.completeStop().state).toBe('idle');
     expect(runtime.beginPreflight('rehearsal').state).toBe('preflight');

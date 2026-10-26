@@ -64,11 +64,11 @@ it('试用和缺少许可的 active 状态都不能获得付费权限', async ()
 });
 it('只有未激活的电脑提示购买；已付费但需联网或到期时只说明原因', async () => {
   const blocked = (state: LicenseStatus['state'], message: string) => new LicenseAccess(() => Promise.resolve({ ...valid, state, message })).requireOutput();
-  await expect(blocked('inactive', '此主机尚未激活')).rejects.toThrow('请购买并激活本机');
+  await expect(blocked('inactive', '这台电脑还没激活')).rejects.toThrow('请购买并激活本机');
   for (const state of ['renewal-required', 'expired'] as const) {
-    const failure = await blocked(state, '无法连接授权服务器').catch((error: unknown) => error);
+    const failure = await blocked(state, '连不上授权服务器').catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
-    expect(String(failure)).toContain('无法连接授权服务器');
+    expect(String(failure)).toContain('连不上授权服务器');
     expect(String(failure)).not.toContain('请购买');
   }
 });

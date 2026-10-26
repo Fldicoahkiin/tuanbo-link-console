@@ -45,7 +45,7 @@ it('后台关闭必须等网络取消回执；取消失败不报告已经释放'
   f.api.cancelMa2Playback.mockImplementationOnce(() => new Promise<void>((_resolve, failed) => { reject = failed; }));
   let settled = false;
   const closing = f.output.close().finally(() => { settled = true; });
-  const failed = expect(closing).rejects.toThrow('取消未完成');
+  const failed = expect(closing).rejects.toThrow('取消没有完成');
   try {
     await Promise.resolve(); expect(settled).toBe(false); reject!(new Error('控台取消未确认')); await failed;
     expect(diagnostic).toHaveBeenCalledWith('取消灯光网络输出失败', expect.any(Error));

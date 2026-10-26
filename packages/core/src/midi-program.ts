@@ -67,7 +67,7 @@ export class MidiProgramSession {
 
   constructor(project: LinkProject, itemId: string, private readonly dependencies: MidiProgramDependencies) {
     const item = project.rundown.find(entry => entry.id === itemId);
-    if (project.playbackSource !== 'internal' || !item || !item.enabled) throw new Error('后台 MIDI 需要已启用的内部主控节目');
+    if (project.playbackSource !== 'internal' || !item || !item.enabled) throw new Error('后台 MIDI 只支持已启用的“联动台播放”节目');
     let token = 0;
     const events: Event[] = [];
     for (const { cue, scheduledFrame } of compileRundownTimelineCues(item, project.timebase.frameRate)) {
@@ -102,7 +102,7 @@ export class MidiProgramSession {
     this.cursor = lowerBound(this.events, positionMs, positionMs > 0);
     try {
       await this.dependencies.prepare(this.ports, this.cancellation.signal);
-      if (this.cancellation.signal.aborted) throw new Error('MIDI 会话准备已取消');
+      if (this.cancellation.signal.aborted) throw new Error('MIDI 准备已取消');
       this.state = 'ready';
     } catch (error) { const failure = toError(error); if (!this.cancellation.signal.aborted) this.fail(failure); throw failure; }
   }
@@ -121,7 +121,7 @@ export class MidiProgramSession {
     try {
       const now = this.dependencies.now(), age = now - observedAtMs;
       if (!Number.isFinite(positionMs) || positionMs < this.position || !Number.isFinite(age) || age < 0) {
-        throw new Error('MIDI 音频位置倒退或无效；停止该通道，不补发历史动作');
+        throw new Error('MIDI 收到的音频位置倒退或无效，已停止 MIDI 输出，不补发之前的动作');
       }
       this.state = 'running'; this.position = positionMs;
       let missed = 0;
@@ -129,7 +129,7 @@ export class MidiProgramSession {
         const event = this.events[this.cursor++]!;
         const deadline = observedAtMs + 100 - Math.max(0, positionMs - event.atMs), epoch = this.epoch;
         if (!event.release && deadline <= now) { missed++; continue; }
-        if (this.queued >= 32) throw new Error('MIDI 节目动作积压，已停止该通道');
+        if (this.queued >= 32) throw new Error('MIDI 动作积压，已停止 MIDI 输出');
         this.queued++;
         this.tail = this.tail.then(async () => {
           if (epoch !== this.epoch || this.failure) { if (this.failure && !event.release) this.unsentFromMs ??= event.atMs; return; }
@@ -140,7 +140,7 @@ export class MidiProgramSession {
             this.notes.delete(key!);
           }
           const sending = this.dependencies.now();
-          if (!event.release && sending >= deadline) { this.dependencies.missed(`MIDI 动作发送晚于 100ms 执行边界，未补发：${event.action.label}`); return; }
+          if (!event.release && sending >= deadline) { this.dependencies.missed(`MIDI 动作晚了超过 100 ms，没有补发：${event.action.label}`); return; }
           await this.dependencies.send(event.action.portProfileId, encodeMidiAction(event.action), event.release ? Math.max(deadline, sending + 100) : deadline);
           if (epoch !== this.epoch || this.failure) return;
           if (key && event.action.kind === 'midi.noteOn' && event.action.velocity > 0) {
@@ -150,7 +150,7 @@ export class MidiProgramSession {
         }).catch(error => { if (!event.release) this.unsentFromMs ??= event.atMs; if (epoch === this.epoch) this.fail(toError(error)); })
           .finally(() => { this.queued--; });
       }
-      if (missed) this.dependencies.missed(`播放位置更新中断，错过 ${missed} 个 MIDI 动作，未补发`);
+      if (missed) this.dependencies.missed(`播放位置更新中断，错过了 ${missed} 个 MIDI 动作，没有补发`);
     } catch (error) { this.fail(toError(error)); }
   }
 
@@ -170,7 +170,7 @@ export class MidiProgramSession {
   private fail(error: Error): void {
     if (this.failure || this.state === 'closed') return;
     this.failure = error; this.state = 'failed'; this.dependencies.failed(error);
-    void this.close().catch(cleanup => this.dependencies.failed(new Error(`MIDI 会话关闭失败：${toError(cleanup).message}`)));
+    void this.close().catch(cleanup => this.dependencies.failed(new Error(`MIDI 关闭失败：${toError(cleanup).message}`)));
   }
 }
 

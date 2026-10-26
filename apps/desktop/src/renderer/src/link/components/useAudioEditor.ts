@@ -23,8 +23,8 @@ export function useAudioEditor(item: RundownItem | null, projectPath: string | n
   const points = analysis?.[level] ?? audio?.beats?.levels?.[level] ?? audio?.beats?.pointsMs ?? [];
   const current = (): boolean => useDocumentStore.getState().project?.rundown.find((entry) => entry.id === item?.id)?.referenceAudio === audio;
   const commit = (next: NonNullable<RundownItem['referenceAudio']>, label: string, kind: 'audio' | 'markers' = 'audio'): void => {
-    if (!item || !current()) throw new Error('节目或音频已改变，请重新执行操作');
-    if (kind === 'audio' && (disabled || useRuntimeStore.getState().state !== 'idle')) throw new Error('请停止播放后应用音频修改');
+    if (!item || !current()) throw new Error('节目或音频已经变了，请重新操作');
+    if (kind === 'audio' && (disabled || useRuntimeStore.getState().state !== 'idle')) throw new Error('请停止播放后再应用音频修改');
     useDocumentStore.getState().execute(editReferenceAudioCommand(item.id, next, label));
   };
   const run = async (operation: () => void | Promise<void>): Promise<void> => {
@@ -38,7 +38,7 @@ export function useAudioEditor(item: RundownItem | null, projectPath: string | n
     if (disabled || useRuntimeStore.getState().state !== 'idle') throw new Error('请停止播放后编辑音频片段');
     if (!audio || !projectPath) throw new Error('请先保存工程并添加歌曲音频');
     if (!next.length) {
-      if (!item || !current()) throw new Error('节目或音频已改变，请重新执行操作');
+      if (!item || !current()) throw new Error('节目或音频已经变了，请重新操作');
       useDocumentStore.getState().execute(setReferenceAudioCommand(item.id, null));
       return;
     }
@@ -60,7 +60,7 @@ export function useAudioEditor(item: RundownItem | null, projectPath: string | n
     analyze: (onReady?: (points: number[]) => void) => run(async () => {
       if (!audio || !projectPath) throw new Error('请先保存工程并添加歌曲音频');
       const result = audioBeatAnalysisSchema.parse(await linkDesktopViewModel.analyzeAudioBeats({ projectPath, source: audio }));
-      if (!current()) throw new Error('分析期间音频已改变，请重新分析');
+      if (!current()) throw new Error('分析时音频被修改了，请重新分析');
       if (onReady) onReady(result[level]); else setAnalysis(result);
       if (!result.dense.length) notify('没有检测到明显节奏点，请按听感手动放置灯光 Cue', 'info');
     }),

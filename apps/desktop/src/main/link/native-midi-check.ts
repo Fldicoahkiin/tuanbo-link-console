@@ -13,7 +13,7 @@ export class NativeMidiCheckService {
   check(input: NativeMidiCheck): Promise<void> {
     const request = nativeMidiCheckSchema.parse(input);
     if (this.active()) return Promise.reject(new Error('播放中不能重新打开 MIDI 接口，请先停止播放'));
-    if (this.pending) return Promise.reject(new Error('MIDI 接口正在检查，请等待完成'));
+    if (this.pending) return Promise.reject(new Error('正在检查 MIDI 接口，请稍等'));
     const task = this.run(request.portName).finally(() => { if (this.pending === task) this.pending = null; });
     this.pending = task;
     return task;

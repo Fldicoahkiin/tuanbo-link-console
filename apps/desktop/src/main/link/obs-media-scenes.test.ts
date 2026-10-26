@@ -142,7 +142,7 @@ describe('素材独立场景播放', () => {
     responses.set('GetSourceScreenshot', { imageData: '' });
     await expect(scenes.prime(event, 'C:/dance.mp4', () => { setMediaState('OBS_MEDIA_STATE_PAUSED', 2300); return Promise.resolve(); })).rejects.toThrow('可用画面');
     calls.length = 0;
-    await expect(scenes.execute(event, 'C:/dance.mp4')).rejects.toThrow('预热尚未完成');
+    await expect(scenes.execute(event, 'C:/dance.mp4')).rejects.toThrow('素材还没准备好');
     expect(calls).toEqual([]);
   });
   it('暂停指令返回但 OBS 仍播放时不能提前定位，也不重复发送暂停', async () => {
@@ -341,7 +341,7 @@ describe('素材独立场景播放', () => {
     const opening = { ...event, sourceOffsetMs: 0, deferSceneSwitch: true };
     await scenes.prime(opening, 'C:/dance.mp4', () => { setMediaState('OBS_MEDIA_STATE_PAUSED', 0); return Promise.resolve(); }); calls.length = 0;
     setMediaState('OBS_MEDIA_STATE_PAUSED', 2000);
-    await expect(scenes.execute(opening, 'C:/dance.mp4')).rejects.toThrow('预热素材状态已变化');
+    await expect(scenes.execute(opening, 'C:/dance.mp4')).rejects.toThrow('准备的素材状态变了');
     expect(calls.some(call => call.requestType === 'TriggerMediaInputAction')).toBe(false);
   });
   it('已成功停止的预备素材不在统一清理时再次停止，其他预备目标仍须清理', async () => {
@@ -365,7 +365,7 @@ describe('素材独立场景播放', () => {
     const { scenes, calls, responses } = fixture();
     await scenes.prepare('project', asset, 'C:/dance.mp4');
     responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_ERROR', mediaCursor: 0 });
-    await expect(scenes.prime({ ...event, sourceOffsetMs: 0 }, 'C:/dance.mp4', () => Promise.resolve())).rejects.toThrow('未完成画面定位');
+    await expect(scenes.prime({ ...event, sourceOffsetMs: 0 }, 'C:/dance.mp4', () => Promise.resolve())).rejects.toThrow('没能定位到');
     calls.length = 0; await scenes.releasePrimed([names.sourceName]);
     expect(calls).toEqual([
       { requestType: 'TriggerMediaInputAction', requestData: { inputName: names.sourceName, mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP' } },
@@ -432,13 +432,13 @@ describe('素材独立场景播放', () => {
   it('拖动只定位已准备的自有素材，不重载来源或重新启动媒体', async () => {
     const { scenes, calls, responses } = fixture();
     const native = vi.fn(() => Promise.resolve());
-    await expect(scenes.seek(event, 'C:/dance.mp4', native)).rejects.toThrow('未准备');
+    await expect(scenes.seek(event, 'C:/dance.mp4', native)).rejects.toThrow('还没准备好');
     await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
     responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PAUSED', mediaCursor: 2300 });
     await scenes.seek(event, 'C:/dance.mp4', native);
     expect(native).toHaveBeenCalledWith(event.sourceName, 2300);
     expect(calls.some((call) => ['SetInputSettings', 'TriggerMediaInputAction', 'SetMediaInputCursor'].includes(call.requestType))).toBe(false);
-    await expect(scenes.seek(event, 'C:/other.mp4', native)).rejects.toThrow('与工程不符');
+    await expect(scenes.seek(event, 'C:/other.mp4', native)).rejects.toThrow('和工程对不上');
     expect(native).toHaveBeenCalledTimes(1);
   });
   it('结束片段使用停止，避免暂停在 EOF 后无法重新定位', async () => {
@@ -471,7 +471,7 @@ describe('素材独立场景播放', () => {
         responses.set('GetSceneItemTransform', { sceneItemTransform: { sourceWidth: 0, sourceHeight: 0 } });
         return Promise.resolve();
       });
-      const failure = expect(scenes.seek(event, 'C:/dance.mp4', native)).rejects.toThrow('未完成画面定位');
+      const failure = expect(scenes.seek(event, 'C:/dance.mp4', native)).rejects.toThrow('没能定位到');
       await vi.advanceTimersByTimeAsync(2020); await failure;
       expect(native).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
@@ -572,7 +572,7 @@ describe('素材独立场景播放', () => {
   it('切场景前位置正确、切场景后被 OBS 重置时不能报告成功', async () => {
     const { scenes } = fixture(true);
     await scenes.prepare('project', asset, 'C:/dance.mp4');
-    await expect(scenes.execute(event, 'C:/dance.mp4')).rejects.toThrow(/切场景后素材位置不一致：舞蹈\.mp4，按音乐应在 2\d{3} ms，OBS 实际 0 ms/);
+    await expect(scenes.execute(event, 'C:/dance.mp4')).rejects.toThrow(/切场景后素材位置对不上：舞蹈\.mp4，按音乐应该在 2\d{3} ms，OBS 实际在 0 ms/);
   });
   it('播放时启动解码器并按位置切换，回读实际状态', async () => {
     const { scenes, calls } = fixture(); await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;

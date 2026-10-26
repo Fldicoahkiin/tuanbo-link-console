@@ -99,13 +99,13 @@ export class Ma2LiveService {
       if (this.pressed.has(key)) { this.client?.input(request.page, request.slot, request.action); this.pressed.delete(key); }
       return;
     }
-    if (Date.now() > request.deadlineAt || this.failed || this.scope !== this.key(request) || !this.client?.connected) throw new Error('推杆操作已过期或连接改变，未发送');
+    if (Date.now() > request.deadlineAt || this.failed || this.scope !== this.key(request) || !this.client?.connected) throw new Error('推杆操作已过期或连接变了，没有发送');
     const snapshot = this.snapshot;
     if (!snapshot || snapshot.page !== request.page || snapshot.start !== request.start || Date.now() - snapshot.readAt > 1000 || Date.now() - this.verifiedAt > 2000) throw new Error('实时状态已过期，请重新读取后操作');
     const block = snapshot.items.flatMap(item => item.blocks).find(value => value.slot === request.slot);
     const action = request.action;
     if (!block || action.kind === 'fader' && !block.fader || action.kind === 'button' && !block.buttons.some(button => button.id === action.id && button.name !== 'Empty')) throw new Error('此位置没有可操作的推杆或按键');
-    if (action.kind === 'fader' && block.fader && (action.value < block.fader.min || action.value > block.fader.max)) throw new Error('推杆数值超出控台允许的范围，未发送');
+    if (action.kind === 'fader' && block.fader && (action.value < block.fader.min || action.value > block.fader.max)) throw new Error('推杆数值超出了控台允许的范围，没有发送');
     this.client.input(request.page, request.slot, request.action);
     if (request.action.kind === 'button' && request.action.pressed) { this.pressed.set(key, { page: request.page, slot: request.slot, id: request.action.id }); this.armRelease(); }
   }

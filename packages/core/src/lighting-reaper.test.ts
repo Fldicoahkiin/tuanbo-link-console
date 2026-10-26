@@ -161,7 +161,7 @@ it('畸形、重复或未知形状的 REAPER 变速不能按基础 BPM 静默导
 });
 it('缺失外部 MIDI 和无法理解的 SysEx 不静默丢弃', () => {
   expect(() => importLightingReaper(source.replace('HASDATA 1 960 QN', 'FILE "missing.mid"'))).toThrow('missing.mid');
-  expect(() => importLightingReaper(source.replace('E 0 90 3c 64', 'E 0 f0 7f f7'))).toThrow('尚未支持');
+  expect(() => importLightingReaper(source.replace('E 0 90 3c 64', 'E 0 f0 7f f7'))).toThrow('还不支持');
 });
 it('外部 MIDI 优先按工程相对路径匹配，同名文件互不覆盖', () => {
   const midi = (noteNumber: number) => new Uint8Array(writeMidi({ header: { format: 0, numTracks: 1, ticksPerBeat: 960 }, tracks: [[

@@ -123,7 +123,7 @@ const tbLink: LinkDesktopBridgeApi = {
   setObsProgramSourceEnabled: (sourceName, enabled) => invoke('link:obs-program-source-enabled', { sourceName, enabled }),
   getMa2CurrentShow: async () => {
     const show = await invoke<unknown>('link:ma2-current-show');
-    if (typeof show !== 'string' || !show) throw new Error('控台当前 show 响应无效');
+    if (typeof show !== 'string' || !show) throw new Error('控台返回的当前 Show 信息无法识别');
     return show;
   },
   saveMa2Network: (payload) => invoke('link:ma2-network-save', payload),

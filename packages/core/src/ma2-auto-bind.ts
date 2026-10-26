@@ -80,7 +80,7 @@ export function applyMa2AutoBindingsCommand(itemId: string, expected: LightingDo
   return { id, label: '自动准备控台同步', historyRebaseKey: `ma2-auto-bind:${itemId}:${id}`, rebaseHistory: rebase,
     execute(project) {
       const current = project.rundown.find(item => item.id === itemId)?.lighting;
-      if (!current || JSON.stringify(current.ma2Bindings) !== JSON.stringify(expected.ma2Bindings)) throw new Error('准备同步期间控台绑定已改变，自动关联已保留在控台，请重新开启同步核对');
+      if (!current || JSON.stringify(current.ma2Bindings) !== JSON.stringify(expected.ma2Bindings)) throw new Error('准备同步时控台的绑定变了，自动关联已保留在控台，请重新开启同步');
       return rebase(project);
     }, undo: before => parseLinkProject(before) };
 }
