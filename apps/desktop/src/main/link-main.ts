@@ -2146,16 +2146,27 @@ function registerIpc(
     return path;
   });
   // A report goes out even when the license cannot be read: that machine is the one most likely to need help.
-  const feedbackIdentity = async (): Promise<FeedbackIdentity> => {
+  const unreadableIdentity = (error: unknown): FeedbackIdentity =>
+    ({ machineCode: null, license: null, licensed: false, licenseSummary: `读取本机授权失败：${error instanceof Error ? error.message : String(error)}`, version: buildVersion });
+  const licensedFeedbackIdentity = async (): Promise<FeedbackIdentity> => {
     try {
-      if (localTestAccess) return { machineCode: (await getLocalTestStatus()).machineCode, license: null, licensed: false, licenseSummary: '本地测试模式（不校验授权）', version: buildVersion };
       const service = await getLicenseService(), status = await service.status();
       return { machineCode: status.machineCode, license: await service.signedLicense(), licensed: status.state === 'active',
         licenseSummary: `${licenseStateLabel[status.state]}${status.state === 'active' ? '' : `：${status.message}`}`, version: buildVersion };
     } catch (error) {
-      return { machineCode: null, license: null, licensed: false, licenseSummary: `读取本机授权失败：${error instanceof Error ? error.message : String(error)}`, version: buildVersion };
+      return unreadableIdentity(error);
     }
   };
+  const localTestFeedbackIdentity = async (): Promise<FeedbackIdentity> => {
+    try {
+      return { machineCode: (await getLocalTestStatus()).machineCode, license: null, licensed: false, licenseSummary: '本地测试模式（不校验授权）', version: buildVersion };
+    } catch (error) {
+      return unreadableIdentity(error);
+    }
+  };
+  // Keep the local test branch out of any try block: Rollup keeps whatever a try block references, and a release
+  // bundle that still carries the local test license is refused at packaging (scripts/require-release-build.mjs).
+  const feedbackIdentity = (): Promise<FeedbackIdentity> => localTestAccess ? localTestFeedbackIdentity() : licensedFeedbackIdentity();
   const feedback = new FeedbackService({
     serverUrl: licenseConfig.serverUrl,
     identity: feedbackIdentity,
