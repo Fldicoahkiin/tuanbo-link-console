@@ -177,7 +177,7 @@ sudo systemctl start tblink-console-health.service
 systemctl show tblink-console-health.service --property=Result,ExecMainStatus
 ```
 
-- 专用证书沿用服务器现有的 ACME 账户和验证目录（certbot 提示有多个账户时，加上 `--account`，取值用 `sudo grep '^account' /etc/letsencrypt/renewal/tuanbo-link.jinhefilm.com.conf` 里的那个）；DNS 还没切，这次验证直接到服务器。现有的部署钩子只在共用证书续期时重载 Nginx，专用证书不被 Nginx 使用，不需要钩子。
+- 专用证书沿用服务器现有的 ACME 账户和验证目录（certbot 提示有多个账户时，加上 `--account`，取值用 `sudo grep '^account' /etc/letsencrypt/renewal/tuanbo-link.jinhefilm.com.conf` 里的那个）；DNS 还没切，这次验证直接到服务器。服务器上的续期钩子 `/etc/letsencrypt/renewal-hooks/deploy/reload-nginx` 对每张证书续期都会先 `nginx -t` 再平滑重载，所以专用证书续期时 Nginx 也会多重载一次，没有影响；专用证书不被 Nginx 使用，不需要另加钩子。
 - 这一步不启用定时器：DNS 还没切，定时检查没有意义。
 - 验证：
   - certbot 显示 `updates.tuanbo-link.jinhefilm.com` 证书，只有这一个域名，有效期约 90 天。
