@@ -18,11 +18,11 @@ it('未单独设置引擎的档案默认用原生引擎；输出时间码时明�
   expect(internalAudioEngine(profile(undefined, false), project())).toEqual({ engine: 'native', outputsMtc: false, blocked: null });
   const chosen = internalAudioEngine(profile('browser', true), project());
   expect(chosen).toMatchObject({ engine: 'browser', outputsMtc: true });
-  expect(chosen.blocked).toContain('请在“播放设置”点“改用 Windows 原生音频”后再播放');
+  expect(chosen.blocked).toContain('请在“播放设置”里点“改用 Windows 原生音频”后再播放');
   expect(internalAudioEngine(profile('browser', false), project('timecode')).blocked).not.toBeNull();
   const native = internalAudioEngine(profile('native', true), project('timecode'));
   expect(native).toEqual({ engine: 'native', outputsMtc: true, blocked: null });
-  expect(internalAudioEngineLabel(native)).toBe('Windows 原生音频（输出 MIDI 时间码）');
+  expect(internalAudioEngineLabel(native)).toBe('Windows 原生音频（同时发送 MIDI 时间码）');
 });
 
 it('没有灯光的工程（纯音频加画面）继续可用浏览器引擎；有灯光的歌不论保存的输出方式都发时间码', () => {

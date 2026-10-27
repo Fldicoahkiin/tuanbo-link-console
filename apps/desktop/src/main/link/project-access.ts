@@ -39,7 +39,7 @@ export class ProjectAccess {
   }
 
   requireApproved(path: string): void {
-    if (!this.approved.has(pathKey(path))) throw new Error(`工程路径未经本软件的打开或保存对话框确认，已拒绝：${path}`);
+    if (!this.approved.has(pathKey(path))) throw new Error(`这个工程路径不是通过联动台打开或保存的，已拒绝：${path}`);
   }
 
   /** The window's report of the project it shows (null: unnamed or none), recorded as the last project. */
@@ -93,7 +93,7 @@ export class ProjectAccess {
     try {
       projectPath = lastProjectRecordSchema.parse(JSON.parse(content)).projectPath;
     } catch (error) {
-      throw new Error(`上次工程记录损坏：${this.lastProjectFile}`, { cause: error });
+      throw new Error(`上次打开的工程记录已损坏：${this.lastProjectFile}`, { cause: error });
     }
     this.recorded = projectPath;
     this.approve(projectPath);
@@ -111,7 +111,7 @@ export class ProjectAccess {
     this.requireShown(projectPath);
     if (chosen.has(sourcePath)) return;
     const asset = relative(dirname(resolve(projectPath)), resolve(sourcePath)).replaceAll('\\', '/');
-    if (!isProjectAssetPath(asset)) throw new Error(`导入文件未经本软件的文件选择或拖放确认，已拒绝：${sourcePath}`);
+    if (!isProjectAssetPath(asset)) throw new Error(`这个文件不是通过联动台选择或拖入的，已拒绝：${sourcePath}`);
     await resolveProjectAssetFiles(projectPath, [asset]);
   }
 }

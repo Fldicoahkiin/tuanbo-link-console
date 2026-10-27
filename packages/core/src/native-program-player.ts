@@ -36,9 +36,6 @@ export class NativeProgramPlayer {
   private finishing = false;
   private allowMtc = false;
   private mtcSuppressed = false;
-  private allowLighting = false;
-  /** Lighting route of the current song, decided before it starts and kept for its seeks and loops. */
-  private lit = true;
   private loopStart: number | null = null;
   private reflectGain = false;
   private ingestPending = false;
@@ -77,16 +74,16 @@ export class NativeProgramPlayer {
       void this.api.preloadNativeObs({ ...request, projectPath: this.projectPath, positionMs: prepared.snapshot.positionMs,
         preciseSeeking: this.dependencies.preciseSeeking?.() ?? false, snapshot: createObsProgramSnapshot(this.project, itemId, this.revision) })
         // Once the song is being played it prepares its own picture; a preselection refused meanwhile is not a failure.
-        .catch(error => { if (!this.disposed && this.selectedPreload === selection && !['preparing', 'playing', 'paused'].includes(this.state.status)) this.reportUnavailable(`节目画面预备未完成：${toUserErrorMessage(error)}`); });
-    } catch (error) { this.reportUnavailable(`节目画面无法预备：${toUserErrorMessage(error)}`); }
+        .catch(error => { if (!this.disposed && this.selectedPreload === selection && !['preparing', 'playing', 'paused'].includes(this.state.status)) this.reportUnavailable(`节目画面没有准备好：${toUserErrorMessage(error)}`); });
+    } catch (error) { this.reportUnavailable(`节目画面无法准备：${toUserErrorMessage(error)}`); }
   }
   private async cancelPreload(): Promise<void> {
     const selection = this.selectedPreload; this.selectedPreload = null;
     if (selection) await this.api.cancelNativeObsPreload(selection.request);
   }
 
-  /** `withoutLighting`: the operator chose to play this song without lighting after the start check. */
-  play(itemId: string, positionMs?: number, paused = false, withoutLighting = false): Promise<void> {
+  /** Every song starts with its timecode (2026-10-26); the start check only shows a warning. */
+  play(itemId: string, positionMs?: number, paused = false): Promise<void> {
     const config = this.dependencies.configuration(), token = ++this.epoch;
     // The service discards another song's preselected picture for this play; that is not a failure.
     if (this.selectedPreload?.itemId !== itemId) this.selectedPreload = null;
@@ -96,25 +93,20 @@ export class NativeProgramPlayer {
     this.cancelScheduled(); this.runtimePrepared = false; this.timecodeOutput = idleTimecodeOutput; this.boundary('seek');
     this.update({ status: 'preparing', itemId, error: null, errorTitle: null, notice: null, fault: null, mtcConnectionFailed: false });
     return this.enqueue(token, async () => {
-      if (!this.projectPath) throw new Error('请先保存工程，再播放正式音频');
+      if (!this.projectPath) throw new Error('请先保存工程，再播放');
       // An engine in error has exited and rejects every command; prepare replaces it.
       if (this.native && this.native.status !== 'stopped' && this.native.status !== 'ended' && this.native.status !== 'error') await this.command({ kind: 'stop' });
-      await this.optionalRuntime(() => this.stopObs(), '上次画面清理失败');
-      await this.optionalRuntime(() => this.dependencies.stop(), '上次联动清理失败');
+      await this.optionalRuntime(() => this.stopObs(), '上一次的画面没清理干净');
+      await this.optionalRuntime(() => this.dependencies.stop(), '上一次的联动没清理干净');
       if (!this.current(token)) return;
       const prepared = nativeProgramSnapshot(this.project, itemId, this.revision, positionMs, config.audioSampleRate ?? 48000);
       const item = this.project.rundown.find(entry => entry.id === itemId)!;
       if (!reuseSession) {
-        // Without an operator choice (end of song, MIDI control, skip) a failed check plays without lighting in red.
         const check = lightingStartCheck(this.project, itemId, { portName: config.mtcPortName, ports: null });
-        this.lit = !withoutLighting && check === null;
-        // The operator's choice is in the run log already (开播前检查); show it without logging it twice.
-        if (withoutLighting) this.showNotice(`本首无灯光播放：${check ?? '操作员选择'}`);
-        else if (check) this.startFault(`${check}；本首无灯光播放`);
+        if (check) this.reportUnavailable(check);
       }
-      this.allowMtc = prepared.allowMtc && this.lit;
-      this.allowLighting = prepared.allowLighting && this.lit;
-      if (prepared.notice && this.lit) this.reportUnavailable(prepared.notice);
+      this.allowMtc = prepared.allowMtc;
+      if (prepared.notice) this.reportUnavailable(prepared.notice);
       const sendMtc = this.allowMtc && this.state.mtcEnabled;
       const midiPortName = sendMtc ? config.mtcPortName : null;
       const snapshot = { ...prepared.snapshot, volume: config.fadeInMs && !paused ? 0 : prepared.snapshot.volume };
@@ -131,7 +123,7 @@ export class NativeProgramPlayer {
         if (next) try {
           nextSnapshot = nativeProgramSnapshot(this.project, next.id, this.revision,
             this.loopStart ?? undefined, config.audioSampleRate ?? 48000).snapshot;
-        } catch (error) { this.reportUnavailable(`下一节目无法提前准备：${toUserErrorMessage(error)}`); }
+        } catch (error) { this.reportUnavailable(`下一个节目无法提前准备：${toUserErrorMessage(error)}`); }
       }
       this.requestedPreparation = true;
       const result = await this.api.prepareNativePlayback({ version: 1, sessionId: this.sessionId, generation: ++this.nativeGeneration,
@@ -141,9 +133,9 @@ export class NativeProgramPlayer {
       if (!this.current(token)) { await this.command({ kind: 'stop' }); return; }
       if (this.mtcSuppressed && result.mtcPortName) await this.command({ kind: 'stop-mtc' });
       if (!this.current(token)) return;
-      const prepareLighting = async (): Promise<void> => { if (item.lighting && this.allowLighting) {
+      const prepareLighting = async (): Promise<void> => { if (item.lighting) {
         try { await optionalOutputReady(this.lighting.prepare(playbackLighting(item.lighting), config.lightingProfile ?? null, snapshot.positionMs), () => this.lighting.stop(), '灯光动作'); this.lightingPrepared = this.current(token); }
-        catch (error) { this.lighting.stop(); if (this.current(token)) this.startFault(`灯光动作未参与：${toUserErrorMessage(error)}`); }
+        catch (error) { this.lighting.stop(); if (this.current(token)) this.startFault(`灯光动作没有启动：${toUserErrorMessage(error)}`); }
       } };
       if (!this.current(token)) return;
       await Promise.all([prepareLighting(), this.prepareRuntime(itemId, snapshot.positionMs, reuseSession, token), this.prepareObs(itemId, token)]);
@@ -175,9 +167,9 @@ export class NativeProgramPlayer {
       const position = this.native!.positionMs;
       if (!this.current(token)) return;
       const item = this.project.rundown.find(entry => entry.id === this.state.itemId);
-      const prepareLighting = async (): Promise<void> => { if (item?.lighting && this.allowLighting) {
+      const prepareLighting = async (): Promise<void> => { if (item?.lighting) {
         try { await optionalOutputReady(this.lighting.prepare(playbackLighting(item.lighting), this.dependencies.configuration().lightingProfile ?? null, position), () => this.lighting.stop(), '灯光动作'); this.lightingPrepared = this.current(token); }
-        catch (error) { this.reportUnavailable(`灯光动作未恢复：${toUserErrorMessage(error)}`); }
+        catch (error) { this.reportUnavailable(`灯光动作没有恢复：${toUserErrorMessage(error)}`); }
       } };
       // Pause cancels unsent MIDI and releases owned notes. Prepare the future
       // range before resuming audio; late preparation cannot join mid-song.
@@ -193,7 +185,7 @@ export class NativeProgramPlayer {
     // Stop reaches the main service immediately if preparation has already
     // published its session; otherwise the queued prepare cannot start audio.
     const stopping = (this.requestedPreparation ? this.command({ kind: 'stop' }) : Promise.resolve()).catch(error => { if (this.current(token)) this.fail(error); });
-    return this.enqueue(token, async () => { await stopping; if (this.lighting.release) await this.optionalRuntime(() => this.lighting.release!(), '灯光关闭未完成'); await this.optionalRuntime(() => this.cancelPreload(), '节目预备清理失败'); await this.optionalRuntime(() => this.stopObs(), '画面清理失败'); await this.dependencies.stop(); this.runtimePrepared = false;
+    return this.enqueue(token, async () => { await stopping; if (this.lighting.release) await this.optionalRuntime(() => this.lighting.release!(), '灯光没能完全关闭'); await this.optionalRuntime(() => this.cancelPreload(), '节目准备没清理干净'); await this.optionalRuntime(() => this.stopObs(), '画面清理失败'); await this.dependencies.stop(); this.runtimePrepared = false;
       if (this.current(token)) { this.boundary('pause'); this.update({ positionMs: 0, mtcSentPositionMs: null }); } });
   }
   async reset(): Promise<void> { await this.stop(); if (this.state.status !== 'error') this.update({ itemId: null, playedItemIds: [], durationMs: 0 }); }
@@ -235,7 +227,7 @@ export class NativeProgramPlayer {
     this.update({ mtcEnabled: !this.state.mtcEnabled });
     if (!this.state.mtcEnabled) this.mtcSuppressed = true;
     if (!this.state.mtcEnabled && this.native && !['preparing', 'stopped', 'error'].includes(this.native.status)) void this.command({ kind: 'stop-mtc' }).catch(error => this.reportUnavailable(`停止时间码失败：${toUserErrorMessage(error)}`));
-    else if (this.state.mtcEnabled) this.reportUnavailable('下次明确播放时重新准备时间码，本首不在中途补发。');
+    else if (this.state.mtcEnabled) this.reportUnavailable('下次播放时会重新准备时间码，这首歌不会中途补发。');
   }
   setVolume(volume: number): void { if (!Number.isFinite(volume)) return; this.reflectGain = false; const target = Math.max(0, Math.min(100, volume)); this.update({ volume: target }); this.queueVolume(target / 100, 0); }
   fade(out: boolean): void { const config = this.dependencies.configuration(), volume = this.project.rundown.find(item => item.id === this.state.itemId)?.playback?.volume ?? 100; this.reflectGain = true; this.queueVolume(out ? 0 : volume / 100, (out ? config.fadeOutMs : config.fadeInMs) ?? 500); }
@@ -275,7 +267,7 @@ export class NativeProgramPlayer {
     if (timecode.notice) this.reportUnavailable(timecode.notice);
     this.update({ mtcConnectionFailed: Boolean(status.mtcError), mtcPortName: status.mtcError ? null : status.mtcPortName,
       mtcSentPositionMs: status.mtcPortName && !status.mtcError && status.mtcSent ? status.offsetMs + status.positionMs : null });
-    if (status.audioError || status.status === 'error') { if (this.state.status !== 'error') this.fail(new Error(status.audioError ?? '原生音频服务失效')); return; }
+    if (status.audioError || status.status === 'error') { if (this.state.status !== 'error') this.fail(new Error(status.audioError ?? '音频服务已失效，请重新播放')); return; }
     if (this.state.status === 'playing') this.consumeClock();
   }
   private receiveObs(status: NativeObsStatus): void {
@@ -283,9 +275,9 @@ export class NativeProgramPlayer {
       || status.generation < this.obsSession.generation || status.itemId !== this.state.itemId) return;
     this.dependencies.obsChanged?.(status);
     if (status.notice) this.reportUnavailable(status.notice);
-    if (status.state === 'failed' || status.state === 'stopped' && status.reason) this.reportUnavailable(`画面通道未参与或已停止：${status.reason ?? '未知错误'}；音频继续播放。`);
+    if (status.state === 'failed' || status.state === 'stopped' && status.reason) this.reportUnavailable(`画面没有联动或已停止，音频照常播放。原因：${status.reason ?? '未知错误'}`);
     // A stopped picture channel is an output fault for a song with picture work; for one without, the notice above is all.
-    const fault = status.state === 'failed' && itemNeedsObs(this.project, status.itemId) ? `画面通道已停止：${status.reason ?? '未知错误'}` : status.fault;
+    const fault = status.state === 'failed' && itemNeedsObs(this.project, status.itemId) ? `画面联动已停止：${status.reason ?? '未知错误'}` : status.fault;
     if (fault) this.reportFault(fault);
   }
   private async prepareObs(itemId: string, token: number): Promise<void> {
@@ -306,7 +298,7 @@ export class NativeProgramPlayer {
     } catch (error) {
       // Operator decision 2026-10-19: a song with picture work does not start without its picture.
       if (this.current(token) && itemNeedsObs(this.project, itemId)) throw new Error(`画面准备失败：${toUserErrorMessage(error)}`, { cause: error });
-      if (this.current(token)) this.reportUnavailable(`画面未参与：${toUserErrorMessage(error)}；音频继续播放。`);
+      if (this.current(token)) this.reportUnavailable(`画面没有联动，音频照常播放。原因：${toUserErrorMessage(error)}`);
     }
     finally { if (this.obsSession === envelope) this.obsPreparing = false; }
   }
@@ -317,7 +309,7 @@ export class NativeProgramPlayer {
     try {
       return { snapshot: createObsProgramSnapshot(this.project, next.id, this.revision),
         positionMs: nativeProgramSnapshot(this.project, next.id, this.revision, undefined, this.dependencies.configuration().audioSampleRate ?? 48000).snapshot.positionMs };
-    } catch (error) { this.reportUnavailable(`下一节目文件预备未参与：${toUserErrorMessage(error)}`); return undefined; }
+    } catch (error) { this.reportUnavailable(`下一个节目的文件没有准备：${toUserErrorMessage(error)}`); return undefined; }
   }
   private async stopObs(): Promise<void> {
     const envelope = this.obsSession; this.obsSession = null; this.obsPreparing = false;
@@ -336,7 +328,7 @@ export class NativeProgramPlayer {
   private startCompanionClock(): void {
     if (!this.runtimePrepared || !this.native) return;
     try { this.dependencies.started?.(this.native.positionMs); }
-    catch (error) { this.runtimeUnavailable(`通用 MIDI Cue 未开始：${toUserErrorMessage(error)}；音频和后台画面独立运行。`); }
+    catch (error) { this.runtimeUnavailable(`通用 MIDI Cue 没有启动，音频和画面照常进行。原因：${toUserErrorMessage(error)}`); }
   }
   private async ingest(): Promise<void> {
     if (this.ingestPending) return;
@@ -355,7 +347,7 @@ export class NativeProgramPlayer {
         catch (error) {
           if (!this.current(token)) return;
           this.lightingPrepared = false; this.lighting.stop();
-          this.reportUnavailable(`曲尾灯光未完成：${toUserErrorMessage(error)}；继续原定节目播放动作。`);
+          this.reportUnavailable(`曲尾灯光没有完成，节目按原来的设置继续。原因：${toUserErrorMessage(error)}`);
         }
       }
       if (!this.current(token)) return;
@@ -391,7 +383,7 @@ export class NativeProgramPlayer {
         void this.dependencies.stop().catch(error => { if (this.current(token)) this.reportUnavailable(`取消联动准备失败：${toUserErrorMessage(error)}`); });
       }, 'MIDI Cue');
       this.runtimePrepared = this.current(token) && !abort.signal.aborted;
-    } catch (error) { if (this.current(token)) this.reportUnavailable(`MIDI Cue 未参与：${toUserErrorMessage(error)}；音频继续播放。`); }
+    } catch (error) { if (this.current(token)) this.reportUnavailable(`MIDI Cue 没有发出，音频照常播放。原因：${toUserErrorMessage(error)}`); }
     finally { if (this.runtimePreparation === abort) this.runtimePreparation = null; }
   }
   private cancelScheduled(cancelObsPreparation = true): void {
@@ -399,7 +391,7 @@ export class NativeProgramPlayer {
     if (cancelObsPreparation && this.obsPreparing) void this.stopObs().catch(error => this.reportUnavailable(`取消画面准备失败：${toUserErrorMessage(error)}`));
     this.lighting.stop(); this.lightingPrepared = false; this.finishing = false; this.lastPosition = -1; this.pendingPosition = null; this.volumePending = null; this.reflectGain = false;
   }
-  private fail(error: unknown): void { ++this.epoch; this.cancelScheduled(); this.update({ status: 'error', error: toUserErrorMessage(error), errorTitle: this.state.status === 'preparing' ? '播放未开始：准备失败' : '播放操作失败' }); if (this.native?.status !== 'error' && this.native?.status !== 'stopped') void this.command({ kind: 'stop' }).catch(cleanup => this.reportUnavailable(`停止音频失败：${toUserErrorMessage(cleanup)}`)); void this.dependencies.stop().catch(cleanup => this.reportUnavailable(`停止联动失败：${toUserErrorMessage(cleanup)}`)); }
+  private fail(error: unknown): void { ++this.epoch; this.cancelScheduled(); this.update({ status: 'error', error: toUserErrorMessage(error), errorTitle: this.state.status === 'preparing' ? '没有开始播放：准备失败' : '播放操作失败' }); if (this.native?.status !== 'error' && this.native?.status !== 'stopped') void this.command({ kind: 'stop' }).catch(cleanup => this.reportUnavailable(`停止音频失败：${toUserErrorMessage(cleanup)}`)); void this.dependencies.stop().catch(cleanup => this.reportUnavailable(`停止联动失败：${toUserErrorMessage(cleanup)}`)); }
   private boundary(event: PlaybackBoundary): void { for (const listener of this.boundaries) listener(event); }
   private items() { return playlistItems(this.project, this.state.playlistId ?? 'all').filter(item => item.enabled && item.referenceAudio); }
   private markPlayed(): void { if (this.state.itemId) this.update({ playedItemIds: [...new Set([...this.state.playedItemIds, this.state.itemId])] }); }

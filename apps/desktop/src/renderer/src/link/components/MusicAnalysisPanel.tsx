@@ -20,7 +20,7 @@ export function MusicAnalysisPanel({ editor, document, onChange, onBpm, onSeek }
       const response = await window.tbLink.analyzeMusic({ version: 1, taskId, projectPath: state.path, source: audio }, update => { if (mounted.current && active.current === taskId) setProgress(`${update.message} ${Math.round(update.progress * 100)}%`); });
       if (!mounted.current || active.current !== taskId) return;
       const now = useDocumentStore.getState();
-      if (now.documentId !== state.documentId || !now.project?.rundown.some(item => item.referenceAudio === audio)) throw new Error('歌曲或音源已改变，分析结果未应用');
+      if (now.documentId !== state.documentId || !now.project?.rundown.some(item => item.referenceAudio === audio)) throw new Error('歌曲或音频已经变了，分析结果没有应用');
       setResult(response); setSelected(new Set());
     } catch (cause) { if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { if (active.current === taskId) active.current = null; if (mounted.current) setBusy(false); }
@@ -28,7 +28,7 @@ export function MusicAnalysisPanel({ editor, document, onChange, onBpm, onSeek }
   const candidates = result?.candidates.filter(value => value.kind === kind) ?? [];
   const names = { beat: '节拍', hit: '疑似重击', roll: '疑似密集鼓点', silence: '疑似停顿' };
   const apply = (): void => {
-    if (!result || result.sourceSha256 !== audio?.sha256 || result.durationMs !== audio.durationMs) { setError('分析依据已经失效，请重新分析'); return; }
+    if (!result || result.sourceSha256 !== audio?.sha256 || result.durationMs !== audio.durationMs) { setError('分析结果已过期，请重新分析'); return; }
     const values = result.candidates.filter(value => selected.has(value.id)); if (!values.length) return;
     onChange({ ...document, version: 2, music: document.music ?? createLightingMusic(), markers: [...document.markers, ...values.map(value => ({ id: crypto.randomUUID(), name: names[value.kind], kind: value.kind === 'beat' ? 'custom' as const : value.kind === 'silence' ? 'stop' as const : value.kind, startMs: value.startMs, endMs: value.endMs, color: '#eabb68', notes: '辅助检测候选，经用户确认' }))] }, '应用选中的音乐分析结果');
     setResult({ ...result, candidates: result.candidates.filter(value => !selected.has(value.id)) }); setSelected(new Set());

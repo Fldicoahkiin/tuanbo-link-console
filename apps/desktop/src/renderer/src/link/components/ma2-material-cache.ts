@@ -16,6 +16,6 @@ export function loadMa2MaterialCache(projectId: string): MaterialCache | null {
 
 export function rememberMa2MaterialCache(projectId: string, source: Ma2CatalogRequest, library: Ma2EffectLibrary): void {
   const current = useDocumentStore.getState();
-  if (current.project?.projectId !== projectId) throw new Error('工程已切换，素材未写入其他工程');
+  if (current.project?.projectId !== projectId) throw new Error('工程已切换，素材没有写进别的工程');
   current.execute(saveMa2MaterialLibraryCommand(source.network ? `${source.network.host}:${source.network.port}` : '本机 onPC', library));
 }

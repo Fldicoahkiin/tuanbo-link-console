@@ -46,10 +46,10 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
       probe: await attempt(page, v => window.tbLink.findMissingAssetFiles({ projectPath: v.never, files: [{ relativePath: 'assets/reference-media/secret.png', sha256: 'a'.repeat(64) }] }), values)
     };
     expect.soft(projects).toEqual({
-      report: expect.stringContaining('未经本软件的打开或保存对话框确认'),
-      open: expect.stringContaining('未经本软件的打开或保存对话框确认'),
+      report: expect.stringContaining('不是通过联动台打开或保存的'),
+      open: expect.stringContaining('不是通过联动台打开或保存的'),
       save: expect.stringContaining('只能访问当前打开的工程'),
-      recovery: expect.stringContaining('未经本软件的打开或保存对话框确认'),
+      recovery: expect.stringContaining('不是通过联动台打开或保存的'),
       probe: expect.stringContaining('只能访问当前打开的工程')
     });
     expect.soft(await readdir(dirname(planted))).toEqual([]);
@@ -82,9 +82,9 @@ test('窗口不能自行指定路径：工程、工程内文件、导入来源�
       startStreaming: await attempt(page, v => window.tbLink.saveIntegrationProfile({ profile: { ...v.profile, obs: { ...v.profile.obs, arguments: ['--startstreaming'] } } }), values)
     };
     expect.soft(sources).toEqual({
-      importUnchosen: expect.stringContaining('未经本软件的文件选择或拖放确认'),
-      plantProgram: expect.stringContaining('程序位置未经本软件的选择对话框或一键识别确认'),
-      plantFolder: expect.stringContaining('启动文件夹未经本软件的选择对话框确认'),
+      importUnchosen: expect.stringContaining('不是通过联动台选择或拖入的'),
+      plantProgram: expect.stringContaining('这个程序位置不是通过联动台选择或一键识别得到的，已拒绝'),
+      plantFolder: expect.stringContaining('这个启动文件夹不是通过联动台选择的，已拒绝'),
       startStreaming: expect.stringContaining('OBS 启动参数不在允许范围内')
     });
     expect.soft(await exists(join(dirname(shown), 'assets'))).toBe(false);

@@ -22,7 +22,7 @@ export function BeautyOutput({ connected, onTarget }: { connected: boolean; onTa
     finally { setInstalling(false); }
   };
   return <section className="beauty-output" aria-label="全画面美颜状态">
-    <p>对 OBS 当前完整画面统一调节，自动跟随场景切换，无需选择来源或手动启动。</p>
+    <p>对 OBS 的整个画面统一美颜，切换场景时自动跟随，不用选来源，也不用手动启动。</p>
     {source ? <p>当前画面：{source}</p> : null}
     {runtime?.phase === 'error' || error ? <>
       <p className="beauty-output-error" role="alert">{error || runtime?.message}</p>

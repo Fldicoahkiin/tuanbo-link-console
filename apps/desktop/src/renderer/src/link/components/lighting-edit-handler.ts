@@ -6,7 +6,7 @@ export function lightingEditHandler({ itemId, project, notify }: { itemId: strin
   return (document: LightingDocument, label: string, automaticSource?: ReferenceAudio): boolean => {
     if (!itemId) { notify('请先选择要保存灯光素材的节目', 'error'); return false; }
     try {
-      if (useDocumentStore.getState().project !== project) throw new Error('工程在操作期间已改变，请重新修改');
+      if (useDocumentStore.getState().project !== project) throw new Error('操作过程中工程被修改了，请重新操作');
       if (automaticSource && !document.musicAnalysis) throw new Error('自动分析没有返回音乐识别结果');
       useDocumentStore.getState().execute(automaticSource && document.musicAnalysis
         ? setAutomaticMusicAnalysisCommand(itemId, automaticSource, document.musicAnalysis)

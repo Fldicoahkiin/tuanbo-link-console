@@ -170,6 +170,11 @@ import ffmpegPath from 'ffmpeg-static';
 import { NativeAudioCache } from './link/native-audio-cache';
 import { NativePlayerService } from './link/native-player-service';
 import { NativeMidiCheckService } from './link/native-midi-check';
+import { MidiPortBroker } from './link/midi-port-broker';
+import { NativeMidiOutput } from './link/native-midi-output';
+import { NativeMidiInput } from './link/native-midi-input';
+import { NativeDeviceQuery } from './link/native-device-query';
+import { midiPortHandleSchema, midiPortListRequestSchema, midiPortOpenSchema, midiPortSendSchema } from '@tb/schema';
 import { NativePlayerUiPublisher } from './link/native-player-ui-publisher';
 import { NativeProgramHost } from './link/native-program-host';
 import { NativeProgramService } from './link/native-program-service';
@@ -225,9 +230,9 @@ let runQuit: (reason: 'quit' | 'update', finish: () => void) => Promise<boolean>
 let runtimeActive = false;
 let releaseRendererRuntime: () => Promise<void> = () => Promise.resolve();
 let automaticMusic: AutomaticMusicRuntime | null = null;
-let authorizeOutput: () => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
-let authorizeProduct: (channel: string, value: unknown) => Promise<void> = () => Promise.reject(new Error('授权服务尚未就绪'));
-let readLicenseStatus: () => Promise<LicenseStatus> = () => Promise.reject(new Error('授权服务尚未就绪'));
+let authorizeOutput: () => Promise<void> = () => Promise.reject(new Error('授权服务还没准备好'));
+let authorizeProduct: (channel: string, value: unknown) => Promise<void> = () => Promise.reject(new Error('授权服务还没准备好'));
+let readLicenseStatus: () => Promise<LicenseStatus> = () => Promise.reject(new Error('授权服务还没准备好'));
 let ipcLogger: LinkRunLogger | null = null;
 let allowWindowClose = false;
 let stopAuditionForQuit: (() => Promise<void>) | null = null;
@@ -241,6 +246,8 @@ let nativeObs: NativeObsHost | null = null;
 let nativeObsPreload: NativeObsPreloadPool | null = null;
 let nativeProgram: NativeProgramService | null = null;
 let nativeProgramHost: NativeProgramHost | null = null;
+/** Every MIDI port the window uses is opened here, in main, and only while it is in use. */
+let midiPorts: MidiPortBroker | null = null;
 
 async function closeNativePlayer(): Promise<void> {
   await nativeProgram?.close();
@@ -248,7 +255,7 @@ async function closeNativePlayer(): Promise<void> {
   nativePlayerShutdown ??= (async () => {
     const results = await Promise.allSettled([player?.close(), nativeObs?.stop(), nativeObsPreload?.close(), musicMonitor?.stop()]);
     const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
-    if (failures.length) throw new AggregateError(failures, '正式音频或画面关闭未完成，请查看日志');
+    if (failures.length) throw new AggregateError(failures, '音频或画面没能完全关闭，请查看运行日志');
   })();
   // A failed close keeps the owned instance and blocks another engine from
   // opening the same device. Never claim stopped or spawn a replacement.
@@ -307,11 +314,11 @@ async function bootstrap(): Promise<void> {
   void logger.pruneSessions(path => shell.trashItem(path)).then(async pruned => {
     if (pruned.length === 0) return;
     const bytes = pruned.reduce((sum, entry) => sum + entry.bytes, 0);
-    await logger.record({ level: 'info', category: 'system', message: `已把 ${pruned.length} 个旧会话日志（${(bytes / 1024 / 1024).toFixed(1)} MB）移到回收站`,
+    await logger.record({ level: 'info', category: 'system', message: `已把 ${pruned.length} 个旧日志（${(bytes / 1024 / 1024).toFixed(1)} MB）移到回收站`,
       details: { expired: pruned.filter(entry => entry.reason === 'expired').length, overSize: pruned.filter(entry => entry.reason === 'over-size').length, bytes,
         files: pruned.slice(0, 300).map(entry => basename(entry.file)) } });
   }).catch(async (error: unknown) => {
-    await logger.record({ level: 'warning', category: 'system', message: '旧会话日志清理未完成，下次启动再试', details: { error: error instanceof Error ? error.message : String(error) } });
+    await logger.record({ level: 'warning', category: 'system', message: '旧日志没清理完，下次启动时再试', details: { error: error instanceof Error ? error.message : String(error) } });
   }).catch((error: unknown) => console.error('日志清理结果未能写入', error));
   app.on('child-process-gone', (_event, details) => {
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
@@ -450,39 +457,44 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
   mainWindow.webContents.on('will-navigate', event => event.preventDefault());
   const window = mainWindow;
   let rendererReloadedAt = 0;
+  // A new page holds none of the MIDI ports the previous one opened.
+  mainWindow.webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument) void midiPorts?.releaseWindow();
+  });
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    void midiPorts?.releaseWindow();
     // Nothing can be saved from a window that exited: the recovery copy holds the
     // edits and is offered when the project opens again, so quitting does not ask.
-    rendererSaves.failAll('界面进程已退出，无法保存；未保存的修改保留在恢复副本中，下次打开工程时可以恢复');
-    if (documentState.dirty) recordQuitStep('界面进程退出，未保存的修改以恢复副本为准');
+    rendererSaves.failAll('界面已退出，无法保存。未保存的修改已存进恢复副本，下次打开工程时可以恢复');
+    if (documentState.dirty) recordQuitStep('界面已退出，未保存的修改以恢复副本为准');
     documentState = { ...documentState, dirty: false, consoleSynced: false };
     // A program that is playing runs in main and keeps its audio, timecode, OBS and
     // lighting outputs; the reloaded window takes it over. Anything else stops.
     void (nativeProgram?.release() ?? Promise.resolve(null)).then(async kept => {
       if (kept) {
-        await logger.record({ level: 'warning', category: 'state', device: '正式播放器', ...(kept.itemId ? { itemId: kept.itemId } : {}),
-          message: `界面进程退出，节目继续在后台播放（${Math.floor(kept.positionMs / 1000)} 秒）；界面重新加载后接管` });
+        await logger.record({ level: 'warning', category: 'state', device: '播放器', ...(kept.itemId ? { itemId: kept.itemId } : {}),
+          message: `界面已退出，节目在后台继续播放（${Math.floor(kept.positionMs / 1000)} 秒），界面重新加载后会接回控制` });
         return;
       }
       await closeNativePlayer(); await releaseRendererRuntime();
     }).catch((error: unknown) => {
-      void logger.record({ level: 'error', category: 'device', device: '正式音频', message: `界面退出后停止音频失败：${String(error)}`, result: 'failed' })
+      void logger.record({ level: 'error', category: 'device', device: '音频', message: `界面退出后停止音频失败：${String(error)}`, result: 'failed' })
         .catch((loggingError: unknown) => console.error('记录音频停止失败', loggingError));
     });
     void logger.record({ level: 'error', category: 'device', device: 'Electron',
-      message: `Electron 界面进程退出：${details.reason}，退出码 ${details.exitCode}；故障转储目录：${app.getPath('crashDumps')}`,
+      message: `界面进程意外退出：${details.reason}，退出码 ${details.exitCode}。崩溃记录在：${app.getPath('crashDumps')}`,
       result: 'failed' }).catch((error: unknown) => console.error('记录 Electron 界面崩溃失败', error));
     if (quitFlowRunning || details.reason === 'clean-exit' || window.isDestroyed()) return;
     // Reload once automatically. Another exit within a minute waits for the
     // operator, so a page that keeps failing cannot reload in a loop.
     if (Date.now() - rendererReloadedAt > 60_000) { rendererReloadedAt = Date.now(); window.webContents.reload(); return; }
-    void dialog.showMessageBox(window, { type: 'error', title: '界面进程再次退出', noLink: true, defaultId: 0, cancelId: 1,
-      message: '界面进程在自动重新加载后一分钟内再次退出，已暂停自动重新加载。', buttons: ['重新加载界面', '暂不加载'] })
+    void dialog.showMessageBox(window, { type: 'error', title: '界面又退出了', noLink: true, defaultId: 0, cancelId: 1,
+      message: '界面重新加载后不到一分钟又退出了，已停止自动重新加载。', buttons: ['重新加载界面', '暂不加载'] })
       .then(({ response }) => { if (response === 0 && !window.isDestroyed()) { rendererReloadedAt = Date.now(); window.webContents.reload(); } })
       .catch((error: unknown) => console.error('界面重新加载询问失败', error));
   });
   mainWindow.on('unresponsive', () => {
-    rendererSaves.failAll('界面无响应，保存未完成；未保存的修改保留在恢复副本中');
+    rendererSaves.failAll('界面没有响应，这次没有保存。未保存的修改已存进恢复副本');
     void logger.record({ level: 'error', category: 'system', message: '界面无响应', result: 'failed' })
       .catch((error: unknown) => console.error('记录界面无响应失败', error));
   });
@@ -522,18 +534,12 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
   mainWindow.webContents.session.setPermissionCheckHandler((_webContents, permission, _origin, details) => {
     // Chromium requires the audio-device visibility check to enumerate output
     // endpoints. Actual capture requests remain denied below.
-    // MIDI must pass the asynchronous, isolated driver probe below. Granting it
-    // here would let Chromium enter a stalled Windows MIDI service directly.
     return permission === 'media' && details.mediaType === 'audio';
   });
   mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
-    if (permission === 'midi' || permission === 'midiSysex') {
-      void authorizeOutput().then(() => midiHealth.check()).then((result) => callback(result === 'ready'), (error: unknown) => {
-        console.error('MIDI 检测组件失败', error);
-        callback(false);
-      });
-      return;
-    }
+    // Web MIDI stays denied: Chromium opens every MIDI port on the computer for as long as the page
+    // uses MIDI, so single-client USB interfaces refused the playback engine and P1 (0.5.2, error 7).
+    // The window's MIDI goes through main instead (link:midi-*), one port at a time.
     callback(permission === 'speaker-selection');
   });
   mainWindow.on('close', (event) => {
@@ -543,7 +549,7 @@ function createMainWindow(obs: ObsWebSocketAdapter, logger: LinkRunLogger): void
     requestQuit();
   });
   mainWindow.on('closed', () => {
-    rendererSaves.failAll('界面已关闭，无法保存；未保存的修改保留在恢复副本中，下次打开工程时可以恢复');
+    rendererSaves.failAll('界面已关闭，无法保存。未保存的修改已存进恢复副本，下次打开工程时可以恢复');
     mainWindow = null;
   });
 
@@ -565,9 +571,9 @@ function registerIpc(
   const assetRelinkRequests = new AssetRelinkRequests({ projects: projectService, access: projectAccess });
   // Absolute paths the window may hand back: files the operator dropped, picked or chose in a
   // dialog, and programs a dialog or the detection found. Kept apart so a dropped file is no program.
-  const chosenFiles = new ChosenPaths('文件未经本软件的文件选择或拖放确认');
-  const chosenPrograms = new ChosenPaths('程序位置未经本软件的选择对话框或一键识别确认');
-  const chosenFolders = new ChosenPaths('启动文件夹未经本软件的选择对话框确认');
+  const chosenFiles = new ChosenPaths('这个文件不是通过联动台选择或拖入的');
+  const chosenPrograms = new ChosenPaths('这个程序位置不是通过联动台选择或一键识别得到的');
+  const chosenFolders = new ChosenPaths('这个启动文件夹不是通过联动台选择的');
   // The preload reports the path of each real File the operator dropped or picked; a window cannot
   // send this message itself, and a File it makes up has no path.
   ipcMain.removeAllListeners('link:file-chosen');
@@ -590,9 +596,9 @@ function registerIpc(
   const obsPreload = new NativeObsPreloadPool({
     authorize: async request => {
       await authorizeProduct('link:native-obs-prepare', request);
-      if (nativePlaybackActive() || nativeObs?.busy) throw new Error('播放或画面会话活动时不能预备另一个节目');
+      if (nativePlaybackActive() || nativeObs?.busy) throw new Error('正在播放时不能准备另一个节目');
       await nativeObs?.stop();
-      if (nativePlaybackActive()) throw new Error('音频已开始准备，不能另行启动节目预备');
+      if (nativePlaybackActive()) throw new Error('音频已经在准备了，不能再单独准备节目');
     },
     create: (request, positionMs) => createNativeObsOutputs(request, { obs, projects: projectService, media: mediaPreviewService,
       profiles: profileStore, seek: nativeSeek, logger, seenNotices,
@@ -600,7 +606,7 @@ function registerIpc(
         if (nativeObs?.status?.sessionId === request.sessionId) nativeObs.disconnect(error.message);
         else console.error('已结束画面会话的运行日志未能落盘', error);
       },
-      audioIdentity: () => { if (!nativePlayer) throw new Error('正式音频尚未准备'); return nativePlayer.audioCaptureIdentity; } }, positionMs)
+      audioIdentity: () => { if (!nativePlayer) throw new Error('音频还没准备好'); return nativePlayer.audioCaptureIdentity; } }, positionMs)
   });
   nativeObsPreload = obsPreload;
   nativeObs = new NativeObsHost({
@@ -613,7 +619,7 @@ function registerIpc(
       assertCurrent();
       const decoderPrepared = await obs.preparePlaybackMedia(() => obsPreload.prepareNext(request, assertCurrent));
       await logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: request.snapshot.projectId,
-        itemId: request.nextFiles.snapshot.item.id, message: decoderPrepared ? '下一节目画面预备完成' : '下一节目文件预备完成，共用来源等待交接', result: 'succeeded',
+        itemId: request.nextFiles.snapshot.item.id, message: decoderPrepared ? '下一个节目的画面已准备好' : '下一个节目的文件已准备好，共用的来源等当前节目结束后交接', result: 'succeeded',
         details: { elapsedMs: performance.now() - started, decoderPrepared } });
     },
     changed: status => { sendToRenderer('link:native-obs-status', status); for (const listener of programObsListeners) listener(status); },
@@ -634,7 +640,7 @@ function registerIpc(
     if (picture === 'running') { await nativeObs!.reconnected(); return; }
     if (picture !== 'paused' || !program || positionMs === undefined) return;
     await program.seek(positionMs);
-    const message = 'OBS 已重新连接：已在暂停位置重新准备画面';
+    const message = 'OBS 已重新连接，画面已按暂停位置恢复';
     program.reportFault(message);
     await logger.record({ level: 'warning', category: 'device', device: '后台画面', message });
   };
@@ -643,20 +649,48 @@ function registerIpc(
     const reconnected = state.status === 'connected' && !obsConnected;
     obsConnected = state.status === 'connected';
     if (reconnected) void recoverNativeObs().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面',
-      message: `OBS 重新连接后画面恢复失败：${String(error)}`, result: 'failed' }).catch((failure: unknown) => console.error('画面恢复日志写入失败', failure)); });
+      message: `OBS 已重新连接，但画面恢复失败：${String(error)}`, result: 'failed' }).catch((failure: unknown) => console.error('画面恢复日志写入失败', failure)); });
     if (state.status === 'connected') return;
     nativeObs?.disconnect(state.error || 'OBS 已断开');
-    void obsPreload.close().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message: `关闭节目预备失败：${String(error)}`, result: 'failed' })
+    void obsPreload.close().catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面', message: `关闭节目准备失败：${String(error)}`, result: 'failed' })
       .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
   });
+  const engineExecutable = app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
+    : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe');
+  const midiPortQuery = new NativeDeviceQuery(engineExecutable);
+  const midiPortBroker = new MidiPortBroker({
+    authorize: () => authorizeOutput(),
+    list: async recheck => {
+      const result = await midiHealth.check(recheck);
+      if (result !== 'ready') throw new Error(midiHealthMessage(result));
+      if (recheck) await midiPortQuery.reopenForPreparation();
+      return midiPortQuery.read();
+    },
+    // The editor previews send a whole lighting state at once.
+    createOutput: failed => new NativeMidiOutput(engineExecutable, failed, 256),
+    createInput: (receive, failed, invalid) => new NativeMidiInput(engineExecutable, receive, failed, invalid),
+    emit: event => sendToRenderer('link:midi-event', event),
+    log: (level, message) => { void logger.record({ level, category: 'device', device: 'MIDI', message, result: level === 'info' ? 'succeeded' : 'failed' })
+      .catch((error: unknown) => console.error('MIDI 日志写入失败', error)); }
+  });
+  midiPorts = midiPortBroker;
+  handle('link:midi-ports', (_event, value: unknown) => midiPortBroker.listPorts(midiPortListRequestSchema.parse(value).recheck));
+  // Opening checks the license itself; sending and closing need a port it opened.
+  handle('link:midi-open', async (_event, value: unknown) => {
+    const request = midiPortOpenSchema.parse(value);
+    return { version: 1 as const, handle: await midiPortBroker.open(request.direction, request.portName) };
+  }, 'listener');
+  // Messages go out in the order they arrive: nothing is awaited before the broker queues one.
+  handle('link:midi-send', (_event, value: unknown) => { const request = midiPortSendSchema.parse(value); return midiPortBroker.send(request.handle, request.bytes); }, 'listener');
+  handle('link:midi-close', (_event, value: unknown) => midiPortBroker.close(midiPortHandleSchema.parse(value).handle), 'listener');
   const player = (): NativePlayerService => {
-    if (nativePlayerShutdown) throw new Error('正式音频引擎正在关闭或关闭失败，请查看运行日志');
+    if (nativePlayerShutdown) throw new Error('音频引擎正在关闭或关闭失败，请查看运行日志');
     if (!nativePlayer) {
       if (!ffmpegPath) throw new Error('FFmpeg 音频解码组件未安装');
       let lastClockBoundary = '', lastReadyBoundary = '';
       // Each preparation's steps go into one 正式音频准备完成 entry; only a slow step is recorded as it happens.
       const audioSteps = new PreparationSteps((step, ms) => {
-        void logger.record({ level: 'info', category: 'system', device: '正式音频', message: `正式音频准备较慢：${step} 用时 ${(ms / 1000).toFixed(1)} 秒`, details: { ms: Math.round(ms) } })
+        void logger.record({ level: 'info', category: 'system', device: '音频', message: `音频准备较慢：${step} 用了 ${(ms / 1000).toFixed(1)} 秒`, details: { ms: Math.round(ms) } })
           .catch((error: unknown) => console.error('正式音频计时日志写入失败', error));
       });
       const measured = (phase: string, elapsedMs: number): void => audioSteps.add(phase, elapsedMs);
@@ -665,8 +699,8 @@ function registerIpc(
           const result = await midiHealth.check(recheck);
           if (result !== 'ready') throw new Error(midiHealthMessage(result));
         },
-        executable: app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
-          : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe'),
+        executable: engineExecutable,
+        claimMidiOutput: name => midiPortBroker.claimFormal(name, '时间码'),
         cache: new NativeAudioCache(join(app.getPath('userData'), 'native-audio-streams'), ffmpegPath.replace('app.asar', 'app.asar.unpacked'), undefined, undefined, measured),
         resolveAudio: (projectPath, relativePath) => projectService.resolveReferenceAudio(projectPath, relativePath),
         changed: (status, qpc100ns) => {
@@ -675,7 +709,7 @@ function registerIpc(
           if (status.status === 'ready' && readyBoundary !== lastReadyBoundary) {
             lastReadyBoundary = readyBoundary;
             const steps = audioSteps.take();
-            void logger.record({ level: 'info', category: 'system', device: '正式音频', itemId: status.itemId, message: '正式音频准备完成',
+            void logger.record({ level: 'info', category: 'system', device: '音频', itemId: status.itemId, message: '音频已准备好',
               details: { playbackSessionId: status.sessionId, generation: status.generation, totalMs: steps.reduce((sum, step) => sum + step.ms, 0), steps } })
               .catch((error: unknown) => console.error('正式音频准备日志写入失败', error));
           }
@@ -683,8 +717,8 @@ function registerIpc(
             const boundary = `${status.sessionId}:${status.generation}:${status.status}`;
             if (boundary !== lastClockBoundary) {
               lastClockBoundary = boundary;
-              void logger.record({ level: 'info', category: 'state', device: '正式音频', itemId: status.itemId,
-                message: status.status === 'playing' ? '设备时钟确认开始输出' : '设备时钟确认到达曲尾',
+              void logger.record({ level: 'info', category: 'state', device: '音频', itemId: status.itemId,
+                message: status.status === 'playing' ? '声卡已开始输出' : '声卡已播到曲尾',
                 details: { playbackSessionId: status.sessionId, generation: status.generation, positionMs: status.positionMs, qpc100ns, enginePid: status.enginePid } })
                 .catch((error: unknown) => console.error('正式音频边界日志写入失败', error));
             }
@@ -694,27 +728,27 @@ function registerIpc(
           nativeObs?.interrupt(request); nativeProgramHost?.interrupt(request);
           if (request.kind === 'stop' || request.kind === 'seek') void obsPreload.cancelNext(request.sessionId)
             .catch((error: unknown) => { void logger.record({ level: 'error', category: 'device', device: '后台画面',
-              message: `下一节目预备清理失败：${String(error)}`, result: 'failed' })
+              message: `清理下一个节目的准备失败：${String(error)}`, result: 'failed' })
               .catch((failure: unknown) => console.error('节目预备清理日志写入失败', failure)); });
         },
         measured,
         // A failed preparation keeps the steps it got through.
-        error: message => { const steps = audioSteps.take(); void logger.record({ level: 'error', category: 'device', device: '正式音频', message, result: 'failed', ...(steps.length ? { details: { steps } } : {}) })
+        error: message => { const steps = audioSteps.take(); void logger.record({ level: 'error', category: 'device', device: '音频', message, result: 'failed', ...(steps.length ? { details: { steps } } : {}) })
           .catch((error: unknown) => console.error('正式音频日志写入失败', error)); },
-        recovered: report => { void logger.record({ level: 'warning', category: 'device', device: '正式音频', ...(nativePlayer?.status ? { itemId: nativePlayer.status.itemId } : {}),
-          message: `时间码中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从当前播放位置继续发送，中断期间的时间码未补发`,
+        recovered: report => { void logger.record({ level: 'warning', category: 'device', device: '音频', ...(nativePlayer?.status ? { itemId: nativePlayer.status.itemId } : {}),
+          message: `时间码中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从当前播放位置继续发送，中断期间的时间码不补发`,
           result: 'succeeded', details: report }).catch((error: unknown) => console.error('正式音频日志写入失败', error)); }
       });
     }
     return nativePlayer;
   };
   handle('link:native-player-devices', (_event, value: unknown) => player().devices(nativeDeviceQueryRequestSchema.parse(value).scope));
-  const midiCheck = new NativeMidiCheckService(app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
-    : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe'), () => runtimeActive || nativePlaybackActive());
+  const midiCheck = new NativeMidiCheckService(engineExecutable, () => runtimeActive || nativePlaybackActive(), undefined,
+    name => midiPortBroker.claimFormal(name, '接口检查'));
   handle('link:native-midi-check', async (_event, value: import('@tb/schema').NativeMidiCheck) => {
     try {
       await midiCheck.check(value);
-      await logger.record({ level: 'info', category: 'device', device: 'midi', message: `Windows MIDI 接口已实际打开并释放：${value.portName}（未发送时间码）`, result: 'succeeded' });
+      await logger.record({ level: 'info', category: 'device', device: 'midi', message: `已试开并释放 Windows MIDI 接口：${value.portName}（没有发送时间码）`, result: 'succeeded' });
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'midi', message: error instanceof Error ? error.message : String(error), result: 'failed' });
       throw error;
@@ -756,19 +790,19 @@ function registerIpc(
     runtimeActive = false;
   };
   authorizeOutput = async () => {
-    if (licenseChanging) throw new Error('请等待授权操作完成后再执行设备输出');
+    if (licenseChanging) throw new Error('授权操作还没完成，请稍后再试');
     await licenseAccess.requireOutput();
-    if (licenseChanging) throw new Error('授权正在更换，请完成后重新执行');
+    if (licenseChanging) throw new Error('正在更换授权，请完成后再试');
   };
   authorizeProduct = async (channel, value) => {
     const protectedCall = needsProductLicense(channel, value);
-    if (protectedCall && licenseChanging) throw new Error('请等待授权操作完成后再使用产品功能');
+    if (protectedCall && licenseChanging) throw new Error('授权操作还没完成，请稍后再试');
     await licenseAccess.authorize(channel, value);
-    if (protectedCall && licenseChanging) throw new Error('授权正在更换，请完成后重试');
+    if (protectedCall && licenseChanging) throw new Error('正在更换授权，请完成后再试');
   };
   handle('link:license-require-output', () => authorizeOutput());
   const changeOnlineLicense = async (code?: string) => {
-    if (runtimeActive || licenseChanging) throw new Error('请停止播放，并等待上一项授权操作完成');
+    if (runtimeActive || licenseChanging) throw new Error('请先停止播放，并等上一个授权操作完成');
     licenseChanging = true;
     const action = code === undefined ? '联网验证授权' : '输入激活码激活';
     try {
@@ -802,15 +836,15 @@ function registerIpc(
     return true;
   });
   handle('link:license-import', async () => {
-    if (runtimeActive || licenseChanging) throw new Error('请停止播放并等待授权操作完成后再更换授权');
+    if (runtimeActive || licenseChanging) throw new Error('请先停止播放，并等授权操作完成后再更换授权');
     licenseChanging = true;
     try {
       const result = await dialog.showOpenDialog(mainWindow!, { title: '导入本机授权', properties: ['openFile'], filters: [{ name: '团播联动台授权', extensions: ['tbllicense'] }] });
       const file = result.filePaths[0];
       if (result.canceled || !file) return null;
-      if ((await stat(file)).size > 16384) throw new Error('授权文件超过大小限制');
+      if ((await stat(file)).size > 16384) throw new Error('授权文件太大，请确认选的是正确的文件');
       const token = await readFile(file, 'utf8');
-      if (runtimeActive) throw new Error('播放已开始，请停止后再导入授权');
+      if (runtimeActive) throw new Error('正在播放，请停止后再导入授权');
       const status = await (await getLicenseService()).activate(token);
       await logger.record({ level: 'info', category: 'system', device: '授权', message: '已导入本机授权', result: 'succeeded', details: licenseLogDetails(status) });
       return status;
@@ -843,7 +877,7 @@ function registerIpc(
   // Changing a Windows adapter needs the operator's answer to the main process's own dialog.
   const ma2NetworkSetup = new Ma2NetworkSetup(join(app.getPath('userData'), 'ma2-network-addresses.json'), async change => {
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '修改网卡地址', noLink: true, buttons: ['确认修改', '取消'], defaultId: 1, cancelId: 1,
-      message: change.action === 'add' ? `为网卡「${change.adapterName}」增加地址 ${change.address}/${change.prefix}？` : `从网卡「${change.adapterName}」移除本软件添加的地址 ${change.address}/${change.prefix}？`,
+      message: change.action === 'add' ? `为网卡「${change.adapterName}」增加地址 ${change.address}/${change.prefix}？` : `从网卡「${change.adapterName}」移除联动台添加的地址 ${change.address}/${change.prefix}？`,
       detail: `用于连接控台 ${change.host}。网卡：${change.adapterDescription}。Windows 可能还会请求管理员确认。` });
     return response === 0;
   });
@@ -852,14 +886,14 @@ function registerIpc(
     const profile = await profileStore.loadProfile();
     if (!profile?.ma2) return;
     const selected = await processManager.refresh('ma2', processConfiguration(profile, 'ma2'));
-    if (selected.pid === null) throw new Error('选定的 MA2 onPC 尚未运行，请先点击一键连接');
+    if (selected.pid === null) throw new Error('选择的 MA2 onPC 还没运行，请先点“一键连接”');
     await assertMa2ConnectionOwner(selected.pid, peers);
   }, async (host, port) => {
     if (!isLocalMa2Address(host)) return;
     const profile = await profileStore.loadProfile();
     if (!profile?.ma2) return;
     const selected = await processManager.refresh('ma2', processConfiguration(profile, 'ma2'));
-    if (selected.pid === null) throw new Error(`本机 MA2 onPC 未运行，未尝试登录 ${host}:${port}。请先点击一键连接按顺序启动 onPC，或在 MA2 设置中核对控台地址。`);
+    if (selected.pid === null) throw new Error(`本机 MA2 onPC 没有运行，没有尝试登录 ${host}:${port}。请先点“一键连接”启动 onPC，或在 MA2 设置里检查控台地址。`);
     const started = performance.now();
     const outcome = await waitForMa2Listener(selected.pid, port, profile.ma2.startupTimeoutMs);
     if (outcome === 'waited') await logger.record({ level: 'info', category: 'device', device: 'MA2', result: 'succeeded',
@@ -896,7 +930,7 @@ function registerIpc(
   handle('link:ma2-discover', async () => {
     await ma2NetworkReady; if (runtimeActive) throw new Error('请停止播放后搜索控台');
     const result = await ma2Discovery.search(ma2Network.status().profiles ?? []);
-    await logger.record({ level: result.hosts.some(host => host.identity === 'ma2') ? 'info' : 'warning', category: 'device', device: 'MA2', message: `自动发现完成：${result.hosts.filter(host => host.identity === 'ma2').length} 台已识别控台，${result.hosts.filter(host => host.identity === 'candidate').length} 个待确认地址`, details: { hosts: result.hosts, ranges: result.ranges, warnings: result.warnings } });
+    await logger.record({ level: result.hosts.some(host => host.identity === 'ma2') ? 'info' : 'warning', category: 'device', device: 'MA2', message: `自动发现完成：找到 ${result.hosts.filter(host => host.identity === 'ma2').length} 台控台，另有 ${result.hosts.filter(host => host.identity === 'candidate').length} 个地址需要确认`, details: { hosts: result.hosts, ranges: result.ranges, warnings: result.warnings } });
     return result;
   });
   handle('link:ma2-discovery-cancel', () => ma2Discovery.cancel());
@@ -908,7 +942,7 @@ function registerIpc(
     if(!ma2Audition.status().targets.length)return;
     const result=await ma2Audition.stop();
     await logger.record({level:result.phase==='failed'?'error':'info',category:'operator',device:'MA2',message:'退出前停止本次灯光试听',details:{targets:result.targets}});
-    if(result.phase==='failed')throw new Error('试听停止未完成，请在灯光工作台查看失败目标并处理后再退出。');
+    if(result.phase==='failed')throw new Error('试听没能停止，请在灯光工作台查看没停下的目标，处理后再退出。');
   };
   handle('link:ma2-audition-play',async(_event,payload:unknown)=>{
     const request=ma2AuditionRequestSchema.parse(payload);await ma2NetworkReady;
@@ -922,13 +956,13 @@ function registerIpc(
       const target=ma2Audition.status().targets.find(value=>value.id===request.targetId);
       if(!target?.connectionChanged||target.state!=='failed')throw new Error('旧连接记录已变化，请刷新后查看');
       const label=target.action.target==='sequence'?`序列 ${target.action.sequence}`:`执行器 ${target.action.executor}`;
-      const answer=await dialog.showMessageBox(mainWindow!,{type:'warning',title:'核对原控台输出',message:`已在原控台确认 ${label} 停止了吗？`,detail:`原连接：${target.network.host}:${target.network.port}。仅在你已确认该目标停止后清除记录；此操作不会发送关灯指令。`,buttons:['取消','已确认停止，清除记录'],defaultId:0,cancelId:0,noLink:true});
+      const answer=await dialog.showMessageBox(mainWindow!,{type:'warning',title:'确认原控台输出',message:`你已在原控台确认 ${label} 停下了吗？`,detail:`原连接：${target.network.host}:${target.network.port}。确认它已经停下后再清除记录。这个操作不会发送关灯指令。`,buttons:['取消','已确认停止，清除记录'],defaultId:0,cancelId:0,noLink:true});
       if(answer.response!==1)return ma2Audition.status();
       const result=ma2Audition.acknowledgeClosed(request.targetId);
       await logger.record({level:'warning',category:'operator',device:'MA2',message:'操作员确认原控台目标已停止，清除旧连接试听记录（未发送指令）',details:{target}});
       return result;
     }
-    const result=await ma2Audition.stop();await logger.record({level:result.phase==='failed'?'error':'info',category:'operator',device:'MA2',message:result.phase==='failed'?'停止试听未完成':'试听关闭指令已发送',details:{targets:result.targets}});return result;
+    const result=await ma2Audition.stop();await logger.record({level:result.phase==='failed'?'error':'info',category:'operator',device:'MA2',message:result.phase==='failed'?'试听没能停止':'试听关闭指令已发送',details:{targets:result.targets}});return result;
   });
   app.once('will-quit', () => ma2Network.disconnect());
   const getMa2Connection = async (request: { dataDirectory: string; network?: import('@tb/schema').Ma2NetworkTarget | undefined }) => {
@@ -953,19 +987,20 @@ function registerIpc(
   nativeProgram = new NativeProgramService((project, request, callbacks) => {
     // A channel that cannot join (OBS, timecode) repeats song after song until fixed: a warning the first time, then info.
     const notice = (message: string, itemId: string | null): void => {
-      void logger.record({ level: firstTimeWarning(seenNotices, message), category: 'state', device: '正式播放器', projectId: project.projectId,
+      void logger.record({ level: firstTimeWarning(seenNotices, message), category: 'state', device: '播放器', projectId: project.projectId,
         ...(itemId ? { itemId } : {}), message }).catch((error: unknown) => console.error('后台节目提示日志未能保存', error));
     };
     const host = new NativeProgramHost(project, request.projectPath, request.revision, {
       executable: app.isPackaged ? join(process.resourcesPath, 'playback-engine/tblink-playback.exe')
         : process.env.TBLINK_PLAYBACK_ENGINE_EXE ?? join(__dirname, '../../../../tools/playback-engine/bin/tblink-playback.exe'),
       audio: () => nativePlayer?.status ?? null, authorize: () => authorizeOutput(), configuration: () => callbacks.configuration(),
+      claimMidiOutput: (name, owner) => midiPortBroker.claimFormal(name, owner),
       midiOutputs: async () => (await player().devices('all', true)).midiOutputs,
       preciseSeeking: () => callbacks.configuration().preciseSeeking, changed: state => callbacks.changed(state),
       midiChanged: state => { if (state.state === 'running' || state.state === 'ready') callbacks.cueChanged(state.currentCueId); },
       midiRecovered: (report, itemId) => {
         void logger.record({ level: 'warning', category: 'device', device: '动作 MIDI', projectId: project.projectId, itemId,
-          message: `动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从下一个动作起照常发送，中断期间跳过 ${report.skippedActions} 个动作，未补发`,
+          message: `动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）：从下一个动作起照常发送，中断期间跳过了 ${report.skippedActions} 个动作，不补发`,
           details: { portName: report.portName, interruptedAt: report.interruptedAt, recoveredAt: report.recoveredAt, durationMs: report.durationMs, skippedActions: report.skippedActions } })
           .catch((error: unknown) => console.error('动作 MIDI 恢复日志未能保存', error));
       },
@@ -992,8 +1027,8 @@ function registerIpc(
     const attachment = await nativeProgram!.open(value, async (projectPath, project) => {
       await projectAccess.assetFiles(projectPath, projectFileReferences(project).map(file => file.relativePath));
     });
-    if (attachment !== 'opened') await logger.record({ level: 'warning', category: 'state', device: '正式播放器',
-      message: `重新加载的界面已接管后台播放的节目${attachment === 'outdated' ? '；界面工程与播放中的版本不同，停止后按界面工程重新准备' : ''}` });
+    if (attachment !== 'opened') await logger.record({ level: 'warning', category: 'state', device: '播放器',
+      message: `重新加载的界面已接回后台播放的节目${attachment === 'outdated' ? '；界面里的工程和正在播放的版本不同，停止后会按界面里的工程重新准备' : ''}` });
     return attachment;
   }, 'listener');
   handle('link:native-program-control', (_event, value: unknown) => nativeProgram!.control(value), 'listener');
@@ -1003,13 +1038,13 @@ function registerIpc(
     const directory = await mkdtemp(join(selected.filePaths[0], 'TBLINK-MA2-Bridge-'));
     try {
       for (const [name, content] of [['tblink_bridge.lua', ma2PluginLua], ['tblink_bridge.xml', ma2PluginXml], ['安装说明.md', ma2PluginInstructions]]) {
-        if (!name || content === undefined) throw new Error('MA2 插件资源缺失');
+        if (!name || content === undefined) throw new Error('MA2 插件文件缺失，请重新安装联动台');
         await writeFile(join(directory, name), content, { flag: 'wx' });
       }
       await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: 'MA2 插件已导出', result: 'succeeded' });
       return directory;
     } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `插件导出未完成：${error instanceof Error ? error.message : String(error)}`, result: 'failed' });
+      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `插件导出失败：${error instanceof Error ? error.message : String(error)}`, result: 'failed' });
       throw error;
     }
   });
@@ -1017,7 +1052,7 @@ function registerIpc(
   handle('link:ma2-network-connect', async () => {
     await ma2NetworkReady;
     const result = await ma2Network.connect();
-    await logger.record({ level: result.error ? 'error' : 'info', category: 'device', device: 'MA2', message: result.error ?? (result.state === 'connected' ? `MA2 ${result.version} 网络登录已确认` : 'MA2 连接已取消'), result: result.error ? 'failed' : result.state === 'connected' ? 'succeeded' : 'skipped' });
+    await logger.record({ level: result.error ? 'error' : 'info', category: 'device', device: 'MA2', message: result.error ?? (result.state === 'connected' ? `MA2 ${result.version} 已登录` : 'MA2 连接已取消'), result: result.error ? 'failed' : result.state === 'connected' ? 'succeeded' : 'skipped' });
     return result;
   });
   handle('link:ma2-network-disconnect', async () => { await ma2NetworkReady; return ma2Network.disconnectByOperator(); });
@@ -1039,15 +1074,15 @@ function registerIpc(
     try {
       await ma2NetworkReady;
       if (task.signal.aborted) throw new Error('扫描已取消');
-      if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('读取检查点的工程身份不一致');
+      if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('读取进度记录和当前工程对不上');
       const recovery = request.projectPath && request.projectId ? new Ma2ReadRecovery(request.projectPath, request.projectId, request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC') : undefined;
       const checkpoint = recovery?.checkpoint.bind(recovery);
       const catalog = request.network ? await ma2Network.readCatalog(request.network, task.report, task.signal, request.targets, checkpoint, request.expectedSource) : await readMa2Catalog((await getMa2Connection(request)).bridge, () => runtimeActive, undefined, task.report, task.signal, { targets: request.targets, checkpoint, expectedSource: request.expectedSource });
       for (const entry of catalog.entries) if (entry.error) await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `Timecode ${entry.target} 扫描失败：${entry.error}`, result: 'failed' });
-      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `已扫描 ${catalog.entries.length} 条 Timecode，${catalog.entries.filter(entry => entry.error).length} 条读取异常`, result: catalog.entries.some(entry => entry.error) ? 'failed' : 'succeeded' });
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `已扫描 ${catalog.entries.length} 条 Timecode，其中 ${catalog.entries.filter(entry => entry.error).length} 条读取出错`, result: catalog.entries.some(entry => entry.error) ? 'failed' : 'succeeded' });
       return catalog;
     } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `控台目录扫描未完成：${error instanceof Error ? error.message : String(error)}`, result: 'failed' });
+      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `控台扫描没有完成：${error instanceof Error ? error.message : String(error)}`, result: 'failed' });
       throw error;
     } finally { task.finish(); }
   });
@@ -1058,7 +1093,7 @@ function registerIpc(
     try {
       await ma2NetworkReady;
       if (task.signal.aborted) throw new Error('素材读取已取消');
-      if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('素材检查点的工程身份不一致');
+      if (request.projectPath && (!request.projectId || (await projectService.open(request.projectPath)).projectId !== request.projectId)) throw new Error('素材读取进度和当前工程对不上');
       const recovery = request.projectPath && request.projectId ? new Ma2MaterialRecovery(request.projectPath, request.projectId, request.network ? `${request.network.host}:${request.network.port}` : '本机 onPC') : undefined;
       const report = async (update: import('@tb/schema').Ma2ReadProgressUpdate): Promise<void> => { await recovery?.record(update); task.report?.(update); };
       const result = request.network ? await ma2Network.readLibrary(request.network, report, 'library', task.signal, request.targets, request.expectedSource, request.details) : await readMa2EffectLibrary((await getMa2Connection(request)).bridge, () => runtimeActive, report, task.signal, request.targets, request.expectedSource, request.details);
@@ -1078,7 +1113,7 @@ function registerIpc(
     if (ma2Reads.size) throw new Error('请等待当前控台读取结束');
     const request = ma2CueDeletePrepareSchema.parse(value); projectAccess.requireShown(request.projectPath); const task = beginMa2Read(event,request.progressId);
     try { return await ma2Network.prepareCueDeletion(request,task.report); }
-    catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`空 Cue 删除清单核对失败：${String(error)}`,result:'failed'}); throw error; }
+    catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`检查空 Cue 删除清单失败：${String(error)}`,result:'failed'}); throw error; }
     finally { task.finish(); }
   });
   handle('link:ma2-cue-delete-commit', async (event,value:unknown) => {
@@ -1086,9 +1121,9 @@ function registerIpc(
     const request = ma2CueDeleteCommitSchema.parse(value); projectAccess.requireShown(request.projectPath); const task = beginMa2Read(event,request.progressId);
     try {
       const result = await ma2Network.commitCueDeletion(request,task.report);
-      await logger.record({level:result.error?'error':'info',category:'device',device:'MA2',message:`空 Cue 删除已确认 ${result.deleted.length} 项；备份 ${result.backups.join('；')}；${result.error??'回读通过'}`,result:result.error?'failed':'succeeded'});
+      await logger.record({level:result.error?'error':'info',category:'device',device:'MA2',message:`已删除 ${result.deleted.length} 个空 Cue；备份 ${result.backups.join('；')}；${result.error??'控台确认无误'}`,result:result.error?'failed':'succeeded'});
       return result;
-    } catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`空 Cue 删除未完成：${String(error)}`,result:'failed'}); throw error; }
+    } catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`空 Cue 没有删完：${String(error)}`,result:'failed'}); throw error; }
     finally { task.finish(); }
   });
   handle('link:ma2-song-check', async (_event, value: unknown) => ma2Network.checkSong(ma2SongCheckRequestSchema.parse(value)));
@@ -1101,7 +1136,7 @@ function registerIpc(
     const task = beginMa2Read(event, request.progressId);
     try {
       const result = await ma2Network.syncSong(request, task.report, task.signal);
-      if (result.changed) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `歌曲序列 ${result.binding.sequence} · ${result.binding.executor ? `执行器 ${result.binding.executor}` : `Layout ${result.binding.layout}`} 已写入并回读，备份 ${result.backupFile}`, result: 'succeeded' });
+      if (result.changed) await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `歌曲序列 ${result.binding.sequence} · ${result.binding.executor ? `执行器 ${result.binding.executor}` : `Layout ${result.binding.layout}`} 已写入控台并确认，备份 ${result.backupFile}`, result: 'succeeded' });
       return result;
     } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `歌曲同步停止：${String(error)}`, result: 'failed' }); throw error; }
     finally { task.finish(); }
@@ -1133,9 +1168,9 @@ function registerIpc(
     const request = ma2ExecutorUpdateRequestSchema.parse(value);
     try {
       const result = await ma2Network.updateExecutor(request);
-      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `执行器 ${request.page}.${request.slot} ${request.action.kind} 已回读，备份 ${result.backupFile}`, result: 'succeeded' });
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `执行器 ${request.page}.${request.slot} ${request.action.kind} 已确认，备份 ${result.backupFile}`, result: 'succeeded' });
       return result;
-    } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器修改待核对：${String(error)}`, result: 'failed' }); throw error; }
+    } catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器修改需要确认：${String(error)}`, result: 'failed' }); throw error; }
   });
   handle('link:ma2-executor-input', async (_event, value: unknown) => {
     try { await ma2Network.inputExecutor(ma2ExecutorInputSchema.parse(value)); }
@@ -1143,21 +1178,21 @@ function registerIpc(
   });
   handle('link:ma2-executor-release', async () => {
     try { await ma2Network.releaseExecutors(); }
-    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器松开未回读：${String(error)}`, result: 'failed' }); throw error; }
+    catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `执行器松开后没有确认：${String(error)}`, result: 'failed' }); throw error; }
   });
   handle('link:ma2-layout-update', async (_event, value: unknown) => {
-    try { const result = await ma2Network.updateLayout(ma2LayoutUpdateRequestSchema.parse(value)); await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `Layout ${result.layout} 名称与位置已回读`, result: 'succeeded' }); return result; }
+    try { const result = await ma2Network.updateLayout(ma2LayoutUpdateRequestSchema.parse(value)); await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `Layout ${result.layout} 的名称和位置已确认`, result: 'succeeded' }); return result; }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `Layout 修改未完成：${String(error)}`, result: 'failed' }); throw error; }
   });
   handle('link:ma2-new-cue', async (_event,value:unknown) => {
-    try { const result=await ma2Network.newCue(ma2NewCueRequestSchema.parse(value));await logger.record({level:'info',category:'device',device:'MA2',message:`新建序列 ${result.sequence}，Layout ${result.layout.layout} 已回读核对`,result:'succeeded'});return result; }
+    try { const result=await ma2Network.newCue(ma2NewCueRequestSchema.parse(value));await logger.record({level:'info',category:'device',device:'MA2',message:`已新建序列 ${result.sequence}，Layout ${result.layout.layout} 已确认`,result:'succeeded'});return result; }
     catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`新建 Cue 未完成：${String(error)}`,result:'failed'});throw error; }
   });
   handle('link:ma2-auto-bind', async (_event, value: unknown) => {
     const request = ma2AutoBindRequestSchema.parse(value);
     try {
       const result = await prepareMa2AutoBindings((await getMa2Connection(request)).bridge, request, () => runtimeActive || nativePlaybackActive());
-      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `自动关联已核对：${result.plan.assignments.length} 个执行位置`, result: 'succeeded' });
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `自动关联已确认：${result.plan.assignments.length} 个执行位置`, result: 'succeeded' });
       return result;
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `自动关联未完成：${String(error)}`, result: 'failed' });
@@ -1170,7 +1205,7 @@ function registerIpc(
       const { bridge } = await getMa2Connection(request);
       const result = await renameMa2Object(bridge, request);
       await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object: `Sequence ${result.sequence}`, files: [result.backupFile] });
-      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `控台改名已回读：Sequence ${result.sequence} ${result.kind === 'single' ? `Cue ${result.cue}` : ''} → ${result.name}；备份 ${result.backupFile}`, result: 'succeeded' });
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `控台改名已确认：Sequence ${result.sequence} ${result.kind === 'single' ? `Cue ${result.cue}` : ''} → ${result.name}；备份 ${result.backupFile}`, result: 'succeeded' });
       return result;
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `控台改名未确认：${String(error)}`, result: 'failed' });
@@ -1182,7 +1217,7 @@ function registerIpc(
     await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: `新建 Timecode ${request.target}`, result: 'running' });
     try {
       const result = await createMa2Timecode((await getMa2Connection(request)).bridge, request.target, request.name);
-      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `Timecode ${request.target} 创建回读已核对`, result: 'succeeded' });
+      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `Timecode ${request.target} 已创建并确认`, result: 'succeeded' });
       return result;
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'MA2', message: error instanceof Error ? error.message : String(error), result: 'failed' });
@@ -1210,7 +1245,7 @@ function registerIpc(
     await logger.record({ level: 'info', category: 'operator', device: 'MA2', message: `开始同步 Timecode ${request.readback.target}`, result: 'running' });
     const result = await service.apply(request);
     if (result.status === 'verified' && result.backupFile) await ma2ConsoleBackups.record(bridge, { console: ma2ConsoleKey(request), object: `Timecode ${request.readback.target}`, files: [result.backupFile] });
-    await logger.record({ level: result.status === 'verified' ? 'info' : 'error', category: 'device', device: 'MA2', message: result.status === 'verified' ? 'MA2 回读已核对，等待节目应用' : result.message, result: result.status === 'verified' ? 'succeeded' : 'failed', details: result.status === 'verified' ? { backupFile: result.backupFile } : { stage: result.stage, mayHaveWritten: result.mayHaveWritten, backupFile: result.backupFile } });
+    await logger.record({ level: result.status === 'verified' ? 'info' : 'error', category: 'device', device: 'MA2', message: result.status === 'verified' ? 'MA2 已确认，等待应用到节目' : result.message, result: result.status === 'verified' ? 'succeeded' : 'failed', details: result.status === 'verified' ? { backupFile: result.backupFile } : { stage: result.stage, mayHaveWritten: result.mayHaveWritten, backupFile: result.backupFile } });
     return result;
   });
   handle('link:app-info', async (): Promise<LinkAppInfo> => {
@@ -1228,13 +1263,13 @@ function registerIpc(
   handle('link:update-check', (): Promise<LinkUpdateStatus> => updateManager.check());
   handle('link:update-download', (): Promise<LinkUpdateStatus> => updateManager.download());
   handle('link:update-install', async () => {
-    if (runtimeActive || nativePlaybackActive()) throw new Error('联动尚未停止；请先到集成中心停止联动并完成 OBS 清理，再安装更新');
+    if (runtimeActive || nativePlaybackActive()) throw new Error('联动还没停止。请先到集成中心停止联动、等 OBS 清理完成，再安装更新');
     await updateManager.prepareInstall();
     const decision = await dialog.showMessageBox(mainWindow!, {
       type: 'question',
       title: '安装团播联动台更新',
-      message: '联动台将退出并安装已下载的新版本。',
-      detail: '退出前和关闭软件一样，逐项确认未保存的工程、灯光试听和由本软件启动的外部程序。更新完成后联动台将重新启动。',
+      message: '联动台会退出并安装已下载的新版本。',
+      detail: '退出前会像平时关闭软件一样，逐项确认未保存的工程、灯光试听和联动台启动的外部程序。更新完成后联动台会自动重新启动。',
       buttons: ['取消', '退出并安装'],
       defaultId: 0,
       cancelId: 0,
@@ -1267,16 +1302,16 @@ function registerIpc(
     rendererSaves.answer(response.id, response.result);
   });
   handle('link:set-runtime-active', async (_event, activeValue: unknown) => {
-    if (licenseChanging && activeValue === true) throw new Error('请等待授权操作完成后再播放');
+    if (licenseChanging && activeValue === true) throw new Error('授权操作还没完成，请稍后再播放');
     const active = linkRuntimeActiveSchema.parse(activeValue);
     await licenseAccess.setActive(active);
-    if (active && licenseChanging) { await licenseAccess.setActive(false); throw new Error('授权正在更换，请完成后重新播放'); }
+    if (active && licenseChanging) { await licenseAccess.setActive(false); throw new Error('正在更换授权，请完成后再播放'); }
     runtimeActive = active;
   });
   handle('link:window-control', (event, actionValue: unknown) => {
     const action = linkWindowControlActionSchema.parse(actionValue);
     const targetWindow = BrowserWindow.fromWebContents(event.sender);
-    if (!targetWindow) throw new Error('无法定位当前联动台窗口');
+    if (!targetWindow) throw new Error('找不到联动台窗口');
     if (action === 'minimize') targetWindow.minimize();
     else if (action === 'toggleMaximize') {
       if (targetWindow.isMaximized()) targetWindow.unmaximize();
@@ -1369,7 +1404,7 @@ function registerIpc(
     }
     try { await projectDocuments.save(destination, content, options.backupOriginal === true); }
     catch (error) {
-      await logger.record({ level:'error', category:'system', message:'工程保存失败，未确认落盘', result:'failed', details:{ path:destination, error:error instanceof Error ? error.message : String(error) } });
+      await logger.record({ level:'error', category:'system', message:'工程保存失败，文件可能没有写入', result:'failed', details:{ path:destination, error:error instanceof Error ? error.message : String(error) } });
       throw error;
     }
     // A save to the dialog's answer is the project the window shows from now on.
@@ -1384,7 +1419,7 @@ function registerIpc(
     for (const entry of pruned) await logger.record({ level: 'info', category: 'system', message: entry.reason === 'orphan' ? `清除残留的恢复副本文件：${entry.file}`
       : `恢复副本${entry.reason === 'expired' ? '超过 30 天' : '超过 20 份'}，已移到回收站：${entry.manifest.name}`, details: entry.reason === 'orphan' ? {} : { projectPath: entry.manifest.projectPath, savedAt: entry.manifest.savedAt } });
   }).catch(async (error: unknown) => {
-    await logger.record({ level: 'warning', category: 'system', message: '恢复副本清理未完成，下次启动再试', details: { error: error instanceof Error ? error.message : String(error) } });
+    await logger.record({ level: 'warning', category: 'system', message: '恢复副本没清理完，下次启动时再试', details: { error: error instanceof Error ? error.message : String(error) } });
   });
   // The renderer records a failed write once, with the reason shown to the operator.
   handle('link:write-recovery-copy', async (_event, payload: unknown) => {
@@ -1395,24 +1430,15 @@ function registerIpc(
   handle('link:confirm-project-location', async (_event, purposeValue: unknown) => {
     const purpose = z.string().min(1).max(200).parse(purposeValue);
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'question', title: '选择工程保存位置', noLink: true,
-      message: `${purpose}需要先保存工程。`, detail: '素材和读取检查点会放在工程文件旁边。选择位置保存后继续；取消则不执行。',
+      message: `${purpose}需要先保存工程。`, detail: '素材和读取进度会放在工程文件旁边。选好位置保存后继续，取消则不执行。',
       buttons: ['选择保存位置', '取消'], defaultId: 0, cancelId: 1 });
-    return response === 0;
-  });
-  handle('link:confirm-play-without-lighting', async (_event, reasonValue: unknown) => {
-    const reason = z.string().min(1).max(4000).parse(reasonValue);
-    const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '开播前检查', noLink: true,
-      message: '这首歌的灯光还不能演出。', detail: reason, buttons: ['无灯光播放', '取消'], defaultId: 0, cancelId: 1 });
-    // The song's lighting needs someone's attention: a warning the first time, info when it repeats song after song.
-    await logger.record({ level: firstTimeWarning(seenNotices, reason), category: 'operator', device: '正式播放器',
-      message: `开播前检查：${reason}；${response === 0 ? '操作员选择无灯光播放' : '操作员取消播放'}` });
     return response === 0;
   });
   handle('link:project-document-worker', () => ({ stalled: projectDocuments.stalledReason() }));
   handle('link:restart-project-document-worker', async (_event, reasonValue: unknown) => {
     const reason = z.string().min(1).max(8192).parse(reasonValue);
-    const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '工程处理未响应', noLink: true,
-      message: '保存没有完成：工程处理超过 30 秒未响应。',
+    const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '工程处理没有响应', noLink: true,
+      message: '保存没有完成：工程处理超过 30 秒没有响应。',
       detail: `${reason}\n\n重启工程处理后再保存一次。上一次未确认的保存可能已经写入，再次保存后以本次内容为准。`,
       buttons: ['重启并保存', '取消'], defaultId: 0, cancelId: 1 });
     if (response !== 0) return false;
@@ -1424,7 +1450,7 @@ function registerIpc(
     const payload = z.object({ name: z.string().max(512), consoleSynced: z.boolean() }).strict().parse(payloadValue);
     const { response } = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '恢复到上次保存', noLink: true,
       message: `放弃对「${payload.name}」的所有未保存修改？`,
-      detail: ['重新打开工程文件中上次保存的内容，撤销记录会清空，恢复副本移除。', ...payload.consoleSynced ? ['已同步到控台的改动不会撤回。'] : []].join('\n'),
+      detail: ['重新打开工程文件里上次保存的内容，撤销记录会清空，恢复副本会删除。', ...payload.consoleSynced ? ['已同步到控台的改动不会撤回。'] : []].join('\n'),
       buttons: ['恢复到上次保存', '取消'], defaultId: 1, cancelId: 1 });
     return response === 0;
   });
@@ -1462,7 +1488,7 @@ function registerIpc(
     projectAccess.requireShown(projectArchiveRequestSchema.parse(payload).projectPath);
     return projectArchives(payload, projectDocuments, archiveSettings, path => shell.showItemInFolder(path), async path => {
       try { await shell.trashItem(path); return true; }
-      catch (error) { await logger.record({ level: 'warning', category: 'system', message: '自动存档超出保留数量，移到回收站未完成', details: { path, error: error instanceof Error ? error.message : String(error) } }); return false; }
+      catch (error) { await logger.record({ level: 'warning', category: 'system', message: '自动存档超出保留数量，但没能移到回收站', details: { path, error: error instanceof Error ? error.message : String(error) } }); return false; }
     });
   });
   handle('link:project-archive-settings', async (_event, payload: unknown) => {
@@ -1567,7 +1593,7 @@ function registerIpc(
   });
   handle('link:stop-music-monitor', () => musicMonitor!.stop());
   handle('link:analyze-music', async (_event, value: unknown) => {
-    if (runtimeActive) throw new Error('请停止正式播放后分析音乐');
+    if (runtimeActive) throw new Error('请先停止播放，再分析音乐');
     const request = musicAnalysisRequestSchema.parse(value);
     await projectAccess.assetFiles(request.projectPath, [request.source.relativePath]);
     return musicAnalysis.analyze(request.taskId, request.projectPath, request.source);
@@ -1631,11 +1657,11 @@ function registerIpc(
     const detection = await integrationDetector.detect();
     const title = detection.applications.p1.windowTitle?.trim() ?? '';
     if (!title.toLocaleLowerCase('en-US').endsWith('.hia')) {
-      throw new Error('P1 当前没有打开已保存的 .hia 音频工程；请先在 P1 保存工程，或手动选择 .hia 文件');
+      throw new Error('P1 现在没有打开已保存的 .hia 工程。请先在 P1 里保存工程，或手动选择 .hia 文件');
     }
     const candidate = title.replaceAll('/', '\\');
     const fileStat = await stat(candidate);
-    if (!fileStat.isFile()) throw new Error(`P1 当前工程文件不存在：${candidate}`);
+    if (!fileStat.isFile()) throw new Error(`找不到 P1 当前的工程文件：${candidate}`);
     chosenFiles.choose(candidate);
     return candidate;
   });
@@ -1746,7 +1772,7 @@ function registerIpc(
     if (connected.status === 'connected' && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(profile.obs.webSocketUrl).hostname)) {
       try { await nativeSeek.prepare(profile.obs.webSocketUrl); }
       catch (error) { await logger.record({ level: 'warning', category: 'device', device: 'OBS 原生媒体',
-        message: `OBS 网络已连接，但本机媒体桥识别失败：${error instanceof Error ? error.message : String(error)}`, result: 'failed' }); }
+        message: `OBS 已连接，但联动台的 OBS 媒体组件识别失败：${error instanceof Error ? error.message : String(error)}`, result: 'failed' }); }
     }
     return connected;
   };
@@ -1759,7 +1785,7 @@ function registerIpc(
     const key = JSON.stringify(Object.entries(warnings).sort());
     if (key !== inventoryWarningKey && Object.keys(warnings).length > 0) {
       await logger.record({ level: 'warning', category: 'device', device: 'obs', result: 'failed',
-        message: '部分 OBS 来源尺寸不可用；其他场景已读取，可继续播放', details: warnings });
+        message: '部分 OBS 来源读不到尺寸，其他场景已读取，可以继续播放', details: warnings });
     }
     inventoryWarningKey = key;
     return inventory;
@@ -1767,23 +1793,23 @@ function registerIpc(
   handle('link:obs-media-scenes-prepare', async (_event, pathValue: unknown, projectValue: unknown, preciseSeekingValue: unknown) => {
     const path = linkFilePathSchema.parse(pathValue); const project = parseLinkProject(projectValue);
     const preciseSeeking = z.boolean().parse(preciseSeekingValue);
-    if (obs.getSnapshot().status !== 'connected') throw new Error('请先连接 OBS，再同步素材独立场景');
+    if (obs.getSnapshot().status !== 'connected') throw new Error('请先连接 OBS，再同步素材场景');
     await projectAccess.assetFiles(path, projectFileReferences(project).map(file => file.relativePath));
     await projectService.inspectAssets(path, project);
     const targets = materialSceneTargets(project);
     for (const [index, target] of targets.entries()) {
       const { asset } = target;
       const absolutePath = projectService.resolveMediaAsset(path, asset.relativePath);
-      if (!(await stat(absolutePath)).isFile()) throw new Error(`素材文件不可读：${asset.name}`);
+      if (!(await stat(absolutePath)).isFile()) throw new Error(`素材文件读不了：${asset.name}`);
       const generation = { startedAt: 0 };
       const playbackPath = preciseSeeking && asset.kind === 'video'
         ? await mediaPreviewService.ensureObsSeekVideo(path, asset.relativePath, asset.sha256, 'hardware', () => {
           generation.startedAt = performance.now();
           sendToRenderer('link:obs-media-preparation', obsMediaPreparationSchema.parse({ assetName: asset.name, index, total: targets.length }));
-          void logger.record({ level: 'info', category: 'device', device: 'obs', message: `正在生成 OBS 定位缓存：${asset.name}（${index + 1}/${targets.length}）`, result: 'running' })
+          void logger.record({ level: 'info', category: 'device', device: 'obs', message: `正在准备 OBS 画面：${asset.name}（${index + 1}/${targets.length}）`, result: 'running' })
             .catch((error: unknown) => console.error('定位缓存日志未能写入', error));
         }) : absolutePath;
-      if (generation.startedAt) await logger.record({ level: 'info', category: 'device', device: 'obs', message: `OBS 定位缓存已生成：${asset.name}`,
+      if (generation.startedAt) await logger.record({ level: 'info', category: 'device', device: 'obs', message: `OBS 画面已准备好：${asset.name}`,
         result: 'succeeded', details: { elapsedMs: Math.round(performance.now() - generation.startedAt) } });
       await obs.mediaScenes.prepare(project.projectId, asset, absolutePath, playbackPath, obsMediaCachePaths(path, asset.sha256), target);
     }
@@ -1866,7 +1892,7 @@ function registerIpc(
   let localObsConnecting = false;
   handle('link:obs-connect-local', async () => {
     if (runtimeActive) throw new Error('请先停止节目再连接 OBS');
-    if (localObsConnecting) throw new Error('正在自动连接 OBS，请等待当前操作完成');
+    if (localObsConnecting) throw new Error('正在自动连接 OBS，请稍等');
     localObsConnecting = true;
     try {
       let profile = await requireProfile(profileStore);
@@ -1879,11 +1905,11 @@ function registerIpc(
       }
       const running = process.pid !== null;
       if (running && process.executablePath) profile = { ...profile, obs: { ...profile.obs, executablePath: process.executablePath, workingDirectory: dirname(process.executablePath) } };
-      if (!profile.obs.executablePath) throw new Error('尚未找到本机 OBS，请先安装 OBS 或选择程序位置');
+      if (!profile.obs.executablePath) throw new Error('没有找到本机的 OBS，请先安装 OBS 或手动选择程序位置');
       // Before touching its configuration or plugin: an OBS we cannot inspect must not get a second instance.
       if (!running) await processManager.assertNoUnverifiableInstance('obs', profile.obs.executablePath);
       const access = processManager.inspectionAccess('obs');
-      if (process.pid !== null && process.executablePath && process.startTime && access === null) throw new Error('OBS 进程身份尚未核验，请重新点一键连接');
+      if (process.pid !== null && process.executablePath && process.startTime && access === null) throw new Error('还没确认 OBS 程序身份，请重新点“一键连接”');
       const commandLine = process.pid !== null && process.executablePath && process.startTime && access !== null
         ? await readObsCommandLine({ pid: process.pid, executablePath: process.executablePath, startTime: process.startTime, access }, identityHelper) : '';
       let targetPid = process.pid;
@@ -1895,15 +1921,15 @@ function registerIpc(
       await logger.record({ level: 'info', category: 'device', device: 'obs', message: '已自动读取本机 OBS 连接配置', details: { address: local.address, source: local.configurationPath, changed: local.changed } });
       if (!running) {
         try { await bridgeSetup.prepare(); }
-        catch (error) { await logger.record({ level: 'warning', category: 'device', device: 'obs', message: `预览组件需单独维护：${String(error)}` }); }
+        catch (error) { await logger.record({ level: 'warning', category: 'device', device: 'obs', message: `OBS 预览组件需要单独修复：${String(error)}` }); }
         const started = await processManager.start('obs', processConfiguration(profile, 'obs'));
-        if (started.pid === null) throw new Error('OBS 尚未启动');
+        if (started.pid === null) throw new Error('OBS 还没启动');
         targetPid = started.pid;
         await waitForObsEndpoint(local.address, started.pid, profile.obs.startupTimeoutMs);
       }
       const listeningPid = targetPid === null ? null : await findLocalObsPid(local.address);
       if (targetPid !== null && listeningPid === null) throw obsEndpointNotListening(local.address, targetPid);
-      if (targetPid === null || listeningPid !== targetPid) throw new Error('OBS 连接端口与选定进程不一致，请检查是否同时运行了多个 OBS；尚未发送密码');
+      if (targetPid === null || listeningPid !== targetPid) throw new Error('OBS 的连接端口和选定的 OBS 程序对不上，请检查是不是同时开了多个 OBS（密码还没发送）');
       const snapshot = await connectObs();
       return localObsConnectionResultSchema.parse({ version: 1, address: local.address, password: local.password, snapshot });
     } catch (error) {
@@ -1946,15 +1972,15 @@ function registerIpc(
     },
     confirm: async (kind, reason) => {
       const decision = await dialog.showMessageBox(mainWindow!, {
-        type: 'question', title: '维护 OBS 内置组件',
-        message: kind === 'restart' ? '需要正常重启 OBS 以加载组件' : '请先在 OBS 内正常退出，再继续',
-        detail: `${reason}\n\n${kind === 'restart' ? '请先保存 OBS 场景。确认后联动台会检查推流与录像状态，正常关闭本次启动的 OBS，部署组件并重新连接。' : '当前 OBS 不是本次由联动台启动，软件不会关闭它。请保存场景并正常退出 OBS；点击继续后，软件将完成部署、启动和连接。'}${kind === 'external' && processManager.inspectionAccess('obs') === 'limited' ? '\n\n这个 OBS 正以管理员身份运行。联动台不会提权启动程序，修复后会用普通方式打开 OBS；需要管理员身份时，可以之后自己重新打开 OBS 再点“一键连接”，新组件在两种方式下都能用。' : ''}`,
+        type: 'question', title: '修复 OBS 组件',
+        message: kind === 'restart' ? '需要重启 OBS 来加载组件' : '请先正常退出 OBS，再继续',
+        detail: `${reason}\n\n${kind === 'restart' ? '请先保存 OBS 场景。确认后联动台会先检查推流和录像状态，再正常关闭这次由联动台启动的 OBS，安装组件并重新连接。' : '当前的 OBS 不是这次由联动台启动的，联动台不会关闭它。请保存场景并正常退出 OBS，然后点“已退出，继续”，联动台会完成安装、启动和连接。'}${kind === 'external' && processManager.inspectionAccess('obs') === 'limited' ? '\n\n这个 OBS 正以管理员身份运行。联动台不会提权启动程序，修复后会用普通方式打开 OBS；需要管理员身份时，可以之后自己重新打开 OBS 再点“一键连接”，新组件在两种方式下都能用。' : ''}`,
         buttons: [kind === 'restart' ? '保存好了，重启并修复' : '已退出，继续', '取消'], defaultId: 1, cancelId: 1
       });
       return decision.response === 0;
     },
     stop: async () => {
-      if (runtimeActive) throw new Error('请先停止节目播放，再维护 OBS 组件');
+      if (runtimeActive) throw new Error('请先停止播放，再修复 OBS 组件');
       const profile = await requireProfile(profileStore);
       if (obs.getSnapshot().status !== 'connected') await connectObs();
       await processManager.stop('obs', profile.obs.shutdownTimeoutMs);
@@ -1964,13 +1990,13 @@ function registerIpc(
     start: async () => {
       const profile = await requireProfile(profileStore);
       const started = await processManager.start('obs', processConfiguration(profile, 'obs'));
-      if (started.pid === null) throw new Error('OBS 启动后未返回进程');
+      if (started.pid === null) throw new Error('OBS 启动后没有找到它的进程');
       await waitForObsEndpoint(profile.obs.webSocketUrl, started.pid, profile.obs.startupTimeoutMs);
     },
     connect: async () => {
       if (obs.getSnapshot().status !== 'connected') {
         const snapshot = await connectObs();
-        if (snapshot.status !== 'connected') throw new Error('OBS 组件已部署，但 WebSocket 未连接；请在设备连接中检查配置');
+        if (snapshot.status !== 'connected') throw new Error('OBS 组件已安装，但 WebSocket 没有连上，请在「设备连接」里检查设置');
       }
     },
     verify: async () => {
@@ -1981,15 +2007,15 @@ function registerIpc(
     }
   });
   handle('link:obs-bridge-repair', async (): Promise<void> => {
-    if (runtimeActive) throw new Error('请先停止节目播放，再维护 OBS 组件');
-    if (bridgeMaintenance) throw new Error('OBS 组件维护正在进行');
+    if (runtimeActive) throw new Error('请先停止播放，再修复 OBS 组件');
+    if (bridgeMaintenance) throw new Error('正在修复 OBS 组件，请稍等');
     bridgeMaintenance = true;
     livePreview.close(); liveAddress = null; liveBridgeInstalled = false;
     try {
-      await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'running', message: '开始检查 OBS 预览组件：部署、连接及真实视频帧验证' });
+      await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'running', message: '开始检查 OBS 预览组件：安装、连接和画面验证' });
       bridgeMaintenanceTask = bridgeSetup.repair();
       await bridgeMaintenanceTask;
-      await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'succeeded', message: 'OBS 内置组件部署及真实视频帧检查通过' });
+      await logger.record({ level: 'info', category: 'device', device: 'obs', result: 'succeeded', message: 'OBS 组件安装和画面检查都已通过' });
     } catch (error) {
       await logger.record({ level: 'error', category: 'device', device: 'obs', result: 'failed', message: String(error) });
       throw error;
@@ -2047,7 +2073,7 @@ function registerIpc(
     await projectAccess.assetFiles(payload.projectPath, [payload.event.relativePath]);
     const absolutePath = projectService.resolveMediaAsset(payload.projectPath, payload.event.relativePath);
     const file = await stat(absolutePath);
-    if (!file.isFile()) throw new Error(`正式媒体文件不存在：${absolutePath}`);
+    if (!file.isFile()) throw new Error(`找不到媒体文件：${absolutePath}`);
     await obs.executeManagedMediaEvent(payload.event, absolutePath);
   });
   handle('link:process-start', async (_event, idValue: unknown): Promise<LinkProcessSnapshot> => {
@@ -2061,7 +2087,7 @@ function registerIpc(
       try { await bridgeSetup.prepare(); }
       catch (error) {
         await logger.record({ level: 'warning', category: 'device', device: 'obs', result: 'failed',
-          message: `OBS 预览组件尚未就绪，继续启动控制连接；预览需单独修复：${String(error)}` });
+          message: `OBS 预览组件还没准备好，先继续连接 OBS；预览需要单独修复：${String(error)}` });
       }
     }
     const started = await processManager.start(id, processConfiguration(profile, id));
@@ -2139,23 +2165,34 @@ function registerIpc(
   handle('link:diagnostic-export', async (_event, contextValue: unknown, rangeValue: unknown) => {
     const context = linkDiagnosticContextSchema.parse(contextValue);
     const range = linkLogExportRangeSchema.parse(rangeValue ?? { days: 7 });
-    const path = await saveDiagnosticDialog('导出脱敏诊断包');
+    const path = await saveDiagnosticDialog('导出诊断包');
     if (!path) return null;
     await writeDiagnostic(path, context, range.days);
     await logger.record({ level: 'info', category: 'operator', device: '诊断', message: `已导出诊断包（最近 ${range.days} 天）：${path}`, result: 'succeeded' });
     return path;
   });
   // A report goes out even when the license cannot be read: that machine is the one most likely to need help.
-  const feedbackIdentity = async (): Promise<FeedbackIdentity> => {
+  const unreadableIdentity = (error: unknown): FeedbackIdentity =>
+    ({ machineCode: null, license: null, licensed: false, licenseSummary: `读取本机授权失败：${error instanceof Error ? error.message : String(error)}`, version: buildVersion });
+  const licensedFeedbackIdentity = async (): Promise<FeedbackIdentity> => {
     try {
-      if (localTestAccess) return { machineCode: (await getLocalTestStatus()).machineCode, license: null, licensed: false, licenseSummary: '本地测试模式（不校验授权）', version: buildVersion };
       const service = await getLicenseService(), status = await service.status();
       return { machineCode: status.machineCode, license: await service.signedLicense(), licensed: status.state === 'active',
         licenseSummary: `${licenseStateLabel[status.state]}${status.state === 'active' ? '' : `：${status.message}`}`, version: buildVersion };
     } catch (error) {
-      return { machineCode: null, license: null, licensed: false, licenseSummary: `读取本机授权失败：${error instanceof Error ? error.message : String(error)}`, version: buildVersion };
+      return unreadableIdentity(error);
     }
   };
+  const localTestFeedbackIdentity = async (): Promise<FeedbackIdentity> => {
+    try {
+      return { machineCode: (await getLocalTestStatus()).machineCode, license: null, licensed: false, licenseSummary: '本地测试模式（不校验授权）', version: buildVersion };
+    } catch (error) {
+      return unreadableIdentity(error);
+    }
+  };
+  // Keep the local test branch out of any try block: Rollup keeps whatever a try block references, and a release
+  // bundle that still carries the local test license is refused at packaging (scripts/require-release-build.mjs).
+  const feedbackIdentity = (): Promise<FeedbackIdentity> => localTestAccess ? localTestFeedbackIdentity() : licensedFeedbackIdentity();
   const feedback = new FeedbackService({
     serverUrl: licenseConfig.serverUrl,
     identity: feedbackIdentity,
@@ -2198,13 +2235,13 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
     // must not keep the console app open for good; the operator chooses.
     const reason = error instanceof Error ? error.message : String(error);
     recordQuitStep('灯光试听停止未完成', { error: reason });
-    const options = { type: 'warning' as const, title: '灯光试听未能停止', message: '退出前没有确认控台已关闭本次试听。',
-      detail: `${reason}\n\n仍然退出时，控台上可能保留当前灯光状态，请到控台手动处理。`, buttons: ['返回软件', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true };
+    const options = { type: 'warning' as const, title: '灯光试听没能停止', message: '退出前没能确认控台已经关掉这次试听。',
+      detail: `${reason}\n\n如果仍然退出，控台上可能还保持着当前的灯光，请到控台手动处理。`, buttons: ['返回软件', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true };
     const choice = mainWindow && !mainWindow.isDestroyed() ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
     if (choice.response !== 1) { recordQuitStep('返回软件处理灯光试听'); return false; }
     recordQuitStep('操作员选择仍然退出', { error: reason });
   }
-  recordQuitStep('退出前关闭正式音频与画面');
+  recordQuitStep('退出前关闭音频和画面');
   await closeNativePlayer();
   const owned = (['p1', 'ma3d', 'ma2', 'obs'] as const)
     .map((id) => processManager.getSnapshot(id))
@@ -2212,6 +2249,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   if (owned.length === 0) {
     recordQuitStep('退出前关闭音乐分析');
     await automaticMusic?.close();
+    await midiPorts?.dispose();
     if (discardOnQuit) await discardOpenDocumentRecovery();
     allowWindowClose = true;
     settleRepeatedLogs();
@@ -2225,9 +2263,9 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
     const decision = await dialog.showMessageBox(mainWindow!, {
       type: 'question',
       title: '逐项确认外部程序',
-      message: `${snapshot.id} 由本次联动台启动`,
-      detail: `PID ${String(snapshot.pid)}\n${snapshot.executablePath ?? '路径未知'}\n\n请选择退出联动台时如何处理此程序。`,
-      buttons: ['取消退出', '保留并继续确认', '请求正常关闭'],
+      message: `${snapshot.id} 是这次由联动台启动的`,
+      detail: `PID ${String(snapshot.pid)}\n${snapshot.executablePath ?? '路径未知'}\n\n退出联动台时要怎么处理这个程序？`,
+      buttons: ['取消退出', '保留它，继续', '正常关闭它'],
       defaultId: 0,
       cancelId: 0,
       noLink: true
@@ -2251,8 +2289,8 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
     if (failures.length > 0) {
       await dialog.showMessageBox(mainWindow!, {
         type: 'warning',
-        title: '部分外部程序保持运行',
-        message: '联动台没有强制结束以下程序：',
+        title: '有些外部程序还在运行',
+        message: '以下程序没有关闭（联动台不会强制结束程序）：',
         detail: failures.join('\n'),
         buttons: ['确认并退出']
       });
@@ -2260,6 +2298,7 @@ async function runQuitFlow(profileStore: SecureProfileStore, processManager: Ext
   }
   recordQuitStep('退出前关闭音乐分析');
   await automaticMusic?.close();
+  await midiPorts?.dispose();
   if (discardOnQuit) await discardOpenDocumentRecovery();
   allowWindowClose = true;
   settleRepeatedLogs();
@@ -2277,7 +2316,7 @@ async function discardOpenDocumentRecovery(): Promise<void> {
     await recoveryCopies.discard({ version: 1, projectPath, projectId });
     recordQuitStep('已按“不保存”清除恢复副本', { projectPath });
   } catch (error) {
-    recordQuitStep('恢复副本未能清除，下次打开工程时会再次提示', { projectPath, error: error instanceof Error ? error.message : String(error) });
+    recordQuitStep('恢复副本没能清除，下次打开工程时还会提示', { projectPath, error: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -2286,8 +2325,8 @@ function recoveryPrompt(offer: RecoveryOffer): Electron.MessageBoxOptions {
   const detail = offer.kind === 'file'
     ? [`位置：${offer.projectPath}`, ...offer.movedFrom === undefined ? [] : [`原位置：${offer.movedFrom}（工程文件已移到当前位置）`],
       `未保存改动的最后修改：${time(offer.copySavedAt)}`, `工程文件上次保存：${time(offer.fileModifiedAt)}`, '',
-      '恢复：载入这些改动，保存后才写入工程文件。', '丢弃：把恢复副本移到回收站，打开工程文件中的内容。',
-      ...offer.copySavedAt < offer.fileModifiedAt ? ['', '恢复副本早于工程文件，工程文件可能在别处被修改过，请确认后再选择。'] : []]
+      '恢复：载入这些改动，保存后才写入工程文件。', '丢弃：把恢复副本移到回收站，打开工程文件里的内容。',
+      ...offer.copySavedAt < offer.fileModifiedAt ? ['', '恢复副本比工程文件旧，工程文件可能在别处改过，请确认后再选择。'] : []]
     : [`未保存改动的最后修改：${time(offer.copySavedAt)}`, '', '恢复：打开这些内容，保存时选择位置。', '丢弃：把恢复副本移到回收站。'];
   return { type: 'question', title: '发现未保存的改动', noLink: true, buttons: ['恢复', '丢弃'], defaultId: 0, cancelId: 0,
     message: offer.kind === 'file' ? `工程「${offer.name}」有未保存的改动。` : `未命名工程「${offer.name}」有未保存的改动。`, detail: detail.join('\n') };
@@ -2308,14 +2347,14 @@ function recordQuitStep(step: string, details: Record<string, unknown> = {}): vo
 
 let runtimeExitWarningOpen = false;
 function showRuntimeActiveExitWarning(): void {
-  recordQuitStep('运行会话未停止，拒绝退出');
+  recordQuitStep('联动还没停止，暂不退出');
   if (runtimeExitWarningOpen) return;
   runtimeExitWarningOpen = true;
   const options = {
     type: 'warning' as const,
-    title: '联动尚未停止',
-    message: '当前音频或联动会话尚未停止。',
-    detail: '请返回播放器停止播放；仍有画面联动时，等待相关来源完成清理后再退出。',
+    title: '联动还没停止',
+    message: '音频或联动还在运行。',
+    detail: '请回到播放器停止播放。如果还有画面联动，等相关来源清理完再退出。',
     buttons: ['返回软件'],
     defaultId: 0,
     cancelId: 0,
@@ -2332,7 +2371,7 @@ function processConfiguration(profile: IntegrationProfile, id: ExternalApplicati
     const portable = profile.obs.arguments.some((argument) => argument === '--portable' || argument === '-p')
       || existsSync(join(root, 'portable_mode')) || existsSync(join(root, 'obs_portable_mode'));
     if (!portable) return profile.obs;
-    if (!process.env.ProgramData) throw new Error('无法定位 OBS 内置组件目录');
+    if (!process.env.ProgramData) throw new Error('找不到 OBS 组件所在的文件夹');
     const plugins = join(process.env.ProgramData, 'obs-studio/plugins');
     return { ...profile.obs, environment: {
       OBS_PLUGINS_PATH: join(plugins, 'tblink-realtime-preview/bin/64bit').replaceAll('\\', '/'),
@@ -2340,13 +2379,13 @@ function processConfiguration(profile: IntegrationProfile, id: ExternalApplicati
     } };
   }
   const configuration = profile[id];
-  if (!configuration) throw new Error(`${id === 'ma2' ? 'MA2 onPC' : id === 'ma3d' ? 'MA 3D' : 'P1'} 程序路径尚未配置，请在设备设置中选择程序`);
+  if (!configuration) throw new Error(`${id === 'ma2' ? 'MA2 onPC' : id === 'ma3d' ? 'MA 3D' : 'P1'} 的程序路径还没设置，请在设备设置里选择程序`);
   return configuration;
 }
 
 async function requireProfile(store: SecureProfileStore) {
   const profile = await store.loadProfile();
-  if (!profile) throw new Error('尚未配置本机集成档案');
+  if (!profile) throw new Error('这台电脑还没有设备设置');
   return profile;
 }
 

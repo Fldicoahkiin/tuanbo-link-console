@@ -56,7 +56,7 @@ it('完整模型结果交付实际候选及数量，长度不符明确失败而�
   expect(changed.at(-1)?.candidates?.bpm).toBe(120);
   service.enqueue({ ...input, taskId: randomUUID(), source: { ...input.source, durationMs: 2000 } });
   await vi.waitFor(() => expect(service.list()[1]?.state).toBe('failed'));
-  expect(service.list()[1]?.message).toContain('音源长度已改变');
+  expect(service.list()[1]?.message).toContain('音源长度变了');
 });
 
 it('排队取消不启动进程；活动任务取消后迟到结果不得交付', async () => {

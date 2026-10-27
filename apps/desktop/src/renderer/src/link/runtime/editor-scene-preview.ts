@@ -19,11 +19,11 @@ export class EditorScenePreview {
     const operation = pending.then(async () => {
       if (!current()) return;
       if (!projectPath) throw new Error('请先保存工程，再定位 OBS 画面');
-      if (useIntegrationStore.getState().obs.status !== 'connected') throw new Error('OBS 未连接，无法跟随时间线定位画面');
+      if (useIntegrationStore.getState().obs.status !== 'connected') throw new Error('OBS 没有连接，画面无法跟随时间线');
       await previewEditorScene(project, projectPath, itemId, positionMs, preciseSeeking, linkDesktopViewModel, current);
     }).catch((error: unknown) => {
       if (generation === this.generation) this.failed = true;
-      throw new Error(`${error instanceof Error ? error.message : String(error)}。已停止后续定位请求；处理后点击停止，再重新定位。`, { cause: error });
+      throw new Error(`${error instanceof Error ? error.message : String(error)}。画面定位已暂停，处理好后先点“停止”，再重新定位。`, { cause: error });
     });
     const tail = operation.catch((error: unknown) => reportCoordinatorError(
       `编辑画面定位失败：${error instanceof Error ? error.message : String(error)}`, message => console.error(message)));

@@ -12,14 +12,14 @@ export async function seekInternalRuntime(project: LinkProject, projectPath: str
   sample: MtcSample, runtime: CueRuntime, managed: ManagedOutputRuntime, runner: CueActionRunner,
   apply: (update: RuntimeUpdate) => void, assertCurrent: () => void = () => undefined): Promise<void> {
   assertCurrent();
-  if (!projectPath || project.playbackSource !== 'internal' || project.obsOutputMode !== 'scenes') throw new Error('原生定位需要已保存的本机场景工程');
+  if (!projectPath || project.playbackSource !== 'internal' || project.obsOutputMode !== 'scenes') throw new Error('定位前请先保存工程');
   const work = internalSeekState(project, itemId, timecodeToMilliseconds(sample.timecode, project.timebase.frameRate));
   const targets = work.media.map(event => managed.alignEvent(event, sample.totalFrames));
   const cleanup = managed.takeCleanup();
   await executeManagedOutputCleanup({ ...cleanup, mediaEvents: cleanup.mediaEvents.filter((event) => !targets.some(target => target.sourceName === event.sourceName)) }, managed, runner);
   assertCurrent();
   const mode = runtime.getMode();
-  apply(runtime.stop('定位后重新布防')); apply(runtime.completeStop()); apply(runtime.selectItem(itemId));
+  apply(runtime.stop('定位后重新待命')); apply(runtime.completeStop()); apply(runtime.selectItem(itemId));
   apply(runtime.beginPreflight(mode)); apply(runtime.arm(performance.now(), sample));
   apply(runtime.pauseAutomatic('定位后保持暂停'));
   for (const entry of work.cues) for (const action of entry.cue.actions) { assertCurrent(); await executeObsCueAction(desktop, project, action); }

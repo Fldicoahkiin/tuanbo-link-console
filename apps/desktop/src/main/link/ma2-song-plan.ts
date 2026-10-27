@@ -48,7 +48,7 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
   const binding = request.binding;
   const remote = remoteXml ? inspectMa2SequenceXml(remoteXml).sequences[0]! : null;
   const base = binding ? inspectMa2SequenceXml(binding.baselineXml).sequences[0]! : null;
-  if (binding && (base?.number !== binding.sequence || remote && remote.number !== binding.sequence)) throw new Error(`本曲控台序列 ${binding.sequence} 与上次核对的内容编号不一致，未写入；请从控台刷新后核对`);
+  if (binding && (base?.number !== binding.sequence || remote && remote.number !== binding.sequence)) throw new Error(`这首歌的控台序列 ${binding.sequence} 和上次的内容编号对不上，没有写入；请从控台刷新后检查`);
   const target = binding?.sequence ?? request.settings.nextSequence;
   // Names are written as pinyin. A Chinese name an earlier version wrote still counts as equal,
   // so nothing on the console is renamed until the operator asks for rewriteLegacyNames.
@@ -79,7 +79,7 @@ export function planMa2SongSync(request: Ma2SongSyncRequest, remoteXml: string |
   const changes: Ma2SongPlan['changes'] = []; const restored: string[] = [];
   const adopted = new Set<string>();
   for (const point of request.points) {
-    if (point.cues.some(cue => cue.delayMs !== 0)) throw new Error(`“${point.name || '未命名 Cue'}”包含延迟，不能压成控台单步；请先拆为时间线点位`);
+    if (point.cues.some(cue => cue.delayMs !== 0)) throw new Error(`“${point.name || '未命名 Cue'}”带有延迟，不能变成控台上的单步；请先拆成时间线上的点`);
     const old = previous.get(point.id);
     if (old) { numbers.set(point.id, milli(old.cue)); continue; }
     // A Cue added on the console and dragged onto the timeline becomes this point's Cue as it is.

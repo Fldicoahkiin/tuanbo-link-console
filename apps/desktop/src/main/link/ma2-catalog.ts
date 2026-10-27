@@ -15,9 +15,9 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isP
   };
   if (signal?.aborted) throw new Error('扫描已取消');
   const directory = ma2ObjectDirectorySchema.parse(JSON.parse(await request('LIST', 1)));
-  if (options?.expectedSource && Object.entries(options.expectedSource).some(([key, value]) => Reflect.get(directory, key) !== value)) throw new Error('Show 或控台会话已改变，保留旧缓存，请读取新目录');
+  if (options?.expectedSource && Object.entries(options.expectedSource).some(([key, value]) => Reflect.get(directory, key) !== value)) throw new Error('控台的 Show 或连接变了，旧缓存已保留，请重新读取');
   const readAt = new Date().toISOString();
-  const checkpointCatalog = (): Ma2Catalog => ({ directory, readAt, entries: [], sourceUnverified: false, incomplete: '读取尚未完成' });
+  const checkpointCatalog = (): Ma2Catalog => ({ directory, readAt, entries: [], sourceUnverified: false, incomplete: '读取还没完成' });
   await options?.checkpoint?.(checkpointCatalog());
   if (signal?.aborted) throw new Error('扫描已取消');
   const objects = directory.entries.filter(entry => !options?.targets || options.targets.includes(entry.target));
@@ -41,7 +41,7 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isP
       entry.warnings = report.warnings;
       entry.eventCount = tc.tracks.reduce((sum, track) => sum + track.subtracks.reduce((count, subtrack) => count + subtrack.events.length, 0), 0);
       totalEvents += entry.eventCount;
-      if (totalEvents > 100000) throw new Error('扫描事件超过十万，请缩小现场 Show 后重新扫描');
+      if (totalEvents > 100000) throw new Error('事件超过十万个，请精简 Show 后重新扫描');
       for (const track of tc.tracks) for (const subtrack of track.subtracks) for (const event of subtrack.events) {
         const address = track.executorAddress;
         entry.events.push({ path: event.path, time: event.attributes.time ?? '0', action: event.attributes.command ?? subtrack.attributes.fader_command ?? '未知动作', executor: address.length === 4 ? `${address[2]}.${address[3]}` : address.join('/'), cue: null, name: event.cueName });
@@ -72,15 +72,15 @@ export async function readMa2Catalog(bridge: Pick<Ma2OnpcBridge, 'request'>, isP
     if (totalEvents > 100000) { incomplete = '扫描事件超过十万，已保留完成条目与原始 XML，请缩小读取范围'; break; }
   }
   if (!incomplete && !signal?.aborted && !isPlaying()) {
-    onProgress?.({ phase: 'timecodes', completed: entries.length, total: objects.length + 1, detail: '核对控台时间线目录' });
+    onProgress?.({ phase: 'timecodes', completed: entries.length, total: objects.length + 1, detail: '检查控台时间线目录' });
     try {
       const verified = ma2ObjectDirectorySchema.parse(JSON.parse(await request('LIST', 1)));
-      if (JSON.stringify(directory) !== JSON.stringify(verified)) { sourceUnverified = true; incomplete = '控台 Show、插件或目录已变化；以下为读取时缓存，需重新核对来源'; }
+      if (JSON.stringify(directory) !== JSON.stringify(verified)) { sourceUnverified = true; incomplete = '控台 Show、插件或目录有变化；下面是之前读取的内容，请重新读取控台确认'; }
     } catch (error) { sourceUnverified = true; incomplete = `目录复核未完成：${error instanceof Error ? error.message : String(error)}`; }
   } else incomplete ??= '读取已取消，保留已读取对象';
   metrics.elapsedMs = performance.now() - started;
   const result = ma2CatalogSchema.parse({ directory, readAt, entries, metrics, incomplete, sourceUnverified });
   await options?.checkpoint?.(result);
-  onProgress?.({ phase: 'timecodes', completed: incomplete ? entries.length : objects.length + 1, total: objects.length + 1, detail: incomplete ? '已保留部分读取结果' : '时间线目录已核对' });
+  onProgress?.({ phase: 'timecodes', completed: incomplete ? entries.length : objects.length + 1, total: objects.length + 1, detail: incomplete ? '已保留部分读取结果' : '时间线目录检查完毕' });
   return result;
 }

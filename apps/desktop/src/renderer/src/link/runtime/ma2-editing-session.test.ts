@@ -43,7 +43,7 @@ it('重新连接核对目录并复用缓存，等待明确开始同步', async (
   expect(scanMa2Materials).toHaveBeenCalledWith(connection, false);
   expect(useMa2AutoSyncStore.getState().request).toBeNull();
   expect(message).toContain('实时同步');
-  expect(message).toContain('缓存');
+  expect(message).toContain('工程里保存的控台数据');
 });
 it('首次连接依次扫描、配对，不依赖设置页面挂载', async () => {
   useDocumentStore.setState(state => ({ project: { ...state.project!, ma2ReadState: undefined } }));
@@ -63,13 +63,14 @@ it('连接之前的本地修改保留，不能因连接动作自动覆盖控台'
   const project = structuredClone(useDocumentStore.getState().project!);
   project.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events[0]!.at = 1000;
   useDocumentStore.getState().setProject(project, 'test.tblink');
-  expect(await prepareMa2Editing(connection, useDocumentStore.getState().documentId)).toContain('连接前的本地修改');
+  expect(await prepareMa2Editing(connection, useDocumentStore.getState().documentId)).toContain('连接前做的本地修改');
   expect(useMa2AutoSyncStore.getState().request).toBeNull();
 });
-it('原生保留时间线可载入但不会冒充可安全写回', async () => {
+it('含软件不转换的控台动作的时间线照样可写回，动作原样保留（2026-10-26）', async () => {
   const project = structuredClone(useDocumentStore.getState().project!);
   project.rundown[0]!.lighting!.ma2Bindings![0]!.nativeEvents = [{ path: 'native', reason: '未验证动作' }];
   useDocumentStore.getState().setProject(project, 'test.tblink');
-  expect(await prepareMa2Editing(connection, useDocumentStore.getState().documentId)).toContain('尚无已验证可写回');
+  const summary = await prepareMa2Editing(connection, useDocumentStore.getState().documentId);
+  expect(summary).toContain('1 条含控台原样动作'); expect(summary).not.toContain('还没有可以写回控台的时间线');
   expect(importCachedMa2).toHaveBeenCalledOnce(); expect(useMa2AutoSyncStore.getState().request).toBeNull();
 });

@@ -19,7 +19,7 @@ it('只关闭本节目去重后的执行器，单独停止不会输出全局 Off
 it('断线和目标变化不会把旧歌曲关闭指令发给另一台控台，也不自动重发', async () => {
   const f = fixture(); await f.release.prepare(f.document);
   f.status.settings!.host = '192.0.2.2';
-  await expect(f.release.release()).rejects.toThrow('连接已改变');
+  await expect(f.release.release()).rejects.toThrow('控台连接变了');
   await f.release.release(); expect(f.api.playMa2Cue).not.toHaveBeenCalled();
 });
 it('准备期间取消，迟到结果不能恢复旧关闭计划', async () => {

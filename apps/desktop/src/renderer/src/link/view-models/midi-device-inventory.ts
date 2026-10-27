@@ -30,7 +30,7 @@ export async function readAndStoreMidiPorts(monitor: LinkMidiAdapter): Promise<M
   const webError = web.status === 'rejected' ? message(web.reason) : null;
   if (!useConnectionCheckStore.getState().running) useConnectionCheckStore.getState().finish('midi', webError ? 'error' : 'ready', webError ?? '系统 MIDI 检测通过');
   await desktop.recordLog({ level: webError || native.status === 'rejected' ? 'warning' : 'info', category: 'device', device: 'midi',
-    message: 'MIDI 端口重新检测完成（仅枚举，未发送时间码）', details: {
+    message: 'MIDI 端口已重新检测（只列出端口，没有发送时间码）', details: {
       browserPorts: ports, browserError: webError,
       windowsOutputs: native.status === 'fulfilled' ? native.value.midiOutputs : [],
       windowsError: native.status === 'rejected' ? message(native.reason) : null
@@ -48,7 +48,7 @@ export function midiOutputInventory(engine: 'browser' | 'native', ports: readonl
   const windowsOnly = engine === 'browser' ? windows.filter(name => !browser.includes(name)) : [];
   const names = [...new Set([...available, ...windowsOnly, ...(selected ? [selected] : [])])];
   return { available, windowsOnly, options: names.map(name => ({ name, available: available.includes(name),
-    reason: windowsOnly.includes(name) ? '当前播放引擎未识别' : available.includes(name) ? '' : '未检测到' })) };
+    reason: windowsOnly.includes(name) ? '当前播放方式识别不到' : available.includes(name) ? '' : '未检测到' })) };
 }
 
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }

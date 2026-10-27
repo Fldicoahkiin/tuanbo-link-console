@@ -13,7 +13,6 @@ export function ma2AutoBindEvents(document: LightingDocument): Array<Extract<Lig
   return document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events.flatMap(event => {
     if (event.kind !== 'ma2' && event.kind !== 'ma2-fader') return [];
     const binding = bound.get(track.id);
-    if (binding?.binding.nativeEvents?.length || binding?.binding.playback === 'native-timecode') return [];
     return !binding || !event.executor || binding.executor !== event.executor ? [event] : [];
   })));
 }
@@ -32,7 +31,6 @@ export function normalizeMa2AutoBindings(input: LightingDocument, plan: Ma2AutoB
   const result: LightingTrack[] = [];
   for (const track of document.tracks) {
     const native = bound.get(track.id);
-    if (native?.binding.nativeEvents?.length || native?.binding.playback === 'native-timecode') { result.push(track); continue; }
     const binding = native?.binding ?? destination;
     const groups = new Map<string, LightingTrack>();
     if (native) groups.set(native.executor ?? '', { ...track, clips: track.clips.map(clip => ({ ...clip, events: [] })) });
@@ -82,7 +80,7 @@ export function applyMa2AutoBindingsCommand(itemId: string, expected: LightingDo
   return { id, label: '自动准备控台同步', historyRebaseKey: `ma2-auto-bind:${itemId}:${id}`, rebaseHistory: rebase,
     execute(project) {
       const current = project.rundown.find(item => item.id === itemId)?.lighting;
-      if (!current || JSON.stringify(current.ma2Bindings) !== JSON.stringify(expected.ma2Bindings)) throw new Error('准备同步期间控台绑定已改变，自动关联已保留在控台，请重新开启同步核对');
+      if (!current || JSON.stringify(current.ma2Bindings) !== JSON.stringify(expected.ma2Bindings)) throw new Error('准备同步时控台的绑定变了，自动关联已保留在控台，请重新开启同步');
       return rebase(project);
     }, undo: before => parseLinkProject(before) };
 }

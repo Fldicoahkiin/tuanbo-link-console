@@ -31,13 +31,13 @@ export class NativeDeviceQuery {
   read(): Promise<NativePlaybackDevices> {
     if (this.closing) return Promise.reject(new Error('设备查询服务正在关闭'));
     if (this.failure) return Promise.reject(this.failure);
-    if (this.pending.size >= 8) return Promise.reject(new Error('设备查询队列已满；本次查询未入队'));
+    if (this.pending.size >= 8) return Promise.reject(new Error('设备查询排队已满，这次没有查询'));
     if (this.requestId === 0xffffffff) return Promise.reject(new Error('设备查询编号已耗尽，请重新打开工程服务'));
     if (!this.child) this.start();
     const id = ++this.requestId, bytes = Buffer.alloc(8);
     bytes.write('TBD1'); bytes.writeUInt32LE(id, 4);
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error('设备查询超过 5 秒未返回；不沿用旧设备、不自动重试')), 5000);
+      const timer = setTimeout(() => this.fail(new Error('设备查询 5 秒没有结果，没有沿用旧的设备列表，也不会自动重试')), 5000);
       this.pending.set(id, { resolve, reject, timer });
       this.child!.stdin.write(bytes, error => { if (error) this.fail(error); });
     });
@@ -78,7 +78,7 @@ export class NativeDeviceQuery {
         const response = nativeDeviceResponseSchema.parse(JSON.parse(this.buffer)); this.buffer = '';
         const entry = this.pending.get(response.requestId);
         if (!entry) throw new Error('设备查询响应不属于当前请求');
-        if (!response.ok) throw new Error('Windows 未能完整读取设备；本次清单不可用');
+        if (!response.ok) throw new Error('Windows 没能完整读取设备，这次的设备列表不可用');
         this.pending.delete(response.requestId); clearTimeout(entry.timer); entry.resolve(response.devices);
       }
     } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); }
@@ -95,7 +95,7 @@ export class NativeDeviceQuery {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([this.exited, new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error('设备查询进程未退出，保留进程并报告，不强杀')), 5000);
+        timer = setTimeout(() => reject(new Error('设备查询进程没有退出，进程保留，没有强制结束')), 5000);
       })]);
     } finally { clearTimeout(timer); }
     if (checkExit && this.exitError) throw this.exitError;

@@ -30,8 +30,8 @@ export function saveCueIngredients(document: LightingDocument, ingredients: CueI
   const original = document.tracks.flatMap(track => track.clips.flatMap(clip => clip.events)).find(event => event.id === eventId || event.effectGroupId === eventId);
   const runMode = original?.kind === 'ma2' || original?.kind === 'empty-cue' && original.runMode ? original.runMode : document.outputMode === 'timecode' ? undefined : 'independent';
   if (!ingredients.length) return placeEmptyLightingCue(document, eventId ?? crypto.randomUUID(), ms, durationMs, name.trim());
-  if (ingredients.some(entry => entry.executor && !/^[1-9]\d*\.[1-9]\d*$/.test(entry.executor))) throw new Error('执行器格式应为页号.编号；留空即可使用序列池');
-  if (new Set(ingredients.map(entry => `${entry.executor ? `executor:${entry.executor}` : `sequence:${entry.sequence}`}:${entry.delayMs}`)).size !== ingredients.length) throw new Error('同一序列池序列或同一执行器在同一时间只能使用一个 Cue，请调整组合延迟或移除冲突素材');
+  if (ingredients.some(entry => entry.executor && !/^[1-9]\d*\.[1-9]\d*$/.test(entry.executor))) throw new Error('执行器格式应为“页号.编号”，例如 1.5；留空则使用序列池');
+  if (new Set(ingredients.map(entry => `${entry.executor ? `executor:${entry.executor}` : `sequence:${entry.sequence}`}:${entry.delayMs}`)).size !== ingredients.length) throw new Error('同一个序列或执行器在同一时刻只能运行一个 Cue。请调整组合延迟，或移除冲突的素材');
   const first = document.templates.find(effect => effect.track.cueStamp?.mode === 'fixed');
   const map = new LightingTempoMap(document.tempos);
   for (const track of document.tracks) for (const clip of track.clips) {
@@ -40,7 +40,7 @@ export function saveCueIngredients(document: LightingDocument, ingredients: CueI
   }
   if (durationMs <= 0 || ms < 0 || ms >= durationMs) throw new Error('请先添加音频，并将播放头放在音频范围内');
   if (ingredients.some(entry => entry.preparation && entry.preparation.leadMs > ms)) throw new Error('埋步不能早于节目开始，请缩短提前时间或后移正式 Cue');
-  if (ingredients.some(entry => entry.preparation && (!/^\d{1,4}(?:\.\d{1,3})?$/.test(entry.preparation.cue) || Number(entry.preparation.cue) <= 0 || Number(entry.preparation.cue) === Number(entry.cue)))) throw new Error('请填写与正式 Cue 不同的有效准备 Cue 编号');
+  if (ingredients.some(entry => entry.preparation && (!/^\d{1,4}(?:\.\d{1,3})?$/.test(entry.preparation.cue) || Number(entry.preparation.cue) <= 0 || Number(entry.preparation.cue) === Number(entry.cue)))) throw new Error('准备 Cue 的编号要有效，并且不能和正式 Cue 相同');
   const base = eventId ? removeLightingEffects(document, [eventId]) : document;
   const ingredient = ingredients[0]!;
   const track = first?.track ?? lightingTrackSchema.parse({ id: crypto.randomUUID(), name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [] });
@@ -69,7 +69,7 @@ function retainCueLocations(before: LightingDocument, placed: LightingDocument, 
     const slot = original[index]; if (!slot) return;
     const generatedMs = placed.tracks.flatMap(track=>track.clips.flatMap(clip=>clip.events.filter(value=>value.id===event.id).map(value=>lightingEventTime(clip,value,map))))[0] ?? ms;
     const at = (slot.clip.timeLock === 'time' ? generatedMs : map.msToBeat(generatedMs)) - slot.clip.start;
-    if (at < 0) throw new Error('组合的正式时间早于原片段起点，请先调整片段');
+    if (at < 0) throw new Error('组合的开始时间早于片段起点，请先调整片段');
     moved.set(event.id, { clipId: slot.clip.id, event: { ...event, id: slot.event.id, at } });
   });
   const tracks = placed.tracks.map(track => ({ ...track, clips: track.clips.map(clip => {
@@ -118,7 +118,7 @@ export function LightingCueComposer({ templateId, document, eventId, ms, duratio
           setError('');
         } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
       }}>{title}</button>)}</div>
-      <small>{document.outputMode === 'timecode' ? '时间码跟随的工程由控台按时间线运行，不能选单独运行。' : stored.runMode === 'independent' ? '结束前面的灯光组合，再运行本 Cue。' : '保留前面的灯光组合，叠加运行本 Cue。'}{stored.kind === 'ma2' && stored.preparation ? ' 埋步开始时执行切换。' : ''}{stored.kind === 'empty-cue' ? ' 空点位暂不发指令；添加灯光或同步控台后生效。' : ''}</small>
+      <small>{document.outputMode === 'timecode' ? '跟随时间码的工程由控台按时间线运行，不能选“单独运行”。' : stored.runMode === 'independent' ? '先结束前面的灯光组合，再运行这个 Cue。' : '保留前面的灯光组合，在上面叠加运行这个 Cue。'}{stored.kind === 'ma2' && stored.preparation ? ' 在埋步开始时切换。' : ''}{stored.kind === 'empty-cue' ? ' 空点位暂时不发指令，添加灯光或同步控台后生效。' : ''}</small>
     </div> : null}
     <div className="cue-composer-body"><div className="cue-content-heading"><span>包含素材</span><small>{ingredients.length}</small></div>
     <div className="cue-ingredients" aria-label="Cue 内容">{ingredients.map((entry, index) => <div className="cue-ingredient" key={`${entry.sequence}:${entry.executor}:${entry.cue}:${entry.delayMs}`}>
@@ -131,9 +131,9 @@ export function LightingCueComposer({ templateId, document, eventId, ms, duratio
       </div></details>
     </div>)}</div>
     <div className="cue-drop-hint"><Layers /><span>{ingredients.length ? '拖入素材，或点素材上的 ＋' : '空 Cue · 拖入素材，或点素材上的 ＋'}</span></div>
-    {eventId ? <small>素材修改自动保存；空 Cue 不发送灯光指令。</small> : null}
+    {eventId ? <small>素材修改会自动保存；空 Cue 不发送灯光指令。</small> : null}
     {ingredients.length ? <LightingCuePreparation document={document} ingredients={ingredients} onChange={onIngredients} cueTime={cueTime} disabled={disabled} /> : null}
-    {ingredients.some(entry => entry.preparation) ? <small>埋步不能写入控台，含埋步时本曲无法同步到控台，演出没有灯光。请去掉埋步。</small> : null}
+    {ingredients.some(entry => entry.preparation) ? <small>埋步不能写入控台。这首歌含有埋步时无法同步到控台，演出时不会有灯光。请去掉埋步。</small> : null}
     <details className="cue-composer-advanced"><summary>存入素材库</summary><button disabled={disabled || !ingredients.length || !name.trim()} onClick={() => { try { const first = ingredients[0]!; const track = lightingTrackSchema.parse({id:crypto.randomUUID(),name:name.trim(),kind:'ma2',color:'#68c9ed',group:'',muted:false,solo:false,locked:false,channel:1,controller:7,portProfileId:'',noteNames:{},clips:[],cueStamp:{mode:'fixed',sequence:first.sequence,cue:first.cue,executor:first.executor}});const previous=document.templates.find(value=>value.id===templateId);const template={...previous,id:previous?.id ?? crypto.randomUUID(),name:name.trim(),track,nativeSequence:false,members:ingredients.map(({name,sequence,cue,executor,delayMs})=>({name,sequence,cue,executor,delayMs}))};const result=onChange({...document,templates:[...document.templates.filter(value=>value.id!==template.id),template]},'收藏灯光组合');if(result===false)throw new Error('保存组合失败');setError(''); } catch(cause){setError(cause instanceof Error ? cause.message : String(cause));} }}>{templateId ? '保存分类素材修改' : '保存为分类素材'}</button></details>
     {error ? <p role="alert">{error}</p> : null}
 

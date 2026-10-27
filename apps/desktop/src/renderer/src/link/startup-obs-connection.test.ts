@@ -26,7 +26,7 @@ const running = { ...stopped, status: 'running' as const, pid: 1234, owned: true
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(readNativeDevices).mockResolvedValue({ protocol: 4, audio: [], midiOutputs: [] });
+  vi.mocked(readNativeDevices).mockResolvedValue({ protocol: 4, audio: [], midiOutputs: [], midiInputs: [] });
   mockDesktop.getSecurityPreflight.mockResolvedValue({ credentialDecryptable: true, logRedactionReady: true, error: null });
   mockDesktop.startExternalApplication.mockResolvedValue(running);
   mockDesktop.connectObs.mockResolvedValue({ status: 'connected', obsVersion: '32.2.2', webSocketVersion: '5.6.3', error: null });
@@ -50,7 +50,7 @@ describe('OBS 启动连接', () => {
     mockDesktop.readObsInventory.mockRejectedValue(new Error('显示器采集无法对应到有效显示器尺寸'));
     await connectStartupObs(defaultProfile(), true, disconnected, [], () => false);
     expect(useIntegrationStore.getState().obs.status).toBe('connected');
-    expect(useIntegrationStore.getState().error).toContain('场景清单读取失败');
+    expect(useIntegrationStore.getState().error).toContain('读取场景列表失败');
     expect(mockDesktop.recordLog.mock.calls.some(([entry]) => entry.level === 'warning' && entry.message.includes('显示器采集'))).toBe(true);
   });
   it('后续清单请求失败不会复活已经断开的 OBS', async () => {
@@ -83,7 +83,7 @@ describe('OBS 启动连接', () => {
     mockDesktop.startExternalApplication.mockRejectedValue(new Error('ECONNREFUSED'));
     await connectStartupObs(createDefaultIntegrationProfile(), true, disconnected, [stopped], () => false);
     expect(useIntegrationStore.getState().obs.status).toBe('disconnected');
-    expect(useIntegrationStore.getState().obs.error).toMatch(/^OBS 启动连接未完成：无法连接目标设备/);
+    expect(useIntegrationStore.getState().obs.error).toMatch(/^启动时没能连上 OBS：连不上目标设备/);
     expect(useIntegrationStore.getState().error).toBeNull();
   });
 

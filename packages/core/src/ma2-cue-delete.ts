@@ -33,7 +33,7 @@ export function applyMa2CueDeletionCommand(source: string, result: Ma2CueDeleteR
       sequences: result.library ? [...old.sequences.filter(value => !changed.has(value.sequence)), ...result.library.sequences.filter(value => changed.has(value.sequence))] : old.sequences.map(sequence => ({ ...sequence, cues: sequence.cues.filter(cue => !deleted({sequence:sequence.sequence,cue:cue.number})) })),
       fixtureUsage: [...old.fixtureUsage.filter(value => !changed.has(value.sequence)), ...(result.library?.fixtureUsage.filter(value => changed.has(value.sequence)) ?? [])],
       cueAttributes: [...(old.cueAttributes ?? []).filter(value => !changed.has(value.sequence)), ...(result.library?.cueAttributes?.filter(value => changed.has(value.sequence)) ?? [])],
-      errors: [...old.errors.filter(value => !changed.has(value.sequence)), ...(result.library?.errors.filter(value => changed.has(value.sequence)) ?? [...changed].map(sequence => ({sequence,message:'删除已确认，目录回读失败；请刷新素材后再使用'})))] };
+      errors: [...old.errors.filter(value => !changed.has(value.sequence)), ...(result.library?.errors.filter(value => changed.has(value.sequence)) ?? [...changed].map(sequence => ({sequence,message:'删除已确认，但重新读取控台失败；请刷新素材后再用'})))] };
     let next = saveMa2MaterialLibraryCommand(source, nextLibrary).execute(project);
     const user = projectLightingLibrary(next);
     const remainingFirst = (sequence: number): string | undefined => nextLibrary.sequences.find(value => value.sequence === sequence)?.cues[0]?.number;

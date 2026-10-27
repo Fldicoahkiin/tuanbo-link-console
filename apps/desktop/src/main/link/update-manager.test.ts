@@ -59,9 +59,9 @@ describe('LinkUpdateManager', () => {
       download: () => Promise.resolve(installer), install: vi.fn(), dispose: vi.fn()
     }));
     const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(), factory);
-    await expect(manager.check()).resolves.toMatchObject({ phase: 'error', message: '更新服务尚未发布可用的正式版本' });
+    await expect(manager.check()).resolves.toMatchObject({ phase: 'error', message: '更新服务还没有可用的正式版本' });
     expect(factory).toHaveBeenCalledWith('https://updates.tuanbo-link.jinhefilm.com/windows/x64/', expect.any(Object));
-    expect(() => manager.install()).toThrow('更新尚未下载完成');
+    expect(() => manager.install()).toThrow('更新还没下载完');
     await expect(manager.download()).rejects.toThrow('当前没有可下载的更新');
   });
 
@@ -125,7 +125,7 @@ describe('LinkUpdateManager', () => {
     progress();
     const stopped = await downloading;
     expect(stopped).toMatchObject({ phase: 'available', progressPercent: null });
-    expect(stopped.message).toContain('更新下载已停止');
+    expect(stopped.message).toContain('更新下载已暂停');
     expect(signal?.aborted).toBe(true);
   });
 
@@ -149,7 +149,7 @@ describe('LinkUpdateManager', () => {
     }));
     const status = await manager.check();
     expect(status).toMatchObject({ phase: 'available', availableVersion: '0.2.1' });
-    expect(status.installBlockedReason).toBe('新版本 0.2.1 发布于 2026-08-27，晚于本机授权的升级服务期限 2026-08-26；可以继续使用当前版本，续费延长升级服务后再安装');
+    expect(status.installBlockedReason).toBe('新版本 0.2.1 发布于 2026-08-27，晚于本机授权的升级服务期限 2026-08-26。当前版本可以继续用，续费延长升级服务后再安装');
     await expect(manager.download()).rejects.toThrow('晚于本机授权的升级服务期限');
     expect(download).not.toHaveBeenCalled();
   });
@@ -164,11 +164,11 @@ describe('LinkUpdateManager', () => {
   });
 
   it('授权不可用时仍可检查更新，只是不能安装', async () => {
-    const expired: LicenseStatus = { ...licensed('2027-01-01T00:00:00.000Z'), state: 'expired', message: '使用期限已结束；工程文件保持不变' };
+    const expired: LicenseStatus = { ...licensed('2027-01-01T00:00:00.000Z'), state: 'expired', message: '授权已到期；工程文件不受影响' };
     const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), rules(() => false, () => expired), (_feedUrl, handlers) => fakeClient(handlers, vi.fn()));
     const status = await manager.check();
     expect(status.phase).toBe('available');
-    expect(status.installBlockedReason).toBe('本机授权当前不可用（使用期限已结束；工程文件保持不变），可以查看新版本，恢复授权后再安装');
+    expect(status.installBlockedReason).toBe('本机授权当前不可用（授权已到期；工程文件不受影响），可以查看新版本，恢复授权后再安装');
   });
 
   it('没有发布签名或 latest.yml 被改成别的安装包：可以看到版本，不能下载，写日志', async () => {
@@ -206,17 +206,17 @@ describe('LinkUpdateManager', () => {
     await manager.check();
     const rejected = await manager.download();
     expect(rejected.phase).toBe('error');
-    expect(rejected.message).toContain('下载的更新与发布签名不一致，已拒绝安装');
+    expect(rejected.message).toContain('下载的更新没通过签名校验，已拒绝安装');
     expect(log).toHaveBeenLastCalledWith('error', expect.stringContaining('拒绝安装更新 0.2.1'));
     expect(log).toHaveBeenCalledWith('info', '开始下载更新 0.2.1');
-    await expect(manager.prepareInstall()).rejects.toThrow('更新尚未下载完成');
+    await expect(manager.prepareInstall()).rejects.toThrow('更新还没下载完');
 
     delivered = installer;
     await manager.check();
     await expect(manager.download()).resolves.toMatchObject({ phase: 'downloaded' });
     await writeFile(installer, 'changed after the download');
-    await expect(manager.prepareInstall()).rejects.toThrow('下载的更新与发布签名不一致');
-    expect(() => manager.install()).toThrow('更新尚未下载完成');
+    await expect(manager.prepareInstall()).rejects.toThrow('下载的更新没通过签名校验');
+    expect(() => manager.install()).toThrow('更新还没下载完');
     expect(install).not.toHaveBeenCalled();
     await writeFile(installer, installerBytes);
   });
@@ -236,7 +236,7 @@ describe('LinkUpdateManager', () => {
     }));
     const offline = await manager.check('background');
     expect(offline.phase).toBe('idle');
-    expect(offline.message).toBe('启动时未能检查更新（更新失败：net::ERR_INTERNET_DISCONNECTED），可以在软件更新中重试');
+    expect(offline.message).toBe('启动时没能检查更新（更新失败：net::ERR_INTERNET_DISCONNECTED），可以在「软件更新」里重试');
     expect(phases).not.toContain('error');
     online = true;
     await expect(manager.check('background')).resolves.toMatchObject({ phase: 'available', availableVersion: '0.2.1' });
@@ -255,7 +255,7 @@ describe('LinkUpdateManager', () => {
     await expect(manager.download()).resolves.toMatchObject({ phase: 'error', message: '更新失败：checksum mismatch' });
     expect(log).toHaveBeenCalledWith('info', '检查更新：发现新版本 0.2.1');
     expect(log).toHaveBeenLastCalledWith('error', '下载更新 0.2.1 失败：更新失败：checksum mismatch');
-    expect(() => manager.install()).toThrow('更新尚未下载完成');
+    expect(() => manager.install()).toThrow('更新还没下载完');
     await expect(manager.check()).resolves.toMatchObject({ phase: 'available' });
   });
 });

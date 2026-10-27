@@ -24,4 +24,4 @@ export function timecodeOutputChange(memory: TimecodeOutputMemory, status: Pick<
   return { memory, fault: null, clearFault: false, notice: null };
 }
 
-function timecodeFault(error: string): string { return `时间码未参与：${error}；音频继续播放。`; }
+function timecodeFault(error: string): string { return `时间码没有发出，音频照常播放。原因：${error}`; }

@@ -2,12 +2,15 @@ import { compileLightingPackets, LightingNetworkOutput, LightingOutputRelease, L
   type LinkDesktopApi, type ProgramLightingOutput } from '@tb/core/link';
 import type { IntegrationProfile, LightingDocument } from '@tb/schema';
 import { NativeMidiPorts } from './native-midi-ports';
+import type { MidiClaim } from './midi-port-broker';
 
 type Ports = Pick<NativeMidiPorts, 'prepare' | 'send' | 'close'>;
 type Dependencies = {
   executable: string;
   network: Pick<LinkDesktopApi, 'getMa2NetworkStatus' | 'cancelMa2Playback' | 'playMa2Cue'>;
   authorize(): Promise<void>;
+  /** Takes an output from the editor before it opens for this lighting. */
+  claim?: (portName: string) => Promise<MidiClaim>;
   error(message: string): void;
   now?: () => number;
   ports?: (profile: IntegrationProfile | null, failed: (error: Error) => void) => Ports;
@@ -51,9 +54,10 @@ export class NativeLightingOutput implements ProgramLightingOutput {
     this.failure = null;
     const packets = compileLightingPackets(document, profile?.lighting?.mscDeviceId ?? 127);
     const aborted = new AbortController(); this.abort = aborted;
-    const failed = (error: Error) => { if (generation === this.generation) this.fail(error); else this.dependencies.error(`旧灯光会话：${error.message}`); };
+    const failed = (error: Error) => { if (generation === this.generation) this.fail(error); else this.dependencies.error(`上一首的灯光：${error.message}`); };
     const ports = this.dependencies.ports?.(profile, failed) ?? new NativeMidiPorts(profile, {
-      executable: this.dependencies.executable, authorize: () => this.dependencies.authorize(), failed
+      executable: this.dependencies.executable, authorize: () => this.dependencies.authorize(), failed,
+      ...this.dependencies.claim ? { claim: this.dependencies.claim } : {}
     });
     this.ports = ports;
     try {
@@ -69,7 +73,7 @@ export class NativeLightingOutput implements ProgramLightingOutput {
       // only the differences go out now, before audio continues.
       this.position = positionMs; this.observedAt = this.now(); this.ticked = positionMs;
       const sent = restored + this.scheduler.restore(positionMs);
-      if (sent) this.fault = `灯光按播放位置重建：发送 ${sent} 条，中间事件不补发`;
+      if (sent) this.fault = `灯光已按播放位置恢复（发送 ${sent} 条），中间错过的事件不补发`;
     } catch (error) { if (generation === this.generation) this.stop(); throw error; }
   }
 
@@ -83,11 +87,11 @@ export class NativeLightingOutput implements ProgramLightingOutput {
   tick(positionMs: number): void {
     this.requireClock(positionMs);
     const age = this.now() - this.observedAt;
-    if (age > 100) { this.fault = `灯光音频时钟晚到 ${Math.round(age)}ms，本次位置未发送灯光，不补发`; return; }
+    if (age > 100) { this.fault = `灯光收到的音频时间晚了 ${Math.round(age)} ms，这个位置的灯光没有发送，也不补发`; return; }
     const gap = this.ticked === null ? 0 : positionMs - this.ticked; this.ticked = positionMs;
     if (this.local && gap > 100) {
       const sent = this.network.restore(positionMs) + (this.scheduler?.restore(positionMs) ?? 0);
-      this.fault = `灯光位置更新中断 ${Math.round(gap)}ms：按当前位置重建，发送 ${sent} 条，中间事件不补发`; return;
+      this.fault = `灯光位置更新中断了 ${Math.round(gap)} ms，已按当前位置恢复（发送 ${sent} 条），中间错过的事件不补发`; return;
     }
     this.network.tick(positionMs); this.scheduler?.tick(positionMs);
   }
@@ -126,18 +130,18 @@ export class NativeLightingOutput implements ProgramLightingOutput {
     if (this.failure) throw this.failure;
     const age = this.now() - this.observedAt;
     if (!Number.isFinite(positionMs) || positionMs < 0 || positionMs !== this.position || !Number.isFinite(age) || age < 0) {
-      const error = new Error('灯光音频时钟无效或位置不一致，停止该通道，不补发'); this.fail(error); throw error;
+      const error = new Error('灯光收到的音频时间无效或对不上，已停止灯光输出，不补发'); this.fail(error); throw error;
     }
   }
   private send(packet: LightingPacket): void {
     const ports = this.ports;
-    if (!ports || this.failure) throw this.failure ?? new Error('灯光 MIDI 尚未准备');
-    if (this.pending.size >= 32) { this.fault = '灯光 MIDI 动作积压超过 32 条，本条未发送'; return; }
+    if (!ports || this.failure) throw this.failure ?? new Error('灯光 MIDI 还没准备好');
+    if (this.pending.size >= 32) { this.fault = '灯光 MIDI 动作积压超过 32 条，这条没有发送'; return; }
     const generation = this.generation, now = this.now();
     let deadline = this.observedAt + 100 - Math.max(0, this.position - packet.atMs);
     if (now > deadline) {
       // A late start is never sent. A late release still is, so nothing stays on.
-      if (packet.phase !== 'off' && !packet.ma2Off) { this.fault = `灯光动作晚于 100ms 执行边界，未发送（${Math.round(now - deadline)}ms）`; return; }
+      if (packet.phase !== 'off' && !packet.ma2Off) { this.fault = `灯光动作晚了超过 100 ms，没有发送（晚了 ${Math.round(now - deadline)} ms）`; return; }
       deadline = now + 100;
     }
     const sending = ports.send(packet.portProfileId, packet.bytes, deadline).catch(error => {

@@ -36,7 +36,7 @@ it('替换等待旧输出关闭；旧界面的迟到关闭不停止新输出', a
   await service.control(command(a, { kind: 'close' })); expect(next.close).not.toHaveBeenCalled();
   gate.release(); await replacing; expect(create).toHaveBeenCalledTimes(2);
   await expect(service.control(command(a, { kind: 'play', itemId: 'old' }))).rejects.toThrow('已关闭');
-  await service.control(command(b, { kind: 'play', itemId: 'next' })); expect(next.controller.play).toHaveBeenCalledWith('next', undefined, undefined, undefined);
+  await service.control(command(b, { kind: 'play', itemId: 'next' })); expect(next.controller.play).toHaveBeenCalledWith('next', undefined, undefined);
 });
 
 it('停止不排在未完成的播放准备之后', async () => {
@@ -78,7 +78,7 @@ it('界面进程退出时播放中的节目不停；重新加载的同工程界�
   const published = events.length; callbacks.changed({ ...emptyInternalPlayerState, itemId: 'song', status: 'playing', positionMs: 6000 });
   expect(events).toHaveLength(published);
   const other = request();
-  await expect(service.open(other)).rejects.toThrow('请打开该工程接管或停止播放'); expect(output.close).not.toHaveBeenCalled();
+  await expect(service.open(other)).rejects.toThrow('请打开这个工程接回控制，或停止播放'); expect(output.close).not.toHaveBeenCalled();
   const reloaded = { ...a, ownerId: randomUUID(), revision: 0 };
   expect(await service.open(reloaded)).toBe('adopted'); expect(create).toHaveBeenCalledTimes(1);
   expect(events.at(-1)).toMatchObject({ ownerId: reloaded.ownerId, state: { positionMs: 6000, status: 'playing' } });

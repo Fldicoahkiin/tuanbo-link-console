@@ -21,11 +21,10 @@ export class Ma2ApplyService {
       this.requireStopped();
       const binding = request.document.ma2Bindings?.find((entry) => entry.id === request.bindingId);
       if (!binding || binding.timecode !== request.readback.target) throw new Error('节目与 MA2 绑定不一致');
-      if (binding.nativeEvents?.length || binding.playback === 'native-timecode' || request.readback.unconverted.length) throw new Error('此时间线含原生保留事件，禁止写回；请在控台编辑并使用原有 Timecode 播放');
       stage = 'read';
       let snapshot = await this.bridge.request('SNAPSHOT', binding.timecode);
       const current = convertMa2Snapshot(snapshot, binding.timecode, [], binding.timeOriginMs);
-      if (!sameMa2XmlObjects(request.readback.sourceXml, current.sourceXml) || previewContent(request.readback) !== previewContent(current)) throw new Error('控台 Timecode 或序列在预览后已改变，请重新读取比较');
+      if (!sameMa2XmlObjects(request.readback.sourceXml, current.sourceXml) || previewContent(request.readback) !== previewContent(current)) throw new Error('预览之后控台的 Timecode 或序列变了，请重新读取后再比较');
       stage = 'preflight';
       const merged = resolveMa2Sync(compareMa2LightingReadback(request.document, request.bindingId, request.readback, new Map(request.choices)), new Map(request.conflicts));
       const desiredSequences = new Set<number>();
@@ -40,7 +39,7 @@ export class Ma2ApplyService {
         stage = 'read';
         snapshot = await this.bridge.request('SCOPE', binding.timecode, additional.join(','));
         const scoped = convertMa2Snapshot(snapshot, binding.timecode, additional, binding.timeOriginMs);
-        if (!sameMa2XmlObjects(current.sourceXml, scoped.sourceXml) || previewContent(current) !== previewContent(scoped)) throw new Error('控台在读取新增 Cue 序列期间已改变，请重新读取比较');
+        if (!sameMa2XmlObjects(current.sourceXml, scoped.sourceXml) || previewContent(current) !== previewContent(scoped)) throw new Error('读取新增 Cue 序列时控台有变化，请重新读取后再比较');
         stage = 'preflight';
       }
       const prepared = prepareMa2MergedEvents(request.document, request.bindingId, request.readback, new Map(request.choices), new Map(request.conflicts), [snapshot], request.timeAlignment ?? 'exact');
@@ -63,8 +62,8 @@ export class Ma2ApplyService {
   private requireStopped(): void { if (this.isPlaying()) throw new Error('播放期间不能同步 MA2 工程'); }
 }
 
+/** Console-only actions are part of the content: they stay as they are and are compared by path. */
 function previewContent(preview: Ma2TimecodePreview): string {
-  if (preview.unconverted.length) throw new Error('回读包含未转换事件');
   const mappings = new Map(preview.mappings.map((mapping) => [mapping.eventId, mapping]));
   const events = preview.document.tracks.flatMap((track) => track.clips.flatMap((clip) => clip.events.map((event) => {
     const mapping = mappings.get(event.id);
@@ -73,5 +72,5 @@ function previewContent(preview: Ma2TimecodePreview): string {
   })));
   if (events.length !== preview.mappings.length) throw new Error('MA2 预览映射不完整');
   events.sort((a, b) => a.path.localeCompare(b.path));
-  return JSON.stringify({ name: preview.name, trackCount: preview.document.tracks.length, events });
+  return JSON.stringify({ name: preview.name, trackCount: preview.document.tracks.length, events, consoleOnly: preview.unconverted.map((entry) => entry.path).sort() });
 }

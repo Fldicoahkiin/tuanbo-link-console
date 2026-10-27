@@ -23,7 +23,7 @@ export function LightingMusicToolbar({ lighting, playheadMs, durationMs, editor,
   const [bpmSuggestion, setBpmSuggestion] = useState<number | null>(null);
   const taps = useRef<number[]>([]);
   const run = (operation: () => void): void => { try { operation(); setError(''); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } };
-  const change = (next: LightingDocument, label: string): void => { if (next.markers.some(value => value.startMs > durationMs || value.endMs !== null && value.endMs > durationMs) || next.music?.sections.some(value => value.endMs > durationMs)) throw new Error('标记或段落超出歌曲范围'); lighting.onChange(lightingDocumentSchema.parse(next), label); };
+  const change = (next: LightingDocument, label: string): void => { if (next.markers.some(value => value.startMs > durationMs || value.endMs !== null && value.endMs > durationMs) || next.music?.sections.some(value => value.endMs > durationMs)) throw new Error('标记或段落超出了歌曲范围'); lighting.onChange(lightingDocumentSchema.parse(next), label); };
   const updateMusic = (patch: Partial<LightingMusic>): void => run(() => change({ ...document, version: 2, music: { ...music, ...patch } }, '修改音乐网格'));
   const propose = (next: LightingDocument, label: string): void => run(() => {
     const value = changeMusicTempo(document, next.tempos, next.music ?? music, durationMs);
@@ -35,7 +35,7 @@ export function LightingMusicToolbar({ lighting, playheadMs, durationMs, editor,
     const needsRange = ['roll', 'build', 'ending'].includes(kind);
     if (needsRange && (!area || area.end <= area.start)) { setPanel('markers'); setPendingKind(kind); setRange({ start: playheadMs, end: playheadMs }); return; }
     const id = crypto.randomUUID(); const startMs = needsRange && area ? area.start : playheadMs; const endMs = needsRange && area ? area.end : null;
-    if (startMs > durationMs || endMs !== null && endMs > durationMs) throw new Error('标记超出歌曲范围');
+    if (startMs > durationMs || endMs !== null && endMs > durationMs) throw new Error('标记超出了歌曲范围');
     change({ ...document, version: 2, music, markers: [...document.markers, { id, kind, name: musicMarkerNames[kind], startMs, endMs, color: '#eabb68', notes: '' }] }, '添加音乐标记'); setMarkerId(id); setSectionId(null); setPendingKind(null); setPanel('markers');
   });
   const selected = new Set(lighting.selectedEventIds ?? (lighting.selectedEventId ? [lighting.selectedEventId] : []));
@@ -64,7 +64,7 @@ export function LightingMusicToolbar({ lighting, playheadMs, durationMs, editor,
       {panel === 'analysis' ? <MusicAnalysisPanel editor={editor} document={document} onChange={change} onBpm={tempo} onSeek={onSeek} /> : null}
       {panel === 'tempo' || panel === 'analysis' ? <MusicMonitorControls editor={editor} document={document} positionMs={marker?.startMs ?? playheadMs} /> : null}
     </section> : null}
-    {proposal ? <section className="music-change-preview" aria-label="Cue 修改预览"><header><strong>{proposal.label} · {proposal.changes.length} 项</strong><button aria-label="取消修改预览" onClick={() => setProposal(null)}><X /></button></header><div className="music-preview-rows">{proposal.changes.slice(0, 200).map((value, index) => <div key={`${value.id}:${index}`}><span>{value.name}</span><span>{(value.fromMs / 1000).toFixed(3)} → {(value.toMs / 1000).toFixed(3)}s</span></div>)}</div>{proposal.changes.length > 200 ? <span>显示前 200 项，共 {proposal.changes.length} 项</span> : null}<button onClick={() => run(() => { if (JSON.stringify(proposal.before) !== JSON.stringify(document)) throw new Error('编排已改变，请重新生成预览'); change(proposal.next, proposal.label); setProposal(null); })}><Check />确认应用</button></section> : null}
+    {proposal ? <section className="music-change-preview" aria-label="Cue 修改预览"><header><strong>{proposal.label} · {proposal.changes.length} 项</strong><button aria-label="取消修改预览" onClick={() => setProposal(null)}><X /></button></header><div className="music-preview-rows">{proposal.changes.slice(0, 200).map((value, index) => <div key={`${value.id}:${index}`}><span>{value.name}</span><span>{(value.fromMs / 1000).toFixed(3)} → {(value.toMs / 1000).toFixed(3)}s</span></div>)}</div>{proposal.changes.length > 200 ? <span>显示前 200 项，共 {proposal.changes.length} 项</span> : null}<button onClick={() => run(() => { if (JSON.stringify(proposal.before) !== JSON.stringify(document)) throw new Error('编排已经变了，请重新生成预览'); change(proposal.next, proposal.label); setProposal(null); })}><Check />确认应用</button></section> : null}
   </div>;
 }
 
@@ -72,4 +72,4 @@ function MusicMarkEditor({ value, onSave }: { value: { name: string; startMs: nu
   return <form className="music-fields" onSubmit={event => { event.preventDefault(); const fields = new FormData(event.currentTarget); onSave({ name: formText(fields, 'name'), startMs: Number(fields.get('start')) * 1000, endMs: fields.get('end') === '' ? null : Number(fields.get('end')) * 1000, color: formText(fields, 'color'), notes: formText(fields, 'notes') }); }}><label>名称<input name="name" required defaultValue={value.name} /></label><label>位置（秒）<input name="start" type="number" min="0" step="0.001" required defaultValue={value.startMs / 1000} /></label><label>结束（秒）<input name="end" type="number" min="0" step="0.001" defaultValue={value.endMs === null ? '' : value.endMs / 1000} placeholder="留空为点" /></label><label>颜色<input name="color" type="color" defaultValue={value.color ?? '#eabb68'} /></label><label>备注<input name="notes" defaultValue={value.notes ?? ''} /></label><button><Plus />保存标记</button></form>;
 }
 
-function formText(data: FormData, name: string): string { const value = data.get(name); if (typeof value !== "string") throw new Error("表单字段无效"); return value; }
+function formText(data: FormData, name: string): string { const value = data.get(name); if (typeof value !== "string") throw new Error("有填写内容不正确，请检查"); return value; }

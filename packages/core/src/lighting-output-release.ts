@@ -31,7 +31,7 @@ export class LightingOutputRelease {
     if (!actions.length) return;
     const status = ma2NetworkStatusSchema.parse(await this.api.getMa2NetworkStatus());
     if (generation !== this.generation) return;
-    if (status.state !== 'connected' || !status.settings) { this.unavailable = '时间码已停止；未连接 MA2 网络，无法发送本节目执行器关闭指令'; return; }
+    if (status.state !== 'connected' || !status.settings) { this.unavailable = '时间码已停止；没有连接 MA2 网络，无法发送这个节目的执行器关闭指令'; return; }
     const { host, port, monitorPort, username } = status.settings;
     this.plan = { network: { host, port, monitorPort, username }, actions };
   }
@@ -43,7 +43,7 @@ export class LightingOutputRelease {
     if (unavailable) throw new Error(unavailable);
     if (!plan) return;
     const status = ma2NetworkStatusSchema.parse(await this.api.getMa2NetworkStatus());
-    if (status.state !== 'connected' || !status.settings || Object.entries(plan.network).some(([key, value]) => Reflect.get(status.settings!, key) !== value)) throw new Error('灯光关闭未发送：控台连接已改变');
+    if (status.state !== 'connected' || !status.settings || Object.entries(plan.network).some(([key, value]) => Reflect.get(status.settings!, key) !== value)) throw new Error('关灯指令没有发送：控台连接变了');
     const sessionId = crypto.randomUUID();
     for (const action of plan.actions) await this.api.playMa2Cue({ network: plan.network, action, sessionId, deadlineAt: Date.now() + 2000 });
   }

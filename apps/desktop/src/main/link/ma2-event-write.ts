@@ -13,7 +13,7 @@ const commonProperties = {
 const eventProperties = z.union([
   z.object({ ...commonProperties, cue: z.string(), name: z.string(), sequence: z.string(), action: z.enum(['goto', 'go', 'off']) }).strict(),
   z.object({ ...commonProperties, name: z.literal('主推杆'), action: z.literal('master'), fader: z.literal('Master'),
-    level: z.string().regex(/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/).transform(Number).refine((value) => value === Number(value.toFixed(3)), 'MA2 3.3.4 主推杆精度为 0.1%，请调整推杆值后再同步；未写入控台') }).strict()
+    level: z.string().regex(/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/).transform(Number).refine((value) => value === Number(value.toFixed(3)), 'MA2 3.3.4 的主推杆精度是 0.1%，请调整推杆值后再同步（这次没有写入控台）') }).strict()
 ]);
 
 export type Ma2PreparedEventWrite = {
@@ -48,7 +48,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
       Object.keys(next.properties).length === 2 && next.properties.name === pendingTracks.get(next.id)!.executorName && ['true', 'false'].includes(next.properties.muted ?? '')) continue;
     if (!remote || !next || remote.kind !== next.kind || remote.parentId !== next.parentId || (object.kind !== 'track' && remote.order !== next.order) ||
       Object.keys(remote.properties).length !== Object.keys(next.properties).length || Object.keys(remote.properties).some((key) => remote.properties[key] !== next.properties[key] && !(object.kind === 'track' && key === 'muted' && ['true', 'false'].includes(next.properties[key] ?? '')))) {
-      throw new Error('此次合并包含轨道或 Timecode 对象修改，事件写回尚不能完整处理');
+      throw new Error('这次合并改动了轨道或 Timecode 本身，暂时不能写回');
     }
   }
   const matches = resolveMa2Readback(binding, readback, identityChoices);
@@ -88,12 +88,12 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     const stableId = trackIdentities.get(track.id);
     const executor = readback.trackMappings?.find((mapping) => mapping.trackId === track.id)?.executor;
     if (!binding.baselineTracks.some((entry) => entry.id === stableId) && newTracks.some((entry) => pendingTracks.get(entry.id)?.executor === executor)) {
-      throw new Error('控台新增轨道与待同步轨道使用相同执行器，请先取消待同步关联并回读确认，避免重复创建');
+      throw new Error('控台上新加的轨道和待同步的轨道用了同一个执行器。请先取消待同步的关联并重新读取控台，避免重复创建');
     }
   }
   const appended = appendMa2Tracks(readback.sourceXml, readback.target, newTracks.map((object) => {
     const pending = pendingTracks.get(object.id);
-    if (!pending) throw new Error('新增轨道缺少明确的执行器绑定');
+    if (!pending) throw new Error('新增的轨道没有指定执行器');
     return { executor: pending.executor, executorName: pending.executorName, muted: object.properties.muted === 'true' };
   }));
   for (const [index, track] of newTracks.entries()) {
@@ -109,10 +109,14 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
   for (const [id, path] of trackPaths) {
     const master = newMasters.paths.get(path); if (!master) continue;
     const executor = trackExecutors.get(id);
-    if (!executor) throw new Error('新增推杆子轨道缺少执行器绑定');
+    if (!executor) throw new Error('新增的推杆子轨道没有指定执行器');
     subtracks.get(id)!.add(master); masterSubtracks.add(master); subtrackExecutors.set(master, executor);
   }
   const raw = new Map(report.timecodes.flatMap((tc) => tc.tracks.flatMap((track) => track.subtracks.flatMap((subtrack) => subtrack.events.map((event) => [event.path, { event, executor: track.executorAddress.slice(2).join('.') }] as const)))));
+  // Console actions the software does not convert stay in the XML untouched (2026-10-26); the ones shown
+  // on the timeline (a Cue with console-only parameters) may only move or be deleted.
+  const consoleOnly = new Set(readback.unconverted.map((entry) => entry.path));
+  const followers = ma2ReleaseFollowers(report);
   const sequences = sequenceXml.map((source) => inspectMa2SequenceXml(source, true));
   if (sequences.some((sequence) => sequence.version !== report.version)) throw new Error('关联序列的 MA2 版本与 Timecode 不一致');
   const edits: Ma2EventEdit[] = [];
@@ -121,10 +125,10 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
   for (const object of desired.objects.filter((entry) => entry.kind === 'event')) {
     const level = Number(object.properties.level);
     if (object.properties.action === 'master' && Number.isFinite(level) && level !== Number(level.toFixed(3))) {
-      throw new Error('MA2 3.3.4 主推杆精度为 0.1%，请调整推杆值后再同步；未写入控台');
+      throw new Error('MA2 3.3.4 的主推杆精度是 0.1%，请调整推杆值后再同步（这次没有写入控台）');
     }
     const properties = eventProperties.safeParse(object.properties);
-    if (!properties.success || object.order !== 0 || !object.parentId) throw new Error('此次合并包含未完成转换的灯光动作或参数');
+    if (!properties.success || object.order !== 0 || !object.parentId) throw new Error('这次合并里有还不支持的灯光动作或参数');
     const value = properties.data;
     let path = paths.get(object.id);
     const before = remoteObjects.get(object.id);
@@ -134,15 +138,15 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     }
     const candidates = new Set([...(subtracks.get(object.parentId) ?? [])].filter((candidate) => masterSubtracks.has(candidate) === (value.action === 'master')));
     const subtrackPath = path?.slice(0, path.lastIndexOf('/')) ?? (candidates?.size === 1 ? [...candidates][0] : undefined);
-    if (!subtrackPath) throw new Error('新增灯光点的控台子轨道不明确');
+    if (!subtrackPath) throw new Error('新增灯光点要放到控台哪条子轨道不明确');
     const original = path ? raw.get(path) : undefined;
     const executor = original?.executor ?? subtrackExecutors.get(subtrackPath);
-    if (executor !== value.executor) throw new Error('灯光点的执行器与控台轨道不一致，请先配置轨道对应');
+    if (executor !== value.executor) throw new Error('灯光点的执行器和控台轨道对不上，请先设置轨道对应关系');
     if (masterSubtracks.has(subtrackPath) !== (value.action === 'master')) throw new Error('不能把 Cue 点改成推杆点，或把推杆点改成 Cue 点');
     const ticks = (value.time + (readback.timeOriginMs ?? 0)) * 30 / 1000 - Number(report.timecodes[0]?.attributes.offset ?? 0);
-    if (ticks < 0) throw new Error('事件早于控台 Timecode 起点，请调整时间或在控台修改偏移');
+    if (ticks < 0) throw new Error('事件比控台 Timecode 的起点还早，请调整时间，或在控台修改偏移');
     // Current native acceptance proves integer ticks. Do not silently round sub-frame points.
-    if (Math.abs(ticks - Math.round(ticks)) > 1e-7) throw new Error('灯光点时间未落在已验证的 MA2 帧位置，需要先处理帧精度');
+    if (Math.abs(ticks - Math.round(ticks)) > 1e-7) throw new Error('灯光点的时间没有对齐到 MA2 的帧，请先对齐帧');
     const rawTime = String(Math.round(ticks));
     if (value.action === 'master') {
       if (path && original) {
@@ -170,11 +174,13 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
       const timeChanged = Number(original.event.attributes.time ?? 0) !== Number(rawTime);
       const cueChanged = cue ? original.event.cueAddress.join('.') !== `1.${cue.sequence}.${cue.cueIndex}` || original.event.attributes.command !== 'Goto' : false;
       const actionChanged = value.action !== 'goto' && original.event.attributes.command !== (value.action === 'go' ? 'Go' : 'Off');
+      if ((cueChanged || actionChanged) && consoleOnly.has(path)) throw new Error(`没有写入控台：事件 ${path} 带有联动台不转换的控台参数，在联动台里只能改时间或删除。要换 Cue 或动作，请在控台上改。`);
       if (timeChanged || cueChanged || actionChanged) edits.push({ kind: 'update', path, ...(timeChanged ? { rawTime } : {}), ...(cueChanged ? { cue } : {}), ...(actionChanged && value.action !== 'goto' ? { executorAction: value.action } : {}) });
     } else {
       addedIds.set(edits.length, object.id); edits.push({ kind: 'add', subtrackPath, rawTime, ...(cue ? { cue } : {}), ...(value.action !== 'goto' ? { executorAction: value.action } : {}) });
     }
   }
+  edits.push(...ma2FollowerEdits(edits, followers, raw));
   const write = prepareMa2TimecodeEvents(newMasters.xml, inspectMa2TimecodeXml(newMasters.xml).sha256, readback.target, edits);
   const eventPaths = new Map<string, string>();
   for (const [id, path] of paths) { const next = write.originalPaths.get(path); if (next) eventPaths.set(id, next); }
@@ -186,8 +192,11 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
     return { path, muted: entry.properties.muted === 'true' };
   });
   const deletedPaths = [...trackPaths].filter(([id]) => !desiredObjects.has(id)).map(([, path]) => path);
+  for (const path of deletedPaths) {
+    if ([...consoleOnly].some((entry) => entry === path || entry.startsWith(`${path}/`))) throw new Error('没有写入控台：这条轨道上有联动台不转换的控台动作。要删掉整条轨道，请在控台上删。');
+  }
   const orderedTracks = desired.objects.filter((entry) => entry.kind === 'track').sort((a, b) => a.order - b.order);
-  if (orderedTracks.some((track, index) => track.order !== index)) throw new Error('合并后的轨道顺序存在冲突，请重新比较');
+  if (orderedTracks.some((track, index) => track.order !== index)) throw new Error('合并后的轨道顺序有冲突，请重新比较');
   const order = orderedTracks.map((track) => { const path = trackPaths.get(track.id); if (!path) throw new Error('轨道排序缺少控台映射'); return path; });
   const removed = removeMa2Tracks(editMa2TrackStates(write.xml, readback.target, trackEdits), readback.target, deletedPaths, order);
   for (const [id, previous] of trackPaths) {
@@ -197,7 +206,7 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
   for (const [id, previous] of eventPaths) {
     const split = previous.indexOf('/SubTrack:');
     const next = removed.trackPaths.get(previous.slice(0, split));
-    if (!next) throw new Error('删除轨道后仍存在关联灯光点');
+    if (!next) throw new Error('删除轨道后还有灯光点关联着它');
     eventPaths.set(id, next + previous.slice(split));
   }
   const desiredXml = edits.length ? extendMa2TimecodeLength(removed.xml, readback.target) : removed.xml;
@@ -206,11 +215,11 @@ export function prepareMa2MergedEvents(documentInput: LightingDocument, bindingI
 
 /** Confirm native output and restore stable IDs before a project baseline may advance. */
 export function confirmMa2MergedEvents(prepared: Ma2PreparedEventWrite, readbackXml: string, sequenceXml: readonly string[]): Ma2TimecodePreview {
-  if (!sameMa2XmlObjects(prepared.desiredXml, readbackXml)) throw new Error('MA2 回读与本次写入不一致，不能更新同步基线');
+  if (!sameMa2XmlObjects(prepared.desiredXml, readbackXml)) throw new Error('控台读回的内容和这次写入的不一致，同步没有完成');
   const root = prepared.desired.objects.find((object) => object.kind === 'timecode');
   if (!root) throw new Error('同步结果缺少 Timecode');
+  // Console-only actions are allowed: the readback equals the XML written, so they are kept as they were.
   const preview = convertMa2Timecode(readbackXml, sequenceXml, Number(root.properties.number), prepared.timeOriginMs);
-  if (preview.unconverted.length) throw new Error('MA2 回读存在未转换内容，不能更新同步基线');
   const byPath = new Map([...prepared.eventPaths].map(([id, path]) => [path, id]));
   if (byPath.size !== prepared.eventPaths.size || byPath.size !== preview.mappings.length) throw new Error('MA2 写回映射数量不一致');
   const desired = new Map(prepared.desired.objects.map((object) => [object.id, object]));
@@ -221,25 +230,71 @@ export function confirmMa2MergedEvents(prepared: Ma2PreparedEventWrite, readback
   for (const track of preview.document.tracks) {
     const trackMapping = preview.trackMappings?.find((entry) => entry.trackId === track.id);
     const stableTrackId = trackMapping ? tracksByPath.get(trackMapping.path) : undefined;
-    if (!stableTrackId || !trackMapping) throw new Error('MA2 回读轨道无法对应本次写入');
+    if (!stableTrackId || !trackMapping) throw new Error('控台读回的轨道和这次写入对不上');
     for (const clip of track.clips) for (const event of clip.events) {
       const mapping = mappings.get(event.id);
       const id = mapping ? byPath.get(mapping.path) : undefined;
       const expected = id ? desired.get(id) : undefined;
-      if (!mapping || !id || !expected || expected.kind !== 'event' || !expected.parentId || (event.kind !== 'ma2' && event.kind !== 'ma2-fader')) throw new Error('MA2 回读事件无法对应到本次写入');
+      if (!mapping || !id || !expected || expected.kind !== 'event' || !expected.parentId || (event.kind !== 'ma2' && event.kind !== 'ma2-fader')) throw new Error('控台读回的事件和这次写入对不上');
       const value = eventProperties.parse(expected.properties);
       const actionMatches = value.action === 'master'
         ? event.kind === 'ma2-fader' && event.fader === value.fader && event.level === value.level
         : event.kind === 'ma2' && event.action === value.action && (value.action !== 'goto' || (Number(event.cue) === Number(value.cue) && event.sequence === Number(value.sequence)));
-      if (Math.abs(event.at + clip.start - value.time) > 1e-6 || !actionMatches || event.executor !== value.executor || event.label !== value.name || clip.muted !== (value.muted !== 'false')) throw new Error('MA2 回读的时间、Cue 或动作与合并结果不一致');
-      if (stableTrackId && stableTrackId !== expected.parentId) throw new Error('MA2 回读轨道关系不一致');
+      if (Math.abs(event.at + clip.start - value.time) > 1e-6 || !actionMatches || event.executor !== value.executor || event.label !== value.name || clip.muted !== (value.muted !== 'false')) throw new Error('控台读回的时间、Cue 或动作和合并结果对不上');
+      if (stableTrackId && stableTrackId !== expected.parentId) throw new Error('控台读回的轨道关系对不上');
       event.id = id; mapping.eventId = id; mapping.trackId = expected.parentId;
     }
-    if (!stableTrackId || trackIds.has(stableTrackId)) throw new Error('MA2 回读轨道无法唯一对应');
+    if (!stableTrackId || trackIds.has(stableTrackId)) throw new Error('控台读回的轨道无法一一对应');
     const expected = desired.get(stableTrackId);
-    if (expected?.kind !== 'track' || expected.order !== trackIds.size || expected.properties.name !== track.name || expected.properties.muted !== String(track.muted)) throw new Error('MA2 回读轨道属性与合并结果不一致');
+    if (expected?.kind !== 'track' || expected.order !== trackIds.size || expected.properties.name !== track.name || expected.properties.muted !== String(track.muted)) throw new Error('控台读回的轨道属性和合并结果对不上');
     trackIds.add(stableTrackId); track.id = stableTrackId; trackMapping.trackId = stableTrackId;
   }
-  if (root.properties.name !== preview.name || trackIds.size !== prepared.desired.objects.filter((object) => object.kind === 'track').length) throw new Error('MA2 回读对象范围与合并结果不一致');
+  if (root.properties.name !== preview.name || trackIds.size !== prepared.desired.objects.filter((object) => object.kind === 'track').length) throw new Error('控台读回的对象范围和合并结果对不上');
   return ma2TimecodePreviewSchema.parse(preview);
+}
+
+/**
+ * A button press recorded on the console is followed by its release (`pressed="false"`) on the same
+ * SubTrack. Each release belongs to the nearest earlier press of the same command and Cue; it is not
+ * shown in the software and moves or goes with its press.
+ */
+export function ma2ReleaseFollowers(report: Pick<ReturnType<typeof inspectMa2TimecodeXml>, 'timecodes'>): Map<string, string[]> {
+  const result = new Map<string, string[]>();
+  for (const tc of report.timecodes) for (const track of tc.tracks) for (const subtrack of track.subtracks) {
+    const last = new Map<string, string>();
+    const ordered = subtrack.events.map((event, position) => ({ event, position }))
+      .sort((a, b) => Number(a.event.attributes.time ?? 0) - Number(b.event.attributes.time ?? 0) || a.position - b.position);
+    for (const { event } of ordered) {
+      if (event.attributes.fader_level !== undefined) continue;
+      const key = `${event.attributes.command ?? ''}|${event.cueAddress.join('.')}`;
+      if (event.attributes.pressed === 'true') last.set(key, event.path);
+      else if (event.attributes.pressed === 'false') {
+        const press = last.get(key);
+        if (press) result.set(press, [...result.get(press) ?? [], event.path]);
+      }
+    }
+  }
+  return result;
+}
+
+/** A press that moves takes its releases along by the same amount; a press deleted takes them with it. */
+export function ma2FollowerEdits(edits: readonly Ma2EventEdit[], followers: ReadonlyMap<string, readonly string[]>, raw: ReadonlyMap<string, { event: { attributes: Record<string, string> } }>): Ma2EventEdit[] {
+  const touched = new Set(edits.flatMap((edit) => edit.kind === 'add' ? [] : [edit.path]));
+  const result: Ma2EventEdit[] = [];
+  for (const edit of edits) {
+    if (edit.kind === 'add') continue;
+    const paths = (followers.get(edit.path) ?? []).filter((path) => !touched.has(path));
+    if (edit.kind === 'delete') { for (const path of paths) { touched.add(path); result.push({ kind: 'delete', path }); } continue; }
+    if (edit.rawTime === undefined) continue;
+    const before = Number(raw.get(edit.path)?.event.attributes.time ?? 0);
+    const shift = Number(edit.rawTime) - before;
+    if (!Number.isFinite(shift) || shift === 0) continue;
+    for (const path of paths) {
+      const time = Number(raw.get(path)?.event.attributes.time ?? 0) + shift;
+      if (!Number.isFinite(time) || time < 0) throw new Error(`没有写入控台：按键松开事件 ${path} 跟着按下移动后，早于时间线起点。`);
+      touched.add(path);
+      result.push({ kind: 'update', path, rawTime: String(Number(time.toFixed(6))) });
+    }
+  }
+  return result;
 }

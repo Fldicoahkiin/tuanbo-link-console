@@ -84,7 +84,7 @@ it('管道中积压的位置不能按收到时刻重新获得执行窗口；直�
   const test = setup(); await test.session.prepare(0);
   test.time(200); test.session.clock(0, 0); await test.session.settled();
   expect(test.actions).toEqual([]);
-  expect(test.faults[0]).toContain('100ms'); expect(test.session.error).toBeNull();
+  expect(test.faults[0]).toContain('100 ms'); expect(test.session.error).toBeNull();
   test.time(250); test.session.clock(250, 250); await test.session.settled();
   expect(test.actions).toEqual([]);
   for (let at = 300; at <= 1000; at += 100) { test.time(at); test.session.clock(at); await test.session.settled(); }
@@ -94,7 +94,7 @@ it('管道中积压的位置不能按收到时刻重新获得执行窗口；直�
 it('位置更新中断超过 100ms 按当前位置重建画面并标红：间隔内的机位此刻切换，后续动作继续', async () => {
   const test = setup(); await test.session.prepare(0); await test.advance(0, 900);
   test.time(1100); test.session.clock(1100); await test.session.settled();
-  expect(test.faults).toEqual(['播放位置更新中断 200ms：画面按当前位置重建']);
+  expect(test.faults).toEqual(['播放位置更新中断了 200 ms，画面已按当前位置恢复']);
   expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-1']);
   expect(test.session.error).toBeNull();
   await test.advance(1200, 2000);
@@ -106,7 +106,7 @@ it('设备观察年龄和本机排队耗时共同计入画面执行边界；迟�
   test.time(1060); test.session.clock(1000, 1000);
   test.time(1110); await test.session.settled();
   expect(test.actions.map(action => action.id)).toEqual(['action-0']);
-  expect(test.faults.join()).toContain('100ms'); expect(test.session.error).toBeNull();
+  expect(test.faults.join()).toContain('100 ms'); expect(test.session.error).toBeNull();
   await test.advance(1200, 2000);
   expect(test.actions.map(action => action.id)).toEqual(['action-0', 'action-2']);
 });
@@ -148,7 +148,7 @@ it('请求拖延后不补发过时画面并标红，通道继续执行后续画�
   const test = setup(); await test.session.prepare(0);
   test.session.clock(0); test.time(101); await test.session.settled();
   expect(test.actions).toEqual([]);
-  expect(test.faults[0]).toContain('100ms'); expect(test.session.error).toBeNull();
+  expect(test.faults[0]).toContain('100 ms'); expect(test.session.error).toBeNull();
   expect(test.reports[0]?.results.map(result => result.status)).toEqual(['skipped']);
   await test.advance(200, 1000);
   expect(test.actions.map(action => action.id)).toEqual(['action-1']);
@@ -200,7 +200,7 @@ it('素材预备晚于播放边界：起播失败标红，预备完成后按当�
   await vi.waitFor(() => expect(calls).toHaveLength(2));
   const late = calls[1]![0].event, lateMs = late.sourceOffsetMs;
   expect(late).toMatchObject({ clipId: overdue.clipId, phase: 'start' }); expect(lateMs).toBeGreaterThanOrEqual(200);
-  expect(test.faults).toContain(`素材预备晚于播放边界，已按当前位置起播：视频（晚 ${lateMs}ms）`);
+  expect(test.faults).toContain(`素材准备得晚了，已按当前位置开始播放：视频（晚了 ${lateMs} ms）`);
   test.dependencies.prepareUpcoming.mockResolvedValueOnce(overdue); await test.advance(1700, 2400); await test.session.settled();
   expect(calls).toHaveLength(2); expect(test.session.error).toBeNull();
 });
@@ -240,7 +240,7 @@ it('长片段每 5 秒按当前位置检查一次漂移，校正时标红；起�
   correct.mockResolvedValueOnce(450);
   for (let time = 5100; time <= 10000; time += 100) { test.time(time); session.clock(time); await session.settled(); }
   expect(correct.mock.calls.map(call => call[0].sourceOffsetMs)).toEqual([5000, 10000]);
-  expect(test.faults).toEqual(['素材与音乐偏差 450ms，已按当前位置校正：视频']);
+  expect(test.faults).toEqual(['素材和音乐差了 450 ms，已按当前位置校正：视频']);
   await session.stop();
   const seeked = new ObsProgramSession(videoFixture(), 'C:/shows/test.tblink', 'song', drift); correct.mockClear();
   test.time(20000); await seeked.prepare(4500);
@@ -340,7 +340,7 @@ it('恢复媒体也遵守设备观察的截止时间，排队过期不会迟到�
   await test.session.pause();
   test.time(5060); test.session.clock(1000, 5000); test.time(5110); await test.session.settled();
   expect(test.actions.map(action => action.kind === 'obs.mediaAction' ? action.action : action.kind)).toEqual(['pause']);
-  expect(test.faults.join()).toContain('100ms'); expect(test.session.error).toBeNull();
+  expect(test.faults.join()).toContain('100 ms'); expect(test.session.error).toBeNull();
 });
 
 it('动作按时开始发送后，后续子请求不被截止打断：切场景与播放要么都发送，要么都不发送', async () => {

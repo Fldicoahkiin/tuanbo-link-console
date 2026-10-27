@@ -119,7 +119,7 @@ it('歌曲配对失效后禁止将本地拖动写回控台', async () => {
   project.ma2ReadState = { source: 'test', catalog: test.catalog, pairs: {}, pairings: { '9902': { itemId: 'song', status: 'stale', evidence: '', reason: '起点已变化' } }, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
   await test.runner.tick(); await test.runner.tick();
   expect(test.dependencies.catalog).not.toHaveBeenCalled(); expect(test.dependencies.apply).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('配对已失效'));
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('关联已失效'));
 });
 it('音源或长度变化的既有绑定起点未变时，仍先核对三方基线再同步', async () => {
   const test = setup(); test.edit();
@@ -133,7 +133,7 @@ it('音源或长度变化的既有绑定起点未变时，仍先核对三方基�
   project.rundown[0]!.playback.mtcOffsetMs = 3600000;
   test.runner.start({ dataDirectory: 'test' }, test.catalog); await test.runner.tick();
   expect(test.dependencies.read).not.toHaveBeenCalled(); expect(test.dependencies.apply).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('配对已失效'));
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('关联已失效'));
 });
 it('关闭自动同步不能提前释放已经发送的写入锁', async () => {
   const test = setup(); test.edit();
@@ -152,12 +152,14 @@ it('换 Show 后停止，后续周期不继续读写', async () => {
   expect(test.dependencies.catalog).toHaveBeenCalledTimes(1); expect(test.dependencies.read).not.toHaveBeenCalled();
   expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('Show'));
 });
-it('双方冲突先阻断，不发送写入', async () => {
+it('同一项两边都改过时以软件为准写入，不停止自动同步（2026-10-26）', async () => {
   const test = setup(); test.edit();
   const remote = convertMa2Timecode(xml.replace('<Event index="0"', '<Event time="15" index="0"'), [sequence], 9902);
   test.dependencies.read = vi.fn(() => Promise.resolve(remote));
-  await test.runner.tick(); expect(test.dependencies.apply).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('冲突'));
+  await test.runner.tick();
+  const request = vi.mocked(test.dependencies.apply).mock.calls[0]?.[0];
+  expect(request?.conflicts.length).toBeGreaterThan(0); expect(request?.conflicts.every(([, side]) => side === 'local')).toBe(true);
+  expect(vi.mocked(test.dependencies.changed).mock.calls.some(([status, message]) => status === 'writing' && message.includes('以联动台为准'))).toBe(true);
 });
 
 it.skipIf(!process.env.MA2_ONPC_AUTO_SYNC_ACCEPTANCE)('真实 onPC 自动写回及反向修改进入工程，最后恢复测试对象', async () => {

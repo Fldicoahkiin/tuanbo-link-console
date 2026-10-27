@@ -46,7 +46,7 @@ export function useMa2LivePlayback(page: number, start: number, scope: string) {
         for (const [slot, value] of next) {
           const fader = result.items.flatMap(item => item.blocks).find(block => block.slot === slot)?.fader;
           if (result.readAt >= value.at && fader && Math.abs(fader.value - value.value) < 0.01) next.delete(slot);
-          else if (Date.now() - value.at > 1500) throw new Error(`推杆 ${page}.${slot} 未回读到目标值，操作已停止`);
+          else if (Date.now() - value.at > 1500) throw new Error(`推杆 ${page}.${slot} 没有到达目标值，操作已停止`);
         }
         pendingRef.current = next; setPending(next); setSnapshot(result);
         pollTimer = setTimeout(() => { void poll(); }, 100);

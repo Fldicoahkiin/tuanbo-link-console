@@ -97,7 +97,7 @@ describe('三方合并到 MA2 原生写入', () => {
       { id: 'added-master', kind: 'ma2-fader', at: 500, executor: '99.219', fader: 'Master', level: 0.125, label: '主推杆' },
       { ...fader, label: '主推杆' }
     ]);
-    expect(() => confirmMa2MergedEvents(write, write.desiredXml.replace('fader_level="0.625"', 'fader_level="0.6"'), [sequence])).toThrow('回读与本次写入不一致');
+    expect(() => confirmMa2MergedEvents(write, write.desiredXml.replace('fader_level="0.625"', 'fader_level="0.6"'), [sequence])).toThrow('和这次写入的不一致');
     const project = createEmptyLinkProject('Master 同步'); project.schemaVersion = 2;
     project.rundown.push({ id: 'item', title: '节目', enabled: true, notes: '', cues: [], visualLayers: [], referenceMediaClips: [], lighting: document });
     const next = applyMa2ReadbackCommand('item', 'binding', document, confirmed).execute(project).rundown[0]!.lighting!;
@@ -266,7 +266,7 @@ describe('三方合并到 MA2 原生写入', () => {
     expect(confirmed.document.tracks[0]?.id).toBe(document.tracks[0]?.id);
     expect(confirmed.document.tracks[0]?.clips[0]?.events.map((event) => event.id)).toEqual(['added', 'duplicate', first.id]);
     expect(confirmed.mappings.map((mapping) => mapping.eventId)).toEqual(['added', 'duplicate', first.id]);
-    expect(() => confirmMa2MergedEvents(result, xml, [sequence])).toThrow('回读');
+    expect(() => confirmMa2MergedEvents(result, xml, [sequence])).toThrow('读回');
     const invalid = { ...result, eventPaths: new Map(result.eventPaths) }; invalid.eventPaths.delete(first.id);
     expect(() => confirmMa2MergedEvents(invalid, result.desiredXml, [sequence])).toThrow('映射');
   });

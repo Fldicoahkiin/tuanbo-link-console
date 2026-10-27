@@ -63,7 +63,7 @@ export function MissingAssetsDialog({ request, locked, notify }: {
       const next: Record<string, Outcome> = {};
       let restored = 0;
       for (let offset = 0; offset < missing.length; offset += RELINK_BATCH) {
-        setProgress(`正在核对并复制 ${offset + 1}–${Math.min(offset + RELINK_BATCH, missing.length)} / ${missing.length}`);
+        setProgress(`正在检查并复制 ${offset + 1}–${Math.min(offset + RELINK_BATCH, missing.length)} / ${missing.length}`);
         const files = missing.slice(offset, offset + RELINK_BATCH).map(({ relativePath, sha256 }) => ({ relativePath, sha256 }));
         for (const result of await linkDesktopViewModel.relinkAssetFiles({ projectPath, sourceDirectory, files })) {
           if (result.status === 'restored') restored += 1;
@@ -90,7 +90,7 @@ export function MissingAssetsDialog({ request, locked, notify }: {
       <FileSearch className="dialog-symbol" aria-hidden="true" />
       <h2>找不到 {missing.length} 个素材</h2>
       <p>工程文件夹里缺少下面这些文件。通常是只移动或复制了 .tblink 文件，没有带上它原来所在文件夹里的 assets 文件夹。</p>
-      <p>选择 .tblink 原来所在的文件夹，软件会在其中相同的位置查找，内容核对一致后复制到当前工程文件夹：{folder}</p>
+      <p>请选择 .tblink 原来所在的文件夹。联动台会在里面相同的位置查找，确认内容一致后复制到当前工程文件夹：{folder}</p>
       <ul className="missing-assets-list" aria-label="缺失的素材">
         {missing.map((file) => <li key={file.relativePath}>
           <span title={file.relativePath}>{file.label}</span>

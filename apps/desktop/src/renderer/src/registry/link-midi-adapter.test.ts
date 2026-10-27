@@ -1,48 +1,46 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('./midi-access', () => ({ requestMidiAccess: vi.fn(), refreshMidiAccess: vi.fn() }));
 import { LinkMidiAdapter, buildMidiShowControlMessage, hasConnectedProfilePort, type MidiPortProfile, type MidiPortSnapshot } from './link-midi-adapter';
+import { refreshMidiAccess, requestMidiAccess, type MidiAccess, type MidiInput, type MidiMessage, type MidiOutput,
+  type MidiPortConnectionState, type MidiPortDeviceState } from './midi-access';
 import type { IntegrationProfile } from '@tb/schema';
-
-const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
 
 afterEach(() => {
   vi.useRealTimers();
-  if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
-  else Reflect.deleteProperty(globalThis, 'navigator');
+  vi.mocked(requestMidiAccess).mockReset(); vi.mocked(refreshMidiAccess).mockReset();
 });
 
 describe('LinkMidiAdapter', () => {
   it('手动刷新重新申请端口会话并更新订阅，不沿用已失效的缓存', async () => {
     const oldAccess = midiAccess([]), freshAccess = midiAccess([]);
-    Object.defineProperty(oldAccess.outputs.get('output')!, 'state', { value: 'disconnected' });
-    const request = vi.fn<() => Promise<MIDIAccess>>().mockResolvedValueOnce(oldAccess).mockResolvedValue(freshAccess);
-    installNavigator(oldAccess, request);
+    oldAccess.outputs.get('output')!.state = 'disconnected';
+    installAccess(oldAccess); vi.mocked(refreshMidiAccess).mockResolvedValue(freshAccess);
     const adapter = new LinkMidiAdapter(resolveProfile, vi.fn());
     const listener = vi.fn(); adapter.subscribePorts(listener);
     expect((await adapter.initialize()).find(port => port.direction === 'output')?.state).toBe('disconnected');
     expect((await adapter.refreshPorts()).find(port => port.direction === 'output')?.state).toBe('connected');
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(requestMidiAccess).toHaveBeenCalledOnce(); expect(refreshMidiAccess).toHaveBeenCalledOnce();
     expect(listener).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ direction: 'output', state: 'connected' })]));
-    listener.mockClear(); oldAccess.dispatchEvent(new Event('statechange'));
+    listener.mockClear(); oldAccess.changed();
     expect(listener).not.toHaveBeenCalled();
-    freshAccess.dispatchEvent(new Event('statechange')); expect(listener).toHaveBeenCalledOnce();
+    freshAccess.changed(); expect(listener).toHaveBeenCalledOnce();
     adapter.dispose();
   });
   it('系统端口申请挂起时明确超时，允许操作员重新检测', async () => {
     vi.useFakeTimers();
     const access = midiAccess([]);
-    const request = vi.fn<() => Promise<MIDIAccess>>().mockReturnValueOnce(new Promise(() => undefined)).mockResolvedValue(access);
-    installNavigator(access, request);
+    vi.mocked(requestMidiAccess).mockReturnValueOnce(new Promise(() => undefined)).mockResolvedValue(access);
     const adapter = new LinkMidiAdapter(resolveProfile, vi.fn());
     const failed = expect(adapter.initialize()).rejects.toThrow('检测超时');
     await vi.advanceTimersByTimeAsync(5_000);
     await failed;
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(requestMidiAccess).toHaveBeenCalledTimes(1);
     expect((await adapter.initialize()).length).toBeGreaterThan(0);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(requestMidiAccess).toHaveBeenCalledTimes(2);
   });
   it('IBC Note 脉冲保持 100ms 后释放，防止控台漏触发', async () => {
-    vi.useFakeTimers(); const sent: number[][] = []; installNavigator(midiAccess(sent));
+    vi.useFakeTimers(); const sent: number[][] = []; installAccess(midiAccess(sent));
     const adapter = new LinkMidiAdapter(resolveProfile, vi.fn()); await adapter.initialize();
     const execution = adapter.execute({ id: 'pulse', label: '脉冲', kind: 'midi.noteOn', portProfileId: 'out', channel: 1, note: 60, velocity: 127, durationMs: 100 });
     await vi.advanceTimersByTimeAsync(99); expect(sent).toEqual([[0x90, 60, 127]]);
@@ -61,13 +59,12 @@ describe('LinkMidiAdapter', () => {
 
   it('并发初始化只申请一次系统 MIDI 权限并共享最新端口', async () => {
     const access = midiAccess([]);
-    const requestMIDIAccess = vi.fn(() => Promise.resolve(access));
-    installNavigator(access, requestMIDIAccess);
+    installAccess(access);
     const adapter = new LinkMidiAdapter(resolveProfile, vi.fn());
 
     const [first, second] = await Promise.all([adapter.initialize(), adapter.initialize()]);
 
-    expect(requestMIDIAccess).toHaveBeenCalledOnce();
+    expect(requestMidiAccess).toHaveBeenCalledOnce();
     expect(first).toEqual(second);
     expect(new Set(first.map((port) => `${port.direction}:${port.name}`))).toEqual(new Set(['input:P1 MTC', 'output:P1 Control']));
   });
@@ -75,15 +72,15 @@ describe('LinkMidiAdapter', () => {
   it('等待精确配置的 P1 MTC 输入出现后再返回', async () => {
     vi.useFakeTimers();
     const access = midiAccess([]);
-    (access.inputs as unknown as Map<string, MIDIInput>).clear();
-    installNavigator(access);
+    access.inputs.clear();
+    installAccess(access);
     const adapter = new LinkMidiAdapter(resolveProfile, vi.fn());
     const observed: MidiPortSnapshot[][] = [];
     const waiting = adapter.waitForConnectedInput('in', 1_000, (ports) => observed.push(ports));
 
     await vi.advanceTimersByTimeAsync(0);
     expect(observed.at(-1)?.some((port) => port.direction === 'input')).toBe(false);
-    (access.inputs as unknown as Map<string, MIDIInput>).set('input', midiInput('input', 'P1 MTC'));
+    access.inputs.set('input', new FakePort('input', 'P1 MTC', 'input', access));
     await vi.advanceTimersByTimeAsync(250);
 
     await expect(waiting).resolves.toBeUndefined();
@@ -93,7 +90,7 @@ describe('LinkMidiAdapter', () => {
   it('通过明确端口档案发送 Note、CC、Program 和 MSC', async () => {
     const sent: number[][] = [];
     const access = midiAccess(sent);
-    installNavigator(access);
+    installAccess(access);
     const adapter = new LinkMidiAdapter(resolveProfile, vi.fn());
     await adapter.initialize();
 
@@ -122,25 +119,23 @@ describe('LinkMidiAdapter', () => {
     ]);
   });
 
-  it('MTC quarter-frame 使用本机单调时钟时间戳上报', async () => {
+  it('MTC quarter-frame 按接口送达的时刻上报，不算转发路上的时间', async () => {
     const access = midiAccess([]);
-    installNavigator(access);
+    installAccess(access);
     const adapter = new LinkMidiAdapter(resolveProfile, vi.fn());
     await adapter.initialize();
     const messages: Array<{ messageType: number; value: number; receivedAt: number }> = [];
     const unsubscribe = await adapter.subscribeMtc('in', '30', (message) => messages.push(message));
-    const input = access.inputs.get('input');
-    if (!input?.onmidimessage) throw new Error('测试 MIDI 输入没有监听器');
-    input.onmidimessage({ data: new Uint8Array([0xf1, 0x34]) } as MIDIMessageEvent);
+    const input = access.inputs.get('input')!;
+    input.emit([0xf1, 0x34], 42);
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({ messageType: 3, value: 4 });
-    expect(messages[0]?.receivedAt).toBeTypeOf('number');
-    expect((input as unknown as { open: ReturnType<typeof vi.fn> }).open).toHaveBeenCalledOnce();
+    expect(messages).toEqual([{ messageType: 3, value: 4, receivedAt: 42 }]);
+    expect(input.open).toHaveBeenCalledOnce();
     expect(adapter.hasActiveMtcSubscription('in')).toBe(true);
     unsubscribe();
     expect(adapter.hasActiveMtcSubscription('in')).toBe(false);
-    expect((input as unknown as { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalledOnce();
+    expect(input.close).toHaveBeenCalledOnce();
+    expect(input.listeners.size).toBe(0);
   });
 
   it('实际输入端口改变或断开后不复用旧 MTC 订阅', async () => {
@@ -148,7 +143,7 @@ describe('LinkMidiAdapter', () => {
     const access = midiAccess([]);
     const firstInput = access.inputs.get('input');
     if (!firstInput) throw new Error('测试 MIDI 输入不存在');
-    installNavigator(access);
+    installAccess(access);
     const adapter = new LinkMidiAdapter((id) => id === 'in'
       ? { id, direction: 'input', portName: inputName }
       : resolveProfile(id), vi.fn());
@@ -156,19 +151,18 @@ describe('LinkMidiAdapter', () => {
     await adapter.subscribeMtc('in', '30', vi.fn());
     expect(adapter.hasActiveMtcSubscription('in')).toBe(true);
 
-    const secondInput = midiInput('input-2', 'P1 MTC 2');
-    (access.inputs as unknown as Map<string, MIDIInput>).set('input-2', secondInput);
+    access.inputs.set('input-2', new FakePort('input-2', 'P1 MTC 2', 'input', access));
     inputName = 'P1 MTC 2';
     expect(adapter.hasActiveMtcSubscription('in')).toBe(false);
 
     inputName = 'P1 MTC';
-    (firstInput as unknown as { state: MIDIPortDeviceState }).state = 'disconnected';
+    firstInput.state = 'disconnected';
     expect(adapter.hasActiveMtcSubscription('in')).toBe(false);
   });
 
   it('缺失端口和非 ASCII MSC 字段明确失败', async () => {
     const access = midiAccess([]);
-    installNavigator(access);
+    installAccess(access);
     const adapter = new LinkMidiAdapter((id) => id === 'missing'
       ? { id, direction: 'output', portName: 'Missing' }
       : resolveProfile(id), vi.fn());
@@ -212,14 +206,14 @@ describe('LinkMidiAdapter', () => {
 
   it('端口消失时立即更新枚举，后续发送明确失败且不切换端口', async () => {
     const access = midiAccess([]);
-    installNavigator(access);
+    installAccess(access);
     const adapter = new LinkMidiAdapter(resolveProfile, vi.fn());
     await adapter.initialize();
     const snapshots: string[][] = [];
     adapter.subscribePorts((ports) => snapshots.push(ports.map((port) => `${port.direction}:${port.name}`)));
 
-    (access.outputs as unknown as Map<string, MIDIOutput>).delete('output');
-    access.dispatchEvent(new Event('statechange'));
+    access.outputs.delete('output');
+    access.changed();
 
     expect(snapshots.at(-1)).toEqual(['input:P1 MTC']);
     await expect(adapter.execute({
@@ -231,18 +225,33 @@ describe('LinkMidiAdapter', () => {
       program: 1
     })).rejects.toThrow('MIDI 输出端口不存在：P1 Control');
     adapter.dispose();
-    expect(access.onstatechange).toBeNull();
+    expect(access.listeners.size).toBe(0);
   });
 
-  it('释放播放适配器不会移除顶部端口监视器的热插拔监听', async () => {
-    const access = midiAccess([]); installNavigator(access);
+  it('端口清单读取失败时明确上报一次，不当作端口仍在', async () => {
+    const access = midiAccess([]); installAccess(access);
+    const reportError = vi.fn();
+    const adapter = new LinkMidiAdapter(resolveProfile, reportError);
+    await adapter.initialize();
+    access.failure = 'Windows MIDI 没有响应'; access.inputs.clear(); access.outputs.clear();
+    access.changed(); access.changed();
+    expect(reportError).toHaveBeenCalledOnce();
+    expect(reportError.mock.calls[0]?.[0]).toMatchObject({ message: 'Windows MIDI 没有响应' });
+    expect(adapter.listPorts()).toEqual([]);
+    adapter.dispose();
+  });
+
+  it('释放播放适配器只关闭自己打开的输出，不移除顶部端口监视器的热插拔监听', async () => {
+    const access = midiAccess([]); installAccess(access);
     const monitor = new LinkMidiAdapter(resolveProfile, vi.fn());
     const runtime = new LinkMidiAdapter(resolveProfile, vi.fn());
     await monitor.initialize(); await runtime.initialize();
     const observed = vi.fn(); monitor.subscribePorts(observed);
+    expect(await runtime.openOutputs(['out'])).toEqual([]);
     runtime.dispose();
-    (access.outputs as unknown as Map<string, MIDIOutput>).clear();
-    access.dispatchEvent(new Event('statechange'));
+    expect(access.outputs.get('output')!.close).toHaveBeenCalledOnce();
+    access.outputs.clear();
+    access.changed();
     expect(observed).toHaveBeenCalledTimes(2);
     expect(observed.mock.calls.at(-1)?.[0]).toEqual([expect.objectContaining({ name: 'P1 MTC', direction: 'input' })]);
     monitor.dispose();
@@ -252,9 +261,8 @@ describe('LinkMidiAdapter', () => {
     const access = midiAccess([]);
     const input = access.inputs.get('input');
     if (!input) throw new Error('测试 MIDI 输入不存在');
-    const mockInput = input as unknown as { close: ReturnType<typeof vi.fn>; onmidimessage: EventListener | null };
-    mockInput.close.mockRejectedValueOnce(new Error('设备正忙'));
-    installNavigator(access);
+    input.close.mockRejectedValueOnce(new Error('设备正忙'));
+    installAccess(access);
     const reportedErrors: Error[] = [];
     const reportError = (error: Error): void => { reportedErrors.push(error); };
     const adapter = new LinkMidiAdapter(resolveProfile, reportError);
@@ -264,58 +272,46 @@ describe('LinkMidiAdapter', () => {
     adapter.dispose();
     await vi.waitFor(() => expect(reportedErrors).toHaveLength(1));
 
-    expect(reportedErrors[0]?.message).toContain('MIDI 输入端口关闭失败：P1 MTC：设备正忙');
-    expect(access.onstatechange).toBeNull();
-    expect(mockInput.onmidimessage).toBeNull();
+    expect(reportedErrors[0]?.message).toContain('MIDI 接口「P1 MTC」关闭失败：设备正忙');
+    expect(access.listeners.size).toBe(0);
+    expect(input.listeners.size).toBe(0);
   });
 });
 
-function installNavigator(
-  access: MIDIAccess,
-  requestMIDIAccess: () => Promise<MIDIAccess> = () => Promise.resolve(access)
-): void {
-  Object.defineProperty(globalThis, 'navigator', {
-    configurable: true,
-    value: { requestMIDIAccess }
-  });
+function installAccess(access: FakeAccess): void { vi.mocked(requestMidiAccess).mockResolvedValue(access); }
+
+class FakeAccess implements MidiAccess {
+  readonly inputs = new Map<string, FakePort>();
+  readonly outputs = new Map<string, FakePort>();
+  failure: string | null = null;
+  readonly listeners = new Set<() => void>();
+  onStateChange(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  changed(): void { for (const listener of [...this.listeners]) listener(); }
 }
 
-function midiAccess(sent: number[][]): MIDIAccess {
-  const input = midiInput('input', 'P1 MTC');
-  const output = {
-    id: 'output',
-    name: 'P1 Control',
-    manufacturer: 'P1',
-    state: 'connected',
-    connection: 'open',
-    send: (data: number[]) => sent.push([...data])
-  } as unknown as MIDIOutput;
-  return Object.assign(new EventTarget(), {
-    inputs: new Map([['input', input]]),
-    outputs: new Map([['output', output]]),
-    sysexEnabled: true,
-    onstatechange: null
-  }) as unknown as MIDIAccess;
+class FakePort implements MidiInput, MidiOutput {
+  readonly manufacturer = 'P1';
+  state: MidiPortDeviceState = 'connected';
+  connection: MidiPortConnectionState = 'closed';
+  closedReason: string | null = null;
+  readonly listeners = new Set<(message: MidiMessage) => void>();
+  readonly open = vi.fn(() => { this.connection = 'open'; return Promise.resolve(); });
+  readonly close = vi.fn(() => { this.connection = 'closed'; return Promise.resolve(); });
+  constructor(readonly id: string, readonly name: string, readonly type: 'input' | 'output', private readonly access: FakeAccess,
+    private readonly sent: number[][] = []) {}
+  send(data: readonly number[]): void { this.sent.push([...data]); }
+  onMessage(listener: (message: MidiMessage) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  onStateChange(listener: () => void): () => void { return this.access.onStateChange(listener); }
+  emit(bytes: number[], receivedAt: number): void { for (const listener of [...this.listeners]) listener({ data: Uint8Array.from(bytes), receivedAt }); }
 }
 
-function midiInput(id: string, name: string): MIDIInput {
-  const input = {
-    id,
-    name,
-    manufacturer: 'P1',
-    state: 'connected' as MIDIPortDeviceState,
-    connection: 'closed' as MIDIPortConnectionState,
-    onmidimessage: null as ((this: MIDIInput, ev: MIDIMessageEvent) => unknown) | null,
-    open: vi.fn(() => {
-      input.connection = 'open';
-      return Promise.resolve(input as unknown as MIDIInput);
-    }),
-    close: vi.fn(() => {
-      input.connection = 'closed';
-      return Promise.resolve(input as unknown as MIDIInput);
-    })
-  };
-  return input as unknown as MIDIInput;
+function midiAccess(sent: number[][]): FakeAccess {
+  const access = new FakeAccess();
+  access.inputs.set('input', new FakePort('input', 'P1 MTC', 'input', access));
+  const output = new FakePort('output', 'P1 Control', 'output', access, sent);
+  output.connection = 'open';
+  access.outputs.set('output', output);
+  return access;
 }
 
 function resolveProfile(id: string): MidiPortProfile | null {
@@ -324,7 +320,7 @@ function resolveProfile(id: string): MidiPortProfile | null {
   return null;
 }
 
-function portSnapshot(id: string, name: string, state: MIDIPortDeviceState): import('./link-midi-adapter').MidiPortSnapshot {
+function portSnapshot(id: string, name: string, state: MidiPortDeviceState): import('./link-midi-adapter').MidiPortSnapshot {
   return { id, name, manufacturer: 'test', direction: 'input', state, connection: 'closed' };
 }
 

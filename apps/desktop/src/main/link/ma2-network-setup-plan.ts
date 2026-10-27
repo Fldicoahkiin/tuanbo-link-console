@@ -18,7 +18,7 @@ export function planMa2Network(adapters: Ma2NetworkAdapter[], request: Ma2Networ
   const addressOwner = parsed.address ? connected.filter(adapter => adapter.addresses.some(entry => entry.address === parsed.address)) : [];
   const adapter = parsed.adapterId ? connected.find(adapter => adapter.id === parsed.adapterId) : addressOwner.length === 1 ? addressOwner[0] : candidates.length === 1 ? candidates[0] : undefined;
   if (!adapter) throw new Error(candidates.length > 1 ? '检测到多张可用网卡，请选择插控台网线的那一张，再点自动连接' : '没有找到可用的有线网卡，请插入网线或在手动设置中选择网卡');
-  if (adapters.some(adapter => adapter.addresses.some(entry => entry.address === parsed.host))) throw new Error('控台 IP 与电脑现有 IP 相同，请核对控台屏幕上的地址');
+  if (adapters.some(adapter => adapter.addresses.some(entry => entry.address === parsed.host))) throw new Error('控台 IP 与电脑现有 IP 相同，请检查控台屏幕上显示的地址');
   const existing = adapter.addresses.find(entry => readyAddress(entry) && entry.prefix > 0 && entry.prefix < 32 && sameNetwork(entry.address, parsed.host, entry.prefix));
   const selected = parsed.address ? adapter.addresses.find(entry => entry.address === parsed.address && entry.prefix > 0 && entry.prefix < 32 && sameNetwork(entry.address, parsed.host, entry.prefix)) : existing;
   if (selected && !readyAddress(selected)) throw new Error(`电脑 ${selected.address} 的 Windows 地址状态为 ${selected.state}，尚不可用。请刷新网卡；只有 Duplicate 才表示地址冲突。`);

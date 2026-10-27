@@ -370,7 +370,7 @@ it.skipIf(!process.env.MA2_ONPC_PRECISION_ACCEPTANCE)('本机 Timecode 子帧精
       const desired = patchMa2EventTimes(current, report.sha256, [{ path, rawTime: requested }]);
       let exact = true;
       try { await bridge.request('APPLY', 9902, current, desired); }
-      catch (error) { if (!(error instanceof Error) || !error.message.includes('回读与预期不一致')) throw error; exact = false; }
+      catch (error) { if (!(error instanceof Error) || !error.message.includes('读回的内容和预期不一致')) throw error; exact = false; }
       const result = inspectMa2TimecodeXml(await bridge.request('READ', 9902));
       const actual = result.timecodes[0]?.tracks[0]?.subtracks[0]?.events[1]?.attributes.time ?? '0';
       results.push({ requested, actual, exact });
@@ -399,7 +399,7 @@ it.skipIf(!process.env.MA2_ONPC_ACTION_ACCEPTANCE)('本机执行器动作 XML �
       const desired = original.replace('time="45" command="Goto" pressed="true" step="2"', `time="45" command="${command}" pressed="true" step="${step}"`);
       expect(desired).not.toBe(original);
       try { await bridge.request('APPLY', 9902, current, desired); }
-      catch (error) { if (!(error instanceof Error) || !error.message.includes('回读与预期不一致')) throw error; }
+      catch (error) { if (!(error instanceof Error) || !error.message.includes('读回的内容和预期不一致')) throw error; }
       const readback = await bridge.request('READ', 9902);
       expect(inspectMa2TimecodeXml(readback).timecodes[0]?.tracks[0]?.subtracks[0]?.events[1]).toMatchObject({ attributes: { command, step: command === 'Go' ? '2' : '1' }, cueName: null, cueAddress: [] });
     }
@@ -409,7 +409,7 @@ it.skipIf(!process.env.MA2_ONPC_ACTION_ACCEPTANCE)('本机执行器动作 XML �
       const desired = original.replace(/<SubTrack index="0">[\s\S]*?<\/SubTrack>/, `<SubTrack index="0">${body}</SubTrack>`);
       expect(desired).not.toBe(original);
       try { await bridge.request('APPLY', 9902, current, desired); }
-      catch (error) { if (!(error instanceof Error) || !error.message.includes('回读与预期不一致')) throw error; }
+      catch (error) { if (!(error instanceof Error) || !error.message.includes('读回的内容和预期不一致')) throw error; }
       const report = inspectMa2TimecodeXml(await bridge.request('READ', 9902));
       expect(report.timecodes[0]?.tracks[0]?.subtracks[0]?.events.map((event) => [event.attributes.command, event.attributes.step, event.cueAddress])).toEqual(commands.map((command, index) => [command, steps[index], []]));
     }

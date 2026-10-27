@@ -13,8 +13,8 @@ export class ObsNativeSeek {
     if (this.pending?.address === address) return this.pending.promise;
     const epoch = ++this.epoch; this.location = null;
     const operation = this.findPid(address).then(pid => {
-      if (epoch !== this.epoch) throw new Error('OBS 原生连接识别已取消');
-      if (pid === null) throw new Error('原生定位只支持本机 OBS');
+      if (epoch !== this.epoch) throw new Error('OBS 连接识别已取消');
+      if (pid === null) throw new Error('画面定位只支持本机的 OBS');
       this.location = { address, pid };
     });
     this.pending = { address, promise: operation };
@@ -29,20 +29,20 @@ export class ObsNativeSeek {
   private async send(address: string, packet: Buffer): Promise<void> {
     await this.prepare(address);
     const location = this.location, epoch = this.epoch;
-    if (!location || location.address !== address) throw new Error('OBS 原生连接已更换');
+    if (!location || location.address !== address) throw new Error('OBS 连接已更换');
     await new Promise<void>((resolve, reject) => {
       const socket = createConnection(`\\\\.\\pipe\\tblink-obs-seek-${location.pid}`);
       const response = Buffer.alloc(4); let offset = 0;
       const finish = (error?: Error): void => { clearTimeout(timer); socket.destroy(); if (error) reject(error); else resolve(); };
-      const timer = setTimeout(() => finish(new Error('OBS 原生定位超时')), 2000);
-      socket.on('error', (error) => finish(new Error(isPipeAccessDenied(error) ? `OBS 原生定位不可用：${obsPipeAccessDeniedMessage}` : `OBS 原生定位不可用，请确认已加载新版插件：${error.message}`)));
-      socket.once('connect', () => { if (epoch !== this.epoch) finish(new Error('OBS 原生请求已取消，尚未发送')); else socket.write(packet); });
+      const timer = setTimeout(() => finish(new Error('OBS 画面定位超时')), 2000);
+      socket.on('error', (error) => finish(new Error(isPipeAccessDenied(error) ? `OBS 画面定位不可用：${obsPipeAccessDeniedMessage}` : `OBS 画面定位不可用，请确认已加载新版组件：${error.message}`)));
+      socket.once('connect', () => { if (epoch !== this.epoch) finish(new Error('OBS 请求已取消，还没发送')); else socket.write(packet); });
       socket.on('data', (chunk: Buffer) => {
-        if (epoch !== this.epoch) { finish(new Error('OBS 原生请求期间连接改变，请核对目标状态')); return; }
+        if (epoch !== this.epoch) { finish(new Error('OBS 请求过程中连接变了，请检查 OBS 画面')); return; }
         const size = Math.min(4 - offset, chunk.length); chunk.copy(response, offset, 0, size); offset += size;
-        if (offset === 4) { const result = response.readUInt32LE(); finish(result ? new Error(`OBS 拒绝原生定位，错误码 ${result}`) : undefined); }
+        if (offset === 4) { const result = response.readUInt32LE(); finish(result ? new Error(`OBS 拒绝了画面定位，错误码 ${result}`) : undefined); }
       });
-      socket.on('end', () => { if (offset < 4) finish(new Error('OBS 原生定位连接提前关闭')); });
+      socket.on('end', () => { if (offset < 4) finish(new Error('OBS 画面定位连接提前关闭了')); });
     });
   }
 }

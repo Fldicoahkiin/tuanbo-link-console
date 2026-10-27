@@ -39,11 +39,11 @@ describe('LinkRunLogger', () => {
     await writeFile(file, `${JSON.stringify(entry)}\r\n\r\ninvalid`);
     const entries = await logger.query();
     expect(entries).toHaveLength(2);
-    expect(entries[1]?.message).toContain('第 3 行损坏');
+    expect(entries[1]?.message).toContain('第 3 行已损坏');
     const exported = join(directory, 'damaged.tbdiag.gz'); cleanupFiles.push(exported);
     await logger.exportDiagnosticPackage(exported, {});
     const text = (await gunzipAsync(await readFile(exported))).toString('utf8');
-    expect(text).toContain('已保留原文件');
+    expect(text).toContain('原文件保留');
     expect(text).toContain('中文');
     expect(await readFile(file, 'utf8')).toContain('invalid');
   });

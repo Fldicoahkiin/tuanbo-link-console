@@ -17,7 +17,7 @@ export class P1LightingOutput {
     // Auto-follow has already converted allocated P1 ranges to song-local time.
     this.originMs = autoFollow ? 0 : lightingTimeOrigin(item.lighting, item.playback?.mtcOffsetMs ?? 0);
     await this.output.prepare(item.lighting, profile, Math.max(0, sample ? this.position(sample) : 0));
-    if (generation !== this.generation) throw new Error('P1 灯光准备期间播放会话已改变');
+    if (generation !== this.generation) throw new Error('P1 灯光准备期间播放状态变了');
     this.ready = true;
   }
   tick(sample: MtcSample): void {

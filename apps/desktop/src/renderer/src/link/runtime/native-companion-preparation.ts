@@ -28,11 +28,11 @@ export async function prepareNativeCompanionRuntime(project: LinkProject, itemId
     if (ports.length) {
       await deps.initializeMidi(); assertCurrent();
       const errors = await deps.midi.openOutputs(ports); assertCurrent();
-      if (errors.length) throw new Error(`MIDI Cue 未参与：${errors.join('；')}`);
+      if (errors.length) throw new Error(`MIDI Cue 不会输出：${errors.join('；')}`);
     }
     await deps.applyPreflight({ checkedAt: new Date().toISOString(), mode: 'live', passed: true,
       checks: [{ id: 'midi.nativeCompanion', label: '通用 MIDI Cue', status: 'passed', detail: ports.length
-        ? `已准备 ${ports.length} 个输出目标` : '当前节目没有通用 MIDI Cue；音频、时间码和画面由后台服务报告' }] });
+        ? `已准备 ${ports.length} 个输出端口` : '当前节目没有通用 MIDI Cue；音频、时间码和画面的状态单独显示' }] });
     assertCurrent();
     const sample = positionMs > 0 ? internalSample(project, positionMs) : null;
     deps.sample(sample);

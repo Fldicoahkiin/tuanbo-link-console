@@ -1,4 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
+vi.mock('./midi-access', () => ({ requestMidiAccess: vi.fn(), refreshMidiAccess: vi.fn() }));
+import { requestMidiAccess, type MidiAccess } from './midi-access';
+/** The window's MIDI comes from main; these tests hand the code under test a fixed port list. */
+function stubMidi(request: () => Promise<unknown>): void { vi.mocked(requestMidiAccess).mockImplementation(() => request() as Promise<MidiAccess>); }
 import { createLightingDocument, lightingTrackSchema, type Ma2NetworkStatus } from '@tb/schema';
 import { compileLightingNetworkActions, compileLightingPackets, collectLightingOutputProfileIds } from '@tb/core/link';
 import { LightingNetworkOutput } from './lighting-network-output';
@@ -21,7 +25,7 @@ function setup() {
   document.tracks = [lightingTrackSchema.parse({ id: 'pool', name: '序列池', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '开场', start: 0, duration: 5000, timeLock: 'time', muted: false, events: [100, 200].map((at, index) => ({ id: `cue-${index}`, at, kind: 'ma2', action: 'goto', sequence: 168, cue: `${index + 1}.250`, executor: '', label: '开场' })) }] })];
   const status: Ma2NetworkStatus = { state: 'connected', settings: { host: '192.168.0.10', port: 30000, monitorPort: 30001, username: 'operator', autoConnect: false }, passwordSaved: false, version: '3.9.60.74', error: null };
   const api = { requireOutputLicense: vi.fn(async () => {}), getMa2NetworkStatus: vi.fn(() => Promise.resolve(status)), playMa2Cue: vi.fn(async () => {}), playMa2Audition: vi.fn(async () => {}), controlMa2Audition: vi.fn(() => Promise.resolve({ version: 1, revision: 0, generation: 0, phase: 'idle', targets: [] })), cancelMa2Playback: vi.fn(async () => {}) };
-  const midi = vi.fn(); vi.stubGlobal('navigator', { requestMIDIAccess: midi }); vi.stubGlobal('window', { tbLink: api });
+  const midi = vi.fn(); stubMidi(midi); vi.stubGlobal('window', { tbLink: api });
   return { document, status, api, midi, output: new LightingNetworkOutput() };
 }
 
@@ -41,7 +45,7 @@ it('后台关闭必须等网络取消回执；取消失败不报告已经释放'
   f.api.cancelMa2Playback.mockImplementationOnce(() => new Promise<void>((_resolve, failed) => { reject = failed; }));
   let settled = false;
   const closing = f.output.close().finally(() => { settled = true; });
-  const failed = expect(closing).rejects.toThrow('取消未完成');
+  const failed = expect(closing).rejects.toThrow('取消没有完成');
   try {
     await Promise.resolve(); expect(settled).toBe(false); reject!(new Error('控台取消未确认')); await failed;
     expect(diagnostic).toHaveBeenCalledWith('取消灯光网络输出失败', expect.any(Error));

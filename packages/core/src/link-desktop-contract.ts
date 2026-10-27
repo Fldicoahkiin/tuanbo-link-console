@@ -207,6 +207,12 @@ export type LinkDesktopApi = {
   getNativePlaybackStatus(): Promise<import('@tb/schema').NativePlayerStatus | null>;
   onNativePlaybackStatus(listener: (status: import('@tb/schema').NativePlayerStatus) => void): () => void;
   recheckMidi(): Promise<void>;
+  /** The window's MIDI: main opens one port at a time for it, never Chromium Web MIDI. */
+  listMidiPorts(request: import('@tb/schema').MidiPortListRequest): Promise<import('@tb/schema').MidiPortList>;
+  openMidiPort(request: import('@tb/schema').MidiPortOpen): Promise<import('@tb/schema').MidiPortHandle>;
+  sendMidi(request: import('@tb/schema').MidiPortSend): Promise<void>;
+  closeMidiPort(request: import('@tb/schema').MidiPortHandle): Promise<void>;
+  onMidiEvent(listener: (event: import('@tb/schema').MidiPortEvent) => void): () => void;
   getLicenseStatus(): Promise<import('@tb/schema').LicenseStatus>;
   exportLicenseRequest(): Promise<boolean>;
   importLicense(): Promise<import('@tb/schema').LicenseStatus | null>;
@@ -299,8 +305,6 @@ export type LinkDesktopApi = {
   writeRecoveryCopy(payload: import('@tb/schema').RecoveryCopyWrite): Promise<void>;
   /** An unnamed project asks once before an action that needs a location: 选择保存位置 / 取消. */
   confirmProjectLocation(purpose: string): Promise<boolean>;
-  /** Start check failed: true plays the song without lighting, false cancels. */
-  confirmPlayWithoutLighting(reason: string): Promise<boolean>;
   /** Why the main-process document worker refuses work (a timeout or a broken worker); null while it works. */
   projectDocumentWorkerState(): Promise<{ stalled: string | null }>;
   /** Asks the operator, then restarts a stuck document worker; true when confirmed. */

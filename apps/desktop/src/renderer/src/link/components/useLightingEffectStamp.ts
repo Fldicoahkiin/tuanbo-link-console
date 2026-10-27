@@ -9,9 +9,9 @@ export function placeEffect(document: LightingDocument, stamp: Stamp, durationMs
   const effect = document.templates.find(entry => entry.id === stamp.effectId);
   const binding = effect?.track.cueStamp;
   if (!effect || binding?.mode !== 'fixed') throw new Error('请先绑定灯光效果');
-  if (binding.executor && !/^[1-9]\d*\.[1-9]\d*$/.test(binding.executor)) throw new Error('该素材尚未绑定执行器，请在素材配置中填写控台页号.执行器编号');
+  if (binding.executor && !/^[1-9]\d*\.[1-9]\d*$/.test(binding.executor)) throw new Error('这个素材还没绑定执行器，请在素材设置里填写“页号.执行器编号”');
   if (effect.members) {
-    if (effect.members.some(member => stamp.ms + member.delayMs >= durationMs)) throw new Error('组合效果超出音频结尾，请提前放置');
+    if (effect.members.some(member => stamp.ms + member.delayMs >= durationMs)) throw new Error('组合效果超出了音频结尾，请往前放');
     return [...effect.members].sort((a, b) => a.delayMs - b.delayMs).reduce((result, member, index) => {
       const temporary = { ...effect, name: member.name, members: undefined, track: { ...effect.track, cueStamp: { mode: 'fixed' as const, sequence: member.sequence, cue: member.cue, executor: member.executor } } };
       const value = placeEffect({ ...result, templates: result.templates.map(entry => entry.id === effect.id ? temporary : entry) }, { ...stamp, ms: stamp.ms + member.delayMs, id: index === 0 ? stamp.id : crypto.randomUUID(), groupId: stamp.id }, durationMs);
@@ -56,7 +56,7 @@ export function useLightingEffectStamp(itemId: string | null, document: Lighting
       const item = state.project?.rundown.find(value => value.id === itemId);
       if (!item) throw new Error('歌曲已删除，请重新选择');
       const pool = state.project?.ma2MaterialLibrary?.library;
-      if (!pool || pool.sourceUnverified || !pool.sequences.some(sequence => sequence.sequence === reference.sequence && sequence.cues.some(cue => cue.number === reference.cue))) throw new Error('控台素材已改变或尚未核对，请重新读取并拖入');
+      if (!pool || pool.sourceUnverified || !pool.sequences.some(sequence => sequence.sequence === reference.sequence && sequence.cues.some(cue => cue.number === reference.cue))) throw new Error('控台素材已经变了或还没确认，请重新读取后再拖入');
       commit(itemId, placeConsoleCue(item.lighting ?? document, reference, ms, durationMs));
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
   };

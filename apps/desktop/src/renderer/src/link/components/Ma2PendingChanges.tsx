@@ -41,7 +41,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const failed = songs.some(song => song.state === 'blocked');
   const blocked = automatic.status === 'blocked' || failed;
   const moving = songs.find(song => song.requestId && song.progress?.total);
-  const status = recoveryError ? '恢复副本需处理' : !active ? '已暂停同步' : failed ? '同步失败' : blocked ? '有修改待核对' : moving?.progress ? `同步中 ${Math.floor(moving.progress.completed / moving.progress.total * 100)}%` : working ? '同步中' : songs.some(song => song.waitingForConnection) ? '等待连接' : count ? `待同步 ${count}` : songs.length && songs.every(song => song.state === 'verified') ? '已回读确认' : automatic.status === 'verified' ? '已回读确认' : '同步已开启';
+  const status = recoveryError ? '恢复副本需要处理' : !active ? '已暂停同步' : failed ? '同步失败' : blocked ? '有修改需要确认' : moving?.progress ? `同步中 ${Math.floor(moving.progress.completed / moving.progress.total * 100)}%` : working ? '同步中' : songs.some(song => song.waitingForConnection) ? '等待连接' : count ? `待同步 ${count}` : songs.length && songs.every(song => song.state === 'verified') ? '已同步' : automatic.status === 'verified' ? '已同步' : '同步已开启';
   const run = async (action: () => Promise<void> | void): Promise<void> => {
     if (busy) return;
     setBusy(true);
@@ -90,13 +90,13 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
     await linkDesktopViewModel.projectArchives({ version: 1, action: 'reveal', projectPath: path, ...(name ? { name } : {}) });
   };
   return <div className="ma2-sync-controls" aria-label="灯光同步操作">
-    <button className="ma2-realtime-switch" role="switch" aria-label="实时同步" aria-checked={active} disabled={busy || (working && !active)} onClick={() => void run(toggle)} title="编辑结束后自动核对、存档、写回并确认；播放中暂存，停止后同步"><span className="ma2-switch-track" aria-hidden="true"><span /></span><span>实时同步</span></button>
+    <button className="ma2-realtime-switch" role="switch" aria-label="实时同步" aria-checked={active} disabled={busy || (working && !active)} onClick={() => void run(toggle)} title="编辑完成后自动检查、存档、写入控台并确认；播放时先暂存，停止后再同步"><span className="ma2-switch-track" aria-hidden="true"><span /></span><span>实时同步</span></button>
     <button aria-label="同步状态详情" data-state={blocked ? 'blocked' : automatic.status} onClick={() => {
       if (!detailOpen) void linkDesktopViewModel.projectArchiveSettings({ action: 'status' }).then(value => setArchivingOff(!value.settings.enabled), (error: unknown) => setNotice(`存档设置读取失败：${error instanceof Error ? error.message : String(error)}`));
       setDetailOpen(value => !value); setArchiveOpen(false);
     }}>{blocked || count ? <CircleAlert /> : <Check />}<span>{status}</span></button>
-    <button aria-label="刷新同步" title="立即读取控台，把时间线与控台不一致的地方写回（包括在控台上删掉的 Cue 或序列）；暂停时会重新开启同步" onClick={() => { setNotice(''); refreshMa2RealtimeSession(); }}><RefreshCw /><span>刷新同步</span></button>
-    <button aria-label="撤销灯光修改" title="撤销上一次工程编辑；启用同步后会将撤销结果写回控台" disabled={!canUndo} onClick={() => useDocumentStore.getState().undo()}><Undo2 /></button>
+    <button aria-label="刷新同步" title="立即读取控台，把和时间线不一致的地方写回控台（包括在控台上删掉的 Cue 或序列）；如果同步已暂停，会重新打开" onClick={() => { setNotice(''); refreshMa2RealtimeSession(); }}><RefreshCw /><span>刷新同步</span></button>
+    <button aria-label="撤销灯光修改" title="撤销上一次编辑；开启同步时，撤销结果也会写回控台" disabled={!canUndo} onClick={() => useDocumentStore.getState().undo()}><Undo2 /></button>
     <button aria-label="重做灯光修改" title="重做上一次撤销" disabled={!canRedo} onClick={() => useDocumentStore.getState().redo()}><Redo2 /></button>
     <button disabled={busy} title="保存工程并创建存档" onClick={() => void run(save)}><Save /><span>保存</span></button>
     <button disabled={busy} onClick={() => archiveOpen ? setArchiveOpen(false) : void run(loadArchives)}><FolderArchive /><span>存档</span></button>
@@ -104,22 +104,22 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
       <header><strong>{status}</strong><button onClick={() => setDetailOpen(false)}>关闭</button></header>
       {recoveryError ? <p role="alert">{recoveryError}</p> : null}
       {archivingOff ? <p>已关闭存档，写入前不再备份。</p> : null}
-      <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{notice || (!active ? '已暂停，修改保留在本地。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : automatic.request || automatic.status === 'blocked' || !songs.length ? automatic.message : '名称与 Cue 内容双向核对，控台位置如下。')}</p>
+      <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{notice || (!active ? '已暂停，修改保留在本地。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : automatic.request || automatic.status === 'blocked' || !songs.length ? automatic.message : '名称和 Cue 内容会双向比对，控台位置如下。')}</p>
       {blocked ? <button onClick={() => { setNotice(''); refreshMa2RealtimeSession(); }}>刷新同步</button> : null}
       {songs.map(song => <p key={song.itemId} role={song.state === 'blocked' ? 'alert' : 'status'}>{project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}：{song.progress?.detail ?? song.message}</p>)}
-      {playing ? <p>播放中暂存本地，停止后同步。</p> : null}
+      {playing ? <p>播放时先暂存在本地，停止后再同步。</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}
       {renames.length ? <button disabled={busy || working} onClick={() => void run(() => enableMa2NameSync(useDocumentStore.getState().documentId))}>同步名称</button> : null}
-      {legacy.count ? <p>控台上有 {legacy.count} 个以前写入的中文名称，控台只能显示英文和数字。<button disabled={busy || working} onClick={() => void run(async () => { const count = await convertMa2LegacyNames(useDocumentStore.getState().documentId); setNotice(`已提交 ${count} 个名称改为拼音，歌曲名称在下一次同步时写入`); })}>改为拼音</button></p> : null}
+      {legacy.count ? <p>控台上有 {legacy.count} 个以前写入的中文名称，控台只能显示英文和数字。<button disabled={busy || working} onClick={() => void run(async () => { const count = await convertMa2LegacyNames(useDocumentStore.getState().documentId); setNotice(`已把 ${count} 个名称改成拼音，歌曲名称会在下次同步时写入`); })}>改为拼音</button></p> : null}
       {pending.map(item => <p key={`${item.itemId}:${item.bindingId}`}>{item.title} · Timecode {item.target}：{item.error ?? `${item.changes.length} 处修改`}</p>)}
       {unbound.map(item => <p key={item.itemId}>{item.title} · {item.count} 个 Cue → 按钮第 {item.page} 页的空格。</p>)}
       {showless.length ? <p>有 {showless.length} 首歌要同步到控台才能演出：{showless.map(item => item.title).join('、')}。同步会为每首歌在控台上建立自己的时间码节目。<button disabled={busy || working} onClick={() => { setNotice(''); writeMissingConsoleShows(); }}>同步到控台</button></p> : null}
     </div> : null}
     {archiveOpen ? <div className="ma2-sync-popover" role="region" aria-label="灯光工程存档">
       <header><strong>工程存档 · {archives.length}</strong><button onClick={() => setArchiveOpen(false)}>关闭</button></header>
-      <p>保存整个工程及原始 XML；同步前自动存一份。恢复会写回原工程位置，恢复前的工程另存一份。</p>
+      <p>保存整个工程和原始 XML，同步前会自动存一份。恢复时写回原工程位置，恢复前的工程也会另存一份。</p>
       <button onClick={() => void run(() => reveal())}><FolderOpen />打开存档位置</button>
-      {!archives.length ? <p>暂无存档，点击“保存”创建。</p> : <ul>{archives.slice(0,100).map(entry => <li key={entry.name}><span>{new Date(entry.createdAt).toLocaleString()} · {entry.reason === 'manual' ? '手动保存' : '同步前'}</span><button aria-label={`定位存档 ${entry.name}`} onClick={() => void run(() => reveal(entry.name))}>定位文件</button>{confirmRestore === entry.name ? <button aria-label={`确认恢复存档 ${entry.name}`} disabled={busy || playing} onClick={() => void run(() => restore(entry.name))}>确认恢复</button> : <button aria-label={`恢复存档 ${entry.name}`} disabled={busy || playing} onClick={() => setConfirmRestore(entry.name)}>恢复</button>}</li>)}</ul>}
+      {!archives.length ? <p>还没有存档，点“保存”创建。</p> : <ul>{archives.slice(0,100).map(entry => <li key={entry.name}><span>{new Date(entry.createdAt).toLocaleString()} · {entry.reason === 'manual' ? '手动保存' : '同步前'}</span><button aria-label={`定位存档 ${entry.name}`} onClick={() => void run(() => reveal(entry.name))}>定位文件</button>{confirmRestore === entry.name ? <button aria-label={`确认恢复存档 ${entry.name}`} disabled={busy || playing} onClick={() => void run(() => restore(entry.name))}>确认恢复</button> : <button aria-label={`恢复存档 ${entry.name}`} disabled={busy || playing} onClick={() => setConfirmRestore(entry.name)}>恢复</button>}</li>)}</ul>}
     </div> : null}
   </div>;
 }

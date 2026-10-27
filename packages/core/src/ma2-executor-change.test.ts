@@ -42,7 +42,7 @@ it('删除清单明确识别无法转成序列引用的执行器专用动作', (
   const project = sample();
   project.rundown[0]!.lighting!.tracks[0]!.clips[0]!.events.push({ id: 'f', kind: 'ma2-fader', at: 250, executor: '1000.101', fader: 'Master', level: 1, label: '亮度' });
   project.rundown[0]!.lighting!.consoleSong!.executor = '1000.103';
-  expect(ma2ExecutorDeletionUses(project, '1000.101')).toEqual(['歌曲：含执行器专用动作，请先重新指定这些动作的目标']);
+  expect(ma2ExecutorDeletionUses(project, '1000.101')).toEqual(['歌曲：有动作只能用在这个执行器上，请先给这些动作重新指定目标']);
   expect(ma2ExecutorDeletionUses(project, '1000.102')).toEqual([]);
 });
 it('本曲控台序列自己的执行器不能在页面里删除，只能移动；已解除分配或别的控台不拦', () => {

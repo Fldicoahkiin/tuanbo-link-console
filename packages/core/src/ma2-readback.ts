@@ -41,9 +41,8 @@ export type Ma2ReadbackMatch = {
 export function matchMa2Readback(bindingInput: Binding, previewInput: Ma2TimecodePreview): Ma2ReadbackMatch {
   const binding = lightingMa2BindingSchema.parse(bindingInput);
   const preview = ma2TimecodePreviewSchema.parse(previewInput);
-  if (binding.timecode !== preview.target) throw new Error('回读的 Timecode 与节目绑定不一致');
-  if ((binding.timeOriginMs ?? 0) !== (preview.timeOriginMs ?? 0)) throw new Error('回读的歌曲时间码起点与绑定不一致');
-  if (preview.unconverted.length) throw new Error('回读包含未转换事件，不能比较完整工程');
+  if (binding.timecode !== preview.target) throw new Error('读回的 Timecode 和节目绑定对不上');
+  if ((binding.timeOriginMs ?? 0) !== (preview.timeOriginMs ?? 0)) throw new Error('读回的歌曲时间码起点和绑定对不上');
   const before = mappedEntries(binding.baselineTracks, binding.mappings);
   const remote = mappedEntries(preview.document.tracks, preview.mappings);
   const groups = (entries: Entry[]): Map<string, Entry[]> => {

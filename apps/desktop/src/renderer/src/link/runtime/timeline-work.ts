@@ -58,7 +58,7 @@ export async function retryReportedAction(cueId: string, actionId: string, runne
     .flatMap((report) => report.results)
     .reverse()
     .find((result) => result.cueId === cueId && result.actionId === actionId)?.action;
-  if (!action) throw new Error('重试目标动作不存在');
+  if (!action) throw new Error('要重试的动作不存在');
   managed.trackVisualActionAttempt(cueId, action); const result = await runner.retry(cueId, action);
   managed.applyRetriedVisualAction(cueId, action, result.status);
   appendRetryActionReport(result, mode);
@@ -95,7 +95,7 @@ export async function executeTimelineWork(dueCues: RuntimeUpdate['dueCues'], med
   let blocked: Error | null = null;
   for (const entry of work) {
     if (blocked || !handlers.canExecute()) {
-      const reason = blocked ? `当前批次已被前序错误阻断：${blocked.message}` : '运行已暂停、中断或停止，未执行排队动作';
+      const reason = blocked ? `前面的动作出错，后面的动作没有执行：${blocked.message}` : '运行已暂停或停止，排队的动作没有执行';
       if ('event' in entry) await handlers.skipMedia(entry.event, reason);
       else await handlers.skipCue(entry.cue, reason);
       continue;

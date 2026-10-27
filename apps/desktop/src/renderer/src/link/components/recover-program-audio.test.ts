@@ -40,9 +40,9 @@ it('不自动复活用户已删除的音轨', async () => {
 });
 it('无声视频不伪造音轨，后端旧协议不写入不完整多轨结果', async () => {
   fixture(); bridge.ensureMediaAudioUrl.mockRejectedValueOnce(new Error('素材不包含音频轨道'));
-  await expect(recoverProgramAudio('song')).rejects.toThrow('不包含可用原声');
+  await expect(recoverProgramAudio('song')).rejects.toThrow('没有可用的声音');
   bridge.renderAudioSegments.mockResolvedValueOnce({ assetId: 'old', relativePath: 'assets/old.wav', sha256: 'c'.repeat(64), durationMs: 7000 });
-  await expect(recoverProgramAudio('song')).rejects.toThrow('后台仍是旧版本');
+  await expect(recoverProgramAudio('song')).rejects.toThrow('后台还是旧版本');
   expect(useDocumentStore.getState().project!.rundown[0]!.referenceAudio).toBeUndefined();
 });
 it('提取途中修改工程取消写入', async () => {
@@ -51,6 +51,6 @@ it('提取途中修改工程取消写入', async () => {
     useDocumentStore.getState().setProject(createEmptyLinkProject('其他工程'), 'C:/other.tblink');
     return Promise.resolve({ assetId: 'audio', relativePath: 'audio.wav', sha256: 'b'.repeat(64), durationMs: 10000, timeline: { source: { assetId: 'audio', relativePath: 'audio.wav', sha256: 'b'.repeat(64), durationMs: 10000 }, segments: [{ id: 'mix', startMs: 0, sourceOffsetMs: 0, durationMs: 10000 }], tracks: [{ id: 'track', title: '原声', source: { assetId: 'audio', relativePath: 'audio.wav', sha256: 'b'.repeat(64), durationMs: 10000 }, segments: [{ id: 'clip', startMs: 0, sourceOffsetMs: 0, durationMs: 10000 }] }] } });
   });
-  await expect(recoverProgramAudio('song')).rejects.toThrow('工程已修改');
+  await expect(recoverProgramAudio('song')).rejects.toThrow('工程被修改了');
   expect(useDocumentStore.getState().project!.name).toBe('其他工程');
 });

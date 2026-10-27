@@ -5,7 +5,7 @@ export async function recordMidiPortUpdate(projectId: string, ports: readonly Mi
   await linkDesktopViewModel.recordLog({
     level: ports.some((port) => port.state !== 'connected') ? 'warning' : 'info',
     category: 'device',
-    message: `Windows MIDI 端口更新：${ports.length} 个`,
+    message: `Windows MIDI 端口已更新，共 ${ports.length} 个`,
     projectId,
     device: 'midi',
     details: {

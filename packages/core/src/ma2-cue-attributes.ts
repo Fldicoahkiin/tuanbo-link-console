@@ -8,13 +8,13 @@ import { saveMa2MaterialLibraryCommand } from './ma2-program-import';
 export function mergeMa2MetadataCommand(source: string, result: Ma2EffectLibrary): LinkCommand {
   const apply: LinkCommand['execute'] = project => {
     const cache = project.ma2MaterialLibrary;
-    if (!cache?.library || cache.source !== source || result.sourceUnverified || ['show', 'generation', 'version'].some(key => Reflect.get(cache.library!.directory, key) !== Reflect.get(result.directory, key))) throw new Error('控台或 Show 已变化，页面素材未合入原目录');
+    if (!cache?.library || cache.source !== source || result.sourceUnverified || ['show', 'generation', 'version'].some(key => Reflect.get(cache.library!.directory, key) !== Reflect.get(result.directory, key))) throw new Error('控台或 Show 变了，这一页的素材没有合并进来');
     if (result.errors.length) throw new Error(result.errors.map(error => `序列 ${error.sequence}：${error.message}`).join('；'));
     const incoming = new Map(result.sequences.map(sequence => [sequence.sequence, sequence]));
     const sequences = [...cache.library.sequences.filter(sequence => !incoming.has(sequence.sequence) && result.directory.entries.some(entry => entry.target === sequence.sequence)), ...result.sequences];
     return saveMa2MaterialLibraryCommand(source, { ...cache.library, directory: result.directory, readAt: result.readAt, sequences }).execute(project);
   };
-  return { id: crypto.randomUUID(), label: '回读页面 Cue 名称', historyRebaseKey: `ma2-page-metadata:${source}`, rebaseHistory: project => project.ma2MaterialLibrary?.source === source && project.ma2MaterialLibrary.library?.directory.generation === result.directory.generation ? apply(project) : project, execute: apply, undo: before => before };
+  return { id: crypto.randomUUID(), label: '读取页面 Cue 名称', historyRebaseKey: `ma2-page-metadata:${source}`, rebaseHistory: project => project.ma2MaterialLibrary?.source === source && project.ma2MaterialLibrary.library?.directory.generation === result.directory.generation ? apply(project) : project, execute: apply, undo: before => before };
 }
 
 export const ma2AttributeRoles: Readonly<Record<Ma2AttributeRole, string>> = {
@@ -52,7 +52,7 @@ function customPresetCategory(group: Ma2AttributeGroup): { id: string; name: str
 export function mergeMa2AttributesCommand(source: string, result: Ma2EffectLibrary, targets: number[], autoClassify: boolean): LinkCommand {
   return { id: crypto.randomUUID(), label: autoClassify ? '读取属性并自动分类' : '读取 Cue 属性', scope: 'lighting', execute(project) {
     const cache = project.ma2MaterialLibrary;
-    if (!cache?.library || cache.source !== source || ['show', 'generation', 'version'].some(key => Reflect.get(cache.library!.directory, key) !== Reflect.get(result.directory, key)) || result.sourceUnverified) throw new Error('控台或 Show 已变化，属性结果未合入原目录');
+    if (!cache?.library || cache.source !== source || ['show', 'generation', 'version'].some(key => Reflect.get(cache.library!.directory, key) !== Reflect.get(result.directory, key)) || result.sourceUnverified) throw new Error('控台或 Show 变了，属性结果没有合并进来');
     const failed = new Set(result.errors.map(entry => entry.sequence));
     const byCue = new Map(result.cueAttributes?.map(value => [`${value.sequence}:${value.cueIndex}`, value]));
     const partial = result.sequences.filter(sequence => sequence.cues.some(cue => {
@@ -66,7 +66,7 @@ export function mergeMa2AttributesCommand(source: string, result: Ma2EffectLibra
       const previous = new Set(old.map(entry => entry.sequence));
       return [...old.filter(entry => keep(entry.sequence)), ...incoming.filter(entry => good.has(entry.sequence) || !previous.has(entry.sequence))];
     };
-    const errors = [...result.errors, ...partial.filter(sequence => !result.errors.some(error => error.sequence === sequence.sequence)).map(sequence => ({ sequence: sequence.sequence, message: '部分属性数据不完整，已保留此前读取结果和分类；请查看属性详情并手动补读' }))];
+    const errors = [...result.errors, ...partial.filter(sequence => !result.errors.some(error => error.sequence === sequence.sequence)).map(sequence => ({ sequence: sequence.sequence, message: '部分属性数据不完整，已保留之前读取的结果和分类；请查看属性详情，手动补读' }))];
     const merged: Ma2EffectLibrary = { ...cache.library, directory: result.directory, readAt: result.readAt,
       // Verified names and numbers remain useful even if fixture detail is incomplete.
       sequences: [...cache.library.sequences.filter(sequence => !result.sequences.some(incoming => incoming.sequence === sequence.sequence && !result.errors.some(error => error.sequence === incoming.sequence)) && result.directory.entries.some(entry => entry.target === sequence.sequence)), ...result.sequences.filter(sequence => !result.errors.some(error => error.sequence === sequence.sequence))],

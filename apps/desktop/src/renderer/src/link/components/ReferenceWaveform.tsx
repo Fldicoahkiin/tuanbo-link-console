@@ -224,7 +224,7 @@ function drawVisibleWaveform(
   canvas.width = Math.max(1, Math.floor(bounds.width * scale));
   canvas.height = Math.max(1, Math.floor(bounds.height * scale));
   const context = canvas.getContext('2d');
-  if (!context) throw new Error('Canvas 2D 不可用');
+  if (!context) throw new Error('无法绘制波形');
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.strokeStyle = '#63d8c1';
   context.lineWidth = Math.max(1, scale);
@@ -249,7 +249,7 @@ function drawClippedWaveform(canvas: HTMLCanvasElement, bounds: { width: number;
   canvas.width = Math.max(1, Math.min(4096, Math.floor(bounds.width * scale)));
   canvas.height = Math.max(1, Math.floor(bounds.height * scale));
   const context = canvas.getContext('2d');
-  if (!context) throw new Error('Canvas 2D 不可用');
+  if (!context) throw new Error('无法绘制波形');
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.strokeStyle = '#8be7d4';
   context.lineWidth = Math.max(1, scale);

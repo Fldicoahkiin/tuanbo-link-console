@@ -20,7 +20,7 @@ export function IntegrationHero({ busy, securityAvailable, coordinatorAvailable,
     <div className="integration-toolbar-title">
       <span className={`integration-current-item ${currentItemTitle ? 'ready' : 'missing'}`} title={currentItemTitle ?? '请先在工程与节目单中设置当前节目'}>{currentItemTitle ? `当前节目：${currentItemTitle}` : '未设置当前节目'}</span>
       <span className={`integration-security-state ${securityAvailable ? 'ok' : 'error'}`}><ShieldCheck />Windows 安全存储</span>
-      <span className="integration-ready-count">{readyCount} / 3 链路就绪</span>
+      <span className="integration-ready-count">{readyCount} / 3 项就绪</span>
     </div>
     <div className="integration-hero-actions">
       {runtimeActive
@@ -35,7 +35,7 @@ export function IntegrationFooter({ midiPorts, inventory }: {
   inventory: LinkObsInventory | null;
 }): JSX.Element {
   return <details className="integration-diagnostics device-advanced">
-    <summary><span><SlidersHorizontal />电脑检测到了哪些设备？</span><small>{midiPorts.length} 个 MIDI 端口 · OBS {inventory ? '已读取' : '尚未读取'}</small><ChevronDown /></summary>
+    <summary><span><SlidersHorizontal />电脑检测到了哪些设备？</span><small>{midiPorts.length} 个 MIDI 端口 · OBS {inventory ? '已读取' : '还没读取'}</small><ChevronDown /></summary>
     <div className="integration-resources">
       <section className="midi-inventory">
         <div className="panel-title"><span><Cable />Windows MIDI 端口</span><small>{midiPorts.length}</small></div>
@@ -46,7 +46,7 @@ export function IntegrationFooter({ midiPorts, inventory }: {
         <div className="panel-title"><span><MonitorUp />从 OBS 读取的内容</span></div>
         {inventory
           ? <div className="stat-strip"><span><strong>{inventory.scenes.length}</strong>场景</span><span><strong>{inventory.inputs.length}</strong>来源</span><span><strong>{Object.values(inventory.filters).flat().length}</strong>滤镜</span><span><strong>{inventory.transitions.length}</strong>转场</span></div>
-          : <p className="inventory-empty">尚未读取，请先到“OBS Studio”连接，再重新检测。</p>}
+          : <p className="inventory-empty">还没读取，请先到“OBS Studio”连接，再重新检测。</p>}
       </section>
     </div>
   </details>;

@@ -48,23 +48,23 @@ export class Ma2Telnet {
         socket.on('connect', () => { if (index === 1) { monitorReady = true; this.check(); } });
         socket.on('data', (data: Buffer) => { if (this.streams.includes(stream)) this.receive(stream, data); });
         socket.on('error', (error: NodeJS.ErrnoException) => { if (this.streams.includes(stream)) this.fail(new Error(`MA2 ${index === 0 ? '命令' : '监视'}端口连接失败：${this.address.host}:${port}${this.address.localAddress ? `（电脑 ${this.address.localAddress}）` : ''}（${error.code ?? '网络错误'}）。${error.code === 'EADDRNOTAVAIL' ? '电脑专用地址已失效，请重新点击自动连接。' : error.code === 'ECONNREFUSED' ? '目标拒绝了此端口，请检查控台 Telnet 是否为 Login Enabled、端口和防火墙；不需要反复更换电脑 IP。' : error.code === 'ENETUNREACH' || error.code === 'EHOSTUNREACH' ? '当前网卡无法到达控台，请检查插控台网线的网卡、网线及所选地址。' : '请检查网线、端口和控台 Telnet 设置。'}`)); });
-        socket.on('close', () => { if (this.streams.includes(stream)) this.fail(new Error('MA2 网络连接已断开；未确认的操作不会自动重试')); });
+        socket.on('close', () => { if (this.streams.includes(stream)) this.fail(new Error('MA2 网络连接断开了，没确认的操作不会自动重试')); });
       }
       await this.waitFor((text) => monitorReady && /\[[^\r\n]*\]>/.test(text) ? 'ready' : null, () => {
         const ports = this.streams.map((stream, index) => {
           const source = this.address.localAddress ?? stream.socket.localAddress;
           return `${this.address.host}:${index === 0 ? this.address.port : this.address.monitorPort} ${stream.socket.connecting ? 'TCP 未连通' : 'TCP 已连通'}${source && source !== '0.0.0.0' ? `（本机 ${source}）` : '（尚未取得本机连接地址）'}`;
         }).join('；');
-        return `MA2 连接超时：${ports}。${this.streams.some(stream => stream.socket.connecting) ? '请核对电脑与控台 IP、子网掩码、网卡路由及这两个端口的防火墙放行。' : '端口已通，但未收到 MA2 远程提示，请核对远程登录服务和端口。'} MIDI 线不提供这条网络连接。`;
+        return `MA2 连接超时：${ports}。${this.streams.some(stream => stream.socket.connecting) ? '请检查电脑和控台的 IP、子网掩码、网卡路由，以及防火墙是否放行这两个端口。' : '端口已通，但未收到 MA2 远程提示，请核对远程登录服务和端口。'} MIDI 线不提供这条网络连接。`;
       });
       // Validate accepted connections, not listening sockets: Windows can report
       // MA 3D as listener even when onPC accepted this particular connection.
       const epoch = this.connectionEpoch;
       if (this.validatePeers) await this.validatePeers(this.streams.map(({ socket }) => {
-        if (!socket.localAddress || !socket.localPort || !socket.remoteAddress || !socket.remotePort) throw new Error('MA2 通信通道已关闭，请重新连接');
+        if (!socket.localAddress || !socket.localPort || !socket.remoteAddress || !socket.remotePort) throw new Error('MA2 连接已关闭，请重新连接');
         return { localAddress: socket.localAddress, localPort: socket.localPort, remoteAddress: socket.remoteAddress, remotePort: socket.remotePort };
       }));
-      if (epoch !== this.connectionEpoch || !this.socket) throw new Error('MA2 连接已改变，未发送登录或控台命令');
+      if (epoch !== this.connectionEpoch || !this.socket) throw new Error('MA2 连接变了，没有发送登录或控台命令');
       this.setState('authenticating');
       await this.command(`Login "${username}" "${password}"`, (text) => /\[[^\r\n]*\]>/.test(text) ? 'prompt' : null);
       // The native banner says "guest" even before login: only an executed
@@ -82,9 +82,9 @@ export class Ma2Telnet {
     } finally { this.connecting = false; }
   }
   async command(line: string, match: (response: string) => string | null, beforeSend?: () => void, priority:'normal'|'playback'|'stop'='normal'): Promise<string> {
-    if (!this.socket || (this.current !== 'connected' && this.current !== 'authenticating')) throw new Error('MA2 尚未连接');
+    if (!this.socket || (this.current !== 'connected' && this.current !== 'authenticating')) throw new Error('MA2 还没连接');
     if (/[\r\n\u0000]/.test(line) || Buffer.byteLength(line) > 4096) throw new Error('MA2 网络命令格式或长度无效');
-    if (this.queuedCommands >= (priority==='stop'?64:32)) throw new Error('控台请求过多，请等待当前操作完成');
+    if (this.queuedCommands >= (priority==='stop'?64:32)) throw new Error('控台请求太多，请等当前操作完成');
     const epoch = this.connectionEpoch;
     const queuedAt = performance.now();
     this.queuedCommands += 1;
@@ -100,7 +100,7 @@ export class Ma2Telnet {
     },priority).finally(() => { this.queuedCommands -= 1; });
     return response;
   }
-  disconnect(): void { this.fail(new Error('MA2 连接已关闭；未确认的操作不会自动重试')); }
+  disconnect(): void { this.fail(new Error('MA2 连接已关闭，没确认的操作不会自动重试')); }
   private fail(error: Error): void {
     this.connectionEpoch += 1;
     this.socket = null;
@@ -110,9 +110,9 @@ export class Ma2Telnet {
     if (this.current !== 'disconnected') this.setState('disconnected');
   }
   private waitFor(match: Waiter['match'], timeoutMessage?: () => string): Promise<string> {
-    if (this.waiter) return Promise.reject(new Error('MA2 网络请求尚未完成'));
+    if (this.waiter) return Promise.reject(new Error('MA2 网络请求还没完成'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error(timeoutMessage?.() ?? (this.current === 'authenticating' ? 'MA2 网络端口已连通，但登录未确认。请检查登录用户、密码以及 Telnet 的 Login Enabled 设置，无需修改电脑 IP' : 'MA2 响应超时；操作未确认，不会自动重试'))), this.timeoutMs);
+      const timer = setTimeout(() => this.fail(new Error(timeoutMessage?.() ?? (this.current === 'authenticating' ? 'MA2 网络端口已经连通，但登录没有成功。请检查登录用户、密码和 Telnet 的 Login Enabled 设置，不需要改电脑 IP' : 'MA2 响应超时，操作没有确认，不会自动重试'))), this.timeoutMs);
       this.waiter = { match, resolve, reject, timer };
       this.check();
     });
@@ -149,7 +149,7 @@ export class Ma2Telnet {
     if (stream.buffer.length > 1024 * 1024) { this.fail(new Error('MA2 网络响应超过限制')); return; }
     stream.buffer = stream.buffer.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
     if (stream.socket === this.socket && this.current === 'connecting' && /(?:^|[\r\n])\s*Remote commandline disabled\s*(?:[\r\n]|$)/i.test(stream.buffer)) {
-      this.fail(new Error('已找到控台，但控台尚未开启远程连接。请在控台设置中开启远程登录，然后连接。'));
+      this.fail(new Error('已找到控台，但控台还没开启远程连接。请在控台设置里开启远程登录，再连接。'));
       return;
     }
     this.check();

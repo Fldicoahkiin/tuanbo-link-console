@@ -24,12 +24,12 @@ export class NativeProgramService {
   async open(value: unknown, checkProject?: (projectPath: string, project: LinkProject) => Promise<void>): Promise<NativeProgramAttachment> {
     const request = nativeProgramOpenSchema.parse(value);
     const project = parseLinkProject(JSON.parse(request.document));
-    if (project.playbackSource !== 'internal') throw new Error('后台节目只接受内部主控工程');
+    if (project.playbackSource !== 'internal') throw new Error('只有“联动台播放”的工程才能在后台播放');
     if (this.current?.request.ownerId === request.ownerId) throw new Error('节目控制会话编号重复');
     const previous = this.current, document = JSON.stringify(project);
     if (previous?.orphaned && active(previous.state)) {
       if (previous.request.projectPath !== request.projectPath || previous.projectId !== project.projectId) {
-        throw new Error(`界面重新加载前的节目仍在播放：${previous.request.projectPath}。请打开该工程接管或停止播放`);
+        throw new Error(`界面重新加载前的节目还在播放：${previous.request.projectPath}。请打开这个工程接回控制，或停止播放`);
       }
       previous.orphaned = false; previous.request = request; previous.configuration = request.configuration;
       this.emit(previous);
@@ -69,16 +69,16 @@ export class NativeProgramService {
     const request = nativeProgramControlSchema.parse(value), entry = this.current;
     if (!entry || entry.request.ownerId !== request.ownerId) {
       if (request.operation.kind === 'close') return;
-      throw new Error('节目控制请求属于已关闭的界面会话');
+      throw new Error('这个播放控制请求来自已关闭的界面');
     }
     if (request.operation.kind === 'close') { await this.close(); return; }
     await entry.ready;
-    if (entry !== this.current || entry.cancelled || !entry.host) throw new Error('节目控制会话已取消');
+    if (entry !== this.current || entry.cancelled || !entry.host) throw new Error('播放控制已取消');
     if (request.configuration) entry.configuration = request.configuration;
     const player = entry.host.controller, operation = request.operation;
     // Do not serialize transport here: stop must invalidate an in-flight play.
     switch (operation.kind) {
-      case 'play': return player.play(operation.itemId, operation.positionMs, operation.paused, operation.withoutLighting);
+      case 'play': return player.play(operation.itemId, operation.positionMs, operation.paused);
       case 'pause': return player.pause();
       case 'resume': return player.resume();
       case 'stop': return player.stop();

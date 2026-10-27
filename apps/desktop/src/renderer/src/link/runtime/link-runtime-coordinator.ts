@@ -56,8 +56,8 @@ export class LinkRuntimeCoordinator {
   async prepareInternal(itemId: string, preflight: (assertCurrent: () => void) => Promise<PreflightReport>, positionMs = 0, signal?: AbortSignal, notice: (message: string) => void = () => undefined): Promise<void> {
     this.internalClockActive = false;
     this.autoFollow?.suspend();
-    if (this.disposed) throw new Error('当前播放会话已关闭');
-    await this.internalPreparation.run(() => this.stopAndWait(false, '准备节目前结束上一会话'), assertCurrent => {
+    if (this.disposed) throw new Error('这次播放已经结束');
+    await this.internalPreparation.run(() => this.stopAndWait(false, '准备节目前停止上一首'), assertCurrent => {
       this.internalObsOwner = 'renderer';
       return prepareInternalRuntime(this.project, itemId, positionMs, () => preflight(assertCurrent), {
       assertCurrent, notice, select: () => this.selectItem(itemId, false), capture: () => { this.internalCaptureActive = true; },
@@ -72,9 +72,9 @@ export class LinkRuntimeCoordinator {
    * Cue actions and the operator's timeline state; it never prepares/captures OBS. */
   async prepareNativeCompanion(itemId: string, positionMs: number, signal?: AbortSignal): Promise<void> {
     this.internalClockActive = false; this.autoFollow?.suspend();
-    if (this.disposed) throw new Error('当前播放会话已关闭');
+    if (this.disposed) throw new Error('这次播放已经结束');
     await prepareNativeCompanionRuntime(this.project, itemId, positionMs, {
-      scope: this.internalPreparation, stop: () => this.stopAndWait(false, '准备节目前结束上一会话'),
+      scope: this.internalPreparation, stop: () => this.stopAndWait(false, '准备节目前停止上一首'),
       select: () => { this.internalObsOwner = 'main'; this.selectItem(itemId, false); },
       runtime: this.runtime, beginPreflight: () => this.beginPreflight('live'),
       initializeMidi: () => this.initializeMidi(false), midi: this.midi,
@@ -99,7 +99,7 @@ export class LinkRuntimeCoordinator {
     if (this.internalObsOwner === 'main' && item) {
       await this.prepareNativeCompanion(item.id, positionMs); await this.pauseInternal('定位后保持暂停'); return;
     }
-    if (!item || !useRuntimeStore.getState().preflight?.passed || !['running', 'paused'].includes(this.runtime.getState())) throw new Error('当前播放会话不可定位，请重新播放');
+    if (!item || !useRuntimeStore.getState().preflight?.passed || !['running', 'paused'].includes(this.runtime.getState())) throw new Error('现在不能定位，请重新播放');
     if (this.runtime.getState() === 'running') this.applyRequiredUpdate(this.runtime.pauseAutomatic('定位中暂停'));
     ++this.executionGeneration; await this.cueExecutionTail;
     const sample = internalSample(this.project, positionMs); this.lastSample = sample;
@@ -129,7 +129,7 @@ export class LinkRuntimeCoordinator {
     if (this.autoFollow) { await this.initializeMidi(); this.autoFollow.enable(); return; }
     this.autoFollow = new P1AutoFollowController(this.project, {
       prepare: async (itemId, isCurrent) => {
-        this.stop(false, 'P1 切歌，结束上一会话'); await this.cueExecutionTail;
+        this.stop(false, 'P1 切歌，停止上一首'); await this.cueExecutionTail;
         if (!isCurrent()) return;
         this.selectItem(itemId, false);
         const report = await preflight();
@@ -142,7 +142,7 @@ export class LinkRuntimeCoordinator {
       fail: (error) => this.reportRuntimeError(error)
     });
     await this.initializeMidi();
-    useRuntimeStore.getState().setState({ reason: '自动监听 P1：直接点击歌曲即可联动 OBS' });
+    useRuntimeStore.getState().setState({ reason: '正在自动监听 P1：在 P1 里点歌，OBS 就会跟着切换' });
   }
 
   constructor(private readonly project: LinkProject, private readonly projectPath: string | null) {
@@ -193,34 +193,34 @@ export class LinkRuntimeCoordinator {
   beginPreflight(mode: PreflightReport['mode']): void { useRuntimeStore.getState().setState({ preflight: null, mode }); this.applyRequiredUpdate(this.runtime.beginPreflight(mode)); }
 
   async applyPreflight(report: PreflightReport): Promise<void> {
-    if (this.runtime.getState() !== 'preflight') throw new Error(`预检结果不能应用到当前运行状态：${this.runtime.getState()}`);
-    await this.recordOperatorActionAsync('执行预检', { mode: report.mode, passed: report.passed });
+    if (this.runtime.getState() !== 'preflight') throw new Error(`当前状态（${this.runtime.getState()}）不能使用这次开播前检查的结果`);
+    await this.recordOperatorActionAsync('开播前检查', { mode: report.mode, passed: report.passed });
     useRuntimeStore.getState().setState({ preflight: report, mode: report.mode });
   }
 
   async arm(): Promise<void> {
     const report = useRuntimeStore.getState().preflight;
-    if (!report?.passed) throw new Error('预检存在阻断项，不能布防');
+    if (!report?.passed) throw new Error('开播前检查有未通过的项目，不能待命');
     const currentSample = this.lastSample && performance.now() - this.lastSample.receivedAtMs <= 500
       ? this.lastSample
       : null;
-    if (!currentSample) throw new Error('当前没有持续更新的 MTC；请到集成中心重新启动并待命');
-    if (!useRuntimeStore.getState().mtcStable) throw new Error('MTC 尚未连续稳定 500ms；请等待稳定后重新预检');
+    if (!currentSample) throw new Error('没有收到持续的 MTC 时间码。请到集成中心重新启动后再待命');
+    if (!useRuntimeStore.getState().mtcStable) throw new Error('MTC 时间码还不稳定（需要连续稳定 500 ms），请稍等后重新做开播前检查');
     this.managedOutput.resetExecution();
     useRuntimeStore.getState().setState({ reports: [], mediaReports: [], currentCueId: null });
     if (this.project.obsOutputMode !== 'scenes') await linkDesktopViewModel.activateManagedObsOutput();
     await this.p1Lighting.prepare(this.project.playbackSource === 'internal' ? undefined : this.currentItem(), useIntegrationStore.getState().profile, Boolean(this.autoFollow), currentSample);
     this.applyRequiredUpdate(this.runtime.arm(performance.now(), currentSample));
     const skippedMedia = this.managedOutput.collectThrough(currentSample.totalFrames);
-    await this.enqueueSkippedMedia(skippedMedia, '从当前 MTC 布防时该素材边界已经越过；系统未自动补执行');
-    await this.recordOperatorActionAsync('从当前 MTC 布防当前节目', { skippedMediaActions: skippedMedia.length });
+    await this.enqueueSkippedMedia(skippedMedia, '从当前 MTC 位置待命时，这个素材的切换点已经过了，没有自动补播');
+    await this.recordOperatorActionAsync('从当前 MTC 位置待命', { skippedMediaActions: skippedMedia.length });
   }
 
   async armFromStart(assertCurrent: () => void = () => undefined): Promise<void> {
     const report = useRuntimeStore.getState().preflight;
-    if (!report?.passed) throw new Error('预检存在阻断项，不能布防');
+    if (!report?.passed) throw new Error('开播前检查有未通过的项目，不能待命');
     await this.prepareArmFromStart(assertCurrent); assertCurrent();
-    await this.recordOperatorActionAsync('从头布防当前节目');
+    await this.recordOperatorActionAsync('从头待命');
   }
 
   pause(reason?: string): void {
@@ -234,13 +234,13 @@ export class LinkRuntimeCoordinator {
   }
 
   async resyncCurrentTime(): Promise<void> {
-    if (!this.lastSample) throw new Error('尚未收到完整 MTC 时间码');
-    if (performance.now() - this.lastSample.receivedAtMs > 500) throw new Error('MTC 尚未恢复稳定更新，不能按当前时间重同步');
+    if (!this.lastSample) throw new Error('还没收到完整的 MTC 时间码');
+    if (performance.now() - this.lastSample.receivedAtMs > 500) throw new Error('MTC 时间码还没恢复稳定，暂时不能按当前时间重新同步');
     const sample = this.lastSample;
     this.applyRequiredUpdate(this.runtime.resync(sample));
     const skippedMedia = this.managedOutput.collectThrough(sample.totalFrames);
-    await this.enqueueSkippedMedia(skippedMedia, 'MTC 丢失期间已越过该素材边界；系统未自动补执行');
-    await this.recordOperatorActionAsync('按当前时间重同步', { skippedMediaActions: skippedMedia.length });
+    await this.enqueueSkippedMedia(skippedMedia, 'MTC 中断期间已经过了这个素材的切换点，没有自动补播');
+    await this.recordOperatorActionAsync('按当前时间重新同步', { skippedMediaActions: skippedMedia.length });
   }
 
   rearmFromStart(): void {
@@ -250,19 +250,19 @@ export class LinkRuntimeCoordinator {
     this.p1Lighting.restart();
     resetRuntimeExecutionView();
     this.applyRequiredUpdate(this.runtime.rearmFromStart(performance.now()));
-    this.recordOperatorAction('从头重新布防');
+    this.recordOperatorAction('从头重新待命');
   }
 
   async enableManualTakeover(): Promise<void> {
     this.applyRequiredUpdate(this.runtime.enableManualTakeover(this.lastSample));
     const skippedMedia = this.lastSample ? this.managedOutput.collectThrough(this.lastSample.totalFrames) : [];
-    await this.enqueueSkippedMedia(skippedMedia, 'MTC 丢失后已切换手动接管；系统未自动补执行');
+    await this.enqueueSkippedMedia(skippedMedia, 'MTC 中断后已改为手动接管，没有自动补播');
     await this.recordOperatorActionAsync('确认手动接管', { skippedMediaActions: skippedMedia.length });
   }
 
   async manualGo(cueId: string): Promise<void> {
     if (this.internalObsOwner === 'main' && this.currentItem()?.cues.find(cue => cue.id === cueId)?.actions.some(action => action.kind.startsWith('obs.'))) {
-      throw new Error('当前画面由后台播放会话执行，不能通过旧的手动接管重复触发；请暂停并定位到目标位置');
+      throw new Error('现在的画面由后台播放控制，不能再用手动接管触发。请先暂停，再定位到要播的位置');
     }
     await this.recordOperatorActionAsync('手动 GO', { cueId });
     const update = this.runtime.manualGo(cueId);
@@ -298,7 +298,7 @@ export class LinkRuntimeCoordinator {
     if (suspendAuto) { this.internalStopHandler?.(); this.autoFollow?.suspend(); }
     if (this.runtime.getState() === 'stopping') return;
     this.applyUpdate(this.runtime.stop(reason)); if (this.runtime.getState() === 'idle') return;
-    if (!reason) this.recordOperatorAction('停止运行会话');
+    if (!reason) this.recordOperatorAction('停止运行');
     const settled = this.internalPreparation.settledBefore(this.cueExecutionTail);
     const cleanupExecution = collectManagedOutputCleanupAfter(settled, this.managedOutput).then(async (cleanup) => {
       await executeManagedOutputCleanup(cleanup, this.managedOutput, this.runner);
@@ -360,7 +360,7 @@ export class LinkRuntimeCoordinator {
     const scenes = update.state === 'running' ? this.managedOutput.sceneTimeline : null;
     const work = scenes ? scenes[update.rebuild ? 'rebuild' : 'cross'](previousFrame, sample.totalFrames, update.dueCues, managedMedia) : { cues: update.dueCues, media: managedMedia };
     await this.enqueueTimelineWork(work.cues, work.media);
-    await this.enqueueSkippedMedia(skippedMedia, '自动联动暂停期间已越过该素材边界；系统未自动补执行');
+    await this.enqueueSkippedMedia(skippedMedia, '自动联动暂停期间已经过了这个素材的切换点，没有自动补播');
   }
 
   private enqueueTimelineWork(dueCues: RuntimeUpdate['dueCues'], mediaEvents: ManagedMediaEvent[]): Promise<void> {

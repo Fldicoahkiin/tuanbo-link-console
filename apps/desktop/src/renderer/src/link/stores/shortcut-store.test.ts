@@ -17,7 +17,7 @@ describe('快捷键配置', () => {
       expect(useShortcutStore.getState().bindings).toEqual(changed);
       storage.set('tblink.timeline-shortcuts', 'invalid');
       useShortcutStore.setState({ loaded: false }); useShortcutStore.getState().load();
-      expect(useShortcutStore.getState().error).toContain('加载失败');
+      expect(useShortcutStore.getState().error).toContain('读取失败');
       expect(useShortcutStore.getState().bindings).toEqual([]);
     } finally { vi.unstubAllGlobals(); useShortcutStore.setState({ loaded: false, bindings: defaultShortcuts, error: null }); }
   });

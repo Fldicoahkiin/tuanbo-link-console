@@ -42,7 +42,7 @@ export async function recoverMa2Material(projectPath: string, project: LinkProje
   const root = `${projectPath}.ma2-material-recovery`;
   let header: z.infer<typeof headerSchema>;
   try { header = headerSchema.parse(JSON.parse(await readFile(join(root, 'active.json'), 'utf8'))); }
-  catch (error) { if (missing(error)) return project; throw new Error('素材恢复记录损坏，原工程与记录均保留', { cause: error }); }
+  catch (error) { if (missing(error)) return project; throw new Error('素材恢复记录已损坏，原工程和记录都已保留', { cause: error }); }
   if (header.projectId !== project.projectId) return project;
   const saved = project.ma2MaterialLibrary;
   if (saved?.library && saved.library.readAt >= header.library.readAt && !saved.library.sourceUnverified) return project;

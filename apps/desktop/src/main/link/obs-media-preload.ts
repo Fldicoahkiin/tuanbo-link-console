@@ -47,7 +47,7 @@ export class ObsMediaPreload {
   resolveSource(logicalName: string): string { return this.media.get(logicalName)?.current?.sourceName ?? logicalName; }
 
   async prime(event: ManagedMediaEvent, assertCurrent: () => void): Promise<void> {
-    assertCurrent(); if (this.closed) throw new Error('素材预备会话已关闭');
+    assertCurrent(); if (this.closed) throw new Error('素材准备已关闭');
     const kind = event.assetKind;
     if (kind !== 'audio' && kind !== 'video') throw new Error('只有音频和视频需要解码预热');
     const media = this.require(event);
@@ -55,7 +55,7 @@ export class ObsMediaPreload {
       if (!media.pending.ready) throw new Error(`素材正在准备，不能重复准备：${event.assetName}`);
       return;
     }
-    if (media.pending) throw new Error(`已有下一素材待播放：${event.assetName}`);
+    if (media.pending) throw new Error(`已经有下一个素材在等待播放：${event.assetName}`);
     const primary = event.sourceName;
     const sourceName = media.current?.sourceName === primary ? `${primary}·预备` : primary;
     const slot = { event, sourceName, ready: false }; media.pending = slot;
@@ -75,7 +75,7 @@ export class ObsMediaPreload {
       if (event.sourceOffsetMs !== 0) await this.native.seek(sourceName, Math.round(event.sourceOffsetMs));
       assertCurrent();
     });
-    assertCurrent(); if (this.closed || media.pending !== slot) throw new Error('素材预备结果已过期');
+    assertCurrent(); if (this.closed || media.pending !== slot) throw new Error('素材准备结果已过期');
     slot.ready = true;
     media.retained.delete(sourceName);
   }
@@ -124,12 +124,12 @@ export class ObsMediaPreload {
     assertCurrent();
     const media = this.require(opening);
     if (this.closed || media.current || !media.pending?.ready || media.pending.event.clipId !== opening.clipId || media.following) {
-      throw new Error('接续预备只能在首个素材已准备、正式播放尚未开始时执行');
+      throw new Error('接续准备只能在第一个素材准备好、还没开始播放时进行');
     }
     const next = this.starts.find(event => event.sourceName === opening.sourceName && event.clipId !== opening.clipId && event.frameNumber > opening.frameNumber
       && event.frameNumber <= opening.frameNumber + 2 * this.lookaheadFrames);
     if (!next) return;
-    if (next.assetKind !== 'audio' && next.assetKind !== 'video') throw new Error('接续预备只支持音视频');
+    if (next.assetKind !== 'audio' && next.assetKind !== 'video') throw new Error('接续准备只支持音频和视频');
     const sourceName = `${opening.sourceName}·预备`, kind = next.assetKind;
     media.touched.add(sourceName);
     await this.scenes.prepareStandby(opening.sourceName); assertCurrent();
@@ -139,14 +139,14 @@ export class ObsMediaPreload {
       assertCurrent();
     });
     assertCurrent();
-    if (this.closed) throw new Error('接续预备会话已关闭');
+    if (this.closed) throw new Error('接续准备已关闭');
     media.following = { event: next, sourceName, ready: true };
   }
 
   async execute(event: ManagedMediaEvent, path: string): Promise<void> {
     if (event.assetKind === 'image') return this.scenes.execute(event, path);
     const media = this.require(event);
-    if (media.path !== path || this.closed) throw new Error('素材播放路径或会话已改变');
+    if (media.path !== path || this.closed) throw new Error('素材的播放路径或状态已改变');
     // Keep at most the existing pair of decoders. Retain an inactive input only
     // when its next preparation window is within one lookahead interval. Pause
     // stops decoding and hide/mute keep it off air, without repeatedly freeing
@@ -163,7 +163,7 @@ export class ObsMediaPreload {
       return;
     }
     const next = media.pending;
-    if (!next?.ready || next.event.clipId !== event.clipId) throw new Error(`下一素材未在播放边界前准备完成：${event.assetName}`);
+    if (!next?.ready || next.event.clipId !== event.clipId) throw new Error(`下一个素材没能在切换前准备好：${event.assetName}`);
     const previous = media.current;
     media.current = next; media.pending = media.following; media.following = null;
     await this.scenes.execute({ ...event, sourceName: next.sourceName }, path, previous?.sourceName, retirement);
@@ -178,7 +178,7 @@ export class ObsMediaPreload {
   async seek(event: ManagedMediaEvent, path: string): Promise<void> {
     if (event.assetKind === 'image') return this.scenes.seek(event, path, this.native.seek);
     const media = this.require(event);
-    if (media.path !== path || this.closed) throw new Error('素材定位路径或会话已改变');
+    if (media.path !== path || this.closed) throw new Error('素材的定位路径或状态已改变');
     const sourceName = media.pending?.sourceName ?? media.current?.sourceName ?? event.sourceName;
     media.touched.add(sourceName); media.pending = null; media.following = null;
     media.retained.delete(sourceName);
@@ -207,11 +207,11 @@ export class ObsMediaPreload {
         catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
       }
     }
-    if (errors.length) throw new Error(`预备素材清理失败：${errors.join('；')}`);
+    if (errors.length) throw new Error(`清理准备好的素材失败：${errors.join('；')}`);
   }
   private require(event: ManagedMediaEvent): Media {
     const media = this.media.get(event.sourceName);
-    if (!media) throw new Error(`素材未注册到当前画面会话：${event.assetName}`);
+    if (!media) throw new Error(`当前画面里没有这个素材：${event.assetName}`);
     return media;
   }
 }

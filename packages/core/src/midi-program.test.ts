@@ -55,7 +55,7 @@ it('停止立即取消未发队列，旧确认和未来释放不能污染下一�
 it('过期时钟错过的动作记录且不补发，通道继续发送之后的动作；倒退时钟关闭通道', async () => {
   const f = fixture([{ frame: 0, actions: [note('a')] }, { frame: 9, actions: [note('b')] }]); await f.session.prepare(0);
   f.time(1101); f.session.clock(0, 1000); await f.session.settled();
-  expect(f.send).not.toHaveBeenCalled(); expect(f.missed).toEqual(['播放位置更新中断，错过 1 个 MIDI 动作，未补发']);
+  expect(f.send).not.toHaveBeenCalled(); expect(f.missed).toEqual(['播放位置更新中断，错过了 1 个 MIDI 动作，没有补发']);
   await f.clock(300); expect(f.sent).toEqual([[0x90, 60, 100]]); expect(f.errors).toEqual([]); await f.session.close();
   const backwards = fixture([{ frame: 0, actions: [note('a')] }]); await backwards.session.prepare(100);
   await backwards.clock(99); expect(backwards.errors[0]?.message).toContain('倒退'); await backwards.session.close();
@@ -66,7 +66,7 @@ it('设备时钟虽新但跨过动作截止边界，也不能补发历史 Cue；
   await f.clock(0); expect(f.sent).toEqual([[0x90, 60, 100]]);
   await f.clock(400);
   expect(f.sent).toEqual([[0x90, 60, 100], [0x80, 60, 0]]); expect(f.send.mock.calls[1]?.[2]).toBe(1500);
-  expect(f.missed).toEqual(['播放位置更新中断，错过 1 个 MIDI 动作，未补发']); expect(f.errors).toEqual([]); await f.session.close();
+  expect(f.missed).toEqual(['播放位置更新中断，错过了 1 个 MIDI 动作，没有补发']); expect(f.errors).toEqual([]); await f.session.close();
 });
 
 it('排队等待超过执行边界的动作不发送并记录，之后的动作照常', async () => {
@@ -74,7 +74,7 @@ it('排队等待超过执行边界的动作不发送并记录，之后的动作�
     { frame: 9, actions: [{ id: 'pc', label: 'PC', kind: 'midi.programChange', portProfileId: 'out', channel: 1, program: 3 }] }]);
   f.send.mockImplementationOnce((_port, bytes) => { f.sent.push([...bytes]); f.time(1200); return Promise.resolve(); });
   await f.session.prepare(0); await f.clock(0);
-  expect(f.sent).toEqual([[0x90, 60, 100]]); expect(f.missed).toEqual(['MIDI 动作发送晚于 100ms 执行边界，未补发：CC 7']);
+  expect(f.sent).toEqual([[0x90, 60, 100]]); expect(f.missed).toEqual(['MIDI 动作晚了超过 100 ms，没有补发：CC 7']);
   await f.clock(300); expect(f.sent.at(-1)).toEqual([0xc0, 3]); expect(f.errors).toEqual([]); await f.session.close();
 });
 

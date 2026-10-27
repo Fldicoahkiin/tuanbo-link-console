@@ -5,7 +5,7 @@ import { activationCodeSchema, licenseStatusSchema, type LicenseStatus } from '@
 import { Button } from './Button';
 import { PurchaseSettings } from './PurchaseSettings';
 
-const stateLabels: Record<LicenseStatus['state'], string> = { unconfigured: '尚未启用', inactive: '未激活', active: '已激活', expired: '已到期', invalid: '校验失败', 'renewal-required': '需要联网验证' };
+const stateLabels: Record<LicenseStatus['state'], string> = { unconfigured: '还没启用', inactive: '未激活', active: '已激活', expired: '已到期', invalid: '验证失败', 'renewal-required': '需要联网验证' };
 const kindLabels = { perpetual: '买断授权', subscription: '订阅授权', trial: '试用授权' };
 export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive: boolean; onAuthorized?: () => Promise<void> }): JSX.Element {
   const [status, setStatus] = useState<LicenseStatus | null>(null);
@@ -22,7 +22,7 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
         const parsed = licenseStatusSchema.parse(await window.tbLink.getLicenseStatus());
         if (alive) setStatus(parsed);
       } catch (failure) {
-        if (alive) setError(`读取授权失败，请完整退出并重新打开软件后重试。${failure instanceof Error ? failure.message : String(failure)}`);
+        if (alive) setError(`读取授权失败，请完全退出软件后重新打开。${failure instanceof Error ? failure.message : String(failure)}`);
       }
     };
     void read();
@@ -31,7 +31,7 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
   const run = async (action: 'refresh' | 'export' | 'import' | 'activate' | 'online'): Promise<void> => {
     setBusy(true); setError(''); setMessage('');
     try {
-      if (action === 'export') { if (await window.tbLink.exportLicenseRequest()) setMessage('机器信息已导出，可用于向发行方核对授权。'); }
+      if (action === 'export') { if (await window.tbLink.exportLicenseRequest()) setMessage('本机信息已导出，可以发给售后核对授权。'); }
       else {
         const value = await (action === 'import' ? window.tbLink.importLicense() : action === 'activate' ? window.tbLink.activateLicenseCode(activationCodeSchema.parse(code)) : action === 'online' ? window.tbLink.refreshOnlineLicense() : window.tbLink.getLicenseStatus());
         if (value) {
@@ -42,7 +42,7 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
             if (parsed.state === 'active' && parsed.claims && parsed.claims.kind !== 'trial') {
               setMessage('授权已验证并保存到本机。');
               if (action === 'activate') { setCode(''); setShowCode(false); }
-            } else setError(parsed.message || '授权未生效，请核对激活码或联系售后。');
+            } else setError(parsed.message || '授权没有生效，请检查激活码，或联系售后。');
           }
         }
       }
@@ -52,7 +52,7 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
       if (action === 'activate') codeInput.current?.focus();
       if (action === 'activate' || action === 'online') {
         try { setStatus(licenseStatusSchema.parse(await window.tbLink.getLicenseStatus())); }
-        catch (readFailure) { setError(`${reason}；读取当前授权状态失败：${readFailure instanceof Error ? readFailure.message : String(readFailure)}`); }
+        catch (readFailure) { setError(`${reason}。另外，读取当前授权状态也失败了：${readFailure instanceof Error ? readFailure.message : String(readFailure)}`); }
       }
     }
     finally { setBusy(false); }
@@ -68,9 +68,9 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
       </form>
       {message ? <p className="license-feedback" role="status">{message}</p> : null}
       {error ? <p id="license-activation-error" className="device-error license-feedback" role="alert">{error}</p> : null}
-      {!status.onlineAvailable ? <p className="settings-note">发行方尚未配置在线授权服务，请联系发行方。</p> : <p className="settings-note license-assurance">一码一机 · 无需注册账户<br />启动时联网验证，演出中断网不影响运行。</p>}
+      {!status.onlineAvailable ? <p className="settings-note">在线授权服务还没开通，请联系售后。</p> : <p className="settings-note license-assurance">一码一机 · 无需注册账户<br />启动时联网验证，演出中断网不影响运行。</p>}
       {claims ? <dl className="license-claims"><dt>授权客户</dt><dd>{claims.customer}</dd><dt>授权类型</dt><dd>{kindLabels[claims.kind]}</dd><dt>使用期限</dt><dd>{claims.useUntil ? new Date(claims.useUntil).toLocaleString('zh-CN') : '永久使用'}</dd><dt>升级服务截止</dt><dd>{new Date(claims.updatesUntil).toLocaleString('zh-CN')}</dd></dl> : null}
-      {claims?.online ? <p className="settings-note">本次签名凭证有效至 {new Date(claims.online.leaseUntil).toLocaleString('zh-CN')}。该期限不免除下次启动的联网验证；运行中的演出不会因网络中断而停止。</p> : null}
+      {claims?.online ? <p className="settings-note">本次验证有效至 {new Date(claims.online.leaseUntil).toLocaleString('zh-CN')}。下次启动仍需联网验证；演出过程中断网不会影响运行。</p> : null}
       <details className="license-disclosure">
         <summary><ShoppingCart aria-hidden="true" /><span>购买授权与查询订单</span><ChevronRight className="license-disclosure-chevron" aria-hidden="true" /></summary>
       <PurchaseSettings runtimeActive={runtimeActive || busy || !status.onlineAvailable} license={claims ?? null} onSelectCode={value => { setCode(value); codeInput.current?.focus(); }} />
@@ -81,7 +81,7 @@ export function LicenseSettings({ runtimeActive, onAuthorized }: { runtimeActive
         <p className="settings-note">{status.message}</p>
         <div className="settings-header-actions"><Button className="secondary-button" disabled={busy} onClick={() => void run('export')}><Download />导出授权申请</Button><Button className="secondary-button" disabled={busy || runtimeActive || status.onlineAvailable} onClick={() => void run('import')}><Upload />导入授权文件</Button><Button className="secondary-button" disabled={busy} onClick={() => void run('refresh')}><RefreshCw />刷新状态</Button></div>
       </details>
-      <p className="settings-note license-legal">授权后使用全部产品功能。开票、换机与售后可通过官网联系。</p>
+      <p className="settings-note license-legal">激活后即可使用全部功能。开票、换电脑和售后问题，请通过官网联系我们。</p>
       {runtimeActive ? <p className="settings-note">请停止播放后再更换授权。</p> : null}
     </> : error ? <Button className="secondary-button" disabled={busy} onClick={() => void run('refresh')}>重新读取</Button> : null}
     {!status && error ? <p className="device-error" role="alert">{error}</p> : null}

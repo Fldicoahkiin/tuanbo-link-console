@@ -87,7 +87,7 @@ export async function readExtractedAudioDuration(path: string): Promise<number> 
 }
 
 function resolveFfmpegExecutable(): string {
-  if (!ffmpegPath) throw new Error('FFmpeg 运行时未安装');
+  if (!ffmpegPath) throw new Error('缺少 FFmpeg 组件，请重新安装联动台');
   return ffmpegPath.includes('app.asar') ? ffmpegPath.replace('app.asar', 'app.asar.unpacked') : ffmpegPath;
 }
 

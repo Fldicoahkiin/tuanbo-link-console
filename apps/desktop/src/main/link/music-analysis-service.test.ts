@@ -17,7 +17,7 @@ it('真实 FFmpeg 分析可取消、拒绝变更音源，重新启动只返回�
   try {
     const cancelled=randomUUID();await expect(service.analyze(cancelled,join(directory,'test.tblink'),source)).rejects.toThrow('取消');
     expect(progress.filter(value=>value.taskId===cancelled).at(-1)?.phase).toBe('cancelled');
-    await expect(service.analyze(randomUUID(),join(directory,'test.tblink'),{...source,sha256:'0'.repeat(64)})).rejects.toThrow('音源已改变');
+    await expect(service.analyze(randomUUID(),join(directory,'test.tblink'),{...source,sha256:'0'.repeat(64)})).rejects.toThrow('音源变了');
     const taskId=randomUUID();const result=await service.analyze(taskId,join(directory,'test.tblink'),source);
     expect(result.taskId).toBe(taskId);expect(result.sourceSha256).toBe(source.sha256);expect(result.bpm).toBeCloseTo(120,0);
     expect(result.candidates.some(value=>value.kind==='silence')).toBe(true);expect(progress.at(-1)?.phase).toBe('complete');

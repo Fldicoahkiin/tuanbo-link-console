@@ -33,7 +33,7 @@ type ConnectionStep = <T>(id: string, label: string, operation: () => Promise<T>
 function withDeadline<T>(operation: Promise<T>, deadlineMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label}超过 ${Math.round(deadlineMs / 1000)} 秒未完成；该操作可能仍在后台进行`)), deadlineMs);
+    timer = setTimeout(() => reject(new Error(`${label}超过 ${Math.round(deadlineMs / 1000)} 秒还没完成，可能仍在后台进行`)), deadlineMs);
   });
   return Promise.race([operation, deadline]).finally(() => clearTimeout(timer));
 }
@@ -52,14 +52,14 @@ async function startMaPrograms(profile: IntegrationProfile, detected: Partial<Re
     const label = id === 'ma2' ? 'MA2 onPC' : 'MA 3D';
     if (!profile[id]?.connectOnDemand) {
       const found = detected[id];
-      skip(key, profile[id] ? '已关闭一键启动' : found ? `已识别 ${found}，未启用；在 MA2 设置中选择并启用后才会由一键连接启动` : '未配置本机程序；可在 MA2 设置选择程序');
+      skip(key, profile[id] ? '已关闭一键启动' : found ? `已找到 ${found}，但没有启用；在 MA2 设置里选择并启用后，一键连接才会启动它` : '没有设置本机程序，可以在 MA2 设置里选择');
       return true;
     }
     const result = await run(key, label, async () => {
       const snapshot = await desktop.startExternalApplication(id);
       useIntegrationStore.getState().setProcess(snapshot);
       if (snapshot.status !== 'running') throw new Error(snapshot.error ?? `${label} 未运行`);
-    }, `${label} 已运行；控台通信另行检查`, (profile[id]?.startupTimeoutMs ?? 30_000) + stepDeadlineMs);
+    }, `${label} 已运行；控台通信另外检查`, (profile[id]?.startupTimeoutMs ?? 30_000) + stepDeadlineMs);
     return result !== null;
   };
   if (await start('ma2')) await connect();
@@ -74,7 +74,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
   if (!checks.begin(tasks)) return;
   const issues: string[] = [];
   let stoppedBy: string | null = null;
-  const skip = (id: string, detail: string): void => stoppedBy ? checks.finish(id, 'blocked', `未执行：${stoppedBy}未通过，已停止后续步骤`) : checks.finish(id, 'skipped', detail);
+  const skip = (id: string, detail: string): void => stoppedBy ? checks.finish(id, 'blocked', `没有执行，因为“${stoppedBy}”没通过`) : checks.finish(id, 'skipped', detail);
   const run = async <T>(id: string, label: string, operation: () => Promise<T>, detail = '检查通过', deadlineMs = stepDeadlineMs): Promise<{ value: T } | null> => {
     if (stoppedBy) { skip(id, ''); return null; }
     checks.checking(id);
@@ -95,16 +95,16 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
   const internal = options.project?.playbackSource === 'internal';
   const connectMa2 = async (): Promise<void> => {
     const method = readMa2Method();
-    if (method === 'midi') { skip('ma2', '未启用网络连接，当前使用 MIDI'); skip('bridge', 'MIDI 模式无需工程通信'); return; }
+    if (method === 'midi') { skip('ma2', '没有启用网络连接，当前用 MIDI'); skip('bridge', '仅 MIDI 时不需要读写控台'); return; }
     if (method === 'local') {
       skip('ma2', '当前使用本机 onPC');
-      await run('bridge', 'MA2 工程通信', async () => connectLocalMa2((await desktop.getMa2DataDirectory()) ?? ''), '本机控台通信已响应'); return;
+      await run('bridge', 'MA2 工程通信', async () => connectLocalMa2((await desktop.getMa2DataDirectory()) ?? ''), '本机控台通信正常'); return;
     }
     await run('ma2', 'MA2 网络', async () => {
       const status = ma2NetworkStatusSchema.parse(await connectDiscoveredMa2());
-      if (status.state !== 'connected') throw new Error(status.error ?? '控台登录未完成');
+      if (status.state !== 'connected') throw new Error(status.error ?? '控台没有登录成功');
     }, '控台网络登录成功');
-    await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); await assertProjectMa2Show(options.project); }, '控台工程通信已响应');
+    await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); await assertProjectMa2Show(options.project); }, '控台读写通信正常');
   };
   try {
     const detection = await run('discovery', '程序识别', () => desktop.detectLocalIntegrations());
@@ -126,10 +126,10 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       if (status.state === 'missing' && !profile.loopMidi?.autoStart) return false;
       // Automatic startup preference does not disable an explicit Connect All action.
       if (status.state !== 'running') status = loopMidiStatusSchema.parse(await desktop.loopMidi('start'));
-      if (status.state !== 'running') throw new Error('loopMIDI 未启动，请安装并配置虚拟端口');
+      if (status.state !== 'running') throw new Error('loopMIDI 没有启动，请安装并设置虚拟端口');
       return true;
-    }, 'loopMIDI 已运行，端口单独检查');
-    if (loop?.value === false) skip('loop', '未安装虚拟 MIDI，实体 MIDI 不依赖此项');
+    }, 'loopMIDI 已运行，端口另外检查');
+    if (loop?.value === false) skip('loop', '没有安装虚拟 MIDI；用实体 MIDI 接口不受影响');
     const midi = await run('midi', '系统 MIDI', options.readMidiPorts, '系统 MIDI 检测通过');
     const nativeMtc = usesNativeMidiOutput(profile, options.project, 'output');
     const nativeDevices = useIntegrationStore.getState().nativeDevices;
@@ -165,7 +165,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
             snapshot = await desktop.connectObs();
           }
           useIntegrationStore.getState().setObs(snapshot);
-          if (snapshot.status !== 'connected') throw new Error(snapshot.error ?? 'OBS 连接未完成');
+          if (snapshot.status !== 'connected') throw new Error(snapshot.error ?? 'OBS 没有连上');
         }
       }, 'OBS 控制已连接');
       await run('obs-inventory', 'OBS 场景清单', async () => {
@@ -175,16 +175,16 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
         const preview = obsPreviewSession.open();
         try { await preview.next(); }
         finally { await preview.close(); }
-      }, '已收到真实预览画面');
+      }, '已收到 OBS 预览画面');
     };
     const p1Task = async (): Promise<void> => {
-      if (internal || !options.project) { skip('p1', internal ? '本机播放模式无需启动 P1' : '未选择 P1 跟随工程'); return; }
+      if (internal || !options.project) { skip('p1', internal ? '当前由联动台播放，不需要启动 P1' : '还没选择要跟随的 P1 工程'); return; }
       await run('p1', 'P1 播放器', async () => {
         const snapshot = await desktop.startExternalApplication('p1'); useIntegrationStore.getState().setProcess(snapshot);
-        if (snapshot.status !== 'running') throw new Error(snapshot.error ?? 'P1 尚未运行');
+        if (snapshot.status !== 'running') throw new Error(snapshot.error ?? 'P1 没有运行');
         if (midi) await options.listenToP1();
-        else throw new Error('程序已启动，系统 MIDI 未就绪，时间码监听尚未连接');
-      }, 'P1 已运行，时间码监听已连接；等待真实播放信号');
+        else throw new Error('P1 已启动，但系统 MIDI 没有准备好，还收不到时间码');
+      }, 'P1 已运行，可以接收时间码；等待 P1 开始播放');
     };
     const portsTask = async (): Promise<void> => {
       const checkedNativeOutputs = new Map<string, Promise<void>>();
@@ -195,28 +195,28 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
         const mapped = profile.midiPortProfiles.find(port => port.id === target.id && port.direction === target.direction);
         const nativeOutput = usesNativeMidiOutput(profile, options.project, target.direction);
         await run(key, target.name, async () => {
-          if (!mapped?.portName) throw new Error('尚未配置接口，请在音频与 MIDI 中选择');
+          if (!mapped?.portName) throw new Error('还没设置接口，请在“音频与 MIDI”里选择');
           if (nativeOutput) {
-            if (!nativeDevices) throw new Error(useIntegrationStore.getState().nativeDeviceError ?? 'Windows 原生设备尚未检测，请刷新端口');
-            if (nativeDevices.midiOutputs.filter(port => port.name === mapped.portName).length !== 1) throw new Error(`Windows MIDI 接口未检测到或名称重复：${mapped.portName}`);
+            if (!nativeDevices) throw new Error(useIntegrationStore.getState().nativeDeviceError ?? '还没检测 Windows 设备，请刷新端口');
+            if (nativeDevices.midiOutputs.filter(port => port.name === mapped.portName).length !== 1) throw new Error(`找不到 Windows MIDI 接口，或有重名接口：${mapped.portName}`);
             if (!checkedNativeOutputs.has(mapped.portName)) {
               checkedNativeOutputs.set(mapped.portName, desktop.checkNativeMidiOutput({ version: 1, portName: mapped.portName }));
             }
             await checkedNativeOutputs.get(mapped.portName);
             return;
           }
-          if (!midi) throw new Error('系统 MIDI 未就绪，请处理系统检测项');
+          if (!midi) throw new Error('系统 MIDI 没有准备好，请先处理系统检测里的问题');
           const matching = midi.value.filter(port => port.name === mapped.portName && port.direction === target.direction && port.state === 'connected');
-          if (matching.length !== 1) throw new Error('接口不可用或名称重复，请检查设备连接');
+          if (matching.length !== 1) throw new Error('接口不可用或有重名接口，请检查设备连接');
           const errors = await options.openMidiPorts([target.id], target.direction);
           if (errors.length) throw new Error(errors.join('；'));
-        }, nativeOutput ? 'Windows 接口打开检查通过；未发送时间码，播放时打开并输出' : '接口已打开；未发送任何 Cue 或时间码');
+        }, nativeOutput ? 'Windows 接口检查通过；现在不发送时间码，播放时才打开接口发送' : '接口已打开；还没发送任何 Cue 或时间码');
       }
     };
     await obsTask();
     await run('audio', '音频输出', async () => {
       await assertAudioOutputAvailable(profile.internalPlayer);
-    }, '播放设备可用，正式音频在播放时启用');
+    }, '播放设备可用，播放时开始输出声音');
     await portsTask();
     await p1Task();
     await startMaPrograms(profile, detectedMaPrograms, run, skip, connectMa2);

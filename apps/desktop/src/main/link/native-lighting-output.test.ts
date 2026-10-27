@@ -57,8 +57,8 @@ it('端口准备途中停止不会产生迟到灯光；关闭等待已打开的�
 it('过期位置本次不发送并标红，通道继续；与音频不一致的位置仍拒绝，不让 UI 的播放头成为输出时钟', async () => {
   const f = fixture(); await f.output.prepare(f.document, null, 0); f.output.observe(0, 899);
   expect(() => f.output.tick(0)).not.toThrow(); expect(f.ports.send).not.toHaveBeenCalled();
-  expect(f.output.takeFault()).toContain('晚到'); expect(f.output.takeFault()).toBeNull();
-  f.output.observe(0, 1000); expect(() => f.output.tick(1)).toThrow('位置不一致');
+  expect(f.output.takeFault()).toContain('晚了'); expect(f.output.takeFault()).toBeNull();
+  f.output.observe(0, 1000); expect(() => f.output.tick(1)).toThrow('对不上');
   await f.output.close();
 });
 
@@ -72,7 +72,7 @@ it('卡顿后按当前位置重建并标红：仍应按住的音符此刻发出�
   const f = fixture(); await f.output.prepare(f.document, null, 0);
   f.time(1500); f.output.observe(500, 1450); f.output.tick(500);
   expect(f.ports.send.mock.calls).toEqual([['out', [0x90, 60, 100], 1550]]);
-  expect(f.output.takeFault()).toBe('灯光位置更新中断 500ms：按当前位置重建，发送 1 条，中间事件不补发');
+  expect(f.output.takeFault()).toBe('灯光位置更新中断了 500 ms，已按当前位置恢复（发送 1 条），中间错过的事件不补发');
   f.time(2100); f.output.observe(1100, 2050); f.output.tick(1100);
   expect(f.ports.send.mock.calls[1]).toEqual(['out', [0x80, 60, 0], 2150]);
   await f.output.close();
@@ -86,7 +86,7 @@ it('暂停后继续按当前位置重建：补发仍按住的音符，控台上�
   f.output.stop(); f.ports.send.mockClear();
   await f.output.prepare(f.document, null, 80);
   expect(f.ports.send.mock.calls.map(call => call[1])).toEqual([[0x90, 60, 100]]);
-  expect(f.output.takeFault()).toBe('灯光按播放位置重建：发送 1 条，中间事件不补发');
+  expect(f.output.takeFault()).toBe('灯光已按播放位置恢复（发送 1 条），中间错过的事件不补发');
   f.output.stop(); await f.output.release(); f.ports.send.mockClear();
   await f.output.prepare(f.document, null, 80);
   expect(f.ports.send.mock.calls.map(call => call[1][0])).toEqual([0x90, 0xf0]);

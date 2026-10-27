@@ -1,8 +1,9 @@
 import { expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, parseLinkProject, type Ma2Catalog } from '@tb/schema';
 import { importMa2TimecodeCommand, compileLightingPackets, matchMa2Programs, saveMa2ReadStateCommand } from '@tb/core/link';
-import { convertMa2TimecodeReferences } from './ma2-timecode-conversion';
+import { convertMa2Snapshot, convertMa2TimecodeReferences } from './ma2-timecode-conversion';
 import { Ma2ApplyService } from './ma2-apply-service';
+import { prepareMa2MergedEvents } from './ma2-event-write';
 import { readMa2Catalog } from './ma2-catalog';
 import { meiNanXml, meiNanSequences, meiNanCues } from './fixtures/ma2-mei-nan-reconstruction';
 
@@ -11,7 +12,9 @@ function songProject() {
   project.rundown = [{ id: 'song', title: '不同的中文歌名', enabled: true, notes: '', cues: [], referenceMediaClips: [], visualLayers: [], referenceAudio: { assetId: 'audio', relativePath: 'assets/test.wav', sha256: 'a'.repeat(64), durationMs: 40000 }, playback: { volume: 100, endAction: 'stop', startMs: 1500, endMs: 39000, mtcOffsetMs: 480000, shortcut: '' } }];
   return project;
 }
-it('截图重建的24个混合事件保留全部原文，11个已知Cue进入歌曲时间线与素材库，禁止部分模型写回', async () => {
+const sequenceXml = `<?xml version="1.0" encoding="utf-8"?><MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" major_vers="3" minor_vers="7" stream_vers="0"><Sequ index="35" name="Screenshot reconstruction">${meiNanCues.map((number, index) => `<Cue index="${index + 1}"><Number number="${Number(number.split('.')[0])}" sub_number="${Number(number.split('.')[1])}" /><CuePart index="0" /></Cue>`).join('')}</Sequ></MA>`;
+const withSequence = (xml: string): string => xml.replace('</MA>', `${sequenceXml.match(/<Sequ[\s\S]*<\/Sequ>/)![0]}</MA>`);
+it('截图重建的24个混合事件保留全部原文，11个已知Cue进入歌曲时间线与素材库；改 Cue 时间写回同一条时间线，控台专有动作原样保留（2026-10-26）', async () => {
   const preview = convertMa2TimecodeReferences(meiNanXml, meiNanSequences, 2);
   expect(preview.timing?.absoluteEventTimesMs).toHaveLength(24);
   expect(preview.unconverted).toHaveLength(13);
@@ -23,12 +26,20 @@ it('截图重建的24个混合事件保留全部原文，11个已知Cue进入歌
   expect(lighting.ma2Bindings![0]!.sourceXml).toBe(meiNanXml);
   expect(lighting.ma2Bindings![0]!.nativeEvents).toHaveLength(13);
   expect(compileLightingPackets(lighting)).toEqual([]);
-  expect(() => compileLightingPackets({ ...lighting, outputMode: 'direct' })).toThrow('原生保留');
+  expect(() => compileLightingPackets({ ...lighting, outputMode: 'direct' })).toThrow('控台原样');
   lighting.tracks[1]!.clips[0]!.events[0]!.at = 200;
-  const bridge = { request: vi.fn(), exchange: vi.fn() };
-  const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: '', document: lighting, bindingId: lighting.ma2Bindings![0]!.id, readback: preview, choices: [], conflicts: [] });
-  expect(result).toMatchObject({ status: 'incomplete', stage: 'preflight', mayHaveWritten: false });
-  expect(bridge.request).not.toHaveBeenCalled(); expect(bridge.exchange).not.toHaveBeenCalled();
+  let console = withSequence(meiNanXml);
+  const bridge = { request: vi.fn(() => Promise.resolve(console)), exchange: vi.fn((_operation: string, _target: number, _expected: string, desired: string) => { console = withSequence(desired); return Promise.resolve({ response: desired, requestId: 'b'.repeat(32) }); }) };
+  const readback = convertMa2Snapshot(withSequence(meiNanXml), 2, [], 480000);
+  const result = await new Ma2ApplyService(bridge, () => false).apply({ dataDirectory: '', document: lighting, bindingId: lighting.ma2Bindings![0]!.id, readback, choices: [], conflicts: [] });
+  expect(result).toMatchObject({ status: 'verified' });
+  expect(bridge.exchange).toHaveBeenCalledOnce();
+  // Only the moved Cue changed: 3 → 6 frames (100 ms → 200 ms after the song start). Master faders, XFade and Learn stay as they were.
+  const events = (xml: string) => [...xml.matchAll(/<Event\s([^>]*)>/g)].map(match => match[1]!.replace(/\s*index="\d+"/, '').replace(/\s*\/$/, '').trim());
+  const before = events(meiNanXml), after = events(console);
+  expect(after).toHaveLength(24);
+  expect(after.filter(value => !before.includes(value))).toEqual(['time="6" command="Goto" pressed="true"']);
+  expect(before.filter(value => !after.includes(value))).toEqual(['time="3" command="Goto" pressed="true"']);
   expect(parseLinkProject(JSON.parse(JSON.stringify(imported))).rundown[0]!.lighting!.ma2Bindings![0]!.sourceXml).toBe(meiNanXml);
 });
 it('额外参数的Goto只投影已知Cue；释放事件保留而不伪造为一次Goto', () => {
@@ -37,6 +48,22 @@ it('额外参数的Goto只投影已知Cue；释放事件保留而不伪造为一
   expect(preview.unconverted).toHaveLength(15);
   expect(preview.document.tracks[1]!.clips[0]!.events).toHaveLength(10);
   expect(preview.sourceXml).toBe(xml);
+});
+it('带控台专有参数的 Cue 在软件里可改时间（参数原样保留），换 Cue 被拒绝；整条删掉含专有动作的轨道被拒绝（2026-10-26）', () => {
+  const xml = meiNanXml.replace('<Event index="0" time="3" command="Goto"', '<Event index="0" time="3" unknown="keep-exactly" command="Goto"');
+  const preview = convertMa2TimecodeReferences(xml, meiNanSequences, 2);
+  const lighting = importMa2TimecodeCommand('song', preview).execute(songProject()).rundown[0]!.lighting!;
+  const bindingId = lighting.ma2Bindings![0]!.id;
+  const readback = convertMa2Snapshot(withSequence(xml), 2, [], 480000);
+  const moved = structuredClone(lighting); moved.tracks[1]!.clips[0]!.events[0]!.at = 200;
+  const write = prepareMa2MergedEvents(moved, bindingId, readback, new Map(), new Map(), [withSequence(xml)]);
+  expect(write.desiredXml).toMatch(/<Event index="0" time="6" unknown="keep-exactly" command="Goto" pressed="true">/);
+  const recued = structuredClone(lighting); const event = recued.tracks[1]!.clips[0]!.events[0]!;
+  if (event.kind !== 'ma2') throw new Error('测试数据应为 Cue');
+  event.cue = '2.000';
+  expect(() => prepareMa2MergedEvents(recued, bindingId, readback, new Map(), new Map(), [withSequence(xml)])).toThrow('不转换的控台参数');
+  const removed = structuredClone(lighting); removed.tracks.splice(2, 1);
+  expect(() => prepareMa2MergedEvents(removed, bindingId, readback, new Map(), new Map(), [withSequence(xml)])).toThrow('要删掉整条轨道，请在控台上删');
 });
 it('不推断未验证帧率，原始目录与XML仍保留', async () => {
   const xml = meiNanXml.replace('30 FPS', '25 FPS');

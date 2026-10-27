@@ -6,7 +6,7 @@ export type ObsSourceSize = {
 };
 
 export function hasVisibleObsPreviewPixels(pixels: Uint8ClampedArray): boolean {
-  if (pixels.length % 4 !== 0) throw new Error('OBS 预览像素数据不是合法的 RGBA 序列');
+  if (pixels.length % 4 !== 0) throw new Error('OBS 返回的预览画面数据有误');
   for (let index = 3; index < pixels.length; index += 4) {
     if (pixels[index] !== 0) return true;
   }
@@ -17,7 +17,7 @@ const OBS_PREVIEW_MAX_DIMENSION = 960;
 
 export function obsPreviewRequestSize(source: ObsSourceSize): ObsSourceSize {
   if (!Number.isFinite(source.width) || source.width <= 0 || !Number.isFinite(source.height) || source.height <= 0) {
-    throw new Error('OBS 来源预览尺寸必须是正有限数值');
+    throw new Error('OBS 返回的来源尺寸无效');
   }
   const scale = Math.min(1, OBS_PREVIEW_MAX_DIMENSION / Math.max(source.width, source.height));
   return {

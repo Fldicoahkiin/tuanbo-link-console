@@ -33,7 +33,7 @@ export class MediaAudioPreparation {
         if (!asset) break;
         this.attempted.add(identity(asset));
         try {
-          if (!asset.durationMs) throw new Error('视频缺少可用时长');
+          if (!asset.durationMs) throw new Error('读不到视频时长');
           const directory = input.projectPath.slice(0, Math.max(input.projectPath.lastIndexOf('/'), input.projectPath.lastIndexOf('\\')) + 1);
           await this.prepare({ projectPath: input.projectPath, sourcePath: directory + asset.relativePath, durationMs: asset.durationMs });
         } catch (error) {

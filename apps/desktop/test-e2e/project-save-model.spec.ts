@@ -106,7 +106,7 @@ test('关闭时询问：保存失败留在对话框并说明原因，取消后�
     await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
     await expect.poll(async () => (await shownDialogs(app)).length).toBe(2);
     const shown = await shownDialogs(app);
-    expect(shown.map(value => value.title)).toEqual(['工程尚未保存', '工程尚未保存']);
+    expect(shown.map(value => value.title)).toEqual(['工程还没保存', '工程还没保存']);
     expect(shown[1]!.detail).toContain('上次保存失败');
     await page.waitForTimeout(500);
     expect(exited).toBe(false);
@@ -172,7 +172,7 @@ test('不保存后退出流程被取消（灯光试听未停止，返回软件�
     // 不保存, then 返回软件 at the audition question: the quit is cancelled.
     await answerDialogs(app, { 工程尚未保存: [1, 1], 灯光试听未能停止: [0, 1] });
     await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
-    await expect.poll(async () => (await shownDialogs(app)).map(value => value.title)).toEqual(['工程尚未保存', '灯光试听未能停止']);
+    await expect.poll(async () => (await shownDialogs(app)).map(value => value.title)).toEqual(['工程还没保存', '灯光试听没能停止']);
     await page.waitForTimeout(500);
     expect(exited).toBe(false);
     await expect(unsaved(page)).toBeVisible();
@@ -322,7 +322,7 @@ test('打开旧格式工程：只在内存升级、标记未保存、不写回�
   const { app, page } = await launch(userData);
   try {
     await openFile(app, page, path);
-    await expect(page.getByText('尚未写回').first()).toBeVisible();
+    await expect(page.getByText('这个工程来自旧版本').first()).toBeVisible();
     await expect(unsaved(page)).toBeVisible();
     await page.waitForTimeout(2000);
     expect(await readFile(path, 'utf8')).toBe(original);

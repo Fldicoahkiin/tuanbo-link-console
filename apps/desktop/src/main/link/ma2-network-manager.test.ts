@@ -26,7 +26,7 @@ vi.mock('./ma2-telnet', async (importOriginal) => ({ ...await importOriginal<typ
     const rpc = /TBLINK_NET\('([a-f0-9]{32})','(\w+)','([a-f0-9]{32})'/.exec(line);
     if (rpc) {
       memory.rpc.push(`${rpc[2]}:${rpc[3]}`);
-      if (rpc[2] === 'run' && memory.dropOnRun) { memory.dropOnRun = false; memory.drop(); throw new Error('MA2 网络连接已断开；未确认的操作不会自动重试'); }
+      if (rpc[2] === 'run' && memory.dropOnRun) { memory.dropOnRun = false; memory.drop(); throw new Error('MA2 网络连接断开了，没确认的操作不会自动重试'); }
       return match(`TBLINK_RPC_${rpc[1]}:ACK\r\n`) ?? Promise.reject(new Error('No rpc response'));
     }
     const show = /TBLINK_SHOW_[a-f0-9]{32}/.exec(line)?.[0];
@@ -112,14 +112,14 @@ it('读取控台当前 show 原名，中文名不经 telnet 编码损坏；未�
   memory.show = '2号厅·正式演出';
   await expect(manager.currentShow()).resolves.toBe('2号厅·正式演出');
   memory.show = '';
-  await expect(manager.currentShow()).rejects.toThrow('控台没有加载 show');
+  await expect(manager.currentShow()).rejects.toThrow('控台没有加载 Show');
 });
 it('本机 onPC 未就绪时不建立 TCP 连接、不发送登录，状态给出具体原因', async () => {
-  const awaitListener = vi.fn().mockRejectedValue(new Error('本机 MA2 onPC 未运行，未尝试登录 127.0.0.1:30000'));
+  const awaitListener = vi.fn().mockRejectedValue(new Error('本机 MA2 onPC 没有运行，没有尝试登录 127.0.0.1:30000'));
   const manager = new Ma2NetworkManager(process.cwd(), secretStore(), () => false, undefined, undefined, undefined, awaitListener);
   await manager.save({ settings: { ...settings, host: '127.0.0.1' } });
   const connects = memory.connects;
-  expect((await manager.connect()).error).toBe('本机 MA2 onPC 未运行，未尝试登录 127.0.0.1:30000');
+  expect((await manager.connect()).error).toBe('本机 MA2 onPC 没有运行，没有尝试登录 127.0.0.1:30000');
   expect(awaitListener).toHaveBeenCalledWith('127.0.0.1', settings.port); expect(memory.connects).toBe(connects);
 });
 it('网络播放拒绝过期、换目标和停止后排队的指令', async () => {
@@ -133,7 +133,7 @@ it('网络播放拒绝过期、换目标和停止后排队的指令', async () =
   let release: (() => void) | undefined;
   memory.pause = new Promise<void>(resolve => { release = resolve; });
   const queued = manager.playCue(request); manager.cancelPlayback(request.sessionId); release?.();
-  await expect(queued).rejects.toThrow('会话已结束');
+  await expect(queued).rejects.toThrow('灯光播放已结束');
   manager.disconnect();
 });
 function secretStore() {

@@ -10,6 +10,7 @@ export function useLightingCueAudition(document: LightingDocument, projectId: st
   const [enabled, setEnabled] = useState(true);
   const [status, setStatus] = useState('选中灯光 Cue 即发送到控台');
   useEffect(() => () => output.cancel(), [output, projectId, item?.id, enabled]);
+  useEffect(() => () => output.close(), [output]);
   const select = (eventId: string, template = false): void => {
     // Clicking a library Cue is an explicit audition, independent of timeline-selection preview.
     if (!projectId || !template && !enabled) return;
@@ -21,7 +22,7 @@ export function useLightingCueAudition(document: LightingDocument, projectId: st
     void operation.then(async count => {
       if (!count) return;
       const network = template || document.ma2Bindings?.some(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode') || viaNetwork || document.tracks.some(track => track.clips.some(clip => clip.events.some(entry => entry.kind === 'ma2' && !entry.executor && (entry.id === eventId || entry.effectGroupId === eventId))));
-      setStatus(network ? `已发送 ${count} 条网络 Cue 指令` : `已发送 ${count} 条 Cue 指令（MIDI 无回执）`);
+      setStatus(network ? `已发送 ${count} 条网络 Cue 指令` : `已发送 ${count} 条 Cue 指令（MIDI 无法确认控台是否收到）`);
       await recordRuntimeOperator(projectId, item ?? undefined, '选中灯光 Cue，已发送调用指令', { eventId, count });
     }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);

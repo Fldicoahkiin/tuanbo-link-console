@@ -105,7 +105,7 @@ export class LinkRunLogger {
     onFailure: (error: Error) => void): Promise<LinkLogEntry> {
     if (this.bufferedFailure) return Promise.reject(this.bufferedFailure);
     const sanitized = this.createEntry(entry), bytes = Buffer.byteLength(JSON.stringify(sanitized), 'utf8');
-    if (this.bufferedCount >= 512 || this.bufferedBytes + bytes > 4 * 1024 * 1024) return Promise.reject(new Error('正式输出日志待写队列已满；本条未接收'));
+    if (this.bufferedCount >= 512 || this.bufferedBytes + bytes > 4 * 1024 * 1024) return Promise.reject(new Error('日志写入排队已满，这条没有记录'));
     this.bufferedCount++; this.bufferedBytes += bytes;
     void this.persist(sanitized).then(() => {
       this.bufferedCount--; this.bufferedBytes -= bytes;
@@ -115,7 +115,7 @@ export class LinkRunLogger {
       this.failedBuffered.push({ ...sanitized, details: { ...sanitized.details, persistence: 'failed' } });
       this.bufferedCount--; this.bufferedBytes -= bytes;
       if (!this.bufferedFailure) {
-        this.bufferedFailure = new Error(`运行日志未能落盘：${error instanceof Error ? error.message : String(error)}`);
+        this.bufferedFailure = new Error(`运行日志写入失败：${error instanceof Error ? error.message : String(error)}`);
         onFailure(this.bufferedFailure);
       }
     });
@@ -269,7 +269,7 @@ export class LinkRunLogger {
           // A crash can leave an incomplete final line. Keep other evidence exportable.
           yield { id: `damaged-${basename(filePath)}-${index}`, sessionId: basename(filePath, '.jsonl'),
             timestamp: new Date().toISOString(), monotonicMs: 0, level: 'error', category: 'system',
-            message: `${basename(filePath)} 第 ${index} 行损坏；已保留原文件并继续读取其他日志`,
+            message: `${basename(filePath)} 第 ${index} 行已损坏，原文件保留，继续读取其他日志`,
             details: { file: basename(filePath), line: index, reason: error instanceof SyntaxError ? 'JSON 不完整或格式错误' : '日志条目结构无效' } };
         }
       }

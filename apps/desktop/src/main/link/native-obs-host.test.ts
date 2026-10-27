@@ -39,13 +39,13 @@ it('下一节目文件仅在当前音频开始后准备一次，停止后在途�
   test.observe({ positionMs: 10 }, 10);
   expect(prepare).toHaveBeenCalledTimes(1);
   expect(() => assertCurrent?.()).not.toThrow();
-  await test.host.stop(); expect(() => assertCurrent?.()).toThrow('预备已取消');
+  await test.host.stop(); expect(() => assertCurrent?.()).toThrow('准备已取消');
 });
 
 it('跨工程或跨修订的下一节目不能随当前节目准备', async () => {
   const test = setup();
   test.request.nextFiles = { snapshot: { ...test.request.snapshot, revision: 5 }, positionMs: 0 };
-  await expect(test.host.prepare(test.request)).rejects.toThrow('修订不一致');
+  await expect(test.host.prepare(test.request)).rejects.toThrow('和当前工程版本对不上');
   expect(test.execute).not.toHaveBeenCalled(); expect(test.prepareNextFiles).not.toHaveBeenCalled();
 });
 
@@ -54,7 +54,7 @@ it('状态更新不能冒充设备采样；旧 QPC 不执行画面并标红，�
   test.change({ status: 'playing', generation: 2 }); test.host.observe(test.audio());
   await new Promise(resolve => setTimeout(resolve, 0)); expect(test.execute).not.toHaveBeenCalled();
   test.observe({ positionMs: 0 }, 200, 200);
-  expect(test.host.status?.state).not.toBe('failed'); expect(test.host.status?.fault).toContain('100ms'); expect(test.failures[0]).toContain('100ms');
+  expect(test.host.status?.state).not.toBe('failed'); expect(test.host.status?.fault).toContain('100 ms'); expect(test.failures[0]).toContain('100 ms');
   for (let time = 250; time <= 1000; time += 50) { test.observe({ positionMs: time }, time); await new Promise(resolve => setTimeout(resolve, 0)); }
   expect(test.execute).toHaveBeenCalledTimes(1);
   expect(test.host.status?.state).toBe('running');
@@ -106,7 +106,7 @@ it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('真实 WASAPI 管道�
     expect(test.execute).toHaveBeenCalledTimes(1); expect(test.failures).toEqual([]);
     const boundary = performance.now() + 500;
     while (performance.now() < boundary) { /* deliberate main-thread stall */ }
-    await expect.poll(() => test.host.status?.fault).toContain('画面按当前位置重建');
+    await expect.poll(() => test.host.status?.fault).toContain('画面已按当前位置恢复');
     await expect.poll(() => client.clock?.positionMs).toBeGreaterThan(1500);
     expect(test.execute).toHaveBeenCalledTimes(2);
     expect(test.host.status?.state).toBe('running'); expect(Math.max(...ages)).toBeGreaterThan(100);
@@ -120,8 +120,8 @@ it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('真实 WASAPI 管道�
 
 it('只接受当前已准备音频的同会话同代数，歌曲名称不能替代身份', async () => {
   const test = setup();
-  await expect(test.host.prepare({ ...test.request, generation: 2 })).rejects.toThrow('不一致');
-  await expect(test.host.prepare({ ...test.request, sessionId: crypto.randomUUID() })).rejects.toThrow('不一致');
+  await expect(test.host.prepare({ ...test.request, generation: 2 })).rejects.toThrow('不是当前这首歌');
+  await expect(test.host.prepare({ ...test.request, sessionId: crypto.randomUUID() })).rejects.toThrow('不是当前这首歌');
   expect(test.execute).not.toHaveBeenCalled();
   await expect(test.host.prepare(test.request)).resolves.toMatchObject({ state: 'ready', revision: 4, nextCueId: 'cue-0' });
 });
@@ -178,7 +178,7 @@ it('初始化在途时音频先启动，立即作废准备，迟到结果不能�
   await started;
   test.observe({ status: 'playing', generation: 2 }, 10);
   expect(test.host.status?.state).toBe('stopped');
-  expect(test.host.status?.reason).toContain('本轮未参与');
+  expect(test.host.status?.reason).toContain('这一首不联动画面');
   release(); await preparing; await test.host.stop();
   expect(test.execute).toHaveBeenCalledTimes(1);
 });
@@ -186,7 +186,7 @@ it('初始化在途时音频先启动，立即作废准备，迟到结果不能�
 it('旧准备的停止不得取消新节目；播放中断线标红但画面通道保留，重新连接后继续', async () => {
   const test = setup(); await test.host.prepare(test.request);
   test.change({ generation: 2 }); await test.host.prepare({ ...test.request, generation: 2 });
-  await expect(test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 1 })).rejects.toThrow('旧准备');
+  await expect(test.host.stopOwned({ version: 1, sessionId: test.request.sessionId, generation: 1 })).rejects.toThrow('上一次准备');
   expect(test.host.status?.state).toBe('ready');
   test.observe({ status: 'playing', generation: 3, positionMs: 0 }, 0);
   test.host.disconnect('OBS 网络断开'); test.host.disconnect('OBS 网络断开');
@@ -207,11 +207,11 @@ it('播放中重新连接 OBS：重新准备本曲场景后按当前位置重建
   await test.host.reconnected();
   expect(test.restoreScenes).toHaveBeenCalledOnce(); expect(test.execute).toHaveBeenCalledTimes(sent + 1);
   expect(test.execute.mock.calls.at(-1)?.[0]).toMatchObject({ kind: 'obs.setProgramScene', sceneName: '机位1' });
-  expect(test.host.status).toMatchObject({ state: 'running', fault: 'OBS 已重新连接：画面按当前位置重建，发送 1 项' });
+  expect(test.host.status).toMatchObject({ state: 'running', fault: 'OBS 已重新连接，画面已按当前位置恢复（1 项）' });
   test.restoreScenes.mockRejectedValueOnce(new Error('素材文件不可读'));
   await test.host.reconnected();
-  expect(test.host.status).toMatchObject({ state: 'running', fault: 'OBS 重新连接后画面重建失败：素材文件不可读' });
-  expect(test.failures.at(-1)).toBe('OBS 重新连接后画面重建失败：素材文件不可读');
+  expect(test.host.status).toMatchObject({ state: 'running', fault: 'OBS 已重新连接，但画面恢复失败：素材文件不可读' });
+  expect(test.failures.at(-1)).toBe('OBS 已重新连接，但画面恢复失败：素材文件不可读');
 });
 
 it('准备阶段断线仍取消本轮画面，不带着未就绪的画面开播', async () => {

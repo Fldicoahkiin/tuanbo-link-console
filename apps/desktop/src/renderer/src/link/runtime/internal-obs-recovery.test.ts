@@ -37,11 +37,11 @@ it('播放中重连：只重新准备这首歌的素材场景再重建并标红�
   prepareObsMediaScenes.mockResolvedValue();
   await recoverInternalObs({ ...base, status: 'playing' });
   expect(prepareObsMediaScenes.mock.calls[0]?.[1].mediaAssets.map(asset => asset.id)).toEqual(['video']);
-  expect(faults).toEqual(['OBS 已重新连接：画面按当前位置重建，发送 3 项']); expect(notices).toEqual(faults);
+  expect(faults).toEqual(['OBS 已重新连接，画面已按当前位置恢复（3 项）']); expect(notices).toEqual(faults);
   await recoverInternalObs({ ...base, status: 'paused' });
-  expect(player.seek).toHaveBeenCalledWith(9000); expect(faults.at(-1)).toBe('OBS 已重新连接：已在暂停位置重新准备画面');
+  expect(player.seek).toHaveBeenCalledWith(9000); expect(faults.at(-1)).toBe('OBS 已重新连接，画面已按暂停位置恢复');
   prepareObsMediaScenes.mockRejectedValueOnce(new Error('场景创建失败'));
   await recoverInternalObs({ ...base, status: 'playing' });
-  expect(faults.at(-1)).toBe('OBS 重新连接后画面重建失败：场景创建失败');
+  expect(faults.at(-1)).toBe('OBS 已重新连接，但画面恢复失败：场景创建失败');
   await recoverInternalObs({ ...base, status: 'stopped' }); expect(faults).toHaveLength(3);
 });

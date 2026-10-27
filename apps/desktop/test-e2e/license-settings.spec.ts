@@ -54,7 +54,7 @@ for (const credential of ['missing', 'tampered'] as const) {
         dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath });
       }, request);
       await panel.getByRole('button', { name: '导出授权申请' }).click();
-      await expect(panel.getByText('机器信息已导出，可用于向发行方核对授权。')).toBeVisible();
+      await expect(panel.getByText('本机信息已导出，可以发给售后核对授权。')).toBeVisible();
       expect(licenseRequestSchema.parse(JSON.parse(await readFile(request, 'utf8'))).machineCode).toBe(await panel.getByLabel('本机机器码').inputValue());
     } finally { await closeDiscarding(application); }
   });

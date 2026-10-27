@@ -24,8 +24,8 @@ export function renameConsoleCueCommand(ref:ConsoleCueReference, name:string, so
     const library=projectLightingLibrary(project);
     const sequence=project.ma2MaterialLibrary!.library!.sequences.find(value=>value.sequence===ref.sequence);
     const cue=sequence?.cues.find(value=>value.number===ref.cue);
-    if(!sequence||!cue)throw new Error('Cue 已不在当前读取目录中');
-    if(project.ma2MaterialLibrary!.library!.sourceUnverified)throw new Error('控台素材来源尚未核对，请先读取控台');
+    if(!sequence||!cue)throw new Error('读到的控台内容里已经没有这个 Cue');
+    if(project.ma2MaterialLibrary!.library!.sourceUnverified)throw new Error('还没读取控台素材，请先读取控台');
     const old=library.entries.find(entry=>entry.source.endpoint===source.endpoint&&entry.source.show===source.show&&entry.kind===ref.kind&&entry.track.cueStamp?.mode==='fixed'&&entry.track.cueStamp.executor===''&&entry.track.cueStamp.sequence===ref.sequence&&entry.track.cueStamp.cue===ref.cue);
     const entry=lightingLibraryEntrySchema.parse(old?{...old,name,track:{...old.track,name:name.trim()}}:{
       id,name,originalName:(ref.kind==='sequence'?sequence.name:cue.name)??'',revision:1,kind:ref.kind,categoryIds:[],favorite:false,
@@ -45,11 +45,11 @@ export function renameLightingLibraryEntryCommand(id:string,name:string):LinkCom
     let queued = library;
     if (old.kind !== 'combination') {
       const ref = old.track.cueStamp;
-      if (ref?.mode !== 'fixed' || !old.source.verified) throw new Error('素材缺少已核对的控台引用，请先读取控台');
+      if (ref?.mode !== 'fixed' || !old.source.verified) throw new Error('素材没有确认过的控台引用，请先读取控台');
       checkSource(project, old.source);
       const sequence = project.ma2MaterialLibrary!.library!.sequences.find(value => value.sequence === ref.sequence);
       const cue = sequence?.cues.find(value => Number(value.number) === Number(ref.cue));
-      if (!sequence || old.kind === 'single' && !cue) throw new Error('Cue 已不在当前读取目录中');
+      if (!sequence || old.kind === 'single' && !cue) throw new Error('读到的控台内容里已经没有这个 Cue');
       queued = queueMa2Rename(library, { endpoint: old.source.endpoint, show: old.source.show, sequence: ref.sequence, cue: ref.cue, kind: old.kind, confirmedName: (old.kind === 'sequence' ? sequence.name : cue?.name) ?? '', name });
     }
     return setLightingLibraryCommand({...queued,entries:library.entries.map(value=>value.id===id?entry:value)}).execute(project);
@@ -69,7 +69,7 @@ export function updateConsoleCueCategoriesCommand(refs:ConsoleCueReference[], ch
     }));
     for(const [key,{ref,id}] of inputs){
       const sequence=sequences.get(ref.sequence);const cue=sequence?.cues.find(value=>value.number===ref.cue);
-      if(!sequence || !cue)throw new Error(`序列 ${ref.sequence} / Cue ${ref.cue} 已不在当前读取目录中`);
+      if(!sequence || !cue)throw new Error(`读到的控台内容里已经没有序列 ${ref.sequence} / Cue ${ref.cue}`);
       const index=existing.get(key);const old=index===undefined?undefined:entries[index];
       if(old){entries[index!]={...old,categoryIds:[...new Set([...old.categoryIds.filter(id=>!changes.remove.includes(id)),...changes.add])]};continue;}
       if(!changes.add.length)continue;

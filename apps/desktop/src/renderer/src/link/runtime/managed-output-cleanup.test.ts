@@ -29,7 +29,7 @@ describe('executeManagedOutputCleanup', () => {
     };
 
     await expect(executeManagedOutputCleanup({ mediaEvents: [mediaEvent()], cameraCues: [cue] }, runtime, runner))
-      .rejects.toThrow('受管 OBS 输出清理不完整：媒体停止失败；机位隐藏失败');
+      .rejects.toThrow('联动台在 OBS 里创建的画面没有清理干净：媒体停止失败；机位隐藏失败');
     expect(runtime.executeMedia).toHaveBeenCalledOnce();
     expect(runner.run).toHaveBeenCalledOnce();
     expect(useRuntimeStore.getState()).toMatchObject({ mediaReports: [{ status: 'failed' }], reports: [{ cueId: cue.id }] });

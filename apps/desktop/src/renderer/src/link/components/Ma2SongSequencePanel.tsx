@@ -48,11 +48,11 @@ export function Ma2SongSequencePanel({ itemId, settings }: { itemId: string; set
     <strong>本曲控台序列</strong>
     {project && item ? <SongMtcStart project={project} item={item} detail /> : null}
     <p>{binding ? `${binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`} · 序列 ${binding.sequence} · ${binding.points.length} 步` : `整首歌合为一条多步序列，放进按钮第 ${executorPage} 页的空格。可以在控台继续编灯。`}</p>
-    {binding?.assignment === 'unassigned' ? <p>执行器已解除分配；下次同步会把序列 {binding.sequence} 重新放回按钮第 {binding.executor?.split('.')[0]} 页。</p> : binding?.executor ? <button onClick={() => { const [page, slot] = binding.executor!.split('.').map(Number); locateMa2Executor(page!, slot!); }}>定位本曲控台位置</button> : null}
+    {binding?.assignment === 'unassigned' ? <p>执行器已清空；下次同步会把序列 {binding.sequence} 重新放回按钮第 {binding.executor?.split('.')[0]} 页。</p> : binding?.executor ? <button onClick={() => { const [page, slot] = binding.executor!.split('.').map(Number); locateMa2Executor(page!, slot!); }}>定位本曲控台位置</button> : null}
     <form className="ma2-song-default-page" noValidate onSubmit={event => { event.preventDefault(); saveDefaultPage(); }}>
       <label>默认创建页<input aria-label="默认创建按钮页" type="number" min={1} max={9999} step={1} value={pageDraft} onChange={event => { setPageDraft(event.target.value); setDefaultMessage(''); }}/></label>
       <button>保存默认</button>
-      <small>{defaultMessage || '本工程后续新建歌曲使用此按钮页，已创建歌曲保持原位置。'}</small>
+      <small>{defaultMessage || '这个工程之后新建的歌曲都放在这一页，已创建的歌曲位置不变。'}</small>
     </form>
     <label>序列名称<input aria-label="本曲控台序列名称" value={name} onFocus={() => setEditingName(true)} onChange={event => setName(event.target.value)} onBlur={() => {
       setEditingName(false); if (!binding || !item?.lighting || name === binding.name) return;

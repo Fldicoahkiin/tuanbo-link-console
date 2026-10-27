@@ -21,7 +21,7 @@ it('sends the exact native assigned function and releases on the stop queue', as
 });
 it('never substitutes Go for an unread or unsupported function, or dispatches an expired press', async () => {
   const connection = { command: vi.fn() }; const service = new Ma2ExecutorInputService(); const input = request();
-  await expect(service.input(connection, { ...input, expectedItem: { ...input.expectedItem, buttons: [99999] } }, () => undefined)).rejects.toThrow('没有已读取');
+  await expect(service.input(connection, { ...input, expectedItem: { ...input.expectedItem, buttons: [99999] } }, () => undefined)).rejects.toThrow('没有读到');
   await expect(service.input(connection, { ...input, deadlineAt: Date.now() - 1 }, () => undefined)).rejects.toThrow('已过期');
   expect(connection.command).not.toHaveBeenCalled();
 });
@@ -60,7 +60,7 @@ it('断线释放未确认只保留到控台租约的最晚截止，不永久卡�
     const service = new Ma2ExecutorInputService(); const input = request();
     const connection = { command: vi.fn().mockResolvedValueOnce('SENT').mockRejectedValue(new Error('disconnected')) };
     await service.input(connection, input, () => undefined);
-    await expect(service.release()).rejects.toThrow('租约');
+    await expect(service.release()).rejects.toThrow('自动松开');
     vi.setSystemTime(input.deadlineAt + 2001);
     await service.release();
     await service.release();

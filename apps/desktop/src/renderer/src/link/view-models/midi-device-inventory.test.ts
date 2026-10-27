@@ -10,7 +10,7 @@ const api = vi.hoisted(() => ({ recheckMidi: vi.fn<LinkDesktopApi['recheckMidi']
 vi.mock('./link-desktop-view-model', () => ({ linkDesktopViewModel: api }));
 const usb: MidiPortSnapshot = { id: 'usb', name: 'USB MIDI Interface', direction: 'output', manufacturer: '', state: 'connected', connection: 'closed' };
 const babyface: MidiPortSnapshot = { ...usb, id: 'babyface', name: 'Babyface Midi Port 1' };
-const native: NativePlaybackDevices = { protocol: 4, audio: [], midiOutputs: [{ id: 0, name: babyface.name }, { id: 1, name: usb.name }] };
+const native: NativePlaybackDevices = { protocol: 4, audio: [], midiOutputs: [{ id: 0, name: babyface.name }, { id: 1, name: usb.name }], midiInputs: [] };
 beforeEach(() => {
   vi.resetAllMocks();
   api.recheckMidi.mockResolvedValue();
@@ -35,7 +35,7 @@ it('退出占用软件后刷新，同一份列表更新设置页并记录两套�
 it('Windows 看得到但浏览器漏枚举的 USB 仍展示原因，不能冒充浏览器可连接', () => {
   const browser = midiOutputInventory('browser', [babyface], native, usb.name);
   expect(browser.windowsOnly).toEqual([usb.name]);
-  expect(browser.options.find(option => option.name === usb.name)).toEqual({ name: usb.name, available: false, reason: '当前播放引擎未识别' });
+  expect(browser.options.find(option => option.name === usb.name)).toEqual({ name: usb.name, available: false, reason: '当前播放方式识别不到' });
   expect(midiOutputInventory('native', [babyface], native, usb.name).options.find(option => option.name === usb.name)?.available).toBe(true);
 });
 

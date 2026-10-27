@@ -55,11 +55,11 @@ export class ObsSourceManager {
       await this.request(() => this.client.call('SetInputSettings', { inputName, inputSettings: settings, overlay: true }), 'SetInputSettings');
       const actual = await this.request(() => this.client.call('GetInputSettings', { inputName }), 'GetInputSettings');
       for (const [key, value] of Object.entries(settings)) {
-        if (typeof value !== 'object' && actual.inputSettings[key] !== value) throw new Error(`OBS 未确认参数 ${key}，来源尚未应用`);
+        if (typeof value !== 'object' && actual.inputSettings[key] !== value) throw new Error(`OBS 没有确认参数 ${key}，来源还没应用`);
       }
       await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName: draft.sceneName, sceneItemId: draft.sceneItemId, sceneItemEnabled: true }), 'SetSceneItemEnabled');
       const enabled = await this.request(() => this.client.call('GetSceneItemEnabled', { sceneName: draft.sceneName, sceneItemId: draft.sceneItemId }), 'GetSceneItemEnabled');
-      if (!enabled.sceneItemEnabled) throw new Error('OBS 来源尚未启用');
+      if (!enabled.sceneItemEnabled) throw new Error('OBS 来源还没启用');
       this.drafts.delete(inputName);
     });
   }
@@ -81,7 +81,7 @@ export class ObsSourceManager {
 
   private requireDraft(inputName: string): ObsSourceDraft {
     const draft = this.drafts.get(inputName);
-    if (!draft) throw new Error('此来源不是当前待添加来源，不能覆盖或删除');
+    if (!draft) throw new Error('这不是正在添加的来源，不能覆盖或删除');
     return draft;
   }
 

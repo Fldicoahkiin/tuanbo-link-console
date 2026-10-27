@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+vi.mock('../../registry/midi-access', () => ({ requestMidiAccess: vi.fn(), refreshMidiAccess: vi.fn() }));
+import { requestMidiAccess, type MidiAccess } from '../../registry/midi-access';
+/** The window's MIDI comes from main; these tests hand the code under test a fixed port list. */
+function stubMidi(request: () => Promise<unknown>): void { vi.mocked(requestMidiAccess).mockImplementation(() => request() as Promise<MidiAccess>); }
 vi.mock('../../registry/license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { createEmptyLinkProject, parseLinkProject, type LinkAction } from '@tb/schema';
 import { runDesktopPreflight } from './link-preflight-view-model';
@@ -22,7 +26,7 @@ const midiRequest = vi.fn(() => Promise.reject(new Error('测试：系统 MIDI �
 let coordinator: LinkRuntimeCoordinator | undefined;
 beforeEach(() => {
   midiRequest.mockClear();
-  vi.stubGlobal('navigator', { requestMIDIAccess: midiRequest });
+  stubMidi(midiRequest);
   useRuntimeStore.getState().reset();
   const profile = createDefaultIntegrationProfile();
   profile.internalPlayer = { mtcOutputPortProfileId: 'lighting-output', audioOutputDeviceId: 'default' };

@@ -45,7 +45,7 @@ export class ProjectDocumentService {
    * repeated here, the operator saves again.
    */
   restart(): void {
-    if (!this.failure) throw new Error('工程处理线程运行正常，无需重启');
+    if (!this.failure) throw new Error('工程处理运行正常，不需要重启');
     const stuck = this.worker;
     this.worker = null; this.failure = null;
     stuck?.removeAllListeners();
@@ -53,7 +53,7 @@ export class ProjectDocumentService {
   }
   private request(payload: Payload): Promise<ProjectDocumentResponse> {
     if (this.failure) return Promise.reject(this.failure);
-    if (this.pending.size >= 64) return Promise.reject(new Error('工程处理队列已满；此次请求未入队'));
+    if (this.pending.size >= 64) return Promise.reject(new Error('工程处理排队已满，这次请求没有处理'));
     const request = projectDocumentRequestSchema.parse({ version: 1, id: ++this.sequence, ...payload });
     if (!this.worker) {
       this.worker = new Worker(this.workerPath);
@@ -61,18 +61,18 @@ export class ProjectDocumentService {
         try {
           const response = projectDocumentResponseSchema.parse(value), pending = this.pending.get(response.id);
           if (!pending) throw new Error('工程处理收到未知请求结果');
-          if (response.kind !== 'error' && response.kind !== resultKinds[pending.kind]) throw new Error('工程处理返回类型与请求不一致；未确认的保存结果需重新核对');
+          if (response.kind !== 'error' && response.kind !== resultKinds[pending.kind]) throw new Error('工程处理返回的结果对不上；保存是否成功需要重新确认');
           this.pending.delete(response.id); clearTimeout(pending.timer);
           if (!this.pending.size) this.worker?.unref();
           if (response.kind === 'error') pending.reject(new Error(response.error)); else pending.resolve(response);
         } catch (error) { this.fail(error); }
       });
       this.worker.on('error', (error: unknown) => this.fail(error));
-      this.worker.on('exit', code => this.fail(new Error(`工程处理线程退出（${code}）；未确认的保存结果需重新核对`)));
+      this.worker.on('exit', code => this.fail(new Error(`工程处理意外退出（${code}）；保存是否成功需要重新确认`)));
     }
     this.worker.ref();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒；未确认的保存可能已写入，不会自动重试。可在提示中重启工程处理后再保存')), 30000);
+      const timer = setTimeout(() => this.fail(new Error('工程处理超过 30 秒没有响应；这次保存可能已经写入，不会自动重试。可以在提示里重启工程处理后再保存')), 30000);
       this.pending.set(request.id, { kind: payload.kind, resolve, reject, timer });
       try { this.worker!.postMessage(request); }
       catch (error) { this.fail(error); }

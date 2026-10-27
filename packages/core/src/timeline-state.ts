@@ -94,7 +94,7 @@ export class TimelineStateIndex {
       if (!asset) throw new Error(`媒体素材不存在：${clip.assetId}`);
       const isVisualAsset = asset.kind === 'video' || asset.kind === 'image';
       if (isVisualAsset && item.visualLayers.length > 0 && !clip.layerId) {
-        throw new Error(`视觉素材片段“${clip.label}”尚未分配视觉图层`);
+        throw new Error(`视觉素材片段“${clip.label}”还没分配视觉图层`);
       }
       const layerEntry = clip.layerId ? layerById.get(clip.layerId) : undefined;
       if (clip.layerId && !layerEntry) throw new Error(`素材片段“${clip.label}”引用不存在的图层：${clip.layerId}`);
@@ -117,7 +117,7 @@ export class TimelineStateIndex {
     const visualObsCues = item.cues.flatMap((cue): ResolvedTimelineObsCue[] => {
       const showAction = findVisualObsShowAction(cue);
       if (!showAction) return [];
-      if (!cue.layerId) throw new Error(`OBS 显示 Cue“${cue.name}”尚未分配视觉图层`);
+      if (!cue.layerId) throw new Error(`OBS 显示 Cue“${cue.name}”还没分配视觉图层`);
       const layerEntry = layerById.get(cue.layerId);
       if (!layerEntry) throw new Error(`OBS 显示 Cue“${cue.name}”引用不存在的图层：${cue.layerId}`);
       const span = resolveTimelineCueSpan(cue, frameRate);

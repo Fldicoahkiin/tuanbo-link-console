@@ -60,7 +60,7 @@ test('真实 onPC 经界面导入、修改、同步、冲突选择与保存重�
     await page.getByRole('button', { name: '比较节目与控台修改', exact: true }).click();
     await expect(page.getByLabel('节目与控台差异')).toContainText('没有冲突');
     await page.getByRole('button', { name: '同步节目与 MA2', exact: true }).click();
-    await expect(page.getByLabel('MA2 节目同步')).toContainText('已同步并核对');
+    await expect(page.getByLabel('MA2 节目同步')).toContainText('已同步并确认');
     const written = await bridge.request('READ', 9902);
     await writeFile(info.outputPath('written.xml'), written);
     expect(inspectMa2TimecodeXml(written).timecodes[0]?.tracks[0]?.subtracks[0]?.events[1]?.attributes.time).toBe('36');
@@ -77,7 +77,7 @@ test('真实 onPC 经界面导入、修改、同步、冲突选择与保存重�
     await page.getByLabel('冲突 1 保留版本').selectOption('remote');
     await page.screenshot({ path: info.outputPath('conflict.png') });
     await page.getByRole('button', { name: '同步节目与 MA2', exact: true }).click();
-    await expect(page.getByLabel('MA2 节目同步')).toContainText('已同步并核对');
+    await expect(page.getByLabel('MA2 节目同步')).toContainText('已同步并确认');
     await expect.poll(times).toEqual([0, 1400]);
     await page.getByRole('button', { name: '关闭灯光工具', exact: true }).click();
     await page.reload();

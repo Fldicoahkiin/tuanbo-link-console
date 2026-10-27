@@ -19,7 +19,7 @@ export class ProjectArchiveSettingsStore {
   constructor(private readonly path: string, readonly defaultDirectory: string) {}
   async read(): Promise<ProjectArchiveSettings> {
     try { return projectArchiveSettingsSchema.parse(JSON.parse(await readFile(this.path, 'utf8'))); }
-    catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return DEFAULT_ARCHIVE_SETTINGS; throw new Error('工程存档设置读取失败，请在设置中重新保存', { cause: error }); }
+    catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return DEFAULT_ARCHIVE_SETTINGS; throw new Error('读取存档设置失败，请在设置里重新保存一次', { cause: error }); }
   }
   async write(settings: ProjectArchiveSettings): Promise<ProjectArchiveSettings> {
     const value = projectArchiveSettingsSchema.parse(settings);
@@ -82,12 +82,12 @@ export async function projectArchives(input: unknown, documents: Pick<ProjectDoc
   }
   if (request.action === 'reveal') {
     const entry = request.name ? (await entries()).find(value => value.name === request.name) : undefined;
-    if (request.name && !entry) throw new Error('该存档不属于当前工程或已移动');
+    if (request.name && !entry) throw new Error('这个存档不属于当前工程，或已被移动');
     reveal(entry?.path ?? folder ?? projectPath);
   }
   if (request.action === 'restore') {
     const entry = (await entries()).find(value => value.name === request.name);
-    if (!entry) throw new Error('该存档不属于当前工程或已移动');
+    if (!entry) throw new Error('这个存档不属于当前工程，或已被移动');
     const content = await readFile(entry.path, 'utf8');
     await documents.inspect(content);
     // The current file is archived first, so a restore can itself be undone from the list.
@@ -122,12 +122,12 @@ async function projectFolder(root: string, projectPath: string, projectName: str
     if (!index && create && !(await listDirectory(folder)).length) { await mkdir(folder, { recursive: true }); return folder; }
     if (!index && !create && !(await listDirectory(folder)).length) return null;
   }
-  if (create) throw new Error('存档位置下同名工程文件夹过多，请清理后重试');
+  if (create) throw new Error('存档位置里同名的工程文件夹太多，请清理后再试');
   return null;
 }
 async function readIndex(folder: string): Promise<Index | null> {
   try { return indexSchema.parse(JSON.parse(await readFile(join(folder, INDEX), 'utf8'))); }
-  catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null; throw new Error(`存档记录无法读取：${join(folder, INDEX)}`, { cause: error }); }
+  catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null; throw new Error(`读不了存档记录：${join(folder, INDEX)}`, { cause: error }); }
 }
 async function listDirectory(path: string): Promise<string[]> {
   try { return await readdir(path); }

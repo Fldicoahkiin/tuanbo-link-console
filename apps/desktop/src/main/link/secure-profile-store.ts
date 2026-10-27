@@ -42,7 +42,7 @@ export class SecureProfileStore {
   async saveCredential(credentialId: string, password: string): Promise<void> {
     assertCredentialId(credentialId);
     if (!this.safeStorage.isEncryptionAvailable()) {
-      throw new Error('Windows 安全存储不可用，不能保存凭证');
+      throw new Error('Windows 安全存储不可用，无法保存密码');
     }
     await this.writeCredentials(async () => {
       const secrets = await this.loadSecrets();
@@ -55,15 +55,15 @@ export class SecureProfileStore {
     assertCredentialId(credentialId);
     await this.credentialWrites;
     if (!this.safeStorage.isEncryptionAvailable()) {
-      throw new Error('Windows 安全存储不可用，不能读取凭证');
+      throw new Error('Windows 安全存储不可用，无法读取密码');
     }
     const secrets = await this.loadSecrets();
     const encoded = secrets.credentials[credentialId];
-    if (!encoded) throw new Error(`未找到凭证：${credentialId}`);
+    if (!encoded) throw new Error(`找不到保存的密码：${credentialId}`);
     try {
       return this.safeStorage.decryptString(Buffer.from(encoded, 'base64'));
     } catch (error) {
-      throw new Error(`凭证无法解密：${credentialId}`, { cause: error });
+      throw new Error(`保存的密码无法解密，请重新输入：${credentialId}`, { cause: error });
     }
   }
 
@@ -103,7 +103,7 @@ export class SecureProfileStore {
     const content = await readOptionalFile(this.secretsPath);
     if (content === null) return { schemaVersion: 1, credentials: {} };
     const value = parseJson(content, this.secretsPath);
-    if (!isStoredSecrets(value)) throw new Error(`凭证文件结构无效：${this.secretsPath}`);
+    if (!isStoredSecrets(value)) throw new Error(`保存密码的文件已损坏：${this.secretsPath}`);
     return value;
   }
 }
@@ -121,7 +121,7 @@ function parseJson(content: string, filePath: string): unknown {
   try {
     return JSON.parse(content);
   } catch (error) {
-    throw new Error(`JSON 文件损坏：${filePath}`, { cause: error });
+    throw new Error(`文件已损坏：${filePath}`, { cause: error });
   }
 }
 

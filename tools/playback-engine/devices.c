@@ -66,6 +66,15 @@ static int write_devices(bool include_midi) {
     if (i) putchar(',');
     printf("{\"id\":%u,\"name\":", i); json_string(caps.szPname); putchar('}');
   }
+  fputs("],\"midiInputs\":[", stdout);
+  UINT input_count = include_midi && SUCCEEDED(hr) ? midiInGetNumDevs() : 0;
+  for (UINT i = 0; SUCCEEDED(hr) && i < input_count; i++) {
+    MIDIINCAPSW caps;
+    MMRESULT result = midiInGetDevCapsW(i, &caps, sizeof(caps));
+    if (result != MMSYSERR_NOERROR) { hr = E_FAIL; break; }
+    if (i) putchar(',');
+    printf("{\"id\":%u,\"name\":", i); json_string(caps.szPname); putchar('}');
+  }
   fputs("]}", stdout);
   if (default_id) CoTaskMemFree(default_id);
   if (default_device) IMMDevice_Release(default_device);

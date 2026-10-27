@@ -30,7 +30,7 @@ export type NativeProgramOpen = z.infer<typeof nativeProgramOpenSchema>;
  * program plays a different document than the reloaded window shows. */
 export type NativeProgramAttachment = 'opened' | 'adopted' | 'outdated';
 const operation = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('play'), itemId: z.string(), positionMs: time.optional(), paused: z.boolean().optional(), withoutLighting: z.boolean().optional() }).strict(),
+  z.object({ kind: z.literal('play'), itemId: z.string(), positionMs: time.optional(), paused: z.boolean().optional() }).strict(),
   z.object({ kind: z.enum(['pause', 'resume', 'stop', 'reset', 'toggle', 'toggleMtc', 'close']) }).strict(),
   z.object({ kind: z.literal('seek'), positionMs: time }).strict(),
   z.object({ kind: z.literal('scrub'), itemId: z.string(), positionMs: time }).strict(),

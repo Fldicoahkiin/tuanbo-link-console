@@ -1,8 +1,12 @@
 import type { IntegrationProfile } from '@tb/schema';
-import { NativeMidiOutput, type NativeMidiReceipt } from './native-midi-output';
+import { MidiOutputFailure, NativeMidiOutput, type NativeMidiReceipt } from './native-midi-output';
+import { midiPortBusy, sharedPortMessage } from './midi-error';
+import type { MidiClaim } from './midi-port-broker';
 
 type Port = { open(name: string): Promise<void>; send(bytes: readonly number[], deadline100ns: bigint): Promise<NativeMidiReceipt>; close(): Promise<void> };
 type Dependencies = { executable: string; authorize(): Promise<void>; failed(error: Error): void;
+  /** Takes the output from the editor before it opens here; released once its helper has exited. */
+  claim?: (portName: string) => Promise<MidiClaim>;
   create?: (failed: (error: Error) => void) => Port };
 
 /** Machine mappings are resolved once per preparation. No project port names,
@@ -10,6 +14,7 @@ type Dependencies = { executable: string; authorize(): Promise<void>; failed(err
 export class NativeMidiPorts {
   private readonly byProfile = new Map<string, Port>();
   private readonly owned = new Set<Port>();
+  private readonly claims = new Set<MidiClaim>();
   private preparing: Promise<void> | null = null;
   private closing: Promise<void> | null = null;
   private state: 'new' | 'preparing' | 'ready' | 'closed' = 'new';
@@ -27,7 +32,7 @@ export class NativeMidiPorts {
       requireCurrent();
       const mappings = [...new Set(ids)].map(id => {
         const matches = this.profile?.midiPortProfiles.filter(entry => entry.id === id && entry.direction === 'output') ?? [];
-        if (matches.length !== 1 || !matches[0]?.portName) throw new Error(`MIDI 输出档案不存在或不唯一：${id}`);
+        if (matches.length !== 1 || !matches[0]?.portName) throw new Error(`MIDI 输出设置不存在或有重复：${id}`);
         return matches[0];
       });
       if (mappings.length) { await this.authorize(); requireCurrent(); }
@@ -36,14 +41,20 @@ export class NativeMidiPorts {
         requireCurrent();
         let output = names.get(mapping.portName);
         if (!output) {
-          const failed = (error: Error) => {
+          const claim = await this.dependencies.claim?.(mapping.portName) ?? null;
+          if (claim) this.claims.add(claim);
+          requireCurrent();
+          const failed = (raw: Error) => {
+            const error = explain(raw, claim);
             if (this.state === 'closed' || this.failure) return;
             this.failure = error; this.dependencies.failed(error);
             void this.close().catch(cleanup => this.dependencies.failed(toError(cleanup)));
           };
           output = this.dependencies.create?.(failed) ?? new NativeMidiOutput(this.dependencies.executable, failed);
           this.owned.add(output); names.set(mapping.portName, output);
-          await output.open(mapping.portName); requireCurrent();
+          try { await output.open(mapping.portName); }
+          catch (error) { throw explain(toError(error), claim); }
+          requireCurrent();
         }
         this.byProfile.set(mapping.id, output);
       }
@@ -61,7 +72,7 @@ export class NativeMidiPorts {
     if (!Number.isFinite(deadlineAtMs) || deadlineAtMs < 0) throw new Error('MIDI 动作截止时间无效');
     if (this.state !== 'ready' || this.failure) throw this.failure ?? new Error('MIDI 输出未准备或已取消');
     const output = this.byProfile.get(profileId);
-    if (!output) throw new Error(`本轮未准备 MIDI 输出：${profileId}`);
+    if (!output) throw new Error(`这一首没有准备 MIDI 输出：${profileId}`);
     await this.authorize();
     if (this.state !== 'ready' || this.failure) throw this.failure ?? new Error('MIDI 动作在许可检查期间已取消');
     await output.send(bytes, BigInt(Math.floor(deadlineAtMs * 10000)));
@@ -76,6 +87,9 @@ export class NativeMidiPorts {
     const preparing = this.preparing;
     this.closing = Promise.allSettled(closing).then(async results => {
       if (preparing) await Promise.allSettled([preparing]);
+      // The helpers have exited: the editor may use these outputs again.
+      for (const claim of this.claims) claim.release();
+      this.claims.clear();
       const failures = results.flatMap(result => result.status === 'rejected' ? [toError(result.reason)] : []);
       if (failures.length) throw new AggregateError(failures, failures.map(error => error.message).join('；'));
     });
@@ -95,3 +109,9 @@ export class NativeMidiPorts {
 }
 
 function toError(error: unknown): Error { return error instanceof Error ? error : new Error(String(error)); }
+/** A port this playback already uses for something else refuses a second opener on single-client drivers. */
+function explain(error: Error, claim: MidiClaim | null): Error {
+  if (!claim || !(error instanceof MidiOutputFailure) || !midiPortBusy(error.code)) return error;
+  const others = claim.others().filter(owner => owner !== claim.owner && owner !== '接口检查');
+  return others.length ? new MidiOutputFailure(sharedPortMessage(error.portName, claim.owner, others), error.code, error.portName) : error;
+}

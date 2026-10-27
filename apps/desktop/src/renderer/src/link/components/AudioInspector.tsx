@@ -16,12 +16,12 @@ export function AudioInspector({ editor, playheadMs }: { editor: AudioEditor; pl
       </div> : <p>点击波形定位，拖动片段移动位置，拖动两端调整范围。</p>}
       <div className="audio-edit-actions"><button onClick={() => void editor.split(playheadMs)}><Scissors />播放头处分割</button><button disabled={!segment} onClick={() => void editor.remove()}><Trash2 />删除片段</button></div>
       </fieldset>
-      {editor.disabled && !editor.busy ? <p>停止播放后可移动、裁剪或删除音频片段；节拍标记仍可操作。</p> : null}
+      {editor.disabled && !editor.busy ? <p>停止播放后才能移动、裁剪或删除音频片段，节拍标记随时可以编辑。</p> : null}
       </details>
     <fieldset disabled={editor.busy}>
       <section className="audio-beat-properties"><h3>找到音乐的节拍</h3><p>先检测，再把节拍放到时间线上，方便对齐灯光。</p><button className="audio-detect-button" disabled={!editor.audio} onClick={() => void editor.analyze()}><ScanLine />{editor.busy ? '正在检测…' : '检测节拍'}</button>
         <div className="audio-beat-levels" role="group" aria-label="节拍密度">{([['sparse', '每四拍'], ['standard', '每两拍'], ['dense', '每拍']] as const).map(([value, label]) => <button key={value} aria-pressed={editor.level === value} onClick={() => editor.setLevel(value satisfies AudioBeatLevel)}>{label}</button>)}</div>
-        <p>{editor.points.length ? `当前显示 ${editor.points.length} 个节拍点。点击应用标记后保存到工程。` : '检测后可选择标记间隔。'}</p>
+        <p>{editor.points.length ? `检测到 ${editor.points.length} 个节拍点，点“应用标记”后保存到工程。` : '检测完成后可以选择标记间隔。'}</p>
         <div className="audio-edit-actions"><button disabled={!editor.points.length} onClick={() => void editor.mark()}>应用标记</button><button disabled={!editor.points.length} onClick={() => void editor.clearMarks()}>清除标记</button></div>
       </section>
     </fieldset>

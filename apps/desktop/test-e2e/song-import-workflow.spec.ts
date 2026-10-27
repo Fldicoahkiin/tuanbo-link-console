@@ -60,7 +60,7 @@ test('小红花入口可导入自有音频并明确不支持备份包和播放�
     await page.getByRole('button', { name: '导入歌曲 / P1', exact: true }).click();
     const songs = page.getByRole('region', { name: '歌曲导入', exact: true });
     await songs.getByRole('button', { name: /小红花音效助手/ }).click();
-    await expect(songs.getByText(/尚未接入：小红花备份包/)).toBeVisible();
+    await expect(songs.getByText(/暂不支持：小红花备份包/)).toBeVisible();
     await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath }); }, target);
     await answerSaveQuestions(application);
     await songs.getByLabel('导入本地音频文件', { exact: true }).setInputFiles(audio);

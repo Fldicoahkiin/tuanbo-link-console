@@ -13,6 +13,7 @@ import ffmpegPath from 'ffmpeg-static';
 import { convertMa2Snapshot } from '../src/main/link/ma2-timecode-conversion';
 import { createMa2TimecodeXml } from '../src/main/link/ma2-create';
 import { answerSaveQuestions, saveProject, savedValue } from './save-questions';
+import { stubMidiPorts } from './midi-ports';
 
 const execFileAsync = promisify(execFile);
 const desktopEntry = join(process.cwd(), process.env.TBLINK_E2E_BUILD_DIR ?? 'out', 'main/index.cjs');
@@ -262,7 +263,7 @@ test('新建 MA2 Timecode 关联当前节目并保存，失败不产生虚假绑
   const preview = convertMa2Snapshot(createMa2TimecodeXml(9903, '节目 1', '3.3.4.3'), 9903);
   await application.evaluate(({ ipcMain }) => { ipcMain.removeHandler('link:ma2-create'); ipcMain.handle('link:ma2-create', () => { throw new Error('Timecode already exists'); }); });
   await page.getByRole('button', { name: '创建并关联当前节目', exact: true }).click();
-  await expect(page.getByText('创建未确认，请读取目标编号检查；不会自动重试', { exact: true })).toBeVisible();
+  await expect(page.getByText('无法确认是否创建成功，请读取这个编号检查（不会自动重试）', { exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'MA2 灯光读取预览' })).toHaveCount(0);
   await application.evaluate(({ ipcMain }, result) => { ipcMain.removeHandler('link:ma2-create'); ipcMain.handle('link:ma2-create', (_event, input: { target: number; name: string }) => { if (input.target !== 9903 || input.name !== '节目 1') throw new Error('创建目标不一致'); return result; }); }, preview);
   await page.getByRole('button', { name: '创建并关联当前节目', exact: true }).click();
@@ -452,7 +453,7 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，列出未支�
   await expect(difference).toContainText('2.500 秒');
   await expect(difference.getByRole('button', { name: '同步节目与 MA2', exact: true })).toBeDisabled();
   await page.getByLabel('冲突 1 保留版本').selectOption('remote');
-  await expect(difference.getByRole('status')).toHaveText('合并检查通过 · 尚未应用');
+  await expect(difference.getByRole('status')).toHaveText('合并检查通过 · 还没应用');
   await page.screenshot({ path: testInfo.outputPath('ma2-conflict.png') });
   await application.evaluate(({ ipcMain }) => {
     ipcMain.removeHandler('link:ma2-apply');
@@ -469,7 +470,7 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，列出未支�
     ipcMain.handle('link:ma2-apply', () => ({ status: 'verified', confirmed, backupFile: 'tblink_backup_test.xml' }));
   }, changedReadback);
   await difference.getByRole('button', { name: '同步节目与 MA2', exact: true }).click();
-  await expect(page.getByText(/节目与 Timecode 9902 已同步并核对/)).toBeVisible();
+  await expect(page.getByText(/节目和 Timecode 9902 已同步并确认/)).toBeVisible();
   await closeLightingTools(); await navigation.getByRole('button', { name: '编辑器', exact: true }).click();
   await selectCueSeven();
   await expect(page.getByLabel('灯光点歌曲时间')).toHaveValue('2.5');
@@ -1000,7 +1001,7 @@ test('设置各页面在最小窗口内字段可读且不横向溢出', async ({
     await expect.poll(() => page.locator('.device-console:visible').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: testInfo.outputPath(`settings-${index}.png`) });
     if (name === '播放') {
-      await page.getByRole('radio', { name: /本软件播放/ }).check();
+      await page.getByRole('radio', { name: /联动台播放/ }).check();
       await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放习惯', exact: true }).click();
       const fadeOut = page.getByLabel('淡出时长（秒）');
       await fadeOut.fill('1.2');
@@ -1019,7 +1020,7 @@ test('设置各页面在最小窗口内字段可读且不横向溢出', async ({
       await page.screenshot({ path: testInfo.outputPath('settings-internal-playback.png') });
       await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放主控', exact: true }).click();
       await page.getByRole('radio', { name: /跟随 P1/ }).check();
-      await page.getByRole('radio', { name: /本软件播放/ }).check();
+      await page.getByRole('radio', { name: /联动台播放/ }).check();
       await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放习惯', exact: true }).click();
       await expect(page.getByLabel('淡出时长（秒）')).toHaveValue('1.2');
       await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放主控', exact: true }).click();
@@ -1315,11 +1316,11 @@ test('设置分类清晰，首页无重复入口，场景在原编辑器编排',
   await expect(page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button')).toHaveText(['设备连接', '播放', '画面与同步', '外观与更新']);
   await expect(page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button').first()).toHaveText('设备连接');
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
-  await page.getByRole('radio', { name: /本软件播放/ }).check();
+  await page.getByRole('radio', { name: /联动台播放/ }).check();
   await page.getByRole('button', { name: '画面与同步', exact: true }).click();
   await expect(page.getByLabel('OBS 输出方式')).toHaveCount(0);
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '场景工作方式', exact: true }).click();
-  await expect(page.getByText('分辨率、画面方向在 OBS 设置。素材与机位时长在时间线调整。', { exact: true })).toBeVisible();
+  await expect(page.getByText('分辨率和画面方向在 OBS 里设置；素材和机位的时长在时间线上调整。', { exact: true })).toBeVisible();
   await expect(page.getByLabel('工程输出画布')).toHaveCount(0);
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1200, 800));
   await page.screenshot({ path: testInfo.outputPath('settings-picture.png') });
@@ -1441,9 +1442,9 @@ test('播放预检阻断直接展示节目、原因和处理办法，紧凑窗�
   await page.getByLabel('播放状态详情', { exact: true }).filter({ has: page.locator('svg') }).first().click();
   const notice = page.locator('.player-error');
   await expect(notice).toBeVisible();
-  await expect(notice).toContainText('播放未开始');
-  await expect(notice).toContainText('无法读取或解码音频');
-  await expect(notice).toContainText('修复或更换音频后重新播放');
+  await expect(notice).toContainText('没有开始播放');
+  await expect(notice).toContainText('无法读取这个音频');
+  await expect(notice).toContainText('换一个音频文件后重新播放');
   await expect(page.getByRole('heading', { name: '387..MP4', exact: true })).toBeVisible();
   await expect(notice.locator('details')).toHaveCount(0);
   const bounds = await notice.boundingBox();
@@ -1473,12 +1474,7 @@ test('编辑器共用正式播放器，打点和菜单切换不中断，暂停�
   const profile = createDefaultIntegrationProfile();
   profile.midiPortProfiles.push({ id: 'lighting-record-input', direction: 'input', portName: 'Transport Input' });
   await page.evaluate((value) => window.tbLink.saveIntegrationProfile({ profile: value }), profile);
-  await page.addInitScript(() => {
-    const input = Object.assign(new EventTarget(), { id: 'record', name: 'Transport Input', type: 'input', state: 'connected', open: () => Promise.resolve() });
-    Reflect.set(window, '__transportInput', input);
-    const access = Object.assign(new EventTarget(), { inputs: new Map([['record', input]]), outputs: new Map() });
-    Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
-  });
+  const transportMidi = await stubMidiPorts(application, { inputs: ['Transport Input'] });
   await page.reload();
   await application.evaluate(({ ipcMain, BrowserWindow, dialog }, path) => {
     Reflect.set(globalThis, '__transportActions', []);
@@ -1513,10 +1509,7 @@ test('编辑器共用正式播放器，打点和菜单切换不中断，暂停�
   await expect.poll(() => application.evaluate(() => (Reflect.get(globalThis, '__transportActions') as unknown[]).length)).toBe(1);
   await page.getByRole('button', { name: '录制灯光', exact: true }).click();
   await expect(page.getByRole('button', { name: '结束录制', exact: true })).toBeVisible();
-  await page.evaluate(() => {
-    const event = new Event('midimessage'); Object.defineProperty(event, 'data', { value: new Uint8Array([0xb0, 7, 96]) });
-    (Reflect.get(window, '__transportInput') as EventTarget).dispatchEvent(event);
-  });
+  await transportMidi.deliver('Transport Input', [0xb0, 7, 96]);
   await page.getByRole('button', { name: '结束录制', exact: true }).click();
   await expect(page.locator('.lighting-clip')).toHaveCount(2);
   await page.locator('.lighting-track-name').click();
@@ -1645,7 +1638,7 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '外观与更新', exact: true }).click();
   await openSoftwareUpdate();
   await expect(page.getByRole('region', { name: '软件更新设置', exact: true }).getByRole('heading', { name: '软件更新', exact: true })).toBeVisible();
-  await expect(page.getByText('开发模式不执行安装更新，请使用 Windows 安装版验证')).toBeVisible();
+  await expect(page.getByText('开发模式下不能安装更新，请用 Windows 安装版')).toBeVisible();
   const developmentVersion = (await page.evaluate(() => window.tbLink.getUpdateStatus())).currentVersion;
   await expect(page.getByText(`当前版本 ${developmentVersion}`)).toBeVisible();
   await closeSettingsDialog();
@@ -1665,7 +1658,7 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
   await expect(page.getByLabel('工程输出画布')).toHaveCount(0);
   await expect(page.getByLabel('工程输出分辨率')).toHaveCount(0);
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '场景工作方式', exact: true }).click();
-  await expect(page.getByText('分辨率、画面方向在 OBS 设置。素材与机位时长在时间线调整。', { exact: true })).toBeVisible();
+  await expect(page.getByText('分辨率和画面方向在 OBS 里设置；素材和机位的时长在时间线上调整。', { exact: true })).toBeVisible();
   await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).outputCanvas).toEqual({ width: 1080, height: 1920 });
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '时间码同步', exact: true }).click();
@@ -1811,7 +1804,7 @@ test('保存旧快照不会清除后来修改的退出保护', async ({}, testIn
       return { titles, destroyed: window.isDestroyed() };
     } finally { mutableDialog.showMessageBox = original; }
   });
-  expect(result).toEqual({ titles: ['工程尚未保存'], destroyed: false });
+  expect(result).toEqual({ titles: ['工程还没保存'], destroyed: false });
   await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
 });
 
@@ -1836,7 +1829,7 @@ test('不经过关闭窗口的退出同样询问未保存修改；取消后再�
       return { titles, destroyed: window.isDestroyed() };
     } finally { mutableDialog.showMessageBox = original; }
   });
-  expect(result).toEqual({ titles: ['工程尚未保存', '工程尚未保存'], destroyed: false });
+  expect(result).toEqual({ titles: ['工程还没保存', '工程还没保存'], destroyed: false });
   await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null }));
 });
 
@@ -1862,7 +1855,7 @@ test('运行会话未停止时主进程拒绝关闭窗口', async () => {
       mutableDialog.showMessageBox = original;
     }
   });
-  expect(result).toEqual({ warningTitle: '联动尚未停止', destroyed: false });
+  expect(result).toEqual({ warningTitle: '联动还没停止', destroyed: false });
   await page.evaluate(() => window.tbLink.setRuntimeActive(false));
 });
 
@@ -1903,7 +1896,7 @@ test('没有联动工程时可直接选择 P1 音频并自动建档', async ({},
   await expect(page.getByRole('button', { name: '读取 P1 当前工程' })).toBeEnabled();
   await expect(page.getByRole('button', { name: '选择 .hia 文件' })).toBeEnabled();
   await page.getByRole('button', { name: '选择 .hia 文件' }).click();
-  await expect(page.locator('.integration-setup-primary .p1-sync-panel').getByText('已建立映射')).toBeVisible();
+  await expect(page.locator('.integration-setup-primary .p1-sync-panel').getByText('已关联')).toBeVisible();
   await expect(page.locator('.p1-sync-summary')).toContainText('1 首音频');
   await page.getByRole('button', { name: /节目单/ }).first().click();
   await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', linkPath);
@@ -2010,8 +2003,8 @@ test('损坏的工作区布局会明确告警而不是静默清零', async () =>
   });
   await page.reload();
   await page.getByRole('button', { name: /编辑器/ }).click();
-  await expect(page.locator('.toast.error')).toContainText('工作区布局恢复失败');
-  await expect(page.locator('.toast.error')).toContainText('已使用默认布局');
+  await expect(page.locator('.toast.error')).toContainText('工作区布局没有恢复成功');
+  await expect(page.locator('.toast.error')).toContainText('已改用默认布局');
 });
 
 test('工程恢复存储不可用时明确告警且界面保持可用', async ({}, testInfo) => {
@@ -2172,7 +2165,7 @@ test('取消重启安装后更新按钮会恢复可操作', async () => {
       totalBytes: 1,
       feedConfigured: true,
       installBlockedReason: null,
-      message: '版本 0.2.11 已下载，确认后重启安装'
+      message: '版本 0.2.11 已下载，确认后会重启并安装'
     }));
     ipcMain.removeHandler('link:update-install');
     ipcMain.handle('link:update-install', () => new Promise<void>((resolve) => setTimeout(resolve, 100)));
@@ -2237,7 +2230,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await expect(page.getByRole('button', { name: '播放主控 音乐、画面与灯光' })).toHaveCount(0);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
-  await page.getByRole('radio', { name: /本软件播放/ }).check();
+  await page.getByRole('radio', { name: /联动台播放/ }).check();
   await closeSettingsDialog();
   await page.getByRole('button', { name: '导入歌曲 / P1', exact: true }).click();
   await page.getByRole('button', { name: /本地音频/ }).click();
@@ -2333,7 +2326,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await expect(mtcOffset).toHaveValue('01:02:03:17');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
-  await expect(page.getByRole('radio', { name: /本软件播放/ })).toBeChecked();
+  await expect(page.getByRole('radio', { name: /联动台播放/ })).toBeChecked();
   await closeSettingsDialog();
   await expect(page.locator('.p1-media-card')).toHaveCount(1);
   await openSettingsDialog();
@@ -2346,7 +2339,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: '播放主控', exact: true }).click();
   await page.getByRole('radio', { name: /跟随 P1/ }).check();
   await closeSettingsDialog();
-  await expect(page.getByRole('button', { name: '切换为本软件播放', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '改由联动台播放', exact: true })).toBeVisible();
 });
 
 test('已保存工程的修改在保存后重新打开仍然存在', async ({}, testInfo) => {
@@ -2583,7 +2576,7 @@ test('新建独立工程前询问未保存修改：保存框取消会再次询�
   await beginNewProject();
   await page.getByLabel('工程名称').fill('另一份节目单');
   await page.getByRole('button', { name: '创建工程', exact: true }).click();
-  await expect.poll(() => application.evaluate(() => [...(Reflect.get(globalThis, '__unsavedTitles') as string[])])).toEqual(['工程尚未保存', '工程尚未保存']);
+  await expect.poll(() => application.evaluate(() => [...(Reflect.get(globalThis, '__unsavedTitles') as string[])])).toEqual(['工程还没保存', '工程还没保存']);
   await expect(page.getByRole('heading', { name: '新建联动工程' })).toBeVisible();
   await expect(page.locator('.p1-media-card')).toHaveCount(1);
   const originalPath = testInfo.outputPath('preserved.tblink');
@@ -2664,21 +2657,14 @@ test('MIDI 顶部状态在启动和插拔时更新，不依赖打开设置', asy
     if (!profile) throw new Error('缺少测试配置');
     await window.tbLink.saveIntegrationProfile({ profile: { ...profile, midiPortProfiles: profile.midiPortProfiles.map((port) => ({ ...port, portName: port.id === profile.p1.controlOutputPortProfileId ? 'Startup Test Output' : '' })) } });
   });
-  await page.addInitScript(() => {
-    const output = { id: 'startup-output', name: 'Startup Test Output', manufacturer: 'Test', type: 'output', state: 'connected', connection: 'closed' };
-    const outputs = new Map([['startup-output', output]]);
-    const access = Object.assign(new EventTarget(), { inputs: new Map(), outputs, onstatechange: null as ((event: Event) => void) | null });
-    Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
-    window.addEventListener('test-midi-disconnect', () => { outputs.clear(); access.dispatchEvent(new Event('statechange')); });
-    window.addEventListener('test-midi-reconnect', () => { outputs.set('startup-output', output); access.dispatchEvent(new Event('statechange')); });
-  });
+  const startupMidi = await stubMidiPorts(application, { outputs: ['Startup Test Output'] });
   // Native playback lists outputs through Windows; the test controls that list and announces each change
-  // through Web MIDI, as Windows does. The real handler is put back afterwards.
+  // through the window's port list, as main's polling does. The real handlers are put back afterwards.
   await application.evaluate(({ ipcMain }) => {
     Reflect.set(globalThis, '__nativeDevicesHandler', (Reflect.get(ipcMain, '_invokeHandlers') as Map<string, unknown>).get('link:native-player-devices'));
     Reflect.set(globalThis, '__nativeMidiOutputs', [{ id: 0, name: 'Startup Test Output' }]);
     ipcMain.removeHandler('link:native-player-devices');
-    ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [], midiOutputs: Reflect.get(globalThis, '__nativeMidiOutputs') as { id: number; name: string }[] }));
+    ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [], midiOutputs: Reflect.get(globalThis, '__nativeMidiOutputs') as { id: number; name: string }[], midiInputs: [] }));
   });
   const setNativeOutputs = (names: string[]) => application.evaluate((_electron, list) => { Reflect.set(globalThis, '__nativeMidiOutputs', list.map((name, id) => ({ id, name }))); }, names);
   try {
@@ -2688,12 +2674,13 @@ test('MIDI 顶部状态在启动和插拔时更新，不依赖打开设置', asy
     const midi = page.getByRole('button', { name: /^P1 控制输出：/ });
     await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：可用');
     await setNativeOutputs([]);
-    await page.evaluate(() => window.dispatchEvent(new Event('test-midi-disconnect')));
+    await startupMidi.setPorts({});
     await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：未连接');
     await setNativeOutputs(['Startup Test Output']);
-    await page.evaluate(() => window.dispatchEvent(new Event('test-midi-reconnect')));
+    await startupMidi.setPorts({ outputs: ['Startup Test Output'] });
     await expect(midi).toHaveAttribute('aria-label', 'P1 控制输出：可用');
   } finally {
+    await startupMidi.restore();
     await application.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('link:native-player-devices');
       ipcMain.handle('link:native-player-devices', Reflect.get(globalThis, '__nativeDevicesHandler') as Parameters<typeof ipcMain.handle>[1]);
@@ -2918,16 +2905,12 @@ test('音乐自然结束补齐最后轮询间隔的 Cue，手动跳到结尾只�
   await application.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, projectPath);
   await page.getByRole('button', { name: '打开工程', exact: true }).click();
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
+  const tailMidi = await stubMidiPorts(application, { outputs: ['Tail Test'] });
   await page.evaluate(() => {
-    const packets: number[][] = [];
-    Reflect.set(window, '__tailPackets', packets);
     const audio = document.querySelector<HTMLAudioElement>('.timeline-toolbar > audio');
     const lifecycle: Array<{ event: string; time: number; ended: boolean; seeking: boolean }> = [];
     Reflect.set(window, '__tailLifecycle', lifecycle);
     for (const event of ['playing', 'pause', 'seeking', 'seeked', 'ended']) audio?.addEventListener(event, () => lifecycle.push({ event, time: audio.currentTime, ended: audio.ended, seeking: audio.seeking }));
-    const output = { name: 'Tail Test', state: 'connected', open: () => Promise.resolve(), send: (bytes: number[]) => packets.push([...bytes]) };
-    const access = Object.assign(new EventTarget(), { inputs: new Map(), outputs: new Map([['out', output]]) });
-    Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
     // Deterministically leave a final polling interval for the ended cleanup to flush.
     const interval = window.setInterval.bind(window);
     Object.defineProperty(window, 'setInterval', { configurable: true, value: (handler: TimerHandler, delay?: number, ...args: unknown[]): number => interval(delay === 5 && typeof handler === 'function' ? () => {
@@ -2941,16 +2924,16 @@ test('音乐自然结束补齐最后轮询间隔的 Cue，手动跳到结尾只�
   await page.getByRole('button', { name: '播放时间线', exact: true }).click();
   await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible({ timeout: 12000 });
-  await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__tailPackets') as number[][]).map((bytes) => bytes[0]))).toEqual([0x90, 0xf0, 0x80]).catch(async (error: unknown) => {
+  await expect.poll(async () => (await tailMidi.sent('Tail Test')).map((bytes) => bytes[0])).toEqual([0x90, 0xf0, 0x80]).catch(async (error: unknown) => {
     await writeFile(testInfo.outputPath('audio-lifecycle.json'), JSON.stringify(await page.evaluate((): unknown => Reflect.get(window, '__tailLifecycle')), null, 2));
     throw error;
   });
   await page.getByRole('button', { name: '回到时间线开头', exact: true }).click();
   await page.getByRole('button', { name: '播放时间线', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__tailPackets') as number[][]).length)).toBe(4);
+  await expect.poll(async () => (await tailMidi.sent('Tail Test')).length).toBe(4);
   await page.locator('.timeline-toolbar > audio').evaluate((audio) => { (audio as HTMLAudioElement).currentTime = 4; });
   await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => (Reflect.get(window, '__tailPackets') as number[][]).map((bytes) => bytes[0]))).toEqual([0x90, 0xf0, 0x80, 0x90, 0x80]);
+  await expect.poll(async () => (await tailMidi.sent('Tail Test')).map((bytes) => bytes[0])).toEqual([0x90, 0xf0, 0x80, 0x90, 0x80]);
 });
 
 test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo) => {
@@ -2978,7 +2961,7 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
   await expect(page.getByRole('button', { name: '读取 P1 当前工程' })).toBeEnabled();
   await expect(page.getByRole('button', { name: '选择 .hia 文件' })).toBeEnabled();
   await page.getByRole('button', { name: '选择 .hia 文件' }).click();
-  await expect(page.locator('.integration-setup-primary').getByText('已建立映射')).toBeVisible();
+  await expect(page.locator('.integration-setup-primary').getByText('已关联')).toBeVisible();
   await expect(page.locator('.p1-sync-summary')).toContainText('1 首音频');
   await page.getByRole('button', { name: /节目单/ }).first().click();
   await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', linkPath);
@@ -3003,13 +2986,7 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
   await page.reload();
   await expect.poll(() => page.evaluate(async () => (await window.tbLink.loadIntegrationProfile())?.midiPortProfiles.find((port) => port.id === 'lighting-record-input')?.portName)).toBe('Test Lighting Input');
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
-  await page.evaluate(() => {
-    const input = Object.assign(new EventTarget(), { name: 'Test Lighting Input', state: 'connected', open: () => Promise.resolve() });
-    const access = Object.assign(new EventTarget(), { inputs: new Map([['test', input]]), outputs: new Map() });
-    Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
-    Reflect.set(window, '__testLightingInput', input);
-    Reflect.set(window, '__testLightingAccess', access);
-  });
+  const recordMidi = await stubMidiPorts(application, { inputs: ['Test Lighting Input'] });
   await expect.poll(() => page.locator('.timeline-audio-engine').evaluate((audio) => (audio as HTMLAudioElement).readyState)).toBeGreaterThanOrEqual(2);
   await page.locator('.lighting-clip').first().dblclick({ position: { x: 20, y: 30 } });
   await page.getByLabel('执行器', { exact: true }).fill('1.5');
@@ -3022,45 +2999,28 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
   await expect(page.getByRole('button', { name: '结束录制', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '播放时间线', exact: true }).click();
   await expect.poll(() => page.locator('.timeline-audio-engine').evaluate((audio) => (audio as HTMLAudioElement).currentTime)).toBeGreaterThan(0.4);
-  const recordedMs = await page.evaluate(() => {
-    const input = Reflect.get(window, '__testLightingInput') as EventTarget;
-    const audio = document.querySelector<HTMLAudioElement>('.timeline-audio-engine');
-    if (!audio) throw new Error('播放音频不存在');
-    const message = new Event('midimessage');
-    Object.defineProperty(message, 'data', { value: new Uint8Array([0xb0, 7, 96]) });
-    const ms = audio.currentTime * 1000;
-    input.dispatchEvent(message);
-    const cueMessage = new Event('midimessage');
-    Object.defineProperty(cueMessage, 'data', { value: new Uint8Array([0xf0, 0x7f, 0x7f, 2, 1, 1, ...[...'37.200\0' + '5.1'].map((char) => char.charCodeAt(0)), 0xf7]) });
-    input.dispatchEvent(cueMessage);
-    const offMessage = new Event('midimessage');
-    Object.defineProperty(offMessage, 'data', { value: new Uint8Array([0xf0, 0x7f, 0x7f, 2, 1, 0x0b, ...[...'0.000\0' + '5.1'].map((char) => char.charCodeAt(0)), 0xf7]) });
-    input.dispatchEvent(offMessage);
-    const noteMessage = new Event('midimessage');
-    Object.defineProperty(noteMessage, 'data', { value: new Uint8Array([0x90, 60, 100]) });
-    input.dispatchEvent(noteMessage);
-    return ms;
-  });
+  const audioMs = () => page.locator('.timeline-audio-engine').evaluate((audio) => (audio as HTMLAudioElement).currentTime * 1000);
+  // Messages now cross from main to the window, so the recorded time lies between these two readings.
+  const recordedMs = await audioMs();
+  await recordMidi.deliver('Test Lighting Input', [0xb0, 7, 96]);
+  await recordMidi.deliver('Test Lighting Input', [0xf0, 0x7f, 0x7f, 2, 1, 1, ...[...'37.200\0' + '5.1'].map((char) => char.charCodeAt(0)), 0xf7]);
+  await recordMidi.deliver('Test Lighting Input', [0xf0, 0x7f, 0x7f, 2, 1, 0x0b, ...[...'0.000\0' + '5.1'].map((char) => char.charCodeAt(0)), 0xf7]);
+  await recordMidi.deliver('Test Lighting Input', [0x90, 60, 100]);
+  const deliveredMs = await audioMs();
   await expect.poll(() => page.locator('.timeline-audio-engine').evaluate((audio) => (audio as HTMLAudioElement).currentTime * 1000)).toBeGreaterThan(recordedMs + 150);
-  const releasedMs = await page.evaluate(() => {
-    const input = Reflect.get(window, '__testLightingInput') as EventTarget;
-    for (const bytes of [[0x80, 60, 72], [0x90, 62, 90]]) {
-      const message = new Event('midimessage');
-      Object.defineProperty(message, 'data', { value: new Uint8Array(bytes) }); input.dispatchEvent(message);
-    }
-    return (document.querySelector<HTMLAudioElement>('.timeline-audio-engine')?.currentTime ?? 0) * 1000;
-  });
+  await recordMidi.deliver('Test Lighting Input', [0x80, 60, 72]);
+  await recordMidi.deliver('Test Lighting Input', [0x90, 62, 90]);
+  const releasedMs = await audioMs();
   await expect.poll(() => page.locator('.timeline-audio-engine').evaluate((audio) => (audio as HTMLAudioElement).currentTime * 1000)).toBeGreaterThan(releasedMs + 50);
-  await page.evaluate(() => {
-    Reflect.set(Reflect.get(window, '__testLightingInput') as EventTarget, 'state', 'disconnected');
-    (Reflect.get(window, '__testLightingAccess') as EventTarget).dispatchEvent(new Event('statechange'));
-  });
+  await recordMidi.setPorts({});
   await expect(page.getByRole('button', { name: '录制灯光', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
   await expect.poll(() => savedValue(page, async () => {
     const project = JSON.parse(await readFile(linkPath, 'utf8')) as { rundown: Array<{ lighting?: { tracks: Array<{ clips: Array<{ events: Array<{ kind: string; at: number }> }> }> } }> };
     return project.rundown[0]?.lighting?.tracks[0]?.clips.flatMap((clip) => clip.events).find((event) => event.kind === 'cc')?.at;
-  })).toBeCloseTo(recordedMs, 0);
+  })).toBeGreaterThanOrEqual(recordedMs - 1);
+  const recordedCc = parseLinkProject(JSON.parse(await readFile(linkPath, 'utf8'))).rundown[0]?.lighting?.tracks[0]?.clips.flatMap((clip) => clip.events).find((event) => event.kind === 'cc');
+  expect(recordedCc?.at).toBeLessThanOrEqual(deliveredMs + 100);
   await expect.poll(async () => {
     const project = JSON.parse(await readFile(linkPath, 'utf8')) as { rundown: Array<{ lighting?: { tracks: Array<{ clips: Array<{ events: Array<{ kind: string; cue?: string; executor?: string; sequence?: number; at: number }> }> }> } }> };
     return project.rundown[0]?.lighting?.tracks[0]?.clips.flatMap((clip) => clip.events).find((event) => event.kind === 'ma2' && event.cue === '37.200');
@@ -3367,7 +3327,7 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
     await page.getByLabel('MA2 MSC 设备号').fill('5'); await page.getByLabel('MA2 MSC 设备号').press('Tab');
     await expect.poll(() => page.evaluate(() => window.tbLink.loadIntegrationProfile())).toMatchObject({ lighting: { mscDeviceId: 5 } });
     await page.getByRole('button', { name: '检测版本兼容性', exact: true }).click();
-    await expect(page.getByText(/基础接口可用；请读取目标 Timecode/)).toBeVisible();
+    await expect(page.getByText(/基本功能可用。请先读取目标 Timecode/)).toBeVisible();
     const settingsPath = testInfo.outputPath('user-data', 'link-integrations', 'ma2-network.json');
     const saved = await readFile(settingsPath, 'utf8'); expect(saved).not.toContain('synthetic-e2e-password'); expect(JSON.parse(saved) as unknown).toMatchObject({ format: 1, active: { host: '127.0.0.1', port, monitorPort, autoConnect: true } });
     const destination = testInfo.outputPath('plugin-export'); await mkdir(destination, { recursive: true });
@@ -3413,7 +3373,7 @@ test('设备连接三种尺寸、跨页草稿与搜索目标隔离', async ({}, 
   await beginNewProject(); await page.getByLabel('工程名称').fill('设备页面验收'); await page.getByRole('button', { name: '创建工程' }).click(); await addEmptyProgram();
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   const menu = page.getByRole('navigation', { name: '设置子菜单' });
-  await menu.getByRole('button', { name: '播放', exact: true }).click(); await page.getByRole('radio', { name: /本软件播放/ }).check();
+  await menu.getByRole('button', { name: '播放', exact: true }).click(); await page.getByRole('radio', { name: /联动台播放/ }).check();
   await menu.getByRole('button', { name: '设备连接', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click(); await page.getByLabel('MA2 连接方式').selectOption('network');
   await openMa2ManualSettings();
@@ -3604,7 +3564,7 @@ test('一键连接仅保留顶部入口，连接中禁止重复点击', async ({
   await expect(page.getByLabel('全部连接状态').getByRole('button', { name: '程序识别：待处理', exact: true })).toBeVisible();
   // The first failed step stops the sequence: later steps are marked not run and no program is launched.
   await expect(page.getByLabel('全部连接状态').getByRole('button', { name: '系统 MIDI：未执行', exact: true }))
-    .toHaveAttribute('title', '系统 MIDI：未执行\n未执行：程序识别未通过，已停止后续步骤');
+    .toHaveAttribute('title', '系统 MIDI：未执行\n没有执行，因为“程序识别”没通过');
   expect(await application.evaluate(() => Number(Reflect.get(globalThis, '__processStarts')))).toBe(0);
 
   await expect(page.locator('.device-maintenance-section').getByRole('button', { name: '一键识别并连接', exact: true })).toHaveCount(0);

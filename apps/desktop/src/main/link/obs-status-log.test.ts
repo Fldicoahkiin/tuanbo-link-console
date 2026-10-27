@@ -15,7 +15,7 @@ describe('obsStatusLogEntry', () => {
 
   it('连接中途掉线是需要人处理的警告；连接错误记为错误；操作员断开只是信息', () => {
     expect(obsStatusLogEntry('connected', snapshot('disconnected', 'socket hang up'))).toEqual({ level: 'warning', message: 'OBS 连接已断开：socket hang up', result: 'failed', details: { error: 'socket hang up' } });
-    expect(obsStatusLogEntry('connected', snapshot('error', 'ECONNRESET'))).toEqual({ level: 'error', message: 'OBS 连接错误：ECONNRESET', result: 'failed', details: { error: 'ECONNRESET' } });
+    expect(obsStatusLogEntry('connected', snapshot('error', 'ECONNRESET'))).toEqual({ level: 'error', message: 'OBS 连接出错：ECONNRESET', result: 'failed', details: { error: 'ECONNRESET' } });
     expect(obsStatusLogEntry('connected', snapshot('disconnected'))).toEqual({ level: 'info', message: 'OBS 已断开连接', result: 'succeeded' });
     expect(obsStatusLogEntry('connected', snapshot('reconnecting'))).toBeNull();
   });

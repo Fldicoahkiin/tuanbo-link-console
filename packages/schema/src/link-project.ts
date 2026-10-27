@@ -92,7 +92,7 @@ export const linkActionSchema = z.discriminatedUnion('kind', [
     kind: z.literal('obs.setTransition'),
     transitionName: z.string().min(1),
     durationMs: z.number().int().min(0).max(20_000).refine((value) => value === 0 || value >= 50, {
-      message: 'OBS 转场时长必须为 0 或 50–20000ms'
+      message: 'OBS 转场时长必须是 0 或 50–20000 ms'
     })
   }),
   actionBase.extend({
@@ -543,7 +543,7 @@ function validateProjectInvariants(project: z.infer<typeof linkProjectSchema>, c
       }
       const asset = assetById.get(clip.assetId);
       if (asset && asset.kind !== 'audio' && visualLayerIds.size > 0 && !clip.layerId) {
-        ctx.addIssue({ code: 'custom', message: `视觉素材片段“${clip.label}”尚未分配视觉图层`, path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'layerId'] });
+        ctx.addIssue({ code: 'custom', message: `视觉素材片段“${clip.label}”还没分配视觉图层`, path: ['rundown', itemIndex, 'referenceMediaClips', clipIndex, 'layerId'] });
       }
       if (asset?.durationMs !== undefined && (clip.sourceOffsetMs ?? 0) + clip.durationMs > asset.durationMs) {
         ctx.addIssue({
@@ -582,7 +582,7 @@ function validateProjectInvariants(project: z.infer<typeof linkProjectSchema>, c
       const visualShowActions = cue.actions.filter((action) => action.kind === 'obs.setSceneItemEnabled' && action.enabled);
       const visualShow = visualShowActions.length > 0;
       if (visualShow && visualLayerIds.size > 0 && !cue.layerId) {
-        ctx.addIssue({ code: 'custom', message: `OBS 显示 Cue“${cue.name}”尚未分配视觉图层`, path: ['rundown', itemIndex, 'cues', cueIndex, 'layerId'] });
+        ctx.addIssue({ code: 'custom', message: `OBS 显示 Cue“${cue.name}”还没分配视觉图层`, path: ['rundown', itemIndex, 'cues', cueIndex, 'layerId'] });
       }
       if (visualShowActions.length > 1) {
         ctx.addIssue({

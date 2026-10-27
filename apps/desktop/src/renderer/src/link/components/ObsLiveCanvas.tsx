@@ -121,7 +121,7 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAs
         const next = obsLiveSceneSchema.parse(await desktop.readObsLiveScene());
         if (active.current && revision === editRevision.current) { acceptScene(next); setScene(next); if (next.sceneName !== targetScene) setEditError(null); }
       } catch (readError) { if (active.current && revision === editRevision.current) setEditError(toUserErrorMessage(readError)); }
-      void desktop.recordLog({ level: 'warning', category: 'device', device: 'obs', message: 'OBS 画布编辑已停止，未重发修改', details: { sceneName: targetScene, reason: toUserErrorMessage(reason) } }).catch(console.error);
+      void desktop.recordLog({ level: 'warning', category: 'device', device: 'obs', message: 'OBS 画面编辑已停止，修改不会自动重发', details: { sceneName: targetScene, reason: toUserErrorMessage(reason) } }).catch(console.error);
     }
     finally { sending.current = false; if (pending.current) void send(); }
   };
@@ -139,7 +139,7 @@ export const ObsLiveCanvas = memo(function ObsLiveCanvas({ editable = true, onAs
     {editable && scene && !error ? <ObsLiveSelection key={scene.sceneName} scene={scene} selected={selected} onSelect={setSelected} onEdit={edit} /> : null}
     {editError ? <div className="obs-edit-notice" role="status">{editError}<button onClick={() => { setEditError(null); setRestart(value => value + 1); }}>刷新编辑目标</button></div> : null}
 
-    {error || repairing ? <div className="stage-error" role="alert">{repairing ? '正在检查 OBS 组件，请完成可能出现的 Windows 授权或 OBS 重启确认。' : error}<button disabled={repairing} onClick={() => { void repair(); }}>检查并修复组件</button><button disabled={repairing} onClick={() => { previewFailed.current = false; setSuspended(false); setRestart((value) => value + 1); }}>重新连接预览</button></div> : null}
+    {error || repairing ? <div className="stage-error" role="alert">{repairing ? '正在检查 OBS 组件。如果弹出 Windows 授权或重启 OBS 的提示，请按提示完成。' : error}<button disabled={repairing} onClick={() => { void repair(); }}>检查并修复组件</button><button disabled={repairing} onClick={() => { previewFailed.current = false; setSuspended(false); setRestart((value) => value + 1); }}>重新连接预览</button></div> : null}
     </div>
   </div>;
 });

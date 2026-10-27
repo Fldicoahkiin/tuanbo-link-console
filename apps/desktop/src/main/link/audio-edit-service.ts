@@ -35,7 +35,7 @@ export class AudioEditService {
     }
     const audio = referenceAudioSourceSchema.parse(await operation);
     const expectedMs = Math.max(...tracks.flatMap(track => track.segments.map(segment => segment.startMs + segment.durationMs)));
-    if (audio.durationMs !== expectedMs) throw new Error('音轨缓存时长与当前编排不一致');
+    if (audio.durationMs !== expectedMs) throw new Error('音轨缓存的时长和当前编排对不上');
     const rendered = { ...audio, assetId: crypto.randomUUID() };
     return referenceAudioSchema.parse({ ...rendered, timeline: { source: rendered,
       segments: [{ id: `mix-${rendered.assetId}`, startMs: 0, sourceOffsetMs: 0, durationMs: rendered.durationMs }], tracks } });
@@ -154,7 +154,7 @@ export class AudioEditService {
       exists = false;
     }
     if (exists) {
-      if (!await this.verified.verify(destination, digest)) throw new Error('已有混音文件校验失败，未覆盖原文件');
+      if (!await this.verified.verify(destination, digest)) throw new Error('已有的混音文件校验失败，没有覆盖原文件');
     } else await rename(output, destination);
     return referenceAudioSchema.parse({ assetId: crypto.randomUUID(), relativePath: relative(dirname(projectPath), destination).replaceAll('\\', '/'), sha256: digest, durationMs });
   }
@@ -200,7 +200,7 @@ export async function composeAudioPcm(sourcePath: string, outputPath: string, se
       const start = segment.startMs * bytesPerMs;
       const length = segment.durationMs * bytesPerMs;
       let position = segment.sourceOffsetMs * bytesPerMs;
-      if (start < timelineBytes || position + length > sourceBytes + bytesPerMs) throw new Error('音频片段范围无效或超出已解码音频');
+      if (start < timelineBytes || position + length > sourceBytes + bytesPerMs) throw new Error('音频片段的范围无效，或超出了音频长度');
       while (timelineBytes < start) {
         const count = Math.min(silence.length, start - timelineBytes);
         await output.writeFile(silence.subarray(0, count)); timelineBytes += count;
@@ -210,7 +210,7 @@ export async function composeAudioPcm(sourcePath: string, outputPath: string, se
         const count = Math.min(buffer.length, remaining);
         buffer.fill(0, 0, count);
         const { bytesRead } = await source.read(buffer, 0, Math.min(count, Math.max(0, sourceBytes - position)), position + (wav?.offset ?? 0));
-        if (bytesRead < count && position + count - sourceBytes > bytesPerMs) throw new Error('音频源数据提前结束');
+        if (bytesRead < count && position + count - sourceBytes > bytesPerMs) throw new Error('音频文件提前结束了，可能已损坏');
         await output.writeFile(buffer.subarray(0, count));
         position += count; remaining -= count; timelineBytes += count;
       }
@@ -219,7 +219,7 @@ export async function composeAudioPcm(sourcePath: string, outputPath: string, se
 }
 
 function ffmpeg(args: string[], onData?: (data: Buffer) => void): Promise<void> {
-  if (!ffmpegPath) throw new Error('FFmpeg 运行时未安装');
+  if (!ffmpegPath) throw new Error('缺少 FFmpeg 组件，请重新安装联动台');
   const executable = ffmpegPath.includes('app.asar') ? ffmpegPath.replace('app.asar', 'app.asar.unpacked') : ffmpegPath;
   return new Promise((resolve, reject) => {
     const child = spawn(executable, ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-n', ...args], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });

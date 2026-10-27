@@ -9,7 +9,7 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
   // A catalog session owns the final directory verification when reusing this snapshot.
   const directory = sessionDirectory ?? ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
   if (signal?.aborted) throw new Error('素材读取已取消');
-  if (expectedSource && Object.entries(expectedSource).some(([key, value]) => Reflect.get(directory, key) !== value)) throw new Error('Show 或控台会话已改变，保留缓存，请重新读取目录');
+  if (expectedSource && Object.entries(expectedSource).some(([key, value]) => Reflect.get(directory, key) !== value)) throw new Error('控台的 Show 或连接变了，缓存已保留，请重新读取');
   const readAt = new Date().toISOString();
   await onProgress?.({ phase, completed: 0, total: directory.entries.length + 1, detail: '读取序列与 Cue', show: directory.show, checkpoint: { directory, readAt } });
   const sequences: Ma2EffectLibrary['sequences'] = [];
@@ -58,16 +58,16 @@ export async function readMa2NativeLibrary(connection: Pick<Ma2Telnet, 'command'
       if (signal?.aborted || isPlaying()) throw cause;
       errors.push({ sequence: entry.target, message: cause instanceof Error ? cause.message : String(cause) });
     }
-    await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: `已核对序列 ${entry.target}`, sequences: sequences.at(-1)?.sequence === entry.target ? [sequences.at(-1)!] : [], ...(errors.at(-1)?.sequence === entry.target ? { libraryError: errors.at(-1)! } : {}) });
+    await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: `已检查序列 ${entry.target}`, sequences: sequences.at(-1)?.sequence === entry.target ? [sequences.at(-1)!] : [], ...(errors.at(-1)?.sequence === entry.target ? { libraryError: errors.at(-1)! } : {}) });
   }
   if (signal?.aborted) throw new Error('素材读取已取消');
-  await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: '核对控台序列目录' });
+  await onProgress?.({ phase, completed: sequences.length + errors.length, total: directory.entries.length + 1, detail: '检查控台序列目录' });
   const verified = sessionDirectory ?? ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LISTSEQ', 1)));
   if (signal?.aborted) throw new Error('素材读取已取消');
-  if (isPlaying()) throw new Error('播放已开始，素材核对已停止，停止播放后重新核对');
-  if (JSON.stringify(directory) !== JSON.stringify(verified)) throw new Error('控台工程或序列目录发生变化，请重新读取');
+  if (isPlaying()) throw new Error('已开始播放，素材检查已停止，停止播放后会重新检查');
+  if (JSON.stringify(directory) !== JSON.stringify(verified)) throw new Error('控台的 Show 或序列有变化，请重新读取');
   const result = ma2EffectLibrarySchema.parse({ directory, sequences, fixtureUsage: [], fixtureDetails: 'unavailable', errors, readAt });
-  await onProgress?.({ phase, completed: directory.entries.length + 1, total: directory.entries.length + 1, detail: '序列目录已核对' });
+  await onProgress?.({ phase, completed: directory.entries.length + 1, total: directory.entries.length + 1, detail: '序列目录检查完毕' });
   return result;
 }
 
@@ -79,7 +79,7 @@ export function readNativeCueChunks(text: string, prefix: string): string | null
   const chunks: string[] = [];
   for (let position = 1; position <= length; position += 700) {
     const chunk = ma2ResponseLine(text, `${prefix}${position}:`);
-    if (chunk === null || chunk.length !== Math.min(700, length - position + 1)) throw new Error('控台 Cue 目录传输不完整，未使用截断数据');
+    if (chunk === null || chunk.length !== Math.min(700, length - position + 1)) throw new Error('控台的 Cue 列表没有传完，没有使用不完整的数据');
     chunks.push(chunk);
   }
   return chunks.join('');

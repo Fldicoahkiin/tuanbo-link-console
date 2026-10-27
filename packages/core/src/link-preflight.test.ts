@@ -58,7 +58,7 @@ describe('团播联动台预检', () => {
     ]));
     expect(report.checks.find((check) => check.id === 'mtc.stable')).toMatchObject({
       status: 'blocking',
-      detail: '尚无持续时间码，无法判断稳定性'
+      detail: '还没有持续的时间码，无法判断是否稳定'
     });
   });
 
@@ -121,7 +121,7 @@ describe('团播联动台预检', () => {
 
     delete value.profile.p1.obsAudioInputName;
     expect(runLinkPreflight(value).checks.find((check) => check.id === 'obs.p1AudioInput'))
-      .toMatchObject({ status: 'blocking', detail: '尚未选择承载 P1 正式音乐的 OBS 音频输入' });
+      .toMatchObject({ status: 'blocking', detail: '还没选择 OBS 里接收 P1 音乐的音频输入' });
   });
 
   it('OBS 二次缩小输出时明确提示画质损失', () => {
@@ -139,7 +139,7 @@ describe('团播联动台预检', () => {
 
     value.obs.videoSettings = { baseWidth: 1920, baseHeight: 1080 };
     expect(runLinkPreflight(value).checks.find((check) => check.id === 'obs.outputCanvas'))
-      .toMatchObject({ status: 'blocking', detail: '工程要求 1080×1920，OBS 当前为 1920×1080' });
+      .toMatchObject({ status: 'blocking', detail: '工程需要 1080×1920，OBS 现在是 1920×1080' });
   });
 
   it('P1 一键启动允许播放前没有 MTC，但必须配置当前节目的明确触发', () => {
@@ -172,8 +172,8 @@ describe('团播联动台预检', () => {
     expect(report.checks.find((check) => check.id === 'p1.startTrigger')).toBeUndefined();
     const mtcCheck = report.checks.find((check) => check.id === 'mtc.updating');
     expect(mtcCheck).toMatchObject({ status: 'warning' });
-    expect(mtcCheck?.detail).toContain('尚未收到时间码');
-    expect(mtcCheck?.detail).toContain('仅允许等待 P1');
+    expect(mtcCheck?.detail).toContain('还没收到时间码');
+    expect(mtcCheck?.detail).toContain('只能等 P1 播放');
   });
 
   it('灯光 Cue 使用独立 MIDI 端口档案并在端口缺失时阻断', () => {
@@ -192,7 +192,7 @@ describe('团播联动台预检', () => {
     });
 
     expect(runLinkPreflight(value).checks.find((check) => check.id === 'midi.output.lighting-output'))
-      .toMatchObject({ status: 'blocking', detail: '端口档案不存在' });
+      .toMatchObject({ status: 'blocking', detail: '端口设置不存在' });
     value.profile.midiPortProfiles.push({ id: 'lighting-output', direction: 'output', portName: 'Lighting Console' });
     value.midi.ports.push({ name: 'Lighting Console', direction: 'output', connected: true });
     expect(runLinkPreflight(value).checks.find((check) => check.id === 'midi.output.lighting-output'))
@@ -226,7 +226,7 @@ describe('团播联动台预检', () => {
 
     expect(runLinkPreflight(value).checks.find((check) => check.id === 'asset.media.clip')).toMatchObject({
       status: 'blocking',
-      detail: '素材文件缺失或不可读'
+      detail: '素材文件不见了或读不了'
     });
     value.mediaAssets.media = { fileAvailable: true };
     expect(runLinkPreflight(value).checks.find((check) => check.id === 'asset.media.clip')).toMatchObject({ status: 'passed' });
@@ -263,7 +263,7 @@ describe('MA2 控台 show', () => {
     const showCheck = (ma2Show?: string) => runLinkPreflight({ ...value, ...(ma2Show ? { ma2Show } : {}) }).checks.find(check => check.id === 'ma2.show.item');
     expect(showCheck()).toBeUndefined();
     const blocked = showCheck('tblink_ui100_20261007');
-    expect(blocked?.status).toBe('blocking'); expect(blocked?.detail).toContain('灯光 Cue 依据“2hao”编写');
+    expect(blocked?.status).toBe('blocking'); expect(blocked?.detail).toContain('灯光 Cue 是按“2hao”编的');
     expect(showCheck('2hao')).toMatchObject({ status: 'passed', detail: '2hao' });
   });
 });

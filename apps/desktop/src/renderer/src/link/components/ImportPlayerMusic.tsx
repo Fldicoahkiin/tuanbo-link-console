@@ -22,6 +22,6 @@ export function ImportPlayerMusic({ disabled, notify, onBusy, playlistId }: { di
     finally { setBusy(false); onBusy(false); if (input.current) input.current.value = ''; }
   };
   return <><Button className="primary-button import-player-music" disabled={disabled || busy} onClick={() => void choose()}><ListPlus />{busy ? '正在添加节目…' : '添加节目'}</Button>
-    <input ref={input} type="file" aria-label="导入主控音乐" hidden multiple accept="audio/*,video/mp4,.wav,.mp3,.flac,.m4a,.aac,.ogg,.mp4" onChange={(event) => void importFiles([...event.currentTarget.files ?? []])} /></>;
+    <input ref={input} type="file" aria-label="导入歌曲" hidden multiple accept="audio/*,video/mp4,.wav,.mp3,.flac,.m4a,.aac,.ogg,.mp4" onChange={(event) => void importFiles([...event.currentTarget.files ?? []])} /></>;
 }
 

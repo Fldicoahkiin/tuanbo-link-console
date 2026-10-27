@@ -35,7 +35,7 @@ export function withMa2TimeOrigin(input: Ma2TimecodePreview, originMs: number): 
   for (const track of preview.document.tracks) for (const clip of track.clips) {
     if (clip.timeLock !== 'time') throw new Error('MA2 导入必须使用绝对时间片段');
     const events = clip.events.map(event => ({ ...event, at: event.at + clip.start + shift }));
-    if (events.some(event => event.at < -1e-6)) throw new Error('控台包含歌曲起点之前的事件，请拆分跨歌曲时间线或重新配对，不能丢弃事件');
+    if (events.some(event => event.at < -1e-6)) throw new Error('控台上有比歌曲起点还早的事件，请拆分跨歌曲的时间线或重新关联（不能丢弃事件）');
     clip.start = 0;
     clip.events = events.map(event => ({ ...event, at: Math.max(0, event.at) }));
     clip.duration = clip.events.reduce((end, event) => Math.max(end, event.at + 1), 1);

@@ -23,7 +23,7 @@ describe('按真实 Cue 顺序打点', () => {
     track.cueStamp = { mode: 'marker' };
     expect(nextLightingMaster(document, track, 1000).level).toBe(0.625);
     document.ma2Bindings![0]!.trackMappings = [];
-    expect(() => nextLightingMaster(document, track, 1000)).toThrow('缺少');
+    expect(() => nextLightingMaster(document, track, 1000)).toThrow('还没绑定');
     document.ma2Bindings = [];
     expect(nextLightingMaster(document, track, 0).executor).toBe('1.1');
     expect(() => nextLightingMaster(document, track, Number.NaN)).toThrow('有效');
@@ -55,11 +55,11 @@ describe('按真实 Cue 顺序打点', () => {
   it('固定 Cue 在正式和待同步绑定中均不能绕过执行器检查，离线轨道仍可打点', () => {
     const { document, track, clip } = fixture();
     track.cueStamp = { mode: 'fixed', sequence: 9901, cue: '7.500', executor: '1.1' };
-    expect(() => nextLightingCue(document, track, 1000)).toThrow('改为 99.219');
+    expect(() => nextLightingCue(document, track, 1000)).toThrow('改成 99.219');
     const binding = document.ma2Bindings![0]!;
     binding.baselineTracks = [];
     binding.pendingTracks = [{ trackId: track.id, executor: '99.218', executorName: '待同步' }];
-    expect(() => nextLightingCue(document, track, 1000)).toThrow('改为 99.218');
+    expect(() => nextLightingCue(document, track, 1000)).toThrow('改成 99.218');
     track.cueStamp.executor = '99.218';
     expect(nextLightingCue(document, track, 1000).executor).toBe('99.218');
     expect(clip.events).toEqual([]);
@@ -100,7 +100,7 @@ describe('按真实 Cue 顺序打点', () => {
     clip.events.push({ id: 'first', at: 0, kind: 'ma2', action: 'goto', cue: '2', sequence: 9901, executor: '99.219', label: '不存在' });
     expect(() => nextLightingCue(document, track, 1000)).toThrow('列表中没有');
     delete document.ma2Bindings![0]!.cueCatalog;
-    expect(() => nextLightingCue(document, track, 1000)).toThrow('尚未读取');
+    expect(() => nextLightingCue(document, track, 1000)).toThrow('还没读取');
     clip.events = [];
     expect(() => nextLightingCue(document, track, 1000)).toThrow('指定序列');
   });

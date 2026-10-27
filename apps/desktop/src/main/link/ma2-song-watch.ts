@@ -16,8 +16,8 @@ export class Ma2SongWatch {
   constructor(private readonly isPlaying: () => boolean) {}
   async changed(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, input: Ma2SongCheckRequest): Promise<boolean> {
     const request = ma2SongCheckRequestSchema.parse(input);
-    if (this.busy) throw new Error('歌曲回读检查尚未结束');
-    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停歌曲回读'); };
+    if (this.busy) throw new Error('歌曲检查还没结束');
+    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停检查歌曲'); };
     stopped(); this.busy = true;
     const key = this.key(request);
     const cached = this.snapshots.get(key);
@@ -54,7 +54,7 @@ export class Ma2SongWatch {
     const request = ma2SongCheckRequestSchema.parse({ ...input, revision: createHash('sha256').update(canonical(baselineXml)).digest('hex') });
     const cached = this.snapshots.get(this.key(request));
     if (this.busy || this.isPlaying() || !cached || cached.revision !== request.revision) return null;
-    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停歌曲回读'); };
+    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停检查歌曲'); };
     stopped(); this.busy = true;
     try {
       if (await this.same(connection, request, cached.file, stopped)) return cached.file;
@@ -72,7 +72,7 @@ export class Ma2SongWatch {
     const request = ma2SongCheckRequestSchema.parse(input);
     if (!/^tblink_library_[a-f0-9]{32}$/.test(exportFile)) throw new Error('歌曲回读导出文件名无效');
     if (this.busy || this.isPlaying()) return false;
-    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停歌曲回读'); };
+    const stopped = (): void => { if (this.isPlaying()) throw new Error('播放期间暂停检查歌曲'); };
     this.busy = true;
     const key = this.key(request);
     const file = this.snapshots.get(key)?.file ?? this.file(request);

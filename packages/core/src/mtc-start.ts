@@ -20,6 +20,11 @@ export function nextMtcStartMs(occupied: ReadonlyArray<{ startMs: number; endMs:
 
 /** The slot MIDI timecode reaches on grandMA2 by default; every song's own Timecode show listens there. */
 export const MA2_SONG_TIMECODE_SLOT = 'TC Slot 2';
+/**
+ * Starts a song sync error when the console changed the song's Sequence between the read and the
+ * write: nothing was written and the next pass reads again, so it is a wait, not a failed attempt.
+ */
+export const MA2_SONG_COLLISION = '控台同时在改';
 
 /** A show whose length the console does not give still runs past its last event; this much is kept clear after it. */
 const LAST_EVENT_MARGIN_TICKS = 30 * 30;
@@ -34,7 +39,7 @@ const LAST_EVENT_MARGIN_TICKS = 30 * 30;
  */
 export function allocateSongMtcStart(project: LinkProject, itemId: string, console: Ma2TimecodeRanges): number {
   const item = project.rundown.find(value => value.id === itemId);
-  if (!item?.referenceAudio) throw new Error('歌曲缺少参考音频时长，无法分配时间码起点');
+  if (!item?.referenceAudio) throw new Error('歌曲没有音频时长，无法分配时间码起点');
   const occupied: Array<{ startMs: number; endMs: number }> = [];
   const unclear: string[] = [];
   for (const show of console.entries) {

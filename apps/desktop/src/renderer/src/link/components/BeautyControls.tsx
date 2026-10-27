@@ -20,7 +20,7 @@ export function BeautySlider({ control }: { control: BeautyControl }): JSX.Eleme
   };
   return <div className={`beauty-control${control.prototype ? '' : ' is-unavailable'}`}>
     <div className="beauty-control-label"><label htmlFor={`beauty-${control.key}`}>{control.name}</label>
-      <small>{control.prototype ? '' : '未实现'}</small>
+      <small>{control.prototype ? '' : '暂不支持'}</small>
       <button className="beauty-icon" title={`重置${control.name}`} aria-label={`重置${control.name}`} disabled={value === 0}
         onClick={() => { begin(); change(control.key, 0); end(); }}><RotateCcw size={12} /></button>
     </div>

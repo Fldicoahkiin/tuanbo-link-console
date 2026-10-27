@@ -18,6 +18,7 @@ import { assignMa2SongExecutor, planMa2SongExecutor } from './ma2-song-executor'
 import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recovery';
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
 import { writeMa2SongTimecode } from './ma2-song-timecode';
+import { MA2_SONG_COLLISION } from '@tb/core/link';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
@@ -64,7 +65,7 @@ export class Ma2LayoutService {
       const key=`TBLINK_LAYOUT_${randomBytes(12).toString('hex')}`;
       const prepare=async(code:string):Promise<void>=>{
         const response=await connection.command(`Lua "${code};gma.echo('${prefix}READY')"`,text=>ma2ResponseLine(text,prefix),beforeSend);
-        if(response!=='READY')throw new Error('Layout 操作准备未确认');
+        if(response!=='READY')throw new Error('Layout 操作没有准备好');
       };
       await prepare(`${key}={}`);
       const bytes=Buffer.from(script);
@@ -106,7 +107,7 @@ export class Ma2LayoutService {
     const xml = await this.exportLayout(connection, request, file);
     const verified = await this.exportLayout(connection, request, `${file}_verify`);
     if (xml === null && verified === null) return null;
-    if (xml === null || verified === null || canonical(xml) !== canonical(verified)) throw new Error('Layout 在读取时发生变化，请重新读取');
+    if (xml === null || verified === null || canonical(xml) !== canonical(verified)) throw new Error('读取过程中 Layout 变了，请重新读取');
     await this.call(connection, `${backup ? removeFiles(`${file}_verify`) : removeFiles(file, `${file}_verify`)}return 'removed'`);
     return { xml, file, value: { ...inspectMa2LayoutXml(xml, request.layout), revision: createHash('sha256').update(canonical(xml)).digest('hex') } };
   }
@@ -116,7 +117,7 @@ export class Ma2LayoutService {
     await this.directory(bridge, request);
     const snapshot = await this.snapshot(connection, request);
     await this.directory(bridge, request);
-    if (!snapshot) throw new Error(`Layout ${request.layout} 尚未创建；新建 Cue 时可创建专用布局`);
+    if (!snapshot) throw new Error(`Layout ${request.layout} 还没创建，新建 Cue 时可以创建专用 Layout`);
     return snapshot.value;
   }
 
@@ -134,20 +135,20 @@ export class Ma2LayoutService {
   async update(connection: Connection, bridge: Bridge, input: Ma2LayoutUpdateRequest): Promise<Ma2LayoutSnapshot> {
     const request = ma2LayoutUpdateRequestSchema.parse(input);
     if (request.name !== undefined) request.name = toConsoleLabel(request.name);
-    if (this.busy || this.isPlaying()) throw new Error('请停止播放并等待当前控台操作完成');
+    if (this.busy || this.isPlaying()) throw new Error('请先停止播放，并等当前的控台操作完成');
     this.busy = true; let backup = '';
     try {
       await this.directory(bridge, request); const before = await this.snapshot(connection, request, true);
-      if (!before || before.value.revision !== request.revision) throw new Error('控台页面已变化，请刷新后再编辑；未覆盖控台修改');
+      if (!before || before.value.revision !== request.revision) throw new Error('控台页面有变化，请刷新后再编辑（没有覆盖控台上的修改）');
       backup = before.file;
       const xml = moveMa2LayoutObjects(before.xml, request.layout, request.positions, request.name);
       const file = `tblink_layout_move_${randomBytes(12).toString('hex')}`;
       await this.prepareXml(connection, request, file, xml);
       await this.call(connection, `${this.guard(request)}gma.cmd('Export Layout ${request.layout} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${before.file}')==read('${file}_check'),'Layout changed during write');gma.cmd('Import ${file}.xml At Layout ${request.layout} /o /nc');${removeFiles(file, `${file}_check`)}return 'written'`);
       const after = await this.snapshot(connection, request);
-      if (!after) throw new Error('Layout 回读缺失');
+      if (!after) throw new Error('没有读回 Layout');
       const expected = inspectMa2LayoutXml(xml, request.layout);
-      if (JSON.stringify([expected.name, expected.items, expected.omittedFixtures]) !== JSON.stringify([after.value.name, after.value.items, after.value.omittedFixtures])) throw new Error('Layout 名称或位置回读未通过');
+      if (JSON.stringify([expected.name, expected.items, expected.omittedFixtures]) !== JSON.stringify([after.value.name, after.value.items, after.value.omittedFixtures])) throw new Error('控台上 Layout 的名称或位置和修改的不一致');
       if (before.value.name !== after.value.name) {
         const key = `${request.network.host}:${request.network.port}/${request.expectedSource.show}/${request.layout}`;
         const owners = await this.readOwners();
@@ -170,14 +171,14 @@ export class Ma2LayoutService {
     // The plan converts the song and Cue names it writes; the Layout name is only ever written.
     request.settings.name = toConsoleLabel(request.settings.name);
     const originalPoints = structuredClone(request.points);
-    if (this.busy || this.isPlaying()) throw new Error('请停止播放并等待当前控台操作完成');
-    if (this.attempted.has(request.requestId)) throw new Error('此请求已执行，请先回读核对');
+    if (this.busy || this.isPlaying()) throw new Error('请先停止播放，并等当前的控台操作完成');
+    if (this.attempted.has(request.requestId)) throw new Error('这个请求已经执行过了，请先读取控台确认');
     this.busy = true; let wrote = false;
     const deadline = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const received = (): void => {
       clearTimeout(timer);
-      timer = setTimeout(() => deadline.abort(new Error('控台连续 90 秒没有返回新的确认，当前编辑已保留；恢复连接后核对原位置')), 90000);
+      timer = setTimeout(() => deadline.abort(new Error('控台 90 秒没有回应，当前编辑已保留，连接恢复后会继续')), 90000);
     };
     received();
     const signal = externalSignal ? AbortSignal.any([externalSignal, deadline.signal]) : deadline.signal;
@@ -200,8 +201,10 @@ export class Ma2LayoutService {
     let layoutRequest = { network: request.network, expectedSource: request.expectedSource, layout: request.binding?.layout ?? request.settings.layout };
     let executorPage = request.binding?.executor ? Number(request.binding.executor.split('.')[0]) : request.binding?.layout ? undefined : request.settings.executorPage;
     let backupFile = '';
+    // Set only when the song's own write guard refused: the console changed the target meanwhile.
+    let collision: 'changed' | 'occupied' | null = null;
     try {
-      progress('connecting', 0, 1, '核对控台、歌曲绑定与目标位置');
+      progress('connecting', 0, 1, '检查控台、歌曲关联和目标位置');
       const directory = await this.directory(bridge, layoutRequest);
       const ownership = `${this.ownershipFile}.songs.json`;
       const schema = z.array(z.object({ key: z.string(), projectId: z.string(), itemId: z.string(), inputHash: z.string().optional(), binding: ma2SongBindingSchema.optional(),
@@ -231,11 +234,11 @@ export class Ma2LayoutService {
       };
       if (!request.binding) {
         const previous = owners.filter(owner => owner.key.startsWith(`${endpoint}/${directory.show}/`) && owner.projectId === request.projectId && owner.itemId === request.itemId && directory.entries.some(entry => owner.key === `${endpoint}/${directory.show}/${entry.target}`));
-        if (previous.length > 1) throw new Error(`本曲已有多个控台序列记录：${previous.map(owner => owner.key.split('/').at(-1)).join('、')}，请核对；未重复新建`);
+        if (previous.length > 1) throw new Error(`这首歌在控台上有多个序列记录：${previous.map(owner => owner.key.split('/').at(-1)).join('、')}，请检查（没有再新建）`);
         const existing = previous[0];
         if (existing) {
           const savedBinding = existing.binding ?? existing.draft?.binding;
-          if (!savedBinding || existing.inputHash !== inputHash && !existing.originalPoints) throw new Error(`上一次同步已保留序列 ${existing.key.split('/').at(-1)}，请先从控台读取核对；不会重复新建或覆盖`);
+          if (!savedBinding || existing.inputHash !== inputHash && !existing.originalPoints) throw new Error(`上一次同步留下了序列 ${existing.key.split('/').at(-1)}，请先读取控台确认；不会重复新建或覆盖`);
           target = savedBinding.sequence;
           if (existing.draft && !existing.binding) {
             await recoverDraft(existing);
@@ -259,13 +262,16 @@ export class Ma2LayoutService {
       }
       if (!request.binding) {
         const occupied = new Set(directory.entries.map(entry => entry.target));
-        while (occupied.has(target) && target < 99999) target++;
-        if (occupied.has(target)) throw new Error('起始序列之后没有空位置，请修改起始序列');
+        // A new song's Sequence and its own Timecode show share one number (2026-10-26), so either one
+        // finds the other: the first number from the start that is free in both pools.
+        const shows = request.timecodeStartMs === undefined ? new Set<number>() : new Set(ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1))).entries.map(entry => entry.target));
+        while ((occupied.has(target) || shows.has(target)) && target < 99999) target++;
+        if (occupied.has(target) || shows.has(target)) throw new Error('起始序列后面没有序列和时间码节目都空着的编号了，请改一个起始序列');
         request.settings.nextSequence = target;
       }
-      if (request.binding && (request.binding.endpoint !== endpoint || request.binding.show !== directory.show || request.binding.layout !== null && request.settings.layout !== request.binding.layout)) throw new Error('本曲绑定的控台、Show 或页面发生变化，请先核对原位置');
+      if (request.binding && (request.binding.endpoint !== endpoint || request.binding.show !== directory.show || request.binding.layout !== null && request.settings.layout !== request.binding.layout)) throw new Error('这首歌绑定的控台、Show 或页面有变化，请先确认原来的位置');
       const key = `${endpoint}/${directory.show}/${target}`;
-      if (request.binding && owners.some(value => value.key === key && (value.projectId !== request.projectId || value.itemId !== request.itemId))) throw new Error('此位置已关联本机另一歌曲，请核对歌曲绑定');
+      if (request.binding && owners.some(value => value.key === key && (value.projectId !== request.projectId || value.itemId !== request.itemId))) throw new Error('这个位置已经关联了另一首歌，请检查歌曲绑定');
       // Confirm the destination before importing or renaming any song content.
       const destination = executorPage ? await planMa2SongExecutor(bridge, request, target, executorPage, request.binding?.executor, this.isPlaying) : null;
       // With 'keep', SEQUENCE leaves its native export as importexport/tblink_library_<request id>.xml
@@ -296,7 +302,7 @@ export class Ma2LayoutService {
       const needsLayoutItem = !executorPage && !beforeLayout?.value.items.some(item => item.sequence === target);
       const layoutOwners = await this.readOwners();
       const layoutKey = `${endpoint}/${directory.show}/${layoutRequest.layout}`;
-      if (needsLayoutItem && beforeLayout && !layoutOwners.some(owner => owner.key === layoutKey && owner.projectId === request.projectId && owner.name === beforeLayout.value.name)) throw new Error(`Layout ${layoutRequest.layout} 不属于本工程，请选择空页面，避免改动已有布局`);
+      if (needsLayoutItem && beforeLayout && !layoutOwners.some(owner => owner.key === layoutKey && owner.projectId === request.projectId && owner.name === beforeLayout.value.name)) throw new Error(`Layout ${layoutRequest.layout} 不属于这个工程，请选一个空页面，以免改动已有的 Layout`);
       const changes = [];
       const sources = new Map<string, string>();
       const sourceCount = new Set(plan.changes.flatMap(change => (change.refs ?? []).map(ref => ref.sequence))).size;
@@ -346,10 +352,10 @@ export class Ma2LayoutService {
         const remote = inspectMa2SequenceXml(remoteXml).sequences[0]!;
         const names = [...(remote.name !== plan.name ? [{ kind: 'sequence' as const, cue: '0', confirmedName: remote.name ?? '', name: plan.name }] : []), ...changes.map(change => ({ kind: 'single' as const, cue: change.cue, confirmedName: remote.cues.find(cue => Number(cue.number) === Number(change.cue))?.name ?? '', name: change.name }))];
         for (const change of names) {
-          if (this.isPlaying()) throw new Error('播放已开始，后续名称尚未发送');
+          if (this.isPlaying()) throw new Error('已开始播放，后面的名称还没发送');
           const result = await renameMa2Object(bridge, { dataDirectory: '', network: request.network, generation: request.expectedSource.generation, change: { endpoint, show: directory.show, sequence: target, ...change } });
           backupFile ||= result.backupFile; labelBackups.push(result.backupFile);
-          progress('previews', names.indexOf(change) + 1, names.length, `已回读${change.kind === 'sequence' ? '序列名称' : ` Cue ${change.cue} 名称`}`);
+          progress('previews', names.indexOf(change) + 1, names.length, `已在控台确认${change.kind === 'sequence' ? '序列名称' : ` Cue ${change.cue} 名称`}`);
         }
       } else if (changed) {
         // New songs can copy their already-present Cue data inside MA2. Only the
@@ -373,7 +379,7 @@ export class Ma2LayoutService {
         // The song's own Sequence is compared with its console export inside the write command below.
         // Copy takes each source Cue as the console holds it at that moment, so a source edited since
         // it was read shows up in the read-back check below; only the uploaded snapshot reads it twice.
-        if (!copyInPlace) for (const [number, xml] of sources) if (Number(number) !== target && canonical(await bridge.request('SEQCUES', Number(number), sourceCues(Number(number)))) !== canonical(xml)) throw new Error('来源 Cue 在合成时改变，未写入，请重新核对');
+        if (!copyInPlace) for (const [number, xml] of sources) if (Number(number) !== target && canonical(await bridge.request('SEQCUES', Number(number), sourceCues(Number(number)))) !== canonical(xml)) throw new Error('合成过程中来源 Cue 有变化，没有写入，请重新检查');
         await checkpoint(remoteXml ?? uploaded, nativeCopy || copyInPlace ? ma2SongCreationStages(remoteXml ?? uploaded, changes) : undefined);
         const verify = remoteXml ? `gma.cmd('Export Sequence ${target} ${file}_check /o');local function read(n)local f=assert(io.open(gma.show.getvar('PATH')..'/importexport/'..n..'.xml','rb'));local s=f:read('*a');f:close();return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><') end;assert(read('${remoteExport}')==read('${file}_check'),'Sequence changed during write');` : `assert(not gma.show.getobj.handle('Sequence ${target}'),'Sequence occupied');`;
         // Import /o can retain the previous native step table when a numbered
@@ -387,7 +393,14 @@ export class Ma2LayoutService {
         this.attempted.add(request.requestId); wrote = true;
         const clear = replacingAll ? `gma.cmd('Import ${file}_clear.xml At Sequence ${target} /o /nc');` : '';
         const write = copyInPlace ? '' : `gma.cmd('Import ${file}.xml At Sequence ${target} /o /nc');assert(gma.show.getobj.handle('Sequence ${target}'),'Sequence creation failed');`;
-        await this.call(connection, `${this.guard(layoutRequest)}${verify}${remove}${clear}${write}${removeFiles(file, `${file}_check`, `${file}_clear`)}return 'written'`);
+        try { await this.call(connection, `${this.guard(layoutRequest)}${verify}${remove}${clear}${write}${removeFiles(file, `${file}_check`, `${file}_clear`)}return 'written'`); }
+        catch (error) {
+          // The guard stops before anything is written. Drop the draft just recorded so the next
+          // sync reads the console afresh instead of resuming, or adopting, a Sequence it never wrote.
+          collision = error instanceof Error ? /Sequence changed during write/.test(error.message) ? 'changed' : /(?<!Scratch )Sequence occupied/.test(error.message) ? 'occupied' : null : null;
+          if (collision) { wrote = false; await writeFileAtomically(ownership, JSON.stringify(owners)); }
+          throw error;
+        }
         if (copyInPlace && existingName !== plan.name) await this.call(connection, `${this.guard(layoutRequest)}gma.cmd(${decode(`Label Sequence ${target} "${plan.name}"`)});return 'labelled'`);
         if (nativeCopy || copyInPlace) {
           progress('previews', 0, plan.changes.length, `控台内部${nativeCopy ? '创建' : '写入'} ${plan.changes.length} 个 Cue`);
@@ -413,24 +426,24 @@ export class Ma2LayoutService {
           while (slot < 10000 && beforeLayout?.value.items.some(item => Math.abs(item.x - position(slot).x) < item.width / 2 + .5 && Math.abs(item.y - position(slot).y) < item.height / 2 + .5)) slot++;
           if (slot >= 10000) throw new Error('Layout 没有可用位置');
           if (!beforeLayout) await this.call(connection, `${this.guard(layoutRequest)}assert(not gma.show.getobj.handle('Layout ${layoutRequest.layout}'),'Layout occupied');gma.cmd('Import ${file}_layout.xml At Layout ${layoutRequest.layout} /nc');gma.cmd(${decode(`Label Layout ${layoutRequest.layout} "${request.settings.name}"`)});${removeFiles(`${file}_layout`)}return 'layout'`);
-          else { const current = await this.snapshot(connection, layoutRequest); if (!current || canonical(current.xml) !== canonical(beforeLayout.xml)) throw new Error('Layout 已变化，序列已保留，请核对后重新读取'); }
+          else { const current = await this.snapshot(connection, layoutRequest); if (!current || canonical(current.xml) !== canonical(beforeLayout.xml)) throw new Error('Layout 有变化，序列已保留，请检查后重新读取'); }
           const { x, y } = position(slot);
           await this.call(connection, `${this.guard(layoutRequest)}gma.cmd('Assign Sequence ${target} At Layout ${layoutRequest.layout} /x=${x} /y=${y}');return 'assigned'`);
           await writeFileAtomically(this.ownershipFile, JSON.stringify([...layoutOwners.filter(value => value.key !== layoutKey), { key: layoutKey, projectId: request.projectId, name: beforeLayout?.value.name ?? request.settings.name }]));
         }
       }
-      progress('verification', 0, 1, `回读序列 ${target}，确认名称、内容和位置`);
+      progress('verification', 0, 1, `读取序列 ${target}，确认名称、内容和位置`);
       // Kept on the console: a failed check leaves it beside the write-before export as evidence.
-      const readback = changed ? await readSequence(target, 'verification', `回读序列 ${target}`) : null;
+      const readback = changed ? await readSequence(target, 'verification', `读取序列 ${target}`) : null;
       const readbackFile = readback ? `tblink_library_${readback.requestId}` : null;
       // Without a write the console still holds the Sequence as read before it.
       const verifiedXml = readback ? readback.response : remoteXml;
-      if (verifiedXml === null) throw new Error('歌曲序列回读缺失');
+      if (verifiedXml === null) throw new Error('没有读回歌曲序列');
       const report = inspectMa2SequenceXml(verifiedXml).sequences[0]!;
-      if (report.number !== target || report.name !== plan.name) throw new Error('歌曲序列名称回读未通过');
+      if (report.number !== target || report.name !== plan.name) throw new Error('控台上歌曲序列的名称和写入的不一致');
       const actualHashes = ma2SequenceCueFingerprints(verifiedXml);
       const oldHashes = remoteXml ? ma2SequenceCueFingerprints(remoteXml) : new Map<string, string>();
-      for (const [number, hash] of oldHashes) if (!changes.some(change => Number(change.cue) === Number(number)) && !plan.deletions.includes(number) && actualHashes.get(number) !== hash) throw new Error(`未修改的 Cue ${number} 回读不同，已停止同步`);
+      for (const [number, hash] of oldHashes) if (!changes.some(change => Number(change.cue) === Number(number)) && !plan.deletions.includes(number) && actualHashes.get(number) !== hash) throw new Error(`没改过的 Cue ${number} 在控台上不一样了，已停止同步`);
       const expectedReport = changes.length ? inspectMa2SequenceXml(desired).sequences[0]! : null;
       const changedNumbers = new Set(changes.map(change => Number(change.cue)));
       const actualData = changes.length ? inspectMa2SequenceCueData(verifiedXml, report.cues.filter(cue => changedNumbers.has(Number(cue.number))).map(cue => cue.index)) : new Map<number, Map<string, Record<string, string>>>();
@@ -439,20 +452,20 @@ export class Ma2LayoutService {
         const actual = report.cues.find(cue => Number(cue.number) === Number(change.cue));
         const expected = expectedReport?.cues.find(cue => Number(cue.number) === Number(change.cue));
         const normalize = (value: Map<string, Record<string, string>>) => JSON.stringify([...value].sort(([a],[b]) => a.localeCompare(b)).map(([key,layers]) => [key,Object.entries(layers).sort(([a],[b]) => a.localeCompare(b))]));
-        if (!actual || !expected || actual.name !== change.name) throw new Error(`Cue ${change.cue} 名称回读未通过`);
+        if (!actual || !expected || actual.name !== change.name) throw new Error(`控台上 Cue ${change.cue} 的名称和写入的不一致`);
         if (normalize(actualData.get(actual.index)!) !== normalize(expectedData.get(expected.index)!)) {
           const refs = plan.changes.find(value => Number(value.cue) === Number(change.cue))?.refs ?? [];
           throw new Error(copiedOnConsole && refs.length
-            ? `Cue ${change.cue} 的灯光内容与来源 ${refs.map(ref => `序列 ${ref.sequence} · Cue ${ref.cue}`).join(' + ')} 回读不一致：控台上的来源可能在同步期间被改过，请核对来源后重新同步`
-            : `Cue ${change.cue} 内容回读未通过`);
+            ? `Cue ${change.cue} 的灯光内容和来源 ${refs.map(ref => `序列 ${ref.sequence} · Cue ${ref.cue}`).join(' + ')} 对不上：控台上的来源可能在同步期间被改过，请检查来源后重新同步`
+            : `控台上 Cue ${change.cue} 的内容和写入的不一致`);
         }
       }
-      if (plan.deletions.some(number => actualHashes.has(number) && !changedNumbers.has(Number(number)))) throw new Error('歌曲 Cue 删除回读未通过');
+      if (plan.deletions.some(number => actualHashes.has(number) && !changedNumbers.has(Number(number)))) throw new Error('歌曲 Cue 没有从控台删干净');
       // The show record the project holds, or the one recorded here when the project never received it.
       const previousTimecode = request.binding?.timecode ?? owners.find(owner => owner.key === key && owner.projectId === request.projectId && owner.itemId === request.itemId)?.binding?.timecode;
-      const executor = executorPage && destination ? await assignMa2SongExecutor(connection, bridge, request, target, executorPage, destination, this.isPlaying) : undefined;
+      const executor = executorPage && destination ? await assignMa2SongExecutor(connection, bridge, request, target, destination, this.isPlaying) : undefined;
       const afterLayout = executorPage ? null : changed ? await this.snapshot(connection, layoutRequest) : beforeLayout;
-      if (!executorPage && !afterLayout?.value.items.some(item => item.sequence === target)) throw new Error('Layout 未回读到本曲序列');
+      if (!executorPage && !afterLayout?.value.items.some(item => item.sequence === target)) throw new Error('Layout 里没有读到这首歌的序列');
       // Without a write the directory read at the start still lists this Sequence as it is.
       const verifiedDirectory = changed ? await this.directory(bridge, layoutRequest) : directory; const readAt = new Date().toISOString();
       progress('verification', 1, 1, `${executor ? `执行器 ${executor}` : `Layout ${layoutRequest.layout}`} · 序列 ${target} 已确认`);
@@ -487,14 +500,20 @@ export class Ma2LayoutService {
       const written = await writeMa2SongTimecode(bridge, { previous: previousTimecode, sequence: target, executor, startMs: request.timecodeStartMs, lengthMs: request.timecodeLengthMs, name: report.name ?? toConsoleLabel(request.name), version: directory.version,
         cues: result.binding.points.map(point => {
           const cue = report.cues.find(value => Number(value.number) === Number(point.cue));
-          if (!cue) throw new Error(`本曲时间码节目未写入：序列 ${target} 回读中没有 Cue ${point.cue}`);
+          if (!cue) throw new Error(`这首歌的时间码节目没有写入：控台的序列 ${target} 里没有 Cue ${point.cue}`);
           return { atMs: times.get(point.id)!, cueIndex: cue.index, number: cue.number, name: cue.name };
         }), created: timecode => journal({ ...result.binding, timecode }) });
       const timed = ma2SongSyncResultSchema.parse({ ...result, binding: { ...result.binding, timecode: written.timecode, points: result.binding.points.map(point => ({ ...point, atMs: times.get(point.id)! })) } });
       await journal(timed.binding);
       if (written.backup) await this.backups.record(rawBridge, { console: endpoint, object: `Timecode ${written.timecode.number}`, files: [written.backup] });
       return timed;
-    } catch (cause) { throw new Error(`${wrote ? `序列 ${target} 的写入结果待核对，原位置与备份 ${backupFile || '新建对象记录'} 已保留。` : ''}${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      // The guard runs before anything is written: the console changed the song's Sequence meanwhile.
+      if (collision === 'changed') throw new Error(`${MA2_SONG_COLLISION}：序列 ${target} 在控台上刚被改过，这次没有写入`, { cause });
+      if (collision === 'occupied') throw new Error(`${MA2_SONG_COLLISION}：序列 ${target} 在控台上刚被占用，这次没有写入，下次同步换一个空编号`, { cause });
+      throw new Error(`${wrote ? `序列 ${target} 的写入结果需要确认，原位置和备份 ${backupFile || '新建对象记录'} 已保留。` : ''}${message}`, { cause });
+    }
     finally { clearTimeout(timer!); this.busy = false; }
   }
 
@@ -513,7 +532,7 @@ export class Ma2LayoutService {
     for (let offset = 0, index = 0; offset < bytes.length; offset += 360, index++) {
       const prefix = `${writer}:${index}:`;
       const result = await connection.command(`Lua "if ${writer} then ${writer}(${index},'${bytes.subarray(offset, offset + 360).toString('hex')}'${offset + 360 >= bytes.length ? ',1' : ''}) else gma.echo('${prefix}ERR:missing') end"`, text => ma2ResponseLine(text, prefix), beforeSend);
-      if (result !== 'OK') throw new Error(`控台文件写入未确认：${result.replace(/^ERR:/, '')}`);
+      if (result !== 'OK') throw new Error(`控台没有确认文件写入：${result.replace(/^ERR:/, '')}`);
       report?.(Math.min(offset + 360, bytes.length), bytes.length);
     }
   }
@@ -521,8 +540,8 @@ export class Ma2LayoutService {
   async create(connection: Connection, bridge: Bridge, input: Ma2NewCueRequest): Promise<Ma2NewCueResult> {
     const request = ma2NewCueRequestSchema.parse(input);
     request.name = toConsoleLabel(request.name); request.settings.name = toConsoleLabel(request.settings.name);
-    if (this.busy || this.isPlaying()) throw new Error('请停止播放并等待当前控台操作完成');
-    if (this.attempted.has(request.requestId)) throw new Error('此新建请求已经执行过，请读取控台核对结果');
+    if (this.busy || this.isPlaying()) throw new Error('请先停止播放，并等当前的控台操作完成');
+    if (this.attempted.has(request.requestId)) throw new Error('这个新建请求已经执行过了，请读取控台确认结果');
     this.busy = true;
     let wrote = false;
     const target = request.settings.nextSequence;
@@ -544,7 +563,7 @@ export class Ma2LayoutService {
         const cue=resolveMa2CueNumber(ref.sequence, ref.cue, [report]);
         for(const [channel,layers] of inspectMa2CueData(sourceXml,cue.cueIndex))combined.set(channel,{...combined.get(channel),...layers});
       }
-      if(request.content.kind==='combine'&&!combined.size)throw new Error('所选 Cue 没有显式灯具属性；Tracking 继承内容不能按静态属性组合');
+      if(request.content.kind==='combine'&&!combined.size)throw new Error('选的 Cue 没有直接记录灯具属性；Tracking 继承来的内容不能组合');
       let slot = old?.value.items.length ?? 0;
       const position=(index:number)=>({x:(index%request.settings.columns)*2,y:-Math.floor(index/request.settings.columns)*2});
       while(slot<10000 && old?.value.items.some(item=>Math.abs(item.x-position(slot).x)<item.width/2+.5 && Math.abs(item.y-position(slot).y)<item.height/2+.5))slot++;
@@ -571,18 +590,18 @@ export class Ma2LayoutService {
       if(request.content.kind==='combine') {
         const actual=inspectMa2CueData(await bridge.request('SEQUENCE',target),1);
         const normalized=(value:Map<string,Record<string,string>>):string=>JSON.stringify([...value].sort(([a],[b])=>a.localeCompare(b)).map(([key,layers])=>[key,Object.entries(layers).sort(([a],[b])=>a.localeCompare(b))]));
-        if(normalized(actual)!==normalized(combined))throw new Error('合成后的灯具属性值与所选 Cue 不一致，未加入 Layout；请检查 World、Filter 或 Cue Part');
+        if(normalized(actual)!==normalized(combined))throw new Error('合成后的灯具属性和选的 Cue 不一致，没有加入 Layout；请检查 World、Filter 或 Cue Part');
       }
       const library = await readMa2EffectLibrary(bridge, this.isPlaying, undefined, undefined, [target], request.expectedSource, 'attributes', connection);
       const cue = library.sequences[0]?.cues[0];
-      if (library.errors.length || !cue || cue.name !== request.name || !library.cueAttributes?.some(value => value.attributes.length)) throw new Error('新 Cue 未回读到灯具属性；请检查控台 Programmer、World 和 Store Filter。未加入 Layout');
+      if (library.errors.length || !cue || cue.name !== request.name || !library.cueAttributes?.some(value => value.attributes.length)) throw new Error('新 Cue 里没有读到灯具属性，没有加入 Layout。请检查控台的 Programmer、World 和 Store Filter');
       await this.call(connection, `${this.guard(layoutRequest)}${old ? '' : `assert(not gma.show.getobj.handle('Layout ${request.settings.layout}'),'Layout occupied');gma.cmd(${decode(`Import "${blankFile}_layout.xml" At Layout ${request.settings.layout} /nc`)});gma.cmd(${decode(`Label Layout ${request.settings.layout} "${request.settings.name}"`)});${removeFiles(`${blankFile}_layout`)}`}gma.cmd('Assign Sequence ${target} At Layout ${request.settings.layout} /x=${x} /y=${y}');return 'assigned'`);
       const after = await this.snapshot(connection, layoutRequest);
-      if (!after || !after.value.items.some(item => item.sequence === target) || old && old.value.items.some((item,index) => JSON.stringify(item) !== JSON.stringify(after.value.items[index]))) throw new Error('Layout 回读未通过，请在控台核对，未自动重试');
+      if (!after || !after.value.items.some(item => item.sequence === target) || old && old.value.items.some((item,index) => JSON.stringify(item) !== JSON.stringify(after.value.items[index]))) throw new Error('控台上的 Layout 和写入的不一致，请到控台检查（没有自动重试）');
       await writeFileAtomically(this.ownershipFile, JSON.stringify([...owners.filter(value=>value.key!==key),{key,projectId:request.projectId,name:after.value.name}]));
       return ma2NewCueResultSchema.parse({ layout: after.value, sequence: target, cue: '1.000', library, backupFile: old ? `${old.file}.xml` : '' });
     } catch (error) {
-      throw new Error(`${wrote ? `序列 ${target} 可能已创建，保留现场结果，请先读取核对，不会自动重试。` : ''}${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      throw new Error(`${wrote ? `序列 ${target} 可能已经创建，控台上的结果已保留，请先读取控台确认，不会自动重试。` : ''}${error instanceof Error ? error.message : String(error)}`, { cause: error });
     } finally { this.busy = false; }
   }
 }

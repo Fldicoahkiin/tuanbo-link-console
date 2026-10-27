@@ -121,7 +121,7 @@ function itemTakes(item: RppNode): Array<{ item: RppNode; inactive: boolean }> {
   let explicitSelection = false;
   for (const entry of item.entries) {
     if (Array.isArray(entry) && entry[0] === 'TAKE') {
-      if (entry.length > 2 || (entry[1] !== undefined && entry[1] !== 'SEL')) throw new Error('REAPER Take 标志尚未支持');
+      if (entry.length > 2 || (entry[1] !== undefined && entry[1] !== 'SEL')) throw new Error('REAPER Take 标志还不支持');
       if (entry[1] === 'SEL') {
         if (explicitSelection) throw new Error('REAPER 存在多个启用 Take');
         selected = takes.length;
@@ -130,7 +130,7 @@ function itemTakes(item: RppNode): Array<{ item: RppNode; inactive: boolean }> {
       takes.push({ tag: 'ITEM', args: [], lines: [], children: [], entries: [] });
       continue;
     }
-    if (!Array.isArray(entry) && entry.tag === 'TAKE') throw new Error('REAPER Take 块格式尚未支持');
+    if (!Array.isArray(entry) && entry.tag === 'TAKE') throw new Error('REAPER Take 块格式还不支持');
     const current = takes[takes.length - 1]!;
     current.entries.push(entry);
     if (Array.isArray(entry)) current.lines.push(entry);
@@ -158,7 +158,7 @@ function importTempoEnvelope(envelope: RppNode, initial: LightingTempo): Lightin
     const bpm = numeric(point[2]);
     const rawShape = point[3] === '-1' ? line(envelope, 'DEFSHAPE')?.[1] : point[3];
     const shape = numeric(rawShape);
-    if (shape !== 0 && shape !== 1) throw new Error('REAPER 变速包络包含尚未支持的曲线形状');
+    if (shape !== 0 && shape !== 1) throw new Error('REAPER 变速包络包含还不支持的曲线形状');
     const signature = numeric(point[4] ?? '0');
     if (!Number.isSafeInteger(signature) || signature > 0xffffffff) throw new Error('REAPER 变速拍号编码无效');
     const beat = previous.beat + (ms - previousMs) * (previous.transition === 'linear' ? previous.bpm + bpm : previous.bpm * 2) / 120000;
@@ -207,7 +207,7 @@ function importEmbedded(source: RppNode): LightingImport {
   let tick = 0;
   for (const entry of source.entries) {
     if (!Array.isArray(entry)) {
-      if (!/^[Xx]$/.test(entry.tag) || entry.args.length !== 2 || entry.args[1] !== '0' || entry.children.length) throw new Error('REAPER 内嵌 MIDI 扩展块类型或标志尚未支持');
+      if (!/^[Xx]$/.test(entry.tag) || entry.args.length !== 2 || entry.args[1] !== '0' || entry.children.length) throw new Error('REAPER 内嵌 MIDI 扩展块类型或标志还不支持');
       const delta = numeric(entry.args[0]);
       if (!Number.isSafeInteger(delta)) throw new Error('REAPER MIDI 增量时间必须为整数');
       tick += delta;
@@ -241,7 +241,7 @@ function importEmbedded(source: RppNode): LightingImport {
       case 0xa0: event = { ...base, type: 'noteAftertouch', noteNumber: a, amount: b }; break;
       case 0xd0: event = { ...base, type: 'channelAftertouch', amount: a }; break;
       case 0xe0: event = { ...base, type: 'pitchBend', value: (a | b << 7) - 8192 }; break;
-      default: throw new Error(`REAPER 内嵌 MIDI 消息 ${status.toString(16)} 尚未支持，请导出标准 MIDI`);
+      default: throw new Error(`REAPER 内嵌 MIDI 消息 ${status.toString(16)} 还不支持，请导出标准 MIDI`);
     }
     events.push({ tick, muted: row[0]!.endsWith('m'), event });
   }

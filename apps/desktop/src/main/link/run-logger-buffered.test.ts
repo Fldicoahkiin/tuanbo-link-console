@@ -57,7 +57,7 @@ it('慢磁盘时拒绝第513条待写日志，不创建无限任务队列', asyn
   const logger = new LinkRunLogger(directory), failure = vi.fn();
   try {
     for (let index = 0; index < 512; index++) await logger.recordBuffered(entry, failure);
-    await expect(logger.recordBuffered(entry, failure)).rejects.toThrow('队列已满');
+    await expect(logger.recordBuffered(entry, failure)).rejects.toThrow('排队已满');
     release(); await logger.flush(); expect(failure).not.toHaveBeenCalled();
   } finally { release(); await logger.flush(); await actual.rmdir(directory); }
 });

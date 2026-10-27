@@ -54,7 +54,7 @@ export function applyMa2ExecutorChangeCommand(source: string, show: string, sequ
 export function ma2ExecutorDeletionUses(project: LinkProject, address: string): string[] {
   const needsExecutor = (track: LightingTrack): boolean => track.clips.some(clip => clip.events.some(event =>
     (event.kind === 'ma2-fader' || event.kind === 'ma2' && (event.action !== 'goto' || !event.sequence)) && event.executor === address));
-  const message = '含执行器专用动作，请先重新指定这些动作的目标';
+  const message = '有动作只能用在这个执行器上，请先给这些动作重新指定目标';
   const material = project.ma2MaterialLibrary;
   const show = material?.library?.directory.show;
   const uses = project.rundown.flatMap(item => {

@@ -52,6 +52,6 @@ export async function elevateObsPluginInstall(source: string, sha256: string): P
   try {
     await run(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded(launcher)], { windowsHide: true });
   } catch (error) {
-    throw new Error('OBS 组件部署未完成。Windows 授权被取消，或组件仍被占用；请处理后在软件中再次点击“检查并修复组件”。', { cause: error });
+    throw new Error('OBS 组件没有装好：可能是取消了 Windows 的管理员确认，或组件还被占用。处理后请再点一次“检查并修复组件”。', { cause: error });
   }
 }

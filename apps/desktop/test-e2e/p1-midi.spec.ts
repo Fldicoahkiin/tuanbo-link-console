@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createEmptyLinkProject, parseLinkProject, createLightingDocument, lightingTrackSchema } from '@tb/schema';
 import { answerSaveQuestions, saveProject, savedValue } from './save-questions';
+import { stubMidiPorts } from './midi-ports';
 
 test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', async ({}, info) => {
   const wav = Buffer.alloc(44 + 8000 * 10, 128);
@@ -37,14 +38,9 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
       ipcMain.removeHandler('link:process-start'); ipcMain.handle('link:process-start', () => { throw new Error('隔离测试不启动外部程序'); });
       // Native playback identifies outputs through Windows; this test's only output is the stand-in USB interface.
       // One-click connect checks the audio output first, so the list carries the Windows default device.
-      ipcMain.removeHandler('link:native-player-devices'); ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [{ id: 'default', name: 'Windows 默认输出', isDefault: true }], midiOutputs: [{ id: 0, name: 'USB MIDI' }] }));
+      ipcMain.removeHandler('link:native-player-devices'); ipcMain.handle('link:native-player-devices', () => ({ protocol: 4, audio: [{ id: 'default', name: 'Windows 默认输出', isDefault: true }], midiOutputs: [{ id: 0, name: 'USB MIDI' }], midiInputs: [] }));
     }, path);
-    await page.evaluate(() => {
-      const packets: number[][] = []; Reflect.set(window, '__cuePackets', packets);
-      const port = Object.assign(new EventTarget(), { id: 'usb', name: 'USB MIDI', manufacturer: 'Test', type: 'output', state: 'connected', connection: 'closed', open() { this.connection = 'open'; return Promise.resolve(this); }, close() { this.connection = 'closed'; return Promise.resolve(this); }, send(bytes: number[]) { packets.push([...bytes]); }, clear() { packets.length = 0; } });
-      const access = Object.assign(new EventTarget(), { inputs: new Map(), outputs: new Map([['usb', port]]), sysexEnabled: true });
-      Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: () => Promise.resolve(access) });
-    });
+    const midi = await stubMidiPorts(app, { outputs: ['USB MIDI'] });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('button', { name: '顶部一键连接', exact: true }).click();
     await expect.poll(async () => {
@@ -60,7 +56,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     await connectionResult.getByRole('button', { name: 'OBS 控制：已连接', exact: true }).click();
     await page.getByRole('region', { name: '连接详情' }).getByRole('button', { name: '前往设置', exact: true }).click();
     await expect(page.getByRole('navigation', { name: '设置子子菜单' })).toBeVisible();
-    const packets = () => page.evaluate(() => Reflect.get(window, '__cuePackets') as number[][]);
+    const packets = () => midi.sent('USB MIDI');
     expect(await packets()).toEqual([]);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     await page.getByRole('button', { name: '音频 Cue 1', exact: true }).click();
@@ -72,7 +68,7 @@ test('一键识别 MIDI 输出，点击 Cue 发包，关闭开关不发包', asy
     await page.getByLabel('选中 Cue 实时播放', { exact: true }).check();
     await page.getByRole('button', { name: '音频 Cue 2', exact: true }).click();
     await expect.poll(async () => (await packets()).length).toBe(2);
-    await expect(page.getByText('已发送 1 条 Cue 指令（MIDI 无回执）', { exact: true })).toBeVisible();
+    await expect(page.getByText('已发送 1 条 Cue 指令（MIDI 无法确认控台是否收到）', { exact: true })).toBeVisible();
   } finally { await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: null, projectId: null })); await app.close(); }
 });
 
@@ -124,8 +120,8 @@ test('纯 MIDI 无网络前置：裁剪 P1 导入、保存重开、未启动 P1 
     await panel.getByText('MIDI 连接说明', { exact: true }).click();
     await panel.getByLabel('导入 P1 工程').click();
     await panel.getByRole('button', { name: '选择 .hia 文件', exact: true }).click();
-    await expect(panel.getByText('已建立映射', { exact: true })).toBeVisible();
-    await expect(panel.getByText('已恢复的歌曲：请核对裁剪范围', { exact: true })).toBeVisible();
+    await expect(panel.getByText('已关联', { exact: true })).toBeVisible();
+    await expect(panel.getByText('已恢复的歌曲：请检查裁剪范围', { exact: true })).toBeVisible();
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).playbackSource)).toBe('internal');
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown[0]?.playback?.mtcOffsetMs)).toBe(120000);
     const summaries = await panel.locator('.p1-sync-summary, .p1-sync-issues').evaluateAll(elements => elements.map(element => { const box = element.getBoundingClientRect(); return { top: box.top, bottom: box.bottom }; }));

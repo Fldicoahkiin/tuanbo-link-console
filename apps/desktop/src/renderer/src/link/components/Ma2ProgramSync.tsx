@@ -13,7 +13,7 @@ async function archiveBeforeSync(destination: number, programId: string, source:
   if (current.documentId !== destination || !current.project) throw new Error('工程已切换');
   await archiveMa2Project(destination, current.project);
   const latest = useDocumentStore.getState();
-  if (latest.documentId !== destination || latest.project?.rundown.find(entry => entry.id === programId)?.lighting !== source) throw new Error('存档期间工程发生修改，请重新核对');
+  if (latest.documentId !== destination || latest.project?.rundown.find(entry => entry.id === programId)?.lighting !== source) throw new Error('存档时工程被修改了，请重新检查');
 }
 export function Ma2ProgramSync({ disabled, notify, method, network, directory, onBusy, initialTarget = 1 }: { initialTarget?: number; onBusy: (busy: boolean) => void; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; method: 'local' | 'network'; network: Ma2NetworkTarget | null; directory: string }): JSX.Element {
   const [difference, setDifference] = useState<{ result: Ma2SyncPreview; source: LightingDocument; readback: Ma2TimecodePreview; identities: ReadonlyMap<string, string | null> } | null>(null);
@@ -24,7 +24,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
       if (status.state !== 'connected' || !status.settings) throw new Error('请先保存并连接 MA2 控台');
       const { host, port, monitorPort, username } = status.settings; return { dataDirectory: '', network: { host, port, monitorPort, username } };
     }
-    if (method === 'local' && !directory.trim()) throw new Error('请在维护页填写本机 onPC 数据目录');
+    if (method === 'local' && !directory.trim()) throw new Error('请先填写本机 onPC 数据目录');
     return method === 'network' && network ? { dataDirectory: '', network } : { dataDirectory: directory.trim() };
   };
   const [target, setTarget] = useState(initialTarget);
@@ -50,7 +50,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
       const result = ma2TimecodePreviewSchema.parse(await window.tbLink.previewMa2({ ...connection, target, timeOriginMs: item?.lighting?.ma2Bindings?.find(entry => entry.timecode === target)?.timeOriginMs }));
       setPreview({ result, documentId, itemId });
       setStatus(result.unconverted.length ? `已读取，${result.unconverted.length} 个事件暂不能转换` : `Timecode ${target} 已读取`);
-    } catch (error) { const message = error instanceof Error ? error.message : String(error); setStatus('通信未完成'); notify(message, 'error'); }
+    } catch (error) { const message = error instanceof Error ? error.message : String(error); setStatus('和控台通信没有完成'); notify(message, 'error'); }
     finally { setBusy(false); }
   };
   const stale = preview !== null && (preview.documentId !== documentId || preview.itemId !== itemId);
@@ -69,7 +69,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
       setPreview({ result, documentId: destination, itemId: programId }); setIdentityChoices(new Map());
       setStatus(`Timecode ${number} 已创建并关联当前节目`);
     } catch (error) {
-      setStatus(created ? `Timecode ${number} 已创建，节目关联未完成，请重新读取` : '创建未确认，请读取目标编号检查；不会自动重试');
+      setStatus(created ? `Timecode ${number} 已创建，但还没关联到节目，请重新读取` : '无法确认是否创建成功，请读取这个编号检查（不会自动重试）');
       notify(error instanceof Error ? error.message : String(error), 'error');
     } finally { setBusy(false); }
   };
@@ -94,7 +94,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
   const activeDifference = difference && difference.source === item?.lighting && difference.readback === preview?.result && difference.identities === identityChoices && !stale ? difference.result : null;
   const resolution = useMemo(() => {
     if (!activeDifference || activeDifference.conflicts.some((entry) => !conflictChoices.has(entry.id))) return null;
-    try { return { ...alignMa2SnapshotToFrames(resolveMa2Sync(activeDifference, conflictChoices), 30, preview?.result.timeOriginMs ?? 0), message: '合并检查通过 · 尚未应用' }; }
+    try { return { ...alignMa2SnapshotToFrames(resolveMa2Sync(activeDifference, conflictChoices), 30, preview?.result.timeOriginMs ?? 0), message: '合并检查通过 · 还没应用' }; }
     catch (error) { return { snapshot: null, adjustments: [], message: `合并未完成：${error instanceof Error ? error.message : String(error)}` }; }
   }, [activeDifference, conflictChoices, preview?.result.timeOriginMs]);
   const mergedEvents = useMemo(() => resolution?.snapshot?.objects.filter((entry) => entry.kind === 'event').sort((a, b) => Number(a.properties.time) - Number(b.properties.time)) ?? [], [resolution]);
@@ -104,7 +104,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
     if (!preview || !binding || !item?.lighting || !activeDifference || !resolution?.snapshot || stale || busy || disabled) return;
     const source = item.lighting; const destination = preview.documentId; const programId = item.id;
     let consoleConfirmed = false;
-    setBusy(true); setStatus('正在复核、同步并回读…'); try {
+    setBusy(true); setStatus('正在检查、同步并确认…'); try {
       await archiveBeforeSync(destination, programId, source);
       const result = ma2ApplyResultSchema.parse(await window.tbLink.applyMa2({ ...await endpoint(), document: source, bindingId: binding.id, readback: preview.result, choices: [...identityChoices], conflicts: [...conflictChoices], timeAlignment: 'nearest-frame' }));
       if (result.status === 'incomplete') {
@@ -114,10 +114,10 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
       }
       consoleConfirmed = true;
       useDocumentStore.getState().executeForDocument(destination, applyMa2ReadbackCommand(programId, binding.id, source, result.confirmed));
-      setStatus(`节目与 Timecode ${result.confirmed.target} 已同步并核对${result.backupFile ? ` · 备份 ${result.backupFile}` : ''}`);
+      setStatus(`节目和 Timecode ${result.confirmed.target} 已同步并确认${result.backupFile ? ` · 备份 ${result.backupFile}` : ''}`);
       setPreview(null); setDifference(null);
     } catch (error) {
-      setStatus(consoleConfirmed ? '控台已确认 · 节目更新未完成，请重新读取比较' : '同步未确认 · 请重新读取控台');
+      setStatus(consoleConfirmed ? '控台已确认 · 节目还没更新完，请重新读取比对' : '无法确认同步结果 · 请重新读取控台');
       notify(error instanceof Error ? error.message : String(error), 'error'); setDifference(null);
     } finally { setBusy(false); }
   };
@@ -142,7 +142,7 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
   return <section className="settings-section ma2-sync-section" aria-label="MA2 节目同步">
     <p className="sync-destination"><span>目标控台</span><strong>{method === 'network' ? network ? `${network.host} · ${network.username}` : '请先在设备连接中保存并连接控台' : `本机 onPC · ${directory || '未配置目录'}`}</strong></p>
     <div className="settings-header-actions ma2-connection-actions"><label>时间码编号<input aria-label="读取 MA2 Timecode 编号" type="number" min={1} max={99999} value={Number.isNaN(target) ? '' : target} disabled={busy || disabled} onChange={(event) => { setTarget(event.target.valueAsNumber); setPreview(null); setDifference(null); }} /></label><Button className="primary-button" disabled={busy || disabled || !item} onClick={() => void readPreview()}>读取灯光编排</Button>{status !== '尚未检查' ? <span className="ma2-connection-status" role="status">{status}</span> : null}</div>
-    {item ? <div className="ma2-create-action"><Button className="secondary-button" title={`使用上方编号创建“${item.title}”，已有编号不会覆盖`} disabled={busy || disabled || item.lighting?.ma2Bindings?.some((entry) => entry.timecode === target)} onClick={() => void create()}>创建并关联当前节目</Button></div> : null}
+    {item ? <div className="ma2-create-action"><Button className="secondary-button" title={`用上面的编号创建“${item.title}”，不会覆盖已有编号`} disabled={busy || disabled || item.lighting?.ma2Bindings?.some((entry) => entry.timecode === target)} onClick={() => void create()}>创建并关联当前节目</Button></div> : null}
     {preview ? <div className="ma2-read-preview" role="region" aria-label="MA2 灯光读取预览">
       <strong>{preview.result.name} · {events.length} 个灯光点</strong>
       {binding && item?.lighting && !stale ? <Ma2TrackBinding key={`${item.id}:${binding.id}:${directory}:${preview.result.readAt}`} directory={method === 'network' ? '' : directory} network={method === 'network' ? network ?? undefined : undefined} itemId={item.id} bindingId={binding.id} document={item.lighting} preview={preview.result} disabled={disabled || busy} notify={notify} /> : null}
@@ -154,18 +154,18 @@ export function Ma2ProgramSync({ disabled, notify, method, network, directory, o
         setIdentityChoices(next);
       }}><option value="">请选择对应点</option><option value="new">控台新增点</option>{comparison.candidates.get(event.id)?.map((id) => <option key={id} value={`old:${id}`} disabled={[...identityChoices].some(([remote, selected]) => remote !== event.id && selected === id)}>{comparison.baseline.get(id)}</option>)}</select> : comparison?.labels.get(event.id) ?? '未比较'}</td> : null}</tr>)}</tbody></table> : null}
       {comparison?.removed.length ? <details open><summary>控台已删除的点（{comparison.removed.length}）</summary>{comparison.removed.map(({ event, time }) => <p key={event.id}>{(time / 1000).toFixed(3)} 秒 · {ma2EventLabel(event, true)}{event.kind === 'ma2' ? ` · ${event.label}` : ''}</p>)}</details> : null}
-      {comparison?.result ? <p className="settings-note">仅回读 · 未应用到节目或控台</p> : null}
+      {comparison?.result ? <p className="settings-note">只读取 · 还没应用到节目或控台</p> : null}
       {comparison?.result ? <Button className="secondary-button" disabled={busy || disabled || stale || comparison.result.ambiguous.length > 0} onClick={() => void compare()}>比较节目与控台修改</Button> : null}
       {activeDifference ? <div className="ma2-difference" role="region" aria-label="节目与控台差异">
         <strong>{activeDifference.conflicts.length ? `${activeDifference.conflicts.length} 处冲突，请选择保留内容` : '没有冲突'}</strong>
-        {activeDifference.conflicts.length ? <table className="ma2-conflict-table"><thead><tr><th>原来</th><th>当前节目</th><th>控台回读</th><th>保留</th></tr></thead><tbody>{activeDifference.conflicts.map((entry, index) => <tr key={entry.id}>
+        {activeDifference.conflicts.length ? <table className="ma2-conflict-table"><thead><tr><th>原来</th><th>当前节目</th><th>控台版本</th><th>保留</th></tr></thead><tbody>{activeDifference.conflicts.map((entry, index) => <tr key={entry.id}>
           {[entry.base, entry.local, entry.remote].map((object, column) => <td key={column}>{object ? Object.entries(object.properties).filter(([key]) => key === 'name' || key === 'cue' || new Set([entry.base?.properties[key], entry.local?.properties[key], entry.remote?.properties[key]]).size > 1).map(([key, value]) => <div key={key}><span>{({ time: '时间', cue: 'Cue', name: '名称', sequence: '序列', executor: '执行器', action: '动作', muted: '静音', number: '编号', level: '推杆值', fader: '推杆类型' } as Record<string, string>)[key] ?? key}：</span>{key === 'level' ? `${Number((Number(value) * 100).toFixed(6))}%` : key === 'time' ? `${(Number(value) / 1000).toFixed(3)} 秒` : key === 'muted' ? value === 'true' ? '是' : '否' : key === 'action' ? ({ goto: '调用 Cue', go: '下一步', off: '关闭执行器', master: '主推杆' } as Record<string, string>)[value] ?? value : value}</div>) : '已删除'}</td>)}
-          <td><select aria-label={`冲突 ${index + 1} 保留版本`} value={conflictChoices.get(entry.id) ?? ''} onChange={(input) => { const value = input.currentTarget.value; const next = new Map(conflictChoices); if (value === 'local' || value === 'remote') next.set(entry.id, value); else next.delete(entry.id); setConflictChoices(next); }}><option value="">请选择</option><option value="local">当前节目</option><option value="remote">控台回读</option></select></td>
+          <td><select aria-label={`冲突 ${index + 1} 保留版本`} value={conflictChoices.get(entry.id) ?? ''} onChange={(input) => { const value = input.currentTarget.value; const next = new Map(conflictChoices); if (value === 'local' || value === 'remote') next.set(entry.id, value); else next.delete(entry.id); setConflictChoices(next); }}><option value="">请选择</option><option value="local">当前节目</option><option value="remote">控台版本</option></select></td>
         </tr>)}</tbody></table> : null}
         {resolution ? <p role="status">{resolution.message}</p> : null}
         {resolution?.snapshot ? <p className="settings-note">合并后 {resolution.snapshot.objects.filter((entry) => entry.kind === 'track').length} 条轨道 · {mergedEvents.length} 个灯光点</p> : null}
         {resolution?.adjustments.length ? <p className="settings-note">MA2 按 30 帧/秒保存，{resolution.adjustments.length} 个点将对齐到最近帧，最大偏移 {resolution.adjustments.reduce((maximum, entry) => Math.max(maximum, Math.abs(entry.toMs - entry.fromMs)), 0).toFixed(3)} 毫秒。合并结果显示对齐后的时间，确认同步后应用到节目。</p> : null}
-        {resolution?.snapshot ? <details open><summary>核对合并结果（{mergedEvents.length} 个点）</summary><table><thead><tr><th>时间（秒）</th><th>Cue / 动作</th><th>执行器</th><th>名称</th></tr></thead><tbody>{mergedEvents.slice(visibleMergePage * 100, (visibleMergePage + 1) * 100).map((entry) => <tr key={entry.id}><td>{(Number(entry.properties.time) / 1000).toFixed(3)}</td><td>{entry.properties.action === 'master' ? `主推杆 ${Number((Number(entry.properties.level) * 100).toFixed(6))}%` : entry.properties.action === 'goto' ? entry.properties.cue : entry.properties.action === 'go' ? '下一步' : '关闭执行器'}</td><td>{entry.properties.executor}</td><td>{entry.properties.name}</td></tr>)}</tbody></table>{mergePageCount > 1 ? <div className="settings-header-actions"><button disabled={visibleMergePage === 0} onClick={() => setMergePage(visibleMergePage - 1)}>上一页</button><span>{visibleMergePage + 1} / {mergePageCount}</span><button disabled={visibleMergePage + 1 === mergePageCount} onClick={() => setMergePage(visibleMergePage + 1)}>下一页</button></div> : null}</details> : null}
+        {resolution?.snapshot ? <details open><summary>检查合并结果（{mergedEvents.length} 个点）</summary><table><thead><tr><th>时间（秒）</th><th>Cue / 动作</th><th>执行器</th><th>名称</th></tr></thead><tbody>{mergedEvents.slice(visibleMergePage * 100, (visibleMergePage + 1) * 100).map((entry) => <tr key={entry.id}><td>{(Number(entry.properties.time) / 1000).toFixed(3)}</td><td>{entry.properties.action === 'master' ? `主推杆 ${Number((Number(entry.properties.level) * 100).toFixed(6))}%` : entry.properties.action === 'goto' ? entry.properties.cue : entry.properties.action === 'go' ? '下一步' : '关闭执行器'}</td><td>{entry.properties.executor}</td><td>{entry.properties.name}</td></tr>)}</tbody></table>{mergePageCount > 1 ? <div className="settings-header-actions"><button disabled={visibleMergePage === 0} onClick={() => setMergePage(visibleMergePage - 1)}>上一页</button><span>{visibleMergePage + 1} / {mergePageCount}</span><button disabled={visibleMergePage + 1 === mergePageCount} onClick={() => setMergePage(visibleMergePage + 1)}>下一页</button></div> : null}</details> : null}
         <Button className="secondary-button" disabled={busy || disabled || !resolution?.snapshot} onClick={() => void synchronize()}>同步节目与 MA2</Button>
       </div> : null}
       {events.length > 100 ? <div className="settings-header-actions"><button disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button><span>{page + 1} / {Math.ceil(events.length / 100)}</span><button disabled={(page + 1) * 100 >= events.length} onClick={() => setPage(page + 1)}>下一页</button></div> : null}
@@ -188,7 +188,7 @@ function Ma2TrackBinding(props: { directory: string; network?: Ma2NetworkTarget 
     setReading(true); setDiscovered(null);
     try {
       const result = ma2ExecutorPreviewSchema.parse(await window.tbLink.readMa2Executor({ dataDirectory: props.directory, network: props.network, target: props.preview.target, executor: address.trim() }));
-      if (result.target !== props.preview.target || result.executor !== address.trim()) throw new Error('执行器回读目标不一致，请重新读取');
+      if (result.target !== props.preview.target || result.executor !== address.trim()) throw new Error('读取到的执行器不一致，请重新读取');
       if (alive.current) { setDiscovered(result); setExecutor(result.executor); }
     } catch (error) { if (alive.current) props.notify(error instanceof Error ? error.message : String(error), 'error'); }
     finally { if (alive.current) setReading(false); }
@@ -203,7 +203,7 @@ function Ma2TrackBinding(props: { directory: string; network?: Ma2NetworkTarget 
     try {
       if (!tracks.some((track) => track.id === trackId) || !executors.get(executor)) throw new Error('请选择灯光轨道和已读取的执行器');
       useDocumentStore.getState().execute(bindMa2TrackCommand(props.itemId, props.bindingId, trackId, executor, executors.get(executor)!, discovered?.executor === executor ? discovered : undefined));
-      setTrackId(''); props.notify('轨道已关联，比较后同步到 MA2');
+      setTrackId(''); props.notify('轨道已关联，比对后同步到 MA2');
     } catch (error) { props.notify(error instanceof Error ? error.message : String(error), 'error'); }
   };
   const cancel = (id: string): void => {

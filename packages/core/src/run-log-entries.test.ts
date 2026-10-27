@@ -6,7 +6,7 @@ const passed = (id: string, label: string): PreflightCheck => ({ id, label, stat
 
 describe('preflightLogEntries', () => {
   it('全部通过时只有一条汇总，各项结果放进详情', () => {
-    const checks = [passed('disk', '可用磁盘空间'), passed('obs.version', 'OBS 版本'), passed('redaction', '日志脱敏')];
+    const checks = [passed('disk', '可用磁盘空间'), passed('obs.version', 'OBS 版本'), passed('redaction', '日志隐私处理')];
     const entries = preflightLogEntries(checks, new Set(), 'project');
     expect(entries).toEqual([{ level: 'info', message: '开播前检查通过（3 项）', result: 'succeeded',
       details: { checks: checks.map(({ id, label, status, detail }) => ({ id, label, status, detail })) } }]);
@@ -16,14 +16,14 @@ describe('preflightLogEntries', () => {
     const seen = new Set<string>();
     const checks: PreflightCheck[] = [passed('disk', '可用磁盘空间'),
       { id: 'quality.upscale.clip', label: '素材清晰度：1.MP4', status: 'warning', detail: '原始 720×1280，放大到约 1080×1920' },
-      { id: 'asset.media.clip', label: '时间线素材：2.MP4', status: 'blocking', detail: '素材文件缺失或不可读' }];
+      { id: 'asset.media.clip', label: '时间线素材：2.MP4', status: 'blocking', detail: '素材文件不见了或读不了' }];
     const first = preflightLogEntries(checks, seen, 'project');
     expect(first.map(entry => [entry.level, entry.message])).toEqual([
-      ['error', '开播前检查未通过（1 项阻断，1 项提示，共 3 项）'],
-      ['error', '时间线素材：2.MP4：素材文件缺失或不可读'],
+      ['error', '开播前检查未通过（1 项未通过，1 项提示，共 3 项）'],
+      ['error', '时间线素材：2.MP4：素材文件不见了或读不了'],
       ['info', '开播前检查提示：素材清晰度：1.MP4：原始 720×1280，放大到约 1080×1920']]);
     const again = preflightLogEntries(checks, seen, 'project');
-    expect(again.map(entry => entry.message)).toEqual(['开播前检查未通过（1 项阻断，1 项提示，共 3 项）', '时间线素材：2.MP4：素材文件缺失或不可读']);
+    expect(again.map(entry => entry.message)).toEqual(['开播前检查未通过（1 项未通过，1 项提示，共 3 项）', '时间线素材：2.MP4：素材文件不见了或读不了']);
     // A changed asset (new size) or another project is noted again.
     const changed = checks.map(check => check.status === 'warning' ? { ...check, detail: '原始 1080×1920，放大到约 1440×2560' } : check);
     expect(preflightLogEntries(changed, seen, 'project').some(entry => entry.message.startsWith('开播前检查提示'))).toBe(true);

@@ -168,7 +168,7 @@ describe('P1ProjectService', () => {
     trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
     expect(imported.items.map(item => item.title)).toEqual(['第二首.wav']);
     expect(imported.skippedItems).toHaveLength(1);
-    expect(imported.skippedItems?.[0]?.reason).toContain('可解码的音轨');
+    expect(imported.skippedItems?.[0]?.reason).toContain('能解码的音轨');
     const project = synchronizeP1ProjectCommand(imported, sequenceIds('good', 'unavailable'), timestamp).execute(createEmptyLinkProject('部分导入'));
     expect(project.rundown.find(item => item.referenceAudio)?.playback?.mtcOffsetMs).toBe(120000);
     expect(project.rundown).toHaveLength(2);
@@ -283,7 +283,7 @@ describe('P1ProjectService', () => {
       .execute(createEmptyLinkProject('联动工程'));
 
     await writeFile(fixture.p1Path, `${await readFile(fixture.p1Path, 'utf8')}\n`, 'utf8');
-    await expect(service.previewExport(fixture.p1Path, fixture.linkPath, project)).rejects.toThrow('上次导入后已变化');
+    await expect(service.previewExport(fixture.p1Path, fixture.linkPath, project)).rejects.toThrow('上次导入后有变化');
   });
 
   it('缺失源音频只跳过该条目，不生成伪素材', async () => {
@@ -374,7 +374,7 @@ describe('P1ProjectService', () => {
     expect(project.rundown).toHaveLength(1);
     expect(project.rundown[0]).toMatchObject({ id: 'pending', title: 'MP4 音频', enabled: false });
     expect(project.rundown[0]?.referenceAudio).toBeUndefined();
-    expect(project.rundown[0]?.notes).toContain('没有可解码的音轨');
+    expect(project.rundown[0]?.notes).toContain('没有能解码的音轨');
     expect(synchronizeP1ProjectCommand(imported).execute(project).rundown).toHaveLength(1);
   });
 });

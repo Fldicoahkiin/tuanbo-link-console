@@ -98,7 +98,7 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
       const state = () => ({ sourceName: '测试机位', filterName: '美颜', enabled: true, liveMode: true, uniform: true, values });
       let running = false;
       const runtime = () => ({ phase: running ? 'tracking' : 'idle', sourceName: running ? '测试机位' : null,
-        filterName: running ? '美颜' : null, faces: running ? 2 : 0, message: running ? '已识别 2 人，统一美颜' : '尚未启动美颜' });
+        filterName: running ? '美颜' : null, faces: running ? 2 : 0, message: running ? '已识别 2 人，统一美颜' : '美颜还没启动' });
       for (const channel of ['link:beauty-status', 'link:beauty-start', 'link:beauty-stop']) ipcMain.removeHandler(channel);
       ipcMain.handle('link:beauty-status', runtime);
       ipcMain.handle('link:beauty-start', () => { running = true; return runtime(); });
@@ -182,7 +182,7 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await expect(page.getByLabel('美颜生效状态')).toContainText('已识别 2 人');
     await page.getByRole('slider', { name: '磨皮', exact: true }).fill('65');
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toContain('"smooth":65');
-    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已送达');
+    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已发给 OBS');
     await expect(page.getByLabel('美颜生效状态')).toBeVisible();
     await expect(page.getByLabel('美颜生效状态')).toContainText('已识别 2 人');
     const comparisonTitle = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle());
@@ -276,9 +276,9 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
       ipcMain.handle('link:beauty-status', () => ({ phase: 'tracking', sourceName: '测试机位', filterName: '美颜', faces: 2, message: '已识别 2 人，统一美颜' }));
     });
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null }));
-    await expect(page.getByLabel('美颜生效状态')).toContainText('离线调节');
+    await expect(page.getByLabel('美颜生效状态')).toContainText('未连接 OBS');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'connected', obsVersion: '32.0.4', webSocketVersion: '5', error: null }));
-    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已送达');
+    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已发给 OBS');
     const staleBeauty = await page.evaluate(() => window.tbLink.readObsBeauty({ sourceName: '测试机位', filterName: '美颜' }));
     await app.evaluate(({ ipcMain, BrowserWindow }) => {
       ipcMain.removeHandler('link:beauty-output');
@@ -291,7 +291,7 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await page.getByRole('slider', { name: '瘦腰', exact: true }).fill('50');
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle())).toBe('BEAUTY_APPLY_PENDING');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('link:obs-status', { status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null }));
-    await expect(page.getByLabel('美颜生效状态')).toContainText('离线调节');
+    await expect(page.getByLabel('美颜生效状态')).toContainText('未连接 OBS');
     await app.evaluate(({ ipcMain }, stale) => {
       process.env.TBLINK_BEAUTY_STALE_READ = 'waiting';
       ipcMain.removeHandler('link:obs-beauty-read');
@@ -309,9 +309,9 @@ test('竖屏美颜预览占满高度，参数与导航始终可用', async ({}, 
     await expect(page.getByLabel('美颜生效状态')).toContainText('正在同步');
     await expect.poll(() => app.evaluate(() => process.env.TBLINK_BEAUTY_STALE_READ)).toBe('pending');
     await app.evaluate(({ ipcMain }) => { ipcMain.emit('beauty-test-release'); });
-    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已送达');
+    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已发给 OBS');
     await app.evaluate(({ ipcMain }) => { ipcMain.emit('beauty-test-read-release'); });
-    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已送达 · 旧回读已返回');
+    await expect(page.getByLabel('美颜生效状态')).toContainText('参数已发给 OBS · 旧回读已返回');
     await app.evaluate(({ ipcMain, BrowserWindow }) => {
       ipcMain.removeHandler('link:beauty-output');
       let requests = 0, active = 0, maximum = 0;

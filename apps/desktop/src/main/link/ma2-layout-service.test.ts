@@ -8,7 +8,7 @@ import type { Ma2ConsoleBackups } from './ma2-console-backups';
 import { editMa2SongSequence, emptyMa2SequenceXml, inspectMa2CueData, inspectMa2SequenceXml, inspectMa2TimecodeXml, emptyMa2LayoutXml, inspectMa2LayoutXml } from './ma2-timecode-xml';
 import { planMa2SongSync } from './ma2-song-plan';
 import { readFileSync } from 'node:fs';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -34,25 +34,25 @@ it('empty destinations carry no Programmer values or selected fixtures',()=>{
   const xml=emptyMa2SequenceXml(9000,'3.7.0.5');expect(inspectMa2SequenceXml(xml).sequences[0]?.number).toBe(9000);expect(inspectMa2CueData(xml,1).size).toBe(0);
   expect(inspectMa2LayoutXml(emptyMa2LayoutXml(999,'3.7.0.5'),999)).toMatchObject({items:[],omittedFixtures:0});
 });
-it('rejects a full song executor page before importing or renaming any Sequence', async () => {
+it('按钮第 1000 页起连续 10 页都放满时，不导入也不改名任何序列（满页本身顺延到下一页，见 ma2-song-executor.test）', async () => {
   const base = request();
   const song: Ma2SongSyncRequest = { network: base.network, expectedSource: source, projectId: base.projectId, itemId: 'song', requestId: base.requestId, settings: { ...base.settings, executorPage: 1000 }, name: '歌曲', points: [{ id: 'cue', name: '起点', atMs: 0, cues: [] }] };
-  const full = `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" major_vers="3" minor_vers="7" stream_vers="0" tblink_show="test" tblink_generation="one" tblink_version="3.7.0.5"><Page index="999">${'<Exec xsi:nil="true"/>'.repeat(100)}${'<Exec offset_from_first="0"><Assignment><No>25</No><No>1</No><No>1</No></Assignment></Exec>'.repeat(90)}</Page></MA>`;
+  const full = (page: number): string => `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" major_vers="3" minor_vers="7" stream_vers="0" tblink_show="test" tblink_generation="one" tblink_version="3.7.0.5"><Page index="${page - 1}">${'<Exec xsi:nil="true"/>'.repeat(100)}${'<Exec offset_from_first="0"><Assignment><No>25</No><No>1</No><No>1</No></Assignment></Exec>'.repeat(90)}</Page></MA>`;
   const command = vi.fn<Ma2Telnet['command']>();
-  const bridge = { request: vi.fn<Ma2OnpcBridge['request']>().mockImplementation(op => {
+  const bridge = { request: vi.fn<Ma2OnpcBridge['request']>().mockImplementation((op, page) => {
     if (op === 'LISTSEQ') return Promise.resolve(JSON.stringify({ ...source, entries: [] }));
-    if (op === 'PAGES') return Promise.resolve(JSON.stringify({ ...source, buttonPage: 1000, faderPage: 1, pages: [{ page: 1000, name: '已有灯光' }] }));
-    if (op === 'PAGE') return Promise.resolve(full);
+    if (op === 'PAGES') return Promise.resolve(JSON.stringify({ ...source, buttonPage: 1000, faderPage: 1, pages: Array.from({ length: 10 }, (_, index) => ({ page: 1000 + index, name: '已有灯光' })) }));
+    if (op === 'PAGE') return Promise.resolve(full(page));
     throw new Error(`Unexpected ${op}`);
   }), exchange: vi.fn<Ma2OnpcBridge['exchange']>(op => Promise.reject(new Error(`Unexpected ${op}`))) };
-  await expect(new Ma2LayoutService(`unused-${randomUUID()}.json`, () => false, noBackups).syncSong({ command }, bridge, song)).rejects.toThrow('已经放满');
+  await expect(new Ma2LayoutService(`unused-${randomUUID()}.json`, () => false, noBackups).syncSong({ command }, bridge, song)).rejects.toThrow('第 1000–1009 页的 101–190 都已放满');
   expect(command).not.toHaveBeenCalled();
-  expect(bridge.request.mock.calls.map(([op]) => op)).toEqual(['LISTSEQ', 'PAGES', 'PAGE']);
+  expect(bridge.request.mock.calls.map(([op]) => op)).toEqual(['LISTSEQ', 'PAGES', ...Array<string>(10).fill('PAGE')]);
 });
 
 /** In-memory console for syncSong: emulates only the script shapes that path sends. */
 function songConsole(sequences: Map<number, string>, slowRead?: { target: number; ms: number }) {
-  const files = new Map<string, Buffer>(); const lines: string[] = []; const ops: string[] = []; const slow = { done: false };
+  const files = new Map<string, Buffer>(); const lines: string[] = []; const ops: string[] = []; const slow = { started: false, done: false };
   const timecodes = new Map<number, string>();
   const pending = new Map<string, Buffer[]>(); const copies = new Map<string, Array<{ xml: string; cue: string }>>(); const keeps: string[] = [];
   const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
@@ -87,6 +87,14 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
     }
     if (copy) return 'copied';
     if (script.includes("return 'labelled'")) return 'labelled';
+    const assign = /gma\.cmd\('Assign Sequence (\d+) At Executor 1000\.(\d+) \/nc'\)/.exec(script);
+    if (assign) {
+      if (executors.has(Number(assign[2]))) return 'ERR:Executor became occupied';
+      executors.set(Number(assign[2]), Number(assign[1])); return 'assigned';
+    }
+    // A new song's write refuses a number someone took on the console after it was chosen.
+    const free = /assert\(not gma\.show\.getobj\.handle\('Sequence (\d+)'\),'Sequence occupied'\)/.exec(script);
+    if (free && sequences.has(Number(free[1]))) return 'ERR:Sequence occupied';
     // A full clear imports the emptied snapshot first; the last Import is what the Sequence ends up holding.
     match = [...script.matchAll(/gma\.cmd\('Import (\w+)\.xml At Sequence (\d+) \/o \/nc'\)/g)].at(-1) ?? null;
     if (!match && /read\('\w+'\)==read\('\w+_check'\)/.test(script)) {
@@ -116,20 +124,23 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
       if (chunk[4]) writers.delete(chunk[1]!);
       return Promise.resolve(match(`${chunk[1]}:${chunk[2]}:OK\r\n`)!);
     }
-    let script = body; let prefix = /TBLINK_LAYOUT_[a-f0-9]{24}:/.exec(body)?.[0];
-    const key = /(TBLINK_LAYOUT_[a-f0-9]{24})=\{\}/.exec(body)?.[1];
+    let script = body; let prefix = /TBLINK_(?:LAYOUT|CUE)_[a-f0-9]{24}:/.exec(body)?.[0];
+    const key = /(TBLINK_(?:LAYOUT|CUE)_[a-f0-9]{24})=\{\}/.exec(body)?.[1];
     if (key) { pending.set(key, []); return Promise.resolve(match(`${prefix}READY\r\n`)!); }
-    const part = /(TBLINK_LAYOUT_[a-f0-9]{24})\[#\1\+1\]=unhex\('([a-f0-9]+)'\)/.exec(body);
+    const part = /(TBLINK_(?:LAYOUT|CUE)_[a-f0-9]{24})\[#\1\+1\]=unhex\('([a-f0-9]+)'\)/.exec(body);
     if (part) { pending.get(part[1]!)!.push(Buffer.from(part[2]!, 'hex')); return Promise.resolve(match(`${prefix}READY\r\n`)!); }
-    const assembled = /local s=table\.concat\((TBLINK_LAYOUT_[a-f0-9]{24})\)/.exec(body)?.[1];
-    if (assembled) { script = Buffer.concat(pending.get(assembled)!).toString('utf8'); pending.delete(assembled); prefix = /TBLINK_LAYOUT_[a-f0-9]{24}:/.exec(script)?.[0]; }
+    const assembled = /local s=table\.concat\((TBLINK_(?:LAYOUT|CUE)_[a-f0-9]{24})\)/.exec(body)?.[1];
+    if (assembled) { script = Buffer.concat(pending.get(assembled)!).toString('utf8'); pending.delete(assembled); prefix = /TBLINK_(?:LAYOUT|CUE)_[a-f0-9]{24}:/.exec(script)?.[0]; }
     const result = run(script);
     return Promise.resolve(match(`${prefix}${result.startsWith('ERR:') ? result : `OK:${result}`}\r\n`)!);
   });
-  const page = `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" major_vers="3" minor_vers="7" stream_vers="0" tblink_show="test" tblink_generation="one" tblink_version="3.7.0.5"><Page index="999">${'<Exec xsi:nil="true"/>'.repeat(100)}<Exec offset_from_first="0"><Assignment><No>25</No><No>1</No><No>9000</No></Assignment></Exec></Page></MA>`;
+  // Button page 1000: slot 101 holds Sequence 9000; assignments add slots after it.
+  const executors = new Map<number, number>([[101, 9000]]);
+  const page = (): string => `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" major_vers="3" minor_vers="7" stream_vers="0" tblink_show="test" tblink_generation="one" tblink_version="3.7.0.5"><Page index="999">${Array.from({ length: Math.max(...executors.keys()) }, (_, index) => executors.has(index + 1) ? `<Exec offset_from_first="0"><Assignment><No>25</No><No>1</No><No>${executors.get(index + 1)}</No></Assignment></Exec>` : '<Exec xsi:nil="true"/>').join('')}</Page></MA>`;
   const exchange = vi.fn<Ma2OnpcBridge['exchange']>(async (operation, target, expected, _desired, _signal, progress) => {
     ops.push(`${operation} ${target}`);
     if (slowRead && operation === 'SEQUENCE' && target === slowRead.target && ops.filter(op => op === `SEQUENCE ${target}`).length === 1) {
+      slow.started = true;
       for (let elapsed = 0; elapsed < slowRead.ms; elapsed += 5000) { await new Promise(resolve => setTimeout(resolve, 5000)); progress?.(); }
       slow.done = true;
     }
@@ -160,8 +171,8 @@ function songConsole(sequences: Map<number, string>, slowRead?: { target: number
       if (canonical(timecodes.get(target)!) !== canonical(expected!)) return Promise.reject(new Error('Timecode changed after preview'));
       timecodes.set(target, _desired!); files.set(`tblink_backup_${requestId}`, Buffer.from(expected!)); return Promise.resolve({ requestId, response: _desired! });
     }
-    if (operation === 'EXECUTOR') return Promise.resolve({ requestId, response: `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" major_vers="3" minor_vers="7" stream_vers="0"><Exec offset_from_first="0" tblink_executor_name="GeQu ${target}.${expected}"><Assignment name="GeQu"><No>25</No><No>1</No><No>9000</No></Assignment></Exec></MA>` });
-    if (operation === 'PAGE') return Promise.resolve({ requestId, response: page });
+    if (operation === 'EXECUTOR') return Promise.resolve({ requestId, response: `<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" major_vers="3" minor_vers="7" stream_vers="0"><Exec offset_from_first="0" tblink_executor_name="GeQu ${target}.${expected}"><Assignment name="GeQu"><No>25</No><No>1</No><No>${executors.get(Number(expected)) ?? 9000}</No></Assignment></Exec></MA>` });
+    if (operation === 'PAGE') return Promise.resolve({ requestId, response: page() });
     return Promise.reject(new Error(`Unexpected ${operation}`));
   });
   return { files, lines, ops, writers, slow, keeps, timecodes, connection: { command }, bridge: { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response } };
@@ -186,8 +197,9 @@ it('一次大读取持续超过 90 秒但每批都有回包时不判为无进展
     const directory = await mkdtemp(join(tmpdir(), 'tblink-song-'));
     const sync = new Ma2LayoutService(join(directory, 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song);
     let settled = false; void sync.finally(() => { settled = true; }).catch(() => undefined);
-    // Fake time runs only during the slow read; the service also waits on real file I/O.
-    for (let step = 0; step < 200 && !settled && !fake.slow.done; step++) { await new Promise(resolve => setImmediate(resolve)); await vi.advanceTimersByTimeAsync(1000); }
+    // Fake time runs only during the slow read; before it starts the service waits on real file I/O,
+    // which takes more event-loop turns when the machine is busy.
+    for (let step = 0; step < 20000 && !settled && !fake.slow.done; step++) { await new Promise(resolve => setImmediate(resolve)); if (fake.slow.started) await vi.advanceTimersByTimeAsync(1000); }
     vi.useRealTimers();
     expect(fake.slow.done).toBe(true);
     await expect(sync).resolves.toMatchObject({ changed: true });
@@ -202,7 +214,7 @@ it('已绑定歌曲换一个 Cue 的内容：在控台内 Copy，不上传歌曲
   console.info(JSON.stringify({ commands: fake.lines.length, bytes: fake.lines.reduce((total, line) => total + Buffer.byteLength(line), 0), ops: fake.ops }));
   // Whole-Sequence reads say how much has arrived, before and after the write.
   const size = Buffer.byteLength(sequences.get(9000)!);
-  expect(reported).toContain(`verification ${size}/${size} 回读序列 9000 · ${Math.ceil(size / 1024)}/${Math.ceil(size / 1024)} KB`);
+  expect(reported).toContain(`verification ${size}/${size} 读取序列 9000 · ${Math.ceil(size / 1024)}/${Math.ceil(size / 1024)} KB`);
   expect(reported.some(line => line.startsWith('connecting ') && line.includes('读取控台序列 9000 · '))).toBe(true);
   expect(result.changed).toBe(true);
   expect([...fake.files.keys()].some(name => name.endsWith('_before'))).toBe(false);
@@ -311,16 +323,65 @@ it('新建本曲节目后写入失败：编号已记进同步记录，重试读�
     const exchange: Ma2OnpcBridge['exchange'] = async (...args) => {
       if (args[0] !== 'APPLY') return await fake.bridge.exchange(...args);
       if (imported) fake.timecodes.set(args[1], args[3]!.replace('name="GeQu', 'name="回读不一致 GeQu'));
-      throw new Error('MA2 响应超时；操作未确认，不会自动重试');
+      throw new Error('MA2 响应超时，操作没有确认，不会自动重试');
     };
     const failing = { exchange, request: async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await exchange(...args)).response };
     await expect(service.syncSong(fake.connection, failing, timed())).rejects.toThrow('MA2 响应超时');
     expect([...fake.timecodes.keys()]).toEqual([9000]);
     expect((await service.syncSong(fake.connection, fake.bridge, timed())).binding.timecode).toMatchObject({ number: 9000, offset: 14400 });
-    expect(fake.timecodes.get(9000)).not.toContain('回读不一致');
+    expect(fake.timecodes.get(9000)).not.toContain('对不上');
     expect([...fake.timecodes.keys()]).toEqual([9000]);
   }
 }, 30000);
+it('新歌（2026-10-26 第 7 点）：序列与时间码节目用同一个两边都空的编号；写前控台上有人占了这个号时不写、不认领，下次顺延', async () => {
+  const sequences = new Map<number, string>();
+  const fake = songConsole(sequences);
+  // Someone's own show already sits on the first number; the song moves on to the next number free in both pools.
+  fake.timecodes.set(9000, '<MA/>');
+  const file = join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json');
+  const service = new Ma2LayoutService(file, () => false, noBackups), projectId = randomUUID();
+  const song = (): Ma2SongSyncRequest => ({ ...songRequest(), projectId, requestId: randomUUID(), timecodeStartMs: 480000,
+    points: [{ id: 'a', name: '前奏', atMs: 0, cues: [] }, { id: 'b', name: '副歌', atMs: 2000, cues: [] }] });
+  const plain = fake.bridge.exchange.getMockImplementation()!;
+  let taken = false;
+  fake.bridge.exchange.mockImplementation(async (...args) => {
+    const response = await plain(...args);
+    // The operator stores a Sequence on that number on the console after the software chose it.
+    if (args[0] === 'PAGE' && !taken) { taken = true; sequences.set(9001, emptyMa2SequenceXml(9001, '3.7.0.5')); }
+    return response;
+  });
+  await expect(service.syncSong(fake.connection, fake.bridge, song())).rejects.toThrow('控台同时在改：序列 9001 在控台上刚被占用');
+  expect(sequences.get(9001)).toBe(emptyMa2SequenceXml(9001, '3.7.0.5'));
+  // Nothing was written, so no half-written record is left that a retry could resume into the operator's Sequence.
+  expect(JSON.parse(await readFile(`${file}.songs.json`, 'utf8'))).toEqual([]);
+  const result = await service.syncSong(fake.connection, fake.bridge, song());
+  expect(result.binding).toMatchObject({ sequence: 9002, executor: '1000.102', timecode: { number: 9002, offset: 14400 } });
+  expect(sequences.get(9001)).toBe(emptyMa2SequenceXml(9001, '3.7.0.5'));
+  expect(fake.timecodes.get(9000)).toBe('<MA/>');
+}, 20000);
+it('已绑定歌曲写前发现控台上刚改过本曲序列：不写入、不留续写记录，下次读控台新内容再写', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const file = join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json');
+  const service = new Ma2LayoutService(file, () => false, noBackups);
+  const first = await service.syncSong(fake.connection, fake.bridge, song);
+  const journal: unknown = JSON.parse(await readFile(`${file}.songs.json`, 'utf8'));
+  // A new empty point: the song's snapshot is imported, behind the guard that compares the console with what was read.
+  const edited = [...song.points.map((point, index) => ({ ...point, cues: [{ sequence: 9000, cue: first.binding.points[index]!.cue, delayMs: 0 }] })), { id: 'added', name: '新点', atMs: 9000, cues: [] }];
+  const plain = fake.bridge.exchange.getMockImplementation()!;
+  let changed = false;
+  fake.bridge.exchange.mockImplementation(async (...args) => {
+    const response = await plain(...args);
+    // The operator relabels the Sequence on the console right after the software read it.
+    if (args[0] === 'SEQUENCE' && args[1] === 9000 && !changed) { changed = true; sequences.set(9000, editMa2SongSequence(sequences.get(9000)!, '控台改名', [], [])); }
+    return response;
+  });
+  await expect(service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: first.binding, points: edited })).rejects.toThrow('控台同时在改：序列 9000 在控台上刚被改过');
+  expect(inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.name).toBe('控台改名');
+  expect(JSON.parse(await readFile(`${file}.songs.json`, 'utf8'))).toEqual(journal);
+  await service.syncSong(fake.connection, fake.bridge, { ...song, requestId: randomUUID(), binding: first.binding, points: edited });
+  expect(inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues).toHaveLength(9);
+}, 20000);
 it('Copy 路径不再二次读取来源：来源在读取后被改，回读校验报出是哪个来源，结果待核对，写前备份保留且不进轮转', async () => {
   const { song, sourceNumber, sequences } = boundSong();
   const fake = songConsole(sequences);
@@ -334,7 +395,7 @@ it('Copy 路径不再二次读取来源：来源在读取后被改，回读校�
   fake.bridge.request = async (...args: Parameters<Ma2OnpcBridge['exchange']>) => (await fake.bridge.exchange(...args)).response;
   noBackups.record.mockClear();
   const sync = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups).syncSong(fake.connection, fake.bridge, song);
-  await expect(sync).rejects.toThrow(/写入结果待核对[\s\S]*tblink_library_[a-f0-9]{32}\.xml 已保留[\s\S]*来源 序列 \d+ · Cue 1\.000[\s\S]*控台上的来源可能在同步期间被改过/);
+  await expect(sync).rejects.toThrow(/写入结果需要确认[\s\S]*tblink_library_[a-f0-9]{32}\.xml 已保留[\s\S]*来源 序列 \d+ · Cue 1\.000[\s\S]*控台上的来源可能在同步期间被改过/);
   expect(fake.ops.filter(op => op === `SEQCUES ${sourceNumber}`)).toHaveLength(1);
   const backup = [...fake.files.keys()].find(name => name.startsWith('tblink_library_'));
   expect(backup).toBeDefined();

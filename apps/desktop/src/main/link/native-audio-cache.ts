@@ -35,7 +35,7 @@ export class NativeAudioCache {
 
   async prepare(input: z.input<typeof requestSchema>, signal: AbortSignal): Promise<NativeAudioLease> {
     const request = requestSchema.parse(input); signal.throwIfAborted();
-    if (this.busy) throw new Error('音频准备任务尚未结束，不能叠加解码任务');
+    if (this.busy) throw new Error('上一个音频还在准备，请稍后再试');
     this.busy = true;
     let measuredAt = performance.now();
     const measured = (phase: string): void => { const now = performance.now(); this.measured(phase, now - measuredAt); measuredAt = now; };
@@ -45,15 +45,15 @@ export class NativeAudioCache {
       const initial = await stat(request.sourcePath).catch((error: unknown) => {
         throw new Error(`音频解码或读取失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
       });
-      if (await digest(request.sourcePath, signal) !== request.sourceSha256) throw new Error('音频原文件与工程指纹不一致，请重新导入');
-      measured('音源完整性校验');
+      if (await digest(request.sourcePath, signal) !== request.sourceSha256) throw new Error('音频原文件和工程记录的不一致，请重新导入');
+      measured('音源校验');
       // Retain source coordinates even when decoding begins near a cold seek.
       const baseFrame = Math.floor(request.positionMs / 1000) * request.sampleRate;
       const key = `${request.sourceSha256}-${request.sampleRate}-${baseFrame}`;
       const path = join(this.directory, `${key}.pcm`), metadata = join(this.directory, `${key}.json`);
       const existing = this.active.get(key);
       if (existing) {
-        if (existing.releasing) throw new Error('该音源正在释放，请在清理完成后明确重新准备');
+        if (existing.releasing) throw new Error('这个音源正在释放，请等清理完成后重新准备');
         if (existing.durationMs !== request.expectedDurationMs) throw new Error('同一音源的节目时长声明不一致');
         const neededFrames = Math.min(existing.frames, Math.ceil(request.positionMs * request.sampleRate / 1000) - baseFrame + request.sampleRate * 2);
         await existing.decoder.readyThrough(neededFrames * 4, signal); signal.throwIfAborted();
@@ -64,20 +64,20 @@ export class NativeAudioCache {
       }
       let manifest: Manifest | null = null;
       try { manifest = manifestSchema.parse(JSON.parse(await readFile(metadata, 'utf8'))); }
-      catch (error) { if (!isMissing(error)) throw new Error('音频解码缓存元数据损坏，原文件未修改', { cause: error }); }
+      catch (error) { if (!isMissing(error)) throw new Error('音频缓存信息损坏，原文件没有改动', { cause: error }); }
       if (manifest) {
         if (manifest.key !== key || manifest.sourceSha256 !== request.sourceSha256 || manifest.sampleRate !== request.sampleRate
           || manifest.baseFrame !== baseFrame || manifest.bytes !== manifest.frames * 4 || (await stat(path)).size !== manifest.bytes
-          || await digest(path, signal) !== manifest.pcmSha256) throw new Error('音频解码缓存校验失败，不能使用损坏的 PCM');
+          || await digest(path, signal) !== manifest.pcmSha256) throw new Error('音频缓存校验失败，已损坏的缓存不会被使用');
         signal.throwIfAborted(); await writeFileAtomically(metadata, JSON.stringify({ ...manifest, lastUsed: Date.now() }));
         return this.cachedLease(key, path, manifest);
       }
-      if (this.active.size >= 2) throw new Error('当前与下一音源已占用解码槽，不能增加后台解码任务');
+      if (this.active.size >= 2) throw new Error('当前和下一首的音频都在解码，暂时不能再加');
       const frames = Math.ceil(request.expectedDurationMs * request.sampleRate / 1000) - baseFrame;
       const reserve = frames * 4 + request.sampleRate * 4;
       await this.makeRoom(reserve);
       const free = await statfs(this.directory);
-      if (free.bavail * free.bsize < reserve + 256 * 1024 ** 2) throw new Error('磁盘空间不足以准备音频，保留至少 256MB 余量后重试');
+      if (free.bavail * free.bsize < reserve + 256 * 1024 ** 2) throw new Error('磁盘空间不够准备音频，请至少留出 256 MB 后再试');
       signal.throwIfAborted();
       const temporary = join(this.directory, `${key}.${randomUUID()}.partial`);
       const decoder = new NativeAudioDecode({ executable: this.ffmpeg, source: request.sourcePath, output: temporary,
@@ -102,8 +102,8 @@ export class NativeAudioCache {
     const decoded = await active.decoder.finished; if (!decoded.ok) return decoded;
     try {
       const source = await stat(request.sourcePath), pcm = await stat(active.path);
-      if (initial.size !== source.size || initial.mtimeMs !== source.mtimeMs || initial.ino !== source.ino) throw new Error('解码时音频源发生变化，不能使用此次结果');
-      if (!pcm.size || pcm.size % 4 || pcm.size > reserve || pcm.size / 4 + request.sampleRate / 1000 < expectedFrames) throw new Error('实际解码音频长度与工程不符');
+      if (initial.size !== source.size || initial.mtimeMs !== source.mtimeMs || initial.ino !== source.ino) throw new Error('解码过程中音频文件变了，这次结果不能用');
+      if (!pcm.size || pcm.size % 4 || pcm.size > reserve || pcm.size / 4 + request.sampleRate / 1000 < expectedFrames) throw new Error('解码出的音频长度和工程记录不一致');
       active.manifest = { version: 2, key: active.key, sourceSha256: request.sourceSha256, baseFrame,
         pcmSha256: await digest(active.path, new AbortController().signal), frames: pcm.size / 4, sampleRate: request.sampleRate, bytes: pcm.size, lastUsed: Date.now() };
       const handle = await open(active.path, 'r+'); try { await handle.sync(); } finally { await handle.close(); }
@@ -149,7 +149,7 @@ export class NativeAudioCache {
   }
 
   private async makeRoom(bytes: number): Promise<void> {
-    if (bytes > this.budgetBytes) throw new Error('本次音频超过解码缓存预算，请增加缓存预算；原素材未修改');
+    if (bytes > this.budgetBytes) throw new Error('这段音频超过了音频缓存上限，请调大缓存上限；原素材没有改动');
     const entries: Manifest[] = []; let used = 0;
     for (const name of await readdir(this.directory)) {
       if (/^[a-f0-9]{64}-(44100|48000)-\d+(\.pcm|\.[a-f0-9-]+\.partial)$/.test(name)) used += (await stat(join(this.directory, name))).size;
@@ -167,7 +167,7 @@ export class NativeAudioCache {
       if (this.leases.has(entry.key)) continue;
       await unlink(join(this.directory, `${entry.key}.pcm`)); await unlink(join(this.directory, `${entry.key}.json`)); used -= entry.bytes; count--;
     }
-    if (used + bytes > this.budgetBytes || count >= this.maxEntries) throw new Error('正在播放或准备的音频占满缓存，不能淘汰活动资源');
+    if (used + bytes > this.budgetBytes || count >= this.maxEntries) throw new Error('正在播放和准备的音频已经占满缓存');
   }
 }
 

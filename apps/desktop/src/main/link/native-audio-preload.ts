@@ -21,7 +21,7 @@ export class NativeAudioPreload {
       promise: Promise.resolve(null), consumed: false, cleanup: null };
     this.task = task;
     task.promise = this.prepare(task).catch(error => {
-      if (!task.abort.signal.aborted) this.options.error(`下一节目音频预填充失败：${error instanceof Error ? error.message : String(error)}`);
+      if (!task.abort.signal.aborted) this.options.error(`预先准备下一首音频失败：${error instanceof Error ? error.message : String(error)}`);
       return null;
     });
   }
@@ -36,10 +36,10 @@ export class NativeAudioPreload {
     const actual = await stat(task.sourcePath);
     if (this.task !== task || task.abort.signal.aborted) return null;
     if (!sameIdentity(actual, task.result.identity)) {
-      await this.cancel(); throw new Error('已预填充的音频原文件发生变化，请重新导入；未使用旧音频');
+      await this.cancel(); throw new Error('预先准备好的音频原文件变了，请重新导入；旧音频不会被使用');
     }
     task.consumed = true; this.task = null;
-    this.options.measured?.('复用下一节目音频预填充', performance.now() - started);
+    this.options.measured?.('使用预先准备的下一首音频', performance.now() - started);
     return task.result.lease;
   }
 
@@ -59,13 +59,13 @@ export class NativeAudioPreload {
       expectedDurationMs: snapshot.audio.durationMs, sampleRate: snapshot.sampleRate, positionMs: snapshot.positionMs }, task.abort.signal);
     try {
       const after = await stat(task.sourcePath);
-      if (!sameIdentity(before, after)) throw new Error('音频在预填充期间发生变化');
+      if (!sameIdentity(before, after)) throw new Error('预先准备音频时文件发生了变化');
       const result = { lease, identity: after };
       task.result = result;
-      this.options.measured?.('下一节目音频预填充', performance.now() - started);
+      this.options.measured?.('预先准备下一首音频', performance.now() - started);
       void lease.completion.then(outcome => {
         if (!outcome.ok && this.task === task && !task.abort.signal.aborted && !task.consumed) {
-          task.result = null; this.options.error(`下一节目音频解码失败：${outcome.error.message}`);
+          task.result = null; this.options.error(`下一首音频解码失败：${outcome.error.message}`);
         }
       });
       return result;

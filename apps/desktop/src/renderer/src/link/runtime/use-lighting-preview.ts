@@ -6,7 +6,11 @@ import { MediaMtcOutput } from '../../registry/media-mtc-output';
 import { useIntegrationStore } from '../stores/integration-store';
 import { reportCoordinatorError } from './runtime-action-log';
 
-export function useLightingPreview(input: { enabled: boolean; document: LightingDocument | undefined; audioRef: RefObject<HTMLAudioElement>; playing: boolean; frameRate: MtcFrameRate; onError: (message: string) => void }): { ready: boolean; stop: () => Promise<void> } {
+/**
+ * `mtcOrigin` is the song's MTC start, the one the program sends (2026-10-26: P1-follow previews used to
+ * start from the console binding, 0 for a song made in the software). Without it the binding's start is used.
+ */
+export function useLightingPreview(input: { enabled: boolean; document: LightingDocument | undefined; mtcOrigin?: (() => number) | undefined; audioRef: RefObject<HTMLAudioElement>; playing: boolean; frameRate: MtcFrameRate; onError: (message: string) => void }): { ready: boolean; stop: () => Promise<void> } {
   const endingOutput = useRef<LightingMidiOutput | null>(null);
   const ownedOutput = useRef<LightingMidiOutput | null>(null);
   const [ready, setReady] = useState(false);
@@ -15,7 +19,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
     const output = ownedOutput.current; ownedOutput.current = null;
     if (!output) return;
     output.stop();
-    await output.release();
+    try { await output.release(); } finally { output.close(); }
   };
   useEffect(() => () => {
     const output = ownedOutput.current; ownedOutput.current = null;
@@ -25,7 +29,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       const message = error instanceof Error ? error.message : String(error);
       latest.current.onError(message);
       reportCoordinatorError(message, failure => latest.current.onError(failure));
-    });
+    }).finally(() => output.close());
   }, []);
   useEffect(() => {
     endingOutput.current?.stop(); endingOutput.current = null;
@@ -33,7 +37,8 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
     if (!input.playing || !document?.tracks.length) { setReady(false); return; }
     const hasLightingContent = Boolean(document.ma2Bindings?.length) || document.tracks.some(track => track.clips.some(clip => clip.events.some(event => event.kind !== 'empty-cue')));
     const output = new LightingMidiOutput(); const mtc = new MediaMtcOutput();
-    if (input.enabled) ownedOutput.current = output;
+    // A replaced preview is never released any more: its outputs are let go now.
+    if (input.enabled) { ownedOutput.current?.close(); ownedOutput.current = output; }
     let seekAudio: HTMLAudioElement | null = null;
     let canFinish = false;
     let looping = false;
@@ -56,26 +61,32 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
         try { finishing = output.finish(seekAudio.currentTime * 1000); } catch (error) { fail(error); }
       }
       seekAudio?.removeEventListener('playing', began); seekAudio?.removeEventListener('seeking', located); seekAudio?.removeEventListener('seeked', located); seekAudio = null;
-      mtc.stop();
+      mtc.close();
       if (finishing) {
         endingOutput.current = output;
         void finishing.catch(fail).finally(() => {
           try { output.stop(); } catch (error) { fail(error); }
           if (endingOutput.current === output) endingOutput.current = null;
+          if (ownedOutput.current !== output) output.close();
         });
-      } else { try { output.stop(); } catch (error) { fail(error); } }
+      } else {
+        try { output.stop(); } catch (error) { fail(error); }
+        // The owned preview keeps its outputs for the release when it is stopped.
+        if (ownedOutput.current !== output) output.close();
+      }
     };
     const start = async (): Promise<void> => {
-      const originMs = lightingTimeOrigin(document);
+      const sendsMtc = input.enabled && hasLightingContent && document.outputMode === 'timecode';
+      const originMs = sendsMtc ? (latest.current.mtcOrigin ?? (() => lightingTimeOrigin(document)))() : 0;
       const profile = useIntegrationStore.getState().profile;
       const audio = input.audioRef.current;
       if (!audio || !audio.getAttribute('src')) { if (input.enabled) throw new Error('请先给节目添加音乐，再开启灯光试听'); return; }
       if (input.enabled) await output.prepare(document, profile, audio.currentTime * 1000);
       if (cancelled || (input.enabled && ownedOutput.current !== output)) { cleanup(); return; }
-      if (input.enabled && hasLightingContent && document.outputMode === 'timecode') {
+      if (sendsMtc) {
         const id = profile?.internalPlayer?.mtcOutputPortProfileId;
         const name = profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output')?.portName;
-        if (!name) throw new Error('请在设备设置选择 MIDI 时间码输出');
+        if (!name) throw new Error('请先在设备设置里选择 MIDI 时间码输出');
         await mtc.connect(name);
       }
       if (cancelled || (input.enabled && ownedOutput.current !== output)) { cleanup(); return; }
@@ -92,7 +103,7 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
             else resume();
             return;
           }
-          if (input.enabled) output.tick(audio.currentTime * 1000); if (input.enabled && hasLightingContent && document.outputMode === 'timecode') mtc.tick(audio.currentTime * 1000 + originMs, latest.current.frameRate);
+          if (input.enabled) output.tick(audio.currentTime * 1000); if (sendsMtc) mtc.tick(audio.currentTime * 1000 + originMs, latest.current.frameRate);
         } catch (error) { cleanup(); fail(error); }
       }, 5);
     };

@@ -3,7 +3,7 @@ import { WindowsMidiHealth, probeWindowsMidi, midiHealthMessage, type MidiHealth
 
 describe('MIDI 系统故障隔离', () => {
   it('系统枚举卡死与检测组件故障分别给出恢复建议', () => {
-    expect(midiHealthMessage('timeout')).toContain('端口枚举未响应');
+    expect(midiHealthMessage('timeout')).toContain('读取 MIDI 端口没有响应');
     expect(midiHealthMessage('stopping')).toContain('Windows MIDI 服务正在停止');
     expect(midiHealthMessage('failed')).toContain('检测组件运行失败');
     expect(midiHealthMessage('failed')).not.toContain('恢复系统 MIDI 服务');

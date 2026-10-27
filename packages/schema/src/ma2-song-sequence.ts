@@ -20,7 +20,7 @@ export const ma2SongSyncRequestSchema = z.object({ network: ma2NetworkTargetSche
   /** The song's length: the show runs, and reads as taken, for the whole song rather than up to its last point. */
   timecodeLengthMs: z.number().int().positive().max(86400000).optional()
 }).strict().superRefine((value, ctx) => {
-  if (!value.points.length && !value.binding) ctx.addIssue({ code: 'custom', message: '新歌曲需先添加 Cue；已绑定歌曲可以核对后清空' });
+  if (!value.points.length && !value.binding) ctx.addIssue({ code: 'custom', message: '新歌要先添加 Cue；已关联的歌确认后可以清空' });
   if (new Set(value.points.map(point => point.id)).size !== value.points.length) ctx.addIssue({ code: 'custom', message: '歌曲 Cue 身份重复' });
 });
 export const ma2SongSyncResultSchema = z.object({ binding: ma2SongBindingSchema, library: ma2EffectLibrarySchema, layout: ma2LayoutSnapshotSchema.nullable(),

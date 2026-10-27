@@ -67,13 +67,13 @@ test('截图重建：混合事件读取中切页、缓存配对、Cue可见、�
     await expect(page.locator('.waveform-cue-point')).toHaveCount(11);
     await page.keyboard.press('Control+S'); await expect(page.locator('.project-save-status')).toBeHidden();
     await nav.getByRole('button', { name: '设置', exact: true }).click();
-    const exportButton = page.getByRole('button', { name: '导出现场核对包', exact: true });
+    const exportButton = page.getByRole('button', { name: '导出控台数据包', exact: true });
     if (!await exportButton.isVisible()) await page.getByText('歌曲导入与同步', { exact: true }).click();
     await expect(exportButton).toBeVisible();
     const diagnosticPath = info.outputPath('现场核对.tbdiag.gz');
     await app.evaluate(({ dialog }, path) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: path }); }, diagnosticPath);
     await exportButton.click();
-    await expect(page.getByText(`现场核对包已导出：${diagnosticPath}`, { exact: true })).toBeVisible();
+    await expect(page.getByText(`控台数据包已导出：${diagnosticPath}`, { exact: true })).toBeVisible();
     const exported = z.object({ context: z.object({ ma2Site: z.object({ raw: z.array(z.object({ target: z.number(), xml: z.string() })), pairings: z.record(z.string(), z.unknown()) }) }) }).parse(JSON.parse(gunzipSync(await readFile(diagnosticPath)).toString('utf8')));
     expect(exported.context.ma2Site.raw.find(entry => entry.target === 2)?.xml).toBe(meiNanXml);
     expect(await app.evaluate(() => process.env.TBLINK_CACHE_TEST_READS)).toBe('1');

@@ -4,18 +4,16 @@ import { createEmptyLinkProject, createLightingDocument, parseLinkProject, type 
 import { RemoteNativeProgramPlayer } from './remote-native-program-player';
 
 const song = parseLinkProject({ ...createEmptyLinkProject('远程控制'), playbackSource: 'internal', rundown: [{ id: 'song', title: '歌曲' }] });
-function fixture(wait?: Promise<NativeProgramAttachment>, project: LinkProject = song, withoutLightingChoices: NonNullable<InternalPlayerDependencies['withoutLightingChoices']> = new Map()) {
+function fixture(wait?: Promise<NativeProgramAttachment>, project: LinkProject = song) {
   const api = {
     openNativeProgram: vi.fn<LinkDesktopApi['openNativeProgram']>(() => wait ?? Promise.resolve('opened')),
     controlNativeProgram: vi.fn<LinkDesktopApi['controlNativeProgram']>(() => Promise.resolve()),
     onNativeProgramEvent: vi.fn<LinkDesktopApi['onNativeProgramEvent']>(() => vi.fn()),
-    onNativePlaybackStatus: vi.fn<LinkDesktopApi['onNativePlaybackStatus']>(() => vi.fn()),
-    getNativePlaybackDevices: vi.fn<LinkDesktopApi['getNativePlaybackDevices']>(() => Promise.resolve({ protocol: 4, audio: [], midiOutputs: [] }))
+    onNativePlaybackStatus: vi.fn<LinkDesktopApi['onNativePlaybackStatus']>(() => vi.fn())
   };
   const dependencies = { prepare: vi.fn(() => Promise.resolve()), ingest: vi.fn(() => Promise.resolve()), pause: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()), resolveAudio: vi.fn(() => Promise.reject(new Error('不能在界面播放原声'))),
-    configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: vi.fn<InternalPlayerDependencies['changed']>(), notice: vi.fn(),
-    confirmWithoutLighting: vi.fn<NonNullable<InternalPlayerDependencies['confirmWithoutLighting']>>(() => Promise.resolve(true)), withoutLightingChoices };
+    configuration: () => ({ outputDeviceId: 'default', mtcPortName: null }), changed: vi.fn<InternalPlayerDependencies['changed']>(), notice: vi.fn() };
   const observed = vi.fn(), player = new RemoteNativeProgramPlayer(project, 'C:/test/show.tblink', 1, dependencies, api, observed);
   const ownerId = api.openNativeProgram.mock.calls[0]![0].ownerId;
   const emit = (patch: Partial<NativeProgramEvent> = {}) => api.onNativeProgramEvent.mock.calls[0]![0]({ version: 1, ownerId, sequence: 1,
@@ -64,41 +62,13 @@ it('接管到与界面不同版本的节目时标记为过期，其余打开不�
   expect(outdated.player.outdated).toBe(true); expect(adopted.player.outdated).toBe(false); expect(fixture().player.outdated).toBe(false);
 });
 
-it('没有灯光工作的歌直接播放，不询问也不查询端口；灯光需要处理的歌先问，取消就不播放，选择后无灯光播放', async () => {
-  const plain = fixture(); await plain.player.play('song');
-  expect(plain.dependencies.confirmWithoutLighting).not.toHaveBeenCalled(); expect(plain.api.getNativePlaybackDevices).not.toHaveBeenCalled();
-  expect(plain.api.controlNativeProgram.mock.calls[0]?.[0].operation).toEqual({ kind: 'play', itemId: 'song', paused: false });
+it('随时可播放：灯光需要处理的歌也直接发给后台播放，不弹窗、不拦，由后台显示提示（2026-10-26）', async () => {
   const lit = structuredClone(song), lighting = createLightingDocument();
   lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '歌曲', readAt: '2026-10-22T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [], mappings: [], playback: 'editable', timeOriginMs: 0 }];
   lit.rundown[0]!.lighting = lighting;
-  const asked = fixture(undefined, lit); asked.dependencies.confirmWithoutLighting.mockResolvedValueOnce(false);
-  await asked.player.play('song');
-  expect(asked.dependencies.confirmWithoutLighting.mock.calls[0]?.[0]).toMatch(/^这首歌的灯光需要处理：控台 Timecode 2/);
-  expect(asked.api.controlNativeProgram).not.toHaveBeenCalled();
-  await asked.player.play('song');
-  expect(asked.api.controlNativeProgram.mock.calls[0]?.[0].operation).toEqual({ kind: 'play', itemId: 'song', paused: false, withoutLighting: true });
-});
-
-it('开播检查同一首歌同一类问题只问一次：重建播放器后沿用选择；检查通过或换了问题类型后再问', async () => {
-  const lit = structuredClone(song), lighting = createLightingDocument();
-  lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '歌曲', readAt: '2026-10-22T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [], mappings: [], playback: 'editable', timeOriginMs: 0 }];
-  lit.rundown[0]!.lighting = lighting;
-  const choices: NonNullable<InternalPlayerDependencies['withoutLightingChoices']> = new Map();
-  const withoutLighting = { kind: 'play', itemId: 'song', paused: false, withoutLighting: true };
-  const first = fixture(undefined, lit, choices);
-  await first.player.play('song'); await first.player.play('song');
-  expect(first.dependencies.confirmWithoutLighting).toHaveBeenCalledOnce();
-  expect(first.api.controlNativeProgram.mock.calls.map(call => call[0].operation)).toEqual([withoutLighting, withoutLighting]);
-  const rebuilt = fixture(undefined, lit, choices); await rebuilt.player.play('song');
-  expect(rebuilt.dependencies.confirmWithoutLighting).not.toHaveBeenCalled();
-  expect(rebuilt.api.controlNativeProgram.mock.calls[0]?.[0].operation).toEqual(withoutLighting);
-  expect(rebuilt.dependencies.notice).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^开播前检查：沿用操作员选择无灯光播放；这首歌的灯光需要处理/), 'song');
-  const declined = fixture(undefined, structuredClone(lit), new Map(choices)); declined.dependencies.confirmWithoutLighting.mockResolvedValueOnce(false);
-  declined.dependencies.withoutLightingChoices.set(`${lit.projectId}\nsong`, 'editing'); await declined.player.play('song');
-  expect(declined.dependencies.confirmWithoutLighting).toHaveBeenCalledOnce(); expect(declined.api.controlNativeProgram).not.toHaveBeenCalled();
-  expect(declined.dependencies.withoutLightingChoices.get(`${lit.projectId}\nsong`)).toBe('editing');
-  const fixed = fixture(undefined, song, choices); await fixed.player.play('song');
-  expect(fixed.dependencies.confirmWithoutLighting).not.toHaveBeenCalled(); expect(choices.size).toBe(0);
-  const again = fixture(undefined, lit, choices); await again.player.play('song');
-  expect(again.dependencies.confirmWithoutLighting).toHaveBeenCalledOnce();
+  for (const project of [song, lit]) {
+    const f = fixture(undefined, project); await f.player.play('song'); await f.player.play('song');
+    expect(f.api.controlNativeProgram.mock.calls.map(call => call[0].operation)).toEqual([{ kind: 'play', itemId: 'song', paused: false }, { kind: 'play', itemId: 'song', paused: false }]);
+    expect(f.dependencies.notice).not.toHaveBeenCalled();
+  }
 });

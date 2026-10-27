@@ -90,7 +90,7 @@ export class Ma2NetworkSetup {
     this.busy = true;
     try {
       const records = await this.records(); const record = records.find(record => record.plan.id === id);
-      if (!record) throw new Error('未找到本软件添加的地址');
+      if (!record) throw new Error('找不到联动台添加的地址');
       const current = await this.dependencies.snapshot();
       if (record.bootId === current.bootId) {
         const adapter = current.adapters.find(adapter => adapter.id === record.plan.adapter.id);

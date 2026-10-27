@@ -51,8 +51,8 @@ export class ObsBeauty {
       if (!state.enabled) throw new Error('美颜滤镜已关闭，无法读取对比画面');
       const result = await this.request(() => this.client.call('GetSourceFilter', parsed), '读取美颜对比通道');
       const path = z.string().regex(/^\\\\\.\\pipe\\tblink-beauty-compare-\d+-\d+$/).safeParse(result.filterSettings.comparison_pipe);
-      if (!path.success) throw new Error('美颜组件不支持对比，请更新组件并正常重启 OBS');
-      if (!path.data.startsWith(`\\\\.\\pipe\\tblink-beauty-compare-${localPid}-`)) throw new Error('美颜对比通道与当前 OBS 进程不匹配');
+      if (!path.success) throw new Error('美颜组件版本太旧，不支持对比，请更新组件后重启 OBS');
+      if (!path.data.startsWith(`\\\\.\\pipe\\tblink-beauty-compare-${localPid}-`)) throw new Error('美颜对比连接和当前 OBS 对不上，请重新打开对比');
       return path.data;
     });
   }
@@ -62,13 +62,13 @@ export class ObsBeauty {
       const filterName = '团播·人像美颜';
       const filters = await this.request(() => this.client.call('GetSourceFilterList', { sourceName }), '读取美颜来源滤镜');
       const existing = filters.filters.find(filter => filter.filterName === filterName);
-      if (existing && existing.filterKind !== 'tblink_beauty_prototype') throw new Error('同名滤镜属于其他插件，请在 OBS 中改名后继续');
+      if (existing && existing.filterKind !== 'tblink_beauty_prototype') throw new Error('有一个同名滤镜属于其他插件，请先在 OBS 里给它改名');
       if (!existing) await this.request(() => this.client.call('CreateSourceFilter', { sourceName, filterName,
         filterKind: 'tblink_beauty_prototype', filterSettings: { live_mode: true, uniform_controls: true, smooth: 0, white: 0, slim: 0, eye: 0 }
       }), '创建联动台美颜滤镜');
       await this.readFilter({ sourceName, filterName });
       const result = await this.request(() => this.client.call('GetSourceFilter', { sourceName, filterName }), '读取美颜分析通道');
-      if (result.filterSettings.transport_version !== 7) throw new Error('美颜分析通道版本不匹配，请更新美颜组件并正常重启 OBS');
+      if (result.filterSettings.transport_version !== 7) throw new Error('美颜分析组件版本不匹配，请更新美颜组件后重启 OBS');
       const channel = z.string().regex(/^Local\\tblink-beauty-\d+-\d+$/).parse(result.filterSettings.transport_name);
       await this.request(() => this.client.call('SetSourceFilterSettings', { sourceName, filterName, overlay: true, filterSettings: { live_mode: true } }), '启用实时美颜分析');
       await this.request(() => this.client.call('SetSourceFilterEnabled', { sourceName, filterName, filterEnabled: true }), '启用联动台美颜');
@@ -85,7 +85,7 @@ export class ObsBeauty {
       }), '应用基础美颜参数');
       const confirmed = await this.readFilter(target);
       if (!confirmed.uniform || Object.keys(values).some(key => confirmed.values[key as keyof typeof values] !== values[key as keyof typeof values])) {
-        throw new Error('OBS 返回的美颜参数与本次设置不一致，请检查滤镜；未自动重试');
+        throw new Error('OBS 返回的美颜参数和设置的不一致，请检查滤镜（没有自动重试）');
       }
       return confirmed;
     });
@@ -95,7 +95,7 @@ export class ObsBeauty {
     const result = await this.request(() => this.client.call('GetSourceFilter', target), '读取美颜滤镜');
     if (result.filterKind !== 'tblink_beauty_prototype') throw new Error('所选滤镜不是联动台美颜，已拒绝修改');
     const settings = settingsSchema.safeParse(result.filterSettings);
-    if (!settings.success) throw new Error('美颜滤镜版本不支持统一参数，请先更新美颜组件');
+    if (!settings.success) throw new Error('美颜滤镜版本太旧，请先更新美颜组件');
     const value = settings.data;
     return { ...target, enabled: result.filterEnabled, liveMode: value.live_mode === true, uniform: value.uniform_controls === true,
       values: beautyBasicValuesSchema.parse(Object.fromEntries(beautyRuntimeKeys.map(key => [key, Math.round((value[key] ?? 0) * 100)]))) };

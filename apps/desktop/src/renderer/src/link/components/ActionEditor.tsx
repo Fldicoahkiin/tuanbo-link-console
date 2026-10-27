@@ -52,7 +52,7 @@ export function ActionEditor({ itemId, cueId, action, index, actionCount, onTest
       <div className="action-card-header">
         {actionCount > 1 ? <span className="action-order">{String(index + 1).padStart(2, '0')}</span> : null}
         <select aria-label="动作类型" value={action.kind} onChange={(event) => replace(changeActionKind(action, event.currentTarget.value as LinkAction['kind']))}>
-          {!supported ? <option value={action.kind} disabled>旧来源动作 · 请改为切换场景</option> : null}
+          {!supported ? <option value={action.kind} disabled>旧版来源动作，请改用“切换场景”</option> : null}
           {availableKinds.map((option) => <option value={option.kind} key={option.kind}>{option.label}</option>)}
         </select>
         <input className="action-name" aria-label="动作名称" title="动作名称" key={action.label} defaultValue={action.label} onBlur={(event) => { if (event.currentTarget.value !== action.label) replace({ ...action, label: event.currentTarget.value }); }} />
@@ -112,13 +112,13 @@ function renderActionFields(
       return <>{text('来源', action.sourceName, (value) => ({ ...action, sourceName: value }))}{text('文件名', action.fileName, (value) => ({ ...action, fileName: value }))}</>;
     case 'midi.noteOn':
     case 'midi.noteOff':
-      return <>{text('端口档案', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('通道', action.channel, (value) => ({ ...action, channel: value }), { min: 1, max: 16 })}{number('音符', action.note, (value) => ({ ...action, note: value }), { min: 0, max: 127 })}{number('力度', action.velocity, (value) => ({ ...action, velocity: value }), { min: action.kind === 'midi.noteOn' ? 1 : 0, max: 127 })}</>;
+      return <>{text('端口设置', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('通道', action.channel, (value) => ({ ...action, channel: value }), { min: 1, max: 16 })}{number('音符', action.note, (value) => ({ ...action, note: value }), { min: 0, max: 127 })}{number('力度', action.velocity, (value) => ({ ...action, velocity: value }), { min: action.kind === 'midi.noteOn' ? 1 : 0, max: 127 })}</>;
     case 'midi.controlChange':
-      return <>{text('端口档案', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('通道', action.channel, (value) => ({ ...action, channel: value }), { min: 1, max: 16 })}{number('控制器', action.controller, (value) => ({ ...action, controller: value }), { min: 0, max: 127 })}{number('值', action.value, (value) => ({ ...action, value }), { min: 0, max: 127 })}</>;
+      return <>{text('端口设置', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('通道', action.channel, (value) => ({ ...action, channel: value }), { min: 1, max: 16 })}{number('控制器', action.controller, (value) => ({ ...action, controller: value }), { min: 0, max: 127 })}{number('值', action.value, (value) => ({ ...action, value }), { min: 0, max: 127 })}</>;
     case 'midi.programChange':
-      return <>{text('端口档案', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('通道', action.channel, (value) => ({ ...action, channel: value }), { min: 1, max: 16 })}{number('音色编号', action.program, (value) => ({ ...action, program: value }), { min: 0, max: 127 })}</>;
+      return <>{text('端口设置', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('通道', action.channel, (value) => ({ ...action, channel: value }), { min: 1, max: 16 })}{number('音色编号', action.program, (value) => ({ ...action, program: value }), { min: 0, max: 127 })}</>;
     case 'midi.showControl':
-      return <>{text('端口档案', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('设备编号', action.deviceId, (value) => ({ ...action, deviceId: value }), { min: 0, max: 127 })}{number('命令格式', action.commandFormat, (value) => ({ ...action, commandFormat: value }), { min: 0, max: 127 })}<Field label="命令"><select value={action.command} onChange={(event) => replace({ ...action, command: event.currentTarget.value as typeof action.command })}>{Object.entries({ go: '执行（Go）', stop: '停止', resume: '继续', load: '预载' }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>{text('Cue 编号', action.cueNumber ?? '', (value) => ({ ...action, cueNumber: value || undefined }))}{text('Cue 列表', action.cueList ?? '', (value) => ({ ...action, cueList: value || undefined }))}{text('Cue 路径', action.cuePath ?? '', (value) => ({ ...action, cuePath: value || undefined }))}</>;
+      return <>{text('端口设置', action.portProfileId, (value) => ({ ...action, portProfileId: value }))}{number('设备编号', action.deviceId, (value) => ({ ...action, deviceId: value }), { min: 0, max: 127 })}{number('命令格式', action.commandFormat, (value) => ({ ...action, commandFormat: value }), { min: 0, max: 127 })}<Field label="命令"><select value={action.command} onChange={(event) => replace({ ...action, command: event.currentTarget.value as typeof action.command })}>{Object.entries({ go: '执行（Go）', stop: '停止', resume: '继续', load: '预载' }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>{text('Cue 编号', action.cueNumber ?? '', (value) => ({ ...action, cueNumber: value || undefined }))}{text('Cue 列表', action.cueList ?? '', (value) => ({ ...action, cueList: value || undefined }))}{text('Cue 路径', action.cuePath ?? '', (value) => ({ ...action, cuePath: value || undefined }))}</>;
   }
 }
 
@@ -134,8 +134,8 @@ function SceneTransitionFields({ action, replace }: { action: Extract<LinkAction
       const name = event.currentTarget.value;
       if (name) replace({ ...action, transition: { name, durationMs: selected?.durationMs ?? 300 } });
       else { const remaining = { ...action }; delete remaining.transition; replace(remaining); }
-    }}><option value="">沿用 OBS 当前转场</option>{[...new Set([...transitions, ...(selected ? [selected.name] : [])])].map((name) => <option key={name} value={name}>{name}{transitions.includes(name) ? '' : '（未检测到）'}</option>)}</select></Field>
-    {selected ? <Field label="过渡时长（毫秒）"><PropertyNumberInput label="Cue 过渡时长（毫秒）" min={50} max={20000} value={selected.durationMs} onCommit={(durationMs) => replace({ ...action, transition: { ...selected, durationMs } })} /><small>切换和固定时长转场使用 OBS 自身时长。</small></Field> : null}
+    }}><option value="">沿用 OBS 当前转场</option>{[...new Set([...transitions, ...(selected ? [selected.name] : [])])].map((name) => <option key={name} value={name}>{name}{transitions.includes(name) ? '' : '（OBS 中找不到）'}</option>)}</select></Field>
+    {selected ? <Field label="过渡时长（毫秒）"><PropertyNumberInput label="Cue 过渡时长（毫秒）" min={50} max={20000} value={selected.durationMs} onCommit={(durationMs) => replace({ ...action, transition: { ...selected, durationMs } })} /><small>“切换”和固定时长的转场按 OBS 里设定的时长执行。</small></Field> : null}
   </>;
 }
 

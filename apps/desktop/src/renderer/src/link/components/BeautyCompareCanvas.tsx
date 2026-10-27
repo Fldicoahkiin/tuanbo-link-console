@@ -52,7 +52,7 @@ export function BeautyCompareCanvas({ target, onAspectChange }: { target: Beauty
     </div>
     <div className="beauty-comparison-label">{target.sourceName} · 美颜前 / 美颜后</div>
     {error ? <div className="beauty-comparison-error" role="alert">{error}<button onClick={() => setRevision(value => value + 1)}>重新读取对比</button></div>
-      : !received ? <div className="beauty-comparison-loading" role="status">正在读取同帧对比…</div> : null}
+      : !received ? <div className="beauty-comparison-loading" role="status">正在读取对比画面…</div> : null}
     {received && !error ? <label className="beauty-comparison-split">前<input aria-label="美颜对比分割线" type="range" min="0" max="100" value={split} onChange={event => setSplit(Number(event.target.value))} />后</label> : null}
   </div>;
 }

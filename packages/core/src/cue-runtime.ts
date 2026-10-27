@@ -92,7 +92,7 @@ export class CueRuntime {
     if (timing) return { status: 'not-applied', reason: timing };
     for (const channel of plan.requiredChannels) {
       const confirmation = request.channels.find(entry => entry.channel === channel);
-      if (confirmation?.state !== 'ready') return { status: 'not-applied', reason: confirmation?.reason ?? `${channel} 尚未完成此次修改的准备` };
+      if (confirmation?.state !== 'ready') return { status: 'not-applied', reason: confirmation?.reason ?? `${channel} 还没准备好这次修改` };
     }
     this.selectedItem = plan.item; this.scheduledCues = plan.events;
     this.authoredCueIds = new Set(plan.item.cues.map(cue => cue.id)); this.executionRevision++;
@@ -100,22 +100,22 @@ export class CueRuntime {
   }
 
   private editIdentityError(request: Pick<LiveCueEditRequest, 'sessionId' | 'programId' | 'baseRevision'>): string | null {
-    if (this.state !== 'armed' && this.state !== 'running') return '当前不在可以接收未来修改的播放会话中';
-    if (request.sessionId !== this.editSessionId || request.programId !== this.selectedItem?.id) return '播放会话或节目已经改变';
-    if (request.baseRevision !== this.executionRevision) return '修改依据的运行版本已经过期';
+    if (this.state !== 'armed' && this.state !== 'running') return '当前播放不能接收后面的修改';
+    if (request.sessionId !== this.editSessionId || request.programId !== this.selectedItem?.id) return '播放或节目已经变了';
+    if (request.baseRevision !== this.executionRevision) return '修改依据的版本已经过期';
     return null;
   }
 
   private editBoundaryError(plan: PreparedCueEdit): string | null {
     const positionMs = Math.max(0, this.previousFrame) * 1000 / playbackFramesPerSecond(this.project.timebase.frameRate);
     if (plan.earliestAffectedMs <= positionMs + 5000 || plan.affectedIds.some(id => this.executedCueIds.has(id) || this.missedCueIds.has(id))) {
-      return '修改涉及过去、已执行或未来 5 秒保护窗口内的 Cue，本轮未应用';
+      return '修改涉及已经播过、已执行或 5 秒内就要执行的 Cue，这一轮没有应用';
     }
     return null;
   }
 
   selectItem(itemId: string, currentFrame = -1): RuntimeUpdate {
-    if (isProtectedRuntimeState(this.state)) return this.update([], `运行状态 ${this.state} 下不能切换节目`);
+    if (isProtectedRuntimeState(this.state)) return this.update([], `当前状态（${this.state}）不能切换节目`);
     const item = this.project.rundown.find((candidate) => candidate.id === itemId);
     if (!item) return this.fail(`节目不存在：${itemId}`);
     if (!item.enabled) return this.fail(`节目已停用：${item.title}`);
@@ -136,7 +136,7 @@ export class CueRuntime {
   }
 
   beginPreflight(mode: LinkRunMode): RuntimeUpdate {
-    if (isProtectedRuntimeState(this.state)) return this.fail(`运行状态 ${this.state} 下不能重新预检`);
+    if (isProtectedRuntimeState(this.state)) return this.fail(`当前状态（${this.state}）不能重新做开播前检查`);
     this.mode = mode;
     this.state = 'preflight';
     return this.update();
@@ -148,15 +148,15 @@ export class CueRuntime {
     startMode: 'immediate' | 'awaiting-external-start' = 'immediate',
     executionOwner: 'local' | 'external' = 'local'
   ): RuntimeUpdate {
-    if (this.state !== 'preflight') return this.fail(`只有 preflight 状态可以布防，当前为 ${this.state}`);
-    if (!this.selectedItem) return this.fail('尚未选择节目');
+    if (this.state !== 'preflight') return this.fail(`只有开播前检查完成后才能待命，当前状态：${this.state}`);
+    if (!this.selectedItem) return this.fail('还没选择节目');
     if (executionOwner === 'external' && (this.project.playbackSource !== 'internal'
       || this.scheduledCues.some(entry => entry.cue.actions.some(action => action.kind.startsWith('midi.'))))) {
       return this.fail('外部执行状态观察不能接管 P1 输入或本地 MIDI Cue');
     }
     this.executionOwner = executionOwner;
     if (currentSample && currentSample.frameRate !== this.project.timebase.frameRate) {
-      return this.fail(`MTC 帧率不匹配：期望 ${this.project.timebase.frameRate}，收到 ${currentSample.frameRate}`);
+      return this.fail(`MTC 帧率不一致：应为 ${this.project.timebase.frameRate}，收到的是 ${currentSample.frameRate}`);
     }
     this.executedCueIds.clear();
     this.missedCueIds.clear();
@@ -174,9 +174,9 @@ export class CueRuntime {
     if (this.state === 'idle' || this.state === 'preflight' || this.state === 'error' || this.state === 'stopping') {
       return this.update();
     }
-    if (!this.selectedItem) return this.fail('尚未选择节目');
+    if (!this.selectedItem) return this.fail('还没选择节目');
     if (sample.frameRate !== this.project.timebase.frameRate) {
-      return this.fail(`MTC 帧率不匹配：期望 ${this.project.timebase.frameRate}，收到 ${sample.frameRate}`);
+      return this.fail(`MTC 帧率不一致：应为 ${this.project.timebase.frameRate}，收到的是 ${sample.frameRate}`);
     }
     // This is a display of a separately validated native playback session. UI
     // delivery gaps say nothing about that device clock or its background outputs.
@@ -211,7 +211,7 @@ export class CueRuntime {
       && sample.totalFrames > nominalFramesPerSecond(sample.frameRate) * MTC_INITIAL_LOCK_SECONDS
     ) {
       this.lastSample = sample;
-      return this.loseTimecode('MTC 首帧未从节目开头开始');
+      return this.loseTimecode('MTC 不是从节目开头开始的');
     }
     // The formal audio clock is the timeline itself. A late observation whose
     // position kept time is a gap in watching, not a lost timecode.
@@ -263,7 +263,7 @@ export class CueRuntime {
   }
 
   resync(sample: MtcSample): RuntimeUpdate {
-    if (this.state !== 'timecodeLost') return this.fail(`只有 timecodeLost 状态可以重同步，当前为 ${this.state}`);
+    if (this.state !== 'timecodeLost') return this.fail(`只有时间码中断后才能重新同步，当前状态：${this.state}`);
     this.pendingEdit = null; this.editSessionId = crypto.randomUUID();
     this.previousFrame = sample.totalFrames;
     this.lastSample = sample;
@@ -280,7 +280,7 @@ export class CueRuntime {
   }
 
   resumeP1(sample: MtcSample): RuntimeUpdate {
-    if (this.state !== 'timecodeLost' || !this.lastSample) return this.fail('P1 恢复前没有可验证的暂停位置');
+    if (this.state !== 'timecodeLost' || !this.lastSample) return this.fail('P1 恢复前没有可以确认的暂停位置');
     const delta = sample.totalFrames - this.previousFrame;
     if (sample.frameRate !== this.lastSample.frameRate || delta < 0 || delta > nominalFramesPerSecond(sample.frameRate) / 4) {
       return this.fail('P1 恢复位置发生跳变，请从歌曲开头重新播放');
@@ -291,7 +291,7 @@ export class CueRuntime {
   }
 
   rearmFromStart(nowMs = performance.now()): RuntimeUpdate {
-    if (this.state !== 'timecodeLost') return this.fail(`只有 timecodeLost 状态可以从头重新布防，当前为 ${this.state}`);
+    if (this.state !== 'timecodeLost') return this.fail(`只有时间码中断后才能从头重新待命，当前状态：${this.state}`);
     this.pendingEdit = null; this.editSessionId = crypto.randomUUID();
     this.executedCueIds.clear();
     this.missedCueIds.clear();
@@ -304,7 +304,7 @@ export class CueRuntime {
   }
 
   enableManualTakeover(currentSample: MtcSample | null = null): RuntimeUpdate {
-    if (this.state !== 'timecodeLost') return this.fail(`只有 timecodeLost 状态可以进入手动接管，当前为 ${this.state}`);
+    if (this.state !== 'timecodeLost') return this.fail(`只有时间码中断后才能手动接管，当前状态：${this.state}`);
     if (currentSample) {
       this.markCuesThroughAsMissed(currentSample.totalFrames);
       this.previousFrame = currentSample.totalFrames;
@@ -317,7 +317,7 @@ export class CueRuntime {
 
   pauseAutomatic(reason = '操作员暂停自动联动'): RuntimeUpdate {
     if (this.state !== 'armed' && this.state !== 'running') {
-      return this.fail(`只有 armed 或 running 状态可以暂停，当前为 ${this.state}`);
+      return this.fail(`只有待命或运行中才能暂停，当前状态：${this.state}`);
     }
     this.state = 'paused';
     this.pendingEdit = null; this.editSessionId = crypto.randomUUID();
@@ -325,8 +325,8 @@ export class CueRuntime {
   }
 
   resumeAutomatic(): RuntimeUpdate {
-    if (this.state !== 'paused') return this.fail(`只有 paused 状态可以恢复，当前为 ${this.state}`);
-    if (this.manualTakeover) return this.fail('手动接管期间不能恢复自动联动，必须停止后重新预检');
+    if (this.state !== 'paused') return this.fail(`只有暂停时才能恢复，当前状态：${this.state}`);
+    if (this.manualTakeover) return this.fail('手动接管期间不能恢复自动联动，请先停止，再重新做开播前检查');
     this.state = this.lastSample ? 'running' : 'armed';
     return this.update();
   }
@@ -342,7 +342,7 @@ export class CueRuntime {
     }
     if (this.state !== 'paused' || !this.lastSample || sample.frameRate !== this.lastSample.frameRate
       || Math.abs(sample.totalFrames - this.previousFrame) > nominalFramesPerSecond(sample.frameRate) / 4) {
-      return this.fail('内部音频恢复位置无效，请从头重播');
+      return this.fail('音频恢复位置无效，请从头重播');
     }
     this.lastSample = { ...this.lastSample, receivedAtMs: sample.receivedAtMs };
     this.state = 'running';
@@ -356,7 +356,7 @@ export class CueRuntime {
       || !this.lastSample || sample.frameRate !== this.lastSample.frameRate
       || sample.totalFrames < this.previousFrame
       || sample.totalFrames - this.previousFrame > nominalFramesPerSecond(sample.frameRate) / 4) {
-      return this.fail('本机播放起点与准备位置不一致，请重新定位后播放');
+      return this.fail('播放起点和准备的位置对不上，请重新定位后播放');
     }
     const elapsed = (sample.totalFrames - this.previousFrame) * 1000 / nominalFramesPerSecond(sample.frameRate);
     this.lastSample = { ...this.lastSample, receivedAtMs: sample.receivedAtMs - elapsed };
@@ -364,15 +364,15 @@ export class CueRuntime {
   }
 
   manualGo(cueId: string): RuntimeUpdate {
-    if (this.executionOwner === 'external') return this.update([], '该会话由后台执行，界面观察器不能发送 Cue');
-    if (!this.manualTakeover || !this.selectedItem) return this.fail('手动接管尚未确认');
+    if (this.executionOwner === 'external') return this.update([], '这次播放由后台控制，界面不能发送 Cue');
+    if (!this.manualTakeover || !this.selectedItem) return this.fail('还没确认手动接管');
     const cue = this.selectedItem.cues.find((candidate) => candidate.id === cueId);
     if (!cue) return this.fail(`Cue 不存在：${cueId}`);
     if (!cue.enabled) return this.fail(`Cue 已停用：${cue.name}`);
     if (this.executedCueIds.has(cue.id)) return this.fail(`Cue 已执行：${cue.name}`);
     const runnableCue = this.scheduledCues
       .find((entry) => entry.cue.id === cue.id)?.cue;
-    if (!runnableCue) return this.fail(`Cue 所在视觉图层已隐藏：${cue.name}`);
+    if (!runnableCue) return this.fail(`Cue 所在的画面图层已隐藏：${cue.name}`);
     this.executedCueIds.add(cue.id);
     return this.update([{ cue: runnableCue, scheduledFrame: timecodeToFrameNumber(runnableCue.timecode, this.project.timebase.frameRate), executionId: crypto.randomUUID() }]);
   }
@@ -387,7 +387,7 @@ export class CueRuntime {
   }
 
   abortStart(reason: string): RuntimeUpdate {
-    if (this.state !== 'armed') return this.fail(`只有 armed 状态可以中止 P1 启动，当前为 ${this.state}`);
+    if (this.state !== 'armed') return this.fail(`只有待命时才能取消 P1 启动，当前状态：${this.state}`);
     this.lastSample = null;
     this.armedAtMs = null;
     this.state = 'error';
@@ -444,7 +444,7 @@ export class CueRuntime {
       this.missedCueIds.add(cue.id); missed += 1;
     }
     this.previousFrame = frame; this.lastSample = sample; this.armedAtMs = null; this.state = 'running';
-    return { ...this.update(due, `播放位置更新中断 ${gapMs}ms：画面按当前位置重建${missed ? `，错过 ${missed} 个联动 Cue，未补发` : ''}`), rebuild: true };
+    return { ...this.update(due, `播放位置更新中断了 ${gapMs} ms，画面已按当前位置恢复${missed ? `，错过了 ${missed} 个联动 Cue，没有补发` : ''}`), rebuild: true };
   }
 
   private markCrossedCuesAsMissed(currentFrame: number): void {

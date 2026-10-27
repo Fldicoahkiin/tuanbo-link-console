@@ -30,7 +30,7 @@ export function Ma2ProgramSettings({ disabled, notify }: {
   };
   return <section className="settings-section" aria-label="本机控台程序">
     <div className="device-section-heading"><h3>本机控台与预演</h3></div>
-    <p className="settings-note">一键连接会打开选定的 onPC 和 MA 3D，已运行的程序会直接复用。程序运行、控台通信和 MIDI 输出分别检查。多版本安装时请明确选择配套版本。</p>
+    <p className="settings-note">一键连接会打开选好的 onPC 和 MA 3D，已经在运行的会直接使用。程序是否运行、控台通信和 MIDI 输出会分别检查。装了多个版本时，请选择配套的版本。</p>
     {(['ma2', 'ma3d'] as const).map(id => {
       const title = id === 'ma2' ? 'MA2 onPC' : 'MA 3D';
       const settings = profile?.[id];

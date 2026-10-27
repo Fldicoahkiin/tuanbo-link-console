@@ -40,7 +40,7 @@ export function ObsPreviewLayer(props: {
       if (props.status !== 'connected') {
         setImageData(null);
         setWarming(false);
-        setError('OBS WebSocket 未连接，无法读取画面');
+        setError('OBS 还没连接，无法读取画面');
         return;
       }
       try {
@@ -55,7 +55,7 @@ export function ObsPreviewLayer(props: {
           setImageData(null);
           const preparing = performance.now() - emptySince < 2000;
           setWarming(preparing);
-          setError(preparing ? null : `OBS 返回的“${props.sourceName}”预览没有可见画面。请检查该场景中的来源是否可见、采集目标是否有效。`);
+          setError(preparing ? null : `“${props.sourceName}”的预览是空白的。请检查这个场景里的来源是否可见，采集的设备或窗口是否还在。`);
         } else { emptySince = null; setWarming(false); setImageData(next); setError(null); }
       } catch (reason) {
         if (!cancelled) { setImageData(null); setWarming(false); setError(toMessage(reason)); }
@@ -129,7 +129,7 @@ export function ObsPreviewLayer(props: {
         if (props.sourceSize || intrinsicSize) return;
         const { naturalWidth, naturalHeight } = event.currentTarget;
         if (naturalWidth <= 0 || naturalHeight <= 0) {
-          setError('OBS 来源预览未返回有效原始尺寸');
+          setError('OBS 没有返回这个来源的画面尺寸');
           return;
         }
         setIntrinsicSource({ sourceName: props.sourceName, size: { width: naturalWidth, height: naturalHeight } });
@@ -163,12 +163,12 @@ async function hasVisibleObsPreview(dataUrl: string, sourceName: string): Promis
   const image = new Image();
   image.src = dataUrl;
   await image.decode();
-  if (image.naturalWidth <= 0 || image.naturalHeight <= 0) throw new Error(`OBS 来源“${sourceName}”未返回有效预览尺寸`);
+  if (image.naturalWidth <= 0 || image.naturalHeight <= 0) throw new Error(`OBS 没有返回来源“${sourceName}”的预览尺寸`);
   const canvas = document.createElement('canvas');
   canvas.width = 16;
   canvas.height = 16;
   const context = canvas.getContext('2d', { willReadFrequently: true });
-  if (!context) throw new Error('浏览器无法分析 OBS 来源预览像素');
+  if (!context) throw new Error('无法分析 OBS 来源的预览画面');
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
   return hasVisibleObsPreviewPixels(context.getImageData(0, 0, canvas.width, canvas.height).data);
 }

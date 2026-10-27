@@ -32,7 +32,7 @@ it('删除只隐藏软件素材，原始控台目录、已分类条目保留；�
   expect(projectLightingLibrary(hideConsoleCuesCommand(refs,source,false).execute(reopened)).hiddenConsoleCues).toEqual([]);
   expect(command.undo(base)).toBe(base);
   expect(()=>classifyConsoleCuesCommand(refs,'rim:7:back',{...source,show:'其他 Show'}).execute(base)).toThrow('目录已变化');
-  expect(()=>classifyConsoleCuesCommand([{...refs[0]!,cue:'不存在'}],'rim:7:back',source).execute(base)).toThrow('当前读取目录');
+  expect(()=>classifyConsoleCuesCommand([{...refs[0]!,cue:'不存在'}],'rim:7:back',source).execute(base)).toThrow('读到的控台内容里已经没有');
   expect(()=>classifyConsoleCuesCommand(refs,'不存在',source).execute(base)).toThrow('分类已移除');
 });
 it('重命名未分类 Cue 后归类、重读及保存保留名称，原名和执行版本不变',()=>{

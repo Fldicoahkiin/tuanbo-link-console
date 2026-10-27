@@ -2,6 +2,7 @@ import { NativeProgramPlayer, type InternalPlayerDependencies, type InternalPlay
 import type { LinkProject, NativePlayerControl, NativePlayerStatus } from '@tb/schema';
 import { NativeMidiHost, type ActionMidiRecovery, type NativeMidiChannelState } from './native-midi-host';
 import { NativeLightingOutput } from './native-lighting-output';
+import type { MidiClaim, MidiClaimOwner } from './midi-port-broker';
 
 type AudioApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePlayback' | 'getNativePlaybackDevices'
   | 'prepareNativeObs' | 'stopNativeObs' | 'onNativeObsStatus' | 'preloadNativeObs' | 'cancelNativeObsPreload'>;
@@ -13,6 +14,8 @@ type Dependencies = {
   /** Windows MIDI outputs as listed now, checked again when the last listing failed: waits for a lost action MIDI port. */
   midiOutputs(): Promise<readonly { id: number; name: string }[]>;
   authorize(): Promise<void>;
+  /** Formal playback takes an output from the editor before opening it. */
+  claimMidiOutput?: (portName: string, owner: MidiClaimOwner) => Promise<MidiClaim>;
   configuration: InternalPlayerDependencies['configuration'];
   preciseSeeking(): boolean;
   changed(state: InternalPlayerState): void;
@@ -37,19 +40,21 @@ export class NativeProgramHost {
 
   constructor(project: LinkProject, path: string, revision: number, private readonly dependencies: Dependencies) {
     const error = (message: string) => this.controller.reportUnavailable(message);
+    const claim = dependencies.claimMidiOutput;
     this.midi = new NativeMidiHost({ audio: () => dependencies.audio(), profile: () => dependencies.configuration().lightingProfile ?? null,
       executable: dependencies.executable, authorize: () => dependencies.authorize(), changed: state => dependencies.midiChanged(state), error,
+      ...claim ? { claim: (name: string) => claim(name, '动作 MIDI') } : {},
       fault: (message, itemId) => { dependencies.notice(message, itemId); this.controller.reportFault(message); },
       outputs: () => dependencies.midiOutputs(), recovered: (report, itemId) => {
         dependencies.midiRecovered(report, itemId); this.controller.clearFault(report.fault);
         this.controller.reportUnavailable(`动作 MIDI 中断 ${(report.durationMs / 1000).toFixed(1)} 秒后已恢复（${report.portName}）`);
       } });
     this.lighting = new NativeLightingOutput({ executable: dependencies.executable, network: dependencies.network,
-      authorize: () => dependencies.authorize(), error });
+      authorize: () => dependencies.authorize(), error, ...claim ? { claim: (name: string) => claim(name, '灯光 MIDI') } : {} });
     this.controller = new NativeProgramPlayer(project, path, revision, {
       prepare: async (itemId, positionMs, { signal }) => {
         const audio = dependencies.audio();
-        if (!audio || audio.itemId !== itemId || audio.positionMs !== positionMs) throw new Error('MIDI 准备起点与当前音频不一致');
+        if (!audio || audio.itemId !== itemId || audio.positionMs !== positionMs) throw new Error('MIDI 准备的起点和当前音频对不上');
         const cancelled = () => { void this.midi.stop().catch(cleanup => error(`取消 MIDI 准备失败：${String(cleanup)}`)); };
         if (signal?.aborted) throw new Error('MIDI 准备已取消');
         signal?.addEventListener('abort', cancelled, { once: true });
@@ -72,7 +77,7 @@ export class NativeProgramHost {
     }, {
       prepare: async (document, profile, positionMs) => {
         const audio = dependencies.audio();
-        if (!audio || !['ready', 'paused'].includes(audio.status) || audio.positionMs !== positionMs) throw new Error('灯光准备不属于当前待播放音频');
+        if (!audio || !['ready', 'paused'].includes(audio.status) || audio.positionMs !== positionMs) throw new Error('灯光准备的不是当前要播放的这首歌');
         const session = { sessionId: audio.sessionId, generation: audio.generation, itemId: audio.itemId, ready: false };
         this.lightingSession = session;
         await this.lighting.prepare(document, profile, positionMs);
@@ -95,7 +100,7 @@ export class NativeProgramHost {
       lighting.generation = status.generation;
       if (status.audioError || ['stopped', 'error', 'preparing'].includes(status.status)) this.stopLighting();
       else if (!lighting.ready && status.status === 'playing') {
-        this.controller.reportUnavailable('灯光准备未赶上音频开始；本轮不参与，不中途补发'); this.stopLighting();
+        this.controller.reportUnavailable('灯光没赶上音频开始，这一首不发灯光，也不会中途补发'); this.stopLighting();
       } else if (qpc100ns && qpc100ns !== '0' && lighting.ready) {
         this.lighting.observe(status.positionMs, Number(qpc100ns) / 10000);
         if (status.status === 'playing') {

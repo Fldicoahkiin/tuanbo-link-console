@@ -38,13 +38,13 @@ it('被替换的原片重新提取，损坏音轨不能复用或静默重建', a
   const updated = await f.cache.ensure(f.project, f.source, f.extract);
   expect(f.extract).toHaveBeenCalledTimes(2);
   await writeFile(join(f.directory, updated.relativePath), 'tampered');
-  await expect(f.cache.ensure(f.project, f.source, f.extract)).rejects.toThrow('原声音轨文件已改变');
+  await expect(f.cache.ensure(f.project, f.source, f.extract)).rejects.toThrow('原声音轨文件变了');
   expect(f.extract).toHaveBeenCalledTimes(2);
 });
 it('提取途中原片变化不会发布可复用结果，失败仅在用户再次调用时重新执行', async () => {
   const f = await fixture();
   const extract = vi.fn(async () => { const result = await f.extract(); await writeFile(f.source, 'replaced'); return result; });
-  await expect(f.cache.ensure(f.project, f.source, extract)).rejects.toThrow('原素材在音轨准备期间发生变化');
+  await expect(f.cache.ensure(f.project, f.source, extract)).rejects.toThrow('准备音轨时原素材发生了变化');
   await expect(readFile(join(f.directory, 'cache', 'reference-audio', `${await hashFile(f.source)}.json`))).rejects.toThrow();
   await f.cache.ensure(f.project, f.source, f.extract);
   expect(extract).toHaveBeenCalledTimes(1);

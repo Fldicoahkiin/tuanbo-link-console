@@ -48,15 +48,15 @@ export function SongImportSettings({ disabled, notify, children }: Props): JSX.E
     </div>
     <div hidden={source === 'p1'} className="song-file-import">
       <h3>{source === 'xiaohonghua' ? '导入自己保留的原始歌曲或音效' : '导入音频到节目单'}</h3>
-      <p className="settings-note">支持一次选择多首音频，导入后由联动台播放。普通音频不含控台时间码，需要另行编排或核对灯光关系。</p>
+      <p className="settings-note">可以一次选择多首音频，导入后由联动台播放。普通音频不带控台时间码，灯光需要另外编排或配对。</p>
       <Button className="primary-button" disabled={disabled || busy} onClick={() => input.current?.click()}><FolderOpen />{busy ? '正在导入…' : '选择音频文件'}</Button>
       <input hidden ref={input} type="file" multiple accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg,.wma" aria-label="导入本地音频文件" onChange={event => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; void importAudio(files); }} />
       {result ? <p className="settings-note" role="status">{result}</p> : null}
       {source === 'xiaohonghua' ? <div className="song-source-limits">
         <h4>小红花接入范围</h4>
         <p>可使用：你自己保存的原始音频文件。</p>
-        <p>尚未接入：小红花备份包、内部音效、分类与剪辑设置；跟随小红花播放及时间码同步。</p>
-        <p className="settings-note">小红花官方说明备份包只能在其软件内使用。当前未取得播放位置接口，不能把快捷键触发视为同步。</p>
+        <p>暂不支持：小红花备份包、内置音效、分类和剪辑设置，以及跟随小红花播放和时间码同步。</p>
+        <p className="settings-note">按小红花官方说明，备份包只能在小红花软件里使用。目前拿不到它的播放位置，用快捷键触发不等于同步。</p>
       </div> : null}
     </div>
   </section>;

@@ -17,7 +17,7 @@ export async function enableMa2NameSync(documentId: number): Promise<void> {
   const current = (): ReturnType<typeof useDocumentStore.getState> => {
     const state = useDocumentStore.getState();
     if (state.documentId !== documentId) throw new Error('工程已切换，名称同步已取消');
-    if (!state.project || !state.path) throw new Error('新名称已改在工程里，请先保存工程后再同步');
+    if (!state.project || !state.path) throw new Error('新名称已改到工程里，请先保存工程再同步');
     return state;
   };
   current();
@@ -28,7 +28,7 @@ export async function enableMa2NameSync(documentId: number): Promise<void> {
   const catalog = await window.tbLink.readMa2Catalog({ ...connection, targets: [] });
   const materials = current().project?.ma2MaterialLibrary;
   const endpoint = connection.network ? `${connection.network.host}:${connection.network.port}` : '本机 onPC';
-  if (!materials?.library || materials.source !== endpoint || materials.library.directory.show !== catalog.directory.show || materials.library.directory.generation !== catalog.directory.generation || materials.library.directory.version !== catalog.directory.version) throw new Error('新名称已改在工程里；控台或 Show 会话已变化，请重新读取后再同步');
+  if (!materials?.library || materials.source !== endpoint || materials.library.directory.show !== catalog.directory.show || materials.library.directory.generation !== catalog.directory.generation || materials.library.directory.version !== catalog.directory.version) throw new Error('新名称已改到工程里，但控台或 Show 有变化，请重新读取控台后再同步');
   const latest = useMa2AutoSyncStore.getState();
   if (latest.request && latest.status !== 'blocked' && latest.status !== 'off') return;
   useMa2AutoSyncStore.setState({ request: { connection, catalog, scope: 'names' } });

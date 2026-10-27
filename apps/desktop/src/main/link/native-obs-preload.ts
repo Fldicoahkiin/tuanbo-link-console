@@ -21,7 +21,7 @@ export class NativeObsPreloadPool {
     const next = request.nextFiles;
     if (!next) return false;
     if (next.snapshot.projectId !== request.snapshot.projectId || next.snapshot.revision !== request.snapshot.revision) {
-      throw new Error('下一节目预备与当前工程修订不一致');
+      throw new Error('下一个节目的准备和当前工程版本对不上');
     }
     if (next.snapshot.item.id === request.snapshot.item.id) return false;
     const currentNames = new Set(materialSceneTargets(projectFromObsSnapshot(request.snapshot)).flatMap(target => [target.sourceName, target.sceneName]));
@@ -33,7 +33,7 @@ export class NativeObsPreloadPool {
     }
     if (materialSceneTargets(projectFromObsSnapshot(next.snapshot)).some(target => currentNames.has(target.sourceName) || currentNames.has(target.sceneName))) return false;
     assertCurrent();
-    if (this.entry) throw new Error('已有节目预备占用，不能覆盖');
+    if (this.entry) throw new Error('已经有一个节目在准备，不能覆盖');
     const entry: Entry = {
       origin: 'next', request: { version: 1, sessionId: request.sessionId, generation: request.generation,
         projectPath: request.projectPath, preciseSeeking: request.preciseSeeking, snapshot: next.snapshot, positionMs: next.positionMs },
@@ -41,7 +41,7 @@ export class NativeObsPreloadPool {
     };
     this.entry = entry;
     const current = (): void => {
-      if (entry.cancelled) throw new ObsPreparationCancelled('下一节目预备已取消');
+      if (entry.cancelled) throw new ObsPreparationCancelled('下一个节目的准备已取消');
       if (entry.assertOwner) entry.assertOwner(); else assertCurrent();
     };
     entry.task = (async () => {
@@ -57,10 +57,10 @@ export class NativeObsPreloadPool {
   /** `checkFiles`: the window's request names its media files; the program's own requests pass none. */
   preload(value: unknown, checkFiles?: (request: NativeObsPreload) => Promise<void>): Promise<void> {
     const request = nativeObsPreloadSchema.parse(value);
-    if (this.entry?.origin === 'selection' && this.entry.request.sessionId === request.sessionId && request.generation <= this.entry.request.generation) return Promise.reject(new Error('节目预备请求已过期'));
+    if (this.entry?.origin === 'selection' && this.entry.request.sessionId === request.sessionId && request.generation <= this.entry.request.generation) return Promise.reject(new Error('节目准备请求已过期'));
     const previous = this.discard();
     const entry: Entry = { origin: 'selection', request, cancelled: false, outputs: null, task: Promise.resolve(), assertOwner: null }; this.entry = entry;
-    const current = (): void => { if (entry.cancelled) throw new ObsPreparationCancelled('节目预备已取消'); entry.assertOwner?.(); };
+    const current = (): void => { if (entry.cancelled) throw new ObsPreparationCancelled('节目准备已取消'); entry.assertOwner?.(); };
     entry.task = (async () => {
       await previous; current();
       // A formal session that takes this preparation meanwhile was admitted on its own; the

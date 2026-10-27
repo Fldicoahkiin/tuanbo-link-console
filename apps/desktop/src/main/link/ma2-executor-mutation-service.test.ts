@@ -39,9 +39,9 @@ it('moves the native executor without reconstructing its assignment and returns 
 
 it('refuses an occupied destination, stale label or changed session before issuing a write', async () => {
   const mutation = await service();
-  await expect(mutation.update(connection, { request: vi.fn().mockResolvedValue(xml) }, { ...base, action: { kind: 'move', page: 99, slot: 201 } })).rejects.toThrow('连续空格');
-  await expect(mutation.update(connection, { request: vi.fn().mockResolvedValue(xml) }, { ...base, expectedItem: { ...base.expectedItem, name: 'stale' }, action: { kind: 'delete' } })).rejects.toThrow('已变化');
-  await expect(mutation.update(connection, { request: vi.fn().mockResolvedValue(xml) }, { ...base, expectedSource: { ...base.expectedSource, generation: 'changed' }, action: { kind: 'delete' } })).rejects.toThrow('会话已变化');
+  await expect(mutation.update(connection, { request: vi.fn().mockResolvedValue(xml) }, { ...base, action: { kind: 'move', page: 99, slot: 201 } })).rejects.toThrow('连续空位');
+  await expect(mutation.update(connection, { request: vi.fn().mockResolvedValue(xml) }, { ...base, expectedItem: { ...base.expectedItem, name: 'stale' }, action: { kind: 'delete' } })).rejects.toThrow('有变化');
+  await expect(mutation.update(connection, { request: vi.fn().mockResolvedValue(xml) }, { ...base, expectedSource: { ...base.expectedSource, generation: 'changed' }, action: { kind: 'delete' } })).rejects.toThrow('Show 或连接变了');
   expect(invoke).not.toHaveBeenCalled();
 });
 
@@ -63,7 +63,7 @@ it('renames through the original executor and confirms the assigned object name'
 });
 
 it('does not mark an unconfirmed move complete or resend it', async () => {
-  await expect((await service()).update(connection, { request: vi.fn().mockResolvedValue(xml) }, { ...base, action: { kind: 'move', page: 99, slot: 102 } })).rejects.toThrow('尚未完整回读');
+  await expect((await service()).update(connection, { request: vi.fn().mockResolvedValue(xml) }, { ...base, action: { kind: 'move', page: 99, slot: 102 } })).rejects.toThrow('还没完全确认');
   expect(invoke).toHaveBeenCalledTimes(1);
 });
 
@@ -77,6 +77,6 @@ it('validates every occupied slot of a wide executor at the destination', async 
   const correctWideXml = xml.replace(/<Exec\b[^>]*?(?:\/>|>[\s\S]*?<\/Exec>)/g, value => ++index === 102 ? '<Exec offset_from_first="1" />' : value);
   const wide = inspectMa2ExecutorPageXml(correctWideXml, 99);
   const request: Ma2ExecutorUpdateRequest = { ...base, expectedItem: wide.items[0]!, action: { kind: 'move', page: 99, slot: 200 } };
-  await expect((await service()).update(connection, { request: vi.fn().mockResolvedValue(correctWideXml) }, request)).rejects.toThrow('连续空格');
+  await expect((await service()).update(connection, { request: vi.fn().mockResolvedValue(correctWideXml) }, request)).rejects.toThrow('连续空位');
   expect(invoke).not.toHaveBeenCalled();
 });

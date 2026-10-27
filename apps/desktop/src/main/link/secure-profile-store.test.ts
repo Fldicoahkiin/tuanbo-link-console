@@ -24,7 +24,7 @@ describe('SecureProfileStore', () => {
     cleanupDirectories.push(join(directory, 'link-integrations'));
     await expect(store.loadObsPassword('obs-main')).resolves.toBe('configured');
     const broken = new SecureProfileStore(directory, { ...storage, decryptString: () => { throw new Error('cannot decrypt'); } });
-    await expect(broken.loadObsPassword('obs-main')).rejects.toThrow('凭证无法解密');
+    await expect(broken.loadObsPassword('obs-main')).rejects.toThrow('保存的密码无法解密');
   });
   it('并发保存激活码与订单凭据时两项均保留，删除不覆盖同时保存的凭据', async () => {
     const directory = await createTestDirectory();
@@ -98,7 +98,7 @@ describe('SecureProfileStore', () => {
     await store.deleteCredential('github.update.token');
     await expect(store.hasCredential('github.update.token')).resolves.toBe(false);
     await expect(store.loadCredential('obs-main')).resolves.toBe('obs-password');
-    await expect(store.loadCredential('github.update.token')).rejects.toThrow('未找到凭证');
+    await expect(store.loadCredential('github.update.token')).rejects.toThrow('找不到保存的密码');
   });
 });
 

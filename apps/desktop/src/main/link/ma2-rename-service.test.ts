@@ -8,22 +8,22 @@ const request: Ma2RenameRequest = { dataDirectory: '', network: { host: '192.0.2
 const result = { sequence: 2, cue: '1.100', kind: 'single', show: '测试', generation: 'session', name: 'MianGuang', backupFile: `tblink_label_${'a'.repeat(32)}.xml` };
 it('恢复原本未命名对象时明确阻断旧协议不支持的清空，不发送或冒充确认', async () => {
   const bridge = { request: vi.fn() };
-  await expect(renameMa2Object(bridge, { ...request, change: { ...request.change, name: '' } })).rejects.toThrow('本次撤销尚未同步');
+  await expect(renameMa2Object(bridge, { ...request, change: { ...request.change, name: '' } })).rejects.toThrow('这次撤销还没同步');
   expect(bridge.request).not.toHaveBeenCalled();
 });
 it('只发送类型化目标和 UTF-8 十六进制名称，中文写为拼音，并核对实际回读', async () => {
   const bridge = { request: vi.fn(() => Promise.resolve(JSON.stringify(result))) };
   expect(await renameMa2Object(bridge, request)).toEqual(result);
   expect(bridge.request).toHaveBeenCalledWith('LABEL', 2, ['single', '1.100', ...['测试', 'session', 'Old', 'MianGuang'].map(value => Buffer.from(value).toString('hex'))].join('\n'));
-  await expect(renameMa2Object(bridge, { ...request, change: { ...request.change, endpoint: 'another' } })).rejects.toThrow('另一控台');
+  await expect(renameMa2Object(bridge, { ...request, change: { ...request.change, endpoint: 'another' } })).rejects.toThrow('另一个控台');
   bridge.request.mockResolvedValue(JSON.stringify({ ...result, name: 'Other' }));
-  await expect(renameMa2Object(bridge, request)).rejects.toThrow('回读');
+  await expect(renameMa2Object(bridge, request)).rejects.toThrow('名称和修改的不一致');
 });
 it('排队期间开始播放，改名不会发送；响应身份错误会阻断', async () => {
   let playing = false;
   const wire = { exchange: vi.fn((_id: string, _op: string, _target: number, _body: string, beforeSend: () => void) => { playing = true; beforeSend(); return Promise.resolve(JSON.stringify(result)); }) };
   const bridge = new Ma2OnpcBridge(wire, () => playing);
-  await expect(renameMa2Object(bridge, request)).rejects.toThrow('播放已开始');
+  await expect(renameMa2Object(bridge, request)).rejects.toThrow('已开始播放');
   playing = false;
   wire.exchange.mockImplementation(() => Promise.resolve(JSON.stringify({ ...result, sequence: 3 })));
   await expect(renameMa2Object(bridge, request)).rejects.toThrow('序列不一致');

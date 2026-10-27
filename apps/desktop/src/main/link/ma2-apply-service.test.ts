@@ -230,7 +230,7 @@ describe('本机 MA2 同步服务', () => {
       const result = await new Ma2ApplyService(bridge, () => false).apply(request);
       expect(result).toMatchObject({ status: 'incomplete', stage: 'read', mayHaveWritten: false });
       if (result.status !== 'incomplete') throw new Error('过期预览未拒绝');
-      expect(result.message).toContain('预览后');
+      expect(result.message).toContain('预览之后');
       expect(bridge.exchange).not.toHaveBeenCalled();
     }
   });

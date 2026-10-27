@@ -28,11 +28,11 @@ export class Ma2OnpcBridge {
   }
   async exchange(operation: Ma2Operation, target: number, expected = '', desired = '', signal?: AbortSignal, progress?: Ma2TransferProgress): Promise<{ response: string; requestId: string }> {
     signal?.throwIfAborted();
-    if (this.queuedExchanges >= 32) throw new Error('控台操作过多，请等待当前操作完成');
+    if (this.queuedExchanges >= 32) throw new Error('控台操作太多，请等当前操作完成');
     const epoch = this.exchangeEpoch;
     this.queuedExchanges += 1;
     const result = this.exchangeTail.then(async () => {
-      if (epoch !== this.exchangeEpoch) throw new Error('前一项控台操作未完成，待处理操作已取消');
+      if (epoch !== this.exchangeEpoch) throw new Error('上一个控台操作没完成，排队的操作已取消');
       try { return await this.performExchange(operation, target, expected, desired, signal, progress); }
       catch (error) { this.exchangeEpoch += 1; throw error; }
     }).finally(() => { this.queuedExchanges -= 1; });
@@ -93,14 +93,14 @@ export class Ma2OnpcBridge {
           if (operation === 'SNAPSHOT' || operation === 'SCOPE') validateMa2TimecodeSnapshot(result, requestedSequences);
           else validateMa2TimecodeWrite(result);
           const report = inspectMa2TimecodeXml(result);
-          if (report.timecodes.length !== 1 || report.timecodes[0]?.index !== target - 1) throw new Error('MA2 回读对象与绑定 Timecode 不一致，同步未确认');
+          if (report.timecodes.length !== 1 || report.timecodes[0]?.index !== target - 1) throw new Error('控台读回的对象和绑定的 Timecode 对不上，同步没有确认');
         }
-        if (writing && !sameMa2XmlObjects(desired, result)) throw new Error('MA2 写入后的回读与预期不一致；同步未完成，备份已保留。请重新读取控台检查引用及事件');
+        if (writing && !sameMa2XmlObjects(desired, result)) throw new Error('写入后控台读回的内容和预期不一致，同步没有完成，备份已保留。请重新读取控台，检查引用和事件');
         return { response: result, requestId: id };
       };
       if (typeof this.dataDirectory !== 'string') {
         return validate(await this.dataDirectory.exchange(id, operation, target, body, () => {
-          if ((writing || assigning) && this.isPlaying()) throw new Error('播放已开始，未发送 MA2 写入请求');
+          if ((writing || assigning) && this.isPlaying()) throw new Error('已开始播放，没有向 MA2 写入');
           sent = true;
         }, signal, progress));
       }
@@ -111,7 +111,7 @@ export class Ma2OnpcBridge {
       const temporary = join(directory, `tblink_request_${id}.tmp`);
       signal?.throwIfAborted();
       await writeFile(temporary, `${id}\n${operation}\n${target}\n${Buffer.byteLength(body)}\n${body}`, 'utf8');
-      if ((writing || assigning) && this.isPlaying()) throw new Error('播放已开始，未发送 MA2 写入请求');
+      if ((writing || assigning) && this.isPlaying()) throw new Error('已开始播放，没有向 MA2 写入');
       await rename(temporary, join(directory, 'tblink_bridge_request.txt'));
       sent = true;
       const deadline = Date.now() + 15000;
@@ -130,7 +130,7 @@ export class Ma2OnpcBridge {
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      throw new Error('MA2 插件响应超时；同步未确认，不会自动重试。请检查插件和控台当前数据');
+      throw new Error('MA2 插件响应超时，同步没有确认，不会自动重试。请检查插件和控台上的数据');
     } catch (error) {
       if (error instanceof Ma2BridgeFailure) throw error;
       let message = error instanceof Error ? error.message : String(error);
@@ -144,7 +144,7 @@ export class Ma2OnpcBridge {
           if (report.timecodes.length !== 1 || report.timecodes[0]?.index !== target - 1) throw new Error('备份 Timecode 与同步目标不一致');
           backupFile = name;
         } catch (backupError) {
-          if (!(backupError instanceof Error && 'code' in backupError && backupError.code === 'ENOENT')) message += `；备份核对失败：${backupError instanceof Error ? backupError.message : String(backupError)}`;
+          if (!(backupError instanceof Error && 'code' in backupError && backupError.code === 'ENOENT')) message += `；备份检查失败：${backupError instanceof Error ? backupError.message : String(backupError)}`;
         }
       }
       throw new Ma2BridgeFailure(message, id, sent, { cause: error }, backupFile);

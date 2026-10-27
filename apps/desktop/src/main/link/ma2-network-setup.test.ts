@@ -32,7 +32,7 @@ it('读取方案不改变连接来源，复用地址也持久保存网卡选择�
 it('区分已有地址、真实冲突、检测超时；超时不冒充冲突，清理失败保留恢复入口',()=>{
   expect(new NetworkAddressChangeError(5010).message).toContain('已经存在');
   expect(new NetworkAddressChangeError(41001).message).toContain('确认');
-  expect(new NetworkAddressChangeError(41002).message).toContain('未确认冲突');
+  expect(new NetworkAddressChangeError(41002).message).toContain('无法确认是否冲突');
   expect(new NetworkAddressChangeError(41002).needsRestore).toBe(false);
   expect(new NetworkAddressChangeError(50005).needsRestore).toBe(true);
 });

@@ -19,6 +19,7 @@ import { linkProjectAssetFilesPayloadSchema, linkProjectAssetRelinkPayloadSchema
 import { toUserErrorMessage } from '@tb/core/link';
 import { ma2ReadProgressSchema, linkP1ProjectImportProgressSchema } from '@tb/schema';
 import { nativePlaybackDevicesSchema, nativePlayerPrepareSchema, nativePlayerControlSchema, nativePlayerStatusSchema, nativeMidiCheckSchema } from '@tb/schema';
+import { midiPortEventSchema, midiPortHandleSchema, midiPortListRequestSchema, midiPortListSchema, midiPortOpenSchema, midiPortSendSchema } from '@tb/schema';
 import { nativeObsPrepareSchema, nativeObsPreloadSchema, nativeObsStopSchema, nativeObsStatusSchema, obsMediaPreparationSchema } from '@tb/schema';
 import type { LinkDesktopApi, LinkDesktopBridgeApi, LinkFileBridge, LinkObsSnapshot, LinkProcessSnapshot, LinkUpdateStatus } from '@tb/core/link';
 
@@ -79,6 +80,15 @@ const tbLink: LinkDesktopBridgeApi = {
     return () => ipcRenderer.removeListener('link:native-player-status', receive);
   },
   recheckMidi: () => invoke('link:midi-recheck'),
+  listMidiPorts: async request => midiPortListSchema.parse(await invoke('link:midi-ports', midiPortListRequestSchema.parse(request))),
+  openMidiPort: async request => midiPortHandleSchema.parse(await invoke('link:midi-open', midiPortOpenSchema.parse(request))),
+  sendMidi: request => invoke('link:midi-send', midiPortSendSchema.parse(request)),
+  closeMidiPort: request => invoke('link:midi-close', midiPortHandleSchema.parse(request)),
+  onMidiEvent: listener => {
+    const receive = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(midiPortEventSchema.parse(value));
+    ipcRenderer.on('link:midi-event', receive);
+    return () => ipcRenderer.removeListener('link:midi-event', receive);
+  },
   getLicenseStatus: () => invoke('link:license-status'),
   exportLicenseRequest: () => invoke('link:license-export-request'),
   importLicense: () => invoke('link:license-import'),
@@ -113,7 +123,7 @@ const tbLink: LinkDesktopBridgeApi = {
   setObsProgramSourceEnabled: (sourceName, enabled) => invoke('link:obs-program-source-enabled', { sourceName, enabled }),
   getMa2CurrentShow: async () => {
     const show = await invoke<unknown>('link:ma2-current-show');
-    if (typeof show !== 'string' || !show) throw new Error('控台当前 show 响应无效');
+    if (typeof show !== 'string' || !show) throw new Error('控台返回的当前 Show 信息无法识别');
     return show;
   },
   saveMa2Network: (payload) => invoke('link:ma2-network-save', payload),
@@ -177,7 +187,6 @@ const tbLink: LinkDesktopBridgeApi = {
   lastProjectPath: async () => z.string().min(1).nullable().parse(await invoke('link:last-project')),
   saveProjectDocument: (path, content, options) => invoke('link:save-project', path, content, options ?? {}),
   confirmProjectLocation: async (purpose) => z.boolean().parse(await invoke('link:confirm-project-location', purpose)),
-  confirmPlayWithoutLighting: async (reason) => z.boolean().parse(await invoke('link:confirm-play-without-lighting', reason)),
   confirmRevertToSaved: async (payload) => z.boolean().parse(await invoke('link:confirm-revert-to-saved', payload)),
   projectDocumentWorkerState: async () => z.object({ stalled: z.string().nullable() }).strict().parse(await invoke('link:project-document-worker')),
   restartProjectDocumentWorker: async (reason) => z.boolean().parse(await invoke('link:restart-project-document-worker', reason)),

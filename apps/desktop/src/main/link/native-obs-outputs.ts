@@ -47,8 +47,8 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
   let captureNotice: string | null = null;
   const identities = new Map<string, { size: number; mtimeMs: number; ctimeMs: number; ino: number }>();
   const preload = new ObsMediaPreload(project, request.snapshot.item.id, obs.mediaScenes, {
-    prime: async (name, retained, kind) => { if (!address) throw new Error('后台画面连接尚未准备'); await seek.prime(address, name, retained, kind); },
-    seek: async (name, position) => { if (!address) throw new Error('后台画面连接尚未准备'); await seek.seek(address, name, position); }
+    prime: async (name, retained, kind) => { if (!address) throw new Error('画面连接还没准备好'); await seek.prime(address, name, retained, kind); },
+    seek: async (name, position) => { if (!address) throw new Error('画面连接还没准备好'); await seek.seek(address, name, position); }
   });
   const outputs: NativeObsOutputs = {
     outputNotice: () => captureNotice,
@@ -65,7 +65,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       // One 画面准备完成 entry carries every stage and asset; only a slow one is recorded as it happens.
       const reportSlow = (step: string, ms: number): void => {
         void logger.record({ level: 'info', category: 'preflight', device: '后台画面', projectId: project.projectId, itemId: request.snapshot.item.id,
-          message: `画面准备较慢：${step} 用时 ${(ms / 1000).toFixed(1)} 秒`, result: 'succeeded', details: { phase: preparationPhase, ms: Math.round(ms) } })
+          message: `画面准备较慢：${step} 用了 ${(ms / 1000).toFixed(1)} 秒`, result: 'succeeded', details: { phase: preparationPhase, ms: Math.round(ms) } })
           .catch((error: unknown) => console.error('画面准备计时日志未能保存', error));
       };
       const steps = new PreparationSteps(reportSlow);
@@ -76,9 +76,9 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         previous = now;
       };
       assertCurrent();
-      if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 未连接，画面通道本轮不参与');
+      if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 没有连接，这一首不联动画面');
       const profile = await profiles.loadProfile(); assertCurrent();
-      if (!profile) throw new Error('本机连接配置尚未保存');
+      if (!profile) throw new Error('本机连接设置还没保存');
       address = profile.obs.webSocketUrl;
       const opening = new SceneOutputTimeline(project, request.snapshot.item.id).at(millisecondsToFrameNumber(positionMs, request.snapshot.frameRate));
       const openingDecoders = new Map(opening.media.filter(event => event.assetKind !== 'image')
@@ -102,14 +102,14 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
           const timings = [{ phase, atMs: 0 }];
           try {
             const inspected = await projects.inspectMediaAssets(path, [asset]); assertCurrent();
-            if (!inspected[asset.id]?.fileAvailable) throw new Error(`素材文件不可读：${asset.name}`);
+            if (!inspected[asset.id]?.fileAvailable) throw new Error(`素材文件读不了：${asset.name}`);
             phase = '文件身份'; timings.push({ phase, atMs: performance.now() - assetStarted });
             const absolute = projects.resolveMediaAsset(path, asset.relativePath);
             const identity = await stat(absolute);
-            if (!identity.isFile()) throw new Error(`素材文件不可读：${asset.name}`);
+            if (!identity.isFile()) throw new Error(`素材文件读不了：${asset.name}`);
             identities.set(absolute, identity);
             assertCurrent();
-            phase = '定位缓存核验'; timings.push({ phase, atMs: performance.now() - assetStarted });
+            phase = '画面缓存检查'; timings.push({ phase, atMs: performance.now() - assetStarted });
             const playbackPath = request.preciseSeeking && asset.kind === 'video' && preciseAssets.has(asset.id)
               ? await services.media.ensureObsSeekVideo(path, asset.relativePath, asset.sha256, hardwareDecode ? 'hardware' : 'software') : absolute;
             assertCurrent();
@@ -142,7 +142,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
             if (assetMs >= SLOW_PREPARATION_STEP_MS) reportSlow(`素材 ${asset.name}`, assetMs);
           } catch (error) {
             if (!(error instanceof ObsPreparationCancelled)) await logger.record({ level: 'error', category: 'preflight', device: '后台画面', projectId: project.projectId,
-              itemId: request.snapshot.item.id, message: `素材准备未完成：${asset.name}`, result: 'failed',
+              itemId: request.snapshot.item.id, message: `素材没有准备好：${asset.name}`, result: 'failed',
               details: { assetId: asset.id, phase, elapsedMs: performance.now() - assetStarted, timings,
                 error: error instanceof Error ? error.message : String(error) } });
             throw error;
@@ -150,10 +150,10 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         }));
         const failure = results.find(result => result.status === 'rejected');
         if (failure?.status === 'rejected') throw failure.reason;
-        assertCurrent(); measure(`校验、准备及预热素材 ${offset + 1}–${Math.min(offset + batchSize, materialTargets.length)}`);
+        assertCurrent(); measure(`检查并准备素材 ${offset + 1}–${Math.min(offset + batchSize, materialTargets.length)}`);
       }
       const assets = await projects.inspectAssets(path, project); assertCurrent();
-      measure('预检文件状态');
+      measure('检查文件状态');
       const actions = project.rundown.flatMap(item => item.cues.filter(cue => cue.enabled).flatMap(cue => cue.actions));
       // Name indexes remain complete, but prior songs' thousands of source
       // details must not be reread on each playback boundary. A screenshot can
@@ -182,7 +182,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
         assertCurrent();
       }
       if (!report.passed) throw new Error(report.checks.filter(check => check.status === 'blocking').map(check => check.detail).join('；'));
-      measure('预检');
+      measure('开播前检查');
       const upcoming = [...new Set([
         ...request.snapshot.item.cues.filter(cue => cue.enabled).flatMap(cue => cue.actions.flatMap(action =>
           action.kind === 'obs.setProgramScene' ? [action.sceneName] : [])),
@@ -205,12 +205,12 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
     prepareOutputs: async assertCurrent => {
       if (!prepared) await outputs.preloadResources(assertCurrent, 'playback');
       assertCurrent();
-      if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 已断开，不能使用预备画面');
+      if (obs.getSnapshot().status !== 'connected') throw new Error('OBS 已断开，准备好的画面不能用了');
       // A prepared decoder must not conceal an edited/deleted source file.
       for (const [file, identity] of identities) {
         const actual = await stat(file); assertCurrent();
         if (actual.size !== identity.size || actual.mtimeMs !== identity.mtimeMs || actual.ctimeMs !== identity.ctimeMs || actual.ino !== identity.ino) {
-          throw new Error('已预备的素材发生变化，请重新导入后准备节目');
+          throw new Error('准备好的素材有变化，请重新导入后再准备节目');
         }
       }
       const scenes = [...new Set([...request.snapshot.item.cues.filter(cue => cue.enabled)
@@ -220,7 +220,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       try { await obs.setInternalAudioCapture(true, capture.executable, capture.title, capture.audioDeviceId, scenes, capture.windowClass); }
       catch (error) {
         assertCurrent();
-        captureNotice = `OBS 音乐采集未就绪：${error instanceof Error ? error.message : String(error)}。本机音频与画面动作继续，OBS 是否收到音乐请检查混音器。`;
+        captureNotice = `OBS 还没准备好接收音乐：${error instanceof Error ? error.message : String(error)}。本机音频和画面动作照常进行，请在 OBS 混音器里确认是否收到音乐。`;
         // Repeats song after song until fixed: a warning the first time, then info.
         await logger.record({ level: firstTimeWarning(services.seenNotices, captureNotice), category: 'device', device: 'OBS 音乐采集',
           projectId: project.projectId, itemId: request.snapshot.item.id, message: captureNotice, result: 'failed' });
@@ -240,10 +240,10 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       for (const release of cleanup) {
         try { await release(); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
       }
-      if (errors.length) throw new Error(`画面通道清理未完成：${errors.join('；')}`);
+      if (errors.length) throw new Error(`画面没有清理干净：${errors.join('；')}`);
     },
     executeManagedMediaEvent: async payload => {
-      if (payload.projectPath !== path) throw new Error('后台画面素材与当前工程不一致');
+      if (payload.projectPath !== path) throw new Error('画面素材和当前工程对不上');
       try { await preload.execute(payload.event, projects.resolveMediaAsset(path, payload.event.relativePath)); }
       catch (error) {
         await logger.record({ level: 'error', category: 'device', device: '后台画面', projectId: project.projectId,
@@ -258,7 +258,7 @@ export function createNativeObsOutputs(request: NativeObsPrepare, services: Serv
       return obs.mediaScenes.correctDrift({ ...event, sourceName: preload.resolveSource(event.sourceName) }, () => event.sourceOffsetMs + performance.now() - received);
     },
     seekMedia: async event => {
-      if (!address) throw new Error('后台画面连接尚未准备');
+      if (!address) throw new Error('画面连接还没准备好');
       const target = address;
       await seek.prepare(target);
       await preload.seek(event, projects.resolveMediaAsset(path, event.relativePath));

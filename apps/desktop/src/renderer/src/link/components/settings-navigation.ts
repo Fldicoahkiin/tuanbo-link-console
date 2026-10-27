@@ -15,7 +15,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'virtual', group: 'devices', name: '虚拟 MIDI', detail: '让同一台电脑上的软件传递 MIDI 信号', icon: Cable },
   { id: 'maintenance', group: 'devices', name: '程序维护', detail: '修复 OBS 预览、设置程序启动位置', icon: Wrench },
   { id: 'archives', group: 'devices', name: '工程存档', detail: '同步前自动存档、存档位置与保留份数', icon: FolderArchive },
-  { id: 'source', group: 'playback', name: '播放主控', detail: '选择内部主控或跟随 P1', icon: Play },
+  { id: 'source', group: 'playback', name: '播放主控', detail: '联动台播放或跟随 P1', icon: Play },
   { id: 'preferences', group: 'playback', name: '播放习惯', detail: '快捷操作、预载和淡入淡出', icon: Keyboard },
   { id: 'shortcuts', group: 'playback', name: '快捷键', detail: '灯光时间线快捷键设置、添加和修改', icon: Keyboard },
   { id: 'performance', group: 'picture', name: '监看与性能', detail: '预览与低功率运行', icon: Gauge },

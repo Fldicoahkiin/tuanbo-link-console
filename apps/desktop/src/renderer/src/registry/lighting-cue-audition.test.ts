@@ -1,4 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
+vi.mock('./midi-access', () => ({ requestMidiAccess: vi.fn(), refreshMidiAccess: vi.fn() }));
+import { requestMidiAccess, type MidiAccess } from './midi-access';
+/** The window's MIDI comes from main; these tests hand the code under test a fixed port list. */
+function stubMidi(request: () => Promise<unknown>): void { vi.mocked(requestMidiAccess).mockImplementation(() => request() as Promise<MidiAccess>); }
 vi.mock('./license-output', () => ({ requireOutputLicense: vi.fn().mockResolvedValue(undefined) }));
 import { createLightingDocument, lightingTrackSchema } from '@tb/schema';
 import { createDefaultIntegrationProfile } from '../link/view-models/local-integration-profile';
@@ -31,7 +35,7 @@ it('原生混合时间线只试听指定序列 Cue，原文和完整播放限制
   expect(f.play).toHaveBeenCalledWith(expect.objectContaining({ action: { target: 'sequence', sequence: 1, cue: '2', action: 'goto' } }));
   expect(f.play).toHaveBeenCalledTimes(1); expect(f.send).not.toHaveBeenCalled();
   expect(f.document).toEqual(before);
-  expect(() => compileLightingNetworkActions({ ...f.document, outputMode: 'network' })).toThrow('原生保留');
+  expect(() => compileLightingNetworkActions({ ...f.document, outputMode: 'network' })).toThrow('控台原样');
 });
 
 it('未放进时间线的素材点击也调用原序列 Cue，不插入事件或更改输出模式', async () => {
@@ -64,8 +68,8 @@ function fixture() {
   document.tracks = [lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false, channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 1000, duration: 5000, timeLock: 'time', muted: false, events: [{ id: 'a', kind: 'ma2', action: 'goto', cue: '1', sequence: 1, executor: '2.101', label: 'A', at: 2000 }, { id: 'b', kind: 'ma2', action: 'goto', cue: '2', sequence: 1, executor: '2.101', label: 'B', at: 4000 }] }] })];
   const profile = createDefaultIntegrationProfile(); profile.midiPortProfiles.push({ id: 'lighting-events-output', direction: 'output', portName: 'USB' });
   const send = vi.fn(); const open = vi.fn(() => Promise.resolve());
-  const access = { outputs: new Map([['usb', { name: 'USB', state: 'connected', open, send }]]) };
-  const request = vi.fn(() => Promise.resolve(access)); vi.stubGlobal('navigator', { requestMIDIAccess: request });
+  const access = { outputs: new Map([['usb', { name: 'USB', state: 'connected', open, send, close: () => Promise.resolve(), connection: 'open' }]]) };
+  const request = vi.fn(() => Promise.resolve(access)); stubMidi(request);
   return { document, profile, send, open, request, access, audition: new LightingCueAudition() };
 }
 it('选中 Cue 即发送该 Cue，不启动音乐、不发送其他点、不要求网络或直控模式', async () => {
@@ -100,7 +104,7 @@ it('权限挂起明确超时，不会在超时后补发', async () => {
   vi.useFakeTimers(); const f = fixture();
   let finish = (): void => { throw new Error('未开始'); };
   f.request.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(f.access); }));
-  const rejected = expect(f.audition.play(f.document, 'a', f.profile, false)).rejects.toThrow('MIDI 访问超时');
+  const rejected = expect(f.audition.play(f.document, 'a', f.profile, false)).rejects.toThrow('读取 MIDI 接口超时');
   await vi.advanceTimersByTimeAsync(5000); await rejected; finish(); await Promise.resolve();
   expect(f.send).not.toHaveBeenCalled();
 });

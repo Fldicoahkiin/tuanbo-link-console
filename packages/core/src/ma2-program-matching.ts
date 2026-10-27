@@ -15,7 +15,7 @@ export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog): { p
   const unresolved: { target: number; reason: string }[] = [];
   const originErrors: string[] = [];
   const songs = project.rundown.filter(item => item.referenceAudio && !item.p1UnavailableSourceKey && (item.p1Media || item.playback)).flatMap(item => {
-    if (item.p1Media?.importedFullSource) { originErrors.push(`${item.title}：P1 裁剪未按原范围导入，请核对音频坐标`); return []; }
+    if (item.p1Media?.importedFullSource) { originErrors.push(`${item.title}：P1 裁剪未按原范围导入，请检查音频位置`); return []; }
     try { return [{ item, start: programTimeOrigin(item) }]; }
     catch (error) { originErrors.push(`${item.title}：${error instanceof Error ? error.message : String(error)}`); return []; }
   });
@@ -23,7 +23,7 @@ export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog): { p
     if (entry.eventCount === 0) continue;
     if (entry.error) { unresolved.push({ target: entry.target, reason: entry.error }); continue; }
     if (project.rundown.some(item => item.lighting?.ma2Bindings?.some(binding => binding.timecode === entry.target))) continue;
-    if (entry.frameFormat !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(entry.offset ?? '0') || entry.events.some(event => !/^\d+(?:\.\d+)?$/.test(event.time))) { unresolved.push({ target: entry.target, reason: '时间格式尚未支持，请手动核对' }); continue; }
+    if (entry.frameFormat !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(entry.offset ?? '0') || entry.events.some(event => !/^\d+(?:\.\d+)?$/.test(event.time))) { unresolved.push({ target: entry.target, reason: '还不支持这种时间格式，请手动确认' }); continue; }
     const fits = ({ item, start }: typeof songs[number]): boolean => entry.events.length > 0 && !ma2EventOutsideSong(entry, start, item.referenceAudio!.durationMs);
     const titles = (list: typeof songs): string => list.map(({ item }) => `“${item.title}”`).join('、');
     // A song whose start (in 30 FPS frames) equals the Timecode offset is paired first; several such
@@ -34,12 +34,12 @@ export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog): { p
       const length = Number(entry.length ?? 0) * 1000 / 30;
       const sized = inside.length > 1 && length > 0 ? inside.filter(({ item }) => length <= item.referenceAudio!.durationMs) : inside;
       if (sized.length === 1) { pairs[entry.target] = sized[0]!.item.id; continue; }
-      unresolved.push({ target: entry.target, reason: inside.length ? `起始码相同的歌曲有 ${titles(sized.length ? sized : inside)}，无法区分，请核对并选择歌曲` : `起始码与 ${titles(sameStart)} 相同，但事件超出歌曲时长，请核对起点或拆分时间线` });
+      unresolved.push({ target: entry.target, reason: inside.length ? `有多首歌起始码相同（${titles(sized.length ? sized : inside)}），无法区分，请确认后手动选择歌曲` : `起始码和 ${titles(sameStart)} 相同，但事件超出了歌曲时长，请检查起点或拆分时间线` });
       continue;
     }
     const candidates = songs.filter(fits);
     const selected = candidates.length === 1 ? candidates : [];
-    if (selected.length !== 1) { unresolved.push({ target: entry.target, reason: candidates.length ? '歌曲原始时间区间重叠，请核对并选择歌曲；不按歌名或序号硬配' : `没有完整包含这些事件的已确认歌曲区间，请核对起点或拆分时间线${originErrors.length ? `；${originErrors.join('；')}` : ''}` }); continue; }
+    if (selected.length !== 1) { unresolved.push({ target: entry.target, reason: candidates.length ? '歌曲的原始时间区间有重叠，请确认后手动选择歌曲（不会按歌名或序号硬配）' : `没有哪首已确认的歌曲能完整包含这些事件，请检查起点或拆分时间线${originErrors.length ? `；${originErrors.join('；')}` : ''}` }); continue; }
     pairs[entry.target] = selected[0]!.item.id;
   }
   return { pairs, unresolved };

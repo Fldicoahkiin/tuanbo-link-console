@@ -27,7 +27,7 @@ export function automaticMusicCandidates(run: AutomaticMusicRun): AutomaticMusic
 /** Called by a single LinkCommand; existing cues, tempo, MTC and manual annotations are untouched. */
 export function applyAutomaticMusicCandidates(document: LightingDocument, source: ReferenceAudio, candidates: AutomaticMusicCandidates, selected: ReadonlySet<string>): LightingDocument {
   const valid = automaticMusicCandidatesSchema.parse(candidates);
-  if (source.sha256 !== valid.sourceSha256 || Math.abs(source.durationMs - valid.durationMs) > 50) throw new Error('音源或裁剪已改变，请重新分析当前音乐');
+  if (source.sha256 !== valid.sourceSha256 || Math.abs(source.durationMs - valid.durationMs) > 50) throw new Error('音源或裁剪变了，请重新分析这首音乐');
   const chosen = valid.items.filter(item => selected.has(item.id));
   if (!chosen.length) throw new Error('请选择要应用的分析结果');
   if (chosen.length !== selected.size) throw new Error('分析结果已改变，请重新选择');
@@ -39,7 +39,7 @@ export function applyAutomaticMusicCandidates(document: LightingDocument, source
     const notes = `音乐分析建议，经用户确认；音源 ${source.sha256}`;
     if (item.kind === 'section' && item.endMs !== null) {
       if (sections.some(section => section.id === id)) continue;
-      if (sections.some(section => item.startMs < section.endMs && item.endMs! > section.startMs)) throw new Error(`“${item.name}”与已有段落重叠，请取消选择或先调整已有段落`);
+      if (sections.some(section => item.startMs < section.endMs && item.endMs! > section.startMs)) throw new Error(`“${item.name}”和已有的段落重叠，请取消选择，或先调整已有段落`);
       sections.push({ id, name: item.name, startMs: item.startMs, endMs: item.endMs, color, notes });
     } else if (!markers.some(marker => marker.id === id)) markers.push({ id, name: item.name, kind: 'custom', startMs: item.startMs, endMs: null, color, notes });
   }

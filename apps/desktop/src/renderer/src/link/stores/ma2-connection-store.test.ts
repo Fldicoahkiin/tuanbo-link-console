@@ -52,7 +52,7 @@ it('本机目录版本与正在运行的 onPC 不符时不发出会超时的插�
   useIntegrationStore.setState({ processes: { ...processes, ma2: { ...processes.ma2,
     status: 'running', executablePath: 'D:/ma/grandma2 onpc 3.7.0.5/gma2onpc.exe.exe', fileVersion: '3.7.0.5' } } });
   try {
-    await expect(connectLocalMa2('C:/ProgramData/MA Lighting Technologies/grandma/gma2_V_3.3.4')).rejects.toThrow('正在运行 onPC 3.7.0');
+    await expect(connectLocalMa2('C:/ProgramData/MA Lighting Technologies/grandma/gma2_V_3.3.4')).rejects.toThrow('正在运行的是 onPC 3.7.0');
     expect(exchangeMa2).not.toHaveBeenCalled();
     expect(useLocalMa2Store.getState().status).toBe('error');
     expect(useLocalMa2Store.getState().error).toContain('127.0.0.1');

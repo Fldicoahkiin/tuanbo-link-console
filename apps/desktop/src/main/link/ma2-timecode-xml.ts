@@ -20,7 +20,7 @@ export function ma2ExecutorNativeBlocks(xml: string, slot: number, width: number
 export function inspectMa2ExecutorPageXml(xml: string, target: number): Ma2ExecutorPage {
   const { root } = parse(xml);
   const version = ['major_vers', 'minor_vers', 'stream_vers'].map(name => required(root, name)).join('.');
-  if (!['3.3.4', '3.7.0'].includes(version)) throw new Error('此 MA2 执行器页面 XML 版本尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(version)) throw new Error('这个 MA2 执行器页面 XML 版本还没验证过');
   const page = singleChild(root, 'Page');
   if (!page || indexOf(page) + 1 !== target) throw new Error('执行器页面回读编号不一致');
   const slots = children(page, 'Exec');
@@ -75,7 +75,7 @@ export function inspectMa2ExecutorPageXml(xml: string, target: number): Ma2Execu
 export function inspectMa2LayoutXml(xml: string, target: number): Ma2LayoutSnapshot {
   const { root } = parse(xml);
   const version = ['major_vers', 'minor_vers', 'stream_vers'].map(name => required(root, name)).join('.');
-  if (!['3.3.4', '3.7.0'].includes(version)) throw new Error('此 MA2 Layout XML 版本尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(version)) throw new Error('这个 MA2 Layout XML 版本还没验证过');
   const group = singleChild(root, 'Group');
   if (!group || indexOf(group) + 1 !== target) throw new Error('Layout 回读对象不一致');
   const layout = singleChild(group, 'LayoutData');
@@ -237,11 +237,11 @@ function inspectCueDataElement(cue: XmlElement): Map<string,Record<string,string
 export function inspectMa2ExecutorXml(xml: string): Ma2ExecutorReport {
   const { root } = parse(xml);
   const version = ['major_vers', 'minor_vers', 'stream_vers'].map((name) => required(root, name)).join('.');
-  if (version !== '3.3.4' && version !== '3.7.0') throw new Error('该 MA2 执行器 XML 版本尚未验证');
+  if (version !== '3.3.4' && version !== '3.7.0') throw new Error('这个 MA2 执行器 XML 版本还没验证过');
   const executor = singleChild(root, 'Exec');
   if (!executor || required(executor, 'offset_from_first') !== '0') throw new Error('必须读取单个明确执行器');
   const assignment = singleChild(executor, 'Assignment');
-  if (!assignment) throw new Error('执行器尚未分配序列');
+  if (!assignment) throw new Error('执行器还没分配序列');
   const reference = address(assignment).map((value) => value.trim());
   if (reference.length !== 3 || reference[0] !== '25' || reference[1] !== '1') throw new Error('执行器分配的对象不是已支持的 Sequence');
   const sequence = reference[2]!;
@@ -305,7 +305,7 @@ export function inspectMa2CueFixtures(xml: string): { sequence: number; cueIndex
 export function inspectMa2SequenceXml(xml: string, allowEmpty = false): Ma2SequenceReport {
   const { root } = parse(xml);
   const version = ['major_vers', 'minor_vers', 'stream_vers'].map((name) => required(root, name)).join('.');
-  if (!['3.3.4', '3.7.0'].includes(version)) throw new Error('该 MA2 序列 XML 版本尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(version)) throw new Error('这个 MA2 序列 XML 版本还没验证过');
   const sequences = indexedChildren(root, 'Sequ').map((sequence) => {
     const indices = new Set<number>(); const numbers = new Set<string>();
     const cues = children(sequence, 'Cue').filter((cue) => cue.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance', 'nil') !== 'true').map((cue) => {
@@ -415,7 +415,7 @@ export function inspectMa2TimecodeXml(xml: string): Ma2XmlReport {
   const { root } = parse(xml);
   const warnings = new Set<string>();
   const version = ['major_vers', 'minor_vers', 'stream_vers'].map((name) => required(root, name)).join('.');
-  if (!['3.7.0', '3.3.4'].includes(version)) warnings.add(`尚未验证的 MA2 XML 版本：${version}`);
+  if (!['3.7.0', '3.3.4'].includes(version)) warnings.add(`还没验证过的 MA2 XML 版本：${version}`);
   const timecodes = indexedChildren(root, 'Timecode').map((timecode) => ({
     index: indexOf(timecode), attributes: attributes(timecode),
     tracks: indexedChildren(timecode, 'Track').map((track) => {
@@ -428,9 +428,9 @@ export function inspectMa2TimecodeXml(xml: string): Ma2XmlReport {
           events: indexedChildren(subtrack, 'Event').map((event) => {
             const cue = singleChild(event, 'Cue');
             if (event.hasAttribute('fader_level')) warnings.add(version === '3.3.4' && subtrack.getAttribute('fader_command') === 'Master'
-              ? 'Master 推杆点可同步；点间插值由 MA2 执行，尚未完成播放测量'
-              : '存在尚未验证的推杆类型或版本，保留原始数据');
-            else if (!['Goto', 'Go', 'Off'].includes(event.getAttribute('command') ?? '')) warnings.add('存在尚未完成实机验证的执行器动作，保留原始数据');
+              ? 'Master 推杆点可同步；点间插值由 MA2 执行，还没完成播放测量'
+              : '存在还没验证过的推杆类型或版本，保留原始数据');
+            else if (!['Goto', 'Go', 'Off'].includes(event.getAttribute('command') ?? '')) warnings.add('存在还没完成实机验证的执行器动作，保留原始数据');
             return { path: eventPath(timecode, track, subtrack, event), attributes: attributes(event), cueName: cue?.getAttribute('name') ?? null, cueAddress: address(cue) };
           })
         }))
@@ -530,7 +530,7 @@ function canonicalElement(element: XmlElement): CanonicalElement {
 export function patchMa2EventTimes(xml: string, expectedSha256: string, changes: ReadonlyArray<{ path: string; rawTime: string }>): string {
   if (hash(xml) !== expectedSha256) throw new Error('MA2 XML 在预览后已改变');
   const report = inspectMa2TimecodeXml(xml);
-  if (!['3.7.0', '3.3.4'].includes(report.version)) throw new Error('该 MA2 XML 版本尚未验证，禁止修改');
+  if (!['3.7.0', '3.3.4'].includes(report.version)) throw new Error('这个 MA2 XML 版本还没验证过，不能修改');
   const { document, root } = parse(xml);
   const nodes = new Map<string, XmlElement>();
   for (const tc of indexedChildren(root, 'Timecode')) {
@@ -574,7 +574,7 @@ export function editMa2TrackStates(xml: string, target: number, input: readonly 
   validateMa2TimecodeWrite(xml);
   const report = inspectMa2TimecodeXml(xml);
   if (report.timecodes.length !== 1 || report.timecodes[0]?.index !== target - 1) throw new Error('轨道写入目标与 Timecode 不一致');
-  if (!['3.3.4', '3.7.0'].includes(report.version)) throw new Error('该 MA2 轨道格式尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(report.version)) throw new Error('这个 MA2 轨道格式还没验证过');
   if (new Set(edits.map((entry) => entry.path)).size !== edits.length) throw new Error('轨道修改路径重复');
   if (!edits.length) return xml;
   const { document, root } = parse(xml);
@@ -595,7 +595,7 @@ export function prepareMa2TimecodeEvents(xml: string, expectedSha256: string, ta
   const report = inspectMa2TimecodeXml(xml);
   const tc = report.timecodes[0];
   if (report.timecodes.length !== 1 || tc?.index !== target - 1) throw new Error('写入目标 Timecode 与 XML 不一致');
-  if (!['3.3.4', '3.7.0'].includes(report.version) || tc.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(tc.attributes.offset ?? '0')) throw new Error('该 Timecode 格式或时间基准尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(report.version) || tc.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(tc.attributes.offset ?? '0')) throw new Error('这个 Timecode 格式或时间基准还没验证过');
   const edits = z.array(ma2EventEditSchema).parse(input);
   for (const edit of edits) {
     if (edit.kind === 'delete') continue;
@@ -687,7 +687,10 @@ export function prepareMa2TimecodeEvents(xml: string, expectedSha256: string, ta
       continue;
     }
     if (edit.faderLevel !== undefined) throw new Error('Cue 动作不能改写为推杆点');
-    if (!['Goto', 'Go', 'Off'].includes(node.getAttribute('command') ?? '') || node.getAttribute('pressed') !== 'true') throw new Error('此控台动作的修改尚未验证');
+    // Moving an event in time keeps everything else it holds, so any console action may move (2026-10-26):
+    // a button release follows its press, and a Cue with console-only parameters keeps them.
+    const timeOnly = !edit.cue && !edit.executorAction;
+    if (!timeOnly && (!['Goto', 'Go', 'Off'].includes(node.getAttribute('command') ?? '') || node.getAttribute('pressed') !== 'true')) throw new Error('此控台动作的修改还没验证过');
     if (edit.rawTime !== undefined) setTime(node, edit.rawTime);
     if (edit.cue) setCue(node, edit.cue);
     if (edit.executorAction) setExecutorAction(node, edit.executorAction);
@@ -726,7 +729,7 @@ export function resetMa2TimecodeShow(xml: string, target: number, show: { name: 
   validateMa2TimecodeWrite(xml);
   const report = inspectMa2TimecodeXml(xml);
   if (report.timecodes.length !== 1 || report.timecodes[0]?.index !== target - 1) throw new Error('自有 Timecode 与写入目标不一致');
-  if (!['3.3.4', '3.7.0'].includes(report.version) || report.timecodes[0].attributes.frame_format !== '30 FPS') throw new Error('该 MA2 版本或时间格式尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(report.version) || report.timecodes[0].attributes.frame_format !== '30 FPS') throw new Error('这个 MA2 版本或时间格式还没验证过');
   if (!Number.isSafeInteger(show.offset) || show.offset < 0 || show.offset >= 2592000) throw new Error('歌曲起始时间超出 24 小时');
   const { document, root } = parse(xml);
   const timecode = indexedChildren(root, 'Timecode')[0]!;
@@ -749,7 +752,7 @@ export function extendMa2TimecodeLength(xml: string, target: number, coverTicks 
   const report = inspectMa2TimecodeXml(xml);
   const timecode = report.timecodes[0];
   if (report.timecodes.length !== 1 || timecode?.index !== target - 1) throw new Error('播放长度目标与 Timecode 不一致');
-  if (!['3.3.4', '3.7.0'].includes(report.version) || timecode.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('该 MA2 版本或时间基准的播放长度尚未验证');
+  if (!['3.3.4', '3.7.0'].includes(report.version) || timecode.attributes.frame_format !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(timecode.attributes.offset ?? '0')) throw new Error('这个 MA2 版本或时间基准的播放长度还没验证过');
   const length = timecode.attributes.lenght ?? '0';
   if (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))) throw new Error('MA2 播放长度无效，未写入控台');
   let required = coverTicks;
@@ -768,7 +771,7 @@ export function extendMa2TimecodeLength(xml: string, target: number, coverTicks 
 }
 
 function assertMasterFader(subtrack: XmlElement, version: string): void {
-  if (version !== '3.3.4' || subtrack.getAttribute('fader_command') !== 'Master') throw new Error('该推杆类型或 MA2 版本尚未验证');
+  if (version !== '3.3.4' || subtrack.getAttribute('fader_command') !== 'Master') throw new Error('该推杆类型或 MA2 版本还没验证过');
 }
 
 function parse(xml: string) {

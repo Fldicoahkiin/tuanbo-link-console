@@ -13,7 +13,7 @@ function fixture(scope: 'all' | 'audio' = 'all') {
   processMock.spawn.mockReturnValue(child);
   const query = new NativeDeviceQuery('test-engine.exe', scope);
   const reply = (id: number, name: string) => JSON.stringify({ version: 1, requestId: id, ok: true,
-    devices: { protocol: 4, audio: [], midiOutputs: [{ id: 0, name }] } }) + '\n';
+    devices: { protocol: 4, audio: [], midiOutputs: [{ id: 0, name }], midiInputs: [] } }) + '\n';
   const close = async () => { const closing = query.close(); child.emit('close', 0); await closing; };
   return { child, query, reply, close };
 }
@@ -22,7 +22,7 @@ it.each(['all', 'audio'] as const)('明确的 %s 设备查询使用对应原生�
   const f = fixture(scope), pending = f.query.read();
   expect(processMock.spawn).toHaveBeenCalledWith('test-engine.exe',
     [scope === 'audio' ? '--audio-device-service' : '--device-service'], expect.objectContaining({ windowsHide: true }));
-  f.child.stdout.write(JSON.stringify({ version: 1, requestId: 1, ok: true, devices: { protocol: 4, audio: [], midiOutputs: [] } }) + '\n');
+  f.child.stdout.write(JSON.stringify({ version: 1, requestId: 1, ok: true, devices: { protocol: 4, audio: [], midiOutputs: [], midiInputs: [] } }) + '\n');
   await pending; await f.close();
 });
 
@@ -52,9 +52,9 @@ it('结果身份不符会拒绝在途查询，不把迟到结果或旧清单当�
 
 it('超时停止查询，关闭不强杀拒绝退出的进程', async () => {
   const f = fixture();
-  const pending = expect(f.query.read()).rejects.toThrow('超过 5 秒');
+  const pending = expect(f.query.read()).rejects.toThrow('5 秒没有结果');
   await vi.advanceTimersByTimeAsync(5000); await pending;
-  const close = expect(f.query.close()).rejects.toThrow('不强杀');
+  const close = expect(f.query.close()).rejects.toThrow('没有强制结束');
   await vi.advanceTimersByTimeAsync(5000); await close;
   expect(processMock.spawn).toHaveBeenCalledOnce();
 });
@@ -70,7 +70,7 @@ it('关闭取消在途请求；重复关闭共享结果且异常退出不会冒�
 it('队列和单条响应都有容量上限', async () => {
   const f = fixture();
   const pending = Array.from({ length: 8 }, () => expect(f.query.read()).rejects.toThrow('超过容量'));
-  await expect(f.query.read()).rejects.toThrow('队列已满');
+  await expect(f.query.read()).rejects.toThrow('排队已满');
   f.child.stdout.write('x'.repeat(256 * 1024 + 1));
   await Promise.all(pending); await f.close();
 });

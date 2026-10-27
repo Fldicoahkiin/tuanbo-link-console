@@ -36,6 +36,8 @@ export type LightingTimelineProps = {
   onOpenTools?: (tool: import('./LightingTimelineTools').LightingTool) => void;
   preview?: boolean;
   onPreviewChange?: (enabled: boolean) => void;
+  /** The song's MTC start, the same one the program sends; throws when the song's start is invalid. */
+  mtcOrigin?: () => number;
   onSelect: (trackId: string, clipId: string | null) => void;
   onChange: (document: LightingDocument, label: string, automaticSource?: ReferenceAudio) => void;
 };

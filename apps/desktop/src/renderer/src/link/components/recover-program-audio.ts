@@ -15,7 +15,7 @@ export async function recoverProgramAudio(itemId: string): Promise<void> {
   if (!path) throw new Error('请先保存工程，再提取视频原声');
   if (useRuntimeStore.getState().state !== 'idle') throw new Error('请停止播放后恢复视频原声');
   const clips = item.referenceMediaClips.filter(clip => clip.embeddedAudioEnabled !== false && project.mediaAssets.some(asset => asset.id === clip.assetId && asset.kind === 'video'));
-  if (!clips.length) throw new Error('该节目没有音频，也没有可恢复原声的视频。请添加音频或重新拖入视频；已删除或关闭的原声不会自动恢复。');
+  if (!clips.length) throw new Error('这个节目没有音频，也没有能提取原声的视频。请添加音频或重新拖入视频（已删除或关闭的原声不会自动恢复）。');
   const directory = path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
   const tracks: AudioTrack[] = [];
   const mutedClips: LinkCommand[] = [];
@@ -27,16 +27,16 @@ export async function recoverProgramAudio(itemId: string): Promise<void> {
     const source = referenceAudioSourceSchema.parse(await desktop.importReferenceAudio({ projectPath: path, sourcePath: directory + asset.relativePath, durationMs: asset.durationMs }));
     const sourceOffsetMs = Math.round(clip.sourceOffsetMs ?? 0);
     const durationMs = Math.floor(Math.min(clip.durationMs, source.durationMs - sourceOffsetMs));
-    if (durationMs <= 0) throw new Error(`视频片段已超出原声音频范围：${asset.name}`);
+    if (durationMs <= 0) throw new Error(`视频片段超出了原声音频的范围：${asset.name}`);
     tracks.push({ id: crypto.randomUUID(), title: `${asset.name} · 原声`, source, segments: [{ id: crypto.randomUUID(), startMs: Math.round(timecodeToMilliseconds(clip.startTimecode, project.timebase.frameRate)), sourceOffsetMs, durationMs }] });
     mutedClips.push(replaceReferenceMediaClipCommand(itemId, { ...clip, embeddedAudioEnabled: false }));
   }
-  if (!tracks.length) throw new Error('该节目的视频不包含可用原声，请添加歌曲音频');
+  if (!tracks.length) throw new Error('这个节目的视频没有可用的声音，请添加歌曲音频');
   const audio = referenceAudioSchema.parse(await desktop.renderAudioSegments({ projectPath: path, source: tracks[0]!.source, segments: tracks[0]!.segments, tracks }));
-  if (!audio.timeline?.tracks) throw new Error('当前后台仍是旧版本，请保存工程并重新启动软件后恢复音轨');
+  if (!audio.timeline?.tracks) throw new Error('软件后台还是旧版本，请保存工程、重启软件后再恢复音轨');
   const current = useDocumentStore.getState();
-  if (current.documentId !== documentId || current.revision !== revision) throw new Error('恢复期间工程已修改，已取消写入，请重新点击播放');
-  if (useRuntimeStore.getState().state !== 'idle') throw new Error('恢复期间已开始播放，已取消写入');
+  if (current.documentId !== documentId || current.revision !== revision) throw new Error('恢复时工程被修改了，已取消，请重新点击播放');
+  if (useRuntimeStore.getState().state !== 'idle') throw new Error('恢复时已经开始播放，已取消');
   const command = editReferenceAudioCommand(itemId, audio, '恢复已有视频的独立原声音轨');
   current.executeForDocument(documentId, { ...command, execute: value => command.execute(mutedClips.reduce((next, mute) => mute.execute(next), value)) });
 }

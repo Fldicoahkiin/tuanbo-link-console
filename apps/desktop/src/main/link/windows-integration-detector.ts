@@ -81,7 +81,7 @@ export async function executePowerShell(script: string, timeoutMs: number): Prom
       if (settled) return;
       settled = true;
       child.kill();
-      reject(new Error(`Windows 本机集成检测超过 ${timeoutMs}ms`));
+      reject(new Error(`检测本机程序超时（${timeoutMs} ms）`));
     }, timeoutMs);
     child.once('error', (error) => {
       if (settled) return;

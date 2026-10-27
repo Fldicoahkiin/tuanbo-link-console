@@ -56,11 +56,11 @@ const reasonLabel: Record<UnsavedChangesReason, string> = {
 
 export function unsavedChangesPrompt(prompt: UnsavedChangesPrompt): MessageBoxOptions {
   const detail = [
-    `不保存将丢弃这些修改并${reasonLabel[prompt.reason]}。`,
+    `不保存会丢掉这些修改，然后${reasonLabel[prompt.reason]}。`,
     ...prompt.consoleSynced ? ['已同步到控台的改动不会撤回。'] : [],
     ...prompt.failure ? ['', `上次保存失败：${prompt.failure}`] : []
   ];
-  return { type: 'warning', title: '工程尚未保存', noLink: true, buttons: ['保存', '不保存', '取消'], defaultId: 0, cancelId: 2,
+  return { type: 'warning', title: '工程还没保存', noLink: true, buttons: ['保存', '不保存', '取消'], defaultId: 0, cancelId: 2,
     message: `是否保存对「${prompt.name ?? '未命名工程'}」的修改？`, detail: detail.join('\n') };
 }
 
@@ -72,7 +72,7 @@ export class RendererSaveRequests {
 
   request(): Promise<RendererSaveResult> {
     const target = this.window();
-    if (!target) return Promise.resolve({ status: 'failed', message: '界面已关闭，无法保存；未保存的修改保留在恢复副本中，下次打开工程时可以恢复' });
+    if (!target) return Promise.resolve({ status: 'failed', message: '界面已关闭，无法保存。未保存的修改已存进恢复副本，下次打开工程时可以恢复' });
     const id = ++this.sequence;
     // No fixed time limit: the Save As dialog waits for the operator. A window
     // that exits or stops responding fails the request (failAll).

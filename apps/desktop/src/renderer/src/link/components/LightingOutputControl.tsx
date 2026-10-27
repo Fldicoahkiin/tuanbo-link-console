@@ -14,7 +14,7 @@ export function LightingOutputControl({ project, item }: { project: LinkProject;
     <TimelineIconMenu key={view.state} icon={TriangleAlert} label="灯光输出提示">
       <strong>{view.label}</strong>
       <p>{view.detail}</p>
-      <button type="button" onClick={() => useMa2ReadStore.setState({ browserOpen: true })}>核对控台时间线</button>
+      <button type="button" onClick={() => useMa2ReadStore.setState({ browserOpen: true })}>检查控台时间线</button>
     </TimelineIconMenu>
   </span> : null}</span>;
 }

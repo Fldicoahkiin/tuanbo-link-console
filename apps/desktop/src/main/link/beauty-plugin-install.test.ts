@@ -48,7 +48,7 @@ it('新目录切换失败恢复整个旧版本，不留下新着色器与旧 DLL
     if (String(source).endsWith('staged')) throw new Error('injected switch failure');
     await actual.rename(source, destination);
   });
-  await expect(installBeautyPlugin(root, programData)).rejects.toThrow('原组件已保留');
+  await expect(installBeautyPlugin(root, programData)).rejects.toThrow('原来的组件已保留');
   expect(await readFile(join(target, 'data/beauty.effect'), 'utf8')).toBe('new effect');
   expect(await readFile(join(target, 'bin/64bit/tblink-beauty.dll'))).toEqual(dll);
 });
@@ -58,7 +58,7 @@ it('占用阻止旧目录移动时保留旧文件，安装资源损坏也不修�
   await installBeautyPlugin(root, programData);
   await writeFile(join(root, 'plugin/beauty.effect'), 'updated effect');
   vi.mocked(rename).mockRejectedValue(new Error('access denied'));
-  await expect(installBeautyPlugin(root, programData)).rejects.toThrow('原组件未修改');
+  await expect(installBeautyPlugin(root, programData)).rejects.toThrow('原来的组件没有改动');
   expect(await readFile(join(target, 'data/beauty.effect'), 'utf8')).toBe('new effect');
   await writeFile(join(root, 'plugin/tblink-beauty.dll'), 'invalid dll');
   vi.mocked(rename).mockClear();
@@ -68,7 +68,7 @@ it('占用阻止旧目录移动时保留旧文件，安装资源损坏也不修�
 
 it('资源缺失时提前失败，不创建 OBS 插件目录', async () => {
   const { root, programData } = await fixture();
-  await expect(installBeautyPlugin(join(root, 'missing'), programData)).rejects.toThrow('安装资源缺失');
+  await expect(installBeautyPlugin(join(root, 'missing'), programData)).rejects.toThrow('安装文件缺失');
   expect(rename).not.toHaveBeenCalled();
   await expect(readdir(programData)).rejects.toMatchObject({ code: 'ENOENT' });
 });
@@ -83,7 +83,7 @@ it('恢复也被阻止时明确报告备份位置，旧版本仍可找回', asyn
     if (String(source) === target) { backup = String(destination); await actual.rename(source, destination); }
     else throw new Error('injected switch and restore failure');
   });
-  await expect(installBeautyPlugin(root, programData)).rejects.toThrow('安装及恢复失败');
+  await expect(installBeautyPlugin(root, programData)).rejects.toThrow('恢复也没成功');
   expect(backup).toContain('previous');
   expect(await readFile(join(backup, 'data/beauty.effect'), 'utf8')).toBe('new effect');
   vi.mocked(rename).mockImplementation(actual.rename);
@@ -131,6 +131,6 @@ it('首次安装中断不发布未完成的暂存目录，多个记录不猜测�
   await expect(readdir(target)).rejects.toMatchObject({ code: 'ENOENT' });
   await interrupted(programData, '2');
   await interrupted(programData, '3');
-  await expect(installBeautyPlugin(root, programData)).rejects.toThrow('多个未完成');
+  await expect(installBeautyPlugin(root, programData)).rejects.toThrow('多个没完成');
   await expect(readdir(target)).rejects.toMatchObject({ code: 'ENOENT' });
 });

@@ -10,7 +10,7 @@ export async function answerSaveQuestions(application: ElectronApplication): Pro
     const original = dialog.showMessageBox.bind(dialog);
     Reflect.set(dialog, 'showMessageBox', (...args: unknown[]) => {
       const options = args.at(-1) as { title?: string };
-      if (options.title === '选择工程保存位置' || options.title === '工程尚未保存') return Promise.resolve({ response: 0, checkboxChecked: false });
+      if (options.title === '选择工程保存位置' || options.title === '工程还没保存') return Promise.resolve({ response: 0, checkboxChecked: false });
       return Reflect.apply(original, dialog, args) as unknown;
     });
   });

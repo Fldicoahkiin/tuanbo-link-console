@@ -18,7 +18,7 @@ async function installSettingsDevices(app: ElectronApplication): Promise<void> {
       'link:load-profile': () => saved,
       'link:security-availability': () => true,
       'link:update-status': () => ({ phase: 'upToDate', currentVersion: '0.4.46', availableVersion: null, releaseDate: null, progressPercent: null, transferredBytes: null, totalBytes: null, feedConfigured: true, installBlockedReason: null, message: '当前已是最新版本' }),
-      'link:native-player-devices': () => ({ protocol: 4, audio: [], midiOutputs: [] }),
+      'link:native-player-devices': () => ({ protocol: 4, audio: [], midiOutputs: [], midiInputs: [] }),
       'link:loop-midi': () => ({ state: 'missing', executablePath: null, pid: null, startTime: null }),
       'link:obs-snapshot': () => ({ status: 'disconnected', obsVersion: null, webSocketVersion: null, error: null }),
       'link:ma2-network-status': () => ({ state: 'disconnected', settings: null, passwordSaved: false, profiles: [], version: null, error: null }),
@@ -66,7 +66,7 @@ test('设置全部页面双主题三尺寸、展开状态与缩放视觉矩阵',
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await select(page, 'source');
-    await expect(page.getByRole('radio', { name: /本软件播放/ })).toBeChecked();
+    await expect(page.getByRole('radio', { name: /联动台播放/ })).toBeChecked();
     const results: unknown[] = [];
     for (const theme of ['dark', 'light']) {
       await page.evaluate(value => { localStorage.setItem('tblink.appearance.v1', value); window.dispatchEvent(new Event('tblink-appearance-change')); }, theme);

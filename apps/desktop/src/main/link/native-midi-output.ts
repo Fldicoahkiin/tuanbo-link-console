@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { z } from 'zod';
+import { midiPortBusy } from './midi-error';
 
 const responseSchema = z.object({ version: z.literal(1), requestId: z.number().int().min(1).max(0xffffffff),
   code: z.number().int(), acceptedAt100ns: z.string().regex(/^\d{1,20}$/) }).strict();
@@ -29,7 +30,9 @@ export class NativeMidiOutput {
   private closeTask: Promise<void> | null = null;
   private portName = '';
 
-  constructor(private readonly executable: string, private readonly reportFailure: (error: Error) => void) {}
+  /** `queueLimit`: messages waiting behind the one in flight. A show's actions keep it short; the editor's
+   * previews send a whole lighting state at once. */
+  constructor(private readonly executable: string, private readonly reportFailure: (error: Error) => void, private readonly queueLimit = 32) {}
 
   async open(portName: string): Promise<void> {
     if (this.state !== 'new') throw new Error('MIDI 输出已打开、失败或关闭；必须明确准备新会话');
@@ -48,10 +51,10 @@ export class NativeMidiOutput {
 
   /** Receipt confirms WinMM accepted the message, not actual light output. */
   async send(message: readonly number[], deadline100ns: bigint): Promise<NativeMidiReceipt> {
-    if (this.state !== 'ready') throw this.failure ?? new Error('MIDI 输出尚未准备或已取消');
+    if (this.state !== 'ready') throw this.failure ?? new Error('MIDI 输出还没准备好或已取消');
     validateMessage(message);
     const remaining = deadline100ns - now100ns();
-    if (remaining <= 0n || remaining > 20_000_000n) throw new Error('MIDI 动作截止时间无效或已过期，本次未发送');
+    if (remaining <= 0n || remaining > 20_000_000n) throw new Error('MIDI 动作的截止时间无效或已过期，这次没有发送');
     const acceptedAt100ns = await this.enqueue(2, Buffer.from(message), deadline100ns, Math.ceil(Number(remaining) / 10000));
     return { acceptedAt100ns };
   }
@@ -59,22 +62,22 @@ export class NativeMidiOutput {
   close(): Promise<void> {
     if (this.closeTask) return this.closeTask;
     this.state = 'closing';
-    this.rejectPending(new Error('MIDI 会话已取消；在途指令可能已发送，尚未发送的队列已清空'));
+    this.rejectPending(new Error('MIDI 输出已取消；正在发的消息可能已经发出，还没发的已清空'));
     this.child?.stdin.end();
     this.closeTask = this.waitForExit();
     return this.closeTask;
   }
 
   private enqueue(operation: number, payload: Buffer, deadline: bigint, timeoutMs: number): Promise<bigint> {
-    if (this.queue.length >= 32) return Promise.reject(new Error('MIDI 动作队列已满，本次未入队'));
-    if (this.requestId === 0xffffffff) return Promise.reject(new Error('MIDI 请求编号已耗尽，请停止后重新准备'));
+    if (this.queue.length >= this.queueLimit) return Promise.reject(new Error('MIDI 动作排队已满，这次没有加入'));
+    if (this.requestId === 0xffffffff) return Promise.reject(new Error('MIDI 请求编号用完了，请停止播放后重新开始'));
     const id = ++this.requestId, bytes = Buffer.alloc(24 + payload.length);
     bytes.write('TBM1'); bytes.writeUInt32LE(id, 4); bytes.writeUInt32LE(operation, 8);
     bytes.writeUInt32LE(payload.length, 12); bytes.writeBigUInt64LE(deadline, 16); payload.copy(bytes, 24);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.fail(new Error(operation === 1
-        ? 'MIDI 端口准备超过 2 秒，未参与本次播放'
-        : 'MIDI 动作未在截止时间内确认；在途结果不明，已停止该通道，不自动重发')), timeoutMs);
+        ? 'MIDI 端口 2 秒内没有准备好，这次播放不发 MIDI'
+        : 'MIDI 动作没有按时确认，无法确定是否已发出；这个输出已停止，不会自动重发')), timeoutMs);
       this.queue.push({ id, bytes, deadline, resolve, reject, timer }); this.flush();
     });
   }
@@ -99,7 +102,7 @@ export class NativeMidiOutput {
     const next = this.queue.shift(); if (!next) return;
     this.active = next;
     if (next.deadline && now100ns() >= next.deadline) {
-      this.fail(new Error('MIDI 动作在队列中过期；已停止该通道，不补发')); return;
+      this.fail(new Error('MIDI 动作排队时过期了；这个输出已停止，不补发')); return;
     }
     if (!this.child) { this.fail(new Error('MIDI 驱动服务不可用')); return; }
     this.child.stdin.write(next.bytes, error => { if (error) this.fail(error); });
@@ -119,7 +122,7 @@ export class NativeMidiOutput {
         if (response.code !== 0) throw new MidiOutputFailure(nativeError(response.code), response.code, this.portName);
         const accepted = BigInt(response.acceptedAt100ns);
         if (accepted === 0n || accepted > now100ns() + 10_000n) throw new Error('MIDI 驱动确认时间无效');
-        if (pending.deadline && accepted >= pending.deadline) throw new Error('MIDI 驱动确认超过截止时间；动作可能已执行，停止该通道');
+        if (pending.deadline && accepted >= pending.deadline) throw new Error('MIDI 驱动确认晚了，动作可能已经执行；这个输出已停止');
         this.active = null; clearTimeout(pending.timer); pending.resolve(accepted); this.flush();
       }
     } catch (error) { this.fail(toError(error)); }
@@ -143,7 +146,7 @@ export class NativeMidiOutput {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([this.exited, new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error('MIDI 驱动服务未退出，保留进程与原生缓冲区，不强杀')), 5000);
+        timer = setTimeout(() => reject(new Error('MIDI 驱动服务没有退出，进程保留，没有强制结束')), 5000);
       })]);
     } finally { clearTimeout(timer); }
     if (this.exitError) throw this.exitError;
@@ -153,17 +156,20 @@ export class NativeMidiOutput {
 function now100ns(): bigint { return process.hrtime.bigint() / 100n; }
 function toError(error: unknown): Error { return error instanceof Error ? error : new Error(String(error)); }
 function nativeError(code: number): string {
-  const reasons: Record<number, string> = { 4: '端口资源被占用（错误码 4），请退出使用该接口的软件', [-1]: '指令或状态无效', [-3]: '输出端口名称不唯一',
-    [-4]: 'Windows 驱动等待失败', [-5]: '打开的端口身份发生变化', [-6]: '前一条 SysEx 未及时完成', [-7]: '动作已过期，未发送' };
+  const reasons: Record<number, string> = { [-1]: '指令或状态无效', [-3]: '有多个同名的输出端口',
+    [-4]: 'Windows 驱动没有响应', [-5]: '打开的端口换成了别的设备', [-6]: '上一条 SysEx 没有及时发完', [-7]: '动作已过期，没有发送' };
   // The same port is opened again once it is back (authorised 2026-10-24); other failures are left to the operator.
-  if (code === 5 || code === 6) return `MIDI 输出失败：接口已断开（错误码 ${code}）；同一接口重新连接后自动恢复，中断期间的动作不补发`;
-  if (code === -2) return 'MIDI 输出失败：指定输出端口不存在；该接口出现后自动开始发送';
-  return `MIDI 输出失败：${reasons[code] ?? `Windows 错误 ${code}`}；已停止该通道，不自动重试`;
+  if (code === 5 || code === 6) return `MIDI 输出失败：接口断开了（错误码 ${code}）。插回同一个接口后会自动恢复，断开期间的动作不补发`;
+  if (code === -2) return 'MIDI 输出失败：找不到指定的输出端口。接口接上后会自动开始发送';
+  if (midiPortBusy(code)) return `MIDI 输出失败：接口正被其他软件占用（错误码 ${code}）。请关闭 P1 等正在使用它的软件；这个输出已停止，不会自动重试`;
+  return `MIDI 输出失败：${reasons[code] ?? `Windows 错误 ${code}`}。这个输出已停止，不会自动重试`;
 }
 function validateMessage(message: readonly number[]): void {
   if (message.length < 2 || message.length > 65536 || message.some(value => !Number.isInteger(value) || value < 0 || value > 255)) throw new Error('MIDI 消息格式无效');
   const status = message[0]!, type = status & 0xf0;
   const sysex = status === 0xf0;
+  // MTC quarter frame: the editor's timecode preview.
+  if (status === 0xf1) { if (message.length !== 2 || message[1]! > 127) throw new Error('MIDI 消息必须是完整单条消息；不允许运行状态或混合指令'); return; }
   const valid = sysex ? message.length >= 3 && message.at(-1) === 0xf7
     : type >= 0x80 && type <= 0xe0 && message.length === (type === 0xc0 || type === 0xd0 ? 2 : 3);
   if (!valid || message.slice(1, sysex ? -1 : undefined).some(value => value > 127)) throw new Error('MIDI 消息必须是完整单条消息；不允许运行状态或混合指令');

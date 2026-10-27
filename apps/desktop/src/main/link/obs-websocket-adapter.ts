@@ -105,7 +105,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       this.updateSnapshot({ status: 'disconnected', error: error.message });
     });
     this.client.on('ConnectionError', (error) => {
-      this.requests.invalidate(new Error(`OBS 连接错误：${error.message}`));
+      this.requests.invalidate(new Error(`OBS 连接出错：${error.message}`));
       this.editorPreview?.clear();
       this.updateSnapshot({ status: 'error', error: error.message });
     });
@@ -121,7 +121,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
 
   /** Read-only audit: monitor audio must never be captured by desktop or process inputs. */
   async assertMusicMonitorIsolation(deviceId: string, isDefault: boolean, identity: { executable: string; title: string; windowClass: string; ownerExecutable: string }): Promise<void> {
-    if (this.snapshot.status !== 'connected') throw new Error('请先连接 OBS 核对监听隔离；尚未启用试听声音');
+    if (this.snapshot.status !== 'connected') throw new Error('请先连接 OBS，确认监听声音不会进入直播，再开启试听');
     const response = await this.request(() => this.client.call('GetInputList'), 'GetInputList');
     const special = await this.request(() => this.client.call('GetSpecialInputs'), 'GetSpecialInputs');
     const inputs = new Set([...collectNames(response.inputs.filter(input => typeof input.inputKind === 'string' && ['wasapi_output_capture', 'wasapi_process_output_capture'].includes(input.inputKind)), 'inputName'), ...Object.values(special).filter((name): name is string => typeof name === 'string' && name.length > 0)]);
@@ -131,9 +131,9 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       const muted = await this.request(() => this.client.call('GetInputMute', { inputName }), 'GetInputMute');
       if (muted.inputMuted) continue;
       const settings = input.inputSettings;
-      if (input.inputKind === 'wasapi_output_capture' && (settings.device_id === deviceId || (settings.device_id === 'default' || settings.device_id === undefined) && isDefault)) throw new Error(`监听设备被 OBS“${inputName}”采集，请选择未进入正式混音的设备`);
-      if (input.inputKind === 'wasapi_process_output_capture' && typeof settings.window === 'string' && settings.window.toLowerCase().endsWith(`:${identity.ownerExecutable.toLowerCase()}`)) throw new Error(`OBS“${inputName}”采集联动台及其子进程，请绑定正式音频引擎的精确窗口后再启用监听`);
-      if (input.inputKind === 'wasapi_process_output_capture' && typeof settings.window === 'string' && (settings.window === encodeObsAudioWindow(identity.executable, identity.title, identity.windowClass) || settings.priority !== 0 && settings.window.includes(identity.executable))) throw new Error(`OBS“${inputName}”可能采集监听进程，请改用正式音频进程的精确窗口`);
+      if (input.inputKind === 'wasapi_output_capture' && (settings.device_id === deviceId || (settings.device_id === 'default' || settings.device_id === undefined) && isDefault)) throw new Error(`监听设备正被 OBS 的“${inputName}”采集，请选择不会进入直播混音的设备`);
+      if (input.inputKind === 'wasapi_process_output_capture' && typeof settings.window === 'string' && settings.window.toLowerCase().endsWith(`:${identity.ownerExecutable.toLowerCase()}`)) throw new Error(`OBS 的“${inputName}”会采集联动台的所有声音，请把它改成只采集联动台的音频窗口，再开启监听`);
+      if (input.inputKind === 'wasapi_process_output_capture' && typeof settings.window === 'string' && (settings.window === encodeObsAudioWindow(identity.executable, identity.title, identity.windowClass) || settings.priority !== 0 && settings.window.includes(identity.executable))) throw new Error(`OBS 的“${inputName}”可能会采集到监听声音，请改成只采集联动台的音频窗口`);
     }
   }
 
@@ -215,7 +215,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
 
   private async executeAction(action: LinkAction): Promise<void> {
     if (!this.supports(action)) throw new Error(`OBS 适配器不支持 ${action.kind}`);
-    if (this.snapshot.status !== 'connected') throw new Error('OBS WebSocket 尚未连接');
+    if (this.snapshot.status !== 'connected') throw new Error('OBS WebSocket 还没连接');
 
     switch (action.kind) {
       case 'obs.setProgramScene':
@@ -346,7 +346,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
         errors.push(error);
       }
       if (errors.length > 0) {
-        throw new Error(`OBS 受管素材停止不完整：${errors.map(toErrorMessage).join('；')}`, {
+        throw new Error(`联动台在 OBS 里创建的素材没有全部停止：${errors.map(toErrorMessage).join('；')}`, {
           cause: new AggregateError(errors)
         });
       }
@@ -404,7 +404,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     } catch (error) {
       const cleanupErrors = await this.rollbackManagedMediaStart(event, sceneItemId);
       if (cleanupErrors.length > 0) {
-        throw new Error(`OBS 受管素材启动失败且回滚不完整：${toErrorMessage(error)}；回滚失败：${cleanupErrors.map(toErrorMessage).join('；')}`, {
+        throw new Error(`联动台在 OBS 里创建的素材启动失败，也没能完全撤回：${toErrorMessage(error)}；撤回失败：${cleanupErrors.map(toErrorMessage).join('；')}`, {
           cause: new AggregateError([error, ...cleanupErrors])
         });
       }
@@ -422,7 +422,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     await this.request(() => this.client.call('SetCurrentProgramScene', { sceneName: MANAGED_OBS_SCENE_NAME }), 'SetCurrentProgramScene');
     const current = await this.request(() => this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
     if (current.currentProgramSceneName !== MANAGED_OBS_SCENE_NAME) {
-      throw new Error(`OBS 未切换到受管输出场景：当前为 ${current.currentProgramSceneName ?? '未知场景'}`);
+      throw new Error(`OBS 没有切换到联动台的场景，当前是 ${current.currentProgramSceneName ?? '未知场景'}`);
     }
   }
 
@@ -440,12 +440,12 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     const inputs = await this.request(() => this.client.call('GetInputList'), 'GetInputList');
     const kind = collectNameValueMap(inputs.inputs, 'inputName', 'inputKind')[name];
     if (!enabled && kind === undefined) return;
-    if (kind !== undefined && kind !== 'wasapi_process_output_capture') throw new Error('内部音频来源名称被其他类型来源占用');
+    if (kind !== undefined && kind !== 'wasapi_process_output_capture') throw new Error('联动台的音频来源名称被其他类型的来源占用了，请在 OBS 里改名');
     await this.ensureManagedScene();
     const initialWindow = windowClass ? encodeObsAudioWindow(executable, title, windowClass) : null;
     if (kind === undefined) {
       const kinds = await this.request(() => this.client.call('GetInputKindList'), 'GetInputKindList');
-      if (!kinds.inputKinds.includes('wasapi_process_output_capture')) throw new Error('当前 OBS/Windows 不支持应用音频采集，内部正式音频尚不能接入 OBS');
+      if (!kinds.inputKinds.includes('wasapi_process_output_capture')) throw new Error('当前的 OBS 或 Windows 版本不支持应用音频采集，联动台的音乐暂时送不进 OBS');
       await this.request(() => this.client.call('CreateInput', { sceneName: MANAGED_OBS_SCENE_NAME, inputName: name,
         inputKind: 'wasapi_process_output_capture', inputSettings: initialWindow ? { window: initialWindow, priority: 0 } : {}, sceneItemEnabled: false }), 'CreateInput');
     }
@@ -455,7 +455,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
         inputName: name, propertyName: 'window'
       }), 'GetInputPropertiesListPropertyItems');
       const windowValue = selectObsAudioWindow(properties.propertyItems, executable, title);
-      if (initialWindow && windowValue !== initialWindow) throw new Error('OBS 采集窗口与正式音频进程握手身份不一致');
+      if (initialWindow && windowValue !== initialWindow) throw new Error('OBS 采集的窗口和联动台的音频对不上');
       const settings = kind === undefined ? { window: initialWindow, priority: 0 }
         : (await this.request(() => this.client.call('GetInputSettings', { inputName: name }), 'GetInputSettings')).inputSettings;
       if (settings.window !== windowValue || settings.priority !== 0) {
@@ -497,13 +497,13 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       if (muted.inputMuted || volume.inputVolumeMul === 0) continue;
       const settings = await this.request(() => this.client.call('GetInputSettings', { inputName }), 'GetInputSettings');
       if (audioDeviceId !== 'default' || settings.inputSettings.device_id !== 'default') {
-        throw new Error('OBS 已启用桌面音频，但其设备与音乐输出无法确认一致。请先在 OBS 停用桌面音频，或将两端播放设备设为默认，避免重复收音');
+        throw new Error('OBS 开着桌面音频，但无法确认它和音乐用的是同一个设备。请先在 OBS 里关掉桌面音频，或把两边的播放设备都设成默认，避免声音被收两次');
       }
       const tracks = await this.request(() => this.client.call('GetInputAudioTracks', { inputName }), 'GetInputAudioTracks');
-      if (tracks.inputAudioTracks['1'] !== true) throw new Error('OBS 桌面音频未送入音轨 1，无法保证正式音乐输出');
+      if (tracks.inputAudioTracks['1'] !== true) throw new Error('OBS 的桌面音频没有送到音轨 1，无法保证音乐能进直播');
       matched += 1;
     }
-    if (matched > 1) throw new Error('OBS 有两路桌面音频同时采集默认设备，请仅保留一路，避免重复收音');
+    if (matched > 1) throw new Error('OBS 有两路桌面音频在同时采集默认设备，请只保留一路，避免声音被收两次');
     return matched === 1;
   }
 
@@ -515,7 +515,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
       if (status.mediaState === 'OBS_MEDIA_STATE_ERROR') throw new Error(`OBS 无法解码媒体：${inputName}`);
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
     } while (Date.now() < deadline);
-    throw new Error(`OBS 媒体未在 ${this.requestTimeoutMs}ms 内进入可定位状态：${inputName}`);
+    throw new Error(`OBS 媒体在 ${this.requestTimeoutMs} ms 内没有准备好：${inputName}`);
   }
 
   readInventory(details?: { scenes: ReadonlySet<string> | null; inputs: ReadonlySet<string> }): Promise<ObsInventory> {
@@ -670,12 +670,12 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     }
     const current = await this.request(() => this.client.call('GetCurrentProgramScene'), 'GetCurrentProgramScene');
     const sceneName = current.currentProgramSceneName;
-    if (!sceneName) throw new Error('无法读取 OBS 当前播出场景');
+    if (!sceneName) throw new Error('读不到 OBS 当前的直播场景');
     const items = await this.request(() => this.client.call('GetSceneItemList', { sceneName }), 'GetSceneItemList');
     const matches = items.sceneItems.filter(item => item.sourceName === sourceName);
     const sceneItemId = matches[0]?.sceneItemId;
     if (matches.length !== 1 || typeof sceneItemId !== 'number') {
-      throw new Error(matches.length ? `当前播出场景“${sceneName}”中有多个来源“${sourceName}”，无法确定显示哪一个` : `当前播出场景“${sceneName}”中没有来源“${sourceName}”`);
+      throw new Error(matches.length ? `当前直播场景“${sceneName}”里有多个“${sourceName}”来源，无法确定用哪一个` : `当前直播场景“${sceneName}”里没有“${sourceName}”来源`);
     }
     await this.request(() => this.client.call('SetSceneItemEnabled', { sceneName, sceneItemId, sceneItemEnabled: enabled }), 'SetSceneItemEnabled');
     if (enabled) this.shownInProgram.set(sourceName, { sceneName, sceneItemId });
@@ -709,7 +709,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
     const kinds = collectNameValueMap(response.inputs, 'inputName', 'inputKind');
     const existingKind = kinds[event.sourceName];
     if (existingKind !== undefined && existingKind !== expectedKind) {
-      throw new Error(`OBS 受管来源名称冲突：${event.sourceName} 已是 ${existingKind}，预期 ${expectedKind}`);
+      throw new Error(`OBS 来源名称冲突：${event.sourceName} 已经是 ${existingKind}，联动台需要的是 ${expectedKind}`);
     }
     if (existingKind === undefined) {
       const created = await this.request(() => this.client.call('CreateInput', {
@@ -797,7 +797,7 @@ export class ObsWebSocketAdapter implements LinkActionExecutor {
   }
 
   private assertConnected(): void {
-    if (this.snapshot.status !== 'connected') throw new Error('OBS WebSocket 尚未连接');
+    if (this.snapshot.status !== 'connected') throw new Error('OBS WebSocket 还没连接');
   }
 
   private updateSnapshot(update: Partial<ObsConnectionSnapshot>): void {
@@ -884,7 +884,7 @@ function resolveMonitorCaptureSize(
   const selected = propertyItems.find((item) => item.itemValue === monitorId);
   const label = selected?.itemName;
   if (typeof monitorId !== 'string' || typeof label !== 'string') {
-    throw new Error(`OBS 显示器采集“${inputName}”未返回可识别的显示器绑定`);
+    throw new Error(`OBS 的显示器采集“${inputName}”没有返回能识别的显示器`);
   }
   const monitor = monitors.find((candidate) => {
     const width = candidate.monitorWidth;
@@ -915,7 +915,7 @@ async function forEachBounded<T>(values: T[], action: (value: T) => Promise<void
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${operation}超过 ${timeoutMs}ms`)), timeoutMs);
+    const timer = setTimeout(() => reject(new Error(`${operation}超时（${timeoutMs} ms）`)), timeoutMs);
     promise.then(
       (value) => {
         clearTimeout(timer);

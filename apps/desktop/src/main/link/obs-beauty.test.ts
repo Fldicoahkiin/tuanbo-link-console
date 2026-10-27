@@ -60,7 +60,7 @@ it('对比只连接当前本机 OBS 的自有启用滤镜，不改变来源设�
   const call = vi.spyOn(client, 'call').mockResolvedValue({ ...response, filterSettings: { ...response.filterSettings, comparison_pipe: path } });
   const beauty = new ObsBeauty(client, operation => operation(), operation => operation());
   expect(await beauty.comparisonPipe(target, 123)).toBe(path);
-  await expect(beauty.comparisonPipe(target, 456)).rejects.toThrow('不匹配');
+  await expect(beauty.comparisonPipe(target, 456)).rejects.toThrow('对不上');
   expect(call.mock.calls.every(args => args[0] === 'GetSourceFilter')).toBe(true);
   call.mockResolvedValue({ ...response, filterEnabled: false });
   await expect(beauty.comparisonPipe(target, 123)).rejects.toThrow('已关闭');

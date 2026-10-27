@@ -1,5 +1,5 @@
 import { LightingNetworkOutput } from './lighting-network-output';
-import { requestMidiAccess } from './midi-access';
+import { requestMidiAccess, type MidiAccess, type MidiOutput } from './midi-access';
 import { requireOutputLicense } from './license-output';
 import { compileLightingPackets, compileLightingReleasePackets, LightingScheduler, LightingOutputRelease, type LightingOnAir, type LightingPacket } from '@tb/core/link';
 import type { IntegrationProfile, LightingDocument } from '@tb/schema';
@@ -13,8 +13,11 @@ export class LightingMidiOutput {
   private networkEnabled = false;
   private generation = 0;
   private scheduler: LightingScheduler | null = null;
-  private readonly outputs = new Map<string, MIDIOutput>();
-  private releasePackets: { output: MIDIOutput; packet: LightingPacket }[] = [];
+  private readonly outputs = new Map<string, MidiOutput>();
+  private releasePackets: { output: MidiOutput; packet: LightingPacket }[] = [];
+  private access: MidiAccess | null = null;
+  /** Outputs this lighting opened; the same objects are reused song after song and closed with `close()`. */
+  private readonly ports = new Set<MidiOutput>();
   private document: LightingDocument | null = null;
   private carried: { document: LightingDocument; onAir: LightingOnAir } | null = null;
   private ticked: number | null = null;
@@ -33,12 +36,13 @@ export class LightingMidiOutput {
     if (ids.size) {
       await requireOutputLicense();
       if (generation !== this.generation) return;
-      const access = await requestMidiAccess({ sysex: true });
+      const access = this.access ??= await requestMidiAccess();
       if (generation !== this.generation) return;
       for (const id of ids) {
         const mapping = profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output');
         const ports = [...access.outputs.values()].filter((port) => port.name === mapping?.portName && port.state === 'connected');
-        const port = ports[0]; if (!port || ports.length !== 1) throw new Error(`灯光输出不可用或不唯一：${id}`);
+        const port = ports[0]; if (!port || ports.length !== 1) throw new Error(`灯光输出端口不可用，或有多个同名端口：${id}`);
+        this.ports.add(port);
         await port.open(); if (generation !== this.generation) return; this.outputs.set(id, port);
       }
     }
@@ -47,20 +51,20 @@ export class LightingMidiOutput {
     if (generation !== this.generation) return;
     this.releasePackets = compileLightingReleasePackets(document, profile?.lighting?.mscDeviceId ?? 127).map(packet => {
       const output = this.outputs.get(packet.portProfileId);
-      if (!output) throw new Error(`灯光关闭端口未准备：${packet.portProfileId}`);
+      if (!output) throw new Error(`用于关闭灯光的端口还没准备好：${packet.portProfileId}`);
       return { output, packet };
     });
     this.scheduler = new LightingScheduler(packets, (packet) => this.send(packet), this.rebuild && this.carried?.document === document ? this.carried.onAir : undefined);
     this.document = document; this.carried = null; this.ticked = positionMs; this.local = packets.length > 0 || this.networkEnabled;
     if (!this.rebuild) { this.scheduler.locate(positionMs); return; }
     const sent = restored + this.scheduler.restore(positionMs);
-    if (sent) this.fault = `灯光按播放位置重建：发送 ${sent} 条，中间事件不补发`;
+    if (sent) this.fault = `灯光已按播放位置恢复（发送 ${sent} 条），中间错过的事件不补发`;
   }
   tick(positionMs: number): void {
     const gap = this.ticked === null ? 0 : positionMs - this.ticked; this.ticked = positionMs;
     if (this.rebuild && this.local && gap > 100) {
       const sent = (this.networkEnabled ? this.network.restore(positionMs) : 0) + (this.scheduler?.restore(positionMs) ?? 0);
-      this.fault = `灯光位置更新中断 ${Math.round(gap)}ms：按当前位置重建，发送 ${sent} 条，中间事件不补发`; return;
+      this.fault = `灯光位置更新中断了 ${Math.round(gap)} ms，已按当前位置恢复（发送 ${sent} 条），中间错过的事件不补发`; return;
     }
     this.network.tick(positionMs); this.scheduler?.tick(positionMs);
   }
@@ -68,7 +72,7 @@ export class LightingMidiOutput {
   async release(): Promise<void> {
     const packets = this.releasePackets; this.releasePackets = [];
     for (const { output, packet } of packets) {
-      if (output.state !== 'connected' || output.connection !== 'open') throw new Error('MIDI 灯光关闭未发送：原播放端口已断开');
+      if (output.state !== 'connected' || output.connection !== 'open') throw new Error(`关闭灯光的 MIDI 消息没有发出：${output.closedReason ?? '原来的播放端口已断开'}`);
       output.send(packet.bytes);
     }
     this.carried = null; this.document = null; this.network.forget();
@@ -80,9 +84,16 @@ export class LightingMidiOutput {
   stop(): void {
     if (this.scheduler && this.document) this.carried = { document: this.document, onAir: this.scheduler.onAir() };
     this.ticked = null; this.generation += 1; this.releaseOutput.cancelPreparation(); this.networkEnabled = false; this.network.stop(); this.scheduler?.stop(); this.scheduler = null; this.outputs.clear(); }
+  /** Lets the outputs go, so P1 or formal playback can open them. */
+  close(): void {
+    this.stop(); this.releasePackets = [];
+    for (const port of this.ports) void port.close().catch((error: unknown) => console.error(`MIDI 接口「${port.name}」关闭失败`, error));
+    this.ports.clear();
+  }
   private send(packet: LightingPacket): void {
     const port = this.outputs.get(packet.portProfileId);
     if (!port || port.state !== 'connected') throw new Error(`灯光输出已断开：${packet.portProfileId}`);
+    if (port.connection !== 'open') throw new Error(port.closedReason ?? `灯光输出已关闭：${packet.portProfileId}`);
     port.send(packet.bytes);
   }
 }
