@@ -6,7 +6,11 @@
 用户 2026-10-24 定下：打 tag 即上线，中间没有人工步骤；不做额外的自动化验收，用户自己安装测试；官网只放最新的包。本文后面的章节是 2026-09 的旧链路，以本节和[软件更新文档](SOFTWARE_UPDATES.md#步骤)为准。
 
 1. 确认 `release-notes/X.Y.Z.md` 写全了（GitHub Release、仓库 CHANGELOG、官网和软件里的更新日志都从它生成，见 [release-notes/README.md](../release-notes/README.md)）。发布提交改根目录和 `apps/desktop` 两个 `package.json` 的版本号，运行 `pnpm changelog`，提交信息 `chore(release): X.Y.Z`，推 master。
-2. 这个提交的 CI 通过后，在它上面打 `vX.Y.Z` 标签并推送。
+2. 这个提交的 CI 通过后，在 GitHub Actions 手动运行 Release Windows（Run workflow，分支选 master，`commit` 填这个提交的 40 位提交号），tag 由工作流自己打（`scripts/tag-release.mjs`）。Claude 的会话推不了 tag，就用 GitHub API 触发同一个工作流，不需要用户动手（用户 2026-10-27 要求）。推 `vX.Y.Z` 标签也照样能发版。
+   - 分支在触发后又有新提交时，tag 作业拒绝，免得把别的改动发出去；核对后用新的提交号重新触发。
+   - master 已经有下一版的改动时，从要发布的提交开 `release/X.Y.Z` 分支，在那个分支上触发。
+   - 打了 tag 但没发布出去的版本（打包失败，GitHub 上没有它的 release 或草稿，更新源也没有它），修好后在修复提交上再触发一次，标签挪过去，版本号不变（用户 2026-10-26 要求不跳号）。已有草稿或已发布的版本，tag 作业拒绝挪动。
+   - 推 master 后 Verify Desktop 在几分钟内检查类型、lint，以及正式模式构建不带本机开发测试通道（这类问题以前要到打包时才发现，0.5.3 第一次就是这样失败的）。
 3. 之后全部自动（2026-10-24 用户定下：在 GitHub 云端打包，工位电脑只负责把包搬到服务器；不用 Cloudflare）：
    - Release Windows 的 verify 和 build 作业在 GitHub 云端 Windows 上跑：检查版本、类型、单测、lint；下载美颜和音乐分析的固定资产，打包、签名，把四个文件放进这个标签的草稿 GitHub Release。
    - 搬运：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次 `scripts/relay-release.mjs`，Mac 也可以手动 `pnpm release:relay`，二选一，重复运行安全。它下载草稿、按构建清单核对，上传到服务器 staging；服务器上已有或正在上传就不重复传。
