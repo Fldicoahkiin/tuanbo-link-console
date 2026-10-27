@@ -4,7 +4,7 @@ import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertNewerRelease, compareStableVersions, signUpdateMetadata, verifyUpdateSignature, developmentAccessIn, readAsarFile, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, websiteRelease } from './release-config.mjs';
+import { assertNewerRelease, compareStableVersions, signUpdateMetadata, verifyUpdateSignature, developmentAccessIn, readAsarFile, releaseTagPlan, validatePackagedUpdateConfig, validateReleaseVersion, validateUpdateMetadata, versionTags, websiteRelease } from './release-config.mjs';
 
 const publish = { provider: 'generic', url: 'https://updates.tuanbo-link.jinhefilm.com/windows/x64/' };
 
@@ -111,6 +111,22 @@ test('正式版本必须高于其他标签和线上更新源，自己的标签�
   assert.throws(() => assertNewerRelease('0.4.20', { tags, head: 'h', feedVersion: '0.4.19' }), /不高于已有标签 v0\.4\.28/);
   assert.throws(() => assertNewerRelease('0.4.30', { tags, head: 'h', feedVersion: '0.4.30' }), /不高于更新源/);
   assert.throws(() => assertNewerRelease('0.4.30', { tags: [...tags, { name: 'v0.5.0', commit: 'z' }], head: 'h', feedVersion: '0.4.29' }), /v0\.5\.0/);
+});
+
+test('发版打标签：没有就建，已在本次提交上就保留，没发布过的才能挪到新提交', () => {
+  const tags = [{ name: 'v0.5.2', commit: 'a' }];
+  const input = { tags, head: 'h', feedVersion: '0.5.2', hasRelease: false };
+  assert.equal(releaseTagPlan('0.5.3', input), 'create');
+  assert.equal(releaseTagPlan('0.5.3', { ...input, tags: [...tags, { name: 'v0.5.3', commit: 'h' }] }), 'keep');
+  // 0.5.3 打了 tag 但打包失败、没出过草稿：修好后同一个版本号挪到修复提交上。
+  assert.equal(releaseTagPlan('0.5.3', { ...input, tags: [...tags, { name: 'v0.5.3', commit: 'old' }] }), 'move');
+  assert.throws(() => releaseTagPlan('0.5.3', { ...input, tags: [...tags, { name: 'v0.5.3', commit: 'old' }], hasRelease: true }), /已有 release/);
+  assert.throws(() => releaseTagPlan('0.5.3', { ...input, tags: [...tags, { name: 'v0.5.3', commit: 'old' }], feedVersion: '0.5.3' }), /不高于更新源/);
+  assert.throws(() => releaseTagPlan('0.5.3', { ...input, tags: [...tags, { name: 'v0.5.4', commit: 'b' }] }), /不高于已有标签 v0\.5\.4/);
+});
+
+test('标签列表：附注标签取它指向的提交', () => {
+  assert.deepEqual(versionTags('v0.5.2 t1 c1\nv0.5.0 c0 \n'), [{ name: 'v0.5.2', commit: 'c1' }, { name: 'v0.5.0', commit: 'c0' }]);
 });
 
 test('发布签名写进 latest.yml，只能由客户端内置的密钥签发，并绑定这个安装包', () => {
