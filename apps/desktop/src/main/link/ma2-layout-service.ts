@@ -19,6 +19,7 @@ import { ma2SongCreationStages, recoverMa2SongCreation } from './ma2-song-recove
 import type { Ma2ConsoleBackups } from './ma2-console-backups';
 import { writeMa2SongTimecode } from './ma2-song-timecode';
 import { MA2_SONG_COLLISION } from '@tb/core/link';
+import { hasMa2SongConsoleEdits, mergeMa2SongConsoleEdits } from './ma2-song-console-edits';
 
 type Connection = Pick<Ma2Telnet, 'command'>;
 type Bridge = Pick<Ma2OnpcBridge, 'request'>;
@@ -170,7 +171,7 @@ export class Ma2LayoutService {
     const request = ma2SongSyncRequestSchema.parse(input);
     // The plan converts the song and Cue names it writes; the Layout name is only ever written.
     request.settings.name = toConsoleLabel(request.settings.name);
-    const originalPoints = structuredClone(request.points);
+    let originalPoints = structuredClone(request.points);
     if (this.busy || this.isPlaying()) throw new Error('请先停止播放，并等当前的控台操作完成');
     if (this.attempted.has(request.requestId)) throw new Error('这个请求已经执行过了，请先读取控台确认');
     this.busy = true; let wrote = false;
@@ -290,6 +291,22 @@ export class Ma2LayoutService {
         remote = { response: request.binding.baselineXml, requestId };
       } else if (request.binding) { remote = await readSequence(target, 'connecting', `读取控台序列 ${target}`); readOverTelnet = true; }
       const remoteXml = remote?.response ?? null;
+      // Edits made on the console since the last confirmed sync come into this sync first (2026-10-26):
+      // moved and deleted points, and triggers added for the song's Cues, so the write never undoes them.
+      let consoleEdits: Ma2SongSyncResult['consoleEdits'];
+      if (request.binding && remoteXml) {
+        let showXml: string | null = null;
+        const show = request.timecodeStartMs === undefined ? undefined : request.binding.timecode;
+        if (show && ma2ObjectDirectorySchema.parse(JSON.parse(await bridge.request('LIST', 1))).entries.some(entry => entry.target === show.number)) {
+          progress('connecting', 1, 1, `读取这首歌的时间码节目 ${show.number}`);
+          showXml = await bridge.request('READ', show.number);
+        }
+        const merged = mergeMa2SongConsoleEdits(request.binding, request.points, remoteXml, showXml);
+        if (hasMa2SongConsoleEdits(merged.edits)) {
+          request.points = merged.points; request.binding = merged.binding; originalPoints = structuredClone(merged.points);
+          consoleEdits = merged.edits;
+        }
+      }
       const remoteExport = remote ? `tblink_library_${remote.requestId}` : null;
       const labelBackups: string[] = [];
       // The saved project carries the console identity and the native three-way baseline.
@@ -474,7 +491,7 @@ export class Ma2LayoutService {
           points: plan.points.map(point => { const atMs = request.binding?.points.find(value => value.id === point.id)?.atMs; return atMs === undefined ? point : { ...point, atMs }; }),
           ...previousTimecode ? { timecode: previousTimecode } : {} },
         library: { directory: verifiedDirectory, readAt, sequences: [{ sequence: target, name: report.name, cues: report.cues }], errors: [], fixtureDetails: 'included', fixtureUsage: inspectMa2CueFixtures(verifiedXml), cueAttributes: inspectMa2CueAttributes(verifiedXml, readAt, true) },
-        layout: afterLayout?.value ?? null, backupFile, changed,
+        layout: afterLayout?.value ?? null, backupFile, changed, ...consoleEdits ? { consoleEdits } : {},
         remoteRevision: createHash('sha256').update(canonical(verifiedXml)).digest('hex') });
       // Persist the verified binding before returning. If the renderer closes or
       // saving the project fails, the next explicit check recovers this position.
