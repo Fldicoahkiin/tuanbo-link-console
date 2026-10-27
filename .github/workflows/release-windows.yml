@@ -1,6 +1,12 @@
 name: Release Windows
 
-# A pushed vX.Y.Z tag is the release: nothing after it needs a person.
+# A release starts one of two ways, and nothing after it needs a person:
+#   - Run this workflow by hand (or through the API) on master or a release/* branch with the commit to release. The
+#     tag job checks that the branch is still on that commit and tags it vX.Y.Z through the GitHub API
+#     (scripts/tag-release.mjs). This is how Claude releases: its sessions cannot push tags. A tag whose version was never
+#     released moves to the new commit, so a release that failed before publishing keeps its version number.
+#   - Push a vX.Y.Z tag.
+#   tag     dispatched runs only, see above.
 #   verify  GitHub-hosted: version, typecheck, tests, lint.
 #   build   GitHub-hosted: fetches the pinned beauty and music-analysis assets from their own releases, packages,
 #           signs latest.yml with the release key (secret) and puts the four files into a draft release on the tag.
@@ -12,18 +18,66 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 要发布的提交（完整 40 位提交号，必须是所选分支的最新提交）
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-windows-${{ github.ref }}
+  group: release-windows-${{ inputs.commit || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  tag:
+    if: github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/release/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Creates or moves the release tag.
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Use pnpm 10.33.0
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6 (v6.0.10)
+        with:
+          version: 10.33.0
+
+      - name: Use Node.js 25.8.2
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 (v7.1.0)
+        with:
+          node-version: 25.8.2
+          cache: pnpm
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Tag the commit to release
+        id: tag
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+        run: node scripts/tag-release.mjs "$RELEASE_COMMIT"
+
   verify:
+    needs: tag
+    # A tag push skips the tag job; a dispatched run continues only once its tag exists.
+    if: ${{ !cancelled() && (needs.tag.result == 'success' || (needs.tag.result == 'skipped' && github.event_name == 'push')) }}
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      RELEASE_TAG: ${{ needs.tag.outputs.tag || github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
@@ -48,7 +102,7 @@ jobs:
       - name: Release version is new
         shell: pwsh
         run: |
-          node scripts/verify-release-version.mjs --release "$env:GITHUB_REF_NAME"
+          node scripts/verify-release-version.mjs --release "$env:RELEASE_TAG"
           if ($LASTEXITCODE -ne 0) { throw 'Release version check failed' }
 
       - name: Typecheck, test and lint
@@ -58,9 +112,12 @@ jobs:
           pnpm lint
 
   build:
-    needs: verify
+    needs: [tag, verify]
+    if: ${{ !cancelled() && needs.verify.result == 'success' }}
     runs-on: windows-latest
     timeout-minutes: 120
+    env:
+      RELEASE_TAG: ${{ needs.tag.outputs.tag || github.ref_name }}
     # Creates and fills the draft release.
     permissions:
       contents: write
@@ -89,7 +146,7 @@ jobs:
         # Checked again here: a re-run of this job alone must not rebuild a version the feed already serves.
         shell: pwsh
         run: |
-          node scripts/verify-release-version.mjs --release "$env:GITHUB_REF_NAME"
+          node scripts/verify-release-version.mjs --release "$env:RELEASE_TAG"
           if ($LASTEXITCODE -ne 0) { throw 'Release version check failed' }
 
       - name: Fetch the pinned beauty build and music-analysis runtime
@@ -130,6 +187,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          node scripts/draft-github-release.mjs ($env:GITHUB_REF_NAME.Substring(1)) apps/desktop/dist
+          node scripts/draft-github-release.mjs ($env:RELEASE_TAG.Substring(1)) apps/desktop/dist
           if ($LASTEXITCODE -ne 0) { throw 'Draft release failed' }
 

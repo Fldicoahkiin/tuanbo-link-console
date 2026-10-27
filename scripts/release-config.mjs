@@ -39,6 +39,38 @@ export function assertNewerRelease(version, { tags, head, feedVersion }) {
   if (compareStableVersions(feedVersion, version) >= 0) throw new Error(`版本 ${version} 不高于更新源上的 ${feedVersion}`);
 }
 
+/** Tagging `head` as v{version}: create the tag, keep it (already on head) or move it there. The tag may move only
+ * while its version was never released: the feed is older (checked with the other tags) and GitHub has no release for
+ * it, not even a draft that a relay could still publish. A release that failed before that keeps its version number. */
+export function releaseTagPlan(version, { tags, head, feedVersion, hasRelease }) {
+  const name = `v${version}`;
+  assertNewerRelease(version, { tags: tags.filter(tag => tag.name !== name), head, feedVersion });
+  const existing = tags.find(tag => tag.name === name);
+  if (!existing) return 'create';
+  if (existing.commit === head) return 'keep';
+  if (hasRelease) throw new Error(`${name} 在 GitHub 上已有 release（含草稿），不能挪到新提交；先核对那个 release 再决定`);
+  return 'move';
+}
+
+/** Version tags from `git for-each-ref refs/tags/v* --format='%(refname:short) %(objectname) %(*objectname)'`, each
+ * with the commit it names (an annotated tag's own object is peeled). */
+export function versionTags(forEachRef) {
+  return forEachRef.split('\n').filter(Boolean).map(line => {
+    const [name, object, peeled] = line.split(' ');
+    return { name, commit: peeled || object };
+  });
+}
+
+/** The version the live update feed serves, read from latest.yml next to the packaged publish URL. */
+export async function feedVersionOf(publishUrl) {
+  const feed = new URL('latest.yml', publishUrl);
+  const response = await fetch(feed, { cache: 'no-store', signal: AbortSignal.timeout(20_000) });
+  if (!response.ok) throw new Error(`读取线上更新源失败：${feed} HTTP ${response.status}`);
+  const version = load(await response.text())?.version;
+  if (typeof version !== 'string') throw new Error('线上 latest.yml 没有版本号');
+  return version;
+}
+
 export function validatePackagedUpdateConfig(text, expected) {
   const config = load(text);
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('app-update.yml 必须为对象');
