@@ -71,7 +71,7 @@ import { ProjectDocumentService } from './link/project-document-service';
 import { ProjectArchiveSettingsStore, projectArchives } from './link/project-archives';
 import { offerRecoveryCopy, RecoveryCopies, type RecoveryOffer } from './link/recovery-copies';
 import { RendererSaveRequests, UnsavedChangesGuard, unsavedChangesPrompt } from './link/unsaved-changes-guard';
-import { cpus, release, totalmem, freemem } from 'node:os';
+import { cpus, release, totalmem, freemem, networkInterfaces } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
 import { projectDocumentTextSchema, projectSaveOptionsSchema } from '@tb/schema';
@@ -1052,7 +1052,9 @@ function registerIpc(
   handle('link:ma2-network-connect', async () => {
     await ma2NetworkReady;
     const result = await ma2Network.connect();
-    await logger.record({ level: result.error ? 'error' : 'info', category: 'device', device: 'MA2', message: result.error ?? (result.state === 'connected' ? `MA2 ${result.version} 已登录` : 'MA2 连接已取消'), result: result.error ? 'failed' : result.state === 'connected' ? 'succeeded' : 'skipped' });
+    const target = result.settings ? { host: result.settings.host, port: result.settings.port, monitorPort: result.settings.monitorPort } : null;
+    await logger.record({ level: result.error ? 'error' : 'info', category: 'device', device: 'MA2', message: result.error ?? (result.state === 'connected' ? `MA2 ${result.version} 已登录（${result.settings?.host ?? '未知地址'}）` : 'MA2 连接已取消'), result: result.error ? 'failed' : result.state === 'connected' ? 'succeeded' : 'skipped',
+      details: { target, ...result.unreachable ? { unreachable: true } : {} } });
     return result;
   });
   handle('link:ma2-network-disconnect', async () => { await ma2NetworkReady; return ma2Network.disconnectByOperator(); });
@@ -1689,12 +1691,21 @@ function registerIpc(
     const controller = new AbortController();
     if (id) p1Imports.set(id, { senderId: event.sender.id, controller });
     try {
-      return await p1ProjectService.importProject(payload.p1ProjectPath, payload.linkProjectPath, {
+      const result = await p1ProjectService.importProject(payload.p1ProjectPath, payload.linkProjectPath, {
         signal: controller.signal,
         ...(id ? { onProgress: (progress: Omit<LinkP1ProjectImportProgress, 'id'>) => {
           if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send('link:p1-import-progress', linkP1ProjectImportProgressSchema.parse({ id, ...progress } satisfies LinkP1ProjectImportProgress));
         } } : {})
       });
+      // Each song's MidiStartTime as P1 wrote it: the start its console timeline is lined up with.
+      await logger.record({ level: result.skippedItems?.length ? 'warning' : 'info', category: 'operator', device: 'P1', result: 'succeeded',
+        message: `已从 P1 读取 ${result.items.length} 首歌${result.skippedItems?.length ? `，${result.skippedItems.length} 首需要修复` : ''}`,
+        details: { source: result.sourcePath, songs: result.items.map(item => ({ title: item.title, midiStartTime: item.p1Media.midiStartTime, durationMs: item.referenceAudio.durationMs, ...item.p1Media.sourceTrim ? { trim: item.p1Media.sourceTrim } : {} })),
+          skipped: result.skippedItems?.map(item => ({ title: item.title, reason: item.reason })) ?? [] } });
+      return result;
+    } catch (error) {
+      await logger.record({ level: 'error', category: 'operator', device: 'P1', result: 'failed', message: `P1 工程读取失败：${error instanceof Error ? error.message : String(error)}` });
+      throw error;
     } finally { if (id) p1Imports.delete(id); }
   });
   handle('link:p1-preview-export', (_event, payloadValue: unknown) => {
@@ -1702,15 +1713,18 @@ function registerIpc(
     projectAccess.requireShown(payload.linkProjectPath); chosenFiles.require(payload.p1ProjectPath);
     return p1ProjectService.previewExport(payload.p1ProjectPath, payload.linkProjectPath, payload.project);
   });
-  handle('link:p1-export-project', (_event, payloadValue: unknown) => {
+  handle('link:p1-export-project', async (_event, payloadValue: unknown) => {
     const payload = linkP1ProjectExportPayloadSchema.parse(payloadValue);
     projectAccess.requireShown(payload.linkProjectPath); chosenFiles.require(payload.p1ProjectPath);
-    return p1ProjectService.exportProject(
+    const result = await p1ProjectService.exportProject(
       payload.p1ProjectPath,
       payload.linkProjectPath,
       payload.project,
       payload.expectedSourceSha256
     );
+    await logger.record({ level: 'info', category: 'operator', device: 'P1', result: 'succeeded', message: `已写出 P1 工程：${result.outputPath}`,
+      details: { songs: result.itemBindings.map(binding => ({ itemId: binding.itemId, midiStartTime: binding.p1Media.midiStartTime })) } });
+    return result;
   });
   handle('link:load-profile', () => profileStore.loadProfile());
   handle('link:save-profile', async (_event, payloadValue: unknown) => {
@@ -2143,6 +2157,8 @@ function registerIpc(
       totalMemoryBytes: totalmem(), freeMemoryBytes: freemem(), uptimeSeconds: Math.round(process.uptime()), versions: process.versions,
       gpuFeatures: app.getGPUFeatureStatus(), processes: app.getAppMetrics(),
       obs: obs.getSnapshot(), ma2: ma2Network.status(), runtimeActive, player: nativePlayer?.status ?? null,
+      // Which networks this computer is on, for a console that cannot be reached; hardware addresses are left out.
+      networkAdapters: Object.entries(networkInterfaces()).flatMap(([name, entries]) => (entries ?? []).filter(entry => entry.family === 'IPv4' && !entry.internal).map(entry => ({ name, address: entry.cidr ?? entry.address }))),
       license, update: updateManager.getStatus(), logSessionId: logger.sessionId,
       crashDumps, crashDumpContentsIncluded: false, collectedAt: new Date().toISOString()
     };

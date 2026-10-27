@@ -68,7 +68,7 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
         if (!request.success) throw new Error('请检查连接端口、用户名和密码；用户名和密码不能包含引号、反斜杠或换行');
         await window.tbLink.saveMa2Network(request.data); setHost(address); setPassword(''); setPasswordEdited(false);
       }
-      const next = await connectDiscoveredMa2(setFound, address => computerNetwork.prepare(address, setProgress));
+      const next = await connectDiscoveredMa2(setFound, address => computerNetwork.prepare(address, setProgress), message => notify(message, 'info'));
       setStatus(next);
       networkConnected = true;
       if (next.settings) choose(next.settings);

@@ -26,6 +26,32 @@ it('已保存 IP 直接连接，不要求广播发现；失败明确返回而不
   connect.mockResolvedValue({ ...status, error: '命令端口超时' });
   await expect(connectDiscoveredMa2(undefined,prepare)).rejects.toThrow('命令端口超时'); expect(connect).toHaveBeenCalledTimes(2);
 });
+it('已保存地址完全连不到时搜索一次：唯一找到的另一台控台保存并连接，并说明改了地址', async () => {
+  const saved = { host: '2.0.0.1', port: 30000, monitorPort: 30001, username: 'administrator', autoConnect: false };
+  const status = { state: 'disconnected', settings: saved, profiles: [saved], passwordSaved: true, version: null, error: null };
+  const prepare = vi.fn().mockResolvedValue(undefined); const save = vi.fn().mockResolvedValue(undefined); const notice = vi.fn();
+  const connect = vi.fn().mockResolvedValueOnce({ ...status, error: '2.0.0.1:30000 TCP 未连通', unreachable: true })
+    .mockResolvedValueOnce({ ...status, state: 'connected', settings: { ...saved, host: '2.0.0.5' }, version: '3.3.4.3' });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: () => Promise.resolve(status), connectMa2Network: connect, saveMa2Network: save,
+    discoverMa2: () => Promise.resolve({ hosts: [{ host: '2.0.0.5', port: 30000, identity: 'ma2' }, { host: '2.0.0.9', port: 30000, identity: 'candidate' }], ranges: [], warnings: [] }) } });
+  expect((await connectDiscoveredMa2(undefined, prepare, notice)).settings?.host).toBe('2.0.0.5');
+  expect(prepare.mock.calls).toEqual([['2.0.0.1'], ['2.0.0.5']]);
+  expect(save).toHaveBeenCalledWith({ settings: { host: '2.0.0.5', port: 30000, monitorPort: 30001, username: 'administrator', autoConnect: false }, password: 'admin' });
+  expect(connect).toHaveBeenCalledTimes(2);
+  expect(notice).toHaveBeenCalledWith(expect.stringContaining('2.0.0.5'));
+});
+it('已保存地址连不到时：搜到的还是它就请操作员再点一次，没搜到就说清楚，都不再登录', async () => {
+  const saved = { host: '2.0.0.1', port: 30000, monitorPort: 30001, username: 'administrator', autoConnect: false };
+  const status = { state: 'disconnected', settings: saved, passwordSaved: true, version: null, error: null };
+  const connect = vi.fn().mockResolvedValue({ ...status, error: '2.0.0.1:30000 TCP 未连通', unreachable: true });
+  const discover = vi.fn().mockResolvedValueOnce({ hosts: [{ host: '2.0.0.1', port: 30000, identity: 'ma2' }], ranges: [], warnings: [] })
+    .mockResolvedValueOnce({ hosts: [], ranges: [], warnings: ['MA-Net 上 2.0.0.3 有回应，但登录端口没开'] });
+  vi.stubGlobal('window', { tbLink: { getMa2NetworkStatus: () => Promise.resolve(status), connectMa2Network: connect, discoverMa2: discover } });
+  const prepare = vi.fn().mockResolvedValue(undefined);
+  await expect(connectDiscoveredMa2(undefined, prepare)).rejects.toThrow('请再点一次连接');
+  await expect(connectDiscoveredMa2(undefined, prepare)).rejects.toThrow(/TCP 未连通[\s\S]*没找到控台[\s\S]*2\.0\.0\.3/);
+  expect(connect).toHaveBeenCalledTimes(2);
+});
 it('首次发现未识别设备时保留结果与网卡诊断，不擅自登录候选端口', async () => {
   const result = { hosts: [{ host: '2.97.214.223', port: 30000, identity: 'candidate' }], ranges: ['本机'], warnings: ['广播端口被占用'] };
   const onDiscovery = vi.fn(); const connect = vi.fn();

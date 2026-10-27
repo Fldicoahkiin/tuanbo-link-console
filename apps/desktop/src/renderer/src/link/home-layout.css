@@ -540,6 +540,8 @@
 .p1-media-card footer { display: flex; grid-column: 1 / -1; grid-row: 4; gap: 12px; align-items: center; justify-content: space-between; color: var(--text-secondary); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
 .p1-media-card footer small { display: flex; align-items: center; gap: 4px; font-size: var(--text-caption); }
 .p1-media-card footer svg { width: 14px; height: 14px; }
+.p1-media-card footer .program-card-time { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.p1-media-card footer .program-card-time .song-mtc-start { align-self: center; }
 .p1-media-card .program-row-properties { grid-column: 2; grid-row: 1; }
 .program-list-columns, .p1-media-grid[data-view=list] .p1-media-card { grid-template-columns: 40px minmax(120px, 1fr) minmax(110px, .55fr) 138px 32px; gap: 12px; }
 .program-list-columns { display: grid; padding: 10px 18px; color: var(--text-secondary); font-size: var(--text-caption); }

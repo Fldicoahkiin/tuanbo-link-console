@@ -11,6 +11,11 @@ type Stream = { socket: Socket; decoder: StringDecoder; buffer: string; negotiat
 
 type Waiter = { match: (text: string) => string | null; resolve: (value: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 
+/** No TCP connection reached the console at this address: it is off, unplugged or now at another IP. */
+export class Ma2UnreachableError extends Error {}
+/** Socket errors that mean nothing at this address answers on the console port. */
+const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT']);
+
 /** Native MA2 Telnet, not the local onPC mailbox. Never replay a command. */
 export class Ma2Telnet {
   private socket: Socket | null = null;
@@ -45,9 +50,10 @@ export class Ma2Telnet {
         const stream: Stream = { socket, decoder: new StringDecoder('utf8'), buffer: '', negotiation: 'data', optionCommand: 0 };
         this.streams.push(stream);
         socket.setNoDelay(true); socket.setKeepAlive(true, 5000);
-        socket.on('connect', () => { if (index === 1) { monitorReady = true; this.check(); } });
+        let opened = false;
+        socket.on('connect', () => { opened = true; if (index === 1) { monitorReady = true; this.check(); } });
         socket.on('data', (data: Buffer) => { if (this.streams.includes(stream)) this.receive(stream, data); });
-        socket.on('error', (error: NodeJS.ErrnoException) => { if (this.streams.includes(stream)) this.fail(new Error(`MA2 ${index === 0 ? '命令' : '监视'}端口连接失败：${this.address.host}:${port}${this.address.localAddress ? `（电脑 ${this.address.localAddress}）` : ''}（${error.code ?? '网络错误'}）。${error.code === 'EADDRNOTAVAIL' ? '电脑专用地址已失效，请重新点击自动连接。' : error.code === 'ECONNREFUSED' ? '目标拒绝了此端口，请检查控台 Telnet 是否为 Login Enabled、端口和防火墙；不需要反复更换电脑 IP。' : error.code === 'ENETUNREACH' || error.code === 'EHOSTUNREACH' ? '当前网卡无法到达控台，请检查插控台网线的网卡、网线及所选地址。' : '请检查网线、端口和控台 Telnet 设置。'}`)); });
+        socket.on('error', (error: NodeJS.ErrnoException) => { if (this.streams.includes(stream)) this.fail(new (!opened && UNREACHABLE_CODES.has(error.code ?? '') ? Ma2UnreachableError : Error)(`MA2 ${index === 0 ? '命令' : '监视'}端口连接失败：${this.address.host}:${port}${this.address.localAddress ? `（电脑 ${this.address.localAddress}）` : ''}（${error.code ?? '网络错误'}）。${error.code === 'EADDRNOTAVAIL' ? '电脑专用地址已失效，请重新点击自动连接。' : error.code === 'ECONNREFUSED' ? '目标拒绝了此端口，请检查控台 Telnet 是否为 Login Enabled、端口和防火墙；不需要反复更换电脑 IP。' : error.code === 'ENETUNREACH' || error.code === 'EHOSTUNREACH' ? '当前网卡无法到达控台，请检查插控台网线的网卡、网线及所选地址。' : '请检查网线、端口和控台 Telnet 设置。'}`)); });
         socket.on('close', () => { if (this.streams.includes(stream)) this.fail(new Error('MA2 网络连接断开了，没确认的操作不会自动重试')); });
       }
       await this.waitFor((text) => monitorReady && /\[[^\r\n]*\]>/.test(text) ? 'ready' : null, () => {
@@ -55,7 +61,8 @@ export class Ma2Telnet {
           const source = this.address.localAddress ?? stream.socket.localAddress;
           return `${this.address.host}:${index === 0 ? this.address.port : this.address.monitorPort} ${stream.socket.connecting ? 'TCP 未连通' : 'TCP 已连通'}${source && source !== '0.0.0.0' ? `（本机 ${source}）` : '（尚未取得本机连接地址）'}`;
         }).join('；');
-        return `MA2 连接超时：${ports}。${this.streams.some(stream => stream.socket.connecting) ? '请检查电脑和控台的 IP、子网掩码、网卡路由，以及防火墙是否放行这两个端口。' : '端口已通，但未收到 MA2 远程提示，请核对远程登录服务和端口。'} MIDI 线不提供这条网络连接。`;
+        const message = `MA2 连接超时：${ports}。${this.streams.some(stream => stream.socket.connecting) ? '请检查电脑和控台的 IP、子网掩码、网卡路由，以及防火墙是否放行这两个端口。' : '端口已通，但未收到 MA2 远程提示，请核对远程登录服务和端口。'} MIDI 线不提供这条网络连接。`;
+        return new (this.streams.every(stream => stream.socket.connecting) ? Ma2UnreachableError : Error)(message);
       });
       // Validate accepted connections, not listening sockets: Windows can report
       // MA 3D as listener even when onPC accepted this particular connection.
@@ -109,10 +116,10 @@ export class Ma2Telnet {
     if (this.waiter) { clearTimeout(this.waiter.timer); this.waiter.reject(error); this.waiter = null; }
     if (this.current !== 'disconnected') this.setState('disconnected');
   }
-  private waitFor(match: Waiter['match'], timeoutMessage?: () => string): Promise<string> {
+  private waitFor(match: Waiter['match'], timeoutError?: () => Error): Promise<string> {
     if (this.waiter) return Promise.reject(new Error('MA2 网络请求还没完成'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error(timeoutMessage?.() ?? (this.current === 'authenticating' ? 'MA2 网络端口已经连通，但登录没有成功。请检查登录用户、密码和 Telnet 的 Login Enabled 设置，不需要改电脑 IP' : 'MA2 响应超时，操作没有确认，不会自动重试'))), this.timeoutMs);
+      const timer = setTimeout(() => this.fail(timeoutError?.() ?? new Error(this.current === 'authenticating' ? 'MA2 网络端口已经连通，但登录没有成功。请检查登录用户、密码和 Telnet 的 Login Enabled 设置，不需要改电脑 IP' : 'MA2 响应超时，操作没有确认，不会自动重试')), this.timeoutMs);
       this.waiter = { match, resolve, reject, timer };
       this.check();
     });

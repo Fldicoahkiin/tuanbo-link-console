@@ -2,11 +2,12 @@ import { Button } from './Button';
 import '../p1-sync.css';
 import { useEffect, useRef, useState } from 'react';
 import { AudioLines, ChevronDown, Download, FileAudio2, FolderOpen, Upload } from 'lucide-react';
-import { allocateP1TimecodeRanges, configureP1AutoFollowCommand, applyP1ProjectExportCommand, synchronizeP1ProjectCommand, setPlaybackSourceCommand } from '@tb/core/link';
+import { allocateP1TimecodeRanges, configureP1AutoFollowCommand, applyP1ProjectExportCommand, formatMtcOffset, p1ImportReport, setItemPlaybackCommand, synchronizeP1ProjectCommand, setPlaybackSourceCommand, withP1MtcStart, type P1SameNameSong } from '@tb/core/link';
+import { SongMtcStart } from './SongMtcStart';
 import { assertDocumentSession, useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { requireProjectLocation } from '../project-document';
-import type { LinkP1ProjectImportProgress } from '@tb/schema';
+import type { LinkP1ProjectImportProgress, LinkProject } from '@tb/schema';
 
 type Props = {
   directImport?: boolean;
@@ -34,10 +35,14 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
   const activeImport = useRef<string | null>(null);
   const cancelledImport = useRef(false);
   const [summary, setSummary] = useState<SyncSummary | null>(null);
+  // The songs the last read brought in, so their MTC starts can be listed against the live project.
+  const [importedKeys, setImportedKeys] = useState<string[] | null>(null);
+  const report = project && importedKeys ? p1ImportReport(project, importedKeys) : null;
   useEffect(() => () => { if (activeImport.current) void linkDesktopViewModel.cancelP1Import(activeImport.current).catch(error => console.error(error)); }, []);
   useEffect(() => {
     setP1ProjectPath('');
     setSummary(null);
+    setImportedKeys(null);
   }, [documentId]);
 
   const importProject = async (source: 'current' | 'picker', lighting = purpose !== 'migration' && Boolean(afterImport)): Promise<void> => {
@@ -68,13 +73,17 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
       const command = synchronizeP1ProjectCommand(imported);
       useDocumentStore.getState().executeForDocument(targetDocumentId, purpose !== 'follow' ? { ...command, label: '导入 P1 音频，由联动台播放', execute: value => setPlaybackSourceCommand('internal').execute(command.execute(value)) } : command);
       setP1ProjectPath(imported.sourcePath);
+      const keys = imported.items.map(item => item.p1Media.sourceKey);
+      setImportedKeys(keys);
+      const updated = useDocumentStore.getState().project;
+      const sameName = updated ? p1ImportReport(updated, keys).sameName.length : 0;
       setSummary({
         path: imported.sourcePath,
         itemCount: imported.items.length,
         playlistCount: imported.playlists.length,
         updatedAt: new Date().toLocaleString('zh-CN')
       });
-      notify(`已导入 ${imported.items.length} 首音频，另有 ${imported.skippedItems?.length ?? 0} 首需要修复（已保留在节目单）；原始时间码已保留。${purpose === 'audio' ? '由联动台播放，不需要启动 P1。' : ''}`);
+      notify(`已导入 ${imported.items.length} 首歌，每首歌的 MTC 起始码都按 P1 里的原样保留，下方列出了每首的起始码。${imported.skippedItems?.length ? `另有 ${imported.skippedItems.length} 首需要修复，已保留在节目单。` : ''}${sameName ? `有 ${sameName} 首本地歌和 P1 里的歌同名但起始码不同，请在下方确认。` : ''}${purpose === 'audio' ? '由联动台播放，不需要启动 P1。' : ''}`);
       if (lighting && afterImport) await afterImport();
     } catch (error) {
       notify(cancelledImport.current ? '已取消导入 P1，当前工程没有变化' : error instanceof Error ? error.message : String(error), 'error');
@@ -164,9 +173,38 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
     <p>{directImport ? '导入后由联动台播放，歌曲、裁剪和原始时间码都会保留。连好音频和 MIDI 就能沿用控台上的编排；连接 MA2 并读取后，编辑器里才会显示对应的 Cue。' : purpose === 'audio' ? '读取 P1 音频，保留裁剪和原始歌曲时间码。MP4 音轨结尾缺少不超过 250 毫秒时会补上静音，保证节目长度和灯光时间码不变。P1 里没有控台 Cue 列表；要显示 Cue，请在设备连接里扫描控台后导入。写回 P1 会生成一个独立的 .hia；重新打开联动工程后，选择上次读取或导出的 P1 文件即可导出，不需要启动 P1 或连接控台网络。' : purpose === 'migration' ? '把另一台电脑上的 .hia 和歌曲文件夹复制到同一个文件夹里。可以只导入音乐，也可以同时按原始时间码匹配控台 Cue。同名音频或时间线无法确定对应关系时，会单独列出来。' : project?.p1AutoFollow?.enabled ? '已开启自动监听：在 P1 里打开生成的 .hia，直接点歌曲就会选中节目并跟随时间线。停止联动后，可以在集成中心恢复监听。' : '生成一次联动工程后，在 P1 里点歌曲就能自动控制 OBS，不用每首歌单独准备。'}</p>
     {purpose === 'migration' ? <p>只导入音乐不需要连接控台；匹配 Cue 需要先连接 MA2。在同一个联动工程里重复选择同一份 .hia，会更新已有歌曲、复用相同的音频，并跳过已绑定的 Cue。如果改过 .hia 里的歌曲路径，可能会被当成新歌曲。</p> : null}
     {project?.rundown.some(item => item.notes.startsWith('P1 裁剪')) ? <details className="p1-sync-issues"><summary>已恢复的歌曲：请检查裁剪范围</summary>{project.rundown.filter(item => item.notes.startsWith('P1 裁剪')).map(item => <p key={item.id}><strong>{item.title}</strong><br />{item.notes}</p>)}</details> : null}
+    {project && report?.sameName.length ? <P1SameNameList project={project} entries={report.sameName} disabled={disabled || busy} notify={notify} /> : null}
+    {project && report?.songs.length ? <details className="p1-sync-issues p1-sync-starts"><summary>这次导入的 {report.songs.length} 首歌和它们的 MTC 起始码</summary><ul>{report.songs.map(song => {
+      const item = project.rundown.find(value => value.id === song.itemId);
+      return item ? <li key={song.itemId}><span>{song.title}</span><SongMtcStart project={project} item={item} /></li> : null;
+    })}</ul></details> : null}
     {summary ? <div className="p1-sync-summary"><div><strong>{summary.itemCount}</strong> 首音频 · <strong>{summary.playlistCount}</strong> 个列表 · {summary.updatedAt}</div><span title={summary.path}>{summary.path}</span></div> : null}
     {project?.p1Sync?.skippedItems?.length ? <details open className="p1-sync-issues"><summary>已保留 {project.p1Sync.skippedItems.length} 首需要修复的节目，其余歌曲可以正常播放</summary><p>下面这些歌曲保留在节目单里，但已停用。补齐原文件后重新导入即可恢复；写回 P1 时原条目也会保留。</p>{project.p1Sync.skippedItems.map(entry => <p key={entry.sourceKey}><strong>{entry.playlistName} / {entry.title}</strong><br />{entry.reason}</p>)}</details> : null}
   </section>;
+}
+
+/**
+ * Local songs named like a song from P1 but starting elsewhere. A console timeline recorded in the
+ * old P1 workflow starts at the P1 song's start, so the operator can move an unlit local song there;
+ * a song lit on its own console timeline is only explained, since its start moves that timeline.
+ */
+function P1SameNameList({ project, entries, disabled, notify }: { project: LinkProject; entries: P1SameNameSong[]; disabled: boolean; notify: Props['notify'] }): JSX.Element {
+  const code = (ms: number): string => formatMtcOffset(ms, project.timebase.frameRate);
+  const adopt = (entry: P1SameNameSong): void => {
+    const local = project.rundown.find(item => item.id === entry.localId);
+    if (!local) { notify(`节目单里已经没有「${entry.localTitle}」`, 'error'); return; }
+    try {
+      useDocumentStore.getState().execute(setItemPlaybackCommand(local.id, withP1MtcStart(local, entry.p1StartMs)));
+      notify(`「${entry.localTitle}」的 MTC 起始码已改成 ${code(entry.p1StartMs)}，和 P1 里的「${entry.p1Title}」一样。可以撤销。`);
+    } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error'); }
+  };
+  return <details open className="p1-sync-issues"><summary>有 {entries.length} 首本地歌和 P1 里的歌同名，但 MTC 起始码不同</summary>
+    <p>控台上按老流程录的时间线，是从 P1 的起始码开始的。确认是同一首歌后，把本地这首改成 P1 的起始码，就能和控台上的时间线配对。</p>
+    {entries.map(entry => <p key={entry.localId}><strong>{entry.localTitle}</strong>：本地是 {entry.localStart.state === 'set' ? code(entry.localStart.startMs) : entry.localStart.state === 'unset' ? '还没有起始码' : `无效的起始码（${entry.localStart.reason}）`}，P1 的「{entry.p1Title}」是 {code(entry.p1StartMs)}。
+      {entry.durationDifferenceMs !== null && entry.durationDifferenceMs > 500 ? `两首音频长度差 ${(entry.durationDifferenceMs / 1000).toFixed(1)} 秒，P1 可能裁剪过开头，请先核对再改。` : ''}
+      {entry.lit ? '这首歌在控台上已经有自己的时间线，改起始码会把那条时间线一起挪走，所以这里不提供一键修改。要用控台上原来录的时间线，请给 P1 导入的那首配对。' : <Button className="secondary-button" disabled={disabled} onClick={() => adopt(entry)}>改成 P1 的起始码</Button>}
+    </p>)}
+  </details>;
 }
 
 async function ensureLinkDocument(sourcePath: string): Promise<void> {

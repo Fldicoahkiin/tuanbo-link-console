@@ -24,7 +24,9 @@ export type Ma2Capabilities = z.infer<typeof ma2CapabilitiesSchema>;
 export const ma2NetworkStatusSchema = z.object({
   settings: ma2NetworkSettingsSchema.nullable(), passwordSaved: z.boolean(),
   profiles: z.array(ma2NetworkSettingsSchema).optional(), capabilities: ma2CapabilitiesSchema.nullable().optional(),
-  state: z.enum(['disconnected', 'connecting', 'authenticating', 'connected']), version: z.string().nullable(), error: z.string().nullable()
+  state: z.enum(['disconnected', 'connecting', 'authenticating', 'connected']), version: z.string().nullable(), error: z.string().nullable(),
+  /** The last connect reached nothing at the saved address: the console is off, unplugged or at another IP. */
+  unreachable: z.literal(true).optional()
 }).strict();
 export type Ma2NetworkStatus = z.infer<typeof ma2NetworkStatusSchema>;
 import { lightingDocumentSchema, lightingMa2EventMappingSchema, lightingMa2TrackMappingSchema, lightingMa2CueCatalogSchema } from './lighting';

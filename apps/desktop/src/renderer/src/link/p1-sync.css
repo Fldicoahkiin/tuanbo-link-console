@@ -21,3 +21,6 @@
 .p1-sync-panel.p1-sync-layout .ma2-read-progress > div { flex-wrap: wrap; }
 .p1-sync-panel.p1-sync-layout .p1-import-menu { min-width: 0; max-width: 100%; }
 .p1-sync-panel.p1-sync-layout .p1-import-popover { position: static; min-width: 0; max-width: 100%; margin-top: 6px; box-shadow: none; }
+.p1-sync-panel.p1-sync-layout .p1-sync-starts ul { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.p1-sync-panel.p1-sync-layout .p1-sync-starts li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.p1-sync-panel.p1-sync-layout .p1-sync-starts li span:first-child { min-width: 0; overflow-wrap: anywhere; }

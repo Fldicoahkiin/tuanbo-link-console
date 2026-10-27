@@ -7,6 +7,8 @@ import { ProjectPlaybackMonitor } from './ProjectPlaybackMonitor';
 import { ProgramGrid } from './ProgramGrid';
 import { SongPlaybackProperties } from './SongPlaybackProperties';
 import { SongLightingState } from './SongLightingState';
+import { SongMtcStart } from './SongMtcStart';
+import { programContents } from '../view-models/program-contents';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -300,7 +302,7 @@ function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
             <div className="p1-card-top"><span><Music2 />{item.referenceAudio ? '音频节目' : '待添加音频'}</span><button className="rundown-index" disabled={!item.enabled} onClick={(event) => { event.stopPropagation(); (props.playItem ?? props.onSelectCurrentItem)(item); }}>{index + 1}</button></div>
             <strong>{item.title}</strong>
             <div className="p1-card-state">{project.playbackSource === 'internal' ? <SongLightingState project={project} item={item} /> : null}{project.playbackSource === 'internal' && item.referenceAudio ? <button className="song-volume-button" aria-label={`${item.title} 独立音量`} title="设置这首音频的独立音量，随工程保存" disabled={props.locked} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); props.onChooseItem(item); setInspectorOpen(true); }}>音量 {item.playback?.volume ?? 100}%</button> : null}{item.id === currentItemId ? <><Check />{runtime === 'running' ? '播放中' : runtime === 'paused' ? '已暂停' : '当前节目'}</> : props.playedItemIds.includes(item.id) ? '已播放' : props.playItem ? doubleClickPlayback ? '双击播放' : '点击播放' : item.p1Media ? 'P1 音频' : '联动节目'}</div>
-            <footer><span>{formatDuration(item.referenceAudio?.durationMs ?? 0)}</span><small><Film />{item.referenceMediaClips.length} 素材 · {item.cues.length} Cue</small></footer>
+            <footer><span className="program-card-time">{formatDuration(item.referenceAudio?.durationMs ?? 0)}{item.referenceAudio ? <SongMtcStart project={project} item={item} /> : null}</span><small><Film />{programContents(item)}</small></footer>
             <Button className="icon-button program-row-properties" aria-label={`编辑节目属性：${item.title}`} title="编辑节目属性" onDoubleClick={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); props.onChooseItem(item); setInspectorOpen(true); }}><SlidersHorizontal /></Button>
           </article>;
         }} />

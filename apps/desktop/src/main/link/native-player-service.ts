@@ -7,6 +7,7 @@ import { basename } from 'node:path';
 import { NativeAudioPreload } from './native-audio-preload';
 import { MidiPortRecovery, type PortRecoveryReport } from './midi-port-recovery';
 import { midiPortBusy, sharedPortMessage } from './midi-error';
+import { audioErrorMessage } from './audio-error';
 import type { MidiClaim } from './midi-port-broker';
 
 type Clock = Extract<NativePlaybackEvent, { kind: 'clock' }>;
@@ -172,7 +173,7 @@ export class NativePlayerService {
       const clock = await this.client.readClock(this.nativeGeneration, ['ready', 'error']);
       measured('音频设备与时钟准备');
       this.requireEpoch(epoch);
-      if (clock.audioError || clock.state === 'error') throw new Error(`Windows 音频准备失败：${clock.audioError}`);
+      if (clock.audioError || clock.state === 'error') throw new Error(`音频没有准备好：${audioErrorMessage(clock.audioError)}`);
       this.patch({ status: 'ready', enginePid: this.client.identity!.pid, engineTitle: this.client.identity!.title,
         mtcPortName: midiDevice === null ? null : midi[0]!.name });
       this.receive(clock);
@@ -230,7 +231,7 @@ export class NativePlayerService {
         if (request.kind !== 'volume') {
           const clock = await this.client.readClock(this.nativeGeneration, settledStates[request.kind]);
           this.requireEpoch(epoch);
-          if (clock.audioError || clock.state === 'error') throw new Error(`Windows 音频控制失败：${clock.audioError}`);
+          if (clock.audioError || clock.state === 'error') throw new Error(`音频操作没有完成：${audioErrorMessage(clock.audioError)}`);
           this.receive(clock);
         }
         // A stopped program lets its timecode port go, so P1 or the editor can use it until the next song.
@@ -358,7 +359,7 @@ export class NativePlayerService {
   private requireEpoch(epoch: number): void { if (epoch !== this.epoch || this.closing) throw new Error('播放操作已被取消'); }
   private receive(clock: Clock): void {
     if (!this.state || clock.generation !== this.nativeGeneration || this.state.status === 'preparing' || this.state.status === 'error') return;
-    const audioError = clock.audioError ? `Windows 音频输出失败：${clock.audioError}` : this.state.audioError;
+    const audioError = clock.audioError ? audioErrorMessage(clock.audioError) : this.state.audioError;
     // While the lost port is waited for and reopened, its errors belong to that outage: the watch logs them.
     const midiError = this.mtcRecovery.watching ? 0 : clock.midiError;
     this.reopening?.check(clock);
