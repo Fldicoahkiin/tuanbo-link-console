@@ -12,6 +12,16 @@ describe('preflightLogEntries', () => {
       details: { checks: checks.map(({ id, label, status, detail }) => ({ id, label, status, detail })) } }]);
   });
 
+  it('同一工程同样的检查结果第二次只写“和之前一样”，结果变了再写全', () => {
+    const seen = new Set<string>();
+    const checks = [passed('disk', '可用磁盘空间'), passed('project.currentItem', '当前节目')];
+    expect(preflightLogEntries(checks, seen, 'project')[0]?.details).toEqual({ checks: checks.map(({ id, label, status, detail }) => ({ id, label, status, detail })) });
+    expect(preflightLogEntries(checks, seen, 'project')[0]).toMatchObject({ message: '开播前检查通过（2 项）', details: { sameAsEarlier: true } });
+    const other = [passed('disk', '可用磁盘空间'), { ...passed('project.currentItem', '当前节目'), detail: '刀马.mp4' }];
+    expect(preflightLogEntries(other, seen, 'project')[0]?.details).toHaveProperty('checks');
+    expect(preflightLogEntries(checks, seen, 'other')[0]?.details).toHaveProperty('checks');
+  });
+
   it('阻断项每次单独记为错误；提示项同一工程本次运行只记一次', () => {
     const seen = new Set<string>();
     const checks: PreflightCheck[] = [passed('disk', '可用磁盘空间'),
