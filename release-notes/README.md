@@ -33,6 +33,6 @@
 1. 确认这一版的 `X.Y.Z.md` 写全了。
 2. 改根目录和 `apps/desktop` 两个 `package.json` 的版本号，运行 `pnpm changelog`（去掉这一版的「未发布」），一起提交 `chore(release): X.Y.Z`，推 master。
 3. CI 通过后在 GitHub Actions 手动运行 Release Windows（分支选 master，填这个提交号），工作流自己打 `vX.Y.Z` tag；推 tag 也可以。没有这一版的文件时，`pnpm verify` 和 Release Windows 的第一步都会报错；`CHANGELOG.md` 没更新时，推 master 后的 CI 会报错。所以一定等 CI 通过再发版。打包失败、没发布出去的版本，修好后再触发一次，tag 会挪到修复提交上，版本号不变，详见 [docs/RELEASE_CHAIN.md](../docs/RELEASE_CHAIN.md#以后发版本的标准流程)。
-4. 新版上线后更新官网的 `release.json`（`node scripts/write-website-release.mjs`），官网下载页随之显示新版条目。
+4. 新版上线、GitHub Release 转正式后，Website Release 自动更新官网的 `release.json` 并部署，官网下载页随之显示新版条目。
 
 0.5.1 打了 tag，但构建上传失败、从未发布，改动随 0.5.2 发布，所以没有 `0.5.1.md`。0.4.27 及更早的测试版本只在 GitHub Releases 里有说明。

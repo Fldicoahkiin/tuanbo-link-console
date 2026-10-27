@@ -1,0 +1,70 @@
+name: Website Release
+
+# Points the download page at the version the update feed serves, so nobody has to do it after a release.
+# The relay publishes a GitHub release only once the feed serves it byte for byte, and that starts this run. It writes
+# apps/licensing-server/web/release.json from the live feed (scripts/write-website-release.mjs), commits it to master
+# through the API and starts Verify Licensing Server, which deploys the website. A commit made with the workflow's
+# token starts no workflow by itself, hence the explicit start.
+# Run it by hand after a rollback on the server, so the page follows the feed back.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-release
+  cancel-in-progress: false
+
+jobs:
+  website:
+    # build-assets-* releases are not software versions.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Use pnpm 10.33.0
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6 (v6.0.10)
+        with:
+          version: 10.33.0
+
+      - name: Use Node.js 25.8.2
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 (v7.1.0)
+        with:
+          node-version: 25.8.2
+          cache: pnpm
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Write the download page record from the live feed
+        run: node scripts/write-website-release.mjs
+
+      - name: Commit it to master and deploy the website
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          path=apps/licensing-server/web/release.json
+          version=$(jq -r .version "$path")
+          if git diff --quiet -- "$path"; then
+            echo "官网下载页已经是更新源上的 $version，不用改" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          message=$(printf 'chore(website): point the download page at %s\n\n- Written by write-website-release.mjs from the live feed after v%s was published' "$version" "$version")
+          current=$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=master" --jq .sha)
+          commit=$(gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/$path" -f branch=master -f sha="$current" \
+            -f message="$message" -f content="$(base64 -w0 "$path")" --jq .commit.sha)
+          gh workflow run verify-licensing-server.yml --ref master
+          echo "官网下载页改为 $version（提交 $commit），已启动 Verify Licensing Server 部署官网" | tee -a "$GITHUB_STEP_SUMMARY"

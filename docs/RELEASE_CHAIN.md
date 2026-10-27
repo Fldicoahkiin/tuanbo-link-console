@@ -16,12 +16,11 @@
    - 搬运：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次 `scripts/relay-release.mjs`，Mac 也可以手动 `pnpm release:relay`，二选一，重复运行安全。它下载草稿、按构建清单核对，上传到服务器 staging；服务器上已有或正在上传就不重复传。
    - 服务器：发布脚本重新做全部校验（签名、manifest、sha256、版本高于更新源、这个版本没发布过），通过就上线。
    - 搬运脚本看到更新源换成这个版本后，把草稿转为正式 Release，标为 Latest。
+   - 官网：Release 转正式会触发 Website Release，它从线上更新源写 `release.json`，提交到 master，再启动 Verify Licensing Server 部署官网（2026-10-27 起，之前要手动运行 `write-website-release.mjs` 并推送）。服务器回滚后，在 Actions 里手动运行一次 Website Release，官网就跟着回到更新源上的版本。
    - 工位电脑关机时什么都不用做：它上线后计划任务自动接着同步，或者在 Mac 上跑一次。
 4. 用户从官网下载安装、测试。有问题就在后台「回滚到上一版」，或者修好后发下一个版本。
 
 后台「软件更新」保留，用来看状态、看最近一次自动发布的结果和紧急回滚。没能自动发布的版本留在待发布列表里，原因写在「最近一次自动发布」。
-
-官网下载信息暂时还要在上线后运行 `node scripts/write-website-release.mjs` 并推送；改成直接跟着更新源变化之后，这一步去掉。
 
 保留规则：
 - 官网下载页和 `release.json` 只放最新版。
@@ -63,7 +62,7 @@
 - **工位电脑的网络**：上传服务器必须用 Git for Windows 的 ssh，Windows 自带的 ssh.exe 输入一大就停。本机代理 127.0.0.1:7890 偶尔会断开连接，搬运下一轮会接着做。
 - **大文件上传 GitHub**：必须从文件流式发送，一次写入整个安装包在 Windows 上会失败（就是 0.5.1 的问题）。
 - **改草稿 release**：通过 API 修改草稿时要带上 `tag_name`，否则 GitHub 会把它的标签名改成 `untagged-…`。
-- **官网**：「官网跟着更新源变」那批（本地分支 `website-follows-feed`）装上之前，每次上线后都要运行 `node scripts/write-website-release.mjs` 并推送。下载页的日期按北京时间，构建晚于 UTC 16:00 时会是第二天。
+- **官网**：上线后由 Website Release 自动更新（见上面第 3 步）。Verify Licensing Server 只在 master 仍是它检查的那个提交时部署，所以它跑完之前 master 又有了新提交、而新提交不触发它时，官网这次不会部署，要再手动运行一次 Verify Licensing Server。下载页的日期按北京时间，构建晚于 UTC 16:00 时会是第二天。
 - **日常签名私钥**：云端签名已在 0.5.2 确认可用，工位电脑上的 `D:\tblink-release-signing\release-2026-10-a.pem` 可以删除。
 - **服务器磁盘**：归档上限和磁盘余量检查（见[待办](#发版流程待办)）还没做。staging 最多存 5 份，自动发布失败的会占位，要在后台丢弃。
 
