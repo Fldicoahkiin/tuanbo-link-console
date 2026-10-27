@@ -1,0 +1,16 @@
+[Unit]
+Description=Keep the update CDN certificate equal to the server certificate
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Root: it reads the Let's Encrypt private key and the Tencent Cloud key in /etc/tblink-cdn.
+ExecStart=/usr/bin/python3 /opt/tblink-licensing/push-cdn-certificate.py
+StateDirectory=tblink-cdn
+StateDirectoryMode=0755
+TimeoutStartSec=30min
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+ProtectSystem=strict
