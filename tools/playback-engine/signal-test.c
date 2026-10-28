@@ -1,4 +1,5 @@
 #include "signal.h"
+#include "timecode.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -26,5 +27,16 @@ int main(void) {
   assert(fabs(peaks[0] - 0.05) < 0.0001 && fabs(peaks[1] - 0.025) < 0.0001);
   for (unsigned i = 0; i < ANALYSIS_BINS; i++) if (i != 64) assert(bins[i] < bins[64]);
   assert(bins[64] > 200);
-  puts("{\"passed\":true,\"scope\":\"native sample envelope and 2048-point stereo monitor math\"}"); return 0;
+  unsigned char tc[4];
+  timecode_parts(0, 30, 0, tc); assert(tc[0] == 0x60 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0);
+  timecode_parts(11820u * 25u, 25, 0, tc); assert(tc[0] == (3 | 0x20) && tc[1] == 17 && tc[2] == 0 && tc[3] == 0);
+  timecode_parts(24u * 86400u + 23u, 24, 0, tc); assert(tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 23);
+  timecode_parts(1799, 30, 1, tc); assert(tc[0] == 0x40 && tc[1] == 0 && tc[2] == 59 && tc[3] == 29);
+  timecode_parts(1800, 30, 1, tc); assert(tc[0] == 0x40 && tc[1] == 1 && tc[2] == 0 && tc[3] == 2);
+  timecode_parts(17982, 30, 1, tc); assert(tc[1] == 10 && tc[2] == 0 && tc[3] == 0);
+  timecode_parts(17982u + 1800u, 30, 1, tc); assert(tc[1] == 11 && tc[2] == 0 && tc[3] == 2);
+  timecode_parts(2589407u, 30, 1, tc); assert(tc[0] == (23 | 0x40) && tc[1] == 59 && tc[2] == 59 && tc[3] == 29);
+  timecode_parts(2589408u, 30, 1, tc); assert(tc[0] == 0x40 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0);
+  assert(fabs(timecode_frame_ms(30, 1) - 1001.0 / 30.0) < 1e-12 && timecode_frame_ms(25, 0) == 40.0);
+  puts("{\"passed\":true,\"scope\":\"native sample envelope, 2048-point stereo monitor math and timecode labels\"}"); return 0;
 }

@@ -115,28 +115,34 @@ DWORD WINAPI telemetry_worker(void *unused) {
 }
 static DWORD WINAPI commands(void *unused) {
   (void)unused; CoInitializeEx(NULL, COINIT_MULTITHREADED);
-  unsigned char header[96], path[PATH_BYTES + 1], device_id[DEVICE_BYTES + 1];
+  unsigned char header[96], path[PATH_BYTES + 1], device_id[DEVICE_BYTES + 1], port_name[PORT_NAME_BYTES + 1];
   while (fread(header, 1, 96, stdin) == 96) {
     UINT32 length = read_u32(header + 4), request = read_u32(header + 8), generation = read_u32(header + 12);
     UINT32 op = read_u32(header + 16), bytes = read_u32(header + 72);
-    UINT32 device_bytes = read_u32(header + 76);
-    if (read_u32(header) != 0x34504254 || bytes > PATH_BYTES || device_bytes > DEVICE_BYTES || length != 96 + bytes + device_bytes || !request || !generation || op < 1 || op > 9 || (op != 1 && bytes) || (op != 1 && op != 9 && device_bytes)) break;
+    UINT32 device_bytes = read_u32(header + 76), name_bytes = read_u32(header + 92);
+    if (read_u32(header) != 0x34504254 || bytes > PATH_BYTES || device_bytes > DEVICE_BYTES || name_bytes > PORT_NAME_BYTES || length != 96 + bytes + device_bytes + name_bytes || !request || !generation || op < 1 || op > 9 || (op != 1 && bytes) || (op != 1 && op != 9 && device_bytes) || (op != 1 && name_bytes)) break;
     if (bytes && fread(path, 1, bytes, stdin) != bytes) break;
     path[bytes] = 0;
     if (device_bytes && fread(device_id, 1, device_bytes, stdin) != device_bytes) break;
     device_id[device_bytes] = 0;
+    // Prepare names the timecode port after the audio device: the opened port must carry this name.
+    if (name_bytes && fread(port_name, 1, name_bytes, stdin) != name_bytes) break;
+    port_name[name_bytes] = 0;
     UINT32 rate = read_u32(header + 20), device = read_u32(header + 24), fps = read_u32(header + 28);
     double start = read_f64(header + 32), end = read_f64(header + 40), offset = read_f64(header + 48), volume = read_f64(header + 56);
-    wchar_t wide[4096], device_wide[1024]; int count = 0, device_count = 0;
+    wchar_t wide[4096], device_wide[1024], name_wide[32]; int count = 0, device_count = 0, name_count = 0;
     double duration = read_f64(header + 64);
-    double base = read_f64(header + 80); UINT32 streaming = read_u32(header + 88);
-    BOOL valid = (op == 6 ? isfinite(duration) && duration >= 0 && duration <= 30000 : duration == 0) && read_u32(header + 92) == 0;
-    valid = valid && (op == 1 ? isfinite(base) && base >= 0 && base <= start && streaming <= 1 : base == 0 && streaming == 0);
+    // Prepare flags: bit 0 the PCM is still being decoded, bit 1 timecode without Full Frame messages.
+    double base = read_f64(header + 80); UINT32 flags = read_u32(header + 88);
+    BOOL valid = op == 6 ? isfinite(duration) && duration >= 0 && duration <= 30000 : duration == 0;
+    valid = valid && (op == 1 ? isfinite(base) && base >= 0 && base <= start && flags <= 3 : base == 0 && flags == 0);
     if (op == 1) {
       count = bytes ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (LPCCH)path, (int)bytes, wide, 4095) : 0;
       device_count = device_bytes ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (LPCCH)device_id, (int)device_bytes, device_wide, 1023) : 0;
+      name_count = name_bytes ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (LPCCH)port_name, (int)name_bytes, name_wide, 31) : 0;
       valid = valid && bytes && !memchr(path, 0, bytes) && count > 0 && device_count > 0 && !memchr(device_id, 0, device_bytes) && (device == 0xffffffffu || device <= 65535) &&
-        (rate == 44100 || rate == 48000) && (fps == 24 || fps == 25 || fps == 30) &&
+        (device == 0xffffffffu ? name_bytes == 0 : name_count > 0 && !memchr(port_name, 0, name_bytes)) &&
+        (rate == 44100 || rate == 48000) && (fps == 24 || fps == 25 || fps == 30 || fps == 2997) &&
         isfinite(start) && isfinite(end) && isfinite(offset) && isfinite(volume) && start >= 0 && end > start &&
         offset >= 0 && end + offset < 86400000 && volume >= 0 && volume <= 1;
     }
@@ -166,13 +172,14 @@ static DWORD WINAPI commands(void *unused) {
     if (bad_state) { acknowledge(request, generation, (int32_t)E_INVALIDARG); continue; }
     HRESULT result = E_INVALIDARG;
     if (op == 1) {
-      wide[count] = 0; device_wide[device_count] = 0;
-      result = audio_prepare(wide, rate, start, end, device_wide, base, streaming != 0);
+      wide[count] = 0; device_wide[device_count] = 0; name_wide[name_count] = 0;
+      result = audio_prepare(wide, rate, start, end, device_wide, base, (flags & 1) != 0);
       if (SUCCEEDED(result)) {
         EnterCriticalSection(&engine.lock); engine.offset_ms = offset; LeaveCriticalSection(&engine.lock);
         audio_volume(volume, 0);
         // MIDI is optional. Its independent failure is reported in health, never an audio failure.
-        midi_prepare(device, fps);
+        // 2997 asks for 29.97 drop-frame: 30 nominal frames a second.
+        midi_prepare(device, fps == 2997 ? 30 : fps, fps == 2997, (flags & 2) != 0, name_wide);
       }
     } else if (op == 2) result = audio_play();
     else if (op == 3) result = audio_pause();

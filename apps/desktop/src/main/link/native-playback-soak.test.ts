@@ -28,7 +28,7 @@ it.skipIf(!enabled)('原生 WASAPI / WinMM 独立回环：实际时钟误差、�
   await mkdir(directory, { recursive: true });
   const engineSha256 = createHash('sha256').update(await readFile(executable)).digest('hex');
   const sources = ['tools/playback-engine/engine.c', 'tools/playback-engine/engine.h', 'tools/playback-engine/audio.c', 'tools/playback-engine/midi.c', 'tools/playback-engine/devices.c', 'tools/playback-engine/probe.c',
-    'tools/playback-engine/signal.c', 'tools/playback-engine/signal.h', 'tools/playback-engine/signal-test.c',
+    'tools/playback-engine/signal.c', 'tools/playback-engine/signal.h', 'tools/playback-engine/timecode.c', 'tools/playback-engine/timecode.h', 'tools/playback-engine/signal-test.c',
     'tools/playback-engine/build.mjs', 'packages/schema/src/playback-engine.ts',
     'apps/desktop/src/main/link/native-playback-client.ts', 'apps/desktop/src/main/link/native-playback-protocol.ts', 'apps/desktop/src/main/link/native-playback-soak.test.ts'];
   await mkdir(join(directory, 'sources'));
@@ -115,7 +115,7 @@ it.skipIf(!enabled)('原生 WASAPI / WinMM 独立回环：实际时钟误差、�
   try {
     await expect.poll(() => ready, { timeout: 5000 }).toBe(true);
     await client.start();
-    await client.command({ protocol: 4, requestId: 1, generation: 1, kind: 'prepare', pcmPath, sampleRate: 48000, frameRate: 30, midiDevice: outputs[0]!.id, startMs: 1500, endMs: (seconds + 12) * 1000, offsetMs: 480000, volume: 1 });
+    await client.command({ protocol: 4, requestId: 1, generation: 1, kind: 'prepare', pcmPath, sampleRate: 48000, frameRate: 30, midiDevice: outputs[0]!.id, midiPortName: outputs[0]!.name, startMs: 1500, endMs: (seconds + 12) * 1000, offsetMs: 480000, volume: 1 });
     await client.command({ protocol: 4, requestId: 2, generation: 2, kind: 'play' });
     const started = performance.now(), end = started + seconds * 1000;
     startedAt = started;

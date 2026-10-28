@@ -10,7 +10,7 @@ vi.mock('./native-playback-client',()=>({readNativePlaybackDevices:()=>Promise.r
   start(){return Promise.resolve();} close(){state.closed();return Promise.resolve();}
   async command(command:NativePlaybackCommand){state.commands.push(command);await state.gate;}
 }}));
-vi.mock('./native-audio-cache',()=>({NativeAudioCache:class {prepare(){return Promise.resolve({path:'monitor.pcm',baseMs:0,streaming:true,release:()=>{state.released();return Promise.resolve();}});}}}));
+vi.mock('./native-audio-cache',()=>({NativeAudioCache:class {prepare(){return Promise.resolve({path:'monitor.pcm',baseMs:0,streaming:true,availableMs:10000,release:()=>{state.released();return Promise.resolve();}});}}}));
 beforeEach(()=>{state.commands=[];state.gate=Promise.resolve();state.closed.mockClear();state.released.mockClear();});
 const request:MusicMonitorRequest={version:1,sessionId:crypto.randomUUID(),projectPath:'D:/test/show.tblink',deviceId:'headphones',volume:.2,mode:'segment',source:{assetId:'audio',relativePath:'audio.wav',sha256:'a'.repeat(64),durationMs:10000},startMs:2000,endMs:6000,firstBeatMs:0,tempos:[{beat:0,bpm:128,numerator:4,denominator:4}]};
 function setup(){const unsubscribe=vi.fn();const changed=vi.fn();const report=vi.fn();let routeChanged:()=>void=()=>{throw new Error('尚未监听线路');};

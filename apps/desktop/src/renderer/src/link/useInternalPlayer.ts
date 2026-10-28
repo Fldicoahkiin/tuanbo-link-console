@@ -108,7 +108,7 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
         const profile = useIntegrationStore.getState().profile;
         const id = profile?.internalPlayer?.mtcOutputPortProfileId;
         const port = id ? profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output') : null;
-        return { lightingProfile: profile, outputDeviceId: audioConfiguration.deviceId, audioSampleRate: audioConfiguration.sampleRate, mtcPortName: port?.portName ?? null,
+        return { lightingProfile: profile, outputDeviceId: audioConfiguration.deviceId, audioSampleRate: audioConfiguration.sampleRate, mtcPortName: port?.portName ?? null, mtcSendMode: profile?.internalPlayer?.mtcSendMode ?? 'standard',
           preload: profile?.internalPlayer?.preload ?? true, fadeInMs: profile?.internalPlayer?.fadeInMs ?? 0, fadeOutMs: profile?.internalPlayer?.fadeOutMs ?? 500 };
       }, changed: view.publish,
       // A channel that cannot join repeats song after song until fixed: a warning the first time, then info.

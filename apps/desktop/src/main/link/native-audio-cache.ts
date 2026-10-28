@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { writeFileAtomically } from './atomic-file';
 import { NativeAudioDecode, type DecodeResult } from './native-audio-decode';
+import { decodeToleranceFrames } from './native-playback-range';
 
 const requestSchema = z.object({ sourcePath: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
   sampleRate: z.union([z.literal(44100), z.literal(48000)]), expectedDurationMs: z.number().finite().positive().max(86_400_000),
@@ -17,8 +18,10 @@ type Manifest = z.infer<typeof manifestSchema>;
 type Active = { key: string; path: string; cachedPath: string; metadata: string; decoder: NativeAudioDecode; count: number;
   completion: Promise<DecodeResult>; manifest: Manifest | null; published: boolean; releasing: boolean;
   reserve: number; frames: number; baseFrame: number; durationMs: number; sampleRate: 44100 | 48000 };
+/** `availableMs` is where the PCM is sure to reach: the decoded end of a cached file, or for a file still being
+ * decoded the shortest length the decode may come out at and still be accepted. Playback never ends past it. */
 export type NativeAudioLease = { path: string; sampleRate: 44100 | 48000; baseMs: number; streaming: boolean;
-  frames: number; durationMs: number; completion: Promise<DecodeResult>; release: () => Promise<void> };
+  frames: number; durationMs: number; availableMs: number; completion: Promise<DecodeResult>; release: () => Promise<void> };
 
 /** Original audio is fingerprinted before output. A private growing PCM file
  * starts playback after a two-second prefill, independently of total duration.
@@ -103,7 +106,7 @@ export class NativeAudioCache {
     try {
       const source = await stat(request.sourcePath), pcm = await stat(active.path);
       if (initial.size !== source.size || initial.mtimeMs !== source.mtimeMs || initial.ino !== source.ino) throw new Error('解码过程中音频文件变了，这次结果不能用');
-      if (!pcm.size || pcm.size % 4 || pcm.size > reserve || pcm.size / 4 + request.sampleRate / 1000 < expectedFrames) throw new Error('解码出的音频长度和工程记录不一致');
+      if (!pcm.size || pcm.size % 4 || pcm.size > reserve || pcm.size / 4 < expectedFrames - decodeToleranceFrames(request.sampleRate)) throw new Error('解码出的音频长度和工程记录对不上');
       active.manifest = { version: 2, key: active.key, sourceSha256: request.sourceSha256, baseFrame,
         pcmSha256: await digest(active.path, new AbortController().signal), frames: pcm.size / 4, sampleRate: request.sampleRate, bytes: pcm.size, lastUsed: Date.now() };
       const handle = await open(active.path, 'r+'); try { await handle.sync(); } finally { await handle.close(); }
@@ -131,6 +134,7 @@ export class NativeAudioCache {
   private activeLease(active: Active): NativeAudioLease {
     return { get path() { return active.published ? active.cachedPath : active.path; }, sampleRate: active.sampleRate,
       streaming: true, baseMs: active.baseFrame * 1000 / active.sampleRate, frames: active.frames, durationMs: active.durationMs,
+      availableMs: (active.baseFrame + active.frames - decodeToleranceFrames(active.sampleRate)) * 1000 / active.sampleRate,
       completion: active.completion, release: this.onceRelease(() => this.releaseActive(active)) };
   }
 
@@ -138,6 +142,7 @@ export class NativeAudioCache {
     this.leases.set(key, (this.leases.get(key) ?? 0) + 1);
     return { path, sampleRate: manifest.sampleRate, baseMs: manifest.baseFrame * 1000 / manifest.sampleRate, streaming: false,
       frames: manifest.frames, durationMs: (manifest.baseFrame + manifest.frames) * 1000 / manifest.sampleRate,
+      availableMs: (manifest.baseFrame + manifest.frames) * 1000 / manifest.sampleRate,
       completion: Promise.resolve({ ok: true }), release: this.onceRelease(() => {
         const count = (this.leases.get(key) ?? 1) - 1; if (count) this.leases.set(key, count); else this.leases.delete(key); return Promise.resolve();
       }) };

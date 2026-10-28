@@ -33,7 +33,7 @@ it.skipIf(process.env.TBLINK_NATIVE_ENGINE_TEST !== '1')('真实引擎：时间�
   try {
     await client.start();
     await client.command({ protocol: 4, requestId: 1, generation: 1, kind: 'prepare', pcmPath: path, sampleRate: 48000, frameRate: 30,
-      midiDevice: port[0]!.id, startMs: 0, endMs: 9000, offsetMs: 480000, volume: 1 });
+      midiDevice: port[0]!.id, midiPortName: port[0]!.name, startMs: 0, endMs: 9000, offsetMs: 480000, volume: 1 });
     await client.command({ protocol: 4, requestId: 2, generation: 2, kind: 'play' });
     await expect.poll(() => client.clock?.midiSent ?? 0).toBeGreaterThan(40);
     const before = clocks;

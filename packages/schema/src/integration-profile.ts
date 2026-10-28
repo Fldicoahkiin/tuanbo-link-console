@@ -48,6 +48,8 @@ export const integrationProfileSchema = z.object({
     fadeInMs: z.number().int().min(0).max(30_000).optional(),
     fadeOutMs: z.number().int().min(0).max(30_000).optional(),
     mtcOutputPortProfileId: z.string().min(1).nullable().default(null),
+    /** How timecode relocates the console: standard sends a Full Frame first, quarter-frames sends quarter frames only. */
+    mtcSendMode: z.enum(['standard', 'quarter-frames']).optional(),
     audioOutputDeviceId: z.string().default('default'),
     audioSampleRate: z.union([z.literal(44100), z.literal(48000)]).optional()
   }).optional(),

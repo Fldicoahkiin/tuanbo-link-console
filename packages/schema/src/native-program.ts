@@ -15,7 +15,7 @@ export const programPlayerStateSchema = z.object({
 export type ProgramPlayerState = z.infer<typeof programPlayerStateSchema>;
 export const nativeProgramConfigurationSchema = z.object({
   outputDeviceId: z.string().min(1), audioSampleRate: z.union([z.literal(44100), z.literal(48000)]).optional(),
-  mtcPortName: z.string().nullable(), preload: z.boolean().optional(), fadeInMs: time.optional(), fadeOutMs: time.optional(),
+  mtcPortName: z.string().nullable(), mtcSendMode: z.enum(['standard', 'quarter-frames']).optional(), preload: z.boolean().optional(), fadeInMs: time.optional(), fadeOutMs: time.optional(),
   lightingProfile: integrationProfileSchema.nullable().optional(), preciseSeeking: z.boolean()
 }).strict();
 export type NativeProgramConfiguration = z.infer<typeof nativeProgramConfigurationSchema>;

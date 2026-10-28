@@ -123,6 +123,16 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
       await linkDesktopViewModel.saveIntegrationProfile({ profile: next }); useIntegrationStore.getState().setProfile(next);
     } catch (error) { setError(String(error)); notify(String(error), 'error'); } finally { setSaving(false); onBusy(false); }
   };
+  const sendMode = profile?.internalPlayer?.mtcSendMode ?? 'standard';
+  const chooseSendMode = async (mtcSendMode: 'standard' | 'quarter-frames'): Promise<void> => {
+    if (disabled || saving) return;
+    setSaving(true); onBusy(true); setError('');
+    try {
+      const current = useIntegrationStore.getState().profile ?? createDefaultIntegrationProfile();
+      const next = { ...current, updatedAt: new Date().toISOString(), internalPlayer: { audioOutputDeviceId: 'default', mtcOutputPortProfileId: null, ...current.internalPlayer, mtcSendMode } };
+      await linkDesktopViewModel.saveIntegrationProfile({ profile: next }); useIntegrationStore.getState().setProfile(next); setSavedField('mode');
+    } catch (error) { setError(String(error)); notify(String(error), 'error'); } finally { setSaving(false); onBusy(false); }
+  };
   return <div className="player-connections panel"><h3 className="device-form-title">音频输出</h3>
     <p className="settings-note">当前播放引擎：{internalAudioEngineLabel(choice)}</p>
     {choice.blocked ? <p className="device-error" role="alert">{choice.blocked}</p> : null}
@@ -131,6 +141,8 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
     <label><span>采样率</span><select aria-label="音频采样率" disabled={disabled || saving} value={profile?.internalPlayer?.audioSampleRate ?? 48000} onChange={(event) => void save(port, chosenOutput, inputName, profile?.internalPlayer?.doubleClickPlayback ?? false, event.currentTarget.value === '44100' ? 44100 : 48000)}><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select>{savedField === 'rate' ? <small className="field-save-status" role="status">已保存</small> : null}</label>
 <h3 className="device-form-title">MIDI 时间码</h3>
 <label><span>时间码输出</span><select aria-label="灯光 MIDI 输出" disabled={disabled || saving} value={port} onChange={(event) => void chooseMtcPort(event.currentTarget.value)}><option value="">自动检测控台接口</option>{inventory.options.map(option => <option key={option.name} value={option.name} disabled={!option.available && !inventory.windowsOnly.includes(option.name)}>{option.name}{inventory.windowsOnly.includes(option.name) ? '（Windows 原生）' : option.reason ? `（${option.reason}）` : ''}</option>)}</select>{savedField === 'mtc' ? <small className="field-save-status" role="status">已保存，播放时再打开端口</small> : null}</label>
+<label><span>发送方式</span><select aria-label="时间码发送方式" disabled={disabled || saving} value={sendMode} onChange={(event) => void chooseSendMode(event.currentTarget.value === 'quarter-frames' ? 'quarter-frames' : 'standard')}><option value="standard">标准（先发整帧定位）</option><option value="quarter-frames">只发四分之一帧</option></select>{savedField === 'mode' ? <small className="field-save-status" role="status">已保存，下一首起生效</small> : null}</label>
+    <p className="settings-note">控台收不到时间码时，可以改成“只发四分之一帧”再播一首试试：有的 USB MIDI 接口传不了整帧消息。控台上 Timecode 窗口的时间在走，就说明收到了。</p>
     <p className="settings-note">用来给灯光控台发送 MTC 时间码，支持 loopMIDI 虚拟端口和 USB MIDI 设备。{outputs.length === 0 ? '现在没有找到可用的输出设备。' : `已找到 ${new Set(outputs).size} 个输出端口。`}</p>
     <p className="settings-note">由联动台代替 P1 播放时，请先完全退出 P1（否则会占用同一个 MIDI 接口），再刷新端口。</p>
     {inventory.windowsOnly.length ? <p className="settings-note">带“Windows 原生”标记的接口可以直接选，选后会改用 Windows 原生方式播放音频和 MIDI。选好后点“一键连接”检查接口。</p> : null}

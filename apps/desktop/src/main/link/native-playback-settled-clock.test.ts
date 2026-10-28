@@ -29,7 +29,7 @@ function fixture() {
 it('切歌准备：确认前收到的同编号旧状态（上一首停止位置）不算准备结果，等到真正就绪的时钟', async () => {
   const f = fixture(); await f.start();
   const prepared = f.client.command({ protocol: 4, requestId: 1, generation: 2, kind: 'prepare', pcmPath: 'C:\\cache\\song.pcm', sampleRate: 48000,
-    frameRate: 30, midiDevice: 0, startMs: 1000, endMs: 60000, offsetMs: 480000, volume: 1 });
+    frameRate: 30, midiDevice: 0, midiPortName: 'test-mtc', startMs: 1000, endMs: 60000, offsetMs: 480000, volume: 1 });
   // The previous song's stop left the device stopped at 9 s; this report arrived before the acknowledgement.
   f.clock(2, 'stopped', 9000);
   f.emit({ protocol: 4, kind: 'ack', requestId: 1, generation: 2, ok: true, code: 0 });

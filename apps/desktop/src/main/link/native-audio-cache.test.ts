@@ -23,12 +23,13 @@ it('实际 FFmpeg 分块解码保留整个原音源，不重复裁剪；复用�
   const cache = new NativeAudioCache(join(directory, 'cache'), ffmpeg);
   const lease = await cache.prepare(input, new AbortController().signal);
   expect(lease.frames).toBe(96000); expect(lease.durationMs).toBe(2000);
+  expect(lease.availableMs).toBe(1999);
   expect(await lease.completion).toEqual({ ok: true });
   const pcm = await readFile(lease.path);
   expect(pcm.readInt16LE(0)).toBe(512); expect(pcm.readInt16LE(1500 * 192)).toBe(-512);
   const initial = await stat(lease.path); await lease.release();
   const restored = await cache.prepare(input, new AbortController().signal);
-  expect((await stat(restored.path)).mtimeMs).toBe(initial.mtimeMs); await restored.release();
+  expect((await stat(restored.path)).mtimeMs).toBe(initial.mtimeMs); expect(restored.availableMs).toBe(2000); await restored.release();
   await writeFile(restored.path, Buffer.alloc(4));
   await expect(cache.prepare(input, new AbortController().signal)).rejects.toThrow('缓存校验失败');
   expect(createHash('sha256').update(await readFile(input.sourcePath)).digest('hex')).toBe(input.sourceSha256);
@@ -55,7 +56,7 @@ it('预填充完成不能把声明时长错误的音源冒充完整缓存', asyn
   const input = await source(directory, 144);
   const lease = await new NativeAudioCache(join(directory, 'cache'), ffmpeg).prepare({ ...input, expectedDurationMs: 4000 }, new AbortController().signal);
   const result = await lease.completion; expect(result.ok).toBe(false);
-  if (!result.ok) expect(result.error.message).toContain('长度和工程记录不一致');
+  if (!result.ok) expect(result.error.message).toContain('长度和工程记录对不上');
   await lease.release(); expect(lease.path).toMatch(/\.partial$/);
 });
 
