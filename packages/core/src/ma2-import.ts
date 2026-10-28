@@ -1,7 +1,7 @@
 import { createLightingDocument, lightingDocumentSchema, ma2ExecutorPreviewSchema, ma2TimecodePreviewSchema, parseLinkProject, type LightingDocument, type LightingTrack, type Ma2ExecutorPreview, type Ma2TimecodePreview } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { LightingTempoMap } from './lighting-edit';
-import { programTimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
+import { MA2_FRAME_MS, programTimeOrigin, withMa2TimeOrigin } from './ma2-time-origin';
 
 export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePreview, initialDocument?: LightingDocument): LinkCommand {
   const input = ma2TimecodePreviewSchema.parse(value);
@@ -12,7 +12,9 @@ export function importMa2TimecodeCommand(itemId: string, value: Ma2TimecodePrevi
     const item = next.rundown.find((entry) => entry.id === itemId);
     if (!item) throw new Error('接收 MA2 数据的节目不存在');
     const originMs = programTimeOrigin(item, input.timeOriginMs ?? 0);
-    if (input.timing?.absoluteEventTimesMs.some(time => time < originMs - 1e-6 || item.referenceAudio && time >= originMs + item.referenceAudio.durationMs)) throw new Error('控台事件超出了歌曲的原始时间范围，请检查关联（没有丢弃事件，也没有改起点）');
+    // A show pairs with a song less than one frame apart (2026-10-26), so an event at the show's start may
+    // sit just before the song's; events after the song's end are kept as they are on the console.
+    if (input.timing?.absoluteEventTimesMs.some(time => time < originMs - MA2_FRAME_MS)) throw new Error('控台上有比歌曲起点还早的事件，请检查歌曲的 MTC 起始码（没有丢弃事件，也没有改起点）');
     const preview = withMa2TimeOrigin(input, originMs);
     if (originMs > 0) item.playback ??= { volume: item.p1Media?.volume ?? 100, startMs: 0, endMs: 0, mtcOffsetMs: originMs, shortcut: item.p1Media?.shortcut ?? '' };
     const current = item.lighting ?? structuredClone(initial ?? createLightingDocument());

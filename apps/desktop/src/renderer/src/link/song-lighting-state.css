@@ -1,5 +1,0 @@
-/* A song's lighting state on the rundown and beside the lighting transport. */
-.song-lighting-state { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: var(--r-pill); font-size: var(--text-caption); line-height: 16px; white-space: nowrap; color: var(--text-secondary); background: var(--surface-raised); }
-.song-lighting-state[data-state=ready] { color: var(--success-text); background: var(--success-soft); }
-.song-lighting-state[data-state=editing] { color: var(--warning-text); background: var(--warning-soft); }
-.song-lighting-state[data-state=attention] { color: var(--danger); background: var(--danger-soft); }

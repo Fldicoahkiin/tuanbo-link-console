@@ -26,7 +26,11 @@ export function parseP1TimeOrigin(value: string): number {
   return milliseconds;
 }
 
-/** Keep native XML intact; translate only the song-relative editor positions. */
+/** One grandMA2 Timecode frame: shows keep their times in 1/30 s. */
+export const MA2_FRAME_MS = 1000 / 30;
+
+/** Keep native XML intact; translate only the song-relative editor positions. An event less than one
+ * frame before the song's start is the show's start frame and lands on the song's start. */
 export function withMa2TimeOrigin(input: Ma2TimecodePreview, originMs: number): Ma2TimecodePreview {
   if (!Number.isSafeInteger(originMs) || originMs < 0 || originMs >= 86400000) throw new Error('歌曲时间码起点无效');
   const preview = ma2TimecodePreviewSchema.parse(input);
@@ -35,7 +39,7 @@ export function withMa2TimeOrigin(input: Ma2TimecodePreview, originMs: number): 
   for (const track of preview.document.tracks) for (const clip of track.clips) {
     if (clip.timeLock !== 'time') throw new Error('MA2 导入必须使用绝对时间片段');
     const events = clip.events.map(event => ({ ...event, at: event.at + clip.start + shift }));
-    if (events.some(event => event.at < -1e-6)) throw new Error('控台上有比歌曲起点还早的事件，请拆分跨歌曲的时间线或重新关联（不能丢弃事件）');
+    if (events.some(event => event.at < -MA2_FRAME_MS)) throw new Error('控台上有比歌曲起点还早的事件，请拆分跨歌曲的时间线或重新关联（不能丢弃事件）');
     clip.start = 0;
     clip.events = events.map(event => ({ ...event, at: Math.max(0, event.at) }));
     clip.duration = clip.events.reduce((end, event) => Math.max(end, event.at + 1), 1);

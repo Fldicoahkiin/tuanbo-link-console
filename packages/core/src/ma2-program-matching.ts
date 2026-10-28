@@ -1,46 +1,118 @@
 import type { LinkProject, Ma2Catalog } from '@tb/schema';
+import { formatMtcOffset } from './mtc-timecode';
 import { programTimeOrigin } from './ma2-time-origin';
 
 type Ma2CatalogEntry = Ma2Catalog['entries'][number];
-/** The first Timecode event (offset added, 30 FPS) outside the song's audio, or undefined when all fit. */
-export function ma2EventOutsideSong(entry: Ma2CatalogEntry, startMs: number, durationMs: number): Ma2CatalogEntry['events'][number] | undefined {
-  return entry.events.find(event => {
-    const time = (Number(event.time) + Number(entry.offset ?? 0)) * 1000 / 30;
-    return time < startMs || time >= startMs + durationMs;
-  });
+
+/** MA2 keeps a show's offset and event times in 1/30 s whatever its frame format. */
+const TICKS_PER_SECOND = 30;
+
+/** The show's start in console ticks, or null when the console wrote something else. */
+export function ma2ShowStartTicks(entry: Pick<Ma2CatalogEntry, 'offset'>): number | null {
+  const text = entry.offset ?? '0';
+  return /^\d+(?:\.\d+)?$/.test(text) ? Number(text) : null;
 }
 
-export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog): { pairs: Record<number, string>; unresolved: { target: number; reason: string }[] } {
-  const pairs: Record<number, string> = {};
-  const unresolved: { target: number; reason: string }[] = [];
-  const originErrors: string[] = [];
-  const songs = project.rundown.filter(item => item.referenceAudio && !item.p1UnavailableSourceKey && (item.p1Media || item.playback)).flatMap(item => {
-    if (item.p1Media?.importedFullSource) { originErrors.push(`${item.title}：P1 裁剪未按原范围导入，请检查音频位置`); return []; }
+/**
+ * A song and a console Timecode show belong together when they start on the same frame (2026-10-26,
+ * lighting workflow rule 3). Less than one frame apart counts as the same start: a P1 start such as
+ * 11820.02 s and a show offset in whole 1/30 s name the same frame.
+ */
+export function sameMtcStart(songStartMs: number, showTicks: number): boolean {
+  return Math.abs(songStartMs * TICKS_PER_SECOND / 1000 - showTicks) < 1;
+}
+
+/** The Timecode events (offset added) after the end of the song's audio: kept and shown, never a reason not to pair. */
+export function ma2EventsAfterSong(entry: Ma2CatalogEntry, startMs: number, durationMs: number): Ma2CatalogEntry['events'] {
+  const start = ma2ShowStartTicks(entry);
+  if (start === null) return [];
+  return entry.events.filter(event => /^\d+(?:\.\d+)?$/.test(event.time) && (Number(event.time) + start) * 1000 / TICKS_PER_SECOND >= startMs + durationMs);
+}
+
+export type Ma2StartMatch = {
+  /** Console show → song: the show starts where exactly one song starts, and that song starts no other show. */
+  pairs: Record<number, string>;
+  /** Shows with events that are not paired, and why. */
+  unresolved: { target: number; reason: string }[];
+  /** Songs that start where two or more console shows start: the shows, in number order. Nothing is guessed. */
+  duplicateStarts: Record<string, number[]>;
+  /** Paired shows with something to know that does not stop the pairing. */
+  notes: { target: number; text: string }[];
+};
+
+/**
+ * Which console Timecode show runs with which song, by the MTC start alone (2026-10-26). The show's
+ * number counts only for a song that already took that show's Cues (a binding): the show must still
+ * start where the song starts. Names, the console Show, the audio and the Cue times play no part.
+ * A song's own show (made by this software for a new song) belongs to that song and is not matched.
+ */
+export function matchMa2Programs(project: LinkProject, catalog: Ma2Catalog): Ma2StartMatch {
+  const unresolved: Ma2StartMatch['unresolved'] = [];
+  const notes: Ma2StartMatch['notes'] = [];
+  const frameRate = project.timebase.frameRate;
+  const songs = project.rundown.flatMap(item => {
+    if (!item.referenceAudio || item.p1UnavailableSourceKey || !item.p1Media && !item.playback || item.lighting?.consoleSong) return [];
     try { return [{ item, start: programTimeOrigin(item) }]; }
-    catch (error) { originErrors.push(`${item.title}：${error instanceof Error ? error.message : String(error)}`); return []; }
+    catch { return []; }
   });
+  const own = new Set(project.rundown.flatMap(item => item.lighting?.consoleSong?.timecode ? [item.lighting.consoleSong.timecode.number] : []));
+  const bound = new Map(project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).map(binding => [binding.timecode, item.id] as const)));
+  const placedAt = new Map(project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).map(binding => [binding.timecode, binding.timeOriginMs ?? 0] as const)));
+  const found = new Map<number, string>();
   for (const entry of catalog.entries) {
-    if (entry.eventCount === 0) continue;
+    if (own.has(entry.target)) continue;
+    const owner = bound.get(entry.target);
+    if (!owner && entry.eventCount === 0) continue;
     if (entry.error) { unresolved.push({ target: entry.target, reason: entry.error }); continue; }
-    if (project.rundown.some(item => item.lighting?.ma2Bindings?.some(binding => binding.timecode === entry.target))) continue;
-    if (entry.frameFormat !== '30 FPS' || !/^\d+(?:\.\d+)?$/.test(entry.offset ?? '0') || entry.events.some(event => !/^\d+(?:\.\d+)?$/.test(event.time))) { unresolved.push({ target: entry.target, reason: '还不支持这种时间格式，请手动确认' }); continue; }
-    const fits = ({ item, start }: typeof songs[number]): boolean => entry.events.length > 0 && !ma2EventOutsideSong(entry, start, item.referenceAudio!.durationMs);
-    const titles = (list: typeof songs): string => list.map(({ item }) => `“${item.title}”`).join('、');
-    // A song whose start (in 30 FPS frames) equals the Timecode offset is paired first; several such
-    // songs are told apart by their events and then by the Timecode length, never by name or order.
-    const sameStart = songs.filter(({ start }) => Math.round(start * 30 / 1000) === Number(entry.offset ?? 0));
-    if (sameStart.length) {
-      const inside = sameStart.filter(fits);
-      const length = Number(entry.length ?? 0) * 1000 / 30;
-      const sized = inside.length > 1 && length > 0 ? inside.filter(({ item }) => length <= item.referenceAudio!.durationMs) : inside;
-      if (sized.length === 1) { pairs[entry.target] = sized[0]!.item.id; continue; }
-      unresolved.push({ target: entry.target, reason: inside.length ? `有多首歌起始码相同（${titles(sized.length ? sized : inside)}），无法区分，请确认后手动选择歌曲` : `起始码和 ${titles(sameStart)} 相同，但事件超出了歌曲时长，请检查起点或拆分时间线` });
+    const start = ma2ShowStartTicks(entry);
+    if (start === null) { unresolved.push({ target: entry.target, reason: `控台写的起点“${entry.offset ?? ''}”读不懂，没有对歌曲` }); continue; }
+    const code = formatMtcOffset(start * 1000 / TICKS_PER_SECOND, frameRate);
+    if (owner) {
+      const song = songs.find(value => value.item.id === owner);
+      // The Cues were put on the song from the start they had then; both must still be the show's start.
+      const placed = placedAt.get(entry.target) ?? 0;
+      if (song && sameMtcStart(song.start, start) && sameMtcStart(placed, start)) found.set(entry.target, owner);
+      else unresolved.push({ target: entry.target, reason: !song
+        ? `「${project.rundown.find(item => item.id === owner)?.title ?? owner}」还没有可用的 MTC 起始码，已放进歌曲的 Cue 都保留，先不往控台写`
+        : !sameMtcStart(song.start, start)
+          ? `控台 Timecode ${entry.target} 从 ${code} 开始，和「${song.item.title}」的 MTC 起始码 ${formatMtcOffset(song.start, frameRate)} 对不上。已放进歌曲的 Cue 都保留，这首歌先不往控台写`
+          : `「${song.item.title}」里 Timecode ${entry.target} 的 Cue 是按起点 ${formatMtcOffset(placed, frameRate)} 放的，和现在的 ${code} 对不上。Cue 都保留，这首歌先不往控台写；请在控台时间线里用已读取的内容刷新` });
       continue;
     }
-    const candidates = songs.filter(fits);
-    const selected = candidates.length === 1 ? candidates : [];
-    if (selected.length !== 1) { unresolved.push({ target: entry.target, reason: candidates.length ? '歌曲的原始时间区间有重叠，请确认后手动选择歌曲（不会按歌名或序号硬配）' : `没有哪首已确认的歌曲能完整包含这些事件，请检查起点或拆分时间线${originErrors.length ? `；${originErrors.join('；')}` : ''}` }); continue; }
-    pairs[entry.target] = selected[0]!.item.id;
+    const same = songs.filter(song => sameMtcStart(song.start, start));
+    if (same.length === 1) found.set(entry.target, same[0]!.item.id);
+    else if (same.length > 1) unresolved.push({ target: entry.target, reason: `有 ${same.length} 首歌的 MTC 起始码都是 ${code}（${same.map(song => `「${song.item.title}」`).join('、')}），分不清是哪一首，没有对上。请改开其中几首的起始码` });
   }
-  return { pairs, unresolved };
+  for (const [target, itemId] of bound) if (!own.has(target) && !catalog.entries.some(entry => entry.target === target)) {
+    unresolved.push({ target, reason: `新读取的控台里没有 Timecode ${target}。「${project.rundown.find(item => item.id === itemId)?.title ?? itemId}」已放进的 Cue 都保留，这首歌先不往控台写` });
+  }
+  const bySong = new Map<string, number[]>();
+  for (const [target, itemId] of found) bySong.set(itemId, [...bySong.get(itemId) ?? [], target]);
+  const pairs: Record<number, string> = {};
+  const duplicateStarts: Record<string, number[]> = {};
+  for (const [itemId, targets] of bySong) {
+    // The song already holds the Cues of a show that no longer starts with it: another show starting there
+    // is not taken over silently, or the song would hold two shows with different starts.
+    const lost = [...bound].filter(([target, owner]) => owner === itemId && !found.has(target)).map(([target]) => target);
+    if (lost.length) {
+      const title = project.rundown.find(item => item.id === itemId)?.title ?? itemId;
+      for (const target of targets.filter(value => !bound.has(value))) unresolved.push({ target, reason: `Timecode ${target} 和「${title}」起点一样，但这首歌已经放进了 Timecode ${lost.join('、')} 的 Cue，没有自动换过去。要换用 Timecode ${target}，请先在控台时间线里解除 Timecode ${lost.join('、')} 的关联` });
+      targets.splice(0, targets.length, ...targets.filter(value => bound.has(value)));
+      if (!targets.length) continue;
+    }
+    const sorted = targets.sort((a, b) => a - b);
+    if (sorted.length > 1) {
+      duplicateStarts[itemId] = sorted;
+      const title = project.rundown.find(item => item.id === itemId)?.title ?? itemId;
+      for (const target of sorted) unresolved.push({ target, reason: `控台上 Timecode ${sorted.join('、')} 的起点相同，都和「${title}」的起始码一样，分不清用哪一个，没有对上。请在控台上改开它们的起点，或删掉多余的` });
+      continue;
+    }
+    const target = sorted[0]!;
+    pairs[target] = itemId;
+    const song = songs.find(value => value.item.id === itemId)!;
+    const entry = catalog.entries.find(value => value.target === target)!;
+    const after = ma2EventsAfterSong(entry, song.start, song.item.referenceAudio!.durationMs);
+    if (after.length) notes.push({ target, text: `控台 Timecode ${target} 有 ${after.length} 个事件在歌曲结束之后，播放到歌曲结束就不会触发` });
+  }
+  return { pairs, unresolved: unresolved.sort((a, b) => a.target - b.target), duplicateStarts, notes };
 }

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { confirmMa2PairingCommand, importMa2ProgramsCommand, reconcileMa2ReadState, saveMa2ReadStateCommand, setItemPlaybackCommand, type LinkCommand } from '@tb/core/link';
+import { importMa2ProgramsCommand, ma2SongPairs, reconcileMa2ReadState, saveMa2ReadStateCommand } from '@tb/core/link';
 import { ma2CatalogSchema, type Ma2CatalogRequest, type Ma2ReadProgress, type Ma2ReadState } from '@tb/schema';
 import { useDocumentStore } from './document-store';
 import { readMa2Programs, type Ma2ImportFailure } from '../view-models/read-ma2-programs';
@@ -71,48 +71,30 @@ async function runScan(source: Ma2CatalogRequest, retry: boolean): Promise<void>
 }
 
 /**
- * Puts the Cues of paired console Timecode shows on their songs' timelines. With `itemId`, the
- * operator just chose that song for `target`: confirming and importing are one undoable step, and a
- * song that has no MTC start yet takes the show's start, so the song sends the timecode the show runs on.
+ * Puts the Cues of the console Timecode shows that start where a song starts on those songs' timelines
+ * (2026-10-26: by the MTC start alone, nothing to confirm). With `target`, only that show. A show already
+ * on a song, or one whose read is incomplete, is left as it is; why a show could not go in is kept with it.
  */
-export async function importCachedMa2(target?: number, itemId?: string): Promise<{ imported: string[]; failures: Ma2ImportFailure[] }> {
+export async function importCachedMa2(target?: number): Promise<{ imported: string[]; failures: Ma2ImportFailure[] }> {
   const before = useDocumentStore.getState();
   const project = before.project; const state = project?.ma2ReadState;
   if (!project || !state) return { imported: [], failures: [] };
-  if (useMa2ReadStore.getState().busy) throw new Error('还在读取中，读完或取消后才能关联已读的条目');
-  if (state.catalog.sourceUnverified || state.catalog.incomplete && state.catalog.sourceUnverified === undefined) throw new Error('控台目录还没确认，已读的内容可以查看；确认后才能关联');
+  if (useMa2ReadStore.getState().busy) throw new Error('还在读取中，读完或取消后才能把 Cue 放进歌曲');
+  if (state.catalog.sourceUnverified || state.catalog.incomplete && state.catalog.sourceUnverified === undefined) throw new Error('控台目录还没确认，已读的内容可以查看；读完整后才能放进歌曲');
   const bound = (number: number): boolean => project.rundown.some(item => item.lighting?.ma2Bindings?.some(binding => binding.timecode === number));
-  if (itemId !== undefined && (target === undefined || bound(target))) throw new Error(target === undefined ? '请选择控台时间线' : `Timecode ${target} 已关联歌曲，请先解除关联`);
-  const pairs: [string, string][] = itemId !== undefined && target !== undefined ? [[String(target), itemId]]
-    : Object.entries(state.pairs).filter(([number, id]) => id && state.pairings?.[number]?.status !== 'stale' && (target === undefined || Number(number) === target) && !bound(Number(number)));
-  const chosen = itemId === undefined ? undefined : project.rundown.find(item => item.id === itemId);
-  const show = target === undefined ? undefined : state.catalog.entries.find(value => value.target === target);
-  // MA2 keeps a show's offset in 1/30 s whatever its frame format.
-  const startCommand: LinkCommand | null = chosen && !chosen.playback && !chosen.p1Media && show && /^\d+(?:\.\d+)?$/.test(show.offset ?? '0')
-    ? setItemPlaybackCommand(chosen.id, { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: Math.round(Number(show.offset ?? 0) * 1000 / 30), shortcut: '' }) : null;
-  const base = startCommand ? startCommand.execute(project) : project;
-  const result = await readMa2Programs(base, pairs, number => {
+  const pairs = Object.entries(ma2SongPairs(project).pairs).filter(([number]) => (target === undefined || Number(number) === target) && !bound(Number(number)));
+  const result = await readMa2Programs(project, pairs, number => {
     const entry = state.catalog.entries.find(value => value.target === number);
     const pairedItem = pairs.find(([key]) => Number(key) === number)?.[1];
     if (state.detachedBindings?.some(value => value.itemId === pairedItem && value.binding.timecode === number)) throw new Error('这首歌有已归档的本地修改，请先“恢复归档关联”');
     if (!entry?.preview || entry.error) throw new Error(entry?.error ?? entry?.conversionError ?? '这一条还没读取完整，请用“只补读未完成项”');
-    // Validate inside the per-entry read operation so one bad cached pairing is
-    // recorded with its Timecode instead of rolling back all usable selections.
-    if (!pairedItem) throw new Error(`Timecode ${number} 还没选择对应的歌曲`);
-    confirmMa2PairingCommand(number, pairedItem).execute(base);
     return Promise.resolve(entry.preview);
   }, () => { if (useDocumentStore.getState().project !== project || useDocumentStore.getState().documentId !== before.documentId) throw new Error('工程变了，请重新应用读取结果'); }, () => undefined);
-  const message = `${result.selections.length} 条已关联 · ${result.selections.filter(value => value.preview.unconverted.length).length} 条含控台原样动作 · ${result.failures.length} 条需处理`;
+  const message = `${result.selections.length} 条已放进歌曲 · ${result.selections.filter(value => value.preview.unconverted.length).length} 条含控台原样动作 · ${result.failures.length} 条需处理`;
   const handled = new Set(pairs.map(([number]) => Number(number)));
   const cacheCommand = saveMa2ReadStateCommand({ ...state, failures: [...state.failures.filter(failure => !handled.has(failure.target)), ...result.failures], message });
   const importCommand = result.selections.length ? importMa2ProgramsCommand(result.selections) : null;
-  // The pairings were checked against this project, including the start the chosen song takes.
-  if (useDocumentStore.getState().project !== project) throw new Error('工程变了，请重新关联');
-  before.executeForDocument(before.documentId, { ...cacheCommand, label: itemId ? '关联控台时间线并放到歌曲时间线' : '关联缓存中的控台时间线', execute: value => {
-    let next = startCommand && importCommand ? startCommand.execute(value) : value;
-    next = cacheCommand.execute(importCommand ? importCommand.execute(next) : next);
-    for (const selection of result.selections) next = confirmMa2PairingCommand(selection.preview.target, selection.itemId).execute(next);
-    return next;
-  } });
+  if (useDocumentStore.getState().project !== project) throw new Error('工程变了，请重新放进歌曲');
+  before.executeForDocument(before.documentId, { ...cacheCommand, label: '把对上的控台时间线放进歌曲', execute: value => cacheCommand.execute(importCommand ? importCommand.execute(value) : value) });
   return { imported: result.selections.map(selection => selection.itemId), failures: result.failures };
 }

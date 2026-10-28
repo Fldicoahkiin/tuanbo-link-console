@@ -1,69 +1,89 @@
 import { parseLinkProject, type LinkProject, type Ma2Catalog, type Ma2ReadState } from '@tb/schema';
 import type { LinkCommand } from './link-command';
-import { ma2EventOutsideSong, matchMa2Programs } from './ma2-program-matching';
-import { programTimeOrigin } from './ma2-time-origin';
+import { ma2ShowStartTicks, matchMa2Programs, sameMtcStart, type Ma2StartMatch } from './ma2-program-matching';
 import { importMa2TimecodeCommand } from './ma2-import';
+import { formatMtcOffset } from './mtc-timecode';
+import { programTimeOrigin } from './ma2-time-origin';
+
+const noMatch: Ma2StartMatch = { pairs: {}, unresolved: [], duplicateStarts: {}, notes: [] };
+const matches = new WeakMap<LinkProject, Ma2StartMatch>();
 
 /**
- * What a confirmed pairing rests on: the console, the Show, the Timecode's frame format and start, and
- * the song's start and audio. A pairing is made by the MTC start alone (2026-10-26), so the times of
- * the Cues inside the timeline are not part of it: moving a Cue in the software or on the console and
- * reading the console again keeps the confirmation. The bridge session and console version are not
- * part of it either, so a restarted plugin or an upgrade keeps confirmations.
+ * Which console Timecode show runs with which song: worked out from the last console read the project
+ * keeps and the songs' MTC starts, every time it is asked for a new project version (2026-10-26, rule 3).
+ * Nothing is confirmed by hand and nothing goes stale: a new console Show name, a reopened project or an
+ * earlier version's stored pairing changes nothing, only the starts and the show numbers count.
  */
-export function ma2PairingEvidence(project: LinkProject, source: string, catalog: Ma2Catalog, target: number, itemId: string): string {
+export function ma2SongPairs(project: LinkProject): Ma2StartMatch {
+  const catalog = project.ma2ReadState?.catalog;
+  if (!catalog) return noMatch;
+  let match = matches.get(project);
+  if (!match) { match = matchMa2Programs(project, catalog); matches.set(project, match); }
+  return match;
+}
+
+/**
+ * Why the local edits of a song's console Timecode show stay in the software instead of being written
+ * (lighting workflow rule 6): the song's MTC start is not the start its Cues were placed from, or the
+ * console show (as last read) starts elsewhere. Writing then would put the Cues at the wrong time on the
+ * console. Null when they can be written; the write itself still checks the console first. The song plays
+ * and sends its timecode either way.
+ */
+export function ma2BindingHold(project: LinkProject, itemId: string, target: number): string | null {
   const item = project.rundown.find(value => value.id === itemId);
-  const entry = catalog.entries.find(value => value.target === target);
-  if (!item?.referenceAudio || !entry || entry.error || item.p1UnavailableSourceKey || item.p1Media?.importedFullSource || !item.p1Media && !item.playback) return '';
-  try {
-    return JSON.stringify({ source, show: catalog.directory.show,
-      frame: entry.frameFormat, offset: entry.offset,
-      origin: programTimeOrigin(item),
-      audio: item.referenceAudio.sha256, duration: item.referenceAudio.durationMs, trim: item.p1Media?.sourceTrim,
-      fullSource: item.p1Media?.importedFullSource });
-  } catch { return ''; }
+  const binding = item?.lighting?.ma2Bindings?.find(value => value.timecode === target);
+  if (!item || !binding) return null;
+  let start: number;
+  try { start = programTimeOrigin(item); }
+  catch (error) { return `「${item.title}」的 MTC 起始码读不出来：${error instanceof Error ? error.message : String(error)}`; }
+  const frameRate = project.timebase.frameRate;
+  const placed = binding.timeOriginMs ?? 0;
+  if (!sameMtcStart(start, placed * 30 / 1000)) return `「${item.title}」里 Timecode ${target} 的 Cue 是按起点 ${formatMtcOffset(placed, frameRate)} 放的，歌曲现在从 ${formatMtcOffset(start, frameRate)} 开始`;
+  const entry = project.ma2ReadState?.catalog.entries.find(value => value.target === target);
+  const ticks = entry && !entry.error ? ma2ShowStartTicks(entry) : null;
+  if (ticks !== null && !sameMtcStart(start, ticks)) return `控台 Timecode ${target} 从 ${formatMtcOffset(ticks * 1000 / 30, frameRate)} 开始，和「${item.title}」的 MTC 起始码 ${formatMtcOffset(start, frameRate)} 对不上`;
+  return null;
 }
 
-/** Evidence saved by earlier versions also carried the bridge session, the console version and the Cue times; none counts. */
-function sameMa2PairingEvidence(saved: string, current: string): boolean {
-  if (saved === current) return current !== '';
-  if (!saved || !current) return false;
-  const timing = (text: string): string => {
-    const value = JSON.parse(text) as Record<string, unknown>;
-    delete value.version; delete value.generation; delete value.times;
-    return JSON.stringify(value);
-  };
-  return timing(saved) === timing(current);
+/** The pairs as the project file keeps them for earlier versions: every pair stands on the MTC start, so each is confirmed. */
+function storedPairs(match: Ma2StartMatch, catalog: Ma2Catalog): Pick<Ma2ReadState, 'pairs' | 'pairings'> {
+  const pairs: Record<string, string> = {}, pairings: NonNullable<Ma2ReadState['pairings']> = {};
+  for (const [target, itemId] of Object.entries(match.pairs)) {
+    const entry = catalog.entries.find(value => value.target === Number(target));
+    pairs[target] = itemId;
+    pairings[target] = { itemId, status: 'confirmed', evidence: JSON.stringify({ start: entry ? ma2ShowStartTicks(entry) : null }) };
+  }
+  return { pairs, pairings };
 }
 
-/** Legacy automatic suggestions never become operator confirmations on a new scan. */
+/** The project with its stored pairs brought up to date; the same object when they already are. */
+function withStoredPairs(project: LinkProject): LinkProject {
+  const state = project.ma2ReadState;
+  if (!state) return project;
+  const match = matchMa2Programs(project, state.catalog);
+  const stored = storedPairs(match, state.catalog);
+  if (JSON.stringify(stored.pairs) === JSON.stringify(state.pairs) && JSON.stringify(stored.pairings) === JSON.stringify(state.pairings ?? {})) {
+    matches.set(project, match);
+    return project;
+  }
+  return parseLinkProject({ ...project, ma2ReadState: { ...state, ...stored } });
+}
+
+/** A new console read: the pairs come from the MTC starts; read failures are kept only for the same Show and session. */
 export function reconcileMa2ReadState(project: LinkProject, source: string, catalog: Ma2Catalog): Ma2ReadState {
   const previous = project.ma2ReadState;
-  const matched = matchMa2Programs(project, catalog);
-  const pairings: NonNullable<Ma2ReadState['pairings']> = {};
-  for (const entry of catalog.entries) {
-    const key = String(entry.target);
-    const bound = project.rundown.find(item => item.lighting?.ma2Bindings?.some(binding => binding.timecode === entry.target));
-    const old = previous?.pairings?.[key];
-    const itemId = bound?.id ?? (old?.status === 'confirmed' || old?.status === 'stale' ? old.itemId : matched.pairs[entry.target]);
-    if (!itemId) continue;
-    const evidence = ma2PairingEvidence(project, source, catalog, entry.target, itemId);
-    const sameSource = previous?.source === source && previous.catalog.directory.show === catalog.directory.show;
-    const confirmed = old?.status === 'confirmed' && sameSource && sameMa2PairingEvidence(old.evidence, evidence);
-    const retained = Boolean(bound || old?.status === 'confirmed' || old?.status === 'stale');
-    pairings[key] = { itemId, evidence, status: confirmed ? 'confirmed' : retained ? 'stale' : 'suggested',
-      ...(retained && !confirmed ? { reason: '来源或时间需要重新确认；已有灯光和本地编辑都保留' } : {}) };
-  }
-  for (const item of project.rundown) for (const binding of item.lighting?.ma2Bindings ?? []) {
-    const key = String(binding.timecode);
-    if (!pairings[key]) pairings[key] = { itemId: item.id, evidence: '', status: 'stale', reason: '新读取的控台里没有这条时间线，已有灯光保留；请检查控台来源' };
-  }
+  const match = matchMa2Programs(project, catalog);
   const sameSource = previous?.source === source && previous.catalog.directory.show === catalog.directory.show && previous.catalog.directory.generation === catalog.directory.generation;
-  return { formatVersion: 2, source, catalog, pairings, ...(previous?.detachedBindings ? { detachedBindings: previous.detachedBindings } : {}),
-    pairs: Object.fromEntries(Object.entries(pairings).filter(([, value]) => value.status !== 'stale').map(([key, value]) => [key, value.itemId])),
+  const read = catalog.entries.filter(entry => !entry.error).length, failed = catalog.entries.length - read;
+  return { formatVersion: 2, source, catalog, ...storedPairs(match, catalog), ...(previous?.detachedBindings ? { detachedBindings: previous.detachedBindings } : {}),
     failures: sameSource ? previous.failures : [], selectedTarget: previous?.selectedTarget ?? null,
     query: previous?.query ?? '', filter: previous?.filter ?? 'all',
-    message: `${catalog.entries.filter(entry => !entry.error).length} 条已读取 · ${catalog.entries.filter(entry => entry.error).length} 条读取出错${catalog.incomplete ? ' · 还没读完' : ''}` };
+    message: `${read} 条已读取 · ${Object.keys(match.pairs).length} 条按起始码对上歌曲${failed ? ` · ${failed} 条读取出错` : ''}${catalog.incomplete ? ' · 还没读完' : ''}` };
+}
+
+/** Every project edit keeps the stored pairs in step with the starts, inside the same undoable step. */
+export function withMa2Pairings(command: LinkCommand): LinkCommand {
+  return { ...command, execute(project) { return withStoredPairs(command.execute(project)); } };
 }
 
 /** Preserve the complete native baseline and local edits outside the active playback document. */
@@ -79,9 +99,7 @@ export function detachMa2BindingCommand(itemId: string, target: number): LinkCom
     state.formatVersion = 2;
     lighting.tracks = lighting.tracks.filter(track => !ids.has(track.id));
     lighting.ma2Bindings = lighting.ma2Bindings?.filter(value => value.id !== binding.id);
-    delete state.pairs[target];
-    if (state.pairings) delete state.pairings[target];
-    return parseLinkProject({ ...next, updatedAt: new Date().toISOString() });
+    return withStoredPairs(parseLinkProject({ ...next, updatedAt: new Date().toISOString() }));
   }, undo: before => parseLinkProject(before) };
 }
 
@@ -114,51 +132,6 @@ export function refreshMa2BindingCommand(itemId: string, target: number, archive
     const tracks = lighting.tracks.filter(track => ids.has(track.id));
     if (!archiveLocalEdits && (binding.pendingTracks?.length || JSON.stringify(tracks) !== JSON.stringify(binding.baselineTracks))) throw new Error('本地编排已有修改：请选择保留本地，或归档本地后采用控台版本');
     const archived = detachMa2BindingCommand(itemId, target).execute(project);
-    const replaced = importMa2TimecodeCommand(itemId, entry.preview).execute(archived);
-    return confirmMa2PairingCommand(target, itemId).execute(replaced);
-  }, undo: before => parseLinkProject(before) };
-}
-
-/** Run inside the same command as an edit so undo restores both timing and confirmation. */
-export function withMa2PairingValidation(command: LinkCommand): LinkCommand {
-  return { ...command, execute(project) {
-    const next = command.execute(project);
-    const state = next.ma2ReadState;
-    if (!state?.pairings) return next;
-    const invalid = Object.entries(state.pairings).filter(([target, value]) => value.status !== 'stale' && !sameMa2PairingEvidence(value.evidence, ma2PairingEvidence(next, state.source, state.catalog, Number(target), value.itemId)));
-    if (!invalid.length) return next;
-    const pairs = { ...state.pairs }, pairings = { ...state.pairings };
-    for (const [target, value] of invalid) { delete pairs[target]; pairings[target] = { ...value, status: 'stale', reason: '歌曲起点或音频范围改过了，请重新确认关联' }; }
-    return parseLinkProject({ ...next, ma2ReadState: { ...state, pairs, pairings } });
-  } };
-}
-
-export function confirmMa2PairingCommand(target: number, itemId: string): LinkCommand {
-  return { id: crypto.randomUUID(), label: '确认歌曲与控台时间线对应关系', execute(project) {
-    const state = project.ma2ReadState;
-    if (!state) throw new Error('还没有读过控台');
-    if (state.catalog.sourceUnverified) throw new Error('控台来源还没确认，请先确认读取来源');
-    const song = project.rundown.find(item => item.id === itemId);
-    const entry = state.catalog.entries.find(item => item.target === target);
-    const origin = song && (song.p1Media || song.playback) ? programTimeOrigin(song) : undefined;
-    if (!entry) throw new Error(`还没读取 Timecode ${target}，请先读取控台`);
-    if (entry.error) throw new Error(`Timecode ${target} 读取出错：${entry.error}`);
-    if (!song?.referenceAudio || origin === undefined) throw new Error(`歌曲“${song?.title ?? itemId}”没有音频或原始时间码起点，请先完成歌曲导入`);
-    if (entry.frameFormat !== '30 FPS') throw new Error(`Timecode ${target} 的时间格式是 ${entry.frameFormat ?? '未知'}，目前只支持 30 FPS（没有改动控台帧率）`);
-    if (!/^\d+(?:\.\d+)?$/.test(entry.offset ?? '0') || !Number.isFinite(Number(entry.offset ?? 0))) throw new Error(`Timecode ${target} 的偏移时间格式无效：${entry.offset ?? '未知'}`);
-    if (!entry.events.length) throw new Error(`Timecode ${target} 里没有事件，不需要关联歌曲`);
-    const invalid = entry.events.find(event => !/^\d+(?:\.\d+)?$/.test(event.time) || !Number.isFinite(Number(event.time)));
-    if (invalid) throw new Error(`Timecode ${target} 的事件 ${invalid.path} 时间格式无效：${invalid.time}`);
-    const outside = ma2EventOutsideSong(entry, origin, song.referenceAudio.durationMs);
-    if (outside) {
-      const seconds = (Number(outside.time) + Number(entry.offset ?? 0)) / 30;
-      throw new Error(`Timecode ${target} 的事件 ${outside.path} 在 ${seconds.toFixed(3)} 秒，超出了“${song.title}”的歌曲范围（${(origin / 1000).toFixed(3)}～${((origin + song.referenceAudio.durationMs) / 1000).toFixed(3)} 秒）。请检查歌曲的原始时间码起点，或选择对应的歌曲`);
-    }
-    const binding = song.lighting?.ma2Bindings?.find(value => value.timecode === target);
-    if (binding && (binding.timeOriginMs ?? 0) !== origin) throw new Error('关联的歌曲起点变了，请先刷新并检查本地 Cue 的位置');
-    const evidence = ma2PairingEvidence(project, state.source, state.catalog, target, itemId);
-    if (!evidence) throw new Error('歌曲起点或控台数据无效，无法确认关联');
-    return parseLinkProject({ ...project, schemaVersion: 2, updatedAt: new Date().toISOString(), ma2ReadState: { ...state, formatVersion: 2,
-      pairs: { ...state.pairs, [target]: itemId }, pairings: { ...state.pairings, [target]: { itemId, status: 'confirmed', evidence } } } });
+    return withStoredPairs(importMa2TimecodeCommand(itemId, entry.preview).execute(archived));
   }, undo: before => parseLinkProject(before) };
 }

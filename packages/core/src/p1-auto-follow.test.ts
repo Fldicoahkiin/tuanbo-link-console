@@ -52,8 +52,10 @@ describe('P1 点歌区间沿用歌曲已有的 MTC 起始码', () => {
     const free = parseLinkProject({ ...createEmptyLinkProject('重叠'), rundown: [song('a', 2400), song('b', 2410)] });
     expect(allocateP1TimecodeRanges(free).ranges.map((range) => range.startSeconds)).toEqual([2400, 2440]);
     const lit = parseLinkProject({ ...createEmptyLinkProject('重叠'), rundown: [song('a', 2400), song('b', 2410)] });
-    lit.ma2ReadState = { source: 'console', pairs: {}, pairings: { 29: { itemId: 'b', status: 'confirmed', evidence: '' } }, failures: [], selectedTarget: null, query: '', filter: 'all', message: '',
-      catalog: { directory: { show: '测试 Show', generation: 'session', version: '3.3.4.3', entries: [] }, readAt: '2026-10-27T00:00:00.000Z', entries: [] } };
+    lit.schemaVersion = 2;
+    lit.ma2ReadState = { source: 'console', pairs: {}, failures: [], selectedTarget: null, query: '', filter: 'all', message: '',
+      catalog: { directory: { show: '测试 Show', generation: 'session', version: '3.3.4.3', entries: [{ target: 29, name: 'b' }] }, readAt: '2026-10-27T00:00:00.000Z',
+        entries: [{ target: 29, name: 'b', eventCount: 1, frameFormat: '30 FPS', offset: '72300', slot: 'TC Slot 2', events: [{ path: '1', time: '30', action: 'Goto', executor: '1.1', cue: '1', name: null }], error: null, warnings: [] }] } };
     expect(() => allocateP1TimecodeRanges(lit)).toThrow(/「b」的 MTC 起始码不能用于 P1 点歌：和另一首歌的时间码范围重叠/);
   });
 });

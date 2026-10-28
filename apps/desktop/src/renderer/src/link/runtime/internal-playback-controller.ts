@@ -77,20 +77,18 @@ export class InternalPlaybackController {
       if (!this.current(generation)) return;
       this.directLighting = item.lighting?.outputMode === 'direct' || item.lighting?.outputMode === 'network';
       const sendMtc = !this.directLighting && this.state.mtcEnabled;
+      // Every song sends its timecode and prepares its lighting, matched to a console show or not (2026-10-26, rule 9).
       let mtcPortName: string | null | undefined;
-      const stalePairing = Object.values(this.project.ma2ReadState?.pairings ?? {}).some(pair => pair.itemId === item.id && pair.status === 'stale');
-      const allowLighting = !stalePairing || this.directLighting;
-      if (stalePairing && !this.directLighting) this.appendNotice('这首歌还没和控台时间线确认关联，这次不发时间码，音频照常播放。请在控台时间线里确认关联。');
       await Promise.all([
         (async () => {
           try {
-            mtcPortName = await optionalOutputReady(this.mtc.connect(sendMtc && !stalePairing ? config.mtcPortName : null, sendMtc && !stalePairing && Boolean(item.p1Media || item.lighting?.ma2Bindings?.length || item.lighting?.tracks.some(track => track.clips.some(clip => clip.events.length)))), () => this.mtc.stop(), 'MIDI 时间码');
+            mtcPortName = await optionalOutputReady(this.mtc.connect(sendMtc ? config.mtcPortName : null, sendMtc && Boolean(item.p1Media || item.lighting?.ma2Bindings?.length || item.lighting?.tracks.some(track => track.clips.some(clip => clip.events.length)))), () => this.mtc.stop(), 'MIDI 时间码');
           } catch (error) {
             if (this.current(generation)) { this.mtc.stop(); this.update({ mtcConnectionFailed: true }); this.startFault(`MIDI 时间码没有发出，音频照常播放。原因：${toUserErrorMessage(error)}`); }
           }
         })(),
         (async () => {
-          if (!item.lighting || !allowLighting) return;
+          if (!item.lighting) return;
           try {
             await optionalOutputReady(this.lighting.prepare(item.lighting, config.lightingProfile ?? null, positionMs), () => this.lighting.stop(), '灯光动作');
             if (this.current(generation)) this.lightingPrepared = true;
@@ -101,7 +99,7 @@ export class InternalPlaybackController {
       ]);
       if (!this.current(generation)) return;
       this.update({ mtcPortName: sendMtc ? mtcPortName ?? null : null, mtcSentPositionMs: null });
-      const lightingNotice = item.lighting && allowLighting && sendMtc && mtcPortName ? lightingTimecodePlaybackNotice(item.lighting) : null;
+      const lightingNotice = item.lighting && sendMtc && mtcPortName ? lightingTimecodePlaybackNotice(item.lighting) : null;
       if (lightingNotice) this.update({ notice: [this.state.notice, lightingNotice].filter(Boolean).join('；') });
       if (!this.current(generation)) return;
       try { await this.dependencies.prepare(itemId, positionMs, { reuseSession, mtcOutputEnabled: sendMtc && Boolean(mtcPortName) }); this.runtimePrepared = true; }
@@ -116,10 +114,9 @@ export class InternalPlaybackController {
       this.update({ volume: item.playback?.volume ?? 100, ...(item.playback?.endAction ? { endAction: item.playback.endAction } : {}) });
       this.audio.currentTime = positionMs / 1000; this.audio.volume = this.state.volume / 100;
       this.offsetMs = programTimeOrigin(item, this.project.obsOutputMode === 'scenes' ? 0 : (allocateMediaTimecodeRanges(this.project).find((range) => range.itemId === itemId)?.startSeconds ?? 0) * 1000);
-      if (lightingTimeOrigin(item.lighting, this.offsetMs) !== this.offsetMs) {
-        this.mtc.stop(); this.update({ mtcPortName: null });
-        this.appendNotice('歌曲的播放起点和 MA2 里绑定的时间码对不上，这次不发时间码，音频照常播放。');
-      }
+      // The song's own start is what is sent (rule 9); a binding that starts elsewhere is only pointed out.
+      try { if (lightingTimeOrigin(item.lighting, this.offsetMs) !== this.offsetMs) this.appendNotice('歌曲的 MTC 起始码和放进来的控台时间线起点对不上，时间码照常从歌曲的起始码发送。'); }
+      catch (error) { this.appendNotice(`${toUserErrorMessage(error)}；时间码照常从歌曲的起始码发送。`); }
       this.lastFrame = -1; this.previousPosition = -1; this.lastAdvanced = performance.now();
       this.update({ itemId, positionMs, mtcPositionMs: positionMs + this.offsetMs, durationMs: endMs });
       if (this.runtimePrepared) {

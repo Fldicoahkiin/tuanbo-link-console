@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, type LightingTrack, type Ma2Catalog } from '@tb/schema';
-import { confirmMa2PairingCommand, reconcileMa2ReadState, withMa2PairingValidation } from './ma2-pairing-state';
+import { reconcileMa2ReadState } from './ma2-pairing-state';
 import { songLightingStatus } from './song-lighting-status';
 
 function fixture() {
@@ -15,37 +15,44 @@ function fixture() {
 }
 const track = (at: number): LightingTrack => ({ id: 'track', name: '灯光', kind: 'ma2', color: '#68c9ed', group: '', muted: false, solo: false, locked: false, channel: 1, controller: 7, portProfileId: '', noteNames: {},
   clips: [{ id: 'clip', name: '原编排', start: 0, duration: 40000, timeLock: 'time', muted: false, events: [{ id: 'cue', kind: 'ma2', at, sequence: 1, executor: '1.101', cue: '1', action: 'goto', label: '开场' }] }] });
+const matched = { state: 'matched', timecode: 2, startMs: 480000, frameRate: '30', pending: 0, problems: [], notes: [] };
 
-it('没有配对和绑定是未匹配；自动匹配未确认要处理；确认后可演出并给出控台节目、起始码和帧率', () => {
+it('起始码对上就是对上，不用确认；没有控台节目的歌是未对上；给出控台节目、起始码和帧率', () => {
   const { project } = fixture();
-  expect(songLightingStatus(project, '歌曲乙')).toEqual({ state: 'unmatched' });
-  expect(songLightingStatus(project, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('还没确认')] });
-  const confirmed = confirmMa2PairingCommand(2, '歌曲甲').execute(project);
-  expect(songLightingStatus(confirmed, '歌曲甲')).toEqual({ state: 'ready', timecode: 2, startMs: 480000, frameRate: '30' });
-  expect(() => songLightingStatus(confirmed, '不存在')).toThrow('节目单中没有');
+  expect(songLightingStatus(project, '歌曲乙')).toEqual({ state: 'unmatched', reason: null });
+  expect(songLightingStatus(project, '歌曲甲')).toEqual(matched);
+  expect(() => songLightingStatus(project, '不存在')).toThrow('节目单中没有');
+  const other = structuredClone(project); other.ma2ReadState!.catalog.entries[0]!.frameFormat = '25 FPS';
+  expect(songLightingStatus(other, '歌曲甲')).toEqual({ ...matched, frameRate: '25' });
 });
 
-it('改了歌曲起点后配对失效，变为需处理并写明原因；控台节目不是 30 FPS 也需处理', () => {
-  const { project } = fixture();
-  const confirmed = confirmMa2PairingCommand(2, '歌曲甲').execute(project);
-  const moved = withMa2PairingValidation({ id: 'move', label: '改起点', execute: value => { const next = structuredClone(value); next.rundown[0]!.playback!.mtcOffsetMs += 1000; return next; }, undo: before => before }).execute(confirmed);
-  expect(songLightingStatus(moved, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('歌曲起点或音频范围改过了')] });
-  const other = structuredClone(confirmed); other.ma2ReadState!.catalog.entries[0]!.frameFormat = '25 FPS';
-  expect(songLightingStatus(other, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('25 FPS')] });
+it('改了歌曲起点就不再对上；控台两个节目起点相同时标起点重复', () => {
+  const { project, catalog } = fixture();
+  const moved = structuredClone(project); moved.rundown[0]!.playback!.mtcOffsetMs += 1000;
+  expect(songLightingStatus(moved, '歌曲甲')).toEqual({ state: 'unmatched', reason: null });
+  const twice = structuredClone(catalog); twice.entries.push({ ...twice.entries[0]!, target: 5 });
+  const duplicate = structuredClone(project); duplicate.ma2ReadState = reconcileMa2ReadState(duplicate, 'console', twice);
+  expect(songLightingStatus(duplicate, '歌曲甲')).toEqual({ state: 'duplicate', timecodes: [2, 5] });
 });
 
-it('已确认配对的歌有本地修改尚未写到控台：编灯中，并给出待同步件数', () => {
+it('对上的歌有本地修改还没写到控台：给出待同步件数；放 Cue 时的起点对不上：未对上并说明怎么处理', () => {
   const { project } = fixture();
-  const confirmed = confirmMa2PairingCommand(2, '歌曲甲').execute(project);
   const lighting = createLightingDocument(); lighting.tracks = [track(500)];
   lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '歌曲甲', readAt: '2026-10-22T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [track(0)], mappings: [], playback: 'editable', timeOriginMs: 480000 }];
-  confirmed.rundown[0]!.lighting = lighting;
-  expect(songLightingStatus(confirmed, '歌曲甲')).toEqual({ state: 'editing', pending: 1 });
+  project.rundown[0]!.lighting = lighting;
+  expect(songLightingStatus(project, '歌曲甲')).toEqual({ ...matched, pending: 1 });
   // Every edit is a new project snapshot, as commands produce.
-  const written = structuredClone(confirmed); written.rundown[0]!.lighting!.tracks = [track(0)];
-  expect(songLightingStatus(written, '歌曲甲')).toEqual({ state: 'ready', timecode: 2, startMs: 480000, frameRate: '30' });
-  const moved = structuredClone(written); moved.rundown[0]!.lighting!.ma2Bindings![0]!.timeOriginMs = 0;
-  expect(songLightingStatus(moved, '歌曲甲')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('起点对不上')] });
+  const written = structuredClone(project); written.rundown[0]!.lighting!.tracks = [track(0)];
+  expect(songLightingStatus(written, '歌曲甲')).toEqual(matched);
+  const placed = structuredClone(written); placed.rundown[0]!.lighting!.ma2Bindings![0]!.timeOriginMs = 0;
+  expect(songLightingStatus(placed, '歌曲甲')).toEqual({ state: 'unmatched', reason: expect.stringContaining('刷新') as string });
+});
+
+it('控台事件在歌曲结束之后：仍然对上，带提示', () => {
+  const { project, catalog } = fixture();
+  const late = structuredClone(catalog); late.entries[0]!.events.push({ path: '2', time: '1500', action: 'Goto', executor: '1.101', cue: null, name: null });
+  project.ma2ReadState = reconcileMa2ReadState(project, 'console', late);
+  expect(songLightingStatus(project, '歌曲甲')).toEqual({ ...matched, notes: [expect.stringContaining('1 个事件在歌曲结束之后') as string] });
 });
 
 function ownShowSong(times: number[], start = 480000) {
@@ -58,19 +65,20 @@ function ownShowSong(times: number[], start = 480000) {
   return project;
 }
 
-it('自有时间码节目：点位和起始码都与上次写入一致即可演出；挪动时间、改起始码算编灯中；只有序列没有节目仍是未匹配', () => {
-  expect(songLightingStatus(ownShowSong([0, 1000]), '歌曲乙')).toEqual({ state: 'ready', timecode: 9000, startMs: 480000, frameRate: '30' });
-  expect(songLightingStatus(ownShowSong([0, 1010]), '歌曲乙')).toEqual({ state: 'ready', timecode: 9000, startMs: 480000, frameRate: '30' });
-  expect(songLightingStatus(ownShowSong([0, 1500]), '歌曲乙')).toEqual({ state: 'editing', pending: 1 });
-  expect(songLightingStatus(ownShowSong([0, 1000, 2000]), '歌曲乙')).toEqual({ state: 'editing', pending: 1 });
-  expect(songLightingStatus(ownShowSong([0, 1000], 490000), '歌曲乙')).toEqual({ state: 'editing', pending: 1 });
+it('自有时间码节目：一直算对上；挪动时间、加点位、改起始码算待同步；控台上还没有节目时说明会自动建立', () => {
+  const own = { state: 'matched', timecode: 9000, startMs: 480000, frameRate: '30', problems: [], notes: [] };
+  expect(songLightingStatus(ownShowSong([0, 1000]), '歌曲乙')).toEqual({ ...own, pending: 0 });
+  expect(songLightingStatus(ownShowSong([0, 1010]), '歌曲乙')).toEqual({ ...own, pending: 0 });
+  expect(songLightingStatus(ownShowSong([0, 1500]), '歌曲乙')).toEqual({ ...own, pending: 1 });
+  expect(songLightingStatus(ownShowSong([0, 1000, 2000]), '歌曲乙')).toEqual({ ...own, pending: 1 });
+  expect(songLightingStatus(ownShowSong([0, 1000], 490000), '歌曲乙')).toEqual({ ...own, startMs: 490000, pending: 1 });
   const unwritten = ownShowSong([0, 1000]); delete unwritten.rundown[1]!.lighting!.consoleSong!.timecode;
-  expect(songLightingStatus(unwritten, '歌曲乙')).toEqual({ state: 'unmatched' });
+  expect(songLightingStatus(unwritten, '歌曲乙')).toEqual({ state: 'unmatched', reason: expect.stringContaining('同步时自动建立') as string });
 });
 
-it('只放在 Layout 页面上、没有执行器位置的本曲序列建不了时间码节目：需处理并说明', () => {
+it('只放在 Layout 页面上、没有执行器位置的本曲序列建不了时间码节目：未对上并说明', () => {
   const project = ownShowSong([0, 1000]);
   const song = project.rundown[1]!.lighting!.consoleSong!;
   project.rundown[1]!.lighting!.consoleSong = { ...song, layout: 999, executor: undefined, timecode: undefined };
-  expect(songLightingStatus(project, '歌曲乙')).toMatchObject({ state: 'attention', reasons: [expect.stringContaining('没有执行器位置')] });
+  expect(songLightingStatus(project, '歌曲乙')).toEqual({ state: 'unmatched', reason: expect.stringContaining('没有执行器位置') as string });
 });

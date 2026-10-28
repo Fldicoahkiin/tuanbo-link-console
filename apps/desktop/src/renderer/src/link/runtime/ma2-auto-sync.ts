@@ -1,4 +1,4 @@
-import { applyMa2AutoBindingsCommand, ma2AutoBindEvents, applyMa2ReadbackCommand, matchMa2Readback, programTimeOrigin, type LinkCommand, type Ma2SyncPreview } from '@tb/core/link';
+import { applyMa2AutoBindingsCommand, ma2AutoBindEvents, applyMa2ReadbackCommand, ma2BindingHold, matchMa2Readback, type LinkCommand, type Ma2PendingChange, type Ma2SyncPreview } from '@tb/core/link';
 import { ma2AutoBindResultSchema, type Ma2AutoBindRequest, type Ma2AutoBindResult } from '@tb/schema';
 import { ma2ApplyResultSchema, ma2CatalogSchema, ma2TimecodePreviewSchema, type LinkProject, type Ma2ApplyRequest, type Ma2ApplyResult, type Ma2Catalog, type Ma2CatalogRequest, type Ma2CompareRequest, type Ma2ReadRequest, type Ma2TimecodePreview } from '@tb/schema';
 import { ma2PendingChanges } from '@tb/core/link';
@@ -59,28 +59,16 @@ export class Ma2AutoSync {
       this.dependencies.changed(count ? 'staged' : 'waiting', count ? `${count} 项修改还没同步，目前只存在本地，停止播放后同步` : '播放中，停止后同步'); return;
     }
     if (state.editing) { this.dependencies.changed('waiting', '等待编辑结束'); return; }
-    let pending = session.scope === 'names' ? [] : ma2PendingChanges(state.project);
+    let pending = session.scope === 'names' ? [] : writable(state.project, ma2PendingChanges(state.project));
+    const held = session.scope === 'names' ? [] : heldBack(state.project);
     const unbound = session.scope !== 'all' ? [] : state.project.rundown.filter(item => item.lighting && !item.lighting.consoleSong && ma2AutoBindEvents(item.lighting).length);
     const renames = pendingMa2Renames(state.project);
     if (!refreshRemote && !pending.length && !unbound.length && !renames.length) {
-      this.dependencies.changed(this.confirmed ? 'verified' : 'waiting', session.scope === 'names'
+      this.dependencies.changed(held.length ? 'staged' : this.confirmed ? 'verified' : 'waiting', session.scope === 'names'
         ? (this.confirmed ? '名称已写入控台并回读确认' : '名称实时同步已开启，等待改名')
-        : (this.confirmed ? '修改已同步到控台' : '实时同步已开启，等待修改'));
+        : held.length ? heldMessage(state.project, held) : (this.confirmed ? '修改已同步到控台' : '实时同步已开启，等待修改'));
       return;
     }
-    const stale = pending.find(change => {
-      const project = state.project!;
-      if (project.ma2ReadState?.pairings?.[change.target]?.status !== 'stale') return false;
-      const item = project.rundown.find(entry => entry.id === change.itemId);
-      const binding = item?.lighting?.ma2Bindings?.find(entry => entry.id === change.bindingId);
-      const source = project.ma2ReadState.catalog.directory;
-      if (!item?.referenceAudio || (!item.playback && !item.p1Media) || !binding || source.show !== session.directory.show || source.version !== session.directory.version) return true;
-      // An explicit existing binding is independent of audio identity/duration.
-      // Revalidate its unchanged origin, then the normal three-way readback below.
-      try { return programTimeOrigin(item) !== (binding.timeOriginMs ?? 0); }
-      catch (error) { this.dependencies.changed('blocked', error instanceof Error ? error.message : String(error)); return true; }
-    });
-    if (stale) { this.session = null; this.dependencies.changed('blocked', `Timecode ${stale.target} 的歌曲关联已失效，请重新确认关联；这次没有写入控台`); return; }
     const blocked = pending.find(change => change.error && !unbound.some(item => item.id === change.itemId));
     if (blocked) { this.session = null; this.dependencies.changed('blocked', `Timecode ${blocked.target}：${blocked.error}`); return; }
     const generation = this.generation;
@@ -146,10 +134,10 @@ export class Ma2AutoSync {
       if (session.scope === 'all' && project.rundown.some(item => item.lighting && !item.lighting.consoleSong && ma2AutoBindEvents(item.lighting).length)) {
         this.dependencies.changed('waiting', '准备期间新增了 Cue，继续处理新增的部分'); return;
       }
-      pending = ma2PendingChanges(project);
+      pending = writable(project, ma2PendingChanges(project));
       const invalid = pending.find(change => change.error);
       if (invalid) throw new Error(`Timecode ${invalid.target}：${invalid.error}`);
-      const targets = project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).filter(binding => (refreshRemote || pending.some(change => change.bindingId === binding.id && change.itemId === item.id))).map(binding => ({ itemId: item.id, bindingId: binding.id, target: binding.timecode })));
+      const targets = project.rundown.flatMap(item => (item.lighting?.ma2Bindings ?? []).filter(binding => ma2BindingHold(project, item.id, binding.timecode) === null && (refreshRemote || pending.some(change => change.bindingId === binding.id && change.itemId === item.id))).map(binding => ({ itemId: item.id, bindingId: binding.id, target: binding.timecode })));
       if (new Set(targets.map(target => target.target)).size !== targets.length) throw new Error('同一控台时间线绑定了多个节目，不能自动同步');
       for (const target of targets) {
         if (!current()) return;
@@ -184,9 +172,11 @@ export class Ma2AutoSync {
         if (this.session !== session) { this.dependencies.changed('off', '实时同步已关闭，已发出的修改都已在控台确认'); return; }
       }
       if (!current()) return;
-      const remaining = ma2PendingChanges(this.dependencies.state().project);
-      const outstanding = remaining.length + pendingMa2Renames(this.dependencies.state().project).length;
-      this.dependencies.changed(outstanding ? 'staged' : 'verified', outstanding ? '上一项已确认，继续同步后面的修改' : '修改已同步到控台');
+      const latest = this.dependencies.state().project;
+      const remaining = latest ? writable(latest, ma2PendingChanges(latest)) : [];
+      const outstanding = remaining.length + pendingMa2Renames(latest).length;
+      const still = latest ? heldBack(latest) : [];
+      this.dependencies.changed(outstanding || still.length ? 'staged' : 'verified', outstanding ? '上一项已确认，继续同步后面的修改' : still.length && latest ? `修改已同步到控台；${heldMessage(latest, still)}` : '修改已同步到控台');
     } catch (error) {
       this.session = null;
       this.dependencies.changed('blocked', error instanceof Error ? error.message : String(error));
@@ -195,4 +185,19 @@ export class Ma2AutoSync {
       if (this.session === session && !current()) this.dependencies.changed('waiting', '播放或编辑状态有变化，停止播放并编辑完后会重新同步');
     }
   }
+}
+
+/**
+ * Only a show that still starts where its song starts is written (lighting workflow rule 6); the edits
+ * of a song whose start moved stay in the software, and that song plays as usual.
+ */
+function writable(project: LinkProject, pending: readonly Ma2PendingChange[]): Ma2PendingChange[] {
+  return pending.filter(change => ma2BindingHold(project, change.itemId, change.target) === null);
+}
+function heldBack(project: LinkProject): Ma2PendingChange[] {
+  return ma2PendingChanges(project).filter(change => ma2BindingHold(project, change.itemId, change.target) !== null);
+}
+function heldMessage(project: LinkProject, held: readonly Ma2PendingChange[]): string {
+  const reasons = [...new Set(held.flatMap(change => ma2BindingHold(project, change.itemId, change.target) ?? []))];
+  return `${reasons.join('；')}。这些改动先留在联动台，没有写到控台；起始码对上后会自动同步`;
 }

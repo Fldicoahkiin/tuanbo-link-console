@@ -113,27 +113,26 @@ it('播放中连接可建立编辑会话，但等待停止后才写回', async (
   expect(test.dependencies.catalog).not.toHaveBeenCalled(); expect(test.dependencies.apply).not.toHaveBeenCalled();
   expect(test.dependencies.changed).toHaveBeenLastCalledWith('staged', expect.any(String));
 });
-it('歌曲配对失效后禁止将本地拖动写回控台', async () => {
+it('歌曲 MTC 起始码改了以后，本地拖动先留在联动台，不写到控台；歌曲照常可播', async () => {
   const test = setup(); test.edit();
   const project = test.dependencies.state().project!;
-  project.ma2ReadState = { source: 'test', catalog: test.catalog, pairs: {}, pairings: { '9902': { itemId: 'song', status: 'stale', evidence: '', reason: '起点已变化' } }, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
+  project.rundown[0]!.playback = { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: (project.rundown[0]!.lighting!.ma2Bindings![0]!.timeOriginMs ?? 0) + 5000, shortcut: '' };
   await test.runner.tick(); await test.runner.tick();
   expect(test.dependencies.catalog).not.toHaveBeenCalled(); expect(test.dependencies.apply).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('关联已失效'));
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('staged', expect.stringContaining('Cue 是按起点'));
 });
 it('音源或长度变化的既有绑定起点未变时，仍先核对三方基线再同步', async () => {
   const test = setup(); test.edit();
   const project = test.dependencies.state().project!;
   project.rundown[0]!.referenceAudio = { assetId: 'audio', relativePath: 'audio.wav', sha256: 'a'.repeat(64), durationMs: 33000 };
   project.rundown[0]!.playback = { volume: 100, endAction: 'stop', startMs: 0, endMs: 0, mtcOffsetMs: 0, shortcut: '' };
-  project.ma2ReadState = { source: 'test', catalog: test.catalog, pairs: {}, pairings: { '9902': { itemId: 'song', status: 'stale', evidence: '', reason: '音源已变化' } }, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
   await test.runner.tick();
   expect(test.dependencies.read).toHaveBeenCalledOnce(); expect(test.dependencies.compare).toHaveBeenCalledOnce(); expect(test.dependencies.apply).toHaveBeenCalledOnce();
   test.dependencies.read = vi.fn(); test.dependencies.apply = vi.fn();
   project.rundown[0]!.playback.mtcOffsetMs = 3600000;
   test.runner.start({ dataDirectory: 'test' }, test.catalog); await test.runner.tick();
   expect(test.dependencies.read).not.toHaveBeenCalled(); expect(test.dependencies.apply).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('关联已失效'));
+  expect(test.dependencies.changed).toHaveBeenLastCalledWith('staged', expect.stringContaining('歌曲现在从 01:00:00:00 开始'));
 });
 it('关闭自动同步不能提前释放已经发送的写入锁', async () => {
   const test = setup(); test.edit();

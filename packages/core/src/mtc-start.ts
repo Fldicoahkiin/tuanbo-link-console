@@ -86,15 +86,13 @@ export function songMtcOverlaps(project: LinkProject): Map<string, string[]> {
 }
 
 /**
- * Songs being lit in this software that still have no MTC start: they have audio and lighting, are
- * not tied to a console Timecode show read from the console (bound or in a pairing), and can get a
- * show of their own. Songs without lighting keep sending what they sent before, so a console show
- * made for them by hand keeps running on the same timecode.
+ * Songs being lit in this software that still have no MTC start: they have audio and lighting, hold
+ * no Cues read from a console Timecode show, and can get a show of their own. A song without a start
+ * cannot be paired with a console show (pairing is by the start alone). Songs without lighting keep
+ * sending what they sent before, so a console show made for them by hand keeps running on the same timecode.
  */
 export function songsNeedingMtcStart(project: LinkProject): string[] {
-  const state = project.ma2ReadState;
-  const paired = new Set([...Object.values(state?.pairs ?? {}), ...Object.values(state?.pairings ?? {}).map(pairing => pairing.itemId)]);
-  return project.rundown.filter(item => item.referenceAudio && item.lighting && !item.playback && !item.p1Media && !paired.has(item.id)
+  return project.rundown.filter(item => item.referenceAudio && item.lighting && !item.playback && !item.p1Media
     && !item.lighting.ma2Bindings?.length && (!item.lighting.consoleSong || item.lighting.consoleSong.executor)).map(item => item.id);
 }
 

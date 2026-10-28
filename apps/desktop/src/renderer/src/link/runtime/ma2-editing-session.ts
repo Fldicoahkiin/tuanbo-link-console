@@ -51,10 +51,9 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   if (!project || !state) throw new Error('没有读到可用的控台数据');
   const bindings = project.rundown.flatMap(item => item.lighting?.ma2Bindings ?? []);
   const retained = bindings.filter(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode').length;
-  const pairingNotice = state.failures.length ? `；${state.failures.length} 条没有关联上，原因可在“配对与查看 Cue”里查看` : '';
+  const pairingNotice = state.failures.length ? `；${state.failures.length} 条没能放进歌曲，原因可在“控台时间线”里查看` : '';
   const summary = `${reuse ? '已用工程里保存的控台数据（控台有改动请点“更新控台读取”）' : '控台读取完成'}；${bindings.length} 条已关联，${retained} 条含控台原样动作（这些动作原样保留，其余 Cue 可以改并写回）${pairingNotice}${libraryNotice}`;
   const reason = state.catalog.incomplete || state.catalog.sourceUnverified ? '控台还没读完整'
-    : Object.values(state.pairings ?? {}).some(pair => pair.status === 'stale') ? '已有的关联需要重新确认'
     : ma2PendingChanges(project).length ? '有连接前做的本地修改，请先确认后再同步'
     : !bindings.length ? '还没有已关联的时间线' : null;
   if (reason) {

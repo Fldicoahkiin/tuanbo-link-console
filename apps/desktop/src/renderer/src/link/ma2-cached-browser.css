@@ -19,3 +19,8 @@
 .ma2-browser-events th, .ma2-browser-events td { padding: 7px 9px; text-align: left; border-bottom: 1px solid var(--separator); }
 .ma2-native-note { padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--surface-raised); }
 .ma2-browser-mtc { font-variant-numeric: tabular-nums; color: var(--accent); }
+.ma2-browser-body nav button[data-state=matched] span { color: var(--success-text); }
+.ma2-browser-body nav button[data-state=error] span { color: var(--danger); }
+.ma2-browser-match { padding: 8px 10px; border-radius: var(--radius-control); background: var(--surface-raised); }
+.ma2-browser-match[data-state=matched] { color: var(--success-text); background: var(--success-soft); }
+.ma2-browser-match[data-state=error] { color: var(--danger); background: var(--danger-soft); }
