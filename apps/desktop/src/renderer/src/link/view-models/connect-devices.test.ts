@@ -249,7 +249,7 @@ it('OBS 连接失败即停止：预览不误报就绪，控台与 MIDI 接口均
   expect(useConnectionCheckStore.getState().checks.preview).toMatchObject({ state: 'blocked', detail: '没有执行，因为“OBS 控制”没通过' });
   expect(useConnectionCheckStore.getState().checks['port:custom-input']?.state).toBe('blocked');
 });
-it('控台当前 show 与工程灯光依据不一致时工程通信不通过，不再启动 MA 3D；一致时通过', async () => {
+it('控台当前 Show 名和上次读取的不一样：工程通信照样通过并附上说明，继续启动 MA 3D（2026-10-28）', async () => {
   const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false,
     channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 5000, timeLock: 'time', muted: false,
       events: [{ id: 'cue', at: 1000, kind: 'ma2', sequence: 7, cue: '6.000', executor: '', label: '副歌', action: 'goto' }] }] });
@@ -263,13 +263,12 @@ it('控台当前 show 与工程灯光依据不一致时工程通信不通过，�
     lighting: { ...createLightingDocument(), outputMode: 'network', tracks: [track], ma2Library: { show: '2hao', readAt: '2026-10-13T00:00:00.000Z', sequences: [] } } }] });
   api.getMa2CurrentShow.mockResolvedValueOnce('tblink_ui100_20261007');
   await connectDevices(config);
-  expect(useConnectionCheckStore.getState().checks.bridge?.state).toBe('error');
-  expect(useConnectionCheckStore.getState().checks.bridge?.detail).toContain('控台现在加载的 Show 是“tblink_ui100_20261007”，但灯光 Cue 是按“2hao”编的');
-  expect(api.startExternalApplication).not.toHaveBeenCalledWith('ma3d');
+  expect(useConnectionCheckStore.getState().checks.bridge?.state).toBe('ready');
+  expect(useConnectionCheckStore.getState().checks.bridge?.detail).toContain('控台现在加载的 Show 是“tblink_ui100_20261007”，上次读取的是“2hao”');
+  expect(api.startExternalApplication).toHaveBeenCalledWith('ma3d');
   api.getMa2CurrentShow.mockResolvedValueOnce('2hao');
   await connectDevices(config);
-  expect(useConnectionCheckStore.getState().checks.bridge?.state).toBe('ready');
-  expect(api.startExternalApplication).toHaveBeenCalledWith('ma3d');
+  expect(useConnectionCheckStore.getState().checks.bridge).toMatchObject({ state: 'ready', detail: '控台读写通信正常' });
 });
 it('程序识别未通过即停止，不再保存配置或连接设备', async () => {
   api.detectLocalIntegrations.mockRejectedValueOnce(new Error('系统命令组件暂不可用'));

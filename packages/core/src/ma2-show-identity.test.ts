@@ -20,6 +20,6 @@ describe('MA2 show 身份', () => {
   it('控台 show 与依据不一致时写清两边名称（2026-10-13/14 现场：2hao 的 Cue 发到 tblink_ui100）', () => {
     expect(ma2ShowMismatch(['2hao'], '2hao')).toBeNull();
     expect(ma2ShowMismatch([], 'tblink_ui100_20261007')).toBeNull();
-    expect(ma2ShowMismatch(['2hao'], 'tblink_ui100_20261007')).toBe('控台现在加载的 Show 是“tblink_ui100_20261007”，但灯光 Cue 是按“2hao”编的，Cue 编号可能不存在或指向别的对象。请在控台加载对应的 Show，或在灯光工作台重新读取素材后检查。');
+    expect(ma2ShowMismatch(['2hao'], 'tblink_ui100_20261007')).toBe('控台现在加载的 Show 是“tblink_ui100_20261007”，上次读取的是“2hao”。时间码照常按起始码跑灯；重新连接控台会读取现在的 Show。如果 Show 内容也换了，直接按编号触发的 Cue 可能打到别的对象。');
   });
 });

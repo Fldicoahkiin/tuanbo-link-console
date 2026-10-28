@@ -40,12 +40,11 @@ function withDeadline<T>(operation: Promise<T>, deadlineMs: number, label: strin
   return Promise.race([operation, deadline]).finally(() => clearTimeout(timer));
 }
 
-/** Cue numbers are only meaningful in the show they were read from. */
-async function assertProjectMa2Show(project: LinkProject | null): Promise<void> {
+/** A Show saved under a new name is normal (2026-10-28): reported with the check, never a failed connection. */
+async function projectMa2ShowNote(project: LinkProject | null): Promise<string | null> {
   const expected = project ? [...new Set(project.rundown.flatMap(item => expectedMa2Shows(project, item.id)))] : [];
-  if (!expected.length) return;
-  const mismatch = ma2ShowMismatch(expected, await desktop.getMa2CurrentShow());
-  if (mismatch) throw new Error(mismatch);
+  if (!expected.length) return null;
+  return ma2ShowMismatch(expected, await desktop.getMa2CurrentShow());
 }
 
 async function startMaPrograms(profile: IntegrationProfile, detected: Partial<Record<'ma2' | 'ma3d', string>>, run: ConnectionStep, skip: (id: string, detail: string) => void, connect: () => Promise<void>): Promise<void> {
@@ -108,7 +107,7 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       if (status.state !== 'connected') throw new Error(status.error ?? '控台没有登录成功');
       return status;
     }, status => moved || `控台 ${status.settings?.host ?? ''} 登录成功`, ma2StepDeadlineMs);
-    await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); await assertProjectMa2Show(options.project); }, '控台读写通信正常');
+    await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); return projectMa2ShowNote(options.project); }, note => note ? `控台读写通信正常。${note}` : '控台读写通信正常');
   };
   try {
     const detection = await run('discovery', '程序识别', () => desktop.detectLocalIntegrations());

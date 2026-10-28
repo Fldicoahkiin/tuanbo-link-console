@@ -296,7 +296,7 @@ input:disabled, textarea:disabled, select:disabled { opacity: .5; cursor: not-al
 .connection-overview-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
 .connection-overview-item.state-ready { color: #6bdaa3; }
 .connection-overview-item.state-error { color: #ff7777; }
-.connection-overview-item.state-checking { color: #e8bd79; }
+.connection-overview-item.state-checking, .connection-overview-item.state-warning { color: #e8bd79; }
 .connection-overview-item.state-skipped { color: var(--text-tertiary); }
 .topbar-details-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .app-topbar > .topbar-drag-region { grid-column: 3; min-width: 30px; }

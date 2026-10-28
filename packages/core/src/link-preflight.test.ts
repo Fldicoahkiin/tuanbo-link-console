@@ -253,7 +253,7 @@ it('完整场景模式允许显示来源动作（作用于当前播出场景）�
 });
 
 describe('MA2 控台 show', () => {
-  it('与节目灯光依据不一致时阻断，一致时通过，未查询控台时不新增检查项', () => {
+  it('Show 名和上次读取的不一样只提示不阻断（每天另存新名字是正常的），一致时通过，未查询控台时不新增检查项', () => {
     const value = context();
     const track = lightingTrackSchema.parse({ id: 'track', name: '灯光', kind: 'ma2', color: '#ffffff', group: '', muted: false, solo: false, locked: false,
       channel: 1, portProfileId: '', controller: 7, noteNames: {}, clips: [{ id: 'clip', name: '灯光', start: 0, duration: 5000, timeLock: 'time', muted: false,
@@ -262,8 +262,8 @@ describe('MA2 控台 show', () => {
     value.project = { ...value.project, schemaVersion: 2, rundown: value.project.rundown.map(item => ({ ...item, lighting })) };
     const showCheck = (ma2Show?: string) => runLinkPreflight({ ...value, ...(ma2Show ? { ma2Show } : {}) }).checks.find(check => check.id === 'ma2.show.item');
     expect(showCheck()).toBeUndefined();
-    const blocked = showCheck('tblink_ui100_20261007');
-    expect(blocked?.status).toBe('blocking'); expect(blocked?.detail).toContain('灯光 Cue 是按“2hao”编的');
+    const renamed = showCheck('tblink_ui100_20261007');
+    expect(renamed?.status).toBe('warning'); expect(renamed?.detail).toContain('上次读取的是“2hao”');
     expect(showCheck('2hao')).toMatchObject({ status: 'passed', detail: '2hao' });
   });
 });
