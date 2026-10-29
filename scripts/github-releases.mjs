@@ -47,17 +47,32 @@ export async function uploadAsset(release, name, path, base = 'https://uploads.g
   return size;
 }
 
-/** Streams a release asset into `sink` (a file path or a writable stream) and returns its sha256 and size. The API
- * answers with a redirect to a signed storage URL, which is followed without the token. */
-export async function downloadAsset(asset, sink) {
+/** The API answers an asset download with a redirect to a signed storage URL, which is followed without the token. */
+async function assetResponse(asset, signal, headers = {}) {
   if (!process.env.GITHUB_TOKEN) throw new Error('需要 GITHUB_TOKEN');
-  const signal = AbortSignal.timeout(60 * 60_000);
   const api = await fetch(`https://api.github.com/repos/${REPOSITORY}/releases/assets/${asset.id}`, {
     signal, redirect: 'manual',
     headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/octet-stream', 'x-github-api-version': '2022-11-28' }
   });
   const location = api.status >= 300 && api.status < 400 ? api.headers.get('location') : null;
-  const response = location ? await fetch(location, { signal }) : api;
+  return location ? fetch(location, { signal, headers }) : api;
+}
+
+/** Bytes start to start + length - 1 of a release asset, by an HTTP range request. */
+export async function downloadAssetRange(asset, start, length) {
+  const response = await assetResponse(asset, AbortSignal.timeout(10 * 60_000), { range: `bytes=${start}-${start + length - 1}` });
+  const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
+  if (response.status !== 206 || !range || Number(range[1]) !== start || Number(range[2]) !== start + length - 1 || Number(range[3]) !== asset.size) {
+    throw new Error(`下载 ${asset.name} 第 ${start} 字节起的 ${length} 字节失败：HTTP ${response.status} ${response.headers.get('content-range') ?? ''}`);
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length !== length) throw new Error(`下载 ${asset.name} 第 ${start} 字节起的 ${length} 字节只收到 ${bytes.length} 字节`);
+  return bytes;
+}
+
+/** Streams a release asset into `sink` (a file path or a writable stream) and returns its sha256 and size. */
+export async function downloadAsset(asset, sink) {
+  const response = await assetResponse(asset, AbortSignal.timeout(60 * 60_000));
   if (!response.ok) throw new Error(`下载 ${asset.name} 失败：HTTP ${response.status}`);
   const hash = createHash('sha256');
   let size = 0;

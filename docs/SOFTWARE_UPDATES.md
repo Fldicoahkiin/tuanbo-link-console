@@ -124,7 +124,7 @@ Git、版本标识、构建位置与服务部署关系见 [完整链路核查](R
 ### 步骤
 
 1. 推发布提交到 master；CI 通过后在 Actions 里运行 Release Windows（分支选 master，填这个提交号），工作流自己打 `vX.Y.Z` 标签；推标签也可以。之后没有人工步骤，详见[发版流程](RELEASE_CHAIN.md#以后发版本的标准流程)。
-2. Release Windows：verify 和 build 作业在 GitHub 云端 Windows 上同时检查、打包、签名，verify 通过后 build 才把安装包、blockmap、`latest.yml`、`release-manifest.json` 放进这个标签的草稿 GitHub Release（私有仓库的 Actions 产物存储只有 500 MB，所以不用 artifact）。搬运脚本 `scripts/relay-release.mjs` 下载草稿、按构建清单核对，再上传到服务器 staging：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次，Mac 上可以手动 `pnpm release:relay`，二选一，重复运行安全（[发版搬运准备](RELEASE_BUILDER_SETUP.md)）。美颜和音乐分析的固定资产各放在一个 `build-assets-*` release 里，见[固定资产](RELEASE_BUILDER_SETUP.md#固定资产)。
+2. Release Windows：verify 和 build 作业在 GitHub 云端 Windows 上同时检查、打包、签名，verify 通过后 build 才把安装包、blockmap、`latest.yml`、`release-manifest.json` 放进这个标签的草稿 GitHub Release（私有仓库的 Actions 产物存储只有 500 MB，所以不用 artifact）。搬运脚本 `scripts/relay-release.mjs` 下载草稿、按构建清单核对，再上传到服务器 staging（[服务器安装](SERVER_INSTALL_DELTA_UPLOAD_20261029.md)之后只下载、上传更新源当前版没有的块，服务器拼出完整安装包再核对）：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次，Mac 上可以手动 `pnpm release:relay`，二选一，重复运行安全（[发版搬运准备](RELEASE_BUILDER_SETUP.md)）。美颜和音乐分析的固定资产各放在一个 `build-assets-*` release 里，见[固定资产](RELEASE_BUILDER_SETUP.md#固定资产)。
 3. 服务器自动发布：staging 里出现新的一份包，root 发布脚本就复制、重新校验，通过就上线。条件是签名有效、manifest 和 sha256 一致、版本高于更新源，并且这个版本以前没上过更新源。更新源只留新版和上一版，更早的移进服务器备份，备份只保留最近 3 份；磁盘余量低于 5 GB 时拒绝发布。每份上传只自动尝试一次；没能发布的留在后台「软件更新」的待发布列表，原因写在「最近一次自动发布」。需要撤回时用「回滚到上一版」，撤下的版本也移出更新源，之后重跑工作流也不会再把它自动发上去。完整链路和信任边界见[自动发布文档](AUTOMATED_DEPLOYMENT.md#windows-更新发布打-tag-即上线)。
 4. 更新源换成这个版本（`latest.yml` 与草稿里的逐字节相同）后，搬运脚本把草稿转为正式 Release 并标为 Latest：上传后同一次运行最多等 10 分钟，没等到就由下一次运行完成。说明在建草稿时取自 `release-notes/X.Y.Z.md`，后面加固定的激活说明。
    - 搬运某一步失败（工位电脑关机、代理或 GitHub 出错、服务器没能自动发布）只记日志，下一次运行接着做；服务器上已经有这个版本或另一份上传正在进行时，不重复上传。
