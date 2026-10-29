@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import type { SettingsCategory, SettingsLocation } from './components/settings-navigation';
 import { useSettingsLocation } from './useSettingsLocation';
-import { SettingsNavigation, SettingsSectionNavigation, UpdateDot } from './components/SettingsNavigation';
+import { SettingsNavigation, UpdateDot } from './components/SettingsNavigation';
 import { usePendingUpdate } from './view-models/update-availability';
 import { CueWorkspace } from './components/CueWorkspace';
 import { IntegrationWorkspace } from './components/IntegrationWorkspace';
@@ -216,7 +216,6 @@ export function LinkApp(): JSX.Element {
         notify={notify}
       />
       <section className={`app-workspace${connectionsOpen ? ' settings-workspace' : ''}`}>
-        {connectionsOpen ? <SettingsSectionNavigation selected={settingsCategory} onSelect={category => { setSettingsLocation(null); setSettingsCategory(category); }} /> : null}
         <main className="app-main" id="workspace-content" tabIndex={-1} aria-label={connectionsOpen ? '设置' : NAVIGATION.find(item => item.id === page)?.label}>
           <div className="content-scroll">{pageContent}<section hidden={!connectionsOpen} className="connections-dialog" role="dialog" aria-modal="false" aria-label={settingsOpen ? '设置' : '连接与设备'}><div className="connections-content" ref={settingsLocator.ref}><IntegrationWorkspace quickConnectHost={connectHost} midiMonitor={midiMonitor} category={settingsCategory} onCategoryChange={category => { setSettingsLocation(null); setSettingsCategory(category); }} coordinator={coordinator} notify={notify} settingsOpen={connectionsOpen && settingsOpen} onSettingsClose={closeSettings} onSettingsOpen={openSettings} onCreate={() => leaveSettings(beginCreateProject)} onOpen={() => leaveSettings(() => void openProject())} /></div></section>
       <div className="toast-stack" role="region" aria-label="通知"><div role="status" aria-live="polite">{licenseNotices.map((message, index) => <div className="toast info" key={`license-${index}`}><span>{message}</span><button aria-label="关闭授权提醒" onClick={() => dismissLicenseNotice(index)}><X aria-hidden="true" /></button></div>)}{notices.filter(notice => notice.tone === 'info').map((notice) => <div className="toast info" key={notice.id}><span>{notice.message}</span><button aria-label="关闭通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div><div role="alert">{notices.filter(notice => notice.tone === 'error').map((notice) => <div className="toast error" key={notice.id}><span>{notice.message}</span><button aria-label="关闭错误通知" onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}><X aria-hidden="true" /></button></div>)}</div></div></div>

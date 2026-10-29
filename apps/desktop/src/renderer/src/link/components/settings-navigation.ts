@@ -9,9 +9,9 @@ export const SETTINGS_GROUPS = [
 ] as const;
 export const SETTINGS_SECTIONS = [
   { id: 'songs', group: 'devices', name: '歌曲导入', detail: '导入 P1 工程或本地歌曲，建立节目单', icon: ListMusic },
+  { id: 'audio', group: 'devices', name: '音频与 MIDI', detail: '选择声音从哪里播放、时间码发送到哪里', icon: AudioLines },
   { id: 'obs', group: 'devices', name: 'OBS Studio', detail: '连接 OBS，控制节目画面与声音', icon: Monitor },
   { id: 'ma2', group: 'devices', name: 'MA2 控台', detail: '连接灯光控台，读取和同步节目 Cue', icon: SlidersHorizontal },
-  { id: 'audio', group: 'devices', name: '音频与 MIDI', detail: '选择声音从哪里播放、时间码发送到哪里', icon: AudioLines },
   { id: 'virtual', group: 'devices', name: '虚拟 MIDI', detail: '让同一台电脑上的软件传递 MIDI 信号', icon: Cable },
   { id: 'maintenance', group: 'devices', name: '程序维护', detail: '修复 OBS 预览、设置程序启动位置', icon: Wrench },
   { id: 'archives', group: 'devices', name: '工程存档', detail: '同步前自动存档、存档位置与保留份数', icon: FolderArchive },
@@ -32,11 +32,6 @@ export type SettingsCategory = (typeof SETTINGS_SECTIONS)[number]['id'];
 export type SettingsFocus = 'audio-output' | 'lighting-mtc' | 'lighting-actions' | 'obs-connection' | 'ma2-connection';
 export type SettingsLocation = { category: SettingsCategory; focus?: SettingsFocus };
 export type DeviceSettingsCategory = 'songs' | 'obs' | 'ma2' | 'audio' | 'virtual' | 'maintenance' | 'archives';
-export const DEVICE_WORKFLOW_GROUPS = [
-  { name: '歌曲准备', entries: ['songs'] },
-  { name: '设备连接', entries: ['audio', 'obs', 'ma2'] },
-  { name: '辅助工具', entries: ['virtual', 'maintenance', 'archives'] }
-] as const;
 
 export function settingsScope(category: SettingsCategory): string {
   if (category === 'source' || category === 'timecode' || category === 'songs') return '工程设置';

@@ -58,27 +58,12 @@
   --accent-soft-2: #e0edfb;
   --settings-control-border: #85858e;
 }
-.app-shell[data-workspace='settings'] .settings-submenus { border: 0; padding: 8px 0; }
-.app-shell[data-workspace='settings'] .settings-submenus::before { content: none; }
 .app-workspace.settings-workspace { flex-direction: row; background: var(--surface); }
 .settings-workspace > .app-main { position: relative; flex: 1 1 0; min-width: 0; background: var(--surface); }
 .settings-workspace .toast-stack { position: absolute; max-width: calc(100% - 32px); }
 .settings-workspace .content-scroll { padding: 0; scrollbar-gutter: stable; }
 .settings-workspace .connections-dialog { display: block; height: auto; }
 .settings-workspace .connections-content { overflow: visible; }
-.settings-section-sidebar { flex: 0 0 208px; min-width: 0; padding: 28px 12px; overflow-y: auto; border-inline-end: 1px solid var(--separator); background: var(--settings-navigation); }
-.settings-section-sidebar > h2 { margin: 0 12px 24px; font-size: 14px; font-weight: 500; color: var(--text-secondary); }
-.settings-section-sidebar .main-nav { display: grid; gap: 4px; }
-.settings-section-sidebar .device-workflow-group { display: grid; gap: 4px; margin-block-end: 24px; }
-.settings-section-sidebar .device-workflow-group h3 { margin: 0 12px 8px; color: var(--text-secondary); font-size: 14px; font-weight: 400; }
-.settings-section-sidebar .main-nav button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 10px 12px; border: 0; border-inline-start: 2px solid transparent; border-radius: 8px; background: transparent; color: var(--text-primary); text-align: start; }
-.settings-section-sidebar .main-nav button:has(small) { min-height: 56px; }
-.settings-section-sidebar .main-nav button > svg { flex: 0 0 16px; width: 16px; height: 16px; color: var(--text-secondary); }
-.settings-section-sidebar .main-nav button > span { min-width: 0; }
-.settings-section-sidebar .main-nav button strong { display: block; font-size: 15px; font-weight: 500; white-space: normal; }
-.settings-section-sidebar .main-nav button small { display: block; margin-top: 3px; font-size: 14px; line-height: 1.5; color: var(--text-secondary); white-space: normal; }
-.settings-section-sidebar .main-nav button.active { background: var(--accent-soft-2); color: var(--text-emphasis); border-inline-start-color: var(--accent); box-shadow: none; }
-.settings-section-sidebar .main-nav button.active > svg { color: var(--accent); }
 .device-console, .settings-confirm {
   --text-body: 15px; --text-control: 15px; --text-caption: 14px; --radius-control: 6px;
   --device-bg: var(--surface-raised); --device-panel: var(--surface); --device-input: var(--surface-raised);
@@ -123,7 +108,7 @@
 .device-console button svg, .settings-confirm button svg { width: 16px; height: 16px; flex-shrink: 0; }
 .device-console button.primary-button, .settings-confirm button.primary-button { color: var(--on-accent); border-color: transparent; background: var(--accent-fill); }
 .device-console :is(button,input,select,textarea):disabled { opacity: .65; cursor: not-allowed; }
-.device-console :is(button,input,select,textarea,summary,a):focus-visible, .settings-section-sidebar button:focus-visible, .settings-confirm button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+.device-console :is(button,input,select,textarea,summary,a):focus-visible, .settings-confirm button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
 .device-console .settings-actions, .settings-confirm .settings-actions, .device-console :is(.device-actions,.settings-header-actions,.device-panel-actions,.heading-actions) { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .device-console .settings-password { display: flex; position: relative; width: 100%; max-width: 360px; }
 .device-console .settings-password input { padding-inline-end: 48px; }
@@ -251,19 +236,15 @@
 .settings-confirm h2 { margin: 0 0 12px; font-size: 18px; }
 .settings-confirm .settings-actions { justify-content: flex-end; margin-bottom: 0; }
 @media (hover: hover) {
-  .device-console button:hover:not(:disabled), .settings-section-sidebar .main-nav button:hover:not(.active) { background: var(--surface-hover); }
+  .device-console button:hover:not(:disabled), .app-sidebar .settings-submenus button:hover:not(.active) { background: var(--surface-hover); }
   .device-console button.primary-button:hover:not(:disabled) { background: var(--accent-fill); filter: brightness(1.08); }
 }
 @media (prefers-reduced-motion: no-preference) { .device-console button { transition: background-color 120ms, border-color 120ms; } }
-@media (prefers-reduced-motion: reduce) { .device-console *, .settings-section-sidebar * { transition: none; animation: none; scroll-behavior: auto; } }
+@media (prefers-reduced-motion: reduce) { .device-console * { transition: none; animation: none; scroll-behavior: auto; } }
 @media (max-width: 1399px) {
-  .settings-section-sidebar { flex-basis: 192px; padding-inline: 8px; }
   .device-console { padding: 24px 24px 40px; }
 }
 @media (max-width: 899px) {
-  .settings-section-sidebar { flex-basis: 144px; padding: 16px 4px; }
-  .settings-section-sidebar .main-nav button { padding: 8px 6px; gap: 6px; }
-  .settings-section-sidebar .main-nav button small { display: none; }
   .device-console { padding: 16px 16px 32px; }
 }
 @container (max-width: 580px) {

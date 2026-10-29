@@ -1,4 +1,4 @@
-import { DEVICE_WORKFLOW_GROUPS, SETTINGS_GROUPS, SETTINGS_SECTIONS, type SettingsCategory } from './settings-navigation';
+import { SETTINGS_GROUPS, SETTINGS_SECTIONS, type SettingsCategory } from './settings-navigation';
 import { useRef } from 'react';
 import { usePendingUpdate } from '../view-models/update-availability';
 
@@ -7,24 +7,21 @@ export function UpdateDot({ version }: { version: string }): JSX.Element {
   return <span className="update-dot" title={`有新版本 ${version}`} aria-hidden="true" />;
 }
 
+/**
+ * Settings navigation, one column (2026-10-28, pictures 4 to 6: a second column repeated the group,
+ * so "设备连接" showed three times). Each group opens its pages right under it.
+ */
 export function SettingsNavigation({ selected, onSelect }: { selected: SettingsCategory; onSelect: (category: SettingsCategory) => void }): JSX.Element {
   const activeGroup = SETTINGS_SECTIONS.find((section) => section.id === selected)?.group;
   const lastVisited = useRef<Partial<Record<string, SettingsCategory>>>({});
   const pendingUpdate = usePendingUpdate();
   if (activeGroup) lastVisited.current[activeGroup] = selected;
-  return <nav className="main-nav settings-submenus" aria-label="设置子菜单">{SETTINGS_GROUPS.map(({ id, name, icon: Icon }) => {
+  return <nav className="settings-submenus" aria-label="设置子菜单">{SETTINGS_GROUPS.map(({ id, name, icon: Icon }) => {
     const entries = SETTINGS_SECTIONS.filter((section) => section.group === id);
-    return <button key={id} className={activeGroup === id ? 'active' : ''} aria-current={activeGroup === id ? 'true' : undefined} onClick={() => { if (activeGroup !== id) onSelect(lastVisited.current[id] ?? entries[0]!.id); }}><Icon aria-hidden="true" /><span><strong>{name}</strong></span>{id === 'appearance' && pendingUpdate ? <UpdateDot version={pendingUpdate} /> : null}</button>;
+    const active = activeGroup === id;
+    return <div className="settings-nav-group" key={id} data-open={active}>
+      <button className={active ? 'active' : ''} aria-current={active ? 'true' : undefined} aria-expanded={active} onClick={() => { if (!active) onSelect(lastVisited.current[id] ?? entries[0]!.id); }}><Icon aria-hidden="true" /><span><strong>{name}</strong></span>{id === 'appearance' && pendingUpdate ? <UpdateDot version={pendingUpdate} /> : null}</button>
+      {active ? <nav className="settings-nav-pages" aria-label="设置子子菜单">{entries.map(({ id: page, name: pageName }) => <button key={page} className={selected === page ? 'active' : ''} aria-label={pageName} aria-current={selected === page ? 'page' : undefined} onClick={() => onSelect(page)}><span><strong>{pageName}</strong></span>{page === 'updates' && pendingUpdate ? <UpdateDot version={pendingUpdate} /> : null}</button>)}</nav> : null}
+    </div>;
   })}</nav>;
-}
-
-export function SettingsSectionNavigation({ selected, onSelect }: { selected: SettingsCategory; onSelect: (category: SettingsCategory) => void }): JSX.Element {
-  const activeGroup = SETTINGS_SECTIONS.find((section) => section.id === selected)!.group;
-  const group = SETTINGS_GROUPS.find((entry) => entry.id === activeGroup)!;
-  const pendingUpdate = usePendingUpdate();
-  const renderEntry = (id: SettingsCategory): JSX.Element => {
-    const { name, icon: Icon } = SETTINGS_SECTIONS.find(section => section.id === id)!;
-    return <button key={id} data-device-category={activeGroup === 'devices' ? id : undefined} className={selected === id ? 'active' : ''} aria-label={name} aria-current={selected === id ? 'page' : undefined} onClick={() => onSelect(id)}><Icon /><span><strong>{name}</strong></span>{id === 'updates' && pendingUpdate ? <UpdateDot version={pendingUpdate} /> : null}</button>;
-  };
-  return <aside className="settings-section-sidebar"><h2>{group.name}</h2><nav className="main-nav" aria-label="设置子子菜单">{activeGroup === 'devices' ? DEVICE_WORKFLOW_GROUPS.map(section => <div className="device-workflow-group" key={section.name}><h3>{section.name}</h3>{section.entries.map(renderEntry)}</div>) : SETTINGS_SECTIONS.filter(section => section.group === activeGroup).map(section => renderEntry(section.id))}</nav></aside>;
 }
