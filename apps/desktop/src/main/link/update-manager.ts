@@ -303,9 +303,10 @@ function createElectronUpdateClient(feedUrl: string, handlers: UpdateClientHandl
   updater.disableWebInstaller = true;
   // Differential download: the installer copies itself to the updater cache on every install, so only changed
   // blocks are fetched (about 2 MB when the beauty and music assets are unchanged). The old blockmap comes from the
-  // cache when this version was itself installed by an update, otherwise from the feed, which keeps only the
-  // previous version's. Without one, or when the result's sha512 differs from latest.yml, the updater falls back to
-  // the full installer; either way the file must then match the release signature before it is installed.
+  // cache when this version was itself installed by an update, otherwise from the feed (see "差分更新" in
+  // docs/SOFTWARE_UPDATES.md for which versions it keeps). Without one, or when the result's sha512 differs from
+  // latest.yml, the updater falls back to the full installer; either way the file must then match the release
+  // signature before it is installed.
   updater.disableDifferentialDownload = false;
   updater.logger = {
     info: (message?: unknown) => forwardUpdaterLine('info', message, handlers.log),

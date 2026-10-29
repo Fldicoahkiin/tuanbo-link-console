@@ -5,6 +5,8 @@ Usage (root):
   publish-update.py <directory> <manifest_sha256> <git_sha> <version>   publish a reviewed directory by hand
   publish-update.py --process-requests                                    run the console's queued requests, then
                                                                           publish a newly staged release
+  publish-update.py --restore-blockmaps                                   put back the blockmaps of published versions
+                                                                          that an earlier publish moved off the feed
 A release the builder stages goes live on its own once it passes every check (tag = release). The console never
 writes the feed: it queues a rollback, a discard or a manual publish; this script, started as root by
 tblink-update-publish.path, re-validates everything and writes the result back.
@@ -253,14 +255,17 @@ def receipt_directory(root, kind, version):
     return receipt
 
 
-def archive_feed(root, keep, receipt):
-    """The feed serves only the versions in keep: every other installer and blockmap moves into the receipt's
-    archived folder, out of public reach. The feed and root's backups are separate mounts in the service unit, so
-    each file is copied, checked and only then removed from the feed."""
+def archive_feed(root, keep, receipt, withdrawn=None):
+    """The feed serves the installers of the versions in keep only: every other installer moves into the receipt's
+    archived folder, out of public reach. Blockmaps stay, about 1 MB each: a computer installed from the website
+    has no blockmap of its own version, and without one on the feed it downloads the whole installer instead of
+    the changed blocks. Only the withdrawn version (a rollback) loses its blockmap too, so it can be published
+    again. The feed and root's backups are separate mounts in the service unit, so each file is copied, checked
+    and only then removed from the feed."""
     archived = []
     for path in sorted((root / FEED).iterdir()):
         match = VERSIONED.fullmatch(path.name)
-        if not match or match.group(1) in keep:
+        if not match or match.group(1) in keep or (match.group(5) and match.group(1) != withdrawn):
             continue
         if path.is_symlink() or not path.is_file():
             raise RuntimeError('更新目录里的文件不安全：' + path.name)
@@ -334,8 +339,7 @@ def install(source, release, root, request=None):
     # latest.yml is last in names: clients never see a feed whose installer is not in place.
     for pending, target in staged:
         os.replace(pending, target)
-    # Keep this version and the one it replaced: a one-step rollback needs the previous installer, and clients
-    # updating from it download its blockmap for the differential update.
+    # Keep the installers of this version and the one it replaced: a one-step rollback needs the previous one.
     keep = {release['version']} | ({feed_metadata(previous.decode())['version']} if previous is not None else set())
     try:
         archived = archive_feed(root, keep, receipt)
@@ -456,7 +460,8 @@ def rollback(version, root, request):
         raise RuntimeError(issue)
     if previous['version'] != version:
         raise RuntimeError('回滚目标与确认时不一致')
-    receipt_source = publish_receipt(root, current_feed(root)['version'])
+    current_version = current_feed(root)['version']
+    receipt_source = publish_receipt(root, current_version)
     feed = root / FEED / 'latest.yml'
     receipt = receipt_directory(root, 'rollback', version)
     (receipt / 'replaced-latest.yml').write_bytes(feed.read_bytes())
@@ -467,9 +472,9 @@ def rollback(version, root, request):
         outgoing.flush()
         os.fsync(outgoing.fileno())
     os.replace(pending, feed)
-    # The withdrawn version leaves the feed with anything else but the version now served.
+    # The withdrawn version leaves the feed, blockmap included, with any other installer but the version now served.
     try:
-        archived = archive_feed(root, {version}, receipt)
+        archived = archive_feed(root, {version}, receipt, withdrawn=current_version)
     except (OSError, RuntimeError) as error:
         raise RuntimeError(f'更新源已回到 {version}，但移出撤下的版本失败：{error}') from None
     try:
@@ -480,6 +485,57 @@ def rollback(version, root, request):
               'request': request}
     (receipt / 'receipt.json').write_text(json.dumps(result, indent=2) + '\n')
     return result
+
+
+def restore_blockmaps(root=Path('/'), accounts=None):
+    """Puts back on the feed the blockmap of each version published here that an earlier publish moved into a
+    receipt (before blockmaps stayed on the feed). The copy must match the sha256 its version's manifest recorded.
+    A version a rollback withdrew stays off. Returns the restored file names."""
+    accounts = accounts or system_accounts()
+    check_layout(root, accounts)
+    feed = root / FEED
+    restored = []
+    with locked(root):
+        current = current_feed(root)
+        if current is None:
+            return restored
+        withdrawn = set()
+        expected = {}
+        for receipt in sorted((root / RECEIPTS).iterdir()):
+            if receipt.is_symlink() or not receipt.is_dir():
+                continue
+            record_path = receipt / 'receipt.json'
+            if not record_path.is_file():
+                continue
+            record = json.loads(record_path.read_text())
+            if record.get('kind') == 'rollback':
+                withdrawn.update(name for name in record.get('archived', []) if name.endswith('.blockmap'))
+            manifest = receipt / 'release-manifest.json'
+            if record.get('kind') == 'publish' and manifest.is_file():
+                name = f'Tuanbo-Link-Console-{record["version"]}-x64.exe.blockmap'
+                for item in json.loads(manifest.read_text())['artifacts']:
+                    if item['path'] == 'apps/desktop/dist/' + name:
+                        expected[name] = (record['version'], item['sha256'])
+        for name, (version, sha256) in sorted(expected.items(), key=lambda entry: version_key(entry[1][0])):
+            target = feed / name
+            if name in withdrawn or version_key(version) > version_key(current['version']) or os.path.lexists(target):
+                continue
+            for copy in sorted((root / RECEIPTS).glob('*/archived/' + name)):
+                if copy.is_symlink() or not copy.is_file() or digest(copy).hexdigest() != sha256:
+                    continue
+                pending = feed / ('.' + name + '.pending-' + uuid.uuid4().hex)
+                with copy.open('rb') as incoming, pending.open('xb') as outgoing:
+                    os.chmod(pending, 0o644)
+                    shutil.copyfileobj(incoming, outgoing)
+                    outgoing.flush()
+                    os.fsync(outgoing.fileno())
+                if digest(pending).hexdigest() != sha256:
+                    pending.unlink()
+                    raise RuntimeError('写入后的 blockmap 校验失败：' + name)
+                os.replace(pending, target)
+                restored.append(name)
+                break
+    return restored
 
 
 def discard(staging_fd, name, accounts):
@@ -702,12 +758,18 @@ if __name__ == '__main__':
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--process-requests', action='store_true')
+    parser.add_argument('--restore-blockmaps', action='store_true')
     parser.add_argument('arguments', nargs='*')
     args = parser.parse_args()
-    if args.process_requests:
+    if args.process_requests and args.restore_blockmaps:
+        parser.error('--process-requests and --restore-blockmaps are separate runs')
+    if args.process_requests or args.restore_blockmaps:
         if args.arguments:
-            parser.error('--process-requests takes no arguments')
-        process_requests()
+            parser.error('--process-requests and --restore-blockmaps take no arguments')
+        if args.process_requests:
+            process_requests()
+        else:
+            print(json.dumps({'restored': restore_blockmaps()}))
     elif len(args.arguments) == 4:
         directory, manifest_sha, git_sha, version = args.arguments
         print(json.dumps(publish(Path(directory), manifest_sha, git_sha, version)))
