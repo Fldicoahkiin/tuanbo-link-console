@@ -45,7 +45,8 @@
 
 .ma2-material-menubar .ma2-pool-navigation>strong { max-width:160px; flex-shrink:1; overflow:hidden; text-overflow:ellipsis; }
 .ma2-material-menubar > button { flex-shrink:0; white-space:nowrap; }
-.ma2-material-menubar > .ma2-material-menu-trigger { width:30px; padding:4px; justify-content:center; }
+/* Icon triggers; the Cue location one also names the page and slot once it knows them. */
+.ma2-material-menubar > .ma2-material-menu-trigger { display:inline-flex; align-items:center; justify-content:center; gap:4px; flex-shrink:0; min-width:30px; padding:4px 7px; white-space:nowrap; }
 .ma2-material-menu-trigger { max-width:220px; overflow:hidden; text-overflow:ellipsis; }
 .ma2-material-menu { z-index:10000; width:220px; max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); box-sizing:border-box; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:4px; background:var(--surface-raised); color:var(--text-primary); border:1px solid var(--separator); border-radius:8px; box-shadow:0 8px 24px #0006; }
 .ma2-material-menu button { display:flex; align-items:center; gap:6px; min-height:30px; padding:5px 8px; background:transparent; color:inherit; border:1px solid transparent; border-radius:5px; font:inherit; font-size:12px; text-align:left; cursor:pointer; }

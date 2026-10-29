@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { ma2NetworkSettingsSchema, ma2NetworkSaveSchema, ma2NetworkCatalogSchema, ma2TimecodeRangesSchema, type Ma2Capabilities, type Ma2NetworkSettings, type Ma2NetworkSave, type Ma2NetworkStatus, type Ma2NetworkTarget, type Ma2ReadProgressUpdate } from '@tb/schema';
 import { SecureProfileStore } from './secure-profile-store';
 import { writeFileAtomically } from './atomic-file';
-import { Ma2Telnet, ma2ResponseLine, type Ma2ConnectedPeer } from './ma2-telnet';
+import { Ma2Telnet, Ma2UnreachableError, ma2ResponseLine, type Ma2ConnectedPeer } from './ma2-telnet';
 import { Ma2NetworkWire } from './ma2-network-wire';
 import { Ma2OnpcBridge } from './ma2-onpc-bridge';
 import { Ma2ApplyService } from './ma2-apply-service';
@@ -33,6 +33,8 @@ export class Ma2NetworkManager {
   private connection: Ma2Telnet | null = null;
   private version: string | null = null;
   private error: string | null = null;
+  /** The last connect reached nothing at the saved address, so a search may find the console elsewhere. */
+  private unreachable = false;
   private passwordSaved = false;
   private busy = false;
   private generation = 0;
@@ -259,7 +261,7 @@ export class Ma2NetworkManager {
     catch { this.error = '读取保存的 MA2 密码失败，请重新保存密码'; return; }
     if (this.settings.autoConnect) await this.connect();
   }
-  status(): Ma2NetworkStatus { return { profiles: this.profiles, capabilities: this.capabilities, settings: this.settings, passwordSaved: this.passwordSaved, state: this.connection?.state === 'connected' && !this.services ? 'connecting' : this.connection?.state ?? 'disconnected', version: this.version, error: this.error }; }
+  status(): Ma2NetworkStatus { return { profiles: this.profiles, capabilities: this.capabilities, settings: this.settings, passwordSaved: this.passwordSaved, state: this.connection?.state === 'connected' && !this.services ? 'connecting' : this.connection?.state ?? 'disconnected', version: this.version, error: this.error, ...this.error && this.unreachable ? { unreachable: true } : {} }; }
   async save(payload: Ma2NetworkSave): Promise<Ma2NetworkStatus> {
     if (this.isPlaying()) throw new Error('播放期间不能更换控台连接');
     if (this.busy) throw new Error('MA2 正在连接，请稍后保存');
@@ -277,7 +279,7 @@ export class Ma2NetworkManager {
       await writeFileAtomically(this.path, JSON.stringify({ format: 1, active: settings, profiles }));
       this.profiles = profiles;
       if(replaceConnection)this.disconnect();
-      this.settings = settings; this.error = null;
+      this.settings = settings; this.error = null; this.unreachable = false;
       this.passwordSaved = await this.secrets.hasCredential(id);
       return this.status();
     } finally { release?.();this.busy = false; }
@@ -288,7 +290,7 @@ export class Ma2NetworkManager {
     if (!this.settings) throw new Error('请先保存控台 IP 和登录用户');
     if(this.connection?.state==='connected'&&this.services)return this.status();
     const recovering = this.reconnectAllowed;
-    this.disconnect(); this.reconnectAllowed = recovering; this.error = null; this.busy = true;
+    this.disconnect(); this.reconnectAllowed = recovering; this.error = null; this.unreachable = false; this.busy = true;
     const generation = this.generation;
     try {
       const settings = this.settings;
@@ -321,7 +323,7 @@ export class Ma2NetworkManager {
       const bridge = new Ma2OnpcBridge(wire, this.isPlaying);
       this.services = { bridge, service: new Ma2ApplyService(bridge, this.isPlaying) };
       this.reconnectAllowed = true; this.reconnectDelay = 1000;
-    } catch (error) { if (generation === this.generation) { this.connection?.disconnect(); this.services = null; this.error = error instanceof Error ? error.message : String(error); this.version = null; } }
+    } catch (error) { if (generation === this.generation) { this.connection?.disconnect(); this.services = null; this.error = error instanceof Error ? error.message : String(error); this.unreachable = error instanceof Ma2UnreachableError; this.version = null; } }
     finally { this.busy = false; }
     return this.status();
   }

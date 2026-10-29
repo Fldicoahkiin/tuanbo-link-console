@@ -39,7 +39,7 @@ for (const cancelled of [false, true]) test(`自动连接配置电脑地址、${
       await expect(page.locator('.ma2-network-settings [role="alert"]')).toContainText('管理员授权已取消');
       expect(await app.evaluate(() => Reflect.get(globalThis, '__networkActions') as string[])).toEqual(['apply']);
     } else {
-      await expect(page.locator('.ma2-network-settings .ma2-device-status')).toHaveText('已连接');
+      await expect(page.locator('.ma2-device-section .connection-status-badge')).toHaveText('已连接');
       expect(await app.evaluate(() => Reflect.get(globalThis, '__networkActions') as string[])).toEqual(['apply', 'connect']);
       await page.locator('.ma2-network-settings > .ma2-advanced-settings > summary').click();
       await expect(page.getByLabel('控台网卡', { exact: true })).toBeVisible();

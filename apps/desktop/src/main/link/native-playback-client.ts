@@ -146,7 +146,7 @@ export class NativePlaybackClient {
           if (!entry) continue;
           this.pending.delete(event.requestId); clearTimeout(entry.timer);
           if (entry.generation !== event.generation) entry.reject(new Error('播放引擎确认的不是当前这次播放'));
-          else if (!event.ok) entry.reject(new Error(`播放引擎操作失败：${event.code}`));
+          else if (!event.ok) entry.reject(new NativeEngineRejection(event.code));
           else entry.resolve();
         }
         this.changed(event);
@@ -164,4 +164,9 @@ export class NativePlaybackClient {
     if (this.clockCheck) clearImmediate(this.clockCheck);
     this.clockWatch = null; this.clockCheck = null;
   }
+}
+
+/** The engine answered a command with a failure code. Callers that know what they asked for can explain it. */
+export class NativeEngineRejection extends Error {
+  constructor(readonly code: number) { super(`播放引擎操作失败：${code}`); }
 }

@@ -7,7 +7,8 @@ import { ma2LuaString, runMa2GuardedLua } from './ma2-lua-command';
 import { inspectMa2ExecutorXml } from './ma2-timecode-xml';
 
 const canonical = (xml: string): string => xml.replace(/<Info\b[^>]*\/>/g, '').replace(/>\s+</g, '><').trim();
-type Snapshot = { file: string; revision: string };
+/** `timecode`: the song's own Timecode show as exported next to the Sequence (`<file>_tc`), and its revision. */
+type Snapshot = { file: string; revision: string; timecode?: { number: number; revision: string } };
 
 /** Compare complete native exports on MA2; unchanged fixture data never crosses IPC. */
 export class Ma2SongWatch {
@@ -24,8 +25,8 @@ export class Ma2SongWatch {
     const file = cached?.file ?? this.file(request);
     try {
       if (cached) {
-        if (await this.same(connection, request, file, stopped)) return cached.revision !== request.revision;
-        this.snapshots.delete(key); return true;
+        if (!await this.same(connection, request, file, stopped)) { this.snapshots.delete(key); return true; }
+        return cached.revision !== request.revision || await this.timecodeChanged(connection, bridge, request, key, cached, stopped);
       }
       // A Sequence or executor removed or reassigned on the console is a change: the full sync puts the song back.
       if (!await this.capture(connection, request, file, '', stopped)) return true;
@@ -40,9 +41,37 @@ export class Ma2SongWatch {
       if (!await this.same(connection, request, file, stopped)) return true;
       const revision = createHash('sha256').update(canonical(xml)).digest('hex');
       this.remember(key, { file, revision });
-      return revision !== request.revision;
+      return revision !== request.revision || await this.timecodeChanged(connection, bridge, request, key, { file, revision }, stopped);
     } catch (cause) { this.snapshots.delete(key); throw cause; }
     finally { this.busy = false; }
+  }
+
+  /**
+   * The song's own Timecode show compared on the console like its Sequence (2026-10-26: a time moved
+   * there comes back to the software). A baseline is exported and read once for each revision the
+   * software confirms; after that every check is a console-side compare. A show missing or changed is
+   * a change, which the full sync reads and merges.
+   */
+  private async timecodeChanged(connection: Pick<Ma2Telnet, 'command'>, bridge: Pick<Ma2OnpcBridge, 'request'>, request: Ma2SongCheckRequest, key: string, snapshot: Snapshot, stopped: () => void): Promise<boolean> {
+    const show = request.timecode;
+    if (!show) return false;
+    if (snapshot.timecode?.number === show.number && snapshot.timecode.revision === show.revision) {
+      if (await this.sameTimecode(connection, request, show.number, snapshot.file, stopped)) return false;
+      this.remember(key, { file: snapshot.file, revision: snapshot.revision });
+      return true;
+    }
+    const exported = await runMa2GuardedLua(connection, `${this.guard(request)}if not gma.show.getobj.handle('Timecode ${show.number}') then return 'missing' end;gma.cmd('Export Timecode ${show.number} ${snapshot.file}_tc /o');return 'captured'`, stopped);
+    if (exported === 'missing') return true;
+    const xml = await bridge.request('READ', show.number);
+    // Read-only race, as for the Sequence: the show changed between the export and the read.
+    if (!await this.sameTimecode(connection, request, show.number, snapshot.file, stopped)) return true;
+    const revision = createHash('sha256').update(canonical(xml)).digest('hex');
+    this.remember(key, { file: snapshot.file, revision: snapshot.revision, timecode: { number: show.number, revision } });
+    return revision !== show.revision;
+  }
+  private async sameTimecode(connection: Pick<Ma2Telnet, 'command'>, request: Ma2SongCheckRequest, number: number, file: string, stopped: () => void): Promise<boolean> {
+    const read = "local function r(n,x)local p=gma.show.getvar('PATH')..'/importexport/'..n..'.xml';local f=assert(io.open(p,'rb'));local s=f:read('*a');f:close();if x then os.remove(p)end;return s:gsub('<Info.-/>',''):gsub('>[%s]+<','><')end;";
+    return await runMa2GuardedLua(connection, `${this.guard(request)}if not gma.show.getobj.handle('Timecode ${number}') then return 'missing' end;gma.cmd('Export Timecode ${number} ${file}_check_tc /o');${read}return r('${file}_tc')==r('${file}_check_tc',1)`, stopped) === 'true';
   }
 
   /**

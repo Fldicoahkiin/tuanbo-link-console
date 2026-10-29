@@ -66,7 +66,7 @@ function fixture() {
   const options = { executable: 'test', changed: vi.fn(), error,
     checkDeviceHealth,
     resolveAudio: () => 'test.wav', cache: { prepare: () => Promise.resolve({ path: 'test.pcm', sampleRate: 48000 as const,
-      baseMs: 0, streaming: false, frames: 480000, durationMs: 10000,
+      baseMs: 0, streaming: false, frames: 480000, durationMs: 10000, availableMs: 10000,
       completion: Promise.resolve({ ok: true as const }), release: () => Promise.resolve() }) } };
   const service = new NativePlayerService(options);
   const request: NativePlayerPrepare = { version: 1, sessionId: randomUUID(), generation: 1,
@@ -88,6 +88,17 @@ it('系统 MIDI 检测失败不启动完整设备查询；配了时间码端口�
     f.checkDeviceHealth.mockResolvedValue(undefined);
     await expect(f.service.prepare({ ...f.request, generation: 2 })).resolves.toMatchObject({ status: 'ready', mtcPortName: 'test-mtc', mtcError: null });
     expect(native.devices.mock.calls).toEqual([['audio'], ['all']]);
+  } finally { await f.service.close(); }
+});
+
+it('时间码端口按名字交给引擎核对；选了“只发四分之一帧”时准备和定位都带上这个方式', async () => {
+  const f = fixture();
+  try {
+    await f.service.prepare({ ...f.request, mtcQuarterFramesOnly: true });
+    await f.service.control({ version: 1, sessionId: f.request.sessionId, generation: 2, kind: 'seek', positionMs: 2000 });
+    const prepared = native.commands.mock.calls.flatMap(([command]) => command.kind === 'prepare' ? [command] : []);
+    expect(prepared.slice(-2)).toEqual([expect.objectContaining({ midiDevice: 1, midiPortName: 'test-mtc', quarterFramesOnly: true }),
+      expect.objectContaining({ midiDevice: 1, midiPortName: 'test-mtc', quarterFramesOnly: true, startMs: 2000 })]);
   } finally { await f.service.close(); }
 });
 
@@ -136,7 +147,8 @@ it('定位时 MIDI 端口消失只退出时间码通道，音频仍可定位和�
     expect(native.commands.mock.calls.map(([command]) => command)).toContainEqual(expect.objectContaining({ kind: 'reopen-mtc', midiDevice: 2, midiPortName: 'test-mtc' }));
     expect(f.service.status).toMatchObject({ mtcPortName: 'test-mtc', mtcError: null });
     await f.service.control({ ...envelope, generation: 5, kind: 'seek', positionMs: 3000 });
-    expect(native.commands.mock.calls.flatMap(([command]) => command.kind === 'prepare' ? [command] : []).at(-1)?.midiDevice).toBe(2);
+    // The engine opens the port by index and checks the name on the opened port.
+    expect(native.commands.mock.calls.flatMap(([command]) => command.kind === 'prepare' ? [command] : []).at(-1)).toMatchObject({ midiDevice: 2, midiPortName: 'test-mtc', quarterFramesOnly: false });
     expect(f.service.status).toMatchObject({ status: 'paused', mtcPortName: 'test-mtc', mtcError: null, audioError: null });
     expect(f.error).toHaveBeenCalledOnce();
   } finally { await f.service.close(); }

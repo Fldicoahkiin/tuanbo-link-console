@@ -4,6 +4,7 @@ import ffmpegPath from 'ffmpeg-static';
 import { LightingTempoMap } from '@tb/core/link';
 import type { MusicMonitorRequest, MusicMonitorStatus } from '@tb/schema';
 import { NativeAudioCache, type NativeAudioLease } from './native-audio-cache';
+import { playableEndMs } from './native-playback-range';
 import { NativePlaybackClient, readNativePlaybackDevices } from './native-playback-client';
 import type { LinkProjectService } from './link-project-service';
 import type { ObsWebSocketAdapter } from './obs-websocket-adapter';
@@ -39,12 +40,13 @@ export class MusicMonitorService {
       await this.obs.assertMusicMonitorIsolation(device.id, device.isDefault, { executable: basename(this.executable), title: identity.title, windowClass: identity.windowClass, ownerExecutable: basename(process.execPath) });
       state.unsubscribe = this.obs.subscribeMusicMonitorRouteChange(() => stopOnFailure(new Error('OBS 的音频设置变了，监听已停止，请检查后重新试听')));
       const directory = join(dirname(request.projectPath), 'cache', 'music-monitor'); await mkdir(directory, { recursive: true });
-      let pcmPath: string; let pcmBaseMs: number; let streaming: boolean;
+      let pcmPath: string; let pcmBaseMs: number; let streaming: boolean; let endMs = request.endMs;
       if (request.mode === 'segment') {
         if (!ffmpegPath) throw new Error('缺少音频解码组件，请重新安装联动台');
         const cache = new NativeAudioCache(directory, ffmpegPath.replace('app.asar', 'app.asar.unpacked'));
         state.lease = await cache.prepare({ sourcePath: this.projects.resolveReferenceAudio(request.projectPath, request.source.relativePath), sourceSha256: request.source.sha256, expectedDurationMs: request.source.durationMs, sampleRate: 48000, positionMs: request.startMs }, abort.signal);
         pcmPath = state.lease.path; pcmBaseMs = state.lease.baseMs; streaming = state.lease.streaming;
+        endMs = playableEndMs({ startMs: request.startMs, endMs: request.endMs, availableMs: state.lease.availableMs, frameRate: 30 });
       } else {
         pcmPath = join(directory, `${request.sessionId}.pcm`); state.file = pcmPath; pcmBaseMs = request.startMs; streaming = true;
         let readyResolve: () => void = () => {}; let readyReject: (error: unknown) => void = () => {};
@@ -53,7 +55,7 @@ export class MusicMonitorService {
         await ready;
       }
       if (abort.signal.aborted || this.current !== state) throw new Error('监听已取消');
-      await client.command({ protocol: 4, requestId: 1, generation: 1, kind: 'prepare', pcmPath, pcmBaseMs, streaming, audioDeviceId: device.id, sampleRate: 48000, frameRate: 30, midiDevice: null, startMs: request.startMs, endMs: request.endMs, offsetMs: 0, volume: request.volume });
+      await client.command({ protocol: 4, requestId: 1, generation: 1, kind: 'prepare', pcmPath, pcmBaseMs, streaming, audioDeviceId: device.id, sampleRate: 48000, frameRate: 30, midiDevice: null, startMs: request.startMs, endMs, offsetMs: 0, volume: request.volume });
       if (abort.signal.aborted) throw new Error('监听已取消');
       await client.command({ protocol: 4, requestId: 2, generation: 1, kind: 'play' });
       if (abort.signal.aborted || this.current !== state) throw new Error('监听已取消');

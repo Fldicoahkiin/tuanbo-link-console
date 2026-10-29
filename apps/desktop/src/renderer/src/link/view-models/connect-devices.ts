@@ -27,6 +27,8 @@ export type DeviceConnectionOptions = {
 // lighting so a lighting fault does not hide whether video is usable.
 const tasks = ['discovery', 'loop', 'midi', 'profile', 'obs', 'obs-inventory', 'preview', 'audio', 'p1', 'ma2-app', 'ma2', 'bridge', 'ma3d'];
 const stepDeadlineMs = 60_000;
+/** A dead saved address is followed by a search of up to 45 s and one more login. */
+const ma2StepDeadlineMs = 100_000;
 type ConnectionStep = <T>(id: string, label: string, operation: () => Promise<T>, detail?: string, deadlineMs?: number) => Promise<{ value: T } | null>;
 
 /** The operation is not cancelled; the step fails and reports that it may still be running. */
@@ -38,12 +40,11 @@ function withDeadline<T>(operation: Promise<T>, deadlineMs: number, label: strin
   return Promise.race([operation, deadline]).finally(() => clearTimeout(timer));
 }
 
-/** Cue numbers are only meaningful in the show they were read from. */
-async function assertProjectMa2Show(project: LinkProject | null): Promise<void> {
+/** A Show saved under a new name is normal (2026-10-28): reported with the check, never a failed connection. */
+async function projectMa2ShowNote(project: LinkProject | null): Promise<string | null> {
   const expected = project ? [...new Set(project.rundown.flatMap(item => expectedMa2Shows(project, item.id)))] : [];
-  if (!expected.length) return;
-  const mismatch = ma2ShowMismatch(expected, await desktop.getMa2CurrentShow());
-  if (mismatch) throw new Error(mismatch);
+  if (!expected.length) return null;
+  return ma2ShowMismatch(expected, await desktop.getMa2CurrentShow());
 }
 
 async function startMaPrograms(profile: IntegrationProfile, detected: Partial<Record<'ma2' | 'ma3d', string>>, run: ConnectionStep, skip: (id: string, detail: string) => void, connect: () => Promise<void>): Promise<void> {
@@ -75,11 +76,11 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
   const issues: string[] = [];
   let stoppedBy: string | null = null;
   const skip = (id: string, detail: string): void => stoppedBy ? checks.finish(id, 'blocked', `没有执行，因为“${stoppedBy}”没通过`) : checks.finish(id, 'skipped', detail);
-  const run = async <T>(id: string, label: string, operation: () => Promise<T>, detail = '检查通过', deadlineMs = stepDeadlineMs): Promise<{ value: T } | null> => {
+  const run = async <T>(id: string, label: string, operation: () => Promise<T>, detail: string | ((value: T) => string) = '检查通过', deadlineMs = stepDeadlineMs): Promise<{ value: T } | null> => {
     if (stoppedBy) { skip(id, ''); return null; }
     checks.checking(id);
     try {
-      const value = await withDeadline(operation(), deadlineMs, label); checks.finish(id, 'ready', detail); return { value };
+      const value = await withDeadline(operation(), deadlineMs, label); checks.finish(id, 'ready', typeof detail === 'string' ? detail : detail(value)); return { value };
     } catch (error) {
       const raw = typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : String(error);
       const technicalError = options.password ? raw.replaceAll(options.password, '[REDACTED]') : raw;
@@ -100,11 +101,13 @@ export async function connectDevices(options: DeviceConnectionOptions): Promise<
       skip('ma2', '当前使用本机 onPC');
       await run('bridge', 'MA2 工程通信', async () => connectLocalMa2((await desktop.getMa2DataDirectory()) ?? ''), '本机控台通信正常'); return;
     }
+    let moved = '';
     await run('ma2', 'MA2 网络', async () => {
-      const status = ma2NetworkStatusSchema.parse(await connectDiscoveredMa2());
+      const status = ma2NetworkStatusSchema.parse(await connectDiscoveredMa2(undefined, undefined, notice => { moved = notice; }));
       if (status.state !== 'connected') throw new Error(status.error ?? '控台没有登录成功');
-    }, '控台网络登录成功');
-    await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); await assertProjectMa2Show(options.project); }, '控台读写通信正常');
+      return status;
+    }, status => moved || `控台 ${status.settings?.host ?? ''} 登录成功`, ma2StepDeadlineMs);
+    await run('bridge', 'MA2 工程通信', async () => { await checkNetworkMa2(); return projectMa2ShowNote(options.project); }, note => note ? `控台读写通信正常。${note}` : '控台读写通信正常');
   };
   try {
     const detection = await run('discovery', '程序识别', () => desktop.detectLocalIntegrations());

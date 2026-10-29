@@ -1,6 +1,6 @@
 import { createServer, type Socket } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
-import { Ma2Telnet, ma2ResponseLine, type Ma2TelnetState, type Ma2PeerValidator } from './ma2-telnet';
+import { Ma2Telnet, Ma2UnreachableError, ma2ResponseLine, type Ma2TelnetState, type Ma2PeerValidator } from './ma2-telnet';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -154,4 +154,19 @@ it('主动断开取消全部未发送请求', async () => {
   connection.disconnect();
   expect((await finished).every(result => result.status === 'rejected')).toBe(true);
   expect(sent).not.toContain('First'); expect(sent).not.toContain('Second');
+});
+
+it('地址上没有任何程序接受连接时标为连不到，可去搜索；端口通了但没提示符不算', async () => {
+  const closed = createServer();
+  await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+  const address = closed.address();
+  if (!address || typeof address === 'string') throw new Error('Test listener unavailable');
+  await new Promise<void>((resolve, reject) => closed.close((error) => error ? reject(error) : resolve()));
+  const refused = client({ port: address.port, monitorPort: address.port + 1 === 65536 ? address.port - 1 : address.port + 1 });
+  await expect(refused.connect('operator', 'test-value')).rejects.toBeInstanceOf(Ma2UnreachableError);
+  const silent = client(await peer(() => undefined, ''));
+  const failure = await silent.connect('operator', 'test-value').then(() => null, (error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure).not.toBeInstanceOf(Ma2UnreachableError);
+  expect(String(failure)).toContain('TCP 已连通');
 });

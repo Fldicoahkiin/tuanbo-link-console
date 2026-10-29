@@ -32,9 +32,14 @@
 .cue-composer-advanced>summary { cursor:pointer; font-size:12px; color:var(--text-secondary); }
 .cue-composer-advanced>button { margin-block-start:8px; }
 .cue-library-error { position:absolute; inset-inline:12px; bottom:4px; padding:8px; background:var(--surface); color:var(--danger); font-size:12px; }
-.console-cue-cell { display:flex; gap:2px; height:100%; min-width:0; }
+.console-cue-cell { position:relative; display:flex; height:100%; min-width:0; }
 .console-cue-cell>button:first-child { flex:1; min-width:0; overflow:hidden; justify-content:flex-start; }
-.console-cue-cell>button:not(:first-child) { width:26px; flex-shrink:0; padding:3px; }
+/* "Add to the current Cue" sits in the card's corner and shows on hover or keyboard focus, so the cards
+   line up (2026-10-28, picture 10). */
+.console-cue-cell>button:not(:first-child) { position:absolute; top:50%; right:4px; display:grid; place-items:center; width:24px; height:24px; min-height:0; padding:0; transform:translateY(-50%); border:1px solid var(--separator); border-radius:5px; background:var(--surface-raised); opacity:0; transition:opacity .12s; }
+.console-cue-cell:is(:hover,:focus-within)>button:not(:first-child) { opacity:1; }
+.console-cue-cell>button:not(:first-child) svg { width:14px; height:14px; }
+@media (prefers-reduced-motion:reduce) { .console-cue-cell>button:not(:first-child) { transition:none; } }
 @media (max-width:1050px) { .lighting-workbench .lighting-effect-dock.lighting-material-layout[data-sidebar=true][data-editor=true] { grid-template-columns:minmax(220px,1fr) 6px 280px; } }
 
 .lighting-classification[data-composing=true] .classification-cell>button:last-of-type { display:inline-flex; }

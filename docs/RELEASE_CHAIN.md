@@ -6,18 +6,21 @@
 用户 2026-10-24 定下：打 tag 即上线，中间没有人工步骤；不做额外的自动化验收，用户自己安装测试；官网只放最新的包。本文后面的章节是 2026-09 的旧链路，以本节和[软件更新文档](SOFTWARE_UPDATES.md#步骤)为准。
 
 1. 确认 `release-notes/X.Y.Z.md` 写全了（GitHub Release、仓库 CHANGELOG、官网和软件里的更新日志都从它生成，见 [release-notes/README.md](../release-notes/README.md)）。发布提交改根目录和 `apps/desktop` 两个 `package.json` 的版本号，运行 `pnpm changelog`，提交信息 `chore(release): X.Y.Z`，推 master。
-2. 这个提交的 CI 通过后，在它上面打 `vX.Y.Z` 标签并推送。
+2. 这个提交的 CI 通过后，在 GitHub Actions 手动运行 Release Windows（Run workflow，分支选 master，`commit` 填这个提交的 40 位提交号），tag 由工作流自己打（`scripts/tag-release.mjs`）。Claude 的会话推不了 tag，就用 GitHub API 触发同一个工作流，不需要用户动手（用户 2026-10-27 要求）。推 `vX.Y.Z` 标签也照样能发版。
+   - 分支在触发后又有新提交时，tag 作业拒绝，免得把别的改动发出去；核对后用新的提交号重新触发。
+   - master 已经有下一版的改动时，从要发布的提交开 `release/X.Y.Z` 分支，在那个分支上触发。
+   - 打了 tag 但没发布出去的版本（打包失败，GitHub 上没有它的 release 或草稿，更新源也没有它），修好后在修复提交上再触发一次，标签挪过去，版本号不变（用户 2026-10-26 要求不跳号）。已有草稿或已发布的版本，tag 作业拒绝挪动。
+   - 推 master 后 Verify Desktop 在几分钟内检查类型、lint，以及正式模式构建不带本机开发测试通道（这类问题以前要到打包时才发现，0.5.3 第一次就是这样失败的）。
 3. 之后全部自动（2026-10-24 用户定下：在 GitHub 云端打包，工位电脑只负责把包搬到服务器；不用 Cloudflare）：
    - Release Windows 的 verify 和 build 作业在 GitHub 云端 Windows 上跑：检查版本、类型、单测、lint；下载美颜和音乐分析的固定资产，打包、签名，把四个文件放进这个标签的草稿 GitHub Release。
    - 搬运：工位电脑的计划任务每 10 分钟（以及登录、联网时）跑一次 `scripts/relay-release.mjs`，Mac 也可以手动 `pnpm release:relay`，二选一，重复运行安全。它下载草稿、按构建清单核对，上传到服务器 staging；服务器上已有或正在上传就不重复传。
    - 服务器：发布脚本重新做全部校验（签名、manifest、sha256、版本高于更新源、这个版本没发布过），通过就上线。
    - 搬运脚本看到更新源换成这个版本后，把草稿转为正式 Release，标为 Latest。
+   - 官网：Release 转正式会触发 Website Release，它从线上更新源写 `release.json`，提交到 master，再启动 Verify Licensing Server 部署官网（2026-10-27 起，之前要手动运行 `write-website-release.mjs` 并推送）。服务器回滚后，在 Actions 里手动运行一次 Website Release，官网就跟着回到更新源上的版本。
    - 工位电脑关机时什么都不用做：它上线后计划任务自动接着同步，或者在 Mac 上跑一次。
 4. 用户从官网下载安装、测试。有问题就在后台「回滚到上一版」，或者修好后发下一个版本。
 
 后台「软件更新」保留，用来看状态、看最近一次自动发布的结果和紧急回滚。没能自动发布的版本留在待发布列表里，原因写在「最近一次自动发布」。
-
-官网下载信息暂时还要在上线后运行 `node scripts/write-website-release.mjs` 并推送；改成直接跟着更新源变化之后，这一步去掉。
 
 保留规则：
 - 官网下载页和 `release.json` 只放最新版。
@@ -59,7 +62,7 @@
 - **工位电脑的网络**：上传服务器必须用 Git for Windows 的 ssh，Windows 自带的 ssh.exe 输入一大就停。本机代理 127.0.0.1:7890 偶尔会断开连接，搬运下一轮会接着做。
 - **大文件上传 GitHub**：必须从文件流式发送，一次写入整个安装包在 Windows 上会失败（就是 0.5.1 的问题）。
 - **改草稿 release**：通过 API 修改草稿时要带上 `tag_name`，否则 GitHub 会把它的标签名改成 `untagged-…`。
-- **官网**：「官网跟着更新源变」那批（本地分支 `website-follows-feed`）装上之前，每次上线后都要运行 `node scripts/write-website-release.mjs` 并推送。下载页的日期按北京时间，构建晚于 UTC 16:00 时会是第二天。
+- **官网**：上线后由 Website Release 自动更新（见上面第 3 步）。Verify Licensing Server 只在 master 仍是它检查的那个提交时部署，所以它跑完之前 master 又有了新提交、而新提交不触发它时，官网这次不会部署，要再手动运行一次 Verify Licensing Server。下载页的日期按北京时间，构建晚于 UTC 16:00 时会是第二天。
 - **日常签名私钥**：云端签名已在 0.5.2 确认可用，工位电脑上的 `D:\tblink-release-signing\release-2026-10-a.pem` 可以删除。
 - **服务器磁盘**：归档上限和磁盘余量检查（见[待办](#发版流程待办)）还没做。staging 最多存 5 份，自动发布失败的会占位，要在后台丢弃。
 

@@ -5,15 +5,21 @@ export type PreflightLogEntry = { level: 'info' | 'error'; message: string; resu
 /**
  * One preflight run as run-log entries: a single summary carrying every result in its details, each blocking
  * check on its own line every time, and an advisory (warning status) once per project, check and wording in
- * this run of the software, since it repeats on every song until someone changes the project.
+ * this run of the software, since it repeats on every song until someone changes the project. A summary
+ * whose results this run already logged for the project says so instead of repeating them: choosing songs
+ * reruns the check each time, and those repeats were half of a site log (2026-10-27).
  */
 export function preflightLogEntries(checks: readonly PreflightCheck[], seen: Set<string>, projectId: string): PreflightLogEntry[] {
   const blocking = checks.filter(check => check.status === 'blocking'), advisories = checks.filter(check => check.status === 'warning');
   const notes = [blocking.length ? `${blocking.length} 项未通过` : '', advisories.length ? `${advisories.length} 项提示` : ''].filter(Boolean);
+  const results = checks.map(({ id, label, status, detail }) => ({ id, label, status, detail }));
+  const resultsKey = `preflight\n${projectId}\n${JSON.stringify(results)}`;
+  const repeated = seen.has(resultsKey);
+  seen.add(resultsKey);
   const summary: PreflightLogEntry = {
     level: blocking.length ? 'error' : 'info', result: blocking.length ? 'failed' : 'succeeded',
     message: blocking.length ? `开播前检查未通过（${notes.join('，')}，共 ${checks.length} 项）` : `开播前检查通过（${[`${checks.length} 项`, ...notes].join('，')}）`,
-    details: { checks: checks.map(({ id, label, status, detail }) => ({ id, label, status, detail })) }
+    details: repeated ? { sameAsEarlier: true } : { checks: results }
   };
   const entries = [summary, ...blocking.map((check): PreflightLogEntry => ({ level: 'error', result: 'failed', message: `${check.label}：${check.detail}` }))];
   for (const check of advisories) {

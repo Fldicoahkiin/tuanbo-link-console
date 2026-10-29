@@ -128,7 +128,7 @@ export class NativeProgramPlayer {
       this.requestedPreparation = true;
       const result = await this.api.prepareNativePlayback({ version: 1, sessionId: this.sessionId, generation: ++this.nativeGeneration,
         projectPath: this.projectPath, snapshot, ...(nextSnapshot ? { nextSnapshot } : {}), audioDeviceId: config.outputDeviceId, midiPortName,
-        autoDetectMtc: sendMtc && !midiPortName && Boolean(item.p1Media || item.lighting) });
+        autoDetectMtc: sendMtc && !midiPortName && Boolean(item.p1Media || item.lighting), mtcQuarterFramesOnly: config.mtcSendMode === 'quarter-frames' });
       this.receive(result);
       if (!this.current(token)) { await this.command({ kind: 'stop' }); return; }
       if (this.mtcSuppressed && result.mtcPortName) await this.command({ kind: 'stop-mtc' });

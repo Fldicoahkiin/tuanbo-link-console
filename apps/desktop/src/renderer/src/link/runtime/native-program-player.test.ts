@@ -102,16 +102,20 @@ it('随时可播放：开播检查不过的歌照发本曲起始码的时间码�
   const f = fixture(), lighting = createLightingDocument();
   lighting.ma2Bindings = [{ id: 'binding', timecode: 2, name: '音频 0', readAt: '2026-10-22T00:00:00.000Z', sourceXml: '<MA/>', baselineTracks: [], mappings: [], playback: 'editable', timeOriginMs: 480000 }];
   f.project.rundown[0]!.lighting = lighting;
+  // The console show now starts one second later than the song: not paired, the song still sends its own start.
+  f.project.ma2ReadState = { source: 'console', catalog: { directory: { show: 'test', generation: 'session', version: '3.7.0.5', entries: [{ target: 2, name: '音频 0' }] }, readAt: '2026-10-22T00:00:00.000Z',
+    entries: [{ target: 2, name: '音频 0', eventCount: 1, frameFormat: '30 FPS', offset: '14430', slot: 'TC Slot 2', events: [{ path: '1', time: '30', action: 'Goto', executor: '1.1', cue: '1', name: null }], error: null, warnings: [] }] },
+    pairs: {}, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };
   await f.player.play('song-0');
   expect(f.api.prepareNativePlayback.mock.calls[0]?.[0]).toMatchObject({ midiPortName: 'TEST', snapshot: { offsetMs: 480000 } });
   expect(f.lighting.prepare).toHaveBeenCalledOnce();
-  expect(f.state()).toMatchObject({ status: 'playing', fault: null }); expect(f.state().notice).toMatch(/^这首歌的灯光需要处理：.*。时间码照常发送(；|$)/);
+  expect(f.state()).toMatchObject({ status: 'playing', fault: null }); expect(f.state().notice).toMatch(/^控台 Timecode 2 从 .*对不上.*；时间码照常发送(；|$)/);
   await f.player.seek(3000);
   expect(f.api.prepareNativePlayback.mock.calls[1]?.[0].midiPortName).toBe('TEST'); expect(f.state().fault).toBeNull();
-  expect(f.deps.notice.mock.calls.filter(([message]) => String(message).startsWith('这首歌的灯光需要处理'))).toHaveLength(1);
+  expect(f.deps.notice.mock.calls.filter(([message]) => String(message).startsWith('控台 Timecode 2'))).toHaveLength(1);
   await f.player.play('song-1');
   expect(f.api.prepareNativePlayback.mock.calls[2]?.[0]).toMatchObject({ midiPortName: 'TEST', snapshot: { offsetMs: 500000 } });
-  expect(f.state().fault).toBeNull(); expect(f.state().notice ?? '').not.toContain('灯光需要处理');
+  expect(f.state().fault).toBeNull(); expect(f.state().notice ?? '').not.toContain('对不上');
   await f.player.dispose();
 });
 
@@ -438,26 +442,26 @@ describe('原生正式播放器的操作与会话', () => {
   });
 });
 
-it('不支持的 MTC 帧率明确隔离该通道，保留已知直接灯光和音频；不修改歌曲偏移', () => {
+it('29.97 丢帧工程照常发时间码，引擎按丢帧计算；不修改歌曲偏移', () => {
   const f = fixture(); f.project.timebase.frameRate = '29.97df';
   f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: 'network' };
   const result = nativeProgramSnapshot(f.project, 'song-0', 7, 1000, 48000);
-  expect(result).toMatchObject({ allowMtc: false }); expect(result.notice).toContain('29.97df');
+  expect(result).toMatchObject({ allowMtc: true, notice: null, snapshot: { frameRate: 29.97, offsetMs: 480000 } });
   expect(f.project.rundown[0]!.playback!.mtcOffsetMs).toBe(480000);
 });
 
-for (const mode of ['network', 'direct', 'timecode'] as const) it(`原生播放：时间码配对待核对的 ${mode} 输出歌曲照发时间码，只提示核对关联（2026-10-26）`, async () => {
+for (const mode of ['network', 'direct', 'timecode'] as const) it(`原生播放：控台上两个节目起点和 ${mode} 输出歌曲相同时照发时间码，只提示（2026-10-26）`, async () => {
   const f = fixture();
   f.project.rundown[0]!.lighting = { ...createLightingDocument(), outputMode: mode };
-  f.project.ma2ReadState = { source: 'console', catalog: { directory: { show: 'test', generation: 'session', version: '3.7.0.5', entries: [] }, readAt: '2026-10-08T00:00:00.000Z', entries: [] },
-    pairs: {}, pairings: { '2': { itemId: 'song-0', status: 'stale', evidence: '', reason: '时间依据已变化' } }, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };
+  const entry = (target: number) => ({ target, name: `节目 ${target}`, eventCount: 1, frameFormat: '30 FPS', offset: '14400', slot: 'TC Slot 2', events: [{ path: '1', time: '30', action: 'Goto', executor: '1.1', cue: '1', name: null }], error: null, warnings: [] });
+  f.project.ma2ReadState = { source: 'console', catalog: { directory: { show: 'test', generation: 'session', version: '3.7.0.5', entries: [] }, readAt: '2026-10-08T00:00:00.000Z', entries: [entry(2), entry(3)] },
+    pairs: {}, failures: [], selectedTarget: null, query: '', filter: 'all', message: '' };
   const result = nativeProgramSnapshot(f.project, 'song-0', 7, 500, 48000);
   expect(result).toMatchObject({ allowMtc: true, notice: null, snapshot: { offsetMs: 480000 } });
   await f.player.play('song-0');
-  expect(f.state()).toMatchObject({ status: 'playing', fault: null }); expect(f.state().notice).toMatch(/时间依据已变化.*时间码照常发送/);
+  expect(f.state()).toMatchObject({ status: 'playing', fault: null }); expect(f.state().notice).toMatch(/Timecode 2、3 的起点和这首歌相同.*时间码照常发送/);
   expect(f.lighting.prepare).toHaveBeenCalledOnce();
   expect(f.api.prepareNativePlayback.mock.calls[0]?.[0].midiPortName).toBe('TEST');
-  expect(f.project.ma2ReadState?.pairings?.['2']?.status).toBe('stale');
   await f.player.stop();
 });
 

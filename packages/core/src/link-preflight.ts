@@ -93,7 +93,7 @@ export function runLinkPreflight(context: PreflightContext): PreflightReport {
     const expectedShows = expectedMa2Shows(project, item.id);
     if (context.ma2Show !== undefined && expectedShows.length) {
       const mismatch = ma2ShowMismatch(expectedShows, context.ma2Show);
-      checks.push(mismatch ? blocking(`ma2.show.${item.id}`, `MA2 控台 Show：${item.title}`, mismatch)
+      checks.push(mismatch ? warning(`ma2.show.${item.id}`, `MA2 控台 Show：${item.title}`, mismatch)
         : passed(`ma2.show.${item.id}`, `MA2 控台 Show：${item.title}`, context.ma2Show));
     }
     if (project.obsOutputMode === 'scenes') {

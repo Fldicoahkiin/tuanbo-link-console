@@ -1,53 +1,51 @@
 import type { LinkProject, MtcFrameRate } from '@tb/schema';
 import { ma2PendingChanges } from './ma2-pending-changes';
+import { ma2SongPairs } from './ma2-pairing-state';
 import { ma2SongPoints } from './ma2-song-sequence';
-import { lightingTimeOrigin, programTimeOrigin } from './ma2-time-origin';
+import { programTimeOrigin } from './ma2-time-origin';
 
 export type SongLightingStatus =
-  | { state: 'unmatched' }
-  | { state: 'editing'; pending: number }
-  | { state: 'ready'; timecode: number; startMs: number; frameRate: MtcFrameRate }
-  | { state: 'attention'; reasons: string[] };
+  /** No console show is known to start where the song starts; `reason` says why when there is one. */
+  | { state: 'unmatched'; reason: string | null }
+  /** The console show that runs with the song. `pending` edits are not on the console yet; `problems` stop them being written. */
+  | { state: 'matched'; timecode: number; startMs: number; frameRate: MtcFrameRate | null; pending: number; problems: string[]; notes: string[] }
+  /** Two or more console shows start where the song starts: none is guessed and nothing is written. */
+  | { state: 'duplicate'; timecodes: number[] };
 
 /**
- * Whether a song's lighting can run from its own console Timecode show when the player sends MTC.
- * Read from the project alone (pairings confirmed against a console read, Timecode bindings and
- * local edits), so it answers the same with the network cable unplugged. `ready.startMs` is the
- * song's MTC start, already checked against the paired show's offset and events.
+ * Whether a console Timecode show runs with the song when the player sends its MTC (2026-10-26: by the
+ * MTC start alone, no confirmation). Read from the project alone (the last console read it keeps, the
+ * songs' starts, bindings and local edits), so it answers the same with the network cable unplugged.
+ * Nothing here holds a song back: every song plays and sends its timecode.
  */
 export function songLightingStatus(project: LinkProject, itemId: string): SongLightingStatus {
   const item = project.rundown.find(value => value.id === itemId);
   if (!item) throw new Error(`节目单中没有 ${itemId}`);
   const own = item.lighting?.consoleSong;
   if (item.lighting && own?.timecode) return ownShowStatus(item, item.lighting, own, own.timecode);
-  if (own && !own.executor) return { state: 'attention', reasons: ['这首歌的控台序列只放在 Layout 页面上，没有执行器位置，不能建时间码节目'] };
-  const pairings = Object.entries(project.ma2ReadState?.pairings ?? {}).filter(([, pairing]) => pairing.itemId === itemId);
-  const bindings = item.lighting?.ma2Bindings ?? [];
-  if (!pairings.length && !bindings.length) return { state: 'unmatched' };
-  const reasons: string[] = [];
-  for (const [target, pairing] of pairings) {
-    if (pairing.status === 'stale') reasons.push(`控台 Timecode ${target}：${pairing.reason ?? '需要重新确认关联'}`);
-    if (pairing.status === 'suggested') reasons.push(`控台 Timecode ${target} 是自动匹配的，还没确认`);
+  if (own && !own.executor) return { state: 'unmatched', reason: '这首歌的控台序列只放在 Layout 页面上，没有执行器位置，建不了时间码节目' };
+  if (own) return { state: 'unmatched', reason: '控台上还没有这首歌的时间码节目，同步时自动建立' };
+  const match = ma2SongPairs(project);
+  const duplicate = match.duplicateStarts[itemId];
+  if (duplicate) return { state: 'duplicate', timecodes: duplicate };
+  const target = Object.entries(match.pairs).find(([, id]) => id === itemId)?.[0];
+  const bound = new Set(item.lighting?.ma2Bindings?.map(binding => binding.timecode) ?? []);
+  if (target === undefined) {
+    const reasons = match.unresolved.filter(value => bound.has(value.target)).map(value => value.reason);
+    return { state: 'unmatched', reason: reasons.length ? reasons.join('；') : null };
   }
-  for (const binding of bindings) if (!pairings.some(([target]) => Number(target) === binding.timecode)) reasons.push(`控台 Timecode ${binding.timecode} 还没确认关联，请先读取控台`);
-  const confirmed = pairings.filter(([, pairing]) => pairing.status === 'confirmed');
-  if (confirmed.length > 1) reasons.push(`同一首歌对应多个控台 Timecode：${confirmed.map(([target]) => target).join('、')}`);
-  let startMs: number | null = null;
-  try {
-    startMs = programTimeOrigin(item);
-    if (lightingTimeOrigin(item.lighting, startMs) !== startMs) reasons.push('歌曲的开始时间和控台时间线的起点对不上');
-  } catch (error) { reasons.push(error instanceof Error ? error.message : String(error)); }
-  for (const [target] of confirmed) {
-    const frame = project.ma2ReadState?.catalog.entries.find(entry => entry.target === Number(target))?.frameFormat;
-    if (frame !== '30 FPS') reasons.push(`控台 Timecode ${target} 的帧率为 ${frame ?? '未知'}，只支持 30 FPS`);
-  }
+  const timecode = Number(target);
   const pending = ma2PendingChanges(project).filter(change => change.itemId === itemId);
-  for (const change of pending) if (change.error) reasons.push(`控台 Timecode ${change.target}：${change.error}`);
-  if (reasons.length) return { state: 'attention', reasons };
-  const count = pending.reduce((total, change) => total + change.changes.length, 0);
-  if (count) return { state: 'editing', pending: count };
-  if (confirmed.length === 1 && startMs !== null) return { state: 'ready', timecode: Number(confirmed[0]![0]), startMs, frameRate: '30' };
-  return { state: 'unmatched' };
+  const problems = pending.flatMap(change => change.error ? [`控台 Timecode ${change.target}：${change.error}`] : []);
+  for (const value of match.unresolved) if (bound.has(value.target)) problems.push(value.reason);
+  const format = project.ma2ReadState?.catalog.entries.find(entry => entry.target === timecode)?.frameFormat;
+  return { state: 'matched', timecode, startMs: programTimeOrigin(item), frameRate: consoleFrameRate(format),
+    pending: pending.reduce((total, change) => total + change.changes.length, 0), problems,
+    notes: match.notes.filter(note => note.target === timecode).map(note => note.text) };
+}
+
+function consoleFrameRate(format: string | null | undefined): MtcFrameRate | null {
+  return format === '30 FPS' ? '30' : format === '25 FPS' ? '25' : format === '24 FPS' ? '24' : null;
 }
 
 type Item = LinkProject['rundown'][number];
@@ -63,7 +61,7 @@ const frames = (ms: number): number => Math.round(ms * 30 / 1000);
 function ownShowStatus(item: Item, lighting: Lighting, song: ConsoleSong, timecode: NonNullable<ConsoleSong['timecode']>): SongLightingStatus {
   let startMs: number; let points: ReturnType<typeof ma2SongPoints>;
   try { startMs = programTimeOrigin(item); points = ma2SongPoints(lighting); }
-  catch (error) { return { state: 'attention', reasons: [error instanceof Error ? error.message : String(error)] }; }
+  catch (error) { return { state: 'unmatched', reason: error instanceof Error ? error.message : String(error) }; }
   const written = new Map(song.points.map(point => [point.id, point]));
   let pending = frames(startMs) === timecode.offset ? 0 : 1;
   for (const point of points) {
@@ -72,5 +70,5 @@ function ownShowStatus(item: Item, lighting: Lighting, song: ConsoleSong, timeco
     if (!stored || !own || stored.atMs === undefined || frames(stored.atMs) !== frames(point.atMs)) pending += 1;
   }
   pending += song.points.filter(point => !points.some(local => local.id === point.id)).length;
-  return pending ? { state: 'editing', pending } : { state: 'ready', timecode: timecode.number, startMs, frameRate: '30' };
+  return { state: 'matched', timecode: timecode.number, startMs, frameRate: '30', pending, problems: [], notes: [] };
 }

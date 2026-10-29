@@ -297,7 +297,7 @@ describe('P1ProjectService', () => {
     expect(imported.items).toHaveLength(1); expect(imported.skippedItems).toHaveLength(1);
   });
 
-  it('零时长从原音频恢复，缺失歌曲保留原顺序，补文件后原位恢复不重复', async () => {
+  it('裁剪 0～0 是 P1 没裁剪：按完整音频导入，不提示；缺失歌曲保留原顺序，补文件后原位恢复不重复', async () => {
     const fixture = await createFixture();
     const wav = Buffer.alloc(44 + 2 * 192000);
     wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
@@ -305,14 +305,16 @@ describe('P1ProjectService', () => {
     wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(192000, 28); wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34);
     wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
     await writeFile(fixture.audioPaths[0], wav); await unlink(fixture.audioPaths[1]);
-    await writeFile(fixture.p1Path, (await readFile(fixture.p1Path, 'utf8')).replace('cut_end="1"', 'cut_end="0"').replaceAll('MidiStartTime="0"', 'MidiStartTime="120"'));
+    await writeFile(fixture.p1Path, (await readFile(fixture.p1Path, 'utf8')).replace('cut_start="0" cut_end="1"', 'cut_start="0" cut_end="0"').replaceAll('MidiStartTime="0"', 'MidiStartTime="120"'));
     const service = new P1ProjectService(new LinkProjectService());
     const imported = await service.importProject(fixture.p1Path, fixture.linkPath);
     trackImportedAssets(fixture.directory, imported.items.map(item => item.referenceAudio.relativePath));
     let project = synchronizeP1ProjectCommand(imported, sequenceIds('first', 'second')).execute(createEmptyLinkProject('全部保留'));
     expect(project.rundown.map(item => item.id)).toEqual(['first', 'second']);
     expect(project.rundown[0]?.referenceAudio?.durationMs).toBe(2000);
-    expect(project.rundown[0]?.notes).toContain('完整原音频');
+    expect(project.rundown[0]?.notes ?? '').not.toContain('裁剪');
+    expect(project.rundown[0]?.p1Media).not.toHaveProperty('importedFullSource');
+    expect(project.rundown[0]?.p1Media).not.toHaveProperty('sourceTrim');
     expect(project.rundown[0]?.playback?.mtcOffsetMs).toBe(120000);
     expect(project.rundown[1]?.enabled).toBe(false);
     project = synchronizeP1ProjectCommand(imported).execute(project);

@@ -20,7 +20,6 @@ export function nativeProgramSnapshot(project: LinkProject, itemId: string, revi
   catch (error) { problems.push(`${error instanceof Error ? error.message : String(error)}；这次不发时间码，请检查歌曲起始码。`); }
   if (!problems.length && offsetMs + endMs >= 86400000) problems.push('歌曲的时间码范围超过一天，这次不发时间码。');
   const rate = project.timebase.frameRate;
-  if (rate === '29.97df') problems.push('Windows 原生播放的 29.97df 时间码还没验证过，这次不发时间码。');
   // Audio-only preparation does not invent a replacement song timecode. The
   // native offset is unused when MIDI is disabled; authored data stays intact.
   const notice = problems.length ? problems.join('；') : null;
@@ -28,6 +27,6 @@ export function nativeProgramSnapshot(project: LinkProject, itemId: string, revi
   const snapshot = playbackSnapshotSchema.parse({ version: 1, projectId: project.projectId, itemId, revision,
     audio: { relativePath: audio.relativePath, sha256: audio.sha256, durationMs: audio.durationMs },
     startMs, endMs, positionMs: positionMs ?? startMs, offsetMs: allowMtc ? offsetMs : 0,
-    frameRate: rate === '24' ? 24 : rate === '25' ? 25 : 30, sampleRate, volume: (item.playback?.volume ?? 100) / 100 });
+    frameRate: rate === '24' ? 24 : rate === '25' ? 25 : rate === '29.97df' ? 29.97 : 30, sampleRate, volume: (item.playback?.volume ?? 100) / 100 });
   return { snapshot, notice, allowMtc };
 }

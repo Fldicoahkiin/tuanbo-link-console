@@ -97,11 +97,11 @@ export class P1ProjectService {
         if (realRefusal) throw new Error(`“${media.title}”的实际文件：${explain(realRefusal)}`);
         const fileStat = await stat(realSong);
         if (!fileStat.isFile() || fileStat.size <= 0) throw new Error(`音频文件为空或不是文件：${realSong}`);
-        const audio = await importP1Audio(this.projects, linkProjectPath, media, realSong);
+        const { trim, ...audio } = await importP1Audio(this.projects, linkProjectPath, media, realSong);
         items.push({
           title: media.title,
           ...audio,
-          p1Media: { ...binding, ...(!audio.importNotes ? { sourceTrim: { startMs: Number(media.element.getAttribute('cut_start')) * 1000, endMs: Number(media.element.getAttribute('cut_end')) * 1000, applied: true } } : { importedFullSource: true }) }
+          p1Media: { ...binding, ...trim === 'whole' ? {} : trim === 'fallback' ? { importedFullSource: true } : { sourceTrim: { ...trim, applied: true } } }
         });
         } catch (error) {
           options.signal?.throwIfAborted();
@@ -430,21 +430,27 @@ function readMediaBinding(
   });
 }
 
-async function importP1Audio(projects: LinkProjectService, projectPath: string, media: ParsedP1Media, readablePath: string): Promise<Pick<LinkP1ProjectImportResult['items'][number], 'referenceAudio' | 'importNotes'>> {
-  const startText = media.element.getAttribute('cut_start');
-  const endText = media.element.getAttribute('cut_end');
-  const start = Number(startText), end = Number(endText);
-  const valid = startText?.trim() && endText?.trim() && Number.isFinite(start) && start >= 0 && Number.isFinite(end) && end > start && Math.round((end - start) * 1000) > 0;
-  if (!valid) return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), importNotes: `P1 裁剪时长无效（${startText ?? '缺失'}～${endText ?? '缺失'} 秒），已按完整原音频导入；原起始时间码保留，请检查灯光的结束位置。` };
+/**
+ * The song's audio as P1 plays it. `trim` says how: `whole` when P1 does not cut the file (cut 0～0, as
+ * P1 writes for an uncut song, or no cut given), the cut range when it was applied, and `fallback` when a
+ * cut P1 gave could not be applied and the whole file was imported instead (with a note).
+ */
+async function importP1Audio(projects: LinkProjectService, projectPath: string, media: ParsedP1Media, readablePath: string): Promise<Pick<LinkP1ProjectImportResult['items'][number], 'referenceAudio' | 'importNotes'> & { trim: 'whole' | 'fallback' | { startMs: number; endMs: number } }> {
+  const startText = media.element.getAttribute('cut_start')?.trim() ?? '';
+  const endText = media.element.getAttribute('cut_end')?.trim() ?? '';
+  const start = Number(startText || '0'), end = Number(endText || '0');
+  if (start === 0 && end === 0) return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), trim: 'whole' };
+  const valid = Number.isFinite(start) && start >= 0 && Number.isFinite(end) && end > start && Math.round((end - start) * 1000) > 0;
+  if (!valid) return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), trim: 'fallback', importNotes: `P1 裁剪时长无效（${startText || '缺失'}～${endText || '缺失'} 秒），已按完整原音频导入；原起始时间码保留，请检查灯光的结束位置。` };
   const durationMs = Math.round((end - start) * 1000);
   try {
     const referenceAudio = await projects.importReferenceAudio(projectPath, readablePath, durationMs, start * 1000, true);
     if (referenceAudio.durationMs < durationMs - 2) throw new Error('声明时长超出可解码音频');
-    return { referenceAudio };
+    return { referenceAudio, trim: { startMs: start * 1000, endMs: end * 1000 } };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     if (!/裁剪区间超出可解码音频|声明时长超出可解码音频/.test(reason)) throw error;
-    return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), importNotes: `P1 裁剪范围 ${start}～${end} 秒超出实际音频，已按完整原音频导入；原起始时间码保留，请检查灯光的结束位置。` };
+    return { referenceAudio: await projects.importReferenceAudio(projectPath, readablePath, null), trim: 'fallback', importNotes: `P1 裁剪范围 ${start}～${end} 秒超出实际音频，已按完整原音频导入；原起始时间码保留，请检查灯光的结束位置。` };
   }
 }
 

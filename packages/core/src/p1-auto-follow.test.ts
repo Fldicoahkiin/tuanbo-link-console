@@ -37,3 +37,25 @@ describe('P1 原生时间码映射', () => {
     expect(() => allocateP1TimecodeRanges(project)).toThrow('15 小时');
   });
 });
+
+describe('P1 点歌区间沿用歌曲已有的 MTC 起始码', () => {
+  const song = (id: string, startSeconds: number | null) => ({
+    id, title: id, cues: [],
+    referenceAudio: { assetId: `audio-${id}`, relativePath: `assets/${id}.wav`, sha256: 'a'.repeat(64), durationMs: 30_000 },
+    ...startSeconds === null ? {} : { playback: { volume: 100, startMs: 0, endMs: 0, mtcOffsetMs: startSeconds * 1000, shortcut: '' } }
+  });
+  it('已有起点的歌不动，没有起点的排在所有歌后面', () => {
+    const project = parseLinkProject({ ...createEmptyLinkProject('沿用起点'), rundown: [song('a', 2400), song('b', null), song('c', 600)] });
+    expect(allocateP1TimecodeRanges(project).ranges.map((range) => [range.itemId, range.startSeconds])).toEqual([['a', 2400], ['b', 2440], ['c', 600]]);
+  });
+  it('没有灯光的歌起点不能用时重新分配；有控台灯光的歌说明原因，不替它换起点', () => {
+    const free = parseLinkProject({ ...createEmptyLinkProject('重叠'), rundown: [song('a', 2400), song('b', 2410)] });
+    expect(allocateP1TimecodeRanges(free).ranges.map((range) => range.startSeconds)).toEqual([2400, 2440]);
+    const lit = parseLinkProject({ ...createEmptyLinkProject('重叠'), rundown: [song('a', 2400), song('b', 2410)] });
+    lit.schemaVersion = 2;
+    lit.ma2ReadState = { source: 'console', pairs: {}, failures: [], selectedTarget: null, query: '', filter: 'all', message: '',
+      catalog: { directory: { show: '测试 Show', generation: 'session', version: '3.3.4.3', entries: [{ target: 29, name: 'b' }] }, readAt: '2026-10-27T00:00:00.000Z',
+        entries: [{ target: 29, name: 'b', eventCount: 1, frameFormat: '30 FPS', offset: '72300', slot: 'TC Slot 2', events: [{ path: '1', time: '30', action: 'Goto', executor: '1.1', cue: '1', name: null }], error: null, warnings: [] }] } };
+    expect(() => allocateP1TimecodeRanges(lit)).toThrow(/「b」的 MTC 起始码不能用于 P1 点歌：和另一首歌的时间码范围重叠/);
+  });
+});

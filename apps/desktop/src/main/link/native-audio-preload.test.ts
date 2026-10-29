@@ -14,7 +14,7 @@ async function fixture() {
     startMs: 1000, endMs: 9000, positionMs: 1500, offsetMs: 480000, frameRate: 30, sampleRate: 48000, volume: 0.8 };
   const release = vi.fn(() => Promise.resolve()), error = vi.fn(), measured = vi.fn();
   const lease: NativeAudioLease = { path: join(directory, 'decoded.pcm'), baseMs: 1000, streaming: true, frames: 480000,
-    durationMs: 10000, sampleRate: 48000, completion: Promise.resolve({ ok: true }), release };
+    durationMs: 10000, availableMs: 10000, sampleRate: 48000, completion: Promise.resolve({ ok: true }), release };
   const prepare = vi.fn(() => Promise.resolve(lease));
   const preload = new NativeAudioPreload({ cache: { prepare }, resolveAudio: () => path, error, measured });
   return { preload, path, snapshot, lease, prepare, release, error, measured };

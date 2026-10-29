@@ -99,3 +99,40 @@ it('控台删掉本曲序列或执行器改放别的序列时报告“有变化�
     ? '<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA" major_vers="3" minor_vers="7" stream_vers="0"><Exec offset_from_first="0"><Assignment name="别的"><No>25</No><No>1</No><No>9001</No></Assignment></Exec></MA>' : '<MA><Sequ index="8999"/></MA>')) };
   expect(await new Ma2SongWatch(() => false).changed(connection, moved, { ...request, executor: '9890.101' })).toBe(true);
 });
+it('复查也盯住这首歌的时间码节目（2026-10-26）：每个已确认版本只读一次节目，之后在控台上比较；控台上一改就报变化', async () => {
+  const { createHash } = await import('node:crypto');
+  const revision = (xml: string): string => createHash('sha256').update(xml).digest('hex');
+  const shows = new Map([[9000, '<MA><Timecode index="8999"/></MA>']]); const files = new Map<string, string>(); const lines: string[] = [];
+  const connection: Pick<Ma2Telnet, 'command'> = { command: vi.fn<Ma2Telnet['command']>((line, match) => {
+    lines.push(line);
+    const prefix = `${/TBLINK_CUE_[a-f0-9]{24}/.exec(line)?.[0]}:`;
+    const missing = /handle\('Timecode (\d+)'\) then return 'missing'/.exec(line);
+    const exported = /Export Timecode (\d+) (\w+) \/o/.exec(line);
+    const compare = /return r\('(\w+)'\)==r\('(\w+)',1\)/.exec(line);
+    let result = 'true';
+    if (missing && !shows.has(Number(missing[1]))) result = 'missing';
+    else if (exported) { files.set(exported[2]!, shows.get(Number(exported[1]))!); result = compare ? String(files.get(compare[1]!) === files.get(compare[2]!)) : 'captured'; }
+    return Promise.resolve(match(`${prefix}${line.includes("READY')") ? 'READY' : `OK:${result}`}\r\n`)!);
+  }) };
+  const bridge = { request: vi.fn<Ma2OnpcBridge['request']>(operation => Promise.resolve(operation === 'READ' ? shows.get(9000)! : '<MA><Sequ index="8999"/></MA>')) };
+  const watch = new Ma2SongWatch(() => false);
+  const sequenceRevision = revision('<MA><Sequ index="8999"/></MA>');
+  const song = { ...request, revision: sequenceRevision, timecode: { number: 9000, revision: revision(shows.get(9000)!) } };
+  const reads = (): number => bridge.request.mock.calls.filter(([operation]) => operation === 'READ').length;
+  expect(await watch.changed(connection, bridge, song)).toBe(false); expect(reads()).toBe(1);
+  const before = lines.length;
+  expect(await watch.changed(connection, bridge, song)).toBe(false);
+  expect(reads()).toBe(1); expect(lines.length - before).toBe(3);
+  expect(lines.every(line => Buffer.byteLength(line) <= 900 && !/[$|^]/.test(line))).toBe(true);
+  // The operator moves a time on the console.
+  shows.set(9000, '<MA><Timecode index="8999" moved="1"/></MA>');
+  expect(await watch.changed(connection, bridge, song)).toBe(true); expect(reads()).toBe(1);
+  // Until the sync confirms the console's version the song stays changed; once it does, checks are cheap again.
+  expect(await watch.changed(connection, bridge, song)).toBe(true); expect(reads()).toBe(2);
+  const confirmed = { ...song, timecode: { number: 9000, revision: revision(shows.get(9000)!) } };
+  expect(await watch.changed(connection, bridge, confirmed)).toBe(false); expect(reads()).toBe(2);
+  expect(await watch.changed(connection, bridge, confirmed)).toBe(false); expect(reads()).toBe(2);
+  // A show deleted on the console is a change: the sync writes it again.
+  shows.delete(9000);
+  expect(await watch.changed(connection, bridge, confirmed)).toBe(true);
+});

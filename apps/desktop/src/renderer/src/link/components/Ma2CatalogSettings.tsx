@@ -45,12 +45,12 @@ export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy
   return <section className="settings-section ma2-catalog-settings" aria-label="MA2 现场节目导入">
     <section className="ma2-settings-group">
       <h3>控台灯光</h3>
-      <p className="settings-note">{!project ? '打开工程后，可以把控台 Cue 读到歌曲里。' : !connected ? '连接控台后，可读取节目 Cue。' : '读取结果保存在工程中，可到灯光工作台配对和编辑。'}</p>
+      <p className="settings-note">{!project ? '打开工程后，可以把控台 Cue 读到歌曲里。' : !connected ? '连接控台后，可读取节目 Cue。' : '读取结果保存在工程中，歌曲按 MTC 起始码自动对上控台时间线，可到灯光工作台编辑。'}</p>
       <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{automatic.message}</p>
       <div className="device-actions">
         <Button className={connected ? "primary-button" : "secondary-button"} disabled={disabled || job.busy || !project || !connected} onClick={() => guard(() => read())}>{cached ? '更新控台读取' : '读取控台灯光到现有歌曲'}</Button>
         {cached ? <><Button className="secondary-button" disabled={disabled || job.busy} onClick={() => guard(() => read(true))}>只补读未完成项</Button>
-        <Button className="secondary-button" onClick={() => useMa2ReadStore.setState({ openWorkspace: true, browserOpen: true })}>配对与查看 Cue</Button></> : null}
+        <Button className="secondary-button" onClick={() => useMa2ReadStore.setState({ openWorkspace: true, browserOpen: true })}>查看控台时间线</Button></> : null}
         <Button className="secondary-button" disabled={!cached} onClick={() => guard(exportSite)}>导出控台数据包</Button>
       </div>
       <p className="settings-note">数据包里有已读取的原始 XML、歌曲时间码、配对和读取记录，不需要再扫描一次。{!cached ? '读取一条后即可导出。' : job.busy ? '读取过程中可以导出已经完成的部分。' : ''}</p>

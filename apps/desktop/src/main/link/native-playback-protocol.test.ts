@@ -18,7 +18,20 @@ it('原生协议保留 Unicode 路径、非零起点和时间码偏移', () => {
 });
 it('拒绝非有限值、时间码跨天、空字节和未支持帧率', () => {
   const base = { protocol: 4, requestId: 1, generation: 1, kind: 'prepare', pcmPath: 'C:\\test.pcm', sampleRate: 48000, frameRate: 30, midiDevice: null, startMs: 0, endMs: 9000, offsetMs: 480000, volume: 1 };
-  for (const patch of [{ offsetMs: 86399999 }, { startMs: 9000 }, { volume: NaN }, { frameRate: 29.97 }, { pcmPath: 'a\0b' }, { audioDeviceId: 'a\0b' }, { protocol: 1 }]) expect(nativePlaybackCommandSchema.safeParse({ ...base, ...patch }).success).toBe(false);
+  for (const patch of [{ offsetMs: 86399999 }, { startMs: 9000 }, { volume: NaN }, { frameRate: 29 }, { pcmPath: 'a\0b' }, { audioDeviceId: 'a\0b' }, { protocol: 1 }]) expect(nativePlaybackCommandSchema.safeParse({ ...base, ...patch }).success).toBe(false);
+});
+it('时间码端口名写在设备标识之后，引擎据此核对打开的接口；29.97 掉帧和只发四分之一帧各有独立编码', () => {
+  const command = { protocol: 4, requestId: 2, generation: 2, kind: 'prepare', pcmPath: 'C:\\test.pcm', streaming: true, quarterFramesOnly: true, sampleRate: 48000, frameRate: 29.97,
+    midiDevice: 1, midiPortName: 'USB MIDI Interface', startMs: 0, endMs: 9000, offsetMs: 0, volume: 1 } as const;
+  const bytes = encodeNativePlaybackCommand(command);
+  expect(bytes.readUInt32LE(28)).toBe(2997); expect(bytes.readUInt32LE(88)).toBe(3);
+  expect(bytes.readUInt32LE(92)).toBe(Buffer.byteLength(command.midiPortName));
+  const tail = 96 + bytes.readUInt32LE(72) + bytes.readUInt32LE(76);
+  expect(bytes.subarray(96 + bytes.readUInt32LE(72), tail).toString('utf8')).toBe('default');
+  expect(bytes.subarray(tail).toString('utf8')).toBe(command.midiPortName); expect(bytes.readUInt32LE(4)).toBe(bytes.length);
+  const plain = encodeNativePlaybackCommand({ ...command, streaming: false, quarterFramesOnly: false, frameRate: 25, midiDevice: null, midiPortName: undefined });
+  expect(plain.readUInt32LE(28)).toBe(25); expect(plain.readUInt32LE(88)).toBe(0); expect(plain.readUInt32LE(92)).toBe(0);
+  for (const patch of [{ midiPortName: undefined }, { midiDevice: null }, { midiPortName: 'a'.repeat(32) }]) expect(nativePlaybackCommandSchema.safeParse({ ...command, ...patch }).success).toBe(false);
 });
 it('精确端点使用独立长度字段，不把设备名或二进制尾部混入 PCM 路径', () => {
   const command = { protocol: 4, requestId: 1, generation: 1, kind: 'prepare', pcmPath: 'C:\\test.pcm', audioDeviceId: '{0.0.0.00000000}.{设备}', sampleRate: 48000, frameRate: 30, midiDevice: null, startMs: 0, endMs: 9000, offsetMs: 0, volume: 1 } as const;

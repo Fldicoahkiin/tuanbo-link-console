@@ -144,7 +144,10 @@ async function fetchDraft(draft, version, commit, directory) {
 
 async function upload(version, directory, manifestBytes) {
   const archive = join(directory, 'upload.tar');
-  const tar = spawnSync('tar', ['-cf', archive, '-C', directory, ...filesOf(version)], { encoding: 'utf8', windowsHide: true, timeout: 10 * 60_000 });
+  // macOS tar adds a "._name" entry for every file with extended attributes (downloads carry com.apple.provenance),
+  // and the server accepts exactly the four release files. COPYFILE_DISABLE=1 leaves those entries out; other tars
+  // ignore it.
+  const tar = spawnSync('tar', ['-cf', archive, '-C', directory, ...filesOf(version)], { encoding: 'utf8', windowsHide: true, timeout: 10 * 60_000, env: { ...process.env, COPYFILE_DISABLE: '1' } });
   if (tar.status !== 0) throw new Error(`打包上传内容失败（tar 退出码 ${tar.status}）：${(tar.stderr || String(tar.error)).slice(-500)}`);
   const input = openSync(archive, 'r');
   const started = Date.now();

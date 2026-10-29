@@ -2,7 +2,8 @@ import type { LinkObsSnapshot } from '@tb/core/link';
 import type { Ma2NetworkStatus } from '@tb/schema';
 import type { ConnectionCheck } from '../stores/connection-check-store';
 
-export type ConnectionStatus = { state: 'ready' | 'error' | 'checking' | 'idle' | 'skipped'; value: string; detail: string };
+/** `warning`: connected, but one step after it failed; the detail names the step. */
+export type ConnectionStatus = { state: 'ready' | 'warning' | 'error' | 'checking' | 'idle' | 'skipped'; value: string; detail: string };
 
 /** The overview reports the live connection; detailed bridge checks remain separate. */
 export function ma2EditingConnectionStatus(input: {
@@ -19,10 +20,10 @@ export function ma2EditingConnectionStatus(input: {
     return { state: input.local.status === 'error' ? 'error' : 'idle', value: '未连接', detail: input.local.error ?? '还没连接本机控台' };
   }
   if (input.networkError) return { state: 'error', value: '连接异常', detail: input.networkError };
-  if (input.network?.state === 'connected') return {
-    state: input.bridge?.state === 'error' ? 'error' : 'ready', value: '已连接',
-    detail: input.bridge?.state === 'error' ? `控台网络已连接，但读写通信有问题：${input.bridge.detail}` : input.bridge?.state === 'ready' ? '控台网络已连接，读写通信正常' : '控台网络已连接；每次读写时还会再检查通信和内容'
-  };
+  // The word and the colour say the same thing: a network login with a failed read/write check is not "connected".
+  if (input.network?.state === 'connected') return input.bridge?.state === 'error'
+    ? { state: 'warning', value: '读写异常', detail: `控台网络已登录，但读写控台这一步失败：${input.bridge.detail}` }
+    : { state: 'ready', value: '已连接', detail: input.bridge?.state === 'ready' ? `控台网络已连接；${input.bridge.detail}` : '控台网络已连接；每次读写时还会再检查通信和内容' };
   if (input.network?.state === 'connecting' || input.network?.state === 'authenticating') return { state: 'checking', value: '连接中', detail: '正在连接并登录控台' };
   return { state: input.network?.error ? 'error' : 'idle', value: '未连接', detail: input.network?.error ?? '还没连接控台' };
 }
@@ -43,7 +44,8 @@ export function midiConnectionStatus(input: {
   if (!required) return { state: 'skipped', value: '未启用', detail: '未启用此接口' };
   if (!portName) return { state: 'idle', value: '未配置', detail: '请在音频与 MIDI 中选择接口' };
   if (input.inventoryPending) return { state: 'checking', value: '检测中', detail: `正在读取 Windows 接口：${portName}` };
-  if (open) return { state: 'ready', value: '已连接', detail: `${portName}；接口已打开，但不代表控台已在跑灯` };
+  // An open port says nothing about the console: "已连接" here read as "the lights will run" (2026-10-28, picture 3).
+  if (open) return { state: 'ready', value: '接口已打开', detail: `${portName}；接口已打开。控台有没有收到、在不在跑灯，要看控台的时间码窗口` };
   if (check?.state === 'checking') return { state: 'checking', value: '连接中', detail: check.detail };
   if (check?.state === 'waiting' || check?.state === 'blocked') return { state: 'idle', value: check.state === 'waiting' ? '等待中' : '未执行', detail: check.detail };
   if (!available) return { state: 'error', value: '未连接', detail: `${portName}；找不到这个接口，或有重名接口` };

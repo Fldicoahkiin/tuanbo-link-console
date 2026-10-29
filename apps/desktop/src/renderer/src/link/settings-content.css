@@ -186,8 +186,7 @@
 .settings-inline.integration-workspace .settings-devices .settings-section:last-child { border-bottom: 0; margin-bottom: 0; }
 .device-section-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .settings-inline.integration-workspace .settings-detail .device-section-heading h3 { margin: 0; font-size: 18px; line-height: 26px; font-weight: 600; }
-.device-section-heading > span, .ma2-device-status { color: var(--text-secondary); font-size: var(--text-body); font-weight: 400; }
-.ma2-device-status { position: absolute; top: 2px; left: 104px; }
+.device-section-heading > span:not(.connection-status-badge) { color: var(--text-secondary); font-size: var(--text-body); font-weight: 400; }
 .settings-inline.integration-workspace .settings-devices :is(.settings-row, .settings-path-row, .player-connections > label, .ma2-network-fields > label, .ma2-saved-row > label) { display: grid; grid-template-columns: 120px minmax(0, 360px); gap: 12px; align-items: center; min-height: 40px; padding: 3px 0; margin: 0; font-size: var(--text-body); }
 .settings-inline.integration-workspace .settings-devices label > span { font-weight: 400; color: var(--text-primary); }
 .settings-inline.integration-workspace .settings-devices :where(input:not([type="checkbox"]):not([type="range"]):not([type="color"]), select) { width: 100%; max-width: 360px; height: 34px; min-height: 34px; padding: 5px 10px; font-size: var(--text-body); }

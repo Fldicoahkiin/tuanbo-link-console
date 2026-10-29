@@ -179,7 +179,7 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
         midiPorts={midiPorts} inventory={inventory} notify={notify}
         onRefresh={() => void refresh()} onSave={() => void save()} onRefreshMidi={async () => { await readAndStoreMidiPorts(midiMonitor); }}
         onClose={onSettingsClose}
-        songTools={<div className="connection-overview p1-follow-settings">
+        songTools={<div className="p1-follow-settings">
       {internal ? null : <IntegrationHero
         busy={busy} securityAvailable={securityAvailable} coordinatorAvailable={coordinator !== null}
         currentItemTitle={currentItemTitle} runtimeState={runtimeState}
@@ -187,19 +187,13 @@ export function IntegrationWorkspace({ quickConnectHost, midiMonitor, category, 
         mtcReady={mtcReady}
         onLaunch={() => void launchSequence()} onStop={() => stopRuntime(coordinator, runtimeState, notify)}
       />}
-
-      <div className="integration-setup-grid">
-        <div className="integration-setup-primary">
-          <P1ProjectSyncPanel disabled={runtimeActive} notify={notify} />
-          {localIntegration.detection ? <DetectionReport detection={localIntegration.detection} issues={localIntegration.issues} /> : null}
-        </div>
-        <div className="integration-alerts">
-          {!securityAvailable ? <section className="security-banner blocked"><span className="banner-symbol"><ShieldCheck /></span><div><strong>Windows 安全存储不可用</strong><p>暂时无法保存 OBS 密码，也无法连接 OBS。</p></div></section> : null}
-          {autoFollowEnabled && runtimeState !== 'error' && mtcPortAvailable && !mtcReady
-            ? <section className="security-banner attention"><div><strong>等待 P1 播放或继续</strong><p>P1 暂停或停止时不会发送时间码，时间线和视频停在当前位置。直接在 P1 里继续、重播或切歌即可，不用重新选择节目。</p></div></section>
-            : <P1MtcSetupNotice ready={mtcReady} portAvailable={mtcPortAvailable} />}
-        </div>
-      </div>
+      <P1ProjectSyncPanel heading={false} disabled={runtimeActive} notify={notify} />
+      {/* P1's timecode matters only while following P1; under the internal player it is not expected (2026-10-28, picture 4). */}
+      {internal ? null : autoFollowEnabled && runtimeState !== 'error' && mtcPortAvailable && !mtcReady
+        ? <section className="security-banner attention"><div><strong>等待 P1 播放或继续</strong><p>P1 暂停或停止时不会发送时间码，时间线和视频停在当前位置。直接在 P1 里继续、重播或切歌即可，不用重新选择节目。</p></div></section>
+        : <P1MtcSetupNotice ready={mtcReady} portAvailable={mtcPortAvailable} />}
+      {!securityAvailable ? <section className="security-banner blocked"><span className="banner-symbol"><ShieldCheck /></span><div><strong>Windows 安全存储不可用</strong><p>暂时无法保存 OBS 密码，也无法连接 OBS。</p></div></section> : null}
+      {localIntegration.detection ? <DetectionReport detection={localIntegration.detection} issues={localIntegration.issues} /> : null}
       </div>}
         maintenance={<>
         <ProgramSettingsCards

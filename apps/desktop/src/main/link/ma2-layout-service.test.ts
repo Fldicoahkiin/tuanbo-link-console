@@ -311,6 +311,46 @@ it('带起始码同步时在序列之后写本曲时间码节目；改时间后�
   expect(inspectMa2TimecodeXml(fake.timecodes.get(9000)!).timecodes[0]!.tracks[0]!.subtracks[0]!.events[1]!.attributes.time).toBe('48');
   expect(noBackups.record).toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ object: 'Timecode 9000' }));
 }, 20000);
+it('控台上挪了、删了本曲时间码节目里的触发：同步读回联动台，挪动不重写节目，删掉的点的 Cue 留在序列里（2026-10-26 双向）', async () => {
+  const { song, sequences } = boundSong();
+  const fake = songConsole(sequences);
+  const service = new Ma2LayoutService(join(await mkdtemp(join(tmpdir(), 'tblink-song-')), 'layouts.json'), () => false, noBackups);
+  const plain = await service.syncSong(fake.connection, fake.bridge, song);
+  const timed = (binding: Ma2SongSyncResult['binding'], points = song.points): Ma2SongSyncRequest => ({ ...song, requestId: randomUUID(), binding, timecodeStartMs: 480000,
+    points: points.map(point => ({ ...point, cues: [{ sequence: 9000, cue: binding.points.find(value => value.id === point.id)!.cue, delayMs: 0 }] })) });
+  const first = await service.syncSong(fake.connection, fake.bridge, timed(plain.binding));
+  // The operator moves the second point from frame 30 to 45 on the console.
+  fake.timecodes.set(9000, fake.timecodes.get(9000)!.replace(/(<Event\b[^>]*\btime=")30(")/, '$145$2'));
+  noBackups.record.mockClear(); let ops = fake.ops.length;
+  const moved = await service.syncSong(fake.connection, fake.bridge, timed(first.binding));
+  expect(moved.consoleEdits).toEqual({ moved: [{ id: 'point-1', atMs: 1500 }], removed: [], added: [] });
+  expect(moved.binding.points[1]).toMatchObject({ id: 'point-1', atMs: 1500 });
+  expect(moved.binding.timecode!.revision).not.toBe(first.binding.timecode!.revision);
+  expect(fake.ops.slice(ops)).not.toContain('APPLY 9000');
+  expect(noBackups.record).not.toHaveBeenCalledWith(fake.bridge, expect.objectContaining({ object: 'Timecode 9000' }));
+  // The software now holds the console's time; syncing it again changes nothing.
+  const local = song.points.map(point => point.id === 'point-1' ? { ...point, atMs: 1500 } : point);
+  ops = fake.ops.length;
+  const again = await service.syncSong(fake.connection, fake.bridge, timed(moved.binding, local));
+  expect(again.consoleEdits).toBeUndefined(); expect(again.changed).toBe(false); expect(fake.ops.slice(ops)).not.toContain('APPLY 9000');
+  // The operator deletes the third point's trigger: the point leaves the timeline, its Cue stays in the Sequence.
+  const full = fake.timecodes.get(9000)!;
+  const trigger = /<Event\b[^>]*\btime="60"[^>]*>[\s\S]*?<\/Event>/.exec(full)![0];
+  fake.timecodes.set(9000, full.replace(trigger, ''));
+  const removed = await service.syncSong(fake.connection, fake.bridge, timed(again.binding, local));
+  expect(removed.consoleEdits).toEqual({ moved: [], removed: ['point-2'], added: [] });
+  expect(removed.binding.points.map(point => point.id)).not.toContain('point-2');
+  expect(inspectMa2SequenceXml(sequences.get(9000)!).sequences[0]!.cues).toHaveLength(8);
+  expect(inspectMa2TimecodeXml(fake.timecodes.get(9000)!).timecodes[0]!.tracks[0]!.subtracks[0]!.events).toHaveLength(7);
+  // The operator fires that Cue again from the show: it comes back as a new point, nothing is written.
+  fake.timecodes.set(9000, full);
+  const kept = local.filter(point => point.id !== 'point-2');
+  ops = fake.ops.length;
+  const added = await service.syncSong(fake.connection, fake.bridge, timed(removed.binding, kept));
+  expect(added.consoleEdits).toMatchObject({ moved: [], removed: [], added: [{ atMs: 2000, cue: first.binding.points[2]!.cue }] });
+  expect(added.binding.points.map(point => [point.cue, point.atMs])).toContainEqual([first.binding.points[2]!.cue, 2000]);
+  expect(fake.ops.slice(ops)).not.toContain('APPLY 9000');
+}, 20000);
 it('新建本曲节目后写入失败：编号已记进同步记录，重试读回同一编号重写，不另建；导入了一半的节目也在同一编号重写', async () => {
   for (const imported of [false, true]) {
     const { song, sequences } = boundSong();

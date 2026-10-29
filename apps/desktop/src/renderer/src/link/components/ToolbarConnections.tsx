@@ -14,9 +14,9 @@ import { useConnectionCheckStore, type ConnectionCheck } from '../stores/connect
 import { midiConnectionTargets, usesNativeMidiOutput } from '../view-models/connection-targets';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 import { assertAudioOutputAvailable } from '../view-models/audio-output-route';
-import { obsConnectionStatus, midiConnectionStatus, ma2EditingConnectionStatus, lightingConnectionDestination } from '../view-models/connection-status';
+import { obsConnectionStatus, midiConnectionStatus, ma2EditingConnectionStatus, lightingConnectionDestination, type ConnectionStatus } from '../view-models/connection-status';
 
-type Row = { id: string; name: string; value: string; state: 'ready' | 'error' | 'checking' | 'idle' | 'skipped'; detail: string; category: SettingsCategory };
+type Row = { id: string; name: string; value: string; state: ConnectionStatus['state']; detail: string; category: SettingsCategory };
 const statusLabel = { checking: '连接中', ready: '已就绪', error: '待处理', skipped: '未启用' };
 function checked(row: Row, check: ConnectionCheck | undefined): Row {
   if (check?.state === 'waiting' || check?.state === 'blocked') return { ...row, state: 'idle', value: check.state === 'waiting' ? '等待中' : '未执行', detail: check.detail };
@@ -110,9 +110,9 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   const row = (id: string): Row | undefined => rows.find(entry => entry.id === id);
   const lightingRow = row(`port:${profile?.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output'}`);
   const lightingStatus: Pick<Row, 'state' | 'value' | 'detail'> = player.state.status === 'playing' && player.state.mtcSending
-    ? { state: 'ready', value: '发送中', detail: '正在按音频位置发送灯光时间码' }
+    ? { state: 'ready', value: '时间码已发出', detail: '正在按音频位置发出灯光时间码；控台有没有收到，请看控台的时间码窗口' }
     : player.state.mtcConnectionFailed && player.state.status === 'playing'
-      ? { state: 'error', value: '未连接', detail: '音乐照常播放，但灯光时间码没有发出去' }
+      ? { state: 'error', value: '没发出', detail: '音乐照常播放，但灯光时间码没有发出去' }
       : lightingRow ?? { state: 'skipped', value: '未启用', detail: '当前工程没有设置灯光输出' };
   const audioStatus: Pick<Row, 'state' | 'value' | 'detail'> | undefined = internal && player.state.status === 'playing'
     ? { state: 'ready', value: '播放中', detail: '联动台正在播放音乐' }
@@ -124,7 +124,7 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
     { name: '编辑灯光', status: ma2EditingConnectionStatus({ method, network, networkError, local, bridge: checks.bridge }), category: 'ma2', focus: 'ma2-connection' }
   ];
   return <div className="toolbar-project-summary"><button type="button" className="topbar-details-trigger" aria-pressed={open} onClick={() => { setOpen(value => !value); setSelected(null); }}>详细</button>
-    {statusHost ? createPortal(open ? <><div className="toolbar-connections" aria-label="全部连接状态">
+    {statusHost ? createPortal(open ? <><div className="toolbar-connections" aria-label="全部连接状态" onWheel={event => { event.currentTarget.scrollLeft += event.deltaY; }}>
       {rows.map(row => <button key={row.id} className={'toolbar-connection connection-chip state-' + row.state} aria-label={row.name + '：' + row.value} aria-pressed={selected === row.id} title={`${row.name}：${row.value}\n${row.detail}`} onClick={() => setSelected(selected === row.id ? null : row.id)}>{row.name}</button>)}
       <ToolbarMtcStatus player={player} receiving={receiving} onSettings={() => onSettings('audio')} portStatus={checks.midi?.state === 'error' ? '不可用' : '详见上面各个输入输出接口'} portDetail={targets.filter(target => target.required).map(target => target.name + '：' + (profile?.midiPortProfiles.find(port => port.id === target.id)?.portName ?? '未配置')).join('；')} />
     </div>{detail ? <div className="connection-inline-detail" role="region" aria-label="连接详情"><strong>{detail.name} · {detail.value}</strong><span>{detail.detail}</span><button onClick={() => { onSettings(detail.category); setSelected(null); setOpen(false); }}>前往设置</button><button aria-label="收起连接详情" onClick={() => setSelected(null)}>收起</button></div> : null}</> : <div className="topbar-connection-overview" role="group" aria-label="连接状态概览">{overview.map(entry => <button type="button" key={entry.name} aria-label={`${entry.name}：${entry.status?.value ?? '未检查'}，前往设置`} onClick={() => onSettings(entry.category, entry.focus)} className={`connection-overview-item state-${entry.status?.state ?? 'idle'}`} title={`${entry.name}：${entry.status?.value ?? '未检查'}\n${entry.status?.detail ?? ''}\n点击前往对应设置`}><span className="connection-overview-dot" aria-hidden="true" /><strong>{entry.name}</strong><small>{entry.status?.value ?? '未检查'}</small></button>)}</div>, statusHost) : null}

@@ -65,12 +65,12 @@ it('读出每首歌的 MTC 起点：没设为未分配；两首歌的 MTC 范围
   expect(songMtcOverlaps(value).size).toBe(0);
 });
 
-it('连上控台给正在编灯、还没有 MTC 起点的歌依次分配，一次撤销；没编灯、已配对或已有起点的歌不动', () => {
+it('连上控台给正在编灯、还没有 MTC 起点的歌依次分配，一次撤销；没编灯、已放进控台 Cue 或已有起点的歌不动', () => {
   const value = project(); value.schemaVersion = 2;
   const song = (id: string) => ({ ...structuredClone(value.rundown[0]!), id, title: id });
-  value.rundown.push(song('第三首'), song('没编灯'), song('已配对'));
+  value.rundown.push(song('第三首'), song('没编灯'), song('已放进 Cue'));
   for (const item of value.rundown) if (item.id !== '没编灯') item.lighting = createLightingDocument();
-  value.ma2ReadState = { source: 'console', catalog: { directory: { show: 'Show', generation: 'g', version: '3.7.0.5', entries: [] }, readAt: new Date().toISOString(), entries: [] }, pairs: { 7: '已配对' }, failures: [], message: '', selectedTarget: null, query: '', filter: 'all' };
+  value.rundown[4]!.lighting!.ma2Bindings = [{ id: 'binding', name: '控台节目', timecode: 7, readAt: new Date().toISOString(), sourceXml: '<MA/>', baselineTracks: [], mappings: [], playback: 'editable', timeOriginMs: 0 }];
   expect(songsNeedingMtcStart(value)).toEqual(['新歌', '第三首']);
   // 控台节目 600–800 s；旧歌 300–420 s。
   const starts = allocateMissingMtcStarts(value, { show: 'Show', entries: [show(1, 18_000, '6000', '5940')] });

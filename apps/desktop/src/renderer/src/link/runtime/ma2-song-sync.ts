@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { MA2_SONG_COLLISION, allocateSongMtcStart, applyMa2SongReadback, consoleLabelText, ma2SongPoints, mergeMa2AttributesCommand, programTimeOrigin, projectLightingLibrary, setAllocatedMtcStartsCommand, setLightingLibraryCommand, setLightingCommand } from '@tb/core/link';
-import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding } from '@tb/schema';
+import type { Ma2LayoutSettings, Ma2ReadProgress, Ma2SongBinding, Ma2SongConsoleEdits } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { requireSavedProjectPath } from '../project-document';
 import { acceptCreatedMa2Layout, currentMa2LayoutScope } from '../stores/ma2-layout-store';
@@ -98,9 +98,10 @@ function update(entry: SongSync, patch: Partial<SongSync>): void {
     return { songs: { ...state.songs, [entry.itemId]: { ...current, ...patch, ...(current.state === 'paused' ? { state: 'paused' as const } : {}) } } };
   });
 }
-function confirmedMessage(binding: Ma2SongBinding): string {
+function confirmedMessage(binding: Ma2SongBinding, edits?: Ma2SongConsoleEdits): string {
   const location = binding.executor ? ma2ExecutorLocationLabel(Number(binding.executor.split('.')[0]), Number(binding.executor.split('.')[1])) : `Layout ${binding.layout}`;
-  return `${location} · 序列 ${binding.sequence} · ${binding.points.length} 步已确认`;
+  const taken = edits ? [edits.moved.length ? `挪了 ${edits.moved.length} 个` : '', edits.removed.length ? `删了 ${edits.removed.length} 个` : '', edits.added.length ? `加了 ${edits.added.length} 个` : ''].filter(Boolean) : [];
+  return `${location} · 序列 ${binding.sequence} · ${binding.points.length} 步已确认${taken.length ? ` · 控台上${taken.join('、')} Cue，已同步到联动台` : ''}`;
 }
 function canContinue(entry: SongSync): boolean {
   const document = useDocumentStore.getState();
@@ -175,7 +176,9 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         }
         if (checkOnly && entry.remoteRevision && item.lighting.consoleSong) {
           const binding = item.lighting.consoleSong;
-          const changed = await window.tbLink.checkMa2Song({ network, expectedSource: { show, generation, version }, sequence: binding.sequence, ...(binding.executor ? { executor: binding.executor } : {}), revision: entry.remoteRevision });
+          // The song's own Timecode show is watched too: a time moved there on the console comes back here.
+          const changed = await window.tbLink.checkMa2Song({ network, expectedSource: { show, generation, version }, sequence: binding.sequence, ...(binding.executor ? { executor: binding.executor } : {}), revision: entry.remoteRevision,
+            ...(binding.timecode ? { timecode: { number: binding.timecode.number, revision: binding.timecode.revision } } : {}) });
           if (!canContinue(entry)) continue;
           if (!changed) {
             update(entry, { checking: false, state: 'verified', waitingForConnection: false, checkedAt: Date.now(), nextCheckAt: Date.now() + BACKGROUND_RECHECK_MS, message: confirmedMessage(binding) });
@@ -246,7 +249,7 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const remoteRevision = result.remoteRevision ?? Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
         update(entry, { state: 'verified', checking: false, waitingForConnection: false, checkedAt: Date.now(), nextCheckAt: Date.now() + BACKGROUND_RECHECK_MS, remoteRevision, consecutiveFailures: 0, consecutiveCollisions: 0,
           rewriteLegacyNames: false, acknowledged: songSignature(ma2SongPoints(confirmed), result.binding.name, start),
-          message: confirmedMessage(result.binding) });
+          message: confirmedMessage(result.binding, result.consoleEdits) });
         // An edit made while this song was being written waits for its own sync instead of the next check.
         markPendingMa2Songs();
       } catch (cause) {

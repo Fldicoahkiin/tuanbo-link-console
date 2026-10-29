@@ -6,6 +6,7 @@ import { ArrowDown, ArrowUp, ListMusic, Plus, Pencil, Trash2 } from 'lucide-reac
 import { editProgramPlaylistCommand, playlistItems, programPlaylists } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
+import { FloatingMenu } from './FloatingMenu';
 
 export const PROGRAM_DRAG_TYPE = 'application/x-tblink-program';
 export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: string; locked: boolean; onSelect: (id: string) => void; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
@@ -46,12 +47,12 @@ export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: s
       onDrop={(event) => { event.preventDefault(); const id = event.dataTransfer.getData(PROGRAM_DRAG_TYPE); if (id && list.id !== 'all') execute({ type: 'assign', itemIds: [id], playlistId: list.id === 'unassigned' ? null : list.id }); }}>
       <ListMusic /><span>{list.name}</span><small>{playlistItems(props.project, list.id).length}</small>
     </button>)}
-    {createPortal(<>{menu && current ? <div className="resource-context-menu program-context-menu playlist-context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 210) }} onPointerDown={(event) => event.stopPropagation()}>
+    {createPortal(<>{menu && current ? <FloatingMenu x={menu.x} y={menu.y} className="resource-context-menu program-context-menu playlist-context-menu" label={`${current.name} 菜单`}>
       <button onClick={() => { setEditing({ id: current.id, name: current.name }); setMenu(null); }}><Pencil />重命名列表</button>
       <button disabled={index <= 0} onClick={() => { execute({ type: 'move', id: current.id, index: index - 1 }); setMenu(null); }}><ArrowUp />上移列表</button>
       <button disabled={index >= lists.length - 1} onClick={() => { execute({ type: 'move', id: current.id, index: index + 1 }); setMenu(null); }}><ArrowDown />下移列表</button>
       <button onClick={() => { setRemoving(current.id); setMenu(null); }}><Trash2 />删除列表</button>
-    </div> : null}
+    </FloatingMenu> : null}
     {editing ? <ModalSurface className="playlist-dialog" label={editing.id ? '重命名列表' : '新建播放列表'} onClose={() => setEditing(null)}><form onSubmit={(event) => { event.preventDefault(); save(); }}>
       <strong>{editing.id ? '重命名列表' : '新建播放列表'}</strong><input autoFocus aria-label="列表名称" value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.currentTarget.value })} />
       <div><button type="button" onClick={() => setEditing(null)}>取消</button><button type="submit" disabled={props.locked || !editing.name.trim()}>保存列表</button></div>

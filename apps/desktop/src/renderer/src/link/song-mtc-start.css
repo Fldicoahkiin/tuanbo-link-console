@@ -1,8 +1,15 @@
-/* A song's MTC start on the lighting program list, beside the lighting transport and on its console Sequence. */
-.song-mtc-start { display: inline-flex; align-items: center; align-self: flex-start; gap: 4px; padding: 1px 7px; border-radius: var(--r-pill); font-size: var(--text-caption); font-weight: 600; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+/* A song's MTC start on the program cards, beside the lighting transport and on its console Sequence.
+   Green when a console Timecode show starts there (playing runs its lights); otherwise neutral. */
+.song-mtc-start { display: inline-flex; align-items: center; align-self: flex-start; gap: 4px; max-width: 100%; min-width: 0; padding: 1px 7px; border-radius: var(--r-pill); font-size: var(--text-caption); font-weight: 600; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-secondary); background: var(--surface-raised); box-shadow: inset 0 0 0 1px var(--separator); }
+/* A narrow card cuts the end of the text; the tooltip keeps all of it. */
+.song-mtc-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 span.song-mtc-start svg { width: 12px; height: 12px; flex-shrink: 0; }
-.song-mtc-start[data-state=unset] { font-weight: 400; color: var(--text-secondary); background: var(--surface-raised); }
+.song-mtc-start:is([data-state=matched], [data-state=warning], [data-state=invalid]) { box-shadow: none; }
+.song-mtc-start[data-state=matched] { color: var(--success-text); background: var(--success-soft); }
+.song-mtc-start[data-state=unset] { font-weight: 400; }
 .song-mtc-start[data-state=warning] { color: var(--warning-text); background: var(--warning-soft); }
 .song-mtc-start[data-state=invalid] { color: var(--danger); background: var(--danger-soft); }
 .song-mtc-detail { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .song-mtc-detail small { color: var(--text-secondary); }
+/* Edits still to reach the console: a small sync mark, explained in the tooltip. */
+span.song-mtc-start svg.song-mtc-pending { width: 11px; height: 11px; opacity: .8; }

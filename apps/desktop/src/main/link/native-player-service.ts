@@ -1,12 +1,14 @@
 import { nativePlayerControlSchema, nativePlayerPrepareSchema, nativePlayerStatusSchema,
   type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativePlaybackEvent, type NativeDeviceQueryRequest, type NativePlaybackDevices } from '@tb/schema';
 import { NativeAudioCache, type NativeAudioLease } from './native-audio-cache';
-import { NativePlaybackClient, type NativeClockState } from './native-playback-client';
+import { NativeEngineRejection, NativePlaybackClient, type NativeClockState } from './native-playback-client';
+import { playableEndMs, rangeRejectedMessage } from './native-playback-range';
 import { NativeDeviceQuery } from './native-device-query';
 import { basename } from 'node:path';
 import { NativeAudioPreload } from './native-audio-preload';
 import { MidiPortRecovery, type PortRecoveryReport } from './midi-port-recovery';
 import { midiPortBusy, sharedPortMessage } from './midi-error';
+import { audioErrorMessage } from './audio-error';
 import type { MidiClaim } from './midi-port-broker';
 
 type Clock = Extract<NativePlaybackEvent, { kind: 'clock' }>;
@@ -42,6 +44,8 @@ export class NativePlayerService {
   private stopping: { epoch: number; sessionId: string; task: Promise<NativePlayerStatus> } | null = null;
   private state: NativePlayerStatus | null = null;
   private source: NativePlayerPrepare | null = null;
+  /** Where the engine stops this program: the program end, or the end of the decoded audio when that is up to a frame shorter. */
+  private playEndMs = 0;
   private epoch = 0;
   private nativeGeneration = 0;
   private requestId = 0;
@@ -151,7 +155,8 @@ export class NativePlayerService {
       measured('音源校验与解码预填充');
       if (epoch !== this.epoch) { await lease.release(); throw new Error('音频准备已取消'); }
       this.attachLease(lease);
-      if (lease.durationMs + 1 < request.snapshot.endMs) throw new Error('解码出的音频比节目的播放范围短');
+      const endMs = playableEndMs({ startMs: request.snapshot.positionMs, endMs: request.snapshot.endMs, availableMs: lease.availableMs, frameRate: request.snapshot.frameRate });
+      this.playEndMs = endMs;
       if (!this.client) {
         const client = new NativePlaybackClient(this.options.executable, event => {
           if (this.client === client && event.kind === 'clock') { this.engineReopens = event.midiReopens; this.receive(event); }
@@ -167,12 +172,14 @@ export class NativePlayerService {
       try {
         await this.client.command({ protocol: 4, requestId: ++this.requestId, generation: ++this.nativeGeneration, kind: 'prepare',
           pcmPath: lease.path, pcmBaseMs: lease.baseMs, streaming: lease.streaming, audioDeviceId: request.audioDeviceId, sampleRate: snapshot.sampleRate, frameRate: snapshot.frameRate,
-          midiDevice, startMs: snapshot.positionMs, endMs: snapshot.endMs, offsetMs: snapshot.offsetMs, volume: snapshot.volume });
+          midiDevice, ...(midiDevice === null ? {} : { midiPortName: midi[0]!.name }), quarterFramesOnly: request.mtcQuarterFramesOnly ?? false,
+          startMs: snapshot.positionMs, endMs, offsetMs: snapshot.offsetMs, volume: snapshot.volume })
+          .catch((error: unknown) => { throw explainRange(error, snapshot.positionMs, endMs, lease); });
       } finally { previous?.claim?.release(); }
       const clock = await this.client.readClock(this.nativeGeneration, ['ready', 'error']);
       measured('音频设备与时钟准备');
       this.requireEpoch(epoch);
-      if (clock.audioError || clock.state === 'error') throw new Error(`Windows 音频准备失败：${clock.audioError}`);
+      if (clock.audioError || clock.state === 'error') throw new Error(`音频没有准备好：${audioErrorMessage(clock.audioError)}`);
       this.patch({ status: 'ready', enginePid: this.client.identity!.pid, engineTitle: this.client.identity!.title,
         mtcPortName: midiDevice === null ? null : midi[0]!.name });
       this.receive(clock);
@@ -193,7 +200,7 @@ export class NativePlayerService {
     }
     if (request.kind !== 'stop' && this.queued >= 32) return Promise.reject(new Error('音频控制排队已满，这次操作没有执行'));
     if (request.kind !== 'stop' && (state.status === 'error' || state.status === 'stopped' || state.status === 'preparing' || !this.lease)) return Promise.reject(new Error('音频还没准备好或已停止，请重新播放这首歌'));
-    if (request.kind === 'seek' && (!this.source || request.positionMs < this.source.snapshot.startMs || request.positionMs >= this.source.snapshot.endMs)) return Promise.reject(new Error('定位超出了节目的裁剪范围'));
+    if (request.kind === 'seek' && (!this.source || request.positionMs < this.source.snapshot.startMs || request.positionMs >= this.playEndMs)) return Promise.reject(new Error('定位超出了节目的裁剪范围'));
     this.options.beforeControl?.(request);
     // Transport boundaries invalidate queued/in-flight continuations. A late
     // seek must never resume after a newer pause, stop or program preparation.
@@ -211,7 +218,7 @@ export class NativePlayerService {
           // Decode from the requested source position, never wait for hours of
           // preceding PCM or change the original source/timecode coordinates.
           const snapshot = this.source!.snapshot;
-          const midiDevice = await this.resolveMidi(epoch);
+          const midi = await this.resolveMidi(epoch);
           this.requireEpoch(epoch);
           await this.send({ kind: 'stop' }); await this.preload.cancel(); await this.releaseLease(); this.requireEpoch(epoch);
           const lease = await this.options.cache.prepare({ sourcePath: this.options.resolveAudio(this.source!.projectPath, snapshot.audio.relativePath),
@@ -219,18 +226,22 @@ export class NativePlayerService {
             sampleRate: snapshot.sampleRate, positionMs: request.positionMs }, signal!);
           if (epoch !== this.epoch) { await lease.release(); throw new Error('音频定位已取消'); }
           this.attachLease(lease);
+          const endMs = playableEndMs({ startMs: request.positionMs, endMs: snapshot.endMs, availableMs: lease.availableMs, frameRate: snapshot.frameRate });
+          this.playEndMs = endMs;
           await this.client.command({ protocol: 4, requestId: ++this.requestId, generation: ++this.nativeGeneration, kind: 'prepare',
             pcmPath: lease.path, pcmBaseMs: lease.baseMs, streaming: lease.streaming, audioDeviceId: this.source!.audioDeviceId, sampleRate: snapshot.sampleRate, frameRate: snapshot.frameRate,
-            midiDevice, startMs: request.positionMs, endMs: snapshot.endMs, offsetMs: snapshot.offsetMs, volume: this.volume });
+            midiDevice: midi?.id ?? null, ...(midi ? { midiPortName: midi.name } : {}), quarterFramesOnly: this.source!.mtcQuarterFramesOnly ?? false,
+            startMs: request.positionMs, endMs, offsetMs: snapshot.offsetMs, volume: this.volume })
+            .catch((error: unknown) => { throw explainRange(error, request.positionMs, endMs, lease); });
           // Without a timecode port the engine has let the previous one go.
-          if (midiDevice === null) this.releaseMtc();
+          if (midi === null) this.releaseMtc();
           this.requireEpoch(epoch);
           await this.send({ kind: 'pause' });
         } else await this.send(request);
         if (request.kind !== 'volume') {
           const clock = await this.client.readClock(this.nativeGeneration, settledStates[request.kind]);
           this.requireEpoch(epoch);
-          if (clock.audioError || clock.state === 'error') throw new Error(`Windows 音频控制失败：${clock.audioError}`);
+          if (clock.audioError || clock.state === 'error') throw new Error(`音频操作没有完成：${audioErrorMessage(clock.audioError)}`);
           this.receive(clock);
         }
         // A stopped program lets its timecode port go, so P1 or the editor can use it until the next song.
@@ -277,7 +288,7 @@ export class NativePlayerService {
       this.pending = cleanup.catch(error => this.fail(error instanceof Error ? error : new Error(String(error))));
     });
   }
-  private async resolveMidi(epoch: number): Promise<number | null> {
+  private async resolveMidi(epoch: number): Promise<{ id: number; name: string } | null> {
     if (!this.state?.mtcPortName || this.state.mtcError) return null;
     const name = this.state.mtcPortName, devices = await this.devices();
     this.requireEpoch(epoch);
@@ -289,7 +300,7 @@ export class NativePlayerService {
       if (!ports.length) this.mtcRecovery.lost(name);
       return null;
     }
-    return ports[0]!.id;
+    return { id: ports[0]!.id, name };
   }
   /** The request is queued like other commands; the engine opens the port on its MIDI thread and reports
    * the outcome in telemetry. It counts as recovered only once timecode goes out from the opened port:
@@ -358,7 +369,7 @@ export class NativePlayerService {
   private requireEpoch(epoch: number): void { if (epoch !== this.epoch || this.closing) throw new Error('播放操作已被取消'); }
   private receive(clock: Clock): void {
     if (!this.state || clock.generation !== this.nativeGeneration || this.state.status === 'preparing' || this.state.status === 'error') return;
-    const audioError = clock.audioError ? `Windows 音频输出失败：${clock.audioError}` : this.state.audioError;
+    const audioError = clock.audioError ? audioErrorMessage(clock.audioError) : this.state.audioError;
     // While the lost port is waited for and reopened, its errors belong to that outage: the watch logs them.
     const midiError = this.mtcRecovery.watching ? 0 : clock.midiError;
     this.reopening?.check(clock);
@@ -385,6 +396,8 @@ export class NativePlayerService {
       return `${port}正被其他软件占用（错误码 ${code}），时间码没有发出。请关闭 P1 等正在使用它的软件后重新播放。`;
     }
     if (unplugged) return `${port}断开了（错误码 ${code}）。插回同一个接口后，时间码会自动接着发。`;
+    // 2: the index no longer names this port (an interface was plugged in or out just now); nothing was sent elsewhere.
+    if (code === 2) return `${port}在打开时找不到了，可能刚好有 MIDI 设备插拔，时间码没有发出，也没有发到别的接口。请重新播放这首歌。`;
     return `${port}发时间码失败（Windows 错误 ${code}）。请重新插拔接口后重新播放。`;
   }
   private fail(error: Error): void {
@@ -392,4 +405,10 @@ export class NativePlayerService {
   }
   private patch(patch: Partial<NativePlayerStatus>, qpc100ns: string | null = null): void { if (this.state) { this.state = { ...this.state, ...patch }; this.publish(qpc100ns); } }
   private publish(qpc100ns: string | null = null): void { if (this.state) this.options.changed(nativePlayerStatusSchema.parse(this.state), qpc100ns); }
+}
+
+/** E_INVALIDARG on prepare means the engine refused the range it was given; say which range, for the log and the operator. */
+function explainRange(error: unknown, startMs: number, endMs: number, lease: NativeAudioLease): Error {
+  if (!(error instanceof NativeEngineRejection) || error.code !== -2147024809) return error instanceof Error ? error : new Error(String(error));
+  return new Error(rangeRejectedMessage({ startMs, endMs, availableMs: lease.availableMs, streaming: lease.streaming, code: error.code }), { cause: error });
 }

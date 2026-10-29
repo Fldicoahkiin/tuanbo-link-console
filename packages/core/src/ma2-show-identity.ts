@@ -12,7 +12,12 @@ export function expectedMa2Shows(project: LinkProject, itemId: string): string[]
     .filter((show): show is string => Boolean(show)))];
 }
 
+/**
+ * A note, never a stop (2026-10-28): the operator saves the console Show under a new name every day, the
+ * timecode runs the lights by the MTC start whatever the Show is called, and a reconnect reads the new Show.
+ * Only Cues fired directly by number may point elsewhere when the Show's content changed too.
+ */
 export function ma2ShowMismatch(expected: readonly string[], current: string): string | null {
   if (!expected.length || expected.includes(current)) return null;
-  return `控台现在加载的 Show 是“${current}”，但灯光 Cue 是按“${expected.join('”或“')}”编的，Cue 编号可能不存在或指向别的对象。请在控台加载对应的 Show，或在灯光工作台重新读取素材后检查。`;
+  return `控台现在加载的 Show 是“${current}”，上次读取的是“${expected.join('”或“')}”。时间码照常按起始码跑灯；重新连接控台会读取现在的 Show。如果 Show 内容也换了，直接按编号触发的 Cue 可能打到别的对象。`;
 }

@@ -8,6 +8,10 @@ const timeMs = z.number().finite().min(0).max(86_399_999);
 const audioDeviceIdSchema = z.string().min(1).max(1023).refine(value => !value.includes('\0'));
 const envelope = { protocol: z.literal(4), requestId: generation, generation };
 const fadeDuration = z.number().finite().min(0).max(30000);
+/** 29.97 is drop-frame: 30 nominal frames a second, each 1001/30 ms long. */
+const timecodeRate = z.union([z.literal(24), z.literal(25), z.literal(29.97), z.literal(30)]);
+/** WinMM port names hold at most 31 characters. */
+const midiPortName = z.string().min(1).max(31).refine(value => !value.includes('\0'));
 export const playbackAnalysisSchema = z.object({
   fftSize: z.literal(2048), spectrum: z.array(z.number().int().min(0).max(255)).length(1024),
   peaks: z.tuple([z.number().finite().min(0).max(1), z.number().finite().min(0).max(1)])
@@ -17,16 +21,20 @@ export const nativePlaybackCommandSchema = z.discriminatedUnion('kind', [
   z.object({ ...envelope, kind: z.literal('prepare'), pcmPath: z.string().min(1).max(4096).refine(value => !value.includes('\0')),
     audioDeviceId: audioDeviceIdSchema.optional(), pcmBaseMs: timeMs.optional(), streaming: z.boolean().optional(),
     sampleRate: z.union([z.literal(44100), z.literal(48000)]), midiDevice: z.number().int().min(0).max(65535).nullable(),
-    frameRate: z.union([z.literal(24), z.literal(25), z.literal(30)]), startMs: timeMs, endMs: timeMs,
-    offsetMs: timeMs, volume: z.number().finite().min(0).max(1) }).strict().refine(value => (value.pcmBaseMs ?? 0) <= value.startMs && value.endMs > value.startMs && value.endMs + value.offsetMs < 86_400_000, '播放范围或时间码超过一天'),
+    // The engine opens the timecode port by index and checks that the opened port carries this name.
+    midiPortName: midiPortName.optional(),
+    // Relocate with quarter frames alone, without the Full Frame message.
+    quarterFramesOnly: z.boolean().optional(),
+    frameRate: timecodeRate, startMs: timeMs, endMs: timeMs,
+    offsetMs: timeMs, volume: z.number().finite().min(0).max(1) }).strict().refine(value => (value.pcmBaseMs ?? 0) <= value.startMs && value.endMs > value.startMs && value.endMs + value.offsetMs < 86_400_000, '播放范围或时间码超过一天')
+    .refine(value => (value.midiDevice === null) === (value.midiPortName === undefined), '时间码端口的编号和名字必须一起给出'),
   z.object({ ...envelope, kind: z.literal('play') }).strict(),
   z.object({ ...envelope, kind: z.literal('pause') }).strict(),
   z.object({ ...envelope, kind: z.literal('seek'), positionMs: timeMs }).strict(),
   z.object({ ...envelope, kind: z.literal('stop') }).strict(),
   z.object({ ...envelope, kind: z.literal('stop-mtc') }).strict(),
   // The configured timecode port is back: open it again by index; the opened handle must carry this name.
-  z.object({ ...envelope, kind: z.literal('reopen-mtc'), midiDevice: z.number().int().min(0).max(65535),
-    midiPortName: z.string().min(1).max(31).refine(value => !value.includes('\0')) }).strict(),
+  z.object({ ...envelope, kind: z.literal('reopen-mtc'), midiDevice: z.number().int().min(0).max(65535), midiPortName }).strict(),
   z.object({ ...envelope, kind: z.literal('volume'), volume: z.number().finite().min(0).max(1), durationMs: fadeDuration.optional() }).strict(),
   z.object({ ...envelope, kind: z.literal('close') }).strict()
 ]);
@@ -69,7 +77,7 @@ export const playbackSnapshotSchema = z.object({
   audio: z.object({ relativePath: z.string().min(1).max(4096).refine(value => !value.includes('\0')),
     sha256: z.string().regex(/^[a-f0-9]{64}$/), durationMs: timeMs }).strict(),
   startMs: timeMs, endMs: timeMs, positionMs: timeMs, offsetMs: timeMs,
-  frameRate: z.union([z.literal(24), z.literal(25), z.literal(30)]),
+  frameRate: timecodeRate,
   sampleRate: z.union([z.literal(44100), z.literal(48000)]), volume: z.number().finite().min(0).max(1)
 }).strict().refine(value => value.startMs < value.endMs && value.endMs <= value.audio.durationMs
   && value.positionMs >= value.startMs && value.positionMs < value.endMs && value.offsetMs + value.endMs < 86_400_000,
@@ -79,7 +87,9 @@ export type PlaybackSnapshot = z.infer<typeof playbackSnapshotSchema>;
 const playerSession = { version: z.literal(1), sessionId: z.string().uuid(), generation };
 export const nativePlayerPrepareSchema = z.object({ ...playerSession, projectPath: z.string().min(1).max(4096), snapshot: playbackSnapshotSchema,
   nextSnapshot: playbackSnapshotSchema.optional(),
-  audioDeviceId: audioDeviceIdSchema, midiPortName: z.string().min(1).max(256).nullable(), autoDetectMtc: z.boolean().optional() }).strict()
+  audioDeviceId: audioDeviceIdSchema, midiPortName: z.string().min(1).max(256).nullable(), autoDetectMtc: z.boolean().optional(),
+  /** The operator's timecode send mode: true sends quarter frames only. */
+  mtcQuarterFramesOnly: z.boolean().optional() }).strict()
   .refine(value => !value.nextSnapshot || value.nextSnapshot.projectId === value.snapshot.projectId
     && value.nextSnapshot.revision === value.snapshot.revision && value.nextSnapshot.sampleRate === value.snapshot.sampleRate,
   '下一节目必须属于同一工程修订和音频采样率');

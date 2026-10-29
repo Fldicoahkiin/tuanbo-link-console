@@ -14,17 +14,16 @@ import { songLightingStatus } from './song-lighting-status';
 export function lightingStartCheck(project: LinkProject, itemId: string, mtc: { portName: string | null; ports: readonly string[] | null }): string | null {
   const status = songLightingStatus(project, itemId);
   switch (status.state) {
-    case 'unmatched': return null;
-    case 'editing': return `控台上还是上一版：这首歌还有 ${status.pending} 项改动没同步到控台，这次时间码触发的是控台上现有的灯光；停止播放后会自动同步`;
-    case 'attention': return `这首歌的灯光需要处理：${status.reasons.join('；')}。时间码照常发送`;
-    case 'ready': {
-      const problems: string[] = [];
-      if (!mtc.portName) problems.push('没有选择时间码输出端口');
-      else if (mtc.ports && !mtc.ports.includes(mtc.portName)) problems.push(`找不到时间码输出端口：${mtc.portName}`);
+    case 'unmatched': return status.reason ? `${status.reason}；时间码照常发送` : null;
+    case 'duplicate': return `控台上 Timecode ${status.timecodes.join('、')} 的起点和这首歌相同，同一段时间码会让它们一起跑灯；时间码照常发送`;
+    case 'matched': {
+      const problems = [...status.problems];
+      if (mtc.portName && mtc.ports && !mtc.ports.includes(mtc.portName)) problems.push(`找不到时间码输出端口：${mtc.portName}`);
       const prepared = nativeProgramSnapshot(project, itemId, 0, undefined, 48000);
       if (!prepared.allowMtc) problems.push(prepared.notice ?? '这次不能发送时间码');
-      if (project.timebase.frameRate !== status.frameRate) problems.push(`帧率不一致：工程是 ${project.timebase.frameRate} FPS，控台上是 ${status.frameRate} FPS`);
-      return problems.length ? `这首歌可以播放，但${problems.join('；')}` : null;
+      if (status.frameRate && project.timebase.frameRate !== status.frameRate) problems.push(`帧率不一致：工程是 ${project.timebase.frameRate} FPS，控台 Timecode ${status.timecode} 是 ${status.frameRate} FPS`);
+      const pending = status.pending ? `控台上还是上一版：这首歌还有 ${status.pending} 项改动没同步到控台，这次时间码触发的是控台上现有的灯光；停止播放后会自动同步` : '';
+      return [pending, problems.length ? `这首歌可以播放，但${problems.join('；')}` : ''].filter(Boolean).join('；') || null;
     }
   }
 }

@@ -2,7 +2,7 @@ import { useMa2SongSyncStore } from '../runtime/ma2-song-sync';
 import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
 import { pauseMa2RealtimeSession, pendingSongSummary, refreshMa2RealtimeSession, retryMa2RealtimeSession, songsWithoutConsoleShow, writeMissingConsoleShows } from '../runtime/ma2-realtime-session';
 import { useMemo, useState } from 'react';
-import { Check, CircleAlert, FolderArchive, FolderOpen, RefreshCw, Save, Undo2, Redo2 } from 'lucide-react';
+import { Check, CircleAlert, FolderArchive, FolderOpen, RefreshCw, Save } from 'lucide-react';
 import type { ProjectArchiveResult } from '@tb/schema';
 import { ma2PendingChanges } from '@tb/core/link';
 import { enableMa2NameSync, useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
@@ -16,8 +16,6 @@ import { convertMa2LegacyNames, legacyMa2ConsoleNames } from '../runtime/ma2-leg
 
 export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element | null {
   const project = useDocumentStore(state => state.project);
-  const canUndo = useDocumentStore(state => state.past.length > 0);
-  const canRedo = useDocumentStore(state => state.future.length > 0);
   const pending = useMemo(() => ma2PendingChanges(project), [project]);
   const unbound = useMemo(() => pendingSongSummary(project), [project]);
   const showless = useMemo(() => songsWithoutConsoleShow(project), [project]);
@@ -91,15 +89,13 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   };
   return <div className="ma2-sync-controls" aria-label="灯光同步操作">
     <button className="ma2-realtime-switch" role="switch" aria-label="实时同步" aria-checked={active} disabled={busy || (working && !active)} onClick={() => void run(toggle)} title="编辑完成后自动检查、存档、写入控台并确认；播放时先暂存，停止后再同步"><span className="ma2-switch-track" aria-hidden="true"><span /></span><span>实时同步</span></button>
-    <button aria-label="同步状态详情" data-state={blocked ? 'blocked' : automatic.status} onClick={() => {
+    <button className="ma2-sync-status" aria-label="同步状态详情" data-state={blocked ? 'blocked' : automatic.status} onClick={() => {
       if (!detailOpen) void linkDesktopViewModel.projectArchiveSettings({ action: 'status' }).then(value => setArchivingOff(!value.settings.enabled), (error: unknown) => setNotice(`存档设置读取失败：${error instanceof Error ? error.message : String(error)}`));
       setDetailOpen(value => !value); setArchiveOpen(false);
     }}>{blocked || count ? <CircleAlert /> : <Check />}<span>{status}</span></button>
-    <button aria-label="刷新同步" title="立即读取控台，把和时间线不一致的地方写回控台（包括在控台上删掉的 Cue 或序列）；如果同步已暂停，会重新打开" onClick={() => { setNotice(''); refreshMa2RealtimeSession(); }}><RefreshCw /><span>刷新同步</span></button>
-    <button aria-label="撤销灯光修改" title="撤销上一次编辑；开启同步时，撤销结果也会写回控台" disabled={!canUndo} onClick={() => useDocumentStore.getState().undo()}><Undo2 /></button>
-    <button aria-label="重做灯光修改" title="重做上一次撤销" disabled={!canRedo} onClick={() => useDocumentStore.getState().redo()}><Redo2 /></button>
-    <button disabled={busy} title="保存工程并创建存档" onClick={() => void run(save)}><Save /><span>保存</span></button>
-    <button disabled={busy} onClick={() => archiveOpen ? setArchiveOpen(false) : void run(loadArchives)}><FolderArchive /><span>存档</span></button>
+    <button className="ma2-sync-refresh" aria-label="刷新同步" title="立即读取控台，把和时间线不一致的地方写回控台（包括在控台上删掉的 Cue 或序列）；如果同步已暂停，会重新打开" onClick={() => { setNotice(''); refreshMa2RealtimeSession(); }}><RefreshCw /><span>刷新同步</span></button>
+    <button className="ma2-sync-save" aria-label="保存" disabled={busy} title="保存工程并创建存档" onClick={() => void run(save)}><Save /><span>保存</span></button>
+    <button className="ma2-sync-archive" aria-label="存档" title="查看和恢复存档" disabled={busy} onClick={() => archiveOpen ? setArchiveOpen(false) : void run(loadArchives)}><FolderArchive /><span>存档</span></button>
     {detailOpen ? <div className="ma2-sync-popover" role="region" aria-label="同步状态详情">
       <header><strong>{status}</strong><button onClick={() => setDetailOpen(false)}>关闭</button></header>
       {recoveryError ? <p role="alert">{recoveryError}</p> : null}

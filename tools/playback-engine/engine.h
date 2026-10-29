@@ -11,10 +11,12 @@
 #include <stdio.h>
 #include <math.h>
 #include "signal.h"
+#include "timecode.h"
 
 #define RING_FRAMES 262144u
 #define PATH_BYTES 8192u
 #define DEVICE_BYTES 2048u
+#define PORT_NAME_BYTES 128u
 enum { EMPTY, READY, PLAYING, PAUSED, STOPPED, ENDED, FAILED };
 typedef struct {
   CRITICAL_SECTION lock, output_lock, midi_lock;
@@ -36,6 +38,9 @@ typedef struct {
   MIDIHDR midi_header;
   unsigned char full_frame[10];
   UINT32 fps, midi_generation, midi_sent, midi_epoch, midi_interruptions;
+  /* 29.97 drop-frame labels (fps is then 30), and the operator's choice to relocate receivers with
+   * quarter frames alone, without the Full Frame SysEx some USB interfaces do not pass on. */
+  BOOL drop_frame, quarter_frames_only;
   int32_t midi_error, midi_worker_error, midi_interruption;
   BOOL midi_suspended;
   /* Timecode port reopen (op 9): the command thread records it, the MIDI worker carries it out without
@@ -63,7 +68,7 @@ DWORD WINAPI audio_worker(void *unused);
 DWORD WINAPI reader_worker(void *unused);
 DWORD WINAPI telemetry_worker(void *unused);
 DWORD WINAPI midi_worker(void *unused);
-MMRESULT midi_prepare(UINT device, UINT fps);
+MMRESULT midi_prepare(UINT device, UINT fps, BOOL drop_frame, BOOL quarter_frames_only, const wchar_t *name);
 MMRESULT midi_release(void);
 HRESULT midi_request_reopen(UINT device, const wchar_t *name);
 void acknowledge(UINT32 request, UINT32 generation, int32_t code);

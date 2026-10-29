@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ListPlus, Trash2 } from 'lucide-react';
 import { useProgramViewport } from './useProgramViewport';
+import { FloatingMenu } from './FloatingMenu';
 
 export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAddItem, onBlankClick, onImportFiles, selectedIds, onSelectionChange, onDeleteSelection, view = 'cards' }: { itemIds: string[]; renderItem: (index: number) => ReactNode; empty: ReactNode; compact: boolean; locked: boolean; onAddItem: () => void; onBlankClick: () => void; onImportFiles: (files: File[]) => Promise<void>; selectedIds: string[]; onSelectionChange: (ids: string[]) => void; onDeleteSelection: () => void; view?: 'list' | 'cards' }): JSX.Element {
   const virtual = useProgramViewport(itemIds, view, compact);
@@ -78,20 +79,20 @@ export function ProgramGrid({ itemIds, renderItem, empty, compact, locked, onAdd
     if (locked || !card?.dataset.programId) return;
     if (selectedIds.includes(card.dataset.programId)) {
       event.preventDefault(); event.stopPropagation();
-      setPosition({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 100)) });
+      setPosition({ x: event.clientX, y: event.clientY });
     } else onSelectionChange([]);
   }} onContextMenu={(event) => {
     if (locked || (event.target instanceof Element && event.target.closest('.p1-media-card'))) return;
     event.preventDefault();
-    setPosition({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 100)) });
+    setPosition({ x: event.clientX, y: event.clientY });
   }}>
     {itemIds.length ? <div className="program-virtual-body" style={{ height: virtual.totalHeight }}>
       {virtual.indices.map(index => <div className="program-virtual-row" data-program-index={index} key={itemIds[index]} style={virtual.style(index)}>{renderItem(index)}</div>)}
     </div> : empty}
     {rectangle ? <div className="program-selection-rectangle" style={rectangle} /> : null}
-    {position && !locked ? <div className="resource-context-menu" role="menu" style={{ left: position.x, top: position.y }} onPointerDown={(event) => event.stopPropagation()}>
+    {position && !locked ? <FloatingMenu x={position.x} y={position.y} className="resource-context-menu" label="节目列表菜单">
       {selectedIds.length ? <button className="context-menu-item danger" role="menuitem" onClick={() => { setPosition(null); onDeleteSelection(); }}><Trash2 /><span>删除所选 {selectedIds.length} 个节目</span></button> : null}
       <button className="context-menu-item" role="menuitem" onClick={() => { setPosition(null); onAddItem(); }}><ListPlus /><span>新建空白节目</span></button>
-    </div> : null}
+    </FloatingMenu> : null}
   </div>;
 }
