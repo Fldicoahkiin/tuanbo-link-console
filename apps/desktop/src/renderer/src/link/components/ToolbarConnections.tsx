@@ -110,9 +110,9 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   const row = (id: string): Row | undefined => rows.find(entry => entry.id === id);
   const lightingRow = row(`port:${profile?.internalPlayer?.mtcOutputPortProfileId ?? 'internal-mtc-output'}`);
   const lightingStatus: Pick<Row, 'state' | 'value' | 'detail'> = player.state.status === 'playing' && player.state.mtcSending
-    ? { state: 'ready', value: '发送中', detail: '正在按音频位置发送灯光时间码' }
+    ? { state: 'ready', value: '时间码已发出', detail: '正在按音频位置发出灯光时间码；控台有没有收到，请看控台的时间码窗口' }
     : player.state.mtcConnectionFailed && player.state.status === 'playing'
-      ? { state: 'error', value: '未连接', detail: '音乐照常播放，但灯光时间码没有发出去' }
+      ? { state: 'error', value: '没发出', detail: '音乐照常播放，但灯光时间码没有发出去' }
       : lightingRow ?? { state: 'skipped', value: '未启用', detail: '当前工程没有设置灯光输出' };
   const audioStatus: Pick<Row, 'state' | 'value' | 'detail'> | undefined = internal && player.state.status === 'playing'
     ? { state: 'ready', value: '播放中', detail: '联动台正在播放音乐' }

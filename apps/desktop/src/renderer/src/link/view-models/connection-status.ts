@@ -44,7 +44,8 @@ export function midiConnectionStatus(input: {
   if (!required) return { state: 'skipped', value: '未启用', detail: '未启用此接口' };
   if (!portName) return { state: 'idle', value: '未配置', detail: '请在音频与 MIDI 中选择接口' };
   if (input.inventoryPending) return { state: 'checking', value: '检测中', detail: `正在读取 Windows 接口：${portName}` };
-  if (open) return { state: 'ready', value: '已连接', detail: `${portName}；接口已打开，但不代表控台已在跑灯` };
+  // An open port says nothing about the console: "已连接" here read as "the lights will run" (2026-10-28, picture 3).
+  if (open) return { state: 'ready', value: '接口已打开', detail: `${portName}；接口已打开。控台有没有收到、在不在跑灯，要看控台的时间码窗口` };
   if (check?.state === 'checking') return { state: 'checking', value: '连接中', detail: check.detail };
   if (check?.state === 'waiting' || check?.state === 'blocked') return { state: 'idle', value: check.state === 'waiting' ? '等待中' : '未执行', detail: check.detail };
   if (!available) return { state: 'error', value: '未连接', detail: `${portName}；找不到这个接口，或有重名接口` };

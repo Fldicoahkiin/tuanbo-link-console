@@ -27,6 +27,6 @@ it('Windows 独有 USB 接口可用时亮绿，不宣称控台已出灯；拔出
   expect(midiConnectionStatus({ ...input, check: { state: 'error', detail: '接口被占用', checkedAt: 1 } })).toMatchObject({ state: 'error', detail: '接口被占用' });
 });
 it('实际打开的浏览器端口不受旧检查失败覆盖，灯光跳转始终为时间码', () => {
-  expect(midiConnectionStatus({ required: true, portName: 'USB MIDI Interface', available: true, open: true, native: false, check: { state: 'error', detail: '旧错误', checkedAt: 1 }, systemError: undefined })).toMatchObject({ state: 'ready', value: '已连接' });
+  expect(midiConnectionStatus({ required: true, portName: 'USB MIDI Interface', available: true, open: true, native: false, check: { state: 'error', detail: '旧错误', checkedAt: 1 }, systemError: undefined })).toMatchObject({ state: 'ready', value: '接口已打开' });
   expect(lightingConnectionDestination).toEqual({ category: 'audio', focus: 'lighting-mtc' });
 });
