@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { LinkUpdateManager, type UpdateClient, type UpdateClientFactory, type UpdateClientHandlers, type UpdateRules } from './update-manager';
+import { LinkUpdateManager, updaterLogLine, type UpdateClient, type UpdateClientFactory, type UpdateClientHandlers, type UpdateRules } from './update-manager';
 
 const releaseKey = generateKeyPairSync('ed25519');
 const releaseKeys = { 'release-test-a': releaseKey.publicKey.export({ type: 'spki', format: 'pem' }).toString() };
@@ -270,6 +270,51 @@ function licensed(updatesUntil: string): LicenseStatus {
     claims: { version: 1, product: 'tuanbo-link-console', licenseId: '9d53530a-6712-423e-985e-e69beb9ec1c6', customer: '测试客户', machineCode,
       kind: 'subscription', issuedAt: '2026-01-01T00:00:00.000Z', useUntil: '2027-12-31T00:00:00.000Z', updatesUntil } };
 }
+
+describe('下载方式', () => {
+  it('进度按要下载的大小区分只下载变化部分和下载完整安装包', async () => {
+    const messages: string[] = [];
+    const manager = new LinkUpdateManager('0.2.0', true, (status) => messages.push(status.message), rules(), (_feedUrl, handlers) => ({
+      check: () => { handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
+      download: () => {
+        handlers.progress({ percent: 50, bytesPerSecond: 1, transferred: 4, total: 8, delta: 4 });
+        handlers.progress({ percent: 25, bytesPerSecond: 1, transferred: 4, total: installerBytes.length, delta: 4 });
+        handlers.downloaded(updateInfo('0.2.1'));
+        return Promise.resolve(installer);
+      },
+      install: vi.fn(),
+      dispose: vi.fn()
+    }));
+    await manager.check();
+    await manager.download();
+    expect(messages).toContain('正在下载有变化的部分 50.0%');
+    expect(messages).toContain('正在下载完整安装包 25.0%');
+  });
+
+  it('更新程序说明下载方式的日志写进运行日志', async () => {
+    const log = vi.fn<UpdateRules['log']>();
+    const manager = new LinkUpdateManager('0.2.0', true, vi.fn(), { ...rules(), log }, (_feedUrl, handlers) => ({
+      check: () => { handlers.log('info', '更新只下载有变化的部分：7.07 MB，完整安装包 936.06 MB（1%）'); handlers.available(updateInfo('0.2.1')); return Promise.resolve(); },
+      download: () => Promise.resolve(installer),
+      install: vi.fn(),
+      dispose: vi.fn()
+    }));
+    await manager.check();
+    expect(log).toHaveBeenCalledWith('info', '更新只下载有变化的部分：7.07 MB，完整安装包 936.06 MB（1%）');
+  });
+
+  it('只保留下载计划和改下完整安装包这两类更新程序日志', () => {
+    expect(updaterLogLine('info', 'Full: 936.06 MB, To download: 7.07 MB (1%)')).toEqual({
+      level: 'info', message: '更新只下载有变化的部分：7.07 MB，完整安装包 936.06 MB（1%）'
+    });
+    expect(updaterLogLine('error', 'Cannot download differentially, fallback to full download: Error: Cannot download "https://updates.example.com/windows/x64/Tuanbo-Link-Console-0.2.0-x64.exe.blockmap", status 404: Not Found\n    at ClientRequest.<anonymous>')).toEqual({
+      level: 'warning',
+      message: '只下载有变化的部分没成功，改为下载完整安装包。原因：Error: Cannot download "https://updates.example.com/windows/x64/Tuanbo-Link-Console-0.2.0-x64.exe.blockmap", status 404: Not Found'
+    });
+    expect(updaterLogLine('info', 'Checking for update')).toBeNull();
+    expect(updaterLogLine('error', 'Error: net::ERR_INTERNET_DISCONNECTED')).toBeNull();
+  });
+});
 
 function fakeClient(handlers: UpdateClientHandlers, installed: () => void): UpdateClient {
   return {
