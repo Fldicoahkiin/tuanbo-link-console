@@ -158,8 +158,18 @@
 .device-console .tone-warning { border-inline-start-color: var(--warning-text); }
 .device-console .tone-warning > svg { color: var(--warning-text); }
 .device-console details { margin: 24px 0 0; padding: 0; border: 0; border-top: 1px solid var(--separator); border-radius: 0; background: transparent; }
-.device-console summary, .device-console .p1-import-menu > summary { min-height: 48px; padding: 14px 0; cursor: pointer; color: var(--text-primary); font-size: 15px; line-height: 1.5; font-weight: 500; }
+.device-console summary { min-height: 48px; padding: 14px 0; cursor: pointer; color: var(--text-primary); font-size: 15px; line-height: 1.5; font-weight: 500; }
+/* The P1 import menu opens like a button and looks like the buttons beside it. */
+.device-console .p1-import-menu > summary { min-height: 40px; padding: 8px 14px; border: 1px solid var(--settings-control-border); border-radius: 8px; background: var(--surface-raised); box-shadow: none; font-size: 15px; font-weight: 500; line-height: 1.5; }
 .device-console details[open] > summary { margin-bottom: 8px; }
+/* One disclosure arrow across settings (2026-10-28, picture 4 showed three): a summary without its own
+   icon gets the same chevron the setting rows use, turning down when open. */
+.device-console details:not(.settings-disclosure) > summary:not(:has(> svg)) { display: flex; align-items: center; gap: 8px; list-style: none; cursor: pointer; }
+.device-console details:not(.settings-disclosure) > summary:not(:has(> svg))::-webkit-details-marker { display: none; }
+.device-console details:not(.settings-disclosure) > summary:not(:has(> svg))::before { content: ''; flex: none; width: 7px; height: 7px; margin: 0 3px 0 1px; border-right: 1.5px solid var(--text-secondary); border-top: 1.5px solid var(--text-secondary); transform: rotate(45deg); }
+.device-console details[open]:not(.settings-disclosure) > summary:not(:has(> svg))::before { transform: rotate(135deg); }
+/* Following P1: its tools and the timecode notice stack in one column under the disclosure. */
+.device-console .p1-follow-settings { display: grid; gap: 16px; min-width: 0; padding-top: 4px; }
 .device-console details[open] > :not(summary) { margin-inline: 0; }
 .device-console .settings-disclosure-body { padding-bottom: 8px; }
 .device-console .field-save-status { grid-column: 2; margin: 0; color: var(--success-text); }

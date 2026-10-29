@@ -14,6 +14,8 @@ type Props = {
   onBusyChange?: (busy: boolean) => void;
   afterImport?: (() => Promise<void>) | undefined;
   purpose?: 'follow' | 'migration' | 'audio';
+  /** false under another panel that already names the P1 project and shows its file. */
+  heading?: boolean;
   disabled?: boolean;
   notify: (message: string, tone?: 'info' | 'error') => void;
 };
@@ -25,7 +27,7 @@ type SyncSummary = {
   updatedAt: string;
 };
 
-export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow', afterImport, directImport = false, onBusyChange }: Props): JSX.Element {
+export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow', heading = true, afterImport, directImport = false, onBusyChange }: Props): JSX.Element {
   const project = useDocumentStore((state) => state.project);
   const documentId = useDocumentStore((state) => state.documentId);
   const [p1ProjectPath, setP1ProjectPath] = useState('');
@@ -149,14 +151,14 @@ export function P1ProjectSyncPanel({ disabled = false, notify, purpose = 'follow
   };
 
   return <section className="p1-sync-panel p1-sync-layout">
-    <div className="p1-sync-heading">
+    {heading ? <div className="p1-sync-heading">
       <div><AudioLines /><span><strong>P1 音频工程同步</strong></span></div>
       <span className={`status-pill ${project?.p1Sync ? 'ok' : 'pending'}`}>{project?.p1Sync ? '已关联' : '未读取'}</span>
-    </div>
+    </div> : null}
     {progress ? <div className="ma2-read-progress" role="status" aria-live="polite"><div><strong>导入 P1 歌曲</strong><span>{progress.total ? `${progress.completed} / ${progress.total}` : '正在统计歌曲'}</span></div><progress aria-label="P1 导入进度" {...progress.total ? { value: progress.completed, max: progress.total } : {}} /><small>{progress.song ? `${progress.state === 'skipped' ? '待修复' : '已导入'}：${progress.song}` : '正在读取 P1 工程'}</small><button onClick={() => { const id = activeImport.current; if (id) { cancelledImport.current = true; void linkDesktopViewModel.cancelP1Import(id).catch(error => notify(String(error), 'error')); } }}>取消导入</button></div> : null}
-    <div className="p1-sync-path" title={p1ProjectPath || (project?.p1Sync ? '已保存在联动工程里，不用重新导入' : '还没选择 P1 工程')}>
+    {heading ? <div className="p1-sync-path" title={p1ProjectPath || (project?.p1Sync ? '已保存在联动工程里，不用重新导入' : '还没选择 P1 工程')}>
       <FileAudio2 /><span>{p1ProjectPath || (project?.p1Sync ? `已保存 P1 歌曲 · ${new Date(project.p1Sync.importedAt).toLocaleString('zh-CN')}` : '未选择 .hia 工程')}</span>
-    </div>
+    </div> : null}
     <div className="p1-sync-actions">
       {directImport ? <Button className="primary-button" disabled={disabled || busy} onClick={() => void importProject('picker')}><FolderOpen />导入 P1 歌曲（.hia）</Button> : <details className={`p1-import-menu ${disabled || busy ? 'disabled' : ''}`}>
         <summary aria-label={purpose === 'migration' ? '仅导入 P1 音乐' : '导入 P1 工程'} aria-disabled={disabled || busy} onClick={(event) => { if (disabled || busy) event.preventDefault(); }}><Download />{purpose === 'migration' ? '仅导入 P1 音乐' : '导入 P1 工程'}<ChevronDown /></summary>
