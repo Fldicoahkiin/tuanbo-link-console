@@ -8,9 +8,11 @@ name: Release Windows
 #   - Push a vX.Y.Z tag.
 #   tag     dispatched runs only, see above.
 #   verify  GitHub-hosted: version, typecheck, tests, lint.
-#   build   GitHub-hosted: fetches the pinned beauty and music-analysis assets from their own releases, packages,
-#           signs latest.yml with the release key (secret) and puts the four files into a draft release on the tag.
-#           No Actions artifacts: a private repository has only 500 MB of artifact storage.
+#   build   GitHub-hosted, beside verify: fetches the pinned beauty and music-analysis assets from their own releases,
+#           packages, signs latest.yml with the release key (secret), waits for verify to pass
+#           (scripts/wait-for-job.mjs) and only then puts the four files into a draft release on the tag. A version
+#           whose checks fail never gets a draft, so its tag can still move. Running beside verify saves its quarter
+#           hour. No Actions artifacts: a private repository has only 500 MB of artifact storage.
 # The server's upload key never goes to GitHub. scripts/relay-release.mjs carries the draft to the server and publishes
 # it once the feed serves it: the office PC runs it every 10 minutes, and a Mac can run it by hand (pnpm release:relay).
 
@@ -112,15 +114,17 @@ jobs:
           pnpm lint
 
   build:
-    needs: [tag, verify]
-    if: ${{ !cancelled() && needs.verify.result == 'success' }}
+    needs: tag
+    # Starts with verify, on the same condition; the draft waits for verify to pass.
+    if: ${{ !cancelled() && (needs.tag.result == 'success' || (needs.tag.result == 'skipped' && github.event_name == 'push')) }}
     runs-on: windows-latest
     timeout-minutes: 120
     env:
       RELEASE_TAG: ${{ needs.tag.outputs.tag || github.ref_name }}
-    # Creates and fills the draft release.
+    # Creates and fills the draft release; reads this run's jobs to wait for verify.
     permissions:
       contents: write
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (v7.0.1)
@@ -181,6 +185,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Release manifest failed' }
           $manifest = Get-Content -Raw apps/desktop/dist/release-manifest.json | ConvertFrom-Json
           if (-not $manifest.releaseSignature) { throw 'A release build must be signed' }
+
+      - name: Wait for verify to pass
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-job.mjs verify
 
       - name: Put the release into a draft GitHub release
         shell: pwsh
