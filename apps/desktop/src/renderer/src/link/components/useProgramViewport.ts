@@ -1,5 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 
+/** Program cards: three lines (index and title, duration and contents, MTC start) at least this wide. */
+const CARD_MIN_WIDTH = 232, CARD_HEIGHT = 92, CARD_GAP = 8;
+
 export function useProgramViewport(ids: string[], view: 'list' | 'cards', compact: boolean) {
   const viewport = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0, top: 0 });
@@ -14,9 +17,11 @@ export function useProgramViewport(ids: string[], view: 'list' | 'cards', compac
     });
     observer.observe(element); return () => observer.disconnect();
   }, []);
-  const columns = view === 'list' ? 1 : Math.max(1, Math.floor((size.width + 8) / 172));
-  const height = view === 'cards' ? 104 : compact || size.width < 600 ? 96 : 56;
-  const gap = view === 'cards' ? 8 : 3, step = height + gap;
+  const columns = view === 'list' ? 1 : Math.max(1, Math.floor((size.width + CARD_GAP) / (CARD_MIN_WIDTH + CARD_GAP)));
+  // Cards share the row's width, so they grow with the window instead of leaving a gap on the right.
+  const cardWidth = size.width ? (size.width - (columns - 1) * CARD_GAP) / columns : CARD_MIN_WIDTH;
+  const height = view === 'cards' ? CARD_HEIGHT : compact || size.width < 600 ? 96 : 56;
+  const gap = view === 'cards' ? CARD_GAP : 3, step = height + gap;
   const rows = Math.ceil(ids.length / columns), totalHeight = Math.max(0, rows * step - gap);
   const start = Math.max(0, Math.floor(size.top / step) - 1) * columns;
   const end = Math.min(ids.length, (Math.ceil((size.top + size.height) / step) + 1) * columns);
@@ -51,6 +56,6 @@ export function useProgramViewport(ids: string[], view: 'list' | 'cards', compac
   };
   return { viewport, indices: [...indices].sort((a, b) => a - b), totalHeight, setFocused, keyDown,
     scroll: (top: number) => setSize(previous => previous.top === top ? previous : { ...previous, top }),
-    style: (index: number) => ({ top: Math.floor(index / columns) * step, left: view === 'list' ? 0 : index % columns * 172,
-      height, width: view === 'list' ? '100%' : Math.min(164, size.width || 164) }) };
+    style: (index: number) => ({ top: Math.floor(index / columns) * step, left: view === 'list' ? 0 : Math.round(index % columns * (cardWidth + CARD_GAP)),
+      height, width: view === 'list' ? '100%' : Math.floor(cardWidth) }) };
 }

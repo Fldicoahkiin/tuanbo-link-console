@@ -79,7 +79,7 @@ export function SongMtcStart({ project, item, detail = false }: { project: LinkP
   const allocationError = useMtcStartAllocationStore(state => state.error);
   const view = songMtcView(project, item, allocationError);
   const badge = <span className="song-mtc-start" data-state={view.state} title={view.detail} aria-label={`${view.text}。${view.detail}`}>
-    {view.state === 'warning' || view.state === 'invalid' ? <TriangleAlert aria-hidden /> : null}{view.text}{view.pending ? <RefreshCw className="song-mtc-pending" aria-hidden /> : null}
+    {view.state === 'warning' || view.state === 'invalid' ? <TriangleAlert aria-hidden /> : null}<span className="song-mtc-text">{view.text}</span>{view.pending ? <RefreshCw className="song-mtc-pending" aria-hidden /> : null}
   </span>;
   return detail ? <span className="song-mtc-detail">{badge}<small>{view.detail}</small></span> : badge;
 }

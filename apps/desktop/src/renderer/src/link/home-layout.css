@@ -524,56 +524,61 @@
 .p1-media-pane > .p1-pane-title label input { min-width: 0; width: 100%; padding: 0; background: transparent; border: 0; }
 .program-view-switch { display: flex; gap: 2px; background: var(--surface-1); border: 1px solid var(--border-subtle); border-radius: var(--r-md); padding: 3px; }
 .program-view-switch button[aria-pressed=true] { color: var(--text-1); background: var(--surface-4); border-radius: var(--r-sm); box-shadow: var(--shadow-1); }
-.p1-media-grid { display: grid; flex: 1; align-content: start; min-height: 0; overflow: auto; gap: 8px; padding: 12px; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 164px)); grid-auto-rows: 104px; }
-.p1-media-card.rundown-row { display: grid; position: relative; grid-template-columns: minmax(0, 1fr) 32px; grid-template-rows: auto 1fr auto; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--separator); border-radius: 8px; background: var(--surface); cursor: pointer; }
+.p1-media-grid { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+.p1-media-card.rundown-row { display: grid; position: relative; align-items: center; border: 1px solid var(--separator); border-radius: 8px; background: var(--surface); cursor: pointer; }
 .p1-media-card.rundown-row.is-selected { border-color: var(--border-accent); background: var(--accent-soft-2); box-shadow: none; }
 .p1-media-card.rundown-row[data-runtime=running] { border-color: var(--success-text); }
 .p1-media-card.rundown-row.is-disabled { opacity: .55; }
 .p1-card-top { display: flex; grid-column: 1; grid-row: 1; gap: 8px; align-items: center; }
-.p1-card-top > span { display: flex; gap: 6px; align-items: center; color: var(--text-secondary); font-size: var(--text-caption); }
-.p1-card-top svg { width: 14px; height: 14px; }
 .p1-media-card .rundown-index { background: var(--surface-raised); color: var(--text-secondary); border: 0; border-radius: 6px; min-width: 32px; height: 32px; font-variant-numeric: tabular-nums; }
-.p1-media-card > strong { grid-column: 1 / -1; grid-row: 2; text-align: left; font-size: var(--text-body); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.p1-card-state { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; grid-column: 1; grid-row: 3; font-size: var(--text-caption); color: var(--text-secondary); }
+.p1-media-card > strong { min-width: 0; text-align: left; font-size: var(--text-body); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p1-card-state { display: flex; gap: 6px; align-items: center; min-width: 0; font-size: var(--text-caption); color: var(--text-secondary); white-space: nowrap; }
 .p1-card-state svg { width: 14px; height: 14px; color: var(--success-text); }
 .p1-card-state .song-volume-button { padding: 3px 5px; min-height: 24px; color: var(--text-secondary); border: 1px solid var(--separator); border-radius: 4px; background: var(--surface); font-size: var(--text-caption); }
-.p1-media-card footer { display: flex; grid-column: 1 / -1; grid-row: 4; gap: 12px; align-items: center; justify-content: space-between; color: var(--text-secondary); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
-.p1-media-card footer small { display: flex; align-items: center; gap: 4px; font-size: var(--text-caption); }
-.p1-media-card footer svg { width: 14px; height: 14px; }
-.p1-media-card footer .program-card-time { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
-.p1-media-card footer .program-card-time .song-mtc-start { align-self: center; }
-.p1-media-card .program-row-properties { grid-column: 2; grid-row: 1; }
-.program-list-columns, .p1-media-grid[data-view=list] .p1-media-card { grid-template-columns: 40px minmax(120px, 1fr) minmax(110px, .55fr) 138px 32px; gap: 12px; }
+/* Footer: duration and contents on one line, the MTC badge on its own (2026-10-28, pictures 1 and 7). */
+.p1-media-card footer { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 8px; min-width: 0; color: var(--text-secondary); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
+.p1-media-card footer small { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-caption); }
+.p1-media-card footer small svg { width: 13px; height: 13px; margin-right: 4px; vertical-align: -2px; }
+.p1-media-card footer .song-mtc-start { grid-column: 1 / -1; justify-self: start; max-width: 100%; }
+
+/* List: one row per song; the MTC start has its own column so the badges line up. */
+.program-list-columns, .p1-media-grid[data-view=list] .p1-media-card { grid-template-columns: 40px minmax(120px, 1fr) minmax(140px, .45fr) minmax(170px, 230px) minmax(110px, 170px) 32px; column-gap: 12px; }
 .program-list-columns { display: grid; padding: 10px 18px; color: var(--text-secondary); font-size: var(--text-caption); }
-.p1-media-grid[data-view=list] { display: flex; flex-direction: column; padding: 0 8px 12px; gap: 3px; }
-.p1-media-grid[data-view=list] .p1-media-card { flex-shrink: 0; min-height: 44px; grid-template-rows: auto; padding: 10px; border-color: transparent; background: transparent; }
+.p1-media-grid[data-view=list] { padding: 0 8px 12px; }
+.p1-media-grid[data-view=list] .p1-media-card { min-height: 44px; padding: 8px 10px; border-color: transparent; background: transparent; }
 .p1-media-grid[data-view=list] .p1-media-card.is-selected { border-color: transparent; background: var(--surface-2); box-shadow: inset 2px 0 var(--accent-bar); }
-.p1-media-grid[data-view=list] .p1-card-top { grid-column: 1; grid-row: 1; }
-.p1-media-grid[data-view=list] .p1-card-top > span { display: none; }
 .p1-media-grid[data-view=list] .p1-media-card > strong { grid-column: 2; grid-row: 1; }
 .p1-media-grid[data-view=list] .p1-card-state { grid-column: 3; grid-row: 1; }
-.p1-media-grid[data-view=list] .p1-media-card footer { grid-column: 4; grid-row: 1; display: grid; gap: 3px; }
-.p1-media-grid[data-view=list] .program-row-properties { grid-column: 5; grid-row: 1; }
+.p1-media-grid[data-view=list] .p1-media-card footer { grid-column: 4 / 6; grid-row: 1; grid-template-columns: subgrid; grid-template-rows: auto auto; row-gap: 2px; }
+.p1-media-grid[data-view=list] .p1-media-card footer .program-card-time { grid-column: 2; grid-row: 1; }
+.p1-media-grid[data-view=list] .p1-media-card footer small { grid-column: 2; grid-row: 2; }
+.p1-media-grid[data-view=list] .p1-media-card footer .song-mtc-start { grid-column: 1; grid-row: 1 / 3; align-self: center; }
+.p1-media-grid[data-view=list] .program-row-properties { grid-column: 6; grid-row: 1; }
 .p1-library-workbench > .p1-item-inspector { display: block; grid-column: 2; grid-row: 1; margin: 0; padding: 16px; border: 0; border-left: 1px solid var(--separator); border-radius: 0; min-width: 0; min-height: 0; overflow: auto; background: var(--surface-raised); }
 .p1-item-inspector .p1-pane-title button { margin-left: auto; }
+/* Narrow list (properties open): title, state, then MTC, duration and contents on one line. */
 .p1-library-workbench[data-inspector=true] .program-list-columns { display: none; }
-.p1-library-workbench[data-inspector=true] .p1-media-grid[data-view=list] .p1-media-card { grid-template-columns: 36px minmax(100px, 1fr) 32px; }
+.p1-library-workbench[data-inspector=true] .p1-media-grid[data-view=list] .p1-media-card { grid-template-columns: 36px minmax(100px, 1fr) 32px; row-gap: 4px; }
 .p1-library-workbench[data-inspector=true] .p1-media-grid[data-view=list] .program-row-properties { grid-column: 3; }
 .p1-library-workbench[data-inspector=true] .p1-media-grid[data-view=list] .p1-card-state { grid-column: 2; grid-row: 2; }
-.p1-library-workbench[data-inspector=true] .p1-media-grid[data-view=list] footer { grid-column: 2; grid-row: 3; display: flex; }
-.p1-media-grid[data-view=cards] .p1-media-card { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 18px minmax(0, 1fr) 18px; gap: 4px; padding: 8px; border-radius: 6px; background: var(--surface-raised); }
+.p1-library-workbench[data-inspector=true] .p1-media-grid[data-view=list] footer { grid-column: 2; grid-row: 3; grid-template-columns: auto auto minmax(0, 1fr); grid-template-rows: auto; }
+.p1-library-workbench[data-inspector=true] .p1-media-grid[data-view=list] footer > * { grid-row: 1; }
+.p1-library-workbench[data-inspector=true] .p1-media-grid[data-view=list] footer .song-mtc-start { grid-column: 1; }
+.p1-library-workbench[data-inspector=true] .p1-media-grid[data-view=list] footer .program-card-time { grid-column: 2; }
+.p1-library-workbench[data-inspector=true] .p1-media-grid[data-view=list] footer small { grid-column: 3; }
+
+/* Cards: index, title and play state; duration and contents; the MTC badge across the card. */
+.p1-media-grid[data-view=cards] .p1-media-card { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: 22px 18px 20px; gap: 6px 8px; padding: 10px 12px; border-radius: 6px; background: var(--surface-raised); }
 .p1-media-grid[data-view=cards] .p1-media-card.is-selected { background: var(--accent-soft-2); }
 .p1-media-grid.program-virtual-grid { display: block; }
 .program-virtual-body { position: relative; width: 100%; }
 .program-virtual-row { position: absolute; }
 .program-virtual-row > .p1-media-card { height: 100%; width: 100%; box-sizing: border-box; }
-.p1-media-grid[data-view=cards] .p1-card-top > span { display: none; }
-.p1-media-grid[data-view=cards] .rundown-index { min-width: 20px; width: 20px; height: 20px; background: transparent; }
-.p1-media-grid[data-view=cards] .p1-media-card > strong { text-align: center; }
-.p1-media-grid[data-view=cards] .p1-card-state { grid-column: 2; grid-row: 1; justify-content: flex-end; font-size: 11px; }
-.p1-media-grid[data-view=cards] .song-volume-button { display: none; }
-.p1-media-grid[data-view=cards] .p1-media-card footer { grid-row: 3; flex-direction: row-reverse; font-size: 11px; }
-.p1-media-grid[data-view=cards] .program-row-properties { display: none; }
+.p1-media-grid[data-view=cards] .rundown-index { width: auto; min-width: 22px; height: 22px; padding: 0; place-items: center start; background: transparent; font-weight: 600; }
+.p1-media-grid[data-view=cards] .p1-media-card > strong { grid-column: 2; grid-row: 1; }
+.p1-media-grid[data-view=cards] .p1-card-state { grid-column: 3; grid-row: 1; justify-content: flex-end; }
+.p1-media-grid[data-view=cards] :is(.song-volume-button, .program-card-hint, .program-row-properties) { display: none; }
+.p1-media-grid[data-view=cards] .p1-media-card footer { grid-column: 1 / -1; grid-row: 2 / 4; grid-template-rows: subgrid; row-gap: 6px; }
 .p1-library-workbench { grid-template-rows: auto minmax(0, 1fr); }
 .p1-library-workbench > .p1-media-pane { display: contents; }
 .p1-media-pane > .p1-pane-title { grid-column: 1 / -1; min-height: 56px; padding: 10px 16px; }
@@ -601,10 +606,14 @@
   .app-sidebar > .workspace-navigation > button { padding-inline: 8px; }
   .p1-project-workspace { height: auto; }
   .program-list-columns { display: none; }
-  .p1-media-grid[data-view=list] .p1-media-card { grid-template-columns: 36px minmax(80px, 1fr) 32px; }
+  .p1-media-grid[data-view=list] .p1-media-card { grid-template-columns: 36px minmax(80px, 1fr) 32px; row-gap: 4px; }
   .p1-media-grid[data-view=list] .program-row-properties { grid-column: 3; }
   .p1-media-grid[data-view=list] .p1-card-state { grid-column: 2; grid-row: 2; }
-  .p1-media-grid[data-view=list] .p1-media-card footer { grid-column: 2; grid-row: 3; }
+  .p1-media-grid[data-view=list] .p1-media-card footer { grid-column: 2; grid-row: 3; grid-template-columns: auto auto minmax(0, 1fr); grid-template-rows: auto; }
+  .p1-media-grid[data-view=list] .p1-media-card footer > * { grid-row: 1; }
+  .p1-media-grid[data-view=list] .p1-media-card footer .song-mtc-start { grid-column: 1; }
+  .p1-media-grid[data-view=list] .p1-media-card footer .program-card-time { grid-column: 2; }
+  .p1-media-grid[data-view=list] .p1-media-card footer small { grid-column: 3; }
   .p1-library-workbench[data-inspector=true] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(80px, 1fr) minmax(0, 1fr); }
   .p1-library-workbench[data-inspector=true] .p1-media-grid { grid-row: 2; }
   .p1-library-workbench[data-inspector=true] > .p1-item-inspector { grid-column: 1; grid-row: 3; border-left: 0; border-top: 1px solid var(--separator); max-height: 440px; }

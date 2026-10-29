@@ -7,6 +7,7 @@ import { ProjectPlaybackMonitor } from './ProjectPlaybackMonitor';
 import { ProgramGrid } from './ProgramGrid';
 import { SongPlaybackProperties } from './SongPlaybackProperties';
 import { SongMtcStart } from './SongMtcStart';
+import { FloatingMenu } from './FloatingMenu';
 import { programContents } from '../view-models/program-contents';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -16,7 +17,6 @@ import {
   Search, List, LayoutGrid, Plus, X,
   SlidersHorizontal,
   Trash2,
-  Music2,
   Film
 } from 'lucide-react';
 import {
@@ -291,17 +291,17 @@ function ProjectLibrary(props: ProjectLibraryProps): JSX.Element {
 
     <section className="p1-media-pane">
       <div className="p1-pane-title"><div className="program-library-heading"><strong>节目单 <small>{filteredItems.length} 个</small></strong><span>{selectedPlaylistId === 'all' ? '全部节目' : programPlaylists(project).find(list => list.id === selectedPlaylistId)?.name ?? '未分组'} · {props.playItem ? doubleClickPlayback ? '双击节目播放' : '单击节目播放' : '选择节目进行联动'}</span></div><label><Search /><input aria-label="搜索节目" placeholder="搜索节目…" value={search} onChange={(event) => props.onSearch(event.currentTarget.value)} /></label><div className="program-view-switch" role="group" aria-label="节目显示方式"><Button className="icon-button" aria-label="列表视图" aria-pressed={view === 'list'} onClick={() => setView('list')}><List /></Button><Button className="icon-button" aria-label="卡片视图" aria-pressed={view === 'cards'} onClick={() => setView('cards')}><LayoutGrid /></Button></div><Button className="secondary-button" disabled={props.locked} onClick={props.onImportSongs}><FileAudio />导入歌曲 / P1</Button><Button className="secondary-button" disabled={props.locked} onClick={props.onAddItem}><Plus />新建节目</Button><Button className="icon-button" title="节目属性" aria-label="节目属性" aria-expanded={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><SlidersHorizontal /></Button></div>
-      {view === 'list' ? <div className="program-list-columns" aria-hidden="true"><span>顺序</span><span>节目名称</span><span>状态</span><span>时长 / 内容</span><span>属性</span></div> : null}
+      {view === 'list' ? <div className="program-list-columns" aria-hidden="true"><span>顺序</span><span>节目名称</span><span>状态</span><span>MTC 起始码</span><span>时长 / 内容</span><span>属性</span></div> : null}
       <ProgramGrid view={view} compact={inspectorOpen} itemIds={filteredItems.map(item => item.id)} locked={props.locked} onAddItem={props.onAddItem} onImportFiles={props.onImportFiles} selectedIds={visibleBatchIds} onSelectionChange={setBatchIds} onDeleteSelection={deleteSelection} onBlankClick={() => setInspectorOpen(false)}
         empty={<div className="p1-library-empty"><FileAudio /><strong>{search ? '没有找到匹配的节目' : '添加第一个节目'}</strong></div>}
         renderItem={visibleIndex => {
           const item = filteredItems[visibleIndex]!;
           const index = project.rundown.findIndex((candidate) => candidate.id === item.id);
           return <article className={`p1-media-card rundown-row ${item.id === selectedItemId ? 'is-selected' : ''} ${item.id === currentItemId ? 'is-current' : ''} ${item.enabled ? '' : 'is-disabled'}`} data-program-id={item.id} data-batch-selected={visibleBatchIds.includes(item.id)} data-runtime={item.id === currentItemId ? runtime : 'idle'} title={item.title} aria-label={`${item.title}，${props.playItem ? doubleClickPlayback ? '双击播放' : '单击播放' : '单击选中'}`} key={`${item.id}:${revision}`} tabIndex={0} draggable={false} onClick={() => props.playItem && !doubleClickPlayback ? props.playItem(item) : props.onChooseItem(item)} onDoubleClick={() => { if (doubleClickPlayback && props.playItem) props.playItem(item); else if (!props.playItem) props.onSelectCurrentItem(item); }} onContextMenu={(event) => { event.preventDefault(); if (props.locked) return; props.onChooseItem(item); setContext({ item, x: event.clientX, y: event.clientY }); }} onKeyDown={(event) => { if (event.key === 'Enter' && event.target === event.currentTarget) { event.preventDefault(); (props.playItem ?? props.onSelectCurrentItem)(item); } }}>
-            <div className="p1-card-top"><span><Music2 />{item.referenceAudio ? '音频节目' : '待添加音频'}</span><button className="rundown-index" disabled={!item.enabled} onClick={(event) => { event.stopPropagation(); (props.playItem ?? props.onSelectCurrentItem)(item); }}>{index + 1}</button></div>
+            <div className="p1-card-top"><button className="rundown-index" disabled={!item.enabled} onClick={(event) => { event.stopPropagation(); (props.playItem ?? props.onSelectCurrentItem)(item); }}>{index + 1}</button></div>
             <strong>{item.title}</strong>
-            <div className="p1-card-state">{project.playbackSource === 'internal' && item.referenceAudio ? <button className="song-volume-button" aria-label={`${item.title} 独立音量`} title="设置这首音频的独立音量，随工程保存" disabled={props.locked} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); props.onChooseItem(item); setInspectorOpen(true); }}>音量 {item.playback?.volume ?? 100}%</button> : null}{item.id === currentItemId ? <><Check />{runtime === 'running' ? '播放中' : runtime === 'paused' ? '已暂停' : '当前节目'}</> : props.playedItemIds.includes(item.id) ? '已播放' : props.playItem ? doubleClickPlayback ? '双击播放' : '点击播放' : item.p1Media ? 'P1 音频' : '联动节目'}</div>
-            <footer><span className="program-card-time">{formatDuration(item.referenceAudio?.durationMs ?? 0)}{item.referenceAudio ? <SongMtcStart project={project} item={item} /> : null}</span><small><Film />{programContents(item)}</small></footer>
+            <div className="p1-card-state">{project.playbackSource === 'internal' && item.referenceAudio ? <button className="song-volume-button" aria-label={`${item.title} 独立音量`} title="设置这首音频的独立音量，随工程保存" disabled={props.locked} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); props.onChooseItem(item); setInspectorOpen(true); }}>音量 {item.playback?.volume ?? 100}%</button> : null}{item.id === currentItemId ? <><Check />{runtime === 'running' ? '播放中' : runtime === 'paused' ? '已暂停' : '当前节目'}</> : props.playedItemIds.includes(item.id) ? '已播放' : <span className="program-card-hint">{props.playItem ? doubleClickPlayback ? '双击播放' : '点击播放' : item.p1Media ? 'P1 音频' : '联动节目'}</span>}</div>
+            <footer><span className="program-card-time">{formatDuration(item.referenceAudio?.durationMs ?? 0)}</span><small><Film />{programContents(item)}</small>{item.referenceAudio ? <SongMtcStart project={project} item={item} /> : null}</footer>
             <Button className="icon-button program-row-properties" aria-label={`编辑节目属性：${item.title}`} title="编辑节目属性" onDoubleClick={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); props.onChooseItem(item); setInspectorOpen(true); }}><SlidersHorizontal /></Button>
           </article>;
         }} />
@@ -358,7 +358,7 @@ function ProgramContextMenu(props: {
 }): JSX.Element {
   const index = props.project.rundown.findIndex((item) => item.id === props.item.id);
   const run = (action: () => void): void => { props.onClose(); action(); };
-  return <div className="resource-context-menu program-context-menu" style={{ left: Math.min(props.x, window.innerWidth - 240), top: Math.min(props.y, window.innerHeight - 250) }} onPointerDown={(event) => event.stopPropagation()}>
+  return <FloatingMenu x={props.x} y={props.y} className="resource-context-menu program-context-menu" label={`${props.item.title} 菜单`}>
     <button className="context-menu-item" onClick={() => run(props.onProperties)}><span className="context-icon"><SlidersHorizontal /></span><span>节目属性</span></button>
     <button className="context-menu-item" onClick={() => run(props.onOpenCueEditor)}><span className="context-icon"><SlidersHorizontal /></span><span>打开 Cue 编辑器</span></button>
     <button className="context-menu-item" disabled={!props.item.enabled} onClick={() => run(props.onSelectCurrent)}><span className="context-icon"><Check /></span><span>设为当前节目</span></button>
@@ -368,7 +368,7 @@ function ProgramContextMenu(props: {
     <button className="context-menu-item" disabled={index === props.project.rundown.length - 1} onClick={() => run(() => props.execute(moveRundownItemCommand(props.item.id, index + 1)))}><span className="context-icon"><ArrowDown /></span><span>下移</span></button>
     <button className="context-menu-item" onClick={() => run(() => props.execute(duplicateRundownItemCommand(props.item.id)))}><span className="context-icon"><Copy /></span><span>复制节目</span></button>
     <button className="context-menu-item danger" onClick={() => run(() => { if (window.confirm(`确认删除节目“${props.item.title}”？`)) props.execute(removeRundownItemCommand(props.item.id)); })}><span className="context-icon"><Trash2 /></span><span>删除节目</span></button>
-  </div>;
+  </FloatingMenu>;
 }
 
 function formatMilliseconds(milliseconds: number): string {
