@@ -90,9 +90,10 @@
 @media (prefers-reduced-motion:reduce) { .ma2-switch-track,.ma2-switch-track>span { transition:none; } }
 .lighting-topbar-actions .ma2-sync-controls>button { display:inline-flex; align-items:center; gap:4px; height:30px; padding:4px 7px; font-size:12px; white-space:nowrap; background:var(--surface-raised); color:var(--text-primary); border:1px solid var(--separator); border-radius:5px; }
 .lighting-topbar-actions svg { width:14px; height:14px; }
-.lighting-topbar-actions .ma2-sync-controls>button:nth-child(3),.lighting-topbar-actions .ma2-sync-controls>button:nth-child(4) { display:none; }
 .lighting-topbar-actions .ma2-sync-popover { position:absolute; top:38px; inset-inline-end:0; width:min(420px,70vw); z-index:200; border:1px solid var(--separator); box-shadow:0 12px 30px #0006; }
-@media (max-width:1300px) { .lighting-topbar-actions .ma2-sync-controls>button:nth-child(2)>span { display:none; } .lighting-topbar-actions .ma2-sync-controls>button { padding-inline:5px; } }
+/* A narrower window keeps the icons; the names stay in each button's label and tooltip. */
+@media (max-width:1300px) { .lighting-topbar-actions .ma2-sync-controls>:is(.ma2-sync-status,.ma2-sync-refresh,.ma2-sync-archive)>span { display:none; } .lighting-topbar-actions .ma2-sync-controls>button { padding-inline:5px; } }
+@media (max-width:1100px) { .lighting-topbar-actions .ma2-sync-controls>:is(.ma2-realtime-switch,.ma2-sync-save)>span:last-child { display:none; } }
 @media (max-width:1100px) { .lighting-material-layout>.cue-composer { padding:8px; } .lighting-workbench .lighting-effect-dock.lighting-material-layout { grid-template-columns:92px minmax(0,var(--library-share,.65fr)) 6px minmax(200px,var(--cue-share,.35fr)); } .lighting-classification { grid-template-columns:100px minmax(0,1fr); gap:6px; } .lighting-material-navigation { padding-inline:4px; } }
 
 .lighting-classification[data-section=effect] { grid-template-columns:218px minmax(0,1fr); }
