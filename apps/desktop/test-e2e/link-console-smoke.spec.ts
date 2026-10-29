@@ -3317,7 +3317,7 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
     await page.getByLabel('MA2 登录密码').fill('synthetic-e2e-password');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ }).click();
-    await expect(page.locator('.ma2-device-status')).toHaveText('已连接');
+    await expect(page.locator('.ma2-device-section .connection-status-badge')).toHaveText('已连接');
     await page.getByRole('button', { name: '详细', exact: true }).click();
     await expect(page.getByRole('button', { name: 'MA2 网络：已连接', exact: true })).toBeVisible();
     expect(executions).toBe(0);
@@ -3356,12 +3356,12 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
     await expect.poll(() => logins).toBe(2); await navigate(); await openMa2ManualSettings();
     await expect(page.getByLabel('已保存 MA2 控台').locator('option')).toHaveCount(3);
     await expect(page.getByLabel('MA2 控台 IP')).toHaveValue('127.0.0.1'); await expect(page.getByLabel('MA2 登录密码')).toHaveValue('');
-    await expect(page.locator('.ma2-device-status')).toHaveText('已连接');
+    await expect(page.locator('.ma2-device-section .connection-status-badge')).toHaveText('已连接');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await expect(page.getByLabel('MA2 MSC 设备号')).toHaveValue('5');
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.locator('.ma2-network-settings').getByRole('button', { name: '断开', exact: true }).click();
-    await expect(page.locator('.ma2-device-status')).toHaveText('未连接'); expect(logins).toBe(2);
+    await expect(page.locator('.ma2-device-section .connection-status-badge')).toHaveText('未连接'); expect(logins).toBe(2);
   } finally {
     for (const socket of sockets) socket.destroy();
     await Promise.all([commandServer, monitorServer].map((server) => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))));

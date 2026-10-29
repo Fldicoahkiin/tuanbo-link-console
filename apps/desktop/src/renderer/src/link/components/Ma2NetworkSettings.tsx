@@ -10,7 +10,7 @@ import { useDocumentStore } from '../stores/document-store';
 import { prepareMa2Editing } from '../runtime/ma2-editing-session';
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState, type JSX } from 'react';
-import { ma2NetworkStatusSchema, ma2NetworkSaveSchema, ma2DiscoverySchema, type Ma2Discovery, type Ma2NetworkSettings as NetworkSettings } from '@tb/schema';
+import { ma2NetworkStatusSchema, ma2NetworkSaveSchema, ma2DiscoverySchema, type Ma2Discovery, type Ma2NetworkSettings as NetworkSettings, type Ma2NetworkStatus } from '@tb/schema';
 import { useMa2NetworkStatus } from './useMa2NetworkStatus';
 import { ma2CredentialsForTarget } from '../view-models/ma2-credentials';
 
@@ -20,7 +20,10 @@ async function loadConnectedMa2(target: NetworkSettings, documentId: number, pro
   notify(await prepareMa2Editing({ dataDirectory: '', network: { host: target.host, port: target.port, monitorPort: target.monitorPort, username: target.username } }, documentId));
 }
 
-export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMaintenance, onBusy, onConnected }: { maintenanceHost: HTMLDivElement | null; onMaintenance: () => void; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; onBusy: (busy: boolean) => void; onConnected: (connected: boolean) => void }): JSX.Element {
+/** The connection as the settings heading shows it: the console these fields name, and whether it is logged in. */
+export type Ma2NetworkView = Pick<Ma2NetworkStatus, 'state' | 'error'>;
+
+export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMaintenance, onBusy, onStatus }: { maintenanceHost: HTMLDivElement | null; onMaintenance: () => void; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void; onBusy: (busy: boolean) => void; onStatus: (status: Ma2NetworkView) => void }): JSX.Element {
   const [error, setError] = useState('');
   const [touched, setTouched] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -135,16 +138,17 @@ export function Ma2NetworkSettings({ disabled, notify, maintenanceHost, onMainte
   };
   const matching = status?.settings?.host === host.trim() && status.settings.port === port && status.settings.monitorPort === monitorPort && status.settings.username === username.trim();
   const connected = matching && status?.state === 'connected';
-  useEffect(() => { onConnected(connected); }, [connected, onConnected]);
+  const viewState: Ma2NetworkView['state'] = busy ? 'connecting' : matching && status ? status.state : 'disconnected';
+  const viewError = matching ? status?.error ?? null : null;
+  useEffect(() => { onStatus({ state: viewState, error: viewError }); }, [viewState, viewError, onStatus]);
   const dirty = status?.settings ? !matching || passwordEdited || autoConnect !== status.settings.autoConnect : Boolean(host.trim() || username.trim() || passwordEdited || autoConnect || port !== 30000 || monitorPort !== 30001);
   useSettingsDirty('ma2', loaded && dirty && (touched || Boolean(status?.settings)));
-  const connectionLabel = busy || matching && (status?.state === 'connecting' || status?.state === 'authenticating') ? '连接中' : connected ? '已连接' : '未连接';
 
   const profiles = status?.profiles ?? [];
   const selected = profiles.findIndex((profile) => profile.host === host && profile.port === port && profile.monitorPort === monitorPort && profile.username === username);
   return <div className="ma2-network-settings">
     <form className="ma2-connect-form" onSubmit={event => { event.preventDefault(); if (!locked && !searching) void (host.trim() && (!connected || dirty) ? save(true) : automatic()); }}>
-      <div className="ma2-connect-heading"><label htmlFor="ma2-console-address">控台 IP</label><span className="ma2-device-status" data-connected={connected} role="status">{connectionLabel}</span></div>
+      <div className="ma2-connect-heading"><label htmlFor="ma2-console-address">控台 IP</label></div>
       <div className="ma2-connect-address"><input id="ma2-console-address" ref={hostInput} aria-label="MA2 控台 IP" aria-invalid={fieldError ? true : undefined} aria-describedby="ma2-address-help" placeholder="例如 2.0.0.1" value={host} disabled={locked} onChange={event => { const value = event.target.value; setError(''); setTouched(true); setSaved(false); setHost(value); setFieldError(''); changeCredentialTarget({ host: value.trim(), port, monitorPort, username: username.trim() }); }} /><Button type="submit" className="primary-button" disabled={locked || searching}>{busy ? '连接中…' : connected && !dirty ? '读取 Cue' : '连接控台'}</Button>{connected ? <Button type="button" className="secondary-button" disabled={locked || searching} onClick={() => void disconnect()}>断开</Button> : null}</div>
       <p id="ma2-address-help" className="settings-note">填写 MA2 控台屏幕上显示的 IP，电脑的网卡和 IP 会自动匹配。</p>
     </form>

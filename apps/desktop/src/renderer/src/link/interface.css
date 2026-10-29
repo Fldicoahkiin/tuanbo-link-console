@@ -295,10 +295,15 @@ input:disabled, textarea:disabled, select:disabled { opacity: .5; cursor: not-al
   .settings-location-highlight { animation: none; outline-color: var(--accent, #459bff); }
 }
 .connection-overview-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
-.connection-overview-item.state-ready { color: #6bdaa3; }
-.connection-overview-item.state-error { color: #ff7777; }
-.connection-overview-item.state-checking, .connection-overview-item.state-warning { color: #e8bd79; }
-.connection-overview-item.state-skipped { color: var(--text-tertiary); }
+/* The top bar chips and the status badge in settings headings share one set of state colours. */
+.connection-status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: var(--r-pill); background: var(--surface-hover); color: var(--text-secondary); font-size: 13px; font-weight: 600; line-height: 20px; white-space: nowrap; }
+:is(.connection-overview-item, .connection-status-badge).state-ready { color: #6bdaa3; }
+:is(.connection-overview-item, .connection-status-badge).state-error { color: #ff7777; }
+:is(.connection-overview-item, .connection-status-badge):is(.state-checking, .state-warning) { color: #e8bd79; }
+:is(.connection-overview-item, .connection-status-badge).state-skipped { color: var(--text-tertiary); }
+:root[data-theme='light'] .connection-status-badge.state-ready { color: #146c47; }
+:root[data-theme='light'] .connection-status-badge.state-error { color: #be2828; }
+:root[data-theme='light'] .connection-status-badge:is(.state-checking, .state-warning) { color: #8a4d08; }
 .topbar-details-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .app-topbar > .topbar-drag-region { grid-column: 3; min-width: 30px; }
 .app-topbar > .topbar-details { grid-column: 4; grid-row: 1; display: flex; align-items: center; position: relative; -webkit-app-region: no-drag; }

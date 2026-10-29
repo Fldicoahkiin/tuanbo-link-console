@@ -5,7 +5,10 @@ import { P1ProjectSyncPanel } from './P1ProjectSyncPanel';
 import { Download, FolderOpen, ScanSearch } from 'lucide-react';
 import { connectLocalMa2, useLocalMa2Store } from '../stores/ma2-connection-store';
 import { useEffect, useRef, useState } from 'react';
-import { Ma2NetworkSettings } from './Ma2NetworkSettings';
+import { Ma2NetworkSettings, type Ma2NetworkView } from './Ma2NetworkSettings';
+import { ConnectionStatusBadge } from './ConnectionStatusBadge';
+import { ma2EditingConnectionStatus } from '../view-models/connection-status';
+import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { Ma2CatalogSettings } from './Ma2CatalogSettings';
 import { prepareMa2Editing } from '../runtime/ma2-editing-session';
 import { useDocumentStore } from '../stores/document-store';
@@ -28,7 +31,9 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
   };
   const [busy, setBusy] = useState(false);
   const [networkBusy, setNetworkBusy] = useState(false);
-  const [networkConnected, setNetworkConnected] = useState(false);
+  const [network, setNetwork] = useState<Ma2NetworkView | null>(null);
+  const networkConnected = network?.state === 'connected';
+  const bridge = useConnectionCheckStore(state => state.checks.bridge);
   const exportPlugin = async (): Promise<void> => {
     setBusy(true);
     try { const path = await window.tbLink.exportMa2Plugin(); if (path) notify(`插件与安装说明已导出：${path}`); }
@@ -37,6 +42,8 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
   };
   const local = useLocalMa2Store();
   const status = local.directory !== directory.trim() ? '未连接' : local.status === 'ready' ? '插件已响应' : local.status === 'connecting' ? '连接中' : '未连接';
+  // The heading tells the same state, in the same colours, as 编辑灯光 in the top bar (2026-10-28, picture 6).
+  const connection = ma2EditingConnectionStatus({ method, network, networkError: null, local: local.directory === directory.trim() ? local : { status: 'disconnected', error: null }, bridge });
   const chooseDirectory = async (how: 'pick' | 'detect'): Promise<void> => {
     setBusy(true);
     try {
@@ -59,7 +66,7 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
     finally { setBusy(false); }
   };
   return <section className="settings-section ma2-device-section" aria-label="MA2 连接设置">
-    <div className="device-section-heading"><h3>连接</h3>{method === 'local' ? <span role="status">{status}</span> : null}</div>
+    <div className="device-section-heading"><h3>连接</h3>{method === 'midi' ? null : <ConnectionStatusBadge name="MA2 控台" status={connection} />}</div>
 
     <label className="settings-path-row"><span>连接方式</span><select aria-label="MA2 连接方式" value={method} disabled={busy || networkBusy || disabled} onChange={(event) => void setMethod(event.target.value === 'midi' ? 'midi' : event.target.value === 'local' ? 'local' : 'network')}><option value="midi">仅 MIDI（时间码与 Cue）</option><option value="network">实体控台 / 网络 onPC</option><option value="local">本机 onPC</option></select></label>
     {method === 'midi' ? <div className="settings-connection-block"><div className="settings-connection-summary"><div className="settings-connection-copy"><h2>通过 MIDI 控制灯光</h2><p>发送时间码和 Cue 指令。请先选择要使用的 MIDI 端口。</p></div><Button className="primary-button" onClick={onAudioSettings}>选择 MIDI 端口</Button></div><p className="settings-note">需要读取控台里的 Cue？请把连接方式改为“实体控台 / 网络 onPC”。</p></div> : method === 'local' ? <>
@@ -73,7 +80,7 @@ export function Ma2ConnectionSettings({ disabled, notify, maintenanceHost, onMai
       <Button className="secondary-button" disabled={disabled || busy} onClick={() => void setMethod('network')}>改用本机网络直连</Button>
       <div className="device-actions"><Button className="primary-button" disabled={disabled || busy} onClick={() => void connectLocal()}>连接本机 onPC</Button></div>
     </> : null}
-    {networkVisited.current ? <div hidden={method !== 'network'}><Ma2NetworkSettings onConnected={setNetworkConnected} onBusy={setNetworkBusy} disabled={disabled || method !== 'network'} notify={notify} maintenanceHost={method === 'network' ? maintenanceHost : null} onMaintenance={onMaintenance} /></div> : null}
+    {networkVisited.current ? <div hidden={method !== 'network'}><Ma2NetworkSettings onStatus={setNetwork} onBusy={setNetworkBusy} disabled={disabled || method !== 'network'} notify={notify} maintenanceHost={method === 'network' ? maintenanceHost : null} onMaintenance={onMaintenance} /></div> : null}
     {method === 'midi' ? <SettingsDisclosure title="MIDI 连接说明" description="控台接收设置与 P1 歌曲导入"><p className="settings-note">在“音频与 MIDI”里选择灯光时间码输出端口，并在控台上选择对应的时间码输入。需要触发 Cue 时，再选择“灯光动作输出”，并在控台上打开 MSC MIDI 接收。</p><p className="settings-note">仅用 MIDI 时不需要 IP、登录账号或联动插件。端口可用只说明电脑这边正常，控台有没有收到时间码，请在控台上确认。</p><P1ProjectSyncPanel purpose="audio" disabled={disabled || busy} notify={notify} /></SettingsDisclosure> : null}
     {method !== 'midi' ? <SettingsDisclosure title="歌曲导入与同步"><Ma2CatalogSettings connected={method === 'local' ? status === '插件已响应' : networkConnected} method={method} directory={directory} disabled={disabled || networkBusy} notify={notify} onBusy={setBusy} /></SettingsDisclosure> : null}
     <SettingsDisclosure title="本机程序与预演"><Ma2ProgramSettings disabled={disabled || busy} notify={notify} /></SettingsDisclosure>
