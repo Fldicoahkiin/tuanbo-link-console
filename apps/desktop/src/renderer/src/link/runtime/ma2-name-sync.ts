@@ -95,12 +95,8 @@ export async function runMa2NameSync(connection: Ma2CatalogRequest, documentId: 
   }
 }
 
-/**
- * Renaming a console object asks for its name to be written. With real-time sync on, the next pass
- * sends it with the songs; while sync is paused, or on the local onPC, this explicit request sends
- * the names once.
- */
-export async function enableMa2NameSync(documentId: number): Promise<void> {
+/** The document a name sync belongs to; it throws once another document is open or this one cannot be synced. */
+function namesDocument(documentId: number): () => ReturnType<typeof useDocumentStore.getState> {
   const current = (): ReturnType<typeof useDocumentStore.getState> => {
     const state = useDocumentStore.getState();
     if (state.documentId !== documentId) throw new Error('工程已切换，名称同步已取消');
@@ -108,13 +104,37 @@ export async function enableMa2NameSync(documentId: number): Promise<void> {
     return state;
   };
   if (!current().project?.ma2MaterialLibrary?.library) throw new Error('新名称已改到工程里，请先读取控台素材再同步');
-  if (useMa2SyncStore.getState().names.state === 'syncing') return;
-  if (readMa2Method() === 'network' && useMa2RealtimePreference.getState().enabled) {
-    setNames({ state: 'pending', blockedRevision: undefined, nextCheckAt: 0, message: '等待把新名称写到控台' });
-    return;
-  }
+  return current;
+}
+
+async function writeNames(documentId: number, current: () => unknown): Promise<void> {
   const connection = await ma2MaterialConnection();
   current();
   if (useMa2SyncStore.getState().names.state === 'syncing') return;
   await runMa2NameSync(connection, documentId, () => useDocumentStore.getState().documentId === documentId);
+}
+
+export const MA2_NAMES_PAUSED = '实时同步已暂停，新名称先留在工程里；打开实时同步或点“同步名称”后写到控台';
+
+/**
+ * After a console object is renamed. On the network console the real-time pass writes the name with
+ * the songs; while real-time sync is paused the name waits in the project like every other edit. The
+ * local onPC has no real-time pass, so the name is written now.
+ */
+export async function requestMa2NameSync(documentId: number): Promise<void> {
+  const current = namesDocument(documentId);
+  if (useMa2SyncStore.getState().names.state === 'syncing') return;
+  if (readMa2Method() === 'network') {
+    const paused = !useMa2RealtimePreference.getState().enabled;
+    setNames({ state: 'pending', blockedRevision: undefined, nextCheckAt: 0, message: paused ? MA2_NAMES_PAUSED : '等待把新名称写到控台' });
+    return;
+  }
+  await writeNames(documentId, current);
+}
+
+/** 同步名称: the operator asks for the renamed objects to be written now, also while real-time sync is paused. */
+export async function writeMa2NamesNow(documentId: number): Promise<void> {
+  const current = namesDocument(documentId);
+  if (useMa2SyncStore.getState().names.state === 'syncing') return;
+  await writeNames(documentId, current);
 }

@@ -211,7 +211,8 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
       if (entry.state === 'verified' && useDocumentStore.getState().revision !== startRevision) break;
       const due = dueAt(entry);
       if (due && Date.now() < due && (!entry.consecutiveFailures || entry.blockedRevision === useDocumentStore.getState().revision)) continue;
-      if (playing) { update(entry, { state: 'pending', message: '播放中，修改会在停止后同步' }); continue; }
+      // A confirmed song's check waits for the stop too; it has nothing to send, so it stays confirmed.
+      if (playing) { if (entry.state !== 'verified') update(entry, { state: 'pending', message: '播放中，修改会在停止后同步' }); continue; }
       const imported = Boolean(useDocumentStore.getState().project?.rundown.find(value => value.id === entry.itemId)?.lighting?.ma2Bindings?.length);
       try {
         const before = useDocumentStore.getState(); const item = before.project?.rundown.find(value => value.id === entry.itemId);

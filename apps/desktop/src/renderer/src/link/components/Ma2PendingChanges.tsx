@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { Check, ChevronRight, CircleAlert, FolderArchive, FolderOpen, RefreshCw, Save } from 'lucide-react';
 import type { ProjectArchiveResult } from '@tb/schema';
 import { ma2PendingChanges } from '@tb/core/link';
-import { enableMa2NameSync } from '../runtime/ma2-name-sync';
+import { writeMa2NamesNow } from '../runtime/ma2-name-sync';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { archiveMa2Project } from '../runtime/ma2-project-archive';
 import { useDocumentStore } from '../stores/document-store';
@@ -40,10 +40,11 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const closeDetails = useCallback(() => setDetailOpen(false), []);
   if (!project) return null;
   const working = names.state === 'syncing' || songs.some(song => song.state === 'syncing' || song.requestId);
-  // One count per song, either way it was lit; edits of a song whose sync has not started yet count once too.
-  const jobs = new Set(songs.map(song => song.itemId));
-  const count = unbound.length + renames.length + showless.length + songs.filter(song => song.state === 'pending' && !unbound.some(item => item.itemId === song.itemId)).length
-    + new Set(pending.filter(change => !jobs.has(change.itemId)).map(change => change.itemId)).size;
+  // One count per song, either way it was lit. A way 1 song keeps the baseline the console confirmed,
+  // so its edits are counted from that: an undo back to it leaves nothing to sync, also while playing.
+  const imported = (itemId: string): boolean => Boolean(project.rundown.find(item => item.id === itemId)?.lighting?.ma2Bindings?.length);
+  const count = unbound.length + renames.length + showless.length + new Set(pending.map(change => change.itemId)).size
+    + songs.filter(song => song.state === 'pending' && !imported(song.itemId) && !unbound.some(item => item.itemId === song.itemId)).length;
   const failed = names.state === 'blocked' || songs.some(song => song.state === 'blocked');
   const blocked = session.status === 'blocked' || failed;
   const moving = songs.find(song => song.requestId && song.progress?.total);
@@ -124,7 +125,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
       {playing ? <p>播放时先暂存在本地，停止后再同步。</p> : null}
       {names.state !== 'idle' && names.message ? <p role={names.state === 'blocked' ? 'alert' : 'status'}>改名：{names.message}</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}
-      {renames.length ? <Button variant="secondary" size="sm" disabled={busy || working} onClick={() => void run(() => enableMa2NameSync(useDocumentStore.getState().documentId))}>同步名称</Button> : null}
+      {renames.length ? <Button variant="secondary" size="sm" disabled={busy || working} onClick={() => void run(() => writeMa2NamesNow(useDocumentStore.getState().documentId))}>同步名称</Button> : null}
       {legacy.count ? <><p>控台上有 {legacy.count} 个以前写入的中文名称，控台只能显示英文和数字。</p><Button variant="secondary" size="sm" disabled={busy || working} onClick={() => void run(async () => { const count = await convertMa2LegacyNames(useDocumentStore.getState().documentId); setNotice(`已把 ${count} 个名称改成拼音，歌曲名称会在下次同步时写入`); })}>改为拼音</Button></> : null}
       {pending.map(item => <p key={`${item.itemId}:${item.bindingId}`}>{item.title} · Timecode {item.target}：{item.error ?? `${item.changes.length} 处修改`}</p>)}
       {unbound.map(item => <p key={item.itemId}>{item.title} · {item.count} 个 Cue → 按钮第 {item.page} 页的空格。</p>)}

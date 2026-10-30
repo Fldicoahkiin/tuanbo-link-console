@@ -84,6 +84,8 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
     await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
     await expect(badge).toContainText('已暂停同步');
     await expect(realtime).toHaveAttribute('aria-checked', 'false');
+    // The clicks on the switch and the transport closed the details; opened again they still list the change.
+    await badge.click();
     await expect(pending).toContainText('1 处修改');
     await page.screenshot({ path: info.outputPath('pending.png') });
     await page.getByRole('button', { name: '停止时间线', exact: true }).click();

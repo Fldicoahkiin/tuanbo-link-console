@@ -242,15 +242,15 @@ test('界面样本：单步分类点击出灯，多步进入原编号子菜单�
       });
       BrowserWindow.getAllWindows()[0]?.webContents.send('link:ma2-audition-state',state);
     });
-    await preview.getByText('原连接待核对 · 1 项',{exact:true}).click();
+    await preview.getByText('原来的控台连接需要确认 · 1 项',{exact:true}).click();
     await expect(preview.getByRole('alert')).toContainText('序列 8999');
-    await preview.getByRole('button',{name:'核对原控台',exact:true}).click();
-    await expect(preview.getByText('原连接待核对 · 1 项',{exact:true})).toBeVisible();
+    await preview.getByRole('button',{name:'确认原控台',exact:true}).click();
+    await expect(preview.getByText('原来的控台连接需要确认 · 1 项',{exact:true})).toBeVisible();
     await expect.poll(()=>application.evaluate(()=>process.env.TBLINK_REVIEWED_TARGET)).toBe('previous-console-8999');
     await page.screenshot({path:info.outputPath('previous-connection-review.png')});
     await application.evaluate(()=>{process.env.TBLINK_REVIEW_CONFIRM='1';});
-    await preview.getByRole('button',{name:'核对原控台',exact:true}).click();
-    await expect(preview.getByText('原连接待核对 · 1 项',{exact:true})).toHaveCount(0);
+    await preview.getByRole('button',{name:'确认原控台',exact:true}).click();
+    await expect(preview.getByText('原来的控台连接需要确认 · 1 项',{exact:true})).toHaveCount(0);
     expect(await application.evaluate(()=>process.env.TBLINK_LIBRARY_CALLS)).toBe(callsBeforeReview);
 
   } finally {

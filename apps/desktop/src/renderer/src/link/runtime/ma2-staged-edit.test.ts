@@ -94,6 +94,15 @@ it('播放中每次 Cue 编辑走命令，撤销重做即时更新待提交列�
   expect(test.song().state).toBe('pending'); expect(test.song().message).toContain('播放中');
 });
 
+it('播放中到了定期核对的时间，已确认的歌不读控台，也不变成待同步', async () => {
+  const test = setup(); test.stop(); await test.tick();
+  expect(test.song().state).toBe('verified');
+  const reads = test.api.previewMa2.mock.calls.length;
+  useMa2SyncStore.setState(state => ({ songs: { ...state.songs, song: { ...state.songs.song!, nextCheckAt: 0 } } }));
+  test.play(); await test.tick();
+  expect(test.song().state).toBe('verified'); expect(test.api.previewMa2).toHaveBeenCalledTimes(reads);
+});
+
 it('停止后经过比较、写前快照与回读才清空待提交，回读更新基线但不增加撤销步骤', async () => {
   const test = setup(); test.edit(1000); await test.tick(); test.stop();
   await test.tick();
