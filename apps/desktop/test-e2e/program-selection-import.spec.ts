@@ -20,10 +20,10 @@ test('节目框选批量删除、撤销以及外部音视频拖入', async ({}, 
     await app.evaluate(({ dialog, BrowserWindow }, file) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [file] }); BrowserWindow.getAllWindows()[0]?.setSize(1540, 960); }, path);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     const grid = page.getByLabel('节目列表', { exact: true });
-    const cards = page.locator('.p1-media-card');
+    const cards = page.locator('.home-card');
     await expect(cards).toHaveCount(4);
     expect(await cards.first().getAttribute('draggable')).toBe('false');
-    expect(await page.locator('.monitor-readings').evaluate(el => getComputedStyle(el).userSelect)).toBe('none');
+    expect(await page.locator('.home-clock').evaluate(el => getComputedStyle(el).userSelect)).toBe('none');
     expect(await page.getByLabel('搜索节目', { exact: true }).evaluate(el => getComputedStyle(el).userSelect)).toBe('text');
     const first = (await cards.first().boundingBox())!, second = (await cards.nth(1).boundingBox())!;
     await page.mouse.move(first.x - 5, first.y - 5); await page.mouse.down();
@@ -53,7 +53,7 @@ test('节目框选批量删除、撤销以及外部音视频拖入', async ({}, 
     await page.evaluate(() => {
       const input = document.querySelector<HTMLInputElement>('#test-drop-files')!;
       const transfer = new DataTransfer(); for (const file of input.files!) transfer.items.add(file);
-      document.querySelector('.p1-media-grid')!.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      document.querySelector('.home-grid')!.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
     });
     await expect(cards).toHaveCount(6);
     await expect.poll(() => savedValue(page, async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.length)).toBe(6);

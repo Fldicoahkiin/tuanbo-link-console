@@ -26,10 +26,10 @@ test('统一控件连续输入、组合输入、弹窗提交与焦点恢复', as
     await name.dispatchEvent('compositionstart');
     await name.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true, bubbles: true });
     await expect(name).toBeFocused();
-    await expect(page.locator('.p1-media-card > strong')).toHaveText('原节目');
+    await expect(page.locator('.home-card > strong')).toHaveText('原节目');
     await name.dispatchEvent('compositionend');
     await name.press('Enter');
-    await expect(page.locator('.p1-media-card > strong')).toHaveText('Jinhe 2026 中文节目');
+    await expect(page.locator('.home-card > strong')).toHaveText('Jinhe 2026 中文节目');
     const create = page.getByRole('button', { name: '新建播放列表', exact: true });
     await create.click();
     const dialog = page.getByRole('dialog', { name: '新建播放列表', exact: true });

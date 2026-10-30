@@ -13,9 +13,6 @@
 .ma2-layout-create ol { margin: 0; padding: 0; max-height: 200px; overflow: auto; }
 .ma2-layout-create li { padding-block: 5px; font-size: 12px; }
 .ma2-layout-create small { display: block; color: var(--text-secondary); }
-.ma2-layout-canvas { position: relative; width: 100%; min-height: 160px; flex: none; background: var(--surface); border: 1px solid var(--separator); overflow: hidden; }
-.ma2-layout-canvas button { position: absolute; display: flex; flex-direction: column; justify-content: center; padding: 3px; min-height: 0; min-width: 0; overflow: hidden; font-size: 11px; }
-.ma2-layout-canvas button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ma2-layout-panel > .ma2-sequence-preview { min-height: 240px; flex: none; }
 
 /* Match the single-Cue pool density; page navigation stays in one compact toolbar. */
@@ -59,7 +56,6 @@
 .ma2-layout-object button > strong, .ma2-layout-object button > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ma2-layout-viewport[data-editing=true] .ma2-layout-object { cursor: move; outline: 1px dashed var(--accent); touch-action: none; }
 .ma2-layout-viewport[data-editing=true] .ma2-layout-object > * { pointer-events: none; }
-.ma2-executor-scroll { flex: 1; min-height: 0; overflow: auto; }
 .ma2-executor-grid { display: grid; grid-template-columns: repeat(15, minmax(66px, 1fr)); grid-auto-rows: 58px; gap: 4px; min-width: 1060px; padding: 4px; }
 .ma2-executor-cell { position: relative; min-width: 0; border: 1px solid var(--separator); border-radius: 6px; background: var(--surface); overflow: hidden; }
 .ma2-executor-cell[data-empty=true] { background: transparent; border-color: color-mix(in srgb, var(--separator) 45%, transparent); }

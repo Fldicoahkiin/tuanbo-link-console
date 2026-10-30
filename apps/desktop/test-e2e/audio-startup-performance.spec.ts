@@ -50,7 +50,7 @@ for (const seconds of [35, 21605]) test(`正式音频启动性能诊断 ${second
     await page.evaluate(path => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: path, projectId: null }), file);
     await page.evaluate(({ file, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: file, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { file, sha256 });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await expect(page.locator('.player-transport .primary-button')).toBeEnabled();
+    await expect(page.locator('.home-player-play')).toBeEnabled();
     await app.evaluate(async () => {
       const inspector = process.getBuiltinModule('node:inspector');
       const session = new inspector.Session(); session.connect();
@@ -67,12 +67,12 @@ for (const seconds of [35, 21605]) test(`正式音频启动性能诊断 ${second
       Reflect.set(window, '__startupGaps', samples);
       let previous = performance.now();
       Reflect.set(window, '__startupTimer', setInterval(() => {
-        const now = performance.now(); if (now - previous > 20 && samples.length < 2000) samples.push({ at: now, elapsed: now - previous, playing: Boolean(document.querySelector('.player-transport.status-playing')) }); previous = now;
+        const now = performance.now(); if (now - previous > 20 && samples.length < 2000) samples.push({ at: now, elapsed: now - previous, playing: Boolean(document.querySelector('.home-player[data-status="playing"]')) }); previous = now;
       }, 5));
     });
     const startedAt = performance.now();
-    await page.locator('.player-transport .primary-button').click();
-    await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     const startupMs = performance.now() - startedAt;
     await page.waitForTimeout(10000);
     const status = native ? await page.evaluate(() => window.tbLink.getNativePlaybackStatus()) : null;
@@ -88,7 +88,7 @@ for (const seconds of [35, 21605]) test(`正式音频启动性能诊断 ${second
       const seekAt = performance.now();
       await waveform.click({ position: { x: box.width / 2, y: box.height / 2 } });
       await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.positionMs).toBeGreaterThan(seconds * 500 - 1000);
-      await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+      await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
       const seekMs = performance.now() - seekAt;
       const sought = await page.evaluate(() => window.tbLink.getNativePlaybackStatus());
       expect(sought).toMatchObject({ status: 'playing', offsetMs: 0, audioError: null, underruns: 0 });

@@ -92,7 +92,7 @@ test('离线复制两首 P1 歌曲后自动配对控台 Cue，并在编辑器按
     await expect(page.getByRole('button', { name: '修改节目名称：甲.wav' })).toBeVisible();
     await expect(page.locator('.lighting-timeline-point')).toHaveAttribute('title', /甲的 Cue · Cue 1\.250/);
     await navigation.getByRole('button', { name: '节目单', exact: true }).click();
-    await page.locator('.p1-media-card').filter({ hasText: '乙.wav' }).click({ button: 'right' });
+    await page.locator('.home-card').filter({ hasText: '乙.wav' }).click({ button: 'right' });
     await page.keyboard.press('Escape');
     await navigation.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.getByRole('button', { name: '音频 Cue 1', exact: true })).toBeVisible();

@@ -24,12 +24,9 @@
 .lighting-editor button svg { width: 14px; height: 14px; }
 .lighting-editor button[aria-pressed="true"] { color: var(--accent); }
 .lighting-editor :disabled { opacity: .45; cursor: not-allowed; }
-.lighting-editor nav, .lighting-tools, .lighting-clip-fields, .lighting-event-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lighting-editor nav, .lighting-tools, .lighting-event-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .lighting-tools { padding: 8px 0; }
-.lighting-clip-fields { padding-bottom: 8px; }
-.lighting-clip-fields > input { width: 130px; }
-.lighting-clip-fields label, .lighting-event-fields label { display: inline-flex; gap: 4px; align-items: center; font-size: var(--text-caption); }
-.lighting-clip-fields label input { width: 85px; }
+.lighting-event-fields label { display: inline-flex; gap: 4px; align-items: center; font-size: var(--text-caption); }
 .lighting-canvas { display: block; width: 100%; flex: 1; min-height: 100px; max-height: 300px; background: var(--surface); cursor: crosshair; }
 .lighting-canvas .grid { stroke: var(--separator); stroke-width: .5; }
 .lighting-canvas { touch-action: none; }
@@ -70,14 +67,9 @@
 .lighting-workbar { display: flex; flex-shrink: 0; align-items: center; gap: 12px; padding: 0 14px 8px; color: var(--text-secondary); }
 .lighting-workbar > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lighting-workbar time { font-variant-numeric: tabular-nums; font-family: monospace; }
-.lighting-cue-entry { padding: 12px 14px 4px; flex-shrink: 0; background: var(--surface); }
-.lighting-entry-fields { display: grid; grid-template-columns: 80px 72px 88px minmax(80px, 1fr); gap: 10px; }
-.lighting-entry-fields label { display: flex; flex-direction: column; gap: 6px; color: var(--text-secondary); font-size: var(--text-caption); }
-.lighting-entry-fields input { width: 100%; background: var(--page-background); }
 .lighting-editor .lighting-primary { background: var(--accent); color: var(--page-background); font-weight: 600; }
 @media (hover: hover) and (pointer: fine) {
 .lighting-editor .lighting-primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); } }
-.lighting-check { display: flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: var(--text-caption); }
 .lighting-tools kbd { margin-left: 8px; opacity: .7; font: inherit; }
 .lighting-editor > .lighting-tools { padding-inline: 14px; }
 .lighting-list-heading { display: flex; justify-content: space-between; align-items: center; padding: 6px 14px; color: var(--text-secondary); flex-shrink: 0; font-size: var(--text-caption); }
@@ -90,9 +82,6 @@
 @media (hover: hover) and (pointer: fine) {
 .lighting-event-list tr:hover { background: var(--surface-hover); } }
 .lighting-event-list .lighting-event-summary { display: block; width: 100%; text-align: left; overflow: hidden; text-overflow: ellipsis; max-width: 350px; white-space: nowrap; }
-.lighting-selected-fields { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex-shrink: 0; padding: 10px 14px; background: var(--surface); color: var(--text-secondary); }
-.lighting-selected-fields > span { font-size: var(--text-caption); }
-.lighting-selected-fields input, .lighting-selected-fields select { background: var(--page-background); }
 .lighting-event-fields { gap: 8px; }
 .lighting-event-fields input[aria-label="Cue 名称"] { width: 110px; }
 .lighting-recording { flex-shrink: 0; padding: 8px 14px; color: var(--text-secondary); }
@@ -104,9 +93,6 @@
 .lighting-settings { overflow: visible; padding: 0 0 14px; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .lighting-settings label { grid-template-columns: 110px minmax(0, 1fr); }
 .lighting-settings-content .lighting-settings fieldset { padding: 4px 0 16px; }
-.lighting-settings .lighting-clip-fields label { display: inline-flex; }
-.lighting-settings .lighting-clip-fields label input { width: 58px; }
-.lighting-settings .lighting-clip-fields > input { width: 110px; }
 .lighting-muted { color: var(--text-secondary); line-height: 1.7; font-size: var(--text-caption); }
 .lighting-empty { text-align: center; padding: 24px 12px; }
 .lighting-empty strong { display: block; color: var(--text-secondary); font-size: var(--text-control); font-weight: 500; }
@@ -117,8 +103,6 @@
 @container (max-width: 480px) {
   .lighting-editor > header { flex-wrap: wrap; }
   .lighting-editor header nav { order: 3; width: 100%; }
-  .lighting-entry-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .lighting-name-field { grid-column: 1 / -1; }
   .lighting-settings-content { padding: 12px; }
   .lighting-settings label { grid-template-columns: 1fr; gap: 5px; }
   .lighting-event-list .lighting-event-summary { max-width: 160px; }
@@ -137,28 +121,11 @@
 .lighting-timeline-point i { display: block; width: 3px; height: 22px; background: var(--lighting-color); flex-shrink: 0; }
 .lighting-timeline-point.selected { background: var(--accent); color: var(--page-background); z-index: 2; }
 .lighting-timeline-point.selected i { background: var(--text-primary); }
-.lighting-inspector .lighting-track-settings { margin-top: 24px; color: var(--text-secondary); }
 
 .editor-preview-row .lighting-inspector { padding: 10px 14px; }
 .editor-preview-row .lighting-inspector-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
 .editor-preview-row .lighting-inspector .lighting-event-fields { display: contents; }
 .editor-preview-row .lighting-inspector-fields > label, .editor-preview-row .lighting-inspector .lighting-event-fields label { gap: 4px; }
-.editor-preview-row .lighting-inspector .lighting-track-settings { margin-top: 10px; }
-
-.lighting-property-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 4px 0 14px; }
-.lighting-property-heading h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lighting-property-heading output { color: var(--accent); font: 18px ui-monospace, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.lighting-target-details { margin-top: 14px; color: var(--text-secondary); }
-.lighting-target-details summary { width: fit-content; cursor: pointer; padding: 6px 0; font-size: var(--text-caption); }
-.lighting-target-details[open] summary { margin-bottom: 8px; }
-.lighting-property-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
-.lighting-shortcuts { display: flex; flex-wrap: wrap; gap: 16px; color: var(--text-secondary); font-size: var(--text-caption); }
-.lighting-shortcuts span { display: flex; align-items: center; gap: 6px; }
-.lighting-shortcuts kbd { color: var(--text-primary); background: var(--surface); padding: 3px 6px; border-radius: 3px; font: inherit; }
-.lighting-section-label .lighting-stamp-button { display: flex; gap: 6px; align-items: center; padding: 4px 8px; margin-left: 10px; color: var(--text-primary); }
-.lighting-stamp-button svg { width: 12px; height: 12px; }
-.lighting-stamp-button kbd { color: var(--text-secondary); font: inherit; }
-.lighting-stamp-button:disabled { opacity: .4; cursor: not-allowed; }
 .timeline-content .lighting-lane, .timeline-track-headings .lighting-heading { background-color: color-mix(in srgb, var(--surface) 88%, var(--text-secondary)); }
 .lighting-lane .lighting-clip { border: 0; border-radius: 0; background: transparent; }
 .lighting-lane .lighting-clip.selected { outline: 0; background: transparent; }
@@ -202,9 +169,6 @@
 .lighting-timeline-point:has(.lighting-master-handle)::before { display: none; }
 .lighting-timeline-point:has(.lighting-master-handle) i { opacity: .35; }
 .lighting-heading .lighting-grip { cursor: ns-resize; touch-action: none; color: var(--text-secondary); }
-.lighting-heading.is-moving { background: var(--surface-hover); }
-.lighting-playback-field { display: flex; align-items: center; gap: 14px; margin: 0 0 16px; color: var(--text-secondary); font-size: var(--text-caption); }
-.lighting-inspector .lighting-playback-field select { width: auto; flex: 1; max-width: 230px; }
 .timeline-audio-end { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #b99452; z-index: 3; pointer-events: none; }
 .timeline-audio-end span { position: absolute; right: 5px; top: 4px; white-space: nowrap; color: #cba567; background: var(--page-background); font-size: var(--text-caption); }
 .timeline-audio-overrun { position: absolute; top: 28px; bottom: 0; background: rgb(203 165 103 / .06); pointer-events: none; z-index: 2; }

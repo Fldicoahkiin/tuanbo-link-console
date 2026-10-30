@@ -29,11 +29,11 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
     page.on('pageerror', error => errors.push(error.message));
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await expect(page.locator('.p1-media-card')).toHaveCount(24);
-    await expect(page.locator('.monitor-duration')).toContainText('总时长 00:00:12');
+    await expect(page.locator('.home-card')).toHaveCount(24);
+    await expect(page.locator('.home-clock-duration')).toContainText('总时长 00:00:12');
     const nav = page.getByRole('navigation', { name: '主要工作区' });
-    await page.locator('.player-buttons .primary-button').click();
-    await expect(page.locator('.unified-player .mtc-output-status')).toHaveCount(0);
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player .mtc-output-status')).toHaveCount(0);
     await page.getByRole('button', { name: '详细', exact: true }).click();
     await page.getByRole('button', { name: /^MTC 状态：/ }).click();
     const mtcDialog = page.getByRole('dialog', { name: 'MTC 时间码状态' });
@@ -46,7 +46,7 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
     await expect(page.getByLabel('音频与 MIDI设置', { exact: true })).toBeVisible();
     await nav.getByRole('button', { name: '节目单', exact: true }).click();
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
-    await expect(page.locator('.unified-player').getByRole('button', { name: /^MTC / })).toHaveCount(0);
+    await expect(page.locator('.home-player').getByRole('button', { name: /^MTC / })).toHaveCount(0);
     for (const theme of ['dark', 'light']) {
       await page.evaluate(value => { localStorage.setItem('tblink.appearance.v1', value); window.dispatchEvent(new Event('tblink-appearance-change')); }, theme);
       for (const size of [[1540, 960], [1180, 720]]) {

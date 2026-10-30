@@ -44,8 +44,8 @@ test('正式原生按钮驱动隔离 OBS：精确音频采集、编排切场景�
     await page.evaluate(file => window.tbLink.setDocumentState({ version: 1, dirty: false, consoleSynced: false, name: null, projectPath: file, projectId: null }), file);
     await page.evaluate(({ file, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: file, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { file, sha256 });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await page.locator('.player-transport .primary-button').click();
-    await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     await expect.poll(() => peak('starting'), { timeout: 2000 }).toBeGreaterThan(0.005);
     const state = await page.evaluate(() => window.tbLink.getNativePlaybackStatus());
     expect(state).toMatchObject({ status: 'playing', offsetMs: 480000, audioError: null, underruns: 0 });
@@ -62,7 +62,7 @@ test('正式原生按钮驱动隔离 OBS：精确音频采集、编排切场景�
     await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('paused');
     await page.waitForTimeout(300); phase = 'paused'; await page.waitForTimeout(300);
     expect(readings.some(reading => reading.phase === 'paused' && reading.levels.length > 0)).toBe(true); expect(peak('paused')).toBeLessThan(0.0001);
-    await page.locator('.player-transport .primary-button').click();
+    await page.locator('.home-player-play').click();
     phase = 'resumed'; await expect.poll(() => peak('resumed')).toBeGreaterThan(0.005);
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
     await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('stopped');

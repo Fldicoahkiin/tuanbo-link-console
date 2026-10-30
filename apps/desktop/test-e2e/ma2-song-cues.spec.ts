@@ -52,7 +52,7 @@ test('两首歌分别导入控台时间线后，编辑器仅显示当前歌曲�
     await navigation.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.getByRole('region', { name: '灯光节目列表' })).toHaveCount(0);
     await navigation.getByRole('button', { name: '节目单', exact: true }).click();
-    await page.locator('.rundown-row').filter({ hasText: '歌曲乙' }).click();
+    await page.locator('.home-card').filter({ hasText: '歌曲乙' }).click();
     await navigation.getByRole('button', { name: '编辑器', exact: true }).click();
     await expect(page.getByRole('button', { name: '修改节目名称：歌曲乙' })).toBeVisible();
     await expect(page.locator('.lighting-timeline-point')).toHaveCount(1);

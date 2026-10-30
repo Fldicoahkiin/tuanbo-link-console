@@ -3,19 +3,12 @@
 .lighting-classification :is(button,input,select) { font-size:13px; }
 .lighting-classification :is(input:not([type=checkbox]),select) { min-height:28px; color:var(--text-primary); background:var(--surface-raised); border:1px solid var(--separator); border-radius:var(--radius-control); padding:4px 6px; }
 .lighting-classification :is(button svg,label svg) { width:15px; height:15px; flex-shrink:0; }
-.lighting-library-tabs,.lighting-classification-sections,.classification-filters { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-.lighting-library-tabs { padding:6px 10px; border-bottom:1px solid var(--border-subtle,#303036); }
-.lighting-effect-dock>.lighting-library-tabs { grid-column:1 / -1; grid-row:1; }
-.lighting-effect-dock.lighting-console-dock { grid-template-columns:minmax(0,1fr); }
-.lighting-console-dock>.ma2-sequence-preview { grid-column:1; grid-row:2; }
+.classification-filters { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .lighting-effect-dock>.cue-material-browser:has(.lighting-classification) { padding:0; gap:0; }
 .classification-update { display:grid; gap:6px; max-height:180px; overflow:auto; padding:8px; border:1px solid var(--separator); }
 .classification-update label { display:flex; gap:6px; align-items:center; }
 .lighting-classification button { display:inline-flex; align-items:center; gap:5px; }
-.lighting-classification button[aria-pressed=true],.lighting-library-tabs button[aria-pressed=true] { background:#263e50; border-color:#569aca; }
-.lighting-classification-sections [data-section=front] { color:#e9bc69; }
-.lighting-classification-sections [data-section=rim] { color:#69c7ca; }
-.lighting-classification-sections [data-section=effect] { color:#c8a0ee; }
+.lighting-classification button[aria-pressed=true] { background:#263e50; border-color:#569aca; }
 .classification-search { display:flex; gap:5px; align-items:center; flex:1; min-width:130px; }
 .classification-search input { width:100%; min-width:80px; }
 .classification-filters>div { display:flex; gap:4px; }
@@ -43,7 +36,6 @@
   grid-template-columns: 104px minmax(0,var(--library-share, .65fr)) 6px minmax(250px,var(--cue-share, .35fr));
   grid-template-rows: minmax(0,1fr);
 }
-.lighting-workbench .lighting-material-layout.lighting-console-dock { grid-template-columns:104px minmax(0,1fr); }
 .lighting-material-navigation { grid-column:1; grid-row:1; display:flex; flex-direction:column; gap:6px; padding:12px 8px; border-inline-end:1px solid var(--separator); background:var(--surface); }
 .lighting-effect-dock .lighting-material-navigation button { justify-content:flex-start; padding:8px; min-height:36px; font-size:13px; border-color:transparent; background:transparent; white-space:nowrap; }
 .lighting-material-navigation button[data-section=front] { --section-color:#e9bc69; }
@@ -52,7 +44,7 @@
 .lighting-material-navigation button { --section-color:#8ab9eb; }
 .lighting-material-navigation button svg { color:var(--section-color); }
 .lighting-effect-dock .lighting-material-navigation button[aria-pressed=true] { color:var(--section-color); background:color-mix(in srgb,var(--section-color) 12%,var(--surface)); box-shadow:inset 2px 0 var(--section-color); }
-.lighting-material-layout>.cue-material-browser, .lighting-material-layout.lighting-console-dock>.ma2-sequence-preview { grid-column:2; grid-row:1; }
+.lighting-material-layout>.cue-material-browser { grid-column:2; grid-row:1; }
 .lighting-material-layout>.lighting-cue-splitter { grid-column:3; grid-row:1; }
 .lighting-material-layout>.cue-composer { grid-column:4; grid-row:1; padding:12px; gap:10px; }
 .lighting-classification { display:grid; grid-template-columns:108px minmax(0,1fr); grid-template-rows:auto auto minmax(0,1fr); gap:8px 12px; padding:12px 12px 8px 0; min-height:0; }
@@ -80,7 +72,6 @@
 .classification-reference-dot { position:absolute; inset-inline-start:4px; top:4px; width:4px; height:4px; background:#e9bc69; border-radius:50%; }
 .classification-cell[data-selected=true] { border-color:var(--accent); }
 .lighting-material-layout .cue-composer .cue-save { margin-top:0; min-height:32px; position:static; font-size:13px; }
-.cue-composer-empty { color:var(--text-secondary); font-size:12px; }
 .lighting-topbar-actions { -webkit-app-region:no-drag; flex-shrink:0; }
 .lighting-topbar-actions:empty { display:none; }
 .lighting-topbar-actions .ma2-sync-controls { position:relative; display:flex; align-items:center; gap:4px; border:0; margin:0; padding:0; }

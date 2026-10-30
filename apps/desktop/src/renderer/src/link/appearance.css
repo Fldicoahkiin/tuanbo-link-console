@@ -17,91 +17,38 @@
 .app-sidebar::after {
  display: none;
 }
-.sidebar-brand strong, .main-nav button.active strong { color: var(--text-primary); }
+.main-nav button.active strong { color: var(--text-primary); }
 .main-nav button.active { color: var(--accent); background: var(--accent-soft); }
 .main-nav button.active > svg { color: var(--accent); }
-.main-nav button small, .sidebar-section-label, .sidebar-current-project small, .device-rack small { color: var(--text-secondary); }
-.appearance-control { padding: 8px 12px; }
-.appearance-control label { display: flex; align-items: center; gap: 7px; font-size: var(--text-caption); color: var(--text-secondary); }
-.appearance-control label svg { width: 15px; height: 15px; }
-.appearance-control select { margin-left: auto; max-width: 112px; padding: 6px; border: 0; border-radius: 6px; background: var(--surface-raised); color: var(--text-primary); font-size: var(--text-caption); }
-.appearance-control small { display: block; margin-top: 6px; color: var(--apple-red); font-size: var(--text-caption); }
+.main-nav button small, .sidebar-section-label { color: var(--text-secondary); }
 .p1-project-title strong { font-size: 20px; color: var(--text-primary); }
 .p1-project-title span { color: var(--text-secondary); font-size: var(--text-caption); }
-.project-player-setup { border-bottom: 0; padding-bottom: 0; }
-.project-player-mode .compact-select, .project-player-devices { color: var(--text-secondary); font-size: var(--text-caption); }
-.project-player-mode select, .p1-project-actions select, .player-options select, .player-connections select { background: var(--surface-raised); color: var(--text-primary); }
+.p1-project-actions select { background: var(--surface-raised); color: var(--text-primary); }
 .p1-project-actions .primary-button, .p1-project-actions .document-save-button { background: var(--surface-raised); color: var(--text-primary); }
-.p1-project-workspace .primary-button.import-player-music { color: var(--on-accent); background: var(--accent-fill); }
-.p1-monitor-deck { padding: 18px 22px; border-radius: 16px; background: var(--player-background); gap: 24px; }
-.p1-monitor-deck.has-player { grid-template-columns: minmax(420px,1fr) minmax(225px,.4fr); }
-.player-transport { padding: 0; gap: 9px; }
-.home-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.home-section-heading h2 { margin: 0; color: var(--text-primary); font-size: 15px; font-weight: 650; }
-.home-section-heading > span { color: var(--text-secondary); font-size: var(--text-caption); }
-.player-now h2 { color: var(--text-primary); font-size: 23px; line-height: 1.3; font-weight: 650; }
-.player-now small { color: var(--text-secondary); font-size: var(--text-caption); }
-.player-track-icon { background: var(--accent-soft); color: var(--accent); }
-.player-next strong { color: var(--text-secondary); }
-.player-buttons button { color: var(--text-primary); }
-.player-buttons button.primary-button { color: var(--on-accent); background: var(--accent-fill); border: 0; min-width: 112px; font-size: var(--text-body); }
-.player-buttons .player-stop { color: var(--text-secondary); }
-.player-options label, .player-fades button { color: var(--text-secondary); font-size: var(--text-caption); }
-.player-volume input { accent-color: var(--accent-fill); }
-.player-transport > input { accent-color: var(--accent-fill); }
-.p1-digital-panel { padding: 14px 0 12px 22px; border-left: 1px solid var(--separator); border-radius: 0; }
-.p1-digital-panel dt { color: var(--text-secondary); font-size: var(--text-caption); }
-.p1-digital-panel dd { font-size: 28px; letter-spacing: -.8px; }
-.p1-digital-panel .forward { color: var(--text-primary); }
-.p1-digital-panel .remaining { color: var(--accent); }
-.p1-digital-panel > span { color: var(--text-secondary); font-size: var(--text-caption); }
-.p1-digital-panel b { color: var(--text-secondary); }
-.p1-digital-panel b.online { color: var(--success-text); }
 .p1-playlist-pane > button { color: var(--text-secondary); font-size: var(--text-caption); }
 .p1-playlist-pane > button.active { background: var(--accent-soft); color: var(--accent); }
 .p1-playlist-pane > button small { color: inherit; }
-.p1-media-pane .p1-pane-title { padding: 8px 10px 12px; border-bottom: 1px solid var(--separator); }
-.p1-media-pane .p1-pane-title strong { font-size: 20px; font-weight: 650; color: var(--text-primary); }
 .p1-pane-title strong small, .p1-pane-title > span { color: var(--text-secondary); font-size: var(--text-caption); }
 .p1-pane-title label { background: var(--surface-raised); }
 .p1-pane-title input { color: var(--text-primary); font-size: var(--text-caption); }
-.p1-item-inspector .p1-pane-title strong { color: var(--text-primary); font-size: 15px; font-weight: 600; }
-.p1-inspector-content > small, .p1-inspector-content > label:not(.check-field) { color: var(--text-secondary); font-size: var(--text-caption); }
-.p1-inspector-content .title-input, .p1-inspector-content textarea { color: var(--text-primary); border-bottom: 1px solid var(--separator); font-size: var(--text-control); }
-.p1-inspector-content .inspector-edit { background: var(--surface-raised); color: var(--accent); }
-.p1-inspector-content .inspector-audio, .p1-select-current { color: var(--text-secondary); }
-.p1-inspector-content .check-field { color: var(--text-secondary); }
-.project-obs-status.connected { color: var(--success-text); }
 .player-error { color: #ffb8bd; background: #46232a; }
 :root[data-theme='light'] .player-error { color: #942b37; background: #fff0f1; }
 /* Shared settings and editors use the same semantic surface palette. */
 .integration-workspace { --integration-card: var(--surface); --integration-group: var(--surface-raised); --integration-hairline: var(--separator); --integration-surface: var(--surface); --integration-surface-raised: var(--surface-raised); --integration-stroke: var(--separator); --integration-unified-surface: var(--surface); --integration-divider: var(--separator); --integration-primary-text: var(--text-primary); --integration-label-text: var(--text-secondary); --integration-secondary-text: var(--text-secondary); }
-.integration-settings-dialog, .settings-dialog, .modal-card, .update-dialog { background: var(--surface); color: var(--text-primary); }
-:root[data-theme='light'] .modal-backdrop { background: rgba(25,36,50,.25); }
+.modal-card { background: var(--surface); color: var(--text-primary); }
 :root[data-theme='light'] .primary-button { color: var(--on-accent); }
 :root[data-theme='light'] .p1-project-actions .primary-button { color: var(--text-primary); }
 :root[data-theme='light'] .toast.info { background: var(--surface); color: var(--text-primary); }
 :root[data-theme='light'] .toast.error { background: #ffe3e6; color: #7d2230; }
-:root[data-theme='light'] .media-preview, :root[data-theme='light'] .canvas-stage { background: #111; }
 :root[data-theme='light'] .media-preview-label { background: rgba(12,18,28,.88); }
 :root[data-theme='light'] .media-preview-label span, :root[data-theme='light'] .media-preview-label small { color: #f4f7fc; }
 :root[data-theme='light'] .timeline-cue { color: white; }
-@media (max-width: 1380px) {
- .p1-monitor-deck { padding: 15px 18px; gap: 18px; }
- .p1-monitor-deck.has-player { grid-template-columns: minmax(400px,1fr) minmax(205px,.4fr); }
- .player-transport { padding: 0; }
- .player-now h2 { font-size: 20px; }
- .p1-digital-panel { padding: 14px 0 8px 18px; }
- .p1-digital-panel dd { font-size: 24px; }
- .home-section-heading > span { display: none; }
- .player-options .player-volume { font-size: var(--text-caption); }
-}
 
 .stage-frame, .stage-obs-layer { background: #090909; }
 .stage-frame .stage-placeholder, .stage-frame .empty-panel { color: #d9e0ec; background: #101114; }
 .stage-frame .empty-panel h3, .stage-frame .empty-panel p { color: #d9e0ec; }
-:root[data-theme='light'] .integration-workspace .status-pill.ok, :root[data-theme='light'] .integration-workspace .ownership-row.active, :root[data-theme='light'] .integration-workspace .chip.ok, :root[data-theme='light'] .integration-security-state.ok { color: #14794d; }
-:root[data-theme='light'] .integration-workspace .status-pill.error, :root[data-theme='light'] .integration-security-state.error { color: #ae2737; }
+:root[data-theme='light'] .integration-workspace .status-pill.ok { color: #14794d; }
+:root[data-theme='light'] .integration-workspace .status-pill.error { color: #ae2737; }
 :root[data-theme='light'] .unified-toolbar .window-controls { background: rgba(255,255,255,.8); }
 
 :root[data-theme='light'] .timeline-waveform-canvas { filter: brightness(.52) saturate(1.15); }

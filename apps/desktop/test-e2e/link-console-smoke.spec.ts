@@ -45,7 +45,7 @@ async function closeLightingTools(): Promise<void> {
 async function openProgramProperties(): Promise<void> {
   const button = page.getByRole('button', { name: '节目属性', exact: true });
   if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
-  await expect(page.locator('.p1-item-inspector')).toBeVisible();
+  await expect(page.locator('.home-inspector')).toBeVisible();
 }
 async function openSoftwareUpdate(): Promise<void> {
   await openSettingsSection('软件更新');
@@ -1277,7 +1277,7 @@ test('节目属性拒绝空名称，无修改不产生撤销，改名备注可�
   await application.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, destination);
   await page.getByRole('button', { name: '打开工程', exact: true }).click();
   await openProgramProperties();
-  const panel = page.locator('.p1-item-inspector');
+  const panel = page.locator('.home-inspector');
   const name = panel.getByLabel('节目名称', { exact: true });
   const notes = panel.getByRole('textbox', { name: '备注', exact: true });
   const undo = page.getByRole('button', { name: '撤销', exact: true });
@@ -1376,43 +1376,43 @@ test('播放列表可新建、改名、分配歌曲和删除，删除列表不�
   await page.getByRole('textbox', { name: '列表名称' }).fill('暖场');
   await page.getByRole('button', { name: '保存列表' }).click();
   await addEmptyProgram();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toHaveCount(1);
   await page.getByRole('button', { name: '新建播放列表', exact: true }).click();
   await page.getByRole('textbox', { name: '列表名称' }).fill('正式');
   await page.getByRole('button', { name: '保存列表' }).click();
-  await expect(page.locator('.p1-media-card')).toHaveCount(0);
+  await expect(page.locator('.home-card')).toHaveCount(0);
   await page.locator('.p1-playlist-pane > button').filter({ hasText: '暖场' }).click();
   await openProgramProperties();
   await page.getByLabel('所属播放列表').selectOption({ label: '正式' });
-  await expect(page.locator('.p1-media-card')).toHaveCount(0);
+  await expect(page.locator('.home-card')).toHaveCount(0);
   const target = page.locator('.p1-playlist-pane > button').filter({ hasText: '正式' });
   await target.dblclick();
   await page.getByRole('textbox', { name: '列表名称' }).fill('正式演出');
   await page.getByRole('button', { name: '保存列表' }).click();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toHaveCount(1);
   await page.locator('.p1-playlist-pane > button').filter({ hasText: '正式演出' }).click({ button: 'right' });
-  await page.getByRole('button', { name: '上移列表', exact: true }).click();
+  await page.getByRole('menuitem', { name: '上移列表', exact: true }).click();
   await expect(page.locator('.p1-playlist-pane > button').nth(1)).toContainText('正式演出');
-  await expect(page.locator('.p1-media-card')).toHaveAttribute('draggable', 'false');
+  await expect(page.locator('.home-card')).toHaveAttribute('draggable', 'false');
   await page.getByLabel('所属播放列表').selectOption({ label: '暖场' });
-  await expect(page.locator('.p1-media-card')).toHaveCount(0);
+  await expect(page.locator('.home-card')).toHaveCount(0);
   await page.locator('.p1-playlist-pane > button').filter({ hasText: '暖场' }).click();
   await page.getByLabel('所属播放列表').selectOption({ label: '正式演出' });
   await page.getByRole('button', { name: '撤销', exact: true }).click();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toHaveCount(1);
   await page.getByRole('button', { name: '重做', exact: true }).click();
-  await expect(page.locator('.p1-media-card')).toHaveCount(0);
+  await expect(page.locator('.home-card')).toHaveCount(0);
   await application.evaluate(({ dialog }, destination) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: destination }); }, testInfo.outputPath('playlist.tblink'));
   await page.getByRole('button', { name: '保存工程', exact: true }).click();
   await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', testInfo.outputPath('playlist.tblink'));
   await page.reload();
   await page.locator('.p1-playlist-pane > button').filter({ hasText: '正式演出' }).click();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toHaveCount(1);
   await page.locator('.p1-playlist-pane > button').filter({ hasText: '正式演出' }).click({ button: 'right' });
-  await page.getByRole('button', { name: '删除列表', exact: true }).click();
+  await page.getByRole('menuitem', { name: '删除列表', exact: true }).click();
   await page.getByRole('button', { name: '删除列表，保留歌曲' }).click();
   await page.locator('.p1-playlist-pane > button').filter({ hasText: '未分组' }).click();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toHaveCount(1);
   await expect(page.locator('.p1-playlist-pane > button').filter({ hasText: '正式演出' })).toHaveCount(0);
 });
 
@@ -1445,8 +1445,8 @@ test('播放预检阻断直接展示节目、原因和处理办法，紧凑窗�
   await page.getByRole('button', { name: '打开工程', exact: true }).click();
   // The song audio is deliberately missing, so opening the project first lists it as missing.
   await page.getByRole('dialog', { name: '找回缺失素材' }).getByRole('button', { name: '稍后处理', exact: true }).click();
-  await page.locator('.player-buttons').getByRole('button', { name: '播放', exact: true }).click();
-  await expect(page.locator('.player-transport')).toHaveClass(/status-error/);
+  await page.locator('.home-transport').getByRole('button', { name: '播放', exact: true }).click();
+  await expect(page.locator('.home-player')).toHaveAttribute('data-status', 'error');
   const diagnostics = page.locator('.player-diagnostics');
   await expect(diagnostics).toHaveAttribute('data-status', 'error');
   await page.getByLabel('播放状态详情', { exact: true }).filter({ has: page.locator('svg') }).first().click();
@@ -1458,7 +1458,7 @@ test('播放预检阻断直接展示节目、原因和处理办法，紧凑窗�
   await expect(page.getByRole('heading', { name: '387..MP4', exact: true })).toBeVisible();
   await expect(notice.locator('details')).toHaveCount(0);
   const bounds = await notice.boundingBox();
-  const buttons = await page.locator('.player-buttons').boundingBox();
+  const buttons = await page.locator('.home-transport').boundingBox();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
   expect(bounds!.y + bounds!.height <= buttons!.y || buttons!.y + buttons!.height <= bounds!.y).toBe(true);
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(await page.evaluate(() => innerHeight));
@@ -1528,7 +1528,7 @@ test('编辑器共用正式播放器，打点和菜单切换不中断，暂停�
   await expect(page.locator('.lighting-combined-lane')).toHaveCount(1);
   await expect(page.getByRole('button', { name: '暂停时间线', exact: true })).toBeVisible();
   await navigation.getByRole('button', { name: '节目单', exact: true }).click();
-  await expect(page.locator('.player-transport')).toHaveClass(/status-playing/);
+  await expect(page.locator('.home-player')).toHaveAttribute('data-status', 'playing');
   await navigation.getByRole('button', { name: '编辑器', exact: true }).click();
   await page.getByRole('button', { name: '暂停时间线', exact: true }).click();
   const paused = await page.locator('.timeline-transport code').textContent();
@@ -1655,7 +1655,7 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
   await beginNewProject();
   await page.getByLabel('工程名称').fill('E2E 联动工程');
   await page.getByRole('button', { name: '创建工程' }).click();
-  await expect(page.locator('.p1-project-workspace')).toBeVisible();
+  await expect(page.locator('.home-page')).toBeVisible();
   const projectPath = testInfo.outputPath('e2e-project.tblink');
   await application.evaluate(({ dialog }, destination) => {
     dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: destination });
@@ -1678,31 +1678,31 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
   await closeSettingsDialog();
   await addEmptyProgram();
   await expect(page.getByRole('button', { name: /全部节目/ })).toBeVisible();
-  await expect(page.locator('.p1-media-pane .p1-pane-title')).toContainText('节目单');
+  await expect(page.locator('.home-programs-toolbar')).toContainText('节目单');
   await openProgramProperties();
   await expect(page.getByText('编辑节目', { exact: true })).toBeVisible();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
-  await page.locator('.p1-media-card').click({ button: 'right' });
-  await expect(page.getByRole('button', { name: '打开 Cue 编辑器' })).toBeVisible();
+  await expect(page.locator('.home-card')).toHaveCount(1);
+  await page.locator('.home-card').click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: '打开 Cue 编辑器' })).toBeVisible();
   await page.locator('.toolbar-project-summary').click();
-  await expect(page.getByRole('button', { name: '打开 Cue 编辑器' })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: '打开 Cue 编辑器' })).toHaveCount(0);
   await expect(page.locator('input.title-input')).toHaveValue('节目 1');
   await page.screenshot({ path: testInfo.outputPath('p1-style-project-workspace.png') });
-  expect(await page.locator('.p1-inspector-content').evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  expect(await page.locator('.home-inspector-body').evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await expect(page.getByText('当前节目', { exact: true })).toHaveCount(0);
-  const itemEnabled = page.getByRole('checkbox', { name: '启用' });
+  const itemEnabled = page.getByRole('switch', { name: '启用' });
   await expect(itemEnabled).toBeChecked();
   await itemEnabled.uncheck();
-  await expect(page.locator('.rundown-row')).toHaveClass(/is-disabled/);
+  await expect(page.locator('.home-card')).toHaveAttribute('data-disabled', 'true');
   await itemEnabled.check();
 
   await page.getByRole('button', { name: /编辑器/ }).click();
   await expect(page.getByRole('button', { name: /修改节目名称：/ })).toBeVisible();
   await page.getByRole('button', { name: /节目单/ }).click();
-  await page.locator('.rundown-index').click();
-  await expect(page.locator('.p1-media-card').getByText('当前节目', { exact: true })).toBeVisible();
-  await page.locator('.p1-media-card').click({ button: 'right' });
-  await page.getByRole('button', { name: '打开 Cue 编辑器' }).click();
+  await page.locator('.home-card-index').click();
+  await expect(page.locator('.home-card').getByText('当前节目', { exact: true })).toBeVisible();
+  await page.locator('.home-card').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '打开 Cue 编辑器' }).click();
   await expect(page.locator('.reference-stage .stage-canvas.portrait')).toBeVisible();
   await expect(page.locator('.reference-stage .stage-toolbar')).toHaveCount(0);
   await expect(page.getByText('1080×1920', { exact: true })).toBeVisible();
@@ -1789,7 +1789,7 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
 });
 
 test('保存旧快照不会清除后来修改的退出保护', async ({}, testInfo) => {
-  await expect(page.locator('.project-welcome')).toBeVisible();
+  await expect(page.locator('.home-welcome')).toBeVisible();
   await application.evaluate(({ dialog }, destination) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: destination }); }, testInfo.outputPath('snapshot.tblink'));
   await page.evaluate(async () => {
     const project = await window.tbLink.createProject('旧快照');
@@ -1818,7 +1818,7 @@ test('保存旧快照不会清除后来修改的退出保护', async ({}, testIn
 });
 
 test('不经过关闭窗口的退出同样询问未保存修改；取消后再次关闭仍询问', async () => {
-  await expect(page.locator('.project-welcome')).toBeVisible();
+  await expect(page.locator('.home-welcome')).toBeVisible();
   await page.evaluate(() => window.tbLink.setDocumentState({ version: 1, dirty: true, consoleSynced: false, name: '未保存', projectPath: null, projectId: 'unsaved-test' }));
   const result = await application.evaluate(async ({ app, BrowserWindow, dialog }) => {
     const window = BrowserWindow.getAllWindows()[0];
@@ -1843,7 +1843,7 @@ test('不经过关闭窗口的退出同样询问未保存修改；取消后再�
 });
 
 test('运行会话未停止时主进程拒绝关闭窗口', async () => {
-  await expect(page.locator('.project-welcome')).toBeVisible();
+  await expect(page.locator('.home-welcome')).toBeVisible();
   await page.evaluate(() => window.tbLink.setRuntimeActive(true));
   const result = await application.evaluate(async ({ BrowserWindow, dialog }) => {
     const window = BrowserWindow.getAllWindows()[0];
@@ -1911,8 +1911,8 @@ test('没有联动工程时可直接选择 P1 音频并自动建档', async ({},
   await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', linkPath);
   await page.getByRole('button', { name: /节目单/ }).click();
   await expect(page.locator('.p1-playlist-pane').getByText('P1 节目', { exact: true })).toBeVisible();
-  await expect(page.locator('.p1-media-card').getByText('测试音乐', { exact: true })).toBeVisible();
-  await page.locator('.rundown-index').click();
+  await expect(page.locator('.home-card').getByText('测试音乐', { exact: true })).toBeVisible();
+  await page.locator('.home-card-index').click();
   await page.getByRole('button', { name: /编辑器/ }).click();
   await expect(page.locator('.wavesurfer-surface:visible').first()).toBeVisible({ timeout: 10_000 });
   await expect.poll(() => page.locator('.wavesurfer-surface:visible').first().evaluate((canvas) => canvas.getBoundingClientRect().height)).toBeGreaterThanOrEqual(30);
@@ -1980,7 +1980,7 @@ test('素材缩略图生成失败会明确显示原因而不是静默降级', as
     });
   });
   await page.reload();
-  await expect(page.locator('.p1-project-workspace')).toBeVisible();
+  await expect(page.locator('.home-page')).toBeVisible();
   await page.getByRole('button', { name: /编辑器/ }).click();
   await expect(page.getByLabel(/缩略图生成失败：.*模拟缩略图解码失败/)).toBeVisible();
   await expect(page.locator('.media-thumbnail.failed')).toContainText('失败');
@@ -1999,10 +1999,10 @@ test('新建工程不会静默覆盖当前未保存修改：取消保留当前�
   await beginNewProject();
   await page.getByRole('button', { name: '创建工程' }).click();
   await expect(page.getByRole('heading', { name: '新建联动工程' })).toBeVisible();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toHaveCount(1);
   await page.getByRole('button', { name: '创建工程' }).click();
   await expect(page.getByRole('heading', { name: '新建联动工程' })).toHaveCount(0);
-  await expect(page.locator('.p1-media-card')).toHaveCount(0);
+  await expect(page.locator('.home-card')).toHaveCount(0);
   await expect(page.locator('.project-save-status')).toBeHidden();
 });
 
@@ -2201,7 +2201,7 @@ test('重复切换更新设置与其他页面不会产生 renderer 异常', asyn
   await page.getByLabel('工程名称').fill('稳定性巡检工程');
   await page.getByRole('button', { name: '创建工程' }).click();
   await addEmptyProgram();
-  await page.locator('.rundown-index').click();
+  await page.locator('.home-card-index').click();
 
   for (const name of ['节目单', '编辑器']) {
     await page.getByRole('button', { name: new RegExp(name) }).click();
@@ -2264,12 +2264,12 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await expect(page.getByLabel('音乐监听设备')).toBeVisible();
   await expect(page.getByLabel('灯光事件输出端口')).toBeVisible();
   await closeSettingsDialog();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
-  await expect(page.locator('.p1-media-card')).toContainText('music.wav');
+  await expect(page.locator('.home-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toContainText('music.wav');
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1180, 720));
   const homeViewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
   const homeLayout = await page.evaluate(() => {
-    const selectors = ['.p1-project-ribbon .document-actions', '.p1-pane-title .secondary-button', '.player-buttons', '.p1-media-pane'];
+    const selectors = ['.p1-project-ribbon .document-actions', '.home-programs-toolbar .ui-button', '.home-transport', '.home-programs'];
     const controls = document.querySelector('.window-controls')!.getBoundingClientRect();
     return selectors.map((selector) => {
       const box = document.querySelector(selector)!.getBoundingClientRect();
@@ -2324,7 +2324,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
     await midiNotice.getByRole('button', { name: '关闭错误通知', exact: true }).click();
   }
   await page.getByRole('button', { name: '编辑内容', exact: true }).click();
-  await expect(page.locator('.p1-project-workspace')).toBeHidden();
+  await expect(page.locator('.home-page')).toBeHidden();
   await page.getByRole('button', { name: /节目单/ }).first().click();
 
   await saveWithShortcut();
@@ -2337,7 +2337,7 @@ test('内部主控可直接批量导入音乐，保存模式并保留 P1 跟随�
   await openSettingsSection('播放主控');
   await expect(page.getByRole('radio', { name: /联动台播放/ })).toBeChecked();
   await closeSettingsDialog();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toHaveCount(1);
   await openSettingsDialog();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '播放', exact: true }).click();
   await openSettingsSection('播放习惯');
@@ -2363,15 +2363,15 @@ test('已保存工程的修改在保存后重新打开仍然存在', async ({}, 
   await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', projectPath);
 
   await addEmptyProgram();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toHaveCount(1);
   await saveWithShortcut();
   await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(projectPath, 'utf8'))).rundown.length).toBe(1);
 
   await page.reload();
-  await expect(page.locator('.p1-project-workspace')).toBeVisible();
+  await expect(page.locator('.home-page')).toBeVisible();
   await expect(page.getByRole('button', { name: '演出控制' })).toHaveCount(0);
   await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', projectPath);
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toHaveCount(1);
 });
 
 test('多轨时间线滚动时刻度固定、轨道对齐且底部可达', async ({}, testInfo) => {
@@ -2421,7 +2421,7 @@ test('Cue 时间线的统一图层、取消拖动、适配、滚动和播放键�
   await page.getByRole('button', { name: '添加音频', exact: true }).click();
   await (await chooseAudio).setFiles(firstAudioPath);
   await expect(page.getByRole('button', { name: '更换音频', exact: true })).toBeVisible();
-  await page.locator('.rundown-index').click();
+  await page.locator('.home-card-index').click();
   await page.getByRole('button', { name: /编辑器/ }).click();
   await page.locator('.resource-library input[type="file"]').setInputFiles(firstAudioPath);
   const firstAudioAsset = page.locator('.asset-row').filter({ hasText: 'timeline-a.wav' });
@@ -2587,7 +2587,7 @@ test('新建独立工程前询问未保存修改：保存框取消会再次询�
   await page.getByRole('button', { name: '创建工程', exact: true }).click();
   await expect.poll(() => application.evaluate(() => [...(Reflect.get(globalThis, '__unsavedTitles') as string[])])).toEqual(['工程还没保存', '工程还没保存']);
   await expect(page.getByRole('heading', { name: '新建联动工程' })).toBeVisible();
-  await expect(page.locator('.p1-media-card')).toHaveCount(1);
+  await expect(page.locator('.home-card')).toHaveCount(1);
   const originalPath = testInfo.outputPath('preserved.tblink');
   await application.evaluate(({ dialog }, filePath) => {
     Reflect.set(dialog, 'showMessageBox', () => Promise.resolve({ response: 0, checkboxChecked: false }));
@@ -2595,7 +2595,7 @@ test('新建独立工程前询问未保存修改：保存框取消会再次询�
   }, originalPath);
   await page.getByRole('button', { name: '创建工程', exact: true }).click();
   await expect(page.getByRole('heading', { name: '新建联动工程' })).toHaveCount(0);
-  await expect(page.locator('.p1-media-card')).toHaveCount(0);
+  await expect(page.locator('.home-card')).toHaveCount(0);
   const saved = JSON.parse(await readFile(originalPath, 'utf8')) as { name: string; rundown: { title: string }[] };
   expect(saved.name).toBe('需要保留的节目单');
   expect(saved.rundown).toHaveLength(1);
@@ -2633,8 +2633,8 @@ test('P1 模式的名称、波形、试听和模式切换互不重叠', async ({
   await beginNewProject();
   await page.getByRole('button', { name: '创建工程', exact: true }).click();
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1100, 760));
-  const player = page.locator('.following-mode');
-  const parts = [player.locator('.p1-monitor-caption'), player.locator('.home-waveform-monitor'), player.locator('.p1-monitor-empty'), player.locator('.player-mode-note')];
+  const player = page.locator('.home-player[data-mode="following"]');
+  const parts = [player.locator('.home-player-heading'), player.locator('.home-waveform'), player.locator('.home-player-empty')];
   const parent = await player.boundingBox();
   let bottom = parent!.y;
   for (const part of parts) {
@@ -2647,7 +2647,7 @@ test('P1 模式的名称、波形、试听和模式切换互不重叠', async ({
 });
 
 async function addEmptyProgram(): Promise<void> {
-  const grid = page.locator('.p1-media-grid');
+  const grid = page.locator('.home-grid');
   await expect(grid).toBeVisible();
   const box = await grid.boundingBox();
   await grid.click({ button: 'right', position: { x: 10, y: box!.height - 10 } });
@@ -2749,14 +2749,14 @@ test('编辑器恢复最后选择的节目，顶部改名自动保存，删除�
   await page.getByRole('button', { name: /编辑器/ }).first().click();
   await expect(page.getByRole('button', { name: '修改节目名称：第二幕', exact: true })).toBeVisible();
   await page.getByRole('button', { name: /节目单/ }).first().click();
-  await page.locator('.p1-media-card').filter({ hasText: '节目 1' }).click();
+  await page.locator('.home-card').filter({ hasText: '节目 1' }).click();
   await page.getByRole('button', { name: /编辑器/ }).first().click();
   await expect(page.getByRole('button', { name: '修改节目名称：节目 1', exact: true })).toBeVisible();
   await page.getByRole('button', { name: /节目单/ }).first().click();
-  await page.locator('.p1-media-card').filter({ hasText: '第二幕' }).click();
+  await page.locator('.home-card').filter({ hasText: '第二幕' }).click();
   await openProgramProperties();
   await page.evaluate(() => { window.confirm = () => true; });
-  await page.locator('.p1-inspector-actions').getByRole('button', { name: '删除', exact: true }).click();
+  await page.locator('.home-inspector-actions').getByRole('button', { name: '删除', exact: true }).click();
   await page.getByRole('button', { name: /编辑器/ }).first().click();
   await expect(page.getByRole('button', { name: '修改节目名称：节目 1', exact: true })).toBeVisible();
 });
@@ -2976,8 +2976,8 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
   await expect(page.locator('.p1-project-ribbon')).toHaveAttribute('title', linkPath);
   await page.getByRole('button', { name: /节目单/ }).click();
   await expect(page.locator('.p1-playlist-pane').getByText('P1 节目', { exact: true })).toBeVisible();
-  await expect(page.locator('.p1-media-card').getByText('测试音乐', { exact: true })).toBeVisible();
-  await page.locator('.rundown-index').click();
+  await expect(page.locator('.home-card').getByText('测试音乐', { exact: true })).toBeVisible();
+  await page.locator('.home-card-index').click();
   await page.getByRole('button', { name: /编辑器/ }).click();
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();

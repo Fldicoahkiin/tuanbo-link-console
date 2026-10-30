@@ -25,15 +25,15 @@ test('只挪动 .tblink 后打开：列出缺失素材，选择原工程文件�
     const page = await app.firstWindow();
     await pickPath(app, path);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await expect(page.locator('.p1-media-grid')).toBeVisible();
+    await expect(page.locator('.home-grid')).toBeVisible();
     await page.evaluate(() => { const input = document.createElement('input'); input.id = 'test-drop-files'; input.type = 'file'; input.multiple = true; input.hidden = true; document.body.append(input); });
     await page.locator('#test-drop-files').setInputFiles([audio, video]);
     await page.evaluate(() => {
       const input = document.querySelector<HTMLInputElement>('#test-drop-files')!;
       const transfer = new DataTransfer(); for (const file of input.files!) transfer.items.add(file);
-      document.querySelector('.p1-media-grid')!.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      document.querySelector('.home-grid')!.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
     });
-    await expect(page.locator('.p1-media-card')).toHaveCount(3);
+    await expect(page.locator('.home-card')).toHaveCount(3);
     await page.keyboard.press('Control+S'); await expect(page.locator('.project-save-status')).toBeHidden();
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).mediaAssets.length).toBe(1);
     await expect.poll(async () => parseLinkProject(JSON.parse(await readFile(path, 'utf8'))).rundown.filter(item => item.referenceAudio).length).toBe(2);

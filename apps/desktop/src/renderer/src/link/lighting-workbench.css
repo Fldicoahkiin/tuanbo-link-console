@@ -7,13 +7,6 @@
 .timeline-stamp-controls > button { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .timeline-stamp-controls > select { max-width: 140px; min-width: 80px; height: 30px; }
 .timeline-stamp-controls > [role="alert"] { max-width: 220px; font-size: var(--text-caption); color: var(--apple-red); }
-.shortcut-settings { display: grid; gap: 18px; max-width: 850px; }
-.shortcut-settings p { color: var(--text-secondary); }
-.shortcut-setting-row { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 16px; align-items: center; }
-.shortcut-setting-row > div, .shortcut-binding { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.shortcut-binding input { width: 160px; padding: 8px; }
-.shortcut-settings button { display: inline-flex; align-items: center; gap: 6px; width: fit-content; }
-.shortcut-settings button svg { width: 15px; height: 15px; }
 .lighting-workbench .reference-timeline .timeline-viewport { overflow-y: auto; }
 .lighting-workbench .timeline-new-layer-drop, .lighting-workbench .timeline-new-layer-heading { min-height: 0; padding: 0; }
 .lighting-workbench .reference-timeline :is(button, span, strong, small, svg) { -webkit-user-drag: none; }
@@ -23,17 +16,10 @@
 .lighting-workbench .reference-timeline { grid-column: 1; grid-row: 4; min-height: 0; height: 100%; grid-template-rows: auto minmax(0, 1fr); }
 .lighting-workbench-panel { grid-column: 2; grid-row: 2; min-height: 0; }
 .lighting-workbench .cue-inspector { position: absolute; right: 12px; top: 110px; width: 320px; max-height: calc(100% - 330px); z-index: 20; border: 1px solid var(--separator); box-shadow: 0 12px 40px #0008; }
-.lighting-page-header { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 4px 14px; }
-.lighting-page-header span { color: var(--accent); font-size: var(--text-caption); }
-.lighting-page-header h2 { font-size: 22px; margin: 4px 0; }
-.lighting-page-header p { color: var(--text-secondary); margin: 0; font-size: var(--text-control); }
 .lighting-workbench-panel { border: 1px solid var(--separator); border-radius: 8px; background: var(--surface); padding: 16px; overflow: auto; }
 .lighting-workbench-panel header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .lighting-workbench-panel h2 { display: flex; align-items: center; gap: 8px; margin: 6px 0 12px; font-size: 18px; }
 .lighting-workbench-panel svg, .lighting-programs svg { width: 17px; height: 17px; flex-shrink: 0; }
-.lighting-position { font-size: 24px; font-variant-numeric: tabular-nums; color: var(--accent); }
-.lighting-position small { font-size: var(--text-caption); }
-.lighting-workbench-actions { display: flex; gap: 8px; margin-bottom: 12px; }
 .lighting-workbench-panel button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 6px 10px; border: 1px solid var(--separator); border-radius: 5px; color: var(--text-primary); background: var(--surface-raised); }
 @media (hover: hover) and (pointer: fine) {
 .lighting-workbench-panel button:hover:not(:disabled) { border-color: var(--accent); } }
@@ -61,14 +47,8 @@
 .lighting-workbench .audio-timeline-segment.selected .audio-trim-handle::after { display: none; }
 .lighting-workbench .audio-segment-name { height: 24px; font-size: var(--text-caption); color: var(--text-secondary); }
 .lighting-workbench .audio-segment-waveform { top: 28px; height: calc(100% - 34px); }
-.lighting-waveform-controls { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--separator); font-size: var(--text-caption); }
-.lighting-waveform-controls label { display: flex; gap: 8px; align-items: center; }
-.lighting-waveform-controls input { width: 100px; accent-color: var(--accent); }
-.lighting-waveform-controls span { color: var(--text-secondary); }
 .lighting-workbench .timeline-beat-guide { display: block; position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); opacity: .18; pointer-events: none; }
 @media (max-width: 1200px) { .lighting-workbench .timeline-workbench { grid-template-columns: minmax(0, 1fr); gap: 8px; } .lighting-workbench-panel { padding: 12px; } }
-
-.lighting-waveform-controls select { background: var(--surface-raised); color: var(--text-primary); border: 1px solid var(--separator); padding: 4px 8px; }
 
 .lighting-task-tabs { display: flex; gap: 6px; padding-bottom: 16px; border-bottom: 1px solid var(--separator); }
 .lighting-task-tabs button { flex: 1; min-height: 40px; font-weight: 600; }
@@ -98,15 +78,6 @@
 .lighting-workbench-panel .audio-manual-edit summary { color: var(--text-secondary); cursor: pointer; }
 .lighting-workbench-panel button { cursor: pointer; }
 .lighting-workbench-panel button:disabled { cursor: not-allowed; }
-.lighting-waveform-controls { gap: 12px; }
-.lighting-waveform-controls input { width: 64px; }
-.lighting-waveform-controls > span { flex-basis: 100%; font-size: var(--text-caption); }
-.lighting-effect-cards { grid-column: 1 / -1; grid-row: 2; display: flex; align-items: flex-start; align-content: flex-start; flex-wrap: wrap; gap: 10px; min-width: 0; min-height: 0; height: 100%; overflow-y: auto; }
-.lighting-effect-card { min-width: 150px; display: flex; align-items: center; flex-shrink: 0; border: 1px solid var(--separator); border-radius: 5px; background: var(--surface-raised); }
-.lighting-effect-card > button:first-child { flex: 1; min-height: 42px; border: 0; background: transparent; padding: 7px 10px; }
-.lighting-effect-card strong { font-size: var(--text-control); font-weight: 500; }
-@media (hover: hover) and (pointer: fine) {
-.lighting-effect-card:hover { border-color: var(--accent); } }
 .effect-binding-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: #0008; }
 .effect-binding-form { width: 380px; padding: 24px; border: 1px solid var(--separator); border-radius: 12px; background: var(--surface); box-shadow: 0 20px 80px #0008; }
 .effect-binding-form h3 { margin: 0 0 12px; }
@@ -204,7 +175,6 @@
 .cue-mouse-modes button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); background: var(--surface-raised); }
 .waveform-cue-points.is-selecting { pointer-events: auto; cursor: crosshair; }
 .cue-selection-box { position: absolute; top: 0; bottom: 0; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); pointer-events: none; }
-.cue-selection-delete { position: absolute; bottom: 8px; pointer-events: auto; padding: 6px 10px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--accent); border-radius: 5px; cursor: pointer; }
 
 .lighting-workbench .reference-timeline { container-type: inline-size; container-name: lighting-timeline; }
 .lighting-workbench .reference-timeline .timeline-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; min-height: 50px; padding: 8px 12px; }
@@ -222,22 +192,17 @@
 .lighting-workbench .cue-mouse-modes { padding-right: 10px; gap: 4px; }
 .lighting-workbench .cue-mouse-modes button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; }
 .lighting-workbench .timeline-toolbar svg { width: 17px; height: 17px; flex-shrink: 0; }
-.lighting-workbench .waveform-mode-control { display: flex; align-items: center; gap: 6px; margin-left: 4px; color: var(--text-secondary); }
-.lighting-workbench .waveform-mode-control select { width: 104px; height: 32px; border: 0; border-radius: 5px; padding: 0 6px; background: var(--surface); color: var(--text-primary); font-size: var(--text-caption); }
 .lighting-workbench .reference-timeline .timeline-toolbar { min-height: 48px; padding: 6px 12px; background: var(--surface); border-bottom: 1px solid var(--surface-raised); }
 .lighting-workbench .timeline-edit-controls { gap: 10px; }
 .lighting-workbench .cue-mouse-modes button { border-color: transparent; background: transparent; border-radius: 4px; color: var(--text-secondary); }
 @media (hover: hover) and (pointer: fine) {
 .lighting-workbench .cue-mouse-modes button:hover { background: var(--surface-hover); color: var(--text-primary); } }
 .lighting-workbench .cue-mouse-modes button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-.lighting-workbench .waveform-mode-control select { background: transparent; font-size: var(--text-caption); }
-.lighting-workbench .waveform-mode-control select option { background: var(--surface); }
 .timeline-auto-analyze { display: flex; align-items: center; gap: 8px; padding-left: 10px; border-left: 1px solid var(--separator); white-space: nowrap; }
 .lighting-workbench .timeline-auto-analyze button { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 9px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--text-primary); font-size: var(--text-caption); cursor: pointer; }
 @media (hover: hover) and (pointer: fine) {
 .lighting-workbench .timeline-auto-analyze button:hover:not(:disabled) { background: var(--surface-hover); } }
 .lighting-workbench .timeline-auto-analyze button:disabled { opacity: .4; cursor: default; }
-.analysis-point-count { font-size: var(--text-caption); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .analysis-spinner { animation: analysis-spin 1s linear infinite; }
 @keyframes analysis-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .analysis-spinner { animation: none; } }
@@ -270,12 +235,6 @@
 .lighting-library-splitter:focus-visible span { background: var(--accent); }
 @media (hover: hover) and (pointer: fine) {
 .lighting-library-splitter:hover span, .lighting-library-splitter:focus-visible span { background: var(--accent); } }
-.lighting-effect-cards { grid-row: 3; }
-.lighting-effect-card { padding: 6px 8px; min-width: 210px; }
-.lighting-effect-card.is-selected { border-color: var(--accent); }
-.lighting-effect-card > button:not(.effect-settings) { display: flex; flex-direction: column; align-items: flex-start; border: 0; background: transparent; min-width: 100px; flex: 1; }
-.lighting-effect-card small { color: var(--text-secondary); font-size: var(--text-caption); }
-.lighting-effect-card [aria-pressed=true] { color: var(--accent); }
 .effect-import-dialog { display: flex; flex-direction: column; width: min(960px, 90vw); max-height: 85vh; padding: 24px; gap: 12px; background: var(--surface); border: 1px solid var(--separator); border-radius: 10px; }
 .effect-import-dialog header, .effect-import-dialog footer { display: flex; justify-content: space-between; gap: 12px; }
 .effect-import-dialog p { font-size: var(--text-caption); margin: 0; color: var(--text-secondary); }
@@ -284,17 +243,12 @@
 .effect-import-rows table { width: 100%; border-collapse: collapse; text-align: left; font-size: var(--text-caption); }
 .effect-import-rows th, .effect-import-rows td { padding: 8px; border-bottom: 1px solid var(--separator); }
 .effect-import-rows input:not([type=checkbox]), .effect-import-rows select { width: 115px; padding: 7px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--separator); border-radius: 4px; }
-.effect-category-options { display: flex; flex-wrap: wrap; border: 1px solid var(--separator); gap: 8px; }
-.effect-category-options label { display: flex; margin: 0; gap: 4px; }
-.effect-category-options input { width: auto; }
 .effect-binding-form { max-height: 85vh; overflow: auto; }
 
 .fixture-mapping { font-size: var(--text-caption); }
 .fixture-mapping > div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px 0; }
 .fixture-mapping label { display: flex; flex-direction: column; gap: 5px; }
 .fixture-mapping input { padding: 6px; background: var(--surface-raised); color: var(--text-primary); border: 1px solid var(--separator); }
-
-
 
 .cue-point-context { position: fixed; z-index: 12000; min-width: 220px; padding: 4px; background: var(--surface); border: 1px solid var(--control-border); border-radius: 6px; box-shadow: 0 8px 28px #0006; }
 .cue-point-context button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; background: transparent; color: var(--text-primary); border: 0; border-radius: 3px; cursor: pointer; font-size: var(--text-caption); }
@@ -308,21 +262,13 @@
 .lighting-workbench .audio-row-resize:focus-visible::after { height: 2px; background: var(--accent); }
 @media (hover: hover) and (pointer: fine) {
 .lighting-workbench .audio-row-resize:hover::after, .lighting-workbench .audio-row-resize:focus-visible::after { height: 2px; background: var(--accent); } }
-.lighting-workbench .lighting-page-header { padding: 0 4px; min-height: 32px; }
-.lighting-workbench .lighting-page-header h2 { font-size: var(--text-body); margin: 0; }
-.lighting-workbench .lighting-page-header p, .lighting-workbench .lighting-page-header > div > span { display: none; }
 .cue-ingredients p { color: var(--text-secondary); font-size: var(--text-caption); }
 .cue-ingredients { overflow-y: auto; flex: 1; min-height: 0; }
 .cue-ingredients > div { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--separator); }
 .cue-ingredients span { display: flex; flex-direction: column; gap: 4px; }
 .effect-binding-form textarea { background: var(--surface); color: var(--text-primary); border: 1px solid var(--separator); padding: 10px; resize: vertical; }
-.material-manager-list { display: grid; gap: 6px; max-height: 230px; overflow-y: auto; }
-.material-manager-list > div { display: flex; gap: 6px; }
-.material-manager-list input { min-width: 0; flex: 1; }
-.material-manager-list svg { width: 14px; height: 14px; }
 .lighting-workbench .timeline-ruler > .timeline-current-time { display: none; }
 .lighting-workbench .reference-timeline[data-playhead-time=true] .timeline-ruler > .timeline-current-time { display: block; }
-.lighting-workbench .reference-timeline .timeline-content:has(.cue-ruler-time) .timeline-ruler > .timeline-current-time { display: none; }
 
 /* Flat work surface, with actions presented as a quiet icon toolbar. */
 .cue-ingredients > div { border: 0; padding: 10px 0; }
@@ -330,34 +276,9 @@
 .lighting-workbench .reference-timeline { grid-row: 3; }
 .effect-inline-panel .lighting-tools-dialog .settings-detail { padding: 0; }
 .effect-inline-panel .lighting-tools-dialog h2 { font-size: 17px; }
-
-/* Native dialog keeps material selection out of the constrained timeline dock. */
-.ma2-material-dialog { width: min(1120px, calc(100vw - 64px)); max-width: none; max-height: calc(100vh - 64px); padding: 0; color: var(--text-primary); background: var(--surface); border: 1px solid var(--separator); border-radius: 14px; box-shadow: 0 24px 80px #0006, 0 4px 16px #0004; }
-.ma2-material-dialog::backdrop { background: #0009; }
-.ma2-material-dialog .effect-import-dialog { width: 100%; height: min(760px, calc(100vh - 66px)); max-height: none; padding: 0; gap: 0; border: 0; border-radius: 14px; box-sizing: border-box; }
-.ma2-material-heading { align-items: center; padding: 24px 28px 20px; }
-.ma2-material-heading h2 { font-size: 21px; font-weight: 600; margin: 0 0 6px; letter-spacing: -.3px; }
-.ma2-material-dialog button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 7px 12px; border: 1px solid var(--separator); border-radius: 7px; background: var(--surface-raised); color: var(--text-primary); font: inherit; font-size: 13px; cursor: pointer; }
-.ma2-material-dialog button:hover:not(:disabled) { background: var(--surface-hover); }
-.ma2-material-dialog button:disabled { opacity: .45; cursor: default; }
-.ma2-material-dialog button.primary-button { color: var(--on-accent); background: var(--accent-fill); border-color: transparent; }
-.ma2-material-dialog svg { width: 17px; height: 17px; flex-shrink: 0; }
-.ma2-material-dialog .ma2-material-close { border: 0; background: transparent; width: 36px; padding: 8px; }
 .ma2-material-toolbar { display: flex; align-items: center; gap: 10px; padding: 0 28px 20px; }
 .ma2-material-toolbar .effect-search { flex: 1; min-width: 0; height: 38px; box-sizing: border-box; font-size: 13px; }
 .ma2-material-toolbar > select { max-width: 240px; min-height: 38px; padding: 7px 10px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--separator); border-radius: 7px; }
-.ma2-material-dialog .effect-import-rows { flex: 1; min-height: 0; margin: 0 28px; border: 1px solid var(--separator); border-radius: 8px; }
-.ma2-material-dialog .effect-import-rows table { font-size: 13px; }
-.ma2-material-dialog th { position: sticky; top: 0; z-index: 1; background: var(--surface-raised); color: var(--text-secondary); font-size: 12px; font-weight: 500; }
-.ma2-material-dialog .effect-import-rows :is(th, td) { padding: 10px 14px; }
-.ma2-material-dialog td:first-child, .ma2-material-dialog th:first-child { width: 24px; padding-right: 0; }
-.ma2-material-dialog td:nth-child(2) { width: 42%; font-weight: 500; }
-.ma2-material-dialog td:nth-child(3) { white-space: nowrap; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.ma2-material-dialog tr[data-selected=true] { background: color-mix(in srgb, var(--accent-fill) 12%, transparent); }
-.ma2-material-dialog tbody tr:hover { background: var(--surface-hover); }
-.ma2-material-dialog input[type=checkbox] { accent-color: var(--accent-fill); width: 15px; height: 15px; }
-.ma2-material-dialog .effect-import-rows :is(input:not([type=checkbox]), select) { width: 110px; border-color: transparent; border-radius: 6px; background: transparent; font-size: 12px; }
-.ma2-material-dialog .effect-import-rows :is(input:not([type=checkbox]), select):hover { border-color: var(--separator); background: var(--surface-raised); }
 .ma2-material-footer { padding: 18px 28px; align-items: center; font-size: 13px; }
 .ma2-material-footer > span { color: var(--text-secondary); }
 .ma2-material-pagination { display: flex; align-items: center; gap: 12px; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
@@ -365,12 +286,10 @@
 .ma2-material-empty { min-height: 240px; height: 70%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; color: var(--text-secondary); font-size: 13px; }
 .ma2-material-empty > svg { width: 28px; height: 28px; margin-bottom: 4px; }
 .ma2-material-empty strong { font-size: 15px; color: var(--text-primary); font-weight: 500; }
-.ma2-material-dialog .effect-import-dialog > [role=alert] { margin: 12px 28px 0; }
-.ma2-material-dialog .fixture-mapping { margin: 0 28px 14px; }
 .ma2-advanced-settings { margin-top: 24px; border-top: 1px solid var(--separator); padding-top: 18px; }
 .ma2-advanced-settings > summary { color: var(--text-secondary); font-size: 13px; cursor: pointer; }
 .ma2-advanced-settings[open] > summary { margin-bottom: 20px; }
-@media (max-width: 800px) { .ma2-material-dialog { width: calc(100vw - 24px); } .ma2-material-toolbar { flex-wrap: wrap; } .ma2-material-toolbar .effect-search { flex-basis: 100%; } .ma2-material-dialog .effect-import-rows { margin-inline: 16px; } }
+@media (max-width: 800px) { .ma2-material-toolbar { flex-wrap: wrap; } .ma2-material-toolbar .effect-search { flex-basis: 100%; } }
 
 .ma2-sync-controls { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding: 10px 0; margin: 6px 0; border-block: 1px solid var(--separator); }
 .lighting-workbench-nav .ma2-sync-controls > button { min-width: 0; width: 100%; padding: 8px 4px; gap: 4px; white-space: nowrap; justify-content: center; font-size: 12px; }

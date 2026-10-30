@@ -64,6 +64,11 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
   </span>;
 });
 
+/** A number box with its unit (%, 秒, BPM) inside, after the value; the input is `children`. */
+export function WithUnit({ unit, children }: { unit: string; children: ReactNode }): JSX.Element {
+  return <span className="ui-unit">{children}<small aria-hidden="true">{unit}</small></span>;
+}
+
 /** An on/off setting that applies at once; `help` explains what "on" does. */
 export function Switch({ label, help, className, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'role'> & { label: ReactNode; help?: ReactNode }): JSX.Element {
   const id = useId();

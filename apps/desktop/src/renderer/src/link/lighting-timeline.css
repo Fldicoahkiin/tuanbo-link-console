@@ -32,28 +32,6 @@
 .reference-timeline[data-lighting-timeline=true] .lighting-timeline-popover p { margin: 8px 0 0; font-size: 11px; color: var(--text-secondary); line-height: 1.8; }
 .reference-timeline[data-lighting-timeline=true] .lighting-timeline-popover label { display: flex; align-items: center; gap: 8px; min-height: 32px; }
 .reference-timeline[data-lighting-timeline=true] .lighting-timeline-popover input { accent-color: var(--accent); }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-options > summary { gap: 7px; min-height: 32px; padding-inline: 10px; border: 1px solid color-mix(in srgb,var(--accent) 45%,var(--separator)); background: var(--accent-soft); color: var(--text-primary); font-weight: 500; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-options > summary:is(:hover,:focus-visible),
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-options[open] > summary { border-color: var(--accent); }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-options > summary > svg { color: var(--accent); }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-badge { padding-left: 7px; border-left: 1px solid var(--separator); color: var(--text-secondary); font-size: 10px; font-weight: 400; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-options .timeline-analysis-chevron { width: 12px; color: var(--text-secondary); }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-popover { width: 306px; padding: 18px; white-space: normal; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-popover > header { display: flex; gap: 12px; align-items: center; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-popover > header > svg { width: 34px; height: 34px; padding: 7px; box-sizing: border-box; border-radius: 8px; color: var(--accent); background: var(--accent-soft); }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-popover header strong { display: block; font-size: 14px; font-weight: 600; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-popover header span { display: block; margin-top: 2px; color: var(--text-secondary); font-size: 11px; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-capabilities { display: flex; gap: 6px; margin: 16px 0; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-capabilities span { border: 1px solid var(--separator); border-radius: 4px; padding: 3px 7px; font-size: 11px; color: var(--text-secondary); }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-status { border-top: 1px solid var(--separator); padding-top: 14px; font-size: 12px; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-status p { margin-top: 5px; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-popover .timeline-analysis-footnote { margin-top: 14px; font-size: 10px; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-actions { margin-top: 14px; display: flex; gap: 8px; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-actions select { flex: 0 0 94px; min-width: 0; border: 1px solid var(--separator); border-radius: 5px; padding: 0 6px; background: var(--surface); color: var(--text-primary); font-size: 11px; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-actions button { display: flex; justify-content: center; align-items: center; gap: 10px; width: 100%; min-height: 34px; background: var(--accent-fill); color: var(--on-accent); font-size: 12px; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-actions button:hover { background: var(--accent); }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-actions button:disabled { opacity: .45; cursor: not-allowed; }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-actions button span { opacity: .75; font-size: 10px; }
 .reference-timeline[data-lighting-timeline=true] .timeline-analysis-summary { display: grid; gap: 6px; margin: 12px 0 0; font-size: 11px; }
 .reference-timeline[data-lighting-timeline=true] .timeline-analysis-summary div { display: flex; justify-content: space-between; gap: 8px; }
 .reference-timeline[data-lighting-timeline=true] .timeline-analysis-summary dt { color: var(--text-secondary); }
@@ -65,14 +43,11 @@
   .reference-timeline[data-lighting-timeline=true] .timeline-transport { gap: 1px; }
   .reference-timeline[data-lighting-timeline=true] .timeline-transport > button:not(.timeline-play-button) { width: 26px; padding: 4px; }
   .reference-timeline[data-lighting-timeline=true] .timeline-display-options summary > span { display: none; }
-  .reference-timeline[data-lighting-timeline=true] .timeline-analysis-badge,
-  .reference-timeline[data-lighting-timeline=true] .timeline-analysis-options .timeline-analysis-chevron { display: none; }
   .reference-timeline[data-lighting-timeline=true] .timeline-transport > button:is([aria-label="上一帧"],[aria-label="下一帧"],[aria-label="跳到时间线结尾"]) { display: none; }
 }
 @container lighting-timeline (max-width: 850px) {
   .reference-timeline[data-lighting-timeline=true] .timeline-transport > button:is([aria-label="上一帧"],[aria-label="下一帧"],[aria-label="跳到时间线结尾"]) { display: none; }
 }
-.reference-timeline[data-lighting-timeline=true] .timeline-analysis-popover:has(.automatic-music-results) { position: fixed; top: auto; bottom: 24px; right: 24px; width: min(490px, calc(100vw - 48px)); max-height: calc(100vh - 96px); overflow-y: auto; box-sizing: border-box; }
 .automatic-music-results { display: grid; gap: 8px; margin-top: 12px; border-top: 1px solid var(--separator); padding-top: 10px; }
 .analysis-result-heading, .analysis-result-selection, .analysis-result-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .analysis-result-heading span, .analysis-result-selection span { color: var(--text-secondary); font-size: 12px; }
@@ -121,7 +96,6 @@
 .music-analysis-panel .analysis-technical-details { margin-top: 24px; max-width: 620px; font-size: 12px; }
 .analysis-technical-details > summary { cursor: pointer; color: var(--text-secondary); padding: 8px 0; }
 .music-analysis-panel .timeline-analysis-summary div { display: flex; gap: 12px; }
-.music-analysis-panel .timeline-analysis-status p { color: var(--text-secondary); }
 .music-analysis-panel .automatic-music-results { max-width: 560px; }
 .music-analysis-panel .automatic-music-results p { color: var(--text-secondary); }
 .reference-timeline .music-analysis-button { display: flex; align-items: center; gap: 7px; border: 1px solid var(--separator); padding: 6px 9px; border-radius: 6px; background: var(--surface-raised); color: var(--text-primary); }
@@ -137,8 +111,6 @@
 .analysis-result-row button.analysis-delete-marker { flex: 0 0 28px; width: 28px; min-width: 28px; padding: 4px; justify-content: center; }
 .music-beat-markers button.music-tempo-segment { height: 20px; padding: 1px 7px; transform: none; border-inline-start: 1px solid #eabb68; border-bottom: 1px solid #eabb6855; color: #eabb68; background: #eabb6814; text-align: start; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .music-beat-markers button[aria-pressed=true], .music-beat-overview button[aria-pressed=true] { outline: 1px solid #eabb68; background: #eabb6822; }
-.music-segment-properties { margin-bottom: 16px; padding: 10px; border: 1px solid var(--separator); border-radius: 6px; }
-.music-segment-properties > strong { color: #eabb68; font-size: 13px; }
 .reference-timeline[data-lighting-timeline=true] .timeline-ruler:has(.music-beat-markers button) > span { line-height: 14px; bottom: 9px; }
 .reference-timeline .timeline-ruler[data-music=true] .timeline-markers { top: 24px; }
 .reference-timeline .timeline-ruler[data-music=true][data-sections=true] .timeline-markers { top: 48px; }

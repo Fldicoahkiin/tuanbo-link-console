@@ -34,7 +34,7 @@
 .waveform-lane .audio-beat-marker:hover::before, .waveform-lane .audio-beat-marker:focus-visible::before { background: #fff; } }
 .timeline-beat-guide { display: none; }
 .track-heading button.audio-track-edit { width: auto; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; background: transparent; color: inherit; font: inherit; padding: 0; border: 0; }
-.editor-preview-row .cue-inspector, .p1-item-inspector, .obs-source-dialog {
+.editor-preview-row .cue-inspector, .obs-source-dialog {
   --property-control: color-mix(in srgb, var(--page-background) 90%, var(--text-primary));
   --property-control-hover: color-mix(in srgb, var(--page-background) 85%, var(--text-primary));
   --property-section: color-mix(in srgb, var(--page-background) 97%, var(--text-primary));
@@ -47,19 +47,18 @@
 .editor-preview-row .cue-inspector > .panel-title { display: flex; align-items: center; justify-content: space-between; min-height: 38px; padding: 0 16px; background: transparent; border: 0; border-bottom: 1px solid var(--property-border); font-size: var(--text-control); font-weight: 600; }
 .editor-preview-row .cue-inspector > .panel-title > button { min-height: 26px; padding: 2px 8px; font-size: var(--text-caption); background: transparent; color: var(--text-secondary); }
 .editor-preview-row .cue-inspector :is(.inspector-body, .lighting-inspector, .common-properties) { min-width: 0; min-height: 0; padding: 14px 16px 18px; overflow: auto; scrollbar-gutter: stable; font-size: var(--text-control); }
-.editor-preview-row .cue-inspector :is(input:not([type='checkbox']), select, textarea),
-.p1-item-inspector .p1-inspector-content :is(input:not([type='checkbox']), select, textarea) { box-sizing: border-box; min-width: 0; width: 100%; min-height: 32px; padding: 5px 9px; border: 1px solid var(--property-border); border-radius: 5px; background: var(--property-control); color: var(--text-primary); font: inherit; font-size: var(--text-control); line-height: 1.45; font-weight: 400; box-shadow: none; }
-.editor-preview-row .cue-inspector :is(input, textarea)::placeholder, .p1-item-inspector :is(input, textarea)::placeholder { color: var(--text-secondary); opacity: .8; }
+.editor-preview-row .cue-inspector :is(input:not([type='checkbox']), select, textarea) { box-sizing: border-box; min-width: 0; width: 100%; min-height: 32px; padding: 5px 9px; border: 1px solid var(--property-border); border-radius: 5px; background: var(--property-control); color: var(--text-primary); font: inherit; font-size: var(--text-control); line-height: 1.45; font-weight: 400; box-shadow: none; }
+.editor-preview-row .cue-inspector :is(input, textarea)::placeholder { color: var(--text-secondary); opacity: .8; }
 .editor-preview-row .cue-inspector input[type='number'], .editor-preview-row .cue-inspector .mtc-offset-field input { font-variant-numeric: tabular-nums; }
 @media (hover: hover) and (pointer: fine) {
-.editor-preview-row .cue-inspector :is(input, select, textarea):hover:not(:disabled), .p1-item-inspector .p1-inspector-content :is(input, select, textarea):hover:not(:disabled) { background-color: var(--property-control-hover); } }
-.editor-preview-row .cue-inspector :is(input, select, textarea, button, summary):focus-visible, .p1-item-inspector :is(input, select, textarea, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.editor-preview-row .cue-inspector :is(input, select, textarea):hover:not(:disabled) { background-color: var(--property-control-hover); } }
+.editor-preview-row .cue-inspector :is(input, select, textarea, button, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .editor-preview-row .cue-inspector button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 9px; border: 1px solid var(--property-border); border-radius: 5px; background: var(--property-control); color: var(--text-primary); font: inherit; font-size: var(--text-caption); box-shadow: none; cursor: pointer; }
 @media (hover: hover) and (pointer: fine) {
 .editor-preview-row .cue-inspector button:hover:not(:disabled) { background: var(--property-control-hover); } }
 .editor-preview-row .cue-inspector button svg { width: 14px; height: 14px; flex-shrink: 0; }
-.editor-preview-row .cue-inspector :disabled, .p1-item-inspector :disabled { opacity: .45; cursor: not-allowed; }
-.editor-preview-row .cue-inspector input[type='checkbox'], .p1-item-inspector input[type='checkbox'] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.editor-preview-row .cue-inspector :disabled { opacity: .45; cursor: not-allowed; }
+.editor-preview-row .cue-inspector input[type='checkbox'] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .editor-preview-row .cue-inspector input[role='switch'] { appearance: none; position: relative; width: 32px; height: 18px; border: 1px solid var(--property-border); border-radius: 10px; background: var(--property-control-hover); }
 .editor-preview-row .cue-inspector input[role='switch']::after { content: ''; position: absolute; left: 2px; top: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-secondary); }
 .editor-preview-row .cue-inspector input[role='switch']:checked { background: var(--accent); }
@@ -177,35 +176,6 @@
 .lighting-settings .tempo-point-heading button svg, .lighting-settings legend svg, .lighting-settings .property-add-button svg { width: 14px; height: 14px; margin-right: 6px; vertical-align: middle; }
 .lighting-settings .tempo-points summary { padding: 10px 0; cursor: pointer; }
 .lighting-settings .tempo-points summary > span { margin-left: 12px; color: var(--text-secondary); }
-/* Programme-list properties share control sizing and readable metadata. */
-.p1-item-inspector { container-type: inline-size; }
-/* The inspector shares the clock column while the library heading spans the row. */
-.p1-item-inspector .p1-pane-title { min-height: 28px; padding: 0 2px 6px; border: 0; gap: 8px; }
-.p1-item-inspector .p1-pane-title strong { font-size: var(--text-control); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.p1-item-inspector .p1-pane-title > span { color: var(--text-secondary); font-size: var(--text-caption); }
-.p1-item-inspector .p1-inspector-content { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-content: start; padding: 8px 0 0; overflow: visible; }
-.p1-item-inspector .p1-inspector-content label { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 6px; min-width: 0; font-size: var(--text-caption); color: var(--property-label); }
-.p1-library-workbench .p1-item-inspector .p1-inspector-content :is(input:not([type='checkbox']), select, textarea) { height: 30px; min-height: 30px; padding: 5px 8px; font-size: var(--text-caption); border-radius: 4px; }
-.p1-item-inspector .p1-inspector-content textarea { resize: none; }
-.p1-item-inspector .mtc-offset-field > span small { display: none; }
-.p1-item-inspector .song-advanced { border-top: 1px solid var(--separator); margin-top: 3px; padding-top: 4px; min-width: 0; }
-.p1-item-inspector .song-advanced summary { padding: 5px 0; color: var(--text-secondary); font-size: var(--text-caption); cursor: pointer; }
-.p1-item-inspector .song-advanced > div { display: grid; gap: 7px; padding-top: 4px; }
-.p1-inspector-footer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; gap: 6px; padding-top: 8px; border-top: 1px solid var(--property-border); }
-.p1-item-inspector .p1-inspector-footer > .check-field { display: flex; align-items: center; gap: 6px; font-size: var(--text-caption); }
-.p1-item-inspector .p1-inspector-footer > :is(.inspector-edit, .inspector-audio) { grid-area: auto; }
-.p1-inspector-footer > button { min-width: 0; min-height: 28px; padding: 4px; font-size: var(--text-caption); white-space: nowrap; }
-.p1-inspector-footer .p1-inspector-actions { grid-column: 1 / -1; justify-content: space-between; }
-.p1-item-inspector .p1-inspector-content > small { margin: 0; color: var(--text-secondary); font-size: var(--text-caption); overflow-wrap: anywhere; }
-.p1-item-inspector .p1-inspector-content label small { font-size: var(--text-caption); color: var(--text-secondary); }
-.p1-item-inspector .p1-inspector-content > .check-field { display: flex; align-items: center; gap: 8px; }
-.p1-item-inspector .p1-inspector-content > button { min-width: 0; min-height: 30px; border-radius: 5px; font-size: var(--text-caption); }
-.p1-item-inspector .p1-inspector-content > :is(.inspector-edit, .inspector-audio) { grid-area: auto; }
-.p1-item-inspector .p1-inspector-content button svg { width: 14px; height: 14px; }
-.p1-item-inspector .p1-inspector-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 0; border: 0; }
-.p1-item-inspector .p1-inspector-actions button { width: 30px; height: 30px; padding: 6px; }
-.p1-item-inspector .property-number-unit { display: flex; align-items: center; min-width: 0; background: var(--property-control); border-radius: 5px; }
-.p1-item-inspector .property-number-unit small { padding-right: 8px; }
 @container (max-width: 740px) {
   .cue-inspector .common-properties .common-properties-fields { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .cue-inspector .common-properties .song-properties { border-left: 0; border-top: 1px solid var(--property-border); padding: 18px 0 0; }
@@ -240,36 +210,16 @@
 .settings-lighting .lighting-settings input[type='color'] { width: 44px; height: 30px; min-height: 30px; padding: 3px; justify-self: start; cursor: pointer; }
 .settings-lighting .lighting-settings input:not([type='checkbox']), .settings-lighting .lighting-settings select { min-height: 32px; font-size: var(--text-caption); }
 .settings-lighting .lighting-settings-content h3 { margin: 6px 0 10px; font-size: var(--text-caption); font-weight: 500; }
-.settings-lighting .lighting-settings .lighting-tempo-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) 100px 124px 36px; gap: 8px; align-items: center; padding: 0; }
 .settings-lighting .lighting-tempo-signature { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 3px; align-items: center; min-width: 0; }
 .settings-lighting .lighting-tempo-signature :is(input, select) { width: 100%; min-width: 0; padding-inline: 4px; }
-.settings-lighting .lighting-settings .lighting-tempo-row label { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; min-width: 0; white-space: nowrap; }
-.settings-lighting .lighting-settings .lighting-tempo-row label input { width: 100%; }
-.settings-lighting .lighting-settings .lighting-tempo-row button { padding: 4px; }
 .settings-lighting .lighting-settings .lighting-loop-toggle { display: flex; gap: 8px; justify-content: flex-start; }
 .settings-lighting .lighting-settings fieldset { padding-bottom: 8px; }
 
 .editor-preview-row .cue-inspector dl > div { display: flex; min-height: 24px; justify-content: space-between; gap: 8px; padding: 0; border: 0; background: transparent; }
 
-/* Keep paired fields in stable columns as the panel is resized. */
-.p1-item-inspector .p1-inspector-content > .p1-select-current,
-.p1-item-inspector .p1-inspector-content > .check-field { grid-column: auto; align-self: center; }
-.p1-item-inspector .p1-inspector-actions { display: flex; justify-content: flex-end; gap: 4px; padding: 0; margin: 0; border: 0; background: transparent; }
-
 .settings-lighting .lighting-marker-settings { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) 40px; align-items: end; gap: 8px; padding: 4px 0; }
 .settings-lighting .lighting-marker-settings label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
 .settings-lighting .lighting-marker-settings button { min-height: 32px; padding: 4px; }
-
-
-.home-spectrum-monitor .audio-spectrum-display { height: auto; position: absolute; inset: 16px 12px 30px; background-image: linear-gradient(var(--separator) 1px, transparent 1px), linear-gradient(90deg, var(--separator) 1px, transparent 1px); background-size: 100% 25%, 8.333% 100%; }
-
-/* P1 hardware-style time display retains its proportions at every window size. */
-.p1-time-monitor { position: relative; display: flex; align-items: center; min-width: 0; overflow: hidden; background: #000; border: 3px solid #888; border-radius: 0; }
-.p1-time-monitor > [role='alert'] { position: absolute; inset: auto 6px 6px; padding: 6px; background: #240b0b; color: #ffb4b4; font-size: var(--text-caption); }
-.p1-time-monitor > svg { display: block; width: 100%; height: 100%; min-height: 0; max-height: 100%; }
-.p1-time-monitor text { fill: #fff; font: 22px 'SimSun', serif; }
-.p1-time-monitor .p1-track-title { font-size: 24px; }
-.p1-time-monitor .p1-monitor-meta { font-size: 21px; }
 
 .wavesurfer-surface { position: relative; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
 .wavesurfer-wave, .wavesurfer-spectrum { position: absolute; inset: 0; }
@@ -277,8 +227,4 @@
 .mtc-output-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 5px 12px; font-size: var(--text-caption); border-bottom: 1px solid var(--border); }
 .mtc-output-status small { opacity: .75; }
 .mtc-output-status strong { font-variant-numeric: tabular-nums; }
-
-.p1-sync-panel > .p1-sync-issues { grid-column: 1 / -1; grid-row: auto; display: block; min-width: 0; padding: 10px 0; overflow-wrap: anywhere; border-top: 1px solid var(--border); font-size: var(--text-caption); }
-.p1-sync-issues summary { cursor: pointer; font-weight: 600; }
-.p1-sync-issues p { margin: 8px 0; line-height: 1.6; }
 }

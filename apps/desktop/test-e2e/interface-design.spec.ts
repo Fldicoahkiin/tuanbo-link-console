@@ -29,7 +29,7 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
     await expect(create).toBeFocused();
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] }); }, file);
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
-    await expect(page.locator('.p1-media-card')).toHaveCount(4);
+    await expect(page.locator('.home-card')).toHaveCount(4);
     const nav = page.getByRole('navigation', { name: '主要工作区' });
     await nav.getByRole('button', { name: '节目单', exact: true }).click();
     await page.getByRole('button', { name: '新建播放列表', exact: true }).click();
@@ -73,7 +73,7 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
           expect(workspace!.height).toBeGreaterThan(500);
           expect(workspace!.y + workspace!.height).toBeLessThanOrEqual(height! + 1);
           if (name === '节目单') {
-            const library = await page.locator('.p1-library-workbench').boundingBox();
+            const library = await page.locator('.home-library').boundingBox();
             expect(library!.height).toBeGreaterThan(200);
             expect(library!.y + library!.height).toBeLessThanOrEqual(height!);
           }
@@ -83,13 +83,13 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
       }
     }
     await nav.getByRole('button', { name: '节目单', exact: true }).click();
-    await expect(page.locator('.p1-item-inspector')).toBeVisible();
-    await expect(page.locator('.p1-media-grid')).toHaveAttribute('data-view', 'cards');
+    await expect(page.locator('.home-inspector')).toBeVisible();
+    await expect(page.locator('.home-grid')).toHaveAttribute('data-view', 'cards');
     await page.getByRole('button', { name: '卡片视图', exact: true }).click();
-    await expect(page.locator('.p1-media-grid')).toHaveAttribute('data-view', 'cards');
+    await expect(page.locator('.home-grid')).toHaveAttribute('data-view', 'cards');
     await page.getByRole('button', { name: '列表视图', exact: true }).click();
-    const cards = await page.locator('.p1-media-grid').boundingBox();
-    const properties = await page.locator('.p1-item-inspector').boundingBox();
+    const cards = await page.locator('.home-grid').boundingBox();
+    const properties = await page.locator('.home-inspector').boundingBox();
     if (!cards || !properties) throw new Error('节目列表和属性面板必须同时可见');
     expect(cards.x + cards.width <= properties.x + 1 || properties.x + properties.width <= cards.x + 1
       || cards.y + cards.height <= properties.y + 1 || properties.y + properties.height <= cards.y + 1,

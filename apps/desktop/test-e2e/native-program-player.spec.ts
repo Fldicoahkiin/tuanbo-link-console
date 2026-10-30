@@ -35,10 +35,10 @@ test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继�
     await page.evaluate(({ file, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: file, sha256, peaks: Array.from({ length: 2400 }, () => 0) }), { file, sha256 });
     await page.getByRole('button', { name: '打开工程', exact: true }).click();
     await page.evaluate(() => { const Original = AudioContext; Reflect.set(window, '__audioContexts', 0); Reflect.set(window, 'AudioContext', class extends Original { constructor(options?: AudioContextOptions) { super(options); Reflect.set(window, '__audioContexts', (Reflect.get(window, '__audioContexts') as number) + 1); } }); });
-    await page.locator('.player-transport .primary-button').click();
-    await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     const before = await page.evaluate(() => window.tbLink.getNativePlaybackStatus());
-    const displayedBefore = await page.locator('.p1-time-monitor dd').first().innerText();
+    const displayedBefore = await page.locator('.home-clock-readings dd').first().innerText();
     expect(before).toMatchObject({ itemId: 'song-0', status: 'playing', offsetMs: 480000, audioError: null, underruns: 0 });
     await app.evaluate(({ app, dialog }) => {
       dialog.showMessageBoxSync = () => { throw new Error('运行退出提示不应阻塞主进程'); };
@@ -49,7 +49,7 @@ test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继�
     await page.evaluate(() => { const end = performance.now() + 900; while (performance.now() < end) { /* Deliberate renderer stall. */ } });
     const after = await page.evaluate(() => window.tbLink.getNativePlaybackStatus());
     expect(after!.positionMs - before!.positionMs).toBeGreaterThan(800); expect(after!.audioError).toBeNull();
-    await expect(page.locator('.p1-time-monitor dd').first()).not.toHaveText(displayedBefore);
+    await expect(page.locator('.home-clock-readings dd').first()).not.toHaveText(displayedBefore);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
     await expect(page.locator('.reference-timeline')).toBeVisible();
     expect((await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.status).toBe('playing');
@@ -58,9 +58,9 @@ test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继�
     const paused = await page.evaluate(() => window.tbLink.getNativePlaybackStatus());
     await page.waitForTimeout(200); expect((await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))!.positionMs).toBe(paused!.positionMs);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
-    const displayedPaused = await page.locator('.p1-time-monitor dd').first().innerText();
+    const displayedPaused = await page.locator('.home-clock-readings dd').first().innerText();
     await page.waitForTimeout(200);
-    await expect(page.locator('.p1-time-monitor dd').first()).toHaveText(displayedPaused);
+    await expect(page.locator('.home-clock-readings dd').first()).toHaveText(displayedPaused);
     await page.screenshot({ path: info.outputPath('paused-player.png') });
     await page.getByRole('textbox', { name: '节目名称', exact: true }).fill('暂停中修改名称');
     await page.getByRole('textbox', { name: '节目名称', exact: true }).press('Enter');
@@ -74,7 +74,7 @@ test('正式播放按钮使用原生音频：切页、界面阻塞、暂停继�
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
     await page.getByRole('button', { name: '下一首', exact: true }).click();
     await expect.poll(async () => (await page.evaluate(() => window.tbLink.getNativePlaybackStatus()))?.itemId).toBe('song-1');
-    await expect(page.locator('.player-transport.status-paused')).toBeVisible();
+    await expect(page.locator('.home-player[data-status="paused"]')).toBeVisible();
     const ended = await page.evaluate(() => window.tbLink.getNativePlaybackStatus());
     expect(ended).toMatchObject({ status: 'ended', offsetMs: 500000, positionMs: 1500, underruns: 0, audioError: null });
     expect(await page.evaluate(() => Reflect.get(window, '__audioContexts') as number)).toBe(0);

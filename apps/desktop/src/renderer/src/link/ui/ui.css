@@ -98,6 +98,10 @@
   :is(.ui-input, .ui-select > select)[aria-invalid='true'] { border-color: var(--color-danger); }
   :is(.ui-input, .ui-select > select):disabled { opacity: 0.5; cursor: not-allowed; }
 
+  .ui-unit { position: relative; display: inline-flex; align-items: center; width: 100%; max-width: 360px; min-width: 0; }
+  .ui-unit > .ui-input { max-width: none; padding-right: 32px; }
+  .ui-unit > small { position: absolute; right: 10px; color: var(--color-text-secondary); font: 400 var(--type-caption)/1 var(--font-ui); pointer-events: none; }
+
   .ui-switch { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: 32px; color: var(--color-text); cursor: pointer; }
   .ui-switch-text { display: grid; gap: 2px; min-width: 0; }
   .ui-switch-label { font: 400 var(--type-body)/1.4 var(--font-ui); }

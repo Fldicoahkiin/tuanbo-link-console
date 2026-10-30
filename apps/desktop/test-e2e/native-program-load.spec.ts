@@ -88,8 +88,8 @@ test('高负载正式按钮与真实 OBS 连续节目', async ({}, info) => {
       .some(entry => entry.itemId === project.rundown[0]!.id && entry.message === '画面准备完成' && entry.result === 'succeeded'),
     { timeout: 60000, message: '选定节目必须在点击播放前完成真实 OBS 预备，不能用 sleep 或模拟就绪替代' }).toBe(true);
     await writeFile(info.outputPath('initial-preload.json'), JSON.stringify({ elapsedMs: performance.now() - preloadingAt, itemId: project.rundown[0]!.id }));
-    await page.locator('.player-transport .primary-button').click();
-    await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     await app.evaluate(() => {
       const probe = (globalThis as typeof globalThis & { tblinkLoadProbe: MainLoopProbe }).tblinkLoadProbe;
       probe.last = performance.now(); probe.maximumMs = 0; probe.stalls.length = 0;

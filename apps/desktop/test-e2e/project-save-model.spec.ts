@@ -59,7 +59,7 @@ async function openFile(app: ElectronApplication, page: Page, path: string): Pro
 async function renameProgram(page: Page, title: string): Promise<void> {
   const button = page.getByRole('button', { name: '节目属性', exact: true });
   if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
-  const name = page.locator('.p1-item-inspector').getByLabel('节目名称', { exact: true });
+  const name = page.locator('.home-inspector').getByLabel('节目名称', { exact: true });
   await name.fill(title); await name.press('Tab');
 }
 
@@ -277,15 +277,15 @@ test('未命名工程的未保存修改在界面重新载入后提示恢复', as
     await page.getByRole('button', { name: '新建工程', exact: true }).click();
     await page.getByLabel('工程名称').fill('未命名恢复');
     await page.getByRole('button', { name: '创建工程', exact: true }).click();
-    const grid = page.locator('.p1-media-grid');
+    const grid = page.locator('.home-grid');
     const box = await grid.boundingBox();
     await grid.click({ button: 'right', position: { x: 10, y: box!.height - 10 } });
     await page.getByRole('menuitem', { name: '新建空白节目', exact: true }).click();
-    await expect(page.locator('.p1-media-card')).toHaveCount(1);
+    await expect(page.locator('.home-card')).toHaveCount(1);
     await expect.poll(() => recoveryCopies(userData)).toHaveLength(1);
     await answerDialogs(app, { 发现未保存的改动: [0] });
     await page.reload();
-    await expect(page.locator('.p1-media-card')).toHaveCount(1);
+    await expect(page.locator('.home-card')).toHaveCount(1);
     expect((await shownDialogs(app)).map(value => value.title)).toEqual(['发现未保存的改动']);
     await expect(unsaved(page)).toBeVisible();
   } finally { await closeWithoutSaving(app, page); }
@@ -368,8 +368,8 @@ test('播放中按 Ctrl+S 写入工程文件，播放不中断', async ({}, info
     await page.evaluate(({ path, sha256 }) => window.tbLink.saveWaveformCache({ projectPath: path, sha256, peaks: Array.from({ length: 1200 }, () => 0) }), { path, sha256 });
     await openFile(app, page, path);
     await expect(unsaved(page)).toBeVisible();
-    await page.locator('.player-transport .primary-button').click();
-    await expect(page.locator('.player-transport.status-playing')).toBeVisible();
+    await page.locator('.home-player-play').click();
+    await expect(page.locator('.home-player[data-status="playing"]')).toBeVisible();
     const before = await page.evaluate(() => window.tbLink.getNativePlaybackStatus());
     expect(before).toMatchObject({ status: 'playing', audioError: null });
     await page.keyboard.press('Control+S');

@@ -56,7 +56,6 @@
 .obs-live-selection { pointer-events: none; }
 .obs-live-source { position: absolute; pointer-events: auto; touch-action: none; cursor: move; }
 .obs-live-source.is-selected { outline: 1px solid #ff453a; outline-offset: -1px; }
-.obs-live-caption { position: absolute; left: 0; bottom: -20px; color: var(--text-secondary); font-size: var(--text-caption); white-space: nowrap; pointer-events: none; }
 
 .obs-live-container { position: relative; width: 100%; height: 100%; min-height: 0; container-type: size; }
 .obs-edit-notice { position: absolute; z-index: 9; right: 8px; bottom: 8px; left: 8px; padding: 7px 9px; color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 7px; background: var(--surface); font-size: var(--text-caption); }

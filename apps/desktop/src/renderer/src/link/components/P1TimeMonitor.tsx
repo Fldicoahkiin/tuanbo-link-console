@@ -30,32 +30,38 @@ function useStereoLevels(player: ProjectPlayer): { levels: number[]; error: stri
   }, [player.controller, player.state.status, lowPower]);
   return { levels, error };
 }
+/**
+ * Timecode and clocks next to the home player (2026-10-30 rework). The MTC the console reads comes
+ * first and largest; elapsed and remaining time and the stereo levels follow.
+ */
 export function P1TimeMonitor({ player, title, positionMs, durationMs, frameRate, internal, outputTimecode }: {
   player: ProjectPlayer; title: string; positionMs: number; durationMs: number; frameRate: string; internal: boolean; outputTimecode: string;
 }): JSX.Element {
   const { levels, error } = useStereoLevels(player);
   const sampleRate = useIntegrationStore((s) => s.profile?.internalPlayer?.audioSampleRate ?? 44100);
   const sending = internal && player.state.mtcEnabled && player.state.status === 'playing' && player.state.mtcSending && !player.state.error;
-  return <section className="p1-time-monitor" aria-label="P1 播放监测" title={title}>
-    <div className="monitor-readings">
-      <dl>
-        <div><dt>正计时</dt><dd aria-label={`正计时 ${clockText(positionMs)}`}>{clockText(positionMs)}</dd></div>
-        <div><dt>倒计时</dt><dd className="monitor-remaining" aria-label={`倒计时 ${clockText(Math.max(0, durationMs - positionMs))}`}>{clockText(Math.max(0, durationMs - positionMs))}</dd></div>
-      </dl>
-      <div className="monitor-levels" role="group" aria-label="双声道电平">
-        {levels.map((level, channel) => <div key={channel} className="monitor-channel" role="meter" aria-label={`${channel === 0 ? '左' : '右'}声道电平`} aria-valuemin={-60} aria-valuemax={0} aria-valuenow={Math.round(level * 60 - 60)} aria-valuetext={`${Math.round(level * 60 - 60)} dB`}>
-          <div className="monitor-level-track">{Array.from({ length: 12 }, (_, index) => <i key={index} className={index < 2 ? 'peak' : index < 4 ? 'warning' : ''} data-lit={level > (11 - index) / 12} />)}</div>
-          <small>{channel === 0 ? 'L' : 'R'}</small>
-        </div>)}
-      </div>
-    </div>
-    <div className="monitor-mtc" data-sending={sending} title={internal ? '已包含时间码偏移。没有发送时显示的是待发位置，不代表控台已经收到' : '最近接收到的外部 MTC 时间码'}>
+  const state = sending ? '发送中' : !internal ? outputTimecode === '—' ? '无信号' : '接收值' : player.state.status === 'paused' ? '已暂停' : '未发送';
+  const remaining = clockText(Math.max(0, durationMs - positionMs));
+  return <section className="home-clock" data-sending={sending} aria-label="时间码与计时" title={title}>
+    <header className="home-clock-heading">
       <span>MTC · {frameRate} fps</span>
-      <strong className="monitor-mtc-clock" aria-label={`MTC 时间码 ${outputTimecode}`}>{outputTimecode}</strong>
-      <span>{sending ? '发送中' : !internal ? outputTimecode === '—' ? '无信号' : '接收值' : player.state.status === 'paused' ? '已暂停' : '未发送'}</span>
-      <span className="monitor-duration">总时长 {clockText(durationMs).slice(0, 8)}</span>
-      <span>{internal ? `${sampleRate / 1000} kHz` : '跟随 P1'}</span>
+      <span className="home-clock-state" data-sending={sending} title={internal ? '已包含时间码偏移。没有发送时显示的是待发位置，不代表控台已经收到' : '最近接收到的外部 MTC 时间码'}>{state}</span>
+    </header>
+    <strong className="home-clock-mtc" aria-label={`MTC 时间码 ${outputTimecode}`}>{outputTimecode}</strong>
+    <dl className="home-clock-readings">
+      <div><dt>正计时</dt><dd aria-label={`正计时 ${clockText(positionMs)}`}>{clockText(positionMs)}</dd></div>
+      <div><dt>倒计时</dt><dd data-kind="remaining" aria-label={`倒计时 ${remaining}`}>{remaining}</dd></div>
+    </dl>
+    <div className="home-levels" role="group" aria-label="双声道电平">
+      {levels.map((level, channel) => <div key={channel} className="home-level" role="meter" aria-label={`${channel === 0 ? '左' : '右'}声道电平`} aria-valuemin={-60} aria-valuemax={0} aria-valuenow={Math.round(level * 60 - 60)} aria-valuetext={`${Math.round(level * 60 - 60)} dB`}>
+        <small aria-hidden="true">{channel === 0 ? 'L' : 'R'}</small>
+        <span className="home-level-track">{Array.from({ length: 12 }, (_, index) => <i key={index} data-zone={index > 9 ? 'peak' : index > 7 ? 'warning' : 'normal'} data-lit={level > index / 12} />)}</span>
+      </div>)}
     </div>
-    {error ? <small role="alert">{error}</small> : null}
+    <footer className="home-clock-footer">
+      <span className="home-clock-duration">总时长 {clockText(durationMs).slice(0, 8)}</span>
+      <span>{internal ? `${sampleRate / 1000} kHz` : '跟随 P1'}</span>
+    </footer>
+    {error ? <small className="home-clock-error" role="alert">{error}</small> : null}
   </section>;
 }

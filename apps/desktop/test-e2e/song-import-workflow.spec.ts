@@ -41,7 +41,7 @@ test('从首页直接导入 P1 歌曲并保存原始时间码，内部主控仍�
     expect(saved.rundown[0]?.p1Media?.midiStartTime).toBe('120');
     expect(saved.rundown[0]?.referenceAudio?.durationMs).toBe(1500);
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '节目单', exact: true }).click();
-    await expect(page.locator('.p1-media-card').getByText('歌曲原名', { exact: true })).toBeVisible();
+    await expect(page.locator('.home-card').getByText('歌曲原名', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '导入歌曲 / P1', exact: true }).click();
     await expect(songs.getByRole('button', { name: '导入 P1 歌曲（.hia）', exact: true })).toBeVisible();
     await expect(songs.locator('.p1-import-path:visible')).toContainText('已保存 P1 歌曲');
