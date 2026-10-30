@@ -15,7 +15,7 @@
   display: flex;
   flex-direction: column;
   flex: 0 0 76px;
-  min-width: 900px;
+  min-width: 0;
   min-height: 0;
 }
 .ma2-executor-band[data-executor-band=upper] { flex: 1 0 310px; }
@@ -339,8 +339,4 @@
 .ma2-executor-dialog footer button:disabled { opacity: .5; cursor: default; }
 .ma2-executor-dialog [role=alert] { margin: 8px 0 0; color: var(--danger); overflow-wrap: anywhere; }
 
-@container (min-width: 1100px) {
-  .ma2-executor-band { min-width: 0; }
-  .ma2-executor-surface .ma2-executor-key > strong { font-size: 12px; }
-}
 }

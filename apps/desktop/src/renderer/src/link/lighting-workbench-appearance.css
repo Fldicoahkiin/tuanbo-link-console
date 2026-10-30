@@ -54,9 +54,6 @@
 .sidebar-task-progress :is(p, small) { margin: 0; font-size: var(--text-caption); line-height: 1.5; overflow-wrap: anywhere; }
 .sidebar-task-progress details { font-size: var(--text-caption); color: var(--text-secondary); }
 .sidebar-task-progress details p { max-height: 120px; overflow: auto; margin-top: 6px; }
-.sidebar-task-progress .attribute-read-actions { display: grid; gap: 5px; padding: 0; }
-.sidebar-task-progress .attribute-read-actions button { width: 100%; min-height: 28px; padding: 5px 8px; border: 1px solid var(--separator); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-primary); font: inherit; font-size: var(--text-caption); }
-.sidebar-task-progress .attribute-read-actions small { display: none; }
 .lighting-effect-dock .effect-binding-form, .lighting-effect-dock .effect-import-dialog, .lighting-effect-dock .lighting-tools-dialog { width: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; box-shadow: none; border-radius: 0; background: transparent; }
 .lighting-effect-dock .effect-binding-form { display: flex; flex-direction: column; gap: 12px; }
 .lighting-effect-dock .effect-binding-form > label { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 16px; margin: 0; font-size: var(--text-control); }

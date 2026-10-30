@@ -29,7 +29,6 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
   const [live, setLive] = useState(true);
   const [notice, setNotice] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
-  const [progressHost, setProgressHost] = useState<HTMLElement | null>(null);
   const [menu, setMenu] = useState<Selection | null>(null);
   const [editing, setEditing] = useState<{ selection: Selection; kind: 'rename' | 'move' | 'delete' } | null>(null);
   const [name, setName] = useState('');
@@ -41,7 +40,6 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
   const directoryNextRead = useRef(0);
   const pageKey = JSON.stringify(state.bandPages);
   const report = (cause: unknown): void => setNotice(cause instanceof Error ? cause.message : String(cause));
-  useEffect(() => { setProgressHost(window.document.getElementById('ma2-sidebar-read-actions')); }, []);
   useEffect(() => {
     if (!state.slot) return;
     setRanges(current => state.activeBand === 'fader'
@@ -88,6 +86,9 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
       {typeControl}
       <Ma2MaterialMenu label="页面选项" trigger={<MoreHorizontal/>} open={optionsOpen} onOpenChange={setOptionsOpen}>
         <button onClick={() => { setOptionsOpen(false); refresh(); }}><RefreshCw/>刷新控台页面</button>
+        {/* The scan's progress shows in the sidebar's task list while it runs. */}
+        <button disabled={state.scanning} onClick={() => { setOptionsOpen(false); setNotice(''); void scanMa2ExecutorLocations().catch(report); }}><List/>{state.scanning ? `正在读取 Cue 位置 ${state.completed}/${state.total || '…'} 页` : '读取全部 Cue 位置'}</button>
+        {state.complete ? <small className="ma2-page-index-done">全部 {state.completed} 页的位置已读取</small> : null}
         <label className="ma2-page-live-option"><input aria-label="实时同步执行器页面" type="checkbox" checked={live} onChange={event => setLive(event.target.checked)}/>实时同步页面</label>
       </Ma2MaterialMenu>
       {selected ? <button aria-label="返回页面" title="返回页面" onClick={onBack}><ArrowLeft/></button> : null}
@@ -173,7 +174,7 @@ export function Ma2ExecutorPageView({ typeControl, toolbarHost, selected, onBack
       {notice ? <p role="alert">{notice}</p> : null}
       <footer><button type="button" onClick={() => setEditing(null)}>取消</button><button disabled={state.mutating || editing.kind === 'rename' && !name.trim()}>{state.mutating ? '正在确认…' : editing.kind === 'rename' ? '保存名称' : editing.kind === 'move' ? '确认移动' : '删除执行器'}</button></footer>
     </form></div>, window.document.body) : null}
-    {progressHost ? createPortal(<div className="ma2-page-index-progress"><button disabled={state.scanning} onClick={() => { setNotice(''); void scanMa2ExecutorLocations().catch(report); }}>{state.scanning ? `读取 Cue 位置 ${state.completed}/${state.total || '…'} 页` : '读取全部 Cue 位置'}</button>{state.scanning && state.total ? <progress aria-label="控台页面读取进度" max={state.total} value={state.completed}/> : null}{state.complete ? <small>全部 {state.completed} 页位置已读取</small> : null}{state.mutating ? <small role="status">已写入，正在向控台确认…</small> : notice ? <small role="status">{notice}</small> : null}</div>, progressHost) : null}
+    {state.mutating ? <p className="ma2-executor-status" role="status">已写入，正在向控台确认…</p> : notice && !editing ? <p className="ma2-executor-status" role="alert">{notice}</p> : null}
   </section>;
 }
 

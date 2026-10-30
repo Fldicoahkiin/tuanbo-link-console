@@ -14,33 +14,8 @@
 .lighting-workbench .timeline-workbench { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(160px, 2fr) minmax(min(458px, 55vh), 1fr); position: relative; gap: 12px; height: 100%; min-height: 0; }
 .lighting-workbench .editor-preview-row { display: contents; }
 .lighting-workbench .reference-timeline { grid-column: 1; grid-row: 4; min-height: 0; height: 100%; grid-template-rows: auto minmax(0, 1fr); }
-.lighting-workbench-panel { grid-column: 2; grid-row: 2; min-height: 0; }
 .lighting-workbench .cue-inspector { position: absolute; right: 12px; top: 110px; width: 320px; max-height: calc(100% - 330px); z-index: 20; border: 1px solid var(--separator); box-shadow: 0 12px 40px #0008; }
-.lighting-workbench-panel { border: 1px solid var(--separator); border-radius: 8px; background: var(--surface); padding: 16px; overflow: auto; }
-.lighting-workbench-panel header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
-.lighting-workbench-panel h2 { display: flex; align-items: center; gap: 8px; margin: 6px 0 12px; font-size: 18px; }
-.lighting-workbench-panel svg, .lighting-programs svg { width: 17px; height: 17px; flex-shrink: 0; }
-.lighting-workbench-panel button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 6px 10px; border: 1px solid var(--separator); border-radius: 5px; color: var(--text-primary); background: var(--surface-raised); }
-@media (hover: hover) and (pointer: fine) {
-.lighting-workbench-panel button:hover:not(:disabled) { border-color: var(--accent); } }
 .lighting-workbench button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.lighting-workbench-panel button:disabled { opacity: .45; }
-.lighting-region-form { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin: 0; padding: 10px; border: 1px solid var(--separator); border-radius: 6px; }
-.lighting-region-form label { display: flex; flex-direction: column; gap: 4px; font-size: var(--text-caption); }
-.lighting-region-form input { width: 110px; min-height: 32px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--separator); border-radius: 4px; padding: 5px 8px; }
-.lighting-workbench-hint, .lighting-region-list p { font-size: var(--text-caption); line-height: 1.6; color: var(--text-secondary); }
-.lighting-region-list { display: flex; gap: 8px; flex-wrap: wrap; }
-.lighting-region-list > div { display: flex; }
-.lighting-region-list > div > button:first-child { align-items: start; flex-direction: column; }
-.lighting-region-list small { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.lighting-programs { width: 100%; min-width: 0; padding: 12px 8px; overflow: auto; }
-.lighting-programs header { display: flex; gap: 8px; align-items: center; padding: 8px; }
-.lighting-programs p { color: var(--text-secondary); font-size: var(--text-caption); padding: 0 8px; }
-.lighting-programs > button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 8px; text-align: left; border: 1px solid transparent; background: transparent; color: var(--text-primary); border-radius: 6px; }
-.lighting-programs > button[aria-pressed=true] { border-color: transparent; background: var(--accent-soft); }
-.lighting-programs > button > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.lighting-programs strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lighting-programs small { color: var(--text-secondary); }
 .lighting-workbench .waveform-lane { --audio-wave: #68c9ed; }
 .lighting-workbench .audio-timeline-segment,
 .lighting-workbench .audio-timeline-segment.selected { background: transparent; border-color: transparent; border-radius: 0; outline: none; }
@@ -48,36 +23,7 @@
 .lighting-workbench .audio-segment-name { height: 24px; font-size: var(--text-caption); color: var(--text-secondary); }
 .lighting-workbench .audio-segment-waveform { top: 28px; height: calc(100% - 34px); }
 .lighting-workbench .timeline-beat-guide { display: block; position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); opacity: .18; pointer-events: none; }
-@media (max-width: 1200px) { .lighting-workbench .timeline-workbench { grid-template-columns: minmax(0, 1fr); gap: 8px; } .lighting-workbench-panel { padding: 12px; } }
-
-.lighting-task-tabs { display: flex; gap: 6px; padding-bottom: 16px; border-bottom: 1px solid var(--separator); }
-.lighting-task-tabs button { flex: 1; min-height: 40px; font-weight: 600; }
-.lighting-task-tabs button[aria-selected=true] { background: var(--accent); color: var(--text-primary); border-color: var(--accent); }
-.lighting-step-intro h3 { font-size: 17px; margin: 20px 0 8px; }
-.lighting-step-intro p, .lighting-extra-edit p { color: var(--text-secondary); line-height: 1.7; font-size: var(--text-control); }
-.lighting-workbench .lighting-region-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 8px; padding: 12px; margin-top: 16px; }
-.lighting-region-form label:first-of-type { grid-column: 1 / -1; }
-.lighting-region-form input { width: 100%; min-width: 0; }
-.lighting-region-form > button:last-child { grid-column: 1 / -1; background: var(--accent); color: var(--text-primary); }
-.lighting-region-list { flex-direction: column; margin-top: 18px; }
-.lighting-region-list > div > button:first-child { flex: 1; }
-.lighting-extra-edit { border-top: 1px solid var(--separator); margin-top: 24px; padding-top: 16px; }
-.lighting-extra-edit summary { cursor: pointer; color: var(--text-secondary); }
-.lighting-gap-notice { display: grid; gap: 10px; padding: 12px; margin-top: 16px; border: 1px solid var(--accent); border-radius: 6px; font-size: var(--text-control); }
-.lighting-workbench-panel .audio-inspector { padding: 0; overflow: visible; }
-.lighting-workbench-panel .audio-inspector > header { display: none; }
-.lighting-workbench-panel .audio-beat-properties { border: 0; margin: 0; padding: 8px 0 20px; }
-.lighting-workbench-panel .audio-beat-properties h3 { font-size: 17px; margin: 12px 0 8px; }
-.lighting-workbench-panel .audio-beat-properties p { font-size: var(--text-control); line-height: 1.7; color: var(--text-secondary); }
-.lighting-workbench-panel .audio-beat-levels { display: flex; margin: 16px 0; gap: 6px; }
-.lighting-workbench-panel .audio-beat-levels button { flex: 1; padding: 8px 4px; }
-.lighting-workbench-panel .audio-beat-levels button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--surface); }
-.lighting-workbench-panel .audio-edit-actions { gap: 8px; margin-top: 12px; }
-.lighting-workbench-panel .audio-detect-button { background: var(--accent); color: white; width: 100%; min-height: 42px; font-weight: 600; }
-.lighting-workbench-panel .audio-manual-edit { border-top: 1px solid var(--separator); padding-top: 16px; }
-.lighting-workbench-panel .audio-manual-edit summary { color: var(--text-secondary); cursor: pointer; }
-.lighting-workbench-panel button { cursor: pointer; }
-.lighting-workbench-panel button:disabled { cursor: not-allowed; }
+@media (max-width: 1200px) { .lighting-workbench .timeline-workbench { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
 .effect-binding-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: #0008; }
 .effect-binding-form { width: 380px; padding: 24px; border: 1px solid var(--separator); border-radius: 12px; background: var(--surface); box-shadow: 0 20px 80px #0008; }
 .effect-binding-form h3 { margin: 0 0 12px; }

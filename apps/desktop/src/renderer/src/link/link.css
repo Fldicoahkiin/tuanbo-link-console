@@ -84,7 +84,8 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .p1-sync-note { color: var(--text-primary); font-size: var(--text-caption); line-height: 1.45; }
 .p1-sync-note { margin: 0; }
 
-.toast-stack { position: fixed; right: 18px; bottom: 18px; z-index: 50; display: grid; gap: 8px; width: min(420px, calc(100vw - 36px)); }
+/* The lighting workbench lifts notices above its timeline through --notice-clearance (useLightingLibrarySplit). */
+.toast-stack { position: fixed; right: 18px; bottom: var(--notice-clearance, 18px); z-index: 50; display: grid; gap: 8px; width: min(420px, calc(100vw - 36px)); }
 .toast { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 13px; border: 1px solid #315c54; border-radius: 8px; background: var(--surface-raised); box-shadow: 0 12px 35px rgba(0, 0, 0, .35); font-size: var(--text-caption); }
 .toast.error { color: #ffacb9; border-color: #71313c; background: var(--surface-raised); }
 .toast button { display: grid; place-items: center; padding: 0; border: 0; background: transparent; cursor: pointer; }

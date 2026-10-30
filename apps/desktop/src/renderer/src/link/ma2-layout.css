@@ -67,9 +67,4 @@
 .ma2-executor-cell button strong { font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ma2-executor-cell button small { font-size: 10px; color: var(--text-secondary); }
 .ma2-executor-cell button[data-search-match=false] { opacity: .25; }
-.ma2-page-index-progress { display: flex; flex-direction: column; gap: 4px; }
-.ma2-page-index-progress button { min-height: 29px; padding: 5px 8px; color: var(--text-primary); background: var(--surface); border: 1px solid var(--separator); border-radius: 8px; font: inherit; font-size: 11px; cursor: pointer; }
-.ma2-page-index-progress button:hover:not(:disabled) { border-color: var(--accent); }
-.ma2-page-index-progress small { color: var(--text-secondary); font-size: 10px; }
-.ma2-page-index-progress progress { width: 100%; height: 4px; accent-color: var(--accent); }
 }

@@ -1,0 +1,20 @@
+/*
+ * The lighting workbench's own rules from the 2026-10-30 rework, in the pages layer: the material
+ * library's refresh button and messages, and the console page view's status line. Reading the
+ * console runs in the sidebar's task list; the buttons that start it stay with what they read.
+ */
+@layer pages {
+  .ma2-sequence-preview .ma2-refresh-directory { flex: none; justify-content: center; width: 30px; padding: 0; }
+  .ma2-refresh-directory[data-busy='true'] svg { animation: lighting-refresh-spin 1s linear infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .ma2-refresh-directory[data-busy='true'] svg { animation: none; }
+  }
+  @keyframes lighting-refresh-spin { to { transform: rotate(360deg); } }
+
+  .ma2-material-message { flex: none; margin: 0; color: var(--color-text-secondary); font-size: var(--type-caption); line-height: 1.5; overflow-wrap: anywhere; }
+  .ma2-material-message[role='alert'] { color: var(--color-danger); }
+
+  .ma2-executor-status { flex: none; margin: 0; padding: var(--space-half) 2px 0; color: var(--color-text-secondary); font-size: var(--type-caption); line-height: 1.5; overflow-wrap: anywhere; }
+  .ma2-executor-status[role='alert'] { color: var(--color-danger); }
+  .ma2-material-menu .ma2-page-index-done { color: var(--color-text-secondary); }
+}
