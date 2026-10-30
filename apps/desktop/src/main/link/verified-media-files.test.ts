@@ -20,6 +20,7 @@ describe('素材校验缓存', () => {
       expect(hash).toHaveBeenCalledTimes(2);
     } finally { await unlink(path); await rmdir(directory); }
   });
+  // Creates and checks 2000 files on purpose; Windows CI disks with scanning need more than the default 5 s.
   it('2000 个素材切页检查不会因 256 条缓存循环淘汰而重复读取全部内容', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'tblink-integrity-scale-'));
     const paths = Array.from({ length: 2000 }, (_, index) => join(directory, `${index}.mp4`));
@@ -51,7 +52,8 @@ describe('素材校验缓存', () => {
       phases.finishedMs = performance.now() - started;
       console.info('素材校验负载阶段耗时', JSON.stringify(phases));
     }
-  });
+  }, 60000);
+  // Real files on disk; Windows CI disks with scanning need more than the default 5 s.
   it('十份未变化素材连续检查十轮只读取十次内容，变化后重新校验', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'tblink-integrity-'));
     const paths = Array.from({ length: 10 }, (_, index) => join(directory, `${index}.mp4`));
@@ -72,7 +74,7 @@ describe('素材校验缓存', () => {
       await Promise.all(paths.map((path) => unlink(path)));
       await rmdir(directory);
     }
-  });
+  }, 20000);
   it('校验期间被改写的文件不能缓存为成功', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'tblink-changing-'));
     const path = join(directory, 'video.mp4');

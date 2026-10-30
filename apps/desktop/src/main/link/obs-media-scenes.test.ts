@@ -422,12 +422,16 @@ describe('素材独立场景播放', () => {
     await expect(scenes.compose('用户机位', [names.sceneName])).rejects.toThrow('独立');
   });
   it('叠加中的媒体启动与定位不抢走正式机位，也不静音同场其他层', async () => {
-    const { scenes, calls, responses } = fixture();
-    await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
-    await scenes.execute({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4');
-    responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PAUSED', mediaCursor: 2300 });
-    await scenes.seek({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4', () => Promise.resolve());
-    expect(calls.some(call => call.requestType === 'SetCurrentProgramScene')).toBe(false);
+    // The start compares OBS's cursor with the music's elapsed time; a busy test machine must not count as music time.
+    vi.useFakeTimers({ toFake: ['performance'] });
+    try {
+      const { scenes, calls, responses } = fixture();
+      await scenes.prepare('project', asset, 'C:/dance.mp4'); calls.length = 0;
+      await scenes.execute({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4');
+      responses.set('GetMediaInputStatus', { mediaState: 'OBS_MEDIA_STATE_PAUSED', mediaCursor: 2300 });
+      await scenes.seek({ ...event, deferSceneSwitch: true }, 'C:/dance.mp4', () => Promise.resolve());
+      expect(calls.some(call => call.requestType === 'SetCurrentProgramScene')).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
   it('拖动只定位已准备的自有素材，不重载来源或重新启动媒体', async () => {
     const { scenes, calls, responses } = fixture();
