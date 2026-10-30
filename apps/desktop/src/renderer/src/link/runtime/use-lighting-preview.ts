@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { lightingTimeOrigin } from '@tb/core/link';
+import { lightingTimeOrigin, mtcOutputSettings } from '@tb/core/link';
 import type { LightingDocument, MtcFrameRate } from '@tb/schema';
 import { LightingMidiOutput } from '../../registry/lighting-midi-output';
 import { MediaMtcOutput } from '../../registry/media-mtc-output';
@@ -84,10 +84,10 @@ export function useLightingPreview(input: { enabled: boolean; document: Lighting
       if (input.enabled) await output.prepare(document, profile, audio.currentTime * 1000);
       if (cancelled || (input.enabled && ownedOutput.current !== output)) { cleanup(); return; }
       if (sendsMtc) {
-        const id = profile?.internalPlayer?.mtcOutputPortProfileId;
-        const name = profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output')?.portName;
-        if (!name) throw new Error('请先在设备设置里选择 MIDI 时间码输出');
-        await mtc.connect(name);
+        // The same port and send mode as formal playback: the preview fires the lights the way the show will.
+        const settings = mtcOutputSettings(profile);
+        if (!settings.portName) throw new Error('请先在设备设置里选择 MIDI 时间码输出');
+        await mtc.connect(settings.portName, false, settings.sendMode);
       }
       if (cancelled || (input.enabled && ownedOutput.current !== output)) { cleanup(); return; }
       seekAudio = audio; audio.addEventListener('playing', began); audio.addEventListener('seeking', located); audio.addEventListener('seeked', located);

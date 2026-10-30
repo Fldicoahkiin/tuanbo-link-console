@@ -192,3 +192,26 @@ it.each([0, 2])('自动识别有 %s 个输出时明确阻断，不随意选择',
   expect(open).not.toHaveBeenCalled();
   expect(output.tick(0, '30', 0)).toBe(false);
 });
+
+it.each(['24', '25', '29.97df', '30'] as const)('%s fps 只发四分之一帧时：开始、定位和中断后都不发完整帧，控台照样按四分之一帧对上位置（和正式播放同一种发送方式）', async rate => {
+  let mediaMs = 60013;
+  const decoder = new MtcQuarterFrameDecoder();
+  const errors: number[] = [];
+  const send = vi.fn((message: number[]) => {
+    if (message[0] !== 0xf1) return;
+    const sample = decoder.push(message[1]!, mediaMs);
+    if (sample) errors.push(sample.totalFrames * 1000 / playbackFramesPerSecond(rate) - mediaMs);
+  });
+  stubMidi(() => Promise.resolve({ outputs: new Map([['ma', { name: 'MA2', state: 'connected', connection: 'open', open: () => Promise.resolve(), send, close: () => Promise.resolve() }]]) }));
+  const output = new MediaMtcOutput(); await output.connect('MA2', false, 'quarter-frames');
+  for (let tick = 0; tick <= 1000; tick += 1) { mediaMs = 60013 + tick; output.tick(mediaMs, rate, tick); }
+  output.tick(mediaMs + 5000, rate, 1001);
+  for (let tick = 1; tick <= 500; tick += 1) { mediaMs = 65013 + tick; output.tick(mediaMs, rate, 1001 + tick); }
+  expect(send.mock.calls.some(([message]) => message[0] === 0xf0)).toBe(false);
+  expect(errors.length).toBeGreaterThan(10);
+  expect(Math.max(...errors.map(Math.abs))).toBeLessThan(1000 / playbackFramesPerSecond(rate) / 4 + 1);
+  await output.connect('MA2');
+  const before = send.mock.calls.length;
+  output.tick(1000, rate, 2000);
+  expect(send.mock.calls[before]?.[0]?.[0]).toBe(0xf0);
+});

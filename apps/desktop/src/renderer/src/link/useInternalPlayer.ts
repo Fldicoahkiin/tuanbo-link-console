@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import { PlayerViewStore } from './stores/player-view-store';
 import { PlaybackMidiInput } from '../registry/playback-midi-input';
 import { InternalPlaybackController, emptyInternalPlayerState, type InternalPlayerDependencies } from './runtime/internal-playback-controller';
-import { firstTimeWarning, toUserErrorMessage } from '@tb/core/link';
+import { firstTimeWarning, mtcOutputSettings, toUserErrorMessage } from '@tb/core/link';
 import { RemoteNativeProgramPlayer } from './runtime/remote-native-program-player';
 import type { ProgramPlayerControls } from './runtime/program-player-controls';
 import { recoverInternalObs } from './runtime/internal-obs-recovery';
@@ -106,9 +106,8 @@ export function useInternalPlayer(coordinator: LinkRuntimeCoordinator | null, re
       },
       configuration: () => {
         const profile = useIntegrationStore.getState().profile;
-        const id = profile?.internalPlayer?.mtcOutputPortProfileId;
-        const port = id ? profile?.midiPortProfiles.find((entry) => entry.id === id && entry.direction === 'output') : null;
-        return { lightingProfile: profile, outputDeviceId: audioConfiguration.deviceId, audioSampleRate: audioConfiguration.sampleRate, mtcPortName: port?.portName ?? null, mtcSendMode: profile?.internalPlayer?.mtcSendMode ?? 'standard',
+        const mtc = mtcOutputSettings(profile);
+        return { lightingProfile: profile, outputDeviceId: audioConfiguration.deviceId, audioSampleRate: audioConfiguration.sampleRate, mtcPortName: mtc.portName, mtcSendMode: mtc.sendMode,
           preload: profile?.internalPlayer?.preload ?? true, fadeInMs: profile?.internalPlayer?.fadeInMs ?? 0, fadeOutMs: profile?.internalPlayer?.fadeOutMs ?? 500 };
       }, changed: view.publish,
       // A channel that cannot join repeats song after song until fixed: a warning the first time, then info.

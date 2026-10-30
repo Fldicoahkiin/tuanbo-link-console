@@ -3,7 +3,7 @@ import { createDefaultIntegrationProfile } from '../view-models/local-integratio
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Play, Pause, Square, SkipBack, SkipForward, RotateCcw, Music2 } from 'lucide-react';
-import { playlistItems } from '@tb/core/link';
+import { mtcOutputSettings, playlistItems } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
 import type { InternalPlayerState } from '../runtime/internal-playback-controller';
 import type { ProgramPlayerControls } from '../runtime/program-player-controls';
@@ -85,7 +85,7 @@ function PlayerConnections({ disabled, notify, onBusy, children }: { disabled: b
     refreshDevices(); navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
     return () => { cancelled = true; navigator.mediaDevices.removeEventListener('devicechange', refreshDevices); };
   }, [notify, engine]);
-  const port = profile?.midiPortProfiles.find((entry) => entry.id === profile.internalPlayer?.mtcOutputPortProfileId)?.portName ?? '';
+  const port = mtcOutputSettings(profile).portName ?? '';
   const inventory = midiOutputInventory(engine, ports, nativeDevices, port);
   const outputs = inventory.available;
   const audioDevices = engine === 'native' ? nativeDevices?.audio.map(device => ({ deviceId: device.id, label: device.name })) ?? [] : devices;
