@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, it, vi } from 'vitest';
-import { Ma2LivePlayback, parseMa2LivePlayback } from './ma2-live-playback';
+import { Ma2LivePlayback, parseMa2ExecutorObservation, parseMa2LivePlayback } from './ma2-live-playback';
 
 const native: unknown = JSON.parse(await readFile(new URL('./fixtures/ma2-live-faders-3.7.json', import.meta.url), 'utf8'));
 it('parses actual onPC values and functions without inventing empty fader levels', () => {
@@ -56,4 +56,18 @@ it('stops after a response timeout without reconnecting or replaying a control',
     expect(() => client.input(1000, 1, { kind: 'fader', value: 1 })).toThrow('超时');
     expect(socket.sent.filter(value => value.requestType === 'playbacks_userInput')).toHaveLength(0);
   } finally { client.close(); vi.useRealTimers(); }
+});
+
+it('读回单个执行器：在不在跑、当前 Cue；返回的格号和请求不一致时拒绝，不当成“没在跑”', async () => {
+  expect(parseMa2ExecutorObservation(native, 1000, 1)).toEqual({ running: false, cue: '', name: 'TBLINK_40_STEP_ACCEPTANCE' });
+  expect(() => parseMa2ExecutorObservation(native, 999, 1)).toThrow('其他页面');
+  expect(() => parseMa2ExecutorObservation(native, 1000, 101)).toThrow('格号');
+  const { client, socket } = setup();
+  await client.connect('test', 'test-secret');
+  expect(await client.observe(1000, 2)).toMatchObject({ running: false });
+  expect(socket.sent.at(-1)).toMatchObject({ requestType: 'playbacks', startIndex: [0], itemsCount: [15], pageIndex: 999, itemsType: [2] });
+  // Button executors 101–190 are asked for as their own group; this fixture answers with fader slots and is refused.
+  await expect(client.observe(1000, 101)).rejects.toThrow('格号');
+  expect(socket.sent.at(-1)).toMatchObject({ startIndex: [100], itemsType: [3], view: 3 });
+  expect(socket.closed).toBe(true);
 });

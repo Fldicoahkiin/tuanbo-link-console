@@ -264,6 +264,10 @@ export type LinkDesktopApi = {
   readMa2Live(payload: import('@tb/schema').Ma2LiveRequest): Promise<import('@tb/schema').Ma2LiveSnapshot>;
   inputMa2Live(payload: import('@tb/schema').Ma2LiveInput): Promise<void>;
   releaseMa2Live(): Promise<void>;
+  /** One executor's state while a song plays, on its own read-only web remote session. */
+  observeMa2Executor(payload: import('@tb/schema').Ma2ExecutorObserveRequest): Promise<import('@tb/schema').Ma2ExecutorObservation>;
+  /** Ends that session and forgets its failure, before the next song is checked. */
+  releaseMa2Observer(): Promise<void>;
   updateMa2Layout(payload: import('@tb/schema').Ma2LayoutUpdateRequest): Promise<import('@tb/schema').Ma2LayoutSnapshot>;
   readMa2Layout(payload: import('@tb/schema').Ma2LayoutReadRequest): Promise<import('@tb/schema').Ma2LayoutSnapshot>;
   prepareMa2CueDeletion(payload: import('@tb/schema').Ma2CueDeletePrepare, onProgress?: (progress: import('@tb/schema').Ma2ReadProgress) => void): Promise<import('@tb/schema').Ma2CueDeletePlan>;

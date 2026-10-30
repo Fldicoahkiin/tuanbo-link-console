@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { type Ma2LiveConnect, type Ma2LiveSnapshot } from '@tb/schema';
 import { Ma2LiveService } from './ma2-live-service';
+import type { Ma2LivePlayback } from './ma2-live-playback';
 
 const mock = vi.hoisted(() => ({ input: vi.fn(), close: vi.fn(), read: vi.fn(), connect: vi.fn() }));
 vi.mock('./ma2-live-playback', () => ({ Ma2LivePlayback: class {
@@ -84,5 +85,32 @@ it('uses the reported fader range for speed and special masters instead of assum
     service.input({ ...readRequest, slot: 1, deadlineAt: Date.now() + 500, action: { kind: 'fader', value: 150 } });
     expect(mock.input).toHaveBeenLastCalledWith(1000, 1, { kind: 'fader', value: 150 });
     expect(() => service.input({ ...readRequest, slot: 1, deadlineAt: Date.now() + 500, action: { kind: 'fader', value: 241 } })).toThrow('超出');
+  } finally { service.close(); }
+});
+
+it('核对控台在不在跟：用推杆页存过的用户另开一个只读连接；没连过网页遥控时说明原因；失败后这首歌不再读，换下一首前清掉', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tblink-observer-test-'));
+  const secrets = { saveCredential: vi.fn<(_key: string, value: string) => Promise<void>>().mockResolvedValue(undefined), loadCredential: vi.fn().mockResolvedValue('test-secret') };
+  const bridge = { request: vi.fn().mockResolvedValue(JSON.stringify({ ...source, buttonPage: 1, faderPage: 1000, pages: [] })) };
+  const observer = { connect: vi.fn(() => Promise.resolve()), observe: vi.fn(() => Promise.resolve<{ running: boolean; cue: string; name: string } | null>({ running: true, cue: '    5 FuGe', name: 'Song' })), close: vi.fn() };
+  const service = new Ma2LiveService(join(dir, 'profiles.json'), secrets, () => bridge, () => observer as unknown as Ma2LivePlayback);
+  const observe = { network: request.network, page: 1000, slot: 101 };
+  try {
+    const unavailable = await service.observe(observe);
+    expect(unavailable.kind === 'unavailable' && unavailable.reason).toContain('网页遥控');
+    await service.connect(request);
+    mock.connect.mockClear();
+    expect(await service.observe(observe)).toEqual({ kind: 'executor', running: true, cue: '    5 FuGe', name: 'Song' });
+    expect(observer.connect).toHaveBeenCalledWith('test', 'test-secret');
+    expect(mock.connect).not.toHaveBeenCalled();
+    observer.observe.mockResolvedValueOnce(null);
+    expect(await service.observe(observe)).toEqual({ kind: 'empty' });
+    observer.observe.mockRejectedValueOnce(new Error('实时推杆读取超时，请重新连接'));
+    await expect(service.observe(observe)).rejects.toThrow('读取超时');
+    await expect(service.observe(observe)).rejects.toThrow('读取超时');
+    expect(observer.observe).toHaveBeenCalledTimes(3);
+    expect(mock.close).not.toHaveBeenCalled();
+    service.releaseObserver();
+    expect(await service.observe(observe)).toMatchObject({ kind: 'executor' });
   } finally { service.close(); }
 });

@@ -1,6 +1,6 @@
 import { ma2LayoutDirectoryRequestSchema, ma2LayoutDirectorySchema, ma2LayoutUpdateRequestSchema } from '@tb/schema';
 import { ma2ExecutorPageDirectorySchema, ma2ExecutorPageSchema, ma2ExecutorPageRequestSchema, ma2ExecutorUpdateRequestSchema, ma2ExecutorUpdateResultSchema, ma2ExecutorInputSchema } from '@tb/schema';
-import { ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2LiveSnapshotSchema } from '@tb/schema';
+import { ma2ExecutorObservationSchema, ma2ExecutorObserveRequestSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2LiveSnapshotSchema } from '@tb/schema';
 import { ma2NetworkTargetSchema, ma2TimecodeRangesSchema, ma2SongCheckRequestSchema, ma2SongSyncRequestSchema, ma2SongSyncResultSchema } from '@tb/schema';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { z } from 'zod';
@@ -142,6 +142,8 @@ const tbLink: LinkDesktopBridgeApi = {
   readMa2Live: async payload => ma2LiveSnapshotSchema.parse(await invoke('link:ma2-live-read', ma2LiveRequestSchema.parse(payload))),
   inputMa2Live: async payload => { await invoke('link:ma2-live-input', ma2LiveInputSchema.parse(payload)); },
   releaseMa2Live: async () => { await invoke('link:ma2-live-release'); },
+  observeMa2Executor: async payload => ma2ExecutorObservationSchema.parse(await invoke('link:ma2-observe-executor', ma2ExecutorObserveRequestSchema.parse(payload))),
+  releaseMa2Observer: async () => { await invoke('link:ma2-observer-release'); },
   updateMa2Layout: async payload => ma2LayoutSnapshotSchema.parse(await invoke('link:ma2-layout-update', ma2LayoutUpdateRequestSchema.parse(payload))),
   readMa2Layout: async payload => ma2LayoutSnapshotSchema.parse(await invoke('link:ma2-layout', ma2LayoutReadRequestSchema.parse(payload))),
   prepareMa2CueDeletion: async (payload, progress) => ma2CueDeletePlanSchema.parse(await readMa2('link:ma2-cue-delete-prepare', ma2CueDeletePrepareSchema.parse(payload), progress)),

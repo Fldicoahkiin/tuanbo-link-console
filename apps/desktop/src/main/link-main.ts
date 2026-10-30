@@ -57,7 +57,7 @@ import { Ma2NetworkSetup } from './link/ma2-network-setup';
 import { ma2NetworkSetupRequestSchema } from '@tb/schema';
 import { Ma2NetworkManager } from './link/ma2-network-manager';
 import { Ma2ConsoleBackups } from './link/ma2-console-backups';
-import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema } from '@tb/schema';
+import { ma2PlaybackRequestSchema, ma2NetworkSaveSchema, ma2LiveConnectSchema, ma2LiveInputSchema, ma2LiveRequestSchema, ma2ExecutorObserveRequestSchema } from '@tb/schema';
 import ma2PluginLua from '../../../../tools/ma2/tblink_bridge.lua?raw';
 import ma2PluginXml from '../../../../tools/ma2/tblink_bridge.xml?raw';
 import ma2PluginInstructions from '../../../../tools/ma2/README.md?raw';
@@ -1159,6 +1159,11 @@ function registerIpc(
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `推杆操作未完成：${String(error)}`, result: 'failed' }); throw error; }
   });
   handle('link:ma2-live-release', () => ma2Network.live().release());
+  handle('link:ma2-observe-executor', async (_event, value: unknown) => {
+    try { return await ma2Network.live().observe(ma2ExecutorObserveRequestSchema.parse(value)); }
+    catch (error) { await logger.record({ level: 'warning', category: 'device', device: 'MA2', message: `读不到控台执行器状态，这首歌不再核对控台在不在跟：${String(error)}`, result: 'failed' }); throw error; }
+  });
+  handle('link:ma2-observer-release', () => ma2Network.live().releaseObserver());
   handle('link:ma2-executor-page', async (_event, value: unknown) => {
     try { return await ma2Network.readExecutorPage(ma2ExecutorPageRequestSchema.parse(value)); }
     catch (error) { await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `读取执行器页面失败：${String(error)}`, result: 'failed' }); throw error; }
