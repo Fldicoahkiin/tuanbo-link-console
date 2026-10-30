@@ -86,11 +86,15 @@ export class Ma2AutoSync {
       this.dependencies.changed('reading', '正在检查控台和节目的修改');
       const catalog = ma2CatalogSchema.parse(await this.dependencies.catalog({ ...session.connection, targets: [] }));
       if (!current()) return;
-      if (JSON.stringify(catalog.directory) !== JSON.stringify(session.directory)) throw new Error('控台的 Show、插件连接或时间线有变化，请重新读取控台后再开启自动同步');
+      // Timecode shows come and go as songs are written, and the Show may be saved under a new name:
+      // neither stops the sync. What is written is matched by Timecode number and start (rule 3).
+      session.directory = catalog.directory;
+      let waitingRenames = 0;
       for (const change of renames) {
         if (!current()) return;
         const endpoint = session.connection.network ? `${session.connection.network.host}:${session.connection.network.port}` : '本机 onPC';
-        if (change.endpoint !== endpoint || change.show !== session.directory.show) throw new Error('要改名的 Cue 属于另一个控台或 Show，没有发送');
+        // Recorded under the console's previous name or address: it is sent once the session check has moved the project's references.
+        if (change.endpoint !== endpoint || change.show !== session.directory.show) { waitingRenames += 1; continue; }
         const stillPending = () => pendingMa2Renames(this.dependencies.state().project).some(value => ma2RenameKey(value) === ma2RenameKey(change) && value.name === change.name && value.confirmedName === change.confirmedName);
         if (!stillPending()) continue;
         await archiveBeforeWrite();
@@ -107,7 +111,7 @@ export class Ma2AutoSync {
       }
       if (session.scope === 'names') {
         const outstanding = pendingMa2Renames(this.dependencies.state().project).length;
-        this.dependencies.changed(outstanding ? 'staged' : 'verified', outstanding ? '上一个名称已确认，继续同步后面的改名' : '名称已写入控台并回读确认');
+        this.dependencies.changed(outstanding ? 'staged' : 'verified', waitingRenames ? MOVED_RENAMES : outstanding ? '上一个名称已确认，继续同步后面的改名' : '名称已写入控台并回读确认');
         return;
       }
       for (const item of unbound) {
@@ -176,7 +180,7 @@ export class Ma2AutoSync {
       const remaining = latest ? writable(latest, ma2PendingChanges(latest)) : [];
       const outstanding = remaining.length + pendingMa2Renames(latest).length;
       const still = latest ? heldBack(latest) : [];
-      this.dependencies.changed(outstanding || still.length ? 'staged' : 'verified', outstanding ? '上一项已确认，继续同步后面的修改' : still.length && latest ? `修改已同步到控台；${heldMessage(latest, still)}` : '修改已同步到控台');
+      this.dependencies.changed(outstanding || still.length ? 'staged' : 'verified', waitingRenames && outstanding ? MOVED_RENAMES : outstanding ? '上一项已确认，继续同步后面的修改' : still.length && latest ? `修改已同步到控台；${heldMessage(latest, still)}` : '修改已同步到控台');
     } catch (error) {
       this.session = null;
       this.dependencies.changed('blocked', error instanceof Error ? error.message : String(error));
@@ -186,6 +190,8 @@ export class Ma2AutoSync {
     }
   }
 }
+
+const MOVED_RENAMES = '控台换了 Show 名或地址，改名等核对完再发到控台';
 
 /**
  * Only a show that still starts where its song starts is written (lighting workflow rule 6); the edits

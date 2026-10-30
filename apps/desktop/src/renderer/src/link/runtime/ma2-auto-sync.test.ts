@@ -146,10 +146,12 @@ it('关闭自动同步不能提前释放已经发送的写入锁', async () => {
   expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', '写入超时');
   await test.runner.tick(); expect(test.dependencies.apply).toHaveBeenCalledOnce();
 });
-it('换 Show 后停止，后续周期不继续读写', async () => {
-  const test = setup(); test.edit(); test.catalog.directory.show = 'Other'; await test.runner.tick(); await test.runner.tick();
-  expect(test.dependencies.catalog).toHaveBeenCalledTimes(1); expect(test.dependencies.read).not.toHaveBeenCalled();
-  expect(test.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('Show'));
+it('控台 Show 另存了新名字、又新建了时间码节目：照常读回并写入，不停下（2026-10-30）', async () => {
+  const test = setup(); test.edit();
+  test.catalog.directory.show = 'Test 10.28'; test.catalog.directory.entries = [{ target: 9903, name: '新歌' }];
+  await test.runner.tick();
+  expect(test.dependencies.read).toHaveBeenCalledOnce(); expect(test.dependencies.apply).toHaveBeenCalledOnce();
+  expect(vi.mocked(test.dependencies.changed).mock.calls.some(([status, message]) => status === 'blocked' && message.includes('Show'))).toBe(false);
 });
 it('同一项两边都改过时以软件为准写入，不停止自动同步（2026-10-26）', async () => {
   const test = setup(); test.edit();

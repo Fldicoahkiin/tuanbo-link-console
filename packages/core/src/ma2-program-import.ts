@@ -1,6 +1,7 @@
 import { ma2EffectLibrarySchema, type Ma2EffectLibrary, ma2TimecodePreviewSchema, ma2ReadStateSchema, parseLinkProject, type Ma2TimecodePreview, type Ma2ReadState } from '@tb/schema';
 import type { LinkCommand } from './link-command';
 import { importMa2TimecodeCommand } from './ma2-import';
+import { ma2MaterialPlace, retargetMa2References } from './ma2-console-identity';
 
 export function saveMa2ReadStateCommand(input: Ma2ReadState, historyGroup?: string): LinkCommand {
   const state = ma2ReadStateSchema.parse(input);
@@ -28,7 +29,12 @@ export function importMa2ProgramsCommand(selections: readonly { itemId: string; 
   }, undo: before => parseLinkProject(before) };
 }
 
+/** Saving a library read under another Show name or address moves the project's console references with it. */
 export function saveMa2MaterialLibraryCommand(source: string, input: Ma2EffectLibrary, historyGroup?: string): LinkCommand {
   const library = ma2EffectLibrarySchema.parse(input);
-  return { id: crypto.randomUUID(), ...(historyGroup ? { historyGroup } : {}), label: '保存工程控台素材目录', execute: project => parseLinkProject({ ...project, schemaVersion: 2, ma2MaterialLibrary: { ...project.ma2MaterialLibrary, version: project.ma2MaterialLibrary?.userLibrary ? 2 : 1, source, library }, updatedAt: new Date().toISOString() }), undo: before => parseLinkProject(before) };
+  return { id: crypto.randomUUID(), ...(historyGroup ? { historyGroup } : {}), label: '保存工程控台素材目录', execute: project => {
+    const from = ma2MaterialPlace(project);
+    const moved = from ? retargetMa2References(project, from, { endpoint: source, show: library.directory.show }, library.directory.entries) : project;
+    return parseLinkProject({ ...moved, schemaVersion: 2, ma2MaterialLibrary: { ...moved.ma2MaterialLibrary, version: moved.ma2MaterialLibrary?.userLibrary ? 2 : 1, source, library }, updatedAt: new Date().toISOString() });
+  }, undo: before => parseLinkProject(before) };
 }

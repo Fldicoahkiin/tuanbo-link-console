@@ -77,12 +77,12 @@ it('超时或冲突后保留改名，不自动重试或冒充确认', async () =
   expect(pendingMa2Renames(store.getState().project)).toHaveLength(1);
   expect(t.dependencies.changed).toHaveBeenLastCalledWith('blocked', '结果未知');
 });
-it('换 Show 阻断，不把旧名称发送到新控台', async () => {
+it('控台 Show 换了名字：改名先不发，等工程的控台引用跟过去再发；同步不停下（2026-10-30）', async () => {
   const t = setup(); t.start(); t.rename('Changed');
   const catalog = await t.dependencies.catalog({ dataDirectory: '' });
   t.dependencies.catalog = () => Promise.resolve({ ...catalog, directory: { ...catalog.directory, show: 'Other' } });
   await t.runner.tick(); expect(t.dependencies.rename).not.toHaveBeenCalled();
-  expect(t.dependencies.changed).toHaveBeenLastCalledWith('blocked', expect.stringContaining('Show'));
+  expect(t.dependencies.changed).toHaveBeenLastCalledWith('staged', '控台换了 Show 名或地址，改名等核对完再发到控台');
 });
 it('特殊命令字符被拒绝；英文、中文及单引号可用', () => {
   const t = setup(); expect(() => t.rename('"; Off All')).toThrow(); expect(() => t.rename('New\nName')).toThrow();

@@ -160,7 +160,11 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         const { host, port, monitorPort, username } = networkStatus.settings;
         const network = { host, port, monitorPort, username };
         const endpoint = `${host}:${port}`;
-        if (endpoint !== materials.source) throw new Error('素材来源与当前控台不一致');
+        // Reached at another address: the session check moves the project's references first, then this song continues.
+        if (endpoint !== materials.source) {
+          update(entry, { state: 'pending', checking: false, nextCheckAt: Date.now() + 1000, message: '控台换了地址，核对后接着同步' });
+          continue;
+        }
         const { show, generation, version } = materials.library.directory;
         // A song without an MTC start gets one before its first show is written: after every show on
         // the console and every other song, kept through undo like a console read-back.
@@ -219,7 +223,8 @@ export async function tickMa2SongSync(playing: boolean): Promise<void> {
         if (after.documentId !== entry.documentId) throw new Error('控台操作已完成，但工程已切换，请回到原来的工程确认');
         const current = after.project?.rundown.find(value => value.id === entry.itemId)?.lighting;
         if (!current || !after.project) throw new Error('歌曲已删除，控台上的结果保留，请读取控台确认');
-        const locationIdentity = (binding: typeof current.consoleSong) => binding ? JSON.stringify([binding.endpoint, binding.show, binding.sequence, binding.layout, binding.executor, binding.assignment]) : '';
+        // The console's address and Show name may follow the console meanwhile; the song's place on it may not.
+        const locationIdentity = (binding: typeof current.consoleSong) => binding ? JSON.stringify([binding.sequence, binding.layout, binding.executor, binding.assignment]) : '';
         if (locationIdentity(current.consoleSong) !== locationIdentity(item.lighting.consoleSong)) continue;
         // The binding changed, or the points the console now confirms do: an empty Cue becomes a reference to its new Cue.
         if (JSON.stringify(current.consoleSong) !== JSON.stringify(result.binding) || JSON.stringify(ma2SongPoints(applyMa2SongReadback(current, points, result))) !== JSON.stringify(ma2SongPoints(current))) {

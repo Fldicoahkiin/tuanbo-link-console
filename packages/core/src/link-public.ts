@@ -30,6 +30,7 @@ export * from './ma2-readback';
 export * from './ma2-bound-sync';
 export * from './ma2-import';
 export * from './ma2-program-import';
+export * from './ma2-console-identity';
 export * from './ma2-time-origin';
 export * from './ma2-program-matching';
 export * from './ma2-pairing-state';

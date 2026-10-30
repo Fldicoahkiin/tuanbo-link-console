@@ -11,7 +11,7 @@ import { prepareMa2RealtimeSession, pauseMa2RealtimeSession, refreshMa2RealtimeS
 import { convertMa2LegacyNames, legacyMa2ConsoleNames } from './ma2-legacy-names';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
-const { recordLog } = vi.hoisted(() => ({ recordLog: vi.fn(() => Promise.resolve()) }));
+const { recordLog } = vi.hoisted(() => ({ recordLog: vi.fn<(entry: { level: string; message: string }) => Promise<void>>(() => Promise.resolve()) }));
 vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { recordLog } }));
 const { archive } = vi.hoisted(() => ({ archive: vi.fn() }));
 vi.mock('./ma2-project-archive', () => ({ archiveMa2Project: archive }));
@@ -438,17 +438,13 @@ it('播放中不启动目录扫描，不把读取被播放打断误报为同步�
   expect(metadata).not.toHaveBeenCalled(); expect(status).not.toHaveBeenCalled();
   expect(useMa2AutoSyncStore.getState().status).toBe('waiting');
 });
-it('来源不符保留修改，只检查连接状态；恢复原控台后自动重新核对', async () => {
-  vi.useFakeTimers();
-  status.mockResolvedValue({ state: 'connected', settings: { host: '192.0.2.2', port: 30000 } });
-  await prepareMa2RealtimeSession(); await prepareMa2RealtimeSession();
-  expect(useMa2AutoSyncStore.getState().status).toBe('blocked');
-  expect(useMa2AutoSyncStore.getState().message).toContain('不是同一来源');
-  expect(status).toHaveBeenCalledTimes(2); expect(catalog).not.toHaveBeenCalled(); expect(useMa2SongSyncStore.getState().songs).toEqual({});
-  status.mockResolvedValue({ state: 'connected', settings: { host: '192.0.2.1', port: 30000, monitorPort: 30001, username: 'test' } });
-  vi.advanceTimersByTime(1001);
-  await prepareMa2RealtimeSession();
+it('控台换了 IP：按编号认作同一台控台，素材来源跟过去，歌曲照常进入同步（2026-10-30）', async () => {
+  status.mockResolvedValue({ state: 'connected', settings: { host: '192.0.2.2', port: 30000, monitorPort: 30001, username: 'test' } });
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  expect(useDocumentStore.getState().project?.ma2MaterialLibrary?.source).toBe('192.0.2.2:30000');
+  expect(useMa2AutoSyncStore.getState().status).not.toBe('blocked');
   expect(Object.keys(useMa2SongSyncStore.getState().songs)).toEqual(['first', 'second']);
+  expect(recordLog.mock.calls.some(([entry]) => entry.level === 'info' && entry.message.includes('按编号接着同步'))).toBe(true);
 });
 it('会话检查偶发失败后，下一次核对成功即解除待核对，不需要手动按钮', async () => {
   vi.useFakeTimers();
@@ -499,13 +495,17 @@ it('桥重启后先核对同一 Show 的新 generation，再续接原歌曲，�
   expect(Object.fromEntries(Object.entries(useMa2SongSyncStore.getState().songs).map(([key, song]) => [key, song.sessionId]))).toEqual(sessions);
   expect(catalog).not.toHaveBeenCalled(); expect(sync).not.toHaveBeenCalled();
 });
-it('不同 Show 不改素材来源与本地编排，也不将已连接误认成可以同步', async () => {
-  metadata.mockResolvedValue({ ...project().ma2MaterialLibrary!.library, directory: { ...source, show: 'another-show', generation: 'other', entries: [] } });
-  const before = useDocumentStore.getState();
-  expect(await prepareMa2RealtimeSession()).toBe(false);
-  expect(useDocumentStore.getState().revision).toBe(before.revision);
-  expect(useDocumentStore.getState().project).toBe(before.project);
-  expect(useMa2SongSyncStore.getState().songs).toEqual({});
+it('控台上 Show 另存了新名字（或重启后打开）：不用重新读取，素材和歌曲的控台位置跟着改名，照常同步（2026-10-30）', async () => {
+  const value = project();
+  value.rundown[0]!.lighting!.consoleSong = { endpoint: '192.0.2.1:30000', show: source.show, layout: null, executor: '1000.101', sequence: 9000, name: 'first', baselineXml: '<MA/>', points: [] };
+  useDocumentStore.getState().setProject(value, 'song.tblink');
+  metadata.mockResolvedValue({ ...value.ma2MaterialLibrary!.library, directory: { ...source, show: 'Show 10.28', generation: 'other', entries: [{ target: 9000, name: 'first' }] } });
+  expect(await prepareMa2RealtimeSession()).toBe(true);
+  const after = useDocumentStore.getState().project!;
+  expect(after.ma2MaterialLibrary?.library?.directory.show).toBe('Show 10.28');
+  expect(after.rundown[0]!.lighting!.consoleSong).toMatchObject({ show: 'Show 10.28', sequence: 9000 });
+  expect(useMa2AutoSyncStore.getState().status).not.toBe('blocked');
+  expect(Object.keys(useMa2SongSyncStore.getState().songs)).toEqual(['first', 'second']);
 });
 it('会话目录回读途中切换为 MIDI，不应用迟到 generation 或创建歌曲队列', async () => {
   let finish: (value: unknown) => void = () => { throw new Error('metadata not started'); };

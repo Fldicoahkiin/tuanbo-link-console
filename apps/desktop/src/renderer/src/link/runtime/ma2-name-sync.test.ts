@@ -36,13 +36,13 @@ it('已有明确启用的全量同步会话不被右键改名重置', async () =
   expect(useMa2AutoSyncStore.getState().request).toBe(request);
   expect(ma2MaterialConnection).not.toHaveBeenCalled();
 });
-it('未保存工程或控台会话变化不会开启写回', async () => {
+it('未保存工程不开启写回；控台会话变了时先不写，等会话核对把工程的控台引用跟过去后再发（不报错）', async () => {
   useDocumentStore.setState({ path: null });
   await expect(enableMa2NameSync(useDocumentStore.getState().documentId)).rejects.toThrow('先保存');
   expect(ma2MaterialConnection).not.toHaveBeenCalled();
   useDocumentStore.setState({ path: 'test.tblink' });
   readCatalog.mockResolvedValue({ ...catalog, directory: { ...catalog.directory, generation: 'other' } });
-  await expect(enableMa2NameSync(useDocumentStore.getState().documentId)).rejects.toThrow('控台或 Show 有变化');
+  await expect(enableMa2NameSync(useDocumentStore.getState().documentId)).resolves.toBeUndefined();
   expect(useMa2AutoSyncStore.getState().request).toBeNull();
 });
 it('回读期间切换工程不启用旧工程的名称写回', async () => {

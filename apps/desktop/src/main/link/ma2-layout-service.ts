@@ -270,7 +270,15 @@ export class Ma2LayoutService {
         if (occupied.has(target) || shows.has(target)) throw new Error('起始序列后面没有序列和时间码节目都空着的编号了，请改一个起始序列');
         request.settings.nextSequence = target;
       }
-      if (request.binding && (request.binding.endpoint !== endpoint || request.binding.show !== directory.show || request.binding.layout !== null && request.settings.layout !== request.binding.layout)) throw new Error('这首歌绑定的控台、Show 或页面有变化，请先确认原来的位置');
+      if (request.binding && request.binding.layout !== null && request.settings.layout !== request.binding.layout) throw new Error('这首歌绑定的页面有变化，请先确认原来的位置');
+      // A Show saved under a new name, or the console reached at another address, is the same console
+      // (2026-10-30) while the song's Sequence there still carries the name the song wrote.
+      if (request.binding && (request.binding.endpoint !== endpoint || request.binding.show !== directory.show)) {
+        const there = directory.entries.find(entry => entry.target === target);
+        if (there && there.name !== request.binding.name && there.name !== toConsoleLabel(request.binding.name)) {
+          throw new Error(`控台上序列 ${target} 现在叫“${there.name}”，不是这首歌写过的“${request.binding.name}”，可能打开了另一个 Show。这首歌先不同步，请在控台上确认`);
+        }
+      }
       const key = `${endpoint}/${directory.show}/${target}`;
       if (request.binding && owners.some(value => value.key === key && (value.projectId !== request.projectId || value.itemId !== request.itemId))) throw new Error('这个位置已经关联了另一首歌，请检查歌曲绑定');
       // Confirm the destination before importing or renaming any song content.

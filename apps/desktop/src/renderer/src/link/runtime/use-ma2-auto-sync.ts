@@ -28,7 +28,10 @@ export async function enableMa2NameSync(documentId: number): Promise<void> {
   const catalog = await window.tbLink.readMa2Catalog({ ...connection, targets: [] });
   const materials = current().project?.ma2MaterialLibrary;
   const endpoint = connection.network ? `${connection.network.host}:${connection.network.port}` : '本机 onPC';
-  if (!materials?.library || materials.source !== endpoint || materials.library.directory.show !== catalog.directory.show || materials.library.directory.generation !== catalog.directory.generation || materials.library.directory.version !== catalog.directory.version) throw new Error('新名称已改到工程里，但控台或 Show 有变化，请重新读取控台后再同步');
+  if (!materials?.library) throw new Error('新名称已改到工程里，请先读取控台素材再同步');
+  // The console moved (another Show name, address or session): the realtime session check moves the
+  // project's references first and then sends the pending names itself.
+  if (materials.source !== endpoint || materials.library.directory.show !== catalog.directory.show || materials.library.directory.generation !== catalog.directory.generation || materials.library.directory.version !== catalog.directory.version) return;
   const latest = useMa2AutoSyncStore.getState();
   if (latest.request && latest.status !== 'blocked' && latest.status !== 'off') return;
   useMa2AutoSyncStore.setState({ request: { connection, catalog, scope: 'names' } });

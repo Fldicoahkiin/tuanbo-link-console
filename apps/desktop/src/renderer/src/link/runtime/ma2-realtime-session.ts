@@ -8,6 +8,7 @@ import { setMa2RealtimeEnabled, useMa2RealtimePreference } from './ma2-realtime-
 import { useMa2AutoSyncStore } from '../stores/ma2-auto-sync-store';
 import { useMtcStartAllocationStore } from '../stores/mtc-start-allocation-store';
 import { reportCoordinatorError } from './runtime-action-log';
+import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 
 let preparing = false;
 let sessionDocument = -1;
@@ -57,11 +58,11 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
       return false;
     }
     const { host, port, monitorPort, username } = status.settings;
+    const endpoint = `${host}:${port}`;
     context = JSON.stringify([state.documentId, state.revision, material.source, material.library.directory.show, material.library.directory.generation, material.library.directory.version, host, port]);
-    if (material.source !== `${host}:${port}`) throw new Error('当前控台和工程里的素材不是同一来源，请先读取当前控台再同步');
     if (!current()) return false;
     const connection = { dataDirectory: '', network: { host, port, monitorPort, username } };
-    const sourceKey = JSON.stringify([state.documentId, material.source, material.library.directory.show, material.library.directory.generation, material.library.directory.version]);
+    const sourceKey = JSON.stringify([state.documentId, endpoint, material.source, material.library.directory.show, material.library.directory.generation, material.library.directory.version]);
     if (verifiedSource !== sourceKey || Date.now() >= nextSourceCheck) {
       if (!verifiedSource && Date.now() < nextSourceCheck) return false;
       // The lightweight directory is verified twice by the adapter; no Cue XML
@@ -74,13 +75,19 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
         || cache.library.directory.generation !== material.library.directory.generation || cache.library.directory.version !== material.library.directory.version) return false;
       const directory = metadata.directory;
       if (metadata.sourceUnverified || metadata.incomplete) throw new Error('控台还没读完，本地修改已保留，请稍后重新读取');
-      if (directory.show !== cache.library.directory.show || directory.version !== cache.library.directory.version) throw new Error('控台的 Show 或版本变了，工程里的修改已保留，请读取当前控台后确认');
-      if (directory.generation !== cache.library.directory.generation) {
+      // The console is known by its object numbers (2026-10-30): a Show saved under a new name, another
+      // address or a restarted bridge is the same console, and the project's references move with it.
+      const moved = cache.source !== endpoint || directory.show !== cache.library.directory.show || directory.version !== cache.library.directory.version;
+      if (moved || directory.generation !== cache.library.directory.generation) {
         const exists = (sequence: number): boolean => directory.entries.some(entry => entry.target === sequence);
+        if (moved) void linkDesktopViewModel.recordLog({ level: 'info', category: 'device', device: 'MA2',
+          message: `控台现在是 ${endpoint} 上的“${directory.show}”（工程上次读的是 ${cache.source} 上的“${cache.library.directory.show}”），按编号接着同步`,
+          details: { from: { endpoint: cache.source, show: cache.library.directory.show, generation: cache.library.directory.generation, version: cache.library.directory.version },
+            to: { endpoint, show: directory.show, generation: directory.generation, version: directory.version } } }).catch(console.error);
         // Keep cached fixture data explicitly at its original readAt. This
         // advances only the verified session/directory; song content is still
         // compared against native snapshots before each write.
-        latest.executeForDocument(state.documentId, saveMa2MaterialLibraryCommand(cache.source, {
+        latest.executeForDocument(state.documentId, saveMa2MaterialLibraryCommand(endpoint, {
           ...cache.library, directory,
           sequences: cache.library.sequences.filter(sequence => exists(sequence.sequence)),
           fixtureUsage: cache.library.fixtureUsage.filter(entry => exists(entry.sequence)),
@@ -93,7 +100,7 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
           useMa2SongSyncStore.setState(value => ({ songs: { ...value.songs, [song.itemId]: { ...song, nextCheckAt: 0, consecutiveFailures: 0 } } }));
         }
       }
-      verifiedSource = JSON.stringify([state.documentId, cache.source, directory.show, directory.generation, directory.version]);
+      verifiedSource = JSON.stringify([state.documentId, endpoint, endpoint, directory.show, directory.generation, directory.version]);
       nextSourceCheck = Date.now() + 5000;
     }
     if (!current()) return false;
@@ -122,7 +129,8 @@ export async function prepareMa2RealtimeSession(): Promise<boolean> {
     }
     const catalog = await window.tbLink.readMa2Catalog({ ...connection, targets: [] });
     const source = project.ma2MaterialLibrary!.library!.directory;
-    if (catalog.directory.show !== source.show || catalog.directory.generation !== source.generation || catalog.directory.version !== source.version) throw new Error('控台的 Show 或连接变了，请刷新素材后确认');
+    // Changed between the two reads: the next pass moves the project's references first.
+    if (catalog.directory.show !== source.show || catalog.directory.generation !== source.generation || catalog.directory.version !== source.version) { verifiedSource = ''; return false; }
     if (!current()) return false;
     blockedContext = context; sessionBlocked = false;
     useMa2AutoSyncStore.setState({ request: { connection, catalog, scope: hasBindings ? 'bound' : 'names' } });
