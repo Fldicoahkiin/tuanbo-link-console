@@ -1,4 +1,4 @@
-import type { CueActionRunner, CueRuntime, ManagedMediaEvent, PreflightMode, RuntimeUpdate } from '@tb/core/link';
+import type { CueActionRunner, ManagedMediaEvent, PreflightMode, RuntimeUpdate } from '@tb/core/link';
 import type { LinkCue, LinkProject } from '@tb/schema';
 import { ManagedMediaExecutionError, type ManagedOutputRuntime } from '@tb/core/link';
 import { useRuntimeStore } from '../stores/runtime-store';
@@ -36,20 +36,6 @@ export async function synchronizeTimelineTransport(project: LinkProject, itemId:
   const work = sceneOutputAt(project, itemId, frame);
   // Internal audio resumes the paused decoder; don't seek/restart it a second time.
   await execute(work.cues, project.playbackSource === 'internal' ? [] : work.media);
-}
-
-/** Recovery rule B after OBS reconnects mid-song (internal playback): OBS lost the
- * owned scenes' state, so the picture at the current frame is rebuilt from nothing:
- * camera or composition, every clip on air started in step, shown sources in their
- * span. Returns how many outputs were sent. */
-export async function rebuildTimelinePicture(frame: () => number, runtime: CueRuntime, managed: ManagedOutputRuntime,
-  execute: (cues: RuntimeUpdate['dueCues'], media: ManagedMediaEvent[]) => Promise<void>): Promise<number> {
-  const timeline = managed.sceneTimeline, at = frame();
-  if (!timeline) return 0;
-  managed.adoptSeek([], at);
-  const work = timeline.restore(at, runtime.shownSourcesAt(at));
-  await execute(work.cues, work.media);
-  return work.cues.length + work.media.length;
 }
 
 /** Operator retry of a failed or missed action, as last reported in this run. */

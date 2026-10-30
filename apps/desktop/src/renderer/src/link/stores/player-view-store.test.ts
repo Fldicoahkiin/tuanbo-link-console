@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { emptyInternalPlayerState } from '../runtime/internal-playback-controller';
+import { emptyInternalPlayerState } from '@tb/core/link';
 import { PlayerViewStore } from './player-view-store';
 
 it('连续设备时钟只通知时钟订阅者，保留每次原始偏移与完整发送位置', () => {

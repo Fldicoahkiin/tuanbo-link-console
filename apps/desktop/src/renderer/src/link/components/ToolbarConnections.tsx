@@ -98,7 +98,7 @@ export function ToolbarConnections({ player, statusHost, onSettings }: { player:
   for (const target of targets) {
     const mapped = profile?.midiPortProfiles.find(port => port.id === target.id && port.direction === target.direction);
     const matching = ports.filter(port => port.name === mapped?.portName && port.direction === target.direction && port.state === 'connected');
-    const nativeOutput = usesNativeMidiOutput(profile, project, target.direction);
+    const nativeOutput = usesNativeMidiOutput(project, target.direction);
     const available = nativeOutput ? nativeDevices?.midiOutputs.filter(port => port.name === mapped?.portName).length === 1 : matching.length === 1;
     const open = !nativeOutput && available && matching[0]?.connection === 'open';
     const key = 'port:' + target.id;

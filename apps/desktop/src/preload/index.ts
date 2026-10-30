@@ -282,7 +282,6 @@ const tbLink: LinkDesktopBridgeApi = {
   getObsSourceScreenshot: (payload) => invoke('link:obs-source-screenshot', payload),
   executeObsAction: (action) => invoke('link:obs-execute', action),
   activateManagedObsOutput: () => invoke('link:obs-activate-managed-output'),
-  setInternalAudioCapture: (enabled, sceneNames) => invoke('link:obs-internal-audio', { enabled, sceneNames }),
   executeManagedMediaEvent: (payload) => invoke('link:obs-execute-managed-media', payload),
   seekManagedMedia: (payload) => invoke('link:obs-seek-managed-media', payload),
   startExternalApplication: (id) => invoke('link:process-start', id),

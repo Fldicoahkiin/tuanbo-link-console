@@ -26,17 +26,14 @@ it('退出占用软件后刷新，同一份列表更新设置页并记录两套�
   const open = vi.spyOn(monitor, 'openOutputs');
   await readAndStoreMidiPorts(monitor);
   const state = useIntegrationStore.getState();
-  expect(midiOutputInventory('browser', state.midiPorts, state.nativeDevices, '').options).toContainEqual({ name: usb.name, available: true, reason: '' });
+  expect(midiOutputInventory(state.nativeDevices, '').options).toContainEqual({ name: usb.name, available: true, reason: '' });
   expect(api.recordLog.mock.calls[0]?.[0].details?.browserPorts).toEqual([babyface, usb]);
   expect(api.recordLog.mock.calls[0]?.[0].details?.windowsOutputs).toEqual(native.midiOutputs);
   expect(open).not.toHaveBeenCalled();
 });
 
-it('Windows 看得到但浏览器漏枚举的 USB 仍展示原因，不能冒充浏览器可连接', () => {
-  const browser = midiOutputInventory('browser', [babyface], native, usb.name);
-  expect(browser.windowsOnly).toEqual([usb.name]);
-  expect(browser.options.find(option => option.name === usb.name)).toEqual({ name: usb.name, available: false, reason: '当前播放方式识别不到' });
-  expect(midiOutputInventory('native', [babyface], native, usb.name).options.find(option => option.name === usb.name)?.available).toBe(true);
+it('时间码输出列 Windows 看得到的接口：浏览器漏枚举的 USB 接口也能选', () => {
+  expect(midiOutputInventory(native, usb.name).options.find(option => option.name === usb.name)?.available).toBe(true);
 });
 
 it('刷新失败清除旧可用列表但保留已选名称，Windows 检测仍可独立完成', async () => {
@@ -46,7 +43,7 @@ it('刷新失败清除旧可用列表但保留已选名称，Windows 检测仍�
   const state = useIntegrationStore.getState();
   expect(state.midiPorts).toEqual([]);
   expect(state.nativeDevices).toEqual(native);
-  expect(midiOutputInventory('browser', state.midiPorts, null, usb.name).options).toEqual([{ name: usb.name, available: false, reason: '未检测到' }]);
+  expect(midiOutputInventory(null, usb.name).options).toEqual([{ name: usb.name, available: false, reason: '未检测到' }]);
 });
 
 it('Windows 检测失败不阻止浏览器 MIDI 刷新，不使用过期原生列表', async () => {

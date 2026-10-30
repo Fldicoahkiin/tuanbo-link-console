@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyLinkProject, createLightingDocument, linkCueSchema, parseLinkProject, type NativePlayerControl, type NativePlayerPrepare, type NativePlayerStatus, type NativeObsPrepare, type NativeObsStatus } from '@tb/schema';
 import { NativeProgramPlayer, type ProgramLightingOutput } from '@tb/core/link';
-import { emptyInternalPlayerState } from './internal-playback-controller';
+import { emptyInternalPlayerState } from '@tb/core/link';
 import { nativeProgramSnapshot } from '@tb/core/link';
 import type { NativeObsPreload } from '@tb/schema';
 

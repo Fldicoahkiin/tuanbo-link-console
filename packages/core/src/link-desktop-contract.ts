@@ -401,7 +401,6 @@ export type LinkDesktopApi = {
   /** Full-scene mode: show or hide a source in the scene currently on program. */
   setObsProgramSourceEnabled(sourceName: string, enabled: boolean): Promise<void>;
   activateManagedObsOutput(): Promise<void>;
-  setInternalAudioCapture(enabled: boolean, sceneNames?: string[]): Promise<void>;
   executeManagedMediaEvent(payload: { projectPath: string; event: import('./managed-media-timeline').ManagedMediaEvent }): Promise<void>;
   seekManagedMedia(payload: { projectPath: string; event: import('./managed-media-timeline').ManagedMediaEvent }): Promise<void>;
   startExternalApplication(id: LinkProcessSnapshot['id']): Promise<LinkProcessSnapshot>;

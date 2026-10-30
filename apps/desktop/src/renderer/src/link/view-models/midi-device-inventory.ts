@@ -39,16 +39,13 @@ export async function readAndStoreMidiPorts(monitor: LinkMidiAdapter): Promise<M
   return ports;
 }
 
-export function midiOutputInventory(engine: 'browser' | 'native', ports: readonly MidiPortSnapshot[], native: NativePlaybackDevices | null, selected: string): {
-  available: string[]; windowsOnly: string[]; options: { name: string; available: boolean; reason: string }[];
+/** Timecode leaves through the native player, so the outputs Windows lists are the ones it can open. */
+export function midiOutputInventory(native: NativePlaybackDevices | null, selected: string): {
+  available: string[]; options: { name: string; available: boolean; reason: string }[];
 } {
-  const browser = ports.filter(port => port.direction === 'output' && port.state === 'connected').map(port => port.name);
-  const windows = native?.midiOutputs.map(port => port.name) ?? [];
-  const available = engine === 'native' ? windows : browser;
-  const windowsOnly = engine === 'browser' ? windows.filter(name => !browser.includes(name)) : [];
-  const names = [...new Set([...available, ...windowsOnly, ...(selected ? [selected] : [])])];
-  return { available, windowsOnly, options: names.map(name => ({ name, available: available.includes(name),
-    reason: windowsOnly.includes(name) ? '当前播放方式识别不到' : available.includes(name) ? '' : '未检测到' })) };
+  const available = native?.midiOutputs.map(port => port.name) ?? [];
+  const names = [...new Set([...available, ...(selected ? [selected] : [])])];
+  return { available, options: names.map(name => ({ name, available: available.includes(name), reason: available.includes(name) ? '' : '未检测到' })) };
 }
 
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }

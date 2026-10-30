@@ -97,7 +97,6 @@ import {
   linkUnsavedChangesReasonSchema,
   type LinkDocumentState,
   linkRuntimeActiveSchema,
-  linkInternalAudioCaptureSchema,
   linkExternalApplicationIdSchema,
   linkFilePathSchema,
   linkIntegrationProfileSavePayloadSchema,
@@ -2072,16 +2071,6 @@ function registerIpc(
     return obs.setSourceEnabledInProgramScene(request.sourceName, request.enabled);
   });
   handle('link:obs-activate-managed-output', () => obs.activateManagedOutput());
-  handle('link:obs-internal-audio', async (_event, value: unknown) => {
-    if (!mainWindow) throw new Error('主控窗口不存在');
-    const profile = await requireProfile(profileStore);
-    const payload = linkInternalAudioCaptureSchema.parse(value);
-    if (payload.enabled && nativePlayer?.status && nativePlayer.status.status !== 'stopped') {
-      const identity = nativePlayer.audioCaptureIdentity;
-      return obs.setInternalAudioCapture(true, identity.executable, identity.title, identity.audioDeviceId, payload.sceneNames, identity.windowClass);
-    }
-    return obs.setInternalAudioCapture(payload.enabled, basename(process.execPath), mainWindow.getTitle(), profile.internalPlayer?.audioOutputDeviceId ?? 'default', payload.sceneNames);
-  });
   handle('link:obs-execute-managed-media', async (_event, payloadValue: unknown) => {
     const payload = linkManagedMediaExecutionPayloadSchema.parse(payloadValue);
     await projectAccess.assetFiles(payload.projectPath, [payload.event.relativePath]);

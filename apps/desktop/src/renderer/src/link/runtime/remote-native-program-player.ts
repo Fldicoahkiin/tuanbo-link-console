@@ -3,6 +3,10 @@ import { emptyInternalPlayerState, nativeAudioAnalysis, toUserErrorMessage,
 import type { LinkProject, NativePlayerStatus, NativeProgramAttachment, NativeProgramEvent, NativeProgramOperation } from '@tb/schema';
 
 type Api = Pick<LinkDesktopApi, 'openNativeProgram' | 'controlNativeProgram' | 'onNativeProgramEvent' | 'onNativePlaybackStatus'>;
+/** What the window supplies: settings to play with, and where to show and log what happens. */
+export type RemotePlayerDependencies = Pick<InternalPlayerDependencies, 'configuration' | 'changed' | 'preciseSeeking'> & {
+  notice: (message: string, itemId: string | null) => void;
+};
 
 /** UI controller is a remote for the main-process program host. It never
  * schedules playback, sends lighting, or invents time while the UI is busy. */
@@ -23,7 +27,7 @@ export class RemoteNativeProgramPlayer {
     subscribeBoundary: listener => { this.boundaries.add(listener); return () => { this.boundaries.delete(listener); }; }
   };
 
-  constructor(private readonly project: LinkProject, projectPath: string, revision: number, private readonly dependencies: InternalPlayerDependencies,
+  constructor(private readonly project: LinkProject, projectPath: string, revision: number, private readonly dependencies: RemotePlayerDependencies,
     private readonly api: Api, private readonly observed: (event: NativeProgramEvent) => void) {
     const program = api.onNativeProgramEvent(event => {
       if (this.disposed || event.ownerId !== this.ownerId || event.sequence <= this.sequence) return;
@@ -92,6 +96,6 @@ export class RemoteNativeProgramPlayer {
     if (this.disposed) return;
     const message = toUserErrorMessage(error);
     this.state = { ...this.state, status: 'error', error: message, errorTitle: '播放控制失败' };
-    this.dependencies.changed(this.state); this.dependencies.notice?.(message, this.state.itemId);
+    this.dependencies.changed(this.state); this.dependencies.notice(message, this.state.itemId);
   }
 }

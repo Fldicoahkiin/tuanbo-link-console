@@ -33,7 +33,8 @@ export async function verifyObsProgramPlayback({ page, directory, profile, contr
   const onScene = event => observedScenes.push({ sceneName: event.sceneName, at: Date.now() });
   control.on('CurrentProgramSceneChanged', onScene);
   try {
-    for (const scenario of [{ engine: 'browser', hidden: false }, { engine: 'native', hidden: false }, { engine: 'browser', hidden: true }]) {
+    // One playback engine since 0.5.6: Windows native audio, with the window shown and hidden.
+    for (const scenario of [{ engine: 'native', hidden: false }, { engine: 'native', hidden: true }]) {
       const { engine, hidden } = scenario;
       await page.evaluate(async ({ profile, file, engine }) => {
         await globalThis.window.tbLink.saveIntegrationProfile({ profile: { ...profile, internalPlayer: { audioEngine: engine, nativeAudioOutputDeviceId: 'default', audioOutputDeviceId: 'default', mtcOutputPortProfileId: null, audioSampleRate: 48000 } } });
@@ -55,14 +56,8 @@ export async function verifyObsProgramPlayback({ page, directory, profile, contr
       await expect.poll(() => observedScenes.map(event => event.sceneName), { timeout: 5000, intervals: [20, 50] }).toEqual(['验收机位甲', '验收机位乙', '验收机位甲']);
       const scenes = [...observedScenes];
       assert.equal((await control.call('GetCurrentProgramScene')).currentProgramSceneName, '验收机位甲');
-      if (engine === 'native') {
-        const status = await page.evaluate(() => globalThis.window.tbLink.getNativePlaybackStatus());
-        assert.equal(status.offsetMs, 480500);
-      }
-      if (hidden) {
-        const logs = await page.evaluate(() => globalThis.window.tbLink.queryLogs());
-        assert(logs.some(entry => entry.device === 'OBS 音乐采集' && entry.result === 'failed'), 'Hidden-window capture failure must be explicit, not disguised as success');
-      }
+      const status = await page.evaluate(() => globalThis.window.tbLink.getNativePlaybackStatus());
+      assert.equal(status.offsetMs, 480500);
       results.push({ engine, hiddenWindow: hidden, scenes, importedP1Origin: imported.items[0].p1Media.midiStartTime, playbackOriginMs: project.rundown[0].playback.mtcOffsetMs });
       await writeFile(join(target, 'completed-scenarios.json'), JSON.stringify(results, null, 2));
       await page.getByRole('button', { name: '停止播放', exact: true }).click();

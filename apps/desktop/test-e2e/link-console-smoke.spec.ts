@@ -1483,7 +1483,6 @@ test('编辑器共用正式播放器，打点和菜单切换不中断，暂停�
       'link:obs-snapshot': () => ({ status: 'connected', obsVersion: '32.2.2', webSocketVersion: '5.6.3', error: null }),
       'link:security-preflight': () => ({ credentialDecryptable: true, logRedactionReady: true }),
       'link:obs-inventory': () => ({ videoSettings: { baseWidth: 1080, baseHeight: 1920 }, scenes: ['测试场景'], inputs: [], inputKinds: {}, sceneItems: { 测试场景: [] }, filters: {}, transitions: [], inputAudioStates: {}, sourceSizes: {} }),
-      'link:obs-internal-audio': () => undefined,
       'link:obs-execute': (...args) => { (Reflect.get(globalThis, '__transportActions') as unknown[]).push(args[1]); }
     };
     for (const [channel, handler] of Object.entries(handlers)) { ipcMain.removeHandler(channel); ipcMain.handle(channel, handler); }

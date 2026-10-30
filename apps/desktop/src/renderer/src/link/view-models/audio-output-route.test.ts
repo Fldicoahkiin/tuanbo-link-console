@@ -21,11 +21,11 @@ it('原生默认线路必须有明确默认端点，缺少时不切到其他设�
   await expect(assertAudioOutputAvailable({ audioEngine: 'native', audioOutputDeviceId: 'default', mtcOutputPortProfileId: null })).rejects.toThrow('不可用');
 });
 
-it('旧工程显式使用浏览器线路，不调用原生枚举', async () => {
+it('档案里还写着旧的浏览器方式：照样检查 Windows 播放设备，不用浏览器设备 ID', async () => {
   vi.stubGlobal('navigator', { mediaDevices: { enumerateDevices: mocks.browser } });
-  mocks.browser.mockResolvedValue([{ kind: 'audiooutput', deviceId: 'browser-a' }]);
+  mocks.native.mockResolvedValue({ protocol: 4, audio: [{ id: 'native-a', name: '默认设备', isDefault: true }], midiOutputs: [], midiInputs: [] });
   await assertAudioOutputAvailable({ audioEngine: 'browser', audioOutputDeviceId: 'browser-a', mtcOutputPortProfileId: null });
-  expect(mocks.native).not.toHaveBeenCalled();
+  expect(mocks.native).toHaveBeenCalledWith('audio'); expect(mocks.browser).not.toHaveBeenCalled();
 });
 
 it('未设置引擎的档案默认检查 Windows 原生播放设备', async () => {
