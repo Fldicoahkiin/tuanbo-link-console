@@ -1,3 +1,4 @@
+@layer legacy {
 /* Program home: shared playback, library and editing surface. */
 .p1-project-workspace button, .p1-project-workspace select, .p1-project-workspace input { font-family: inherit; }
 .p1-project-workspace button:focus-visible, .p1-project-workspace select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -194,3 +195,4 @@
 .player-next strong { color: var(--text-primary); }
 .p1-inspector-content .title-input:focus, .p1-inspector-content textarea:focus { border-bottom-color: #659ae4; }
 @media (max-width: 1380px) { .content-scroll { padding-inline: 18px; } }
+}

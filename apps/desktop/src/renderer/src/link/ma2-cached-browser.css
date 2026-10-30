@@ -1,3 +1,4 @@
+@layer legacy {
 .ma2-cached-browser { grid-column: 1 / -1; grid-row: 1 / -1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 12px; gap: 10px; height: 100%; background: var(--surface-base); }
 .ma2-cached-browser header, .ma2-browser-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ma2-cached-browser header { justify-content: space-between; }
@@ -24,3 +25,4 @@
 .ma2-browser-match { padding: 8px 10px; border-radius: var(--radius-control); background: var(--surface-raised); }
 .ma2-browser-match[data-state=matched] { color: var(--success-text); background: var(--success-soft); }
 .ma2-browser-match[data-state=error] { color: var(--danger); background: var(--danger-soft); }
+}

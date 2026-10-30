@@ -1,3 +1,4 @@
+@layer legacy {
 /* The primary material menu now uses the existing application sidebar. */
 .lighting-workbench .lighting-effect-dock.lighting-material-layout[data-sidebar=true] { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
 .lighting-workbench .lighting-effect-dock.lighting-material-layout[data-sidebar=true][data-editor=true] { grid-template-columns:minmax(280px,var(--library-share,.65fr)) 6px minmax(290px,var(--cue-share,.35fr)); }
@@ -55,3 +56,4 @@
 .cue-run-mode button { flex: 1; font-size: 12px; min-height: 30px; }
 .cue-run-mode button[aria-pressed=true] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--surface)); }
 .cue-run-settings small { color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+}

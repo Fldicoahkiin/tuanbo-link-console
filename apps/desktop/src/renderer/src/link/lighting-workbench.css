@@ -1,3 +1,4 @@
+@layer legacy {
 .lighting-workbench .cue-studio-grid { display: block; height: 100%; }
 .lighting-workbench .reference-timeline { user-select: none; -webkit-user-drag: none; }
 .lighting-workbench .timeline-shell { grid-template-columns: minmax(0, 1fr); }
@@ -385,3 +386,4 @@
 .ma2-sync-popover [role="alert"] { color: var(--apple-red); }
 .ma2-sync-popover ul { list-style: none; margin: 8px 0 0; padding: 0; }
 .ma2-sync-popover li { padding: 8px 0; border-top: 1px solid var(--separator); }
+}

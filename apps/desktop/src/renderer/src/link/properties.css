@@ -1,3 +1,4 @@
+@layer legacy {
 /* Shared inspector language: quiet sections, consistent fields, and compact values. */
 .audio-inspector > header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
 .audio-inspector > header svg { width: 16px; height: 16px; }
@@ -280,3 +281,4 @@
 .p1-sync-panel > .p1-sync-issues { grid-column: 1 / -1; grid-row: auto; display: block; min-width: 0; padding: 10px 0; overflow-wrap: anywhere; border-top: 1px solid var(--border); font-size: var(--text-caption); }
 .p1-sync-issues summary { cursor: pointer; font-weight: 600; }
 .p1-sync-issues p { margin: 8px 0; line-height: 1.6; }
+}

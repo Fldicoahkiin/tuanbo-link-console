@@ -1,3 +1,4 @@
+@layer legacy {
 /* A song's MTC start on the program cards, beside the lighting transport and on its console Sequence.
    Green when a console Timecode show starts there (playing runs its lights); otherwise neutral. */
 .song-mtc-start { display: inline-flex; align-items: center; align-self: flex-start; gap: 4px; max-width: 100%; min-width: 0; padding: 1px 7px; border-radius: var(--r-pill); font-size: var(--text-caption); font-weight: 600; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-secondary); background: var(--surface-raised); box-shadow: inset 0 0 0 1px var(--separator); }
@@ -13,3 +14,4 @@ span.song-mtc-start svg { width: 12px; height: 12px; flex-shrink: 0; }
 .song-mtc-detail small { color: var(--text-secondary); }
 /* Edits still to reach the console: a small sync mark, explained in the tooltip. */
 span.song-mtc-start svg.song-mtc-pending { width: 11px; height: 11px; opacity: .8; }
+}

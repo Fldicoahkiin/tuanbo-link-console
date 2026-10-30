@@ -1,3 +1,4 @@
+@layer legacy {
 .ma2-executor-surface {
   display: flex;
   flex-direction: column;
@@ -341,4 +342,5 @@
 @container (min-width: 1100px) {
   .ma2-executor-band { min-width: 0; }
   .ma2-executor-surface .ma2-executor-key > strong { font-size: 12px; }
+}
 }

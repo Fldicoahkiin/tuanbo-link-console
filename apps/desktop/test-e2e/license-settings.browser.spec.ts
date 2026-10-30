@@ -15,7 +15,7 @@ test.beforeAll(async () => {
     alias: { '@tb/schema': resolve('../../packages/schema/src/index.ts') }
   });
   script = result.outputFiles[0]!.text;
-  styles = (await Promise.all(['link.css', 'project-workspace.css', 'appearance.css', 'home-layout.css', 'settings-content.css', 'lighting.css', 'properties.css', 'device-connections.css', 'timeline-editing.css', 'interface.css'].map(file => readFile(resolve('src/renderer/src/link', file), 'utf8')))).join('\n');
+  styles = (await Promise.all(['styles/layers.css', 'styles/tokens.css', ...['link.css', 'project-workspace.css', 'appearance.css', 'home-layout.css', 'settings-content.css', 'lighting.css', 'properties.css', 'device-connections.css', 'timeline-editing.css', 'interface.css'].map(file => `link/${file}`)].map(file => readFile(resolve('src/renderer/src', file), 'utf8')))).join('\n');
 });
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });

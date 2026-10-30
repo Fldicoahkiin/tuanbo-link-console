@@ -1,3 +1,4 @@
+@layer legacy {
 .beauty-workspace { container-type: size; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; color: var(--text-primary); background: var(--surface); overflow: hidden; font-size: 13px; }
 .app-shell[data-workspace='beauty'] .content-scroll { padding: 0; overflow: hidden; }
 .beauty-workspace button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
@@ -152,3 +153,4 @@
 .beauty-tone-swatches button[aria-pressed="true"] { border-color: var(--accent, #0a84ff); }
 .beauty-tone-swatches button:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 2px; }
 .beauty-tone-swatches button:active { opacity: .75; }
+}

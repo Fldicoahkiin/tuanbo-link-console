@@ -1,3 +1,4 @@
+@layer legacy {
 .lighting-attribute-dialog { width: min(640px, 86vw); max-height: 80vh; padding: 18px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--separator); border-radius: 12px; }
 .lighting-attribute-dialog::backdrop { background: #0008; }
 .lighting-attribute-dialog header, .attribute-read-actions, .attribute-tags { display: flex; align-items: center; gap: 8px; }
@@ -52,3 +53,4 @@
 .cue-delete-list th:nth-child(2), .cue-delete-list td:nth-child(2) { white-space:nowrap; }
 .cue-delete-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
 .cue-delete-actions .danger { color:var(--danger,#ff7777); }
+}

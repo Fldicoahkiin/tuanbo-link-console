@@ -1,3 +1,4 @@
+@layer legacy {
 .lighting-music-tools { position:relative; flex:0 0 auto; border-bottom:1px solid #303037; font-size:13px; }
 .lighting-music-toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:5px 8px; }
 .lighting-music-toolbar button,.lighting-music-toolbar label { display:inline-flex; align-items:center; gap:5px; font-size:13px; }
@@ -28,3 +29,4 @@
 .music-preview-rows { max-height:140px; overflow:auto; }
 .music-preview-rows>div { display:flex; gap:12px; justify-content:space-between; padding:3px; }
 .music-section-strip { position:absolute; top:0; height:20px; opacity:.85; pointer-events:auto; z-index:8; overflow:hidden; font-size:12px; padding:0 5px; border-left:2px solid; }
+}

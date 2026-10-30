@@ -1,3 +1,4 @@
+@layer legacy {
 /* Shared form styles for the inline lighting tools and license entry. Settings workspace styles live in device-connections.css. */
 .settings-inline.integration-workspace .settings-detail {
   container-type: inline-size;
@@ -395,4 +396,5 @@
   .license-activation-card { padding: 20px; }
   .license-footer { padding: 0 16px; }
   .license-footer span:first-child { display: none; }
+}
 }

@@ -1,3 +1,4 @@
+@layer legacy {
 :root {
   color-scheme: dark;
   font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
@@ -3303,3 +3304,4 @@ html, body, #root { background: transparent; }
 
 /* Metadata remains editable during an internal pause; output controls keep their session lock. */
 .p1-runtime-properties { display: contents; }
+}

@@ -1,3 +1,4 @@
+@layer legacy {
 .ma2-fader-bank { display:flex; flex-direction:column; min-height:0; flex:1; gap:8px; overflow:auto; container-type:size; container-name:ma2-faders; }
 .ma2-fader-bank-toolbar { display:flex; align-items:center; gap:6px; white-space:nowrap; font-size:11px; color:var(--text-secondary); }
 .ma2-fader-bank-toolbar select { width:72px; height:30px; }
@@ -46,4 +47,5 @@
   .ma2-fader-bank .ma2-fader-key { height:24px; min-height:24px; }
   .ma2-fader-function,.ma2-fader-block output { height:11px; line-height:11px; }
   .ma2-fader-slider { min-height:32px; margin:0; }
+}
 }

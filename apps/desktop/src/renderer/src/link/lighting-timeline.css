@@ -1,3 +1,4 @@
+@layer legacy {
 /* Only the bottom lighting timeline. Upper workbench layout is untouched. */
 .reference-timeline[data-lighting-timeline=true] { container: lighting-timeline / inline-size; }
 .reference-timeline[data-lighting-timeline=true] .timeline-toolbar.timeline-toolbar { display: flex; flex-wrap: nowrap; justify-content: space-between; gap: 12px; height: 50px; min-height: 50px; padding: 6px 12px; background: var(--surface); border-bottom: 1px solid var(--separator); }
@@ -151,3 +152,4 @@
 .music-segment-editor { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 14px; border: 1px solid var(--separator); border-radius: 8px; }
 .music-segment-editor label { display: grid; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .music-segment-editor input { width: 130px; min-height: 32px; padding: 6px 8px; box-sizing: border-box; border: 1px solid var(--separator); background: var(--surface-raised); color: var(--text-primary); border-radius: 5px; }
+}

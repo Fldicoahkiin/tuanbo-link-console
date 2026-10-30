@@ -1,3 +1,4 @@
+@layer legacy {
 .ma2-layout-panel { min-width: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; border-inline-start: 1px solid var(--separator); grid-column: 3; grid-row: 1; }
 .ma2-layout-panel header, .ma2-layout-read, .ma2-layout-create li { display: flex; align-items: center; gap: 8px; }
 .ma2-layout-panel header strong, .ma2-layout-create li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -75,3 +76,4 @@
 .ma2-page-index-progress button:hover:not(:disabled) { border-color: var(--accent); }
 .ma2-page-index-progress small { color: var(--text-secondary); font-size: 10px; }
 .ma2-page-index-progress progress { width: 100%; height: 4px; accent-color: var(--accent); }
+}

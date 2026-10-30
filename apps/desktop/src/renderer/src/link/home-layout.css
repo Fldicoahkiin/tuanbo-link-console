@@ -1,3 +1,4 @@
+@layer legacy {
 /* Shared workspace geometry. Programme layout is owned by the block at the end. */
 .p1-project-ribbon { min-height: 42px; }
 .p1-project-title strong { font-size: 17px; }
@@ -623,4 +624,4 @@
   .cue-studio:not(.lighting-workbench) .editor-preview-row > .workspace-splitter { display: none; }
   .cue-studio[data-inspector=false]:not(.lighting-workbench) .editor-preview-row { grid-template-rows: minmax(0, 1fr); }
 }
-
+}

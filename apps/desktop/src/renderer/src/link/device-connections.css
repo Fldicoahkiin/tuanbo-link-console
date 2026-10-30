@@ -1,3 +1,4 @@
+@layer legacy {
 /* Settings surfaces and type stay inside the workspace; global navigation is shared. */
 .device-console .ma2-adapter-inventory { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 8px; }
 .device-console .ma2-adapter-inventory li { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--separator); border-radius: 6px; font-size: 12px; overflow-wrap: anywhere; }
@@ -273,3 +274,4 @@
   .device-console .device-path-control input { flex-basis: 100%; }
 }
 @container (max-width: 340px) { .device-console .log-filters { grid-template-columns: minmax(0,1fr); } }
+}

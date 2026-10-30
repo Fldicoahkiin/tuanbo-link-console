@@ -1,3 +1,4 @@
+@layer legacy {
 .lighting-heading { gap: 3px; min-width: 0; }
 .lighting-heading select { width: 125px; min-width: 0; background: transparent; color: var(--text-primary); border: 0; }
 .lighting-heading button { flex-shrink: 0; padding: 3px; }
@@ -248,3 +249,4 @@
 .lighting-tools-dialog fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .lighting-tools-dialog .lighting-settings { display: block; }
 @media (max-width: 760px) { .lighting-tools-backdrop { padding: 12px; } .lighting-tools-dialog .settings-detail { padding: 18px; } .lighting-track-fields > label { grid-template-columns: 85px minmax(0, 1fr); gap: 8px; } }
+}

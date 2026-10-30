@@ -19,7 +19,7 @@ test.beforeAll(async () => {
     define: { __TBLINK_RELEASE_NOTES__: JSON.stringify(releaseNotes) }
   });
   script = result.outputFiles[0]!.text;
-  styles = (await Promise.all(['link.css', 'appearance.css', 'interface.css'].map(file => readFile(resolve('src/renderer/src/link', file), 'utf8')))).join('\n');
+  styles = (await Promise.all(['styles/layers.css', 'styles/tokens.css', 'link/link.css', 'link/appearance.css', 'link/interface.css'].map(file => readFile(resolve('src/renderer/src', file), 'utf8')))).join('\n');
 });
 
 test('公司更新无需客户凭证，下载后由用户确认安装，关闭恢复工作区', async ({ page }, info) => {
@@ -33,7 +33,7 @@ test('公司更新无需客户凭证，下载后由用户确认安装，关闭�
       getAppInfo: () => Promise.resolve({ name: '团播联动台', version: '0.4.27', channel: 'release', gitSha: '0123456789abcdef0123456789abcdef01234567', appId: 'com.tuanbo.control' }),
       checkForUpdates: () => Promise.resolve({ ...status, phase: 'available', availableVersion: '0.4.28', message: '发现新版本 0.4.28' }),
       downloadUpdate: () => Promise.resolve({ ...status, phase: 'downloaded', availableVersion: '0.4.28', message: '版本 0.4.28 已下载，确认后会重启并安装' }),
-      installUpdate: () => Promise.reject(new Error('联动尚未停止，请停止联动后再安装更新'))
+      installUpdate: () => Promise.reject(new Error('联动还没停止。请先到集成中心停止联动、等 OBS 清理完成，再安装更新'))
     } });
   });
   await page.addScriptTag({ content: script });

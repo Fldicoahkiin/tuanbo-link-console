@@ -1,0 +1,177 @@
+/*
+ * Design tokens (2026-10-30 interface rework). New components and pages use only the names in the
+ * first two blocks: --color-*, --type-*, --space-*, --radius-*, --z-*, plus the shared shadow,
+ * motion and font names. The last block keeps the names the legacy stylesheets were written with,
+ * pointing at the same values; it goes away with the last legacy stylesheet.
+ */
+@layer base {
+  :root {
+    /* Colours, dark theme. 32 in all, each with a light value below. */
+    --color-page: #08080a;
+    --color-surface: #0e0e11;
+    --color-surface-raised: #15151a;
+    --color-surface-hover: #1d1d23;
+    --color-surface-strong: #25252d;
+    --color-glass: rgba(28, 28, 32, 0.72);
+    --color-glass-strong: rgba(14, 14, 17, 0.88);
+    --color-input: rgba(255, 255, 255, 0.04);
+    --color-input-hover: rgba(255, 255, 255, 0.08);
+    --color-text: #c9cdd4;
+    --color-text-strong: #f5f5f7;
+    --color-text-secondary: #a1a6af;
+    --color-text-tertiary: #969ca7;
+    --color-text-disabled: rgba(245, 245, 247, 0.3);
+    --color-on-accent: #ffffff;
+    --color-hairline: rgba(255, 255, 255, 0.04);
+    --color-separator: rgba(255, 255, 255, 0.06);
+    --color-border: rgba(255, 255, 255, 0.1);
+    --color-border-strong: rgba(255, 255, 255, 0.18);
+    --color-accent: #0a84ff;
+    --color-accent-hover: #1a8fff;
+    /* Small white labels on a filled button need AA contrast, which the accent itself does not give. */
+    --color-accent-fill: #0066cc;
+    --color-accent-soft: rgba(10, 132, 255, 0.06);
+    --color-accent-soft-strong: rgba(10, 132, 255, 0.12);
+    --color-accent-border: rgba(10, 132, 255, 0.32);
+    --color-success: #34d399;
+    --color-warning: #fbbf24;
+    --color-danger-rgb: 255, 69, 58;
+    --color-danger: rgb(var(--color-danger-rgb));
+    --color-selection: #153653;
+    --color-selection-border: #409cff;
+    --color-clock-elapsed: #6be3a1;
+    --color-clock-remaining: #ffbf69;
+    --color-success-soft: color-mix(in srgb, var(--color-success) 12%, transparent);
+    --color-warning-soft: color-mix(in srgb, var(--color-warning) 12%, transparent);
+    --color-danger-soft: rgba(var(--color-danger-rgb), 0.1);
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.35);
+    --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.5);
+    --shadow-4: 0 24px 56px rgba(0, 0, 0, 0.6);
+  }
+
+  :root[data-theme='light'] {
+    --color-page: #f2f2f5;
+    --color-surface: #ffffff;
+    --color-surface-raised: #f1f1f4;
+    --color-surface-hover: #ffffff;
+    --color-surface-strong: #e6e6ea;
+    --color-glass: rgba(255, 255, 255, 0.72);
+    --color-glass-strong: rgba(248, 248, 250, 0.9);
+    --color-input: rgba(0, 0, 0, 0.04);
+    --color-input-hover: rgba(0, 0, 0, 0.07);
+    --color-text: #1d1d1f;
+    --color-text-strong: #1d1d1f;
+    --color-text-secondary: rgba(0, 0, 0, 0.62);
+    /* Lighter grey fails 4.5:1 on the raised surfaces, so tertiary text matches secondary here. */
+    --color-text-tertiary: rgba(0, 0, 0, 0.62);
+    --color-text-disabled: rgba(0, 0, 0, 0.26);
+    --color-hairline: rgba(0, 0, 0, 0.05);
+    --color-separator: rgba(0, 0, 0, 0.08);
+    --color-border: rgba(0, 0, 0, 0.12);
+    --color-border-strong: rgba(0, 0, 0, 0.2);
+    --color-accent: #007aff;
+    --color-accent-hover: #0a84ff;
+    --color-accent-soft: rgba(0, 122, 255, 0.08);
+    --color-accent-soft-strong: rgba(0, 122, 255, 0.14);
+    --color-accent-border: rgba(0, 122, 255, 0.4);
+    --color-success: #059669;
+    --color-warning: #b45309;
+    --color-danger-rgb: 215, 38, 30;
+    --color-selection: #dcecff;
+    --color-selection-border: #007aff;
+    --color-clock-elapsed: #087744;
+    --color-clock-remaining: #955100;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.08);
+    --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.1);
+    --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.14);
+    --shadow-4: 0 24px 56px rgba(0, 0, 0, 0.18);
+  }
+
+  :root {
+    /* Type: six sizes. Work surfaces (timeline, lighting, player) set text at --type-control;
+       forms and settings at --type-body. Clocks and timecode use --font-numeric at their own size. */
+    --type-caption: 12px;
+    --type-control: 13px;
+    --type-body: 14px;
+    --type-heading: 16px;
+    --type-title: 20px;
+    --type-display: 24px;
+    --font-ui: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-numeric: 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+
+    /* Space: multiples of 8, with 4 for the gap inside a control. */
+    --space-half: 4px;
+    --space-1: 8px;
+    --space-2: 16px;
+    --space-3: 24px;
+    --space-4: 32px;
+    --space-6: 48px;
+
+    /* Corners: small for chips and badges, medium for controls and cards, large for dialogs and panels. */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-pill: 999px;
+
+    /* Stacking, lowest first. */
+    --z-raised: 1;
+    --z-sticky: 10;
+    --z-overlay: 100;
+    --z-popover: 10000;
+    --z-toast: 12000;
+    --z-drag: 2147483647;
+
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+    --dur-fast: 0.12s;
+    --dur-normal: 0.2s;
+    --dur-slow: 0.32s;
+  }
+
+  /* Names used by the legacy stylesheets. Do not use them in new code. */
+  :root {
+    --sp-0: 0; --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px;
+    --sp-8: 32px; --sp-10: 40px; --sp-12: 48px; --sp-16: 64px;
+    --r-xs: 4px; --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-xl: 20px; --r-pill: 999px;
+    --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 15px; --fs-xl: 18px; --fs-2xl: 22px; --fs-3xl: 28px;
+    --letter-tight: -0.02em; --letter-caps: 0.04em;
+    --surface-0: var(--color-page); --surface-1: var(--color-surface); --surface-2: var(--color-surface-raised);
+    --surface-3: var(--color-surface-hover); --surface-4: var(--color-surface-strong);
+    --surface-glass: var(--color-glass); --surface-glass-strong: var(--color-glass-strong);
+    --text-1: var(--color-text); --text-emphasis: var(--color-text-strong); --text-2: var(--color-text-secondary);
+    --text-3: #969ca7; --text-4: var(--color-text-disabled); --text-on-accent: var(--color-on-accent);
+    --clock-elapsed: var(--color-clock-elapsed); --clock-remaining: var(--color-clock-remaining);
+    --selection-background: var(--color-selection); --selection-border: var(--color-selection-border);
+    --border-hairline: var(--color-hairline); --border-subtle: var(--color-separator); --border-default: var(--color-border);
+    --border-emphasis: var(--color-border-strong); --border-accent: var(--color-accent-border);
+    --input-bg: var(--color-input); --input-bg-hover: var(--color-input-hover);
+    --editor-input-bg: transparent; --editor-input-bg-hover: rgba(255, 255, 255, 0.05);
+    --accent: var(--color-accent); --accent-hover: var(--color-accent-hover); --accent-soft: var(--color-accent-soft);
+    --accent-soft-2: var(--color-accent-soft-strong); --accent-bar: rgba(10, 132, 255, 0.85); --accent-glow: rgba(10, 132, 255, 0.4);
+    --success: var(--color-success); --warning: var(--color-warning); --danger-rgb: var(--color-danger-rgb); --danger: var(--color-danger);
+    --text-caption: var(--fs-sm); --text-control: var(--fs-md); --text-body: var(--fs-md);
+    --text-section: var(--fs-lg); --text-title: var(--fs-2xl);
+    --radius-control: var(--r-md); --radius-panel: var(--r-md); --radius-dialog: var(--r-lg);
+    --surface: var(--surface-1); --surface-raised: var(--surface-2); --surface-hover: var(--surface-3);
+    --page-background: var(--surface-0); --sidebar-background: var(--surface-1); --player-background: var(--surface-1);
+    --text-primary: var(--text-1); --text-secondary: var(--text-2); --text-tertiary: var(--text-3);
+    --separator: var(--border-subtle); --control-border: var(--border-default);
+    --theme-ink-rgb: 245 245 247;
+    --accent-fill: var(--color-accent-fill); --on-accent: var(--text-on-accent); --focus-ring: var(--accent);
+    --success-text: var(--success); --success-soft: var(--color-success-soft);
+    --danger-soft: var(--color-danger-soft); --warning-text: var(--warning); --warning-soft: var(--color-warning-soft);
+    --shadow-popover: var(--shadow-2); --image-outline: var(--border-default);
+    --label-secondary: var(--text-secondary); --label-tertiary: var(--text-tertiary);
+    --text-muted: var(--text-secondary); --apple-blue: var(--accent);
+    --apple-green: var(--success-text); --apple-red: var(--danger); --apple-orange: var(--warning-text);
+  }
+  :root[data-theme='light'] {
+    --text-3: rgba(0, 0, 0, 0.42); --text-tertiary: var(--text-2);
+    --editor-input-bg-hover: rgba(0, 0, 0, 0.03);
+    --accent-bar: rgba(0, 122, 255, 0.85); --accent-glow: rgba(0, 122, 255, 0.3);
+    --theme-ink-rgb: 0 0 0;
+  }
+}

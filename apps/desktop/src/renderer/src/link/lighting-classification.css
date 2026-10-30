@@ -1,3 +1,4 @@
+@layer legacy {
 .lighting-classification { display:flex; flex-direction:column; min-height:180px; height:100%; gap:8px; padding:10px; overflow:hidden; }
 .lighting-classification :is(button,input,select) { font-size:13px; }
 .lighting-classification :is(input:not([type=checkbox]),select) { min-height:28px; color:var(--text-primary); background:var(--surface-raised); border:1px solid var(--separator); border-radius:var(--radius-control); padding:4px 6px; }
@@ -138,3 +139,4 @@
 .lighting-audition-control>span,.lighting-audition-control summary { font-size:12px; color:var(--text-secondary); white-space:nowrap; }
 .lighting-audition-control summary { color:#ffb2b8; cursor:pointer; }
 .lighting-audition-control details[open]>div { position:absolute; top:40px; left:0; width:320px; max-height:220px; overflow:auto; background:var(--surface-raised); padding:10px; border:1px solid #d86d75; border-radius:6px; z-index:80; font-size:12px; }
+}

@@ -1,3 +1,4 @@
+@layer legacy {
 .app-shell[data-workspace=lighting] .content-scroll { padding: 0; }
 
 /* A material library and the selected Cue share one editing surface. */
@@ -329,4 +330,5 @@
 @media (hover: hover) and (pointer: fine) {
   .material-preferences .row-actions { opacity: 0; }
   .material-preferences .preference-row:hover .row-actions, .material-preferences .preference-row:focus-within .row-actions { opacity: 1; }
+}
 }
