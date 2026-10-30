@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { ReleaseNotes } from './ReleaseNotes';
 import { bundledReleaseNotes } from '../release-notes';
 import { useEffect, useRef, useState } from 'react';

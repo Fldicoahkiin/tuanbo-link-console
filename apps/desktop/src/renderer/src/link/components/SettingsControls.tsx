@@ -1,7 +1,7 @@
 import { useId, useState, type InputHTMLAttributes, type ReactNode } from 'react';
 import { CheckCircle2, ChevronRight, CircleAlert, Eye, EyeOff, Info, LoaderCircle } from 'lucide-react';
-import { Button } from './Button';
-import { ModalSurface } from './ModalSurface';
+import { Button } from '../ui/Button';
+import { ModalSurface } from '../ui/ModalSurface';
 
 export function SettingsPageHeader({ title, description, scope, status }: { title: string; description: string; scope: string; status?: ReactNode }): JSX.Element {
   return <header className="settings-page-header"><div><div className="settings-page-title"><h1>{title}</h1><span className="settings-scope">{scope}</span></div><p>{description}</p></div>{status}</header>;

@@ -2,7 +2,7 @@ import { SettingsActions, SettingsDisclosure, SettingsFeedback, SettingsField, S
 import { useSettingsDirty } from '../useSettingsDirty';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { Monitor, CheckCircle2, CircleAlert } from 'lucide-react';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { ObsPreviewSetup } from './ObsPreviewSetup';
 import { useEffect, useRef, useState } from 'react';
 import { useIntegrationStore } from '../stores/integration-store';

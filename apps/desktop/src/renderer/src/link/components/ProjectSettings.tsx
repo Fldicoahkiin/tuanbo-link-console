@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { SettingsActions, SettingsConfirm, SettingsFeedback, SettingsSwitch } from './SettingsControls';
 import type { SettingsCategory } from './settings-navigation';
 import { setPlaybackSourceCommand, setProjectFrameRateCommand } from '@tb/core/link';

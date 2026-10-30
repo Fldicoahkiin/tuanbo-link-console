@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Copy, FileText, FolderOpen, Save, Send } from 'lucide-react';
 import type { FeedbackCategory } from '@tb/schema';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { SettingsActions, SettingsFeedback, SettingsField, SettingsGroup, SettingsSwitch } from './SettingsControls';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 import { descriptionCount, FEEDBACK_CATEGORIES, feedbackDraft, localDateTimeValue, OCCURRED_PRESETS, submittedMessage, type FeedbackFormValues, type OccurredPreset } from '../view-models/feedback-form';

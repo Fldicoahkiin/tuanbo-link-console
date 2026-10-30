@@ -2,7 +2,7 @@ import { SettingsPassword, SettingsSwitch, SettingsField } from './SettingsContr
 import { useSettingsDirty } from '../useSettingsDirty';
 import { Ma2DiscoveryResults } from './Ma2DiscoveryResults';
 import { Ma2ComputerNetwork, useMa2ComputerNetwork } from './Ma2ComputerNetwork';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { ChevronRight } from 'lucide-react';
 import { ma2AddressInput } from '../view-models/ma2-address-input';
 import { checkNetworkMa2, connectDiscoveredMa2 } from '../stores/ma2-connection-store';

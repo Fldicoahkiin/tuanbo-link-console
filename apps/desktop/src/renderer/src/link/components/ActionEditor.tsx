@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { ArrowDown, ArrowUp, Play, Trash2 } from 'lucide-react';
 import { moveActionCommand, removeActionCommand, replaceActionCommand } from '@tb/core/link';

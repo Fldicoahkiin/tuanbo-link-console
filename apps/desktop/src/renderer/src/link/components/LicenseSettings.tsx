@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ZodError } from 'zod';
 import { Download, Upload, RefreshCw, KeyRound, ChevronRight, ShoppingCart, Monitor, Eye, EyeOff } from 'lucide-react';
 import { activationCodeSchema, licenseStatusSchema, type LicenseStatus } from '@tb/schema';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { PurchaseSettings } from './PurchaseSettings';
 
 const stateLabels: Record<LicenseStatus['state'], string> = { unconfigured: '还没启用', inactive: '未激活', active: '已激活', expired: '已到期', invalid: '验证失败', 'renewal-required': '需要联网验证' };

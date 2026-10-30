@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { FolderInput, FolderOpen, RotateCcw } from 'lucide-react';
 import { projectArchiveNameTemplateSchema, type ProjectArchiveSettingsAction, type ProjectArchiveSettingsStatus } from '@tb/schema';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { SettingsActions, SettingsField, SettingsGroup, SettingsSwitch } from './SettingsControls';
 import { useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';

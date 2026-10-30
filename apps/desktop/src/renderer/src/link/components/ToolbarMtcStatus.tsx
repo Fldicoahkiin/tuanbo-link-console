@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ModalSurface } from './ModalSurface';
+import { ModalSurface } from '../ui/ModalSurface';
 import { MtcOutputStatus } from './MtcOutputStatus';
 import type { ProjectPlayer } from './ProjectPlayerControls';
 import { useDocumentStore } from '../stores/document-store';

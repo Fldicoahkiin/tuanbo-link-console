@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { useEffect, type RefObject, type ReactNode } from 'react';
 import { TimelineIconMenu } from './TimelineIconMenu';
 import {

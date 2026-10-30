@@ -1,5 +1,5 @@
 import { useProgramSelection } from './useProgramSelection';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { importProgramFiles } from './import-program-files';
 import { useSelectedProgram } from '../useSelectedProgram';
 import { usePlayProgram } from './usePlayProgram';
@@ -7,7 +7,7 @@ import { ProjectPlaybackMonitor } from './ProjectPlaybackMonitor';
 import { ProgramGrid } from './ProgramGrid';
 import { SongPlaybackProperties } from './SongPlaybackProperties';
 import { SongMtcStart } from './SongMtcStart';
-import { FloatingMenu } from './FloatingMenu';
+import { FloatingMenu } from '../ui/FloatingMenu';
 import { programContents } from '../view-models/program-contents';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';

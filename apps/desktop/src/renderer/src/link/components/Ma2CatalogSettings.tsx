@@ -1,7 +1,7 @@
 import { SettingsDisclosure } from './SettingsControls';
 import { useEffect } from 'react';
 import { ma2NetworkStatusSchema, type Ma2CatalogRequest } from '@tb/schema';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { Ma2ReadProgress } from './Ma2ReadProgress';
 import { useDocumentStore } from '../stores/document-store';
 import { useMa2ReadStore } from '../stores/ma2-read-store';

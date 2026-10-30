@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import '../p1-sync.css';
 import { useEffect, useRef, useState } from 'react';
 import { AudioLines, ChevronDown, Download, FileAudio2, FolderOpen, Upload } from 'lucide-react';

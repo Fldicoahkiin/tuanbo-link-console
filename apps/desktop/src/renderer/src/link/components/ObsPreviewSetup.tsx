@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { useState } from 'react';
 import { Wrench } from 'lucide-react';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';

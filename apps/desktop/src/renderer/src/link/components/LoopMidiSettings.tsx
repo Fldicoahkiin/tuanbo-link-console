@@ -1,5 +1,5 @@
 import { SettingsSwitch } from './SettingsControls';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { useEffect, useState } from 'react';
 import { Download, Play, RefreshCw } from 'lucide-react';
 import { loopMidiStatusSchema, type LoopMidiStatus } from '@tb/schema';

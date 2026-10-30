@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ma2NetworkStatusSchema } from '@tb/schema';
 import { alignMa2SnapshotToFrames, applyMa2ReadbackCommand, bindMa2TrackCommand, importMa2TimecodeCommand, matchMa2Readback, resolveMa2Readback, resolveMa2Sync, setLightingCommand, type Ma2SyncPreview } from '@tb/core/link';

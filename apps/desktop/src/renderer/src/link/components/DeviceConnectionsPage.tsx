@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { ArchiveSettings } from './ArchiveSettings';
 import { useMa2ModeStore } from '../stores/ma2-mode-store';
 import { useState, type ReactNode } from 'react';

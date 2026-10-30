@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Download, FolderOpen } from 'lucide-react';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 import { diagnosticContext } from '../view-models/diagnostic-context';
 

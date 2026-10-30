@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FileSearch, RefreshCw } from 'lucide-react';
 import type { LinkLogEntryDto } from '@tb/core/link';

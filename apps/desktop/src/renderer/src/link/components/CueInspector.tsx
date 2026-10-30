@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { addActionCommand, nominalFramesPerSecond, removeCueCommand, replaceActionCommand, replaceCueCommand, type LinkObsInventory } from '@tb/core/link';
 import type { LinkAction, LinkCue, LinkProject } from '@tb/schema';

@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { createDefaultIntegrationProfile } from '../view-models/local-integration-profile';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';

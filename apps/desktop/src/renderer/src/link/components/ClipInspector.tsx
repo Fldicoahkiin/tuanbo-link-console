@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import type { LinkMediaAsset, ReferenceCanvasTransform, ReferenceMediaClip } from '@tb/schema';
 import { Crosshair, Maximize, RotateCcw, Trash2 } from 'lucide-react';

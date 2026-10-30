@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { useState } from 'react';
 import { setReferenceAudioCommand } from '@tb/core/link';
 import type { LinkMediaAsset } from '@tb/schema';

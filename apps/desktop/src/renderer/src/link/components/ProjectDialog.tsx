@@ -1,6 +1,6 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { FilePlus2 } from 'lucide-react';
-import { ModalSurface } from './ModalSurface';
+import { ModalSurface } from '../ui/ModalSurface';
 
 export function ProjectDialog({ name, error, onNameChange, onClose, onCreate }: {
   name: string;

@@ -12,7 +12,7 @@ import { PowerModeSettings } from './PowerModeSettings';
 import { settingsScope, SETTINGS_SECTIONS, isDeviceSettingsCategory, type SettingsCategory } from './settings-navigation';
 import { useDocumentStore } from '../stores/document-store';
 import { SettingsPageHeader, SettingsFeedback } from './SettingsControls';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { DeviceConnectionsPage } from './DeviceConnectionsPage';
 import { FeedbackForm } from './FeedbackSettings';
 import { LogsWorkspace } from './LogsWorkspace';

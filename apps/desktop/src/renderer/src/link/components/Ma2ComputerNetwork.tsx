@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ma2NetworkSetupPlanSchema, ma2NetworkSetupStateSchema, type Ma2NetworkSetupPlan, type Ma2NetworkSetupState } from '@tb/schema';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { ma2AddressInput } from '../view-models/ma2-address-input';
 import { prepareMa2ComputerNetwork } from '../view-models/ma2-computer-network';
 

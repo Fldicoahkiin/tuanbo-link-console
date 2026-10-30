@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { Redo2, Save, TriangleAlert, Undo2 } from 'lucide-react';
 import { useDocumentStore } from '../stores/document-store';
 import { useRecoveryCopyStore } from '../recovery-copy-writer';

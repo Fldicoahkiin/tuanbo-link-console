@@ -1,12 +1,12 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { useEffect, useState } from 'react';
-import { ModalSurface } from './ModalSurface';
+import { ModalSurface } from '../ui/ModalSurface';
 import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, ListMusic, Plus, Pencil, Trash2 } from 'lucide-react';
 import { editProgramPlaylistCommand, playlistItems, programPlaylists } from '@tb/core/link';
 import type { LinkProject } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
-import { FloatingMenu } from './FloatingMenu';
+import { FloatingMenu } from '../ui/FloatingMenu';
 
 export const PROGRAM_DRAG_TYPE = 'application/x-tblink-program';
 export function ProgramPlaylistPane(props: { project: LinkProject; selectedId: string; locked: boolean; onSelect: (id: string) => void; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {

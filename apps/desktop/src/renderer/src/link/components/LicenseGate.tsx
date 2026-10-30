@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { ArrowUpRight, AudioLines, Clapperboard, KeyRound, Maximize2, MessageSquareWarning, Minus, PanelsTopLeft, X } from 'lucide-react';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { FeedbackForm } from './FeedbackSettings';
-import { ModalSurface } from './ModalSurface';
+import { ModalSurface } from '../ui/ModalSurface';
 import { LicenseSettings } from './LicenseSettings';
 import { UpdateCenter } from './UpdateCenter';
 import timelinePreview from '../../assets/activation-timeline.webp';

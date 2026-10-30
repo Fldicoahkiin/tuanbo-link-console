@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { FileAudio2, Flower2, FolderOpen, ListMusic } from 'lucide-react';
 import { setPlaybackSourceCommand } from '@tb/core/link';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { P1ProjectSyncPanel } from './P1ProjectSyncPanel';
 import { importProgramFiles } from './import-program-files';
 import { assertDocumentSession, useDocumentStore } from '../stores/document-store';

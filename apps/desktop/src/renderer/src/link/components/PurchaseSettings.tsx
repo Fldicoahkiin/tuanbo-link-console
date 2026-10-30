@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Copy, ExternalLink, RefreshCw, ShoppingCart, KeyRound } from 'lucide-react';
 import { z } from 'zod';
 import { purchaseCatalogResponseSchema, purchaseReceiptSchema, purchaseRequestSchema, type LicenseClaims, type PurchaseCatalogResponse, type PurchaseReceipt } from '@tb/schema';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 
 const money = (fen: number): string => `¥${(fen / 100).toFixed(2)}`;
 const recordsSchema = z.array(purchaseReceiptSchema).max(100);

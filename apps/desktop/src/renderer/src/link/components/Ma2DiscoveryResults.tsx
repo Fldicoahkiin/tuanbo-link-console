@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Ma2Discovery } from '@tb/schema';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 
 export function Ma2DiscoveryResults({ result, disabled, selectedHost, onChoose }: {
   result: Ma2Discovery; disabled: boolean; selectedHost: string;

@@ -1,7 +1,7 @@
 import { useSettingsDirty } from '../useSettingsDirty';
 import { useSettingsSessionStore } from '../stores/settings-session-store';
 import { ObsPreviewSetup } from './ObsPreviewSetup';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { ObsDeviceSettings } from './ObsDeviceSettings';
 import { useConnectionCheckStore } from '../stores/connection-check-store';
 import { createDefaultIntegrationProfile, mergeIntegrationDraft, programDraftValues, mergeProgramSettings } from '../view-models/local-integration-profile';

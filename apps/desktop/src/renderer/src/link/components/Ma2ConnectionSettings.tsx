@@ -1,5 +1,5 @@
 import { SettingsDisclosure } from './SettingsControls';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { setMa2Method, useMa2ModeStore } from '../stores/ma2-mode-store';
 import { P1ProjectSyncPanel } from './P1ProjectSyncPanel';
 import { Download, FolderOpen, ScanSearch } from 'lucide-react';

@@ -1,4 +1,4 @@
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { ListMusic, FilePlus2, FolderOpen, Download } from 'lucide-react';
 export function ProjectWelcome({ onCreate, onOpen, onImportSongs }: { onCreate: () => void; onOpen: () => void; onImportSongs: () => void }): JSX.Element {
   return <section className="project-welcome"><ListMusic />
