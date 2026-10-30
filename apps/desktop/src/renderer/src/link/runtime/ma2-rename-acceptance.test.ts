@@ -11,6 +11,8 @@ import { inspectMa2SequenceXml } from '../../../../main/link/ma2-timecode-xml';
 import { syncMa2Names } from './ma2-name-sync';
 import { useDocumentStore as store } from '../stores/document-store';
 
+// The connection method is read when its store loads; Node 25 has a localStorage without methods.
+vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined }); });
 vi.mock('../view-models/link-desktop-view-model', () => ({ linkDesktopViewModel: { recordLog: () => Promise.resolve() } }));
 
 it.skipIf(!process.env.MA2_RENAME_ACCEPTANCE_HOST)('真实 onPC：中文英文 Cue 改名、撤销重做及冲突保护，最后恢复原名', async () => {
