@@ -68,8 +68,8 @@ async function chooseMa2DataDirectory(directory: string): Promise<void> {
 async function openLightingTools(name: '节目同步' | '节拍与循环' | '导入与导出'): Promise<void> {
   await closeLightingTools();
   await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
-  await page.locator('.timeline-lighting-tools > summary').click();
-  await page.locator('.timeline-lighting-tools').getByRole('button', { name, exact: true }).click();
+  await page.getByRole('group', { name: '时间线剪辑工具' }).getByRole('button', { name: '灯光', exact: true }).click();
+  await page.getByRole('menu', { name: '灯光工具' }).getByRole('menuitem', { name, exact: true }).click();
   await expect(page.getByRole(name === '节拍与循环' ? 'region' : 'dialog', { name, exact: true })).toBeVisible();
 }
 async function openLightingTrack(): Promise<void> {
@@ -108,7 +108,7 @@ test('32 轨十万事件只渲染可见灯光点，滚动后可选中远处 Cue'
   const grouped = points.filter({ has: page.locator('small') }).first();
   await expect(grouped).toBeVisible();
   await grouped.click({ button: 'right' });
-  const choice = page.getByRole('button', { name: '选中：点 0-0', exact: true });
+  const choice = page.getByRole('menuitem', { name: '选中：点 0-0', exact: true });
   await choice.click();
   await expect(page.getByLabel('Cue 名称', { exact: true })).toHaveValue('点 0-0');
   await expect(page.getByLabel('灯光点歌曲时间')).toHaveValue('0');
@@ -147,7 +147,7 @@ test('灯光多选整体移动保持间距，批量删除只需一次撤销', as
   await page.locator('.reference-timeline').press('Home');
   await points.first().click({ button: 'right' });
   await expect(page.locator('.lighting-timeline-point.selected')).toHaveCount(2);
-  await page.getByRole('button', { name: '复制 2 个点到播放头', exact: true }).click();
+  await page.getByRole('menuitem', { name: '复制 2 个点到播放头', exact: true }).click();
   await expect(points).toHaveCount(4);
   const duplicates = page.locator('.lighting-timeline-point.selected');
   await expect(duplicates).toHaveCount(2);
@@ -155,7 +155,7 @@ test('灯光多选整体移动保持间距，批量删除只需一次撤销', as
   expect(copyPositions[1]! - copyPositions[0]!).toBeCloseTo(after[1]! - after[0]!, 0);
   expect(copyPositions[0]).toBeLessThan(after[0]!);
   await duplicates.first().click({ button: 'right' });
-  await page.getByRole('button', { name: '删除 2 个灯光点', exact: true }).click();
+  await page.getByRole('menuitem', { name: '删除 2 个灯光点', exact: true }).click();
   await expect(points).toHaveCount(2);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect(points).toHaveCount(4);
@@ -238,12 +238,12 @@ test('灯光剪贴板跨节目粘贴、剪切撤销和轨道锁定保持正确',
   await page.locator('.reference-timeline').press('Control+v');
   await expect(points).toHaveCount(2);
   await points.first().click({ button: 'right' });
-  await expect(page.getByRole('button', { name: /粘贴到这里/ })).toBeDisabled();
-  await page.getByRole('button', { name: /复制灯光点 Ctrl/ }).click();
+  await expect(page.getByRole('menuitem', { name: /粘贴到这里/ })).toBeDisabled();
+  await page.getByRole('menuitem', { name: /复制灯光点/ }).click();
   await page.getByRole('button', { name: '灯光锁定', exact: true }).click();
   await clip.click({ position: { x: 256, y: 50 } });
   await clip.click({ button: 'right', position: { x: 256, y: 50 } });
-  await page.getByRole('button', { name: /粘贴到这里/ }).click();
+  await page.getByRole('menuitem', { name: /粘贴到这里/ }).click();
   await expect(points).toHaveCount(4);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect(points).toHaveCount(2);
@@ -381,7 +381,7 @@ test('MA2 读取预览加入节目、撤销和保存基线完整，列出未支�
     const points = page.locator('.lighting-timeline-point');
     for (let i = 0; i < await points.count(); i++) {
       await points.nth(i).click({ button: 'right' });
-      const choice = page.getByRole('button', { name: '选中：Cue 7.5', exact: true });
+      const choice = page.getByRole('menuitem', { name: '选中：Cue 7.5', exact: true });
       if (await choice.isVisible()) { await choice.click(); return; }
       await page.keyboard.press('Escape');
     }
@@ -984,7 +984,7 @@ test('顶部工程名与紧凑素材侧栏支持大量素材搜索和滚动', as
   await expect(table).toHaveClass(/media-view-list/);
   await library.getByLabel('搜索素材').fill('0599');
   await library.getByLabel('管理素材 演出素材 0599', { exact: true }).click();
-  await expect(page.getByRole('button', { name: '重命名', exact: true })).toBeVisible();
+  await expect(page.getByRole('menu', { name: '素材菜单' }).getByRole('menuitem', { name: '重命名', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await library.getByRole('button', { name: /OBS 场景/ }).click();
   await expect(library.locator('.asset-row')).toHaveCount(0);
@@ -1148,11 +1148,11 @@ test('灯光直接在时间线打点拖动，歌曲时间一致，自动保存�
   await expect(page.getByLabel('执行器', { exact: true })).toBeVisible();
   await page.locator('.lighting-clip').click({ position: { x: 400, y: 10 } });
   await page.locator('.lighting-timeline-point').last().click({ button: 'right' });
-  await page.getByRole('button', { name: '复制到播放头', exact: true }).click();
+  await page.getByRole('menuitem', { name: '复制到播放头', exact: true }).click();
   await expect.poll(displayedLightingEventCount).toBe(3);
   expect(Number(await timeInput.inputValue())).toBeCloseTo(12.5, 1);
   await page.locator('.lighting-timeline-point').last().click({ button: 'right' });
-  await page.locator('.lighting-point-menu').getByRole('button', { name: '删除灯光点', exact: true }).click();
+  await page.getByRole('menu', { name: '灯光点菜单' }).getByRole('menuitem', { name: '删除灯光点', exact: true }).click();
   await expect.poll(displayedLightingEventCount).toBe(2);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(displayedLightingEventCount).toBe(3);
@@ -1175,7 +1175,7 @@ test('灯光直接在时间线打点拖动，歌曲时间一致，自动保存�
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '编辑器', exact: true }).click();
   await expect.poll(displayedLightingEventCount).toBe(2);
   await page.locator('.lighting-heading').filter({ has: page.getByRole('button', { name: '删除灯光轨道', exact: true }) }).click({ button: 'right' });
-  await page.locator('.resource-context-menu').getByRole('button', { name: '删除灯光轨道', exact: true }).click();
+  await page.getByRole('menu', { name: '灯光轨道菜单' }).getByRole('menuitem', { name: '删除灯光轨道', exact: true }).click();
   await expect(page.locator('.lighting-lane')).toHaveCount(0);
   await saveWithShortcut();
   await expect.poll(async () => JSON.parse(await readFile(destination, 'utf8')) as unknown).toMatchObject({ rundown: [{ lighting: { tracks: [] } }] });
@@ -1323,7 +1323,7 @@ test('设置分类清晰，首页无重复入口，场景在原编辑器编排',
   await expect(page.getByText('画面设置', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '连接与设备', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await expect(page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button')).toHaveText(['设备连接', '当前工程', '播放', '画面', '外观与更新', '帮助与反馈']);
+  await expect(page.getByRole('navigation', { name: '设置子菜单' }).locator('.settings-nav-group > button')).toHaveText(['设备连接', '当前工程', '播放', '画面', '外观与更新', '帮助与反馈']);
   await expect(page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button').first()).toHaveText('设备连接');
   await openSettingsSection('播放主控');
   await page.getByRole('radio', { name: /联动台播放/ }).check();
@@ -1685,7 +1685,7 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
   await expect(page.locator('.home-card')).toHaveCount(1);
   await page.locator('.home-card').click({ button: 'right' });
   await expect(page.getByRole('menuitem', { name: '打开 Cue 编辑器' })).toBeVisible();
-  await page.locator('.toolbar-project-summary').click();
+  await page.locator('.titlebar-document-name').click();
   await expect(page.getByRole('menuitem', { name: '打开 Cue 编辑器' })).toHaveCount(0);
   await expect(page.locator('input.title-input')).toHaveValue('节目 1');
   await page.screenshot({ path: testInfo.outputPath('p1-style-project-workspace.png') });
@@ -1745,16 +1745,16 @@ test('主窗口、最小 preload 和新工程工作流可用', async ({}, testIn
   await expect(page.getByRole('button', { name: '刷新场景' })).toBeVisible();
   await page.getByRole('button', { name: /^本地素材/ }).click();
   await page.locator('.media-table-body').click({ button: 'right' });
-  await expect(page.getByRole('button', { name: '导入视频素材', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '添加音频', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '添加图片', exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: '导入视频素材', exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: '添加音频', exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: '添加图片', exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('resource-library-context-menu.png') });
-  await page.getByRole('button', { name: '新建文件夹' }).last().click();
+  await page.getByRole('menuitem', { name: '新建文件夹', exact: true }).click();
   await page.locator('.new-folder-editor input').fill('测试资源');
   await page.getByRole('button', { name: '确定' }).click();
   await expect(page.locator('.folder-row').getByText('测试资源')).toBeVisible();
   await page.locator('.folder-row').click({ button: 'right' });
-  await page.getByRole('button', { name: '重命名文件夹' }).click();
+  await page.getByRole('menuitem', { name: '重命名文件夹' }).click();
   await page.locator('.media-inline-name').fill('演出素材');
   await page.locator('.media-inline-name').press('Enter');
   await expect(page.locator('.folder-row').getByText('演出素材')).toBeVisible();
@@ -2022,7 +2022,7 @@ test('工程恢复存储不可用时明确告警且界面保持可用', async ({
   const record = join(testInfo.outputPath('user-data'), 'link-integrations', 'last-project.json');
   await mkdir(dirname(record), { recursive: true }); await writeFile(record, '模拟恢复存储损坏');
   await page.reload();
-  await expect(page.locator('.toast.error')).toContainText('读取上次工程路径失败：上次工程记录损坏');
+  await expect(page.locator('.toast.error')).toContainText('读取上次工程路径失败：上次打开的工程记录已损坏');
   await expect(page.getByRole('button', { name: '新建工程', exact: true })).toBeEnabled();
 
   await beginNewProject();
@@ -2148,7 +2148,8 @@ test('软件更新设置在最小窗口内可读且不被工具栏遮挡', async
   await openSoftwareUpdate();
   const panel = page.getByRole('region', { name: '软件更新设置', exact: true });
   await expect(panel.getByRole('heading', { name: '软件更新', exact: true })).toBeVisible();
-  const layout = await panel.locator('.update-center').evaluate(card => {
+  // The status card with the update buttons; the changelog under it scrolls with the page.
+  const layout = await panel.locator('.update-center > *').first().evaluate(card => {
     const rect = card.getBoundingClientRect();
     return { horizontalOverflow: card.scrollWidth - card.clientWidth, top: rect.top, bottom: rect.bottom,
       viewportHeight: innerHeight, onTop: [0.15, 0.5, 0.85].every(ratio => card.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height * ratio))) };
@@ -2818,14 +2819,14 @@ test('独立素材场景同步、场景长度拖动与低功率切换', async ({
   await page.getByRole('button', { name: /^OBS 场景/ }).click();
   await page.getByRole('button', { name: '刷新场景', exact: true }).click();
   await page.locator('.media-resource-table').click({ button: 'right' });
-  for (const label of ['视频采集设备', '媒体', '浏览器', '窗口采集', '文本', '显示器采集', '音频输入采集', '音频输出采集']) await expect(page.locator('.resource-context-menu').getByRole('button', { name: label, exact: true })).toBeVisible();
-  await page.locator('.resource-context-menu').getByRole('button', { name: '视频采集设备', exact: true }).click();
+  for (const label of ['视频采集设备', '媒体', '浏览器', '窗口采集', '文本', '显示器采集', '音频输入采集', '音频输出采集']) await expect(page.getByRole('menu', { name: '素材菜单' }).getByRole('menuitem', { name: label, exact: true })).toBeVisible();
+  await page.getByRole('menu', { name: '素材菜单' }).getByRole('menuitem', { name: '视频采集设备', exact: true }).click();
   await page.getByRole('button', { name: '下一步', exact: true }).click();
   await page.getByLabel('设备 / 窗口').selectOption('device-1');
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '添加视频采集设备' })).toHaveCount(0);
   await page.locator('.media-table-body').click({ button: 'right' });
-  await page.locator('.resource-context-menu').getByRole('button', { name: '文本', exact: true }).click();
+  await page.getByRole('menu', { name: '素材菜单' }).getByRole('menuitem', { name: '文本', exact: true }).click();
   await page.getByRole('button', { name: '下一步', exact: true }).click();
   await page.getByLabel('文本内容').fill('欢迎来到直播间');
   await page.screenshot({ path: testInfo.outputPath('source-dialog.png') });
@@ -3065,10 +3066,10 @@ test('灯光录制按实际音乐位置保存输入事件', async ({}, testInfo)
     const candidates = page.locator('.lighting-timeline-point');
     for (let index = 0; index < await candidates.count(); index += 1) {
       await candidates.nth(index).click({ button: 'right' });
-      if (await page.getByRole('button', { name: '选中：音符 60', exact: true }).isVisible()) break;
+      if (await page.getByRole('menuitem', { name: '选中：音符 60', exact: true }).isVisible()) break;
       await page.keyboard.press('Escape');
     }
-    await page.getByRole('button', { name: '选中：音符 60', exact: true }).click();
+    await page.getByRole('menuitem', { name: '选中：音符 60', exact: true }).click();
   }
   const duration = page.getByLabel('持续（秒）', { exact: true });
   await expect(duration).toBeVisible();
@@ -3148,13 +3149,13 @@ test('灯光时间线右键直接创建主推杆点，复用前值并支持撤�
   await closeLightingTools(); await navigation.getByRole('button', { name: '编辑器', exact: true }).click();
   const clip = page.locator('.lighting-clip').first();
   await clip.click({ button: 'right', position: { x: 100, y: 30 } });
-  await page.getByRole('button', { name: '添加主推杆点', exact: true }).click();
+  await page.getByRole('menuitem', { name: '添加主推杆点', exact: true }).click();
   const level = page.getByLabel('主推杆 %', { exact: true });
   await expect(level).toHaveValue('100');
   await expect(page.getByLabel('执行器', { exact: true })).toHaveValue('1.1');
   await level.fill('62.5'); await level.press('Tab');
   await clip.click({ button: 'right', position: { x: 180, y: 30 } });
-  await page.getByRole('button', { name: '添加主推杆点', exact: true }).click();
+  await page.getByRole('menuitem', { name: '添加主推杆点', exact: true }).click();
   await expect(level).toHaveValue('62.5');
   await expect(page.getByRole('button', { name: '灯光点 Master 62.5%', exact: true })).toHaveCount(2);
   const masterPoints = page.locator('.lighting-timeline-point');
@@ -3190,7 +3191,7 @@ test('灯光时间线右键直接创建主推杆点，复用前值并支持撤�
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await page.getByRole('button', { name: '灯光锁定', exact: true }).click();
   await clip.click({ button: 'right', position: { x: 220, y: 30 } });
-  await expect(page.getByRole('button', { name: '添加主推杆点', exact: true })).toBeDisabled();
+  await expect(page.getByRole('menuitem', { name: '添加主推杆点', exact: true })).toBeDisabled();
   await page.keyboard.press('Escape');
   const destination = testInfo.outputPath('created-master.tblink');
   await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath }); }, destination);
@@ -3325,8 +3326,6 @@ test('MA2 网络设置通过真实 IPC 连接双端口，保存重启自动连�
     await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await openSettingsSection('MA2 控台'); await page.getByLabel('MA2 连接方式').selectOption('network');
-    const advanced = page.getByLabel('MA2 控台设置').locator('details.device-advanced');
-    if (await advanced.getAttribute('open') === null) await advanced.locator('summary').click();
   };
   try {
     await navigate(); await openMa2ManualSettings(); await expect(page.getByLabel('MA2 控台 IP')).toBeEnabled();
@@ -3396,7 +3395,7 @@ test('设备连接三种尺寸、跨页草稿与搜索目标隔离', async ({}, 
   await beginNewProject(); await page.getByLabel('工程名称').fill('设备页面验收'); await page.getByRole('button', { name: '创建工程' }).click(); await addEmptyProgram();
   await closeLightingTools(); await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   const menu = page.getByRole('navigation', { name: '设置子菜单' });
-  await menu.getByRole('button', { name: '播放', exact: true }).click(); await page.getByRole('radio', { name: /联动台播放/ }).check();
+  await openSettingsSection('播放主控'); await page.getByRole('radio', { name: /联动台播放/ }).check();
   await menu.getByRole('button', { name: '设备连接', exact: true }).click();
   await openSettingsSection('MA2 控台'); await page.getByLabel('MA2 连接方式').selectOption('network');
   await openMa2ManualSettings();
@@ -3523,7 +3522,7 @@ test('灯光轨道无需选 Cue 即可编辑，工具按需打开且三种尺寸
 test('维护合并设备连接，外观和更新同页，移除诊断日志入口', async ({}, testInfo) => {
   await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
   const menu = page.getByRole('navigation', { name: '设置子菜单' });
-  await expect(menu.getByRole('button')).toHaveText(['设备连接', '当前工程', '播放', '画面', '外观与更新', '帮助与反馈']);
+  await expect(menu.locator('.settings-nav-group > button')).toHaveText(['设备连接', '当前工程', '播放', '画面', '外观与更新', '帮助与反馈']);
   const section = page.getByRole('navigation', { name: '设置子子菜单' });
   await section.getByRole('button', { name: 'MA2 控台', exact: true }).click();
   await page.getByLabel('MA2 连接方式').selectOption('network');

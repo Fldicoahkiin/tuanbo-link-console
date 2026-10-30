@@ -6,10 +6,10 @@ export type ControlSize = 'sm' | 'md';
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   /** Without a variant the button keeps the look of the legacy page it sits on, until that page is redone. */
-  variant?: ButtonVariant;
+  variant?: ButtonVariant | undefined;
   size?: ControlSize;
   loading?: boolean;
-  icon?: LucideIcon;
+  icon?: LucideIcon | undefined;
 };
 
 /** The one button: native form semantics, refs and event targets, styled by link/ui/ui.css. */
@@ -27,7 +27,8 @@ type IconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children' 
   /** Read by screen readers and shown as the tooltip. */
   label: string;
   icon: LucideIcon;
-  variant?: Exclude<ButtonVariant, 'primary'>;
+  /** `primary` only for the one main action of its area, such as play on the timeline. */
+  variant?: ButtonVariant;
   size?: ControlSize;
 };
 

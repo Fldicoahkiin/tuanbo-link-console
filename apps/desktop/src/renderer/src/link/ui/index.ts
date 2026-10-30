@@ -7,7 +7,8 @@ export { Field, TextInput, TextArea, PasswordInput, Select, Switch, WithUnit, ty
 export { ChoiceGroup, type Choice } from './ChoiceGroup';
 export { Card, Disclosure, Notice, Toolbar, ToolbarGroup, ToolbarSpacer, type NoticeTone } from './Surface';
 export { StatusBadge } from './StatusBadge';
-export { Menu, MenuItem, MenuSeparator } from './Menu';
+export { Menu, MenuItem, MenuSeparator, MenuLabel, MenuNote } from './Menu';
+export { MenuButton } from './MenuButton';
 export { Dialog } from './Dialog';
 export { Progress } from './Progress';
 export { ModalSurface } from './ModalSurface';

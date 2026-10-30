@@ -57,14 +57,6 @@ export function ReferenceStage(props: Props): JSX.Element {
   const obsCanvasMatches = props.obsInventory?.videoSettings?.baseWidth === canvas.width
     && props.obsInventory.videoSettings.baseHeight === canvas.height;
   const activeObsCount = props.scenePreview ? 1 : props.timelineState?.activeObsCueIds.length ?? 0;
-  useEffect(() => {
-    if (!mediaContext && !obsContext) return;
-    const close = (): void => { setMediaContext(null); setObsContext(null); };
-    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === 'Escape') close(); };
-    window.addEventListener('pointerdown', close);
-    window.addEventListener('keydown', closeOnEscape);
-    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', closeOnEscape); };
-  }, [mediaContext, obsContext]);
   const dropObs = (event: DragEvent<HTMLDivElement>): void => {
     const value = event.dataTransfer.getData(OBS_DRAG_TYPE);
     if (!value) return;

@@ -1,14 +1,9 @@
 @layer legacy {
 /* Only the bottom lighting timeline. Upper workbench layout is untouched. */
 .reference-timeline[data-lighting-timeline=true] { container: lighting-timeline / inline-size; }
-.reference-timeline[data-lighting-timeline=true] .timeline-toolbar.timeline-toolbar { display: flex; flex-wrap: nowrap; justify-content: space-between; gap: 12px; height: 50px; min-height: 50px; padding: 6px 12px; background: var(--surface); border-bottom: 1px solid var(--separator); }
-.reference-timeline[data-lighting-timeline=true] .timeline-toolbar > div { grid-column: auto; grid-row: auto; }
 .reference-timeline[data-lighting-timeline=true] .timeline-toolbar button { border-radius: 6px; border-color: transparent; background: transparent; min-height: 30px; }
 .reference-timeline[data-lighting-timeline=true] .timeline-toolbar button:is(:hover,:focus-visible) { background: var(--surface-raised); }
 .reference-timeline[data-lighting-timeline=true] .timeline-toolbar button[aria-pressed=true] { color: var(--accent); background: var(--accent-soft); }
-.reference-timeline[data-lighting-timeline=true] .timeline-toolbar .timeline-play-button { width: 36px; height: 36px; border-radius: 50%; background: var(--accent-fill); color: var(--on-accent); margin: 0 3px; }
-.reference-timeline[data-lighting-timeline=true] .timeline-transport { gap: 3px; border: 0; padding: 0; }
-.reference-timeline[data-lighting-timeline=true] .timeline-transport code { min-width: 105px; margin: 0; font-size: 15px; font-weight: 500; letter-spacing: .01em; padding: 0 8px; }
 .reference-timeline[data-lighting-timeline=true] .timeline-content { background-image: none; }
 .reference-timeline[data-lighting-timeline=true] .timeline-ruler { background: var(--surface-raised); border-bottom: 1px solid var(--separator); }
 .reference-timeline[data-lighting-timeline=true] .timeline-ruler > span { color: var(--text-secondary); font-size: 11px; font-weight: 400; }
@@ -38,15 +33,7 @@
 .reference-timeline[data-lighting-timeline=true] .timeline-analysis-summary dd { margin: 0; }
 .reference-timeline[data-lighting-timeline=true] .lighting-timeline-controls summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @container lighting-timeline (max-width: 1050px) {
-  .reference-timeline[data-lighting-timeline=true] .timeline-toolbar.timeline-toolbar { gap: 6px; padding-inline: 8px; }
-  .reference-timeline[data-lighting-timeline=true] .timeline-toolbar :is(.timeline-edit-controls,.timeline-view-controls) { gap: 2px; }
-  .reference-timeline[data-lighting-timeline=true] .timeline-transport { gap: 1px; }
-  .reference-timeline[data-lighting-timeline=true] .timeline-transport > button:not(.timeline-play-button) { width: 26px; padding: 4px; }
   .reference-timeline[data-lighting-timeline=true] .timeline-display-options summary > span { display: none; }
-  .reference-timeline[data-lighting-timeline=true] .timeline-transport > button:is([aria-label="上一帧"],[aria-label="下一帧"],[aria-label="跳到时间线结尾"]) { display: none; }
-}
-@container lighting-timeline (max-width: 850px) {
-  .reference-timeline[data-lighting-timeline=true] .timeline-transport > button:is([aria-label="上一帧"],[aria-label="下一帧"],[aria-label="跳到时间线结尾"]) { display: none; }
 }
 .automatic-music-results { display: grid; gap: 8px; margin-top: 12px; border-top: 1px solid var(--separator); padding-top: 10px; }
 .analysis-result-heading, .analysis-result-selection, .analysis-result-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

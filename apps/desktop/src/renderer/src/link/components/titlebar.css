@@ -53,7 +53,7 @@
   .titlebar-details svg { width: 14px; height: 14px; transition: transform var(--dur-fast) var(--ease-out); }
   .titlebar-details[aria-expanded='true'] { color: var(--color-text-strong); background: var(--color-input-hover); }
   .titlebar-details[aria-expanded='true'] svg { transform: rotate(180deg); }
-  .titlebar-drag { flex: 1 1 60px; align-self: stretch; min-width: 60px; }
+  .titlebar-drag { flex: 1 1 60px; align-self: stretch; min-width: 60px; -webkit-app-region: drag; }
   /* Narrow windows keep each status's name and colour; the word is in the tooltip and in 详细. */
   @container titlebar-middle (max-width: 590px) {
     .titlebar-overview .ui-status-value { display: none; }

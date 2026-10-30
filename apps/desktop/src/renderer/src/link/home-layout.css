@@ -187,21 +187,8 @@
 .resource-library button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .app-sidebar :is(.p1-playlist-pane > button, .media-table-row, .resource-toolbar button, .resource-filterbar input, .resource-filterbar select):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-.reference-timeline .timeline-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 10px 12px; min-height: 56px; border-bottom: 1px solid var(--separator); border-radius: 10px 10px 0 0; }
-.reference-timeline .timeline-edit-controls, .reference-timeline .timeline-view-controls { gap: 6px; }
-.reference-timeline .timeline-edit-controls > button, .reference-timeline .timeline-view-controls > button { min-height: 30px; }
-.reference-timeline .timeline-edit-controls > button:first-child, .reference-timeline .timeline-fit-button { display: flex; gap: 5px; align-items: center; width: auto; padding: 0 8px; }
-.reference-timeline .timeline-toolbar button span { color: inherit; margin: 0; font-size: var(--text-caption); }
-.reference-timeline .timeline-transport { gap: 5px; padding-inline: 10px; border-inline: 1px solid var(--separator); }
-.reference-timeline .timeline-transport code { min-width: 116px; margin-left: 8px; font-size: 17px; font-variant-numeric: tabular-nums; }
-.reference-timeline .timeline-snap-distance { width: 108px; height: 30px; border: 1px solid var(--separator); border-radius: 6px; background: var(--surface-raised); color: var(--text-primary); font-size: var(--text-caption); padding: 0 5px; }
-.timeline-navigation-menu { position: relative; font-size: var(--text-caption); }
 .timeline-snap-guide { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); box-shadow: 0 0 5px var(--accent); z-index: 35; pointer-events: none; }
 .timeline-snap-guide > span { position: absolute; top: 22px; left: 5px; white-space: nowrap; padding: 3px 6px; border-radius: 4px; font-size: var(--text-caption); color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--accent); }
-.timeline-navigation-menu summary { cursor: pointer; padding: 7px 8px; border-radius: 6px; background: var(--surface-hover); }
-.timeline-navigation-menu > div { position: absolute; left: 0; top: calc(100% + 8px); z-index: 80; width: 180px; padding: 8px; border: 1px solid var(--separator); border-radius: 8px; background: var(--surface-raised); box-shadow: 0 8px 24px #0004; }
-.timeline-navigation-menu > div > button { display: block; width: 100%; padding: 8px; text-align: left; height: auto; }
-.timeline-navigation-menu p { margin: 8px 0 0; padding: 8px; border-top: 1px solid var(--separator); font-size: var(--text-caption); line-height: 1.9; color: var(--text-secondary); }
 .connections-dialog[hidden] { display: none; }
 
 /* Navigation and contextual rail share a stable frame across all workspaces. */

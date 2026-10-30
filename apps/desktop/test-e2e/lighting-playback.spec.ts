@@ -39,7 +39,7 @@ for (const scenario of ['connected', 'disconnected', 'empty'] as const) test(`�
     if (empty) {
       await page.locator('.waveform-cue-point').click();
       await expect(page.locator('.cue-ingredient')).toHaveCount(0);
-      await expect(page.getByLabel('灯光输出提示', { exact: true })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '灯光提示', exact: true })).toHaveCount(0);
       await expect(page.locator('.wavesurfer-surface[data-ready=true]').first()).toBeVisible();
       await page.getByRole('button', { name: '播放时间线', exact: true }).click();
       await expect.poll(() => page.locator('.timeline-audio-engine').evaluate(element => (element as HTMLAudioElement).currentTime)).toBeGreaterThan(1);

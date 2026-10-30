@@ -4,15 +4,10 @@
 .audio-inspector > header svg { width: 16px; height: 16px; }
 .audio-inspector > header span { margin-left: auto; color: var(--text-secondary); font-size: var(--text-caption); }
 .audio-inspector > fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
-.audio-segment-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-.audio-segment-fields label { display: grid; gap: 6px; min-width: 0; font-size: var(--text-caption); }
-.audio-edit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .audio-edit-actions > span { font-size: var(--text-caption); color: var(--text-secondary); }
 .audio-beat-properties { border-top: 1px solid var(--property-border); margin-top: 18px; padding-top: 14px; }
 .audio-beat-properties h3 { margin: 0 0 12px; font-size: var(--text-control); }
 .audio-beat-properties p, .audio-inspector p { color: var(--text-secondary); font-size: var(--text-caption); line-height: 1.6; }
-.audio-beat-levels { display: flex; gap: 4px; }
-.cue-inspector .audio-beat-levels button[aria-pressed='true'] { color: var(--accent); border-color: var(--accent); }
 .waveform-lane { --audio-clip-bg: #122f52; --audio-wave: #1486b3; --audio-selected: #f1f4f7; --audio-marker: #09bec7; }
 .audio-timeline-segment { position: absolute; top: 12px; bottom: 6px; min-width: 2px; border: 1px solid transparent; background: var(--audio-clip-bg); border-radius: 3px; cursor: crosshair; touch-action: none; overflow: hidden; }
 .audio-timeline-segment.selected { border-color: var(--audio-selected); }
@@ -69,8 +64,8 @@
 .editor-preview-row .cue-inspector small { color: var(--text-secondary); font-size: var(--text-caption); font-weight: 400; }
 .editor-preview-row .cue-inspector :is(.action-card, .visual-layout-editor, .property-section, .lighting-track-fields) { min-width: 0; padding: 12px; border: 1px solid var(--property-border); border-radius: 7px; background: var(--property-section); box-shadow: none; }
 .editor-preview-row .cue-inspector :is(.property-section h3, .property-section h4) { margin: 0 0 10px; font-size: var(--text-control); font-weight: 600; }
-.editor-preview-row .cue-inspector :is(.property-row, .property-fields > label, .lighting-event-fields > label, .lighting-track-fields > label, .action-card .field) { display: grid; grid-template-columns: var(--property-label-width) minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; min-height: 32px; font-size: var(--text-control); color: var(--property-label); }
-.editor-preview-row .cue-inspector :is(.property-row, .property-fields > label, .action-card .field) > span { font-size: var(--text-control); color: var(--property-label); overflow-wrap: anywhere; }
+.editor-preview-row .cue-inspector :is(.property-row, .property-fields > label, .lighting-event-fields > label, .lighting-track-fields > label) { display: grid; grid-template-columns: var(--property-label-width) minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; min-height: 32px; font-size: var(--text-control); color: var(--property-label); }
+.editor-preview-row .cue-inspector :is(.property-row, .property-fields > label) > span { font-size: var(--text-control); color: var(--property-label); overflow-wrap: anywhere; }
 .editor-preview-row .cue-inspector :is(.property-fields, .lighting-event-fields, .lighting-track-fields) { display: grid; gap: 10px; }
 .editor-preview-row .cue-inspector .lighting-inspector { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; }
 .editor-preview-row .cue-inspector .lighting-inspector > button { justify-self: start; }
@@ -87,38 +82,15 @@
 .editor-preview-row .cue-inspector .property-footer button { color: var(--text-secondary); background: transparent; }
 .editor-preview-row .cue-inspector .inspector-hero strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-body); font-weight: 600; }
 .editor-preview-row .cue-inspector .inspector-hero small { display: block; margin-top: 4px; }
-.editor-preview-row .cue-inspector :is(.icon-button, .action-tools button, .inspector-hero > button) { width: 30px; height: 30px; min-width: 30px; padding: 6px; background: transparent; color: var(--text-secondary); }
+.editor-preview-row .cue-inspector .icon-button { width: 30px; height: 30px; min-width: 30px; padding: 6px; background: transparent; color: var(--text-secondary); }
 @media (hover: hover) and (pointer: fine) {
 .editor-preview-row .cue-inspector :is(.danger, .danger-text):hover { color: var(--danger, #ef8c8c); } }
 .editor-preview-row .cue-inspector .clip-inspector { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; }
 .editor-preview-row .cue-inspector .visual-layout-editor { display: grid; gap: 12px; margin: 0; }
-.editor-preview-row .cue-inspector .visual-layout-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
-.editor-preview-row .cue-inspector .layout-number { display: grid; grid-template-columns: 58px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--property-label); font-size: var(--text-caption); }
-.editor-preview-row .cue-inspector .layout-number > div { display: flex; align-items: center; min-width: 0; max-width: 160px; border: 1px solid var(--property-border); border-radius: 5px; background: var(--property-control); }
-.editor-preview-row .cue-inspector .layout-number input { border: 0; background: transparent; min-height: 30px; }
-.editor-preview-row .cue-inspector .layout-number small { padding-right: 8px; }
-.editor-preview-row .cue-inspector .layout-number > div:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
-.editor-preview-row .cue-inspector .layout-number input:focus-visible { outline: none; }
-.editor-preview-row .cue-inspector .layout-preset-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .editor-preview-row .cue-inspector .visual-source-summary { color: var(--text-secondary); font-size: var(--text-caption); padding: 0; border: 0; background: transparent; }
-.editor-preview-row .cue-inspector :is(.inspector-toggle, .visual-toggle, .video-audio-property) { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; margin: 0; padding: 4px 0; border: 0; background: transparent; color: var(--property-label); font-size: var(--text-control); }
-.editor-preview-row .cue-inspector .inspector-toggle > span { display: block; min-width: 78px; }
-.editor-preview-row .cue-inspector .video-audio-property button { width: fit-content; }
+.editor-preview-row .cue-inspector .video-audio-property { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; margin: 0; padding: 4px 0; border: 0; background: transparent; color: var(--property-label); font-size: var(--text-control); }
 .editor-preview-row .cue-inspector .cue-property-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; }
-.editor-preview-row .cue-inspector .cue-detail-header { display: flex; align-items: center; min-width: 0; gap: 10px; padding: 0; border: 0; }
-.editor-preview-row .cue-inspector .cue-detail-header > input { flex: 1; min-width: 0; font-weight: 600; }
-.editor-preview-row .cue-inspector .check-field { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: var(--text-caption); }
-.editor-preview-row .cue-inspector .timecode-editor { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; max-width: 420px; padding: 0; border: 0; background: transparent; }
-.editor-preview-row .cue-inspector .timecode-editor label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; font-size: var(--text-caption); color: var(--text-secondary); }
-.editor-preview-row .cue-inspector .cue-notes { min-height: 32px; height: 32px; margin: 0; resize: vertical; }
 .editor-preview-row .cue-inspector .action-list { display: grid; gap: 12px; margin: 0; }
-.editor-preview-row .cue-inspector .action-card-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; padding: 0; border: 0; background: transparent; }
-.editor-preview-row .cue-inspector .action-card-header > select { flex: 0 1 200px; }
-.editor-preview-row .cue-inspector .action-card-header > .action-name { flex: 1 1 120px; width: 0; }
-.editor-preview-row .cue-inspector .action-order { color: var(--text-secondary); font-size: var(--text-caption); background: transparent; }
-.editor-preview-row .cue-inspector .action-tools { display: flex; gap: 4px; margin-left: auto; }
-.editor-preview-row .cue-inspector .action-card .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 16px; padding: 0; background: transparent; }
-.editor-preview-row .cue-inspector .action-card .field:has(textarea) { grid-column: 1 / -1; }
 .editor-preview-row .cue-inspector dl { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; border: 0; }
 .editor-preview-row .cue-inspector dl > div { display: flex; gap: 8px; padding: 0; }
 .editor-preview-row .cue-inspector dt { color: var(--text-secondary); font-size: var(--text-caption); }
@@ -191,11 +163,6 @@
 }
 @container (max-width: 380px) {
   .editor-preview-row .cue-inspector :is(.inspector-body, .lighting-inspector, .common-properties) { padding-inline: 10px; }
-  .editor-preview-row .cue-inspector .visual-layout-grid, .editor-preview-row .cue-inspector .action-card .form-grid { grid-template-columns: minmax(0, 1fr); }
-  .editor-preview-row .cue-inspector .action-card .field { grid-template-columns: minmax(0, 1fr); gap: 5px; }
-  .editor-preview-row .cue-inspector .action-card-header > select { flex-basis: 100%; }
-  .editor-preview-row .cue-inspector .cue-detail-header { flex-wrap: wrap; }
-  .editor-preview-row .cue-inspector .cue-detail-header > input { flex-basis: 100%; }
 }
 .settings-lighting { border: 0; padding: 0; margin: 0; min-width: 0; }
 .settings-lighting > legend { padding: 0 0 12px; color: var(--text-secondary); font-size: var(--text-caption); }

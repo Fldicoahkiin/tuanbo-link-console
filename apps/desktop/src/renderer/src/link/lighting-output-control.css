@@ -1,7 +1,4 @@
 @layer legacy {
 .timeline-transport .lighting-output-route { margin: 0; display: inline-flex; align-items: center; flex: 0 0 auto; gap: 6px; white-space: nowrap; }
 .timeline-transport .lighting-output-notice { margin: 0; display: inline-flex; color: var(--warning, #e6b85b); font-size: 12px; }
-.lighting-output-notice .timeline-icon-menu > summary { color: inherit; }
-.lighting-output-notice .timeline-icon-menu-content { left: auto; right: 0; width: 260px; white-space: normal; }
-.timeline-transport .lighting-output-notice button { display: flex; align-items: center; justify-content: center; width: 100%; height: auto; min-height: 32px; margin-top: 12px; padding: 6px 10px; border: 1px solid var(--accent); border-radius: var(--radius-control); color: var(--text-primary); font-size: 12px; }
 }

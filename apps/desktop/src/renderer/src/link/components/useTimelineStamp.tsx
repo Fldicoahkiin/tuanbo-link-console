@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { PlaybackClock } from '../../registry/playback-clock';
 import { MapPinPlus, Layers3, TriangleAlert } from 'lucide-react';
-import { TimelineIconMenu } from './TimelineIconMenu';
+import { TimelinePanelButton } from './TimelinePanelButton';
+import { Field, IconButton, Select } from '../ui';
 import { playbackFramesPerSecond } from '@tb/core/link';
 import type { MtcFrameRate } from '@tb/schema';
 import { shortcutKey, shortcutLabel, useShortcutStore } from '../stores/shortcut-store';
@@ -50,8 +51,8 @@ export function useTimelineStamp(props: Props) {
     window.addEventListener('keydown', key, true); return () => window.removeEventListener('keydown', key, true);
   });
   const shortcut = bindings.find(binding => binding.action === 'stamp');
-  const controls = lighting ? <div className="timeline-stamp-controls"><button aria-label="打点" title={`在播放头打点${shortcut ? `（${shortcutLabel(shortcut.key)}）` : ''}；波形右键可在鼠标位置打点`} onClick={event => { stamp(); event.currentTarget.closest<HTMLElement>(".reference-timeline")?.focus(); }}><MapPinPlus /></button>
-    {!lighting.onCreateCue && lighting.document.tracks.length ? <TimelineIconMenu icon={Layers3} label={`打点轨道：${track?.name ?? '未选择'}`}><label>打点轨道<select aria-label="打点轨道" value={track?.id ?? ''} onChange={event => setChosen(event.currentTarget.value)}>{lighting.document.tracks.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.locked ? '（已锁定）' : ''}</option>)}</select></label></TimelineIconMenu> : null}
+  const controls = lighting ? <div className="timeline-stamp-controls"><IconButton label="打点" title={`在播放头打点${shortcut ? `（${shortcutLabel(shortcut.key)}）` : ''}；波形右键可在鼠标位置打点`} icon={MapPinPlus} onClick={event => { stamp(); event.currentTarget.closest<HTMLElement>(".reference-timeline")?.focus(); }} />
+    {!lighting.onCreateCue && lighting.document.tracks.length ? <TimelinePanelButton icon={Layers3} label={`打点轨道：${track?.name ?? '未选择'}`}><Field stacked label="打点轨道">{(field) => <Select {...field} value={track?.id ?? ''} onChange={event => setChosen(event.currentTarget.value)}>{lighting.document.tracks.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.locked ? '（已锁定）' : ''}</option>)}</Select>}</Field></TimelinePanelButton> : null}
     {message || error ? <span role="alert" className="timeline-tool-error" tabIndex={0} aria-label={message ?? error ?? ''} title={message ?? error ?? ''}><TriangleAlert /></span> : null}
   </div> : null;
   return { stamp, controls };

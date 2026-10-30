@@ -136,11 +136,8 @@
 .lighting-clip-caption { top: 12px; left: 12px; color: var(--text-secondary); }
 .lighting-timeline-point { top: 8px; height: 28px; border-radius: 3px; max-width: 150px; padding-right: 8px; background: color-mix(in srgb, var(--lighting-color) 20%, var(--surface)); }
 .lighting-timeline-point i { height: 28px; }
-.lighting-point-menu { min-width: 174px; }
-.lighting-point-menu button { text-align: left; }
 
 .lighting-timeline-point small { font-size: var(--text-caption); padding: 1px 4px; margin-left: 3px; border-radius: 3px; background: rgb(var(--theme-ink-rgb) / .12); }
-.lighting-point-menu { max-height: min(360px, calc(100vh - 160px)); overflow-y: auto; }
 
 /* Small flags retain an exact time edge even when cues are densely spaced. */
 .lighting-lane .lighting-timeline-point { --cue-ink: var(--lighting-color); position: absolute; z-index: 1; top: 8px; width: 10px; min-width: 0; max-width: 10px; height: 46px; padding: 0; overflow: visible; border: 0; border-radius: 0; background: transparent; outline: 0; display: block; }
@@ -172,8 +169,6 @@
 .timeline-audio-end { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #b99452; z-index: 3; pointer-events: none; }
 .timeline-audio-end span { position: absolute; right: 5px; top: 4px; white-space: nowrap; color: #cba567; background: var(--page-background); font-size: var(--text-caption); }
 .timeline-audio-overrun { position: absolute; top: 28px; bottom: 0; background: rgb(203 165 103 / .06); pointer-events: none; z-index: 2; }
-.timeline-edit-controls .timeline-record-button { width: auto; min-width: 72px; padding: 0 8px; font-size: var(--text-caption); color: var(--text-secondary); }
-.timeline-edit-controls .timeline-record-button[aria-pressed='true'] { color: #ff9999; background: rgb(220 70 70 / .16); }
 
 /* Markers share the ruler; their hit targets do not cover empty ruler space. */
 .timeline-markers { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
@@ -200,10 +195,6 @@
 .lighting-track-more { margin-top: 10px; }
 .lighting-track-more summary { cursor: pointer; color: var(--text-secondary); font-size: var(--text-control); padding: 6px 0; }
 .lighting-track-more[open] .lighting-track-fields { margin: 8px 0 12px; }
-.timeline-lighting-tools { position: relative; font-size: var(--text-caption); }
-.timeline-lighting-tools summary { cursor: pointer; padding: 6px 10px; color: var(--text-primary); white-space: nowrap; }
-.timeline-lighting-tools > div { position: absolute; top: 100%; left: 0; min-width: 150px; padding: 5px; background: var(--surface); box-shadow: 0 5px 20px #0006; z-index: 30; }
-.timeline-edit-controls .timeline-lighting-tools button { display: block; width: 100%; padding: 9px 12px; text-align: left; white-space: nowrap; font-size: var(--text-control); }
 .lighting-tools-backdrop { margin: 0; border: 0; width: 100vw; height: 100vh; max-width: none; max-height: none; box-sizing: border-box; position: fixed; inset: 0; background: #0008; display: grid; place-items: center; padding: 24px; z-index: 1000; }
 .lighting-tools-dialog { width: min(880px, 100%); max-height: calc(100vh - 48px); overflow: auto; background: var(--page-background); color: var(--text-primary); box-shadow: 0 14px 60px #0008; }
 .lighting-tools-dialog .settings-detail { padding: 24px 28px; }

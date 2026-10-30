@@ -8,20 +8,18 @@ import {
   Monitor,
   Type,
   Volume2,
-  ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
   FileAudio,
   FileImage,
   Film,
-  FolderInput,
   FolderPlus,
-  ListFilter,
   Pencil,
   Search,
   Trash2
 } from 'lucide-react';
 import type { MediaContextTarget, MediaSort } from './MediaResourceTable';
+import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../ui';
 
 const sourceIcons = { camera: Camera, media: Film, image: FileImage, browser: Globe, window: AppWindow, text: Type, display: Monitor, audioInput: Mic, audioOutput: Volume2 };
 
@@ -29,6 +27,7 @@ type Props = {
   x: number;
   y: number;
   target: MediaContextTarget;
+  sort: MediaSort;
   activeFolderId: string | null;
   folders: LinkMediaFolder[];
   onImport: (kind: LinkMediaKind, folderId: string | null) => void;
@@ -48,9 +47,6 @@ type Props = {
 };
 
 export function ResourceContextMenu(props: Props): JSX.Element {
-  const width = props.target.kind === 'blank' ? 340 : 220;
-  const left = Math.min(props.x, window.innerWidth - width - 8);
-  const top = Math.max(8, Math.min(props.y, window.innerHeight - (props.target.kind === 'blank' ? 620 : 300)));
   const folderId = props.target.kind === 'folder'
     ? props.target.folder.id
     : props.target.kind === 'asset'
@@ -58,53 +54,43 @@ export function ResourceContextMenu(props: Props): JSX.Element {
       : props.activeFolderId;
   const asset = props.target.kind === 'asset' ? props.target.asset : null;
   const folder = props.target.kind === 'folder' ? props.target.folder : null;
-  return <div className="resource-context-menu" style={{ left, top, width }} onMouseDown={(event) => event.stopPropagation()}>
-    {props.target.kind === 'blank' ? <><div className="obs-source-menu-grid">{(Object.keys(obsSourceKinds) as ObsSourceKind[]).map((kind) => { const Icon = sourceIcons[kind]; return <MenuButton key={kind} icon={<Icon />} label={obsSourceKinds[kind].label} onClick={() => props.onCreateObsSource(kind)} />; })}</div>
-    <div className="context-separator" />
-    <MenuButton icon={<Film />} label="导入视频素材" onClick={() => props.onImport('video', folderId)} />
-    <MenuButton icon={<FileAudio />} label="添加音频" onClick={() => props.onImport('audio', folderId)} />
-    <MenuButton icon={<FileImage />} label="添加图片" onClick={() => props.onImport('image', folderId)} />
-    <MenuButton icon={<FolderPlus />} label="新建文件夹" onClick={() => props.onCreateFolder(folderId)} />
-    <div className="context-separator" />
-    <MenuButton icon={<Camera />} label="刷新 OBS 资源" onClick={props.onSyncObs} />
+  return <Menu x={props.x} y={props.y} label="素材菜单" {...(asset ? { title: asset.name } : folder ? { title: folder.name } : {})} onClose={props.onClose}>
+    {props.target.kind === 'blank' ? <>
+      <MenuLabel>添加到 OBS 场景</MenuLabel>
+      <div className="obs-source-menu-grid">{(Object.keys(obsSourceKinds) as ObsSourceKind[]).map((kind) => <MenuItem key={kind} icon={sourceIcons[kind]} onSelect={() => props.onCreateObsSource(kind)}>{obsSourceKinds[kind].label}</MenuItem>)}</div>
+      <MenuSeparator />
+      <MenuItem icon={Film} onSelect={() => props.onImport('video', folderId)}>导入视频素材</MenuItem>
+      <MenuItem icon={FileAudio} onSelect={() => props.onImport('audio', folderId)}>添加音频</MenuItem>
+      <MenuItem icon={FileImage} onSelect={() => props.onImport('image', folderId)}>添加图片</MenuItem>
+      <MenuItem icon={FolderPlus} onSelect={() => props.onCreateFolder(folderId)}>新建文件夹</MenuItem>
+      <MenuSeparator />
+      <MenuItem icon={Camera} onSelect={props.onSyncObs}>刷新 OBS 资源</MenuItem>
+      <MenuSeparator />
+      <MenuLabel>排序方式</MenuLabel>
+      {(['name', 'type', 'status'] as const).map((value) => <MenuItem key={value} checked={props.sort === value} onSelect={() => props.onSort(value)}>{sortLabels[value]}</MenuItem>)}
+      <MenuSeparator />
+      <MenuItem icon={ChevronsUpDown} onSelect={props.onExpandAll}>展开全部文件夹</MenuItem>
+      <MenuItem icon={ChevronsDownUp} onSelect={props.onCollapseAll}>折叠全部文件夹</MenuItem>
     </> : null}
     {asset ? <>
-      <div className="context-separator" />
-      <MenuButton icon={<Search />} label="参考预览" onClick={() => props.onPreviewAsset(asset.id)} />
-      <MenuButton icon={<Monitor />} label="同步素材独立场景" onClick={() => props.onPublishAsset(asset.id)} />
-      <MenuButton icon={<Pencil />} label="重命名" onClick={() => props.onRename({ kind: 'asset', asset })} />
-      <MoveSubmenu
-        folders={props.folders}
-        currentFolderId={asset.folderId}
-        onMove={(nextFolderId) => props.onMoveAsset(asset.id, nextFolderId)}
-      />
-      <MenuButton danger icon={<Trash2 />} label="删除素材" onClick={() => props.onRemove({ kind: 'asset', asset })} />
+      <MenuItem icon={Search} onSelect={() => props.onPreviewAsset(asset.id)}>参考预览</MenuItem>
+      <MenuItem icon={Monitor} onSelect={() => props.onPublishAsset(asset.id)}>同步素材独立场景</MenuItem>
+      <MenuItem icon={Pencil} onSelect={() => props.onRename({ kind: 'asset', asset })}>重命名</MenuItem>
+      <MoveTargets folders={props.folders} currentFolderId={asset.folderId} onMove={(nextFolderId) => props.onMoveAsset(asset.id, nextFolderId)} />
+      <MenuSeparator />
+      <MenuItem icon={Trash2} danger onSelect={() => props.onRemove({ kind: 'asset', asset })}>删除素材</MenuItem>
     </> : null}
     {folder ? <>
-      <div className="context-separator" />
-      <MenuButton icon={<FolderPlus />} label="新建子文件夹" onClick={() => props.onCreateFolder(folder.id)} />
-      <MenuButton icon={<Pencil />} label="重命名文件夹" onClick={() => props.onRename({ kind: 'folder', folder })} />
-      <MoveSubmenu
-        folders={folderMoveTargets(props.folders, folder.id)}
-        currentFolderId={folder.parentId}
-        onMove={(nextFolderId) => props.onMoveFolder(folder.id, nextFolderId)}
-      />
-      <MenuButton danger icon={<Trash2 />} label="删除空文件夹" onClick={() => props.onRemove({ kind: 'folder', folder })} />
+      <MenuItem icon={FolderPlus} onSelect={() => props.onCreateFolder(folder.id)}>新建子文件夹</MenuItem>
+      <MenuItem icon={Pencil} onSelect={() => props.onRename({ kind: 'folder', folder })}>重命名文件夹</MenuItem>
+      <MoveTargets folders={folderMoveTargets(props.folders, folder.id)} currentFolderId={folder.parentId} onMove={(nextFolderId) => props.onMoveFolder(folder.id, nextFolderId)} />
+      <MenuSeparator />
+      <MenuItem icon={Trash2} danger onSelect={() => props.onRemove({ kind: 'folder', folder })}>删除空文件夹</MenuItem>
     </> : null}
-    {props.target.kind === 'blank' ? <><div className="context-separator" />
-    <div className="context-submenu-wrap">
-      <MenuButton icon={<ListFilter />} label="排序方式" suffix={<ChevronRight />} />
-      <div className="context-submenu">
-        <MenuButton label="按名称" onClick={() => props.onSort('name')} />
-        <MenuButton label="按类型" onClick={() => props.onSort('type')} />
-        <MenuButton label="按状态" onClick={() => props.onSort('status')} />
-      </div>
-    </div>
-    <MenuButton icon={<ChevronsUpDown />} label="展开全部文件夹" onClick={props.onExpandAll} />
-    <MenuButton icon={<ChevronsDownUp />} label="折叠全部文件夹" onClick={props.onCollapseAll} />
-    </> : null}
-  </div>;
+  </Menu>;
 }
+
+const sortLabels: Record<MediaSort, string> = { name: '按名称', type: '按类型', status: '按状态' };
 
 function folderMoveTargets(folders: LinkMediaFolder[], folderId: string): LinkMediaFolder[] {
   const excluded = new Set<string>([folderId]);
@@ -121,39 +107,16 @@ function folderMoveTargets(folders: LinkMediaFolder[], folderId: string): LinkMe
   return folders.filter((folder) => !excluded.has(folder.id));
 }
 
-function MoveSubmenu(props: {
+/** The folders an item can move to, ticked where it is now; listed in the menu instead of a hover submenu. */
+function MoveTargets(props: {
   folders: LinkMediaFolder[];
   currentFolderId: string | null;
   onMove: (folderId: string | null) => void;
 }): JSX.Element {
-  return <div className="context-submenu-wrap">
-    <MenuButton icon={<FolderInput />} label="移动到" suffix={<ChevronRight />} />
-    <div className="context-submenu move-submenu">
-      <MenuButton checked={props.currentFolderId === null} label="资源库根目录" onClick={() => props.onMove(null)} />
-      {props.folders.map((folder) => <MenuButton
-        checked={props.currentFolderId === folder.id}
-        key={folder.id}
-        label={folder.name}
-        onClick={() => props.onMove(folder.id)}
-      />)}
-    </div>
-  </div>;
-}
-
-function MenuButton(props: {
-  icon?: JSX.Element;
-  label: string;
-  suffix?: JSX.Element;
-  danger?: boolean;
-  checked?: boolean;
-  onClick?: () => void;
-}): JSX.Element {
-  return <button
-    className={`context-menu-item ${props.danger ? 'danger' : ''}`}
-    disabled={!props.onClick && !props.suffix}
-    onClick={props.onClick}
-  >
-    <span className="context-icon">{props.icon}{props.checked ? <i /> : null}</span>
-    <span>{props.label}</span>{props.suffix}
-  </button>;
+  return <>
+    <MenuSeparator />
+    <MenuLabel>移动到</MenuLabel>
+    <MenuItem checked={props.currentFolderId === null} onSelect={() => props.onMove(null)}>资源库根目录</MenuItem>
+    {props.folders.map((folder) => <MenuItem key={folder.id} checked={props.currentFolderId === folder.id} onSelect={() => props.onMove(folder.id)}>{folder.name}</MenuItem>)}
+  </>;
 }

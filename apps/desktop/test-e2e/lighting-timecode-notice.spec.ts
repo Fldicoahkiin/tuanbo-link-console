@@ -26,9 +26,8 @@ test('时间码关联待核对：不弹窗直接播放，只显示一条准确�
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '灯光工作台', exact: true }).click();
     // The output mode selector is gone (1d7d5bd); the notice follows the song's lighting state alone.
     await expect(page.getByRole('combobox', { name: '灯光输出方式' })).toHaveCount(0);
-    await page.getByLabel('灯光输出提示', { exact: true }).click();
-    const menu = page.locator('.lighting-output-notice .timeline-icon-menu-content');
-    await expect(menu.getByText('需处理', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '灯光提示', exact: true }).click();
+    const menu = page.getByRole('dialog', { name: '灯光提示', exact: true });
     await expect(menu.getByText(/控台 Timecode 2：音频已替换/)).toBeVisible();
     await expect(page.locator('.lighting-output-route .song-lighting-state')).toHaveText('需处理');
     await page.keyboard.press('Escape');
@@ -43,8 +42,8 @@ test('时间码关联待核对：不弹窗直接播放，只显示一条准确�
       await expect(page.getByRole('button', { name: '播放时间线', exact: true })).toBeVisible();
     }
     expect(await startChecks()).toEqual([]);
-    await page.getByLabel('灯光输出提示', { exact: true }).click();
-    await page.getByRole('button', { name: '核对控台时间线', exact: true }).click();
+    await page.getByRole('button', { name: '灯光提示', exact: true }).click();
+    await page.getByRole('button', { name: '查看控台时间线', exact: true }).click();
     await expect(page.getByRole('heading', { name: '控台时间线', exact: true })).toBeVisible();
     expect(errors).toEqual([]);
     await page.screenshot({ path: info.outputPath('timecode-pairing-review.png') });

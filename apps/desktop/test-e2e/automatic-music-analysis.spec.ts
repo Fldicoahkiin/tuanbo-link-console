@@ -95,10 +95,10 @@ test('真实短歌：自动识别分段、旧编号隐藏、纠错、保存恢�
     await panel.getByRole('button', { name: '保存修改', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.segments[0]?.name).toBe('核对段落');
     await page.locator('.music-detected-beat').nth(4).click({ button: 'right' });
-    await page.getByRole('button', { name: '删除拍点', exact: true }).click();
+    await page.getByRole('menuitem', { name: '删除拍点', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.beats.length).toBe(original.beats.length - 1);
     await page.locator('.music-tempo-segment').last().click({ button: 'right' });
-    await page.locator('.music-beat-context').getByRole('button', { name: '删除此段', exact: true }).click();
+    await page.getByRole('menu', { name: '音乐段落菜单' }).getByRole('menuitem', { name: '删除此段', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.segments.length).toBe(original.segments.length - 1);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect.poll(async () => (await savedAnalysis())?.segments.length).toBe(original.segments.length);

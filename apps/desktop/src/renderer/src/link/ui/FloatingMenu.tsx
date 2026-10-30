@@ -19,7 +19,8 @@ export function floatingMenuPlace(pointer: { x: number; y: number }, size: { wid
 
 /**
  * A right-click menu at the pointer. It is mounted on the page body, so a workspace that contains its
- * layout cannot move it away from the pointer (2026-10-28, picture 11).
+ * layout cannot move it away from the pointer (2026-10-28, picture 11). Presses and clicks in it stay in
+ * it: React passes them up its tree to the timeline or stage that opened the menu otherwise.
  */
 export function FloatingMenu({ x, y, className, label, children }: { x: number; y: number; className: string; label: string; children: ReactNode }): JSX.Element {
   const menu = useRef<HTMLDivElement>(null);
@@ -28,5 +29,5 @@ export function FloatingMenu({ x, y, className, label, children }: { x: number; 
     const box = menu.current?.getBoundingClientRect();
     if (box) setPlace(floatingMenuPlace({ x, y }, box, { width: window.innerWidth, height: window.innerHeight }));
   }, [x, y]);
-  return createPortal(<div ref={menu} role="menu" aria-label={label} className={className} style={place} onPointerDown={event => event.stopPropagation()} onContextMenu={event => event.preventDefault()}>{children}</div>, document.body);
+  return createPortal(<div ref={menu} role="menu" aria-label={label} className={className} style={place} onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()} onContextMenu={event => event.preventDefault()}>{children}</div>, document.body);
 }

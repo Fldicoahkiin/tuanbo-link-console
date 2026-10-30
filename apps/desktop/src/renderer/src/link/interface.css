@@ -85,7 +85,6 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .modal-surface.obs-source-dialog form { display: grid; gap: 16px; }
 .lighting-workbench .lighting-output-choice { color: var(--text-secondary); }
 .lighting-output-choice select { min-height: 32px; border: 1px solid var(--control-border); border-radius: var(--radius-control); padding: 4px; color: var(--text-primary); background: var(--surface); }
-.reference-timeline .timeline-transport code { color: var(--text-primary); }
 .toast-stack { display: grid; gap: 8px; max-width: min(440px, calc(100vw - 32px)); max-height: min(50dvh, 360px, calc(100dvh - var(--notice-clearance, 18px) - 70px)); overflow: auto; overscroll-behavior: contain; }
 .toast-stack { pointer-events: none; }
 .toast-stack > div { display: grid; gap: 8px; }
@@ -96,7 +95,6 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
 .toast-stack .toast.info { color: var(--text-primary); background: var(--surface-glass-strong); backdrop-filter: blur(20px) saturate(1.5); }
 .toast-stack .toast.error { color: var(--danger); background: var(--danger-soft); border-color: rgba(var(--danger-rgb), .22); }
 .toast button { flex: 0 0 28px; width: 28px; height: 28px; border-radius: 6px; color: inherit; }
-.resource-context-menu, .timeline-icon-menu-content, .timeline-edit-menu { background: var(--surface-glass); backdrop-filter: blur(24px); border: 1px solid var(--border-subtle); border-radius: var(--r-md); box-shadow: var(--shadow-2); }
 .media-thumbnail img, .media-thumbnail video { outline: 1px solid var(--image-outline); outline-offset: -1px; }
 .stage-frame, .stage-obs-layer { background: #101114; }
 .stage-frame .stage-placeholder, .stage-frame .empty-panel { color: #d9e0ec; background: #101114; }
@@ -122,7 +120,7 @@ code, time, input[type='number'] { font-variant-numeric: tabular-nums; }
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .app-sidebar, .modal-card, .modal-surface, .resource-context-menu, .timeline-icon-menu-content, .toast-stack .toast.info { backdrop-filter: none; }
+  .app-sidebar, .modal-card, .modal-surface, .toast-stack .toast.info { backdrop-filter: none; }
 }
 @media (forced-colors: active) {
   :root :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible { outline: 2px solid Highlight; }

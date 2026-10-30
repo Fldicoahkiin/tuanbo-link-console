@@ -5,8 +5,7 @@ import { useDisplayPreferences } from '../stores/display-preferences-store';
 import { useIntegrationStore } from '../stores/integration-store';
 import { linkDesktopViewModel as desktop } from '../view-models/link-desktop-view-model';
 import { ObsSourceDialog } from './ObsSourceDialog';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useMemo, useRef, useState } from 'react';
 import type { LinkMediaAsset, LinkMediaFolder, LinkMediaKind } from '@tb/schema';
 import type { LinkObsInventory, LinkObsSnapshot } from '@tb/core/link';
 import {
@@ -68,7 +67,7 @@ export function ResourceLibrary(props: Props): JSX.Element {
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set(props.folders.map((folder) => folder.id)));
   const [renameTarget, setRenameTarget] = useState<MediaRenameTarget>(null);
   const [newFolderParentId, setNewFolderParentId] = useState<string | null | undefined>(undefined);
-  const [context, setContext] = useResourceContext();
+  const [context, setContext] = useState<ContextState>(null);
   const [fileDropActive, setFileDropActive] = useState(false);
   const obsVisuals = useMemo(() => buildObsVisualResources(props.inventory, true), [props.inventory]);
   const visibleObsVisuals = props.obsStatus === 'connected' && section === 'obs'
@@ -180,8 +179,9 @@ export function ResourceLibrary(props: Props): JSX.Element {
       onAddObsResource={props.onAddObsResource}
     />
     {publishError ? <p role="alert" className="device-error">{publishError}</p> : null}
-    {context ? createPortal(<ResourceContextMenu
+    {context ? <ResourceContextMenu
       {...context}
+      sort={sort}
       activeFolderId={selectedFolderId}
       folders={props.folders}
       onCreateObsSource={(kind) => runAndClose(() => { if (kind === 'media' || kind === 'image') requestImport(kind === 'image' ? 'image' : 'all', selectedFolderId); else setSourceKind(kind); })}
@@ -198,7 +198,7 @@ export function ResourceLibrary(props: Props): JSX.Element {
       onCollapseAll={() => runAndClose(() => setExpandedFolderIds(new Set()))}
       onSyncObs={() => runAndClose(() => { if (props.obsStatus === 'connected') props.onRefreshObs(); })}
       onClose={() => setContext(null)}
-    />, document.body) : null}
+    /> : null}
     {sourceKind ? <ObsSourceDialog kind={sourceKind} scenes={props.inventory?.scenes ?? []} onClose={() => setSourceKind(null)} /> : null}
   </aside>;
 }
@@ -209,24 +209,6 @@ function NewFolderEditor(props: { parentName: string; onCommit: (name: string) =
     <FolderPlus /><span><small>位置：{props.parentName}</small><input autoFocus value={name} onChange={(event) => setName(event.currentTarget.value)} /></span>
     <button type="submit">确定</button><button type="button" onClick={props.onCancel}>取消</button>
   </form>;
-}
-
-function useResourceContext(): [ContextState, React.Dispatch<React.SetStateAction<ContextState>>] {
-  const [context, setContext] = useState<ContextState>(null);
-  useEffect(() => {
-    if (!context) return;
-    const close = (): void => setContext(null);
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') close(); };
-    window.addEventListener('mousedown', close);
-    window.addEventListener('blur', close);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', close);
-      window.removeEventListener('blur', close);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [context]);
-  return [context, setContext];
 }
 
 function acceptForKind(kind: LinkMediaKind | 'all'): string {
