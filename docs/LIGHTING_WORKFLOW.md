@@ -27,7 +27,7 @@
 | 6 | 匹配百分百正确 | 读取后先校验起始码和节目编号，对不上就不写；每次写入前对比控台当前内容，写入后读回确认。 |
 | 7 | 新歌放在哪、叫什么 | 见下文“方式 2：新歌”。 |
 | 8 | 不重复同步、删改都同步 | 见下文“同步规则”。 |
-| 9 | 随时可播放 | 开播前检查只提示，不拦、不弹窗（`lighting-start-check.ts`）。有改动还没同步时，提示“控台上还是上一版”，时间码照常发，控台按它现有的时间线跑灯；停止后自动同步。MTC 起始码显示在歌曲的 MTC 标记上（`SongMtcStart.tsx`），节目单卡片上也有。 |
+| 9 | 随时可播放 | 开一首歌会做什么只在一处决定（`program-start.ts` 的 `programStart`）：只有没有音频的歌放不了，其余都只是某一路输出参不参加。开播前检查只提示，不拦、不弹窗（`lighting-start-check.ts`）。要画面的歌先等画面准备好；画面准备失败也照常放音乐、发时间码，画面标红（2026-10-30，取代 2026-10-19 的“画面不就绪就不播”）。有改动还没同步时，提示“控台上还是上一版”，时间码照常发，控台按它现有的时间线跑灯；停止后自动同步。MTC 起始码显示在歌曲的 MTC 标记上（`SongMtcStart.tsx`），节目单卡片上也有。 |
 | 10 | 编辑预览也对齐 | 编辑器里试听发出的时间码同样从这首歌的起始码开始（`use-lighting-preview.ts`）。 |
 
 ## 每条的测试
@@ -43,7 +43,7 @@
 | 7 | `apps/desktop/src/main/link/ma2-song-executor.test.ts`（1000 页放满放 1001 页）；`ma2-layout-service.test.ts`（序列与时间码节目同号） |
 | 8 | 同上第 8 条；`ma2-song-plan.test.ts`（删除直接同步、编号复用、不重复创建）；`ma2-layout-service.test.ts`（没有改动的同步不写） |
 | 3、5、6 | 控台按编号认：`packages/core/src/ma2-console-identity.test.ts`（引用跟着新 Show 名和 IP 走）；`ma2-layout-service.test.ts`（换了 Show 名和 IP 照常同步，同号序列换名才不写）；`ma2-realtime-session.test.ts`、`ma2-bound-song-sync.test.ts`（换 Show 名、换 IP、新增时间码节目都不停下） |
-| 9 | 同上第 9 条：没编灯、没同步、起点对不上、控台没有时间线、两首同起点，都照常播放并发时间码 |
+| 9 | 同上第 9 条：没编灯、没同步、起点对不上、控台没有时间线、两首同起点、要画面的歌，都照常播放并发时间码；`program-start.test.ts`；`native-program-player.test.ts`（画面准备失败照常放音乐和时间码） |
 
 ## 方式 2：新歌
 

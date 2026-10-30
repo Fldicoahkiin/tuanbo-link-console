@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyLinkProject, createLightingDocument, type LightingTrack, type LinkProject, type Ma2Catalog } from '@tb/schema';
+import { createEmptyLinkProject, createLightingDocument, linkCueSchema, type LightingTrack, type LinkProject, type Ma2Catalog } from '@tb/schema';
 import { matchMa2Programs } from './ma2-program-matching';
 import { ma2SongPairs, reconcileMa2ReadState } from './ma2-pairing-state';
 import { ma2PendingChanges } from './ma2-pending-changes';
 import { songLightingStatus } from './song-lighting-status';
 import { lightingStartCheck } from './lighting-start-check';
 import { nativeProgramSnapshot } from './native-program-snapshot';
+import { programStart } from './program-start';
 import { parseP1TimeOrigin, programTimeOrigin } from './ma2-time-origin';
 import { encodeMediaTimecode } from './mtc-output';
 
@@ -142,6 +143,18 @@ describe('第 9 条：随时可以播放，任何原因都不拦', () => {
     expect(prepared.snapshot.offsetMs).toBe(SONG_START_MS);
     const notice = lightingStartCheck(value, '甲', { portName: null, ports: null });
     expect(notice === null || typeof notice === 'string').toBe(true);
+    // programStart is the one place that decides what starting a song does.
+    const start = programStart(value, '甲', { revision: 1, positionMs: undefined, sampleRate: 48_000, mtcPortName: 'MTC', check: true });
+    expect(start).toMatchObject({ allowMtc: true, snapshot: { offsetMs: SONG_START_MS } });
+  });
+
+  it('要画面的歌也照常播放并发时间码：只等画面准备，画面失败不拦（取代 2026-10-19 的“画面不就绪就不播”）', () => {
+    const value = project();
+    value.rundown[0]!.cues = [linkCueSchema.parse({ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
+      actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
+    const start = programStart(value, '甲', { revision: 1, positionMs: undefined, sampleRate: 48_000, mtcPortName: null, check: true });
+    expect(start).toMatchObject({ picture: 'wait', allowMtc: true, snapshot: { offsetMs: SONG_START_MS } });
+    expect(programStart(value, '乙', { revision: 1, positionMs: undefined, sampleRate: 48_000, mtcPortName: null, check: true }).picture).toBe('optional');
   });
 
   it('配对上的歌显示两边的起始码：歌曲的和控台 Timecode 的是同一个', () => {

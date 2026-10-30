@@ -52,6 +52,7 @@ export * from './lighting-output-release';
 export * from './native-program-player';
 export * from './native-audio-analysis';
 export * from './native-program-snapshot';
+export * from './program-start';
 export * from './optional-output-ready';
 export * from './lighting-library';
 export * from './lighting-empty-cue';

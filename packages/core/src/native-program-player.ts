@@ -1,4 +1,4 @@
-import { createObsProgramSnapshot, itemNeedsObs } from './obs-program-snapshot';
+import { createObsProgramSnapshot } from './obs-program-snapshot';
 import { playbackLighting } from './lighting-playback';
 import { idleTimecodeOutput, timecodeOutputChange, type TimecodeOutputMemory } from './native-timecode-output';
 import { playlistItems, programPlaylists } from './program-playlists';
@@ -10,7 +10,7 @@ import type { PlaybackBoundary, PlaybackClock } from './program-player';
 import { emptyInternalPlayerState, type InternalPlayerDependencies, type InternalPlayerState } from './program-player';
 import type { ProgramLightingOutput } from './program-player';
 import { nativeProgramSnapshot } from './native-program-snapshot';
-import { lightingStartCheck } from './lighting-start-check';
+import { programStart, type ProgramStart } from './program-start';
 import { optionalOutputReady } from './optional-output-ready';
 
 type NativeApi = Pick<LinkDesktopApi, 'prepareNativePlayback' | 'controlNativePlayback' | 'getNativePlaybackDevices' | 'onNativePlaybackStatus' | 'prepareNativeObs' | 'stopNativeObs' | 'onNativeObsStatus' | 'preloadNativeObs' | 'cancelNativeObsPreload'>;
@@ -35,6 +35,7 @@ export class NativeProgramPlayer {
   private lightingPrepared = false;
   private finishing = false;
   private allowMtc = false;
+  private picture: ProgramStart['picture'] = 'optional';
   private mtcSuppressed = false;
   private loopStart: number | null = null;
   private reflectGain = false;
@@ -82,7 +83,7 @@ export class NativeProgramPlayer {
     if (selection) await this.api.cancelNativeObsPreload(selection.request);
   }
 
-  /** Every song starts with its timecode (2026-10-26); the start check only shows a warning. */
+  /** Every song starts with its timecode (2026-10-26); `programStart` decides what joins it. */
   play(itemId: string, positionMs?: number, paused = false): Promise<void> {
     const config = this.dependencies.configuration(), token = ++this.epoch;
     // The service discards another song's preselected picture for this play; that is not a failure.
@@ -99,14 +100,11 @@ export class NativeProgramPlayer {
       await this.optionalRuntime(() => this.stopObs(), '上一次的画面没清理干净');
       await this.optionalRuntime(() => this.dependencies.stop(), '上一次的联动没清理干净');
       if (!this.current(token)) return;
-      const prepared = nativeProgramSnapshot(this.project, itemId, this.revision, positionMs, config.audioSampleRate ?? 48000);
+      const prepared = programStart(this.project, itemId, { revision: this.revision, positionMs, sampleRate: config.audioSampleRate ?? 48000,
+        mtcPortName: config.mtcPortName, check: !reuseSession });
       const item = this.project.rundown.find(entry => entry.id === itemId)!;
-      if (!reuseSession) {
-        const check = lightingStartCheck(this.project, itemId, { portName: config.mtcPortName, ports: null });
-        if (check) this.reportUnavailable(check);
-      }
-      this.allowMtc = prepared.allowMtc;
-      if (prepared.notice) this.reportUnavailable(prepared.notice);
+      for (const warning of prepared.warnings) this.reportUnavailable(warning);
+      this.allowMtc = prepared.allowMtc; this.picture = prepared.picture;
       const sendMtc = this.allowMtc && this.state.mtcEnabled;
       const midiPortName = sendMtc ? config.mtcPortName : null;
       const snapshot = { ...prepared.snapshot, volume: config.fadeInMs && !paused ? 0 : prepared.snapshot.volume };
@@ -115,7 +113,7 @@ export class NativeProgramPlayer {
       if (this.loopStart !== null && loop) snapshot.endMs = loop.endMs;
       this.update({ positionMs: snapshot.positionMs, durationMs: snapshot.endMs, volume: prepared.snapshot.volume * 100,
         endAction: item.playback?.endAction ?? this.state.endAction, mtcPositionMs: this.allowMtc ? snapshot.positionMs + snapshot.offsetMs : null });
-      let nextSnapshot: ReturnType<typeof nativeProgramSnapshot>['snapshot'] | undefined;
+      let nextSnapshot: ProgramStart['snapshot'] | undefined;
       if (config.preload !== false) {
         const items = this.items();
         const next = this.loopStart !== null || this.state.endAction === 'loop' ? item
@@ -277,7 +275,7 @@ export class NativeProgramPlayer {
     if (status.notice) this.reportUnavailable(status.notice);
     if (status.state === 'failed' || status.state === 'stopped' && status.reason) this.reportUnavailable(`画面没有联动或已停止，音频照常播放。原因：${status.reason ?? '未知错误'}`);
     // A stopped picture channel is an output fault for a song with picture work; for one without, the notice above is all.
-    const fault = status.state === 'failed' && itemNeedsObs(this.project, status.itemId) ? `画面联动已停止：${status.reason ?? '未知错误'}` : status.fault;
+    const fault = status.state === 'failed' && this.picture === 'wait' ? `画面联动已停止：${status.reason ?? '未知错误'}` : status.fault;
     if (fault) this.reportFault(fault);
   }
   private async prepareObs(itemId: string, token: number): Promise<void> {
@@ -291,14 +289,16 @@ export class NativeProgramPlayer {
         preciseSeeking: this.dependencies.preciseSeeking?.() ?? false, snapshot, ...(nextFiles ? { nextFiles } : {}) });
       // A song that needs its picture waits for it (a first play may build seek
       // caches); the operator can stop. Optional picture keeps the one-second window.
-      const status = await (itemNeedsObs(this.project, itemId) ? preparing : optionalOutputReady(preparing,
+      const status = await (this.picture === 'wait' ? preparing : optionalOutputReady(preparing,
         () => { void this.stopObs().catch(error => this.reportUnavailable(`取消画面准备失败：${toUserErrorMessage(error)}`)); }, '后台画面'));
       if (this.current(token) && this.obsSession === envelope) this.receiveObs(status);
       else await this.stopObs();
     } catch (error) {
-      // Operator decision 2026-10-19: a song with picture work does not start without its picture.
-      if (this.current(token) && itemNeedsObs(this.project, itemId)) throw new Error(`画面准备失败：${toUserErrorMessage(error)}`, { cause: error });
-      if (this.current(token)) this.reportUnavailable(`画面没有联动，音频照常播放。原因：${toUserErrorMessage(error)}`);
+      // Rule 9 (2026-10-26) replaces the decision of 2026-10-19: a song with picture work plays without
+      // its picture, in red, instead of not starting; audio and timecode go on.
+      if (!this.current(token)) return;
+      if (this.picture === 'wait') this.startFault(`画面准备失败，音乐和时间码照常播放：${toUserErrorMessage(error)}`);
+      else this.reportUnavailable(`画面没有联动，音频照常播放。原因：${toUserErrorMessage(error)}`);
     }
     finally { if (this.obsSession === envelope) this.obsPreparing = false; }
   }

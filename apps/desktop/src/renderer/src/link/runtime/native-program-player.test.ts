@@ -53,15 +53,16 @@ function fixture() {
   return { player, project, deps, api, lighting, emit, state: () => state };
 }
 
-it('有画面动作的歌，后台画面准备失败时不开始播放；纯音频的歌照常播放并提示', async () => {
+it('随时可播放：有画面动作的歌画面准备失败时照常放音乐、发时间码，画面标红；纯音频的歌只提示（第 9 条取代 10-19 的决定）', async () => {
   const f = fixture(); f.project.obsOutputMode = 'scenes';
   f.project.rundown[0]!.cues = [linkCueSchema.parse({ id: 'cue', name: '机位', timecode: { hours: 0, minutes: 0, seconds: 1, frames: 0 },
     actions: [{ id: 'scene', label: '机位', kind: 'obs.setProgramScene', sceneName: '场景' }] })];
   f.api.prepareNativeObs.mockRejectedValueOnce(new Error('素材来源与工程文件不一致，拒绝覆盖'));
   await f.player.play('song-0');
-  expect(f.state()).toMatchObject({ status: 'error' });
-  expect(f.state().error).toContain('画面准备失败：素材来源与工程文件不一致');
-  expect(f.api.controlNativePlayback.mock.calls.map(([command]) => command.kind)).not.toContain('play');
+  expect(f.state()).toMatchObject({ status: 'playing', error: null, fault: '画面准备失败，音乐和时间码照常播放：素材来源与工程文件不一致，拒绝覆盖' });
+  expect(f.api.prepareNativePlayback.mock.calls[0]?.[0]).toMatchObject({ midiPortName: 'TEST', snapshot: { offsetMs: 480000 } });
+  expect(f.api.controlNativePlayback.mock.calls.map(([command]) => command.kind)).toContain('play');
+  expect(f.deps.notice).toHaveBeenCalledWith(expect.stringContaining('画面准备失败，音乐和时间码照常播放'), 'song-0');
   f.api.prepareNativeObs.mockRejectedValueOnce(new Error('OBS 未连接'));
   await f.player.play('song-1');
   expect(f.state().status).toBe('playing');
