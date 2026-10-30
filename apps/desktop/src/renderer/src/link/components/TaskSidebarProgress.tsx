@@ -8,7 +8,7 @@ import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { musicAnalysisOutcome } from '../view-models/music-analysis-progress';
 import { Ma2ReadProgress } from './Ma2ReadProgress';
 import { MusicAnalysisProgress } from './MusicAnalysisProgress';
-import { useMa2SongSyncStore } from '../runtime/ma2-song-sync';
+import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { pauseMa2RealtimeSession } from '../runtime/ma2-realtime-session';
 
 type Notify = (message: string, tone?: 'info' | 'error') => void;
@@ -22,7 +22,7 @@ export function TaskSidebarProgress({ notify }: { notify: Notify }): JSX.Element
   const attributes = useMa2AttributeStore();
   const materials = useMa2MaterialReadStore();
   const catalog = useMa2ReadStore();
-  const songs = useMa2SongSyncStore(state => state.songs);
+  const songs = useMa2SyncStore(state => state.songs);
   const documentId = useDocumentStore(state => state.documentId);
   const path = useDocumentStore(state => state.path);
   const [jobs, setJobs] = useState<AutomaticMusicJob[]>([]);

@@ -45,7 +45,7 @@ test('软件流程：连接后自动配对，编辑后自动发送并应用已�
     await page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button', { name: 'MA2 控台', exact: true }).click();
     await page.getByLabel('MA2 连接方式').selectOption('network');
     await page.getByRole('button', { name: /^(连接控台|读取 Cue)$/ }).click();
-    await expect(page.getByText(/可在顶部打开“实时同步”/)).toBeVisible();
+    await expect(page.getByText(/顶部“实时同步”开着时/)).toBeVisible();
     await nav.getByRole('button', { name: '灯光工作台', exact: true }).click();
     await expect(page.locator('.waveform-cue-point')).toHaveCount(2);
     expect(await app.evaluate(() => process.env.TBLINK_EDIT_REQUEST)).toBeUndefined();

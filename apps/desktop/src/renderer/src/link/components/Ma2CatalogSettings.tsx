@@ -9,13 +9,13 @@ import { prepareMa2Editing } from '../runtime/ma2-editing-session';
 import { P1ProjectSyncPanel } from './P1ProjectSyncPanel';
 import { P1LightingImportReport } from './P1LightingImportReport';
 import { Ma2ProgramSync } from './Ma2ProgramSync';
-import { useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
+import { useMa2SyncStore } from '../stores/ma2-sync-store';
 
 export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy, connected }: { connected: boolean; onBusy: (busy: boolean) => void; method: 'local' | 'network'; directory: string; disabled: boolean; notify: (message: string, tone?: 'info' | 'error') => void }): JSX.Element {
   const project = useDocumentStore(state => state.project);
   const cached = project?.ma2ReadState;
   const job = useMa2ReadStore();
-  const automatic = useMa2AutoSyncStore();
+  const session = useMa2SyncStore(state => state.session);
   useEffect(() => { onBusy(job.busy); return () => onBusy(false); }, [job.busy, onBusy]);
   const endpoint = async (): Promise<Ma2CatalogRequest> => {
     if (method === 'local') {
@@ -46,7 +46,7 @@ export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy
     <section className="ma2-settings-group">
       <h3>控台灯光</h3>
       <p className="settings-note">{!project ? '打开工程后，可以把控台 Cue 读到歌曲里。' : !connected ? '连接控台后，可读取节目 Cue。' : '读取结果保存在工程中，歌曲按 MTC 起始码自动对上控台时间线，可到灯光工作台编辑。'}</p>
-      <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{automatic.message}</p>
+      <p role={session.status === 'blocked' ? 'alert' : 'status'}>{session.message}</p>
       <div className="device-actions">
         <Button className={connected ? "primary-button" : "secondary-button"} disabled={disabled || job.busy || !project || !connected} onClick={() => guard(() => read())}>{cached ? '更新控台读取' : '读取控台灯光到现有歌曲'}</Button>
         {cached ? <><Button className="secondary-button" disabled={disabled || job.busy} onClick={() => guard(() => read(true))}>只补读未完成项</Button>
@@ -62,12 +62,7 @@ export function Ma2CatalogSettings({ method, directory, disabled, notify, onBusy
     </section>
     <details className="ma2-advanced-settings"><summary>诊断与手动同步</summary>
       {cached?.catalog.metrics ? <p>本次读取 {(cached.catalog.metrics.elapsedMs / 1000).toFixed(1)} 秒 · {cached.catalog.metrics.requests} 次请求 · {(cached.catalog.metrics.bytes / 1024).toFixed(0)} KB 数据{cached.catalog.metrics.wireCommands !== undefined ? ` · ${cached.catalog.metrics.wireCommands} 条网络命令 · ${((cached.catalog.metrics.receivedBytes ?? 0) / 1024).toFixed(0)} KB 网络接收` : ''}。各阶段耗时已保存到数据包。</p> : null}
-      <Ma2ProgramSync method={method} directory={directory} network={automatic.request?.connection.network ?? null} disabled={disabled || job.busy} notify={notify} onBusy={onBusy} />
-      <Button className="secondary-button" disabled={!automatic.request && (disabled || job.busy || !cached)} onClick={() => guard(async () => {
-        if (automatic.request) { useMa2AutoSyncStore.setState({ request: null }); return; }
-        if (cached) useMa2AutoSyncStore.setState({ request: { catalog: cached.catalog, connection: await endpoint() } });
-      })}>{automatic.request ? '关闭编辑后自动同步' : '启用编辑后自动同步'}</Button>
-      <p role="status">{automatic.message}</p>
+      <Ma2ProgramSync method={method} directory={directory} network={null} disabled={disabled || job.busy} notify={notify} onBusy={onBusy} />
       <p className="settings-note">联动台不转换的控台动作，写回时保持控台原样。写回前仍要先重新读取并和控台比对。</p>
     </details>
   </section>;

@@ -26,7 +26,7 @@ test('MA2 设置分组及大量搜索结果保持紧凑', async ({}, info) => {
     await page.screenshot({ path: info.outputPath('ma2-local-top.png') });
     await page.getByText('歌曲导入与同步', { exact: true }).click();
     await page.locator('.ma2-catalog-settings > .ma2-advanced-settings > summary').click();
-    await page.getByRole('button', { name: '启用编辑后自动同步', exact: true }).scrollIntoViewIfNeeded();
+    await page.locator('.ma2-catalog-settings > .ma2-advanced-settings').scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath('ma2-operation-groups.png') });
     await method.selectOption('network');
     await page.locator('.ma2-network-settings > .ma2-advanced-settings > summary').click();

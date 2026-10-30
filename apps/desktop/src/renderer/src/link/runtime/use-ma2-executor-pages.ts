@@ -1,17 +1,15 @@
 import { useEffect, type MutableRefObject } from 'react';
 import { currentMa2LayoutScope } from '../stores/ma2-layout-store';
 import { loadMa2ExecutorDirectory, loadMa2ExecutorPage, useMa2ExecutorPageStore } from '../stores/ma2-executor-page-store';
-import { useMa2AutoSyncStore } from './use-ma2-auto-sync';
-import { useMa2SongSyncStore } from './ma2-song-sync';
+import { ma2ConsoleWriting, ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useMa2MaterialReadStore } from '../stores/ma2-material-read-store';
 
 /** Page polling yields the single console channel to writes, material reads and playback. */
 export function pageReadsPaused(): boolean {
   const current = useMa2ExecutorPageStore.getState();
-  const automatic = useMa2AutoSyncStore.getState();
-  return current.mutating || current.scanning || automatic.status === 'writing' || automatic.status === 'reading'
-    || automatic.timelinePlaying || automatic.previewPlaying || useMa2MaterialReadStore.getState().busy
-    || Object.values(useMa2SongSyncStore.getState().songs).some(song => song.state === 'syncing');
+  const sync = useMa2SyncStore.getState();
+  return current.mutating || current.scanning || ma2ConsoleWriting() || ma2SyncPlaying() || useMa2MaterialReadStore.getState().busy
+    || sync.names.state === 'syncing' || Object.values(sync.songs).some(song => song.state === 'syncing');
 }
 
 /** One polling loop for a mounted page view; returns its stop function. */

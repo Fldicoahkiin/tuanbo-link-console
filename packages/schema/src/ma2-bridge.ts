@@ -7,6 +7,8 @@ export const ma2NetworkSettingsSchema = z.object({
 export type Ma2NetworkSettings = z.infer<typeof ma2NetworkSettingsSchema>;
 export const ma2NetworkTargetSchema = ma2NetworkSettingsSchema.pick({ host: true, port: true, monitorPort: true, username: true });
 export type Ma2NetworkTarget = z.infer<typeof ma2NetworkTargetSchema>;
+/** The bridge's answer to ASSIGNSEQ: the executor a Sequence was placed on. */
+export const ma2SequenceAssignmentSchema = z.object({ sequence: z.number().int().min(1).max(99999), executor: z.string().regex(/^[1-9]\d*\.[1-9]\d*$/) }).strict();
 export const ma2NetworkSaveSchema = z.object({ settings: ma2NetworkSettingsSchema, password: z.string().max(256).regex(/^[^"\\\u0000-\u001f\u007f]*$/).optional() }).strict();
 export type Ma2NetworkSave = z.infer<typeof ma2NetworkSaveSchema>;
 export const ma2NetworkCatalogSchema = z.object({

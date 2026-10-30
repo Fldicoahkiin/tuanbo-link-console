@@ -1,6 +1,5 @@
 import { Ma2LayoutCanvas } from './Ma2LayoutCanvas';
-import { useMa2SongSyncStore } from '../runtime/ma2-song-sync';
-import { useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
+import { ma2SyncPlaying, useMa2SyncStore } from '../stores/ma2-sync-store';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, Plus, RefreshCw, List, Grid2X2, Map, MoreHorizontal, CornerDownLeft } from 'lucide-react';
@@ -29,7 +28,7 @@ export function Ma2LayoutView({ selected, onBack, onNavigate, onSettings, render
   useEffect(() => {
     if (!live || editing || state.busy || state.error) return;
     const timer = setInterval(() => {
-      if (useMa2AutoSyncStore.getState().timelinePlaying || useMa2AutoSyncStore.getState().previewPlaying || Object.values(useMa2SongSyncStore.getState().songs).some(song => song.checking || song.state === 'syncing')) return;
+      if (ma2SyncPlaying() || Object.values(useMa2SyncStore.getState().songs).some(song => song.checking || song.state === 'syncing')) return;
       void readMa2LayoutPage(state.page, true).catch((cause: unknown) => { setLive(false); setInputError(String(cause)); });
     }, 2500);
     return () => clearInterval(timer);

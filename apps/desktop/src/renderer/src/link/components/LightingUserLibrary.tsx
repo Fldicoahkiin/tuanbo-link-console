@@ -10,7 +10,7 @@ import { Ma2SequencePreview } from './Ma2SequencePreview';
 import { LightingAuditionStop } from './LightingAuditionStop';
 import { useAuditionSelectionReset } from '../stores/ma2-audition-store';
 import { LightingCueContextMenu } from './LightingCueContextMenu';
-import { enableMa2NameSync } from '../runtime/use-ma2-auto-sync';
+import { enableMa2NameSync } from '../runtime/ma2-name-sync';
 import { CuePoolGrid } from './CuePoolGrid';
 import { EFFECT_DRAG } from './LightingEffectDock';
 import '../lighting-classification.css';

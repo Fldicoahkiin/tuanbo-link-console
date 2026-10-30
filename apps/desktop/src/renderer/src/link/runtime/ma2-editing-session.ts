@@ -2,7 +2,7 @@ import { ma2CatalogSchema, type Ma2CatalogRequest } from '@tb/schema';
 import { useDocumentStore } from '../stores/document-store';
 import { importCachedMa2, scanMa2, useMa2ReadStore } from '../stores/ma2-read-store';
 import { ma2PendingChanges } from '@tb/core/link';
-import { useMa2AutoSyncStore } from './use-ma2-auto-sync';
+import { ma2ConsoleWriting } from '../stores/ma2-sync-store';
 import { scanMa2Materials } from '../stores/ma2-material-read-store';
 
 let preparing = false;
@@ -22,8 +22,7 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   };
   if (!current().project?.rundown.length) return 'MA2 已连接。导入 P1 歌曲后重新连接，就能载入对应的 Cue';
   if (useMa2ReadStore.getState().busy) throw new Error('正在读取控台，请等这次完成');
-  if (useMa2AutoSyncStore.getState().status === 'writing') throw new Error('正在写入控台并确认，请完成后再连接或刷新');
-  useMa2AutoSyncStore.setState({ request: null });
+  if (ma2ConsoleWriting()) throw new Error('正在写入控台并确认，请完成后再连接或刷新');
   const cached = current().project?.ma2ReadState;
   const source = connection.network ? `${connection.network.host}:${connection.network.port}` : '本机 onPC';
   let reuse = false;
@@ -53,13 +52,9 @@ async function prepare(connection: Ma2CatalogRequest, documentId: number, refres
   const retained = bindings.filter(binding => binding.nativeEvents?.length || binding.playback === 'native-timecode').length;
   const pairingNotice = state.failures.length ? `；${state.failures.length} 条没能放进歌曲，原因可在“控台时间线”里查看` : '';
   const summary = `${reuse ? '已用工程里保存的控台数据（控台有改动请点“更新控台读取”）' : '控台读取完成'}；${bindings.length} 条已关联，${retained} 条含控台原样动作（这些动作原样保留，其余 Cue 可以改并写回）${pairingNotice}${libraryNotice}`;
-  const reason = state.catalog.incomplete || state.catalog.sourceUnverified ? '控台还没读完整'
-    : ma2PendingChanges(project).length ? '有连接前做的本地修改，请先确认后再同步'
-    : !bindings.length ? '还没有已关联的时间线' : null;
-  if (reason) {
-    useMa2AutoSyncStore.setState({ status: 'off', message: `${reason}。读到的 Cue 可以查看，但本地修改不会自动写回` });
-    return `${summary}。${reason}，没有开启自动写回`;
-  }
-  useMa2AutoSyncStore.setState({ status: 'off', message: '已就绪。打开实时同步后，停止播放时做的修改会自动写回控台' });
-  return `${summary}。可在顶部打开“实时同步”，之后停止播放时每次拖动完都会自动写入控台并确认`;
+  const edited = ma2PendingChanges(project).length;
+  const note = state.catalog.incomplete || state.catalog.sourceUnverified ? '。控台还没读完整，读到的 Cue 可以查看，没读到的部分不会写回'
+    : edited ? `。有 ${edited} 条时间线带着连接前做的本地修改：同步时先读控台比对，两边改了同一处以联动台为准，控台上的旧版本写入前备份在控台上`
+    : !bindings.length ? '。还没有已关联的时间线' : '';
+  return `${summary}${note}。顶部“实时同步”开着时，停止播放后每次改完都会自动写入控台并回读确认`;
 }

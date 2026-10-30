@@ -1,11 +1,11 @@
-import { useMa2SongSyncStore } from '../runtime/ma2-song-sync';
 import { useMa2RealtimePreference } from '../runtime/ma2-realtime-preference';
 import { pauseMa2RealtimeSession, pendingSongSummary, refreshMa2RealtimeSession, retryMa2RealtimeSession, songsWithoutConsoleShow, writeMissingConsoleShows } from '../runtime/ma2-realtime-session';
 import { useMemo, useState } from 'react';
 import { Check, CircleAlert, FolderArchive, FolderOpen, RefreshCw, Save } from 'lucide-react';
 import type { ProjectArchiveResult } from '@tb/schema';
 import { ma2PendingChanges } from '@tb/core/link';
-import { enableMa2NameSync, useMa2AutoSyncStore } from '../runtime/use-ma2-auto-sync';
+import { enableMa2NameSync } from '../runtime/ma2-name-sync';
+import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { archiveMa2Project } from '../runtime/ma2-project-archive';
 import { useDocumentStore } from '../stores/document-store';
 import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
@@ -21,10 +21,11 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const showless = useMemo(() => songsWithoutConsoleShow(project), [project]);
   const renames = useMemo(() => pendingMa2Renames(project), [project]);
   const legacy = useMemo(() => legacyMa2ConsoleNames(project), [project]);
-  const automatic = useMa2AutoSyncStore();
+  const session = useMa2SyncStore(state => state.session);
+  const names = useMa2SyncStore(state => state.names);
   const active = useMa2RealtimePreference(state => state.enabled);
   const recoveryError = useRecoveryCopyStore(state => state.error);
-  const songSync = useMa2SongSyncStore(state => state.songs);
+  const songSync = useMa2SyncStore(state => state.songs);
   const songs = Object.values(songSync);
   const [busy, setBusy] = useState(false);
   const [archives, setArchives] = useState<ProjectArchiveResult['entries']>([]);
@@ -34,12 +35,17 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   const [archivingOff, setArchivingOff] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   if (!project) return null;
-  const working = automatic.status === 'writing' || automatic.status === 'reading' || songs.some(song => song.state === 'syncing' || song.requestId);
-  const count = pending.length + unbound.length + renames.length + showless.length + songs.filter(song => song.state === 'pending' && !unbound.some(item => item.itemId === song.itemId)).length;
-  const failed = songs.some(song => song.state === 'blocked');
-  const blocked = automatic.status === 'blocked' || failed;
+  const working = names.state === 'syncing' || songs.some(song => song.state === 'syncing' || song.requestId);
+  // One count per song, either way it was lit; edits of a song whose sync has not started yet count once too.
+  const jobs = new Set(songs.map(song => song.itemId));
+  const count = unbound.length + renames.length + showless.length + songs.filter(song => song.state === 'pending' && !unbound.some(item => item.itemId === song.itemId)).length
+    + new Set(pending.filter(change => !jobs.has(change.itemId)).map(change => change.itemId)).size;
+  const failed = names.state === 'blocked' || songs.some(song => song.state === 'blocked');
+  const blocked = session.status === 'blocked' || failed;
   const moving = songs.find(song => song.requestId && song.progress?.total);
-  const status = recoveryError ? '恢复副本需要处理' : !active ? '已暂停同步' : failed ? '同步失败' : blocked ? '有修改需要确认' : moving?.progress ? `同步中 ${Math.floor(moving.progress.completed / moving.progress.total * 100)}%` : working ? '同步中' : songs.some(song => song.waitingForConnection) ? '等待连接' : count ? `待同步 ${count}` : songs.length && songs.every(song => song.state === 'verified') ? '已同步' : automatic.status === 'verified' ? '已同步' : '同步已开启';
+  const confirmed = songs.length ? songs.every(song => song.state === 'verified') : names.state === 'verified';
+  const status = recoveryError ? '恢复副本需要处理' : !active ? '已暂停同步' : failed ? '同步失败' : blocked ? '控台需要核对' : moving?.progress ? `同步中 ${Math.floor(moving.progress.completed / moving.progress.total * 100)}%` : working ? '同步中' : songs.some(song => song.waitingForConnection) ? '等待连接' : count ? `待同步 ${count}` : confirmed ? '已同步' : '同步已开启';
+  const state = blocked ? 'blocked' : working ? 'writing' : count ? 'staged' : confirmed ? 'verified' : 'waiting';
   const run = async (action: () => Promise<void> | void): Promise<void> => {
     if (busy) return;
     setBusy(true);
@@ -89,7 +95,7 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
   };
   return <div className="ma2-sync-controls" aria-label="灯光同步操作">
     <button className="ma2-realtime-switch" role="switch" aria-label="实时同步" aria-checked={active} disabled={busy || (working && !active)} onClick={() => void run(toggle)} title="编辑完成后自动检查、存档、写入控台并确认；播放时先暂存，停止后再同步"><span className="ma2-switch-track" aria-hidden="true"><span /></span><span>实时同步</span></button>
-    <button className="ma2-sync-status" aria-label="同步状态详情" data-state={blocked ? 'blocked' : automatic.status} onClick={() => {
+    <button className="ma2-sync-status" aria-label="同步状态详情" data-state={state} onClick={() => {
       if (!detailOpen) void linkDesktopViewModel.projectArchiveSettings({ action: 'status' }).then(value => setArchivingOff(!value.settings.enabled), (error: unknown) => setNotice(`存档设置读取失败：${error instanceof Error ? error.message : String(error)}`));
       setDetailOpen(value => !value); setArchiveOpen(false);
     }}>{blocked || count ? <CircleAlert /> : <Check />}<span>{status}</span></button>
@@ -100,10 +106,11 @@ export function Ma2PendingChanges({ playing, notify }: { playing: boolean; notif
       <header><strong>{status}</strong><button onClick={() => setDetailOpen(false)}>关闭</button></header>
       {recoveryError ? <p role="alert">{recoveryError}</p> : null}
       {archivingOff ? <p>已关闭存档，写入前不再备份。</p> : null}
-      <p role={automatic.status === 'blocked' ? 'alert' : 'status'}>{notice || (!active ? '已暂停，修改保留在本地。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : automatic.request || automatic.status === 'blocked' || !songs.length ? automatic.message : '名称和 Cue 内容会双向比对，控台位置如下。')}</p>
+      <p role={session.status === 'blocked' ? 'alert' : 'status'}>{notice || (!active ? '已暂停，修改保留在本地。' : !useDocumentStore.getState().path ? '请先保存工程，保存后自动同步。' : session.status !== 'ready' || !songs.length ? session.message : '名称和 Cue 内容会双向比对，控台位置如下。')}</p>
       {blocked ? <button onClick={() => { setNotice(''); refreshMa2RealtimeSession(); }}>刷新同步</button> : null}
       {songs.map(song => <p key={song.itemId} role={song.state === 'blocked' ? 'alert' : 'status'}>{project.rundown.find(item => item.id === song.itemId)?.title ?? song.name}：{song.progress?.detail ?? song.message}</p>)}
       {playing ? <p>播放时先暂存在本地，停止后再同步。</p> : null}
+      {names.state !== 'idle' && names.message ? <p role={names.state === 'blocked' ? 'alert' : 'status'}>改名：{names.message}</p> : null}
       {renames.map(change => <p key={ma2RenameKey(change)}>序列 {change.sequence}{change.kind === 'single' ? ` · Cue ${change.cue}` : ''}：{change.confirmedName} → {change.name}</p>)}
       {renames.length ? <button disabled={busy || working} onClick={() => void run(() => enableMa2NameSync(useDocumentStore.getState().documentId))}>同步名称</button> : null}
       {legacy.count ? <p>控台上有 {legacy.count} 个以前写入的中文名称，控台只能显示英文和数字。<button disabled={busy || working} onClick={() => void run(async () => { const count = await convertMa2LegacyNames(useDocumentStore.getState().documentId); setNotice(`已把 ${count} 个名称改成拼音，歌曲名称会在下次同步时写入`); })}>改为拼音</button></p> : null}

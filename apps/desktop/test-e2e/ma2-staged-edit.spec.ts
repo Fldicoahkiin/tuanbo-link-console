@@ -39,7 +39,7 @@ test('播放中编辑已绑定 Cue、撤销重做、停止与重开保留待提�
       ipcMain.removeHandler('link:ma2-preview'); ipcMain.handle('link:ma2-preview', () => data.catalog.entries[0]!.preview);
       ipcMain.removeHandler('link:ma2-effect-library'); ipcMain.handle('link:ma2-effect-library', () => data.library);
       process.env.TBLINK_STAGED_WRITE_CALLS = '0';
-      for (const channel of ['link:ma2-apply', 'link:ma2-auto-bind', 'link:ma2-song-sync']) {
+      for (const channel of ['link:ma2-apply', 'link:ma2-song-sync']) {
         ipcMain.removeHandler(channel); ipcMain.handle(channel, () => {
           process.env.TBLINK_STAGED_WRITE_CALLS = String(Number(process.env.TBLINK_STAGED_WRITE_CALLS) + 1);
           throw new Error('播放或主动暂停期间不得提交控台修改');

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type MouseEvent } from 'react';
 import { renameConsoleCueCommand, updateConsoleCueCategoriesCommand, type CategoryChanges, consoleCueKey, hideConsoleCuesCommand, projectLightingLibrary, type ConsoleCueReference, type ConsoleLibrarySource } from '@tb/core/link';
 import { useDocumentStore } from '../stores/document-store';
 import { LightingCueContextMenu } from './LightingCueContextMenu';
-import { enableMa2NameSync } from '../runtime/use-ma2-auto-sync';
+import { enableMa2NameSync } from '../runtime/ma2-name-sync';
 import { LightingCueAttributes } from './LightingCueAttributes';
 
 export function useConsoleCueClassification(onError:(message:string)=>void){

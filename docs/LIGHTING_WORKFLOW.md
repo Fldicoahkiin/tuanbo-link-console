@@ -22,8 +22,8 @@
 | 1、3 | 配对只看 MTC 起始码 | `packages/core/src/ma2-pairing-state.ts`：配对凭据只有时间码节目编号和起始码，不含 Cue 时间、版本号；控台上改 Cue 时间不会让配对失效。 |
 | 1、3 | P1 的起始码原样带进来、不被改掉 | 导入 P1 时每首歌的 `MidiStartTime` 写进歌曲的 MTC 起始码，导入后逐首列出；和 P1 歌同名、起始码不同的本地歌单独列出，由操作员确认后改（`p1-import-report.ts`）。“生成点击播放联动工程”沿用每首歌已有的起始码，只给没有起始码的歌分配（`p1-auto-follow.ts`）。 |
 | 4、10 | 不连网线也能用 MIDI 时间码 | 播放永远从这首歌的 MTC 起始码发送时间码（`native-program-snapshot.ts` 用 `programTimeOrigin`），只要选了时间码输出端口就发。网线只用于编辑和同步，不是播放的前提。 |
-| 5 | 同一条时间线双向同步 | 方式 1 的绑定（`ma2Bindings`）由 `ma2-auto-sync.ts` 三方比较后写回原来的 Timecode 节目，不新建。控台上录的、带联动台不转换动作的时间线也能改：这些动作原样保留，按键松开跟着按下一起移动（`ma2-event-write.ts` 的 `ma2ReleaseFollowers`）。 |
-| 5 | 两边同时改同一个点 | 以联动台为准写入，控台上的旧版本在写入前备份到控台，同步不停下来等人选（`ma2-auto-sync.ts`）。 |
+| 5 | 同一条时间线双向同步 | 方式 1 的绑定（`ma2Bindings`）由 `ma2-bound-song-sync.ts` 三方比较后写回原来的 Timecode 节目，不新建；和方式 2 的歌走同一个逐首同步（`ma2-song-sync.ts`）。控台上录的、带联动台不转换动作的时间线也能改：这些动作原样保留，按键松开跟着按下一起移动（`ma2-event-write.ts` 的 `ma2ReleaseFollowers`）。 |
+| 5 | 两边同时改同一个点 | 以联动台为准写入，控台上的旧版本在写入前备份到控台，同步不停下来等人选（`ma2-bound-song-sync.ts`）。 |
 | 6 | 匹配百分百正确 | 读取后先校验起始码和节目编号，对不上就不写；每次写入前对比控台当前内容，写入后读回确认。 |
 | 7 | 新歌放在哪、叫什么 | 见下文“方式 2：新歌”。 |
 | 8 | 不重复同步、删改都同步 | 见下文“同步规则”。 |
@@ -42,7 +42,7 @@
 | 5 | 同上第 5 条；`apps/desktop/src/main/link/ma2-song-console-edits.test.ts`（控台上改的读回联动台） |
 | 7 | `apps/desktop/src/main/link/ma2-song-executor.test.ts`（1000 页放满放 1001 页）；`ma2-layout-service.test.ts`（序列与时间码节目同号） |
 | 8 | 同上第 8 条；`ma2-song-plan.test.ts`（删除直接同步、编号复用、不重复创建）；`ma2-layout-service.test.ts`（没有改动的同步不写） |
-| 3、5、6 | 控台按编号认：`packages/core/src/ma2-console-identity.test.ts`（引用跟着新 Show 名和 IP 走）；`ma2-layout-service.test.ts`（换了 Show 名和 IP 照常同步，同号序列换名才不写）；`ma2-realtime-session.test.ts`、`ma2-auto-sync.test.ts`（换 Show 名、换 IP、新增时间码节目都不停下） |
+| 3、5、6 | 控台按编号认：`packages/core/src/ma2-console-identity.test.ts`（引用跟着新 Show 名和 IP 走）；`ma2-layout-service.test.ts`（换了 Show 名和 IP 照常同步，同号序列换名才不写）；`ma2-realtime-session.test.ts`、`ma2-bound-song-sync.test.ts`（换 Show 名、换 IP、新增时间码节目都不停下） |
 | 9 | 同上第 9 条：没编灯、没同步、起点对不上、控台没有时间线、两首同起点，都照常播放并发时间码 |
 
 ## 方式 2：新歌
@@ -68,6 +68,7 @@
 - **播放时不写控台**：正在播放时改动先留在联动台，停止后再同步，避免演出中改控台。
 - **写入中控台被改**：每次写入前，控台会先比较这首歌的序列和联动台读取时是不是一样；新歌会先确认这个编号还空着。不一样就这次不写，也不留“写了一半”的记录，提示“控台同时在改”，稍后重新读取控台后再写，不会把别人的序列当成这首歌的。每次间隔 2 秒重试；控台连续 5 次都在改时，之后按普通失败计数，再失败 3 次就停止自动重试，等人处理好后点“刷新同步”，不会一直转圈。
 - **断线**：断线时改动留在联动台，连接恢复后继续同步；播放不受影响，时间码照常发送。
+- **两种方式同一个同步**（2026-10-30）：方式 1 的歌（控台上已有的时间码节目）、方式 2 的歌（联动台建的序列）和改名，用同一个逐首同步、同一份状态（`ma2-song-sync.ts`）。断线、播放中、编辑中都只是等待，不算失败。失败时方式 2 按上一条重试 3 次；方式 1 和改名不自动重试（项目规范），失败一次就停在这首歌上并写明原因，下一次编辑或点“刷新同步”再试。一首歌停下不挡其他歌。方式 1 的歌也按上面的节奏核对控台：正在编辑的歌每 2 秒，其他歌每 30 秒。测试：`ma2-bound-song-sync.test.ts`、`ma2-staged-edit.test.ts`、`ma2-rename.test.ts`。
 - **控台 Show 另存新名字、换了 IP**（2026-10-30）：控台只按编号认，Show 的文件名和 IP 都不算。联动台发现控台换了名字或地址，就把工程里所有控台引用（素材、分类库、改名记录、每首歌的序列位置）改到新的名字和地址，接着同步，不用重新读取、不用重新绑定，日志里记一笔（`ma2-console-identity.ts`、`ma2-realtime-session.ts`）。唯一的例外：方式 2 的歌，控台上同一个编号的序列换了名字，说明可能打开了另一个 Show，这首歌先不写，提示里写明两边的名字（`ma2-layout-service.ts`）。
 
 ## 已知限制

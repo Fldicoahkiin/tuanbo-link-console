@@ -33,7 +33,6 @@ export * from './lighting-music';
 export * from './music-analysis';
 export * from './automatic-music-analysis';
 export * from './music-monitor';
-export * from './ma2-auto-bind';
 export * from './native-program';
 
 export { musicStructureSchema, musicStructureSegmentSchema, type MusicStructure, type MusicStructureSegment } from './music-structure';

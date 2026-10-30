@@ -55,7 +55,6 @@ export * from './native-program-snapshot';
 export * from './optional-output-ready';
 export * from './lighting-library';
 export * from './lighting-empty-cue';
-export * from './ma2-auto-bind';
 export * from './lighting-library-classification';
 export * from './lighting-category-navigation';
 export * from './ma2-cue-attributes';

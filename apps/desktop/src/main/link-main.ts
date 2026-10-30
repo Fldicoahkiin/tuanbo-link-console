@@ -39,8 +39,6 @@ import { ObsLivePreview } from './link/obs-live-preview';
 import { ObsNativeSeek } from './link/obs-native-seek';
 import { obsSourceCreateSchema, obsSourceNameSchema, obsSourceApplySchema, ma2BridgeRequestSchema, ma2ReadRequestSchema, ma2CompareRequestSchema, ma2ApplyRequestSchema, ma2CreateRequestSchema } from '@tb/schema';
 import { createMa2Timecode } from './link/ma2-create';
-import { ma2AutoBindRequestSchema } from '@tb/schema';
-import { prepareMa2AutoBindings } from './link/ma2-auto-bind-service';
 import { renameMa2Object } from './link/ma2-rename-service';
 import { ma2RenameRequestSchema } from '@tb/schema';
 import { ma2CatalogRequestSchema, ma2ReadProgressSchema, linkP1ProjectImportProgressSchema, type Ma2ReadProgressUpdate, type LinkP1ProjectImportProgress } from '@tb/schema';
@@ -1188,17 +1186,6 @@ function registerIpc(
   handle('link:ma2-new-cue', async (_event,value:unknown) => {
     try { const result=await ma2Network.newCue(ma2NewCueRequestSchema.parse(value));await logger.record({level:'info',category:'device',device:'MA2',message:`已新建序列 ${result.sequence}，Layout ${result.layout.layout} 已确认`,result:'succeeded'});return result; }
     catch(error) { await logger.record({level:'error',category:'device',device:'MA2',message:`新建 Cue 未完成：${String(error)}`,result:'failed'});throw error; }
-  });
-  handle('link:ma2-auto-bind', async (_event, value: unknown) => {
-    const request = ma2AutoBindRequestSchema.parse(value);
-    try {
-      const result = await prepareMa2AutoBindings((await getMa2Connection(request)).bridge, request, () => runtimeActive || nativePlaybackActive());
-      await logger.record({ level: 'info', category: 'device', device: 'MA2', message: `自动关联已确认：${result.plan.assignments.length} 个执行位置`, result: 'succeeded' });
-      return result;
-    } catch (error) {
-      await logger.record({ level: 'error', category: 'device', device: 'MA2', message: `自动关联未完成：${String(error)}`, result: 'failed' });
-      throw error;
-    }
   });
   handle('link:ma2-rename', async (_event, value: unknown) => {
     const request = ma2RenameRequestSchema.parse(value);
