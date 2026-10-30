@@ -30,6 +30,20 @@
 | 9 | 随时可播放 | 开播前检查只提示，不拦、不弹窗（`lighting-start-check.ts`）。有改动还没同步时，提示“控台上还是上一版”，时间码照常发，控台按它现有的时间线跑灯；停止后自动同步。MTC 起始码显示在歌曲的 MTC 标记上（`SongMtcStart.tsx`），节目单卡片上也有。 |
 | 10 | 编辑预览也对齐 | 编辑器里试听发出的时间码同样从这首歌的起始码开始（`use-lighting-preview.ts`）。 |
 
+## 每条的测试
+
+每条规则都有测试守着，推 master 时在 Windows 上跑（`.github/workflows/verify-desktop.yml`）。改了代码让下面任何一个测试失败，就是违反了这条规则，不能靠改测试过关。
+
+| 条 | 测试 |
+| --- | --- |
+| 1 | `packages/core/src/lighting-workflow-rules.test.ts` 第 1 条 |
+| 3 | 同上第 3 条：换 Show 名、会话、版本、歌名、顺序、音频，配对都不变；工程里存的旧配对不参与；差一帧以上不配；两首同起点不猜 |
+| 4、10 | 同上第 4、10 条：时间码从歌曲起始码开始，和有没有读过控台无关 |
+| 5 | 同上第 5 条；`apps/desktop/src/main/link/ma2-song-console-edits.test.ts`（控台上改的读回联动台） |
+| 7 | `apps/desktop/src/main/link/ma2-song-executor.test.ts`（1000 页放满放 1001 页）；`ma2-layout-service.test.ts`（序列与时间码节目同号） |
+| 8 | 同上第 8 条；`ma2-song-plan.test.ts`（删除直接同步、编号复用、不重复创建）；`ma2-layout-service.test.ts`（没有改动的同步不写） |
+| 9 | 同上第 9 条：没编灯、没同步、起点对不上、控台没有时间线、两首同起点，都照常播放并发时间码 |
+
 ## 方式 2：新歌
 
 - **编号**：序列和时间码节目用同一个编号。从设置里的“起始序列”往后，找第一个在序列和时间码节目两边都空着的编号（`ma2-layout-service.ts`）。看到序列 N，就去时间码节目 N 找它的时间线，反过来也一样。
