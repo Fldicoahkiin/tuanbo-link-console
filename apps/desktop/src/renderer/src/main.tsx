@@ -1,6 +1,7 @@
 // First stylesheet: declares the cascade layers before any component brings its own styles.
 import './styles/layers.css';
 import './styles/tokens.css';
+import './link/ui/ui.css';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { LinkApp } from './link/LinkApp';
@@ -13,7 +14,6 @@ import './link/home-layout.css';
 import './link/settings-content.css';
 import './link/lighting.css';
 import './link/properties.css';
-import './link/device-connections.css';
 import './link/timeline-editing.css';
 import './link/interface.css';
 

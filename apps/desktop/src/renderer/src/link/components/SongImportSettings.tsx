@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { FileAudio2, Flower2, FolderOpen, ListMusic } from 'lucide-react';
 import { setPlaybackSourceCommand } from '@tb/core/link';
-import { Button } from '../ui/Button';
+import { Button, Card, ChoiceGroup, Disclosure } from '../ui';
 import { P1ProjectSyncPanel } from './P1ProjectSyncPanel';
 import { importProgramFiles } from './import-program-files';
 import { assertDocumentSession, useDocumentStore } from '../stores/document-store';
@@ -36,28 +36,27 @@ export function SongImportSettings({ disabled, notify, children }: Props): JSX.E
     } catch (error) { const message = error instanceof Error ? error.message : String(error); setResult(message); notify(message, 'error'); }
     finally { pending.current = false; setBusy(false); }
   };
-  return <section className="song-import-settings" aria-label="歌曲导入">
-    <div className="song-source-picker" role="group" aria-label="选择歌曲来源">
-      <Button disabled={busy || disabled} aria-pressed={source === 'p1'} onClick={() => setSource('p1')}><ListMusic /><span><strong>P1 工程</strong><small>歌曲、裁剪、原始时间码</small></span></Button>
-      <Button disabled={busy || disabled} aria-pressed={source === 'local'} onClick={() => setSource('local')}><FileAudio2 /><span><strong>本地音频</strong><small>选择电脑上的歌曲文件</small></span></Button>
-      <Button disabled={busy || disabled} aria-pressed={source === 'xiaohonghua'} onClick={() => setSource('xiaohonghua')}><Flower2 /><span><strong>小红花音效助手</strong><small>原始音频与接入范围</small></span></Button>
+  return <section className="settings-stack" aria-label="歌曲导入">
+    <ChoiceGroup<Source> label="选择歌曲来源" value={source} disabled={busy || disabled} onChange={setSource} choices={[
+      { value: 'p1', title: 'P1 工程', icon: ListMusic, help: '歌曲、裁剪、原始时间码' },
+      { value: 'local', title: '本地音频', icon: FileAudio2, help: '选择电脑上的歌曲文件' },
+      { value: 'xiaohonghua', title: '小红花音效助手', icon: Flower2, help: '原始音频与接入范围' }
+    ]} />
+    <div hidden={source !== 'p1'} className="settings-stack">
+      <Card title="从 P1 工程导入"><P1ProjectSyncPanel purpose="audio" directImport disabled={disabled || busy} notify={notify} onBusyChange={setBusy} /></Card>
+      <Disclosure title="继续使用 P1 播放：跟随与写回"><fieldset className="settings-fieldset" disabled={disabled || busy}>{children}</fieldset></Disclosure>
     </div>
-    <div hidden={source !== 'p1'}>
-      <P1ProjectSyncPanel purpose="audio" directImport disabled={disabled || busy} notify={notify} onBusyChange={setBusy} />
-      <details className="device-advanced"><summary>继续使用 P1 播放：跟随与写回</summary><fieldset disabled={disabled || busy}>{children}</fieldset></details>
-    </div>
-    <div hidden={source === 'p1'} className="song-file-import">
-      <h3>{source === 'xiaohonghua' ? '导入自己保留的原始歌曲或音效' : '导入音频到节目单'}</h3>
-      <p className="settings-note">可以一次选择多首音频，导入后由联动台播放。普通音频不带控台时间码，灯光需要另外编排或配对。</p>
-      <Button className="primary-button" disabled={disabled || busy} onClick={() => input.current?.click()}><FolderOpen />{busy ? '正在导入…' : '选择音频文件'}</Button>
-      <input hidden ref={input} type="file" multiple accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg,.wma" aria-label="导入本地音频文件" onChange={event => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; void importAudio(files); }} />
-      {result ? <p className="settings-note" role="status">{result}</p> : null}
-      {source === 'xiaohonghua' ? <div className="song-source-limits">
-        <h4>小红花接入范围</h4>
-        <p>可使用：你自己保存的原始音频文件。</p>
+    <div hidden={source === 'p1'} className="settings-stack">
+      <Card title={source === 'xiaohonghua' ? '导入自己保留的原始歌曲或音效' : '导入音频到节目单'} description="可以一次选多首音频，导入后由联动台播放。普通音频不带控台时间码，灯光要另外编排或配对。">
+        <div className="settings-actions-row"><Button variant="primary" icon={FolderOpen} loading={busy} disabled={disabled || busy} onClick={() => input.current?.click()}>{busy ? '正在导入…' : '选择音频文件'}</Button></div>
+        <input hidden ref={input} type="file" multiple accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg,.wma" aria-label="导入本地音频文件" onChange={event => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; void importAudio(files); }} />
+        {result ? <p role="status">{result}</p> : null}
+      </Card>
+      {source === 'xiaohonghua' ? <Card title="小红花接入范围">
+        <p>可以用：你自己保存的原始音频文件。</p>
         <p>暂不支持：小红花备份包、内置音效、分类和剪辑设置，以及跟随小红花播放和时间码同步。</p>
-        <p className="settings-note">按小红花官方说明，备份包只能在小红花软件里使用。目前拿不到它的播放位置，用快捷键触发不等于同步。</p>
-      </div> : null}
+        <p>按小红花官方说明，备份包只能在小红花软件里用。目前拿不到它的播放位置，用快捷键触发不等于同步。</p>
+      </Card> : null}
     </div>
   </section>;
 }

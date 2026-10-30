@@ -19,10 +19,10 @@ test.beforeAll(async () => {
     define: { __TBLINK_RELEASE_NOTES__: JSON.stringify(releaseNotes) }
   });
   script = result.outputFiles[0]!.text;
-  styles = (await Promise.all(['styles/layers.css', 'styles/tokens.css', 'link/link.css', 'link/appearance.css', 'link/interface.css'].map(file => readFile(resolve('src/renderer/src', file), 'utf8')))).join('\n');
+  styles = (await Promise.all(['styles/layers.css', 'styles/tokens.css', 'link/ui/ui.css', 'link/components/settings-page.css', 'link/link.css', 'link/appearance.css', 'link/interface.css'].map(file => readFile(resolve('src/renderer/src', file), 'utf8')))).join('\n');
 });
 
-test('公司更新无需客户凭证，下载后由用户确认安装，关闭恢复工作区', async ({ page }, info) => {
+test('公司更新无需客户凭证，下载后由用户确认安装', async ({ page }, info) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.setContent('<main class="app-shell"><div id="root"></div><div id="notice" role="status"></div></main>');
   await page.addStyleTag({ content: styles });
@@ -37,8 +37,7 @@ test('公司更新无需客户凭证，下载后由用户确认安装，关闭�
     } });
   });
   await page.addScriptTag({ content: script });
-  await page.getByRole('button', { name: '软件更新', exact: true }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByText('可以检查软件更新', { exact: true })).toBeVisible();
   await expect(page.locator('input')).toHaveCount(0);
   await expect(page.getByText('团播联动台 · 正式版 · 提交 0123456789ab · com.tuanbo.control', { exact: true })).toBeVisible();
   const notes = page.getByRole('region', { name: '更新日志' });
@@ -56,10 +55,6 @@ test('公司更新无需客户凭证，下载后由用户确认安装，关闭�
   await page.getByRole('button', { name: '重启并安装', exact: true }).click();
   await expect(page.locator('#notice')).toContainText('联动还没停止');
   await expect(page.getByRole('button', { name: '重启并安装', exact: true })).toBeEnabled();
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '软件更新', exact: true })).toBeEnabled();
-  expect(await page.locator('.app-shell').evaluate(element => element.hasAttribute('inert'))).toBe(false);
 });
 
 test('超出升级服务期限：显示新版本和原因，不提供下载', async ({ page }) => {
@@ -72,14 +67,13 @@ test('超出升级服务期限：显示新版本和原因，不提供下载', as
       getAppInfo: () => Promise.resolve({ name: '团播联动台', version: '0.5.0', channel: 'development', gitSha: '0123456789abcdef0123456789abcdef01234567-dirty', appId: 'com.tuanbo.control' }) } });
   });
   await page.addScriptTag({ content: script });
-  await page.getByRole('button', { name: '软件更新', exact: true }).click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog.getByText('发现新版本 0.5.1', { exact: true })).toBeVisible();
-  await expect(dialog.getByText(/晚于本机授权的升级服务期限 2026-10-31/)).toBeVisible();
-  await expect(dialog.getByRole('button', { name: '下载更新' })).toHaveCount(0);
+  const center = page.locator('.update-center');
+  await expect(center.getByText('发现新版本 0.5.1', { exact: true })).toBeVisible();
+  await expect(center.getByText(/晚于本机授权的升级服务期限 2026-10-31/)).toBeVisible();
+  await expect(center.getByRole('button', { name: '下载更新' })).toHaveCount(0);
   // After renewing, the operator checks again to recompute the term.
-  await expect(dialog.getByRole('button', { name: '检查更新' })).toBeEnabled();
-  await expect(dialog.getByText('团播联动台 · 开发版 · 提交 0123456789ab-dirty · com.tuanbo.control', { exact: true })).toBeVisible();
+  await expect(center.getByRole('button', { name: '检查更新' })).toBeEnabled();
+  await expect(center.getByText('团播联动台 · 开发版 · 提交 0123456789ab-dirty · com.tuanbo.control', { exact: true })).toBeVisible();
 });
 
 test('当前版本比更新源新时不显示「可用版本」', async ({ page }) => {
@@ -92,6 +86,5 @@ test('当前版本比更新源新时不显示「可用版本」', async ({ page 
       getAppInfo: () => Promise.resolve({ name: '团播联动台', version: '0.5.0', channel: 'release', gitSha: '0123456789abcdef0123456789abcdef01234567', appId: 'com.tuanbo.control' }) } });
   });
   await page.addScriptTag({ content: script });
-  await page.getByRole('button', { name: '软件更新', exact: true }).click();
-  await expect(page.getByRole('dialog').getByText('当前版本 0.5.0', { exact: true })).toBeVisible();
+  await expect(page.getByText('当前版本 0.5.0', { exact: true })).toBeVisible();
 });

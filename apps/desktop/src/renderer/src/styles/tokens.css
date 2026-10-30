@@ -6,10 +6,11 @@
  */
 @layer base {
   :root {
-    /* Colours, dark theme. 32 in all, each with a light value below. */
+    /* Colours, dark theme. 33 in all, each with a light value below. */
     --color-page: #08080a;
     --color-surface: #0e0e11;
     --color-surface-raised: #15151a;
+    --color-card: #15151a;
     --color-surface-hover: #1d1d23;
     --color-surface-strong: #25252d;
     --color-glass: rgba(28, 28, 32, 0.72);
@@ -55,6 +56,8 @@
     --color-page: #f2f2f5;
     --color-surface: #ffffff;
     --color-surface-raised: #f1f1f4;
+    /* Cards sit white on the grey page in the light theme, like grouped settings on macOS. */
+    --color-card: #ffffff;
     --color-surface-hover: #ffffff;
     --color-surface-strong: #e6e6ea;
     --color-glass: rgba(255, 255, 255, 0.72);
@@ -129,6 +132,16 @@
     --dur-fast: 0.12s;
     --dur-normal: 0.2s;
     --dur-slow: 0.32s;
+  }
+
+  /* Forms and settings are read rather than worked in, so their text is a step larger. */
+  [data-density='comfortable'] {
+    --type-caption: 13px;
+    --type-control: 14px;
+    /* Older parts still placed on a settings page read their sizes from the legacy names. */
+    --text-caption: var(--type-caption);
+    --text-control: var(--type-control);
+    --text-body: var(--type-body);
   }
 
   /* Names used by the legacy stylesheets. Do not use them in new code. */

@@ -33,7 +33,7 @@ test('从首页直接导入 P1 歌曲并保存原始时间码，内部主控仍�
     await expect(page.locator('.settings-location-highlight')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('song-workflow-dark.png'), animations: 'disabled' });
     await songs.getByRole('button', { name: '导入 P1 歌曲（.hia）', exact: true }).click();
-    await expect(songs.locator('.p1-sync-summary')).toContainText('1 首音频');
+    await expect(songs.locator('.p1-import-summary')).toContainText('1 首音频');
     await saveProject(page);
     const saved = parseLinkProject(JSON.parse(await readFile(target, 'utf8')));
     expect(saved.playbackSource).toBe('internal');
@@ -44,7 +44,7 @@ test('从首页直接导入 P1 歌曲并保存原始时间码，内部主控仍�
     await expect(page.locator('.p1-media-card').getByText('歌曲原名', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '导入歌曲 / P1', exact: true }).click();
     await expect(songs.getByRole('button', { name: '导入 P1 歌曲（.hia）', exact: true })).toBeVisible();
-    await expect(songs.locator('.p1-sync-path:visible')).toContainText('已保存 P1 歌曲');
+    await expect(songs.locator('.p1-import-path:visible')).toContainText('已保存 P1 歌曲');
     await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
     await expect(page.locator('.settings-location-highlight')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('song-workflow-light.png'), animations: 'disabled' });
@@ -59,7 +59,7 @@ test('小红花入口可导入自有音频并明确不支持备份包和播放�
     const page = await application.firstWindow();
     await page.getByRole('button', { name: '导入歌曲 / P1', exact: true }).click();
     const songs = page.getByRole('region', { name: '歌曲导入', exact: true });
-    await songs.getByRole('button', { name: /小红花音效助手/ }).click();
+    await songs.getByRole('radio', { name: /小红花音效助手/ }).click();
     await expect(songs.getByText(/暂不支持：小红花备份包/)).toBeVisible();
     await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath }); }, target);
     await answerSaveQuestions(application);

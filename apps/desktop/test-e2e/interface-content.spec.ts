@@ -43,7 +43,7 @@ test('重设计工作区的长节目单、真实波形、素材与放大布局',
     await expect(mtcDialog.locator('.mtc-output-status')).toContainText('fps');
     await expect(mtcDialog.getByRole('button', { name: /^MTC / })).toHaveCount(0);
     await mtcDialog.getByRole('button', { name: '音频与 MIDI 设置', exact: true }).click();
-    await expect(page.getByLabel('音频与 MIDI 设备面板', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('音频与 MIDI设置', { exact: true })).toBeVisible();
     await nav.getByRole('button', { name: '节目单', exact: true }).click();
     await page.getByRole('button', { name: '停止播放', exact: true }).click();
     await expect(page.locator('.unified-player').getByRole('button', { name: /^MTC / })).toHaveCount(0);

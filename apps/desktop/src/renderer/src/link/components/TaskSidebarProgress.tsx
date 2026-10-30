@@ -8,6 +8,7 @@ import { linkDesktopViewModel } from '../view-models/link-desktop-view-model';
 import { musicAnalysisOutcome } from '../view-models/music-analysis-progress';
 import { Ma2ReadProgress } from './Ma2ReadProgress';
 import { MusicAnalysisProgress } from './MusicAnalysisProgress';
+import { Button, Progress } from '../ui';
 import { useMa2SyncStore } from '../stores/ma2-sync-store';
 import { pauseMa2RealtimeSession } from '../runtime/ma2-realtime-session';
 
@@ -43,16 +44,14 @@ export function TaskSidebarProgress({ notify }: { notify: Notify }): JSX.Element
   const music = projectJobs.find(job => job.state !== 'paused') ?? projectJobs.at(-1) ?? null;
   return <div className="sidebar-task-progress" aria-label="后台任务进度">
     <div id="ma2-sidebar-read-actions"/>
-    {Object.values(songs).filter(song => song.documentId === documentId && song.state === 'syncing').map(song => <div className="ma2-read-progress" role="status" key={song.itemId}>
-      <div><strong>同步歌曲 Cue</strong><span>{song.progress?.total ? `${Math.floor(song.progress.completed / song.progress.total * 100)}%` : '检查中'}</span></div>
-      <progress aria-label="歌曲同步阶段进度" value={song.progress?.completed ?? 0} max={song.progress?.total || 1}/>
-      <small>{song.progress?.detail ?? song.message}</small>
-      <button onClick={pauseMa2RealtimeSession}>停止同步</button>
-    </div>)}
-    {attributes.busy ? <Ma2ReadProgress progress={attributes.progress} waiting="读取属性并分类"/> : null}
-    {materials.documentId === documentId && materials.busy ? <Ma2ReadProgress progress={materials.progress} waiting="连接控台并读取素材"/> : null}
-    {catalog.busy ? <Ma2ReadProgress progress={catalog.progress} waiting="读取控台时间线"/> : null}
-    {music ? <MusicAnalysisProgress job={music} submitting={false}/> : null}
+    {Object.values(songs).filter(song => song.documentId === documentId && song.state === 'syncing').map(song => <Progress key={song.itemId} compact label="歌曲同步阶段进度" title="同步歌曲 Cue"
+      status={song.progress?.total ? `${Math.floor(song.progress.completed / song.progress.total * 100)}%` : '检查中'} value={song.progress?.completed ?? 0} max={song.progress?.total || 1} detail={song.progress?.detail ?? song.message}>
+      <Button variant="secondary" size="sm" onClick={pauseMa2RealtimeSession}>停止同步</Button>
+    </Progress>)}
+    {attributes.busy ? <Ma2ReadProgress compact progress={attributes.progress} waiting="读取属性并分类"/> : null}
+    {materials.documentId === documentId && materials.busy ? <Ma2ReadProgress compact progress={materials.progress} waiting="连接控台并读取素材"/> : null}
+    {catalog.busy ? <Ma2ReadProgress compact progress={catalog.progress} waiting="读取控台时间线"/> : null}
+    {music ? <MusicAnalysisProgress sidebar job={music} submitting={false}/> : null}
     {error ? <details><summary>任务状态读取失败</summary><p>{error}</p></details> : null}
   </div>;
 }

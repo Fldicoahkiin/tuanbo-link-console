@@ -1,5 +1,5 @@
+import { Button, Dialog } from './ui';
 import { useSettingsExit } from './useSettingsExit';
-import { SettingsConfirm } from './components/SettingsControls';
 import { toUserErrorMessage } from '@tb/core/link';
 import { useMa2ReadStore } from './stores/ma2-read-store';
 import { useDocumentShortcuts } from './useDocumentShortcuts';
@@ -226,7 +226,10 @@ export function LinkApp(): JSX.Element {
         </main>
       </section>
 
-      {settingsExit ? <SettingsConfirm cancelLabel="继续编辑" title="离开设置？" confirmLabel="放弃未保存修改" onClose={() => setSettingsExit(null)} onConfirm={settingsExit}>连接或启动设置还没保存，离开后这部分修改会丢失。其他已保存的设置和工程修改不受影响。</SettingsConfirm> : null}
+      {settingsExit ? <Dialog title="离开设置？" size="sm" onClose={() => setSettingsExit(null)} actions={<>
+        <Button variant="secondary" onClick={() => setSettingsExit(null)}>继续编辑</Button>
+        <Button variant="danger" onClick={settingsExit}>放弃未保存修改</Button>
+      </>}><p>连接或启动设置还没保存，离开后这部分修改会丢失。其他已保存的设置和工程修改不受影响。</p></Dialog> : null}
       {newProjectOpen ? <ProjectDialog name={newProjectName} error={newProjectError} onNameChange={setNewProjectName} onClose={() => setNewProjectOpen(false)} onCreate={() => void createProject()} /> : null}
     </div>
   </RendererErrorBoundary>;

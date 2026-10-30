@@ -17,6 +17,7 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1180, 720));
     await page.evaluate(() => window.tbLink.recordLog({ level: 'error', category: 'device', device: 'MA2', message: '异机灯光测试记录', result: 'failed', details: { password: 'must-not-export' } }));
     await page.getByRole('navigation', { name: '主要工作区' }).getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '帮助与反馈', exact: true }).click();
     await page.getByRole('button', { name: '运行日志', exact: true }).click();
     const logs = page.getByRole('region', { name: '运行日志设置' });
     await expect(logs.getByText('异机灯光测试记录', { exact: true })).toBeVisible();
@@ -28,9 +29,9 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
     await expect(logs.getByRole('region', { name: '导出日志与诊断' }).getByRole('status')).toContainText(textPath);
     const text = await readFile(textPath, 'utf8');
     expect(text).toContain('异机灯光测试记录'); expect(text).not.toContain('must-not-export');
-    await logs.getByText('附加问题说明与灯光数据（选填）', { exact: true }).click();
+    await logs.getByText('附加问题说明与灯光数据', { exact: true }).click();
     const exports = logs.getByRole('region', { name: '导出日志与诊断', exact: true });
-    await exports.getByLabel('问题描述（选填）').fill('另一台主机：播放后没有出灯');
+    await exports.getByLabel('问题描述', { exact: true }).fill('另一台主机：播放后没有出灯');
     const diagnosticPath = info.outputPath('现场.tbdiag.gz');
     await application.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath }); }, diagnosticPath);
     await exports.getByRole('button', { name: '导出诊断包', exact: true }).click();
@@ -39,7 +40,7 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
     const data = packageSchema.parse(JSON.parse(unpacked));
     const desktopPackage = z.object({ version: z.string() }).parse(JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')));
     expect(data.context.environment.appVersion).toBe(desktopPackage.version);
-    expect(data.context.problem).toContain('另一台电脑'); expect(data.context.environment.cpu).toBeTruthy();
+    expect(data.context.problem).toContain('另一台主机'); expect(data.context.environment.cpu).toBeTruthy();
     expect(data.logs.some(log => log.message.includes('已启动'))).toBe(true);
     expect(unpacked).not.toContain('must-not-export');
     await application.evaluate(({ dialog }) => { dialog.showSaveDialog = () => Promise.resolve({ canceled: true, filePath: '' }); });
@@ -51,8 +52,9 @@ test('运行日志使用设置子菜单，真实导出诊断及文本，并显�
     await expect(exports.getByRole('alert')).toContainText('操作失败');
     expect(await readFile(blocked, 'utf8')).toBe('keep');
     await page.screenshot({ path: info.outputPath('diagnostic-export.png') });
+    await page.getByRole('navigation', { name: '设置子菜单' }).getByRole('button', { name: '设备连接', exact: true }).click();
     await page.getByRole('button', { name: '程序维护', exact: true }).click();
-    const maintenance = page.getByRole('region', { name: '程序维护设备面板', exact: true });
+    const maintenance = page.getByRole('region', { name: '程序维护设置', exact: true });
     await expect(maintenance.getByRole('button', { name: /导出/ })).toHaveCount(0);
     await expect(maintenance.getByRole('heading', { name: '联动台预览没有画面', exact: true })).toBeVisible();
     await expect(maintenance.getByLabel('OBS Studio 可执行文件', { exact: true })).not.toBeVisible();

@@ -210,7 +210,6 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .update-overlay { position: fixed; z-index: 2147483647; inset: 0; display: none; width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 16px; overflow: auto; place-items: center; color: inherit; border: 0; background: transparent; isolation: isolate; }
 .update-overlay[open] { display: grid; }
 .update-overlay::backdrop { background: var(--surface); backdrop-filter: blur(18px); }
-.update-center { width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); }
 .update-center-header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
 .update-center-header h2 { margin: 4px 0 14px; }
 .update-summary { display: flex; gap: 12px; align-items: center; padding: 14px; border-radius: 12px; background: rgb(var(--theme-ink-rgb) / 0.13); }

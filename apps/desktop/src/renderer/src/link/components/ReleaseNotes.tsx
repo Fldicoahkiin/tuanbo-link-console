@@ -1,4 +1,5 @@
 import { ArrowUpRight } from 'lucide-react';
+import { Card } from '../ui';
 import type { ReleaseNote, ReleaseNoteBlock, ReleaseNoteInline } from '../release-notes';
 
 /** The website lists the notes of the version the update feed serves; the main process opens only this exact page. */
@@ -13,16 +14,15 @@ type ReleaseNotesProps = {
 
 export function ReleaseNotes({ notes, currentVersion, availableVersion }: ReleaseNotesProps): JSX.Element | null {
   if (!notes.length && !availableVersion) return null;
-  return <section className="update-release-notes" aria-label="更新日志">
-    <h3>更新日志</h3>
-    {availableVersion ? <a className="update-release-notes-link" href={WEBSITE_CHANGELOG_URL} target="_blank" rel="noreferrer">
+  return <Card title="更新日志" className="release-notes">
+    {availableVersion ? <a className="release-notes-link" href={WEBSITE_CHANGELOG_URL} target="_blank" rel="noreferrer">
       在官网查看 {availableVersion} 的更新内容<ArrowUpRight aria-hidden="true" />
     </a> : null}
     {notes.map((note, index) => <details key={note.version} open={index === 0}>
-      <summary>v{note.version}{note.version === currentVersion ? <span>当前版本</span> : null}</summary>
+      <summary>v{note.version}{note.version === currentVersion ? <span className="release-notes-current">当前版本</span> : null}</summary>
       {note.blocks.map((block, blockIndex) => <ReleaseNoteContent key={blockIndex} block={block} />)}
     </details>)}
-  </section>;
+  </Card>;
 }
 
 function ReleaseNoteContent({ block }: { block: ReleaseNoteBlock }): JSX.Element {

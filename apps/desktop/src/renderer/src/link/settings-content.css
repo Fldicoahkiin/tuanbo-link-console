@@ -1,5 +1,5 @@
 @layer legacy {
-/* Shared form styles for the inline lighting tools and license entry. Settings workspace styles live in device-connections.css. */
+/* Shared form styles for the inline lighting tools and license entry. Settings page styles live in components/settings-page.css. */
 .settings-inline.integration-workspace .settings-detail {
   container-type: inline-size;
   --settings-control-width: 360px;
@@ -19,38 +19,14 @@
 }
 .settings-inline.integration-workspace .settings-detail > header h2 { margin: 0; font-size: 22px; line-height: 1.4; font-weight: 650; }
 .settings-header-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.purchase-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
-.purchase-confirmation { display: flex; align-items: center; gap: 10px; margin: 16px 0; }
 .settings-detail .settings-header-actions button { min-height: 40px; padding: 8px 14px; font-size: var(--text-body); border-radius: 6px; }
-.settings-inline.integration-workspace .settings-detail .settings-section,
-.settings-inline.integration-workspace .settings-detail .music-connection-settings,
-.settings-inline.integration-workspace .settings-detail .program-card {
+.settings-inline.integration-workspace .settings-detail .settings-section {
   display: block; min-height: 0; padding: 0 0 24px; margin: 0 0 24px;
   border: 0; border-bottom: 1px solid var(--separator); border-radius: 0;
   background: transparent; background-image: none; box-shadow: none; overflow: visible;
 }
-.settings-inline.integration-workspace .settings-detail .settings-section:last-child,
-.settings-inline.integration-workspace .settings-detail .music-connection-settings:last-child { border-bottom: 0; margin-bottom: 0; }
-.settings-inline.integration-workspace .settings-detail .program-card::before,
-.settings-inline.integration-workspace .settings-detail .program-card::after { display: none; }
+.settings-inline.integration-workspace .settings-detail .settings-section:last-child { border-bottom: 0; margin-bottom: 0; }
 .settings-inline.integration-workspace .settings-detail h3 { margin: 0 0 12px; font-size: 16px; font-weight: 650; color: var(--text-primary); }
-.settings-inline.integration-workspace .settings-detail fieldset.settings-program-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; }
-.settings-inline.integration-workspace .settings-detail .settings-form,
-.settings-inline.integration-workspace .settings-detail .player-connections,
-.settings-inline.integration-workspace .settings-detail .program-configuration,
-.settings-inline.integration-workspace .settings-detail .program-configuration > .form-grid {
-  display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0; margin: 0;
-  border: 0; border-radius: 0; background: transparent; box-shadow: none;
-}
-.settings-inline.integration-workspace .settings-detail .settings-form > label,
-.settings-inline.integration-workspace .settings-detail .settings-row,
-.settings-inline.integration-workspace .settings-detail .settings-toggle,
-.settings-inline.integration-workspace .settings-detail .player-connections > label,
-.settings-inline.integration-workspace .settings-detail .program-card .field {
-  display: grid; grid-template-columns: minmax(170px, 240px) minmax(180px, var(--settings-control-width));
-  align-items: center; gap: 20px; min-height: 52px; padding: 6px 0; margin: 0;
-  border: 0; background: transparent; font-size: var(--text-body); line-height: 1.6; box-sizing: border-box;
-}
 .settings-inline.integration-workspace .settings-detail label > span,
 .settings-inline.integration-workspace .settings-detail .field > span { color: var(--text-primary); font-size: var(--text-body); font-weight: 500; }
 .settings-inline.integration-workspace .settings-detail small,
@@ -78,37 +54,9 @@
 .settings-inline.integration-workspace .settings-detail input[type="checkbox"]:checked { background: var(--accent-fill); box-shadow: none; }
 .settings-inline.integration-workspace .settings-detail input[type="checkbox"]:checked::after { transform: translateX(14px); background: white; }
 .settings-inline.integration-workspace .settings-detail :is(input, select, button):disabled { cursor: not-allowed; opacity: .65; }
-.settings-inline.integration-workspace .settings-detail .program-card-title {
-  display: flex; justify-content: flex-start; align-items: center; gap: 10px; min-height: 28px; padding: 0; margin: 0 0 12px; background: transparent; border: 0;
-}
 .settings-inline.integration-workspace .settings-detail .program-icon { width: 20px; height: 20px; background: transparent; border: 0; box-shadow: none; color: var(--accent); }
 .settings-inline.integration-workspace .settings-detail .program-icon svg { width: 18px; height: 18px; }
-.settings-inline.integration-workspace .settings-detail .program-identity { flex: 1; margin: 0; text-align: left; }
-.settings-inline.integration-workspace .settings-detail .program-identity h3 { margin: 0; }
-.settings-inline.integration-workspace .settings-detail .program-identity > span { display: flex; align-items: center; gap: 12px; }
 .settings-inline.integration-workspace .settings-detail .status-pill { font-size: var(--text-control); font-weight: 500; }
-.settings-inline.integration-workspace .settings-detail .device-maintenance-trigger { display: inline-flex; width: auto; min-height: 40px; margin: 12px 0 0; padding: 8px 10px; border: 1px solid var(--separator); border-radius: 6px; background: var(--surface); box-shadow: none; color: var(--text-primary); }
-.settings-inline.integration-workspace .settings-detail .device-maintenance-trigger small { display: none; }
-.settings-inline.integration-workspace .settings-detail .device-maintenance-trigger > span { font-size: var(--text-control); font-weight: 450; }
-.settings-inline.integration-workspace .settings-detail .settings-disclosure { padding: 12px 0; font-size: var(--text-control); color: var(--text-secondary); }
-.settings-inline.integration-workspace .settings-detail .settings-disclosure summary { width: fit-content; cursor: pointer; }
-.settings-inline.integration-workspace .settings-detail .settings-disclosure p { margin: 10px 0 0; line-height: 1.8; }
-.settings-inline.integration-workspace .settings-detail .appearance-control { max-width: none; padding: 0; margin: 0; }
-.settings-inline.integration-workspace .settings-detail .appearance-control label { display: grid; grid-template-columns: 20px minmax(120px, 228px) minmax(180px, var(--settings-control-width)); gap: 12px; min-height: 38px; font-size: var(--text-control); }
-.settings-inline.integration-workspace .settings-detail .integration-settings-body { display: grid; align-content: start; gap: 8px; width: 100%; max-width: 680px; max-height: none; padding: 0; overflow: visible; }
-.settings-inline.integration-workspace .settings-detail .integration-settings-body > .settings-section { padding: 0 0 20px; margin: 0 0 16px; }
-.settings-inline.integration-workspace .settings-detail .integration-settings-body .settings-section-heading { min-height: 36px; }
-.settings-inline.integration-workspace .settings-detail .integration-settings-body .settings-section-heading span { font-size: var(--text-control); }
-.settings-inline.integration-workspace .settings-detail .integration-settings-body .settings-disclosure { padding: 6px 0; }
-.settings-inline.integration-workspace .settings-detail .settings-support-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
-.settings-inline.integration-workspace .settings-detail .settings-support-grid .update-trigger { display: inline-flex; width: auto; gap: 6px; }
-.update-installed-version { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; }
-.update-installed-version > span { color: var(--text-secondary); font-size: var(--text-control); }
-.update-installed-version > strong { color: var(--text-primary); font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.settings-inline.integration-workspace .settings-detail .settings-support-grid > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 16px; min-height: 0; padding: 6px 0; border: 0; border-bottom: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.settings-inline.integration-workspace .settings-detail .settings-support-grid > div > strong { grid-column: 1; font-size: var(--text-body); }
-.settings-inline.integration-workspace .settings-detail .settings-support-grid > div > span { grid-column: 1; color: var(--text-secondary); font-size: var(--text-control); }
-.settings-inline.integration-workspace .settings-detail .settings-support-grid > div > :last-child { grid-column: 2; grid-row: 1 / 3; align-self: center; margin: 0; }
 @media (max-width: 1200px) {
   .settings-inline.integration-workspace .settings-detail { --settings-control-width: 320px; padding-inline: 8px; }
   .settings-inline.integration-workspace .settings-detail > header { flex-wrap: wrap; gap: 12px; }
@@ -133,18 +81,10 @@
 .settings-detail .ma2-connection-actions > label { display: flex; align-items: center; gap: 8px; margin: 0; }
 .settings-detail .ma2-connection-actions > label input { width: 100px; min-width: 0; }
 .settings-detail .ma2-connection-actions > button { min-height: 34px; height: 34px; padding: 6px 10px; }
-.settings-detail .settings-path-row { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: center; gap: 12px; font-size: var(--text-control); }
 .settings-detail .ma2-connection-actions { margin-top: 6px; }
 .settings-detail .ma2-connection-status { min-width: 0; color: var(--text-secondary); font-size: var(--text-control); overflow-wrap: anywhere; }
 .settings-detail .ma2-network-settings { display: grid; gap: 8px; margin-block: 10px; }
-.settings-detail .ma2-network-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; }
-.settings-detail .ma2-network-fields > label { display: grid; grid-template-columns: 84px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; margin: 0; font-size: var(--text-body); }
-.settings-detail .ma2-network-fields input:not([type="checkbox"]) { width: 100%; min-width: 0; height: 30px; }
 .settings-detail .ma2-network-settings .settings-header-actions { flex-wrap: wrap; gap: 8px; }
-.settings-detail .ma2-network-settings .settings-disclosure p { max-width: 80ch; font-size: var(--text-control); line-height: 1.6; }
-@container (max-width: 720px) {
-  .settings-detail .ma2-network-fields { grid-template-columns: minmax(0, 1fr); }
-}
 
 .settings-detail .ma2-read-preview .ma2-match-table th:nth-child(5) { width: 210px; }
 .settings-detail .ma2-match-table select { width: 100%; min-width: 0; font-size: var(--text-control); }
@@ -161,82 +101,14 @@
 .settings-detail .ma2-pending-track { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 30px; }
 .settings-detail .ma2-pending-track span { overflow-wrap: anywhere; }
 .settings-detail .ma2-pending-track button { background: transparent; white-space: nowrap; }
-
-/* Adapt to the available settings pane, including smaller desktop windows. */
-@container (max-width: 560px) {
-  .settings-inline.integration-workspace .settings-detail :is(.settings-form > label, .settings-row, .settings-toggle, .player-connections > label, .program-card .field) {
-    grid-template-columns: minmax(0, 1fr); gap: 8px; padding-block: 10px;
-  }
-  .settings-inline.integration-workspace .settings-detail .appearance-control label {
-    grid-template-columns: 20px minmax(0, 1fr);
-  }
-  .settings-inline.integration-workspace .settings-detail .appearance-control select { grid-column: 1 / -1; }
-}
 .settings-inline.integration-workspace .settings-detail :is(label > span, .settings-note, small) { overflow-wrap: anywhere; }
-.settings-inline.integration-workspace .settings-detail .settings-path-row { align-items: start; }
-.settings-inline.integration-workspace .settings-detail .settings-path-row :is(span, code) { white-space: normal; overflow-wrap: anywhere; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting > legend { font-size: var(--text-body); }
 .settings-inline.integration-workspace .settings-detail .lighting-editor > header nav button { min-height: 40px; padding: 8px 12px; font-size: var(--text-body); border-radius: 6px; }
 .settings-inline.integration-workspace .settings-detail .lighting-editor > header nav button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 -2px var(--accent); }
-
-
-/* Daily device configuration: one label column, natural control widths. */
-.settings-inline.integration-workspace .settings-detail.settings-devices { max-width: 980px; padding: 18px 28px 36px; }
-.settings-device-page:not([hidden]) { display: block; }
-.settings-inline.integration-workspace .settings-devices .settings-section { position: relative; padding: 0 0 28px; margin: 0 0 28px; border-bottom: 1px solid var(--separator); }
-.settings-inline.integration-workspace .settings-devices .settings-section:last-child { border-bottom: 0; margin-bottom: 0; }
-.device-section-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
-.settings-inline.integration-workspace .settings-detail .device-section-heading h3 { margin: 0; font-size: 18px; line-height: 26px; font-weight: 600; }
-.device-section-heading > span:not(.connection-status-badge) { color: var(--text-secondary); font-size: var(--text-body); font-weight: 400; }
-.settings-inline.integration-workspace .settings-devices :is(.settings-row, .settings-path-row, .player-connections > label, .ma2-network-fields > label, .ma2-saved-row > label) { display: grid; grid-template-columns: 120px minmax(0, 360px); gap: 12px; align-items: center; min-height: 40px; padding: 3px 0; margin: 0; font-size: var(--text-body); }
-.settings-inline.integration-workspace .settings-devices label > span { font-weight: 400; color: var(--text-primary); }
-.settings-inline.integration-workspace .settings-devices :where(input:not([type="checkbox"]):not([type="range"]):not([type="color"]), select) { width: 100%; max-width: 360px; height: 34px; min-height: 34px; padding: 5px 10px; font-size: var(--text-body); }
-.settings-inline.integration-workspace .settings-detail.settings-devices input[aria-label="MA2 控台 IP"] { max-width: 240px; }
-.settings-inline.integration-workspace .settings-detail.settings-devices input:is([aria-label="MA2 登录用户"], [aria-label="MA2 登录密码"], [aria-label="OBS 密码"]) { max-width: 300px; }
 .settings-inline.integration-workspace .settings-detail input[type="number"] { max-width: 88px; }
-.settings-inline.integration-workspace .settings-devices .ma2-network-settings { display: block; margin: 0; }
-.settings-inline.integration-workspace .settings-devices .ma2-network-fields { display: block; }
-.ma2-saved-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
-.ma2-saved-row > label { flex: 0 1 492px; }
-.settings-inline.integration-workspace .settings-devices .settings-header-actions { gap: 8px; }
-.settings-inline.integration-workspace .settings-devices button { font-size: var(--text-body); min-height: 34px; padding: 5px 12px; }
-.settings-inline.integration-workspace .settings-devices .device-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 0 132px; }
 .device-error { color: var(--text-primary); font-size: var(--text-control); overflow-wrap: anywhere; }
-.settings-devices .device-error { margin: 8px 0 0 132px; max-width: 520px; }
-.settings-devices [aria-label="MA2 搜索结果"] { margin: 4px 0 8px 132px; }
-.settings-devices [aria-label="MA2 搜索结果"] button { margin: 4px 8px 0 0; }
-.save-feedback:empty { display: none; }
-.save-feedback { margin-left: 132px; color: var(--text-secondary); font-size: var(--text-control); }
-.lighting-page-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 20px; }
-.lighting-page-tabs button { min-height: 38px; padding: 6px 12px; font-size: var(--text-body); background: transparent; color: var(--text-secondary); border: 0; border-radius: 0; }
-.lighting-page-tabs button[aria-pressed="true"] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); }
 .settings-lighting > fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .sync-destination { margin: 0 0 16px; overflow-wrap: anywhere; }
-.ma2-protocol { padding-bottom: 28px; margin-bottom: 28px; border-bottom: 1px solid var(--separator); }
-.ma2-protocol > .settings-header-actions { display: inline-flex; margin: 0 8px 12px 0; }
-.ma2-protocol .settings-path-row { max-width: 492px; padding-block: 5px; }
-.ma2-protocol .device-actions { display: flex; gap: 8px; margin-top: 12px; }
-@container (max-width: 640px) {
-  .ma2-saved-row > .settings-header-actions { margin-left: 132px; }
-}
-@container (max-width: 380px) {
-  .settings-inline.integration-workspace .settings-devices :is(.settings-row, .settings-path-row, .player-connections > label, .ma2-network-fields > label, .ma2-saved-row > label) { grid-template-columns: 104px minmax(0, 1fr); gap: 8px; }
-  .settings-inline.integration-workspace .settings-devices .device-actions, .settings-devices .device-error, .settings-devices [aria-label="MA2 搜索结果"], .ma2-saved-row > .settings-header-actions { margin-left: 112px; }
-}
-
-.settings-inline.integration-workspace .settings-devices label:has(> .field-save-status) { grid-template-columns: 120px minmax(0, 360px) auto; justify-content: start; }
-.settings-inline.integration-workspace .settings-devices .field-save-status { margin: 0; color: var(--text-secondary); font-size: var(--text-control); white-space: nowrap; }
-@container (max-width: 580px) {
-  .settings-inline.integration-workspace .settings-devices label:has(> .field-save-status) { grid-template-columns: 120px minmax(0, 360px); }
-  .settings-inline.integration-workspace .settings-devices .field-save-status { grid-column: 2; }
-}
-
-/* The lighting settings page shares the device page form rhythm. */
-.settings-inline.integration-workspace .settings-detail .lighting-program-heading { display: flex; align-items: baseline; gap: 12px; margin: -12px 0 16px; font-size: var(--text-body); }
-.lighting-program-heading > span { color: var(--text-secondary); }
-.lighting-program-heading > strong { font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
-.settings-inline.integration-workspace .settings-detail .lighting-page-tabs { display: flex; flex-direction: row; width: auto; flex-wrap: wrap; align-items: center; padding: 0; gap: 4px; margin: 0 0 24px; background: transparent; border-bottom: 1px solid var(--separator); }
-.settings-inline.integration-workspace .settings-detail .lighting-page-tabs button { flex: 0 0 auto; min-height: 40px; padding: 8px 14px; font-size: var(--text-body); line-height: 1.5; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-editor { height: auto; min-height: 0; overflow: visible; background: transparent; border: 0; padding: 0; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings-content { overflow: visible; padding: 0; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings { max-width: 680px; gap: 0; padding: 0; }
@@ -251,8 +123,6 @@
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-muted { color: var(--text-secondary); font-size: var(--text-control); margin: 8px 0 16px; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings fieldset { padding: 0 0 24px; margin-bottom: 24px; border: 0; border-bottom: 1px solid var(--separator); }
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings fieldset:last-child { border-bottom: 0; margin-bottom: 0; }
-.settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-tempo-row { grid-template-columns: 120px 110px 100px minmax(130px, 180px) auto; gap: 10px; margin-bottom: 12px; }
-.settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-tempo-row label { font-size: var(--text-body); min-height: 34px; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-tempo-signature :is(input, select) { padding-inline: 5px; }
 .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-import-preview { flex-basis: 100%; padding: 16px 0; margin: 12px 0 0; border: 0; border-top: 1px solid var(--separator); background: transparent; }
 .settings-inline.integration-workspace .settings-detail .ma2-sync-section .sync-destination { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; margin: 0 0 16px; font-size: var(--text-body); }
@@ -262,27 +132,10 @@
 .settings-inline.integration-workspace .settings-detail .ma2-sync-section .ma2-connection-status { width: 100%; margin: 0 0 0 132px; }
 .settings-inline.integration-workspace .settings-detail .ma2-create-action { margin-left: 132px; }
 .settings-inline.integration-workspace .settings-detail .ma2-read-preview { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--separator); font-size: var(--text-body); }
-@container (max-width: 680px) {
-  .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-tempo-row { grid-template-columns: 120px 110px 100px; }
-  .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-tempo-row > select { grid-column: 1 / 3; }
-}
 @container (max-width: 420px) {
   .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings > label,
   .settings-inline.integration-workspace .settings-detail .settings-lighting .lighting-settings fieldset > label { grid-template-columns: 100px minmax(0, 1fr); gap: 8px; }
 }
-
-/* Maintenance follows the same vertical device layout. */
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings .integration-setup-grid { display: block; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings .p1-sync-panel { display: flex; flex-direction: column; align-items: stretch; text-align: left; gap: 12px; min-height: 0; padding: 12px 0; border: 0; box-shadow: none; background: transparent; }
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings .p1-sync-heading { display: flex; align-items: center; gap: 12px; }
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings .p1-sync-heading > div { display: flex; gap: 8px; align-items: center; }
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings .p1-sync-heading strong { white-space: nowrap; }
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings .p1-sync-heading > .status-pill { margin-left: 0; }
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings .p1-sync-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 8px; }
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings .p1-sync-actions button { flex: 0 1 auto; }
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings .p1-sync-panel > p { width: auto; margin: 0; font-size: var(--text-control); color: var(--text-secondary); }
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings .security-banner { min-height: 0; padding: 8px 0; }
-.settings-inline.integration-workspace .settings-detail .p1-follow-settings { margin: 20px 0; }
 /* The authorization shell remains usable before the workspace is mounted. */
 .license-gate { width: 100%; height: 100dvh; display: grid; grid-template-rows: 48px minmax(0, 1fr) 38px; border: 1px solid var(--border-emphasis); background: var(--page-background); color: var(--text-primary); overflow: hidden; }
 .license-titlebar { display: flex; align-items: stretch; min-width: 0; border-bottom: 1px solid var(--border-default); background: var(--surface); -webkit-app-region: drag; user-select: none; }
@@ -324,7 +177,6 @@
 .license-card-welcome p { margin: 14px 0 0; color: var(--text-tertiary); font-size: 11px; }
 .license-activation-card > .license-settings { display: block; margin: 0; padding: 0; border: 0; background: transparent; }
 .license-gate-update { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-emphasis); }
-.license-gate-update .update-center { width: auto; max-height: none; }
 .license-gate-help { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-emphasis); }
 .license-gate-help > div { display: grid; gap: 4px; min-width: 0; }
 .license-gate-help strong { color: var(--text-primary); font-size: 13px; font-weight: 600; }
@@ -338,8 +190,6 @@
 .license-state[data-state='active'] { color: var(--success-text); background: var(--success-soft); }
 .license-activation-card .settings-note { margin: 12px 0; color: var(--text-secondary); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
 .license-activation-card .license-code-form { margin: 26px 0 16px; }
-.license-activation-card .settings-path-row { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; margin: 14px 0; }
-.license-activation-card .settings-path-row > span { width: auto; font-size: 12px; color: var(--text-primary); }
 .license-activation-card input:not([type='checkbox']), .license-activation-card select { width: 100%; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid var(--border-emphasis); border-radius: 6px; color: var(--text-emphasis); background: var(--input-bg); }
 .license-activation-card .license-code-form input { height: 46px; font-family: var(--font-numeric); font-size: 13px; }
 .license-activation-card .settings-header-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
@@ -362,9 +212,6 @@
 .license-disclosure-chevron { margin-left: auto; }
 .license-disclosure[open] > summary .license-disclosure-chevron { transform: rotate(90deg); }
 .license-disclosure > .settings-section { margin: 0 0 16px; padding: 0; border: 0; background: transparent; }
-.license-activation-card .purchase-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
-.license-activation-card .purchase-confirmation { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.7; }
-.license-activation-card .device-section-heading { flex-wrap: wrap; }
 .license-activation-card .license-legal { margin: 18px 0 0; font-size: 11px; }
 .license-claims { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; font-size: 12px; }
 .license-claims dt { color: var(--text-secondary); }

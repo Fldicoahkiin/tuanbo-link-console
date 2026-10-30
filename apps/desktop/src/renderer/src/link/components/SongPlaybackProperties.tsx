@@ -1,11 +1,14 @@
+import type { InputHTMLAttributes } from 'react';
 import { PropertyNumberInput } from './PropertyNumberInput';
 import { formatMtcOffset, parseMtcOffset, programTimeOrigin, setItemPlaybackCommand } from '@tb/core/link';
 import type { RundownItem } from '@tb/schema';
-
-type Playback = NonNullable<RundownItem['playback']>;
 import { useDocumentStore } from '../stores/document-store';
 
-export function SongPlaybackProperties({ item, notify, collapseAdvanced = false }: { collapseAdvanced?: boolean; item: RundownItem; notify: (message: string, tone?: 'error' | 'info') => void }): JSX.Element {
+type Playback = NonNullable<RundownItem['playback']>;
+type Notify = (message: string, tone?: 'error' | 'info') => void;
+
+/** A song's playback settings as saved, and the edits that save them in the project. */
+function useSongPlayback(item: RundownItem, notify: Notify) {
   const frameRate = useDocumentStore((state) => state.project?.timebase.frameRate ?? '30');
   let originMs = 0, originError: string | null = null;
   try { originMs = programTimeOrigin(item); }
@@ -22,20 +25,34 @@ export function SongPlaybackProperties({ item, notify, collapseAdvanced = false 
     if (Object.entries(patch).every(([key, next]) => value[key as keyof Playback] === next)) return true;
     return commit({ ...value, ...patch });
   };
-  const timecode = <label className="mtc-offset-field" title={originError ?? `歌曲播放位置 + MTC 起始时间 = 输出时间码。${item.p1Media ? `P1 导入原值：${item.p1Media.midiStartTime}（秒或时:分:秒）。` : ''}修改后下次播放生效。`}><span>MTC 起始时间<small>时:分:秒:帧 · {frameRate}</small></span><input key={`${item.id}:${frameRate}:${offset}`} aria-label="MTC 起始时间（时:分:秒:帧）" aria-invalid={Boolean(originError)} defaultValue={offset} placeholder="00:00:00:00" spellCheck={false}
-      onInput={(event) => event.currentTarget.setCustomValidity('')}
-      onKeyDown={(event) => {
-        if (event.key !== 'Enter' && event.key !== 'Escape') return;
-        event.preventDefault(); event.stopPropagation();
-        if (event.key === 'Escape') { event.currentTarget.value = offset; event.currentTarget.setCustomValidity(''); }
-        event.currentTarget.blur();
-      }}
-      onBlur={(event) => {
-        const input = event.currentTarget;
-        if (input.value === offset) return;
-        try { if (!save({ mtcOffsetMs: parseMtcOffset(input.value, frameRate) })) input.value = offset; }
-        catch (error) { const message = error instanceof Error ? error.message : String(error); input.value = offset; input.setCustomValidity(message); input.reportValidity(); notify(message, 'error'); }
-      }} /></label>;
+  return { frameRate, originError, value, offset, commit, save };
+}
+
+/**
+ * The song's MTC start (时:分:秒:帧), saved in the project on Enter or when focus leaves; Escape puts
+ * the saved value back. Used by the song properties and the 时间码 settings page.
+ */
+export function SongMtcStartInput({ item, notify, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, 'defaultValue' | 'onBlur' | 'onKeyDown' | 'onInput'> & { item: RundownItem; notify: Notify }): JSX.Element {
+  const { frameRate, originError, offset, save } = useSongPlayback(item, notify);
+  return <input {...props} key={`${item.id}:${frameRate}:${offset}`} aria-invalid={Boolean(originError)} defaultValue={offset} placeholder="00:00:00:00" spellCheck={false}
+    onInput={(event) => event.currentTarget.setCustomValidity('')}
+    onKeyDown={(event) => {
+      if (event.key !== 'Enter' && event.key !== 'Escape') return;
+      event.preventDefault(); event.stopPropagation();
+      if (event.key === 'Escape') { event.currentTarget.value = offset; event.currentTarget.setCustomValidity(''); }
+      event.currentTarget.blur();
+    }}
+    onBlur={(event) => {
+      const input = event.currentTarget;
+      if (input.value === offset) return;
+      try { if (!save({ mtcOffsetMs: parseMtcOffset(input.value, frameRate) })) input.value = offset; }
+      catch (error) { const message = error instanceof Error ? error.message : String(error); input.value = offset; input.setCustomValidity(message); input.reportValidity(); notify(message, 'error'); }
+    }} />;
+}
+
+export function SongPlaybackProperties({ item, notify, collapseAdvanced = false }: { collapseAdvanced?: boolean; item: RundownItem; notify: Notify }): JSX.Element {
+  const { frameRate, originError, value, commit, save } = useSongPlayback(item, notify);
+  const timecode = <label className="mtc-offset-field" title={originError ?? `歌曲播放位置 + MTC 起始时间 = 输出时间码。${item.p1Media ? `P1 导入原值：${item.p1Media.midiStartTime}（秒或时:分:秒）。` : ''}修改后下次播放生效。`}><span>MTC 起始时间<small>时:分:秒:帧 · {frameRate}</small></span><SongMtcStartInput item={item} notify={notify} aria-label="MTC 起始时间（时:分:秒:帧）" /></label>;
   const advanced = <>
     <label><span>快捷键</span><input aria-label="歌曲快捷键" value={value.shortcut} readOnly placeholder="未设置" onKeyDown={(event) => {
       if (event.key === 'Tab') return;

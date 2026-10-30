@@ -110,12 +110,12 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
     await expect.poll(async () => (await inspector.boundingBox())!.width).toBe(inspectorBefore);
     await nav.getByRole('button', { name: '设置', exact: true }).click();
     const groups = page.getByRole('navigation', { name: '设置子菜单' });
-    for (const group of ['设备连接', '播放', '画面与同步', '外观与更新']) {
+    for (const group of ['设备连接', '当前工程', '播放', '画面', '外观与更新', '帮助与反馈']) {
       await groups.getByRole('button', { name: group, exact: true }).click();
       const sections = page.getByRole('navigation', { name: '设置子子菜单' }).getByRole('button');
       for (let index = 0; index < await sections.count(); index++) {
         await sections.nth(index).click();
-        await expect(page.locator('.device-console:visible')).toBeVisible();
+        await expect(page.locator('.settings-page:visible')).toBeVisible();
         await page.screenshot({ path: info.outputPath(`settings-${group}-${index}.png`) });
       }
     }
@@ -126,7 +126,7 @@ test('全工作区外观、最小窗口和键盘入口', async ({}, info) => {
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     const zoomImage = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0]!.webContents.capturePage()).toPNG().toString('base64'));
     await writeFile(info.outputPath('settings-200-percent.png'), Buffer.from(zoomImage, 'base64'));
-    expect(await page.locator('.device-console:visible').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await page.locator('.settings-page:visible').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(1));
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.keyboard.press('Tab');
